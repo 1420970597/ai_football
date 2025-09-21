@@ -1,0 +1,6 @@
+两队历史交锋：https://webapi.sporttery.cn/gateway/uniform/football/getResultHistoryV1.qry?sportteryMatchId=2033716&termLimits=10&tournamentFlag=0&homeAwayFlag=0
+积分榜：https://webapi.sporttery.cn/gateway/uniform/football/getMatchTablesV2.qry?gmMatchId=2033716
+未来比赛：https://webapi.sporttery.cn/gateway/uniform/football/getFutureMatchesV1.qry?sportteryMatchId=2033716&termLimits=4
+射手信息：https://webapi.sporttery.cn/gateway/uniform/football/getMatchPlayerV1.qry?sportteryMatchId=2033716&termLimits=3
+伤停信息：https://webapi.sporttery.cn/gateway/uniform/football/getInjurySuspensionV1.qry?sportteryMatchId=2033716
+数据统计：https://webapi.sporttery.cn/gateway/uniform/football/getMatchFeatureV1.qry?termLimits=10&sportteryMatchId=2033716
