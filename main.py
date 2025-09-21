@@ -100,7 +100,18 @@ class AIAnalysisClient:
 
 # 导入自定义模块
 from match_generator import get_football_data_single_files
-from article_search import ArticleSearcher
+from search_tools.sogou_searcher import SogouSearcher
+from search_tools.sportsdata_searcher import SportsDataSearcher
+from config import SPORTSDATA_CONFIG
+
+def get_searcher(searcher_name: str):
+    """搜索器工厂函数"""
+    if searcher_name == "sogou":
+        return SogouSearcher()
+    elif searcher_name == "sportsdata":
+        return SportsDataSearcher(api_key=SPORTSDATA_CONFIG["api_key"])
+    else:
+        raise ValueError(f"未知的搜索器: {searcher_name}")
 
 # 导入浏览器相关模块
 try:
@@ -122,11 +133,11 @@ except ImportError:
 class FootballAnalyzer:
     """足球比赛分析器（集成AI分析功能）"""
 
-    def __init__(self):
+    def __init__(self, searcher_name: str = "sogou"):
         self.output_dir = Path("output")
         self.article_dir = self.output_dir / "articles"
         self.analysis_dir = self.output_dir / "analysis"
-        self.searcher = ArticleSearcher()
+        self.searcher = get_searcher(searcher_name)
         self.driver = None
         self.current_match_cookies_acquired = False  # 当前比赛是否已获取cookies
 
@@ -1594,32 +1605,24 @@ class FootballAnalyzer:
 
 def main():
     """主函数"""
-    analyzer = FootballAnalyzer()
+    import argparse
+    parser = argparse.ArgumentParser(description="足球比赛分析工具")
+    parser.add_argument("--searcher", type=str, default="sogou", help="选择搜索引擎 (sogou, sportsdata)")
+    parser.add_argument("--auto", action="store_true", help="完整自动流程（包含内容提取）")
+    parser.add_argument("--info-only", action="store_true", help="仅获取文章信息（推荐，避免反爬虫）")
+    parser.add_argument("--ai-analysis", action="store_true", help="AI智能分析流程")
 
-    # 检查命令行参数自动运行
-    import sys
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--auto":
-            # 自动模式：直接运行完整流程
-            analyzer.process_all_matches()
-        elif sys.argv[1] == "--info-only":
-            # 仅文章信息模式：搜索文章但不提取内容
-            analyzer.process_all_matches_info_only()
-        elif sys.argv[1] == "--ai-analysis":
-            # AI智能分析模式：完整AI分析流程
-            analyzer.process_matches_with_ai_analysis()
-        elif sys.argv[1] == "--help":
-            print("足球比赛分析工具使用说明:")
-            print("  python main.py              # 交互模式")
-            print("  python main.py --auto       # 完整自动流程（包含内容提取）")
-            print("  python main.py --info-only  # 仅获取文章信息（推荐，避免反爬虫）")
-            print("  python main.py --ai-analysis # AI智能分析流程（AI分析+一致性检查+推文生成）")
-            print("  python main.py --help       # 显示此帮助信息")
-        else:
-            print(f"未知参数: {sys.argv[1]}")
-            print("使用 --help 查看可用参数")
+    args = parser.parse_args()
+
+    analyzer = FootballAnalyzer(searcher_name=args.searcher)
+
+    if args.auto:
+        analyzer.process_all_matches()
+    elif args.info_only:
+        analyzer.process_all_matches_info_only()
+    elif args.ai_analysis:
+        analyzer.process_matches_with_ai_analysis()
     else:
-        # 交互模式
         analyzer.run_interactive()
 
 

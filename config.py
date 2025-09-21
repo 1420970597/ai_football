@@ -25,3 +25,8 @@ ANALYSIS_CONFIG = {
 
 # 兼容旧配置（保持向后兼容）
 SILICONFLOW_CONFIG = API_CONFIG
+
+# SportsDataIO API配置
+SPORTSDATA_CONFIG = {
+    "api_key": "YOUR_SPORTSDATA_API_KEY"  # 在这里替换为你的SportsData.io API密钥
+}
