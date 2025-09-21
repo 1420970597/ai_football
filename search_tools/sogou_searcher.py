@@ -14,8 +14,10 @@ from typing import List, Dict, Optional
 import urllib.parse
 
 
-class ArticleSearcher:
-    """微信公众号文章搜索器"""
+from .base_searcher import BaseSearcher
+
+class SogouSearcher(BaseSearcher):
+    """搜狗微信公众号文章搜索器"""
 
     def __init__(self):
         self.base_url = "https://weixin.sogou.com/weixin"
@@ -352,7 +354,7 @@ class ArticleSearcher:
 
 def main():
     """主函数示例"""
-    searcher = ArticleSearcher()
+    searcher = SogouSearcher()
 
     # 搜索示例
     keyword = input("请输入搜索关键词: ").strip()
