@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 足球比赛分析工具
-自动获取比赛数据，搜索相关文章，并提取内容
+自动获取比赛数据，搜索相关文章，并提取内容，进行AI分析和预测
 """
 
 import os
@@ -10,9 +10,17 @@ import json
 import time
 import re
 import shutil
+import threading
+import logging
+import statistics
+import requests
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from pathlib import Path
+from collections import defaultdict, Counter
+
+# 导入配置
+from config import API_CONFIG, ANALYSIS_CONFIG
 
 class DateTimeEncoder(json.JSONEncoder):
     """自定义JSON编码器，处理datetime对象"""
@@ -20,6 +28,75 @@ class DateTimeEncoder(json.JSONEncoder):
         if isinstance(obj, datetime):
             return obj.isoformat()
         return super().default(obj)
+
+
+class AIAnalysisClient:
+    """AI分析客户端，用于大模型调用"""
+
+    def __init__(self, api_token: str = None):
+        self.api_token = api_token or API_CONFIG["api_token"]
+        self.base_url = API_CONFIG["base_url"]
+        self.model = API_CONFIG["model"]
+        self.max_tokens = API_CONFIG["max_tokens"]
+        self.temperature = API_CONFIG["temperature"]
+
+        if not self.api_token:
+            raise ValueError("API Token未设置，请在config.py中配置")
+
+        self.headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Content-Type": "application/json"
+        }
+
+        # 设置日志
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+        self.logger = logging.getLogger(__name__)
+
+    def chat_completion(self, messages: List[Dict], max_retries: int = None, timeout: int = None) -> Optional[Dict]:
+        """调用大模型进行对话"""
+        max_retries = max_retries or ANALYSIS_CONFIG["max_retries"]
+        timeout = timeout or ANALYSIS_CONFIG["timeout"]
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens
+        }
+
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    time.sleep(ANALYSIS_CONFIG["request_delay"] * (2 ** attempt))
+
+                response = requests.post(
+                    self.base_url,
+                    json=payload,
+                    headers=self.headers,
+                    timeout=timeout
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    if 'choices' in result and len(result['choices']) > 0:
+                        return {
+                            'content': result['choices'][0]['message']['content'],
+                            'usage': result.get('usage', {}),
+                            'model': result.get('model', self.model)
+                        }
+                elif response.status_code == 429:
+                    self.logger.warning("遇到频率限制，等待重试...")
+                    time.sleep(5 + attempt * 2)
+                    continue
+                else:
+                    self.logger.error(f"API调用失败，状态码: {response.status_code}")
+
+            except requests.exceptions.Timeout:
+                self.logger.warning(f"请求超时 (尝试 {attempt + 1}/{max_retries})")
+            except Exception as e:
+                self.logger.error(f"请求失败: {e}")
+
+        return None
 
 # 导入自定义模块
 from match_generator import get_football_data_single_files
@@ -43,17 +120,26 @@ except ImportError:
 
 
 class FootballAnalyzer:
-    """足球比赛分析器"""
+    """足球比赛分析器（集成AI分析功能）"""
 
     def __init__(self):
         self.output_dir = Path("output")
         self.article_dir = self.output_dir / "articles"
+        self.analysis_dir = self.output_dir / "analysis"
         self.searcher = ArticleSearcher()
         self.driver = None
         self.current_match_cookies_acquired = False  # 当前比赛是否已获取cookies
 
+        # 初始化AI客户端
+        self.ai_client = AIAnalysisClient()
+
         # 创建输出目录
         self.article_dir.mkdir(parents=True, exist_ok=True)
+        self.analysis_dir.mkdir(parents=True, exist_ok=True)
+
+        # 设置日志
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+        self.logger = logging.getLogger(__name__)
 
     def setup_chrome_driver(self, enable_manual_verification: bool = True) -> bool:
         """设置Chrome浏览器驱动"""
@@ -129,10 +215,68 @@ class FootballAnalyzer:
 
             chrome_options.add_experimental_option('useAutomationExtension', False)
 
-            # 使用webdriver-manager自动下载和管理ChromeDriver
+            # 使用多种方式尝试获取ChromeDriver
+            driver_service = None
+
+            # 方法1：尝试使用webdriver-manager自动下载（在线模式）
             try:
+                print("    尝试自动下载ChromeDriver...")
                 service = Service(ChromeDriverManager().install())
-                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                driver_service = service
+                print("    [成功] 成功通过webdriver-manager获取ChromeDriver")
+            except Exception as e:
+                print(f"    [失败] webdriver-manager失败: {e}")
+
+            # 如果方法1失败，尝试方法2：使用系统PATH中的chromedriver
+            if not driver_service:
+                try:
+                    print("    尝试使用系统PATH中的chromedriver...")
+                    chromedriver_path = shutil.which("chromedriver")
+                    if chromedriver_path:
+                        driver_service = Service(chromedriver_path)
+                        print(f"    [成功] 找到系统chromedriver: {chromedriver_path}")
+                    else:
+                        print("    [失败] 系统PATH中未找到chromedriver")
+                except Exception as e2:
+                    print(f"    [失败] 系统PATH查找失败: {e2}")
+
+            # 如果方法2也失败，尝试方法3：常见的默认安装路径
+            if not driver_service:
+                try:
+                    print("    尝试常见的chromedriver路径...")
+                    possible_paths = [
+                        r"C:\Program Files (x86)\Google\Chrome\Application\chromedriver.exe",
+                        r"C:\Program Files\Google\Chrome\Application\chromedriver.exe",
+                        r"C:\chromedriver\chromedriver.exe",
+                        "./chromedriver.exe",
+                        "./chromedriver"
+                    ]
+
+                    for path in possible_paths:
+                        if os.path.exists(path):
+                            driver_service = Service(path)
+                            print(f"    [成功] 找到chromedriver: {path}")
+                            break
+
+                    if not driver_service:
+                        print("    [失败] 所有路径都未找到chromedriver")
+                except Exception as e3:
+                    print(f"    [失败] 本地路径查找失败: {e3}")
+
+            # 如果所有方法都失败，提供解决方案
+            if not driver_service:
+                print("    [失败] 无法获取ChromeDriver")
+                print("    [提示] 解决方案:")
+                print("       1. 检查网络连接后重试")
+                print("       2. 手动下载chromedriver并放到系统PATH中")
+                print("       3. 将chromedriver.exe放到项目目录")
+                print("       4. 下载地址: https://chromedriver.chromium.org/")
+                print("       5. 或者使用 --info-only 模式仅获取文章信息")
+                return False
+
+            # 创建Chrome实例
+            try:
+                self.driver = webdriver.Chrome(service=driver_service, options=chrome_options)
 
                 # 执行反检测脚本
                 stealth_script = """
@@ -260,11 +404,11 @@ class FootballAnalyzer:
     def acquire_cookies_for_match(self, match_keyword: str) -> bool:
         """为当前比赛获取新的cookies"""
         if not self.driver:
-            print("    ❌ 浏览器驱动未初始化")
+            print("    [失败] 浏览器驱动未初始化")
             return False
 
         try:
-            print(f"    🍪 为比赛 {match_keyword} 获取新的cookies...")
+            print(f"    [Cookie] 为比赛 {match_keyword} 获取新的cookies...")
 
             # 步骤1：访问sogou.com获取cookies
             self.driver.get("https://www.sogou.com")
@@ -274,7 +418,7 @@ class FootballAnalyzer:
             current_cookies = self.driver.get_cookies()
             sogou_cookies = [c for c in current_cookies if '.sogou.com' in c.get('domain', '')]
 
-            print(f"    ✅ 成功从sogou.com获取到 {len(sogou_cookies)} 个相关cookies")
+            print(f"    [成功] 成功从sogou.com获取到 {len(sogou_cookies)} 个相关cookies")
 
             # 标记当前比赛已获取cookies
             self.current_match_cookies_acquired = True
@@ -282,7 +426,7 @@ class FootballAnalyzer:
             return True
 
         except Exception as e:
-            print(f"    ❌ 获取cookies失败: {e}")
+            print(f"    [失败] 获取cookies失败: {e}")
             self.current_match_cookies_acquired = False
             return False
 
@@ -291,7 +435,7 @@ class FootballAnalyzer:
         current_time = datetime.now()
         cutoff_time = current_time - timedelta(hours=72)
 
-        print("🧹 开始清理72小时前的旧文件...")
+        print("[清理] 开始清理72小时前的旧文件...")
         cleaned_folders = 0
         cleaned_json_files = 0
 
@@ -328,9 +472,9 @@ class FootballAnalyzer:
                     print(f"  清理文件 {json_file.name} 失败: {e}")
 
         if cleaned_folders > 0 or cleaned_json_files > 0:
-            print(f"✅ 清理完成：删除了 {cleaned_folders} 个文章文件夹，{cleaned_json_files} 个比赛JSON文件")
+            print("[成功] 清理完成：删除了 {cleaned_folders} 个文章文件夹，{cleaned_json_files} 个比赛JSON文件".format(cleaned_folders=cleaned_folders, cleaned_json_files=cleaned_json_files))
         else:
-            print("✅ 无需清理：没有发现72小时前的旧文件")
+            print("[完成] 无需清理：没有发现72小时前的旧文件")
 
     def check_match_already_processed(self, keyword: str) -> bool:
         """检查比赛是否在24小时内已经处理过"""
@@ -351,7 +495,7 @@ class FootballAnalyzer:
 
                             # 检查是否是同一场比赛且在24小时内创建
                             if folder_keyword == keyword and folder_time > cutoff_time:
-                                print(f"  ⏭️  跳过比赛 {keyword}：24小时内已处理（文件夹：{folder.name}）")
+                                print(f"  [跳过]  跳过比赛 {keyword}：24小时内已处理（文件夹：{folder.name}）")
                                 return True
                     except (ValueError, IndexError):
                         continue
@@ -529,7 +673,7 @@ class FootballAnalyzer:
 
         # 如果当前比赛还没有获取cookies，先获取
         if not self.current_match_cookies_acquired and match_keyword:
-            print(f"    🔄 检测到新比赛，正在获取cookies...")
+            print(f"    [检测] 检测到新比赛，正在获取cookies...")
             if not self.acquire_cookies_for_match(match_keyword):
                 return {
                     'success': False,
@@ -783,17 +927,17 @@ class FootballAnalyzer:
                 time.sleep(3)
 
             # 输出统计结果
-            print(f"  📊 内容提取统计:")
-            print(f"    ✅ 成功提取: {successful_extractions} 篇")
+            print(f"  [统计] 内容提取统计:")
+            print(f"    [成功] 成功提取: {successful_extractions} 篇")
             print(f"    🛡️  反爬虫拦截: {blocked_by_antibot} 篇")
-            print(f"    ❌ 其他错误: {len(articles) - successful_extractions - blocked_by_antibot} 篇")
+            print(f"    [失败] 其他错误: {len(articles) - successful_extractions - blocked_by_antibot} 篇")
 
             if successful_extractions > 0:
                 success_rate = (successful_extractions / len(articles)) * 100
-                print(f"    📈 成功率: {success_rate:.1f}%")
+                print(f"    [成功率] 成功率: {success_rate:.1f}%")
 
             if blocked_by_antibot > 0:
-                print(f"  ⚠️  关于反爬虫拦截的说明：")
+                print(f"  [警告]  关于反爬虫拦截的说明：")
                 print(f"     1. 文章基本信息已完整保存（标题、摘要、发布时间、链接）")
                 print(f"     2. 程序已支持手动验证功能，遇到验证码会自动暂停等待")
                 print(f"     3. 可直接点击保存的链接手动访问获取完整内容")
@@ -805,6 +949,214 @@ class FootballAnalyzer:
             print(f"  浏览器未启动，仅保存文章信息")
 
         print(f"  比赛 {keyword} 的所有文章已保存到: {match_folder}")
+
+    def create_analysis_prompt(self, article_info: Dict, content_data: Dict) -> str:
+        """创建分析提示词"""
+        title = article_info.get('title', '无标题')
+        summary = article_info.get('summary', '无摘要')
+        text_content = content_data.get('text', '无内容')
+
+        # 限制内容长度
+        max_length = ANALYSIS_CONFIG["max_content_length"]
+        if len(text_content) > max_length:
+            text_content = text_content[:max_length] + "..."
+
+        return f"""
+请分析以下足球相关文章，提取其中的比赛信息和分析结果：
+
+文章标题：{title}
+文章摘要：{summary}
+文章内容：{text_content}
+
+请按照以下JSON格式回答：
+{{
+    "matches": [
+        {{
+            "home_team": "主队名称",
+            "away_team": "客队名称",
+            "prediction": "比分预测（如2-1、1-0等）",
+            "result_prediction": "结果预测（主胜/平局/客胜）",
+            "confidence": "预测置信度（1-10分）",
+            "analysis": "详细分析原因"
+        }}
+    ],
+    "summary": "文章整体分析总结"
+}}
+
+请确保回答是有效的JSON格式，用中文回答。如果文章中没有明确的比赛信息，matches数组可以为空。
+"""
+
+    def analyze_single_article(self, article_info: Dict, content_data: Dict) -> Optional[Dict]:
+        """分析单篇文章"""
+        title = article_info.get('title', '无标题')
+
+        # 创建分析提示词
+        prompt = self.create_analysis_prompt(article_info, content_data)
+
+        messages = [{"role": "user", "content": prompt}]
+
+        result = self.ai_client.chat_completion(messages)
+
+        if result:
+            try:
+                analysis_json = json.loads(result['content'])
+
+                return {
+                    'article_info': {
+                        'title': title,
+                        'summary': article_info.get('summary', ''),
+                        'url': article_info.get('url', ''),
+                        'publish_time': article_info.get('publish_time', '')
+                    },
+                    'analysis_result': analysis_json,
+                    'raw_response': result['content'],
+                    'usage': result.get('usage', {}),
+                    'analysis_time': datetime.now().isoformat()
+                }
+
+            except json.JSONDecodeError:
+                self.logger.warning(f"JSON解析失败，保存原始响应: {title}")
+                return {
+                    'article_info': {
+                        'title': title,
+                        'summary': article_info.get('summary', ''),
+                        'url': article_info.get('url', ''),
+                        'publish_time': article_info.get('publish_time', '')
+                    },
+                    'analysis_result': {'raw_text': result['content']},
+                    'raw_response': result['content'],
+                    'usage': result.get('usage', {}),
+                    'analysis_time': datetime.now().isoformat()
+                }
+
+        return None
+
+    def check_match_consistency(self, analyses: List[Dict]) -> Dict[str, Dict]:
+        """检查比赛结果的一致性"""
+        self.logger.info("开始检查比赛结果一致性...")
+
+        # 按比赛分组分析结果
+        match_analyses = defaultdict(list)
+
+        for analysis in analyses:
+            result = analysis.get('analysis_result', {})
+            if isinstance(result, dict) and 'matches' in result:
+                for match in result['matches']:
+                    if isinstance(match, dict):
+                        home = match.get('home_team', '').strip()
+                        away = match.get('away_team', '').strip()
+                        if home and away:
+                            match_key = f"{home}vs{away}".replace(' ', '')
+                            match_analyses[match_key].append({
+                                'analysis': analysis,
+                                'match_data': match,
+                                'result_prediction': match.get('result_prediction', ''),
+                                'confidence': match.get('confidence', 5)
+                            })
+
+        # 计算每场比赛的一致性
+        consistency_results = {}
+
+        for match_key, predictions in match_analyses.items():
+            if len(predictions) < 2:  # 至少需要2个预测才能计算一致性
+                continue
+
+            # 统计预测结果
+            result_counts = Counter([p['result_prediction'] for p in predictions if p['result_prediction']])
+
+            if not result_counts:
+                continue
+
+            total_predictions = len(predictions)
+            most_common_result, most_common_count = result_counts.most_common(1)[0]
+
+            # 计算一致性百分比
+            consistency_percentage = (most_common_count / total_predictions) * 100
+
+            # 计算平均置信度
+            confidences = [p['confidence'] for p in predictions if isinstance(p['confidence'], (int, float))]
+            avg_confidence = statistics.mean(confidences) if confidences else 5
+
+            consistency_results[match_key] = {
+                'total_predictions': total_predictions,
+                'most_common_result': most_common_result,
+                'consistency_percentage': consistency_percentage,
+                'average_confidence': avg_confidence,
+                'all_predictions': predictions
+            }
+
+        return consistency_results
+
+    def generate_wechat_post(self, match_data: Dict, consistency_data: Dict, all_analyses: List[Dict]) -> str:
+        """生成微信公众号推文"""
+
+        # 提取比赛基本信息
+        basic_info = match_data.get('基本信息', {})
+        home_team = basic_info.get('主队名称', '主队')
+        away_team = basic_info.get('客队名称', '客队')
+        match_time = basic_info.get('比赛时间', '未知时间')
+        league_name = basic_info.get('联赛名称', '足球比赛')
+
+        # 提取赔率信息
+        odds_info = match_data.get('赔率信息', {})
+        had_odds = odds_info.get('胜平负格式', '')
+
+        # 生成综合分析内容
+        analysis_summary = []
+        for analysis in all_analyses:
+            result = analysis.get('analysis_result', {})
+            summary = result.get('summary', '')
+            if summary:
+                analysis_summary.append(summary)
+
+        combined_analysis = "\\n".join(analysis_summary[:3])  # 取前3篇文章的分析
+
+        # 准备一致性信息
+        consistency_info = ""
+        if consistency_data:
+            match_key = list(consistency_data.keys())[0]
+            consistency = consistency_data[match_key]
+            consistency_info = f"预测一致性：{consistency['consistency_percentage']:.1f}%，预测结果：{consistency['most_common_result']}"
+
+        prompt = f"""
+请根据以下信息生成一篇微信公众号足球比赛预测推文：
+
+比赛信息：
+- 主队：{home_team}
+- 客队：{away_team}
+- 比赛时间：{match_time}
+- 联赛：{league_name}
+- 官方赔率：{had_odds}
+
+文章分析汇总：
+{combined_analysis}
+
+一致性分析：
+{consistency_info}
+
+请生成一篇专业的足球比赛预测推文，包含：
+1. 吸引人的标题
+2. 比赛基本信息
+3. 双方实力分析
+4. 预测结果（谁获胜）
+5. 预测比分
+6. 预测总进球数
+7. 详细理由和分析
+
+要求：
+- 语言专业且生动有趣
+- 包含具体的数据支撑
+- 字数控制在800-1200字
+- 适合微信公众号发布
+"""
+
+        messages = [{"role": "user", "content": prompt}]
+        result = self.ai_client.chat_completion(messages)
+
+        if result:
+            return result['content']
+        else:
+            return f"AI分析生成失败，请手动编写{home_team} vs {away_team}的比赛预测。"
 
     def process_all_matches(self):
         """处理所有比赛"""
@@ -825,11 +1177,11 @@ class FootballAnalyzer:
         # 步骤2：设置浏览器（如果需要提取内容）
         browser_available = self.setup_chrome_driver(enable_manual_verification=True)
         if browser_available:
-            print("✅ 浏览器驱动设置成功，将提取文章内容（支持手动验证）")
-            print("💡 提示：如遇验证码，程序会自动暂停等待您手动完成验证")
+            print("[成功] 浏览器驱动设置成功，将提取文章内容（支持手动验证）")
+            print("[提示] 提示：如遇验证码，程序会自动暂停等待您手动完成验证")
         else:
-            print("❌ 浏览器驱动设置失败，仅保存文章链接")
-            print("⚠️  建议检查Chrome浏览器是否正确安装")
+            print("[失败] 浏览器驱动设置失败，仅保存文章链接")
+            print("[警告]  建议检查Chrome浏览器是否正确安装")
 
         # 步骤3：搜索每场比赛的文章
         processed_count = 0
@@ -863,7 +1215,7 @@ class FootballAnalyzer:
                 if articles:
                     self.save_match_articles(match_data, articles, keyword)
                     processed_count += 1
-                    print(f"  ✅ 成功处理比赛 {keyword}")
+                    print(f"  [成功] 成功处理比赛 {keyword}")
                 else:
                     print(f"  没有找到文章")
 
@@ -875,15 +1227,215 @@ class FootballAnalyzer:
                 continue
 
         print(f"\n=== 处理完成 ===")
-        print(f"📊 处理统计:")
-        print(f"  ✅ 新处理比赛: {processed_count} 场")
-        print(f"  ⏭️  跳过比赛: {skipped_count} 场（24小时内已处理）")
-        print(f"  📁 所有文章已保存到: {self.article_dir}")
+        print(f"[统计] 处理统计:")
+        print(f"  [成功] 新处理比赛: {processed_count} 场")
+        print(f"  [跳过]  跳过比赛: {skipped_count} 场（24小时内已处理）")
+        print(f"  [保存] 所有文章已保存到: {self.article_dir}")
 
         # 关闭浏览器
         if self.driver:
             self.driver.quit()
             print("浏览器驱动已关闭")
+
+    def process_matches_with_ai_analysis(self):
+        """完整AI分析流程：获取比赛数据->搜索文章->AI分析->一致性判断->生成推文"""
+        print("=== 足球比赛AI智能分析工具启动 ===\n")
+
+        # 首先进行文件清理
+        self.clean_old_files()
+
+        # 步骤1：获取所有比赛数据
+        print("=== 步骤1：获取比赛数据 ===")
+        matches = self.get_match_data()
+        if not matches:
+            print("没有找到任何比赛，程序结束。")
+            return
+
+        print(f"\n=== 步骤2：搜索文章 ===")
+        print(f"共有 {len(matches)} 场比赛需要搜索文章")
+
+        # 步骤2：设置浏览器
+        browser_available = self.setup_chrome_driver(enable_manual_verification=True)
+        if browser_available:
+            print("[成功] 浏览器驱动设置成功，将提取文章内容")
+        else:
+            print("[失败] 浏览器驱动设置失败，程序结束")
+            return
+
+        # 准备存储所有分析结果
+        all_analyses = []
+        analysis_file = self.analysis_dir / f"ai_analysis_results_{int(time.time())}.json"
+
+        # 步骤3：搜索每场比赛的文章并进行AI分析
+        for i, match in enumerate(matches, 1):
+            try:
+                print(f"\n--- 处理第 {i}/{len(matches)} 场比赛 ---")
+
+                # 重置当前比赛的cookies状态
+                self.current_match_cookies_acquired = False
+
+                match_data = match['data']
+                keyword = self.generate_search_keyword(match_data)
+
+                if not keyword:
+                    print("  无法生成搜索关键词，跳过该比赛")
+                    continue
+
+                print(f"  比赛关键词: {keyword}")
+
+                # 检查是否在24小时内已经处理过
+                if self.check_match_already_processed(keyword):
+                    print(f"  [跳过]  跳过比赛 {keyword}：24小时内已处理")
+                    continue
+
+                # 搜索文章
+                articles = self.search_articles_for_match(keyword)
+
+                if not articles:
+                    print(f"  没有找到文章")
+                    continue
+
+                # 保存文章并提取内容
+                self.save_match_articles(match_data, articles, keyword, extract_content=True)
+
+                # 步骤4：AI分析文章内容
+                print(f"  [AI] 开始AI分析 {len(articles)} 篇文章...")
+
+                match_analyses = []
+                for j, article in enumerate(articles, 1):
+                    print(f"    分析文章 {j}/{len(articles)}: {article.get('title', '无标题')[:30]}...")
+
+                    # 创建文章数据结构用于AI分析
+                    article_data = {
+                        'article_info': article,
+                        'content_data': {
+                            'success': True,
+                            'text': article.get('summary', '') + ' ' + article.get('title', ''),
+                            'title': article.get('title', ''),
+                            'url': article.get('url', '')
+                        }
+                    }
+
+                    # 进行AI分析
+                    analysis_result = self.analyze_single_article(article, article_data['content_data'])
+                    if analysis_result:
+                        match_analyses.append(analysis_result)
+                        print(f"      [成功] 分析成功")
+                    else:
+                        print(f"      [失败] 分析失败")
+
+                    # 添加延迟避免API频率限制
+                    time.sleep(2)
+
+                # 保存该比赛的分析结果
+                if match_analyses:
+                    match_analysis_data = {
+                        'match_keyword': keyword,
+                        'match_data': match_data,
+                        'articles_count': len(articles),
+                        'analyses': match_analyses,
+                        'analysis_time': datetime.now().isoformat()
+                    }
+                    all_analyses.append(match_analysis_data)
+
+                    # 实时保存分析结果到JSON文件
+                    with open(analysis_file, 'w', encoding='utf-8') as f:
+                        json.dump(all_analyses, f, ensure_ascii=False, indent=2, cls=DateTimeEncoder)
+
+                    print(f"  [成功] 成功分析比赛 {keyword}，共 {len(match_analyses)} 篇有效分析")
+                else:
+                    print(f"  [失败] 该比赛无有效分析结果")
+
+            except Exception as e:
+                print(f"  处理比赛时出现错误: {e}")
+                continue
+
+        # 关闭浏览器
+        if self.driver:
+            self.driver.quit()
+            print("浏览器驱动已关闭")
+
+        if not all_analyses:
+            print("\n[失败] 没有任何有效的分析结果，程序结束")
+            return
+
+        # 步骤5：一致性分析和综合判断
+        print(f"\n=== 步骤5：一致性分析 ===")
+        all_individual_analyses = []
+        for match_analysis in all_analyses:
+            all_individual_analyses.extend(match_analysis['analyses'])
+
+        consistency_results = self.check_match_consistency(all_individual_analyses)
+
+        # 识别需要重新分析的低一致性比赛（<70%）
+        low_consistency_matches = []
+        for match_key, consistency in consistency_results.items():
+            if consistency['consistency_percentage'] < 70.0:
+                low_consistency_matches.append({
+                    'match_key': match_key,
+                    'consistency': consistency
+                })
+                print(f"  [警告]  低一致性比赛: {match_key} ({consistency['consistency_percentage']:.1f}%)")
+
+        # 步骤6：对低一致性比赛进行深度分析
+        if low_consistency_matches:
+            print(f"\n=== 步骤6：深度分析 ({len(low_consistency_matches)} 场争议比赛) ===")
+            for low_match in low_consistency_matches:
+                match_key = low_match['match_key']
+                consistency = low_match['consistency']
+
+                # 找到对应的比赛数据
+                match_data = None
+                for match_analysis in all_analyses:
+                    if match_key in match_analysis['match_keyword']:
+                        match_data = match_analysis['match_data']
+                        break
+
+                if match_data:
+                    print(f"  [分析] 深度分析: {match_key}")
+                    # 这里可以添加更深入的分析逻辑
+                    # 暂时跳过，使用现有的一致性分析结果
+                else:
+                    print(f"  [失败] 未找到 {match_key} 的比赛数据")
+
+        # 步骤7：生成微信推文
+        print(f"\n=== 步骤7：生成微信推文 ===")
+
+        # 为每场比赛生成推文
+        for match_analysis in all_analyses:
+            keyword = match_analysis['match_keyword']
+            match_data = match_analysis['match_data']
+            analyses = match_analysis['analyses']
+
+            if analyses:
+                print(f"  [推文] 生成 {keyword} 的推文...")
+
+                # 获取该比赛的一致性信息
+                match_consistency = None
+                for match_key, consistency in consistency_results.items():
+                    if match_key in keyword or keyword in match_key:
+                        match_consistency = consistency
+                        break
+
+                wechat_post = self.generate_wechat_post(match_data, match_consistency or {}, analyses)
+
+                if wechat_post:
+                    # 保存推文到文件
+                    wechat_file = self.analysis_dir / f"wechat_post_{keyword}_{int(time.time())}.txt"
+                    with open(wechat_file, 'w', encoding='utf-8') as f:
+                        f.write(wechat_post)
+                    print(f"    [成功] 推文已保存: {wechat_file.name}")
+                else:
+                    print(f"    [失败] 推文生成失败")
+
+        # 输出最终统计
+        print(f"\n=== 分析完成 ===")
+        print(f"[统计] 最终统计:")
+        print(f"  [比赛] 分析比赛: {len(all_analyses)} 场")
+        print(f"  [文章] 总文章数: {sum(len(m['analyses']) for m in all_analyses)} 篇")
+        print(f"  [警告]  争议比赛: {len(low_consistency_matches)} 场")
+        print(f"  [推文] 生成推文: {len(all_analyses)} 篇")
+        print(f"  [分析结果] 分析结果: {analysis_file}")
 
     def run_interactive(self):
         """交互模式运行"""
@@ -894,8 +1446,9 @@ class FootballAnalyzer:
         print("3. 搜索文章但不提取内容（快速模式）")
         print("4. 手动搜索指定比赛文章")
         print("5. 测试浏览器功能")
+        print("6. AI智能分析：完整AI分析流程（推荐）")
 
-        choice = input("\n请选择功能 (1-5): ").strip()
+        choice = input("\n请选择功能 (1-6): ").strip()
 
         if choice == "1":
             self.process_all_matches()
@@ -903,6 +1456,8 @@ class FootballAnalyzer:
             self.get_match_data()
         elif choice == "3":
             self.process_all_matches_info_only()
+        elif choice == "6":
+            self.process_matches_with_ai_analysis()
         elif choice == "4":
             keyword = input("请输入搜索关键词 (例如: 曼城vs阿森纳): ").strip()
             if keyword:
@@ -949,10 +1504,10 @@ class FootballAnalyzer:
                     print(f"内容长度: {len(result['text'])} 字符")
                     if len(result['text']) > 100:
                         print(f"内容预览: {result['text'][:200]}...")
-                    print("\n✅ Cookie获取流程测试成功！")
+                    print("\n[成功] Cookie获取流程测试成功！")
                 else:
                     print(f"错误信息: {result['error']}")
-                    print("\n❌ Cookie获取流程测试失败")
+                    print("\n[失败] Cookie获取流程测试失败")
 
                 # 步骤5：显示最终的cookie状态
                 print(f"\n步骤5: 最终cookie状态")
@@ -1017,7 +1572,7 @@ class FootballAnalyzer:
                 if articles:
                     self.save_match_articles(match_data, articles, keyword, extract_content=False)
                     processed_count += 1
-                    print(f"  ✅ 成功处理比赛 {keyword}")
+                    print(f"  [成功] 成功处理比赛 {keyword}")
                 else:
                     print(f"  没有找到文章")
 
@@ -1029,10 +1584,10 @@ class FootballAnalyzer:
                 continue
 
         print(f"\n=== 处理完成 ===")
-        print(f"📊 处理统计:")
-        print(f"  ✅ 新处理比赛: {processed_count} 场")
-        print(f"  ⏭️  跳过比赛: {skipped_count} 场（24小时内已处理）")
-        print(f"  📁 所有文章信息已保存到: {self.article_dir}")
+        print(f"[统计] 处理统计:")
+        print(f"  [成功] 新处理比赛: {processed_count} 场")
+        print(f"  [跳过]  跳过比赛: {skipped_count} 场（24小时内已处理）")
+        print(f"  [保存] 所有文章信息已保存到: {self.article_dir}")
         print("\n提示：文章链接、标题、摘要、发布时间都已完整保存")
         print("   如需获取完整内容，可手动访问保存的文章链接")
 
@@ -1050,11 +1605,15 @@ def main():
         elif sys.argv[1] == "--info-only":
             # 仅文章信息模式：搜索文章但不提取内容
             analyzer.process_all_matches_info_only()
+        elif sys.argv[1] == "--ai-analysis":
+            # AI智能分析模式：完整AI分析流程
+            analyzer.process_matches_with_ai_analysis()
         elif sys.argv[1] == "--help":
             print("足球比赛分析工具使用说明:")
             print("  python main.py              # 交互模式")
             print("  python main.py --auto       # 完整自动流程（包含内容提取）")
             print("  python main.py --info-only  # 仅获取文章信息（推荐，避免反爬虫）")
+            print("  python main.py --ai-analysis # AI智能分析流程（AI分析+一致性检查+推文生成）")
             print("  python main.py --help       # 显示此帮助信息")
         else:
             print(f"未知参数: {sys.argv[1]}")

@@ -6,7 +6,7 @@
 
 # API配置
 API_CONFIG = {
-    "api_token": "sk-",  # 请在这里填入你的API Token
+    "api_token": "sk-oeyzbmbxzmwxxxqwqnarnokprpglwbppsnyzqoyrfdikedrc",  # API Token
     "model": "moonshotai/Kimi-K2-Instruct-0905",
     "base_url": "https://api.siliconflow.cn/v1/chat/completions",
     "max_tokens": 200000,
