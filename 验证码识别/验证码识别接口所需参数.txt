@@ -1,0 +1,26 @@
+import base64
+import requests
+
+with open('图片绝对路径/test.png', 'rb') as f:
+    b = base64.b64encode(f.read()).decode()  ## 图片二进制流base64字符串，这里我们直接使用网页中获取的base64编码即可
+
+
+def verify():
+    url = "http://api.jfbym.com/api/YmServer/customApi"
+    data = {
+        ## 关于参数,一般来说有3个;不同类型id可能有不同的参数个数和参数名,找客服获取
+        "token": "FPeil-aOu2nS3DwUQTI_0nDo-ByLtRfRrB47OzYNJYQ",
+        "type": "30100",
+        "image": b,
+        "extra": 奸,刊,剔,困 ## 这里是verify-msg元素【】中的内容请依次点击【奸,刊,剔,困】
+    }
+    _headers = {
+        "Content-Type": "application/json"
+    }
+    response = requests.request("POST", url, headers=_headers, json=data).json()
+    print(response)
+
+
+if __name__ == '__main__':
+    verify()
+
