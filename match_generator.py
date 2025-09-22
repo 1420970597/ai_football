@@ -534,7 +534,7 @@ def get_football_data_single_files():
                         tomorrow_index = i
 
             # 根据时间和数据可用性决定获取哪个索引
-            if current_hour >= 20:
+            if current_hour >= 19:
                 # 晚于19:00，优先获取明天的数据
                 if tomorrow_index is not None:
                     target_index = tomorrow_index
