@@ -1,27 +1,19 @@
 ﻿<template>
   <section class="match-list">
     <section class="card filters">
-      <div class="section-title">即将开赛</div>
+      <div class="section-title">筛选条件</div>
       <div class="filter-grid">
         <label>
           联赛
-          <input
-            v-model="store.filter.league"
-            placeholder="输入联赛名称"
-            @keyup.enter="refresh"
-          />
+          <input v-model="store.filter.league" placeholder="输入联赛名称" @keyup.enter="refresh" />
         </label>
         <label>
-          球队
-          <input
-            v-model="store.filter.team"
-            placeholder="球队名关键词"
-            @keyup.enter="refresh"
-          />
+          队伍
+          <input v-model="store.filter.team" placeholder="输入球队关键词" @keyup.enter="refresh" />
         </label>
         <label class="checkbox">
           <input type="checkbox" v-model="store.filter.upcoming" @change="refresh" />
-          仅显示未开始的比赛
+          仅看未开始比赛
         </label>
         <button class="refresh" @click="refresh">刷新列表</button>
       </div>
@@ -29,8 +21,8 @@
 
     <section class="empty" v-if="!store.loading && !matches.length">
       <div class="card">
-        <h2>暂无比赛数据</h2>
-        <p>等待后台同步完成或请稍后重试。</p>
+        <h2>暂无符合条件的比赛</h2>
+        <p>等待后台同步完成后再来看看。</p>
       </div>
     </section>
 
@@ -40,7 +32,7 @@
 
     <section v-if="store.loading" class="card loading">
       <div class="spinner"></div>
-      <p>加载中...</p>
+      <p>数据加载中...</p>
     </section>
 
     <section class="match-grid">
@@ -73,15 +65,23 @@
               <small>客队</small>
             </div>
           </div>
+          <dl class="meta">
+            <div>
+              <dt>文章前瞻</dt>
+              <dd>{{ match.articles_count ?? 0 }} 篇</dd>
+            </div>
+            <div>
+              <dt>AI 判定</dt>
+              <dd>{{ verdictLabel(match.latest_insight?.verdict) }}</dd>
+            </div>
+            <div>
+              <dt>信心</dt>
+              <dd>{{ match.latest_insight?.confidence ? match.latest_insight.confidence + '%' : '待分析' }}</dd>
+            </div>
+          </dl>
           <div v-if="match.latest_insight" class="insight">
-            <h4>{{ match.latest_insight.headline || 'AI 前瞻' }}</h4>
-            <p>{{ match.latest_insight.key_points || '查看详情获取完整分析。' }}</p>
-            <footer class="insight-meta">
-              <span>胜负倾向：{{ verdictLabel(match.latest_insight.verdict) }}</span>
-              <span v-if="match.latest_insight.confidence">
-                信心指数：{{ match.latest_insight.confidence }}%
-              </span>
-            </footer>
+            <h4>{{ match.latest_insight.headline || 'AI 综合前瞻' }}</h4>
+            <p>{{ match.latest_insight.key_points || '点击查看完整详情与走势分析。' }}</p>
           </div>
         </section>
       </article>
@@ -127,72 +127,102 @@ function formatTeams(match) {
   return `${match.home_team.name} vs ${match.away_team.name}`
 }
 
-function verdictLabel(code) {
-  if (!code) return '待定'
+function verdictLabel(verdict) {
   const map = {
-    home: '倾向主胜',
-    draw: '倾向平局',
-    away: '倾向客胜'
+    home_win: '主胜',
+    away_win: '客胜',
+    draw: '平局',
+    unknown: '待分析',
+    undefined: '待分析'
   }
-  return map[code] || code
+  return map[verdict] || '待分析'
 }
 </script>
 
 <style scoped>
-.filters input {
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  background: rgba(15, 23, 42, 0.6);
-  color: #e2e8f0;
+.match-list {
+  display: grid;
+  gap: 24px;
+}
+
+.card {
+  background: rgba(15, 23, 42, 0.7);
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
+  padding: 22px 24px;
+  transition: transform 0.2s ease;
+}
+
+.filters {
+  display: grid;
+  gap: 18px;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #38bdf8;
 }
 
 .filter-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 16px;
-  align-items: end;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: #cbd5f5;
+  font-size: 14px;
+}
+
+input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.5);
+  color: #e2e8f0;
 }
 
 .checkbox {
-  display: flex;
   align-items: center;
-  gap: 10px;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
 }
 
 .refresh {
-  padding: 10px 16px;
-  border-radius: 12px;
-  background: linear-gradient(90deg, #38bdf8, #14b8a6);
-  border: none;
+  background: linear-gradient(120deg, rgba(56, 189, 248, 0.9), rgba(20, 184, 166, 0.85));
   color: #0f172a;
   font-weight: 600;
+  border: none;
+  border-radius: 12px;
+  padding: 12px;
   cursor: pointer;
   transition: transform 0.2s ease;
 }
 
 .refresh:hover {
-  transform: translateY(-1px);
+  transform: translateY(-2px);
 }
 
 .match-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 20px;
 }
 
 .match-card {
-  cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
   position: relative;
-  overflow: hidden;
+  cursor: pointer;
 }
 
 .match-card::after {
   content: '';
   position: absolute;
   inset: 0;
+  border-radius: 20px;
   background: linear-gradient(120deg, rgba(56, 189, 248, 0.08), rgba(20, 184, 166, 0.08));
   opacity: 0;
   transition: opacity 0.3s ease;
@@ -225,6 +255,16 @@ function verdictLabel(code) {
   color: #e2e8f0;
 }
 
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  font-size: 12px;
+}
+
 .team-block {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -253,8 +293,22 @@ function verdictLabel(code) {
   color: #f8fafc;
 }
 
+.meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin: 18px 0 0;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.meta dt {
+  font-weight: 600;
+  color: #cbd5f5;
+}
+
 .insight {
-  margin-top: 20px;
+  margin-top: 16px;
   padding: 16px;
   border-radius: 14px;
   border: 1px solid rgba(56, 189, 248, 0.2);
@@ -268,17 +322,10 @@ function verdictLabel(code) {
 }
 
 .insight p {
-  margin: 0 0 12px;
+  margin: 0;
   color: #cbd5f5;
   font-size: 14px;
   line-height: 1.5;
-}
-
-.insight-meta {
-  display: flex;
-  gap: 18px;
-  font-size: 13px;
-  color: #94a3b8;
 }
 
 .loading,

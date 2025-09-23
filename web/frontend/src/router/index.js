@@ -1,7 +1,7 @@
-﻿import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 
 import MatchList from '@/components/MatchList.vue'
-import MatchDetail from '@/components/MatchDetail.vue'
+import MatchDetail from '@/components/MatchDetail.vue'\nimport SettingsPanel from '@/components/SettingsPanel.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -24,4 +24,5 @@ const router = createRouter({
 })
 
 export default router
+
 

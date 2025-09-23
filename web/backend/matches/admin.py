@@ -1,46 +1,53 @@
-﻿from django.contrib import admin
+from django.contrib import admin
 
-from .models import AIInsight, Article, Match, Recommendation, Team, TeamStat
+from matches.models import AiInsight, Article, Match, MatchDetail, MatchRecommendation, MatchTimelineEntry, SiteConfiguration, Team
 
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    list_display = ('name', 'league', 'country', 'coach')
-    search_fields = ('name', 'league', 'country')
-
-
-@admin.register(TeamStat)
-class TeamStatAdmin(admin.ModelAdmin):
-    list_display = ('team', 'season', 'matches_played', 'wins', 'draws', 'losses')
-    list_filter = ('season',)
-    search_fields = ('team__name',)
+    list_display = ('name', 'short_name', 'league', 'league_id')
+    search_fields = ('name', 'short_name', 'league')
 
 
 @admin.register(Match)
 class MatchAdmin(admin.ModelAdmin):
-    list_display = ('league', 'match_datetime', 'home_team', 'away_team', 'status')
-    search_fields = ('league', 'home_team__name', 'away_team__name')
+    list_display = ('id', 'league', 'match_datetime', 'home_team', 'away_team', 'status')
     list_filter = ('league', 'status')
-    date_hierarchy = 'match_datetime'
+    search_fields = ('home_team__name', 'away_team__name', 'league')
+    autocomplete_fields = ('home_team', 'away_team')
 
 
 @admin.register(Article)
 class ArticleAdmin(admin.ModelAdmin):
-    list_display = ('title', 'match', 'source', 'published_at')
-    search_fields = ('title', 'source')
-    list_filter = ('source',)
+    list_display = ('title', 'match', 'source', 'publish_datetime', 'status')
+    list_filter = ('status', 'source')
+    search_fields = ('title', 'summary', 'match__league')
+    readonly_fields = ('created_at', 'updated_at')
 
 
-@admin.register(AIInsight)
-class AIInsightAdmin(admin.ModelAdmin):
-    list_display = ('match', 'provider', 'verdict', 'confidence', 'created_at')
-    search_fields = ('match__home_team__name', 'match__away_team__name', 'provider')
-    list_filter = ('provider',)
+@admin.register(AiInsight)
+class AiInsightAdmin(admin.ModelAdmin):
+    list_display = ('match', 'headline', 'verdict', 'confidence', 'model_name', 'created_at')
+    list_filter = ('verdict', 'model_name')
+    search_fields = ('headline', 'match__home_team__name', 'match__away_team__name')
 
 
-@admin.register(Recommendation)
-class RecommendationAdmin(admin.ModelAdmin):
+@admin.register(MatchDetail)
+class MatchDetailAdmin(admin.ModelAdmin):
+    list_display = ('match', 'updated_at')
+
+
+@admin.register(MatchTimelineEntry)
+class MatchTimelineAdmin(admin.ModelAdmin):
+    list_display = ('match', 'event_type', 'headline', 'created_at')
+    list_filter = ('event_type',)
+
+
+@admin.register(MatchRecommendation)
+class MatchRecommendationAdmin(admin.ModelAdmin):
     list_display = ('match', 'title', 'confidence_level', 'created_at')
-    search_fields = ('title', 'match__home_team__name', 'match__away_team__name')
-    list_filter = ('confidence_level',)
 
+
+@admin.register(SiteConfiguration)
+class SiteConfigurationAdmin(admin.ModelAdmin):
+    list_display = ('ai_model', 'update_interval_minutes', 'last_update_at')

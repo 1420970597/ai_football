@@ -1,17 +1,18 @@
-ï»¿<template>
+<template>
   <div class="app-shell">
     <header class="app-header">
       <div class="container">
         <div class="header-content">
           <div class="branding">
-            <span class="brand-mark">?</span>
+            <span class="brand-mark">??</span>
             <div>
-              <h1>AI è¶³çƒèµ›äº‹æƒ…æŠ¥ä¸­å¿ƒ</h1>
-              <p>è‡ªç ”æ•°æ® + AI å‰çž»æ±‡æ€» + å®žæ—¶æ›´æ–°</p>
+              <h1>AI ×ãÇò±ÈÈüÇ°Õ°ÖÐÐÄ</h1>
+              <p>Êý¾Ý¶´²ì ¡¤ Ã½Ìå¹Ûµã ¡¤ AI Ô¤²â</p>
             </div>
           </div>
           <nav class="nav-links">
-            <RouterLink to="/">èµ›ç¨‹æ€»è§ˆ</RouterLink>
+            <RouterLink to="/">±ÈÈüÖÐÐÄ</RouterLink>
+            <RouterLink to="/settings">ÏµÍ³ÉèÖÃ</RouterLink>
           </nav>
         </div>
       </div>
@@ -109,4 +110,3 @@ p {
   }
 }
 </style>
-

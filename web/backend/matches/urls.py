@@ -1,19 +1,13 @@
-﻿from rest_framework.routers import DefaultRouter
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
 
-from .views import (
-    AIInsightViewSet,
-    ArticleViewSet,
-    MatchViewSet,
-    RecommendationViewSet,
-    TeamViewSet,
-)
+from matches.views import ManualUpdateTriggerView, MatchViewSet, SiteConfigurationView
 
 router = DefaultRouter()
-router.register('teams', TeamViewSet)
-router.register('matches', MatchViewSet)
-router.register('articles', ArticleViewSet)
-router.register('ai-insights', AIInsightViewSet)
-router.register('recommendations', RecommendationViewSet)
+router.register('matches', MatchViewSet, basename='matches')
 
-urlpatterns = router.urls
-
+urlpatterns = [
+    path('', include(router.urls)),
+    path('settings/', SiteConfigurationView.as_view(), name='site-configuration'),
+    path('updates/trigger/', ManualUpdateTriggerView.as_view(), name='manual-update-trigger'),
+]

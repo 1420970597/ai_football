@@ -1,4 +1,4 @@
-﻿import axios from 'axios'
+import axios from 'axios'
 
 const apiClient = axios.create({
   baseURL: '/api',
@@ -25,5 +25,13 @@ export const fetchMatchTimeline = (matchId) =>
 export const fetchTeams = () =>
   apiClient.get('/teams/').then((res) => res.data)
 
-export default apiClient
+export const fetchSettings = () =>
+  apiClient.get('/settings/').then((res) => res.data)
 
+export const updateSettings = (payload) =>
+  apiClient.put('/settings/', payload).then((res) => res.data)
+
+export const triggerUpdate = () =>
+  apiClient.post('/updates/trigger/').then((res) => res.data)
+
+export default apiClient

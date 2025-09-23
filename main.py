@@ -2006,7 +2006,7 @@ class FootballAnalyzer:
         
         return False
 
-    def extract_articles_concurrently(self, articles: List[Dict], keyword: str, max_workers: int = 3) -> List[Dict]:
+    def extract_articles_concurrently(self, articles: List[Dict], keyword: str, max_workers: int = 2) -> List[Dict]:
         """并发提取文章内容（复用浏览器实例）"""
         print(f"  [并发] 使用{max_workers}个浏览器进程并发提取 {len(articles)} 篇文章...")
         
@@ -2520,8 +2520,8 @@ class FootballAnalyzer:
         if extract_content and articles:
             print(f"  开始提取 {len(articles)} 篇文章的详细内容...")
             
-            # 使用并发方式提取文章内容（3个浏览器进程）
-            extraction_results = self.extract_articles_concurrently(articles, keyword, max_workers=3)
+            # 使用并发方式提取文章内容（2个浏览器进程）
+            extraction_results = self.extract_articles_concurrently(articles, keyword, max_workers=2)
             
             print(f"  [调试] 并发提取完成，返回{len(extraction_results)}个结果")
             for idx, result in enumerate(extraction_results):
@@ -2802,6 +2802,19 @@ class FootballAnalyzer:
 
     def generate_wechat_post(self, match_data: Dict, consistency_data: Dict, all_analyses: List[Dict]) -> str:
         """生成微信公众号推文"""
+        
+        # 类型安全检查
+        if not isinstance(consistency_data, dict):
+            print(f"    [警告] consistency_data类型错误: {type(consistency_data)}, 使用空字典替代")
+            consistency_data = {}
+        
+        if not isinstance(match_data, dict):
+            print(f"    [警告] match_data类型错误: {type(match_data)}, 使用默认值")
+            match_data = {}
+            
+        if not isinstance(all_analyses, list):
+            print(f"    [警告] all_analyses类型错误: {type(all_analyses)}, 使用空列表替代")
+            all_analyses = []
 
         # 提取比赛基本信息
         basic_info = match_data.get('基本信息', {})
@@ -2826,10 +2839,21 @@ class FootballAnalyzer:
 
         # 准备一致性信息
         consistency_info = ""
-        if consistency_data:
-            match_key = list(consistency_data.keys())[0]
-            consistency = consistency_data[match_key]
-            consistency_info = f"预测一致性：{consistency['consistency_percentage']:.1f}%，预测结果：{consistency['most_common_result']}"
+        if consistency_data and isinstance(consistency_data, dict) and len(consistency_data) > 0:
+            try:
+                match_key = list(consistency_data.keys())[0]
+                consistency = consistency_data[match_key]
+                if isinstance(consistency, dict):
+                    consistency_percentage = consistency.get('consistency_percentage', 0)
+                    most_common_result = consistency.get('most_common_result', '未知')
+                    consistency_info = f"预测一致性：{consistency_percentage:.1f}%，预测结果：{most_common_result}"
+                else:
+                    consistency_info = "一致性数据格式错误"
+            except (KeyError, IndexError, TypeError) as e:
+                print(f"    [警告] 一致性数据处理失败: {e}")
+                consistency_info = "一致性数据不可用"
+        else:
+            consistency_info = "暂无一致性数据"
 
         prompt = f"""
 请根据以下信息生成一篇微信公众号足球比赛预测推文：
@@ -3099,12 +3123,25 @@ class FootballAnalyzer:
 
                 # 获取该比赛的一致性信息
                 match_consistency = None
+                print(f"  [调试] 为比赛 {keyword} 查找一致性信息...")
+                print(f"  [调试] 可用的一致性结果: {list(consistency_results.keys())}")
+                
                 for match_key, consistency in consistency_results.items():
+                    print(f"  [调试] 检查匹配: '{match_key}' vs '{keyword}'")
                     if match_key in keyword or keyword in match_key:
                         match_consistency = consistency
+                        print(f"  [调试] 找到匹配的一致性数据: {type(consistency)}")
+                        print(f"  [调试] 一致性数据内容: {consistency}")
                         break
+                
+                if match_consistency is None:
+                    print(f"  [调试] 未找到匹配的一致性数据，使用空字典")
+                
+                # 确保传递正确的数据类型
+                consistency_param = match_consistency if isinstance(match_consistency, dict) else {}
+                print(f"  [调试] 传递给generate_wechat_post的一致性参数类型: {type(consistency_param)}")
 
-                wechat_post = self.generate_wechat_post(match_data, match_consistency or {}, analyses)
+                wechat_post = self.generate_wechat_post(match_data, consistency_param, analyses)
 
                 if wechat_post:
                     # 保存推文到文件

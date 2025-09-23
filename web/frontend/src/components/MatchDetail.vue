@@ -1,5 +1,5 @@
 ﻿<template>
-  <section class="match-detail" v-if="store.selectedMatch">
+  <section class="match-detail" v-if="match">
     <section class="card hero">
       <header class="hero-header">
         <div>
@@ -38,23 +38,22 @@
 
     <section class="grid">
       <article class="card team-card">
-        <h3 class="section-title">球队数据雷达</h3>
+        <h3 class="section-title">球队近期表现</h3>
         <div class="team-stats" v-for="team in [match.home_team, match.away_team]" :key="team.id">
           <header>
             <h4>{{ team.name }}</h4>
-            <small>{{ team.league || '联赛待定' }}</small>
+            <small>{{ team.league || '暂无联赛信息' }}</small>
           </header>
-          <section v-if="team.stats.length" class="stats">
+          <section v-if="team.stats?.length" class="stats">
             <div class="stat" v-for="stat in team.stats" :key="stat.season">
               <strong>{{ stat.season }}</strong>
               <span>战绩 {{ stat.wins }}胜 {{ stat.draws }}平 {{ stat.losses }}负</span>
-              <span>场均控球 {{ stat.possession_average ?? '-' }}%</span>
-              <span>射门 {{ stat.shots_average ?? '-' }} 次</span>
-              <span>传球成功率 {{ stat.passing_accuracy ?? '-' }}%</span>
-              <span>近期状态 {{ stat.form || '暂无' }}</span>
+              <span>场均进球 {{ stat.shots_average ?? '-' }}</span>
+              <span>场均失球 {{ stat.conceded_average ?? '-' }}</span>
+              <span>状态亮点 {{ stat.form || '暂无数据' }}</span>
             </div>
           </section>
-          <p v-else class="empty">暂无该队的赛季统计</p>
+          <p v-else class="empty">暂无该球队的统计信息</p>
         </div>
       </article>
 
@@ -88,7 +87,7 @@
             <li v-for="point in item.recommendation_points" :key="point">{{ point }}</li>
           </ul>
           <footer>
-            <span class="badge">信心：{{ item.confidence_level || '中性' }}</span>
+            <span class="badge">置信度：{{ item.confidence_level || '待评估' }}</span>
           </footer>
         </div>
       </article>
@@ -99,7 +98,7 @@
           <li v-for="article in match.articles" :key="article.id">
             <a :href="article.url" target="_blank" rel="noopener">
               <h4>{{ article.title }}</h4>
-              <p>{{ article.summary || '暂无摘要' }}</p>
+              <p>{{ article.summary || '暂无摘要信息' }}</p>
               <small>{{ formatDate(article.published_at) }} · {{ article.source || '未知来源' }}</small>
             </a>
           </li>
@@ -113,7 +112,7 @@
             <time>{{ formatDate(item.created_at) }}</time>
             <div>
               <strong>{{ item.headline || verdictLabel(item.verdict) }}</strong>
-              <p>{{ item.key_points || '暂无详细描述' }}</p>
+              <p>{{ item.details || '点击查看上方摘要了解更多' }}</p>
             </div>
           </li>
         </ol>
@@ -127,7 +126,7 @@
   </section>
 
   <section v-else class="card error">
-    <p>暂无该比赛信息。</p>
+    <p>未获取到该比赛的详细信息</p>
   </section>
 </template>
 
@@ -172,18 +171,18 @@ function formatDate(value) {
 }
 
 function verdictLabel(code) {
-  if (!code) return '待定'
   const map = {
-    home: '倾向主胜',
-    draw: '倾向平局',
-    away: '倾向客胜'
+    home_win: '主队更优',
+    draw: '打成平局',
+    away_win: '客队更优',
+    unknown: '待分析'
   }
-  return map[code] || code
+  return map[code] || '待分析'
 }
 
 function statusLabel(status) {
   const map = {
-    scheduled: '未开赛',
+    scheduled: '未开始',
     live: '进行中',
     finished: '已结束',
     postponed: '延期'
@@ -214,11 +213,36 @@ function statusLabel(status) {
   color: #94a3b8;
 }
 
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  font-size: 12px;
+}
+
 .odds {
   background: rgba(56, 189, 248, 0.12);
   border-radius: 14px;
   padding: 16px;
   border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+.odds h4 {
+  margin: 0 0 10px;
+  color: #38bdf8;
+}
+
+.odds ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+  color: #cbd5f5;
 }
 
 .scoreboard {
@@ -238,44 +262,52 @@ function statusLabel(status) {
   color: #cbd5f5;
 }
 
-.scoreboard .team strong {
-  font-size: 20px;
-}
-
 .scoreboard .score {
+  font-size: 32px;
+  font-weight: 700;
+  color: #f8fafc;
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 40px;
-  font-weight: 700;
-  color: #f8fafc;
 }
 
 .grid {
   display: grid;
-  gap: 24px;
+  gap: 20px;
 }
 
-.team-card .team-stats {
+.section-title {
+  margin: 0 0 18px;
+  font-size: 18px;
+  color: #38bdf8;
+}
+
+.team-card {
   display: grid;
   gap: 18px;
 }
 
-.team-card .stats {
+.team-stats {
+  background: rgba(14, 23, 42, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 14px;
+  padding: 18px;
+}
+
+.stats {
   display: grid;
-  gap: 14px;
+  gap: 12px;
   margin-top: 12px;
 }
 
 .stat {
-  padding: 12px 14px;
+  background: rgba(15, 23, 42, 0.6);
   border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  background: rgba(15, 23, 42, 0.5);
+  padding: 12px;
   display: grid;
   gap: 6px;
-  font-size: 14px;
   color: #cbd5f5;
+  font-size: 14px;
 }
 
 .insight-item {
@@ -321,11 +353,6 @@ function statusLabel(status) {
 .article-list a:hover {
   transform: translateY(-2px);
   border-color: rgba(56, 189, 248, 0.4);
-}
-
-.article-list h4 {
-  margin: 0 0 6px;
-  color: #e2e8f0;
 }
 
 .timeline {
