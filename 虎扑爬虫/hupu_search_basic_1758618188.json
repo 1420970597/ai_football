@@ -1,0 +1,63 @@
+{
+  "success": true,
+  "query": "大阪钢巴VS横滨水手",
+  "total_articles": 6,
+  "hours_limit": 48,
+  "pages_searched": 1,
+  "articles": [
+    {
+      "title": "9月23日阿静侃球赛前分析",
+      "url": "https://bbs.hupu.com/634917829.html",
+      "forum_name": "足球财富区",
+      "publish_time": "2025-09-23",
+      "replies": 1,
+      "recommendations": 0,
+      "lights": 0
+    },
+    {
+      "title": "2025年9月23日，17场足球方向参考，仅供参考！",
+      "url": "https://bbs.hupu.com/634917486.html",
+      "forum_name": "足球话题区",
+      "publish_time": "2025-09-23",
+      "replies": 0,
+      "recommendations": 0,
+      "lights": 0
+    },
+    {
+      "title": "今日公推：大阪钢巴 VS 横滨水手",
+      "url": "https://bbs.hupu.com/634917373.html",
+      "forum_name": "足球话题区",
+      "publish_time": "2025-09-23",
+      "replies": 3,
+      "recommendations": 2,
+      "lights": 0
+    },
+    {
+      "title": "今日足球 日职 鹿岛鹿角vs大阪樱花！",
+      "url": "https://bbs.hupu.com/634917096.html",
+      "forum_name": "足球话题区",
+      "publish_time": "2025-09-23",
+      "replies": 0,
+      "recommendations": 0,
+      "lights": 0
+    },
+    {
+      "title": "9.23早场分享",
+      "url": "https://bbs.hupu.com/634916493.html",
+      "forum_name": "足球话题区",
+      "publish_time": "2025-09-23",
+      "replies": 0,
+      "recommendations": 0,
+      "lights": 0
+    },
+    {
+      "title": "9.23号今日足球赛事分析",
+      "url": "https://bbs.hupu.com/634915057.html",
+      "forum_name": "足球财富区",
+      "publish_time": "2025-09-23",
+      "replies": 0,
+      "recommendations": 0,
+      "lights": 0
+    }
+  ]
+}

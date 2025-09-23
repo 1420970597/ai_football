@@ -1,0 +1,11 @@
+Django>=5.2,<5.3
+djangorestframework>=3.15
+django-filter>=24.3
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.2
+selenium>=4.24
+webdriver-manager>=4.0
+fake-useragent>=1.5
+apscheduler>=3.10
+python-dateutil>=2.9

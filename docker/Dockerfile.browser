@@ -1,0 +1,68 @@
+# 基于Ubuntu 20.04构建Chrome沙盒环境
+FROM ubuntu:20.04
+
+# 避免交互式安装
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 设置时区
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# 安装基础依赖
+RUN apt-get update && apt-get install -y \
+    wget \
+    curl \
+    gnupg \
+    ca-certificates \
+    apt-transport-https \
+    software-properties-common \
+    python3 \
+    python3-pip \
+    xvfb \
+    fonts-liberation \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libxss1 \
+    libnss3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 添加Google Chrome仓库
+RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+
+# 安装Google Chrome
+RUN apt-get update && apt-get install -y google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建非root用户
+RUN useradd -m -s /bin/bash scraper && \
+    mkdir -p /home/scraper/app && \
+    chown -R scraper:scraper /home/scraper
+
+# 切换到非root用户
+USER scraper
+WORKDIR /home/scraper/app
+
+# 复制requirements文件
+COPY requirements-browser.txt .
+
+# 安装Python依赖
+RUN pip3 install --user -r requirements-browser.txt
+
+# 复制应用代码
+COPY --chown=scraper:scraper . .
+
+# 设置Python路径
+ENV PATH="/home/scraper/.local/bin:${PATH}"
+ENV PYTHONPATH="/home/scraper/app:${PYTHONPATH}"
+
+# 暴露端口
+EXPOSE 8080
+
+# 启动命令
+CMD ["python3", "browser_scraper_service.py"]

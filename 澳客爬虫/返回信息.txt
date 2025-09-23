@@ -1,0 +1,1216 @@
+请求地址：https://zx.okooo.com/jingcai
+需要携带cookies：PHPSESSID=467800936f69c300e181cab43a07d3ed0cd97b5f; LastUrl=; FirstURL=wap.okooo.com/; FirstOKURL=https%3A//www.okooo.com/jingcai/; First_Source=wap.okooo.com; pm=; LStatus=N; LoginStr=%7B%22welcome%22%3A%22%u60A8%u597D%uFF0C%u6B22%u8FCE%u60A8%22%2C%22login%22%3A%22%u767B%u5F55%22%2C%22register%22%3A%22%u6CE8%u518C%22%2C%22TrustLoginArr%22%3A%7B%22alipay%22%3A%7B%22LoginCn%22%3A%22%22%7D%2C%22tenpay%22%3A%7B%22LoginCn%22%3A%22%u8D22%u4ED8%u901A%22%7D%2C%22weibo%22%3A%7B%22LoginCn%22%3A%22%u65B0%u6D6A%u5FAE%u535A%22%7D%2C%22renren%22%3A%7B%22LoginCn%22%3A%22%22%7D%2C%22baidu%22%3A%7B%22LoginCn%22%3A%22%22%7D%2C%22snda%22%3A%7B%22LoginCn%22%3A%22%22%7D%7D%2C%22userlevel%22%3A%22%22%2C%22flog%22%3A%22hidden%22%2C%22UserInfo%22%3A%22%22%2C%22loginSession%22%3A%22___GlobalSession%22%7D; acw_tc=0aef342417586210138235011e571b3c65cd391703fa9e32e9cce8fb7f4f5b
+
+返回信息：
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta http-equiv="X-UA-Compatible" content="IE=8,9,10,11,edge"/>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<title>竞足最新资讯_澳客</title>
+<meta name="keywords" content="竞足,预测,推荐,资讯,世界杯新闻,世界杯预测,世界杯最新资讯" />
+<meta name="description" content="竞足海量资讯，网站为您提供最新资讯、前沿动态、专家预测等内容，方便在线分析竞猜。为您提供世界杯新闻和世界杯预测，方便您查看丹麦、厄瓜多尔、突尼斯、克罗地亚世界杯球队新闻资讯。" />
+<meta name="copyright" content="澳客官网" />
+<meta name="360-site-verification" content="89cf388f9531ae7029bec7446ba1534d" />
+<meta name="referrer" content="unsafe-url"/>
+
+<script>
+//
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?213d524a1d07274f17dfa17b79db318f";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+//
+</script>
+
+  <link rel="stylesheet" href="https://imgv1.okoooimg.cn/min/?b=oae/css&f=circle.css&_v=20250821170100">
+  <link rel="stylesheet" href="https://imgv1.okoooimg.cn/min/?b=oae/css&f=news.css&_v=20250421170100">
+  <link rel="stylesheet" href="https://imgv1.okoooimg.cn/min/?b=style/css&f=circleMoudle.css&_v=20250421170100">
+  <link rel="stylesheet" href="https://imgv1.okoooimg.cn/min/?b=style/css/lottery&f=auther_content.css&_v=20250421170100">
+  <style>
+    .news_left {
+      width: 720px;
+      box-sizing: border-box;
+      overflow: hidden;
+      padding: 10px 20px;
+      margin-bottom: 5px;
+      box-shadow: 0px 0px 7px 0 rgba(0, 0, 0, 0.06);
+      border: none;
+      border-radius: initial;
+    }
+
+    .newsKind_title.clearfix {
+      display: inline-block;
+      width: 100%;
+      border-bottom: 1px solid #e1e1e1;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      padding-top: 10px;
+    }
+
+    .newsKind_title h1.float_l {
+      margin-bottom: auto;
+      font-size: 14px;
+      font-weight: 500;
+      color: #666;
+    }
+
+    .newsKind_right a {
+      color: #474747;
+    }
+    .newsKind_right a.active{
+      font-weight: bold;
+    }
+
+    .newsKind_right a:not(:last-child):after {
+      content: '|';
+      font-size: 8px;
+      color: #ccc;
+      position: relative;
+      margin: 0 2px 0 8px;
+      top: -2px;
+    }
+
+    .news_left_item a.img_box {
+      width: auto;
+      height: 115px;
+      border: 1px solid #eee;
+      border-radius: 2px;
+      overflow: hidden;
+      float: left;
+    }
+
+    h2.news_title {
+      padding: 0 0 10px 0;
+    }
+
+    .news_txt p.summary {
+      font-size: 15px;
+      line-height: 1.67;
+      word-wrap: break-word;
+      text-align: justify;
+      margin: 0 0 5px 0;
+    }
+
+    .news_txt p.summary a {
+      color: #999;
+    }
+
+    .cyq_newope.clearfix {
+      margin: 0;
+    }
+
+    .cyqopeIcon.icon_checkgood label {
+      margin: 0;
+    }
+
+    span.cyq_detail_btn {
+      display: inline-block;
+      border: 1px solid #e1e1e1;
+      font-size: 12px;
+      color: #ea5650;
+      margin: 0 0 0 15px;
+      border-radius: 30px;
+      padding: 0 10px;
+    }
+
+    .pagination a {
+      width: 24px;
+      height: 24px;
+      line-height: 24px;
+    }
+
+    span.cyq_readtoll {
+      background-color: #7848ff;
+      color: #fff;
+      border-radius: 2px;
+      padding: 0 3px;
+      font-size: 14px;
+      margin-right: 3px;
+      border: unset;
+    }
+
+    /*左边结束*/
+    /*右边开始*/
+    .news_right {
+      width: 260px;
+    }
+
+    .news_right_model {
+      width: 260px;
+      box-sizing: border-box;
+      padding: 15px;
+      box-shadow: 0px 0px 7px 0 rgba(0, 0, 0, 0.06);
+      border: none;
+      border-radius: initial;
+    }
+
+    a.relaxLabel_btn {
+      background-color: #f8f8f8;
+      border-radius: 20px;
+      display: inline-block;
+      padding: 3px 8px 1px 8px;
+      color: #999;
+      font-size: 12px;
+      margin: 5px 0;
+      border: 1px solid #e1e1e1;
+      min-width: initial;
+      height: auto;
+      line-height: initial;
+      float: initial;
+    }
+
+    /* 热门新闻 */
+    div#hotNewsList {
+      padding: 10px 0 0 0;
+    }
+
+    .news_right_item {
+      padding: 5px 0;
+      border: none;
+    }
+
+    .hot_num {
+      width: 15px;
+      height: 15px;
+      line-height: 15px;
+      float: left;
+      background: #c7cbd4;
+      text-align: center;
+      margin-top: 3px;
+      border-radius: 2px;
+      color: #fff;
+      font-size: 12px;
+    }
+
+    .news_right_item:nth-child(1) .hot_num {
+      background: #ea5650
+    }
+
+    .news_right_item:nth-child(2) .hot_num {
+      background: #ff8011
+    }
+
+    .news_right_item:nth-child(3) .hot_num {
+      background: #efc05e
+    }
+
+    .hotNewsList .news_right_item a {
+      display: inline-block;
+      width: 178px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin: 0 0 0 5px;
+    }
+
+    .news_read {
+      float: right;
+      font-size: 12px;
+      color: #999;
+      line-height: 20px;
+    }
+
+    a.newsChannel {
+      background-color: #f8f8f8;
+      border-radius: 20px;
+      display: inline-block;
+      padding: 3px 8px 1px 8px;
+      color: #999;
+      font-size: 12px;
+      margin: 4px 0;
+      border: 1px solid #e1e1e1;
+      width: auto;
+    }
+
+    /*热门新闻结束*/
+    span.cyq_newope_time {
+      color: #c1c1c1;
+    }
+  </style>
+</head>
+
+<body>
+  <link rel="stylesheet" href="https://imgv1.okoooimg.cn/min/?b=style%2fcss&f=headernew.css&_v=20250421170100">
+<link rel="stylesheet" href="https://imgv1.okoooimg.cn/min/?b=style/css/new-pc/css&f=new-pc-public.css&_v=20250421170100">
+<link rel="stylesheet" href="https://imgv1.okoooimg.cn/min/?b=oae/css&f=login.css&_v=20250421170100">
+<script src="https://imgv1.okoooimg.cn/min/?b=oae/js&f=jquery-1.11.2.min.js&_v=20250512170000"></script>
+<script src="https://imgv1.okoooimg.cn/min/?b=JS&f=public/util.js,public/ejs.js&_v=20240529170050"></script>
+<script>
+  var tDate = '2025-09-23';
+  var js_version = '20211203160010';
+  var user_id = '';
+  var StaticUrl = 'https://imgv1.okoooimg.cn';
+  var jsrequire = '20250512140020';
+  var ejsversion = '20250109140000';
+  var BaseUrl = '//www.okooo.com';
+  var isNeedCors = '1';
+  function getMobileHref() {
+    var httpText = 'http:';
+    if (location.href.indexOf('https') != 0) {
+      httpText = 'https:';
+    }
+    //var url = httpText + '//a.okooo.com/detect.php?fs=pc&from=' + encodeURIComponent(location.href) + "&rand=" + Math.floor(Math.random() * 99999999);
+    var url = httpText + '//m.okooo.com/';
+    var project_pattern = /\.com\/u\/([0-9]+)\/p([0-9]+)\//g;
+    var p_result = project_pattern.exec(location.href);
+    if (p_result) {
+      url = httpText + '//m.okooo.com/project/index.php?ProjectID=' + p_result[2] + '&SponsorID=' + p_result[1] + '&from=pc';
+    }
+    var wager_pattern = /\.com\/u\/([0-9]+)\/w([0-9]+)\//g;
+    var p_result = wager_pattern.exec(location.href);
+    if (p_result) {
+      url = '';
+    }
+    var plan_pattern1 = /\.com\/Buy06\/SeriesShow\.php\?PlanID=([0-9]+)/g;
+    var p_result = plan_pattern1.exec(location.href);
+    if (p_result) {
+      url = httpText + '//m.okooo.com/project/plan.php?PlanID=' + p_result[1] + '&from=pc';
+    }
+    var plan_pattern2 = /\.com\/Buy06\/SeriesShowWinner\.php\?PlanID=([0-9]+)/g;
+    var p_result = plan_pattern2.exec(location.href);
+    if (p_result) {
+      url = httpText + '//m.okooo.com/project/plan.php?PlanID=' + p_result[1] + '&from=pc';
+    }
+    var model_pattern2 = /\.com\/model\/info?mid=([0-9]+)/g;
+    var p_result = model_pattern2.exec(location.href);
+    if (p_result) {
+      url = httpText + '//m.okooo.com/winner/show.php?mid=' + p_result[1] + '&from=pc';
+    }
+    var odds_pattern = /\.com\/soccer\/match\/([0-9]+)\/odds/g;
+    var p_result = odds_pattern.exec(location.href);
+    if (p_result) {
+      url = httpText + '//m.okooo.com/match/odds.php?MatchID=' + p_result[1] + '&from=pc';
+    }
+    var ah_pattern = /\.com\/soccer\/match\/([0-9]+)\/ah/g;
+    var p_result = ah_pattern.exec(location.href);
+    if (p_result) {
+      url = httpText + '//m.okooo.com/match/handicap.php?MatchID=' + p_result[1] + '&from=pc';
+    }
+    var history_pattern = /\.com\/soccer\/match\/([0-9]+)\/history/g;
+    var p_result = history_pattern.exec(location.href);
+    if (p_result) {
+      url = httpText + '//m.okooo.com/match/history.php?MatchID=' + p_result[1] + '&from=pc';
+    }
+    var exchanges_pattern = /\.com\/soccer\/match\/([0-9]+)\/exchanges/g;
+    var p_result = exchanges_pattern.exec(location.href);
+    if (p_result) {
+      url = httpText + '//m.okooo.com/match/exchanges.php?MatchID=' + p_result[1] + '&from=pc';
+    }
+    var form_pattern = /\.com\/soccer\/match\/([0-9]+)\/$/g;
+    var p_result = form_pattern.exec(location.href);
+    if (p_result) {
+      url = httpText + '//m.okooo.com/match/form.php?MatchID=' + p_result[1] + '&from=pc';
+    }
+    var note_pattern = /\.com\/soccer\/match\/([0-9]+)\/#note=([0-9a-zA-Z]+)$/g;
+    var p_result = note_pattern.exec(location.href);
+    if (p_result) {
+      url = httpText + '//m.okooo.com/match/note.php?MatchID=' + p_result[1] + '&from=pc';
+    }
+    return url;
+  }
+  var mobileHref = getMobileHref();
+  try {
+    var params = parseURL(location.href)['params'];
+  } catch (e) {
+    var params = {};
+  }
+  var jump_to_mobile = 1;
+  if (params && params['mobile_app'])
+    jump_to_mobile = 0;
+  if (jump_to_mobile && mobileHref && document.cookie.indexOf("mobile_app") < 0 && location.hostname.indexOf("itou.com") < 0 && location.hostname.indexOf("www.okooo.com") >= 0 && navigator.userAgent.indexOf('iPad') < 0) {
+    var u = navigator.userAgent;
+    if (!!u.match(/AppleWebKit.*Mobile.*/)) {
+      location.href = mobileHref;
+    } else if (u.indexOf('Android') > -1) {
+      location.href = mobileHref;
+    } else if (u.indexOf('iPhone') > -1) {
+      location.href = mobileHref;
+    } else if (u.indexOf('iPad') > -1) {
+      location.href = mobileHref;
+    } else if (u.indexOf("Linux") > -1 && u.indexOf("360browser") > -1) {
+      location.href = mobileHref;
+    } else if (u.indexOf("U;") > -1 && u.indexOf("Mac OS") > -1) {
+      location.href = mobileHref;
+    } else if (u.indexOf("Windows Phone") > -1) {
+      location.href = mobileHref
+    }
+  }
+
+    if (typeof(Common.cors) == 'undefined') {
+      // 跨域改造，在头部添加Common的方法
+      Common.cors = {};
+      Common.cors.json = 'json';
+      // if (typeof (isNeedCors) != 'undefined' && isNeedCors) {
+      //   Common.cors.json = 'jsonp';
+      // }
+      Common.cors.needCors = function(_url) {
+        var url = _url;
+        if (typeof(isNeedCors) != 'undefined' && isNeedCors) {
+          // url = BaseUrl + url + '&format=jsonp&jsoncallback=?';
+          url = BaseUrl + url;
+        }
+        return url;
+      }
+      Common.cors.baseUrl = function(_url) {
+        var url = _url;
+        if (typeof(isNeedCors) != 'undefined' && isNeedCors) {
+          url = BaseUrl + url;
+        }
+        return url;
+      }
+      Common.cors.ajaxCorsFn = function(_url, _type, _param, callback, otherParam) {
+        var url = _url;
+        var param = {
+          type: _type || 'get',
+          url: url,
+          data: _param,
+          dataType: 'json',
+          success: callback
+        }
+        if (typeof(isNeedCors) != 'undefined' && isNeedCors) {
+          // param.json = 'jsonp';
+          // param.url = BaseUrl + param.url + '&format=jsonp&jsoncallback=?';
+          param.url = BaseUrl + param.url;
+          param.xhrFields = {};
+          param.xhrFields.withCredentials = true;
+          param.crossDomain = true;
+        }
+        if (otherParam && typeof(otherParam) == 'object') {
+          if (typeof Object.assign != 'function') {
+            (function() {
+              Object.assign = function(target) {
+                'use strict';
+                if (target === undefined || target === null) {
+                  throw new TypeError('Cannot convert undefined or null to object');
+                }
+                var output = Object(target);
+                for (var index = 1; index < arguments.length; index++) {
+                  var source = arguments[index];
+                  if (source !== undefined && source !== null) {
+                    for (var nextKey in source) {
+                      if (source.hasOwnProperty(nextKey)) {
+                        output[nextKey] = source[nextKey];
+                      }
+                    }
+                  }
+                }
+                return output;
+              };
+            })();
+          }
+          Object.assign(param, otherParam);
+        }
+        $.ajax(param);
+      }
+    }
+
+</script>
+
+
+
+
+
+
+
+
+  <div class="ok-header-placeholder"></div>
+  <div class="ok-header header-fixed">
+    <div class="ok-container flex AIC ok-header-body">
+      <a href="//www.okooo.com" class="logo-link" style="width:120px; height:auto;margin-right: 25px;">
+        <img src="
+                         https://imgv1.okoooimg.cn/style/css/new-pc/img/header/oklogo-xin.png
+          " alt="澳客网" class="logo-img">
+
+      </a>
+
+                        <div class="ok-header-item" data-type="lottery">
+            <div class="text">
+              <a  href="//www.okooo.com/jingcai/"  >赛程前瞻</a> <i class="glyphicon glyphicon-triangle-bottom"></i>            </div>
+                          <div class="header-item-dropdown clearfix">
+                                  <a href="//www.okooo.com/jingcai/"  class="dropdown-item">竞足</a>
+                                  <a href="//www.okooo.com/jingcailanqiu/hunhe/"  class="dropdown-item">竞篮</a>
+                                  <a href="//www.okooo.com/danchang/"  class="dropdown-item">北单</a>
+                                  <a href="//www.okooo.com/zucai/"  class="dropdown-item">传统14场</a>
+                                  <a href="//www.okooo.com/zucai/ren9/"  class="dropdown-item"> 任选9场</a>
+                                  <a href="//kj.okooo.com"  class="dropdown-item">赛果大厅</a>
+                              </div>
+                      </div>
+                  <div class="ok-header-item" data-type="live">
+            <div class="text">
+              <a  href="//www.okooo.com/livecenter/"  >比分直播</a> <i class="glyphicon glyphicon-triangle-bottom"></i>            </div>
+                          <div class="header-item-dropdown clearfix">
+                                  <a href="//www.okooo.com/livecenter/"  class="dropdown-item">竞足直播</a>
+                                  <a href="//www.okooo.com/livecenter/football/"  class="dropdown-item">足球直播</a>
+                                  <a href="//www.okooo.com/livecenter/danchang/"  class="dropdown-item">单场直播</a>
+                                  <a href="//www.okooo.com/livecenter/zucai/"  class="dropdown-item">十四直播</a>
+                                  <a href="//www.okooo.com/livecenter/jingcailanqiu/"  class="dropdown-item">竞篮直播</a>
+                              </div>
+                      </div>
+                  <div class="ok-header-item" data-type="social">
+            <div class="text">
+              <a  href="//www.okooo.com/circle/"  >社区</a>            </div>
+                      </div>
+                  <div class="ok-header-item" data-type="data">
+            <div class="text">
+              <a  href="//www.okooo.com/soccer/"  >足球数据</a> <i class="glyphicon glyphicon-triangle-bottom"></i>            </div>
+                          <div class="header-item-dropdown clearfix">
+                                  <a href="//www.okooo.com/soccer/"  class="dropdown-item">足球数据</a>
+                                  <a href="//www.okooo.com/basketball/"  class="dropdown-item">篮球数据</a>
+                              </div>
+                      </div>
+                  <div class="ok-header-item" data-type="jinnang">
+            <div class="text">
+              <a  href="//www.okooo.com/jinnang/"  >锦囊</a>            </div>
+                      </div>
+                  <div class="ok-header-item" data-type="download">
+            <div class="text">
+              <a  href="//www.okooo.com/app/down/"  >APP</a> <i class="glyphicon glyphicon-triangle-bottom"></i>            </div>
+                          <div class="header-item-dropdown clearfix">
+                                  <a href="//www.okooo.com/app/down/"  class="dropdown-item"><img src='//www.okooo.com/style/css/new-pc/img/home/index_app_code.png?v=20250605'  style='position:relative; left:100%'><i style='position: relative;left: 100%;font-size: 14px;font-style: normal;'>扫码下载APP</i></a>
+                              </div>
+                      </div>
+                      <div class="ok-header-search">
+        <i class="glyphicon glyphicon-search"></i><input type="text" class="search-input JSsearchInput" placeholder="搜高手搜比赛">
+      </div>
+      <div class="ok-header-acc-body hide" id="userLoginDiv">
+        <div class="ok-header-acc flex AIC">
+          <a id="loginBtn" class="acc-btn">登录</a>
+          <a id="registerBtn" class="acc-btn">注册</a>
+        </div>
+      </div>
+      <div class="ok-header-acc-body" style="display: none;">
+        <div class="ok-header-acc flex AIC">
+          <a href="#" class="acc-avatar">
+            <img  alt="" class="avatar-img">
+            <i class="msg_numdot "></i>
+          </a>
+          <a href="//www.okooo.com/member//" class="acc-link" id="iTxtUserName"></a>
+          <div class="header-acc-dropdown">
+            <a href="//www.okooo.com/member//" class="dropdown-item">社交主页</a>
+            <a href="//www.okooo.com/Buy/UserBetList.php" class="dropdown-item">保存记录</a>
+            <a href="//www.okooo.com/userinfo/account/" class="dropdown-item">我的钱包</a>
+            <a href="//www.okooo.com/userinfo/pm/" class="dropdown-item">站内消息<i class="msg_num" style="display: none;" id="userLoginSucInfo"></i></a>
+            <a href="//www.okooo.com/userinfo/settings/" class="dropdown-item">个人设置</a>
+            <a href="javascript:void(0);" onclick="logout();" class="dropdown-item">退出登录</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    //导航菜单下拉事件
+    $(function() {
+      var hoverPanelEvent = function(hoverClass, addClass, delayTime) {
+        /*
+      hoverClass   string CSSclassName
+      addClass     string DOMclassName
+      */
+        var hoverTime, outTime, delay;
+        $(hoverClass).hover(function() {
+          var $this = $(this);
+          if (delayTime) {
+            delay = setTimeout(function() {
+              clearTimeout(outTime);
+              $(hoverClass).removeClass(addClass);
+              $this.addClass(addClass);
+            }, delayTime);
+          } else {
+            clearTimeout(outTime);
+            $(hoverClass).removeClass(addClass);
+            $this.addClass(addClass);
+          }
+        }, function() {
+          var $this = $(this);
+          clearTimeout(delay);
+          outTime = setTimeout(function() {
+            $this.removeClass(addClass);
+          }, 100);
+        });
+      }
+      hoverPanelEvent('.ok-header-item', 'ok-active');
+      hoverPanelEvent('.ok-nav-item', 'ok-active');
+      hoverPanelEvent('.ok-header-acc', 'ok-active');
+      hoverPanelEvent('.home-banner-top-left>.top-left-main>.item', 'ok-active', 100);
+    });
+  </script>
+  <div class="news_bg">
+    <div class="news_wrap clearfix">
+      <div class="news_left">
+        <div class="newsKind_title clearfix">
+          <h1 class="float_l"><a href="https://zx.okooo.com">澳客资讯</a>>竞足</h1>
+          <div class="newsKind_right">
+                          <a href="/jingcai/" class="active">竞足</a>
+                          <a href="/danchang/" class="">北单</a>
+                          <a href="/jingcailanqiu/" class="">竞篮</a>
+                          <a href="/zucai/" class="">14场</a>
+                      </div>
+        </div>
+
+
+        <div id="mathNewList" class="news_list">
+                      <div class="news_left_item clearfix first">
+              <!-- 第一条新闻 class加first -->
+              <a target="_blank" class="img_box" href="/news/68d26dfef46e670e56b52861/"><img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_5.png" alt="新闻图片" class="float_l"></a>              <div class="news_txt float_l ">
+                <h2 class="news_title">
+                  <a target="_blancyq_detail_btnk" href="/news/68d26dfef46e670e56b52861/">J联赛半场战报：浦和红钻主场0-0暂平清水鼓动</a>
+                </h2>
+                <p class="summary"><a target="_blank" href="/news/68d26dfef46e670e56b52861/">比赛概述在北京时间2025年9月23日17:00进行的J联赛第31轮比赛中，浦和红钻坐镇主场迎战清水鼓动。半场战...</a></p>
+
+                <!-- 新的点赞-->
+                <div class="cyq_newope clearfix">
+                  <span class="cyq_newope_time">刚刚</span>
+                                                      <div class="cyq_newope_right" linkUrl="/news/68d26dfef46e670e56b52861/" entityId="68d26dfef46e670e56b52861" entityType="Info_News" weiboId="68d26dfef46e670e56b52861" weiboType="Info_News">
+                    <span class="cyqopeIcon icon_relay" data-author="" data-title="J联赛半场战报：浦和红钻主场0-0暂平清水鼓动">
+                      <em></em><label for="">转发</label> <!-- 转发 -->
+                    </span>
+                    <span class="groupIcon icon_view" data-type="news">
+                      <a target="_blancyq_detail_btnk" href="/news/68d26dfef46e670e56b52861/">
+                        <em></em><label class="commentCount" for="">评论</label>
+                      </a>
+                    </span>
+                    <span class="cyqopeIcon icon_checkgood">
+                      <em></em><label for="">赞</label> <!-- 点赞 加check -->
+                    </span>
+                    <!--<em class="cyqopeIcon icon_more" data-id="copylink_68d26dfef46e670e56b52861" data-type="entity" data-user="30276172" data-entityid="68d26dfef46e670e56b52861" data-entitytype="Info_News"></em>
+                    <div class="tc_xiala">
+                      <em class="navIcon icon_jiantou"></em>
+                      <div>
+                        <a href="javascript:;" class="shareIcon">分享</a>
+                        <div class="news_share sharePluginDiv hide">
+                          <div class="okooo_share" data-title="J联赛半场战报：浦和红钻主场0-0暂平清水鼓动" data-src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_5.png">
+                            <a href="javascript:void(0);" class="okooo_qzone" data-cmd="qzone"></a>
+                            <a href="javascript:void(0);" class="okooo_tsina" data-cmd="tsina"></a>
+                            <a href="javascript:void(0);" class="okooo_tqq" data-cmd="tqq"></a>
+                          </div>
+                        </div>
+                      </div>
+                      <a href="javascript:;" class="copyIcon" id="copylink_68d26dfef46e670e56b52861">复制链接</a>
+                      <a href="javascript:;" class="report reportIcon">举报</a>
+                    </div>-->
+                  </div>
+                </div>
+              </div>
+            </div>
+                      <div class="news_left_item clearfix ">
+              <!-- 第一条新闻 class加first -->
+              <a target="_blank" class="img_box" href="/news/68d26826f46e6702dabf5cbb/"><img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_3.png" alt="新闻图片" class="float_l"></a>              <div class="news_txt float_l ">
+                <h2 class="news_title">
+                  <a target="_blancyq_detail_btnk" href="/news/68d26826f46e6702dabf5cbb/">法乙-兰斯vs克莱蒙：机构设想主胜打出概率63%</a>
+                </h2>
+                <p class="summary"><a target="_blank" href="/news/68d26826f46e6702dabf5cbb/">任何指数分析的终极方法一定是看盈亏，其中的道理很简单：某机构永远是盈利的一方。只有看透了这点我...</a></p>
+
+                <!-- 新的点赞-->
+                <div class="cyq_newope clearfix">
+                  <span class="cyq_newope_time">5分钟前</span>
+                                                      <div class="cyq_newope_right" linkUrl="/news/68d26826f46e6702dabf5cbb/" entityId="68d26826f46e6702dabf5cbb" entityType="Info_News" weiboId="68d26826f46e6702dabf5cbb" weiboType="Info_News">
+                    <span class="cyqopeIcon icon_relay" data-author="" data-title="法乙-兰斯vs克莱蒙：机构设想主胜打出概率63%">
+                      <em></em><label for="">转发</label> <!-- 转发 -->
+                    </span>
+                    <span class="groupIcon icon_view" data-type="news">
+                      <a target="_blancyq_detail_btnk" href="/news/68d26826f46e6702dabf5cbb/">
+                        <em></em><label class="commentCount" for="">评论</label>
+                      </a>
+                    </span>
+                    <span class="cyqopeIcon icon_checkgood">
+                      <em></em><label for="">赞</label> <!-- 点赞 加check -->
+                    </span>
+                    <!--<em class="cyqopeIcon icon_more" data-id="copylink_68d26826f46e6702dabf5cbb" data-type="entity" data-user="30276176" data-entityid="68d26826f46e6702dabf5cbb" data-entitytype="Info_News"></em>
+                    <div class="tc_xiala">
+                      <em class="navIcon icon_jiantou"></em>
+                      <div>
+                        <a href="javascript:;" class="shareIcon">分享</a>
+                        <div class="news_share sharePluginDiv hide">
+                          <div class="okooo_share" data-title="法乙-兰斯vs克莱蒙：机构设想主胜打出概率63%" data-src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_3.png">
+                            <a href="javascript:void(0);" class="okooo_qzone" data-cmd="qzone"></a>
+                            <a href="javascript:void(0);" class="okooo_tsina" data-cmd="tsina"></a>
+                            <a href="javascript:void(0);" class="okooo_tqq" data-cmd="tqq"></a>
+                          </div>
+                        </div>
+                      </div>
+                      <a href="javascript:;" class="copyIcon" id="copylink_68d26826f46e6702dabf5cbb">复制链接</a>
+                      <a href="javascript:;" class="report reportIcon">举报</a>
+                    </div>-->
+                  </div>
+                </div>
+              </div>
+            </div>
+                      <div class="news_left_item clearfix ">
+              <!-- 第一条新闻 class加first -->
+              <a target="_blank" class="img_box" href="/news/68d2626483da50641f3a466b/"><img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_2.png" alt="新闻图片" class="float_l"></a>              <div class="news_txt float_l ">
+                <h2 class="news_title">
+                  <a target="_blancyq_detail_btnk" href="/news/68d2626483da50641f3a466b/">大阪钢巴vs横滨水手：宇佐美贵史阿劳霍首发对决</a>
+                </h2>
+                <p class="summary"><a target="_blank" href="/news/68d2626483da50641f3a466b/">2025年9月23日18:00，J联赛第31轮，大阪钢巴在松夏体育场对阵横滨水手。赛前，双方公布了本场比赛的首发...</a></p>
+
+                <!-- 新的点赞-->
+                <div class="cyq_newope clearfix">
+                  <span class="cyq_newope_time">30分钟前</span>
+                                                      <div class="cyq_newope_right" linkUrl="/news/68d2626483da50641f3a466b/" entityId="68d2626483da50641f3a466b" entityType="Info_News" weiboId="68d2626483da50641f3a466b" weiboType="Info_News">
+                    <span class="cyqopeIcon icon_relay" data-author="" data-title="大阪钢巴vs横滨水手：宇佐美贵史阿劳霍首发对决">
+                      <em></em><label for="">转发</label> <!-- 转发 -->
+                    </span>
+                    <span class="groupIcon icon_view" data-type="news">
+                      <a target="_blancyq_detail_btnk" href="/news/68d2626483da50641f3a466b/">
+                        <em></em><label class="commentCount" for="">评论</label>
+                      </a>
+                    </span>
+                    <span class="cyqopeIcon icon_checkgood">
+                      <em></em><label for="">赞</label> <!-- 点赞 加check -->
+                    </span>
+                    <!--<em class="cyqopeIcon icon_more" data-id="copylink_68d2626483da50641f3a466b" data-type="entity" data-user="30276162" data-entityid="68d2626483da50641f3a466b" data-entitytype="Info_News"></em>
+                    <div class="tc_xiala">
+                      <em class="navIcon icon_jiantou"></em>
+                      <div>
+                        <a href="javascript:;" class="shareIcon">分享</a>
+                        <div class="news_share sharePluginDiv hide">
+                          <div class="okooo_share" data-title="大阪钢巴vs横滨水手：宇佐美贵史阿劳霍首发对决" data-src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_2.png">
+                            <a href="javascript:void(0);" class="okooo_qzone" data-cmd="qzone"></a>
+                            <a href="javascript:void(0);" class="okooo_tsina" data-cmd="tsina"></a>
+                            <a href="javascript:void(0);" class="okooo_tqq" data-cmd="tqq"></a>
+                          </div>
+                        </div>
+                      </div>
+                      <a href="javascript:;" class="copyIcon" id="copylink_68d2626483da50641f3a466b">复制链接</a>
+                      <a href="javascript:;" class="report reportIcon">举报</a>
+                    </div>-->
+                  </div>
+                </div>
+              </div>
+            </div>
+                      <div class="news_left_item clearfix ">
+              <!-- 第一条新闻 class加first -->
+              <a target="_blank" class="img_box" href="/news/68d25f2d83da50641f3a403b/"><img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_1.png" alt="新闻图片" class="float_l"></a>              <div class="news_txt float_l ">
+                <h2 class="news_title">
+                  <a target="_blancyq_detail_btnk" href="/news/68d25f2d83da50641f3a403b/">J联赛第31轮：柏太阳神对阵广岛三箭，小泽一郎与大迫敬介首发</a>
+                </h2>
+                <p class="summary"><a target="_blank" href="/news/68d25f2d83da50641f3a403b/">北京时间2025年9月23日18:00，J联赛第31轮，柏太阳神在主场三共边疆柏体育场迎战广岛三箭。赛前，双方公...</a></p>
+
+                <!-- 新的点赞-->
+                <div class="cyq_newope clearfix">
+                  <span class="cyq_newope_time">16:49</span>
+                                                      <div class="cyq_newope_right" linkUrl="/news/68d25f2d83da50641f3a403b/" entityId="68d25f2d83da50641f3a403b" entityType="Info_News" weiboId="68d25f2d83da50641f3a403b" weiboType="Info_News">
+                    <span class="cyqopeIcon icon_relay" data-author="" data-title="J联赛第31轮：柏太阳神对阵广岛三箭，小泽一郎与大迫敬介首发">
+                      <em></em><label for="">转发</label> <!-- 转发 -->
+                    </span>
+                    <span class="groupIcon icon_view" data-type="news">
+                      <a target="_blancyq_detail_btnk" href="/news/68d25f2d83da50641f3a403b/">
+                        <em></em><label class="commentCount" for="">评论</label>
+                      </a>
+                    </span>
+                    <span class="cyqopeIcon icon_checkgood">
+                      <em></em><label for="">赞</label> <!-- 点赞 加check -->
+                    </span>
+                    <!--<em class="cyqopeIcon icon_more" data-id="copylink_68d25f2d83da50641f3a403b" data-type="entity" data-user="30276162" data-entityid="68d25f2d83da50641f3a403b" data-entitytype="Info_News"></em>
+                    <div class="tc_xiala">
+                      <em class="navIcon icon_jiantou"></em>
+                      <div>
+                        <a href="javascript:;" class="shareIcon">分享</a>
+                        <div class="news_share sharePluginDiv hide">
+                          <div class="okooo_share" data-title="J联赛第31轮：柏太阳神对阵广岛三箭，小泽一郎与大迫敬介首发" data-src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_1.png">
+                            <a href="javascript:void(0);" class="okooo_qzone" data-cmd="qzone"></a>
+                            <a href="javascript:void(0);" class="okooo_tsina" data-cmd="tsina"></a>
+                            <a href="javascript:void(0);" class="okooo_tqq" data-cmd="tqq"></a>
+                          </div>
+                        </div>
+                      </div>
+                      <a href="javascript:;" class="copyIcon" id="copylink_68d25f2d83da50641f3a403b">复制链接</a>
+                      <a href="javascript:;" class="report reportIcon">举报</a>
+                    </div>-->
+                  </div>
+                </div>
+              </div>
+            </div>
+                      <div class="news_left_item clearfix ">
+              <!-- 第一条新闻 class加first -->
+              <a target="_blank" class="img_box" href="/news/68d25c04f46e677908930df4/"><img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_6.png" alt="新闻图片" class="float_l"></a>              <div class="news_txt float_l ">
+                <h2 class="news_title">
+                  <a target="_blancyq_detail_btnk" href="/news/68d25c04f46e677908930df4/">法乙-亚眠vs圣埃蒂安：主平真实分布概率57%</a>
+                </h2>
+                <p class="summary"><a target="_blank" href="/news/68d25c04f46e677908930df4/">尽人事，听天命。红黑都是命。任何指数分析的终极方法一定是看盈亏，其中的道理很简单：某机构永远是...</a></p>
+
+                <!-- 新的点赞-->
+                <div class="cyq_newope clearfix">
+                  <span class="cyq_newope_time">16:36</span>
+                                                      <div class="cyq_newope_right" linkUrl="/news/68d25c04f46e677908930df4/" entityId="68d25c04f46e677908930df4" entityType="Info_News" weiboId="68d25c04f46e677908930df4" weiboType="Info_News">
+                    <span class="cyqopeIcon icon_relay" data-author="" data-title="法乙-亚眠vs圣埃蒂安：主平真实分布概率57%">
+                      <em></em><label for="">转发</label> <!-- 转发 -->
+                    </span>
+                    <span class="groupIcon icon_view" data-type="news">
+                      <a target="_blancyq_detail_btnk" href="/news/68d25c04f46e677908930df4/">
+                        <em></em><label class="commentCount" for="">评论</label>
+                      </a>
+                    </span>
+                    <span class="cyqopeIcon icon_checkgood">
+                      <em></em><label for="">赞</label> <!-- 点赞 加check -->
+                    </span>
+                    <!--<em class="cyqopeIcon icon_more" data-id="copylink_68d25c04f46e677908930df4" data-type="entity" data-user="30276176" data-entityid="68d25c04f46e677908930df4" data-entitytype="Info_News"></em>
+                    <div class="tc_xiala">
+                      <em class="navIcon icon_jiantou"></em>
+                      <div>
+                        <a href="javascript:;" class="shareIcon">分享</a>
+                        <div class="news_share sharePluginDiv hide">
+                          <div class="okooo_share" data-title="法乙-亚眠vs圣埃蒂安：主平真实分布概率57%" data-src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_6.png">
+                            <a href="javascript:void(0);" class="okooo_qzone" data-cmd="qzone"></a>
+                            <a href="javascript:void(0);" class="okooo_tsina" data-cmd="tsina"></a>
+                            <a href="javascript:void(0);" class="okooo_tqq" data-cmd="tqq"></a>
+                          </div>
+                        </div>
+                      </div>
+                      <a href="javascript:;" class="copyIcon" id="copylink_68d25c04f46e677908930df4">复制链接</a>
+                      <a href="javascript:;" class="report reportIcon">举报</a>
+                    </div>-->
+                  </div>
+                </div>
+              </div>
+            </div>
+                      <div class="news_left_item clearfix ">
+              <!-- 第一条新闻 class加first -->
+              <a target="_blank" class="img_box" href="/news/68d2536ef46e6774541fcd03/"><img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_9.png" alt="新闻图片" class="float_l"></a>              <div class="news_txt float_l ">
+                <h2 class="news_title">
+                  <a target="_blancyq_detail_btnk" href="/news/68d2536ef46e6774541fcd03/">法乙-阿纳西vs南锡：主胜真实分布概率35%</a>
+                </h2>
+                <p class="summary"><a target="_blank" href="/news/68d2536ef46e6774541fcd03/">尽人事，听天命。红黑都是命。任何指数分析的终极方法一定是看盈亏，其中的道理很简单：某机构永远是...</a></p>
+
+                <!-- 新的点赞-->
+                <div class="cyq_newope clearfix">
+                  <span class="cyq_newope_time">15:59</span>
+                                                      <div class="cyq_newope_right" linkUrl="/news/68d2536ef46e6774541fcd03/" entityId="68d2536ef46e6774541fcd03" entityType="Info_News" weiboId="68d2536ef46e6774541fcd03" weiboType="Info_News">
+                    <span class="cyqopeIcon icon_relay" data-author="" data-title="法乙-阿纳西vs南锡：主胜真实分布概率35%">
+                      <em></em><label for="">转发</label> <!-- 转发 -->
+                    </span>
+                    <span class="groupIcon icon_view" data-type="news">
+                      <a target="_blancyq_detail_btnk" href="/news/68d2536ef46e6774541fcd03/">
+                        <em></em><label class="commentCount" for="">评论</label>
+                      </a>
+                    </span>
+                    <span class="cyqopeIcon icon_checkgood">
+                      <em></em><label for="">赞</label> <!-- 点赞 加check -->
+                    </span>
+                    <!--<em class="cyqopeIcon icon_more" data-id="copylink_68d2536ef46e6774541fcd03" data-type="entity" data-user="30276176" data-entityid="68d2536ef46e6774541fcd03" data-entitytype="Info_News"></em>
+                    <div class="tc_xiala">
+                      <em class="navIcon icon_jiantou"></em>
+                      <div>
+                        <a href="javascript:;" class="shareIcon">分享</a>
+                        <div class="news_share sharePluginDiv hide">
+                          <div class="okooo_share" data-title="法乙-阿纳西vs南锡：主胜真实分布概率35%" data-src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_9.png">
+                            <a href="javascript:void(0);" class="okooo_qzone" data-cmd="qzone"></a>
+                            <a href="javascript:void(0);" class="okooo_tsina" data-cmd="tsina"></a>
+                            <a href="javascript:void(0);" class="okooo_tqq" data-cmd="tqq"></a>
+                          </div>
+                        </div>
+                      </div>
+                      <a href="javascript:;" class="copyIcon" id="copylink_68d2536ef46e6774541fcd03">复制链接</a>
+                      <a href="javascript:;" class="report reportIcon">举报</a>
+                    </div>-->
+                  </div>
+                </div>
+              </div>
+            </div>
+                      <div class="news_left_item clearfix ">
+              <!-- 第一条新闻 class加first -->
+              <a target="_blank" class="img_box" href="/news/68d251fcf46e670e56b51082/"><img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_7.png" alt="新闻图片" class="float_l"></a>              <div class="news_txt float_l ">
+                <h2 class="news_title">
+                  <a target="_blancyq_detail_btnk" href="/news/68d251fcf46e670e56b51082/">鹿岛鹿角迎战大阪樱花：柴崎岳与香川真司焦点对决</a>
+                </h2>
+                <p class="summary"><a target="_blank" href="/news/68d251fcf46e670e56b51082/">2025-09-2317:00:00，J联赛第31轮，鹿岛鹿角在主场鹿岛足球体育场迎战大阪樱花。赛前，双方公布了本场比...</a></p>
+
+                <!-- 新的点赞-->
+                <div class="cyq_newope clearfix">
+                  <span class="cyq_newope_time">15:53</span>
+                                                      <div class="cyq_newope_right" linkUrl="/news/68d251fcf46e670e56b51082/" entityId="68d251fcf46e670e56b51082" entityType="Info_News" weiboId="68d251fcf46e670e56b51082" weiboType="Info_News">
+                    <span class="cyqopeIcon icon_relay" data-author="" data-title="鹿岛鹿角迎战大阪樱花：柴崎岳与香川真司焦点对决">
+                      <em></em><label for="">转发</label> <!-- 转发 -->
+                    </span>
+                    <span class="groupIcon icon_view" data-type="news">
+                      <a target="_blancyq_detail_btnk" href="/news/68d251fcf46e670e56b51082/">
+                        <em></em><label class="commentCount" for="">评论</label>
+                      </a>
+                    </span>
+                    <span class="cyqopeIcon icon_checkgood">
+                      <em></em><label for="">赞</label> <!-- 点赞 加check -->
+                    </span>
+                    <!--<em class="cyqopeIcon icon_more" data-id="copylink_68d251fcf46e670e56b51082" data-type="entity" data-user="30276162" data-entityid="68d251fcf46e670e56b51082" data-entitytype="Info_News"></em>
+                    <div class="tc_xiala">
+                      <em class="navIcon icon_jiantou"></em>
+                      <div>
+                        <a href="javascript:;" class="shareIcon">分享</a>
+                        <div class="news_share sharePluginDiv hide">
+                          <div class="okooo_share" data-title="鹿岛鹿角迎战大阪樱花：柴崎岳与香川真司焦点对决" data-src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_7.png">
+                            <a href="javascript:void(0);" class="okooo_qzone" data-cmd="qzone"></a>
+                            <a href="javascript:void(0);" class="okooo_tsina" data-cmd="tsina"></a>
+                            <a href="javascript:void(0);" class="okooo_tqq" data-cmd="tqq"></a>
+                          </div>
+                        </div>
+                      </div>
+                      <a href="javascript:;" class="copyIcon" id="copylink_68d251fcf46e670e56b51082">复制链接</a>
+                      <a href="javascript:;" class="report reportIcon">举报</a>
+                    </div>-->
+                  </div>
+                </div>
+              </div>
+            </div>
+                      <div class="news_left_item clearfix ">
+              <!-- 第一条新闻 class加first -->
+              <a target="_blank" class="img_box" href="/news/68d25048f46e6774541fca7a/"><img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_3.png" alt="新闻图片" class="float_l"></a>              <div class="news_txt float_l ">
+                <h2 class="news_title">
+                  <a target="_blancyq_detail_btnk" href="/news/68d25048f46e6774541fca7a/">【周二017塞维利亚VS比利亚雷亚尔解析，包含胜平负/比分/总进球/半全场内容】</a>
+                </h2>
+                <p class="summary"><a target="_blank" href="/news/68d25048f46e6774541fca7a/">周二017塞维利亚VS比利亚雷亚尔本场比赛是25/26赛季西甲第6轮的一场较量，对阵双方是塞维利亚VS比利亚雷...</a></p>
+
+                <!-- 新的点赞-->
+                <div class="cyq_newope clearfix">
+                  <span class="cyq_newope_time">15:46</span>
+                                                      <div class="cyq_newope_right" linkUrl="/news/68d25048f46e6774541fca7a/" entityId="68d25048f46e6774541fca7a" entityType="Info_News" weiboId="68d25048f46e6774541fca7a" weiboType="Info_News">
+                    <span class="cyqopeIcon icon_relay" data-author="" data-title="【周二017塞维利亚VS比利亚雷亚尔解析，包含胜平负/比分/总进球/半全场内容】">
+                      <em></em><label for="">转发</label> <!-- 转发 -->
+                    </span>
+                    <span class="groupIcon icon_view" data-type="news">
+                      <a target="_blancyq_detail_btnk" href="/news/68d25048f46e6774541fca7a/">
+                        <em></em><label class="commentCount" for="">评论</label>
+                      </a>
+                    </span>
+                    <span class="cyqopeIcon icon_checkgood">
+                      <em></em><label for="">赞</label> <!-- 点赞 加check -->
+                    </span>
+                    <!--<em class="cyqopeIcon icon_more" data-id="copylink_68d25048f46e6774541fca7a" data-type="entity" data-user="19358225" data-entityid="68d25048f46e6774541fca7a" data-entitytype="Info_News"></em>
+                    <div class="tc_xiala">
+                      <em class="navIcon icon_jiantou"></em>
+                      <div>
+                        <a href="javascript:;" class="shareIcon">分享</a>
+                        <div class="news_share sharePluginDiv hide">
+                          <div class="okooo_share" data-title="【周二017塞维利亚VS比利亚雷亚尔解析，包含胜平负/比分/总进球/半全场内容】" data-src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_3.png">
+                            <a href="javascript:void(0);" class="okooo_qzone" data-cmd="qzone"></a>
+                            <a href="javascript:void(0);" class="okooo_tsina" data-cmd="tsina"></a>
+                            <a href="javascript:void(0);" class="okooo_tqq" data-cmd="tqq"></a>
+                          </div>
+                        </div>
+                      </div>
+                      <a href="javascript:;" class="copyIcon" id="copylink_68d25048f46e6774541fca7a">复制链接</a>
+                      <a href="javascript:;" class="report reportIcon">举报</a>
+                    </div>-->
+                  </div>
+                </div>
+              </div>
+            </div>
+                      <div class="news_left_item clearfix ">
+              <!-- 第一条新闻 class加first -->
+              <a target="_blank" class="img_box" href="/news/68d24f77f46e6779089302ba/"><img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_7.png" alt="新闻图片" class="float_l"></a>              <div class="news_txt float_l ">
+                <h2 class="news_title">
+                  <a target="_blancyq_detail_btnk" href="/news/68d24f77f46e6779089302ba/">【周二003东京FCVS福冈黄蜂解析，包含胜平负/比分/总进球/半全场内容】</a>
+                </h2>
+                <p class="summary"><a target="_blank" href="/news/68d24f77f46e6779089302ba/">周二003东京FCVS福冈黄蜂本场比赛是2025赛季日职第31轮的一场较量，对阵双方是东京FCVS福冈黄蜂，比赛时...</a></p>
+
+                <!-- 新的点赞-->
+                <div class="cyq_newope clearfix">
+                  <span class="cyq_newope_time">15:42</span>
+                                                      <div class="cyq_newope_right" linkUrl="/news/68d24f77f46e6779089302ba/" entityId="68d24f77f46e6779089302ba" entityType="Info_News" weiboId="68d24f77f46e6779089302ba" weiboType="Info_News">
+                    <span class="cyqopeIcon icon_relay" data-author="" data-title="【周二003东京FCVS福冈黄蜂解析，包含胜平负/比分/总进球/半全场内容】">
+                      <em></em><label for="">转发</label> <!-- 转发 -->
+                    </span>
+                    <span class="groupIcon icon_view" data-type="news">
+                      <a target="_blancyq_detail_btnk" href="/news/68d24f77f46e6779089302ba/">
+                        <em></em><label class="commentCount" for="">评论</label>
+                      </a>
+                    </span>
+                    <span class="cyqopeIcon icon_checkgood">
+                      <em></em><label for="">赞</label> <!-- 点赞 加check -->
+                    </span>
+                    <!--<em class="cyqopeIcon icon_more" data-id="copylink_68d24f77f46e6779089302ba" data-type="entity" data-user="19358225" data-entityid="68d24f77f46e6779089302ba" data-entitytype="Info_News"></em>
+                    <div class="tc_xiala">
+                      <em class="navIcon icon_jiantou"></em>
+                      <div>
+                        <a href="javascript:;" class="shareIcon">分享</a>
+                        <div class="news_share sharePluginDiv hide">
+                          <div class="okooo_share" data-title="【周二003东京FCVS福冈黄蜂解析，包含胜平负/比分/总进球/半全场内容】" data-src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_7.png">
+                            <a href="javascript:void(0);" class="okooo_qzone" data-cmd="qzone"></a>
+                            <a href="javascript:void(0);" class="okooo_tsina" data-cmd="tsina"></a>
+                            <a href="javascript:void(0);" class="okooo_tqq" data-cmd="tqq"></a>
+                          </div>
+                        </div>
+                      </div>
+                      <a href="javascript:;" class="copyIcon" id="copylink_68d24f77f46e6779089302ba">复制链接</a>
+                      <a href="javascript:;" class="report reportIcon">举报</a>
+                    </div>-->
+                  </div>
+                </div>
+              </div>
+            </div>
+                      <div class="news_left_item clearfix ">
+              <!-- 第一条新闻 class加first -->
+              <a target="_blank" class="img_box" href="/news/68d24ea7f46e6779089301fd/"><img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_9.png" alt="新闻图片" class="float_l"></a>              <div class="news_txt float_l ">
+                <h2 class="news_title">
+                  <a target="_blancyq_detail_btnk" href="/news/68d24ea7f46e6779089301fd/">【周二002清水鼓动VS浦和红钻解析，包含胜平负/比分/总进球/半全场内容】</a>
+                </h2>
+                <p class="summary"><a target="_blank" href="/news/68d24ea7f46e6779089301fd/">周二002清水鼓动VS浦和红钻本场比赛是2025赛季日职第31轮的一场较量，对阵双方是清水鼓动VS浦和红钻，比...</a></p>
+
+                <!-- 新的点赞-->
+                <div class="cyq_newope clearfix">
+                  <span class="cyq_newope_time">15:39</span>
+                                                      <div class="cyq_newope_right" linkUrl="/news/68d24ea7f46e6779089301fd/" entityId="68d24ea7f46e6779089301fd" entityType="Info_News" weiboId="68d24ea7f46e6779089301fd" weiboType="Info_News">
+                    <span class="cyqopeIcon icon_relay" data-author="" data-title="【周二002清水鼓动VS浦和红钻解析，包含胜平负/比分/总进球/半全场内容】">
+                      <em></em><label for="">转发</label> <!-- 转发 -->
+                    </span>
+                    <span class="groupIcon icon_view" data-type="news">
+                      <a target="_blancyq_detail_btnk" href="/news/68d24ea7f46e6779089301fd/">
+                        <em></em><label class="commentCount" for="">评论</label>
+                      </a>
+                    </span>
+                    <span class="cyqopeIcon icon_checkgood">
+                      <em></em><label for="">赞</label> <!-- 点赞 加check -->
+                    </span>
+                    <!--<em class="cyqopeIcon icon_more" data-id="copylink_68d24ea7f46e6779089301fd" data-type="entity" data-user="19358225" data-entityid="68d24ea7f46e6779089301fd" data-entitytype="Info_News"></em>
+                    <div class="tc_xiala">
+                      <em class="navIcon icon_jiantou"></em>
+                      <div>
+                        <a href="javascript:;" class="shareIcon">分享</a>
+                        <div class="news_share sharePluginDiv hide">
+                          <div class="okooo_share" data-title="【周二002清水鼓动VS浦和红钻解析，包含胜平负/比分/总进球/半全场内容】" data-src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_9.png">
+                            <a href="javascript:void(0);" class="okooo_qzone" data-cmd="qzone"></a>
+                            <a href="javascript:void(0);" class="okooo_tsina" data-cmd="tsina"></a>
+                            <a href="javascript:void(0);" class="okooo_tqq" data-cmd="tqq"></a>
+                          </div>
+                        </div>
+                      </div>
+                      <a href="javascript:;" class="copyIcon" id="copylink_68d24ea7f46e6779089301fd">复制链接</a>
+                      <a href="javascript:;" class="report reportIcon">举报</a>
+                    </div>-->
+                  </div>
+                </div>
+              </div>
+            </div>
+                    <div class="clearfix pagination"><span class="gray9 pagetxt">15001条，共1501页</span><a href="/jingcai/?total=15001&amp;page=1" class="sed">1</a><a href="/jingcai/?total=15001&amp;page=2">2</a><a href="/jingcai/?total=15001&amp;page=3">3</a><a href="/jingcai/?total=15001&amp;page=4">4</a><a href="/jingcai/?total=15001&amp;page=5">5</a><a href="/jingcai/?total=15001&amp;page=6">6</a><a href="/jingcai/?total=15001&amp;page=7">7</a><a href="/jingcai/?total=15001&amp;page=8">8</a><a href="/jingcai/?total=15001&amp;page=9">9</a><a href="/jingcai/?total=15001&amp;page=10">10</a><a href="/jingcai/?total=15001&amp;page=2" aria-label="Next"><span aria-hidden="true">?</span></a></div>
+        </div>
+
+      </div>
+      <!-- 新闻右侧 -->
+
+      <div class="news_right">
+        <!--下载APP广告-->
+        <div style="text-align:center;display: inline-block; padding:0; margin-bottom:5px;"><img src="https://imgv1.okoooimg.cn/style/img/gjcbanner05.png?v=20241224002" alt="旺财体育公众号" title="独家支持微信订阅开奖消息"></div>
+        <!--热门资讯-->
+        <div class="news_right_model posr">
+          <div class="clearfix">
+            <!--<em class="blueBlock"></em>-->
+            <!--竞足热门资讯-->
+            <span class="news_right_title float_l">热门新闻</span> <span class="float_r font_12">
+              <a href="javascript:void(0);" class="gray9" id="changeNewsLoad" channelTag="flottery_2">换一换</a>            </span>
+          </div>
+          <div id="hotNewsList" class="hotNewsList">
+            <div class="news_right_item ">
+    <!--<img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_2.png" alt="新闻图片" class="hotNews_img">-->
+    <!--<a  target="_blank" href="/news/68d0193983da50459bf660b9/"></a>-->
+    <p>
+        <span class="hot_num">1</span>
+        <a  target="_blank" href="https://zx.okooo.com/news/68d0193983da50459bf660b9/">【周一002北雪平VS索尔纳解析，包含胜平负/比分/总进球/半全场内容】</a>
+        <span class="news_read">135</span>
+    </p>
+
+    <!--<p class="clearfix"><span class="gray9 float_l font_12"><em class="news_icon visitors"></em>135</span> <span class="gray9 float_r font_12">20250921232649</span></p>-->
+</div>
+<div class="news_right_item ">
+    <!--<img src="https://imgv1.okoooimg.cn/newscollect/report/1296160-thum.png" alt="新闻图片" class="hotNews_img">-->
+    <!--<a  target="_blank" href="/news/68cef556f46e6747f65981b1/"></a>-->
+    <p>
+        <span class="hot_num">2</span>
+        <a  target="_blank" href="https://zx.okooo.com/news/68cef556f46e6747f65981b1/">英超第5轮：曼联2-1力克切尔西，红牌频发戏剧性取胜</a>
+        <span class="news_read">126</span>
+    </p>
+
+    <!--<p class="clearfix"><span class="gray9 float_l font_12"><em class="news_icon visitors"></em>126</span> <span class="gray9 float_r font_12">20250921024126</span></p>-->
+</div>
+<div class="news_right_item ">
+    <!--<img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_1.png" alt="新闻图片" class="hotNews_img">-->
+    <!--<a  target="_blank" href="/news/68cf31b3f46e673a6587991d/"></a>-->
+    <p>
+        <span class="hot_num">3</span>
+        <a  target="_blank" href="https://zx.okooo.com/news/68cf31b3f46e673a6587991d/">挪超-罗森博格vs博德闪耀：主负真实分布概率22%</a>
+        <span class="news_read">118</span>
+    </p>
+
+    <!--<p class="clearfix"><span class="gray9 float_l font_12"><em class="news_icon visitors"></em>118</span> <span class="gray9 float_r font_12">20250921065859</span></p>-->
+</div>
+<div class="news_right_item bdn">
+    <!--<img src="https://imgv1.okoooimg.cn/image/shoujigoucai/mc/entity/entity_default_7.png" alt="新闻图片" class="hotNews_img">-->
+    <!--<a  target="_blank" href="/news/68cf154bf46e673a65877e26/"></a>-->
+    <p>
+        <span class="hot_num">4</span>
+        <a  target="_blank" href="https://zx.okooo.com/news/68cf154bf46e673a65877e26/">马赛vs巴黎圣日尔曼：主队获胜场次中赔付小于2有4场</a>
+        <span class="news_read">103</span>
+    </p>
+
+    <!--<p class="clearfix"><span class="gray9 float_l font_12"><em class="news_icon visitors"></em>103</span> <span class="gray9 float_r font_12">20250921045747</span></p>-->
+</div>
+
+          </div>
+          <div class="loadImg_box hide">
+            <div class="matte"></div>
+            <img src="https://imgv1.okoooimg.cn/style/img/news/loading.gif" alt="loading" class="loadImg_sm" />
+          </div>
+        </div>
+
+        <!-- 相关标签 -->
+        <div class="news_right_model">
+          <div class="clearfix">
+            <!--<em class="blueBlock"></em>-->
+            <span class="news_right_title float_l">“竞足”相关标签</span>
+          </div>
+          <div class="news_right_item bdn clearfix">
+                          <a href="/tags/fyuce_1/" class="relaxLabel_btn">预测</a>
+                          <a href="/tags/stype_201/" class="relaxLabel_btn">足球</a>
+                          <a href="/tags/fyuce_2/" class="relaxLabel_btn">前瞻</a>
+                          <a href="/tags/flottery_1/" class="relaxLabel_btn">北单</a>
+                          <a href="/tags/flottery_5/" class="relaxLabel_btn">足彩</a>
+                          <a href="/tags/other_181024081844779/" class="relaxLabel_btn">比赛资讯</a>
+                          <a href="/tags/fyuce_3/" class="relaxLabel_btn">数据</a>
+                          <a href="/tags/fleague_17/" class="relaxLabel_btn">英超</a>
+                          <a href="/tags/fleague_8/" class="relaxLabel_btn">西甲</a>
+                          <a href="/tags/fleague_23/" class="relaxLabel_btn">意甲</a>
+                      </div>
+        </div>
+        <!-- 相关标签结束 -->
+        <!-- 开奖 -->
+
+
+
+
+
+
+
+
+
+        <!-- 开奖结束 -->
+
+      </div>
+
+    </div>
+
+  </div>
+   <link rel="stylesheet" type="text/css" href="https://imgv1.okoooimg.cn/min/?b=oae/css&f=footer.css&_v=20250421170100"/>
+        <div class="index_footer">
+	<div class="index_footer_content clearfix">
+ 	<div class="new-footer">
+		<div class="new-footer-left">
+			<dl>
+			 	<dt>关于澳客</dt>
+				<dd><a href="//www.okooo.com/about/declare/">法律声明</a></dd>
+				<dd><a href="//www.okooo.com/about/security/">安全保障</a></dd>
+			</dl>
+			<dl>
+			 	<dt>联系我们</dt>
+				<dd><a href="//www.okooo.com/about/co/">商务合作</a></dd>
+				<dd><a href="//www.okooo.com/about/hr/">加入澳客</a></dd>
+			</dl>
+			<dl>
+			 	<dt>澳客产品</dt>
+				<dd><a href="https://m.okooo.com/">触屏版</a></dd>
+                <dd><a href="https://wap.okooo.com/">多彩专栏</a></dd>
+			</dl>
+			<dl>
+			 	<dt>帮助中心</dt>
+				<dd><a href="//www.okooo.com/help/" target="_blank">自助服务</a></dd>
+				<dd><a href="javascript:void(0)" id="clickKefuFn">客户反馈</a></dd>
+			</dl>
+				<div class="linkImgbox">
+					<div class="linkImg">
+					<a href="//www.okooo.com/rel.php?url=http%3A%2F%2Fwww.315online.com.cn%2Fmember%2F315100151.html" target="_blank" class="zhengshu_icon icon_zs2"></a>
+					<a id='___szfw_logo___' href="https://credit.szfw.org/CX20161227031782020357.html" target='_blank'><img src='https://icon.cecdc.com/sf.png' border='0' style="background:#fff; border-radius: 3px; *vertical-align: -3px;height: 38px;margin-right: 12px;" /></a>
+
+					<script type='text/javascript'>(function(){document.getElementById('___szfw_logo___').oncontextmenu = function(){return false;}})();</script>
+
+					<a href="//www.okooo.com/rel.php?url=https%3A%2F%2Fss.knet.cn%2Fverifyseal.dll%3Fsn%3De131205110100438489vsm000000%26ct%3Ddf%26a%3D1%26pa%3D0.3253314474131912" target="_blank" class="zhengshu_icon icon_zs4"></a>
+
+					<a href="//www.okooo.com/rel.php?url=http%3A%2F%2Fwww.cyberpolice.cn" target="_blank" class="zhengshu_icon icon_zs1"></a>
+					<a href="//www.okooo.com/rel.php?url=http%3A%2F%2Fwww.bjjubao.org" target="_blank" class="zhengshu_icon icon_zs3"></a>
+					</div>
+			</div>
+		</div>
+	</div>
+ </div>
+ </div>
+ <div class="new-copyright_txt">
+		<p>Copyright <em>&copy;</em> 2002-2023 <a href="//www.okooo.com" target="_blank">澳客网</a>&nbsp;&nbsp;All rights reserved.&nbsp;&nbsp;&nbsp;
+       <a href="https://beian.miit.gov.cn" target="_blank" rel="nofollow" >京ICP备2023027454号-2</a>&nbsp;&nbsp;<a href="https://www.okooo.com/about/security/" target="_blank" rel="nofollow" >增值电信业务经营许可证：京B2-20240263</a>&nbsp;&nbsp;<a href="http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=11010802026576" target="_blank" rel="nofollow">京公网安备11010802026576号</a></p>
+	</div>
+<div id="login_bg"></div>
+<script type="text/javascript" src="https://imgv1.okoooimg.cn/min/?b=oae/js&f=json.js,funcs.js,public.js,login.js,search.js&_v=20250512170000"></script>
+ <script type="text/javascript" src="https://imgv1.okoooimg.cn/min/?b=JS&amp;f=jquery.jsonp.min.js,wxLogin.js,public/jsencrypt.js,loginNew.js&_v=20250512170000"></script>
+<script type="text/javascript"src="https://imgv1.okoooimg.cn/min/?b=JS&f=public%2Fgoogle.js,jquery%2Fajaxfiledataupload.js,public%2Fxiaomishu.js&_v=20250512170000"></script>
+
+<script>
+	$("#clickKefuFn").click(function () {
+		$(".kefu_function02").click();
+	});
+</script>
+
+
+
+  <div style="width: 900px;height:555px;position: absolute;z-index: 999;display: none;background: url(about:blank);border: none;box-shadow: none;" id="weixin_dialog">
+    <a id="weixin_dialog_close" style="width: 50px;height:50px;background:url(about:blank);position: absolute;right:101px;top: 22px;cursor: pointer"></a>
+    <img src="https://imgv1.okoooimg.cn/image/itou/weixinzuodan.png?v=201511272106" alt="微信选号" style="border:none">
+  </div>
+  <input type="hidden" value="jingcai" id="newsChannelId" />
+  <script type="text/javascript" src="https://imgv1.okoooimg.cn/min/?b=JS&amp;f=public/tools/tipMessage.js,public/ZeroClipboard.js,inlike/listComment.js,inlike/inlike.js,lottery/handleAutherContent.js&amp;v=20250512170000"></script>
+
+    <script>
+      $(function() {
+        //添加小秘书
+        okXiaoMiShu({
+          pageType: 'othersub'
+        });
+        var inlike = new inlikeUtil();
+        inlike.init();
+        //换一换
+        $("#changeNewsLoad").bind("click", function() {
+          var $this = $(this),
+            tagId = $this.attr("channelTag"),
+            date = new Date().getTime();
+          if ($this.attr("no-data") == "true") {
+            return;
+          }
+          $(".loadImg_box").show();
+          $.get("/news/ajax/hot/?v=" + date, {
+            "id": tagId
+          }, function(data) {
+            $(".loadImg_box").hide();
+            if (data) {
+              $("#hotNewsList").empty().html(data);
+            } else {
+              $this.attr("no-data", "true");
+              tipMessage({msg:"没有热门内容了",e:event});
+            }
+          }, "html");
+        });
+        // var channel = $("#newsChannelId").val(),
+        //   date = new Date().getTime();
+        // $.get("/news/ajax/lotteryresult/?v=" + date, {
+        //   "type": channel
+        // }, function(data) {
+        //   if (data) {
+        //     $("#lotteryModelDrawing").empty().html(data);
+        //   } else {
+        //     $("#lotteryModelDrawing").parent().hide();
+        //   }
+        // }, "html");
+        //活动图片展示
+        $("#weixinShowDialog").bind("click", function() {
+          $("#weixin_dialog").loadDialog();
+        });
+        $("#weixin_dialog_close").bind("click", function() {
+          $("#weixin_dialog").loadDialog("close");
+        });
+      });
+    </script>
+
+</body>
+
+</html>
+
+第二页url：https://zx.okooo.com/jingcai/?page=2
+与第一页携带一样的cookies
+
