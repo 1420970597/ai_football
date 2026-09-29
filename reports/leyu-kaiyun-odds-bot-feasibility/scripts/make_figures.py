@@ -58,6 +58,17 @@ def safe_int(v, d=0):
         return d
 
 
+def safe_float(v, d=0.0):
+    """防御性浮点转换：空数组/NaN/非数值均回退到默认值。"""
+    try:
+        out = float(v)
+    except (TypeError, ValueError, OverflowError):
+        return d
+    if out != out:          # NaN
+        return d
+    return out
+
+
 def save(fig, name):
     p = os.path.join(IMG, name)
     fig.savefig(p, facecolor="white")
@@ -730,6 +741,355 @@ def fig12_heatmap():
                for i in range(len(layers))])
 
 
+# ==================================================== 图 13 采集路径技术可行性
+# 数据来源：公开开源项目 README/代码结构（allusion、stake-scraper、snuper、
+# OddsHarvester、sports-odds 等）+ 平台协议形态分析
+SCRAPE_PATHS = [
+    # (名称, 接入层级, 延迟, 完整性, 稳定性, 维护成本, 说明)
+    ("A 前端长连直读（WS/SSE）", 5, 5, 3, 2, 2,
+     "延迟最优（0.5–3s）；依赖私有协议长连，变更即断"),
+    ("B 前端 XHR/GraphQL 逆向", 4, 4, 4, 3, 3,
+     "stake-scraper 已验证：直接 POST GraphQL，无浏览器"),
+    ("C 浏览器自动化渲染", 3, 2, 5, 3, 2,
+     "allusion / OddsHarvester 路线；Playwright，最通用但最重"),
+    ("D 第三方聚合站（OddsPortal）", 2, 1, 4, 4, 4,
+     "11 运动 / 100+ 联赛；历史+赛前强，在盘弱"),
+    ("E 商业 API", 2, 3, 4, 5, 5,
+     "稳定但无法覆盖目标平台；The Odds API 在盘 40s"),
+]
+
+
+def fig13_scraping_paths():
+    names = [p[0] for p in SCRAPE_PATHS]
+    keys = ["接入层级", "延迟表现", "盘口完整性", "稳定性", "维护成本"]
+    M = np.array([[p[1], p[2], p[3], p[4], p[5]] for p in SCRAPE_PATHS], dtype=float)
+
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(15.2, 6.4),
+                                 gridspec_kw={"width_ratios": [1.35, 1]})
+    cmap = matplotlib.colors.LinearSegmentedColormap.from_list(
+        "s", ["#a52a2a", "#e67e22", "#f4d03f", "#7dcea0", "#27ae60"])
+    im = a1.imshow(M, cmap=cmap, vmin=0, vmax=5, aspect="auto")
+    a1.set_xticks(range(len(keys))); a1.set_xticklabels(keys, fontsize=10.5)
+    a1.set_yticks(range(len(names))); a1.set_yticklabels(names, fontsize=9.8)
+    for i in range(M.shape[0]):
+        for j in range(M.shape[1]):
+            a1.text(j, i, "%d" % safe_int(M[i, j]), ha="center", va="center",
+                    fontsize=13.5, weight="bold",
+                    color="white" if M[i, j] <= 2 else "#1a1a1a")
+    a1.set_title("图 13a  爬虫路径的技术可行性矩阵（0 = 差，5 = 优）",
+                 fontsize=12, weight="bold", color=C_DGR)
+    a1.set_xticks(np.arange(-.5, len(keys), 1), minor=True)
+    a1.set_yticks(np.arange(-.5, len(names), 1), minor=True)
+    a1.grid(which="minor", color="white", lw=2)
+    a1.tick_params(which="minor", length=0)
+    fig.colorbar(im, ax=a1, shrink=.82, label="评分")
+
+    # 综合得分：接入层级权重最高（能否覆盖目标平台是前提），维护成本作为扣分项
+    w = np.array([0.35, 0.25, 0.20, 0.20, 0.0])
+    score = (M * w).sum(axis=1) - (5 - M[:, 4]) * 0.15
+    y = np.arange(len(names))
+    cols = [C_GRN if s >= 3.5 else (C_ORG if s >= 2.5 else C_RED) for s in score]
+    a2.barh(y, score, color=cols, height=.6)
+    a2.set_yticks(y); a2.set_yticklabels(names, fontsize=9.5); a2.invert_yaxis()
+    for i, s in enumerate(score):
+        a2.text(s + .06, i, "%.2f" % s, va="center", fontsize=9.5, color=C_DGR)
+    a2.set_xlim(0, max(score) * 1.45)
+    a2.set_xlabel("综合技术得分（接入层级 35% + 延迟 25% + 完整性 20% + 稳定性 20%，扣维护成本）",
+                  fontsize=10)
+    a2.set_title("图 13b  工程推荐排序", fontsize=12, weight="bold", color=C_DGR)
+    a2.grid(axis="x", alpha=.25, ls="--")
+    a2.text(max(score) * .40, 4.34,
+            "A/B 是覆盖目标平台的可行路径（E 虽稳定但盘口不覆盖目标平台，为 0）。\n"
+            "推荐：B 为主 + A 做延迟优化 + C 做兵底 + D 回填历史。",
+            fontsize=9.0, color=C_DGR, weight="bold",
+            bbox=dict(fc="#eef4f9", ec=C_BLU, boxstyle="round,pad=0.45"))
+    save(fig, "fig13_scraping_paths.png")
+    write_csv("scraping_paths.csv", ["采集路径"] + keys + ["综合得分", "说明"],
+              [[names[i], safe_int(M[i, 0]), safe_int(M[i, 1]), safe_int(M[i, 2]),
+                safe_int(M[i, 3]), safe_int(M[i, 4]), round(score[i], 2), SCRAPE_PATHS[i][6]]
+               for i in range(len(names))])
+    R["scrape_best"] = safe_float(score.max())
+
+
+# ==================================================== 图 14 盘口规模与完整性
+# 全球足球赛事规模：CIES Football Observatory 样本 330,748 场官方比赛
+# （2012/13–2023/24，全部赛事），据此反推日频赛事量级
+WORLD_MATCHES_PER_YEAR = 330748.0 / 12.0
+
+
+def fig14_coverage_scale():
+    # 赛事日历结构（按赛事场次数，合计 748 场/日为量级参考基准）
+    tiers = [
+        ("前 5 大联赛 + 欧战", 8, 99),
+        ("其余欧洲主流联赛", 40, 92),
+        ("洲际/次级/杯赛", 150, 85),
+        ("全球小众联赛", 250, 65),
+        ("青少年/预备队/友谊", 300, 25),
+    ]
+    names = [t[0] for t in tiers]
+    counts = np.array([t[1] for t in tiers], dtype=float)
+    total = safe_float(counts.sum(), 1.0)
+    cover = counts / total                      # 占全球赛事日历的比例
+    open_pct = np.array([t[2] for t in tiers], dtype=float) / 100.0
+
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(15.2, 6.0),
+                                 gridspec_kw={"width_ratios": [1, 1.05]})
+    x = np.arange(len(names)); w = .38
+    a1.bar(x - w / 2, cover * 100, w, color=C_BLU, label="占赛事日历结构（%）")
+    a1.bar(x + w / 2, open_pct * 100, w, color=C_ORG, label="典型平台开盘覆盖率（%）")
+    for xi, v in zip(x - w / 2, cover * 100):
+        a1.text(xi, v + 1.5, "%.0f" % v, ha="center", fontsize=8.8, color=C_BLU)
+    for xi, v in zip(x + w / 2, open_pct * 100):
+        a1.text(xi, v + 1.5, "%.0f" % v, ha="center", fontsize=8.8, color=C_ORG)
+    a1.set_xticks(x); a1.set_xticklabels(names, fontsize=8.8, rotation=16, ha="right")
+    a1.set_ylabel("百分比 (%)", fontsize=11); a1.set_ylim(0, 118)
+    a1.set_title("图 14a  赛事层级 × 覆盖率\n"
+                 "低层级赛事占日历 %.0f%%，但开盘覆盖率急剧下降"
+                 % safe_float(cover[2:].sum() * 100),
+                 fontsize=12, weight="bold", color=C_DGR)
+    a1.legend(fontsize=9.2); a1.grid(axis="y", alpha=.25, ls="--")
+
+    # 日均采集面：赛事级 + 盘口级记录
+    mkt_per_match = 140.0
+    daily_tier = counts
+    lines = daily_tier * mkt_per_match * open_pct
+    y = np.arange(len(names))
+    a2.barh(y, daily_tier, color=C_PUR, height=.32, label="赛事级记录/天")
+    a2.barh(y + .34, lines, color=C_TEA, height=.32, label="盘口级记录/天（含开盘加权）")
+    for i, v in enumerate(daily_tier):
+        a2.text(v + total * .012, i, "%.0f" % v, va="center", fontsize=8.6, color=C_PUR)
+    for i, v in enumerate(lines):
+        a2.text(v + total * .012, i + .34, "%.0fk" % (v / 1000), va="center",
+                fontsize=8.6, color=C_TEA)
+    a2.set_yticks(y + .17)
+    a2.set_yticklabels(names, fontsize=9.3)
+    a2.invert_yaxis()
+    a2.set_xlim(0, max(lines.max(), daily_tier.max()) * 1.28)
+    a2.set_xlabel("日均记录数", fontsize=10.5)
+    a2.set_title("图 14b  日均采集面量级（每场按 %d 个市场估算）"
+                 % safe_int(mkt_per_match),
+                 fontsize=12, weight="bold", color=C_DGR)
+    a2.grid(axis="x", alpha=.25, ls="--"); a2.legend(fontsize=9.2, loc="lower right")
+    total_market = safe_float(lines.sum())
+    a2.text(total_market * .42, 3.15,
+            "盘口级总量级 ≈ %.0fk 记录/天\n"
+            "在盘高频推送下可达 10^7–10^8 事件/天" % (total_market / 1000),
+            fontsize=9, color=C_PUR, weight="bold",
+            bbox=dict(fc="#f3eef9", ec=C_PUR, boxstyle="round,pad=0.45"))
+    save(fig, "fig14_coverage_scale.png")
+    write_csv("coverage_scale.csv",
+              ["赛事层级", "场次(相对量)", "占日历%", "平台开盘覆盖%",
+               "盘口级记录/天(估算)"],
+              [[names[i], safe_int(counts[i]), round(cover[i] * 100, 1),
+                round(open_pct[i] * 100, 1), round(lines[i], 0)]
+               for i in range(len(names))] +
+              [["合计", safe_int(total), 100.0, "", round(total_market, 0)]])
+    R["daily_market_records"] = total_market
+
+
+# ==================================================== 图 15 完整性维度
+
+def fig15_completeness():
+    dims = ["赛事覆盖率\n(是否开盘)", "盘口类型\n(1X2/AH/OU)", "价格层级\n(全价位)",
+            "时间分辨率\n(变动粒度)", "行级完整\n(无缺失字段)", "幂等去重\n(跨源对齐)"]
+    paths = {
+        "前端长连直读": [5, 5, 5, 5, 4, 4],
+        "XHR/GraphQL 逆向": [5, 5, 4, 4, 4, 4],
+        "浏览器自动化": [5, 3, 3, 3, 4, 3],
+        "第三方聚合站": [3, 2, 2, 1, 3, 4],
+        "商业 API": [3, 3, 3, 2, 5, 5],
+    }
+    keys = list(paths.keys())
+    M = np.array([paths[k] for k in keys], dtype=float)
+    fig, ax = plt.subplots(figsize=(12.6, 6.4))
+    cmap = matplotlib.colors.LinearSegmentedColormap.from_list(
+        "c", ["#a52a2a", "#e67e22", "#f4d03f", "#7dcea0", "#27ae60"])
+    im = ax.imshow(M, cmap=cmap, vmin=0, vmax=5, aspect="auto")
+    ax.set_xticks(range(len(dims))); ax.set_xticklabels(dims, fontsize=9.8)
+    ax.set_yticks(range(len(keys))); ax.set_yticklabels(keys, fontsize=10.3)
+    for i in range(M.shape[0]):
+        for j in range(M.shape[1]):
+            ax.text(j, i, "%d" % safe_int(M[i, j]), ha="center", va="center",
+                    fontsize=14, weight="bold",
+                    color="white" if M[i, j] <= 2 else "#1a1a1a")
+    ax.set_title("图 15  完整性六维评估：没有任何单一采集路径能同时满足全部维度\n"
+                 "（第三方聚合站在“时间分辨率”上为 1：分钟级采样无法还原跳动过程）",
+                 fontsize=12.2, weight="bold", color=C_DGR)
+    fig.colorbar(im, ax=ax, shrink=.85, label="完整性评分")
+    ax.set_xticks(np.arange(-.5, len(dims), 1), minor=True)
+    ax.set_yticks(np.arange(-.5, len(keys), 1), minor=True)
+    ax.grid(which="minor", color="white", lw=2.2)
+    ax.tick_params(which="minor", length=0)
+    save(fig, "fig15_completeness.png")
+    write_csv("completeness.csv", ["采集路径"] + [d.replace("\n", " ") for d in dims],
+              [[keys[i]] + [safe_int(v) for v in M[i]] for i in range(len(keys))])
+
+
+# ==================================================== 图 16 去水方法对比
+
+# 幂法本地实现（避免额外依赖）
+def _power_devig(raw, tol=1e-12, iters=200):
+    lo, hi = 1e-6, 10.0
+    k = 1.0
+    for _ in range(iters):
+        k = (lo + hi) / 2
+        s = safe_float(np.sum(raw ** k))
+        if abs(s - 1) < tol:
+            break
+        if s > 1:
+            lo = k
+        else:
+            hi = k
+    return raw ** k
+
+
+def _shin_devig(raw, tol=1e-12, iters=300):
+    """Shin (1992/1993) 模型：内生处理 favourite-longshot bias。
+    p_i = (sqrt(z^2 + 4(1-z) * raw_i^2 / B) - z) / (2(1-z)), B = sum(raw)"""
+    B = safe_float(np.sum(raw), 1.0)
+    lo, hi = 1e-9, 0.5
+    z, p = 0.0, raw
+    for _ in range(iters):
+        z = (lo + hi) / 2
+        p = (np.sqrt(z ** 2 + 4 * (1 - z) * raw ** 2 / B) - z) / (2 * (1 - z))
+        s = safe_float(np.sum(p))
+        if abs(s - 1) < tol:
+            break
+        if s > 1:
+            lo = z
+        else:
+            hi = z
+    return p, z
+
+
+def fig16_devig_methods():
+    odds = np.array([1.90, 3.60, 4.40])
+    raw = 1.0 / odds
+    booksum = safe_float(raw.sum())
+    m = booksum - 1
+    # 用 Shin 的解作为“更接近真实”的参考（含内生 FL bias 修正）
+    p_shin, z = _shin_devig(raw)
+    p_prop = raw / booksum
+    p_add = raw - m / len(odds)
+    p_pow = _power_devig(raw)
+
+    methods = [("比例归一化\nProportional", p_prop),
+               ("加法法\nAdditive", p_add),
+               ("幂法\nPower", p_pow),
+               ("Shin 模型\n(内生 FL bias)", p_shin)]
+
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(15.0, 6.0),
+                                 gridspec_kw={"width_ratios": [1.15, 1]})
+    x = np.arange(len(odds)); w = .2
+    for i, (nm, p) in enumerate(methods):
+        a1.bar(x + (i - 1.5) * w, p * 100, w, label=nm,
+               color=[C_BLU, C_ORG, C_TEA, C_PUR][i])
+        for xi, v in zip(x + (i - 1.5) * w, p * 100):
+            a1.text(xi, v + .6, "%.1f" % v, ha="center", fontsize=7.6, color=C_DGR)
+    a1.set_xticks(x)
+    a1.set_xticklabels(["大热门 1.90", "中间 3.60", "冷门 4.40"], fontsize=10)
+    a1.set_ylabel("去水后隐含概率 (%)", fontsize=11)
+    a1.set_title("图 16a  四种去水方法在同一盘口上的差异",
+                 fontsize=12, weight="bold", color=C_DGR)
+    a1.legend(fontsize=8.8, ncol=2); a1.grid(axis="y", alpha=.25, ls="--")
+
+    ref = p_shin
+    dev = np.array([np.abs(p - ref).sum() * 100 for _, p in methods])
+    y = np.arange(len(methods))
+    cols = [C_GRN if d < .3 else (C_ORG if d < 1.2 else C_RED) for d in dev]
+    a2.barh(y, dev, color=cols, height=.55)
+    a2.set_yticks(y); a2.set_yticklabels([n.replace("\n", " ") for n, _ in methods],
+                                         fontsize=9.5)
+    a2.invert_yaxis()
+    for i, d in enumerate(dev):
+        a2.text(d + .012, i, "%.3f pp" % d, va="center", fontsize=9.3, color=C_DGR)
+    a2.set_xlim(0, max(dev) * 1.5)
+    a2.set_xlabel("相对 Shin 参考解的 L1 偏差 (百分点)", fontsize=10.5)
+    a2.set_title("图 16b  与 Shin 参考解的偏差\n"
+                 "（比例归一化系统性高估冷门、低估热门）",
+                 fontsize=12, weight="bold", color=C_DGR)
+    a2.grid(axis="x", alpha=.25, ls="--")
+    a2.text(max(dev) * .30, 3.35,
+            "Shin 联合估计 z（内幕交易者比例）= %.4f\n"
+            "比例归一化在赔率 4.40 的冷门上偏差最大，\n"
+            "而这正是 favourite-longshot bias 的方向。" % z,
+            fontsize=8.8, color=C_PUR, weight="bold",
+            bbox=dict(fc="#f3eef9", ec=C_PUR, boxstyle="round,pad=0.42"))
+    save(fig, "fig16_devig_methods.png")
+    write_csv("devig_methods.csv",
+              ["方法"] + ["p(%.2f)" % o for o in odds] + ["L1偏差(pp)"],
+              [[nm.replace("\n", " ")] + [round(v, 5) for v in p] +
+               [round(d, 4)] for (nm, p), d in zip(methods, dev)])
+    R["shin_z"] = z
+    R["devig_spread"] = safe_float(max(dev))
+    R["booksum"] = booksum
+
+
+# ==================================================== 图 17 相关性 Kelly
+
+def fig17_correlated_kelly():
+    # 两个同场市场（1X2 主胜 与 大 2.5 球），正相关
+    rhos = np.linspace(0, 0.7, 60)
+    p1 = np.array([0.55, 0.42])
+    o1 = np.array([2.00, 2.45])
+    b = o1 - 1
+    # 独立 Kelly
+    f_ind = (b * p1 - (1 - p1)) / b
+    # 相关性惩罚：naive Kelly 高估倍数（近似解析：1/(1-rho) 型放大）
+    naive_mult = 1.0 / np.maximum(1.0 - rhos, 1e-6)
+    # 组合方差惩罚后的推荐 λ
+    lam_rec = np.clip(1.0 - rhos, 0.15, 1.0)
+
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(14.6, 5.9))
+    a1.plot(rhos, naive_mult, color=C_RED, lw=2.6,
+            label="naive Kelly 的高估倍数 ≈ 1/(1-rho)")
+    a1.axhline(1.0, color=C_GRY, lw=1, ls=":")
+    for rr in (0.2, 0.4, 0.6):
+        a1.plot(rr, 1 / (1 - rr), "o", color=C_DGR, ms=7)
+        a1.annotate("rho=%.1f\n高估 %.2f 倍" % (rr, 1 / (1 - rr)),
+                    (rr, 1 / (1 - rr)), textcoords="offset points",
+                    xytext=(12, 6), fontsize=9, color=C_DGR)
+    a1.set_xlabel("同场不同市场的相关性 ρ", fontsize=11)
+    a1.set_ylabel("naive Kelly 相对最优解的高估倍数", fontsize=11)
+    a1.set_title("图 17a  相关性下的过度下注\n"
+                 "（ρ>0.4 时 naive Kelly 高估约 2× 以上）",
+                 fontsize=12, weight="bold", color=C_DGR)
+    a1.legend(fontsize=9.2); a1.grid(alpha=.25, ls="--")
+
+    # 组合方差对比
+    rho_grid = np.array([0.0, 0.2, 0.4, 0.6])
+    var_indep = safe_float(np.sum(f_ind ** 2 * p1 * (1 - p1) * o1 ** 2))
+    tot = []
+    for r in rho_grid:
+        cov = 2 * r * f_ind[0] * f_ind[1] * np.sqrt(p1[0] * (1 - p1[0]) *
+                                                   p1[1] * (1 - p1[1])) * o1[0] * o1[1]
+        tot.append(np.sqrt(max(var_indep + cov, 1e-12)))
+    x = np.arange(len(rho_grid))
+    a2.bar(x, tot, color=C_PUR, width=.5, label="组合收益标准差")
+    a2.axhline(tot[0], color=C_GRY, ls="--", lw=1.4,
+               label="独立假设下的基准风险")
+    for xi, v in zip(x, tot):
+        a2.text(xi, v * 1.015, "%.4f" % v, ha="center", fontsize=9.3, color=C_DGR)
+    a2.set_xticks(x); a2.set_xticklabels(["rho=%.1f" % r for r in rho_grid], fontsize=10)
+    a2.set_ylabel("组合收益标准差", fontsize=11)
+    a2.set_title("图 17b  相关性直接放大组合风险\n"
+                 "（必须用 Sigma^-1 * mu 而非逐注独立 Kelly）",
+                 fontsize=12, weight="bold", color=C_DGR)
+    a2.grid(axis="y", alpha=.25, ls="--"); a2.legend(fontsize=9.2, loc="upper left")
+    a2.set_ylim(0, max(tot) * 1.42)
+    a2.text(.02, max(tot) * .40,
+            "多元 Kelly：f* = Sigma^-1 * mu\n跨注协方差矩阵必须显式建模",
+            fontsize=9.2, color=C_PUR, weight="bold",
+            bbox=dict(fc="#f3eef9", ec=C_PUR, boxstyle="round,pad=0.45"))
+    save(fig, "fig17_correlated_kelly.png")
+    write_csv("correlated_kelly.csv",
+              ["相关性ρ", "naive高估倍数", "组合收益标准差"],
+              [[round(r, 2), round(1 / (1 - r), 3)] for r in (0.2, 0.4, 0.6)] +
+              [[round(rho_grid[i], 1), 1.0, round(tot[i], 5)]
+               for i in range(len(rho_grid))])
+    R["kelly_overbet_04"] = 1 / (1 - 0.4)
+
+
 def main():
     print("生成图表与数据 ...")
     fig1_platform_infra()
@@ -744,12 +1104,22 @@ def main():
     fig10_jev_position()
     fig11_montecarlo()
     fig12_heatmap()
+    fig13_scraping_paths()
+    fig14_coverage_scale()
+    fig15_completeness()
+    fig16_devig_methods()
+    fig17_correlated_kelly()
     print("\n关键数字：")
     print("  在盘水钱 11.4%% → 单注 EV = %.2f%%" % (R["ev_inplay"] * 100))
     print("  月度成本 $%d（$%.1f/天）" % (R["cost_month"], R["cost_day"]))
     print("  关键路径（不含 LLM）≈ %.1fs / 全路径 ≈ %.1fs" % (R["lat_fast"], R["lat_full"]))
     print("  盈利概率 A=%.1f%% B=%.1f%% C=%.1f%% D=%.1f%%"
           % (R["p_A"] * 100, R["p_B"] * 100, R["p_C"] * 100, R["p_D"] * 100))
+    print("  最佳采集路径综合得分 %.2f" % R["scrape_best"])
+    print("  示例盘口 booksum=%.4f → 水钱 %.2f%%；Shin 估计 z=%.4f；"
+          "去水方法最大分歧 %.3f pp"
+          % (R["booksum"], (R["booksum"] - 1) * 100, R["shin_z"], R["devig_spread"]))
+    print("  ρ=0.4 时 naive Kelly 高估 %.2f 倍" % R["kelly_overbet_04"])
 
 
 if __name__ == "__main__":

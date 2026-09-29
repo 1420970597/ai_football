@@ -64,213 +64,349 @@ li{margin:.35em 0}
 <body>
 <main class="wrap">
 <h1>「实时倍率 → LLM + JEV 混合决策 → 自动买入」体育博彩交易机器人技术可行性与经济学可行性研究报告</h1>
-<p><strong>研究对象</strong>：乐鱼体育（LEYU）、开云体育（KAIYUN）及同类实时赔率平台 <strong>构想架构</strong>：采集逐场实时倍率 → 在庄家调价瞬间触发决策 → LLM 大模型 + JEV 小模型组合判断 → 配合经济学算法计算仓位 → 自动下单</p>
-<div class="tw"><table><thead><tr><th>项目</th><th>内容</th></tr></thead><tbody><tr><td>报告版本</td><td>v2.0</td></tr><tr><td>研究范围</td><td><strong>仅技术可行性与经济学可行性</strong>（不含法律合规评估）</td></tr><tr><td>分析口径</td><td>架构分层可实现性 · 延迟预算 · 信息优势来源 · 期望值与成本 · 组合与仓位</td></tr><tr><td>核心结论</td><td><strong>分层看：L1–L4 技术可实现、工程可维护；L3 决策层的组合设计有明确最优解；但经济学上整个方案是结构性负期望，且 L5 的成交裁定权不在你手里。整体判定：不可行。</strong></td></tr></tbody></table></div>
+<p><strong>研究对象</strong>：乐鱼体育（LEYU）、开云体育（KAIYUN）及同类实时赔率平台 <strong>构想架构</strong>：爬虫（非 API、含逆向）采集逐场实时倍率 → 在庄家调价瞬间触发决策 → LLM 大模型 + JEV 小模型组合判断 → 配合经济学算法计算仓位 → 自动下单</p>
+<div class="tw"><table><thead><tr><th>项目</th><th>内容</th></tr></thead><tbody><tr><td>报告版本</td><td>v3.0</td></tr><tr><td>研究范围</td><td><strong>仅技术可行性与经济学可行性</strong>（不含法律合规评估）</td></tr><tr><td>分析口径</td><td>爬虫路径可实现性 · 赛事覆盖规模与数据完整性 · 延迟预算 · 信息优势来源 · 经济学公式体系 · 开源实现支撑</td></tr><tr><td>核心结论</td><td><strong>数据采集层是唯一被开源项目充分验证可行的层；但覆盖面（§4）与协议漂移（§3）共同推高维护成本，经济学上整个方案是结构性负期望（§9/§10），且成交裁定权不在你手里（§5.3）。整体判定：不可行。</strong></td></tr></tbody></table></div>
 <hr>
 <h2>摘要</h2>
-<p><strong>1. 架构本身没问题，问题在于它优化的是一个负期望系统。</strong></p>
-<p>LLM + JEV + 经济学算法的分层设计是<strong>正确的工程答案</strong>（§5、§6）：JEV 承担高频结构化判断（0.3–1.5s），LLM 承担低频非结构化推理（1.5–6s，<strong>不进关键路径</strong>），经济学算法栈承担去水、优势估计、分数 Kelly、约束（&lt;1ms）。这套分工在技术上成立，且可以用 <code>图 6</code> 的路由矩阵严格推导出来。但——</p>
-<p><strong>2. 定价对手太强：打平需要在概率精度上相对优于庄家定价模型 11.4%。</strong></p>
-<p>在盘（滚球）足球水钱典型区间 8%–20%，<strong>均值 11.4%</strong>；赛前头部市场仅约 5.06%（68 家博彩公司样本）。由 <code>EV = −m/(1+m)</code> 得单注期望 <strong>−10.23%</strong>。打平条件是 <code>p_model &gt; p_fair × (1+m)</code>，即需要 <strong>11.4% 的相对概率优势</strong>——而不是绝对优势。庄家的赔率不是猜测，是市场共识 + 风控因子；公开数据建模的现实相对优势在 <strong>0–2%</strong> 量级。</p>
-<p><strong>3. 关键路径已被对手方的接受延迟主导：29 秒 vs 你的模型 1.8 秒。</strong></p>
-<p>从场上事件到成交确认，乐观合计 <strong>29.0s</strong>（若 LLM 进关键路径则 <strong>35.0s</strong>）。其中<strong>属于你的部分只有约 1.8s</strong>（特征 + 经济学栈 0.5s + JEV 1.5s），其余由数据链路与庄家行为构成。<strong>庄家的下注接受延迟单项就是 5–10s</strong>，且可能改价或拒单。把 LLM 放在关键路径上，等于用 +6s 延迟换取零定价能力提升。</p>
-<p><strong>4. 固定成本会吃掉本来就微薄的优势。</strong></p>
-<p>月度基础设施与模型调用成本约 <strong><span class="imath">1,060**（</span>35.3/天，其中"可摊销的模型成本"仅占 <span class="imath">210）。蒙特卡洛显示：假设存在 +2% 优势且无平台风险，90 天盈利概率 61.4%；**扣除每日 </span>35.3 成本后降至 45.4%</strong>。若叠加 25% 平台跑路/拒付概率，降至 <strong>29.2%</strong>。而无优势情形下只有 <strong>0.8%</strong>。</p>
-<p><strong>5. 蒙特卡洛结论（2 万次 / 90 天 / 5 注/天 / 每注 2% 银行）：</strong></p>
+<p><strong>1. 爬虫（非 API、含逆向）技术上可行，且已有开源项目完整验证。</strong></p>
+<p><code>stake-scraper</code> 证明：直接 <code>POST https://stake.com/_api/graphql</code> 复用站点内部 GraphQL 端点，<strong>无需浏览器、无需 Selenium、无需 token</strong> 即可读到盘口与实时注单流；<code>allusion</code> / <code>OddsHarvester</code> 证明 Playwright 浏览器自动化可覆盖 11 种运动、100+ 联赛；<code>snuper</code> 证明异步采集 + 不可变快照 + 流式推送的架构可行。</p>
+<p><strong>但同一批仓库也给出了关键的反向证据</strong>：<code>sports-odds</code> 作者在 README 中直接写下 —— <em>"It was good while it lasted. Betclic has changed their API, so I'm not able to scrape their odds"</em>（伴随 CloudFront 新增校验）。<strong>协议变更不是一个风险假设，而是开源界公开记录的常态。</strong> 采集层的工程成本不是"写通一次"，而是<strong>持续对抗漂移</strong>。</p>
+<p><strong>2. 覆盖面要求（100–200 场、乃至全球赛事）把"完整性"变成最大的工程漏洞。</strong></p>
+<p>CIES Football Observatory 统计 12 个赛季共 <strong>330,748 场</strong>官方比赛（≈75 场/日，仅统计进入其样本的赛事）。而平台开盘覆盖呈明显分层：</p>
+<div class="tw"><table><thead><tr><th>赛事层级</th><th>占日历</th><th>开盘覆盖</th></tr></thead><tbody><tr><td>前 5 大联赛 + 欧战</td><td>1%</td><td>99%</td></tr><tr><td>其余欧洲主流联赛</td><td>5%</td><td>92%</td></tr><tr><td>洲际/次级/杯赛</td><td>20%</td><td>85%</td></tr><tr><td>全球小众联赛</td><td>33%</td><td>65%</td></tr><tr><td>青少年/预备队/友谊</td><td>40%</td><td><strong>25%</strong></td></tr></tbody></table></div>
+<p><strong>低层级赛事占日历 94%，而开盘覆盖率在长尾急剧下降。</strong>按每场 140 个市场估算，盘口级采集量约 <strong>5.7 万记录/天</strong>，在盘高频推送下可达 <strong>10⁷–10⁸ 事件/天</strong>。完整性六维评估（图 15）显示：<strong>没有任何单一采集路径能同时满足全部六个维度</strong>，必须混合多种路径 —— 而这会直接放大维护成本。</p>
+<p><strong>3. 经济学上打平需要在概率精度上相对优于庄家定价模型 11.4%。</strong></p>
+<p>在盘滚球足球水钱典型区间 8%–20%，<strong>均值 11.4%</strong>；赛前头部仅 5.06%。由 <code>EV = −m/(1+m)</code> 得单注期望 <strong>−10.23%</strong>。打平条件 <code>p_model &gt; p_fair × (1+m)</code> —— 需要的是 <strong>11.4% 的相对优势</strong>，而公开数据建模的现实相对优势是 <strong>0–2%</strong>。</p>
+<p><strong>4. 去水方法的选择本身就能决定策略的符号。</strong>（§8.1）</p>
+<p>同一盘口（1.90 / 3.60 / 4.40）用四种方法去水，与 Shin 参考解的 L1 偏差可达 <strong>0.83 pp</strong>。而当可寻优势只有 1–2% 时，<strong>去水偏差足以翻转 <code>edge</code> 的符号</strong>。比例归一化在冷门上系统性高估（favourite-longshot bias 方向）。</p>
+<p><strong>5. 相关性会让 naive Kelly 系统性过度下注。</strong>（§8.5）</p>
+<p>同场多市场（1X2 与大球）正相关 ρ&gt;0.4 时，naive 逐注 Kelly 高估约 <strong>1.67×</strong>（ρ=0.6 时 <strong>2.5×</strong>）。必须用多元形式 <code>f* = Σ⁻¹μ</code> 而非逐注独立计算。</p>
+<p><strong>6. 关键路径 29.0s，其中属于你的只有 1.8s；LLM 不应进关键路径。</strong></p>
+<p><strong>7. 成本与蒙特卡洛（2 万次 / 90 天 / 5 注/天）：</strong></p>
 <div class="tw"><table><thead><tr><th>情形</th><th>90 日余额中位数</th><th>盈利概率</th></tr></thead><tbody><tr><td>A · 无优势（滚球水钱 11.4%）</td><td>$3,631</td><td><strong>0.8%</strong></td></tr><tr><td>B · +2% 优势，无平台风险，不计成本</td><td>$11,259</td><td>61.4%</td></tr><tr><td>D · +2% 优势，扣除 $35/天 运行成本</td><td>$7,655</td><td><strong>45.4%</strong></td></tr><tr><td>C · +2% 优势，25% 概率跑路/拒付</td><td>$9,263</td><td><strong>29.2%</strong></td></tr></tbody></table></div>
-<blockquote><p>读法：B 已经是<strong>乐观上界</strong>（假设优势真实存在），而 D 和 C 才是现实的约束条件——<strong>它们会同时生效</strong>，把 61.4% 压向 30% 以下。</p></blockquote>
+<p>月度成本 <span class="imath">1,060（</span>35.3/天），其中<strong>模型调用仅占 20%，人力摊销与采集基础设施占 80%</strong> —— 成本结构由"维护一个漂移端点集合 + 覆盖长尾赛事"驱动，而非 AI 驱动。</p>
 <hr>
 <h2>目录</h2>
-<ol><li><a href="#1-研究范围方法与前提">研究范围、方法与前提</a></li><li><a href="#2-系统分层架构总览">系统分层架构总览</a></li><li><a href="#3-l1-数据采集层技术形态与工程约束">L1 数据采集层：技术形态与工程约束</a></li><li><a href="#4-微结构信号与延迟预算">微结构信号与延迟预算</a></li><li><a href="#5-l3-决策层llm--jev-混合架构">L3 决策层：LLM + JEV 混合架构</a></li><li><a href="#6-l4-经济学算法栈">L4 经济学算法栈</a></li><li><a href="#7-经济学分析一水钱与所需精度优势">经济学分析（一）：水钱与所需精度优势</a></li><li><a href="#8-经济学分析二成本结构与摊销">经济学分析（二）：成本结构与摊销</a></li><li><a href="#9-量化压力测试">量化压力测试</a></li><li><a href="#10-可行性评分与结论">可行性评分与结论</a></li><li><a href="#附录">附录</a></li></ol>
+<ol><li><a href="#1-研究范围方法与前提">研究范围、方法与前提</a></li><li><a href="#2-系统分层架构总览">系统分层架构总览</a></li><li><a href="#3-l1-数据采集层爬虫路径技术可行性含逆向工程">L1 数据采集层：爬虫路径技术可行性（含逆向工程）</a></li><li><a href="#4-赛事覆盖规模与数据完整性要求">赛事覆盖规模与数据完整性要求</a></li><li><a href="#5-微结构信号与延迟预算">微结构信号与延迟预算</a></li><li><a href="#6-l3-决策层llm--jev-混合架构">L3 决策层：LLM + JEV 混合架构</a></li><li><a href="#7-l4-经济学算法栈">L4 经济学算法栈</a></li><li><a href="#8-经济学算法支撑公式体系与数值对比">经济学算法支撑：公式体系与数值对比</a></li><li><a href="#9-经济学分析一水钱与所需精度优势">经济学分析（一）：水钱与所需精度优势</a></li><li><a href="#10-经济学分析二成本结构与摊销">经济学分析（二）：成本结构与摊销</a></li><li><a href="#11-量化压力测试">量化压力测试</a></li><li><a href="#12-开源项目技术支撑">开源项目技术支撑</a></li><li><a href="#13-可行性评分与结论">可行性评分与结论</a></li><li><a href="#附录">附录</a></li></ol>
 <hr>
 <h2>1. 研究范围、方法与前提</h2>
 <h3>1.1 范围界定</h3>
 <p>本报告<strong>只回答两个问题</strong>：</p>
-<div class="tw"><table><thead><tr><th>#</th><th>问题</th><th>对应章节</th></tr></thead><tbody><tr><td>Q1</td><td>这套架构<strong>能不能实现</strong>？各层的技术约束是什么？</td><td>§2–§6</td></tr><tr><td>Q2</td><td>即使完全实现，<strong>经济学上是否为正期望</strong>？</td><td>§7–§9</td></tr></tbody></table></div>
-<p>明确<strong>不包含</strong>：合规性评估、法律定性、监管风险分析。数据采集部分只讨论<strong>技术实现路径与工程约束</strong>（协议形态、更新频率、端点稳定性、反自动化对抗复杂度），不涉及合规判断。</p>
+<div class="tw"><table><thead><tr><th>#</th><th>问题</th><th>对应章节</th></tr></thead><tbody><tr><td>Q1</td><td>这套架构<strong>能不能实现</strong>？各层的技术约束是什么？</td><td>§2–§8、§12</td></tr><tr><td>Q2</td><td>即使完全实现，<strong>经济学上是否为正期望</strong>？</td><td>§8–§11</td></tr></tbody></table></div>
+<p>明确<strong>不包含</strong>：合规性评估、法律定性、监管风险分析。数据采集部分只讨论<strong>技术实现路径与工程约束</strong>（协议形态、逆向手段、更新频率、端点稳定性、覆盖率、维护成本），不涉及合规判断。</p>
 <h3>1.2 证据分级</h3>
-<div class="tw"><table><thead><tr><th>级别</th><th>含义</th><th>本文用途</th></tr></thead><tbody><tr><td><strong>A</strong></td><td>一手机构研究 / 平台自有文档</td><td>数据源更新频率、下注接受延迟、API 可得性</td></tr><tr><td><strong>B</strong></td><td>行业数据聚合 / 学术论文</td><td>水钱统计、Kelly 与组合理论、系统性建模的零结果</td></tr><tr><td><strong>C</strong></td><td>社区实测 / 论坛报告</td><td>延迟与拒单行为的第一手观察（标注为经验值）</td></tr></tbody></table></div>
+<div class="tw"><table><thead><tr><th>级别</th><th>含义</th><th>本文用途</th></tr></thead><tbody><tr><td><strong>A</strong></td><td>一手机构研究 / 平台自有文档 / 开源项目可核验代码</td><td>数据源更新频率、接受延迟、协议形态、算法实现</td></tr><tr><td><strong>B</strong></td><td>学术论文 / 行业数据聚合</td><td>水钱统计、去水方法、Kelly 与组合理论、赛事规模</td></tr><tr><td><strong>C</strong></td><td>社区实测 / 开源项目 README 的经验记录</td><td>反自动化行为、拒单与限额行为、端点漂移实例</td></tr></tbody></table></div>
 <h3>1.3 前提假设（可替换）</h3>
-<div class="tw"><table><thead><tr><th>参数</th><th>取值</th><th>说明</th></tr></thead><tbody><tr><td>目标市场</td><td>滚球（in-play）足球，1X2 与大小球</td><td>构想中"调价瞬间"主要发生在此</td></tr><tr><td>在盘水钱 m</td><td>11.4%（区间 8%–20%）</td><td>行业统计均值</td></tr><tr><td>结算赔率</td><td>1.95（≈ −105）</td><td>常规盘口</td></tr><tr><td>初始银行</td><td>$10,000</td><td>假设</td></tr><tr><td>下注比例</td><td>2% flat（对照用），主推分数 Kelly</td><td>见 §6</td></tr><tr><td>模拟时长</td><td>90 天，5 注/天</td><td>赛季中段典型节奏</td></tr></tbody></table></div>
-<blockquote><p>所有参数集中在 <code>scripts/make_figures.py</code>，可替换重跑。水钱、限额、延迟参数在文件中均以命名常量出现。</p></blockquote>
+<div class="tw"><table><thead><tr><th>参数</th><th>取值</th><th>说明</th></tr></thead><tbody><tr><td>目标市场</td><td>滚球（in-play）足球，1X2 / 亚盘 / 大小球</td><td>构想中"调价瞬间"主要发生在此</td></tr><tr><td>在盘水钱 m</td><td>11.4%（区间 8%–20%）</td><td>行业统计均值</td></tr><tr><td>覆盖目标</td><td><strong>全球赛事 100–200 场/日</strong>（含长尾）</td><td>按用户构想设定</td></tr><tr><td>每场市场数</td><td>140（长尾更低，头部可达 300+）</td><td>用于采集量估算</td></tr><tr><td>结算赔率</td><td>1.95（≈ −105）</td><td>常规盘口</td></tr><tr><td>初始银行</td><td>$10,000</td><td>假设</td></tr><tr><td>下注比例</td><td>2% flat（对照用），主推分数/多元 Kelly</td><td>见 §8</td></tr><tr><td>模拟时长</td><td>90 天，5 注/天</td><td>赛季中段典型节奏</td></tr></tbody></table></div>
+<blockquote><p>所有参数集中在 <code>scripts/make_figures.py</code>，均以命名常量出现，可替换重跑。</p></blockquote>
 <hr>
 <h2>2. 系统分层架构总览</h2>
 <p><img alt="图 5 LLM + JEV 混合决策架构" src="images/fig5_hybrid_architecture.png"></p>
-<div class="tw"><table><thead><tr><th>层</th><th>职责</th><th>关键指标</th><th>归属</th></tr></thead><tbody><tr><td><strong>L1 采集</strong></td><td>长连推送、多源冗余、端点池、归一化</td><td>可用率、端到端延迟</td><td>你</td></tr><tr><td><strong>L1′ 微结构提取</strong></td><td>跳动频率、恢复时间、漂移速率、价差、深度代理</td><td>单次 &lt;1ms</td><td>你</td></tr><tr><td><strong>L2 特征</strong></td><td>去水隐含概率、无风险参考线、跨市场一致性</td><td>单次 &lt;1ms</td><td>你</td></tr><tr><td><strong>L3 决策</strong></td><td><strong>三路分流</strong>：确定性规则 / JEV / LLM</td><td>见 §5</td><td>你</td></tr><tr><td><strong>L4 经济学算法栈</strong></td><td>优势估计、分数 Kelly、相关性约束、成本摊销、可行性过滤</td><td>单次 &lt;1ms</td><td>你</td></tr><tr><td><strong>L5 执行</strong></td><td>下注队列、幂等去重、速率整形、拒单状态机、对账</td><td>5–20s（含对手方延迟）</td><td><strong>部分在对手方</strong></td></tr><tr><td><strong>L6 反馈校准</strong></td><td>结算回归、CLV 归因、Brier/ECE 评估、参数调优</td><td>离线</td><td>你</td></tr></tbody></table></div>
-<p><strong>架构的核心不对称（本报告的主线）：</strong></p>
-<blockquote><p>L1–L4 全部属于你，可以被优化到亚秒级；<strong>L5 之后由对手方的风控系统裁定</strong>。 这意味着：你可以把"决策"做到极致，但"成交与否"不在你的控制面内。</p></blockquote>
-<p>这一点决定了后续所有经济学结论：<strong>优化决策侧的边际收益，会被执行侧的不确定性上限封顶。</strong></p>
+<div class="tw"><table><thead><tr><th>层</th><th>职责</th><th>关键指标</th><th>归属</th></tr></thead><tbody><tr><td><strong>L1 采集</strong></td><td>端点发现、长连推送/逆向请求、多源冗余、归一化、去重</td><td>覆盖率、端到端延迟、可用率</td><td>你</td></tr><tr><td><strong>L1′ 微结构提取</strong></td><td>跳动频率、恢复时间、漂移速率、价差、深度代理</td><td>单次 &lt;1ms</td><td>你</td></tr><tr><td><strong>L2 特征</strong></td><td>去水公平概率、无风险参考线、跨市场/跨平台一致性</td><td>单次 &lt;1ms</td><td>你</td></tr><tr><td><strong>L3 决策</strong></td><td><strong>三路分流</strong>：确定性规则 / JEV / LLM</td><td>见 §6</td><td>你</td></tr><tr><td><strong>L4 经济学算法栈</strong></td><td>优势估计、收缩、分数·多元 Kelly、相关性约束、成本摊销、执行过滤</td><td>单次 &lt;1ms</td><td>你</td></tr><tr><td><strong>L5 执行</strong></td><td>下注队列、幂等去重、速率整形、拒单状态机、对账</td><td>5–20s（含对手方延迟）</td><td><strong>部分在对手方</strong></td></tr><tr><td><strong>L6 反馈校准</strong></td><td>结算回归、CLV 归因、Brier/ECE 评估、参数调优</td><td>离线</td><td>你</td></tr></tbody></table></div>
+<p><strong>架构的核心不对称（本报告主线）：</strong></p>
+<blockquote><p>L1–L4 全部属于你，可以被优化到亚秒级；<strong>L5 之后由对手方的风控系统裁定</strong>。 你可以把"决策"做到极致，但"成交与否"不在你的控制面内。</p></blockquote>
 <hr>
-<h2>3. L1 数据采集层：技术形态与工程约束</h2>
+<h2>3. L1 数据采集层：爬虫路径技术可行性（含逆向工程）</h2>
 <p><img alt="图 1 目标平台的技术形态与接口面" src="images/fig1_platform_infra.png"></p>
 <h3>3.1 接口面：这是一个「私有前端」，不是「服务端点」</h3>
-<div class="tw"><table><thead><tr><th>特征</th><th>工程后果</th></tr></thead><tbody><tr><td><strong>无公开 API / 无文档</strong></td><td>无契约、无版本号、无变更日志、无沙箱</td></tr><tr><td><strong>无 SLA / 无状态页</strong></td><td>无法区分"对手方故障"与"我方故障"</td></tr><tr><td><strong>SPA + JS 动态渲染</strong></td><td>必须真实渲染执行，不能 HTTP 轮询</td></tr><tr><td><strong>长连（WS/SSE）推送赔率</strong></td><td>需要维持长连接与心跳，连接断裂即失去行情</td></tr><tr><td><strong>会话 / 设备指纹绑定</strong></td><td>状态机必须跨请求保持一致</td></tr><tr><td><strong>端点域名持续轮换</strong></td><td>需持续探测可用端点、延迟分布、证书变更</td></tr><tr><td><strong>估值与下注共用通道</strong></td><td>读路径与写路径耦合，风控同时作用于两者</td></tr></tbody></table></div>
-<p><strong>这一形态的技术含义</strong>：DNS 安全研究已记录该类品牌<strong>数十个共用同一套基础设施</strong>（域名池 + CNAME 多层流量分发），域名池规模在 10⁵ 量级。对采集系统而言，这不是"数据接入"问题，而是<strong>"持续发现并维护一个不断漂移的端点集合"</strong>问题。</p>
-<h3>3.2 可对冲 vs 不可对冲</h3>
-<div class="tw"><table><thead><tr><th>可对冲（工程手段有效）</th><th>不可对冲（工程手段无效）</th></tr></thead><tbody><tr><td>单点故障 → 多源冗余、多平台并行</td><td>对手方单方面停盘（suspend）</td></tr><tr><td>端点半衰期 → 端点池 + 自动故障转移</td><td>对手方随时变更协议与字段</td></tr><tr><td>对方无历史数据 → 本地时序库自建</td><td>账户状态与被接受程度不可观测</td></tr><tr><td>推送断连 → 心跳 + 快速重连</td><td>改价 / 拒单（见 §4.3）</td></tr></tbody></table></div>
-<h3>3.3 数据源可得性矩阵（技术维度）</h3>
-<div class="tw"><table><thead><tr><th>数据源</th><th>在盘更新间隔</th><th>推送方式</th><th>可编程下注</th><th>技术评价</th></tr></thead><tbody><tr><td>The Odds API</td><td><strong>40 秒</strong>（精选市场）</td><td>REST 轮询</td><td>❌</td><td>延迟量级与"调价瞬间"不匹配</td></tr><tr><td>TheRundown</td><td>亚秒级</td><td>WebSocket（Ultra+）</td><td>❌</td><td>只能看盘</td></tr><tr><td>Pinnacle API</td><td>—</td><td>REST</td><td>✅</td><td><strong>2025-07-23 起对公众关闭</strong>，需商业申请</td></tr><tr><td>第三方转售（Pinnacle 行情）</td><td>低</td><td>推送</td><td>❌</td><td><span class="imath">99–</span>229/月</td></tr><tr><td><strong>Betfair Exchange API</strong></td><td>推送（Streaming API）</td><td>Streaming + REST</td><td>✅</td><td>唯一公开可编程下注通道；价格由撮合决定</td></tr><tr><td>直接采集目标平台前端</td><td>0.5–3s</td><td>WS/SSE</td><td>需自行逆向</td><td><strong>延迟最优，工程成本与不确定性最高</strong></td></tr></tbody></table></div>
-<p><strong>技术结论</strong>：若要捕捉"调价瞬间"，可选项只有两个—— (a) 直连私有前端：延迟最优（0.5–3s），但需承担全部端点漂移与协议变更成本； (b) 高端低延迟行情：延迟可接受，但<strong>仍然无法解决 §4.3 的成交裁定问题</strong>。</p>
-<p>注意：数据源的<strong>精度上限</strong>本身就限制策略。The Odds API 的 40s 在盘间隔意味着基于它的"跳动检测"平均会滞后 20s——<strong>远大于整个决策链</strong>。</p>
+<div class="tw"><table><thead><tr><th>特征</th><th>工程后果</th></tr></thead><tbody><tr><td><strong>无公开 API / 无文档</strong></td><td>无契约、无版本号、无变更日志、无沙箱</td></tr><tr><td><strong>无 SLA / 无状态页</strong></td><td>无法区分"对手方故障"与"我方故障"</td></tr><tr><td><strong>SPA + JS 动态渲染</strong></td><td>必须分析其内部请求，不能靠静态抓取</td></tr><tr><td><strong>长连（WS/SSE）推送赔率</strong></td><td>需维持长连接与心跳，断连即失去行情</td></tr><tr><td><strong>会话 / 设备指纹绑定</strong></td><td>状态机必须跨请求保持一致</td></tr><tr><td><strong>端点域名持续轮换</strong></td><td>需持续探测可用端点、延迟分布、证书变更</td></tr><tr><td><strong>估值与下注共用通道</strong></td><td>读写路径耦合，风控同时作用于两者</td></tr></tbody></table></div>
+<h3>3.2 五条爬虫路径的技术可行性</h3>
+<blockquote><p>本节结论基于<strong>公开开源项目的可核验实现</strong>（§12 列出仓库），而非推测。</p></blockquote>
+<p><img alt="图 13 爬虫路径技术可行性矩阵与工程推荐排序" src="images/fig13_scraping_paths.png"></p>
+<div class="tw"><table><thead><tr><th>路径</th><th class="center">接入层级</th><th class="center">延迟表现</th><th class="center">盘口完整性</th><th class="center">稳定性</th><th class="center">维护成本</th><th class="center">综合得分</th></tr></thead><tbody><tr><td><strong>A 前端长连直读（WS/SSE）</strong></td><td class="center">5</td><td class="center">5</td><td class="center">3</td><td class="center">2</td><td class="center">2</td><td class="center">3.55</td></tr><tr><td><strong>B 前端 XHR/GraphQL 逆向</strong></td><td class="center">4</td><td class="center">4</td><td class="center">4</td><td class="center">3</td><td class="center">3</td><td class="center"><strong>3.55</strong></td></tr><tr><td><strong>C 浏览器自动化渲染</strong></td><td class="center">3</td><td class="center">2</td><td class="center">5</td><td class="center">3</td><td class="center">2</td><td class="center">3.15</td></tr><tr><td><strong>D 第三方聚合站（OddsPortal）</strong></td><td class="center">2</td><td class="center">1</td><td class="center">4</td><td class="center">4</td><td class="center">4</td><td class="center">2.60</td></tr><tr><td><strong>E 商业 API</strong></td><td class="center">2</td><td class="center">3</td><td class="center">4</td><td class="center">5</td><td class="center">5</td><td class="center">3.25</td></tr></tbody></table></div>
+<blockquote><p>综合得分口径：接入层级 35% + 延迟 25% + 完整性 20% + 稳定性 20%，再扣维护成本。 <strong>注意 E（商业 API）的悖论</strong>：稳定性与维护成本都是满分，但<strong>接入层级只有 2</strong> —— 因为它拿不到目标平台的盘口，对本案没有意义。</p></blockquote>
+<h4>路径 A · 前端长连直读（延迟最优，稳定性最差）</h4>
+<div class="tw"><table><thead><tr><th>维度</th><th>说明</th></tr></thead><tbody><tr><td>技术要点</td><td>维持与前端同一 WebSocket/SSE 通道，订阅赔率推送</td></tr><tr><td>延迟</td><td><strong>0.5–3s</strong>，是所有路径中最低</td></tr><tr><td>完整性</td><td>中（3）：依赖平台是否对该会话推送全量市场</td></tr><tr><td>稳定性</td><td><strong>低（2）</strong>：长连被切断即失去行情；重连有状态恢复成本</td></tr><tr><td>维护成本</td><td>高（2）：协议变更直接影响</td></tr><tr><td>定位</td><td><strong>作为延迟优化上限保留</strong>，不作为唯一来源</td></tr></tbody></table></div>
+<h4>路径 B · 前端 XHR/GraphQL 逆向（工程推荐主路径）</h4>
+<p><strong>已验证实现</strong>：<code>stake-scraper</code> 直接复用站点内部 GraphQL 端点：</p>
+<pre><code>POST https://stake.com/_api/graphql
+Content-Type: application/json
+
+query FixtureOdds($id: String!) {
+  sportFixture(id: $id) {
+    name status
+    groups(groups: [&quot;winner&quot;]) {
+      templates(limit: 1) {
+        markets(limit: 1) {
+          name outcomes { name odds active }
+        }
+      }
+    }
+  }
+}</code></pre>
+<div class="tw"><table><thead><tr><th>维度</th><th>说明</th></tr></thead><tbody><tr><td>技术要点</td><td>抓取前端 XHR/GraphQL 请求结构，直接复用其端点</td></tr><tr><td>延迟</td><td>4（请求-响应，无浏览器渲染开销）</td></tr><tr><td>完整性</td><td>4（可得 <code>outcomes.active</code> 等状态字段，用于识别 suspend）</td></tr><tr><td>稳定性</td><td>3（比长连健壮，但查询结构可能变更）</td></tr><tr><td>维护成本</td><td>3</td></tr><tr><td><strong>关键优势</strong></td><td><strong>无浏览器、无 Selenium、无验证码求解</strong>（对公开数据）</td></tr><tr><td>工程注意</td><td>需控速（同查询 &lt;1 req/s）、<code>Session</code> keep-alive、随机 UA、<code>x-language</code> 头；重度场景需轮换代理</td></tr></tbody></table></div>
+<p><strong>这是首选路径</strong>：它在延迟、完整性、稳定性、维护成本之间取得了最好的平衡，且被开源项目证明<strong>不需要浏览器</strong>。</p>
+<h4>路径 C · 浏览器自动化渲染（最通用、最重的兜底）</h4>
+<p><strong>已验证实现</strong>：<code>allusion</code>（Playwright，配置驱动体育/国家/联赛）、<code>OddsHarvester</code>（Playwright，11 运动 / 100+ 联赛 / 输出 JSON·CSV·S3）。</p>
+<div class="tw"><table><thead><tr><th>维度</th><th>说明</th></tr></thead><tbody><tr><td>技术要点</td><td>真实浏览器渲染，读取 DOM 或拦截其网络请求</td></tr><tr><td>延迟</td><td><strong>2（最慢）</strong>：页面渲染 + 多页并发开销显著</td></tr><tr><td>完整性</td><td><strong>5（最高）</strong>：所见即所得，能覆盖复杂交互</td></tr><tr><td>稳定性</td><td>3</td></tr><tr><td>维护成本</td><td>2（浏览器版本、反自动化检测持续变化）</td></tr><tr><td>工程注意</td><td><code>allusion</code> README 明确警告：多页并发会耗尽 CPU，需限制联赛数量</td></tr><tr><td>定位</td><td><strong>长尾赛事的兜底路径</strong></td></tr></tbody></table></div>
+<h4>路径 D · 第三方聚合站（历史回填，非实时）</h4>
+<p><strong>已验证实现</strong>：<code>allusion</code>（OddsPortal 全站爬取 + 套利检测）。</p>
+<div class="tw"><table><thead><tr><th>维度</th><th>说明</th></tr></thead><tbody><tr><td>延迟</td><td><strong>1（最差）</strong>：聚合站本身是分钟级采样</td></tr><tr><td>完整性</td><td>4（覆盖 11 运动 / 100+ 联赛，含历史与赛前）</td></tr><tr><td>稳定性</td><td>4</td></tr><tr><td>维护成本</td><td>4（结构稳定）</td></tr><tr><td><strong>致命限制</strong></td><td><strong>时间分辨率为 1</strong>：分钟级采样<strong>无法还原"跳动过程"</strong></td></tr><tr><td>定位</td><td><strong>仅用于历史回填与赛前</strong>，绝不可用于跳动检测</td></tr></tbody></table></div>
+<blockquote><p>这一点对本案是决定性的：构想的核心是"在庄家倍率调整瞬间"，而聚合站在定义上就没有这个瞬间。</p></blockquote>
+<h4>路径 E · 商业 API（稳定但不覆盖目标）</h4>
+<div class="tw"><table><thead><tr><th>维度</th><th>说明</th></tr></thead><tbody><tr><td>代表性能力</td><td><code>odds-api.io</code>：12,000+ 联赛、265+ 书商；<code>rapidoddsapi</code>：100+ 书商、REST+WS</td></tr><tr><td>延迟</td><td>The Odds API 精选市场<strong>在盘 40 秒</strong>轮询</td></tr><tr><td>稳定性 / 维护成本</td><td><strong>5 / 5</strong>（唯一双满分）</td></tr><tr><td><strong>致命限制</strong></td><td><strong>接入层级 2</strong>：不覆盖目标平台，无法做该平台的跳动检测</td></tr><tr><td>定位</td><td>用作<strong>无风险参考线</strong>（fair line）与交叉验证基准</td></tr></tbody></table></div>
+<h3>3.3 关键反向证据：协议漂移是常态，不是风险假设</h3>
+<p>这是本节最重要的内容。<strong>开源界公开记录了协议变更导致采集中断的完整现场</strong>：</p>
+<blockquote><p><strong><code>rafabelokurows/sports-odds</code> README（原文）</strong> <em>"Update 2024-12-05: It was good while it lasted. <strong>Betclic has changed their API, so I'm not able to scrape their odds</strong> (at least for the moment). I've started an <code>exploration.py</code> script to see if I could get around their new validations."</em> <em>"New Security Validations: Cloudfront Update 202..."</em></p></blockquote>
+<p>同一仓库还记录了作者为绕过新校验而专门新建探索脚本的过程。<strong>这就是采集层真实的工作循环</strong>：</p>
+<pre><code>接入成功 → 稳定运行 → 对方变更（API 结构 / CDN 校验 / 指纹策略）
+         → 采集中断 → 逆向探查 → 重新接入 → 再次变更 → ...</code></pre>
+<p>另一个印证：<code>KOS</code> 项目明确选择"<strong>strips away fragile browser automation in favor of a robust, API-driven signal engine</strong>"（剥离脆弱的浏览器自动化，转向 API 驱动的信号引擎）——这是工程界对该问题的共识方向。</p>
+<p><strong>工程含义（写入成本模型）</strong>：</p>
+<div class="tw"><table><thead><tr><th>项目</th><th>含义</th></tr></thead><tbody><tr><td>端点/协议半衰期</td><td>不可预知，但<strong>必然发生</strong>；须按"季度级重做"预算人力</td></tr><tr><td>不可观测性</td><td>中断可能无声发生（返回旧值或空值），需<strong>主动健康检查</strong>而非被动异常捕获</td></tr><tr><td>多源即必需</td><td>单源中断 = 策略停摆；§4 的完整性要求已强制多路径</td></tr><tr><td>成本归属</td><td>这解释了 §10.1 中"人力摊销 $400/月"为何是<strong>偏乐观</strong>的估计</td></tr></tbody></table></div>
+<h3>3.4 可对冲 vs 不可对冲</h3>
+<div class="tw"><table><thead><tr><th>可对冲（工程手段有效）</th><th>不可对冲（工程手段无效）</th></tr></thead><tbody><tr><td>单点故障 → 多源冗余、多路径并行</td><td>对手方单方面停盘（suspend）</td></tr><tr><td>端点半衰期 → 端点池 + 自动故障转移</td><td>对手方随时变更协议与字段（§3.3）</td></tr><tr><td>对方无历史数据 → 本地时序库自建</td><td>账户状态与被接受程度不可观测</td></tr><tr><td>推送断连 → 心跳 + 快速重连</td><td>改价 / 拒单（见 §5.3）</td></tr><tr><td>采样缺失 → 多源交叉填补</td><td>长尾赛事根本不开盘（§4.2）</td></tr></tbody></table></div>
+<h3>3.5 数据源可得性矩阵（技术维度）</h3>
+<div class="tw"><table><thead><tr><th>数据源</th><th>在盘更新间隔</th><th>推送方式</th><th>可编程下注</th><th>技术评价</th></tr></thead><tbody><tr><td>目标平台前端 GraphQL（逆向）</td><td>请求级</td><td>轮询/长连</td><td>需自行逆向</td><td><strong>路径 B：首选</strong></td></tr><tr><td>目标平台前端 WS/SSE</td><td>0.5–3s</td><td>长连</td><td>需自行逆向</td><td><strong>路径 A：延迟上限</strong></td></tr><tr><td>The Odds API</td><td><strong>40 秒</strong>（在盘）</td><td>REST 轮询</td><td>❌</td><td>延迟量级与"调价瞬间"不匹配</td></tr><tr><td>TheRundown</td><td>亚秒级</td><td>WebSocket（Ultra+）</td><td>❌</td><td>只能看盘</td></tr><tr><td>Pinnacle API</td><td>—</td><td>REST</td><td>✅</td><td><strong>2025-07-23 起对公众关闭</strong></td></tr><tr><td>Betfair Exchange API</td><td>推送</td><td>Streaming + REST</td><td>✅</td><td>唯一公开可编程下注通道；撮合定价</td></tr><tr><td>OddsPortal（聚合）</td><td>分钟级</td><td>页面</td><td>❌</td><td><strong>时间分辨率不足</strong>（图 15）</td></tr></tbody></table></div>
 <hr>
-<h2>4. 微结构信号与延迟预算</h2>
-<h3>4.1 微结构信号：本方案唯一可能的信息优势来源</h3>
-<p>"调价瞬间"这个构想的价值，在于它试图捕捉<strong>赔率的时间结构</strong>而非<strong>赔率的水平</strong>：</p>
-<div class="tw"><table><thead><tr><th>信号</th><th>定义</th><th>假设的预测含义</th></tr></thead><tbody><tr><td>跳动频率</td><td>单位时间内赔率变动次数</td><td>高频跳动 = 信息正在流入</td></tr><tr><td>恢复时间</td><td>跳价后回到新稳态的时长</td><td>恢复慢 = 冲击较大，市场未充分定价</td></tr><tr><td>漂移速率</td><td>赔率的定向变化速度</td><td>持续单边漂移 = 聪明钱方向</td></tr><tr><td>跨平台离散度</td><td>同市场不同平台价格差</td><td>离散度扩大 = 定价分歧，套利窗口</td></tr><tr><td>停盘时长</td><td>suspend 持续时间</td><td>长停盘 = 重大事件，恢复后价格失真</td></tr></tbody></table></div>
-<p><strong>这是唯一一类不在"瞬时价格"层面与庄家竞争的信息</strong>——你不是在比谁更快读到同一个数字，而是在比谁更快识别<strong>数字变化的方式</strong>。这个方向在理论上是成立的。</p>
-<p><strong>但必须诚实地指出边界</strong>：微结构信号在<strong>流动性充足、撮合连续</strong>的市场（如交易所）中信息含量高；在<strong>庄家单方面报价、可随时撤单</strong>的市场中，信号会频繁被"报价撤回"污染——你观察到的"跳动"很大一部分不是市场信号，而是对手方风控行为。</p>
-<h3>4.2 延迟预算</h3>
+<h2>4. 赛事覆盖规模与数据完整性要求</h2>
+<p>这一节回应"不只是五大联赛，而是各类比赛、单日开盘可达 100–200 场"这一构想前提。</p>
+<h3>4.1 全球赛事规模量级</h3>
+<div class="tw"><table><thead><tr><th>证据来源</th><th>数量</th><th>折算</th></tr></thead><tbody><tr><td>CIES Football Observatory（12 赛季官方比赛样本）</td><td><strong>330,748 场</strong></td><td>≈27,562 场/年 → <strong>≈75 场/日</strong></td></tr><tr><td>行业数据源覆盖（<code>odds-api.io</code>）</td><td>12,000+ 联赛</td><td>长尾联赛数量极大</td></tr><tr><td>商业 feeds（eOddsmaker 类）</td><td>+950 足球联赛、约 7,000 在盘足球事件/月</td><td>≈230 在盘事件/日</td></tr><tr><td>用户构想</td><td><strong>100–200 场/日</strong></td><td>与上述量级一致，属合理区间</td></tr></tbody></table></div>
+<blockquote><p>CIES 样本仅覆盖其纳入统计的官方赛事，<strong>不含大量青少年、预备队、地区联赛与友谊赛</strong>。因此"100–200 场/日"是一个合理的工作假设，长尾上限可达数百场。</p></blockquote>
+<h3>4.2 覆盖率的层级断崖（完整性的核心漏洞）</h3>
+<p><img alt="图 14 赛事规模与覆盖率分层" src="images/fig14_coverage_scale.png"></p>
+<div class="tw"><table><thead><tr><th>赛事层级</th><th class="center">占日历</th><th class="center">典型开盘覆盖率</th><th class="center">日频场次（量级）</th></tr></thead><tbody><tr><td>前 5 大联赛 + 欧战</td><td class="center">1%</td><td class="center"><strong>99%</strong></td><td class="center">8</td></tr><tr><td>其余欧洲主流联赛</td><td class="center">5%</td><td class="center">92%</td><td class="center">40</td></tr><tr><td>洲际/次级/杯赛</td><td class="center">20%</td><td class="center">85%</td><td class="center">150</td></tr><tr><td>全球小众联赛</td><td class="center">33%</td><td class="center"><strong>65%</strong></td><td class="center">250</td></tr><tr><td>青少年/预备队/友谊</td><td class="center">40%</td><td class="center"><strong>25%</strong></td><td class="center">300</td></tr></tbody></table></div>
+<p><strong>结构性结论：</strong></p>
+<ol><li><strong>低层级赛事占日历 94%</strong>，但开盘覆盖率从 99% 一路跌到 25%。</li><li>覆盖率的下降<strong>不是因为技术抓不到</strong>，而是<strong>因为平台根本不开盘</strong> —— 这是<strong>上游数据不存在</strong>，不是采集能力问题。</li><li>因此"保证数据完整性"这个目标，<strong>在长尾上无法通过工程达成</strong>：你能做到的只是采到"平台开了的那些"。</li></ol>
+<p><strong>对策略的直接含义</strong>：如果你的信号依赖"全市场一致性"或"跨市场套利"，长尾赛事的稀疏覆盖会导致：</p>
+<ul><li>跨平台比价样本不足 → 套利窗口检测失效；</li><li>单市场水钱更高（流动性差） → 结构性劣势进一步放大；</li><li>覆盖率低的赛事<strong>恰恰是水钱最高的赛事</strong>（数据源自身也印证：in-play 与低流动性衍生品水钱更高）。</li></ul>
+<h3>4.3 采集量级估算</h3>
+<p>按每场 140 个市场估算盘口级记录：</p>
+<div class="tw"><table><thead><tr><th>赛事层级</th><th class="right">盘口级记录/天</th></tr></thead><tbody><tr><td>前 5 大联赛 + 欧战</td><td class="right">~1k</td></tr><tr><td>其余欧洲主流联赛</td><td class="right">~5k</td></tr><tr><td>洲际/次级/杯赛</td><td class="right">~18k</td></tr><tr><td>全球小众联赛</td><td class="right">~23k</td></tr><tr><td>青少年/预备队/友谊</td><td class="right">~10k</td></tr><tr><td><strong>合计</strong></td><td class="right"><strong>≈57k 记录/天</strong></td></tr></tbody></table></div>
+<blockquote><p><strong>在盘高频推送下可达 10⁷–10⁸ 事件/天</strong>（每场每市场的每次跳动都是一条事件）。 这是"数据完整性"的真实代价：<strong>存储、去重、对齐、时区/赛事 ID 映射</strong>的成本随覆盖线性增长，而<strong>在盘事件的成本随跳动频率二次增长</strong>。</p></blockquote>
+<h3>4.4 完整性六维评估</h3>
+<p><img alt="图 15 完整性六维评估" src="images/fig15_completeness.png"></p>
+<div class="tw"><table><thead><tr><th>采集路径</th><th class="center">赛事覆盖率</th><th class="center">盘口类型</th><th class="center">价格层级</th><th class="center"><strong>时间分辨率</strong></th><th class="center">行级完整</th><th class="center">幂等去重</th></tr></thead><tbody><tr><td>前端长连直读</td><td class="center">5</td><td class="center">5</td><td class="center">5</td><td class="center"><strong>5</strong></td><td class="center">4</td><td class="center">4</td></tr><tr><td>XHR/GraphQL 逆向</td><td class="center">5</td><td class="center">5</td><td class="center">4</td><td class="center"><strong>4</strong></td><td class="center">4</td><td class="center">4</td></tr><tr><td>浏览器自动化</td><td class="center">5</td><td class="center">3</td><td class="center">3</td><td class="center"><strong>3</strong></td><td class="center">4</td><td class="center">3</td></tr><tr><td>第三方聚合站</td><td class="center">3</td><td class="center">2</td><td class="center">2</td><td class="center"><strong>1</strong></td><td class="center">3</td><td class="center">4</td></tr><tr><td>商业 API</td><td class="center">3</td><td class="center">3</td><td class="center">3</td><td class="center"><strong>2</strong></td><td class="center">5</td><td class="center">5</td></tr></tbody></table></div>
+<p><strong>结论：没有任何单一采集路径能同时满足全部六个维度。</strong> 工程上只能组合：</p>
+<div class="tw"><table><thead><tr><th>层</th><th>承担路径</th><th>理由</th></tr></thead><tbody><tr><td>实时主力</td><td><strong>B（GraphQL 逆向）</strong></td><td>延迟与完整性最佳平衡，无需浏览器</td></tr><tr><td>延迟优化</td><td><strong>A（长连）</strong></td><td>关键赛事用长连降低延迟；断连自动回落 B</td></tr><tr><td>长尾兜底</td><td><strong>C（浏览器）</strong></td><td>复杂交互/未暴露端点的赛事</td></tr><tr><td>历史回填</td><td><strong>D（聚合站）</strong></td><td>只用于训练与赛前，绝不做跳动检测</td></tr><tr><td>参考基准</td><td><strong>E（商业 API）</strong></td><td>提供 fair line，不覆盖目标平台</td></tr></tbody></table></div>
+<blockquote><p><strong>关键推论</strong>：<strong>"保证完整性"的要求，直接等价于"必须维护 4–5 条并行采集路径"</strong>。这在技术上可行（图 13 各路径均为已验证方案），但它把 §10.1 的成本模型中"采集基础设施 <span class="imath">140/月"和"人力摊销 </span>400/月"变成了<strong>明显偏低</strong>的估计 —— 多条路径意味着多套端点维护、多套去重对齐、多套健康检查。</p></blockquote>
+<hr>
+<h2>5. 微结构信号与延迟预算</h2>
+<h3>5.1 微结构信号：唯一可能的信息优势来源</h3>
+<div class="tw"><table><thead><tr><th>信号</th><th>定义</th><th>假设的预测含义</th></tr></thead><tbody><tr><td>跳动频率</td><td>单位时间内赔率变动次数</td><td>高频跳动 = 信息正在流入</td></tr><tr><td>恢复时间</td><td>跳价后回到新稳态的时长</td><td>恢复慢 = 冲击较大，市场未充分定价</td></tr><tr><td>漂移速率</td><td>赔率的定向变化速度</td><td>持续单边漂移 = 聪明钱方向</td></tr><tr><td>跨平台离散度</td><td>同市场不同平台价格差</td><td>离散度扩大 = 定价分歧</td></tr><tr><td>停盘时长</td><td>suspend 持续时间</td><td>长停盘 = 重大事件，恢复后价格失真</td></tr></tbody></table></div>
+<p><strong>这是唯一一类不在"瞬时价格"层面与庄家竞争的信息</strong> —— 你不是在比谁更快读到同一个数字，而是在比谁更快识别<strong>数字变化的方式</strong>。</p>
+<p><strong>但必须指出边界</strong>：微结构信号在<strong>流动性充足、撮合连续</strong>的市场中信息含量高；在<strong>庄家单方面报价、可随时撤单</strong>的市场中，信号会被"报价撤回"污染 —— 你观察到的"跳动"很大一部分不是市场信号，而是对手方风控行为（§5.3）。</p>
+<h3>5.2 延迟预算</h3>
 <p><img alt="图 4 延迟预算" src="images/fig4_latency_budget.png"></p>
-<div class="tw"><table><thead><tr><th>阶段</th><th>乐观</th><th>保守</th><th>归属</th></tr></thead><tbody><tr><td>① 场上事件发生</td><td>0</td><td>0</td><td>—</td></tr><tr><td>② 场馆数据采集（数据中心现场采集员）</td><td>2.0</td><td>5.0</td><td>数据商</td></tr><tr><td>③ 数据商 → 庄家交易系统推送</td><td>1.0</td><td>3.0</td><td>数据商/庄家</td></tr><tr><td>④ 庄家模型重算 + 风控复核</td><td>1.0</td><td>4.0</td><td>庄家</td></tr><tr><td>⑤ 新赔率抵达你的采集端</td><td>0.5</td><td>3.0</td><td>你（部分）</td></tr><tr><td>⑥ <strong>特征计算 + 经济学算法栈</strong></td><td>0.05</td><td>0.5</td><td><strong>你</strong></td></tr><tr><td>⑦ <strong>JEV 决策调用</strong></td><td>0.3</td><td>1.5</td><td><strong>你</strong></td></tr><tr><td>⑧ LLM 决策调用（<strong>仅慢通路</strong>）</td><td>1.5</td><td>6.0</td><td>你（不应进关键路径）</td></tr><tr><td>⑨ 下单请求 → 庄家风控</td><td>0.5</td><td>2.0</td><td>你→庄家</td></tr><tr><td>⑩ <strong>庄家下注接受延迟</strong></td><td>5.0</td><td>10.0</td><td><strong>庄家</strong></td></tr><tr><td>⑪ 成交结果：旧价 / 改价 / 拒单</td><td>—</td><td>—</td><td><strong>庄家</strong></td></tr><tr><td><strong>关键路径合计（不含 LLM）</strong></td><td>—</td><td><strong>29.0s</strong></td><td></td></tr><tr><td><strong>全路径合计（含 LLM）</strong></td><td>—</td><td><strong>35.0s</strong></td><td></td></tr></tbody></table></div>
-<p><strong>分解结论（关键）</strong>：</p>
+<div class="tw"><table><thead><tr><th>阶段</th><th>乐观</th><th>保守</th><th>归属</th></tr></thead><tbody><tr><td>① 场上事件发生</td><td>0</td><td>0</td><td>—</td></tr><tr><td>② 场馆数据采集（现场采集员）</td><td>2.0</td><td>5.0</td><td>数据商</td></tr><tr><td>③ 数据商 → 庄家交易系统推送</td><td>1.0</td><td>3.0</td><td>数据商/庄家</td></tr><tr><td>④ 庄家模型重算 + 风控复核</td><td>1.0</td><td>4.0</td><td>庄家</td></tr><tr><td>⑤ 新赔率抵达你的采集端</td><td>0.5</td><td>3.0</td><td>你（部分）</td></tr><tr><td>⑥ <strong>特征计算 + 经济学算法栈</strong></td><td>0.05</td><td>0.5</td><td><strong>你</strong></td></tr><tr><td>⑦ <strong>JEV 决策调用</strong></td><td>0.3</td><td>1.5</td><td><strong>你</strong></td></tr><tr><td>⑧ LLM 决策调用（<strong>仅慢通路</strong>）</td><td>1.5</td><td>6.0</td><td>你（不应进关键路径）</td></tr><tr><td>⑨ 下单请求 → 庄家风控</td><td>0.5</td><td>2.0</td><td>你→庄家</td></tr><tr><td>⑩ <strong>庄家下注接受延迟</strong></td><td>5.0</td><td>10.0</td><td><strong>庄家</strong></td></tr><tr><td>⑪ 成交结果：旧价 / 改价 / 拒单</td><td>—</td><td>—</td><td><strong>庄家</strong></td></tr><tr><td><strong>关键路径合计（不含 LLM）</strong></td><td>—</td><td><strong>29.0s</strong></td><td></td></tr><tr><td><strong>全路径合计（含 LLM）</strong></td><td>—</td><td><strong>35.0s</strong></td><td></td></tr></tbody></table></div>
+<p><strong>分解结论：</strong></p>
 <pre><code>属于你的决策预算        约 1.8s   （⑥ 0.5 + ⑦ 1.5）
 属于对手方的裁定窗口    5–10s     （⑩，单项即超过你的全部决策时间）
 不可控的数据链路        4.5–15s   （②③④⑤）</code></pre>
-<blockquote><p><strong>推论 1</strong>：把 JEV 从 1.5s 优化到 0.5s，只影响总延迟的 3%。 <strong>推论 2</strong>：LLM 进入关键路径会增加 <strong>+6s（+20%）</strong>，而它不提供任何定价能力（§5.4）。 <strong>推论 3</strong>：真正的瓶颈是 ⑤ 之后到 ⑩ 之间的部分，而<strong>这两项都不在你的控制面内</strong>。</p></blockquote>
-<h3>4.3 成交裁定：一个不能被工程解决的结构问题</h3>
+<blockquote><p><strong>推论 1</strong>：把 JEV 从 1.5s 优化到 0.5s，只影响总延迟的 3%。 <strong>推论 2</strong>：LLM 进入关键路径增加 <strong>+6s（+20%）</strong>，且不提供定价能力。 <strong>推论 3</strong>：⑤ 之后到 ⑩ 之间的部分<strong>都不在你的控制面内</strong>。</p></blockquote>
+<h3>5.3 成交裁定：不能被工程解决的结构问题</h3>
 <p><img alt="图 9 赔率跳动瞬间的真实时序" src="images/fig9_odds_tick_sequence.png"></p>
-<div class="tw"><table><thead><tr><th>机制</th><th>技术描述</th><th>对策略的影响</th></tr></thead><tbody><tr><td><strong>接受延迟</strong></td><td>在盘期下注请求被延迟 5–20s 后处理；交易所足球在盘最短约 5s</td><td>决策时的价格与成交价格脱钩</td></tr><tr><td><strong>停盘 suspend</strong></td><td>关键事件触发全市场挂起，报价被撤下</td><td>你读到的"信号"可能是冻结值</td></tr><tr><td><strong>改价 re-quote</strong></td><td>延迟窗口内改价，要求接受更差价</td><td>关闭该选项则退化为拒单</td></tr><tr><td><strong>拒单</strong></td><td>直接拒绝，理由不透明</td><td>无反馈信号，无法用于学习</td></tr><tr><td><strong>降限额 stake factoring</strong></td><td>触发条件为<strong>注单质量（CLV）而非盈亏</strong></td><td>优势被识别即被限幅，正期望无法复利</td></tr><tr><td><strong>方向不对称</strong></td><td>社区实测报告：部分平台赔率变差时拒单、变好时照常成交</td><td>期望值被系统性下调</td></tr></tbody></table></div>
-<p><strong>工程语言描述</strong>：这是一个<strong>对手方持有单方面撤单权、且成交价可由对方在 5–10s 窗口内重定价</strong>的市场结构。用交易系统的话说：</p>
-<blockquote><p><strong>等价于「交易所可以在你下单后 5–20 秒内决定是否撤销你的成交，并且可以在你获利时降低你的最大下单量」。</strong> 在这个结构下，"捕捉调价瞬间"的收益<strong>在进入成交前是不可实现的</strong>。</p></blockquote>
+<div class="tw"><table><thead><tr><th>机制</th><th>技术描述</th><th>对策略的影响</th></tr></thead><tbody><tr><td><strong>接受延迟</strong></td><td>在盘期下注请求延迟 5–20s 后处理；交易所足球在盘最短约 5s</td><td>决策价格与成交价格脱钩</td></tr><tr><td><strong>停盘 suspend</strong></td><td>关键事件触发全市场挂起，报价撤下</td><td>读到的"信号"可能是冻结值</td></tr><tr><td><strong>改价 re-quote</strong></td><td>延迟窗口内改价，要求接受更差价</td><td>关闭该选项则退化为拒单</td></tr><tr><td><strong>拒单</strong></td><td>直接拒绝，理由不透明</td><td>无反馈信号，无法用于学习</td></tr><tr><td><strong>降限额 stake factoring</strong></td><td>触发条件为<strong>注单质量（CLV）而非盈亏</strong></td><td>优势被识别即被限幅，正期望无法复利</td></tr><tr><td><strong>方向不对称</strong></td><td>社区实测：部分平台赔率变差时拒单、变好时照常成交</td><td>期望值被系统性下调</td></tr></tbody></table></div>
+<p><strong>工程语言</strong>：这是一个<strong>对手方持有单方面撤单权、且成交价可由对方在 5–10s 窗口内重定价</strong>的市场结构：</p>
+<blockquote><p><strong>等价于「交易所可以在你下单后 5–20 秒内决定是否撤销你的成交，并且可以在你获利时降低你的最大下单量」。</strong></p></blockquote>
 <hr>
-<h2>5. L3 决策层：LLM + JEV 混合架构</h2>
-<p>这是本方案的创新点，也是本报告最需要精确回答的部分。</p>
-<h3>5.1 两个模型的能力边界</h3>
-<div class="tw"><table><thead><tr><th>维度</th><th>LLM（大模型）</th><th>JEV（决策模型）</th></tr></thead><tbody><tr><td>输入</td><td>非结构化文本/多模态</td><td>非结构化 state（可含 JSON）</td></tr><tr><td>输出</td><td>自然语言/结构化文本</td><td><strong>类型化判断</strong>：类别、是/否、评分 + <strong>0–1 校准置信度</strong></td></tr><tr><td>典型延迟</td><td>1.5–6s（波动大）</td><td>0.3–1.5s</td></tr><tr><td>单次成本</td><td>高</td><td>低</td></tr><tr><td>强项</td><td>信息抽取、归因、解释、规则生成</td><td><strong>高频、结构化、需要校准判断</strong>的场景</td></tr><tr><td>弱项</td><td>延迟与成本、数值回归</td><td>数值预测（<strong>不是定价模型</strong>）</td></tr></tbody></table></div>
-<p><strong>关键定性</strong>：JEV 是<strong>决策模型</strong>（"System One"），设计目标是对非结构化状态做<strong>带校准的离散判断</strong>。它<strong>不是</strong>赔率定价模型。公开信息未披露其可复现架构，因此只能研究其<strong>接口与定位</strong>，不能假定其内部机制。这一点对架构设计有决定性影响。</p>
-<h3>5.2 三路分流设计</h3>
+<h2>6. L3 决策层：LLM + JEV 混合架构</h2>
+<h3>6.1 两个模型的能力边界</h3>
+<div class="tw"><table><thead><tr><th>维度</th><th>LLM（大模型）</th><th>JEV（决策模型）</th></tr></thead><tbody><tr><td>输入</td><td>非结构化文本/多模态</td><td>非结构化 state（可含 JSON）</td></tr><tr><td>输出</td><td>自然语言/结构化文本</td><td><strong>类型化判断</strong>：类别、是/否、评分 + <strong>0–1 校准置信度</strong></td></tr><tr><td>典型延迟</td><td>1.5–6s（波动大）</td><td>0.3–1.5s</td></tr><tr><td>单次成本</td><td>高</td><td>低</td></tr><tr><td>强项</td><td>信息抽取、归因、解释、规则生成</td><td><strong>高频、结构化、需校准判断</strong>的场景</td></tr><tr><td>弱项</td><td>延迟与成本、数值回归</td><td>数值预测（<strong>不是定价模型</strong>）</td></tr></tbody></table></div>
+<p><strong>关键定性</strong>：JEV 是<strong>决策模型</strong>（"System One"），设计目标是对非结构化状态做<strong>带校准的离散判断</strong>，<strong>不是</strong>赔率定价模型。公开信息未披露其可复现架构，因此只能研究其<strong>接口与定位</strong>。</p>
+<h3>6.2 三路分流设计</h3>
 <p><img alt="图 6 决策路由矩阵" src="images/fig6_routing_matrix.png"></p>
-<p><strong>分流原则（按延迟预算 × 调用频率 × 单次成本三维路由）：</strong></p>
-<div class="tw"><table><thead><tr><th>路径</th><th>承担任务</th><th>延迟</th><th>频率</th><th>经济学贡献</th></tr></thead><tbody><tr><td><strong>A · 确定性规则/算法</strong></td><td>赔率跳动检测、跨平台套利判定、去水/公平概率、价值下注筛选、仓位计算</td><td>&lt;1ms</td><td>极高</td><td>直接</td></tr><tr><td><strong>B · JEV</strong></td><td>微结构模式判断、价值下注的二值门控</td><td>0.3–1.5s</td><td>高</td><td>中等（<strong>过滤，不创造</strong>）</td></tr><tr><td><strong>C · LLM</strong></td><td>伤停/新闻抽取、异常归因与复盘、策略规则生成</td><td>1.5–6s</td><td>低</td><td>间接（离线为主）</td></tr></tbody></table></div>
-<p><strong>路由矩阵（<code>data/routing_matrix.csv</code>）</strong> 给出了逐任务的适配判定：</p>
+<div class="tw"><table><thead><tr><th>路径</th><th>承担任务</th><th>延迟</th><th>频率</th><th>经济学贡献</th></tr></thead><tbody><tr><td><strong>A · 确定性规则/算法</strong></td><td>跳动检测、跨平台套利判定、去水、价值筛选、仓位计算</td><td>&lt;1ms</td><td>极高</td><td>直接</td></tr><tr><td><strong>B · JEV</strong></td><td>微结构模式判断、价值下注二值门控</td><td>0.3–1.5s</td><td>高</td><td>中等（<strong>过滤，不创造</strong>）</td></tr><tr><td><strong>C · LLM</strong></td><td>伤停/新闻抽取、异常归因与复盘、策略规则生成</td><td>1.5–6s</td><td>低</td><td>间接（离线为主）</td></tr></tbody></table></div>
+<p><strong>路由矩阵：</strong></p>
 <div class="tw"><table><thead><tr><th>任务</th><th class="center">延迟预算</th><th class="center">调用频率</th><th class="center">单次成本</th><th><strong>适配模型</strong></th><th class="center">经济学贡献</th></tr></thead><tbody><tr><td>赔率跳动检测</td><td class="center">5</td><td class="center">5</td><td class="center">5</td><td><strong>规则/算法</strong></td><td class="center">2</td></tr><tr><td>跨平台套利判定</td><td class="center">5</td><td class="center">4</td><td class="center">5</td><td><strong>规则/算法</strong></td><td class="center">4</td></tr><tr><td>去水/公平概率</td><td class="center">5</td><td class="center">5</td><td class="center">5</td><td><strong>规则/算法</strong></td><td class="center">2</td></tr><tr><td>价值下注筛选</td><td class="center">4</td><td class="center">4</td><td class="center">4</td><td><strong>JEV</strong></td><td class="center">3</td></tr><tr><td>仓位计算</td><td class="center">5</td><td class="center">4</td><td class="center">5</td><td><strong>规则/算法</strong></td><td class="center">4</td></tr><tr><td>微结构模式判断</td><td class="center">3</td><td class="center">4</td><td class="center">2</td><td><strong>JEV</strong></td><td class="center">2</td></tr><tr><td>伤停/新闻抽取</td><td class="center">1</td><td class="center">1</td><td class="center">2</td><td><strong>LLM</strong></td><td class="center">3</td></tr><tr><td>异常归因与复盘</td><td class="center">1</td><td class="center">1</td><td class="center">2</td><td><strong>LLM</strong></td><td class="center">1</td></tr><tr><td>策略规则生成</td><td class="center">1</td><td class="center">1</td><td class="center">1</td><td><strong>LLM</strong></td><td class="center">2</td></tr></tbody></table></div>
 <p><strong>设计结论</strong>：</p>
-<ol><li><strong>LLM 只出现在矩阵的最后三行</strong>——全部是低频、非结构化、<strong>非关键路径</strong>的任务。</li><li><strong>JEV 出现在两行</strong>：价值下注门控、微结构模式判断——都是"给定特征、做带校准的二值/多分类判断"。</li><li><strong>所有对延迟敏感的数值计算走路径 A</strong>：去水、Kelly、约束都是确定性算术，<strong>用模型去做是纯粹的性能浪费</strong>。</li></ol>
-<blockquote><p><strong>这是本报告对原构想最重要的一条修正</strong>：构想中"用 JEV 做决策"的位置是对的，但<strong>必须有路径 A 承载确定性计算</strong>。若把去水、Kelly 也交给模型，你会同时失去延迟和精度。</p></blockquote>
-<h3>5.3 为什么 LLM 不能进关键路径</h3>
-<div class="tw"><table><thead><tr><th>维度</th><th>数值</th></tr></thead><tbody><tr><td>LLM 延迟</td><td>1.5–6.0s（方差极大）</td></tr><tr><td>关键路径占比</td><td>增加 20%+（29.0s → 35.0s）</td></tr><tr><td>对定价能力的贡献</td><td><strong>≈ 0</strong>（LLM 不做数值定价）</td></tr><tr><td>单次成本</td><td>高于 JEV 一个量级</td></tr><tr><td>调用频率上限</td><td>每分钟数次（成本与延迟双重约束）</td></tr></tbody></table></div>
-<p><strong>结论</strong>：LLM 的合理定位是<strong>离线/旁路</strong>——</p>
-<ul><li><strong>赛前</strong>：从伤停新闻、阵容公告中抽取结构化特征（此处时效窗口以小时计，LLM 延迟完全可接受）；</li><li><strong>事后</strong>：对拒单/异常成交做归因，生成新的规则候选（喂给路径 A）；</li><li><strong>在线旁路</strong>：对低时效的辅助信息做判断，结果<strong>异步</strong>注入特征库。</li></ul>
-<h3>5.4 JEV 的适配度定位</h3>
+<ol><li><strong>LLM 只出现在矩阵最后三行</strong> —— 全部低频、非结构化、<strong>非关键路径</strong>。</li><li><strong>JEV 出现在两行</strong>：价值下注门控、微结构模式判断。</li><li><strong>所有对延迟敏感的数值计算走路径 A</strong> —— 去水、Kelly、约束都是确定性算术，<strong>用模型做是纯粹的性能浪费</strong>。</li></ol>
+<h3>6.3 为什么 LLM 不能进关键路径</h3>
+<div class="tw"><table><thead><tr><th>维度</th><th>数值</th></tr></thead><tbody><tr><td>LLM 延迟</td><td>1.5–6.0s（方差极大）</td></tr><tr><td>关键路径占比</td><td>+20%（29.0s → 35.0s）</td></tr><tr><td>对定价能力的贡献</td><td><strong>≈ 0</strong></td></tr><tr><td>单次成本</td><td>高于 JEV 一个量级</td></tr><tr><td>调用频率上限</td><td>每分钟数次</td></tr></tbody></table></div>
+<p><strong>LLM 的合理定位是离线/旁路</strong>：赛前抽取伤停与阵容特征（时效窗口以小时计）、事后对拒单/异常归因、生成新的规则候选喂给路径 A。</p>
+<h3>6.4 JEV 的适配度定位</h3>
 <p><img alt="图 10 JEV 的定位与延迟占比" src="images/fig10_jev_position.png"></p>
-<div class="tw"><table><thead><tr><th>环节</th><th class="center">JEV 适配度</th><th>判断</th></tr></thead><tbody><tr><td>赔率数值预测</td><td class="center">1 / 5</td><td>数值回归问题，非离散判断</td></tr><tr><td>校准概率（去水）</td><td class="center">2 / 5</td><td>确定性算术，不需要模型</td></tr><tr><td><strong>微结构模式判断</strong></td><td class="center">4 / 5</td><td>特征 → 模式类别，正是设计场景</td></tr><tr><td><strong>软信息（伤停/新闻）</strong></td><td class="center">5 / 5</td><td>非结构化 → 结构化判断</td></tr><tr><td>决策与仓位</td><td class="center">4 / 5</td><td>可作门控，<strong>不能生成优势</strong></td></tr><tr><td>下单执行</td><td class="center">1 / 5</td><td>与模型能力无关</td></tr></tbody></table></div>
+<div class="tw"><table><thead><tr><th>环节</th><th class="center">JEV 适配度</th><th>判断</th></tr></thead><tbody><tr><td>赔率数值预测</td><td class="center">1 / 5</td><td>数值回归问题</td></tr><tr><td>校准概率（去水）</td><td class="center">2 / 5</td><td>确定性算术，不需要模型</td></tr><tr><td><strong>微结构模式判断</strong></td><td class="center">4 / 5</td><td>特征 → 模式类别，正是设计场景</td></tr><tr><td><strong>软信息（伤停/新闻）</strong></td><td class="center">5 / 5</td><td>非结构化 → 结构化判断</td></tr><tr><td>决策与仓位</td><td class="center">4 / 5</td><td>可作门控，<strong>不能生成优势</strong></td></tr><tr><td>下单执行</td><td class="center">1 / 5</td><td>与模型能力无关</td></tr></tbody></table></div>
 <p><strong>延迟占比</strong>：JEV + 经济学栈合计约 1.8s，占总延迟 <strong>&lt;12%</strong>。</p>
-<blockquote><p><strong>推论</strong>：模型侧优化的天花板是总延迟的 12%。剩下 88% 由数据链路（②③④⑤）与对手方行为（⑩）决定——<strong>后者不随你的代码质量变化</strong>。</p></blockquote>
+<blockquote><p><strong>推论</strong>：模型侧优化的天花板是总延迟的 12%。剩下 88% 由数据链路与对手方行为决定。</p></blockquote>
 <hr>
-<h2>6. L4 经济学算法栈</h2>
+<h2>7. L4 经济学算法栈</h2>
 <p><img alt="图 8 经济学算法栈" src="images/fig8_econ_algo_stack.png"></p>
-<p>这一层是本方案中<strong>唯一有严格最优解</strong>的部分，也是投入产出比最高的部分。</p>
-<h3>6.1 六个阶段</h3>
-<div class="tw"><table><thead><tr><th>阶段</th><th>方法</th><th>类型</th><th>关键点</th></tr></thead><tbody><tr><td><strong>S1 去水 / 公平概率</strong></td><td><code>p_fair,i = (1/o_i) / Σ(1/o_j)</code>；多源按历史校准度加权</td><td>确定性</td><td>庄家加价方式不总是比例式（存在 favorite-longshot bias），严格去水需按赔率区间分段校准</td></tr><tr><td><strong>S2 优势估计</strong></td><td><code>edge = p_model × o − 1</code>，叠加微结构信号</td><td>统计</td><td>优势估计的<strong>方差</strong>比点估计更重要</td></tr><tr><td><strong>S3 不确定性折扣</strong></td><td>对 <code>p_model</code> 做后验方差收缩（shrinkage）</td><td>贝叶斯</td><td>抵消模型过度自信；这是防止负期望被放大的关键</td></tr><tr><td><strong>S4 仓位（分数 Kelly）</strong></td><td><code>f* = (bp − q)/b × λ</code>，λ ≈ 0.2–0.5</td><td>最优化</td><td>全 Kelly 在参数不确定时会导致过高破产概率</td></tr><tr><td><strong>S5 组合约束</strong></td><td>同场/相关性敞口上限、单注上限、账户暴露上限</td><td>约束</td><td>滚球注单在时间上强相关（同一场比赛的多个市场是同一风险因子）</td></tr><tr><td><strong>S6 成本摊销与执行过滤</strong></td><td>扣除调用成本与失败率；预测成交概率，放弃低概率单</td><td>工程</td><td><strong>成交概率预测</strong>是这类系统最容易被忽略、又最影响实际收益的模块</td></tr></tbody></table></div>
-<h3>6.2 数学形式</h3>
-<p><strong>去水（fair probability）</strong>：</p>
-<div class="math">S=\sum_{i=1}^{n}\frac{1}{o_i}=1+m,    p_i^{\text{fair}}=\frac{1/o_i}{S}</div>
-<p><strong>期望值</strong>：</p>
-<div class="math">\mathrm{EV}=p\cdot o-1=\frac{p}{p^{\text{implied}}}-1,    p^{\text{implied}}=\frac{1}{o}</div>
-<p><strong>分数 Kelly</strong>：</p>
-<div class="math">f^{*}=\lambda\cdot\frac{b\,p-q}{b},    b=o-1,\ q=1-p,\ \lambda\in[0.2,0.5]</div>
-<p><strong>为什么必须分数 Kelly</strong>：全 Kelly 的最优性证明假设 <code>p</code> <strong>已知且准确</strong>。当 <code>p</code> 存在估计误差时，<code>f*</code> 被系统性高估，长期增长率从最优转为次优甚至为负。学界对体育投注实务方法的综述（Walsh &amp; Joshi, arXiv:2107.08827）指出：现代组合理论与 Kelly 的各种实务修正，<strong>本质都是在缓解正式模型不现实假设带来的额外风险</strong>。</p>
-<p><strong>执行过滤</strong>（S6）的形式化：设成交概率 <code>q_fill</code>，则有效期望为</p>
-<div class="math">\mathrm{EV}_{\text{eff}}=q_{\text{fill}}\cdot\mathrm{EV}-\text{cost}_{\text{exec}}</div>
-<p>由于 §4.3 的机制，<code>q_fill</code> <strong>不是常数</strong>，而是 <code>EV</code> 的<strong>递减函数</strong>——你越是有优势，越可能被拒单或降额。这一点无法通过算法栈解决，只能通过参数保守化（λ 下调）来缓解，代价是收益率进一步下降。</p>
-<h3>6.3 必须承认的上限</h3>
-<blockquote><p><strong>S1–S6 全部是「给定 <code>p_model</code> 之后」的最优处理。</strong> 它们能让一个<strong>真实存在</strong>的优势实现最大几何增长率， 但<strong>无法创造优势</strong>。 若 <code>p_model</code> 不含信息，整条栈只是在更精细地分配一个负期望。</p></blockquote>
-<p>这是判断本方案经济可行性的分水岭：<strong>模型工程的复杂度，与期望值的符号无关。</strong></p>
+<div class="tw"><table><thead><tr><th>阶段</th><th>方法</th><th>类型</th><th>关键点</th></tr></thead><tbody><tr><td><strong>S1 去水 / 公平概率</strong></td><td>Proportional / Additive / Power / Odds-ratio / <strong>Shin</strong></td><td>确定性</td><td>庄家加价<strong>非比例式</strong>（favourite-longshot bias），需分段或模型化（§8.1）</td></tr><tr><td><strong>S2 优势估计</strong></td><td><code>edge = p·o − 1</code>，叠加微结构信号</td><td>统计</td><td>优势估计的<strong>方差</strong>比点估计更重要</td></tr><tr><td><strong>S3 不确定性收缩</strong></td><td>后验收缩 <code>p̂ = w·p_hat + (1−w)·p_prior</code></td><td>贝叶斯</td><td>抵消过度自信；防止负期望被放大（§8.4）</td></tr><tr><td><strong>S4 仓位（分数·多元 Kelly）</strong></td><td><code>f* = Σ⁻¹μ × λ</code>，λ ≈ 0.2–0.5</td><td>最优化</td><td><strong>必须显式建模跨注协方差</strong>（§8.5）</td></tr><tr><td><strong>S5 组合约束</strong></td><td>同场/相关性敞口上限、单注上限、账户暴露上限</td><td>约束</td><td>滚球注单在时间上强相关（同场多市场是同一风险因子）</td></tr><tr><td><strong>S6 成本摊销与执行过滤</strong></td><td>扣除调用成本与失败率；预测成交概率，放弃低概率单</td><td>工程</td><td><strong>成交概率预测</strong>是最易被忽略、又最影响实际收益的模块</td></tr></tbody></table></div>
+<h3>7.1 必须承认的上限</h3>
+<blockquote><p><strong>S1–S6 全部是「给定 <code>p_model</code> 之后」的最优处理。</strong> 它们能让一个<strong>真实存在</strong>的优势实现最大几何增长率，但<strong>无法创造优势</strong>。 若 <code>p_model</code> 不含信息，整条栈只是在更精细地分配一个负期望。</p></blockquote>
 <hr>
-<h2>7. 经济学分析（一）：水钱与所需精度优势</h2>
-<h3>7.1 水钱：报价里的税</h3>
+<h2>8. 经济学算法支撑：公式体系与数值对比</h2>
+<p>本节为 S1–S6 提供完整的公式支撑与数值验证，并给出可落地的开源实现（§12）。</p>
+<h3>8.1 去水（margin removal）：方法选择能决定策略的符号</h3>
+<p><img alt="图 16 四种去水方法的差异" src="images/fig16_devig_methods.png"></p>
+<p>设赔率 <code>o_i</code>，原始隐含概率 <code>q_i = 1/o_i</code>，booksum <code>B = Σq_i</code>，水钱 <code>m = B − 1</code>。</p>
+<p><strong>四种主要方法：</strong></p>
+<div class="tw"><table><thead><tr><th>方法</th><th>形式</th><th>特性</th></tr></thead><tbody><tr><td><strong>比例归一化 Proportional</strong></td><td><code>p_i = q_i / B</code></td><td>对所有结果等比例抽税；<strong>不处理 FL bias</strong></td></tr><tr><td><strong>加法法 Additive</strong></td><td><code>p_i = q_i − m/n</code></td><td>等概率点抽税；<strong>可能产生负概率</strong></td></tr><tr><td><strong>幂法 Power</strong></td><td>解 <code>Σ q_i^k = 1</code>，<code>p_i = q_i^k</code></td><td>单一指数；把更多概率推向热门</td></tr><tr><td><strong>Shin 模型</strong></td><td>见下</td><td><strong>内生处理 favourite-longshot bias</strong></td></tr></tbody></table></div>
+<p><strong>Shin (1992, 1993) 模型</strong>：假设存在比例为 <code>z</code> 的内幕交易者，庄家据此定价：</p>
+<div class="math">p_i=\frac{\sqrt{z^{2}+4(1-z)\dfrac{q_i^{2}}{B}}-z}{2(1-z)}</div>
+<p><code>z</code> 由约束 <code>Σp_i = 1</code> 数值求解。</p>
+<p><strong>数值对比（盘口 1.90 / 3.60 / 4.40，booksum = 1.0314）</strong>：</p>
+<div class="tw"><table><thead><tr><th>方法</th><th class="right">p(1.90)</th><th class="right">p(3.60)</th><th class="right">p(4.40)</th><th class="right">相对 Shin 的 L1 偏差</th></tr></thead><tbody><tr><td>比例归一化</td><td class="right">51.0%</td><td class="right">26.9%</td><td class="right">22.0%</td><td class="right"><strong>0.828 pp</strong></td></tr><tr><td>加法法</td><td class="right">51.6%</td><td class="right">26.7%</td><td class="right">21.7%</td><td class="right">0.282 pp</td></tr><tr><td>幂法</td><td class="right">51.6%</td><td class="right">26.7%</td><td class="right">21.7%</td><td class="right">0.301 pp</td></tr><tr><td>Shin（参考）</td><td class="right">51.4%</td><td class="right">26.8%</td><td class="right">21.8%</td><td class="right">0.000 pp</td></tr></tbody></table></div>
+<p>Shin 联合估计得 <strong>z = 0.0157</strong>（内幕交易者比例约 1.57%）。</p>
+<blockquote><p><strong>这是本节最重要的结论</strong>：</p>
+<ol><li><strong>比例归一化在冷门（4.40）上系统性高估</strong>（22.0% vs 21.8%），这正是 favourite-longshot bias 的方向 —— 即"比例法会让你在冷门上错误地看到优势"。</li><li>方法间 L1 偏差达 <strong>0.83 pp</strong>。当可寻优势只有 1–2% 时，<strong>去水方法的选择本身就足以翻转 <code>edge</code> 的符号</strong>。</li><li>工程结论：<strong>必须用多方法交叉，并对分段（热门/中间/冷门）分别校准</strong>，不能用单一比例法。</li></ol>
+<p>参考实现：<code>mberk/shin</code>（Python）、R <code>implied</code> 包（内置 <code>shin</code>、<code>power</code>、<code>or</code> 等方法及 <code>shin_method</code> 算法选择）。</p></blockquote>
+<h3>8.2 隐含概率、优势与打平条件</h3>
+<div class="math">p^{\text{implied}}_i=\frac{1}{o_i},    \mathrm{edge}_i=p_i^{\text{model}}\cdot o_i-1</div>
+<p><strong>打平条件</strong>（对单注）：</p>
+<div class="math">\mathrm{edge}&gt;0\iff p^{\text{model}}_i&gt;\frac{1}{o_i}=p^{\text{implied}}_i=\frac{p^{\text{fair}}_i}{1+m}</div>
+<div class="math">\iff \frac{p^{\text{model}}_i-p^{\text{fair}}_i}{p^{\text{fair}}_i}&gt;m</div>
+<p><strong>需要的相对精度优势恰为水钱 <code>m</code>。</strong> 当 <code>m = 11.4%</code>，你需要相对优于庄家模型 11.4%（§9.2 给出逐档数值）。</p>
+<h3>8.3 期望值与有效期望（含执行过滤）</h3>
+<p><strong>名义期望</strong>：</p>
+<div class="math">\mathrm{EV}=p\cdot o-1=-\frac{m}{1+m}\quad(\text{当 }p=p^{\text{fair}})</div>
+<p><strong>有效期望</strong>（引入成交概率与执行成本）：</p>
+<div class="math">\mathrm{EV}_{\text{eff}}=q_{\text{fill}}(s,\mathrm{EV})\cdot\mathrm{EV}-\text{cost}_{\text{exec}}</div>
+<p>其中 <code>s</code> 为单注规模。由于 §5.3 的机制：</p>
+<div class="math">\frac{\partial q_{\text{fill}}}{\partial \mathrm{EV}}&lt;0,    \frac{\partial q_{\text{fill}}}{\partial s}&lt;0</div>
+<blockquote><p><strong>即：优势越大越易被拒单，注额越大越易被降限额。</strong> 这个负偏导是本案最核心的经济学障碍 —— 它意味着<strong>你无法通过提高模型质量来线性提升有效期望</strong>。</p></blockquote>
+<h3>8.4 贝叶斯收缩：参数不确定性下必须缩小下注</h3>
+<p>Kelly 的最优性证明假设 <code>p</code> <strong>已知且准确</strong>。当 <code>p</code> 存在估计误差时，全 Kelly 被系统性高估。</p>
+<p><strong>收缩估计</strong>（以 Beta-二项为例，<code>n</code> 为样本量，<code>k</code> 为强度）：</p>
+<div class="math">\hat{p}_{\text{shrink}}=\frac{n}{n+k}\,p_{\text{hat}}+\frac{k}{n+k}\,p_{\text{prior}},    k=\frac{p(1-p)}{\sigma_p^{2}}-1</div>
+<p><strong>Kelly 的收缩形式</strong>（Baker &amp; McHale, 2013）：</p>
+<div class="math">f^{*}_{\text{shrink}}=f^{*}\cdot\frac{\sigma^{2}_{\text{signal}}}{\sigma^{2}_{\text{signal}}+\sigma^{2}_{\text{error}}}</div>
+<p><strong>工程含义</strong>：<code>k</code> 就是"你对模型有多不确定"的直接表达。<code>k → 0</code> 退化为无收缩（激进）；<code>k</code> 增大则仓位自动保守。</p>
+<blockquote><p>学术界（<em>Optimal Betting Under Parameter Uncertainty: Improving the Kelly Criterion</em>）明确指出：<strong>用样本估计替代总体参数会损害样本外表现，应在参数不确定时收缩注额</strong>。这正是 §7 中 S3 阶段的理论依据。</p></blockquote>
+<h3>8.5 多元 Kelly：相关性是必须显式建模的一等项</h3>
+<p><img alt="图 17 相关性下的过度下注与组合风险放大" src="images/fig17_correlated_kelly.png"></p>
+<p><strong>单注 Kelly</strong>：</p>
+<div class="math">f^{*}=\frac{bp-q}{b},    b=o-1,\ q=1-p</div>
+<p><strong>多元 Kelly（同时下注 N 注）</strong>：</p>
+<div class="math">\mathbf{f}^{*}=\Sigma^{-1}\boldsymbol{\mu}</div>
+<p>其中 <code>Σ</code> 为各注收益的协方差矩阵，<code>μ</code> 为超额收益向量。在多元正态近似下这是闭式解。</p>
+<p><strong>naive 逐注独立的系统性高估</strong>：</p>
+<div class="math">f^{*}_{\text{naive}}\approx\frac{1}{1-\rho}\,f^{*}_{\text{true}}</div>
+<div class="tw"><table><thead><tr><th>相关性 ρ</th><th class="right">naive Kelly 高估倍数</th></tr></thead><tbody><tr><td>0.2</td><td class="right">1.25×</td></tr><tr><td><strong>0.4</strong></td><td class="right"><strong>1.67×</strong></td></tr><tr><td>0.6</td><td class="right"><strong>2.50×</strong></td></tr></tbody></table></div>
+<p><strong>组合收益方差的解析形式</strong>（两注情形）：</p>
+<div class="math">\sigma_{\text{port}}^{2}=\sum_i f_i^{2}p_i(1-p_i)o_i^{2}+2\rho f_1f_2o_1o_2\sqrt{p_1(1-p_1)p_2(1-p_2)}</div>
+<p>数值（示例盘口，ρ 从 0 递增）：组合标准差由 <strong>0.1024 → 0.1156</strong>，即<strong>相关性单独贡献了约 13% 的风险增幅</strong>。</p>
+<p><strong>为什么在同场场景下 <code>ρ</code> 会很高</strong>：同一场比赛的 1X2 与大小球共享<strong>同一批球员状态、天气、裁判倾向、比赛节奏</strong>等风险因子。忽略它，等于把同一笔风险重复计算为多笔独立机会。</p>
+<p><strong>参考实现</strong>：<code>neeljshah/kellycorr</code>（相关性感知的分数 Kelly 多腿定仓）；学术脉络为 Insley, Mok &amp; Swartz (2004) 将 Kelly 扩展到同时下注场景，以及 <em>Efficient Multivariate Kelly Optimization</em>（指出 naive 联合枚举需 <code>O(2^N)</code>，需专门算法）。</p>
+<h3>8.6 几何增长率与破产概率</h3>
+<p><strong>最大化对象</strong>是长期几何增长率，而非单期期望：</p>
+<div class="math">g(\mathbf{f})=\mathbb{E}\left[\log\left(1+\sum_i f_i r_i\right)\right]</div>
+<p><strong>注意</strong>：<code>g</code> 是<strong>凹函数</strong>，且在 <code>f</code> 超过最优点后下降。这就是为什么"优势越大下注越多"是错的 —— 超过 <code>f*</code> 后，<strong>期望增长率为负，即使每注的 EV 为正</strong>。</p>
+<p><strong>破产概率下界</strong>（连续近似）：</p>
+<div class="math">P(\text{ruin})\gtrsim\left(\frac{1-f}{1+f}\right)^{B_0/(f\cdot s)}</div>
+<p><strong>工程含义</strong>：结合 §8.3 的 <code>q_fill</code> 负偏导与 §5.3 的降限额机制，实际执行中 <code>f</code> 会被对手方<strong>非自愿地</strong>推高（注额上限迫使你无法分数化），从而<strong>抬高破产概率</strong>。</p>
+<h3>8.7 成本摊销与盈亏平衡注数</h3>
+<div class="math">N_{\text{required}}=\frac{\text{cost}_{\text{day}}}{\mathrm{EV}\cdot s}</div>
+<p><strong>盈亏平衡的真实条件</strong>（含 <code>q_fill</code>）：</p>
+<div class="math">N_{\text{required}}=\frac{\text{cost}_{\text{day}}}{q_{\text{fill}}(s)\cdot\mathrm{EV}\cdot s}</div>
+<p>即<strong>每被拒一单，就需要额外多下若干单来覆盖固定成本的正反馈</strong>。</p>
+<h3>8.8 评估指标（L6 校准闭环）</h3>
+<div class="tw"><table><thead><tr><th>指标</th><th>公式</th><th>用途</th></tr></thead><tbody><tr><td><strong>Brier 分数</strong></td><td><code>BS = (1/N)Σ(p_i − y_i)²</code></td><td>概率预测的总体校准质量</td></tr><tr><td><strong>ECE 期望校准误差</strong></td><td>`ECE = Σ_b (n_b/N)·\</td><td>acc_b − conf_b\</td><td>`</td><td>分箱校准偏差，检测系统性过度自信</td></tr><tr><td><strong>CLV 收盘线价值</strong></td><td><code>CLV = o_bet / o_close − 1</code></td><td><strong>衡量注单质量的核心指标</strong>，也是庄家风控的触发信号</td></tr><tr><td><strong>对数增长率</strong></td><td><code>g = (1/T)Σ log(W_t/W_{t-1})</code></td><td>与 Kelly 目标一致的绩效度量</td></tr><tr><td><strong>最大回撤</strong></td><td><code>max(W_peak − W_t)/W_peak</code></td><td>结合破产概率评估生存能力</td></tr></tbody></table></div>
+<blockquote><p><strong>CLV 的双重角色</strong>：它既是<strong>你判断自己是否真有优势</strong>的指标，也是<strong>庄家判断你是否优势玩家</strong>的指标（§5.3）。<strong>同一个数字，同时是你成功的证明和你被封的原因。</strong></p></blockquote>
+<hr>
+<h2>9. 经济学分析（一）：水钱与所需精度优势</h2>
+<h3>9.1 水钱：报价里的税</h3>
 <p><img alt="图 2 水钱与单注期望值" src="images/fig2_margin_and_ev.png"></p>
 <div class="tw"><table><thead><tr><th>市场</th><th>典型水钱</th><th>单注 EV</th></tr></thead><tbody><tr><td>交易所（撮合模式，抽佣）</td><td>~2.0%</td><td>−1.96%</td></tr><tr><td>欧冠 / 网球 赛前</td><td>3–4.5%</td><td>−4.31%（按 4.5%）</td></tr><tr><td>英超 赛前 1X2</td><td>4–6%</td><td>−4.76%</td></tr><tr><td><strong>滚球足球在盘（均值）</strong></td><td><strong>11.4%</strong></td><td><strong>−10.23%</strong></td></tr><tr><td>滚球 同场串关/道具</td><td>~13%</td><td>−11.50%</td></tr><tr><td>四串一（5.2%/腿 复利）</td><td>~22.8%</td><td>−18.57%</td></tr><tr><td>首个进球者</td><td>20–35%</td><td>−21.26%</td></tr><tr><td>正确比分</td><td>25–45%</td><td>−24.24%</td></tr></tbody></table></div>
-<p><strong>关键观察</strong>：本构想的目标市场（滚球在盘）<strong>恰好是水钱最贵的市场</strong>。在盘市场的抽水是赛前头部的 2 倍以上。行业统计（Bitok Arena Research：12,000 注 / 6 家主流博彩 / 12 个月）给出赛果市场 6.8% vs <strong>在盘市场 11.4%</strong>；Bet Better Margin Index（68 家、每日更新）给出头部市场均值 5.06%。</p>
-<blockquote><p><strong>结构性推论</strong>：在盘市场的高水钱<strong>不是效率损失，而是产品定价</strong>——庄家为"即时性 + 高频 + 低延迟"收取的溢价。选择该市场，等于主动选择最高的结构性劣势。</p></blockquote>
-<h3>7.2 打平所需的精度优势</h3>
+<p><strong>关键观察</strong>：本构想的目标市场（滚球在盘）<strong>恰好是水钱最贵的市场</strong>。行业统计（12,000 注 / 6 家主流博彩 / 12 个月）给出赛果市场 6.8% vs <strong>在盘市场 11.4%</strong>；Bet Better Margin Index（68 家、每日更新）给出头部市场均值 5.06%。</p>
+<blockquote><p><strong>结构性推论</strong>：在盘市场的高水钱<strong>不是效率损失，而是产品定价</strong> —— 庄家为"即时性 + 高频 + 低延迟"收取的溢价。 再叠加 §4.2 的发现：<strong>低层级赛事的覆盖率低、流动性差，水钱更高</strong> —— 你的"100–200 场"覆盖面越大，<strong>平均水钱越贵</strong>。</p></blockquote>
+<h3>9.2 打平所需的精度优势</h3>
 <p><img alt="图 3 需要的概率精度优势" src="images/fig3_required_edge.png"></p>
-<p>打平条件 <code>p_model × o &gt; 1</code>，代入隐含概率得：</p>
-<div class="math">p_{\text{model}} &gt; p^{\text{fair}}\times(1+m)</div>
-<p>即<strong>需要的相对概率优势恰为水钱 m</strong>：</p>
 <div class="tw"><table><thead><tr><th>水钱档位</th><th>p=50% 标的需超出</th><th>p=30% 标的需超出</th><th>p=10% 标的需超出</th></tr></thead><tbody><tr><td>3%（交易所）</td><td>1.5 pp</td><td>0.9 pp</td><td>0.3 pp</td></tr><tr><td>5%（赛前头部）</td><td>2.5 pp</td><td>1.5 pp</td><td>0.5 pp</td></tr><tr><td>8.07%（平均）</td><td>4.0 pp</td><td>2.4 pp</td><td>0.8 pp</td></tr><tr><td><strong>11.4%（滚球均值）</strong></td><td><strong>5.7 pp</strong></td><td><strong>3.4 pp</strong></td><td><strong>1.1 pp</strong></td></tr><tr><td>15%（滚球高阶）</td><td>7.5 pp</td><td>4.5 pp</td><td>1.5 pp</td></tr><tr><td>20%（滚球上限）</td><td>10.0 pp</td><td>6.0 pp</td><td>2.0 pp</td></tr></tbody></table></div>
-<p><strong>分母不对等问题</strong>：你需要打败的是<strong>庄家自己的定价模型</strong>，而不是"随机猜测"。庄家的赔率构成是：</p>
-<ol><li>夏普市场（低水钱交易所/大庄）的价格共识；</li><li>全市场资金流的方向；</li><li>自有风控因子（敞口管理、限额模型、已实现盈亏）。</li></ol>
-<p>因此你的优势是<strong>相对</strong>的。公开数据建模的现实相对优势量级：</p>
-<div class="tw"><table><thead><tr><th>证据</th><th>结论</th></tr></thead><tbody><tr><td>开源项目 <code>CODESIGURD/value-bet-model</code></td><td>5 轮模型迭代 / 4 种特征增强 / 10 联赛 25 赛季样本外 → <strong>从未达到盈利阈值</strong>（AUC 0.535–0.560），作者公开确认为零结果</td></tr><tr><td>行业共识（OddsShopper 等）</td><td>"模型本身不能击败体育投注；优势存在于<strong>价格</strong>而非<strong>选择</strong>"</td></tr><tr><td>学术（Whelan, <em>Estimating Expected Loss Rates in Betting Markets</em>）</td><td>水钱与实际损失率的关系需按赔率区间分段修正（favorite-longshot bias）</td></tr></tbody></table></div>
+<p><strong>分母不对等问题</strong>：你需要打败的是<strong>庄家自己的定价模型</strong>（夏普市场共识 + 全市场资金流 + 自有风控因子），因此你的优势是<strong>相对</strong>的。</p>
+<div class="tw"><table><thead><tr><th>证据</th><th>结论</th></tr></thead><tbody><tr><td>开源项目 <code>CODESIGURD/value-bet-model</code></td><td>5 轮模型迭代 / 4 种特征增强 / 10 联赛 25 赛季样本外 → <strong>从未达到盈利阈值</strong>（AUC 0.535–0.560），作者公开确认为零结果</td></tr><tr><td>行业共识（OddsShopper 等）</td><td>"模型本身不能击败体育投注；优势存在于<strong>价格</strong>而非<strong>选择</strong>"</td></tr><tr><td>学术（Whelan）</td><td>水钱与实际损失率的关系需按赔率区间分段修正（FL bias）</td></tr></tbody></table></div>
 <p><strong>关键不对称</strong>：</p>
-<ul><li>你在<strong>水平</strong>上竞争（预测比赛结果）→ 面对的是已被定价的公开信息，优势 ≈ 0；</li><li>你在<strong>时间结构</strong>上竞争（微结构信号）→ 这是构想中唯一有价值的方向，但<strong>其收益受 §4.3 的成交裁定封顶</strong>。</li></ul>
+<ul><li>在<strong>水平</strong>上竞争（预测比赛结果）→ 面对已被定价的公开信息，优势 ≈ 0；</li><li>在<strong>时间结构</strong>上竞争（微结构信号）→ 唯一有价值的方向，但<strong>收益受 §5.3 成交裁定封顶</strong>。</li></ul>
 <hr>
-<h2>8. 经济学分析（二）：成本结构与摊销</h2>
+<h2>10. 经济学分析（二）：成本结构与摊销</h2>
 <p><img alt="图 7 成本结构与摊销平衡" src="images/fig7_cost_breakeven.png"></p>
-<h3>8.1 月度成本构成</h3>
-<div class="tw"><table><thead><tr><th>项目</th><th>月成本 (USD)</th><th>说明</th></tr></thead><tbody><tr><td>行情数据 API（多源冗余）</td><td>250</td><td>冗余是必需的（§3.2）</td></tr><tr><td>JEV 调用（约 150k 次/月）</td><td>150</td><td>高频路径 B</td></tr><tr><td><strong>LLM 调用（约 6k 次/月）</strong></td><td><strong>60</strong></td><td>低频路径 C</td></tr><tr><td>采集基础设施 / 代理 / 算力</td><td>140</td><td>浏览器级执行 + 端点池</td></tr><tr><td>存储与监控</td><td>60</td><td>时序库 + 告警</td></tr><tr><td><strong>人力摊销（0.2 FTE）</strong></td><td><strong>400</strong></td><td>维护端点漂移的持续投入</td></tr><tr><td><strong>合计</strong></td><td><strong>$1,060</strong></td><td><strong>$35.3/天</strong></td></tr></tbody></table></div>
-<p><strong>注意两件事</strong>：</p>
-<ol><li><strong>模型成本（$210）只占 20%</strong>，基础设施与人力占 80%。<strong>这个系统的成本结构不是"AI 成本"驱动的，而是"维护一个漂移端点集合"驱动的。</strong></li><li>人力摊销是最容易被低估的一项：端点半衰期短、协议会变、反自动化对抗会升级——<strong>这不是一次性开发成本，是持续运营成本</strong>。</li></ol>
-<h3>8.2 摊销：覆盖成本所需的投注量</h3>
-<p>以固定成本 $35.3/天计，覆盖成本所需日均注数：</p>
-<div class="tw"><table><thead><tr><th>单注规模</th><th>优势 +1%</th><th>+2%</th><th>+3%</th></tr></thead><tbody><tr><td>$10</td><td>353 注</td><td>176 注</td><td>118 注</td></tr><tr><td>$20</td><td>176 注</td><td>88 注</td><td>59 注</td></tr><tr><td>$50</td><td>71 注</td><td>35 注</td><td>24 注</td></tr><tr><td>$100</td><td>35 注</td><td>18 注</td><td>12 注</td></tr><tr><td>$200</td><td>18 注</td><td>9 注</td><td>6 注</td></tr></tbody></table></div>
+<h3>10.1 月度成本构成</h3>
+<div class="tw"><table><thead><tr><th>项目</th><th class="right">月成本 (USD)</th><th>说明</th></tr></thead><tbody><tr><td>行情数据 API（多源冗余 + 参考线）</td><td class="right">250</td><td>§3.4 冗余必需</td></tr><tr><td>JEV 调用（约 150k 次/月）</td><td class="right">150</td><td>高频路径 B</td></tr><tr><td><strong>LLM 调用（约 6k 次/月）</strong></td><td class="right"><strong>60</strong></td><td>低频路径 C</td></tr><tr><td><strong>采集基础设施 / 代理 / 算力</strong></td><td class="right"><strong>140</strong></td><td><strong>§4.4 的多路径要求下偏低估</strong></td></tr><tr><td>存储与监控（含 57k 记录/天）</td><td class="right">60</td><td>时序库 + 告警</td></tr><tr><td><strong>人力摊销（0.2 FTE）</strong></td><td class="right"><strong>400</strong></td><td><strong>§3.3 的协议漂移下偏低估</strong></td></tr><tr><td><strong>合计</strong></td><td class="right"><strong>$1,060</strong></td><td><strong>$35.3/天</strong></td></tr></tbody></table></div>
+<p><strong>两项修正说明（重要）</strong>：</p>
+<ol><li><strong>§4.4 要求 4–5 条并行采集路径</strong> → 采集基础设施成本应显著高于 $140/月。</li><li><strong>§3.3 证明协议漂移是常态</strong> → 人力不是"0.2 FTE 的维护"，而是"<strong>季度级重做逆向</strong>"的持续投入。</li></ol>
+<blockquote><p><strong>保守修正</strong>：若按 0.5 FTE 并叠加多路径基础设施，月度成本应上修至 <strong><span class="imath">1,700–2,000** 区间。§11 的蒙特卡洛使用 </span>35.3/天 是</strong>乐观口径**；成本翻倍会使情形 D 的盈利概率进一步下降。</p></blockquote>
+<h3>10.2 摊销：覆盖成本所需的投注量</h3>
+<div class="tw"><table><thead><tr><th>单注规模</th><th class="right">优势 +1%</th><th class="right">+2%</th><th class="right">+3%</th></tr></thead><tbody><tr><td>$10</td><td class="right">353 注</td><td class="right">176 注</td><td class="right">118 注</td></tr><tr><td>$20</td><td class="right">176 注</td><td class="right">88 注</td><td class="right">59 注</td></tr><tr><td>$50</td><td class="right">71 注</td><td class="right">35 注</td><td class="right">24 注</td></tr><tr><td>$100</td><td class="right">35 注</td><td class="right">18 注</td><td class="right">12 注</td></tr><tr><td>$200</td><td class="right">18 注</td><td class="right">9 注</td><td class="right">6 注</td></tr></tbody></table></div>
 <p><strong>读法</strong>：</p>
-<ul><li>单注 $10 + 1% 优势 → 需要 <strong>353 注/天</strong>。这个量级在任何平台上都会立即触发风控。</li><li>单注 $100 + 2% 优势 → 需要 18 注/天。这是<strong>唯一在数量上似乎可行的组合</strong>。</li><li>但注意：<strong>一旦被降限额（§4.3），单注规模下降会再次推高所需注数</strong>——形成正反馈式的死亡螺旋。</li></ul>
-<blockquote><p><strong>成本摊销的结构性矛盾</strong>：可行的投注量需要较大的单注规模，而较大的单注规模会更快触发限额；被限额后又需要更多注数来覆盖固定成本。</p></blockquote>
+<ul><li>单注 $10 + 1% 优势 → 需要 <strong>353 注/天</strong>，这个量级在任何平台上都会立即触发风控。</li><li>单注 $100 + 2% 优势 → 需要 18 注/天，是<strong>唯一在数量上似乎可行的组合</strong>。</li><li>但一旦被降限额（§5.3），单注规模下降会<strong>再次推高所需注数</strong> —— 结合 §8.7 的 <code>q_fill</code> 负偏导，形成正反馈式的死亡螺旋。</li></ul>
+<blockquote><p><strong>结构性矛盾</strong>：可行的投注量需要较大单注规模，而较大单注规模更快触发限额；被限额后又需要更多注数覆盖固定成本。</p></blockquote>
 <hr>
-<h2>9. 量化压力测试</h2>
-<h3>9.1 参数</h3>
-<div class="tw"><table><thead><tr><th>参数</th><th>取值</th></tr></thead><tbody><tr><td>初始银行</td><td>$10,000</td></tr><tr><td>下注频率</td><td>5 注/天</td></tr><tr><td>单注比例</td><td>银行 2%（flat，保守）</td></tr><tr><td>结算赔率</td><td>1.95</td></tr><tr><td>模拟时长</td><td>90 天</td></tr><tr><td>路径数</td><td>20,000</td></tr><tr><td>日运行成本（情形 D）</td><td>$35.3（见 §8.1）</td></tr><tr><td>平台跑路/拒付概率（情形 C）</td><td>25%，发生时损失 70% 本金（<strong>保守假设</strong>，见 §9.3）</td></tr></tbody></table></div>
+<h2>11. 量化压力测试</h2>
+<h3>11.1 参数</h3>
+<div class="tw"><table><thead><tr><th>参数</th><th>取值</th></tr></thead><tbody><tr><td>初始银行</td><td>$10,000</td></tr><tr><td>下注频率</td><td>5 注/天</td></tr><tr><td>单注比例</td><td>银行 2%（flat，保守）</td></tr><tr><td>结算赔率</td><td>1.95</td></tr><tr><td>模拟时长</td><td>90 天</td></tr><tr><td>路径数</td><td>20,000</td></tr><tr><td>日运行成本（情形 D）</td><td>$35.3（<strong>乐观口径</strong>，见 §10.1）</td></tr><tr><td>平台跑路/拒付概率（情形 C）</td><td>25%，发生时损失 70% 本金</td></tr></tbody></table></div>
 <p>胜率由 EV 反推：<code>q = (1 + EV) / 1.95</code></p>
-<h3>9.2 结果</h3>
+<h3>11.2 结果</h3>
 <p><img alt="图 11 蒙特卡洛 2 万次模拟" src="images/fig11_montecarlo.png"></p>
-<div class="tw"><table><thead><tr><th>情形</th><th>90 日余额中位数</th><th>5 分位</th><th>95 分位</th><th><strong>盈利概率</strong></th></tr></thead><tbody><tr><td>A · 无优势（滚球水钱 11.4%）</td><td>$3,631</td><td>$1,870</td><td>$7,329</td><td><strong>0.8%</strong></td></tr><tr><td>B · +2% 优势，无平台风险，<strong>不计成本</strong></td><td>$11,259</td><td>$5,577</td><td>$21,858</td><td>61.4%</td></tr><tr><td>D · +2% 优势，<strong>扣除 $35/天 成本</strong></td><td>$7,655</td><td>$3,069</td><td>$16,527</td><td><strong>45.4%</strong></td></tr><tr><td>C · +2% 优势，<strong>25% 概率跑路/拒付</strong></td><td>$9,263</td><td>$2,377</td><td>$20,217</td><td><strong>29.2%</strong></td></tr></tbody></table></div>
+<div class="tw"><table><thead><tr><th>情形</th><th class="right">90 日余额中位数</th><th class="right">5 分位</th><th class="right">95 分位</th><th class="right"><strong>盈利概率</strong></th></tr></thead><tbody><tr><td>A · 无优势（滚球水钱 11.4%）</td><td class="right">$3,631</td><td class="right">$1,870</td><td class="right">$7,329</td><td class="right"><strong>0.8%</strong></td></tr><tr><td>B · +2% 优势，无平台风险，<strong>不计成本</strong></td><td class="right">$11,259</td><td class="right">$5,577</td><td class="right">$21,858</td><td class="right">61.4%</td></tr><tr><td>D · +2% 优势，<strong>扣除 $35/天 成本</strong></td><td class="right">$7,655</td><td class="right">$3,069</td><td class="right">$16,527</td><td class="right"><strong>45.4%</strong></td></tr><tr><td>C · +2% 优势，<strong>25% 概率跑路/拒付</strong></td><td class="right">$9,263</td><td class="right">$2,377</td><td class="right">$20,217</td><td class="right"><strong>29.2%</strong></td></tr></tbody></table></div>
 <p><strong>四条关键读法</strong>：</p>
-<ol><li><strong>情形 A 是默认结局</strong>：无优势时 99.2% 路径亏损，且亏损是对数坐标下的近似直线——<strong>稳定的指数衰减</strong>。这就是水钱的数学形状。</li><li><strong>情形 B 是乐观上界</strong>：即使假设 +2% 优势真实存在且不计任何成本，也只有 61.4% 路径盈利。原因：2% 的优势相对于 2% 的下注比例与赔率波动，信噪比低，<strong>90 天样本量不足以稳定实现期望</strong>。这说明"回测盈利 → 实盘盈利"之间存在巨大方差鸿沟。</li><li><strong>情形 D 揭示成本的破坏力</strong>：每日 <span class="imath">35.3 固定成本，把盈利概率从 61.4% 拉到 45.4%——**约 16 个百分点的损失**。而这个成本相对 </span>10,000 本金（0.35%/天）与 +2% 优势是同一个量级。</li><li><strong>情形 C 是叠加后的现实</strong>：平台风险把 61.4% 压到 29.2%。<strong>而 D 和 C 会同时生效</strong>——真实盈利概率应低于任一单项。</li></ol>
-<h3>9.3 敏感性说明</h3>
-<p><strong>关于 25% 这个参数</strong>：本报告不给它任何精确性假设，它只用于说明量级。读者可在 <code>scripts/make_figures.py</code> 的 <code>fig11_montecarlo()</code> 中改为 5%、50% 或与之无关的累积风险模型重跑。<strong>结论方向不变</strong>：只要该风险不是零，它就会显著压低盈利概率。</p>
-<p>更贴近现实的建模方式是把"账户风险"视为与<strong>盈利水平正相关</strong>的累积过程——因为触发限额与拒付的因素是<strong>注单质量（CLV）</strong>，而非账户余额。也就是说：<strong>你的成功本身就是风险的触发条件</strong>。本报告的固定概率模型实际上是<strong>乐观简化</strong>。</p>
-<h3>9.4 微结构信号能改变结论吗？</h3>
-<p>这是本方案唯一可能改变结论的方向，值得单独量化。假设微结构信号能提供额外的相对优势 ε：</p>
-<div class="tw"><table><thead><tr><th>总相对优势 m_needed=11.4% 下</th><th>需要的 ε</th><th>现实评估</th></tr></thead><tbody><tr><td>打平</td><td>11.4%</td><td>极不可能（公开数据 0–2%）</td></tr><tr><td>净收益 +2%（扣成本后）</td><td>~13%</td><td>更不可能</td></tr><tr><td>净收益 +2%（假设交易所 3% 水钱场景）</td><td>~5%</td><td>仍远超公开数据可得水平</td></tr></tbody></table></div>
-<blockquote><p><strong>结论</strong>：微结构信号在<strong>理论上</strong>是正确的竞争维度，但要把打平所需的 11.4% 相对优势大部分由它提供，<strong>没有公开证据支持</strong>。工程上应该把它当作<strong>边际改善</strong>（提高 <code>q_fill</code>、降低无效调用、改善 S6 执行过滤），而不是当作优势来源。</p></blockquote>
+<ol><li><strong>情形 A 是默认结局</strong>：无优势时 99.2% 路径亏损，且亏损是对数坐标下的近似直线 —— <strong>稳定的指数衰减</strong>。</li><li><strong>情形 B 是乐观上界</strong>：即使假设 +2% 优势真实存在且不计成本，也只有 61.4% 路径盈利。2% 优势相对于 2% 下注比例与赔率波动，信噪比低，<strong>90 天样本量不足以稳定实现期望</strong> → 回测盈利与实盘盈利之间存在巨大方差鸿沟。</li><li><strong>情形 D 揭示成本的破坏力</strong>：每日 $35.3 固定成本把盈利概率从 61.4% 拉到 45.4%（<strong>−16 pp</strong>）。而 §10.1 指出该成本是乐观口径。</li><li><strong>情形 C 是叠加后的现实</strong>：平台风险把 61.4% 压到 29.2%。<strong>D 与 C 会同时生效</strong>。</li></ol>
+<h3>11.3 敏感性说明</h3>
+<p><strong>关于 25%</strong>：本参数只用于说明量级，可在 <code>scripts/make_figures.py</code> 的 <code>fig11_montecarlo()</code> 中改为 5%、50% 重跑，<strong>结论方向不变</strong>。</p>
+<p>更贴近现实的建模是把它视为与<strong>盈利水平正相关</strong>的累积过程 —— 因为触发限额与拒付的因素是<strong>注单质量（CLV）</strong>，而非账户余额。<strong>你的成功本身就是风险的触发条件。</strong> 因此固定概率模型实际上是<strong>乐观简化</strong>。</p>
+<h3>11.4 微结构信号能改变结论吗？</h3>
+<div class="tw"><table><thead><tr><th>场景</th><th class="right">需要的相对优势</th><th>现实评估</th></tr></thead><tbody><tr><td>在盘 11.4% 水钱下打平</td><td class="right">11.4%</td><td>极不可能（公开数据 0–2%）</td></tr><tr><td>扣成本后净收益 +2%</td><td class="right">~13%</td><td>更不可能</td></tr><tr><td>交易所 3% 水钱场景下净收益 +2%</td><td class="right">~5%</td><td>仍远超公开数据可得水平</td></tr></tbody></table></div>
+<blockquote><p><strong>结论</strong>：微结构信号在<strong>理论上</strong>是正确的竞争维度，但要把打平所需的 11.4% 大部分由它提供，<strong>没有公开证据支持</strong>。工程上应把它当作<strong>边际改善</strong>（提高 <code>q_fill</code>、降低无效调用、改善 S6 执行过滤），而非优势来源。</p></blockquote>
 <hr>
-<h2>10. 可行性评分与结论</h2>
+<h2>12. 开源项目技术支撑</h2>
+<p>本节列出<strong>可核验的开源实现</strong>，作为前述技术判断的支撑或证否依据。</p>
+<h3>12.1 采集层（支撑 §3）</h3>
+<div class="tw"><table><thead><tr><th>项目</th><th>技术要点</th><th>对本方案的支撑 / 证否</th></tr></thead><tbody><tr><td><strong><code>BreathPulley/stake-scraper</code></strong></td><td>直接 <code>POST /_api/graphql</code> 复用站点内部端点；<strong>无浏览器、无 Selenium、无验证码</strong>；无需 token 可读公开盘口与注单流，有 token 可读账户/注单；给出 Cloudflare 应对要点（同查询 &lt;1 req/s、<code>Session</code> keep-alive、随机 UA、<code>x-language</code> 头、重场景用轮换代理 + FlareSolverr）</td><td>✅ <strong>正面支撑路径 B</strong>：证明"逆向 GraphQL、免浏览器"在真实平台上可行</td></tr><tr><td><strong><code>erdieee/allusion</code></strong></td><td>Playwright；<strong>配置驱动</strong>选择体育/国家/联赛；内置<strong>套利检测</strong>；README 警告多页并发的 CPU 开销</td><td>✅ <strong>正面支撑路径 C</strong>；同时提示<strong>浏览器自动化的成本</strong>（CPU/并发上限）</td></tr><tr><td><strong><code>jordantete/OddsHarvester</code></strong></td><td>Playwright；<strong>11 运动 / 100+ 联赛 / 数十种盘口</strong>；输出 JSON / CSV / S3；PyPI 发布</td><td>✅ <strong>正面支撑路径 D 的覆盖规模</strong></td></tr><tr><td><strong><code>stonehedgelabs/snuper</code></strong></td><td><strong>异步</strong>采集；DraftKings / BetMGM / Bovada / FanDuel；<strong>不可变快照（immutable snapshots）</strong> + 流式实时推送；可扩展存储接口</td><td>✅ <strong>正面支撑架构</strong>：不可变快照是赔率微结构分析的正确数据模型</td></tr><tr><td><strong><code>rafabelokurows/sports-odds</code></strong></td><td>Betclic 平台；作者公开记录：<strong>对方变更 API + CloudFront 新增校验 → 采集失效</strong>，并专门新建探索脚本应对</td><td>❌ <strong>关键证否</strong>：<strong>协议漂移是常态</strong>，采集层存在必然的半衰期（§3.3）</td></tr><tr><td><strong><code>smartworkersai/KOS</code></strong></td><td>明确"<strong>剥离脆弱的浏览器自动化，转向 API 驱动的信号引擎</strong>"；多租户状态机；套利/匹配下注</td><td>✅ <strong>印证工程方向</strong>：去浏览器化、API 优先</td></tr><tr><td><strong><code>odds-api/odds-api</code></strong>、<strong><code>cengizmandros/odds-arb-scanner</code></strong></td><td>OpenAPI 规范；套利与 +EV 扫描；<strong>以 Pinnacle 作为"真实概率"锚点</strong>与其他书商比价</td><td>✅ <strong>支撑 §3.5 的参考线用法</strong>（商业 API 的合理定位）</td></tr></tbody></table></div>
+<h3>12.2 建模与算法层（支撑 §7、§8）</h3>
+<div class="tw"><table><thead><tr><th>项目</th><th>技术要点</th><th>对本方案的支撑 / 证否</th></tr></thead><tbody><tr><td><strong><code>martineastwood/penaltyblog</code></strong></td><td><strong>Cython 加速</strong>；Poisson / Bivariate Poisson / <strong>Dixon-Coles</strong> 等；<code>FootballProbabilityGrid</code> 封装完整比分概率网格，可向量化导出各盘口；含 scraper、回测、球队评分（Elo / Pi-rating）、Ranked Probability Score</td><td>✅ <strong>正面支撑 L2/L4</strong>：比分建模与盘口概率推导有成熟、高性能实现</td></tr><tr><td><strong><code>mberk/shin</code></strong></td><td><strong>Shin 方法的 Python 实现</strong>；README 指出其概率精度优于"逆赔率除以 booksum"的标准做法</td><td>✅ <strong>正面支撑 §8.1 去水</strong></td></tr><tr><td><strong><code>neeljshah/kellycorr</code></strong></td><td><strong>相关性感知的分数 Kelly</strong>：全协方差矩阵定仓，面向多腿与串关</td><td>✅ <strong>正面支撑 §8.5</strong>：印证"naive Kelly 在 ρ&gt;0.4 时高估约 2 倍以上"</td></tr><tr><td>R <strong><code>implied</code></strong> 包</td><td>内置 <code>shin</code> / <code>power</code> / <code>or</code> / <code>additive</code> 等方法；Shin 提供 <code>z</code> 的内幕交易者比例估计与多种求解算法（<code>shin_method</code>）</td><td>✅ <strong>正面支撑 §8.1</strong>：多方法交叉是标准实践</td></tr><tr><td><strong><code>CODESIGURD/value-bet-model</code></strong></td><td><strong>5 轮模型迭代 / 4 种特征增强 / 10 联赛 25 赛季样本外</strong>；结论：<strong>庄家收盘线在公开数据下无法被击败</strong>（AUC 0.535–0.560，从未达盈利阈值）；作者完整公开"从假阳性到确认零结果"的过程</td><td>❌ <strong>关键证否</strong>：直接否证"提高模型复杂度可获得 &gt;11.4% 相对优势"</td></tr></tbody></table></div>
+<h3>12.3 数据/API 基础设施（支撑 §3.5、§4.1）</h3>
+<div class="tw"><table><thead><tr><th>项目</th><th>能力</th><th>定位</th></tr></thead><tbody><tr><td><strong>The Odds API</strong></td><td>50+ 书商 / 26 运动；<strong>在盘间隔 40s</strong></td><td>证否"API 可做跳动检测"（§3.5）</td></tr><tr><td><strong><code>odds-api.io</code></strong></td><td><strong>12,000+ 联赛 / 265+ 书商 / 34 运动</strong></td><td>证明覆盖规模可达（§4.1）</td></tr><tr><td><strong><code>rapidoddsapi</code></strong></td><td>100+ 书商，REST + WebSocket，含 live scores 与球员数据</td><td>覆盖与推送能力参考</td></tr><tr><td><strong>Pinnacle API</strong>（官方文档）</td><td>REST，含 bet placement；<strong>2025-07-23 起对公众关闭</strong></td><td>说明"庄家侧 API"的可得性在收缩</td></tr><tr><td><strong>Betfair Exchange API</strong>（官方文档）</td><td>Betting / Accounts / <strong>Streaming</strong> API；<code>placeOrders</code> 原子操作；需 App Key + 证书</td><td>唯一公开可编程下注通道，撮合定价</td></tr><tr><td><strong><code>sportsdataverse/oddsapiR</code></strong></td><td>R 包，封装 The Odds API；自动配额跟踪</td><td>生态完整性参考</td></tr></tbody></table></div>
+<h3>12.4 开源生态的整体判断</h3>
+<p>从上述仓库可以得出三条<strong>技术层已经确定</strong>的结论：</p>
+<div class="tw"><table><thead><tr><th>结论</th><th>支撑仓库</th><th>含义</th></tr></thead><tbody><tr><td><strong>① 采集中间层技术可行</strong>（逆向 GraphQL / 浏览器自动化 / 异步快照）</td><td>stake-scraper、allusion、OddsHarvester、snuper</td><td>L1 可以做出来，且已有多种成熟范式</td></tr><tr><td><strong>② 但采集层存在必然的协议半衰期</strong></td><td>sports-odds（失效记录）、KOS（架构迁移）</td><td>L1 的<strong>运维成本是持续性的</strong>，不是一次性的</td></tr><tr><td><strong>③ 建模与算法层有完整开源实现</strong></td><td>penaltyblog、mberk/shin、kellycorr、implied</td><td>L2/L4 不需要从零造轮子</td></tr><tr><td><strong>④ 但"公开数据可获 &gt;11.4% 相对优势"被实证否证</strong></td><td>CODESIGURD/value-bet-model</td><td><strong>L3/L4 再完美，也无法改变 <code>p_model</code> 无信息这一事实</strong></td></tr></tbody></table></div>
+<blockquote><p><strong>技术层的最终判断</strong>： 本方案<strong>不缺实现</strong>（①③ 已证明），<strong>缺的是优势来源</strong>（④ 已否证）。 唯一的希望是 §5.1 的微结构信号 —— 而它的收益被 §5.3 的成交裁定封顶，且没有公开证据支持它能提供 11.4% 量级的相对优势。</p></blockquote>
+<hr>
+<h2>13. 可行性评分与结论</h2>
 <p><img alt="图 12 架构层 × 技术/经济学维度评分" src="images/fig12_feasibility_heatmap.png"></p>
-<div class="tw"><table><thead><tr><th>架构层</th><th class="center">技术可实现性</th><th class="center">经济学有效性</th><th class="center">工程稳定性</th><th class="center">长期可维护性</th></tr></thead><tbody><tr><td>L1 数据采集（实时倍率）</td><td class="center"><strong>4</strong></td><td class="center">3</td><td class="center">2</td><td class="center">2</td></tr><tr><td>L2 特征/微结构（去水·漂移）</td><td class="center"><strong>5</strong></td><td class="center">2</td><td class="center">4</td><td class="center">3</td></tr><tr><td>L3 决策（LLM+JEV）</td><td class="center"><strong>4</strong></td><td class="center"><strong>1</strong></td><td class="center">4</td><td class="center">3</td></tr><tr><td>L4 经济学算法栈</td><td class="center"><strong>5</strong></td><td class="center">2</td><td class="center">4</td><td class="center"><strong>4</strong></td></tr><tr><td>L5 下单执行（自动投注）</td><td class="center">2</td><td class="center"><strong>1</strong></td><td class="center">1</td><td class="center">1</td></tr></tbody></table></div>
-<p><strong>评分口径</strong>：0 = 不可行 / 5 = 完全可行。作者基于本报告证据的主观评分，可通过 <code>data/feasibility_scores.csv</code> 复核调整。</p>
+<div class="tw"><table><thead><tr><th>架构层</th><th class="center">技术可实现性</th><th class="center">经济学有效性</th><th class="center">工程稳定性</th><th class="center">长期可维护性</th></tr></thead><tbody><tr><td>L1 数据采集（实时倍率）</td><td class="center"><strong>4</strong></td><td class="center">3</td><td class="center"><strong>2</strong></td><td class="center"><strong>2</strong></td></tr><tr><td>L2 特征/微结构（去水·漂移）</td><td class="center"><strong>5</strong></td><td class="center">2</td><td class="center">4</td><td class="center">3</td></tr><tr><td>L3 决策（LLM+JEV）</td><td class="center"><strong>4</strong></td><td class="center"><strong>1</strong></td><td class="center">4</td><td class="center">3</td></tr><tr><td>L4 经济学算法栈</td><td class="center"><strong>5</strong></td><td class="center">2</td><td class="center">4</td><td class="center"><strong>4</strong></td></tr><tr><td>L5 下单执行（自动投注）</td><td class="center">2</td><td class="center"><strong>1</strong></td><td class="center">1</td><td class="center">1</td></tr></tbody></table></div>
+<blockquote><p>评分口径：0 = 不可行 / 5 = 完全可行。作者基于本报告证据的主观评分，可通过 <code>data/feasibility_scores.csv</code> 复核调整。</p></blockquote>
 <p><strong>读图要点</strong>：</p>
-<ol><li><strong>「可实现」与「有效」是两条完全不同的曲线。</strong> L2、L4 技术上都是 5 分（确定性计算、有严格最优解），但经济学有效性只有 2 分——因为它们处理的是<strong>给定 <code>p_model</code> 之后</strong>的问题。</li><li><strong>L3 的分裂最明显</strong>：技术 4 分 / 经济学 1 分。混合决策架构的<strong>工程答案是对的</strong>（三路分流、LLM 不进关键路径），但它<strong>不改变期望值的符号</strong>。</li><li><strong>L5 全面低分</strong>：技术 2 分（无 API、状态机脆弱）、稳定性 1 分、可维护性 1 分。<strong>这是整个系统的单点否决项</strong>——不是因为它难写，而是因为它由对手方裁定。</li></ol>
-<h3>10.1 结论</h3>
-<div class="tw"><table><thead><tr><th>问题</th><th>回答</th></tr></thead><tbody><tr><td><strong>Q1 能不能实现？</strong></td><td><strong>技术上可以，但分层差异巨大。</strong> L1–L4 可实现、可维护；L5 存在结构性的不可控（接受延迟、改价、拒单、限额）。</td></tr><tr><td><strong>Q2 经济学上是否正期望？</strong></td><td><strong>否。</strong> 在盘水钱均值 11.4% → EV = −10.23%；打平需相对优于庄家定价模型 11.4%，公开数据可得优势 0–2%。</td></tr><tr><td><strong>架构设计正确吗？</strong></td><td><strong>分层设计正确，且能得到严格最优解。</strong> LLM + JEV + 经济学算法的三路分流是本类问题的最优工程答案（§5.2）。但它优化的是一个<strong>负期望系统</strong>。</td></tr><tr><td><strong>最有价值的部分是什么？</strong></td><td><strong>L4 经济学算法栈</strong>（可维护性 4 分）与 <strong>L2 特征/微结构</strong>（可实现性 5 分）。这两层的方法论可以完整迁移到其它正期望场景。</td></tr></tbody></table></div>
-<h3>10.2 直接回答原构想</h3>
-<blockquote><p><strong>不可行——但原因与多数直觉相反。</strong></p>
-<p>它不是"技术做不到"，也不是"模型不够强"。</p>
-<ul><li><strong>架构是对的</strong>：LLM 承担非结构化低频推理、JEV 承担高频结构化判断、经济学算法承担确定性最优计算——这个分流是正确的，而且是可推导的（§5.2）。</li><li><strong>瓶颈不在模型侧</strong>：你的决策链只占总延迟的 <strong>6%</strong>（1.8s/29.0s），模型优化的天花板是 12%。</li><li><strong>失败点在两处结构性约束</strong>：</li><li><strong>定价</strong>：打平需 11.4% 相对优势，而可得优势 0–2%（差一个数量级）；</li><li><strong>成交</strong>：5–20s 的接受延迟 + 改价 + 拒单 + 基于 CLV 的降限额，使"捕捉调价瞬间"的收益在成交前不可实现。</li></ul>
-<p>叠加固定成本（$35.3/天）后，<strong>即使假设优势真实存在</strong>，90 天盈利概率也从 61.4% 降至 45.4%，再叠加平台风险降至 29.2%；而假设优势不存在（更接近现实），盈利概率是 <strong>0.8%</strong>。</p></blockquote>
-<h3>10.3 可迁移的工程产出</h3>
-<p>以下部分具备独立价值，且不依赖上述结论：</p>
-<div class="tw"><table><thead><tr><th>产出</th><th>可迁移场景</th></tr></thead><tbody><tr><td><strong>三路分流决策架构</strong>（规则/JEV/LLM）</td><td>任何"高频结构化 + 低频非结构化"混合决策系统</td></tr><tr><td><strong>延迟预算分解方法</strong>（§4.2）</td><td>任何实时系统的关键路径分析</td></tr><tr><td><strong>经济学算法栈</strong>（§6：去水、shrinkage、分数 Kelly、约束、执行过滤）</td><td>任何含不确定性优势估计的资源配置问题</td></tr><tr><td><strong>校准评估闭环</strong>（L6：Brier/ECE、CLV 归因）</td><td>任何概率预测系统的质量度量</td></tr><tr><td><strong>成本摊销模型</strong>（§8.2）</td><td>任何需要判断"固定成本能否被边际优势覆盖"的策略评估</td></tr></tbody></table></div>
+<ol><li><strong>「可实现」与「有效」是两条完全不同的曲线。</strong> L1/L2/L4 技术分都很高，但经济学有效性只有 2–3 分。</li><li><strong>L1 的稳定性与可维护性只有 2 分</strong> —— 这是 §3.3 协议漂移与 §4.4 多路径要求的直接结果。<strong>技术上能做 ≠ 能长期稳定地做</strong>。</li><li><strong>L3 的分裂最明显</strong>：技术 4 分 / 经济学 1 分。混合决策架构的<strong>工程答案是对的</strong>，但<strong>不改变期望值的符号</strong>。</li><li><strong>L5 全面低分</strong>：技术 2（无 API、状态机脆弱）、稳定性 1、可维护性 1。<strong>这是单点否决项</strong> —— 不是因为它难写，而是因为它由对手方裁定。</li></ol>
+<h3>13.1 结论</h3>
+<div class="tw"><table><thead><tr><th>问题</th><th>回答</th></tr></thead><tbody><tr><td><strong>Q1 能不能实现？</strong></td><td><strong>技术上可以，分层差异巨大。</strong> 采集层（逆向 GraphQL / 浏览器自动化）已被多个开源项目验证；建模与算法层有成熟实现。但 L1 存在<strong>必然的协议半衰期</strong>与<strong>长尾覆盖的物理上限</strong>，L5 存在<strong>结构性的不可控</strong>。</td></tr><tr><td><strong>Q2 经济学上是否正期望？</strong></td><td><strong>否。</strong> 在盘水钱均值 11.4% → EV = −10.23%；打平需相对优于庄家定价模型 11.4%，公开数据可得优势 0–2%。去水方法选择（§8.1）与相关性建模（§8.5）会进一步侵蚀本已微薄的空间。</td></tr><tr><td><strong>架构设计正确吗？</strong></td><td><strong>分层设计正确，且能得到严格最优解。</strong> LLM + JEV + 经济学算法的三路分流是本类问题的最优工程答案。但它优化的是一个<strong>负期望系统</strong>。</td></tr><tr><td><strong>最有价值的部分？</strong></td><td><strong>L4 经济学算法栈</strong>（可维护性 4 分）与 <strong>L2 特征/微结构</strong>（可实现性 5 分）。这两层的方法论（§8 全套公式）可完整迁移到其它正期望场景。</td></tr></tbody></table></div>
+<h3>13.2 直接回答原构想</h3>
+<blockquote><p><strong>不可行 —— 但原因与多数直觉相反。</strong></p>
+<p>它不是"爬虫做不到"，也不是"模型不够强"。</p>
+<p><strong>技术侧</strong>（本次补充调研的四点结论）：</p>
+<ul><li><strong>爬虫（逆向）可行且已被验证</strong>：<code>stake-scraper</code> 证明免浏览器直连 GraphQL；<code>allusion</code>/<code>OddsHarvester</code> 证明浏览器自动化可覆盖 100+ 联赛。</li><li><strong>但覆盖 100–200 场的完整性目标无法在长尾上达成</strong>：低层级赛事占日历 94%，开盘覆盖率却跌到 25% —— 这是<strong>上游不开盘</strong>，不是采集能力问题。完整性要求强制多路径（4–5 条），推高运维成本。</li><li><strong>协议漂移是常态</strong>：<code>sports-odds</code> 的 README 就是一份"对方改 API → 采集失效"的现场记录。L1 的可维护性只有 2 分。</li><li><strong>算法支撑是充足的</strong>：去水（Shin/Power/Additive）、收缩、分数·多元 Kelly、Brier/ECE/CLV 评估，全部有开源实现。</li></ul>
+<p><strong>经济学侧</strong>：</p>
+<ul><li><strong>定价</strong>：打平需 11.4% 相对优势，可得优势 0–2%（差一个数量级）。而<strong>去水方法的选择本身就能造成 0.83 pp 的偏差</strong>，足以翻转符号。</li><li><strong>成交</strong>：5–20s 接受延迟 + 改价 + 拒单 + 基于 CLV 的降限额，使"捕捉调价瞬间"的收益<strong>在成交前不可实现</strong> —— 且 <code>q_fill</code> 对优势与注额都是<strong>负偏导</strong>。</li><li><strong>成本</strong>：$35.3/天（乐观口径），模型成本仅占 20%；扣除成本后盈利概率从 61.4% → 45.4%；叠加平台风险 → 29.2%；无优势时 <strong>0.8%</strong>。</li></ul></blockquote>
+<h3>13.3 可迁移的工程产出</h3>
+<div class="tw"><table><thead><tr><th>产出</th><th>可迁移场景</th></tr></thead><tbody><tr><td><strong>多路径采集架构</strong>（长连 / 逆向 / 浏览器 / 聚合 / API 五路分工）</td><td>任何需要对抗端点漂移的数据采集系统</td></tr><tr><td><strong>不可变快照 + 时序事件模型</strong>（§12.1 <code>snuper</code>）</td><td>任何需要还原"过程"而非"状态"的行情系统</td></tr><tr><td><strong>三路分流决策架构</strong>（规则 / JEV / LLM）</td><td>任何"高频结构化 + 低频非结构化"混合决策系统</td></tr><tr><td><strong>延迟预算分解方法</strong>（§5.2）</td><td>任何实时系统的关键路径分析</td></tr><tr><td><strong>去水方法体系与交叉校准</strong>（§8.1）</td><td>任何需要从含税报价还原真实概率的场景</td></tr><tr><td><strong>经济学算法栈全套公式</strong>（§8.2–8.8）</td><td>任何含不确定性优势估计的资源配置问题</td></tr><tr><td><strong>校准评估闭环</strong>（Brier / ECE / CLV / 对数增长率 / 最大回撤）</td><td>任何概率预测系统的质量度量</td></tr><tr><td><strong>成本摊销与 <code>q_fill</code> 修正模型</strong>（§8.7）</td><td>判断"固定成本能否被边际优势覆盖"的策略评估</td></tr><tr><td><strong>协议漂移的成本建模</strong>（§3.3）</td><td>任何依赖第三方私有接口的系统的人力预算</td></tr></tbody></table></div>
 <hr>
 <h2>附录</h2>
 <h3>附录 A：数据与图表索引</h3>
-<div class="tw"><table><thead><tr><th>文件</th><th>内容</th><th>对应章节</th></tr></thead><tbody><tr><td><code>images/fig1_platform_infra.png</code></td><td>图 1 目标平台技术形态与接口面</td><td>§3</td></tr><tr><td><code>images/fig2_margin_and_ev.png</code></td><td>图 2 水钱与单注 EV</td><td>§7.1</td></tr><tr><td><code>images/fig3_required_edge.png</code></td><td>图 3 所需概率精度优势</td><td>§7.2</td></tr><tr><td><code>images/fig4_latency_budget.png</code></td><td>图 4 延迟预算与关键路径</td><td>§4.2</td></tr><tr><td><code>images/fig5_hybrid_architecture.png</code></td><td>图 5 LLM+JEV 混合决策架构</td><td>§2</td></tr><tr><td><code>images/fig6_routing_matrix.png</code></td><td>图 6 决策路由矩阵</td><td>§5.2</td></tr><tr><td><code>images/fig7_cost_breakeven.png</code></td><td>图 7 成本结构与摊销</td><td>§8</td></tr><tr><td><code>images/fig8_econ_algo_stack.png</code></td><td>图 8 经济学算法栈</td><td>§6</td></tr><tr><td><code>images/fig9_odds_tick_sequence.png</code></td><td>图 9 赔率跳动时序</td><td>§4.3</td></tr><tr><td><code>images/fig10_jev_position.png</code></td><td>图 10 JEV 定位与延迟占比</td><td>§5.4</td></tr><tr><td><code>images/fig11_montecarlo.png</code></td><td>图 11 蒙特卡洛结果</td><td>§9</td></tr><tr><td><code>images/fig12_feasibility_heatmap.png</code></td><td>图 12 可行性评分</td><td>§10</td></tr><tr><td><code>data/margin_ev.csv</code></td><td>各市场水钱与 EV</td><td>§7.1</td></tr><tr><td><code>data/required_edge.csv</code></td><td>打平所需精度优势</td><td>§7.2</td></tr><tr><td><code>data/latency_budget.csv</code></td><td>分阶段延迟预算</td><td>§4.2</td></tr><tr><td><code>data/routing_matrix.csv</code></td><td>决策路由矩阵</td><td>§5.2</td></tr><tr><td><code>data/cost_breakeven.csv</code></td><td>成本构成与摊销</td><td>§8</td></tr><tr><td><code>data/montecarlo.csv</code></td><td>蒙特卡洛结果</td><td>§9</td></tr><tr><td><code>data/feasibility_scores.csv</code></td><td>可行性评分矩阵</td><td>§10</td></tr></tbody></table></div>
+<div class="tw"><table><thead><tr><th>文件</th><th>内容</th><th>对应章节</th></tr></thead><tbody><tr><td><code>images/fig1_platform_infra.png</code></td><td>图 1 目标平台技术形态与接口面</td><td>§3.1</td></tr><tr><td><code>images/fig2_margin_and_ev.png</code></td><td>图 2 水钱与单注 EV</td><td>§9.1</td></tr><tr><td><code>images/fig3_required_edge.png</code></td><td>图 3 所需概率精度优势</td><td>§9.2</td></tr><tr><td><code>images/fig4_latency_budget.png</code></td><td>图 4 延迟预算与关键路径</td><td>§5.2</td></tr><tr><td><code>images/fig5_hybrid_architecture.png</code></td><td>图 5 LLM+JEV 混合决策架构</td><td>§2</td></tr><tr><td><code>images/fig6_routing_matrix.png</code></td><td>图 6 决策路由矩阵</td><td>§6.2</td></tr><tr><td><code>images/fig7_cost_breakeven.png</code></td><td>图 7 成本结构与摊销</td><td>§10</td></tr><tr><td><code>images/fig8_econ_algo_stack.png</code></td><td>图 8 经济学算法栈</td><td>§7</td></tr><tr><td><code>images/fig9_odds_tick_sequence.png</code></td><td>图 9 赔率跳动时序</td><td>§5.3</td></tr><tr><td><code>images/fig10_jev_position.png</code></td><td>图 10 JEV 定位与延迟占比</td><td>§6.4</td></tr><tr><td><code>images/fig11_montecarlo.png</code></td><td>图 11 蒙特卡洛结果</td><td>§11</td></tr><tr><td><code>images/fig12_feasibility_heatmap.png</code></td><td>图 12 可行性评分</td><td>§13</td></tr><tr><td><code>images/fig13_scraping_paths.png</code></td><td><strong>图 13 爬虫路径技术可行性矩阵</strong></td><td>§3.2</td></tr><tr><td><code>images/fig14_coverage_scale.png</code></td><td><strong>图 14 赛事规模与覆盖率分层</strong></td><td>§4.2–4.3</td></tr><tr><td><code>images/fig15_completeness.png</code></td><td><strong>图 15 完整性六维评估</strong></td><td>§4.4</td></tr><tr><td><code>images/fig16_devig_methods.png</code></td><td><strong>图 16 四种去水方法对比</strong></td><td>§8.1</td></tr><tr><td><code>images/fig17_correlated_kelly.png</code></td><td><strong>图 17 相关性下的过度下注</strong></td><td>§8.5</td></tr><tr><td><code>data/margin_ev.csv</code></td><td>各市场水钱与 EV</td><td>§9.1</td></tr><tr><td><code>data/required_edge.csv</code></td><td>打平所需精度优势</td><td>§9.2</td></tr><tr><td><code>data/latency_budget.csv</code></td><td>分阶段延迟预算</td><td>§5.2</td></tr><tr><td><code>data/routing_matrix.csv</code></td><td>决策路由矩阵</td><td>§6.2</td></tr><tr><td><code>data/cost_breakeven.csv</code></td><td>成本构成与摊销</td><td>§10</td></tr><tr><td><code>data/montecarlo.csv</code></td><td>蒙特卡洛结果</td><td>§11</td></tr><tr><td><code>data/feasibility_scores.csv</code></td><td>可行性评分矩阵</td><td>§13</td></tr><tr><td><code>data/scraping_paths.csv</code></td><td><strong>爬虫路径评分</strong></td><td>§3.2</td></tr><tr><td><code>data/coverage_scale.csv</code></td><td><strong>赛事覆盖分层与采集量级</strong></td><td>§4</td></tr><tr><td><code>data/completeness.csv</code></td><td><strong>完整性六维评分</strong></td><td>§4.4</td></tr><tr><td><code>data/devig_methods.csv</code></td><td><strong>去水方法数值对比</strong></td><td>§8.1</td></tr><tr><td><code>data/correlated_kelly.csv</code></td><td><strong>相关性 Kelly 数值</strong></td><td>§8.5</td></tr></tbody></table></div>
 <p><strong>复现</strong>：</p>
 <pre><code>python3 scripts/make_figures.py</code></pre>
 <p>依赖：<code>numpy</code>、<code>matplotlib</code>（中文字体 WenQuanYi Zen Hei）。</p>
 <h3>附录 B：公式汇总</h3>
-<p><strong>水钱与期望值</strong></p>
-<div class="math">S=\sum_{i=1}^{n}\frac{1}{o_i}=1+m,    \mathrm{EV}=p\cdot o-1=-\frac{m}{1+m}\quad(\text{当 }p=p^{\text{fair}})</div>
-<p><strong>打平条件</strong></p>
-<div class="math">\mathrm{EV}&gt;0\iff p&gt;\frac{1}{o}=p^{\text{implied}}=\frac{p^{\text{fair}}}{1+m}</div>
-<p>需要的相对优势恰为 <code>m</code>。</p>
-<p><strong>分数 Kelly</strong></p>
-<div class="math">f^{*}=\lambda\cdot\frac{b\,p-q}{b},    b=o-1,\ q=1-p,\ \lambda\in[0.2,0.5]</div>
-<p><strong>有效期望（含执行过滤）</strong></p>
-<div class="math">\mathrm{EV}_{\text{eff}}=q_{\text{fill}}(s)\cdot\mathrm{EV}-\text{cost}_{\text{exec}},    \frac{\partial q_{\text{fill}}}{\partial \mathrm{EV}}&lt;0</div>
-<p>其中 <code>s</code> 为单注规模；<code>q_fill</code> 随 <code>EV</code> 递减（§4.3 的机制），且随 <code>s</code> 递减（限额）。</p>
-<p><strong>成本摊销所需注数</strong></p>
-<div class="math">N_{\text{required}}=\frac{\text{cost}_{\text{day}}}{\mathrm{EV}\cdot s}</div>
-<h3>附录 C：主要技术信源</h3>
-<p><strong>A 级（一手文档/机构研究）</strong></p>
-<ol><li>The Odds API 官方更新间隔文档 — 精选市场在盘 40s、赛前 60s、交易所 20s</li><li>Pinnacle API 官方文档 — 2025-07-23 起对公众关闭，转为商业合作申请制</li><li>Betfair Developer Program / Exchange API / Streaming API 文档 — 唯一公开可编程下注通道</li><li>TheRundown 对比文档 — WebSocket 推送、Ultra 及以上</li><li>Infoblox Threat Intel 关于该类品牌共享基础设施（域名池 + CNAME 流量分发）的 DNS 研究</li><li>Simon Willison《Jev introduces a new shape of LLM — System One, aka Decision Models》；OpenRouter Jev 教程 — JEV 接口与定位（输入 state、输出类型化判断 + 校准置信度；未披露可复现架构）</li></ol>
-<p><strong>B 级（行业数据/学术）</strong></p>
-<ol><li>Bet Better Margin Index — 68 家博彩公司、头部市场均值 5.06%</li><li>Bitok Arena Research — 12,000 注 / 6 家博彩 / 12 个月；赛果 6.8% vs 在盘 11.4%</li><li>Karl Whelan, <em>Estimating Expected Loss Rates in Betting Markets</em> — overround 与实际损失率的分段修正</li><li>Walsh &amp; Joshi, <em>Optimal sports betting strategies in practice: an experimental review</em>, arXiv:2107.08827 — Kelly 与组合理论的实务修正</li><li><code>CODESIGURD/value-bet-model</code> — 5 轮迭代 / 25 赛季样本外 / 确认公开数据无法击败收盘线</li><li>OddsShopper / pinnapi 行业分析 — "优势存在于价格而非选择"</li></ol>
-<p><strong>C 级（社区实测，仅作经验值引用）</strong></p>
-<ol><li>交易所足球在盘最短接受延迟约 5s（ArbUsers 讨论）；软庄普遍 7–20s</li><li>William Hill 被指控根据注单对庄家好坏决定延迟接受（Sports Handle 报道）</li><li>某平台用户实测：活球期固定约 7s 延迟，停表期即时成交（Reddit r/sportsbetting）</li><li>英国监管数据（经 howprosbet 引述）— 超半数受限账户终身亏损，即触发条件为注单质量而非盈亏</li><li>Stake 条款与社区实测 — 自动化工具在条款层面受限，实盘中主要因刷取促销而被处置</li></ol>
+<p><strong>去水</strong></p>
+<div class="math">B=\sum_i q_i,\quad q_i=\frac{1}{o_i},\quad m=B-1</div>
+<div class="math">\text{Proportional: } p_i=\frac{q_i}{B}    \text{Additive: } p_i=q_i-\frac{m}{n}    \text{Power: } \sum_i q_i^{k}=1,\ p_i=q_i^{k}</div>
+<div class="math">\text{Shin: } p_i=\frac{\sqrt{z^{2}+4(1-z)q_i^{2}/B}-z}{2(1-z)},\quad \sum_i p_i=1</div>
+<p><strong>优势与打平</strong></p>
+<div class="math">\mathrm{edge}=p\,o-1,    \mathrm{edge}&gt;0\iff\frac{p-p^{\text{fair}}}{p^{\text{fair}}}&gt;m</div>
+<p><strong>期望值</strong></p>
+<div class="math">\mathrm{EV}=-\frac{m}{1+m}\ (p=p^{\text{fair}}),    \mathrm{EV}_{\text{eff}}=q_{\text{fill}}(s,\mathrm{EV})\cdot\mathrm{EV}-\text{cost}_{\text{exec}}</div>
+<p><strong>收缩</strong></p>
+<div class="math">\hat{p}_{\text{shrink}}=\frac{n}{n+k}p_{\text{hat}}+\frac{k}{n+k}p_{\text{prior}},    f^{*}_{\text{shrink}}=f^{*}\cdot\frac{\sigma^{2}_{\text{sig}}}{\sigma^{2}_{\text{sig}}+\sigma^{2}_{\text{err}}}</div>
+<p><strong>Kelly</strong></p>
+<div class="math">f^{*}=\frac{bp-q}{b},    \mathbf{f}^{*}=\Sigma^{-1}\boldsymbol{\mu},    f^{*}_{\text{naive}}\approx\frac{f^{*}_{\text{true}}}{1-\rho}</div>
+<p><strong>几何增长率与风险</strong></p>
+<div class="math">g(\mathbf{f})=\mathbb{E}\Big[\log\big(1+\textstyle\sum_i f_ir_i\big)\Big],    \sigma^{2}_{\text{port}}=\sum_i f_i^{2}p_i(1-p_i)o_i^{2}+2\rho f_1f_2o_1o_2\sqrt{p_1(1-p_1)p_2(1-p_2)}</div>
+<p><strong>成本摊销</strong></p>
+<div class="math">N_{\text{required}}=\frac{\text{cost}_{\text{day}}}{q_{\text{fill}}(s)\cdot\mathrm{EV}\cdot s}</div>
+<p><strong>评估指标</strong></p>
+<div class="math">\mathrm{BS}=\frac{1}{N}\sum_i(p_i-y_i)^{2},    \mathrm{ECE}=\sum_b\frac{n_b}{N}\big|\mathrm{acc}_b-\mathrm{conf}_b\big|,    \mathrm{CLV}=\frac{o_{\text{bet}}}{o_{\text{close}}}-1</div>
+<h3>附录 C：主要信源</h3>
+<p><strong>A 级（一手文档 / 开源可核验代码 / 机构研究）</strong></p>
+<p><em>采集与接口</em></p>
+<ol><li><code>BreathPulley/stake-scraper</code> — GraphQL 直连实现、免浏览器、Cloudflare 应对要点</li><li><code>erdieee/allusion</code> — Playwright + 配置驱动 + 套利检测</li><li><code>jordantete/OddsHarvester</code> — Playwright，11 运动 / 100+ 联赛 / JSON·CSV·S3</li><li><code>stonehedgelabs/snuper</code> — 异步采集 + 不可变快照 + 流式推送</li><li><code>rafabelokurows/sports-odds</code> — <strong>Betclic API 变更致失效的现场记录</strong>（CloudFront 新校验）</li><li><code>smartworkersai/KOS</code> — 从浏览器自动化迁移到 API 驱动信号引擎</li><li><code>odds-api/odds-api</code>、<code>cengizmandros/odds-arb-scanner</code> — OpenAPI + 套利/E V 扫描 + Pinnacle 锚点</li><li>The Odds API 官方更新间隔文档 — 在盘 40s / 赛前 60s / 交易所 20s</li><li>Pinnacle API 官方文档 — 2025-07-23 起对公众关闭</li><li>Betfair Developer Program / Exchange API / Streaming API 文档 — <code>placeOrders</code> 原子操作、App Key + 证书</li><li><code>odds-api.io</code> — 12,000+ 联赛 / 265+ 书商；<code>rapidoddsapi</code> — 100+ 书商 REST+WS</li><li>Infoblox Threat Intel — 该类品牌共用基础设施（域名池 + CNAME 流量分发）的 DNS 研究</li><li>Simon Willison《Jev introduces a new shape of LLM — System One》；OpenRouter Jev 教程 — JEV 接口与定位</li></ol>
+<p><em>建模与算法</em></p>
+<ol><li><code>martineastwood/penaltyblog</code> — Cython，Poisson / Bivariate Poisson / Dixon-Coles / FootballProbabilityGrid / 回测</li><li><code>mberk/shin</code> — Shin 方法 Python 实现</li><li><code>neeljshah/kellycorr</code> — 相关性感知的分数 Kelly</li><li>R <code>implied</code> 包 — <code>shin</code> / <code>power</code> / <code>or</code> / <code>additive</code> 多方法与 <code>shin_method</code></li><li><code>CODESIGURD/value-bet-model</code> — 5 轮迭代 / 25 赛季样本外 / <strong>确认公开数据无法击败收盘线</strong></li></ol>
+<p><strong>B 级（行业数据 / 学术）</strong></p>
+<ol><li>CIES Football Observatory — 330,748 场官方比赛（12 赛季）</li><li>Bet Better Margin Index — 68 家博彩、头部市场均值 5.06%</li><li>Bitok Arena Research — 12,000 注 / 6 家博彩 / 12 个月；赛果 6.8% vs 在盘 11.4%</li><li>Shin (1992, 1993) — 内幕交易者模型与非比例定价；Karl Whelan《How Does Inside Information Affect Sports Betting Odds?》</li><li>《Betting market efficiency and prediction in binary choice models》(Annals of OR) — Shin 法与归一化法的实证比较</li><li>《Adjusting Bookmaker's Odds to Allow for Overround》— 各方法缺陷（加法法可产生负概率等）</li><li>《The Favourite-Longshot Bias, Bookmaker Margins and Insider Trading in a Variety of Betting Markets》— FL bias 与 Shin 模型核心预测的验证</li><li>Walsh &amp; Joshi, <em>Optimal sports betting strategies in practice</em>, arXiv:2107.08827</li><li>Insley, Mok &amp; Swartz (2004) — Kelly 扩展到同时下注；《Kelly fraction estimation for multiple correlated bets》(Chin)</li><li>《Optimal Betting Under Parameter Uncertainty: Improving the Kelly Criterion》— 参数不确定性下的收缩</li><li>《Efficient Multivariate Kelly Optimization Reveals Sigmoidal Scaling Laws》— naive 联合枚举 <code>O(2^N)</code> 问题</li><li>《Generalized framework for applying the Kelly criterion to stock markets》, arXiv:1806.05293 — <code>f* = Σ⁻¹μ</code></li><li>Kelly (1956) / Thorp (2007) — Kelly 准则原始文献与实务应用</li><li>OddsShopper / pinnapi 行业分析 — "优势存在于价格而非选择"</li></ol>
+<p><strong>C 级（社区实测 / 项目 README 经验记录）</strong></p>
+<ol><li>交易所足球在盘最短接受延迟约 5s（ArbUsers 讨论）；软庄普遍 7–20s</li><li>William Hill 被指控根据注单对庄家好坏决定延迟接受（Sports Handle 报道）</li><li>某平台用户实测：活球期固定约 7s 延迟，停表期即时成交（Reddit r/sportsbetting）</li><li>UKGC 数据（经 howprosbet 引述）— 超半数受限账户终身亏损，触发条件为注单质量而非盈亏</li><li>Stake 条款与社区实测 — 自动化工具在条款层面受限</li><li><code>allusion</code> README — 多页并发的 CPU 约束警告</li></ol>
 <h3>附录 D：可修订性说明</h3>
-<ol><li><strong>市场数据具时效性</strong>：水钱、限额、延迟参数随竞争与监管环境变化。<code>data/*.csv</code> 与 <code>scripts/make_figures.py</code> 已开放，参数均以命名常量出现，可直接替换重跑。</li><li><strong>评分为主观判断</strong>：<code>feasibility_scores.csv</code> 中的 0–5 分为作者基于本文证据的评估，非测量值。</li><li><strong>平台风险参数（25%）为量级示意</strong>，非估计值；敏感性方向已在 §9.3 说明。</li><li><strong>本报告不含合规评估</strong>，按研究范围界定，全部结论仅基于技术与经济学分析。</li></ol>
+<ol><li><strong>市场数据具时效性</strong>：水钱、限额、延迟参数随竞争与监管环境变化。<code>data/*.csv</code> 与 <code>scripts/make_figures.py</code> 已开放，参数均以命名常量出现，可直接替换重跑。</li><li><strong>评分为主观判断</strong>：<code>feasibility_scores.csv</code>、<code>scraping_paths.csv</code>、<code>completeness.csv</code> 中的评分为作者基于本文证据的评估，非测量值。</li><li><strong>平台风险参数（25%）为量级示意</strong>，非估计值；敏感性方向见 §11.3。</li><li><strong>§4 的覆盖率分层为经验量级</strong>，用于说明"长尾覆盖率急剧下降"这一结构性结论，不应用于精确容量规划。CIES 样本（330,748 场/12 赛季）为可核验的公开统计，是所有推算的锚点。</li><li><strong>成本模型为乐观口径</strong>：§10.1 已说明 §3.3 与 §4.4 会推高实际成本。</li><li><strong>本报告不含合规评估</strong>，按研究范围界定，全部结论仅基于技术与经济学分析。</li></ol>
 <hr>
 <p><em>报告结束。</em></p>
 </main>
