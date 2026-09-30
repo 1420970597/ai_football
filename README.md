@@ -535,20 +535,47 @@ ai_football/
 > ⚠️ **宿主机无 pip，且缺少 `selenium`/`flask`/`redis`/`pytest`**（AGENTS.md §0）。
 > 业务代码一律在容器内运行，**不要在宿主机 `pip install`**。
 
-### 9.2 启动全栈
+### 9.2 启动全栈（推荐：一键脚本）
 
 ```bash
-# 1) 端口冲突时用环境变量覆盖（默认 6379 / 8080 / 8000）
-export REDIS_PORT=16379
+./scripts/up.sh            # 自动避让被占用端口并启动
+./scripts/up.sh --dry-run  # 只看将使用哪些端口，不启动
+./scripts/up.sh --down     # 仅停止本项目
+```
+
+**脚本的核心保证：绝不触碰宿主机上其他项目的服务。**
+
+| 场景 | 行为 |
+| --- | --- |
+| 端口被**其他项目**占用 | 只为本项目挑选空闲端口（如 6379→6380、8080→8081） |
+| 端口已被**本项目**容器占用 | **复用**（保证脚本幂等，重复运行端口不漂移） |
+| 其他项目的容器 | **不停止、不修改、不重启** |
+
+> 这是硬性约束：很多开发机同时跑着多个 compose 项目，
+> 端口冲突时停掉别人的服务是不可接受的。
+
+### 9.3 启动全栈（手工方式）
+
+```bash
+# 端口冲突时用环境变量覆盖（默认 6379 / 8080 / 8000 / 3000）
+export REDIS_PORT=16380
 export SCRAPER_PORT=18080
+export ANALYTICS_PORT=18000
+export CONSOLE_PORT=13000
 
-# 2) 构建并启动基础栈（redis + browser-scraper）
 docker compose -f docker/docker-compose.yml up -d --build
-
-# 3) 确认健康
 docker compose -f docker/docker-compose.yml ps
-curl -s http://localhost:18080/health
-# → {"status":"healthy","timestamp":"..."}
+curl -s http://localhost:18000/health
+```
+
+**已验证输出**（4 容器全 healthy）：
+
+```text
+NAME                        STATUS                   PORTS
+ai_football_analytics_api   Up (healthy)             0.0.0.0:18000->8000/tcp
+ai_football_browser_scraper Up (healthy)             0.0.0.0:18080->8080/tcp
+ai_football_redis           Up                       127.0.0.1:16380->6379/tcp
+ai_football_web_console     Up                       0.0.0.0:13000->80/tcp
 ```
 
 **已验证输出**：
@@ -559,7 +586,7 @@ ai_football_browser_scraper   Up (healthy)              0.0.0.0:18080->8080/tcp
 ai_football_redis             Up                        127.0.0.1:16379->6379/tcp
 ```
 
-### 9.3 抓取接口
+### 9.4 抓取接口
 
 ```bash
 curl -s -X POST http://localhost:18080/scrape \
@@ -570,7 +597,7 @@ curl -s -X POST http://localhost:18080/scrape \
 
 **已验证响应字段**：`success` `url` `title` `content` `meta` `links` `images` `execution_time` `timestamp`
 
-### 9.4 运行分析器（一次性任务）
+### 9.5 运行分析器（一次性任务）
 
 `ai-analyzer` 使用 `profiles` 隔离，不随 `up` 启动（分析器是一次性任务而非长驻服务）：
 
@@ -583,7 +610,7 @@ docker compose -f docker/docker-compose.yml run --rm ai-analyzer \
   python3 enhanced_analyzer.py --resume --workers 20 -v
 ```
 
-### 9.5 复现研究报告
+### 9.6 复现研究报告
 
 ```bash
 python3 reports/leyu-kaiyun-odds-bot-feasibility/scripts/make_figures.py
@@ -594,7 +621,7 @@ python3 reports/leyu-kaiyun-odds-bot-feasibility/scripts/md_to_html.py \
   reports/leyu-kaiyun-odds-bot-feasibility/REPORT.html
 ```
 
-### 9.6 验收自检（AGENTS.md §6 DoD）
+### 9.7 验收自检（AGENTS.md §6 DoD）
 
 ```bash
 # 语法检查

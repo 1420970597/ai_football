@@ -203,3 +203,68 @@ class TestSnapshotStore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestCachePreference(unittest.TestCase):
+    """缓存后端偏好的自动判定（修复「容器内永远用不到 Redis」的缺陷）。"""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="cachepref_")
+        self._env = {k: os.environ.get(k) for k in ("REDIS_URL", "CACHE_BACKEND")}
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_no_redis_url_falls_back_to_memory(self):
+        from service.valuation import ValuationService
+        os.environ.pop("REDIS_URL", None)
+        os.environ.pop("CACHE_BACKEND", None)
+        svc = ValuationService(snapshot_root=self._tmp)
+        self.assertEqual(svc.store.cache.name, "memory")
+
+    def test_explicit_memory_backend_wins(self):
+        from service.valuation import ValuationService
+        os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
+        os.environ["CACHE_BACKEND"] = "memory"
+        svc = ValuationService(snapshot_root=self._tmp)
+        self.assertEqual(svc.store.cache.name, "memory")
+
+    def test_redis_url_enables_redis_preference(self):
+        """设了 REDIS_URL 时，服务必须以 prefer_redis=True 调用 make_cache。
+
+        这是缺陷回归测试：此前 service 硬编码 prefer_redis=False，
+        导致容器内即使装了 redis 库、Redis 可达，也永远用内存缓存
+        （缓存不跨进程）。这里用 mock 断言**传参**，
+        从而不依赖真实 Redis 是否可达。
+        """
+        from unittest import mock
+
+        import service.valuation as sv
+
+        os.environ["REDIS_URL"] = "redis://example:6379/0"
+        os.environ.pop("CACHE_BACKEND", None)
+        with mock.patch.object(sv, "make_cache",
+                               return_value=MemoryCache()) as m:
+            sv.ValuationService(snapshot_root=self._tmp)
+        self.assertTrue(m.called)
+        self.assertIs(m.call_args.kwargs.get("prefer_redis"), True)
+
+    def test_unreachable_redis_degrades_gracefully(self):
+        """Redis 不可达时必须优雅降级到内存，而非启动失败。"""
+        from service.valuation import ValuationService
+        os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
+        os.environ.pop("CACHE_BACKEND", None)
+        svc = ValuationService(snapshot_root=self._tmp)
+        self.assertIn(svc.store.cache.name, ("memory", "redis"))
+        svc.store.cache.set("k", "v")   # 任何后端都应可用
+
+    def test_explicit_prefer_redis_flag(self):
+        from service.valuation import ValuationService
+        svc = ValuationService(snapshot_root=self._tmp, prefer_redis=False)
+        self.assertEqual(svc.store.cache.name, "memory")

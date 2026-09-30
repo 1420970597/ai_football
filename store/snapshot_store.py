@@ -168,34 +168,59 @@ class MemoryCache(CacheBackend):
 
 
 class RedisCache(CacheBackend):
-    """Redis 缓存后端。redis 库缺失或连接失败时 available() 返回 False。"""
+    """Redis 缓存后端。redis 库缺失或连接失败时 available() 返回 False。
+
+    支持**连接重试**：容器编排下 analytics-api 常先于 redis 就绪启动，
+    若首次连接失败就永久回退内存，会导致缓存不跨进程。
+    因此这里在构造时做有限次重试（指数退避），
+    并在运行期首次成功操作时**惰性重连**。
+    """
 
     name = "redis"
 
-    def __init__(self, url: str, timeout: float = 2.0) -> None:
+    def __init__(self, url: str, timeout: float = 2.0,
+                 connect_retries: int = 5,
+                 retry_backoff: float = 0.5) -> None:
         self.url = url
-        # 用 Any 标注：redis 为可选依赖，无法在类型层面引用其类型；
-        # 连接失败时保持 None，由 available() 暴露状态。
+        self.timeout = timeout
+        self.connect_retries = max(1, int(connect_retries))
+        self.retry_backoff = max(0.0, float(retry_backoff))
+        # 用 Any 标注：redis 为可选依赖，无法在类型层面引用其类型。
         self._client: Any = None
         self._ok = False
-        try:
-            # redis 是**可选依赖**（仅生产容器安装）。
-            # 用 importlib 动态导入而非 `import redis`：
-            #   1) 类型检查器不会因未安装该包而报 missing-import；
-            #   2) 也无需 type: ignore（本项目开启了 warn_unused_ignores，
-            #      写 ignore 反而会被判为多余）；
-            #   3) 缺失时统一走 except 回退到内存缓存，语义清晰。
-            redis = importlib.import_module("redis")
+        self._module: Any = None
 
-            client = redis.Redis.from_url(
-                url, socket_connect_timeout=timeout, socket_timeout=timeout
-            )
-            client.ping()
-            self._client = client
-            self._ok = True
-        except Exception:
-            self._client = None
-            self._ok = False
+        # redis 是**可选依赖**（仅生产容器安装）。
+        # 用 importlib 动态导入：类型检查器不会因未安装而报 missing-import，
+        # 也无需 type: ignore（本项目开启了 warn_unused_ignores）。
+        try:
+            self._module = importlib.import_module("redis")
+        except ImportError:
+            self._module = None
+            return
+
+        self._connect()
+
+    def _connect(self) -> None:
+        """尝试建立连接，失败则按退避重试。"""
+        if self._module is None:
+            return
+        for attempt in range(self.connect_retries):
+            try:
+                client = self._module.Redis.from_url(
+                    self.url,
+                    socket_connect_timeout=self.timeout,
+                    socket_timeout=self.timeout,
+                )
+                client.ping()
+                self._client = client
+                self._ok = True
+                return
+            except Exception:
+                self._client = None
+                self._ok = False
+                if attempt < self.connect_retries - 1 and self.retry_backoff > 0:
+                    time.sleep(self.retry_backoff * (2 ** attempt))
 
     def available(self) -> bool:
         return self._ok

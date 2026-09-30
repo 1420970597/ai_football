@@ -110,10 +110,23 @@ class ValuationService:
         snapshot_root: str | Path,
         corpus_root: Optional[str | Path] = None,
         cache: Optional[Any] = None,
+        prefer_redis: Optional[bool] = None,
     ) -> None:
+        """构造估值服务。
+
+        prefer_redis：缓存后端偏好。
+          - None（默认）：根据环境变量自动判定 —— 设了 REDIS_URL 就尝试 Redis，
+            否则用内存缓存。**不应硬编码为 False**，否则容器里永远连不上 Redis，
+            缓存不跨进程（这是一个曾经真实存在的缺陷）。
+          - True / False：显式指定（供测试使用）。
+        """
+        if prefer_redis is None:
+            prefer_redis = bool(os.environ.get("REDIS_URL", "").strip()) \
+                and os.environ.get("CACHE_BACKEND", "").strip().lower() != "memory"
         self.store = SnapshotStore(
             snapshot_root,
-            cache=cache if cache is not None else make_cache(prefer_redis=False),
+            cache=cache if cache is not None else make_cache(
+                prefer_redis=prefer_redis),
         )
         self.corpus_root = Path(corpus_root) if corpus_root else None
         self._ingested = False
