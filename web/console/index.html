@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ai_football · 赛事数据与量化研究控制台</title>
+<style>
+:root{
+  --fg:#1c2733;--mut:#5d6b7a;--line:#d9e0e7;--bg:#f5f7f9;--card:#fff;
+  --acc:#2c6fa8;--red:#b3271e;--redbg:#fdf0ee;--amb:#8a5a00;--ambbg:#fdf6e6;
+  --grn:#1e7b46;--grnbg:#eef9f2;--pur:#7d5ba6;--teal:#16847c;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif}
+header{background:#fff;border-bottom:1px solid var(--line);padding:12px 22px;
+  display:flex;align-items:center;gap:18px;position:sticky;top:0;z-index:10;
+  box-shadow:0 1px 4px rgba(0,0,0,.05)}
+.logo{font-weight:700;font-size:16px;color:#12212e;white-space:nowrap}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{background:none;border:0;padding:7px 13px;border-radius:6px;cursor:pointer;
+  font-size:13.5px;color:var(--mut);font-family:inherit}
+nav button:hover{background:#eef2f6;color:var(--fg)}
+nav button.on{background:var(--acc);color:#fff;font-weight:600}
+.spacer{flex:1}
+.banner{background:var(--ambbg);border:1px solid #e8d9a8;color:var(--amb);
+  padding:8px 14px;border-radius:6px;font-size:12.5px;white-space:nowrap}
+.wrap{max-width:1420px;margin:0 auto;padding:18px 22px 60px}
+.filters{background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:12px 14px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px}
+.f{display:flex;flex-direction:column;gap:4px}
+.f label{font-size:11.5px;color:var(--mut);font-weight:600}
+.f input,.f select{padding:6px 9px;border:1px solid var(--line);border-radius:5px;
+  font-size:13px;font-family:inherit;background:#fff;min-width:120px}
+.btn{background:var(--acc);color:#fff;border:0;padding:7px 15px;border-radius:5px;
+  cursor:pointer;font-size:13px;font-family:inherit;font-weight:600}
+.btn:hover{background:#235a8a}
+.btn.ghost{background:#fff;color:var(--acc);border:1px solid var(--acc)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+  gap:12px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:13px 16px}
+.card .k{font-size:11.5px;color:var(--mut);font-weight:600;letter-spacing:.02em}
+.card .v{font-size:23px;font-weight:700;margin-top:3px;color:#12212e;
+  font-variant-numeric:tabular-nums}
+.card .s{font-size:11px;color:var(--mut);margin-top:2px}
+.card.neg .v{color:var(--red)}
+.card.warn{border-color:#e8d9a8;background:var(--ambbg)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:8px;
+  margin-bottom:16px;overflow:hidden}
+.panel>h2{margin:0;padding:11px 15px;font-size:13.5px;border-bottom:1px solid var(--line);
+  background:#fafcfd;color:#1d3a52;display:flex;justify-content:space-between;
+  align-items:center;font-weight:600}
+.panel>h2 .tag{font-size:11px;color:var(--mut);font-weight:400}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:8px 12px;border-bottom:1px solid var(--line);text-align:left;
+  white-space:nowrap}
+th{background:#f1f5f9;font-weight:600;color:#1d3a52;font-size:12px;position:sticky;top:0}
+tbody tr:hover{background:#f7fafc}
+tbody tr.sel{background:#eaf3fb}
+tbody tr.risky{background:var(--ambbg)}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;
+  font-weight:600;line-height:1.7}
+.pill.ok{background:var(--grnbg);color:var(--grn)}
+.pill.warn{background:var(--ambbg);color:var(--amb)}
+.pill.bad{background:var(--redbg);color:var(--red)}
+.pill.mut{background:#eef2f6;color:var(--mut)}
+.state{display:none;padding:34px 20px;text-align:center;color:var(--mut)}
+.state.show{display:block}
+.state .big{font-size:32px;margin-bottom:8px}
+.state h3{margin:0 0 6px;color:var(--fg);font-size:15px}
+.state p{margin:0 0 14px;font-size:13px}
+.skel{padding:14px}
+.skel .bar{height:13px;border-radius:4px;margin-bottom:9px;
+  background:linear-gradient(90deg,#eef2f6 25%,#e2e8ee 50%,#eef2f6 75%);
+  background-size:200% 100%;animation:sh 1.3s infinite}
+@keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.msg{padding:11px 15px;border-radius:6px;margin-bottom:14px;font-size:13px;display:none}
+.msg.show{display:block}
+.msg.err{background:var(--redbg);border:1px solid #f0c3bd;color:var(--red)}
+.msg.hint{background:var(--grnbg);border:1px solid #b8e0c8;color:var(--grn)}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;
+  padding:14px 15px}
+.kv div{font-size:12.5px}
+.kv b{color:var(--mut);font-weight:600;display:block;font-size:11.5px}
+.bars{padding:6px 15px 14px}
+.bar-row{display:flex;align-items:center;gap:9px;margin:6px 0;font-size:12.5px}
+.bar-row .nm{width:64px;color:var(--mut);font-weight:600}
+.bar{height:15px;border-radius:3px;background:var(--acc);min-width:2px}
+.bar.pos{background:var(--grn)}.bar.neg{background:var(--red)}
+.note{font-size:12.5px;color:var(--mut);padding:11px 15px;line-height:1.8;
+  border-top:1px solid var(--line);background:#fafcfd}
+.note code{background:#eef2f6;padding:1px 5px;border-radius:3px;font-size:12px}
+footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
+.warnbox{background:var(--redbg);border:1px solid #f0c3bd;color:var(--red);
+  padding:10px 14px;border-radius:6px;font-size:12.5px;margin:0 15px 14px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">⚽ ai_football</div>
+  <nav id="nav"></nav>
+  <div class="spacer"></div>
+  <div class="banner" id="banner">仅研究用途 · 不提供投注执行</div>
+</header>
+
+<div class="wrap">
+  <div class="msg" id="msg"></div>
+
+  <!-- ============ 赛事看板 ============ -->
+  <section id="view-dashboard">
+    <div class="filters">
+      <div class="f"><label>比赛日期</label><input type="date" id="f-date"></div>
+      <div class="f"><label>联赛</label><input type="text" id="f-league" placeholder="如 日职"></div>
+      <div class="f"><label>关键词</label><input type="text" id="f-q" placeholder="队名 / 场次号"></div>
+      <div class="f"><label>去水方法</label>
+        <select id="f-method">
+          <option value="auto">auto（Shin 优先）</option>
+          <option value="shin">shin</option>
+          <option value="proportional">proportional</option>
+          <option value="additive">additive</option>
+          <option value="power">power</option>
+          <option value="odds_ratio">odds_ratio</option>
+        </select>
+      </div>
+      <button class="btn" id="btn-load">查询</button>
+      <button class="btn ghost" id="btn-reset">重置</button>
+    </div>
+
+    <div class="cards" id="cards"></div>
+
+    <div class="panel">
+      <h2>赛事列表 <span class="tag" id="list-tag"></span></h2>
+      <div class="state" id="st-loading">
+        <div class="skel">
+          <div class="bar" style="width:92%"></div><div class="bar" style="width:78%"></div>
+          <div class="bar" style="width:85%"></div><div class="bar" style="width:64%"></div>
+          <div class="bar" style="width:88%"></div><div class="bar" style="width:71%"></div>
+        </div>
+      </div>
+      <div class="state" id="st-empty">
+        <div class="big">📭</div>
+        <h3>该条件下暂无赛事数据</h3>
+        <p>可能是日期无赛事、或尚未导入快照。可先放宽筛选条件再试。</p>
+        <button class="btn" id="btn-empty-reset">换一个日期</button>
+      </div>
+      <div class="state" id="st-error">
+        <div class="big">⚠️</div>
+        <h3 id="st-error-title">请求失败</h3>
+        <p id="st-error-desc">无法连接后端服务。</p>
+        <button class="btn" id="btn-retry">重试</button>
+      </div>
+      <div class="tw" id="tbl-wrap"><table id="tbl">
+        <thead><tr>
+          <th>场次</th><th>联赛</th><th>对阵</th>
+          <th class="num">主</th><th class="num">平</th><th class="num">客</th>
+          <th class="num">水钱</th><th class="num">分歧</th><th>状态</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table></div>
+      <div class="note" id="list-note"></div>
+    </div>
+  </section>
+
+  <!-- ============ 定价对比 ============ -->
+  <section id="view-pricing" style="display:none">
+    <div class="panel">
+      <h2>去水方法对比 <span class="tag" id="pricing-tag">选择上方赛事行的「详情」查看</span></h2>
+      <div class="state show" id="st-pricing-empty">
+        <div class="big">🔬</div>
+        <h3>尚未选择赛事</h3>
+        <p>请回到「赛事看板」，点击任一行末尾的「详情」。</p>
+        <button class="btn" id="btn-goto-dash">前往赛事看板</button>
+      </div>
+      <div id="pricing-body" style="display:none">
+        <div class="kv" id="pricing-kv"></div>
+        <div class="warnbox" id="pricing-warn" style="display:none"></div>
+        <div class="tw"><table>
+          <thead><tr><th>结果</th><th class="num">赔率</th><th class="num">原始隐含</th>
+            <th class="num">比例法</th><th class="num">加法法</th><th class="num">幂法</th>
+            <th class="num">赔率比</th><th class="num">Shin</th><th class="num">edge</th></tr></thead>
+          <tbody id="pricing-tbody"></tbody>
+        </table></div>
+        <div class="note" id="pricing-note"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 校准报告 ============ -->
+  <section id="view-calibration" style="display:none">
+    <div class="panel">
+      <h2>L6 校准报告 <span class="tag">Brier · ECE · CLV · 对数增长率 · 最大回撤</span></h2>
+      <div class="kv" id="cal-kv"></div>
+      <div class="note" id="cal-note"></div>
+    </div>
+    <div class="panel">
+      <h2>系统状态 <span class="tag">快照存储与缓存后端</span></h2>
+      <div class="kv" id="health-kv"></div>
+    </div>
+  </section>
+</div>
+
+<footer>
+  ai_football · 数据来源：中国体育彩票官方 API V2 · 本系统<b>不提供投注执行功能</b><br>
+  结论依据：<code>reports/leyu-kaiyun-odds-bot-feasibility/REPORT.md</code> §5.3 / §9.3 / §13.2
+</footer>
+
+<script>
+
+"use strict";
+/* ============================================================================
+   ai_football 控制台前端
+   安全约束（AGENTS.md §3）：全部 DOM 通过 createElement/textContent 构建，
+   绝不使用 innerHTML —— 从结构上消除 XSS 注入面。
+   ========================================================================== */
+const API = "/api/v1";
+const $ = (id) => document.getElementById(id);
+const S = { matches: [], selected: null, method: "auto", view: "dashboard" };
+
+/* ---------- 安全 DOM 构建器 ---------- */
+function el(tag, props, children) {
+  const n = document.createElement(tag);
+  if (props) {
+    for (const k of Object.keys(props)) {
+      const v = props[k];
+      if (v === null || v === undefined) continue;
+      if (k === "class") n.className = v;
+      else if (k === "text") n.textContent = String(v);   // 唯一文本入口
+      else if (k === "style") n.setAttribute("style", v);
+      else if (k.startsWith("on") && typeof v === "function") {
+        n.addEventListener(k.slice(2).toLowerCase(), v);
+      } else n.setAttribute(k, String(v));
+    }
+  }
+  for (const c of (children || [])) {
+    if (c === null || c === undefined) continue;
+    n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return n;
+}
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+function setText(node, text) { node.textContent = text === null || text === undefined ? "" : String(text); }
+
+/* ---------- 格式化 ---------- */
+const fx = (v, n = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "—" : Number(v).toFixed(n);
+const pct = (v, n = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "—" : (Number(v) * 100).toFixed(n) + "%";
+
+/* ---------- 视图 ---------- */
+const VIEWS = [["dashboard", "赛事看板"], ["pricing", "定价对比"], ["calibration", "校准报告"]];
+function renderNav() {
+  const nav = $("nav");
+  clear(nav);
+  VIEWS.forEach(([k, label]) => {
+    nav.appendChild(el("button", {
+      class: S.view === k ? "on" : "",
+      text: label,
+      "data-v": k,
+      onclick: () => showView(k)
+    }));
+  });
+}
+function showView(v) {
+  S.view = v;
+  VIEWS.forEach(([k]) => { const n = $("view-" + k); if (n) n.style.display = (k === v) ? "" : "none"; });
+  renderNav();
+  if (v === "calibration") loadCalibration();
+}
+
+/* ---------- 消息与状态 ---------- */
+function showMsg(kind, text) {
+  const m = $("msg");
+  m.className = "msg show " + (kind === "err" ? "err" : "hint");
+  setText(m, text);
+  if (kind !== "err") setTimeout(() => { m.className = "msg"; }, 6000);
+}
+function clearMsg() { $("msg").className = "msg"; }
+function setListState(state, extra) {
+  ["st-loading", "st-empty", "st-error"].forEach(id => $(id).classList.remove("show"));
+  $("tbl-wrap").style.display = (state === "table") ? "" : "none";
+  if (state === "loading") $("st-loading").classList.add("show");
+  if (state === "empty") $("st-empty").classList.add("show");
+  if (state === "error") {
+    $("st-error").classList.add("show");
+    if (extra) {
+      setText($("st-error-title"), extra.title || "请求失败");
+      setText($("st-error-desc"), extra.desc || "");
+    }
+  }
+}
+
+/* ---------- 赛事列表 ---------- */
+async function loadMatches() {
+  setListState("loading");
+  clearMsg();
+  const qs = new URLSearchParams();
+  const d = $("f-date").value, lg = $("f-league").value.trim(), q = $("f-q").value.trim();
+  if (d) qs.set("date", d);
+  if (lg) qs.set("league", lg);
+  if (q) qs.set("q", q);
+
+  let res;
+  try { res = await fetch(API + "/matches?" + qs); }
+  catch (e) {
+    setListState("error", { title: "网络不可达", desc: "无法连接 " + API + "/matches，请确认后端服务已启动。" });
+    return;
+  }
+  if (!res.ok) {
+    let detail = "";
+    try { const j = await res.json(); detail = j.error || ""; } catch (_) { detail = ""; }
+    setListState("error", { title: "后端返回 " + res.status, desc: detail || "服务异常。" });
+    return;
+  }
+  const data = await res.json();
+  const base = data.matches || [];
+  if (!base.length) {
+    S.matches = [];
+    setListState("empty");
+    setText($("list-tag"), "0 场");
+    setText($("list-note"), "");
+    renderCards([], 0);
+    return;
+  }
+  const rows = await Promise.all(base.map(async (m) => {
+    try {
+      const f = await fetch(API + "/fair/" + encodeURIComponent(m.match_id) + "?method=" + S.method);
+      return f.ok ? Object.assign({}, m, { _fair: await f.json() }) : Object.assign({}, m, { _fair: null });
+    } catch (_) { return Object.assign({}, m, { _fair: null }); }
+  }));
+  S.matches = rows;
+  setListState("table");
+  renderTable(rows);
+  renderCards(rows, rows.length);
+  const risky = rows.filter(r => r._fair && r._fair.spread_warning).length;
+  setText($("list-tag"), rows.length + " 场 · 高分歧 " + risky + " 场");
+  const note = $("list-note");
+  clear(note);
+  note.appendChild(document.createTextNode(
+    "高分歧行（方法间 L1 偏差 > 1pp）已降饱和并禁用 edge：报告 §8.1 指出该量级足以翻转 "));
+  note.appendChild(el("code", { text: "edge" }));
+  note.appendChild(document.createTextNode(" 的符号。点击任意行查看五法对比。"));
+}
+
+function renderCards(rows, n) {
+  const withFair = rows.filter(r => r._fair);
+  const margins = withFair.map(r => r._fair.margin).filter(v => typeof v === "number");
+  const avgM = margins.length ? margins.reduce((a, b) => a + b, 0) / margins.length : null;
+  const evFair = (avgM === null) ? null : -avgM / (1 + avgM);
+  const risky = withFair.filter(r => r._fair.spread_warning).length;
+  const worst = withFair.reduce((mx, r) => Math.max(mx, r._fair.method_spread_pp || 0), 0);
+
+  const box = $("cards");
+  clear(box);
+  const mk = (k, v, s, cls) => el("div", { class: "card" + (cls ? " " + cls : "") }, [
+    el("div", { class: "k", text: k }),
+    el("div", { class: "v", text: v }),
+    el("div", { class: "s", text: s })
+  ]);
+  box.appendChild(mk("赛事数", String(n), "当前筛选条件下"));
+  box.appendChild(mk("平均水钱", avgM === null ? "—" : pct(avgM),
+    "报告 §9.1：滚球均值 11.4%", (avgM !== null && avgM > 0.08) ? "warn" : ""));
+  box.appendChild(mk("公平定价下的期望", evFair === null ? "—" : pct(evFair),
+    "EV = −m/(1+m)，与选谁无关", "neg"));
+  box.appendChild(mk("高分歧场次", risky + (n ? " / " + n : ""),
+    "最大偏差 " + fx(worst, 2) + " pp（阈值 1.0）", risky ? "warn" : ""));
+}
+
+function renderTable(rows) {
+  const tb = $("tbody");
+  clear(tb);
+  rows.forEach((m, i) => {
+    const f = m._fair;
+    const o = (m.latest_odds && m.latest_odds["1X2"]) || [];
+    const risky = !!(f && f.spread_warning);
+    const tr = el("tr", {
+      class: [m.match_id === S.selected ? "sel" : "", risky ? "risky" : ""].join(" ").trim(),
+      style: "cursor:pointer",
+      "data-i": i,
+      onclick: () => openPricing(i)
+    });
+    tr.appendChild(el("td", { text: m.match_id }));
+    tr.appendChild(el("td", { text: m.league || "—" }));
+    tr.appendChild(el("td", { text: m.home + " vs " + m.away }));
+    [0, 1, 2].forEach(k => tr.appendChild(el("td", { class: "num", text: o[k] ? fx(o[k]) : "—" })));
+    tr.appendChild(el("td", { class: "num", text: f ? pct(f.margin) : "—" }));
+    if (risky) {
+      tr.appendChild(el("td", { class: "num" }, [
+        el("span", { class: "pill warn", text: fx(f.method_spread_pp, 2) + " pp" })
+      ]));
+    } else {
+      tr.appendChild(el("td", { class: "num", text: f ? fx(f.method_spread_pp, 2) + " pp" : "—" }));
+    }
+    tr.appendChild(el("td", {}, [
+      m.state === "active" ? el("span", { class: "pill ok", text: "有效" })
+                           : el("span", { class: "pill mut", text: m.state })
+    ]));
+    tb.appendChild(tr);
+  });
+}
+
+/* ---------- 定价对比 ---------- */
+async function openPricing(i) {
+  const m = S.matches[i];
+  if (!m) return;
+  S.selected = m.match_id;
+  renderTable(S.matches);
+  showView("pricing");
+  $("st-pricing-empty").classList.remove("show");
+  $("pricing-body").style.display = "";
+  setText($("pricing-tag"), m.match_id + " · " + m.home + " vs " + m.away);
+
+  let fair = null, edge = null;
+  try {
+    const r1 = await fetch(API + "/fair/" + encodeURIComponent(m.match_id) + "?method=" + S.method);
+    if (!r1.ok) throw new Error("HTTP " + r1.status);
+    fair = await r1.json();
+    const r2 = await fetch(API + "/edge/" + encodeURIComponent(m.match_id) + "?method=" + S.method);
+    if (r2.ok) edge = await r2.json();
+  } catch (err) {
+    showMsg("err", "加载定价数据失败：" + err.message);
+    return;
+  }
+
+  const risky = !!fair.spread_warning;
+  const kv = $("pricing-kv");
+  clear(kv);
+  const pairs = [
+    ["去水方法", String(fair.method)],
+    ["booksum", fx((fair.margin || 0) + 1, 6)],
+    ["水钱 m", pct(fair.margin)],
+    ["Shin z（内幕比例）", fair.shin_z === null ? "—" : fx(fair.shin_z, 4)],
+    ["方法间 L1 偏差", fx(fair.method_spread_pp, 3) + " pp"],
+    ["公平定价 EV", fair.ev_if_fair === null ? "—" : pct(fair.ev_if_fair)]
+  ];
+  pairs.forEach(([k, v]) => kv.appendChild(el("div", {}, [
+    el("b", { text: k }), document.createTextNode(v)
+  ])));
+
+  const w = $("pricing-warn");
+  clear(w);
+  if (risky) {
+    w.style.display = "";
+    w.appendChild(document.createTextNode(
+      "⚠️ 方法间偏差 " + fx(fair.method_spread_pp, 3) + " pp 超过 1 pp 阈值。报告 §8.1：此量级足以翻转 "));
+    w.appendChild(el("b", { text: "edge" }));
+    w.appendChild(document.createTextNode(" 的符号，故本行 edge 列已禁用。"));
+  } else { w.style.display = "none"; }
+
+  const methods = ["proportional", "additive", "power", "odds_ratio", "shin"];
+  const tb = $("pricing-tbody");
+  clear(tb);
+  fair.outcomes.forEach((oc, k) => {
+    const odds = (m.latest_odds && m.latest_odds["1X2"]) ? m.latest_odds["1X2"][k] : null;
+    const tr = el("tr", {});
+    tr.appendChild(el("td", { text: oc }));
+    tr.appendChild(el("td", { class: "num", text: odds ? fx(odds) : "—" }));
+    tr.appendChild(el("td", { class: "num", text: odds ? pct(1 / odds) : "—" }));
+    methods.forEach(mt => {
+      const pm = fair.per_method[mt];
+      if (!pm) { tr.appendChild(el("td", { class: "num", text: "—" })); return; }
+      const v = pm[k];
+      const bad = (mt === "additive" && v < 0);
+      tr.appendChild(el("td", { class: "num", text: pct(v), style: bad ? "color:#b3271e" : "" }));
+    });
+    if (risky || !edge) {
+      tr.appendChild(el("td", { class: "num", text: "—" }));
+    } else {
+      const e = edge.edge[k];
+      tr.appendChild(el("td", { class: "num", text: pct(e), style: e > 0 ? "color:#1e7b46" : "color:#b3271e" }));
+    }
+    tb.appendChild(tr);
+  });
+
+  const note = $("pricing-note");
+  clear(note);
+  const notes = [];
+  if (fair.notes) notes.push.apply(notes, fair.notes);
+  if (edge && edge.notes) notes.push.apply(notes, edge.notes);
+  if (!notes.length) { note.appendChild(document.createTextNode("无告警。")); }
+  else notes.forEach((t, idx) => {
+    if (idx) note.appendChild(document.createElement("br"));
+    note.appendChild(document.createTextNode("· " + t));
+  });
+}
+
+/* ---------- 校准 ---------- */
+async function loadCalibration() {
+  const calKv = $("cal-kv"), hKv = $("health-kv");
+  clear(calKv); clear(hKv);
+  calKv.appendChild(el("div", { text: "加载中…" }));
+  hKv.appendChild(el("div", { text: "加载中…" }));
+  try {
+    const r = await fetch(API + "/calibration");
+    const d = await r.json();
+    clear(calKv);
+    [
+      ["样本数 n", String(d.n)],
+      ["Brier 分数", d.brier === null ? "—" : fx(d.brier, 4)],
+      ["ECE 校准误差", d.ece === null ? "—" : fx(d.ece, 4)],
+      ["CLV 均值", d.clv_mean === null ? "—" : pct(d.clv_mean)],
+      ["对数增长率", d.log_growth === null ? "—" : fx(d.log_growth, 6)],
+      ["最大回撤", d.max_drawdown === null ? "—" : pct(d.max_drawdown)]
+    ].forEach(([k, v]) => calKv.appendChild(el("div", {}, [el("b", { text: k }), document.createTextNode(v)])));
+    const note = $("cal-note");
+    clear(note);
+    const all = (d.notes || []).slice();
+    if (d.note) all.push(d.note);
+    if (!all.length) note.appendChild(document.createTextNode("—"));
+    else all.forEach((t, i) => {
+      if (i) note.appendChild(document.createElement("br"));
+      note.appendChild(document.createTextNode("· " + t));
+    });
+  } catch (err) {
+    clear(calKv);
+    calKv.appendChild(el("div", {}, [el("b", { text: "加载失败" }), document.createTextNode(err.message)]));
+  }
+  try {
+    const r = await fetch("/health");
+    const d = await r.json();
+    const st = d.snapshot_store || {};
+    clear(hKv);
+    [
+      ["服务状态", String(d.status)],
+      ["快照根目录", String(st.root)],
+      ["赛事目录数", String(st.match_dirs)],
+      ["快照文件数", String(st.snapshot_files)],
+      ["缓存后端", st.cache_backend + "（可用 " + st.cache_available + "）"]
+    ].forEach(([k, v]) => hKv.appendChild(el("div", {}, [el("b", { text: k }), document.createTextNode(v)])));
+  } catch (err) {
+    clear(hKv);
+    hKv.appendChild(el("div", {}, [el("b", { text: "加载失败" }), document.createTextNode(err.message)]));
+  }
+}
+
+/* ---------- 事件绑定 ---------- */
+$("btn-load").addEventListener("click", loadMatches);
+$("btn-retry").addEventListener("click", loadMatches);
+const resetFilters = () => {
+  $("f-date").value = ""; $("f-league").value = ""; $("f-q").value = "";
+  loadMatches();
+};
+$("btn-reset").addEventListener("click", resetFilters);
+$("btn-empty-reset").addEventListener("click", resetFilters);
+$("btn-goto-dash").addEventListener("click", () => showView("dashboard"));
+$("f-method").addEventListener("change", (e) => { S.method = e.target.value; loadMatches(); });
+["f-date", "f-league", "f-q"].forEach(id =>
+  $(id).addEventListener("keydown", e => { if (e.key === "Enter") loadMatches(); }));
+
+renderNav();
+loadMatches();
+
+</script>
+</body>
+</html>

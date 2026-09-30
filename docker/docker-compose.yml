@@ -80,6 +80,49 @@ services:
     # 需要时用： docker compose -f docker/docker-compose.yml run --rm ai-analyzer
     profiles: ["analyzer"]
 
+  # B/S 架构的 Server 端入口：REST API + 静态控制台
+  analytics-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.analytics
+    container_name: ai_football_analytics_api
+    ports:
+      # 可覆盖： ANALYTICS_PORT=18000 docker compose ... up -d
+      - "${ANALYTICS_PORT:-8000}:8000"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - SNAPSHOT_ROOT=/app/output/snapshots
+      - CORPUS_ROOT=${CORPUS_ROOT:-}
+      # 缓存后端：redis 可达则用 redis，否则自动回退内存
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      # 宿主机语料（output/场次*.json）只读挂载，供首次导入
+      - ../output:/app/output
+    depends_on:
+      - redis
+    networks:
+      - ai_football_network
+    restart: unless-stopped
+
+  # Web 控制台静态资源（B/S 的 B）。
+  # 用 nginx 托管 static，并把 /api 反向代理到 analytics-api，
+  # 从而让 Browser 端与 Server 端同源 —— 免除 CORS 配置。
+  web-console:
+    image: nginx:1.27-alpine
+    container_name: ai_football_web_console
+    ports:
+      # 可覆盖： CONSOLE_PORT=13000 docker compose ... up -d
+      - "${CONSOLE_PORT:-3000}:80"
+    volumes:
+      - ../web/console:/usr/share/nginx/html:ro
+      - ./nginx.console.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - analytics-api
+    networks:
+      - ai_football_network
+    restart: unless-stopped
+
 volumes:
   redis_data:
 

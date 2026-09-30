@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-football"
+version = "1.0.0"
+description = "足球赛事数据采集 / 量化研究与决策系统（B/S 架构）"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+
+# 运行依赖：核心层（core/store/collector）刻意保持零第三方依赖，
+# 因此此处只声明 Web 与采集运行所需的包。
+dependencies = [
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.2",
+]
+
+[project.optional-dependencies]
+# 浏览器链路依赖（仅 browser-scraper 容器需要，见 docker/requirements-browser.txt）
+browser = [
+    "selenium>=4.15.2",
+    "webdriver-manager>=4.0.1",
+    "undetected-chromedriver>=3.5.4",
+    "flask>=2.3.3",
+    "redis>=5.0.1",
+]
+dev = [
+    "pytest>=8.0.0",
+    "mypy>=1.8.0",
+]
+
+# 扁平布局：显式声明顶层包，替代脆弱的自动发现。
+# 这让 pyright / jedi / mypy 等工具能稳定解析 `import core`、`import store`。
+[tool.setuptools]
+packages = ["core", "store", "collector", "api"]
+
+[tool.mypy]
+python_version = "3.12"
+# 核心层零依赖，无需忽略第三方 stub；报告与 web 采集脚本不纳入严格检查。
+files = ["core", "store", "collector", "api", "tests"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+strict_equality = true
+show_error_codes = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

@@ -38,3 +38,6 @@ logs/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 虚拟环境（pyright/jedi 用于解析源码根；不入库）
+.venv/

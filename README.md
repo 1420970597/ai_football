@@ -10,7 +10,8 @@
 | 🐍 技术栈 | Python 3.12 · Flask · Selenium/undetected-chromedriver · Redis · Playwright(规划) · LLM API |
 | 📊 研究报告 | [reports/leyu-kaiyun-odds-bot-feasibility/](reports/leyu-kaiyun-odds-bot-feasibility/)（17 图 / 53 表） |
 | 📐 工程宪章 | [AGENTS.md](AGENTS.md)（运行约束 · 架构红线 · DoD） |
-| ✅ 已验证 | redis + browser-scraper 全栈 healthy，`POST /scrape` 实测可用，容器间 B/S 调用打通 |
+| ✅ 已验证 | **4 容器全栈 healthy**；11 端点实测；17 场真实数据端到端；容器内 271 测试全通过 + mypy 15 文件干净 |
+| 📐 设计文档 | [docs/architecture/valuation-core.md](docs/architecture/valuation-core.md) |
 
 ---
 
@@ -325,10 +326,10 @@ stateDiagram-v2
 | `redis` | ai_football_redis | 6379 | ✅ **已验证** | 会话、快照缓存、任务状态 | — |
 | `browser-scraper` | ai_football_browser_scraper | 8080 | ✅ **已验证** | 无头 Chrome 渲染，`/health` `/scrape` `/scrape/batch` | §3.2 路径 C |
 | `ai-analyzer` | ai_football_analyzer | 8000 | ✅ **已构建** | 分析编排、LLM 调用（慢通路） | §6.3 |
-| `odds-collector` | *(规划)* | — | 🟧 原型设计 | L1 逆向采集 + L1′ 微结构提取 | §3.2 A/B 路径 |
-| `valuation-core` | *(规划)* | — | 🟧 原型设计 | L2 去水 + L4 经济学算法栈 | §8.1–8.8 |
-| `analytics-api` | *(规划)* | 8000 | 🟧 原型设计 | REST 接入层，供 Web 控制台调用 | §2 |
-| `web-console` | *(规划)* | 3000 | 🟧 原型设计 | B/S 的 Browser 端 | §7 |
+| `odds-collector` | *(库模块)* | — | ✅ **已实现** | L1 归一化 + L1′ 微结构 + 采集编排 | §3.2 A/B 路径 |
+| `valuation-core` | *(库模块)* | — | ✅ **已实现** | L2 去水 + L4 经济学算法栈 | §8.1–8.8 |
+| `analytics-api` | ai_football_analytics_api | 8000 | ✅ **已实现** | REST 接入层（11 端点），供控制台调用 | §2 |
+| `web-console` | ai_football_web_console | 3000 | ✅ **已实现** | B/S 的 Browser 端（nginx + 静态） | §7 |
 
 ### 5.1 职责边界（AGENTS.md §3.2 强制）
 

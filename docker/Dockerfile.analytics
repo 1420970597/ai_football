@@ -1,0 +1,57 @@
+# analytics-api —— B/S 架构的 Server 端入口（REST + 静态控制台）
+#
+# 构建： docker compose -f docker/docker-compose.yml build analytics-api
+# 说明： 本镜像承载 api（REST 接入层）+ service（业务编排）+ core（纯算法）
+#        + store（不可变快照）+ collector（采集编排）。
+#        核心层零第三方依赖，故运行时只需标准库 —— 无需 pip install。
+
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    TZ=Asia/Shanghai \
+    API_HOST=0.0.0.0 \
+    API_PORT=8000 \
+    SNAPSHOT_ROOT=/app/output/snapshots
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tzdata ca-certificates curl \
+ && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+ && echo $TZ > /etc/timezone \
+ && rm -rf /var/lib/apt/lists/*
+
+# redis 客户端：store.make_cache() 用它连接缓存后端；
+# 缺失时自动回退到进程内 MemoryCache（可用但不跨进程共享）。
+RUN pip install --no-cache-dir "redis>=5.0.1"
+
+WORKDIR /app
+
+# 核心层（core/store/collector/service/api）仅依赖标准库。
+# 注意：不 COPY config.py —— 该文件含明文凭据（AGENTS.md §3.4），
+#       生产环境应改为环境变量注入。
+COPY core/ ./core/
+COPY store/ ./store/
+COPY collector/ ./collector/
+COPY service/ ./service/
+COPY api/ ./api/
+
+# Browser 端静态资源（B/S 的 B）
+COPY web/console/ ./web/console/
+
+# 运行期数据卷：不可变快照 + 语料
+RUN mkdir -p /app/output/snapshots
+VOLUME ["/app/output"]
+
+EXPOSE 8000
+
+# 健康检查：走 /health（含快照存储与缓存后端状态）
+HEALTHCHECK --interval=20s --timeout=6s --retries=5 --start-period=10s \
+  CMD curl -fsS http://localhost:8000/health || exit 1
+
+# 启动脚本：容器启动时自动把宿主机语料（output/场次*.json）
+# 归一化写入不可变快照存储，保证控制台开箱即有数据。
+COPY docker/entrypoint.analytics.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+CMD ["/usr/local/bin/entrypoint.sh"]
