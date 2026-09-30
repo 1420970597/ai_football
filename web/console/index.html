@@ -5,67 +5,99 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ai_football · 赛事数据与量化研究控制台</title>
 <style>
+/* ===================================================================
+   设计说明（AGENTS.md §5.2）
+   -------------------------------------------------------------------
+   采用**深色体育数据终端**风格：深底 + 高对比数字 + 状态色分级。
+   这是博彩/体育赔率类界面（乐鱼、开云等主流体育盘口页）的通行视觉
+   语言：暗背景降低长时间盯盘的疲劳，等宽数字让赔率便于纵向比读，
+   涨/跌用绿/红即时区分。
+
+   注意：此处**仅借鉴通用视觉风格**（暗色、等宽数字、状态色），
+   未复制乐鱼/开云的任何专有素材、商标、图标或代码。
+   那两个站点是无牌离岸博彩，本项目不与其发生任何数据或品牌关联。
+
+   主题通过 CSS 变量集中管理，可整体切换明/暗。
+   =================================================================== */
 :root{
-  --fg:#1c2733;--mut:#5d6b7a;--line:#d9e0e7;--bg:#f5f7f9;--card:#fff;
-  --acc:#2c6fa8;--red:#b3271e;--redbg:#fdf0ee;--amb:#8a5a00;--ambbg:#fdf6e6;
-  --grn:#1e7b46;--grnbg:#eef9f2;--pur:#7d5ba6;--teal:#16847c;
+  /* 底色层次：从最深到最浅，形成卡片纵深 */
+  --fg:#e8eef5;--mut:#93a4b8;--line:#26374a;--bg:#0d1620;--card:#141f2c;
+  --card2:#182636;--card3:#1d2f42;
+  /* 强调色：体育终端常用的青蓝 */
+  --acc:#2f9ee0;--acc2:#1b7fbd;
+  /* 状态色 */
+  --pos:#3ddc84;--posbg:rgba(61,220,132,.12);
+  --neg:#ff6b5e;--negbg:rgba(255,107,94,.12);
+  --amb:#ffc44d;--ambbg:rgba(255,196,77,.12);
+  --pur:#b18cf0;--teal:#2ee6d6;
+  --shadow:0 2px 10px rgba(0,0,0,.35);
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
-  font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif}
-header{background:#fff;border-bottom:1px solid var(--line);padding:12px 22px;
+  font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+header{background:linear-gradient(180deg,#16232f,#111c27);
+  border-bottom:1px solid var(--line);padding:12px 22px;
   display:flex;align-items:center;gap:18px;position:sticky;top:0;z-index:10;
-  box-shadow:0 1px 4px rgba(0,0,0,.05)}
-.logo{font-weight:700;font-size:16px;color:#12212e;white-space:nowrap}
+  box-shadow:var(--shadow)}
+.logo{font-weight:700;font-size:16px;color:#fff;white-space:nowrap;
+  letter-spacing:.01em}
+.logo::before{content:"⚽";margin-right:7px;filter:saturate(1.2)}
 nav{display:flex;gap:4px;flex-wrap:wrap}
 nav button{background:none;border:0;padding:7px 13px;border-radius:6px;cursor:pointer;
-  font-size:13.5px;color:var(--mut);font-family:inherit}
-nav button:hover{background:#eef2f6;color:var(--fg)}
-nav button.on{background:var(--acc);color:#fff;font-weight:600}
+  font-size:13.5px;color:var(--mut);font-family:inherit;transition:background .15s,color .15s}
+nav button:hover{background:var(--card3);color:var(--fg)}
+nav button.on{background:var(--acc);color:#04121c;font-weight:700}
 .spacer{flex:1}
-.banner{background:var(--ambbg);border:1px solid #e8d9a8;color:var(--amb);
+.banner{background:var(--ambbg);border:1px solid rgba(255,196,77,.3);color:var(--amb);
   padding:8px 14px;border-radius:6px;font-size:12.5px;white-space:nowrap}
 .wrap{max-width:1420px;margin:0 auto;padding:18px 22px 60px}
 .filters{background:var(--card);border:1px solid var(--line);border-radius:8px;
-  padding:12px 14px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px}
+  padding:12px 14px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;
+  margin-bottom:14px;box-shadow:var(--shadow)}
 .f{display:flex;flex-direction:column;gap:4px}
 .f label{font-size:11.5px;color:var(--mut);font-weight:600}
 .f input,.f select{padding:6px 9px;border:1px solid var(--line);border-radius:5px;
-  font-size:13px;font-family:inherit;background:#fff;min-width:120px}
-.btn{background:var(--acc);color:#fff;border:0;padding:7px 15px;border-radius:5px;
-  cursor:pointer;font-size:13px;font-family:inherit;font-weight:600}
-.btn:hover{background:#235a8a}
-.btn.ghost{background:#fff;color:var(--acc);border:1px solid var(--acc)}
+  font-size:13px;font-family:inherit;background:var(--card2);color:var(--fg);min-width:120px}
+.f input:focus,.f select:focus{outline:none;border-color:var(--acc)}
+.btn{background:var(--acc);color:#04121c;border:0;padding:7px 15px;border-radius:5px;
+  cursor:pointer;font-size:13px;font-family:inherit;font-weight:700;
+  transition:background .15s}
+.btn:hover{background:var(--acc2);color:#fff}
+.btn.ghost{background:transparent;color:var(--acc);border:1px solid var(--acc)}
+.btn.ghost:hover{background:rgba(47,158,224,.12);color:var(--acc)}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
   gap:12px;margin-bottom:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:13px 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:13px 16px;box-shadow:var(--shadow)}
 .card .k{font-size:11.5px;color:var(--mut);font-weight:600;letter-spacing:.02em}
-.card .v{font-size:23px;font-weight:700;margin-top:3px;color:#12212e;
+.card .v{font-size:23px;font-weight:700;margin-top:3px;color:#fff;
   font-variant-numeric:tabular-nums}
 .card .s{font-size:11px;color:var(--mut);margin-top:2px}
-.card.neg .v{color:var(--red)}
-.card.warn{border-color:#e8d9a8;background:var(--ambbg)}
+.card.neg .v{color:var(--neg)}
+.card.warn{border-color:rgba(255,196,77,.35);background:var(--card)}
+.card.warn .v{color:var(--amb)}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:8px;
-  margin-bottom:16px;overflow:hidden}
+  margin-bottom:16px;overflow:hidden;box-shadow:var(--shadow)}
 .panel>h2{margin:0;padding:11px 15px;font-size:13.5px;border-bottom:1px solid var(--line);
-  background:#fafcfd;color:#1d3a52;display:flex;justify-content:space-between;
+  background:var(--card2);color:#fff;display:flex;justify-content:space-between;
   align-items:center;font-weight:600}
 .panel>h2 .tag{font-size:11px;color:var(--mut);font-weight:400}
 .tw{overflow-x:auto}
 table{border-collapse:collapse;width:100%;font-size:13px}
 th,td{padding:8px 12px;border-bottom:1px solid var(--line);text-align:left;
   white-space:nowrap}
-th{background:#f1f5f9;font-weight:600;color:#1d3a52;font-size:12px;position:sticky;top:0}
-tbody tr:hover{background:#f7fafc}
-tbody tr.sel{background:#eaf3fb}
+th{background:var(--card3);font-weight:600;color:#cfe0f0;font-size:12px;position:sticky;top:0}
+tbody tr:hover{background:var(--card2)}
+tbody tr.sel{background:rgba(47,158,224,.14)}
 tbody tr.risky{background:var(--ambbg)}
-.num{text-align:right;font-variant-numeric:tabular-nums}
+.num{text-align:right;font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
 .pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;
   font-weight:600;line-height:1.7}
-.pill.ok{background:var(--grnbg);color:var(--grn)}
+.pill.ok{background:var(--posbg);color:var(--pos)}
 .pill.warn{background:var(--ambbg);color:var(--amb)}
-.pill.bad{background:var(--redbg);color:var(--red)}
-.pill.mut{background:#eef2f6;color:var(--mut)}
+.pill.bad{background:var(--negbg);color:var(--neg)}
+.pill.mut{background:var(--card3);color:var(--mut)}
 .state{display:none;padding:34px 20px;text-align:center;color:var(--mut)}
 .state.show{display:block}
 .state .big{font-size:32px;margin-bottom:8px}
@@ -73,13 +105,13 @@ tbody tr.risky{background:var(--ambbg)}
 .state p{margin:0 0 14px;font-size:13px}
 .skel{padding:14px}
 .skel .bar{height:13px;border-radius:4px;margin-bottom:9px;
-  background:linear-gradient(90deg,#eef2f6 25%,#e2e8ee 50%,#eef2f6 75%);
+  background:linear-gradient(90deg,var(--card2) 25%,var(--card3) 50%,var(--card2) 75%);
   background-size:200% 100%;animation:sh 1.3s infinite}
 @keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .msg{padding:11px 15px;border-radius:6px;margin-bottom:14px;font-size:13px;display:none}
 .msg.show{display:block}
-.msg.err{background:var(--redbg);border:1px solid #f0c3bd;color:var(--red)}
-.msg.hint{background:var(--grnbg);border:1px solid #b8e0c8;color:var(--grn)}
+.msg.err{background:var(--negbg);border:1px solid rgba(255,107,94,.35);color:var(--neg)}
+.msg.hint{background:var(--posbg);border:1px solid rgba(61,220,132,.3);color:var(--pos)}
 .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;
   padding:14px 15px}
 .kv div{font-size:12.5px}
@@ -88,12 +120,13 @@ tbody tr.risky{background:var(--ambbg)}
 .bar-row{display:flex;align-items:center;gap:9px;margin:6px 0;font-size:12.5px}
 .bar-row .nm{width:64px;color:var(--mut);font-weight:600}
 .bar{height:15px;border-radius:3px;background:var(--acc);min-width:2px}
-.bar.pos{background:var(--grn)}.bar.neg{background:var(--red)}
+.bar.pos{background:var(--pos)}.bar.neg{background:var(--neg)}
 .note{font-size:12.5px;color:var(--mut);padding:11px 15px;line-height:1.8;
-  border-top:1px solid var(--line);background:#fafcfd}
-.note code{background:#eef2f6;padding:1px 5px;border-radius:3px;font-size:12px}
+  border-top:1px solid var(--line);background:var(--card2)}
+.note code{background:var(--card3);padding:1px 5px;border-radius:3px;font-size:12px;
+  color:var(--teal)}
 footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
-.warnbox{background:var(--redbg);border:1px solid #f0c3bd;color:var(--red);
+.warnbox{background:var(--negbg);border:1px solid rgba(255,107,94,.35);color:var(--neg);
   padding:10px 14px;border-radius:6px;font-size:12.5px;margin:0 15px 14px}
 </style>
 </head>
@@ -185,6 +218,36 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
         <div class="note" id="pricing-note"></div>
       </div>
     </div>
+
+    <!-- 多玩法统计：一场比赛有多种玩法，各自水钱/EV 差异极大 -->
+    <div class="panel">
+      <h2>各玩法统计 <span class="tag" id="mk-tag">玩法维度</span></h2>
+      <div class="note">同一场比赛的不同玩法，水钱差异可达十几个百分点。
+        EV = −m/(1+m) 说明<b>冷门玩法亏得更快</b>——这是报告 §9.1 的直接推论。</div>
+      <div class="kv" id="mk-kv"></div>
+      <div class="tw"><table>
+        <thead><tr><th>玩法</th><th class="num">结果数</th><th class="num">booksum</th>
+          <th class="num">水钱 m</th><th class="num">公平定价 EV</th>
+          <th class="num">方法间偏差</th><th>状态</th></tr></thead>
+        <tbody id="mk-tbody"></tbody>
+      </table></div>
+      <div class="note" id="mk-note"></div>
+    </div>
+
+    <!-- 模型 vs 市场：真实 edge 的唯一来源 -->
+    <div class="panel">
+      <h2>模型概率 vs 市场定价 <span class="tag" id="md-tag">Poisson 模型</span></h2>
+      <div class="note">去水后的市场概率只是「市场怎么想」。要判断真实优势，
+        必须有<b>独立的模型</b>作为第二意见。下方为独立泊松比分模型的估计。</div>
+      <div class="kv" id="md-kv"></div>
+      <div class="tw"><table>
+        <thead><tr><th>结果</th><th class="num">赔率</th><th class="num">盈亏平衡 p</th>
+          <th class="num">模型 p</th><th class="num">市场 p</th>
+          <th class="num">模型 − 市场</th><th class="num">模型 edge</th></tr></thead>
+        <tbody id="md-tbody"></tbody>
+      </table></div>
+      <div class="note" id="md-note"></div>
+    </div>
   </section>
 
   <!-- ============ 校准报告 ============ -->
@@ -203,7 +266,9 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
 
 <footer>
   ai_football · 数据来源：中国体育彩票官方 API V2 · 本系统<b>不提供投注执行功能</b><br>
-  结论依据：<code>reports/leyu-kaiyun-odds-bot-feasibility/REPORT.md</code> §5.3 / §9.3 / §13.2
+  结论依据：<code>reports/leyu-kaiyun-odds-bot-feasibility/REPORT.md</code> §5.3 / §9.3 / §13.2<br>
+  <span style="font-size:11px">界面采用通用深色体育数据终端风格（暗底 / 等宽数字 / 状态色分级）。
+  未使用乐鱼、开云或任何博彩站点的素材、商标或代码。</span>
 </footer>
 
 <script>
@@ -460,13 +525,13 @@ async function openPricing(i) {
       if (!pm) { tr.appendChild(el("td", { class: "num", text: "—" })); return; }
       const v = pm[k];
       const bad = (mt === "additive" && v < 0);
-      tr.appendChild(el("td", { class: "num", text: pct(v), style: bad ? "color:#b3271e" : "" }));
+      tr.appendChild(el("td", { class: "num", text: pct(v), style: bad ? "color:var(--neg)" : "" }));
     });
     if (risky || !edge) {
       tr.appendChild(el("td", { class: "num", text: "—" }));
     } else {
       const e = edge.edge[k];
-      tr.appendChild(el("td", { class: "num", text: pct(e), style: e > 0 ? "color:#1e7b46" : "color:#b3271e" }));
+      tr.appendChild(el("td", { class: "num", text: pct(e), style: e > 0 ? "color:var(--pos)" : "color:var(--neg)" }));
     }
     tb.appendChild(tr);
   });
@@ -481,6 +546,135 @@ async function openPricing(i) {
     if (idx) note.appendChild(document.createElement("br"));
     note.appendChild(document.createTextNode("· " + t));
   });
+
+  // 玩法维度与模型对照（独立请求，失败不影响主定价面板）
+  loadMarkets(m.match_id);
+}
+
+/* ---------- 多玩法统计 ---------- */
+async function loadMarkets(matchId) {
+  const kv = $("mk-kv"), tb = $("mk-tbody"), note = $("mk-note");
+  clear(kv); clear(tb); clear(note);
+  setText($("mk-tag"), "加载中…");
+  clear($("md-kv")); clear($("md-tbody")); clear($("md-note"));
+  setText($("md-tag"), "加载中…");
+
+  let d = null;
+  try {
+    const r = await fetch(API + "/markets/" + encodeURIComponent(matchId));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    d = await r.json();
+  } catch (err) {
+    setText($("mk-tag"), "加载失败");
+    note.appendChild(document.createTextNode("玩法数据加载失败：" + err.message));
+    setText($("md-tag"), "—");
+    return;
+  }
+
+  setText($("mk-tag"), d.n_markets + " 种玩法");
+  [
+    ["玩法数", String(d.n_markets)],
+    ["水钱最低", pct(d.margins.min)],
+    ["水钱最高", pct(d.margins.max)],
+    ["水钱跨度", fx(d.margins.spread_pp, 2) + " pp"],
+    ["最优 EV", pct(d.ev_if_fair.best)],
+    ["最差 EV", pct(d.ev_if_fair.worst)]
+  ].forEach(function (kvp) {
+    kv.appendChild(el("div", {}, [el("b", { text: kvp[0] }),
+      document.createTextNode(kvp[1])]));
+  });
+
+  d.markets.forEach(function (mk) {
+    const tr = el("tr", {});
+    tr.appendChild(el("td", { text: mk.market + (mk.play_name ? " " + mk.play_name : "") }));
+    tr.appendChild(el("td", { class: "num", text: String(mk.n_outcomes) }));
+    tr.appendChild(el("td", { class: "num", text: mk.booksum === undefined ? "—" : fx(mk.booksum, 4) }));
+    tr.appendChild(el("td", { class: "num", text: mk.margin === undefined ? "—" : pct(mk.margin),
+      style: "color:var(--neg)" }));
+    tr.appendChild(el("td", { class: "num",
+      text: mk.ev_if_fair === null || mk.ev_if_fair === undefined ? "—" : pct(mk.ev_if_fair),
+      style: "color:var(--neg)" }));
+    tr.appendChild(el("td", { class: "num",
+      text: mk.method_spread_pp === undefined ? "—" : fx(mk.method_spread_pp, 3) + " pp",
+      style: mk.spread_warning ? "color:var(--neg)" : "" }));
+    tr.appendChild(el("td", { text: mk.error ? ("错误：" + mk.error) : (mk.spread_warning ? "⚠️ 高分歧" : "有效") }));
+    tb.appendChild(tr);
+  });
+
+  if (d.spread_warning_markets && d.spread_warning_markets.length) {
+    note.appendChild(document.createTextNode(
+      "高分歧玩法（方法间偏差 >1pp，据报告 §8.1 足以翻转 edge 符号）："
+      + d.spread_warning_markets.join("、")));
+  } else if (!note.firstChild) {
+    note.appendChild(document.createTextNode("全部玩法的方法间偏差均在阈值内。"));
+  }
+
+  loadModel(matchId);
+}
+
+/* ---------- 模型 vs 市场 ---------- */
+async function loadModel(matchId) {
+  const kv = $("md-kv"), tb = $("md-tbody"), note = $("md-note");
+  let d = null;
+  try {
+    const r = await fetch(API + "/model/" + encodeURIComponent(matchId) + "?market=HAD");
+    if (!r.ok) {
+      setText($("md-tag"), "无数据");
+      note.appendChild(document.createTextNode(
+        "该场无进球统计数据（需要「详细分析数据.数据统计」），无法建模。"));
+      return;
+    }
+    d = await r.json();
+  } catch (err) {
+    setText($("md-tag"), "加载失败");
+    note.appendChild(document.createTextNode(err.message));
+    return;
+  }
+
+  setText($("md-tag"), d.market + " · " + d.model);
+  [
+    ["主队期望进球 λ_home", fx(d.lambda_home, 3)],
+    ["客队期望进球 λ_away", fx(d.lambda_away, 3)],
+    ["合计期望进球", fx(d.lambda_total, 3)],
+    ["市场水钱", pct(d.market_margin)],
+    ["划分校验", d.partition_ok ? "通过（和=1）" : "异常"]
+  ].forEach(function (kvp) {
+    kv.appendChild(el("div", {}, [el("b", { text: kvp[0] }),
+      document.createTextNode(kvp[1])]));
+  });
+
+  const hasMarket = Array.isArray(d.market_probabilities);
+  d.outcomes.forEach(function (oc, k) {
+    const tr = el("tr", {});
+    const pp = d.model_probabilities[k];
+    const be = hasMarket ? d.breakeven_prob[k] : null;
+    const mp = hasMarket ? d.market_probabilities[k] : null;
+    const diff = hasMarket ? d.prob_diff_model_minus_market[k] : null;
+    const eg = hasMarket ? d.model_edge_vs_market[k] : null;
+    tr.appendChild(el("td", { text: oc }));
+    tr.appendChild(el("td", { class: "num", text: be ? fx(1 / be) : "—" }));
+    tr.appendChild(el("td", { class: "num", text: be ? pct(be) : "—" }));
+    tr.appendChild(el("td", { class: "num", text: pct(pp) }));
+    tr.appendChild(el("td", { class: "num", text: mp === null ? "—" : pct(mp) }));
+    tr.appendChild(el("td", { class: "num", text: diff === null ? "—" : pct(diff),
+      style: diff > 0 ? "color:var(--pos)" : "" }));
+    tr.appendChild(el("td", { class: "num", text: eg === null ? "—" : pct(eg),
+      style: eg > 0 ? "color:var(--pos)" : "color:var(--neg)" }));
+    tb.appendChild(tr);
+  });
+
+  (d.caveats || []).forEach(function (c, i) {
+    if (i) note.appendChild(document.createElement("br"));
+    note.appendChild(document.createTextNode("· " + c));
+  });
+  const pos = hasMarket ? d.model_edge_vs_market.filter(function (x) { return x > 0; }).length : 0;
+  if (hasMarket) {
+    note.appendChild(document.createElement("br"));
+    note.appendChild(document.createTextNode(
+      "⚠️ 本场 " + d.outcomes.length + " 个结果中有 " + pos + " 个模型 edge 为正。"
+      + "在无独立信息优势时，这通常是模型噪声而非真实优势（报告 §7.1）——"
+      + "必须用 L6 校准（Brier/CLV）验证模型是否真的优于市场。"));
+  }
 }
 
 /* ---------- 校准 ---------- */

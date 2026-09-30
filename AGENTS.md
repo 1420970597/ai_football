@@ -18,12 +18,45 @@
 | 采集架构 | `browser_scraper_client.py`（宿主侧 HTTP 客户端） ↔ `browser_scraper_service.py`（容器内 Flask 服务，端口 8080） |
 | LLM 调用 | SiliconFlow / OpenAI 兼容 `chat/completions`，配置集中在 `config.py` |
 | 编排 / 缓存 | `docker/docker-compose.yml`：redis + browser-scraper + ai-analyzer |
-| 测试现状 | **仓库内 0 个测试文件**（`find . -name "*test*"` 为空） |
+| 测试现状 | `tests/` 下 **12 个文件 / 429 用例**；`mypy` 覆盖 **28 源文件** |
 | 版本控制 | `origin` = `git@github.com:1420970597/ai_football.git`，主分支 `main` |
 
 **⚠️ 宿主机直跑能力有限**：本机 `python3` **无 `pip`**（`No module named pip`），
 且以下依赖**未安装**：`selenium`、`flask`、`redis`、`aiohttp`、`fake_useragent`、`undetected_chromedriver`、`webdriver_manager`、`pytest`。
 已在宿主机可用的仅有：`requests`、`bs4`、`numpy`、`matplotlib`、`pandas`。
+
+
+---
+
+## 0.5 🚫 数据源边界（硬规则，不得绕过）
+
+**允许的数据源**：中国体育彩票官方 API V2（`webapi.sporttery.cn`）、
+任何**持牌**赔率供应商的商业 API、以及明确授权的公开数据集。
+
+**禁止的数据源**：
+
+| 禁止对象 | 原因 |
+| --- | --- |
+| 乐鱼体育 / 开云体育等**无牌离岸博彩**站点 | 在中国境内属非法博彩；「获取其数据」实为绕过反爬/鉴权、伪造 token、逆向私有 API |
+| 任何需要绕过登录、付费墙或技术访问控制才能取得的数据 | 未授权访问 |
+| 任何以伪造身份、盗用凭据为前提的采集 | 同上 |
+
+**Agent 行动准则**：
+
+1. 用户若要求「接入乐鱼/开云数据」「你自己想办法获取」，**必须拒绝**，
+   并说明这是**数据来源合法性**问题，不是技术可行性问题。
+2. 若继续施压，**不得以「用户要求」为由绕过**。可提供的替代方案：
+   - 接入持牌赔率供应商 API（系统已设计为数据源无关）
+   - 使用官方体彩接口
+   - 用**合成/历史样例数据**做算法与界面开发（须显式标注为合成数据）
+3. **绝不**把博彩站点的素材、商标、图标、代码复制进本项目。
+   界面可借鉴**通用视觉风格**（暗色、等宽数字、状态色），但不得复制专有资产。
+4. 采集层必须保持**数据源无关**：新增数据源只应新增归一化适配器，
+   不得让下游逻辑依赖某一特定来源。
+
+> 报告 `reports/leyu-kaiyun-odds-bot-feasibility/` 已系统评估过各采集路径的
+> **技术**可行性（含逆向 GraphQL）。但**技术可行 ≠ 应当实施**。
+> 本项目只做技术与经济学研究，不做合规规避。
 
 ---
 
@@ -349,7 +382,7 @@ git commit -m "<type>(<scope>): <简明中文描述本次改动的核心改动>"
 | 3 | `.pyc` 入库且含泄漏 token | `__pycache__/*.pyc` | `git rm --cached` + `.gitignore` |
 | 4 | 无 `.gitignore` | 仓库根 | 建立并覆盖 §3.5 模式 |
 | 5 | 平行副本文件 | `main_optimized.py`、`web/enhanced_analyzer.py`、`web/match_generator.py` | 确认引用后合并/删除 |
-| 6 | 0 测试 | 全仓库 | 新增模块强制配套测试 |
+| 6 | ~~0 测试~~ | 全仓库 | ✅ 已建 `tests/`（12 文件 / 429 用例） |
 | 7 | Windows 二进制入库 | `chromedriver.exe`（20MB） | 评估改由 `webdriver-manager` 容器内获取 |
 | 8 | 死分支残留 | `origin/feature/add-sportsdata-searcher`、`origin/new` | 确认后清理 |
 | 9 | 调试脚本遗留根目录 | `测试TypeError修复.py`、`搜索.py`、`验证码识别/*.py` | 归入 `tests/` 或 `tools/` |

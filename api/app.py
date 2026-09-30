@@ -13,6 +13,11 @@ REST 接入层（B/S 架构的 Server 端入口）
   GET  /api/v1/matches
   GET  /api/v1/matches/<id>
   GET  /api/v1/odds/<id>
+  GET  /api/v1/markets                         玩法目录
+  GET  /api/v1/markets/<id>                    某场全部玩法统计
+  GET  /api/v1/markets/<id>/<market>           单玩法明细
+  GET  /api/v1/model/<id>?market=HAD           Poisson 模型概率
+  GET  /api/v1/consistency/<id>                跨玩法边际一致性
   GET  /api/v1/fair/<id>
   GET  /api/v1/edge/<id>
   GET  /api/v1/microstructure/<id>
@@ -28,6 +33,7 @@ REST 接入层（B/S 架构的 Server 端入口）
 from __future__ import annotations
 
 import json
+import re
 import math
 import os
 import threading
@@ -161,6 +167,14 @@ def _body_probs(body: Mapping[str, Any], name: str) -> Optional[List[float]]:
 # 应用（与 HTTP 框架解耦的路由层）
 # --------------------------------------------------------------------------- #
 
+_PLACEHOLDER_RE = re.compile(r"^<[A-Za-z_][A-Za-z0-9_]*>$")
+
+
+def _is_placeholder(segment: str) -> bool:
+    """判断路径模板片段是否为占位符（如 <id> / <market>）。"""
+    return bool(_PLACEHOLDER_RE.match(segment))
+
+
 class ApiApp:
     """路由与处理逻辑（不含 socket 细节，便于单测直接调用）。"""
 
@@ -180,6 +194,11 @@ class ApiApp:
             ("GET", "/matches", self.h_matches),
             ("GET", "/matches/<id>", self.h_match_detail),
             ("GET", "/odds/<id>", self.h_odds),
+            ("GET", "/markets", self.h_market_catalog),
+            ("GET", "/markets/<id>", self.h_markets),
+            ("GET", "/markets/<id>/<market>", self.h_market_detail),
+            ("GET", "/model/<id>", self.h_model),
+            ("GET", "/consistency/<id>", self.h_consistency),
             ("GET", "/fair/<id>", self.h_fair),
             ("GET", "/edge/<id>", self.h_edge),
             ("GET", "/microstructure/<id>", self.h_microstructure),
@@ -213,7 +232,9 @@ class ApiApp:
                 args: List[str] = []
                 matched = True
                 for pp, ap in zip(pat_parts, parts):
-                    if pp == "<id>":
+                    # 通用占位符 <name>（此前只认死字面量 "<id>"，
+                    # 导致 /markets/<id>/<market> 这类多段路径永远匹配不上）
+                    if _is_placeholder(pp):
                         args.append(ap)
                     elif pp != ap:
                         matched = False
@@ -226,7 +247,7 @@ class ApiApp:
                 pat_parts = [p for p in pattern.strip("/").split("/") if p]
                 if len(pat_parts) != len(parts):
                     continue
-                if all(pp == "<id>" or pp == ap
+                if all(_is_placeholder(pp) or pp == ap
                        for pp, ap in zip(pat_parts, parts)):
                     return HTTPStatus.METHOD_NOT_ALLOWED, {
                         "error": "方法不允许", "allowed": m, "path": path,
@@ -270,6 +291,76 @@ class ApiApp:
         d = self.svc.get_odds(match_id)
         if d is None:
             raise NotFound("无赔率快照：%s" % match_id)
+        return d
+
+    # -- 多玩法 -------------------------------------------------------------
+
+    def h_market_catalog(self, query: Mapping[str, List[str]],
+                         body: Mapping[str, Any]) -> Dict[str, Any]:
+        """玩法目录：本项目支持的全部玩法及其结果空间。"""
+        return self.svc.market_catalog()
+
+    def h_markets(self, query: Mapping[str, List[str]],
+                  body: Mapping[str, Any], match_id: str) -> Dict[str, Any]:
+        """某场赛事的**全部玩法**统计（去水 / 水钱 / EV / 方法分歧）。"""
+        d = self.svc.list_markets(match_id)
+        if d is None:
+            raise NotFound("无该赛事样例：%s" % match_id)
+        return d
+
+    def h_market_detail(self, query: Mapping[str, List[str]],
+                        body: Mapping[str, Any], match_id: str,
+                        market: str) -> Dict[str, Any]:
+        """单个玩法的逐结果明细（赔率 / 隐含 / 公平概率 / 公平赔率）。"""
+        d = self.svc.get_market(match_id, market)
+        if d is None:
+            # 区分「赛事不存在」与「该玩法未落库」——两者处置完全不同：
+            # 前者是请求错误，后者是**已知数据缺口**，需要重新采集而非重试。
+            known = self.svc.list_markets(match_id)
+            if known is None:
+                raise NotFound("无该赛事：%s" % match_id)
+            raise NotFound(
+                "该场未落库玩法 %s（现有玩法：%s）。"
+                "注意：既有 output JSON 仅保存 HAD/HHAD 赔率，"
+                "TTG/CRS/HAFU 虽标记 Selling 但赔率未采集——"
+                "这是已知数据缺口，需重新采集（见 collector."
+                "normalizer.parse_pooled_odds），重试本请求无济于事。"
+                % (market, ", ".join(m["market"] for m in known["markets"]))
+            )
+        return d
+
+    def h_model(self, query: Mapping[str, List[str]],
+                body: Mapping[str, Any], match_id: str) -> Dict[str, Any]:
+        """Poisson 模型概率（独立于市场定价的 p_model）。
+
+        这是「真实 edge」判定的必要输入：
+        与 /fair 的市场隐含概率相比，模型概率才是独立的第二意见。
+        """
+        d = self.svc.get_model_probs(
+            match_id,
+            market=_q1(query, "market", "HAD") or "HAD",
+            shrink=_q_float(query, "shrink", 0.3, minimum=0.0, maximum=1.0),
+            league_avg_goals=_q_float(query, "league_avg_goals", 2.6,
+                                      minimum=0.1),
+        )
+        if d is None:
+            raise NotFound(
+                "无进球统计数据，无法建模：%s（该场缺少 详细分析数据.数据统计）"
+                % match_id)
+        if "error" in d:
+            raise BadRequest(d["error"])
+        return d
+
+    def h_consistency(self, query: Mapping[str, List[str]],
+                      body: Mapping[str, Any],
+                      match_id: str) -> Dict[str, Any]:
+        """跨玩法边际一致性校验（数据错误 vs 真实套利检测）。"""
+        d = self.svc.cross_market_check(
+            match_id,
+            tol=_q_float(query, "tol", 0.02, minimum=0.0, maximum=1.0),
+        )
+        if d is None:
+            raise NotFound("无该赛事样例：%s" % match_id)
         return d
 
     def h_fair(self, query: Mapping[str, List[str]],
