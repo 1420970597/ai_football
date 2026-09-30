@@ -98,15 +98,24 @@ def convert(md):
         line = lines[i]
         stripped = line.strip()
 
-        # ---- 围栏代码块
+        # ---- 围栏代码块（mermaid 单独处理）
         if stripped.startswith("```"):
+            lang = stripped[3:].strip().lower()
             i += 1
             buf = []
             while i < n and not lines[i].strip().startswith("```"):
                 buf.append(lines[i])
                 i += 1
             i += 1
-            out.append("<pre><code>%s</code></pre>" % html.escape("\n".join(buf)))
+            body = "\n".join(buf)
+            if lang in ("mermaid", "mmd"):
+                # Mermaid 必须保留原始文本（含 <、>、&），\n由浏览器解析
+                out.append('<div class="mmd"><pre class="mermaid">%s</pre></div>'
+                           % html.escape(body, quote=False))
+            else:
+                cls = ' class="language-%s"' % lang if lang else ""
+                out.append("<pre><code%s>%s</code></pre>"
+                           % (cls, html.escape(body)))
             continue
 
         # ---- $$ 公式块（独占一行的 $$...$$，或 \n$$\n 围栏形式）
@@ -247,6 +256,16 @@ pre code{background:none;border:0;color:inherit;padding:0;font-size:1em}
       font:14px/1.9 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#243342}
 .imath{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
        font-size:.95em;color:#8a2b4a;background:#f4f6f8;padding:.05em .28em;border-radius:3px}
+.mmd{margin:1.6em 0;padding:10px 6px;border:1px solid var(--line);border-radius:8px;
+     background:#fcfdfe;overflow-x:auto}
+pre.mermaid{background:none;border:0;color:#1c2733;padding:0;margin:0;
+            font-size:13px;text-align:center;display:block}
+pre.mermaid.mermaid-fallback{background:#f7f9fb;border:1px dashed #c3ccd6;border-radius:6px;
+            padding:14px 16px;text-align:left;color:#33475b;font-size:12.5px;
+            white-space:pre;overflow:auto}
+pre.mermaid.mermaid-fallback::before{content:"⚠ Mermaid 未渲染（离线）—— 以下为图源文本";
+            display:block;margin-bottom:8px;color:var(--amb);font-weight:600;font-size:12px}
+pre.mermaid svg{max-width:100%;height:auto}
 blockquote{margin:1.2em 0;padding:14px 20px;background:#f8f9fb;
            border-left:4px solid var(--acc);border-radius:0 6px 6px 0;color:#33475b}
 blockquote p{margin:.4em 0}
@@ -305,6 +324,72 @@ def _write_text(path, text):
         raise ValueError("无法写入 %s: %s" % (path, exc)) from exc
 
 
+def render_mermaid(md, doc_head_extra):
+    """判断是否有 mermaid，并返回需注入 <head> 的运行时片段。"""
+    if 'class="mermaid"' not in md:
+        return ""
+    return MERMAID_RUNTIME
+
+
+MERMAID_RUNTIME = """<script type="module">
+/* Mermaid 运行时：CDN 可用则渲染；离线/失败则优雅降级为可读代码块。
+   关键：渲染成功必须清除降级标记，避免出现「已渲染但仍显示未渲染警告」。 */
+const CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+const SEL = "pre.mermaid";
+
+function degrade(reason) {
+  var n = 0;
+  document.querySelectorAll(SEL).forEach(function (el) {
+    if (el.querySelector("svg")) return;   // 已成功渲染的不动
+    el.classList.add("mermaid-fallback");
+    n++;
+  });
+  if (n) console.warn("Mermaid fallback:", reason, "(" + n + " blocks)");
+  return n;
+}
+
+function clearFallback() {
+  document.querySelectorAll(SEL).forEach(function (el) {
+    el.classList.remove("mermaid-fallback");
+    el.removeAttribute("title");
+  });
+}
+
+(function () {
+  var settled = false;
+  var timer = setTimeout(function () {
+    if (!settled) degrade("加载超时（CDN 不可达）");
+  }, 15000);
+
+  import(CDN).then(function (mod) {
+    var mermaid = mod.default;
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "neutral",
+      securityLevel: "strict",
+      fontFamily: '-apple-system,"PingFang SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif',
+      flowchart: { useMaxWidth: true, htmlLabels: false },
+      sequence: { useMaxWidth: true },
+      state: { useMaxWidth: true }
+    });
+    return mermaid.run({ querySelector: SEL });
+  }).then(function () {
+    settled = true;
+    clearTimeout(timer);
+    clearFallback();                       // 成功后必须清除降级标记
+    window.__mermaidStatus = { ok: true, blocks: document.querySelectorAll(SEL + " svg").length };
+  }).catch(function (e) {
+    settled = true;
+    clearTimeout(timer);
+    var msg = String((e && e.message) || e);
+    degrade(msg);
+    window.__mermaidStatus = { ok: false, error: msg };
+  });
+})();
+</script>
+"""
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
@@ -322,13 +407,15 @@ def main():
     if m:
         title = re.sub(r"[`*]", "", m.group(1)).strip()
 
+    body = convert(md)
+    runtime = render_mermaid(body, None)
     doc = (
         "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n"
         "<meta charset=\"utf-8\">\n"
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n"
-        "<title>%s</title>\n<style>%s</style>\n</head>\n<body>\n"
+        "<title>%s</title>\n<style>%s</style>\n%s</head>\n<body>\n"
         "<main class=\"wrap\">\n%s\n</main>\n</body>\n</html>\n"
-        % (html.escape(title), CSS, convert(md))
+        % (html.escape(title), CSS, runtime, body)
     )
     try:
         _write_text(dst, doc)

@@ -37,6 +37,16 @@ pre code{background:none;border:0;color:inherit;padding:0;font-size:1em}
       font:14px/1.9 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#243342}
 .imath{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
        font-size:.95em;color:#8a2b4a;background:#f4f6f8;padding:.05em .28em;border-radius:3px}
+.mmd{margin:1.6em 0;padding:10px 6px;border:1px solid var(--line);border-radius:8px;
+     background:#fcfdfe;overflow-x:auto}
+pre.mermaid{background:none;border:0;color:#1c2733;padding:0;margin:0;
+            font-size:13px;text-align:center;display:block}
+pre.mermaid.mermaid-fallback{background:#f7f9fb;border:1px dashed #c3ccd6;border-radius:6px;
+            padding:14px 16px;text-align:left;color:#33475b;font-size:12.5px;
+            white-space:pre;overflow:auto}
+pre.mermaid.mermaid-fallback::before{content:"⚠ Mermaid 未渲染（离线）—— 以下为图源文本";
+            display:block;margin-bottom:8px;color:var(--amb);font-weight:600;font-size:12px}
+pre.mermaid svg{max-width:100%;height:auto}
 blockquote{margin:1.2em 0;padding:14px 20px;background:#f8f9fb;
            border-left:4px solid var(--acc);border-radius:0 6px 6px 0;color:#33475b}
 blockquote p{margin:.4em 0}
@@ -60,6 +70,62 @@ li{margin:.35em 0}
   h2{page-break-after:avoid}table,img,pre,.math{page-break-inside:avoid}}
 @media(max-width:760px){.wrap{padding:26px 18px 60px}h1{font-size:1.5em}}
 </style>
+<script type="module">
+/* Mermaid 运行时：CDN 可用则渲染；离线/失败则优雅降级为可读代码块。
+   关键：渲染成功必须清除降级标记，避免出现「已渲染但仍显示未渲染警告」。 */
+const CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+const SEL = "pre.mermaid";
+
+function degrade(reason) {
+  var n = 0;
+  document.querySelectorAll(SEL).forEach(function (el) {
+    if (el.querySelector("svg")) return;   // 已成功渲染的不动
+    el.classList.add("mermaid-fallback");
+    n++;
+  });
+  if (n) console.warn("Mermaid fallback:", reason, "(" + n + " blocks)");
+  return n;
+}
+
+function clearFallback() {
+  document.querySelectorAll(SEL).forEach(function (el) {
+    el.classList.remove("mermaid-fallback");
+    el.removeAttribute("title");
+  });
+}
+
+(function () {
+  var settled = false;
+  var timer = setTimeout(function () {
+    if (!settled) degrade("加载超时（CDN 不可达）");
+  }, 15000);
+
+  import(CDN).then(function (mod) {
+    var mermaid = mod.default;
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "neutral",
+      securityLevel: "strict",
+      fontFamily: '-apple-system,"PingFang SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif',
+      flowchart: { useMaxWidth: true, htmlLabels: false },
+      sequence: { useMaxWidth: true },
+      state: { useMaxWidth: true }
+    });
+    return mermaid.run({ querySelector: SEL });
+  }).then(function () {
+    settled = true;
+    clearTimeout(timer);
+    clearFallback();                       // 成功后必须清除降级标记
+    window.__mermaidStatus = { ok: true, blocks: document.querySelectorAll(SEL + " svg").length };
+  }).catch(function (e) {
+    settled = true;
+    clearTimeout(timer);
+    var msg = String((e && e.message) || e);
+    degrade(msg);
+    window.__mermaidStatus = { ok: false, error: msg };
+  });
+})();
+</script>
 </head>
 <body>
 <main class="wrap">
@@ -102,6 +168,55 @@ li{margin:.35em 0}
 <hr>
 <h2>2. 系统分层架构总览</h2>
 <p><img alt="图 5 LLM + JEV 混合决策架构" src="images/fig5_hybrid_architecture.png"></p>
+<h3>2.1 系统分层与数据流（Mermaid）</h3>
+<div class="mmd"><pre class="mermaid">flowchart LR
+    subgraph YOU["你的控制面（L1–L4）"]
+        direction TB
+        L1["L1 采集层&lt;br/&gt;端点发现 · 长连/逆向 · 归一化去重"]
+        L1B["L1′ 微结构&lt;br/&gt;跳动频率 · 恢复时间 · 漂移速率"]
+        L2["L2 特征&lt;br/&gt;去水公平概率 · 无风险参考线"]
+        L3["L3 决策（三路分流）"]
+        L4["L4 经济学算法栈&lt;br/&gt;优势估计 · 收缩 · Kelly · 约束"]
+        L1 --&gt; L1B --&gt; L2 --&gt; L3 --&gt; L4
+    end
+
+    subgraph DEC["L3 三路分流"]
+        direction TB
+        RA["路径 A · 确定性规则&lt;br/&gt;＜1ms"]
+        RB["路径 B · JEV&lt;br/&gt;0.3–1.5s"]
+        RC["路径 C · LLM&lt;br/&gt;1.5–6s（慢通路）"]
+    end
+
+    subgraph OPP["对手方控制面（L5）"]
+        direction TB
+        L5A["风控队列&lt;br/&gt;接受延迟 5–20s"]
+        L5B["裁定：改价 / 拒单 / 降限额"]
+        L5A --&gt; L5B
+    end
+
+    L6["L6 反馈校准&lt;br/&gt;CLV 归因 · Brier/ECE · 参数调优"]
+
+    L3 --&gt; RA
+    L3 --&gt; RB
+    L3 --&gt; RC
+    RA --&gt; L4
+    RB --&gt; L4
+    RC -.-&gt;|"离线/旁路，不入关键路径"| L4
+    L4 --&gt;|"下单请求"| L5A
+    L5B --&gt;|"结算结果"| L6
+    L1 --&gt;|"行情快照"| L6
+    L6 -.-&gt;|"规则候选 / 参数更新"| L3
+    L6 -.-&gt;|"校准参考"| L2
+
+    classDef mine fill:#eef4f9,stroke:#2c6fa8,stroke-width:1px,color:#12212e
+    classDef dec fill:#f3eef9,stroke:#7d5ba6,stroke-width:1px,color:#12212e
+    classDef opp fill:#fdecea,stroke:#c0392b,stroke-width:1px,color:#12212e
+    classDef fb fill:#eef9f2,stroke:#27ae60,stroke-width:1px,color:#12212e
+    class L1,L1B,L2,L3,L4 mine
+    class RA,RB,RC dec
+    class L5A,L5B opp
+    class L6 fb</pre></div>
+<blockquote><p><strong>读图要点</strong>：蓝色（L1–L4）是你的控制面，可优化到亚秒级； 红色（L5）是对手方控制面，<strong>接受延迟与裁定权都不在你手里</strong>。 紫色为三路分流，绿色为反馈闭环。</p></blockquote>
 <div class="tw"><table><thead><tr><th>层</th><th>职责</th><th>关键指标</th><th>归属</th></tr></thead><tbody><tr><td><strong>L1 采集</strong></td><td>端点发现、长连推送/逆向请求、多源冗余、归一化、去重</td><td>覆盖率、端到端延迟、可用率</td><td>你</td></tr><tr><td><strong>L1′ 微结构提取</strong></td><td>跳动频率、恢复时间、漂移速率、价差、深度代理</td><td>单次 &lt;1ms</td><td>你</td></tr><tr><td><strong>L2 特征</strong></td><td>去水公平概率、无风险参考线、跨市场/跨平台一致性</td><td>单次 &lt;1ms</td><td>你</td></tr><tr><td><strong>L3 决策</strong></td><td><strong>三路分流</strong>：确定性规则 / JEV / LLM</td><td>见 §6</td><td>你</td></tr><tr><td><strong>L4 经济学算法栈</strong></td><td>优势估计、收缩、分数·多元 Kelly、相关性约束、成本摊销、执行过滤</td><td>单次 &lt;1ms</td><td>你</td></tr><tr><td><strong>L5 执行</strong></td><td>下注队列、幂等去重、速率整形、拒单状态机、对账</td><td>5–20s（含对手方延迟）</td><td><strong>部分在对手方</strong></td></tr><tr><td><strong>L6 反馈校准</strong></td><td>结算回归、CLV 归因、Brier/ECE 评估、参数调优</td><td>离线</td><td>你</td></tr></tbody></table></div>
 <p><strong>架构的核心不对称（本报告主线）：</strong></p>
 <blockquote><p>L1–L4 全部属于你，可以被优化到亚秒级；<strong>L5 之后由对手方的风控系统裁定</strong>。 你可以把"决策"做到极致，但"成交与否"不在你的控制面内。</p></blockquote>
@@ -119,7 +234,7 @@ li{margin:.35em 0}
 <div class="tw"><table><thead><tr><th>维度</th><th>说明</th></tr></thead><tbody><tr><td>技术要点</td><td>维持与前端同一 WebSocket/SSE 通道，订阅赔率推送</td></tr><tr><td>延迟</td><td><strong>0.5–3s</strong>，是所有路径中最低</td></tr><tr><td>完整性</td><td>中（3）：依赖平台是否对该会话推送全量市场</td></tr><tr><td>稳定性</td><td><strong>低（2）</strong>：长连被切断即失去行情；重连有状态恢复成本</td></tr><tr><td>维护成本</td><td>高（2）：协议变更直接影响</td></tr><tr><td>定位</td><td><strong>作为延迟优化上限保留</strong>，不作为唯一来源</td></tr></tbody></table></div>
 <h4>路径 B · 前端 XHR/GraphQL 逆向（工程推荐主路径）</h4>
 <p><strong>已验证实现</strong>：<code>stake-scraper</code> 直接复用站点内部 GraphQL 端点：</p>
-<pre><code>POST https://stake.com/_api/graphql
+<pre><code class="language-http">POST https://stake.com/_api/graphql
 Content-Type: application/json
 
 query FixtureOdds($id: String!) {
@@ -145,11 +260,44 @@ query FixtureOdds($id: String!) {
 <blockquote><p>这一点对本案是决定性的：构想的核心是"在庄家倍率调整瞬间"，而聚合站在定义上就没有这个瞬间。</p></blockquote>
 <h4>路径 E · 商业 API（稳定但不覆盖目标）</h4>
 <div class="tw"><table><thead><tr><th>维度</th><th>说明</th></tr></thead><tbody><tr><td>代表性能力</td><td><code>odds-api.io</code>：12,000+ 联赛、265+ 书商；<code>rapidoddsapi</code>：100+ 书商、REST+WS</td></tr><tr><td>延迟</td><td>The Odds API 精选市场<strong>在盘 40 秒</strong>轮询</td></tr><tr><td>稳定性 / 维护成本</td><td><strong>5 / 5</strong>（唯一双满分）</td></tr><tr><td><strong>致命限制</strong></td><td><strong>接入层级 2</strong>：不覆盖目标平台，无法做该平台的跳动检测</td></tr><tr><td>定位</td><td>用作<strong>无风险参考线</strong>（fair line）与交叉验证基准</td></tr></tbody></table></div>
+<p><strong>采集路径选择决策树（Mermaid）</strong>：</p>
+<div class="mmd"><pre class="mermaid">flowchart TD
+    START(["需要哪个平台的盘口？"]) --&gt; Q1{"目标平台是否&lt;br/&gt;暴露内部端点？"}
+
+    Q1 --&gt;|"是（可抓到 XHR/WS）"| B["路径 B：逆向 GraphQL/XHR&lt;br/&gt;免浏览器 · 综合 3.55"]
+    Q1 --&gt;|"否（纯前端渲染）"| C["路径 C：浏览器自动化&lt;br/&gt;Playwright/Selenium · 3.15"]
+
+    B --&gt; NEED{"是否需&lt;br/&gt;亚秒级延迟？"}
+    NEED --&gt;|"是（关键赛事）"| A["路径 A：长连直读 WS/SSE&lt;br/&gt;0.5–3s · 3.55"]
+    NEED --&gt;|"否"| USE["直接使用 B"]
+    A --&gt;|断连时自动回落| B
+
+    C --&gt; LONG["长尾赛事兜底"]
+
+    START --&gt; Q2{"是否需要历史数据&lt;br/&gt;或赛前基准？"}
+    Q2 --&gt;|"是"| D["路径 D：聚合站（OddsPortal）&lt;br/&gt;时间分辨率 = 1&lt;br/&gt;⚠ 严禁用于跳动检测"]
+    Q2 --&gt;|"需无风险参考线"| E["路径 E：商业 API&lt;br/&gt;稳定性 5/5&lt;br/&gt;⚠ 不覆盖目标平台"]
+
+    USE --&gt; AGG["多路径聚合层&lt;br/&gt;赛事 ID 对齐 · 时区归一 · 幂等去重"]
+    LONG --&gt; AGG
+    A --&gt; AGG
+    D -.-&gt;|"仅作训练/回填"| AGG
+    E -.-&gt;|"仅作 fair line"| AGG
+
+    AGG --&gt; OUT["本地时序库&lt;br/&gt;不可变快照 + 事件流"]
+
+    classDef best fill:#eef9f2,stroke:#27ae60,stroke-width:2px,color:#12212e
+    classDef mid fill:#eef4f9,stroke:#2c6fa8,stroke-width:1px,color:#12212e
+    classDef warn fill:#fdf6e6,stroke:#8a5a00,stroke-width:1px,color:#12212e
+    class B,A best
+    class C,AGG,OUT mid
+    class D,E warn</pre></div>
+<blockquote><p><strong>关键约束</strong>：路径 D 的「时间分辨率 = 1」是<strong>致命限制</strong> —— 构想的核心是"在庄家倍率调整瞬间"，而聚合站在定义上就没有这个瞬间。 路径 E 稳定性虽满分，但<strong>接入层级只有 2</strong>（拿不到目标平台盘口）。</p></blockquote>
 <h3>3.3 关键反向证据：协议漂移是常态，不是风险假设</h3>
 <p>这是本节最重要的内容。<strong>开源界公开记录了协议变更导致采集中断的完整现场</strong>：</p>
 <blockquote><p><strong><code>rafabelokurows/sports-odds</code> README（原文）</strong> <em>"Update 2024-12-05: It was good while it lasted. <strong>Betclic has changed their API, so I'm not able to scrape their odds</strong> (at least for the moment). I've started an <code>exploration.py</code> script to see if I could get around their new validations."</em> <em>"New Security Validations: Cloudfront Update 202..."</em></p></blockquote>
 <p>同一仓库还记录了作者为绕过新校验而专门新建探索脚本的过程。<strong>这就是采集层真实的工作循环</strong>：</p>
-<pre><code>接入成功 → 稳定运行 → 对方变更（API 结构 / CDN 校验 / 指纹策略）
+<pre><code class="language-text">接入成功 → 稳定运行 → 对方变更（API 结构 / CDN 校验 / 指纹策略）
          → 采集中断 → 逆向探查 → 重新接入 → 再次变更 → ...</code></pre>
 <p>另一个印证：<code>KOS</code> 项目明确选择"<strong>strips away fragile browser automation in favor of a robust, API-driven signal engine</strong>"（剥离脆弱的浏览器自动化，转向 API 驱动的信号引擎）——这是工程界对该问题的共识方向。</p>
 <p><strong>工程含义（写入成本模型）</strong>：</p>
@@ -191,12 +339,82 @@ query FixtureOdds($id: String!) {
 <p><img alt="图 4 延迟预算" src="images/fig4_latency_budget.png"></p>
 <div class="tw"><table><thead><tr><th>阶段</th><th>乐观</th><th>保守</th><th>归属</th></tr></thead><tbody><tr><td>① 场上事件发生</td><td>0</td><td>0</td><td>—</td></tr><tr><td>② 场馆数据采集（现场采集员）</td><td>2.0</td><td>5.0</td><td>数据商</td></tr><tr><td>③ 数据商 → 庄家交易系统推送</td><td>1.0</td><td>3.0</td><td>数据商/庄家</td></tr><tr><td>④ 庄家模型重算 + 风控复核</td><td>1.0</td><td>4.0</td><td>庄家</td></tr><tr><td>⑤ 新赔率抵达你的采集端</td><td>0.5</td><td>3.0</td><td>你（部分）</td></tr><tr><td>⑥ <strong>特征计算 + 经济学算法栈</strong></td><td>0.05</td><td>0.5</td><td><strong>你</strong></td></tr><tr><td>⑦ <strong>JEV 决策调用</strong></td><td>0.3</td><td>1.5</td><td><strong>你</strong></td></tr><tr><td>⑧ LLM 决策调用（<strong>仅慢通路</strong>）</td><td>1.5</td><td>6.0</td><td>你（不应进关键路径）</td></tr><tr><td>⑨ 下单请求 → 庄家风控</td><td>0.5</td><td>2.0</td><td>你→庄家</td></tr><tr><td>⑩ <strong>庄家下注接受延迟</strong></td><td>5.0</td><td>10.0</td><td><strong>庄家</strong></td></tr><tr><td>⑪ 成交结果：旧价 / 改价 / 拒单</td><td>—</td><td>—</td><td><strong>庄家</strong></td></tr><tr><td><strong>关键路径合计（不含 LLM）</strong></td><td>—</td><td><strong>29.0s</strong></td><td></td></tr><tr><td><strong>全路径合计（含 LLM）</strong></td><td>—</td><td><strong>35.0s</strong></td><td></td></tr></tbody></table></div>
 <p><strong>分解结论：</strong></p>
-<pre><code>属于你的决策预算        约 1.8s   （⑥ 0.5 + ⑦ 1.5）
+<pre><code class="language-text">属于你的决策预算        约 1.8s   （⑥ 0.5 + ⑦ 1.5）
 属于对手方的裁定窗口    5–10s     （⑩，单项即超过你的全部决策时间）
 不可控的数据链路        4.5–15s   （②③④⑤）</code></pre>
 <blockquote><p><strong>推论 1</strong>：把 JEV 从 1.5s 优化到 0.5s，只影响总延迟的 3%。 <strong>推论 2</strong>：LLM 进入关键路径增加 <strong>+6s（+20%）</strong>，且不提供定价能力。 <strong>推论 3</strong>：⑤ 之后到 ⑩ 之间的部分<strong>都不在你的控制面内</strong>。</p></blockquote>
 <h3>5.3 成交裁定：不能被工程解决的结构问题</h3>
 <p><img alt="图 9 赔率跳动瞬间的真实时序" src="images/fig9_odds_tick_sequence.png"></p>
+<p><strong>全链路时序（Mermaid 泳道图）</strong>：</p>
+<div class="mmd"><pre class="mermaid">sequenceDiagram
+    autonumber
+    participant P as 球场
+    participant F as 数据商&lt;br/&gt;(现场采集员)
+    participant B as 庄家交易系统
+    participant S as 你的系统&lt;br/&gt;(L1–L4)
+    participant A as 你的账户
+
+    P-&gt;&gt;F: ① 进球 / 红牌 / 角球
+    Note over F: 人眼录入&lt;br/&gt;2–5s
+    F-&gt;&gt;B: ② 事件数据上行
+    Note over B: 模型重算 + 风控&lt;br/&gt;1–4s
+    B-&gt;&gt;S: ③ 新赔率下发（0.5–3s）
+
+    Note over B: ③′ 关键事件触发 suspend&lt;br/&gt;此时读到的是冻结/撤下的价格
+
+    Note over S: ④ 微结构 + 经济学栈 ＜0.5s&lt;br/&gt;⑤ JEV 判定 0.3–1.5s&lt;br/&gt;合计约 1.8s（属于你）
+
+    S-&gt;&gt;A: ⑥ 提交下注（0.5–2s）
+    A-&gt;&gt;B: ⑦ 请求进入风控队列
+    Note over B: 接受延迟 5–20s&lt;br/&gt;用最新行情复查你的单子
+
+    alt 价格已变
+        B--&gt;&gt;A: ⑧a 改价（要求接受更差价）
+    else 判定为优势玩家
+        B--&gt;&gt;A: ⑧b 拒单 / 降限额 / 标记
+    else 少数情况
+        B--&gt;&gt;A: ⑧c 按旧价成交
+    end
+
+    Note over S,B: 你能控制 ④⑤（约 1.8s），&lt;br/&gt;⑥⑦⑧（5–20s）由对手方裁定</pre></div>
+<p><strong>下注单生命周期状态机（Mermaid stateDiagram）</strong>：</p>
+<div class="mmd"><pre class="mermaid">stateDiagram-v2
+    [*] --&gt; 待发: 经济学算法栈输出 f* ＞ 0
+    待发 --&gt; 已发送: 提交下注请求
+    待发 --&gt; 已放弃: 执行过滤判定 q_fill 过低
+
+    已发送 --&gt; 接受延迟中: 进入庄家风控队列
+
+    接受延迟中 --&gt; 已成交_原价: 价格未变（少数）
+    接受延迟中 --&gt; 待确认改价: 价格已变，要求接受更差价
+    接受延迟中 --&gt; 已拒单: 直接拒绝
+    接受延迟中 --&gt; 已停盘: 关键事件 suspend
+
+    待确认改价 --&gt; 已成交_劣价: 接受更差价
+    待确认改价 --&gt; 已放弃: 拒绝改价
+
+    已成交_原价 --&gt; 待结算
+    已成交_劣价 --&gt; 待结算
+    待结算 --&gt; 已结算: 赛事结束
+    已结算 --&gt; 反馈校准: 回写 CLV / Brier / ECE
+
+    已拒单 --&gt; 反馈校准
+    已停盘 --&gt; 反馈校准
+    已放弃 --&gt; 反馈校准
+
+    反馈校准 --&gt; [*]
+
+    note right of 接受延迟中
+        此状态耗时 5–20s
+        状态转换权在对手方
+        非本人可优化项
+    end note
+
+    note right of 反馈校准
+        CLV 双重角色：
+        既是优势证明，
+        也是被封号的触发信号
+    end note</pre></div>
 <div class="tw"><table><thead><tr><th>机制</th><th>技术描述</th><th>对策略的影响</th></tr></thead><tbody><tr><td><strong>接受延迟</strong></td><td>在盘期下注请求延迟 5–20s 后处理；交易所足球在盘最短约 5s</td><td>决策价格与成交价格脱钩</td></tr><tr><td><strong>停盘 suspend</strong></td><td>关键事件触发全市场挂起，报价撤下</td><td>读到的"信号"可能是冻结值</td></tr><tr><td><strong>改价 re-quote</strong></td><td>延迟窗口内改价，要求接受更差价</td><td>关闭该选项则退化为拒单</td></tr><tr><td><strong>拒单</strong></td><td>直接拒绝，理由不透明</td><td>无反馈信号，无法用于学习</td></tr><tr><td><strong>降限额 stake factoring</strong></td><td>触发条件为<strong>注单质量（CLV）而非盈亏</strong></td><td>优势被识别即被限幅，正期望无法复利</td></tr><tr><td><strong>方向不对称</strong></td><td>社区实测：部分平台赔率变差时拒单、变好时照常成交</td><td>期望值被系统性下调</td></tr></tbody></table></div>
 <p><strong>工程语言</strong>：这是一个<strong>对手方持有单方面撤单权、且成交价可由对方在 5–10s 窗口内重定价</strong>的市场结构：</p>
 <blockquote><p><strong>等价于「交易所可以在你下单后 5–20 秒内决定是否撤销你的成交，并且可以在你获利时降低你的最大下单量」。</strong></p></blockquote>
@@ -208,6 +426,40 @@ query FixtureOdds($id: String!) {
 <h3>6.2 三路分流设计</h3>
 <p><img alt="图 6 决策路由矩阵" src="images/fig6_routing_matrix.png"></p>
 <div class="tw"><table><thead><tr><th>路径</th><th>承担任务</th><th>延迟</th><th>频率</th><th>经济学贡献</th></tr></thead><tbody><tr><td><strong>A · 确定性规则/算法</strong></td><td>跳动检测、跨平台套利判定、去水、价值筛选、仓位计算</td><td>&lt;1ms</td><td>极高</td><td>直接</td></tr><tr><td><strong>B · JEV</strong></td><td>微结构模式判断、价值下注二值门控</td><td>0.3–1.5s</td><td>高</td><td>中等（<strong>过滤，不创造</strong>）</td></tr><tr><td><strong>C · LLM</strong></td><td>伤停/新闻抽取、异常归因与复盘、策略规则生成</td><td>1.5–6s</td><td>低</td><td>间接（离线为主）</td></tr></tbody></table></div>
+<p><strong>三路分流的判定流程（Mermaid）</strong>：</p>
+<div class="mmd"><pre class="mermaid">flowchart TD
+    IN(["待处理任务"]) --&gt; Q1{"对延迟是否敏感？&lt;br/&gt;需 ＜1ms 完成"}
+
+    Q1 --&gt;|"是"| Q2{"是否为确定性算术？"}
+    Q1 --&gt;|"否（可容忍 0.3–1.5s）"| Q3{"是否需带校准的&lt;br/&gt;离散判断？"}
+
+    Q2 --&gt;|"是（去水/Kelly/约束/跳动检测）"| PA["路径 A · 规则算法&lt;br/&gt;延迟 ＜1ms · 成本 ≈ 0"]
+    Q2 --&gt;|"否（异常）"| ESC["重新判定：&lt;br/&gt;可能需上抬至路径 B"]
+
+    Q3 --&gt;|"是（微结构模式/价值门控）"| PB["路径 B · JEV&lt;br/&gt;0.3–1.5s · 高频"]
+    Q3 --&gt;|"否"| Q4{"是否需要&lt;br/&gt;非结构化理解？"}
+
+    Q4 --&gt;|"是（伤停/新闻/归因/规则生成）"| Q5{"是否在关键路径上？"}
+    Q4 --&gt;|"否"| DROP["不需要模型&lt;br/&gt;用普通代码实现"]
+
+    Q5 --&gt;|"是"| BLOCK["❌ 禁止&lt;br/&gt;LLM 入关键路径&lt;br/&gt;+20% 延迟 · 定价贡献 ≈ 0"]
+    Q5 --&gt;|"否（离线/旁路）"| PC["路径 C · LLM&lt;br/&gt;1.5–6s · 低频"]
+
+    BLOCK --&gt; PB
+    PC --&gt; ASYNC["结果异步注入特征库&lt;br/&gt;不阻塞下单链路"]
+
+    PA --&gt; L4["L4 经济学算法栈"]
+    PB --&gt; L4
+    ASYNC -.-&gt;|"下一轮迭代生效"| L4
+
+    classDef rule fill:#eef9f2,stroke:#27ae60,stroke-width:2px,color:#12212e
+    classDef jev fill:#f3eef9,stroke:#7d5ba6,stroke-width:2px,color:#12212e
+    classDef llm fill:#fdf6e6,stroke:#e67e22,stroke-width:1px,color:#12212e
+    classDef bad fill:#fdecea,stroke:#c0392b,stroke-width:2px,color:#12212e
+    class PA rule
+    class PB jev
+    class PC,ASYNC llm
+    class BLOCK bad</pre></div>
 <p><strong>路由矩阵：</strong></p>
 <div class="tw"><table><thead><tr><th>任务</th><th class="center">延迟预算</th><th class="center">调用频率</th><th class="center">单次成本</th><th><strong>适配模型</strong></th><th class="center">经济学贡献</th></tr></thead><tbody><tr><td>赔率跳动检测</td><td class="center">5</td><td class="center">5</td><td class="center">5</td><td><strong>规则/算法</strong></td><td class="center">2</td></tr><tr><td>跨平台套利判定</td><td class="center">5</td><td class="center">4</td><td class="center">5</td><td><strong>规则/算法</strong></td><td class="center">4</td></tr><tr><td>去水/公平概率</td><td class="center">5</td><td class="center">5</td><td class="center">5</td><td><strong>规则/算法</strong></td><td class="center">2</td></tr><tr><td>价值下注筛选</td><td class="center">4</td><td class="center">4</td><td class="center">4</td><td><strong>JEV</strong></td><td class="center">3</td></tr><tr><td>仓位计算</td><td class="center">5</td><td class="center">4</td><td class="center">5</td><td><strong>规则/算法</strong></td><td class="center">4</td></tr><tr><td>微结构模式判断</td><td class="center">3</td><td class="center">4</td><td class="center">2</td><td><strong>JEV</strong></td><td class="center">2</td></tr><tr><td>伤停/新闻抽取</td><td class="center">1</td><td class="center">1</td><td class="center">2</td><td><strong>LLM</strong></td><td class="center">3</td></tr><tr><td>异常归因与复盘</td><td class="center">1</td><td class="center">1</td><td class="center">2</td><td><strong>LLM</strong></td><td class="center">1</td></tr><tr><td>策略规则生成</td><td class="center">1</td><td class="center">1</td><td class="center">1</td><td><strong>LLM</strong></td><td class="center">2</td></tr></tbody></table></div>
 <p><strong>设计结论</strong>：</p>
@@ -351,6 +603,14 @@ query FixtureOdds($id: String!) {
 <p>从上述仓库可以得出三条<strong>技术层已经确定</strong>的结论：</p>
 <div class="tw"><table><thead><tr><th>结论</th><th>支撑仓库</th><th>含义</th></tr></thead><tbody><tr><td><strong>① 采集中间层技术可行</strong>（逆向 GraphQL / 浏览器自动化 / 异步快照）</td><td>stake-scraper、allusion、OddsHarvester、snuper</td><td>L1 可以做出来，且已有多种成熟范式</td></tr><tr><td><strong>② 但采集层存在必然的协议半衰期</strong></td><td>sports-odds（失效记录）、KOS（架构迁移）</td><td>L1 的<strong>运维成本是持续性的</strong>，不是一次性的</td></tr><tr><td><strong>③ 建模与算法层有完整开源实现</strong></td><td>penaltyblog、mberk/shin、kellycorr、implied</td><td>L2/L4 不需要从零造轮子</td></tr><tr><td><strong>④ 但"公开数据可获 &gt;11.4% 相对优势"被实证否证</strong></td><td>CODESIGURD/value-bet-model</td><td><strong>L3/L4 再完美，也无法改变 <code>p_model</code> 无信息这一事实</strong></td></tr></tbody></table></div>
 <blockquote><p><strong>技术层的最终判断</strong>： 本方案<strong>不缺实现</strong>（①③ 已证明），<strong>缺的是优势来源</strong>（④ 已否证）。 唯一的希望是 §5.1 的微结构信号 —— 而它的收益被 §5.3 的成交裁定封顶，且没有公开证据支持它能提供 11.4% 量级的相对优势。</p></blockquote>
+<h3>12.5 采码方案综合评估矩阵（8 方案 × 9 维度）</h3>
+<blockquote><p>按交付规范要求（≥3 方案 × ≥6 维度）编制，此处扩展至 <strong>8 方案 × 9 维度</strong>。 评分为 0–5（5 = 最优），为基于 §3–§12 证据的主观评估。</p></blockquote>
+<div class="tw"><table><thead><tr><th>方案</th><th class="center">接入层级</th><th class="center">延迟表现</th><th class="center">盘口完整性</th><th class="center">时间分辨率</th><th class="center">稳定性</th><th class="center">维护成本</th><th class="center">覆盖率</th><th class="center">自研成本</th><th class="center">依赖风险</th></tr></thead><tbody><tr><td><strong>A · 前端长连直读 WS/SSE</strong></td><td class="center">5</td><td class="center"><strong>5</strong></td><td class="center">3</td><td class="center"><strong>5</strong></td><td class="center">2</td><td class="center">2</td><td class="center">5</td><td class="center">3</td><td class="center"><strong>1</strong></td></tr><tr><td><strong>B · XHR/GraphQL 逆向</strong></td><td class="center">4</td><td class="center">4</td><td class="center">4</td><td class="center">4</td><td class="center">3</td><td class="center">3</td><td class="center">5</td><td class="center">4</td><td class="center">3</td></tr><tr><td><strong>C · 浏览器自动化</strong></td><td class="center">3</td><td class="center">2</td><td class="center"><strong>5</strong></td><td class="center">3</td><td class="center">3</td><td class="center">2</td><td class="center">5</td><td class="center">3</td><td class="center">3</td></tr><tr><td><strong>D · 第三方聚合站</strong></td><td class="center">2</td><td class="center"><strong>1</strong></td><td class="center">4</td><td class="center"><strong>1</strong></td><td class="center">4</td><td class="center"><strong>5</strong></td><td class="center">4</td><td class="center"><strong>5</strong></td><td class="center">4</td></tr><tr><td><strong>E · 商业 API</strong></td><td class="center">2</td><td class="center">3</td><td class="center">3</td><td class="center">2</td><td class="center"><strong>5</strong></td><td class="center"><strong>5</strong></td><td class="center">3</td><td class="center"><strong>5</strong></td><td class="center"><strong>5</strong></td></tr><tr><td><strong>F · 开源现成方案</strong>（stake-scraper / allusion）</td><td class="center">4</td><td class="center">3</td><td class="center">4</td><td class="center">3</td><td class="center">2</td><td class="center">3</td><td class="center">4</td><td class="center"><strong>5</strong></td><td class="center">2</td></tr><tr><td><strong>G · 混合方案</strong>（B 主 + A 降延迟 + C 兑底 + D 回填 + E 参考）</td><td class="center"><strong>5</strong></td><td class="center">4</td><td class="center"><strong>5</strong></td><td class="center"><strong>5</strong></td><td class="center">3</td><td class="center"><strong>1</strong></td><td class="center"><strong>5</strong></td><td class="center">2</td><td class="center">3</td></tr><tr><td><strong>H · 不采集，只建模</strong>（公开数据集离线研究）</td><td class="center"><strong>1</strong></td><td class="center"><strong>1</strong></td><td class="center">2</td><td class="center"><strong>1</strong></td><td class="center"><strong>5</strong></td><td class="center"><strong>5</strong></td><td class="center">2</td><td class="center"><strong>5</strong></td><td class="center"><strong>5</strong></td></tr></tbody></table></div>
+<p><strong>维度说明</strong>：</p>
+<ul><li><strong>接入层级</strong>：能否触及目标平台的真实盘口（决定方案对本案是否有意义）</li><li><strong>延迟表现</strong>：能否支撑"调价瞬间"检测</li><li><strong>盘口完整性</strong>：盘口类型（1X2/AH/OU）与价格层级（全价位）的完整度</li><li><strong>时间分辨率</strong>：能否还原跳动过程（聚合站为 1 = 致命）</li><li><strong>稳定性 / 维护成本</strong>：工程持续性（分越高越省心）</li><li><strong>覆盖率</strong>：赛事覆盖广度（含长尾）</li><li><strong>自研成本</strong>：分越高越便宜</li><li><strong>依赖风险</strong>：分越高越可控</li></ul>
+<p><strong>综合推荐（加权结论）</strong>：</p>
+<div class="tw"><table><thead><tr><th class="center">排名</th><th>方案</th><th>结论</th></tr></thead><tbody><tr><td class="center">🥇</td><td><strong>G · 混合方案</strong></td><td><strong>技术上唯一能同时满足完整性与时间分辨率的路径</strong>，但维护成本仅 1 分——这是 §10.1 成本上修至 $1,700–2,000 的直接原因</td></tr><tr><td class="center">🥈</td><td><strong>B · GraphQL 逆向</strong></td><td>工程性价比最高（综合 3.55），作为 G 的实时主力</td></tr><tr><td class="center">🥉</td><td><strong>A · 长连直读</strong></td><td>延迟上限，但<strong>依赖风险仅 1 分</strong>（断连即失行情），不可单用</td></tr><tr><td class="center">—</td><td>C / D / E</td><td>C 做长尾兑底，D 仅历史回填，E 仅 fair line——<strong>均不可单独承担实时职责</strong></td></tr><tr><td class="center">❌</td><td>F · 开源现成</td><td>可以直接拿来验证可行性，但<strong>依赖风险 2 分</strong>（上游停更/目标平台不匹配）</td></tr><tr><td class="center">✅</td><td><strong>H · 不采集只建模</strong></td><td>对本案的经济学目标<strong>无意义</strong>（接入层级 1），但在 §13.3 的可迁移产出维度上得分最高</td></tr></tbody></table></div>
+<blockquote><p><strong>矩阵传达的核心矛盾</strong>：满足完整性（G）就必须接受维护成本 1 分与自研成本 2 分； 成本可接受（D/E/H）则接入层级或时间分辨率必然跌到 1–2。 <strong>没有任何一格是双优的</strong> —— 这是 §3.3 协议漂移与 §4.2 覆盖率断崖在工程上的必然投影。</p></blockquote>
 <hr>
 <h2>13. 可行性评分与结论</h2>
 <p><img alt="图 12 架构层 × 技术/经济学维度评分" src="images/fig12_feasibility_heatmap.png"></p>
@@ -374,7 +634,7 @@ query FixtureOdds($id: String!) {
 <h3>附录 A：数据与图表索引</h3>
 <div class="tw"><table><thead><tr><th>文件</th><th>内容</th><th>对应章节</th></tr></thead><tbody><tr><td><code>images/fig1_platform_infra.png</code></td><td>图 1 目标平台技术形态与接口面</td><td>§3.1</td></tr><tr><td><code>images/fig2_margin_and_ev.png</code></td><td>图 2 水钱与单注 EV</td><td>§9.1</td></tr><tr><td><code>images/fig3_required_edge.png</code></td><td>图 3 所需概率精度优势</td><td>§9.2</td></tr><tr><td><code>images/fig4_latency_budget.png</code></td><td>图 4 延迟预算与关键路径</td><td>§5.2</td></tr><tr><td><code>images/fig5_hybrid_architecture.png</code></td><td>图 5 LLM+JEV 混合决策架构</td><td>§2</td></tr><tr><td><code>images/fig6_routing_matrix.png</code></td><td>图 6 决策路由矩阵</td><td>§6.2</td></tr><tr><td><code>images/fig7_cost_breakeven.png</code></td><td>图 7 成本结构与摊销</td><td>§10</td></tr><tr><td><code>images/fig8_econ_algo_stack.png</code></td><td>图 8 经济学算法栈</td><td>§7</td></tr><tr><td><code>images/fig9_odds_tick_sequence.png</code></td><td>图 9 赔率跳动时序</td><td>§5.3</td></tr><tr><td><code>images/fig10_jev_position.png</code></td><td>图 10 JEV 定位与延迟占比</td><td>§6.4</td></tr><tr><td><code>images/fig11_montecarlo.png</code></td><td>图 11 蒙特卡洛结果</td><td>§11</td></tr><tr><td><code>images/fig12_feasibility_heatmap.png</code></td><td>图 12 可行性评分</td><td>§13</td></tr><tr><td><code>images/fig13_scraping_paths.png</code></td><td><strong>图 13 爬虫路径技术可行性矩阵</strong></td><td>§3.2</td></tr><tr><td><code>images/fig14_coverage_scale.png</code></td><td><strong>图 14 赛事规模与覆盖率分层</strong></td><td>§4.2–4.3</td></tr><tr><td><code>images/fig15_completeness.png</code></td><td><strong>图 15 完整性六维评估</strong></td><td>§4.4</td></tr><tr><td><code>images/fig16_devig_methods.png</code></td><td><strong>图 16 四种去水方法对比</strong></td><td>§8.1</td></tr><tr><td><code>images/fig17_correlated_kelly.png</code></td><td><strong>图 17 相关性下的过度下注</strong></td><td>§8.5</td></tr><tr><td><code>data/margin_ev.csv</code></td><td>各市场水钱与 EV</td><td>§9.1</td></tr><tr><td><code>data/required_edge.csv</code></td><td>打平所需精度优势</td><td>§9.2</td></tr><tr><td><code>data/latency_budget.csv</code></td><td>分阶段延迟预算</td><td>§5.2</td></tr><tr><td><code>data/routing_matrix.csv</code></td><td>决策路由矩阵</td><td>§6.2</td></tr><tr><td><code>data/cost_breakeven.csv</code></td><td>成本构成与摊销</td><td>§10</td></tr><tr><td><code>data/montecarlo.csv</code></td><td>蒙特卡洛结果</td><td>§11</td></tr><tr><td><code>data/feasibility_scores.csv</code></td><td>可行性评分矩阵</td><td>§13</td></tr><tr><td><code>data/scraping_paths.csv</code></td><td><strong>爬虫路径评分</strong></td><td>§3.2</td></tr><tr><td><code>data/coverage_scale.csv</code></td><td><strong>赛事覆盖分层与采集量级</strong></td><td>§4</td></tr><tr><td><code>data/completeness.csv</code></td><td><strong>完整性六维评分</strong></td><td>§4.4</td></tr><tr><td><code>data/devig_methods.csv</code></td><td><strong>去水方法数值对比</strong></td><td>§8.1</td></tr><tr><td><code>data/correlated_kelly.csv</code></td><td><strong>相关性 Kelly 数值</strong></td><td>§8.5</td></tr></tbody></table></div>
 <p><strong>复现</strong>：</p>
-<pre><code>python3 scripts/make_figures.py</code></pre>
+<pre><code class="language-bash">python3 scripts/make_figures.py</code></pre>
 <p>依赖：<code>numpy</code>、<code>matplotlib</code>（中文字体 WenQuanYi Zen Hei）。</p>
 <h3>附录 B：公式汇总</h3>
 <p><strong>去水</strong></p>
