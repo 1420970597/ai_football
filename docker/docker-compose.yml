@@ -1,4 +1,7 @@
-version: '3.8'
+# 注意：不再声明 `version:`。Compose V2 已忽略该字段并会输出
+#       "the attribute `version` is obsolete" 警告。
+
+name: ai_football
 
 services:
   # Redis缓存服务
@@ -6,7 +9,9 @@ services:
     image: redis:7-alpine
     container_name: ai_football_redis
     ports:
-      - "6379:6379"
+      # 端口可通过环境变量覆盖，避免与宿主机上其他项目冲突：
+      #   REDIS_PORT=16379 docker compose -f docker/docker-compose.yml up -d
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
@@ -20,7 +25,8 @@ services:
       dockerfile: docker/Dockerfile.browser
     container_name: ai_football_browser_scraper
     ports:
-      - "8080:8080"
+      # 同理可覆盖： SCRAPER_PORT=18080 docker compose ... up -d
+      - "${SCRAPER_PORT:-8080}:8080"
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DISPLAY=:99
@@ -40,6 +46,16 @@ services:
         limits:
           memory: 2G
           cpus: '1.0'
+    # 显式声明启动命令。默认 CMD 已是同一命令，此处显式写出以便排查时无需翻 Dockerfile。
+    # 注意：browser_scraper_service.py 的逻辑是「当 DISPLAY 存在时启用 --headless」，
+    #       故上面的 DISPLAY=:99 实际是触发无头模式的开关（见 README「已知问题」）。
+    command: ["python3", "browser_scraper_service.py"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=5).status==200 else 1)"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 40s
 
   # AI分析主服务
   ai-analyzer:
@@ -48,18 +64,21 @@ services:
       dockerfile: Dockerfile
     container_name: ai_football_analyzer
     ports:
-      - "8000:8000"
+      - "${ANALYZER_PORT:-8000}:8000"
     environment:
       - BROWSER_SCRAPER_URL=http://browser-scraper:8080
       - REDIS_URL=redis://redis:6379/0
     volumes:
       - ../output:/app/output
-      - ../config.py:/app/config.py
+      - ../config.py:/app/config.py:ro
     depends_on:
       - redis
       - browser-scraper
     networks:
       - ai_football_network
+    # 默认不随 up 启动（分析器为一次性任务，而非长驻服务）。
+    # 需要时用： docker compose -f docker/docker-compose.yml run --rm ai-analyzer
+    profiles: ["analyzer"]
 
 volumes:
   redis_data:

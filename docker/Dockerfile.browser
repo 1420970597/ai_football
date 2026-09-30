@@ -49,13 +49,18 @@ USER scraper
 WORKDIR /home/scraper/app
 
 # 复制requirements文件
-COPY requirements-browser.txt .
+# 注意：docker-compose.yml 为本服务声明的 context 是仓库根目录（`..`），
+#       故路径必须带 `docker/` 前缀。此前的 `COPY requirements-browser.txt .`
+#       与 context 不匹配，会导致构建报
+#       "failed to calculate checksum ... /requirements-browser.txt: not found"。
+COPY --chown=scraper:scraper docker/requirements-browser.txt .
 
 # 安装Python依赖
 RUN pip3 install --user -r requirements-browser.txt
 
-# 复制应用代码
-COPY --chown=scraper:scraper . .
+# 仅复制本服务运行所需文件（白名单优于整仓 COPY，避免把 output/ 与凭据带入镜像）
+# browser_scraper_service.py 仅依赖第三方库，不 import 任何本地模块。
+COPY --chown=scraper:scraper browser_scraper_service.py ./
 
 # 设置Python路径
 ENV PATH="/home/scraper/.local/bin:${PATH}"
