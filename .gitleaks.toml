@@ -1,0 +1,32 @@
+# gitleaks 配置（AGENTS.md §6 卫生检查配套）
+#
+# 用途：把**已核实的误报**以可评审的方式登记下来，避免每次扫描都重复告警，
+# 同时又不像 `--no-git` 或全局关闭那样掩盖真实问题。
+#
+# 注意：本文件只做「排除」，不放宽任何检测规则——真实凭据一旦出现在
+# 将被提交的文件里，仍会被拦下。
+
+[extend]
+# 继承 gitleaks 内置规则集（不覆盖、不放宽）
+
+[allowlist]
+description = "已核实的历史运行产物与示例值；均不会进入仓库"
+
+# 1) output/ 是采集链路的**运行产物目录**：
+#    - 已被 .gitignore 忽略（见 .gitignore 的 `output/`）
+#    - 未被 git 追踪（git ls-files output/ == 0）
+#    其中的 URL 是第三方站点（搜狗微信）的分享链接参数，不是本项目凭据。
+#    扫描它无法保护仓库（内容永远不进提交），只会产生噪音。
+paths = [
+  '''output/''',
+  '''\.venv/''',
+  '''\.pi/tasks/''',
+]
+
+# 2) 测试中**刻意构造**的合成值：用于验证脱敏逻辑，非真实凭据。
+#    例如 tests/test_session.py 里的 deadbeef… / secret-token-value-…。
+regexes = [
+  '''deadbeefcafebabe[0-9a-f]*''',
+  '''secret-token-value-[0-9]*''',
+  '''secret-token-[a-z0-9-]*''',
+]

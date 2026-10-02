@@ -97,10 +97,17 @@ services:
       # 数据源：默认 leyu（乐鱼）。切回体彩文件源用 DATA_SOURCE=ticai。
       - DATA_SOURCE=${DATA_SOURCE:-leyu}
       # 乐鱼网关与会话。
-      # LEYU_REQUEST_ID 是**会话令牌**（随机值会被上游拒绝，见协议文档 §2.2），
-      # 必须由部署时注入，不得硬编码进仓库。
+      # 会话必须由部署时注入，**不得硬编码进仓库**（AGENTS.md §3.4）。
+      # 三种来源（优先级：命令 → 文件 → 环境变量）：
+      #   LEYU_LOGIN_COMMAND  登录命令（argv 形式，不是 shell 字符串），
+      #                       stdout 输出会话 JSON → 支持自动续期（推荐）
+      #   LEYU_SESSION_FILE   会话 JSON 文件，可由外部流程定期刷新
+      #   LEYU_REQUEST_ID     手工临时使用的会话令牌
       - LEYU_HOST=${LEYU_HOST:-https://api.rah492x.com}
       - LEYU_REQUEST_ID=${LEYU_REQUEST_ID:-}
+      - LEYU_CUID=${LEYU_CUID:-}
+      - LEYU_SESSION_FILE=${LEYU_SESSION_FILE:-}
+      - LEYU_LOGIN_COMMAND=${LEYU_LOGIN_COMMAND:-}
       # 留空表示在线拉取；给出 saz 路径则转为离线回放（供无网环境）
       - LEYU_SAZ=${LEYU_SAZ:-}
       # 缓存后端：redis 可达则用 redis，否则自动回退内存
