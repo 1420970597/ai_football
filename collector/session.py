@@ -93,6 +93,9 @@ __all__ = [
     "SESSION_ENV_COOKIE",
     "SESSION_ENV_FILE",
     "SESSION_ENV_COMMAND",
+    "SESSION_ENV_APP_TOKEN",
+    "SESSION_ENV_APP_UUID",
+    "SESSION_ENV_APP_SIGNATURE",
 ]
 
 #: 环境变量名（集中声明，便于部署与文档一致）
@@ -101,6 +104,11 @@ SESSION_ENV_CUID = "LEYU_CUID"
 SESSION_ENV_COOKIE = "LEYU_COOKIE"
 SESSION_ENV_FILE = "LEYU_SESSION_FILE"
 SESSION_ENV_COMMAND = "LEYU_LOGIN_COMMAND"
+
+#: App 引导所需凭据（与 collector.leyu_app_session 同名；此处转发以便统一文档）
+SESSION_ENV_APP_TOKEN = "LEYU_APP_TOKEN"
+SESSION_ENV_APP_UUID = "LEYU_APP_UUID"
+SESSION_ENV_APP_SIGNATURE = "LEYU_APP_SIGNATURE"
 
 #: 默认会话存活时间（秒）。实测：抓包会话约 1.5~2 小时后失效。
 #: 该值仅用于**提前刷新**的启发式判断，真正的失效以 `0401013` 为准。
@@ -220,14 +228,18 @@ class NullSessionProvider(SessionProvider):
     def acquire(self, previous: Optional[Session] = None) -> Session:
         raise SessionError(
             "无可用的乐鱼会话（%s）。"
-            "乐鱼业务 API 需要**已认证登录**产生的会话令牌；本系统不会伪造凭证。\n"
+            "乐鱼业务 API 需要**已认证会话**产生的令牌；本系统不会伪造凭证。\n"
             "请任选一种方式注入会话后重试：\n"
-            "  1) %s=\"<登录脚本>\"   —— 脚本向 stdout 输出会话 JSON（推荐，可实现自动续期）\n"
+            "  0) %s + %s + %s"
+            " —— App 凭据启动 YBTY 场馆换取 requestId（推荐，可自动续期）\n"
+            "  1) %s=\"<登录脚本>\"   —— 脚本向 stdout 输出会话 JSON\n"
             "  2) %s=/path/session.json —— 外部流程定期刷新的会话文件\n"
             "  3) %s=<requestId> [%s=<cuid>] —— 手工临时使用\n"
             "会话 JSON 字段：{\"request_id\": \"...\", \"cuid\": \"...\", "
             "\"host\": \"https://api.<gateway>\", \"origin\": \"https://<site>\"}"
-            % (self.reason or "未配置", SESSION_ENV_COMMAND, SESSION_ENV_FILE,
+            % (self.reason or "未配置",
+               SESSION_ENV_APP_TOKEN, SESSION_ENV_APP_UUID, SESSION_ENV_APP_SIGNATURE,
+               SESSION_ENV_COMMAND, SESSION_ENV_FILE,
                SESSION_ENV_REQUEST_ID, SESSION_ENV_CUID)
         )
 
@@ -445,11 +457,18 @@ def make_session_provider(
     command: Optional[str] = None,
     session_file: Optional[str] = None,
     request_id: Optional[str] = None,
+    include_app: bool = True,
 ) -> SessionProvider:
-    """按「命令 → 文件 → 环境变量」优先级构造 provider 链。
+    """按「App 场馆启动 → 命令 → 文件 → 环境变量」优先级构造 provider 链。
 
-    显式参数优先于环境变量。三者都没有时返回 `NullSessionProvider`
-    （会在使用时给出可操作报错，而不是启动即崩）。
+    显式参数优先于环境变量。都没有时返回 `NullSessionProvider`
+    （使用时给出可操作报错，而不是启动即崩）。
+
+    App 引导（`LEYU_APP_TOKEN` + `LEYU_APP_UUID` + `LEYU_APP_SIGNATURE`）
+    放在首位，因为它**不依赖人工登录**：用 App 凭据启动 YBTY 场馆即可
+    拿到业务网关的 requestId，且会话失效时能自动重建。
+
+    为避免循环导入，App provider 在函数内延迟导入。
     """
     e = env if env is not None else os.environ
     cmd = (command or e.get(SESSION_ENV_COMMAND) or "").strip()
@@ -457,6 +476,12 @@ def make_session_provider(
     rid = (request_id or e.get(SESSION_ENV_REQUEST_ID) or "").strip()
 
     providers: list[SessionProvider] = []
+    if include_app:
+        from .leyu_app_session import AppSessionProvider, bootstrapper_from_env
+
+        boot = bootstrapper_from_env(e)
+        if boot is not None:
+            providers.append(AppSessionProvider(boot))
     if cmd:
         providers.append(CommandSessionProvider(cmd))
     if f:
@@ -468,5 +493,8 @@ def make_session_provider(
         merged[SESSION_ENV_REQUEST_ID] = rid
         providers.append(EnvSessionProvider(merged))
     if not providers:
-        return NullSessionProvider("未配置任何会话来源")
+        reason = "未配置任何会话来源"
+        if not include_app:
+            reason = "未配置会话来源（且已禁用 App 引导）"
+        return NullSessionProvider(reason)
     return providers[0] if len(providers) == 1 else ChainSessionProvider(providers)

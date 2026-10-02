@@ -108,6 +108,16 @@ services:
       - LEYU_CUID=${LEYU_CUID:-}
       - LEYU_SESSION_FILE=${LEYU_SESSION_FILE:-}
       - LEYU_LOGIN_COMMAND=${LEYU_LOGIN_COMMAND:-}
+      # App 引导（推荐）：用 App 凭据启动 YBTY 场馆换取 requestId，
+      # 无需人工登录，且会话失效时可自动重建。
+      #   LEYU_APP_TOKEN     x-api-token（运维注入，**不入库**）
+      #   LEYU_APP_UUID      x-api-uuid
+      #   LEYU_APP_SIGNATURE 站点级前缀签名（实测不绑定 uuid/token，可长期缓存）
+      #   LEYU_APP_HOST      App/H5 网关（可覆盖）
+      - LEYU_APP_TOKEN=${LEYU_APP_TOKEN:-}
+      - LEYU_APP_UUID=${LEYU_APP_UUID:-}
+      - LEYU_APP_SIGNATURE=${LEYU_APP_SIGNATURE:-}
+      - LEYU_APP_HOST=${LEYU_APP_HOST:-}
       # 留空表示在线拉取；给出 saz 路径则转为离线回放（供无网环境）
       - LEYU_SAZ=${LEYU_SAZ:-}
       # 缓存后端：redis 可达则用 redis，否则自动回退内存
