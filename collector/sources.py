@@ -159,6 +159,15 @@ class SnapshotSource(ABC):
             `(snapshots, issues)`；issues 为可读告警（不中断整批）。
         """
 
+    def schedule(self) -> List[Any]:
+        """列出当前赛程（**可选能力**）。
+
+        返回 `LeYuMatch` 列表；不支持赛程列举的数据源（如本地文件源）
+        返回空列表。后台实时推送依赖它来选取订阅目标，因此必须在基类
+        声明，而不是调用处用 `getattr` 绕过类型检查。
+        """
+        return []
+
     def describe(self) -> Dict[str, Any]:
         """数据源元信息（供 /health 与排障使用）。"""
         return {"source": self.name, "kind": type(self).__name__}
@@ -286,6 +295,8 @@ class LeYuSource(SnapshotSource):
         self.batch_size = max(1, _to_int(batch_size, 20))
         self.timeout = timeout
         self._client: Optional[LeYuClient] = None
+        # 进度回调出错时的记录（供排障，不影响采集）
+        self.last_progress_error = ""
         # 会话管理：显式传入优先；否则按「命令 → 文件 → 环境变量」构造
         self.session_provider = session_provider if session_provider is not None \
             else make_session_provider(request_id=request_id)
@@ -367,19 +378,34 @@ class LeYuSource(SnapshotSource):
         return self._call_with_refresh(lambda: self.client.all_matches())
 
     def odds(
-        self, mids: Sequence[str], replay: bool = False
+        self, mids: Sequence[str], replay: bool = False,
+        progress: Optional[Any] = None,
     ) -> List[LeYuMatch]:
         """阶段 2：按 mid 批量取完整盘口。
 
         注意：回放模式下 `mids` 被忽略（抓包里就是一个已拉好的批次）。
+
+        Args:
+            progress: 可选回调 `fn(done, total)`，每批完成后上报进度。
+                全量采集有百来批，无进度反馈时无法判断是否卡住。
         """
         if replay or self.replay:
             return parse_odds_block(self._replay_blob(self.replay_sids[1]))
         if not mids:
             return []
         out: List[LeYuMatch] = []
-        for batch in self.client.iter_odds_batches(list(mids), self.batch_size):
+        total = len(mids)
+        batches = list(self.client.iter_odds_batches(list(mids), self.batch_size))
+        done = 0
+        for batch in batches:
             out.extend(batch)
+            done += len(batch)
+            if progress is not None:
+                try:
+                    progress(done, total)
+                except Exception as exc:  # noqa: BLE001 - 进度回调不应影响采集
+                    # 静默吞掉会让进度上报的 bug 永不被发现；记录但不中断采集
+                    self.last_progress_error = "%s: %s" % (type(exc).__name__, exc)
         return out
     # -- 主入口 -------------------------------------------------------------
 
@@ -390,12 +416,15 @@ class LeYuSource(SnapshotSource):
         stale_after: float = DEFAULT_STALE_AFTER,
         captured: Optional[datetime] = None,
         sport_id: Optional[str] = None,
+        full: bool = False,
+        progress: Optional[Any] = None,
     ) -> Tuple[List[OddsSnapshot], List[str]]:
         """拉取并归一化乐鱼数据。
 
         参数语义：
             mids: 指定赛事；为空时按赛程自动选。
-            max_matches: 上限，**默认 60**（两千场全拉会打爆上游）；None 表示不限制。
+            max_matches: 上限。**未指定且 full=False 时默认 60**（避免误拉两千场）；
+                `full=True` 表示全量（不截断），用于完整采集。
             stale_after: 陈旧阈值（秒）。
             captured: 采集时刻（UTC），默认当前时间。
             sport_id: 限定运动（默认 `SOCCER_SPORT_ID`="1" 足球）。
@@ -403,6 +432,8 @@ class LeYuSource(SnapshotSource):
                 它们的盘口代号（153/172/202/24x…）与足球完全不同；
                 不筛运动会导致大量「无法映射盘口」噪音并把无关赛事写进库里。
                 传 `""`（空串）可关闭筛选，拉全部运动。
+            full: 是否全量采集（不限制场次）。实测 2233 场约需 111 批 / ~40 秒。
+            progress: 可选回调 `fn(done, total)`，用于上报采集进度。
         """
         offline = bool(self.replay)
         when = captured or utcnow()
@@ -413,8 +444,11 @@ class LeYuSource(SnapshotSource):
             matches = self.odds([], replay=True)
         else:
             schedule = self.schedule()
-            targets = self._select_mids(schedule, mids, max_matches, want_sport)
-            matches = self.odds(targets)
+            # full=True 时不做截断；显式给了 max_matches 则仍以其为准
+            effective_max = max_matches if max_matches is not None else (
+                None if full else 60)
+            targets = self._select_mids(schedule, mids, effective_max, want_sport)
+            matches = self.odds(targets, progress=progress)
             missing = set(targets) - {m.mid for m in matches}
             if missing:
                 issues.append("上游未返回盘口：%s" % ",".join(sorted(missing)[:20]))
@@ -441,6 +475,9 @@ class LeYuSource(SnapshotSource):
 
         显式 `mids` 优先；否则取**进行中优先、开赛时间升序**的未结束赛事，
         并按运动过滤（默认只取足球，避免拉入篮球/网球的无关盘口）。
+
+        `max_matches=None` 表示不截断（全量）；调用方需自行决定是否全量，
+        因为全量会打上百批请求。
         """
         if mids:
             return [str(m) for m in mids]
@@ -449,8 +486,9 @@ class LeYuSource(SnapshotSource):
             pool = [m for m in pool if m.sport_id == sport_id]
         # 进行中优先（实时价值最高），再按开赛时间
         pool.sort(key=lambda m: (0 if m.is_live else 1, m.start_ms, m.mid))
-        limit = 60 if max_matches is None else max(0, _to_int(max_matches))
-        return [m.mid for m in pool[:limit]]
+        if max_matches is None:
+            return [m.mid for m in pool]
+        return [m.mid for m in pool[: max(0, _to_int(max_matches))]]
 
     def describe(self) -> Dict[str, Any]:
         return {

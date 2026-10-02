@@ -125,6 +125,7 @@ __all__ = [
     "API_PREFIX_JOB",
     "API_PREFIX_WS",
     "AUTH_ERROR_CODES",
+    "RATE_LIMIT_CODES",
     "DEFAULT_HOST",
     "DEFAULT_ORIGIN",
     "DEFAULT_USER_AGENT",
@@ -134,6 +135,7 @@ __all__ = [
     "TransportError",
     "DecodeError",
     "AuthError",
+    "RateLimitError",
     "LeYuMatch",
     "LeYuClient",
     "OddsQuote",
@@ -179,7 +181,7 @@ OV_SCALE = 100_000.0
 # 后端成功码（saz 中 "0000000" 与旧版 "200" 并存）
 SUCCESS_CODES = frozenset({"0000000", "200", "0"})
 
-#: 需要重新登录的业务码 → 可读说明。
+#: 会话失效类业务码 → 可读说明（**需要重新获取会话**）
 #: 实测（2026-09-30，HTTPS 直连 api.rah492x.com）：
 #:   随机 requestId → code=0401013；抓包原始 requestId → code=0000000。
 #: 即 requestId 是**绑定账号的会话令牌**，不是可任意生成的追踪 ID。
@@ -187,8 +189,22 @@ AUTH_ERROR_CODES: Mapping[str, str] = {
     "0401013": "账户信息已过期，请重新登录",
     "0401014": "账户未登录",
     "0401015": "账户无权限",
-    "0401038": "当前访问人数过多，请稍后再试",
 }
+
+#: 限流类业务码 → 可读说明（**应退避重试，不是会话失效**）。
+#: 实测：全量采集 111 批全速请求时触发 0401038。
+#: 早期实现把 0401038 归入 AUTH_ERROR_CODES，导致限流被当成
+#: 会话过期而触发重新登录（无意义且加重风控），已拆分。
+RATE_LIMIT_CODES: Mapping[str, str] = {
+    "0401038": "当前访问人数过多，请稍后再试",
+    "0400429": "请求过于频繁",
+}
+
+#: 限流退避参数（实测全量采集 111 批会触发 0401038）
+#: 限流时用比普通错误更多的尝试次数与更长的等待，因为上游是在主动拦我们。
+RATE_LIMIT_RETRIES = 6
+RATE_LIMIT_BACKOFF_BASE_S = 1.0
+RATE_LIMIT_BACKOFF_MAX_S = 15.0
 
 # 盘口类型 hpt
 HPT_WINNER = 1     # 独赢（1X2 / 上半场 1X2）
@@ -245,6 +261,14 @@ class AuthError(DecodeError):
     乐鱼业务端点用 `requestId` 作为绑定账号的会话令牌；
     随机生成的 requestId 会让上游返回「账户信息已过期」。
     基类为 DecodeError 以兼容旧捕获写法。
+    """
+
+
+class RateLimitError(DecodeError):
+    """上游限流（业务码 0401038 等）。
+
+    与 AuthError 分开：限流的正确处置是**退避重试**，
+    重新获取会话既无帮助，也会加重风控。
     """
 
 
@@ -420,6 +444,11 @@ def decode_envelope(payload: Mapping[str, Any]) -> Any:
     """
     code = str(payload.get("code", ""))
     if code and code not in SUCCESS_CODES:
+        if code in RATE_LIMIT_CODES:
+            raise RateLimitError(
+                "上游限流 code=%s（%s）。应退避后重试；"
+                "请降低采集速率（增大批间隔）而非重新登录。"
+                % (code, RATE_LIMIT_CODES[code]))
         hint = AUTH_ERROR_CODES.get(code)
         if hint is not None:
             raise AuthError(
@@ -957,6 +986,12 @@ class LeYuClient:
         return headers
 
     def _request(self, method: str, path: str, body: Optional[Mapping[str, Any]] = None) -> Any:
+        """发起请求，带指数退避与（限流专用的）长退避。
+
+        限流（`RateLimitError`）与网络错误的退避策略不同：
+        限流说明上游在主动拦我们，需要更长的等待；继续快速重试只会
+        加重风控。因此限流用独立的更长退避序列。
+        """
         url = "%s/%s%s" % (self.host, API_PREFIX_JOB, path)
         url += "%st=%d" % ("&" if "?" in url else "?", _now_ms())
         data = None
@@ -964,7 +999,9 @@ class LeYuClient:
             data = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
         last_exc: Optional[Exception] = None
-        for attempt in range(self.retries):
+        # 限流时用更多尝试次数 + 更长退避（实测全量采集会触发 0401038）
+        attempts = max(self.retries, RATE_LIMIT_RETRIES)
+        for attempt in range(attempts):
             req = urllib.request.Request(url, data=data, method=method)
             for k, v in self._headers(data is not None).items():
                 req.add_header(k, v)
@@ -976,13 +1013,21 @@ class LeYuClient:
                         raw = gzip.decompress(raw)
                 payload = json.loads(raw.decode("utf-8", "replace"))
                 return decode_envelope(payload)
+            except RateLimitError as exc:
+                # 限流：长退避（1s→2s→4s→8s，封顶 15s）+ 抖动
+                last_exc = exc
+                if attempt + 1 < attempts:
+                    wait = min(RATE_LIMIT_BACKOFF_BASE_S * (2 ** attempt),
+                               RATE_LIMIT_BACKOFF_MAX_S)
+                    time.sleep(wait + random.random() * 0.5)
+                continue
             except urllib.error.HTTPError as exc:
                 last_exc = TransportError("HTTP %d: %s" % (exc.code, url))
                 if exc.code < 500:
                     raise last_exc from exc
             except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
                 last_exc = TransportError("请求失败 %s: %s" % (url, exc))
-            if attempt + 1 < self.retries:
+            if attempt + 1 < attempts:
                 # 指数退避 + 抖动，避免触发风控
                 time.sleep(0.5 * (2 ** attempt) + random.random() * 0.3)
         raise last_exc or TransportError("请求失败: %s" % url)

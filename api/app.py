@@ -179,9 +179,22 @@ class ApiApp:
     """路由与处理逻辑（不含 socket 细节，便于单测直接调用）。"""
 
     def __init__(self, service: ValuationService,
-                 registry: Optional[TaskRegistry] = None) -> None:
+                 registry: Optional[TaskRegistry] = None,
+                 analysis: Optional[Any] = None) -> None:
         self.svc = service
         self.registry = registry if registry is not None else TaskRegistry()
+        #: 分析层（实时推送 + 决策引擎）。未注入时按需惰性构造，
+        #: 避免每次测试构造 API 都去连上游。
+        self._analysis = analysis
+
+    @property
+    def analysis(self) -> Any:
+        """惰性构造分析服务（含后台实时推送）。"""
+        if self._analysis is None:
+            from service.analysis import build_analysis_service
+
+            self._analysis = build_analysis_service(self.svc, realtime=None)
+        return self._analysis
 
     # -- 分发 ---------------------------------------------------------------
 
@@ -198,6 +211,12 @@ class ApiApp:
             ("GET", "/markets/<id>", self.h_markets),
             ("GET", "/markets/<id>/<market>", self.h_market_detail),
             ("GET", "/model/<id>", self.h_model),
+            # 决策与实时（T5/T7）：决策列表直接供控制台渲染
+            ("GET", "/decisions", self.h_decisions),
+            ("GET", "/decisions/<id>", self.h_decision_detail),
+            ("GET", "/trend/<id>", self.h_trend),
+            ("GET", "/realtime", self.h_realtime),
+            ("GET", "/llm", self.h_llm),
             ("GET", "/consistency/<id>", self.h_consistency),
             ("GET", "/fair/<id>", self.h_fair),
             ("GET", "/edge/<id>", self.h_edge),
@@ -275,14 +294,17 @@ class ApiApp:
         """赛事列表。
 
         支持 `?refresh=1`：先确保当前数据源有新鲜数据再返回。
-        这样控制台打开时看到的就是**当前数据源**的真实数据，
+        加上 `&full=1` 则进行**全量采集**（保证赛事完整，约 40 秒）。
+        这样控制台打开时看到的就是当前数据源的真实数据，
         而不会因为存储里只有旧源而显示过期内容。
         默认不自动采集（避免每次翻页都打上游）。
         """
         refreshed: Optional[Dict[str, Any]] = None
         if _q1(query, "refresh") not in (None, "", "0", "false"):
+            full = _q1(query, "full") not in (None, "", "0", "false")
+            limit = _q_int(query, "limit", 0) or None
             refreshed = self.svc.ensure_fresh(
-                max_matches=_q_int(query, "limit", 40) or 40)
+                max_matches=None if full else (limit or 40), full=full)
         items = self.svc.list_matches(
             date=_q1(query, "date"),
             league=_q1(query, "league"),
@@ -461,6 +483,58 @@ class ApiApp:
             raise NotFound("任务不存在：%s" % task_id)
         return t.as_dict()
 
+    # -- 决策与实时（T5/T7） ------------------------------------------------
+
+    def h_decisions(self, query: Mapping[str, List[str]],
+                    body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """决策列表：按优势排序，直接供控制台赛事列表展示。
+
+        参数：
+            limit=12      分析赛事上限（LLM 调用昂贵）
+            live=1        只看进行中的赛事
+            league=xxx    限定联赛
+            force=1       忽略缓存重算
+        """
+        limit = _q_int(query, "limit", 12) or 12
+        only_live = _q1(query, "live") not in (None, "", "0", "false")
+        force = _q1(query, "force") not in (None, "", "0", "false")
+        return self.analysis.decide_list(
+            limit=max(1, min(limit, 50)),
+            only_live=only_live,
+            league=_q1(query, "league"),
+            force=force,
+        )
+
+    def h_decision_detail(self, query: Mapping[str, List[str]],
+                          body: Mapping[str, Any], match_id: str) -> Dict[str, Any]:
+        """单场决策明细（含每个候选结果的概率拆解与 LLM 理由）。"""
+        market = _q1(query, "market")
+        d = self.analysis.analyze(
+            match_id, market=market,
+            force=_q1(query, "force") not in (None, "", "0", "false"))
+        if d is None:
+            raise NotFound("无该赛事或该场无可分析市场：%s" % match_id)
+        return d.as_dict()
+
+    def h_trend(self, query: Mapping[str, List[str]],
+                body: Mapping[str, Any], match_id: str) -> Dict[str, Any]:
+        """盘口走势（来自实时推送的真实赔率变动）。"""
+        return self.analysis.realtime.trend(match_id) if self.analysis.realtime \
+            else {"mid": match_id, "n_markets": 0, "markets": [],
+                    "note": "实时推送未启用"}
+
+    def h_realtime(self, query: Mapping[str, List[str]],
+                   body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """实时推送健康与统计（判断采集频率是否正常）。"""
+        if self.analysis.realtime is None:
+            return {"running": False, "note": "实时推送未启用"}
+        return self.analysis.realtime.health()
+
+    def h_llm(self, query: Mapping[str, List[str]],
+              body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """LLM 配置与调用统计（密钥一律脱敏）。"""
+        return self.analysis.llm_health()
+
 
 # --------------------------------------------------------------------------- #
 # HTTP 适配壳
@@ -472,17 +546,19 @@ def create_app(
     registry: Optional[TaskRegistry] = None,
     source: Optional[str] = None,
     saz_path: Optional[str] = None,
+    analysis: Optional[Any] = None,
 ) -> ApiApp:
     """构造 API 应用（供 WSGI/测试使用）。
 
     source 为空时依次取 `DATA_SOURCE` 环境变量、最后回退 **leyu**（默认数据源）。
     saz_path 给出时乐鱼源进入离线回放（无需联网，供 CI/演示）。
+    analysis 可注入已构造的分析服务（含实时推送）；不注入时懒构造。
     """
     svc = ValuationService(snapshot_root=snapshot_root,
                            corpus_root=corpus_root,
                            source=source,
                            saz_path=saz_path)
-    return ApiApp(svc, registry=registry)
+    return ApiApp(svc, registry=registry, analysis=analysis)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -575,13 +651,59 @@ def _env_int(name: str, default: int,
     return val
 
 
+def _start_background(
+    svc: ValuationService,
+    app: "ApiApp",
+) -> Optional[Any]:
+    """启动后台实时推送（失败不影响 API 可用）。
+
+    返回 Hub（供关闭时 stop），失败返回 None。
+    设计原则：采集是**增强**而非前提——推送挂了，控制台仍应能用快照库工作。
+    """
+    try:
+        from collector.leyu_realtime import RealtimeHub
+        from service.analysis import build_analysis_service
+
+        source = svc.source
+        provider = getattr(source, "session_provider", None)
+        if provider is None:
+            print("提示：当前数据源不支持会话，跳过实时推送")
+            return None
+
+        max_matches = _env_int("REALTIME_MAX_MATCHES", 60, minimum=1)
+
+        def _mids() -> List[str]:
+            """订阅源：优先进行中的赛事（实时价值最高）。"""
+            try:
+                schedule = source.schedule()
+            except Exception as exc:  # noqa: BLE001 - 订阅源失败不终止推送
+                print("警告：获取订阅列表失败：%s" % exc)
+                return []
+            live = [m.mid for m in schedule if m.is_live]
+            return live[:max_matches]
+
+        hub = RealtimeHub(provider, mids_provider=_mids, max_matches=max_matches)
+        hub.start()
+
+        # 分析服务复用同一个 Hub，并将盘中行情变化纳入决策
+        app._analysis = build_analysis_service(svc, realtime=hub)
+        print("实时推送已启动（最多 %d 场）" % max_matches)
+        return hub
+    except Exception as exc:  # noqa: BLE001 - 采集失败不能阻止 API 启动
+        print("警告：实时推送启动失败（API 仍可用）：%s" % exc)
+        return None
+
+
 def run_server(host: str = "0.0.0.0", port: int = 8000,
                snapshot_root: str = "/app/output/snapshots",
                corpus_root: Optional[str] = None,
                source: Optional[str] = None,
                saz_path: Optional[str] = None) -> None:
-    """启动 API 服务（阻塞）。"""
+    """启动 API 服务（阻塞）。含后台实时采集。"""
     app = create_app(snapshot_root, corpus_root, source=source, saz_path=saz_path)
+    hub = None
+    if os.environ.get("REALTIME_DISABLED", "").strip() not in ("1", "true"):
+        hub = _start_background(app.svc, app)
     srv = make_server(app, host, port)
     print("ai_football API 监听 http://%s:%d" % (host, port))
     try:
@@ -589,6 +711,8 @@ def run_server(host: str = "0.0.0.0", port: int = 8000,
     except KeyboardInterrupt:
         pass
     finally:
+        if hub is not None:
+            hub.stop()
         srv.server_close()
 
 

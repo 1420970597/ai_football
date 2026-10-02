@@ -188,15 +188,19 @@ class ValuationService:
         source: Optional[str] = None,
         mids: Optional[Sequence[str]] = None,
         max_matches: Optional[int] = None,
+        full: bool = False,
+        progress: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """拉取数据源 → 归一化 → 写入不可变快照存储。
 
         Args:
             source: 覆盖数据源展示名（默认用数据源自身的 `display_source`）。
             mids: 限定赛事 ID（乐鱼源的两阶段拉取必需，否则会拉上千场）。
-            max_matches: 上限；乐鱼源默认 60 场。
+            max_matches: 上限；未指定且 full=False 时乐鱼源默认 60 场。
+            full: 全量采集（不截断）。实测约 2233 场 / 111 批 / ~40 秒。
+            progress: 可选进度回调 `fn(done, total)`。
         """
-        snaps, issues = self._fetch(source, mids, max_matches)
+        snaps, issues = self._fetch(source, mids, max_matches, full, progress)
         written = self.store.append_many(snaps)
         self._ingested = True
         return {
@@ -212,15 +216,22 @@ class ValuationService:
         source: Optional[str],
         mids: Optional[Sequence[str]],
         max_matches: Optional[int],
+        full: bool = False,
+        progress: Optional[Any] = None,
     ) -> Any:
         """按数据源类型分派拉取（保留体彩源的 source 覆盖能力）。"""
+        kwargs: Dict[str, Any] = {"mids": mids, "max_matches": max_matches}
+        # 仅乐鱼源支持 full / progress；体彩源忽略这两个参数
+        if self.source.name == "leyu":
+            kwargs["full"] = full
+            kwargs["progress"] = progress
         if source is None or source == self.source.display_source:
-            return self.source.fetch(mids=mids, max_matches=max_matches)
+            return self.source.fetch(**kwargs)
         # 显式覆盖：仅体彩文件源支持自定义展示名
+        snaps, issues = self.source.fetch(**kwargs)
         if self.source.name == "ticai":
-            snaps, issues = self.source.fetch(mids=mids, max_matches=max_matches)
             return [replace(s, source=source) for s in snaps], issues
-        return self.source.fetch(mids=mids, max_matches=max_matches)
+        return snaps, issues
 
     def _all_snapshots(self) -> List[OddsSnapshot]:
         """扫描存储，返回**当前数据源**的全部快照。
@@ -247,6 +258,7 @@ class ValuationService:
         self,
         max_matches: Optional[int] = None,
         max_age_s: float = 900.0,
+        full: bool = False,
     ) -> Dict[str, Any]:
         """若当前数据源的存储为空或过期，则自动采集一次。
 
@@ -256,18 +268,21 @@ class ValuationService:
         Args:
             max_matches: 单次采集上限（透传给数据源）。
             max_age_s: 快照最大可接受年龄（秒）；超过则重新采集。
+            full: 全量采集（用于「赛事必须完整」的刷库场景）。
 
         Returns:
             `ingest_corpus()` 的结果，或 `{"skipped": ...}` 说明为何未采集。
         """
-        snaps = self._all_snapshots()
-        if snaps:
-            newest = max(s.captured_at for s in snaps)
-            age = (utcnow() - newest).total_seconds()
-            if age <= max_age_s:
-                return {"skipped": "数据仍新鲜", "age_s": round(age, 1),
-                        "snapshots": len(snaps)}
-        res = self.ingest_corpus(max_matches=max_matches)
+        # 全量模式下不能因为「有旧数据」就跳过：需要补齐全部赛事
+        if not full:
+            snaps = self._all_snapshots()
+            if snaps:
+                newest = max(s.captured_at for s in snaps)
+                age = (utcnow() - newest).total_seconds()
+                if age <= max_age_s:
+                    return {"skipped": "数据仍新鲜", "age_s": round(age, 1),
+                            "snapshots": len(snaps)}
+        res = self.ingest_corpus(max_matches=max_matches, full=full)
         res["auto"] = True
         return res
 
