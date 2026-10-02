@@ -340,7 +340,7 @@ stateDiagram-v2
 | `redis` | ai_football_redis | 6379 | ✅ **已验证** | 会话、快照缓存、任务状态 | — |
 | `browser-scraper` | ai_football_browser_scraper | 8080 | ✅ **已验证** | 无头 Chrome 渲染，`/health` `/scrape` `/scrape/batch` | §3.2 路径 C |
 | `ai-analyzer` | ai_football_analyzer | 8000 | ✅ **已构建** | 分析编排、LLM 调用（慢通路） | §6.3 |
-| `odds-collector` | *(库模块)* | — | ✅ **已实现** | 乐鱼全量采集 + 实时推送 + 会活续期 + 归一化 | §3.2 A/B 路径 |
+| `odds-collector` | *(库模块)* | — | ✅ **已实现** | 乐鱼全量采集 + 实时推送 + 会话续期 + 归一化 | §3.2 A/B 路径 |
 | `valuation-core` | *(库模块)* | — | ✅ **已实现** | 去水 + 经济学算法栈 | §8.1–8.8 |
 | `decision-engine` | *(库模块)* | — | ✅ **已实现** | 盘口汇总式决策（经济算法 + LLM） | §6.5 |
 | `analytics-api` | ai_football_analytics_api | 8000 | ✅ **已实现** | REST 接入层（23 端点），供控制台调用 | §2 |
@@ -354,7 +354,7 @@ stateDiagram-v2
 | `leyu_ws.py` | RFC6455 自实现（握手/心跳/重连/C8 订阅） |
 | `leyu_realtime.py` | 后台实时消费者 + 盘口走势记录 + `TrendStore` 持久化 |
 | `leyu_app_session.py` | App 场馆启动换取 `requestId` |
-| `session.py` | 会活生命周期（provider 链 + 失效重建） |
+| `session.py` | 会话生命周期（provider 链 + 失效重建） |
 | `leyu_normalizer.py` | 报价 → `OddsSnapshot`（市场映射 + 状态推导） |
 | `sources.py` | 数据源抽象（leyu / ticai） |
 
@@ -802,9 +802,9 @@ ai_football/
 ./scripts/up.sh --down     # 仅停止本项目
 ```
 
-### 9.2.1 注入会活（**必需**，否则采集不到数据）
+### 9.2.1 注入会话（**必需**，否则采集不到数据）
 
-业务 API 需要**运维注入的已授权会活**。在仓库根创建 `.env`
+业务 API 需要**运维注入的已授权会话**。在仓库根创建 `.env`
 （已被 `.gitignore` 忽略，**不会入库**）：
 
 ```bash
