@@ -272,12 +272,31 @@ class ApiApp:
 
     def h_matches(self, query: Mapping[str, List[str]],
                   body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """赛事列表。
+
+        支持 `?refresh=1`：先确保当前数据源有新鲜数据再返回。
+        这样控制台打开时看到的就是**当前数据源**的真实数据，
+        而不会因为存储里只有旧源而显示过期内容。
+        默认不自动采集（避免每次翻页都打上游）。
+        """
+        refreshed: Optional[Dict[str, Any]] = None
+        if _q1(query, "refresh") not in (None, "", "0", "false"):
+            refreshed = self.svc.ensure_fresh(
+                max_matches=_q_int(query, "limit", 40) or 40)
         items = self.svc.list_matches(
             date=_q1(query, "date"),
             league=_q1(query, "league"),
             query=_q1(query, "q"),
         )
-        return {"count": len(items), "matches": items}
+        out: Dict[str, Any] = {
+            "count": len(items),
+            "matches": items,
+            "data_source": self.svc.source.display_source,
+            "source_id": self.svc.source.name,
+        }
+        if refreshed is not None:
+            out["refresh"] = refreshed
+        return out
 
     def h_match_detail(self, query: Mapping[str, List[str]],
                        body: Mapping[str, Any], match_id: str) -> Dict[str, Any]:

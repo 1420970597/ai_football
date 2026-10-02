@@ -40,8 +40,9 @@ from core.models import (
     FairProbabilities,
     OddsSnapshot,
     SnapshotState,
+    utcnow,
 )
-from store import SnapshotStore, make_cache
+from store import SnapshotStore, make_cache, safe_name
 
 __all__ = ["ValuationService", "load_corpus"]
 
@@ -222,11 +223,53 @@ class ValuationService:
         return self.source.fetch(mids=mids, max_matches=max_matches)
 
     def _all_snapshots(self) -> List[OddsSnapshot]:
-        """扫描存储，返回全部快照。"""
+        """扫描存储，返回**当前数据源**的全部快照。
+
+        重要：存储按 `<source>/<league>/` 分目录。切换数据源后，
+        旧源（如体彩）的历史快照仍在磁盘上；若不加过滤地全扫，
+        新旧数据会混合，页面会出现「已切换数据源但仍是旧数据」的假象。
+        因此这里只读当前数据源目录。
+
+        回退：当前数据源目录不存在时（如刚切换、尚未采集），
+        返回空列表而不是旧源数据 —— 宁可先显示空，也不要展示错误来源的数据。
+        """
+        base = self.store.root / safe_name(self.source.display_source)
+        if not base.exists():
+            return []
         out: List[OddsSnapshot] = []
-        for d in sorted(self.store.root.rglob("_index.json")):
+        for d in sorted(base.rglob("_index.json")):
             out.extend(self.store._load_dir(d.parent))
         return out
+
+    # -- 采集自动落库 -------------------------------------------------------
+
+    def ensure_fresh(
+        self,
+        max_matches: Optional[int] = None,
+        max_age_s: float = 900.0,
+    ) -> Dict[str, Any]:
+        """若当前数据源的存储为空或过期，则自动采集一次。
+
+        用途：让 Web 控制台在首次打开时就能看到当前数据源的数据，
+        而不是上次遗留的旧快照。
+
+        Args:
+            max_matches: 单次采集上限（透传给数据源）。
+            max_age_s: 快照最大可接受年龄（秒）；超过则重新采集。
+
+        Returns:
+            `ingest_corpus()` 的结果，或 `{"skipped": ...}` 说明为何未采集。
+        """
+        snaps = self._all_snapshots()
+        if snaps:
+            newest = max(s.captured_at for s in snaps)
+            age = (utcnow() - newest).total_seconds()
+            if age <= max_age_s:
+                return {"skipped": "数据仍新鲜", "age_s": round(age, 1),
+                        "snapshots": len(snaps)}
+        res = self.ingest_corpus(max_matches=max_matches)
+        res["auto"] = True
+        return res
 
     # -- 查询 ---------------------------------------------------------------
 
@@ -333,7 +376,17 @@ class ValuationService:
         return tuple(out)
 
     def _latest(self, match_id: str,
-                market: str = "1X2") -> Optional[OddsSnapshot]:
+                market: str = "1X2",
+                fallback: bool = False) -> Optional[OddsSnapshot]:
+        """取某市场的最新快照。
+
+        Args:
+            market: 市场名（支持遗留名与规范名的等价匹配）。
+            fallback: 精确匹配失败时，是否降级到任意可用市场。
+                乐鱼源并非每场都有胜平负（部分只有让球/大小），
+                而控制台默认请求 1X2/HAD；不开降级会导致这些场次
+                的赔率列、水钱、公平概率全为空。
+        """
         names = self._candidate_names(market)
         snaps = self._snapshots_of(match_id)
         # 先按规范名精确匹配，再退回等价名，保证新数据优先
@@ -341,6 +394,12 @@ class ValuationService:
             for s in reversed(snaps):
                 if s.market == name:
                     return s
+        if fallback and snaps:
+            # 降级：优先两结果市场（让球/大小），否则取任一
+            for s in reversed(snaps):
+                if s.market.startswith(("AH", "OU")):
+                    return s
+            return snaps[-1]
         return None
 
     def get_match(self, match_id: str) -> Optional[Dict[str, Any]]:
@@ -674,8 +733,14 @@ class ValuationService:
     # -- 估值 ---------------------------------------------------------------
 
     def get_fair(self, match_id: str, market: str = "1X2",
-                 method: str = "auto") -> Optional[Dict[str, Any]]:
-        snap = self._latest(match_id, market)
+                 method: str = "auto",
+                 fallback: bool = True) -> Optional[Dict[str, Any]]:
+        """去水后的公平概率。
+
+        fallback=True 时，若该场没有请求的市场（乐鱼源常无胜平负），
+        降级到任意可用市场，而不是直接返回空。
+        """
+        snap = self._latest(match_id, market, fallback=fallback)
         if snap is None:
             return None
         try:
@@ -686,6 +751,12 @@ class ValuationService:
         d = fp.as_dict()
         d["match_id"] = match_id
         d["state"] = snap.state.value
+        # 必须回传**实际**使用的市场：请求 1X2 而被降级到 AH/OU 时，
+        # 前端若不知情就会把两结果市场当成胜平负展示，产生误导。
+        d["market"] = snap.market
+        d["requested_market"] = market
+        d["market_fallback"] = self._canonical_market(
+            snap.market) != self._canonical_market(market)
         # 报告 §8.1：EV = −m/(1+m)，公平定价下的期望
         d["ev_if_fair"] = (
             econ.expected_value_from_margin(snap.margin)

@@ -164,7 +164,8 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
     <div class="cards" id="cards"></div>
 
     <div class="panel">
-      <h2>赛事列表 <span class="tag" id="list-tag"></span></h2>
+      <h2>赛事列表 <span class="tag" id="list-tag"></span>
+        <span class="tag" id="list-src" title="当前生效的数据源"></span></h2>
       <div class="state" id="st-loading">
         <div class="skel">
           <div class="bar" style="width:92%"></div><div class="bar" style="width:78%"></div>
@@ -265,7 +266,7 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
 </div>
 
 <footer>
-  ai_football · 数据来源：中国体育彩票官方 API V2 · 本系统<b>不提供投注执行功能</b><br>
+  ai_football · 数据来源：<span id="foot-src">乐鱼（leyu）在线 API</span> · 本系统<b>不提供投注执行功能</b><br>
   结论依据：<code>reports/leyu-kaiyun-odds-bot-feasibility/REPORT.md</code> §5.3 / §9.3 / §13.2<br>
   <span style="font-size:11px">界面采用通用深色体育数据终端风格（暗底 / 等宽数字 / 状态色分级）。
   未使用乐鱼、开云或任何博彩站点的素材、商标或代码。</span>
@@ -354,8 +355,31 @@ function setListState(state, extra) {
   }
 }
 
+/* 胜平负市场的等价名：
+   体彩源用 1X2，乐鱼源用 HAD（服务端会把 1X2 → HAD 折叠）。
+   硬编码只读 "1X2" 会导致切到乐鱼源后赔率列全空。 */
+function winDrawLose(m) {
+  const lo = (m && m.latest_odds) || {};
+  return lo["1X2"] || lo["HAD"] || null;
+}
+
+/* 无胜平负时的降级市场：取首个有赔率的市场，并给出可读名。 */
+function firstMarket(m) {
+  const lo = (m && m.latest_odds) || {};
+  const names = Object.keys(lo).sort();
+  if (!names.length) return null;
+  // 优先让球/大小这类两结果市场，它们也能反映比赛预期
+  const pick = names.find(n => /^(AH|OU)/i.test(n)) || names[0];
+  const odds = lo[pick] || [];
+  if (!odds.length) return null;
+  return { name: pick, odds: odds };
+}
+
 /* ---------- 赛事列表 ---------- */
-async function loadMatches() {
+async function loadMatches(opts) {
+  // refresh=1：首次加载时让后端确保当前数据源有新鲜数据，
+  // 否则页面会一直显示上一次采集（可能是旧数据源）的快照。
+  const doRefresh = !!(opts && opts.refresh);
   setListState("loading");
   clearMsg();
   const qs = new URLSearchParams();
@@ -363,6 +387,7 @@ async function loadMatches() {
   if (d) qs.set("date", d);
   if (lg) qs.set("league", lg);
   if (q) qs.set("q", q);
+  if (doRefresh) qs.set("refresh", "1");
 
   let res;
   try { res = await fetch(API + "/matches?" + qs); }
@@ -378,11 +403,21 @@ async function loadMatches() {
   }
   const data = await res.json();
   const base = data.matches || [];
+  // 展示真实数据源，避免“以为在看新数据、实际是旧源快照”
+  if (data.data_source) {
+    S.dataSource = data.data_source;
+    setText($("list-src"), "数据源：" + data.data_source);
+  }
+  if (data.refresh && data.refresh.auto && data.refresh.written) {
+    showMsg("ok", "已自动采集 " + data.refresh.written + " 条快照（" +
+                   (data.data_source || "") + "）");
+  }
   if (!base.length) {
     S.matches = [];
     setListState("empty");
     setText($("list-tag"), "0 场");
     setText($("list-note"), "");
+    setText($("list-src"), data.data_source ? ("数据源：" + data.data_source) : "");
     renderCards([], 0);
     return;
   }
@@ -435,7 +470,7 @@ function renderTable(rows) {
   clear(tb);
   rows.forEach((m, i) => {
     const f = m._fair;
-    const o = (m.latest_odds && m.latest_odds["1X2"]) || [];
+    const o = winDrawLose(m) || [];
     const risky = !!(f && f.spread_warning);
     const tr = el("tr", {
       class: [m.match_id === S.selected ? "sel" : "", risky ? "risky" : ""].join(" ").trim(),
@@ -446,7 +481,22 @@ function renderTable(rows) {
     tr.appendChild(el("td", { text: m.match_id }));
     tr.appendChild(el("td", { text: m.league || "—" }));
     tr.appendChild(el("td", { text: m.home + " vs " + m.away }));
-    [0, 1, 2].forEach(k => tr.appendChild(el("td", { class: "num", text: o[k] ? fx(o[k]) : "—" })));
+    // 胜平负列：乐鱼源并非每场都有胜平负（部分场次只有让球/大小），
+    // 此时用首个可用市场降级展示，并标注市场名，避免整列为空。
+    if (o.length) {
+      [0, 1, 2].forEach(k =>
+        tr.appendChild(el("td", { class: "num", text: o[k] ? fx(o[k]) : "—" })));
+    } else {
+      const alt = firstMarket(m);
+      const cell = (k) => {
+        const v = alt && alt.odds[k];
+        return el("td", { class: "num", text: v ? fx(v) : "—" });
+      };
+      tr.appendChild(cell(0));
+      tr.appendChild(el("td", { class: "num mut",
+        text: alt ? alt.name : "—", title: alt ? "该场无胜平负，展示：" + alt.name : "" }));
+      tr.appendChild(cell(1));
+    }
     tr.appendChild(el("td", { class: "num", text: f ? pct(f.margin) : "—" }));
     if (risky) {
       tr.appendChild(el("td", { class: "num" }, [
@@ -490,6 +540,11 @@ async function openPricing(i) {
   const kv = $("pricing-kv");
   clear(kv);
   const pairs = [
+    // 展示实际市场；若发生降级（如请求胜平负但该场只有让球），
+    // 必须显式告知，否则两结果市场会被误读为胜平负。
+    ["市场", fair.market_fallback
+        ? (String(fair.requested_market) + " → " + String(fair.market) + "（降级）")
+        : String(fair.market || fair.requested_market)],
     ["去水方法", String(fair.method)],
     ["booksum", fx((fair.margin || 0) + 1, 6)],
     ["水钱 m", pct(fair.margin)],
@@ -515,7 +570,7 @@ async function openPricing(i) {
   const tb = $("pricing-tbody");
   clear(tb);
   fair.outcomes.forEach((oc, k) => {
-    const odds = (m.latest_odds && m.latest_odds["1X2"]) ? m.latest_odds["1X2"][k] : null;
+    const odds = (winDrawLose(m) || [])[k] ?? null;
     const tr = el("tr", {});
     tr.appendChild(el("td", { text: oc }));
     tr.appendChild(el("td", { class: "num", text: odds ? fx(odds) : "—" }));
@@ -741,7 +796,9 @@ $("f-method").addEventListener("change", (e) => { S.method = e.target.value; loa
   $(id).addEventListener("keydown", e => { if (e.key === "Enter") loadMatches(); }));
 
 renderNav();
-loadMatches();
+// 首次加载先确保当前数据源有新鲜数据（refresh=1），
+// 否则会展示上一次采集（可能是旧数据源）遗留的快照。
+loadMatches({ refresh: true });
 
 </script>
 </body>
