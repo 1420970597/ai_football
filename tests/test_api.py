@@ -21,7 +21,9 @@ CORPUS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 
 def build_app() -> ApiApp:
     tmp = tempfile.mkdtemp(prefix="apitest_")
-    app = create_app(snapshot_root=tmp, corpus_root=CORPUS)
+    # 显式指定 ticai：本文件验证的是**体彩语料**驱动的端点契约，
+    # 不能跟随默认数据源（乐鱼）去访问网络。
+    app = create_app(snapshot_root=tmp, corpus_root=CORPUS, source="ticai")
     app.svc.ingest_corpus()
     return app
 

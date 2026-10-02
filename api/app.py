@@ -321,11 +321,12 @@ class ApiApp:
                 raise NotFound("无该赛事：%s" % match_id)
             raise NotFound(
                 "该场未落库玩法 %s（现有玩法：%s）。"
-                "注意：既有 output JSON 仅保存 HAD/HHAD 赔率，"
-                "TTG/CRS/HAFU 虽标记 Selling 但赔率未采集——"
-                "这是已知数据缺口，需重新采集（见 collector."
-                "normalizer.parse_pooled_odds），重试本请求无济于事。"
-                % (market, ", ".join(m["market"] for m in known["markets"]))
+                "这是**已知数据缺口**，需重新采集而非重试（当前数据源：%s）。"
+                "体彩源的落盘 JSON 仅存 HAD/HHAD 赔率；"
+                "乐鱼源覆盖 HAD/AH(<line>)/OU(<line>) 及上半场玩法，"
+                "但不含 TTG/CRS/HAFU（见 docs/architecture/leyu-api-protocol.md）。"
+                % (market, ", ".join(m["market"] for m in known["markets"]),
+                   self.svc.source.name)
             )
         return d
 
@@ -450,10 +451,18 @@ def create_app(
     snapshot_root: str,
     corpus_root: Optional[str] = None,
     registry: Optional[TaskRegistry] = None,
+    source: Optional[str] = None,
+    saz_path: Optional[str] = None,
 ) -> ApiApp:
-    """构造 API 应用（供 WSGI/测试使用）。"""
+    """构造 API 应用（供 WSGI/测试使用）。
+
+    source 为空时依次取 `DATA_SOURCE` 环境变量、最后回退 **leyu**（默认数据源）。
+    saz_path 给出时乐鱼源进入离线回放（无需联网，供 CI/演示）。
+    """
     svc = ValuationService(snapshot_root=snapshot_root,
-                           corpus_root=corpus_root)
+                           corpus_root=corpus_root,
+                           source=source,
+                           saz_path=saz_path)
     return ApiApp(svc, registry=registry)
 
 
@@ -549,9 +558,11 @@ def _env_int(name: str, default: int,
 
 def run_server(host: str = "0.0.0.0", port: int = 8000,
                snapshot_root: str = "/app/output/snapshots",
-               corpus_root: Optional[str] = None) -> None:
+               corpus_root: Optional[str] = None,
+               source: Optional[str] = None,
+               saz_path: Optional[str] = None) -> None:
     """启动 API 服务（阻塞）。"""
-    app = create_app(snapshot_root, corpus_root)
+    app = create_app(snapshot_root, corpus_root, source=source, saz_path=saz_path)
     srv = make_server(app, host, port)
     print("ai_football API 监听 http://%s:%d" % (host, port))
     try:
@@ -568,4 +579,6 @@ if __name__ == "__main__":  # pragma: no cover
         port=_env_int("API_PORT", 8000, minimum=1),
         snapshot_root=os.environ.get("SNAPSHOT_ROOT", "/app/output/snapshots"),
         corpus_root=os.environ.get("CORPUS_ROOT") or None,
+        source=os.environ.get("DATA_SOURCE") or None,
+        saz_path=os.environ.get("LEYU_SAZ") or None,
     )

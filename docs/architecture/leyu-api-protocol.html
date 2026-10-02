@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>乐鱼（leyu）赛事 / 盘口 API 协议还原</title>
+<style>
+:root{--fg:#1c2733;--mut:#5d6b7a;--line:#d9e0e7;--bg:#fff;--acc:#2c6fa8;
+      --red:#b3271e;--redbg:#fdf0ee;--amb:#8a5a00;--ambbg:#fdf6e6;
+      --grn:#1e7b46;--grnbg:#eef9f2;--code:#f4f6f8}
+*{box-sizing:border-box}
+body{margin:0;background:#eef1f4;color:var(--fg);
+     font:16px/1.85 -apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",
+          "WenQuanYi Zen Hei","Noto Sans CJK SC",sans-serif;}
+.wrap{max-width:980px;margin:0 auto;background:var(--bg);
+      padding:56px 68px 90px;box-shadow:0 2px 18px rgba(0,0,0,.07)}
+h1{font-size:1.95em;line-height:1.4;margin:.2em 0 .6em;padding-bottom:.5em;
+   border-bottom:3px solid var(--acc);color:#12212e}
+h2{font-size:1.42em;margin:2.4em 0 .8em;padding:.35em 0 .35em .7em;
+   border-left:5px solid var(--acc);background:#f7fafc;color:#12212e}
+h3{font-size:1.16em;margin:1.9em 0 .6em;color:#1d3a52}
+h4{font-size:1.04em;margin:1.5em 0 .5em;color:#2b4a63}
+p{margin:.85em 0}
+a{color:var(--acc);text-decoration:none;border-bottom:1px solid #b9d3e6}
+a:hover{border-bottom-color:var(--acc)}
+hr{border:0;border-top:1px solid var(--line);margin:2.4em 0}
+strong{color:#0f1e2b}
+code{background:var(--code);padding:.14em .42em;border-radius:4px;
+     font:0.88em/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+     color:#8a2b4a;border:1px solid #e6eaee}
+pre{background:#1e2a36;color:#e6edf3;padding:18px 20px;border-radius:8px;
+    overflow:auto;font-size:13.5px;line-height:1.7}
+pre code{background:none;border:0;color:inherit;padding:0;font-size:1em}
+.math{background:var(--code);border:1px solid var(--line);border-left:4px solid var(--acc);
+      padding:14px 18px;margin:1.2em 0;white-space:pre-wrap;word-break:break-word;
+      overflow-x:auto;border-radius:6px;
+      font:14px/1.9 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#243342}
+.imath{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       font-size:.95em;color:#8a2b4a;background:#f4f6f8;padding:.05em .28em;border-radius:3px}
+.mmd{margin:1.6em 0;padding:10px 6px;border:1px solid var(--line);border-radius:8px;
+     background:#fcfdfe;overflow-x:auto}
+pre.mermaid{background:none;border:0;color:#1c2733;padding:0;margin:0;
+            font-size:13px;text-align:center;display:block}
+pre.mermaid.mermaid-fallback{background:#f7f9fb;border:1px dashed #c3ccd6;border-radius:6px;
+            padding:14px 16px;text-align:left;color:#33475b;font-size:12.5px;
+            white-space:pre;overflow:auto}
+pre.mermaid.mermaid-fallback::before{content:"⚠ Mermaid 未渲染（离线）—— 以下为图源文本";
+            display:block;margin-bottom:8px;color:var(--amb);font-weight:600;font-size:12px}
+pre.mermaid svg{max-width:100%;height:auto}
+blockquote{margin:1.2em 0;padding:14px 20px;background:#f8f9fb;
+           border-left:4px solid var(--acc);border-radius:0 6px 6px 0;color:#33475b}
+blockquote p{margin:.4em 0}
+blockquote blockquote{margin:.6em 0;background:#fff}
+.tw{overflow-x:auto;margin:1.3em 0;
+    border:1px solid var(--line);border-radius:8px;background:#fff}
+table{border-collapse:collapse;width:100%;font-size:14.5px}
+th,td{padding:9px 13px;border-bottom:1px solid var(--line);text-align:left;
+      vertical-align:top}
+th{background:#f1f5f9;font-weight:600;color:#1d3a52;white-space:nowrap}
+tbody tr:nth-child(even){background:#fafcfd}
+tbody tr:last-child td{border-bottom:0}
+.center{text-align:center}.right{text-align:right}
+img{max-width:100%;height:auto;display:block;margin:1.6em auto;
+    border:1px solid var(--line);border-radius:8px;background:#fff}
+ul,ol{margin:.8em 0;padding-left:1.7em}
+li{margin:.35em 0}
+.tag{display:inline-block;padding:.1em .55em;border-radius:4px;font-size:.86em;
+     font-weight:600;white-space:nowrap}
+@media print{body{background:#fff}.wrap{box-shadow:none;max-width:none;padding:0}
+  h2{page-break-after:avoid}table,img,pre,.math{page-break-inside:avoid}}
+@media(max-width:760px){.wrap{padding:26px 18px 60px}h1{font-size:1.5em}}
+</style>
+<script type="module">
+/* Mermaid 运行时：CDN 可用则渲染；离线/失败则优雅降级为可读代码块。
+   关键：渲染成功必须清除降级标记，避免出现「已渲染但仍显示未渲染警告」。 */
+const CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+const SEL = "pre.mermaid";
+
+function degrade(reason) {
+  var n = 0;
+  document.querySelectorAll(SEL).forEach(function (el) {
+    if (el.querySelector("svg")) return;   // 已成功渲染的不动
+    el.classList.add("mermaid-fallback");
+    n++;
+  });
+  if (n) console.warn("Mermaid fallback:", reason, "(" + n + " blocks)");
+  return n;
+}
+
+function clearFallback() {
+  document.querySelectorAll(SEL).forEach(function (el) {
+    el.classList.remove("mermaid-fallback");
+    el.removeAttribute("title");
+  });
+}
+
+(function () {
+  var settled = false;
+  var timer = setTimeout(function () {
+    if (!settled) degrade("加载超时（CDN 不可达）");
+  }, 15000);
+
+  import(CDN).then(function (mod) {
+    var mermaid = mod.default;
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "neutral",
+      securityLevel: "strict",
+      fontFamily: '-apple-system,"PingFang SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif',
+      flowchart: { useMaxWidth: true, htmlLabels: false },
+      sequence: { useMaxWidth: true },
+      state: { useMaxWidth: true }
+    });
+    return mermaid.run({ querySelector: SEL });
+  }).then(function () {
+    settled = true;
+    clearTimeout(timer);
+    clearFallback();                       // 成功后必须清除降级标记
+    window.__mermaidStatus = { ok: true, blocks: document.querySelectorAll(SEL + " svg").length };
+  }).catch(function (e) {
+    settled = true;
+    clearTimeout(timer);
+    var msg = String((e && e.message) || e);
+    degrade(msg);
+    window.__mermaidStatus = { ok: false, error: msg };
+  });
+})();
+</script>
+</head>
+<body>
+<main class="wrap">
+<h1>乐鱼（leyu）赛事 / 盘口 API 协议还原</h1>
+<blockquote><p><strong>来源</strong>：仓库根目录 <code>leyu.saz</code>（Fiddler Session Archive，898 个会话，2699 个条目， 采集进程 <code>chrome:112208</code> / <code>chrome</code>，抓包时间 2026-09-29 ~ 09-30）。 <strong>方法</strong>：只读离线解析（<code>tools/saz_extract.py</code>）+ 前端 JS 逆向（<code>WebSocketClient-DBZzJqlx.js</code>、 <code>index-DKYh4SHz.js</code>、<code>index-D6PjBGGO.js</code>）。 <strong>产出代码</strong>：<code>collector/leyu_client.py</code>，用例 <code>tests/test_leyu_client.py</code>（40 例）。 本文件所有结论均可由上述两者复现；<strong>不含任何猜测字段</strong>。</p></blockquote>
+<h2>0. 证据分级（AGENTS.md §5.3）</h2>
+<div class="tw"><table><thead><tr><th>级别</th><th>含义</th><th>本文档中的对应内容</th></tr></thead><tbody><tr><td><strong>A</strong></td><td>一手可核验代码 / 抓包原文</td><td>端点路径、请求头、响应体结构、<code>ov</code> 编码、AES 密钥与密文、WS 指令码、重连/心跳参数</td></tr><tr><td><strong>B</strong></td><td>由 A 类证据推导</td><td>字段语义映射（如 <code>ms</code> 状态取值分布）、盘口 <code>hpt</code> 分类、<code>cufm</code> 节流语义</td></tr><tr><td><strong>C</strong></td><td>社区/经验，未验证</td><td>未出现——本文档未采用任何 C 类信源</td></tr></tbody></table></div>
+<p><strong>未验证项已显式标注</strong>（见 §7）。</p>
+<hr>
+<h2>1. 系统分层与数据流</h2>
+<div class="mmd"><pre class="mermaid">graph TD
+    subgraph L0["L0 域名发现（必需前置）"]
+        OSS["OSS prod.json&lt;br/&gt;AES-128-ECB 密文"]
+        DEC["decode_prod_json()&lt;br/&gt;panda1234_1234ob"]
+        POOL["真实 https 网关池&lt;br/&gt;live_domains / GAB / GAS / GAY / GACOMMON"]
+        OSS --&gt; DEC --&gt; POOL
+    end
+
+    subgraph L1["L1 collector（本项目新增，零第三方依赖）"]
+        CLI["LeYuClient"]
+        ENV["decode_envelope()&lt;br/&gt;base64 → gzip → JSON"]
+        PM["parse_match_list()"]
+        PO["parse_odds_block()"]
+        CLI --&gt; ENV
+        ENV --&gt; PM
+        ENV --&gt; PO
+    end
+
+    subgraph L2["L2 领域模型"]
+        LM["LeYuMatch&lt;br/&gt;mid/home/away/mgt/ms"]
+        MQ["MarketQuote&lt;br/&gt;chpid/hv/quotes"]
+        OQ["OddsQuote&lt;br/&gt;decimal = ov / 100000"]
+        LM --&gt; MQ --&gt; OQ
+    end
+
+    subgraph L3["L3 实时通道"]
+        WS["WebSocket&lt;br/&gt;/yewuws2/push?requestId="]
+        HB["心跳 C0 / 5s"]
+        SUB["订阅 C8 (L=1.5s / LM=4s)"]
+        WS --&gt; HB
+        WS --&gt; SUB
+    end
+
+    POOL --&gt; CLI
+    PM --&gt; LM
+    PO --&gt; LM
+    WS --&gt; CLI</pre></div>
+<h3>时序：一次完整的"全量赛事 + 实时盘口"</h3>
+<div class="mmd"><pre class="mermaid">sequenceDiagram
+    autonumber
+    participant C as LeYuClient
+    participant OSS as OSS (prod.json)
+    participant API as api.&lt;domain&gt;/yewu11
+    participant WS as api.&lt;domain&gt;/yewuws2
+
+    C-&gt;&gt;OSS: GET /prod.json
+    OSS--&gt;&gt;C: {live_domains, GAB.api[], ...} (AES-ECB 密文)
+    C-&gt;&gt;C: decode_prod_json() → 选网关
+    C-&gt;&gt;API: GET /v2/m/getOriginalDataPB?t=&lt;ms&gt;
+    Note over C,API: 一次返回 1868 场 / 333 联赛 / 11 运动
+    API--&gt;&gt;C: {code:"0000000", data:"&lt;base64(gzip(JSON))&gt;"}
+    C-&gt;&gt;C: parse_match_list() → List[LeYuMatch]
+
+    loop 每批 12~20 场
+        C-&gt;&gt;API: POST /v1/w/structureMatchBaseInfoByMidsPB?t=&lt;ms&gt;
+        Note over C,API: body {"mids":"a,b,c,...","cuid":..,"cos":0,"orpt":0,"euid":"3020101"}
+        API--&gt;&gt;C: data[].hpsPns[] + hpsData[0].hps[]/hpsAdd[]
+        C-&gt;&gt;C: parse_odds_block() → MarketQuote/OddsQuote
+    end
+
+    C-&gt;&gt;WS: upgrade /yewuws2/push?requestId=&lt;32hex&gt;
+    WS--&gt;&gt;C: 101 Switching Protocols
+    loop 每 5s
+        C-&gt;&gt;WS: {"cmd":"C0","requestId":"&lt;hex&gt;"}
+    end
+    C-&gt;&gt;WS: {"cmd":"C8","key":..,"list":[{"mid":..}],"cufm":"L","marketLevel":0,"esMarketLevel":0}
+    WS--&gt;&gt;C: {"cmd":"C118"|"C2"|"C21", ...} 实时赔率/盘口变更</pre></div>
+<hr>
+<h2>2. 传输契约（A 类证据）</h2>
+<h3>2.1 网关与路径</h3>
+<div class="tw"><table><thead><tr><th>项</th><th>值</th></tr></thead><tbody><tr><td>业务前缀</td><td><code>/yewu11/</code>（<code>API_PREFIX_JOB</code>）、<code>/yewu12/</code>（用户）、<code>/yewu40/</code>（埋点）、<code>/yewurecord/</code>（注单）</td></tr><tr><td>WS 前缀</td><td><code>/yewuws2/</code>（<code>API_PREFIX_WBSOCKET</code>）</td></tr><tr><td>时间戳</td><td>所有 REST 带 <code>?t=&lt;毫秒&gt;</code>（缓存击穿位）</td></tr><tr><td>观测到的网关</td><td><code>api.vk3whcw.com</code>、<code>api.z0ugnx7k.com</code>、<code>api-umc.4u9jjgl.com</code> 等 <strong>36 个</strong>轮换域名</td></tr></tbody></table></div>
+<h3>2.2 固定请求头</h3>
+<pre><code class="language-http">lang: zh
+request-code: {&quot;panda-bss-source&quot;:&quot;2&quot;}
+requestId: &lt;32 位 hex 会话令牌&gt;   # 会话期常量；实测即会话凭证，勿泄露
+checkId:   pc-&lt;md5&gt;-&lt;cuid&gt;-&lt;毫秒时间戳&gt;                  # 服务端不回校验
+Origin:    https://&lt;前端域名&gt;/
+Referer:   https://&lt;前端域名&gt;/
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) ... Chrome/153.0.0.0 Safari/537.36</code></pre>
+<blockquote><h3>⚠️ 关键结论：<strong>不存在请求签名</strong></h3>
+<p>对 sid 347 / 379 / 426 等会话的完整请求头与请求体做了字符串取证， <code>sign</code> / <code>signature</code> / <code>nonce</code> / <code>timestamp</code> <strong>均不出现在任何请求中</strong> （<code>tests/test_leyu_client.py::test_capture_has_no_signature_params</code> 断言锁定）。 <code>checkId</code> 只是带时间戳的追踪 ID，服务端响应会回显自己的 <code>checkId</code>。 因此本客户端<strong>不伪造任何签名</strong>——伪造签名既无必要，也会引入虚假的"绕过"叙述。</p>
+<h3>🔑 关键结论（2026-09-30 实测）：<strong><code>requestId</code> 就是会话令牌</strong></h3>
+<p>直接 HTTPS 连真实网关做了对照实验：</p>
+<div class="tw"><table><thead><tr><th>请求头 <code>requestId</code></th><th>上游响应</th></tr></thead><tbody><tr><td>抓包原始值（脱敏，见 §2.2 说明）</td><td><code>code=0000000</code>，<strong>成功</strong>，<code>data</code> 371 115 字节</td></tr><tr><td>随机 32 位 hex</td><td><code>code=0401013</code>，<code>账户信息已过期,请重新登录</code></td></tr><tr><td>空串</td><td><code>code=0401013</code> 同上</td></tr></tbody></table></div>
+<p>即：<strong>业务端点需要有效会话</strong>，而会话凭证就是 <code>requestId</code> 本身 （抓包请求头中确实<strong>没有</strong> Cookie / Token / Authorization， 故 <code>requestId</code> 是唯一的会话载体）。</p>
+<p><strong>实践含义</strong>：</p>
+<ol><li>调用业务端点必须提供<strong>有效会话的 requestId</strong></li></ol>
+<p>（环境变量 <code>LEYU_REQUEST_ID</code>，或由浏览器登录后取得）；</p>
+<ol><li>随机生成 <code>requestId</code> 只能用于探测连通性（会得到业务层错误，而非网络错误）；</li><li>本客户端在鉴权失败时抛 <code>AuthError</code> 并给出可操作提示，</li></ol>
+<p>不把「业务层鉴权失败」伪装成成功。</p></blockquote>
+<h3>2.4 <code>data</code> 字段的三种形态（实测）</h3>
+<p>早期实现假设 <code>data</code> 恒为 base64+gzip，导致系统时间接口必报错。实测存在三种：</p>
+<div class="tw"><table><thead><tr><th>形态</th><th>端点示例</th><th>处理</th></tr></thead><tbody><tr><td><code>base64(gzip(JSON))</code></td><td><code>getOriginalDataPB</code></td><td>解码为 JSON</td></tr><tr><td>明文 JSON</td><td><code>category/getCategoryList</code></td><td>直接解析</td></tr><tr><td><strong>明文标量字符串</strong></td><td><code>getSystemTime/currentTimeMillis</code> → <code>"1790812193894"</code></td><td>原样返回</td></tr></tbody></table></div>
+<p>判别依据是 <strong>gzip 魔数</strong> <code>1f 8b</code>：有魔数则必须解压成功，否则报错 （绝不把损坏的 gzip 静默当明文）；无魔数则走明文路径。</p>
+<h3>2.3 响应封装</h3>
+<pre><code class="language-json">{&quot;code&quot;:&quot;0000000&quot;,&quot;data&quot;:&quot;H4sIAAAAAAAAA...&quot;,&quot;msg&quot;:&quot;成功&quot;,&quot;ts&quot;:1790785716076}</code></pre>
+<p><code>data</code> 是 <strong>base64(gzip(UTF-8 JSON))</strong>，<strong>不是 protobuf</strong>（端点名带 <code>PB</code> 后缀属历史命名）。 少数端点（<code>category/getCategoryList</code>、<code>eventInfo</code>、<code>platformsCount</code>）直接回明文 JSON。</p>
+<p>成功码集合：<code>{"0000000", "200", "0"}</code>（新旧版本并存）。</p>
+<hr>
+<h2>3. 全量赛程：<code>GET /yewu11/v2/m/getOriginalDataPB</code></h2>
+<p><strong>一次调用即拿到全部运动 × 全部联赛 × 全部赛事</strong>（实测 <code>len(matchsList)=1868</code>），无需分页。</p>
+<pre><code class="language-http">GET /yewu11/v2/m/getOriginalDataPB?t=&lt;ms&gt;</code></pre>
+<p>解码后顶层结构：</p>
+<div class="tw"><table><thead><tr><th>字段</th><th>实测规模</th><th>语义</th></tr></thead><tbody><tr><td><code>spList[]</code></td><td>42 条</td><td><code>csid</code> 运动 ID、<code>csna</code> 运动名</td></tr><tr><td><code>tids_obj[]</code></td><td>333 条</td><td><code>tid</code> 联赛 ID、<code>tn</code> 联赛名、<code>tlev</code> 层级</td></tr><tr><td><code>matchsList[]</code></td><td><strong>1868 条</strong></td><td>赛事主体</td></tr><tr><td><code>menus{}</code></td><td>11634 键</td><td>彩种/玩法菜单名映射</td></tr></tbody></table></div>
+<p>赛事主体字段（49 个，以下为已用字段）：</p>
+<div class="tw"><table><thead><tr><th>字段</th><th>类型</th><th>语义</th><th>实测分布</th></tr></thead><tbody><tr><td><code>mid</code></td><td>str</td><td><strong>赛事主键</strong></td><td>唯一</td></tr><tr><td><code>csid</code></td><td>str</td><td>运动 ID</td><td>足球=1（1090 场）</td></tr><tr><td><code>tid</code></td><td>str</td><td>联赛 ID</td><td>333 个</td></tr><tr><td><code>mhn</code> / <code>man</code></td><td>str</td><td>主队 / 客队名</td><td>—</td></tr><tr><td><code>mhlu</code> / <code>malu</code></td><td>str[]</td><td>主/客队 logo 相对路径</td><td>—</td></tr><tr><td><code>mgt</code></td><td>str</td><td>开赛时间（<strong>毫秒</strong> EPOCH）</td><td>—</td></tr><tr><td><code>ms</code></td><td>int</td><td>赛事状态</td><td>0=未开赛 1725 · 1=进行中 127 · 110=已结束 16</td></tr><tr><td><code>mst</code></td><td>str</td><td>即时分钟</td><td>—</td></tr><tr><td><code>mmp</code></td><td>str</td><td>比赛阶段</td><td>—</td></tr><tr><td><code>msc</code></td><td>str</td><td>比分/统计序列 `"S1\</td><td>2:1,S555\</td><td>3:4,…"`</td><td><code>S1</code>=比分 <code>S555</code>=角球 <code>S12001</code>=黄牌 <code>S11001</code>=红牌</td></tr><tr><td><code>mcid</code></td><td>str</td><td>场次编号</td><td>如 <code>周六019</code>，部分为空</td></tr><tr><td><code>betAmount</code></td><td>str</td><td>投注额（小数，字符串）</td><td>—</td></tr></tbody></table></div>
+<hr>
+<h2>4. 实时盘口：<code>POST /yewu11/v1/w/structureMatchBaseInfoByMidsPB</code></h2>
+<pre><code class="language-http">POST /yewu11/v1/w/structureMatchBaseInfoByMidsPB?t=&lt;ms&gt;
+Content-Type: application/json
+
+{&quot;mids&quot;:&quot;5714088,5687515,5687518,...&quot;,&quot;cuid&quot;:&quot;&lt;20位&gt;&quot;,&quot;cos&quot;:0,&quot;orpt&quot;:0,&quot;euid&quot;:&quot;3020101&quot;}</code></pre>
+<ul><li>抓包中单批 <strong>12 场</strong>；<code>getMatchBaseInfoByOddsPB</code> 为单场版（<code>{"mid":"5714088","mcid":0,"newUser":0}</code>）。</li><li>二者共用同一套盘口结构，代码共用 <code>parse_odds_block()</code>。</li></ul>
+<h3>4.1 盘口定义 <code>hpsPns[]</code></h3>
+<div class="tw"><table><thead><tr><th>字段</th><th>语义</th><th>实测取值</th></tr></thead><tbody><tr><td><code>chpid</code> / <code>hpid</code></td><td>盘口 ID</td><td>1、2、4、17、18、19 …</td></tr><tr><td><code>hpn</code></td><td>盘口中文名</td><td>全场独赢 / 全场让球 / 全场大小 / 上半场独赢 / 上半场让球 / 上半场大小</td></tr><tr><td><code>hpt</code></td><td>盘口类型</td><td><strong>1=独赢 · 2=让球（亚盘）· 5=大小球</strong></td></tr><tr><td><code>hmm</code></td><td>是否含盘口线</td><td>1=含（让球/大小），0=不含（独赢）</td></tr><tr><td><code>hsw</code></td><td>可选盘口线</td><td><code>"1,2,3,4,5,6"</code></td></tr><tr><td><code>mct</code></td><td>主盘口线</td><td><code>1.5</code> / <code>1</code></td></tr><tr><td><code>hshow</code></td><td>是否展示</td><td><code>"Yes"</code></td></tr></tbody></table></div>
+<h3>4.2 赔率 <code>hpsData[0].hps[]</code> / <code>hpsAdd[]</code></h3>
+<pre><code class="language-jsonc">{ &quot;chpid&quot;: &quot;1&quot;, &quot;ctsp&quot;: &quot;1790785712143&quot;,
+  &quot;hl&quot;: { &quot;hv&quot;: &quot;3&quot;,                 // 盘口线
+          &quot;ol&quot;: [                    // ⚠️ 每一项就是一个投注选项
+            { &quot;oid&quot;: &quot;147728961044955237&quot;, &quot;ot&quot;: &quot;1&quot;, &quot;ov&quot;: 3200000,
+              &quot;ov2&quot;: &quot;-0.90&quot;, &quot;on&quot;: &quot;主胜&quot;, &quot;otd&quot;: 47, &quot;ots&quot;: &quot;T1&quot;, &quot;cds&quot;: &quot;N02&quot; } ] } }</code></pre>
+<blockquote><p><code>hl</code> <strong>既可能是 dict 也可能是 list</strong>：主盘口是 dict，附加盘口 <code>hpsAdd</code> 是 "每个盘口线一个元素"的数组。把 <code>hpsAdd</code> 的多条线合并会污染水位计算， 故实现按 <code>(chpid, hv)</code> 拆成多个 <code>MarketQuote</code> （<code>tests/…::test_added_lines_split_into_separate_markets</code> 锁定）。</p></blockquote>
+<h3>4.3 <code>ov</code> 赔率编码（本协议最关键的还原点）</h3>
+<pre><code class="language-text">decimal = ov / 100000</code></pre>
+<p>实证对照（sid 360，厄立特里亚 vs 南非）：</p>
+<div class="tw"><table><thead><tr><th>选项</th><th><code>ov</code></th><th>还原十进制</th><th>佐证</th></tr></thead><tbody><tr><td>客胜（南非）</td><td><code>107000</code></td><td><strong>1.07</strong></td><td>强队大热</td></tr><tr><td>平局</td><td><code>850000</code></td><td><strong>8.50</strong></td><td>—</td></tr><tr><td>主胜（厄立特里亚）</td><td><code>3200000</code></td><td><strong>32.00</strong></td><td>弱队冷门，与 1.07 互斥合理</td></tr></tbody></table></div>
+<p>水位校验：<code>1/1.07 + 1/8.50 + 1/32.00 = 1.0835</code> → 水位 <strong>8.35%</strong>，落在合理区间； 若误用其他编码（如 <code>/1000</code> 或直接当小数），水位会为负或超过 100%，可立即发现。</p>
+<p><code>ov2</code> 为马来盘水位，换算：<code>decimal = 1 + 1/|ov2|</code>（<code>ov2&lt;0</code>）或 <code>1 + ov2</code>（<code>ov2&gt;0</code>）。 实测两者互相一致（如 <code>ov=211000</code> ↔ <code>ov2=-0.90</code> → 均为 ≈2.11）。</p>
+<p><code>cds</code> 数据源标识（本项目只做记录，不做跨源聚合）：<code>N01</code>/<code>N02</code> 内部盘、 <code>A01</code>/<code>G01</code> 聚合盘、<code>L01-Bet365</code>、<code>L02-12Bet</code>。</p>
+<hr>
+<h2>5. 实时推送：<code>wss://&lt;host&gt;/yewuws2/push?requestId=&lt;32hex&gt;</code></h2>
+<h3>5.1 连接与保活（JS 常量实证）</h3>
+<div class="tw"><table><thead><tr><th>参数</th><th>值</th><th>出处</th></tr></thead><tbody><tr><td>心跳间隔</td><td><strong>5 s</strong></td><td><code>heartbeatInterval = 1e3*5</code></td></tr><tr><td>心跳超时</td><td><strong>8 s</strong></td><td><code>heartbeatTimeout = 1e3*8</code></td></tr><tr><td>重连间隔</td><td><strong>4 s</strong></td><td><code>reconnectInterval = 1e3*4</code></td></tr><tr><td>心跳报文</td><td><code>{"cmd":"C0","requestId":"&lt;hex&gt;"}</code></td><td><code>heartbeatSendData</code></td></tr></tbody></table></div>
+<p>握手仅需 <code>requestId</code>；抓包中 sid 324 得到 <code>101 Switching Protocols</code>。</p>
+<blockquote><p>注意：WS 握手<strong>不做业务鉴权</strong>（因此随机 requestId 也能升级成功）， 但订阅后能否收到有效推送仍取决于该会话是否有效。 不要把「握手成功」误读为「无需凭证」（详见 §2.2 的实测对照表）。</p></blockquote>
+<h3>5.2 客户端上行指令</h3>
+<div class="tw"><table><thead><tr><th>指令</th><th>语义</th><th>报文要点</th></tr></thead><tbody><tr><td><code>C00</code></td><td>关闭连接</td><td>—</td></tr><tr><td><code>C0</code></td><td>心跳</td><td><code>requestId</code></td></tr><tr><td><code>C01/C03/C04/C05</code></td><td>赛事列表 / 3 / 4 / 5</td><td>—</td></tr><tr><td><strong><code>C8</code></strong></td><td><strong>全站盘口赔率订阅（买量最大）</strong></td><td><code>key</code>、<code>list[{mid}]</code>、<code>cufm</code>、<code>marketLevel</code>、<code>esMarketLevel</code>、<code>oddsType</code></td></tr><tr><td><code>C13</code></td><td>赛事详情页订阅</td><td><code>mid</code>、<code>requestId</code>（抓包中动画页使用）</td></tr><tr><td><code>C4</code></td><td>主动推送订阅</td><td><code>uuid = &lt;requestId&gt;_Z01</code></td></tr><tr><td><code>C2 / C21 / C118</code></td><td>单个盘口赔率</td><td><code>hid</code>、<code>mid</code></td></tr><tr><td><code>C3</code></td><td>订单</td><td>—</td></tr><tr><td><code>C5 / C51</code></td><td>菜单</td><td>—</td></tr><tr><td><code>C6</code></td><td>热门直播</td><td>—</td></tr><tr><td><code>C7</code></td><td>全局开关</td><td>—</td></tr><tr><td><code>C9</code></td><td>联赛状态</td><td><code>tid</code>，<code>cclose="1"</code> 关闭</td></tr></tbody></table></div>
+<h3>5.3 服务端下行（<code>R_</code> 前缀）</h3>
+<p><code>C101</code> 赛事状态 · <code>C102</code> 赛事事件 · <code>C103</code> 比分 · <code>C104</code> 盘口状态 · <code>C105</code> 玩法状态 · <code>C106</code> 注单赔率 · <code>C107</code> 视频动画 · <code>C108</code> 财务日结 · <code>C110</code> 玩法计数 · <code>C112</code> 分类切换 · <code>C118</code> 盘口赔率 · <code>C201/C202</code> 订单状态/计数 · <code>C301</code> 菜单分段 · <code>C302</code> 开赛 · <code>C303</code> 玩法暂停 · <code>C801</code> 补时 · <code>C901</code> 联赛关闭 · <strong><code>C1301</code></strong> 动画页赛事增量。</p>
+<h3>5.4 <code>cufm</code> 节流（B 类：由 JS 常量推导）</h3>
+<div class="tw"><table><thead><tr><th>值</th><th>节流</th><th>客户端行为</th></tr></thead><tbody><tr><td><code>L</code></td><td><strong>1500 ms</strong></td><td>请求体参与合并（同 <code>key</code> 覆盖），<code>lodash.throttle(…,1500,{leading,trailing})</code></td></tr><tr><td><code>LM</code></td><td><strong>4000 ms</strong></td><td><code>one_send=1</code> 强制单发；或 <code>cufm=="LM"</code> 的列表推送</td></tr></tbody></table></div>
+<p><code>cclose="1"</code> 表示退订。</p>
+<hr>
+<h2>6. 域名轮换（可用性前提）</h2>
+<p><code>oss/prod.json</code> 中所有域名均为 <strong>AES-128-ECB + PKCS7 + Base64</strong> 密文：</p>
+<div class="tw"><table><thead><tr><th>用途</th><th>密钥（Utf8 明文）</th><th>JS 出处</th></tr></thead><tbody><tr><td>prod.json 域名池</td><td><code>panda1234_1234ob</code></td><td><code>DomainState.DECRYPT_KEY</code></td></tr><tr><td><code>?api=</code> URL 参数</td><td><code>OBTY20220712OBTY</code></td><td><code>DECRYPT_KEY_URL_API</code></td></tr></tbody></table></div>
+<p>解密结果（<code>decode_prod_json()</code>）：</p>
+<pre><code class="language-text">live_domains.pc  → https://prolivepc.dbsportxxx13ky.com
+GAB.api[]        → api.9qx9js6.com:17025 / api.vur70no.com:17025 / api.rah492x.com …
+GAS.api[]        → api.1p54wbe.com / api.etx7rn0.com …
+GACOMMON.api[]   → api.ybj4ra7.com / api.3qttu0s.com …</code></pre>
+<div class="mmd"><pre class="mermaid">graph TD
+    A["启动"] --&gt; B["拉取 OSS prod.json"]
+    B --&gt; C{"AES 解密成功?"}
+    C --&gt;|是| D["得到网关池（多组）"]
+    C --&gt;|否| E["仅用 BUILDIN_CONFIG 内置域名列表"]
+    D --&gt; F["按组选取可用网关"]
+    E --&gt; F
+    F --&gt; G["探测 /v1/getSystemTime/currentTimeMillis"]
+    G --&gt; H{"返回成功码?"}
+    H --&gt;|是| I["作为当前网关"]
+    H --&gt;|否| J["切换池中下一个网关"]
+    J --&gt; G
+    I --&gt; K["开始采集"]</pre></div>
+<blockquote><p>抓包中出现的 36 个 <code>api.*</code> 域名分属不同组，<strong>同一时刻只需一个可用网关</strong>。</p></blockquote>
+<hr>
+<h2>7. 采集路径对比与选型</h2>
+<div class="tw"><table><thead><tr><th>维度</th><th><strong>A. REST 快照轮询</strong>（本项目采用）</th><th>B. WebSocket 推送</th><th>C. 浏览器渲染抓取</th></tr></thead><tbody><tr><td>接入层级</td><td>应用层 JSON API</td><td>应用层 WS 协议</td><td>DOM（Selenium）</td></tr><tr><td>延迟表现</td><td>轮询周期决定（可做到 5~15 s）</td><td><strong>最优</strong>（服务端主动推，秒级）</td><td>差（渲染 + 等待）</td></tr><tr><td>盘口完整性</td><td><strong>完整</strong>（<code>hpsPns</code> + <code>hpsAdd</code> 全量线）</td><td>增量事件，需自己维护状态</td><td>仅页面已渲染部分</td></tr><tr><td>稳定性</td><td>高（幂等 GET/POST）</td><td>中（需处理心跳/重连/断线丢事件）</td><td>低（反爬、前端改版）</td></tr><tr><td>维护成本</td><td><strong>低</strong>（字段已固化 + 40 例回归）</td><td>高（指令码/节流语义多）</td><td>高</td></tr><tr><td>覆盖率</td><td><strong>1868 场 / 333 联赛 / 11 运动</strong></td><td>需逐场订阅</td><td>受渲染滚动限制</td></tr><tr><td>资源占用</td><td>低（纯 HTTP，零浏览器）</td><td>低</td><td><strong>高</strong>（每实例一个 Chrome）</td></tr><tr><td>依赖风险</td><td>仅标准库</td><td>需 WS 客户端</td><td>需 Docker + Chrome 沙盒</td></tr><tr><td>合规/风控</td><td>请求量可控，可退避</td><td>长连接易被风控标记</td><td>最易触发风控</td></tr></tbody></table></div>
+<p><strong>选型结论</strong>：以 <strong>A（REST）为主</strong>，覆盖全量赛程与全量盘口； <strong>B（WS）作为可选增量通道</strong>（<code>ws_subscribe_odds()</code> 已就绪，接入 WS 运行时即可启用）； <strong>C 不采用</strong>——本项目已有 <code>browser_scraper_service</code> 容器专司浏览器能力， 本协议还原证明主站数据<strong>无需浏览器即可获得</strong>，可直接卸载该层负担。</p>
+<p><strong>敏感性方向</strong>：若把轮询周期从 10 s 改为 3 s 或 60 s，上述"完整性/覆盖率"结论不变 （一次调用即返回全量），仅"延迟表现"列随周期线性变化。</p>
+<hr>
+<h2>8. 赛事状态机</h2>
+<div class="mmd"><pre class="mermaid">stateDiagram-v2
+    [*] --&gt; 未开赛: ms=0 (实测 1725 场)
+    未开赛 --&gt; 进行中: 开赛 (WS C302 / ms=1)
+    进行中 --&gt; 进行中: 比分/盘口更新\n(WS C103 比分, C118 赔率)
+    进行中 --&gt; 已结束: 完赛 (ms=110)
+    已结束 --&gt; [*]
+    进行中 --&gt; 暂停: 玩法暂停 (WS C303)
+    暂停 --&gt; 进行中: 恢复
+    未开赛 --&gt; 取消: 联赛关闭 (WS C901)
+    取消 --&gt; [*]</pre></div>
+<hr>
+<h2>9. 未验证项（诚实披露）</h2>
+<ol><li><strong>WebSocket 下行报文未在抓包中捕获</strong>——saz 里 sid 324 只有握手（101），</li></ol>
+<p>没有帧内容（Fiddler 对 WS 帧默认不落盘）。指令码语义来自 JS 常量表与页面逻辑， 属 <strong>B 类</strong>；实际帧结构需真实连一次才能确认。</p>
+<ol><li><strong><code>getOriginalDataPB</code> 无分页/无参数</strong>——本抓包中该请求无 query 参数（除 <code>t</code>），</li></ol>
+<p>但未验证是否存在服务端条数上限（实测返回 1868 场）。</p>
+<ol><li><strong><code>cufm</code> 节流数值</strong>来自 JS 常量（1500/4000 ms），非服务端契约，属 B 类。</li><li><strong><code>ov</code> 编码</strong>已用三档赔率（1.07 / 8.50 / 32.00）交叉验证；</li></ol>
+<p>极端值（如 <code>ov=100000</code> 即 decimal 1.00）未出现，实现按非法丢弃处理。</p>
+<ol><li><strong>合规边界</strong>：本还原仅用于技术与经济学研究（AGENTS.md §0.5）；</li></ol>
+<p>项目不做合规规避，不实现投注/下单链路（<code>C3</code>、<code>yewurecord</code> 相关端点已识别但未实现）。</p>
+<hr>
+<h2>10. 复现命令</h2>
+<pre><code class="language-bash"># 1) 结构化导出抓包（只读，不发起任何网络请求）
+python3 tools/saz_extract.py leyu.saz
+
+# 2) 语法与用例（宿主机可直跑，零第三方依赖）
+python3 -m py_compile collector/leyu_client.py tests/test_leyu_client.py
+python3 -m unittest tests.test_leyu_client -v      # 期望 40 passed
+
+# 3) 全量回归
+python3 -m unittest discover -s tests -q           # 期望 469 passed</code></pre>
+</main>
+</body>
+</html>

@@ -176,9 +176,12 @@ class TestServiceMultiMarket(unittest.TestCase):
     """服务层的多玩法聚合（用合成语料，不依赖仓库 output/）。"""
 
     def _service(self) -> ValuationService:
+        # 显式指定 ticai：这些用例验证的是**体彩语料**的解析与聚合，
+        # 不能受默认数据源（乐鱼）影响，否则会去打网络。
         return ValuationService(snapshot_root="output",
                                 corpus_root="output",
-                                prefer_redis=False)
+                                prefer_redis=False,
+                                source="ticai")
 
     def setUp(self):
         self.svc = self._service()

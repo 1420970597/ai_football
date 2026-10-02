@@ -22,11 +22,14 @@ from __future__ import annotations
 import json
 import math
 import os
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from collector.leyu_client import DEFAULT_HOST, DEFAULT_ORIGIN
 from collector.normalizer import normalize_matches
+from collector.sources import make_source
 from core import calibration as cal
 from core import devig as devig_mod
 from core import economics as econ
@@ -42,7 +45,22 @@ from store import SnapshotStore, make_cache
 
 __all__ = ["ValuationService", "load_corpus"]
 
+#: 乐鱼源写入快照的展示名（现为**默认**数据源）
+LEYU_SOURCE_NAME = "乐鱼API"
+
+#: 体彩源展示名（保留作为可选数据源与回归对照）
 DEFAULT_SOURCE = "体彩官方API"
+
+
+def _env_int(name: str, default: int) -> int:
+    """读整数环境变量；缺失或非法时回退 default。"""
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
 
 
 def _as_prob_tuple(raw: object, name: str) -> Tuple[float, ...]:
@@ -104,7 +122,11 @@ def load_corpus(root: str | Path) -> List[Dict[str, Any]]:
 
 
 class ValuationService:
-    """估值服务：快照 → 去水 → 优势 → 仓位 → 校准。"""
+    """估值服务：快照 → 去水 → 优势 → 仓位 → 校准。
+
+    数据源是可插拔的（见 `collector.sources`）：默认 **乐鱼（leyu）**，
+    可通过 `DATA_SOURCE` 环境变量或构造参数切换，体彩文件源保留为可选。
+    """
 
     def __init__(
         self,
@@ -112,6 +134,9 @@ class ValuationService:
         corpus_root: Optional[str | Path] = None,
         cache: Optional[Any] = None,
         prefer_redis: Optional[bool] = None,
+        source: Optional[str] = None,
+        saz_path: Optional[str | Path] = None,
+        source_obj: Optional[Any] = None,
     ) -> None:
         """构造估值服务。
 
@@ -120,6 +145,11 @@ class ValuationService:
             否则用内存缓存。**不应硬编码为 False**，否则容器里永远连不上 Redis，
             缓存不跨进程（这是一个曾经真实存在的缺陷）。
           - True / False：显式指定（供测试使用）。
+
+        source：数据源名称（`leyu` / `ticai`，支持中文别名）。
+          - None（默认）：读 `DATA_SOURCE` 环境变量；仍为空则用 **leyu**。
+        saz_path：乐鱼抓包路径；给出时乐鱼源进入**离线回放**（无需联网）。
+        source_obj：直接注入已构造的数据源（供测试/扩展覆盖前两者）。
         """
         if prefer_redis is None:
             prefer_redis = bool(os.environ.get("REDIS_URL", "").strip()) \
@@ -130,25 +160,66 @@ class ValuationService:
                 prefer_redis=prefer_redis),
         )
         self.corpus_root = Path(corpus_root) if corpus_root else None
+        self.saz_path = str(saz_path) if saz_path else \
+            (os.environ.get("LEYU_SAZ") or None)
         self._ingested = False
+
+        if source_obj is not None:
+            self.source = source_obj
+        else:
+            resolved = source if source is not None \
+                else (os.environ.get("DATA_SOURCE") or None)
+            self.source = make_source(
+                resolved,
+                corpus_root=self.corpus_root,
+                # 仅在显式给出 saz 时回放；否则与乐鱼在线网关打交道
+                saz_path=self.saz_path,
+                host=os.environ.get("LEYU_HOST") or DEFAULT_HOST,
+                origin=os.environ.get("LEYU_ORIGIN") or DEFAULT_ORIGIN,
+                request_id=os.environ.get("LEYU_REQUEST_ID") or None,
+                batch_size=_env_int("LEYU_BATCH", 20),
+            )
 
     # -- 数据准备 -----------------------------------------------------------
 
-    def ingest_corpus(self, source: str = DEFAULT_SOURCE) -> Dict[str, Any]:
-        """把 output/ 下的原始记录归一化并写入不可变快照存储。"""
-        if self.corpus_root is None:
-            return {"ingested": 0, "reason": "未配置 corpus_root"}
-        records = load_corpus(self.corpus_root)
-        res = normalize_matches(records, source=source)
-        written = self.store.append_many(res.snapshots)
+    def ingest_corpus(
+        self,
+        source: Optional[str] = None,
+        mids: Optional[Sequence[str]] = None,
+        max_matches: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """拉取数据源 → 归一化 → 写入不可变快照存储。
+
+        Args:
+            source: 覆盖数据源展示名（默认用数据源自身的 `display_source`）。
+            mids: 限定赛事 ID（乐鱼源的两阶段拉取必需，否则会拉上千场）。
+            max_matches: 上限；乐鱼源默认 60 场。
+        """
+        snaps, issues = self._fetch(source, mids, max_matches)
+        written = self.store.append_many(snaps)
         self._ingested = True
         return {
-            "records": len(records),
-            "snapshots": len(res.snapshots),
+            "data_source": self.source.name,
+            "snapshots": len(snaps),
             "written": len(written),
-            "issues": len(res.issues),
-            "summary": res.summary(),
+            "issues": len(issues),
+            "issue_samples": issues[:20],
         }
+
+    def _fetch(
+        self,
+        source: Optional[str],
+        mids: Optional[Sequence[str]],
+        max_matches: Optional[int],
+    ) -> Any:
+        """按数据源类型分派拉取（保留体彩源的 source 覆盖能力）。"""
+        if source is None or source == self.source.display_source:
+            return self.source.fetch(mids=mids, max_matches=max_matches)
+        # 显式覆盖：仅体彩文件源支持自定义展示名
+        if self.source.name == "ticai":
+            snaps, issues = self.source.fetch(mids=mids, max_matches=max_matches)
+            return [replace(s, source=source) for s in snaps], issues
+        return self.source.fetch(mids=mids, max_matches=max_matches)
 
     def _all_snapshots(self) -> List[OddsSnapshot]:
         """扫描存储，返回全部快照。"""

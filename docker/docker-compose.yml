@@ -94,11 +94,22 @@ services:
       - API_PORT=8000
       - SNAPSHOT_ROOT=/app/output/snapshots
       - CORPUS_ROOT=${CORPUS_ROOT:-}
+      # 数据源：默认 leyu（乐鱼）。切回体彩文件源用 DATA_SOURCE=ticai。
+      - DATA_SOURCE=${DATA_SOURCE:-leyu}
+      # 乐鱼网关与会话。
+      # LEYU_REQUEST_ID 是**会话令牌**（随机值会被上游拒绝，见协议文档 §2.2），
+      # 必须由部署时注入，不得硬编码进仓库。
+      - LEYU_HOST=${LEYU_HOST:-https://api.rah492x.com}
+      - LEYU_REQUEST_ID=${LEYU_REQUEST_ID:-}
+      # 留空表示在线拉取；给出 saz 路径则转为离线回放（供无网环境）
+      - LEYU_SAZ=${LEYU_SAZ:-}
       # 缓存后端：redis 可达则用 redis，否则自动回退内存
       - REDIS_URL=redis://redis:6379/0
     volumes:
-      # 宿主机语料（output/场次*.json）只读挂载，供首次导入
+      # 宿主机语料（output/场次*.json）只读挂载，供首次导入与体彩源使用
       - ../output:/app/output
+      # 乐鱼抓包（离线回放时才需要；文件缺失不影响在线模式）
+      - ../leyu.saz:/app/leyu.saz:ro
     depends_on:
       - redis
     networks:

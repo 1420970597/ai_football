@@ -10,6 +10,20 @@ service —— 业务编排层
   valuation  ValuationService（快照→去水→优势→仓位→校准）
 """
 
-from .valuation import DEFAULT_SOURCE, ValuationService, load_corpus
+from .valuation import (
+    DEFAULT_SOURCE,
+    LEYU_SOURCE_NAME,
+    ValuationService,
+    load_corpus,
+)
 
-__all__ = ["DEFAULT_SOURCE", "ValuationService", "load_corpus"]
+#: 当前默认数据源（乐鱼）。保留 DEFAULT_SOURCE 作为体彩展示名的向后兼容别名。
+DEFAULT_DATA_SOURCE = "leyu"
+
+__all__ = [
+    "DEFAULT_DATA_SOURCE",
+    "DEFAULT_SOURCE",
+    "LEYU_SOURCE_NAME",
+    "ValuationService",
+    "load_corpus",
+]
