@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import ssl
 import time
@@ -55,6 +56,7 @@ __all__ = [
     "LLMClient",
     "load_pi_config",
     "extract_json",
+    "_repair_truncated_json",
 ]
 
 #: pi 配置目录（允许通过环境变量覆盖，便于容器挂载）
@@ -68,7 +70,10 @@ ENV_MODEL = "PI_LLM_MODEL"
 ENV_BASE_URL = "PI_LLM_BASE_URL"
 
 DEFAULT_TIMEOUT_S = 120.0
-DEFAULT_MAX_RETRIES = 2
+#: 默认重试次数。上游实测会间歇返回 502
+#: （`Upstream service temporarily unavailable`，实测 47 次调用失败 15 次），
+#: 2 次不够——重试 4 次能把绝大多数瞬时故障抹掉。
+DEFAULT_MAX_RETRIES = 4
 #: 温度：分析决策场景要稳定可复现，不用高随机性
 DEFAULT_TEMPERATURE = 0.2
 #: 默认输出预算：推理型模型需要先“思考”，预算过小会导致正文为空
@@ -88,9 +93,13 @@ class LLMNotConfigured(LLMError):
 # 配置
 # --------------------------------------------------------------------------- #
 
-#: 这些占位符说明"配置存在但未填"，必须当作未配置而不是发出去
+#: 这些占位符说明"配置存在但未填"，必须当作未配置而不是发出去。
+#: 全部小写存储：比较前会把输入 `lower()`，若集合里混有大写
+#: 则 `"your_api_key"` 这类小写写法会绕过校验（真实存在过的缺陷）。
 _PLACEHOLDER_KEYS = frozenset(
-    {"", "YOUR_API_KEY", "YOUR_SPORTSDATA_API_KEY", "sk-xxx", "changeme", "none"})
+    {s.lower() for s in
+     {"", "YOUR_API_KEY", "YOUR_SPORTSDATA_API_KEY", "sk-xxx",
+      "changeme", "none", "null", "undefined"}})
 
 
 @dataclass(frozen=True)
@@ -152,6 +161,10 @@ def _read_json(path: Path) -> Dict[str, Any]:
 #: 输出预算因“推理占满”时，自动扩容重试的次数与上限
 TRUNCATION_RETRIES = 2
 MAX_TOKEN_BUDGET = 32768
+
+#: LLM 重试退避（实测上游会间歇 502）
+LLM_BACKOFF_BASE_S = 1.5
+LLM_BACKOFF_MAX_S = 8.0
 
 
 def _safe_base_url(url: str) -> str:
@@ -278,7 +291,8 @@ def extract_json(text: str) -> Optional[Any]:
     """从模型输出中稳健地提取 JSON。
 
     模型常把 JSON 包在解释文字或 ```json 围栏里，直接 `json.loads` 会失败。
-    策略：先剥围栏，再依次尝试整段解析、找最外层 `{...}` / `[...]`。
+    策略：先剥围栏，再依次尝试整段解析、找最外层 `{...}` / `[...]`、
+    最后尝试**修复被截断的 JSON**（推理型模型把 token 花在思考上时很常见）。
     """
     if not text:
         return None
@@ -301,8 +315,98 @@ def extract_json(text: str) -> Optional[Any]:
             return json.loads(cand)
         except ValueError:
             continue
+
+    # 截断修复：补齐未闭合的字符串/括号。
+    # 实测模型会输出 `{"probabilities":{...},` 然后预算耗尽，
+    # 直接丢弃会让整场决策降级成 no_llm。
+    repaired = _repair_truncated_json(s)
+    if repaired is not None:
+        try:
+            return json.loads(repaired)
+        except ValueError:
+            pass
     # 全部候选都失败：返回 None 让调用方报错（不返回假数据）
     return None
+
+
+def _repair_truncated_json(text: str) -> Optional[str]:
+    """尝试把被截断的 JSON 补齐到可解析状态。
+
+    只做**结构层补齐**（丢弃未完成的末段，并闭合括号），
+    不编造缺失的键值——编造数值会直接污染决策，宁可让上层报错。
+
+    实测的典型截断：`{"probabilities": {...}, "confid`
+    此行既未闭合字符串、也未给出冒号与值；必须把整个
+    `"confid` 段**丢掉**，而不是补个引号了事（那会得到 `"confid"}`，
+    一个没有值的键，仍然解析失败）。
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    s = text[start:]
+
+    # 逐字符扫描，记录“最后一个完整键值对结束”的位置
+    depth_stack: List[str] = []
+    in_str = False
+    escaped = False
+    #: 在每个键值对结束（即顶层/嵌套层级上遇到逗号）处记录的截断点
+    safe_end = -1
+    for i, ch in enumerate(s):
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            depth_stack.append(ch)
+        elif ch in "}]":
+            if depth_stack:
+                depth_stack.pop()
+            # 一个容器正常闭合，此处也是安全的切点
+            safe_end = i
+        elif ch == "," and depth_stack:
+            safe_end = i
+
+    # 从最后一个安全切点截断，并去掉尾部的逗号
+    if safe_end >= 0:
+        buf = s[:safe_end].rstrip()
+        while buf and buf[-1] == ",":
+            buf = buf[:-1].rstrip()
+    else:
+        # 连一个完整键值对都没有：仅尝试闭合括号
+        buf = s.rstrip()
+
+    # 重新统计 buf 中未闭合的括号（截断后可能变化）
+    stack: List[str] = []
+    in_str = False
+    escaped = False
+    for ch in buf:
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+    if in_str:
+        buf += '"'
+    if not stack:
+        return buf if buf != s else None
+    closer = {"{": "}", "[": "]"}
+    return buf + "".join(closer[c] for c in reversed(stack))
 
 
 class LLMClient:
@@ -437,7 +541,10 @@ class LLMClient:
             except (urllib.error.URLError, TimeoutError, OSError, LLMError) as exc:
                 last = exc if isinstance(exc, LLMError) else LLMError(str(exc))
             if attempt + 1 < max(1, self.config.max_retries):
-                time.sleep(0.8 * (2 ** attempt))
+                # 渐进退避：5xx/超时往往是上游瞬时不可用，稍等即可恢复。
+                # 上限 8s，避免把总延迟拖得太长（决策接口是同步等待的）。
+                time.sleep(min(LLM_BACKOFF_BASE_S * (2 ** attempt),
+                               LLM_BACKOFF_MAX_S) + random.random() * 0.4)
         self.failures += 1
         self.last_error = str(last)
         raise LLMError("LLM 调用失败（%s/%s）: %s"

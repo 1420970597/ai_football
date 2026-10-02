@@ -120,6 +120,12 @@ echo
 echo "==> 构建并启动"
 docker compose -f "$COMPOSE_FILE" up -d --build
 
+# nginx 配置是 **bind mount**（./nginx.console.conf），且容器镜像未变时
+# `up -d` 不会重启 web-console —— 于是改了配置也不会生效，
+# 表现为“改了超时但仍然 504”。因此这里显式 reload。
+docker compose -f "$COMPOSE_FILE" exec -T web-console nginx -s reload \
+  >/dev/null 2>&1 && echo "    nginx 配置已重载" || true
+
 echo
 echo "==> 等待 analytics-api 就绪"
 READY=0
