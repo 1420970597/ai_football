@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import threading
 import time
 from dataclasses import dataclass, field
@@ -53,6 +54,7 @@ from .decision import (
     DecisionEngine,
     MatchDecision,
 )
+from .match_decision import MatchDecisionEngine, MatchPicks
 from .llm import LLMClient, LLMNotConfigured, load_pi_config
 
 __all__ = [
@@ -93,20 +95,31 @@ class AnalysisConfig:
                                           "AH(-0.5)", "OU", "OU(2.5)", "OU(3)")
     #: 是否启用在线的 LLM 分析
     use_llm: bool = True
-    #: LLM 分析并发数。
+    #: LLM 分析并发数（**多场并行**）。
     #: 实测推理服务可承受 4 并发（4 个请求总耗时 4.4s，而非串行的 9s），
     #: 调高能显著缩短整批决策时间；过高可能被服务端排队或限流。
     llm_concurrency: int = 4
+    #: 买入门槛：优势低于此值不给买入建议
+    min_edge: float = 0.02
+    #: 买入门槛：LLM 置信度低于此值只观望
+    min_confidence: float = 0.5
 
 
 class AnalysisService:
-    """统一分析服务（线程安全）。"""
+    """统一分析服务（线程安全）。
+
+    主路径是**盘口汇总式**决策（`MatchDecisionEngine`）：
+    经济学算法先算完一场的全部盘口，再汇总给 LLM 做**一次**买入裁定。
+
+    支持**异步任务**：LLM 决策需数秒~数十秒，同步 HTTP 容易超时。
+    `start_job()` 立即返回 job_id，前端轮询 `job_status()`。
+    """
 
     def __init__(
         self,
         valuation: Any,
         realtime: Optional[RealtimeHub] = None,
-        engine: Optional[DecisionEngine] = None,
+        engine: Optional[Any] = None,
         config: Optional[AnalysisConfig] = None,
     ) -> None:
         self.valuation = valuation
@@ -116,18 +129,89 @@ class AnalysisService:
         self.llm_error = ""
         self.llm: Optional[LLMClient] = None
 
-        if engine is not None:
-            self.engine = engine
-        else:
-            self.engine = DecisionEngine(
-                DecisionConfig(use_llm=self.config.use_llm))
-            if self.config.use_llm:
-                self._try_attach_llm()
+        dcfg = DecisionConfig(
+            use_llm=self.config.use_llm,
+            min_edge=self.config.min_edge,
+            min_confidence=self.config.min_confidence,
+        )
+        #: 汇总式引擎（主路径）：经济学算全部盘口 → 一次 LLM 裁定
+        self.match_engine: MatchDecisionEngine = (
+            MatchDecisionEngine(dcfg) if engine is None else engine)
+        #: 逐盘口引擎（详情页/深度分析用）
+        self.engine = DecisionEngine(dcfg)
+        if self.config.use_llm:
+            self._try_attach_llm()
 
         self._lock = threading.RLock()
-        self._cache: Dict[str, Tuple[float, MatchDecision]] = {}
+        self._cache: Dict[str, Tuple[float, Any]] = {}
         self._last_run: Optional[Dict[str, Any]] = None
         self._analyze_lock = threading.Lock()
+        #: 异步任务表 job_id → 状态
+        self._jobs: Dict[str, Dict[str, Any]] = {}
+        self._jobs_lock = threading.RLock()
+
+    # -- 异步任务 -----------------------------------------------------------
+
+    def start_job(
+        self,
+        limit: int = 8,
+        only_live: bool = False,
+        league: Optional[str] = None,
+        max_workers: Optional[int] = None,
+    ) -> str:
+        """启动后台决策任务，**立即返回** job_id。
+
+        为什么需要：LLM 决策耗时数十秒，同步 HTTP 会 504。
+        前端拿 job_id 后轮询 `/decisions/job/<id>` 看进度。
+        """
+        job_id = "job-%d-%04x" % (int(time.time()), random.getrandbits(16))
+        with self._jobs_lock:
+            self._jobs[job_id] = {
+                "id": job_id, "state": "running", "started_at": time.time(),
+                "done": 0, "total": 0, "result": None, "error": "",
+                "limit": limit, "only_live": only_live, "league": league,
+            }
+            # 只保留最近 10 个任务，防无界增长
+            if len(self._jobs) > 10:
+                for k in sorted(self._jobs,
+                                key=lambda kk: self._jobs[kk]["started_at"])[:-10]:
+                    self._jobs.pop(k, None)
+
+        def _run() -> None:
+            try:
+                res = self.decide_list(
+                    limit=limit, only_live=only_live, league=league,
+                    force=True, max_workers=max_workers, job_id=job_id,
+                )
+                with self._jobs_lock:
+                    self._jobs[job_id].update(state="done", result=res)
+            except Exception as exc:  # noqa: BLE001 - 任务异常要能回报给前端
+                with self._jobs_lock:
+                    self._jobs[job_id].update(state="failed", error=str(exc)[:300])
+
+        threading.Thread(target=_run, name=job_id, daemon=True).start()
+        return job_id
+
+    def job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
+        with self._jobs_lock:
+            j = self._jobs.get(job_id)
+            if j is None:
+                return None
+            out = {k: v for k, v in j.items() if k != "result"}
+            out["elapsed_s"] = round(time.time() - j["started_at"], 1)
+            if j["state"] == "done":
+                out["result"] = j["result"]
+            return out
+
+    def _set_job_progress(self, job_id: Optional[str], done: int,
+                          total: int) -> None:
+        if not job_id:
+            return
+        with self._jobs_lock:
+            j = self._jobs.get(job_id)
+            if j is not None:
+                j["done"] = done
+                j["total"] = total
 
     # -- LLM ---------------------------------------------------------------
 
@@ -135,11 +219,13 @@ class AnalysisService:
         """尝试接上 pi 的模型配置；失败则记录原因并自我降级。"""
         try:
             self.llm = LLMClient(load_pi_config())
+            self.match_engine.attach_llm(self.llm)
             self.engine.attach_llm(self.llm)
             self.llm_error = ""
         except (LLMNotConfigured, Exception) as exc:  # noqa: BLE001 - 配置问题不应让服务起不来
             self.llm = None
             self.llm_error = str(exc)[:300]
+            self.match_engine.attach_llm(None)
             self.engine.attach_llm(None)
 
     # -- 候选选取 -----------------------------------------------------------
@@ -255,65 +341,89 @@ class AnalysisService:
         only_live: bool = False,
         league: Optional[str] = None,
         force: bool = False,
+        max_workers: Optional[int] = None,
+        job_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """批量决策，返回按优劣排序的列表（供控制台列表直接渲染）。"""
-        # 串行化，避免控制台并发刷新触发重复 LLM 调用
+        """批量决策（**盘口汇总式**），返回按优劣排序的列表。
+
+        每场只调 **1 次** LLM：先把该场全部盘口交给经济学算法算完，
+        再把汇总结果一次性交给 LLM 做买入裁定。
+        （旧实现逐盘口调 LLM，一场平均 14.5 个盘口 → 6 场 300s+ → 504）
+
+        Args:
+            max_workers: 并行度；默认取 `llm_concurrency`。
+            job_id: 异步任务 id（用于回报进度）。
+        """
         with self._analyze_lock:
             cands = self.candidates(limit=limit, only_live=only_live, league=league)
             t0 = time.time()
-            decisions: List[MatchDecision] = []
-            errors: List[str] = []
+            self.stats_runs = getattr(self, "stats_runs", 0) + 1
 
-            # 并行分析：LLM 单场耗时 3~10 秒，串行会让 12 场→100 秒以上，
-            # 控制台无法接受。并发度受 llm_concurrency 限制，
-            # 以免打爆推理服务（它可能排队或限流）。
-            workers = (max(1, _to_int(self.config.llm_concurrency, 4))
-                       if self.engine.llm_available else min(8, len(cands) or 1))
-            if len(cands) <= 1 or workers <= 1:
-                for m in cands:
-                    mid = str(m.get("match_id"))
+            # 组装每场的输入：全部快照 + 走势 + 上下文
+            items: List[Tuple[str, str, str, str, List[Any], Any, Dict[str, Any]]] = []
+            for m in cands:
+                mid = str(m.get("match_id"))
+                snaps = self.valuation._snapshots_of(mid)
+                if not snaps:
+                    continue
+                trend = self.realtime.trend(mid) if self.realtime else None
+                ctx = self._build_context(m)
+                items.append((mid, str(m.get("league") or ""),
+                              str(m.get("home") or ""), str(m.get("away") or ""),
+                              snaps, trend, ctx))
+
+            self._set_job_progress(job_id, 0, len(items))
+
+            workers = (max(1, _to_int(max_workers or self.config.llm_concurrency, 4))
+                       if self.match_engine.llm_available
+                       else min(8, len(items) or 1))
+            # 带进度回报的并行（每完成一场累加 done）
+            results: List[Any] = []
+            if len(items) <= 1 or workers <= 1:
+                for i, it in enumerate(items):
                     try:
-                        d = self.analyze(mid, market=m.get("_market"), force=force)
+                        results.append(self.match_engine.decide_match(
+                            it[4], trend=it[5], context=it[6]))
                     except Exception as exc:  # noqa: BLE001
-                        errors.append("%s: %s" % (mid, exc))
-                        continue
-                    if d is not None:
-                        decisions.append(d)
+                        results.append(self._failed_pick(it[0], exc))
+                    self._set_job_progress(job_id, i + 1, len(items))
             else:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                def _one(mm: Mapping[str, Any]) -> Optional[MatchDecision]:
-                    return self.analyze(str(mm.get("match_id")),
-                                        market=mm.get("_market"), force=force)
+                def _one(it: Any) -> Any:
+                    return self.match_engine.decide_match(
+                        it[4], trend=it[5], context=it[6])
 
                 with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = {pool.submit(_one, m): str(m.get("match_id"))
-                               for m in cands}
-                    for fut in as_completed(futures):
-                        mid = futures[fut]
+                    futs = {pool.submit(_one, it): it for it in items}
+                    done = 0
+                    for fut in as_completed(futs):
+                        it = futs[fut]
                         try:
-                            d = fut.result()
+                            results.append(fut.result())
                         except Exception as exc:  # noqa: BLE001
-                            errors.append("%s: %s" % (mid, exc))
-                            continue
-                        if d is not None:
-                            decisions.append(d)
+                            results.append(self._failed_pick(it[0], exc))
+                        done += 1
+                        self._set_job_progress(job_id, done, len(items))
 
-            decisions.sort(key=lambda d: d.rank_score, reverse=True)
+            results.sort(key=lambda r: r.rank_score, reverse=True)
+            errors = ["%s: %s" % (r.match_id, r.error) for r in results if r.error]
             summary = {
-                "n": len(decisions),
-                "buy": sum(1 for d in decisions if d.decision == DECISION_BUY),
-                "watch": sum(1 for d in decisions if d.decision == DECISION_WATCH),
-                "avoid": sum(1 for d in decisions if d.decision == DECISION_AVOID),
-                "no_llm": sum(1 for d in decisions if d.decision == DECISION_NO_LLM),
+                "n": len(results),
+                "buy": sum(1 for r in results if r.has_buy),
+                "no_llm": sum(1 for r in results
+                              if r.decision == DECISION_NO_LLM),
+                "avoid": sum(1 for r in results
+                             if r.decision == DECISION_AVOID),
+                "n_picks": sum(len(r.picks) for r in results),
             }
             result = {
-                "count": len(decisions),
+                "count": len(results),
                 "summary": summary,
-                "llm": self.engine.llm_health(),
+                "llm": self.match_engine.llm_health(),
                 "elapsed_s": round(time.time() - t0, 2),
                 "errors": errors[:10],
-                "decisions": [d.as_dict() for d in decisions],
+                "decisions": [r.as_dict() for r in results],
             }
             with self._lock:
                 self._last_run = {
@@ -321,6 +431,14 @@ class AnalysisService:
                     "elapsed_s": result["elapsed_s"], "summary": summary,
                 }
             return result
+
+    @staticmethod
+    def _failed_pick(match_id: str, exc: Exception) -> MatchPicks:
+        """构造一个表示失败的 MatchPicks（单场失败不应中断整批）。"""
+        r = MatchPicks(match_id=match_id)
+        r.decision = DECISION_AVOID
+        r.error = "%s: %s" % (type(exc).__name__, exc)
+        return r
 
     # -- 诊断 ---------------------------------------------------------------
 

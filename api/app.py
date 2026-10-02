@@ -36,6 +36,7 @@ import json
 import re
 import math
 import os
+from pathlib import Path
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -142,6 +143,39 @@ def _body_float(body: Mapping[str, Any], name: str, default: float,
     return val
 
 
+def _body_int(body: Mapping[str, Any], name: str, default: int,
+              minimum: Optional[int] = None,
+              maximum: Optional[int] = None) -> int:
+    """从请求体提取整数字段（可选），带类型与区间校验。
+
+    与 `_body_float` 同一约定：请求体是外部输入，转换失败必须是 400。
+    POST /decisions/job 需要 limit/workers，因此单独提供整数版本。
+    """
+    if name not in body or body[name] is None:
+        return default
+    raw = body[name]
+    if isinstance(raw, bool):
+        raise BadRequest("%s 不能是布尔值" % name)
+    if isinstance(raw, int):
+        val = raw
+    elif isinstance(raw, float):
+        if not math.isfinite(raw) or raw != int(raw):
+            raise BadRequest("字段 %s 必须是整数: %r" % (name, raw))
+        val = int(raw)
+    elif isinstance(raw, str):
+        try:
+            val = int(raw.strip())
+        except (TypeError, ValueError) as exc:
+            raise BadRequest("字段 %s 不是整数: %r" % (name, raw)) from exc
+    else:
+        raise BadRequest("字段 %s 类型不支持: %s" % (name, type(raw).__name__))
+    if minimum is not None and val < minimum:
+        raise BadRequest("字段 %s 不能小于 %s" % (name, minimum))
+    if maximum is not None and val > maximum:
+        raise BadRequest("字段 %s 不能大于 %s" % (name, maximum))
+    return val
+
+
 def _body_probs(body: Mapping[str, Any], name: str) -> Optional[List[float]]:
     """从请求体提取概率序列（可选字段）。"""
     if name not in body or body[name] is None:
@@ -213,6 +247,8 @@ class ApiApp:
             ("GET", "/model/<id>", self.h_model),
             # 决策与实时（T5/T7）：决策列表直接供控制台渲染
             ("GET", "/decisions", self.h_decisions),
+            ("POST", "/decisions/job", self.h_decisions_job),
+            ("GET", "/decisions/job/<id>", self.h_decisions_job_status),
             ("GET", "/decisions/<id>", self.h_decision_detail),
             ("GET", "/trend/<id>", self.h_trend),
             ("GET", "/realtime", self.h_realtime),
@@ -487,23 +523,55 @@ class ApiApp:
 
     def h_decisions(self, query: Mapping[str, List[str]],
                     body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
-        """决策列表：按优势排序，直接供控制台赛事列表展示。
+        """决策列表（**盘口汇总式**）：经济学算全部盘口 → 每场 1 次 LLM 裁定。
 
         参数：
-            limit=12      分析赛事上限（LLM 调用昂贵）
+            limit=8       分析赛事上限
             live=1        只看进行中的赛事
             league=xxx    限定联赛
-            force=1       忽略缓存重算
+            async=1       改为异步：立即返回 job_id（推荐，避免 HTTP 超时）
+            workers=4     并行度
         """
-        limit = _q_int(query, "limit", 12) or 12
+        limit = _q_int(query, "limit", 8) or 8
         only_live = _q1(query, "live") not in (None, "", "0", "false")
-        force = _q1(query, "force") not in (None, "", "0", "false")
+        limit = max(1, min(limit, 50))
+
+        # 异步模式：LLM 决策耗时数十秒，同步容易 504
+        if _q1(query, "async") not in (None, "", "0", "false"):
+            job_id = self.analysis.start_job(
+                limit=limit, only_live=only_live,
+                league=_q1(query, "league"),
+                max_workers=_q_int(query, "workers", 4),
+            )
+            return {"job_id": job_id, "state": "running",
+                    "poll": API_PREFIX + "/decisions/job/" + job_id}
+
         return self.analysis.decide_list(
-            limit=max(1, min(limit, 50)),
-            only_live=only_live,
+            limit=limit, only_live=only_live,
             league=_q1(query, "league"),
-            force=force,
+            max_workers=_q_int(query, "workers", 4),
         )
+
+    def h_decisions_job(self, query: Mapping[str, List[str]],
+                        body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """创建决策任务（POST 形式，等价于 `?async=1`）。"""
+        limit = _body_int(body, "limit", 8)
+        job_id = self.analysis.start_job(
+            limit=max(1, min(limit, 50)),
+            only_live=bool(body.get("live")),
+            league=body.get("league") or None,
+            max_workers=_body_int(body, "workers", 4),
+        )
+        return {"job_id": job_id, "state": "running",
+                "poll": API_PREFIX + "/decisions/job/" + job_id}
+
+    def h_decisions_job_status(self, query: Mapping[str, List[str]],
+                               body: Mapping[str, Any], job_id: str) -> Dict[str, Any]:
+        """轮询决策任务状态；完成时携带 result。"""
+        st = self.analysis.job_status(job_id)
+        if st is None:
+            raise NotFound("任务不存在：%s" % job_id)
+        return st
 
     def h_decision_detail(self, query: Mapping[str, List[str]],
                           body: Mapping[str, Any], match_id: str) -> Dict[str, Any]:
@@ -685,8 +753,14 @@ def _start_background(
             live = [m.mid for m in schedule if m.is_live]
             return live[:max_matches]
 
-        hub = RealtimeHub(provider, mids_provider=_mids, max_matches=max_matches)
+        # 走势落盘目录：放在快照根下的 _trends/，随 output 卷一起持久化。
+        # 这样经济学算法与 LLM 能读到历史走势，容器重启也不丢。
+        trend_root = str(Path(svc.store.root) / ".." / "_trends")
+        hub = RealtimeHub(provider, mids_provider=_mids,
+                          max_matches=max_matches, trend_root=trend_root,
+                          resume=True)
         hub.start()
+        print("走势持久化: %s" % hub.trend_store.health())
 
         # 分析服务复用同一个 Hub，并将盘中行情变化纳入决策
         app._analysis = build_analysis_service(svc, realtime=hub)

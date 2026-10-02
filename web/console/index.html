@@ -99,6 +99,11 @@ tbody tr.risky{background:var(--ambbg)}
 .pill.bad{background:var(--negbg);color:var(--neg)}
 .pill.mut{background:var(--card3);color:var(--mut)}
 
+/* 非买入行弱化展示 */
+tr.row-dim{opacity:.62}
+tr.row-dim:hover{opacity:.9}
+.prog{color:var(--acc);font-size:12px;margin-top:8px}
+
 /* ---------- 决策徽标（T6：买入建议直接展示在列表中） ---------- */
 .badge{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;
   border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.4px;
@@ -218,6 +223,7 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
           <div class="bar" style="width:85%"></div><div class="bar" style="width:64%"></div>
           <div class="bar" style="width:88%"></div><div class="bar" style="width:71%"></div>
         </div>
+        <div class="prog">正在分析…</div>
       </div>
       <div class="state" id="st-empty">
         <div class="big">📭</div>
@@ -433,37 +439,80 @@ function firstMarket(m) {
 }
 
 /* ---------- 决策列表（T6：买入建议直接进列表） ---------- */
-const DECISION_TEXT = {buy:"买入", watch:"观望", avoid:"回避", no_llm:"无LLM"};
+const DECISION_TEXT = {buy:"买入", watch:"观望", avoid:"无机会", no_llm:"待分析"};
 const DECISION_CLS  = {buy:"buy",  watch:"watch", avoid:"avoid", no_llm:"nollm"};
 
+/* 从一场决策里取最优买入建议 */
+function bestPick(d) {
+  if (d && d.best_pick) return d.best_pick;
+  const ps = (d && d.picks) || [];
+  if (!ps.length) return null;
+  return ps.slice().sort((a, b) => (b.edge * b.confidence) - (a.edge * a.confidence))[0];
+}
+
+/* 异步加载：先 POST 建任务，再轮询（避免同步 504） */
 async function loadDecisions(opts) {
   const o = opts || {};
   setListState("loading");
   clearMsg();
-  const qs = new URLSearchParams();
-  qs.set("limit", String(o.limit || 12));
-  if (o.live) qs.set("live", "1");
-  if (o.force) qs.set("force", "1");
+  const body = { limit: o.limit || 8, workers: o.workers || 4 };
+  if (o.live) body.live = true;
   const lg = $("f-league").value.trim();
-  if (lg) qs.set("league", lg);
+  if (lg) body.league = lg;
 
-  let res;
-  try { res = await fetch(API + "/decisions?" + qs); }
-  catch (e) {
-    setListState("error", { title: "网络不可达",
-      desc: "无法连接 " + API + "/decisions，请确认后端服务已启动。" });
+  let job;
+  try {
+    const r = await fetch(API + "/decisions/job", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    job = await r.json();
+  } catch (e) {
+    setListState("error", { title: "无法启动分析",
+      desc: "POST " + API + "/decisions/job 失败：" + e.message });
     return;
   }
-  if (!res.ok) {
-    let detail = "";
-    try { const j = await res.json(); detail = j.error || ""; } catch (_) {}
-    setListState("error", { title: "后端返回 " + res.status, desc: detail || "服务异常。" });
+
+  setListState("loading");
+  setText($("list-tag"), "分析中…");
+  const t0 = Date.now();
+  const showProgress = (st) => {
+    const el2 = $("st-loading");
+    if (el2) {
+      const t = el2.querySelector(".prog");
+      if (t) t.textContent = "已完成 " + (st.done || 0) + "/" + (st.total || "?")
+        + " 场 · " + st.elapsed_s + "s";
+    }
+  };
+
+  // 轮询直到完成（最长 10 分钟）
+  let data = null;
+  while (Date.now() - t0 < 600000) {
+    await new Promise(r => setTimeout(r, 1500));
+    let st;
+    try {
+      const r = await fetch(API + "/decisions/job/" + encodeURIComponent(job.job_id));
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      st = await r.json();
+    } catch (e) {
+      setListState("error", { title: "轮询失败", desc: e.message });
+      return;
+    }
+    showProgress(st);
+    if (st.state === "done") { data = st.result; break; }
+    if (st.state === "failed") {
+      setListState("error", { title: "分析失败", desc: st.error || "未知错误" });
+      return;
+    }
+  }
+  if (!data) {
+    setListState("error", { title: "分析超时", desc: "10 分钟内未完成，请减少场次后重试。" });
     return;
   }
-  const data = await res.json();
+
   S.decisions = data.decisions || [];
   S.decisionSummary = data.summary || null;
-
   renderDecisionSummary(data);
   if (!S.decisions.length) {
     setListState("empty");
@@ -499,65 +548,87 @@ function renderDecisionSummary(data) {
       : ("LLM 不可用：" + (llm.error || llm.reason || "未配置")))
   ]));
   box.appendChild(el("button", { class: "btn", text: "重新分析",
-    onclick: () => loadDecisions({ force: true, limit: S.decisionLimit }) }));
+    onclick: () => loadDecisions({ limit: S.decisionLimit }) }));
   box.style.display = "";
-}
-
-function trendCell(d) {
-  // 从候选里找出该建议结果的走势方向
-  const pick = (d.candidates || []).find(c => c.outcome === d.pick) || {};
-  const t = pick.trend || "flat";
-  const pct = pick.trend_pct || 0;
-  const arrow = t === "down" ? "↓" : (t === "up" ? "↑" : "·");
-  // 降赔（↓）意味着资金流入、市场认为该结果概率上升
-  const title = t === "down" ? "降赔：资金流入该结果"
-              : (t === "up" ? "升赔：资金流出该结果" : "盘口未变动");
-  return el("span", { class: "trend " + t, text: arrow + (pct ? pct.toFixed(1) + "%" : ""),
-                      title: title });
 }
 
 function renderDecisionTable(rows) {
   const tb = $("tbody");
   clear(tb);
   rows.forEach((d, i) => {
-    const cls = DECISION_CLS[d.decision] || "avoid";
+    const bp = bestPick(d);
+    const isBuy = !!bp;
     const tr = el("tr", {
-      class: (d.decision === "buy" ? "row-buy " : "") + "clk",
+      // 只高亮推荐买入的行；其余弱化（用户要求）
+      class: (isBuy ? "row-buy " : "row-dim ") + "clk",
       "data-i": i, onclick: () => openDecision(i)
     });
-    tr.appendChild(el("td", {}, [el("span", { class: "badge " + cls,
-      text: DECISION_TEXT[d.decision] || d.decision })]));
-    tr.appendChild(el("td", { class: "pick" }, [
-      document.createTextNode(d.pick_label || d.pick || "—"),
-      el("span", { class: "o", text: d.pick_odds ? "  " + fx(d.pick_odds) : "" })
-    ]));
-    tr.appendChild(el("td", { class: "num", text: d.pick_odds ? fx(d.pick_odds) : "—" }));
-    tr.appendChild(el("td", { class: "num " + (d.edge > 0 ? "edge-pos" : "edge-neg"),
-      text: d.edge_pct === undefined ? "—" : (d.edge_pct > 0 ? "+" : "") + d.edge_pct.toFixed(2) + "%" }));
-    tr.appendChild(el("td", { class: "num stake",
-      text: d.kelly_pct ? d.kelly_pct.toFixed(2) + "%" : "—" }));
-    tr.appendChild(el("td", { class: "num" }, [
-      el("span", { class: "conf-bar", title: "置信度 " + (d.confidence || 0).toFixed(2) }, [
-        el("i", { style: "width:" + Math.round((d.confidence || 0) * 100) + "%" })
-      ])
-    ]));
-    tr.appendChild(el("td", {}, [trendCell(d)]));
+    tr.appendChild(el("td", {}, [el("span", {
+      class: "badge " + (isBuy ? "buy" : (DECISION_CLS[d.decision] || "avoid")),
+      text: isBuy ? ("买入 x" + d.picks.length) : (DECISION_TEXT[d.decision] || d.decision)
+    })]));
+
+    if (bp) {
+      tr.appendChild(el("td", { class: "pick" }, [
+        el("b", { text: bp.market + " " }),
+        document.createTextNode(bp.outcome),
+        el("span", { class: "o", text: "  " + fx(bp.odds) })
+      ]));
+      tr.appendChild(el("td", { class: "num", text: fx(bp.odds) }));
+      tr.appendChild(el("td", { class: "num edge-pos",
+        text: (bp.edge_pct > 0 ? "+" : "") + bp.edge_pct.toFixed(2) + "%" }));
+      tr.appendChild(el("td", { class: "num stake",
+        text: bp.kelly_pct ? bp.kelly_pct.toFixed(2) + "%" : "—" }));
+      tr.appendChild(el("td", { class: "num" }, [
+        el("span", { class: "conf-bar", title: "置信度 " + (bp.confidence || 0).toFixed(2) }, [
+          el("i", { style: "width:" + Math.round((bp.confidence || 0) * 100) + "%" })
+        ])
+      ]));
+      tr.appendChild(el("td", {}, [trendSpan(bp.trend, bp.trend_pct)]));
+    } else {
+      // 无买入建议：不展示细节，保持列表清爽
+      const span = (t, cls) => el("td", { class: cls || "", text: t });
+      const reason = d.decision === "no_llm" ? (d.llm_reason || "LLM 未就绪") : "LLM 判定无足够优势";
+      tr.appendChild(el("td", { class: "mut" }, [
+        document.createTextNode("— "),
+        el("span", { class: "mut", title: reason,
+          text: (d.n_computed || 0) + " 个盘口已算" })
+      ]));
+      tr.appendChild(span("—", "num"));
+      tr.appendChild(span("—", "num"));
+      tr.appendChild(span("—", "num"));
+      tr.appendChild(span("—", "num"));
+      tr.appendChild(el("td", {}, [el("span", { class: "trend flat", text: "·" })]));
+    }
+
     tr.appendChild(el("td", { text: d.league || "—" }));
     tr.appendChild(el("td", { text: d.home + " vs " + d.away }));
     tr.appendChild(el("td", { class: "num",
-      text: d.margin_pct === undefined ? "—" : d.margin_pct.toFixed(2) + "%" }));
+      text: (d.n_computed || 0) + "/" + (d.n_markets || 0) }));
     tr.appendChild(el("td", {}, [el("span", { class: "pill mut",
-      text: d.market || "—" })]));
+      text: (d.elapsed_ms || 0) + "ms" })]));
     tb.appendChild(tr);
   });
-  setText($("list-tag"), rows.length + " 场 · 买入 " +
-    rows.filter(r => r.decision === "buy").length + " 场");
+  const nBuy = rows.filter(r => bestPick(r)).length;
+  setText($("list-tag"), rows.length + " 场 · 推荐买入 " + nBuy + " 场");
   const note = $("list-note");
   clear(note);
   note.appendChild(document.createTextNode(
-    "优势 = 融合概率 × 赔率 − 1；建议仓位 = 分数凯利（λ=0.25）且不超过资金 5%。"));
+    "每场先由经济学算法算完全部盘口（去水/水钱/走势/EV/凯利），"));
   note.appendChild(document.createTextNode(
-    " 无独立信息源时不给买入建议（报告 §8.2：没有独立信息就不存在优势）。点击行看拆解。"));
+    "再汇总给 LLM 做一次买入裁定——只展示 LLM 认可的买入盘口。"));
+  note.appendChild(document.createTextNode(
+    " 若证据不足，LLM 会明确返回「无机会」，而不是勉强挑一个。点击行看全部盘口计算。"));
+}
+
+/* 走势箭头：降赔=资金流入（绿），升赔=流出（红） */
+function trendSpan(t, pct) {
+  t = t || "flat";
+  const arrow = t === "down" ? "↓" : (t === "up" ? "↑" : "·");
+  const title = t === "down" ? "降赔：资金流入该结果"
+              : (t === "up" ? "升赔：资金流出该结果" : "盘口未变动");
+  return el("span", { class: "trend " + t, title: title,
+    text: arrow + (pct ? Math.abs(pct).toFixed(1) + "%" : "") });
 }
 
 function renderDecisionCards(data) {
@@ -595,60 +666,86 @@ function openDecision(i) {
   const body = $("decision-body");
   clear(body);
 
-  // 顶部：结论 + 建议
-  const cls = DECISION_CLS[d.decision] || "avoid";
+  // 顶部：买入建议汇总 + 全部盘口计算
   const grid = el("div", { class: "dgrid" });
   const card = (title, big, sub, pick) => el("div", { class: "dcard" + (pick ? " pick-card" : "") }, [
     el("h4", { text: title }),
     el("div", { class: "big", text: big }),
     el("div", { class: "s", style: "color:var(--mut);font-size:11px", text: sub || "" })
   ]);
-  grid.appendChild(card("决策", DECISION_TEXT[d.decision] || d.decision,
-    "优势阈值 / 置信度门槛", d.decision === "buy"));
-  grid.appendChild(card("建议结果", d.pick_label || d.pick || "—",
-    "赔率 " + (d.pick_odds ? fx(d.pick_odds) : "—"), d.decision === "buy"));
-  grid.appendChild(card("优势 (edge)",
-    (d.edge_pct > 0 ? "+" : "") + (d.edge_pct || 0).toFixed(2) + "%",
-    "融合概率 × 赔率 − 1"));
-  grid.appendChild(card("建议仓位",
-    d.kelly_pct ? d.kelly_pct.toFixed(2) + "%" : "不建议",
-    "分数凯利 λ=0.25，上限 5%"));
-  grid.appendChild(card("置信度", (d.confidence || 0).toFixed(2),
-    "LLM 权重 " + (d.llm_weight || 0).toFixed(2)));
-  grid.appendChild(card("水钱", (d.margin_pct || 0).toFixed(2) + "%",
-    "方法分歧 " + (d.method_spread_pp || 0).toFixed(2) + " pp"));
+  const bp = bestPick(d);
+  grid.appendChild(card("结论", bp ? ("推荐买入 " + d.picks.length + " 项") : "无买入建议",
+    d.llm_used ? "LLM 已裁定" : (d.llm_reason || "LLM 未就绪"), !!bp));
+  grid.appendChild(card("已算盘口", (d.n_computed || 0) + " / " + (d.n_markets || 0),
+    "经济学算法（去水/水钱/走势/EV/凯利）"));
+  grid.appendChild(card("耗时", (d.elapsed_ms || 0) + " ms", "含一次 LLM 调用"));
+  grid.appendChild(card("LLM 置信", (d.llm_confidence || 0).toFixed(2),
+    bp ? ("最优项 " + bp.market) : "—"));
   body.appendChild(grid);
 
-  // LLM 理由
-  if (d.llm_reason) {
+  // LLM 整体判断
+  if (d.llm_note || d.llm_reason) {
     body.appendChild(el("div", { class: "reason" }, [
-      el("b", { text: "LLM 理由：" }),
-      document.createTextNode(d.llm_reason)
+      el("b", { text: "LLM 判断：" }),
+      document.createTextNode(d.llm_note || d.llm_reason)
     ]));
   }
 
-  // 候选拆解表：让每个结果的三套概率都可见（可复核性）
+  // 推荐买入（重点展示，带理由）
+  if (bp) {
+    body.appendChild(el("h2", { text: "推荐买入" }));
+    const ptable = el("tbody", {});
+    d.picks.forEach(p => {
+      const tr = el("tr", { class: "row-buy" });
+      tr.appendChild(el("td", { text: p.market }));
+      tr.appendChild(el("td", { text: p.outcome }));
+      tr.appendChild(el("td", { class: "num", text: fx(p.odds) }));
+      tr.appendChild(el("td", { class: "num edge-pos",
+        text: (p.edge_pct > 0 ? "+" : "") + p.edge_pct.toFixed(2) + "%" }));
+      tr.appendChild(el("td", { class: "num stake",
+        text: p.kelly_pct ? p.kelly_pct.toFixed(2) + "%" : "—" }));
+      tr.appendChild(el("td", { class: "num", text: (p.confidence || 0).toFixed(2) }));
+      tr.appendChild(el("td", {}, [trendSpan(p.trend, p.trend_pct)]));
+      tr.appendChild(el("td", { text: p.reason || "" }));
+      ptable.appendChild(tr);
+    });
+    body.appendChild(el("table", { class: "mk" }, [
+      el("thead", {}, [el("tr", {}, [
+        el("th", { text: "盘口" }), el("th", { text: "结果" }),
+        el("th", { class: "num", text: "赔率" }),
+        el("th", { class: "num", text: "优势" }),
+        el("th", { class: "num", text: "建议仓位" }),
+        el("th", { class: "num", text: "置信" }),
+        el("th", { text: "走势" }), el("th", { text: "理由" })
+      ])]), ptable]));
+  }
+
+  // 全部盘口的计算结果（可复核）
+  body.appendChild(el("h2", { text: "全部盘口计算结果（经济学算法）" }));
   const tb = el("tbody", {});
-  (d.candidates || []).forEach(c => {
+  const comps = (d.computations || []).slice().sort((a, b) => b.best_edge - a.best_edge);
+  comps.forEach(c => {
     const tr = el("tr", {});
-    tr.appendChild(el("td", { text: c.label || c.outcome }));
-    tr.appendChild(el("td", { class: "num", text: fx(c.odds) }));
-    tr.appendChild(el("td", { class: "num", text: (c.p_small * 100).toFixed(2) + "%" }));
+    tr.appendChild(el("td", { text: c.market }));
+    tr.appendChild(el("td", { class: "num", text: (c.margin * 100).toFixed(2) + "%" }));
+    tr.appendChild(el("td", { class: "num", text: (c.method_spread_pp || 0).toFixed(2) }));
+    // 最优项
+    tr.appendChild(el("td", { class: "num edge-pos",
+      text: c.best_outcome + " " + (c.best_edge > 0 ? "+" : "") + (c.best_edge * 100).toFixed(2) + "%" }));
     tr.appendChild(el("td", { class: "num",
-      text: c.p_llm === null ? "—" : (c.p_llm * 100).toFixed(2) + "%" }));
-    tr.appendChild(el("td", { class: "num", text: (c.p_combined * 100).toFixed(2) + "%" }));
-    tr.appendChild(el("td", { class: "num " + (c.edge > 0 ? "edge-pos" : "edge-neg"),
-      text: (c.edge > 0 ? "+" : "") + (c.edge_pct || 0).toFixed(2) + "%" }));
-    tr.appendChild(el("td", {}, [trendCell({ candidates: [c] })]));
+      text: c.odds.map((o, k) => c.outcomes[k] + "=" + fx(o)).join(" / ") }));
+    tr.appendChild(el("td", {}, [trendSpan(c.trend, c.trend_pct)]));
+    tr.appendChild(el("td", { class: "num", text: String(c.trend_n || 0) }));
     tb.appendChild(tr);
   });
-  const head = el("thead", {}, [el("tr", {}, [
-    el("th", { text: "结果" }), el("th", { class: "num", text: "赔率" }),
-    el("th", { class: "num", text: "小模型" }), el("th", { class: "num", text: "LLM" }),
-    el("th", { class: "num", text: "融合" }), el("th", { class: "num", text: "优势" }),
-    el("th", { text: "走势" })
-  ])]);
-  body.appendChild(el("table", { class: "mk" }, [head, tb]));
+  body.appendChild(el("table", { class: "mk" }, [
+    el("thead", {}, [el("tr", {}, [
+      el("th", { text: "盘口" }), el("th", { class: "num", text: "水钱" }),
+      el("th", { class: "num", text: "分歧pp" }),
+      el("th", { class: "num", text: "最优优势" }),
+      el("th", { class: "num", text: "赔率" }),
+      el("th", { text: "走势" }), el("th", { class: "num", text: "变动次数" })
+    ])]), tb]));
 
   // 盘口走势（从实时推送取）
   loadTrend(d.match_id);
@@ -1123,7 +1220,7 @@ if (backBtn) backBtn.addEventListener("click", () => {
 renderNav();
 // 首次加载：直接拉「决策列表」——买入建议/优势/仓位就在列表里，
 // 不需要先看一堆原始赔率再点进去。
-loadDecisions({ force: true, limit: S.decisionLimit });
+loadDecisions({ limit: S.decisionLimit });
 
 </script>
 </body>

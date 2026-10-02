@@ -109,6 +109,11 @@ class DecisionConfig:
     max_stake_pct: float = 0.05
     #: 是否启用 LLM（关闭时纯小模型，用于对照与降级）
     use_llm: bool = True
+    #: 单场 LLM 决策的**硬超时**（秒）。
+    #: 实测推理型模型在较大输入上思考时长不可预测（同一 prompt 可 8s 也可 295s），
+    #: 而控制台需要可预期响应。超时即降级为“无买入建议”并说明原因，
+    #: 不让单个慢请求拖住整批决策。
+    llm_timeout_s: float = 90.0
 
 
 @dataclass

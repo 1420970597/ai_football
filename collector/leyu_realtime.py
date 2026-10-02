@@ -42,6 +42,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .leyu_client import OV_SCALE
@@ -49,8 +50,8 @@ from .leyu_ws import LeYuFeed
 
 __all__ = [
     "PriceTick",
-    "_MarketState",
     "TrendSeries",
+    "TrendStore",
     "RealtimeStats",
     "RealtimeHub",
     "decode_push_payload",
@@ -60,6 +61,15 @@ __all__ = [
 
 #: 每场赛事保留的最大走势点数（防长跑比赛内存无界增长）
 MAX_TICKS_PER_MARKET = 400
+
+#: 走势落盘目录（相对快照根）
+TREND_SUBDIR = "_trends"
+
+#: 落盘批大小：累积这么多 tick 后刷一次盘
+TREND_FLUSH_EVERY = 25
+
+#: 落盘间隔上限（秒）：即使不足批大小也要写，保证不丢数据
+TREND_FLUSH_INTERVAL_S = 20.0
 
 #: 每场赛事保留的最大事件数
 MAX_EVENTS_PER_MATCH = 120
@@ -150,6 +160,130 @@ class PriceTick:
         }
 
 
+class TrendStore:
+    """走势持久化：JSONL 追写，进程重启后可恢复。
+
+    为何需要：走势原本只在内存（`RealtimeHub._trends`），
+    容器重启即全部丢失，历史无法回溯、也无法供后续分析与回测使用。
+
+    设计：
+    * 每场一个文件 `<_trends>/<mid>.jsonl`，**追写**（append）——
+      不重写整个文件，避免高频写入时的写放大。
+    * 先写缓冲，达到 `flush_every` 条或超过 `flush_interval_s` 时刷盘，
+      避免每条都 fsync 拖慢推送消费。
+    * 写入失败只告警不抛错——采集不能因为磁盘问题而中断。
+    """
+
+    def __init__(
+        self,
+        root: Optional[str] = None,
+        flush_every: int = TREND_FLUSH_EVERY,
+        flush_interval_s: float = TREND_FLUSH_INTERVAL_S,
+        max_file_mb: float = 64.0,
+    ) -> None:
+        self.root = Path(root) if root else None
+        self.flush_every = max(1, int(flush_every))
+        self.flush_interval_s = float(flush_interval_s)
+        self.max_file_bytes = int(max_file_mb * 1024 * 1024)
+        self._buf: Dict[str, List[str]] = {}
+        self._last_flush = time.time()
+        self._lock = threading.RLock()
+        self.written = 0
+        self.dropped = 0
+        self.last_error = ""
+        if self.root:
+            try:
+                self.root.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                self.root = None
+                self.last_error = "创建走势目录失败: %s" % exc
+
+    @property
+    def enabled(self) -> bool:
+        return self.root is not None
+
+    def _path(self, mid: str) -> Path:
+        """该场赛事的走势文件路径。
+
+        `mid` 来自上游，做字符白名单过滤以防路径穿越（如 `../`）。
+        """
+        assert self.root is not None
+        safe = "".join(ch for ch in str(mid) if ch.isalnum() or ch in "-_")
+        return self.root / ("%s.jsonl" % (safe or "unknown"))
+
+    def append_many(self, ticks: Sequence[PriceTick]) -> None:
+        """缓冲一批 tick；按批/按时间自动刷盘。"""
+        if not self.enabled or not ticks:
+            return
+        with self._lock:
+            for t in ticks:
+                self._buf.setdefault(t.mid, []).append(
+                    json.dumps(t.as_dict(), ensure_ascii=False, separators=(",", ":")))
+            total = sum(len(v) for v in self._buf.values())
+            due = (total >= self.flush_every
+                   or (time.time() - self._last_flush) >= self.flush_interval_s)
+        if due:
+            self.flush()
+
+    def flush(self) -> int:
+        """把缓冲区写入磁盘。返回写入条数（失败不抛错）。"""
+        if not self.enabled:
+            return 0
+        with self._lock:
+            buf, self._buf = self._buf, {}
+            self._last_flush = time.time()
+        n = 0
+        for mid, lines in buf.items():
+            path = self._path(mid)
+            try:
+                if path.exists() and path.stat().st_size > self.max_file_bytes:
+                    # 单场文件过大时轮转，避免单个文件无限增大
+                    try:
+                        path.rename(path.with_suffix(".jsonl.1"))
+                    except OSError:
+                        pass
+                with path.open("a", encoding="utf-8") as fh:
+                    fh.write("\n".join(lines) + "\n")
+                n += len(lines)
+            except OSError as exc:
+                # 磁盘异常不应中断采集；记录并丢弃这批（内存中仍保有最近数据）
+                self.dropped += len(lines)
+                self.last_error = "写入 %s 失败: %s" % (path.name, exc)
+        self.written += n
+        return n
+
+    def load(self, mid: str, limit: int = MAX_TICKS_PER_MARKET) -> List[Dict[str, Any]]:
+        """读取某场的历史走势（重启后恢复用）。"""
+        if not self.enabled:
+            return []
+        path = self._path(mid)
+        if not path.exists():
+            return []
+        try:
+            with path.open(encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError as exc:
+            self.last_error = "读取 %s 失败: %s" % (path.name, exc)
+            return []
+        out: List[Dict[str, Any]] = []
+        for line in lines[-max(1, limit):]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue  # 半行/脏行直接跳过
+        return out
+
+    def health(self) -> Dict[str, Any]:
+        with self._lock:
+            pending = sum(len(v) for v in self._buf.values())
+        return {"enabled": self.enabled, "root": str(self.root) if self.root else None,
+                "written": self.written, "dropped": self.dropped,
+                "pending": pending, "last_error": self.last_error}
+
+
 @dataclass
 class TrendSeries:
     """某个 (赛事, 盘口) 的赔率走势。"""
@@ -203,6 +337,8 @@ class RealtimeStats:
     last_message_at: float = 0.0
     last_error: str = ""
     subscribed: int = 0
+    #: 启动时从落盘文件恢复的盘口数（验证持久化生效）
+    resumed_markets: int = 0
 
     def as_dict(self) -> Dict[str, Any]:
         now = time.time()
@@ -215,6 +351,7 @@ class RealtimeStats:
             "status_updates": self.status_updates,
             "finished": self.finished,
             "subscribed": self.subscribed,
+            "resumed_markets": self.resumed_markets,
             "uptime_s": round(now - self.started_at, 1),
             "idle_s": round(now - self.last_message_at, 1) if self.last_message_at else None,
             "last_error": self.last_error,
@@ -323,6 +460,8 @@ class RealtimeHub:
         mids_provider: Optional[Callable[[], Sequence[str]]] = None,
         subscribe_interval_s: float = 45.0,
         max_matches: int = 60,
+        trend_root: Optional[str] = None,
+        resume: bool = True,
     ) -> None:
         """
         Args:
@@ -330,6 +469,9 @@ class RealtimeHub:
             mids_provider: 返回要订阅的赛事 ID 列表；定期刷新。
             subscribe_interval_s: 重新计算订阅列表的间隔。
             max_matches: 单次订阅上限（订阅过多会被上游限制）。
+            trend_root: 走势落盘目录；给出则启用持久化（推荐）。
+                为空时仅存内存，容器重启即丢。
+            resume: 启动时从落盘文件回填走势（重启不丢历史）。
         """
         self.session_provider = session_provider
         self.mids_provider = mids_provider
@@ -349,6 +491,54 @@ class RealtimeHub:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._subscribed: List[str] = []
+        #: 走势持久化（供经济学算法/LLM 与重启后回填使用）
+        self.trend_store = TrendStore(trend_root)
+        if resume:
+            self._resume_from_store()
+
+    def _resume_from_store(self) -> None:
+        """从落盘文件回填历史走势（重启不丢）。
+
+        同时重建 `_last_price` 基线：否则重启后的第一条推送会被当作
+        “首次观测”，丢失一次真实变动。
+        """
+        store = self.trend_store
+        if not store.enabled or store.root is None:
+            return
+        try:
+            files = list(store.root.glob("*.jsonl"))
+        except OSError:
+            return
+        for path in files:
+            mid = path.stem
+            rows = store.load(mid, limit=MAX_TICKS_PER_MARKET)
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    continue
+                try:
+                    chpid = str(row.get("chpid") or "")
+                    hv = str(row.get("hv") or "")
+                    oid = str(row.get("oid") or "")
+                    old = float(row.get("old", 0.0))
+                    new = float(row.get("new", 0.0))
+                    ts = int(row.get("ts") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if chpid == "" and oid == "":
+                    continue
+                tick = PriceTick(
+                    mid=mid, chpid=chpid, hid="", hv=hv, oid=oid,
+                    ot=str(row.get("ot") or ""), old_ov=old, new_ov=new,
+                    ts_ms=ts)
+                key = (mid, chpid, hv)
+                series = self._trends.get(key)
+                if series is None:
+                    series = TrendSeries(mid=mid, chpid=chpid, hv=hv)
+                    self._trends[key] = series
+                series.add(tick)
+                self._last_price[(mid, chpid, hv, oid)] = new
+        if self._trends:
+            self.stats.resumed_markets = len(self._trends)
 
     # -- 生命周期 -----------------------------------------------------------
 
@@ -422,6 +612,7 @@ class RealtimeHub:
             # 收到的赔率快照条数（含未变化的），用于区分“推送正常但没变化”
             "price_snapshots": snaps,
             "changed_ratio": round(self.stats.price_ticks / snaps, 4) if snaps else 0.0,
+            "trend_store": self.trend_store.health(),
             **self.stats.as_dict(),
         }
 
@@ -433,8 +624,10 @@ class RealtimeHub:
         关键：`C105` 是周期全量快照（`obv` 恒等于 `ov`），所以必须用
         **自行维护的上次值** 对比，只把真正变化的项记为走势。
         否则每条快照都入库，真实信号会被稀释上千倍。
+
+        真实变动会同步落盘（`trend_store`），供后续分析与重启回填。
         """
-        changed = 0
+        changed: List[PriceTick] = []
         with self._lock:
             for t in ticks:
                 key = (t.mid, t.chpid, t.hv, t.oid)
@@ -456,9 +649,12 @@ class RealtimeHub:
                     series = TrendSeries(mid=real.mid, chpid=real.chpid, hv=real.hv)
                     self._trends[mkey] = series
                 series.add(real)
-                changed += 1
+                changed.append(real)
             self._snapshots += len(ticks)
-            self.stats.price_ticks += changed
+            self.stats.price_ticks += len(changed)
+        # 落盘在锁外：磁盘 IO 不应阻塞推送消费
+        if changed:
+            self.trend_store.append_many(changed)
 
     def _market_states(self) -> int:
         """已建立基线的选项数（用于诊断）。"""
