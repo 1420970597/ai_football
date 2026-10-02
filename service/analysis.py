@@ -93,8 +93,10 @@ class AnalysisConfig:
                                           "AH(-0.5)", "OU", "OU(2.5)", "OU(3)")
     #: 是否启用在线的 LLM 分析
     use_llm: bool = True
-    #: LLM 分析并发数（过高会打爆推理服务）
-    llm_concurrency: int = 2
+    #: LLM 分析并发数。
+    #: 实测推理服务可承受 4 并发（4 个请求总耗时 4.4s，而非串行的 9s），
+    #: 调高能显著缩短整批决策时间；过高可能被服务端排队或限流。
+    llm_concurrency: int = 4
 
 
 class AnalysisService:
@@ -265,7 +267,7 @@ class AnalysisService:
             # 并行分析：LLM 单场耗时 3~10 秒，串行会让 12 场→100 秒以上，
             # 控制台无法接受。并发度受 llm_concurrency 限制，
             # 以免打爆推理服务（它可能排队或限流）。
-            workers = (max(1, _to_int(self.config.llm_concurrency, 2))
+            workers = (max(1, _to_int(self.config.llm_concurrency, 4))
                        if self.engine.llm_available else min(8, len(cands) or 1))
             if len(cands) <= 1 or workers <= 1:
                 for m in cands:

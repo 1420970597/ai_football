@@ -662,9 +662,12 @@ def _start_background(
     """
     try:
         from collector.leyu_realtime import RealtimeHub
+        from collector.sources import SnapshotSource
         from service.analysis import build_analysis_service
 
-        source = svc.source
+        # 显式注解：schedule() 是 SnapshotSource 基类的可选能力，
+        # 写清楚类型可让静态检查确认该调用合法（而非靠 getattr 绕过）。
+        source: SnapshotSource = svc.source
         provider = getattr(source, "session_provider", None)
         if provider is None:
             print("提示：当前数据源不支持会话，跳过实时推送")

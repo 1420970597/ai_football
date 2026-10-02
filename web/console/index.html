@@ -98,6 +98,51 @@ tbody tr.risky{background:var(--ambbg)}
 .pill.warn{background:var(--ambbg);color:var(--amb)}
 .pill.bad{background:var(--negbg);color:var(--neg)}
 .pill.mut{background:var(--card3);color:var(--mut)}
+
+/* ---------- 决策徽标（T6：买入建议直接展示在列表中） ---------- */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;
+  border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.4px;
+  white-space:nowrap}
+.badge.buy{background:var(--pos);color:#06240f}
+.badge.watch{background:var(--amb);color:#2a1f00}
+.badge.avoid{background:var(--card3);color:var(--mut)}
+.badge.nollm{background:var(--card3);color:var(--amb)}
+/* 建议买入：整行高亮，一眼可见 */
+tr.row-buy{background:linear-gradient(90deg,rgba(61,220,132,.10),transparent 60%);
+  box-shadow:inset 3px 0 0 var(--pos)}
+tr.row-buy:hover{background:linear-gradient(90deg,rgba(61,220,132,.16),transparent 60%)}
+.pick{font-weight:600;color:var(--fg)}
+.pick .o{color:var(--acc);font-variant-numeric:tabular-nums}
+.edge-pos{color:var(--pos);font-weight:600}
+.edge-neg{color:var(--mut)}
+.stake{color:var(--teal);font-variant-numeric:tabular-nums}
+/* 走势方向箭头 */
+.trend{font-size:11px;font-weight:600}
+.trend.down{color:var(--pos)}   /* 降赔=资金流入 */
+.trend.up{color:var(--neg)}
+.trend.flat{color:var(--mut)}
+.conf-bar{display:inline-block;width:34px;height:5px;border-radius:3px;
+  background:var(--card3);vertical-align:middle;overflow:hidden}
+.conf-bar>i{display:block;height:100%;background:var(--acc)}
+/* 决策汇总条 */
+.summary{display:flex;gap:14px;flex-wrap:wrap;align-items:center;
+  padding:8px 12px;margin-bottom:10px;background:var(--card2);
+  border:1px solid var(--line);border-radius:6px;font-size:12px}
+.summary b{font-variant-numeric:tabular-nums}
+.summary .s-buy{color:var(--pos)}.summary .s-watch{color:var(--amb)}
+.summary .s-avoid{color:var(--mut)}.summary .s-nollm{color:var(--amb)}
+/* 决策详情面板 */
+.dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.dcard{background:var(--card2);border:1px solid var(--line);border-radius:6px;padding:10px}
+.dcard.pick-card{border-color:rgba(61,220,132,.45);background:rgba(61,220,132,.06)}
+.dcard h4{margin:0 0 6px;font-size:12px;color:var(--mut);font-weight:600}
+.dcard .big{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.reason{background:var(--card2);border-left:3px solid var(--acc);padding:10px 12px;
+  margin-top:10px;border-radius:0 6px 6px 0;font-size:12px;line-height:1.6;color:var(--fg)}
+.tick-list{max-height:260px;overflow:auto;font-size:11px;line-height:1.7}
+.tick-list .tk{display:grid;grid-template-columns:52px 1fr 78px 62px;gap:6px;
+  padding:1px 0;border-bottom:1px solid rgba(38,55,74,.5)}
+.tick-list .tk.down{color:var(--pos)}.tick-list .tk.up{color:var(--neg)}
 .state{display:none;padding:34px 20px;text-align:center;color:var(--mut)}
 .state.show{display:block}
 .state .big{font-size:32px;margin-bottom:8px}
@@ -143,6 +188,7 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
 
   <!-- ============ 赛事看板 ============ -->
   <section id="view-dashboard">
+    <div class="summary" id="decision-summary" style="display:none"></div>
     <div class="filters">
       <div class="f"><label>比赛日期</label><input type="date" id="f-date"></div>
       <div class="f"><label>联赛</label><input type="text" id="f-league" placeholder="如 日职"></div>
@@ -187,9 +233,10 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
       </div>
       <div class="tw" id="tbl-wrap"><table id="tbl">
         <thead><tr>
-          <th>场次</th><th>联赛</th><th>对阵</th>
-          <th class="num">主</th><th class="num">平</th><th class="num">客</th>
-          <th class="num">水钱</th><th class="num">分歧</th><th>状态</th>
+          <th>决策</th><th>建议</th><th class="num">赔率</th>
+          <th class="num">优势</th><th class="num">建议仓位</th><th class="num">置信</th>
+          <th>走势</th><th>联赛</th><th>对阵</th>
+          <th class="num">水钱</th><th>状态</th>
         </tr></thead>
         <tbody id="tbody"></tbody>
       </table></div>
@@ -218,6 +265,14 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
         </table></div>
         <div class="note" id="pricing-note"></div>
       </div>
+    </div>
+
+    <!-- 决策详情：点列表行展开，展示每个候选的概率拆解与 LLM 理由 -->
+    <div class="panel" id="decision-panel" style="display:none">
+      <h2>决策详情 <span class="tag" id="decision-tag"></span>
+        <button class="btn" id="btn-decision-back" style="float:right">返回列表</button></h2>
+      <div id="decision-body"></div>
+      <div id="decision-ticks"></div>
     </div>
 
     <!-- 多玩法统计：一场比赛有多种玩法，各自水钱/EV 差异极大 -->
@@ -282,7 +337,9 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
    ========================================================================== */
 const API = "/api/v1";
 const $ = (id) => document.getElementById(id);
-const S = { matches: [], selected: null, method: "auto", view: "dashboard" };
+const S = { matches: [], selected: null, method: "auto", view: "dashboard",
+            decisions: [], decisionSummary: null, decisionLimit: 6,
+            dataSource: "" };
 
 /* ---------- 安全 DOM 构建器 ---------- */
 function el(tag, props, children) {
@@ -373,6 +430,266 @@ function firstMarket(m) {
   const odds = lo[pick] || [];
   if (!odds.length) return null;
   return { name: pick, odds: odds };
+}
+
+/* ---------- 决策列表（T6：买入建议直接进列表） ---------- */
+const DECISION_TEXT = {buy:"买入", watch:"观望", avoid:"回避", no_llm:"无LLM"};
+const DECISION_CLS  = {buy:"buy",  watch:"watch", avoid:"avoid", no_llm:"nollm"};
+
+async function loadDecisions(opts) {
+  const o = opts || {};
+  setListState("loading");
+  clearMsg();
+  const qs = new URLSearchParams();
+  qs.set("limit", String(o.limit || 12));
+  if (o.live) qs.set("live", "1");
+  if (o.force) qs.set("force", "1");
+  const lg = $("f-league").value.trim();
+  if (lg) qs.set("league", lg);
+
+  let res;
+  try { res = await fetch(API + "/decisions?" + qs); }
+  catch (e) {
+    setListState("error", { title: "网络不可达",
+      desc: "无法连接 " + API + "/decisions，请确认后端服务已启动。" });
+    return;
+  }
+  if (!res.ok) {
+    let detail = "";
+    try { const j = await res.json(); detail = j.error || ""; } catch (_) {}
+    setListState("error", { title: "后端返回 " + res.status, desc: detail || "服务异常。" });
+    return;
+  }
+  const data = await res.json();
+  S.decisions = data.decisions || [];
+  S.decisionSummary = data.summary || null;
+
+  renderDecisionSummary(data);
+  if (!S.decisions.length) {
+    setListState("empty");
+    setText($("list-tag"), "0 场");
+    renderCards([], 0);
+    return;
+  }
+  setListState("table");
+  renderDecisionTable(S.decisions);
+  renderDecisionCards(data);
+}
+
+function renderDecisionSummary(data) {
+  const box = $("decision-summary");
+  if (!box) return;
+  clear(box);
+  const s = data.summary || {};
+  const llm = data.llm || {};
+  const add = (label, value, cls) => box.appendChild(el("span", { class: cls || "" }, [
+    document.createTextNode(label + " "),
+    el("b", { text: String(value) })
+  ]));
+  add("分析", s.n || 0, "");
+  add("买入建议", s.buy || 0, "s-buy");
+  add("观望", s.watch || 0, "s-watch");
+  add("回避", s.avoid || 0, "s-avoid");
+  if (s.no_llm) add("无LLM", s.no_llm, "s-nollm");
+  box.appendChild(el("span", { class: "mut" },
+    [document.createTextNode("耗时 " + (data.elapsed_s || 0) + "s")]));
+  box.appendChild(el("span", { class: llm.available ? "s-buy" : "s-nollm" }, [
+    document.createTextNode(llm.available
+      ? ("LLM: " + (llm.model || "已连接"))
+      : ("LLM 不可用：" + (llm.error || llm.reason || "未配置")))
+  ]));
+  box.appendChild(el("button", { class: "btn", text: "重新分析",
+    onclick: () => loadDecisions({ force: true, limit: S.decisionLimit }) }));
+  box.style.display = "";
+}
+
+function trendCell(d) {
+  // 从候选里找出该建议结果的走势方向
+  const pick = (d.candidates || []).find(c => c.outcome === d.pick) || {};
+  const t = pick.trend || "flat";
+  const pct = pick.trend_pct || 0;
+  const arrow = t === "down" ? "↓" : (t === "up" ? "↑" : "·");
+  // 降赔（↓）意味着资金流入、市场认为该结果概率上升
+  const title = t === "down" ? "降赔：资金流入该结果"
+              : (t === "up" ? "升赔：资金流出该结果" : "盘口未变动");
+  return el("span", { class: "trend " + t, text: arrow + (pct ? pct.toFixed(1) + "%" : ""),
+                      title: title });
+}
+
+function renderDecisionTable(rows) {
+  const tb = $("tbody");
+  clear(tb);
+  rows.forEach((d, i) => {
+    const cls = DECISION_CLS[d.decision] || "avoid";
+    const tr = el("tr", {
+      class: (d.decision === "buy" ? "row-buy " : "") + "clk",
+      "data-i": i, onclick: () => openDecision(i)
+    });
+    tr.appendChild(el("td", {}, [el("span", { class: "badge " + cls,
+      text: DECISION_TEXT[d.decision] || d.decision })]));
+    tr.appendChild(el("td", { class: "pick" }, [
+      document.createTextNode(d.pick_label || d.pick || "—"),
+      el("span", { class: "o", text: d.pick_odds ? "  " + fx(d.pick_odds) : "" })
+    ]));
+    tr.appendChild(el("td", { class: "num", text: d.pick_odds ? fx(d.pick_odds) : "—" }));
+    tr.appendChild(el("td", { class: "num " + (d.edge > 0 ? "edge-pos" : "edge-neg"),
+      text: d.edge_pct === undefined ? "—" : (d.edge_pct > 0 ? "+" : "") + d.edge_pct.toFixed(2) + "%" }));
+    tr.appendChild(el("td", { class: "num stake",
+      text: d.kelly_pct ? d.kelly_pct.toFixed(2) + "%" : "—" }));
+    tr.appendChild(el("td", { class: "num" }, [
+      el("span", { class: "conf-bar", title: "置信度 " + (d.confidence || 0).toFixed(2) }, [
+        el("i", { style: "width:" + Math.round((d.confidence || 0) * 100) + "%" })
+      ])
+    ]));
+    tr.appendChild(el("td", {}, [trendCell(d)]));
+    tr.appendChild(el("td", { text: d.league || "—" }));
+    tr.appendChild(el("td", { text: d.home + " vs " + d.away }));
+    tr.appendChild(el("td", { class: "num",
+      text: d.margin_pct === undefined ? "—" : d.margin_pct.toFixed(2) + "%" }));
+    tr.appendChild(el("td", {}, [el("span", { class: "pill mut",
+      text: d.market || "—" })]));
+    tb.appendChild(tr);
+  });
+  setText($("list-tag"), rows.length + " 场 · 买入 " +
+    rows.filter(r => r.decision === "buy").length + " 场");
+  const note = $("list-note");
+  clear(note);
+  note.appendChild(document.createTextNode(
+    "优势 = 融合概率 × 赔率 − 1；建议仓位 = 分数凯利（λ=0.25）且不超过资金 5%。"));
+  note.appendChild(document.createTextNode(
+    " 无独立信息源时不给买入建议（报告 §8.2：没有独立信息就不存在优势）。点击行看拆解。"));
+}
+
+function renderDecisionCards(data) {
+  const box = $("cards");
+  clear(box);
+  const s = data.summary || {};
+  const buys = (data.decisions || []).filter(d => d.decision === "buy");
+  const best = buys.length ? buys[0] : null;
+  const box2 = (k, v, sub, cls) => el("div", { class: "card" + (cls ? " " + cls : "") }, [
+    el("div", { class: "k", text: k }),
+    el("div", { class: "v", text: v }),
+    el("div", { class: "s", text: sub })
+  ]);
+  box.appendChild(box2("买入建议", String(s.buy || 0), "可执行的优势机会",
+    (s.buy ? "pos" : "")));
+  box.appendChild(box2("最佳机会", best ? best.pick_label || best.pick : "—",
+    best ? ((best.edge_pct > 0 ? "+" : "") + best.edge_pct.toFixed(2) + "% 优势 · " +
+            (best.league || "")) : "无满足阈值的买入机会"));
+  box.appendChild(box2("进行中", String(S.decisionSummaryLive || 0),
+    "实时推送已订阅"));
+  const llm = data.llm || {};
+  box.appendChild(box2("LLM", llm.available ? "已接入" : "不可用",
+    llm.available ? (llm.model || "") : (llm.error || "未配置"),
+    llm.available ? "" : "warn"));
+}
+
+function openDecision(i) {
+  const d = (S.decisions || [])[i];
+  if (!d) return;
+  S.selectedDecision = i;
+  const panel = $("decision-panel");
+  panel.style.display = "";
+  setText($("decision-tag"), (d.home || "") + " vs " + (d.away || "") + " · " + (d.market || ""));
+
+  const body = $("decision-body");
+  clear(body);
+
+  // 顶部：结论 + 建议
+  const cls = DECISION_CLS[d.decision] || "avoid";
+  const grid = el("div", { class: "dgrid" });
+  const card = (title, big, sub, pick) => el("div", { class: "dcard" + (pick ? " pick-card" : "") }, [
+    el("h4", { text: title }),
+    el("div", { class: "big", text: big }),
+    el("div", { class: "s", style: "color:var(--mut);font-size:11px", text: sub || "" })
+  ]);
+  grid.appendChild(card("决策", DECISION_TEXT[d.decision] || d.decision,
+    "优势阈值 / 置信度门槛", d.decision === "buy"));
+  grid.appendChild(card("建议结果", d.pick_label || d.pick || "—",
+    "赔率 " + (d.pick_odds ? fx(d.pick_odds) : "—"), d.decision === "buy"));
+  grid.appendChild(card("优势 (edge)",
+    (d.edge_pct > 0 ? "+" : "") + (d.edge_pct || 0).toFixed(2) + "%",
+    "融合概率 × 赔率 − 1"));
+  grid.appendChild(card("建议仓位",
+    d.kelly_pct ? d.kelly_pct.toFixed(2) + "%" : "不建议",
+    "分数凯利 λ=0.25，上限 5%"));
+  grid.appendChild(card("置信度", (d.confidence || 0).toFixed(2),
+    "LLM 权重 " + (d.llm_weight || 0).toFixed(2)));
+  grid.appendChild(card("水钱", (d.margin_pct || 0).toFixed(2) + "%",
+    "方法分歧 " + (d.method_spread_pp || 0).toFixed(2) + " pp"));
+  body.appendChild(grid);
+
+  // LLM 理由
+  if (d.llm_reason) {
+    body.appendChild(el("div", { class: "reason" }, [
+      el("b", { text: "LLM 理由：" }),
+      document.createTextNode(d.llm_reason)
+    ]));
+  }
+
+  // 候选拆解表：让每个结果的三套概率都可见（可复核性）
+  const tb = el("tbody", {});
+  (d.candidates || []).forEach(c => {
+    const tr = el("tr", {});
+    tr.appendChild(el("td", { text: c.label || c.outcome }));
+    tr.appendChild(el("td", { class: "num", text: fx(c.odds) }));
+    tr.appendChild(el("td", { class: "num", text: (c.p_small * 100).toFixed(2) + "%" }));
+    tr.appendChild(el("td", { class: "num",
+      text: c.p_llm === null ? "—" : (c.p_llm * 100).toFixed(2) + "%" }));
+    tr.appendChild(el("td", { class: "num", text: (c.p_combined * 100).toFixed(2) + "%" }));
+    tr.appendChild(el("td", { class: "num " + (c.edge > 0 ? "edge-pos" : "edge-neg"),
+      text: (c.edge > 0 ? "+" : "") + (c.edge_pct || 0).toFixed(2) + "%" }));
+    tr.appendChild(el("td", {}, [trendCell({ candidates: [c] })]));
+    tb.appendChild(tr);
+  });
+  const head = el("thead", {}, [el("tr", {}, [
+    el("th", { text: "结果" }), el("th", { class: "num", text: "赔率" }),
+    el("th", { class: "num", text: "小模型" }), el("th", { class: "num", text: "LLM" }),
+    el("th", { class: "num", text: "融合" }), el("th", { class: "num", text: "优势" }),
+    el("th", { text: "走势" })
+  ])]);
+  body.appendChild(el("table", { class: "mk" }, [head, tb]));
+
+  // 盘口走势（从实时推送取）
+  loadTrend(d.match_id);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function loadTrend(mid) {
+  const box = $("decision-ticks");
+  if (!box) return;
+  clear(box);
+  let t = null;
+  try {
+    const r = await fetch(API + "/trend/" + encodeURIComponent(mid));
+    if (r.ok) t = await r.json();
+  } catch (_) {}
+  const mkts = (t && t.markets) || [];
+  const withTicks = mkts.filter(m => m.n > 0);
+  box.appendChild(el("h2", { text: "盘口走势（实时推送）" }));
+  if (!withTicks.length) {
+    box.appendChild(el("div", { class: "note",
+      text: "暂无变动记录。该场可能未被实时订阅，或盘口尚未变动。" }));
+    return;
+  }
+  withTicks.slice(0, 6).forEach(m => {
+    box.appendChild(el("div", { class: "note" }, [
+      document.createTextNode((m.chpid || "") + " / " + (m.hv || "-") + "："),
+      el("b", { text: String(m.n) }), document.createTextNode(" 次变动"),
+      document.createTextNode(m.up || m.down
+        ? "（升 " + (m.up || 0) + " / 降 " + (m.down || 0) + "，" + (m.rate_per_min || 0) + " 次/分）" : "")
+    ]));
+    const list = el("div", { class: "tick-list" });
+    (m.recent || []).slice().reverse().forEach(tk => {
+      list.appendChild(el("div", { class: "tk " + (tk.direction || "flat") }, [
+        el("span", { text: tk.ot || "" }),
+        el("span", { text: tk.old + " → " + tk.new }),
+        el("span", { text: (tk.delta_pct > 0 ? "+" : "") + tk.delta_pct + "%" }),
+        el("span", { text: new Date(tk.ts).toLocaleTimeString() })
+      ]));
+    });
+    box.appendChild(list);
+  });
 }
 
 /* ---------- 赛事列表 ---------- */
@@ -791,14 +1108,22 @@ const resetFilters = () => {
 $("btn-reset").addEventListener("click", resetFilters);
 $("btn-empty-reset").addEventListener("click", resetFilters);
 $("btn-goto-dash").addEventListener("click", () => showView("dashboard"));
-$("f-method").addEventListener("change", (e) => { S.method = e.target.value; loadMatches(); });
+$("f-method").addEventListener("change", (e) => { S.method = e.target.value; openPricing(S.selectedIndex || 0); });
 ["f-date", "f-league", "f-q"].forEach(id =>
-  $(id).addEventListener("keydown", e => { if (e.key === "Enter") loadMatches(); }));
+  $(id).addEventListener("keydown", e => { if (e.key === "Enter") loadDecisions({}); }));
+
+// 返回列表：从决策详情回到决策列表
+const backBtn = $("btn-decision-back");
+if (backBtn) backBtn.addEventListener("click", () => {
+  const p = $("decision-panel");
+  if (p) p.style.display = "none";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
 
 renderNav();
-// 首次加载先确保当前数据源有新鲜数据（refresh=1），
-// 否则会展示上一次采集（可能是旧数据源）遗留的快照。
-loadMatches({ refresh: true });
+// 首次加载：直接拉「决策列表」——买入建议/优势/仓位就在列表里，
+// 不需要先看一堆原始赔率再点进去。
+loadDecisions({ force: true, limit: S.decisionLimit });
 
 </script>
 </body>
