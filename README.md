@@ -822,7 +822,18 @@ LEYU_SESSION_FILE=/path/session.json
 # 方式 D：手工临时
 LEYU_REQUEST_ID=<requestId>
 LEYU_CUID=<cuid>
+
+# 方式 E：Cookie（与服务端下发的 nginx 粘性会话一起用）
+LEYU_COOKIE='X-API-TOKEN=...; route=...'
 ```
+
+> **Cookie 说明**：业务 API 主要靠 `requestId` 鉴权，但服务端会下发
+> nginx 粘性会话 `route=` cookie（抓包实测 60 次）。客户端会：
+> 1. 把 `LEYU_COOKIE` / `Session.cookie` 放进每个请求的 `Cookie` 头
+> 2. 自动吸收响应里的 `Set-Cookie`（同名覆盖），保持路由一致
+>
+> 早期版本只**存** cookie 却从不**发**、也不读 `Set-Cookie`，
+> 导致注入的 cookie 完全无效（三处断链，已修复并有 8 例测试守护）。
 
 优先级：**App 引导 → 命令 → 文件 → 环境变量**。
 会话失效（`0401013`）时自动重新 acquire 并重试。

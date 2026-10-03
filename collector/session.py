@@ -156,8 +156,14 @@ class Session:
     note: str = ""
 
     def __post_init__(self) -> None:
-        if not str(self.request_id).strip():
-            raise SessionError("Session.request_id 不能为空")
+        # 会话凭证有两种合法形式，**至少要有一种**：
+        #   * requestId —— 业务 API 的会话令牌（主力）
+        #   * cookie    —— 站点侧凭证（`X-API-TOKEN`）+ nginx 粘性会话 `route`
+        # 早期强制要求 requestId，导致“只给 cookie”无法建会话，
+        # 而实际上服务端也会用 cookie 鉴权/路由。
+        if not str(self.request_id).strip() and not str(self.cookie).strip():
+            raise SessionError(
+                "Session 需要 request_id 或 cookie 至少之一（两者都为空）")
 
     @property
     def age_s(self) -> float:
@@ -389,13 +395,15 @@ class EnvSessionProvider(SessionProvider):
 
     def acquire(self, previous: Optional[Session] = None) -> Session:
         rid = (self._env.get(SESSION_ENV_REQUEST_ID) or "").strip()
-        if not rid:
+        cookie = (self._env.get(SESSION_ENV_COOKIE) or "").strip()
+        if not rid and not cookie:
             raise SessionError(
-                "环境变量 %s 未设置；无法从环境取得会话" % SESSION_ENV_REQUEST_ID)
+                "环境变量 %s 与 %s 都未设置；无法从环境取得会话"
+                % (SESSION_ENV_REQUEST_ID, SESSION_ENV_COOKIE))
         return Session(
             request_id=rid,
             cuid=(self._env.get(SESSION_ENV_CUID) or "").strip(),
-            cookie=(self._env.get(SESSION_ENV_COOKIE) or "").strip(),
+            cookie=cookie,
             note="来自环境变量",
         )
 

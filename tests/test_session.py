@@ -560,3 +560,41 @@ class TestCachedSessionProvider(unittest.TestCase):
         from collector.session import EnvSessionProvider
         p = make_session_provider(env={"LEYU_REQUEST_ID": "rid"})
         self.assertIsInstance(p, EnvSessionProvider)
+
+
+class TestCookieOnlySession(unittest.TestCase):
+    """只给 cookie 也应能建会话。
+
+    真实限制：早期 `Session.__post_init__` 强制要求 request_id，
+    `EnvSessionProvider` 同上，导致「只注入 cookie」被直接拒绝 ——
+    而服务端本身也支持 cookie 鉴权/路由（X-API-TOKEN + route）。
+    """
+
+    def test_session_accepts_cookie_only(self) -> None:
+        s = Session(request_id="", cookie="X-API-TOKEN=abc")
+        self.assertEqual(s.request_id, "")
+        self.assertEqual(s.cookie, "X-API-TOKEN=abc")
+
+    def test_session_rejects_both_empty(self) -> None:
+        for rid, ck in (("", ""), ("  ", "   ")):
+            with self.subTest(rid=rid, ck=ck):
+                with self.assertRaises(SessionError):
+                    Session(request_id=rid, cookie=ck)
+
+    def test_env_provider_cookie_only(self) -> None:
+        p = EnvSessionProvider({"LEYU_COOKIE": "route=xyz"})
+        s = p.acquire()
+        self.assertEqual(s.cookie, "route=xyz")
+
+    def test_env_provider_both_missing_is_actionable(self) -> None:
+        with self.assertRaises(SessionError) as ctx:
+            EnvSessionProvider({}).acquire()
+        msg = str(ctx.exception)
+        self.assertIn("LEYU_REQUEST_ID", msg)
+        self.assertIn("LEYU_COOKIE", msg)
+
+    def test_cookie_carried_into_client(self) -> None:
+        """回归：cookie 必须从 Session 透传到 HTTP 客户端（否则等于没注入）。"""
+        from collector.leyu_client import LEYUClient
+        c = LEYUClient(host="https://x.test", cookie="route=abc")
+        self.assertIn("Cookie", c._headers(False))
