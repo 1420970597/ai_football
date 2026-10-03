@@ -36,6 +36,7 @@ import json
 import re
 import math
 import os
+from dataclasses import replace
 from pathlib import Path
 import threading
 from http import HTTPStatus
@@ -523,15 +524,39 @@ class ApiApp:
 
     def h_decisions(self, query: Mapping[str, List[str]],
                     body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
-        """决策列表（**盘口汇总式**）：经济学算全部盘口 → 每场 1 次 LLM 裁定。
+        """决策列表（**默认读后台定时产生的结果，不触发 LLM**）。
+
+        设计要点（用户要求）：决策由**后台定时异步**执行，
+        页面刷新不应触发一轮 LLM。因此本端点默认读缓存，毫秒级返回。
 
         参数：
-            limit=8       分析赛事上限
-            live=1        只看进行中的赛事
-            league=xxx    限定联赛
-            async=1       改为异步：立即返回 job_id（推荐，避免 HTTP 超时）
-            workers=4     并行度
+            cached=1（默认）  读后台定时结果，不跑 LLM
+            cached=0          同步重算（**慢**，可能 504，仅供调试）
+            async=1           起一个后台任务并返回 job_id（手动强制刷新）
+            live=1            只看进行中的赛事（仅用于同步/异步重算）
+            league=xxx        限定联赛
+            max_age=600       缓存超过该秒数则标记 stale=true
         """
+        mode = (_q1(query, "cached") or "1").strip().lower()
+        if mode not in ("0", "false", "no"):
+            max_age = _q_int(query, "max_age", 600)
+            res = self.analysis.latest_result(max_age_s=max_age or None)
+            if res is None:
+                # 首轮尚未完成 / 结果过期：给出可操作提示，而不是让前端空等
+                return {
+                    "count": 0, "summary": {}, "decisions": [],
+                    "pending": True,
+                    "cycle": self.analysis.cycle_stats if hasattr(
+                        self.analysis, "cycle_stats") else {},
+                    "hint": "后台定时决策首轮尚未完成；可稍后刷新，"
+                            "或调用 POST /decisions/job 手动触发一轮。",
+                }
+            out = dict(res)
+            out["cached"] = True
+            out["stale"] = False
+            out["cycle"] = getattr(self.analysis, "cycle_stats", {})
+            return out
+
         limit = _q_int(query, "limit", 8) or 8
         only_live = _q1(query, "live") not in (None, "", "0", "false")
         limit = max(1, min(limit, 50))
@@ -762,9 +787,25 @@ def _start_background(
         hub.start()
         print("走势持久化: %s" % hub.trend_store.health())
 
-        # 分析服务复用同一个 Hub，并将盘中行情变化纳入决策
-        app._analysis = build_analysis_service(svc, realtime=hub)
+        # 分析服务复用同一个 Hub，并将盘中行情变化纳入决策。
+        # result_path 放在 output 卷内：重启后仍能立即展示上次决策结果。
+        result_path = str(Path(svc.store.root) / ".." / "decisions.json")
+        ana = build_analysis_service(
+            svc, realtime=hub,
+        )
+        # 注入落盘路径（环境变量优先，否则用默认路径）
+        ana.config = replace(ana.config, result_path=ana.config.result_path
+                             or result_path)
+        app._analysis = ana
         print("实时推送已启动（最多 %d 场）" % max_matches)
+
+        # **后台定时决策**（核心）：不依赖页面刷新。
+        # 页面只读 latest_result()，打开即出结果，不转圈。
+        if ana.start_cycle():
+            print("定时决策已启动（每 %.0fs 一轮，每轮最多 %d 场）"
+                  % (ana.config.cycle_interval_s, ana.config.cycle_limit))
+        else:
+            print("提示：定时决策未启用（ANALYSIS_CYCLE=0）")
         return hub
     except Exception as exc:  # noqa: BLE001 - 采集失败不能阻止 API 启动
         print("警告：实时推送启动失败（API 仍可用）：%s" % exc)
@@ -776,7 +817,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8000,
                corpus_root: Optional[str] = None,
                source: Optional[str] = None,
                saz_path: Optional[str] = None) -> None:
-    """启动 API 服务（阻塞）。含后台实时采集。"""
+    """启动 API 服务（阻塞）。含后台实时采集 + 定时决策。"""
     app = create_app(snapshot_root, corpus_root, source=source, saz_path=saz_path)
     hub = None
     if os.environ.get("REALTIME_DISABLED", "").strip() not in ("1", "true"):
@@ -788,6 +829,9 @@ def run_server(host: str = "0.0.0.0", port: int = 8000,
     except KeyboardInterrupt:
         pass
     finally:
+        ana = getattr(app, "_analysis", None)
+        if ana is not None:
+            ana.stop_cycle()
         if hub is not None:
             hub.stop()
         srv.server_close()

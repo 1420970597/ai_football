@@ -137,6 +137,10 @@ services:
     #   LEYU_LOGIN_COMMAND               登录命令（argv 形式，非 shell 字符串）
     #   LEYU_HOST / LEYU_APP_HOST        覆盖网关
     #   LEYU_SAZ                         给出 saz 路径则离线回放
+    #   ANALYSIS_CYCLE                   后台定时决策间隔秒（默认 180；0=关闭）
+    #   ANALYSIS_CYCLE_LIMIT             每轮决策赛事数（默认 20）
+    #   ANALYSIS_CYCLE_LIVE_ONLY         1=只对进行中赛事决策（省 LLM）
+    #   ANALYSIS_RESULT_PATH             决策结果落盘路径（重启可恢复）
     volumes:
       # 宿主机语料（output/场次*.json）只读挂载，供首次导入与体彩源使用
       - ../output:/app/output

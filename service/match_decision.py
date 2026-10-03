@@ -76,9 +76,10 @@ __all__ = [
 ]
 
 #: 交给 LLM 的候选盘口上限（过多会稀释注意力并撑爆上下文）
-#: 实测：盘口太多 + 提示词太长时，推理模型会把 token 全花在思考上
-#: （曾出现 18494 字推理、正文为空），因此这里取较小值。
-MAX_CANDIDATES_FOR_LLM = 8
+#: 实测教训：盘口越多、提示词越长，推理型模型的思考时间就越不可控
+#: （曾出现单场 331s、推理 18494 字），直接拖垮定时循环。
+#: 只把**经济算法认为最有希望的**前 N 个盘口交给 LLM 判断即可。
+MAX_CANDIDATES_FOR_LLM = 6
 
 #: 单个盘口最多展示的结果数
 MAX_OUTCOMES_PER_MARKET = 3
@@ -364,7 +365,7 @@ class MatchDecisionEngine:
 
     def build_prompt(
         self,
-        computs: Sequence[MarketComputation],
+        comps: Sequence[MarketComputation],
         home: str,
         away: str,
         league: str,
@@ -385,7 +386,7 @@ class MatchDecisionEngine:
             lines.append("比赛状态：%s" % ctx["status_text"])
         lines.append("")
 
-        for c in list(computs)[:MAX_CANDIDATES_FOR_LLM]:
+        for c in list(comps)[:MAX_CANDIDATES_FOR_LLM]:
             trend_txt = ""
             if c.trend_n:
                 trend_txt = "，走势 %s %.2f%%（%d 次变动）" % (
@@ -431,7 +432,7 @@ class MatchDecisionEngine:
 
     def _ask_llm(
         self,
-        computs: Sequence[MarketComputation],
+        comps: Sequence[MarketComputation],
         home: str,
         away: str,
         league: str,
@@ -450,7 +451,7 @@ class MatchDecisionEngine:
         """
         if not self.llm_available:
             return [], 0.0, "", "LLM 未启用"
-        prompt = self.build_prompt(computs, home, away, league, context)
+        prompt = self.build_prompt(comps, home, away, league, context)
         try:
             self.stats["llm_calls"] += 1
             assert self.llm is not None
@@ -474,7 +475,7 @@ class MatchDecisionEngine:
             self.stats["llm_failures"] += 1
             return [], 0.0, "", "LLM 未返回 markets 数组"
 
-        by_market = {c.market: c for c in computs}
+        by_market = {c.market: c for c in comps}
         picks: List[Dict[str, Any]] = []
         confs: List[float] = []
         for row in rows:

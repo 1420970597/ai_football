@@ -312,3 +312,75 @@ class TestPromptAndHelpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestScheduledCycle(unittest.TestCase):
+    """后台定时决策（用户要求：不依赖页面刷新）。"""
+
+    def _svc(self, **kw: Any) -> Any:
+        from service.analysis import AnalysisConfig, AnalysisService
+        cfg = AnalysisConfig(use_llm=False, **kw)
+        return AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                               config=cfg)
+
+    def test_latest_result_none_before_first_round(self) -> None:
+        svc = self._svc(cycle_interval_s=0)
+        self.assertIsNone(svc.latest_result())
+
+    def test_cycle_disabled_when_interval_zero(self) -> None:
+        svc = self._svc(cycle_interval_s=0)
+        self.assertFalse(svc.start_cycle())
+        self.assertFalse(svc.cycle_running)
+
+    def test_run_cycle_once_caches_result(self) -> None:
+        svc = self._svc()
+        fake = {"count": 2, "summary": {"buy": 1}, "decisions": []}
+        with mock.patch.object(svc, "decide_list", return_value=fake):
+            svc._run_cycle_once()
+        got = svc.latest_result()
+        self.assertIsNotNone(got)
+        assert got is not None
+        self.assertTrue(got.get("cycle"))
+        self.assertEqual(svc.cycle_stats["rounds"], 1)
+
+    def test_cycle_survives_exception(self) -> None:
+        """单轮失败不能让定时循环退出（否则系统静默停止更新）。"""
+        svc = self._svc()
+        with mock.patch.object(svc, "decide_list", side_effect=RuntimeError("boom")):
+            svc._run_cycle_once()
+        self.assertIn("boom", svc.cycle_stats["last_error"])
+        self.assertEqual(svc.cycle_stats["rounds"], 0)
+
+    def test_max_age_filters_stale(self) -> None:
+        svc = self._svc()
+        with mock.patch.object(svc, "decide_list",
+                               return_value={"count": 0, "decisions": []}):
+            svc._run_cycle_once()
+        self.assertIsNotNone(svc.latest_result(max_age_s=3600))
+        self.assertIsNone(svc.latest_result(max_age_s=0.000001))
+
+    def test_persist_and_restore(self) -> None:
+        """落盘后重启能立即读到上次结果（不必等首轮）。"""
+        import os as _os
+        import tempfile
+        path = _os.path.join(tempfile.mkdtemp(), "decisions.json")
+        svc = self._svc(result_path=path)
+        with mock.patch.object(svc, "decide_list",
+                               return_value={"count": 1, "decisions": [{"a": 1}]}):
+            svc._run_cycle_once()
+        self.assertTrue(_os.path.exists(path))
+        # 新实例应能恢复
+        svc2 = self._svc(result_path=path)
+        got = svc2.latest_result()
+        self.assertIsNotNone(got)
+        assert got is not None
+        self.assertTrue(got.get("restored"))
+
+    def test_corrupt_result_file_ignored(self) -> None:
+        import os as _os
+        import tempfile
+        path = _os.path.join(tempfile.mkdtemp(), "decisions.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("{ not json")
+        svc = self._svc(result_path=path)
+        self.assertIsNone(svc.latest_result())  # 损坏则忽略，不抛异常

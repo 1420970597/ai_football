@@ -84,6 +84,19 @@ def _to_int(value: object, default: int = 0) -> int:
         return default
 
 
+#: 默认循环间隔（秒）：每隔这么久重新跑一轮决策。
+#: 为何不依赖页面刷新：用户刷新页面不应触发一轮 LLM（慢且浪费）。
+#: 后台定时跑，页面只读缓存结果 —— 打开即秒出。
+#:
+#: 取值依据（实测，并发 4）：单场中位 23s、最坏 90s（硬超时）。
+#: 20 场/轮约 2~3 分钟，因此间隔至少设 180s（否则循环会持续落后）。
+DEFAULT_CYCLE_INTERVAL_S = 300.0
+
+#: 每轮决策的赛事数上限。
+#: 不宜过大：一轮要跑完全部 LLM 调用才能更新缓存，
+#: 场次越多则缓存刷新越慢（用户看到的决策越旧）。
+DEFAULT_CYCLE_LIMIT = 12
+
 @dataclass(frozen=True)
 class AnalysisConfig:
     """分析层配置。"""
@@ -103,6 +116,15 @@ class AnalysisConfig:
     min_edge: float = 0.02
     #: 买入门槛：LLM 置信度低于此值只观望
     min_confidence: float = 0.5
+    #: 后台定时决策间隔（秒）；0 表示不启用定时
+    cycle_interval_s: float = DEFAULT_CYCLE_INTERVAL_S
+    #: 每轮决策赛事数上限
+    cycle_limit: int = DEFAULT_CYCLE_LIMIT
+    #: 是否只对进行中的赛事做定时决策（节省 LLM 开销）
+    cycle_live_only: bool = False
+    #: 决策结果落盘路径（重启后仍能立即展示上次结果）
+    result_path: Optional[str] = None
+
 
 
 class AnalysisService:
@@ -111,8 +133,15 @@ class AnalysisService:
     主路径是**盘口汇总式**决策（`MatchDecisionEngine`）：
     经济学算法先算完一场的全部盘口，再汇总给 LLM 做**一次**买入裁定。
 
-    支持**异步任务**：LLM 决策需数秒~数十秒，同步 HTTP 容易超时。
-    `start_job()` 立即返回 job_id，前端轮询 `job_status()`。
+    ## 决策触发方式（后台定时，非页面刷新）
+
+    * `start_cycle()` 启动**后台定时循环**：每 `cycle_interval_s` 秒自动
+      重跑一轮决策，结果存入内存缓存 + 落盘快照。
+    * 页面/API 只需读 `latest_result()`（毫秒级，不触发 LLM）。
+    * `start_job()` 仍保留，用于手动强制刷新（但要避免滥用）。
+
+    为什么必须定时而不是按需：LLM 一轮要数十秒，若等用户刷新才跑，
+    用户要对着转圈等很久，且每个人都重复触发一遍（浪费且易限流）。
     """
 
     def __init__(
@@ -149,6 +178,128 @@ class AnalysisService:
         #: 异步任务表 job_id → 状态
         self._jobs: Dict[str, Dict[str, Any]] = {}
         self._jobs_lock = threading.RLock()
+        #: 后台定时决策（主路径）：不依赖页面刷新
+        self._cycle_thread: Optional[threading.Thread] = None
+        self._cycle_stop = threading.Event()
+        self.cycle_stats: Dict[str, Any] = {
+            "rounds": 0, "last_started": 0.0, "last_finished": 0.0,
+            "last_elapsed_s": 0.0, "last_error": "", "next_at": 0.0,
+        }
+        #: 最近一轮结果（页面只读它，**不触发 LLM**）
+        self._latest: Optional[Dict[str, Any]] = None
+        self._restore_latest()
+
+    # -- 后台定时决策（主路径） -------------------------------------------
+
+    def start_cycle(self) -> bool:
+        """启动后台定时决策循环（幂等）。返回是否实际启动。"""
+        if self._cycle_thread is not None and self._cycle_thread.is_alive():
+            return False
+        if self.config.cycle_interval_s <= 0:
+            return False
+        self._cycle_stop.clear()
+        self._cycle_thread = threading.Thread(
+            target=self._cycle_loop, name="analysis-cycle", daemon=True)
+        self._cycle_thread.start()
+        return True
+
+    def stop_cycle(self, timeout: float = 5.0) -> None:
+        self._cycle_stop.set()
+        t = self._cycle_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=timeout)
+
+    @property
+    def cycle_running(self) -> bool:
+        return self._cycle_thread is not None and self._cycle_thread.is_alive()
+
+    def _cycle_loop(self) -> None:
+        """定时跑决策。首轮立即执行（不等一个间隔），让系统尽快有数据。"""
+        interval = max(10.0, float(self.config.cycle_interval_s))
+        while not self._cycle_stop.is_set():
+            self._run_cycle_once()
+            self.cycle_stats["next_at"] = time.time() + interval
+            if self._cycle_stop.wait(interval):
+                return
+
+    def _run_cycle_once(self) -> None:
+        """执行一轮决策并缓存结果。异常只记录，不让循环退出。"""
+        self.cycle_stats["last_started"] = time.time()
+        try:
+            res = self.decide_list(
+                limit=self.config.cycle_limit,
+                only_live=self.config.cycle_live_only,
+                force=True,
+                max_workers=self.config.llm_concurrency,
+            )
+            res["cycle"] = True
+            res["finished_at"] = datetime.now(timezone.utc).isoformat()
+            with self._lock:
+                self._latest = res
+            self._persist_latest(res)
+            self.cycle_stats["rounds"] += 1
+            self.cycle_stats["last_error"] = ""
+        except Exception as exc:  # noqa: BLE001 - 定时循环不能因单轮失败而退出
+            self.cycle_stats["last_error"] = "%s: %s" % (type(exc).__name__, exc)
+        finally:
+            self.cycle_stats["last_finished"] = time.time()
+            self.cycle_stats["last_elapsed_s"] = round(
+                self.cycle_stats["last_finished"]
+                - self.cycle_stats["last_started"], 2)
+
+    # -- 结果持久化（重启后立即有数据可看） -------------------------------
+
+    def _persist_latest(self, res: Mapping[str, Any]) -> None:
+        """把一轮结果落盘。失败只记录，不影响服务。"""
+        path = self.config.result_path
+        if not path:
+            return
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(res, fh, ensure_ascii=False)
+            os.replace(tmp, path)  # 原子替换，避免读到半写文件
+        except (OSError, ValueError, TypeError) as exc:
+            self.cycle_stats["last_error"] = "落盘失败: %s" % exc
+
+    def _restore_latest(self) -> None:
+        """启动时读回上次结果，使页面在首轮完成前也能看到数据。"""
+        path = self.config.result_path
+        if not path or not os.path.exists(path):
+            return
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict) and "decisions" in data:
+                data["restored"] = True
+                with self._lock:
+                    self._latest = data
+        except (OSError, ValueError):
+            pass  # 文件损坏就当没有，等下一轮重新生成
+
+    def latest_result(self, max_age_s: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        """读最近一轮决策结果（**毫秒级，不触发 LLM**）。
+
+        这是页面应该调用的接口：打开即出结果，不转圈。
+
+        Args:
+            max_age_s: 超过该年龄则返回 None（调用方可据此提示“数据较旧”）。
+        """
+        with self._lock:
+            res = self._latest
+        if res is None:
+            return None
+        if max_age_s is not None:
+            fin = res.get("finished_at")
+            if fin:
+                try:
+                    age = (datetime.now(timezone.utc)
+                           - datetime.fromisoformat(fin)).total_seconds()
+                    if age > max_age_s:
+                        return None
+                except (TypeError, ValueError):
+                    pass
+        return res
 
     # -- 异步任务 -----------------------------------------------------------
 
@@ -504,5 +655,12 @@ def build_analysis_service(
         max_analyze=_to_int(_num("ANALYSIS_MAX", DEFAULT_MAX_ANALYZE),
                             DEFAULT_MAX_ANALYZE),
         cache_ttl_s=_num("ANALYSIS_CACHE_TTL", DEFAULT_CACHE_TTL_S),
+        # 定时决策（默认 180s）；ANALYSIS_CYCLE=0 可关闭
+        cycle_interval_s=_num("ANALYSIS_CYCLE", DEFAULT_CYCLE_INTERVAL_S),
+        cycle_limit=_to_int(_num("ANALYSIS_CYCLE_LIMIT", DEFAULT_CYCLE_LIMIT),
+                            DEFAULT_CYCLE_LIMIT),
+        cycle_live_only=(e.get("ANALYSIS_CYCLE_LIVE_ONLY", "") or "").strip()
+                        in ("1", "true", "yes"),
+        result_path=(e.get("ANALYSIS_RESULT_PATH") or "").strip() or None,
     )
     return AnalysisService(valuation=valuation, realtime=realtime, config=cfg)

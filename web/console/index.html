@@ -451,15 +451,67 @@ function bestPick(d) {
 }
 
 /* 异步加载：先 POST 建任务，再轮询（避免同步 504） */
+/* 读后台定时决策的结果（**毫秒级，不触发 LLM**）。
+   用户要求：决策由后台定时异步执行，不是刷新页面才跑。 */
 async function loadDecisions(opts) {
   const o = opts || {};
-  setListState("loading");
-  clearMsg();
-  const body = { limit: o.limit || 8, workers: o.workers || 4 };
-  if (o.live) body.live = true;
-  const lg = $("f-league").value.trim();
-  if (lg) body.league = lg;
+  if (!o.silent) setListState("loading");
+  if (!o.silent) clearMsg();
 
+  let data;
+  try {
+    const r = await fetch(API + "/decisions?max_age=1800");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    data = await r.json();
+  } catch (e) {
+    setListState("error", { title: "无法读取决策",
+      desc: "GET " + API + "/decisions 失败：" + e.message });
+    return;
+  }
+
+  // 首轮尚未完成：显示提示，不自动触发 LLM
+  if (data.pending) {
+    setListState("empty");
+    setText($("list-tag"), "等待后台首轮决策…");
+    const note = $("list-note");
+    clear(note);
+    note.appendChild(document.createTextNode(
+      data.hint || "后台定时决策正在运行，稍后自动刷新。"));
+    renderCycleChip(data.cycle);
+    return;
+  }
+
+  S.decisions = data.decisions || [];
+  S.decisionSummary = data.summary || null;
+  renderDecisionSummary(data);
+  renderCycleChip(data.cycle);
+  if (!S.decisions.length) {
+    setListState("empty");
+    setText($("list-tag"), "0 场");
+    renderCards([], 0);
+    return;
+  }
+  setListState("table");
+  renderDecisionTable(S.decisions);
+  renderDecisionCards(data);
+}
+
+/* 后台定时状态提示（告诉用户下一轮何时跑） */
+function renderCycleChip(cycle) {
+  const box = $("decision-summary");
+  if (!box || !cycle) return;
+  const age = cycle.next_at ? Math.max(0, Math.round(cycle.next_at - Date.now() / 1000)) : null;
+  box.appendChild(el("span", { class: "mut", title: "后台定时决策，不依赖页面刷新",
+    text: cycle.rounds
+      ? ("定时轮次 " + cycle.rounds + (age !== null ? " · 下轮 " + age + "s" : ""))
+      : "定时决策启动中" }));
+}
+
+/* 手动强制刷新（用户主动点击，会真的跑一轮 LLM） */
+async function forceRefreshDecisions() {
+  const lg = $("f-league").value.trim();
+  const body = { limit: S.decisionLimit, workers: 4 };
+  if (lg) body.league = lg;
   let job;
   try {
     const r = await fetch(API + "/decisions/job", {
@@ -469,25 +521,12 @@ async function loadDecisions(opts) {
     if (!r.ok) throw new Error("HTTP " + r.status);
     job = await r.json();
   } catch (e) {
-    setListState("error", { title: "无法启动分析",
-      desc: "POST " + API + "/decisions/job 失败：" + e.message });
+    setListState("error", { title: "无法启动分析", desc: e.message });
     return;
   }
-
   setListState("loading");
-  setText($("list-tag"), "分析中…");
+  setText($("list-tag"), "手动分析中…");
   const t0 = Date.now();
-  const showProgress = (st) => {
-    const el2 = $("st-loading");
-    if (el2) {
-      const t = el2.querySelector(".prog");
-      if (t) t.textContent = "已完成 " + (st.done || 0) + "/" + (st.total || "?")
-        + " 场 · " + st.elapsed_s + "s";
-    }
-  };
-
-  // 轮询直到完成（最长 10 分钟）
-  let data = null;
   while (Date.now() - t0 < 600000) {
     await new Promise(r => setTimeout(r, 1500));
     let st;
@@ -499,30 +538,20 @@ async function loadDecisions(opts) {
       setListState("error", { title: "轮询失败", desc: e.message });
       return;
     }
-    showProgress(st);
-    if (st.state === "done") { data = st.result; break; }
+    const el2 = $("st-loading");
+    if (el2) {
+      const t = el2.querySelector(".prog");
+      if (t) t.textContent = "已完成 " + (st.done || 0) + "/" + (st.total || "?")
+        + " 场 · " + st.elapsed_s + "s";
+    }
+    if (st.state === "done") break;
     if (st.state === "failed") {
       setListState("error", { title: "分析失败", desc: st.error || "未知错误" });
       return;
     }
   }
-  if (!data) {
-    setListState("error", { title: "分析超时", desc: "10 分钟内未完成，请减少场次后重试。" });
-    return;
-  }
-
-  S.decisions = data.decisions || [];
-  S.decisionSummary = data.summary || null;
-  renderDecisionSummary(data);
-  if (!S.decisions.length) {
-    setListState("empty");
-    setText($("list-tag"), "0 场");
-    renderCards([], 0);
-    return;
-  }
-  setListState("table");
-  renderDecisionTable(S.decisions);
-  renderDecisionCards(data);
+  // 完成后重新读缓存
+  await loadDecisions({ silent: true });
 }
 
 function renderDecisionSummary(data) {
@@ -547,8 +576,9 @@ function renderDecisionSummary(data) {
       ? ("LLM: " + (llm.model || "已连接"))
       : ("LLM 不可用：" + (llm.error || llm.reason || "未配置")))
   ]));
-  box.appendChild(el("button", { class: "btn", text: "重新分析",
-    onclick: () => loadDecisions({ limit: S.decisionLimit }) }));
+  box.appendChild(el("button", { class: "btn", text: "立即重算",
+    title: "手动跑一轮 LLM 决策（后台本来就会定时跑）",
+    onclick: forceRefreshDecisions }));
   box.style.display = "";
 }
 
@@ -1207,7 +1237,7 @@ $("btn-empty-reset").addEventListener("click", resetFilters);
 $("btn-goto-dash").addEventListener("click", () => showView("dashboard"));
 $("f-method").addEventListener("change", (e) => { S.method = e.target.value; openPricing(S.selectedIndex || 0); });
 ["f-date", "f-league", "f-q"].forEach(id =>
-  $(id).addEventListener("keydown", e => { if (e.key === "Enter") loadDecisions({}); }));
+  $(id).addEventListener("keydown", e => { if (e.key === "Enter") loadDecisions({ silent: true }); }));
 
 // 返回列表：从决策详情回到决策列表
 const backBtn = $("btn-decision-back");
@@ -1220,7 +1250,16 @@ if (backBtn) backBtn.addEventListener("click", () => {
 renderNav();
 // 首次加载：直接拉「决策列表」——买入建议/优势/仓位就在列表里，
 // 不需要先看一堆原始赔率再点进去。
-loadDecisions({ limit: S.decisionLimit });
+// 首屏**只读缓存**（后台定时决策已产出的结果），不触发 LLM。
+loadDecisions({ silent: true });
+
+// 定时自动刷新列表（每 30s 拉一次后台最新结果，页面无需手动刷新）。
+setInterval(() => {
+  // 详情面板打开时不打扰用户
+  const panel = $("decision-panel");
+  if (panel && panel.style.display !== "none") return;
+  loadDecisions({ silent: true });
+}, 30000);
 
 </script>
 </body>
