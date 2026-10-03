@@ -258,8 +258,13 @@ class CachedSessionProvider(SessionProvider):
         if cached is not None:
             return cached
         raise SessionError(
-            "主会话来源失败且无可用缓存：%s\n"
-            "（若 App 凭据已过期，请更新 %s；缓存文件：%s）"
+            "主会话来源失败，且**尚无可用缓存**：%s\n"
+            "—— 怎么办 ——\n"
+            "  1) 更新 %s（App 凭据会过期，上游返回 6001 时要重取）\n"
+            "  2) 或注入 LEYU_REQUEST_ID / LEYU_SESSION_FILE（手工会话）\n"
+            "  3) 或提供 LEYU_LOGIN_COMMAND（登录脚本）\n"
+            "  缓存文件：%s（首次成功后会写入，之后即使 App token 过期\n"
+            "  也能继续采集，直到业务会话本身失效）"
             % (inner_err, SESSION_ENV_APP_TOKEN, self.path))
 
     def invalidate(self, session: Optional[Session]) -> None:
