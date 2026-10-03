@@ -384,3 +384,86 @@ class TestScheduledCycle(unittest.TestCase):
             fh.write("{ not json")
         svc = self._svc(result_path=path)
         self.assertIsNone(svc.latest_result())  # 损坏则忽略，不抛异常
+
+
+class TestNoArtificialCap(unittest.TestCase):
+    """用户要求：展示应与乐鱼接口的进行中数量一致，不应人为截断。
+
+    历史缺陷：三处硬编码 60（全量采集 / WS 订阅 / 决策上限），
+    导致「进行中 50 场」时看着够用，一旦赛程密集就会静默丢赛事。
+    """
+
+    def test_cycle_limit_zero_means_unlimited(self) -> None:
+        from service.analysis import DEFAULT_CYCLE_LIMIT, AnalysisConfig
+        self.assertEqual(DEFAULT_CYCLE_LIMIT, 0)
+        self.assertEqual(AnalysisConfig().cycle_limit, 0)
+
+    def test_partial_max_is_not_the_live_cap(self) -> None:
+        """DEFAULT_PARTIAL_MAX 只用于「非全量拉取」的安全阀，不是进行中上限。"""
+        from collector.sources import DEFAULT_PARTIAL_MAX
+        self.assertGreater(DEFAULT_PARTIAL_MAX, 0)
+
+    def test_candidates_limit_zero_returns_all(self) -> None:
+        """关键回归：0 必须表示「不限」，而不是返回空列表。"""
+        from service.analysis import AnalysisConfig, AnalysisService
+
+        svc = AnalysisService(
+            valuation=mock.MagicMock(), realtime=None,
+            config=AnalysisConfig(use_llm=False, cycle_limit=0))
+        svc.valuation.list_matches.return_value = [
+            {"match_id": str(i), "markets": ["HAD"], "state": "active"}
+            for i in range(25)
+        ]
+        svc.live_match_ids = lambda: None  # 退回按 state 判定
+        got = svc.candidates(limit=0)
+        self.assertEqual(len(got), 25, "limit=0 应返回全部，而不是空")
+
+    def test_candidates_positive_limit_truncates(self) -> None:
+        from service.analysis import AnalysisConfig, AnalysisService
+
+        svc = AnalysisService(
+            valuation=mock.MagicMock(), realtime=None,
+            config=AnalysisConfig(use_llm=False))
+        svc.valuation.list_matches.return_value = [
+            {"match_id": str(i), "markets": ["HAD"], "state": "active"}
+            for i in range(25)
+        ]
+        svc.live_match_ids = lambda: None
+        self.assertEqual(len(svc.candidates(limit=5)), 5)
+
+    def test_refresh_default_is_unlimited(self) -> None:
+        import inspect
+
+        from service.analysis import AnalysisService
+        sig = inspect.signature(AnalysisService.refresh_live_matches)
+        self.assertEqual(sig.parameters["max_matches"].default, 0)
+
+    def test_realtime_hub_does_not_cap_by_default(self) -> None:
+        """订阅默认**不截断**：用户要求与乐鱼进行中数量一致。"""
+        from collector.leyu_realtime import RealtimeHub
+
+        h = RealtimeHub(session_provider=None,
+                        mids_provider=lambda: [str(i) for i in range(120)])
+        self.assertEqual(h.max_matches, 0)
+        self.assertEqual(len(h._pick_mids()), 120)
+
+    def test_realtime_hub_cap_when_explicit(self) -> None:
+        from collector.leyu_realtime import RealtimeHub
+
+        h = RealtimeHub(session_provider=None,
+                        mids_provider=lambda: [str(i) for i in range(120)],
+                        max_matches=10)
+        self.assertEqual(len(h._pick_mids()), 10)
+
+    def test_subscription_source_filters_soccer(self) -> None:
+        """订阅源必须只取足球：乐鱼同网关也返回篮球/网球。
+
+        该过滤在 `api.app._start_background` 的 `_mids()` 里（它是
+        注入给 RealtimeHub 的 mids_provider）。
+        """
+        import inspect
+
+        import api.app as app_mod
+        src = inspect.getsource(app_mod._start_background)
+        self.assertIn("SOCCER_SPORT_ID", src)
+        self.assertIn("is_live", src)

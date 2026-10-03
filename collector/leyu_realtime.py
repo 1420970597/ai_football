@@ -85,6 +85,14 @@ TREND_DIR_MAX_MB = 256.0
 MAX_EVENTS_PER_MATCH = 120
 
 
+def _to_int(value: object, default: int = 0) -> int:
+    """容错整数转换（配置可能来自环境变量的字符串）。"""
+    try:
+        return int(str(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def decode_push_payload(cd: Any) -> Any:
     """解码推送载荷：`base64(gzip(JSON))` 直通明文。
 
@@ -517,7 +525,7 @@ class RealtimeHub:
         session_provider: Any,
         mids_provider: Optional[Callable[[], Sequence[str]]] = None,
         subscribe_interval_s: float = 45.0,
-        max_matches: int = 60,
+        max_matches: int = 0,
         trend_root: Optional[str] = None,
         resume: bool = True,
     ) -> None:
@@ -526,7 +534,9 @@ class RealtimeHub:
             session_provider: 提供 `Session`（含 request_id / host / origin）。
             mids_provider: 返回要订阅的赛事 ID 列表；定期刷新。
             subscribe_interval_s: 重新计算订阅列表的间隔。
-            max_matches: 单次订阅上限（订阅过多会被上游限制）。
+            max_matches: 订阅上限；**0 表示不限制**（覆盖全部进行中）。
+                不要再写固定数字：用户要求展示与乐鱼接口的进行中数量一致，
+                写死 60 在赛程密集时会静默丢掉赛事。
             trend_root: 走势落盘目录；给出则启用持久化（推荐）。
                 为空时仅存内存，容器重启即丢。
             resume: 启动时从落盘文件回填走势（重启不丢历史）。
@@ -805,7 +815,9 @@ class RealtimeHub:
         # 已结束的不再订阅
         with self._lock:
             mids = [m for m in mids if m not in self._finished]
-        return mids[: self.max_matches]
+        # max_matches <= 0 表示不截断（全部订阅）
+        cap = _to_int(self.max_matches)
+        return mids[:cap] if cap > 0 else mids
 
     def _run(self) -> None:
         """推送主循环：连接 → 订阅 → 消费 → 断线重连。"""

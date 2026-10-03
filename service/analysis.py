@@ -96,10 +96,11 @@ def _to_int(value: object, default: int = 0) -> int:
 DEFAULT_CYCLE_INTERVAL_S = 600.0
 
 #: 每轮决策的赛事数上限。
-#: 实测量级：**进行中足球约 50 场**（2026-10-03 实测 51 场），
-#: 而原上限 12 远小于实际需求 → 用户看到的决策列表严重不完整。
-#: 现设为 60，足以覆盖全部进行中赛事（实测 ~50 场）+ 少量即将开赛。
-DEFAULT_CYCLE_LIMIT = 60
+#: **0 表示不限制** —— 应覆盖全部进行中赛事。
+#: 用户要求：展示应与乐鱼接口的进行中数量一致（实测足球 ~50 场，
+#: 但不同时段会波动，写死 60 早晚会不够）。
+#: 真正的约束是 LLM 耗时，而不是一个人为的场次上限。
+DEFAULT_CYCLE_LIMIT = 0
 
 @dataclass(frozen=True)
 class AnalysisConfig:
@@ -228,7 +229,7 @@ class AnalysisService:
             if self._cycle_stop.wait(interval):
                 return
 
-    def refresh_live_matches(self, max_matches: int = 120,
+    def refresh_live_matches(self, max_matches: int = 0,
                              progress: Optional[Any] = None) -> Dict[str, Any]:
         """把**真实进行中**的赛事盘口拉取并落库。
 
@@ -250,7 +251,9 @@ class AnalysisService:
         if not live_ids:
             return {"requested": 0, "stored": 0, "snapshots": 0,
                     "skipped": "无进行中赛事或赛程不可用"}
-        mids = sorted(live_ids)[: max(1, int(max_matches))]
+        mids = sorted(live_ids)
+        if max_matches > 0:
+            mids = mids[:max_matches]
         try:
             matches = self.valuation.source.odds(mids, progress=progress)
         except Exception as exc:  # noqa: BLE001 - 刷新失败不应中断决策（用旧快照也能算）
@@ -538,8 +541,17 @@ class AnalysisService:
             return (0 if m.get("_is_live") else 1,
                     str(m.get("date") or ""), str(m.get("match_id")))
         out.sort(key=sort_key)
-        cap = limit if limit is not None else self.config.max_analyze
-        return out[: max(0, _to_int(cap))]
+        # limit 语义：
+        #   None  → 用配置的 cycle_limit（0 也不限制）
+        #   0     → **不限制**（覆盖全部进行中）
+        #   >0    → 截断到该数
+        # 早期实现直接 out[:cap]，于是 cap=0 会返回**空列表**，
+        # 而 0 本该表示“不限”——这是个很容易踩的语义陷阱。
+        cap = limit if limit is not None else self.config.cycle_limit
+        cap = _to_int(cap)
+        if cap <= 0:
+            return out
+        return out[:cap]
 
     # -- 决策 ---------------------------------------------------------------
 

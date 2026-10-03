@@ -763,7 +763,7 @@ def _start_background(
     """
     try:
         from collector.leyu_realtime import RealtimeHub
-        from collector.sources import SnapshotSource
+        from collector.sources import SOCCER_SPORT_ID, SnapshotSource
         from service.analysis import build_analysis_service
 
         # 显式注解：schedule() 是 SnapshotSource 基类的可选能力，
@@ -774,17 +774,29 @@ def _start_background(
             print("提示：当前数据源不支持会话，跳过实时推送")
             return None
 
-        max_matches = _env_int("REALTIME_MAX_MATCHES", 60, minimum=1)
+        # 订阅上限：**默认不截断**（覆盖全部进行中足球）。
+        # 用户要求：展示应与乐鱼接口的进行中数量一致，
+        # 因此这里不再用固定 60，而是留一个宽松安全阀。
+        max_matches = _env_int("REALTIME_MAX_MATCHES", 0, minimum=0)
 
         def _mids() -> List[str]:
-            """订阅源：优先进行中的赛事（实时价值最高）。"""
+            """订阅源：全部**进行中的足球**赛事（与乐鱼接口一致）。
+
+            注意两个过滤条件：
+            * `m.is_live` —— 只订阅真实进行中（`ms==1`）
+            * `sport_id == 1` —— 只订阅足球（本项目为足球系统；
+              乐鱼同网关还返回篮球/网球等，占额度且无法映射盘口）
+            """
             try:
                 schedule = source.schedule()
             except Exception as exc:  # noqa: BLE001 - 订阅源失败不终止推送
                 print("警告：获取订阅列表失败：%s" % exc)
                 return []
-            live = [m.mid for m in schedule if m.is_live]
-            return live[:max_matches]
+            live = [m.mid for m in schedule
+                    if m.is_live and m.sport_id == SOCCER_SPORT_ID]
+            if max_matches > 0:
+                live = live[:max_matches]
+            return live
 
         # 走势落盘目录：放在快照根下的 _trends/，随 output 卷一起持久化。
         # 这样经济学算法与 LLM 能读到历史走势，容器重启也不丢。
@@ -805,7 +817,8 @@ def _start_background(
         ana.config = replace(ana.config, result_path=ana.config.result_path
                              or result_path)
         app._analysis = ana
-        print("实时推送已启动（最多 %d 场）" % max_matches)
+        print("实时推送已启动（订阅全部进行中足球%s）"
+              % ("，上限 %d 场" % max_matches if max_matches > 0 else ""))
 
         # **后台定时决策**（核心）：不依赖页面刷新。
         # 页面只读 latest_result()，打开即出结果，不转圈。

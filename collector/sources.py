@@ -85,6 +85,12 @@ SOURCE_TICAI = "ticai"
 #: 本项目是足球估值系统；同一网关还返回篮球/网球/乒乓球等，必须默认过滤。
 SOCCER_SPORT_ID = "1"
 
+#: 非全量拉取时的默认上限（安全阀：避免误拉两千多场）。
+#: 需要全部赛事时必须显式 `full=True`。
+#: 注意：**进行中赛事的订阅/决策不走这个上限** —— 它们应当覆盖全部
+#: （见 `LeYuSource.live_match_ids` 与 `RealtimeHub`）。
+DEFAULT_PARTIAL_MAX = 200
+
 KNOWN_SOURCES: Tuple[str, ...] = (SOURCE_LEYU, SOURCE_TICAI)
 
 #: 别名 → 规范名（兼容中文标识与历史写法）
@@ -448,9 +454,11 @@ class LEYUSource(SnapshotSource):
             matches = self.odds([], replay=True)
         else:
             schedule = self.schedule()
-            # full=True 时不做截断；显式给了 max_matches 则仍以其为准
+            # full=True 时不做截断；显式给了 max_matches 则仍以其为准。
+            # 默认（full=False）也只对**非全量拉取**设一个安全上限，
+            # 避免误把两千多场全拉一遍。需要全部时传 full=True。
             effective_max = max_matches if max_matches is not None else (
-                None if full else 60)
+                None if full else DEFAULT_PARTIAL_MAX)
             targets = self._select_mids(schedule, mids, effective_max, want_sport)
             matches = self.odds(targets, progress=progress)
             missing = set(targets) - {m.mid for m in matches}
