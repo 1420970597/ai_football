@@ -42,7 +42,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from collector.leyu_normalizer import snapshots_from_match
 from collector.leyu_realtime import RealtimeHub
+from collector.sources import SOCCER_SPORT_ID
 from core.models import OddsSnapshot
 
 from .decision import (
@@ -226,10 +228,56 @@ class AnalysisService:
             if self._cycle_stop.wait(interval):
                 return
 
+    def refresh_live_matches(self, max_matches: int = 120,
+                             progress: Optional[Any] = None) -> Dict[str, Any]:
+        """把**真实进行中**的赛事盘口拉取并落库。
+
+        为何必须做：快照库是历史全量采集的产物，而**进行中赛事集合一直在变**。
+        实测：乐鱼真实进行中足球 48 场，快照库里只有 9 场 ——
+        其余 39 场根本没快照（它们当时还没开赛），因此决策只能覆盖 9 场。
+
+        本方法每轮决策前调用：先拉这些赛事的盘口 → 归一化落库，
+        决策就能覆盖全部进行中赛事。
+
+        Args:
+            max_matches: 单次刷新上限（防一次性打爆上游）。
+            progress: 可选进度回调。
+
+        Returns:
+            统计字典（\u5305\u542b requested/stored/snapshots/issues）。
+        """
+        live_ids = self.live_match_ids()
+        if not live_ids:
+            return {"requested": 0, "stored": 0, "snapshots": 0,
+                    "skipped": "无进行中赛事或赛程不可用"}
+        mids = sorted(live_ids)[: max(1, int(max_matches))]
+        try:
+            matches = self.valuation.source.odds(mids, progress=progress)
+        except Exception as exc:  # noqa: BLE001 - 刷新失败不应中断决策（用旧快照也能算）
+            return {"requested": len(mids), "stored": 0, "snapshots": 0,
+                    "error": "%s: %s" % (type(exc).__name__, exc)}
+        snaps: List[Any] = []
+        issues: List[str] = []
+        for mt in matches:
+            snaps.extend(snapshots_from_match(
+                mt, source=self.valuation.source.display_source, issues=issues))
+        written = self.valuation.store.append_many(snaps)
+        # 立即失效快照缓存，否则本轮决策仍读不到新数据
+        try:
+            self.valuation.invalidate_cache()
+        except AttributeError:
+            pass
+        return {"requested": len(mids), "returned": len(matches),
+                "stored": len(written), "snapshots": len(snaps),
+                "issues": len(issues)}
+
     def _run_cycle_once(self) -> None:
         """执行一轮决策并缓存结果。异常只记录，不让循环退出。"""
         self.cycle_stats["last_started"] = time.time()
         try:
+            # 先刷新进行中赛事的盘口（否则新开赛的赛事无快照可算）
+            if self.config.cycle_live_only:
+                self.cycle_stats["refresh"] = self.refresh_live_matches()
             res = self.decide_list(
                 limit=self.config.cycle_limit,
                 only_live=self.config.cycle_live_only,
@@ -418,6 +466,38 @@ class AnalysisService:
             ctx["status_text"] = "已结束"
         return ctx
 
+    def live_match_ids(self) -> Optional[set]:
+        """从数据源赛程取**真实进行中**的赛事 ID 集合（`ms == 1`）。
+
+        为何不能直接用 `list_matches()` 的 `state`：
+        那个 `state` 是**快照时效**派生的（active/stale/delisted），
+        与比赛真实是否进行中无关。实测：乐鱼真实进行中足球 44 场，
+        用快照 state 筛选只能命中 2 场，**漏掉 42 场**。
+
+        Returns:
+            真实进行中的 mid 集合；无法获取赛程时返回 None
+            （调用方应回退到旧行为）。
+        """
+        source = getattr(self.valuation, "source", None)
+        if source is None or not hasattr(source, "schedule"):
+            return None
+        # 缓存一段很短时间：候选选取在一轮里可能被调多次
+        now = time.time()
+        cached = getattr(self, "_live_cache", None)
+        if cached is not None and now - cached[0] < 30.0:
+            return cached[1]
+        try:
+            schedule = source.schedule()
+        except Exception:  # noqa: BLE001 - 取不到就用回退策略，不中断决策
+            return None
+        # 只取**足球**（本项目是足球估值系统）：
+        # 乐鱼同一个网关也返回篮球/网球/排球等，不过滤会带入大量
+        # 无法映射的盘口（实测 60 场里 124 条映射告警全来自非足球）。
+        live = {m.mid for m in schedule
+                if m.is_live and m.sport_id == SOCCER_SPORT_ID}
+        self._live_cache = (now, live)
+        return live
+
     def candidates(
         self,
         limit: Optional[int] = None,
@@ -426,28 +506,37 @@ class AnalysisService:
     ) -> List[Dict[str, Any]]:
         """选取待分析的候选赛事。
 
-        优先「进行中」，其次未开赛；已结束的不分析（无决策价值）。
+        优先「真实进行中」（来自数据源赛程的 ms==1），其次未开赛；
+        已结束的不分析（无决策价值）。
+
+        ⚠️ 不能用快照的 `state` 判断是否进行中：那个字段是**快照时效**
+        派生的，实测会漏掉 42/44 场真实进行中的赛事。
         """
         matches = self.valuation.list_matches(league=league)
+        live_ids = self.live_match_ids()
         out: List[Dict[str, Any]] = []
         for m in matches:
             st = str(m.get("state") or "")
             if st == "delisted":
                 continue
-            if only_live and st != "active":
+            mid = str(m.get("match_id") or "")
+            # 真实进行中：优先用赛程数据；取不到时退回快照 state
+            is_live = (mid in live_ids) if live_ids is not None \
+                else (st == "active")
+            if only_live and not is_live:
                 continue
             mkt = self._market_for(m)
             if mkt is None:
                 continue
             m = dict(m)
             m["_market"] = mkt
+            m["_is_live"] = is_live
             out.append(m)
 
-        # 进行中优先（实时价值最高），其余按赔率变动/时间
-        live_mids = set(self.realtime.subscribed()) if self.realtime else set()
+        # 进行中优先（实时价值最高），其余按时间
         def sort_key(m: Mapping[str, Any]) -> Tuple[int, str, str]:
-            is_live = 0 if str(m.get("match_id")) in live_mids else 1
-            return (is_live, str(m.get("date") or ""), str(m.get("match_id")))
+            return (0 if m.get("_is_live") else 1,
+                    str(m.get("date") or ""), str(m.get("match_id")))
         out.sort(key=sort_key)
         cap = limit if limit is not None else self.config.max_analyze
         return out[: max(0, _to_int(cap))]
