@@ -34,6 +34,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import threading
@@ -72,6 +73,19 @@ DEFAULT_CACHE_TTL_S = 120.0
 DEFAULT_MAX_ANALYZE = 12
 
 #: 无 LLM 时仍可分析，但决策只会是 no_llm（诚实降级）
+
+
+def _to_float(value: object, default: float = 0.0) -> float:
+    """容错浮点转换。
+
+    `AnalysisConfig` 是公开 dataclass，调用方可能（经环境变量/JSON）
+    传入字符串；`float()` 抛错会让定时循环线程直接挂掉。
+    """
+    try:
+        out = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return out if math.isfinite(out) else default
 
 
 def _to_int(value: object, default: int = 0) -> int:
@@ -222,7 +236,7 @@ class AnalysisService:
 
     def _cycle_loop(self) -> None:
         """定时跑决策。首轮立即执行（不等一个间隔），让系统尽快有数据。"""
-        interval = max(10.0, float(self.config.cycle_interval_s))
+        interval = max(10.0, _to_float(self.config.cycle_interval_s, 600.0))
         while not self._cycle_stop.is_set():
             self._run_cycle_once()
             self.cycle_stats["next_at"] = time.time() + interval
@@ -370,7 +384,7 @@ class AnalysisService:
         为什么需要：LLM 决策耗时数十秒，同步 HTTP 会 504。
         前端拿 job_id 后轮询 `/decisions/job/<id>` 看进度。
         """
-        job_id = "job-%d-%04x" % (int(time.time()), random.getrandbits(16))
+        job_id = "job-%d-%04x" % (_to_int(time.time()), random.getrandbits(16))
         with self._jobs_lock:
             self._jobs[job_id] = {
                 "id": job_id, "state": "running", "started_at": time.time(),
