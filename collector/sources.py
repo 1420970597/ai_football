@@ -338,6 +338,10 @@ class LEYUSource(SnapshotSource):
                 request_id=sess.request_id,
                 cuid=self.cuid_override or sess.cuid or None,
                 timeout=self.timeout,
+                # 会话里携带的 Cookie 必须透传给客户端。
+                # 早期版本 Session 存了 cookie 却没传出，
+                # 导致注入的 cookie 完全不起作用（存了不发等于没存）。
+                cookie=sess.cookie or "",
             )
         return self._client
 

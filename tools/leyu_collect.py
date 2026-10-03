@@ -199,6 +199,10 @@ def _build_client(args: argparse.Namespace) -> LEYUClient:
         origin=args.origin,
         request_id=args.request_id,
         timeout=args.timeout,
+        # Cookie 从参数或环境变量（LEYU_COOKIE）取。
+        # 实测服务端会下发 nginx 粘性会话 `route`；带上它可保持路由一致。
+        cookie=(getattr(args, "cookie", None)
+                or os.environ.get("LEYU_COOKIE", "")),
     )
 
 
@@ -277,6 +281,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         p.add_argument("--host", default=DEFAULT_HOST, help="网关（prod.json 解密后可得）")
         p.add_argument("--origin", default=DEFAULT_ORIGIN)
         p.add_argument("--request-id", default=None, help="32 位 hex，默认随机")
+        p.add_argument("--cookie", default=None,
+                       help="Cookie 串（如 X-API-TOKEN=...; route=...）；"
+                            "默认读环境变量 LEYU_COOKIE")
         p.add_argument("--timeout", type=float, default=15.0)
         p.add_argument("--json", help="结果落盘为 JSON")
         p.add_argument("--replay", nargs="?", const=DEFAULT_SAZ, default=None,

@@ -859,6 +859,17 @@ def _score_raw(value: object) -> str:
     return ""
 
 
+def _cookie_dict(cookie: str) -> Dict[str, str]:
+    """把 Cookie 串解析为 `name → value` 字典（容忍脏数据）。"""
+    out: Dict[str, str] = {}
+    for part in str(cookie or "").split(";"):
+        name, _, value = part.partition("=")
+        name = name.strip()
+        if name:
+            out[name] = value.strip()
+    return out
+
+
 def _now_ms() -> int:
     """当前毫秒时间戳；取时钟失败时回退 0，绝不因时钟异常中断采集。"""
     try:
@@ -951,7 +962,17 @@ class LEYUClient:
         timeout: float = 15.0,
         user_agent: str = DEFAULT_USER_AGENT,
         retries: int = 2,
+        cookie: str = "",
     ) -> None:
+        """构造客户端。
+
+        Args:
+            cookie: 可选 Cookie 串（如 `X-API-TOKEN=...; route=...`）。
+                业务 API 主要靠 `requestId`，但会话串里的 Cookie 可能
+                参与鉴权/路由（如 nginx 粘性会话 `route=`）。
+                早期版本实现了 cookie 的**存储**却没在请求里**发送**，
+                导致注入的 cookie 完全不起作用。
+        """
         self.host = host.rstrip("/")
         self.origin = origin
         self.request_id = request_id or os.urandom(16).hex()
@@ -961,6 +982,35 @@ class LEYUClient:
         self.timeout = timeout
         self.user_agent = user_agent
         self.retries = max(1, retries)
+        self.cookie = (cookie or "").strip()
+
+    # -- Cookie 维护 -------------------------------------------------------
+
+    def _absorb_cookies(self, headers: Any) -> None:
+        """把响应 `Set-Cookie` 合并进 `self.cookie`（同名覆盖）。
+
+        为何需要：实测服务端会下发 nginx 粘性会话 `route=...`；
+        不保存就会在后续请求中丢失，可能被路由到不同后端节点。
+        """
+        try:
+            raw = headers.get_all("Set-Cookie") or []
+        except AttributeError:
+            raw = []
+        if not raw:
+            return
+        # 先解析现有 cookie，再把新下发的合并进去（同名覆盖）
+        jar = _cookie_dict(self.cookie)
+        for item in raw:
+            name, _, rest = str(item).partition("=")
+            name = name.strip()
+            if not name:
+                continue
+            value = rest.split(";", 1)[0].strip()
+            if value:
+                jar[name] = value
+            else:
+                jar.pop(name, None)
+        self.cookie = "; ".join("%s=%s" % (k, v) for k, v in jar.items())
 
     # -- 内部 ---------------------------------------------------------------
 
@@ -981,6 +1031,9 @@ class LEYUClient:
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Dest": "empty",
         }
+        # Cookie 必须真的发出去（存了不发等于没存）
+        if self.cookie:
+            headers["Cookie"] = self.cookie
         if json_body:
             headers["Content-Type"] = "application/json"
         return headers
@@ -1011,6 +1064,10 @@ class LEYUClient:
                     raw = resp.read()
                     if resp.headers.get("Content-Encoding") == "gzip":
                         raw = gzip.decompress(raw)
+                    # 捕获服务端下发的 Cookie（实测有 nginx 粘性会话 `route`）。
+                    # 早期实现完全不读 Set-Cookie，导致会话/路由信息丢失，
+                    # 下一个请求可能落到不同后端节点。
+                    self._absorb_cookies(resp.headers)
                 payload = json.loads(raw.decode("utf-8", "replace"))
                 return decode_envelope(payload)
             except RateLimitError as exc:

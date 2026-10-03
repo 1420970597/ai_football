@@ -583,3 +583,76 @@ class TestLiveFieldsRegression(unittest.TestCase):
         blob = {"data": [{"mid": "1", "ms": 0, "mmp": "", "mst": ""}]}
         (m,) = parse_odds_block(blob)
         self.assertEqual(m.clock, "-")
+
+
+class TestCookieHandling(unittest.TestCase):
+    """Cookie 必须真的发出去，且要吸收服务端下发的 Set-Cookie。
+
+    真实缺陷：早期 `Session.cookie` 存了却没传给客户端、请求头也不发，
+    等于"存了不发"；同时完全不读 `Set-Cookie`，抓包里的 nginx 粘性会话
+    `route=` cookie 被直接丢弃。
+    """
+
+    def test_cookie_is_sent_when_provided(self) -> None:
+        c = LEYUClient(host="https://x.test", cookie="X-API-TOKEN=abc; route=x")
+        h = c._headers(False)
+        self.assertIn("Cookie", h)
+        self.assertEqual(h["Cookie"], "X-API-TOKEN=abc; route=x")
+
+    def test_no_cookie_header_when_empty(self) -> None:
+        c = LEYUClient(host="https://x.test")
+        self.assertNotIn("Cookie", c._headers(False))
+
+    def test_cookie_whitespace_trimmed(self) -> None:
+        c = LEYUClient(host="https://x.test", cookie="  a=1  ")
+        self.assertEqual(c.cookie, "a=1")
+
+    def test_absorbs_set_cookie(self) -> None:
+        class H:
+            @staticmethod
+            def get_all(name):
+                return ["route=1790785717.312.28718; Path=/yewu11/; HttpOnly"]
+
+        c = LEYUClient(host="https://x.test")
+        c._absorb_cookies(H())
+        self.assertIn("route=1790785717.312.28718", c.cookie)
+
+    def test_set_cookie_overrides_same_name(self) -> None:
+        class H:
+            @staticmethod
+            def get_all(name):
+                return ["route=NEW; Path=/"]
+
+        c = LEYUClient(host="https://x.test", cookie="route=OLD")
+        c._absorb_cookies(H())
+        self.assertIn("route=NEW", c.cookie)
+        self.assertNotIn("route=OLD", c.cookie)
+
+    def test_set_cookie_without_value_removes(self) -> None:
+        class H:
+            @staticmethod
+            def get_all(name):
+                return ["route=; Path=/; Max-Age=0"]
+
+        c = LEYUClient(host="https://x.test", cookie="route=OLD; keep=1")
+        c._absorb_cookies(H())
+        self.assertNotIn("route", c.cookie)
+        self.assertIn("keep=1", c.cookie)
+
+    def test_absent_get_all_is_tolerated(self) -> None:
+        class H:  # 没有 get_all 的假 headers
+            pass
+
+        c = LEYUClient(host="https://x.test", cookie="a=1")
+        c._absorb_cookies(H())  # 不应抛异常
+        self.assertEqual(c.cookie, "a=1")
+
+    def test_empty_set_cookie_list_noop(self) -> None:
+        class H:
+            @staticmethod
+            def get_all(name):
+                return []
+
+        c = LEYUClient(host="https://x.test", cookie="a=1")
+        c._absorb_cookies(H())
+        self.assertEqual(c.cookie, "a=1")
