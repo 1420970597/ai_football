@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, List, Mapping, Optional
 
-from collector.leyu_client import AuthError, DecodeError, LeYuMatch
+from collector.leyu_client import AuthError, DecodeError, LEYUMatch
 from collector.session import (
     DEFAULT_SESSION_TTL_S,
     ChainSessionProvider,
@@ -41,7 +41,7 @@ from collector.session import (
     SESSION_ENV_REQUEST_ID,
     make_session_provider,
 )
-from collector.sources import LeYuSource
+from collector.sources import LEYUSource
 
 
 # --------------------------------------------------------------------------- #
@@ -356,8 +356,8 @@ class _RotatingProvider(SessionProvider):
 class TestAutoRefresh(unittest.TestCase):
     """`_call_with_refresh` 的行为：只在鉴权失败时续期。"""
 
-    def _source(self, provider: SessionProvider) -> LeYuSource:
-        return LeYuSource(host="https://api.example", session_provider=provider,
+    def _source(self, provider: SessionProvider) -> LEYUSource:
+        return LEYUSource(host="https://api.example", session_provider=provider,
                           replay=None, timeout=1.0)
 
     def test_auth_error_triggers_refresh_and_retry(self) -> None:
@@ -451,7 +451,7 @@ class TestAutoRefresh(unittest.TestCase):
         self.assertNotIn("session-1", json.dumps(d))
 
     def test_missing_session_surfaces_actionable_error(self) -> None:
-        src = LeYuSource(host="https://api.example",
+        src = LEYUSource(host="https://api.example",
                          session_provider=NullSessionProvider("测试"))
         with self.assertRaises(SessionError):
             src.schedule()

@@ -31,7 +31,7 @@ graph TD
     end
 
     subgraph L1["L1 collector（本项目新增，零第三方依赖）"]
-        CLI["LeYuClient"]
+        CLI["LEYUClient"]
         ENV["decode_envelope()<br/>base64 → gzip → JSON"]
         PM["parse_match_list()"]
         PO["parse_odds_block()"]
@@ -41,7 +41,7 @@ graph TD
     end
 
     subgraph L2["L2 领域模型"]
-        LM["LeYuMatch<br/>mid/home/away/mgt/ms"]
+        LM["LEYUMatch<br/>mid/home/away/mgt/ms"]
         MQ["MarketQuote<br/>chpid/hv/quotes"]
         OQ["OddsQuote<br/>decimal = ov / 100000"]
         LM --> MQ --> OQ
@@ -66,7 +66,7 @@ graph TD
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as LeYuClient
+    participant C as LEYUClient
     participant OSS as OSS (prod.json)
     participant API as api.<domain>/yewu11
     participant WS as api.<domain>/yewuws2
@@ -77,7 +77,7 @@ sequenceDiagram
     C->>API: GET /v2/m/getOriginalDataPB?t=<ms>
     Note over C,API: 一次返回 1868 场 / 333 联赛 / 11 运动
     API-->>C: {code:"0000000", data:"<base64(gzip(JSON))>"}
-    C->>C: parse_match_list() → List[LeYuMatch]
+    C->>C: parse_match_list() → List[LEYUMatch]
 
     loop 每批 12~20 场
         C->>API: POST /v1/w/structureMatchBaseInfoByMidsPB?t=<ms>

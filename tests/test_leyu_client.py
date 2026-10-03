@@ -31,7 +31,7 @@ from collector.leyu_client import (
     API_PREFIX_JOB,
     API_PREFIX_WS,
     DecodeError,
-    LeYuClient,
+    LEYUClient,
     OSS_AES_KEY,
     TransportError,
     _aes_ecb_decrypt_pure,
@@ -381,7 +381,7 @@ class TestClientWiring(unittest.TestCase):
     """URL / Header 构造，不发网络请求。"""
 
     def test_urls_and_headers_contain_required_fields(self) -> None:
-        c = LeYuClient(host="https://example.test", request_id="r" * 32)
+        c = LEYUClient(host="https://example.test", request_id="r" * 32)
         self.assertEqual(c.ws_url(), "wss://example.test/%s/push?requestId=%s"
                          % (API_PREFIX_WS, "r" * 32))
         h = c._headers(json_body=True)
@@ -391,11 +391,11 @@ class TestClientWiring(unittest.TestCase):
         self.assertTrue(h["checkId"].startswith("pc-"))
 
     def test_ws_url_uses_ws_scheme_for_http_host(self) -> None:
-        c = LeYuClient(host="http://plain.test", request_id="z" * 32)
+        c = LEYUClient(host="http://plain.test", request_id="z" * 32)
         self.assertTrue(c.ws_url().startswith("ws://plain.test/"))
 
     def test_iter_odds_batches_chunks(self) -> None:
-        c = LeYuClient(host="https://example.test")
+        c = LEYUClient(host="https://example.test")
         seen: List[List[str]] = []
 
         def fake(mids: List[str]) -> List[Any]:
@@ -407,12 +407,12 @@ class TestClientWiring(unittest.TestCase):
         self.assertEqual(seen, [["1", "2"], ["3", "4"], ["5"]])
 
     def test_matches_by_mids_empty_short_circuits(self) -> None:
-        c = LeYuClient(host="https://example.test")
+        c = LEYUClient(host="https://example.test")
         self.assertEqual(c.matches_by_mids([]), [])
 
     def test_transport_error_on_unreachable_host(self) -> None:
         """真实走一遍 HTTP 错误路径（本地保留端口必定拒绝连接）。"""
-        c = LeYuClient(host="http://127.0.0.1:9", timeout=1.0, retries=1)
+        c = LEYUClient(host="http://127.0.0.1:9", timeout=1.0, retries=1)
         with self.assertRaises(TransportError):
             c.server_time_ms()
 

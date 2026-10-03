@@ -324,8 +324,8 @@ class TestOnlineReality(unittest.TestCase):
         self.assertTrue(s.host.startswith("http"))
 
     def test_source_fetches_real_odds(self) -> None:
-        from collector.sources import LeYuSource
-        src = LeYuSource(session_provider=AppSessionProvider(self.bs))
+        from collector.sources import LEYUSource
+        src = LEYUSource(session_provider=AppSessionProvider(self.bs))
         snaps, issues = src.fetch(max_matches=5)
         self.assertEqual(issues, [])
         self.assertGreater(len(snaps), 0)

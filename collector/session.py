@@ -50,7 +50,7 @@ function persist(tok) {
 SessionProvider.acquire()  ──> Session(request_id, cuid, ...)
         ↑                              │
         │ 失效时重新 acquire            ↓
-   （来自运维注入：环境变量 / 文件 / 登录命令）      LeYuClient 发起请求
+   （来自运维注入：环境变量 / 文件 / 登录命令）      LEYUClient 发起请求
 ```
 
 会话**必须由运维提供**，来源有三条（按优先级）：

@@ -11,9 +11,9 @@
 
     SnapshotSource（协议）
       ├── TicaiFileSource   体彩官方 API 落盘 JSON（场次*.json）
-      └── LeYuSource        乐鱼 API（在线 HTTP / saz 离线回放）
+      └── LEYUSource        乐鱼 API（在线 HTTP / saz 离线回放）
 
-`LeYuSource` 内部复用 `LeYuClient`（HTTP）与 `leyu_ws`（实时推送），
+`LEYUSource` 内部复用 `LEYUClient`（HTTP）与 `leyu_ws`（实时推送），
 **不在本层发起任何浏览器操作**。
 
 乐鱼源是**两阶段**的（协议限制，见 docs/architecture/leyu-api-protocol.md）：
@@ -41,8 +41,8 @@ from .leyu_client import (
     DEFAULT_HOST,
     DEFAULT_ORIGIN,
     AuthError,
-    LeYuClient,
-    LeYuMatch,
+    LEYUClient,
+    LEYUMatch,
     decode_envelope,
     parse_match_list,
     parse_odds_block,
@@ -72,7 +72,7 @@ __all__ = [
     "SourceError",
     "SnapshotSource",
     "TicaiFileSource",
-    "LeYuSource",
+    "LEYUSource",
     "resolve_source_name",
     "make_source",
 ]
@@ -162,7 +162,7 @@ class SnapshotSource(ABC):
     def schedule(self) -> List[Any]:
         """列出当前赛程（**可选能力**）。
 
-        返回 `LeYuMatch` 列表；不支持赛程列举的数据源（如本地文件源）
+        返回 `LEYUMatch` 列表；不支持赛程列举的数据源（如本地文件源）
         返回空列表。后台实时推送依赖它来选取订阅目标，因此必须在基类
         声明，而不是调用处用 `getattr` 绕过类型检查。
         """
@@ -256,7 +256,7 @@ def _saz_response_body(path: str, sid: int) -> str:
     return text[idx + 4:]
 
 
-class LeYuSource(SnapshotSource):
+class LEYUSource(SnapshotSource):
     """乐鱼源：在线（HTTP）或离线（saz 回放）产出快照。
 
     Args:
@@ -294,7 +294,7 @@ class LeYuSource(SnapshotSource):
         self.replay_sids = replay_sids or self.DEFAULT_REPLAY_SIDS
         self.batch_size = max(1, _to_int(batch_size, 20))
         self.timeout = timeout
-        self._client: Optional[LeYuClient] = None
+        self._client: Optional[LEYUClient] = None
         # 进度回调出错时的记录（供排障，不影响采集）
         self.last_progress_error = ""
         # 会话管理：显式传入优先；否则按「命令 → 文件 → 环境变量」构造
@@ -330,10 +330,10 @@ class LeYuSource(SnapshotSource):
     # -- 内部 ---------------------------------------------------------------
 
     @property
-    def client(self) -> LeYuClient:
+    def client(self) -> LEYUClient:
         if self._client is None:
             sess = self.session
-            self._client = LeYuClient(
+            self._client = LEYUClient(
                 host=self.host, origin=self.origin,
                 request_id=sess.request_id,
                 cuid=self.cuid_override or sess.cuid or None,
@@ -371,7 +371,7 @@ class LeYuSource(SnapshotSource):
         except (ValueError, KeyError) as exc:
             raise SourceError("会话 %03d 解析失败: %s" % (sid, exc)) from exc
 
-    def schedule(self, replay: bool = False) -> List[LeYuMatch]:
+    def schedule(self, replay: bool = False) -> List[LEYUMatch]:
         """阶段 1：全量赛程（不含赔率）。"""
         if replay or self.replay:
             return parse_match_list(self._replay_blob(self.replay_sids[0]))
@@ -380,7 +380,7 @@ class LeYuSource(SnapshotSource):
     def odds(
         self, mids: Sequence[str], replay: bool = False,
         progress: Optional[Any] = None,
-    ) -> List[LeYuMatch]:
+    ) -> List[LEYUMatch]:
         """阶段 2：按 mid 批量取完整盘口。
 
         注意：回放模式下 `mids` 被忽略（抓包里就是一个已拉好的批次）。
@@ -393,7 +393,7 @@ class LeYuSource(SnapshotSource):
             return parse_odds_block(self._replay_blob(self.replay_sids[1]))
         if not mids:
             return []
-        out: List[LeYuMatch] = []
+        out: List[LEYUMatch] = []
         total = len(mids)
         batches = list(self.client.iter_odds_batches(list(mids), self.batch_size))
         done = 0
@@ -466,7 +466,7 @@ class LeYuSource(SnapshotSource):
 
     @staticmethod
     def _select_mids(
-        schedule: Sequence[LeYuMatch],
+        schedule: Sequence[LEYUMatch],
         mids: Optional[Sequence[str]],
         max_matches: Optional[int],
         sport_id: str = SOCCER_SPORT_ID,
@@ -524,7 +524,7 @@ def make_source(
     """
     resolved = resolve_source_name(name)
     if resolved == SOURCE_LEYU:
-        return LeYuSource(
+        return LEYUSource(
             host=host, origin=origin, request_id=request_id,
             replay=saz_path, batch_size=batch_size,
         )

@@ -145,7 +145,7 @@ function clearFallback() {
     end
 
     subgraph L1["L1 collector（本项目新增，零第三方依赖）"]
-        CLI["LeYuClient"]
+        CLI["LEYUClient"]
         ENV["decode_envelope()&lt;br/&gt;base64 → gzip → JSON"]
         PM["parse_match_list()"]
         PO["parse_odds_block()"]
@@ -155,7 +155,7 @@ function clearFallback() {
     end
 
     subgraph L2["L2 领域模型"]
-        LM["LeYuMatch&lt;br/&gt;mid/home/away/mgt/ms"]
+        LM["LEYUMatch&lt;br/&gt;mid/home/away/mgt/ms"]
         MQ["MarketQuote&lt;br/&gt;chpid/hv/quotes"]
         OQ["OddsQuote&lt;br/&gt;decimal = ov / 100000"]
         LM --&gt; MQ --&gt; OQ
@@ -176,7 +176,7 @@ function clearFallback() {
 <h3>时序：一次完整的"全量赛事 + 实时盘口"</h3>
 <div class="mmd"><pre class="mermaid">sequenceDiagram
     autonumber
-    participant C as LeYuClient
+    participant C as LEYUClient
     participant OSS as OSS (prod.json)
     participant API as api.&lt;domain&gt;/yewu11
     participant WS as api.&lt;domain&gt;/yewuws2
@@ -187,7 +187,7 @@ function clearFallback() {
     C-&gt;&gt;API: GET /v2/m/getOriginalDataPB?t=&lt;ms&gt;
     Note over C,API: 一次返回 1868 场 / 333 联赛 / 11 运动
     API--&gt;&gt;C: {code:"0000000", data:"&lt;base64(gzip(JSON))&gt;"}
-    C-&gt;&gt;C: parse_match_list() → List[LeYuMatch]
+    C-&gt;&gt;C: parse_match_list() → List[LEYUMatch]
 
     loop 每批 12~20 场
         C-&gt;&gt;API: POST /v1/w/structureMatchBaseInfoByMidsPB?t=&lt;ms&gt;

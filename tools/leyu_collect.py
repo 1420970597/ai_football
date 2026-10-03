@@ -49,15 +49,15 @@ from collector.leyu_client import (  # noqa: E402
     DEFAULT_HOST,
     DEFAULT_ORIGIN,
     DecodeError,
-    LeYuClient,
-    LeYuMatch,
-    LeYuError,
+    LEYUClient,
+    LEYUMatch,
+    LEYUError,
     TransportError,
     decode_envelope,
     parse_match_list,
     parse_odds_block,
 )
-from collector.leyu_ws import LeYuFeed  # noqa: E402
+from collector.leyu_ws import LEYUFeed  # noqa: E402
 
 DEFAULT_SAZ = os.path.join(_ROOT, "leyu.saz")
 
@@ -83,17 +83,17 @@ def _saz_body(path: str, sid: int) -> str:
     return text[idx + 4:]
 
 
-def replay(path: str, kind: str, sid: Optional[int] = None) -> List[LeYuMatch]:
+def replay(path: str, kind: str, sid: Optional[int] = None) -> List[LEYUMatch]:
     """从 saz 回放一次采集（不发起任何网络请求）。"""
     use_sid = sid if sid is not None else REPLAY_SIDS[kind]
     if not os.path.exists(path):
-        raise LeYuError("抓包文件不存在: %s" % path)
+        raise LEYUError("抓包文件不存在: %s" % path)
     try:
         body = _saz_body(path, use_sid)
     except (zipfile.BadZipFile, KeyError, OSError) as exc:
-        raise LeYuError("读取会话 %03d 失败: %s" % (use_sid, exc)) from exc
+        raise LEYUError("读取会话 %03d 失败: %s" % (use_sid, exc)) from exc
     if not body:
-        raise LeYuError("会话 %03d 无响应体" % use_sid)
+        raise LEYUError("会话 %03d 无响应体" % use_sid)
     try:
         payload = json.loads(body)
     except json.JSONDecodeError as exc:
@@ -106,7 +106,7 @@ def replay(path: str, kind: str, sid: Optional[int] = None) -> List[LeYuMatch]:
 # 输出
 # --------------------------------------------------------------------------- #
 
-def _print_schedule(matches: Sequence[LeYuMatch]) -> None:
+def _print_schedule(matches: Sequence[LEYUMatch]) -> None:
     sports: Dict[str, int] = {}
     leagues: Dict[str, int] = {}
     states = {"未开赛": 0, "进行中": 0, "已结束": 0, "其它": 0}
@@ -137,7 +137,7 @@ def _print_schedule(matches: Sequence[LeYuMatch]) -> None:
         print("  … 另有 %d 场" % (len(live) - 15))
 
 
-def _print_odds(matches: Sequence[LeYuMatch]) -> None:
+def _print_odds(matches: Sequence[LEYUMatch]) -> None:
     with_odds = [m for m in matches if m.markets]
     print("赛事数: %d（其中有盘口 %d）" % (len(matches), len(with_odds)))
     for m in with_odds[:5]:
@@ -154,7 +154,7 @@ def _print_odds(matches: Sequence[LeYuMatch]) -> None:
         print("\n… 另有 %d 场（用 --json 落盘查看全部）" % (len(with_odds) - 5))
 
 
-def _dump(matches: Sequence[LeYuMatch], path: str) -> None:
+def _dump(matches: Sequence[LEYUMatch], path: str) -> None:
     rows: List[Dict[str, Any]] = []
     for m in matches:
         rows.append({
@@ -185,7 +185,7 @@ def _dump(matches: Sequence[LeYuMatch], path: str) -> None:
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(rows, fh, ensure_ascii=False, indent=1)
     except OSError as exc:
-        raise LeYuError("写出失败 %s: %s" % (path, exc)) from exc
+        raise LEYUError("写出失败 %s: %s" % (path, exc)) from exc
     print("已写出 %d 场 → %s" % (len(rows), path))
 
 
@@ -193,8 +193,8 @@ def _dump(matches: Sequence[LeYuMatch], path: str) -> None:
 # 主流程
 # --------------------------------------------------------------------------- #
 
-def _build_client(args: argparse.Namespace) -> LeYuClient:
-    return LeYuClient(
+def _build_client(args: argparse.Namespace) -> LEYUClient:
+    return LEYUClient(
         host=args.host,
         origin=args.origin,
         request_id=args.request_id,
@@ -246,7 +246,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     print("订阅 %d 场: %s" % (len(mids), ",".join(mids)))
     seen = 0
     deadline = time.monotonic() + args.seconds
-    feed = LeYuFeed(client.ws_url(), client.request_id, client.origin, timeout=args.timeout)
+    feed = LEYUFeed(client.ws_url(), client.request_id, client.origin, timeout=args.timeout)
     try:
         feed.connect()
         feed.subscribe_odds(mids, cufm=args.cufm)
@@ -260,7 +260,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
                      json.dumps(message, ensure_ascii=False)[:300]))
             if args.max_messages and seen >= args.max_messages:
                 break
-    except (LeYuError, OSError, KeyboardInterrupt) as exc:
+    except (LEYUError, OSError, KeyboardInterrupt) as exc:
         print("推送中断: %s" % exc, file=sys.stderr)
         return 1
     finally:
@@ -307,7 +307,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = ap.parse_args(argv)
     try:
         return int(args.func(args))
-    except (LeYuError, TransportError, DecodeError) as exc:
+    except (LEYUError, TransportError, DecodeError) as exc:
         print("采集失败: %s" % exc, file=sys.stderr)
         return 1
 

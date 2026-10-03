@@ -57,7 +57,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from core.markets import AH, HAD, MarketSpec, OU
 from core.models import OddsSnapshot, SnapshotState, utcnow
 
-from .leyu_client import LeYuMatch, MarketQuote, OddsQuote
+from .leyu_client import LEYUMatch, MarketQuote, OddsQuote
 
 __all__ = [
     "DEFAULT_SOURCE",
@@ -196,7 +196,7 @@ def _ordered_odds(
     return tuple(by_outcome[o] for o in spec.outcomes), []
 
 
-def _state_for(match: LeYuMatch, mq: MarketQuote, captured: datetime,
+def _state_for(match: LEYUMatch, mq: MarketQuote, captured: datetime,
                stale_after: float) -> SnapshotState:
     """推导快照状态（见模块文档的状态映射表）。"""
     if match.is_finished:
@@ -214,7 +214,7 @@ def _state_for(match: LeYuMatch, mq: MarketQuote, captured: datetime,
 # --------------------------------------------------------------------------- #
 
 def snapshots_from_market(
-    match: LeYuMatch,
+    match: LEYUMatch,
     mq: MarketQuote,
     captured: Optional[datetime] = None,
     stale_after: float = DEFAULT_STALE_AFTER,
@@ -283,7 +283,7 @@ def snapshots_from_market(
 
 
 def snapshots_from_match(
-    match: LeYuMatch,
+    match: LEYUMatch,
     captured: Optional[datetime] = None,
     stale_after: float = DEFAULT_STALE_AFTER,
     source: str = DEFAULT_SOURCE,
@@ -298,7 +298,7 @@ def snapshots_from_match(
 
 
 def normalize_leyu_matches(
-    matches: Iterable[LeYuMatch],
+    matches: Iterable[LEYUMatch],
     captured: Optional[datetime] = None,
     stale_after: float = DEFAULT_STALE_AFTER,
     source: str = DEFAULT_SOURCE,

@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .leyu_client import OV_SCALE
-from .leyu_ws import LeYuFeed
+from .leyu_ws import LEYUFeed
 
 __all__ = [
     "PriceTick",
@@ -829,7 +829,7 @@ class RealtimeHub:
             ws_url = "%s://%s/yewuws2/push?requestId=%s" % (
                 scheme, host.split("://", 1)[-1], session.request_id)
 
-            feed = LeYuFeed(ws_url, session.request_id,
+            feed = LEYUFeed(ws_url, session.request_id,
                             session.origin or "", timeout=25.0)
             try:
                 feed.connect()

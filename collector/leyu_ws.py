@@ -52,7 +52,7 @@ __all__ = [
     "OPCODE_PONG",
     "Frame",
     "WebSocketConnection",
-    "LeYuFeed",
+    "LEYUFeed",
     "encode_frame",
     "decode_frame",
     "build_handshake",
@@ -389,12 +389,12 @@ _CONTINUE = _Continue()
 # 乐鱼实时源
 # --------------------------------------------------------------------------- #
 
-class LeYuFeed:
+class LEYUFeed:
     """乐鱼实时推送订阅器：自动握手 + 心跳 + 订阅 + 断线重连。
 
     用法::
 
-        feed = LeYuFeed("wss://api.example/yewuws2/push?requestId=xx", origin=...,
+        feed = LEYUFeed("wss://api.example/yewuws2/push?requestId=xx", origin=...,
                         request_id="xx")
         feed.subscribe_odds(["5714088", "5687518"])
         for message in feed:
@@ -402,7 +402,7 @@ class LeYuFeed:
 
     回调模式::
 
-        feed = LeYuFeed(..., on_message=lambda m: print(m["cmd"]))
+        feed = LEYUFeed(..., on_message=lambda m: print(m["cmd"]))
         feed.run_forever()          # 阻塞，直到 stop()
     """
 
@@ -479,7 +479,7 @@ class LeYuFeed:
             self._conn.close()
             self._conn = None
 
-    def __enter__(self) -> "LeYuFeed":
+    def __enter__(self) -> "LEYUFeed":
         self.connect()
         return self
 
@@ -528,7 +528,7 @@ class LeYuFeed:
 
     # -- 迭代 ---------------------------------------------------------------
 
-    def __iter__(self) -> "LeYuFeed":
+    def __iter__(self) -> "LEYUFeed":
         return self
 
     def __next__(self) -> Dict[str, Any]:

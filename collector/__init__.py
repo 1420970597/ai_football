@@ -29,9 +29,9 @@ from .orchestrator import (
     collect_urls,
 )
 from .leyu_client import (
-    LeYuClient,
-    LeYuError,
-    LeYuMatch,
+    LEYUClient,
+    LEYUError,
+    LEYUMatch,
     MarketQuote,
     OddsQuote,
     TransportError,
@@ -41,7 +41,7 @@ from .leyu_client import (
     parse_match_list,
     parse_odds_block,
 )
-from .leyu_ws import LeYuFeed, WebSocketConnection
+from .leyu_ws import LEYUFeed, WebSocketConnection
 
 __all__ = [
     "MARKET_1X2",
@@ -50,10 +50,10 @@ __all__ = [
     "CollectorError",
     "DecodeError",
     "HealthResult",
-    "LeYuClient",
-    "LeYuError",
-    "LeYuFeed",
-    "LeYuMatch",
+    "LEYUClient",
+    "LEYUError",
+    "LEYUFeed",
+    "LEYUMatch",
     "MapResult",
     "MarketQuote",
     "OddsQuote",

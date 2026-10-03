@@ -332,7 +332,7 @@ class AppSessionBootstrapper:
 class AppSessionProvider(SessionProvider):
     """`SessionProvider` 适配器：把 App 引导器接入 provider 链。
 
-    这样 `collector.sources.LeYuSource` 的失效自动续期（0401013 →
+    这样 `collector.sources.LEYUSource` 的失效自动续期（0401013 →
     重新 acquire）会自动走「重新 launch 场馆」，无需改动数据源层。
 
     继承 `SessionProvider` 以获得默认的 `invalidate`（无操作）：

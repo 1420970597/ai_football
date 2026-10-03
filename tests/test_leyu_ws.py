@@ -29,7 +29,7 @@ from collector.leyu_ws import (
     OPCODE_TEXT,
     DecodeError,
     Frame,
-    LeYuFeed,
+    LEYUFeed,
     WebSocketConnection,
     build_handshake,
     decode_frame,
@@ -308,7 +308,7 @@ class TestFeedPolicy(unittest.TestCase):
             def recv(self, timeout: Optional[float] = None) -> Optional[Frame]:
                 return None
 
-        feed = LeYuFeed("ws://x/yewuws2/push?requestId=r", "r", "https://w")
+        feed = LEYUFeed("ws://x/yewuws2/push?requestId=r", "r", "https://w")
         payload = feed.subscribe_odds(["5714088"])
         self.assertEqual(sent, [])          # 未连接 -> 只入队
         self.assertIn(payload, feed._pending)
@@ -321,7 +321,7 @@ class TestFeedPolicy(unittest.TestCase):
         self.assertEqual(json.loads(sent[0])["cmd"], "C8")
 
     def test_subscribe_odds_payload_fields(self) -> None:
-        feed = LeYuFeed("ws://x/yewuws2/push?requestId=r", "r", "https://w")
+        feed = LEYUFeed("ws://x/yewuws2/push?requestId=r", "r", "https://w")
         body = json.loads(feed.subscribe_odds(["1", "2"], cufm="LM", market_level=2))
         self.assertEqual(body["cmd"], "C8")
         self.assertEqual(body["cufm"], "LM")
@@ -329,7 +329,7 @@ class TestFeedPolicy(unittest.TestCase):
         self.assertEqual([x["mid"] for x in body["list"]], ["1", "2"])
 
     def test_subscribe_match_sends_c13_and_c4(self) -> None:
-        feed = LeYuFeed("wss://x/yewuws2/push?requestId=rid", "rid", "https://w")
+        feed = LEYUFeed("wss://x/yewuws2/push?requestId=rid", "rid", "https://w")
         feed.subscribe_match("5714088")
         cmds = [json.loads(p)["cmd"] for p in feed._pending]
         self.assertEqual(cmds, ["C13", "C4"])
@@ -337,19 +337,19 @@ class TestFeedPolicy(unittest.TestCase):
         self.assertEqual(c4["uuid"], "rid_Z01")
 
     def test_pending_deduplicates_identical_subscriptions(self) -> None:
-        feed = LeYuFeed("wss://x/yewuws2/push?requestId=r", "r", "https://w")
+        feed = LEYUFeed("wss://x/yewuws2/push?requestId=r", "r", "https://w")
         feed.subscribe_odds(["1"])
         feed.subscribe_odds(["1"])
         self.assertEqual(len(feed._pending), 1)
 
     def test_close_is_idempotent(self) -> None:
-        feed = LeYuFeed("wss://x/yewuws2/push?requestId=r", "r", "https://w")
+        feed = LEYUFeed("wss://x/yewuws2/push?requestId=r", "r", "https://w")
         feed.close()
         feed.close()
         self.assertTrue(feed._stop.is_set())
 
     def test_context_manager_closes(self) -> None:
-        feed = LeYuFeed("wss://127.0.0.1:9/yewuws2/push?requestId=r", "r", "https://w",
+        feed = LEYUFeed("wss://127.0.0.1:9/yewuws2/push?requestId=r", "r", "https://w",
                         auto_reconnect=False, timeout=0.5)
         with self.assertRaises(Exception):
             feed.__enter__()
@@ -357,7 +357,7 @@ class TestFeedPolicy(unittest.TestCase):
         self.assertTrue(feed._stop.is_set())
 
     def test_recv_without_reconnect_returns_none(self) -> None:
-        feed = LeYuFeed("wss://127.0.0.1:9/yewuws2/push?requestId=r", "r", "https://w",
+        feed = LEYUFeed("wss://127.0.0.1:9/yewuws2/push?requestId=r", "r", "https://w",
                         auto_reconnect=False, timeout=0.2)
         self.assertIsNone(feed.recv())
 

@@ -131,13 +131,13 @@ __all__ = [
     "DEFAULT_USER_AGENT",
     "OSS_AES_KEY",
     "API_AES_KEY",
-    "LeYuError",
+    "LEYUError",
     "TransportError",
     "DecodeError",
     "AuthError",
     "RateLimitError",
-    "LeYuMatch",
-    "LeYuClient",
+    "LEYUMatch",
+    "LEYUClient",
     "OddsQuote",
     "decode_envelope",
     "decrypt_aes_ecb",
@@ -243,15 +243,15 @@ CDS_NAMES: Mapping[str, str] = {
 # 异常
 # --------------------------------------------------------------------------- #
 
-class LeYuError(Exception):
+class LEYUError(Exception):
     """乐鱼采集器统一异常基类。"""
 
 
-class TransportError(LeYuError):
+class TransportError(LEYUError):
     """网络层失败（超时 / DNS / HTTP 非 2xx）。"""
 
 
-class DecodeError(LeYuError):
+class DecodeError(LEYUError):
     """响应体解码失败（非 JSON / base64 或 gzip 损坏 / 业务 code 非成功）。"""
 
 
@@ -578,7 +578,7 @@ class MarketQuote:
 
 
 @dataclass(frozen=True)
-class LeYuMatch:
+class LEYUMatch:
     """赛事基础信息（来自 getOriginalDataPB / structureMatchBaseInfoByMidsPB）。"""
 
     mid: str
@@ -749,21 +749,21 @@ def parse_market_quote(
     return tuple(out)
 
 
-def parse_odds_block(blob: Mapping[str, Any]) -> List[LeYuMatch]:
+def parse_odds_block(blob: Mapping[str, Any]) -> List[LEYUMatch]:
     """解析 `structureMatchBaseInfoByMidsPB` / `getMatchBaseInfoByOddsPB` 响应。
 
     Args:
         blob: `decode_envelope` 后的顶层对象，需含 `data`（赛事数组）。
 
     Returns:
-        LeYuMatch 列表；无盘口的赛事同样返回（markets 为空），
+        LEYUMatch 列表；无盘口的赛事同样返回（markets 为空），
         以保留赛事维度，便于上层区分「无盘口」与「未采集」。
     """
     rows = blob.get("data") if isinstance(blob, Mapping) else blob
     if not isinstance(rows, Sequence):
         raise DecodeError("盘口响应 data 非数组: %r" % type(rows).__name__)
 
-    out: List[LeYuMatch] = []
+    out: List[LEYUMatch] = []
     for row in rows:
         if not isinstance(row, Mapping):
             continue
@@ -773,7 +773,7 @@ def parse_odds_block(blob: Mapping[str, Any]) -> List[LeYuMatch]:
             if isinstance(block, Mapping):
                 markets.extend(parse_market_quote(block, hps_pns, include_added=True))
         out.append(
-            LeYuMatch(
+            LEYUMatch(
                 mid=str(row.get("mid", "")),
                 sport_id=str(row.get("csid", "")),
                 sport=str(row.get("csna", "")),
@@ -797,7 +797,7 @@ def parse_odds_block(blob: Mapping[str, Any]) -> List[LeYuMatch]:
     return out
 
 
-def parse_match_list(blob: Mapping[str, Any]) -> List[LeYuMatch]:
+def parse_match_list(blob: Mapping[str, Any]) -> List[LEYUMatch]:
     """解析 `getOriginalDataPB` —— 全量赛程（一次拿全部联赛 + 全部赛事）。"""
     if not isinstance(blob, Mapping):
         raise DecodeError("赛程响应非对象: %r" % type(blob).__name__)
@@ -805,14 +805,14 @@ def parse_match_list(blob: Mapping[str, Any]) -> List[LeYuMatch]:
     leagues = {
         str(t.get("tid")): str(t.get("tn", "")) for t in (blob.get("tids_obj") or ())
     }
-    out: List[LeYuMatch] = []
+    out: List[LEYUMatch] = []
     for m in (blob.get("matchsList") or ()):
         if not isinstance(m, Mapping):
             continue
         csid = str(m.get("csid", ""))
         tid = str(m.get("tid", ""))
         out.append(
-            LeYuMatch(
+            LEYUMatch(
                 mid=str(m.get("mid", "")),
                 sport_id=csid,
                 sport=sports.get(csid, ""),
@@ -930,12 +930,12 @@ def ws_subscribe_odds(
 # HTTP 客户端
 # --------------------------------------------------------------------------- #
 
-class LeYuClient:
+class LEYUClient:
     """乐鱼 REST 客户端（零第三方依赖，仅标准库 urllib）。
 
     用法::
 
-        client = LeYuClient(request_id="a91bcf06...")   # 32 位 hex
+        client = LEYUClient(request_id="a91bcf06...")   # 32 位 hex
         matches = client.all_matches()                  # 全量赛程
         detail = client.matches_by_mids(["5714088"])    # 带盘口
     """
@@ -1034,12 +1034,12 @@ class LeYuClient:
 
     # -- 公开 API -----------------------------------------------------------
 
-    def all_matches(self) -> List[LeYuMatch]:
+    def all_matches(self) -> List[LEYUMatch]:
         """全量赛程（含未开赛 / 进行中 / 已结束），一次覆盖全部运动与联赛。"""
         blob = self._request("GET", "/v2/m/getOriginalDataPB")
         return parse_match_list(blob)
 
-    def matches_by_mids(self, mids: Sequence[str]) -> List[LeYuMatch]:
+    def matches_by_mids(self, mids: Sequence[str]) -> List[LEYUMatch]:
         """批量拉取指定赛事的**完整盘口**（含 hpsAdd 附加盘口线）。"""
         if not mids:
             return []
@@ -1056,7 +1056,7 @@ class LeYuClient:
         )
         return parse_odds_block(blob)
 
-    def match_odds(self, mid: str, new_user: int = 0) -> List[LeYuMatch]:
+    def match_odds(self, mid: str, new_user: int = 0) -> List[LEYUMatch]:
         """单场盘口快照（赛事详情页首屏口径）。"""
         blob = self._request(
             "POST",
@@ -1088,7 +1088,7 @@ class LeYuClient:
 
     def iter_odds_batches(
         self, mids: Sequence[str], batch_size: int = 20
-    ) -> Iterator[List[LeYuMatch]]:
+    ) -> Iterator[List[LEYUMatch]]:
         """按批拉取盘口，避免单次请求过大（抓包中单批为 12 场）。"""
         chunk: List[str] = []
         for mid in mids:

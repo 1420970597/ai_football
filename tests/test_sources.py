@@ -25,7 +25,7 @@ from collector.leyu_client import (
     DecodeError,
     MarketQuote,
     OddsQuote,
-    LeYuMatch,
+    LEYUMatch,
     decode_envelope,
     parse_odds_block,
 )
@@ -40,7 +40,7 @@ from collector.sources import (
     KNOWN_SOURCES,
     SOURCE_LEYU,
     SOURCE_TICAI,
-    LeYuSource,
+    LEYUSource,
     SourceError,
     SnapshotSource,
     TicaiFileSource,
@@ -72,8 +72,8 @@ def _q(outcome: str, decimal: float, label: str = "") -> OddsQuote:
                      decimal=decimal, line="")
 
 
-def _match(markets=(), ms: int = 0, mid: str = "5714088") -> LeYuMatch:
-    return LeYuMatch(
+def _match(markets=(), ms: int = 0, mid: str = "5714088") -> LEYUMatch:
+    return LEYUMatch(
         mid=mid, sport_id="1", sport="足球", tid="217",
         tournament="非洲国家杯2027资格赛",
         home="厄立特里亚", away="南非",
@@ -350,7 +350,7 @@ class TestReplaySource(unittest.TestCase):
             raise unittest.SkipTest("leyu.saz 不存在，跳过回放用例")
 
     def test_replay_fetch_produces_snapshots(self) -> None:
-        src = LeYuSource(replay=SAZ)
+        src = LEYUSource(replay=SAZ)
         snaps, issues = src.fetch(captured=CAPTURED)
         self.assertEqual(issues, [])
         self.assertGreater(len(snaps), 100)
@@ -359,7 +359,7 @@ class TestReplaySource(unittest.TestCase):
         self.assertNotIn("leyu", {s.source for s in snaps})
 
     def test_replay_covers_all_six_market_families(self) -> None:
-        src = LeYuSource(replay=SAZ)
+        src = LEYUSource(replay=SAZ)
         snaps, _ = src.fetch(captured=CAPTURED)
         codes = {s.market for s in snaps}
         self.assertTrue(any(c == "HAD" for c in codes))
@@ -371,7 +371,7 @@ class TestReplaySource(unittest.TestCase):
 
     def test_replay_handicap_matches_captured_odds(self) -> None:
         """让球盘必须是两向，且赔率与抓包一致（1.5 线：1.57 / 2.44）。"""
-        src = LeYuSource(replay=SAZ)
+        src = LEYUSource(replay=SAZ)
         snaps, _ = src.fetch(captured=CAPTURED)
         target = [s for s in snaps
                   if s.match_id == "5714088" and s.market == "AH(1.5)"]
@@ -380,20 +380,20 @@ class TestReplaySource(unittest.TestCase):
         self.assertEqual(tuple(round(o, 2) for o in target[0].odds), (1.57, 2.44))
 
     def test_replay_is_deterministic(self) -> None:
-        src = LeYuSource(replay=SAZ)
+        src = LEYUSource(replay=SAZ)
         a, _ = src.fetch(captured=CAPTURED)
         b, _ = src.fetch(captured=CAPTURED)
         self.assertEqual([(s.market, s.odds) for s in a],
                          [(s.market, s.odds) for s in b])
 
     def test_missing_saz_raises_source_error(self) -> None:
-        src = LeYuSource(replay="/nonexistent/leyu.saz")
+        src = LEYUSource(replay="/nonexistent/leyu.saz")
         with self.assertRaises(SourceError):
             src.fetch(captured=CAPTURED)
 
     def test_describe_reports_mode(self) -> None:
-        self.assertEqual(LeYuSource(replay=SAZ).describe()["mode"], "replay")
-        self.assertEqual(LeYuSource().describe()["mode"], "online")
+        self.assertEqual(LEYUSource(replay=SAZ).describe()["mode"], "replay")
+        self.assertEqual(LEYUSource().describe()["mode"], "online")
 
     def test_ticai_source_still_works(self) -> None:
         """数据源无关性的证明：换回体彩源仍能产出快照。"""
@@ -434,12 +434,12 @@ class TestOnlineReality(unittest.TestCase):
         cls.host, cls.rid = creds
 
     def _client(self):
-        from collector.leyu_client import LeYuClient
-        return LeYuClient(host=self.host, request_id=self.rid, timeout=20)
+        from collector.leyu_client import LEYUClient
+        return LEYUClient(host=self.host, request_id=self.rid, timeout=20)
 
     def test_valid_session_returns_schedule(self) -> None:
-        from collector.sources import SOCCER_SPORT_ID, LeYuSource
-        src = LeYuSource(host=self.host, request_id=self.rid)
+        from collector.sources import SOCCER_SPORT_ID, LEYUSource
+        src = LEYUSource(host=self.host, request_id=self.rid)
         matches = src.schedule()
         self.assertGreater(len(matches), 100)
         # 足球必须占绝对多数
@@ -448,8 +448,8 @@ class TestOnlineReality(unittest.TestCase):
 
     def test_default_selection_is_soccer_and_clean(self) -> None:
         """默认必须只选足球，且不产生「无法映射盘口」噪音。"""
-        from collector.sources import LeYuSource
-        src = LeYuSource(host=self.host, request_id=self.rid)
+        from collector.sources import LEYUSource
+        src = LEYUSource(host=self.host, request_id=self.rid)
         snaps, issues = src.fetch(max_matches=8)
         self.assertGreater(len(snaps), 0)
         self.assertEqual(issues, [], "默认不应有盘口映射噪音")
@@ -461,8 +461,8 @@ class TestOnlineReality(unittest.TestCase):
 
     def test_random_session_is_rejected(self) -> None:
         """随机 requestId 必须抛 AuthError（业务层会话校验）。"""
-        from collector.leyu_client import AuthError, LeYuClient
-        c = LeYuClient(host=self.host, request_id="0" * 32, timeout=15)
+        from collector.leyu_client import AuthError, LEYUClient
+        c = LEYUClient(host=self.host, request_id="0" * 32, timeout=15)
         with self.assertRaises(AuthError):
             c.all_matches()
 
