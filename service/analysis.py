@@ -89,13 +89,15 @@ def _to_int(value: object, default: int = 0) -> int:
 #: 后台定时跑，页面只读缓存结果 —— 打开即秒出。
 #:
 #: 取值依据（实测，并发 4）：单场中位 23s、最坏 90s（硬超时）。
-#: 20 场/轮约 2~3 分钟，因此间隔至少设 180s（否则循环会持续落后）。
-DEFAULT_CYCLE_INTERVAL_S = 300.0
+#: 60 场/轮在并发 4 下约 6~10 分钟，因此间隔设为 600s；
+#: 且**只对进行中的赛事**决策（未开赛的盘口还在变，早算无意义）。
+DEFAULT_CYCLE_INTERVAL_S = 600.0
 
 #: 每轮决策的赛事数上限。
-#: 不宜过大：一轮要跑完全部 LLM 调用才能更新缓存，
-#: 场次越多则缓存刷新越慢（用户看到的决策越旧）。
-DEFAULT_CYCLE_LIMIT = 12
+#: 实测量级：**进行中足球约 50 场**（2026-10-03 实测 51 场），
+#: 而原上限 12 远小于实际需求 → 用户看到的决策列表严重不完整。
+#: 现设为 60，足以覆盖全部进行中赛事（实测 ~50 场）+ 少量即将开赛。
+DEFAULT_CYCLE_LIMIT = 60
 
 @dataclass(frozen=True)
 class AnalysisConfig:
@@ -111,6 +113,7 @@ class AnalysisConfig:
     #: LLM 分析并发数（**多场并行**）。
     #: 实测推理服务可承受 4 并发（4 个请求总耗时 4.4s，而非串行的 9s），
     #: 调高能显著缩短整批决策时间；过高可能被服务端排队或限流。
+    #: 50 场进行中赛事在并发 4 下约 6~10 分钟一轮。
     llm_concurrency: int = 4
     #: 买入门槛：优势低于此值不给买入建议
     min_edge: float = 0.02
@@ -121,7 +124,8 @@ class AnalysisConfig:
     #: 每轮决策赛事数上限
     cycle_limit: int = DEFAULT_CYCLE_LIMIT
     #: 是否只对进行中的赛事做定时决策（节省 LLM 开销）
-    cycle_live_only: bool = False
+    #: 默认 True：未开赛赛事盘口仍在变化，过早决策无意义且浪费 LLM。
+    cycle_live_only: bool = True
     #: 决策结果落盘路径（重启后仍能立即展示上次结果）
     result_path: Optional[str] = None
 
@@ -659,8 +663,8 @@ def build_analysis_service(
         cycle_interval_s=_num("ANALYSIS_CYCLE", DEFAULT_CYCLE_INTERVAL_S),
         cycle_limit=_to_int(_num("ANALYSIS_CYCLE_LIMIT", DEFAULT_CYCLE_LIMIT),
                             DEFAULT_CYCLE_LIMIT),
-        cycle_live_only=(e.get("ANALYSIS_CYCLE_LIVE_ONLY", "") or "").strip()
-                        in ("1", "true", "yes"),
+        cycle_live_only=(e.get("ANALYSIS_CYCLE_LIVE_ONLY", "1") or "1").strip()
+                        not in ("0", "false", "no"),
         result_path=(e.get("ANALYSIS_RESULT_PATH") or "").strip() or None,
     )
     return AnalysisService(valuation=valuation, realtime=realtime, config=cfg)

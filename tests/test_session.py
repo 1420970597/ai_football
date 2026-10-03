@@ -459,3 +459,104 @@ class TestAutoRefresh(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestCachedSessionProvider(unittest.TestCase):
+    """会话缓存：主来源失败时回退（防「App token 一失效就全停采集」）。"""
+
+    def setUp(self) -> None:
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "_session.json")
+
+    def _seed(self, rid: str = "cached-rid-1") -> None:
+        with open(self.path, "w", encoding="utf-8") as fh:
+            json.dump({"request_id": rid, "host": "https://api.example"},
+                      fh)
+
+    def test_falls_back_to_cache_when_primary_fails(self) -> None:
+        from collector.session import CachedSessionProvider
+
+        class Bad(SessionProvider):
+            name = "bad"
+
+            def acquire(self, previous=None):
+                raise SessionError("6001 token已过期")
+
+        self._seed("cached-rid-1")
+        s = CachedSessionProvider(Bad(), self.path).acquire()
+        self.assertEqual(s.request_id, "cached-rid-1")
+        self.assertIn("缓存", s.note)
+
+    def test_saves_on_success(self) -> None:
+        from collector.session import CachedSessionProvider
+
+        class Ok(SessionProvider):
+            name = "ok"
+
+            def acquire(self, previous=None):
+                return Session(request_id="fresh-rid")
+
+        CachedSessionProvider(Ok(), self.path).acquire()
+        with open(self.path, encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["request_id"], "fresh-rid")
+
+    def test_raises_when_both_fail(self) -> None:
+        from collector.session import CachedSessionProvider
+
+        class Bad(SessionProvider):
+            name = "bad"
+
+            def acquire(self, previous=None):
+                raise SessionError("boom")
+
+        with self.assertRaises(SessionError) as ctx:
+            CachedSessionProvider(Bad(), self.path).acquire()
+        # 报错必须可操作（指向要更新的变量与缓存路径）
+        self.assertIn("LEYU_APP_TOKEN", str(ctx.exception))
+
+    def test_invalidate_removes_cache(self) -> None:
+        from collector.session import CachedSessionProvider
+
+        class Ok(SessionProvider):
+            name = "ok"
+
+            def acquire(self, previous=None):
+                return Session(request_id="r")
+
+        p = CachedSessionProvider(Ok(), self.path)
+        p.acquire()
+        self.assertTrue(os.path.exists(self.path))
+        p.invalidate(None)
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_corrupt_cache_ignored(self) -> None:
+        from collector.session import CachedSessionProvider
+
+        class Bad(SessionProvider):
+            name = "bad"
+
+            def acquire(self, previous=None):
+                raise SessionError("boom")
+
+        with open(self.path, "w", encoding="utf-8") as fh:
+            fh.write("{ not json")
+        with self.assertRaises(SessionError):
+            CachedSessionProvider(Bad(), self.path).acquire()
+
+    def test_chain_wraps_cache_even_without_sources(self) -> None:
+        """关键回归：即使没有任何会话来源，也应包缓存以便回退。
+
+        早期实现会在无来源时直接返回 NullSessionProvider，
+        导致「App 凭据一失效就全停采集」，而缓存里其实还有可用会话。
+        """
+        from collector.session import CachedSessionProvider
+        self._seed("from-cache")
+        p = make_session_provider(env={"LEYU_SESSION_CACHE": self.path})
+        self.assertIsInstance(p, CachedSessionProvider)
+        self.assertEqual(p.acquire().request_id, "from-cache")
+
+    def test_no_cache_env_keeps_plain_chain(self) -> None:
+        from collector.session import EnvSessionProvider
+        p = make_session_provider(env={"LEYU_REQUEST_ID": "rid"})
+        self.assertIsInstance(p, EnvSessionProvider)

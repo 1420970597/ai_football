@@ -781,6 +781,11 @@ def _start_background(
         # 走势落盘目录：放在快照根下的 _trends/，随 output 卷一起持久化。
         # 这样经济学算法与 LLM 能读到历史走势，容器重启也不丢。
         trend_root = str(Path(svc.store.root) / ".." / "_trends")
+        # 会话缓存：App 凭据过期时，已换到的业务 requestId 仍可能有效。
+        # 不设此缓存会导致“App token 一失效就全停采集”（真实踩过的坑）。
+        os.environ.setdefault(
+            "LEYU_SESSION_CACHE",
+            str(Path(svc.store.root) / ".." / "_session.json"))
         hub = RealtimeHub(provider, mids_provider=_mids,
                           max_matches=max_matches, trend_root=trend_root,
                           resume=True)

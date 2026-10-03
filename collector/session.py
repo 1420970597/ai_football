@@ -87,6 +87,7 @@ __all__ = [
     "FileSessionProvider",
     "CommandSessionProvider",
     "ChainSessionProvider",
+    "CachedSessionProvider",
     "make_session_provider",
     "SESSION_ENV_REQUEST_ID",
     "SESSION_ENV_CUID",
@@ -109,6 +110,10 @@ SESSION_ENV_COMMAND = "LEYU_LOGIN_COMMAND"
 SESSION_ENV_APP_TOKEN = "LEYU_APP_TOKEN"
 SESSION_ENV_APP_UUID = "LEYU_APP_UUID"
 SESSION_ENV_APP_SIGNATURE = "LEYU_APP_SIGNATURE"
+
+#: 会话缓存文件：App token 过期时，已换到的业务 requestId 仍可能有效，
+#: 存盘可避免“App 凭据一失效就全停采集”这种脆弱行为。
+SESSION_ENV_CACHE = "LEYU_SESSION_CACHE"
 
 #: 默认会话存活时间（秒）。实测：抓包会话约 1.5~2 小时后失效。
 #: 该值仅用于**提前刷新**的启发式判断，真正的失效以 `0401013` 为准。
@@ -216,6 +221,85 @@ class SessionProvider(ABC):
 # --------------------------------------------------------------------------- #
 # 实现
 # --------------------------------------------------------------------------- #
+
+class CachedSessionProvider(SessionProvider):
+    """把成功取得的会话写入磁盘，并在主来源失败时回退到缓存。
+
+    背景（真实故障）：App token 会过期（上游返回 `6001 token已过期`），
+    但**已换到的业务 requestId 仍可能有效**。若不做缓存回退，
+    App 凭据一失效就会导致实时推送与采集**全面停止**，
+    而实际上业务会话还能用很久。
+
+    行为：
+    * `acquire()` 先试 `inner`；成功则落盘（原子写）。
+    * `inner` 失败时，读缓存；若缓存可用则返回（并标注 note）。
+    * 两者都失败才抛错。
+    """
+
+    name = "cached"
+
+    def __init__(self, inner: SessionProvider, path: str | Path) -> None:
+        self.inner = inner
+        self.path = Path(path)
+        #: 最近一次落盘失败的原因（供 describe/排障）
+        self.last_save_error = ""
+
+    def acquire(self, previous: Optional[Session] = None) -> Session:
+        inner_err: Optional[Exception] = None
+        try:
+            sess = self.inner.acquire(previous)
+        except SessionError as exc:
+            inner_err = exc
+        else:
+            self._save(sess)
+            return sess
+
+        cached = self._load()
+        if cached is not None:
+            return cached
+        raise SessionError(
+            "主会话来源失败且无可用缓存：%s\n"
+            "（若 App 凭据已过期，请更新 %s；缓存文件：%s）"
+            % (inner_err, SESSION_ENV_APP_TOKEN, self.path))
+
+    def invalidate(self, session: Optional[Session]) -> None:
+        # 显式失效时才删缓存：避免服务端临时抽风就丢了一个可用会话
+        self.inner.invalidate(session)
+        try:
+            if self.path.exists():
+                self.path.unlink()
+        except OSError:
+            pass
+
+    def _save(self, sess: Session) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = str(self.path) + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(sess.as_dict(include_secrets=True), fh,
+                          ensure_ascii=False)
+            os.replace(tmp, self.path)
+        except (OSError, ValueError) as exc:
+            # 缓存失败不影响本次使用
+            self.last_save_error = str(exc)[:120]
+
+    def _load(self) -> Optional[Session]:
+        if not self.path.exists():
+            return None
+        try:
+            with open(self.path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, Mapping):
+                return None
+            return _session_from_mapping(data, note="来自会话缓存")
+        except (OSError, ValueError, SessionError):
+            return None
+
+    def describe(self) -> Dict[str, Any]:
+        return {"provider": self.name, "inner": self.inner.describe(),
+                "cache": str(self.path), "cache_exists": self.path.exists(),
+                "last_save_error": self.last_save_error}
+
 
 class NullSessionProvider(SessionProvider):
     """无会话可用：给出可操作的报错，绝不伪造凭证。"""
@@ -492,9 +576,21 @@ def make_session_provider(
         merged = dict(e)
         merged[SESSION_ENV_REQUEST_ID] = rid
         providers.append(EnvSessionProvider(merged))
+    chain: SessionProvider
     if not providers:
         reason = "未配置任何会话来源"
         if not include_app:
             reason = "未配置会话来源（且已禁用 App 引导）"
-        return NullSessionProvider(reason)
-    return providers[0] if len(providers) == 1 else ChainSessionProvider(providers)
+        # ⚠️ 这里**不能**直接返回 NullSessionProvider：
+        # App 凭据过期/被移除时，已换到的业务 requestId 仍可能有效，
+        # 必须让下面的会话缓存有机会回退（否则就是“App token 一失效全停采集”）。
+        chain = NullSessionProvider(reason)
+    else:
+        chain = (providers[0] if len(providers) == 1
+                 else ChainSessionProvider(providers))
+
+    # 包一层会话缓存：主来源失败时回退到上次成功的会话。
+    cache = (e.get(SESSION_ENV_CACHE) or "").strip()
+    if cache:
+        return CachedSessionProvider(chain, cache)
+    return chain

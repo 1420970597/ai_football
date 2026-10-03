@@ -71,6 +71,16 @@ TREND_FLUSH_EVERY = 25
 #: 落盘间隔上限（秒）：即使不足批大小也要写，保证不丢数据
 TREND_FLUSH_INTERVAL_S = 20.0
 
+#: 单场走势文件轮转阈值（MB）。
+#: 实测：高频推送下单个活跃赛事的走势文件几小时就到 10MB，
+#: 而原阈值 64MB × 百来场 → 磁盘可达数 GB，属**无界增长**。
+#: 现改为 4MB，并把旧文件滚动为 `.1`（只保留最近两代）。
+TREND_FILE_MAX_MB = 4.0
+
+#: 走势目录总量上限（MB）。超过时删除最旧的文件。
+#: 内存侧已有 maxlen 限流，但落盘必须同样有硬上限。
+TREND_DIR_MAX_MB = 256.0
+
 #: 每场赛事保留的最大事件数
 MAX_EVENTS_PER_MATCH = 120
 
@@ -179,18 +189,23 @@ class TrendStore:
         root: Optional[str] = None,
         flush_every: int = TREND_FLUSH_EVERY,
         flush_interval_s: float = TREND_FLUSH_INTERVAL_S,
-        max_file_mb: float = 64.0,
+        max_file_mb: float = TREND_FILE_MAX_MB,
+        max_dir_mb: float = TREND_DIR_MAX_MB,
     ) -> None:
         self.root = Path(root) if root else None
         self.flush_every = max(1, int(flush_every))
         self.flush_interval_s = float(flush_interval_s)
         self.max_file_bytes = int(max_file_mb * 1024 * 1024)
+        self.max_dir_bytes = int(max_dir_mb * 1024 * 1024)
         self._buf: Dict[str, List[str]] = {}
         self._last_flush = time.time()
         self._lock = threading.RLock()
         self.written = 0
         self.dropped = 0
+        self.rotated = 0
+        self.pruned = 0
         self.last_error = ""
+        self._last_prune = 0.0
         if self.root:
             try:
                 self.root.mkdir(parents=True, exist_ok=True)
@@ -237,9 +252,11 @@ class TrendStore:
             path = self._path(mid)
             try:
                 if path.exists() and path.stat().st_size > self.max_file_bytes:
-                    # 单场文件过大时轮转，避免单个文件无限增大
+                    # 单场文件过大时轮转，避免单个文件无限增大。
+                    # 只保留最近两代（.1 会被覆盖），所以单场磁盘占用有上界。
                     try:
-                        path.rename(path.with_suffix(".jsonl.1"))
+                        path.replace(path.with_suffix(".jsonl.1"))
+                        self.rotated += 1
                     except OSError:
                         pass
                 with path.open("a", encoding="utf-8") as fh:
@@ -250,7 +267,47 @@ class TrendStore:
                 self.dropped += len(lines)
                 self.last_error = "写入 %s 失败: %s" % (path.name, exc)
         self.written += n
+        if n:
+            self._prune_if_needed()
         return n
+
+    def _prune_if_needed(self) -> None:
+        """目录总量超限时删除最旧文件（保证磁盘有界）。
+
+        遍历成本不低，所以最多每 60s 做一次。
+        """
+        now = time.time()
+        if now - self._last_prune < 60.0:
+            return
+        self._last_prune = now
+        assert self.root is not None
+        try:
+            entries = []
+            total = 0
+            for f in self.root.iterdir():
+                if not f.is_file():
+                    continue
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                total += st.st_size
+                entries.append((st.st_mtime, st.st_size, f))
+        except OSError as exc:
+            self.last_error = "扫描走势目录失败: %s" % exc
+            return
+        if total <= self.max_dir_bytes:
+            return
+        entries.sort()  # 最旧在前
+        for _mt, size, f in entries:
+            if total <= self.max_dir_bytes:
+                break
+            try:
+                f.unlink()
+                total -= size
+                self.pruned += 1
+            except OSError:
+                continue
 
     def load(self, mid: str, limit: int = MAX_TICKS_PER_MARKET) -> List[Dict[str, Any]]:
         """读取某场的历史走势（重启后恢复用）。"""
@@ -281,6 +338,7 @@ class TrendStore:
             pending = sum(len(v) for v in self._buf.values())
         return {"enabled": self.enabled, "root": str(self.root) if self.root else None,
                 "written": self.written, "dropped": self.dropped,
+                "rotated": self.rotated, "pruned": self.pruned,
                 "pending": pending, "last_error": self.last_error}
 
 
