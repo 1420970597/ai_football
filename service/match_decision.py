@@ -56,6 +56,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from core import devig as devig_mod
 from core import economics as econ
+from core.market_labels import describe_market, format_market
 from core.models import OddsSnapshot, SnapshotState
 
 from .decision import (
@@ -75,17 +76,17 @@ __all__ = [
     "MATCH_SYSTEM_PROMPT",
 ]
 
-#: 交给 LLM 的候选盘口上限（过多会稀释注意力并撑爆上下文）
-#: 实测教训：盘口越多、提示词越长，推理型模型的思考时间就越不可控
-#: （曾出现单场 331s、推理 18494 字），直接拖垮定时循环。
-#: 只把**经济算法认为最有希望的**前 N 个盘口交给 LLM 判断即可。
-MAX_CANDIDATES_FOR_LLM = 6
+#: 交给 LLM 的候选盘口上限。
+#: 用户要求「经济学算法逐个分析每场比赛的每个盘口」——
+#: 因此**不按数量截断**，而是带上全部盘口（一场实测 14~24 个）。
+#: 这里只留一个防御性硬上限，防异常数据（如上千盘口）把上下文撑爆。
+MAX_MARKETS_PER_PROMPT = 60
 
 #: 单个盘口最多展示的结果数
 MAX_OUTCOMES_PER_MARKET = 3
 
 #: LLM 返回的买入建议上限（防止一次给出一堆"推荐"）
-MAX_PICKS = 4
+MAX_PICKS = 6
 
 #: 默认并行度（受推理服务承载能力限制）
 DEFAULT_MAX_WORKERS = 4
@@ -148,6 +149,10 @@ class MarketComputation:
     margin: float = 0.0
     method: str = ""
     method_spread_pp: float = 0.0
+    #: **原始线值**（如 `0/0.5`、`1.5`）。
+    #: 必须保留原始写法：盘口代码里的 `0.25` 只是复合盘（`0/0.5`）的中点近似，
+    #: 展示中点会让人困惑，而中文标签（“上半场大1.5”）需要真实线值。
+    line: str = ""
     state: str = SnapshotState.ACTIVE.value
     #: 走势摘要（该盘口）
     trend: str = "flat"
@@ -167,6 +172,8 @@ class MarketComputation:
     def as_dict(self) -> Dict[str, Any]:
         return {
             "market": self.market,
+            "market_label": describe_market(self.market),
+            "line": self.line,
             "outcomes": list(self.outcomes),
             "odds": [round(o, 4) for o in self.odds],
             "p_fair": [round(p, 6) for p in self.p_fair],
@@ -235,6 +242,8 @@ class MatchPicks:
             "n_computed": len(self.computations),
             "has_buy": self.has_buy,
             "picks": self.picks,
+            # 便于列表直接展示：最优建议的中文描述
+            "best_label": (best["pick_label"] if (best := self.best_pick) else ""),
             "best_pick": self.best_pick,
             "llm_note": self.llm_note,
             "llm_reason": self.llm_reason,
@@ -324,6 +333,9 @@ class MatchDecisionEngine:
                 margin=_as_float(diag.get("margin"), snap.margin),
                 method=str(diag.get("method", "")),
                 method_spread_pp=_as_float(diag.get("method_spread_pp")),
+                # 原始线值：优先用落库时保存的 `leyu_hv`（如 `0/0.5`），
+                # 它比代码里的中点（0.25）更准确，也是中文标签的依据。
+                line=str((snap.metadata or {}).get("leyu_hv") or ""),
                 state=snap.state.value,
                 trend=(t or {}).get("direction", "flat"),
                 trend_pct=_as_float((t or {}).get("delta_pct")),
@@ -386,20 +398,23 @@ class MatchDecisionEngine:
             lines.append("比赛状态：%s" % ctx["status_text"])
         lines.append("")
 
-        for c in list(comps)[:MAX_CANDIDATES_FOR_LLM]:
+        for c in list(comps)[:MAX_MARKETS_PER_PROMPT]:
             trend_txt = ""
             if c.trend_n:
                 trend_txt = "，走势 %s %.2f%%（%d 次变动）" % (
                     {"down": "降赔", "up": "升赔"}.get(c.trend, "未变"),
                     c.trend_pct, c.trend_n)
-            lines.append("盘口 %s（水钱 %.2f%%%s）：" % (
-                c.market, c.margin * 100, trend_txt))
+            # 用**人话标签**代替机器代码：
+            #   既让 LLM 更好理解，也省 token（“上半场大1.5” vs “OU_1H(1.5) over”）
+            lines.append("盘口 [%s] %s（水钱 %.2f%%%s）：" % (
+                c.market, describe_market(c.market), c.margin * 100, trend_txt))
             order = sorted(range(len(c.outcomes)),
                            key=lambda i: c.p_fair[i], reverse=True)
             for i in order[:MAX_OUTCOMES_PER_MARKET]:
                 lines.append(
                     "  - %s：赔率 %.3f，市场公平概率 %.4f"
-                    % (c.outcomes[i], c.odds[i], c.p_fair[i]))
+                    % (format_market(c.market, c.outcomes[i], c.line),
+                       c.odds[i], c.p_fair[i]))
         lines.append("")
         lines.append("降赔=资金流入=市场认为该结果概率上升。")
         lines.append("给出你的概率估计（可偏离市场）。只输出 JSON。")
@@ -531,6 +546,9 @@ class MatchDecisionEngine:
                 picks.append({
                     "market": mkt,
                     "outcome": oc,
+                    # **人话标签**：用户要求最终结果要说“上半场大1.5”，
+                    # 而不是 `OU_1H(1.5) over`。
+                    "pick_label": format_market(mkt, oc, comp.line),
                     "odds": round(comp.odds[i], 4),
                     "edge": round(edge, 6),
                     "edge_pct": round(edge * 100, 3),

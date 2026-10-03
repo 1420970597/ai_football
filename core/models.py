@@ -208,7 +208,12 @@ class OddsSnapshot:
         return self.state.usable_for_signal
 
     def as_dict(self) -> Dict[str, Any]:
-        """序列化为可 JSON 化的字典。"""
+        """序列化为可 JSON 化的字典。
+
+        ⚠️ **必须包含 metadata**：上游溯源信息（盘口线 `leyu_hv`、数据源 `leyu_cds`、
+        盘口名等）都存那里。早期实现漏了它，导致落库后再读回时盘口线丢失，
+        中文标签无法还原（如“上半场大1.5”只能退回中点 0.75）。
+        """
         return {
             "match_id": self.match_id,
             "league": self.league,
@@ -222,6 +227,7 @@ class OddsSnapshot:
             "source": self.source,
             "booksum": round(self.booksum, 8),
             "margin": round(self.margin, 8),
+            "metadata": dict(self.metadata or {}),
         }
 
 

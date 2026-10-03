@@ -36,7 +36,7 @@ from service.decision import (
 )
 from service.llm import LLMClient, LLMConfig, LLMError
 from service.match_decision import (
-    MAX_CANDIDATES_FOR_LLM,
+    MAX_MARKETS_PER_PROMPT,
     MatchDecisionEngine,
     MatchPicks,
     _as_float,
@@ -280,7 +280,7 @@ class TestPromptAndHelpers(unittest.TestCase):
         self.assertIn("主队", p)
         self.assertIn("1:0", p)
         self.assertIn("市场公平概率", p)
-        self.assertLessEqual(len(comps), MAX_CANDIDATES_FOR_LLM + 3)
+        self.assertLessEqual(len(comps), MAX_MARKETS_PER_PROMPT + 3)
 
     def test_candidate_cap_respected(self) -> None:
         e = _engine()
@@ -289,9 +289,9 @@ class TestPromptAndHelpers(unittest.TestCase):
         comps = e.compute_markets(snaps)
         p = e.build_prompt(comps, "A", "B", "L", None)
         # 提示词里不应出现超过上限的盘口
-        appears = sum(1 for c in comps[:MAX_CANDIDATES_FOR_LLM]
+        appears = sum(1 for c in comps[:MAX_MARKETS_PER_PROMPT]
                       if c.market in p)
-        self.assertLessEqual(appears, MAX_CANDIDATES_FOR_LLM)
+        self.assertLessEqual(appears, MAX_MARKETS_PER_PROMPT)
 
     def test_tolerant_converters(self) -> None:
         self.assertEqual(_as_float("1.5"), 1.5)

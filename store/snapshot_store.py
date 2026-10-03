@@ -469,6 +469,14 @@ class SnapshotStore:
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("快照赔率字段非法: %s" % exc) from exc
 
+        # metadata 必须**完整回传**：写入时它包含盘口线（`leyu_hv`）、
+        # 数据源、盘口名等溯源信息，而中文标签（“上半场大1.5”）
+        # 需要原始线值（代码里的 0.25 只是复合盘 0/0.5 的中点近似）。
+        # 早期实现把它硬编码为 {"file_schema": ...} 并在读取时丢弃，
+        # 导致盘口线无法回放（真实的读写不对称缺陷）。
+        meta = p.get("metadata")
+        metadata: Dict[str, object] = dict(meta) if isinstance(meta, dict) else {}
+        metadata["file_schema"] = p.get("_schema", "")
         return OddsSnapshot(
             match_id=str(p["match_id"]),
             league=str(p.get("league", "")),
@@ -480,7 +488,7 @@ class SnapshotStore:
             state=state,
             captured_at=ts,
             source=str(p.get("source", "unknown")),
-            metadata={"file_schema": p.get("_schema", "")},
+            metadata=metadata,
         )
 
     # -- 缓存联动 -----------------------------------------------------------
