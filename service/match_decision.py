@@ -56,6 +56,12 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from core import devig as devig_mod
 from core import economics as econ
+from core.entry_gate import (
+    EntryGateConfig,
+    GateResult,
+    evaluate_entry,
+    gate_market,
+)
 from core.market_labels import describe_market, format_market
 from core.models import OddsSnapshot, SnapshotState
 
@@ -96,6 +102,61 @@ DEFAULT_MAX_WORKERS = 4
 #: 而控制台需要可预期响应。超时即降级为“无买入建议”并说明原因，
 #: 绝不让一个慢请求拖住整批决策。
 DEFAULT_MATCH_LLM_TIMEOUT_S = 90.0
+
+
+def _elapsed_ms(t0: float) -> int:
+    """距 `t0` 的毫秒数（`time.time()` 理论上可因系统时钟回拨而异常，
+    故用 try 包裹：耗时统计不应影响决策结果）。"""
+    try:
+        return int((time.time() - t0) * 1000)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return 0
+
+
+def _tick_age_s(ts_ms: object) -> Optional[float]:
+    """最近一次盘口跳动距今秒数；无有效时间戳时返回 None。
+
+    用于入场门控的「重定价窗口」判定（[C] 调研结论：进球后各盘口依次
+    重定价，刚跳完价时价格尚未稳定）。
+    """
+    ms = _as_int(ts_ms, 0)
+    if ms <= 0:
+        return None
+    age = time.time() - ms / 1000.0
+    # 上游时间戳可能超前于本机时钟（时钟漂移），负数视为“刚刚发生”
+    return max(0.0, age)
+
+
+def _collect_rejects(comps: Sequence[MarketComputation]) -> List[str]:
+    """汇总未通过门控的原因码（去重，保持首次出现顺序）。
+
+    用途：让「为什么这场比赛没进 LLM」有可读的解释，
+    而不是只给一个空结果。
+    """
+    out: List[str] = []
+    for c in comps:
+        for r in c.reject_reasons:
+            if r not in out:
+                out.append(r)
+    return out
+
+
+def _safe_odds(values: Sequence[object]) -> Tuple[float, ...]:
+    """把赔率序列统一为 float（**长度保持不变**）。
+
+    赔率理论上已在 `OddsSnapshot.__post_init__` 归一化为 float，
+    但快照可能来自反序列化或外部构造，故此处再兜一层。
+    非法值记为 0.0（后续 edge 计算会自然把它判为无优势），
+    **不跳过元素**——跳过会让 edges 与 outcomes 下标错位。
+    """
+    out: List[float] = []
+    for v in values:
+        try:
+            f = float(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError, OverflowError):
+            f = 0.0
+        out.append(f if math.isfinite(f) else 0.0)
+    return tuple(out)
 
 
 def _as_float(value: object, default: float = 0.0) -> float:
@@ -158,6 +219,36 @@ class MarketComputation:
     trend: str = "flat"
     trend_pct: float = 0.0
     trend_n: int = 0
+    #: 逐结果的入场门控结论（经济学闸门）。
+    #: 只有 `gates[i].passed` 为真的结果才交给 LLM 做最终裁定，
+    #: 这是「经济学算法满足后才调用 LLM」的落地点。
+    gates: Tuple[GateResult, ...] = ()
+
+    @property
+    def gate_passed(self) -> bool:
+        """该盘口是否有任一结果通过经济门控。"""
+        return any(g.passed for g in self.gates)
+
+    @property
+    def gate_passed_indices(self) -> List[int]:
+        """通过门控的结果下标（LLM 只看这些）。"""
+        return [i for i, g in enumerate(self.gates) if g.passed]
+
+    @property
+    def best_gate(self) -> Optional[GateResult]:
+        """通过门控且余量最大的结果；无则返回 None。"""
+        ok = [g for g in self.gates if g.passed]
+        return max(ok, key=lambda g: g.margin) if ok else None
+
+    @property
+    def reject_reasons(self) -> List[str]:
+        """未通过门控的原因码（去重，供前端分组统计）。"""
+        out: List[str] = []
+        for g in self.gates:
+            for r in g.rejects:
+                if r not in out:
+                    out.append(r)
+        return out
 
     @property
     def best_edge(self) -> float:
@@ -186,6 +277,11 @@ class MarketComputation:
             "trend": self.trend,
             "trend_pct": round(self.trend_pct, 3),
             "trend_n": self.trend_n,
+            "gate_passed": self.gate_passed,
+            "gate_passed_outcomes": [self.outcomes[i]
+                                     for i in self.gate_passed_indices],
+            "reject_reasons": self.reject_reasons,
+            "gates": [g.as_dict() for g in self.gates],
             "best_edge": round(self.best_edge, 6),
             "best_outcome": (self.outcomes[self.best_index]
                              if self.best_index >= 0 else ""),
@@ -209,6 +305,11 @@ class MatchPicks:
     llm_used: bool = False
     llm_confidence: float = 0.0
     n_markets: int = 0
+    #: 入场门控统计：通过 / 未通过经济门槛的盘口数。
+    #: 用户要求的工作逻辑是「经济算法满足后才调用 LLM」，
+    #: 这两个数就是该逻辑可观测的证据（未通过即不进入 LLM）。
+    gated_in: int = 0
+    gated_out: int = 0
     elapsed_ms: int = 0
     error: str = ""
     computed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -240,6 +341,10 @@ class MatchPicks:
             "decision": self.decision,
             "n_markets": self.n_markets,
             "n_computed": len(self.computations),
+            # 门控结果：前端可直接展示「多少个盘口通过经济门槛」
+            "gated_in": self.gated_in,
+            "gated_out": self.gated_out,
+            "reject_reasons": _collect_rejects(self.computations),
             "has_buy": self.has_buy,
             "picks": self.picks,
             # 便于列表直接展示：最优建议的中文描述
@@ -268,14 +373,20 @@ class MatchDecisionEngine:
     """
 
     def __init__(self, config: Optional[DecisionConfig] = None,
-                 llm: Optional[LLMClient] = None) -> None:
+                 llm: Optional[LLMClient] = None,
+                 entry_config: Optional[EntryGateConfig] = None) -> None:
         self.config = config or DecisionConfig()
+        #: 入场门控参数（经济学算法必须先通过才交给 LLM）。
+        #: 与 `DecisionConfig` 分开：前者是「该不该看」，后者是「怎么看」。
+        self.entry_config = entry_config or EntryGateConfig()
         #: 复用逐盘口引擎的小模型层（去水与走势修正逻辑只写一处）
         self.small = DecisionEngine(self.config, llm=None)
         self.llm = llm
         self.stats: Dict[str, int] = {
             "matches": 0, "with_picks": 0, "picks": 0,
             "llm_calls": 0, "llm_failures": 0, "no_llm": 0,
+            # 门控统计：多少场/多少盘口被经济学算法拦下（不进入 LLM）
+            "gated_out_matches": 0, "gated_out_markets": 0,
         }
 
     # -- LLM ---------------------------------------------------------------
@@ -303,7 +414,7 @@ class MatchDecisionEngine:
     ) -> List[MarketComputation]:
         """对一场的全部盘口做经济学计算（**不发任何 LLM 请求**）。"""
         out: List[MarketComputation] = []
-        trend_by_market = self._index_trend(trend)
+        trend_by_key = self._index_trend(trend)
         # `_small_model` 接受 Dict；这里统一成 dict 以避免只读映射的类型不匹配
         trend_dict: Optional[Dict[str, Any]] = dict(trend) if trend else None
         for snap in snapshots:
@@ -311,7 +422,7 @@ class MatchDecisionEngine:
                 # 停盘/下架的价格不得参与决策（报告 §5.3）
                 continue
             p_small, diag, _ = self.small._small_model(snap, trend_dict)
-            odds = tuple(float(x) for x in snap.odds)
+            odds = _safe_odds(snap.odds)
             edges = tuple(p * o - 1.0 for p, o in zip(p_small, odds))
             kellys = []
             for p, o, e in zip(p_small, odds, edges):
@@ -322,7 +433,46 @@ class MatchDecisionEngine:
                     k = max(0.0, min(k, self.config.max_stake_pct))
                 kellys.append(k)
 
-            t = trend_by_market.get(snap.market)
+            # 走势查找键：必须用快照自带的 `(chpid, hv)`，
+            # **不能用 `snap.market`**。
+            #
+            # 原因（本项目真实缺陷，已修复）：走势来自 WS 推送，其键是上游的
+            # `(mid, chpid, hv)`；而 `snap.market` 是归一化后的代码（如
+            # `AH(0.5)` / `HAD`）。两者**永不可能相等**，
+            # 导致 `trend` 一直为空 → 整个走势维度（含调研 [C]/[D] 的
+            # 资金流信号）形同死代码。
+            meta = snap.metadata or {}
+            ck = (str(meta.get("leyu_chpid") or ""),
+                  str(meta.get("leyu_hv") or ""))
+            trend_info: Dict[str, Any] = (trend_by_key.get(ck)
+                                          or trend_by_key.get((ck[0], ""))
+                                          or {})
+            tick_age_s = _tick_age_s(trend_info.get("ts_ms"))
+            # **阶段 1 门控**：市场质量前置条件 —— 该盘口值不值得问 LLM。
+            # 注意这里用 `gate_market`（不含 edge 判定）：
+            # 去水后的概率就是市场概率，小模型 edge 恒 ≤ 0，
+            # 若在这里卡 edge 就永远不放行（详见 core/entry_gate.py）。
+            gates = tuple(
+                gate_market(
+                    outcome=snap.outcomes[i],
+                    odds=odds[i],
+                    state=snap.state.value,
+                    # 成交额在快照 metadata 里（乐鱼 `betAmount`），
+                    # 不在 OddsSnapshot 顶层字段上。
+                    bet_amount=_as_float(
+                        (snap.metadata or {}).get("leyu_bet_amount")),
+                    method_spread_pp=_as_float(diag.get("method_spread_pp")),
+                    trend=str(trend_info.get("direction", "flat")),
+                    trend_pct=_as_float(trend_info.get("delta_pct")) / 100.0,
+                    tick_age_s=tick_age_s,
+                    trend_ticks=_as_int(trend_info.get("n")),
+                    # 走势修正后的 edge（信息流入但价格未走完时的真实优势）。
+                    # 仅在**有走势数据**时作为阶段 1 的硬条件（见 core/entry_gate.py）。
+                    pre_edge=edges[i],
+                    config=self.entry_config,
+                )
+                for i in range(len(snap.outcomes))
+            )
             out.append(MarketComputation(
                 market=snap.market,
                 outcomes=tuple(snap.outcomes),
@@ -330,6 +480,7 @@ class MatchDecisionEngine:
                 p_fair=tuple(p_small),
                 edges=edges,
                 kellys=tuple(kellys),
+                gates=gates,
                 margin=_as_float(diag.get("margin"), snap.margin),
                 method=str(diag.get("method", "")),
                 method_spread_pp=_as_float(diag.get("method_spread_pp")),
@@ -337,21 +488,29 @@ class MatchDecisionEngine:
                 # 它比代码里的中点（0.25）更准确，也是中文标签的依据。
                 line=str((snap.metadata or {}).get("leyu_hv") or ""),
                 state=snap.state.value,
-                trend=(t or {}).get("direction", "flat"),
-                trend_pct=_as_float((t or {}).get("delta_pct")),
-                trend_n=_as_int((t or {}).get("n")),
+                trend=str(trend_info.get("direction", "flat")),
+                trend_pct=_as_float(trend_info.get("delta_pct")),
+                trend_n=_as_int(trend_info.get("n")),
             ))
         # 优势大的排前面：LLM 上下文有限，优先给它看有希望的
         out.sort(key=lambda c: c.best_edge, reverse=True)
         return out
 
     @staticmethod
-    def _index_trend(trend: Optional[Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """把 Hub 的走势结果索引成 `盘口代码 → 走势摘要`。"""
+    def _index_trend(
+        trend: Optional[Mapping[str, Any]],
+    ) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        """把 Hub 的走势结果索引成 `(chpid, hv) → 走势摘要`。
+
+        为何用 `(chpid, hv)` 而非 `market`：走势推送的原始键就是
+        上游的盘口 ID 与线值；`market` 是本项目归一化后的代码，
+        两者没有直接映射关系（详见 `compute_markets` 内的说明）。
+        同时保留以 `chpid` 单独为键的回退，兼容调用方只知盘口 ID 的情形。
+        """
         if not trend:
             return {}
         markets = trend.get("markets") or []
-        idx: Dict[str, Dict[str, Any]] = {}
+        idx: Dict[Tuple[str, str], Dict[str, Any]] = {}
         for m in markets:
             if not isinstance(m, Mapping):
                 continue
@@ -360,17 +519,27 @@ class MatchDecisionEngine:
             last = m.get("last") or {}
             if not isinstance(last, Mapping):
                 continue
-            key_variants = [hv, chpid]
             info = {
                 "direction": last.get("direction", "flat"),
                 "delta_pct": last.get("delta_pct", 0.0),
                 "n": m.get("n", 0),
                 "up": m.get("up", 0),
                 "down": m.get("down", 0),
+                # 最近一次跳动的上游毫秒时间戳。
+                # 门控用它算「重定价窗口」（[C] 调研结论）：
+                # 刚跳完价时价格尚未稳定，入场应更谨慎。
+                "ts_ms": last.get("ts", 0),
+                # 走势跨度，用于把「变动次数」换算成活跃度
+                "span_s": m.get("span_s", 0.0),
             }
-            for k in key_variants:
-                if k:
-                    idx.setdefault(k, info)
+            # 精确键优先：同一 chpid 下不同线值（如 OU 2.5 / 3.0）必须区分
+            idx[(chpid, hv)] = info
+            # 回退键：仅在无精确匹配时使用（`setdefault` 保证精确键优先）。
+            # 注意：回退键只在**上游确实未给 hv**时才有意义；
+            # 若上游给了 hv，`(chpid, "")` 不应被填充，
+            # 否则会让「hv 不同」的盘口互相污染。
+            if not hv:
+                idx.setdefault((chpid, ""), info)
         return idx
 
     # -- 第 2 步：汇总成 LLM 上下文 ----------------------------------------
@@ -384,8 +553,10 @@ class MatchDecisionEngine:
         context: Optional[Mapping[str, Any]] = None,
     ) -> str:
         lines = [
-            "这是一场比赛的全部盘口经济学计算结果（市场公平概率已去水）。",
+            "这是一场比赛中**已通过经济算法入场门槛**的盘口（市场公平概率已去水）。",
             "请给出**你自己的独立概率估计**，系统会用它重算优势。",
+            "注意：这些盘口已经过确定性算法初筛，但仍需你独立判断；",
+            "若你认为都不值得买，可返回空 markets 数组。",
             "",
             "赛事：%s vs %s（%s）" % (home, away, league),
         ]
@@ -404,10 +575,19 @@ class MatchDecisionEngine:
                 trend_txt = "，走势 %s %.2f%%（%d 次变动）" % (
                     {"down": "降赔", "up": "升赔"}.get(c.trend, "未变"),
                     c.trend_pct, c.trend_n)
+            # 告知该盘口的经济学门槛与余量：
+            # 让 LLM 知道“这个盘口是过了什么关才被送来的”，
+            # 而不是把所有盘口一视同仁地评估。
+            gate_txt = ""
+            bg = c.best_gate
+            if bg is not None:
+                gate_txt = "，经济门槛 %.2f%%（余量 %+.2f%%）" % (
+                    bg.required_edge * 100, bg.margin * 100)
             # 用**人话标签**代替机器代码：
             #   既让 LLM 更好理解，也省 token（“上半场大1.5” vs “OU_1H(1.5) over”）
-            lines.append("盘口 [%s] %s（水钱 %.2f%%%s）：" % (
-                c.market, describe_market(c.market), c.margin * 100, trend_txt))
+            lines.append("盘口 [%s] %s（水钱 %.2f%%%s%s）：" % (
+                c.market, describe_market(c.market), c.margin * 100,
+                trend_txt, gate_txt))
             order = sorted(range(len(c.outcomes)),
                            key=lambda i: c.p_fair[i], reverse=True)
             for i in order[:MAX_OUTCOMES_PER_MARKET]:
@@ -444,6 +624,22 @@ class MatchDecisionEngine:
                 raise LLMError(
                     "LLM 决策超时（>%.0fs）。推理型模型对该输入思考过久；"
                     "可减少盘口数或调大 llm_timeout_s。" % budget) from exc
+
+    def _required_edge_for(self, comp: MarketComputation, index: int) -> float:
+        """取该盘口该结果在**阶段 2** 所需的最低 edge。
+
+        优先用阶段 1 `gate_market()` 算出的动态门槛（含长赔/去水分歧/
+        逆风/重定价等加价）；缺失时回退到全局 `min_edge`。
+
+        为何不直接用 `self.config.min_edge`：调研结论 [B] 明确指出
+        **固定阈值是错的** —— 同样 2% 在高赔/数据稀疏/刚跳价时
+        更容易是噪声，必须按不确定性加价。
+        """
+        if 0 <= index < len(comp.gates):
+            req = comp.gates[index].required_edge
+            if req > 0:
+                return req
+        return self.config.min_edge
 
     def _ask_llm(
         self,
@@ -538,7 +734,11 @@ class MatchDecisionEngine:
             # 用 LLM 的概率**重新算** edge（这才是真实优势来源）
             for i, oc in enumerate(comp.outcomes):
                 edge = probs[i] * comp.odds[i] - 1.0
-                if edge < self.config.min_edge:
+                # **阶段 2 门控**：用该盘口自己的动态门槛（而非全局常数）。
+                # 门槛 = 基准 2% + 长赔/去水分歧/逆风/重定价/稀疏样本 加价，
+                # 由 `gate_market()` 在阶段 1 算出并随快照传递（调研结论落地）。
+                req = self._required_edge_for(comp, i)
+                if edge < req:
                     continue
                 kelly = econ.fractional_kelly(
                     probs[i], comp.odds[i], lam=self.config.kelly_fraction)
@@ -552,6 +752,9 @@ class MatchDecisionEngine:
                     "odds": round(comp.odds[i], 4),
                     "edge": round(edge, 6),
                     "edge_pct": round(edge * 100, 3),
+                    # 回传门槛，便于人工复核「为何这注过/没过」
+                    "required_edge": round(req, 6),
+                    "required_edge_pct": round(req * 100, 3),
                     "kelly": round(kelly, 6),
                     "kelly_pct": round(kelly * 100, 4),
                     "confidence": round(conf, 4),
@@ -593,12 +796,37 @@ class MatchDecisionEngine:
         if not res.computations:
             res.decision = DECISION_AVOID
             res.error = "无可用盘口（全部停盘/下架或无快照）"
-            res.elapsed_ms = int((time.time() - t0) * 1000)
+            res.elapsed_ms = _elapsed_ms(t0)
             return res
 
-        # 第 2/3 步：汇总给 LLM 做一次裁定
+        # 第 1.5 步：**入场门控**（用户要求的工作逻辑）。
+        #
+        # 只有通过经济门槛的盘口才交给 LLM。依据来自互联网调研：
+        # 职业玩家不靠“看到机会就上”，而是先算清 EV 门槛与不确定性
+        # （详见 core/entry_gate.py 的证据分级与来源）。
+        #
+        # 这同时解决了两个工程问题：
+        #   1. LLM 上下文从 14~24 个盘口降到只剩“有可能”的几个；
+        #   2. 全场都不通过时**直接回避**，省下一次 LLM 调用（与延迟）。
+        candidates = [c for c in res.computations if c.gate_passed]
+        res.gated_in = len(candidates)
+        res.gated_out = len(res.computations) - len(candidates)
+        if not candidates:
+            res.decision = DECISION_AVOID
+            self.stats["gated_out_matches"] += 1
+            self.stats["gated_out_markets"] += res.gated_out
+            res.llm_reason = (
+                "经济算法未通过入场门槛（%d 个盘口全部不达标），"
+                "未调用 LLM：%s"
+                % (res.gated_out,
+                   "、".join(_collect_rejects(res.computations)) or "edge 不足"))
+            res.elapsed_ms = _elapsed_ms(t0)
+            self.stats["matches"] += 1
+            return res
+
+        # 第 2/3 步：汇总给 LLM 做一次裁定（**只给通过门控的候选**）
         picks, conf, note, reason = self._ask_llm(
-            res.computations, res.home, res.away, res.league, context)
+            candidates, res.home, res.away, res.league, context)
         res.picks = picks
         res.llm_confidence = conf
         res.llm_note = note
@@ -617,7 +845,7 @@ class MatchDecisionEngine:
             # LLM 明确认为无值得买入的项 —— 这是合法结论
             res.decision = DECISION_AVOID
 
-        res.elapsed_ms = int((time.time() - t0) * 1000)
+        res.elapsed_ms = _elapsed_ms(t0)
         self.stats["matches"] += 1
         return res
 
@@ -678,5 +906,17 @@ class MatchDecisionEngine:
                 "kelly_fraction": self.config.kelly_fraction,
                 "max_llm_weight": self.config.max_llm_weight,
                 "use_llm": self.config.use_llm,
+            },
+            # 入场门控参数（可审计：调研结论如何变成阈值）
+            "entry_gate": {
+                "base_min_edge": self.entry_config.base_min_edge,
+                "longshot_odds": self.entry_config.longshot_odds,
+                "longshot_penalty": self.entry_config.longshot_penalty,
+                "repricing_quiet_s": self.entry_config.repricing_quiet_s,
+                "repricing_penalty": self.entry_config.repricing_penalty,
+                "adverse_trend_penalty": self.entry_config.adverse_trend_penalty,
+                "thin_data_penalty": self.entry_config.thin_data_penalty,
+                "min_trend_ticks": self.entry_config.min_trend_ticks,
+                "hard_reject_trend_pct": self.entry_config.hard_reject_trend_pct,
             },
         }

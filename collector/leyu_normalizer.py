@@ -258,6 +258,9 @@ def snapshots_from_market(
         "leyu_ctsp": mq.ctsp,
         "leyu_cds": sorted({q.source for q in mq.quotes if q.source}),
         "leyu_ov2": {q.outcome: q.malay for q in mq.quotes if q.malay},
+        # 成交额：入场门控用它做流动性下限判定（见 core/entry_gate.py）。
+        # 上游单位为字符串小数，这里保留原始值，判定时再转 float。
+        "leyu_bet_amount": match.bet_amount,
         "联赛": match.tournament,
         "赛事状态": match.status,
     }

@@ -241,6 +241,198 @@ class TestBuyMechanism(unittest.TestCase):
         self.assertIn("p_llm", top)
 
 
+class TestEntryGateWiring(unittest.TestCase):
+    """门控与决策链路的接线（用户要求的工作逻辑）。
+
+    工作逻辑：**经济学算法满足后才调用 LLM**。
+    因此必须验证：
+      1. 全场不通过时**不调 LLM**（省下调用与延迟）；
+      2. 通过时只把**通过的盘口**交给 LLM；
+      3. 阶段 2 用盘口**自己的动态门槛**判定 LLM 的 edge。
+    """
+
+    def test_all_rejected_skips_llm_entirely(self) -> None:
+        """阶段 1 全部拦下 → LLM 零调用（省下调用与延迟）。
+
+        构造：盘口本身可交易，但**去水方法分歧过大**
+        （`devig_unreliable`）——这是阶段 1 的硬拒绝，
+        与「停盘/下架」不同（后者在 `compute_markets` 就被滤掉）。
+        """
+        snaps = [_snap("AH(0)", ("home", "away"), (1.90, 2.00))]
+        calls = {"n": 0}
+
+        def _boom(*a: Any, **kw: Any) -> Any:
+            calls["n"] += 1
+            return {"markets": []}
+
+        e = _engine()
+        # 让去水分歧超过阶段 1 上限（默认 3.0 个百分点）
+        with mock.patch.object(
+                e.small, "_small_model",
+                return_value=((0.5, 0.5), {"margin": 0.05,
+                                           "method": "proportional",
+                                           "method_spread_pp": 9.0}, [])):
+            c = LLMClient(LLMConfig(base_url=_BASE, model="m", api_key=_KEY))
+            with mock.patch.object(c, "complete_json", side_effect=_boom):
+                e.attach_llm(c)
+                r = e.decide_match(snaps)
+        self.assertEqual(calls["n"], 0, "未通过门控不应调用 LLM")
+        self.assertEqual(r.decision, DECISION_AVOID)
+        self.assertFalse(r.llm_used)
+        self.assertIn("入场门槛", r.llm_reason)
+        self.assertEqual(e.stats["gated_out_matches"], 1)
+
+    def test_suspended_snapshots_are_filtered_before_gate(self) -> None:
+        """停盘/下架在 `compute_markets` 就被滤掉（报告 §5.3），
+        不会进入门控；此时给出的是「无可用盘口」而不是门控理由。
+        """
+        snaps = [
+            _snap("AH(0)", ("home", "away"), (1.90, 2.00),
+                  state=SnapshotState.SUSPENDED),
+            _snap("OU(2.5)", ("over", "under"), (1.85, 2.05),
+                  state=SnapshotState.DELISTED),
+        ]
+        e = _engine({"markets": []})
+        r = e.decide_match(snaps)
+        self.assertEqual(r.decision, DECISION_AVOID)
+        self.assertIn("无可用盘口", r.error)
+        self.assertEqual(r.gated_in, 0)
+        self.assertEqual(r.gated_out, 0)
+
+    def test_only_passing_markets_reach_llm(self) -> None:
+        """LLM 上下文只含通过门控的盘口（被阶段 1 拒的不进 prompt）。"""
+        snaps = _three_markets() + [
+            _snap("AH(1)", ("home", "away"), (1.90, 2.00)),
+        ]
+        seen: Dict[str, Any] = {}
+
+        def _cap(prompt: str, **kw: Any) -> Any:
+            seen["prompt"] = prompt
+            return {"markets": []}
+
+        e = _engine()
+        # 只让 AH(1) 的去水分歧过大 → 它被阶段 1 拦下，
+        # 其余三个盘口正常通过（验证“只把通过的交给 LLM”）。
+        real = e.small._small_model
+        bad = ((0.5, 0.5), {"margin": 0.05, "method": "proportional",
+                            "method_spread_pp": 9.0}, [])
+
+        def _small(snap: Any, trend: Any) -> Any:
+            if snap.market == "AH(1)":
+                return bad
+            return real(snap, trend)
+
+        c = LLMClient(LLMConfig(base_url=_BASE, model="m", api_key=_KEY))
+        with mock.patch.object(e.small, "_small_model", side_effect=_small):
+            with mock.patch.object(c, "complete_json", side_effect=_cap):
+                e.attach_llm(c)
+                r = e.decide_match(snaps)
+        self.assertIn("prompt", seen)
+        self.assertNotIn("AH(1)", seen["prompt"], "被门控拦下的盘口不应进 prompt")
+        self.assertGreater(r.gated_in, 0)
+        self.assertGreaterEqual(r.gated_out, 1)
+
+    def test_gate_stats_are_reported(self) -> None:
+        """门控统计必须可观测（供 /health 与排障）。"""
+        e = _engine({"markets": []})
+        r = e.decide_match(_three_markets())
+        d = r.as_dict()
+        for key in ("gated_in", "gated_out", "reject_reasons"):
+            self.assertIn(key, d)
+        self.assertEqual(d["gated_in"] + d["gated_out"], d["n_computed"])
+
+    def test_health_exposes_entry_gate_config(self) -> None:
+        e = _engine()
+        h = e.health()
+        self.assertIn("entry_gate", h)
+        self.assertIn("base_min_edge", h["entry_gate"])
+        self.assertAlmostEqual(h["entry_gate"]["base_min_edge"], 0.02, places=9)
+
+    def test_dynamic_threshold_used_for_llm_edge(self) -> None:
+        """阶段 2 必须用盘口自己的门槛，而不是全局 min_edge。
+
+        构造：长赔（门槛 3%）+ 2.5% edge → 应被拒；
+        若错误地用全局 2%，就会被误判为可买入。
+        """
+        snaps = [_snap("AH(0)", ("home", "away"), (6.00, 1.15))]
+        reply = {"markets": [
+            {"market": "AH(0)", "probabilities": {"home": 0.17, "away": 0.83},
+             "confidence": 0.9, "reason": ""},
+        ]}
+        e = _engine(reply)
+        comps = e.compute_markets(snaps)
+        self.assertTrue(comps, "应有可用盘口")
+        self.assertGreater(comps[0].gates[0].required_edge, 0.02,
+                           "长赔门槛应高于基准")
+        r = e.decide_match(snaps)
+        self.assertEqual(r.picks, [], "2.5% edge 不应过长赔门槛")
+
+    def test_pick_reports_required_edge(self) -> None:
+        """买入建议必须回传门槛，便于人工复核。"""
+        reply = {"markets": [
+            {"market": "AH(0)", "probabilities": {"home": 0.65, "away": 0.35},
+             "confidence": 0.9, "reason": ""},
+        ]}
+        e = _engine(reply)
+        r = e.decide_match(_three_markets())
+        top = r.best_pick
+        self.assertIsNotNone(top)
+        assert top is not None
+        self.assertIn("required_edge", top)
+        self.assertIn("required_edge_pct", top)
+
+
+class TestTrendIndexing(unittest.TestCase):
+    """走势索引键的回归（本项目真实缺陷）。
+
+    走势来自 WS 推送，键为上游 `(chpid, hv)`；
+    而 `snap.market` 是归一化代码（`AH(0.5)`）。
+    早期实现用 `snap.market` 去查，两者**永不可能相等**，
+    导致走势维度一直为空（形同死代码）。
+    """
+
+    def test_trend_matched_by_chpid_and_hv(self) -> None:
+        snap = _snap("AH(0.5)", ("home", "away"), (1.90, 2.00))
+        object.__setattr__(snap, "metadata", {"leyu_chpid": "4",
+                                               "leyu_hv": "0.5"})
+        trend = {"markets": [{
+            "chpid": "4", "hv": "0.5", "n": 7,
+            "last": {"direction": "down", "delta_pct": -2.5, "ts": 0},
+        }]}
+        e = _engine()
+        comps = e.compute_markets([snap], trend=trend)
+        self.assertEqual(len(comps), 1)
+        self.assertEqual(comps[0].trend_n, 7, "走势必须能匹配上")
+        self.assertEqual(comps[0].trend, "down")
+
+    def test_trend_not_matched_by_market_code(self) -> None:
+        """反证：`market` 代码作键时匹配不上（旧实现的做法）。"""
+        snap = _snap("AH(0.5)", ("home", "away"), (1.90, 2.00))
+        object.__setattr__(snap, "metadata", {"leyu_chpid": "4",
+                                               "leyu_hv": "0.5"})
+        # 用 market 代码当 chpid → 不应匹配
+        trend = {"markets": [{
+            "chpid": "AH(0.5)", "hv": "", "n": 7,
+            "last": {"direction": "down", "delta_pct": -2.5, "ts": 0},
+        }]}
+        e = _engine()
+        comps = e.compute_markets([snap], trend=trend)
+        self.assertEqual(comps[0].trend_n, 0)
+
+    def test_chpid_fallback_when_hv_differs(self) -> None:
+        """同一 chpid 下不同线值必须能区分，但缺失 hv 时可回退。"""
+        snap = _snap("OU(2.5)", ("over", "under"), (1.85, 2.05))
+        object.__setattr__(snap, "metadata", {"leyu_chpid": "2",
+                                               "leyu_hv": "2.5"})
+        trend = {"markets": [{
+            "chpid": "2", "hv": "", "n": 4,
+            "last": {"direction": "up", "delta_pct": 1.0, "ts": 0},
+        }]}
+        e = _engine()
+        comps = e.compute_markets([snap], trend=trend)
+        self.assertEqual(comps[0].trend_n, 4)
+
+
 class TestParallelAndRanking(unittest.TestCase):
     def test_decide_many_parallel(self) -> None:
         e = _engine({"markets": []}, llm_timeout_s=30.0)
