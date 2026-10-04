@@ -25,7 +25,7 @@ import json
 import time
 import unittest
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, cast
 from unittest import mock
 
 from core.models import OddsSnapshot, SnapshotState
@@ -904,3 +904,139 @@ def _mp(mid: str) -> Any:
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestScoreLeakRegression(unittest.TestCase):
+    """回归：**绝不把比分/比赛时钟下发给 LLM**（真实故障）。
+
+    实测故障：早期 `AnalysisService._build_context` 把
+    `realtime.score(mid)` 放进上下文，`build_prompt` 又把它写进提示词，
+    于是 LLM 直接“抄答案”：
+
+        reason = "终场0:0，小球" / "主队2:0取胜，平手盘主胜"
+        p_llm = 1.0  而  p_market = 0.35
+
+    这既制造假买入信号，又让赛后统计的命中率虚高（把答案泄给考生）。
+    """
+
+    def _svc(self, **kw: Any) -> Any:
+        from service.analysis import AnalysisConfig, AnalysisService
+
+        class _Hub:
+            def score(self, mid: str) -> Any:
+                return (3, 0)
+
+            def status(self, mid: str) -> Any:
+                return {"mst": "87", "mmp": "2"}
+
+            def is_finished(self, mid: str) -> bool:
+                return False
+
+            def score_age_s(self, mid: str) -> Any:
+                return 1.0
+
+            def first_seen_age_s(self, mid: str) -> Any:
+                return 1.0
+
+        cfg = AnalysisConfig(use_llm=False, **kw)
+        # 传替身对象：本组用例只验证「上下文/提示词里有没有比分」，
+        # 不依赖 RealtimeHub 的其余能力，故用 cast 明确意图。
+        return AnalysisService(valuation=mock.MagicMock(),
+                               realtime=cast(Any, _Hub()),
+                               config=cfg)
+
+    def test_context_omits_score_by_default(self) -> None:
+        svc = self._svc()
+        ctx = svc._build_context({"match_id": "m1", "state": "active"})
+        self.assertNotIn("score", ctx)
+        self.assertNotIn("minute", ctx)
+
+    def test_prompt_contains_no_score_text(self) -> None:
+        """端到端：即使拿到了比分，提示词里也不能出现它。"""
+        svc = self._svc()
+        ctx = svc._build_context({"match_id": "m1", "state": "active"})
+        e = _engine(None)
+        comps = e.compute_markets(_three_markets())
+        prompt = e.build_prompt(comps, "主队", "客队", "联赛", ctx)
+        self.assertNotIn("3:0", prompt)
+        self.assertNotIn("当前比分", prompt)
+        self.assertNotIn("第 87 分钟", prompt)
+
+    def test_leak_switch_is_explicit_and_off_by_default(self) -> None:
+        from service.analysis import AnalysisConfig
+        self.assertFalse(AnalysisConfig().leak_score_to_llm)
+
+    def test_leak_switch_on_restores_old_behaviour_for_ab_test(self) -> None:
+        """开关打开时恢复旧行为 —— 用于复现“泄露导致假 edge”的对照实验。"""
+        svc = self._svc(leak_score_to_llm=True)
+        ctx = svc._build_context({"match_id": "m1", "state": "active"})
+        self.assertEqual(ctx.get("score"), "3:0")
+
+
+class TestContaminatedProbabilityGuard(unittest.TestCase):
+    """回归：LLM 概率若与市场偏离过大，判为泄露/幻觉并丢弃。"""
+
+    def test_extreme_deviation_is_dropped(self) -> None:
+        # 市场约 0.50/0.50（AH(0) 1.90/2.00 去水后），LLM 给 1.0/0.0
+        reply = {"markets": [
+            {"market": "AH(0)", "probabilities": {"home": 1.0, "away": 0.0},
+             "confidence": 0.95, "reason": "终场0:0"},
+        ]}
+        e = _engine(reply)
+        r = e.decide_match(_three_markets())
+        # 偏离 0.5 > 0.35 阈值 → 丢弃，不给任何买入建议
+        self.assertEqual(r.picks, [])
+        self.assertGreaterEqual(e.stats.get("contaminated", 0), 1)
+
+    def test_moderate_deviation_still_allowed(self) -> None:
+        # 偏离 0.10（0.60 vs 0.50）→ 正常通过护栏
+        reply = {"markets": [
+            {"market": "AH(0)", "probabilities": {"home": 0.60, "away": 0.40},
+             "confidence": 0.8, "reason": "主队状态好"},
+        ]}
+        e = _engine(reply)
+        r = e.decide_match(_three_markets())
+        self.assertEqual(r.decision, DECISION_BUY)
+        self.assertEqual(e.stats.get("contaminated", 0), 0)
+
+
+class TestLlmBudgetAndTimeout(unittest.TestCase):
+    """回归：超时与 prompt 规模可调，避免大批场次因超时降级为 no_llm。
+
+    实测：默认 90s 时一轮 71 场中 **11 场** 因超时降级
+    （全部报“LLM 决策超时（>90s）”）；单场均值 28.85s，
+    推理型模型尾部很长。
+    """
+
+    def test_default_timeout_is_raised_from_90(self) -> None:
+        self.assertGreaterEqual(DecisionConfig().llm_timeout_s, 150.0)
+
+    def test_timeout_is_configurable(self) -> None:
+        e = _engine(None, llm_timeout_s=200.0)
+        self.assertEqual(e.config.llm_timeout_s, 200.0)
+
+    def test_prompt_market_cap_is_configurable(self) -> None:
+        e = _engine(None, max_markets_per_prompt=2)
+        comps = e.compute_markets(_three_markets())
+        prompt = e.build_prompt(comps, "主", "客", "联赛", None)
+        # 只应出现 2 个盘口标题行（[代码] 形式）
+        heads = sum(1 for line in prompt.splitlines()
+                    if line.startswith("盘口 ["))
+        self.assertLessEqual(heads, 2)
+
+    def test_timeout_message_is_actionable(self) -> None:
+        """超时降级必须给出可操作提示（而不是静默无建议）。"""
+        import time as _t
+
+        e = _engine(None, llm_timeout_s=0.01)
+        c = LLMClient(LLMConfig(base_url=_BASE, model="m", api_key=_KEY))
+
+        def _slow(*a: Any, **k: Any) -> Any:
+            _t.sleep(0.5)
+            return {"markets": []}
+
+        c.complete_json = _slow          # type: ignore[assignment]
+        e.attach_llm(c)
+        r = e.decide_match(_three_markets())
+        self.assertEqual(r.decision, DECISION_NO_LLM)
+        self.assertIn("超时", r.llm_reason)

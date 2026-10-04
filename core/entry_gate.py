@@ -185,7 +185,27 @@ class EntryGateConfig:
     min_bet_amount: float = 0.0
     #: 硬性拒绝：去水方法分歧超过该百分点时，市场公平概率本身不可信，
     #: 交给 LLM 也是问一个错误的问题（先修数据，不是先猜方向）。
+    #:
+    #: ⚠️ 这是**绝对下限**。真实故障：原实现只用这条 3pp 绝对阈值，
+    #: 结果 69/71 场比赛都被 `devig_unreliable` 拒掉（用户看到的
+    #: “几十场没有建议”的直接原因）。因为**分歧本质上随水钱放大**：
+    #: 实测本仓库 1763 个盘口，`spread/margin` 中位 0.28、p90 0.69，
+    #: 而水钱在不同玩法上差 3~5 倍（2 结果盘中位 1.75pp，
+    #: 3 结果盘 4.51pp）。拿一个固定值去卡全部玩法必然误杀。
     max_method_spread_pp: float = 3.0
+    #: 去水分歧的**相对允差**：允许分歧随水钱线性放大到 `ratio × margin`。
+    #:
+    #: 依据（本仓库数据实测，非拍脑袋）：
+    #:   * spread/margin 中位 **0.28**、p75 0.45、p90 0.69、p95 0.92；
+    #:   * 取 1.5 作为硬拒绝线 → 只拒 1% 的盘口（真正离群的），
+    #:     而旧的绝对 3pp 要拒 35%。
+    #: 即：分歧显著超出“该水钱水平下的正常放大”才判不可信。
+    #: 取 1.5 而非 p95(0.92) 是为了留出安全余量，避免把正常的
+    #: 高水钱盘口当成异常（宁可多问 LLM，也不要在数据层闲死）。
+    method_spread_margin_ratio: float = 1.5
+    #: 绝对上限（百分点）：即使水钱极大，分歧超过它仍直接拒。
+    #: 防止极端脏数据（实测最大 24.6pp）漏网。
+    method_spread_hard_cap_pp: float = 12.0
     #: 有走势数据时，是否要求「走势修正后的 edge」为正才放行。
     #:
     #: 这是**唯一能在 LLM 之前算出的真实经济信号**：
@@ -233,6 +253,31 @@ class GateResult:
             "rejects": list(self.rejects),
             "checks": self.checks,
         }
+
+
+def max_spread_pp(margin: float = 0.0,
+                  config: Optional[EntryGateConfig] = None) -> float:
+    """给定水钱水平下，去水分歧的**可接受上限**（百分点）。
+
+    规则（依据见 `EntryGateConfig.method_spread_margin_ratio`）：
+
+        limit = max(绝对下限 max_method_spread_pp,
+                    ratio × margin_pp)
+        limit = min(limit, method_spread_hard_cap_pp)
+
+    为何不能只用固定值：实测本仓库 1763 个盘口，`spread/margin`
+    中位 0.28、p90 0.69；而水钱在不同玩法上差 3~5 倍（2 结果盘中位
+    1.75pp，3 结果盘 4.51pp）。固定 3pp 会把**正常的高水钱盘口**
+    成批误杀 —— 真实故障：69/71 场因 `devig_unreliable` 被拒，
+    用户看到的就是“几十场比赛零买入建议”。
+
+    仍然保留绝对上限，是为了卡住真正的脏数据（实测最大 24.6pp）。
+    """
+    cfg = config or EntryGateConfig()
+    margin_pp = max(0.0, _num(margin, 0.0) * 100.0)
+    limit = max(cfg.max_method_spread_pp,
+                cfg.method_spread_margin_ratio * margin_pp)
+    return min(limit, cfg.method_spread_hard_cap_pp)
 
 
 def required_edge(
@@ -313,6 +358,7 @@ def evaluate_entry(
     trend_pct: float = 0.0,
     tick_age_s: Optional[float] = None,
     trend_ticks: int = 0,
+    margin: float = 0.0,
     config: Optional[EntryGateConfig] = None,
 ) -> GateResult:
     """判断该结果是否**值得交给 LLM 做最终裁定**。
@@ -343,7 +389,8 @@ def evaluate_entry(
         rejects.append(REJECT_ILLIQUID)
 
     # -- 硬性：去水不可信（市场公平概率本身有问题）------------------------
-    if spread_v > cfg.max_method_spread_pp:
+    # 阈值随水钱放大：同一分歧在高水钱盘口是正常的，在低水钱盘口才是异常。
+    if spread_v > max_spread_pp(margin, cfg):
         rejects.append(REJECT_METHOD_SPREAD)
 
     # -- 硬性：走势大幅逆风（方向不利，非"不确定"）------------------------
@@ -373,6 +420,7 @@ def evaluate_entry(
         "tick_age_s": (None if tick_age_s is None else round(_num(tick_age_s), 1)),
         "trend_ticks": trend_ticks,
         "method_spread_pp": round(spread_v, 4),
+        "method_spread_limit_pp": round(max_spread_pp(margin, cfg), 4),
         "threshold_parts": parts,
     }
     return GateResult(
@@ -397,6 +445,7 @@ def gate_market(
     tick_age_s: Optional[float] = None,
     trend_ticks: int = 0,
     pre_edge: Optional[float] = None,
+    margin: float = 0.0,
     config: Optional[EntryGateConfig] = None,
 ) -> GateResult:
     """**阶段 1**：经济前置条件 —— 该盘口值不值得去问 LLM。
@@ -431,7 +480,9 @@ def gate_market(
         rejects.append(REJECT_STATE)
     if cfg.min_bet_amount > 0 and bet_v < cfg.min_bet_amount:
         rejects.append(REJECT_ILLIQUID)
-    if spread_v > cfg.max_method_spread_pp:
+    # 去水分歧：阈值随水钱放大（理由见 `max_spread_pp` 与配置注释）。
+    # 早期只用固定 3pp，导致 69/71 场被 `devig_unreliable` 拒掉。
+    if spread_v > max_spread_pp(margin, cfg):
         rejects.append(REJECT_METHOD_SPREAD)
     against = _is_against(trend, trend_v)
     if against and abs(trend_v) >= cfg.hard_reject_trend_pct:
@@ -473,6 +524,8 @@ def gate_market(
                            else round(_num(tick_age_s), 1)),
             "trend_ticks": trend_ticks,
             "method_spread_pp": round(spread_v, 4),
+            "method_spread_limit_pp": round(max_spread_pp(margin, cfg), 4),
+            "margin": round(_num(margin, 0.0), 6),
             "threshold_parts": parts,
         },
     )

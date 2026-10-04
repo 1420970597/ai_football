@@ -178,6 +178,42 @@ tr.row-buy:hover{background:linear-gradient(90deg,rgba(61,220,132,.16),transpare
 footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
 .warnbox{background:var(--negbg);border:1px solid rgba(255,107,94,.35);color:var(--neg);
   padding:10px 14px;border-radius:6px;font-size:12.5px;margin:0 15px 14px}
+
+/* ---------- 实时盘口看板（用户要求：看到每场每个盘口的实时信息） ---------- */
+.mrow{background:var(--card);border:1px solid var(--line);border-radius:8px;
+  margin-bottom:12px;overflow:hidden;box-shadow:var(--shadow)}
+.mrow>summary{cursor:pointer;padding:10px 14px;display:flex;align-items:center;
+  gap:10px;flex-wrap:wrap;background:var(--card2);list-style:none}
+.mrow>summary::-webkit-details-marker{display:none}
+.mrow>summary:hover{background:var(--card3)}
+.mrow .tm{font-weight:700;color:#fff;font-size:13.5px}
+.mrow .lg{color:var(--mut);font-size:11.5px}
+.mrow .sc{font-weight:700;color:var(--acc);font-variant-numeric:tabular-nums;
+  background:rgba(47,158,224,.12);padding:1px 8px;border-radius:4px;font-size:12.5px}
+.mrow .clock{color:var(--amb);font-size:11.5px;font-weight:600}
+.mrow .mk-count{color:var(--mut);font-size:11.5px;margin-left:auto}
+.mk-block{padding:8px 14px 12px;border-top:1px solid var(--line)}
+.mk-block h5{margin:8px 0 5px;font-size:12px;color:#cfe0f0;font-weight:600;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mk-block h5 .line{color:var(--teal);font-weight:600}
+.mk-block h5 .mg{color:var(--mut);font-weight:400;font-size:11px}
+.mk-block table{font-size:12px}
+.mk-block th,.mk-block td{padding:5px 9px}
+.o-hit{color:var(--pos);font-weight:700}
+.o-miss{color:var(--mut)}
+.mk-block tr.gate-off{opacity:.55}
+.gate-tag{display:inline-block;padding:0 6px;border-radius:8px;font-size:10.5px;
+  font-weight:700;line-height:1.8;white-space:nowrap}
+.gate-tag.on{background:var(--posbg);color:var(--pos)}
+.gate-tag.off{background:var(--card3);color:var(--mut)}
+.gate-tag.buy{background:var(--pos);color:#06240f}
+.rej{color:var(--mut);font-size:10.5px}
+.board-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  padding:8px 12px;margin-bottom:10px;background:var(--card2);border:1px solid var(--line);
+  border-radius:6px;font-size:12px}
+.board-bar .live-dot{width:7px;height:7px;border-radius:50%;background:var(--pos);
+  display:inline-block;animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
 </style>
 </head>
 <body>
@@ -247,6 +283,47 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
         <tbody id="tbody"></tbody>
       </table></div>
       <div class="note" id="list-note"></div>
+    </div>
+  </section>
+
+  <!-- ============ 实时盘口看板（逐场逐盘口） ============ -->
+  <section id="view-board" style="display:none">
+    <div class="board-bar" id="board-bar">
+      <span class="live-dot"></span>
+      <b>实时盘口</b>
+      <span class="mut" id="board-tag">加载中…</span>
+      <span class="spacer" style="flex:1"></span>
+      <label class="mut" style="font-size:11.5px">
+        <input type="checkbox" id="board-live" checked> 只看进行中
+      </label>
+      <label class="mut" style="font-size:11.5px">
+        <input type="checkbox" id="board-decided" checked> 只看已决策
+      </label>
+      <button class="btn ghost" id="btn-board-refresh">立即刷新</button>
+      <span class="mut" style="font-size:11px" id="board-updated"></span>
+    </div>
+    <div class="panel">
+      <h2>每场 · 每个盘口 <span class="tag" id="board-note-tag">赔率 / 走势 / 门控结论</span></h2>
+      <div class="state" id="st-board-loading">
+        <div class="skel">
+          <div class="bar" style="width:90%"></div><div class="bar" style="width:70%"></div>
+          <div class="bar" style="width:82%"></div>
+        </div>
+        <div class="prog">正在拉取实时盘口…</div>
+      </div>
+      <div class="state" id="st-board-empty">
+        <div class="big">📡</div>
+        <h3>暂无进行中的盘口</h3>
+        <p>可能是当前无进行中赛事、实时推送未启动，或筛选条件过严。</p>
+      </div>
+      <div class="state" id="st-board-error">
+        <div class="big">⚠️</div>
+        <h3 id="st-board-error-title">请求失败</h3>
+        <p id="st-board-error-desc"></p>
+        <button class="btn" id="btn-board-retry">重试</button>
+      </div>
+      <div id="board-body"></div>
+      <div class="note" id="board-note"></div>
     </div>
   </section>
 
@@ -345,7 +422,7 @@ const API = "/api/v1";
 const $ = (id) => document.getElementById(id);
 const S = { matches: [], selected: null, method: "auto", view: "dashboard",
             decisions: [], decisionSummary: null, decisionLimit: 6,
-            dataSource: "" };
+            dataSource: "", board: [], boardTimer: null };
 
 /* ---------- 安全 DOM 构建器 ---------- */
 function el(tag, props, children) {
@@ -376,7 +453,7 @@ const fx = (v, n = 2) => (v === null || v === undefined || Number.isNaN(Number(v
 const pct = (v, n = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "—" : (Number(v) * 100).toFixed(n) + "%";
 
 /* ---------- 视图 ---------- */
-const VIEWS = [["dashboard", "赛事看板"], ["pricing", "定价对比"], ["calibration", "校准报告"]];
+const VIEWS = [["dashboard", "赛事看板"], ["board", "实时盘口"], ["pricing", "定价对比"], ["calibration", "校准报告"]];
 function renderNav() {
   const nav = $("nav");
   clear(nav);
@@ -394,6 +471,12 @@ function showView(v) {
   VIEWS.forEach(([k]) => { const n = $("view-" + k); if (n) n.style.display = (k === v) ? "" : "none"; });
   renderNav();
   if (v === "calibration") loadCalibration();
+  if (v === "board") {
+    loadBoard();
+    startBoardTimer();
+  } else {
+    stopBoardTimer();   // 离开看板就停掉轮询，不做无谓请求
+  }
 }
 
 /* ---------- 消息与状态 ---------- */
@@ -1225,6 +1308,225 @@ async function loadCalibration() {
   }
 }
 
+/* ============================================================================
+   实时盘口看板（用户要求：能看到每场比赛每个盘口的实时信息）
+   ----------------------------------------------------------------------------
+   数据来自 `GET /api/v1/board`：**一次请求给齐**渲染所需的一切
+   （比分/时钟 + 每个盘口的最新赔率 + 走势 + 门控结论 + 买入建议）。
+   为何不拆多次拉：分次拉会出现「赔率是这一刻、门控是上一刻」的时间戳裂。
+
+   ⚠️ 该端点是**读缓存**（不触发 LLM），所以可以高频轮询。
+   ========================================================================== */
+
+function setBoardState(state, extra) {
+  ["st-board-loading", "st-board-empty", "st-board-error"].forEach(
+    id => { const n = $(id); if (n) n.classList.remove("show"); });
+  if (state === "loading") $("st-board-loading").classList.add("show");
+  if (state === "empty") $("st-board-empty").classList.add("show");
+  if (state === "error") {
+    $("st-board-error").classList.add("show");
+    if (extra) {
+      setText($("st-board-error-title"), extra.title || "请求失败");
+      setText($("st-board-error-desc"), extra.desc || "");
+    }
+  }
+}
+
+/* 走势箭头（与决策列表同语义：降赔=资金流入=绿） */
+function boardTrend(t, pct) {
+  t = t || "flat";
+  const arrow = t === "down" ? "↓" : (t === "up" ? "↑" : "·");
+  const title = t === "down" ? "降赔：资金流入该结果"
+              : (t === "up" ? "升赔：资金流出该结果" : "盘口未变动");
+  return el("span", { class: "trend " + t, title: title,
+    text: arrow + (pct ? " " + Number(pct).toFixed(2) + "%" : "") });
+}
+
+/* 单场比赛卡片：summary 行 + 展开后的逐盘口明细 */
+async function loadBoard(opts) {
+  const o = opts || {};
+  if (!o.silent) setBoardState("loading");
+  const qs = new URLSearchParams();
+  if ($("board-live").checked) qs.set("live", "1");
+  qs.set("markets", "1");
+
+  let data;
+  try {
+    const r = await fetch(API + "/board?" + qs);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    data = await r.json();
+  } catch (e) {
+    setBoardState("error", { title: "无法读取实时盘口",
+      desc: "GET " + API + "/board 失败：" + e.message });
+    return;
+  }
+
+  let rows = data.matches || [];
+  if ($("board-decided").checked) rows = rows.filter(m => m.decided);
+  S.board = rows;
+
+  const rt = data.realtime || {};
+  const trig = data.trigger || {};
+  setText($("board-tag"), (data.count || 0) + " 场 · 进行中 " + (data.live || 0) +
+    " · 有买入建议 " + (data.buy || 0) + " · 已决策 " + (data.decided || 0));
+  setText($("board-updated"), data.generated_at
+    ? ("更新于 " + String(data.generated_at).slice(11, 19) + "Z") : "");
+
+  const body = $("board-body");
+  clear(body);
+  if (!rows.length) {
+    setBoardState("empty");
+    setText($("board-note"), "");
+    return;
+  }
+  setBoardState("table");
+  rows.forEach(m => body.appendChild(renderMatchRow(m)));
+
+  const note = $("board-note");
+  clear(note);
+  note.appendChild(document.createTextNode(
+    "推送：连接 " + (rt.connected || 0) + " · 订阅 " + (rt.subscribed || 0) +
+    " 场 · 消息 " + (rt.messages || 0) + " · 真实变动 " + (rt.price_ticks || 0) + " 次。"));
+  note.appendChild(document.createTextNode(
+    " 触发：累计 " + (trig.triggered || 0) + " 场 / " + (trig.batches || 0) +
+    " 批（盘口变动驱动）。"));
+  note.appendChild(el("br"));
+  note.appendChild(document.createTextNode(
+    "标记为「未决策」的场次只有赔率，没有门控/edge —— 后台决策尚未覆盖它。" +
+    "赔率与走势来自实时推送；门控结论与买入建议来自最近一轮决策缓存。"));
+}
+
+/* 一场比赛：可折叠，summary 展示比分/时钟/买入建议 */
+function renderMatchRow(m) {
+  const d = el("details", { class: "mrow" });
+  // 有买入建议的默认展开，便于一眼看到
+  if (m.has_buy) d.setAttribute("open", "open");
+
+  const sum = el("summary", {});
+  sum.appendChild(el("span", { class: "tm",
+    text: (m.home || "?") + " vs " + (m.away || "?") }));
+  sum.appendChild(el("span", { class: "lg", text: m.league || "" }));
+  if (m.score) {
+    sum.appendChild(el("span", { class: "sc",
+      text: m.score[0] + ":" + m.score[1] }));
+  }
+  if (m.clock) sum.appendChild(el("span", { class: "clock", text: m.clock }));
+  if (m.is_live) sum.appendChild(el("span", { class: "pill ok", text: "进行中" }));
+  if (m.has_buy) {
+    sum.appendChild(el("span", { class: "badge buy",
+      text: "买入 x" + (m.picks || []).length }));
+    if (m.best_label) sum.appendChild(el("span", { class: "pill ok",
+      text: m.best_label }));
+  } else if (m.decided) {
+    sum.appendChild(el("span", { class: "badge avoid", text: "无建议" }));
+  } else {
+    sum.appendChild(el("span", { class: "badge nollm", text: "未决策" }));
+  }
+  sum.appendChild(el("span", { class: "mk-count",
+    text: (m.markets || []).length + " 个盘口" +
+      (m.decided ? (" · 过门控 " + (m.gated_in || 0)) : "") }));
+  d.appendChild(sum);
+
+  const block = el("div", { class: "mk-block" });
+  const mks = m.markets || [];
+  // `/board` 把买入建议放在**场次**级（picks 带 market/outcome），
+  // 而盘口级渲染需要知道“该盘口哪个结果被采纳了”，因此先建索引挂上去。
+  const picksByMarket = {};
+  (m.picks || []).forEach(p => {
+    (picksByMarket[p.market] = picksByMarket[p.market] || []).push(p);
+  });
+  if (!mks.length) {
+    block.appendChild(el("div", { class: "rej", text: "该场无可展示盘口。" }));
+  }
+  mks.forEach(mk => block.appendChild(renderMarketBlock(
+    Object.assign({}, mk, { _picks: picksByMarket[mk.market] || [] }))));
+
+  if (m.decided) {
+    const bits = [];
+    if (m.llm_used) bits.push("LLM 已裁定（置信 " + fx(m.llm_confidence, 2) + "）");
+    else bits.push("LLM 未参与");
+    if (m.reject_reasons && m.reject_reasons.length) {
+      bits.push("拒因：" + m.reject_reasons.join("、"));
+    }
+    if (m.llm_reason) bits.push(m.llm_reason);
+    block.appendChild(el("div", { class: "rej", text: bits.join(" · ") }));
+  } else {
+    block.appendChild(el("div", { class: "rej",
+      text: "未决策：仅显示实时赔率，无门控/edge 结论。" }));
+  }
+  d.appendChild(block);
+  return d;
+}
+
+/* 单个盘口：每个结果一行，带实时赔率 / 去水 / edge / 门控标记 */
+function renderMarketBlock(mk) {
+  const box = el("div", {});
+  const h = el("h5", {});
+  h.appendChild(document.createTextNode(mk.market || "?"));
+  h.appendChild(el("span", { class: "line", text: mk.label || "" }));
+  if (mk.line) h.appendChild(el("span", { class: "line", text: "线 " + mk.line }));
+  if (typeof mk.margin === "number" && mk.margin) {
+    h.appendChild(el("span", { class: "mg",
+      text: "水钱 " + (mk.margin * 100).toFixed(2) + "% · " + (mk.method || "") }));
+  }
+  h.appendChild(boardTrend(mk.trend, mk.trend_pct));
+  if (mk.trend_n) h.appendChild(el("span", { class: "mg",
+    text: "变动 " + mk.trend_n + " 次" }));
+  if (!mk.decided) h.appendChild(el("span", { class: "gate-tag off", text: "未决策" }));
+  box.appendChild(h);
+
+  const tb = el("tbody", {});
+  const outs = mk.outcomes || [];
+  outs.forEach((oc, i) => {
+    const odds = (mk.odds || [])[i];
+    const pf = (mk.p_fair || [])[i];
+    const e = (mk.edges || [])[i];
+    const g = (mk.gates || [])[i];
+    const passed = g ? !!g.passed : false;
+    // 该结果是否就是被采纳的买入建议
+    const pick = (mk._picks || []).find(p => p.outcome === oc);
+    const tr = el("tr", { class: passed || pick ? "" : "gate-off" });
+
+    tr.appendChild(el("td", {}, [
+      el("b", { text: oc, class: pick ? "o-hit" : "o-miss" }),
+      pick ? el("span", { class: "gate-tag buy", text: " 买入" }) : null
+    ]));
+    tr.appendChild(el("td", { class: "num", text: fx(odds, 3) }));
+    tr.appendChild(el("td", { class: "num",
+      text: (pf === undefined || pf === null) ? "—" : (Number(pf) * 100).toFixed(2) + "%" }));
+    tr.appendChild(el("td", { class: "num " + (typeof e === "number" && e > 0 ? "edge-pos" : "edge-neg"),
+      text: (e === undefined || e === null) ? "—" : ((e > 0 ? "+" : "") + (Number(e) * 100).toFixed(2) + "%") }));
+    tr.appendChild(el("td", {},
+      [el("span", { class: "gate-tag " + (passed ? "on" : "off"),
+        text: passed ? "过门槛" : "未过",
+        title: g ? ("门槛 " + (Number(g.required_edge || 0) * 100).toFixed(2) + "%" +
+          ((g.rejects && g.rejects.length) ? " · 拒因 " + g.rejects.join("、") : "")) : "" })]));
+    tr.appendChild(el("td", { class: "rej",
+      text: (passed || !g) ? "" : (g.rejects || []).join("、") }));
+    tb.appendChild(tr);
+  });
+  box.appendChild(el("table", {}, [el("thead", {}, [el("tr", {}, [
+    el("th", { text: "结果" }), el("th", { class: "num", text: "实时赔率" }),
+    el("th", { class: "num", text: "去水概率" }), el("th", { class: "num", text: "edge" }),
+    el("th", { text: "门控" }), el("th", { text: "拒因" })
+  ])]), tb]));
+  return box;
+}
+
+function stopBoardTimer() {
+  if (S.boardTimer) { clearInterval(S.boardTimer); S.boardTimer = null; }
+}
+
+/* 看板自动刷新：`/board` 只读缓存（不跑 LLM），所以可以高频。
+   10s 与实时推送的推送节奏接近，又不会打爆后端。 */
+function startBoardTimer() {
+  stopBoardTimer();
+  S.boardTimer = setInterval(() => {
+    if (S.view !== "board") { stopBoardTimer(); return; }
+    loadBoard({ silent: true });
+  }, 10000);
+}
+
 /* ---------- 事件绑定 ---------- */
 $("btn-load").addEventListener("click", loadMatches);
 $("btn-retry").addEventListener("click", loadMatches);
@@ -1246,6 +1548,16 @@ if (backBtn) backBtn.addEventListener("click", () => {
   if (p) p.style.display = "none";
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
+
+// 实时盘口看板的筛选与刷新
+["board-live", "board-decided"].forEach(id => {
+  const n = $(id);
+  if (n) n.addEventListener("change", () => loadBoard({ silent: true }));
+});
+const boardRefresh = $("btn-board-refresh");
+if (boardRefresh) boardRefresh.addEventListener("click", () => loadBoard());
+const boardRetry = $("btn-board-retry");
+if (boardRetry) boardRetry.addEventListener("click", () => loadBoard());
 
 renderNav();
 // 首次加载：直接拉「决策列表」——买入建议/优势/仓位就在列表里，

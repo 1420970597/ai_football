@@ -37,6 +37,7 @@ import re
 import math
 import os
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 import threading
 from http import HTTPStatus
@@ -72,6 +73,25 @@ def _q1(query: Mapping[str, List[str]], name: str,
     if not vals:
         return default
     return vals[0]
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    """容错浮点转换（看板字段可能缺失/为 None/为字符串）。
+
+    看板是展示层：一个字段缺失不应让整页 500，宁可降级为默认值。
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    """容错整数转换（同上）。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _q_int(query: Mapping[str, List[str]], name: str, default: int,
@@ -259,6 +279,7 @@ class ApiApp:
             ("GET", "/decisions/<id>", self.h_decision_detail),
             ("GET", "/trend/<id>", self.h_trend),
             ("GET", "/realtime", self.h_realtime),
+            ("GET", "/board", self.h_board),
             ("GET", "/llm", self.h_llm),
             ("GET", "/ledger/stats", self.h_ledger_stats),
             ("GET", "/ledger/entries", self.h_ledger_entries),
@@ -636,6 +657,189 @@ class ApiApp:
               body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
         """LLM 配置与调用统计（密钥一律脱敏）。"""
         return self.analysis.llm_health()
+
+    # -- 逐场逐盘口实时看板（用户要求：能看到每场每个盘口的实时信息） --------
+
+    def h_board(self, query: Mapping[str, List[str]],
+                body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """逐场逐盘口的实时看板（一次请求给齐渲染所需数据）。
+
+        为何不拆成多个端点让前端拼：前端要同时展示「比赛 + 每个盘口的
+        最新赔率 + 每个盘口的走势 + 门控结论」。分多次拉取会出现
+        「赔率是这一刻、门控结论是上一刻」的**时间戳裂**，用户看到的
+        信息互相矛盾。这里在服务端对齐到同一时刻。
+
+        数据来源（按优先级）：
+          1. 最近一轮决策的 `computations` —— 信息最全（含 line / 去水 /
+             edge / 门控 / 走势）。**读缓存，不触发 LLM**。
+          2. 该场没有决策结果时，回退用快照库的最新赔率（只有赔率，
+             没有门控结论）。前端必须如实标注「未决策」，
+             而不是显示一个假的「通过」。
+
+        Query:
+            live=1       只看进行中
+            league=xx    限定联赛
+            limit=N      最多几场（默认 0 = 全部）
+            markets=0    不带逐盘口明细（只要列表，减小体积）
+        """
+        from core.market_labels import describe_market
+
+        only_live = (_q1(query, "live") or "") not in ("", "0", "false")
+        league = (_q1(query, "league") or "").strip() or None
+        limit = _q_int(query, "limit", 0, minimum=0, maximum=2000)
+        with_markets = (_q1(query, "markets") or "1") not in (
+            "0", "false", "no")
+
+        live_ids = self.analysis.live_match_ids()
+        res = self.analysis.latest_result(max_age_s=None) or {}
+        dec_by_id: Dict[str, Mapping[str, Any]] = {}
+        for d in (res.get("decisions") or []):
+            if isinstance(d, Mapping):
+                dec_by_id[str(d.get("match_id"))] = d
+        rt = self.analysis.realtime
+
+        rows: List[Dict[str, Any]] = []
+        for m in self.svc.list_matches(league=league):
+            mid = str(m.get("match_id") or "")
+            state = str(m.get("state") or "")
+            if state == "delisted":
+                continue
+            is_live = (mid in live_ids) if live_ids is not None \
+                else (state == "active")
+            if only_live and not is_live:
+                continue
+            dec = dec_by_id.get(mid) or {}
+            row: Dict[str, Any] = {
+                "match_id": mid,
+                "league": str(m.get("league") or ""),
+                "home": str(m.get("home") or ""),
+                "away": str(m.get("away") or ""),
+                "date": str(m.get("date") or ""),
+                "time": str(m.get("time") or ""),
+                "state": state,
+                "is_live": is_live,
+                "score": None,
+                "half_score": None,
+                "clock": "",
+                "n_markets": len(m.get("markets") or []),
+                # 决策结论；未决策时保持中性值，前端据此标注
+                "decided": bool(dec),
+                "decision": str(dec.get("decision") or ""),
+                "has_buy": bool(dec.get("has_buy")),
+                "best_label": str(dec.get("best_label") or ""),
+                "gated_in": _as_int(dec.get("gated_in")),
+                "gated_out": _as_int(dec.get("gated_out")),
+                "reject_reasons": list(dec.get("reject_reasons") or []),
+                "llm_used": bool(dec.get("llm_used")),
+                "llm_confidence": _as_float(dec.get("llm_confidence")),
+                "llm_reason": str(dec.get("llm_reason") or ""),
+                "picks": list(dec.get("picks") or []),
+                "decided_at": str(dec.get("computed_at") or ""),
+            }
+            self._fill_live_state(row, mid, rt)
+            if with_markets:
+                row["markets"] = self._board_markets(m, dec, describe_market)
+            rows.append(row)
+
+        # 排序：有买入建议 → 进行中 → 其余；同级按开赛时间
+        rows.sort(key=lambda r: (
+            0 if r["has_buy"] else (1 if r["is_live"] else 2),
+            str(r.get("date") or ""), r["match_id"]))
+        if limit:
+            rows = rows[:limit]
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "count": len(rows),
+            "live": sum(1 for r in rows if r["is_live"]),
+            "buy": sum(1 for r in rows if r["has_buy"]),
+            "decided": sum(1 for r in rows if r["decided"]),
+            "summary": res.get("summary") or {},
+            "trigger": self.analysis.scheduler_health(),
+            "cycle": getattr(self.analysis, "cycle_stats", {}),
+            "realtime": (rt.health() if rt is not None
+                         else {"running": False}),
+            "matches": rows,
+        }
+
+    @staticmethod
+    def _fill_live_state(row: Dict[str, Any], mid: str, rt: Any) -> None:
+        """填比分 / 半场比分 / 比赛时钟（来自实时推送，缺失则留空）。"""
+        if rt is None:
+            return
+        try:
+            sc = rt.score(mid)
+        except Exception:  # noqa: BLE001 - 单个字段缺失不应让整页 500
+            sc = None
+        if sc and len(sc) >= 2:
+            row["score"] = [int(sc[0]), int(sc[1])]
+        try:
+            st = rt.status(mid) or {}
+        except Exception:  # noqa: BLE001
+            st = {}
+        row["clock"] = str(st.get("clock") or st.get("minute") or "")
+        ht = st.get("half_score")
+        if isinstance(ht, (list, tuple)) and len(ht) >= 2:
+            row["half_score"] = [int(ht[0]), int(ht[1])]
+
+    @staticmethod
+    def _board_markets(m: Mapping[str, Any], dec: Mapping[str, Any],
+                       describe: Any) -> List[Dict[str, Any]]:
+        """逐盘口明细。
+
+        优先用决策里的 `computations`：它含**原始线值**、去水概率、edge、
+        门控结论与走势 —— 这些是判断「为什么没建议买入」的关键。
+        没有决策结果时才回退到快照库的最新赔率（并标记 `decided=False`）。
+        """
+        comps = dec.get("computations") or []
+        if comps:
+            out: List[Dict[str, Any]] = []
+            for c in comps:
+                if not isinstance(c, Mapping):
+                    continue
+                out.append({
+                    "market": str(c.get("market") or ""),
+                    "label": str(c.get("market_label") or ""),
+                    "line": str(c.get("line") or ""),
+                    "outcomes": list(c.get("outcomes") or []),
+                    "odds": list(c.get("odds") or []),
+                    "p_fair": list(c.get("p_fair") or []),
+                    "edges": list(c.get("edges") or []),
+                    "kellys": list(c.get("kellys") or []),
+                    "margin": _as_float(c.get("margin")),
+                    "state": str(c.get("state") or ""),
+                    "method": str(c.get("method") or ""),
+                    "trend": str(c.get("trend") or ""),
+                    "trend_pct": _as_float(c.get("trend_pct")),
+                    "trend_n": _as_int(c.get("trend_n")),
+                    "gate_passed": bool(c.get("gate_passed")),
+                    "reject_reasons": list(c.get("reject_reasons") or []),
+                    "best_edge": _as_float(c.get("best_edge")),
+                    "best_outcome": str(c.get("best_outcome") or ""),
+                    # 逐结果的入场门控结论（含门槛与余量），供人工复核
+                    "gates": list(c.get("gates") or []),
+                    "decided": True,
+                })
+            out.sort(key=lambda r: r["market"])
+            return out
+        # 回退：只有赔率（该场尚未决策）
+        odds_by = m.get("latest_odds") or {}
+        oc_by = m.get("latest_outcomes") or {}
+        out = []
+        for mk in sorted(odds_by):
+            out.append({
+                "market": str(mk),
+                "label": describe(mk),
+                "line": "",
+                "outcomes": list(oc_by.get(mk) or []),
+                "odds": list(odds_by.get(mk) or []),
+                "p_fair": [], "edges": [], "kellys": [],
+                "margin": 0.0, "state": "", "method": "",
+                "trend": "", "trend_pct": 0.0, "trend_n": 0,
+                "gate_passed": False, "reject_reasons": [],
+                "best_edge": 0.0, "best_outcome": "", "gates": [],
+                "decided": False,
+            })
+        return out
 
     # -- 决策台账与本地统计（回答“LLM 判定到底准不准”） ---------------------
 

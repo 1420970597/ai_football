@@ -76,6 +76,7 @@ from .decision import (
 from .llm import LLMClient, LLMError, LLMNotConfigured
 
 __all__ = [
+    "MAX_MARKETS_PER_PROMPT",
     "MarketComputation",
     "MatchPicks",
     "MatchDecisionEngine",
@@ -501,6 +502,9 @@ class MatchDecisionEngine:
                     trend_pct=_as_float(trend_info.get("delta_pct")) / 100.0,
                     tick_age_s=tick_age_s,
                     trend_ticks=_as_int(trend_info.get("n")),
+                    # 水钱：去水分歧的阈值要随它放大（见 core/entry_gate）。
+                    # 不传的话会退回绝对 3pp，重新造成大批判误杀。
+                    margin=_as_float(diag.get("margin"), snap.margin),
                     # 走势修正后的 edge（信息流入但价格未走完时的真实优势）。
                     # 仅在**有走势数据**时作为阶段 1 的硬条件（见 core/entry_gate.py）。
                     pre_edge=edges[i],
@@ -604,7 +608,7 @@ class MatchDecisionEngine:
             lines.append("比赛状态：%s" % ctx["status_text"])
         lines.append("")
 
-        for c in list(comps)[:MAX_MARKETS_PER_PROMPT]:
+        for c in list(comps)[:max(1, self.config.max_markets_per_prompt)]:
             trend_txt = ""
             if c.trend_n:
                 trend_txt = "，走势 %s %.2f%%（%d 次变动）" % (
@@ -779,6 +783,16 @@ class MatchDecisionEngine:
             # 收缩权重 = min(max_llm_weight, confidence)，与逐盘口引擎
             # `DecisionEngine._fuse` 保持一致（同一套概率融合语义）。
             w = min(self.config.max_llm_weight, max(0.0, conf))
+            # **污染护栏**：LLM 对某结果的概率若与市场公平概率相差过大
+            # （实测曾出现 p_llm=1.0 vs p_market=0.35），说明这不是
+            # 独立判断而是泄露/幻觉。此时丢弃整个盘口，不产出任何建议，
+            # 并在 stats 里计数以便监控。
+            dev = max(abs(probs[i] - comp.p_fair[i])
+                      for i in range(len(comp.outcomes)))
+            if dev > self.config.max_prob_deviation:
+                self.stats["contaminated"] = \
+                    self.stats.get("contaminated", 0) + 1
+                continue
             for i, oc in enumerate(comp.outcomes):
                 p_llm_i = probs[i]
                 p_fused = (1.0 - w) * comp.p_fair[i] + w * p_llm_i

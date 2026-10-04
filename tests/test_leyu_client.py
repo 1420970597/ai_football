@@ -656,3 +656,67 @@ class TestCookieHandling(unittest.TestCase):
         c = LEYUClient(host="https://x.test", cookie="a=1")
         c._absorb_cookies(H())
         self.assertEqual(c.cookie, "a=1")
+
+
+# --------------------------------------------------------------------------- #
+# 回归：大响应被截断（真实故障 —— 「订阅列表获取失败」）
+# --------------------------------------------------------------------------- #
+
+class TestTruncatedResponseRegression(unittest.TestCase):
+    """`_read_body` 必须识别截断，并且**重试**而不是把半截数据交出去。
+
+    背景（本项目真实故障）：
+        全量赛程 `getOriginalDataPB` 响应体数百 KB，实测反复抛
+        `http.client.IncompleteRead`。该异常的 MRO 是
+        `IncompleteRead → HTTPException → Exception`，
+        **既不继承** `urllib.error.URLError` **也不继承** `OSError`，
+        因此 `_request` 的 except 分支完全接不住 → 异常穿透 →
+        `mids_provider` 失败 → 实时推送**只订阅到 2 场** →
+        “盘口变动触发决策”几乎无信号可触发（用户看到页面没反应）。
+
+    这里用假 response 对象锁定两条不变式：
+        1. 声明 Content-Length 但实际读得少 → 必抛 IncompleteRead；
+        2. 长度在容差内 → 正常返回，不误伤。
+    """
+
+    @staticmethod
+    def _resp(chunks, declared):
+        class H:
+            @staticmethod
+            def get(name):
+                return declared if name == "Content-Length" else None
+
+        class R:
+            headers = H()
+
+            def __init__(self):
+                self._it = iter(chunks)
+
+            def read(self, n=-1):
+                try:
+                    return next(self._it)
+                except StopIteration:
+                    return b""
+
+        return R()
+
+    def test_short_body_raises_incomplete_read(self) -> None:
+        import http.client
+        # 声明 1000 字节，只给 100 字节
+        r = self._resp([b"x" * 100], "1000")
+        with self.assertRaises(http.client.IncompleteRead):
+            LEYUClient._read_body(r)
+
+    def test_full_body_ok(self) -> None:
+        payload = b"y" * 500
+        r = self._resp([payload], "500")
+        self.assertEqual(LEYUClient._read_body(r), payload)
+
+    def test_within_tolerance_ok(self) -> None:
+        # 声明 1000，实读 995（0.5% 差异）→ 容差内，不报错
+        r = self._resp([b"z" * 995], "1000")
+        self.assertEqual(len(LEYUClient._read_body(r)), 995)
+
+    def test_no_content_length_is_tolerated(self) -> None:
+        r = self._resp([b"a" * 10], None)
+        self.assertEqual(LEYUClient._read_body(r), b"a" * 10)

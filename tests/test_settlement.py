@@ -259,10 +259,16 @@ class TestCLV(unittest.TestCase):
     """CLV = 收盘价 / 买入价 - 1（正 = 买得比收盘便宜）。"""
 
     def test_positive_clv(self) -> None:
-        self.assertAlmostEqual(clv(2.0, 2.2), 0.1, places=6)
+        got = clv(2.0, 2.2)
+        self.assertIsNotNone(got)
+        assert got is not None          # 收窄类型，供静态检查
+        self.assertAlmostEqual(got, 0.1, places=6)
 
     def test_negative_clv(self) -> None:
-        self.assertAlmostEqual(clv(2.2, 2.0), -0.090909, places=5)
+        got = clv(2.2, 2.0)
+        self.assertIsNotNone(got)
+        assert got is not None
+        self.assertAlmostEqual(got, -0.090909, places=5)
 
     def test_invalid_odds_returns_none(self) -> None:
         self.assertIsNone(clv(0.0, 2.0))
@@ -624,3 +630,108 @@ class TestAnalysisServiceLedgerWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestClosingOddsCapture(unittest.TestCase):
+    """回归：收盘赔率必须被留痕，否则 CLV 永远算不出来。
+
+    真实缺口：`settle_finished()` 从不填 `scores[...]["closing"]`，
+    于是 `closing_odds` 恒为 0 → `summarise()` 里 `clv_n=0`、
+    `clv_mean=None`。而 CLV 是判断「是否持续拿到好价格」的
+    唯一领先指标（`core/entry_gate.py` 证据 [E]），
+    用户问“LLM 准不准”时最有用的指标直接缺失。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _entry(self, **kw: Any) -> LedgerEntry:
+        base: Dict[str, Any] = dict(
+            at="2024-01-01T00:00:00+00:00", match_id="m1", market="OU(2.5)",
+            line="", outcome="over", odds=2.00, is_pick=True)
+        base.update(kw)
+        return LedgerEntry(**base)
+
+    def test_capture_closing_sets_odds(self) -> None:
+        led = DecisionLedger(self.root)
+        led._append([self._entry()])
+        n = led.capture_closing({("m1", "OU(2.5)", "", "over"): 2.20})
+        self.assertEqual(n, 1)
+        rows = led.load()
+        self.assertAlmostEqual(rows[0].closing_odds, 2.20)
+
+    def test_clv_computed_after_capture(self) -> None:
+        led = DecisionLedger(self.root)
+        led._append([self._entry(odds=2.00)])
+        led.capture_closing({("m1", "OU(2.5)", "", "over"): 2.20})
+        row = led.load()[0]
+        clv = row.clv
+        assert clv is not None
+        self.assertAlmostEqual(clv, 0.10, places=6)
+
+    def test_stats_expose_clv_mean(self) -> None:
+        led = DecisionLedger(self.root)
+        led._append([self._entry(odds=2.00)])
+        led.capture_closing({("m1", "OU(2.5)", "", "over"): 2.20})
+        # CLV 只对**已结算**（graded）的注统计，因此先结算
+        led.settle({"m1": {"ft": (2, 1)}})
+        st = led.stats(only_picks=False)
+        self.assertEqual(st["clv_n"], 1)
+        self.assertIsNotNone(st["clv_mean"])
+
+    def test_invalid_odds_not_written(self) -> None:
+        led = DecisionLedger(self.root)
+        led._append([self._entry()])
+        bads: Any = (0.0, 1.0, -2.0, "abc", None)
+        for bad in bads:
+            self.assertEqual(
+                led.capture_closing({("m1", "OU(2.5)", "", "over"): bad}), 0)
+
+    def test_settled_entries_are_not_overwritten(self) -> None:
+        """已结算条目不得被改回 pending（否则统计会回退）。"""
+        led = DecisionLedger(self.root)
+        led._append([self._entry()])
+        led.capture_closing({("m1", "OU(2.5)", "", "over"): 2.20})
+        led.settle({"m1": {"ft": (2, 1)}})
+        self.assertNotEqual(led.load()[0].status, "pending")
+        n = led.capture_closing({("m1", "OU(2.5)", "", "over"): 9.99})
+        self.assertEqual(n, 0)
+        self.assertAlmostEqual(led.load()[0].closing_odds, 2.20)
+
+    def test_pending_match_ids(self) -> None:
+        led = DecisionLedger(self.root)
+        led._append([self._entry(match_id="m1"),
+                     self._entry(match_id="m2", outcome="under")])
+        self.assertEqual(sorted(led.pending_match_ids()), ["m1", "m2"])
+
+    def test_service_captures_closing_from_snapshots(self) -> None:
+        """端到端：settle_finished 前会从快照库补收盘赔率。"""
+        from service.analysis import AnalysisConfig, AnalysisService
+
+        with tempfile.TemporaryDirectory() as d:
+            svc = AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                                  config=AnalysisConfig(use_llm=False,
+                                                        ledger_root=d))
+            svc.ledger._append([
+                LedgerEntry(at="2024-01-01T00:00:00+00:00", match_id="m1",
+                            market="HAD", line="", outcome="home",
+                            odds=2.50, is_pick=True)])
+            snap = mock.MagicMock()
+            snap.market = "HAD"
+            snap.outcomes = ("home", "draw", "away")
+            snap.odds = (2.10, 3.30, 3.40)
+            snap.metadata = {"leyu_hv": ""}
+            svc.valuation._snapshots_of.return_value = [snap]
+            # 只更新**台账里已存在**的 pending 条目：本例只录了 HAD/home，
+            # 因此 draw/away 不会被凭空新建（避免台账膨胀）。
+            n = svc._capture_closing_odds({"m1"})
+            self.assertEqual(n, 1)
+            row = [r for r in svc.ledger.load()
+                   if r.key == ("m1", "HAD", "", "home")][0]
+            self.assertAlmostEqual(row.closing_odds, 2.10)
+            self.assertEqual(
+                [r for r in svc.ledger.load() if r.key[3] == "draw"], [])

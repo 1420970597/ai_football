@@ -327,6 +327,65 @@ class DecisionLedger:
 
     # -- 结算 ------------------------------------------------------------
 
+    def capture_closing(self, quotes: Mapping[tuple, float]) -> int:
+        """把**收盘赔率**写入待结算条目（CLV 的前置条件）。
+
+        为何必须单独立这个方法（本项目真实缺口）：
+        CLV = 收盘价 / 买入价 − 1，是职业玩家公认的**唯一领先指标**
+        （见 `core/entry_gate.py` 证据 [E]）。但它**不能事后重建** ——
+        必须在下注当时就把参照的收盘价记下来。原实现只在 `settle()`
+        里从 `scores` 的可选 `closing` 字段取，而 `settle_finished()`
+        从不填它，于是 `closing_odds` 永远是 0、`clv_mean` 恒为 None：
+        用户问“LLM 准不准”时，最有用的那个指标根本算不出来。
+
+        做法：把新价追加写到同一 key（`load()` 按 `at` 取最新一条），
+        **只更新仍为 pending 的条目** —— 已结算条目带终场结论，
+        若被覆盖会把状态改回 pending，导致统计回退。
+
+        Args:
+            quotes: `(match_id, market, line, outcome) -> 收盘赔率`。
+
+        Returns:
+            实际更新的条数。
+        """
+        if not self.enabled or not quotes:
+            return 0
+        rows = self.load()
+        updated: List[LedgerEntry] = []
+        for e in rows:
+            if e.status != SETTLE_PENDING:
+                continue
+            q = quotes.get(e.key)
+            if q is None:
+                continue
+            try:
+                qf = float(q)
+            except (TypeError, ValueError):
+                continue
+            if qf <= 1.0:               # 非法赔率不得写入
+                continue
+            if abs(qf - e.closing_odds) < 1e-9:
+                continue
+            e.closing_odds = qf
+            # 时间戳推新：使本条成为该 key 的“最新一条”
+            e.at = _now().isoformat()
+            updated.append(e)
+        if not updated:
+            return 0
+        return self._append(updated)
+
+    def pending_match_ids(self) -> List[str]:
+        """仍待结算的赛事 ID（去重）——用于定向补齐收盘赔率。"""
+        out: List[str] = []
+        seen: set = set()
+        for e in self.load():
+            if e.status != SETTLE_PENDING or not e.match_id:
+                continue
+            if e.match_id not in seen:
+                seen.add(e.match_id)
+                out.append(e.match_id)
+        return out
+
     def settle(self, scores: Mapping[str, Any]) -> Dict[str, int]:
         """用终场比分结算台账里的待结算条目。
 

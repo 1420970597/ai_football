@@ -40,7 +40,7 @@ import random
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from collector.leyu_normalizer import snapshots_from_match
@@ -58,7 +58,11 @@ from .decision import (
     DecisionEngine,
     MatchDecision,
 )
-from .match_decision import MatchDecisionEngine, MatchPicks
+from .match_decision import (
+    MAX_MARKETS_PER_PROMPT,
+    MatchDecisionEngine,
+    MatchPicks,
+)
 from .ledger import DecisionLedger
 from .llm import LLMClient, LLMNotConfigured, load_pi_config
 
@@ -74,7 +78,46 @@ DEFAULT_CACHE_TTL_S = 120.0
 #: 单次决策分析的最大赛事数（LLM 调用昂贵，须设上限）
 DEFAULT_MAX_ANALYZE = 12
 
+#: 比分推送新鲜度上限（秒）；超过即判该场不活跃（见 AnalysisConfig.stale_score_s）
+DEFAULT_STALE_SCORE_S = 300.0
+
+#: 已开赛且从无比分推送的最大容忍时长（秒），见 max_live_age_s。
+#: 取 150 分钟：覆盖加时/点球，又足以排除“几天前的旧快照”。
+DEFAULT_MAX_LIVE_AGE_S = 9000.0
+
+#: 单场 LLM 决策硬超时（秒）。
+#:
+#: 实测默认 90s 时，一轮 71 场中有 **11 场**因超时降级为 `no_llm`
+#: （全部报“LLM 决策超时（>90s）”）。单场平均耗时 28.85s，
+#: 但推理型模型在长 prompt 上尾部很长；150s 覆盖实测绝大多数尾部。
+DEFAULT_LLM_TIMEOUT_S = 150.0
+
+#: LLM 概率相对市场的最大允许偏离（污染护栏，见 DecisionConfig）。
+DEFAULT_MAX_PROB_DEVIATION = 0.35
+
 #: 无 LLM 时仍可分析，但决策只会是 no_llm（诚实降级）
+
+
+def _start_epoch_s(match: Mapping[str, Any]) -> Optional[float]:
+    """从 `/matches` 的日期/时间字段推算开赛的 epoch 秒；缺失返回 None。
+
+    为何不用 `time.time()` 兜底："没有开赛时间" 与 "刚刚开赛" 语义
+    完全不同 —— 前者无法判断，应该交给调用方回退到 `is_live`。
+    """
+    date_s = str(match.get("date") or "").strip()
+    time_s = str(match.get("time") or "").strip()
+    if not date_s:
+        return None
+    txt = ("%s %s" % (date_s, time_s)).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(txt, fmt)
+        except ValueError:
+            continue
+        # 上游给的是北京时间（本项目容器 TZ=Asia/Shanghai），
+        # 统一转为 UTC 后参与比较；无时区信息时按北京时间处理。
+        return dt.replace(tzinfo=timezone(timedelta(hours=8))).timestamp()
+    return None
 
 
 def _to_float(value: object, default: float = 0.0) -> float:
@@ -181,6 +224,37 @@ class AnalysisConfig:
     #: 而不是死等 `cycle_interval_s`。定时循环降级为**兜底**
     #: （覆盖「长时间无变动但需要刷新」与推送断线的情况）。
     change_trigger: bool = True
+    #: 分析时**不下发**当前比分/比赛时钟给 LLM。
+    #:
+    #: 为什么必须关掉（本项目真实故障）：比分一旦进入提示词，LLM 会直接
+    #: “抄答案”——实测多条买入建议的理由原文是「终场0:0，小球」
+    #: 「主队2:0取胜，平手盘主胜」，并给出 p_llm=1.0 而市场仅 0.35
+    #: 的虚假 edge（均值 +42%）。这既制造假信号，又让赛后无法评估
+    #: LLM 真实水平（等于把答案泄给了考生）。
+    #: 只保留开赛/结束状态（trading 语义），比分与分钟数一律不传。
+    leak_score_to_llm: bool = False
+    #: 比分推送的新鲜度上限（秒）。
+    #:
+    #: 超过该时长仍未收到比分推送，即认为该场**已不再活跃**，
+    #: 即便赛程接口暂时失败、快照 state 仍为 active，也不送去做决策。
+    #: 依据：进行中比赛的比分（C103）是秒级推送的（实测全量
+    #: `score_updates` 数万条、两小时内 `idle_s` < 2s），
+    #: 因此「5 分钟没有比分更新」是一个很保守的过期阈值。
+    stale_score_s: float = DEFAULT_STALE_SCORE_S
+    #: 单场 LLM 决策硬超时（秒），见 `DecisionConfig.llm_timeout_s`
+    llm_timeout_s: float = DEFAULT_LLM_TIMEOUT_S
+    #: LLM 概率相对市场的最大偏离（污染护栏），见 `DecisionConfig`
+    max_prob_deviation: float = DEFAULT_MAX_PROB_DEVIATION
+    #: 单场提示词包含的最大盘口数（控 prompt 长度与耗时）
+    max_markets_per_prompt: int = 60
+    #: 兜底：比赛已开赛超过该时长且从未收到比分推送，视为不活跃。
+    #:
+    #: 为何需要（真实故障场景）：赛程接口失败时 `live_match_ids()` 返回
+    #: None，`is_live` 会退化成快照的 `state`；而快照 state 只看时效，
+    #: 一个几天前入库的**已结束**赛事文件仍是 active，于是被当作
+    #: 进行中送去分析，LLM 又能看到终场比分。长时间从无比分推送
+    #: 恰恰说明该场不是真在踢。
+    max_live_age_s: float = DEFAULT_MAX_LIVE_AGE_S
     #: 单场防抖窗口（秒），见 `DEFAULT_CHANGE_DEBOUNCE_S`
     change_debounce_s: float = DEFAULT_CHANGE_DEBOUNCE_S
     #: 全局最小触发间隔（秒），见 `DEFAULT_CHANGE_MIN_INTERVAL_S`
@@ -237,6 +311,14 @@ class AnalysisService:
             use_llm=self.config.use_llm,
             min_edge=self.config.min_edge,
             min_confidence=self.config.min_confidence,
+            # 超时与 prompt 规模从分析层透传，便于用环境变量调优：
+            # 实测默认 90s 会让 11/71 场因超时降级为 no_llm。
+            llm_timeout_s=_to_float(self.config.llm_timeout_s,
+                                    DEFAULT_LLM_TIMEOUT_S),
+            max_prob_deviation=_to_float(self.config.max_prob_deviation,
+                                         DEFAULT_MAX_PROB_DEVIATION),
+            max_markets_per_prompt=_to_int(self.config.max_markets_per_prompt,
+                                           MAX_MARKETS_PER_PROMPT),
         )
         #: 汇总式引擎（主路径）：经济学算全部盘口 → 一次 LLM 裁定
         self.match_engine: MatchDecisionEngine = (
@@ -612,6 +694,10 @@ class AnalysisService:
             self.settle_stats["rounds"] = \
                 _to_int(self.settle_stats.get("rounds")) + 1
             return {"settled": 0, "void": 0, "reason": "无待结算条目"}
+        # **先补收盘赔率**（CLV 的前置条件，不能事后重建）。
+        # 必须在 settle 之前做：settle 会把条目改成终结态，
+        # 之后 capture_closing 就不再碰它（避免把状态改回 pending）。
+        closing = self._capture_closing_odds(pending)
         scores: Dict[str, Any] = {}
         for mt in self._finished_matches():
             mid = str(getattr(mt, "mid", "") or "")
@@ -629,6 +715,7 @@ class AnalysisService:
         # 显式注解：`settle()` 返回 Dict[str, int]，但下面要挂 `stats`（嵌套字典），
         # 不收宽类型会让静态检查拒绝赋值。
         out: Dict[str, Any] = dict(self.ledger.settle(scores))
+        out["closing_captured"] = closing
         self.settle_stats["rounds"] = \
             _to_int(self.settle_stats.get("rounds")) + 1
         self.settle_stats["settled"] = \
@@ -637,6 +724,47 @@ class AnalysisService:
             _to_int(self.settle_stats.get("void")) + _to_int(out.get("void"))
         out["stats"] = self.ledger.stats()
         return out
+
+    def _capture_closing_odds(self, pending: set) -> int:
+        """为待结算场次补齐**收盘赔率**（CLV 必需），返回写入条数。
+
+        为何用快照库而不是实时推送：快照库保留全部历史，
+        而推送只覆盖“当前已订阅”的场次且重启即丢。
+        取每场每个盘口的最新快照赔率，即最接近收盘的可得价格。
+
+        ⚠️ 诚实边界：这**不是**严格意义的官方收盘价，而是
+        “本系统最后一次看到的赔率”。对于已停止刷新的已结束赛事，
+        两者通常一致；若上游早已停推而快照陈旧，CLV 会偏。
+        因此 CLV 应按“同口径”解读，不能当成交易台精确核算。
+        """
+        want = {str(m) for m in pending if m}
+        if not want:
+            return 0
+        quotes: Dict[Any, float] = {}
+        for mid in want:
+            try:
+                snaps = self.valuation._snapshots_of(mid)
+            except Exception:  # noqa: BLE001 - 单场读取失败不影响其他场
+                continue
+            # `_snapshots_of` 按 captured_at 升序；后用覆盖前用 → 最新在手
+            for snap in snaps:
+                line = str((snap.metadata or {}).get("leyu_hv") or "")
+                outcomes = tuple(snap.outcomes or ())
+                odds = tuple(snap.odds or ())
+                for i, oc in enumerate(outcomes):
+                    if i >= len(odds):
+                        break
+                    try:
+                        val = float(odds[i])
+                    except (TypeError, ValueError):
+                        continue
+                    if val > 1.0:
+                        quotes[(mid, str(snap.market), line, str(oc))] = val
+        try:
+            return self.ledger.capture_closing(quotes)
+        except Exception as exc:  # noqa: BLE001 - 留痕失败不应阻断结算
+            self.settle_stats["last_error"] = "收盘赔率写入失败: %s" % exc
+            return 0
 
     def _finished_matches(self) -> List[Any]:
         """已结束（含带终场比分）的赛事。取不到时返回空列表。"""
@@ -913,10 +1041,32 @@ class AnalysisService:
         return markets[0] if isinstance(markets[0], str) else None
 
     def _build_context(self, match: Mapping[str, Any]) -> Dict[str, Any]:
-        """从实时 Hub 补充比分/阶段上下文。"""
+        """构造交给决策引擎/LLM 的上下文（**严防比分泄漏**）。
+
+        ⚠️ 本项目真实故障：早期实现把 `realtime.score(mid)` 与比赛时钟
+        一并放进上下文，而 `MatchDecisionEngine.build_prompt` 会把它
+        写进提示词 —— 于是 LLM 直接“抄答案”，实测理由原文为
+        「终场0:0，小球」「主队2:0取胜，平手盘主胜」，
+        并给出 `p_llm=1.0` 而市场仅 0.35 的虚假 edge。
+
+        后果有两层：
+          1. 制造大量**假买入信号**（用户看到的“建议”不可信）；
+          2. 污染决策台账，事后统计出的命中率严重虚高，
+             等于把答案泄给了考生，永远无法评估 LLM 真实水平。
+
+        因此这里**只**传交易语义的状态（进行中/未开赛/已结束），
+        比分与分钟数一律不下发。需要排查时可在 /board 查看比分 ——
+        那是给人看的，不是给模型看的。
+        """
         ctx: Dict[str, Any] = {"status_text": match.get("state")}
         mid = str(match.get("match_id", ""))
         if self.realtime is None:
+            return ctx
+        if self.realtime.is_finished(mid):
+            ctx["status_text"] = "已结束"
+        if not self.config.leak_score_to_llm:
+            # 显式开关：默认不传。保留开关是为了让对照实验可复现
+            # （用于证明“泄露比分 → 虚假 edge”这一结论）。
             return ctx
         score = self.realtime.score(mid)
         if score:
@@ -927,9 +1077,43 @@ class AnalysisService:
                 ctx["minute"] = status["mst"]
             if status.get("mmp"):
                 ctx["mmp"] = status["mmp"]
-        if self.realtime.is_finished(mid):
-            ctx["status_text"] = "已结束"
         return ctx
+
+    def _candidate_is_fresh(self, mid: str, m: Mapping[str, Any],
+                            is_live: bool) -> bool:
+        """该场是否仍是「活跃的比赛」（而不是已结束/旧快照）。
+
+        为何需要（真实故障的根因）：赛程接口一失败（本项目实测为
+        会话 `token已过期`），`live_match_ids()` 就返回 None，
+        `is_live` 退化成快照的 `state`；而 state 只看**快照时效**——
+        一个两天前入库、比赛早已结束的赛事，其赔率仍会被上游
+        周期刷新，于是 state 始终是 active，被当作进行中送去分析，
+        LLM 又能看到终场比分（实测：`5720069` 快照来自 10-02，
+        却在 10-04 被分析并给出 “终场0:0…” 的买入建议）。
+
+        判据（依次）：
+          1. 没有实时 Hub（离线/无推送）→ 不拦截，维持旧行为；
+          2. 收到过比分推送：距上次比分更新的时长 ≤ `stale_score_s`；
+          3. 从未收到比分推送：见下。
+
+        关于第 3 种情形的保守处理：刚开赛的场次可能还没推比分，
+        不能一刀切拦掉；但「很早就被 Hub 看到、却始终没有比分」
+        几乎必然是**非活跃**场次。因此用「首次见到距今」时长判定：
+
+          * 从未见过（重启后还没轮到它推送）→ 放行，避免误伤；
+          * 见过但不超过 `max_live_age_s` → 放行（可能是刚开始的场）；
+          * 见过且已超过 `max_live_age_s` 仍无比分 → 拦下。
+        """
+        rt = self.realtime
+        if rt is None:
+            return True
+        age = rt.score_age_s(mid)
+        if age is not None:
+            return age <= self.config.stale_score_s
+        seen = rt.first_seen_age_s(mid)
+        if seen is None:
+            return True
+        return seen <= self.config.max_live_age_s
 
     def live_match_ids(self) -> Optional[set]:
         """从数据源赛程取**真实进行中**的赛事 ID 集合（`ms == 1`）。
@@ -989,6 +1173,12 @@ class AnalysisService:
             is_live = (mid in live_ids) if live_ids is not None \
                 else (st == "active")
             if only_live and not is_live:
+                continue
+            # 活跃度过滤：赛程接口失败时 `live_ids` 为 None，`is_live` 会
+            # 退化成快照 state（只看时效），导致**几天前已结束**的赛事被
+            # 当作进行中送去分析（真实故障：5720069 快照来自 10-02，
+            # 却在 10-04 被分析）。此处用推送活跃度再卡一道。
+            if is_live and not self._candidate_is_fresh(mid, m, is_live):
                 continue
             mkt = self._market_for(m)
             if mkt is None:
@@ -1255,6 +1445,21 @@ def build_analysis_service(
         # 盘口变动触发决策（用户要求的触发时机）；ANALYSIS_CHANGE_TRIGGER=0 可关
         change_trigger=(e.get("ANALYSIS_CHANGE_TRIGGER", "1") or "1").strip()
                        not in ("0", "false", "no"),
+        # 是否允许把比分/比赛时钟下发给 LLM。
+        # **默认关闭**（比分泄露会让 LLM 拄答案）；ANALYSIS_LEAK_SCORE=1
+        # 仅用于可复现的对照实验。
+        leak_score_to_llm=(e.get("ANALYSIS_LEAK_SCORE", "0") or "0").strip()
+                          in ("1", "true", "yes"),
+        stale_score_s=_num("ANALYSIS_STALE_SCORE_S", DEFAULT_STALE_SCORE_S),
+        max_live_age_s=_num("ANALYSIS_MAX_LIVE_AGE_S",
+                            DEFAULT_MAX_LIVE_AGE_S),
+        # LLM 超时：实测默认 90s 使 11/71 场因超时降级，150s 覆盖尾部
+        llm_timeout_s=_num("ANALYSIS_LLM_TIMEOUT", DEFAULT_LLM_TIMEOUT_S),
+        max_prob_deviation=_num("ANALYSIS_MAX_PROB_DEVIATION",
+                                DEFAULT_MAX_PROB_DEVIATION),
+        max_markets_per_prompt=_to_int(
+            _num("ANALYSIS_MAX_MARKETS", MAX_MARKETS_PER_PROMPT),
+            MAX_MARKETS_PER_PROMPT),
         change_debounce_s=_num("ANALYSIS_CHANGE_DEBOUNCE",
                                DEFAULT_CHANGE_DEBOUNCE_S),
         change_min_interval_s=_num("ANALYSIS_CHANGE_MIN_INTERVAL",

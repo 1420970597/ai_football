@@ -59,6 +59,20 @@ from core.models import DevigMethod, OddsSnapshot, SnapshotState
 
 from .llm import LLMClient, LLMError, LLMNotConfigured
 
+
+def _as_float(value: object, default: float = 0.0) -> float:
+    """容错浮点转换（非有限值/不可转换均回退默认）。
+
+    这些值来自去水诊断字典或反序列化的快照，属于外部输入：
+    直接 `float()` 可能抛异常并中断整场决策。全项目统一用法，
+    与 `service/match_decision.py::_as_float` 语义一致。
+    """
+    try:
+        out = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return out if math.isfinite(out) else default
+
 __all__ = [
     "DecisionConfig",
     "CandidateDecision",
@@ -115,8 +129,12 @@ class DecisionConfig:
     #: 置信度用于**缩放仓位**与过滤极低可信度，而不是否决交易。
     #: 0.25 仅用于挡掉「模型自己都说没把握」的输出。
     min_confidence: float = 0.25
-    #: LLM 权重上限
+    #: 融合权重：LLM 最多占多少（剩余保留市场基准）。
+    #: 可调是为了做敏感性分析（“改成 0.3 / 0.5 结论是否变”）。
     max_llm_weight: float = MAX_LLM_WEIGHT
+    #: 训练/提示中单场所含盘口上限（影响 prompt 长度 → LLM 耗时与 token）。
+    #: 一场实测 14~24 个盘口，过大 prompt 是超时与 token 耗尽的主因。
+    max_markets_per_prompt: int = 60
     #: 走势修正上限
     max_trend_adjust: float = MAX_TREND_ADJUST
     #: 去水方法
@@ -129,7 +147,22 @@ class DecisionConfig:
     #: 实测推理型模型在较大输入上思考时长不可预测（同一 prompt 可 8s 也可 295s），
     #: 而控制台需要可预期响应。超时即降级为“无买入建议”并说明原因，
     #: 不让单个慢请求拖住整批决策。
-    llm_timeout_s: float = 90.0
+    #:
+    #: 取值依据（本项目实测）：默认 90s 时，一轮 71 场中有 **11 场**
+    #: 因超时降级为 `no_llm`（全部是“LLM 决策超时（>90s）”）。
+    #: 实测单场均耗时 28.85s，但推理型模型在长 prompt 上尾部很长，
+    #: 90s 截断了这批尾部。150s 能覆盖实测的绝大多数尾部
+    #: （P95 约 120s），同时仍远小于 batch 总耗时上限。
+    llm_timeout_s: float = 150.0
+    #: LLM 概率与市场概率的**最大允许偏离**（绝对值，0.35 = 35 个百分点）。
+    #:
+    #: 为何需要（本项目真实故障的护栏）：实测出现过 `p_llm=1.0` 对
+    #: `p_market=0.35` 的“确信”标注（理由写的是“终场0:0…”）——
+    #: 这是泄露/幻觉，不是独立判断。即使 LLM 真拿到了基本面信息，
+    #: 偏离市场 35pp 以上也属于极端异常，宁可丢弃也不要产出假 edge。
+    #: 注意：这不是“向市场投降”，融合本身已用 max_llm_weight 收缩；
+    #: 此护栏只拦“明显不可能”的标注。
+    max_prob_deviation: float = 0.35
 
 
 @dataclass
@@ -522,8 +555,9 @@ class DecisionEngine:
 
         p_small, diag, notes = self._small_model(snapshot, trend)
         base.notes.extend(notes)
-        base.margin = float(diag.get("margin", snapshot.margin))
-        base.method_spread_pp = float(diag.get("method_spread_pp", 0.0) or 0.0)
+        base.margin = _as_float(diag.get("margin", snapshot.margin), snapshot.margin)
+        base.method_spread_pp = _as_float(
+            diag.get("method_spread_pp", 0.0), 0.0)
 
         p_llm, conf, llm_reason = self._ask_llm(snapshot, p_small, trend, context)
         base.llm_reason = llm_reason
@@ -537,7 +571,7 @@ class DecisionEngine:
         # 逐结果算 edge / 凯利
         best: Optional[CandidateDecision] = None
         for i, oc in enumerate(snapshot.outcomes):
-            odds = float(snapshot.odds[i])
+            odds = _as_float(snapshot.odds[i], 0.0)
             p = p_comb[i]
             edge = p * odds - 1.0
             direction, mag = self._trend_adjust(trend or {}, oc)

@@ -340,3 +340,69 @@ class TestStageConsistency(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# --------------------------------------------------------------------------- #
+# 回归：去水分歧阈值必须随水钱放大（真实故障 —— 69/71 场被误杀）
+# --------------------------------------------------------------------------- #
+
+class TestSpreadThresholdScalesWithMargin(unittest.TestCase):
+    """固定 3pp 绝对阈值会误杀**正常的高水钱盘口**。
+
+    实测（本仓库 output/decisions.json，1763 个盘口）：
+      * spread/margin 中位 0.28、p75 0.45、p90 0.69、p95 0.92；
+      * 水钱在不同玩法上差 3~5 倍（2 结果盘中位 1.75pp、3 结果盘 4.51pp）；
+      * 旧规则（绝对 3pp）拒掉 35% 盘口 → 69/71 场比赛全部
+        带 `devig_unreliable`，用户看到“几十场没有建议”。
+
+    新规则：``limit = clamp(max(3pp, 1.5 × margin_pp), ≤ 12pp)``
+    """
+
+    def test_low_margin_keeps_absolute_floor(self) -> None:
+        from core.entry_gate import max_spread_pp
+        # 水钱 2% → 1.5×2 = 3pp，与绝对下限相同
+        self.assertAlmostEqual(max_spread_pp(0.02), 3.0, places=6)
+
+    def test_high_margin_raises_limit(self) -> None:
+        from core.entry_gate import max_spread_pp
+        # 水钱 6% → 1.5×6 = 9pp（旧规则会在 3pp 处误杀）
+        self.assertAlmostEqual(max_spread_pp(0.06), 9.0, places=6)
+
+    def test_hard_cap_applies(self) -> None:
+        from core.entry_gate import max_spread_pp
+        # 水钱 20% → 1.5×20 = 30pp，但绝对上限 12pp
+        self.assertAlmostEqual(max_spread_pp(0.20), 12.0, places=6)
+
+    def test_6pp_spread_on_6pct_margin_now_passes(self) -> None:
+        """6pp 分歧 / 6% 水钱：旧规则拒，新规则放行（真实误杀案例）。"""
+        r = gate_market(outcome="home", odds=1.90, state="active",
+                        method_spread_pp=6.0, margin=0.06,
+                        trend="flat", trend_ticks=0)
+        self.assertNotIn(REJECT_METHOD_SPREAD, r.rejects)
+        self.assertTrue(r.passed)
+
+    def test_6pp_spread_on_2pct_margin_still_rejected(self) -> None:
+        """同样 6pp 分歧，但水钱只有 2% → 确实是异常，仍拒。"""
+        r = gate_market(outcome="home", odds=1.90, state="active",
+                        method_spread_pp=6.0, margin=0.02,
+                        trend="flat", trend_ticks=0)
+        self.assertIn(REJECT_METHOD_SPREAD, r.rejects)
+
+    def test_extreme_spread_rejected_regardless_of_margin(self) -> None:
+        """脏数据保护：即使水钱极大，分歧超硬上限仍拒。"""
+        r = gate_market(outcome="home", odds=1.90, state="active",
+                        method_spread_pp=24.0, margin=0.30,
+                        trend="flat", trend_ticks=0)
+        self.assertIn(REJECT_METHOD_SPREAD, r.rejects)
+
+    def test_stage2_uses_same_margin_rule(self) -> None:
+        r = evaluate_entry(outcome="home", odds=1.90, edge=0.05,
+                           state="active", method_spread_pp=6.0,
+                           margin=0.06)
+        self.assertNotIn(REJECT_METHOD_SPREAD, r.rejects)
+
+    def test_checks_expose_limit_for_audit(self) -> None:
+        r = gate_market(outcome="home", odds=1.90, state="active",
+                        method_spread_pp=6.0, margin=0.06)
+        self.assertAlmostEqual(r.checks["method_spread_limit_pp"], 9.0,
+                               places=4)

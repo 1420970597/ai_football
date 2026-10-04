@@ -201,10 +201,28 @@ class TrendStore:
         max_dir_mb: float = TREND_DIR_MAX_MB,
     ) -> None:
         self.root = Path(root) if root else None
-        self.flush_every = max(1, int(flush_every))
-        self.flush_interval_s = float(flush_interval_s)
-        self.max_file_bytes = int(max_file_mb * 1024 * 1024)
-        self.max_dir_bytes = int(max_dir_mb * 1024 * 1024)
+        # 以下参数可能来自环境变量（字符串），非法值一律回退默认，
+        # 构造 TrendStore 不应因为一个坏配置就抛异常。
+        try:
+            self.flush_every = max(1, int(str(flush_every)))
+        except (TypeError, ValueError, OverflowError):
+            self.flush_every = TREND_FLUSH_EVERY
+        try:
+            self.flush_interval_s = float(str(flush_interval_s))
+        except (TypeError, ValueError, OverflowError):
+            self.flush_interval_s = TREND_FLUSH_INTERVAL_S
+        try:
+            mb = float(str(max_file_mb))
+            self.max_file_bytes = int(mb * 1024 * 1024) if mb > 0 else int(
+                TREND_FILE_MAX_MB * 1024 * 1024)
+        except (TypeError, ValueError, OverflowError):
+            self.max_file_bytes = int(TREND_FILE_MAX_MB * 1024 * 1024)
+        try:
+            mb = float(str(max_dir_mb))
+            self.max_dir_bytes = int(mb * 1024 * 1024) if mb > 0 else int(
+                TREND_DIR_MAX_MB * 1024 * 1024)
+        except (TypeError, ValueError, OverflowError):
+            self.max_dir_bytes = int(TREND_DIR_MAX_MB * 1024 * 1024)
         self._buf: Dict[str, List[str]] = {}
         self._last_flush = time.time()
         self._lock = threading.RLock()
@@ -438,14 +456,14 @@ def parse_c105(decoded: Mapping[str, Any]) -> List[PriceTick]:
     **是否构成变动由调用方（Hub）对比上次观测值后判定**。
     """
     mid = str(decoded.get("mid", ""))
-    ts = int(str(decoded.get("time") or decoded.get("t") or 0).strip() or 0)
+    ts = _to_int(decoded.get("time") or decoded.get("t") or 0, 0)
     ticks: List[PriceTick] = []
 
     def walk_block(block: Mapping[str, Any], chpid_hint: str = "") -> None:
         chpid = str(block.get("chpid") or chpid_hint)
         hv = str(block.get("hv") or "")
         hid = str(block.get("hid") or "")
-        bts = int(str(block.get("t") or ts).strip() or ts)
+        bts = _to_int(block.get("t") or ts, ts)
         for entry in (block.get("ol") or ()):
             if not isinstance(entry, Mapping):
                 continue
@@ -578,6 +596,20 @@ class RealtimeHub:
         self._subscribed: List[str] = []
         #: 走势持久化（供经济学算法/LLM 与重启后回填使用）
         self.trend_store = TrendStore(trend_root)
+        #: mid → 最近一次收到**比分推送**（C103/C1021）的本机单调时间戳。
+        #:
+        #: 为什么需要：比分是判断「比赛是否已结束 / 该场推送是否还活着」的
+        #: 最直接证据。若某场的比分是几分钟前收到的，而赛程抓取又失败，
+        #: 单凭快照的 `state` 会把**已结束的比赛**当成进行中送去分析，
+        #: 而分析层会把比分喂给 LLM —— LLM 直接“抄答案”给出虚假买入
+        #: （本项目真实故障：p_llm=1.0 vs 市场 0.35，理由是“终场0:0…”）。
+        self._score_at: Dict[str, float] = {}
+        #: mid → 本 Hub **首次见到**该场推送的时刻（单调时钟不可回拨）。
+        #:
+        #: 用途：区分「从未有过比分推送、且已存在很久」的场次（几乎可以
+        #: 肯定不是正在踢的）与「刚刚出现、只是比分还没推来」的场次。
+        #: 单调时钟 (`time.monotonic`) 不受 NTP 回拨影响，避免误判。
+        self._first_seen: Dict[str, float] = {}
         if resume:
             self._resume_from_store()
 
@@ -670,6 +702,32 @@ class RealtimeHub:
         with self._lock:
             return self._scores.get(mid)
 
+    def score_age_s(self, mid: str) -> Optional[float]:
+        """最近一次收到该场比分推送距今秒数；从未收到过返回 None。
+
+        用途：分析层据此判断「比分是否新鲜」。赛程接口失败时它是唯一
+        能区分「正在踢」与「早就结束了但快照还标 active」的信号，
+        从而避免把终场比分泄漏给 LLM（见 `_build_context`）。
+        """
+        with self._lock:
+            at = self._score_at.get(str(mid))
+        if not at:
+            return None
+        return max(0.0, time.monotonic() - at)
+
+    def first_seen_age_s(self, mid: str) -> Optional[float]:
+        """本 Hub 首次见到该场推送距今秒数；从未见过返回 None。"""
+        with self._lock:
+            at = self._first_seen.get(str(mid))
+        if not at:
+            return None
+        return max(0.0, time.monotonic() - at)
+
+    def _touch_seen(self, mid: str) -> None:
+        """记录“首次见到该场”（调用方持锁）。"""
+        if mid and mid not in self._first_seen:
+            self._first_seen[mid] = time.monotonic()
+
     def status(self, mid: str) -> Dict[str, Any]:
         with self._lock:
             return dict(self._status.get(mid) or {})
@@ -715,6 +773,7 @@ class RealtimeHub:
         changed: List[PriceTick] = []
         with self._lock:
             for t in ticks:
+                self._touch_seen(t.mid)
                 key = (t.mid, t.chpid, t.hv, t.oid)
                 prev = self._last_price.get(key)
                 self._last_price[key] = t.new_ov
@@ -796,7 +855,9 @@ class RealtimeHub:
                 if parsed:
                     mid, score = parsed
                     with self._lock:
+                        self._touch_seen(mid)
                         self._scores[mid] = score
+                        self._score_at[mid] = time.monotonic()
                     self.stats.score_updates += 1
                 self._record_event(str(decoded.get("mid", "")),
                                    {"cmd": cmd, "cmec": decoded.get("cmec"),
@@ -808,6 +869,7 @@ class RealtimeHub:
             if isinstance(decoded, Mapping):
                 mid = str(decoded.get("mid", ""))
                 with self._lock:
+                    self._touch_seen(mid)
                     self._status[mid] = {
                         "cmec": decoded.get("cmec"),
                         "mmp": decoded.get("mmp"),

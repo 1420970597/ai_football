@@ -301,3 +301,64 @@ class TestExceptions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestBoardEndpoint(unittest.TestCase):
+    """`/board`：逐场逐盘口的实时看板（用户要求的视图数据源）。
+
+    关键契约（前端依赖）：
+      * 一次请求给齐「场次 + 每个盘口的最新赔率 + 走势 + 门控结论」；
+      * 该场**没有决策结果时要如实标注 decided=False**，
+        而不是伪造一个通过 —— 否则用户会以为看到的是经过算法判定的信息。
+      * 必须读缓存，不触发 LLM（可高频轮询）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = build_app()
+
+    def test_board_shape(self):
+        st, d = call(self.app, "GET", "/api/v1/board", q={"markets": 1})
+        self.assertEqual(st, 200)
+        for k in ("generated_at", "count", "live", "buy", "decided",
+                  "matches", "realtime"):
+            self.assertIn(k, d)
+
+    def test_board_rows_have_market_detail(self):
+        st, d = call(self.app, "GET", "/api/v1/board", q={"markets": 1})
+        self.assertEqual(st, 200)
+        self.assertTrue(d["matches"])
+        row = d["matches"][0]
+        for k in ("match_id", "league", "home", "away", "is_live",
+                  "decided", "has_buy", "markets", "gated_in"):
+            self.assertIn(k, row)
+        self.assertTrue(row["markets"])
+        mk = row["markets"][0]
+        for k in ("market", "label", "outcomes", "odds", "p_fair",
+                  "edges", "trend", "gate_passed", "decided"):
+            self.assertIn(k, mk)
+
+    def test_undecided_rows_are_honestly_marked(self):
+        """没有决策结果的场次必须 decided=False（不得伪装成已判定）。"""
+        st, d = call(self.app, "GET", "/api/v1/board", q={"markets": 1})
+        self.assertEqual(st, 200)
+        for row in d["matches"]:
+            if not row["decided"]:
+                self.assertFalse(row["has_buy"])
+                self.assertEqual(row["picks"], [])
+                for mk in row["markets"]:
+                    self.assertFalse(mk["decided"])
+
+    def test_markets_zero_omits_detail(self):
+        st, d = call(self.app, "GET", "/api/v1/board", q={"markets": 0})
+        self.assertEqual(st, 200)
+        if d["matches"]:
+            self.assertNotIn("markets", d["matches"][0])
+
+    def test_board_does_not_trigger_llm(self):
+        """必须读缓存：连续调用不应增加 LLM 调用数。"""
+        before = self.app.analysis.llm_health().get("calls", 0)
+        for _ in range(3):
+            call(self.app, "GET", "/api/v1/board")
+        after = self.app.analysis.llm_health().get("calls", 0)
+        self.assertEqual(before, after)

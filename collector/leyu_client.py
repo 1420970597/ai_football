@@ -111,6 +111,7 @@ from __future__ import annotations
 import base64
 import binascii
 import gzip
+import http.client
 import json
 import os
 import random
@@ -118,6 +119,7 @@ import time
 import urllib.error
 import urllib.request
 import zlib
+from http.client import IncompleteRead
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
@@ -205,6 +207,22 @@ RATE_LIMIT_CODES: Mapping[str, str] = {
 RATE_LIMIT_RETRIES = 6
 RATE_LIMIT_BACKOFF_BASE_S = 1.0
 RATE_LIMIT_BACKOFF_MAX_S = 15.0
+
+#: 读取完整响应体的**分块读取**上限（单块 64KB）。
+#:
+#: 为何不用 `resp.read()`：本项目真实故障——`getOriginalDataPB`（全量赛程）
+#: 与 `structureMatchBaseInfoByMidsPB` 的响应体可达数百 KB，实测反复抛出
+#: `http.client.IncompleteRead`，而该异常**既不是** `urllib.error.URLError`
+#: **也不是** `OSError`（MRO 为 `IncompleteRead → HTTPException → Exception`），
+#: 因此 `_request` 的 except 分支完全接不住它，异常直接穿透到调用方：
+#:   * `schedule()` → `mids_provider` 失败 → RealtimeHub **只订阅到 2 场**；
+#:   * 进而「盘口变动触发决策」几乎无信号可触发（页面看上去没反应）。
+#: 改为按 `Content-Length` 分块读并校验完整性，不完整即当作可重试的传输错误。
+HTTP_READ_CHUNK = 65536
+
+#: 响应体完整性容差：允许服务端声明的 Content-Length 与实际读到的字节数
+#: 存在极小差异（个别网关的 transfer 编码会略有出入），超过该比例即判为截断。
+READ_LENGTH_TOLERANCE = 0.02
 
 # 盘口类型 hpt
 HPT_WINNER = 1     # 独赢（1X2 / 上半场 1X2）
@@ -1081,7 +1099,7 @@ class LEYUClient:
             req.add_header("Accept-Encoding", "gzip")
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    raw = resp.read()
+                    raw = self._read_body(resp)
                     if resp.headers.get("Content-Encoding") == "gzip":
                         raw = gzip.decompress(raw)
                     # 捕获服务端下发的 Cookie（实测有 nginx 粘性会话 `route`）。
@@ -1102,12 +1120,63 @@ class LEYUClient:
                 last_exc = TransportError("HTTP %d: %s" % (exc.code, url))
                 if exc.code < 500:
                     raise last_exc from exc
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-                last_exc = TransportError("请求失败 %s: %s" % (url, exc))
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError,
+                    IncompleteRead, http.client.HTTPException) as exc:
+                # ⚠️ `http.client.IncompleteRead` 必须**显式**列出：
+                # 它的 MRO 是 IncompleteRead → HTTPException → Exception，
+                # 既不继承 URLError 也不继承 OSError，漏掉会让异常穿透，
+                # 导致「订阅列表获取失败」并使变动触发形同虚设（真实故障）。
+                last_exc = TransportError(
+                    "请求失败 %s: %s: %s" % (url, type(exc).__name__, exc))
             if attempt + 1 < attempts:
                 # 指数退避 + 抖动，避免触发风控
                 time.sleep(0.5 * (2 ** attempt) + random.random() * 0.3)
         raise last_exc or TransportError("请求失败: %s" % url)
+
+    @staticmethod
+    def _read_body(resp: Any) -> bytes:
+        """完整读取响应体；**检测截断**并抛出可重试的传输异常。
+
+        为何不能直接用 `resp.read()`：大响应（赛程/批量盘口）实测会
+        抛 `http.client.IncompleteRead`，而它不属于 URLError/OSError，
+        调用方的 except 接不住（见模块顶部 HTTP_READ_CHUNK 的说明）。
+
+        做法：
+          1. 逐块读（`read(HTTP_READ_CHUNK)`），直到 EOF；
+          2. 若响应声明了 `Content-Length`，校验实际字节数；
+          3. 长度不足（超出容差）即抛 `TransportError`，交由上层退避重试。
+
+        不完整的数据**绝不能**返回：截断的 JSON 会让上层报“解析失败”，
+        掩盖真正的网络问题，排查时极易误判为上游改接口。
+        """
+        declared = resp.headers.get("Content-Length")
+        try:
+            expect = int(declared) if declared else None
+        except (TypeError, ValueError):
+            expect = None
+
+        buf = bytearray()
+        while True:
+            try:
+                chunk = resp.read(HTTP_READ_CHUNK)
+            except IncompleteRead as exc:
+                # 已读到的部分仍可用（`exc.partial`），但整体不可信：
+                # 重新抛成“受支持”的传输错误，交由 `_request` 退避重试。
+                raise IncompleteRead(
+                    bytes(buf) + bytes(exc.partial or b""),
+                    exc.expected or 0) from exc
+            if not chunk:
+                break
+            buf.extend(chunk)
+
+        got = len(buf)
+        if expect is not None and expect > 0 and got < expect:
+            if got < expect * (1.0 - READ_LENGTH_TOLERANCE):
+                # 同理：直接用标准库异常表达“读到的比声明的少”，
+                # 这样重试路径只有一条（`http.client.IncompleteRead`），
+                # 不需要在 except 元组里再加自定义类型。
+                raise IncompleteRead(bytes(buf), expect)
+        return bytes(buf)
 
     # -- 公开 API -----------------------------------------------------------
 
