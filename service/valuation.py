@@ -957,6 +957,23 @@ class ValuationService:
         d = fp.as_dict()
         d["match_id"] = match_id
         d["state"] = snap.state.value
+        # 用户要求：盘口信息一律以**中文**展示，且与乐鱼一致
+        # （如「曼联上半场-1」「上半场进球数>1/1.5」）。
+        # 这里回传与 `outcomes` 同序的中文名，前端直接渲染；
+        # 不在前端重实现一套翻译（否则两处措辞会逐渐漂移）。
+        try:
+            from core.market_labels import format_market
+            line = str((snap.metadata or {}).get("leyu_hv") or "")
+            outcomes = list(d.get("outcomes") or [])
+            d["outcome_labels"] = [
+                format_market(snap.market, oc, line,
+                              home=snap.home, away=snap.away)
+                for oc in outcomes]
+            d["line"] = line
+            d["home"] = snap.home
+            d["away"] = snap.away
+        except Exception:  # noqa: BLE001 - 标签是展示增强，不得影响定价数据
+            pass
         # 必须回传**实际**使用的市场：请求 1X2 而被降级到 AH/OU 时，
         # 前端若不知情就会把两结果市场当成胜平负展示，产生误导。
         d["market"] = snap.market

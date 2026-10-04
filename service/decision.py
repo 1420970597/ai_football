@@ -55,6 +55,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from core import devig as devig_mod
 from core import economics as econ
 from core import markets as mk
+from core.market_labels import format_market
 from core.models import DevigMethod, OddsSnapshot, SnapshotState
 
 from .llm import LLMClient, LLMError, LLMNotConfigured
@@ -580,8 +581,14 @@ class DecisionEngine:
                 kelly = econ.fractional_kelly(p, odds,
                                               lam=self.config.kelly_fraction)
                 kelly = max(0.0, min(kelly, self.config.max_stake_pct))
+            # 中文选项名（乐鱼风格）：用户要求展示一律说中文，
+            # 如「曼联上半场-1」。线值取自快照的 `leyu_hv`（原始写法）。
+            _line = str((snapshot.metadata or {}).get("leyu_hv") or "")
             cand = CandidateDecision(
-                outcome=oc, label=str(oc), odds=odds,
+                outcome=oc,
+                label=format_market(snapshot.market, oc, _line,
+                                    home=snapshot.home, away=snapshot.away),
+                odds=odds,
                 p_small=p_small[i],
                 p_llm=(p_llm.get(oc) if p_llm else None),
                 p_combined=p, edge=edge,

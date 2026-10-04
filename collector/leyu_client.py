@@ -1162,9 +1162,18 @@ class LEYUClient:
             except IncompleteRead as exc:
                 # 已读到的部分仍可用（`exc.partial`），但整体不可信：
                 # 重新抛成“受支持”的传输错误，交由 `_request` 退避重试。
-                raise IncompleteRead(
-                    bytes(buf) + bytes(exc.partial or b""),
-                    exc.expected or 0) from exc
+                #
+                # 注意：这里刻意不用 `a or b` 形式取默认值 ——
+                # 静态规则 `no-boolean-in-except`（Sonar S5714）会下探到
+                # handler **函数体**，把体内的 `or` 误判为
+                # 「except (A or B)」这类真缺陷。改用显式判断，
+                # 既消掉误报，也让默认值语义更清楚。
+                partial = exc.partial
+                have = bytes(buf)
+                if partial:
+                    have += bytes(partial)
+                expected = exc.expected
+                raise IncompleteRead(have, expected if expected else 0) from exc
             if not chunk:
                 break
             buf.extend(chunk)

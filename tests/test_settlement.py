@@ -522,7 +522,9 @@ class TestLedgerFromMatchResult(unittest.TestCase):
         mp.computations = [comp]
         mp.picks = [{
             "market": "OU(2.5)", "line": "", "outcome": "over",
-            "pick_label": "全场大2.5", "odds": 2.0, "edge": 0.05,
+            # 乐鱼风格中文标签（用户要求：说「全场进球数>2.5」，
+            # 而不是「全场大2.5」或 `OU(2.5) over`）。
+            "pick_label": "全场进球数>2.5", "odds": 2.0, "edge": 0.05,
             "required_edge": 0.02, "confidence": 0.4, "p_market": 0.5,
             "p_llm": 0.6, "p_fused": 0.55, "llm_weight": 0.4, "kelly": 0.02,
         }]
@@ -532,7 +534,7 @@ class TestLedgerFromMatchResult(unittest.TestCase):
         picks = [r for r in rows if r.is_pick]
         rej = [r for r in rows if not r.is_pick]
         self.assertEqual(len(picks), 1)
-        self.assertEqual(picks[0].label, "全场大2.5")
+        self.assertEqual(picks[0].label, "全场进球数>2.5")
         self.assertEqual(picks[0].trigger, "price_change")
         self.assertAlmostEqual(picks[0].p_llm, 0.6)
         self.assertEqual(len(rej), 1)

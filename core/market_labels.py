@@ -38,9 +38,11 @@ __all__ = [
     "TOTAL_OUTCOME_ZH",
     "parse_market_code",
     "format_market",
+    "format_selection",
     "format_pick",
     "describe_market",
     "ah_side_label",
+    "negate_line",
 ]
 
 #: 盘口族 → 中文名（不含线值）
@@ -79,12 +81,70 @@ def parse_market_code(code: object) -> Optional[Tuple[str, bool, str]]:
 def _line_zh(line: str) -> str:
     """线值展示（保留行业习惯写法）。
 
-    复合盘 `0/0.5`、`1/1.5` **原样保留** —— 它是行业通用写法，
-    而中点（0.25）只是计算用的近似，展示中点会让人困惑。
-    负号由「让/受让」表述，这里去掉避免双重否定。
+    复合盘 `0/0.5`、`1/1.5` **原样保留** —— 它是行业通用写法
+    （实测乐鱼 `hv` 就是这种形式），而中点（0.25）只是计算用的近似，
+    展示中点会让人困惑。
     """
     s = str(line or "").strip()
     return s.lstrip("+")
+
+
+def _is_zero_line(line: str) -> bool:
+    """线值是否所有分段都为 0（如 `0`、`0/0`）。平手盘无让球方向。"""
+    parts = [p.strip().lstrip("+") for p in str(line or "").split("/")]
+    parts = [p for p in parts if p]
+    if not parts:
+        return False
+    try:
+        return all(float(p) == 0.0 for p in parts)
+    except ValueError:
+        return False
+
+
+def negate_line(line: object) -> str:
+    """把让球线**取反**（主队让球线 ↔ 客队让球线）。
+
+    乐鱼的 `hv` 是**主队视角**的有符号让球线，所以客队那一侧必须取反
+    才能正确展示 —— 否则「主队让1」会被错标成「客队让1」
+    （方向搞反，比不展示更危险）。
+
+    复合盘只翻转整体符号（乐鱼实测 `-0/0.5` ↔ `0/0.5`），
+    不逐段处理（逐段会写出 `0/-0.5` 这种上游不存在的写法）。
+
+    >>> negate_line("-1")
+    '+1'
+    >>> negate_line("0/0.5")
+    '-0/0.5'
+    >>> negate_line("0")
+    '0'
+    """
+    s = str(line or "").strip()
+    if not s:
+        return ""
+    if _is_zero_line(s):
+        return "0"                     # 平手盘：取反仍是平手，不写 `-0`
+    if s.startswith("-"):
+        return s[1:]
+    if s.startswith("+"):
+        return "-" + s[1:]
+    return "-" + s
+
+
+def _signed_line(line: object) -> str:
+    """让球线展示：**正数补显式 `+`**（乐鱼风格 `主队上半场-1` / `客队上半场+1`）。
+
+    为何要显式符号：让球盘只说「1」无法区分让/受让，是方向歧义；
+    `+1`/`-1` 与乐鱼界面一致，也避免与 `ah_side_label` 的
+    「让/受让」措辞相互干扰。平手盘（0）不加符号。
+    """
+    s = str(line or "").strip()
+    if not s:
+        return ""
+    if _is_zero_line(s):
+        return "0"
+    if s.startswith(("-", "+")):
+        return s
+    return "+" + s
 
 
 #: 独赢盘的结果 → 中文（`ot` 是乐鱼原始字段值，一并兼容）
@@ -106,24 +166,33 @@ _TOTAL_OUTCOME = TOTAL_OUTCOME_ZH
 
 
 def format_market(market: object, outcome: object = "",
-                  line: object = "") -> str:
-    """把 `(盘口代码, 结果)` 格式化为中文描述。
+                  line: object = "", home: object = "",
+                  away: object = "") -> str:
+    """把 `(盘口代码, 结果)` 格式化为**乐鱼风格中文**描述。
 
-    例（全部来自本项目真实盘口）：
+    用户要求：盘口信息与买入建议一律说中文，且与乐鱼界面一致：
 
-        format_market("OU_1H(1.5)", "over")   -> "上半场大1.5"
-        format_market("OU(2.5)", "under")     -> "全场小2.5"
-        format_market("AH_1H(0.25)", "home", "0/0.5")
-                                              -> "上半场主队让0/0.5"
-        format_market("AH(-0.5)", "home")     -> "全场主队让0.5"
-        format_market("HAD_1H", "home")       -> "上半场主胜"
-        format_market("HAD", "draw")          -> "全场平局"
+        xx队上半场-1        ← 让球（带队名 + 带符号线值）
+        上半场进球数>1/1.5  ← 大小球（用 `>` / `<`）
+
+    例（全部取自本项目真实盘口）：
+
+        format_market("AH_1H(-1)", "home", "-1", "曼联", "利物浦")
+                                        -> "曼联上半场-1"
+        format_market("AH_1H(-1)", "away", "-1", "曼联", "利物浦")
+                                        -> "利物浦上半场+1"
+        format_market("OU_1H(1.25)", "over", "1/1.5")
+                                        -> "上半场进球数>1/1.5"
+        format_market("OU(2.5)", "under")   -> "全场进球数<2.5"
+        format_market("HAD_1H", "home")      -> "上半场主胜"
 
     Args:
         market: 盘口代码（如 `OU_1H(1.5)`）。
         outcome: 结果名（`home`/`draw`/`away`/`over`/`under`）。
         line: **原始线值**（如 `0/0.5`）；给出时优先于代码里的中点值，
             因为中点（0.25）只是计算近似，展示会让人困惑。
+        home / away: 主/客队名。给出时用于让球盘的「队名」前缀
+            （如 `曼联上半场-1`）；缺失则回退为「主队/客队」。
 
     Returns:
         中文描述；无法识别时回退为原始的 `"代码 结果"`，**不抛异常**
@@ -142,14 +211,41 @@ def format_market(market: object, outcome: object = "",
         return "%s%s" % (prefix, oc_zh) if oc_zh else "%s独赢" % prefix
 
     if fam == "OU":
-        oc_zh = _TOTAL_OUTCOME.get(oc, oc)
-        return "%s%s%s" % (prefix, oc_zh, _line_zh(ln)) if oc_zh \
-            else "%s大小%s" % (prefix, _line_zh(ln))
+        # 乐鱼风格：用比较符表达大/小，而不是「大 2.5」。
+        #   over  → `>线值`（实际进球数大于该线）
+        #   under → `<线值`
+        # 这样展示与乐鱼界面的「进球数 > 1/1.5」一致。
+        body = _line_zh(ln)
+        if oc in ("over", "Over"):
+            return "%s进球数>%s" % (prefix, body)
+        if oc in ("under", "Under"):
+            return "%s进球数<%s" % (prefix, body)
+        return "%s进球数%s" % (prefix, body)
 
-    # AH 让球：line 是**主队让球线**（有符号）
-    #   line < 0 → 主队让球；line > 0 → 主队受让
-    # 用「让/受让」表述方向，而不是把负号丢给用户看。
-    return "%s%s" % (prefix, ah_side_label(oc, ln))
+    # AH 让球（乐鱼风格：`<队名><半场><带符号线值>`）
+    #
+    # ⚠️ 关键：`line` 是**主队视角**的有符号让球线（乐鱼 `hv`）。
+    # 因此客队那一侧必须取反，否则会把「主队让1」错标成「客队让1」——
+    # 方向搞反比不展示更危险。
+    if oc == "away":
+        ln = negate_line(ln)
+    name = ""
+    if oc == "home":
+        name = str(home or "").strip() or "主队"
+    elif oc == "away":
+        name = str(away or "").strip() or "客队"
+    return "%s%s%s" % (name, prefix, _signed_line(ln))
+
+
+def format_selection(market: object, outcome: object = "",
+                     line: object = "", home: object = "",
+                     away: object = "") -> str:
+    """「选项」级中文描述（带队名）。语义上等价于 `format_market`。
+
+    单独立名是为了让调用点读起来清楚：本函数描述的是**一个可投注选项**
+    （如「曼联上半场-1」），而不是整个盘口（「上半场让球 -1」）。
+    """
+    return format_market(market, outcome, line, home=home, away=away)
 
 
 def ah_side_label(outcome: object, line: object) -> str:

@@ -54,6 +54,7 @@ from core.settlement import (
     settle_pick,
     summarise,
 )
+from core.market_labels import describe_market, format_market
 
 __all__ = ["LedgerEntry", "DecisionLedger"]
 
@@ -129,6 +130,17 @@ class LedgerEntry:
     def as_dict(self) -> Dict[str, Any]:
         d = dict(self.__dict__)
         d["clv"] = self.clv
+        # 用户要求：盘口信息一律以中文展示，与乐鱼一致
+        # （如「曼联上半场-1」「上半场进球数>1/1.5」）。
+        # `label` 只在是买入建议时被写入（取自 picks），历史条目可能为空，
+        # 所以这里统算一份，保证每一条都能直接看懂。
+        try:
+            from core.market_labels import format_market
+            d["label"] = format_market(self.market, self.outcome, self.line,
+                                      home=self.home, away=self.away)
+            d["market_label"] = describe_market(self.market)
+        except Exception:  # noqa: BLE001 - 标签是展示增强，不得影响统计
+            pass
         return d
 
     @classmethod
@@ -322,8 +334,19 @@ class DecisionLedger:
 
     @staticmethod
     def _p_fair(comp: Any, i: int) -> float:
-        fair = tuple(getattr(comp, "p_fair", ()) or ())
-        return float(fair[i]) if i < len(fair) else 0.0
+        """取盘口第 i 个结果的公平概率（去水后）。
+
+        为何要容错：`comp` 可能来自反序列化/测试替身，`p_fair` 元素
+        可能是字符串或缺失。一个脏字段不应让整份台账统计崩掉
+        （那样用户就永远拿不到命中率）。
+        """
+        fair = tuple(getattr(comp, "p_fair", None) or ())
+        if i >= len(fair):
+            return 0.0
+        try:
+            return float(fair[i])
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
 
     # -- 结算 ------------------------------------------------------------
 

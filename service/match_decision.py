@@ -129,33 +129,56 @@ def _tick_age_s(ts_ms: object) -> Optional[float]:
 
 
 def _lookup_probability(raw: Mapping[str, Any], outcome: str,
-                        market: str, line: str) -> Optional[float]:
+                        market: str, line: str,
+                        home: object = "", away: object = "") -> Optional[float]:
     """从 LLM 返回的概率字典里取某结果的值（容错多种键写法）。
 
     依次尝试：
       1. 内部代码（`home`/`over`）—— 提示词要求的标准写法；
-      2. 中文标签（`全场主队平手`）—— LLM 常见的自然输出；
-      3. 大小写/空白不敏感匹配。
+      2. 中文标签（如「曼联上半场-1」「上半场进球数>1/1.5」）；
+      3. 不带队名的中文标签（LLM 可能省略队名）；
+      4. 大小写/空白不敏感匹配。
 
     为何必须容错：提示词里同时展示了中文标签，LLM 很容易照中文作答；
     若解析器只认内部代码，整个盘口会被**静默丢弃**，
     表现为「系统跑完却零买入建议」这类难查的故障。
+
+    ⚠️ **`home`/`away` 必须与构建提示词时一致**：让球标签含队名
+    （`曼联上半场-1`），若这里不传队名，就会回退成 `主队上半场-1`
+    而永远匹配不上 LLM 的答案 —— 重现同一种静默丢盘故障。
     """
     if outcome in raw:
-        v = raw[outcome]
-    else:
-        label = format_market(market, outcome, line)
+        return _to_prob(raw[outcome])
+
+    # 候选标签：带队名（与提示词逐字一致）→ 不带队名（LLM 省略时兼容）
+    candidates = [format_market(market, outcome, line,
+                                home=home, away=away)]
+    plain = format_market(market, outcome, line)
+    if plain not in candidates:
+        candidates.append(plain)
+
+    for label in candidates:
         v = raw.get(label)
-        if v is None:
-            # 归一化比较（去空白、统一大小写）
-            norm = {str(k).strip().lower(): val for k, val in raw.items()}
-            v = norm.get(str(outcome).strip().lower())
-            if v is None:
-                v = norm.get(label.strip().lower())
-    if v is None or isinstance(v, bool):
+        if v is not None:
+            return _to_prob(v)
+
+    # 归一化比较（去空白、统一大小写）
+    norm = {str(k).strip(): val for k, val in raw.items()}
+    for key in [str(outcome).strip()] + [c.strip() for c in candidates]:
+        if key in norm:
+            return _to_prob(norm[key])
+        low = {k.lower(): v for k, v in norm.items()}
+        if key.lower() in low:
+            return _to_prob(low[key.lower()])
+    return None
+
+
+def _to_prob(value: object) -> Optional[float]:
+    """把 LLM 给的概率值转为 float；非法/布尔返回 None。"""
+    if value is None or isinstance(value, bool):
         return None
     try:
-        return float(v)  # type: ignore[arg-type]
+        return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError, OverflowError):
         return None
 
@@ -259,6 +282,10 @@ class MarketComputation:
     #: 只有 `gates[i].passed` 为真的结果才交给 LLM 做最终裁定，
     #: 这是「经济学算法满足后才调用 LLM」的落地点。
     gates: Tuple[GateResult, ...] = ()
+    #: 主/客队名。用于生成**乐鱼风格**的中文选项名
+    #: （如「曼联上半场-1」）；缺失时回退为「主队/客队」。
+    home: str = ""
+    away: str = ""
 
     @property
     def gate_passed(self) -> bool:
@@ -302,6 +329,17 @@ class MarketComputation:
             "market_label": describe_market(self.market),
             "line": self.line,
             "outcomes": list(self.outcomes),
+            # 中文选项名（与 outcomes 同序）——用户要求展示与乐鱼一致：
+            # 如「曼联上半场-1」「上半场进球数>1/1.5」。
+            "outcome_labels": [
+                format_market(self.market, oc, self.line,
+                              home=self.home, away=self.away)
+                for oc in self.outcomes],
+            # 最优选项的中文名，便于列表/卡片直接展示
+            "best_label": (
+                format_market(self.market, self.outcomes[self.best_index],
+                              self.line, home=self.home, away=self.away)
+                if self.best_index >= 0 else ""),
             "odds": [round(o, 4) for o in self.odds],
             "p_fair": [round(p, 6) for p in self.p_fair],
             "edges": [round(e, 6) for e in self.edges],
@@ -530,6 +568,10 @@ class MatchDecisionEngine:
                 trend=str(trend_info.get("direction", "flat")),
                 trend_pct=_as_float(trend_info.get("delta_pct")),
                 trend_n=_as_int(trend_info.get("n")),
+                # 队名：生成**乐鱼风格**中文选项名（如「曼联上半场-1」）
+                # 必需 —— 让球盘不带队名就无法与乐鱼展示对齐。
+                home=str(snap.home or ""),
+                away=str(snap.away or ""),
             ))
         # 优势大的排前面：LLM 上下文有限，优先给它看有希望的
         out.sort(key=lambda c: c.best_edge, reverse=True)
@@ -637,7 +679,8 @@ class MatchDecisionEngine:
                 lines.append(
                     "  - 键=%s | %s：赔率 %.3f，市场公平概率 %.4f"
                     % (c.outcomes[i],
-                       format_market(c.market, c.outcomes[i], c.line),
+                       format_market(c.market, c.outcomes[i], c.line,
+                                     home=home, away=away),
                        c.odds[i], c.p_fair[i]))
         lines.append("")
         lines.append("降赔=资金流入=市场认为该结果概率上升。")
@@ -751,7 +794,8 @@ class MatchDecisionEngine:
             probs: List[float] = []
             ok = True
             for oc in comp.outcomes:
-                v = _lookup_probability(raw, oc, mkt, comp.line)
+                v = _lookup_probability(raw, oc, mkt, comp.line,
+                                        home=home, away=away)
                 if v is None:
                     ok = False
                     break
@@ -809,9 +853,11 @@ class MatchDecisionEngine:
                 picks.append({
                     "market": mkt,
                     "outcome": oc,
-                    # **人话标签**：用户要求最终结果要说“上半场大1.5”，
-                    # 而不是 `OU_1H(1.5) over`。
-                    "pick_label": format_market(mkt, oc, comp.line),
+                    # **人话标签**：用户要求最终结果要说「曼联上半场-1」
+                    # 「上半场进球数>1/1.5」，而不是 `OU_1H(1.5) over`。
+                    # 传队名才能给出乐鱼风格的让球描述。
+                    "pick_label": format_market(mkt, oc, comp.line,
+                                                home=home, away=away),
                     "odds": round(comp.odds[i], 4),
                     "edge": round(edge, 6),
                     "edge_pct": round(edge * 100, 3),

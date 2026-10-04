@@ -94,6 +94,18 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _as_int_or_none(value: Any) -> Optional[int]:
+    """容错整数转换；不可转换返回 None（用于“要么给出合法值、要么不给”）。
+
+    区别于 `_as_int`：这里 None 有语义（如比分拿不到就不要写进响应），
+    而不能默默变成 0 —— 那会显示成“0:0”，与“没有比分”完全不同。
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _q_int(query: Mapping[str, List[str]], name: str, default: int,
            minimum: Optional[int] = None,
            maximum: Optional[int] = None) -> int:
@@ -763,7 +775,13 @@ class ApiApp:
 
     @staticmethod
     def _fill_live_state(row: Dict[str, Any], mid: str, rt: Any) -> None:
-        """填比分 / 半场比分 / 比赛时钟（来自实时推送，缺失则留空）。"""
+        """填比分 / 半场比分 / 比赛时钟（来自实时推送，缺失则留空）。
+
+        容错契约：推送载荷不可信（可能是字符串/None/异常值），
+        而本方法在渲染 `/board` 的热路径上 —— 一个脏字段绝不能
+        让整页 500。取不到合法值时**不写字段**（而不是写 0:0），
+        因为“没有比分”与“0:0”语义完全不同。
+        """
         if rt is None:
             return
         try:
@@ -771,15 +789,21 @@ class ApiApp:
         except Exception:  # noqa: BLE001 - 单个字段缺失不应让整页 500
             sc = None
         if sc and len(sc) >= 2:
-            row["score"] = [int(sc[0]), int(sc[1])]
+            hi, ai = _as_int_or_none(sc[0]), _as_int_or_none(sc[1])
+            if hi is not None and ai is not None:
+                row["score"] = [hi, ai]
         try:
-            st = rt.status(mid) or {}
+            st = rt.status(mid)
         except Exception:  # noqa: BLE001
+            st = {}
+        if not isinstance(st, Mapping):
             st = {}
         row["clock"] = str(st.get("clock") or st.get("minute") or "")
         ht = st.get("half_score")
         if isinstance(ht, (list, tuple)) and len(ht) >= 2:
-            row["half_score"] = [int(ht[0]), int(ht[1])]
+            h0, h1 = _as_int_or_none(ht[0]), _as_int_or_none(ht[1])
+            if h0 is not None and h1 is not None:
+                row["half_score"] = [h0, h1]
 
     @staticmethod
     def _board_markets(m: Mapping[str, Any], dec: Mapping[str, Any],
@@ -789,18 +813,39 @@ class ApiApp:
         优先用决策里的 `computations`：它含**原始线值**、去水概率、edge、
         门控结论与走势 —— 这些是判断「为什么没建议买入」的关键。
         没有决策结果时才回退到快照库的最新赔率（并标记 `decided=False`）。
+
+        用户要求：盘口信息与买入建议一律以**中文**展示，且与乐鱼一致
+        （如「曼联上半场-1」「上半场进球数>1/1.5」）。因此每个结果都
+        补一个 `outcome_labels`（与 `outcomes` 同序），前端直接渲染即可，
+        无需在前端重复实现一套翻译（那会导致两处措辞逐渐漂移）。
         """
+        from core.market_labels import format_market
+
+        home = str(m.get("home") or "")
+        away = str(m.get("away") or "")
+
+        def _labels(market: object, line: object,
+                    outcomes: Sequence[Any]) -> List[str]:
+            """每个结果的**中文选项名**（乐鱼风格，含队名）。"""
+            return [format_market(market, oc, line, home=home, away=away)
+                    for oc in outcomes]
+
         comps = dec.get("computations") or []
         if comps:
             out: List[Dict[str, Any]] = []
             for c in comps:
                 if not isinstance(c, Mapping):
                     continue
+                outs = list(c.get("outcomes") or [])
+                ln = str(c.get("line") or "")
+                mk = str(c.get("market") or "")
                 out.append({
-                    "market": str(c.get("market") or ""),
+                    "market": mk,
                     "label": str(c.get("market_label") or ""),
-                    "line": str(c.get("line") or ""),
-                    "outcomes": list(c.get("outcomes") or []),
+                    "line": ln,
+                    "outcomes": outs,
+                    # 中文选项名（与 outcomes 同序），供前端直接展示
+                    "outcome_labels": _labels(mk, ln, outs),
                     "odds": list(c.get("odds") or []),
                     "p_fair": list(c.get("p_fair") or []),
                     "edges": list(c.get("edges") or []),
@@ -826,11 +871,13 @@ class ApiApp:
         oc_by = m.get("latest_outcomes") or {}
         out = []
         for mk in sorted(odds_by):
+            outs = list(oc_by.get(mk) or [])
             out.append({
                 "market": str(mk),
                 "label": describe(mk),
                 "line": "",
-                "outcomes": list(oc_by.get(mk) or []),
+                "outcomes": outs,
+                "outcome_labels": _labels(mk, "", outs),
                 "odds": list(odds_by.get(mk) or []),
                 "p_fair": [], "edges": [], "kellys": [],
                 "margin": 0.0, "state": "", "method": "",

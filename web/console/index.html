@@ -682,9 +682,10 @@ function renderDecisionTable(rows) {
     })]));
 
     if (bp) {
+      // 中文选项名（后端已给 `pick_label`，如「曼联上半场-1」）；
+      // 回退链保证旧数据（无 pick_label）也不会空白。
       tr.appendChild(el("td", { class: "pick" }, [
-        el("b", { text: bp.market + " " }),
-        document.createTextNode(bp.outcome),
+        el("b", { text: bp.pick_label || (bp.market + " " + bp.outcome) }),
         el("span", { class: "o", text: "  " + fx(bp.odds) })
       ]));
       tr.appendChild(el("td", { class: "num", text: fx(bp.odds) }));
@@ -811,7 +812,12 @@ function openDecision(i) {
     d.picks.forEach(p => {
       const tr = el("tr", { class: "row-buy" });
       tr.appendChild(el("td", { text: p.market }));
-      tr.appendChild(el("td", { text: p.outcome }));
+      // 中文选项名优先（与乐鱼一致）
+      tr.appendChild(el("td", {}, [
+        el("span", { text: p.pick_label || p.outcome }),
+        el("span", { class: "mut", text: "（" + p.outcome + "）",
+          title: "结果代码" })
+      ]));
       tr.appendChild(el("td", { class: "num", text: fx(p.odds) }));
       tr.appendChild(el("td", { class: "num edge-pos",
         text: (p.edge_pct > 0 ? "+" : "") + p.edge_pct.toFixed(2) + "%" }));
@@ -839,14 +845,23 @@ function openDecision(i) {
   const comps = (d.computations || []).slice().sort((a, b) => b.best_edge - a.best_edge);
   comps.forEach(c => {
     const tr = el("tr", {});
-    tr.appendChild(el("td", { text: c.market }));
+    // 中文盘口名优先（与乐鱼一致）；代码作为 hover 提示。
+    tr.appendChild(el("td", {}, [
+      el("span", { text: c.market_label || c.market }),
+      el("span", { class: "mut", text: "（" + c.market + "）",
+        title: "机器盘口代码" })
+    ]));
     tr.appendChild(el("td", { class: "num", text: (c.margin * 100).toFixed(2) + "%" }));
     tr.appendChild(el("td", { class: "num", text: (c.method_spread_pp || 0).toFixed(2) }));
-    // 最优项
+    // 最优项：优先用中文选项名（后端已给 best_label）
     tr.appendChild(el("td", { class: "num edge-pos",
-      text: c.best_outcome + " " + (c.best_edge > 0 ? "+" : "") + (c.best_edge * 100).toFixed(2) + "%" }));
+      text: (c.best_label || c.best_outcome) + " " +
+            (c.best_edge > 0 ? "+" : "") + (c.best_edge * 100).toFixed(2) + "%" }));
+    // 赔率列表也用中文选项名（与 outcomes 同序）
+    const ocLabels = c.outcome_labels || [];
     tr.appendChild(el("td", { class: "num",
-      text: c.odds.map((o, k) => c.outcomes[k] + "=" + fx(o)).join(" / ") }));
+      text: c.odds.map((o, k) =>
+        (ocLabels[k] || c.outcomes[k]) + "=" + fx(o)).join(" / ") }));
     tr.appendChild(el("td", {}, [trendSpan(c.trend, c.trend_pct)]));
     tr.appendChild(el("td", { class: "num", text: String(c.trend_n || 0) }));
     tb.appendChild(tr);
@@ -1462,9 +1477,12 @@ function renderMatchRow(m) {
 function renderMarketBlock(mk) {
   const box = el("div", {});
   const h = el("h5", {});
-  h.appendChild(document.createTextNode(mk.market || "?"));
-  h.appendChild(el("span", { class: "line", text: mk.label || "" }));
-  if (mk.line) h.appendChild(el("span", { class: "line", text: "线 " + mk.line }));
+  // 中文盘口名优先（与乐鱼一致）；代码作为 hover 提示供排查对照
+  h.appendChild(document.createTextNode(mk.label || mk.market || "?"));
+  if (mk.label && mk.market) {
+    h.appendChild(el("span", { class: "mg", text: "（" + mk.market + "）",
+      title: "机器盘口代码" }));
+  }
   if (typeof mk.margin === "number" && mk.margin) {
     h.appendChild(el("span", { class: "mg",
       text: "水钱 " + (mk.margin * 100).toFixed(2) + "% · " + (mk.method || "") }));
@@ -1477,6 +1495,7 @@ function renderMarketBlock(mk) {
 
   const tb = el("tbody", {});
   const outs = mk.outcomes || [];
+  const outLabels = mk.outcome_labels || [];
   outs.forEach((oc, i) => {
     const odds = (mk.odds || [])[i];
     const pf = (mk.p_fair || [])[i];
@@ -1487,8 +1506,12 @@ function renderMarketBlock(mk) {
     const pick = (mk._picks || []).find(p => p.outcome === oc);
     const tr = el("tr", { class: passed || pick ? "" : "gate-off" });
 
+    // **中文选项名**（与乐鱼一致，如「曼联上半场-1」）。
+    // 回退链：outcome_labels[i] → 买入标签 → 原始代码，保证永不空白。
+    const zh = outLabels[i] || (pick && pick.pick_label) || oc;
     tr.appendChild(el("td", {}, [
-      el("b", { text: oc, class: pick ? "o-hit" : "o-miss" }),
+      el("b", { text: zh, class: pick ? "o-hit" : "o-miss",
+        title: "结果代码 " + oc }),
       pick ? el("span", { class: "gate-tag buy", text: " 买入" }) : null
     ]));
     tr.appendChild(el("td", { class: "num", text: fx(odds, 3) }));
