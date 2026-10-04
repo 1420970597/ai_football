@@ -19,6 +19,7 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping
+from unittest import mock
 
 from collector.leyu_client import (
     AuthError,
@@ -401,6 +402,103 @@ class TestReplaySource(unittest.TestCase):
         snaps, _ = src.fetch()
         self.assertGreater(len(snaps), 0)
         self.assertEqual({s.source for s in snaps}, {"体彩官方API"})
+
+
+# --------------------------------------------------------------------------- #
+# 「进行中」口径对齐（与乐鱼页面展示一致）
+# --------------------------------------------------------------------------- #
+
+class _FakeMatch:
+    """最小 LEYUMatch 替身（只带口径判定用到的字段）。"""
+
+    def __init__(self, mid: str, sport: str = "1", *, live: bool = False,
+                 finished: bool = False, start_ms: int = 0) -> None:
+        self.mid = mid
+        self.sport_id = sport
+        self.is_live = live
+        self.is_finished = finished
+        self.start_ms = start_ms
+
+
+class _FakeSource(SnapshotSource):
+    """固定赛程的假源，用于验证 `live_match_ids` / `live_count` 的口径。"""
+
+    name = "fake"
+
+    def __init__(self, matches: List[Any]) -> None:
+        self._matches = matches
+
+    def fetch(self, *a: Any, **kw: Any) -> Any:  # pragma: no cover - 未用
+        return [], []
+
+    def schedule(self) -> List[Any]:
+        return list(self._matches)
+
+
+class TestLiveWindowAlignment(unittest.TestCase):
+    """乐鱼页面「滚球」比 `ms==1` 多几场：临近开赛的场次也算。
+
+    实测：`ms==1` 足球 44 场时，上游计数为 47；差额恰好等于
+    「开赛在 0~10 分钟内但上游尚未置 `ms=1`」的 3 场。
+    """
+
+    def setUp(self) -> None:
+        self.now = 1_800_000_000_000
+        self._patch = mock.patch("collector.sources._now_ms",
+                                 return_value=self.now)
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
+
+    def _src(self) -> _FakeSource:
+        minute = 60_000
+        return _FakeSource([
+            _FakeMatch("live-now", live=True),
+            _FakeMatch("kickoff-in-5", start_ms=self.now + 5 * minute),
+            _FakeMatch("kickoff-in-30", start_ms=self.now + 30 * minute),
+            _FakeMatch("kickoff-past-2", start_ms=self.now - 2 * minute),
+            _FakeMatch("already-finished", finished=True,
+                       start_ms=self.now - 3 * minute),
+            _FakeMatch("basket-live", sport="2", live=True),
+            _FakeMatch("no-start-time"),
+        ])
+
+    def test_grace_window_includes_imminent_kickoff(self) -> None:
+        self.assertEqual(sorted(self._src().live_match_ids()),
+                         ["kickoff-in-5", "kickoff-past-2", "live-now"])
+
+    def test_zero_grace_is_strict_ms1_only(self) -> None:
+        """`grace_s=0` 退回严格口径（便于排障与对照）。"""
+        self.assertEqual(self._src().live_match_ids(grace_s=0), ["live-now"])
+
+    def test_finished_match_is_never_counted(self) -> None:
+        """已结束的赛事即使开赛时间在窗口内也不能算进行中。"""
+        self.assertNotIn("already-finished", self._src().live_match_ids())
+
+    def test_missing_start_time_is_not_counted(self) -> None:
+        """缺少开赛时间的赛事不能因为「0 <= now+grace」而被误算。"""
+        self.assertNotIn("no-start-time", self._src().live_match_ids())
+
+    def test_sport_filter_still_applies(self) -> None:
+        self.assertEqual(self._src().live_match_ids("2"), ["basket-live"])
+        self.assertEqual(len(self._src().live_match_ids("")), 4)
+
+    def test_counts_expose_both_denominators(self) -> None:
+        c = self._src().live_count()
+        self.assertEqual(c["derived"], 3)          # 足球
+        self.assertEqual(c["live_all_sports"], 4)  # 含篮球
+        self.assertEqual(c["source"], "derived")  # 假源不支持上游计数
+        self.assertIsNone(c["upstream"])
+
+    def test_upstream_count_is_reported_when_available(self) -> None:
+        """有上游计数时 `live` 采用上游值，但 `derived` 仍并列保留。"""
+        src = self._src()
+        with mock.patch.object(src, "_upstream_live_count",
+                              return_value={"sport": 47, "all_sports": 150,
+                                            "sport_id": "1"}):
+            c = src.live_count()
+        self.assertEqual(c["live"], 47)         # 上游权威值
+        self.assertEqual(c["derived"], 3)       # 本系统推导值（可对账）
+        self.assertEqual(c["source"], "upstream")
 
 
 if __name__ == "__main__":

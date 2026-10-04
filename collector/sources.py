@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import zipfile
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -88,8 +89,30 @@ SOCCER_SPORT_ID = "1"
 #: 非全量拉取时的默认上限（安全阀：避免误拉两千多场）。
 #: 需要全部赛事时必须显式 `full=True`。
 #: 注意：**进行中赛事的订阅/决策不走这个上限** —— 它们应当覆盖全部
-#: （见 `LeYuSource.live_match_ids` 与 `RealtimeHub`）。
+#: （见 `SnapshotSource.live_match_ids` 与 `RealtimeHub`）。
 DEFAULT_PARTIAL_MAX = 200
+
+#: 「进行中」的开赛前宽限（秒）。
+#:
+#: 乐鱼页面「滚球」计数比单纯 `ms==1` 多几场，实测差额恰好等于
+#: 「已临近开赛但上游尚未置 `ms=1`」的场次（详见 `live_match_ids` 文档）。
+#: 900s = 15 分钟：实测可完全消除该系统性偏差，再放大则开始超额。
+#: 设为 0 可退回到「只认 `ms==1`」的严格口径。
+LIVE_GRACE_S = 900.0
+
+
+def _now_ms() -> int:
+    """当前毫秒时间戳（与乐鱼 `mgt` 同一口径）。"""
+    return time.time_ns() // 1_000_000
+
+
+def _counts_as_live(m: Any, now_ms: int, grace_s: float) -> bool:
+    if getattr(m, "is_live", False):
+        return True
+    if grace_s <= 0 or getattr(m, "is_finished", False):
+        return False
+    start = _to_int(getattr(m, "start_ms", 0))
+    return bool(start) and start <= now_ms + grace_s * 1000
 
 KNOWN_SOURCES: Tuple[str, ...] = (SOURCE_LEYU, SOURCE_TICAI)
 
@@ -116,6 +139,19 @@ def _to_int(value: object, default: int = 0) -> int:
         return int(str(value))
     except (TypeError, ValueError, OverflowError):
         return default
+
+
+def _to_opt_int(value: object) -> Optional[int]:
+    """宽松整数转换；缺失或非法返回 None（与 `_to_int` 的区别是不给默认值）。
+
+    用于解析上游 JSON 里的可选计数字段：缺失必须能区分于 0。
+    """
+    if value is None:
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def resolve_source_name(name: Optional[str]) -> str:
@@ -173,6 +209,84 @@ class SnapshotSource(ABC):
         声明，而不是调用处用 `getattr` 绕过类型检查。
         """
         return []
+
+    def live_match_ids(self, sport_id: str = SOCCER_SPORT_ID,
+                       grace_s: float = LIVE_GRACE_S) -> List[str]:
+        """列出全部**进行中**赛事的 ID（可选能力，默认从 `schedule()` 推导）。
+
+        语义：该列表必须覆盖乐鱼页面「滚球」列表里的全部赛事，
+        不能被任何采集上限截断（实时订阅与定时决策都依赖它）。
+
+        ## 为何需要 `grace_s`（实测对账结论，非拍脑袋）
+
+        乐鱼页面「滚球」的计数（`platformsSportCountPB` →
+        `TY.1.balls.<sport>.ct`）比单纯的 `ms==1` **多几场**：
+        实测这差额恰好等于「**已临近开赛但上游尚未置 `ms=1`**」的场次
+        （某次实测：`ms==1` 足球 44 场，+3 场开赛在 0~10 分钟内的 → 47，
+        与上游计数完全吻合；窗口放宽到 20 分钟以上则超额）。
+
+        因此把这类「即将开赛」的赛事一并算作进行中，才能与页面展示一致。
+        上游计数本身是秒级变动的，追求整数相等不现实，
+        但**把系统性偏差消除**是能做到的（见 `live_count` 的 `source` 字段）。
+
+        Args:
+            sport_id: 运动筛选；默认足球。传 `""` 关闭筛选（全部运动）。
+            grace_s: 开赛前宽限秒数（默认 900s）；0 表示只认 `ms==1`。
+        """
+        want = SOCCER_SPORT_ID if sport_id is None else str(sport_id)
+        now_ms = _now_ms()
+        out: List[str] = []
+        for m in self.schedule():
+            if want and str(getattr(m, "sport_id", "")) != want:
+                continue
+            if not _counts_as_live(m, now_ms, grace_s):
+                continue
+            mid = str(getattr(m, "mid", ""))
+            if mid:
+                out.append(mid)
+        return out
+
+    def live_count(self, sport_id: str = SOCCER_SPORT_ID,
+                   grace_s: float = LIVE_GRACE_S) -> Dict[str, Any]:
+        """进行中赛事计数（供 `/health` 与前端对账「是否与乐鱼一致」）。
+
+        `source` 字段说明该计数的口径：
+          * `upstream` —— 上游自报计数（`platformsSportCountPB`）可用，
+            此时 `live` 即上游值，与本系统推导值并列便于对账；
+          * `derived`  —— 上游计数不可用，`live` 由本系统赛程推导。
+
+        Returns:
+            `{"live": N, "live_all_sports": M, "scheduled": K,
+              "source": "upstream"|"derived", "upstream": {...}|None}`
+        """
+        want = SOCCER_SPORT_ID if sport_id is None else str(sport_id)
+        schedule = self.schedule()
+        now_ms = _now_ms()
+        live_all = [m for m in schedule if _counts_as_live(m, now_ms, grace_s)]
+        derived_sport = len([m for m in live_all
+                             if not want
+                             or str(getattr(m, "sport_id", "")) == want])
+
+        upstream = self._upstream_live_count(want)
+        return {
+            "live": (upstream or {}).get("sport", derived_sport),
+            "derived": derived_sport,
+            "live_all_sports": len(live_all),
+            "scheduled": len([m for m in schedule
+                              if not want
+                              or str(getattr(m, "sport_id", "")) == want]),
+            "source": "upstream" if upstream else "derived",
+            "upstream": upstream,
+        }
+
+    def _upstream_live_count(self, sport_id: str) -> Optional[Dict[str, Any]]:
+        """取上游自报的「滚球」计数（可选能力；不支持时返回 None）。
+
+        端点：`GET /yewu11/v1/m/platformsSportCountPB?merchantCode=Y&enName=YBTY`
+        结构：`{"0": {"TY": {"1": {"ct": N, "balls": {"1": {"ct": n, …}}}}}}`
+        其中 `TY`=体育、`"1"`=滚球、`balls` 按运动 ID 细分。
+        """
+        return None
 
     def describe(self) -> Dict[str, Any]:
         """数据源元信息（供 /health 与排障使用）。"""
@@ -501,6 +615,48 @@ class LEYUSource(SnapshotSource):
         if max_matches is None:
             return [m.mid for m in pool]
         return [m.mid for m in pool[: max(0, _to_int(max_matches))]]
+
+    def _upstream_live_count(self, sport_id: str) -> Optional[Dict[str, Any]]:
+        """取上游自报的「滚球」计数（乐鱼页面计数徽标同源）。
+
+        端点：`GET /yewu11/v1/m/platformsSportCountPB?merchantCode=Y&enName=YBTY`
+        结构：`{"0": {"TY": {"1": {"ct": N, "balls": {"1": {"ct": n, …}}}}}}`
+        其中 `0`=今日、`TY`=体育、`"1"`=滚球、`balls` 按运动 ID 细分。
+
+        用途：与页面**对账**。上游计数是秒级变动的，因此本系统同时保留
+        自己推导的 `derived` 值，而不是盲目采用上游值。
+
+        失败一律返回 None（对账属增强能力，不应影响采集）。
+        """
+        if self.replay:
+            return None
+        try:
+            blob = self.client._request(
+                "GET", "/v1/m/platformsSportCountPB?merchantCode=Y&enName=YBTY")
+        except Exception:  # noqa: BLE001 - 对账失败不影响主流程
+            return None
+        if not isinstance(blob, Mapping):
+            return None
+        today = blob.get("0")
+        if not isinstance(today, Mapping):
+            return None
+        sports = today.get("TY")
+        if not isinstance(sports, Mapping):
+            return None
+        roll = sports.get("1")                 # TY=体育, "1"=滚球
+        if not isinstance(roll, Mapping):
+            return None
+        all_ct = _to_opt_int(roll.get("ct"))
+        if all_ct is None:
+            return None
+        sport_ct: Optional[int] = None
+        balls = roll.get("balls")
+        if sport_id and isinstance(balls, Mapping):
+            item = balls.get(str(sport_id))
+            if isinstance(item, Mapping):
+                sport_ct = _to_opt_int(item.get("ct"))
+        return {"sport": sport_ct, "all_sports": all_ct,
+                "sport_id": str(sport_id)}
 
     def describe(self) -> Dict[str, Any]:
         return {

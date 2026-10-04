@@ -556,16 +556,19 @@ def make_session_provider(
     request_id: Optional[str] = None,
     include_app: bool = True,
 ) -> SessionProvider:
-    """按「App 场馆启动 → 命令 → 文件 → 环境变量」优先级构造 provider 链。
+    """按「H5 cookie → App 场馆启动 → 命令 → 文件 → 环境变量」优先级构造 provider 链。
 
     显式参数优先于环境变量。都没有时返回 `NullSessionProvider`
     （使用时给出可操作报错，而不是启动即崩）。
 
-    App 引导（`LEYU_APP_TOKEN` + `LEYU_APP_UUID` + `LEYU_APP_SIGNATURE`）
-    放在首位，因为它**不依赖人工登录**：用 App 凭据启动 YBTY 场馆即可
-    拿到业务网关的 requestId，且会话失效时能自动重建。
+    H5 cookie 引导（`LEYU_H5_SITE` + cookie + `x-api-xxx`）放在链首：
+    它与**浏览器打开页面时的行为逐跳一致**（带 cookie 取网关 →
+    `/game/api/v1/venue/launch` 换 requestId），会话失效时可自动重取。
 
-    为避免循环导入，App provider 在函数内延迟导入。
+    App 引导（`LEYU_APP_TOKEN` + `LEYU_APP_UUID` + `LEYU_APP_SIGNATURE`）
+    紧随其后，作为 H5 未配置时的等价替代（同一份凭据，只是放置位置不同）。
+
+    为避免循环导入，两者都在函数内延迟导入。
     """
     e = env if env is not None else os.environ
     cmd = (command or e.get(SESSION_ENV_COMMAND) or "").strip()
@@ -574,6 +577,15 @@ def make_session_provider(
 
     providers: list[SessionProvider] = []
     if include_app:
+        # H5 cookie 引导排在链首：它是**与浏览器操作一致**的取会话方式
+        # （带 cookie 取网关 → launch 换 requestId），且只依赖运维注入的
+        # 登录 cookie，不需要任何人工登录步骤。
+        from .leyu_h5_session import H5SessionProvider, h5_bootstrapper_from_env
+
+        h5 = h5_bootstrapper_from_env(e)
+        if h5 is not None:
+            providers.append(H5SessionProvider(h5))
+
         from .leyu_app_session import AppSessionProvider, bootstrapper_from_env
 
         boot = bootstrapper_from_env(e)

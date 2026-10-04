@@ -808,7 +808,14 @@ ai_football/
 （已被 `.gitignore` 忽略，**不会入库**）：
 
 ```bash
-# 方式 A（推荐）：App 凭据 → 启动 YBTY 场馆换取 requestId，可自动续期
+# 方式 A（推荐，与浏览器操作一致）：H5 登录 cookie → 启动 YBTY 场馆换取 requestId
+#   浏览器 DevTools → Application → Cookies → 复制 X-API-TOKEN / X-API-UUID
+LEYU_H5_SITE=https://www.<当前网页域名>:6510
+LEYU_H5_TOKEN=<X-API-TOKEN>
+LEYU_H5_UUID=<X-API-UUID>
+LEYU_H5_SIGNATURE=<x-api-xxx 站点级前缀签名>
+
+# 方式 A'（App 等价写法）：同一份凭据放请求头而非 cookie
 LEYU_APP_TOKEN=<x-api-token>
 LEYU_APP_UUID=<x-api-uuid>
 LEYU_APP_SIGNATURE=<站点级前缀签名>
@@ -827,6 +834,18 @@ LEYU_CUID=<cuid>
 LEYU_COOKIE='X-API-TOKEN=...; route=...'
 ```
 
+> **方式 A 说明（H5 cookie 引导）**：与浏览器打开页面**逐跳一致**：
+> 1. 带 cookie 取 `/api/json-cache/y-h5-main:leyu:prod:liveDomain`
+>    （响应为 AES-128-ECB 加密的网关候选，key `A-DB/(z$/?13cfae`）
+> 2. `POST /game/api/v1/venue/launch` → `data.url` 的 `token=` 即 `requestId`
+> 3. `data.h5Url` 的 `?api=` 解密（key `OBTY20220712OBTY`）即**业务网关**
+>
+> 第 3 步不可省：`app-h5.*` 只是静态页面主机，不承载业务 API
+> （实测 404）；用错网关会导致 WebSocket 连不上（`会话缺少 host`）。
+>
+> ⚠️ 取 `api=` 时**不能用 `parse_qs`**：上游返回的是**裸 base64**，
+> 内含未编码的 `+`，`parse_qs` 会把它解成空格导致解密静默失败。
+
 > **Cookie 说明**：业务 API 主要靠 `requestId` 鉴权，但服务端会下发
 > nginx 粘性会话 `route=` cookie（抓包实测 60 次）。客户端会：
 > 1. 把 `LEYU_COOKIE` / `Session.cookie` 放进每个请求的 `Cookie` 头
@@ -835,10 +854,14 @@ LEYU_COOKIE='X-API-TOKEN=...; route=...'
 > 早期版本只**存** cookie 却从不**发**、也不读 `Set-Cookie`，
 > 导致注入的 cookie 完全无效（三处断链，已修复并有 8 例测试守护）。
 
-优先级：**App 引导 → 命令 → 文件 → 环境变量**。
+优先级：**H5 cookie → App 引导 → 命令 → 文件 → 环境变量**。
 会话失效（`0401013`）时自动重新 acquire 并重试。
 
 > ❌ **本系统不自主登录、不绕过验证码**（见 §6.4）。
+> `X-API-TOKEN` 过期后**必须人工重新提供**：上游不提供任何
+> `refresh`/`renew`/`keepalive` 端点（全量 bundle 搜索为 0），
+> 唯一来源是账号登录，而登录需人机验证（极验 `bcaptcha.botion.com`）。
+> 本系统能自动做的是「用**仍然有效**的 cookie 重新换 requestId」。
 
 ### 9.2.2 LLM 配置（决策功能所需）
 

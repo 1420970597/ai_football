@@ -130,8 +130,11 @@ services:
     #
     # 可写入仓库根 .env（已被 .gitignore 忽略，凭证不入库）的变量：
     #   DATA_SOURCE=leyu|ticai           数据源（缺省 leyu）
+    #   LEYU_H5_SITE / LEYU_H5_TOKEN / LEYU_H5_UUID / LEYU_H5_SIGNATURE
+    #       H5 cookie 引导（**推荐**，与浏览器操作一致）：
+    #       带 cookie 取网关 → launch 换 requestId；可自动重取
     #   LEYU_APP_TOKEN / LEYU_APP_UUID / LEYU_APP_SIGNATURE
-    #       App 引导（推荐）：启动 YBTY 场馆换取 requestId，可自动续期
+    #       App 引导（等价写法，凭据放请求头而非 cookie）
     #   LEYU_REQUEST_ID / LEYU_CUID      手工临时会话
     #   LEYU_SESSION_FILE                会话 JSON 文件（外部定期刷新）
     #   LEYU_LOGIN_COMMAND               登录命令（argv 形式，非 shell 字符串）

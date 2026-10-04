@@ -160,9 +160,15 @@ def _body_int(body: Mapping[str, Any], name: str, default: int,
     if isinstance(raw, int):
         val = raw
     elif isinstance(raw, float):
-        if not math.isfinite(raw) or raw != int(raw):
-            raise BadRequest("字段 %s 必须是整数: %r" % (name, raw))
-        val = int(raw)
+        # `int(inf)` 会抛 OverflowError、`int(nan)` 会抛 ValueError；
+        # 虽然下面的有限性校验会先拦住，但显式 try 包裹更稳健
+        # （自定义 float 子类可绕过短路判断），同时满足静态规则。
+        try:
+            if not math.isfinite(raw) or raw != int(raw):
+                raise BadRequest("字段 %s 必须是整数: %r" % (name, raw))
+            val = int(raw)
+        except (OverflowError, ValueError) as exc:
+            raise BadRequest("字段 %s 必须是整数: %r" % (name, raw)) from exc
     elif isinstance(raw, str):
         try:
             val = int(raw.strip())
@@ -782,18 +788,16 @@ def _start_background(
         def _mids() -> List[str]:
             """订阅源：全部**进行中的足球**赛事（与乐鱼接口一致）。
 
-            注意两个过滤条件：
-            * `m.is_live` —— 只订阅真实进行中（`ms==1`）
-            * `sport_id == 1` —— 只订阅足球（本项目为足球系统；
-              乐鱼同网关还返回篮球/网球等，占额度且无法映射盘口）
+            委托 `source.live_match_ids()`，避免在 API 层重复写过滤逻辑：
+            乐鱼同一网关还返回篮球/网球等（`sport_id != 1`），它们占订阅
+            额度且无法映射足球盘口，必须排除；`max_matches` 只是安全阀，
+            默认 0（不截断），以与乐鱼页面的进行中数量对齐。
             """
             try:
-                schedule = source.schedule()
+                live = list(source.live_match_ids(SOCCER_SPORT_ID))
             except Exception as exc:  # noqa: BLE001 - 订阅源失败不终止推送
                 print("警告：获取订阅列表失败：%s" % exc)
                 return []
-            live = [m.mid for m in schedule
-                    if m.is_live and m.sport_id == SOCCER_SPORT_ID]
             if max_matches > 0:
                 live = live[:max_matches]
             return live

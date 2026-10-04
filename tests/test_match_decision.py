@@ -456,14 +456,52 @@ class TestNoArtificialCap(unittest.TestCase):
         self.assertEqual(len(h._pick_mids()), 10)
 
     def test_subscription_source_filters_soccer(self) -> None:
-        """订阅源必须只取足球：乐鱼同网关也返回篮球/网球。
+        """订阅源必须只取**进行中的足球**：乐鱼同网关也返回篮球/网球。
 
-        该过滤在 `api.app._start_background` 的 `_mids()` 里（它是
-        注入给 RealtimeHub 的 mids_provider）。
+        过滤逻辑由 `SnapshotSource.live_match_ids()` 提供，
+        `api.app._start_background` 的 `_mids()` 直接委托它
+        （早期在 API 层内联写过滤，导致此处只能靠字符串匹配源码来断言；
+        现已下沉到基类，可直接做**行为**断言）。
         """
+        from collector.sources import SOCCER_SPORT_ID, SnapshotSource
+
+        src = SnapshotSource.live_match_ids.__doc__ or ""
+        self.assertIn("sport_id", src)
+
+        # 行为断言：构造一个假的源，验证过滤 + 排序无关性
+        class _Fake(SnapshotSource):  # type: ignore[misc]
+            name = "fake"
+
+            def fetch(self, *a: Any, **kw: Any) -> Any:
+                return [], []
+
+            def schedule(self) -> List[Any]:
+                class _M:
+                    def __init__(self, mid: str, sport: str, live: bool) -> None:
+                        self.mid, self.sport_id, self.is_live = mid, sport, live
+
+                return [
+                    _M("soccer-live", SOCCER_SPORT_ID, True),
+                    _M("basket-live", "2", True),      # 篮球：必须被排除
+                    _M("soccer-soon", SOCCER_SPORT_ID, False),  # 未开赛：排除
+                    _M("tennis-live", "5", True),      # 网球：排除
+                ]
+
+        fake = _Fake()
+        self.assertEqual(fake.live_match_ids(), ["soccer-live"])
+        # 传空串可关闭运动筛选（拿全部进行中）
+        self.assertEqual(sorted(fake.live_match_ids("")),
+                         ["basket-live", "soccer-live", "tennis-live"])
+        counts = fake.live_count()
+        self.assertEqual(counts["live"], 1)
+        self.assertEqual(counts["live_all_sports"], 3)
+        self.assertEqual(counts["scheduled"], 2)
+
+    def test_api_delegates_live_filtering_to_source(self) -> None:
+        """API 层应**委托**而不是重复实现过滤（避免两处逻辑漂移）。"""
         import inspect
 
         import api.app as app_mod
         src = inspect.getsource(app_mod._start_background)
+        self.assertIn("live_match_ids", src)
         self.assertIn("SOCCER_SPORT_ID", src)
-        self.assertIn("is_live", src)
