@@ -260,6 +260,9 @@ class ApiApp:
             ("GET", "/trend/<id>", self.h_trend),
             ("GET", "/realtime", self.h_realtime),
             ("GET", "/llm", self.h_llm),
+            ("GET", "/ledger/stats", self.h_ledger_stats),
+            ("GET", "/ledger/entries", self.h_ledger_entries),
+            ("POST", "/ledger/settle", self.h_ledger_settle),
             ("GET", "/consistency/<id>", self.h_consistency),
             ("GET", "/fair/<id>", self.h_fair),
             ("GET", "/edge/<id>", self.h_edge),
@@ -634,6 +637,47 @@ class ApiApp:
         """LLM 配置与调用统计（密钥一律脱敏）。"""
         return self.analysis.llm_health()
 
+    # -- 决策台账与本地统计（回答“LLM 判定到底准不准”） ---------------------
+
+    def h_ledger_stats(self, query: Mapping[str, List[str]],
+                       body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """本地统计：命中率 / ROI / CLV。
+
+        Query:
+            all=1       同时统计**被门控拦截**的盘口（用于校准阈值）
+            trigger     只看某个触发来源（`price_change` / `cycle`）
+        """
+        only_picks = (_q1(query, "all") or "") not in ("1", "true", "yes")
+        trig = (_q1(query, "trigger") or "").strip() or None
+        return self.analysis.ledger_stats(only_picks=only_picks,
+                                          trigger=trig)
+
+    def h_ledger_entries(self, query: Mapping[str, List[str]],
+                         body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """台账明细（可按状态/是否建议筛选），供页面逐条核对。
+
+        Query:
+            picks=1     只看买入建议（默认 1）
+            status      只看某状态（`pending`/`won`/`lost`/`push`/`void`…）
+            limit       返回条数上限（默认 200，最多 2000）
+        """
+        rows = self.analysis.ledger.load()
+        if (_q1(query, "picks") or "1") not in ("0", "false", "no"):
+            rows = [r for r in rows if r.is_pick]
+        st = (_q1(query, "status") or "").strip()
+        if st:
+            rows = [r for r in rows if r.status == st]
+        limit = _q_int(query, "limit", 200, minimum=1, maximum=2000)
+        rows = sorted(rows, key=lambda r: r.at, reverse=True)[:limit]
+        return {"count": len(rows),
+                "entries": [r.as_dict() for r in rows],
+                "ledger": self.analysis.ledger.health()}
+
+    def h_ledger_settle(self, query: Mapping[str, List[str]],
+                        body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """手动触发一次结算（拉终场比分回填台账）。"""
+        return self.analysis.settle_finished()
+
 
 # --------------------------------------------------------------------------- #
 # HTTP 适配壳
@@ -805,32 +849,58 @@ def _start_background(
         # 走势落盘目录：放在快照根下的 _trends/，随 output 卷一起持久化。
         # 这样经济学算法与 LLM 能读到历史走势，容器重启也不丢。
         trend_root = str(Path(svc.store.root) / ".." / "_trends")
+
+        # 先建分析服务（但不启动），以便把它的 notify_price_change
+        # 作为 Hub 的盘口变动回调 —— 这是“盘口一变就重算”的接线点。
+        # result_path 放在 output 卷内：重启后仍能立即展示上次决策结果。
+        result_path = str(Path(svc.store.root) / ".." / "decisions.json")
+        ana = build_analysis_service(svc, realtime=None)
+        # 注入落盘路径（环境变量优先，否则用默认路径）
+        # 台账放在 output 卷内，与快照同生命周期（容器重启不丢）。
+        ledger_root = str(Path(svc.store.root) / ".." / "ledger")
+        ana.config = replace(ana.config,
+                             result_path=ana.config.result_path or result_path,
+                             ledger_root=ana.config.ledger_root or ledger_root)
+        app._analysis = ana
+
         hub = RealtimeHub(provider, mids_provider=_mids,
                           max_matches=max_matches, trend_root=trend_root,
-                          resume=True)
+                          resume=True,
+                          on_price_change=ana.notify_price_change)
         hub.start()
         print("走势持久化: %s" % hub.trend_store.health())
 
-        # 分析服务复用同一个 Hub，并将盘中行情变化纳入决策。
-        # result_path 放在 output 卷内：重启后仍能立即展示上次决策结果。
-        result_path = str(Path(svc.store.root) / ".." / "decisions.json")
-        ana = build_analysis_service(
-            svc, realtime=hub,
-        )
-        # 注入落盘路径（环境变量优先，否则用默认路径）
-        ana.config = replace(ana.config, result_path=ana.config.result_path
-                             or result_path)
-        app._analysis = ana
+        # 分析服务复用同一个 Hub（用于读走势）
+        ana.realtime = hub
         print("实时推送已启动（订阅全部进行中足球%s）"
               % ("，上限 %d 场" % max_matches if max_matches > 0 else ""))
 
-        # **后台定时决策**（核心）：不依赖页面刷新。
+        # **主路径：盘口变动触发决策**（用户要求的触发时机）。
+        if ana.start_scheduler():
+            print("盘口变动触发决策已启动（防抖 %.0fs，全局最小间隔 %.0fs，"
+                  "每批最多 %d 场）"
+                  % (ana.config.change_debounce_s,
+                     ana.config.change_min_interval_s,
+                     ana.config.change_batch))
+        else:
+            print("提示：盘口变动触发决策未启用（ANALYSIS_CHANGE_TRIGGER=0）")
+
+        # **兜底：定时全量决策**：行情长时间不动或推送断线时保证数据不过期。
         # 页面只读 latest_result()，打开即出结果，不转圈。
         if ana.start_cycle():
-            print("定时决策已启动（每 %.0fs 一轮，每轮最多 %d 场）"
+            print("定时决策（兜底）已启动（每 %.0fs 一轮，每轮最多 %d 场）"
                   % (ana.config.cycle_interval_s, ana.config.cycle_limit))
         else:
             print("提示：定时决策未启用（ANALYSIS_CYCLE=0）")
+
+        # **赛后结算**：把终场比分回填台账，算命中率/ROI/CLV。
+        # 这是回答「LLM 判定准不准」的唯一依据。
+        if ana.start_settler():
+            print("赛后结算已启动（每 %.0fs 一轮，台账 %s）"
+                  % (ana.config.settle_interval_s,
+                     ana.ledger.health().get("path")))
+        else:
+            print("提示：赛后结算未启用（台账不可用或间隔为 0）")
         return hub
     except Exception as exc:  # noqa: BLE001 - 采集失败不能阻止 API 启动
         print("警告：实时推送启动失败（API 仍可用）：%s" % exc)
@@ -856,7 +926,9 @@ def run_server(host: str = "0.0.0.0", port: int = 8000,
     finally:
         ana = getattr(app, "_analysis", None)
         if ana is not None:
+            ana.stop_scheduler()
             ana.stop_cycle()
+            ana.stop_settler()
         if hub is not None:
             hub.stop()
         srv.server_close()

@@ -611,9 +611,29 @@ class LEYUMatch:
     @property
     def score(self) -> Tuple[Optional[int], Optional[int]]:
         """从 msc 里取 S1 的全场比分（主, 客）；缺失返回 (None, None)。"""
+        return self._period_score("S1")
+
+    @property
+    def half_score(self) -> Tuple[Optional[int], Optional[int]]:
+        """从 msc 里取 S0 的**半场**比分（主, 客）。
+
+        为何必需：上半场盘口（`*_1H`）必须用半场比分结算；拿全场比分去
+        结算上半场盘口会把结果算反。实测 `msc` 形如
+        `"S0|0:1,S1|2:1"` —— S0 是半场、S1 是全场。
+        缺失时返回 `(None, None)`，调用方应据此**拒绝结算**而非猜测。
+        """
+        return self._period_score("S0")
+
+    def _period_score(self, period: str) -> Tuple[Optional[int], Optional[int]]:
+        """按 `S<period>|主:客` 取某阶段比分。
+
+        必须用 `startswith(period + "|")` 精确匹配：`S1` 不能前缀命中
+        `S10`（本项目已有回归用例，见 `tests/test_leyu_client.py`）。
+        """
+        want = period + "|"
         for chunk in self.score_raw.split(","):
             chunk = chunk.strip().strip("'").strip()
-            if not chunk.startswith("S1|"):
+            if not chunk.startswith(want):
                 continue
             _, _, val = chunk.partition("|")
             left, _, right = val.partition(":")

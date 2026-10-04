@@ -47,6 +47,7 @@ from collector.leyu_normalizer import snapshots_from_match
 from collector.leyu_realtime import RealtimeHub
 from collector.sources import SOCCER_SPORT_ID
 from core.models import OddsSnapshot
+from core.settlement import SETTLE_PENDING
 
 from .decision import (
     DECISION_AVOID,
@@ -58,6 +59,7 @@ from .decision import (
     MatchDecision,
 )
 from .match_decision import MatchDecisionEngine, MatchPicks
+from .ledger import DecisionLedger
 from .llm import LLMClient, LLMNotConfigured, load_pi_config
 
 __all__ = [
@@ -116,6 +118,31 @@ DEFAULT_CYCLE_INTERVAL_S = 600.0
 #: 真正的约束是 LLM 耗时，而不是一个人为的场次上限。
 DEFAULT_CYCLE_LIMIT = 0
 
+#: 盘口变动触发决策的**单场静默窗口**（秒）。
+#:
+#: 语义：某场第一次观测到盘口变动后，等 `CHANGE_DEBOUNCE_S` 秒再决策。
+#: 期间若又有变动，则把该场重新排队（计时重置）。
+#:
+#: 为何需要：实测单个盘口在进球/红牌后会**连跳十几次**，逐跳触发
+#: 会让同一场在几秒内被反复决策（LLM 一轮 20s+，纯属浪费且必然超时）。
+#: 30s 是「等盘口稳定下来」与「不错过时机」的折中。
+DEFAULT_CHANGE_DEBOUNCE_S = 30.0
+
+#: 两轮决策之间的**全局最小间隔**（秒），所有赛事共享。
+#:
+#: 为何需要：行情活跃时可能有 40+ 场同时变动；若全部并发触发，
+#: 会瞬间打满 LLM 配额（实测推理服务 4 并发即饱和）。
+#: 该间隔保证触发式决策**不会比原来的定时轮询更激进**。
+DEFAULT_CHANGE_MIN_INTERVAL_S = 20.0
+
+#: 触发式决策每轮最多处理多少场（按变动时间先后）。
+#: 剩余赛事保留在待办队列里，下一轮继续 —— 不丢，只是排队。
+DEFAULT_CHANGE_BATCH = 12
+
+#: 待办队列长度上限（防止行情暴涨时无限堆积）。
+#: 超出时丢弃**最久未变动**的赛事（它们最可能已经不再有价值）。
+DEFAULT_CHANGE_QUEUE_MAX = 200
+
 @dataclass(frozen=True)
 class AnalysisConfig:
     """分析层配置。"""
@@ -148,9 +175,26 @@ class AnalysisConfig:
     #: 是否只对进行中的赛事做定时决策（节省 LLM 开销）
     #: 默认 True：未开赛赛事盘口仍在变化，过早决策无意义且浪费 LLM。
     cycle_live_only: bool = True
+    #: 是否启用「盘口变动自动触发决策」
+    #:
+    #: 这是用户明确要求的触发时机：赔率/盘口一变就重算该场，
+    #: 而不是死等 `cycle_interval_s`。定时循环降级为**兜底**
+    #: （覆盖「长时间无变动但需要刷新」与推送断线的情况）。
+    change_trigger: bool = True
+    #: 单场防抖窗口（秒），见 `DEFAULT_CHANGE_DEBOUNCE_S`
+    change_debounce_s: float = DEFAULT_CHANGE_DEBOUNCE_S
+    #: 全局最小触发间隔（秒），见 `DEFAULT_CHANGE_MIN_INTERVAL_S`
+    change_min_interval_s: float = DEFAULT_CHANGE_MIN_INTERVAL_S
+    #: 触发式决策每批场次上限，见 `DEFAULT_CHANGE_BATCH`
+    change_batch: int = DEFAULT_CHANGE_BATCH
+    #: 待办队列上限，见 `DEFAULT_CHANGE_QUEUE_MAX`
+    change_queue_max: int = DEFAULT_CHANGE_QUEUE_MAX
     #: 决策结果落盘路径（重启后仍能立即展示上次结果）
     result_path: Optional[str] = None
-
+    #: 决策台账目录（记录「算法说了什么」以备赛后核对）
+    ledger_root: Optional[str] = None
+    #: 自动结算间隔（秒）；0 表示不启用后台结算
+    settle_interval_s: float = 60.0
 
 
 class AnalysisService:
@@ -159,14 +203,19 @@ class AnalysisService:
     主路径是**盘口汇总式**决策（`MatchDecisionEngine`）：
     经济学算法先算完一场的全部盘口，再汇总给 LLM 做**一次**买入裁定。
 
-    ## 决策触发方式（后台定时，非页面刷新）
+    ## 决策触发方式（盘口变动驱动 + 定时兜底）
 
-    * `start_cycle()` 启动**后台定时循环**：每 `cycle_interval_s` 秒自动
-      重跑一轮决策，结果存入内存缓存 + 落盘快照。
+    * **主路径：盘口变动触发**（`change_trigger=True`）。
+      `RealtimeHub` 每次发现**真实赔率变动**就回调 `notify_price_change()`，
+      本类按场防抖（`change_debounce_s`）后排队，后台线程按
+      `change_min_interval_s` 节流逐批决策。这才是「盘口一变就重算」。
+    * **兜底：定时循环**（`start_cycle()`）。行情长时间不动、或推送断线时，
+      仍每 `cycle_interval_s` 秒全量重跑一轮，保证页面不会一直陈旧。
+      定时循环在触发式调度器存活时**降低频率**（见 `_cycle_loop`）。
     * 页面/API 只需读 `latest_result()`（毫秒级，不触发 LLM）。
-    * `start_job()` 仍保留，用于手动强制刷新（但要避免滥用）。
+    * `start_job()` 仍保留，用于手动强制刷新。
 
-    为什么必须定时而不是按需：LLM 一轮要数十秒，若等用户刷新才跑，
+    为何必须后台跑而不是按需：LLM 一轮要数十秒，若等用户刷新才跑，
     用户要对着转圈等很久，且每个人都重复触发一遍（浪费且易限流）。
     """
 
@@ -213,6 +262,32 @@ class AnalysisService:
         }
         #: 最近一轮结果（页面只读它，**不触发 LLM**）
         self._latest: Optional[Dict[str, Any]] = None
+        #: 决策台账：记录每个建议与被拦截盘口，供赛后核对 LLM 准确度
+        self.ledger = DecisionLedger(self.config.ledger_root)
+        #: 结算线程（定期把已结束赛事的比分回填进台账）
+        self._settle_thread: Optional[threading.Thread] = None
+        self._settle_stop = threading.Event()
+        self.settle_stats: Dict[str, Any] = {
+            "rounds": 0, "settled": 0, "void": 0,
+            "last_at": 0.0, "last_error": "",
+        }
+        #: 变动触发式调度器（用户要求的触发时机）
+        self._sched_lock = threading.RLock()
+        self._sched_thread: Optional[threading.Thread] = None
+        self._sched_stop = threading.Event()
+        self._sched_wake = threading.Event()
+        #: mid → 该场最早可决策的时间（防抖计时）
+        self._pending: Dict[str, float] = {}
+        #: 本批已处理过的赛事（避免同一批重复入 LLM）
+        self._sched_stats: Dict[str, Any] = {
+            "signals": 0,        # 收到的变动信号数
+            "triggered": 0,      # 实际发起决策的赛事数
+            "batches": 0,        # 批次数
+            "coalesced": 0,      # 被防抖合并掉的信号数
+            "dropped": 0,        # 因队列满被丢弃的赛事数
+            "last_trigger_at": 0.0,
+            "last_trigger_mids": [],
+        }
         self._restore_latest()
 
     # -- 后台定时决策（主路径） -------------------------------------------
@@ -240,13 +315,345 @@ class AnalysisService:
         return self._cycle_thread is not None and self._cycle_thread.is_alive()
 
     def _cycle_loop(self) -> None:
-        """定时跑决策。首轮立即执行（不等一个间隔），让系统尽快有数据。"""
+        """定时跑决策。首轮立即执行（不等一个间隔），让系统尽快有数据。
+
+        当变动触发式调度器在跑时，本循环只做**兜底**：
+        频率降为 `max(cycle_interval_s, 10×change_debounce_s)`，
+        避免“触发式刚算完、定时又全量重算一遍”的双重浪费。
+        """
         interval = max(10.0, _to_float(self.config.cycle_interval_s, 600.0))
+        if self.config.change_trigger:
+            # 触发式为主时，定时只负责“长时间无行情变动”的兜底
+            floor = 10.0 * max(1.0, _to_float(
+                self.config.change_debounce_s, DEFAULT_CHANGE_DEBOUNCE_S))
+            interval = max(interval, floor)
         while not self._cycle_stop.is_set():
             self._run_cycle_once()
             self.cycle_stats["next_at"] = time.time() + interval
             if self._cycle_stop.wait(interval):
                 return
+
+    # -- 盘口变动触发决策（主路径，用户要求的触发时机） ---------------------
+
+    def notify_price_change(self, mids: Sequence[str]) -> None:
+        """`RealtimeHub` 的盘口变动回调入口（**必须在毫秒级返回**）。
+
+        本方法只做「登记 + 唤醒」，真正的 LLM 决策在调度线程里做。
+        原因：回调跑在推送消费线程上，阻塞它会拖慢整个行情消费。
+
+        防抖语义：同一场在 `change_debounce_s` 窗口内的多次变动合并为一次；
+        后续变动会把该场的决策时间**往后顺延**（等待行情稳定）。
+
+        Args:
+            mids: 本批发生真实变动的赛事 ID（Hub 已去重）。
+        """
+        if not self.config.change_trigger or not mids:
+            return
+        debounce = max(0.0, _to_float(self.config.change_debounce_s,
+                                      DEFAULT_CHANGE_DEBOUNCE_S))
+        due = time.time() + debounce
+        queue_max = max(1, _to_int(self.config.change_queue_max,
+                                   DEFAULT_CHANGE_QUEUE_MAX))
+        with self._sched_lock:
+            self._sched_stats["signals"] += len(mids)
+            for mid in mids:
+                if not mid:
+                    continue
+                if mid in self._pending:
+                    self._sched_stats["coalesced"] += 1
+                self._pending[str(mid)] = due
+            # 队列保护：只保留最可能仍有价值的（最近变动的）赛事
+            while len(self._pending) > queue_max:
+                oldest = min(self._pending, key=lambda k: self._pending[k])
+                self._pending.pop(oldest, None)
+                self._sched_stats["dropped"] += 1
+        self._sched_wake.set()
+
+    def start_scheduler(self) -> bool:
+        """启动变动触发式决策线程（幂等）。返回是否实际启动。"""
+        if not self.config.change_trigger:
+            return False
+        if self._sched_thread is not None and self._sched_thread.is_alive():
+            return False
+        self._sched_stop.clear()
+        self._sched_thread = threading.Thread(
+            target=self._sched_loop, name="analysis-trigger", daemon=True)
+        self._sched_thread.start()
+        return True
+
+    def stop_scheduler(self, timeout: float = 5.0) -> None:
+        self._sched_stop.set()
+        self._sched_wake.set()
+        t = self._sched_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=timeout)
+
+    @property
+    def scheduler_running(self) -> bool:
+        return (self._sched_thread is not None
+                and self._sched_thread.is_alive())
+
+    def _sched_loop(self) -> None:
+        """后台循环：等「有赛事到期」→ 限流 → 批量决策。
+
+        用 `Event.wait(timeout)` 而非 `sleep`，所以新信号能立即唤醒；
+        同时 `min_interval` 保证不会比原来的定时轮询更激进。
+        """
+        while not self._sched_stop.is_set():
+            wait_s = self._next_trigger_wait()
+            if wait_s is None:
+                # 无待办：睡着等新信号（不轮询，不烧 CPU）
+                self._sched_wake.wait(1.0)
+                self._sched_wake.clear()
+                continue
+            if wait_s > 0:
+                self._sched_wake.wait(min(wait_s, 1.0))
+                self._sched_wake.clear()
+                continue
+            self._sched_wake.clear()
+            self._trigger_batch()
+
+    def _next_trigger_wait(self) -> Optional[float]:
+        """距下一批触发还有多少秒；`None` 表示无待办。"""
+        min_gap = max(0.0, _to_float(self.config.change_min_interval_s,
+                                     DEFAULT_CHANGE_MIN_INTERVAL_S))
+        now = time.time()
+        with self._sched_lock:
+            if not self._pending:
+                return None
+            last = _to_float(self._sched_stats.get("last_trigger_at"), 0.0)
+            throttle = (last + min_gap) - now
+            earliest = min(self._pending.values()) - now
+        return max(earliest, throttle)
+
+    def _trigger_batch(self) -> None:
+        """取一批到期的赛事做决策（异常只记录，不退出循环）。"""
+        now = time.time()
+        batch_max = max(1, _to_int(self.config.change_batch,
+                                   DEFAULT_CHANGE_BATCH))
+        with self._sched_lock:
+            due = [m for m, t in self._pending.items() if t <= now]
+            if not due:
+                return
+            # 最久等待的优先（它们变动最早，行情已稳定）
+            due.sort(key=lambda m: self._pending[m])
+            picked = due[:batch_max]
+            for m in picked:
+                self._pending.pop(m, None)
+            self._sched_stats["last_trigger_at"] = now
+            self._sched_stats["last_trigger_mids"] = list(picked)
+        try:
+            res = self.decide_matches(picked)
+            with self._sched_lock:
+                self._sched_stats["batches"] += 1
+                self._sched_stats["triggered"] += len(picked)
+            # 把触发式结果也落盘，重启后能看到最新一批
+            self._persist_latest(res)
+        except Exception as exc:  # noqa: BLE001 - 单批失败不得杀死调度器
+            self.cycle_stats["last_error"] = "触发决策失败: %s: %s" % (
+                type(exc).__name__, exc)
+
+    def decide_matches(self, mids: Sequence[str]) -> Dict[str, Any]:
+        """只对指定赛事跑一轮决策，并**合并进** `_latest`。
+
+        与 `decide_list` 的区别：不重新选候选、不重算全部赛事，
+        只算 `mids` 里的场次，然后把结果**合并**到最近一轮结果中。
+
+        为何要合并而不是覆盖：行情是逐场跳动的，若每批都覆盖，
+        页面上其它场次会瞬间变成“无数据”。合并能保证列表始终完整。
+        """
+        want = {str(m) for m in mids if m}
+        if not want:
+            return self._latest or {"count": 0, "summary": {}, "decisions": []}
+        # 先把这几场的**最新赔率**拉回来，否则算的是旧价（见 refresh_matches）
+        refresh = self.refresh_matches(sorted(want))
+        # 用候选表把 mid 映射回完整赛事信息（联赛/队名/快照）
+        cand_by_id = {str(m.get("match_id")): m
+                      for m in self.candidates(only_live=False)}
+        items: List[Tuple[str, str, str, str, List[Any], Any, Dict[str, Any]]] = []
+        for mid in want:
+            m = cand_by_id.get(mid)
+            if m is None:
+                continue  # 已结束/不在候选里：静默跳过
+            snaps = self.valuation._snapshots_of(mid)
+            if not snaps:
+                continue
+            trend = self.realtime.trend(mid) if self.realtime else None
+            items.append((mid, str(m.get("league") or ""),
+                          str(m.get("home") or ""), str(m.get("away") or ""),
+                          snaps, trend, self._build_context(m)))
+        if not items:
+            return self._latest or {"count": 0, "summary": {}, "decisions": []}
+
+        workers = (max(1, _to_int(self.config.llm_concurrency, 4))
+                   if self.match_engine.llm_available else 1)
+        fresh: List[MatchPicks] = []
+        t0 = time.time()
+        if len(items) == 1 or workers <= 1:
+            for it in items:
+                try:
+                    fresh.append(self.match_engine.decide_match(
+                        it[4], trend=it[5], context=it[6]))
+                except Exception as exc:  # noqa: BLE001
+                    fresh.append(self._failed_pick(it[0], exc))
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futs = {pool.submit(self.match_engine.decide_match,
+                                    it[4], trend=it[5], context=it[6]): it
+                        for it in items}
+                for fut in as_completed(futs):
+                    it = futs[fut]
+                    try:
+                        fresh.append(fut.result())
+                    except Exception as exc:  # noqa: BLE001
+                        fresh.append(self._failed_pick(it[0], exc))
+        return self._merge_into_latest(fresh, t0, refresh=refresh)
+
+    def _merge_into_latest(self, fresh: Sequence[MatchPicks],
+                           t0: float,
+                           refresh: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        """把新算的几场合并进 `_latest`，保持整表完整。"""
+        with self._lock:
+            prev = self._latest or {}
+            by_id: Dict[str, Dict[str, Any]] = {}
+            for row in prev.get("decisions") or []:
+                if isinstance(row, Mapping):
+                    by_id[str(row.get("match_id"))] = dict(row)
+            for r in fresh:
+                by_id[r.match_id] = r.as_dict()
+            rows = sorted(by_id.values(),
+                          key=lambda r: _to_float(r.get("rank_score")), reverse=True)
+            summary = {
+                "n": len(rows),
+                "buy": sum(1 for r in rows if r.get("has_buy")),
+                "no_llm": sum(1 for r in rows
+                              if r.get("decision") == DECISION_NO_LLM),
+                "avoid": sum(1 for r in rows
+                             if r.get("decision") == DECISION_AVOID),
+                "n_picks": sum(len(r.get("picks") or []) for r in rows),
+            }
+            res = {
+                "count": len(rows),
+                "summary": summary,
+                "llm": self.match_engine.llm_health(),
+                "elapsed_s": round(time.time() - t0, 2),
+                "errors": [],
+                "decisions": rows,
+                "triggered": [r.match_id for r in fresh],
+                "trigger": "price_change",
+                "refresh": dict(refresh) if refresh else None,
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self._latest = res
+        # 落台账（锁外）：磁盘 IO 不应持锁
+        self._record_ledger(fresh, "price_change")
+        return res
+
+    def _record_ledger(self, results: Sequence[MatchPicks],
+                       trigger: str) -> None:
+        """把决策写进台账（失败只记录，不影响决策返回）。"""
+        if not self.ledger.enabled:
+            return
+        try:
+            for r in results:
+                self.ledger.record_match(r, trigger=trigger)
+        except Exception as exc:  # noqa: BLE001 - 留痕失败不得中断决策
+            self.ledger.last_error = "record_match: %s: %s" % (
+                type(exc).__name__, exc)
+
+    # -- 赛后结算（本地统计 LLM 准确度） -----------------------------------
+
+    def start_settler(self) -> bool:
+        """启动后台结算线程（幂等）。返回是否实际启动。"""
+        if not self.ledger.enabled:
+            return False
+        if _to_float(self.config.settle_interval_s, 0.0) <= 0:
+            return False
+        if self._settle_thread is not None and self._settle_thread.is_alive():
+            return False
+        self._settle_stop.clear()
+        self._settle_thread = threading.Thread(
+            target=self._settle_loop, name="analysis-settle", daemon=True)
+        self._settle_thread.start()
+        return True
+
+    def stop_settler(self, timeout: float = 5.0) -> None:
+        self._settle_stop.set()
+        t = self._settle_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=timeout)
+
+    def _settle_loop(self) -> None:
+        interval = max(10.0, _to_float(self.config.settle_interval_s, 60.0))
+        while not self._settle_stop.is_set():
+            try:
+                self.settle_finished()
+            except Exception as exc:  # noqa: BLE001 - 单轮失败不得退出循环
+                self.settle_stats["last_error"] = "%s: %s" % (
+                    type(exc).__name__, exc)
+            if self._settle_stop.wait(interval):
+                return
+
+    def settle_finished(self) -> Dict[str, Any]:
+        """拉取已结束赛事的比分，回填台账并算出本地统计。
+
+        为何要拉「已结束」而不是用实时推送的比分：推送只覆盖**已订阅**
+        的赛事，且容器重启会丢；而台账里可能残留几天前的待结算条目。
+        因此每轮直接向数据源要一次赛程（包含终场比分）。
+
+        Returns:
+            结算统计（含 `stats`，即当前命中率/ROI/CLV）。
+        """
+        self.settle_stats["last_at"] = time.time()
+        pending = {r.match_id for r in self.ledger.load()
+                   if r.status == SETTLE_PENDING}
+        if not pending:
+            self.settle_stats["rounds"] = \
+                _to_int(self.settle_stats.get("rounds")) + 1
+            return {"settled": 0, "void": 0, "reason": "无待结算条目"}
+        scores: Dict[str, Any] = {}
+        for mt in self._finished_matches():
+            mid = str(getattr(mt, "mid", "") or "")
+            if mid not in pending:
+                continue
+            ft = getattr(mt, "score", None)
+            ht = getattr(mt, "half_score", None)
+            if not ft or ft[0] is None or ft[1] is None:
+                continue
+            entry: Dict[str, Any] = {"ft": list(ft)}
+            # 半场比分缺失时不填：上半场盘口会被判 void，而不是拿全场比分硬算
+            if ht and ht[0] is not None and ht[1] is not None:
+                entry["ht"] = list(ht)
+            scores[mid] = entry
+        # 显式注解：`settle()` 返回 Dict[str, int]，但下面要挂 `stats`（嵌套字典），
+        # 不收宽类型会让静态检查拒绝赋值。
+        out: Dict[str, Any] = dict(self.ledger.settle(scores))
+        self.settle_stats["rounds"] = \
+            _to_int(self.settle_stats.get("rounds")) + 1
+        self.settle_stats["settled"] = \
+            _to_int(self.settle_stats.get("settled")) + _to_int(out.get("settled"))
+        self.settle_stats["void"] = \
+            _to_int(self.settle_stats.get("void")) + _to_int(out.get("void"))
+        out["stats"] = self.ledger.stats()
+        return out
+
+    def _finished_matches(self) -> List[Any]:
+        """已结束（含带终场比分）的赛事。取不到时返回空列表。"""
+        try:
+            sched = self.valuation.source.schedule()
+        except Exception:  # noqa: BLE001 - 拿不到赛程不影响其它功能
+            return []
+        return [m for m in (sched or [])
+                if getattr(m, "is_finished", False)]
+
+    def ledger_stats(self, only_picks: bool = True,
+                     trigger: Optional[str] = None) -> Dict[str, Any]:
+        """对外暴露的本地统计入口（API 直接用）。"""
+        out = self.ledger.stats(only_picks=only_picks, trigger=trigger)
+        out["ledger"] = self.ledger.health()
+        out["settle"] = dict(self.settle_stats)
+        return out
 
     def refresh_live_matches(self, max_matches: int = 0,
                              progress: Optional[Any] = None) -> Dict[str, Any]:
@@ -292,6 +699,42 @@ class AnalysisService:
         return {"requested": len(mids), "returned": len(matches),
                 "stored": len(written), "snapshots": len(snaps),
                 "issues": len(issues)}
+
+    def refresh_matches(self, mids: Sequence[str]) -> Dict[str, Any]:
+        """只刷新指定赛事的盘口快照（盘口变动触发时用）。
+
+        为何必需（否则触发式决策是错的）：`RealtimeHub` 的推送只写**走势**
+        （`trend_store`），**不写**快照库（`valuation.store`）。快照库原本
+        只在 `refresh_live_matches()` 里批量刷新。若触发时直接拿快照库
+        去算 edge，用的还是**旧赔率** —— 决策与触发原因脱节，等于白算。
+
+        与 `refresh_live_matches` 的区别：只拉这几场（几十场全拉在秒级
+        触发下太重），且**不**失效全量缓存。
+        """
+        want = [str(m) for m in mids if m]
+        if not want:
+            return {"requested": 0, "stored": 0}
+        try:
+            matches = self.valuation.source.odds(want)
+        except Exception as exc:  # noqa: BLE001 - 刷新失败则用旧快照继续（宁旧勿无）
+            return {"requested": len(want), "stored": 0,
+                    "error": "%s: %s" % (type(exc).__name__, exc)}
+        snaps: List[Any] = []
+        issues: List[str] = []
+        for mt in matches:
+            snaps.extend(snapshots_from_match(
+                mt, source=self.valuation.source.display_source, issues=issues))
+        written = self.valuation.store.append_many(snaps)
+        # 快照缓存是**整库单缓存**（`_snap_cache: Optional[List]`），
+        # 无法只失效单场；只能整体失效。下一轮重建成本可接受
+        # （实测 `_all_snapshots` 是内存过滤，非重复读盘）。
+        # 不这样做的后果：触发式决策会一直读到旧赔率，等于没刷新。
+        try:
+            self.valuation.invalidate_cache()
+        except AttributeError:
+            pass
+        return {"requested": len(want), "returned": len(matches),
+                "stored": len(written), "snapshots": len(snaps)}
 
     def _run_cycle_once(self) -> None:
         """执行一轮决策并缓存结果。异常只记录，不让循环退出。"""
@@ -705,6 +1148,8 @@ class AnalysisService:
                     "at": datetime.now(timezone.utc).isoformat(),
                     "elapsed_s": result["elapsed_s"], "summary": summary,
                 }
+            # 落台账（锁外）：这是“LLM 到底准不准”的唯一证据来源
+            self._record_ledger(results, "cycle")
             return result
 
     @staticmethod
@@ -737,11 +1182,33 @@ class AnalysisService:
                 "cache_ttl_s": self.config.cache_ttl_s,
                 "max_analyze": self.config.max_analyze,
                 "use_llm": self.config.use_llm,
+                # 触发时机可观测：页面/运维能直接看到当前靠什么触发
+                "change_trigger": self.config.change_trigger,
+                "change_debounce_s": self.config.change_debounce_s,
+                "change_min_interval_s": self.config.change_min_interval_s,
+                "cycle_interval_s": self.config.cycle_interval_s,
             },
+            "cycle": dict(self.cycle_stats),
+            "scheduler": self.scheduler_health(),
         }
         if self.realtime is not None:
             out["realtime"] = self.realtime.health()
         return out
+
+    def scheduler_health(self) -> Dict[str, Any]:
+        """变动触发式调度器的可观测状态。"""
+        with self._sched_lock:
+            pending = dict(self._pending)
+            stats = dict(self._sched_stats)
+        now = time.time()
+        return {
+            "running": self.scheduler_running,
+            "pending": len(pending),
+            # 待办里最近/最早何时会被处理（前端可显示“正在等行情稳定”）
+            "next_due_in_s": (round(min(pending.values()) - now, 1)
+                              if pending else None),
+            "stats": stats,
+        }
 
     def clear_cache(self) -> int:
         with self._lock:
@@ -785,6 +1252,20 @@ def build_analysis_service(
                             DEFAULT_CYCLE_LIMIT),
         cycle_live_only=(e.get("ANALYSIS_CYCLE_LIVE_ONLY", "1") or "1").strip()
                         not in ("0", "false", "no"),
+        # 盘口变动触发决策（用户要求的触发时机）；ANALYSIS_CHANGE_TRIGGER=0 可关
+        change_trigger=(e.get("ANALYSIS_CHANGE_TRIGGER", "1") or "1").strip()
+                       not in ("0", "false", "no"),
+        change_debounce_s=_num("ANALYSIS_CHANGE_DEBOUNCE",
+                               DEFAULT_CHANGE_DEBOUNCE_S),
+        change_min_interval_s=_num("ANALYSIS_CHANGE_MIN_INTERVAL",
+                                   DEFAULT_CHANGE_MIN_INTERVAL_S),
+        change_batch=_to_int(_num("ANALYSIS_CHANGE_BATCH", DEFAULT_CHANGE_BATCH),
+                             DEFAULT_CHANGE_BATCH),
+        change_queue_max=_to_int(
+            _num("ANALYSIS_CHANGE_QUEUE_MAX", DEFAULT_CHANGE_QUEUE_MAX),
+            DEFAULT_CHANGE_QUEUE_MAX),
         result_path=(e.get("ANALYSIS_RESULT_PATH") or "").strip() or None,
+        ledger_root=(e.get("ANALYSIS_LEDGER_ROOT") or "").strip() or None,
+        settle_interval_s=_num("ANALYSIS_SETTLE_INTERVAL", 60.0),
     )
     return AnalysisService(valuation=valuation, realtime=realtime, config=cfg)

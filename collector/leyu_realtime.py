@@ -528,6 +528,7 @@ class RealtimeHub:
         max_matches: int = 0,
         trend_root: Optional[str] = None,
         resume: bool = True,
+        on_price_change: Optional[Callable[[List[str]], None]] = None,
     ) -> None:
         """
         Args:
@@ -540,11 +541,27 @@ class RealtimeHub:
             trend_root: 走势落盘目录；给出则启用持久化（推荐）。
                 为空时仅存内存，容器重启即丢。
             resume: 启动时从落盘文件回填走势（重启不丢历史）。
+            on_price_change: **盘口真实变动**回调，参数是本批变动涉及的
+                赛事 ID（已去重，**按首次出现顺序**）。
+
+                为什么需要它：原实现只按固定间隔（600s）定时决策，
+                而赔率/盘口在秒级跳动 —— 定时轮询要么错过时机、要么
+                在行情不动时空烧 LLM。用户要求「盘口变化时自动触发」。
+
+                契约（调用方必须知道）：
+                  * 回调在**推送消费线程**上同步调用，因此必须**极快返回**；
+                    任何耗时工作（尤其是 LLM）必须自行丢进别的线程。
+                  * 回调在 `_record_ticks` 的锁**之外**触发，不得再获取
+                    `hub._lock`（会与外层竞争，虽为 RLock 但没必要）。
+                  * 回调抛出的异常会被吞掉（见 `_notify_price_change`），
+                    以免一条坏回调拖死整个推送链路。
         """
         self.session_provider = session_provider
         self.mids_provider = mids_provider
         self.subscribe_interval_s = subscribe_interval_s
         self.max_matches = max_matches
+        #: 盘口变动回调（见 docstring 契约）
+        self.on_price_change = on_price_change
 
         self.stats = RealtimeStats()
         self._lock = threading.RLock()
@@ -723,6 +740,28 @@ class RealtimeHub:
         # 落盘在锁外：磁盘 IO 不应阻塞推送消费
         if changed:
             self.trend_store.append_many(changed)
+            self._notify_price_change(changed)
+
+    def _notify_price_change(self, changed: Sequence[PriceTick]) -> None:
+        """把「哪些赛事的盘口变了」告诉上层（触发决策用）。
+
+        在锁外调用；回调异常只记录不抛出 —— 决策调度是**增强**能力，
+        绝不能因为它的 bug 把整条实时推送链路打死（那样连行情都看不到了）。
+        """
+        cb = self.on_price_change
+        if cb is None or not changed:
+            return
+        mids: List[str] = []
+        seen: set = set()
+        for t in changed:
+            if t.mid not in seen:
+                seen.add(t.mid)
+                mids.append(t.mid)
+        try:
+            cb(mids)
+        except Exception as exc:  # noqa: BLE001 - 回调失败不得影响推送
+            self.stats.last_error = "on_price_change: %s: %s" % (
+                type(exc).__name__, exc)
 
     def _market_states(self) -> int:
         """已建立基线的选项数（用于诊断）。"""

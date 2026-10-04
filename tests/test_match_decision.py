@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import json
+import time
 import unittest
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional
@@ -502,9 +503,6 @@ class TestPromptAndHelpers(unittest.TestCase):
         self.assertEqual(len(out), 1)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
 
 class TestScheduledCycle(unittest.TestCase):
     """后台定时决策（用户要求：不依赖页面刷新）。"""
@@ -697,3 +695,212 @@ class TestNoArtificialCap(unittest.TestCase):
         src = inspect.getsource(app_mod._start_background)
         self.assertIn("live_match_ids", src)
         self.assertIn("SOCCER_SPORT_ID", src)
+
+
+class TestPriceChangeTrigger(unittest.TestCase):
+    """盘口变动触发决策（用户要求：盘口变化时自动触发）。
+
+    原实现只按固定 600s 定时轮询 —— 要么错过时机，要么在行情不动时
+    空烧 LLM。本组用例锁定新契约：
+
+      1. Hub 只在**真实**变动时回调（首次观测/无变化不回调）
+      2. 回调必须极快返回（不能同步跑 LLM）
+      3. 同一场在防抖窗口内被合并为一次
+      4. 全局最小间隔防止行情暴涨时打满 LLM
+      5. 触发式决策必须先**刷新快照**，否则算的是旧赔率
+      6. 触发结果要**合并**进 latest，不能把其它场次抹掉
+    """
+
+    def _svc(self, **kw: Any) -> Any:
+        from service.analysis import AnalysisConfig, AnalysisService
+        cfg = AnalysisConfig(use_llm=False, **kw)
+        return AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                               config=cfg)
+
+    # -- Hub 侧 -----------------------------------------------------------
+
+    def test_hub_fires_callback_only_on_real_change(self) -> None:
+        """首次观测建立基线不算变动；赔率不变不回调。"""
+        from collector.leyu_realtime import PriceTick, RealtimeHub
+
+        seen: List[List[str]] = []
+        h = RealtimeHub(session_provider=None, on_price_change=seen.append)
+
+        t = PriceTick(mid="m1", chpid="c1", hid="h", hv="0",
+                      oid="o1", ot="1", old_ov=0.0, new_ov=2.0, ts_ms=1)
+        h._record_ticks([t])                      # 首次：只建基线
+        self.assertEqual(seen, [])
+        h._record_ticks([t])                      # 同价：无变动
+        self.assertEqual(seen, [])
+
+        t2 = PriceTick(mid="m1", chpid="c1", hid="h", hv="0",
+                       oid="o1", ot="1", old_ov=0.0, new_ov=1.8, ts_ms=2)
+        h._record_ticks([t2])                     # 真变动
+        self.assertEqual(seen, [["m1"]])
+
+    def test_hub_dedupes_mids_in_one_batch(self) -> None:
+        """同一批里多盘口变动 → 只回调一次，mid 去重。"""
+        from collector.leyu_realtime import PriceTick, RealtimeHub
+
+        seen: List[List[str]] = []
+        h = RealtimeHub(session_provider=None, on_price_change=seen.append)
+        base = [PriceTick(mid="m1", chpid="c1", hid="h", hv="0",
+                          oid="o%d" % i, ot="1", old_ov=0.0, new_ov=2.0,
+                          ts_ms=1) for i in range(3)]
+        h._record_ticks(base)
+        h._record_ticks([PriceTick(mid=t.mid, chpid=t.chpid, hid=t.hid,
+                                   hv=t.hv, oid=t.oid, ot=t.ot, old_ov=0.0,
+                                   new_ov=1.5, ts_ms=2) for t in base])
+        self.assertEqual(seen, [["m1"]])
+
+    def test_hub_callback_exception_does_not_kill_push(self) -> None:
+        """回调抛异常不得影响推送链路（否则连行情都看不到）。"""
+        from collector.leyu_realtime import PriceTick, RealtimeHub
+
+        def boom(_mids: List[str]) -> None:
+            raise RuntimeError("callback bug")
+
+        h = RealtimeHub(session_provider=None, on_price_change=boom)
+        t0 = PriceTick(mid="m1", chpid="c1", hid="h", hv="0", oid="o",
+                       ot="1", old_ov=0.0, new_ov=2.0, ts_ms=1)
+        h._record_ticks([t0])
+        h._record_ticks([PriceTick(mid="m1", chpid="c1", hid="h", hv="0",
+                                   oid="o", ot="1", old_ov=0.0, new_ov=1.9,
+                                   ts_ms=2)])
+        self.assertEqual(h.stats.price_ticks, 1)
+        self.assertIn("callback bug", h.stats.last_error)
+
+    # -- 调度器侧 ---------------------------------------------------------
+
+    def test_notify_is_fast_and_does_not_run_llm(self) -> None:
+        """回调必须极快返回：它在推送消费线程上跑。"""
+        svc = self._svc(change_debounce_s=30.0)
+        with mock.patch.object(svc, "decide_matches") as dm:
+            svc.notify_price_change(["m1", "m2"])
+            dm.assert_not_called()          # 不在调用方线程里决策
+        self.assertEqual(len(svc._pending), 2)
+
+    def test_debounce_coalesces_repeat_signals(self) -> None:
+        """同一场重复变动合并为一次，且计时往后顺延。"""
+        svc = self._svc(change_debounce_s=30.0)
+        svc.notify_price_change(["m1"])
+        first = svc._pending["m1"]
+        svc.notify_price_change(["m1"])
+        self.assertEqual(len(svc._pending), 1)
+        self.assertGreaterEqual(svc._pending["m1"], first)
+        self.assertEqual(svc._sched_stats["coalesced"], 1)
+
+    def test_disabled_trigger_ignores_signals(self) -> None:
+        svc = self._svc(change_trigger=False)
+        svc.notify_price_change(["m1"])
+        self.assertEqual(svc._pending, {})
+        self.assertFalse(svc.start_scheduler())
+
+    def test_queue_max_drops_oldest(self) -> None:
+        """队列满时丢弃最久未变动的赛事（最可能已无价值）。"""
+        svc = self._svc(change_queue_max=3, change_debounce_s=0.0)
+        for i in range(6):
+            svc.notify_price_change(["m%d" % i])
+            svc._pending["m%d" % i] = float(i)   # 人为拉开先后
+        self.assertLessEqual(len(svc._pending), 3)
+        self.assertGreater(svc._sched_stats["dropped"], 0)
+        self.assertNotIn("m0", svc._pending)     # 最早的被丢
+
+    def test_next_trigger_wait_none_when_idle(self) -> None:
+        svc = self._svc()
+        self.assertIsNone(svc._next_trigger_wait())
+
+    def test_global_min_interval_throttles(self) -> None:
+        """刚触发过 → 下一批必须等够全局最小间隔。"""
+        svc = self._svc(change_min_interval_s=20.0, change_debounce_s=0.0)
+        svc.notify_price_change(["m1"])
+        svc._sched_stats["last_trigger_at"] = time.time()
+        wait = svc._next_trigger_wait()
+        assert wait is not None
+        self.assertGreater(wait, 15.0)
+
+    def test_trigger_batch_calls_decide_matches(self) -> None:
+        svc = self._svc(change_debounce_s=0.0, change_batch=2)
+        fake = {"count": 1, "summary": {}, "decisions": []}
+        with mock.patch.object(svc, "decide_matches",
+                               return_value=fake) as dm:
+            svc.notify_price_change(["m1", "m2", "m3"])
+            svc._trigger_batch()
+            dm.assert_called_once()
+            picked = dm.call_args[0][0]
+            self.assertEqual(len(picked), 2)     # batch 上限生效
+        # 剩余的仍留在队列里（不丢，只是排队）
+        self.assertEqual(len(svc._pending), 1)
+
+    # -- decide_matches 行为 -------------------------------------------------
+
+    def test_decide_matches_refreshes_snapshots_first(self) -> None:
+        """关键回归：必须先刷新快照，否则用的是旧赔率。"""
+        svc = self._svc()
+        snap = _mk_snap("m1")
+        svc.candidates = lambda **kw: [{"match_id": "m1", "league": "L",
+                                        "home": "A", "away": "B"}]
+        svc.valuation._snapshots_of = lambda mid: [snap]
+        order: List[str] = []
+        svc.refresh_matches = lambda mids: order.append("refresh") or {}
+        with mock.patch.object(svc.match_engine, "decide_match",
+                               return_value=_mp("m1")):
+            svc.decide_matches(["m1"])
+        self.assertEqual(order, ["refresh"])
+
+    def test_decide_matches_merges_and_keeps_other_matches(self) -> None:
+        """触发式结果必须**合并**，不能把其它场次抹掉。"""
+        svc = self._svc()
+        svc._latest = {
+            "count": 1, "summary": {}, "decisions": [
+                {"match_id": "keep", "rank_score": 0.5, "has_buy": False}],
+        }
+        snap = _mk_snap("m1")
+        svc.candidates = lambda **kw: [{"match_id": "m1", "league": "L",
+                                        "home": "A", "away": "B"}]
+        svc.valuation._snapshots_of = lambda mid: [snap]
+        svc.refresh_matches = lambda mids: {}
+        with mock.patch.object(svc.match_engine, "decide_match",
+                               return_value=_mp("m1")):
+            res = svc.decide_matches(["m1"])
+        ids = {d["match_id"] for d in res["decisions"]}
+        self.assertEqual(ids, {"keep", "m1"})
+        self.assertEqual(res["trigger"], "price_change")
+        self.assertEqual(res["triggered"], ["m1"])
+
+    def test_decide_matches_empty_mids_is_noop(self) -> None:
+        svc = self._svc()
+        svc._latest = {"count": 0, "summary": {}, "decisions": []}
+        self.assertIs(svc.decide_matches([]), svc._latest)
+
+    def test_scheduler_health_exposes_state(self) -> None:
+        svc = self._svc()
+        h = svc.scheduler_health()
+        self.assertIn("running", h)
+        self.assertIn("pending", h)
+        self.assertIn("stats", h)
+
+    def test_cycle_backs_off_when_trigger_enabled(self) -> None:
+        """触发式为主时，定时循环应降频（避免双重浪费）。"""
+        import inspect
+
+        from service.analysis import AnalysisService
+        src = inspect.getsource(AnalysisService._cycle_loop)
+        self.assertIn("change_trigger", src)
+
+
+def _mk_snap(mid: str) -> Any:
+    return OddsSnapshot(
+        match_id=mid, league="L", home="A", away="B",
+        market="HAD", outcomes=("H", "D", "A"),
+        odds=(2.0, 3.3, 3.6), state=SnapshotState.ACTIVE,
+        source="leyu", captured_at=datetime.now(timezone.utc),
+    )
+
+
+def _mp(mid: str) -> Any:
+    from service.match_decision import MatchPicks
+    return MatchPicks(match_id=mid, home="A", away="B")
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
