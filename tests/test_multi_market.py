@@ -347,3 +347,96 @@ class TestServiceMultiMarket(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSnapshotCacheMerge(unittest.TestCase):
+    """回归：新快照必须**增量合并**进缓存，而不是整体失效。
+
+    真实性能故障：全量重扫 65,942 个快照文件需 **14~15 秒**（实测）。
+    而 `refresh_matches()` 在“盘口变动触发决策”下会被持续高频调用；
+    早期实现每次都 `invalidate_cache()` → 下一批决策重扫全库 →
+    容器 CPU 打满 99%、`/health` 被拖到 30s+ 超时，服务形同挂死。
+
+    `merge_snapshots()` 把本批新快照并入缓存（O(本批条数)），
+    并刷新存储指纹，使合并结果被确认有效（不会立刻又被重扫）。
+    """
+
+    def _svc(self) -> ValuationService:
+        return ValuationService(snapshot_root="output",
+                                corpus_root="output",
+                                prefer_redis=False,
+                                source="ticai")
+
+    def test_merge_updates_cache_without_full_reload(self) -> None:
+        from core.models import OddsSnapshot, utcnow
+
+        svc = self._svc()
+        # 先建立缓存
+        base = svc._all_snapshots()
+        self.assertIsNotNone(svc._snap_cache)
+        # ⚠️ `_all_snapshots()` 返回的是**内部缓存列表本身**（非拷贝），
+        # 因此必须在 merge 前先记下长度，否则 merge 追加后 len(base)
+        # 会跟着一起变（这正是下面的断言曾误报的原因）。
+        before_len = len(base)
+
+        fresh = OddsSnapshot(
+            match_id="__merge_test__", league="测试", home="A", away="B",
+            market="HAD", outcomes=("home", "draw", "away"),
+            odds=(2.0, 3.3, 3.6), source=svc.source.display_source,
+            captured_at=utcnow())
+        n = svc.merge_snapshots([fresh])
+        self.assertEqual(n, 0)                     # 新键，非替换
+
+        # 缓存已包含新数据（无需重扫磁盘）
+        cache = svc._snap_cache
+        assert cache is not None
+        self.assertIn("__merge_test__", {s.match_id for s in cache})
+        self.assertEqual(len(cache), before_len + 1)
+
+    def test_merge_replaces_same_key(self) -> None:
+        from core.models import OddsSnapshot, utcnow
+
+        svc = self._svc()
+        svc._all_snapshots()
+        when = utcnow()
+        a = OddsSnapshot(match_id="__m2__", league="L", home="A", away="B",
+                         market="HAD", outcomes=("home", "draw", "away"),
+                         odds=(2.0, 3.3, 3.6), captured_at=when,
+                         source=svc.source.display_source)
+        b = OddsSnapshot(match_id="__m2__", league="L", home="A", away="B",
+                         market="HAD", outcomes=("home", "draw", "away"),
+                         odds=(1.5, 3.9, 4.2), captured_at=when,
+                         source=svc.source.display_source)
+        svc.merge_snapshots([a])
+        self.assertEqual(svc.merge_snapshots([b]), 1)   # 同键 → 替换
+        cache = svc._snap_cache
+        assert cache is not None
+        got = [s for s in cache if s.match_id == "__m2__"]
+        self.assertEqual(len(got), 1)
+        self.assertAlmostEqual(got[0].odds[0], 1.5)
+
+    def test_merge_without_cache_is_noop(self) -> None:
+        from core.models import OddsSnapshot, utcnow
+
+        svc = self._svc()
+        svc._snap_cache = None                      # 模拟缓存尚未建立
+        s = OddsSnapshot(match_id="__m3__", league="L", home="A", away="B",
+                         market="HAD", outcomes=("home", "draw", "away"),
+                         odds=(2.0, 3.3, 3.6), captured_at=utcnow(),
+                         source=svc.source.display_source)
+        self.assertEqual(svc.merge_snapshots([s]), 0)
+
+    def test_stamp_refreshed_so_cache_is_reused(self) -> None:
+        """合并后指纹必须与磁盘一致，否则下一次读取又重扫全库。"""
+        svc = self._svc()
+        svc._all_snapshots()
+        self.assertIsNotNone(svc._snap_stamp)
+        from core.models import OddsSnapshot, utcnow
+        svc.merge_snapshots([OddsSnapshot(
+            match_id="__m4__", league="L", home="A", away="B", market="HAD",
+            outcomes=("home", "draw", "away"), odds=(2.0, 3.3, 3.6),
+            captured_at=utcnow(), source=svc.source.display_source)])
+        self.assertIsNotNone(svc._snap_stamp)
+        before = svc._snap_cache
+        again = svc._all_snapshots()
+        self.assertIs(again, before)               # 命中缓存，未重建

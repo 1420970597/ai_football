@@ -302,7 +302,7 @@ class AnalysisService:
     ) -> None:
         self.valuation = valuation
         self.realtime = realtime
-        self.config = config or AnalysisConfig()
+        self._config = config or AnalysisConfig()
         #: 是否成功接上 LLM（决定决策是否可能是 buy）
         self.llm_error = ""
         self.llm: Optional[LLMClient] = None
@@ -345,8 +345,7 @@ class AnalysisService:
         #: 最近一轮结果（页面只读它，**不触发 LLM**）
         self._latest: Optional[Dict[str, Any]] = None
         #: 决策台账：记录每个建议与被拦截盘口，供赛后核对 LLM 准确度
-        self.ledger = DecisionLedger(self.config.ledger_root)
-        #: 结算线程（定期把已结束赛事的比分回填进台账）
+        self.ledger = DecisionLedger(self.config.ledger_root)        #: 结算线程（定期把已结束赛事的比分回填进台账）
         self._settle_thread: Optional[threading.Thread] = None
         self._settle_stop = threading.Event()
         self.settle_stats: Dict[str, Any] = {
@@ -371,6 +370,36 @@ class AnalysisService:
             "last_trigger_mids": [],
         }
         self._restore_latest()
+
+    # -- 配置（支持运行期注入 ledger_root，且台账会跟着换） -------------------
+
+    @property
+    def config(self) -> AnalysisConfig:
+        """分析层配置。
+
+        为何要做成属性而不是普通字段（本项目真实故障）：
+        `api/app.py` 在构造完本服务后才注入 `ledger_root` /
+        `result_path`（它需要先拿到快照根目录才能算输出路径）。
+        而台账是在 `__init__` 里根据**当时的**配置创建的 ——
+        等到 API 层用 `dataclasses.replace` 把 `ledger_root` 补上，
+        `self.ledger` 早已是不可写的空实现：表现为
+        启动日志“赛后结算未启用（台账不可用）”、`/ledger/stats` 永远
+        零条记录、用户问“LLM 准不准”时根本没有数据可查。
+
+        这里把 config 做成属性，写入时若 `ledger_root` 变化就**重建台账**，
+        使“后注入配置”也能生效。
+        """
+        return self._config
+
+    @config.setter
+    def config(self, value: AnalysisConfig) -> None:
+        old = getattr(self, "_config", None)
+        self._config = value
+        old_root = getattr(old, "ledger_root", None) if old else None
+        new_root = getattr(value, "ledger_root", None)
+        if old is None or old_root != new_root:
+            # 重建台账（保留已有对象则改用新路径；已有的落盘数据仍在磁盘）
+            self.ledger = DecisionLedger(new_root)
 
     # -- 后台定时决策（主路径） -------------------------------------------
 
@@ -666,6 +695,12 @@ class AnalysisService:
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
 
+    @property
+    def settler_running(self) -> bool:
+        """结算线程是否在跑（与 `cycle_running`/`scheduler_running` 对称）。"""
+        return (self._settle_thread is not None
+                and self._settle_thread.is_alive())
+
     def _settle_loop(self) -> None:
         interval = max(10.0, _to_float(self.config.settle_interval_s, 60.0))
         while not self._settle_stop.is_set():
@@ -819,11 +854,15 @@ class AnalysisService:
             snaps.extend(snapshots_from_match(
                 mt, source=self.valuation.source.display_source, issues=issues))
         written = self.valuation.store.append_many(snaps)
-        # 立即失效快照缓存，否则本轮决策仍读不到新数据
+        # 同理用增量合并（全量刷新时一次处理上百场，若整体失效
+        # 会让紧随其后的决策重建 14s 级缓存）。
         try:
-            self.valuation.invalidate_cache()
+            self.valuation.merge_snapshots(snaps)
         except AttributeError:
-            pass
+            try:
+                self.valuation.invalidate_cache()
+            except AttributeError:
+                pass
         return {"requested": len(mids), "returned": len(matches),
                 "stored": len(written), "snapshots": len(snaps),
                 "issues": len(issues)}
@@ -853,14 +892,22 @@ class AnalysisService:
             snaps.extend(snapshots_from_match(
                 mt, source=self.valuation.source.display_source, issues=issues))
         written = self.valuation.store.append_many(snaps)
-        # 快照缓存是**整库单缓存**（`_snap_cache: Optional[List]`），
-        # 无法只失效单场；只能整体失效。下一轮重建成本可接受
-        # （实测 `_all_snapshots` 是内存过滤，非重复读盘）。
-        # 不这样做的后果：触发式决策会一直读到旧赔率，等于没刷新。
+        # **增量合并**，而不是整体失效。
+        #
+        # ⚠️ 本项目真实性能故障：`invalidate_cache()` 会让下一次
+        # `_all_snapshots()` 重扫全库 —— 实测 65,942 个文件需 **14~15s**。
+        # 而本方法在“盘口变动触发”下会被**持续高频**调用，于是每批都重扫
+        # 全库：实测容器 CPU 打满 99%、`/health` 被拖到 30s+ 超时，
+        # 整个服务看起来像挂了。
+        # 合并只把本批新快照并入缓存（O(本批条数)），代价可忽略。
         try:
-            self.valuation.invalidate_cache()
+            self.valuation.merge_snapshots(snaps)
         except AttributeError:
-            pass
+            # 兼容旧版 ValuationService（无该方法时退回整体失效）
+            try:
+                self.valuation.invalidate_cache()
+            except AttributeError:
+                pass
         return {"requested": len(want), "returned": len(matches),
                 "stored": len(written), "snapshots": len(snaps)}
 

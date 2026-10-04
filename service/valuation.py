@@ -23,6 +23,7 @@ import json
 import math
 import os
 import threading
+import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,9 +50,29 @@ __all__ = ["ValuationService", "load_corpus"]
 
 #: 乐鱼源写入快照的展示名（现为**默认**数据源）
 LEYU_SOURCE_NAME = "乐鱼API"
-
 #: 体彩源展示名（保留作为可选数据源与回归对照）
 DEFAULT_SOURCE = "体彩官方API"
+
+#: 存储指纹 TTL（秒）。同一轮决策内几十次 `_all_snapshots()` 共享一次
+#: 目录扫描（实测单次 rglob 2780 个索引目录要 0.55s）。
+#:
+#: ⚠️ 为何要取 60s 而不是几秒（本项目真实性能故障）：
+#: 直播期间快照**持续在写**，磁盘指纹几乎每秒都在变。若 TTL 很短
+#: （如 1.5s），则每次超出 TTL 都会发现“指纹变了”→ 重建缓存
+#: （实测 **14~15s**），于是服务长期卡在重建上：CPU 打满 99%~165%、
+#: `/health` 被拖到 40s+。py-spy 直接拍到 `analysis-trigger` 与
+#: `analysis-cycle` 两个线程同时在 `_load_dir` 里读盘。
+#:
+#: 取 60s 为何安全：本进程自己的写入全部走 `append_many` +
+#: `merge_snapshots`，后者会把指纹同步为磁盘当前值；因此到期重扫
+#: （仅 0.55s）得到的新指纹与缓存一致 → 命中缓存，**不会**重建。
+#: TTL 只用于发现**外部**写入（另一进程/人工导入），60s 足够及时。
+_STAMP_TTL_S = 60.0
+
+#: `/health` 的存储统计缓存 TTL（秒）。`store.stats()` 要递归统计
+#: 6.5 万个文件（实测 3s），而 Docker 健康检查每 20s 一次，
+#: 不缓存会让多个探针叠加、把服务拖到超时。
+_STATS_TTL_S = 30.0
 
 
 def _env_int(name: str, default: int) -> int:
@@ -168,6 +189,22 @@ class ValuationService:
         #: 快照缓存（避免每次查询重扫上万个文件）
         self._snap_cache: Optional[List[OddsSnapshot]] = None
         self._snap_stamp: Optional[Tuple[int, float]] = None
+        #: 存储指纹缓存：`(stamp, computed_at)`。
+        #:
+        #: 为何需要（本项目真实性能故障）：`_store_stamp()` 要 rglob
+        #: 全部联赛目录（实测 2780 个 `_index.json`，耗时 0.55s），
+        #: 而 `_all_snapshots()` 在一轮决策里会被**每场调一次**
+        #: （74 场 → 74×0.55s ≈ 41s 纯 CPU 空转）。实测 py-spy
+        #: 显示 `analysis-trigger` 线程就卡在 `_store_stamp` 的 rglob 上，
+        #: 容器 CPU 打满、`/health` 被拖到超时。
+        #: 加一个很短的 TTL：同一批调用共享一次扫描结果，
+        #: 写入后最多 `_STAMP_TTL_S` 秒内可见（对决策实时性无影响）。
+        self._snap_stamp_at: float = 0.0
+        #: `/health` 存储统计缓存（`store.stats()` 全盘遍历约 3s）
+        self._stats_cache: Optional[Dict[str, Any]] = None
+        self._stats_at: float = 0.0
+        #: 每份缓存对应的 `match_id -> 快照下标` 索引（避免逐场扫全表）
+        self._snap_by_match: Optional[Dict[str, List[int]]] = None
         self._cache_lock = threading.RLock()
 
         if source_obj is not None:
@@ -252,7 +289,7 @@ class ValuationService:
         故加缓存：文件数与最新 mtime 变化时自动失效（写入新快照会刷新）。
         """
         base = self.store.root / safe_name(self.source.display_source)
-        stamp = self._store_stamp(base)
+        stamp = self._store_stamp_cached(base)
         with self._cache_lock:
             if self._snap_cache is not None and stamp == self._snap_stamp:
                 return self._snap_cache
@@ -262,10 +299,38 @@ class ValuationService:
             for d in sorted(base.rglob("_index.json")):
                 out.extend(self.store._load_dir(d.parent))
 
+        # 同一次构建里顺便建 `match_id -> 下标` 索引：`_snapshots_of(mid)`
+        # 在一轮决策里要逐场调用，若每次都过滤 6.5 万条列表（74×6.5万
+        # ≈ 480 万次比较）同样会烧掉大量 CPU。
+        by_match: Dict[str, List[int]] = {}
+        for i, s in enumerate(out):
+            by_match.setdefault(s.match_id, []).append(i)
+
         with self._cache_lock:
             self._snap_cache = out
             self._snap_stamp = stamp
+            self._snap_stamp_at = time.monotonic()
+            self._snap_by_match = by_match
         return out
+
+    def _store_stamp_cached(self, base: Path) -> Tuple[int, float]:
+        """带短 TTL 的存储指纹（避免同一轮里反复 rglob 全目录）。
+
+        TTL 取很小（1.5s）：既让一轮决策内的几十次调用共享一次扫描，
+        又不会让“刚写入的快照”长时间不可见（实时决策要跟盘）。
+        """
+        now = time.monotonic()
+        with self._cache_lock:
+            cached = self._snap_stamp
+            at = self._snap_stamp_at
+            if cached is not None and (now - at) <= _STAMP_TTL_S:
+                return cached
+        stamp = self._store_stamp(base)
+        with self._cache_lock:
+            # 只有当缓存仍是“这一版”时才顺带记录时间，避免覆盖别人刚写的
+            if self._snap_stamp is None:
+                self._snap_stamp_at = now
+        return stamp
 
     @staticmethod
     def _store_stamp(base: Path) -> Tuple[int, float]:
@@ -289,10 +354,82 @@ class ValuationService:
         return (n, newest)
 
     def invalidate_cache(self) -> None:
-        """手动失效快照缓存（写入后立即读取时用）。"""
+        """手动失效快照缓存（写入后立即读取时用）。
+
+        注意：同时要丢掉 `_snap_by_match` 等派生结构 —— 否则下次
+        `_all_snapshots()` 重建缓存后，`_snapshots_of()` 可能拿着
+        **旧索引**去读新列表，取到错位的快照（数据悄悄算错）。
+        """
         with self._cache_lock:
             self._snap_cache = None
             self._snap_stamp = None
+            self._snap_stamp_at = 0.0
+            self._snap_by_match = None
+
+    def merge_snapshots(self, snaps: Sequence[OddsSnapshot]) -> int:
+        """把新快照**增量合并**进缓存，返回替换掉的旧快照数。
+
+        为何需要它（本项目真实性能故障）：
+        全量重扫 65,942 个快照文件需 **14~15 秒**（实测）。而
+        “盘口变动触发决策”每次触发都要把该场最新赔率拉回来落库，
+        若沿用 `invalidate_cache()` 整体失效，就会**每批都重扫全库**：
+        实测直接导致容器 CPU 打满 99%、`/health` 被拖到 30s+ 超时，
+        整个服务看起来像挂了。
+
+        合并规则（与 `_all_snapshots()` 的语义一致）：
+        同一 `(match_id, market, captured_at)` 视为同一条快照 ——
+        新记录覆盖旧的；其余保留。这样 `_snapshots_of(mid)` 仍能
+        看到该场全部历史（走势/结算需要历史，不能只留最新）。
+
+        为什么要**替换**而不是简单追加：重复采集同一盘口会产生
+        内容相同、时间戳相同的快照，追加会让缓存无限膨胀且
+        重复项参与计算。
+
+        Args:
+            snaps: 刚写入存储的快照（调用方已确认落盘成功）。
+
+        Returns:
+            被新记录替换掉的旧条数（0 表示缓存尚未建立，无需合并）。
+        """
+        if not snaps:
+            return 0
+        with self._cache_lock:
+            cache = self._snap_cache
+            if cache is None:
+                # 缓存尚未建立：下次读取会自然包含新数据，无需处理
+                return 0
+            idx = {(s.match_id, s.market, s.captured_at): i
+                   for i, s in enumerate(cache)}
+            replaced = 0
+            for s in snaps:
+                key = (s.match_id, s.market, s.captured_at)
+                pos = idx.get(key)
+                if pos is None:
+                    idx[key] = len(cache)
+                    cache.append(s)
+                    # 同步维护 match 索引：`_snapshots_of()` 依赖它快速取场
+                    by_match = self._snap_by_match
+                    if by_match is not None:
+                        by_match.setdefault(s.match_id, []).append(
+                            len(cache) - 1)
+                else:
+                    cache[pos] = s
+                    replaced += 1
+            # **必须刷新指纹**：若把它留为 None，下一次 `_all_snapshots()`
+            # 会因为 `stamp != None` 而判定缓存失效 → 又去重扫 65k 文件
+            # （14~15s），增量合并就白做了。此处按当前磁盘状态重算指纹，
+            # 使“已包含新数据”的合并结果被认作有效。
+            # 若合并后又有别的写入，指纹会再次不同 → 下次全量重载，
+            # 这是安全的保守行为（宁慢不脏）。
+            base = self.store.root / safe_name(self.source.display_source)
+            try:
+                self._snap_stamp = self._store_stamp(base)
+                # 同时刷新 TTL 时间戳，否则 `_store_stamp_cached()` 会因为
+                # 旧时间戳过期而立即重扫一次（把合并省下的钱又花回去）。
+                self._snap_stamp_at = time.monotonic()
+            except OSError:
+                self._snap_stamp = None
+            return replaced
 
     # -- 采集自动落库 -------------------------------------------------------
 
@@ -402,7 +539,20 @@ class ValuationService:
         return out
 
     def _snapshots_of(self, match_id: str) -> List[OddsSnapshot]:
-        snaps = [s for s in self._all_snapshots() if s.match_id == match_id]
+        """某场的全部快照（按采集时间升序）。
+
+        用 `_snap_by_match` 索引取，而不是过滤整表：一轮决策里本方法
+        要逐场调用（实测 74 场 × 6.5 万条 ≈ 480 万次比较）。
+        索引与缓存同生命周期，任何重建/合并都会同步维护。
+        """
+        allsnaps = self._all_snapshots()
+        with self._cache_lock:
+            idx = self._snap_by_match
+            cache = self._snap_cache
+        if idx is None or cache is not allsnaps:
+            snaps = [s for s in allsnaps if s.match_id == match_id]
+        else:
+            snaps = [allsnaps[i] for i in idx.get(match_id, ())]
         snaps.sort(key=lambda s: s.captured_at)
         return snaps
     #: 遗留市场名 → 规范市场名（既有 output JSON 用 1X2/AH，
@@ -985,6 +1135,25 @@ class ValuationService:
     def health(self) -> Dict[str, Any]:
         return {
             "status": "healthy",
-            "snapshot_store": self.store.stats(),
+            "snapshot_store": self._store_stats_cached(),
             "ts": datetime.now(timezone.utc).isoformat(),
         }
+
+    def _store_stats_cached(self) -> Dict[str, Any]:
+        """带 TTL 的存储统计。
+
+        为何需要（真实性能故障）：`store.stats()` 递归统计 6.5 万个文件
+        需 **3 秒**。Docker 健康检查每 20s 一次，叠加 `/matches`、
+        `/board` 等并发请求时会不断重复全盘遍历，CPU 被吃满、
+        健康检查自己反而超时（探针把服务探死）。
+        """
+        now = time.monotonic()
+        with self._cache_lock:
+            if (self._stats_cache is not None
+                    and (now - self._stats_at) <= _STATS_TTL_S):
+                return self._stats_cache
+        stats = self.store.stats()
+        with self._cache_lock:
+            self._stats_cache = stats
+            self._stats_at = now
+        return stats

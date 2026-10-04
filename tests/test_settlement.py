@@ -735,3 +735,59 @@ class TestClosingOddsCapture(unittest.TestCase):
             self.assertAlmostEqual(row.closing_odds, 2.10)
             self.assertEqual(
                 [r for r in svc.ledger.load() if r.key[3] == "draw"], [])
+
+
+class TestLedgerRootInjectedAfterConstruction(unittest.TestCase):
+    """回归：API 层**后注入** ledger_root 时，台账必须真的启用。
+
+    真实故障：`api/app.py` 在构造完 `AnalysisService` 之后才用
+    `dataclasses.replace` 注入 `ledger_root`（它需要先拿到快照根目录
+    才能算出输出路径）。而 `self.ledger` 是在 `__init__` 里按**当时的**
+    配置创建的，于是注入永远不生效：
+
+        [entrypoint] 提示：赛后结算未启用（台账不可用或间隔为 0）
+
+    后果：`/ledger/stats` 恒为零条记录，用户问“LLM 准不准”时
+    没有任何本地数据可查 —— 正是用户报告的第三个问题。
+    """
+
+    def test_injecting_ledger_root_enables_ledger(self) -> None:
+        from dataclasses import replace
+
+        from service.analysis import AnalysisConfig, AnalysisService
+
+        svc = AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                              config=AnalysisConfig(use_llm=False))
+        self.assertFalse(svc.ledger.enabled)      # 初始未注入 → 空实现
+
+        with tempfile.TemporaryDirectory() as d:
+            svc.config = replace(svc.config, ledger_root=d)
+            self.assertTrue(svc.ledger.enabled)
+            self.assertEqual(str(svc.ledger.root), d)
+            self.assertTrue(svc.start_settler())
+            self.assertTrue(svc.settler_running)
+            svc.stop_settler()
+
+    def test_same_root_keeps_existing_ledger_object(self) -> None:
+        from dataclasses import replace
+
+        from service.analysis import AnalysisConfig, AnalysisService
+
+        with tempfile.TemporaryDirectory() as d:
+            svc = AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                                  config=AnalysisConfig(use_llm=False,
+                                                        ledger_root=d))
+            before = svc.ledger
+            svc.config = replace(svc.config, cache_ttl_s=99.0)
+            self.assertIs(svc.ledger, before)     # 未改路径则不重建
+
+    def test_module_level_config_field_still_mutates(self) -> None:
+        """兼容既有用法：`ana.config = replace(ana.config, X=...)`。"""
+        from dataclasses import replace
+
+        from service.analysis import AnalysisConfig, AnalysisService
+
+        svc = AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                              config=AnalysisConfig(use_llm=False))
+        svc.config = replace(svc.config, settle_interval_s=7.0)
+        self.assertEqual(svc.config.settle_interval_s, 7.0)
