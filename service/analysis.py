@@ -134,8 +134,13 @@ class AnalysisConfig:
     llm_concurrency: int = 4
     #: 买入门槛：优势低于此值不给买入建议
     min_edge: float = 0.02
-    #: 买入门槛：LLM 置信度低于此值只观望
-    min_confidence: float = 0.5
+    #: 买入门槛：LLM 置信度低于此值只观望。
+    #:
+    #: ⚠️ 必须与提示词的语义一致（本项目真实故障）：
+    #: 提示词要求「仅有赔率时给低值(<0.5)」，而原值为 0.5 → 两者矛盾，
+    #: 实测 LLM 自评置信度中位 0.33、达标率 0%，导致**永远零买入建议**。
+    #: 决策变量是 edge；置信度只用于过滤「模型自己都没把握」的输出。
+    min_confidence: float = 0.25
     #: 后台定时决策间隔（秒）；0 表示不启用定时
     cycle_interval_s: float = DEFAULT_CYCLE_INTERVAL_S
     #: 每轮决策赛事数上限

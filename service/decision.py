@@ -85,8 +85,14 @@ MAX_LLM_WEIGHT = 0.60
 #: 低于该 edge 阈值不给买入建议
 DEFAULT_MIN_EDGE = 0.02
 
-#: 低于该 LLM 置信度只给观望
-DEFAULT_MIN_CONFIDENCE = 0.45
+#: 低于该 LLM 置信度只给观望。
+#:
+#: 取值依据（实测）：LLM 在「仅给赔率、无基本面」时自评置信度集中在
+#: 0.28~0.40（中位 0.33）。若阈值设在 0.45~0.5，达标率为 **0%**，
+#: 系统会永远不给出买入建议——本项目实际踩到该坑。
+#: 0.25 的语义是「模型自己都说没把握」，而不是「把握不够大」；
+#: 把握大小由 edge 与分数凯利体现。
+DEFAULT_MIN_CONFIDENCE = 0.25
 
 
 @dataclass(frozen=True)
@@ -97,8 +103,18 @@ class DecisionConfig:
     kelly_fraction: float = 0.25
     #: 最小 edge 才考虑买入
     min_edge: float = DEFAULT_MIN_EDGE
-    #: 最小 LLM 置信度才考虑买入
-    min_confidence: float = DEFAULT_MIN_CONFIDENCE
+    #: 最小 LLM 置信度才考虑买入。
+    #:
+    #: ⚠️ **取值必须与提示词一致**（本项目真实故障）：
+    #: 系统提示词要求「仅有赔率而无其他信息时给低值（<0.5）」，
+    #: 而本阈值原为 0.5 —— 两者直接矛盾。
+    #: 实测 22 个样本的置信度分布：中位 0.33、最大 0.40，**达标率 0%**，
+    #: 这就是「几十场比赛零买入建议」的主因。
+    #:
+    #: 现在的语义（与调研一致）：**edge 才是决策变量**，
+    #: 置信度用于**缩放仓位**与过滤极低可信度，而不是否决交易。
+    #: 0.25 仅用于挡掉「模型自己都说没把握」的输出。
+    min_confidence: float = 0.25
     #: LLM 权重上限
     max_llm_weight: float = MAX_LLM_WEIGHT
     #: 走势修正上限

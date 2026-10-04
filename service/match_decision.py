@@ -127,6 +127,38 @@ def _tick_age_s(ts_ms: object) -> Optional[float]:
     return max(0.0, age)
 
 
+def _lookup_probability(raw: Mapping[str, Any], outcome: str,
+                        market: str, line: str) -> Optional[float]:
+    """从 LLM 返回的概率字典里取某结果的值（容错多种键写法）。
+
+    依次尝试：
+      1. 内部代码（`home`/`over`）—— 提示词要求的标准写法；
+      2. 中文标签（`全场主队平手`）—— LLM 常见的自然输出；
+      3. 大小写/空白不敏感匹配。
+
+    为何必须容错：提示词里同时展示了中文标签，LLM 很容易照中文作答；
+    若解析器只认内部代码，整个盘口会被**静默丢弃**，
+    表现为「系统跑完却零买入建议」这类难查的故障。
+    """
+    if outcome in raw:
+        v = raw[outcome]
+    else:
+        label = format_market(market, outcome, line)
+        v = raw.get(label)
+        if v is None:
+            # 归一化比较（去空白、统一大小写）
+            norm = {str(k).strip().lower(): val for k, val in raw.items()}
+            v = norm.get(str(outcome).strip().lower())
+            if v is None:
+                v = norm.get(label.strip().lower())
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        return float(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _collect_rejects(comps: Sequence[MarketComputation]) -> List[str]:
     """汇总未通过门控的原因码（去重，保持首次出现顺序）。
 
@@ -187,11 +219,14 @@ MATCH_SYSTEM_PROMPT = """你是足球盘口分析师。系统已用经济学算�
 1. 只输出严格 JSON，无解释、无 markdown 围栏。
 2. 不引用你记忆中的具体赛果。
 3. 简短思考后直接给结论，不要长篇推理。
-4. probabilities 必须含该盘口**全部结果**，总和为 1。
-5. confidence 是你对**自己估计**的把握；仅有赔率而无其他信息时给低值（<0.5）。
+4. probabilities 的**键必须逐字照抄用户消息里的 `键=` 值**（如 `home`/`away`/`over`/`under`/`draw`），
+   不要翻译、不要用中文描述、不要改大小写；键缺失或写错会导致该盘口被系统丢弃。
+5. probabilities 必须含该盘口**全部结果**，总和为 1。
+6. confidence 是你对**自己估计**的把握；仅有赔率而无其他信息时给低值（<0.5）。
+7. market 字段必须逐字照抄用户消息里的 `[代码]`（如 `AH(0.25)`）。
 
 输出：
-{"markets":[{"market":"<代码>","probabilities":{"<结果>":<0-1>},"confidence":<0-1>,"reason":"<20字内>"}]}"""
+{"markets":[{"market":"<代码>","probabilities":{"<结果键>":<0-1>},"confidence":<0-1>,"reason":"<20字内>"}]}"""
 
 
 @dataclass
@@ -591,12 +626,18 @@ class MatchDecisionEngine:
             order = sorted(range(len(c.outcomes)),
                            key=lambda i: c.p_fair[i], reverse=True)
             for i in order[:MAX_OUTCOMES_PER_MARKET]:
+                # **必须同时给「结果键」与「中文标签」**：
+                # 早期只给中文描述，而解析器按内部代码（`home`/`over`）取值，
+                # 导致 LLM 返回中文键时**每一行都被静默丢弃**——
+                # 实测这就是「几十场比赛零买入建议」的主因之一。
                 lines.append(
-                    "  - %s：赔率 %.3f，市场公平概率 %.4f"
-                    % (format_market(c.market, c.outcomes[i], c.line),
+                    "  - 键=%s | %s：赔率 %.3f，市场公平概率 %.4f"
+                    % (c.outcomes[i],
+                       format_market(c.market, c.outcomes[i], c.line),
                        c.odds[i], c.p_fair[i]))
         lines.append("")
         lines.append("降赔=资金流入=市场认为该结果概率上升。")
+        lines.append("probabilities 的键必须逐字照抄上面的「键=」值。")
         lines.append("给出你的概率估计（可偏离市场）。只输出 JSON。")
         return "\n".join(lines)
 
@@ -699,23 +740,21 @@ class MatchDecisionEngine:
             raw = row.get("probabilities")
             if not isinstance(raw, Mapping):
                 continue
-            # 必须给出该盘口的**全部**结果，否则无法计算优势
+            # 必须给出该盘口的**全部**结果，否则无法计算优势。
+            # 同时容忍 LLM 用中文标签作答（如「全场主队平手」）：
+            # 早期只认内部代码，LLM 一旦用中文键就整行被丢，
+            # 造成「有结果却零买入」的隐形故障。
             probs: List[float] = []
             ok = True
             for oc in comp.outcomes:
-                v = raw.get(oc)
-                if v is None or isinstance(v, bool):
+                v = _lookup_probability(raw, oc, mkt, comp.line)
+                if v is None:
                     ok = False
                     break
-                try:
-                    fv = float(v)
-                except (TypeError, ValueError):
+                if not (0.0 <= v <= 1.0):
                     ok = False
                     break
-                if not (0.0 <= fv <= 1.0):
-                    ok = False
-                    break
-                probs.append(fv)
+                probs.append(v)
             if not ok:
                 continue
             total = math.fsum(probs)
@@ -732,8 +771,18 @@ class MatchDecisionEngine:
                 continue
 
             # 用 LLM 的概率**重新算** edge（这才是真实优势来源）
+            #
+            # ⚠️ 必须先**向市场收缩**再算 edge（本项目真实故障）：
+            # 实测 LLM 在「只有赔率、无基本面」时倾向输出接近 50/50 的
+            # 「均衡」估计（如市场 p=0.337 而 LLM 给 0.550，偏离 +21pp），
+            # 若直接采用会凭空产生 +40% 的假 edge。
+            # 收缩权重 = min(max_llm_weight, confidence)，与逐盘口引擎
+            # `DecisionEngine._fuse` 保持一致（同一套概率融合语义）。
+            w = min(self.config.max_llm_weight, max(0.0, conf))
             for i, oc in enumerate(comp.outcomes):
-                edge = probs[i] * comp.odds[i] - 1.0
+                p_llm_i = probs[i]
+                p_fused = (1.0 - w) * comp.p_fair[i] + w * p_llm_i
+                edge = p_fused * comp.odds[i] - 1.0
                 # **阶段 2 门控**：用该盘口自己的动态门槛（而非全局常数）。
                 # 门槛 = 基准 2% + 长赔/去水分歧/逆风/重定价/稀疏样本 加价，
                 # 由 `gate_market()` 在阶段 1 算出并随快照传递（调研结论落地）。
@@ -741,7 +790,7 @@ class MatchDecisionEngine:
                 if edge < req:
                     continue
                 kelly = econ.fractional_kelly(
-                    probs[i], comp.odds[i], lam=self.config.kelly_fraction)
+                    p_fused, comp.odds[i], lam=self.config.kelly_fraction)
                 kelly = max(0.0, min(kelly, self.config.max_stake_pct))
                 picks.append({
                     "market": mkt,
@@ -758,10 +807,13 @@ class MatchDecisionEngine:
                     "kelly": round(kelly, 6),
                     "kelly_pct": round(kelly * 100, 4),
                     "confidence": round(conf, 4),
+                    # 融合权重：让人能看出 LLM 到底被采纳了多少
+                    "llm_weight": round(w, 4),
                     "reason": str(row.get("reason") or "")[:200],
                     # 可复核性：三套概率全部回传
                     "p_market": round(comp.p_fair[i], 6),
-                    "p_llm": round(probs[i], 6),
+                    "p_llm": round(p_llm_i, 6),
+                    "p_fused": round(p_fused, 6),
                     "trend": comp.trend,
                     "trend_pct": round(comp.trend_pct, 3),
                 })
