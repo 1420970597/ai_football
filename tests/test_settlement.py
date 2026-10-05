@@ -1254,3 +1254,73 @@ class TestConfirmedFinishedFromSchedule(unittest.TestCase):
         self.assertEqual(svc._merge_local_scores(scores, {"m1"},
                                                  confirmed=set()), 0)
         self.assertEqual(scores, {})
+
+
+class TestAccuracyEndToEndWithRealHub(unittest.TestCase):
+    """**端到端（真实 Hub）**：推送比分 → 落盘 → 重启 → 结算 → 有命中率。
+
+    这是用户问题 2 的完整验收：用**真实的 `RealtimeHub`**（而非 mock）
+    走一遍「收推送 → 落盘 → 新实例回填 → 结算」，
+    证明「正确率算不出来」的链路已被打通。
+
+    背景：实测两条上游路径都拿不到**历史**比分
+    （赛程不返回 `msc`；盘口接口对已结束场次返回空串），
+    赛果只在「进行中」那个时间窗可得，而结算总在结束之后。
+    """
+
+    def test_push_then_restart_then_settle(self) -> None:
+        import base64
+        import gzip
+        import json as _json
+        import os as _os
+        import tempfile
+
+        from collector.leyu_realtime import RealtimeHub
+        from service.analysis import AnalysisConfig, AnalysisService
+        from service.ledger import LedgerEntry
+
+        def _enc(obj: Any) -> str:
+            return base64.b64encode(
+                gzip.compress(_json.dumps(obj).encode())).decode()
+
+        with tempfile.TemporaryDirectory() as d:
+            trend_root = _os.path.join(d, "_trends")
+            ledger_root = _os.path.join(d, "ledger")
+
+            # 1) 真实 Hub 收到比分与结束通知
+            hub = RealtimeHub(session_provider=None, trend_root=trend_root)
+            hub._handle_message({"cmd": "C103", "cd": _enc(
+                {"mid": "m1", "msc": ["S0|1:0", "S1|2:1"], "mst": "90"})})
+            hub._handle_message({"cmd": "C109", "cd": _enc(
+                [{"mid": "m1", "ms": 110}])})
+            self.assertEqual(hub.score("m1"), (2, 1))
+            self.assertTrue(hub.is_finished("m1"))
+
+            # 2) **重启**：新实例必须从磁盘回填赛果
+            hub2 = RealtimeHub(session_provider=None, trend_root=trend_root)
+            self.assertEqual(hub2.score("m1"), (2, 1),
+                             "重启后必须能回填比分")
+            self.assertTrue(hub2.is_finished("m1"),
+                            "重启后必须能回填结束状态")
+
+            # 3) 台账里有一条该场的买入建议
+            svc = AnalysisService(valuation=mock.MagicMock(), realtime=hub2,
+                                  config=AnalysisConfig(use_llm=False,
+                                                        ledger_root=ledger_root))
+            svc.ledger._append([
+                LedgerEntry(at="2024-01-01T00:00:00+00:00", match_id="m1",
+                            market="HAD", line="", outcome="home", odds=2.0,
+                            is_pick=True)])
+
+            # 4) 结算：走 `_merge_local_scores`（C109 已确认结束）
+            scores: Dict[str, Any] = {}
+            n = svc._merge_local_scores(scores, {"m1"})
+            self.assertEqual(n, 1)
+            out = svc.ledger.settle(scores)
+            self.assertEqual(out["settled"], 1)
+            st = svc.ledger.stats()
+            self.assertEqual(st["graded"], 1,
+                             "必须真的产出已结算样本（否则正确率永远为空）")
+            self.assertEqual(st["won"], 1)
+            assert st["hit_rate"] is not None
+            self.assertAlmostEqual(st["hit_rate"], 1.0, places=4)
