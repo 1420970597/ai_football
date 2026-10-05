@@ -591,6 +591,26 @@ def make_session_provider(
         boot = bootstrapper_from_env(e)
         if boot is not None:
             providers.append(AppSessionProvider(boot))
+
+        # **登录续期**（用户要求：实在无法自动续期则用登录接口刷新）。
+        #
+        # 它排在最后：前两者只要凭据未过期就能成功，且开销更小；
+        # 它们都失效时（`6001 token已过期`）才走到登录重取 token。
+        # 本模块**内部**包含“登录 → launch”两步，返回可直接用的 Session。
+        #
+        # ⚠️ 登录受上游 **IP 白名单**限制（非本机可解）：受限时它会抛出
+        # 带可操作指引的 SessionError，而不会静默失败。
+        from .leyu_app_login import login_provider_from_env
+
+        token_cache = ""
+        cache_dir = (e.get(SESSION_ENV_CACHE) or "").strip()
+        if cache_dir:
+            # 与 _session.json 同级，随 output 卷持久化
+            token_cache = os.path.join(
+                os.path.dirname(cache_dir) or ".", "_app_token.json")
+        login = login_provider_from_env(e, token_cache_path=token_cache or None)
+        if login is not None:
+            providers.append(login)
     if cmd:
         providers.append(CommandSessionProvider(cmd))
     if f:
