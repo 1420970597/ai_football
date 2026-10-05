@@ -1038,3 +1038,61 @@ class TestSettleScoresFromLocalPush(unittest.TestCase):
             out = svc.settle_finished()
             self.assertIn("scores_from_push", out)
             self.assertIn("scores_total", out)
+
+
+class TestAccuracyStatsEndToEnd(unittest.TestCase):
+    """**端到端**：会话过期（拿不到 REST 赛程）时，正确率照样能算出来。
+
+    这是用户问题 2「本地买入决策的正确率没有做统计」的验收口径 ——
+    用**推送比分**完成结算并产出命中率/ROI/CLV，全程不依赖外部服务。
+    """
+
+    def test_accuracy_is_computed_from_local_scores(self) -> None:
+        from service.analysis import AnalysisConfig, AnalysisService
+
+        with tempfile.TemporaryDirectory() as d:
+            svc = AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                                  config=AnalysisConfig(use_llm=False,
+                                                        ledger_root=d))
+            # 三条买入建议：m1 会赢、m2/m3 会输
+            svc.ledger._append([
+                LedgerEntry(at="2024-01-01T00:00:00+00:00", match_id="m1",
+                            market="HAD", line="", outcome="home", odds=2.0,
+                            is_pick=True),
+                LedgerEntry(at="2024-01-01T00:00:00+00:00", match_id="m2",
+                            market="HAD", line="", outcome="away", odds=3.0,
+                            is_pick=True),
+                LedgerEntry(at="2024-01-01T00:00:00+00:00", match_id="m3",
+                            market="HAD", line="", outcome="home", odds=1.8,
+                            is_pick=True),
+            ])
+            hub = mock.MagicMock()
+            hub.scores_snapshot.return_value = {"m1": (2, 0), "m2": (1, 0),
+                                               "m3": (0, 1)}
+            hub.finished_mids.return_value = ["m1", "m2", "m3"]
+            hub.half_score.return_value = None
+            svc.realtime = hub
+
+            out = svc.settle_finished()
+            self.assertEqual(out["scores_from_push"], 3,
+                             "3 场都应来自推送比分兜底")
+            st = out["stats"]
+            self.assertEqual(st["graded"], 3)
+            self.assertEqual(st["won"], 1)
+            self.assertEqual(st["lost"], 2)
+            assert st["hit_rate"] is not None
+            self.assertAlmostEqual(st["hit_rate"], 1 / 3, places=4)
+            assert st["roi"] is not None
+            self.assertLess(st["roi"], 0, "1 赢 2 输 + 高赔未命中 → 负收益")
+
+    def test_api_exposes_accuracy_fields(self) -> None:
+        """`/ledger/stats` 必须带命中率/ROI/CLV 字段（前端面板依赖）。"""
+        from api.app import create_app
+        with tempfile.TemporaryDirectory() as d:
+            app = create_app(snapshot_root=d, corpus_root="output",
+                             source="ticai")
+            app.svc.ingest_corpus()
+            _, body = app.dispatch("GET", "/api/v1/ledger/stats", {}, {})
+            for k in ("hit_rate", "roi", "clv_n", "clv_mean", "graded",
+                      "pending", "unpicked_hit_rate", "ledger"):
+                self.assertIn(k, body, "缺少字段 %s（前端面板需要）" % k)
