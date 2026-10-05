@@ -56,6 +56,13 @@ from .leyu_ws import LEYUFeed
 #: 取 5s 是一个兼顾「重启后数据足够新」与「写盘开销可忽略」的折中。
 _LIVE_SAVE_INTERVAL_S = 5.0
 
+#: 比分落盘节流（秒）。
+#:
+#: 比分推送比赔率稀疏得多（实测数小时 300+ 条），但结算需要的是
+#: **终场比分**，因此取更短的 3s —— 让“比赛刚结束”的比分尽快落盘，
+#: 以免重启后丢掉那场唯一的赛果来源（详见 `ScoreStore`）。
+_SCORE_SAVE_INTERVAL_S = 3.0
+
 
 def _live_snapshot_path(trend_root: Optional[str]) -> Optional[str]:
     """由走势目录推出实时表落盘路径（与 `_trends` 同级）。
@@ -69,10 +76,28 @@ def _live_snapshot_path(trend_root: Optional[str]) -> Optional[str]:
     except (TypeError, ValueError):
         return None
 
+
+def _score_snapshot_path(trend_root: Optional[str]) -> Optional[str]:
+    """比分落盘路径（与 `_live`、`_trends` 同级）。
+
+    与实时表分开存：实时表是“现在多少钱”（秒级、体量大、可丢），
+    比分是“最终赛果”（稀少、**不可再生**）—— 冗余丢一次就永远补不回，
+    因此单文件独立保存（见 `ScoreStore`）。
+    """
+    if not trend_root:
+        return None
+    try:
+        return str(Path(trend_root).parent / "_live" / "scores.json")
+    except (TypeError, ValueError):
+        return None
+
 __all__ = [
     "PriceTick",
     "TrendSeries",
     "TrendStore",
+    "LiveBook",
+    "LiveQuote",
+    "ScoreStore",
     "RealtimeStats",
     "RealtimeHub",
     "decode_push_payload",
@@ -424,6 +449,81 @@ class LiveBook:
                 self._by_mid.setdefault(str(mid), {})[key] = None
                 n += 1
         return n
+
+
+class ScoreStore:
+    """比分与结束状态的**本地持久化**（结算的赛果来源）。
+
+    ## 为何必须有它（用户问题 2「正确率没有统计」的真正根因）
+
+    实测两条上游路径都拿不到**历史**比分：
+
+      * `getOriginalDataPB`（赛程）—— 根本不返回 `msc`；
+      * `structureMatchBaseInfoByMidsPB`（盘口）—— 直播中的场次带 `msc`，
+        但**已结束的场次 `score_raw` 恒为空串**（实测 11/11 全空）。
+
+    即：赛果只在「比赛进行中」那个时间窗内可得，一旦结束就再也拿不到。
+    而结算总是发生在比赛结束**之后** → 永远 `graded=0`
+    → 命中率/ROI/CLV 永远算不出来。
+
+    修法：进程在接收推送时（`C103` 比分 / `C109` 结束）就把它们落盘。
+    这样即使比赛早已结束、上游已不提供，本地仍有终场比分可用于结算。
+
+    ⚠️ 只存比分与是否结束，**不存投注相关隐私**；文件在 output 卷内。
+    """
+
+    def __init__(self, path: Optional[str] = None) -> None:
+        self.path = Path(path) if path else None
+        self.last_save_at = 0.0
+        self.last_error = ""
+        self._lock = threading.RLock()
+
+    def save(self, scores: Mapping[str, Any], finished: Any,
+             force: bool = False) -> bool:
+        """原子写入 `{mid: {"ft": [h,a], "ht": [h,a]|null, "done": bool}}`。"""
+        path = self.path
+        if path is None:
+            return False
+        now = time.monotonic()
+        if not force and (now - self.last_save_at) < _SCORE_SAVE_INTERVAL_S:
+            return False
+        done = {str(m) for m in (finished or ())}
+        payload: Dict[str, Any] = {"version": 1}
+        try:
+            payload["saved_at"] = datetime.now(timezone.utc).isoformat()
+            payload["scores"] = {
+                str(mid): {"ft": [int(v[0]), int(v[1])],
+                           "done": str(mid) in done}
+                for mid, v in (scores or {}).items()
+                if v and v[0] is not None and v[1] is not None}
+        except (TypeError, ValueError, IndexError):
+            return False
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, ensure_ascii=False)
+            os.replace(tmp, path)
+            self.last_save_at = now
+            self.last_error = ""
+            return True
+        except (OSError, TypeError, ValueError) as exc:
+            self.last_error = "比分落盘失败: %s" % exc
+            return False
+
+    def load(self) -> Dict[str, Any]:
+        """读回 `{mid: {"ft": [...], "done": bool}}`；缺失/损坏返回空。"""
+        path = self.path
+        if path is None or not path.exists():
+            return {}
+        try:
+            with open(path, encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except (OSError, ValueError) as exc:
+            self.last_error = "比分读取失败: %s" % exc
+            return {}
+        rows = payload.get("scores") if isinstance(payload, dict) else None
+        return dict(rows) if isinstance(rows, dict) else {}
 
 
 class TrendStore:
@@ -856,6 +956,15 @@ class RealtimeHub:
         #: 随 output 卷一起持久化：重启后立即有本地数据可读。
         self.live = LiveBook(_live_snapshot_path(trend_root))
         self.live.load()          # 启动即回填（无需等第一批推送）
+        #: **比分持久化**（结算的赛果来源）。
+        #:
+        #: 为何必须落盘（用户问题 2 的真正根因）：实测两条上游路径都拿不到
+        #: **历史**比分 —— 赛程接口不返回 `msc`；盘口接口对已结束场次返回
+        #: 空串（实测 11/11 全空）。即赛果只在“进行中”那个时间窗可得，
+        #: 而结算总在结束之后 → 永远 `graded=0`。
+        #: 因此在收到的当下就落盘，重启后仍可结算。
+        self.scores_store = ScoreStore(_score_snapshot_path(trend_root))
+        self._load_scores()
         #: mid → 最近一次收到**比分推送**（C103/C1021）的本机单调时间戳。
         #:
         #: 为什么需要：比分是判断「比赛是否已结束 / 该场推送是否还活着」的
@@ -872,6 +981,53 @@ class RealtimeHub:
         self._first_seen: Dict[str, float] = {}
         if resume:
             self._resume_from_store()
+
+    def _load_scores(self) -> None:
+        """启动时从本地回填比分与结束状态（`ScoreStore`）。
+
+        为何需要：赛果只在“比赛进行中”那个时间窗内可取，
+        重启后若只依赖上游就永远拿不回；本地文件是**唯一冗余**。
+        只回填「已确认结束」的场次作为结束集合，避免把“进行中的
+        当前比分”误当成终场比分（那会把还在踢的比赛算成已定输赢）。
+        """
+        try:
+            rows = self.scores_store.load()
+        except (AttributeError, TypeError):
+            return
+        if not rows:
+            return
+        with self._lock:
+            for mid, rec in rows.items():
+                if not isinstance(rec, Mapping):
+                    continue
+                ft = rec.get("ft")
+                if not (isinstance(ft, (list, tuple)) and len(ft) >= 2):
+                    continue
+                try:
+                    h, a = int(ft[0]), int(ft[1])
+                except (TypeError, ValueError):
+                    continue
+                mid = str(mid)
+                self._scores[mid] = (h, a)
+                if rec.get("done"):
+                    self._finished.add(mid)
+
+    def _save_scores(self, force: bool = False) -> None:
+        """把当前比分/结束集合落盘（节流；失败不影响推送）。
+
+        ⚠️ **`C109`（比赛结束）必须传 `force=True`**：它会在只有几秒间隔的
+        情况下紧跟 `C103`（比分）发生，若被 3s 节流丢掉，
+        “已结束”这个标记就永远不落盘 —— 而它正是结算的**安全前提**
+        （未标记结束的场次不得结算，否则会把还在踢的算成已定输赢）。
+        本项目测试真实拓到该缺陷。
+        """
+        with self._lock:
+            scores = dict(self._scores)
+            finished = set(self._finished)
+        try:
+            self.scores_store.save(scores, finished, force=force)
+        except (AttributeError, OSError, TypeError, ValueError) as exc:
+            self.stats.last_error = "比分落盘失败: %s" % exc
 
     def _resume_from_store(self) -> None:
         """从落盘文件回填历史走势（重启不丢）。
@@ -1176,6 +1332,8 @@ class RealtimeHub:
                         self._scores[mid] = score
                         self._score_at[mid] = time.monotonic()
                     self.stats.score_updates += 1
+                    # 落盘赛果（见 ScoreStore：结束之后就再也拿不到了）
+                    self._save_scores()
                 self._record_event(str(decoded.get("mid", "")),
                                    {"cmd": cmd, "cmec": decoded.get("cmec"),
                                     "mmp": decoded.get("mmp"), "mst": decoded.get("mst")})
@@ -1205,6 +1363,10 @@ class RealtimeHub:
                     if isinstance(it, Mapping):
                         self._finished.add(str(it.get("mid", "")))
             self.stats.finished += len(items)
+            # **关键**：比赛刚结束时把终场比分与结束标记落盘。
+            # 这是结算**唯一**能拿到过时赛果的时机（之后上游不再提供），
+            # 且必须 `force=True` —— 不能因节流丢掉“已结束”标记（见 _save_scores）。
+            self._save_scores(force=True)
             return
 
         if cmd == "C110":

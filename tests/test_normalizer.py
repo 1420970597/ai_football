@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -468,3 +469,102 @@ class TestLiveBookToleratesDirtyPayload(unittest.TestCase):
             row = b._rows[(("m1"), "2", "2.5", "a")]
             object.__setattr__(row, "odds", "bad") if hasattr(row, "__dict__") else None
             self.assertTrue(b.save(force=True), "脏字段不应让落盘失败")
+
+
+class TestScoreStore(unittest.TestCase):
+    """**根因回归**：赛果必须落盘，否则结算永远拿不到比分（用户问题 2）。
+
+    实测两条上游路径都拿不到**历史**比分：
+      * `getOriginalDataPB`（赛程）不返回 `msc`；
+      * `structureMatchBaseInfoByMidsPB`（盘口）对**已结束**场次返回空串
+        （实测 11/11 全空）。
+    即赛果只在「进行中」那个时间窗内可得，而结算总在结束**之后** →
+    `graded=0` → 命中率/ROI/CLV 永远算不出来。
+
+    修法：进程在收到推送时（`C103` 比分 / `C109` 结束）就落盘。
+    """
+
+    def _store(self, d: str) -> Any:
+        from collector.leyu_realtime import ScoreStore
+        return ScoreStore(os.path.join(d, "scores.json"))
+
+    def test_save_and_load_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            st = self._store(d)
+            self.assertTrue(st.save({"m1": (2, 1), "m2": (0, 0)}, {"m1"}))
+            got = st.load()
+            self.assertEqual(got["m1"]["ft"], [2, 1])
+            self.assertTrue(got["m1"]["done"], "已结束必须标记 done")
+            self.assertFalse(got["m2"]["done"], "未完赛不得标记 done")
+
+    def test_done_flag_is_critical_for_safety(self) -> None:
+        """`done` 是安全红线：拿“进行中”的比分结算会把还在踢的算成已定输赢。"""
+        with tempfile.TemporaryDirectory() as d:
+            st = self._store(d)
+            st.save({"live": (1, 0)}, set())          # 未结束
+            self.assertFalse(st.load()["live"]["done"])
+
+    def test_dirty_scores_are_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            st = self._store(d)
+            self.assertTrue(st.save(
+                {"ok": (1, 2), "bad": (None, None)}, {"ok"}))
+            got = st.load()
+            self.assertIn("ok", got)
+            self.assertNotIn("bad", got, "脏比分不得写入（宁缺勿错）")
+
+    def test_missing_file_is_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self._store(d).load(), {})
+
+    def test_corrupt_file_is_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "scores.json")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("{not json")
+            st = self._store(d)
+            self.assertEqual(st.load(), {})
+            self.assertTrue(st.last_error)
+
+    def test_no_path_is_memory_only(self) -> None:
+        from collector.leyu_realtime import ScoreStore
+        st = ScoreStore(None)
+        self.assertFalse(st.save({"m1": (1, 0)}, {"m1"}))
+        self.assertEqual(st.load(), {})
+
+    def test_save_throttled_unless_forced(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            st = self._store(d)
+            self.assertTrue(st.save({"m1": (1, 0)}, {"m1"}, force=True))
+            self.assertFalse(st.save({"m1": (1, 0)}, {"m1"}))
+
+
+class TestHubPersistsScoresForSettlement(unittest.TestCase):
+    """Hub 必须把推送到的比分/结束状态落盘并能重启回填。"""
+
+    def test_c109_marks_finished_and_saves(self) -> None:
+        from collector.leyu_realtime import RealtimeHub
+        with tempfile.TemporaryDirectory() as d:
+            hub = RealtimeHub(session_provider=None,
+                              trend_root=os.path.join(d, "_trends"))
+            # C103 比分推送
+            import base64
+            import gzip as _gz
+            cd103 = base64.b64encode(_gz.compress(json.dumps(
+                {"mid": "m1", "msc": ["S0|1:0", "S1|2:1"],
+                 "mst": "90"}).encode()
+            )).decode()
+            hub._handle_message({"cmd": "C103", "cd": cd103})
+            self.assertEqual(hub.score("m1"), (2, 1))
+            # C109 结束通知
+            cd109 = base64.b64encode(_gz.compress(json.dumps(
+                [{"mid": "m1", "ms": 110}]).encode())).decode()
+            hub._handle_message({"cmd": "C109", "cd": cd109})
+            self.assertTrue(hub.is_finished("m1"))
+            # 重启（新实例）应能从磁盘回填
+            hub2 = RealtimeHub(session_provider=None,
+                               trend_root=os.path.join(d, "_trends"))
+            self.assertEqual(hub2.score("m1"), (2, 1))
+            self.assertTrue(hub2.is_finished("m1"))
+            self.assertIn("m1", hub2.finished_mids())
+            self.assertEqual(hub2.scores_snapshot().get("m1"), (2, 1))

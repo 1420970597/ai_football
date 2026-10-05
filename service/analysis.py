@@ -356,6 +356,10 @@ class AnalysisService:
         #: `mid → 名称行` 的字典缓存（`match_index()` 结果是列表，
         #: 逐场线性查找会变成 O(n×m)，见 `_names_dict`）
         self._names_cache: Optional[Tuple[Any, Dict[str, Dict[str, Any]]]] = None
+        #: 上游“滚动球”计数缓存 `(取时时刻, {upstream, derived})`。
+        #: 用于用户问题 1 的对账（“要与乐鱼一致”必须有同源参照值），
+        #: 带 60s TTL 以免每次 `/analysis` 都请求上游。
+        self._upstream_count_cache: Optional[Tuple[float, Dict[str, Any]]] = None
         #: 决策台账：记录每个建议与被拦截盘口，供赛后核对 LLM 准确度
         self.ledger = DecisionLedger(self.config.ledger_root)        #: 结算线程（定期把已结束赛事的比分回填进台账）
         self._settle_thread: Optional[threading.Thread] = None
@@ -745,19 +749,17 @@ class AnalysisService:
     def settle_finished(self) -> Dict[str, Any]:
         """拉取已结束赛事的比分，回填台账并算出本地统计。
 
-        ## 两条比分来源（会话过期时仍能结算）
+        ## 三条比分来源（按优先级）
 
-        1. **REST 赛程**（`source.schedule()`）—— 最完整，含终场/半场比分。
-        2. **本地推送**（`RealtimeHub`）—— REST 拿不到时的兑底。
+        1. **`odds()`（唯一可靠来源）** —— 走
+           `structureMatchBaseInfoByMidsPB`，带 `msc` 比分。
+        2. **`schedule()`** —— 只用于筛「哪些场已结束」；
+           实测它**不返回比分字段**（详见 `_finished_matches`）。
+        3. **本地推送**（`RealtimeHub`）—— REST 不可用时的兑底。
 
-        为何必须加第 2 条（用户报「买入决策正确率没有统计」的根因）：
-        早期只读 REST。会话一过期（`6001 token已过期`）`schedule()`
-        就抛异常 → `_finished_matches()` 返回空 → `graded=0`
-        → **命中率/ROI/CLV 永远算不出来**，而推送里的比分
-        （`C103`/`C1021`）与结束通知（`C109`）本就在内存里。
-
-        为何仍以 REST 为先：推送只在订阅期间覆盖、重启即丢；
-        而台账可能残留几天前的条目。两者合并取并集。
+        为何需要第 1 条（用户报「买入决策正确率没有统计」的根因）：
+        早期只用 `schedule()`，而它根本不带 `msc` → `score` 恒为 `None`
+        → `graded=0` → **命中率/ROI/CLV 永远算不出来**。
 
         Returns:
             结算统计（含 `stats`，即当前命中率/ROI/CLV）。
@@ -777,7 +779,9 @@ class AnalysisService:
         # 之后 capture_closing 就不再碰它（避免把状态改回 pending）。
         closing = self._capture_closing_odds(pending)
         scores: Dict[str, Any] = {}
-        for mt in self._finished_matches():
+        # 只对**待结算**的场次补比分（它们才需要）；
+        # 否则会为几千场无关赛事白打上游。
+        for mt in self._finished_matches(mids=pending):
             mid = str(getattr(mt, "mid", "") or "")
             if mid not in pending:
                 continue
@@ -910,14 +914,63 @@ class AnalysisService:
                 out[mid] = snaps
         return out
 
-    def _finished_matches(self) -> List[Any]:
-        """已结束（含带终场比分）的赛事。取不到时返回空列表。"""
+    def _finished_matches(
+        self, mids: Optional[Any] = None,
+    ) -> List[Any]:
+        """已结束**且能拿到终场比分**的赛事。取不到时返回空列表。
+
+        ## 为何必须额外调 `odds()`（本项目真实缺陷，用户问题 2 的根因）
+
+        用户报「本地买入决策的正确率没有做统计」。排查结论：
+
+        * `source.schedule()`（走 `getOriginalDataPB`）**不返回比分字段**
+          —— 实测全部已结束赛事的 `score_raw` 均为空串，
+          所以 `_finished_matches()` 拿到的 `score` 恒为 `(None, None)`，
+          `settle_finished()` 因此永远集不到赛果 → `graded=0`
+          → 命中率/ROI/CLV **永远算不出来**。
+        * 而 `source.odds(mids)`（走 `structureMatchBaseInfoByMidsPB`）
+          **带 `msc`**（实测 `S0|0:1,S1|1:2,…`），是全仓唯一可靠的赛果来源。
+
+        因此这里改为：先用赛程筛出「已结束」的场次，再用 `odds()` 批量
+        拉回它们的比分。只对**台账里真的待结算**的场次调 `odds()`
+        （由调用方传入 `mids`），避免为几千场无关赛事打上游。
+
+        Args:
+            mids: 需要结算的赛事 ID；为空时不过滤（兼容旧调用）。
+
+        Returns:
+            带终场比分的 `LEYUMatch` 列表。
+        """
         try:
             sched = self.valuation.source.schedule()
         except Exception:  # noqa: BLE001 - 拿不到赛程不影响其它功能
             return []
-        return [m for m in (sched or [])
-                if getattr(m, "is_finished", False)]
+        finished = [m for m in (sched or [])
+                    if getattr(m, "is_finished", False)]
+        if not finished:
+            return []
+        # 只对关心的场次补比分
+        if mids:
+            want = {str(m) for m in mids if m}
+            finished = [m for m in finished if str(getattr(m, "mid", "")) in want]
+            if not finished:
+                return []
+        # 赛程里已带比分（理论上不会）则直接用；否则用 odds() 补
+        if all(getattr(m, "score", (None, None))[0] is not None
+               for m in finished):
+            return finished
+        try:
+            detailed = self.valuation.source.odds(
+                [str(getattr(m, "mid", "")) for m in finished])
+        except Exception:  # noqa: BLE001 - 补比分失败则交回空（未结算）
+            return []
+        by_mid = {str(getattr(m, "mid", "")): m for m in detailed}
+        out: List[Any] = []
+        for m in finished:
+            got = by_mid.get(str(getattr(m, "mid", "")))
+            # 优先用带比分的那份；它没有则退回赛程原件（至少不丢场次）
+            out.append(got if got is not None else m)
+        return out
 
     def _merge_local_scores(self, scores: Dict[str, Any],
                             pending: Any) -> int:
@@ -1764,7 +1817,14 @@ class AnalysisService:
             },
             "cycle": dict(self.cycle_stats),
             "scheduler": self.scheduler_health(),
-            # 进行中覆盖的可观测性：用户要能自己查「为什么比 leyu 少」
+            # 进行中覆盖的可观测性：用户要能自己查「为什么比 leyu 少」。
+            #
+            # `upstream` 是**乐鱼页面滚动球计数同源**的值
+            # （`platformsSportCountPB` → `TY.1.balls.1.ct`），
+            # 用户问题 1「要与乐鱼一致」就能直接对账：
+            #   count = 本系统订阅/展示的场次数
+            #   upstream = 乐鱼页面那个数字
+            #   derived = 纯按 ms==1 推导（不含开赛前宽限）
             "live": {
                 "source": self._live_source or "未取样",
                 "count": (len(self._live_cache[1])
@@ -1773,10 +1833,40 @@ class AnalysisService:
                 "age_s": (round(time.time() - self._live_cache[0], 1)
                           if self._live_cache else None),
                 "error": self._live_error,
+                **(self._live_count_info()),
             },
         }
         if self.realtime is not None:
             out["realtime"] = self.realtime.health()
+        return out
+
+    def _live_count_info(self) -> Dict[str, Any]:
+        """乐鱼上游自报的「滚动球」计数（供与页面直接对账）。
+
+        为何需要（用户问题 1：「比赛场次要与乐鱼中的今日足球进行中一致」）：
+        仅凭本系统的 `count`，用户无法知道“是不是少了”——
+        必须有一个**同源参照值**才能叫“一致”。
+        本方法取的就是乐鱼页面计数徒标同一个端点
+        （`platformsSportCountPB` → 体育 > 滚球 > 足球的 `ct`）。
+
+        失败不影响其它字段（对账是增强能力），且带短 TTL 缓存以免
+        每次 `/analysis` 都打上游。
+        """
+        now = time.time()
+        cached = self._upstream_count_cache
+        if cached and (now - cached[0]) < 60.0:
+            return cached[1]
+        out: Dict[str, Any] = {"upstream": None, "derived": None}
+        try:
+            src = getattr(self.valuation, "source", None)
+            info = src.live_count(SOCCER_SPORT_ID) if src is not None else None
+            if isinstance(info, Mapping):
+                out["upstream"] = info.get("live")
+                out["derived"] = info.get("derived")
+                out["upstream_source"] = info.get("source")
+        except Exception:  # noqa: BLE001 - 对账失败不得影响 /analysis
+            pass
+        self._upstream_count_cache = (now, out)
         return out
 
     def scheduler_health(self) -> Dict[str, Any]:

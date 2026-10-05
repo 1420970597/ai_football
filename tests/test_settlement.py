@@ -1096,3 +1096,82 @@ class TestAccuracyStatsEndToEnd(unittest.TestCase):
             for k in ("hit_rate", "roi", "clv_n", "clv_mean", "graded",
                       "pending", "unpicked_hit_rate", "ledger"):
                 self.assertIn(k, body, "缺少字段 %s（前端面板需要）" % k)
+
+
+class TestFinishedMatchesFetchScoresViaOdds(unittest.TestCase):
+    """**根因回归**：赛程接口不带比分，必须用 `odds()` 补，否则永远 graded=0。
+
+    实测（本项目真实缺陷，用户问题 2「买入决策正确率没有统计」的根因）：
+      * `source.schedule()`（`getOriginalDataPB`）**不返回 `msc` 字段** ——
+        全部已结束赛事的 `score_raw` 都是空串，`score` 恒为 `(None, None)`；
+      * `source.odds(mids)`（`structureMatchBaseInfoByMidsPB`）**带 `msc`**
+        （`S0|0:1,S1|1:2,…`），是全仓唯一可靠的赛果来源。
+
+    因此 `_finished_matches()` 必须用 `odds()` 补比分，否则
+    `settle_finished()` 永远集不到赛果 → `graded=0` → 命中率算不出来。
+    """
+
+    class _M:
+        def __init__(self, mid, finished=True, score=(None, None)):
+            self.mid = mid
+            self._finished = finished
+            self.score = score
+            self.half_score = (None, None)
+
+        @property
+        def is_finished(self) -> bool:
+            return self._finished
+
+    def _svc(self, schedule, odds):
+        from service.analysis import AnalysisConfig, AnalysisService
+        val = mock.MagicMock()
+        val.source.schedule.return_value = schedule
+        val.source.odds.side_effect = odds
+        return AnalysisService(valuation=val, realtime=None,
+                               config=AnalysisConfig(use_llm=False))
+
+    def test_scores_fetched_via_odds_when_schedule_lacks_them(self) -> None:
+        sched = [self._M("m1"), self._M("m2", finished=False)]
+        detailed = [self._M("m1", score=(2, 1))]
+        svc = self._svc(sched, lambda mids: detailed)
+        out = svc._finished_matches(mids={"m1"})
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].score, (2, 1), "必须用 odds() 补回比分")
+        # 只对关心的 mid 调上游
+        svc.valuation.source.odds.assert_called_once()
+        self.assertEqual(list(svc.valuation.source.odds.call_args[0][0]), ["m1"])
+
+    def test_only_pending_mids_requested(self) -> None:
+        """只为待结算场次补比分（避免为几千场无关赛事打上游）。"""
+        sched = [self._M("m1"), self._M("m2"), self._M("m3")]
+        svc = self._svc(sched, lambda mids: [])
+        svc._finished_matches(mids={"m2"})
+        self.assertEqual(list(svc.valuation.source.odds.call_args[0][0]), ["m2"])
+
+    def test_no_finished_returns_empty_without_calling_odds(self) -> None:
+        svc = self._svc([self._M("m1", finished=False)], lambda mids: [])
+        self.assertEqual(svc._finished_matches(mids={"m1"}), [])
+        svc.valuation.source.odds.assert_not_called()
+
+    def test_schedule_with_scores_skips_odds_call(self) -> None:
+        """若赛程已带比分（理论上不会），则不额外打上游。"""
+        sched = [self._M("m1", score=(1, 0))]
+        svc = self._svc(sched, lambda mids: [])
+        out = svc._finished_matches(mids={"m1"})
+        self.assertEqual(out[0].score, (1, 0))
+        svc.valuation.source.odds.assert_not_called()
+
+    def test_odds_failure_degrades_to_empty(self) -> None:
+        """补比分失败时返回空（不崩），由后续轮次重试。"""
+        def boom(_mids):
+            raise RuntimeError("上游不可用")
+        svc = self._svc([self._M("m1")], boom)
+        self.assertEqual(svc._finished_matches(mids={"m1"}), [])
+
+    def test_schedule_failure_degrades_to_empty(self) -> None:
+        from service.analysis import AnalysisConfig, AnalysisService
+        val = mock.MagicMock()
+        val.source.schedule.side_effect = RuntimeError("token 过期")
+        svc = AnalysisService(valuation=val, realtime=None,
+                              config=AnalysisConfig(use_llm=False))
+        self.assertEqual(svc._finished_matches(mids={"m1"}), [])
