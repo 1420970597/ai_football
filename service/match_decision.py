@@ -197,6 +197,63 @@ def _collect_rejects(comps: Sequence[MarketComputation]) -> List[str]:
     return out
 
 
+def _snap_age_s(snap: OddsSnapshot) -> Optional[float]:
+    """快照年龄（秒）；`captured_at` 缺失/非法时返回 None。
+
+    用于时效硬门禁（`DecisionConfig.max_quote_age_s`）：过期赔率算出的
+    「优势」是虚假的 —— 实测一场 1:3（4 球）的比赛，因为取到 4.6 小时前
+    的 3.32 而给出「全场进球数>2.5 买入」，而该盘口早已结算。
+
+    上游时钟可能略快于本机，负数一律视为 0（“刚刚发生”）。
+    """
+    when = getattr(snap, "captured_at", None)
+    if when is None:
+        return None
+    try:
+        age = (datetime.now(timezone.utc) - when).total_seconds()
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(0.0, age)
+
+
+def _latest_per_market(
+    snapshots: Sequence[OddsSnapshot],
+) -> List[OddsSnapshot]:
+    """每个盘口只保留**最新**一份快照（按 `captured_at`）。
+
+    为何必须（本项目真实严重缺陷）：快照库是**不可变历史**，一场比赛
+    同一盘口会累积几十份不同时间的快照。实测 `5726509` 传入 216 条，
+    其中 `OU(2.5)` 重复 **15** 次，赔率从 1.94 一路变到 3.32。
+    不过滤就会：
+
+      * 同一盘口被重复计算与重复上报（看板出现重复盘口）；
+      * **挑到过期价格**：该场已 1:3（4 球），`全场进球数>2.5` 早已结算，
+        却取到 1.8 小时前的赔率 3.32，给出「买入 +7.57%」的**假注单**。
+
+    去重键用 `(market, chpid, hv)` 而非只用 `market`：
+    乐鱼会把同一盘口的不同盘口线（如 `OU` 的 2.5 / 2.75 / 3）
+    拆成独立的市场条目，它们的风险完全不同，**不能合并**。
+    同一键下取 `captured_at` 最大者；时间相同时用列表后者（调用方
+    一般已按时间升序传入，后者即更新）。
+
+    Args:
+        snapshots: 该场全部快照（可能含大量历史）。
+
+    Returns:
+        每键一份的最新快照列表，保持首次出现顺序（便于输出可复现）。
+    """
+    best: Dict[Tuple[str, str, str], OddsSnapshot] = {}
+    for snap in snapshots:
+        meta = snap.metadata or {}
+        key = (str(snap.market),
+               str(meta.get("leyu_chpid") or ""),
+               str(meta.get("leyu_hv") or ""))
+        prev = best.get(key)
+        if prev is None or snap.captured_at >= prev.captured_at:
+            best[key] = snap
+    return list(best.values())
+
+
 def _safe_odds(values: Sequence[object]) -> Tuple[float, ...]:
     """把赔率序列统一为 float（**长度保持不变**）。
 
@@ -486,14 +543,37 @@ class MatchDecisionEngine:
         snapshots: Sequence[OddsSnapshot],
         trend: Optional[Mapping[str, Any]] = None,
     ) -> List[MarketComputation]:
-        """对一场的全部盘口做经济学计算（**不发任何 LLM 请求**）。"""
+        """对一场的全部盘口做经济学计算（**不发任何 LLM 请求**）。
+
+        ⚠️ **每个盘口只取「最新快照」一份**（本项目真实严重缺陷）：
+        快照库是**不可变历史**，一场比赛同一盘口会累积几十份不同时间的
+        快照（实测 `5726509` 共 216 条，其中 `OU(2.5)` 重复 **15** 次，
+        赔率从 1.94 变化到 3.32）。早期实现直接遍历传入的全部快照，
+        于是：
+          * 同一盘口被计算/上报十几次（`/board` 的盘口列表出现重复项）；
+          * 更严重的是**会挑到过期价格**：该场比分已是 1:3（4 球），
+            `全场进球数>2.5` 早已结算，却因为取到了 1.8 小时前的
+            赔率 3.32 而给出「买入 +7.57%」——**这是凭空造出的注单**，
+            对应不上任何可成交的市场。
+
+        因此这里先按 `(market, line)` 去重，只保留 `captured_at` 最新的
+        一份，再送去做经济学计算。同时把快照年龄回传，供上层标注时效。
+        """
         out: List[MarketComputation] = []
         trend_by_key = self._index_trend(trend)
         # `_small_model` 接受 Dict；这里统一成 dict 以避免只读映射的类型不匹配
         trend_dict: Optional[Dict[str, Any]] = dict(trend) if trend else None
-        for snap in snapshots:
+        for snap in _latest_per_market(snapshots):
             if snap.state in (SnapshotState.SUSPENDED, SnapshotState.DELISTED):
                 # 停盘/下架的价格不得参与决策（报告 §5.3）
+                continue
+            # **时效硬门禁**（用户报告问题 2）：赔率太旧就不是“数据缺失”，
+            # 而是“不可交易”。实测该场比分已 1:3（4 球），却因为取到
+            # 4.6 小时前的赔率 3.32 而给出「全场进球数>2.5 买入 +7.57%」
+            # —— 那种注单对应不上任何可成交的市场。
+            age_s = _snap_age_s(snap)
+            if age_s is not None and age_s > self.config.max_quote_age_s:
+                self.stats["stale_quotes"] = self.stats.get("stale_quotes", 0) + 1
                 continue
             p_small, diag, _ = self.small._small_model(snap, trend_dict)
             odds = _safe_odds(snap.odds)

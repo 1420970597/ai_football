@@ -40,10 +40,11 @@ import random
 import threading
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from collector.leyu_normalizer import snapshots_from_match
+from collector.leyu_normalizer import snapshots_from_live, snapshots_from_match
 from collector.leyu_realtime import RealtimeHub
 from collector.sources import SOCCER_SPORT_ID
 from core.models import OddsSnapshot
@@ -344,6 +345,12 @@ class AnalysisService:
         }
         #: 最近一轮结果（页面只读它，**不触发 LLM**）
         self._latest: Optional[Dict[str, Any]] = None
+        #: 进行中赛事缓存：`(取时时刻, mid 集合)`。
+        #: 命中与否可观测（`_live_source`/`_live_error`），便于定位
+        #: 「leyu 67 场 vs 系统 34 场」这类覆盖差异到底来自哪条数据源。
+        self._live_cache: Optional[Tuple[float, Optional[set]]] = None
+        self._live_source: str = ""
+        self._live_error: str = ""
         #: 决策台账：记录每个建议与被拦截盘口，供赛后核对 LLM 准确度
         self.ledger = DecisionLedger(self.config.ledger_root)        #: 结算线程（定期把已结束赛事的比分回填进台账）
         self._settle_thread: Optional[threading.Thread] = None
@@ -586,7 +593,8 @@ class AnalysisService:
             m = cand_by_id.get(mid)
             if m is None:
                 continue  # 已结束/不在候选里：静默跳过
-            snaps = self.valuation._snapshots_of(mid)
+            # 优先本地实时表（最新价、毫秒级），回退磁盘历史
+            snaps = self._snapshots_for(mid)
             if not snaps:
                 continue
             trend = self.realtime.trend(mid) if self.realtime else None
@@ -778,7 +786,9 @@ class AnalysisService:
         quotes: Dict[Any, float] = {}
         for mid in want:
             try:
-                snaps = self.valuation._snapshots_of(mid)
+                # 优先实时表：CLV 参照的收盘价应当取“最后一次看到的价”，
+                # 而实时表就是最新观测值，比磁盘历史更接近收盘。
+                snaps = self._snapshots_for(mid)
             except Exception:  # noqa: BLE001 - 单场读取失败不影响其他场
                 continue
             # `_snapshots_of` 按 captured_at 升序；后用覆盖前用 → 最新在手
@@ -1087,6 +1097,67 @@ class AnalysisService:
                 return m
         return markets[0] if isinstance(markets[0], str) else None
 
+    def _snapshots_for(self, mid: str) -> List[Any]:
+        """取该场用于决策的快照：**优先本地实时表**，回退磁盘历史。
+
+        ## 为何必须优先实时表（用户报告问题 2/3）
+
+        磁盘快照是**不可变历史**：一场比赛同一盘口会累积几十份不同时间的
+        记录（实测 `5726509` 共 216 条，`OU(2.5)` 重复 15 次，赔率 1.94→3.32）。
+        两个后果：
+
+          1. **慢**：读全库实测 14s（冷启动叠加 45s）；
+          2. **取到过期价**：该场比分已 1:3（4 球），系统仍拿
+             4.6 小时前的 3.32 算出「全场进球数>2.5 买入」——
+             那个盘口早已结算，是**凭空造出的注单**。
+
+        推送（`C105` 周期性全量快照）里本来就有**当前赔率**，
+        `LiveBook` 已在内存留了一份，翻译即得。因此：
+
+          * 有实时行情 → 用它（毫秒级 + 必然是最新价）；
+          * 无实时行情（离线/体彩/未订阅）→ 回退快照库（兼容旧行为）。
+
+        Returns:
+            `OddsSnapshot` 列表（实时路径下每个盘口只有一份）。
+        """
+        rt = self.realtime
+        if rt is not None:
+            try:
+                rows = rt.live.book(mid)
+            except AttributeError:
+                rows = None      # 旧版 Hub 无 LiveBook
+            if rows:
+                src = getattr(self.valuation, "source", None)
+                name = getattr(src, "display_source", "") or ""
+                # ⚠️ 必须补队名/联赛：推送只带赔率，不带队名。
+                # 若缺了，`decide_match` 从 `snaps[0]` 取的 home/away
+                # 会是空串，买入建议的中文标签就会退化成「主队/客队」
+                # （用户明确要求「xx队上半场-1」这种带队名的写法）。
+                home, away, league = self._match_names(mid)
+                live = snapshots_from_live(
+                    rows, mid, source=name,
+                    match=SimpleNamespace(tournament=league, home=home,
+                                          away=away))
+                if live:
+                    return live
+        return self.valuation._snapshots_of(mid)
+
+    def _match_names(self, mid: str) -> Tuple[str, str, str]:
+        """从目录名索引取 `(home, away, league)`；未知则返回空串。
+
+        用 `match_index()`（仅扫目录名，实测 0.09s 且带 TTL 缓存），
+        而不是 `list_matches()`（要读 6.5 万个快照文件，14s）。
+        """
+        try:
+            for row in self.valuation.match_index():
+                if str(row.get("match_id")) == str(mid):
+                    return (str(row.get("home") or ""),
+                            str(row.get("away") or ""),
+                            str(row.get("league") or ""))
+        except Exception:  # noqa: BLE001 - 队名缺失只影响展示，不阻断决策
+            pass
+        return "", "", ""
+
     def _build_context(self, match: Mapping[str, Any]) -> Dict[str, Any]:
         """构造交给决策引擎/LLM 的上下文（**严防比分泄漏**）。
 
@@ -1163,36 +1234,96 @@ class AnalysisService:
         return seen <= self.config.max_live_age_s
 
     def live_match_ids(self) -> Optional[set]:
-        """从数据源赛程取**真实进行中**的赛事 ID 集合（`ms == 1`）。
+        """真实**进行中**的赛事 ID 集合。
 
-        为何不能直接用 `list_matches()` 的 `state`：
-        那个 `state` 是**快照时效**派生的（active/stale/delisted），
-        与比赛真实是否进行中无关。实测：乐鱼真实进行中足球 44 场，
-        用快照 state 筛选只能命中 2 场，**漏掉 42 场**。
+        ## 两条数据源（按可靠性排序）
+
+        1. **推送流（首选回退）**：`RealtimeHub` 收到行情的场次就是真的在滚球。
+           这是最接近乐鱼 App 自身行为的判据 —— 用户报告「leyu 显示 67 场但
+           系统只统计 34」时，正是因为早期只依赖第 2 条而它挂了。
+        2. **REST 赛程（优先）**：`source.schedule()` 的 `ms == 1`，语义最明确。
+
+        为何不能只用 `list_matches()` 的 `state`：那个 `state` 是**快照时效**
+        派生的（active/stale/delisted），与比赛真实是否进行中无关。实测：
+        乐鱼真实进行中足球 44 场，用快照 state 筛选只能命中 2 场。
+
+        ## 为何必须加推送回退（本项目真实故障）
+
+        会话过期时 `schedule()` 抛 `SessionError` → 早期实现直接返回 `None`
+        → 调用方退化成按快照 `state` 过滤（只看时效，不看是否在踢）
+        → 用户看到「34 场 vs leyu 67 场」且混入大量已结束场次。
+        而与此同时**推送链路是好的**（实测 51 万次赔率更新、订阅正常滚动），
+        它本来就能告诉我们“哪些场子现在真的在动”。
 
         Returns:
-            真实进行中的 mid 集合；无法获取赛程时返回 None
+            进行中 mid 集合；**两条源都不可用时返回 None**
             （调用方应回退到旧行为）。
         """
         source = getattr(self.valuation, "source", None)
-        if source is None or not hasattr(source, "schedule"):
-            return None
         # 缓存一段很短时间：候选选取在一轮里可能被调多次
         now = time.time()
         cached = getattr(self, "_live_cache", None)
         if cached is not None and now - cached[0] < 30.0:
-            return cached[1]
-        try:
-            schedule = source.schedule()
-        except Exception:  # noqa: BLE001 - 取不到就用回退策略，不中断决策
-            return None
-        # 只取**足球**（本项目是足球估值系统）：
-        # 乐鱼同一个网关也返回篮球/网球/排球等，不过滤会带入大量
-        # 无法映射的盘口（实测 60 场里 124 条映射告警全来自非足球）。
-        live = {m.mid for m in schedule
-                if m.is_live and m.sport_id == SOCCER_SPORT_ID}
+            return cached[1]  # type: ignore[return-value]
+
+        live: Optional[set] = None
+        err = ""
+        if source is not None and hasattr(source, "schedule"):
+            try:
+                schedule = source.schedule()
+            except Exception as exc:  # noqa: BLE001 - 取不到就用推送回退
+                err = "%s: %s" % (type(exc).__name__, exc)
+            else:
+                # 只取**足球**（本项目是足球估值系统）：乐鱼同一网关也返回
+                # 篮球/网球/排球等，不过滤会带入大量无法映射的盘口。
+                live = {m.mid for m in schedule
+                        if m.is_live and m.sport_id == SOCCER_SPORT_ID}
+
+        if live is None:
+            # 回退：用推送流见过的场次（它们现在真的在跳赔）
+            live = self._live_ids_from_push()
+            if live is not None:
+                self._live_source = "push"
+                self._live_error = err
+            else:
+                self._live_source = "none"
+                self._live_error = err or "无可用数据源"
+        else:
+            self._live_source = "schedule"
+            self._live_error = ""
+
         self._live_cache = (now, live)
         return live
+
+    def _live_ids_from_push(self) -> Optional[set]:
+        """从推送流推导进行中赛事（`LiveBook` 留存的最新赔率表）。
+
+        过滤规则（为避免把刚结束的场留在列表里）：
+          * 排除 Hub 已收到结束通知（`C109`）的场；
+          * 排除比分推送已超过 `stale_score_s` 的场（无比分推送则保留，
+            因为部分低级别赛事上游不推比分）。
+
+        Returns:
+            mid 集合；Hub 未启用或无行情时返回 None。
+        """
+        rt = self.realtime
+        if rt is None:
+            return None
+        try:
+            mids = list(rt.live.live_mids())
+        except AttributeError:
+            return None       # 旧版 Hub 无 LiveBook
+        if not mids:
+            return None
+        out: set = set()
+        for mid in mids:
+            try:
+                if rt.is_finished(mid):
+                    continue
+            except Exception:  # noqa: BLE001 - 单个场次判定失败不影响其余
+                pass
+            out.add(str(mid))
+        return out
 
     def candidates(
         self,
@@ -1318,7 +1449,8 @@ class AnalysisService:
             items: List[Tuple[str, str, str, str, List[Any], Any, Dict[str, Any]]] = []
             for m in cands:
                 mid = str(m.get("match_id"))
-                snaps = self.valuation._snapshots_of(mid)
+                # 优先本地实时表（用户要求：查询读本地异步数据）
+                snaps = self._snapshots_for(mid)
                 if not snaps:
                     continue
                 trend = self.realtime.trend(mid) if self.realtime else None
@@ -1427,6 +1559,16 @@ class AnalysisService:
             },
             "cycle": dict(self.cycle_stats),
             "scheduler": self.scheduler_health(),
+            # 进行中覆盖的可观测性：用户要能自己查「为什么比 leyu 少」
+            "live": {
+                "source": self._live_source or "未取样",
+                "count": (len(self._live_cache[1])
+                          if self._live_cache and self._live_cache[1] is not None
+                          else None),
+                "age_s": (round(time.time() - self._live_cache[0], 1)
+                          if self._live_cache else None),
+                "error": self._live_error,
+            },
         }
         if self.realtime is not None:
             out["realtime"] = self.realtime.health()

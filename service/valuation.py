@@ -53,6 +53,45 @@ LEYU_SOURCE_NAME = "乐鱼API"
 #: 体彩源展示名（保留作为可选数据源与回归对照）
 DEFAULT_SOURCE = "体彩官方API"
 
+#: 目录名赛事清单（`match_index()`）的缓存 TTL（秒）。
+#: 扫描实测 0.09s（3111 个目录），TTL 只用于避免同一页面的重复调用。
+_INDEX_TTL_S = 30.0
+
+
+def _parse_match_dirname(name: str) -> Optional[Tuple[str, str, str]]:
+    """解析快照目录名 → `(match_id, home, away)`；无法解析返回 None。
+
+    目录名格式由 `SnapshotStore.match_dir` 决定：
+
+        <match_id>_<home>_vs_<away>
+
+    ⚠️ **队名本身可能含下划线**（实测联赛目录就有 33 个带 `_`），
+    因此不能用 `split('_')` 盲拆。本函数只按**第一个下划线**取 mid，
+    再在剩余部分中找 `_vs_` 分隔符：
+
+      * mid 是纯数字串（乐鱼 mid 实测为 5~19 位数字），带校验；
+      * `_vs_` 取**最后一个**出现位置 —— 万一某队名内部含 `_vs_`，
+        靠近末尾的那个才是真正的分隔符。
+
+    Args:
+        name: 目录名（如 `5726509_维拉斯克斯_vs_科利纳`）。
+
+    Returns:
+        `(mid, home, away)`；格式不符时 None（宁可漏一个，不可错拆）。
+    """
+    text = str(name or "")
+    head, sep, rest = text.partition("_")
+    if not sep or not head.isdigit():
+        return None
+    pos = rest.rfind("_vs_")
+    if pos <= 0:
+        return None
+    home = rest[:pos]
+    away = rest[pos + len("_vs_"):]
+    if not home or not away:
+        return None
+    return head, home, away
+
 #: 存储指纹 TTL（秒）。同一轮决策内几十次 `_all_snapshots()` 共享一次
 #: 目录扫描（实测单次 rglob 2780 个索引目录要 0.55s）。
 #:
@@ -205,6 +244,10 @@ class ValuationService:
         self._stats_at: float = 0.0
         #: 每份缓存对应的 `match_id -> 快照下标` 索引（避免逐场扫全表）
         self._snap_by_match: Optional[Dict[str, List[int]]] = None
+        #: 仅由目录名构建的赛事清单缓存（`match_index()`）：
+        #: `(列表, 取时时刻)`。用于 `/board` 首屏避免全库读盘。
+        self._index_cache: Optional[List[Dict[str, Any]]] = None
+        self._index_at: float = 0.0
         self._cache_lock = threading.RLock()
 
         if source_obj is not None:
@@ -466,6 +509,66 @@ class ValuationService:
         return res
 
     # -- 查询 ---------------------------------------------------------------
+
+    def match_index(self) -> List[Dict[str, Any]]:
+        """仅扫**目录名**得到赛事清单（**不读任何快照文件**）。
+
+        ## 为何需要（用户报告的问题 3：实时盘口加载过慢）
+
+        `/board` 原来调 `list_matches()` → `_all_snapshots()`，后者要读
+        6.5 万个 JSON 文件（实测 **14s**，且会撑满一个 CPU 核）。
+        但列表页真正需要的只是「有哪些场、队名、联赛」——
+        这些信息**全在目录名里**（`<mid>_<home>_vs_<away>`）。
+
+        实测成本对比（本仓库真实数据）：
+
+            scan dirnames  : 0.09s  (3111 个赛事目录)
+            _all_snapshots : 14.0s  (65942 个快照文件)
+
+        即 **150 倍** 差距。列表先出骨架、盘口再从实时表按场取，
+        页面的首屏就不必等全库读盘。
+
+        Returns:
+            赛事字典列表（`match_id`/`league`/`home`/`away`），
+            按 `(league, match_id)` 排序保证输出可复现。
+        """
+        base = self.store.root / safe_name(self.source.display_source)
+        if not base.exists():
+            return []
+        # 目录名扫描很便宜，但仍加一个短 TTL：同一页面多次调用（如轮询）
+        # 不必重复走文件系统。
+        now = time.monotonic()
+        if (self._index_cache is not None
+                and (now - self._index_at) <= _INDEX_TTL_S):
+            return self._index_cache
+
+        out: List[Dict[str, Any]] = []
+        try:
+            league_dirs = [d for d in base.iterdir() if d.is_dir()]
+        except OSError:
+            return []
+        for league_dir in league_dirs:
+            league = league_dir.name
+            try:
+                match_dirs = [d for d in league_dir.iterdir() if d.is_dir()]
+            except OSError:
+                continue
+            for md in match_dirs:
+                parsed = _parse_match_dirname(md.name)
+                if parsed is None:
+                    continue
+                mid, home, away = parsed
+                out.append({
+                    "match_id": mid,
+                    "league": league,
+                    "home": home,
+                    "away": away,
+                })
+        out.sort(key=lambda r: (r["league"], r["match_id"]))
+        with self._cache_lock:
+            self._index_cache = out
+            self._index_at = now
+        return out
 
     def list_matches(
         self,

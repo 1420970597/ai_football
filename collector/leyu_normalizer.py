@@ -57,7 +57,15 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from core.markets import AH, HAD, MarketSpec, OU
 from core.models import OddsSnapshot, SnapshotState, utcnow
 
-from .leyu_client import LEYUMatch, MarketQuote, OddsQuote
+from .leyu_client import (
+    HPT_HANDICAP,
+    HPT_TOTAL,
+    HPT_WINNER,
+    LEYUMatch,
+    MarketQuote,
+    OddsQuote,
+    _normalize_outcome,
+)
 
 __all__ = [
     "DEFAULT_SOURCE",
@@ -68,9 +76,11 @@ __all__ = [
     "MARKET_CHPID_OU",
     "MARKET_CHPID_1H_OU",
     "DEFAULT_STALE_AFTER",
+    "CHPID_TO_HPT",
     "spec_for_market_quote",
     "snapshots_from_market",
     "snapshots_from_match",
+    "snapshots_from_live",
     "normalize_leyu_matches",
 ]
 
@@ -91,6 +101,19 @@ MARKET_CHPID_1H_OU = "18"   # 上半场大小
 #: 默认陈旧阈值：报价超过该时长未见更新即视为 STALE（秒）
 #: 依据：WebSocket 正常推送下赔率秒级刷新，300s 未动可判定链路或该盘口已冻结。
 DEFAULT_STALE_AFTER = 300.0
+
+
+def _as_float(value: object, default: float = 0.0) -> float:
+    """容错浮点转换（非数值/非有限值均回退 default）。
+
+    实时表里的赔率可能来自反序列化或测试替身，直接 `float()` 会抛异常
+    并中断整场还原；展示/决策层不应因一个脏字段崩掉。
+    """
+    try:
+        out = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return out if math.isfinite(out) else default
 
 # --------------------------------------------------------------------------- #
 # 线值解析
@@ -126,6 +149,20 @@ def parse_hv(hv: object) -> Optional[float]:
         return float(text)
     except ValueError:
         return None
+
+
+#: `chpid` → `hpt`（盘口类型）。由 `spec_for_market_quote` 的分支反推得出，
+#: 保证与那里保持一致：独赢=1 / 让球=2 / 大小=5。
+#: 实时推送（`PriceTick`）只带 `chpid`/`hv`/`ot`，不带 `hpt`，
+#: 因此需要这张反查表才能把实时行情还原成快照。
+CHPID_TO_HPT: Mapping[str, int] = {
+    MARKET_CHPID_1X2: HPT_WINNER,
+    MARKET_CHPID_1H_1X2: HPT_WINNER,
+    MARKET_CHPID_AH: HPT_HANDICAP,
+    MARKET_CHPID_1H_AH: HPT_HANDICAP,
+    MARKET_CHPID_OU: HPT_TOTAL,
+    MARKET_CHPID_1H_OU: HPT_TOTAL,
+}
 
 
 def spec_for_market_quote(mq: MarketQuote) -> Optional[MarketSpec]:
@@ -283,6 +320,108 @@ def snapshots_from_market(
     except (ValueError, TypeError) as exc:
         sink.append("赛事 %s 盘口 %s：构造快照失败 %s" % (match.mid, spec.code, exc))
         return []
+
+
+def snapshots_from_live(
+    live: Any,
+    mid: str,
+    match: Optional[LEYUMatch] = None,
+    source: str = DEFAULT_SOURCE,
+    issues: Optional[List[str]] = None,
+) -> List[OddsSnapshot]:
+    """把 **内存实时表**（`LiveBook.book(mid)`）还原成快照列表。
+
+    ## 为何需要这个“反向”转换
+
+    用户要求：「系统应当以 leyu 的 api 更新频率做数据采集，存储至本地，
+    查询的时候读取本地异步数据」。
+
+    推送链路（`C105` 周期性全量快照）本身就是「以乐鱼频率更新」的，
+    且每条都带每个选项的**当前赔率**。以前这些当前值只用于算「变动」
+    （走势），算完即丢；查询时再去翻磁盘上的不可变历史，
+    导致两个后果：
+
+      * **慢**：冷启动要扫 6.5 万个文件（实测 45s）；
+      * **取到过期价**：一场比赛同盘口有几十份历史快照，
+        实测 `5726509` 的 `OU(2.5)` 重复 15 次（1.94 → 3.32），
+        早期实现会挑到 1.8 小时前的旧价，拿一个**已结算**的盘口
+        （比分已 1:3）给出「买入」建议。
+
+    本函数把内存实时表翻译回 `OddsSnapshot`，于是看板与决策都能
+    「读本地内存」，既不碰磁盘、也保证用的是**最新**价。
+
+    Args:
+        live: `LiveQuote` 序列（来自 `hub.live.book(mid)`）。
+        mid: 赛事 ID。
+        match: 可选赛事信息（补队名/联赛）。内存表只存赔率，
+            没有队名；缺省时字段留空（展示层会回退为「主队/客队」）。
+        source: 数据来源展示名。
+        issues: 告警收集。
+
+    Returns:
+        `OddsSnapshot` 列表（每个盘口线一份）。
+    """
+    sink = issues if issues is not None else []
+    #: (chpid, hv) -> {outcome: decimal}
+    grouped: Dict[Tuple[str, str], Dict[str, float]] = {}
+    for row in live or ():
+        chpid = str(getattr(row, "chpid", "") or "")
+        hv = str(getattr(row, "hv", "") or "")
+        ot = str(getattr(row, "ot", "") or "")
+        odds = _as_float(getattr(row, "odds", 0.0))
+        if odds <= 1.0:
+            continue                      # 非法赔率不得进入计算
+        hpt = CHPID_TO_HPT.get(chpid)
+        if hpt is None:
+            sink.append("实时表：未知 chpid=%s（%s/%s）已跳过" % (chpid, mid, hv))
+            continue
+        outcome = _normalize_outcome(ot, hpt)
+        if outcome == "other":
+            sink.append("实时表：无法识别 ot=%r（chpid=%s）已跳过"
+                        % (ot, chpid))
+            continue
+        grouped.setdefault((chpid, hv), {})[outcome] = odds
+
+    out: List[OddsSnapshot] = []
+    for (chpid, hv), by_outcome in grouped.items():
+        # 复用一个“临时 MarketQuote”以复用既有映射逻辑（单一事实源）：
+        # 盘口代码、结果顺序、线值解析都只在那里实现一次。
+        quotes = tuple(
+            OddsQuote(oid="", outcome=oc, label=oc, decimal=od, line=hv)
+            for oc, od in by_outcome.items())
+        mq = MarketQuote(chpid=chpid, name="", hpt=CHPID_TO_HPT[chpid],
+                         hv=hv, quotes=quotes)
+        spec = spec_for_market_quote(mq)
+        if spec is None:
+            continue
+        odds, missing = _ordered_odds(mq, spec)
+        if odds is None:
+            sink.append("实时表 %s %s：缺结果 %s，已跳过"
+                        % (mid, spec.code, ",".join(missing)))
+            continue
+        meta: Dict[str, Any] = {
+            "数据来源": source,
+            "leyu_chpid": chpid,
+            "leyu_hv": hv,
+            "leyu_hpt": CHPID_TO_HPT[chpid],
+            "实时来源": "push",
+        }
+        if spec.line is not None:
+            meta["盘口线"] = spec.line
+        out.append(OddsSnapshot(
+            match_id=str(mid),
+            league=(match.tournament if match else ""),
+            home=(match.home if match else ""),
+            away=(match.away if match else ""),
+            market=spec.code,
+            outcomes=spec.outcomes,
+            odds=odds,
+            state=SnapshotState.ACTIVE,
+            captured_at=utcnow(),
+            source=source,
+            metadata=meta,
+        ))
+    return out
 
 
 def snapshots_from_match(

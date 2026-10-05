@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -196,3 +198,166 @@ class TestNormalizeMatches(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestLiveBookToSnapshots(unittest.TestCase):
+    """内存实时表 → 快照（用户要求：查询读本地，不扫快照库）。
+
+    背景（用户报告问题 2/3）：
+      * 决策拿 1.8 小时前的旧价算出「全场进球数>2.5 @3.32」的买入建议，
+        而该场比分已 1:3（4 球）——那个盘口早已结算；
+      * `/board` 冷启动要扫 6.5 万个快照文件（实测 14~45s）。
+
+    修法：推送（`C105` 周期性全量快照）里本来就有**当前赔率**，
+    在 Hub 内存里留一份；查询时直接翻译成快照。
+    """
+
+    @staticmethod
+    def _tick(mid="m1", chpid="2", hv="2.5", oid="o1", ot="Over",
+              odds=1.9, ts=1):
+        from collector.leyu_realtime import PriceTick
+        return PriceTick(mid=mid, chpid=chpid, hid="h", hv=hv, oid=oid,
+                         ot=ot, old_ov=0.0, new_ov=odds, ts_ms=ts)
+
+    def test_ou_maps_to_snapshot(self) -> None:
+        from collector.leyu_normalizer import snapshots_from_live
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick(oid="o1", ot="Over", odds=1.9),
+                       self._tick(oid="o2", ot="Under", odds=2.0)])
+        out = snapshots_from_live(b.book("m1"), "m1")
+        self.assertEqual(len(out), 1)
+        s = out[0]
+        self.assertEqual(s.market, "OU(2.5)")
+        self.assertEqual(s.outcomes, ("over", "under"))
+        self.assertAlmostEqual(s.odds[0], 1.9, places=4)
+        self.assertEqual(s.metadata["leyu_hv"], "2.5")
+
+    def test_ah_maps_with_signed_line(self) -> None:
+        from collector.leyu_normalizer import snapshots_from_live
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick(chpid="4", hv="-1", oid="h", ot="1",
+                                  odds=1.85),
+                       self._tick(chpid="4", hv="-1", oid="a", ot="2",
+                                  odds=1.95)])
+        out = snapshots_from_live(b.book("m1"), "m1")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].market, "AH(-1)")
+        self.assertEqual(out[0].outcomes, ("home", "away"))
+
+    def test_half_markets_are_distinct(self) -> None:
+        from collector.leyu_normalizer import snapshots_from_live
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick(chpid="18", hv="1", oid="a", ot="Over",
+                                  odds=1.9),
+                       self._tick(chpid="18", hv="1", oid="b", ot="Under",
+                                  odds=2.0)])
+        out = snapshots_from_live(b.book("m1"), "m1")
+        self.assertEqual(out[0].market, "OU_1H(1)")
+
+    def test_illegal_odds_are_skipped(self) -> None:
+        """<=1.0 的赔率非法，不得进入计算（否则会产出虚假 edge）。"""
+        from collector.leyu_normalizer import snapshots_from_live
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick(oid="a", ot="Over", odds=0.5),
+                       self._tick(oid="b", ot="Under", odds=2.0)])
+        out = snapshots_from_live(b.book("m1"), "m1")
+        self.assertEqual(out, [])       # 缺 over → 整盘口跳过
+
+    def test_unknown_chpid_reported_not_crash(self) -> None:
+        from collector.leyu_normalizer import snapshots_from_live
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick(chpid="999", oid="x", ot="Over")])
+        issues: list = []
+        out = snapshots_from_live(b.book("m1"), "m1", issues=issues)
+        self.assertEqual(out, [])
+        self.assertTrue(issues)
+
+    def test_unknown_ot_is_skipped(self) -> None:
+        from collector.leyu_normalizer import snapshots_from_live
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick(oid="x", ot="Weird")])
+        issues: list = []
+        snapshots_from_live(b.book("m1"), "m1", issues=issues)
+        self.assertTrue(issues)
+
+
+class TestLiveBook(unittest.TestCase):
+    """内存实时表 + 本地落盘（用户要求：采集落本地，查询读本地）。"""
+
+    @staticmethod
+    def _tick(mid="m1", oid="o1", odds=1.9):
+        from collector.leyu_realtime import PriceTick
+        return PriceTick(mid=mid, chpid="2", hid="h", hv="2.5", oid=oid,
+                         ot="Over", old_ov=0.0, new_ov=odds, ts_ms=1)
+
+    def test_upsert_and_read(self) -> None:
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick(odds=1.9)])
+        self.assertEqual(b.n_matches(), 1)
+        self.assertEqual(b.n_rows(), 1)
+        self.assertEqual(b.live_mids(), ["m1"])
+        self.assertAlmostEqual(b.book("m1")[0].odds, 1.9, places=4)
+
+    def test_latest_value_wins(self) -> None:
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick(odds=1.9)])
+        b.upsert_many([self._tick(odds=1.5)])
+        self.assertEqual(b.n_rows(), 1)
+        self.assertAlmostEqual(b.book("m1")[0].odds, 1.5, places=4)
+
+    def test_drop_match(self) -> None:
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick(), self._tick(oid="o2")])
+        self.assertEqual(b.drop_match("m1"), 2)
+        self.assertEqual(b.book("m1"), [])
+
+    def test_save_and_load_roundtrip(self) -> None:
+        """重启后立即有本地数据，无需重扫快照库。"""
+        from collector.leyu_realtime import LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "live.json")
+            b = LiveBook(p)
+            b.upsert_many([self._tick(odds=1.9)])
+            self.assertTrue(b.save(force=True))
+            b2 = LiveBook(p)
+            self.assertEqual(b2.load(), 1)
+            self.assertAlmostEqual(b2.book("m1")[0].odds, 1.9, places=4)
+
+    def test_load_missing_file_is_safe(self) -> None:
+        from collector.leyu_realtime import LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(LiveBook(os.path.join(d, "nope.json")).load(), 0)
+
+    def test_load_corrupt_file_is_safe(self) -> None:
+        from collector.leyu_realtime import LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "live.json")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("{not json")
+            b = LiveBook(p)
+            self.assertEqual(b.load(), 0)
+            self.assertTrue(b.last_error)
+
+    def test_save_throttled_unless_forced(self) -> None:
+        from collector.leyu_realtime import LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            b = LiveBook(os.path.join(d, "live.json"))
+            b.upsert_many([self._tick()])
+            self.assertTrue(b.save(force=True))
+            self.assertFalse(b.save())      # 5s 节流内不重复写
+
+    def test_no_path_means_memory_only(self) -> None:
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook(None)
+        b.upsert_many([self._tick()])
+        self.assertFalse(b.save(force=True))
+        self.assertEqual(b.load(), 0)

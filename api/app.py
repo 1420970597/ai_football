@@ -711,7 +711,8 @@ class ApiApp:
         rt = self.analysis.realtime
 
         rows: List[Dict[str, Any]] = []
-        for m in self.svc.list_matches(league=league):
+        for m in self._board_candidates(league=league, live_ids=live_ids,
+                                        only_live=only_live, rt=rt):
             mid = str(m.get("match_id") or "")
             state = str(m.get("state") or "")
             if state == "delisted":
@@ -772,6 +773,114 @@ class ApiApp:
                          else {"running": False}),
             "matches": rows,
         }
+
+    # -- 看板候选：读**本地实时表**，不扫快照库（用户要求 3） ---------------
+
+    def _board_candidates(self, league: Optional[str],
+                         live_ids: Optional[set], only_live: bool,
+                         rt: Any) -> List[Dict[str, Any]]:
+        """构造看板候选场次：**只读本地实时表 + 目录名索引**。
+
+        ## 为何不用 `svc.list_matches()`（用户报告问题 3）
+
+        `list_matches()` 会调 `_all_snapshots()` 读 6.5 万个快照文件
+        （实测 **14s**，冷启动叠加到 45s）。而实时看板真正需要的是：
+
+          * 有哪些场、队名、联赛 → **目录名里就有**（扫 0.09s）；
+          * 现在什么赔率 → **推送已经推过了**（`LiveBook` 内存表）。
+
+        两者都是毫秒级，因此看板不再需要碰磁盘上的历史快照。
+
+        Args:
+            league: 限定联赛。
+            live_ids: `live_match_ids()` 的结果（可能为 None）。
+            only_live: 只看进行中。
+            rt: `RealtimeHub`（可能为 None）。
+
+        Returns:
+            与 `list_matches()` 兼容的字典列表（额外带 `_live_odds`）。
+        """
+        from collector.leyu_normalizer import snapshots_from_live
+
+        # 没有实时推送时（离线语料/体彩源/测试）根本没有“本地实时表”
+        # 可用，此时只能读快照库 —— 这是唯一可行路径，不是性能回退。
+        if rt is None:
+            return list(self.svc.list_matches(league=league))
+
+        names = {r["match_id"]: r for r in self.svc.match_index()}
+
+        # 取实时表（旧版 Hub 没有 `live` 属性 → 视为无行情，走回退路径）。
+        # 用 getattr 而不是 `rt.live`：既兼容旧 Hub，也让类型检查明确
+        # “这个属性可能存在也可能不存在”。
+        live_book: Any = getattr(rt, "live", None)
+
+        # 1) 有实时行情的场次（看板主体）；顺序按 mid 保证输出可复现
+        live_mids: List[str] = []
+        if live_book is not None:
+            try:
+                live_mids = list(live_book.live_mids())
+            except (AttributeError, TypeError):
+                live_book = None    # 旧版/异常实现 → 降级为快照库
+        # 无任何实时行情时（推送刚启动/未订阅到）：同样无法读内存表，
+        # 退回快照库，保证看板仍可用（而非空白页）。
+        if not live_mids and not only_live:
+            return list(self.svc.list_matches(league=league))
+        out: List[Dict[str, Any]] = []
+        seen: set = set()
+        src_name = self.svc.source.display_source
+        for mid in live_mids:
+            if mid in seen:
+                continue
+            seen.add(mid)
+            nm = names.get(mid) or {}
+            lg = str(nm.get("league") or "")
+            if league and lg != league:
+                continue
+            snaps = snapshots_from_live(live_book.book(mid), mid,
+                                        source=src_name)
+            odds_by: Dict[str, List[float]] = {}
+            outs_by: Dict[str, List[str]] = {}
+            for s in snaps:
+                odds_by[s.market] = [round(o, 4) for o in s.odds]
+                outs_by[s.market] = list(s.outcomes)
+            out.append({
+                "match_id": mid,
+                "league": lg,
+                "home": str(nm.get("home") or ""),
+                "away": str(nm.get("away") or ""),
+                "date": "",
+                "time": "",
+                # 有实时行情 → 就是在滚球（state 供前端样式用）
+                "state": "active",
+                "markets": sorted(odds_by),
+                "latest_odds": odds_by,
+                "latest_outcomes": outs_by,
+            })
+
+        # 2) 兜底：无实时行情的场次（未开赛/未被订阅）。
+        #    只给出名称，**不读快照**，避免把看板拖慢；赔率留空由前端标「无行情」。
+        if not only_live:
+            for mid, nm in names.items():
+                if mid in seen:
+                    continue
+                lg = str(nm.get("league") or "")
+                if league and lg != league:
+                    continue
+                is_live = (str(mid) in live_ids) if live_ids is not None \
+                    else False
+                out.append({
+                    "match_id": mid,
+                    "league": lg,
+                    "home": str(nm.get("home") or ""),
+                    "away": str(nm.get("away") or ""),
+                    "date": "",
+                    "time": "",
+                    "state": "active" if is_live else "stale",
+                    "markets": [],
+                    "latest_odds": {},
+                    "latest_outcomes": {},
+                })
+        return out
 
     @staticmethod
     def _fill_live_state(row: Dict[str, Any], mid: str, rt: Any) -> None:

@@ -1040,3 +1040,145 @@ class TestLlmBudgetAndTimeout(unittest.TestCase):
         r = e.decide_match(_three_markets())
         self.assertEqual(r.decision, DECISION_NO_LLM)
         self.assertIn("超时", r.llm_reason)
+
+
+class TestStaleSnapshotDedupe(unittest.TestCase):
+    """**严重回归**：每个盘口只能取最新快照，否则会凭过期赔率造假注单。
+
+    实测故障（用户报告）：维拉斯克斯 vs 科利纳 比分已 1:3（4 球），
+    `全场进球数>2.5` 早已结算，系统却给出「买入 +7.57% @ 3.32」——
+    因为 `compute_markets` 遍历了该场 **216 条历史快照**，
+    其中 `OU(2.5)` 重复 **15** 次（赔率 1.94→3.32），最终挑到
+    1.8 小时前的旧价。这种注单**对应不上任何可成交的市场**。
+    """
+
+    def _snap(self, market, odds, minutes_ago, hv="", chpid="18"):
+        from datetime import timedelta
+        return OddsSnapshot(
+            match_id="m1", league="L", home="A", away="B", market=market,
+            outcomes=("over", "under"), odds=odds,
+            captured_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago),
+            metadata={"leyu_chpid": chpid, "leyu_hv": hv})
+
+    def test_dedupe_keeps_newest_per_market(self) -> None:
+        from service.match_decision import _latest_per_market
+        snaps = [self._snap("OU(2.5)", (1.94, 1.88), 120, "2.5"),
+                 self._snap("OU(2.5)", (3.32, 1.25), 5, "2.5"),
+                 self._snap("OU(2.5)", (2.50, 1.50), 60, "2.5")]
+        out = _latest_per_market(snaps)
+        self.assertEqual(len(out), 1)
+        self.assertAlmostEqual(out[0].odds[0], 3.32, places=4)
+
+    def test_different_lines_kept_separate(self) -> None:
+        """乐鱼把 OU 的不同线拆成独立市场，风险不同，不得合并。"""
+        from service.match_decision import _latest_per_market
+        snaps = [self._snap("OU(2.5)", (3.32, 1.25), 5, "2.5"),
+                 self._snap("OU(3)", (2.11, 1.72), 5, "3"),
+                 self._snap("OU(2.5/3)", (2.60, 1.45), 5, "2.5/3")]
+        out = _latest_per_market(snaps)
+        self.assertEqual(len(out), 3)
+
+    def test_compute_markets_no_longer_duplicates(self) -> None:
+        """端到端：216 条历史 → 每盘口一份，不再重复计算。"""
+        e = _engine(None)
+        snaps = _three_markets()
+        # 为每个盘口追加 5 份更早的历史快照
+        from datetime import timedelta
+        hist = []
+        for i in range(5):
+            for s in snaps:
+                hist.append(OddsSnapshot(
+                    match_id=s.match_id, league=s.league, home=s.home,
+                    away=s.away, market=s.market, outcomes=s.outcomes,
+                    odds=s.odds,
+                    captured_at=s.captured_at - timedelta(minutes=10 * (i + 1)),
+                    metadata=dict(s.metadata or {})))
+        comps = e.compute_markets(list(hist) + list(snaps))
+        markets = [c.market for c in comps]
+        self.assertEqual(len(markets), len(set(markets)),
+                         "同一盘口不得出现多次：%s" % markets)
+        self.assertEqual(len(comps), 3)
+
+    def test_newest_price_is_the_one_used(self) -> None:
+        """必须用**最新**价，而不是列表里第一个（历史价）。"""
+        from datetime import timedelta
+        e = _engine(None)
+        old = OddsSnapshot(
+            match_id="m1", league="L", home="A", away="B", market="OU(2.5)",
+            outcomes=("over", "under"), odds=(3.32, 1.25),
+            captured_at=datetime.now(timezone.utc) - timedelta(hours=2))
+        new = OddsSnapshot(
+            match_id="m1", league="L", home="A", away="B", market="OU(2.5)",
+            outcomes=("over", "under"), odds=(1.05, 9.0),
+            captured_at=datetime.now(timezone.utc))
+        comps = e.compute_markets([old, new])
+        self.assertEqual(len(comps), 1)
+        self.assertAlmostEqual(comps[0].odds[0], 1.05, places=4)
+
+
+class TestStaleQuoteGuard(unittest.TestCase):
+    """**严重回归**：过期赔率不得产出买入建议（用户报告问题 2）。
+
+    实测：维拉斯克斯 vs 科利纳 比分已 1:3（4 球），
+    `全场进球数>2.5` 早已结算，系统却给出「买入 +7.57% @3.32」——
+    因为拿到的赔率来自 **4.6 小时前**（会话过期后快照停止刷新）。
+    这种注单对应不上任何可成交的市场，是**凭空造出的注单**。
+
+    因此「旧价」不是数据缺失，而是**不可交易**，必须硬拒。
+    """
+
+    def _snap(self, market, odds, hours_ago, hv="", chpid="18"):
+        from datetime import timedelta
+        return OddsSnapshot(
+            match_id="m1", league="L", home="A", away="B", market=market,
+            outcomes=("over", "under"), odds=odds,
+            captured_at=datetime.now(timezone.utc) - timedelta(hours=hours_ago),
+            metadata={"leyu_chpid": chpid, "leyu_hv": hv})
+
+    def test_stale_quote_is_rejected(self) -> None:
+        e = _engine(None, max_quote_age_s=600.0)
+        comps = e.compute_markets([self._snap("OU(2.5)", (3.32, 1.25), 4.6,
+                                              "2.5")])
+        self.assertEqual(comps, [], "4.6 小时前的赔率不得参与计算")
+        self.assertGreaterEqual(e.stats.get("stale_quotes", 0), 1)
+
+    def test_fresh_quote_is_kept(self) -> None:
+        e = _engine(None, max_quote_age_s=600.0)
+        comps = e.compute_markets([self._snap("OU(2.5)", (1.9, 1.9), 0.01,
+                                              "2.5")])
+        self.assertEqual(len(comps), 1)
+
+    def test_boundary_just_over_limit_rejected(self) -> None:
+        """略超阈值即拒（边界明确，不做“差不多就行”的模糊判断）。"""
+        e = _engine(None, max_quote_age_s=100.0)
+        snaps = [self._snap("OU(2.5)", (1.9, 1.9), 0.0, "2.5")]
+        # 手动把时间戳设为 101 秒前
+        from datetime import timedelta
+        old = OddsSnapshot(
+            match_id="m1", league="L", home="A", away="B", market="OU(2.5)",
+            outcomes=("over", "under"), odds=(1.9, 1.9),
+            captured_at=datetime.now(timezone.utc) - timedelta(seconds=101),
+            metadata={"leyu_chpid": "18", "leyu_hv": "2.5"})
+        self.assertEqual(e.compute_markets([old]), [])
+        self.assertEqual(len(e.compute_markets(snaps)), 1)
+
+    def test_none_timestamp_is_not_rejected(self) -> None:
+        """`captured_at` 缺失时不误杀（那是未知，不是过期）。"""
+        from service.match_decision import _snap_age_s
+
+        class _NoTime:
+            captured_at = None
+
+        # 用 cast 模拟“字段缺失的脏快照”：本用例验证的是容错分支，
+        # 不需要构造完整的 OddsSnapshot（它不允许 captured_at=None）。
+        self.assertIsNone(_snap_age_s(cast(Any, _NoTime())))
+
+    def test_fresh_and_stale_mixed_keeps_only_fresh(self) -> None:
+        """同一场旧/新混排：只留新鲜的那个（每个盘口仍只有一份）。"""
+        e = _engine(None, max_quote_age_s=600.0)
+        comps = e.compute_markets([
+            self._snap("OU(2.5)", (3.32, 1.25), 4.6, "2.5"),
+            self._snap("OU(2.5)", (1.90, 1.95), 0.02, "2.5"),
+        ])
+        self.assertEqual(len(comps), 1)
+        self.assertAlmostEqual(comps[0].odds[0], 1.90, places=4)

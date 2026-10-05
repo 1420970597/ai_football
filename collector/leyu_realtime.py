@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import os
 import threading
 import time
 from collections import deque
@@ -47,6 +48,25 @@ from typing import Any, Callable, Deque, Dict, List, Mapping, Optional, Sequence
 
 from .leyu_client import OV_SCALE
 from .leyu_ws import LEYUFeed
+
+#: 实时表落盘节流（秒）。
+#:
+#: 推送频率极高（实测一小时 16 万次赔率更新），逐条写盘会打满磁盘 IO；
+#: 取 5s 是一个兼顾「重启后数据足够新」与「写盘开销可忽略」的折中。
+_LIVE_SAVE_INTERVAL_S = 5.0
+
+
+def _live_snapshot_path(trend_root: Optional[str]) -> Optional[str]:
+    """由走势目录推出实时表落盘路径（与 `_trends` 同级）。
+
+    返回值 None 表示不落盘（未配置目录时，退化为纯内存表）。
+    """
+    if not trend_root:
+        return None
+    try:
+        return str(Path(trend_root).parent / "_live" / "live.json")
+    except (TypeError, ValueError):
+        return None
 
 __all__ = [
     "PriceTick",
@@ -176,6 +196,213 @@ class PriceTick:
             "delta_pct": round(self.delta_pct, 3),
             "direction": self.direction, "ts": self.ts_ms,
         }
+
+
+@dataclass
+class LiveQuote:
+    """某个可投注选项的**最新**赔率（内存实时表的一行）。
+
+    与 `PriceTick` 的区别：`PriceTick` 描述「一次变动」（用于走势），
+    而本对象描述「当前值」—— 看板与决策真正需要的后者。
+
+    为何要单独维护：全量快照库（`output/snapshots`）是**不可变历史**，
+    一场比赛同一盘口会累积几十份快照；直接查库既慢（冷启动实测 45s）
+    又会挑到过期价格（实测拿 1.8 小时前的 3.32 去算一个已结算的盘口）。
+    推送消息里本来就有**当前值**（`C105` 是周期性全量快照），
+    因此在 Hub 里存一份内存实时表，查询便退化为字典查找。
+    """
+
+    mid: str
+    chpid: str
+    hv: str
+    oid: str
+    ot: str
+    odds: float
+    ts_ms: int
+    #: 本机写入时刻（单调时钟不可回拨）；用于算“这个价多旧了”
+    at: float = 0.0
+
+    @property
+    def age_s(self) -> float:
+        return max(0.0, time.monotonic() - self.at) if self.at else 0.0
+
+
+class LiveBook:
+    """内存实时赔率表：`(mid, chpid, hv, oid) -> LiveQuote`。
+
+    ## 为何这是本项目最重要的性能修复
+
+    用户要求：「系统应当以 leyu 的 api 更新频率做数据采集，存储至本地，
+    查询的时候读取本地异步数据」。
+
+    推送链路本身就是「以乐鱼频率更新」的：实测 `C105` 是**周期性全量
+    快照**（`price_ticks` 一小时可达 16 万次），每条都带着每个选项的
+    **当前赔率**。以前这些值只被用来算「变动」（走势），算完就丢了；
+    查询时再去翻磁盘上的不可变历史（6.5 万个文件、一场 216 条快照），
+    既慢又容易取到过期价。
+
+    本类把推送里的当前值直接留存在内存：
+      * 写入：`_record_ticks` 时顺带 upsert（唯一写入点，不会漏）；
+      * 读取：`book(mid)` 返回该场每个盘口的当前赔率，O(盘口数)。
+
+    文件落盘不在这里做：`TrendStore` 已按场分文件持久化走势，
+    快照库仍由采集链路按盘口落库（供建模/回放）。本类只负责
+    「查询路径不再碰磁盘」。
+    """
+
+    def __init__(self, snapshot_path: Optional[str] = None) -> None:
+        self._rows: Dict[Tuple[str, str, str, str], LiveQuote] = {}
+        #: mid -> 该场当前活跃的 key 集合（便于整场读取，避免全表扫描）
+        self._by_mid: Dict[str, Dict[Tuple[str, str, str, str], None]] = {}
+        self._lock = threading.RLock()
+        self.updates = 0
+        #: 本地落盘路径（原子写）。重启后立即有数据，**无需重扫快照库**。
+        self.snapshot_path: Optional[Path] = (
+            Path(snapshot_path) if snapshot_path else None)
+        self.last_save_at = 0.0
+        self.last_error = ""
+
+    def upsert_many(self, ticks: Sequence[PriceTick]) -> None:
+        """写入/更新一批赔率（来自推送快照，**含未变动的项**）。"""
+        if not ticks:
+            return
+        now = time.monotonic()
+        with self._lock:
+            for t in ticks:
+                key = (t.mid, t.chpid, t.hv, t.oid)
+                self._rows[key] = LiveQuote(
+                    mid=t.mid, chpid=t.chpid, hv=t.hv, oid=t.oid, ot=t.ot,
+                    odds=float(t.new_ov), ts_ms=t.ts_ms, at=now)
+                self._by_mid.setdefault(t.mid, {})[key] = None
+            self.updates += len(ticks)
+
+    def drop_match(self, mid: str) -> int:
+        """移除某场全部行（比赛结束时调用，防止内存无限增长）。"""
+        with self._lock:
+            keys = self._by_mid.pop(str(mid), None)
+            if not keys:
+                return 0
+            for k in list(keys):
+                self._rows.pop(k, None)
+            return len(keys)
+
+    def book(self, mid: str) -> List[LiveQuote]:
+        """某场全部当前赔率（按盘口/线/选项排序，输出可复现）。"""
+        with self._lock:
+            keys = self._by_mid.get(str(mid))
+            if not keys:
+                return []
+            rows = [self._rows[k] for k in keys if k in self._rows]
+        rows.sort(key=lambda r: (r.chpid, r.hv, r.ot, r.oid))
+        return rows
+
+    def live_mids(self) -> List[str]:
+        """当前有行情的赛事 ID（按是否活跌排序无意义，此处保证稳定）。"""
+        with self._lock:
+            return sorted(self._by_mid)
+
+    def n_matches(self) -> int:
+        with self._lock:
+            return len(self._by_mid)
+
+    def n_rows(self) -> int:
+        with self._lock:
+            return len(self._rows)
+
+    def health(self) -> Dict[str, Any]:
+        with self._lock:
+            newest = max((r.at for r in self._rows.values()), default=0.0)
+            oldest = min((r.at for r in self._rows.values()), default=0.0)
+        return {
+            "matches": self.n_matches(),
+            "rows": self.n_rows(),
+            "updates": self.updates,
+            "newest_age_s": (round(time.monotonic() - newest, 1) if newest else None),
+            "oldest_age_s": (round(time.monotonic() - oldest, 1) if oldest else None),
+            "persist_path": (str(self.snapshot_path)
+                             if self.snapshot_path else ""),
+            "last_save_age_s": (round(time.monotonic() - self.last_save_at, 1)
+                                if self.last_save_at else None),
+            "last_error": self.last_error,
+        }
+
+    # -- 本地持久化（用户要求：采集落本地，查询读本地） ---------------------
+
+    def save(self, force: bool = False) -> bool:
+        """把当前实时表**原子写入**本地 JSON。
+
+        为何需要：用户明确要求「以 leyu 的 api 更新频率做数据采集，
+        存储至本地，查询的时候读取本地异步数据」。内存表解决了一次运行
+        期间的查询速度，而落盘则使**重启后立即有数据** —— 不必等第一批
+        推送，也不必重扫 6.5 万个历史快照（实测 14~45s）。
+
+        Args:
+            force: 忽略节流（启动/退出时用）。
+
+        Returns:
+            是否真的写盘。
+        """
+        path = self.snapshot_path
+        if path is None:
+            return False
+        now = time.monotonic()
+        if not force and (now - self.last_save_at) < _LIVE_SAVE_INTERVAL_S:
+            return False
+        with self._lock:
+            payload = {
+                "version": 1,
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "rows": [[r.mid, r.chpid, r.hv, r.oid, r.ot,
+                          round(r.odds, 6), int(r.ts_ms)]
+                         for r in self._rows.values()],
+            }
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, ensure_ascii=False)
+            os.replace(tmp, path)          # 原子替换，避免读到半写文件
+            self.last_save_at = now
+            self.last_error = ""
+            return True
+        except (OSError, TypeError, ValueError) as exc:
+            self.last_error = "实时表落盘失败: %s" % exc
+            return False
+
+    def load(self) -> int:
+        """从本地 JSON 回填实时表（启动时调用）。返回回填行数。"""
+        path = self.snapshot_path
+        if path is None or not path.exists():
+            return 0
+        try:
+            with open(path, encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except (OSError, ValueError) as exc:
+            self.last_error = "实时表读取失败: %s" % exc
+            return 0
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            return 0
+        now = time.monotonic()
+        n = 0
+        with self._lock:
+            for item in rows:
+                if not isinstance(item, (list, tuple)) or len(item) < 7:
+                    continue
+                mid, chpid, hv, oid, ot, odds, ts_ms = item[:7]
+                try:
+                    f_odds = float(odds)
+                except (TypeError, ValueError):
+                    continue
+                if f_odds <= 1.0:
+                    continue
+                key = (str(mid), str(chpid), str(hv), str(oid))
+                self._rows[key] = LiveQuote(
+                    mid=str(mid), chpid=str(chpid), hv=str(hv), oid=str(oid),
+                    ot=str(ot), odds=f_odds, ts_ms=_to_int(ts_ms, 0), at=now)
+                self._by_mid.setdefault(str(mid), {})[key] = None
+                n += 1
+        return n
 
 
 class TrendStore:
@@ -596,6 +823,18 @@ class RealtimeHub:
         self._subscribed: List[str] = []
         #: 走势持久化（供经济学算法/LLM 与重启后回填使用）
         self.trend_store = TrendStore(trend_root)
+        #: **内存实时赔率表**（关键：查询路径不再碰磁盘）。
+        #:
+        #: 与 `_last_price` 的分工：
+        #:   * `_last_price` 只存“上次值/新值”用于**判定变动**（算走势）；
+        #:   * `LiveBook` 存**当前值**，供看板/决策直接读取。
+        #: 两者同一个写入点（`_record_ticks`），所以不会出现
+        #: “走势有、实时表没有”的不一致。
+        #:
+        #: 落盘路径与走势同级（`_trends/../_live/live.json`），
+        #: 随 output 卷一起持久化：重启后立即有本地数据可读。
+        self.live = LiveBook(_live_snapshot_path(trend_root))
+        self.live.load()          # 启动即回填（无需等第一批推送）
         #: mid → 最近一次收到**比分推送**（C103/C1021）的本机单调时间戳。
         #:
         #: 为什么需要：比分是判断「比赛是否已结束 / 该场推送是否还活着」的
@@ -769,7 +1008,17 @@ class RealtimeHub:
         否则每条快照都入库，真实信号会被稀释上千倍。
 
         真实变动会同步落盘（`trend_store`），供后续分析与重启回填。
+
+        ⚠️ **同时把本批的全部当前值写入内存实时表**（`self.live`）：
+        `C105` 既然是周期性全量快照，那么每条推送里的 `ov` 就是
+        **当前赔率**。早期实现只把变化项用于算走势，当前值算完即丢，
+        查询时被迫回磁盘翻不可变历史（既慢又易取到过期价）。
+
+        注意：传给实时表的是 **`ticks`（全量）**，不是 `changed`（仅变动）：
+        前者才是“现在每个选项多少钱”，后者只是“哪些刚跳过”。
         """
+        # 实时表用全量 ticks（当前值），必须在过滤“变动”之前就写。
+        self.live.upsert_many(ticks)
         changed: List[PriceTick] = []
         with self._lock:
             for t in ticks:
@@ -800,6 +1049,10 @@ class RealtimeHub:
         if changed:
             self.trend_store.append_many(changed)
             self._notify_price_change(changed)
+        # 实时表落盘（节流 5s；内部自会判断是否需要写）。
+        # 放在锁外，与走势落盘同理：磁盘 IO 不应阻塞推送消费。
+        if ticks:
+            self.live.save()
 
     def _notify_price_change(self, changed: Sequence[PriceTick]) -> None:
         """把「哪些赛事的盘口变了」告诉上层（触发决策用）。
