@@ -779,6 +779,9 @@ class AnalysisService:
         # 之后 capture_closing 就不再碰它（避免把状态改回 pending）。
         closing = self._capture_closing_odds(pending)
         scores: Dict[str, Any] = {}
+        # 赛程 `ms==110` 确认的已结束场次（独立于 `odds()` 是否成功）。
+        # 它与 `C109` 一起构成结算的**安全前提**（见 `_merge_local_scores`）。
+        confirmed = self._confirmed_finished_mids(pending)
         # 只对**待结算**的场次补比分（它们才需要）；
         # 否则会为几千场无关赛事白打上游。
         for mt in self._finished_matches(mids=pending):
@@ -795,7 +798,10 @@ class AnalysisService:
                 entry["ht"] = list(ht)
             scores[mid] = entry
         # **本地推送兑底**：REST 不可用（或未覆盖）时用 Hub 内存里的比分。
-        local_used = self._merge_local_scores(scores, pending)
+        # `confirmed` 提供第二路结束证据 —— 否则 `scores.json` 里那些
+        # 有比分但没收到 `C109` 的场次永远不会被结算（实测 17 场）。
+        local_used = self._merge_local_scores(scores, pending,
+                                              confirmed=confirmed)
         # 显式注解：`settle()` 返回 Dict[str, int]，但下面要挂 `stats`（嵌套字典），
         # 不收宽类型会让静态检查拒绝赋值。
         out: Dict[str, Any] = dict(self.ledger.settle(scores))
@@ -972,25 +978,55 @@ class AnalysisService:
             out.append(got if got is not None else m)
         return out
 
+    def _confirmed_finished_mids(self, pending: Any) -> set:
+        """赛程中 `ms==110`（已结束）且属于待结算集合的 mid。
+
+        为何单独抽一个方法（而不用 `_finished_matches`）：
+        后者会额外调 `odds()` 补比分，**on `odds()` 失败就返回空**，
+        于是“已结束”这个信息也一并丢失了 —— 而它是结算的安全前提。
+        本方法只看赛程，不依赖任何补数据步骤，因此稳得多。
+
+        Returns:
+            去重后的 mid 集合；取不到赛程时返回空集。
+        """
+        want = {str(m) for m in (pending or ()) if m}
+        if not want:
+            return set()
+        try:
+            sched = self.valuation.source.schedule()
+        except Exception:  # noqa: BLE001 - 取不到赛程不影响其它功能
+            return set()
+        return {str(getattr(m, "mid", "")) for m in (sched or ())
+                if getattr(m, "is_finished", False)
+                and str(getattr(m, "mid", "")) in want}
+
     def _merge_local_scores(self, scores: Dict[str, Any],
-                            pending: Any) -> int:
+                            pending: Any,
+                            confirmed: Any = None) -> int:
         """把 **本地推送** 里的比分合并进 `scores`（REST 不可用时的兑底）。
 
         为何需要（用户报「买入决策正确率没有统计」的根因）：
-        结算只读 REST 赛程，会话过期（`6001 token已过期`）就完全拿不到
-        比分 → `graded=0` → **命中率/ROI/CLV 永远算不出来**。
-        而推送里的比分（`C103`）与结束通知（`C109`）本就在内存里。
+        结算原只信任 REST 赛程，而它**不返回比分**；本地推送里的比分
+        （`C103`）与结束通知（`C109`）才是可靠来源。
 
-        ⚠️ **只结算已确认结束的场次**（`C109` → `is_finished`）。
-        这是一个安全红线：进球过程中推送的比分是**当前比分**而非终场
-        比分，拿它结算会把“还在踢”的比赛算成已定输赢 ——
-        那种统计比没有统计更危险（会给出错误的命中率）。
+        ⚠️ **安全红线 —— 只结算“已确认结束”的场次**。
+        进球过程中推送的是**当前比分**而非终场比分，拿它结算会把
+        “还在踢”的比赛算成已定输赢 —— 那种统计比没有统计更危险。
 
-        REST 已有结果时不覆盖（它以先到为准，含半场比分更完整）。
+        结束证据有两个来源（取并集），
+        因为只认 `C109` 会漏掉大量真实已结束的场次（实测 scores.json 里
+        17 场有比分却 `done=False`，永远不会被结算）：
+
+          1. `C109` 推送（`rt.finished_mids()`）—— 实时、但只覆盖
+             推送存活期间且订阅到的场次；
+          2. **赛程 `ms==110`**（由调用方通过 `confirmed` 传入）——
+             覆盖更全（重启后仍有）。
 
         Args:
             scores: 已有的 `{mid: {"ft": [...], "ht": [...]}}`（就地修改）。
             pending: 仍待结算的 mid 集合。
+            confirmed: 已由**其它权威来源**（如赛程 `is_finished`）
+                确认结束的 mid 集合。
 
         Returns:
             本次从推送补充的场次数。
@@ -1003,6 +1039,8 @@ class AnalysisService:
             finished = set(rt.finished_mids())
         except AttributeError:
             return 0            # 旧版 Hub 无这些能力
+        # 合并两路结束证据（安全前提不变：必须确证结束）
+        finished |= {str(m) for m in (confirmed or ())}
         want = {str(m) for m in pending if m}
         added = 0
         for mid, ft in local.items():

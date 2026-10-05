@@ -1175,3 +1175,82 @@ class TestFinishedMatchesFetchScoresViaOdds(unittest.TestCase):
         svc = AnalysisService(valuation=val, realtime=None,
                               config=AnalysisConfig(use_llm=False))
         self.assertEqual(svc._finished_matches(mids={"m1"}), [])
+
+
+class TestConfirmedFinishedFromSchedule(unittest.TestCase):
+    """**根因回归**：结束证据不能只认 `C109`，否则永远不结算。
+
+    实测：`scores.json` 里有 **17 场**有比分却 `done=False`
+    （`C109` 只覆盖推送存活期间且订阅到的场次），因此永远不被结算。
+
+    修法：结束证据取**并集** ——
+      1. `C109` 推送（实时，但覆盖窄）；
+      2. **赛程 `ms==110`**（覆盖全，重启后仍有）。
+
+    ⚠️ 安全前提不变：仍必须**确证结束**才结算，
+    否则会把还在踢的比赛按当前比分算成已定输赢。
+    """
+
+    class _M:
+        def __init__(self, mid, finished):
+            self.mid = mid
+            self._f = finished
+
+        @property
+        def is_finished(self) -> bool:
+            return self._f
+
+    def _svc(self, schedule):
+        from service.analysis import AnalysisConfig, AnalysisService
+        val = mock.MagicMock()
+        val.source.schedule.return_value = schedule
+        return AnalysisService(valuation=val, realtime=None,
+                               config=AnalysisConfig(use_llm=False))
+
+    def test_confirmed_only_includes_pending_and_finished(self) -> None:
+        svc = self._svc([self._M("m1", True), self._M("m2", False),
+                         self._M("m3", True)])
+        got = svc._confirmed_finished_mids({"m1", "m2"})
+        self.assertEqual(got, {"m1"},
+                         "只取「待结算 ∩ 已结束」；m3 不在 pending 中")
+
+    def test_confirmed_empty_when_schedule_fails(self) -> None:
+        from service.analysis import AnalysisConfig, AnalysisService
+        val = mock.MagicMock()
+        val.source.schedule.side_effect = RuntimeError("token 过期")
+        svc = AnalysisService(valuation=val, realtime=None,
+                              config=AnalysisConfig(use_llm=False))
+        self.assertEqual(svc._confirmed_finished_mids({"m1"}), set())
+
+    def test_confirmed_empty_for_empty_pending(self) -> None:
+        self.assertEqual(self._svc([self._M("m1", True)])
+                         ._confirmed_finished_mids(set()), set())
+
+    def test_merge_accepts_schedule_confirmed(self) -> None:
+        """有了赛程确认，即使没收到 `C109` 也能结算。"""
+        from service.analysis import AnalysisConfig, AnalysisService
+        svc = AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                              config=AnalysisConfig(use_llm=False))
+        hub = mock.MagicMock()
+        hub.scores_snapshot.return_value = {"m1": (2, 1)}
+        hub.finished_mids.return_value = []      # 没收到 C109
+        hub.half_score.return_value = None
+        svc.realtime = hub
+        scores: Dict[str, Any] = {}
+        n = svc._merge_local_scores(scores, {"m1"}, confirmed={"m1"})
+        self.assertEqual(n, 1)
+        self.assertEqual(scores["m1"]["ft"], [2, 1])
+
+    def test_merge_still_rejects_unconfirmed(self) -> None:
+        """**安全红线**：两路都没确认结束 → 绝不结算。"""
+        from service.analysis import AnalysisConfig, AnalysisService
+        svc = AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                              config=AnalysisConfig(use_llm=False))
+        hub = mock.MagicMock()
+        hub.scores_snapshot.return_value = {"m1": (1, 0)}
+        hub.finished_mids.return_value = []
+        svc.realtime = hub
+        scores: Dict[str, Any] = {}
+        self.assertEqual(svc._merge_local_scores(scores, {"m1"},
+                                                 confirmed=set()), 0)
+        self.assertEqual(scores, {})
