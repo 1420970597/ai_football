@@ -390,6 +390,105 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
   </section>
 
   <!-- ============ 校准报告 ============ -->
+  <!-- ============ 历史战绩（决策 vs 实际结果） ============ -->
+  <section id="view-history" style="display:none">
+    <div class="filters">
+      <div class="f"><label>范围</label>
+        <select id="h-days">
+          <option value="0">全部历史</option>
+          <option value="1">最近 1 天</option>
+          <option value="3" selected>最近 3 天</option>
+          <option value="7">最近 7 天</option>
+          <option value="30">最近 30 天</option>
+        </select>
+      </div>
+      <div class="f"><label>口径</label>
+        <select id="h-scope">
+          <option value="picks" selected>只看买入建议</option>
+          <option value="all">含被门控拦截</option>
+        </select>
+      </div>
+      <div class="f"><label>明细条数</label>
+        <select id="h-limit">
+          <option value="100">100</option>
+          <option value="300" selected>300</option>
+          <option value="1000">1000</option>
+        </select>
+      </div>
+      <button class="btn" id="btn-history-load">查询</button>
+      <button class="btn ghost" id="btn-history-settle">立即结算</button>
+      <span class="mut" style="font-size:11.5px" id="h-updated"></span>
+    </div>
+
+    <div class="cards" id="h-cards"></div>
+
+    <!-- 按日累计曲线：小样本下单日命中率噪声极大，看累计才可信 -->
+    <div class="panel">
+      <h2>按日累计结果 <span class="tag">累计 ROI 比单日命中率可信</span></h2>
+      <div class="tw"><table>
+        <thead><tr>
+          <th>日期</th><th class="num">注数</th><th class="num">赢</th>
+          <th class="num">输</th><th class="num">当日命中率</th>
+          <th class="num">当日盈利</th><th class="num">累计本金</th>
+          <th class="num">累计盈利</th><th class="num">累计 ROI</th>
+        </tr></thead>
+        <tbody id="h-timeline-tbody"></tbody>
+      </table></div>
+      <div class="note" id="h-timeline-note"></div>
+    </div>
+
+    <!-- 分组归因：总量指标无法指导改进，分组才能看出哪类不行 -->
+    <div class="panel">
+      <h2>分联赛统计 <span class="tag" id="h-league-tag">按联赛归因</span></h2>
+      <div class="tw"><table>
+        <thead><tr>
+          <th>联赛</th><th class="num">注数</th><th class="num">已结算</th>
+          <th class="num">赢/输/走水</th><th class="num">命中率</th>
+          <th class="num">ROI</th><th class="num">CLV 均值</th>
+        </tr></thead>
+        <tbody id="h-league-tbody"></tbody>
+      </table></div>
+    </div>
+
+    <div class="panel">
+      <h2>分盘口统计 <span class="tag" id="h-market-tag">按玩法归因</span></h2>
+      <div class="tw"><table>
+        <thead><tr>
+          <th>盘口</th><th class="num">注数</th><th class="num">已结算</th>
+          <th class="num">赢/输/走水</th><th class="num">命中率</th>
+          <th class="num">ROI</th><th class="num">CLV 均值</th>
+        </tr></thead>
+        <tbody id="h-market-tbody"></tbody>
+      </table></div>
+    </div>
+
+    <div class="panel">
+      <h2>分触发来源 <span class="tag" id="h-trigger-tag">盘口变动 vs 定时</span></h2>
+      <div class="tw"><table>
+        <thead><tr>
+          <th>触发来源</th><th class="num">注数</th><th class="num">已结算</th>
+          <th class="num">命中率</th><th class="num">ROI</th>
+        </tr></thead>
+        <tbody id="h-trigger-tbody"></tbody>
+      </table></div>
+    </div>
+
+    <!-- 逐条明细：决策 vs 实际结果（含实际终场比分） -->
+    <div class="panel">
+      <h2>逐条明细 <span class="tag" id="h-entries-tag">决策 vs 实际结果</span></h2>
+      <div class="tw"><table>
+        <thead><tr>
+          <th>决策时间</th><th>联赛</th><th>对阵</th><th>建议</th>
+          <th class="num">赔率</th><th class="num">优势</th>
+          <th>实际比分</th><th>结果</th><th class="num">盈亏</th>
+          <th class="num">CLV</th><th>触发</th>
+        </tr></thead>
+        <tbody id="h-entries-tbody"></tbody>
+      </table></div>
+      <div class="note" id="h-entries-note"></div>
+    </div>
+  </section>
+
   <section id="view-calibration" style="display:none">
     <!-- 买入决策正确率（用户要求：本地要有正确率统计） -->
     <div class="panel">
@@ -459,7 +558,9 @@ const fx = (v, n = 2) => (v === null || v === undefined || Number.isNaN(Number(v
 const pct = (v, n = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? "—" : (Number(v) * 100).toFixed(n) + "%";
 
 /* ---------- 视图 ---------- */
-const VIEWS = [["dashboard", "赛事看板"], ["board", "实时盘口"], ["pricing", "定价对比"], ["calibration", "校准报告"]];
+const VIEWS = [["dashboard", "赛事看板"], ["board", "实时盘口"],
+               ["history", "历史战绩"], ["pricing", "定价对比"],
+               ["calibration", "校准报告"]];
 function renderNav() {
   const nav = $("nav");
   clear(nav);
@@ -480,6 +581,7 @@ function showView(v) {
     loadAccuracy();
     loadCalibration();
   }
+  if (v === "history") loadHistory();
   if (v === "board") {
     loadBoard();
     startBoardTimer();
@@ -1306,6 +1408,245 @@ async function loadModel(matchId) {
 
 /* ---------- 校准 ---------- */
 
+/* ============================================================================
+   历史战绩（用户要求：展示历史决策与实际结果的统计）
+   ----------------------------------------------------------------------------
+   数据源 `GET /api/v1/ledger/history`，一次拿齐：
+     总览 / 按日累计 / 分联赛 / 分盘口 / 分触发源 / 逐条明细
+
+   设计要点：
+     * 总览先放 `stale` 提示 —— graded=0 时所有比率都无意义，
+       不能把 null 显示成 0（会让人以为“命中率就是这么差”）；
+     * 累计列而非只给单日：单日往往只有几注，命中率跳动极大；
+     * 明细保留原始代码提示，方便排查（展示仍用中文）。
+   ========================================================================== */
+
+/* 比率/数值格式化（null 一律显示占位，绝不写成 0） */
+function hNum(v, f) { return (v === null || v === undefined) ? "—" : f(v); }
+function hPct(v) { return hNum(v, (x) => (Number(x) * 100).toFixed(2) + "%"); }
+function hFixed(v, n) { return hNum(v, (x) => Number(x).toFixed(n)); }
+
+/* 输赢状态 → 中文 + 颜色类 */
+const H_STATUS = {
+  won: ["赢", "pill ok"], half_won: ["赢半", "pill ok"],
+  lost: ["输", "pill bad"], half_lost: ["输半", "pill bad"],
+  push: ["走水", "pill mut"], void: ["无效", "pill mut"],
+  pending: ["待结算", "pill warn"]
+};
+
+function hStatusTag(s) {
+  const hit = H_STATUS[s] || [s || "—", "pill mut"];
+  return el("span", { class: hit[1], text: hit[0] });
+}
+
+async function loadHistory() {
+  const cards = $("h-cards");
+  clear(cards);
+  cards.appendChild(el("div", { class: "card" }, [
+    el("div", { class: "k", text: "加载中…" })]));
+  const days = $("h-days").value;
+  const scope = $("h-scope").value;
+  const limit = $("h-limit").value;
+  const qs = new URLSearchParams({ limit: limit, days: days });
+  if (scope === "all") qs.set("all", "1");
+  let d;
+  try {
+    const r = await fetch(API + "/ledger/history?" + qs);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    d = await r.json();
+  } catch (e) {
+    clear(cards);
+    cards.appendChild(el("div", { class: "card neg" }, [
+      el("div", { class: "k", text: "加载失败" }),
+      el("div", { class: "s", text: "/ledger/history：" + e.message })]));
+    return;
+  }
+  renderHistoryCards(d);
+  renderTimeline(d.timeline || []);
+  renderGroupTable("h-league-tbody", d.by_league || {}, "联赛");
+  renderGroupTable("h-market-tbody", d.by_market || {}, "盘口");
+  renderGroupTable("h-trigger-tbody", d.by_trigger || {}, "触发", false);
+  renderHistoryEntries(d);
+  setText($("h-updated"), "更新于 " + new Date().toLocaleTimeString());
+}
+
+function renderHistoryCards(d) {
+  const box = $("h-cards");
+  clear(box);
+  const o = d.overall || {};
+  const s = d.settled || {};
+  const card = (k, v, sub, cls) => el("div", {
+    class: "card" + (cls ? " " + cls : "")
+  }, [el("div", { class: "k", text: k }),
+       el("div", { class: "v", text: v }),
+       el("div", { class: "s", text: sub || "" })]);
+  box.appendChild(card("历史建议总数", String(o.total ?? 0),
+    (d.entries_total ?? 0) + " 条符合筛选"));
+  box.appendChild(card("已结算", String(s.graded ?? 0),
+    s.graded ? "结论有效" : "尚无赛果，比率暂不可算",
+    s.graded ? "" : "warn"));
+  box.appendChild(card("待结算", String(o.pending ?? 0),
+    "需等比赛结束回填比分，然后自动结算",
+    (o.pending ? "warn" : "")));
+  box.appendChild(card("命中率", hPct(s.hit_rate),
+    "赢 /（赢+输），走水不计分母"));
+  box.appendChild(card("ROI", hPct(s.roi),
+    (s.stake_units ? "本金 " + s.stake_units + " 单位" : "每注 1 单位"),
+    (typeof s.roi === "number" && s.roi < 0) ? "neg" : ""));
+  box.appendChild(card("CLV 均值", hPct(s.clv_mean),
+    "收盘价/买入价−1；比单场输赢更可信（样本" + (s.clv_n ?? 0) + "）"));
+  box.appendChild(card("赢 / 输 / 走水", (s.won ?? 0) + " / " + (s.lost ?? 0) +
+    " / " + (s.push ?? 0), "含赢半/输半"));
+}
+
+function renderTimeline(rows) {
+  const tb = $("h-timeline-tbody");
+  clear(tb);
+  if (!rows.length) {
+    tb.appendChild(el("tr", {}, [el("td", {
+      colspan: "9", class: "mut",
+      text: "暂无已结算数据（结算后这里会按日累计，单日样本小、看累计更可信）"
+    })]));
+    setText($("h-timeline-note"), "");
+    return;
+  }
+  rows.forEach(r => {
+    const tr = el("tr", {});
+    tr.appendChild(el("td", { text: r.date }));
+    tr.appendChild(el("td", { class: "num", text: String(r.n) }));
+    tr.appendChild(el("td", { class: "num", text: String(r.won) }));
+    tr.appendChild(el("td", { class: "num", text: String(r.lost) }));
+    tr.appendChild(el("td", { class: "num", text: hPct(r.hit_rate) }));
+    tr.appendChild(el("td", {
+      class: "num " + (r.profit_units >= 0 ? "edge-pos" : "edge-neg"),
+      text: hFixed(r.profit_units, 3) }));
+    tr.appendChild(el("td", { class: "num", text: String(r.cum_stake) }));
+    tr.appendChild(el("td", {
+      class: "num " + (r.cum_profit >= 0 ? "edge-pos" : "edge-neg"),
+      text: hFixed(r.cum_profit, 3) }));
+    tr.appendChild(el("td", {
+      class: "num " + ((r.cum_roi || 0) >= 0 ? "edge-pos" : "edge-neg"),
+      text: hPct(r.cum_roi) }));
+    tb.appendChild(tr);
+  });
+  const last = rows[rows.length - 1];
+  setText($("h-timeline-note"),
+    "累计：本金 " + last.cum_stake + " 单位，盈利 " + hFixed(last.cum_profit, 3) +
+    "，ROI " + hPct(last.cum_roi) + "。");
+}
+
+/* 分组表（联赛/盘口/触发共用一套渲染，避免三份重复代码） */
+function renderGroupTable(tbodyId, groups, keyName, withClv) {
+  const tb = $(tbodyId);
+  if (!tb) return;
+  clear(tb);
+  const keys = Object.keys(groups)
+    .sort((a, b) => (groups[b].graded || 0) - (groups[a].graded || 0) ||
+                    (groups[b].total || 0) - (groups[a].total || 0));
+  if (!keys.length) {
+    tb.appendChild(el("tr", {}, [el("td", {
+      colspan: withClv === false ? "5" : "7", class: "mut",
+      text: "暂无数据"})]));
+    return;
+  }
+  keys.slice(0, 40).forEach(k => {
+    const g = groups[k] || {};
+    const tr = el("tr", {});
+    tr.appendChild(el("td", { text: k || "（未知）" }));
+    tr.appendChild(el("td", { class: "num", text: String(g.total ?? 0) }));
+    tr.appendChild(el("td", { class: "num", text: String(g.graded ?? 0) }));
+    if (withClv === false) {
+      tr.appendChild(el("td", { class: "num", text: hPct(g.hit_rate) }));
+      tr.appendChild(el("td", {
+        class: "num " + ((g.roi || 0) >= 0 ? "edge-pos" : "edge-neg"),
+        text: hPct(g.roi) }));
+    } else {
+      tr.appendChild(el("td", { class: "num",
+        text: (g.won ?? 0) + " / " + (g.lost ?? 0) + " / " + (g.push ?? 0) }));
+      tr.appendChild(el("td", { class: "num", text: hPct(g.hit_rate) }));
+      tr.appendChild(el("td", {
+        class: "num " + ((g.roi || 0) >= 0 ? "edge-pos" : "edge-neg"),
+        text: hPct(g.roi) }));
+      tr.appendChild(el("td", { class: "num", text: hPct(g.clv_mean) }));
+    }
+    tb.appendChild(tr);
+  });
+}
+
+function renderHistoryEntries(d) {
+  const tb = $("h-entries-tbody");
+  const note = $("h-entries-note");
+  clear(tb); clear(note);
+  const rows = d.entries || [];
+  setText($("h-entries-tag"),
+    (d.entries_shown ?? 0) + " / " + (d.entries_total ?? 0) + " 条");
+  if (!rows.length) {
+    tb.appendChild(el("tr", {}, [el("td", {
+      colspan: "11", class: "mut", text: "暂无符合条件的记录"})]));
+    return;
+  }
+  rows.forEach(r => {
+    const tr = el("tr", {});
+    tr.appendChild(el("td", { class: "mut",
+      text: String(r.at || "").replace("T", " ").slice(0, 16) }));
+    tr.appendChild(el("td", { text: r.league || "—" }));
+    tr.appendChild(el("td", { text: (r.home || "?") + " vs " + (r.away || "?") }));
+    // 建议用中文标签（与乐鱼一致）；原始代码放 title 供排查
+    tr.appendChild(el("td", {}, [el("span", {
+      text: r.label || (r.market + " " + r.outcome),
+      title: r.market + " / " + r.outcome +
+             "（p_market=" + hFixed(r.p_market, 4) + " p_llm=" +
+             hFixed(r.p_llm, 4) + "）" })]));
+    tr.appendChild(el("td", { class: "num", text: hFixed(r.odds, 3) }));
+    tr.appendChild(el("td", {
+      class: "num " + ((r.edge || 0) > 0 ? "edge-pos" : "edge-neg"),
+      text: hPct(r.edge) }));
+    // **实际结果**：终场比分（只有结算过的才有）
+    const half = (r.ht_score && r.ht_score.length >= 2)
+      ? ("（半 " + r.ht_score[0] + ":" + r.ht_score[1] + "）") : "";
+    tr.appendChild(el("td", { class: r.ft_score ? "" : "mut",
+      text: r.ft_score ? (r.ft_score[0] + ":" + r.ft_score[1] + half) : "—" }));
+    const td = el("td", {}, [hStatusTag(r.status)]);
+    if (r.settle_note) td.title = r.settle_note;
+    tr.appendChild(td);
+    tr.appendChild(el("td", {
+      class: "num " + ((r.pnl || 0) > 0 ? "edge-pos" : ((r.pnl || 0) < 0 ? "edge-neg" : "")),
+      text: r.status === "pending" ? "—" : hFixed(r.pnl, 3) }));
+    tr.appendChild(el("td", {
+      class: "num " + ((r.clv || 0) > 0 ? "edge-pos" : ((r.clv || 0) < 0 ? "edge-neg" : "")),
+      text: hPct(r.clv) }));
+    tr.appendChild(el("td", { class: "mut", text: r.trigger || "—" }));
+    tb.appendChild(tr);
+  });
+  if (!(d.settled || {}).graded) {
+    note.appendChild(document.createTextNode(
+      "明细中「实际比分」与「结果」需等结算后才有值。当前尚无已结算样本："
+      + "比赛结束后系统会自动回填比分并判定输赢（也可点「立即结算」手动触发）。"));
+  } else {
+    note.appendChild(document.createTextNode(
+      "按「已结算优先 + 时间倒序」排列；盈亏为每单位本金的净收益。"
+      + "CLV = 收盘赔率/买入赔率−1，正数表示买得比收盘便宜。"));
+  }
+}
+
+async function forceSettle() {
+  const btn = $("btn-history-settle");
+  if (btn) { btn.disabled = true; btn.textContent = "结算中…"; }
+  try {
+    const r = await fetch(API + "/ledger/settle", { method: "POST" });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+    showMsg("ok", "结算完成：新结算 " + (d.settled ?? 0) + " 注，" +
+      "无效 " + (d.void ?? 0) + " 注，取到赛果 " + (d.scores_total ?? 0) + " 场" +
+      "（来自推送 " + (d.scores_from_push ?? 0) + "）");
+  } catch (e) {
+    showMsg("err", "结算失败：" + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "立即结算"; }
+    await loadHistory();
+  }
+}
+
 /**
  * 买入决策正确率（用户要求：「本地买入决策的正确率没有做统计」）。
  *
@@ -1702,6 +2043,16 @@ if (backBtn) backBtn.addEventListener("click", () => {
 });
 const boardRefresh = $("btn-board-refresh");
 if (boardRefresh) boardRefresh.addEventListener("click", () => loadBoard());
+
+// 历史战绩的筛选与刷新
+["h-days", "h-scope", "h-limit"].forEach(id => {
+  const n = $(id);
+  if (n) n.addEventListener("change", () => loadHistory());
+});
+const historyLoad = $("btn-history-load");
+if (historyLoad) historyLoad.addEventListener("click", () => loadHistory());
+const historySettle = $("btn-history-settle");
+if (historySettle) historySettle.addEventListener("click", forceSettle);
 const boardRetry = $("btn-board-retry");
 if (boardRetry) boardRetry.addEventListener("click", () => loadBoard());
 

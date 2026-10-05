@@ -774,16 +774,24 @@ class AnalysisService:
             return {"settled": 0, "void": 0, "reason": "无待结算条目",
                     "closing_captured": 0, "scores_from_push": 0,
                     "scores_total": 0, "stats": self.ledger.stats()}
-        # **先补收盘赔率**（CLV 的前置条件，不能事后重建）。
-        # 必须在 settle 之前做：settle 会把条目改成终结态，
-        # 之后 capture_closing 就不再碰它（避免把状态改回 pending）。
-        closing = self._capture_closing_odds(pending)
-        scores: Dict[str, Any] = {}
-        # 赛程 `ms==110` 确认的已结束场次（独立于 `odds()` 是否成功）。
-        # 它与 `C109` 一起构成结算的**安全前提**（见 `_merge_local_scores`）。
+        # **先确定“哪些场真的能结算”**，再只对这些场做昂贵操作。
+        #
+        # 为何要调顺序（实测真实事故）：`_capture_closing_odds` 会读全库
+        # 快照（仓库已累积 8.4 万条，冷缓存重建一次 **19~24s**）。
+        # 早期它对**全部** pending（实测 535 场）都做一遍，
+        # 而其中绝大多数早已结束且上游不再提供赛果 ——
+        # 永远不可能被结算 → 那些读盘是**纯浪费**，
+        # 直接把结算接口拖到 150s 超时。
+        #
+        # 新顺序：先用廉价手段（赛程/本地推送）算出能结算的场次，
+        # 只对它们补收盘价 —— 既省时间，又完全契合 CLV 的语义
+        # （收盘价本就是“该场即将结算时最后一次看到的价”）。
         confirmed = self._confirmed_finished_mids(pending)
-        # 只对**待结算**的场次补比分（它们才需要）；
-        # 否则会为几千场无关赛事白打上游。
+        scores: Dict[str, Any] = {}
+        # 本地推送兑底（廉价：纯内存）—— 先做，以便确定可结算集合
+        local_used = self._merge_local_scores(scores, pending,
+                                              confirmed=confirmed)
+        # REST 补比分：只对**待结算**的场次调上游
         for mt in self._finished_matches(mids=pending):
             mid = str(getattr(mt, "mid", "") or "")
             if mid not in pending:
@@ -797,11 +805,10 @@ class AnalysisService:
             if ht and ht[0] is not None and ht[1] is not None:
                 entry["ht"] = list(ht)
             scores[mid] = entry
-        # **本地推送兑底**：REST 不可用（或未覆盖）时用 Hub 内存里的比分。
-        # `confirmed` 提供第二路结束证据 —— 否则 `scores.json` 里那些
-        # 有比分但没收到 `C109` 的场次永远不会被结算（实测 17 场）。
-        local_used = self._merge_local_scores(scores, pending,
-                                              confirmed=confirmed)
+        # **只对确实能结算的场次**补收盘赔率（CLV 的前置条件，不能事后重建）。
+        # 必须在 settle 之前做：settle 会把条目改成终结态，
+        # 之后 capture_closing 就不再碰它（避免把状态改回 pending）。
+        closing = self._capture_closing_odds(set(scores)) if scores else 0
         # 显式注解：`settle()` 返回 Dict[str, int]，但下面要挂 `stats`（嵌套字典），
         # 不收宽类型会让静态检查拒绝赋值。
         out: Dict[str, Any] = dict(self.ledger.settle(scores))
@@ -906,18 +913,27 @@ class AnalysisService:
 
         # 2) 剩余场次：逐场走 `_snapshots_of`（**单一事实源**，
         #    便于测试替身与未来改动只在那一处生效）。
-        #    性能上不再担心 N+1：`_snapshots_of` 已用
-        #    `match_id → 下标` 索引（O(本场条数)），
-        #    而其底层的 `_all_snapshots()` 指纹校验已带 TTL
-        #    （见 `_store_stamp_cached` 的修复）。
+        #
+        #    ⚠️ 性能关键（实测真实事故）：`_snapshots_of` 底层是
+        #    `_all_snapshots()` —— 全量读盘。虽然它带缓存，
+        #    但缓存指纹 TTL 过期后**一次重建要 19s**（仓库已累积 8.4 万条快照）。
+        #    结算逐场调用时会反复触发重建 → 整个结算接口超时（实测 >150s）。
+        #
+        #    因此先**一次性预热缓存**（失败不影响流程），
+        #    后续每次 `_snapshots_of` 都命中缓存（实测 0.0001s/次）。
         rest = need - set(out)
-        for mid in rest:
+        if rest:
             try:
-                snaps = self.valuation._snapshots_of(mid)
-            except Exception:  # noqa: BLE001 - 单场失败不影响其他场
-                continue
-            if snaps:
-                out[mid] = snaps
+                self.valuation._all_snapshots()   # 预热：只跑一次
+            except Exception:  # noqa: BLE001 - 预热失败则逐场自行降级
+                pass
+            for mid in rest:
+                try:
+                    snaps = self.valuation._snapshots_of(mid)
+                except Exception:  # noqa: BLE001 - 单场失败不影响其他场
+                    continue
+                if snaps:
+                    out[mid] = snaps
         return out
 
     def _finished_matches(
@@ -1076,6 +1092,22 @@ class AnalysisService:
         out = self.ledger.stats(only_picks=only_picks, trigger=trigger)
         out["ledger"] = self.ledger.health()
         out["settle"] = dict(self.settle_stats)
+        return out
+
+    def ledger_history(self, only_picks: bool = True, limit: int = 300,
+                       days: int = 0) -> Dict[str, Any]:
+        """历史决策 vs 实际结果的分组统计 + 明细（用户要求的菜单数据）。
+
+        与 `ledger_stats` 的分工：后者是“一句话结论”（总命中率/ROI），
+        前者是“逐条申诉材料”（分日期/联赛/盘口 + 每条实际比分），
+        用于回答“为什么不行、哪一类不行”。
+
+        同时补上结算线程的状态，让用户知道“未结算的还要等多久”。
+        """
+        out = self.ledger.history(picks_only=only_picks, limit=limit,
+                                  days=days)
+        out["settle"] = dict(self.settle_stats)
+        out["summary"] = self.ledger.stats(only_picks=only_picks)
         return out
 
     def refresh_live_matches(self, max_matches: int = 0,

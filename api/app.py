@@ -299,6 +299,10 @@ class ApiApp:
             ("GET", "/board", self.h_board),
             ("GET", "/llm", self.h_llm),
             ("GET", "/ledger/stats", self.h_ledger_stats),
+            # 历史战绩：分日期/联赛/盘口 的分组统计 + 逐条明细（含实际比分）。
+            # 与 /ledger/stats 互补：后者是“一句话结论”，本端点是
+            # “申诉材料”，用回答“为什么不行、哪一类不行”。
+            ("GET", "/ledger/history", self.h_ledger_history),
             ("GET", "/ledger/entries", self.h_ledger_entries),
             ("POST", "/ledger/settle", self.h_ledger_settle),
             ("GET", "/consistency/<id>", self.h_consistency),
@@ -1082,6 +1086,34 @@ class ApiApp:
         trig = (_q1(query, "trigger") or "").strip() or None
         return self.analysis.ledger_stats(only_picks=only_picks,
                                           trigger=trig)
+
+    def h_ledger_history(self, query: Mapping[str, List[str]],
+                         body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """历史战绩：**决策 vs 实际结果**的分组统计 + 逐条明细。
+
+        用户要求：「增加一个菜单展示历史决策与实际结果的统计」。
+
+        为何不只返回总命中率：总量指标无法指导改进 ——
+        总命中率 52% 可能掩盖「某联赛 20%」或「某盘口 80%」，
+        后者才是可执行的信号。因此本端点同时给：
+
+          * `overall` / `settled` —— 总量指标（含 CLV，比命中率更可信）
+          * `by_date` / `by_league` / `by_market` —— 分组归因
+          * `by_decision` / `by_trigger` —— 按裁定/触发源拆解
+          * `timeline` —— 按日累计曲线（小样本下日命中率噪声大，
+            看累计才能判断是真赚还是运气）
+          * `entries` —— 逐条明细（含**实际终场比分**与输赢）
+
+        Query:
+            all=1      含被门控拦截的盘口（用于校准阈值）
+            limit=N    明细条数（默认 300，最多 2000）
+            days=N     只看最近 N 天（默认 0 = 不限）
+        """
+        only_picks = (_q1(query, "all") or "") not in ("1", "true", "yes")
+        limit = _q_int(query, "limit", 300, minimum=1, maximum=2000)
+        days = _q_int(query, "days", 0, minimum=0, maximum=3650)
+        return self.analysis.ledger_history(only_picks=only_picks,
+                                            limit=limit, days=days)
 
     def h_ledger_entries(self, query: Mapping[str, List[str]],
                          body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:

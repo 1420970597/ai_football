@@ -1324,3 +1324,220 @@ class TestAccuracyEndToEndWithRealHub(unittest.TestCase):
             self.assertEqual(st["won"], 1)
             assert st["hit_rate"] is not None
             self.assertAlmostEqual(st["hit_rate"], 1.0, places=4)
+
+
+class TestLedgerHistory(unittest.TestCase):
+    """历史战绩（用户要求：增加菜单展示历史决策与实际结果的统计）。
+
+    验收口径：
+      * 既要**总量**指标（命中率/ROI/CLV），也要**分组归因**
+        （分日期/联赛/盘口/触发）——总量 52% 可能掩盖「某联赛 20%」，
+        后者才是可执行的改进信号；
+      * 明细必须带**实际终场比分**与输赢（才能逐条核对）。
+    """
+
+    def _ledger(self, d: str):
+        from service.ledger import DecisionLedger
+        return DecisionLedger(d)
+
+    @staticmethod
+    def _entry(mid: str, **kw: Any):
+        from service.ledger import LedgerEntry
+        base: Dict[str, Any] = dict(
+            at="2026-10-05T10:00:00+00:00", match_id=mid, market="HAD",
+            line="", outcome="home", odds=2.0, is_pick=True,
+            league="英超", home="A", away="B", trigger="cycle",
+            decision="buy")
+        base.update(kw)
+        return LedgerEntry(**base)
+
+    def test_history_groups_and_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            led = self._ledger(d)
+            led._append([
+                self._entry("m1", league="英超"),
+                self._entry("m2", league="西甲"),
+                self._entry("m3", league="英超"),
+            ])
+            led.settle({"m1": {"ft": (2, 0)},    # 主胜 → 赢
+                        "m2": {"ft": (0, 1)},    # 客胜 → 输
+                        "m3": {"ft": (1, 1)}})   # 平 → 输
+            h = led.history(picks_only=True, limit=50)
+            self.assertEqual(h["overall"]["total"], 3)
+            self.assertEqual(h["settled"]["graded"], 3)
+            self.assertEqual(h["settled"]["won"], 1)
+            self.assertEqual(h["settled"]["lost"], 2)
+            # 分组归因
+            self.assertIn("英超", h["by_league"])
+            self.assertIn("西甲", h["by_league"])
+            self.assertEqual(h["by_league"]["英超"]["graded"], 2)
+            self.assertEqual(h["by_league"]["英超"]["won"], 1)
+            self.assertEqual(h["by_league"]["英超"]["lost"], 1)
+            self.assertIn("HAD", h["by_market"])
+            self.assertIn("cycle", h["by_trigger"])
+            # 逐条明细必须带实际比分
+            self.assertEqual(h["entries_shown"], 3)
+            with_score = [e for e in h["entries"] if e.get("ft_score")]
+            self.assertEqual(len(with_score), 3, "明细必须带实际终场比分")
+            self.assertTrue(any(e["status"] == "won" for e in h["entries"]))
+
+    def test_settled_entries_come_first(self) -> None:
+        """明细排序：**已结算优先**（先看到有结论的），再按时间倒序。"""
+        with tempfile.TemporaryDirectory() as d:
+            led = self._ledger(d)
+            led._append([
+                self._entry("m1", at="2026-10-05T10:00:00+00:00"),
+                self._entry("m2", at="2026-10-05T11:00:00+00:00"),
+            ])
+            led.settle({"m2": {"ft": (2, 0)}})     # 只结算 m2
+            h = led.history(limit=10)
+            self.assertEqual(h["entries"][0]["match_id"], "m2",
+                             "已结算的必须排在最前")
+
+    def test_timeline_accumulates(self) -> None:
+        """按日累计：单日样本小，必须给累计列才能判断是否真在赚。"""
+        with tempfile.TemporaryDirectory() as d:
+            led = self._ledger(d)
+            led._append([
+                self._entry("m1", at="2026-10-04T10:00:00+00:00", odds=3.0),
+                self._entry("m2", at="2026-10-05T10:00:00+00:00"),
+            ])
+            led.settle({"m1": {"ft": (2, 0)}, "m2": {"ft": (0, 1)}})
+            tl = led.history(limit=5)["timeline"]
+            self.assertEqual(len(tl), 2, "应按日分成两行")
+            self.assertEqual(tl[0]["cum_stake"], 1)
+            self.assertEqual(tl[1]["cum_stake"], 2, "累计本金应递增")
+            self.assertIsNotNone(tl[1]["cum_roi"])
+
+    def test_days_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            led = self._ledger(d)
+            led._append([
+                self._entry("old", at="2020-01-01T00:00:00+00:00"),
+                self._entry("new", at="2099-01-01T00:00:00+00:00"),
+            ])
+            h = led.history(days=1)
+            self.assertEqual(h["overall"]["total"], 1)
+            self.assertEqual(h["entries"][0]["match_id"], "new")
+
+    def test_picks_only_false_includes_rejects(self) -> None:
+        """口径切换：`picks_only=False` 含被门控拦截（用于校准阈值）。"""
+        with tempfile.TemporaryDirectory() as d:
+            led = self._ledger(d)
+            led._append([
+                self._entry("m1", is_pick=True),
+                self._entry("m2", is_pick=False,
+                            rejects=["edge_below_threshold"]),
+            ])
+            self.assertEqual(led.history(picks_only=True)["overall"]["total"], 1)
+            self.assertEqual(led.history(picks_only=False)["overall"]["total"], 2)
+
+    def test_empty_ledger_is_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            h = self._ledger(d).history()
+            self.assertEqual(h["overall"]["total"], 0)
+            self.assertEqual(h["entries"], [])
+            self.assertEqual(h["timeline"], [])
+
+
+class TestHistoryEndpoint(unittest.TestCase):
+    """`/api/v1/ledger/history` 契约（前端菜单依赖）。"""
+
+    def test_endpoint_shape(self) -> None:
+        from api.app import create_app
+        with tempfile.TemporaryDirectory() as d:
+            app = create_app(snapshot_root=d, corpus_root="output",
+                             source="ticai")
+            app.svc.ingest_corpus()
+            st, body = app.dispatch("GET", "/api/v1/ledger/history",
+                                    {"limit": ["10"], "days": ["3"]}, {})
+            self.assertEqual(st, 200)
+            for k in ("overall", "settled", "by_date", "by_league",
+                      "by_market", "by_decision", "by_trigger",
+                      "by_status", "timeline", "entries", "ledger",
+                      "settle", "summary"):
+                self.assertIn(k, body, "缺少字段 %s（前端表格依赖）" % k)
+
+    def test_all_flag_switches_scope(self) -> None:
+        from api.app import create_app
+        with tempfile.TemporaryDirectory() as d:
+            app = create_app(snapshot_root=d, corpus_root="output",
+                             source="ticai")
+            app.svc.ingest_corpus()
+            _, a = app.dispatch("GET", "/api/v1/ledger/history", {}, {})
+            _, b = app.dispatch("GET", "/api/v1/ledger/history",
+                                {"all": ["1"]}, {})
+            self.assertTrue(a["picks_only"])
+            self.assertFalse(b["picks_only"])
+
+
+class TestClosingOddsOnlyForSettleableMatches(unittest.TestCase):
+    """**回归**：收盘赔率只该为「真能结算」的场次捕获。
+
+    实测真实事故：`_capture_closing_odds` 会读全库快照
+    （仓库已累积 8.4 万条，冷缓存重建一次 **19~24s**）。
+    早期它对**全部** pending（实测 535 场）都做一遍，而其中绝大多数
+    早已结束、上游不再提供赛果 → **永远不可能结算** →
+    那些读盘是纯浪费，把结算接口拖到 **150s 超时**。
+
+    新语义：先用廉价手段（赛程/本地推送）确定可结算集合，
+    只对它们补收盘价 —— 这也更符合 CLV 的定义
+    （收盘价本就是“该场即将结算时最后一次看到的价”）。
+    """
+
+    def test_closing_only_called_for_settleable(self) -> None:
+        from service.analysis import AnalysisConfig, AnalysisService
+        svc = AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                              config=AnalysisConfig(use_llm=False))
+        calls: List[Any] = []
+
+        def _fake_capture(pending: Any) -> int:
+            calls.append(set(pending))
+            return 0
+
+        svc._capture_closing_odds = _fake_capture      # type: ignore[assignment]
+        svc._confirmed_finished_mids = lambda p: set()  # type: ignore[assignment]
+        svc._finished_matches = lambda mids=None: []    # type: ignore[assignment]
+        # 台账里有一条可结算（本地推送有比分且已确认结束）
+        hub = mock.MagicMock()
+        hub.scores_snapshot.return_value = {"m1": (2, 1)}
+        hub.finished_mids.return_value = ["m1"]
+        hub.half_score.return_value = None
+        svc.realtime = hub
+        svc._confirmed_finished_mids = lambda p: {"m1"}  # type: ignore[assignment]
+
+        class _Row:
+            match_id = "m1"
+            status = "pending"
+            is_pick = True
+
+        svc.ledger = mock.MagicMock()
+        svc.ledger.load.return_value = [_Row()]
+        svc.ledger.stats.return_value = {}
+
+        svc.settle_finished()
+        self.assertEqual(len(calls), 1, "应只调一次 capture_closing")
+        self.assertEqual(calls[0], {"m1"},
+                         "只对真能结算的场次捕获收盘价（不碰 535 场里的其余）")
+
+    def test_no_settleable_means_no_capture(self) -> None:
+        """无可结算场次时**完全不该读盘**（这正是 150s 超时的来源）。"""
+        from service.analysis import AnalysisConfig, AnalysisService
+        svc = AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                              config=AnalysisConfig(use_llm=False))
+        called: List[Any] = []
+        svc._capture_closing_odds = lambda p: called.append(p) or 0  # type: ignore[assignment]
+        svc._confirmed_finished_mids = lambda p: set()  # type: ignore[assignment]
+        svc._finished_matches = lambda mids=None: []    # type: ignore[assignment]
+        svc.realtime = None
+
+        class _Row:
+            match_id = "m1"
+            status = "pending"
+            is_pick = True
+
+        svc.ledger = mock.MagicMock()
+        svc.ledger.load.return_value = [_Row()]
+        svc.ledger.stats.return_value = {}
+        svc.settle_finished()
+        self.assertEqual(called, [], "无可结算场次时不得调 capture_closing")

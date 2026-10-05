@@ -41,11 +41,12 @@ import json
 import os
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from core.settlement import (
+    GRADED_STATUSES,
     SETTLE_PENDING,
     SETTLE_VOID,
     TERMINAL_STATUSES,
@@ -68,6 +69,32 @@ MAX_FILE_MB = 64.0
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _neg_str(text: object) -> str:
+    """把字符串**反转**用于 `sorted` 实现“时间倒序”。
+
+    为何不用 `reverse=True`：排序键里同时含“已结算优先”（升序）与
+    “时间倒序”，两者方向相反，无法用单一 `reverse` 表达。
+    反转字符串是个廉价且稳定的技巧（ISO8601 字典序即时间序）。
+    """
+    return str(text or "")[::-1]
+
+
+def _to_int_safe(value: object, default: int = 0) -> int:
+    """容错整数（统计字段可能缺失/为 None/为字符串）。"""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _to_float_safe(value: object, default: float = 0.0) -> float:
+    """容错浮点（同上）。"""
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 @dataclass
@@ -122,6 +149,15 @@ class LedgerEntry:
     def key(self) -> tuple:
         """同一盘口结果的唯一键（用于取最新一条）。"""
         return (self.match_id, self.market, self.line, self.outcome)
+
+    @property
+    def date_key(self) -> str:
+        """决策日期 `YYYY-MM-DD`（本地分组用；`at` 为 ISO8601 UTC）。
+
+        为何不直接按 `at`（含时分秒）分组：那样每条都是独立一组，
+        等于没有聚合。按日聚合才能看出“哪几天在赚钱”。
+        """
+        return str(self.at or "")[:10]
 
     @property
     def clv(self) -> Optional[float]:
@@ -539,6 +575,122 @@ class DecisionLedger:
         for r in rows:
             buckets.setdefault(str(getattr(r, attr, "") or ""), []).append(r)
         return {k: summarise(v) for k, v in buckets.items()}
+
+    # -- 历史战绩（用户要求：展示历史决策与实际结果的统计） ---------------
+
+    def history(
+        self,
+        picks_only: bool = True,
+        limit: int = 300,
+        days: int = 0,
+    ) -> Dict[str, Any]:
+        """历史决策 vs 实际结果的**分组统计 + 明细**。
+
+        与 `stats()` 的区别（两者互补，不是重复）：
+          * `stats()` —— 只给**总量**指标（命中率/ROI/CLV），
+            用于“模型到底行不行”的一句话结论；
+          * `history()` —— 拆分到**时间/联赛/盘口/决策来源**，
+            并回传逐条明细（含实际比分），用于“为什么不行、哪一类不行”。
+
+        为何需要分组（否则看不出可优化点）：
+        总命中率 52% 可能掩盖“某个联赛 20%”或“某个盘口 80%”
+        —— 后者才是可执行的改进信号。
+
+        Args:
+            picks_only: 只看买入建议（默认）。设 False 可同时看被门控
+                拦截的盘口表现，用于校准门控阈值（这是判断门控是在
+                帮忙还是在误杀的唯一依据）。
+            limit: 明细返回条数上限（默认 300）。
+            days: 只看最近 N 天；0 表示不限。
+
+        Returns:
+            含 `overall` / `by_date` / `by_league` / `by_market` /
+            `by_decision` / `by_trigger` / `by_status` / `entries` /
+            `timeline` 的字典，全部**可在容器内复核**，不依赖外部服务。
+        """
+        rows = self.load()
+        if picks_only:
+            rows = [r for r in rows if r.is_pick]
+        if days and days > 0:
+            cutoff = (_now() - timedelta(days=days)).isoformat()
+            # `at` 是 ISO8601 UTC 字符串，字典序即时间序（同格式可比）
+            rows = [r for r in rows if str(r.at) >= cutoff]
+
+        # 明细：**已结算优先且按时间倒序**，让人先看到有结论的
+        def _rank(r: LedgerEntry) -> Any:
+            settled = r.status not in (SETTLE_PENDING,)
+            return (0 if settled else 1, _neg_str(r.at))
+        ordered = sorted(rows, key=_rank)
+        entries = [r.as_dict() for r in ordered[:max(0, limit)]]
+
+        graded = [r for r in rows
+                  if r.status in GRADED_STATUSES]
+        return {
+            "overall": summarise(rows),
+            "settled": summarise(graded),
+            "by_date": self._group_by(rows, "date_key"),
+            "by_league": self._group_by(rows, "league"),
+            "by_market": self._group_by(rows, "market"),
+            "by_decision": self._group_by(rows, "decision"),
+            "by_trigger": self._group_by(rows, "trigger"),
+            "by_status": self._count_by(rows, "status"),
+            "timeline": self._timeline(graded),
+            "entries": entries,
+            "entries_shown": len(entries),
+            "entries_total": len(rows),
+            "picks_only": bool(picks_only),
+            "days": int(days or 0),
+            "ledger": self.health(),
+        }
+
+    @staticmethod
+    def _count_by(rows: Sequence[LedgerEntry], attr: str) -> Dict[str, int]:
+        """按字段计数（不跑完整 summarise，避免无意义的指标计算）。"""
+        out: Dict[str, int] = {}
+        for r in rows:
+            k = str(getattr(r, attr, "") or "")
+            out[k] = out.get(k, 0) + 1
+        return out
+
+    @staticmethod
+    def _timeline(graded: Sequence[LedgerEntry]) -> List[Dict[str, Any]]:
+        """按**决策日期**聚合的“累计结果”序列，用于看命中率走势。
+
+        为何要累计列：单日样本往往只有几注，日命中率跳动极大（0%↔100%），
+        看累计曲线才能判断模型是否真的在赚钱，而不是被小样本噪声骗。
+
+        ⚠️ **按决策日期（`at`）而不是结算日期分组**（本项目测试抓到的设计错）：
+        结算是**批量任务**（每 `settle_interval_s` 跑一轮），
+        同一批历史条目会在**同一天**被集中结算 —— 若按 `settled_at` 分组，
+        整条曲线会堆到“今天”一列，完全看不出历史分布。
+        按决策日期分组才是稳定的，也贴合“历史决策 vs 实际结果”的语义。
+        """
+        buckets: Dict[str, List[LedgerEntry]] = {}
+        for r in graded:
+            day = str(r.at or "")[:10]
+            buckets.setdefault(day, []).append(r)
+        out: List[Dict[str, Any]] = []
+        cum_stake = 0
+        cum_profit = 0.0
+        for day in sorted(buckets):
+            st = summarise(buckets[day])
+            stake = _to_int_safe(st.get("stake_units"))
+            profit = _to_float_safe(st.get("profit_units"))
+            cum_stake += stake
+            cum_profit += profit
+            out.append({
+                "date": day,
+                "n": st.get("graded") or 0,
+                "won": st.get("won") or 0,
+                "lost": st.get("lost") or 0,
+                "hit_rate": st.get("hit_rate"),
+                "profit_units": round(profit, 4),
+                "cum_stake": cum_stake,
+                "cum_profit": round(cum_profit, 4),
+                "cum_roi": (round(cum_profit / cum_stake, 6)
+                            if cum_stake else None),
+            })
+        return out
 
     def health(self) -> Dict[str, Any]:
         path = self.path
