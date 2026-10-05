@@ -1000,6 +1000,44 @@ class RealtimeHub:
         with self._lock:
             return mid in self._finished
 
+    def finished_mids(self) -> List[str]:
+        """已收到结束通知（`C109`）的赛事 ID。
+
+        用途：结算时作为**本地方案的来源**（见 `settle_finished`）。
+        用户要求「正确率要能统计」，而 REST 赛程在会话过期时拿不到；
+        推送里的 `C109` 同样能告诉我们哪些场已结束。
+        """
+        with self._lock:
+            return sorted(self._finished)
+
+    def scores_snapshot(self) -> Dict[str, Tuple[int, int]]:
+        """当前所有已知比分（本地推送累积，**不依赖 REST**）。
+
+        为何需要（用户报「买入决策正确率没有统计」的根因之一）：
+        结算原来只调 `source.schedule()` 拿终场比分；会话一过期就
+        完全拿不到 → `graded=0` → 命中率永远算不出。
+        而推送里的比分（`C103`/`C1021`）本就存在内存里，
+        够用于结算已结束的场次。
+        """
+        with self._lock:
+            return dict(self._scores)
+
+    def half_score(self, mid: str) -> Optional[Tuple[int, int]]:
+        """半场比分（若上游在状态里给过）；缺失返回 None。
+
+        半场比分缺失时结算会把半场盘口判为 `void`（而不是拿全场
+        比分硬算）—— 这是既有 `core.settlement` 的约定。
+        """
+        with self._lock:
+            st = self._status.get(str(mid)) or {}
+        raw = st.get("half_score")
+        if isinstance(raw, (list, tuple)) and len(raw) >= 2:
+            try:
+                return (int(raw[0]), int(raw[1]))
+            except (TypeError, ValueError):
+                return None
+        return None
+
     def subscribed(self) -> List[str]:
         with self._lock:
             return list(self._subscribed)

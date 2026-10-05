@@ -22,6 +22,7 @@ import unittest
 from collector.normalizer import parse_pooled_odds
 from core import markets as mk
 from service.valuation import ValuationService
+from store import safe_name
 
 
 def _official_sample() -> dict:
@@ -440,3 +441,50 @@ class TestSnapshotCacheMerge(unittest.TestCase):
         before = svc._snap_cache
         again = svc._all_snapshots()
         self.assertIs(again, before)               # 命中缓存，未重建
+
+
+class TestStoreStampTtlActuallyWorks(unittest.TestCase):
+    """**回归**：存储指纹的 TTL 必须真的生效（否则 CPU 被打满）。
+
+    真实性能缺陷：`_store_stamp_cached` 早期只在 `_snap_stamp is None` 时
+    记录时间戳，而缓存一旦建好 `_snap_stamp` 就不是 None → `_snap_stamp_at`
+    永远停在最初那一刻 → `now - at` 持续增长 → TTL 形同虚设 →
+    **每次调用都 rglob 全目录**（3111 个 `_index.json`，实测 0.55s）。
+
+    后果：结算逐场 34 次 ≈ 19s、决策逐场上千次 → py-spy 拍到
+    `analysis-settle`/`analysis-cycle` 卡在 `_store_stamp → rglob`，
+    容器 CPU 抬到 100%+、接口超时（用户报「加载慢」）。
+    """
+
+    def _svc(self) -> ValuationService:
+        return ValuationService(snapshot_root="output",
+                                corpus_root="output",
+                                prefer_redis=False,
+                                source="ticai")
+
+    def test_repeated_calls_hit_ttl(self) -> None:
+        import time
+        svc = self._svc()
+        base = svc.store.root / safe_name(svc.source.display_source)
+        first = svc._store_stamp_cached(base)          # 冷：真扫一次
+        t0 = time.perf_counter()
+        for _ in range(20):
+            again = svc._store_stamp_cached(base)
+        elapsed = time.perf_counter() - t0
+        self.assertEqual(first, again, "同一 TTL 内应返回同一指纹")
+        # 20 次命中应当远快于 20 次真实扫描（单次扫描约 0.5s）
+        self.assertLess(elapsed, 0.5,
+                        "TTL 未生效：仍在反复全目录扫描（耗时 %.3fs）" % elapsed)
+
+    def test_timestamp_is_refreshed(self) -> None:
+        """每次真实扫描后都应刷新时间戳，否则 TTL 永远过期。"""
+        svc = self._svc()
+        base = svc.store.root / safe_name(svc.source.display_source)
+        svc._store_stamp_cached(base)
+        first_at = svc._snap_stamp_at
+        self.assertGreater(first_at, 0.0, "必须记录扫描时刻")
+        # 把时间戳人为拨回过去 → 下一次应触发真实扫描并刷新它
+        svc._snap_stamp_at = first_at - 10_000.0
+        svc._store_stamp_cached(base)
+        self.assertGreater(svc._snap_stamp_at, first_at - 10_000.0,
+                           "真实扫描后必须刷新时间戳")

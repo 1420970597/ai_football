@@ -747,6 +747,19 @@ class ApiApp:
                 dec_by_id[str(d.get("match_id"))] = d
         rt = self.analysis.realtime
 
+        # **能否判定“进行中”**（用户问题 1：场次要与乐鱼一致）。
+        #
+        # 为何需要这个标志：早期在 `live_ids is None`（赛程与推送都不可用）
+        # 时回退为 `state == "active"`，而那个 state 只是**快照时效**派生
+        # 的（active/stale/delisted），与“比赛是否在踢”无关 ——
+        # 实测页面因此声称 **2436 场进行中**，而乐鱼只有 67 场，
+        # 差异高达 36 倍，属于**误导性展示**。
+        #
+        # 正确做法：拿不到权威判据时就不声称“进行中”，
+        # 而是把这件事**如实告知**（`live_known=False` + 原因），
+        # 让用户知道“这个数字不可信、需要修凭据”，而不是被骗。
+        live_known = live_ids is not None
+
         rows: List[Dict[str, Any]] = []
         for m in self._board_candidates(league=league, live_ids=live_ids,
                                         only_live=only_live, rt=rt):
@@ -754,9 +767,15 @@ class ApiApp:
             state = str(m.get("state") or "")
             if state == "delisted":
                 continue
-            is_live = (mid in live_ids) if live_ids is not None \
-                else (state == "active")
-            if only_live and not is_live:
+            # 只有**权威判据**（赛程 ms==1 或推送见过）才算进行中；
+            # 拿不到判据时一律当作“未知”，不得拿快照时效冒充。
+            is_live = bool(live_known and mid in (live_ids or ()))
+            # ⚠️ 只在**能判定**时才按“进行中”过滤。
+            # 若判据未知（`live_known=False`）还硬过滤，就会重现
+            # “看板空白”的故障（前端默认勾选「只看进行中」）。
+            # 此时宁可全部展示并标注 `live_known=False`，让用户
+            # 知道“这个数字不可信”，而不是给他一个空页。
+            if only_live and live_known and not is_live:
                 continue
             dec = dec_by_id.get(mid) or {}
             row: Dict[str, Any] = {
@@ -803,6 +822,11 @@ class ApiApp:
             "live": sum(1 for r in rows if r["is_live"]),
             "buy": sum(1 for r in rows if r["has_buy"]),
             "decided": sum(1 for r in rows if r["decided"]),
+            # 进行中判据是否可信（用户问题 1 的核心）——
+            # False 时前端必须提示“该数字不可信”，而不是直接展示。
+            "live_known": live_known,
+            "live_source": self.analysis._live_source,
+            "live_error": self.analysis._live_error,
             "summary": res.get("summary") or {},
             "trigger": self.analysis.scheduler_health(),
             "cycle": getattr(self.analysis, "cycle_stats", {}),

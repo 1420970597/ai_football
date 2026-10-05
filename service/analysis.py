@@ -353,6 +353,9 @@ class AnalysisService:
         self._live_cache: Optional[Tuple[float, Optional[set]]] = None
         self._live_source: str = ""
         self._live_error: str = ""
+        #: `mid → 名称行` 的字典缓存（`match_index()` 结果是列表，
+        #: 逐场线性查找会变成 O(n×m)，见 `_names_dict`）
+        self._names_cache: Optional[Tuple[Any, Dict[str, Dict[str, Any]]]] = None
         #: 决策台账：记录每个建议与被拦截盘口，供赛后核对 LLM 准确度
         self.ledger = DecisionLedger(self.config.ledger_root)        #: 结算线程（定期把已结束赛事的比分回填进台账）
         self._settle_thread: Optional[threading.Thread] = None
@@ -606,12 +609,14 @@ class AnalysisService:
         cand_by_id = {str(m.get("match_id")): m
                       for m in self.candidates(only_live=False)}
         items: List[Tuple[str, str, str, str, List[Any], Any, Dict[str, Any]]] = []
+        # 同样批量取（触发式决策每批最多 12 场，但批量版统一路径更简单，
+        # 且避免了 per-match 的指纹校验）。
+        snaps_by_mid = self._snapshots_for_many(sorted(want))
         for mid in want:
             m = cand_by_id.get(mid)
             if m is None:
                 continue  # 已结束/不在候选里：静默跳过
-            # 优先本地实时表（最新价、毫秒级），回退磁盘历史
-            snaps = self._snapshots_for(mid)
+            snaps = snaps_by_mid.get(mid)
             if not snaps:
                 continue
             trend = self.realtime.trend(mid) if self.realtime else None
@@ -740,9 +745,19 @@ class AnalysisService:
     def settle_finished(self) -> Dict[str, Any]:
         """拉取已结束赛事的比分，回填台账并算出本地统计。
 
-        为何要拉「已结束」而不是用实时推送的比分：推送只覆盖**已订阅**
-        的赛事，且容器重启会丢；而台账里可能残留几天前的待结算条目。
-        因此每轮直接向数据源要一次赛程（包含终场比分）。
+        ## 两条比分来源（会话过期时仍能结算）
+
+        1. **REST 赛程**（`source.schedule()`）—— 最完整，含终场/半场比分。
+        2. **本地推送**（`RealtimeHub`）—— REST 拿不到时的兑底。
+
+        为何必须加第 2 条（用户报「买入决策正确率没有统计」的根因）：
+        早期只读 REST。会话一过期（`6001 token已过期`）`schedule()`
+        就抛异常 → `_finished_matches()` 返回空 → `graded=0`
+        → **命中率/ROI/CLV 永远算不出来**，而推送里的比分
+        （`C103`/`C1021`）与结束通知（`C109`）本就在内存里。
+
+        为何仍以 REST 为先：推送只在订阅期间覆盖、重启即丢；
+        而台账可能残留几天前的条目。两者合并取并集。
 
         Returns:
             结算统计（含 `stats`，即当前命中率/ROI/CLV）。
@@ -753,7 +768,10 @@ class AnalysisService:
         if not pending:
             self.settle_stats["rounds"] = \
                 _to_int(self.settle_stats.get("rounds")) + 1
-            return {"settled": 0, "void": 0, "reason": "无待结算条目"}
+            # 字段集与正常路径保持一致（前端/调用方不必区分两种返回形态）
+            return {"settled": 0, "void": 0, "reason": "无待结算条目",
+                    "closing_captured": 0, "scores_from_push": 0,
+                    "scores_total": 0, "stats": self.ledger.stats()}
         # **先补收盘赔率**（CLV 的前置条件，不能事后重建）。
         # 必须在 settle 之前做：settle 会把条目改成终结态，
         # 之后 capture_closing 就不再碰它（避免把状态改回 pending）。
@@ -772,10 +790,14 @@ class AnalysisService:
             if ht and ht[0] is not None and ht[1] is not None:
                 entry["ht"] = list(ht)
             scores[mid] = entry
+        # **本地推送兑底**：REST 不可用（或未覆盖）时用 Hub 内存里的比分。
+        local_used = self._merge_local_scores(scores, pending)
         # 显式注解：`settle()` 返回 Dict[str, int]，但下面要挂 `stats`（嵌套字典），
         # 不收宽类型会让静态检查拒绝赋值。
         out: Dict[str, Any] = dict(self.ledger.settle(scores))
         out["closing_captured"] = closing
+        out["scores_from_push"] = local_used
+        out["scores_total"] = len(scores)
         self.settle_stats["rounds"] = \
             _to_int(self.settle_stats.get("rounds")) + 1
         self.settle_stats["settled"] = \
@@ -801,14 +823,19 @@ class AnalysisService:
         if not want:
             return 0
         quotes: Dict[Any, float] = {}
-        for mid in want:
-            try:
-                # 优先实时表：CLV 参照的收盘价应当取“最后一次看到的价”，
-                # 而实时表就是最新观测值，比磁盘历史更接近收盘。
-                snaps = self._snapshots_for(mid)
-            except Exception:  # noqa: BLE001 - 单场读取失败不影响其他场
-                continue
-            # `_snapshots_of` 按 captured_at 升序；后用覆盖前用 → 最新在手
+        # **一次批量取快照**，而不是逐场调 `_snapshots_for()`。
+        #
+        # 为何（实测性能故障）：轮询中的 pending 可达几十场（本仓库 34 场），
+        # 而每次 `_snapshots_for()` 都会经 `_all_snapshots()` 校验存储指纹
+        # （rglob 3111 个目录）—— 34 次就是 34 轮全盘扫描，且与决策/推送
+        # 线程争抢缓存锁。py-spy 直接拍到 `analysis-settle` 线程卡在
+        # `_store_stamp → rglob`，容器 CPU 被抬到 100%+、结算接口超时。
+        #
+        # 批量版只校验一次，并复用 `_all_snapshots()` 已有的
+        # `match_id -> 下标` 索引。
+        by_mid = self._snapshots_for_many(want)
+        for mid, snaps in by_mid.items():
+            # 快照按 captured_at 升序；后用覆盖前用 → 最新在手
             for snap in snaps:
                 line = str((snap.metadata or {}).get("leyu_hv") or "")
                 outcomes = tuple(snap.outcomes or ())
@@ -828,6 +855,61 @@ class AnalysisService:
             self.settle_stats["last_error"] = "收盘赔率写入失败: %s" % exc
             return 0
 
+    def _snapshots_for_many(self, mids: Any) -> Dict[str, List[Any]]:
+        """批量版 `_snapshots_for`：**只校验一次存储指纹**。
+
+        为何需要：`_snapshots_for()` 每调一次都会经 `_all_snapshots()`
+        校验存储指纹（rglob 3111 个目录）。逐场调用（结算几十场、
+        决策上百场）会把同一份校验重复几十次 —— 实测能把 CPU 抬到
+        100%+ 并使接口超时。本方法复用 `_all_snapshots()` 的
+        `match_id → 下标` 索引，一次拿到所有需要的场次。
+
+        Args:
+            mids: 需要的赛事 ID 集合/序列。
+
+        Returns:
+            `{mid: [OddsSnapshot, ...]}`（按 captured_at 升序）。
+        """
+        need = {str(m) for m in mids if m}
+        out: Dict[str, List[Any]] = {}
+        if not need:
+            return out
+
+        # 1) 优先实时表（毫秒级 + 必然最新）
+        rt = self.realtime
+        if rt is not None:
+            src = getattr(self.valuation, "source", None)
+            name = getattr(src, "display_source", "") or ""
+            for mid in need:
+                try:
+                    rows = rt.live.book(mid)
+                except AttributeError:
+                    break            # 旧版 Hub 无 LiveBook → 整体走磁盘
+                if not rows:
+                    continue
+                home, away, league = self._match_names(mid)
+                live = snapshots_from_live(
+                    rows, mid, home=home, away=away, league=league,
+                    source=name)
+                if live:
+                    out[mid] = live
+
+        # 2) 剩余场次：逐场走 `_snapshots_of`（**单一事实源**，
+        #    便于测试替身与未来改动只在那一处生效）。
+        #    性能上不再担心 N+1：`_snapshots_of` 已用
+        #    `match_id → 下标` 索引（O(本场条数)），
+        #    而其底层的 `_all_snapshots()` 指纹校验已带 TTL
+        #    （见 `_store_stamp_cached` 的修复）。
+        rest = need - set(out)
+        for mid in rest:
+            try:
+                snaps = self.valuation._snapshots_of(mid)
+            except Exception:  # noqa: BLE001 - 单场失败不影响其他场
+                continue
+            if snaps:
+                out[mid] = snaps
+        return out
+
     def _finished_matches(self) -> List[Any]:
         """已结束（含带终场比分）的赛事。取不到时返回空列表。"""
         try:
@@ -836,6 +918,66 @@ class AnalysisService:
             return []
         return [m for m in (sched or [])
                 if getattr(m, "is_finished", False)]
+
+    def _merge_local_scores(self, scores: Dict[str, Any],
+                            pending: Any) -> int:
+        """把 **本地推送** 里的比分合并进 `scores`（REST 不可用时的兑底）。
+
+        为何需要（用户报「买入决策正确率没有统计」的根因）：
+        结算只读 REST 赛程，会话过期（`6001 token已过期`）就完全拿不到
+        比分 → `graded=0` → **命中率/ROI/CLV 永远算不出来**。
+        而推送里的比分（`C103`）与结束通知（`C109`）本就在内存里。
+
+        ⚠️ **只结算已确认结束的场次**（`C109` → `is_finished`）。
+        这是一个安全红线：进球过程中推送的比分是**当前比分**而非终场
+        比分，拿它结算会把“还在踢”的比赛算成已定输赢 ——
+        那种统计比没有统计更危险（会给出错误的命中率）。
+
+        REST 已有结果时不覆盖（它以先到为准，含半场比分更完整）。
+
+        Args:
+            scores: 已有的 `{mid: {"ft": [...], "ht": [...]}}`（就地修改）。
+            pending: 仍待结算的 mid 集合。
+
+        Returns:
+            本次从推送补充的场次数。
+        """
+        rt = self.realtime
+        if rt is None or not pending:
+            return 0
+        try:
+            local = rt.scores_snapshot()
+            finished = set(rt.finished_mids())
+        except AttributeError:
+            return 0            # 旧版 Hub 无这些能力
+        want = {str(m) for m in pending if m}
+        added = 0
+        for mid, ft in local.items():
+            mid = str(mid)
+            if mid not in want or mid in scores:
+                continue
+            if mid not in finished:
+                continue        # 未完赛不得结算（见上）
+            try:
+                h, a = int(ft[0]), int(ft[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            entry: Dict[str, Any] = {"ft": [h, a]}
+            # 半场比分缺失就不填：半场盘口会被判 void，
+            # 而不是拿全场比分硬算（与 REST 分支同一约定）。
+            # `int()` 必须在 try 内：脏值不得中断整轮结算。
+            try:
+                ht = rt.half_score(mid)
+            except (AttributeError, TypeError):
+                ht = None
+            if ht and ht[0] is not None and ht[1] is not None:
+                try:
+                    entry["ht"] = [int(ht[0]), int(ht[1])]
+                except (TypeError, ValueError):
+                    pass        # 脏半场比分宁可不要（会被判 void）
+            scores[mid] = entry
+            added += 1
+        return added
 
     def ledger_stats(self, only_picks: bool = True,
                      trigger: Optional[str] = None) -> Dict[str, Any]:
@@ -1184,16 +1326,36 @@ class AnalysisService:
 
         用 `match_index()`（仅扫目录名，实测 0.09s 且带 TTL 缓存），
         而不是 `list_matches()`（要读 6.5 万个快照文件，14s）。
+
+        性能：`match_index()` 返回的是**列表**，直接遍历查找是 O(n)；
+        而本方法在一轮里会被逐场调用（最多几千场）→ O(n×m)（实测
+        3111×2436 多次比较，白白烧 CPU）。因此这里先转成 `mid → row`
+        的字典并缓存，查找降为 O(1)。
+        """
+        row = self._names_dict().get(str(mid))
+        if row is None:
+            return "", "", ""
+        return (str(row.get("home") or ""),
+                str(row.get("away") or ""),
+                str(row.get("league") or ""))
+
+    def _names_dict(self) -> Dict[str, Dict[str, Any]]:
+        """`mid → 名称行` 的字典缓存（避免逐场线性扫描）。
+
+        与 `match_index()` 的 TTL 缓存配合：`match_index()` 本身已缓存
+        扫描结果，这里只是把它重排成可 O(1) 查找的形状；
+        用 `id()` 判定“列表对象是否换过”即可知道要不要重建。
         """
         try:
-            for row in self.valuation.match_index():
-                if str(row.get("match_id")) == str(mid):
-                    return (str(row.get("home") or ""),
-                            str(row.get("away") or ""),
-                            str(row.get("league") or ""))
+            rows = self.valuation.match_index()
         except Exception:  # noqa: BLE001 - 队名缺失只影响展示，不阻断决策
-            pass
-        return "", "", ""
+            return {}
+        cached = self._names_cache
+        if cached is not None and cached[0] is rows:
+            return cached[1]
+        table = {str(r.get("match_id")): r for r in rows}
+        self._names_cache = (rows, table)
+        return table
 
     def _build_context(self, match: Mapping[str, Any]) -> Dict[str, Any]:
         """构造交给决策引擎/LLM 的上下文（**严防比分泄漏**）。
@@ -1483,11 +1645,17 @@ class AnalysisService:
             self.stats_runs = getattr(self, "stats_runs", 0) + 1
 
             # 组装每场的输入：全部快照 + 走势 + 上下文
+            #
+            # **批量取快照**（而不是逐场 `_snapshots_for()`）：
+            # 后者每调一次都会校验存储指纹（rglob 3111 个目录），
+            # 一轮 2436 场就是 2436 轮全盘扫描 —— 实测把 CPU 抬到 100%+、
+            # 决策接口直接超时。批量版只校验一次。
+            wanted = [str(m.get("match_id")) for m in cands]
+            snaps_by_mid = self._snapshots_for_many(wanted)
             items: List[Tuple[str, str, str, str, List[Any], Any, Dict[str, Any]]] = []
             for m in cands:
                 mid = str(m.get("match_id"))
-                # 优先本地实时表（用户要求：查询读本地异步数据）
-                snaps = self._snapshots_for(mid)
+                snaps = snaps_by_mid.get(mid)
                 if not snaps:
                     continue
                 trend = self.realtime.trend(mid) if self.realtime else None

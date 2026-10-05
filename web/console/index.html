@@ -391,6 +391,12 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
 
   <!-- ============ 校准报告 ============ -->
   <section id="view-calibration" style="display:none">
+    <!-- 买入决策正确率（用户要求：本地要有正确率统计） -->
+    <div class="panel">
+      <h2>买入决策正确率 <span class="tag" id="acc-tag">本地台账统计</span></h2>
+      <div class="kv" id="acc-kv"></div>
+      <div class="note" id="acc-note"></div>
+    </div>
     <div class="panel">
       <h2>L6 校准报告 <span class="tag">Brier · ECE · CLV · 对数增长率 · 最大回撤</span></h2>
       <div class="kv" id="cal-kv"></div>
@@ -470,7 +476,10 @@ function showView(v) {
   S.view = v;
   VIEWS.forEach(([k]) => { const n = $("view-" + k); if (n) n.style.display = (k === v) ? "" : "none"; });
   renderNav();
-  if (v === "calibration") loadCalibration();
+  if (v === "calibration") {
+    loadAccuracy();
+    loadCalibration();
+  }
   if (v === "board") {
     loadBoard();
     startBoardTimer();
@@ -1296,6 +1305,82 @@ async function loadModel(matchId) {
 }
 
 /* ---------- 校准 ---------- */
+
+/**
+ * 买入决策正确率（用户要求：「本地买入决策的正确率没有做统计」）。
+ *
+ * 数据源：`/ledger/stats`（本地台账，**不依赖外部服务**）。
+ *
+ * 关键区别（为何单开一个面板而不是塞进 L6 校准报告）：
+ *   * `graded` —— **已结算**的注单数。为 0 时下面所有指标都无意义，
+ *     必须显式提示「等待赛果」，而不是把 null 显示成 0（会误导）。
+ *   * `unpicked_*` —— 被门控拦下的盘口表现，用于判断门控是在帮忙
+ *     还是在误杀（这是校准门槛的唯一依据）。
+ */
+async function loadAccuracy() {
+  const kv = $("acc-kv"), note = $("acc-note");
+  if (!kv) return;
+  clear(kv); clear(note);
+  kv.appendChild(el("div", { text: "加载中…" }));
+  let d;
+  try {
+    const r = await fetch(API + "/ledger/stats");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    d = await r.json();
+  } catch (e) {
+    clear(kv);
+    kv.appendChild(el("div", {}, [el("b", { text: "加载失败" }),
+      document.createTextNode(" /ledger/stats：" + e.message)]));
+    return;
+  }
+  clear(kv);
+  const num = (v, f) => (v === null || v === undefined) ? "—" : f(v);
+  const pctS = (v) => num(v, (x) => (Number(x) * 100).toFixed(2) + "%");
+  [
+    ["购买建议总数", String(d.total ?? 0)],
+    ["已结算（graded）", String(d.graded ?? 0)],
+    ["待结算（pending）", String(d.pending ?? 0)],
+    ["命中率", pctS(d.hit_rate)],
+    ["赢 / 输 / 走水", (d.won ?? 0) + " / " + (d.lost ?? 0) + " / " + (d.push ?? 0)],
+    ["ROI", pctS(d.roi)],
+    ["盈利（单位）", num(d.profit_units, (x) => Number(x).toFixed(3))],
+    ["平均赔率", num(d.avg_odds, (x) => Number(x).toFixed(3))],
+    ["CLV 样本 / 均值", (d.clv_n ?? 0) + " / " + pctS(d.clv_mean)],
+    ["CLV 正比例", pctS(d.clv_positive_rate)],
+    ["被拦截盘口数", String(d.unpicked_n ?? 0)],
+    ["被拦截命中率", pctS(d.unpicked_hit_rate)]
+  ].forEach(([k, v]) => kv.appendChild(el("div", {},
+    [el("b", { text: k }), document.createTextNode(v)])));
+
+  const tag = $("acc-tag");
+  if (tag) {
+    setText(tag, (d.graded ?? 0) > 0
+      ? ("已结算 " + d.graded + " 注")
+      : "尚无已结算注单");
+  }
+  // 诚实提示：graded=0 时命中率本就无法计算，不能让人以为“都是 0”
+  if (!d.graded) {
+    note.appendChild(document.createTextNode(
+      "尚无已结算注单：命中率/ROI/CLV 需等比赛结束后回填赛果才能计算。"));
+    note.appendChild(el("br"));
+    note.appendChild(document.createTextNode(
+      "台账正在累积（当前 " + (d.total ?? 0) + " 条、待结算 " +
+      (d.pending ?? 0) + " 条）。若长期为 0，请检查赛后结算是否拿到赛果。"));
+  } else {
+    note.appendChild(document.createTextNode(
+      "命中率 = 赢 /（赢+输），走水不计分母；ROI = 每单位本金净收益。"));
+    note.appendChild(el("br"));
+    note.appendChild(document.createTextNode(
+      "CLV（收盘价/买入价−1）比单场输赢更可信，样本需求更低。"));
+    if (d.unpicked_n) {
+      note.appendChild(el("br"));
+      note.appendChild(document.createTextNode(
+        "被门控拦截的 " + d.unpicked_n + " 注命中率 " +
+        pctS(d.unpicked_hit_rate) + "：低于已买注说明门控在帮忙，反之是误杀。"));
+    }
+  }
+}
+
 async function loadCalibration() {
   const calKv = $("cal-kv"), hKv = $("health-kv");
   clear(calKv); clear(hKv);
@@ -1403,10 +1488,27 @@ async function loadBoard(opts) {
 
   const rt = data.realtime || {};
   const trig = data.trigger || {};
-  setText($("board-tag"), (data.count || 0) + " 场 · 进行中 " + (data.live || 0) +
+  // 进行中判据是否可信（用户问题 1：场次要与乐鱼一致）。
+  // 不可信时**明确告知**，而不是把快照时效冒充的假数字直接展示。
+  const liveKnown = data.live_known !== false;
+  setText($("board-tag"), (data.count || 0) + " 场 · 进行中 " +
+    (liveKnown ? (data.live || 0) : "未知") +
     " · 有买入建议 " + (data.buy || 0) + " · 已决策 " + (data.decided || 0));
   setText($("board-updated"), data.generated_at
     ? ("更新于 " + String(data.generated_at).slice(11, 19) + "Z") : "");
+
+  // 判据不可用时把原因写到看板顶部（含修复指引）
+  const bar = $("board-bar");
+  const oldWarn = bar ? bar.querySelector(".live-warn") : null;
+  if (oldWarn) oldWarn.remove();
+  if (!liveKnown && bar) {
+    bar.appendChild(el("span", {
+      class: "pill bad live-warn",
+      title: data.live_error || "",
+      text: "⚠ 进行中判据不可用（显示「未知」）：" +
+            "乐鱼会话可能已过期，需更新 LEYU_H5_TOKEN"
+    }));
+  }
 
   const body = $("board-body");
   clear(body);

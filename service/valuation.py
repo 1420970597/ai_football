@@ -357,10 +357,18 @@ class ValuationService:
         return out
 
     def _store_stamp_cached(self, base: Path) -> Tuple[int, float]:
-        """带短 TTL 的存储指纹（避免同一轮里反复 rglob 全目录）。
+        """带 TTL 的存储指纹（避免同一轮里反复 rglob 全目录）。
 
-        TTL 取很小（1.5s）：既让一轮决策内的几十次调用共享一次扫描，
-        又不会让“刚写入的快照”长时间不可见（实时决策要跟盘）。
+        ⚠️ 本方法曾有一个**真实性能缺陷**（用户报「加载慢 / CPU 高」）：
+        早期只在 `self._snap_stamp is None` 时才记录时间戳，
+        而 `_all_snapshots()` 一旦建好缓存，`_snap_stamp` 就**不再是 None**
+        → `_snap_stamp_at` 永远停在最初那一刻 → `now - at` 持续增长
+        → TTL 形同虚设 → **每次调用都 rglob 全目录**（3111 个 `_index.json`，
+        实测 0.55s）。后果：结算逐场 34 次 ≈ 19s、决策逐场上千次
+        → py-spy 拍到 `analysis-settle` / `analysis-cycle` 卡在
+        `_store_stamp → rglob`，容器 CPU 被抬到 100%+、接口超时。
+
+        正确语义：指纹**刚被扫描过**就刷新时间戳，TTL 才能真正生效。
         """
         now = time.monotonic()
         with self._cache_lock:
@@ -370,9 +378,11 @@ class ValuationService:
                 return cached
         stamp = self._store_stamp(base)
         with self._cache_lock:
-            # 只有当缓存仍是“这一版”时才顺带记录时间，避免覆盖别人刚写的
+            # 只在“没人同时改过指纹”时才写回扫描结果；
+            # 但**无论哪种情况都要刷新时间戳** —— 否则 TTL 失效（见上）。
             if self._snap_stamp is None:
-                self._snap_stamp_at = now
+                self._snap_stamp = stamp
+            self._snap_stamp_at = now
         return stamp
 
     @staticmethod

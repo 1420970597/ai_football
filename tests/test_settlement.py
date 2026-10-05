@@ -941,3 +941,100 @@ class TestStaleResultsAreShownNotHidden(unittest.TestCase):
                                    {"max_age": ["1800"]}, {})
             self.assertTrue(body.get("pending"))
             self.assertEqual(body["count"], 0)
+
+
+class TestSettleScoresFromLocalPush(unittest.TestCase):
+    """**回归**：会话过期（拿不到 REST 赛程）时，正确率仍要能统计出来。
+
+    用户报告「本地买入决策的正确率没有做统计」。根因：结算只读
+    `source.schedule()`，而会话一过期（`6001 token已过期`）它就抛异常，
+    于是 `graded=0` → **命中率/ROI/CLV 永远算不出来**。
+    而推送里的比分（`C103`）与结束通知（`C109`）本就在内存里。
+
+    ⚠️ 安全红线：只结算**已确认结束**（`C109`）的场次。
+    进球过程中推送的是**当前比分**，拿它结算会把“还在踢”的比赛
+    算成已定输赢 —— 那种统计比没有统计更危险。
+    """
+
+    def _svc(self, **kw: Any) -> Any:
+        from service.analysis import AnalysisConfig, AnalysisService
+        return AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                               config=AnalysisConfig(use_llm=False, **kw))
+
+    def test_only_finished_matches_are_settled(self) -> None:
+        svc = self._svc()
+        hub = mock.MagicMock()
+        hub.scores_snapshot.return_value = {"m1": (2, 1), "m2": (0, 0)}
+        hub.finished_mids.return_value = ["m1"]      # 只有 m1 确认结束
+        hub.half_score.return_value = None
+        svc.realtime = hub
+        scores: Dict[str, Any] = {}
+        n = svc._merge_local_scores(scores, {"m1", "m2"})
+        self.assertEqual(n, 1)
+        self.assertEqual(list(scores), ["m1"])
+        self.assertEqual(scores["m1"]["ft"], [2, 1])
+
+    def test_rest_scores_take_precedence(self) -> None:
+        svc = self._svc()
+        hub = mock.MagicMock()
+        hub.scores_snapshot.return_value = {"m1": (9, 9)}
+        hub.finished_mids.return_value = ["m1"]
+        svc.realtime = hub
+        scores = {"m1": {"ft": [1, 0]}}
+        svc._merge_local_scores(scores, {"m1"})
+        self.assertEqual(scores["m1"]["ft"], [1, 0], "REST 结果不得被覆盖")
+
+    def test_pending_matches_not_touched(self) -> None:
+        svc = self._svc()
+        hub = mock.MagicMock()
+        hub.scores_snapshot.return_value = {"other": (1, 1)}
+        hub.finished_mids.return_value = ["other"]
+        svc.realtime = hub
+        scores: Dict[str, Any] = {}
+        self.assertEqual(svc._merge_local_scores(scores, {"m1"}), 0)
+        self.assertEqual(scores, {})
+
+    def test_no_realtime_is_safe(self) -> None:
+        svc = self._svc()
+        self.assertEqual(svc._merge_local_scores({}, {"m1"}), 0)
+
+    def test_old_hub_without_capability_is_safe(self) -> None:
+        """旧版 Hub 没有这些方法时不得抛异常（只用 getattr 宽容检测）。"""
+        svc = self._svc()
+        svc.realtime = object()          # 完全没有 scores_snapshot
+        self.assertEqual(svc._merge_local_scores({}, {"m1"}), 0)
+
+    def test_dirty_score_is_skipped(self) -> None:
+        svc = self._svc()
+        hub = mock.MagicMock()
+        hub.scores_snapshot.return_value = {"m1": ("a", "b")}
+        hub.finished_mids.return_value = ["m1"]
+        svc.realtime = hub
+        scores: Dict[str, Any] = {}
+        self.assertEqual(svc._merge_local_scores(scores, {"m1"}), 0)
+        self.assertEqual(scores, {})
+
+    def test_half_score_attached_when_available(self) -> None:
+        svc = self._svc()
+        hub = mock.MagicMock()
+        hub.scores_snapshot.return_value = {"m1": (2, 1)}
+        hub.finished_mids.return_value = ["m1"]
+        hub.half_score.return_value = (1, 0)
+        svc.realtime = hub
+        scores: Dict[str, Any] = {}
+        svc._merge_local_scores(scores, {"m1"})
+        self.assertEqual(scores["m1"]["ht"], [1, 0])
+
+    def test_settle_reports_local_source(self) -> None:
+        """`settle_finished` 要把「有多少场来自推送」回传，便于排查。"""
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            svc = self._svc(ledger_root=d)
+            hub = mock.MagicMock()
+            hub.scores_snapshot.return_value = {}
+            hub.finished_mids.return_value = []
+            svc.realtime = hub
+            out = svc.settle_finished()
+            self.assertIn("scores_from_push", out)
+            self.assertIn("scores_total", out)
