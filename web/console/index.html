@@ -568,6 +568,10 @@ async function loadDecisions(opts) {
   S.decisionSummary = data.summary || null;
   renderDecisionSummary(data);
   renderCycleChip(data.cycle);
+  // 时效提示（用户报“加载不出来比赛场次”的真实故障）：
+  // 早期后端“超龄就返回空”，页面于是永远空白；现在旧数据仍返回，
+  // 由前端**如实告知“数据较旧”**，而不是把“慢”伪装成“无”。
+  renderStaleChip(data);
   if (!S.decisions.length) {
     setListState("empty");
     setText($("list-tag"), "0 场");
@@ -577,6 +581,23 @@ async function loadDecisions(opts) {
   setListState("table");
   renderDecisionTable(S.decisions);
   renderDecisionCards(data);
+}
+
+/* 数据时效提示：告知“这一轮是什么时候算的” */
+function renderStaleChip(data) {
+  const box = $("decision-summary");
+  if (!box) return;
+  const age = (typeof data.age_s === "number") ? data.age_s : null;
+  if (age === null) return;
+  const mins = Math.round(age / 60);
+  const txt = data.stale
+    ? ("数据较旧（" + mins + " 分钟前）· 后台正在重算")
+    : ("数据新鲜（" + mins + " 分钟前）");
+  box.appendChild(el("span", {
+    class: data.stale ? "mut" : "mut",
+    title: "决策由后台异步计算；“旧”不代表失败，只是尚未轮到下一轮",
+    text: txt
+  }));
 }
 
 /* 后台定时状态提示（告诉用户下一轮何时跑） */

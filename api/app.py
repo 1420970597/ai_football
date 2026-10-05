@@ -577,25 +577,38 @@ class ApiApp:
             async=1           起一个后台任务并返回 job_id（手动强制刷新）
             live=1            只看进行中的赛事（仅用于同步/异步重算）
             league=xxx        限定联赛
-            max_age=600       缓存超过该秒数则标记 stale=true
+            max_age=600       超过该秒数则标 `stale=true`
+
+        关于 `stale`（用户报“加载不出来比赛场次”的真实故障）：
+        早期实现是“超龄就返回 None”，于是页面只能显示“等待后台首轮决策”。
+        但一轮全量决策实测要跑 **50+ 分钟**，其至比 max_age 还长 ——
+        结果刚产出就已“过期”，页面**永远空着**，而磁盘上明明有 2436 场。
+
+        正确语义：**旧数据也要给，只是如实标注它旧**。
+        隐藏它等于把“慢”伪装成“无”，用户反而更看不出问题在哪。
         """
         mode = (_q1(query, "cached") or "1").strip().lower()
         if mode not in ("0", "false", "no"):
             max_age = _q_int(query, "max_age", 600)
-            res = self.analysis.latest_result(max_age_s=max_age or None)
+            # 先不带时效限制取回（以便区分“没有结果”与“结果太旧”）
+            res = self.analysis.latest_result(max_age_s=None)
             if res is None:
-                # 首轮尚未完成 / 结果过期：给出可操作提示，而不是让前端空等
+                # 真的尚未产出过任何结果（如刚启动、首轮还在跑）
                 return {
                     "count": 0, "summary": {}, "decisions": [],
                     "pending": True,
-                    "cycle": self.analysis.cycle_stats if hasattr(
-                        self.analysis, "cycle_stats") else {},
-                    "hint": "后台定时决策首轮尚未完成；可稍后刷新，"
-                            "或调用 POST /decisions/job 手动触发一轮。",
+                    "cycle": getattr(self.analysis, "cycle_stats", {}),
+                    "hint": "后台决策尚无任何产出（首轮可能仍在运行）；"
+                            "可稍后刷新，或调用 POST /decisions/job 手动触发一轮。",
                 }
+            age_s = self.analysis.latest_age_s()
+            stale = bool(max_age and age_s is not None and age_s > max_age)
             out = dict(res)
             out["cached"] = True
-            out["stale"] = False
+            # 如实的时效标注：前端据此提示“数据较旧，后台正在重算”
+            out["stale"] = stale
+            out["age_s"] = (round(age_s, 1) if age_s is not None else None)
+            out["max_age_s"] = max_age
             out["cycle"] = getattr(self.analysis, "cycle_stats", {})
             return out
 
@@ -812,19 +825,29 @@ class ApiApp:
         # 取实时表（旧版 Hub 没有 `live` 属性 → 视为无行情，走回退路径）。
         # 用 getattr 而不是 `rt.live`：既兼容旧 Hub，也让类型检查明确
         # “这个属性可能存在也可能不存在”。
-        live_book: Any = getattr(rt, "live", None)
+        book: Any = getattr(rt, "live", None)
 
         # 1) 有实时行情的场次（看板主体）；顺序按 mid 保证输出可复现
         live_mids: List[str] = []
-        if live_book is not None:
+        if book is not None:
             try:
-                live_mids = list(live_book.live_mids())
+                live_mids = list(book.live_mids())
             except (AttributeError, TypeError):
-                live_book = None    # 旧版/异常实现 → 降级为快照库
-        # 无任何实时行情时（推送刚启动/未订阅到）：同样无法读内存表，
-        # 退回快照库，保证看板仍可用（而非空白页）。
-        if not live_mids and not only_live:
+                book = None     # 旧版/异常实现 → 降级为快照库
+
+        # 没有任何实时行情时退回快照库。
+        #
+        # 为何不再要求 `not only_live`（本项目真实故障）：前端默认勾选
+        # 「只看进行中」，于是 `only_live=True`；而会话不可用时 `live_mids`
+        # 为空 → 早期实现直接越过回退、返回空列表 → 看板永远显示
+        # “暂无进行中的盘口”，而磁盘上明明有几千场。现在统一回退，
+        # 由调用方按 `is_live` 过滤（它本来就会做这一步）。
+        if not live_mids:
             return list(self.svc.list_matches(league=league))
+        # 排除“收集到了 mid 但实时表已降级”的矛盾状态，让类型收窄为非 None。
+        if book is None:
+            return list(self.svc.list_matches(league=league))
+
         out: List[Dict[str, Any]] = []
         seen: set = set()
         src_name = self.svc.source.display_source
@@ -836,7 +859,7 @@ class ApiApp:
             lg = str(nm.get("league") or "")
             if league and lg != league:
                 continue
-            snaps = snapshots_from_live(live_book.book(mid), mid,
+            snaps = snapshots_from_live(book.book(mid), mid,
                                         source=src_name)
             odds_by: Dict[str, List[float]] = {}
             outs_by: Dict[str, List[str]] = {}

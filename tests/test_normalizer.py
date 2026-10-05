@@ -361,3 +361,56 @@ class TestLiveBook(unittest.TestCase):
         b.upsert_many([self._tick()])
         self.assertFalse(b.save(force=True))
         self.assertEqual(b.load(), 0)
+
+
+class TestSnapshotsFromLiveCarriesNames(unittest.TestCase):
+    """回归：实时表**不带队名**，必须由调用方补上。
+
+    为何关键：买入建议的中文标签需要队名（「曼联上半场-1」，
+    用户明确要求与乐鱼一致）。若实时表转换时丢了队名，
+    `decide_match` 从 `snaps[0]` 取到的 home/away 就是空串，
+    标签会静默退化成「主队/客队」—— 功能受损但**不报错**，
+    属于最难发现的那类缺陷。
+    """
+
+    @staticmethod
+    def _book():
+        from collector.leyu_realtime import LiveBook, PriceTick
+        b = LiveBook()
+        b.upsert_many([
+            PriceTick(mid="m1", chpid="4", hid="h", hv="-1", oid="o1",
+                      ot="1", old_ov=0.0, new_ov=1.85, ts_ms=1),
+            PriceTick(mid="m1", chpid="4", hid="h", hv="-1", oid="o2",
+                      ot="2", old_ov=0.0, new_ov=1.95, ts_ms=1),
+        ])
+        return b
+
+    def test_names_are_carried_through(self) -> None:
+        from collector.leyu_normalizer import snapshots_from_live
+        out = snapshots_from_live(self._book().book("m1"), "m1",
+                                  home="曼联", away="利物浦", league="英超")
+        self.assertEqual(len(out), 1)
+        s = out[0]
+        self.assertEqual(s.home, "曼联")
+        self.assertEqual(s.away, "利物浦")
+        self.assertEqual(s.league, "英超")
+
+    def test_names_default_to_empty(self) -> None:
+        from collector.leyu_normalizer import snapshots_from_live
+        out = snapshots_from_live(self._book().book("m1"), "m1")
+        self.assertEqual(out[0].home, "")
+        self.assertEqual(out[0].league, "")
+
+    def test_label_uses_team_name_end_to_end(self) -> None:
+        """端到端：队名 → 乐鱼风格中文标签（用户要求的形式）。"""
+        from collector.leyu_normalizer import snapshots_from_live
+        from core.market_labels import format_market
+        s = snapshots_from_live(self._book().book("m1"), "m1",
+                                home="曼联", away="利物浦", league="英超")[0]
+        line = str((s.metadata or {}).get("leyu_hv") or "")
+        self.assertEqual(
+            format_market(s.market, "home", line, home=s.home, away=s.away),
+            "曼联全场-1")
+        self.assertEqual(
+            format_market(s.market, "away", line, home=s.home, away=s.away),
+            "利物浦全场+1")

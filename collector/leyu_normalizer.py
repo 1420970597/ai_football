@@ -52,7 +52,16 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from core.markets import AH, HAD, MarketSpec, OU
 from core.models import OddsSnapshot, SnapshotState, utcnow
@@ -325,7 +334,9 @@ def snapshots_from_market(
 def snapshots_from_live(
     live: Any,
     mid: str,
-    match: Optional[LEYUMatch] = None,
+    home: str = "",
+    away: str = "",
+    league: str = "",
     source: str = DEFAULT_SOURCE,
     issues: Optional[List[str]] = None,
 ) -> List[OddsSnapshot]:
@@ -353,13 +364,22 @@ def snapshots_from_live(
     Args:
         live: `LiveQuote` 序列（来自 `hub.live.book(mid)`）。
         mid: 赛事 ID。
-        match: 可选赛事信息（补队名/联赛）。内存表只存赔率，
-            没有队名；缺省时字段留空（展示层会回退为「主队/客队」）。
+        home / away / league: 队名与联赛。实时表只存赔率、**不带队名**，
+            而买入建议的中文标签需要队名（如「曼联上半场-1」），
+            所以由调用方从目录名索引传入；缺省时留空，
+            展示层会回退为「主队/客队」。
         source: 数据来源展示名。
         issues: 告警收集。
 
     Returns:
         `OddsSnapshot` 列表（每个盘口线一份）。
+
+    Note:
+        早期版本这里接受一个 `Optional[MatchNames]` 对象，但本函数
+        实际只读三个字符串字段 —— 为一个“数据袋”引入 Protocol
+        属于过度设计（实现者还得是只读的 frozen dataclass 才能满足
+        协议，调用方也要先造对象）。改为直接传三个字符串：更简单，
+        也更贴近真实依赖。
     """
     sink = issues if issues is not None else []
     #: (chpid, hv) -> {outcome: decimal}
@@ -410,9 +430,9 @@ def snapshots_from_live(
             meta["盘口线"] = spec.line
         out.append(OddsSnapshot(
             match_id=str(mid),
-            league=(match.tournament if match else ""),
-            home=(match.home if match else ""),
-            away=(match.away if match else ""),
+            league=str(league or ""),
+            home=str(home or ""),
+            away=str(away or ""),
             market=spec.code,
             outcomes=spec.outcomes,
             odds=odds,

@@ -40,11 +40,13 @@ import random
 import threading
 import time
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from collector.leyu_normalizer import snapshots_from_live, snapshots_from_match
+from collector.leyu_normalizer import (
+    snapshots_from_live,
+    snapshots_from_match,
+)
 from collector.leyu_realtime import RealtimeHub
 from collector.sources import SOCCER_SPORT_ID
 from core.models import OddsSnapshot
@@ -407,6 +409,21 @@ class AnalysisService:
         if old is None or old_root != new_root:
             # 重建台账（保留已有对象则改用新路径；已有的落盘数据仍在磁盘）
             self.ledger = DecisionLedger(new_root)
+        # ⚠️ `result_path` 变化时必须**重新读回上次结果**。
+        #
+        # 为何必需（用户报“加载不出来比赛场次”的直接根因）：
+        # `api/app.py` 需要先拿到快照根目录才能算出输出路径，因此是
+        # **先** `build_analysis_service()`（此刻 `result_path=None`）
+        # **后**才 `replace(config, result_path=…)` 注入。
+        # 而 `_restore_latest()` 只在 `__init__` 里跑过一次，那时路径还是
+        # 空的 → 直接 return → `_latest` 永远是 None。
+        # 后果：页面一直显示“等待后台首轮决策”，而磁盘上明明已有
+        # 2436 场结果（因为下一轮全量决策实测要 50+ 分钟）。
+        #
+        # 这与 `ledger_root` 是**同一类初始化时序缺陷**，一并在此修复。
+        old_rp = getattr(old, "result_path", None) if old else None
+        if old is None or old_rp != value.result_path:
+            self._restore_latest()
 
     # -- 后台定时决策（主路径） -------------------------------------------
 
@@ -1003,6 +1020,27 @@ class AnalysisService:
                     pass
         return res
 
+    def latest_age_s(self) -> Optional[float]:
+        """最近一轮决策结果距今多少秒；无结果或时间戳非法时返回 None。
+
+        用途（用户报“加载不出来比赛场次”的根因之一）：
+        调用方需要区分「从未产出过结果」与「结果太旧」——
+        早期把两者都当成空，于是旧数据被隐藏，页面只能显示空态，
+        而磁盘上其实有几千场决策。有了本方法就能**如实标注时效**。
+        """
+        with self._lock:
+            res = self._latest
+        if not res:
+            return None
+        fin = res.get("finished_at")
+        if not fin:
+            return None
+        try:
+            return max(0.0, (datetime.now(timezone.utc)
+                             - datetime.fromisoformat(fin)).total_seconds())
+        except (TypeError, ValueError):
+            return None
+
     # -- 异步任务 -----------------------------------------------------------
 
     def start_job(
@@ -1135,9 +1173,8 @@ class AnalysisService:
                 # （用户明确要求「xx队上半场-1」这种带队名的写法）。
                 home, away, league = self._match_names(mid)
                 live = snapshots_from_live(
-                    rows, mid, source=name,
-                    match=SimpleNamespace(tournament=league, home=home,
-                                          away=away))
+                    rows, mid, home=home, away=away, league=league,
+                    source=name)
                 if live:
                     return live
         return self.valuation._snapshots_of(mid)

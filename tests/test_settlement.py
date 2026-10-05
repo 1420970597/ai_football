@@ -20,8 +20,10 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from unittest import mock
@@ -793,3 +795,149 @@ class TestLedgerRootInjectedAfterConstruction(unittest.TestCase):
                               config=AnalysisConfig(use_llm=False))
         svc.config = replace(svc.config, settle_interval_s=7.0)
         self.assertEqual(svc.config.settle_interval_s, 7.0)
+
+
+class TestResultPathInjectedAfterConstruction(unittest.TestCase):
+    """**严重回归**：API 层后注入 `result_path` 时，必须读回上次决策结果。
+
+    用户报告「3000 端口加载不出来比赛场次」，实测根因就在此处：
+
+        # api/app.py 的真实顺序（必须先有快照根目录才能算输出路径）
+        ana = build_analysis_service(svc)        # ← 此刻 result_path=None
+        ana.config = replace(ana.config,
+                             result_path=... )   # ← 之后才注入
+
+    而 `_restore_latest()` 只在 `__init__` 里跑过一次，那时路径还是空的，
+    直接 return → `_latest` 永远是 None → 接口返回 `pending=True`、
+    `count=0` → 页面只能显示「等待后台首轮决策」。
+
+    后果特别严重是因为**一轮全量决策要 50+ 分钟**：结果一产出就被下一轮
+    覆盖，用户几乎永远看不到列表。这与 `ledger_root` 属同一类初始化时序
+    缺陷（见 `TestLedgerRootInjectedAfterConstruction`）。
+    """
+
+    def _svc(self, **kw: Any) -> Any:
+        from service.analysis import AnalysisConfig, AnalysisService
+        return AnalysisService(valuation=mock.MagicMock(), realtime=None,
+                               config=AnalysisConfig(use_llm=False, **kw))
+
+    def _write_result(self, path: str, minutes_ago: float = 5.0) -> Dict[str, Any]:
+        from datetime import timedelta
+        payload = {
+            "count": 2,
+            "summary": {"n": 2, "buy": 1},
+            "decisions": [{"match_id": "m1"}, {"match_id": "m2"}],
+            "finished_at": (datetime.now(timezone.utc)
+                            - timedelta(minutes=minutes_ago)).isoformat(),
+        }
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+        return payload
+
+    def test_injecting_result_path_restores_latest(self) -> None:
+        from dataclasses import replace
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "decisions.json")
+            self._write_result(p)
+            svc = self._svc()                       # 初始 result_path=None
+            self.assertIsNone(svc.latest_result())
+            svc.config = replace(svc.config, result_path=p)
+            res = svc.latest_result()
+            self.assertIsNotNone(res, "注入 result_path 后必须读回上次结果")
+            self.assertEqual(res["count"], 2)
+
+    def test_latest_age_s_reports_age(self) -> None:
+        from dataclasses import replace
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "decisions.json")
+            self._write_result(p, minutes_ago=53.0)
+            svc = self._svc()
+            svc.config = replace(svc.config, result_path=p)
+            age = svc.latest_age_s()
+            assert age is not None
+            self.assertGreater(age, 50 * 60)
+
+    def test_latest_age_s_none_without_result(self) -> None:
+        self.assertIsNone(self._svc().latest_age_s())
+
+    def test_same_path_keeps_latest_object(self) -> None:
+        """路径未变时不重建/不重读（避免每次改配置都读盘）。"""
+        from dataclasses import replace
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "decisions.json")
+            self._write_result(p)
+            svc = self._svc(result_path=p)
+            before = svc.latest_result()
+            svc.config = replace(svc.config, cache_ttl_s=99.0)
+            self.assertIs(svc.latest_result(), before)
+
+
+class TestStaleResultsAreShownNotHidden(unittest.TestCase):
+    """**回归**：旧结果必须返回并标注 stale，而不是被隐藏。
+
+    早期实现是「超龄就返回 None」，于是页面永远空白 ——
+    而磁盘上明明有几千场决策。把「慢」伪装成「无」会让用户
+    完全看不出问题在哪，也无从自行排查。
+    """
+
+    def test_old_result_is_returned_with_stale_flag(self) -> None:
+        from api.app import create_app
+        with tempfile.TemporaryDirectory() as d, \
+                tempfile.TemporaryDirectory() as out:
+            p = os.path.join(out, "decisions.json")
+            import json
+            from datetime import timedelta
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump({
+                    "count": 2436, "summary": {"n": 2436},
+                    "decisions": [{"match_id": "m1"}],
+                    "finished_at": (datetime.now(timezone.utc)
+                                    - timedelta(minutes=53)).isoformat(),
+                }, fh)
+            app = create_app(snapshot_root=d, corpus_root="output",
+                             source="ticai")
+            app.svc.ingest_corpus()
+            from dataclasses import replace
+            app.analysis.config = replace(app.analysis.config,
+                                          result_path=p)
+            st, body = app.dispatch(
+                "GET", "/api/v1/decisions", {"max_age": ["1800"]}, {})
+            self.assertEqual(st, 200)
+            self.assertEqual(body["count"], 2436, "旧数据也应返回")
+            self.assertTrue(body["stale"], "必须如实标注 stale")
+            self.assertIsNotNone(body["age_s"])
+            self.assertFalse(body.get("pending"))
+
+    def test_fresh_result_is_not_stale(self) -> None:
+        from api.app import create_app
+        with tempfile.TemporaryDirectory() as d, \
+                tempfile.TemporaryDirectory() as out:
+            p = os.path.join(out, "decisions.json")
+            import json
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump({
+                    "count": 1, "summary": {"n": 1},
+                    "decisions": [{"match_id": "m1"}],
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                }, fh)
+            app = create_app(snapshot_root=d, corpus_root="output",
+                             source="ticai")
+            app.svc.ingest_corpus()
+            from dataclasses import replace
+            app.analysis.config = replace(app.analysis.config,
+                                          result_path=p)
+            _, body = app.dispatch(
+                "GET", "/api/v1/decisions", {"max_age": ["1800"]}, {})
+            self.assertEqual(body["count"], 1)
+            self.assertFalse(body["stale"])
+
+    def test_no_result_at_all_is_pending(self) -> None:
+        from api.app import create_app
+        with tempfile.TemporaryDirectory() as d:
+            app = create_app(snapshot_root=d, corpus_root="output",
+                             source="ticai")
+            app.svc.ingest_corpus()
+            _, body = app.dispatch("GET", "/api/v1/decisions",
+                                   {"max_age": ["1800"]}, {})
+            self.assertTrue(body.get("pending"))
+            self.assertEqual(body["count"], 0)

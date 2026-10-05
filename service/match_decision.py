@@ -987,7 +987,28 @@ class MatchDecisionEngine:
         res.computations = self.compute_markets(snaps, trend)
         if not res.computations:
             res.decision = DECISION_AVOID
-            res.error = "无可用盘口（全部停盘/下架或无快照）"
+            # **如实区分原因**（用户报“为什么全是无机会”时最需要的信息）：
+            # 早期一律写“停盘/下架或无快照”，但实测 2436 场全是
+            # “赔率太旧被时效门禁拦下”（采集停摆 19.9 小时）——
+            # 报错指向错误的方向，排查会完全跑偏。
+            #
+            # 用**本场自算**的数量，而不是引擎级累加计数器：
+            # 后者跨场、跨线程共享（决策是并发的），拿它拼消息会偏大
+            # 且存在竞争。
+            latest = _latest_per_market(snaps)
+            stale_n = sum(
+                1 for s in latest
+                if (_snap_age_s(s) or 0.0) > self.config.max_quote_age_s)
+            if stale_n:
+                res.error = (
+                    "无可用盘口：盘口赔率已过期（超过 %.0f 秒）被全部拒用；"
+                    "本场 %d/%d 个盘口过期 —— 通常是行情采集停摆所致"
+                    % (self.config.max_quote_age_s, stale_n, len(latest)))
+                res.llm_reason = res.error
+            elif not latest:
+                res.error = "无可用盘口：该场没有任何快照（尚未采集或已下架）"
+            else:
+                res.error = "无可用盘口：盘口全部停盘/下架"
             res.elapsed_ms = _elapsed_ms(t0)
             return res
 
