@@ -1196,15 +1196,43 @@ def _start_background(
             乐鱼同一网关还返回篮球/网球等（`sport_id != 1`），它们占订阅
             额度且无法映射足球盘口，必须排除；`max_matches` 只是安全阀，
             默认 0（不截断），以与乐鱼页面的进行中数量对齐。
+
+            ## 本地回退（本项目真实故障）
+
+            会话过期时 `live_match_ids()` 抛异常 → 早期实现直接 return []，
+            于是 `feed.subscribe_odds([])` 把**一条都没订上**（实测
+            `subscribed=0`、`price_ticks=0`），整个实时链路变成空转 ——
+            比“订少了”严重得多。
+
+            而磁盘上已有历史走势文件（`_trends/<mid>.jsonl`），
+            它们就是“近期真正有过行情的场次”。会话不可用时用这批 mid
+            先把订阅建起来，链路就能自愈（拿到新行情后又会持续更新）。
             """
             try:
                 live = list(source.live_match_ids(SOCCER_SPORT_ID))
             except Exception as exc:  # noqa: BLE001 - 订阅源失败不终止推送
                 print("警告：获取订阅列表失败：%s" % exc)
-                return []
+                live = _mids_from_local_trends()
+                if live:
+                    print("提示：改用本地已知 %d 场建立订阅（会话不可用时的自愈）"
+                          % len(live))
             if max_matches > 0:
                 live = live[:max_matches]
             return live
+
+        def _mids_from_local_trends() -> List[str]:
+            """从本地走势文件反推赛事 ID（会话不可用时的订阅回退）。
+
+            只扫 `_trends/*.jsonl` 的文件名（实测 0.05s 级），
+            不读文件内容。
+            """
+            try:
+                root = hub.trend_store.root
+                if root is None:
+                    return []
+                return sorted(p.stem for p in root.glob("*.jsonl"))
+            except OSError:
+                return []
 
         # 走势落盘目录：放在快照根下的 _trends/，随 output 卷一起持久化。
         # 这样经济学算法与 LLM 能读到历史走势，容器重启也不丢。
