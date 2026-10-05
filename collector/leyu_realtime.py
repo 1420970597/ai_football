@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import math
 import os
 import threading
 import time
@@ -111,6 +112,21 @@ def _to_int(value: object, default: int = 0) -> int:
         return int(str(value))
     except (TypeError, ValueError, OverflowError):
         return default
+
+
+def _to_float(value: object, default: float = 0.0) -> float:
+    """容错浮点转换（非数值/非有限值均回退 default）。
+
+    为何必需：实时表写入跑在**推送热路径**上（`C105` 每小时可达 16 万条），
+    而推送载荷来自上游、不可信（可能是字符串/None/异常值）。
+    直接 `float()` 会抛 `ValueError` 并冒到推送循环 → 被外层 `except`
+    当成链路故障而**触发不必要的重连**（丢消息）。宁可丢一个脏值。
+    """
+    try:
+        out = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return out if math.isfinite(out) else default
 
 
 def decode_push_payload(cd: Any) -> Any:
@@ -270,11 +286,15 @@ class LiveBook:
         with self._lock:
             for t in ticks:
                 key = (t.mid, t.chpid, t.hv, t.oid)
+                # 容错：脏赔率（非数值）不得让整批推送中断。
+                odds = _to_float(t.new_ov, 0.0)
+                if odds <= 1.0:
+                    continue        # 非法赔率不入表（1.0 以下不可能成交）
                 self._rows[key] = LiveQuote(
                     mid=t.mid, chpid=t.chpid, hv=t.hv, oid=t.oid, ot=t.ot,
-                    odds=float(t.new_ov), ts_ms=t.ts_ms, at=now)
+                    odds=odds, ts_ms=_to_int(t.ts_ms, 0), at=now)
                 self._by_mid.setdefault(t.mid, {})[key] = None
-            self.updates += len(ticks)
+                self.updates += 1
 
     def drop_match(self, mid: str) -> int:
         """移除某场全部行（比赛结束时调用，防止内存无限增长）。"""
@@ -353,7 +373,8 @@ class LiveBook:
                 "version": 1,
                 "saved_at": datetime.now(timezone.utc).isoformat(),
                 "rows": [[r.mid, r.chpid, r.hv, r.oid, r.ot,
-                          round(r.odds, 6), int(r.ts_ms)]
+                          round(_to_float(r.odds, 0.0), 6),
+                          _to_int(r.ts_ms, 0)]
                          for r in self._rows.values()],
             }
         tmp = path.with_name(path.name + ".tmp")
@@ -995,6 +1016,11 @@ class RealtimeHub:
             "price_snapshots": snaps,
             "changed_ratio": round(self.stats.price_ticks / snaps, 4) if snaps else 0.0,
             "trend_store": self.trend_store.health(),
+            # 内存实时表：用户要求「采集落本地、查询读本地」的落地情况。
+            # 看 `rows`/`matches` 能直接回答“现在到底有多少场在看”
+            # （与 leyu 页面对账时最有用），`oldest_age_s` 则能看出
+            # 行情是否已经停摆（本次故障中它一度是 19.9 小时）。
+            "live_book": self.live.health(),
             **self.stats.as_dict(),
         }
 

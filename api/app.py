@@ -291,6 +291,11 @@ class ApiApp:
             ("GET", "/decisions/<id>", self.h_decision_detail),
             ("GET", "/trend/<id>", self.h_trend),
             ("GET", "/realtime", self.h_realtime),
+            # 分析层健康状况：含**进行中覆盖的判据**（source/count/error）。
+            # 用户要能自己回答「为什么系统显示的进行中比 leyu 少」：
+            # 早期 `AnalysisService.health()` 已算好这些数据，
+            # 但**没有任何端点暴露它**，调用方无从查看。
+            ("GET", "/analysis", self.h_analysis),
             ("GET", "/board", self.h_board),
             ("GET", "/llm", self.h_llm),
             ("GET", "/ledger/stats", self.h_ledger_stats),
@@ -677,6 +682,25 @@ class ApiApp:
         if self.analysis.realtime is None:
             return {"running": False, "note": "实时推送未启用"}
         return self.analysis.realtime.health()
+
+    def h_analysis(self, query: Mapping[str, List[str]],
+                   body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """分析层健康状况：含 **进行中覆盖的判据**（供对账 leyu）。
+
+        为何单独开这个端点（用户报「leyu 67 场 vs 系统 34 场」时最需要它）：
+        `AnalysisService.health()` 里已经算好了 `live.{source,count,error}`，
+        但早期**没有任何端点暴露它**，用户/运维无从查看，只能猜。
+        现在可直接：
+
+            curl /api/v1/analysis | jq .live
+            # {"source":"push","count":41,"age_s":2.1,"error":""}
+
+        `source` 的取值含义：
+          * `schedule` —— 走 REST 赛程（最准）
+          * `push`     —— REST 不可用，用推送见过的场次回退（会话过期的兜底）
+          * `none`     —— 两条路都不可用（此时页面覆盖必然不全）
+        """
+        return self.analysis.health()
 
     def h_llm(self, query: Mapping[str, List[str]],
               body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:

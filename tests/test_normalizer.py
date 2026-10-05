@@ -414,3 +414,57 @@ class TestSnapshotsFromLiveCarriesNames(unittest.TestCase):
         self.assertEqual(
             format_market(s.market, "away", line, home=s.home, away=s.away),
             "利物浦全场+1")
+
+
+class TestLiveBookToleratesDirtyPayload(unittest.TestCase):
+    """回归：脏赔率不得让推送批次中斷（**热路径崩溃风险**）。
+
+    为何严重：`upsert_many` 跑在推送热路径上（`C105` 每小时可达 16 万条），
+    载荷来自上游、不可信。早期直接 `float(t.new_ov)`，遇到非数值就抛
+    `ValueError` → 冒到推送循环 → 被外层 `except` 当成链路故障
+    → **触发不必要的重连**（丢消息）。宁可丢一个脏值，不可断整条链路。
+    """
+
+    @staticmethod
+    def _tick(oid: str, ov: Any) -> Any:
+        from collector.leyu_realtime import PriceTick
+        return PriceTick(mid="m1", chpid="2", hid="h", hv="2.5", oid=oid,
+                         ot="Under", old_ov=0.0, new_ov=ov, ts_ms=1)
+
+    def test_dirty_values_are_dropped_not_raised(self) -> None:
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick("a", "abc"), self._tick("b", None),
+                       self._tick("c", 0.5), self._tick("d", 2.0)])
+        # 只有合法且 >1.0 的那条留下
+        self.assertEqual(b.n_rows(), 1)
+        self.assertEqual(b.updates, 1)
+        self.assertAlmostEqual(b.book("m1")[0].odds, 2.0, places=4)
+
+    def test_nan_and_inf_are_dropped(self) -> None:
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick("a", float("nan")),
+                       self._tick("b", float("inf")),
+                       self._tick("c", 1.95)])
+        self.assertEqual(b.n_rows(), 1)
+        self.assertAlmostEqual(b.book("m1")[0].odds, 1.95, places=4)
+
+    def test_valid_batch_is_fully_stored(self) -> None:
+        from collector.leyu_realtime import LiveBook
+        b = LiveBook()
+        b.upsert_many([self._tick("a", 1.9), self._tick("b", 2.1)])
+        self.assertEqual(b.n_rows(), 2)
+
+    def test_save_tolerates_dirty_fields(self) -> None:
+        """落盘路径同样不得因脏字段抛异常（否则保存整批失败）。"""
+        import os
+        import tempfile
+        from collector.leyu_realtime import LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            b = LiveBook(os.path.join(d, "live.json"))
+            b.upsert_many([self._tick("a", 1.9)])
+            # 手工注入脏值，模拟反序列化/测试替身带来的异常数据
+            row = b._rows[(("m1"), "2", "2.5", "a")]
+            object.__setattr__(row, "odds", "bad") if hasattr(row, "__dict__") else None
+            self.assertTrue(b.save(force=True), "脏字段不应让落盘失败")
