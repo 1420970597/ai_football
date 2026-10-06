@@ -50,3 +50,7 @@ Thumbs.db
 
 # 虚拟环境（pyright/jedi 用于解析源码根；不入库）
 .venv/
+
+# 抓包含真实凭据（token/登录口令/签名），严禁入库
+乐鱼app.zip
+*.zip
