@@ -242,6 +242,8 @@ class ValuationService:
         #: `/health` 存储统计缓存（`store.stats()` 全盘遍历约 3s）
         self._stats_cache: Optional[Dict[str, Any]] = None
         self._stats_at: float = 0.0
+        #: 后台刷新存储统计的线程（保证 `/health` 绝不阻塞）
+        self._stats_thread: Optional[threading.Thread] = None
         #: 每份缓存对应的 `match_id -> 快照下标` 索引（避免逐场扫全表）
         self._snap_by_match: Optional[Dict[str, List[int]]] = None
         #: 仅由目录名构建的赛事清单缓存（`match_index()`）：
@@ -1270,20 +1272,65 @@ class ValuationService:
         }
 
     def _store_stats_cached(self) -> Dict[str, Any]:
-        """带 TTL 的存储统计。
+        """存储统计：**绝不阻塞**的“陈旧先返回 + 后台刷新”。
 
-        为何需要（真实性能故障）：`store.stats()` 递归统计 6.5 万个文件
-        需 **3 秒**。Docker 健康检查每 20s 一次，叠加 `/matches`、
-        `/board` 等并发请求时会不断重复全盘遍历，CPU 被吃满、
-        健康检查自己反而超时（探针把服务探死）。
+        ## 为何要这样设计（实测真实事故）
+
+        `store.stats()` 递归统计 8+ 万个文件需 **3~19s**（仓库越大越慢）。
+        Docker 健康检查每 20s 一次且 **timeout=6s**，因此任何“按 TTL
+        同步重算”的方案都会周期性超时：
+
+          * 早期把计算放锁外 → 5+ 个请求线程**同时**全盘遍历，
+            CPU 吃满、`/health` 60s 都不返回（探针把服务探死）；
+          * 改为锁内单飞后，虽然不再重复扫盘，但**到期那次仍要等 3~19s**
+            → 仍会超过 6s 超时（实测 `FailingStreak` 持续增长）。
+
+        正确做法（本实现）：
+
+          1. 有缓存 → **立即返回**（不管新旧）；
+          2. 缓存过期 → 立即返回旧值，并**后台线程**去刷新；
+          3. 从未有过缓存（仅启动首次）→ 同步算一次。
+
+        即健康检查的延迟不再取决于磁盘扫描耗时。
+        代价：`snapshot_files` 这类监控数字可能最多滞后一个刷新周期
+        （60s）—— 对健康检查而言完全可接受，
+        “探针稳定不超时”远比“数字秒级新鲜”重要。
         """
-        now = time.monotonic()
         with self._cache_lock:
-            if (self._stats_cache is not None
-                    and (now - self._stats_at) <= _STATS_TTL_S):
-                return self._stats_cache
-        stats = self.store.stats()
-        with self._cache_lock:
+            cached = self._stats_cache
+            fresh = (cached is not None
+                     and (time.monotonic() - self._stats_at) <= _STATS_TTL_S)
+            if cached is not None and fresh:
+                return cached
+            if cached is not None:
+                # 陈旧但可用：立即返回，后台刷新（不阻塞调用方）
+                self._spawn_stats_refresh()
+                return cached
+            # 首次（无任何缓存）：**持锁**同步算一次。
+            #
+            # ⚠️ 必须在锁内（本项目测试真实抓到过回归）：若把计算放到锁外，
+            # 冷启动时 8 个并发请求会**同时**全盘扫描（实测 6~8 次），
+            # 正是当初 CPU 吃满的同一类错误。首次只发生在启动阶段，
+            # 让其余线程短暂等待是合理的。
+            stats = self.store.stats()
             self._stats_cache = stats
-            self._stats_at = now
-        return stats
+            self._stats_at = time.monotonic()
+            return stats
+
+    def _spawn_stats_refresh(self) -> None:
+        """后台刷新存储统计（幂等：同一时刻只允许一个在跑）。"""
+        if self._stats_thread is not None and self._stats_thread.is_alive():
+            return
+
+        def _refresh() -> None:
+            try:
+                stats = self.store.stats()
+            except Exception:  # noqa: BLE001 - 刷新失败保留旧值
+                return
+            with self._cache_lock:
+                self._stats_cache = stats
+                self._stats_at = time.monotonic()
+
+        self._stats_thread = threading.Thread(
+            target=_refresh, name="store-stats-refresh", daemon=True)
+        self._stats_thread.start()

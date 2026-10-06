@@ -17,7 +17,12 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
+import threading
+import time
 import unittest
+from typing import Any, Dict, List
 
 from collector.normalizer import parse_pooled_odds
 from core import markets as mk
@@ -488,3 +493,77 @@ class TestStoreStampTtlActuallyWorks(unittest.TestCase):
         svc._store_stamp_cached(base)
         self.assertGreater(svc._snap_stamp_at, first_at - 10_000.0,
                            "真实扫描后必须刷新时间戳")
+
+
+class TestStoreStatsSingleFlight(unittest.TestCase):
+    """**回归**：`/health` 的存储统计必须**单飞**（否则探针把服务探死）。
+
+    实测真实事故：`store.stats()` 递归统计 8+ 万个文件需 **3s 以上**。
+    早期实现把计算放在锁**外**：
+
+        with lock:
+            if 缓存有效: return 缓存
+        stats = self.store.stats()      # ← 锁外，多个线程同时跑
+        with lock:
+            写回
+
+    于是并发请求（Docker 健康检查每 20s + `/matches` 等）会**同时**发现
+    缓存过期、**同时**全盘遍历 —— py-spy 实测拍到 5+ 个请求线程同时卡在
+    `_store_stats_cached`，CPU 吃满、健康检查自己超时（exit=-1，
+    容器被判 unhealthy，探针把服务探死）。
+
+    修法：把“检查 + 计算 + 写回”放进**同一把锁**，只让一个线程真扫盘。
+    """
+
+    def _svc(self) -> ValuationService:
+        # 用**临时空目录**：本用例验证的是并发语义，不该依赖 8 万文件的语料
+        # （那样一次测试要跑数秒，既慢又不稳定）。
+        tmp = tempfile.mkdtemp(prefix="statssf_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        return ValuationService(snapshot_root=tmp, corpus_root=tmp,
+                                prefer_redis=False, source="ticai")
+
+    def test_concurrent_calls_scan_once(self) -> None:
+        """并发 8 次只真正扫盘 1 次。
+
+        用 `threading.Barrier` 让 8 个线程**同时**发起调用
+        （不用 `sleep` 凑时序：那既慢又不确定）；
+        核心不变式是**扫盘次数 == 1** —— 修复前会是 8
+        （各自全盘遍历，叠加成十几秒，正是健康检查超时的原因）。
+        """
+        svc = self._svc()
+        calls: List[int] = []
+        real = svc.store.stats
+
+        def _counting() -> Dict[str, Any]:
+            calls.append(1)
+            return real()
+
+        svc.store.stats = _counting    # type: ignore[assignment]
+        n = 8
+        gate = threading.Barrier(n)     # 让所有线程在同一点同时冲进调用
+        results: List[Any] = []
+        lock = threading.Lock()
+
+        def _work() -> None:
+            gate.wait()
+            r = svc._store_stats_cached()
+            with lock:
+                results.append(r)
+
+        threads = [threading.Thread(target=_work) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(len(results), n)
+        self.assertEqual(len(calls), 1,
+                         "并发调用只应真正扫盘一次（实测 %d 次）" % len(calls))
+
+    def test_cached_after_first_call(self) -> None:
+        svc = self._svc()
+        first = svc._store_stats_cached()
+        second = svc._store_stats_cached()
+        self.assertEqual(first, second)
+        self.assertIs(second, svc._stats_cache)
