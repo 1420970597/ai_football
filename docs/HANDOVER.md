@@ -190,25 +190,36 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 
 ### 3.2 乐鱼凭据过期（P0，**唯一外部阻塞**）
 
+> **🔔 2026-10-07 复核更新（设备已换 IP）：IP 闸门已通过，**不是**瓶颈。**
+> 旧结论「本机 IP 被 `6031 地区ip限制` 拦住」**已失效**。实测（走生产登录代码路径
+> `AppLoginClient.login()`，非仅探针）：用不存在的用户名打 `user/login` 得到
+> **`6008 用户名或密码错误`**，而非 `6031`。服务端**先校 IP 再校凭据**，
+> 故 6008 即证明出口 IP 已被放行。**现在只差正确的账号/口令。**
+>
+> 一键诊断（新增，只读、脱敏）：`python3 tools/leyu_session_doctor.py`
+> —— 逐个 provider 试，报出谁成功/谁失败/为什么，并附登录路径的 IP 闸门判定。
+
 **现象**：`venue/launch` 返回 `6001 token已过期`；当前靠 `_session.json` 缓存回退维持采集。
 
 **实情**：
 - 抓包里那个 token 约 **10 小时后自然过期**（会话生命周期本就如此）；
-- **登录续期代码已实现**（`collector/leyu_app_login.py`），但本机 IP 被
-  `6031 地区ip限制` 拦住 —— 抓包机 `118.107.172.91` 成功，本机 `38.76.205.122` 被拒；
-- 注意 `venue/launch` **不受**该 IP 限制，只有 `user/login` 受限。
+- **登录续期代码已实现**（`collector/leyu_app_login.py`），且链路已接好
+  （`collector/session.py::make_session_provider` 的 provider 链末位）；
+- 但它**默认不在链上**：`login_provider_from_env` 在缺 `LEYU_APP_LOGIN_NAME` /
+  `LEYU_APP_LOGIN_PASSWORD` 时返回 `None`（设计如此，便于回退）。当前 `.env`
+  里这两项为空，所以链上只有 `h5-cookie` 与 `app-launch`，两者都返回 `6001`。
+- `venue/launch` 与 `user/login` 都不再受 IP 限制（历史上只有 `user/login` 受限）。
 
-**三条出路（任选）**：
-1. 在允许的网络/服务器上跑一次登录，把得到的 `x-api-token` 写入 `.env`：
-   ```bash
-   # .env
-   LEYU_APP_TOKEN=<新 token>
-   # 或配置账号口令让系统自动续期（需在允许的 IP 上）
-   LEYU_APP_LOGIN_NAME=<登录账号>
-   LEYU_APP_LOGIN_PASSWORD=<登录口令明文>
-   ```
-2. 或在该网络部署本服务；
-3. 或注入其它可用会话（`LEYU_REQUEST_ID` / `LEYU_SESSION_FILE` / `LEYU_LOGIN_COMMAND`）。
+**处置（当前唯一需要做的事）**：在 `.env` 填入账号口令即可启用自动续期：
+
+```bash
+# .env —— 填入后重启服务，链会自动走「登录 → launch」拿到新 requestId
+LEYU_APP_LOGIN_NAME=<登录账号>
+LEYU_APP_LOGIN_PASSWORD=<登录口令明文>
+```
+
+其余可选路径（按需）：注入 `LEYU_REQUEST_ID` / `LEYU_SESSION_FILE` / `LEYU_LOGIN_COMMAND`，
+或直接更新 `LEYU_APP_TOKEN`（约 10h 有效）。
 
 ### 3.3 进行中场次与乐鱼"完全一致"（P1）
 
@@ -241,19 +252,19 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 
 | # | 问题 | 实测状态 | 建议 |
 | --- | --- | --- | --- |
-| 1 | `config.py` 硬编码 `sk-` token | ❌ **仍存在**（`config.py:9`） | 改 `os.environ.get(..., "")`；**密钥需人工轮换** |
-| 2 | `captcha_token` 硬编码 | ❌ **仍存在**（`main.py`、`main_optimized.py`） | 同上 |
+| 1 | `config.py` 硬编码 `sk-` token | ✅ **已删**（文件已移除，仓库无硬编码凭据） | 旧 token 已随 git 历史泄漏，**仍需人工轮换** |
+| 2 | `captcha_token` 硬编码 | ✅ **已删**（`main.py`/`main_optimized.py` 均已移除） | — |
 | 3 | `.pyc` 入库 | ✅ 已清（0 个被追踪） | — |
 | 4 | 无 `.gitignore` | ✅ 已建 | — |
-| 5 | 平行副本 | ❌ **3 个仍在**（各有 5~6 处引用） | 需先确认引用再合并/删除 |
-| 6 | 0 测试 | ✅ **1115 用例 / 23 文件** | 持续补 |
-| 7 | `chromedriver.exe` 入库 | ❌ **仍被追踪**（20MB） | 改由 `webdriver-manager` 容器内获取 |
-| 8 | 死分支 | ❌ `origin/feature/add-sportsdata-searcher`、`origin/new` | 确认后清理 |
-| 9 | 调试脚本在根目录 | ❌ `搜索.py`、`测试TypeError修复.py`、`验证码识别/` | 归入 `tools/` 或 `tests/` |
+| 5 | 平行副本 | ✅ **已删**（`main_optimized.py` / `web/enhanced_analyzer.py` / `web/match_generator.py` 均无引用后删除） | — |
+| 6 | 0 测试 | ✅ **981 用例（清理后）** | 持续补 |
+| 7 | `chromedriver.exe` 入库 | ✅ **已删** | 需要时由 `webdriver-manager` 容器内获取 |
+| 8 | 死分支 | ✅ **已清**（`origin/new`、`origin/feature/add-sportsdata-searcher`、已合的 `origin/fix/TASK-11-*` 均已删除） | — |
+| 9 | 调试脚本在根目录 | ✅ **已清**（`搜索.py`、`测试TypeError修复.py`、`验证码识别/` 均已移除） | — |
 | 10 | 运行产物入库 | ✅ 已清（0 个被追踪） | — |
-| 11 | 无静态检查配置（ruff） | ⚠️ **本次已声明策略**（`pyproject.toml [tool.ruff]`） | 仅启用真缺陷类（E4/E7/E9/F/B）；**UP 现代化迁移待办**（全仓 2000+ 处 `Optional[X]`→`X \| None`），属独立全仓任务 |
-| 12 | 测试目录历史 lint 欠账 | ⚠️ 实测 **36 条 / 13 个测试文件**（`F401` 未用导入为主，1 条 `E731`），**均为本次之前就存在**，且都不在本次改动文件里 | 单独一次 `chore(tests)` 清理；不要混进业务补丁 |
-| 13 | 4 处 `inspect.getsource` 断言易碎 | ✅ **已修**（本次） | 改为查**编译后的代码对象**：新增 `tests.referenced_names()`（递归 `co_consts` 进嵌套函数，**刻意不收 `co_varnames`**），4 处断言全部改用它；已用变异测试证明**非空洞**（删掉 `_record_ledger` 调用后检查确实失败） |
+| 11 | 无静态检查配置（ruff） | ✅ 已声明策略（`pyproject.toml [tool.ruff]`） | **UP 现代化迁移待办**（全仓 `Optional[X]`→`X \| None` 等），属独立全仓任务 |
+| 12 | 测试目录历史 lint 欠账 | ✅ **已清**（`ruff check .` → `All checks passed!`） | — |
+| 13 | 4 处 `inspect.getsource` 断言易碎 | ✅ **已修**（本轮） | 改为查**编译后的代码对象**：新增 `tests.referenced_names()` |
 
 ### 4.2 功能增强建议（按价值排序）
 
