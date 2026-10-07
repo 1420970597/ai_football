@@ -47,6 +47,54 @@ no_implicit_optional = true
 strict_equality = true
 show_error_codes = true
 
+# ── 静态检查策略（ruff）────────────────────────────────────────────
+#
+# 为何必须显式声明（本项目真实踩到的坑）：
+# 早期仓库没有任何 ruff 配置，于是**外部工具（编辑器/agent 插件）会套用
+# 自己那套规则集**（UP006/UP045/UP031/S112/I001…），对一个从未采纳这些
+# 规则的仓库报出近 3000 条「阻断项」。后果有两个：
+#   1. 真正的缺陷（未定义名、未使用导入）被噪声淹没 —— 实测打开真实的
+#      F82 后，立刻在 `search_tools/sogou_searcher.py` 找到 3 处
+#      **未定义名** `articles`（`return` 之后的死代码，执行必 NameError）；
+#   2. 每次改动都被无关告警拦住，「本次改了多少」无从判断。
+# 显式声明后，「是否新增问题」变得可判定（对比 delta），而不是绝对计数。
+#
+# 规则集取舍：
+#   * 只启用**真缺陷**类（导入/语法/未定义名/未使用导入/bugbear 真实缺陷）；
+#   * 不启用 pyupgrade(UP) 现代化规则 —— 它要求把全仓 2000+ 处
+#     `Optional[X]`/`List[X]` 一次性改成 `X | None`/`list[X]`。这是一次
+#     **全仓迁移**，不属于任何单个业务改动；纳入门禁会逼着每次提交都顺手
+#     重写无关文件（正是 AGENTS.md §7「严禁扩大任一技术债」要防的事）。
+#     该迁移已记为待办，见 docs/HANDOVER.md §4.1。
+[tool.ruff]
+target-version = "py312"
+# 与既有代码实际行长一致（核心层实测 max 99）；仅作格式化参考，不启用 E501。
+line-length = 100
+exclude = [
+    ".venv",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    "output",
+    "web",
+    "reports",
+    "docs",
+    "验证码识别",
+]
+
+[tool.ruff.lint]
+select = [
+    "E4",   # 导入相关（重复导入、星号导入等）
+    "E7",   # 语句层缺陷（赋值比较、无占位符 f-string 之外的真实语句错）
+    "E9",   # 运行时必错（语法类，如裸 raise）
+    "F",    # pyflakes：未定义名、未使用导入/变量、重定义等
+    "B",    # bugbear：可变默认参、except 误用、zip 长度不一致等
+]
+ignore = [
+    "E501",
+    "B905",  # zip(strict=) 需逐处确认语义（改错会抛 ValueError），单独处理
+]
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
