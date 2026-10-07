@@ -56,6 +56,102 @@ def _gateway() -> str:
     return DEFAULT_APP_HOST
 
 
+def _disabled_credentials(env_file: str) -> dict:
+    """找出 .env 里**被注释掉**的登录取凭据。
+
+    为何要单独做（踩过的坑）：凭据常常已经填好，但整行被 `#` 注释掉
+    （历史原因：早期以为本机 IP 被 6031 封禁，写了「需在允许的网络上使用」）。
+    普通 .env 解析会跳过它，于是诊断显示 `<empty>` —— 用户看不出
+    「东西就在那里、只是没启用」。
+
+    Returns:
+        `{键名: 值}`（仅注释行；供「这些值还能用吗」的验证）。
+    """
+    found: dict = {}
+    try:
+        with open(env_file, encoding="utf-8") as fh:
+            for line in fh:
+                s = line.strip()
+                if not s.startswith("#") or "=" not in s:
+                    continue
+                body = s.lstrip("#").strip()
+                if "=" not in body:
+                    continue
+                key, val = body.split("=", 1)
+                key = key.strip()
+                if (key.startswith("LEYU_") or key.endswith("_TOKEN")) and val.strip():
+                    found[key] = val.strip()
+    except OSError:
+        pass
+    return found
+
+
+def _report_credentials(env: dict, commented: dict) -> None:
+    """校验账号/口令能否登录（区分「IP 被拦」与「凭据无效」）。
+
+    判定依据（实测）：服务端**先校 IP 再校凭据**。
+      * `6031` → IP 被拦，本机无解；
+      * `6008`/`6002` → IP 已放行，凭据本身就是错的。
+
+    **也测注释行里的凭据**：用户最需要知道的正是「我填的那对到底还行不行」，
+    否则去掉 `#` 之后才发现无效，白白多绕一圈。
+    """
+    import json as _json
+    import ssl as _ssl
+    import urllib.request as _url
+
+    from collector.leyu_app_login import LOGIN_PATH
+
+    name = (env.get("LEYU_APP_LOGIN_NAME") or "").strip()
+    pwd = env.get("LEYU_APP_LOGIN_PASSWORD") or ""
+    origin = "生效配置"
+    if not (name and pwd):
+        name = (commented.get("LEYU_APP_LOGIN_NAME") or "").strip()
+        pwd = commented.get("LEYU_APP_LOGIN_PASSWORD") or ""
+        origin = "**注释行**（未生效，去掉行首 # 即可启用）"
+    if not (name and pwd):
+        print("  – 未配置账号口令（自动续期不可用，仅能靠已缓存的 token 撑约 10h）")
+        return
+
+    host = _gateway()
+    ctx = _ssl._create_unverified_context()
+
+    def _try(user: str) -> dict:
+        body = _json.dumps({"x-api-name": user, "x-api-password": "x" * 12,
+                            "Kaptchcate": 99}, separators=(",", ":")).encode()
+        req = _url.Request(host.rstrip("/") + LOGIN_PATH, data=body, method="POST",
+                           headers={"Content-Type": "application/json",
+                                    "User-Agent": "Dart/3.6 (dart:io)"})
+        try:
+            with _url.urlopen(req, timeout=25, context=ctx) as r:
+                return _json.loads(r.read().decode("utf-8", "replace"))
+        except Exception as exc:  # noqa: BLE001 - 诊断要报出一切
+            return {"status_code": None, "message": "%s: %s" % (type(exc).__name__, exc)}
+
+    real = _try(name)
+    ctrl = _try("__nonexistent_probe__")
+    host_short = host.replace("https://", "")
+    print(f"  凭据来源：{origin}")
+    print(f"  网关 {host_short}：")
+    print(f"    配置账号 status_code={real.get('status_code')} "
+          f"message={real.get('message')}")
+    print(f"    对照(不存在) status_code={ctrl.get('status_code')} "
+          f"message={ctrl.get('message')}")
+
+    sc = real.get("status_code")
+    if sc == 6031:
+        print("    ✗ 判定: IP 被拦（6031）—— 换网络/部署到放行 IP")
+    elif sc in (6008, 6002):
+        if ctrl.get("status_code") == sc:
+            print("    ✗ 判定: 凭据无效 —— 服务端对「账号不存在」与「口令错误」"
+                  "返回同一 code，无法再细分；需换正确的账号/口令")
+        else:
+            print("    ✗ 判定: 账号存在但口令错误")
+    else:
+        print(f"    ? 判定: 非预期响应（status_code={sc}）")
+    print("    注：IP 闸门已通过（否则会是 6031），故**瓶颈不在 IP**。")
+
+
 def _fp(value: str) -> str:
     """敏感值指纹：只暴露长度与首 4 位，够定位不同凭据、不足以复用。"""
     if not value:
@@ -86,6 +182,16 @@ def main() -> int:
               "LEYU_APP_LOGIN_NAME", "LEYU_APP_LOGIN_PASSWORD",
               "LEYU_REQUEST_ID", "LEYU_SESSION_FILE"):
         print(f"  {k:26s} {_fp(env.get(k, ''))}")
+
+    # 被注释掉的凭据：东西在那儿但没生效 —— 最常见的“看起来配好了却不工作”
+    disabled = _disabled_credentials(env_file)
+    if disabled:
+        print("\n  ⚠ .env 里有**被注释掉**的凭据行（未生效）："
+              f"{', '.join(sorted(disabled))}")
+        print("    若这些值仍有效，去掉行首 `#` 即可启用自动续期（下面已代你验证）。")
+
+    print("\n=== 凭据校验（区分 IP 被拦 / 凭据无效）===")
+    _report_credentials(env, disabled)
 
     # 不启用缓存：我们要看**原始**链路，而不是被上次成功缓存掩盖
     env.pop(S.SESSION_ENV_CACHE, None)
