@@ -33,15 +33,16 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 import os
 import random
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from collector.leyu_normalizer import (
     snapshots_from_live,
@@ -49,14 +50,11 @@ from collector.leyu_normalizer import (
 )
 from collector.leyu_realtime import RealtimeHub
 from collector.sources import SOCCER_SPORT_ID
-from core.models import OddsSnapshot
 from core.settlement import SETTLE_PENDING
 
 from .decision import (
     DECISION_AVOID,
-    DECISION_BUY,
     DECISION_NO_LLM,
-    DECISION_WATCH,
     DecisionConfig,
     DecisionEngine,
     MatchDecision,
@@ -83,6 +81,18 @@ DEFAULT_MAX_ANALYZE = 12
 
 #: 比分推送新鲜度上限（秒）；超过即判该场不活跃（见 AnalysisConfig.stale_score_s）
 DEFAULT_STALE_SCORE_S = 300.0
+
+#: 推送行情的新鲜度上限（秒）：超过即**不得**算作「正在进行中」。
+#:
+#: 为何需要（本项目真实故障）：`LiveBook` 会把内存实时表落盘，启动时回填。
+#: 早期回填把每行都标成「刚写入」，于是 15~24 小时前的旧行情在
+#: `/api/v1/analysis` 里显示成 `count=527, source=push`（自称「真实进行中」），
+#: 而当日实际滚球只有几十场。这与 HANDOVER §6.3 「用快照时效冒充进行中」
+#: 是同一类错误，只是从「快照库」跑到了「实时表回填」这条路径上。
+#:
+#: 取值与 `collector.leyu_realtime.DEFAULT_QUOTE_MAX_AGE_S` 保持一致：
+#: `C105` 是周期性全量快照，真在滚球的场次不会 15 分钟没有新价。
+DEFAULT_PUSH_QUOTE_MAX_AGE_S = 900.0
 
 #: 已开赛且从无比分推送的最大容忍时长（秒），见 max_live_age_s。
 #: 取 150 分钟：覆盖加时/点球，又足以排除“几天前的旧快照”。
@@ -189,6 +199,31 @@ DEFAULT_CHANGE_BATCH = 12
 #: 超出时丢弃**最久未变动**的赛事（它们最可能已经不再有价值）。
 DEFAULT_CHANGE_QUEUE_MAX = 200
 
+
+def _live_mids_supports_max_age(book: Any) -> bool:
+    """`book.live_mids` 是否支持 `max_age_s` 关键字（能力探测）。
+
+    为何用签名探测而不是 `try/except TypeError`：把「能力探测」与
+    「调用出错」混进同一个 `except` 会**吞掉真实缺陷** —— 任何来自
+    实现内部的 TypeError 都会被误判成「旧版不支持」而静默转走兜底分支
+    （本项目已有同类教训，见 HANDOVER §6.6）。此处只问签名，不动数据。
+
+    Returns:
+        接受 `max_age_s`（显式命名参数或 `**kwargs`）时为 True。
+    """
+    fn = getattr(book, "live_mids", None)
+    if not callable(fn):
+        return False
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):  # C 实现/签名不可用时保守处理
+        return False
+    if "max_age_s" in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in params.values())
+
+
 @dataclass(frozen=True)
 class AnalysisConfig:
     """分析层配置。"""
@@ -244,6 +279,8 @@ class AnalysisConfig:
     #: `score_updates` 数万条、两小时内 `idle_s` < 2s），
     #: 因此「5 分钟没有比分更新」是一个很保守的过期阈值。
     stale_score_s: float = DEFAULT_STALE_SCORE_S
+    #: 推送行情新鲜度上限（秒）；超过即不算「进行中」（见上面常量注释）
+    push_quote_max_age_s: float = DEFAULT_PUSH_QUOTE_MAX_AGE_S
     #: 单场 LLM 决策硬超时（秒），见 `DecisionConfig.llm_timeout_s`
     llm_timeout_s: float = DEFAULT_LLM_TIMEOUT_S
     #: LLM 概率相对市场的最大偏离（污染护栏），见 `DecisionConfig`
@@ -1620,22 +1657,58 @@ class AnalysisService:
     def _live_ids_from_push(self) -> Optional[set]:
         """从推送流推导进行中赛事（`LiveBook` 留存的最新赔率表）。
 
-        过滤规则（为避免把刚结束的场留在列表里）：
+        过滤规则（为避免把刚结束/已陈旧的场当活跃）：
           * 排除 Hub 已收到结束通知（`C109`）的场；
-          * 排除比分推送已超过 `stale_score_s` 的场（无比分推送则保留，
-            因为部分低级别赛事上游不推比分）。
+          * 排除**行情本身**已超过 `push_quote_max_age_s` 的场
+            （这是防「重启后旧行情冒充进行中」的关键门禁）。
+
+        ⚠️ 比分的时效门禁**不在本方法**：它由 `_candidate_is_fresh()` 在候选
+        阶段管（本方法只回答「哪些场现在真的在跳赔」）。
+
+        ## 为何必须有行情新鲜度门禁（本项目真实故障）
+
+        `LiveBook` 启动时从 `_live/live.json` 回填，而旧实现把回填行标成
+        「刚写入」，于是 `/api/v1/analysis` 在会话过期、推送一条没收到
+        （`connected=0, messages=0`）的情况下仍然声称
+        `count=527, source=push` —— 把一个**完全死的采集链路**报成
+        「527 场真实进行中」。加门禁后，陈旧回填一律不再算活跃，
+        调用方据此不再做「进行中」判定（HANDOVER §6.3 的既定原则：
+        拿不到权威来源时标「未知」，不冒充）。
 
         Returns:
-            mid 集合；Hub 未启用或无行情时返回 None。
+            mid 集合；**无法判定时返回 None**（包括：Hub 未启用、无
+            `LiveBook`、表里一行行情都没有、或行情**全部已陈旧**）。
+
+            为何“全部陈旧”也归为 `None`（而不是空集）：空集会被下游读作
+            「已确认 0 场进行中」，而“没有任何新鲜行情”并不能证明
+            “没有比赛在踢”（采集可能只是断了）。误报 0 会导致看板在
+            默认勾选「只看进行中」时**变空白且不告警** —— 那正是
+            `api/app.py` 明确要防的「看板空白」故障。
+            返回 `None` 则复用既有的诚实机制：`live_known=False` →
+            前端显示「未知」+ 原因（HANDOVER §6.3 的既定原则）。
+
+            *注*：真正“确认 0 场”的权威来源是**赛程**（`ms==1`，走
+            `source.schedule()`）——那条路返回的空集确实是结论。
+            本方法只是会话不可用时的**回退**，它拿不出结论就应说不知道。
         """
         rt = self.realtime
         if rt is None:
             return None
-        try:
-            mids = list(rt.live.live_mids())
-        except AttributeError:
-            return None       # 旧版 Hub 无 LiveBook
+        book = getattr(rt, "live", None)
+        if book is None:
+            return None
+        max_age = _to_float(self.config.push_quote_max_age_s,
+                            DEFAULT_PUSH_QUOTE_MAX_AGE_S)
+        if not _live_mids_supports_max_age(book):
+            # 旧版/测试替身不支持按年龄取活跃场：**不能**退回「不过滤」
+            # （那正是本方法要修的缺陷），而是自行用真实行情年龄把关。
+            mids = self._live_mids_filtered_by_quote_age(book, max_age)
+        else:
+            mids = list(book.live_mids(max_age_s=max_age))
         if not mids:
+            # 无任何**新鲜**行情 → 无法判定谁在踢，返回 None（未知）。
+            # 绝不能返回空集：空集会被读作「已确认 0 场进行中」，
+            # 使看板变空白且不告警（见 docstring Returns 的说明）。
             return None
         out: set = set()
         for mid in mids:
@@ -1645,6 +1718,25 @@ class AnalysisService:
             except Exception:  # noqa: BLE001 - 单个场次判定失败不影响其余
                 pass
             out.add(str(mid))
+        return out
+
+    @staticmethod
+    def _live_mids_filtered_by_quote_age(book: Any, max_age_s: float) -> list[str]:
+        """`live_mids` 不支持年龄参数时的等价兜底（按上游行情年龄过滤）。"""
+        try:
+            raw = list(book.live_mids())
+        except Exception:  # noqa: BLE001 - 拿不到行情等于没有活跃场次
+            return []
+        out: list[str] = []
+        for mid in raw:
+            try:
+                quotes = book.book(mid)
+                ages = [_to_float(getattr(q, "quote_age_s", float("inf")),
+                                  float("inf")) for q in (quotes or ())]
+            except Exception:  # noqa: BLE001 - 单场异常不影响其余场次
+                ages = []
+            if ages and min(ages) <= max_age_s:
+                out.append(str(mid))
         return out
 
     def candidates(
@@ -2005,6 +2097,8 @@ def build_analysis_service(
         leak_score_to_llm=(e.get("ANALYSIS_LEAK_SCORE", "0") or "0").strip()
                           in ("1", "true", "yes"),
         stale_score_s=_num("ANALYSIS_STALE_SCORE_S", DEFAULT_STALE_SCORE_S),
+        push_quote_max_age_s=_num("ANALYSIS_PUSH_QUOTE_MAX_AGE_S",
+                                   DEFAULT_PUSH_QUOTE_MAX_AGE_S),
         max_live_age_s=_num("ANALYSIS_MAX_LIVE_AGE_S",
                             DEFAULT_MAX_LIVE_AGE_S),
         # LLM 超时：实测默认 90s 使 11/71 场因超时降级，150s 覆盖尾部
