@@ -39,7 +39,6 @@ import os
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
