@@ -130,6 +130,21 @@ TREND_DIR_MAX_MB = 256.0
 #: 每场赛事保留的最大事件数
 MAX_EVENTS_PER_MATCH = 120
 
+#: 行情新鲜度上限（秒）。**超过此年龄的赔率不得再被当作「正在进行中」**。
+#:
+#: 为何必须有这个上限（本项目真实故障）：`LiveBook.save()/load()` 会把
+#: 内存实时表落盘再回填，而回填时早期实现把每行的 `at` 一律写成「载入那
+#: 一刻」，于是 **十几小时前的旧行情在健康检查里显示为「75 秒前」**，
+#: `live_mids()` 也把它们全部算作活跃场次 —— 实测重启后 `/api/v1/analysis`
+#: 声称 `count=527, source=push`（「真实进行中」），而当日实际滚球数只有
+#: 几十场。这正是 HANDOVER §6.3 记录过的「用快照时效冒充进行中」的同一类
+#: 错误，只是换了一条路径（持久化回填）重新长出来。
+#:
+#: 取值依据：`C105` 是**周期性全量快照**（实测一小时可达 16 万次 tick），
+#: 真正在滚球的场次不会连续 15 分钟没有任何新价。900s 与赛程 `grace_s`
+#: 同量级，宁可宽松也**不要误杀**低级别赛事（它们推送频率本就低）。
+DEFAULT_QUOTE_MAX_AGE_S = 900.0
+
 
 def _to_int(value: object, default: int = 0) -> int:
     """容错整数转换（配置可能来自环境变量的字符串）。"""
@@ -267,6 +282,27 @@ class LiveQuote:
     def age_s(self) -> float:
         return max(0.0, time.monotonic() - self.at) if self.at else 0.0
 
+    @property
+    def quote_age_s(self) -> float:
+        """行情**本身**的年龄（秒），按上游 `ts_ms` 计算。
+
+        与 `age_s` 的关键区别：`age_s` 衡量「本进程多久前写过这一行」，
+        会因落盘/回填而被重置；`quote_age_s` 直接对上游时间戳求差，
+        因此**重启回填的历史行情也会如实显示为很旧**，无法被伪装成新鲜。
+
+        Returns:
+            年龄（秒）；`ts_ms` 缺失（<=0）时返回 `inf` —— 即「无法证明
+            它新鲜」，调用方据此不得把它算作活跃行情。
+        """
+        if self.ts_ms <= 0:
+            return math.inf
+        # 容错转换：`ts_ms` 类型未约束（可能来自落盘 JSON 或推送脏字段），
+        # 直接算数会抛错并冒泡到调用方（决策/看板循环不允许因单个脏字段挂掉）。
+        ts_f = _to_float(self.ts_ms, 0.0)
+        if ts_f <= 0:
+            return math.inf
+        return max(0.0, time.time() - ts_f / 1000.0)
+
 
 class LiveBook:
     """内存实时赔率表：`(mid, chpid, hv, oid) -> LiveQuote`。
@@ -341,10 +377,33 @@ class LiveBook:
         rows.sort(key=lambda r: (r.chpid, r.hv, r.ot, r.oid))
         return rows
 
-    def live_mids(self) -> List[str]:
-        """当前有行情的赛事 ID（按是否活跌排序无意义，此处保证稳定）。"""
+    def live_mids(self, max_age_s: Optional[float] = None) -> list[str]:
+        """当前有行情的赛事 ID。
+
+        Args:
+            max_age_s: 只返回「最新一行行情的真实年龄 ≤ 该值」的场次。
+                `None`（默认）不设限，保持历史行为（回填即可用）。
+                判据用 :attr:`LiveQuote.quote_age_s`（按上游时间戳），
+                而不是 `age_s`（按本进程写入时刻）—— 否则重启回填会把
+                陈旧行情算成活跃，正是本项目踩过的坑。
+
+        Returns:
+            赛事 ID 列表（稳定排序）。
+        """
         with self._lock:
-            return sorted(self._by_mid)
+            if max_age_s is None:
+                return sorted(self._by_mid)
+            limit = max(0.0, _to_float(max_age_s, 0.0))
+            fresh: list[str] = []
+            for mid, keys in self._by_mid.items():
+                # 用 `in` 而不是直接下标：两表理论上同步维护，但一旦不一致，
+                # KeyError 会让整个实时看板 500 —— 这里只丢一行，不丢整表。
+                newest = min((self._rows[k].quote_age_s for k in keys
+                              if k in self._rows),
+                             default=math.inf)
+                if newest <= limit:
+                    fresh.append(mid)
+            return sorted(fresh)
 
     def n_matches(self) -> int:
         with self._lock:
@@ -358,12 +417,27 @@ class LiveBook:
         with self._lock:
             newest = max((r.at for r in self._rows.values()), default=0.0)
             oldest = min((r.at for r in self._rows.values()), default=0.0)
+            # 行情**真实**年龄（按上游 ts_ms）：与 at 不同，它无法被回填重置，
+            # 因此健康检查能如实暴露「数据其实是旧的」。
+            quote_newest = min((r.quote_age_s for r in self._rows.values()),
+                               default=0.0)
+            fresh = sum(1 for r in self._rows.values()
+                        if r.quote_age_s <= DEFAULT_QUOTE_MAX_AGE_S)
         return {
             "matches": self.n_matches(),
             "rows": self.n_rows(),
             "updates": self.updates,
             "newest_age_s": (round(time.monotonic() - newest, 1) if newest else None),
             "oldest_age_s": (round(time.monotonic() - oldest, 1) if oldest else None),
+            #: 最新一行行情的真实年龄；None 表示无数据或**无法判定**。
+            #: 必须过滤非有限值：`Infinity` 不是合法 JSON，严格解析器
+            #: （如浏览器 `JSON.parse`）会直接报错。
+            "quote_newest_age_s": (round(quote_newest, 1)
+                                   if self._rows and math.isfinite(quote_newest)
+                                   else None),
+            #: 仍在新鲜度上限内的**条目**数（0 = 全部陈旧，页面不得声称进行中）
+            "fresh_rows": fresh,
+            "fresh_max_age_s": DEFAULT_QUOTE_MAX_AGE_S,
             "persist_path": (str(self.snapshot_path)
                              if self.snapshot_path else ""),
             "last_save_age_s": (round(time.monotonic() - self.last_save_at, 1)
@@ -416,7 +490,26 @@ class LiveBook:
             return False
 
     def load(self) -> int:
-        """从本地 JSON 回填实时表（启动时调用）。返回回填行数。"""
+        """从本地 JSON 回填实时表（启动时调用）。返回回填行数。
+
+        ## 回填的行带**真实年龄**，不得伪装成新鲜（本项目真实故障）
+
+        早期实现在这里把每行的 `at` 写成「载入这一刻」（`at=now`），后果：
+
+          * `health().newest_age_s` 把 24 小时前的行情报成「75 秒前」；
+          * `live_mids()` 把全部回填场次算作活跃 → `_live_ids_from_push()`
+            返回 527 场 → `/api/v1/analysis` 声称 `count=527, source=push`，
+            而当日真实滚球只有几十场。
+
+        这正是 HANDOVER §6.3 的「用快照时效冒充进行中」，只是换了一条路径
+        （持久化回填）重新长出来。修法：`at` 按行情的 `ts_ms` 反推，
+        使 `age_s` 与真实年龄一致；同时保留 `quote_age_s` 作为不依赖
+        单进程写入时刻的第二重口径。
+
+        保留 `load()` 的初衷不变 —— 重启后**立即有数据**（免重扫 10 万快照），
+        只是这些数据的陈旧程度现在能被看见，由调用方（如
+        :meth:`live_mids` 的 `max_age_s`）决定要不要用。
+        """
         path = self.snapshot_path
         if path is None or not path.exists():
             return 0
@@ -430,6 +523,7 @@ class LiveBook:
         if not isinstance(rows, list):
             return 0
         now = time.monotonic()
+        now_ms = time.time() * 1000.0
         n = 0
         with self._lock:
             for item in rows:
@@ -442,10 +536,18 @@ class LiveBook:
                     continue
                 if f_odds <= 1.0:
                     continue
+                i_ts = _to_int(ts_ms, 0)
+                # 反推写入时刻：让 age_s 等于行情的**真实**年龄。
+                # ts_ms 缺失（<=0）时无从判断 → 视为很旧（保持诚实，
+                # 避免把无法证明新鲜的行情算作活跃）。
+                if i_ts > 0:
+                    at = now - max(0.0, (now_ms - i_ts) / 1000.0)
+                else:
+                    at = now - (DEFAULT_QUOTE_MAX_AGE_S * 2.0)
                 key = (str(mid), str(chpid), str(hv), str(oid))
                 self._rows[key] = LiveQuote(
                     mid=str(mid), chpid=str(chpid), hv=str(hv), oid=str(oid),
-                    ot=str(ot), odds=f_odds, ts_ms=_to_int(ts_ms, 0), at=now)
+                    ot=str(ot), odds=f_odds, ts_ms=i_ts, at=at)
                 self._by_mid.setdefault(str(mid), {})[key] = None
                 n += 1
         return n

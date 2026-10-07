@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -364,6 +365,134 @@ class TestLiveBook(unittest.TestCase):
         self.assertEqual(b.load(), 0)
 
 
+class TestLiveBookQuoteAge(unittest.TestCase):
+    """回归：回填的行情必须带**真实年龄**，不得冒充「正在进行中」。
+
+    历史缺陷（本项目真实故障）：`load()` 把每行的 `at` 写成「载入这一刻」，
+    于是 24 小时前的旧行情被 `/api/v1/analysis` 报成
+    `count=527, source=push`（自称「真实进行中」），而当时推送链路
+    一条消息都没收到（`connected=0, messages=0`）。这与 HANDOVER §6.3
+    的「用快照时效冒充进行中」是同一类错误，只是换了持久化回填这条路径
+    重新长出来。
+
+    本组用例锁死三件事：
+      1. 新鲜行情 → 算活跃（正常路径）；
+      2. 陈旧/无时间戳行情 → **不得**算活跃（边界路径）；
+      3. 不带门禁的 `live_mids()` 保持旧行为（向后兼容）。
+    """
+
+    @staticmethod
+    def _write_live(path: str, ts_ms_list: Any) -> None:
+        """按 `save()` 的落盘格式手写一份 live.json。"""
+        rows = [[f"m{i}", "2", "2.5", "o1", "Over", 1.9, ts]
+                for i, ts in enumerate(ts_ms_list)]
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"version": 1, "rows": rows}, fh)
+
+    def test_fresh_quotes_count_as_live(self) -> None:
+        """正常路径：刚推送的行情算活跃。"""
+        from collector.leyu_realtime import DEFAULT_QUOTE_MAX_AGE_S, LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "live.json")
+            self._write_live(p, [int(time.time() * 1000) - 5_000])
+            b = LiveBook(p)
+            self.assertEqual(b.load(), 1)
+            self.assertEqual(
+                b.live_mids(max_age_s=DEFAULT_QUOTE_MAX_AGE_S), ["m0"])
+
+    def test_stale_quotes_are_not_live(self) -> None:
+        """边界路径：24 小时前的行情**不得**算作进行中。"""
+        from collector.leyu_realtime import DEFAULT_QUOTE_MAX_AGE_S, LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "live.json")
+            self._write_live(p, [int(time.time() * 1000) - 24 * 3_600_000])
+            b = LiveBook(p)
+            self.assertEqual(b.load(), 1)
+            self.assertEqual(b.live_mids(max_age_s=DEFAULT_QUOTE_MAX_AGE_S), [])
+            # 回填仍然可用（重启即有数据），只是不再冒充新鲜
+            self.assertEqual(b.n_matches(), 1)
+
+    def test_age_s_is_truthful_after_load(self) -> None:
+        """`age_s` 必须反映真实年龄，而不是「刚刚载入」。"""
+        from collector.leyu_realtime import LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "live.json")
+            self._write_live(p, [int(time.time() * 1000) - 7_200_000])
+            b = LiveBook(p)
+            b.load()
+            age = b.book("m0")[0].age_s
+            self.assertGreater(age, 7_100, "应约为 7200s，而不是 ~0s")
+            self.assertAlmostEqual(b.book("m0")[0].quote_age_s, 7_200,
+                                   delta=60)
+
+    def test_missing_timestamp_is_never_fresh(self) -> None:
+        """边界路径：`ts_ms` 缺失时无从证明新鲜 → 一律不算活跃。"""
+        from collector.leyu_realtime import DEFAULT_QUOTE_MAX_AGE_S, LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "live.json")
+            self._write_live(p, [0])
+            b = LiveBook(p)
+            self.assertEqual(b.load(), 1)
+            self.assertEqual(b.book("m0")[0].quote_age_s, float("inf"))
+            self.assertEqual(b.live_mids(max_age_s=DEFAULT_QUOTE_MAX_AGE_S), [])
+
+    def test_live_mids_without_limit_keeps_backward_compat(self) -> None:
+        """不传门禁时保持旧行为（避免破坏既有调用方）。"""
+        from collector.leyu_realtime import LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "live.json")
+            self._write_live(p, [int(time.time() * 1000) - 24 * 3_600_000])
+            b = LiveBook(p)
+            b.load()
+            self.assertEqual(b.live_mids(), ["m0"])
+
+    def test_health_exposes_true_age_and_fresh_count(self) -> None:
+        """健康检查必须能看出「数据其实是旧的」（可观测性）。"""
+        from collector.leyu_realtime import LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "live.json")
+            self._write_live(p, [int(time.time() * 1000) - 24 * 3_600_000])
+            b = LiveBook(p)
+            b.load()
+            h = b.health()
+            self.assertEqual(h["fresh_rows"], 0)
+            self.assertGreater(h["quote_newest_age_s"], 86_000)
+
+    def test_health_stays_valid_json_when_age_unjudgeable(self) -> None:
+        """边界路径：全部行情都无时间戳时，健康结果仍必须是**合法 JSON**。
+
+        为何关键：`allow_nan=False` 下 `Infinity` 不是合法 JSON，
+        浏览器 `JSON.parse` 会直接报错。而“无时间戳”是真实可能的
+        （落盘兼容/脏字段）。
+        """
+        from collector.leyu_realtime import LiveBook
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "live.json")
+            self._write_live(p, [0])
+            b = LiveBook(p)
+            b.load()
+            h = b.health()
+            self.assertIsNone(h["quote_newest_age_s"])
+            self.assertEqual(h["fresh_rows"], 0)
+            json.dumps(h, allow_nan=False)   # 不抛异常即为通过
+
+    def test_upsert_after_load_restores_freshness(self) -> None:
+        """新推送到来后该场立即恢复活跃（门禁不阻碍正常采集）。"""
+        from collector.leyu_realtime import DEFAULT_QUOTE_MAX_AGE_S, LiveBook, PriceTick
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "live.json")
+            self._write_live(p, [int(time.time() * 1000) - 24 * 3_600_000])
+            b = LiveBook(p)
+            b.load()
+            self.assertEqual(b.live_mids(max_age_s=DEFAULT_QUOTE_MAX_AGE_S), [])
+            b.upsert_many([PriceTick(
+                mid="m0", chpid="2", hid="h", hv="2.5", oid="o1",
+                ot="Over", old_ov=1.9, new_ov=1.95,
+                ts_ms=int(time.time() * 1000))])
+            self.assertEqual(
+                b.live_mids(max_age_s=DEFAULT_QUOTE_MAX_AGE_S), ["m0"])
+
+
 class TestSnapshotsFromLiveCarriesNames(unittest.TestCase):
     """回归：实时表**不带队名**，必须由调用方补上。
 
@@ -461,6 +590,7 @@ class TestLiveBookToleratesDirtyPayload(unittest.TestCase):
         """落盘路径同样不得因脏字段抛异常（否则保存整批失败）。"""
         import os
         import tempfile
+
         from collector.leyu_realtime import LiveBook
         with tempfile.TemporaryDirectory() as d:
             b = LiveBook(os.path.join(d, "live.json"))

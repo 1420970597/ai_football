@@ -617,19 +617,24 @@ class TestAnalysisServiceLedgerWiring(unittest.TestCase):
             self.assertIn("settle", st)
 
     def test_cycle_writes_ledger(self) -> None:
-        """定时决策必须落台账（用户要的“记录决策结果”）。"""
-        import inspect
+        """定时决策必须落台账（用户要的“记录决策结果”）。
 
+        用编译后的代码对象断言（而非 `inspect.getsource` 读文本）：
+        后者会在文件被重排时读到**别的函数体**，造成假失败/假通过；
+        详见 `tests.referenced_names` 的说明。
+        """
         from service.analysis import AnalysisService
+        from tests import referenced_names
+
         self.assertIn("_record_ledger",
-                      inspect.getsource(AnalysisService.decide_list))
+                      referenced_names(AnalysisService.decide_list))
 
     def test_trigger_writes_ledger(self) -> None:
-        import inspect
-
         from service.analysis import AnalysisService
+        from tests import referenced_names
+
         self.assertIn("_record_ledger",
-                      inspect.getsource(AnalysisService._merge_into_latest))
+                      referenced_names(AnalysisService._merge_into_latest))
 
 
 if __name__ == "__main__":

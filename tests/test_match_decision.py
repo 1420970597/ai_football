@@ -25,7 +25,7 @@ import json
 import time
 import unittest
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, cast
+from typing import Any, Dict, List, cast
 from unittest import mock
 
 from core.models import OddsSnapshot, SnapshotState
@@ -688,13 +688,17 @@ class TestNoArtificialCap(unittest.TestCase):
         self.assertEqual(counts["scheduled"], 2)
 
     def test_api_delegates_live_filtering_to_source(self) -> None:
-        """API 层应**委托**而不是重复实现过滤（避免两处逻辑漂移）。"""
-        import inspect
+        """API 层应**委托**而不是重复实现过滤（避免两处逻辑漂移）。
 
+        用编译后的代码对象断言：`live_match_ids` 只在**嵌套**函数 `_mids()`
+        里被引用，因此这也同时锁住了“递归收集嵌套函数”的能力。
+        """
         import api.app as app_mod
-        src = inspect.getsource(app_mod._start_background)
-        self.assertIn("live_match_ids", src)
-        self.assertIn("SOCCER_SPORT_ID", src)
+        from tests import referenced_names
+
+        names = referenced_names(app_mod._start_background)
+        self.assertIn("live_match_ids", names)
+        self.assertIn("SOCCER_SPORT_ID", names)
 
 
 class TestPriceChangeTrigger(unittest.TestCase):
@@ -882,11 +886,11 @@ class TestPriceChangeTrigger(unittest.TestCase):
 
     def test_cycle_backs_off_when_trigger_enabled(self) -> None:
         """触发式为主时，定时循环应降频（避免双重浪费）。"""
-        import inspect
-
         from service.analysis import AnalysisService
-        src = inspect.getsource(AnalysisService._cycle_loop)
-        self.assertIn("change_trigger", src)
+        from tests import referenced_names
+
+        self.assertIn("change_trigger",
+                      referenced_names(AnalysisService._cycle_loop))
 
 
 def _mk_snap(mid: str) -> Any:
@@ -1114,6 +1118,121 @@ class TestStaleSnapshotDedupe(unittest.TestCase):
         comps = e.compute_markets([old, new])
         self.assertEqual(len(comps), 1)
         self.assertAlmostEqual(comps[0].odds[0], 1.05, places=4)
+
+
+class TestStaleBookIsNotLive(unittest.TestCase):
+    """**严重回归**：陈旧回填的行情不得被当作「正在进行中」。
+
+    实测（2026-10-07）：会话过期（`6001 token已过期`）、推送一条没收到
+    （`connected=0, messages=0`）时，`/api/v1/analysis` 仍声称
+    `count=527, source=push` —— 把**完全死的采集链路**报成
+    「527 场真实进行中」。根因是 `LiveBook.load()` 把回填行的 `at`
+    写成「载入这一刻」，抹掉了行情的真实年龄。
+
+    本组用例锁死「不知道」的正确表达：返回 `None`（而非空集），
+    使前端 `live_known=False` 显示「未知」+ 原因，而不是谎报 0 场。
+    """
+
+    @staticmethod
+    def _hub(stale: bool, legacy: bool = False):
+        """造一个挂着行情表的 Hub。
+
+        Args:
+            stale: True 造 24 小时前的行情，False 造 5 秒前的。
+            legacy: True 时把行情表包成**旧版签名**（`live_mids()` 不接受
+                `max_age_s`），用于覆盖 `_live_mids_filtered_by_quote_age()`
+                这条能力兜底路径 —— 早期 `LiveBook` 与部分测试替身正是这个形状。
+        """
+        from collector.leyu_realtime import LiveBook, PriceTick
+        b = LiveBook()
+        ts = int((time.time() - (24 * 3600 if stale else 5)) * 1000)
+        b.upsert_many([PriceTick(mid="m1", chpid="2", hid="h", hv="2.5",
+                                 oid="o1", ot="Over", old_ov=1.9,
+                                 new_ov=1.95, ts_ms=ts)])
+        book: Any = b
+        if legacy:
+            inner = b
+
+            class _NoAgeBook:
+                """代理：刻意不写 `max_age_s`，模拟旧版签名。"""
+
+                def live_mids(self) -> Any:
+                    return inner.live_mids()
+
+                def book(self, mid: str) -> Any:
+                    return inner.book(mid)
+
+            book = _NoAgeBook()
+
+        class _Hub:
+            live = book
+
+            def is_finished(self, mid: str) -> bool:
+                return False
+
+            def health(self) -> Any:
+                return {}
+
+            def score_age_s(self, mid: str) -> Any:
+                return None
+
+            def first_seen_age_s(self, mid: str) -> Any:
+                return None
+
+        return _Hub()
+
+    def _svc(self, *, stale: bool, legacy: bool = False) -> Any:
+        from service.analysis import AnalysisConfig, AnalysisService
+
+        class _Src:
+            def schedule(self) -> Any:
+                raise RuntimeError("6001 token已过期")
+
+        return AnalysisService(
+            valuation=cast(Any, type("V", (), {"source": _Src()})()),
+            realtime=cast(Any, self._hub(stale, legacy)),
+            config=AnalysisConfig(use_llm=False))
+
+    def test_stale_book_is_unknown_not_zero(self) -> None:
+        """边界路径：行情全陈旧 → `None`（未知），**不得**报成「0 场在踢」。"""
+        svc = self._svc(stale=True)
+        self.assertIsNone(svc.live_match_ids())
+        self.assertEqual(svc._live_source, "none")
+
+    def test_fresh_book_reports_the_match(self) -> None:
+        """正常路径：新鲜行情 → 正常给出进行中清单。"""
+        svc = self._svc(stale=False)
+        self.assertEqual(svc.live_match_ids(), {"m1"})
+        self.assertEqual(svc._live_source, "push")
+
+    def test_stale_book_must_not_return_empty_set(self) -> None:
+        """回归：不得用空集表达「不知道」。
+
+        空集会被 `api/app.py` 读作 `live_known=True` + 0 场，
+        于是看板在默认勾选「只看进行中」时**变空白且不告警** ——
+        正是该模块注释里明确要防的「看板空白」故障。
+        """
+        svc = self._svc(stale=True)
+        self.assertNotEqual(
+            svc.live_match_ids(), set(),
+            "空集会被读作「已确认 0 场」，应返回 None 表示未知")
+
+    def test_legacy_book_fallback_filters_stale(self) -> None:
+        """边界路径：旧版签名下兜底也必须按**真实年龄**过滤。
+
+        为何必须有这条：若新门禁只在「新签名」下生效，旧 Hub（或测试替身）
+        会退化成**完全不过滤** —— 那正是本次要修的缺陷，而不是兼容性
+        福利。能力探测的价值就体现在这里。
+        """
+        svc = self._svc(stale=True, legacy=True)
+        self.assertIsNone(svc.live_match_ids())
+        self.assertEqual(svc._live_source, "none")
+
+    def test_legacy_book_fallback_keeps_fresh(self) -> None:
+        """正常路径：旧版签名 + 新鲜行情 → 仍能正常判出活跃场次。"""
+        svc = self._svc(stale=False, legacy=True)
+        self.assertEqual(svc.live_match_ids(), {"m1"})
+        self.assertEqual(svc._live_source, "push")
 
 
 class TestStaleQuoteGuard(unittest.TestCase):

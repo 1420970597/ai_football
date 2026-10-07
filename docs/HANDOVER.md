@@ -1,10 +1,15 @@
 # 交接文档（HANDOVER）
 
 > **项目**：`ai_football` —— 足球赛事数据采集 / 盘口经济学分析 / LLM 决策 / 本地统计
-> **分支**：`main`　**远程**：`git@github.com:1420970597/ai_football.git`
-> **交接日期**：2026-10-06
-> **代码状态**：1102 用例全绿 · pyright 0 error · 容器 healthy
+> **远程**：`git@github.com:1420970597/ai_football.git`
+> **本文件所在分支**：`fix/TASK-11-stale-backfill-quotes-not-live`（基于 `main@6b9a35b`，**待 PR 合并**）
+> **交接日期**：2026-10-07（初版 2026-10-06）
+> **代码状态**：`a482c39` · 全量 `Ran 1115 tests … OK (skipped=11)` **exit 0** · pyright 0 error · 容器 healthy
 > **本文档读法**：§1 先看"现在能不能跑"，§2~§4 是三种状态的工作事项，§6 是踩过的坑（**最省时间的一节**）
+>
+> ⚠️ **接手人先看这条**：本轮修的两个 bug 都有"**看起来已经修过、其实从另一条路径又长回来**"的特征
+> （§6.3 → §6.5）。改代码前请先读 §6，特别是 §6.5 的**设计不变量**（陈旧行情必须返回
+> `None` 而不是空集）—— 它很容易被"顺手优化"成空集，而那会让看板变空白。
 
 ---
 
@@ -14,12 +19,25 @@
 本地台账落盘并可结算**"。核心链路已验证可跑；**唯一外部阻塞是乐鱼会话凭据**（见 §5.1）。
 
 ```text
-浏览器 3000  →  5 个视图（赛事看板 / 实时盘口 / 历史战绩 / 定价对比 / 校准报告）
+浏览器 3001  →  5 个视图（赛事看板 / 实时盘口 / 历史战绩 / 定价对比 / 校准报告）
 API    8000  →  29 个端点
 采集   WS    →  盘口推送 + 比分推送 + 结束通知，落盘 _live/ 与 _trends/
 决策   后台  →  盘口变动触发（30s 防抖）+ 600s 定时兜底
 结算   后台  →  每 60s 回填赛果、算命中率/ROI/CLV
 ```
+
+> ⚠️ 上方端口是**本机实测值**，不是默认值：`REDIS_PORT=6380`（6379 被别的项目占）、
+> `CONSOLE_PORT=3001`（3000 被 new-api 占）。完整命令见 §1.1。
+
+### 0.1 本轮（2026-10-07）做了什么
+
+| 类别 | 内容 | 为何重要 |
+| --- | --- | --- |
+| **真 bug（严重）** | 陈旧回填行情冒充"进行中" | 把一个**完全停摆**的采集链路报成"527 场真实进行中"，见 §6.5 |
+| **真 bug** | `sogou_searcher.py` 的 `print_articles` **定义整个丢失** | 5 处调用 / 0 处定义 ⇒ 该模块自带 CLI 一走到输出就 `AttributeError` |
+| **测试基础设施** | 4 处 `inspect.getsource` 断言改为查**编译后代码对象** | 原断言会同时产生**假失败**与**假通过**，已用变异测试证明非空洞 |
+| **工具链事故** | pi-lens 每回合自动 `ruff format`，**在测试跑动时改文件** | 补丁 diff 放大 5~10 倍 + 使测试出现幻影结果；已在 `.pi-lens.json` 关停（md5 实证） |
+| **文档纠错** | AGENTS.md 3 处环境事实经实测证明**是错的** | 曾误记"宿主机 Python 3.12.3 / 无 pip / bs4+numpy+matplotlib+pandas 可用" |
 
 ---
 
@@ -30,8 +48,9 @@ API    8000  →  29 个端点
 ```bash
 cd /root/ai_football
 
-# 端口冲突提示：6379 已被别的项目占用，本项目用 6380
-REDIS_PORT=6380 SCRAPER_PORT=8081 ANALYTICS_PORT=8000 CONSOLE_PORT=3000 \
+# 端口冲突提示：6379 已被别的项目占用，本项目用 6380；
+#                3000 也被别的项目（new-api）占用，故 web 控制台用 3001
+REDIS_PORT=6380 SCRAPER_PORT=8081 ANALYTICS_PORT=8000 CONSOLE_PORT=3001 \
   docker compose -f docker/docker-compose.yml up -d --build analytics-api web-console
 ```
 
@@ -47,17 +66,27 @@ curl -s localhost:8000/health                            # 应为 {"status":"hea
 curl -s localhost:8000/api/v1/realtime | python3 -m json.tool | head -20
 curl -s localhost:8000/api/v1/analysis | python3 -m json.tool   # 看 live.count vs upstream
 
-open http://localhost:3000/                              # 5 个视图
+open http://localhost:3001/                              # 5 个视图
 ```
 
 ### 1.3 跑测试与类型检查
 
 ```bash
-python3 -m unittest discover -s tests -q      # 1102 passed（约 5.5 分钟）
+python3 -m unittest discover -s tests -q      # 1115 passed
+# ⏱ 实测耗时（本机仅 2 核，别拿旧文档的“5.5 分钟”当预期）：
+#    空闲 ≈17 分钟；3 个容器同时在跑 ≈36 分钟。跑之前先确认没有重任务在抢 CPU，
+#    否则会误以为“卡死了”。
 /root/.pi-lens/tools/node_modules/.bin/pyright  # 0 errors
 ```
 
-> 宿主机无 pip / pytest，因此**统一用 `unittest`**（`python3 -m pytest` 会失败）。
+> 宿主机无 `pytest`，因此**统一用 `unittest`**（`python3 -m pytest` 会失败）。
+> pip 虽在（实测 23.0.1），但受 **PEP 668**（externally-managed-environment）保护，
+> 直装会报错 —— 要装包请用虚拟环境或容器，不要 `--break-system-packages`。
+>
+> ⚙️ **`.pi-lens.json`（本仓库自带）**：把 pi-lens 的 `format.enabled` 关成 `false`。
+> 因为它在**每个回合结束时**自动 `ruff format` 被改动过的文件，会把补丁 diff
+> 放大 5~10 倍、把仓库风格改得不一致（全仓 60 个文件里只有 12 个符合该格式），
+> 并在测试运行中**静默改写文件**造成幻影结果。成因与实证见 §6.6。
 
 ---
 
@@ -109,6 +138,29 @@ python3 -m unittest discover -s tests -q      # 1102 passed（约 5.5 分钟）
 ### 2.5 安全
 
 `乐鱼app.zip`（含 154 处 token + 账号口令）**已从 git 移除**并入 `.gitignore`。
+
+### 2.6 本轮提交（2026-10-07，分支 `fix/TASK-11-stale-backfill-quotes-not-live`）
+
+建议按此顺序阅读，**每个提交都自洽**（自己的 message 里带根因与实测证据）：
+
+| SHA | 提交 | 一句话 |
+| --- | --- | --- |
+| `0787dae` | `test(tests)` | 用编译后代码对象替换易碎的 `getsource` 断言 |
+| `e4c3c1a` | `fix(realtime)` | 陈旧回填行情不得冒充「进行中」（含 §6.5 的不变量） |
+| `f1bb445` | `fix(search_tools)` | 补回 `print_articles` 定义，修必然 `AttributeError` |
+| `7a9da66` | `chore(lint)` | 声明 ruff 策略、关停 pi-lens 自动格式化、忽略索引缓存 |
+| `2c9149e` | `docs` | 修正环境/测试事实，记录回填行情与工具链事故 |
+| `a482c39` | `chore(api)` | 删除未使用的 `threading` 导入 |
+
+本轮验证口令（全部在 `a482c39` 上跑过，**含退出码**）：
+
+```bash
+python3 -m unittest discover -s tests -q   # Ran 1115 tests … OK (skipped=11)  exit 0
+/root/.pi-lens/tools/node_modules/.bin/pyright           # 0 errors, 0 warnings
+/root/.pi-lens/pip-user/bin/ruff check --config pyproject.toml \
+    service/analysis.py collector/leyu_realtime.py \
+    search_tools/sogou_searcher.py api/app.py tests/     # 改动文件 delta = 0
+```
 
 ---
 
@@ -171,6 +223,11 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 （乐鱼把"已临近开赛但 `ms` 未置 1"也算滚球，本项目用 `grace_s=900` 近似）。
 **建议**：不要追求整数相等，而是用 `derived` 与 `upstream` 的**系统性偏差**判断是否异常。
 
+> ✅ **2026-10-07 修**：本条原有另一半隐患——会话过期时 `source=push` 会把
+> **回填的陈旧行情**报成"真实进行中"（实测 `count=527`，而推送一条没收到）。
+> 已加**行情真实年龄门禁**（`push_quote_max_age_s`，默认 900s），详见 §6.5。
+> 现在会话不可用时如实返回 `source=none, count=null` + 错误原因，**不冒充**。
+
 ### 3.4 触发吞吐 vs LLM 延迟（P1）
 
 单批 12 场 × LLM 150s ≈ 长时间占用。实测 `pending` 一度达 72。
@@ -189,11 +246,14 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 | 3 | `.pyc` 入库 | ✅ 已清（0 个被追踪） | — |
 | 4 | 无 `.gitignore` | ✅ 已建 | — |
 | 5 | 平行副本 | ❌ **3 个仍在**（各有 5~6 处引用） | 需先确认引用再合并/删除 |
-| 6 | 0 测试 | ✅ **1102 用例 / 23 文件** | 持续补 |
+| 6 | 0 测试 | ✅ **1115 用例 / 23 文件** | 持续补 |
 | 7 | `chromedriver.exe` 入库 | ❌ **仍被追踪**（20MB） | 改由 `webdriver-manager` 容器内获取 |
 | 8 | 死分支 | ❌ `origin/feature/add-sportsdata-searcher`、`origin/new` | 确认后清理 |
 | 9 | 调试脚本在根目录 | ❌ `搜索.py`、`测试TypeError修复.py`、`验证码识别/` | 归入 `tools/` 或 `tests/` |
 | 10 | 运行产物入库 | ✅ 已清（0 个被追踪） | — |
+| 11 | 无静态检查配置（ruff） | ⚠️ **本次已声明策略**（`pyproject.toml [tool.ruff]`） | 仅启用真缺陷类（E4/E7/E9/F/B）；**UP 现代化迁移待办**（全仓 2000+ 处 `Optional[X]`→`X \| None`），属独立全仓任务 |
+| 12 | 测试目录历史 lint 欠账 | ⚠️ 实测 **36 条 / 13 个测试文件**（`F401` 未用导入为主，1 条 `E731`），**均为本次之前就存在**，且都不在本次改动文件里 | 单独一次 `chore(tests)` 清理；不要混进业务补丁 |
+| 13 | 4 处 `inspect.getsource` 断言易碎 | ✅ **已修**（本次） | 改为查**编译后的代码对象**：新增 `tests.referenced_names()`（递归 `co_consts` 进嵌套函数，**刻意不收 `co_varnames`**），4 处断言全部改用它；已用变异测试证明**非空洞**（删掉 `_record_ledger` 调用后检查确实失败） |
 
 ### 4.2 功能增强建议（按价值排序）
 
@@ -201,6 +261,7 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 2. **基本面数据**：LLM 现在只看赔率，本质是"无信息的高价顾问"。接入伤停/首发/近况才能让 edge 有真实来源。
 3. **前端真推送**：现在 `/board` 是 10s 轮询，可改 SSE。
 4. **门控阈值校准**：`/ledger/history?all=1` 能看到被拦截盘口的表现（`unpicked_hit_rate`），用它判断门控在帮忙还是误杀。
+5. **整仓统一格式（可选、一次性）**：仓库当前只有 12/60 个文件符合 `ruff format`；若要统一，应作为**独立的 `style:` 提交**一次做完，而不是让工具每回合局部重排（见 §6.6）。
 
 ---
 
@@ -302,7 +363,72 @@ output/
 
 修复：**陈旧先返回 + 后台刷新**（单飞）。
 
-### 6.5 其余（简表）
+### 6.5 回填的实时行情冒充"进行中"（2026-10-07 修）
+
+**现象**：容器重建后 `/api/v1/analysis` 报 `{"source":"push","count":527}`
+（自称"真实进行中"），而同一时刻 `/realtime` 明明是
+`connected=0, messages=0, price_ticks=0` —— **推送链路完全死的，却报了 527 场**。
+
+**根因（两层）**：
+1. `LiveBook.load()` 把每行回填的 `at` 一律写成"载入这一刻"，于是 24 小时前的
+   旧行情在 `health()` 里显示成 `newest_age_s=75.8`（谎报新鲜）；
+2. `_live_ids_from_push()` 拿 `live_mids()` 的全部结果当活跃场次，没有任何时效门禁。
+
+这与 §6.3 是**同一类错误**（用时效冒充进行中），只是换了"持久化回填"这条路径
+重新长出来 —— 说明修完一条路径**不等于**修完这个判据。
+
+**修复**：
+* `LiveQuote.quote_age_s` —— 按上游 `ts_ms` 算真实年龄（**不会被回填重置**）；
+  缺时间戳返回 `math.inf`（"无法证明新鲜"）；
+* `LiveBook.load()` 反推真实 `at`，让 `age_s` / `health()` 不再说谎；
+* `LiveBook.live_mids(max_age_s=...)` —— 可按新鲜度取活跃场次；
+* `health()` 新增 `quote_newest_age_s` / `fresh_rows`（可观测性）；
+* `AnalysisConfig.push_quote_max_age_s`（`ANALYSIS_PUSH_QUOTE_MAX_AGE_S`，默认 900s）
+  作为 `_live_ids_from_push()` 的硬门禁；没有任何新鲜行情即返回 `None`（未知）。
+
+> ⚠️ **为何陈旧时返回 `None` 而不是空集**（设计要点，勿改回去）：
+> 空集会被下游读作「已确认 0 场进行中」，而“没有任何新鲜行情”并不能证明
+> “没有比赛在踢”（可能只是采集断了）。误报 0 会让看板在默认勾选
+> 「只看进行中」时**变空白且不告警** —— 正是 `api/app.py` 专门防范的
+> 「看板空白」故障。返回 `None` 则复用既有的诚实机制：
+> `live_known=False` → 前端显示「未知」+ 原因（即 §6.3 的既定原则）。
+> 真正“确认 0 场”的权威来源是**赛程**（`ms==1`），那条路的空集才是结论。
+
+> ⚠️ **副作用（已实测，判断为可接受）**：返回 `None` 会让 `candidates()` 走
+> `state=="active"` 回退分支，于是候选场次数变大 —— 容器内同一份陈旧书实测
+> `candidates(only_live=True)` 从 **457 → 4058**。代价**有界且不花钱**：
+> * **不花 LLM**：这些场次赔率全部过期，`compute_markets()` 先被
+>   `max_quote_age_s` 拦空 → `DECISION_AVOID` 提前返回（§6.2 的门禁仍在）；
+> * **不写台账**：`computations` 为空 → `record_match()` 的 `keep` 为空 → 0 行；
+> * 只多花一次**批量**快照加载（`_snapshots_for_many` 已是一次性指纹校验）。
+>
+> 🚫 **不要为了压这个数就把 `candidates()` 改成「未知即不活跃」**：
+> `decide_list()` 对空候选会返回 `count=0`，而 `_run_cycle_once()` **无条件**
+> 执行 `self._latest = res` 并落盘 —— 看板会立刻变成**空列表**，
+> 正是 §6.3 与 `api/app.py` 要防的「看板空白」。真要改，必须先让
+> `_run_cycle_once()` 拒绝用空结果覆盖已有结果（本项未做，留作后续）。
+
+**验证**（真实数据，173,792 行 / 24.3 小时前的 `_live/live.json`）：
+
+| 观测量 | 修复前 | 修复后 | 判据 |
+| --- | --- | --- | --- |
+| `live_book.newest_age_s` | `75.8`（谎报） | `90030.9`（真话） | 单元测试 + 容器实测 |
+| `live_book.quote_newest_age_s` | — | `90030.8` | 按上游 `ts_ms`，不可被回填重置 |
+| `live_book.fresh_rows` | — | `0 / 173792` | 新鲜条目计数 |
+| `live_match_ids()` | 527 个陈旧 mid | `None` | → `live_known=False` |
+| `/analysis` → `live.count` | `527`（冒充） | `null`（未知） | 前端渲染「未知」+ 原因 |
+| `/analysis` → `live.source` | `push` | `none` | 不确定就不冒充权威来源 |
+
+**教训**：回填/缓存这类"数据搬运"路径最容易把**时间信息**丢掉，
+而时间一旦丢失，下游所有"新鲜度"判断都会静默变成"永真"。
+新增任何回填都要问一句：**年龄还算得出来吗？**
+
+> ℹ️ 上表的年龄是**会随时间变大**的（`_live/live.json` 停止更新后就一直在变老）。
+> 第二次重建容器后实测已是 `92283.3` —— 与 `90030.9` 同量级即正常，
+> 不要把它当成”复现不一致“。真正要盯的是**旧实现的那个 `75.8`**：
+> 它永远停在几十秒，那才是“被回填抹掉了年龄”的特征。
+
+### 6.6 其余（简表）
 
 | 坑 | 教训 |
 | --- | --- |
@@ -312,6 +438,13 @@ output/
 | 追加依赖时忘 import | 新增 helper 后跑 `py_compile` + `pyright` 立即暴露 |
 | 时间线按 `settled_at` 分组 | 结算是批量任务，同批会堆到"今天" → 应按**决策日期**分组 |
 | `MagicMock(name=..., **{...})` | pyright 会报错（`name` 是第一个位置参数）→ 用简单 stub 类 |
+| 仓库无 ruff 配置 → 外部工具套用**自己的规则集** | 实测对一个从未采纳 UP 规则的仓库报出近 **3000 条**阻断项，把真缺陷淹没；显式声明 `[tool.ruff]` 后立刻在 `sogou_searcher.py` 找到 **3 处真实未定义名**（`return` 之后的死代码）。教训：**"工具没报错" 不等于 "代码没问题"** —— 要先问「它在按谁的规则报」 |
+| `return` 之后残留大段代码 | Python 不会报错（而是变成死代码），只有 lint 的未定义名规则能抓到。新增 `return` 时顺手删干净后续块 |
+| 文档里的"环境事实"过期 | AGENTS.md §0 曾误记「宿主机 Python 3.12.3 / 无 pip / bs4+numpy+matplotlib+pandas 可用」，实测全错（3.11.2 / pip 23.0.1 但 PEP668 / 只有 requests）。**已修正**。教训：「文档说行」不等于行 —— 改环境相关流程前**先实测一次** |
+| 用不挂字体的容器重跑图表 | 会让中文变方块并**静默覆盖已入库图片**（需 `git checkout` 还原）。容器重跑图表必须 `-v /usr/share/fonts/truetype/wqy:...:ro`，见 AGENTS.md §1.1A |
+| 皮试工具（pi-lens）**在 agent_end 自动重排被改过的文件** | 本仓库最坑的一条。实测：它在一个回合结束对 6 个 `.py` 跑 `ruff format`，把一个语义改动 120 行的文件变成 **581 行 diff**（`api/app.py` 只改了 1 行 import → 也变成 **600 行 diff**），把补丁彻底淹没；更阴的是它会**把仓库风格改得不一致** —— 实测全仓 60 个文件里只有 **12 个**是 ruff-format-clean，即仓库**本来就不采纳**这套格式。它还会**静默改变文件内容**，使正在跑的测试出现幻影结果（见上一行）。**已在 `.pi-lens.json` 里 `format.enabled=false` 关闭**（**实测已失效**：一次回合里改了 3 个测试文件，其中 2 个确实是 format-dirty（`ruff format --check` 报 would reformat），但回合结束后 8 个相关 `.py` 的 `md5sum` **全部未变**、`recent-touches.json` 也没新增 `reason:"format"` 条目）；若要整仓统一格式，应当是**独立的一次性任务**，不是每回合的副作用 |
+| 跑测试**期间**文件被改写 | `inspect.getsource()` 用**编译时冻结的行号**去读**当前磁盘文件**，文件一旦在测试跑的过程里被整体重排，就返回**别的函数体** → 断言**假失败**（实测 `test_cycle_writes_ledger` 报 `_record_ledger not found`，而 `decide_list` 里明明有；冻结代码后单独复跑即 `OK`）。反方向同样危险：断言可能被**碰巧满足**而**假通过**。**已根治**：`tests/` 原有 4 处 `getsource` 断言全部改为查**编译后的代码对象**（`tests.referenced_names()`），不再依赖“行号↔磁盘文件”一致；变异测试证明删掉调用后检查会失败（非空洞）。但**其余测试仍应冻结跑**（测试本身也是文件），且新代码不要重新引入 `getsource` 式断言 |
+| 改了代码却没重建镜像 | 容器跑的是**构建时**烤进去的副本（只有 `output/` 是挂载卷）。实测主机与容器 `/app` 的 `service/analysis.py` md5 **不一致** —— 也就是说当时“在容器里验证过”的其实是**旧设计**（容器里还是“陈旧→空集”的中间版，主机已是“陈旧→None”）。**改完代码必须 `docker compose up -d --build`**，并用 `docker exec <容器> md5sum /app/<文件>` 与主机对一次；否则验证结论无效 |
 
 ---
 
@@ -324,17 +457,19 @@ output/
 | 可行性调研（范本） | `reports/leyu-kaiyun-odds-bot-feasibility/REPORT.md` |
 | 乐鱼协议文档 | `docs/architecture/leyu-api-protocol.md` |
 | 项目宪章（**必读**） | `AGENTS.md` |
-| 测试 | `tests/`（23 文件 / 1102 用例） |
+| 测试 | `tests/`（23 文件 / 1115 用例） |
 
 ---
 
 ## 8. 接手检查清单
 
-- [ ] 按 §1.1 启动（**记得 4 个端口变量**）
+- [ ] 按 §1.1 启动（**记得 4 个端口变量**：6380 / 8081 / 8000 / **3001**）
 - [ ] §1.2 四项验证全过
-- [ ] 跑 `python3 -m unittest discover -s tests -q`（应 1102 passed）
+- [ ] 跑 `python3 -m unittest discover -s tests -q`（应 `Ran 1115 … OK`；宿主机可直跑，**不需** pytest）
 - [ ] 跑 `pyright`（应 0 errors）
+- [ ] 确认 `.pi-lens.json` 仍在（`format.enabled=false`）—— 它挡住"每回合自动重排文件"，
+      那正是让测试出现**幻影结果**的成因（§6.6）；删掉它会让下一次测试跑动中文件被改
 - [ ] 确认凭据状态（§3.2），必要时按三条出路之一处理
 - [ ] 确认 `graded` 是否开始增长（§3.1）
-- [ ] 读 §6（踩过的坑），改代码时别把已修的坑改回去
-- [ ] 如需重跑测试基线：容器内 `pip install -q pytest requests beautifulsoup4`
+- [ ] 读 §6（踩过的坑），改代码时别把已修的坑改回去 —— 尤其 §6.5 的 `None` 不变量
+- [ ] 若本分支尚未合并：先走 PR（AGENTS.md §2.4：业务代码**不直推 main**）

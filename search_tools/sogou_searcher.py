@@ -11,7 +11,6 @@ import re
 import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
-import urllib.parse
 
 
 from .base_searcher import BaseSearcher
@@ -167,26 +166,27 @@ class SogouSearcher(BaseSearcher):
         cleaned = re.sub(r'\s+', ' ', text.strip())
         return cleaned
 
-    def _convert_timestamp(self, timestamp: int) -> datetime:
+    def _convert_timestamp(self, timestamp: int) -> Optional[datetime]:
         """
         转换时间戳为datetime对象
 
         Args:
-            timestamp: 时间戳
+            timestamp: 时间戳（秒或毫秒）
 
         Returns:
-            datetime: 时间对象
+            datetime: 时间对象；无法解析时返回 None
         """
         try:
             # 将毫秒时间戳转换为秒
+            ts: float = float(timestamp)
             if len(str(timestamp)) == 13:  # 毫秒时间戳
-                timestamp = timestamp / 1000
+                ts = ts / 1000
 
-            return datetime.fromtimestamp(timestamp)
-        except (ValueError, OSError):
+            return datetime.fromtimestamp(ts)
+        except (ValueError, OSError, OverflowError, TypeError):
             return None
 
-    def _format_datetime(self, dt: datetime) -> str:
+    def _format_datetime(self, dt: Optional[datetime]) -> str:
         """
         格式化datetime对象为字符串
 
@@ -316,6 +316,8 @@ class SogouSearcher(BaseSearcher):
             List[Dict]: 最近文章列表
         """
         return self.search_recent_articles_force(keyword, hours, max_pages)
+
+    def print_articles(self, articles: List[Dict]) -> None:
         """
         打印文章信息
 
@@ -333,23 +335,49 @@ class SogouSearcher(BaseSearcher):
             print(f"\n{i}. {article.get('title', '无标题')}")
             print(f"   作者: {article.get('author', '未知')}")
             print(f"   时间: {article.get('publish_time', '未知')}")
-            # 如果有发布时间，显示距离现在的时间
-            if article.get('publish_datetime'):
-                now = datetime.now()
-                time_diff = now - article['publish_datetime']
-                hours_ago = int(time_diff.total_seconds() / 3600)
+            # 如果有发布时间，显示距离现在的时间。
+            #
+            # 为何必须做类型校验：`publish_datetime` 来自页面解析/调用方，
+            # 实测可能是字符串或 None；直接参与减法会抛 TypeError，
+            # 把整场“文章列表打印”打断（一篇文章脏数据埋掉整次输出）。
+            pub = article.get('publish_datetime')
+            if isinstance(pub, datetime):
+                total_s = int((datetime.now() - pub).total_seconds())
+                hours_ago = total_s // 3600
                 if hours_ago < 1:
-                    minutes_ago = int(time_diff.total_seconds() / 60)
-                    print(f"   发布于: {minutes_ago}分钟前")
+                    print(f"   发布于: {total_s // 60}分钟前")
                 elif hours_ago < 24:
                     print(f"   发布于: {hours_ago}小时前")
                 else:
-                    days_ago = int(time_diff.days)
-                    print(f"   发布于: {days_ago}天前")
+                    print(f"   发布于: {total_s // 86400}天前")
             print(f"   摘要: {article.get('summary', '无摘要')[:100]}...")
             print(f"   链接: {article.get('url', '无链接')}")
             if article.get('image_url'):
                 print(f"   图片: {article.get('image_url')}")
+
+
+def _ask_int(prompt: str, default: int) -> int:
+    """读取整数输入；非法输入回退到默认值（不抛异常）。
+
+    为何不能直接 `int(input(...))`：用户输入非数字（如 `abc`、空回车）时
+    会抛 ValueError 并使整个交互流程退出 —— 对命令行演示入口而言，
+    应当容错而不是崩掉。
+
+    Args:
+        prompt: 提示文本
+        default: 解析失败时使用的默认值
+
+    Returns:
+        解析出的整数，或 `default`。
+    """
+    raw = input(prompt).strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"输入 `{raw}` 不是数字，使用默认值 {default}")
+        return default
 
 
 def main():
@@ -378,7 +406,7 @@ def main():
         searcher.print_articles(articles)
     elif choice == "2":
         # 搜索多页
-        max_pages = int(input("请输入最大搜索页数 (默认3): ") or 3)
+        max_pages = _ask_int("请输入最大搜索页数 (默认3): ", 3)
         all_articles = searcher.search_with_pagination(keyword, max_pages)
         searcher.print_articles(all_articles)
         print(f"\n总共找到 {len(all_articles)} 篇文章")
@@ -388,8 +416,8 @@ def main():
         searcher.print_articles(recent_articles)
     elif choice == "4":
         # 自定义时间范围搜索
-        hours = int(input("请输入时间范围（小时，默认48）: ") or 48)
-        max_pages = int(input("请输入最大搜索页数 (默认10): ") or 10)
+        hours = _ask_int("请输入时间范围（小时，默认48）: ", 48)
+        max_pages = _ask_int("请输入最大搜索页数 (默认10): ", 10)
         recent_articles = searcher.search_recent_articles(keyword, hours, max_pages)
         searcher.print_articles(recent_articles)
     else:
