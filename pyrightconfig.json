@@ -4,8 +4,7 @@
     "**/__pycache__",
     "output",
     "web",
-    "reports",
-    "验证码识别"
+    "reports"
   ],
   "extraPaths": ["."],
   "venvPath": ".",

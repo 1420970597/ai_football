@@ -70,12 +70,11 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 __all__ = [
     "DEFAULT_SESSION_TTL_S",
@@ -216,8 +215,12 @@ class SessionProvider(ABC):
             SessionError: 无法取得会话。
         """
 
-    def invalidate(self, session: Optional[Session]) -> None:
-        """告知 provider 该会话已失效（默认无操作，供缓存型实现清理）。"""
+    def invalidate(self, session: Optional[Session]) -> None:  # noqa: B027
+        """告知 provider 该会话已失效（默认无操作，供缓存型实现清理）。
+
+        刻意不加 @abstractmethod：这是**可选**钩子，多数 provider（Env/File/Command…）
+        无缓存可清，强制实现只会逼出一堆空方法。空实现是设计意图，非漏写。
+        """
 
     def describe(self) -> Dict[str, Any]:
         """脱敏元信息，供 /health 与排障。"""

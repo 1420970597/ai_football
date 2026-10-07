@@ -44,7 +44,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
-from collector.orchestrator import TaskRegistry
 from service.valuation import ValuationService
 
 __all__ = ["create_app", "ApiApp", "run_server"]
@@ -251,10 +250,8 @@ class ApiApp:
     """路由与处理逻辑（不含 socket 细节，便于单测直接调用）。"""
 
     def __init__(self, service: ValuationService,
-                 registry: Optional[TaskRegistry] = None,
                  analysis: Optional[Any] = None) -> None:
         self.svc = service
-        self.registry = registry if registry is not None else TaskRegistry()
         #: 分析层（实时推送 + 决策引擎）。未注入时按需惰性构造，
         #: 避免每次测试构造 API 都去连上游。
         self._analysis = analysis
@@ -310,8 +307,6 @@ class ApiApp:
             ("GET", "/microstructure/<id>", self.h_microstructure),
             ("POST", "/portfolio", self.h_portfolio),
             ("GET", "/calibration", self.h_calibration),
-            ("POST", "/collect", self.h_collect),
-            ("GET", "/tasks/<id>", self.h_task),
         ]
 
         norm = path.rstrip("/") or "/"
@@ -550,25 +545,6 @@ class ApiApp:
                       body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
         n_bins = _q_int(query, "n_bins", 10, minimum=1, maximum=100)
         return self.svc.get_calibration(n_bins=n_bins)
-
-    def h_collect(self, query: Mapping[str, List[str]],
-                  body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
-        urls = body.get("urls")
-        if not isinstance(urls, (list, tuple)) or not urls:
-            raise BadRequest("请求体需要非空 urls 数组")
-        clean = [u for u in urls if isinstance(u, str) and u.strip()]
-        if not clean:
-            raise BadRequest("urls 中没有有效字符串项")
-        if len(clean) > 50:
-            raise BadRequest("单次最多 50 个 URL")
-        return self.svc.start_collect(clean, registry=self.registry)
-
-    def h_task(self, query: Mapping[str, List[str]],
-               body: Mapping[str, Any], task_id: str) -> Dict[str, Any]:
-        t = self.registry.get(task_id)
-        if t is None:
-            raise NotFound("任务不存在：%s" % task_id)
-        return t.as_dict()
 
     # -- 决策与实时（T5/T7） ------------------------------------------------
 
@@ -866,7 +842,7 @@ class ApiApp:
         """
         from collector.leyu_normalizer import snapshots_from_live
 
-        # 没有实时推送时（离线语料/体彩源/测试）根本没有“本地实时表”
+        # 没有实时推送时（离线回放/测试）根本没有“本地实时表”
         # 可用，此时只能读快照库 —— 这是唯一可行路径，不是性能回退。
         if rt is None:
             return list(self.svc.list_matches(league=league))
@@ -1147,8 +1123,6 @@ class ApiApp:
 
 def create_app(
     snapshot_root: str,
-    corpus_root: Optional[str] = None,
-    registry: Optional[TaskRegistry] = None,
     source: Optional[str] = None,
     saz_path: Optional[str] = None,
     analysis: Optional[Any] = None,
@@ -1168,10 +1142,9 @@ def create_app(
         str(Path(snapshot_root) / ".." / "_session.json"))
 
     svc = ValuationService(snapshot_root=snapshot_root,
-                           corpus_root=corpus_root,
                            source=source,
                            saz_path=saz_path)
-    return ApiApp(svc, registry=registry, analysis=analysis)
+    return ApiApp(svc, analysis=analysis)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -1399,11 +1372,10 @@ def _start_background(
 
 def run_server(host: str = "0.0.0.0", port: int = 8000,
                snapshot_root: str = "/app/output/snapshots",
-               corpus_root: Optional[str] = None,
                source: Optional[str] = None,
                saz_path: Optional[str] = None) -> None:
     """启动 API 服务（阻塞）。含后台实时采集 + 定时决策。"""
-    app = create_app(snapshot_root, corpus_root, source=source, saz_path=saz_path)
+    app = create_app(snapshot_root, source=source, saz_path=saz_path)
     hub = None
     if os.environ.get("REALTIME_DISABLED", "").strip() not in ("1", "true"):
         hub = _start_background(app.svc, app)
@@ -1429,7 +1401,6 @@ if __name__ == "__main__":  # pragma: no cover
         host=os.environ.get("API_HOST", "0.0.0.0"),
         port=_env_int("API_PORT", 8000, minimum=1),
         snapshot_root=os.environ.get("SNAPSHOT_ROOT", "/app/output/snapshots"),
-        corpus_root=os.environ.get("CORPUS_ROOT") or None,
         source=os.environ.get("DATA_SOURCE") or None,
         saz_path=os.environ.get("LEYU_SAZ") or None,
     )

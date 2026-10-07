@@ -40,7 +40,6 @@ from collector.leyu_h5_session import (
     H5_ENV_SIGNATURE,
     H5_ENV_SITE,
     H5_ENV_TOKEN,
-    H5_ENV_UUID,
     H5Credentials,
     H5SessionBootstrapper,
     H5SessionProvider,
@@ -517,6 +516,8 @@ class TestProviderIntegration(unittest.TestCase):
                      "在线用例默认跳过（设 AI_FOOTBALL_ONLINE=1 开启）")
 class TestOnlineReality(unittest.TestCase):
     """真实环境：H5 cookie → requestId → 业务 API 取到真实数据。"""
+
+    bs: Any
 
     @classmethod
     def setUpClass(cls) -> None:

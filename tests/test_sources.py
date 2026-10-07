@@ -3,7 +3,8 @@
 """数据源切换（collector.sources + service.valuation 接线）的单元测试。
 
 覆盖：
-  - 源名归一化（leyu / ticai / 中文别名 / 未知源报错）
+  - 源名归一化（leyu / 中文别名 / 未知源报错）
+  - **已下线源（ticai）必须被明确拒绝** —— 本项目只保留乐鱼
   - 乐鱼归一化器：chpid → market 映射、盘口线解析、状态推导、结果缺失降级
   - **让球盘必须两向（AH）而非三向（HHAD）** —— 这是一个已修复的真实缺陷回归
   - 会话失效（code=0401013）必须抛 AuthError 并给出可操作提示
@@ -15,10 +16,9 @@
 from __future__ import annotations
 
 import os
-import sys
 import unittest
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List
 from unittest import mock
 
 from collector.leyu_client import (
@@ -28,23 +28,19 @@ from collector.leyu_client import (
     OddsQuote,
     LEYUMatch,
     decode_envelope,
-    parse_odds_block,
 )
 from collector.leyu_normalizer import (
     DEFAULT_STALE_AFTER,
     normalize_leyu_matches,
     parse_hv,
-    snapshots_from_market,
     spec_for_market_quote,
 )
 from collector.sources import (
     KNOWN_SOURCES,
     SOURCE_LEYU,
-    SOURCE_TICAI,
     LEYUSource,
     SourceError,
     SnapshotSource,
-    TicaiFileSource,
     make_source,
     resolve_source_name,
 )
@@ -105,24 +101,22 @@ class TestSourceResolution(unittest.TestCase):
         for name in ("leyu", "LeYu", "乐鱼", "乐鱼API", "乐鱼官方api"):
             with self.subTest(name=name):
                 self.assertEqual(resolve_source_name(name), SOURCE_LEYU)
-        for name in ("ticai", "体彩", "体彩官方API", "sporttery"):
-            with self.subTest(name=name):
-                self.assertEqual(resolve_source_name(name), SOURCE_TICAI)
 
     def test_unknown_source_raises(self) -> None:
         with self.assertRaises(SourceError):
             resolve_source_name("bogus-source")
 
-    def test_known_sources_lists_both(self) -> None:
-        self.assertEqual(set(KNOWN_SOURCES), {SOURCE_LEYU, SOURCE_TICAI})
+    def test_retired_ticai_source_is_rejected(self) -> None:
+        """本项目只保留乐鱼：ticai 及其中文别名必须报错，不得静默回退。"""
+        for name in ("ticai", "体彩", "体彩官方API", "sporttery"):
+            with self.subTest(name=name):
+                with self.assertRaises(SourceError):
+                    resolve_source_name(name)
 
-    def test_make_source_rejects_missing_corpus_for_ticai(self) -> None:
-        with self.assertRaises(SourceError):
-            make_source("ticai", corpus_root=None)
+    def test_known_sources_lists_only_leyu(self) -> None:
+        self.assertEqual(set(KNOWN_SOURCES), {SOURCE_LEYU})
 
     def test_sources_are_snapshot_sources(self) -> None:
-        self.assertIsInstance(make_source("ticai", corpus_root=_ROOT),
-                              SnapshotSource)
         self.assertIsInstance(make_source("leyu"), SnapshotSource)
 
     def test_display_source_differs_from_source_id(self) -> None:
@@ -130,9 +124,6 @@ class TestSourceResolution(unittest.TestCase):
         src = make_source("leyu")
         self.assertEqual(src.name, "leyu")
         self.assertEqual(src.display_source, "乐鱼API")
-        t = make_source("ticai", corpus_root=_ROOT)
-        self.assertEqual(t.name, "ticai")
-        self.assertEqual(t.display_source, "体彩官方API")
 
 
 # --------------------------------------------------------------------------- #
@@ -396,12 +387,10 @@ class TestReplaySource(unittest.TestCase):
         self.assertEqual(LEYUSource(replay=SAZ).describe()["mode"], "replay")
         self.assertEqual(LEYUSource().describe()["mode"], "online")
 
-    def test_ticai_source_still_works(self) -> None:
-        """数据源无关性的证明：换回体彩源仍能产出快照。"""
-        src = TicaiFileSource(os.path.join(_ROOT, "output"))
-        snaps, _ = src.fetch()
-        self.assertGreater(len(snaps), 0)
-        self.assertEqual({s.source for s in snaps}, {"体彩官方API"})
+    def test_retired_ticai_source_cannot_be_constructed(self) -> None:
+        """已下线源：`make_source("ticai")` 必须报错（原来会返回文件源）。"""
+        with self.assertRaises(SourceError):
+            make_source("ticai")
 
 
 # --------------------------------------------------------------------------- #
@@ -522,6 +511,9 @@ def _online_creds():
                      "在线用例默认跳过（设 AI_FOOTBALL_ONLINE=1 开启）")
 class TestOnlineReality(unittest.TestCase):
     """对真实网关的行为锁定（需有效会话）。"""
+
+    host: str
+    rid: str
 
     @classmethod
     def setUpClass(cls) -> None:

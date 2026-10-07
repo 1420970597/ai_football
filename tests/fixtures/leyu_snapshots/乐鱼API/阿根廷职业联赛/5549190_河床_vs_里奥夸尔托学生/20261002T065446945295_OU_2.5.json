@@ -1,0 +1,21 @@
+{
+  "_schema": "odds_snapshot/v1",
+  "away": "里奥夸尔托学生",
+  "booksum": 1.03629725,
+  "captured_at": "2026-10-02T06:54:46.945295+00:00",
+  "home": "河床",
+  "league": "阿根廷职业联赛",
+  "margin": 0.03629725,
+  "market": "OU(2.5)",
+  "match_id": "5549190",
+  "odds": [
+    1.92,
+    1.94
+  ],
+  "outcomes": [
+    "over",
+    "under"
+  ],
+  "source": "乐鱼API",
+  "state": "stale"
+}

@@ -20,10 +20,10 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Mapping
 from unittest import mock
 
-from core.models import DevigMethod, OddsSnapshot, SnapshotState
+from core.models import OddsSnapshot, SnapshotState
 from service.decision import (
     DECISION_AVOID,
     DECISION_BUY,

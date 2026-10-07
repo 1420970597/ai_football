@@ -42,7 +42,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 from collector.leyu_normalizer import (
     snapshots_from_live,
@@ -153,7 +153,7 @@ def _to_int(value: object, default: int = 0) -> int:
     或 JSON），直接 `int()` 会抛 TypeError 并让整个分析请求失败。
     """
     try:
-        return int(value)  # type: ignore[arg-type]
+        return int(cast(Any, value))
     except (TypeError, ValueError, OverflowError):
         return default
 
@@ -1623,7 +1623,7 @@ class AnalysisService:
         now = time.time()
         cached = getattr(self, "_live_cache", None)
         if cached is not None and now - cached[0] < 30.0:
-            return cached[1]  # type: ignore[return-value]
+            return cached[1]
 
         live: Optional[set] = None
         err = ""

@@ -315,8 +315,8 @@ class TestEntryGateWiring(unittest.TestCase):
         # 只让 AH(1) 的去水分歧过大 → 它被阶段 1 拦下，
         # 其余三个盘口正常通过（验证“只把通过的交给 LLM”）。
         real = e.small._small_model
-        bad = ((0.5, 0.5), {"margin": 0.05, "method": "proportional",
-                            "method_spread_pp": 9.0}, [])
+        bad: Any = ((0.5, 0.5), {"margin": 0.05, "method": "proportional",
+                                 "method_spread_pp": 9.0}, [])
 
         def _small(snap: Any, trend: Any) -> Any:
             if snap.market == "AH(1)":
@@ -659,7 +659,7 @@ class TestNoArtificialCap(unittest.TestCase):
         self.assertIn("sport_id", src)
 
         # 行为断言：构造一个假的源，验证过滤 + 排序无关性
-        class _Fake(SnapshotSource):  # type: ignore[misc]
+        class _Fake(SnapshotSource):
             name = "fake"
 
             def fetch(self, *a: Any, **kw: Any) -> Any:
@@ -846,7 +846,11 @@ class TestPriceChangeTrigger(unittest.TestCase):
                                         "home": "A", "away": "B"}]
         svc.valuation._snapshots_of = lambda mid: [snap]
         order: List[str] = []
-        svc.refresh_matches = lambda mids: order.append("refresh") or {}
+        def _refresh(mids: Any) -> Any:
+            order.append("refresh")
+            return {}
+
+        svc.refresh_matches = _refresh
         with mock.patch.object(svc.match_engine, "decide_match",
                                return_value=_mp("m1")):
             svc.decide_matches(["m1"])
@@ -1039,7 +1043,7 @@ class TestLlmBudgetAndTimeout(unittest.TestCase):
             _t.sleep(0.5)
             return {"markets": []}
 
-        c.complete_json = _slow          # type: ignore[assignment]
+        c.complete_json = _slow
         e.attach_llm(c)
         r = e.decide_match(_three_markets())
         self.assertEqual(r.decision, DECISION_NO_LLM)

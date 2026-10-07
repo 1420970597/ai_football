@@ -14,10 +14,9 @@ from .valuation import (
     DEFAULT_SOURCE,
     LEYU_SOURCE_NAME,
     ValuationService,
-    load_corpus,
 )
 
-#: 当前默认数据源（乐鱼）。保留 DEFAULT_SOURCE 作为体彩展示名的向后兼容别名。
+#: 当前数据源（乐鱼）。保留 DEFAULT_SOURCE 作为历史展示名的向后兼容别名。
 DEFAULT_DATA_SOURCE = "leyu"
 
 __all__ = [
@@ -25,5 +24,4 @@ __all__ = [
     "DEFAULT_SOURCE",
     "LEYU_SOURCE_NAME",
     "ValuationService",
-    "load_corpus",
 ]

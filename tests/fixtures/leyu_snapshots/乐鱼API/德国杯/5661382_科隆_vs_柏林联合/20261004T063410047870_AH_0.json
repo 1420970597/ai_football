@@ -1,0 +1,39 @@
+{
+  "_schema": "odds_snapshot/v1",
+  "away": "柏林联合",
+  "booksum": 1.05265963,
+  "captured_at": "2026-10-04T06:34:10.047870+00:00",
+  "home": "科隆",
+  "league": "德国杯",
+  "margin": 0.05265963,
+  "market": "AH(0)",
+  "match_id": "5661382",
+  "metadata": {
+    "leyu_cds": [
+      "A01"
+    ],
+    "leyu_chpid": "4",
+    "leyu_ctsp": 1791095166559,
+    "leyu_hpt": 2,
+    "leyu_hv": "0",
+    "leyu_ov2": {
+      "away": 2.3698630136986303,
+      "home": 1.5899999999999999
+    },
+    "leyu_盘口名": "全场让球",
+    "数据来源": "乐鱼API",
+    "盘口线": 0.0,
+    "联赛": "德国杯",
+    "赛事状态": 0
+  },
+  "odds": [
+    1.59,
+    2.36
+  ],
+  "outcomes": [
+    "home",
+    "away"
+  ],
+  "source": "乐鱼API",
+  "state": "stale"
+}

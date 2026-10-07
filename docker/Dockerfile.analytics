@@ -39,7 +39,7 @@ COPY api/ ./api/
 # Browser 端静态资源（B/S 的 B）
 COPY web/console/ ./web/console/
 
-# 运行期数据卷：不可变快照 + 语料
+# 运行期数据卷：不可变快照（乐鱼实时采集写入）
 RUN mkdir -p /app/output/snapshots
 VOLUME ["/app/output"]
 
@@ -49,8 +49,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=20s --timeout=6s --retries=5 --start-period=10s \
   CMD curl -fsS http://localhost:8000/health || exit 1
 
-# 启动脚本：容器启动时自动把宿主机语料（output/场次*.json）
-# 归一化写入不可变快照存储，保证控制台开箱即有数据。
+# 启动脚本：拉起 REST API + 静态控制台（数据源只有乐鱼）。
 COPY docker/entrypoint.analytics.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

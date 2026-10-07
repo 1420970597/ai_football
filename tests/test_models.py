@@ -4,9 +4,8 @@
 
 from __future__ import annotations
 
-import math
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any, cast
 
 from core.models import (

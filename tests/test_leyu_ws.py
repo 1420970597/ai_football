@@ -10,20 +10,18 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import socket
 import struct
 import threading
 import time
 import unittest
-from typing import Any, List, Optional, Tuple
+from typing import List, Optional
 
-from collector.leyu_client import WS_HEARTBEAT_INTERVAL_S
+from collector.leyu_client import WS_HEARTBEAT_INTERVAL_S, TransportError
 from collector.leyu_ws import (
     OPCODE_BINARY,
     OPCODE_CLOSE,
-    OPCODE_CONT,
     OPCODE_PING,
     OPCODE_PONG,
     OPCODE_TEXT,
@@ -279,7 +277,7 @@ class TestConnectionAgainstFakeServer(unittest.TestCase):
 
         threading.Thread(target=responder, daemon=True).start()
         conn = WebSocketConnection("ws://127.0.0.1:%d/x" % port, "https://w", timeout=5.0)
-        with self.assertRaises(Exception):
+        with self.assertRaises(TransportError):
             conn.connect()
         srv.close()
 
@@ -351,7 +349,7 @@ class TestFeedPolicy(unittest.TestCase):
     def test_context_manager_closes(self) -> None:
         feed = LEYUFeed("wss://127.0.0.1:9/yewuws2/push?requestId=r", "r", "https://w",
                         auto_reconnect=False, timeout=0.5)
-        with self.assertRaises(Exception):
+        with self.assertRaises(TransportError):
             feed.__enter__()
         feed.close()
         self.assertTrue(feed._stop.is_set())

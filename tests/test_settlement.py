@@ -25,7 +25,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 from unittest import mock
 
 from core.settlement import (
@@ -827,7 +827,6 @@ class TestResultPathInjectedAfterConstruction(unittest.TestCase):
                                config=AnalysisConfig(use_llm=False, **kw))
 
     def _write_result(self, path: str, minutes_ago: float = 5.0) -> Dict[str, Any]:
-        from datetime import timedelta
         payload = {
             "count": 2,
             "summary": {"n": 2, "buy": 1},
@@ -899,9 +898,7 @@ class TestStaleResultsAreShownNotHidden(unittest.TestCase):
                     "finished_at": (datetime.now(timezone.utc)
                                     - timedelta(minutes=53)).isoformat(),
                 }, fh)
-            app = create_app(snapshot_root=d, corpus_root="output",
-                             source="ticai")
-            app.svc.ingest_corpus()
+            app = create_app(snapshot_root=d)
             from dataclasses import replace
             app.analysis.config = replace(app.analysis.config,
                                           result_path=p)
@@ -925,9 +922,7 @@ class TestStaleResultsAreShownNotHidden(unittest.TestCase):
                     "decisions": [{"match_id": "m1"}],
                     "finished_at": datetime.now(timezone.utc).isoformat(),
                 }, fh)
-            app = create_app(snapshot_root=d, corpus_root="output",
-                             source="ticai")
-            app.svc.ingest_corpus()
+            app = create_app(snapshot_root=d)
             from dataclasses import replace
             app.analysis.config = replace(app.analysis.config,
                                           result_path=p)
@@ -939,9 +934,7 @@ class TestStaleResultsAreShownNotHidden(unittest.TestCase):
     def test_no_result_at_all_is_pending(self) -> None:
         from api.app import create_app
         with tempfile.TemporaryDirectory() as d:
-            app = create_app(snapshot_root=d, corpus_root="output",
-                             source="ticai")
-            app.svc.ingest_corpus()
+            app = create_app(snapshot_root=d)
             _, body = app.dispatch("GET", "/api/v1/decisions",
                                    {"max_age": ["1800"]}, {})
             self.assertTrue(body.get("pending"))
@@ -1032,7 +1025,6 @@ class TestSettleScoresFromLocalPush(unittest.TestCase):
 
     def test_settle_reports_local_source(self) -> None:
         """`settle_finished` 要把「有多少场来自推送」回传，便于排查。"""
-        import os
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             svc = self._svc(ledger_root=d)
@@ -1094,9 +1086,7 @@ class TestAccuracyStatsEndToEnd(unittest.TestCase):
         """`/ledger/stats` 必须带命中率/ROI/CLV 字段（前端面板依赖）。"""
         from api.app import create_app
         with tempfile.TemporaryDirectory() as d:
-            app = create_app(snapshot_root=d, corpus_root="output",
-                             source="ticai")
-            app.svc.ingest_corpus()
+            app = create_app(snapshot_root=d)
             _, body = app.dispatch("GET", "/api/v1/ledger/stats", {}, {})
             for k in ("hit_rate", "roi", "clv_n", "clv_mean", "graded",
                       "pending", "unpicked_hit_rate", "ledger"):
@@ -1451,9 +1441,7 @@ class TestHistoryEndpoint(unittest.TestCase):
     def test_endpoint_shape(self) -> None:
         from api.app import create_app
         with tempfile.TemporaryDirectory() as d:
-            app = create_app(snapshot_root=d, corpus_root="output",
-                             source="ticai")
-            app.svc.ingest_corpus()
+            app = create_app(snapshot_root=d)
             st, body = app.dispatch("GET", "/api/v1/ledger/history",
                                     {"limit": ["10"], "days": ["3"]}, {})
             self.assertEqual(st, 200)
@@ -1466,9 +1454,7 @@ class TestHistoryEndpoint(unittest.TestCase):
     def test_all_flag_switches_scope(self) -> None:
         from api.app import create_app
         with tempfile.TemporaryDirectory() as d:
-            app = create_app(snapshot_root=d, corpus_root="output",
-                             source="ticai")
-            app.svc.ingest_corpus()
+            app = create_app(snapshot_root=d)
             _, a = app.dispatch("GET", "/api/v1/ledger/history", {}, {})
             _, b = app.dispatch("GET", "/api/v1/ledger/history",
                                 {"all": ["1"]}, {})
@@ -1500,16 +1486,17 @@ class TestClosingOddsOnlyForSettleableMatches(unittest.TestCase):
             calls.append(set(pending))
             return 0
 
-        svc._capture_closing_odds = _fake_capture      # type: ignore[assignment]
-        svc._confirmed_finished_mids = lambda p: set()  # type: ignore[assignment]
-        svc._finished_matches = lambda mids=None: []    # type: ignore[assignment]
+        svc._capture_closing_odds = _fake_capture
+        svc._confirmed_finished_mids = lambda pending: set()
+        svc._finished_matches = lambda mids=None: []
         # 台账里有一条可结算（本地推送有比分且已确认结束）
         hub = mock.MagicMock()
         hub.scores_snapshot.return_value = {"m1": (2, 1)}
         hub.finished_mids.return_value = ["m1"]
         hub.half_score.return_value = None
         svc.realtime = hub
-        svc._confirmed_finished_mids = lambda p: {"m1"}  # type: ignore[assignment]
+
+        svc._confirmed_finished_mids = lambda pending: {"m1"}
 
         class _Row:
             match_id = "m1"
@@ -1531,9 +1518,14 @@ class TestClosingOddsOnlyForSettleableMatches(unittest.TestCase):
         svc = AnalysisService(valuation=mock.MagicMock(), realtime=None,
                               config=AnalysisConfig(use_llm=False))
         called: List[Any] = []
-        svc._capture_closing_odds = lambda p: called.append(p) or 0  # type: ignore[assignment]
-        svc._confirmed_finished_mids = lambda p: set()  # type: ignore[assignment]
-        svc._finished_matches = lambda mids=None: []    # type: ignore[assignment]
+
+        def _capture(pending: Any) -> int:
+            called.append(pending)
+            return 0
+
+        svc._capture_closing_odds = _capture
+        svc._confirmed_finished_mids = lambda pending: set()
+        svc._finished_matches = lambda mids=None: []
         svc.realtime = None
 
         class _Row:

@@ -1,0 +1,21 @@
+{
+  "_schema": "odds_snapshot/v1",
+  "away": "柏林联合",
+  "booksum": 1.03638072,
+  "captured_at": "2026-10-02T06:54:46.945295+00:00",
+  "home": "科隆",
+  "league": "德国杯",
+  "margin": 0.03638072,
+  "market": "AH(0.25)",
+  "match_id": "5661382",
+  "odds": [
+    1.91,
+    1.95
+  ],
+  "outcomes": [
+    "home",
+    "away"
+  ],
+  "source": "乐鱼API",
+  "state": "stale"
+}

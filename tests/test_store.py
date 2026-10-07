@@ -62,12 +62,15 @@ class TestMemoryCache(unittest.TestCase):
 
     def test_keys_prefix(self):
         c = MemoryCache()
-        c.set("a:1", "x"); c.set("a:2", "y"); c.set("b:1", "z")
+        c.set("a:1", "x")
+        c.set("a:2", "y")
+        c.set("b:1", "z")
         self.assertEqual(c.keys("a:"), ["a:1", "a:2"])
 
     def test_clear(self):
         c = MemoryCache()
-        c.set("k", "v"); c.clear()
+        c.set("k", "v")
+        c.clear()
         self.assertIsNone(c.get("k"))
 
     def test_ttl_expiry(self):

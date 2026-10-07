@@ -414,8 +414,8 @@ def snapshots_from_live(
         spec = spec_for_market_quote(mq)
         if spec is None:
             continue
-        odds, missing = _ordered_odds(mq, spec)
-        if odds is None:
+        odds_tuple, missing = _ordered_odds(mq, spec)
+        if odds_tuple is None:
             sink.append("实时表 %s %s：缺结果 %s，已跳过"
                         % (mid, spec.code, ",".join(missing)))
             continue
@@ -435,7 +435,7 @@ def snapshots_from_live(
             away=str(away or ""),
             market=spec.code,
             outcomes=spec.outcomes,
-            odds=odds,
+            odds=odds_tuple,
             state=SnapshotState.ACTIVE,
             captured_at=utcnow(),
             source=source,

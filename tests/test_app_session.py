@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import os
 import unittest
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from unittest import mock
 
 from collector.leyu_app_session import (
@@ -309,6 +309,8 @@ class TestProviderIntegration(unittest.TestCase):
                      "在线用例默认跳过（设 AI_FOOTBALL_ONLINE=1 开启）")
 class TestOnlineReality(unittest.TestCase):
     """真实环境：App 凭据 → requestId → 业务 API 取到真实数据。"""
+
+    bs: Any
 
     @classmethod
     def setUpClass(cls) -> None:

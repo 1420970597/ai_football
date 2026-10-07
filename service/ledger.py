@@ -43,7 +43,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
 
 from core.settlement import (
     GRADED_STATUSES,
@@ -55,7 +55,7 @@ from core.settlement import (
     settle_pick,
     summarise,
 )
-from core.market_labels import describe_market, format_market
+from core.market_labels import describe_market
 
 __all__ = ["LedgerEntry", "DecisionLedger"]
 
@@ -84,7 +84,7 @@ def _neg_str(text: object) -> str:
 def _to_int_safe(value: object, default: int = 0) -> int:
     """容错整数（统计字段可能缺失/为 None/为字符串）。"""
     try:
-        return int(value)  # type: ignore[arg-type]
+        return int(cast(Any, value))
     except (TypeError, ValueError, OverflowError):
         return default
 
@@ -639,7 +639,7 @@ class DecisionLedger:
             "entries_shown": len(entries),
             "entries_total": len(rows),
             "picks_only": bool(picks_only),
-            "days": int(days or 0),
+            "days": days or 0,
             "ledger": self.health(),
         }
 

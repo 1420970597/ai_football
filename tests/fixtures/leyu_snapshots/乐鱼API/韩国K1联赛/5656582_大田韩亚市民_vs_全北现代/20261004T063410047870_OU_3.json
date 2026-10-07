@@ -1,0 +1,39 @@
+{
+  "_schema": "odds_snapshot/v1",
+  "away": "全北现代",
+  "booksum": 1.05844331,
+  "captured_at": "2026-10-04T06:34:10.047870+00:00",
+  "home": "大田韩亚市民",
+  "league": "韩国K1联赛",
+  "margin": 0.05844331,
+  "market": "OU(3)",
+  "match_id": "5656582",
+  "metadata": {
+    "leyu_cds": [
+      "A01"
+    ],
+    "leyu_chpid": "2",
+    "leyu_ctsp": 1791095610446,
+    "leyu_hpt": 5,
+    "leyu_hv": "3",
+    "leyu_ov2": {
+      "over": 2.3513513513513513,
+      "under": 1.58
+    },
+    "leyu_盘口名": "全场大小",
+    "数据来源": "乐鱼API",
+    "盘口线": 3.0,
+    "联赛": "韩国K1联赛",
+    "赛事状态": 0
+  },
+  "odds": [
+    2.35,
+    1.58
+  ],
+  "outcomes": [
+    "over",
+    "under"
+  ],
+  "source": "乐鱼API",
+  "state": "active"
+}

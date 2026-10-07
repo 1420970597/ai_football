@@ -13,15 +13,13 @@ venv/
 .venv/
 env/
 
-# 密钥与环境（config.py 中的凭据必须改为环境变量注入）
+# 密钥与环境（凭据必须改为环境变量注入；仓库已无 config.py）
 .env
 .env.*
 !.env.example
 
 # 运行产物与日志
 output/
-web/*/output/
-web/*/返回信息.txt
 *.log
 logs/
 

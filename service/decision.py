@@ -45,16 +45,13 @@
 
 from __future__ import annotations
 
-import json
 import math
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from core import devig as devig_mod
 from core import economics as econ
-from core import markets as mk
 from core.market_labels import format_market
 from core.models import DevigMethod, OddsSnapshot, SnapshotState
 
