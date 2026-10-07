@@ -164,12 +164,12 @@ class SnapshotSource(ABC):
 
     子类必须实现 `fetch()`。两个名称含义不同，不可混用：
 
-    * `name`           —— **规范源 ID**（`leyu` / `ticai`），用于配置与路由；
+    * `name`           —— **规范源 ID**（本项目只有 `leyu`），用于配置与路由；
     * `display_source` —— 写入 `OddsSnapshot.source` 的**展示名**
-      （`乐鱼API` / `体彩官方API`），用于存储分组与审计展示。
+      （`乐鱼API`），用于存储分组与审计展示。
     """
 
-    #: 规范源 ID（leyu / ticai）
+    #: 规范源 ID（leyu）
     name: str = "unknown"
 
     #: 写入快照的展示源名

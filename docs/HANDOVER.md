@@ -252,6 +252,21 @@ LEYU_APP_LOGIN_PASSWORD=<登录口令明文>
 单批 12 场 × LLM 150s ≈ 长时间占用。实测 `pending` 一度达 72。
 `change_batch` / `change_min_interval_s` 可调，但**建议改为按 LLM 实际吞吐自适应限流**。
 
+> ✅ **2026-10-07 修**：已实现自适应限流（正是本条的“建议”）。
+> 调度器现在记录每批的**实测单场耗时**（指数滑动平均 α=0.5），
+> 再用 `batch = clamp(batch_target_s / per_match_s, batch_min, batch_max)` 反推本批批量：
+> LLM 慢 → 批变小（周转更快、队列不再堆积）；LLM 快 → 批变大（少白等）。
+>
+> | 环境变量 | 默认 | 含义 |
+> | --- | --- | --- |
+> | `ANALYSIS_ADAPTIVE_THROTTLE` | `1` | 置 `0` 则恢复固定 `change_batch` 旧行为 |
+> | `ANALYSIS_BATCH_TARGET_S` | `150` | 单批耗时目标（秒），即原 “12 场 × 150s” 的量级 |
+> | `ANALYSIS_BATCH_MIN` / `_MAX` | `3` / `24` | 批量夹逼，防止离群值把批量推到无意义两端 |
+>
+> 可观测：`/health` → `config.effective_batch`（当前实际批量）与
+> `scheduler.per_match_s` / `last_batch_s`（吞吐来源）。
+> 失败批次**不留吞吐样本**（否则会把批量带偏），该行为有回归测试守住。
+
 ---
 
 ## 4. 📋 待完成（含技术债）

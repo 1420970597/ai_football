@@ -836,6 +836,68 @@ class TestPriceChangeTrigger(unittest.TestCase):
         # 剩余的仍留在队列里（不丢，只是排队）
         self.assertEqual(len(svc._pending), 1)
 
+    # -- 自适应限流（HANDOVER §3.4：固定批量会堆积）---------------------------
+
+    def test_adaptive_batch_uses_config_before_any_sample(self) -> None:
+        """首轮没有实测样本 → 回退到配置的 change_batch，不能拍脑袋。"""
+        svc = self._svc(change_batch=7, adaptive_throttle=True)
+        self.assertEqual(svc._effective_batch(), 7)
+
+    def test_adaptive_batch_clamps_to_min_and_max(self) -> None:
+        """LLM 极快/极慢时分别被 batch_max / batch_min 夹住。"""
+        svc = self._svc(batch_target_s=150.0, batch_min=3, batch_max=24)
+        svc._observe_batch(10, 10.0)            # 1s/场 → 想开 150 场
+        self.assertEqual(svc._effective_batch(), 24)
+        svc._sched_stats["per_match_s"] = 0.0
+        svc._observe_batch(1, 600.0)            # 600s/场 → 想开 0 场
+        self.assertEqual(svc._effective_batch(), 3)
+
+    def test_adaptive_batch_shrinks_as_llm_slows(self) -> None:
+        """核心语义：单场耗时变大 → 本批场次必须变少（方向不能反）。"""
+        svc = self._svc(batch_target_s=150.0, batch_min=1, batch_max=100)
+        svc._sched_stats["per_match_s"] = 0.0
+        svc._observe_batch(2, 10.0)             # 5s/场 → 30 场
+        fast = svc._effective_batch()
+        svc._sched_stats["per_match_s"] = 0.0
+        svc._observe_batch(2, 60.0)             # 30s/场 → 5 场
+        slow = svc._effective_batch()
+        self.assertEqual(fast, 30)
+        self.assertEqual(slow, 5)
+        self.assertLess(slow, fast)
+
+    def test_adaptive_throttle_can_be_disabled(self) -> None:
+        svc = self._svc(change_batch=6, adaptive_throttle=False)
+        svc._observe_batch(1, 600.0)            # 再慢也不影响
+        self.assertEqual(svc._effective_batch(), 6)
+
+    def test_observe_batch_ignores_degenerate_samples(self) -> None:
+        """边界：n<=0 或 elapsed<=0（除零源）不得污染滑动平均。"""
+        svc = self._svc()
+        svc._sched_stats["per_match_s"] = 7.0
+        svc._observe_batch(0, 100.0)
+        svc._observe_batch(5, 0.0)
+        self.assertEqual(svc._sched_stats["per_match_s"], 7.0)
+
+    def test_trigger_batch_records_throughput(self) -> None:
+        """触发一批后应留下实测样本，供下一批自适应。"""
+        svc = self._svc(change_debounce_s=0.0, change_batch=2)
+        fake = {"count": 1, "summary": {}, "decisions": []}
+        with mock.patch.object(svc, "decide_matches", return_value=fake):
+            svc.notify_price_change(["m1", "m2"])
+            svc._trigger_batch()
+        self.assertEqual(svc._sched_stats["last_batch_n"], 2)
+        self.assertGreater(svc._sched_stats["per_match_s"], 0.0)
+
+    def test_trigger_batch_failure_does_not_record_sample(self) -> None:
+        """失败批次不得留下吞吐样本（否则会把批量带偏）。"""
+        svc = self._svc(change_debounce_s=0.0, change_batch=2)
+        with mock.patch.object(svc, "decide_matches",
+                               side_effect=RuntimeError("boom")):
+            svc.notify_price_change(["m1"])
+            svc._trigger_batch()
+        self.assertEqual(svc._sched_stats["per_match_s"], 0.0)
+        self.assertIn("boom", svc.cycle_stats["last_error"])
+
     # -- decide_matches 行为 -------------------------------------------------
 
     def test_decide_matches_refreshes_snapshots_first(self) -> None:
