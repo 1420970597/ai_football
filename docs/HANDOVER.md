@@ -1,10 +1,15 @@
 # 交接文档（HANDOVER）
 
 > **项目**：`ai_football` —— 足球赛事数据采集 / 盘口经济学分析 / LLM 决策 / 本地统计
-> **分支**：`main`　**远程**：`git@github.com:1420970597/ai_football.git`
-> **交接日期**：2026-10-06
-> **代码状态**：1115 用例全绿 · pyright 0 error · 容器 healthy
+> **远程**：`git@github.com:1420970597/ai_football.git`
+> **本文件所在分支**：`fix/TASK-11-stale-backfill-quotes-not-live`（基于 `main@6b9a35b`，**待 PR 合并**）
+> **交接日期**：2026-10-07（初版 2026-10-06）
+> **代码状态**：`a482c39` · 全量 `Ran 1115 tests … OK (skipped=11)` **exit 0** · pyright 0 error · 容器 healthy
 > **本文档读法**：§1 先看"现在能不能跑"，§2~§4 是三种状态的工作事项，§6 是踩过的坑（**最省时间的一节**）
+>
+> ⚠️ **接手人先看这条**：本轮修的两个 bug 都有"**看起来已经修过、其实从另一条路径又长回来**"的特征
+> （§6.3 → §6.5）。改代码前请先读 §6，特别是 §6.5 的**设计不变量**（陈旧行情必须返回
+> `None` 而不是空集）—— 它很容易被"顺手优化"成空集，而那会让看板变空白。
 
 ---
 
@@ -14,12 +19,25 @@
 本地台账落盘并可结算**"。核心链路已验证可跑；**唯一外部阻塞是乐鱼会话凭据**（见 §5.1）。
 
 ```text
-浏览器 3000  →  5 个视图（赛事看板 / 实时盘口 / 历史战绩 / 定价对比 / 校准报告）
+浏览器 3001  →  5 个视图（赛事看板 / 实时盘口 / 历史战绩 / 定价对比 / 校准报告）
 API    8000  →  29 个端点
 采集   WS    →  盘口推送 + 比分推送 + 结束通知，落盘 _live/ 与 _trends/
 决策   后台  →  盘口变动触发（30s 防抖）+ 600s 定时兜底
 结算   后台  →  每 60s 回填赛果、算命中率/ROI/CLV
 ```
+
+> ⚠️ 上方端口是**本机实测值**，不是默认值：`REDIS_PORT=6380`（6379 被别的项目占）、
+> `CONSOLE_PORT=3001`（3000 被 new-api 占）。完整命令见 §1.1。
+
+### 0.1 本轮（2026-10-07）做了什么
+
+| 类别 | 内容 | 为何重要 |
+| --- | --- | --- |
+| **真 bug（严重）** | 陈旧回填行情冒充"进行中" | 把一个**完全停摆**的采集链路报成"527 场真实进行中"，见 §6.5 |
+| **真 bug** | `sogou_searcher.py` 的 `print_articles` **定义整个丢失** | 5 处调用 / 0 处定义 ⇒ 该模块自带 CLI 一走到输出就 `AttributeError` |
+| **测试基础设施** | 4 处 `inspect.getsource` 断言改为查**编译后代码对象** | 原断言会同时产生**假失败**与**假通过**，已用变异测试证明非空洞 |
+| **工具链事故** | pi-lens 每回合自动 `ruff format`，**在测试跑动时改文件** | 补丁 diff 放大 5~10 倍 + 使测试出现幻影结果；已在 `.pi-lens.json` 关停（md5 实证） |
+| **文档纠错** | AGENTS.md 3 处环境事实经实测证明**是错的** | 曾误记"宿主机 Python 3.12.3 / 无 pip / bs4+numpy+matplotlib+pandas 可用" |
 
 ---
 
@@ -121,6 +139,29 @@ python3 -m unittest discover -s tests -q      # 1115 passed
 
 `乐鱼app.zip`（含 154 处 token + 账号口令）**已从 git 移除**并入 `.gitignore`。
 
+### 2.6 本轮提交（2026-10-07，分支 `fix/TASK-11-stale-backfill-quotes-not-live`）
+
+建议按此顺序阅读，**每个提交都自洽**（自己的 message 里带根因与实测证据）：
+
+| SHA | 提交 | 一句话 |
+| --- | --- | --- |
+| `0787dae` | `test(tests)` | 用编译后代码对象替换易碎的 `getsource` 断言 |
+| `e4c3c1a` | `fix(realtime)` | 陈旧回填行情不得冒充「进行中」（含 §6.5 的不变量） |
+| `f1bb445` | `fix(search_tools)` | 补回 `print_articles` 定义，修必然 `AttributeError` |
+| `7a9da66` | `chore(lint)` | 声明 ruff 策略、关停 pi-lens 自动格式化、忽略索引缓存 |
+| `2c9149e` | `docs` | 修正环境/测试事实，记录回填行情与工具链事故 |
+| `a482c39` | `chore(api)` | 删除未使用的 `threading` 导入 |
+
+本轮验证口令（全部在 `a482c39` 上跑过，**含退出码**）：
+
+```bash
+python3 -m unittest discover -s tests -q   # Ran 1115 tests … OK (skipped=11)  exit 0
+/root/.pi-lens/tools/node_modules/.bin/pyright           # 0 errors, 0 warnings
+/root/.pi-lens/pip-user/bin/ruff check --config pyproject.toml \
+    service/analysis.py collector/leyu_realtime.py \
+    search_tools/sogou_searcher.py api/app.py tests/     # 改动文件 delta = 0
+```
+
 ---
 
 ## 3. 🔄 进行中 / 未完成
@@ -184,7 +225,7 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 
 > ✅ **2026-10-07 修**：本条原有另一半隐患——会话过期时 `source=push` 会把
 > **回填的陈旧行情**报成"真实进行中"（实测 `count=527`，而推送一条没收到）。
-> 已加**行情真实年龄门禁**（`push_quote_max_age_s`，默认 900s），详见 §6.3 与 §6.6。
+> 已加**行情真实年龄门禁**（`push_quote_max_age_s`，默认 900s），详见 §6.5。
 > 现在会话不可用时如实返回 `source=none, count=null` + 错误原因，**不冒充**。
 
 ### 3.4 触发吞吐 vs LLM 延迟（P1）
@@ -422,11 +463,13 @@ output/
 
 ## 8. 接手检查清单
 
-- [ ] 按 §1.1 启动（**记得 4 个端口变量**）
+- [ ] 按 §1.1 启动（**记得 4 个端口变量**：6380 / 8081 / 8000 / **3001**）
 - [ ] §1.2 四项验证全过
-- [ ] 跑 `python3 -m unittest discover -s tests -q`（应 1115 passed）
+- [ ] 跑 `python3 -m unittest discover -s tests -q`（应 `Ran 1115 … OK`；宿主机可直跑，**不需** pytest）
 - [ ] 跑 `pyright`（应 0 errors）
+- [ ] 确认 `.pi-lens.json` 仍在（`format.enabled=false`）—— 它挡住"每回合自动重排文件"，
+      那正是让测试出现**幻影结果**的成因（§6.6）；删掉它会让下一次测试跑动中文件被改
 - [ ] 确认凭据状态（§3.2），必要时按三条出路之一处理
 - [ ] 确认 `graded` 是否开始增长（§3.1）
-- [ ] 读 §6（踩过的坑），改代码时别把已修的坑改回去
-- [ ] 如需重跑测试基线：容器内 `pip install -q pytest requests beautifulsoup4`
+- [ ] 读 §6（踩过的坑），改代码时别把已修的坑改回去 —— 尤其 §6.5 的 `None` 不变量
+- [ ] 若本分支尚未合并：先走 PR（AGENTS.md §2.4：业务代码**不直推 main**）
