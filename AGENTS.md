@@ -12,18 +12,27 @@
 
 | 维度 | 实情 |
 | --- | --- |
-| 语言 / 运行时 | **Python 3.12**（`python3 -V` 实测 3.12.3）；使用 `#!/usr/bin/env python3` |
+| 语言 / 运行时 | **容器内 Python 3.12**（实测 `python:3.12-slim` = 3.12.15）；**宿主机 `python3` 实测为 3.11.2**（`/usr/bin/python3`，曾误记为 3.12.3）；脚本统一 `#!/usr/bin/env python3` |
 | 依赖声明 | `requirements.txt`（仅 `requests`、`beautifulsoup4`）；浏览器链路见 `docker/requirements-browser.txt` |
 | 浏览器自动化 | Selenium 4 / `undetected-chromedriver` / `webdriver-manager`，运行在 **Docker 沙盒容器**内 |
 | 采集架构 | `browser_scraper_client.py`（宿主侧 HTTP 客户端） ↔ `browser_scraper_service.py`（容器内 Flask 服务，端口 8080） |
 | LLM 调用 | SiliconFlow / OpenAI 兼容 `chat/completions`，配置集中在 `config.py` |
 | 编排 / 缓存 | `docker/docker-compose.yml`：redis + browser-scraper + ai-analyzer |
-| 测试现状 | `tests/` 下 **12 个文件 / 429 用例**；`mypy` 覆盖 **28 源文件** |
+| 测试现状 | `tests/` 下 **23 个测试文件 / 1115 用例**（标准库 `unittest`，宿主机可直跑）；类型检查主用 `pyright`（实测 0 errors） |
 | 版本控制 | `origin` = `git@github.com:1420970597/ai_football.git`，主分支 `main` |
 
-**⚠️ 宿主机直跑能力有限**：本机 `python3` **无 `pip`**（`No module named pip`），
-且以下依赖**未安装**：`selenium`、`flask`、`redis`、`aiohttp`、`fake_useragent`、`undetected_chromedriver`、`webdriver_manager`、`pytest`。
-已在宿主机可用的仅有：`requests`、`bs4`、`numpy`、`matplotlib`、`pandas`。
+**⚠️ 宿主机直跑能力有限**（2026-10-07 实测复核；原表述有 3 处错误，已修正）：
+
+- `python3 -m pip` **存在**（pip 23.0.1），但受 **PEP 668 externally-managed** 限制：
+  `pip install` 直接报 `error: externally-managed-environment`，且 `ensurepip` 缺失、
+  `venv` 建出来也没有 pip。绕过需 `--break-system-packages`，**禁止**（污染 OS Python）。
+  → 结论不变：**宿主机装不了包**，不要去试。
+- 宿主机**真正可用**的第三方库只有 **`requests`**；
+  `bs4`、`numpy`、`matplotlib`、`pandas` **均已缺失**（原文档误记为可用）。
+- 下列依赖同样未安装：`selenium`、`flask`、`redis`、`aiohttp`、`fake_useragent`、
+  `undetected_chromedriver`、`webdriver_manager`、`pytest`。
+- **中文字体是例外**：`/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc` 在宿主机**存在**，
+  容器内跑图表时必须挂载它（见 §1.1A）。
 
 
 ---
@@ -48,22 +57,31 @@
 
 ### 1.1 分层执行策略（按改动范围选择）
 
-**A. 纯文档 / 图表 / 数据分析任务（宿主机可直跑）**
+**A. 纯文档 / 图表 / 数据分析任务**
 
-适用：修改 `reports/**`、`*.md`、`scripts/make_figures.py` 一类不依赖浏览器与 Flask 的脚本。
+> ⚠️ **2026-10-07 实测修正**：`make_figures.py` **不能**在宿主机直跑 —— 宿主机无
+> `numpy`/`matplotlib`（实测 `ModuleNotFoundError: No module named 'numpy'`）。
+> 它必须走容器，**且必须挂载中文字体**：不挂字体时 matplotlib 退化为 DejaVu
+> （无中文字形），会**静默生成一堆方块字图片并覆盖已入库的图**
+> （本项目真实踩到，需 `git checkout` 还原）。
+> `md_to_html.py` 是纯标准库，宿主机可直跑。
 
 ```bash
-# 语法与字节码编译校验（两脚本都必须过）
+# ① 语法与字节码编译校验（宿主机即可；两脚本都必须过）
 python3 -m py_compile reports/leyu-kaiyun-odds-bot-feasibility/scripts/make_figures.py \
                         reports/leyu-kaiyun-odds-bot-feasibility/scripts/md_to_html.py
 
-# 图表与 CSV 全量重生成（必须 17 图 / 12 CSV 无报错）
-python3 reports/leyu-kaiyun-odds-bot-feasibility/scripts/make_figures.py
-
-# Markdown → 单文件 HTML
+# ② Markdown → 单文件 HTML（纯标准库，宿主机可直跑）
 python3 reports/leyu-kaiyun-odds-bot-feasibility/scripts/md_to_html.py \
         reports/leyu-kaiyun-odds-bot-feasibility/REPORT.md \
         reports/leyu-kaiyun-odds-bot-feasibility/REPORT.html
+
+# ③ 图表与 CSV 全量重生成（必须走容器 + 挂中文字体；期望 17 图 / 12 CSV）
+docker run --rm \
+  -v "$PWD:/w" \
+  -v /usr/share/fonts/truetype/wqy:/usr/share/fonts/truetype/wqy:ro \
+  -w /w python:3.12-slim sh -c \
+  "pip install -q numpy matplotlib && python3 reports/leyu-kaiyun-odds-bot-feasibility/scripts/make_figures.py"
 ```
 
 **B. 爬虫 / 分析器业务代码（强制走 Docker，宿主机依赖不全）**
@@ -88,7 +106,10 @@ curl -sf http://localhost:8080/health                    # browser-scraper 健�
 
 ### 1.2 三条硬性禁令
 
-1. **禁止在宿主机 `pip install`**（本机无 pip；且会污染宿主环境）。需要新依赖 → 写入 `requirements.txt` / `docker/requirements-browser.txt`，在容器内验证。
+1. **禁止在宿主机 `pip install`**。实测 pip **存在**（23.0.1）但被 **PEP 668** 拒绝
+   （`externally-managed-environment`），且 `ensurepip` 缺失；绕过需 `--break-system-packages`，
+   **会污染 OS 级 Python，严禁**。需要新依赖 → 写入 `requirements.txt` /
+   `docker/requirements-browser.txt`，在容器内验证。
 2. **禁止用 `chromedriver.exe` 在 Linux 宿主机直跑**。仓库根目录的 `chromedriver.exe`（20MB，Windows 二进制）仅供 Windows 侧使用；Linux 路径必须走 `docker/Dockerfile.browser` 的 Chrome 沙盒。
 3. **禁止在没有 Docker 的情况下声称"已验证爬虫链路"**。若 daemon 不可用，必须显式声明"未验证"并说明原因，不得含糊。
 
@@ -217,14 +238,34 @@ web/*/返回信息.txt
 
 3. **自测闭环要求**：
 
-   - 全仓库目前 **0 测试**。**任何新增或重构的业务模块，必须同目录配套 `test_<module>.py`**。
+   - 已建 `tests/`（**23 文件 / 1115 用例**）。**任何新增或重构的业务模块，必须同目录配套 `test_<module>.py`**，并同步补进 `tests/`。
    - 用例必须覆盖**至少一条正常路径 + 一条边界/异常路径**（如：requests 超时、HTTP 非 200、HTML 结构变更导致解析为空）。
    - 图表脚本改动需覆盖**参数边界**（如空数组、除零、格式串 `%` 转义）。
-   - 因宿主机无 `pytest`，测试须可在容器内运行：
+   - 测试基座是**标准库 `unittest`**（不是 pytest），**宿主机可直跑**，无需安装任何东西：
+
+     ```bash
+     python3 -m unittest discover -s tests -q      # 本机实测 1115 passed
+     ```
+
+     ⏱ 实测耗时：空闲 ≈17 分钟；3 个 compose 容器同时在跑 ≈36 分钟（宿主机仅 2 核）。
+     跑之前先确认没有重任务抢 CPU，否则很容易误判为“卡死”。
+
+   - **必须在冻结的代码上跑**：测试进程一边跑、文件一边被改写时，
+     `inspect.getsource()` 会用**编译时冻结的行号**去读**当前磁盘文件**，
+     于是返回**别的函数体** —— 既能造成**假失败**（实测），也能造成**假通过**。
+     凡是“文件可能在跑测试期间变化”的场合（自动格式化、后台 Agent 写文件、
+     多个 Agent 共写一个工作区），要么先把文件固定下来，要么在**副本/工作树**里跑，
+     并对副本做内容一致性校验（如逐文件 `md5sum`）。详见 `docs/HANDOVER.md` §6.6。
+
+   - **不要用 `inspect.getsource()` 做“源码里必须有 X”的断言**：改用
+     `tests.referenced_names(fn)`（查编译后的代码对象，天然不受文件重排影响，
+     且不会把**注释/字符串**里的提及误判为“已实现”）。
+
+     仅当用例需要宿主机缺失的依赖（`selenium` / `flask` / `redis`）时才进容器：
 
      ```bash
      docker run --rm -v "$PWD:/w" -w /w python:3.12-slim sh -c \
-       "pip install -q pytest requests beautifulsoup4 && python -m pytest -v"
+       "pip install -q -r requirements.txt && python -m unittest discover -s tests -q"
      ```
 
 ---
@@ -312,9 +353,8 @@ python3 -m py_compile *.py search_tools/*.py web/*/main.py \
 docker run --rm -v "$PWD:/w" -w /w python:3.12-slim sh -c \
   "pip install -q -r requirements.txt && python -c 'import requests, bs4'"
 
-# 3. 单元测试（新增/重构业务模块时必须存在；宿主机无 pytest 故走容器）
-docker run --rm -v "$PWD:/w" -w /w python:3.12-slim sh -c \
-  "pip install -q pytest requests beautifulsoup4 && python -m pytest -v"
+# 3. 单元测试（新增/重构业务模块时必须存在；unittest 基座，宿主机可直跑）
+python3 -m unittest discover -s tests -q      # 应 1115 passed
 
 # 4. 浏览器链路集成（涉及采集改动时，三容器必须 healthy）
 docker compose -f docker/docker-compose.yml up -d --build
@@ -364,7 +404,7 @@ git commit -m "<type>(<scope>): <简明中文描述本次改动的核心改动>"
 | 3 | `.pyc` 入库且含泄漏 token | `__pycache__/*.pyc` | `git rm --cached` + `.gitignore` |
 | 4 | 无 `.gitignore` | 仓库根 | 建立并覆盖 §3.5 模式 |
 | 5 | 平行副本文件 | `main_optimized.py`、`web/enhanced_analyzer.py`、`web/match_generator.py` | 确认引用后合并/删除 |
-| 6 | ~~0 测试~~ | 全仓库 | ✅ 已建 `tests/`（12 文件 / 429 用例） |
+| 6 | ~~0 测试~~ | 全仓库 | ✅ 已建 `tests/`（23 文件 / 1115 用例） |
 | 7 | Windows 二进制入库 | `chromedriver.exe`（20MB） | 评估改由 `webdriver-manager` 容器内获取 |
 | 8 | 死分支残留 | `origin/feature/add-sportsdata-searcher`、`origin/new` | 确认后清理 |
 | 9 | 调试脚本遗留根目录 | `测试TypeError修复.py`、`搜索.py`、`验证码识别/*.py` | 归入 `tests/` 或 `tools/` |
