@@ -1929,6 +1929,7 @@ async function loadBoard(opts) {
   }
 
   const body = $("board-body");
+  const opened = new Set([...body.querySelectorAll("details[open]")].map(n => n.dataset.mid));
   clear(body);
   if (!rows.length) {
     setBoardState("empty");
@@ -1936,7 +1937,11 @@ async function loadBoard(opts) {
     return;
   }
   setBoardState("table");
-  rows.forEach(m => body.appendChild(renderMatchRow(m)));
+  rows.forEach(m => {
+    const node = renderMatchRow(m);
+    if (opened.has(m.match_id)) node.open = true;
+    body.appendChild(node);
+  });
 
   const note = $("board-note");
   clear(note);
@@ -1949,12 +1954,12 @@ async function loadBoard(opts) {
   note.appendChild(el("br"));
   note.appendChild(document.createTextNode(
     "标记为「未决策」的场次只有赔率，没有门控/edge —— 后台决策尚未覆盖它。" +
-    "赔率与走势来自实时推送；门控结论与买入建议来自最近一轮决策缓存。"));
+    "报价标注实时推送或本地快照；决策依据价格另列。报价变化后旧结论待重算。"));
 }
 
 /* 一场比赛：可折叠，summary 展示比分/时钟/买入建议 */
 function renderMatchRow(m) {
-  const d = el("details", { class: "mrow" });
+  const d = el("details", { class: "mrow", "data-mid": m.match_id });
   // 有买入建议的默认展开，便于一眼看到
   if (m.has_buy) d.setAttribute("open", "open");
 
@@ -1974,7 +1979,7 @@ function renderMatchRow(m) {
     if (m.best_label) sum.appendChild(el("span", { class: "pill ok",
       text: m.best_label }));
   } else if (m.decided) {
-    sum.appendChild(el("span", { class: "badge avoid", text: "无建议" }));
+    sum.appendChild(el("span", { class: "badge avoid", text: m.decision_stale ? "报价变化 · 待重算" : "无建议" }));
   } else {
     sum.appendChild(el("span", { class: "badge nollm", text: "未决策" }));
   }
@@ -2032,6 +2037,10 @@ function renderMarketBlock(mk) {
   if (mk.trend_n) h.appendChild(el("span", { class: "mg",
     text: "变动 " + mk.trend_n + " 次" }));
   if (!mk.decided) h.appendChild(el("span", { class: "gate-tag off", text: "未决策" }));
+  if (mk.decision_stale) h.appendChild(el("span", { class: "pill warn", text: "决策已失效 · 待重算" }));
+  h.appendChild(el("span", { class: "mg", text: mk.quote_available
+    ? (mk.quote_source === "live" ? "实时推送" : "本地快照") : "当前报价不可用" }));
+  if (mk.decided_at) h.appendChild(el("span", { class: "mg", text: "决策于 " + mk.decided_at }));
   box.appendChild(h);
 
   const tb = el("tbody", {});
@@ -2056,13 +2065,14 @@ function renderMarketBlock(mk) {
       pick ? el("span", { class: "gate-tag buy", text: " 买入" }) : null
     ]));
     tr.appendChild(el("td", { class: "num", text: fx(odds, 3) }));
+    tr.appendChild(el("td", { class: "num", text: fx((mk.decision_odds || [])[i], 3) }));
     tr.appendChild(el("td", { class: "num",
       text: (pf === undefined || pf === null) ? "—" : (Number(pf) * 100).toFixed(2) + "%" }));
     tr.appendChild(el("td", { class: "num " + (typeof e === "number" && e > 0 ? "edge-pos" : "edge-neg"),
       text: (e === undefined || e === null) ? "—" : ((e > 0 ? "+" : "") + (Number(e) * 100).toFixed(2) + "%") }));
     tr.appendChild(el("td", {},
       [el("span", { class: "gate-tag " + (passed ? "on" : "off"),
-        text: passed ? "过门槛" : "未过",
+        text: mk.decision_stale ? "待重算" : (!mk.decided ? "未决策" : (passed ? "过门槛" : "未过")),
         title: g ? ("门槛 " + (Number(g.required_edge || 0) * 100).toFixed(2) + "%" +
           ((g.rejects && g.rejects.length) ? " · 拒因 " + g.rejects.join("、") : "")) : "" })]));
     tr.appendChild(el("td", { class: "rej",
@@ -2070,7 +2080,8 @@ function renderMarketBlock(mk) {
     tb.appendChild(tr);
   });
   box.appendChild(el("table", {}, [el("thead", {}, [el("tr", {}, [
-    el("th", { text: "结果" }), el("th", { class: "num", text: "实时赔率" }),
+    el("th", { text: "结果" }), el("th", { class: "num", text: "最新赔率" }),
+    el("th", { class: "num", text: "决策赔率" }),
     el("th", { class: "num", text: "去水概率" }), el("th", { class: "num", text: "edge" }),
     el("th", { text: "门控" }), el("th", { text: "拒因" })
   ])]), tb]));

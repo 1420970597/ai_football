@@ -811,8 +811,21 @@ class ApiApp:
                 "decided_at": str(dec.get("computed_at") or ""),
             }
             self._fill_live_state(row, mid, rt)
-            if with_markets:
-                row["markets"] = self._board_markets(m, dec, describe_market)
+            # Even list-only callers must not see a buy at an obsolete price.
+            row["markets"] = self._board_markets(m, dec, describe_market)
+            markets = row["markets"]
+            valid_markets = {mk["market"] for mk in markets
+                             if mk["decided"] and not mk["decision_stale"]}
+            row["decision_stale"] = any(mk["decision_stale"] for mk in markets)
+            row["picks"] = [p for p in row["picks"]
+                            if p.get("market") in valid_markets]
+            row["has_buy"] = bool(row["picks"])
+            row["best_label"] = (str(max(row["picks"],
+                key=lambda p: _as_float(p.get("edge"))).get("pick_label") or "")
+                if row["picks"] else "")
+            row["gated_in"] = sum(bool(mk["gate_passed"]) for mk in markets)
+            if not with_markets:
+                del row["markets"]
             rows.append(row)
 
         # 排序：有买入建议 → 进行中 → 其余；同级按开赛时间
@@ -916,9 +929,11 @@ class ApiApp:
                                         source=src_name)
             odds_by: Dict[str, List[float]] = {}
             outs_by: Dict[str, List[str]] = {}
+            lines_by: Dict[str, str] = {}
             for s in snaps:
                 odds_by[s.market] = [round(o, 4) for o in s.odds]
                 outs_by[s.market] = list(s.outcomes)
+                lines_by[s.market] = str((s.metadata or {}).get("leyu_hv") or "")
             out.append({
                 "match_id": mid,
                 "league": lg,
@@ -931,6 +946,8 @@ class ApiApp:
                 "markets": sorted(odds_by),
                 "latest_odds": odds_by,
                 "latest_outcomes": outs_by,
+                "latest_lines": lines_by,
+                "_quote_source": "live",
             })
 
         # 2) 兜底：无实时行情的场次（未开赛/未被订阅）。
@@ -1016,8 +1033,8 @@ class ApiApp:
                     for oc in outcomes]
 
         comps = dec.get("computations") or []
+        out: List[Dict[str, Any]] = []
         if comps:
-            out: List[Dict[str, Any]] = []
             for c in comps:
                 if not isinstance(c, Mapping):
                     continue
@@ -1049,20 +1066,23 @@ class ApiApp:
                     "gates": list(c.get("gates") or []),
                     "decided": True,
                 })
-            out.sort(key=lambda r: r["market"])
-            return out
-        # 回退：只有赔率（该场尚未决策）
+        # Merge current markets, including newly quoted ones, then align each
+        # computation with its actual input prices. Never relabel cached prices
+        # as live, or apply an old edge/gate to a changed quote.
         odds_by = m.get("latest_odds") or {}
         oc_by = m.get("latest_outcomes") or {}
-        out = []
+        existing = {r["market"] for r in out}
         for mk in sorted(odds_by):
+            if mk in existing:
+                continue
             outs = list(oc_by.get(mk) or [])
+            line = str((m.get("latest_lines") or {}).get(mk) or "")
             out.append({
                 "market": str(mk),
                 "label": describe(mk),
-                "line": "",
+                "line": line,
                 "outcomes": outs,
-                "outcome_labels": _labels(mk, "", outs),
+                "outcome_labels": _labels(mk, line, outs),
                 "odds": list(odds_by.get(mk) or []),
                 "p_fair": [], "edges": [], "kellys": [],
                 "margin": 0.0, "state": "", "method": "",
@@ -1071,6 +1091,41 @@ class ApiApp:
                 "best_edge": 0.0, "best_outcome": "", "gates": [],
                 "decided": False,
             })
+        for row in out:
+            mk = row["market"]
+            decision_odds = list(row["odds"]) if row["decided"] else []
+            decision_outcomes = list(row["outcomes"])
+            current_odds = list(odds_by.get(mk) or [])
+            current_outcomes = list(oc_by.get(mk) or [])
+            available = bool(current_odds and len(current_odds) == len(current_outcomes))
+            same = (available and row["outcomes"] == current_outcomes
+                    and len(decision_odds) == len(current_odds)
+                    and all(math.isclose(_as_float(a), _as_float(b),
+                                         rel_tol=0, abs_tol=0.0001)
+                            for a, b in zip(decision_odds, current_odds)))
+            prices_by_outcome = dict(zip(decision_outcomes, decision_odds))
+            row["decision_odds"] = ([prices_by_outcome.get(oc)
+                                     for oc in current_outcomes]
+                                    if available else decision_odds)
+            row["decided_at"] = str(dec.get("computed_at") or "")
+            row["quote_available"] = available
+            row["quote_source"] = str(m.get("_quote_source") or "snapshot")
+            row["decision_stale"] = bool(row["decided"] and not same)
+            row["odds"] = current_odds if available else []
+            if available:
+                row["outcomes"] = current_outcomes
+                row["outcome_labels"] = _labels(mk, row["line"], current_outcomes)
+            if row["decision_stale"]:
+                for field in ("p_fair", "edges", "kellys", "gates"):
+                    row[field] = []
+                row["gate_passed"] = False
+                row["reject_reasons"] = ["quote_changed" if available else "quote_unavailable"]
+                row["margin"] = None
+                row["best_edge"] = None
+                row["trend"] = ""
+                row["trend_pct"] = 0
+                row["trend_n"] = 0
+        out.sort(key=lambda r: r["market"])
         return out
 
     # -- 决策台账与本地统计（回答“LLM 判定到底准不准”） ---------------------
