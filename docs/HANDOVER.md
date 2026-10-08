@@ -280,6 +280,11 @@ JSON 为 `routes` 对象，包含空前缀、`/site/api`、`/game/api` 三个条
 使用 Compose 解析 `.env`，不再用虚构字段或占位密码推断真实凭据状态。
 注释中的账号口令仅提示未生效，不自动启用；已取得的会话直接用于赛程验证，
 不再次 acquire。不显示账号、密码或原始异常；移除无依据的 IP 闸门探针结论。
+镜像包含该工具，生产诊断使用
+`docker exec ai_football_analytics_api python /app/tools/leyu_session_doctor.py`，
+读取容器实际配置，避免宿主工作区的旧脚本误导诊断。组合分支全量验证为
+1010 tests / 14 skipped（exit 0），Docker mypy 为 49 文件无错误、ruff 全绿、
+pyright 为 0 errors / warnings（均 exit 0）。
 
 ### 3.3 进行中场次与乐鱼"完全一致"（P1）
 

@@ -36,6 +36,9 @@ COPY collector/ ./collector/
 COPY service/ ./service/
 COPY api/ ./api/
 
+# 与生产 provider 一起发布会话诊断，避免宿主工作区旧脚本重复提交账号。
+COPY tools/leyu_session_doctor.py ./tools/leyu_session_doctor.py
+
 # Browser 端静态资源（B/S 的 B）
 COPY web/console/ ./web/console/
 
