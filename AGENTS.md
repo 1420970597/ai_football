@@ -15,10 +15,12 @@
 | 语言 / 运行时 | **容器内 Python 3.12**（实测 `python:3.12-slim` = 3.12.15）；**宿主机 `python3` 实测为 3.11.2**（`/usr/bin/python3`，曾误记为 3.12.3）；脚本统一 `#!/usr/bin/env python3` |
 | 依赖声明 | `requirements.txt`（仅 `requests`、`beautifulsoup4`）；浏览器链路见 `docker/requirements-browser.txt` |
 | 浏览器自动化 | Selenium 4 / `undetected-chromedriver` / `webdriver-manager`，运行在 **Docker 沙盒容器**内 |
-| 采集架构 | `browser_scraper_client.py`（宿主侧 HTTP 客户端） ↔ `browser_scraper_service.py`（容器内 Flask 服务，端口 8080） |
-| LLM 调用 | SiliconFlow / OpenAI 兼容 `chat/completions`，配置集中在 `config.py` |
-| 编排 / 缓存 | `docker/docker-compose.yml`：redis + browser-scraper + ai-analyzer |
-| 测试现状 | `tests/` 下 **23 个测试文件 / 1115 用例**（标准库 `unittest`，宿主机可直跑）；类型检查主用 `pyright`（实测 0 errors） |
+| 采集架构 | **乐鱼（leyu）唯一数据源**：`collector/leyu_*.py` + WebSocket 实时推送；容器内 Flask 服务端口 8080 |
+| LLM 调用 | OpenAI 兼容 `chat/completions`，配置集中在环境变量（**代码内无硬编码凭据**） |
+| 编排 / 缓存 | `docker/docker-compose.yml`：redis + analytics-api + web-console（**三容器**） |
+| 测试现状 | `tests/` 下 **22 个测试文件 / 988 用例**（标准库 `unittest`，宿主机可直跑） |
+| 类型检查 | `python3 -m mypy` → **0 错 / 46 文件**；`ruff check .` → All checks passed |
+| pi-lens | `/root/.pi-lens/tools/node_modules/.bin/pyright`（不在 PATH）→ **0 errors, 0 warnings** |
 | 版本控制 | `origin` = `git@github.com:1420970597/ai_football.git`，主分支 `main` |
 
 **⚠️ 宿主机直跑能力有限**（2026-10-07 实测复核；原表述有 3 处错误，已修正）：

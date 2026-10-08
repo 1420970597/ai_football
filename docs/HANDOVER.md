@@ -4,7 +4,7 @@
 > **远程**：`git@github.com:1420970597/ai_football.git`
 > **本文件所在分支**：`fix/TASK-11-stale-backfill-quotes-not-live`（基于 `main@6b9a35b`，**待 PR 合并**）
 > **交接日期**：2026-10-07（初版 2026-10-06）
-> **代码状态**：`a482c39` · 全量 `Ran 1115 tests … OK (skipped=11)` **exit 0** · pyright 0 error · 容器 healthy
+> **代码状态**：`68cdff6` · 全量 `Ran 988 tests … OK (skipped=11)` **exit 0** · pyright 0 error · mypy 46 文件 0 错 · ruff 全过 · 容器 healthy
 > **本文档读法**：§1 先看"现在能不能跑"，§2~§4 是三种状态的工作事项，§6 是踩过的坑（**最省时间的一节**）
 >
 > ⚠️ **接手人先看这条**：本轮修的两个 bug 都有"**看起来已经修过、其实从另一条路径又长回来**"的特征
@@ -491,7 +491,7 @@ output/
 | 可行性调研（范本） | `reports/leyu-kaiyun-odds-bot-feasibility/REPORT.md` |
 | 乐鱼协议文档 | `docs/architecture/leyu-api-protocol.md` |
 | 项目宪章（**必读**） | `AGENTS.md` |
-| 测试 | `tests/`（23 文件 / 1115 用例） |
+| 测试 | `tests/`（22 文件 / 988 用例） |
 
 ---
 
@@ -499,8 +499,11 @@ output/
 
 - [ ] 按 §1.1 启动（**记得 4 个端口变量**：6380 / 8081 / 8000 / **3001**）
 - [ ] §1.2 四项验证全过
-- [ ] 跑 `python3 -m unittest discover -s tests -q`（应 `Ran 1115 … OK`；宿主机可直跑，**不需** pytest）
-- [ ] 跑 `pyright`（应 0 errors）
+- [ ] 跑 `python3 -m unittest discover -s tests -q`（应 `Ran 988 … OK (skipped=11)`；宿主机可直跑，**不需** pytest）。
+      注：旧文档写 1115，**已过期**——清理阶段删除了非乐鱼链路及其测试（当前 22 个测试文件）。
+- [ ] 跑 `/root/.pi-lens/tools/node_modules/.bin/pyright`（应 `0 errors, 0 warnings`）。
+      它不在 PATH 上，必须用全路径（用 `command -v pyright` 会找不到）。
+      另可跑 `python3 -m mypy`（应 `Success: no issues found in 46 source files`）—— 两者当前均绿。
 - [ ] 确认 `.pi-lens.json` 仍在（`format.enabled=false`）—— 它挡住"每回合自动重排文件"，
       那正是让测试出现**幻影结果**的成因（§6.6）；删掉它会让下一次测试跑动中文件被改
 - [ ] 确认凭据状态（§3.2），必要时按三条出路之一处理
