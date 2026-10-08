@@ -365,6 +365,9 @@ class AppLoginSessionProvider(SessionProvider):
         self._lock = threading.RLock()
         self._token = ""
         self._token_at = 0.0
+        # Monotonic timestamp of the last login attempt, including failures.
+        self._login_attempt_at: Optional[float] = None
+        self.login_attempts = 0
         #: 两次登录的最小间隔（避免触发 30 次/分钟限流）
         self.min_relogin_interval_s = max(0.0, float(min_relogin_interval_s))
         self._load_token()
@@ -409,33 +412,33 @@ class AppLoginSessionProvider(SessionProvider):
 
     def acquire(self, previous: Optional[Session] = None) -> Session:
         """换取可用会话：必要时先登录拿 token，再 launch 换 requestId。"""
-        self.refreshes += 1
         with self._lock:
-            token = self._token
-            now = time.time()
-            # 上一次登录太近时，先沿用缓存 token 试一次，避免触发限流
-            may_login = (now - self._token_at) >= self.min_relogin_interval_s
+            # Serialize login and launch: both mutate the shared launcher credentials.
+            self.refreshes += 1
+            if self._token:
+                try:
+                    return self._launch(self._token)
+                except SessionError as exc:
+                    if not _looks_like_expired(exc):
+                        raise
+                    self._token = ""
 
-        # 1) 先用现有/缓存 token 试 launch（不登录，省一次风控面）
-        if token:
-            try:
-                return self._launch(token)
-            except SessionError as exc:
-                # token 过期（6001/0401013）→ 落到登录；其它错误直接抛
-                if not _looks_like_expired(exc):
-                    raise
-
-        # 2) token 不可用 → 登录换新 token
-        if not may_login:
-            raise SessionError(
-                "登录过于频繁（距上次 %.1fs，下限 %.1fs）；"
-                "上游登录限流为 30 次/分钟，已跳过本次登录。"
-                % (time.time() - self._token_at, self.min_relogin_interval_s))
-        token = self._do_login()
-        return self._launch(token)
+            if self._login_attempt_at is not None:
+                elapsed = time.monotonic() - self._login_attempt_at
+            else:
+                elapsed = time.time() - self._token_at
+            if elapsed < self.min_relogin_interval_s:
+                raise SessionError(
+                    "登录过于频繁（距上次尝试 %.1fs，下限 %.1fs）；已跳过本次登录。"
+                    % (elapsed, self.min_relogin_interval_s))
+            token = self._do_login()
+            return self._launch(token)
 
     def _do_login(self) -> str:
         """登录并缓存 token；失败抛 SessionError（含可操作指引）。"""
+        with self._lock:
+            self._login_attempt_at = time.monotonic()
+            self.login_attempts += 1
         try:
             token = self.client.login()
         except SessionError:
@@ -445,6 +448,7 @@ class AppLoginSessionProvider(SessionProvider):
             self._token = token
             self._token_at = time.time()
             self.logins += 1
+            self.client.last_error = ""
         self._save_token(token)
         return token
 
@@ -468,7 +472,9 @@ class AppLoginSessionProvider(SessionProvider):
             if not token:
                 raise SessionError("登录返回空 token，无法启动场馆")
             creds.token = token
-            return launcher.acquire()
+            session = launcher.acquire()
+            self.last_error = ""
+            return session
         except SessionError:
             self.last_error = getattr(launcher, "last_error", "")
             raise
@@ -493,6 +499,7 @@ class AppLoginSessionProvider(SessionProvider):
             "credentials": self.client.credentials.masked(),
             "has_cached_token": bool(self.cached_token),
             "logins": self.logins,
+            "login_attempts": self.login_attempts,
             "refreshes": self.refreshes,
             "token_cache": self.token_cache_path or "",
             "last_error": self.last_error or self.client.last_error,

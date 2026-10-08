@@ -289,6 +289,60 @@ class TestAppLoginSessionProvider(unittest.TestCase):
                 p.acquire()
             self.assertIn("频繁", str(cm.exception))
 
+    def test_failed_login_is_throttled(self) -> None:
+        """凭据被拒时也必须冷却，避免实时重试线程打满登录接口。"""
+        client, launcher = self._setup()
+        with mock.patch.object(client, "login",
+                               side_effect=SessionError("status_code=6002")) as m:
+            p = AppLoginSessionProvider(client, launcher,
+                                        min_relogin_interval_s=3600.0)
+            with self.assertRaises(SessionError) as first:
+                p.acquire()
+            self.assertIn("6002", str(first.exception))
+            with self.assertRaises(SessionError) as second:
+                p.acquire()
+            self.assertIn("频繁", str(second.exception))
+            self.assertEqual(m.call_count, 1)
+            self.assertEqual(p.login_attempts, 1)
+
+    def test_launch_and_login_are_serialized(self) -> None:
+        """并发刷新共享启动器时只能产生一次登录请求。"""
+        import threading
+
+        client, launcher = self._setup()
+        launcher.acquire.return_value = _session("rid-concurrent")
+        started = threading.Event()
+        release = threading.Event()
+
+        def login() -> str:
+            started.set()
+            if not release.wait(2):
+                raise AssertionError("login was not released")
+            return "T-concurrent"
+
+        with mock.patch.object(client, "login", side_effect=login) as m:
+            p = AppLoginSessionProvider(client, launcher,
+                                        min_relogin_interval_s=0.0)
+            errors = []
+
+            def run() -> None:
+                try:
+                    p.acquire()
+                except Exception as exc:  # pragma: no cover - assertion below
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=run, daemon=True) for _ in range(2)]
+            threads[0].start()
+            self.assertTrue(started.wait(1))
+            threads[1].start()
+            release.set()
+            for t in threads:
+                t.join(timeout=2)
+                self.assertFalse(t.is_alive())
+            self.assertFalse(errors)
+            self.assertEqual(m.call_count, 1)
+            self.assertEqual(p.logins, 1)
+
     def test_token_cached_to_disk_and_reloaded(self) -> None:
         client, launcher = self._setup()
         launcher.acquire.return_value = _session("rid7")
