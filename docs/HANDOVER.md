@@ -215,7 +215,12 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 
 ### 3.2 乐鱼鉴权与自动续期（2026-10-08 状态）
 
-**当前结论**：旧 token 已过期；用户已将刚注册的账号口令填入 `.env`。
+**当前结论**：按用户最新指定的正常账号及列表凭据完成一次 App 登录，已取得
+有效 token 与场馆会话，后台实时采集和 3003 盘口页面已恢复。App 自动续期
+已启用，缓存加载验证通过；真实 token 自然到期续期尚未观察。详细恢复证据
+见本节末尾“账号冻结与跨进程保护”。以下失败响应均为恢复前的历史排查记录。
+
+**恢复前诊断记录**：旧 token 已过期；用户已将刚注册的账号口令填入 `.env`。
 现有 App 登录请求返回 6002，但这不能证明该账号无效，也不能排除请求协议不匹配。
 旧诊断曾使用伪口令和错误字段，不能作为凭据无效或 IP 闸门已通过的证据（issue #10）。
 
@@ -242,7 +247,7 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 均未得到新 token。已停止重复账号提交，继续核对新账号注册入口与账号所属网关。
 这组结果不能证明新账号密码错误，也不能证明所有请求要求已被排除。
 
-**后续线上复核（2026-10-08，一手证据 A；数据源仍未恢复）**：
+**恢复前线上复核（2026-10-08，一手证据 A；当时数据源未恢复）**：
 - 用户明确确认 `.env` 账号状态正常；不能据接口拒绝把结论改写为密码错误。
 - 根 `.env` 两项登录凭据与 Compose 生效值逐字一致，没有变量插值、引号或
   首尾空格改变；原生 preInfo 返回 6000，测得客户端与响应 Date 偏差约 0.7 秒。
@@ -271,7 +276,7 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 - 成功登录得到的 token 缓存权限为 0600，并继续用于场馆续期和重启恢复。
 - 缓存绑定账号、设备和网关的 SHA-256 标识；换账号不复用旧账号缓存，旧无绑定缓存忽略。
 - 业务会话失效保留 App token，先重新 launch；launch 明确返回 token 过期才重登。
-- 配置变更需重新创建服务；重启允许重新尝试登录，不能把重启当作反复试密码的手段。
+- 配置变更需重新创建服务；issue #21 后的共享保护不会因重启解除账号拒绝记录。
 
 **恢复路径**：按用户要求优先核对当前官方 App 登录协议；也可在官方 App 登录后，将有效 x-api-token 更新到
 `.env` 的 `LEYU_APP_TOKEN`（网页 token 则同时更新 `LEYU_H5_TOKEN`），然后重新创建容器。
@@ -280,9 +285,9 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 仅健康检查 200 或已有历史快照不代表实时数据已恢复。
 
 生产部署端口为 API 8001、控制台 3003；重建不得误用默认 8000。
-诊断期间通过临时 compose override 暂停后台账号登录，以免锁定新账号。
+恢复前诊断期间曾通过临时 compose override 暂停后台账号登录；恢复后该暂停已清空。
 
-本轮最终验证：`./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q`
+PR #13 早期验证：`./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q`
 为 1011 tests / 14 skipped（exit 0）；Docker Python 3.12 的 mypy 为 49 文件无错误、
 ruff 为 All checks passed（均 exit 0）；受限 pyright 为 0 errors / warnings（exit 0）。
 Python 文件在验证期间保持不变，语法编译通过。线上 App token 仍未取得，实时计数仍为零。
