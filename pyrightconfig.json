@@ -6,7 +6,7 @@
     "web",
     "reports"
   ],
-  "extraPaths": ["."],
+  "extraPaths": [".", "./tools"],
   "venvPath": ".",
   "venv": ".venv",
   "typeshedPath": "/root/.pi-lens/tools/node_modules/pyright/dist/typeshed-fallback",

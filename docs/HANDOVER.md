@@ -50,11 +50,36 @@ cd /root/ai_football
 
 # 端口冲突提示：6379 已被别的项目占用，本项目用 6380；
 #                3000 也被别的项目（new-api）占用，故 web 控制台用 3001
-REDIS_PORT=6380 SCRAPER_PORT=8081 ANALYTICS_PORT=8000 CONSOLE_PORT=3001 \
-  docker compose -f docker/docker-compose.yml up -d --build analytics-api web-console
+REDIS_PORT=6380 ANALYTICS_PORT=8000 CONSOLE_PORT=3001 \
+  docker compose -f docker/docker-compose.yml up -d analytics-api web-console
 ```
 
-> ⚠️ **必须带这 4 个端口变量**，否则 redis 会与宿主机的 `nexus-mail-redis` 抢 6379 而启动失败。
+> ⚠️ **必须带这 3 个端口变量**，否则 redis 会与宿主机的 `nexus-mail-redis` 抢 6379 而启动失败。
+
+#### 🖥️ CPU 预算（本机跑了 LLM 网关，**必读**）
+
+本机只有 4 个 vCPU，且**pi 的对话链路指向同机 LLM 网关**。任何打满多核的
+构建/采集都会把网关饿死 → 对话直接断。因此本项目统一按 **50%（= 2 核）** 限额：
+
+| 场景 | 机制 | 实测证据 |
+| --- | --- | --- |
+| 容器运行期 | compose 的 `cpus: "${AI_FOOTBALL_CPUS:-2.0}"`（三容器均有） | `cpu.max = 200000 100000` |
+| 镜像构建期 | `scripts/cpu-limited.sh build`（参数 `--cpu-quota=200000`） | 构建容器内 `cpu.max = 200000 100000` |
+| 测试/类型检查 | `scripts/cpu-limited.sh run -- <命令>`（`taskset`） | `affinity [0,1]` |
+
+```bash
+./scripts/cpu-limited.sh build            # 受限构建（不要直接 docker build）
+./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q
+./scripts/cpu-limited.sh up               # 启动（运行期已带 cpus）
+AI_FOOTBALL_CPU_PERCENT=30 ./scripts/cpu-limited.sh build   # 临时改比例
+```
+
+> ⚠️ **不要"优化"成 `taskset docker build`**：docker CLI 只是 API 客户端，
+> 构建容器由 dockerd 拉起，**不继承** 客户端亲和性。实测 `taskset -c 0-1 docker
+> build` 的构建容器仍是 `affinity [0,1,2,3]`。同理 `--cgroup-parent=<slice>`
+> 对 BuildKit 也无效（slice 始终 `Tasks: 0`）。唯一有效路径是
+> **`DOCKER_BUILDKIT=0` + legacy builder 的 `--cpu-quota`**（BuildKit 根本没有
+> CPU 开关）。详见 §6.7。
 
 ### 1.2 验证是否正常
 
@@ -479,6 +504,35 @@ output/
 | 皮试工具（pi-lens）**在 agent_end 自动重排被改过的文件** | 本仓库最坑的一条。实测：它在一个回合结束对 6 个 `.py` 跑 `ruff format`，把一个语义改动 120 行的文件变成 **581 行 diff**（`api/app.py` 只改了 1 行 import → 也变成 **600 行 diff**），把补丁彻底淹没；更阴的是它会**把仓库风格改得不一致** —— 实测全仓 60 个文件里只有 **12 个**是 ruff-format-clean，即仓库**本来就不采纳**这套格式。它还会**静默改变文件内容**，使正在跑的测试出现幻影结果（见上一行）。**已在 `.pi-lens.json` 里 `format.enabled=false` 关闭**（**实测已失效**：一次回合里改了 3 个测试文件，其中 2 个确实是 format-dirty（`ruff format --check` 报 would reformat），但回合结束后 8 个相关 `.py` 的 `md5sum` **全部未变**、`recent-touches.json` 也没新增 `reason:"format"` 条目）；若要整仓统一格式，应当是**独立的一次性任务**，不是每回合的副作用 |
 | 跑测试**期间**文件被改写 | `inspect.getsource()` 用**编译时冻结的行号**去读**当前磁盘文件**，文件一旦在测试跑的过程里被整体重排，就返回**别的函数体** → 断言**假失败**（实测 `test_cycle_writes_ledger` 报 `_record_ledger not found`，而 `decide_list` 里明明有；冻结代码后单独复跑即 `OK`）。反方向同样危险：断言可能被**碰巧满足**而**假通过**。**已根治**：`tests/` 原有 4 处 `getsource` 断言全部改为查**编译后的代码对象**（`tests.referenced_names()`），不再依赖“行号↔磁盘文件”一致；变异测试证明删掉调用后检查会失败（非空洞）。但**其余测试仍应冻结跑**（测试本身也是文件），且新代码不要重新引入 `getsource` 式断言 |
 | 改了代码却没重建镜像 | 容器跑的是**构建时**烤进去的副本（只有 `output/` 是挂载卷）。实测主机与容器 `/app` 的 `service/analysis.py` md5 **不一致** —— 也就是说当时“在容器里验证过”的其实是**旧设计**（容器里还是“陈旧→空集”的中间版，主机已是“陈旧→None”）。**改完代码必须 `docker compose up -d --build`**，并用 `docker exec <容器> md5sum /app/<文件>` 与主机对一次；否则验证结论无效 |
+
+### 6.7 限制 docker 构建的 CPU：三个"看着能行"的错法（2026-10-08）
+
+**背景**：本机 4 vCPU，且 pi 的对话链路指向**同机 LLM 网关**。一次不限速的
+`docker build` 能把整机打满（实测 `host_busy peak=100%`），网关被饿死 → 对话中断。
+
+因此本项目约定：构建/测试类命令一律走 `scripts/cpu-limited.sh`（限额 50%）。
+下面是排查中实测验证的结论，**别再重复试错**：
+
+| 做法 | 结果 | 实测证据 |
+| --- | --- | --- |
+| `taskset -c 0-1 docker build` | ❌ **无效** | docker CLI 只是 API 客户端；构建容器由 dockerd/runc 拉起，不继承客户端亲和性。构建容器内仍 `affinity [0,1,2,3]` |
+| `--cgroup-parent=<slice>`（配 `CPUQuota=200%` 的 slice） | ❌ **无效**（BuildKit） | slice 始终 `Tasks: 0`，构建容器没被放进去；容器内 `cpu.max = max 100000` |
+| BuildKit 默认构建 | ❌ **无任何 CPU 开关** | `docker build --help` 里搜不到 `cpu-quota`/`cpuset-cpus`；容器内 `cpu.max = max 100000` |
+| `DOCKER_BUILDKIT=0` + `--cpu-quota=200000` | ✅ **有效（本项目采用）** | 构建容器内 `cpu.max = 200000 100000`（= 2 核配额） |
+| `DOCKER_BUILDKIT=0` + `--cpuset-cpus=0-1` | ✅ 有效（备选） | 构建容器内 `affinity [0,1]`、`cpuset.cpus.effective 0-1` |
+| compose `cpus: "2.0"`（容器**运行期**） | ✅ 有效 | `cpu.max = 200000 100000` |
+
+**选型理由**：默认用 `--cpu-quota`（配额语义，与核编号无关，换机器只改百分比）；
+`--cpuset-cpus` 仅当需要把重负载与网关**物理隔离**到不同核时才用
+（`AI_FOOTBALL_CPUSET=0-1 scripts/cpu-limited.sh build`）。
+
+**代价**：legacy builder 与 BuildKit 的缓存**不互通**，首次改走 wrapper 会全量重建。
+
+**另一坑（排查途中踩到）**：测构建容器亲和性时用 `pgrep -f "python3 /burn.py"` 抓到
+的“容器进程” cgroup 显示为 `/user.slice/.../tmux-spawn-*.scope`、`/proc/<pid>/root`
+里**没有** `.dockerenv` —— 那其实是**我自己那条 bash 工具命令**的回显/子进程，
+不是构建容器。**教训**：判断进程是不是容器内的，要验 `/proc/<pid>/root/.dockerenv`
+与 PID namespace（看 `root/proc/1/comm`），不要只看命令行匹配。
 
 ---
 

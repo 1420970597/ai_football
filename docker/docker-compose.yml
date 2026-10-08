@@ -1,6 +1,17 @@
 # 注意：不再声明 `version:`。Compose V2 已忽略该字段并会输出
 #       "the attribute `version` is obsolete" 警告。
 
+# ---------------------------------------------------------------------------
+# CPU 预算：本机同时运行 LLM 网关，编译/采集打满 CPU 会拖垮网关（进而
+# 打断交互会话）。因此**所有容器**都声明 `cpus`，默认 2.0 核
+# （4 vCPU 的 50%）。覆盖： AI_FOOTBALL_CPUS=3.0 docker compose ...
+#
+# ⚠️ `cpus` 只约束**运行期**。构建期用的是 BuildKit，它**忽略**
+#    `--cgroup-parent`（实测 cpu.max 仍为 max，4 核跑满）。构建请走
+#    `scripts/cpu-limited.sh build`，它用 DOCKER_BUILDKIT=0 + cpuset
+#    真正把构建容器钉在 2 个核上（实测 affinity=[0,1]）。
+# ---------------------------------------------------------------------------
+
 name: ai_football
 
 services:
@@ -15,6 +26,8 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
+    # CPU 硬上限（见文件头「CPU 预算」）。cpus = 核数，与宿主机核数无关。
+    cpus: "${AI_FOOTBALL_CPUS:-2.0}"
     networks:
       - ai_football_network
 
@@ -75,6 +88,9 @@ services:
       - ../leyu.saz:/app/leyu.saz:ro
     depends_on:
       - redis
+    # 决策/采集是 CPU 敏感路径（全量采集时会打满多核）。
+    # 限到 cpus 核，避免抢占同机上 LLM 网关的算力。
+    cpus: "${AI_FOOTBALL_CPUS:-2.0}"
     networks:
       - ai_football_network
     restart: unless-stopped
@@ -93,6 +109,8 @@ services:
       - ./nginx.console.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - analytics-api
+    # nginx 静态托管几乎不吃 CPU，但统一限上，防止异常流量下的突发。
+    cpus: "${AI_FOOTBALL_CPUS:-2.0}"
     networks:
       - ai_football_network
     restart: unless-stopped

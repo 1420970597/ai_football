@@ -93,6 +93,12 @@ ignore = [
     "B905",  # zip(strict=) 需逐处确认语义（改错会抛 ValueError），单独处理
 ]
 
+[tool.pyright]
+# `tools/` 不是包（无 __init__.py），但测试要导入其中的脚本。
+# 不声明 extraPaths 的话，pyright 报 reportMissingImports，
+# 而那会把「真的导错了」和「只是没配路径」混成同一类噪音。
+extraPaths = [".", "./tools"]
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

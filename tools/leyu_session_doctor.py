@@ -153,9 +153,16 @@ def _report_credentials(env: dict, commented: dict) -> None:
 
 
 def _fp(value: str) -> str:
-    """敏感值指纹：只暴露长度与首 4 位，够定位不同凭据、不足以复用。"""
+    """敏感值指纹：只暴露长度与首 4 位，够定位不同凭据、不足以复用。
+
+    值短于 8 位时**不吐任何字符**：`value[:4]` 会把「短密钥」整串
+    或大半串打出来（如 `abc` → `head=abc…`），那就不是脱敏了。
+    短值本来也无区分风险，只报长度即可。
+    """
     if not value:
         return "<empty>"
+    if len(value) < 8:
+        return f"len={len(value)} head=<略>…"
     return f"len={len(value)} head={value[:4]}…"
 
 
