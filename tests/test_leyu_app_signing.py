@@ -100,6 +100,7 @@ class NativeAppSigningTest(unittest.TestCase):
                 "LEYU_APP_LOGIN_NAME": "example-user", "LEYU_APP_LOGIN_PASSWORD": "example-pwd",
                 "LEYU_APP_UUID": "example-device", "LEYU_APP_HOST": "https://app.test",
                 "LEYU_APP_SIGNING_CONFIG": str(path),
+                "LEYU_APP_LOGIN_STATE": str(Path(directory) / "guard.json"),
             })
             self.assertIsNotNone(provider)
             assert provider is not None
@@ -121,11 +122,13 @@ class NativeAppSigningTest(unittest.TestCase):
                 return response
 
             with mock.patch("urllib.request.urlopen", side_effect=reply):
-                with mock.patch("time.monotonic", return_value=100):
+                with mock.patch("time.monotonic", return_value=100), \
+                        mock.patch("time.time", return_value=100):
                     first = provider.acquire()
                     provider.invalidate(first)
                     self.assertEqual(provider.acquire().request_id, "RID2")
-                with mock.patch("time.monotonic", return_value=200):
+                with mock.patch("time.monotonic", return_value=200), \
+                        mock.patch("time.time", return_value=200):
                     provider.invalidate(first)
                     self.assertEqual(provider.acquire().request_id, "RID3")
             self.assertEqual(provider.logins, 2)

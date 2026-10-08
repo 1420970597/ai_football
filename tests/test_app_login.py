@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -22,6 +24,7 @@ from collector.leyu_app_login import (
     LOGIN_ENV_NAME,
     LOGIN_ENV_PASSWORD,
     LOGIN_ENV_SIGNATURE,
+    LOGIN_ENV_STATE,
     LOGIN_PATH,
     VERSION_TOO_LOW,
     AppLoginClient,
@@ -67,6 +70,14 @@ class TestLoginCredentials(unittest.TestCase):
 
 class TestAppLoginClient(unittest.TestCase):
     """登录客户端的请求契约与错误分类。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        patch = mock.patch("collector.leyu_app_login.DEFAULT_LOGIN_STATE_PATH",
+                           os.path.join(directory.name, "guard.json"))
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def _client(self) -> AppLoginClient:
         return AppLoginClient(
@@ -260,10 +271,22 @@ class TestAppLoginClient(unittest.TestCase):
 class TestAppLoginSessionProvider(unittest.TestCase):
     """provider 的续期策略：缓存复用 / 过期重登 / 非过期不重登 / 限流。"""
 
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = directory.name
+        self.clients = 0
+        patch = mock.patch("collector.leyu_app_login.DEFAULT_LOGIN_STATE_PATH",
+                           os.path.join(directory.name, "guard.json"))
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def _setup(self, creds_ok: bool = True):
+        self.clients += 1
         client = AppLoginClient(
             LoginCredentials(name="u", password="p", uuid="uuid-1"),
-            app_host="https://app.test", signature="sig")
+            app_host="https://app.test", signature="sig",
+            login_state_path=os.path.join(self.directory, str(self.clients), "guard.json"))
         launcher = mock.MagicMock()
         launcher.credentials = AppCredentials("PLACEHOLDER", "uuid-1")
         return client, launcher
@@ -522,6 +545,170 @@ class TestAppLoginSessionProvider(unittest.TestCase):
             with self.assertRaises(SessionError) as cm:
                 p.acquire()
             self.assertIn("credentials", str(cm.exception))
+
+
+class TestPersistentLoginProtection(unittest.TestCase):
+    """在请求边界验证保护，所有 HTTP 均替换为假响应。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = os.path.join(directory.name, "guard.json")
+
+    def client(self, name="example-user", password="example-password",
+               uuid="example-device", host="https://app.test") -> AppLoginClient:
+        return AppLoginClient(LoginCredentials(name, password, uuid), app_host=host,
+                              login_state_path=self.path)
+
+    @staticmethod
+    def response(status=6000, token="example-token"):
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "status_code": status, "data": {"token": token}}).encode()
+        return response
+
+    def test_recreated_clients_and_config_changes_cannot_clear_rejection(self):
+        with mock.patch("urllib.request.urlopen", return_value=self.response(6002)) as send:
+            with self.assertRaises(LoginRejected):
+                self.client().login()
+            for code_change in ({}, {"password": "changed"}, {"uuid": "another-device"},
+                                {"host": "https://another.test"}, {"name": "EXAMPLE-USER"}):
+                with self.subTest(change=code_change):
+                    with self.assertRaises(LoginRejected):
+                        self.client(**code_change).login()
+            self.assertEqual(send.call_count, 1)
+
+    def test_new_provider_reads_block_and_never_submits(self):
+        with mock.patch("urllib.request.urlopen", return_value=self.response(6030)):
+            with self.assertRaises(LoginRejected):
+                self.client().login()
+        launcher = mock.MagicMock()
+        provider = AppLoginSessionProvider(self.client(), launcher)
+        self.assertTrue(provider.describe()["login_blocked"])
+        with mock.patch("urllib.request.urlopen") as send, self.assertRaises(LoginRejected):
+            provider.acquire()
+        send.assert_not_called()
+        launcher.acquire.assert_not_called()
+
+    def test_success_cooldown_survives_recreation_and_then_allows_renewal(self):
+        with mock.patch("time.time", return_value=100), \
+                mock.patch("urllib.request.urlopen", return_value=self.response()) as send:
+            self.assertEqual(self.client().login(), "example-token")
+            with self.assertRaises(SessionError):
+                self.client().login()
+            self.assertEqual(send.call_count, 1)
+        with mock.patch("time.time", return_value=131), \
+                mock.patch("urllib.request.urlopen", return_value=self.response()) as send:
+            self.assertEqual(self.client().login(), "example-token")
+            self.assertEqual(send.call_count, 1)
+
+    def test_sent_timeout_never_retries_even_after_cooldown(self):
+        with mock.patch("urllib.request.urlopen", side_effect=TimeoutError()) as send:
+            with self.assertRaises(SessionError):
+                self.client().login()
+            with mock.patch("time.time", return_value=10**10):
+                with self.assertRaisesRegex(SessionError, "结果不明"):
+                    self.client().login()
+            self.assertEqual(send.call_count, 1)
+
+    def test_unparseable_or_missing_token_responses_preserve_pending(self):
+        for index, raw in enumerate((b"not json", b"[]", b'{}',
+                                    b'{"status_code":6000,"data":{}}')):
+            with self.subTest(raw=raw):
+                path = self.path + str(index)
+                client = self.client()
+                client.guard.path = path
+                response = mock.MagicMock()
+                response.__enter__.return_value.read.return_value = raw
+                with mock.patch("urllib.request.urlopen", return_value=response) as send:
+                    with self.assertRaises(SessionError):
+                        client.login()
+                    with self.assertRaisesRegex(SessionError, "结果不明"):
+                        client.login()
+                    self.assertEqual(send.call_count, 1)
+
+    def test_initialization_failure_does_not_record_a_credential_submission(self):
+        client = self.client()
+        client.signer = mock.MagicMock()
+        client.signer.initialize.side_effect = SessionError("initialization failed")
+        with mock.patch("urllib.request.urlopen") as send:
+            with self.assertRaises(SessionError):
+                client.login()
+            self.assertFalse(os.path.exists(self.path))
+        send.assert_not_called()
+
+    def test_corrupt_or_invalid_state_stops_before_network(self):
+        client = self.client()
+        for value in ("bad json", "[]", '{"version":1,"accounts":[]}',
+                      json.dumps({"version":1,"accounts":{client.guard.account_key:{
+                          "at":float("nan"),"outcome":"success"}}})):
+            with open(self.path, "w") as target:
+                target.write(value)
+            with mock.patch("urllib.request.urlopen") as send:
+                with self.assertRaises(SessionError):
+                    self.client().login()
+                send.assert_not_called()
+
+    def test_state_write_failure_stops_before_network(self):
+        with mock.patch("os.replace", side_effect=OSError("disk full")), \
+                mock.patch("urllib.request.urlopen") as send:
+            with self.assertRaises(SessionError):
+                self.client().login()
+        send.assert_not_called()
+
+    def test_interrupted_process_pending_stops_next_client(self):
+        client = self.client()
+        with client.guard.locked() as state:
+            client.guard.record(state, "pending")
+        with mock.patch("urllib.request.urlopen") as send:
+            with self.assertRaisesRegex(SessionError, "结果不明"):
+                self.client().login()
+        send.assert_not_called()
+
+    def child_probe(self) -> dict:
+        program = '''
+import json,sys
+from unittest.mock import patch
+from collector.leyu_app_login import AppLoginClient,LoginCredentials
+from collector.session import SessionError
+with patch("urllib.request.urlopen", side_effect=AssertionError("network called")) as send:
+    c=AppLoginClient(LoginCredentials("example-user","example-password","child-device"),
+                     app_host="https://app.test",login_state_path=sys.argv[1])
+    try:
+        c.login()
+    except SessionError:
+        print(json.dumps({"blocked":True,"sent":send.call_count}))
+'''
+        return json.loads(subprocess.check_output(
+            [sys.executable, "-c", program, self.path], text=True, timeout=10))
+
+    def test_independent_process_shares_rejection(self):
+        with mock.patch("urllib.request.urlopen", return_value=self.response(6002)):
+            with self.assertRaises(LoginRejected):
+                self.client().login()
+        self.assertEqual(self.child_probe(), {"blocked": True, "sent": 0})
+
+    def test_other_process_cannot_submit_while_lock_is_held(self):
+        with self.client().guard.locked():
+            self.assertEqual(self.child_probe(), {"blocked": True, "sent": 0})
+
+    def test_shared_file_permissions_and_content_do_not_expose_credentials(self):
+        with mock.patch("urllib.request.urlopen", return_value=self.response(6002)):
+            with self.assertRaises(LoginRejected):
+                self.client().login()
+        for path in (self.path, self.path + ".lock"):
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        with open(self.path) as source:
+            text = source.read()
+        for private in ("example-user", "example-password", "example-device", "example-token"):
+            self.assertNotIn(private, text)
+
+    def test_env_factory_uses_explicit_shared_state_path(self):
+        provider = login_provider_from_env({
+            LOGIN_ENV_NAME: "example-user", LOGIN_ENV_PASSWORD: "example-password",
+            "LEYU_APP_UUID": "example-device", LOGIN_ENV_STATE: self.path})
+        assert provider is not None
+        self.assertEqual(provider.client.guard.path, self.path)
 
 
 class TestLoginProviderFromEnv(unittest.TestCase):

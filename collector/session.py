@@ -601,7 +601,7 @@ def make_session_provider(
         # 它们都失效时（`6001 token已过期`）才走到登录重取 token。
         # 本模块**内部**包含“登录 → launch”两步，返回可直接用的 Session。
         #
-        # 上游业务拒绝会暂停账号重试，网络失败则冷却后重试。
+        # 客户端共享保护持久化业务拒绝和结果不明的请求，重启不会重新提交。
         from .leyu_app_login import login_provider_from_env
 
         token_cache = ""
