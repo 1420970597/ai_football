@@ -1571,7 +1571,7 @@ function renderHistoryCards(d) {
     (s.stake_units ? "本金 " + s.stake_units + " 单位" : "每注 1 单位"),
     (typeof s.roi === "number" && s.roi < 0) ? "neg" : ""));
   box.appendChild(card("CLV 均值", hPct(s.clv_mean),
-    "收盘价/买入价−1；比单场输赢更可信（样本" + (s.clv_n ?? 0) + "）"));
+    "买入赔率/收盘赔率−1；比单场输赢更可信（样本" + (s.clv_n ?? 0) + "）"));
   box.appendChild(card("赢 / 输 / 走水", (s.won ?? 0) + " / " + (s.lost ?? 0) +
     " / " + (s.push ?? 0), "含赢半/输半"));
 }
@@ -1702,7 +1702,7 @@ function renderHistoryEntries(d) {
   } else {
     note.appendChild(document.createTextNode(
       "按「已结算优先 + 时间倒序」排列；盈亏为每单位本金的净收益。"
-      + "CLV = 收盘赔率/买入赔率−1，正数表示买得比收盘便宜。"));
+      + "CLV = 买入赔率/收盘赔率−1，正数表示拿到更高买入赔率。"));
   }
 }
 
@@ -1789,7 +1789,7 @@ async function loadAccuracy() {
       "命中率 = 赢 /（赢+输），走水不计分母；ROI = 每单位本金净收益。"));
     note.appendChild(el("br"));
     note.appendChild(document.createTextNode(
-      "CLV（收盘价/买入价−1）比单场输赢更可信，样本需求更低。"));
+      "CLV（买入赔率/收盘赔率−1）比单场输赢更可信，样本需求更低。"));
     if (d.unpicked_n) {
       note.appendChild(el("br"));
       note.appendChild(document.createTextNode(
