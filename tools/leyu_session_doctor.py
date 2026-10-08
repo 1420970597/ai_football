@@ -87,69 +87,54 @@ def _disabled_credentials(env_file: str) -> dict:
 
 
 def _report_credentials(env: dict, commented: dict) -> None:
-    """校验账号/口令能否登录（区分「IP 被拦」与「凭据无效」）。
+    """用生产登录客户端验证实际配置；只报告状态码，不输出响应或 token。"""
+    from collector.leyu_app_login import (
+        APP_ENV_HOST,
+        APP_ENV_SIGNATURE,
+        APP_ENV_UUID,
+        DEFAULT_APP_HOST,
+        LOGIN_ENV_NAME,
+        LOGIN_ENV_PASSWORD,
+        AppLoginClient,
+        LoginCredentials,
+    )
+    from collector.session import SessionError
 
-    判定依据（实测）：服务端**先校 IP 再校凭据**。
-      * `6031` → IP 被拦，本机无解；
-      * `6008`/`6002` → IP 已放行，凭据本身就是错的。
-
-    **也测注释行里的凭据**：用户最需要知道的正是「我填的那对到底还行不行」，
-    否则去掉 `#` 之后才发现无效，白白多绕一圈。
-    """
-    import json as _json
-    import ssl as _ssl
-    import urllib.request as _url
-
-    from collector.leyu_app_login import LOGIN_PATH
-
-    name = (env.get("LEYU_APP_LOGIN_NAME") or "").strip()
-    pwd = env.get("LEYU_APP_LOGIN_PASSWORD") or ""
+    name = (env.get(LOGIN_ENV_NAME) or commented.get(LOGIN_ENV_NAME) or "").strip()
+    password = env.get(LOGIN_ENV_PASSWORD) or commented.get(LOGIN_ENV_PASSWORD) or ""
+    uuid = (env.get(APP_ENV_UUID) or commented.get(APP_ENV_UUID) or "").strip()
     origin = "生效配置"
-    if not (name and pwd):
-        name = (commented.get("LEYU_APP_LOGIN_NAME") or "").strip()
-        pwd = commented.get("LEYU_APP_LOGIN_PASSWORD") or ""
-        origin = "**注释行**（未生效，去掉行首 # 即可启用）"
-    if not (name and pwd):
-        print("  – 未配置账号口令（自动续期不可用，仅能靠已缓存的 token 撑约 10h）")
+    if not env.get(LOGIN_ENV_NAME) or not env.get(LOGIN_ENV_PASSWORD):
+        origin = "注释行（尚未注入运行环境）"
+    if not (name and password):
+        print("  – 未配置账号口令（自动登录续期不可用）")
+        return
+    if not uuid:
+        print(f"  – 缺少 {APP_ENV_UUID}，无法按生产协议验证登录")
         return
 
-    host = _gateway()
-    ctx = _ssl._create_unverified_context()
-
-    def _try(user: str) -> dict:
-        body = _json.dumps({"x-api-name": user, "x-api-password": "x" * 12,
-                            "Kaptchcate": 99}, separators=(",", ":")).encode()
-        req = _url.Request(host.rstrip("/") + LOGIN_PATH, data=body, method="POST",
-                           headers={"Content-Type": "application/json",
-                                    "User-Agent": "Dart/3.6 (dart:io)"})
-        try:
-            with _url.urlopen(req, timeout=25, context=ctx) as r:
-                return _json.loads(r.read().decode("utf-8", "replace"))
-        except Exception as exc:  # noqa: BLE001 - 诊断要报出一切
-            return {"status_code": None, "message": "%s: %s" % (type(exc).__name__, exc)}
-
-    real = _try(name)
-    ctrl = _try("__nonexistent_probe__")
-    host_short = host.replace("https://", "")
+    client = AppLoginClient(
+        LoginCredentials(name=name, password=password, uuid=uuid),
+        app_host=(env.get(APP_ENV_HOST) or DEFAULT_APP_HOST),
+        signature=env.get(APP_ENV_SIGNATURE, ""),
+    )
     print(f"  凭据来源：{origin}")
-    print(f"  网关 {host_short}：")
-    print(f"    配置账号 status_code={real.get('status_code')} "
-          f"message={real.get('message')}")
-    print(f"    对照(不存在) status_code={ctrl.get('status_code')} "
-          f"message={ctrl.get('message')}")
+    try:
+        token = client.login()
+    except SessionError:
+        import re
 
-    sc = real.get("status_code")
-    if sc == 6031:
-        print("    ✗ 判定: IP 被拦（6031）—— 换网络/部署到放行 IP")
-    elif sc in (6008, 6002):
-        if ctrl.get("status_code") == sc:
-            print("    ✗ 判定: 凭据无效 —— 服务端对「账号不存在」与「口令错误」"
-                  "返回同一 code，无法再细分；需换正确的账号/口令")
+        match = re.search(r"status_code=([0-9]+)", client.last_error)
+        code = match.group(1) if match else "network/protocol error"
+        if code == "6031":
+            print("  ✗ 登录被上游拒绝（6031，地区 IP 限制）")
         else:
-            print("    ✗ 判定: 账号存在但口令错误")
-    else:
-        print(f"    ? 判定: 非预期响应（status_code={sc}）")
-    print("    注：IP 闸门已通过（否则会是 6031），故**瓶颈不在 IP**。")
+            print(f"  ✗ 生产登录请求未成功（{code}）；该响应不足以判断账号或口令哪项有误")
+        return
+
+    # A successful token is intentionally discarded; this diagnostic is read-only.
+    del token
+    print("  ✓ 生产登录成功（token 未显示、未缓存）")
 
 
 def _fp(value: str) -> str:
@@ -195,9 +180,9 @@ def main() -> int:
     if disabled:
         print("\n  ⚠ .env 里有**被注释掉**的凭据行（未生效）："
               f"{', '.join(sorted(disabled))}")
-        print("    若这些值仍有效，去掉行首 `#` 即可启用自动续期（下面已代你验证）。")
+        print("    下方会用生产登录协议尝试验证；失败状态码不一定能区分账号与口令问题。")
 
-    print("\n=== 凭据校验（区分 IP 被拦 / 凭据无效）===")
+    print("\n=== 生产登录校验（脱敏）===")
     _report_credentials(env, disabled)
 
     # 不启用缓存：我们要看**原始**链路，而不是被上次成功缓存掩盖

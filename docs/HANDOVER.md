@@ -213,52 +213,24 @@ curl -s -X POST localhost:8000/api/v1/ledger/settle | python3 -m json.tool
 python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];print(len(d), sum(1 for v in d.values() if v.get('done')))"
 ```
 
-### 3.2 乐鱼凭据过期（P0，**唯一外部阻塞**）
+### 3.2 乐鱼登录续期当前不可用（P0）
 
-> **🔔 2026-10-07 复核更新（设备已换 IP）：IP 闸门已通过，**不是**瓶颈。**
-> 旧结论「本机 IP 被 `6031 地区ip限制` 拦住」**已失效**。实测（走生产登录代码路径
-> `AppLoginClient.login()`，非仅探针）：用不存在的用户名打 `user/login` 得到
-> **`6008 用户名或密码错误`**，而非 `6031`。服务端**先校 IP 再校凭据**，
-> 故 6008 即证明出口 IP 已被放行。**现在只差正确的账号/口令。**
->
-> **🔔 2026-10-07 再次复核：`.env` 里那对注释掉的凭据已实测为「无效」。**
-> `.env` 中 `LEYU_APP_LOGIN_NAME` / `LEYU_APP_LOGIN_PASSWORD` **存在但整行被 `#` 注释掉**
-> （历史原因：早期误以为本机 IP 被封，写了「需在允许的网络上使用」——**该注释现在是错的**）。
-> 诊断脚本已**代验证**这对注释凭据：登录返回 `6008`，且与「不存在的账号」对照
-> **返回同一 code** —— 服务端不区分「账号不存在」与「口令错误」，
-> 故无法再细分，**这对凭据确实是失效的**。去掉 `#` 也不会变得可用，需换新的账号/口令。
->
-> ⚠️ **2026-10-08 附带修正**：`.env` 里那句「登录受上游 IP 白名单限制（6031），
-> 需在允许的网络上使用」是**过期且已证伪**的注释，已就地改正。它正是早期把
-> 故障误判为「IP 被封」的源头之一 —— 留着会让下一个人再去查一遍 IP。
-> 同时那两行注释掉的凭据已实测为**无效**（登录返回 6008，且与「不存在的账号」
-> 返回同一 code，服务端不区分账号不存在与口令错误）。
+> **2026-10-08 实测**：H5 与 App token 的 launch 均返回 `6001 token已过期`。
+> `.env` 中存在登录账号和口令，但两行都被注释，故运行中的 API 容器没有拿到它们。
+> 使用生产 `AppLoginClient.login()` 请求验证这组值，上游返回 `6002 用户名或密码错误`；
+> 同一请求格式的虚构账号对照返回 `6008`。当前口令没有通过登录，暂时无法签发新 token；
+> 这组响应不足以断定是密码变更、账号状态还是上游错误码语义，不能把它写成“密码已失效”。
 
-> 一键诊断（新增，只读、脱敏）：`python3 tools/leyu_session_doctor.py`
-> —— 逐个 provider 试，报出谁成功/谁失败/为什么；自动探测 `.env` 里被注释掉的凭据
-> 并**代为验证**（区分「IP 被拦」与「凭据无效」）；附登录路径的 IP 闸门判定。
+自动登录续期代码和 provider 链已经存在：有效 App token 可继续 launch；token 过期时，
+`AppLoginSessionProvider` 用 `LEYU_APP_LOGIN_NAME` / `LEYU_APP_LOGIN_PASSWORD` 登录、取得新 token，
+再 launch 获取业务会话。它续的是 App token 与业务 `requestId`，并不续浏览器 cookie。
+当前账号口令未通过上游登录，因此不能启用为生产配置；需要先在乐鱼侧确认可用口令或账号状态。
 
-**现象**：`venue/launch` 返回 `6001 token已过期`；当前靠 `_session.json` 缓存回退维持采集。
+诊断工具：`python3 tools/leyu_session_doctor.py`。凭据验证复用生产登录客户端，只打印脱敏结果和
+上游状态码；不会显示或保存新 token。注释中的账号口令会被标为“尚未注入运行环境”，
+不会再把虚构密码请求的响应解释成真实凭据结论。
 
-**实情**：
-- 抓包里那个 token 约 **10 小时后自然过期**（会话生命周期本就如此）；
-- **登录续期代码已实现**（`collector/leyu_app_login.py`），且链路已接好
-  （`collector/session.py::make_session_provider` 的 provider 链末位）；
-- 但它**默认不在链上**：`login_provider_from_env` 在缺 `LEYU_APP_LOGIN_NAME` /
-  `LEYU_APP_LOGIN_PASSWORD` 时返回 `None`（设计如此，便于回退）。当前 `.env`
-  里这两项为空，所以链上只有 `h5-cookie` 与 `app-launch`，两者都返回 `6001`。
-- `venue/launch` 与 `user/login` 都不再受 IP 限制（历史上只有 `user/login` 受限）。
-
-**处置（当前唯一需要做的事）**：在 `.env` 填入账号口令即可启用自动续期：
-
-```bash
-# .env —— 填入后重启服务，链会自动走「登录 → launch」拿到新 requestId
-LEYU_APP_LOGIN_NAME=<登录账号>
-LEYU_APP_LOGIN_PASSWORD=<登录口令明文>
-```
-
-其余可选路径（按需）：注入 `LEYU_REQUEST_ID` / `LEYU_SESSION_FILE` / `LEYU_LOGIN_COMMAND`，
-或直接更新 `LEYU_APP_TOKEN`（约 10h 有效）。
+若此前曾把登录行注释，确认账号口令有效后再启用并重启 API；不要把未经上游验证的值作为自动续期配置。
 
 ### 3.3 进行中场次与乐鱼"完全一致"（P1）
 
