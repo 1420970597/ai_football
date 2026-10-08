@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""`collector.leyu_app_login` 的单元测试（App 账号登录续期）。
+"""App 账号登录续期的离线契约、冷却与拒绝保护测试。
 
-被验证的实测结论（来自 `乐鱼app.zip` 抓包，2026-10-05 16:44 CST）：
-
-  * `POST /site/api/v1/user/login` **无需签名**（抓包里 `x-api-token` 为空），
-    请求体 `Kaptchcate: 99` 而服务端**不校验验证码** ⇒ 可程序化续期；
-  * 口令在请求体里是 **32 位小写 MD5**（协议强制，非安全选择）；
-  * `x-api-xxx` 是**站点级固定值**（改 body/换路径复用同一签名仍成功）；
-  * 登录受 **IP 白名单**限制（`6031 地区ip限制`）—— 必须如实报出。
+这些 mock 用例不能证明线上账号登录成功或当前上游无需人机验证。
 
 运行::
 
@@ -27,11 +21,13 @@ from collector.leyu_app_login import (
     IP_RESTRICTED,
     LOGIN_ENV_NAME,
     LOGIN_ENV_PASSWORD,
+    LOGIN_ENV_SIGNATURE,
     LOGIN_PATH,
     VERSION_TOO_LOW,
     AppLoginClient,
     AppLoginSessionProvider,
     LoginCredentials,
+    LoginRejected,
     login_provider_from_env,
 )
 from collector.leyu_app_session import AppCredentials
@@ -54,8 +50,11 @@ class TestLoginCredentials(unittest.TestCase):
     def test_masked_never_leaks_password(self) -> None:
         c = LoginCredentials(name="alice", password="s3cret", uuid="uuid-1")
         out = c.masked()
-        self.assertIn("alice", out)
+        self.assertNotIn("alice", out)
         self.assertNotIn("s3cret", out)
+        self.assertNotIn("uuid-1", out)
+        self.assertNotIn("s3cret", repr(c))
+        self.assertNotIn("alice", repr(c))
 
     def test_missing_fields_raise(self) -> None:
         for kw in ({"name": ""}, {"password": ""}, {"uuid": ""}):
@@ -71,17 +70,14 @@ class TestAppLoginClient(unittest.TestCase):
 
     def _client(self) -> AppLoginClient:
         return AppLoginClient(
-            LoginCredentials(name="ff778580978", password="pw",
-                             uuid="95ad64d5935fa539"),
+            LoginCredentials(name="example-user", password="pw",
+                             uuid="example-device"),
             app_host="https://app.test", signature="sig")
 
     def test_login_success_returns_token(self) -> None:
         c = self._client()
         body = {"data": {"token": "NEWTOKEN", "userId": "1"},
                 "message": "登录成功", "status_code": 6000}
-        with mock.patch.object(c, "_post_json", return_value=body,
-                               create=True):
-            pass  # 占位：真实路径用 _request 封装，见下
         # 直接打桩 urlopen
         with mock.patch("urllib.request.urlopen") as uo:
             uo.return_value.__enter__.return_value.read.return_value = \
@@ -117,14 +113,14 @@ class TestAppLoginClient(unittest.TestCase):
 
         self.assertTrue(captured["url"].endswith(LOGIN_PATH))
         b = captured["body"]
-        self.assertEqual(b["uuid"], "95ad64d5935fa539")
-        self.assertEqual(b["name"], "ff778580978")
+        self.assertEqual(b["uuid"], "example-device")
+        self.assertEqual(b["name"], "example-user")
         self.assertEqual(b["password"], c.credentials.password_md5)
         self.assertEqual(b["Flag"], 1)
         self.assertEqual(b["Version"], "2.0.1")
         self.assertEqual(b["Kaptchcate"], 99)
         # 登录**不需要** token（抓包实证），但可以带签名
-        self.assertNotIn("x-api-token", captured["headers"])
+        self.assertEqual(captured["headers"]["x-api-token"], "")
 
     def test_ip_restriction_gives_actionable_error(self) -> None:
         """`6031 地区ip限制` 必须给出可操作指引，而不是含糊失败。"""
@@ -148,8 +144,8 @@ class TestAppLoginClient(unittest.TestCase):
                 c.login()
         msg = str(cm.exception)
         self.assertIn("地区", msg)
-        self.assertIn("venue/launch", msg)   # 说明只有 login 受限
-        self.assertIn(LOGIN_ENV_PASSWORD, msg)
+        self.assertIsInstance(cm.exception, LoginRejected)
+        self.assertNotIn("无需检查口令", msg)
 
     def test_version_too_low_error(self) -> None:
         c = self._client()
@@ -208,6 +204,58 @@ class TestAppLoginClient(unittest.TestCase):
             with self.assertRaises(SessionError):
                 c.login()
 
+    def test_rejected_response_never_echoes_upstream_secrets(self) -> None:
+        c = self._client()
+        with mock.patch("urllib.request.urlopen") as uo:
+            uo.return_value.__enter__.return_value.read.return_value = json.dumps({
+                "status_code": "6002", "message": "private-password private-token",
+                "data": {"token": "private-token"},
+            }).encode()
+            with self.assertRaises(LoginRejected) as error:
+                c.login()
+        self.assertEqual(error.exception.status_code, "6002")
+        self.assertNotIn("private-", str(error.exception) + c.last_error)
+        self.assertIn("不能仅凭状态码", str(error.exception))
+
+    def test_native_login_initializes_before_submitting_credentials(self) -> None:
+        from collector.leyu_app_signing import NativeAppSigner
+
+        signer = NativeAppSigner({p: {"key": "k" * 32, "iv": "i" * 16}
+                                  for p in ("", "/site/api", "/game/api")})
+        client = self._client()
+        client.signer = signer
+        payloads = iter([
+            {"status_code": 6000, "data": {"ip": "203.0.113.5"}},
+            {"status_code": 6000, "data": {"token": "new-token"}},
+        ])
+        requests = []
+
+        def respond(request, **kwargs):
+            requests.append(request)
+            response = mock.MagicMock()
+            response.__enter__.return_value.read.return_value = json.dumps(next(payloads)).encode()
+            return response
+
+        with mock.patch("urllib.request.urlopen", side_effect=respond):
+            self.assertEqual(client.login(), "new-token")
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0].data, b"{}")
+        self.assertTrue(requests[1].full_url.endswith(LOGIN_PATH))
+        headers = {k.lower(): v for k, v in requests[1].headers.items()}
+        self.assertIn("x-api-hack-xxxxx", headers)
+        self.assertNotEqual(headers["x-api-xxx"], "sig")
+        self.assertEqual(signer._ip, "203.0.113.5")
+
+    def test_token_without_success_status_is_rejected(self) -> None:
+        c = self._client()
+        with mock.patch("urllib.request.urlopen") as uo:
+            uo.return_value.__enter__.return_value.read.return_value = json.dumps({
+                "data": {"token": "private-token"},
+            }).encode()
+            with self.assertRaises(SessionError):
+                c.login()
+        self.assertNotIn("private-token", c.last_error)
+
 
 class TestAppLoginSessionProvider(unittest.TestCase):
     """provider 的续期策略：缓存复用 / 过期重登 / 非过期不重登 / 限流。"""
@@ -263,17 +311,18 @@ class TestAppLoginSessionProvider(unittest.TestCase):
                 p.acquire()
             self.assertEqual(p.logins, 0)
 
-    def test_invalidate_forces_relogin(self) -> None:
+    def test_business_expiry_relaunches_without_account_login(self) -> None:
         client, launcher = self._setup()
         launcher.acquire.return_value = _session("rid5")
-        with mock.patch.object(client, "login", return_value="T5"):
+        with mock.patch.object(client, "login", side_effect=AssertionError("不该登录")):
             p = AppLoginSessionProvider(client, launcher)
             p._token = "X"
             p._token_at = 0.0
-            p.invalidate()
-            self.assertFalse(p.cached_token)
-            p.acquire()
-            self.assertEqual(p.logins, 1)
+            p.invalidate(_session("expired-business-session"))
+            self.assertEqual(p.cached_token, "X")
+            self.assertEqual(p.acquire().request_id, "rid5")
+            self.assertEqual(p.logins, 0)
+            self.assertEqual(launcher.credentials.token, "X")
 
     def test_relogin_throttled(self) -> None:
         """两次登录过近时跳过（上游限流 30 次/分钟）。"""
@@ -283,11 +332,120 @@ class TestAppLoginSessionProvider(unittest.TestCase):
             p = AppLoginSessionProvider(client, launcher,
                                         min_relogin_interval_s=3600.0)
             self.assertEqual(p.acquire().request_id, "rid6")   # 首次登录
-            # 立刻失效再试 → 应被限流挡住
+            # App token 明确过期后仍保留上次账号尝试的冷却。
+            launcher.acquire.side_effect = SessionError("6001 token已过期")
             p.invalidate()
             with self.assertRaises(SessionError) as cm:
                 p.acquire()
             self.assertIn("频繁", str(cm.exception))
+
+    def test_failed_login_is_throttled(self) -> None:
+        """凭据被拒时也必须冷却，避免实时重试线程打满登录接口。"""
+        client, launcher = self._setup()
+        with mock.patch.object(client, "login",
+                               side_effect=SessionError("network timeout")) as m:
+            p = AppLoginSessionProvider(client, launcher,
+                                        min_relogin_interval_s=3600.0)
+            with self.assertRaises(SessionError) as first:
+                p.acquire()
+            self.assertIn("timeout", str(first.exception))
+            p.invalidate()
+            with self.assertRaises(SessionError) as second:
+                p.acquire()
+            self.assertIn("频繁", str(second.exception))
+            self.assertEqual(m.call_count, 1)
+            self.assertEqual(p.login_attempts, 1)
+
+    def test_business_rejection_stops_login_after_cooldown_and_invalidate(self) -> None:
+        for code in (6002, 6008, 6003, 6022, 6030, 6031, 6606):
+            with self.subTest(code=code):
+                client, launcher = self._setup()
+                p = AppLoginSessionProvider(client, launcher)
+                with mock.patch("urllib.request.urlopen") as uo:
+                    uo.return_value.__enter__.return_value.read.return_value = json.dumps({
+                        "status_code": code, "message": "private-server-message",
+                    }).encode()
+                    with mock.patch("time.monotonic", return_value=100):
+                        with self.assertRaises(LoginRejected):
+                            p.acquire()
+                    p.invalidate()
+                    with mock.patch("time.monotonic", return_value=10000):
+                        with self.assertRaises(SessionError) as error:
+                            p.acquire()
+                    self.assertIn("停止自动账号登录", str(error.exception))
+                    self.assertEqual(uo.call_count, 1)
+                self.assertTrue(p.describe()["login_blocked"])
+                self.assertEqual(p.login_attempts, 1)
+                launcher.acquire.assert_not_called()
+
+    def test_network_failure_retries_after_cooldown_and_clears_error(self) -> None:
+        client, launcher = self._setup()
+        launcher.acquire.return_value = _session("rid-recovered")
+        p = AppLoginSessionProvider(client, launcher)
+        with mock.patch.object(client, "login", side_effect=[SessionError("timeout"), "T"]) as login:
+            with mock.patch("time.monotonic", return_value=100):
+                with self.assertRaises(SessionError):
+                    p.acquire()
+            self.assertEqual(p.last_error, "timeout")
+            with mock.patch("time.monotonic", return_value=131):
+                self.assertEqual(p.acquire().request_id, "rid-recovered")
+            self.assertEqual(login.call_count, 2)
+        self.assertFalse(p.describe()["login_blocked"])
+        self.assertEqual(p.last_error, "")
+
+    def test_launch_and_login_are_serialized(self) -> None:
+        """并发刷新共享启动器时只能产生一次登录请求。"""
+        import threading
+
+        client, launcher = self._setup()
+        launcher.acquire.return_value = _session("rid-concurrent")
+        started = threading.Event()
+        release = threading.Event()
+        second_waiting = threading.Event()
+        inner_lock = threading.RLock()
+
+        class ObservedLock:
+            def __enter__(self):
+                if threading.current_thread().name == "second-acquire":
+                    second_waiting.set()
+                return inner_lock.__enter__()
+
+            def __exit__(self, *args):
+                return inner_lock.__exit__(*args)
+
+        def login() -> str:
+            started.set()
+            if not release.wait(2):
+                raise AssertionError("login was not released")
+            return "T-concurrent"
+
+        with mock.patch.object(client, "login", side_effect=login) as m:
+            p = AppLoginSessionProvider(client, launcher,
+                                        min_relogin_interval_s=0.0)
+            lock_patch = mock.patch.object(p, "_lock", ObservedLock())
+            lock_patch.start()
+            self.addCleanup(lock_patch.stop)
+            errors = []
+
+            def run() -> None:
+                try:
+                    p.acquire()
+                except Exception as exc:  # pragma: no cover - assertion below
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=run, daemon=True) for _ in range(2)]
+            threads[1].name = "second-acquire"
+            threads[0].start()
+            self.assertTrue(started.wait(1))
+            threads[1].start()
+            self.assertTrue(second_waiting.wait(1))
+            release.set()
+            for t in threads:
+                t.join(timeout=2)
+                self.assertFalse(t.is_alive())
+            self.assertFalse(errors)
+            self.assertEqual(m.call_count, 1)
+            self.assertEqual(p.logins, 1)
 
     def test_token_cached_to_disk_and_reloaded(self) -> None:
         client, launcher = self._setup()
@@ -300,6 +458,7 @@ class TestAppLoginSessionProvider(unittest.TestCase):
                 p.acquire()
             with open(path, encoding="utf-8") as fh:
                 self.assertEqual(json.load(fh)["token"], "PERSIST")
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
             # 新实例应直接读到缓存（不再登录）
             p2 = AppLoginSessionProvider(client, launcher,
                                          token_cache_path=path)
@@ -319,6 +478,40 @@ class TestAppLoginSessionProvider(unittest.TestCase):
                 p.acquire()
                 self.assertEqual(p.logins, 1)
 
+    def test_cache_cannot_cross_accounts_devices_or_gateways(self) -> None:
+        client, launcher = self._setup()
+        launcher.acquire.return_value = _session("rid-cache")
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "token.json")
+            with mock.patch.object(client, "login", return_value="PRIVATE-TOKEN"):
+                AppLoginSessionProvider(client, launcher, token_cache_path=path).acquire()
+            for name, uuid, host in (
+                ("other-user", "uuid-1", "https://app.test"),
+                ("u", "other-device", "https://app.test"),
+                ("u", "uuid-1", "https://other.test"),
+            ):
+                changed = AppLoginClient(LoginCredentials(name, "p", uuid), app_host=host)
+                provider = AppLoginSessionProvider(changed, launcher, token_cache_path=path)
+                self.assertEqual(provider.cached_token, "")
+            with open(path, encoding="utf-8") as saved:
+                self.assertNotIn('"uuid-1"', saved.read())
+
+    def test_invalid_or_legacy_cache_does_not_crash_or_load_token(self) -> None:
+        client, launcher = self._setup()
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "token.json")
+            provider = AppLoginSessionProvider(client, launcher)
+            invalid_entries: tuple[object, ...] = (
+                [], 1, {"token": "legacy"},
+                {"account": provider._cache_account(), "token": "T", "at": "bad"},
+                {"account": provider._cache_account(), "token": 123},
+            )
+            for data in invalid_entries:
+                with open(path, "w", encoding="utf-8") as target:
+                    json.dump(data, target)
+                loaded = AppLoginSessionProvider(client, launcher, token_cache_path=path)
+                self.assertEqual(loaded.cached_token, "")
+
     def test_launcher_without_writable_credentials(self) -> None:
         """启动器缺可写凭据时给出明确错误（而非 TypeError）。"""
         client = AppLoginClient(
@@ -332,6 +525,23 @@ class TestAppLoginSessionProvider(unittest.TestCase):
 
 
 class TestLoginProviderFromEnv(unittest.TestCase):
+    def test_login_and_launch_use_separate_prefix_signatures(self) -> None:
+        env = {
+            LOGIN_ENV_NAME: "account", LOGIN_ENV_PASSWORD: "password",
+            "LEYU_APP_UUID": "device", "LEYU_APP_SIGNATURE": "game-signature",
+            LOGIN_ENV_SIGNATURE: "site-signature",
+        }
+        p = login_provider_from_env(env)
+        self.assertIsNotNone(p)
+        assert p is not None
+        self.assertEqual(p.client._headers()["x-api-xxx"], "site-signature")
+        self.assertEqual(p.launcher.signature, "game-signature")
+        env.pop(LOGIN_ENV_SIGNATURE)
+        p2 = login_provider_from_env(env)
+        assert p2 is not None
+        self.assertNotIn("x-api-xxx", p2.client._headers())
+        self.assertEqual(p2.launcher.signature, "game-signature")
+
     def test_none_without_credentials(self) -> None:
         self.assertIsNone(login_provider_from_env({}))
         self.assertIsNone(login_provider_from_env(
