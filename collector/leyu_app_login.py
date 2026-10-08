@@ -1,99 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-乐鱼 App **登录续期**（账号密码 → `x-api-token`）—— 补齐最后一环。
+"""乐鱼 App 账号登录续期：口令 → token → 场馆业务会话。
 
-═══════════════════════════════════════════════════════════════════════════
-为什么需要这个模块（在此之前 token 过期只能人工介入）
-═══════════════════════════════════════════════════════════════════════════
+2026-10-08 用户提供的体育 App 成功抓包确认 MD5 口令、
+Kaptchcate=99；动态头算法与官方 Android 2.0.1 代码匹配。
+正常网页登录返回 6022 并显示人机验证，不能将网页验证模式套用到 App。
+离线测试验证协议实现，不能据此宣称当前账号登录已成功。
+本模块不处理或跳过人机验证。上游拒绝登录时停止后台账号重试，
+初始化失败可按冷却间隔重试；已发送而结果不明时也停止账号重试。
+已有有效 token 可继续用于场馆续期。
 
-`collector/leyu_app_session.py` 能「用**有效** token 换 requestId」，
-但 token 自身过期（`6001 token已过期`）后它无能为力，只能报错让人工更新。
-其模块头部明确写着：
-
-    ❌ `x-api-token` 本身过期后重新获取它。
-    原因：token 的唯一来源是账号登录，且**有人机验证**。
-
-**该结论已被 App 抓包推翻**（见 `乐鱼app.zip`，2026-10-05 16:44 CST）：
-登录请求体里 `"Kaptchcate": 99`，而服务端**不校验验证码** ——
-也就是说，拿到账号口令即可程序化换取新 token，无需绕过任何人机验证。
-
-═══════════════════════════════════════════════════════════════════════════
-实测链路（逐跳，均可复现）
-═══════════════════════════════════════════════════════════════════════════
-
-    ① POST {app_host}/site/api/v1/user/login
-       headers: x-api-client / x-api-site / x-api-uuid / content-type
-                （**无需 x-api-token，也无需 x-api-xxx**）
-       body:    {"uuid": <uuid>, "name": <账号>, "password": <MD5(密码)>,
-                 "Flag": 1, "Version": "2.0.1", "Kaptchcate": 99}
-       resp:    {"data":{"token":"e0a669ad…","userId":"33604490"},
-                 "message":"登录成功","status_code":6000}
-
-    ② POST {app_host}/game/api/v1/venue/launch     （见 leyu_app_session）
-       headers: x-api-token + x-api-xxx
-       → data.url?token=<requestId>
-
-    ③ 业务 API（`/yewu11/*`）
-       headers: x-api-token + requestId
-       → {"code":"0000000"}（gzip+base64，由 leyu_client.decode_envelope 解）
-
-═══════════════════════════════════════════════════════════════════════════
-关于签名：**不需要逆向**（实测结论，很重要）
-═══════════════════════════════════════════════════════════════════════════
-
-`x-api-xxx` 是**站点级固定值**，不绑定 body / path / 时间：
-
-    * 抓包里的值                  → 6000 成功
-    * `.env` 里已存的 LEYU_APP_SIGNATURE → 6000 成功（同一账号、同一站点）
-    * 垃圾值 `deadbeef…` / 空值   → 6003 非法请求
-    * 改 body 字段、换请求路径后复用同一签名 → 仍 6000
-
-即：**签名已经存对了，唯一会过期的是 token**。因此本模块只需解决登录。
-
-═══════════════════════════════════════════════════════════════════════════
-⚠️ 已知限制：登录受 **IP 白名单** 限制（必须如实告知）
-═══════════════════════════════════════════════════════════════════════════
-
-实测：从抓包机（`118.107.172.91`）登录成功；从本机（`38.76.205.122`）
-返回 `6031 地区ip限制,不允许登录`。
-
-注意这不是「代码做不到」，而是**上游对登录来源做地域限制**：
-
-    * `venue/launch`（换 requestId）**不受**该限制 —— 本机可成功；
-    * 只有 `user/login` 受限。
-
-因此本模块的行为是**诚实降级**：
-
-    能登录（IP 允许）→ 自动换取新 token，并缓存复用 → 真正自动续期；
-    不能登录（6031）→ 明确报出 `6031 / 地区限制`，并给出可操作指引
-                       （在允许的网络上跑一次登录，把 token 写入 .env），
-                       而不是假装成功或静默失败。
-
-配置（全部来自环境变量，**不含任何硬编码凭据**，符合 AGENTS.md §3.4）：
-
-    LEYU_APP_LOGIN_NAME      账号（登录名）
-    LEYU_APP_LOGIN_PASSWORD  密码（明文；本模块负责 MD5 后发送）
-    LEYU_APP_TOKEN           已有的 x-api-token（可被登录结果覆盖）
-    LEYU_APP_UUID            x-api-uuid
-    LEYU_APP_SIGNATURE       站点级签名（固定值）
-    LEYU_APP_HOST            App/H5 网关
-
-依赖：仅标准库。
+6002/6008 只表示当前请求未获接受，不能排除请求协议不匹配。
+登录签名必须属于 /site/api，场馆签名属于 /game/api。
+配置来自环境变量，依赖仅标准库。
 """
 
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
+import math
 import os
 import ssl
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, Mapping, Optional
 
 from .leyu_app_session import (
     APP_ENV_HOST,
@@ -103,14 +40,17 @@ from .leyu_app_session import (
     DEFAULT_APP_HOST,
     HTTP_TIMEOUT_S,
     HEADER_PREFIX_SIGNATURE,
+    _safe_base_url,
 )
 from .session import Session, SessionError, SessionProvider
+from .leyu_app_signing import NativeAppSigner, signer_from_env
 
 __all__ = [
     "LOGIN_PATH",
     "LOGIN_ENV_NAME",
     "LOGIN_ENV_PASSWORD",
     "LoginCredentials",
+    "LoginRejected",
     "AppLoginClient",
     "AppLoginSessionProvider",
     "login_provider_from_env",
@@ -122,6 +62,12 @@ LOGIN_PATH = "/site/api/v1/user/login"
 #: 登录凭据的环境变量名
 LOGIN_ENV_NAME = "LEYU_APP_LOGIN_NAME"
 LOGIN_ENV_PASSWORD = "LEYU_APP_LOGIN_PASSWORD"
+#: /site/api 登录签名，与 LEYU_APP_SIGNATURE（/game/api）分开配置。
+LOGIN_ENV_SIGNATURE = "LEYU_APP_LOGIN_SIGNATURE"
+LOGIN_ENV_STATE = "LEYU_APP_LOGIN_STATE"
+DEFAULT_LOGIN_STATE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "output", "auth", "_app_login_state.json")
+MIN_LOGIN_INTERVAL_S = 30.0
 
 #: 客户端版本（上游会校验；低版本返回 6606「版本过低」）
 CLIENT_VERSION = "2.0.1"
@@ -129,8 +75,7 @@ CLIENT_VERSION = "2.0.1"
 #: 站点 ID（实测 2001）
 SITE_ID = "2001"
 
-#: 验证码类型占位。实测服务端**不校验**该字段：
-#: 抓包里为 99，缺省也不影响登录成功（但保留以与 App 行为一致）。
+#: 当前官方 App 2.0.1 的默认值；不是网页验证码模式。
 KAPTC_TYPE_NO_CHECK = 99
 
 #: 业务成功码
@@ -141,6 +86,118 @@ IP_RESTRICTED = 6031
 
 #: 「版本过低」业务码
 VERSION_TOO_LOW = 6606
+
+
+class LoginRejected(SessionError):
+    """上游业务拒绝；同一账号不应自动重复提交口令。"""
+
+    def __init__(self, status_code: str, detail: str) -> None:
+        self.status_code = status_code
+        super().__init__("登录被上游拒绝（status_code=%s）：%s" % (status_code, detail))
+
+
+class LoginAttemptGuard:
+    """在共享数据卷中保护账号，进程重启与配置变化不会清除拒绝记录。
+
+    锁文件保持稳定；状态原子替换。发送前先持久化 pending，故崩溃、
+    超时或无法解析响应都不能自动重发已经可能被上游处理的口令请求。
+    文件不可读、损坏或不可写时停止登录，不退回无保护的网络请求。
+    """
+
+    def __init__(self, path: str, account: str) -> None:
+        self.path = path
+        # 上游按账号计数，不能用换密码、设备或网关清除同一账号的保护。
+        identity = SITE_ID + ":" + account.strip().casefold()
+        self.account_key = hashlib.sha256(identity.encode()).hexdigest()
+
+    def _load(self) -> dict:
+        try:
+            with open(self.path, encoding="utf-8") as source:
+                state = json.load(source)
+        except FileNotFoundError:
+            return {"version": 1, "accounts": {}}
+        except (OSError, ValueError) as exc:
+            raise SessionError("登录保护状态无法读取；已停止账号提交。") from exc
+        if (not isinstance(state, dict) or state.get("version") != 1
+                or not isinstance(state.get("accounts"), dict)):
+            raise SessionError("登录保护状态结构异常；已停止账号提交。")
+        for key, entry in state["accounts"].items():
+            if (not isinstance(key, str) or not isinstance(entry, dict)
+                    or entry.get("outcome") not in ("pending", "rejected", "success")
+                    or type(entry.get("at")) not in (int, float)
+                    or not math.isfinite(entry["at"]) or entry["at"] < 0
+                    or (entry["outcome"] == "rejected" and (
+                        not isinstance(entry.get("code"), str)
+                        or not entry["code"].isdigit() or len(entry["code"]) > 8))):
+                raise SessionError("登录保护记录异常；已停止账号提交。")
+        return state
+
+    def _save(self, state: dict) -> None:
+        temporary = ""
+        try:
+            fd, temporary = tempfile.mkstemp(
+                prefix=".login-state-", dir=os.path.dirname(self.path) or ".")
+            with os.fdopen(fd, "w", encoding="utf-8") as target:
+                os.fchmod(target.fileno(), 0o600)
+                json.dump(state, target)
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary, self.path)
+            directory = os.open(os.path.dirname(self.path) or ".", os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError as exc:
+            raise SessionError("登录保护状态无法保存；已停止账号提交。") from exc
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
+
+    @contextmanager
+    def locked(self) -> Iterator[dict]:
+        fd: Optional[int] = None
+        try:
+            os.makedirs(os.path.dirname(self.path) or ".", mode=0o700, exist_ok=True)
+            fd = os.open(self.path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+            os.fchmod(fd, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if fd is not None:
+                os.close(fd)
+            raise SessionError("登录保护锁不可用或有另一进程正在登录；已跳过账号提交。") from exc
+        try:
+            yield self._load()
+        finally:
+            os.close(fd)
+
+    def check(self, state: dict) -> None:
+        entry = state["accounts"].get(self.account_key)
+        if not entry:
+            return
+        if entry["outcome"] == "rejected":
+            raise LoginRejected(entry["code"],
+                                "已停止自动账号登录；持久化保护需人工核对后解除。")
+        if entry["outcome"] == "pending":
+            raise SessionError("上次账号请求结果不明；已停止自动账号登录，请先核对官方状态。")
+        elapsed = time.time() - entry["at"]
+        if elapsed < MIN_LOGIN_INTERVAL_S:
+            raise SessionError("登录过于频繁；共享冷却期间已跳过账号提交。")
+
+    def record(self, state: dict, outcome: str, code: str = "") -> None:
+        entry: dict = {"at": time.time(), "outcome": outcome}
+        if code:
+            entry["code"] = code
+        state["accounts"][self.account_key] = entry
+        self._save(state)
+
+    def blocked(self) -> bool:
+        try:
+            with self.locked() as state:
+                entry = state["accounts"].get(self.account_key, {})
+                return entry.get("outcome") in ("pending", "rejected")
+        except SessionError:
+            return True
 
 
 def _md5_hex(text: str) -> str:
@@ -192,9 +249,10 @@ class LoginCredentials:
         return _md5_hex(self.password)
 
     def masked(self) -> str:
-        u = self.uuid
-        return "name=%s uuid=%s… pwd=<%d 字符，已隐藏>" % (
-            self.name, u[:8], len(self.password))
+        return "name=<已配置> uuid=<已配置> pwd=<已配置>"
+
+    def __repr__(self) -> str:
+        return "LoginCredentials(%s)" % self.masked()
 
 
 class AppLoginClient:
@@ -211,14 +269,20 @@ class AppLoginClient:
         app_host: str = DEFAULT_APP_HOST,
         timeout: float = HTTP_TIMEOUT_S,
         signature: str = "",
+        signer: Optional[NativeAppSigner] = None,
+        login_state_path: Optional[str] = None,
     ) -> None:
         self.credentials = credentials
-        self.app_host = str(app_host).rstrip("/")
+        self.app_host = _safe_base_url(app_host)
         self.timeout = timeout
-        #: 登录本身**不需要**签名，但保留它以便与 App 请求头完全一致
-        #: （某些 CDN 会按头存在与否做风控，带上更稳）。
+        #: 若提供，必须是 /site/api 的签名，不能复用场馆的 /game/api 签名。
         self.signature = str(signature or "").strip()
         self.last_error = ""
+        self.signer = signer
+        self.login_submissions = 0
+        self.guard = LoginAttemptGuard(
+            login_state_path or os.environ.get(LOGIN_ENV_STATE) or DEFAULT_LOGIN_STATE_PATH,
+            credentials.name)
 
     def _headers(self) -> Dict[str, str]:
         h: Dict[str, str] = {
@@ -227,6 +291,7 @@ class AppLoginClient:
             "x-api-site": SITE_ID,
             "x-api-language": "CHS",
             "x-api-uuid": self.credentials.uuid,
+            "x-api-token": "",
             "x-api-currency": "CNY",
             "content-type": "application/json; charset=utf-8",
             "user-agent": "okhttp/4.12.0",
@@ -234,9 +299,31 @@ class AppLoginClient:
         }
         if self.signature:
             h[HEADER_PREFIX_SIGNATURE] = self.signature
+        if self.signer is not None:
+            h.update(self.signer.headers("/site/api"))
         return h
 
     def login(self) -> str:
+        """持有共享锁，并在发送前写入账号尝试，防止任何客户端实例重发。"""
+        try:
+            with self.guard.locked() as state:
+                self.guard.check(state)
+                if self.signer is not None:
+                    self.signer.initialize(self.app_host, self.credentials.uuid, self.timeout)
+                self.guard.record(state, "pending")
+                try:
+                    self.login_submissions += 1
+                    token = self._submit_login()
+                except LoginRejected as exc:
+                    self.guard.record(state, "rejected", exc.status_code)
+                    raise
+                self.guard.record(state, "success")
+                return token
+        except SessionError as exc:
+            self.last_error = str(exc)
+            raise
+
+    def _submit_login(self) -> str:
         """执行登录并返回新的 `x-api-token`。
 
         Returns:
@@ -253,7 +340,7 @@ class AppLoginClient:
             "password": self.credentials.password_md5,
             "Flag": 1,
             "Version": CLIENT_VERSION,
-            # 实测服务端不校验验证码；保留字段以与 App 请求一致
+            # 保留历史 App 格式；不能用于跳过当前网页验证流程。
             "Kaptchcate": KAPTC_TYPE_NO_CHECK,
         }
         url = self.app_host + LOGIN_PATH
@@ -266,12 +353,8 @@ class AppLoginClient:
                                         context=_ssl_ctx()) as resp:
                 raw = resp.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as exc:
-            body_txt = ""
-            try:
-                body_txt = exc.read().decode("utf-8", "replace")[:200]
-            except (OSError, ValueError):
-                body_txt = ""
-            self.last_error = "HTTP %d %s" % (exc.code, body_txt)
+            # 错误响应可能回显账号、token 或请求体，不写日志。
+            self.last_error = "HTTP %d" % exc.code
             raise SessionError("登录请求失败：%s" % self.last_error) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             self.last_error = str(exc)[:160]
@@ -281,49 +364,39 @@ class AppLoginClient:
             payload: Any = json.loads(raw)
         except ValueError as exc:
             self.last_error = "响应非 JSON"
-            raise SessionError("登录响应非 JSON：%s" % raw[:160]) from exc
+            raise SessionError(self.last_error) from exc
         if not isinstance(payload, Mapping):
+            self.last_error = "登录响应结构异常（非对象）"
             raise SessionError("登录响应结构异常（非对象）")
 
         status = payload.get("status_code")
-        message = str(payload.get("message") or "").strip()
         data = payload.get("data")
-
-        if status == IP_RESTRICTED or "ip限制" in message:
-            self.last_error = "status_code=%s message=%s" % (status, message)
-            raise SessionError(
-                "登录被**地区 IP 限制**拒绝（%s）。\n"
-                "这不是代码问题：实测 `venue/launch` 不限 IP，\n"
-                "只有 `user/login` 白名单。\n"
-                "当前使用的账号（%s / %s）看起来正常，无需检查口令。\n"
-                "可操作方案（任一）：\n"
-                "  1) 在允许的网络/服务器上跑一次登录，把得到的 x-api-token\n"
-                "     写入 %s（token 可长期复用，直到再次过期）；\n"
-                "  2) 或在该网络部署本服务；\n"
-                "  3) 或提供已登录的有效会话（%s / LEYU_SESSION_FILE）。"
-                % (self.last_error, LOGIN_ENV_NAME, LOGIN_ENV_PASSWORD,
-                   APP_ENV_TOKEN, APP_ENV_TOKEN))
-
-        if status == VERSION_TOO_LOW or "版本过低" in message:
-            self.last_error = "status_code=%s message=%s" % (status, message)
-            raise SessionError(
-                "登录被拒绝：客户端版本过低（%s）。\n"
-                "请把 CLIENT_VERSION 提升到当前 App 版本（抓包可见）。"
-                % self.last_error)
-
-        if status not in (OK_STATUS, str(OK_STATUS), None):
-            self.last_error = "status_code=%s message=%s" % (status, message)
-            raise SessionError(
-                "登录未成功（%s）。请核对账号/口令（%s / %s）。"
-                % (self.last_error, LOGIN_ENV_NAME, LOGIN_ENV_PASSWORD))
+        if (not isinstance(status, (str, int)) or isinstance(status, bool)
+                or not str(status).isdigit() or len(str(status)) > 8):
+            self.last_error = "登录响应缺少有效 status_code"
+            raise SessionError(self.last_error)
+        code = str(status)
+        if code != str(OK_STATUS):
+            details = {
+                "6002": "当前请求未获接受；不能仅凭状态码认定账号或口令错误。",
+                "6008": "当前请求未获接受；不能仅凭状态码认定账号或口令错误。",
+                "6003": "请求协议或签名未获接受，请核对 /site/api 登录请求。",
+                "6022": "需要在官方页面完成人机验证，再提供有效 token。",
+                "6030": "账号已触发登录失败次数限制，请按官方提示处理。",
+                str(IP_RESTRICTED): "地区 IP 限制，请检查官方登录要求。",
+                str(VERSION_TOO_LOW): "客户端版本过低，请核对当前 App 版本。",
+            }
+            detail = details.get(code, "请核对官方登录流程和请求协议。")
+            self.last_error = "status_code=%s" % code
+            raise LoginRejected(code, detail)
 
         token = ""
         if isinstance(data, Mapping):
             token = str(data.get("token") or "").strip()
         if not token:
-            raise SessionError("登录成功但响应未包含 token（data=%r）"
-                               % (data if not isinstance(data, (bytes, str))
-                                  else "<…>"))
+            self.last_error = "登录成功但响应未包含 token"
+            raise SessionError(self.last_error)
+        self.last_error = ""
         return token
 
 
@@ -365,6 +438,10 @@ class AppLoginSessionProvider(SessionProvider):
         self._lock = threading.RLock()
         self._token = ""
         self._token_at = 0.0
+        # 本实例冷却；客户端边界另有共享、持久化的账号保护。
+        self._login_attempt_at: Optional[float] = None
+        self.login_attempts = 0
+        self._login_rejection: Optional[LoginRejected] = None
         #: 两次登录的最小间隔（避免触发 30 次/分钟限流）
         self.min_relogin_interval_s = max(0.0, float(min_relogin_interval_s))
         self._load_token()
@@ -379,12 +456,22 @@ class AppLoginSessionProvider(SessionProvider):
         try:
             with open(path, encoding="utf-8") as fh:
                 d = json.load(fh)
-            tok = str((d or {}).get("token") or "").strip()
-        except (OSError, ValueError):
+            if not isinstance(d, dict) or d.get("account") != self._cache_account():
+                return
+            tok = d.get("token")
+            if not isinstance(tok, str) or not tok.strip():
+                return
+            at = float(d.get("at") or 0.0)
+        except (OSError, ValueError, TypeError):
             return
-        if tok:
-            self._token = tok
-            self._token_at = float((d or {}).get("at") or 0.0)
+        self._token = tok.strip()
+        self._token_at = at
+
+    def _cache_account(self) -> str:
+        """绑定账号、设备和网关，改配置后不得误用另一账号的 token。"""
+        credentials = self.client.credentials
+        identity = json.dumps([credentials.name, credentials.uuid, self.client.app_host])
+        return hashlib.sha256(identity.encode()).hexdigest()
 
     def _save_token(self, token: str) -> None:
         """落盘（原子写）；失败不影响继续使用（只是下次要重新登录）。"""
@@ -394,8 +481,11 @@ class AppLoginSessionProvider(SessionProvider):
         tmp = path + ".tmp"
         try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump({"token": token, "at": time.time()}, fh)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                os.fchmod(fh.fileno(), 0o600)
+                json.dump({"token": token, "at": time.time(),
+                           "account": self._cache_account()}, fh)
             os.replace(tmp, path)
         except OSError as exc:
             self.last_error = "token 缓存写入失败: %s" % exc
@@ -409,42 +499,52 @@ class AppLoginSessionProvider(SessionProvider):
 
     def acquire(self, previous: Optional[Session] = None) -> Session:
         """换取可用会话：必要时先登录拿 token，再 launch 换 requestId。"""
-        self.refreshes += 1
         with self._lock:
-            token = self._token
-            now = time.time()
-            # 上一次登录太近时，先沿用缓存 token 试一次，避免触发限流
-            may_login = (now - self._token_at) >= self.min_relogin_interval_s
+            # Serialize login and launch: both mutate the shared launcher credentials.
+            self.refreshes += 1
+            if self._token:
+                try:
+                    return self._launch(self._token)
+                except SessionError as exc:
+                    if not _looks_like_expired(exc):
+                        raise
+                    self._token = ""
 
-        # 1) 先用现有/缓存 token 试 launch（不登录，省一次风控面）
-        if token:
-            try:
-                return self._launch(token)
-            except SessionError as exc:
-                # token 过期（6001/0401013）→ 落到登录；其它错误直接抛
-                if not _looks_like_expired(exc):
-                    raise
+            if self._login_rejection is not None:
+                raise SessionError(
+                    "%s；已停止自动账号登录。请完成官方登录并更新 %s，"
+                    "核对协议和账号状态后人工解除持久化保护。"
+                    % (self._login_rejection, APP_ENV_TOKEN))
 
-        # 2) token 不可用 → 登录换新 token
-        if not may_login:
-            raise SessionError(
-                "登录过于频繁（距上次 %.1fs，下限 %.1fs）；"
-                "上游登录限流为 30 次/分钟，已跳过本次登录。"
-                % (time.time() - self._token_at, self.min_relogin_interval_s))
-        token = self._do_login()
-        return self._launch(token)
+            if self._login_attempt_at is not None:
+                elapsed = time.monotonic() - self._login_attempt_at
+            else:
+                elapsed = time.time() - self._token_at
+            if elapsed < self.min_relogin_interval_s:
+                raise SessionError(
+                    "登录过于频繁（距上次尝试 %.1fs，下限 %.1fs）；已跳过本次登录。"
+                    % (elapsed, self.min_relogin_interval_s))
+            token = self._do_login()
+            return self._launch(token)
 
     def _do_login(self) -> str:
         """登录并缓存 token；失败抛 SessionError（含可操作指引）。"""
+        with self._lock:
+            self._login_attempt_at = time.monotonic()
+            self.login_attempts += 1
         try:
             token = self.client.login()
-        except SessionError:
-            self.last_error = self.client.last_error
+        except SessionError as exc:
+            self.last_error = self.client.last_error or str(exc)
+            if isinstance(exc, LoginRejected):
+                self._login_rejection = exc
             raise
         with self._lock:
             self._token = token
             self._token_at = time.time()
             self.logins += 1
+            self.client.last_error = ""
+            self._login_rejection = None
         self._save_token(token)
         return token
 
@@ -468,23 +568,20 @@ class AppLoginSessionProvider(SessionProvider):
             if not token:
                 raise SessionError("登录返回空 token，无法启动场馆")
             creds.token = token
-            return launcher.acquire()
+            session = launcher.acquire()
+            self.last_error = ""
+            return session
         except SessionError:
             self.last_error = getattr(launcher, "last_error", "")
             raise
 
     def invalidate(self, session: Optional[Session] = None) -> None:
-        """标记 token 失效（下次 acquire 会重新登录）。
+        """业务会话失效不代表 App token 失效：下一次先重新 launch。
 
-        与 `AppSessionProvider` 不同：这里**必须**能作废 token，
-        否则业务会话失效后会一直拿旧 token 重试而不去登录。
-
-        ⚠️ 只清 token，**不动 `_token_at`**：后者记录「上次登录时刻」，
-        是限流的依据。若一并归零，`invalidate()` 就变成了绕开
-        限流检查的后门（本项目测试真实拓到）。
+        acquire 只在 launch 明确返回 token 过期时丢弃它并登录。
+        同时保留尝试冷却和业务拒绝状态，避免后台重复账号请求。
         """
-        with self._lock:
-            self._token = ""
+        return None
 
     def describe(self) -> Dict[str, Any]:
         return {
@@ -493,6 +590,10 @@ class AppLoginSessionProvider(SessionProvider):
             "credentials": self.client.credentials.masked(),
             "has_cached_token": bool(self.cached_token),
             "logins": self.logins,
+            "login_attempts": self.login_attempts,
+            "credential_submissions": self.client.login_submissions,
+            "login_blocked": self._login_rejection is not None or self.client.guard.blocked(),
+            "login_state": self.client.guard.path,
             "refreshes": self.refreshes,
             "token_cache": self.token_cache_path or "",
             "last_error": self.last_error or self.client.last_error,
@@ -518,8 +619,8 @@ def login_provider_from_env(
     """按环境变量构造登录型 provider；缺凭据时返回 None（交由上层回退）。
 
     需要：`LEYU_APP_LOGIN_NAME` + `LEYU_APP_LOGIN_PASSWORD` +
-    `LEYU_APP_UUID` + `LEYU_APP_SIGNATURE`（签名是站点级固定值，
-    登录本身不需要，但 launch 需要）。
+    `LEYU_APP_UUID`。登录签名使用 LEYU_APP_LOGIN_SIGNATURE（/site/api），
+    场馆签名使用 LEYU_APP_SIGNATURE（/game/api），不能互相回退。
 
     Args:
         env: 环境变量映射；默认取 `os.environ`。
@@ -543,7 +644,9 @@ def login_provider_from_env(
     client = AppLoginClient(
         creds,
         app_host=(e.get(APP_ENV_HOST) or "").strip() or DEFAULT_APP_HOST,
-        signature=signature,
+        signature=(e.get(LOGIN_ENV_SIGNATURE) or "").strip(),
+        signer=signer_from_env(e),
+        login_state_path=(e.get(LOGIN_ENV_STATE) or "").strip() or None,
     )
     # 延迟导入避免循环：本模块与 leyu_app_session 互不依赖对方顶层符号
     from .leyu_app_session import AppCredentials, AppSessionBootstrapper
@@ -552,6 +655,7 @@ def login_provider_from_env(
         AppCredentials((e.get(APP_ENV_TOKEN) or "").strip() or "pending", uuid),
         signature=signature,
         app_host=client.app_host,
+        signer=client.signer,
     )
     return AppLoginSessionProvider(
         client, launcher, token_cache_path=token_cache_path)
