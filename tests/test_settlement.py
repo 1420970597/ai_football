@@ -281,7 +281,10 @@ class TestCLV(unittest.TestCase):
     def test_finite_validation_and_calibration_consistency(self) -> None:
         from core.calibration import clv as calibration_clv
         for entry, close in ((2.2, 2.0), (2.0, 2.2), (2.0, 2.0)):
-            self.assertAlmostEqual(clv(entry, close), calibration_clv(entry, close))
+            got = clv(entry, close)
+            self.assertIsNotNone(got)
+            assert got is not None
+            self.assertAlmostEqual(got, calibration_clv(entry, close))
         for bad in (float("nan"), float("inf"), 10 ** 400):
             self.assertIsNone(clv(bad, 2.0))
             self.assertIsNone(clv(2.0, bad))
