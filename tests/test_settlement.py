@@ -11,7 +11,7 @@
   3. 上半场盘口**缺半场比分时必须 void**，不得用全场比分硬算
   4. 命中率/ROI 的**分母只含真正下注的行** —— 台账同时记录被门控
      拦截的盘口，若把它们也算成本金，ROI 会被稀释成接近 0
-  5. CLV = 收盘价/买入价 - 1（正 = 买得便宜）
+  5. CLV = 买入赔率/收盘赔率 - 1（正 = 拿到更高赔率）
   6. 台账落盘/重读一致，且同盘口多次决策取**最新一条**
 
     python3 -m unittest tests.test_settlement -v
@@ -258,16 +258,16 @@ class TestPnl(unittest.TestCase):
 
 
 class TestCLV(unittest.TestCase):
-    """CLV = 收盘价 / 买入价 - 1（正 = 买得比收盘便宜）。"""
+    """CLV = 买入赔率 / 收盘赔率 - 1（正 = 拿到更高赔率）。"""
 
     def test_positive_clv(self) -> None:
-        got = clv(2.0, 2.2)
+        got = clv(2.2, 2.0)
         self.assertIsNotNone(got)
         assert got is not None          # 收窄类型，供静态检查
         self.assertAlmostEqual(got, 0.1, places=6)
 
     def test_negative_clv(self) -> None:
-        got = clv(2.2, 2.0)
+        got = clv(2.0, 2.2)
         self.assertIsNotNone(got)
         assert got is not None
         self.assertAlmostEqual(got, -0.090909, places=5)
@@ -277,6 +277,17 @@ class TestCLV(unittest.TestCase):
         self.assertIsNone(clv(2.0, 0.0))
         self.assertIsNone(clv(1.0, 2.0))
         self.assertIsNone(clv(None, 2.0))  # type: ignore[arg-type]
+
+    def test_finite_validation_and_calibration_consistency(self) -> None:
+        from core.calibration import clv as calibration_clv
+        for entry, close in ((2.2, 2.0), (2.0, 2.2), (2.0, 2.0)):
+            got = clv(entry, close)
+            self.assertIsNotNone(got)
+            assert got is not None
+            self.assertAlmostEqual(got, calibration_clv(entry, close))
+        for bad in (float("nan"), float("inf"), 10 ** 400):
+            self.assertIsNone(clv(bad, 2.0))
+            self.assertIsNone(clv(2.0, bad))
 
 
 def _row(status: str, pnl: float, odds: float = 2.0, is_pick: bool = True,
@@ -451,7 +462,7 @@ class TestLedgerPersistence(unittest.TestCase):
         led.settle({"m1": {"ft": [1, 0], "closing": {key: 2.2}}})
         row = led.load()[0]
         self.assertAlmostEqual(row.closing_odds, 2.2)
-        self.assertAlmostEqual(row.clv or 0.0, 0.1, places=6)
+        self.assertAlmostEqual(row.clv or 0.0, 2.0 / 2.2 - 1, places=6)
 
     def test_stats_only_picks_by_default(self) -> None:
         led = DecisionLedger(self.root)
@@ -680,7 +691,7 @@ class TestClosingOddsCapture(unittest.TestCase):
         row = led.load()[0]
         clv = row.clv
         assert clv is not None
-        self.assertAlmostEqual(clv, 0.10, places=6)
+        self.assertAlmostEqual(clv, 2.0 / 2.2 - 1, places=6)
 
     def test_stats_expose_clv_mean(self) -> None:
         led = DecisionLedger(self.root)

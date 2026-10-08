@@ -468,14 +468,27 @@ class LiveBook:
         if not force and (now - self.last_save_at) < _LIVE_SAVE_INTERVAL_S:
             return False
         with self._lock:
-            payload = {
-                "version": 1,
-                "saved_at": datetime.now(timezone.utc).isoformat(),
-                "rows": [[r.mid, r.chpid, r.hv, r.oid, r.ot,
-                          round(_to_float(r.odds, 0.0), 6),
-                          _to_int(r.ts_ms, 0)]
-                         for r in self._rows.values()],
-            }
+            # Historical prices are archived separately. The current book must
+            # not accumulate obsolete option IDs for days (207k rows observed).
+            cutoff_ms = (time.time() - DEFAULT_QUOTE_MAX_AGE_S) * 1000
+            stale = [k for k, r in self._rows.items() if r.ts_ms < cutoff_ms]
+            for key in stale:
+                self._rows.pop(key, None)
+                keys = self._by_mid.get(key[0])
+                if keys is not None:
+                    keys.pop(key, None)
+                    if not keys:
+                        self._by_mid.pop(key[0], None)
+            rows = list(self._rows.values())
+        # Quotes are replaced, never mutated; format the frozen references
+        # outside the lock so decision snapshots can continue during writes.
+        payload = {
+            "version": 1,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "rows": [[r.mid, r.chpid, r.hv, r.oid, r.ot,
+                      round(_to_float(r.odds, 0.0), 6), _to_int(r.ts_ms, 0)]
+                     for r in rows],
+        }
         tmp = path.with_name(path.name + ".tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -534,9 +547,11 @@ class LiveBook:
                     f_odds = float(odds)
                 except (TypeError, ValueError):
                     continue
-                if f_odds <= 1.0:
+                if not math.isfinite(f_odds) or f_odds <= 1.0:
                     continue
                 i_ts = _to_int(ts_ms, 0)
+                if i_ts < now_ms - DEFAULT_QUOTE_MAX_AGE_S * 1000:
+                    continue  # Historical archives, not the current book, retain expired quotes.
                 # 反推写入时刻：让 age_s 等于行情的**真实**年龄。
                 # ts_ms 缺失（<=0）时无从判断 → 视为很旧（保持诚实，
                 # 避免把无法证明新鲜的行情算作活跃）。
@@ -997,6 +1012,7 @@ class RealtimeHub:
         trend_root: Optional[str] = None,
         resume: bool = True,
         on_price_change: Optional[Callable[[List[str]], None]] = None,
+        on_state_change: Optional[Callable[[List[str]], None]] = None,
     ) -> None:
         """
         Args:
@@ -1030,6 +1046,7 @@ class RealtimeHub:
         self.max_matches = max_matches
         #: 盘口变动回调（见 docstring 契约）
         self.on_price_change = on_price_change
+        self.on_state_change = on_state_change
 
         self.stats = RealtimeStats()
         self._lock = threading.RLock()
@@ -1040,6 +1057,11 @@ class RealtimeHub:
         self._scores: Dict[str, Tuple[int, int]] = {}
         self._status: Dict[str, Dict[str, Any]] = {}
         self._events: Dict[str, Deque[Dict[str, Any]]] = {}
+        self._info: Dict[str, Dict[str, Any]] = {}
+        self._versions: Dict[str, int] = {}
+        self._received_at: Dict[str, float] = {}
+        self._status_at: Dict[str, float] = {}
+        self._suspensions: Dict[str, Dict[str, float]] = {}
         self._finished: set = set()
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -1199,6 +1221,70 @@ class RealtimeHub:
 
     # -- 读取（只读，供 service/api 使用） ---------------------------------
 
+    def _changed_state(self, mid: str) -> None:
+        self._versions[mid] = self._versions.get(mid, 0) + 1
+        self._received_at[mid] = time.monotonic()
+
+    def seed_matches(self, matches: Sequence[Any]) -> None:
+        """Background REST enrichment; never performed by the decision worker."""
+        mids = []
+        now = time.monotonic()
+        with self._lock:
+            for match in matches:
+                mid = str(match.mid)
+                self._info[mid] = {
+                    "match_id": mid, "league": match.tournament,
+                    "home": match.home, "away": match.away,
+                    "sport": match.sport, "sport_id": match.sport_id,
+                }
+                if now - self._status_at.get(mid, 0) > 10:
+                    self._status[mid] = {**self._status.get(mid, {}),
+                                         "mst": match.minute, "mmp": match.period}
+                    self._status_at[mid] = now
+                if now - self._score_at.get(mid, 0) > 10:
+                    from core.live_model import valid_score
+                    score = valid_score(match.score)
+                    if score is not None:
+                        self._scores[mid] = score
+                        self._score_at[mid] = now
+                if match.is_finished:
+                    self._finished.add(mid)
+                self._changed_state(mid)
+                mids.append(mid)
+        self._notify_state_change(mids)
+        self._save_scores(force=True)
+
+    def decision_snapshot(self, mid: str) -> Dict[str, Any]:
+        """Copy score, status and quotes under the same writer lock."""
+        with self._lock:
+            return {
+                "match_id": mid, "info": dict(self._info.get(mid, {})),
+                "version": self._versions.get(mid, 0),
+                "received_at": self._received_at.get(mid, 0),
+                "score": self._scores.get(mid),
+                "score_age_s": self.score_age_s(mid),
+                "status_age_s": (time.monotonic() - self._status_at[mid]
+                                 if mid in self._status_at else None),
+                "status": dict(self._status.get(mid, {})),
+                "finished": mid in self._finished,
+                "suspended": bool(self._suspensions.get(mid)),
+                "suspended_ids": list(self._suspensions.get(mid, {})),
+                "events": [dict(e) for e in self._events.get(mid, ())],
+                "quotes": self.live.book(mid),
+            }
+
+    def state_version(self, mid: str) -> int:
+        with self._lock:
+            return self._versions.get(mid, 0)
+
+    def _notify_state_change(self, mids: Sequence[str]) -> None:
+        if self.on_state_change is None or not mids:
+            return
+        try:
+            self.on_state_change(list(dict.fromkeys(mids)))
+        except Exception as exc:  # noqa: BLE001
+            self.stats.last_error = "on_state_change: %s: %s" % (type(exc).__name__, exc)
+
     def trend(self, mid: str, chpid: str = "", hv: str = "") -> Dict[str, Any]:
         """某场某个盘口的走势摘要；不指定 chpid 时返回该场全部盘口。"""
         with self._lock:
@@ -1340,9 +1426,16 @@ class RealtimeHub:
         前者才是“现在每个选项多少钱”，后者只是“哪些刚跳过”。
         """
         # 实时表用全量 ticks（当前值），必须在过滤“变动”之前就写。
-        self.live.upsert_many(ticks)
         changed: List[PriceTick] = []
         with self._lock:
+            self.live.upsert_many(ticks)
+            for mid in dict.fromkeys(t.mid for t in ticks):
+                self._changed_state(mid)
+            for t in ticks:
+                suspended = self._suspensions.get(t.mid, {})
+                for pid, at in list(suspended.items()):
+                    if pid in (t.hid, t.chpid) and t.ts_ms > at * 1000:
+                        suspended.pop(pid, None)
             for t in ticks:
                 self._touch_seen(t.mid)
                 key = (t.mid, t.chpid, t.hv, t.oid)
@@ -1368,9 +1461,10 @@ class RealtimeHub:
             self._snapshots += len(ticks)
             self.stats.price_ticks += len(changed)
         # 落盘在锁外：磁盘 IO 不应阻塞推送消费
+        self._notify_state_change([t.mid for t in ticks])
         if changed:
-            self.trend_store.append_many(changed)
             self._notify_price_change(changed)
+            self.trend_store.append_many(changed)
         # 实时表落盘（节流 5s；内部自会判断是否需要写）。
         # 放在锁外，与走势落盘同理：磁盘 IO 不应阻塞推送消费。
         if ticks:
@@ -1408,7 +1502,7 @@ class RealtimeHub:
             if dq is None:
                 dq = deque(maxlen=MAX_EVENTS_PER_MATCH)
                 self._events[mid] = dq
-            dq.append(dict(event))
+            dq.append({**dict(event), "received_at": time.time()})
 
     def _handle_message(self, msg: Mapping[str, Any]) -> None:
         cmd = str(msg.get("cmd") or "")
@@ -1423,7 +1517,7 @@ class RealtimeHub:
                     self._record_ticks(ticks)
             return
 
-        if cmd in ("C103", "C1021"):
+        if cmd in ("C101", "C103", "C1021"):
             decoded = decode_push_payload(msg.get("cd"))
             if isinstance(decoded, Mapping):
                 parsed = parse_c103(decoded)
@@ -1433,8 +1527,10 @@ class RealtimeHub:
                         self._touch_seen(mid)
                         self._scores[mid] = score
                         self._score_at[mid] = time.monotonic()
+                        self._changed_state(mid)
                     self.stats.score_updates += 1
                     # 落盘赛果（见 ScoreStore：结束之后就再也拿不到了）
+                    self._notify_state_change([mid])
                     self._save_scores()
                 self._record_event(str(decoded.get("mid", "")),
                                    {"cmd": cmd, "cmec": decoded.get("cmec"),
@@ -1453,6 +1549,9 @@ class RealtimeHub:
                         "mst": decoded.get("mst"),
                         "ha": decoded.get("ha"),
                     }
+                    self._status_at[mid] = time.monotonic()
+                    self._changed_state(mid)
+                self._notify_state_change([mid])
                 self.stats.status_updates += 1
                 self._record_event(mid, {"cmd": cmd, "cmec": decoded.get("cmec")})
             return
@@ -1463,7 +1562,11 @@ class RealtimeHub:
             with self._lock:
                 for it in items:
                     if isinstance(it, Mapping):
-                        self._finished.add(str(it.get("mid", "")))
+                        mid = str(it.get("mid", ""))
+                        self._finished.add(mid)
+                        self._changed_state(mid)
+            self._notify_state_change([str(it.get("mid", ""))
+                                       for it in items if isinstance(it, Mapping)])
             self.stats.finished += len(items)
             # **关键**：比赛刚结束时把终场比分与结束标记落盘。
             # 这是结算**唯一**能拿到过时赛果的时机（之后上游不再提供），
@@ -1474,15 +1577,34 @@ class RealtimeHub:
         if cmd == "C110":
             decoded = decode_push_payload(msg.get("cd"))
             if isinstance(decoded, Mapping):
-                self._record_event(str(decoded.get("mid", "")),
-                                   {"cmd": cmd, "mc": decoded.get("mc")})
+                mid = str(decoded.get("mid", ""))
+                self._record_event(mid, {"cmd": cmd, "mc": decoded.get("mc")})
+                with self._lock:
+                    self._changed_state(mid)
+                self._notify_state_change([mid])
             return
+
+        if cmd == "C104":
+            decoded = decode_push_payload(msg.get("cd"))
+            if isinstance(decoded, Mapping):
+                mid = str(decoded.get("mid", ""))
+                self._record_event(mid, {"cmd": cmd, "hpid": decoded.get("hpid"),
+                                         "hs": decoded.get("hs"), "ms": decoded.get("ms")})
+                with self._lock:
+                    self._changed_state(mid)
+                self._notify_state_change([mid])
+            return  # Unknown schema is not evidence that the entire match is paused.
 
         if cmd == "C303":
             decoded = decode_push_payload(msg.get("cd"))
             if isinstance(decoded, Mapping):
                 mid = str(decoded.get("mid", ""))
-                self._status.setdefault(mid, {})["suspended_hpid"] = decoded.get("hpid")
+                with self._lock:
+                    pid = str(decoded.get("hpid") or decoded.get("chpid") or "unknown")
+                    self._suspensions.setdefault(mid, {})[pid] = time.time()
+                    self._status.setdefault(mid, {})["suspended_hpid"] = pid
+                    self._changed_state(mid)
+                self._notify_state_change([mid])
                 self._record_event(mid, {"cmd": cmd, "hpid": decoded.get("hpid")})
             return
 

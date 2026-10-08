@@ -1,3 +1,9 @@
+> 2026-10-08 TASK-25 当前生产：8001 API / 3003 控制台已发布真实足球优先的秒级研究工作台，导航收敛为工作台＋战绩。当前部署使用 `output/deploy/current.compose.json`，镜像 `ai_football-analytics-api:task25-live`，静态资源冻结；三容器healthy，每容器2核。自然token到期未触发，本轮未重新提交账号口令。
+>
+> 全量1071测试在宿主及Python3.12生产镜像均exit0（14 skipped）；mypy 57文件与ruff均exit0。真实足球滚动2048条响应P95=205.243ms，算法P95=1.893ms；120次请求的聚合测量在研究data目录。旧正式建议119条仍缺确认终场，不得报告为已结算战绩。模型继续研究观察，未证明独立收益优势。
+>
+> [实施计划与发布/回滚](architecture/live-expert-system.md) · [App原型与生产截图](prototypes/live-workbench.md) · [研究和完整证据](../reports/live-expert-decision/REPORT.md)。以下旧排查记录保留为历史，不作为当前采集故障的结论。
+
 # 交接文档（HANDOVER）
 
 > **项目**：`ai_football` —— 足球赛事数据采集 / 盘口经济学分析 / LLM 决策 / 本地统计
@@ -125,7 +131,7 @@ python3 -m unittest discover -s tests -q      # 1115 passed
 | 比分/结束 | `C103` 比分、`C109` 结束 → `ScoreStore` **落盘**（结算的唯一赛果来源） | `leyu_realtime.py` |
 | 大响应截断 | `IncompleteRead` 显式捕获 + 限长分块读 + 完整性校验 | `leyu_client.py` |
 | 会话链 | `h5-cookie → app-launch → **app-login**（新增）→ cmd/file/env` | `session.py` |
-| **登录续期** | 账号口令 → `x-api-token`（**推翻"必须人工"的旧结论**，见 §6.1） | `leyu_app_login.py` |
+| **登录续期** | 账号口令 → `x-api-token`（受当前上游验证要求限制，见 §6.1） | `leyu_app_login.py` |
 | 会话缓存 | `_session.json` 回退（token 过期后业务会话仍可用） | `session.py` |
 
 ### 2.2 决策链路（`service/`）
@@ -213,52 +219,182 @@ curl -s -X POST localhost:8000/api/v1/ledger/settle | python3 -m json.tool
 python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];print(len(d), sum(1 for v in d.values() if v.get('done')))"
 ```
 
-### 3.2 乐鱼凭据过期（P0，**唯一外部阻塞**）
+### 3.2 乐鱼鉴权与自动续期（2026-10-08 状态）
 
-> **🔔 2026-10-07 复核更新（设备已换 IP）：IP 闸门已通过，**不是**瓶颈。**
-> 旧结论「本机 IP 被 `6031 地区ip限制` 拦住」**已失效**。实测（走生产登录代码路径
-> `AppLoginClient.login()`，非仅探针）：用不存在的用户名打 `user/login` 得到
-> **`6008 用户名或密码错误`**，而非 `6031`。服务端**先校 IP 再校凭据**，
-> 故 6008 即证明出口 IP 已被放行。**现在只差正确的账号/口令。**
->
-> **🔔 2026-10-07 再次复核：`.env` 里那对注释掉的凭据已实测为「无效」。**
-> `.env` 中 `LEYU_APP_LOGIN_NAME` / `LEYU_APP_LOGIN_PASSWORD` **存在但整行被 `#` 注释掉**
-> （历史原因：早期误以为本机 IP 被封，写了「需在允许的网络上使用」——**该注释现在是错的**）。
-> 诊断脚本已**代验证**这对注释凭据：登录返回 `6008`，且与「不存在的账号」对照
-> **返回同一 code** —— 服务端不区分「账号不存在」与「口令错误」，
-> 故无法再细分，**这对凭据确实是失效的**。去掉 `#` 也不会变得可用，需换新的账号/口令。
->
-> ⚠️ **2026-10-08 附带修正**：`.env` 里那句「登录受上游 IP 白名单限制（6031），
-> 需在允许的网络上使用」是**过期且已证伪**的注释，已就地改正。它正是早期把
-> 故障误判为「IP 被封」的源头之一 —— 留着会让下一个人再去查一遍 IP。
-> 同时那两行注释掉的凭据已实测为**无效**（登录返回 6008，且与「不存在的账号」
-> 返回同一 code，服务端不区分账号不存在与口令错误）。
+**当前结论**：按用户最新指定的正常账号及列表凭据完成一次 App 登录，已取得
+有效 token 与场馆会话，后台实时采集和 3003 盘口页面已恢复。App 自动续期
+已启用，缓存加载验证通过；真实 token 自然到期续期尚未观察。详细恢复证据
+见本节末尾“账号冻结与跨进程保护”。以下失败响应均为恢复前的历史排查记录。
 
-> 一键诊断（新增，只读、脱敏）：`python3 tools/leyu_session_doctor.py`
-> —— 逐个 provider 试，报出谁成功/谁失败/为什么；自动探测 `.env` 里被注释掉的凭据
-> 并**代为验证**（区分「IP 被拦」与「凭据无效」）；附登录路径的 IP 闸门判定。
+**恢复前诊断记录**：旧 token 已过期；用户已将刚注册的账号口令填入 `.env`。
+现有 App 登录请求返回 6002，但这不能证明该账号无效，也不能排除请求协议不匹配。
+旧诊断曾使用伪口令和错误字段，不能作为凭据无效或 IP 闸门已通过的证据（issue #10）。
 
-**现象**：`venue/launch` 返回 `6001 token已过期`；当前靠 `_session.json` 缓存回退维持采集。
+**一手页面证据（A）**：用新账号走正常网页 `/entry/login` 流程，
+`/site/api/v1/user/member/kaptchcate` 返回 6022，页面显示人机验证。
+6022 是正常验证码模式，不是初始化失败；尚未发送账号登录请求。
+该页面的登录请求使用 h5 客户端、浏览器指纹和 `/site/api` 签名。
+直接发送历史 App 的 `Kaptchcate=99` 与完成该流程不等价。
 
-**实情**：
-- 抓包里那个 token 约 **10 小时后自然过期**（会话生命周期本就如此）；
-- **登录续期代码已实现**（`collector/leyu_app_login.py`），且链路已接好
-  （`collector/session.py::make_session_provider` 的 provider 链末位）；
-- 但它**默认不在链上**：`login_provider_from_env` 在缺 `LEYU_APP_LOGIN_NAME` /
-  `LEYU_APP_LOGIN_PASSWORD` 时返回 `None`（设计如此，便于回退）。当前 `.env`
-  里这两项为空，所以链上只有 `h5-cookie` 与 `app-launch`，两者都返回 `6001`。
-- `venue/launch` 与 `user/login` 都不再受 IP 限制（历史上只有 `user/login` 受限）。
+**当前 App 一手代码证据（A）**：从官网 App 下载入口取得全站 Android 2.0.1，
+`LoginDataSource.g/h` 确认 MD5 口令和默认 Kaptchcate=99。
+`SiteManager.a` / `ApiRetryInterceptKt.h` 为每次请求生成 AES-CBC 的
+`X-API-XXX`（毫秒时间加三位随机数）和 `X-API-HACK-XXXXX`（秒时间及 preInfo.ip）。
+后一个请求头绑定初始化 IP，**不绑定请求体**。
+旧固定 H5 签名与该流程不同。全站 App 网关的验证返回 6002，
+不能用于判断用户指定的体育 App 登录结果。
 
-**处置（当前唯一需要做的事）**：在 `.env` 填入账号口令即可启用自动续期：
+**用户体育 App 抓包证据（A）**：现已收到 `乐鱼app.zip`，包含 164 个 HTTP 请求。
+其中登录请求的业务码为 6000；口令编码、默认 Kaptchcate 和两个动态头
+与上述代码匹配。体育启动使用 `sport_android`、`x-inter-client=android`
+及原生启动字段。抓包账号与当前 `.env` 新账号不同。
+按抓包网关、初始化 IP 和动态头提交新账号一次，仍返回 6002；
+抓包旧账号对照请求返回 6030（已锁定），既有 token 启动返回 6001（已过期）。
+均未得到新 token。已停止重复账号提交，继续核对新账号注册入口与账号所属网关。
+这组结果不能证明新账号密码错误，也不能证明所有请求要求已被排除。
 
-```bash
-# .env —— 填入后重启服务，链会自动走「登录 → launch」拿到新 requestId
-LEYU_APP_LOGIN_NAME=<登录账号>
-LEYU_APP_LOGIN_PASSWORD=<登录口令明文>
+**恢复前线上复核（2026-10-08，一手证据 A；当时数据源未恢复）**：
+- 用户明确确认 `.env` 账号状态正常；不能据接口拒绝把结论改写为密码错误。
+- 根 `.env` 两项登录凭据与 Compose 生效值逐字一致，没有变量插值、引号或
+  首尾空格改变；原生 preInfo 返回 6000，测得客户端与响应 Date 偏差约 0.7 秒。
+- 配置的 App 网关与 H5 入口返回相同乐鱼站点信息。账号实际成功登录使用的
+  注册/登录域名仍未提供，尚不能核对新账号是否属于该入口。
+- 原生登录抓包协议为 h2；当前 urllib 客户端为 HTTP/1.1。
+  本轮一次生产 provider 登录返回 6002；App 的 kaptchcate 预检查返回 6022。
+  随后对齐 HTTP/2、gzip 与紧凑 JSON 的一次对照请求返回 6030（登录次数限制），
+  没有取得 token。继续提交这次对照不够谨慎，已经停止账号请求。
+  这些结果不能证明 HTTP/2 是此前失败的根因，不能把协议对照记录为修复成功。
+- `Domain2CallbackImplKt.g(username)` 仅上报域名测速日志，不负责按账号选择网关；
+  不能把它描述为遗漏的账号路由初始化。
+- 只读验证用户 App 抓包中的业务会话：原生请求网关与 launch 返回网关
+  均返回 AuthError 0401013，无法恢复采集；临时会话探测文件已删除，未写入缓存。
+- 生产 API 仍保留诊断 override 的后台登录暂停；新 token、有效业务会话和实时推送
+  均未取得。实时 connected/subscribed/messages/price_ticks 与 fresh_rows 均为 0。
+  下一步需要新账号实际注册或成功登录使用的域名，优先核对该站点的正常 App 流程。
+
+**代码修复（issues #12 / #14 / #15 / #16）**：
+- 整次 acquire 串行执行，网络失败也计入至少默认 30 秒的登录冷却。
+- 明确的上游登录业务拒绝会停止该 provider 的自动账号提交，invalidate 不会解除。
+- 当前 App 使用 `LEYU_APP_SIGNING_CONFIG` 指定的私有 JSON（routes → API 前缀 → key/iv），
+  初始化 IP 后生成两个动态头，登录和场馆共用签名实现。密钥不入库。
+- 兼容的固定登录签名 `LEYU_APP_LOGIN_SIGNATURE`（`/site/api`）与场馆签名
+  `LEYU_APP_SIGNATURE`（`/game/api`）分开配置，不再错误回退。
+- 成功登录得到的 token 缓存权限为 0600，并继续用于场馆续期和重启恢复。
+- 缓存绑定账号、设备和网关的 SHA-256 标识；换账号不复用旧账号缓存，旧无绑定缓存忽略。
+- 业务会话失效保留 App token，先重新 launch；launch 明确返回 token 过期才重登。
+- 配置变更需重新创建服务；issue #21 后的共享保护不会因重启解除账号拒绝记录。
+
+**恢复路径**：按用户要求优先核对当前官方 App 登录协议；也可在官方 App 登录后，将有效 x-api-token 更新到
+`.env` 的 `LEYU_APP_TOKEN`（网页 token 则同时更新 `LEYU_H5_TOKEN`），然后重新创建容器。
+已有有效 token 可自动 launch 换业务 requestId；token 本身过期后，
+账号自动登录能否成功仍取决于当前上游协议和验证要求，不能承诺永久无人值守。
+仅健康检查 200 或已有历史快照不代表实时数据已恢复。
+
+生产部署端口为 API 8001、控制台 3003；重建不得误用默认 8000。
+恢复前诊断期间曾通过临时 compose override 暂停后台账号登录；恢复后该暂停已清空。
+
+PR #13 早期验证：`./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q`
+为 1011 tests / 14 skipped（exit 0）；Docker Python 3.12 的 mypy 为 49 文件无错误、
+ruff 为 All checks passed（均 exit 0）；受限 pyright 为 0 errors / warnings（exit 0）。
+Python 文件在验证期间保持不变，语法编译通过。线上 App token 仍未取得，实时计数仍为零。
+
+私有签名文件放在已忽略的 `output/`，权限 0600；`.env` 设置
+`LEYU_APP_SIGNING_CONFIG=/app/output/playwright/leyu-app-signing-private.json`。
+JSON 为 `routes` 对象，包含空前缀、`/site/api`、`/game/api` 三个条目，
+每个条目有 UTF-8 `key`（16/24/32 字节）和 `iv`（16 字节）。
+取值从用户提供的 App 协议配置取得，不能提交私有文件或复制密钥到代码中。
+`LEYU_APP_HOST` 应指向已核对的体育 App 网关，不能套用全站下载 App 的默认网关。
+
+诊断工具（PR #11，基于 PR #13）：`python3 tools/leyu_session_doctor.py`
+默认不提交账号口令或执行登录命令；`--login` 显式允许一次生产 provider 登录。
+使用 Compose 解析 `.env`，不再用虚构字段或占位密码推断真实凭据状态。
+注释中的账号口令仅提示未生效，不自动启用；已取得的会话直接用于赛程验证，
+不再次 acquire。不显示账号、密码或原始异常；移除无依据的 IP 闸门探针结论。
+镜像包含该工具，生产诊断使用
+`docker exec ai_football_analytics_api python /app/tools/leyu_session_doctor.py`，
+读取容器实际配置，避免宿主工作区的旧脚本误导诊断。组合分支全量验证为
+1010 tests / 14 skipped（exit 0），Docker mypy 为 49 文件无错误、ruff 全绿、
+pyright 为 0 errors / warnings（均 exit 0）。
+
+#### 账号冻结与跨进程保护（issue #21）
+
+2026-10-08 用户提供账号列表后做了离线核对（证据 A）：列表第 3 行与
+`.env` 为同一账号，但 `.env` 密码多一个字符；Compose 确实原样读取该值。
+这证明两份配置不一致，不能推断用户记错密码。MD5 计算与官方 Android
+代码一致；动态请求头与成功抓包的离线契约一致，仍不等于当前线上登录成功。
+此前 6002 后又提交协议对照请求，随后返回 6030；不得用更多账号请求复核冻结。
+
+保护缺陷已确认：旧 `_login_rejection` 仅在 provider 内存，重启、独立诊断、
+直接调用客户端均可丢失保护。现在登录客户端使用共享文件锁和原子状态文件，
+默认 `/app/output/auth/_app_login_state.json`（宿主映射至仓库 `output/auth/`），
+也可用 `LEYU_APP_LOGIN_STATE` 指定所有进程共用的路径。保护按站点及账号绑定，
+密码、设备或网关变化不会自动解除。文件仅保存账号散列、时间、结果和业务码，
+不保存账号明文、密码、MD5、设备或 token；新文件权限 0600。
+
+| 情况 | 处理 |
+| --- | --- |
+| 已有有效 App token | 直接 launch，不提交账号 |
+| 登录成功 | 保存成功时间，30 秒共享冷却后允许正常续期 |
+| 上游业务拒绝，包括 6002/6030 | 持久化停止重试，重启仍有效 |
+| 请求已发但超时、崩溃或响应无法确认成功 | 保留 pending，停止自动重发 |
+| 初始化失败，尚未发送账号请求 | 不写账号提交记录，可按 provider 冷却重试 |
+| 状态文件损坏、不可写或锁被另一进程持有 | 停止本次账号提交 |
+
+```mermaid
+flowchart LR
+    A[账号登录] --> B[共享锁与账号记录]
+    B --> C{拒绝或结果不明?}
+    C -->|是| D[停止提交，人工核对]
+    C -->|否且冷却结束| E[持久化 pending]
+    E --> F[发送一次请求]
+    F -->|成功| G[保存成功时间与 token]
+    F -->|业务拒绝| H[保存拒绝码]
+    F -->|超时或进程中断| D
 ```
 
-其余可选路径（按需）：注入 `LEYU_REQUEST_ID` / `LEYU_SESSION_FILE` / `LEYU_LOGIN_COMMAND`，
-或直接更新 `LEYU_APP_TOKEN`（约 10h 有效）。
+生产诊断在容器内运行，以便共用 output 卷；诊断保留 App token 缓存和保护
+状态，只跳过业务会话的历史回退。`--login` 也受共享保护约束。
+官方确认解冻且核定凭据/协议之后才可人工解除指定账号记录；不得通过删除
+锁文件、换设备、换网关或轮换列表账号继续尝试。初次部署曾为已有 6030 账号
+预置拒绝记录并暂停后台登录，随后按用户确认恢复，见下文。
+`list.txt` 已加入忽略规则；本机文件设为 0600，不提交内容。
+
+**2026-10-08 线上恢复验证（证据 A）**：用户明确指定列表中原账号状态正常，
+要求恢复采集。仅解除该账号的历史保护记录，使用已与列表一致的 `.env`
+密码执行一次生产 App 登录：成功取得 token、场馆业务会话，赛程读取
+**2196 场**（不是全部进行中比赛）。本轮账号提交 **1 次**，没有轮换账号。
+
+App 登录取得的新 token 写回私有 `.env`，沿既有 provider 链换取业务会话；启用
+`LEYU_SESSION_CACHE=/app/output/auth/_session.json`，App token 缓存位于同目录
+`_app_token.json`。旧暂停 override 已清空，后续使用旧部署命令也不会覆盖
+账号口令为空。账号拒绝/结果不明保护继续生效，不会自动解除。
+生产进程确认 token 缓存可加载、与运行配置一致；自动登录续期已启用。
+尚未等待真实 token 自然到期，不能把缓存验证称为到期续期实测。
+
+后台恢复后，WebSocket 建立连接并订阅 **65 场**，随赛事结束继续更新订阅。
+两次采样间隔 **32.7 秒**，推送新增 **1395 条**、盘口变动新增 **5478 次**、
+赔率快照新增 **18193 条**；第二次采样新鲜盘口 **9916 条**，最新报价年龄
+**1.2 秒**，重连次数 **0**。这些是当时测量值，会随赛事状态变化。
+`3003/api/v1/realtime` 和盘口 API 均返回 200；Playwright 实测控制台显示
+“实时推送已连接”，盘口页显示 **46 场 / 2149 个表格行**，空态及错误态未显示，
+控制台错误数 0。默认生产诊断（不提交账号）读取 **2213 场**，exit 0：
+
+```bash
+docker exec ai_football_analytics_api python /app/tools/leyu_session_doctor.py
+```
+
+生产 compose 恢复命令及采样断言均 exit 0：
+
+```bash
+ANALYTICS_PORT=8001 CONSOLE_PORT=3003 AI_FOOTBALL_CPUS=2 \
+  docker compose -f docker/docker-compose.yml \
+  -f output/deploy/console-fixes.compose.json \
+  up -d --no-deps --wait --wait-timeout 60 analytics-api
+```
+
+生产保持 API 8001 / 控制台 3003，三容器各 2 核。仅运行配置和文档更新，
+业务代码仍为已通过 1025 用例的 `2b8b548`。私有凭据、token、账号列表和
+截图/采样产物均保留于已忽略的本机路径，不提交 Git。
 
 ### 3.3 进行中场次与乐鱼"完全一致"（P1）
 
@@ -423,14 +559,13 @@ output/
 
 > 这些都是**真实故障**，不是假想。多数已被测试锁定，改代码时别把它们改回去。
 
-### 6.1 登录续期：旧结论是错的
+### 6.1 登录续期：区分历史协议与当前验证要求
 
-`leyu_app_session.py` 原本断言"token 无法自动续期，因为登录有人机验证"。
-**抓包推翻了它**：登录请求体 `"Kaptchcate": 99`，服务端**不校验验证码**。
-不需要"绕过"，因为它根本没启用。
-
-`x-api-xxx` 也**不需要逆向**：实测是**站点级固定值**
-（抓包值与 `.env` 里的都可过，垃圾值 6003，改 body/换路径复用同一签名仍成功）。
+历史文档根据 `乐鱼app.zip` 宣称所有登录无需验证码；现已收到并复核该文件，
+只能证明其中账号在 2026-10-05 的 App 请求成功，不能推导所有账号始终无需验证。
+2026-10-08 正常网页已显示人机验证（6022）。
+本项目不处理或跳过该验证；离线 mock 测试只验证缓存、并发和失败保护。
+固定签名按 API 前缀配置；当前 App 使用初始化 IP 和动态签名，不能复用历史固定头。
 
 ### 6.2 有过期价 → 凭空造出注单
 

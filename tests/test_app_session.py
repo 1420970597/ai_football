@@ -83,7 +83,8 @@ class TestCredentials(unittest.TestCase):
         c = AppCredentials("s" * 96, "u" * 16)
         m = c.masked()
         self.assertNotIn("s" * 96, m)
-        self.assertIn("ssssss", m)
+        self.assertNotIn("ssssss", m)
+        self.assertNotIn("u" * 16, m)
 
     def test_repr_is_masked(self) -> None:
         c = AppCredentials("s" * 96, "u" * 16)
@@ -207,7 +208,7 @@ class TestSignatureAndHost(unittest.TestCase):
         self.assertIn(HEADER_PREFIX_SIGNATURE, msg)
         self.assertIn(APP_ENV_SIGNATURE, msg)
         # 必须解释这是什么、怎么拿
-        self.assertIn("站点级", msg)
+        self.assertIn("LEYU_APP_SIGNING_CONFIG", msg)
 
     def test_headers_carry_required_fields(self) -> None:
         bs = _bs()

@@ -293,6 +293,8 @@ class ApiApp:
             # 但**没有任何端点暴露它**，调用方无从查看。
             ("GET", "/analysis", self.h_analysis),
             ("GET", "/board", self.h_board),
+            ("GET", "/workbench", self.h_workbench),
+            ("GET", "/workbench/<id>", self.h_workbench_detail),
             ("GET", "/llm", self.h_llm),
             ("GET", "/ledger/stats", self.h_ledger_stats),
             # 历史战绩：分日期/联赛/盘口 的分组统计 + 逐条明细（含实际比分）。
@@ -548,6 +550,55 @@ class ApiApp:
 
     # -- 决策与实时（T5/T7） ------------------------------------------------
 
+    def h_workbench(self, query: Mapping[str, List[str]],
+                    body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        kind = _q1(query, "type", "real")
+        if kind not in ("real", "virtual", "unknown", "all"):
+            raise BadRequest("type 必须是 real/virtual/unknown/all")
+        result = self.analysis.live_expert.results(kind)
+        rt = self.analysis.realtime
+        # A one-second UI poll must not scan/lock the complete persisted book.
+        realtime = ({"running": rt.running, **rt.stats.as_dict()} if rt is not None
+                    else {"running": False, "connected": 0})
+        rows = []
+        for row in result.pop("decisions"):
+            public = self._public_live_row(row, bool(realtime.get("connected")))
+            # All markets remain available in details; the list stays compact.
+            displayed = []
+            for family in ("HAD", "AH", "OU"):
+                options = [m for m in row["markets"] if m["market"] == family]
+                options.sort(key=lambda m: abs(m["quotes"][0]["p_market"] - .5))
+                if options:
+                    displayed.append(options[0])
+            public["markets"] = displayed
+            public.pop("events", None)
+            rows.append(public)
+        rows.sort(key=lambda r: (r["stale"], r.get("league", ""), r["match_id"]))
+        result.update(matches=rows, realtime=realtime, generated_at=datetime.now(timezone.utc).isoformat())
+        return result
+
+    @staticmethod
+    def _public_live_row(row: Mapping[str, Any], connected: bool) -> Dict[str, Any]:
+        import time
+        public = dict(row)
+        age = max(0, time.time() - _as_float(row.get("published_at_ms")) / 1000)
+        quote_age = max(0, time.time() - _as_float(row.get("quote_time_ms")) / 1000)
+        public.update(result_age_s=round(age, 1), quote_age_s=round(quote_age, 1),
+                      stale=not connected or age > 15 or quote_age > 15)
+        if public["stale"]:
+            public["picks"] = []
+            public["has_buy"] = False
+        return public
+
+    def h_workbench_detail(self, query: Mapping[str, List[str]],
+                           body: Mapping[str, Any], match_id: str) -> Dict[str, Any]:
+        row = self.analysis.live_expert.detail(match_id)
+        if row is None:
+            raise NotFound("该场尚未收到实时算法结果")
+        rt = self.analysis.realtime
+        connected = bool(rt is not None and rt.stats.connected)
+        return self._public_live_row(row, connected)
+
     def h_decisions(self, query: Mapping[str, List[str]],
                     body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
         """决策列表（**默认读后台定时产生的结果，不触发 LLM**）。
@@ -588,6 +639,32 @@ class ApiApp:
             age_s = self.analysis.latest_age_s()
             stale = bool(max_age and age_s is not None and age_s > max_age)
             out = dict(res)
+            date = _q1(query, "date")
+            league = _q1(query, "league")
+            keyword = (_q1(query, "q") or "").strip().casefold()
+            if date or league or keyword:
+                # Older persisted decisions lack kickoff dates. Resolve them
+                # from local snapshots only when a date filter is requested.
+                dated_ids = ({str(m["match_id"])
+                              for m in self.svc.list_matches(date=date)}
+                             if date else None)
+                rows = [d for d in (res.get("decisions") or [])
+                        if (dated_ids is None or str(d.get("match_id")) in dated_ids)
+                        and (not league or d.get("league") == league)
+                        and (not keyword or keyword in " ".join(
+                            str(d.get(k) or "") for k in
+                            ("match_id", "league", "home", "away")).casefold())]
+                out["decisions"] = rows
+                out["count"] = len(rows)
+                out["summary"] = {
+                    **(res.get("summary") or {}),
+                    "n": len(rows),
+                    "buy": sum(bool(d.get("picks")) for d in rows),
+                    "watch": sum(d.get("decision") == "watch" for d in rows),
+                    "avoid": sum(d.get("decision") == "avoid" for d in rows),
+                    "no_llm": sum(d.get("decision") == "no_llm" for d in rows),
+                    "n_picks": sum(len(d.get("picks") or []) for d in rows),
+                }
             out["cached"] = True
             # 如实的时效标注：前端据此提示“数据较旧，后台正在重算”
             out["stale"] = stale
@@ -785,8 +862,21 @@ class ApiApp:
                 "decided_at": str(dec.get("computed_at") or ""),
             }
             self._fill_live_state(row, mid, rt)
-            if with_markets:
-                row["markets"] = self._board_markets(m, dec, describe_market)
+            # Even list-only callers must not see a buy at an obsolete price.
+            row["markets"] = self._board_markets(m, dec, describe_market)
+            markets = row["markets"]
+            valid_markets = {mk["market"] for mk in markets
+                             if mk["decided"] and not mk["decision_stale"]}
+            row["decision_stale"] = any(mk["decision_stale"] for mk in markets)
+            row["picks"] = [p for p in row["picks"]
+                            if p.get("market") in valid_markets]
+            row["has_buy"] = bool(row["picks"])
+            row["best_label"] = (str(max(row["picks"],
+                key=lambda p: _as_float(p.get("edge"))).get("pick_label") or "")
+                if row["picks"] else "")
+            row["gated_in"] = sum(bool(mk["gate_passed"]) for mk in markets)
+            if not with_markets:
+                del row["markets"]
             rows.append(row)
 
         # 排序：有买入建议 → 进行中 → 其余；同级按开赛时间
@@ -890,9 +980,11 @@ class ApiApp:
                                         source=src_name)
             odds_by: Dict[str, List[float]] = {}
             outs_by: Dict[str, List[str]] = {}
+            lines_by: Dict[str, str] = {}
             for s in snaps:
                 odds_by[s.market] = [round(o, 4) for o in s.odds]
                 outs_by[s.market] = list(s.outcomes)
+                lines_by[s.market] = str((s.metadata or {}).get("leyu_hv") or "")
             out.append({
                 "match_id": mid,
                 "league": lg,
@@ -905,6 +997,8 @@ class ApiApp:
                 "markets": sorted(odds_by),
                 "latest_odds": odds_by,
                 "latest_outcomes": outs_by,
+                "latest_lines": lines_by,
+                "_quote_source": "live",
             })
 
         # 2) 兜底：无实时行情的场次（未开赛/未被订阅）。
@@ -990,8 +1084,8 @@ class ApiApp:
                     for oc in outcomes]
 
         comps = dec.get("computations") or []
+        out: List[Dict[str, Any]] = []
         if comps:
-            out: List[Dict[str, Any]] = []
             for c in comps:
                 if not isinstance(c, Mapping):
                     continue
@@ -1023,20 +1117,23 @@ class ApiApp:
                     "gates": list(c.get("gates") or []),
                     "decided": True,
                 })
-            out.sort(key=lambda r: r["market"])
-            return out
-        # 回退：只有赔率（该场尚未决策）
+        # Merge current markets, including newly quoted ones, then align each
+        # computation with its actual input prices. Never relabel cached prices
+        # as live, or apply an old edge/gate to a changed quote.
         odds_by = m.get("latest_odds") or {}
         oc_by = m.get("latest_outcomes") or {}
-        out = []
+        existing = {r["market"] for r in out}
         for mk in sorted(odds_by):
+            if mk in existing:
+                continue
             outs = list(oc_by.get(mk) or [])
+            line = str((m.get("latest_lines") or {}).get(mk) or "")
             out.append({
                 "market": str(mk),
                 "label": describe(mk),
-                "line": "",
+                "line": line,
                 "outcomes": outs,
-                "outcome_labels": _labels(mk, "", outs),
+                "outcome_labels": _labels(mk, line, outs),
                 "odds": list(odds_by.get(mk) or []),
                 "p_fair": [], "edges": [], "kellys": [],
                 "margin": 0.0, "state": "", "method": "",
@@ -1045,6 +1142,40 @@ class ApiApp:
                 "best_edge": 0.0, "best_outcome": "", "gates": [],
                 "decided": False,
             })
+        for row in out:
+            mk = row["market"]
+            decision_odds = list(row["odds"]) if row["decided"] else []
+            decision_outcomes = list(row["outcomes"])
+            current_odds = list(odds_by.get(mk) or [])
+            current_outcomes = list(oc_by.get(mk) or [])
+            available = bool(current_odds and len(current_odds) == len(current_outcomes))
+            same = (available and row["outcomes"] == current_outcomes
+                    and len(decision_odds) == len(current_odds)
+                    and all(round(_as_float(a), 4) == round(_as_float(b), 4)
+                            for a, b in zip(decision_odds, current_odds)))
+            prices_by_outcome = dict(zip(decision_outcomes, decision_odds))
+            row["decision_odds"] = ([prices_by_outcome.get(oc)
+                                     for oc in current_outcomes]
+                                    if available else decision_odds)
+            row["decided_at"] = str(dec.get("computed_at") or "")
+            row["quote_available"] = available
+            row["quote_source"] = str(m.get("_quote_source") or "snapshot")
+            row["decision_stale"] = bool(row["decided"] and not same)
+            row["odds"] = current_odds if available else []
+            if available:
+                row["outcomes"] = current_outcomes
+                row["outcome_labels"] = _labels(mk, row["line"], current_outcomes)
+            if row["decision_stale"]:
+                for field in ("p_fair", "edges", "kellys", "gates"):
+                    row[field] = []
+                row["gate_passed"] = False
+                row["reject_reasons"] = ["quote_changed" if available else "quote_unavailable"]
+                row["margin"] = None
+                row["best_edge"] = None
+                row["trend"] = ""
+                row["trend_pct"] = 0
+                row["trend_n"] = 0
+        out.sort(key=lambda r: r["market"])
         return out
 
     # -- 决策台账与本地统计（回答“LLM 判定到底准不准”） ---------------------
@@ -1087,8 +1218,11 @@ class ApiApp:
         only_picks = (_q1(query, "all") or "") not in ("1", "true", "yes")
         limit = _q_int(query, "limit", 300, minimum=1, maximum=2000)
         days = _q_int(query, "days", 0, minimum=0, maximum=3650)
+        kind = _q1(query, "type")
+        if kind not in (None, "all", "real", "virtual", "unknown"):
+            raise BadRequest("type 必须是 real/virtual/unknown/all")
         return self.analysis.ledger_history(only_picks=only_picks,
-                                            limit=limit, days=days)
+                                            limit=limit, days=days, competition_type=kind)
 
     def h_ledger_entries(self, query: Mapping[str, List[str]],
                          body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
@@ -1329,7 +1463,7 @@ def _start_background(
         hub = RealtimeHub(provider, mids_provider=_mids,
                           max_matches=max_matches, trend_root=trend_root,
                           resume=True,
-                          on_price_change=ana.notify_price_change)
+                          on_state_change=ana.notify_price_change)
         hub.start()
         print("走势持久化: %s" % hub.trend_store.health())
 
