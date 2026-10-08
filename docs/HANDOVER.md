@@ -1,3 +1,9 @@
+> 2026-10-08 TASK-25 当前生产：8001 API / 3003 控制台已发布真实足球优先的秒级研究工作台，导航收敛为工作台＋战绩。当前部署使用 `output/deploy/current.compose.json`，镜像 `ai_football-analytics-api:task25-live`，静态资源冻结；三容器healthy，每容器2核。自然token到期未触发，本轮未重新提交账号口令。
+>
+> 全量1071测试在宿主及Python3.12生产镜像均exit0（14 skipped）；mypy 57文件与ruff均exit0。真实足球滚动2048条响应P95=205.243ms，算法P95=1.893ms；120次请求的聚合测量在研究data目录。旧正式建议119条仍缺确认终场，不得报告为已结算战绩。模型继续研究观察，未证明独立收益优势。
+>
+> [实施计划与发布/回滚](architecture/live-expert-system.md) · [App原型与生产截图](prototypes/live-workbench.md) · [研究和完整证据](../reports/live-expert-decision/REPORT.md)。以下旧排查记录保留为历史，不作为当前采集故障的结论。
+
 # 交接文档（HANDOVER）
 
 > **项目**：`ai_football` —— 足球赛事数据采集 / 盘口经济学分析 / LLM 决策 / 本地统计

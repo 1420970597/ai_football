@@ -165,7 +165,35 @@ function clearFallback() {
 <ul><li>A <a href="https://github.com/statsbomb/open-data">StatsBomb Open Data 与使用条款</a>：公开研究需署名，非完整实时授权。</li><li>A <a href="https://live-data-api-guide.statsbomb.com/">StatsBomb Live 指南</a>：事件与订阅 schema，已读取。</li><li>A <a href="https://developer.sportradar.com/soccer/docs/soccer-ig-live-match-retrieval">Sportradar Live Match Updates</a>：已读取。</li><li>A <a href="https://www.statsperform.com/products/opta-data/">Opta 产品页</a>：已读取，不能推导量化延迟或收益。</li><li>A <a href="https://github.com/betfair/stream-api-sample-code">Betfair 官方流客户端</a>：README 缓存/批量变更已读取；developer.betfair.com 本轮403，未声称读到其正文。</li><li>B <a href="https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf">Proper scoring 原文 PDF</a>：已提取正文。</li><li>A <a href="https://www.itl.nist.gov/div898/handbook/prc/section2/prc241.htm">NIST 比例区间</a>。</li><li>B <a href="https://arxiv.org/abs/2106.00170">Adaptive Conformal Inference</a>。</li></ul>
 <p>Crossref 已核验以上三个足球论文的题名/DOI/摘要；不把只有摘要的论文写成全文复现。两次检索 JSON 解码失败未作证据；arXiv:0803.0614 实际题名是 Fitness, chance, and myths，未误标为 birth-process 论文。未使用 SEO 荐单站做能力证据。</p>
 <h2>可复现命令</h2>
-<p>图表在限2核 Docker 中，挂载 <code>/usr/share/fonts/truetype/wqy</code>，运行 <code>scripts/make_figures.py</code>；默认生成1图/1CSV。HTML 复用现有报告渲染器 <code>reports/leyu-kaiyun-odds-bot-feasibility/scripts/md_to_html.py</code>，支持 Mermaid 与离线文本回退。实施后附回放结果、性能实测与 UI 截图，目标值和实测值分列。</p>
+<p>图表在限2核 Docker 中，挂载 <code>/usr/share/fonts/truetype/wqy</code>，运行 <code>scripts/make_figures.py</code>；默认生成2图/4CSV（其中3份来自公开回放）。HTML 复用现有报告渲染器 <code>reports/leyu-kaiyun-odds-bot-feasibility/scripts/md_to_html.py</code>，支持 Mermaid 与离线文本回退。实施后附回放结果、性能实测与 UI 截图，目标值和实测值分列。</p>
+<h2>已执行的真实历史回放（A，2026-10-08）</h2>
+<p>StatsBomb Open Data 固定提交 <code>4b73468fc5b0f1950f9f66fada70ad3a4f9327cb</code>，2018世界杯64场仅用于训练，2022世界杯64场仅用于验证；比赛事件仅提取常规上下半场进球，不用加时和点球大战当标签。感谢 StatsBomb 提供开放数据；使用条款见官方仓库 LICENSE.pdf。数据与 CSV 分别落在 data/public-matches.csv、public-goals.csv、public-replay.csv。</p>
+<p>这是<strong>独立公开进球率基线</strong>的回放，与线上<strong>市场拟合基线</strong>不同。它验证比分/时间条件模型的数学和评估流程，没有验证乐鱼交易优势，也没有把世界杯的进球率直接套到线上所有联赛。</p>
+<div class="tw"><table><thead><tr><th>决策分钟</th><th>方向命中率（64场）</th><th>Brier</th><th>Log loss</th><th>无赛况基线 Brier</th></tr></thead><tbody><tr><td>15</td><td>42.2%</td><td>0.6573</td><td>1.0893</td><td>0.6447</td></tr><tr><td>30</td><td>53.1%</td><td>0.6021</td><td>1.0049</td><td>0.6447</td></tr><tr><td>45</td><td>56.3%</td><td>0.5186</td><td>0.8821</td><td>0.6447</td></tr><tr><td>60</td><td>71.9%</td><td>0.3946</td><td>0.6989</td><td>0.6447</td></tr><tr><td>75</td><td>76.6%</td><td>0.3524</td><td>0.6306</td><td>0.6447</td></tr><tr><td>85</td><td>92.2%</td><td>0.1377</td><td>0.2672</td><td>0.6447</td></tr></tbody></table></div>
+<p><img alt="真实公开比赛回放与校准" src="images/public-replay.png"></p>
+<p>每场取第一次预测概率达到85%的检查点，最终64场全部覆盖，55场命中：85.94%，Wilson95%区间75.38%–92.42%。同一场其他检查点不重复进入此区间。早段表现甚至逊于无赛况基线，不能把85分钟92.2%包装成全场专家正确率。末段高命中主要受已知比分和短剩余时间影响，且补时未知可能导致过度自信。</p>
+<p><strong>没有同期赔率，ROI和相对市场优势均未知</strong>。故线上继续显示研究观察；若要升级可信推荐，需要新增同源盘口/赛况/终场的前瞻样本，按比赛和时间验证支付函数、概率、收益与覆盖率。目前已启用滚动输入日志供下一阶段评价。</p>
+<p>复现：<code>./scripts/cpu-limited.sh run -- python3 reports/live-expert-decision/scripts/public_replay.py --cache &lt;公开数据缓存目录&gt;</code>（本轮 exit0）；图表2张、CSV4份（Wilson + 比赛 + 进球 + 回放），另有1份 JSON 汇总。</p>
+<h2>生产验收与真实延迟（A，2026-10-08）</h2>
+<p>端口3003工作台、8001 API已发布。最终镜像为 <code>sha256:49f0026cda2a8835050cc4f34d2da99815048884ed1f304a1323c261934c972e</code>。保留原 App 会话与共享登录保护；本轮没有重新提交账号口令。三容器均 healthy，实际 <code>cpu.max</code> 均为 <code>200000 100000</code>（每容器2核）。</p>
+<p>正式采样窗口：UTC 16:50:53–16:52:52，120次 HTTP 请求；期间计算累计2411→4013，页面真实足球26→25场，连接保持1，重连/计算错误/日志丢弃/过期版本发布均为0。延迟分位数采用最多2048条的滚动窗口；真实足球最后一窗有2048条，不把分位数当全生命周期统计。</p>
+<div class="tw"><table><thead><tr><th>指标</th><th>验收目标</th><th>实测</th><th>测量口径</th></tr></thead><tbody><tr><td>真实足球接收到结果 P95</td><td>≤1000ms</td><td>205.243ms；采样期间最高报告值221.576ms</td><td>本机最早合并事件到结果发布，不包含球场到上游及网络传输</td></tr><tr><td>算法计算 P95</td><td>≤100ms</td><td>1.893ms；采样期间最高报告值1.983ms</td><td>本地模型计算，未调用 REST/LLM</td></tr><tr><td>真实足球 P99 / 最大值</td><td>观察尾延迟</td><td>430.032 / 675.043ms</td><td>最后2048条滚动窗口</td></tr><tr><td>工作台 HTTP P95</td><td>观察响应</td><td>未压缩13.060ms；gzip12.174ms</td><td>各60次同机请求，含传输，不是远程客户端测速</td></tr><tr><td>工作台响应体</td><td>降低传输量</td><td>未压缩平均63805字节；gzip平均9853字节</td><td>两组不同时间请求的均值，非同一快照的精确压缩率</td></tr></tbody></table></div>
+<p>原版本在发布后短时出现真实足球 P95≈1467ms。进一步检查发现当前报价表累积207552行，每秒健康查询扫全表，存盘格式化长时间持锁。现将工作台改为轻量状态查询，只在当前报价缓存保留15分钟内行情，历史归档独立保留；报价格式化在锁外执行。最终采样在所有容器完成更新后进行；此前一次测量被 nginx 重建时的短暂拒绝连接中断，未当作成功窗口。</p>
+<p>全部聚合原始测量在 <code>data/live-performance.csv</code>，可重新采样：</p>
+<pre><code class="language-bash">./scripts/cpu-limited.sh run -- python3 reports/live-expert-decision/scripts/capture_performance.py \
+  --samples 120 --output reports/live-expert-decision/data/live-performance.csv</code></pre>
+<p>这是有限时段的真实负载测量，不构成所有联赛/负载/上游延迟下的保证。期望收益仍为未验证的研究值。</p>
+<h2>战绩修复与恢复边界（A）</h2>
+<p>生产台账先复制重算，再停服务备份并正式重算：扫描44747条逻辑记录，407条结算、280条无效、44060条跳过；确认终场45场，430场现有比分缺少终场证据。该结算数包含大量未推荐观察记录，不能拿它们充当正式荐单战绩。</p>
+<p>119条旧正式建议仍全部待结算（真实足球70、虚拟49）；被旧盘口键覆盖的历史建议无法凭空还原。修复后每条新建议有独立身份、建议时刻保持不变，结算/收盘追加修订；.25/.75半注、零盘口、无效比分/赔率、并发追加与类型筛选有回归。命中率按实际赢/输本金权重，另列获利建议率；ROI以模拟每条一单位本金解释，不代表实际成交。滚球不同赛况下的赔率漂移不计作 CLV。</p>
+<h2>实际界面与验证记录（A）</h2>
+<p>下图为3003真实生产页面，无测试赛事：</p>
+<p><img alt="生产工作台" src="images/workbench-desktop.png"></p>
+<p><img alt="生产详情" src="images/workbench-detail.png"></p>
+<p><img alt="手机详情" src="images/workbench-mobile.png"></p>
+<p><img alt="真实足球战绩" src="images/workbench-history.png"></p>
+<div class="tw"><table><thead><tr><th>验证</th><th>真实执行结果</th></tr></thead><tbody><tr><td>宿主标准库 unittest（受限2核）</td><td>1071用例，14跳过，exit0</td></tr><tr><td>Python 3.12 生产容器 unittest（只读冻结源码、2核）</td><td>1071用例，14跳过，58.724s，exit0</td></tr><tr><td>Docker mypy / ruff</td><td>57文件无类型错误；All checks passed；exit0</td></tr><tr><td>Python编译、JS语法、Docker生产依赖导入、compose配置校验</td><td>均exit0；运行依赖为redis与标准库，旧requirements/config文件已不存在</td></tr><tr><td>显式测试夹具浏览器验收</td><td>Default/Loading/Empty/Error/Edge-Case、搜索、半注战绩、类型切换、手机及文本安全，exit0</td></tr><tr><td>真实生产浏览器验收</td><td>26场真实足球、详情刷新保留、1个实际走势图、虚拟历史49条独立筛选、手机返回；无pageerror，exit0</td></tr><tr><td>报告渲染</td><td>2个统计图加载正常、Mermaid在线渲染和阻断CDN后的可读文本回退均验证，exit0</td></tr></tbody></table></div>
+<p>构建、测试和测量日志留在宿主 <code>/tmp/task25-*.log</code>；运行台账与原始认证文件未入库。报告现在包括2张脚本生成的统计图、4张生产截图、5份CSV（4份公开研究数据 + 1份性能测量）和公开回放JSON汇总。图表脚本重生成统计图和Wilson CSV；公开回放脚本生成其余3份研究CSV；性能脚本生成独立测量CSV。</p>
 </main>
 </body>
 </html>

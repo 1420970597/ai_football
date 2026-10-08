@@ -48,3 +48,16 @@ flowchart LR
 |Edge-Case|长队名换行/省略并可查看全名；缺比分显示 —；未知时长显示未核验；小屏不横向溢出|
 
 只保留工作台和战绩。原 dashboard/board 合并，pricing/calibration 移入赛事详情与战绩验证区。页面不直接触发慢推理。不得在产品里显示无助于用户判断的协议签名/私有文件/环境变量。
+
+
+## 生产页面参考（A，2026-10-08）
+
+下图来自3003端口真实数据，无测试夹具。生产桌面1440×1000、手机390×844，详情自动刷新保留、盘口走势、历史真实/虚拟筛选和手机返回均通过浏览器验收，退出码0；Loading/Empty/Error/长队名等状态使用显式测试夹具单独验证。
+
+![生产工作台](../../reports/live-expert-decision/images/workbench-desktop.png)
+
+![生产赛事详情](../../reports/live-expert-decision/images/workbench-detail.png)
+
+![手机详情](../../reports/live-expert-decision/images/workbench-mobile.png)
+
+![真实足球战绩](../../reports/live-expert-decision/images/workbench-history.png)

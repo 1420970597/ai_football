@@ -1,0 +1,129 @@
+season,match_id,date,home,away,regulation_home,regulation_away
+3,8650,2018-07-06,Brazil,Belgium,1,2
+3,7584,2018-07-02,Belgium,Japan,3,2
+3,7554,2018-06-24,England,Panama,6,1
+3,7539,2018-06-19,Poland,Senegal,1,2
+3,7550,2018-06-22,Serbia,Switzerland,1,2
+3,7538,2018-06-18,Sweden,South Korea,1,0
+3,7534,2018-06-17,Germany,Mexico,0,1
+3,7543,2018-06-20,Iran,Spain,0,1
+3,7544,2018-06-20,Uruguay,Saudi Arabia,1,0
+3,7546,2018-06-21,France,Peru,1,0
+3,7545,2018-06-21,Argentina,Croatia,0,3
+3,7585,2018-07-03,Colombia,England,1,1
+3,7569,2018-06-28,Panama,Tunisia,1,2
+3,7572,2018-06-28,Japan,Poland,0,1
+3,7561,2018-06-26,Iceland,Croatia,1,2
+3,7540,2018-06-19,Russia,Egypt,3,1
+3,7531,2018-06-16,Argentina,Iceland,1,1
+3,7570,2018-06-28,England,Belgium,0,1
+3,7586,2018-07-03,Sweden,Switzerland,1,0
+3,7557,2018-06-25,Iran,Portugal,1,1
+3,7542,2018-06-20,Portugal,Morocco,1,0
+3,8656,2018-07-11,Croatia,England,1,1
+3,7548,2018-06-22,Brazil,Costa Rica,2,0
+3,7578,2018-06-15,Egypt,Uruguay,0,1
+3,7553,2018-06-23,South Korea,Mexico,1,2
+3,7536,2018-06-18,Belgium,Panama,3,0
+3,7555,2018-06-24,Poland,Colombia,0,3
+3,7576,2018-06-15,Portugal,Spain,3,3
+3,7565,2018-06-27,Serbia,Brazil,0,2
+3,7551,2018-06-23,Germany,Sweden,2,1
+3,7537,2018-06-18,Tunisia,England,1,2
+3,7580,2018-06-30,France,Argentina,4,3
+3,7581,2018-07-01,Croatia,Denmark,1,1
+3,7549,2018-06-22,Nigeria,Iceland,2,0
+3,7529,2018-06-16,Croatia,Nigeria,2,0
+3,7562,2018-06-26,Australia,Peru,0,2
+3,7571,2018-06-28,Senegal,Colombia,0,1
+3,7568,2018-06-27,Switzerland,Costa Rica,2,2
+3,7530,2018-06-16,France,Australia,2,1
+3,7558,2018-06-25,Uruguay,Russia,3,0
+3,7583,2018-07-02,Brazil,Mexico,2,0
+3,7547,2018-06-21,Denmark,Australia,1,1
+3,7535,2018-06-17,Costa Rica,Serbia,0,1
+3,8649,2018-07-06,Uruguay,France,0,2
+3,8658,2018-07-15,France,Croatia,4,2
+3,7582,2018-07-01,Spain,Russia,1,1
+3,7552,2018-06-23,Belgium,Tunisia,5,2
+3,7532,2018-06-16,Peru,Denmark,0,1
+3,7560,2018-06-25,Spain,Morocco,2,2
+3,7533,2018-06-17,Brazil,Switzerland,1,1
+3,7564,2018-06-26,Nigeria,Argentina,1,2
+3,7579,2018-06-30,Uruguay,Portugal,2,1
+3,7577,2018-06-15,Morocco,Iran,0,1
+3,7525,2018-06-14,Russia,Saudi Arabia,5,0
+3,7566,2018-06-27,Mexico,Sweden,0,3
+3,8651,2018-07-07,Sweden,England,0,2
+3,7567,2018-06-27,South Korea,Germany,2,0
+3,7541,2018-06-19,Colombia,Japan,1,2
+3,8655,2018-07-10,France,Belgium,1,0
+3,8657,2018-07-14,Belgium,England,2,0
+3,8652,2018-07-07,Russia,Croatia,1,1
+3,7563,2018-06-26,Denmark,France,0,0
+3,7556,2018-06-24,Japan,Senegal,2,2
+3,7559,2018-06-25,Saudi Arabia,Egypt,2,1
+106,3857276,2022-12-01,Canada,Morocco,1,2
+106,3857271,2022-11-21,England,Iran,6,2
+106,3857296,2022-12-01,Croatia,Belgium,0,0
+106,3857274,2022-11-25,Netherlands,Ecuador,1,1
+106,3857255,2022-12-01,Japan,Spain,2,1
+106,3857272,2022-11-25,England,United States,0,0
+106,3857278,2022-11-29,Iran,United States,0,1
+106,3857277,2022-11-23,Morocco,Croatia,0,0
+106,3857273,2022-11-25,Wales,Iran,0,2
+106,3857275,2022-11-30,Tunisia,France,1,0
+106,3857261,2022-11-29,Wales,England,0,3
+106,3857290,2022-11-24,Switzerland,Cameroon,1,0
+106,3857298,2022-11-24,Portugal,Ghana,3,2
+106,3857285,2022-11-21,Senegal,Netherlands,0,2
+106,3857282,2022-11-21,United States,Wales,1,1
+106,3857297,2022-11-26,Poland,Saudi Arabia,2,0
+106,3857294,2022-11-29,Netherlands,Qatar,2,0
+106,3857266,2022-11-26,France,Denmark,2,1
+106,3857284,2022-11-23,Germany,Japan,1,2
+106,3857254,2022-11-22,Denmark,Tunisia,0,0
+106,3857265,2022-11-22,Mexico,Poland,0,0
+106,3857301,2022-11-25,Qatar,Senegal,1,3
+106,3857268,2022-11-23,Belgium,Canada,1,0
+106,3857269,2022-11-28,Brazil,Switzerland,1,0
+106,3869321,2022-12-09,Netherlands,Argentina,2,2
+106,3857292,2022-12-01,Costa Rica,Germany,2,4
+106,3857295,2022-11-27,Japan,Costa Rica,0,1
+106,3869685,2022-12-18,Argentina,France,2,2
+106,3869684,2022-12-17,Croatia,Morocco,2,1
+106,3857256,2022-12-02,Serbia,Switzerland,2,3
+106,3869151,2022-12-03,Argentina,Australia,2,1
+106,3857257,2022-11-30,Australia,Denmark,1,0
+106,3857258,2022-11-24,Brazil,Serbia,2,0
+106,3857288,2022-11-26,Tunisia,Australia,0,1
+106,3857267,2022-11-29,Ecuador,Senegal,1,2
+106,3857287,2022-11-24,Uruguay,South Korea,0,0
+106,3869486,2022-12-10,Morocco,Portugal,1,0
+106,3857260,2022-11-30,Saudi Arabia,Mexico,1,2
+106,3857264,2022-11-30,Poland,Argentina,0,2
+106,3857289,2022-11-26,Argentina,Mexico,2,0
+106,3869254,2022-12-06,Portugal,Switzerland,6,1
+106,3869118,2022-12-04,England,Senegal,3,0
+106,3869519,2022-12-13,Argentina,Croatia,3,0
+106,3869354,2022-12-10,England,France,1,2
+106,3869552,2022-12-14,France,Morocco,2,0
+106,3869420,2022-12-09,Croatia,Brazil,0,0
+106,3869220,2022-12-06,Morocco,Spain,0,0
+106,3869219,2022-12-05,Japan,Croatia,1,1
+106,3869253,2022-12-05,Brazil,South Korea,4,1
+106,3869152,2022-12-04,France,Poland,3,1
+106,3869117,2022-12-03,Netherlands,United States,3,1
+106,3857270,2022-11-28,Portugal,Uruguay,2,0
+106,3857263,2022-11-27,Spain,Germany,1,1
+106,3857259,2022-11-28,Cameroon,Serbia,3,3
+106,3857283,2022-11-27,Belgium,Morocco,0,2
+106,3857286,2022-11-20,Qatar,Ecuador,0,2
+106,3857300,2022-11-22,Argentina,Saudi Arabia,1,2
+106,3857299,2022-11-28,South Korea,Ghana,2,3
+106,3857293,2022-12-02,Ghana,Uruguay,0,2
+106,3857291,2022-11-23,Spain,Costa Rica,7,0
+106,3857281,2022-11-27,Croatia,Canada,4,1
+106,3857280,2022-12-02,Cameroon,Brazil,1,0
+106,3857279,2022-11-22,France,Australia,4,1
+106,3857262,2022-12-02,South Korea,Portugal,2,1

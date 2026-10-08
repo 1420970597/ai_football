@@ -1,0 +1,113 @@
+{
+  "source": "StatsBomb Open Data",
+  "commit": "4b73468fc5b0f1950f9f66fada70ad3a4f9327cb",
+  "training_season": 2018,
+  "test_season": 2022,
+  "train_matches": 64,
+  "test_matches": 64,
+  "checkpoints": 384,
+  "rates": [
+    1.390625,
+    1.203125
+  ],
+  "selection_threshold": 0.85,
+  "selected_independent_matches": 64,
+  "hits": 55,
+  "coverage": 1.0,
+  "hit_rate": 0.859375,
+  "wilson95": [
+    0.7538371825842297,
+    0.9242142744396914
+  ],
+  "roi": null,
+  "market_comparison": null,
+  "limitation": "Historical national-team baseline; no venue odds, no evidence of trading advantage; 90-minute horizon excludes unknown stoppage duration.",
+  "by_minute": {
+    "15": {
+      "brier": 0.657264478023735,
+      "log_loss": 1.0892650008048799,
+      "baseline_brier": 0.6447046912430305,
+      "baseline_log_loss": 1.0659901358533497,
+      "correct": 0.421875
+    },
+    "30": {
+      "brier": 0.6020767465654437,
+      "log_loss": 1.0048901625553337,
+      "baseline_brier": 0.6447046912430305,
+      "baseline_log_loss": 1.0659901358533497,
+      "correct": 0.53125
+    },
+    "45": {
+      "brier": 0.5185999307925302,
+      "log_loss": 0.8820500930676001,
+      "baseline_brier": 0.6447046912430305,
+      "baseline_log_loss": 1.0659901358533497,
+      "correct": 0.5625
+    },
+    "60": {
+      "brier": 0.3945990063144442,
+      "log_loss": 0.6989090860619888,
+      "baseline_brier": 0.6447046912430305,
+      "baseline_log_loss": 1.0659901358533497,
+      "correct": 0.71875
+    },
+    "75": {
+      "brier": 0.3523502924078166,
+      "log_loss": 0.6306066661735708,
+      "baseline_brier": 0.6447046912430305,
+      "baseline_log_loss": 1.0659901358533497,
+      "correct": 0.765625
+    },
+    "85": {
+      "brier": 0.137710434121812,
+      "log_loss": 0.2671889652587923,
+      "baseline_brier": 0.6447046912430305,
+      "baseline_log_loss": 1.0659901358533497,
+      "correct": 0.921875
+    }
+  },
+  "reliability": [
+    {
+      "bin": 3,
+      "n": 97,
+      "mean_probability": 0.3807677096301127,
+      "accuracy": 0.4329896907216495
+    },
+    {
+      "bin": 4,
+      "n": 28,
+      "mean_probability": 0.4002623837602259,
+      "accuracy": 0.32142857142857145
+    },
+    {
+      "bin": 5,
+      "n": 24,
+      "mean_probability": 0.503248238718835,
+      "accuracy": 0.4583333333333333
+    },
+    {
+      "bin": 6,
+      "n": 50,
+      "mean_probability": 0.6626006396676513,
+      "accuracy": 0.58
+    },
+    {
+      "bin": 7,
+      "n": 50,
+      "mean_probability": 0.7383218272077013,
+      "accuracy": 0.74
+    },
+    {
+      "bin": 8,
+      "n": 41,
+      "mean_probability": 0.856452883436195,
+      "accuracy": 0.8536585365853658
+    },
+    {
+      "bin": 9,
+      "n": 94,
+      "mean_probability": 0.9665502236435823,
+      "accuracy": 0.9361702127659575
+    }
+  ]
+}

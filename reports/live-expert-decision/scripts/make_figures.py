@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
 """理论区间示意；不是系统正确率实测。"""
 import csv
-import math
+import json
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from core.replay import CONFIDENCE_Z, wilson
+
 HYPOTHETICAL_RATE = 0.80
-CONFIDENCE_Z = 1.959963984540054
 SAMPLE_SIZES = (10, 30, 100, 300, 1000)
 CHINESE_FONT = '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc'
-
-
-def wilson(successes, n, z=CONFIDENCE_Z):
-    if n <= 0 or not 0 <= successes <= n:
-        raise ValueError('样本数或成功数非法')
-    p = successes / n
-    den = 1 + z * z / n
-    center = (p + z * z / (2 * n)) / den
-    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / den
-    return max(0, center - half), min(1, center + half)
 
 
 def main():
@@ -29,7 +22,7 @@ def main():
     rows = [(n, round(n * HYPOTHETICAL_RATE), *wilson(round(n * HYPOTHETICAL_RATE), n))
             for n in SAMPLE_SIZES]
     with (root / 'data/wilson.csv').open('w') as f:
-        w = csv.writer(f)
+        w = csv.writer(f, lineterminator='\n')
         w.writerow(('samples', 'successes', 'lower', 'upper', 'hypothetical_rate', 'z'))
         for row in rows:
             w.writerow((*row, HYPOTHETICAL_RATE, CONFIDENCE_Z))
@@ -45,6 +38,26 @@ def main():
     ax.grid(alpha=.2)
     fig.tight_layout()
     fig.savefig(root / 'images/wilson.png', dpi=160)
+    plt.close(fig)
+    summary = json.loads((root / 'data/public-summary.json').read_text())
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+    minutes = [int(m) for m in summary['by_minute']]
+    values = list(summary['by_minute'].values())
+    axes[0].plot(minutes, [v['brier'] for v in values], 'o-', color='#1c88ff', label='比分与剩余时间基线')
+    axes[0].plot(minutes, [v['baseline_brier'] for v in values], '--', color='#9ca6b5', label='无赛况赛前基线')
+    axes[0].set_title('64场时间留出验证：Brier越低越好', fontproperties=font)
+    axes[0].set_xlabel('决策时的比赛分钟', fontproperties=font)
+    axes[0].legend(prop=font)
+    reliability = summary['reliability']
+    axes[1].plot([0, 1], [0, 1], '--', color='#9ca6b5')
+    axes[1].plot([r['mean_probability'] for r in reliability], [r['accuracy'] for r in reliability], 'o-', color='#1c88ff')
+    axes[1].set_title('概率校准：384个检查点，64场比赛', fontproperties=font)
+    axes[1].set_xlabel('模型预测概率', fontproperties=font)
+    axes[1].set_ylabel('实际方向命中率', fontproperties=font)
+    for ax in axes:
+        ax.grid(alpha=.2)
+    fig.tight_layout()
+    fig.savefig(root / 'images/public-replay.png', dpi=160)
     plt.close(fig)
 
 
