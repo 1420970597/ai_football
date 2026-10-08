@@ -1,0 +1,21 @@
+{
+  "_schema": "odds_snapshot/v1",
+  "away": "全北现代",
+  "booksum": 1.04772678,
+  "captured_at": "2026-10-02T06:54:46.945295+00:00",
+  "home": "大田韩亚市民",
+  "league": "韩国K1联赛",
+  "margin": 0.04772678,
+  "market": "AH(0)",
+  "match_id": "5656582",
+  "odds": [
+    1.68,
+    2.21
+  ],
+  "outcomes": [
+    "home",
+    "away"
+  ],
+  "source": "乐鱼API",
+  "state": "active"
+}

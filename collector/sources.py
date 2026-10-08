@@ -10,8 +10,10 @@
 否则每换一次数据源都要改下游服务。
 
     SnapshotSource（协议）
-      ├── TicaiFileSource   体彩官方 API 落盘 JSON（场次*.json）
       └── LEYUSource        乐鱼 API（在线 HTTP / saz 离线回放）
+
+> 2026-10 起本项目**只保留乐鱼源**：体彩文件源（`TicaiFileSource`）与其
+> payload 解析器（`collector/normalizer.py`）已随「只保留 leyu 相关」清理删除。
 
 `LEYUSource` 内部复用 `LEYUClient`（HTTP）与 `leyu_ws`（实时推送），
 **不在本层发起任何浏览器操作**。
@@ -32,9 +34,8 @@ import os
 import time
 import zipfile
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from core.models import OddsSnapshot, utcnow
 
@@ -50,37 +51,28 @@ from .leyu_client import (
 )
 from .session import (
     Session,
-    SessionError,
     SessionProvider,
     make_session_provider,
 )
 from .leyu_normalizer import DEFAULT_SOURCE as LEYU_DISPLAY_SOURCE
-from .leyu_normalizer import DEFAULT_SOURCE as LEYU_DISPLAY_SOURCE
 from .leyu_normalizer import (
     DEFAULT_STALE_AFTER,
     snapshots_from_match,
-    normalize_leyu_matches,
 )
-
-#: 体彩源写入快照的展示名（与 service.DEFAULT_SOURCE 保持一致）
-TICAI_DISPLAY_SOURCE = "体彩官方API"
 
 __all__ = [
     "SOURCE_LEYU",
-    "SOURCE_TICAI",
     "SOCCER_SPORT_ID",
     "KNOWN_SOURCES",
     "SourceError",
     "SnapshotSource",
-    "TicaiFileSource",
     "LEYUSource",
     "resolve_source_name",
     "make_source",
 ]
 
-#: 数据源标识
+#: 数据源标识（本项目仅乐鱼）
 SOURCE_LEYU = "leyu"
-SOURCE_TICAI = "ticai"
 
 #: 足球运动 ID（乐鱼 `spList` 中 csid="1"）。
 #: 本项目是足球估值系统；同一网关还返回篮球/网球/乒乓球等，必须默认过滤。
@@ -114,7 +106,7 @@ def _counts_as_live(m: Any, now_ms: int, grace_s: float) -> bool:
     start = _to_int(getattr(m, "start_ms", 0))
     return bool(start) and start <= now_ms + grace_s * 1000
 
-KNOWN_SOURCES: Tuple[str, ...] = (SOURCE_LEYU, SOURCE_TICAI)
+KNOWN_SOURCES: Tuple[str, ...] = (SOURCE_LEYU,)
 
 #: 别名 → 规范名（兼容中文标识与历史写法）
 _SOURCE_ALIASES: Mapping[str, str] = {
@@ -122,10 +114,6 @@ _SOURCE_ALIASES: Mapping[str, str] = {
     "乐鱼": SOURCE_LEYU,
     "乐鱼api": SOURCE_LEYU,
     "乐鱼官方api": SOURCE_LEYU,
-    "ticai": SOURCE_TICAI,
-    "体彩": SOURCE_TICAI,
-    "体彩官方api": SOURCE_TICAI,
-    "sporttery": SOURCE_TICAI,
 }
 
 
@@ -176,12 +164,12 @@ class SnapshotSource(ABC):
 
     子类必须实现 `fetch()`。两个名称含义不同，不可混用：
 
-    * `name`           —— **规范源 ID**（`leyu` / `ticai`），用于配置与路由；
+    * `name`           —— **规范源 ID**（本项目只有 `leyu`），用于配置与路由；
     * `display_source` —— 写入 `OddsSnapshot.source` 的**展示名**
-      （`乐鱼API` / `体彩官方API`），用于存储分组与审计展示。
+      （`乐鱼API`），用于存储分组与审计展示。
     """
 
-    #: 规范源 ID（leyu / ticai）
+    #: 规范源 ID（leyu）
     name: str = "unknown"
 
     #: 写入快照的展示源名
@@ -291,74 +279,6 @@ class SnapshotSource(ABC):
     def describe(self) -> Dict[str, Any]:
         """数据源元信息（供 /health 与排障使用）。"""
         return {"source": self.name, "kind": type(self).__name__}
-
-
-# --------------------------------------------------------------------------- #
-# 体彩源（保留：数据源无关的证明 + 回归对照）
-# --------------------------------------------------------------------------- #
-
-class TicaiFileSource(SnapshotSource):
-    """体彩官方 API 落盘 JSON（`场次*.json`）→ 快照。
-
-    这是切换前的默认源，现保留为可选后端：
-    既保证原有 500 例测试与历史数据仍可用，也作为「数据源无关」的对照实现。
-    """
-
-    name = SOURCE_TICAI
-    display_source = TICAI_DISPLAY_SOURCE
-
-    def __init__(self, root: str | Path) -> None:
-        self.root = Path(root)
-
-    def load_records(self) -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        for p in sorted(self.root.glob("场次*.json")):
-            try:
-                with p.open(encoding="utf-8") as fh:
-                    data = json.load(fh)
-            except (OSError, ValueError):
-                continue
-            if isinstance(data, dict):
-                out.append(data)
-            elif isinstance(data, list):
-                out.extend(x for x in data if isinstance(x, dict))
-        return out
-
-    def fetch(
-        self,
-        mids: Optional[Sequence[str]] = None,
-        max_matches: Optional[int] = None,
-        stale_after: float = DEFAULT_STALE_AFTER,
-        captured: Optional[datetime] = None,
-    ) -> Tuple[List[OddsSnapshot], List[str]]:
-        # 延迟导入：normalizer 同时导出 legacy 名称，避免循环导入
-        from .normalizer import normalize_matches
-
-        records = self.load_records()
-        if mids:
-            wanted = {str(m) for m in mids}
-            records = [
-                r for r in records
-                if str((r.get("基本信息") or {}).get("场次号")
-                       or (r.get("基本信息") or {}).get("比赛ID") or "") in wanted
-            ]
-        if max_matches is not None:
-            records = records[: max(0, _to_int(max_matches))]
-        res = normalize_matches(
-            records,
-            source=self.display_source,
-            default_time=captured or utcnow(),
-        )
-        issues = ["%s/%s: %s" % (i.match_id, i.field, i.detail) for i in res.issues]
-        return res.snapshots, issues
-
-    def describe(self) -> Dict[str, Any]:
-        return {
-            "source": self.name,
-            "kind": type(self).__name__,
-            "root": str(self.root),
-            "exists": self.root.exists(),
-        }
 
 
 # --------------------------------------------------------------------------- #
@@ -678,17 +598,19 @@ class LEYUSource(SnapshotSource):
 def make_source(
     name: Optional[str],
     *,
-    corpus_root: Optional[str | Path] = None,
     saz_path: Optional[str] = None,
     host: str = DEFAULT_HOST,
     origin: str = DEFAULT_ORIGIN,
     request_id: Optional[str] = None,
     batch_size: int = 20,
-) -> SnapshotSource:
-    """按名称构造数据源（默认乐鱼）。
+) -> LEYUSource:
+    """按名称构造数据源（本项目仅乐鱼）。
 
     乐鱼源在给出 `saz_path` 时自动进入离线回放模式——这让 CI/无网环境
     也能跑完整链路，不需要访问任何博彩域名。
+
+    返回具体类型（而非基类 `SnapshotSource`）：下线体彩源后只剩乐鱼，
+    而 `full`/`progress` 是乐鱼特有的采集参数，抽象基类不应该伪造它们。
     """
     resolved = resolve_source_name(name)
     if resolved == SOURCE_LEYU:
@@ -696,6 +618,4 @@ def make_source(
             host=host, origin=origin, request_id=request_id,
             replay=saz_path, batch_size=batch_size,
         )
-    if corpus_root is None:
-        raise SourceError("体彩源需要 corpus_root（场次*.json 所在目录）")
-    return TicaiFileSource(corpus_root)
+    raise SourceError("不支持的数据源：%r" % resolved)

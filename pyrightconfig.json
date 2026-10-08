@@ -4,12 +4,9 @@
     "**/__pycache__",
     "output",
     "web",
-    "reports",
-    "验证码识别"
+    "reports"
   ],
-  "extraPaths": ["."],
-  "venvPath": ".",
-  "venv": ".venv",
+  "extraPaths": [".", "./tools"],
   "typeshedPath": "/root/.pi-lens/tools/node_modules/pyright/dist/typeshed-fallback",
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",

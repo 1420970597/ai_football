@@ -333,7 +333,8 @@ class TestBreakevenAndRisk(unittest.TestCase):
         """报告 §8.6：g 在 f* 处最大，超过后下降。"""
         p, o = 0.55, 2.0
         f_star = kelly_fraction(p, o)
-        g = lambda f: p * math.log(1 + f * (o - 1)) + (1 - p) * math.log(1 - f)
+        def g(f: float) -> float:
+            return p * math.log(1 + f * (o - 1)) + (1 - p) * math.log(1 - f)
         self.assertGreater(g(f_star), g(f_star * 0.5))
         self.assertGreater(g(f_star), g(min(f_star * 2, 0.9)))
 

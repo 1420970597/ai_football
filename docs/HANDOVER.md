@@ -4,7 +4,7 @@
 > **远程**：`git@github.com:1420970597/ai_football.git`
 > **本文件所在分支**：`fix/TASK-11-stale-backfill-quotes-not-live`（基于 `main@6b9a35b`，**待 PR 合并**）
 > **交接日期**：2026-10-07（初版 2026-10-06）
-> **代码状态**：`a482c39` · 全量 `Ran 1115 tests … OK (skipped=11)` **exit 0** · pyright 0 error · 容器 healthy
+> **代码状态**：`68cdff6` · 全量 `Ran 988 tests … OK (skipped=11)` **exit 0** · pyright 0 error · mypy 46 文件 0 错 · ruff 全过 · 容器 healthy
 > **本文档读法**：§1 先看"现在能不能跑"，§2~§4 是三种状态的工作事项，§6 是踩过的坑（**最省时间的一节**）
 >
 > ⚠️ **接手人先看这条**：本轮修的两个 bug 都有"**看起来已经修过、其实从另一条路径又长回来**"的特征
@@ -50,11 +50,36 @@ cd /root/ai_football
 
 # 端口冲突提示：6379 已被别的项目占用，本项目用 6380；
 #                3000 也被别的项目（new-api）占用，故 web 控制台用 3001
-REDIS_PORT=6380 SCRAPER_PORT=8081 ANALYTICS_PORT=8000 CONSOLE_PORT=3001 \
-  docker compose -f docker/docker-compose.yml up -d --build analytics-api web-console
+REDIS_PORT=6380 ANALYTICS_PORT=8000 CONSOLE_PORT=3001 \
+  docker compose -f docker/docker-compose.yml up -d analytics-api web-console
 ```
 
-> ⚠️ **必须带这 4 个端口变量**，否则 redis 会与宿主机的 `nexus-mail-redis` 抢 6379 而启动失败。
+> ⚠️ **必须带这 3 个端口变量**，否则 redis 会与宿主机的 `nexus-mail-redis` 抢 6379 而启动失败。
+
+#### 🖥️ CPU 预算（本机跑了 LLM 网关，**必读**）
+
+本机只有 4 个 vCPU，且**pi 的对话链路指向同机 LLM 网关**。任何打满多核的
+构建/采集都会把网关饿死 → 对话直接断。因此本项目统一按 **50%（= 2 核）** 限额：
+
+| 场景 | 机制 | 实测证据 |
+| --- | --- | --- |
+| 容器运行期 | compose 的 `cpus: "${AI_FOOTBALL_CPUS:-2.0}"`（三容器均有） | `cpu.max = 200000 100000` |
+| 镜像构建期 | `scripts/cpu-limited.sh build`（参数 `--cpu-quota=200000`） | 构建容器内 `cpu.max = 200000 100000` |
+| 测试/类型检查 | `scripts/cpu-limited.sh run -- <命令>`（`taskset`） | 子进程 `affinity 0,1` |
+
+```bash
+./scripts/cpu-limited.sh build            # 受限构建（不要直接 docker build）
+./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q
+./scripts/cpu-limited.sh up               # 启动（运行期已带 cpus）
+AI_FOOTBALL_CPU_PERCENT=30 ./scripts/cpu-limited.sh build   # 临时改比例
+```
+
+> ⚠️ **不要"优化"成 `taskset docker build`**：docker CLI 只是 API 客户端，
+> 构建容器由 dockerd 拉起，**不继承** 客户端亲和性。实测 `taskset -c 0-1 docker
+> build` 的构建容器仍是 `affinity [0,1,2,3]`。同理 `--cgroup-parent=<slice>`
+> 对 BuildKit 也无效（slice 始终 `Tasks: 0`）。唯一有效路径是
+> **`DOCKER_BUILDKIT=0` + legacy builder 的 `--cpu-quota`**（BuildKit 根本没有
+> CPU 开关）。详见 §6.7。
 
 ### 1.2 验证是否正常
 
@@ -190,25 +215,50 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 
 ### 3.2 乐鱼凭据过期（P0，**唯一外部阻塞**）
 
+> **🔔 2026-10-07 复核更新（设备已换 IP）：IP 闸门已通过，**不是**瓶颈。**
+> 旧结论「本机 IP 被 `6031 地区ip限制` 拦住」**已失效**。实测（走生产登录代码路径
+> `AppLoginClient.login()`，非仅探针）：用不存在的用户名打 `user/login` 得到
+> **`6008 用户名或密码错误`**，而非 `6031`。服务端**先校 IP 再校凭据**，
+> 故 6008 即证明出口 IP 已被放行。**现在只差正确的账号/口令。**
+>
+> **🔔 2026-10-07 再次复核：`.env` 里那对注释掉的凭据已实测为「无效」。**
+> `.env` 中 `LEYU_APP_LOGIN_NAME` / `LEYU_APP_LOGIN_PASSWORD` **存在但整行被 `#` 注释掉**
+> （历史原因：早期误以为本机 IP 被封，写了「需在允许的网络上使用」——**该注释现在是错的**）。
+> 诊断脚本已**代验证**这对注释凭据：登录返回 `6008`，且与「不存在的账号」对照
+> **返回同一 code** —— 服务端不区分「账号不存在」与「口令错误」，
+> 故无法再细分，**这对凭据确实是失效的**。去掉 `#` 也不会变得可用，需换新的账号/口令。
+>
+> ⚠️ **2026-10-08 附带修正**：`.env` 里那句「登录受上游 IP 白名单限制（6031），
+> 需在允许的网络上使用」是**过期且已证伪**的注释，已就地改正。它正是早期把
+> 故障误判为「IP 被封」的源头之一 —— 留着会让下一个人再去查一遍 IP。
+> 同时那两行注释掉的凭据已实测为**无效**（登录返回 6008，且与「不存在的账号」
+> 返回同一 code，服务端不区分账号不存在与口令错误）。
+
+> 一键诊断（新增，只读、脱敏）：`python3 tools/leyu_session_doctor.py`
+> —— 逐个 provider 试，报出谁成功/谁失败/为什么；自动探测 `.env` 里被注释掉的凭据
+> 并**代为验证**（区分「IP 被拦」与「凭据无效」）；附登录路径的 IP 闸门判定。
+
 **现象**：`venue/launch` 返回 `6001 token已过期`；当前靠 `_session.json` 缓存回退维持采集。
 
 **实情**：
 - 抓包里那个 token 约 **10 小时后自然过期**（会话生命周期本就如此）；
-- **登录续期代码已实现**（`collector/leyu_app_login.py`），但本机 IP 被
-  `6031 地区ip限制` 拦住 —— 抓包机 `118.107.172.91` 成功，本机 `38.76.205.122` 被拒；
-- 注意 `venue/launch` **不受**该 IP 限制，只有 `user/login` 受限。
+- **登录续期代码已实现**（`collector/leyu_app_login.py`），且链路已接好
+  （`collector/session.py::make_session_provider` 的 provider 链末位）；
+- 但它**默认不在链上**：`login_provider_from_env` 在缺 `LEYU_APP_LOGIN_NAME` /
+  `LEYU_APP_LOGIN_PASSWORD` 时返回 `None`（设计如此，便于回退）。当前 `.env`
+  里这两项为空，所以链上只有 `h5-cookie` 与 `app-launch`，两者都返回 `6001`。
+- `venue/launch` 与 `user/login` 都不再受 IP 限制（历史上只有 `user/login` 受限）。
 
-**三条出路（任选）**：
-1. 在允许的网络/服务器上跑一次登录，把得到的 `x-api-token` 写入 `.env`：
-   ```bash
-   # .env
-   LEYU_APP_TOKEN=<新 token>
-   # 或配置账号口令让系统自动续期（需在允许的 IP 上）
-   LEYU_APP_LOGIN_NAME=<登录账号>
-   LEYU_APP_LOGIN_PASSWORD=<登录口令明文>
-   ```
-2. 或在该网络部署本服务；
-3. 或注入其它可用会话（`LEYU_REQUEST_ID` / `LEYU_SESSION_FILE` / `LEYU_LOGIN_COMMAND`）。
+**处置（当前唯一需要做的事）**：在 `.env` 填入账号口令即可启用自动续期：
+
+```bash
+# .env —— 填入后重启服务，链会自动走「登录 → launch」拿到新 requestId
+LEYU_APP_LOGIN_NAME=<登录账号>
+LEYU_APP_LOGIN_PASSWORD=<登录口令明文>
+```
+
+其余可选路径（按需）：注入 `LEYU_REQUEST_ID` / `LEYU_SESSION_FILE` / `LEYU_LOGIN_COMMAND`，
+或直接更新 `LEYU_APP_TOKEN`（约 10h 有效）。
 
 ### 3.3 进行中场次与乐鱼"完全一致"（P1）
 
@@ -233,6 +283,48 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 单批 12 场 × LLM 150s ≈ 长时间占用。实测 `pending` 一度达 72。
 `change_batch` / `change_min_interval_s` 可调，但**建议改为按 LLM 实际吞吐自适应限流**。
 
+> ✅ **2026-10-08 修（熔断）**：新增**连续失败熔断**。实测该模型的上游账号池
+> 掉线时，每次调用要走完「4 次重试 + 退避」才失败（单次约 30s），一天攒下
+> **573 次失败**（成功仅 109 次）—— 上游已死却仍在猛敲，既白等又给同机网关
+> 加无谓压力（本机还跑着 pi 的对话链路）。现在连续失败 `failure_threshold`
+> （默认 3）次后冷却 `cooldown_s`（默认 60s），冷却期内**不发网络、不耗退避**，
+> 直接失败；到期放**一个**半开探测请求，成功即恢复，失败则冷却翻倍（封顶 30min）。
+>
+> | 环境变量 | 默认 | 含义 |
+> | --- | --- | --- |
+> | `ANALYSIS_LLM_FAILURE_THRESHOLD` | `3` | 连续失败多少次后熔断；`0` = 关闭（恢复旧行为） |
+> | `ANALYSIS_LLM_COOLDOWN_S` | `60` | 初始冷却秒数（每次半开失败后翻倍，封顶 1800） |
+>
+> 可观测：`/health` → `llm.breaker`（`open` / `consecutive_failures` /
+> `cooldown_remaining_s` / `skipped`）。注意 `calls` 只计**成功**，
+> `attempts` 才是真正发出的网络请求数 —— 上游全挂时会出现 `calls=0` 但
+> `failures=362` 的组合，加 `attempts` 后才看得出「失败多、发得少」。**4xx（请求/凭据错）不熔断** —— 否则一个
+> 写错的 prompt 或失效的 key 会把整条链路停掉。回归测试见
+> `tests/test_llm_decision.py::TestLLMCircuitBreaker`（5 例，含半开恢复与 4xx 不熔断）。
+>
+> **线上实测**（上游掉线时）：362 次调用里 356 次被本地短路，只发了 **6 次**
+> 真请求 —— 旧逻辑按同样调用量要发 ~1448 次（每次 4 重试）。
+>
+> ⚠️ 网关侧的根因**不在本项目**：`sub2api` 日志显示
+> `no available OpenAI accounts supporting model: deepseek-v4.1-flash`
+> （账号池过滤后无可用账号）。那是共享基础设施（pi 自身也走它），本项目
+> 只能做到「上游不可用时快速失败、不猛敲」。
+
+> ✅ **2026-10-07 修**：已实现自适应限流（正是本条的“建议”）。
+> 调度器现在记录每批的**实测单场耗时**（指数滑动平均 α=0.5），
+> 再用 `batch = clamp(batch_target_s / per_match_s, batch_min, batch_max)` 反推本批批量：
+> LLM 慢 → 批变小（周转更快、队列不再堆积）；LLM 快 → 批变大（少白等）。
+>
+> | 环境变量 | 默认 | 含义 |
+> | --- | --- | --- |
+> | `ANALYSIS_ADAPTIVE_THROTTLE` | `1` | 置 `0` 则恢复固定 `change_batch` 旧行为 |
+> | `ANALYSIS_BATCH_TARGET_S` | `150` | 单批耗时目标（秒），即原 “12 场 × 150s” 的量级 |
+> | `ANALYSIS_BATCH_MIN` / `_MAX` | `3` / `24` | 批量夹逼，防止离群值把批量推到无意义两端 |
+>
+> 可观测：`/health` → `config.effective_batch`（当前实际批量）与
+> `scheduler.per_match_s` / `last_batch_s`（吞吐来源）。
+> 失败批次**不留吞吐样本**（否则会把批量带偏），该行为有回归测试守住。
+
 ---
 
 ## 4. 📋 待完成（含技术债）
@@ -241,19 +333,19 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 
 | # | 问题 | 实测状态 | 建议 |
 | --- | --- | --- | --- |
-| 1 | `config.py` 硬编码 `sk-` token | ❌ **仍存在**（`config.py:9`） | 改 `os.environ.get(..., "")`；**密钥需人工轮换** |
-| 2 | `captcha_token` 硬编码 | ❌ **仍存在**（`main.py`、`main_optimized.py`） | 同上 |
+| 1 | `config.py` 硬编码 `sk-` token | ✅ **已删**（文件已移除，仓库无硬编码凭据） | 旧 token 已随 git 历史泄漏，**仍需人工轮换** |
+| 2 | `captcha_token` 硬编码 | ✅ **已删**（`main.py`/`main_optimized.py` 均已移除） | — |
 | 3 | `.pyc` 入库 | ✅ 已清（0 个被追踪） | — |
 | 4 | 无 `.gitignore` | ✅ 已建 | — |
-| 5 | 平行副本 | ❌ **3 个仍在**（各有 5~6 处引用） | 需先确认引用再合并/删除 |
-| 6 | 0 测试 | ✅ **1115 用例 / 23 文件** | 持续补 |
-| 7 | `chromedriver.exe` 入库 | ❌ **仍被追踪**（20MB） | 改由 `webdriver-manager` 容器内获取 |
-| 8 | 死分支 | ❌ `origin/feature/add-sportsdata-searcher`、`origin/new` | 确认后清理 |
-| 9 | 调试脚本在根目录 | ❌ `搜索.py`、`测试TypeError修复.py`、`验证码识别/` | 归入 `tools/` 或 `tests/` |
+| 5 | 平行副本 | ✅ **已删**（`main_optimized.py` / `web/enhanced_analyzer.py` / `web/match_generator.py` 均无引用后删除） | — |
+| 6 | 0 测试 | ✅ **981 用例（清理后）** | 持续补 |
+| 7 | `chromedriver.exe` 入库 | ✅ **已删** | 需要时由 `webdriver-manager` 容器内获取 |
+| 8 | 死分支 | ✅ **已清**（`origin/new`、`origin/feature/add-sportsdata-searcher`、已合的 `origin/fix/TASK-11-*` 均已删除） | — |
+| 9 | 调试脚本在根目录 | ✅ **已清**（`搜索.py`、`测试TypeError修复.py`、`验证码识别/` 均已移除） | — |
 | 10 | 运行产物入库 | ✅ 已清（0 个被追踪） | — |
-| 11 | 无静态检查配置（ruff） | ⚠️ **本次已声明策略**（`pyproject.toml [tool.ruff]`） | 仅启用真缺陷类（E4/E7/E9/F/B）；**UP 现代化迁移待办**（全仓 2000+ 处 `Optional[X]`→`X \| None`），属独立全仓任务 |
-| 12 | 测试目录历史 lint 欠账 | ⚠️ 实测 **36 条 / 13 个测试文件**（`F401` 未用导入为主，1 条 `E731`），**均为本次之前就存在**，且都不在本次改动文件里 | 单独一次 `chore(tests)` 清理；不要混进业务补丁 |
-| 13 | 4 处 `inspect.getsource` 断言易碎 | ✅ **已修**（本次） | 改为查**编译后的代码对象**：新增 `tests.referenced_names()`（递归 `co_consts` 进嵌套函数，**刻意不收 `co_varnames`**），4 处断言全部改用它；已用变异测试证明**非空洞**（删掉 `_record_ledger` 调用后检查确实失败） |
+| 11 | 无静态检查配置（ruff） | ✅ 已声明策略（`pyproject.toml [tool.ruff]`） | **UP 现代化迁移待办**（全仓 `Optional[X]`→`X \| None` 等），属独立全仓任务 |
+| 12 | 测试目录历史 lint 欠账 | ✅ **已清**（`ruff check .` → `All checks passed!`） | — |
+| 13 | 4 处 `inspect.getsource` 断言易碎 | ✅ **已修**（本轮） | 改为查**编译后的代码对象**：新增 `tests.referenced_names()` |
 
 ### 4.2 功能增强建议（按价值排序）
 
@@ -446,6 +538,39 @@ output/
 | 跑测试**期间**文件被改写 | `inspect.getsource()` 用**编译时冻结的行号**去读**当前磁盘文件**，文件一旦在测试跑的过程里被整体重排，就返回**别的函数体** → 断言**假失败**（实测 `test_cycle_writes_ledger` 报 `_record_ledger not found`，而 `decide_list` 里明明有；冻结代码后单独复跑即 `OK`）。反方向同样危险：断言可能被**碰巧满足**而**假通过**。**已根治**：`tests/` 原有 4 处 `getsource` 断言全部改为查**编译后的代码对象**（`tests.referenced_names()`），不再依赖“行号↔磁盘文件”一致；变异测试证明删掉调用后检查会失败（非空洞）。但**其余测试仍应冻结跑**（测试本身也是文件），且新代码不要重新引入 `getsource` 式断言 |
 | 改了代码却没重建镜像 | 容器跑的是**构建时**烤进去的副本（只有 `output/` 是挂载卷）。实测主机与容器 `/app` 的 `service/analysis.py` md5 **不一致** —— 也就是说当时“在容器里验证过”的其实是**旧设计**（容器里还是“陈旧→空集”的中间版，主机已是“陈旧→None”）。**改完代码必须 `docker compose up -d --build`**，并用 `docker exec <容器> md5sum /app/<文件>` 与主机对一次；否则验证结论无效 |
 
+### 6.7 限制 docker 构建的 CPU：三个"看着能行"的错法（2026-10-08）
+
+**背景**：本机 4 vCPU，且 pi 的对话链路指向**同机 LLM 网关**。一次不限速的
+`docker build` 能把整机打满（实测 `host_busy peak=100%`），网关被饿死 → 对话中断。
+
+因此本项目约定：构建/测试类命令一律走 `scripts/cpu-limited.sh`（限额 50%）。
+下面是排查中实测验证的结论，**别再重复试错**：
+
+| 做法 | 结果 | 实测证据 |
+| --- | --- | --- |
+| `taskset -c 0-1 docker build` | ❌ **无效** | docker CLI 只是 API 客户端；构建容器由 dockerd/runc 拉起，不继承客户端亲和性。构建容器内仍 `affinity [0,1,2,3]` |
+| `--cgroup-parent=<slice>`（配 `CPUQuota=200%` 的 slice） | ❌ **无效**（BuildKit） | slice 始终 `Tasks: 0`，构建容器没被放进去；容器内 `cpu.max = max 100000` |
+| BuildKit 默认构建 | ❌ **无任何 CPU 开关** | `docker build --help` 里搜不到 `cpu-quota`/`cpuset-cpus`；容器内 `cpu.max = max 100000` |
+| `DOCKER_BUILDKIT=0` + `--cpu-quota=200000` | ✅ **有效（本项目采用）** | 构建容器内 `cpu.max = 200000 100000`（= 2 核配额） |
+| `DOCKER_BUILDKIT=0` + `--cpuset-cpus=0-1` | ✅ 有效（备选） | 构建容器内 `affinity [0,1]`、`cpuset.cpus.effective 0-1` |
+| compose `cpus: "2.0"`（容器**运行期**） | ✅ 有效 | `cpu.max = 200000 100000` |
+| `taskset -c 0-1 <本地命令>`（unittest/mypy/ruff） | ✅ 有效 | 子进程 `affinity 0,1`（进程级限制，子进程能继承） |
+
+**代价**：legacy builder 与 BuildKit 的缓存**不互通**，首次改走 wrapper 会全量重建。
+
+**未验证的推断（不要当成事实引用）**：曾想用 `--cpuset-cpus=0-1` 把重负载与
+网关**物理隔离**到不同核，但实测**未能证明**其优于 quota —— 两次测得的网关
+`/health` 延迟都在 **6~24ms** 量级、噪声大于差异（不限速 6.0~14.5ms，钉核
+9.8~24.0ms，钉核那侧反而略高）。可能原因是本机 `/health` 太轻、采样太少，
+也可能瓶颈不在 CPU。因此**默认仍用 quota**（语义更稳、与核编号无关，换机器
+只改百分比）；`--cpuset-cpus` 作为备选保留，但**没有证据支持它更保护网关**。
+
+**另一坑（排查途中踩到）**：测构建容器亲和性时用 `pgrep -f "python3 /burn.py"` 抓到
+的“容器进程” cgroup 显示为 `/user.slice/.../tmux-spawn-*.scope`、`/proc/<pid>/root`
+里**没有** `.dockerenv` —— 那其实是**我自己那条 bash 工具命令**的回显/子进程，
+不是构建容器。**教训**：判断进程是不是容器内的，要验 `/proc/<pid>/root/.dockerenv`
+与 PID namespace（看 `root/proc/1/comm`），不要只看命令行匹配。
+
 ---
 
 ## 7. 交付物索引
@@ -457,7 +582,7 @@ output/
 | 可行性调研（范本） | `reports/leyu-kaiyun-odds-bot-feasibility/REPORT.md` |
 | 乐鱼协议文档 | `docs/architecture/leyu-api-protocol.md` |
 | 项目宪章（**必读**） | `AGENTS.md` |
-| 测试 | `tests/`（23 文件 / 1115 用例） |
+| 测试 | `tests/`（22 文件 / 988 用例） |
 
 ---
 
@@ -465,8 +590,11 @@ output/
 
 - [ ] 按 §1.1 启动（**记得 4 个端口变量**：6380 / 8081 / 8000 / **3001**）
 - [ ] §1.2 四项验证全过
-- [ ] 跑 `python3 -m unittest discover -s tests -q`（应 `Ran 1115 … OK`；宿主机可直跑，**不需** pytest）
-- [ ] 跑 `pyright`（应 0 errors）
+- [ ] 跑 `python3 -m unittest discover -s tests -q`（应 `Ran 988 … OK (skipped=11)`；宿主机可直跑，**不需** pytest）。
+      注：旧文档写 1115，**已过期**——清理阶段删除了非乐鱼链路及其测试（当前 22 个测试文件）。
+- [ ] 跑 `/root/.pi-lens/tools/node_modules/.bin/pyright`（应 `0 errors, 0 warnings`）。
+      它不在 PATH 上，必须用全路径（用 `command -v pyright` 会找不到）。
+      另可跑 `python3 -m mypy`（应 `Success: no issues found in 46 source files`）—— 两者当前均绿。
 - [ ] 确认 `.pi-lens.json` 仍在（`format.enabled=false`）—— 它挡住"每回合自动重排文件"，
       那正是让测试出现**幻影结果**的成因（§6.6）；删掉它会让下一次测试跑动中文件被改
 - [ ] 确认凭据状态（§3.2），必要时按三条出路之一处理

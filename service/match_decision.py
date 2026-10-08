@@ -47,19 +47,16 @@ LLM 返回**对候选盘口的买入裁定**，而不是给每个结果编一套
 
 from __future__ import annotations
 
-import json
 import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from core import devig as devig_mod
 from core import economics as econ
 from core.entry_gate import (
     EntryGateConfig,
     GateResult,
-    evaluate_entry,
     gate_market,
 )
 from core.market_labels import describe_market, format_market
@@ -69,7 +66,6 @@ from .decision import (
     DECISION_AVOID,
     DECISION_BUY,
     DECISION_NO_LLM,
-    DECISION_WATCH,
     DecisionConfig,
     DecisionEngine,
 )

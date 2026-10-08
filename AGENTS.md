@@ -15,10 +15,12 @@
 | 语言 / 运行时 | **容器内 Python 3.12**（实测 `python:3.12-slim` = 3.12.15）；**宿主机 `python3` 实测为 3.11.2**（`/usr/bin/python3`，曾误记为 3.12.3）；脚本统一 `#!/usr/bin/env python3` |
 | 依赖声明 | `requirements.txt`（仅 `requests`、`beautifulsoup4`）；浏览器链路见 `docker/requirements-browser.txt` |
 | 浏览器自动化 | Selenium 4 / `undetected-chromedriver` / `webdriver-manager`，运行在 **Docker 沙盒容器**内 |
-| 采集架构 | `browser_scraper_client.py`（宿主侧 HTTP 客户端） ↔ `browser_scraper_service.py`（容器内 Flask 服务，端口 8080） |
-| LLM 调用 | SiliconFlow / OpenAI 兼容 `chat/completions`，配置集中在 `config.py` |
-| 编排 / 缓存 | `docker/docker-compose.yml`：redis + browser-scraper + ai-analyzer |
-| 测试现状 | `tests/` 下 **23 个测试文件 / 1115 用例**（标准库 `unittest`，宿主机可直跑）；类型检查主用 `pyright`（实测 0 errors） |
+| 采集架构 | **乐鱼（leyu）唯一数据源**：`collector/leyu_*.py` + WebSocket 实时推送；容器内 Flask 服务端口 8080 |
+| LLM 调用 | OpenAI 兼容 `chat/completions`，配置集中在环境变量（**代码内无硬编码凭据**） |
+| 编排 / 缓存 | `docker/docker-compose.yml`：redis + analytics-api + web-console（**三容器**） |
+| 测试现状 | `tests/` 下 **22 个测试文件 / 988 用例**（标准库 `unittest`，宿主机可直跑） |
+| 类型检查 | `python3 -m mypy` → **0 错 / 46 文件**；`ruff check .` → All checks passed |
+| pi-lens | `/root/.pi-lens/tools/node_modules/.bin/pyright`（不在 PATH）→ **0 errors, 0 warnings** |
 | 版本控制 | `origin` = `git@github.com:1420970597/ai_football.git`，主分支 `main` |
 
 **⚠️ 宿主机直跑能力有限**（2026-10-07 实测复核；原表述有 3 处错误，已修正）：
@@ -238,17 +240,17 @@ web/*/返回信息.txt
 
 3. **自测闭环要求**：
 
-   - 已建 `tests/`（**23 文件 / 1115 用例**）。**任何新增或重构的业务模块，必须同目录配套 `test_<module>.py`**，并同步补进 `tests/`。
+   - 已建 `tests/`（**22 文件 / 1003 用例**）。**任何新增或重构的业务模块，必须同目录配套 `test_<module>.py`**，并同步补进 `tests/`。
    - 用例必须覆盖**至少一条正常路径 + 一条边界/异常路径**（如：requests 超时、HTTP 非 200、HTML 结构变更导致解析为空）。
    - 图表脚本改动需覆盖**参数边界**（如空数组、除零、格式串 `%` 转义）。
    - 测试基座是**标准库 `unittest`**（不是 pytest），**宿主机可直跑**，无需安装任何东西：
 
      ```bash
-     python3 -m unittest discover -s tests -q      # 本机实测 1115 passed
+     # 先限制 CPU：本机同机跑着 LLM 网关，打满 CPU 会中断对话（见 §1 分层执行策略）
+     ./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q
      ```
 
-     ⏱ 实测耗时：空闲 ≈17 分钟；3 个 compose 容器同时在跑 ≈36 分钟（宿主机仅 2 核）。
-     跑之前先确认没有重任务抢 CPU，否则很容易误判为“卡死”。
+     ⏱ 实测：本机（受限 2 核）约 42 秒~数分钟；若把 4 核全占上，网关会被饿死。
 
    - **必须在冻结的代码上跑**：测试进程一边跑、文件一边被改写时，
      `inspect.getsource()` 会用**编译时冻结的行号**去读**当前磁盘文件**，
@@ -354,12 +356,22 @@ docker run --rm -v "$PWD:/w" -w /w python:3.12-slim sh -c \
   "pip install -q -r requirements.txt && python -c 'import requests, bs4'"
 
 # 3. 单元测试（新增/重构业务模块时必须存在；unittest 基座，宿主机可直跑）
-python3 -m unittest discover -s tests -q      # 应 1115 passed
+#    ⚠️ 一律经 cpu-limited.sh：本机同跑 LLM 网关，打满 CPU 会中断对话
+./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q
+# 3b. 类型检查与 lint（双绿）
+./scripts/cpu-limited.sh run -- python3 -m mypy            # 应 0 errors / 47 files
+./scripts/cpu-limited.sh run -- python3 -m ruff check .    # 应 All checks passed
 
-# 4. 浏览器链路集成（涉及采集改动时，三容器必须 healthy）
-docker compose -f docker/docker-compose.yml up -d --build
+# 4. 全栈集成（三容器必须 healthy，且 CPU 被限额）
+./scripts/cpu-limited.sh up
+./scripts/cpu-limited.sh build analytics-api   # 需重建镜像时（不要直接 docker build）
 docker compose -f docker/docker-compose.yml ps
-curl -sf http://localhost:8080/health && echo " scraper OK"
+curl -sf http://localhost:8000/health && echo " api OK"
+# 确认限额生效（应输出 200000 100000 = 2 核）
+for c in ai_football_analytics_api ai_football_web_console ai_football_redis; do
+  CID=$(docker inspect -f '{{.Id}}' $c)
+  echo "$c: $(cat /sys/fs/cgroup/system.slice/docker-$CID.scope/cpu.max)"
+done
 
 # 5. 报告可复现性（涉及 reports/ 改动时，必须全量重生成且数量对得上）
 python3 reports/*/scripts/make_figures.py     # 期望 17 图 / 12 CSV

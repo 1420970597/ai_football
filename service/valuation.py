@@ -19,18 +19,15 @@
 
 from __future__ import annotations
 
-import json
 import math
 import os
 import threading
 import time
-from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from collector.leyu_client import DEFAULT_HOST, DEFAULT_ORIGIN
-from collector.normalizer import normalize_matches
 from collector.sources import make_source
 from core import calibration as cal
 from core import devig as devig_mod
@@ -39,19 +36,20 @@ from core import markets as mk
 from core import microstructure as micro
 from core.models import (
     DevigMethod,
-    FairProbabilities,
     OddsSnapshot,
     SnapshotState,
     utcnow,
 )
 from store import SnapshotStore, make_cache, safe_name
 
-__all__ = ["ValuationService", "load_corpus"]
+__all__ = ["ValuationService"]
 
-#: 乐鱼源写入快照的展示名（现为**默认**数据源）
+#: 乐鱼源写入快照的展示名（本项目**唯一**数据源）
 LEYU_SOURCE_NAME = "乐鱼API"
-#: 体彩源展示名（保留作为可选数据源与回归对照）
-DEFAULT_SOURCE = "体彩官方API"
+#: 向后兼容别名：历史上这里指向体彩源展示名。
+#: 2026-10 只保留乐鱼后与 `LEYU_SOURCE_NAME` 同值，
+#: 保留名字是为了不破坏既有 import（如 `service.__init__`）。
+DEFAULT_SOURCE = LEYU_SOURCE_NAME
 
 #: 目录名赛事清单（`match_index()`）的缓存 TTL（秒）。
 #: 扫描实测 0.09s（3111 个目录），TTL 只用于避免同一页面的重复调用。
@@ -163,37 +161,15 @@ def _as_prob_tuple(raw: object, name: str) -> Tuple[float, ...]:
     return tuple(out)
 
 
-def load_corpus(root: str | Path) -> List[Dict[str, Any]]:
-    """从 output/场次*.json 读取原始记录（官方 API V2 的落盘结果）。
-
-    这是**合法数据源**：中国体育彩票官方 API，非爬取。
-    """
-    root = Path(root)
-    out: List[Dict[str, Any]] = []
-    for p in sorted(root.glob("场次*.json")):
-        try:
-            with p.open(encoding="utf-8") as fh:
-                data = json.load(fh)
-            if isinstance(data, dict):
-                out.append(data)
-            elif isinstance(data, list):
-                out.extend(x for x in data if isinstance(x, dict))
-        except (OSError, ValueError):
-            continue
-    return out
-
-
 class ValuationService:
     """估值服务：快照 → 去水 → 优势 → 仓位 → 校准。
 
-    数据源是可插拔的（见 `collector.sources`）：默认 **乐鱼（leyu）**，
-    可通过 `DATA_SOURCE` 环境变量或构造参数切换，体彩文件源保留为可选。
+    数据源只有一个：**乐鱼（leyu）**（2026-10 起已下线体彩文件源）。
     """
 
     def __init__(
         self,
         snapshot_root: str | Path,
-        corpus_root: Optional[str | Path] = None,
         cache: Optional[Any] = None,
         prefer_redis: Optional[bool] = None,
         source: Optional[str] = None,
@@ -208,7 +184,7 @@ class ValuationService:
             缓存不跨进程（这是一个曾经真实存在的缺陷）。
           - True / False：显式指定（供测试使用）。
 
-        source：数据源名称（`leyu` / `ticai`，支持中文别名）。
+        source：数据源名称（本项目仅 `leyu`，支持中文别名）。
           - None（默认）：读 `DATA_SOURCE` 环境变量；仍为空则用 **leyu**。
         saz_path：乐鱼抓包路径；给出时乐鱼源进入**离线回放**（无需联网）。
         source_obj：直接注入已构造的数据源（供测试/扩展覆盖前两者）。
@@ -221,7 +197,6 @@ class ValuationService:
             cache=cache if cache is not None else make_cache(
                 prefer_redis=prefer_redis),
         )
-        self.corpus_root = Path(corpus_root) if corpus_root else None
         self.saz_path = str(saz_path) if saz_path else \
             (os.environ.get("LEYU_SAZ") or None)
         self._ingested = False
@@ -259,7 +234,6 @@ class ValuationService:
                 else (os.environ.get("DATA_SOURCE") or None)
             self.source = make_source(
                 resolved,
-                corpus_root=self.corpus_root,
                 # 仅在显式给出 saz 时回放；否则与乐鱼在线网关打交道
                 saz_path=self.saz_path,
                 host=os.environ.get("LEYU_HOST") or DEFAULT_HOST,
@@ -306,19 +280,9 @@ class ValuationService:
         full: bool = False,
         progress: Optional[Any] = None,
     ) -> Any:
-        """按数据源类型分派拉取（保留体彩源的 source 覆盖能力）。"""
-        kwargs: Dict[str, Any] = {"mids": mids, "max_matches": max_matches}
-        # 仅乐鱼源支持 full / progress；体彩源忽略这两个参数
-        if self.source.name == "leyu":
-            kwargs["full"] = full
-            kwargs["progress"] = progress
-        if source is None or source == self.source.display_source:
-            return self.source.fetch(**kwargs)
-        # 显式覆盖：仅体彩文件源支持自定义展示名
-        snaps, issues = self.source.fetch(**kwargs)
-        if self.source.name == "ticai":
-            return [replace(s, source=source) for s in snaps], issues
-        return snaps, issues
+        """拉取当前数据源（只有乐鱼）的全部快照。"""
+        return self.source.fetch(
+            mids=mids, max_matches=max_matches, full=full, progress=progress)
 
     def _all_snapshots(self) -> List[OddsSnapshot]:
         """扫描存储，返回**当前数据源**的全部快照（带缓存）。
@@ -909,8 +873,6 @@ class ValuationService:
                 raw = stats
                 break
         if raw is None:
-            raw = self._goals_stats_of(match_id)
-        if raw is None:
             return None
 
         try:
@@ -986,35 +948,6 @@ class ValuationService:
                 result["market_error"] = str(exc)
 
         return result
-
-    def _goals_stats_of(self, match_id: str) -> Optional[Dict[str, float]]:
-        """从语料里回捞该场的场均进球/失球（若语料可用）。
-
-        既有 output JSON 的「详细分析数据.数据统计」并非快照的一部分，
-        因此这里的回捞是**尽力而为**：找不到就返回 None，绝不编造。
-        """
-        if not self.corpus_root:
-            return None
-        for rec in load_corpus(self.corpus_root):
-            basic = rec.get("基本信息") or {}
-            mid = str(basic.get("场次号") or basic.get("比赛ID") or "")
-            if mid != str(match_id):
-                continue
-            stats = ((rec.get("详细分析数据") or {}).get("数据统计") or {})
-            try:
-                return {
-                    "主队场均进球": float(
-                        (stats.get("进球平均数") or {})["主场平均进球"]),
-                    "主队场均失球": float(
-                        (stats.get("失球平均数") or {})["主场平均失球"]),
-                    "客队场均进球": float(
-                        (stats.get("进球平均数") or {})["客场平均进球"]),
-                    "客队场均失球": float(
-                        (stats.get("失球平均数") or {})["客场平均失球"]),
-                }
-            except (KeyError, TypeError, ValueError):
-                return None
-        return None
 
     def cross_market_check(
         self, match_id: str, tol: float = 0.02,
@@ -1179,9 +1112,21 @@ class ValuationService:
 
     def get_microstructure(self, match_id: str,
                            market: str = "1X2") -> Optional[Dict[str, Any]]:
-        snaps = [s for s in self._snapshots_of(match_id) if s.market == market]
-        if not snaps:
+        snaps_all = self._snapshots_of(match_id)
+        if not snaps_all:
             return None
+        # 必须走等价名匹配：乐鱼的全时独赢叫 `HAD`，而控制台默认请求
+        # 遗留名 `1X2`。原实现用 `s.market == market` 裸比较，
+        # 导致纯乐鱼数据上 `/api/v1/microstructure/<id>` **必然 404**。
+        names = self._candidate_names(market)
+        snaps = [s for s in snaps_all if s.market in names]
+        if not snaps:
+            # 实在没有该玩法：降级到「快照最多」的市场，保证端点可用。
+            by_market: Dict[str, List[OddsSnapshot]] = {}
+            for s in snaps_all:
+                by_market.setdefault(s.market, []).append(s)
+            market = max(by_market, key=lambda m: len(by_market[m]))
+            snaps = by_market[market]
         signals = []
         n_out = len(snaps[0].outcomes)
         for i in range(n_out):
@@ -1249,20 +1194,6 @@ class ValuationService:
             "接入结算数据后 Brier/ECE/CLV 将自动生效（报告 §8.8）"
         )
         return d
-
-    # -- 采集 ---------------------------------------------------------------
-
-    def start_collect(self, urls: Sequence[str],
-                      registry: Any = None) -> Dict[str, Any]:
-        """触发采集任务（经 HTTP 委托 browser-scraper，不直接操作浏览器）。"""
-        from collector.orchestrator import ScrapeClient, collect_urls
-
-        client = ScrapeClient()
-        task, results = collect_urls(
-            urls, client=client, registry=registry, require_healthy=False)
-        ok = sum(1 for r in results if r.get("success"))
-        return {"task": task.as_dict(), "results_ok": ok,
-                "results_total": len(results)}
 
     def health(self) -> Dict[str, Any]:
         return {

@@ -1,6 +1,17 @@
 # 注意：不再声明 `version:`。Compose V2 已忽略该字段并会输出
 #       "the attribute `version` is obsolete" 警告。
 
+# ---------------------------------------------------------------------------
+# CPU 预算：本机同时运行 LLM 网关，编译/采集打满 CPU 会拖垮网关（进而
+# 打断交互会话）。因此**所有容器**都声明 `cpus`，默认 2.0 核
+# （4 vCPU 的 50%）。覆盖： AI_FOOTBALL_CPUS=3.0 docker compose ...
+#
+# ⚠️ `cpus` 只约束**运行期**。构建期用的是 BuildKit，它**忽略**
+#    `--cgroup-parent`（实测 cpu.max 仍为 max，4 核跑满）。构建请走
+#    `scripts/cpu-limited.sh build`，它用 DOCKER_BUILDKIT=0 + cpuset
+#    真正把构建容器钉在 2 个核上（实测 affinity=[0,1]）。
+# ---------------------------------------------------------------------------
+
 name: ai_football
 
 services:
@@ -15,89 +26,17 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
+    # CPU 硬上限（见文件头「CPU 预算」）。cpus = 核数，与宿主机核数无关。
+    cpus: "${AI_FOOTBALL_CPUS:-2.0}"
     networks:
       - ai_football_network
 
-  # 浏览器抓取服务
-  browser-scraper:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.browser
-    container_name: ai_football_browser_scraper
-    ports:
-      # 同理可覆盖： SCRAPER_PORT=18080 docker compose ... up -d
-      - "${SCRAPER_PORT:-8080}:8080"
-    # ⚠️ 重要：不要把「希望由 .env 覆盖」的变量写进 environment。
-    #    compose 中 environment 的优先级**高于** env_file，若写成
-    #    `- FOO=${FOO:-}`，未设置时会被展开为空串并覆盖 env_file 的值，
-    #    导致 .env 里的配置静默失效（本项目曾真实踩到该坑）。
-    #    因此这里只保留容器内固定值；所有可外部注入的变量（DATA_SOURCE、
-    #    LEYU_*）一律只经 env_file 传入，缺省行为由代码兜底
-    #    （data source 默认 leyu；网关默认 api.rah492x.com）。
-    environment:
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
-      - SNAPSHOT_ROOT=/app/output/snapshots
-      - CORPUS_ROOT=${CORPUS_ROOT:-}
-      # 缓存后端：redis 可达则用 redis，否则自动回退内存
-      - REDIS_URL=redis://redis:6379/0
-    # 以下变量可写入仓库根的 .env（已被 .gitignore 忽略，凭证不入库）：
-    #   DATA_SOURCE=leyu|ticai            数据源（缺省 leyu）
-    #   LEYU_APP_TOKEN / LEYU_APP_UUID / LEYU_APP_SIGNATURE
-    #       App 引导（推荐）：启动 YBTY 场馆换取 requestId，可自动续期
-    #   LEYU_REQUEST_ID / LEYU_CUID       手工临时会话
-    #   LEYU_SESSION_FILE                 会话 JSON 文件（外部定期刷新）
-    #   LEYU_LOGIN_COMMAND                登录命令（argv，非 shell 字符串）
-    #   LEYU_HOST / LEYU_APP_HOST         覆盖网关
-    #   LEYU_SAZ                          给出 saz 路径则离线回放
-    volumes:
-      - ../output:/home/scraper/app/output
-      - /tmp/.X11-unix:/tmp/.X11-unix
-    depends_on:
-      - redis
-    networks:
-      - ai_football_network
-    security_opt:
-      - seccomp:unconfined
-    shm_size: 2gb
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1.0'
-    # 显式声明启动命令。默认 CMD 已是同一命令，此处显式写出以便排查时无需翻 Dockerfile。
-    # 注意：browser_scraper_service.py 的逻辑是「当 DISPLAY 存在时启用 --headless」，
-    #       故上面的 DISPLAY=:99 实际是触发无头模式的开关（见 README「已知问题」）。
-    command: ["python3", "browser_scraper_service.py"]
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=5).status==200 else 1)"]
-      interval: 15s
-      timeout: 8s
-      retries: 5
-      start_period: 40s
-
-  # AI分析主服务
-  ai-analyzer:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    container_name: ai_football_analyzer
-    ports:
-      - "${ANALYZER_PORT:-8000}:8000"
-    environment:
-      - BROWSER_SCRAPER_URL=http://browser-scraper:8080
-      - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - ../output:/app/output
-      - ../config.py:/app/config.py:ro
-    depends_on:
-      - redis
-      - browser-scraper
-    networks:
-      - ai_football_network
-    # 默认不随 up 启动（分析器为一次性任务，而非长驻服务）。
-    # 需要时用： docker compose -f docker/docker-compose.yml run --rm ai-analyzer
-    profiles: ["analyzer"]
+  # 说明：本项目已收敛为**单一数据源（乐鱼在线 API）+ 单服务**架构。
+  #   历史遗留的 browser-scraper（Selenium 沙盒）与 ai-analyzer（多站点
+  #   文章搜索 + LLM 摘要）两个容器已于本次清理中移除：数据源、采集、
+  #   归一化、分析与决策全部由下面的 analytics-api 一个进程承担。
+  #   被移除的替代路径：collector/leyu_*（乐鱼 HTTP/WS 采集）与
+  #   service/analysis.py（决策编排），不再需要浏览器与抓取客户端。
 
   # B/S 架构的 Server 端入口：REST API + 静态控制台
   analytics-api:
@@ -119,7 +58,6 @@ services:
       - API_HOST=0.0.0.0
       - API_PORT=8000
       - SNAPSHOT_ROOT=/app/output/snapshots
-      - CORPUS_ROOT=${CORPUS_ROOT:-}
       # 缓存后端：redis 可达则用 redis，否则自动回退内存
       - REDIS_URL=redis://redis:6379/0
     # ⚠️ 可外部注入的变量（DATA_SOURCE、LEYU_*）一律**只经上面的 env_file** 传入，
@@ -129,8 +67,7 @@ services:
     #    缺省行为由代码兜底（数据源默认 leyu；网关默认 api.rah492x.com）。
     #
     # 可写入仓库根 .env（已被 .gitignore 忽略，凭证不入库）的变量：
-    #   DATA_SOURCE=leyu|ticai           数据源（缺省 leyu）
-    #   LEYU_H5_SITE / LEYU_H5_TOKEN / LEYU_H5_UUID / LEYU_H5_SIGNATURE
+        #   LEYU_H5_SITE / LEYU_H5_TOKEN / LEYU_H5_UUID / LEYU_H5_SIGNATURE
     #       H5 cookie 引导（**推荐**，与浏览器操作一致）：
     #       带 cookie 取网关 → launch 换 requestId；可自动重取
     #   LEYU_APP_TOKEN / LEYU_APP_UUID / LEYU_APP_SIGNATURE
@@ -145,12 +82,15 @@ services:
     #   ANALYSIS_CYCLE_LIVE_ONLY         1=只对进行中赛事决策（省 LLM）
     #   ANALYSIS_RESULT_PATH             决策结果落盘路径（重启可恢复）
     volumes:
-      # 宿主机语料（output/场次*.json）只读挂载，供首次导入与体彩源使用
+      # 宿主机快照存储（乐鱼实时采集写入）
       - ../output:/app/output
       # 乐鱼抓包（离线回放时才需要；文件缺失不影响在线模式）
       - ../leyu.saz:/app/leyu.saz:ro
     depends_on:
       - redis
+    # 决策/采集是 CPU 敏感路径（全量采集时会打满多核）。
+    # 限到 cpus 核，避免抢占同机上 LLM 网关的算力。
+    cpus: "${AI_FOOTBALL_CPUS:-2.0}"
     networks:
       - ai_football_network
     restart: unless-stopped
@@ -169,6 +109,8 @@ services:
       - ./nginx.console.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - analytics-api
+    # nginx 静态托管几乎不吃 CPU，但统一限上，防止异常流量下的突发。
+    cpus: "${AI_FOOTBALL_CPUS:-2.0}"
     networks:
       - ai_football_network
     restart: unless-stopped

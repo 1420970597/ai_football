@@ -114,10 +114,9 @@ from __future__ import annotations
 
 import json
 import ssl
-import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlsplit, parse_qs
 
 from .session import Session, SessionError, SessionProvider

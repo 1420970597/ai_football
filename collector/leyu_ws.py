@@ -321,8 +321,8 @@ class WebSocketConnection:
         """接收下一个数据帧。
 
         Returns:
-            Frame；超时返回 None；收到 close 帧返回 None 并置 closed。
-        自动应答 ping（返回 pong）并处理分片重组。
+            数据帧；超时或收到 close 帧返回 None。
+        自动应答 ping（返回 pong）并处理分片重组；控制帧在内部消费后继续读。
         """
         sock = self._require_sock()
         deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
@@ -331,9 +331,9 @@ class WebSocketConnection:
             if parsed is not None:
                 frame, consumed = parsed
                 del self._buffer[:consumed]
-                result = self._handle_control(frame)
-                if result is not _CONTINUE:
-                    return result  # type: ignore[return-value]
+                handled, result = self._handle_control(frame)
+                if not handled:
+                    return result
                 continue
 
             remaining = deadline - time.monotonic()
@@ -353,36 +353,39 @@ class WebSocketConnection:
                 return None
             self._buffer.extend(chunk)
 
-    def _handle_control(self, frame: Frame) -> Optional[Frame]:
-        """处理控制帧与分片；返回数据帧则交还调用方，否则返回哨兵 _CONTINUE。"""
+    def _handle_control(self, frame: Frame) -> Tuple[bool, Optional[Frame]]:
+        """处理控制帧与分片。
+
+        Returns:
+            (handled, frame)：`handled=True` 表示该帧已被消费，调用方应继续读；
+            否则 `frame` 为可交还的数据帧（None 表示 close/连接结束）。
+
+        用元组而不是“哨兵值 + `Optional[Frame]`”返回，是因为后者必须写
+        `# type: ignore[return-value]`，而 mypy 会把 `x is not 哨兵` 判成
+        非重叠比较（真实报过的 `comparison-overlap`），并反过来把那个
+        ignore 判成 unused——两头不讨好。
+        """
         if frame.opcode == OPCODE_PING:
             self._send(encode_frame(frame.payload, OPCODE_PONG))
-            return _CONTINUE  # type: ignore[return-value]
+            return True, None
         if frame.opcode == OPCODE_PONG:
-            return _CONTINUE  # type: ignore[return-value]
+            return True, None
         if frame.opcode == OPCODE_CLOSE:
             self.closed = True
-            return None
+            return False, None
         if frame.opcode == OPCODE_CONT:
             self._fragments.append(frame.payload)
             if frame.fin:
                 payload = b"".join(self._fragments)
                 opcode = self._fragment_opcode
                 self._fragments = []
-                return Frame(fin=True, opcode=opcode, payload=payload)
-            return _CONTINUE  # type: ignore[return-value]
+                return False, Frame(fin=True, opcode=opcode, payload=payload)
+            return True, None
         if not frame.fin:
             self._fragments = [frame.payload]
             self._fragment_opcode = frame.opcode
-            return _CONTINUE  # type: ignore[return-value]
-        return frame
-
-
-class _Continue:
-    """内部哨兵：表示该帧已被消费（控制帧/未完成分片），调用方应继续读。"""
-
-
-_CONTINUE = _Continue()
+            return True, None
+        return False, frame
 
 
 # --------------------------------------------------------------------------- #

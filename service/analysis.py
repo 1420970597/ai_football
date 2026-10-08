@@ -42,7 +42,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 from collector.leyu_normalizer import (
     snapshots_from_live,
@@ -153,7 +153,7 @@ def _to_int(value: object, default: int = 0) -> int:
     或 JSON），直接 `int()` 会抛 TypeError 并让整个分析请求失败。
     """
     try:
-        return int(value)  # type: ignore[arg-type]
+        return int(cast(Any, value))
     except (TypeError, ValueError, OverflowError):
         return default
 
@@ -198,6 +198,22 @@ DEFAULT_CHANGE_BATCH = 12
 #: 待办队列长度上限（防止行情暴涨时无限堆积）。
 #: 超出时丢弃**最久未变动**的赛事（它们最可能已经不再有价值）。
 DEFAULT_CHANGE_QUEUE_MAX = 200
+
+#: 自适应限流：是否根据**实测 LLM 吞吐**调节批量与间隔。
+#:
+#: 为何需要（HANDOVER §3.4 实测）：固定 `change_batch=12` + 固定 20s 间隔，
+#: 遇到 LLM 慢时（单批 12 场 × 150s）待办队列会涨到 72 场；
+#: 遇到 LLM 快时又白等 20s。让批大小跟随实测耗时更贴近真实吞吐。
+DEFAULT_ADAPTIVE_THROTTLE = True
+
+#: 自适应目标：单批耗时尽量不超过这个值（秒）。
+#: 取 150s 是因为原 §3.4 观测的“12 场 × 150s”是用户能接受的量级；
+#: 调小更跟手但批更小（周转更频繁），调大则相反。
+DEFAULT_BATCH_TARGET_S = 150.0
+
+#: 自适应批量的上下限（防止离群值把批量推到无意义的两端）
+DEFAULT_BATCH_MIN = 3
+DEFAULT_BATCH_MAX = 24
 
 
 def _live_mids_supports_max_age(book: Any) -> bool:
@@ -301,6 +317,13 @@ class AnalysisConfig:
     change_min_interval_s: float = DEFAULT_CHANGE_MIN_INTERVAL_S
     #: 触发式决策每批场次上限，见 `DEFAULT_CHANGE_BATCH`
     change_batch: int = DEFAULT_CHANGE_BATCH
+    #: 按实测 LLM 吞吐自适应调节批量/间隔，见 `DEFAULT_ADAPTIVE_THROTTLE`
+    adaptive_throttle: bool = DEFAULT_ADAPTIVE_THROTTLE
+    #: 自适应单批耗时目标（秒），见 `DEFAULT_BATCH_TARGET_S`
+    batch_target_s: float = DEFAULT_BATCH_TARGET_S
+    #: 自适应批量的下限/上限，见 `DEFAULT_BATCH_MIN` / `DEFAULT_BATCH_MAX`
+    batch_min: int = DEFAULT_BATCH_MIN
+    batch_max: int = DEFAULT_BATCH_MAX
     #: 待办队列上限，见 `DEFAULT_CHANGE_QUEUE_MAX`
     change_queue_max: int = DEFAULT_CHANGE_QUEUE_MAX
     #: 决策结果落盘路径（重启后仍能立即展示上次结果）
@@ -421,6 +444,10 @@ class AnalysisService:
             "dropped": 0,        # 因队列满被丢弃的赛事数
             "last_trigger_at": 0.0,
             "last_trigger_mids": [],
+            #: 实测单场耗时（指数滑动平均）——自适应限流的唯一依据
+            "per_match_s": 0.0,
+            "last_batch_n": 0,
+            "last_batch_s": 0.0,
         }
         self._restore_latest()
 
@@ -605,11 +632,55 @@ class AnalysisService:
             earliest = min(self._pending.values()) - now
         return max(earliest, throttle)
 
+    def _effective_batch(self) -> int:
+        """本批该取多少场（自适应限流，HANDOVER §3.4）。
+
+        why：固定批量在 LLM 慢时会堆积（实测 pending 达 72），在 LLM 快时
+        又白等。这里用**上一批的实测单场耗时**反推本批批量：
+
+            batch = clamp(target_batch_s / per_match_s, batch_min, batch_max)
+
+        首轮无样本，用配置的 `change_batch` 作起点。样本用指数滑动平均
+        （α=0.5）平滑，避免单次抖动把批量推飞。
+
+        Returns:
+            本批最多处理的场次数（>= 1）。
+        """
+        base = max(1, _to_int(self.config.change_batch, DEFAULT_CHANGE_BATCH))
+        if not self.config.adaptive_throttle:
+            return base
+        with self._sched_lock:
+            per = _to_float(self._sched_stats.get("per_match_s"), 0.0)
+        if per <= 0.0:
+            return base  # 首轮：无样本，先用配置值
+        target = _to_float(self.config.batch_target_s, DEFAULT_BATCH_TARGET_S)
+        lo = max(1, _to_int(self.config.batch_min, DEFAULT_BATCH_MIN))
+        hi = max(lo, _to_int(self.config.batch_max, DEFAULT_BATCH_MAX))
+        want = int(target / per) if per > 0 else base
+        return max(lo, min(hi, want))
+
+    def _observe_batch(self, n: int, elapsed_s: float) -> None:
+        """记录一批的实测吞吐，供下一轮自适应。
+
+        Args:
+            n: 本批实际处理的场次数。
+            elapsed_s: 本批墙钟耗时（秒）。
+        """
+        if n <= 0 or elapsed_s <= 0:
+            return
+        per = elapsed_s / float(n)
+        with self._sched_lock:
+            old = _to_float(self._sched_stats.get("per_match_s"), 0.0)
+            # 指数滑动平均：α=0.5，新样本权重大，但单次离群不会支配
+            self._sched_stats["per_match_s"] = (per if old <= 0.0
+                                                else 0.5 * old + 0.5 * per)
+            self._sched_stats["last_batch_n"] = n
+            self._sched_stats["last_batch_s"] = round(elapsed_s, 2)
+
     def _trigger_batch(self) -> None:
         """取一批到期的赛事做决策（异常只记录，不退出循环）。"""
         now = time.time()
-        batch_max = max(1, _to_int(self.config.change_batch,
-                                   DEFAULT_CHANGE_BATCH))
+        batch_max = self._effective_batch()
         with self._sched_lock:
             due = [m for m, t in self._pending.items() if t <= now]
             if not due:
@@ -621,8 +692,10 @@ class AnalysisService:
                 self._pending.pop(m, None)
             self._sched_stats["last_trigger_at"] = now
             self._sched_stats["last_trigger_mids"] = list(picked)
+        t0 = time.time()
         try:
             res = self.decide_matches(picked)
+            self._observe_batch(len(picked), time.time() - t0)
             with self._sched_lock:
                 self._sched_stats["batches"] += 1
                 self._sched_stats["triggered"] += len(picked)
@@ -1623,7 +1696,7 @@ class AnalysisService:
         now = time.time()
         cached = getattr(self, "_live_cache", None)
         if cached is not None and now - cached[0] < 30.0:
-            return cached[1]  # type: ignore[return-value]
+            return cached[1]
 
         live: Optional[set] = None
         err = ""
@@ -1976,6 +2049,10 @@ class AnalysisService:
                 "change_debounce_s": self.config.change_debounce_s,
                 "change_min_interval_s": self.config.change_min_interval_s,
                 "cycle_interval_s": self.config.cycle_interval_s,
+                # 自适应限流：当前批量与依据可观测（HANDOVER §3.4）
+                "adaptive_throttle": self.config.adaptive_throttle,
+                "batch_target_s": self.config.batch_target_s,
+                "effective_batch": self._effective_batch(),
             },
             "cycle": dict(self.cycle_stats),
             "scheduler": self.scheduler_health(),
@@ -2114,6 +2191,13 @@ def build_analysis_service(
                                    DEFAULT_CHANGE_MIN_INTERVAL_S),
         change_batch=_to_int(_num("ANALYSIS_CHANGE_BATCH", DEFAULT_CHANGE_BATCH),
                              DEFAULT_CHANGE_BATCH),
+        adaptive_throttle=(e.get("ANALYSIS_ADAPTIVE_THROTTLE", "1") or "1")
+                          .strip() not in ("0", "false", "no"),
+        batch_target_s=_num("ANALYSIS_BATCH_TARGET_S", DEFAULT_BATCH_TARGET_S),
+        batch_min=_to_int(_num("ANALYSIS_BATCH_MIN", DEFAULT_BATCH_MIN),
+                          DEFAULT_BATCH_MIN),
+        batch_max=_to_int(_num("ANALYSIS_BATCH_MAX", DEFAULT_BATCH_MAX),
+                          DEFAULT_BATCH_MAX),
         change_queue_max=_to_int(
             _num("ANALYSIS_CHANGE_QUEUE_MAX", DEFAULT_CHANGE_QUEUE_MAX),
             DEFAULT_CHANGE_QUEUE_MAX),

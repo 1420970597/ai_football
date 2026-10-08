@@ -1,0 +1,39 @@
+{
+  "_schema": "odds_snapshot/v1",
+  "away": "里奥夸尔托学生",
+  "booksum": 1.03103741,
+  "captured_at": "2026-10-04T06:34:10.047870+00:00",
+  "home": "河床",
+  "league": "阿根廷职业联赛",
+  "margin": 0.03103741,
+  "market": "AH_1H(0.25)",
+  "match_id": "5549190",
+  "metadata": {
+    "leyu_cds": [
+      "A01"
+    ],
+    "leyu_chpid": "19",
+    "leyu_ctsp": 1791095608557,
+    "leyu_hpt": 2,
+    "leyu_hv": "-0.5/1",
+    "leyu_ov2": {
+      "away": 1.92,
+      "home": 1.96
+    },
+    "leyu_盘口名": "上半场让球",
+    "数据来源": "乐鱼API",
+    "盘口线": 0.25,
+    "联赛": "阿根廷职业联赛",
+    "赛事状态": 0
+  },
+  "odds": [
+    1.96,
+    1.92
+  ],
+  "outcomes": [
+    "home",
+    "away"
+  ],
+  "source": "乐鱼API",
+  "state": "active"
+}

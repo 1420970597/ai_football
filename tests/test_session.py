@@ -16,15 +16,12 @@ from __future__ import annotations
 
 import json
 import os
-import stat
-import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Any, List, Mapping, Optional
+from typing import List, Optional
 
-from collector.leyu_client import AuthError, DecodeError, LEYUMatch
+from collector.leyu_client import AuthError, DecodeError
 from collector.session import (
     DEFAULT_SESSION_TTL_S,
     ChainSessionProvider,
@@ -121,7 +118,11 @@ class TestFileProvider(unittest.TestCase):
         fd, path = tempfile.mkstemp(suffix=".json")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(content)
-        self.addCleanup(lambda: os.path.exists(path) and os.unlink(path))
+        def _rm_path() -> None:
+            if os.path.exists(path):
+                os.unlink(path)
+
+        self.addCleanup(_rm_path)
         return path
 
     def test_reads_json(self) -> None:
@@ -188,7 +189,11 @@ class TestCommandProvider(unittest.TestCase):
         """
         marker = tempfile.mkstemp()[1]
         os.unlink(marker)
-        self.addCleanup(lambda: os.path.exists(marker) and os.unlink(marker))
+        def _rm_marker() -> None:
+            if os.path.exists(marker):
+                os.unlink(marker)
+
+        self.addCleanup(_rm_marker)
         payload = '{"request_id":"x; touch %s"}' % marker
         p = CommandSessionProvider(["printf", "%s", payload])
         out = p.acquire()
@@ -227,14 +232,14 @@ class TestCommandProvider(unittest.TestCase):
             CommandSessionProvider(["echo", "[1,2,3]"]).acquire()
 
     def test_empty_command_rejected(self) -> None:
-        for bad in ([], ["  "]):
-            with self.subTest(bad=bad):
+        for bad_argv in ([], ["  "]):
+            with self.subTest(argv=bad_argv):
                 with self.assertRaises(SessionError):
-                    CommandSessionProvider(bad)
-        for bad in ("", "   "):
-            with self.subTest(bad=bad):
+                    CommandSessionProvider(bad_argv)
+        for bad_cmd in ("", "   "):
+            with self.subTest(command=bad_cmd):
                 with self.assertRaises(SessionError):
-                    CommandSessionProvider(command=bad)
+                    CommandSessionProvider(command=bad_cmd)
         with self.assertRaises(SessionError):
             CommandSessionProvider()
 

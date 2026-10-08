@@ -684,11 +684,11 @@ def _hafu_probabilities_exact(
                 continue
             ht_res = sign(i, j)
             for k in range(n + 1):
-                for l in range(n + 1):
-                    p = p_ht * sh[k][l]
+                for m in range(n + 1):
+                    p = p_ht * sh[k][m]
                     if p == 0.0:
                         continue
-                    ft_res = sign(i + k, j + l)
+                    ft_res = sign(i + k, j + m)
                     out[idx["%s/%s" % (ht_res, ft_res)]] += p
     return tuple(out)
 

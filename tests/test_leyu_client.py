@@ -24,7 +24,7 @@ import json
 import os
 import unittest
 import zipfile
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from collector.leyu_client import (
     API_AES_KEY,
@@ -32,6 +32,7 @@ from collector.leyu_client import (
     API_PREFIX_WS,
     DecodeError,
     LEYUClient,
+    LEYUMatch,
     OSS_AES_KEY,
     TransportError,
     _aes_ecb_decrypt_pure,
@@ -398,11 +399,11 @@ class TestClientWiring(unittest.TestCase):
         c = LEYUClient(host="https://example.test")
         seen: List[List[str]] = []
 
-        def fake(mids: List[str]) -> List[Any]:
+        def fake(mids: Sequence[str]) -> List[LEYUMatch]:
             seen.append(list(mids))
             return []
 
-        c.matches_by_mids = fake  # type: ignore[method-assign]
+        c.matches_by_mids = fake
         list(c.iter_odds_batches(["1", "2", "3", "4", "5"], batch_size=2))
         self.assertEqual(seen, [["1", "2"], ["3", "4"], ["5"]])
 
@@ -464,6 +465,8 @@ def _load_saz() -> Any:
 
 class TestSazReplay(unittest.TestCase):
     """对真实抓包做端到端断言（锁定协议还原结论）。"""
+
+    saz: Any
 
     @classmethod
     def setUpClass(cls) -> None:

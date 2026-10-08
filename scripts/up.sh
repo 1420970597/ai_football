@@ -11,7 +11,7 @@
 #   ./scripts/up.sh --dry-run    # 只打印将使用的端口，不启动
 #   ./scripts/up.sh --down       # 仅停止本项目
 #
-# 环境变量覆盖：REDIS_PORT SCRAPER_PORT ANALYTICS_PORT CONSOLE_PORT
+# 环境变量覆盖：REDIS_PORT ANALYTICS_PORT CONSOLE_PORT
 
 set -euo pipefail
 
@@ -92,17 +92,15 @@ pick_port() {
 
 echo "==> 探测端口（仅为本项目选端口，不影响其他服务）"
 REDIS_PORT="${REDIS_PORT:-$(pick_port 6379 REDIS_PORT)}"
-SCRAPER_PORT="${SCRAPER_PORT:-$(pick_port 8080 SCRAPER_PORT)}"
 ANALYTICS_PORT="${ANALYTICS_PORT:-$(pick_port 8000 ANALYTICS_PORT)}"
 CONSOLE_PORT="${CONSOLE_PORT:-$(pick_port 3000 CONSOLE_PORT)}"
 
-export REDIS_PORT SCRAPER_PORT ANALYTICS_PORT CONSOLE_PORT
+export REDIS_PORT ANALYTICS_PORT CONSOLE_PORT
 
 cat <<EOF
 
 ==> 将使用以下端口
     redis           127.0.0.1:${REDIS_PORT}
-    browser-scraper 0.0.0.0:${SCRAPER_PORT}
     analytics-api   0.0.0.0:${ANALYTICS_PORT}
     web-console     0.0.0.0:${CONSOLE_PORT}
 

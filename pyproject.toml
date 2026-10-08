@@ -10,22 +10,13 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 
-# 运行依赖：核心层（core/store/collector）刻意保持零第三方依赖，
-# 因此此处只声明 Web 与采集运行所需的包。
+# 运行依赖：采集/决策层刻意保持零第三方依赖（仅标准库 urllib），
+# 因此此处只声明 Web 服务端真正需要的缓存客户端。
 dependencies = [
-    "requests>=2.31.0",
-    "beautifulsoup4>=4.12.2",
+    "redis>=5.0.1",
 ]
 
 [project.optional-dependencies]
-# 浏览器链路依赖（仅 browser-scraper 容器需要，见 docker/requirements-browser.txt）
-browser = [
-    "selenium>=4.15.2",
-    "webdriver-manager>=4.0.1",
-    "undetected-chromedriver>=3.5.4",
-    "flask>=2.3.3",
-    "redis>=5.0.1",
-]
 dev = [
     "pytest>=8.0.0",
     "mypy>=1.8.0",
@@ -66,6 +57,14 @@ show_error_codes = true
 #     **全仓迁移**，不属于任何单个业务改动；纳入门禁会逼着每次提交都顺手
 #     重写无关文件（正是 AGENTS.md §7「严禁扩大任一技术债」要防的事）。
 #     该迁移已记为待办，见 docs/HANDOVER.md §4.1。
+# 测试代码里「猴补丁替换实例方法」（`svc.method = fake`）是通用惯用法，
+# 而 mypy 对实例方法赋值一律报 `method-assign`。生产代码（core/store/
+# collector/api）仍严格检查，这里**只对 tests.* 关闭该方法级告警**，
+# 以免每个测试点都挂 `# type: ignore`（噪声大且会被自动格式化抹掉）。
+[[tool.mypy.overrides]]
+module = "tests.*"
+disable_error_code = ["method-assign"]
+
 [tool.ruff]
 target-version = "py312"
 # 与既有代码实际行长一致（核心层实测 max 99）；仅作格式化参考，不启用 E501。
@@ -79,7 +78,6 @@ exclude = [
     "web",
     "reports",
     "docs",
-    "验证码识别",
 ]
 
 [tool.ruff.lint]
@@ -94,6 +92,12 @@ ignore = [
     "E501",
     "B905",  # zip(strict=) 需逐处确认语义（改错会抛 ValueError），单独处理
 ]
+
+[tool.pyright]
+# `tools/` 不是包（无 __init__.py），但测试要导入其中的脚本。
+# 不声明 extraPaths 的话，pyright 报 reportMissingImports，
+# 而那会把「真的导错了」和「只是没配路径」混成同一类噪音。
+extraPaths = [".", "./tools"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

@@ -9,23 +9,29 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import unittest
 
 from api.app import ApiApp, BadRequest, NotFound, create_app
-from service.valuation import ValuationService
+from service.valuation import LEYU_SOURCE_NAME
 
-CORPUS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                      "output")
+#: 真实乐鱼快照离线夹具（无网、不依赖仓库 output/）。
+FIXTURE_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "fixtures", "leyu_snapshots")
 
 
 def build_app() -> ApiApp:
+    """用乐鱼快照夹具构造应用。
+
+    数据源已统一为乐鱼，不再有「体彩语料」分支；夹具为真实采集到的
+    乐鱼快照（3 场 × 多盘口 × 多时刻），复制到临时目录以免污染仓库。
+    """
     tmp = tempfile.mkdtemp(prefix="apitest_")
-    # 显式指定 ticai：本文件验证的是**体彩语料**驱动的端点契约，
-    # 不能跟随默认数据源（乐鱼）去访问网络。
-    app = create_app(snapshot_root=tmp, corpus_root=CORPUS, source="ticai")
-    app.svc.ingest_corpus()
-    return app
+    root = os.path.join(tmp, "snapshots")
+    shutil.copytree(os.path.join(FIXTURE_ROOT, LEYU_SOURCE_NAME),
+                    os.path.join(root, LEYU_SOURCE_NAME))
+    return create_app(snapshot_root=root)
 
 
 def call(app, verb, path, body=None, q=None):
@@ -228,33 +234,6 @@ class TestCalibration(unittest.TestCase):
         st, _ = call(self.app, "GET", "/api/v1/calibration",
                      q={"n_bins": "0"})
         self.assertEqual(st, 400)
-
-
-class TestCollectAndTasks(unittest.TestCase):
-    def setUp(self):
-        self.app = build_app()
-
-    def test_collect_missing_urls(self):
-        st, _ = call(self.app, "POST", "/api/v1/collect", {})
-        self.assertEqual(st, 400)
-
-    def test_collect_empty_urls(self):
-        st, _ = call(self.app, "POST", "/api/v1/collect", {"urls": []})
-        self.assertEqual(st, 400)
-
-    def test_collect_rejects_non_string(self):
-        st, _ = call(self.app, "POST", "/api/v1/collect", {"urls": [1, 2]})
-        self.assertEqual(st, 400)
-
-    def test_collect_too_many(self):
-        st, _ = call(self.app, "POST", "/api/v1/collect",
-                     {"urls": ["https://e.com"] * 51})
-        self.assertEqual(st, 400)
-
-    def test_task_not_found(self):
-        st, body = call(self.app, "GET", "/api/v1/tasks/nope")
-        self.assertEqual(st, 404)
-        self.assertIn("error", body)
 
 
 class TestRouting(unittest.TestCase):
