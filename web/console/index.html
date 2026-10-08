@@ -905,6 +905,9 @@ function openDecision(i) {
   const d = (S.decisions || [])[i];
   if (!d) return;
   S.selectedDecision = i;
+  showView("pricing");
+  $("pricing-body").style.display = "none";
+  $("st-pricing-empty").classList.remove("show");
   const panel = $("decision-panel");
   panel.style.display = "";
   setText($("decision-tag"), (d.home || "") + " vs " + (d.away || "") + " · " + (d.market || ""));
@@ -2033,6 +2036,7 @@ const backBtn = $("btn-decision-back");
 if (backBtn) backBtn.addEventListener("click", () => {
   const p = $("decision-panel");
   if (p) p.style.display = "none";
+  showView("dashboard");
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
 
@@ -2066,7 +2070,7 @@ loadDecisions({ silent: true });
 setInterval(() => {
   // 详情面板打开时不打扰用户
   const panel = $("decision-panel");
-  if (panel && panel.style.display !== "none") return;
+  if (S.view !== "dashboard") return;
   loadDecisions({ silent: true });
 }, 30000);
 
