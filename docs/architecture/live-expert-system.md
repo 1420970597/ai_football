@@ -108,4 +108,6 @@ ANALYTICS_PORT=8001 CONSOLE_PORT=3003 AI_FOOTBALL_CPUS=2 \
 最终真实足球滚动2048条延迟P95=205.243ms，计算P95=1.893ms；120次API请求与边界见研究报告及 `data/live-performance.csv`。三容器均healthy，实际 `cpu.max` 均为 `200000 100000`。
 
 
-交付 PR：[ #26 ](https://github.com/1420970597/ai_football/pull/26)。秒级与战绩缺陷分别关联 #23/#24；#25 保留同源前瞻模型能力验证跟踪。
+交付 PR：[#26](https://github.com/1420970597/ai_football/pull/26) 已合入 main（1358a8a）。秒级与战绩缺陷分别关联 #23/#24；#25 保留同源前瞻模型能力验证跟踪。
+
+TASK-25 开发 worktree 和分支已在合入后清理，工作区已同步 main。上表 `/tmp/ai-football-task25` 是当时的冻结测试目录；重新验证时将 Docker 挂载源换为当前仓库 `$PWD`。#23/#24 已关闭，#25 保留前瞻能力验证。
