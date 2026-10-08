@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>实时滚球决策：研究、设计与验证边界</title>
+<style>
+:root{--fg:#1c2733;--mut:#5d6b7a;--line:#d9e0e7;--bg:#fff;--acc:#2c6fa8;
+      --red:#b3271e;--redbg:#fdf0ee;--amb:#8a5a00;--ambbg:#fdf6e6;
+      --grn:#1e7b46;--grnbg:#eef9f2;--code:#f4f6f8}
+*{box-sizing:border-box}
+body{margin:0;background:#eef1f4;color:var(--fg);
+     font:16px/1.85 -apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",
+          "WenQuanYi Zen Hei","Noto Sans CJK SC",sans-serif;}
+.wrap{max-width:980px;margin:0 auto;background:var(--bg);
+      padding:56px 68px 90px;box-shadow:0 2px 18px rgba(0,0,0,.07)}
+h1{font-size:1.95em;line-height:1.4;margin:.2em 0 .6em;padding-bottom:.5em;
+   border-bottom:3px solid var(--acc);color:#12212e}
+h2{font-size:1.42em;margin:2.4em 0 .8em;padding:.35em 0 .35em .7em;
+   border-left:5px solid var(--acc);background:#f7fafc;color:#12212e}
+h3{font-size:1.16em;margin:1.9em 0 .6em;color:#1d3a52}
+h4{font-size:1.04em;margin:1.5em 0 .5em;color:#2b4a63}
+p{margin:.85em 0}
+a{color:var(--acc);text-decoration:none;border-bottom:1px solid #b9d3e6}
+a:hover{border-bottom-color:var(--acc)}
+hr{border:0;border-top:1px solid var(--line);margin:2.4em 0}
+strong{color:#0f1e2b}
+code{background:var(--code);padding:.14em .42em;border-radius:4px;
+     font:0.88em/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+     color:#8a2b4a;border:1px solid #e6eaee}
+pre{background:#1e2a36;color:#e6edf3;padding:18px 20px;border-radius:8px;
+    overflow:auto;font-size:13.5px;line-height:1.7}
+pre code{background:none;border:0;color:inherit;padding:0;font-size:1em}
+.math{background:var(--code);border:1px solid var(--line);border-left:4px solid var(--acc);
+      padding:14px 18px;margin:1.2em 0;white-space:pre-wrap;word-break:break-word;
+      overflow-x:auto;border-radius:6px;
+      font:14px/1.9 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#243342}
+.imath{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       font-size:.95em;color:#8a2b4a;background:#f4f6f8;padding:.05em .28em;border-radius:3px}
+.mmd{margin:1.6em 0;padding:10px 6px;border:1px solid var(--line);border-radius:8px;
+     background:#fcfdfe;overflow-x:auto}
+pre.mermaid{background:none;border:0;color:#1c2733;padding:0;margin:0;
+            font-size:13px;text-align:center;display:block}
+pre.mermaid.mermaid-fallback{background:#f7f9fb;border:1px dashed #c3ccd6;border-radius:6px;
+            padding:14px 16px;text-align:left;color:#33475b;font-size:12.5px;
+            white-space:pre;overflow:auto}
+pre.mermaid.mermaid-fallback::before{content:"⚠ Mermaid 未渲染（离线）—— 以下为图源文本";
+            display:block;margin-bottom:8px;color:var(--amb);font-weight:600;font-size:12px}
+pre.mermaid svg{max-width:100%;height:auto}
+blockquote{margin:1.2em 0;padding:14px 20px;background:#f8f9fb;
+           border-left:4px solid var(--acc);border-radius:0 6px 6px 0;color:#33475b}
+blockquote p{margin:.4em 0}
+blockquote blockquote{margin:.6em 0;background:#fff}
+.tw{overflow-x:auto;margin:1.3em 0;
+    border:1px solid var(--line);border-radius:8px;background:#fff}
+table{border-collapse:collapse;width:100%;font-size:14.5px}
+th,td{padding:9px 13px;border-bottom:1px solid var(--line);text-align:left;
+      vertical-align:top}
+th{background:#f1f5f9;font-weight:600;color:#1d3a52;white-space:nowrap}
+tbody tr:nth-child(even){background:#fafcfd}
+tbody tr:last-child td{border-bottom:0}
+.center{text-align:center}.right{text-align:right}
+img{max-width:100%;height:auto;display:block;margin:1.6em auto;
+    border:1px solid var(--line);border-radius:8px;background:#fff}
+ul,ol{margin:.8em 0;padding-left:1.7em}
+li{margin:.35em 0}
+.tag{display:inline-block;padding:.1em .55em;border-radius:4px;font-size:.86em;
+     font-weight:600;white-space:nowrap}
+@media print{body{background:#fff}.wrap{box-shadow:none;max-width:none;padding:0}
+  h2{page-break-after:avoid}table,img,pre,.math{page-break-inside:avoid}}
+@media(max-width:760px){.wrap{padding:26px 18px 60px}h1{font-size:1.5em}}
+</style>
+<script type="module">
+/* Mermaid 运行时：CDN 可用则渲染；离线/失败则优雅降级为可读代码块。
+   关键：渲染成功必须清除降级标记，避免出现「已渲染但仍显示未渲染警告」。 */
+const CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+const SEL = "pre.mermaid";
+
+function degrade(reason) {
+  var n = 0;
+  document.querySelectorAll(SEL).forEach(function (el) {
+    if (el.querySelector("svg")) return;   // 已成功渲染的不动
+    el.classList.add("mermaid-fallback");
+    n++;
+  });
+  if (n) console.warn("Mermaid fallback:", reason, "(" + n + " blocks)");
+  return n;
+}
+
+function clearFallback() {
+  document.querySelectorAll(SEL).forEach(function (el) {
+    el.classList.remove("mermaid-fallback");
+    el.removeAttribute("title");
+  });
+}
+
+(function () {
+  var settled = false;
+  var timer = setTimeout(function () {
+    if (!settled) degrade("加载超时（CDN 不可达）");
+  }, 15000);
+
+  import(CDN).then(function (mod) {
+    var mermaid = mod.default;
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "neutral",
+      securityLevel: "strict",
+      fontFamily: '-apple-system,"PingFang SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif',
+      flowchart: { useMaxWidth: true, htmlLabels: false },
+      sequence: { useMaxWidth: true },
+      state: { useMaxWidth: true }
+    });
+    return mermaid.run({ querySelector: SEL });
+  }).then(function () {
+    settled = true;
+    clearTimeout(timer);
+    clearFallback();                       // 成功后必须清除降级标记
+    window.__mermaidStatus = { ok: true, blocks: document.querySelectorAll(SEL + " svg").length };
+  }).catch(function (e) {
+    settled = true;
+    clearTimeout(timer);
+    var msg = String((e && e.message) || e);
+    degrade(msg);
+    window.__mermaidStatus = { ok: false, error: msg };
+  });
+})();
+</script>
+</head>
+<body>
+<main class="wrap">
+<h1>实时滚球决策：研究、设计与验证边界</h1>
+<p>2026-10-08；用户目标：秒级计算、可信战绩、App 风格精简 UI、专家级实时分析。本报告在创新实施前提交。证据 A=一手文档/代码/实测，B=学术研究，C=社区实测。本轮未以营销“高正确率”或社区荐单作为能力证据。</p>
+<h2>结论与研究路线</h2>
+<p>专家常用比赛时间、比分、场上事件、报价速度和盘口变化解释比赛。这些信息应转为可回放的事件时间特征和校准概率。推荐是否可信，需要在当时可用的信息上，与去水市场基准比较。高命中低赔率不等于正收益；少量精彩案例不足以证明长期优势。</p>
+<p>创新选择：事件驱动快计算、比分条件下剩余进球模型、亚洲盘完整支付函数、证据门控、按比赛留出的校准回放。LLM 可解释已有结果，不能凭赔率编造球队状态、比赛事件或统计置信度。</p>
+<div class="mmd"><pre class="mermaid">sequenceDiagram
+  participant Source as 乐鱼推送
+  participant State as 内存赛事状态
+  participant Model as 本地模型
+  participant UI as 工作台
+  participant Replay as 回放与战绩
+  Source-&gt;&gt;State: 报价/比分/阶段/暂停（接收时刻）
+  State-&gt;&gt;Model: 固定首个到期，合并新状态
+  Model-&gt;&gt;UI: 概率/EV/数据缺口/观察结论
+  Model--&gt;&gt;Replay: 版本化输入与建议
+  Source--&gt;&gt;Replay: 经确认的终场结果
+  Replay-&gt;&gt;Replay: 半注结算，校准、ROI、覆盖率</pre></div>
+<h2>成熟方案比较（A；定性比较，无主观数字打分）</h2>
+<div class="tw"><table><thead><tr><th>方案</th><th>事件接入</th><th>时间与场上事件</th><th>盘口</th><th>实时机制</th><th>覆盖依赖</th><th>接入成本</th><th>能否直接保证预测优势</th></tr></thead><tbody><tr><td>Hudl StatsBomb Live</td><td>GraphQL</td><td>详细事件 schema，可订阅</td><td>需结合赔率源</td><td>subscriptions</td><td>购买比赛覆盖，客户 token</td><td>商业授权，开放历史数据可研究</td><td>不能；数据还需建模验证</td></tr><tr><td>Sportradar Soccer</td><td>REST/Push</td><td>timeline 与摘要，覆盖分层</td><td>独立赔率产品</td><td>Live endpoints / Push</td><td>低覆盖级别可能缺详细事件</td><td>商业账号与套餐</td><td>不能；覆盖和延迟需实测</td></tr><tr><td>Stats Perform Opta</td><td>商业数据接口</td><td>专业事件与分析</td><td>需结合行情</td><td>商业产品接入</td><td>依产品/赛事授权</td><td>商务洽谈</td><td>不能；官方产品页不是收益证据</td></tr><tr><td>Betfair Stream</td><td>交易所流</td><td>行情和订单，不等于球场事件</td><td>交易所价量</td><td>增量变更 + 线程安全缓存</td><td>市场覆盖与流权限</td><td>账户/AppKey</td><td>不能；市场是比较基准</td></tr><tr><td>当前乐鱼</td><td>REST/WS</td><td>比分、阶段、未知事件码</td><td>AH/OU/HAD</td><td>WS 秒级实测</td><td>App 会话、部分比赛类型不明确</td><td>既有接入</td><td>不能；需修复信息缺口与验证</td></tr></tbody></table></div>
+<p>研究不会伪装已接入付费体育数据。当前继续以乐鱼为生产源；公开 StatsBomb 数据仅用于可署名的离线研究。</p>
+<h2>学术证据如何转成实现</h2>
+<div class="tw"><table><thead><tr><th>证据</th><th>研究发现</th><th>实现与限制</th></tr></thead><tbody><tr><td>B Dixon &amp; Coles 1997，DOI 10.1111/1467-9876.00065</td><td>动态球队强度 Poisson 模型，历史样本拟合与收益研究</td><td>提供基线思想，不可照搬 1990 年代回报为当前能力</td></tr><tr><td>B Dixon &amp; Robinson 1998，DOI 10.1111/1467-9884.00152</td><td>比赛内 birth-process 模型</td><td>剩余时间与比分需作为状态，不只预测赛前全场</td></tr><tr><td>B 红黄牌研究，DOI 10.1007/s10479-022-04733-0</td><td>1826 场、5 分钟区间；红牌影响与时间、实力、比分有关</td><td>未核验事件码不设红牌乘数；不能用固定“红牌 +30%”冒充研究结果</td></tr><tr><td>B Gneiting &amp; Raftery 2007</td><td>proper scoring，sharpness subject to calibration</td><td>同时报告 Brier/log loss 和可靠性，不使用模型自评正确率</td></tr><tr><td>A NIST Wilson 方法</td><td>二项比例置信区间</td><td>独立比赛级命中率可用，重复同场信号不能当独立样本</td></tr><tr><td>B Gibbs/Candès ACI，arXiv:2106.00170</td><td>分布漂移下自适应覆盖</td><td>漂移监测研究方向；不是小样本高胜率保证</td></tr></tbody></table></div>
+<h2>一手审计与测量</h2>
+<p>A：连续跳价每次把 pending 延后 30s；全局间隔 20s、目标批次150s；生产兜底一轮 62.06s。这些是 2026-10-08 抽样值，非稳定性保证。</p>
+<p>A：<code>OU over 2.25</code>、1:1 被判全输，应输半；<code>AH home -0.25</code>、0:0 同样错误。台账取同盘口最新建议且更新报价改写建议时间，历史并非完整的决策轨迹。旧数据必须留备份并承认不可恢复部分。</p>
+<p>A：APK 色彩白底 #ffffff、页底 #f2f2f6、蓝 #1c88ff、选中 #e8f3ff。仅采用视觉语言。</p>
+<p>A：真实足球详情 mst 样本 2812/273/3689，是秒值。阶段 6/7 的时钟累计或重置必须核验；EAFC 时长不能沿用真实足球90分钟。未知事件、缺时钟和报价不一致应降低覆盖率，而非编造输入提高推荐量。</p>
+<p><img alt="Wilson 区间示意" src="images/wilson.png"></p>
+<p>图为假设观测命中率 80% 时，独立样本量对 Wilson 95% 区间的影响（理论示意，非系统测量值）。CSV 含全部参数和区间。将成功率改为 50% 或 95% 重跑，样本越大区间越窄的方向不变。ROI、赔率与比赛相关性仍须单独评价。</p>
+<h2>验证方案</h2>
+<p>按比赛 ID 隔离训练与验证，时间顺序留出；只输入当时已收到的比赛状态，终场比分仅作标签。对市场拟合与滞后信号分别测试：市场拟合概率不能称为独立预测优势。完整亚洲支付函数含走水/半注。记录推荐覆盖率、每场一次或明确仓位的 ROI、Brier、log loss、可靠性分桶、缺失率、比赛数和区间。真实足球/EAFC 分开。</p>
+<p>系统只记录模拟建议，没有交易执行或成交保证。未验证的模型明确显示“观察/尚未验证”，不以推荐数量或自评置信度替代证据。专家水平必须在独立比赛、足够样本、稳定校准和正收益下检验；短期命中率不能被承诺。</p>
+<h2>来源与检索诚实性</h2>
+<ul><li>A <a href="https://github.com/statsbomb/open-data">StatsBomb Open Data 与使用条款</a>：公开研究需署名，非完整实时授权。</li><li>A <a href="https://live-data-api-guide.statsbomb.com/">StatsBomb Live 指南</a>：事件与订阅 schema，已读取。</li><li>A <a href="https://developer.sportradar.com/soccer/docs/soccer-ig-live-match-retrieval">Sportradar Live Match Updates</a>：已读取。</li><li>A <a href="https://www.statsperform.com/products/opta-data/">Opta 产品页</a>：已读取，不能推导量化延迟或收益。</li><li>A <a href="https://github.com/betfair/stream-api-sample-code">Betfair 官方流客户端</a>：README 缓存/批量变更已读取；developer.betfair.com 本轮403，未声称读到其正文。</li><li>B <a href="https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf">Proper scoring 原文 PDF</a>：已提取正文。</li><li>A <a href="https://www.itl.nist.gov/div898/handbook/prc/section2/prc241.htm">NIST 比例区间</a>。</li><li>B <a href="https://arxiv.org/abs/2106.00170">Adaptive Conformal Inference</a>。</li></ul>
+<p>Crossref 已核验以上三个足球论文的题名/DOI/摘要；不把只有摘要的论文写成全文复现。两次检索 JSON 解码失败未作证据；arXiv:0803.0614 实际题名是 Fitness, chance, and myths，未误标为 birth-process 论文。未使用 SEO 荐单站做能力证据。</p>
+<h2>可复现命令</h2>
+<p>图表在限2核 Docker 中，挂载 <code>/usr/share/fonts/truetype/wqy</code>，运行 <code>scripts/make_figures.py</code>；默认生成1图/1CSV。HTML 复用现有报告渲染器 <code>reports/leyu-kaiyun-odds-bot-feasibility/scripts/md_to_html.py</code>，支持 Mermaid 与离线文本回退。实施后附回放结果、性能实测与 UI 截图，目标值和实测值分列。</p>
+</main>
+</body>
+</html>
