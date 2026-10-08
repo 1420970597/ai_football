@@ -290,9 +290,14 @@ LEYU_APP_LOGIN_PASSWORD=<登录口令明文>
 > | `ANALYSIS_LLM_COOLDOWN_S` | `60` | 初始冷却秒数（每次半开失败后翻倍，封顶 1800） |
 >
 > 可观测：`/health` → `llm.breaker`（`open` / `consecutive_failures` /
-> `cooldown_remaining_s` / `skipped`）。**4xx（请求/凭据错）不熔断** —— 否则一个
+> `cooldown_remaining_s` / `skipped`）。注意 `calls` 只计**成功**，
+> `attempts` 才是真正发出的网络请求数 —— 上游全挂时会出现 `calls=0` 但
+> `failures=362` 的组合，加 `attempts` 后才看得出「失败多、发得少」。**4xx（请求/凭据错）不熔断** —— 否则一个
 > 写错的 prompt 或失效的 key 会把整条链路停掉。回归测试见
 > `tests/test_llm_decision.py::TestLLMCircuitBreaker`（5 例，含半开恢复与 4xx 不熔断）。
+>
+> **线上实测**（上游掉线时）：362 次调用里 356 次被本地短路，只发了 **6 次**
+> 真请求 —— 旧逻辑按同样调用量要发 ~1448 次（每次 4 重试）。
 >
 > ⚠️ 网关侧的根因**不在本项目**：`sub2api` 日志显示
 > `no available OpenAI accounts supporting model: deepseek-v4.1-flash`

@@ -467,6 +467,8 @@ class LLMClient:
         self.config = config
         self.calls = 0
         self.failures = 0
+        #: 真正发出网络的次数（含失败，不含被熔断拦下的）
+        self.attempts = 0
         self.last_error = ""
         self.total_latency_s = 0.0
         # 熔断状态（见 DEFAULT_FAILURE_THRESHOLD 的注释）
@@ -631,6 +633,7 @@ class LLMClient:
                            % (blocked, self.config.provider, self.config.model))
         for attempt in range(max(1, self.config.max_retries)):
             try:
+                self.attempts += 1
                 resp = self._post(payload)
                 self.calls += 1
                 self.total_latency_s += time.time() - t0
@@ -708,7 +711,11 @@ class LLMClient:
         until = max(0.0, self._open_until - now)
         return {
             **self.config.masked(),
+            # calls 只计**成功**的；attempts 计发出去的（含失败）。
+            # 早期只暴露 calls，于是上游全挂时会出现 calls=0 / failures=362
+            # 这种看着像 bug 的组合。
             "calls": self.calls,
+            "attempts": self.attempts,
             "failures": self.failures,
             "avg_latency_s": round(self.total_latency_s / self.calls, 2)
                              if self.calls else None,
