@@ -26,6 +26,12 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 20s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
     # CPU 硬上限（见文件头「CPU 预算」）。cpus = 核数，与宿主机核数无关。
     cpus: "${AI_FOOTBALL_CPUS:-2.0}"
     networks:
@@ -101,6 +107,12 @@ services:
   web-console:
     image: nginx:1.27-alpine
     container_name: ai_football_web_console
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 20s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
     ports:
       # 可覆盖： CONSOLE_PORT=13000 docker compose ... up -d
       - "${CONSOLE_PORT:-3000}:80"
