@@ -31,16 +31,18 @@
 ## 落盘格式
 
 `<root>/ledger.jsonl` —— 每行一个 JSON 对象。追加写，不做原地修改
-（避免半写文件）；统计时按 `(match_id, market, line, outcome)` 取
-**最新一条**（同一盘口会因盘口变动被多次决策，取最后一次才有意义）。
+（避免半写文件）；每次建议有独立 `decision_id`，修订只更新该建议；`at` 永不改变。旧格式
+缺少身份的数据沿用旧键去重，明确标注为不完整历史，不能恢复被覆盖的建议。
 """
 
 from __future__ import annotations
 
 import json
+import math
+import uuid
 import os
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
@@ -71,14 +73,11 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _neg_str(text: object) -> str:
-    """把字符串**反转**用于 `sorted` 实现“时间倒序”。
-
-    为何不用 `reverse=True`：排序键里同时含“已结算优先”（升序）与
-    “时间倒序”，两者方向相反，无法用单一 `reverse` 表达。
-    反转字符串是个廉价且稳定的技巧（ISO8601 字典序即时间序）。
-    """
-    return str(text or "")[::-1]
+def _epoch(at: str) -> float:
+    try:
+        return datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return 0.0
 
 
 def _to_int_safe(value: object, default: int = 0) -> int:
@@ -104,6 +103,14 @@ class LedgerEntry:
     #: 决策时刻（ISO8601 UTC）
     at: str
     match_id: str
+    decision_id: str = ""
+    updated_at: str = ""
+    competition_type: str = "unknown"
+    is_live: bool = False
+    entry_score: Optional[List[int]] = None
+    entry_clock_s: Optional[float] = None
+    settlement_basis: str = "legacy_full_score"
+    model_version: str = "legacy"
     league: str = ""
     home: str = ""
     away: str = ""
@@ -148,6 +155,11 @@ class LedgerEntry:
     @property
     def key(self) -> tuple:
         """同一盘口结果的唯一键（用于取最新一条）。"""
+        return ((self.decision_id,) + self.quote_key
+                if self.decision_id else self.quote_key)
+
+    @property
+    def quote_key(self) -> tuple:
         return (self.match_id, self.market, self.line, self.outcome)
 
     @property
@@ -161,11 +173,14 @@ class LedgerEntry:
 
     @property
     def clv(self) -> Optional[float]:
-        return clv(self.odds, self.closing_odds) if self.closing_odds else None
+        return (clv(self.odds, self.closing_odds)
+                if self.closing_odds and not self.is_live else None)
 
     def as_dict(self) -> Dict[str, Any]:
         d = dict(self.__dict__)
         d["clv"] = self.clv
+        d["price_drift"] = clv(self.odds, self.closing_odds) if self.closing_odds else None
+        d["legacy_identity"] = not bool(self.decision_id)
         # 用户要求：盘口信息一律以中文展示，与乐鱼一致
         # （如「曼联上半场-1」「上半场进球数>1/1.5」）。
         # `label` 只在是买入建议时被写入（取自 picks），历史条目可能为空，
@@ -184,6 +199,9 @@ class LedgerEntry:
         """从落盘 JSON 还原；未知字段忽略，缺失字段用默认值。"""
         names = {f for f in cls.__dataclass_fields__}
         kw = {k: v for k, v in raw.items() if k in names}
+        if kw.get("competition_type", "unknown") == "unknown":
+            from core.live_model import competition_type
+            kw["competition_type"] = competition_type(kw)
         # 类型兜底：脏数据不应让整次统计失败
         for num in ("odds", "required_edge", "edge", "confidence",
                     "p_market", "p_llm", "p_fused", "llm_weight",
@@ -191,7 +209,8 @@ class LedgerEntry:
                     "closing_odds"):
             if num in kw:
                 try:
-                    kw[num] = float(kw[num] or 0.0)
+                    value = float(kw[num] or 0.0)
+                    kw[num] = value if math.isfinite(value) else 0.0
                 except (TypeError, ValueError):
                     kw[num] = 0.0
         if "rejects" in kw and not isinstance(kw["rejects"], list):
@@ -205,6 +224,8 @@ class DecisionLedger:
     def __init__(self, root: Optional[str | Path] = None) -> None:
         self.root = Path(root) if root else None
         self._lock = threading.RLock()
+        self._loaded_stamp: tuple = ()
+        self._loaded_rows: List[LedgerEntry] = []
         self._warned = ""
         self.last_error = ""
         if self.root is not None:
@@ -247,6 +268,7 @@ class DecisionLedger:
                     for r in rows:
                         fh.write(json.dumps(r.as_dict(), ensure_ascii=False))
                         fh.write("\n")
+                self._loaded_stamp = ()
                 return len(rows)
             except (OSError, TypeError, ValueError) as exc:
                 self.last_error = "台账写入失败: %s" % exc
@@ -265,8 +287,19 @@ class DecisionLedger:
 
     def load(self) -> List[LedgerEntry]:
         """读全部台账（含轮转归档），按 `key` 去重取**最新一条**。"""
+        with self._lock:
+            return self._load_locked()
+
+    def _load_locked(self) -> List[LedgerEntry]:
+        files = self._files()
+        try:
+            stamp = tuple((str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in files)
+        except OSError:
+            stamp = ()
+        if stamp and stamp == self._loaded_stamp:
+            return [replace(e) for e in self._loaded_rows]
         latest: Dict[tuple, LedgerEntry] = {}
-        for path in self._files():
+        for path in files:
             try:
                 with open(path, encoding="utf-8") as fh:
                     for line in fh:
@@ -285,11 +318,15 @@ class DecisionLedger:
                             continue
                         # 后写的覆盖先写的（文件按名排序 ≈ 时间排序）
                         prev = latest.get(e.key)
-                        if prev is None or e.at >= prev.at:
+                        if prev is None or _epoch(e.updated_at or e.settled_at or e.at) >= _epoch(
+                                prev.updated_at or prev.settled_at or prev.at):
                             latest[e.key] = e
             except OSError as exc:
                 self.last_error = "读取 %s 失败: %s" % (path.name, exc)
-        return sorted(latest.values(), key=lambda e: e.at)
+        rows = sorted(latest.values(), key=lambda e: _epoch(e.at))
+        self._loaded_stamp = stamp
+        self._loaded_rows = rows
+        return [replace(e) for e in rows]
 
     # -- 记录决策 --------------------------------------------------------
 
@@ -320,6 +357,7 @@ class DecisionLedger:
         if not mid:
             return 0
         at = _now().isoformat()
+        decision_id = uuid.uuid4().hex
         picks = {self._pick_key(p): p
                  for p in (getattr(result, "picks", None) or [])}
         rows: List[LedgerEntry] = []
@@ -332,7 +370,7 @@ class DecisionLedger:
                 key = (market, line, str(oc))
                 pick = picks.get(key)
                 rows.append(LedgerEntry(
-                    at=at, match_id=mid,
+                    at=at, match_id=mid, decision_id=decision_id, updated_at=at,
                     league=str(getattr(result, "league", "") or ""),
                     home=str(getattr(result, "home", "") or ""),
                     away=str(getattr(result, "away", "") or ""),
@@ -390,7 +428,7 @@ class DecisionLedger:
         """把**收盘赔率**写入待结算条目（CLV 的前置条件）。
 
         为何必须单独立这个方法（本项目真实缺口）：
-        CLV = 收盘价 / 买入价 − 1，是职业玩家公认的**唯一领先指标**
+        CLV = 买入赔率 / 收盘赔率 − 1，仅在同一信息集下可比较；不能称为**唯一领先指标**
         （见 `core/entry_gate.py` 证据 [E]）。但它**不能事后重建** ——
         必须在下注当时就把参照的收盘价记下来。原实现只在 `settle()`
         里从 `scores` 的可选 `closing` 字段取，而 `settle_finished()`
@@ -409,29 +447,22 @@ class DecisionLedger:
         """
         if not self.enabled or not quotes:
             return 0
-        rows = self.load()
-        updated: List[LedgerEntry] = []
-        for e in rows:
-            if e.status != SETTLE_PENDING:
-                continue
-            q = quotes.get(e.key)
-            if q is None:
-                continue
-            try:
-                qf = float(q)
-            except (TypeError, ValueError):
-                continue
-            if qf <= 1.0:               # 非法赔率不得写入
-                continue
-            if abs(qf - e.closing_odds) < 1e-9:
-                continue
-            e.closing_odds = qf
-            # 时间戳推新：使本条成为该 key 的“最新一条”
-            e.at = _now().isoformat()
-            updated.append(e)
-        if not updated:
-            return 0
-        return self._append(updated)
+        with self._lock:
+            updated: List[LedgerEntry] = []
+            for e in self.load():
+                if e.status != SETTLE_PENDING:
+                    continue
+                q = quotes.get(e.quote_key)
+                try:
+                    qf = float(q)  # type: ignore[arg-type]
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if not math.isfinite(qf) or qf <= 1 or abs(qf - e.closing_odds) < 1e-9:
+                    continue
+                e.closing_odds = qf
+                e.updated_at = _now().isoformat()
+                updated.append(e)
+            return self._append(updated)
 
     def pending_match_ids(self) -> List[str]:
         """仍待结算的赛事 ID（去重）——用于定向补齐收盘赔率。"""
@@ -445,7 +476,7 @@ class DecisionLedger:
                 out.append(e.match_id)
         return out
 
-    def settle(self, scores: Mapping[str, Any]) -> Dict[str, int]:
+    def settle(self, scores: Mapping[str, Any], regrade: bool = False) -> Dict[str, int]:
         """用终场比分结算台账里的待结算条目。
 
         Args:
@@ -457,57 +488,60 @@ class DecisionLedger:
         """
         if not self.enabled:
             return {"scanned": 0, "settled": 0, "void": 0, "skipped": 0}
+        with self._lock:
+            return self._settle_locked(scores, regrade)
+
+    def _settle_locked(self, scores: Mapping[str, Any], regrade: bool) -> Dict[str, int]:
         entries = self.load()
         out = {"scanned": 0, "settled": 0, "void": 0, "skipped": 0}
-        # 重写整个台账：结算字段需要原地更新，追加写做不到。
-        # 用「重写全部」而非「追加结算行」是为了让统计逻辑简单可靠
-        # （追加会造成同一 key 多行、状态判定复杂）。
-        rewritten: List[LedgerEntry] = []
+        updates: List[LedgerEntry] = []
         for e in entries:
             out["scanned"] += 1
-            if e.status in TERMINAL_STATUSES:
-                rewritten.append(e)
+            if e.status in TERMINAL_STATUSES and not regrade:
                 continue
             sc = scores.get(e.match_id)
-            if sc is None:
+            if isinstance(sc, Mapping) and sc.get("done") is False:
                 out["skipped"] += 1
-                rewritten.append(e)
                 continue
             ft, ht = self._split_score(sc)
             if ft is None:
                 out["skipped"] += 1
-                rewritten.append(e)
                 continue
-            status, note = settle_pick(e.market, e.outcome, e.line, ft, ht)
-            e.status = status
-            e.settle_note = note
-            e.ft_score = list(ft) if ft else None
-            e.ht_score = list(ht) if ht else None
+            grade_ft, grade_ht = ft, ht
+            if e.settlement_basis == "remaining_score":
+                from core.settlement import _score_of
+                entry = _score_of(e.entry_score)
+                if entry is None or ft[0] < entry[0] or ft[1] < entry[1]:
+                    out["skipped"] += 1
+                    continue
+                grade_ft = (ft[0] - entry[0], ft[1] - entry[1])
+                if ht is not None and ht[0] >= entry[0] and ht[1] >= entry[1]:
+                    grade_ht = (ht[0] - entry[0], ht[1] - entry[1])
+            status, note = settle_pick(e.market, e.outcome, e.line, grade_ft, grade_ht)
+            if e.settlement_basis == "unknown" or not math.isfinite(e.odds) or e.odds <= 1:
+                status, note = SETTLE_VOID, "结算口径或入场赔率未核验"
+            e.status, e.settle_note = status, note
+            e.ft_score = list(ft)
+            e.ht_score = list(ht) if ht is not None else None
             e.settled_at = _now().isoformat()
+            e.updated_at = e.settled_at
             e.pnl = round(pnl_for(status, e.odds), 6) if e.is_pick else 0.0
-            # 收盘赔率：用结算时点的最新赔率（调用方在 scores 里带上来）
             close = self._closing_of(sc, e)
             if close is not None:
                 e.closing_odds = close
-            if status == SETTLE_VOID:
-                out["void"] += 1
-            else:
-                out["settled"] += 1
-            rewritten.append(e)
-        self._rewrite(rewritten)
+            out["void" if status == SETTLE_VOID else "settled"] += 1
+            updates.append(e)
+        # Append revisions; archived originals cannot overwrite a newer settlement.
+        self._append(updates)
         return out
 
     @staticmethod
     def _split_score(sc: Any) -> tuple:
         """把 scores 值统一成 `(ft, ht)`。"""
+        from core.settlement import _score_of
         if isinstance(sc, Mapping):
-            ft = sc.get("ft")
-            ht = sc.get("ht")
-            return (tuple(ft) if isinstance(ft, (list, tuple)) else None,
-                    tuple(ht) if isinstance(ht, (list, tuple)) else None)
-        if isinstance(sc, (list, tuple)) and len(sc) >= 2:
-            return (tuple(sc[:2]), None)
-        return (None, None)
+            return _score_of(sc.get("ft")), _score_of(sc.get("ht"))
+        return _score_of(sc), None
 
     @staticmethod
     def _closing_of(sc: Any, e: LedgerEntry) -> Optional[float]:
@@ -517,14 +551,14 @@ class DecisionLedger:
         closes = sc.get("closing")
         if not isinstance(closes, Mapping):
             return None
-        row = closes.get("|".join(str(x) for x in e.key))
+        row = closes.get("|".join(str(x) for x in e.quote_key))
         if row is None:
             return None
         try:
             v = float(row)
         except (TypeError, ValueError):
             return None
-        return v if v > 1.0 else None
+        return v if math.isfinite(v) and v > 1.0 else None
 
     def _rewrite(self, rows: Sequence[LedgerEntry]) -> None:
         """原子重写台账（临时文件 + rename）。"""
@@ -542,6 +576,7 @@ class DecisionLedger:
                         fh.write(json.dumps(r.as_dict(), ensure_ascii=False))
                         fh.write("\n")
                 os.replace(tmp, path)
+                self._loaded_stamp = ()
             except (OSError, TypeError, ValueError) as exc:
                 self.last_error = "台账重写失败: %s" % exc
 
@@ -563,6 +598,8 @@ class DecisionLedger:
             rows = [r for r in rows if r.trigger == trigger]
         base = summarise(rows)
         # 未结算的单独给个提示（用户最关心「还要等多久才有结论」）
+        base["legacy_identity_rows"] = sum(not r.decision_id for r in rows)
+        base["by_type"] = self._group_by(rows, "competition_type")
         base["by_trigger"] = self._group_by(rows, "trigger")
         base["by_decision"] = self._group_by(rows, "decision")
         base["pending_matches"] = sorted(
@@ -583,6 +620,7 @@ class DecisionLedger:
         picks_only: bool = True,
         limit: int = 300,
         days: int = 0,
+        competition_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """历史决策 vs 实际结果的**分组统计 + 明细**。
 
@@ -611,6 +649,8 @@ class DecisionLedger:
         rows = self.load()
         if picks_only:
             rows = [r for r in rows if r.is_pick]
+        if competition_type and competition_type != "all":
+            rows = [r for r in rows if r.competition_type == competition_type]
         if days and days > 0:
             cutoff = (_now() - timedelta(days=days)).isoformat()
             # `at` 是 ISO8601 UTC 字符串，字典序即时间序（同格式可比）
@@ -619,7 +659,7 @@ class DecisionLedger:
         # 明细：**已结算优先且按时间倒序**，让人先看到有结论的
         def _rank(r: LedgerEntry) -> Any:
             settled = r.status not in (SETTLE_PENDING,)
-            return (0 if settled else 1, _neg_str(r.at))
+            return (0 if settled else 1, -_epoch(r.at))
         ordered = sorted(rows, key=_rank)
         entries = [r.as_dict() for r in ordered[:max(0, limit)]]
 
@@ -628,6 +668,8 @@ class DecisionLedger:
         return {
             "overall": summarise(rows),
             "settled": summarise(graded),
+            "legacy_identity_rows": sum(not r.decision_id for r in rows),
+            "by_type": self._group_by(rows, "competition_type"),
             "by_date": self._group_by(rows, "date_key"),
             "by_league": self._group_by(rows, "league"),
             "by_market": self._group_by(rows, "market"),

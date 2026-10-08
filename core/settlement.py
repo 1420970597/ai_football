@@ -37,6 +37,8 @@
 
 from __future__ import annotations
 
+import math
+
 from typing import Any, List, Optional, Sequence, Tuple
 
 from .market_labels import parse_market_code
@@ -99,19 +101,26 @@ def split_line(line: object) -> List[float]:
 
     无法解析时返回空列表（调用方据此判 void）。
     """
-    s = str(line if line is not None else "").strip().replace("＋", "+")
-    if not s:
+    if isinstance(line, bool):
         return []
-    out: List[float] = []
-    for part in s.split("/"):
-        p = part.strip()
-        if not p:
+    s = str(line if line is not None else "").strip().replace("＋", "+")
+    try:
+        values = [float(x.strip()) for x in s.split("/")]
+    except (ValueError, OverflowError):
+        return []
+    if not values or len(values) > 2 or any(not math.isfinite(x) or abs(x) > 100 for x in values):
+        return []
+    if len(values) == 2:
+        if any(abs(x * 2 - round(x * 2)) > 1e-8 for x in values):
             return []
-        try:
-            out.append(float(p))
-        except ValueError:
-            return []
-    return out
+        return values if abs(abs(values[0] - values[1]) - .5) < 1e-8 else []
+    value = values[0]
+    if abs(value * 4 - round(value * 4)) > 1e-8:
+        return []
+    if abs(value * 2 - round(value * 2)) > 1e-8:
+        low = math.floor(value * 2) / 2
+        return [low, low + .5]
+    return [value]
 
 
 def _norm_outcome(outcome: object) -> str:
@@ -131,19 +140,26 @@ def _norm_outcome(outcome: object) -> str:
 
 def _score_of(score: object) -> Optional[Score]:
     """把任意比分表示转成 `(主, 客)`；不可用时返回 None。"""
-    if score is None:
-        return None
-    if isinstance(score, (tuple, list)) and len(score) >= 2:
-        try:
-            return (int(score[0]), int(score[1]))
-        except (TypeError, ValueError):
-            return None
     if isinstance(score, dict):
-        try:
-            return (int(score.get("home", 0)), int(score.get("away", 0)))
-        except (TypeError, ValueError):
+        if "home" not in score or "away" not in score:
             return None
-    return None
+        parts = [score["home"], score["away"]]
+    elif isinstance(score, (tuple, list)) and len(score) == 2:
+        parts = list(score)
+    else:
+        return None
+    out = []
+    for part in parts:
+        if isinstance(part, bool) or part is None:
+            return None
+        try:
+            value = float(part)
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if not math.isfinite(value) or not 0 <= value <= 100 or value != int(value):
+            return None
+        out.append(int(value))
+    return out[0], out[1]
 
 
 def _grade_margin(margin: float) -> str:
@@ -157,7 +173,9 @@ def _grade_margin(margin: float) -> str:
 
 def pnl_for(status: str, odds: float) -> float:
     """把判定结果换算成**每单位本金**的净收益。"""
-    o = float(odds or 0.0)
+    if implied_probability(odds) is None:
+        return 0.0
+    o = float(odds)
     if status == SETTLE_WON:
         return o - 1.0
     if status == SETTLE_LOST:
@@ -237,7 +255,7 @@ def settle_pick(market: object, outcome: object,
         actual = "home" if home > away else ("away" if away > home else "draw")
         return (SETTLE_WON if oc == actual else SETTLE_LOST), ""
 
-    ln = str(line or "").strip() or code_line
+    ln = str(line if line is not None else "").strip() or code_line
     halves = split_line(ln)
     if not halves:
         return SETTLE_VOID, "无法解析线值"
@@ -270,9 +288,9 @@ def implied_probability(odds: float) -> Optional[float]:
     """赔率 → 隐含概率（含水位）。赔率非法时返回 None。"""
     try:
         o = float(odds)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    if o <= 1.0:
+    if not math.isfinite(o) or o <= 1.0:
         return None
     return 1.0 / o
 
@@ -325,7 +343,8 @@ def summarise(rows: Sequence[Any]) -> dict:
         不能让一条脏数据把整次统计弄崩 —— 否则用户永远看不到命中率。
         """
         try:
-            return float(_get(row, name, 0.0) or 0.0)
+            value = float(_get(row, name, 0.0) or 0.0)
+            return value if math.isfinite(value) else 0.0
         except (TypeError, ValueError):
             return 0.0
 
@@ -354,10 +373,16 @@ def summarise(rows: Sequence[Any]) -> dict:
     # CLV：只对有收盘价的注统计
     clvs: List[float] = []
     for r in staked:
+        if _get(r, "is_live", False):
+            continue  # 不同赛况下的滚球价格漂移不是相同信息集 CLV
         c = clv(_num(r, "odds"), _num(r, "closing_odds"))
         if c is not None:
             clvs.append(c)
 
+    half_won = sum(_get(r, "status") == SETTLE_HALF_WON for r in staked)
+    half_lost = sum(_get(r, "status") == SETTLE_HALF_LOST for r in staked)
+    win_units = wins - half_won * .5
+    loss_units = losses - half_lost * .5
     out = {
         "total": len(rows),
         "graded": len(graded),
@@ -367,7 +392,18 @@ def summarise(rows: Sequence[Any]) -> dict:
         "lost": losses,
         "push": pushes,
         # 命中率分母排除走水（走水既非赢也非输）
-        "hit_rate": round(wins / (wins + losses), 4) if (wins + losses) else None,
+        "hit_rate": (round(win_units / (win_units + loss_units), 4)
+                     if win_units + loss_units else None),
+        "half_won": half_won,
+        "half_lost": half_lost,
+        "full_won": wins - half_won,
+        "full_lost": losses - half_lost,
+        "win_stake_units": win_units,
+        "loss_stake_units": loss_units,
+        "profitable_pick_rate": round(wins / (wins + losses), 4) if wins + losses else None,
+        "matches": len({_get(r, "match_id") for r in rows if _get(r, "match_id")}),
+        "metric_basis": "模拟每条独立建议1单位本金；命中率按赢/输半注权重，走水剔除",
+        "clv_basis": "仅赛前同盘口同结果；滚球价格漂移不作为CLV",
         "profit_units": round(profit, 4),
         "stake_units": round(stake, 4),
         "roi": round(profit / stake, 6) if stake else None,
