@@ -29,7 +29,7 @@
 - [x] P3 UI：本地 APK 白蓝色彩、赛事分组、比分时钟、盘口按钮、走势与解释详情；只保留两页主导航；搜索、返回、自动刷新互不覆盖。
 - [x] P4 自测：冻结文件后受限全量 unittest、语法、Docker 依赖、mypy/ruff；真实行情负载延迟；浏览器 Default/Loading/Empty/Error/Edge-Case。
 - [x] P4 发布：生产数据备份、版本化静态目录、保留 gzip 与登录保护；8001/3003 部署，三容器状态和 2 核限额检查；失败可回滚镜像和静态目录。
-- [ ] P4 交付：PR、issue 回填真实命令与退出码、研究 HTML/图表、截图与性能数据；列出尚不能证明的专家正确率。
+- [x] P4 交付：PR、issue 回填真实命令与退出码、研究 HTML/图表、截图与性能数据；列出尚不能证明的专家正确率。
 
 ## 架构
 
@@ -106,3 +106,6 @@ ANALYTICS_PORT=8001 CONSOLE_PORT=3003 AI_FOOTBALL_CPUS=2 \
 |HTML在线及阻断CDN验收|Mermaid和图片正常；离线保留可读图源，exit0|
 
 最终真实足球滚动2048条延迟P95=205.243ms，计算P95=1.893ms；120次API请求与边界见研究报告及 `data/live-performance.csv`。三容器均healthy，实际 `cpu.max` 均为 `200000 100000`。
+
+
+交付 PR：[ #26 ](https://github.com/1420970597/ai_football/pull/26)。秒级与战绩缺陷分别关联 #23/#24；#25 保留同源前瞻模型能力验证跟踪。
