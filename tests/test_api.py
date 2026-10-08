@@ -12,8 +12,12 @@ import os
 import shutil
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from api.app import ApiApp, BadRequest, NotFound, create_app
+from core.models import OddsSnapshot
+from datetime import datetime, timezone
 from service.valuation import LEYU_SOURCE_NAME
 
 #: 真实乐鱼快照离线夹具（无网、不依赖仓库 output/）。
@@ -105,6 +109,45 @@ class TestMatches(unittest.TestCase):
         self.assertIn("markets", body)
 
 
+class TestCachedDecisionFilters(unittest.TestCase):
+    def setUp(self):
+        self.app = build_app()
+        self.rows = [
+            {"match_id": "a", "league": "英超", "home": "Arsenal", "away": "B",
+             "decision": "buy", "picks": [{"outcome": "home"}]},
+            {"match_id": "b", "league": "日职", "home": "C", "away": "D",
+             "decision": "avoid", "picks": []},
+        ]
+        self.result = {"count": 2, "decisions": self.rows, "summary": {"n": 2, "buy": 1}}
+        self.app._analysis = SimpleNamespace(
+            latest_result=Mock(return_value=self.result),
+            latest_age_s=Mock(return_value=20), cycle_stats={},
+            start_job=Mock(side_effect=AssertionError("Read must not call LLM")))
+
+    def test_keyword_casefold_and_summary(self):
+        status, data = call(self.app, "GET", "/api/v1/decisions", q={"q": "ARSENAL"})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["decisions"], [self.rows[0]])
+        self.assertEqual(data["summary"]["buy"], 1)
+        self.assertEqual(data["summary"]["n"], 1)
+        self.assertEqual(len(self.result["decisions"]), 2)
+
+    def test_league_and_empty(self):
+        _, data = call(self.app, "GET", "/api/v1/decisions", q={"league": "日职"})
+        self.assertEqual(data["decisions"], [self.rows[1]])
+        _, empty = call(self.app, "GET", "/api/v1/decisions", q={"q": "不存在"})
+        self.assertEqual(empty["count"], 0)
+        self.assertEqual(empty["summary"]["buy"], 0)
+        self.assertEqual(empty["summary"]["n"], 0)
+        self.app.analysis.start_job.assert_not_called()
+
+    def test_date_intersects_local_snapshot_matches(self):
+        self.app.svc.list_matches = Mock(return_value=[{"match_id": "b"}])
+        _, data = call(self.app, "GET", "/api/v1/decisions", q={"date": "2026-10-08"})
+        self.assertEqual(data["decisions"], [self.rows[1]])
+        self.app.svc.list_matches.assert_called_once_with(date="2026-10-08")
+
+
 class TestFairEdge(unittest.TestCase):
     def setUp(self):
         self.app = build_app()
@@ -117,6 +160,19 @@ class TestFairEdge(unittest.TestCase):
         self.assertIn("probabilities", body)
         self.assertIn("method_spread_pp", body)
         self.assertAlmostEqual(sum(body["probabilities"]), 1.0, places=6)
+        self.assertEqual(len(body["odds"]), len(body["outcomes"]))
+
+    def test_fair_fallback_prices_match_actual_market(self):
+        snap = OddsSnapshot(
+            match_id="fallback", league="L", home="A", away="B", market="OU(2.5)",
+            outcomes=("over", "under"), odds=(1.8, 2.1),
+            source="leyu", captured_at=datetime.now(timezone.utc))
+        self.app.svc._latest = Mock(return_value=snap)
+        _, data = call(self.app, "GET", "/api/v1/fair/fallback")
+        self.assertTrue(data["market_fallback"])
+        self.assertEqual(data["market"], "OU(2.5)")
+        self.assertEqual(data["odds"], [1.8, 2.1])
+        self.assertEqual(data["outcomes"], ["over", "under"])
 
     def test_fair_method_param(self):
         for m in ("shin", "proportional", "additive", "power", "odds_ratio"):

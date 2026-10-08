@@ -40,6 +40,7 @@ from __future__ import annotations
 from typing import Any, List, Optional, Sequence, Tuple
 
 from .market_labels import parse_market_code
+from .calibration import clv as _calibration_clv
 
 __all__ = [
     "SETTLE_PENDING",
@@ -279,7 +280,7 @@ def implied_probability(odds: float) -> Optional[float]:
 def clv(entry_odds: float, closing_odds: float) -> Optional[float]:
     """闭线价值（CLV）：以买入价相对收盘价的优势。
 
-    对**买入**（back）注：`closing / entry - 1`。
+    对**买入**（back）注：`entry / closing - 1`。
 
     * 正 → 我们买得比收盘价便宜（赚到了价格，长期正期望的信号）
     * 负 → 我们买贵了
@@ -289,13 +290,9 @@ def clv(entry_odds: float, closing_odds: float) -> Optional[float]:
     （这是博彩量化领域的共识做法）。
     """
     try:
-        e = float(entry_odds)
-        c = float(closing_odds)
-    except (TypeError, ValueError):
+        return _calibration_clv(entry_odds, closing_odds)
+    except (TypeError, ValueError, OverflowError):
         return None
-    if e <= 1.0 or c <= 1.0:
-        return None
-    return c / e - 1.0
 
 
 def summarise(rows: Sequence[Any]) -> dict:
