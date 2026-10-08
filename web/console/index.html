@@ -541,8 +541,12 @@ const S = { matches: [], selected: null, method: "auto", view: "dashboard",
             listMode: "decisions", listRequest: 0, pricingRequest: 0 };
 
 const LIST_HEADERS = {
-  decisions: ["决策", "建议", "赔率", "优势", "建议仓位", "置信", "走势", "联赛", "对阵", "已算盘口", "耗时"],
-  matches: ["场次号", "联赛", "对阵", "主胜 / 结果1", "平局 / 市场", "客胜 / 结果2", "水钱", "方法分歧", "状态"]
+  decisions: [["决策"], ["建议"], ["赔率", "num"], ["优势", "num"],
+    ["建议仓位", "num"], ["置信", "num"], ["走势"], ["联赛"], ["对阵"],
+    ["已算盘口", "num"], ["耗时", "num"]],
+  matches: [["场次号"], ["联赛"], ["对阵"], ["主胜 / 结果1", "num"],
+    ["平局 / 市场", "num"], ["客胜 / 结果2", "num"], ["水钱", "num"],
+    ["方法分歧", "num"], ["状态"]]
 };
 
 function listFilters() {
@@ -559,7 +563,7 @@ async function loadList(opts) {
   S.listMode = $("f-mode").value;
   const head = $("tbl").querySelector("thead tr");
   clear(head);
-  LIST_HEADERS[S.listMode].forEach(text => head.appendChild(el("th", { text })));
+  LIST_HEADERS[S.listMode].forEach(([text, cls]) => head.appendChild(el("th", { text, class: cls || "" })));
   $("decision-panel").style.display = "none";
   clear($("list-src"));
   const o = { silent: !!(opts && opts.silent), request };
@@ -2118,7 +2122,11 @@ const changeMethod = e => {
   S.method = e.target.value;
   $("f-method").value = S.method;
   $("pricing-method").value = S.method;
-  if (S.selected) openPricing(S.matches.findIndex(m => m.match_id === S.selected));
+  if (S.view === "pricing" && S.selected) {
+    openPricing(S.matches.findIndex(m => m.match_id === S.selected));
+  } else if (S.view === "dashboard" && S.listMode === "matches") {
+    loadList({ silent: true });
+  }
 };
 $("f-method").addEventListener("change", changeMethod);
 $("pricing-method").addEventListener("change", changeMethod);

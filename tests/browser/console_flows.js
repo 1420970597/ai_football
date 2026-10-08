@@ -73,7 +73,12 @@ async page => {
   await page.locator("#pricing-method").selectOption("power");
   await page.waitForFunction(() => document.querySelector("#pricing-kv").textContent.includes("power"));
   assert((await page.locator("#pricing-tag").textContent()).includes("主队b"), "Method changed match");
+  await page.getByRole("button", {name: "赛事看板", exact: true}).click();
+  await page.locator("#f-method").selectOption("shin");
+  assert(await page.locator("#view-dashboard").isVisible(), "List method change navigates away");
+  assert(await page.locator("#pricing-tag").textContent() === "a · 主队a vs 客队a", "List method change opened pricing");
   failPricing = true;
+  await page.getByRole("button", {name: "定价对比", exact: true}).click();
   await page.locator("#pricing-method").selectOption("shin");
   await page.locator("#msg.err").waitFor({state: "visible"});
   assert(await page.locator("#pricing-tbody tr").count() === 0, "Failed pricing shows previous match");

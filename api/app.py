@@ -1100,8 +1100,7 @@ class ApiApp:
             available = bool(current_odds and len(current_odds) == len(current_outcomes))
             same = (available and row["outcomes"] == current_outcomes
                     and len(decision_odds) == len(current_odds)
-                    and all(math.isclose(_as_float(a), _as_float(b),
-                                         rel_tol=0, abs_tol=0.0001)
+                    and all(round(_as_float(a), 4) == round(_as_float(b), 4)
                             for a, b in zip(decision_odds, current_odds)))
             prices_by_outcome = dict(zip(decision_outcomes, decision_odds))
             row["decision_odds"] = ([prices_by_outcome.get(oc)
