@@ -337,6 +337,10 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
   <section id="view-pricing" style="display:none">
     <div class="panel">
       <h2>去水方法对比 <span class="tag" id="pricing-tag">选择上方赛事行的「详情」查看</span></h2>
+      <div class="filters">
+        <label for="pricing-method">去水方法</label><select id="pricing-method"></select>
+        <button class="btn ghost" id="btn-pricing-back">返回赛事列表</button>
+      </div>
       <div class="state show" id="st-pricing-empty">
         <div class="big">🔬</div>
         <h3>尚未选择赛事</h3>
@@ -534,7 +538,7 @@ const $ = (id) => document.getElementById(id);
 const S = { matches: [], selected: null, method: "auto", view: "dashboard",
             decisions: [], decisionSummary: null, decisionLimit: 6,
             dataSource: "", board: [], boardTimer: null,
-            listMode: "decisions", listRequest: 0 };
+            listMode: "decisions", listRequest: 0, pricingRequest: 0 };
 
 const LIST_HEADERS = {
   decisions: ["决策", "建议", "赔率", "优势", "建议仓位", "置信", "走势", "联赛", "对阵", "已算盘口", "耗时"],
@@ -946,6 +950,7 @@ function openDecision(i) {
   const d = (S.decisions || [])[i];
   if (!d) return;
   S.selectedDecision = i;
+  ++S.pricingRequest;
   showView("pricing");
   $("pricing-body").style.display = "none";
   $("st-pricing-empty").classList.remove("show");
@@ -1238,11 +1243,23 @@ function renderTable(rows) {
 
 /* ---------- 定价对比 ---------- */
 async function openPricing(i) {
+  const request = ++S.pricingRequest;
   const m = S.matches[i];
-  if (!m) return;
+  ["pricing-kv", "pricing-tbody", "pricing-note", "pricing-warn",
+   "mk-kv", "mk-tbody", "mk-note", "md-kv", "md-tbody", "md-note"].forEach(id => clear($(id)));
+  $("pricing-warn").style.display = "none";
+  $("decision-panel").style.display = "none";
+  if (!m) {
+    S.selected = null;
+    $("pricing-body").style.display = "none";
+    $("st-pricing-empty").classList.add("show");
+    return;
+  }
   S.selected = m.match_id;
   renderTable(S.matches);
   showView("pricing");
+  clearMsg();
+  $("pricing-method").value = S.method;
   $("st-pricing-empty").classList.remove("show");
   $("pricing-body").style.display = "";
   setText($("pricing-tag"), m.match_id + " · " + m.home + " vs " + m.away);
@@ -1255,9 +1272,15 @@ async function openPricing(i) {
     const r2 = await fetch(API + "/edge/" + encodeURIComponent(m.match_id) + "?method=" + S.method);
     if (r2.ok) edge = await r2.json();
   } catch (err) {
+    if (request !== S.pricingRequest) return;
     showMsg("err", "加载定价数据失败：" + err.message);
     return;
   }
+  if (request !== S.pricingRequest) return;
+  // A push between the two requests can change the market or its prices.
+  if (edge && (edge.market !== fair.market ||
+      JSON.stringify(edge.outcomes) !== JSON.stringify(fair.outcomes) ||
+      JSON.stringify(edge.odds) !== JSON.stringify(fair.odds))) edge = null;
 
   const risky = !!fair.spread_warning;
   const kv = $("pricing-kv");
@@ -1293,9 +1316,9 @@ async function openPricing(i) {
   const tb = $("pricing-tbody");
   clear(tb);
   fair.outcomes.forEach((oc, k) => {
-    const odds = (winDrawLose(m) || [])[k] ?? null;
+    const odds = (fair.odds || [])[k] ?? null;
     const tr = el("tr", {});
-    tr.appendChild(el("td", { text: oc }));
+    tr.appendChild(el("td", { text: (fair.outcome_labels || [])[k] || oc, title: oc }));
     tr.appendChild(el("td", { class: "num", text: odds ? fx(odds) : "—" }));
     tr.appendChild(el("td", { class: "num", text: odds ? pct(1 / odds) : "—" }));
     methods.forEach(mt => {
@@ -1326,11 +1349,11 @@ async function openPricing(i) {
   });
 
   // 玩法维度与模型对照（独立请求，失败不影响主定价面板）
-  loadMarkets(m.match_id);
+  loadMarkets(m.match_id, request);
 }
 
 /* ---------- 多玩法统计 ---------- */
-async function loadMarkets(matchId) {
+async function loadMarkets(matchId, request) {
   const kv = $("mk-kv"), tb = $("mk-tbody"), note = $("mk-note");
   clear(kv); clear(tb); clear(note);
   setText($("mk-tag"), "加载中…");
@@ -1343,11 +1366,13 @@ async function loadMarkets(matchId) {
     if (!r.ok) throw new Error("HTTP " + r.status);
     d = await r.json();
   } catch (err) {
+    if (request !== S.pricingRequest) return;
     setText($("mk-tag"), "加载失败");
     note.appendChild(document.createTextNode("玩法数据加载失败：" + err.message));
     setText($("md-tag"), "—");
     return;
   }
+  if (request !== S.pricingRequest) return;
 
   setText($("mk-tag"), d.n_markets + " 种玩法");
   [
@@ -1387,15 +1412,16 @@ async function loadMarkets(matchId) {
     note.appendChild(document.createTextNode("全部玩法的方法间偏差均在阈值内。"));
   }
 
-  loadModel(matchId);
+  loadModel(matchId, request);
 }
 
 /* ---------- 模型 vs 市场 ---------- */
-async function loadModel(matchId) {
+async function loadModel(matchId, request) {
   const kv = $("md-kv"), tb = $("md-tbody"), note = $("md-note");
   let d = null;
   try {
     const r = await fetch(API + "/model/" + encodeURIComponent(matchId) + "?market=HAD");
+    if (request !== S.pricingRequest) return;
     if (!r.ok) {
       setText($("md-tag"), "无数据");
       note.appendChild(document.createTextNode(
@@ -1404,10 +1430,12 @@ async function loadModel(matchId) {
     }
     d = await r.json();
   } catch (err) {
+    if (request !== S.pricingRequest) return;
     setText($("md-tag"), "加载失败");
     note.appendChild(document.createTextNode(err.message));
     return;
   }
+  if (request !== S.pricingRequest) return;
 
   setText($("md-tag"), d.market + " · " + d.model);
   [
@@ -2074,7 +2102,16 @@ const resetFilters = () => {
 $("btn-reset").addEventListener("click", resetFilters);
 $("btn-empty-reset").addEventListener("click", resetFilters);
 $("btn-goto-dash").addEventListener("click", () => showView("dashboard"));
-$("f-method").addEventListener("change", (e) => { S.method = e.target.value; openPricing(S.selectedIndex || 0); });
+for (const option of $("f-method").options) $("pricing-method").appendChild(option.cloneNode(true));
+const changeMethod = e => {
+  S.method = e.target.value;
+  $("f-method").value = S.method;
+  $("pricing-method").value = S.method;
+  if (S.selected) openPricing(S.matches.findIndex(m => m.match_id === S.selected));
+};
+$("f-method").addEventListener("change", changeMethod);
+$("pricing-method").addEventListener("change", changeMethod);
+$("btn-pricing-back").addEventListener("click", () => showView("dashboard"));
 ["f-date", "f-league", "f-q"].forEach(id =>
   $(id).addEventListener("keydown", e => { if (e.key === "Enter") loadList(); }));
 

@@ -16,6 +16,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from api.app import ApiApp, BadRequest, NotFound, create_app
+from core.models import OddsSnapshot
+from datetime import datetime, timezone
 from service.valuation import LEYU_SOURCE_NAME
 
 #: 真实乐鱼快照离线夹具（无网、不依赖仓库 output/）。
@@ -158,6 +160,19 @@ class TestFairEdge(unittest.TestCase):
         self.assertIn("probabilities", body)
         self.assertIn("method_spread_pp", body)
         self.assertAlmostEqual(sum(body["probabilities"]), 1.0, places=6)
+        self.assertEqual(len(body["odds"]), len(body["outcomes"]))
+
+    def test_fair_fallback_prices_match_actual_market(self):
+        snap = OddsSnapshot(
+            match_id="fallback", league="L", home="A", away="B", market="OU(2.5)",
+            outcomes=("over", "under"), odds=(1.8, 2.1),
+            source="leyu", captured_at=datetime.now(timezone.utc))
+        self.app.svc._latest = Mock(return_value=snap)
+        _, data = call(self.app, "GET", "/api/v1/fair/fallback")
+        self.assertTrue(data["market_fallback"])
+        self.assertEqual(data["market"], "OU(2.5)")
+        self.assertEqual(data["odds"], [1.8, 2.1])
+        self.assertEqual(data["outcomes"], ["over", "under"])
 
     def test_fair_method_param(self):
         for m in ("shin", "proportional", "additive", "power", "odds_ratio"):

@@ -1004,6 +1004,7 @@ class ValuationService:
         fp = devig_mod.devig(snap, method=m)
         d = fp.as_dict()
         d["match_id"] = match_id
+        d["odds"] = list(snap.odds)
         d["state"] = snap.state.value
         # 用户要求：盘口信息一律以**中文**展示，且与乐鱼一致
         # （如「曼联上半场-1」「上半场进球数>1/1.5」）。
@@ -1093,7 +1094,8 @@ class ValuationService:
 
         return {
             "match_id": match_id,
-            "market": market,
+            "market": snap.market,
+            "requested_market": market,
             "state": snap.state.value,
             "odds": list(snap.odds),
             "outcomes": list(snap.outcomes),
