@@ -76,7 +76,7 @@ async page => {
   await page.getByRole("button", {name: "赛事看板", exact: true}).click();
   await page.locator("#f-method").selectOption("shin");
   assert(await page.locator("#view-dashboard").isVisible(), "List method change navigates away");
-  assert(await page.locator("#pricing-tag").textContent() === "a · 主队a vs 客队a", "List method change opened pricing");
+  assert(await page.locator("#tbody tr").count() === 2, "List method change cleared the list");
   failPricing = true;
   await page.getByRole("button", {name: "定价对比", exact: true}).click();
   await page.locator("#pricing-method").selectOption("shin");
