@@ -588,6 +588,32 @@ class ApiApp:
             age_s = self.analysis.latest_age_s()
             stale = bool(max_age and age_s is not None and age_s > max_age)
             out = dict(res)
+            date = _q1(query, "date")
+            league = _q1(query, "league")
+            keyword = (_q1(query, "q") or "").strip().casefold()
+            if date or league or keyword:
+                # Older persisted decisions lack kickoff dates. Resolve them
+                # from local snapshots only when a date filter is requested.
+                dated_ids = ({str(m["match_id"])
+                              for m in self.svc.list_matches(date=date)}
+                             if date else None)
+                rows = [d for d in (res.get("decisions") or [])
+                        if (dated_ids is None or str(d.get("match_id")) in dated_ids)
+                        and (not league or d.get("league") == league)
+                        and (not keyword or keyword in " ".join(
+                            str(d.get(k) or "") for k in
+                            ("match_id", "league", "home", "away")).casefold())]
+                out["decisions"] = rows
+                out["count"] = len(rows)
+                out["summary"] = {
+                    **(res.get("summary") or {}),
+                    "n": len(rows),
+                    "buy": sum(bool(d.get("picks")) for d in rows),
+                    "watch": sum(d.get("decision") == "watch" for d in rows),
+                    "avoid": sum(d.get("decision") == "avoid" for d in rows),
+                    "no_llm": sum(d.get("decision") == "no_llm" for d in rows),
+                    "n_picks": sum(len(d.get("picks") or []) for d in rows),
+                }
             out["cached"] = True
             # 如实的时效标注：前端据此提示“数据较旧，后台正在重算”
             out["stale"] = stale

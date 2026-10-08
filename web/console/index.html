@@ -231,6 +231,12 @@ footer{text-align:center;color:var(--mut);font-size:12px;padding:22px}
   <section id="view-dashboard">
     <div class="summary" id="decision-summary" style="display:none"></div>
     <div class="filters">
+      <div class="f"><label for="f-mode">数据视图</label>
+        <select id="f-mode">
+          <option value="decisions">决策建议</option>
+          <option value="matches">全部赛事</option>
+        </select>
+      </div>
       <div class="f"><label>比赛日期</label><input type="date" id="f-date"></div>
       <div class="f"><label>联赛</label><input type="text" id="f-league" placeholder="如 日职"></div>
       <div class="f"><label>关键词</label><input type="text" id="f-q" placeholder="队名 / 场次号"></div>
@@ -527,7 +533,34 @@ const API = "/api/v1";
 const $ = (id) => document.getElementById(id);
 const S = { matches: [], selected: null, method: "auto", view: "dashboard",
             decisions: [], decisionSummary: null, decisionLimit: 6,
-            dataSource: "", board: [], boardTimer: null };
+            dataSource: "", board: [], boardTimer: null,
+            listMode: "decisions", listRequest: 0 };
+
+const LIST_HEADERS = {
+  decisions: ["决策", "建议", "赔率", "优势", "建议仓位", "置信", "走势", "联赛", "对阵", "已算盘口", "耗时"],
+  matches: ["场次号", "联赛", "对阵", "主胜 / 结果1", "平局 / 市场", "客胜 / 结果2", "水钱", "方法分歧", "状态"]
+};
+
+function listFilters() {
+  const qs = new URLSearchParams();
+  for (const [id, key] of [["f-date", "date"], ["f-league", "league"], ["f-q", "q"]]) {
+    const value = $(id).value.trim();
+    if (value) qs.set(key, value);
+  }
+  return qs;
+}
+
+async function loadList(opts) {
+  const request = ++S.listRequest;
+  S.listMode = $("f-mode").value;
+  const head = $("tbl").querySelector("thead tr");
+  clear(head);
+  LIST_HEADERS[S.listMode].forEach(text => head.appendChild(el("th", { text })));
+  $("decision-panel").style.display = "none";
+  clear($("list-src"));
+  const o = { silent: !!(opts && opts.silent), request };
+  return S.listMode === "matches" ? loadMatches(o) : loadDecisions(o);
+}
 
 /* ---------- 安全 DOM 构建器 ---------- */
 function el(tag, props, children) {
@@ -654,17 +687,24 @@ async function loadDecisions(opts) {
 
   let data;
   try {
-    const r = await fetch(API + "/decisions?max_age=1800");
+    const qs = listFilters();
+    qs.set("max_age", "1800");
+    const r = await fetch(API + "/decisions?" + qs);
     if (!r.ok) throw new Error("HTTP " + r.status);
     data = await r.json();
   } catch (e) {
+    if (o.request !== S.listRequest) return;
     setListState("error", { title: "无法读取决策",
       desc: "GET " + API + "/decisions 失败：" + e.message });
     return;
   }
+  if (o.request !== S.listRequest) return;
 
   // 首轮尚未完成：显示提示，不自动触发 LLM
   if (data.pending) {
+    S.decisions = [];
+    clear($("decision-summary"));
+    renderCards([], 0);
     setListState("empty");
     setText($("list-tag"), "等待后台首轮决策…");
     const note = $("list-note");
@@ -686,6 +726,7 @@ async function loadDecisions(opts) {
   if (!S.decisions.length) {
     setListState("empty");
     setText($("list-tag"), "0 场");
+    setText($("list-note"), "");
     renderCards([], 0);
     return;
   }
@@ -766,7 +807,7 @@ async function forceRefreshDecisions() {
     }
   }
   // 完成后重新读缓存
-  await loadDecisions({ silent: true });
+  await loadList({ silent: true });
 }
 
 function renderDecisionSummary(data) {
@@ -1059,19 +1100,18 @@ async function loadMatches(opts) {
   const doRefresh = !!(opts && opts.refresh);
   setListState("loading");
   clearMsg();
-  const qs = new URLSearchParams();
-  const d = $("f-date").value, lg = $("f-league").value.trim(), q = $("f-q").value.trim();
-  if (d) qs.set("date", d);
-  if (lg) qs.set("league", lg);
-  if (q) qs.set("q", q);
+  $("decision-summary").style.display = "none";
+  const qs = listFilters();
   if (doRefresh) qs.set("refresh", "1");
 
   let res;
   try { res = await fetch(API + "/matches?" + qs); }
   catch (e) {
+    if (opts.request !== S.listRequest) return;
     setListState("error", { title: "网络不可达", desc: "无法连接 " + API + "/matches，请确认后端服务已启动。" });
     return;
   }
+  if (opts.request !== S.listRequest) return;
   if (!res.ok) {
     let detail = "";
     try { const j = await res.json(); detail = j.error || ""; } catch (_) { detail = ""; }
@@ -1098,12 +1138,18 @@ async function loadMatches(opts) {
     renderCards([], 0);
     return;
   }
-  const rows = await Promise.all(base.map(async (m) => {
+  const rows = [];
+  const FAIR_REQUEST_CONCURRENCY = 6;
+  for (let start = 0; start < base.length; start += FAIR_REQUEST_CONCURRENCY) {
+    if (opts.request !== S.listRequest) return;
+    rows.push(...await Promise.all(base.slice(start, start + FAIR_REQUEST_CONCURRENCY).map(async (m) => {
     try {
       const f = await fetch(API + "/fair/" + encodeURIComponent(m.match_id) + "?method=" + S.method);
       return f.ok ? Object.assign({}, m, { _fair: await f.json() }) : Object.assign({}, m, { _fair: null });
     } catch (_) { return Object.assign({}, m, { _fair: null }); }
-  }));
+    })));
+  }
+  if (opts.request !== S.listRequest) return;
   S.matches = rows;
   setListState("table");
   renderTable(rows);
@@ -2018,18 +2064,19 @@ function startBoardTimer() {
 }
 
 /* ---------- 事件绑定 ---------- */
-$("btn-load").addEventListener("click", loadMatches);
-$("btn-retry").addEventListener("click", loadMatches);
+$("btn-load").addEventListener("click", loadList);
+$("btn-retry").addEventListener("click", loadList);
+$("f-mode").addEventListener("change", loadList);
 const resetFilters = () => {
   $("f-date").value = ""; $("f-league").value = ""; $("f-q").value = "";
-  loadMatches();
+  loadList();
 };
 $("btn-reset").addEventListener("click", resetFilters);
 $("btn-empty-reset").addEventListener("click", resetFilters);
 $("btn-goto-dash").addEventListener("click", () => showView("dashboard"));
 $("f-method").addEventListener("change", (e) => { S.method = e.target.value; openPricing(S.selectedIndex || 0); });
 ["f-date", "f-league", "f-q"].forEach(id =>
-  $(id).addEventListener("keydown", e => { if (e.key === "Enter") loadDecisions({ silent: true }); }));
+  $(id).addEventListener("keydown", e => { if (e.key === "Enter") loadList(); }));
 
 // 返回列表：从决策详情回到决策列表
 const backBtn = $("btn-decision-back");
@@ -2064,14 +2111,13 @@ renderNav();
 // 首次加载：直接拉「决策列表」——买入建议/优势/仓位就在列表里，
 // 不需要先看一堆原始赔率再点进去。
 // 首屏**只读缓存**（后台定时决策已产出的结果），不触发 LLM。
-loadDecisions({ silent: true });
+loadList();
 
 // 定时自动刷新列表（每 30s 拉一次后台最新结果，页面无需手动刷新）。
 setInterval(() => {
   // 详情面板打开时不打扰用户
-  const panel = $("decision-panel");
-  if (S.view !== "dashboard") return;
-  loadDecisions({ silent: true });
+  if (S.view !== "dashboard" || S.listMode !== "decisions") return;
+  loadList({ silent: true });
 }, 30000);
 
 </script>
