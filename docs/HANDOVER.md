@@ -225,12 +225,33 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 该页面的登录请求使用 h5 客户端、浏览器指纹和 `/site/api` 签名。
 直接发送历史 App 的 `Kaptchcate=99` 与完成该流程不等价。
 
-**代码修复（issue #12）**：
+**当前 App 一手代码证据（A）**：从官网 App 下载入口取得全站 Android 2.0.1，
+`LoginDataSource.g/h` 确认 MD5 口令和默认 Kaptchcate=99。
+`SiteManager.a` / `ApiRetryInterceptKt.h` 为每次请求生成 AES-CBC 的
+`X-API-XXX`（毫秒时间加三位随机数）和 `X-API-HACK-XXXXX`（秒时间及 preInfo.ip）。
+后一个请求头绑定初始化 IP，**不绑定请求体**。
+旧固定 H5 签名与该流程不同。全站 App 网关的验证返回 6002，
+不能用于判断用户指定的体育 App 登录结果。
+
+**用户体育 App 抓包证据（A）**：现已收到 `乐鱼app.zip`，包含 164 个 HTTP 请求。
+其中登录请求的业务码为 6000；口令编码、默认 Kaptchcate 和两个动态头
+与上述代码匹配。体育启动使用 `sport_android`、`x-inter-client=android`
+及原生启动字段。抓包账号与当前 `.env` 新账号不同。
+按抓包网关、初始化 IP 和动态头提交新账号一次，仍返回 6002；
+抓包旧账号对照请求返回 6030（已锁定），既有 token 启动返回 6001（已过期）。
+均未得到新 token。已停止重复账号提交，继续核对新账号注册入口与账号所属网关。
+这组结果不能证明新账号密码错误，也不能证明所有请求要求已被排除。
+
+**代码修复（issues #12 / #14 / #15 / #16）**：
 - 整次 acquire 串行执行，网络失败也计入至少默认 30 秒的登录冷却。
 - 明确的上游登录业务拒绝会停止该 provider 的自动账号提交，invalidate 不会解除。
-- 登录签名 `LEYU_APP_LOGIN_SIGNATURE`（`/site/api`）与场馆签名
+- 当前 App 使用 `LEYU_APP_SIGNING_CONFIG` 指定的私有 JSON（routes → API 前缀 → key/iv），
+  初始化 IP 后生成两个动态头，登录和场馆共用签名实现。密钥不入库。
+- 兼容的固定登录签名 `LEYU_APP_LOGIN_SIGNATURE`（`/site/api`）与场馆签名
   `LEYU_APP_SIGNATURE`（`/game/api`）分开配置，不再错误回退。
 - 成功登录得到的 token 缓存权限为 0600，并继续用于场馆续期和重启恢复。
+- 缓存绑定账号、设备和网关的 SHA-256 标识；换账号不复用旧账号缓存，旧无绑定缓存忽略。
+- 业务会话失效保留 App token，先重新 launch；launch 明确返回 token 过期才重登。
 - 配置变更需重新创建服务；重启允许重新尝试登录，不能把重启当作反复试密码的手段。
 
 **恢复路径**：按用户要求优先核对当前官方 App 登录协议；也可在官方 App 登录后，将有效 x-api-token 更新到
@@ -241,6 +262,18 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 
 生产部署端口为 API 8001、控制台 3003；重建不得误用默认 8000。
 诊断期间通过临时 compose override 暂停后台账号登录，以免锁定新账号。
+
+本轮最终验证：`./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q`
+为 1011 tests / 14 skipped（exit 0）；Docker Python 3.12 的 mypy 为 49 文件无错误、
+ruff 为 All checks passed（均 exit 0）；受限 pyright 为 0 errors / warnings（exit 0）。
+Python 文件在验证期间保持不变，语法编译通过。线上 App token 仍未取得，实时计数仍为零。
+
+私有签名文件放在已忽略的 `output/`，权限 0600；`.env` 设置
+`LEYU_APP_SIGNING_CONFIG=/app/output/playwright/leyu-app-signing-private.json`。
+JSON 为 `routes` 对象，包含空前缀、`/site/api`、`/game/api` 三个条目，
+每个条目有 UTF-8 `key`（16/24/32 字节）和 `iv`（16 字节）。
+取值从用户提供的 App 协议配置取得，不能提交私有文件或复制密钥到代码中。
+`LEYU_APP_HOST` 应指向已核对的体育 App 网关，不能套用全站下载 App 的默认网关。
 
 ### 3.3 进行中场次与乐鱼"完全一致"（P1）
 
@@ -407,10 +440,11 @@ output/
 
 ### 6.1 登录续期：区分历史协议与当前验证要求
 
-历史文档根据当前无法复核的 `乐鱼app.zip` 宣称所有登录无需验证码，
-该说法不能作为当前成功证据。2026-10-08 正常网页已显示人机验证（6022）。
+历史文档根据 `乐鱼app.zip` 宣称所有登录无需验证码；现已收到并复核该文件，
+只能证明其中账号在 2026-10-05 的 App 请求成功，不能推导所有账号始终无需验证。
+2026-10-08 正常网页已显示人机验证（6022）。
 本项目不处理或跳过该验证；离线 mock 测试只验证缓存、并发和失败保护。
-签名按 API 前缀配置，不能将 `/game/api` 签名用于 `/site/api` 登录。
+固定签名按 API 前缀配置；当前 App 使用初始化 IP 和动态签名，不能复用历史固定头。
 
 ### 6.2 有过期价 → 凭空造出注单
 

@@ -53,6 +53,8 @@ class TestLoginCredentials(unittest.TestCase):
         self.assertNotIn("alice", out)
         self.assertNotIn("s3cret", out)
         self.assertNotIn("uuid-1", out)
+        self.assertNotIn("s3cret", repr(c))
+        self.assertNotIn("alice", repr(c))
 
     def test_missing_fields_raise(self) -> None:
         for kw in ({"name": ""}, {"password": ""}, {"uuid": ""}):
@@ -68,8 +70,8 @@ class TestAppLoginClient(unittest.TestCase):
 
     def _client(self) -> AppLoginClient:
         return AppLoginClient(
-            LoginCredentials(name="ff778580978", password="pw",
-                             uuid="95ad64d5935fa539"),
+            LoginCredentials(name="example-user", password="pw",
+                             uuid="example-device"),
             app_host="https://app.test", signature="sig")
 
     def test_login_success_returns_token(self) -> None:
@@ -111,14 +113,14 @@ class TestAppLoginClient(unittest.TestCase):
 
         self.assertTrue(captured["url"].endswith(LOGIN_PATH))
         b = captured["body"]
-        self.assertEqual(b["uuid"], "95ad64d5935fa539")
-        self.assertEqual(b["name"], "ff778580978")
+        self.assertEqual(b["uuid"], "example-device")
+        self.assertEqual(b["name"], "example-user")
         self.assertEqual(b["password"], c.credentials.password_md5)
         self.assertEqual(b["Flag"], 1)
         self.assertEqual(b["Version"], "2.0.1")
         self.assertEqual(b["Kaptchcate"], 99)
         # 登录**不需要** token（抓包实证），但可以带签名
-        self.assertNotIn("x-api-token", captured["headers"])
+        self.assertEqual(captured["headers"]["x-api-token"], "")
 
     def test_ip_restriction_gives_actionable_error(self) -> None:
         """`6031 地区ip限制` 必须给出可操作指引，而不是含糊失败。"""
@@ -215,6 +217,35 @@ class TestAppLoginClient(unittest.TestCase):
         self.assertNotIn("private-", str(error.exception) + c.last_error)
         self.assertIn("不能仅凭状态码", str(error.exception))
 
+    def test_native_login_initializes_before_submitting_credentials(self) -> None:
+        from collector.leyu_app_signing import NativeAppSigner
+
+        signer = NativeAppSigner({p: {"key": "k" * 32, "iv": "i" * 16}
+                                  for p in ("", "/site/api", "/game/api")})
+        client = self._client()
+        client.signer = signer
+        payloads = iter([
+            {"status_code": 6000, "data": {"ip": "203.0.113.5"}},
+            {"status_code": 6000, "data": {"token": "new-token"}},
+        ])
+        requests = []
+
+        def respond(request, **kwargs):
+            requests.append(request)
+            response = mock.MagicMock()
+            response.__enter__.return_value.read.return_value = json.dumps(next(payloads)).encode()
+            return response
+
+        with mock.patch("urllib.request.urlopen", side_effect=respond):
+            self.assertEqual(client.login(), "new-token")
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0].data, b"{}")
+        self.assertTrue(requests[1].full_url.endswith(LOGIN_PATH))
+        headers = {k.lower(): v for k, v in requests[1].headers.items()}
+        self.assertIn("x-api-hack-xxxxx", headers)
+        self.assertNotEqual(headers["x-api-xxx"], "sig")
+        self.assertEqual(signer._ip, "203.0.113.5")
+
     def test_token_without_success_status_is_rejected(self) -> None:
         c = self._client()
         with mock.patch("urllib.request.urlopen") as uo:
@@ -280,17 +311,18 @@ class TestAppLoginSessionProvider(unittest.TestCase):
                 p.acquire()
             self.assertEqual(p.logins, 0)
 
-    def test_invalidate_forces_relogin(self) -> None:
+    def test_business_expiry_relaunches_without_account_login(self) -> None:
         client, launcher = self._setup()
         launcher.acquire.return_value = _session("rid5")
-        with mock.patch.object(client, "login", return_value="T5"):
+        with mock.patch.object(client, "login", side_effect=AssertionError("不该登录")):
             p = AppLoginSessionProvider(client, launcher)
             p._token = "X"
             p._token_at = 0.0
-            p.invalidate()
-            self.assertFalse(p.cached_token)
-            p.acquire()
-            self.assertEqual(p.logins, 1)
+            p.invalidate(_session("expired-business-session"))
+            self.assertEqual(p.cached_token, "X")
+            self.assertEqual(p.acquire().request_id, "rid5")
+            self.assertEqual(p.logins, 0)
+            self.assertEqual(launcher.credentials.token, "X")
 
     def test_relogin_throttled(self) -> None:
         """两次登录过近时跳过（上游限流 30 次/分钟）。"""
@@ -300,7 +332,8 @@ class TestAppLoginSessionProvider(unittest.TestCase):
             p = AppLoginSessionProvider(client, launcher,
                                         min_relogin_interval_s=3600.0)
             self.assertEqual(p.acquire().request_id, "rid6")   # 首次登录
-            # 立刻失效再试 → 应被限流挡住
+            # App token 明确过期后仍保留上次账号尝试的冷却。
+            launcher.acquire.side_effect = SessionError("6001 token已过期")
             p.invalidate()
             with self.assertRaises(SessionError) as cm:
                 p.acquire()
@@ -444,6 +477,40 @@ class TestAppLoginSessionProvider(unittest.TestCase):
                 self.assertEqual(p.cached_token, "")
                 p.acquire()
                 self.assertEqual(p.logins, 1)
+
+    def test_cache_cannot_cross_accounts_devices_or_gateways(self) -> None:
+        client, launcher = self._setup()
+        launcher.acquire.return_value = _session("rid-cache")
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "token.json")
+            with mock.patch.object(client, "login", return_value="PRIVATE-TOKEN"):
+                AppLoginSessionProvider(client, launcher, token_cache_path=path).acquire()
+            for name, uuid, host in (
+                ("other-user", "uuid-1", "https://app.test"),
+                ("u", "other-device", "https://app.test"),
+                ("u", "uuid-1", "https://other.test"),
+            ):
+                changed = AppLoginClient(LoginCredentials(name, "p", uuid), app_host=host)
+                provider = AppLoginSessionProvider(changed, launcher, token_cache_path=path)
+                self.assertEqual(provider.cached_token, "")
+            with open(path, encoding="utf-8") as saved:
+                self.assertNotIn('"uuid-1"', saved.read())
+
+    def test_invalid_or_legacy_cache_does_not_crash_or_load_token(self) -> None:
+        client, launcher = self._setup()
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "token.json")
+            provider = AppLoginSessionProvider(client, launcher)
+            invalid_entries: tuple[object, ...] = (
+                [], 1, {"token": "legacy"},
+                {"account": provider._cache_account(), "token": "T", "at": "bad"},
+                {"account": provider._cache_account(), "token": 123},
+            )
+            for data in invalid_entries:
+                with open(path, "w", encoding="utf-8") as target:
+                    json.dump(data, target)
+                loaded = AppLoginSessionProvider(client, launcher, token_cache_path=path)
+                self.assertEqual(loaded.cached_token, "")
 
     def test_launcher_without_writable_credentials(self) -> None:
         """启动器缺可写凭据时给出明确错误（而非 TypeError）。"""

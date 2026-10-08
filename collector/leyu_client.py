@@ -426,6 +426,38 @@ def _aes_ecb_decrypt_pure(block: bytes, key: bytes) -> bytes:
     return bytes(out)
 
 
+def encrypt_aes_cbc(data: bytes, key: bytes, iv: bytes) -> bytes:
+    """AES-CBC/PKCS7 for the native App protocol, using the existing AES tables."""
+    if len(key) not in (16, 24, 32) or len(iv) != 16:
+        raise DecodeError("AES key/IV length invalid")
+    pad = 16 - len(data) % 16
+    data += bytes([pad]) * pad
+    rk = _expand_key(key)
+    nr = len(key) // 4 + 6
+    out = bytearray()
+    previous = iv
+    for off in range(0, len(data), 16):
+        s = [data[off + i] ^ previous[i] ^ rk[i] for i in range(16)]
+        for rnd in range(1, nr + 1):
+            s = [_SBOX[v] for v in s]
+            s = [s[r + 4 * ((c + r) % 4)] for c in range(4) for r in range(4)]
+            if rnd != nr:
+                mixed: List[int] = []
+                for c in range(4):
+                    a, b, d, e = s[c * 4:c * 4 + 4]
+                    mixed.extend((
+                        _gmul(a, 2) ^ _gmul(b, 3) ^ d ^ e,
+                        a ^ _gmul(b, 2) ^ _gmul(d, 3) ^ e,
+                        a ^ b ^ _gmul(d, 2) ^ _gmul(e, 3),
+                        _gmul(a, 3) ^ b ^ d ^ _gmul(e, 2),
+                    ))
+                s = mixed
+            s = [s[i] ^ rk[rnd * 16 + i] for i in range(16)]
+        previous = bytes(s)
+        out.extend(previous)
+    return bytes(out)
+
+
 def decimal_from_ov(ov: object) -> Optional[float]:
     """把 `ov` 整数编码还原为十进制含本金赔率；非法值返回 None。"""
     try:

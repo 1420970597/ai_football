@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """乐鱼 App 账号登录续期：口令 → token → 场馆业务会话。
 
-保留历史 App 请求格式；其成功条件不能从离线单元测试推断。
-2026-10-08 正常网页登录实际返回 6022 并显示人机验证，历史抓包
-`乐鱼app.zip` 当前不在仓库，不能据此宣称所有账户均无需验证。
+2026-10-08 用户提供的体育 App 成功抓包确认 MD5 口令、
+Kaptchcate=99；动态头算法与官方 Android 2.0.1 代码匹配。
+正常网页登录返回 6022 并显示人机验证，不能将网页验证模式套用到 App。
+离线测试验证协议实现，不能据此宣称当前账号登录已成功。
 本模块不处理或跳过人机验证。上游拒绝登录时停止后台账号重试，
 网络失败才按冷却间隔重试；已有有效 token 可继续用于场馆续期。
 
@@ -34,8 +35,10 @@ from .leyu_app_session import (
     DEFAULT_APP_HOST,
     HTTP_TIMEOUT_S,
     HEADER_PREFIX_SIGNATURE,
+    _safe_base_url,
 )
 from .session import Session, SessionError, SessionProvider
+from .leyu_app_signing import NativeAppSigner, signer_from_env
 
 __all__ = [
     "LOGIN_PATH",
@@ -63,7 +66,7 @@ CLIENT_VERSION = "2.0.1"
 #: 站点 ID（实测 2001）
 SITE_ID = "2001"
 
-#: 历史 App 请求格式。不是网页验证码模式，也不保证当前上游接受。
+#: 当前官方 App 2.0.1 的默认值；不是网页验证码模式。
 KAPTC_TYPE_NO_CHECK = 99
 
 #: 业务成功码
@@ -135,6 +138,9 @@ class LoginCredentials:
     def masked(self) -> str:
         return "name=<已配置> uuid=<已配置> pwd=<已配置>"
 
+    def __repr__(self) -> str:
+        return "LoginCredentials(%s)" % self.masked()
+
 
 class AppLoginClient:
     """App 登录客户端：账号口令 → `x-api-token`。
@@ -150,13 +156,15 @@ class AppLoginClient:
         app_host: str = DEFAULT_APP_HOST,
         timeout: float = HTTP_TIMEOUT_S,
         signature: str = "",
+        signer: Optional[NativeAppSigner] = None,
     ) -> None:
         self.credentials = credentials
-        self.app_host = str(app_host).rstrip("/")
+        self.app_host = _safe_base_url(app_host)
         self.timeout = timeout
         #: 若提供，必须是 /site/api 的签名，不能复用场馆的 /game/api 签名。
         self.signature = str(signature or "").strip()
         self.last_error = ""
+        self.signer = signer
 
     def _headers(self) -> Dict[str, str]:
         h: Dict[str, str] = {
@@ -165,6 +173,7 @@ class AppLoginClient:
             "x-api-site": SITE_ID,
             "x-api-language": "CHS",
             "x-api-uuid": self.credentials.uuid,
+            "x-api-token": "",
             "x-api-currency": "CNY",
             "content-type": "application/json; charset=utf-8",
             "user-agent": "okhttp/4.12.0",
@@ -172,6 +181,8 @@ class AppLoginClient:
         }
         if self.signature:
             h[HEADER_PREFIX_SIGNATURE] = self.signature
+        if self.signer is not None:
+            h.update(self.signer.headers("/site/api"))
         return h
 
     def login(self) -> str:
@@ -185,6 +196,8 @@ class AppLoginClient:
                 对 `6031 地区ip限制` 会给出**明确可操作**的说明，
                 因为这属于环境限制而非代码问题。
         """
+        if self.signer is not None:
+            self.signer.initialize(self.app_host, self.credentials.uuid, self.timeout)
         body = {
             "uuid": self.credentials.uuid,
             "name": self.credentials.name,
@@ -307,12 +320,22 @@ class AppLoginSessionProvider(SessionProvider):
         try:
             with open(path, encoding="utf-8") as fh:
                 d = json.load(fh)
-            tok = str((d or {}).get("token") or "").strip()
-        except (OSError, ValueError):
+            if not isinstance(d, dict) or d.get("account") != self._cache_account():
+                return
+            tok = d.get("token")
+            if not isinstance(tok, str) or not tok.strip():
+                return
+            at = float(d.get("at") or 0.0)
+        except (OSError, ValueError, TypeError):
             return
-        if tok:
-            self._token = tok
-            self._token_at = float((d or {}).get("at") or 0.0)
+        self._token = tok.strip()
+        self._token_at = at
+
+    def _cache_account(self) -> str:
+        """绑定账号、设备和网关，改配置后不得误用另一账号的 token。"""
+        credentials = self.client.credentials
+        identity = json.dumps([credentials.name, credentials.uuid, self.client.app_host])
+        return hashlib.sha256(identity.encode()).hexdigest()
 
     def _save_token(self, token: str) -> None:
         """落盘（原子写）；失败不影响继续使用（只是下次要重新登录）。"""
@@ -325,7 +348,8 @@ class AppLoginSessionProvider(SessionProvider):
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 os.fchmod(fh.fileno(), 0o600)
-                json.dump({"token": token, "at": time.time()}, fh)
+                json.dump({"token": token, "at": time.time(),
+                           "account": self._cache_account()}, fh)
             os.replace(tmp, path)
         except OSError as exc:
             self.last_error = "token 缓存写入失败: %s" % exc
@@ -416,15 +440,12 @@ class AppLoginSessionProvider(SessionProvider):
             raise
 
     def invalidate(self, session: Optional[Session] = None) -> None:
-        """标记 token 失效（下次 acquire 会重新登录）。
+        """业务会话失效不代表 App token 失效：下一次先重新 launch。
 
-        与 `AppSessionProvider` 不同：这里**必须**能作废 token，
-        否则业务会话失效后会一直拿旧 token 重试而不去登录。
-
-        保留尝试冷却和业务拒绝状态；invalidate 不能重新打开账号重试。
+        acquire 只在 launch 明确返回 token 过期时丢弃它并登录。
+        同时保留尝试冷却和业务拒绝状态，避免后台重复账号请求。
         """
-        with self._lock:
-            self._token = ""
+        return None
 
     def describe(self) -> Dict[str, Any]:
         return {
@@ -486,6 +507,7 @@ def login_provider_from_env(
         creds,
         app_host=(e.get(APP_ENV_HOST) or "").strip() or DEFAULT_APP_HOST,
         signature=(e.get(LOGIN_ENV_SIGNATURE) or "").strip(),
+        signer=signer_from_env(e),
     )
     # 延迟导入避免循环：本模块与 leyu_app_session 互不依赖对方顶层符号
     from .leyu_app_session import AppCredentials, AppSessionBootstrapper
@@ -494,6 +516,7 @@ def login_provider_from_env(
         AppCredentials((e.get(APP_ENV_TOKEN) or "").strip() or "pending", uuid),
         signature=signature,
         app_host=client.app_host,
+        signer=client.signer,
     )
     return AppLoginSessionProvider(
         client, launcher, token_cache_path=token_cache_path)

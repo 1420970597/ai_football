@@ -1,107 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-乐鱼 App 会话引导（`x-api-token` → `requestId`）—— 解决「requestId 从哪来」。
+"""乐鱼 App token → 体育业务 requestId 的会话引导。
 
-═══════════════════════════════════════════════════════════════════════════
-⚠️ 自动续期的真实边界（必读，避免对能力产生误解）
-═══════════════════════════════════════════════════════════════════════════
+2026-10-08 用户提供的 Android 2.0.1 成功抓包确认：
+登录走 /site/api，体育启动走 /game/api/v1/venue/launch；二者使用
+不同前缀的 x-api-xxx，并携带 x-api-hack-xxxxx。NativeAppSigner
+按私有运行配置生成请求头并加载 preInfo.ip，不持久化账号口令。
+配置 signer 时采用 sport_android / x-inter-client=android 和原生启动字段。
 
-本模块能自动做的：
-
-    ✅ 用**仍然有效的** `x-api-token` 重新 launch 场馆，换取新 `requestId`。
-       即：业务会话（`0401013`）失效时可自愈。
-
-本模块**不负责**（已由 `collector/leyu_app_login.py` 接管）：
-
-    ➡️ `x-api-token` 本身过期后重新获取它。
-       见 `leyu_app_login.AppLoginSessionProvider` —— 它用账号口令调
-       `POST /site/api/v1/user/login` 换新 token，再调本模块 launch。
-
-       拆分原因：登录与建会话职责不同，验证要求也不同。
-
-【2026-10-08 修正】当前正常网页登录返回 6022 并显示人机验证。
-历史 App 抓包不在仓库，不能据此宣称当前登录无需验证；本项目不处理
-或跳过验证码。账号自动登录遭业务拒绝时暂停账号重试，有效 token
-仍可自动换取业务会话；参见 leyu_app_login 与 docs/HANDOVER.md §3.2。
-
-═══════════════════════════════════════════════════════════════════════════
-这条链路解决了此前缺失的最后一环
-═══════════════════════════════════════════════════════════════════════════
-
-之前无法打通的原因：业务 API（`api.*` / `/yewu11/*`）需要 `requestId`，
-而 `requestId` 既不是随机值、也不来自 `x-api-token` 直换。
-
-实测发现 `requestId` 是**通过「启动场馆」换来的**：
-
-    iOS/Android App
-      │  POST /game/api/v1/venue/launch   {"enName":"YBTY", ...}
-      │  headers: x-api-token / x-api-uuid / x-api-xxx（按前缀的签名）
-      ▼
-    {"data":{"url":"https://api.z0ugnx7k.com?token=38bb7a74…","h5Url":...}}
-
-    token 即业务 API 的 requestId：
-      GET https://api.z0ugnx7k.com/yewu11/v2/m/getOriginalDataPB
-      header requestId: 38bb7a74…
-      → {"code":"0000000"}  data=431544 字节  ✅ 实测成功
-
-    同一 token 也是 H5 入口：
-      https://app-h5.ztczzx.com?token=38bb7a74…&api=<加密的网关列表>
-
-场馆代号（实测）：
-    YBTY  乐鱼体育    → 启动成功，指向 api.* 业务网关（**本模块使用**）
-    OBTY  乐鱼体育(旧) → 「即将开放，敬请期待」
-    IMTY  电竞        → 启动成功，指向第三方平台
-    YBBY  捕鱼        → 启动成功
-
-═══════════════════════════════════════════════════════════════════════════
-签名 `x-api-xxx` 的实测结论（重要，避免过度设计）
-═══════════════════════════════════════════════════════════════════════════
-
-App 与 PC 都发送 `x-api-xxx`，其取值是**按 API 前缀分组的一张表**：
-
-    {"/site/api":"19559a3d…", "/act/api":"f65397cb…",
-     "/game/api":"7eb35562…", "/fd/api":"80254b96…", …}
-
-该表在浏览器里以 `localStorage.uuidToBase64` 存储，加密方式为
-**AES-256-CBC**，密钥 `ZFRYCMdFYGf0i5HgO0oWvFV0terUABU0`、IV `CbE3P3t1lY34Ns8F`
-（PKCS7）—— 解出来即上面这张表。
-
-实测**校验强度**（对 `/game/api/v1/venue/launch` 逐项对照）：
-
-    | x-api-xxx              | 结果 |
-    | 正确的 /game/api 值    | ✅ 场馆启动成功 |
-    | 全 0 占位              | ❌ 6003 非法请求 |
-    | 空字符串               | ❌ 6003 非法请求 |
-    | 随机 64 位 hex         | ❌ 6003 非法请求 |
-    | 错前缀（/site/api 值） | ❌ 6003 非法请求 |
-
-即：**该签名必须正确**。不同端点校验强度不同
-（`/site/api/v1/site/venue/sort` 不校验，`venue/launch` 校验）。
-
-进一步实测**绑定性**（同一 `x-api-xxx` 配不同 uuid/token）：
-
-    | uuid     | token   | 结果 |
-    | 原值     | 原值    | ✅ 成功 |
-    | 随机 uuid| 原 token| ✅ 成功 |
-    | 空 uuid  | 原 token| ✅ 成功 |
-    | 原 uuid  | 随机token| ❌ 6001 token已过期 |
-
-结论：**签名既不绑定 uuid、也不绑定 token，是站点级的固定值**。
-因此它可以被抓取一次后**长期缓存复用**，这是自动续期可行的关键。
-
-本模块**不实现签名算法**（不逆向其加密逻辑），而是接受一个由运维/
-一次性抓取提供的签名值；若缺失则给出可操作报错。
-
-═══════════════════════════════════════════════════════════════════════════
-会话续期
-═══════════════════════════════════════════════════════════════════════════
-
-`launch()` 每次调用都返回**新的** `requestId`，因此续期 = 重新 launch。
-`x-api-token` 本身的有效性由上游决定；失效时 `launch` 会返回业务错误，
-本模块将其转换为 `SessionError`，交由 `collector.session` 的 provider 链处理。
-
-本模块**不实现登录**：`x-api-token` 必须由运维注入（环境变量或文件）。
+未配置 signer 时保留既有固定签名与网页启动字段，兼容已有部署；
+抓到一次固定值可重用的历史测量不能证明它永久有效。
+每次 launch 换业务会话，只有明确的 App token 过期才应触发账号登录。
+本模块只负责 launch；账号登录、缓存和重试由 leyu_app_login 管理。
 """
 
 from __future__ import annotations
@@ -114,6 +24,7 @@ from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlsplit, parse_qs
 
 from .session import Session, SessionError, SessionProvider
+from .leyu_app_signing import NativeAppSigner, signer_from_env
 
 __all__ = [
     "VENUE_YBTY",
@@ -136,7 +47,7 @@ VENUE_YBBY = "YBBY"    # 捕鱼
 #: 前缀签名请求头
 HEADER_PREFIX_SIGNATURE = "x-api-xxx"
 
-#: 签名环境变量（站点级固定值；实测不绑定 uuid/token，可长期缓存）
+#: 兼容既有部署的 /game/api 签名；原生动态头使用私有 signing 配置。
 APP_ENV_SIGNATURE = "LEYU_APP_SIGNATURE"
 
 #: App 凭据的环境变量名
@@ -166,6 +77,22 @@ _LAUNCH_BODY: Mapping[str, Any] = {
     "temporaryParam": "",
 }
 
+# 体育 Android App 2.0.1 成功抓包中的启动请求；禁止自动转账。
+_NATIVE_LAUNCH_BODY: Mapping[str, Any] = {
+    "enName": VENUE_YBTY,
+    "gameCode": "",
+    "isApp": "true",
+    "clientType": "android",
+    "https": "true",
+    "isPreload": True,
+    "rollbackAddress": "",
+    "sendMoney": "false",
+    "siteId": "2001",
+    "nativeApp": "1",
+    "isPandaAct": "0",
+    "isUseCache": False,
+}
+
 #: 会话有效期（秒）：launch 换来的 token 实测数小时内有效，取保守值
 SESSION_TTL_S = 3600.0
 
@@ -184,8 +111,7 @@ class AppCredentials:
         self.uuid = uuid.strip()
 
     def masked(self) -> str:
-        return "token=%s…%s uuid=%s" % (
-            self.token[:6], self.token[-4:], self.uuid)
+        return "token=<已配置> uuid=<已配置>"
 
     def __repr__(self) -> str:  # pragma: no cover - 防误打印
         return "AppCredentials(%s)" % self.masked()
@@ -209,7 +135,7 @@ def _ssl_ctx() -> ssl.SSLContext:
     """宽松 TLS 上下文。
 
     这些网关使用轮换域名 + 自签/不匹配证书，严格校验会导致全部请求失败。
-    仅用于读取公开赔率数据，不传输任何敏感信息（令牌只发往上游自身）。
+    该链路会传输会话 token；仅向明确配置的上游网关发送。
     """
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -234,9 +160,11 @@ class AppSessionBootstrapper:
         app_host: str = DEFAULT_APP_HOST,
         venue: str = VENUE_YBTY,
         timeout: float = HTTP_TIMEOUT_S,
+        signer: Optional[NativeAppSigner] = None,
     ) -> None:
         self.credentials = credentials
         self.signature = str(signature).strip()
+        self.signer = signer
         self.app_host = _safe_base_url(app_host)
         self.venue = venue
         self.timeout = timeout
@@ -245,15 +173,15 @@ class AppSessionBootstrapper:
     # -- HTTP -------------------------------------------------------------
 
     def _headers(self) -> Dict[str, str]:
-        if not self.signature:
+        if not self.signature and self.signer is None:
             self.last_error = "缺少 %s" % APP_ENV_SIGNATURE
             raise SessionError(
                 "缺少前缀签名 %s（%s）。\n"
-                "该值是**站点级的固定值**（实测不绑定 uuid/token，可长期缓存）。\n"
+                "固定值兼容旧部署；原生 App 可配置 LEYU_APP_SIGNING_CONFIG。\n"
                 "获取方式：从浏览器 localStorage 的 uuidToBase64 取出后 AES 解密，\n"
                 "或直接抓一次 App 的 venue/launch 请求复制其 x-api-xxx。"
                 % (HEADER_PREFIX_SIGNATURE, APP_ENV_SIGNATURE))
-        return {
+        headers = {
             "x-api-client": "sport_android",
             "x-api-version": "2.0.1",
             "x-api-site": "2001",
@@ -266,6 +194,11 @@ class AppSessionBootstrapper:
             "user-agent": "okhttp/4.12.0",
             "accept-encoding": "identity",
         }
+        if self.signer is not None:
+            self.signer.initialize(self.app_host, self.credentials.uuid, self.timeout)
+            headers.update(self.signer.headers("/game/api"))
+            headers["x-inter-client"] = "android"
+        return headers
 
     def _post(self, path: str, body: Mapping[str, Any]) -> Mapping[str, Any]:
         url = self.app_host + path
@@ -299,7 +232,7 @@ class AppSessionBootstrapper:
         Raises:
             SessionError: 凭据失效、场馆维护、或响应缺少 token。
         """
-        body = dict(_LAUNCH_BODY)
+        body = dict(_NATIVE_LAUNCH_BODY if self.signer is not None else _LAUNCH_BODY)
         body["enName"] = self.venue
         payload = self._post("/game/api/v1/venue/launch", body)
 
@@ -384,16 +317,20 @@ def bootstrapper_from_env(
     """从环境变量构造引导器；凭据缺失时返回 None（交由上层回退）。
 
     只读取环境变量，**不含任何硬编码凭据**（AGENTS.md §3.4）。
-    需要 `LEYU_APP_TOKEN` + `LEYU_APP_UUID` + `LEYU_APP_SIGNATURE`。
+    需要 token、uuid，以及固定签名或 LEYU_APP_SIGNING_CONFIG。
     """
     e = env if env is not None else __import__("os").environ
     token = (e.get(APP_ENV_TOKEN) or "").strip()
     uuid = (e.get(APP_ENV_UUID) or "").strip()
     signature = (e.get(APP_ENV_SIGNATURE) or "").strip()
-    if not (token and uuid and signature):
+    if not (token and uuid):
+        return None
+    signer = signer_from_env(e)
+    if not (signature or signer):
         return None
     return AppSessionBootstrapper(
         AppCredentials(token, uuid),
         signature=signature,
+        signer=signer,
         app_host=(e.get(APP_ENV_HOST) or "").strip() or DEFAULT_APP_HOST,
     )
