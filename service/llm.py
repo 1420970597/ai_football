@@ -80,6 +80,16 @@ DEFAULT_TEMPERATURE = 0.2
 #: （实测 max_tokens=120 时 content 为空、全部 token 花在 reasoning_content）
 DEFAULT_MAX_TOKENS = 4096
 
+#: 熔断阈值：连续失败多少次后暂停上报（跳过一次网络调用）。
+#: 实测背景：同机 LLM 网关 `sub2api` 的 `deepseek-v4.1-flash` 上游账号池
+#: 掉线时，每个请求都要经「4 次重试 + 退避」才失败（单次约 30s）。历史
+#: 记录里一天攒下 **573 次失败**（成功仅 109 次）——上游已死却仍在猛敲，
+#: 既白等又给同机网关加无谓压力（本机还跑着 pi 的对话链路）。
+DEFAULT_FAILURE_THRESHOLD = 3
+#: 熔断后的冷却窗口（秒）。窗口内直接失败；到期放一个**半开**探测请求，
+#: 成功则立刻恢复，失败则重新计时（指数上限见 _COOLDOWN_MAX_S）。
+DEFAULT_COOLDOWN_S = 60.0
+
 
 class LLMError(Exception):
     """LLM 调用失败。"""
@@ -114,6 +124,9 @@ class LLMConfig:
     api_key: Optional[str] = None
     timeout_s: float = DEFAULT_TIMEOUT_S
     max_retries: int = DEFAULT_MAX_RETRIES
+    #: 熔断：连续失败 `failure_threshold` 次后冷却 `cooldown_s` 秒（0 = 关闭）
+    failure_threshold: int = DEFAULT_FAILURE_THRESHOLD
+    cooldown_s: float = DEFAULT_COOLDOWN_S
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = 2048
     source: str = ""   # 配置来源说明（排障用）
@@ -142,7 +155,31 @@ class LLMConfig:
             "has_key": bool(self.api_key),
             "source": self.source,
             "timeout_s": self.timeout_s,
+            "failure_threshold": self.failure_threshold,
+            "cooldown_s": self.cooldown_s,
         }
+
+
+def _env_int(name: str, default: int) -> int:
+    """读整数环境变量；缺失/非法时用默认值（不因配置笔误中断服务）。"""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """读浮点环境变量；缺失/非法时用默认值。"""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
 
 
 def _pi_dir() -> Path:
@@ -165,6 +202,8 @@ MAX_TOKEN_BUDGET = 32768
 #: LLM 重试退避（实测上游会间歇 502）
 LLM_BACKOFF_BASE_S = 1.5
 LLM_BACKOFF_MAX_S = 8.0
+#: 熔断冷却的封顶（避免长时间掉线时冷却指数增长到离谱的值）
+_COOLDOWN_MAX_S = 1800.0
 
 
 def _safe_base_url(url: str) -> str:
@@ -280,6 +319,10 @@ def load_pi_config(
     return LLMConfig(
         base_url=_safe_base_url(base), model=mdl, provider=prov, api_key=key,
         max_tokens=max_tokens, source=src,
+        # 熔断阈值：0 = 关闭（恢复“每次都真打”的旧行为，便于对比排查）
+        failure_threshold=_env_int("ANALYSIS_LLM_FAILURE_THRESHOLD",
+                                   DEFAULT_FAILURE_THRESHOLD),
+        cooldown_s=_env_float("ANALYSIS_LLM_COOLDOWN_S", DEFAULT_COOLDOWN_S),
     )
 
 
@@ -426,6 +469,55 @@ class LLMClient:
         self.failures = 0
         self.last_error = ""
         self.total_latency_s = 0.0
+        # 熔断状态（见 DEFAULT_FAILURE_THRESHOLD 的注释）
+        self._consecutive_failures = 0
+        self._open_until = 0.0          # 单调时钟；>now 表示熔断中
+        self._skipped = 0               # 被熔断拦下、未发网络的调用数
+        self._half_open = False         # 本次探测是否半开
+
+    # -- 熔断 ---------------------------------------------------------------
+
+    def _breaker_check(self, now: float) -> Optional[str]:
+        """返回阻断原因（应直接失败），None 表示放行。
+
+        半开语义：冷却到期的**第一个**调用放行去探测上游（标记 `_half_open`），
+        其余在结果出来前仍被拦，避免上游刚挂就涌进去一批。
+        """
+        if self.config.failure_threshold <= 0 or self._open_until <= 0.0:
+            return None
+        if now < self._open_until:
+            return ("LLM 连续失败 %d 次，熔断至 %+.1fs 后（冷却 %gs）"
+                    % (self._consecutive_failures,
+                       self._open_until - now, self.config.cooldown_s))
+        if self._half_open:
+            return "LLM 熔断半开探测进行中，本次跳过"
+        self._half_open = True   # 放行一个探测
+        return None
+
+    def _breaker_record(self, *, failed: bool) -> None:
+        """按调用结果更新熔断状态。
+
+        ⚠️ 参数用**关键字**并命名为 `failed`（而非 `ok`）。早期版本用
+        位置参数 `ok: bool`，调用点却传了 `_is_upstream_failure(last)`
+        （语义相反的 True=失败），结果**一旦失败就把计数清零**，熔断永远
+        不触发 —— 单测 `test_opens_after_threshold_and_skips_network` 抓到。
+        """
+        self._half_open = False
+        if not failed:
+            self._consecutive_failures = 0
+            self._open_until = 0.0
+            return
+        if self.config.failure_threshold <= 0:
+            # 熔断已关闭：只计数、不建状态（否则 health 会报一个永不放行的 open）
+            return
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self.config.failure_threshold:
+            # 冷却时间随连续失败数递增，上限 _COOLDOWN_MAX_S：
+            # 上游长时段掉线时不再每分钟敲一次。
+            over = self._consecutive_failures - self.config.failure_threshold
+            self._open_until = (time.monotonic()
+                                + min(self.config.cooldown_s * (2 ** over),
+                                      _COOLDOWN_MAX_S))
 
     # -- 底层 ---------------------------------------------------------------
 
@@ -526,12 +618,25 @@ class LLMClient:
 
         last: Optional[Exception] = None
         t0 = time.time()
+        # ⚠️ 熔断用**单调**时钟：`_open_until` 也是 monotonic。早期版本这里传
+        # `time.time()`（epoch，~1.79e9），而 `_open_until` 是 monotonic（~小数），
+        # 相减永远为负 → 熔断器**永远读作未开**。单测抓到（混合时钟域）。
+        blocked = self._breaker_check(time.monotonic())
+        if blocked is not None:
+            # 熔断中：不发网络、不耗退避，直接失败（诚实上报，不伪造结果）
+            self._skipped += 1
+            self.failures += 1
+            self.last_error = blocked
+            raise LLMError("%s（provider=%s model=%s）"
+                           % (blocked, self.config.provider, self.config.model))
         for attempt in range(max(1, self.config.max_retries)):
             try:
                 resp = self._post(payload)
                 self.calls += 1
                 self.total_latency_s += time.time() - t0
-                return self._content_of(resp)
+                out = self._content_of(resp)
+                self._breaker_record(failed=False)
+                return out
             except urllib.error.HTTPError as exc:
                 detail = self._read_error_body(exc)
                 last = LLMError("HTTP %d: %s" % (exc.code, detail))
@@ -547,8 +652,22 @@ class LLMClient:
                                LLM_BACKOFF_MAX_S) + random.random() * 0.4)
         self.failures += 1
         self.last_error = str(last)
+        # 仅“上游不可用”计入熔断；4xx（请求本身错）不熔断，否则一个写错的
+        # prompt 会把整条链路停掉。HTTPError 的 5xx 已含在最后的 last 里。
+        self._breaker_record(failed=self._is_upstream_failure(last))
         raise LLMError("LLM 调用失败（%s/%s）: %s"
                        % (self.config.provider, self.config.model, last))
+
+    @staticmethod
+    def _is_upstream_failure(last: Optional[Exception]) -> bool:
+        """判断失败是否属于“上游不可用”（应该熔断）。
+
+        4xx 是请求/凭据错误 —— 重试与熔断都救不了，不该连坐整条链路。
+        """
+        text = str(last or "")
+        if text.startswith("HTTP 4") and not text.startswith("HTTP 429"):
+            return False
+        return True
 
     def complete_json(
         self,
@@ -585,6 +704,8 @@ class LLMClient:
         raise LLMError("模型输出无法解析为 JSON")
 
     def health(self) -> Dict[str, Any]:
+        now = time.monotonic()
+        until = max(0.0, self._open_until - now)
         return {
             **self.config.masked(),
             "calls": self.calls,
@@ -592,4 +713,10 @@ class LLMClient:
             "avg_latency_s": round(self.total_latency_s / self.calls, 2)
                              if self.calls else None,
             "last_error": self.last_error,
+            "breaker": {
+                "open": until > 0.0,
+                "consecutive_failures": self._consecutive_failures,
+                "cooldown_remaining_s": round(until, 1),
+                "skipped": self._skipped,
+            },
         }

@@ -280,6 +280,88 @@ class TestLLMClient(unittest.TestCase):
         self.assertNotIn(_KEY, json.dumps(c.health()))
 
 
+class TestLLMCircuitBreaker(unittest.TestCase):
+    """熔断器：上游长时段掉线时不要再猛敲。
+
+    背景（实测）：`deepseek-v4.1-flash` 的上游账号池掉线后，每次调用都要
+    走完「4 次重试 + 退避」才失败，一天攒下 573 次失败。
+    """
+
+    def _fail_then_ok(self, c: LLMClient) -> None:
+        """让 _post 连续报 503；返回时已消耗掉重试。"""
+        import urllib.error
+        err = urllib.error.HTTPError(_BASE, 503, "down", {}, None)  # type: ignore[arg-type]
+        with mock.patch.object(c, "_post", side_effect=err):
+            with mock.patch("service.llm.time.sleep"):
+                with self.assertRaises(LLMError):
+                    c.complete("hi")
+
+    def test_opens_after_threshold_and_skips_network(self) -> None:
+        c = LLMClient(_cfg(max_retries=1, failure_threshold=2, cooldown_s=60))
+        self._fail_then_ok(c)
+        self.assertFalse(c.health()["breaker"]["open"], "1 次失败不该熔断")
+        self._fail_then_ok(c)
+        self.assertTrue(c.health()["breaker"]["open"], "2 次失败应熔断")
+        # 熔断中：不得再发网络请求
+        with mock.patch.object(c, "_post") as m:
+            with self.assertRaises(LLMError):
+                c.complete("hi")
+        self.assertEqual(m.call_count, 0, "熔断期间不应发网络请求")
+
+    def test_half_open_recovers_on_success(self) -> None:
+        c = LLMClient(_cfg(max_retries=1, failure_threshold=1, cooldown_s=60))
+        self._fail_then_ok(c)
+        self.assertTrue(c.health()["breaker"]["open"])
+        # 把冷却时间推到过去，模拟“冷却到期”
+        c._open_until = 0.0
+        with mock.patch.object(c, "_post", return_value=_resp('{"ok":1}')):
+            with mock.patch("service.llm.time.sleep"):
+                self.assertEqual(c.complete("hi"), '{"ok":1}')
+        self.assertFalse(c.health()["breaker"]["open"], "成功后应恢复")
+        self.assertEqual(c.health()["breaker"]["consecutive_failures"], 0)
+
+    def test_4xx_does_not_trip_breaker(self) -> None:
+        """4xx 是请求/凭据错，不该连坐整条链路。"""
+        import urllib.error
+        c = LLMClient(_cfg(max_retries=1, failure_threshold=1))
+        err = urllib.error.HTTPError(_BASE, 401, "bad key", {}, None)  # type: ignore[arg-type]
+        for _ in range(3):
+            with mock.patch.object(c, "_post", side_effect=err):
+                with mock.patch("service.llm.time.sleep"):
+                    with self.assertRaises(LLMError):
+                        c.complete("hi")
+        self.assertFalse(c.health()["breaker"]["open"],
+                         "401 不应该触发熔断")
+
+    def test_disabled_when_threshold_zero(self) -> None:
+        """threshold=0 → 关闭熔断（保留旧行为，便于对比排查）。"""
+        import urllib.error
+        c = LLMClient(_cfg(max_retries=1, failure_threshold=0))
+        err = urllib.error.HTTPError(_BASE, 503, "down", {}, None)  # type: ignore[arg-type]
+        for _ in range(5):
+            with mock.patch.object(c, "_post", side_effect=err):
+                with mock.patch("service.llm.time.sleep"):
+                    with self.assertRaises(LLMError):
+                        c.complete("hi")
+        self.assertFalse(c.health()["breaker"]["open"])
+
+    def test_cooldown_grows_capped(self) -> None:
+        """半开探测失败时冷却递增，且有封顶（避免无限增长）。
+
+        注意：**熔断期间的被拦请求不会推高冷却**（否则一次突发就把冷却堆满），
+        只有“冷却到期 → 半开探测 → 又失败”才递增。所以这里每轮手动把
+        `_open_until` 拨到过去，模拟冷却到期。
+        """
+        c = LLMClient(_cfg(max_retries=1, failure_threshold=1, cooldown_s=60))
+        seen = []
+        for _ in range(8):
+            c._open_until = 0.0     # 模拟冷却到期
+            self._fail_then_ok(c)
+            seen.append(c.health()["breaker"]["cooldown_remaining_s"])
+        self.assertLessEqual(max(seen), 1800.0, "冷却应有封顶")
+        self.assertGreater(seen[-1], seen[0], "冷却应随连续失败递增")
+
+
 # --------------------------------------------------------------------------- #
 # 决策引擎
 # --------------------------------------------------------------------------- #

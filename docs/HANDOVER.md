@@ -277,6 +277,28 @@ LEYU_APP_LOGIN_PASSWORD=<登录口令明文>
 单批 12 场 × LLM 150s ≈ 长时间占用。实测 `pending` 一度达 72。
 `change_batch` / `change_min_interval_s` 可调，但**建议改为按 LLM 实际吞吐自适应限流**。
 
+> ✅ **2026-10-08 修（熔断）**：新增**连续失败熔断**。实测该模型的上游账号池
+> 掉线时，每次调用要走完「4 次重试 + 退避」才失败（单次约 30s），一天攒下
+> **573 次失败**（成功仅 109 次）—— 上游已死却仍在猛敲，既白等又给同机网关
+> 加无谓压力（本机还跑着 pi 的对话链路）。现在连续失败 `failure_threshold`
+> （默认 3）次后冷却 `cooldown_s`（默认 60s），冷却期内**不发网络、不耗退避**，
+> 直接失败；到期放**一个**半开探测请求，成功即恢复，失败则冷却翻倍（封顶 30min）。
+>
+> | 环境变量 | 默认 | 含义 |
+> | --- | --- | --- |
+> | `ANALYSIS_LLM_FAILURE_THRESHOLD` | `3` | 连续失败多少次后熔断；`0` = 关闭（恢复旧行为） |
+> | `ANALYSIS_LLM_COOLDOWN_S` | `60` | 初始冷却秒数（每次半开失败后翻倍，封顶 1800） |
+>
+> 可观测：`/health` → `llm.breaker`（`open` / `consecutive_failures` /
+> `cooldown_remaining_s` / `skipped`）。**4xx（请求/凭据错）不熔断** —— 否则一个
+> 写错的 prompt 或失效的 key 会把整条链路停掉。回归测试见
+> `tests/test_llm_decision.py::TestLLMCircuitBreaker`（5 例，含半开恢复与 4xx 不熔断）。
+>
+> ⚠️ 网关侧的根因**不在本项目**：`sub2api` 日志显示
+> `no available OpenAI accounts supporting model: deepseek-v4.1-flash`
+> （账号池过滤后无可用账号）。那是共享基础设施（pi 自身也走它），本项目
+> 只能做到「上游不可用时快速失败、不猛敲」。
+
 > ✅ **2026-10-07 修**：已实现自适应限流（正是本条的“建议”）。
 > 调度器现在记录每批的**实测单场耗时**（指数滑动平均 α=0.5），
 > 再用 `batch = clamp(batch_target_s / per_match_s, batch_min, batch_max)` 反推本批批量：
