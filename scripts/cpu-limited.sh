@@ -56,6 +56,14 @@ CPU_QUOTA=$(( NPROC * CFS_PERIOD * CPU_PERCENT / 100 ))
 CORES="$(python3 -c "print(f'{$CPU_PERCENT / 100 * $NPROC:.1f}')")"
 export AI_FOOTBALL_CPUS="${AI_FOOTBALL_CPUS:-${CORES}}"
 
+# 非 docker 命令（unittest/mypy/ruff）用 taskset 钉核。核数**向下取整**，
+# 保证「最多」不超过百分比（50% × 4 核 → 2 核 = cpu 0-1）。
+# 钉核与配额的差别：配额是「总量上限」，进程仍可短暂跑在所有核上；
+# 钉核是「物理隔离」，把核让给同机的 LLM 网关。本地重命令用后者更稳。
+RUN_CORES=$(( NPROC * CPU_PERCENT / 100 ))
+if [ "$RUN_CORES" -lt 1 ]; then RUN_CORES=1; fi
+RUN_CPUSET="${CPUSET:-0-$(( RUN_CORES - 1 ))}"
+
 usage() {
   cat >&2 <<EOF
 用法：
@@ -64,7 +72,9 @@ usage() {
   $(basename "$0") up                       # 启动容器（运行期已带 cpus）
 
 当前 CPU 预算：宿主 ${NPROC} 核 × ${CPU_PERCENT}% = ${CORES} 核
-              构建期 quota=${CPU_QUOTA}/$CFS_PERIOD  运行期 cpus=${AI_FOOTBALL_CPUS}
+              构建 quota=${CPU_QUOTA}/$CFS_PERIOD（legacy builder）
+              容器 cpus=${AI_FOOTBALL_CPUS}
+              本地命令 taskset -c ${RUN_CPUSET}
 覆盖：AI_FOOTBALL_CPU_PERCENT=30 或 AI_FOOTBALL_CPUSET=0-1
 EOF
   exit 2
@@ -137,10 +147,8 @@ case "$cmd" in
       shift
     fi
     [ "$#" -gt 0 ] || usage
-    if [ -n "$CPUSET" ]; then
-      set -- taskset -c "$CPUSET" "$@"
-    fi
-    echo "==> 受限执行（${CPU_PERCENT}% × ${NPROC} 核）：$*"
+    set -- taskset -c "$RUN_CPUSET" "$@"
+    echo "==> 受限执行（taskset -c ${RUN_CPUSET}，≈${CPU_PERCENT}% × ${NPROC} 核）：$*"
     exec "$@"
     ;;
 

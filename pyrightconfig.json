@@ -7,8 +7,6 @@
     "reports"
   ],
   "extraPaths": [".", "./tools"],
-  "venvPath": ".",
-  "venv": ".venv",
   "typeshedPath": "/root/.pi-lens/tools/node_modules/pyright/dist/typeshed-fallback",
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",

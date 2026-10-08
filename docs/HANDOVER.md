@@ -65,7 +65,7 @@ REDIS_PORT=6380 ANALYTICS_PORT=8000 CONSOLE_PORT=3001 \
 | --- | --- | --- |
 | 容器运行期 | compose 的 `cpus: "${AI_FOOTBALL_CPUS:-2.0}"`（三容器均有） | `cpu.max = 200000 100000` |
 | 镜像构建期 | `scripts/cpu-limited.sh build`（参数 `--cpu-quota=200000`） | 构建容器内 `cpu.max = 200000 100000` |
-| 测试/类型检查 | `scripts/cpu-limited.sh run -- <命令>`（`taskset`） | `affinity [0,1]` |
+| 测试/类型检查 | `scripts/cpu-limited.sh run -- <命令>`（`taskset`） | 子进程 `affinity 0,1` |
 
 ```bash
 ./scripts/cpu-limited.sh build            # 受限构建（不要直接 docker build）
@@ -521,12 +521,16 @@ output/
 | `DOCKER_BUILDKIT=0` + `--cpu-quota=200000` | ✅ **有效（本项目采用）** | 构建容器内 `cpu.max = 200000 100000`（= 2 核配额） |
 | `DOCKER_BUILDKIT=0` + `--cpuset-cpus=0-1` | ✅ 有效（备选） | 构建容器内 `affinity [0,1]`、`cpuset.cpus.effective 0-1` |
 | compose `cpus: "2.0"`（容器**运行期**） | ✅ 有效 | `cpu.max = 200000 100000` |
-
-**选型理由**：默认用 `--cpu-quota`（配额语义，与核编号无关，换机器只改百分比）；
-`--cpuset-cpus` 仅当需要把重负载与网关**物理隔离**到不同核时才用
-（`AI_FOOTBALL_CPUSET=0-1 scripts/cpu-limited.sh build`）。
+| `taskset -c 0-1 <本地命令>`（unittest/mypy/ruff） | ✅ 有效 | 子进程 `affinity 0,1`（进程级限制，子进程能继承） |
 
 **代价**：legacy builder 与 BuildKit 的缓存**不互通**，首次改走 wrapper 会全量重建。
+
+**未验证的推断（不要当成事实引用）**：曾想用 `--cpuset-cpus=0-1` 把重负载与
+网关**物理隔离**到不同核，但实测**未能证明**其优于 quota —— 两次测得的网关
+`/health` 延迟都在 **6~24ms** 量级、噪声大于差异（不限速 6.0~14.5ms，钉核
+9.8~24.0ms，钉核那侧反而略高）。可能原因是本机 `/health` 太轻、采样太少，
+也可能瓶颈不在 CPU。因此**默认仍用 quota**（语义更稳、与核编号无关，换机器
+只改百分比）；`--cpuset-cpus` 作为备选保留，但**没有证据支持它更保护网关**。
 
 **另一坑（排查途中踩到）**：测构建容器亲和性时用 `pgrep -f "python3 /burn.py"` 抓到
 的“容器进程” cgroup 显示为 `/user.slice/.../tmux-spawn-*.scope`、`/proc/<pid>/root`
