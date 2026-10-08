@@ -181,15 +181,15 @@ DEFAULT_CYCLE_LIMIT = 0
 #:
 #: 为何需要：实测单个盘口在进球/红牌后会**连跳十几次**，逐跳触发
 #: 会让同一场在几秒内被反复决策（LLM 一轮 20s+，纯属浪费且必然超时）。
-#: 30s 是「等盘口稳定下来」与「不错过时机」的折中。
-DEFAULT_CHANGE_DEBOUNCE_S = 30.0
+#: 快路径使用 150ms 合并窗口，连续变动不会推迟首个到期时间。
+DEFAULT_CHANGE_DEBOUNCE_S = 0.15
 
 #: 两轮决策之间的**全局最小间隔**（秒），所有赛事共享。
 #:
 #: 为何需要：行情活跃时可能有 40+ 场同时变动；若全部并发触发，
 #: 会瞬间打满 LLM 配额（实测推理服务 4 并发即饱和）。
-#: 该间隔保证触发式决策**不会比原来的定时轮询更激进**。
-DEFAULT_CHANGE_MIN_INTERVAL_S = 20.0
+#: 快路径不调用 LLM，50ms 间隔限制批处理唤醒频率。
+DEFAULT_CHANGE_MIN_INTERVAL_S = 0.05
 
 #: 触发式决策每轮最多处理多少场（按变动时间先后）。
 #: 剩余赛事保留在待办队列里，下一轮继续 —— 不丢，只是排队。
@@ -207,9 +207,9 @@ DEFAULT_CHANGE_QUEUE_MAX = 200
 DEFAULT_ADAPTIVE_THROTTLE = True
 
 #: 自适应目标：单批耗时尽量不超过这个值（秒）。
-#: 取 150s 是因为原 §3.4 观测的“12 场 × 150s”是用户能接受的量级；
+#: 快路径目标批处理预算为 100ms；
 #: 调小更跟手但批更小（周转更频繁），调大则相反。
-DEFAULT_BATCH_TARGET_S = 150.0
+DEFAULT_BATCH_TARGET_S = 0.1
 
 #: 自适应批量的上下限（防止离群值把批量推到无意义的两端）
 DEFAULT_BATCH_MIN = 3
@@ -244,6 +244,7 @@ def _live_mids_supports_max_age(book: Any) -> bool:
 class AnalysisConfig:
     """分析层配置。"""
 
+    fast_live: bool = True
     cache_ttl_s: float = DEFAULT_CACHE_TTL_S
     max_analyze: int = DEFAULT_MAX_ANALYZE
     #: 优先分析的市场（按优先级）；乐鱼源多为 AH/OU
@@ -365,6 +366,8 @@ class AnalysisService:
     ) -> None:
         self.valuation = valuation
         self.realtime = realtime
+        from service.live_expert import LiveExpertService
+        self.live_expert = LiveExpertService()
         self._config = config or AnalysisConfig()
         #: 是否成功接上 LLM（决定决策是否可能是 buy）
         self.llm_error = ""
@@ -435,6 +438,7 @@ class AnalysisService:
         self._sched_wake = threading.Event()
         #: mid → 该场最早可决策的时间（防抖计时）
         self._pending: Dict[str, float] = {}
+        self._pending_first: Dict[str, float] = {}
         #: 本批已处理过的赛事（避免同一批重复入 LLM）
         self._sched_stats: Dict[str, Any] = {
             "signals": 0,        # 收到的变动信号数
@@ -535,6 +539,8 @@ class AnalysisService:
             interval = max(interval, floor)
         while not self._cycle_stop.is_set():
             self._run_cycle_once()
+            if self._fast_live_enabled():
+                interval = min(interval, 60.0)
             self.cycle_stats["next_at"] = time.time() + interval
             if self._cycle_stop.wait(interval):
                 return
@@ -548,7 +554,7 @@ class AnalysisService:
         原因：回调跑在推送消费线程上，阻塞它会拖慢整个行情消费。
 
         防抖语义：同一场在 `change_debounce_s` 窗口内的多次变动合并为一次；
-        后续变动会把该场的决策时间**往后顺延**（等待行情稳定）。
+        后续变动合并但保持首个到期时间，持续跳价也能按时计算。
 
         Args:
             mids: 本批发生真实变动的赛事 ID（Hub 已去重）。
@@ -557,6 +563,8 @@ class AnalysisService:
             return
         debounce = max(0.0, _to_float(self.config.change_debounce_s,
                                       DEFAULT_CHANGE_DEBOUNCE_S))
+        if self._fast_live_enabled():
+            debounce = min(debounce, 0.15)
         due = time.time() + debounce
         queue_max = max(1, _to_int(self.config.change_queue_max,
                                    DEFAULT_CHANGE_QUEUE_MAX))
@@ -567,11 +575,13 @@ class AnalysisService:
                     continue
                 if mid in self._pending:
                     self._sched_stats["coalesced"] += 1
-                self._pending[str(mid)] = due
+                self._pending.setdefault(str(mid), due)
+                self._pending_first.setdefault(str(mid), time.monotonic())
             # 队列保护：只保留最可能仍有价值的（最近变动的）赛事
             while len(self._pending) > queue_max:
                 oldest = min(self._pending, key=lambda k: self._pending[k])
                 self._pending.pop(oldest, None)
+                self._pending_first.pop(oldest, None)
                 self._sched_stats["dropped"] += 1
         self._sched_wake.set()
 
@@ -581,6 +591,7 @@ class AnalysisService:
             return False
         if self._sched_thread is not None and self._sched_thread.is_alive():
             return False
+        self.live_expert.start(self.config.ledger_root)
         self._sched_stop.clear()
         self._sched_thread = threading.Thread(
             target=self._sched_loop, name="analysis-trigger", daemon=True)
@@ -588,6 +599,7 @@ class AnalysisService:
         return True
 
     def stop_scheduler(self, timeout: float = 5.0) -> None:
+        self.live_expert.stop()
         self._sched_stop.set()
         self._sched_wake.set()
         t = self._sched_thread
@@ -623,6 +635,8 @@ class AnalysisService:
         """距下一批触发还有多少秒；`None` 表示无待办。"""
         min_gap = max(0.0, _to_float(self.config.change_min_interval_s,
                                      DEFAULT_CHANGE_MIN_INTERVAL_S))
+        if self._fast_live_enabled():
+            min_gap = min(min_gap, 0.05)
         now = time.time()
         with self._sched_lock:
             if not self._pending:
@@ -646,6 +660,8 @@ class AnalysisService:
         Returns:
             本批最多处理的场次数（>= 1）。
         """
+        if self._fast_live_enabled():
+            return 64
         base = max(1, _to_int(self.config.change_batch, DEFAULT_CHANGE_BATCH))
         if not self.config.adaptive_throttle:
             return base
@@ -700,10 +716,36 @@ class AnalysisService:
                 self._sched_stats["batches"] += 1
                 self._sched_stats["triggered"] += len(picked)
             # 把触发式结果也落盘，重启后能看到最新一批
-            self._persist_latest(res)
+            if not self._fast_live_enabled():
+                self._persist_latest(res)
         except Exception as exc:  # noqa: BLE001 - 单批失败不得杀死调度器
             self.cycle_stats["last_error"] = "触发决策失败: %s: %s" % (
                 type(exc).__name__, exc)
+
+    def _fast_live_enabled(self) -> bool:
+        return bool(self.config.fast_live and self.realtime is not None
+                    and callable(getattr(self.realtime, "decision_snapshot", None)))
+
+    def _decide_live_matches(self, mids: Sequence[str]) -> Dict[str, Any]:
+        rt = self.realtime
+        if rt is None:
+            return self.live_expert.results()
+        for mid in mids:
+            with self._sched_lock:
+                first = self._pending_first.pop(mid, None)
+            snapshot = rt.decision_snapshot(mid)
+            try:
+                row = self.live_expert.compute(snapshot, rt, first)
+                if not row:
+                    self.notify_price_change([mid])
+            except (ValueError, TypeError, ArithmeticError) as exc:
+                self.live_expert.errors += 1
+                self.cycle_stats["last_error"] = "实时模型: %s" % exc
+        result = self.live_expert.results()
+        result["finished_at"] = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            self._latest = result
+        return result
 
     def decide_matches(self, mids: Sequence[str]) -> Dict[str, Any]:
         """只对指定赛事跑一轮决策，并**合并进** `_latest`。
@@ -714,6 +756,8 @@ class AnalysisService:
         为何要合并而不是覆盖：行情是逐场跳动的，若每批都覆盖，
         页面上其它场次会瞬间变成“无数据”。合并能保证列表始终完整。
         """
+        if self._fast_live_enabled():
+            return self._decide_live_matches(mids)
         want = {str(m) for m in mids if m}
         if not want:
             return self._latest or {"count": 0, "summary": {}, "decisions": []}
@@ -1205,7 +1249,7 @@ class AnalysisService:
         return out
 
     def ledger_history(self, only_picks: bool = True, limit: int = 300,
-                       days: int = 0) -> Dict[str, Any]:
+                       days: int = 0, competition_type: Optional[str] = None) -> Dict[str, Any]:
         """历史决策 vs 实际结果的分组统计 + 明细（用户要求的菜单数据）。
 
         与 `ledger_stats` 的分工：后者是“一句话结论”（总命中率/ROI），
@@ -1215,7 +1259,7 @@ class AnalysisService:
         同时补上结算线程的状态，让用户知道“未结算的还要等多久”。
         """
         out = self.ledger.history(picks_only=only_picks, limit=limit,
-                                  days=days)
+                                  days=days, competition_type=competition_type)
         out["settle"] = dict(self.settle_stats)
         out["summary"] = self.ledger.stats(only_picks=only_picks)
         return out
@@ -1252,6 +1296,8 @@ class AnalysisService:
                     "error": "%s: %s" % (type(exc).__name__, exc)}
         snaps: List[Any] = []
         issues: List[str] = []
+        if self._fast_live_enabled():
+            self.realtime.seed_matches(matches)  # type: ignore[union-attr]
         for mt in matches:
             snaps.extend(snapshots_from_match(
                 mt, source=self.valuation.source.display_source, issues=issues))
@@ -1290,6 +1336,8 @@ class AnalysisService:
                     "error": "%s: %s" % (type(exc).__name__, exc)}
         snaps: List[Any] = []
         issues: List[str] = []
+        if self._fast_live_enabled():
+            self.realtime.seed_matches(matches)  # type: ignore[union-attr]
         for mt in matches:
             snaps.extend(snapshots_from_match(
                 mt, source=self.valuation.source.display_source, issues=issues))
@@ -1320,6 +1368,11 @@ class AnalysisService:
             # 先刷新进行中赛事的盘口（否则新开赛的赛事无快照可算）
             if self.config.cycle_live_only:
                 self.cycle_stats["refresh"] = self.refresh_live_matches()
+            if self._fast_live_enabled():
+                self.notify_price_change(self.realtime.live.live_mids(max_age_s=30))  # type: ignore[union-attr]
+                self.cycle_stats["rounds"] += 1
+                self.cycle_stats["last_error"] = ""
+                return
             res = self.decide_list(
                 limit=self.config.cycle_limit,
                 only_live=self.config.cycle_live_only,
@@ -2116,6 +2169,8 @@ class AnalysisService:
         now = time.time()
         return {
             "running": self.scheduler_running,
+            "mode": "live" if self._fast_live_enabled() else "legacy",
+            "performance": self.live_expert.health(),
             "pending": len(pending),
             # 待办里最近/最早何时会被处理（前端可显示“正在等行情稳定”）
             "next_due_in_s": (round(min(pending.values()) - now, 1)
@@ -2155,6 +2210,7 @@ def build_analysis_service(
             return default
 
     cfg = AnalysisConfig(
+        fast_live=(e.get("ANALYSIS_FAST_LIVE", "1").strip().lower() not in ("0", "false", "no")),
         use_llm=use_llm,
         max_analyze=_to_int(_num("ANALYSIS_MAX", DEFAULT_MAX_ANALYZE),
                             DEFAULT_MAX_ANALYZE),

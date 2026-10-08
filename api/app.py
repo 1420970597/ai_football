@@ -293,6 +293,8 @@ class ApiApp:
             # 但**没有任何端点暴露它**，调用方无从查看。
             ("GET", "/analysis", self.h_analysis),
             ("GET", "/board", self.h_board),
+            ("GET", "/workbench", self.h_workbench),
+            ("GET", "/workbench/<id>", self.h_workbench_detail),
             ("GET", "/llm", self.h_llm),
             ("GET", "/ledger/stats", self.h_ledger_stats),
             # 历史战绩：分日期/联赛/盘口 的分组统计 + 逐条明细（含实际比分）。
@@ -547,6 +549,55 @@ class ApiApp:
         return self.svc.get_calibration(n_bins=n_bins)
 
     # -- 决策与实时（T5/T7） ------------------------------------------------
+
+    def h_workbench(self, query: Mapping[str, List[str]],
+                    body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        kind = _q1(query, "type", "real")
+        if kind not in ("real", "virtual", "unknown", "all"):
+            raise BadRequest("type 必须是 real/virtual/unknown/all")
+        result = self.analysis.live_expert.results(kind)
+        rt = self.analysis.realtime
+        # A one-second UI poll must not scan/lock the complete persisted book.
+        realtime = ({"running": rt.running, **rt.stats.as_dict()} if rt is not None
+                    else {"running": False, "connected": 0})
+        rows = []
+        for row in result.pop("decisions"):
+            public = self._public_live_row(row, bool(realtime.get("connected")))
+            # All markets remain available in details; the list stays compact.
+            displayed = []
+            for family in ("HAD", "AH", "OU"):
+                options = [m for m in row["markets"] if m["market"] == family]
+                options.sort(key=lambda m: abs(m["quotes"][0]["p_market"] - .5))
+                if options:
+                    displayed.append(options[0])
+            public["markets"] = displayed
+            public.pop("events", None)
+            rows.append(public)
+        rows.sort(key=lambda r: (r["stale"], r.get("league", ""), r["match_id"]))
+        result.update(matches=rows, realtime=realtime, generated_at=datetime.now(timezone.utc).isoformat())
+        return result
+
+    @staticmethod
+    def _public_live_row(row: Mapping[str, Any], connected: bool) -> Dict[str, Any]:
+        import time
+        public = dict(row)
+        age = max(0, time.time() - _as_float(row.get("published_at_ms")) / 1000)
+        quote_age = max(0, time.time() - _as_float(row.get("quote_time_ms")) / 1000)
+        public.update(result_age_s=round(age, 1), quote_age_s=round(quote_age, 1),
+                      stale=not connected or age > 15 or quote_age > 15)
+        if public["stale"]:
+            public["picks"] = []
+            public["has_buy"] = False
+        return public
+
+    def h_workbench_detail(self, query: Mapping[str, List[str]],
+                           body: Mapping[str, Any], match_id: str) -> Dict[str, Any]:
+        row = self.analysis.live_expert.detail(match_id)
+        if row is None:
+            raise NotFound("该场尚未收到实时算法结果")
+        rt = self.analysis.realtime
+        connected = bool(rt is not None and rt.stats.connected)
+        return self._public_live_row(row, connected)
 
     def h_decisions(self, query: Mapping[str, List[str]],
                     body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
@@ -1167,8 +1218,11 @@ class ApiApp:
         only_picks = (_q1(query, "all") or "") not in ("1", "true", "yes")
         limit = _q_int(query, "limit", 300, minimum=1, maximum=2000)
         days = _q_int(query, "days", 0, minimum=0, maximum=3650)
+        kind = _q1(query, "type")
+        if kind not in (None, "all", "real", "virtual", "unknown"):
+            raise BadRequest("type 必须是 real/virtual/unknown/all")
         return self.analysis.ledger_history(only_picks=only_picks,
-                                            limit=limit, days=days)
+                                            limit=limit, days=days, competition_type=kind)
 
     def h_ledger_entries(self, query: Mapping[str, List[str]],
                          body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
@@ -1409,7 +1463,7 @@ def _start_background(
         hub = RealtimeHub(provider, mids_provider=_mids,
                           max_matches=max_matches, trend_root=trend_root,
                           resume=True,
-                          on_price_change=ana.notify_price_change)
+                          on_state_change=ana.notify_price_change)
         hub.start()
         print("走势持久化: %s" % hub.trend_store.health())
 
