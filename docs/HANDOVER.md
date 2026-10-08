@@ -125,7 +125,7 @@ python3 -m unittest discover -s tests -q      # 1115 passed
 | 比分/结束 | `C103` 比分、`C109` 结束 → `ScoreStore` **落盘**（结算的唯一赛果来源） | `leyu_realtime.py` |
 | 大响应截断 | `IncompleteRead` 显式捕获 + 限长分块读 + 完整性校验 | `leyu_client.py` |
 | 会话链 | `h5-cookie → app-launch → **app-login**（新增）→ cmd/file/env` | `session.py` |
-| **登录续期** | 账号口令 → `x-api-token`（**推翻"必须人工"的旧结论**，见 §6.1） | `leyu_app_login.py` |
+| **登录续期** | 账号口令 → `x-api-token`（受当前上游验证要求限制，见 §6.1） | `leyu_app_login.py` |
 | 会话缓存 | `_session.json` 回退（token 过期后业务会话仍可用） | `session.py` |
 
 ### 2.2 决策链路（`service/`）
@@ -213,52 +213,34 @@ curl -s -X POST localhost:8000/api/v1/ledger/settle | python3 -m json.tool
 python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];print(len(d), sum(1 for v in d.values() if v.get('done')))"
 ```
 
-### 3.2 乐鱼凭据过期（P0，**唯一外部阻塞**）
+### 3.2 乐鱼鉴权与自动续期（2026-10-08 状态）
 
-> **🔔 2026-10-07 复核更新（设备已换 IP）：IP 闸门已通过，**不是**瓶颈。**
-> 旧结论「本机 IP 被 `6031 地区ip限制` 拦住」**已失效**。实测（走生产登录代码路径
-> `AppLoginClient.login()`，非仅探针）：用不存在的用户名打 `user/login` 得到
-> **`6008 用户名或密码错误`**，而非 `6031`。服务端**先校 IP 再校凭据**，
-> 故 6008 即证明出口 IP 已被放行。**现在只差正确的账号/口令。**
->
-> **🔔 2026-10-07 再次复核：`.env` 里那对注释掉的凭据已实测为「无效」。**
-> `.env` 中 `LEYU_APP_LOGIN_NAME` / `LEYU_APP_LOGIN_PASSWORD` **存在但整行被 `#` 注释掉**
-> （历史原因：早期误以为本机 IP 被封，写了「需在允许的网络上使用」——**该注释现在是错的**）。
-> 诊断脚本已**代验证**这对注释凭据：登录返回 `6008`，且与「不存在的账号」对照
-> **返回同一 code** —— 服务端不区分「账号不存在」与「口令错误」，
-> 故无法再细分，**这对凭据确实是失效的**。去掉 `#` 也不会变得可用，需换新的账号/口令。
->
-> ⚠️ **2026-10-08 附带修正**：`.env` 里那句「登录受上游 IP 白名单限制（6031），
-> 需在允许的网络上使用」是**过期且已证伪**的注释，已就地改正。它正是早期把
-> 故障误判为「IP 被封」的源头之一 —— 留着会让下一个人再去查一遍 IP。
-> 同时那两行注释掉的凭据已实测为**无效**（登录返回 6008，且与「不存在的账号」
-> 返回同一 code，服务端不区分账号不存在与口令错误）。
+**当前结论**：旧 token 已过期；用户已将刚注册的账号口令填入 `.env`。
+现有 App 登录请求返回 6002，但这不能证明该账号无效，也不能排除请求协议不匹配。
+旧诊断曾使用伪口令和错误字段，不能作为凭据无效或 IP 闸门已通过的证据（issue #10）。
 
-> 一键诊断（新增，只读、脱敏）：`python3 tools/leyu_session_doctor.py`
-> —— 逐个 provider 试，报出谁成功/谁失败/为什么；自动探测 `.env` 里被注释掉的凭据
-> 并**代为验证**（区分「IP 被拦」与「凭据无效」）；附登录路径的 IP 闸门判定。
+**一手页面证据（A）**：用新账号走正常网页 `/entry/login` 流程，
+`/site/api/v1/user/member/kaptchcate` 返回 6022，页面显示人机验证。
+6022 是正常验证码模式，不是初始化失败；尚未发送账号登录请求。
+该页面的登录请求使用 h5 客户端、浏览器指纹和 `/site/api` 签名。
+直接发送历史 App 的 `Kaptchcate=99` 与完成该流程不等价。
 
-**现象**：`venue/launch` 返回 `6001 token已过期`；当前靠 `_session.json` 缓存回退维持采集。
+**代码修复（issue #12）**：
+- 整次 acquire 串行执行，网络失败也计入至少默认 30 秒的登录冷却。
+- 明确的上游登录业务拒绝会停止该 provider 的自动账号提交，invalidate 不会解除。
+- 登录签名 `LEYU_APP_LOGIN_SIGNATURE`（`/site/api`）与场馆签名
+  `LEYU_APP_SIGNATURE`（`/game/api`）分开配置，不再错误回退。
+- 成功登录得到的 token 缓存权限为 0600，并继续用于场馆续期和重启恢复。
+- 配置变更需重新创建服务；重启允许重新尝试登录，不能把重启当作反复试密码的手段。
 
-**实情**：
-- 抓包里那个 token 约 **10 小时后自然过期**（会话生命周期本就如此）；
-- **登录续期代码已实现**（`collector/leyu_app_login.py`），且链路已接好
-  （`collector/session.py::make_session_provider` 的 provider 链末位）；
-- 但它**默认不在链上**：`login_provider_from_env` 在缺 `LEYU_APP_LOGIN_NAME` /
-  `LEYU_APP_LOGIN_PASSWORD` 时返回 `None`（设计如此，便于回退）。当前 `.env`
-  里这两项为空，所以链上只有 `h5-cookie` 与 `app-launch`，两者都返回 `6001`。
-- `venue/launch` 与 `user/login` 都不再受 IP 限制（历史上只有 `user/login` 受限）。
+**恢复路径**：按用户要求优先核对当前官方 App 登录协议；也可在官方 App 登录后，将有效 x-api-token 更新到
+`.env` 的 `LEYU_APP_TOKEN`（网页 token 则同时更新 `LEYU_H5_TOKEN`），然后重新创建容器。
+已有有效 token 可自动 launch 换业务 requestId；token 本身过期后，
+账号自动登录能否成功仍取决于当前上游协议和验证要求，不能承诺永久无人值守。
+仅健康检查 200 或已有历史快照不代表实时数据已恢复。
 
-**处置（当前唯一需要做的事）**：在 `.env` 填入账号口令即可启用自动续期：
-
-```bash
-# .env —— 填入后重启服务，链会自动走「登录 → launch」拿到新 requestId
-LEYU_APP_LOGIN_NAME=<登录账号>
-LEYU_APP_LOGIN_PASSWORD=<登录口令明文>
-```
-
-其余可选路径（按需）：注入 `LEYU_REQUEST_ID` / `LEYU_SESSION_FILE` / `LEYU_LOGIN_COMMAND`，
-或直接更新 `LEYU_APP_TOKEN`（约 10h 有效）。
+生产部署端口为 API 8001、控制台 3003；重建不得误用默认 8000。
+诊断期间通过临时 compose override 暂停后台账号登录，以免锁定新账号。
 
 ### 3.3 进行中场次与乐鱼"完全一致"（P1）
 
@@ -423,14 +405,12 @@ output/
 
 > 这些都是**真实故障**，不是假想。多数已被测试锁定，改代码时别把它们改回去。
 
-### 6.1 登录续期：旧结论是错的
+### 6.1 登录续期：区分历史协议与当前验证要求
 
-`leyu_app_session.py` 原本断言"token 无法自动续期，因为登录有人机验证"。
-**抓包推翻了它**：登录请求体 `"Kaptchcate": 99`，服务端**不校验验证码**。
-不需要"绕过"，因为它根本没启用。
-
-`x-api-xxx` 也**不需要逆向**：实测是**站点级固定值**
-（抓包值与 `.env` 里的都可过，垃圾值 6003，改 body/换路径复用同一签名仍成功）。
+历史文档根据当前无法复核的 `乐鱼app.zip` 宣称所有登录无需验证码，
+该说法不能作为当前成功证据。2026-10-08 正常网页已显示人机验证（6022）。
+本项目不处理或跳过该验证；离线 mock 测试只验证缓存、并发和失败保护。
+签名按 API 前缀配置，不能将 `/game/api` 签名用于 `/site/api` 登录。
 
 ### 6.2 有过期价 → 凭空造出注单
 
