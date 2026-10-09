@@ -43,6 +43,12 @@ class RuntimeConfig:
     algorithm_alert_enabled: bool = True
     algorithm_alert_min_samples: int = 30
     algorithm_alert_threshold: float = 0.50
+    # Betting is an explicit opt-in.  The gate is evaluated before an
+    # adapter can submit any provider order.
+    betting_enabled: bool = False
+    betting_stake_mode: str = "fixed"
+    betting_fixed_stake: float = 10.0
+    betting_min_hit_count: int = 3
     llm_experiment_enabled: bool = True
     llm_enabled: bool = False
     llm_base_url: str = ""
@@ -69,6 +75,8 @@ RANGES = {
     "llm_review_max_age_s": (30.0, 600.0),
     "algorithm_alert_min_samples": (1, 100000),
     "algorithm_alert_threshold": (0.0, 1.0),
+    "betting_fixed_stake": (0.01, 100000.0),
+    "betting_min_hit_count": (1, 100000),
 }
 
 
@@ -85,7 +93,10 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
             raise ValueError("%s 必须在 %s~%s 之间" % (key, lo, hi))
         if key == "llm_max_tokens" and (not isinstance(v, int)):
             raise ValueError("llm_max_tokens 必须是整数")
-    for name in ("llm_enabled", "llm_experiment_enabled", "algorithm_alert_enabled"):
+        if key == "betting_min_hit_count" and not isinstance(v, int):
+            raise ValueError("betting_min_hit_count 必须是整数")
+    for name in ("llm_enabled", "llm_experiment_enabled", "algorithm_alert_enabled",
+                 "betting_enabled"):
         if name in values and not isinstance(values[name], bool):
             raise ValueError(name + " 必须是布尔值")
     if "algorithms" in values:
@@ -93,7 +104,8 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
         if not isinstance(a, (list, tuple)) or not a or any(not isinstance(x, str) or x not in ALGORITHMS for x in a):
             raise ValueError("至少启用一个有效算法")
         values["algorithms"] = tuple(dict.fromkeys(a))
-    for key in ("primary_algorithm", "devig_method", "llm_base_url", "llm_model", "llm_fallback_models", "llm_api_key"):
+    for key in ("primary_algorithm", "devig_method", "llm_base_url", "llm_model",
+                "llm_fallback_models", "llm_api_key", "betting_stake_mode"):
         if key in values:
             if not isinstance(values[key], str) or len(values[key]) > 4096:
                 raise ValueError("%s 必须是有效字符串" % key)
@@ -103,6 +115,8 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
         raise ValueError("主算法必须属于已启用算法")
     if cfg.devig_method not in ("proportional", "power"):
         raise ValueError("去水方法必须是 proportional 或 power")
+    if cfg.betting_stake_mode not in ("fixed", "confidence_multiplier"):
+        raise ValueError("投注额度模式必须是 fixed 或 confidence_multiplier")
     if cfg.llm_base_url:
         u = urlsplit(cfg.llm_base_url)
         if u.scheme not in ("http", "https") or not u.hostname or u.username or u.password or u.query or u.fragment:

@@ -83,9 +83,12 @@ class LedgerDatabaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             ledger = DecisionLedger(root)
             ledger._append([self.row(decision_id='open', trigger='live_recommendation', status='pending'),
-                            self.row(decision_id='done', trigger='live_recommendation', status='won')])
+                            self.row(decision_id='done', trigger='live_recommendation', status='won'),
+                            self.row(decision_id='individual', trigger='live_recommendation',
+                                     algorithm='poisson_market', status='won')])
             entries = ledger.recommendation_entries('real')
             self.assertEqual({entry['status'] for entry in entries}, {'pending', 'won'})
+            self.assertTrue(all(entry['algorithm'] == 'economic_ensemble' for entry in entries))
 
     def test_portfolio_excludes_algorithm_duplicates_but_ignores_display_cohort(self):
         with tempfile.TemporaryDirectory() as root:

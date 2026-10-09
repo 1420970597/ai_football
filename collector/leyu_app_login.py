@@ -505,6 +505,12 @@ class AppLoginSessionProvider(SessionProvider):
         with self._lock:
             return self._token
 
+    def refresh_token(self) -> str:
+        """Force one guarded credential refresh after a token-only API rejects it."""
+        with self._lock:
+            self._token = ""
+        return self._do_login()
+
     # -- SessionProvider --------------------------------------------------
 
     def acquire(self, previous: Optional[Session] = None) -> Session:

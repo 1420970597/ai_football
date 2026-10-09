@@ -1,9 +1,9 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const S = {view: 'live', type: 'real', league: '', search: '', matches: [], selected: null,
-  request: 0, detailRequest: 0, historyRequest: 0, recommendationsRequest: 0, historyOffset: 0, historyNext: null, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false};
+  request: 0, detailRequest: 0, historyRequest: 0, recommendationsRequest: 0, historyOffset: 0, historyNext: null, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false, accountBusy: false, accountAt: 0};
 const API = '/api/v1';
-const POLL_MS = 1000;
+const POLL_MS = 5000;
 const algorithmLabel = a => ({economic_ensemble:'经济学汇总', economics_control:'纯经济学', economics_llm:'经济学 + LLM', poisson_market: '盘口 Poisson', poisson_time_decay: '衰减 Poisson',
   devig_consensus: '去水共识', economics_risk_adjusted: '经济学风控',
   microstructure_adjusted: '盘口微观结构', legacy: '旧算法'}[a] || a || '—');
@@ -29,6 +29,58 @@ async function get(path) {
   const response = await fetch(API + path, {signal: AbortSignal.timeout(8000), cache: 'no-store'});
   if (!response.ok) throw new Error('读取失败（' + response.status + '）');
   return response.json();
+}
+function renderAccount(data) {
+  const node = $('account-summary');
+  if (!node) return;
+  if (!data || !data.available) {
+    node.textContent = '账户数据不可用';
+    node.title = data?.error || '未配置乐鱼 App 会话';
+    renderAccountDetails(data);
+    return;
+  }
+  const balance = data.sports_balance == null
+    ? (data.balance == null ? '—' : fixed(data.balance)) : fixed(data.sports_balance);
+  const pendingCount = data.unsettled?.count == null ? '—' : String(data.unsettled.count);
+  const pendingAmount = data.unsettled?.amount == null ? '' : ' · ' + fixed(data.unsettled.amount);
+  const pending = pendingCount + pendingAmount;
+  const settled = data.settled?.count == null ? '—' : String(data.settled.count);
+  node.replaceChildren(...[['体育余额', balance], ['未结', pending], ['已结', settled]].map(([label, value]) =>
+    el('span', {text: label + ' ' + value})));
+  node.title = data.error || ('中心钱包 ' + (data.center_balance == null ? '—' : fixed(data.center_balance)) + ' · 乐鱼体育场馆 YBTY');
+  renderAccountDetails(data);
+}
+function renderAccountDetails(data) {
+  const root = $('account-details');
+  if (!root) return;
+  if (!data || !data.available) {
+    root.replaceChildren(el('p', {class:'account-error', text:data?.error || '账户数据不可用'}));
+    return;
+  }
+  const summary = el('div', {class:'account-detail-stats'}, [
+    el('span', {text:'体育余额 ' + fixed(data.sports_balance ?? data.balance)}),
+    el('span', {text:'未结 ' + String(data.unsettled?.count ?? '—') + ' · ' + fixed(data.unsettled?.amount)}),
+    el('span', {text:'已结 ' + String(data.settled?.count ?? '—') + ' · ' + fixed(data.settled?.amount)})
+  ]);
+  const states = [['未结算', data.unsettled?.items || []], ['已结算', data.settled?.items || []]];
+  const sections = states.map(([title, items]) => {
+    const rows = items.length ? items.slice(0, 20).map(item => el('div', {class:'account-order'}, [
+      el('strong', {text:item.match || item.order_no || '投注'}),
+      el('span', {text:(item.market || '盘口') + ' · ' + (item.option || '—') + ' @' + fixed(item.odds)}),
+      el('span', {text:'金额 ' + fixed(item.amount) + (title === '已结算' ? ' · 收益 ' + fixed(item.profit) : '')})
+    ])) : [el('span', {class:'account-muted', text:'暂无记录'})];
+    return el('section', {class:'account-orders'}, [el('h4', {text:title}), ...rows]);
+  });
+  root.replaceChildren(summary, ...sections);
+}
+async function loadAccount() {
+  const now = Date.now();
+  if (S.accountBusy || now - S.accountAt < 30000) return;
+  S.accountBusy = true;
+  S.accountAt = now;
+  try { renderAccount(await get('/account')); }
+  catch (error) { renderAccount({available: false, error: error.message}); }
+  finally { S.accountBusy = false; }
 }
 function switchView(view) {
   S.view = view;
@@ -480,6 +532,10 @@ const SETTING_FIELDS = [
     ['algorithm_alert_enabled', '低正确率预警', 'checkbox'],
     ['algorithm_alert_min_samples', '预警最小有效样本', 'number', [1,100000,1]],
     ['algorithm_alert_threshold', '预警正确率阈值', 'number', [0,1,.01]],
+    ['betting_enabled', '投注功能（默认关闭）', 'checkbox'],
+    ['betting_stake_mode', '单次额度模式', 'select', {fixed: '固定值', confidence_multiplier: '综合置信度 × 固定值'}],
+    ['betting_fixed_stake', '单次固定额度 / CNY', 'number', [.01,100000,.01]],
+    ['betting_min_hit_count', '允许投注的最小盘口命中次数', 'number', [1,100000,1]],
     ['max_total_exposure', '同场最大敞口', 'number', [0,1,.01]],
     ['risk_correlation', '同场风险相关性', 'number', [0,.99,.01]],
     ['execution_cost', '执行成本', 'number', [0,.1,.001]],
@@ -576,6 +632,16 @@ async function saveSettings(event) {
 }
 $('settings-form').addEventListener('submit', saveSettings);
 $('settings-reload').addEventListener('click', loadSettings);
+$('account-summary').addEventListener('click', () => {
+  const panel = $('account-popover');
+  const open = panel.hidden;
+  panel.hidden = !open;
+  $('account-summary').setAttribute('aria-expanded', String(open));
+});
+$('account-close').addEventListener('click', () => {
+  $('account-popover').hidden = true;
+  $('account-summary').setAttribute('aria-expanded', 'false');
+});
 $('nav-live').addEventListener('click', () => switchView('live'));
 $('nav-history').addEventListener('click', () => switchView('history'));
 $('nav-settings').addEventListener('click', () => switchView('settings'));
@@ -597,6 +663,7 @@ for (const button of document.querySelectorAll('[data-type]')) button.addEventLi
 document.addEventListener('keydown', event => {if (event.key === 'Escape') closeDetail();});
 window.addEventListener('hashchange', () => {const view = ['recommendations', 'history', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live'; if (S.view !== view) switchView(view);});
 async function poll() {
+  loadAccount();
   if (S.view === 'recommendations') await loadRecommendations();
   else if (S.view === 'live') await loadLive();
   S.timer = setTimeout(poll, POLL_MS);
