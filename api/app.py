@@ -565,16 +565,29 @@ class ApiApp:
         # A one-second UI poll must not scan/lock the complete persisted book.
         realtime = ({"running": rt.running, **rt.stats.as_dict()} if rt is not None
                     else {"running": False, "connected": 0})
+        persisted_recommendations: Dict[str, List[Dict[str, Any]]] = {}
+        try:
+            persisted_recommendations = self.analysis.ledger.live_recommendations(
+                [str(row.get('match_id', '')) for row in result.get('decisions', [])])
+        except (AttributeError, TypeError, ValueError):
+            persisted_recommendations = {}
         rows = []
         for row in result.pop("decisions"):
             public = self._public_live_row(row, bool(realtime.get("connected")))
+            if not public.get('picks') and persisted_recommendations.get(str(public.get('match_id', ''))):
+                public['picks'] = persisted_recommendations[str(public['match_id'])]
+                public['has_buy'] = True
+                public['decision'] = 'recommend'
+                public['recommendation_retained'] = True
+            self._attach_recommendation_evidence(public)
             public["llm_review"] = self.analysis.live_review.public(row)
             public.pop("evaluations", None)
             public.pop("ensemble", None)
             public.pop("candidates", None)
             public.pop("events", None)
             rows.append(public)
-        rows.sort(key=lambda r: (r["stale"], r.get("league", ""), r["match_id"]))
+        rows.sort(key=lambda r: (-float(r.get("recommendation_confidence", 0.0)),
+                                r["stale"], r.get("league", ""), r["match_id"]))
         result.update(
             matches=rows,
             realtime=realtime,
@@ -629,11 +642,49 @@ class ApiApp:
         quote_age = max(0, time.time() - _as_float(row.get("quote_time_ms")) / 1000)
         public.update(result_age_s=round(age, 1), quote_age_s=round(quote_age, 1),
                       stale=not connected or age > 15 or quote_age > 15)
-        if public["stale"]:
-            public["picks"] = []
-            public["has_buy"] = False
+        # Retained recommendations remain visible while the match is live.
+        # Only the live quote is marked stale; the decision itself is not
+        # silently erased after one missed refresh.
+        if public["stale"] and not public.get("picks"):
             public["decision"] = "observe"
         return public
+
+    def _attach_recommendation_evidence(self, row: Dict[str, Any]) -> None:
+        picks = row.get("picks") or []
+        if not picks or row.get("finished"):
+            return
+        keys = [(str(p.get("algorithm") or 'economic_ensemble'), str(p.get("market") or ''),
+                 str(p.get("line") or ''), str(p.get("outcome") or '')) for p in picks]
+        try:
+            evidence_by_key = self.analysis.ledger.recommendation_performance_many(keys)
+        except (AttributeError, TypeError, ValueError):
+            evidence_by_key = {}
+        best = None
+        for pick in picks:
+            evidence = evidence_by_key.get((str(pick.get("algorithm") or 'economic_ensemble'),
+                                            str(pick.get("market") or ''), str(pick.get("line") or ''),
+                                            str(pick.get("outcome") or '')), {
+                'hit_count': 0, 'miss_count': 0, 'pending_count': 0,
+                'settled_samples': 0, 'accuracy': None})
+            pick.update({
+                'hit_count': evidence['hit_count'], 'miss_count': evidence['miss_count'],
+                'pending_count': evidence['pending_count'], 'settled_samples': evidence['settled_samples'],
+                'historical_accuracy': evidence['accuracy'],
+            })
+            # A Beta(1,1) prior avoids ranking an unseen quote above a quote
+            # backed by settled evidence; the current model confidence remains
+            # the dominant signal.
+            sample = float(evidence['settled_samples'] or 0)
+            observed = ((float(evidence['hit_count']) + 1.0) / (sample + 2.0))
+            base = float(pick.get('confidence') or pick.get('p_model') or 0.0)
+            freshness = 0.75 if row.get('stale') else 1.0
+            pick['composite_confidence'] = round(base * (0.5 + 0.5 * observed) * freshness, 6)
+            if best is None or pick['composite_confidence'] > best['composite_confidence']:
+                best = pick
+        if best is not None:
+            row['recommendation_confidence'] = best['composite_confidence']
+            row['recommendation_pick'] = best
+            row['recommendation_retained'] = bool(row.get('recommendation_retained'))
 
     def h_workbench_detail(self, query: Mapping[str, List[str]],
                            body: Mapping[str, Any], match_id: str) -> Dict[str, Any]:
@@ -643,6 +694,17 @@ class ApiApp:
         rt = self.analysis.realtime
         connected = bool(rt is not None and rt.stats.connected)
         public = self._public_live_row(row, connected)
+        if not public.get('picks'):
+            try:
+                persisted = self.analysis.ledger.live_recommendations([match_id]).get(str(match_id), [])
+            except (AttributeError, TypeError, ValueError):
+                persisted = []
+            if persisted:
+                public['picks'] = persisted
+                public['has_buy'] = True
+                public['decision'] = 'recommend'
+                public['recommendation_retained'] = True
+        self._attach_recommendation_evidence(public)
         public["llm_review"] = self.analysis.live_review.public(row)
         return public
 

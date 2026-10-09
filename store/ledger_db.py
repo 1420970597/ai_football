@@ -41,6 +41,7 @@ class LedgerDB:
             'pending': 'status,match_id', 'date': 'at',
             'performance': 'competition_type,trigger,status,algorithm,settled_at',
             'experiment': 'experiment_id,algorithm',
+            'recommendation_match': 'trigger,algorithm,match_id,at',
         }.items():
             self.connection.execute('CREATE INDEX IF NOT EXISTS idx_' + name + ' ON decisions(' + cols + ')')
         self.connection.execute('CREATE TABLE IF NOT EXISTS imports '

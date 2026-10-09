@@ -80,15 +80,19 @@ function probabilityRows(match, compact = false) {
   return rows;
 }
 function renderRecommendations(rows) {
-  const picks = rows.flatMap(match => match.stale || match.suspended ? [] : (match.picks || []).map(pick => ({match,pick})))
-    .sort((a,b) => b.pick.effective_ev - a.pick.effective_ev);
+  const picks = rows.flatMap(match => match.suspended ? [] : (match.picks || []).map(pick => ({match,pick})))
+    .sort((a,b) => Number(b.pick.composite_confidence ?? b.match.recommendation_confidence ?? b.pick.confidence ?? 0) -
+      Number(a.pick.composite_confidence ?? a.match.recommendation_confidence ?? a.pick.confidence ?? 0));
   $('recommendation-count').textContent = picks.length + ' 项';
   $('recommendations').replaceChildren(...picks.slice(0,12).map(({match,pick}) => el('button', {class:'buy-card', onclick:()=>selectMatch(match.match_id)}, [
     el('span',{class:'buy-match',text:match.home + ' · ' + match.away}),
-    el('strong',{text:pick.label + ' @' + fixed(pick.odds)}),
+    el('strong',{text:pick.label + ' @' + fixed(pick.odds) + (pick.odds_live === false ? ' · 等待新赔率' : '')}),
     el('div',{class:'buy-metrics'},[
       el('span',{text:'概率 ' + pct(pick.p_model)}), el('span',{text:'置信度 ' + pct(pick.confidence)}),
-      el('span',{text:'净EV ' + pct(pick.effective_ev)}), el('span',{text:'仓位 ' + pct(pick.kelly)})])
+      el('span',{text:'净EV ' + pct(pick.effective_ev_live ?? pick.effective_ev)}),
+      el('span',{text:'命中 ' + fixed(pick.hit_count, 1) + ' · 未中 ' + fixed(pick.miss_count, 1)}),
+      el('span',{text:'综合 ' + pct(pick.composite_confidence ?? match.recommendation_confidence)}),
+      el('span',{text:'仓位 ' + pct(pick.kelly)})])
   ])));
   if (!picks.length) $('recommendations').appendChild(el('div',{class:'buy-empty',text:'暂无满足门槛的推荐'}));
 }
@@ -338,7 +342,8 @@ async function loadHistory(reset = true) {
     const data = await get('/ledger/history?limit=100&offset=' + S.historyOffset + '&days=' + encodeURIComponent($('history-days').value) + '&type=' + encodeURIComponent($('history-type').value) + '&algorithm=' + encodeURIComponent($('history-algorithm').value) + '&cohort=' + encodeURIComponent($('history-cohort').value));
     if (request !== S.historyRequest) return;
     const summary = data.overall || {};
-    const metrics = [['全盘口正确率', pct(summary.accuracy ?? summary.hit_rate)], ['有效样本 / 场次', String(summary.accuracy_samples ?? ((summary.won || 0) + (summary.lost || 0))) + ' / ' + (data.settled?.matches || 0)], ['等额 ROI', pct(summary.roi)], ['置信度 ROI', pct(summary.confidence_roi)], ['仓位 ROI', pct(summary.allocated_roi)], ['待确认赛果', String(summary.pending || 0)]];
+    const pendingEntries = Number(summary.pending || 0);
+    const metrics = [['全盘口正确率', pct(summary.accuracy ?? summary.hit_rate)], ['有效样本 / 场次', String(summary.accuracy_samples ?? ((summary.won || 0) + (summary.lost || 0))) + ' / ' + (data.settled?.matches || 0)], ['等额 ROI', pct(summary.roi)], ['置信度 ROI', pct(summary.confidence_roi)], ['仓位 ROI', pct(summary.allocated_roi)], ['待结算盘口', String(pendingEntries)]];
     $('history-stats').replaceChildren(...metrics.map(([label, value]) => el('div', {}, [el('span', {text: label}), el('strong', {text: value})])));
     const portfolio = data.portfolio_summary || {};
     $('history-portfolio').replaceChildren(...[['正确率',pct(portfolio.accuracy)],['有效样本',String(portfolio.accuracy_samples || 0)],['等额 ROI',pct(portfolio.roi)],['置信度 ROI',pct(portfolio.confidence_roi)],['仓位 ROI',pct(portfolio.allocated_roi)],['净收益',fixed(portfolio.profit_units) + 'u']].map(([label,value])=>el('div',{},[el('span',{text:label}),el('strong',{text:value})])));
@@ -378,7 +383,7 @@ async function loadHistory(reset = true) {
     $('history-prev').disabled = S.historyOffset === 0;
     $('history-next').disabled = S.historyNext === null;
     $('history-page').textContent = '第 ' + (Math.floor(S.historyOffset/100)+1) + ' 页 · 查询 ' + fixed(data.query_ms,0) + 'ms';
-    $('history-count').textContent = (data.entries_total || 0) + ' 条 · ' + (summary.matches || 0) + ' 场';
+    $('history-count').textContent = (data.entries_total || 0) + ' 条 · ' + (summary.matches || 0) + ' 场 · 待结算 ' + pendingEntries + ' 个盘口';
     const warning = data.legacy_identity_rows ? '旧记录 ' + data.legacy_identity_rows + ' 条，身份不完整。' : '';
     notice('history-notice', warning + (summary.graded ? '' : '待确认终场赛果 · ' + (data.settle?.evidence_missing ?? summary.pending ?? 0) + ' 场未取得证据'));
     const statusLabel = {won: '正确', lost: '错误', half_won: '赢半', half_lost: '输半', push: '走水', pending: '待结算', void: '无法结算'};
@@ -389,7 +394,8 @@ async function loadHistory(reset = true) {
       return el('tr', {}, [el('td', {text: time}, [el('small', {text: entry.competition_type === 'virtual' ? '虚拟比赛' : entry.competition_type === 'real' ? '真实足球' : '旧记录 / 类型未核验'})]),
         el('td', {text: (entry.home || '主队') + ' vs ' + (entry.away || '客队')}, [el('small', {text: entry.label || entry.market})]),
         el('td', {text: algorithmLabel(entry.algorithm)}, [el('small', {text: 'v' + (entry.config_version || 0) + ' · P ' + pct(entry.p_fused)})]),
-        el('td', {text: fixed(entry.odds)}), el('td', {text: entry.ft_score ? entry.ft_score.join(' : ') : '—'}),
+        el('td', {text: fixed(entry.odds)}, [el('small', {text: entry.entry_clock_s != null ? '入场 ' + fixed(entry.entry_clock_s, 0) + 's' : ''})]),
+        el('td', {text: entry.ft_score ? entry.ft_score.join(' : ') : '—'}, [el('small', {text: entry.status === 'pending' ? '比赛进行中 / 等待终场' : ''})]),
         el('td', {class: kind, text: statusLabel[entry.status] || entry.status, title: entry.settle_note || ''}),
         el('td', {class: kind, text: ['pending', 'void'].includes(entry.status) ? '—' : (entry.pnl > 0 ? '+' : '') + fixed(entry.pnl)})]);
     });

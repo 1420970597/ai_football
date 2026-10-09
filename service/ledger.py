@@ -849,6 +849,89 @@ class DecisionLedger:
             self._sync_db()
             return {'at': cutoff, 'rows': self._db.evidence(cutoff) if self._db else []}
 
+    def recommendation_performance(self, market: str, line: str, outcome: str,
+                                   algorithm: str = 'economic_ensemble') -> Dict[str, Any]:
+        """Return settled and pending counts for one recommended quote.
+
+        The board uses this as evidence for ranking. Pending rows are exposed
+        separately and never enter accuracy or ROI calculations.
+        """
+        key = (algorithm, market, str(line), outcome)
+        return self.recommendation_performance_many([key]).get(key, {
+            'hit_count': 0, 'miss_count': 0, 'pending_count': 0,
+            'settled_samples': 0, 'accuracy': None})
+
+    def recommendation_performance_many(
+            self, keys: Sequence[tuple[str, str, str, str]]) -> Dict[tuple, Dict[str, Any]]:
+        """Aggregate many recommendation quotes with one indexed SQLite scan."""
+        wanted = list(dict.fromkeys((str(a), str(m), str(line_value), str(o))
+                                    for a, m, line_value, o in keys))
+        if not wanted:
+            return {}
+        with self._lock:
+            self._sync_db()
+            if not self._db:
+                return {}
+            clauses = []
+            params: list[str] = []
+            for algorithm, market, line_value, outcome in wanted:
+                clauses.append("(algorithm=? AND market=? AND json_extract(payload,'$.line')=? AND json_extract(payload,'$.outcome')=?)")
+                params.extend((algorithm, market, line_value, outcome))
+            rows = self._db.connection.execute(
+                """SELECT algorithm, market, json_extract(payload,'$.line') AS line,
+                   json_extract(payload,'$.outcome') AS outcome,
+                   sum(status IN ('won','half_won') * CASE status WHEN 'half_won' THEN .5 ELSE 1 END) AS hits,
+                   sum(status IN ('lost','half_lost') * CASE status WHEN 'half_lost' THEN .5 ELSE 1 END) AS misses,
+                   sum(status='pending') AS pending
+                   FROM decisions WHERE is_pick=1 AND trigger='live_recommendation' AND (""" +
+                " OR ".join(clauses) + ") GROUP BY algorithm,market,line,outcome", params).fetchall()
+            out: Dict[tuple, Dict[str, Any]] = {}
+            for row in rows:
+                hits = float(row['hits'] or 0.0)
+                misses = float(row['misses'] or 0.0)
+                settled = hits + misses
+                key = (str(row['algorithm']), str(row['market']), str(row['line'] or ''), str(row['outcome']))
+                out[key] = {'hit_count': round(hits, 3), 'miss_count': round(misses, 3),
+                            'pending_count': int(row['pending'] or 0),
+                            'settled_samples': round(settled, 3),
+                            'accuracy': round(hits / settled, 6) if settled else None}
+            return out
+
+    def live_recommendations(self, match_ids: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
+        """Load the latest persisted ensemble picks for currently live matches."""
+        ids = [str(mid) for mid in match_ids if str(mid)]
+        if not ids:
+            return {}
+        with self._lock:
+            self._sync_db()
+            if not self._db:
+                return {}
+            placeholders = ','.join('?' for _ in ids)
+            rows = self._db.connection.execute(
+                "SELECT payload FROM decisions WHERE trigger='live_recommendation' "
+                "AND algorithm='economic_ensemble' AND match_id IN (" + placeholders + ") "
+                "ORDER BY at DESC", ids).fetchall()
+            out: Dict[str, List[Dict[str, Any]]] = {}
+            seen: set[tuple] = set()
+            for raw in rows:
+                item = json.loads(raw['payload'])
+                key = (str(item.get('match_id', '')), str(item.get('market', '')),
+                       str(item.get('line', '')), str(item.get('outcome', '')))
+                if key in seen:
+                    continue
+                seen.add(key)
+                pick = {
+                    'market': item.get('market', ''), 'line': str(item.get('line', '')),
+                    'outcome': item.get('outcome', ''), 'label': item.get('label', ''),
+                    'odds': item.get('odds', 0), 'decision_odds': item.get('odds', 0),
+                    'p_model': item.get('p_fused', 0), 'confidence': item.get('confidence', 0),
+                    'effective_ev': item.get('edge', 0), 'ev': item.get('edge', 0),
+                    'kelly': item.get('kelly', 0), 'algorithm': 'economic_ensemble',
+                    'odds_live': False, 'recommendation_at': item.get('at', ''),
+                }
+                out.setdefault(str(item.get('match_id', '')), []).append(pick)
+            return out
+
     def experiment_stats(self, competition_type: Optional[str] = None, days: int = 0) -> Dict[str, Any]:
         if not self._db:
             return {}

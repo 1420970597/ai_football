@@ -248,6 +248,23 @@ class UnknownStateMessageTests(unittest.TestCase):
 
 
 class CurrentBookRetentionTests(unittest.TestCase):
+    def test_results_retain_last_recommendation_after_quote_gap(self):
+        svc = LiveExpertService()
+        svc._results['m'] = {
+            'match_id': 'm', 'competition_type': 'real', 'finished': False,
+            'has_buy': False, 'decision': 'observe', 'picks': [], 'markets': [],
+        }
+        svc._recommendations['m'] = {
+            'at': '2026-10-09T10:00:00+00:00', 'at_epoch': time.time() - 3,
+            'picks': [{'market': 'OU', 'line': '2.25', 'outcome': 'over',
+                       'label': '全场大2.25', 'odds': 1.95, 'confidence': .62}],
+        }
+        row = svc.results()['decisions'][0]
+        self.assertTrue(row['has_buy'])
+        self.assertEqual(row['decision'], 'recommend')
+        self.assertTrue(row['recommendation_retained'])
+        self.assertEqual(row['picks'][0]['label'], '全场大2.25')
+
     def test_load_ignores_expired_or_nonfinite_quotes(self):
         from pathlib import Path
         from collector.leyu_realtime import LiveBook, DEFAULT_QUOTE_MAX_AGE_S

@@ -51,6 +51,10 @@ class LiveExpertService:
         self._lock = threading.RLock()
         self._compute_lock = threading.Lock()
         self._results: Dict[str, Dict[str, Any]] = {}
+        # A recommendation is a decision event, not a transient quote. Keep
+        # the last valid ensemble pick while the match is still live so a
+        # short quote gap or a stale refresh cannot make the buy board blink.
+        self._recommendations: Dict[str, Dict[str, Any]] = {}
         self._anchors: Dict[str, Dict[str, Any]] = {}
         self._series: Dict[Tuple[str, str, str, str], deque] = {}
         self._compute_ms: deque = deque(maxlen=2048)
@@ -85,6 +89,7 @@ class LiveExpertService:
                 self.config, self.config_version = config, version
                 self._anchors.clear()
                 self._results.clear()
+                self._recommendations.clear()
 
     def start(self, root: Optional[str]) -> None:
         self.journal_root = root
@@ -167,6 +172,7 @@ class LiveExpertService:
         with self._lock:
             if result['config_version'] != self.config_version:
                 return {}
+            self._remember_recommendation(result)
             self._results[mid] = result
             if self.on_decision:
                 for evaluation in [*result.get('evaluations', []), result['ensemble']]:
@@ -470,12 +476,66 @@ class LiveExpertService:
 
     def results(self, kind: Optional[str] = None) -> Dict[str, Any]:
         with self._lock:
-            rows = [r for r in self._results.values() if not r['finished'] and
-                    (kind in (None, '', 'all') or r['competition_type'] == kind)]
+            rows = []
+            for raw in self._results.values():
+                if raw['finished'] or (kind not in (None, '', 'all') and
+                                        raw['competition_type'] != kind):
+                    continue
+                row = dict(raw)
+                saved = self._recommendations.get(str(row.get('match_id', '')))
+                if saved:
+                    row['picks'] = [dict(p) for p in saved['picks']]
+                    row['has_buy'] = True
+                    row['decision'] = 'recommend'
+                    row['recommendation_at'] = saved['at']
+                    row['recommendation_age_s'] = round(
+                        max(0.0, time.time() - saved['at_epoch']), 1)
+                    self._refresh_recommendation_quotes(row)
+                    row['recommendation_retained'] = not bool(raw.get('picks'))
+                rows.append(row)
             return {'count': len(rows), 'decisions': list(rows),
                     'summary': {'n': len(rows), 'buy': sum(r['has_buy'] for r in rows),
                                 'observe': sum(r['decision'] == 'observe' for r in rows)},
                     'model_version': MODEL_VERSION, 'mode': 'live', 'performance': self.health()}
+
+    def _remember_recommendation(self, result: Mapping[str, Any]) -> None:
+        """Freeze the latest valid ensemble recommendation for this live match."""
+        picks = result.get('picks') or []
+        if not picks or result.get('finished') or result.get('competition_type') != 'real':
+            return
+        mid = str(result.get('match_id', ''))
+        if not mid:
+            return
+        now = time.time()
+        self._recommendations[mid] = {
+            'at': str(result.get('computed_at') or ''),
+            'at_epoch': now,
+            'picks': [dict(p) for p in picks],
+            'config_version': result.get('config_version'),
+        }
+
+    @staticmethod
+    def _refresh_recommendation_quotes(row: Dict[str, Any]) -> None:
+        """Attach the newest quote to a retained pick without changing its model."""
+        quotes = {}
+        for market in row.get('markets') or []:
+            for quote in market.get('quotes') or []:
+                quotes[(market.get('market'), str(market.get('line', '')), quote.get('outcome'))] = (
+                    quote, market)
+        for pick in row.get('picks') or []:
+            quote, market = quotes.get((pick.get('market'), str(pick.get('line', '')), pick.get('outcome')), (None, None))
+            if quote is None:
+                pick['odds_live'] = False
+                continue
+            if 'decision_odds' not in pick:
+                pick['decision_odds'] = pick.get('odds')
+            pick['odds'] = quote.get('odds', pick.get('odds'))
+            pick['odds_live'] = True
+            pick['quote_time_ms'] = market.get('quote_time_ms') if market else None
+            try:
+                pick['effective_ev_live'] = round(float(pick.get('p_model', 0)) * float(pick['odds']) - 1.0, 6)
+            except (TypeError, ValueError):
+                pick['effective_ev_live'] = pick.get('effective_ev')
 
     def detail(self, mid: str) -> Optional[Dict[str, Any]]:
         with self._compute_lock:
@@ -485,7 +545,16 @@ class LiveExpertService:
                     return None
                 histories = {"|".join(key[1:]): list(series)
                              for key, series in self._series.items() if key[0] == mid}
-                return {**row, 'price_history': histories}
+                out = {**row, 'price_history': histories}
+                saved = self._recommendations.get(str(mid))
+                if saved and not out.get('finished'):
+                    out['picks'] = [dict(p) for p in saved['picks']]
+                    out['has_buy'] = True
+                    out['decision'] = 'recommend'
+                    out['recommendation_at'] = saved['at']
+                    out['recommendation_retained'] = not bool(row.get('picks'))
+                    self._refresh_recommendation_quotes(out)
+                return out
 
     def health(self) -> Dict[str, Any]:
         with self._lock:

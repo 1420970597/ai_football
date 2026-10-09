@@ -53,6 +53,32 @@ class LedgerDatabaseTests(unittest.TestCase):
             with patch.object(ledger._db,'entries',side_effect=AssertionError('full payload scan')):
                 self.assertEqual(ledger.stats()['total'],5)
 
+    def test_recommendation_performance_exposes_pending_without_counting_it(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            ledger._append([
+                self.row(decision_id='hit', status='won', trigger='live_recommendation'),
+                self.row(decision_id='miss', status='half_lost', trigger='live_recommendation'),
+                self.row(decision_id='open', status='pending', trigger='live_recommendation'),
+            ])
+            evidence = ledger.recommendation_performance('OU', '2.25', 'over')
+            self.assertEqual(evidence['hit_count'], 1.0)
+            self.assertEqual(evidence['miss_count'], .5)
+            self.assertEqual(evidence['pending_count'], 1)
+            self.assertAlmostEqual(evidence['accuracy'], 2 / 3, places=6)
+
+    def test_live_recommendations_restores_latest_pick_by_match(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            ledger._append([self.row(decision_id='r1', trigger='live_recommendation',
+                                     at='2026-10-01T12:00:00+00:00'),
+                            self.row(decision_id='r2', trigger='live_recommendation',
+                                     at='2026-10-01T12:01:00+00:00', odds=2.1)])
+            restored = ledger.live_recommendations(['m'])['m']
+            self.assertEqual(len(restored), 1)
+            self.assertEqual(restored[0]['odds'], 2.1)
+            self.assertEqual(ledger.live_recommendations(['missing']), {})
+
     def test_portfolio_excludes_algorithm_duplicates_but_ignores_display_cohort(self):
         with tempfile.TemporaryDirectory() as root:
             ledger=DecisionLedger(root)
