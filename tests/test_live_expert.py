@@ -5,6 +5,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from collector.leyu_realtime import PriceTick, RealtimeHub
+from collector.session import NullSessionProvider
 from service.analysis import AnalysisConfig, AnalysisService
 from service.live_expert import LiveExpertService, percentiles
 
@@ -67,6 +68,12 @@ class LiveExpertTests(unittest.TestCase):
         self.assertIn('其他玩法', raw['name'])
         labels = {q['label'] for q in raw['quotes']}
         self.assertEqual(labels, {'其他玩法（RAW_998）是', '其他玩法（RAW_998）否'})
+
+    def test_realtime_health_exposes_session_provider_state(self):
+        hub = RealtimeHub(NullSessionProvider("test"), resume=False)
+        health = hub.health()
+        self.assertEqual(health['session']['provider'], 'none')
+        self.assertIn('last_error', health)
 
     def test_continuous_ticks_keep_first_due(self):
         svc = AnalysisService(MagicMock(), realtime=self.hub(), config=AnalysisConfig(use_llm=False))

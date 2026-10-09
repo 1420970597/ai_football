@@ -1439,8 +1439,14 @@ class RealtimeHub:
         with self._lock:
             baseline = len(self._last_price)
             snaps = self._snapshots
+        try:
+            session = self.session_provider.describe()
+        except Exception as exc:  # noqa: BLE001 - health must remain available
+            session = {"provider": type(self.session_provider).__name__,
+                       "describe_error": type(exc).__name__}
         return {
             "running": self.running,
+            "session": session,
             # 已建立基线的赔率选项数：对比它可判断推送是否在正常覆盖盘口
             "price_options": baseline,
             # 收到的赔率快照条数（含未变化的），用于区分“推送正常但没变化”
