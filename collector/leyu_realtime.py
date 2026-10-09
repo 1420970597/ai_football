@@ -988,6 +988,23 @@ def parse_c103(decoded: Mapping[str, Any]) -> Optional[Tuple[str, Tuple[int, int
     return None
 
 
+def _period_score_from_payload(value: Any, period: str) -> Optional[Tuple[int, int]]:
+    """从推送 `msc` 的 S0/S1 片段提取阶段比分。"""
+    chunks = [value] if isinstance(value, str) else value if isinstance(value, Sequence) else ()
+    prefix = period + "|"
+    for chunk in chunks:
+        text = str(chunk).strip().strip("'")
+        if not text.startswith(prefix):
+            continue
+        _, _, score = text.partition("|")
+        left, _, right = score.partition(":")
+        try:
+            return int(left), int(right)
+        except ValueError:
+            return None
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Hub：后台推送消费 + 共享只读状态
 # --------------------------------------------------------------------------- #
@@ -1261,6 +1278,9 @@ class RealtimeHub:
                 if now - self._status_at.get(mid, 0) > 10:
                     self._status[mid] = {**self._status.get(mid, {}),
                                          "mst": match.minute, "mmp": match.period}
+                    half = getattr(match, "half_score", (None, None))
+                    if half and half[0] is not None and half[1] is not None:
+                        self._status[mid]["half_score"] = [int(half[0]), int(half[1])]
                     self._status_at[mid] = now
                 if now - self._score_at.get(mid, 0) > 10:
                     from core.live_model import valid_score
@@ -1289,6 +1309,7 @@ class RealtimeHub:
                 "version": self._versions.get(mid, 0),
                 "received_at": self._received_at.get(mid, 0),
                 "score": self._scores.get(mid),
+                "half_score": self.half_score(mid),
                 "score_age_s": self.score_age_s(mid),
                 "status_age_s": (time.monotonic() - self._status_at[mid]
                                  if mid in self._status_at else None),
@@ -1551,10 +1572,13 @@ class RealtimeHub:
                 parsed = parse_c103(decoded)
                 if parsed:
                     mid, score = parsed
+                    half = _period_score_from_payload(decoded.get("msc"), "S0")
                     with self._lock:
                         self._touch_seen(mid)
                         self._scores[mid] = score
                         self._score_at[mid] = time.monotonic()
+                        if half is not None:
+                            self._status.setdefault(mid, {})["half_score"] = list(half)
                         self._changed_state(mid)
                     self.stats.score_updates += 1
                     # 落盘赛果（见 ScoreStore：结束之后就再也拿不到了）
@@ -1577,6 +1601,9 @@ class RealtimeHub:
                         "mst": decoded.get("mst"),
                         "ha": decoded.get("ha"),
                     }
+                    half = _period_score_from_payload(decoded.get("msc"), "S0")
+                    if half is not None:
+                        self._status[mid]["half_score"] = list(half)
                     self._status_at[mid] = time.monotonic()
                     self._changed_state(mid)
                 self._notify_state_change([mid])

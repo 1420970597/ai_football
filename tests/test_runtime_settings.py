@@ -53,6 +53,20 @@ class RuntimeSettingsTests(unittest.TestCase):
             self.assertEqual(settings.version, 1)
             self.assertEqual(settings.config.min_ev, .02)
 
+    def test_economic_algorithms_and_risk_parameters_are_validated(self):
+        settings = RuntimeSettings()
+        out = settings.update({
+            'algorithms': ['poisson_market', 'devig_consensus', 'economics_risk_adjusted', 'microstructure_adjusted'],
+            'primary_algorithm': 'economics_risk_adjusted',
+            'devig_spread_warn_pp': 2.0, 'fractional_kelly': .2,
+            'max_total_exposure': .15, 'risk_correlation': .6,
+            'execution_cost': .002,
+        }, 1, lambda *_: None)
+        self.assertEqual(out['settings']['primary_algorithm'], 'economics_risk_adjusted')
+        self.assertEqual(out['settings']['risk_correlation'], .6)
+        with self.assertRaises(ValueError):
+            settings.update({'risk_correlation': 1.0}, 2, lambda *_: None)
+
     def test_parallel_edit_has_one_winner(self):
         settings = RuntimeSettings()
         outcomes = []

@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
-ALGORITHMS = {"poisson_market": "当前盘口 Poisson", "poisson_time_decay": "时间衰减 Poisson"}
+ALGORITHMS = {
+    "poisson_market": "当前盘口 Poisson",
+    "poisson_time_decay": "时间衰减 Poisson",
+    "devig_consensus": "去水共识",
+    "economics_risk_adjusted": "经济学风控",
+    "microstructure_adjusted": "盘口微观结构",
+}
 
 
 class VersionConflict(ValueError):
@@ -27,6 +33,11 @@ class RuntimeConfig:
     quote_max_age_s: float = 15.0
     state_max_age_s: float = 90.0
     anchor_max_age_s: float = 120.0
+    devig_spread_warn_pp: float = 1.0
+    fractional_kelly: float = 0.25
+    max_total_exposure: float = 0.25
+    risk_correlation: float = 0.40
+    execution_cost: float = 0.001
     llm_enabled: bool = False
     llm_base_url: str = ""
     llm_model: str = ""
@@ -41,6 +52,9 @@ RANGES = {
     "min_probability": (0.0, 1.0), "min_ev": (0.0, 1.0),
     "quote_max_age_s": (1.0, 300.0), "state_max_age_s": (5.0, 600.0),
     "anchor_max_age_s": (5.0, 600.0), "llm_timeout_s": (1.0, 120.0),
+    "devig_spread_warn_pp": (0.1, 20.0), "fractional_kelly": (0.0, 1.0),
+    "max_total_exposure": (0.0, 1.0), "risk_correlation": (0.0, 0.99),
+    "execution_cost": (0.0, 0.1),
     "llm_temperature": (0.0, 2.0), "llm_max_tokens": (256, 8192),
     "llm_interval_s": (10.0, 3600.0),
 }

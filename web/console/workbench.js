@@ -4,7 +4,9 @@ const S = {view: 'live', type: 'real', league: '', search: '', matches: [], sele
   request: 0, detailRequest: 0, historyRequest: 0, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false};
 const API = '/api/v1';
 const POLL_MS = 1000;
-const algorithmLabel = a => ({poisson_market: '盘口 Poisson', poisson_time_decay: '衰减 Poisson', legacy: '旧算法'}[a] || a || '—');
+const algorithmLabel = a => ({poisson_market: '盘口 Poisson', poisson_time_decay: '衰减 Poisson',
+  devig_consensus: '去水共识', economics_risk_adjusted: '经济学风控',
+  microstructure_adjusted: '盘口微观结构', legacy: '旧算法'}[a] || a || '—');
 const pct = n => Number.isFinite(Number(n)) && n !== null ? (Number(n) * 100).toFixed(1) + '%' : '—';
 const fixed = (n, digits = 2) => n !== null && n !== undefined && Number.isFinite(Number(n)) ? Number(n).toFixed(digits) : '—';
 function el(tag, attrs = {}, children = []) {
@@ -283,11 +285,13 @@ function renderDetail(match) {
     trend.appendChild(priceChart(series[1]));
   } else trend.appendChild(el('p', {class: 'chart-note', text: '暂无走势'}));
   const candidates = detailSection('盘口估值 · 模型基准');
-  const estimates = el('table', {class: 'ev-table'}, [el('thead', {}, [el('tr', {}, ['方向', '赔率', '模型', 'EV'].map(text => el('th', {text})))])]);
+  const estimates = el('table', {class: 'ev-table'}, [el('thead', {}, [el('tr', {}, ['方向', '赔率', '模型', 'EV', '有效EV', '状态'].map(text => el('th', {text})))])]);
   const estimatesBody = el('tbody');
   for (const candidate of (match.candidates || []).slice(0, 8)) estimatesBody.appendChild(el('tr', {}, [
     el('td', {text: candidate.label}), el('td', {text: fixed(candidate.odds)}),
-    el('td', {text: pct(candidate.p_model)}), el('td', {class: Number(candidate.ev) > 0 ? 'history-win' : 'history-loss', text: pct(candidate.ev)})]));
+    el('td', {text: pct(candidate.p_model)}), el('td', {class: Number(candidate.ev) > 0 ? 'history-win' : 'history-loss', text: pct(candidate.ev)}),
+    el('td', {class: Number(candidate.effective_ev) > 0 ? 'history-win' : 'history-loss', text: pct(candidate.effective_ev)}),
+    el('td', {text: candidate.research_only ? '研究判断' : candidate.decision_status === 'settleable' ? '可结算' : '展示'})]));
   estimates.appendChild(estimatesBody);
   if ((match.candidates || []).length) candidates.appendChild(estimates);
   if (!(match.candidates || []).length) candidates.appendChild(el('p', {class: 'chart-note', text: '暂无 EV'}));
@@ -348,11 +352,16 @@ async function loadHistory() {
 }
 const SETTING_FIELDS = [
   ['算法与门槛', [
-    ['primary_algorithm', '主显示算法', 'select', {poisson_market: '当前盘口 Poisson', poisson_time_decay: '时间衰减 Poisson'}],
+    ['primary_algorithm', '主显示算法', 'select', {poisson_market: '当前盘口 Poisson', poisson_time_decay: '时间衰减 Poisson', devig_consensus: '去水共识', economics_risk_adjusted: '经济学风控', microstructure_adjusted: '盘口微观结构'}],
     ['devig_method', '去水方法', 'select', {proportional: '比例法', power: 'Power 法'}],
     ['min_probability', '建议最低概率', 'number', [0,1,.01]],
     ['min_ev', '建议最低 EV', 'number', [0,1,.01]],
     ['anchor_max_age_s', '衰减锚点重置 / 秒', 'number', [5,600,1]],
+    ['devig_spread_warn_pp', '去水方法分歧阈值 / pp', 'number', [.1,20,.1]],
+    ['fractional_kelly', '分数 Kelly', 'number', [0,1,.05]],
+    ['max_total_exposure', '同场最大敞口', 'number', [0,1,.01]],
+    ['risk_correlation', '同场风险相关性', 'number', [0,.99,.01]],
+    ['execution_cost', '执行成本', 'number', [0,.1,.001]],
   ]],
   ['数据时效', [
     ['quote_max_age_s', '报价有效期 / 秒', 'number', [1,300,1]],

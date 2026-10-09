@@ -10,9 +10,10 @@ async (page) => {
     candidates: [{label: '全场大2.25', ev: .02, odds: 1.95, p_model: .52}],
     price_history: {'OU|2.25|over': [[1000, 1.9], [2000, 1.95]], 'OU|2.25|under': [[1000, 2], [2000, 1.96]]}, events: []
   };
-  const _PLACEHOLDER_SETTINGS = {version:1, persistent:true, algorithms:{poisson_market:'当前盘口 Poisson', poisson_time_decay:'时间衰减 Poisson'},
+  const _PLACEHOLDER_SETTINGS = {version:1, persistent:true, algorithms:{poisson_market:'当前盘口 Poisson', poisson_time_decay:'时间衰减 Poisson', devig_consensus:'去水共识', economics_risk_adjusted:'经济学风控', microstructure_adjusted:'盘口微观结构'},
     settings:{algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',
       min_probability:.52,min_ev:.02,quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,
+      devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
       llm_enabled:false,llm_base_url:'http://localhost:9999/v1',llm_model:'test-model',has_llm_key:true,
       llm_timeout_s:20,llm_temperature:.2,llm_max_tokens:2048,llm_interval_s:60}};
   let mode = 'default';

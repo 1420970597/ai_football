@@ -18,7 +18,11 @@ from core.live_model import (
     MODEL_VERSION, REGULATION_SECONDS, clock_label, clock_seconds,
     competition_type, fit_share, fit_total, payment, remaining_distribution, valid_score,
 )
-from core.market_labels import format_market
+from core.market_labels import format_market, format_raw_market, normalize_market_name
+from core.economics import effective_ev as economics_effective_ev
+from core.economics import fractional_kelly, q_fill_model, shrink_probabilities
+from core.devig import devig as devig_snapshot
+from core.models import OddsSnapshot, SnapshotState, DevigMethod
 from service.runtime_settings import RuntimeConfig
 
 QUOTE_MAX_AGE_S = 15.0
@@ -29,7 +33,8 @@ MAX_RESULTS = 256
 MAX_JOURNAL_MB = 32
 CHPID = {'1': ('HAD', False), '2': ('OU', False), '4': ('AH', False),
          '17': ('HAD', True), '18': ('OU', True), '19': ('AH', True)}
-OUTCOMES = {'1': 'home', '2': 'away', 'X': 'draw', 'Over': 'over', 'Under': 'under'}
+OUTCOMES = {'1': 'home', '2': 'away', 'X': 'draw', 'x': 'draw', 'Over': 'over', 'over': 'over',
+            'Under': 'under', 'under': 'under'}
 
 
 def percentiles(values: Sequence[float]) -> Dict[str, Optional[float]]:
@@ -162,7 +167,8 @@ class LiveExpertService:
                     for record_kind, items in (('forecast', evaluation['forecasts']),
                                                ('recommendation', evaluation['recommendations'])):
                         for forecast in items:
-                            key = (mid, evaluation['algorithm'], forecast['market'], record_kind)
+                            key = (mid, evaluation['algorithm'], forecast['market'],
+                                   str(forecast.get('line', '')), record_kind)
                             if key not in self._recorded and key not in self._decisions and key not in self._recording:
                                 self._decisions[key] = {**result, 'forecast': forecast, 'record_kind': record_kind,
                                                         'algorithm': evaluation['algorithm']}
@@ -207,6 +213,7 @@ class LiveExpertService:
         info = dict(snapshot.get('info') or {})
         kind = competition_type(info)
         score = valid_score(snapshot.get('score'))
+        half_score = valid_score(snapshot.get('half_score'))
         status = snapshot.get('status') or {}
         phase = str(status.get('mmp') or '')
         elapsed_s = clock_seconds(status.get('mst'), phase)
@@ -267,15 +274,19 @@ class LiveExpertService:
                     series.append((q.ts_ms, q.odds))
                 drift = (q.odds / series[0][1] - 1) * 100 if len(series) > 1 else 0
                 label = (format_market(group['market'], oc, group['line'], home=info.get('home') or '',
-                                       away=info.get('away') or '') if group['known'] else oc)
+                                       away=info.get('away') or '') if group['known'] else
+                         format_raw_market(group['market'], oc, group['line'], group['name'],
+                                           home=info.get('home') or '', away=info.get('away') or ''))
                 probability = fair[i]
                 quotes.append({'outcome': oc, 'label': label, 'odds': q.odds,
                                'p_market': round(probability, 6) if probability is not None else None,
                                'trend_pct': round(drift, 3), 'ts_ms': q.ts_ms})
-            markets.append({'market': group['market'], 'line': group['line'], 'name': group['name'],
+            markets.append({'market': group['market'], 'line': group['line'],
+                            'name': group['name'] if group['known'] else normalize_market_name(group['name'], group['market']),
                             'chpid': group['chpid'], 'quotes': quotes, 'complete': complete,
                             'missing_outcomes': [o for o in expected if o not in outcomes] if group['known'] else [],
-                            'supported': group['market'] in ('HAD', 'OU'),
+                            'supported': group['market'].split('_1H')[0] in ('HAD', 'OU', 'AH'),
+                            'known': group['known'],
                             'margin': round(margin, 6) if margin is not None else None,
                             'age_s': round(age, 1) if math.isfinite(age) else None,
                             'fresh': age <= cfg.quote_max_age_s, 'quote_time_ms': group['quote_time_ms']})
@@ -310,39 +321,75 @@ class LiveExpertService:
         for algorithm in cfg.algorithms:
             model_rates = current_rates if algorithm == 'poisson_market' else rates
             candidates: List[Dict[str, Any]] = []
-            probabilities = {}
-            forecasts = []
+            probabilities: Dict[str, float] = {}
+            forecasts: List[Dict[str, Any]] = []
             if model_rates and score is not None:
                 dist = remaining_distribution(model_rates[0], model_rates[1], score)
                 if direction_available:
                     probabilities = {oc: round(payment(dist, 'HAD', oc).win, 6) for oc in ('home', 'draw', 'away')}
                 for market in markets:
                     family = market['market']
-                    if family not in ('HAD', 'OU') or not market['fresh'] or not market['complete']:
+                    base_family = family.split('_1H')[0]
+                    if base_family not in ('HAD', 'OU', 'AH') or not market['fresh'] or not market['complete']:
                         continue
-                    if family == 'HAD' and not direction_available:
+                    if base_family == 'HAD' and not direction_available:
                         continue
                     for quote in market['quotes']:
-                        pay = payment(dist, family, quote['outcome'], market['line'])
+                        half_market = family.endswith('_1H')
+                        settlement_dist = (((half_score[0], half_score[1], 1.0),)
+                                           if half_market and half_score is not None else dist)
+                        pay = payment(settlement_dist, base_family, quote['outcome'], market['line'])
+                        raw_p = pay.effective_probability or 0.0
+                        consensus, spread = self._market_consensus(market, cfg.devig_spread_warn_pp)
+                        if algorithm == 'devig_consensus' and quote['outcome'] in consensus:
+                            raw_p = consensus[quote['outcome']]
+                        if algorithm == 'economics_risk_adjusted':
+                            prior = quote.get('p_market') or raw_p
+                            raw_p = shrink_probabilities((raw_p,), (prior,), 1, k=2.0)[0][0]
+                        ev = pay.ev(quote['odds']) if algorithm != 'devig_consensus' else raw_p * quote['odds'] - 1.0
+                        q_fill = q_fill_model(ev, 1.0)
+                        effective = economics_effective_ev(ev, q_fill, cfg.execution_cost)
+                        kelly = max(0.0, fractional_kelly(raw_p, quote['odds'], cfg.fractional_kelly))
+                        risk_penalty = 0.0
+                        if algorithm == 'economics_risk_adjusted':
+                            # 同场盘口共享比赛状态，相关性越高，可执行仓位越保守。
+                            risk_penalty = min(0.5, cfg.risk_correlation * kelly)
+                            kelly *= max(0.0, 1.0 - cfg.risk_correlation)
+                            effective -= risk_penalty
+                        if algorithm == 'microstructure_adjusted':
+                            risk_penalty = min(0.5, abs(float(quote.get('trend_pct') or 0.0)) / 100.0)
+                            raw_p = min(1.0, max(0.0, raw_p - risk_penalty * (1 if quote.get('trend_pct', 0) > 0 else -1)))
+                            ev = raw_p * quote['odds'] - 1.0
+                            effective = economics_effective_ev(ev, q_fill, cfg.execution_cost)
+                        research_only = half_market and half_score is None
+                        settlement_basis = 'half_score_required' if half_market else 'full_score'
+                        if not market.get('known', False):
+                            research_only, settlement_basis = True, 'unknown'
                         estimate = {**quote, 'market': family, 'line': market['line'], 'algorithm': algorithm,
-                                    'p_model': round(pay.effective_probability or 0, 6),
-                                    'ev': round(pay.ev(quote['odds']), 6), 'win_stake': round(pay.win, 6),
-                                    'loss_stake': round(pay.loss, 6), 'push_stake': round(pay.push, 6),
-                                    'tail': round(pay.tail, 6), 'settlement_basis': 'full_score'}
+                                    'p_model': round(min(1.0, max(0.0, raw_p)), 6),
+                                    'ev': round(ev, 6), 'raw_ev': round(pay.ev(quote['odds']), 6),
+                                    'effective_ev': round(effective, 6), 'q_fill': round(q_fill, 6),
+                                    'kelly': round(min(cfg.max_total_exposure, kelly), 6),
+                                    'risk_penalty': round(risk_penalty, 6),
+                                    'devig_spread_pp': round(spread, 6),
+                                    'win_stake': round(pay.win, 6), 'loss_stake': round(pay.loss, 6),
+                                    'push_stake': round(pay.push, 6), 'tail': round(pay.tail, 6),
+                                    'settlement_basis': settlement_basis, 'research_only': research_only,
+                                    'decision_status': 'research_only' if research_only else 'settleable'}
                         candidates.append(estimate)
-                for family in ('HAD', 'OU'):
-                    choices = [c for c in candidates if c['market'] == family]
-                    if family == 'OU' and choices:
-                        main_line = min(choices, key=lambda c: abs(c['p_market'] - .5))['line']
-                        choices = [c for c in choices if c['line'] == main_line]
-                    if choices:
-                        forecasts.append(max(choices, key=lambda c: c['p_model']))
+                forecast_groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+                for candidate in candidates:
+                    forecast_groups.setdefault((candidate['market'], candidate['line']), []).append(candidate)
+                forecasts.extend(max(choices, key=lambda c: c['p_model'])
+                                 for choices in forecast_groups.values() if choices)
                 candidates.sort(key=lambda c: c['ev'], reverse=True)
             evaluations.append({'algorithm': algorithm, 'probabilities': probabilities,
                                 'remaining_goals': list(model_rates) if model_rates else None,
                                 'candidates': candidates, 'forecasts': forecasts,
-                                'recommendations': [c for c in candidates if c['p_model'] >= cfg.min_probability
-                                                    and c['ev'] >= cfg.min_ev and c['tail'] < .001][:1]})
+                                'recommendations': [c for c in candidates if not c['research_only']
+                                                    and c['p_model'] >= cfg.min_probability
+                                                    and c['effective_ev'] >= cfg.min_ev
+                                                    and c['tail'] < .001]})
         primary = next(e for e in evaluations if e['algorithm'] == cfg.primary_algorithm)
         candidates = primary['candidates']
         picks = primary['recommendations']
@@ -362,7 +409,7 @@ class LiveExpertService:
             'forecasts': primary['forecasts'],
             'market_coverage': {'total': len(markets), 'complete': sum(m['complete'] for m in markets),
                                 'fresh': sum(m['fresh'] for m in markets),
-                                'valued': sum(m['complete'] and m['fresh'] and m['supported'] for m in markets) if candidates else 0},
+                                'valued': sum(m['complete'] and m['fresh'] and m['supported'] for m in markets)},
             'reasons': list(dict.fromkeys(reasons)),
             'decision': 'recommend' if picks else 'forecast' if primary['forecasts'] else 'observe',
             'picks': picks, 'has_buy': bool(picks),
@@ -385,6 +432,22 @@ class LiveExpertService:
         else:
             values = list(inv)
         return [p / sum(values) for p in values]
+
+    @staticmethod
+    def _market_consensus(market: Mapping[str, Any], spread_warn_pp: float) -> Tuple[Dict[str, float], float]:
+        """用已有五种去水方法计算同一盘口的共识概率与方法分歧。"""
+        quotes = list(market.get('quotes') or [])
+        if not quotes:
+            return {}, 0.0
+        outcomes = tuple(str(q.get('outcome', '')) for q in quotes)
+        odds = tuple(float(q.get('odds', 0.0)) for q in quotes)
+        try:
+            snap = OddsSnapshot(match_id='live', league='', home='', away='', market=str(market.get('market', '')),
+                                outcomes=outcomes, odds=odds, state=SnapshotState.ACTIVE)
+            fair = devig_snapshot(snap, method=DevigMethod.AUTO, spread_warn_pp=spread_warn_pp)
+            return dict(zip(outcomes, fair.probabilities)), float(fair.method_spread_pp)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return {}, 0.0
 
     def results(self, kind: Optional[str] = None) -> Dict[str, Any]:
         with self._lock:

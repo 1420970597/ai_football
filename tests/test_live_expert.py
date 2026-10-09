@@ -44,6 +44,30 @@ class LiveExpertTests(unittest.TestCase):
         self.assertFalse(row['llm_used'])
         self.assertEqual(row['clock'], '60:00')
 
+    def test_all_standard_market_families_get_candidates(self):
+        hub = self.hub()
+        ts = int(time.time() * 1000)
+        hub._record_ticks([PriceTick('m', '4', '', '0.5', oc, oc, odds, odds, ts)
+                           for oc, odds in [('1', 1.9), ('2', 2.0)]])
+        hub._record_ticks([PriceTick('m', '19', '', '0.5', oc, oc, odds, odds, ts)
+                           for oc, odds in [('1', 1.9), ('2', 2.0)]])
+        row = LiveExpertService().compute(hub.decision_snapshot('m'), hub)
+        families = {c['market'] for c in row['evaluations'][0]['candidates']}
+        self.assertIn('AH', families)
+        self.assertIn('AH_1H', families)
+        self.assertTrue(all('decision_status' in c and 'effective_ev' in c for c in row['evaluations'][0]['candidates']))
+
+    def test_unknown_market_label_is_chinese_and_research_only(self):
+        hub = self.hub()
+        ts = int(time.time() * 1000)
+        hub._record_ticks([PriceTick('m', '998', '', '', oc, oc, 2.0, 2.0, ts)
+                           for oc in ('yes', 'no')])
+        row = LiveExpertService().compute(hub.decision_snapshot('m'), hub)
+        raw = next(m for m in row['markets'] if m['market'] == 'RAW_998')
+        self.assertIn('其他玩法', raw['name'])
+        labels = {q['label'] for q in raw['quotes']}
+        self.assertEqual(labels, {'其他玩法（RAW_998）是', '其他玩法（RAW_998）否'})
+
     def test_continuous_ticks_keep_first_due(self):
         svc = AnalysisService(MagicMock(), realtime=self.hub(), config=AnalysisConfig(use_llm=False))
         svc.notify_price_change(['m'])

@@ -111,6 +111,8 @@ class LedgerEntry:
     entry_score: Optional[List[int]] = None
     entry_clock_s: Optional[float] = None
     settlement_basis: str = "legacy_full_score"
+    decision_status: str = "settleable"
+    research_only: bool = False
     model_version: str = "legacy"
     algorithm: str = "legacy"
     config_version: int = 0
@@ -348,9 +350,13 @@ class DecisionLedger:
         mid, algorithm = str(row["match_id"]), str(row["algorithm"])
         record_kind = "recommendation" if row.get("record_kind") == "recommendation" else "forecast"
         market = str(forecast.get("market", ""))
-        if row.get("finished") or row.get("competition_type") != "real" or market not in ("HAD", "OU"):
+        if (row.get("finished") or row.get("competition_type") != "real"
+                or market.split("_1H")[0] not in ("HAD", "OU", "AH")
+                or forecast.get("research_only")
+                or forecast.get("decision_status") not in (None, "settleable")):
             return 0
-        identity = hashlib.sha256((mid + "|" + algorithm + "|" + market + "|" + record_kind + "|first-live-v1").encode()).hexdigest()
+        line = str(forecast.get("line", ""))
+        identity = hashlib.sha256((mid + "|" + algorithm + "|" + market + "|" + line + "|" + record_kind + "|first-live-v2").encode()).hexdigest()
         with self._lock:
             if self._live_ids is None:
                 self._live_ids = {e.decision_id for e in self.load() if e.decision_id}
@@ -361,10 +367,12 @@ class DecisionLedger:
                 decision_id=identity, match_id=mid, competition_type="real", is_live=True,
                 entry_score=row.get("score"), entry_clock_s=row.get("elapsed_s"),
                 settlement_basis=str(forecast["settlement_basis"]),
+                decision_status=str(forecast.get("decision_status", "settleable")),
+                research_only=bool(forecast.get("research_only", False)),
                 model_version=str(row["model_version"]), algorithm=algorithm,
                 config_version=int(row["config_version"]), league=str(row.get("league", "")),
                 home=str(row.get("home", "")), away=str(row.get("away", "")),
-                market=market, line=str(forecast.get("line", "")), outcome=str(forecast["outcome"]),
+                market=market, line=line, outcome=str(forecast["outcome"]),
                 odds=float(forecast["odds"]), is_pick=True, decision=record_kind,
                 trigger="live_recommendation" if record_kind == "recommendation" else "live_forecast",
                 edge=float(forecast["ev"]), p_market=float(forecast["p_market"]),
