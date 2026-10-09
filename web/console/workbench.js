@@ -1,7 +1,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const S = {view: 'live', type: 'real', league: '', search: '', matches: [], selected: null,
-  request: 0, detailRequest: 0, historyRequest: 0, busy: false, loaded: false, timer: null};
+  request: 0, detailRequest: 0, historyRequest: 0, busy: false, loaded: false, timer: null, chartKey: ''};
 const API = '/api/v1';
 const POLL_MS = 1000;
 const pct = n => Number.isFinite(Number(n)) && n !== null ? (Number(n) * 100).toFixed(1) + '%' : '—';
@@ -63,6 +63,17 @@ function marketRow(market, match) {
   }
   return row;
 }
+function probabilityRows(match, compact = false) {
+  const rows = el('div', {class: compact ? 'match-probabilities' : ''});
+  for (const oc of ['home', 'draw', 'away']) {
+    const value = match.probabilities?.[oc];
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) continue;
+    const bar = el('span'); bar.style.width = Math.max(0, Math.min(100, Number(value) * 100)) + '%';
+    rows.appendChild(el('div', {class: 'probability-row'}, [el('span', {text: {home: '主胜', draw: '平', away: '客胜'}[oc]}),
+      el('div', {class: 'probability-bar'}, [bar]), el('span', {text: pct(value)})]));
+  }
+  return rows;
+}
 function renderMatches() {
   const query = S.search.toLocaleLowerCase().trim();
   const rows = S.matches.filter(m => (!S.league || m.league === S.league) &&
@@ -79,6 +90,7 @@ function renderMatches() {
       onclick: () => selectMatch(match.match_id)}, [el('span', {class: 'team', text: match.home || '队名待补齐', title: match.home || ''}), score,
       el('span', {class: 'team away', text: match.away || '队名待补齐', title: match.away || ''})]));
     for (const market of match.markets || []) card.appendChild(marketRow(market, match));
+    if (Object.keys(match.probabilities || {}).length) card.appendChild(probabilityRows(match, true));
     card.appendChild(el('div', {class: 'match-bottom'}, [el('span', {class: 'observation', text: match.suspended ? '暂停' : (match.has_buy ? 'EV' : '观察')}),
       el('button', {class: 'analysis-link', text: '详情', title: '查看比赛分析', onclick: () => selectMatch(match.match_id)})]));
     return card;
@@ -118,13 +130,14 @@ async function loadLive() {
     $('match-count').previousElementSibling.textContent = '已分析赛事';
     const coverage = data.coverage || {};
     const sourceCount = coverage.source_current ?? coverage.source_upstream ?? coverage.source_derived;
-    $('source-match-count').textContent = Number.isFinite(Number(sourceCount)) ? sourceCount : '—';
-    $('subscribed-count').textContent = Number.isFinite(Number(coverage.subscribed)) ? coverage.subscribed : '—';
+    $('source-match-count').textContent = sourceCount !== null && sourceCount !== undefined && Number.isFinite(Number(sourceCount)) ? sourceCount : '—';
+    $('subscribed-count').textContent = coverage.subscribed !== null && coverage.subscribed !== undefined && Number.isFinite(Number(coverage.subscribed)) ? coverage.subscribed : '—';
+    $('source-match-count').title = coverage.source_age_s !== null && coverage.source_age_s !== undefined ? '赛程缓存 ' + fixed(coverage.source_age_s, 1) + 's' : '赛程未确认';
     const quoteAges = S.matches.map(m => m.quote_age_s).filter(Number.isFinite);
     $('quote-freshness').textContent = quoteAges.length ? fixed(Math.min(...quoteAges), 1) + 's 前' : '—';
     const p95 = (data.performance?.by_type_event_to_result_ms?.[type] || data.performance?.event_to_result_ms)?.p95;
     $('algorithm-latency').textContent = p95 !== null && p95 !== undefined ? fixed(p95, 0) + ' ms' : '—';
-    notice('notice', online ? (S.matches.some(m => m.stale) ? '部分赛事报价较旧；查看详情时请留意数据时间。' : '') : '采集连接暂不可用，当前显示已保存数据。恢复连接后将自动更新。');
+    notice('notice', online ? (S.matches.some(m => m.stale) ? '部分报价过期' : '') : '采集断开 · 显示缓存');
     renderMatches(); renderLeagues();
     if (S.selected) await loadDetail(S.selected);
   } catch (error) {
@@ -140,6 +153,7 @@ async function loadLive() {
   }
 }
 async function selectMatch(mid) {
+  if (S.selected !== mid) S.chartKey = '';
   S.selected = mid;
   $('detail').classList.add('has-detail');
   $('detail').replaceChildren(el('div', {class: 'detail-placeholder'}, [el('h2', {text: '正在读取赛事分析…'})]));
@@ -169,18 +183,34 @@ function detailSection(title) {
   return el('section', {class: 'detail-section'}, [el('h3', {text: title})]);
 }
 function priceChart(points) {
+  points = points.filter(p => Array.isArray(p) && p.length >= 2 && p.every(v => Number.isFinite(Number(v))));
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 300 105'); svg.setAttribute('class', 'chart');
+  svg.setAttribute('viewBox', '0 0 320 130'); svg.setAttribute('class', 'chart');
   svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', '已接收报价的时间走势');
+  if (!points.length) return svg;
+  const add = (tag, attrs, label) => {
+    const node = document.createElementNS(svg.namespaceURI, tag);
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
+    if (label !== undefined) node.textContent = label;
+    svg.appendChild(node); return node;
+  };
   const vals = points.map(p => Number(p[1]));
   const low = Math.min(...vals), high = Math.max(...vals);
+  const bottom = low === high ? low - .01 : low;
+  const top = low === high ? high + .01 : high;
   const start = Number(points[0][0]), end = Number(points.at(-1)[0]);
-  const coordinates = points.map(p => (10 + 280 * (Number(p[0]) - start) / Math.max(1, end - start)).toFixed(1) + ',' +
-    (85 - 65 * (Number(p[1]) - low) / Math.max(.02, high - low)).toFixed(1));
-  const line = document.createElementNS(svg.namespaceURI, 'polyline');
-  line.setAttribute('points', coordinates.join(' ')); line.setAttribute('fill', 'none');
-  line.setAttribute('stroke', '#1c88ff'); line.setAttribute('stroke-width', '2');
-  svg.appendChild(line);
+  for (const [value, y] of [[top, 14], [(top + bottom) / 2, 54], [bottom, 94]]) {
+    add('line', {x1: 40, x2: 310, y1: y, y2: y, stroke: '#e4e6ed'});
+    add('text', {x: 34, y: y + 4, 'text-anchor': 'end', fill: '#7c8899', 'font-size': 10}, fixed(value));
+  }
+  const coordinates = points.map(p => (40 + 270 * (Number(p[0]) - start) / Math.max(1, end - start)).toFixed(1) + ',' +
+    (94 - 80 * (Number(p[1]) - bottom) / (top - bottom)).toFixed(1));
+  add('polyline', {points: coordinates.join(' '), fill: 'none', stroke: '#1c88ff', 'stroke-width': 2});
+  const last = coordinates.at(-1).split(',');
+  add('circle', {cx: last[0], cy: last[1], r: 3, fill: '#1c88ff'});
+  const stamp = ts => new Date(ts).toLocaleTimeString('zh-CN', {hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit'});
+  add('text', {x: 40, y: 117, fill: '#7c8899', 'font-size': 10}, stamp(start));
+  add('text', {x: 310, y: 117, 'text-anchor': 'end', fill: '#7c8899', 'font-size': 10}, stamp(end));
   return svg;
 }
 function renderDetail(match) {
@@ -190,36 +220,46 @@ function renderDetail(match) {
     el('button', {class: 'close-detail', text: '关闭 ×', onclick: closeDetail})]),
     el('h2', {text: (match.home || '主队') + ' vs ' + (match.away || '客队'), title: (match.home || '') + ' vs ' + (match.away || '')}),
     el('span', {class: 'observation', text: (match.score ? match.score.join(' : ') : '— : —') + ' · ' + match.clock})]);
-  const evidence = detailSection('决策依据');
+  const evidence = el('details', {class: 'detail-section evidence-toggle'}, [el('summary', {text: '模型基准 · 数据状态'})]);
   if (match.stale) evidence.appendChild(el('p', {class: 'evidence', text: '报价已过期'}));
   for (const reason of match.reasons || []) evidence.appendChild(el('p', {class: 'evidence', text: reason}));
-  const probability = detailSection('胜平负概率 · 研究基准');
-  for (const [oc, value] of Object.entries(match.probabilities || {})) {
-    const bar = el('span'); bar.style.width = Math.max(0, Math.min(100, Number(value) * 100)) + '%';
-    probability.appendChild(el('div', {class: 'probability-row'}, [el('span', {text: {home: '主胜', draw: '平局', away: '客胜'}[oc] || oc}),
-      el('div', {class: 'probability-bar'}, [bar]), el('span', {text: pct(value)})]));
-  }
+  const probability = detailSection('胜平负概率');
+  probability.title = '市场拟合模型基准，独立预测优势尚未验证';
+  probability.appendChild(probabilityRows(match));
   if (!Object.keys(match.probabilities || {}).length) probability.appendChild(el('p', {class: 'chart-note', text: '暂无概率'}));
   const intensity = detailSection('剩余进球强度');
   const rates = Array.isArray(match.remaining_goals) ? match.remaining_goals : [];
   if (rates.length >= 2) {
+    const values = el('div', {class: 'intensity-grid'});
     for (const [label, value] of [['主队', rates[0]], ['客队', rates[1]]]) {
-      intensity.appendChild(el('div', {class: 'probability-row'}, [el('span', {text: label}),
-        el('div', {class: 'probability-bar'}, [el('span', {style: 'width:' + Math.min(100, Math.max(0, Number(value) * 100)) + '%'})]),
-        el('span', {text: fixed(value, 2)})]));
+      values.appendChild(el('div', {title: '模型预计的剩余进球数'}, [el('span', {text: label + ' λ'}), el('strong', {text: fixed(value, 2)})]));
     }
+    intensity.appendChild(values);
   } else intensity.appendChild(el('p', {class: 'chart-note', text: '暂无强度'}));
   const trend = detailSection('盘口走势');
-  const series = Object.entries(match.price_history || {}).find(([key, points]) => key.startsWith('OU|') && points.length > 1) ||
-    Object.entries(match.price_history || {}).find(([, points]) => points.length > 1);
+  const seriesList = Object.entries(match.price_history || {}).filter(([, points]) => points.length > 1);
+  const series = seriesList.find(([key]) => key === S.chartKey) || seriesList.find(([key]) => key.startsWith('OU|')) || seriesList[0];
   if (series) {
-    trend.appendChild(el('p', {class: 'chart-note', text: series[0].replaceAll('|', ' · ')}));
+    S.chartKey = series[0];
+    const select = el('select', {'aria-label': '走势图盘口', class: 'chart-select'});
+    for (const [key] of seriesList) {
+      const [market, line, outcome] = key.split('|');
+      const option = el('option', {value: key, text: ({HAD: '独赢', OU: '大小球', AH: '让球'}[market.replace('_1H', '')] || market) +
+        (market.includes('_1H') ? ' 上半场' : '') + ' ' + line + ' ' + ({home: '主', away: '客', draw: '平', over: '大', under: '小'}[outcome] || outcome)});
+      option.selected = key === series[0]; select.appendChild(option);
+    }
+    select.addEventListener('change', () => {S.chartKey = select.value; renderDetail(match);});
+    trend.appendChild(select);
     trend.appendChild(priceChart(series[1]));
-    trend.appendChild(el('p', {class: 'chart-note', text: series[1].length + ' 个报价点'}));
   } else trend.appendChild(el('p', {class: 'chart-note', text: '暂无走势'}));
-  const candidates = detailSection('盘口定价与期望收益');
-  for (const candidate of match.candidates || []) candidates.appendChild(el('div', {class: 'candidate'}, [
-    el('span', {text: candidate.label}), el('strong', {text: 'EV ' + pct(candidate.ev)})]));
+  const candidates = detailSection('盘口估值 · 模型基准');
+  const estimates = el('table', {class: 'ev-table'}, [el('thead', {}, [el('tr', {}, ['方向', '赔率', '模型', 'EV'].map(text => el('th', {text})))])]);
+  const estimatesBody = el('tbody');
+  for (const candidate of match.candidates || []) estimatesBody.appendChild(el('tr', {}, [
+    el('td', {text: candidate.label}), el('td', {text: fixed(candidate.odds)}),
+    el('td', {text: pct(candidate.p_model)}), el('td', {class: Number(candidate.ev) > 0 ? 'history-win' : 'history-loss', text: pct(candidate.ev)})]));
+  estimates.appendChild(estimatesBody);
+  if ((match.candidates || []).length) candidates.appendChild(estimates);
   if (!(match.candidates || []).length) candidates.appendChild(el('p', {class: 'chart-note', text: '暂无 EV'}));
   const markets = detailSection('完整盘口'); markets.classList.add('detail-markets');
   for (const market of match.markets || []) markets.appendChild(marketRow(market, match));
@@ -227,7 +267,7 @@ function renderDetail(match) {
   context.appendChild(el('p', {class: 'chart-note', text: '报价 ' + fixed(match.quote_age_s, 1) + 's · 结果 ' + fixed(match.result_age_s, 1) + 's · 计算 ' + fixed(match.compute_ms, 1) + 'ms'}));
   const events = match.events || [];
   context.appendChild(el('p', {class: 'chart-note', text: events.length ? events.length + ' 条状态事件' : '暂无状态事件'}));
-  panel.replaceChildren(header, evidence, probability, intensity, trend, candidates, markets, context);
+  panel.replaceChildren(header, probability, intensity, trend, candidates, markets, context, evidence);
   panel.scrollTop = scroll;
 }
 async function loadHistory() {

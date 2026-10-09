@@ -592,66 +592,33 @@ class ApiApp:
         the rest of the current schedule was still entering the pipeline.
         Keep source, subscription, analysis and display counts separate.
         """
-        source_current: Optional[int] = None
-        source_upstream: Optional[int] = None
-        source_derived: Optional[int] = None
-        source_status = "unknown"
-        current_ids: Optional[set] = None
         try:
-            typed_ids = self.analysis.live_match_ids_by_type(kind)
-            if isinstance(typed_ids, (set, list, tuple, frozenset)):
-                current_ids = set(typed_ids)
-                source_current = len(current_ids)
-                source_status = "fresh"
-            else:
-                typed_ids = self.analysis.live_match_ids()
-            if (source_current is None
-                    and isinstance(typed_ids, (set, list, tuple, frozenset))):
-                current_ids = set(typed_ids)
-                source_current = len(current_ids)
-                source_status = "fresh"
-        except Exception:  # noqa: BLE001 - counters must not break the board
-            pass
-        try:
-            cached = self.analysis.live_coverage(kind)
-            if isinstance(cached, Mapping):
-                source_current = (_as_int_or_none(cached.get("source_current"))
-                                  if source_current is None else source_current)
-                source_upstream = _as_int_or_none(cached.get("source_upstream"))
-                source_derived = _as_int_or_none(cached.get("source_derived"))
-                source_status = str(cached.get("source_status") or source_status)
+            coverage = self.analysis.live_coverage(kind)
         except (AttributeError, TypeError):
-            # Compatibility with small test doubles and older service objects.
-            pass
-        subscribed: Optional[int] = None
-        subscribed_total: Optional[int] = None
-        book_matches: Optional[int] = None
-        if realtime is not None:
-            try:
-                subscribed_ids = set(realtime.subscribed())
-                subscribed_total = len(subscribed_ids)
-                subscribed = (len(current_ids & subscribed_ids)
-                              if current_ids is not None else subscribed_total)
-            except (AttributeError, TypeError):
-                subscribed = _as_int_or_none(getattr(realtime.stats, "subscribed", None))
-                subscribed_total = subscribed
-            try:
-                book = getattr(realtime, "live", None)
-                count = getattr(book, "n_matches", None)
-                book_matches = _as_int_or_none(count() if callable(count) else None)
-            except (AttributeError, TypeError):
-                pass
-        return {
-            "source_current": source_current,
-            "source_upstream": source_upstream,
-            "source_derived": source_derived,
-            "source_status": source_status,
-            "subscribed": subscribed,
-            "subscribed_total": subscribed_total,
-            "quotes": book_matches,
-            "analyzed": int(displayed),
-            "displayed": int(displayed),
-        }
+            coverage = {}
+        if not isinstance(coverage, dict):
+            coverage = dict(coverage) if isinstance(coverage, Mapping) else {}
+        try:
+            current_ids = self.analysis.live_match_ids_by_type(kind, refresh=False)
+        except (AttributeError, TypeError):
+            current_ids = None
+        try:
+            subscribed_ids = set(realtime.subscribed()) if realtime is not None else set()
+        except (AttributeError, TypeError):
+            subscribed_ids = set()
+        try:
+            quote_matches = realtime.live.n_matches() if realtime is not None else None
+        except (AttributeError, TypeError):
+            quote_matches = None
+        coverage.update(
+            subscribed=(len(current_ids & subscribed_ids)
+                        if current_ids is not None else None),
+            subscribed_total=len(subscribed_ids),
+            quotes=quote_matches,
+            analyzed=displayed,
+            displayed=displayed,
+        )
+        return coverage
 
     @staticmethod
     def _public_live_row(row: Mapping[str, Any], connected: bool) -> Dict[str, Any]:
@@ -1497,10 +1464,14 @@ def _start_background(
                 live = list(source.live_match_ids(SOCCER_SPORT_ID))
             except Exception as exc:  # noqa: BLE001 - 订阅源失败不终止推送
                 print("警告：获取订阅列表失败：%s" % exc)
+                if hub.subscribed():
+                    raise  # Hub preserves the active subscription on provider failure.
                 live = _mids_from_local_trends()
                 if live:
                     print("提示：改用本地已知 %d 场建立订阅（会话不可用时的自愈）"
                           % len(live))
+                else:
+                    raise  # An unavailable source is not an authoritative empty schedule.
             if max_matches > 0:
                 live = live[:max_matches]
             return live

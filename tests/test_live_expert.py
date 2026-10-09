@@ -114,7 +114,9 @@ class LiveExpertTests(unittest.TestCase):
         svc.decide_matches(['m'])
         app = ApiApp(MagicMock())
         app._analysis = svc
-        svc.live_match_ids = lambda: {'m', 'other'}
+        svc._live_cache = (time.time(), {'m', 'other'})
+        svc._live_type_cache = (time.time(), {'real': {'m', 'other'}})
+        svc._live_source = 'schedule'
         hub._subscribed = ['m']
         code, response = app.dispatch('GET', '/api/v1/workbench', {}, {})
         self.assertEqual(code, 200)
@@ -124,13 +126,47 @@ class LiveExpertTests(unittest.TestCase):
         self.assertEqual(response['coverage']['subscribed'], 1)
         self.assertEqual(response['coverage']['analyzed'], 1)
         self.assertEqual(response['coverage']['displayed'], 1)
-        with patch.object(hub.live, 'health', side_effect=AssertionError('full book scan')):
+        with patch.object(hub.live, 'health') as book_health, \
+                patch.object(svc, 'health') as full_health, \
+                patch.object(svc, 'live_match_ids') as fetch_source:
             code, _ = app.dispatch('GET', '/api/v1/workbench', {}, {})
             self.assertEqual(code, 200)
+            book_health.assert_not_called()
+            full_health.assert_not_called()
+            fetch_source.assert_not_called()
         code, _ = app.dispatch('GET', '/api/v1/workbench/nope', {}, {})
         self.assertEqual(code, 404)
         code, _ = app.dispatch('GET', '/api/v1/workbench', {'type': ['bogus']}, {})
         self.assertEqual(code, 400)
+
+    def test_unknown_coverage_does_not_count_virtual_as_real(self):
+        from api.app import ApiApp
+        hub = self.hub()
+        hub._subscribed = ['virtual', 'unknown']
+        svc = AnalysisService(MagicMock(), realtime=hub, config=AnalysisConfig(use_llm=False))
+        svc._upstream_count_cache = (time.time(), {'upstream': 20, 'derived': 18})
+        app = ApiApp(MagicMock())
+        app._analysis = svc
+        code, response = app.dispatch('GET', '/api/v1/workbench', {}, {})
+        self.assertEqual(code, 200)
+        self.assertIsNone(response['coverage']['source_current'])
+        self.assertIsNone(response['coverage']['source_upstream'])
+        self.assertIsNone(response['coverage']['subscribed'])
+        self.assertEqual(response['coverage']['subscribed_total'], 2)
+
+    def test_push_fallback_splits_virtual_and_unknown_matches(self):
+        hub = self.hub()
+        hub._info['v'] = {'league': 'EAFC', 'sport_id': '1'}
+        now = int(time.time() * 1000)
+        hub._record_ticks([PriceTick(mid, '2', '2', '2.5', 'Over', 'Over', 2, 2, now)
+                           for mid in ['v', 'unknown']])
+        valuation = MagicMock()
+        valuation.source.schedule.side_effect = RuntimeError('source unavailable')
+        svc = AnalysisService(valuation, realtime=hub, config=AnalysisConfig(use_llm=False))
+        self.assertEqual(svc.live_match_ids_by_type('real'), {'m'})
+        self.assertEqual(svc.live_match_ids_by_type('virtual'), {'v'})
+        self.assertEqual(svc.live_match_ids_by_type('unknown'), {'unknown'})
+        self.assertEqual(svc.live_coverage('real')['source_status'], 'push')
 
 
 class HistoryTypeIsolationTests(unittest.TestCase):

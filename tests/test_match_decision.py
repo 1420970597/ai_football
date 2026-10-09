@@ -678,6 +678,33 @@ class TestNoArtificialCap(unittest.TestCase):
         self.assertEqual(h._pick_mids(), [])
         self.assertTrue(h._mids_provider_failed)
 
+    def test_subscription_refresh_preserves_failure_but_clears_confirmed_empty(self) -> None:
+        from types import SimpleNamespace
+        from collector.leyu_realtime import RealtimeHub
+
+        for refreshed, expected in [(RuntimeError("source unavailable"), ["current"]),
+                                    ([], [])]:
+            with self.subTest(refreshed=refreshed):
+                provider = mock.Mock(side_effect=[["current"], refreshed])
+                session_provider = SimpleNamespace(
+                    acquire=lambda: SimpleNamespace(host="https://example.test",
+                                                   request_id="test", origin=""))
+                h = RealtimeHub(
+                    session_provider, mids_provider=provider,
+                    subscribe_interval_s=0, resume=False)
+                feed = mock.Mock()
+                calls = [0]
+                def recv(calls=calls, hub=h) -> None:
+                    calls[0] += 1
+                    if calls[0] > 1:
+                        hub._stop.set()
+                    return None
+                feed.recv.side_effect = recv
+                with mock.patch("collector.leyu_realtime.LEYUFeed", return_value=feed):
+                    h._run()
+                self.assertEqual(h.subscribed(), expected)
+                self.assertEqual(feed.subscribe_odds.call_args.args[0], expected)
+
     def test_subscription_source_filters_soccer(self) -> None:
         """订阅源必须只取**进行中的足球**：乐鱼同网关也返回篮球/网球。
 
