@@ -42,6 +42,8 @@ async (page) => {
       experiments:{paired_opportunities:10,paired:{economics_control:{accuracy:.7,roi:.2,stake_units:10},economics_llm:{accuracy:.8,roi:.3,stake_units:5}},coverage:.5,profit_difference:-.5,accuracy_difference:.1,review_status:{ready:10},conclusion:'样本不足'},
       overall: {graded: 1, pending: 0, hit_rate: 1, roi: .5, matches: 1}, entries: [{at: '2026-01-01T12:00:00Z',
         home: '测试主队', away: '测试客队', label: '全场小2.25', odds: 2, ft_score: [1, 1], status: 'half_won', pnl: .5, competition_type: 'real'}]}});
+    if (url.pathname.endsWith('/recommendations')) return route.fulfill({json: {open: [{match_id:'test-real', home:'测试主队', away:'测试客队', market_open:true,
+      pick: {label:'全场大2.25', odds:1.95, p_model:.6, confidence:.55, composite_confidence:.55, hit_count:1, miss_count:0}}], closed: [], summary:{open:1,closed:0,won:0,lost:0,pending:0}}});
     if (url.pathname.startsWith('/api/v1/workbench/')) return route.fulfill({json: _PLACEHOLDER_MATCH});
     const type = url.searchParams.get('type');
     const match = {..._PLACEHOLDER_MATCH};
@@ -56,9 +58,7 @@ async (page) => {
   const baseURL = new URL(page.url()).origin;
   await page.goto(baseURL + '/');
   await page.locator('.match-card').waitFor();
-  assert(await page.locator('.buy-card').count() === 1, 'homepage displays aggregated recommended buy');
-  assert(await page.locator('.buy-metrics').textContent().then(t=>t.includes('置信度') && t.includes('仓位')), 'recommendation contains confidence and position');
-  assert(await page.locator('header nav button').count() === 3, 'live/history/settings primary pages');
+  assert(await page.locator('header nav button').count() === 4, 'recommendation/live/history/settings primary pages');
   assert(await page.locator('#source-match-count').textContent() === '3', 'source coverage is distinct from results');
   assert(await page.locator('#subscribed-count').textContent() === '2', 'typed subscription coverage');
   assert(await page.locator('.match-probabilities .probability-row').count() === 3, 'list includes probability bars');
@@ -76,6 +76,10 @@ async (page) => {
   await page.getByRole('searchbox').fill('不存在的球队');
   assert(await page.getByText('没有符合筛选的赛事').isVisible(), 'search empty state');
   await page.getByRole('button', {name: '清除筛选', exact: true}).click();
+  await page.getByRole('button', {name: '推荐买入', exact: true}).click();
+  await page.locator('.buy-card').first().waitFor();
+  assert(await page.locator('#open-recommendation-count').textContent() === '1 个', 'recommendation menu open quote');
+  assert(await page.locator('.buy-metrics').textContent().then(t=>t.includes('命中') && t.includes('赔率状态')), 'recommendation contains evidence and market state');
   await page.getByRole('button', {name: '战绩', exact: true}).click();
   await page.getByText('赢半', {exact: true}).waitFor();
   assert(await page.locator('#history-portfolio').textContent().then(t=>t.includes('20.0%')), 'aggregated portfolio returns');

@@ -1,7 +1,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const S = {view: 'live', type: 'real', league: '', search: '', matches: [], selected: null,
-  request: 0, detailRequest: 0, historyRequest: 0, historyOffset: 0, historyNext: null, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false};
+  request: 0, detailRequest: 0, historyRequest: 0, recommendationsRequest: 0, historyOffset: 0, historyNext: null, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false};
 const API = '/api/v1';
 const POLL_MS = 1000;
 const algorithmLabel = a => ({economic_ensemble:'经济学汇总', economics_control:'纯经济学', economics_llm:'经济学 + LLM', poisson_market: '盘口 Poisson', poisson_time_decay: '衰减 Poisson',
@@ -32,14 +32,15 @@ async function get(path) {
 }
 function switchView(view) {
   S.view = view;
-  for (const key of ['live', 'history', 'settings']) {
+  for (const key of ['live', 'recommendations', 'history', 'settings']) {
     $(key + '-view').hidden = key !== view;
     $('nav-' + key).classList.toggle('active', key === view);
     if (key === view) $('nav-' + key).setAttribute('aria-current', 'page');
     else $('nav-' + key).removeAttribute('aria-current');
   }
   location.hash = view;
-  if (view === 'history') loadHistory();
+  if (view === 'recommendations') loadRecommendations();
+  else if (view === 'history') loadHistory();
   else if (view === 'settings') loadSettings();
   else loadLive();
 }
@@ -83,8 +84,7 @@ function renderRecommendations(rows) {
   const picks = rows.flatMap(match => match.suspended ? [] : (match.picks || []).map(pick => ({match,pick})))
     .sort((a,b) => Number(b.pick.composite_confidence ?? b.match.recommendation_confidence ?? b.pick.confidence ?? 0) -
       Number(a.pick.composite_confidence ?? a.match.recommendation_confidence ?? a.pick.confidence ?? 0));
-  $('recommendation-count').textContent = picks.length + ' 项';
-  $('recommendations').replaceChildren(...picks.slice(0,12).map(({match,pick}) => el('button', {class:'buy-card', onclick:()=>selectMatch(match.match_id)}, [
+  return picks.slice(0, 100).map(({match,pick}) => el('button', {class:'buy-card', onclick:()=>selectMatch(match.match_id)}, [
     el('span',{class:'buy-match',text:match.home + ' · ' + match.away}),
     el('strong',{text:pick.label + ' @' + fixed(pick.odds) + (pick.odds_live === false ? ' · 等待新赔率' : '')}),
     el('div',{class:'buy-metrics'},[
@@ -93,14 +93,73 @@ function renderRecommendations(rows) {
       el('span',{text:'命中 ' + fixed(pick.hit_count, 1) + ' · 未中 ' + fixed(pick.miss_count, 1)}),
       el('span',{text:'综合 ' + pct(pick.composite_confidence ?? match.recommendation_confidence)}),
       el('span',{text:'仓位 ' + pct(pick.kelly)})])
-  ])));
-  if (!picks.length) $('recommendations').appendChild(el('div',{class:'buy-empty',text:'暂无满足门槛的推荐'}));
+  ]));
+}
+
+function renderRecommendationCard(item) {
+  const match = item.match || item;
+  const pick = item.pick || {};
+  return el('button', {class:'buy-card', onclick:()=> {
+    if (match.match_id) { S.view = 'live'; switchView('live'); selectMatch(match.match_id); }
+  }}, [
+    el('span',{class:'buy-match',text:(match.home || '主队') + ' · ' + (match.away || '客队')}),
+    el('strong',{text:(pick.label || item.label || '盘口') + ' @' + fixed(pick.odds ?? item.odds) + (pick.odds_live === false ? ' · 等待新赔率' : '')}),
+    el('div',{class:'buy-metrics'},[
+      el('span',{text:'概率 ' + pct(pick.p_model ?? item.p_fused)}),
+      el('span',{text:'置信度 ' + pct(pick.confidence ?? item.confidence)}),
+      el('span',{text:'命中 ' + fixed(pick.hit_count ?? item.hit_count, 1) + ' · 未中 ' + fixed(pick.miss_count ?? item.miss_count, 1)}),
+      el('span',{text:'综合 ' + pct(pick.composite_confidence ?? item.composite_confidence)}),
+      el('span',{text:'赔率状态 ' + (item.market_open ? '开启' : '已关闭')})])
+  ]);
+}
+
+function renderRecommendationsPage(data) {
+  const open = data.open || [];
+  const closed = data.closed || [];
+  const summary = data.summary || {};
+  $('recommendations-stats').replaceChildren(...[
+    ['开启盘口', open.length], ['关闭盘口', closed.length], ['正确', summary.won || 0],
+    ['错误', summary.lost || 0], ['待结算', summary.pending || 0]
+  ].map(([label, value]) => el('div', {}, [el('span', {text: label}), el('strong', {text: String(value)})])));
+  $('open-recommendation-count').textContent = open.length + ' 个';
+  $('open-recommendations').replaceChildren(...(open.length ? open.map(renderRecommendationCard) : [el('div',{class:'buy-empty',text:'暂无开启盘口推荐'})]));
+  $('closed-recommendation-count').textContent = closed.length + ' 个';
+  const statusLabel = {won:'正确', lost:'错误', half_won:'赢半', half_lost:'输半', push:'走水', pending:'待结算', void:'无法结算'};
+  const rows = closed.map(item => {
+    const date = new Date(item.at);
+    const time = Number.isNaN(date.getTime()) ? item.at : date.toLocaleString('zh-CN', {hour12:false});
+    const status = statusLabel[item.status] || item.status || '待结算';
+    const kind = ['won','half_won'].includes(item.status) ? 'history-win' : ['lost','half_lost'].includes(item.status) ? 'history-loss' : '';
+    return el('tr', {}, [
+      el('td', {text: time}),
+      el('td', {text: (item.home || '主队') + ' vs ' + (item.away || '客队')}, [el('small',{text:item.label || item.market || '盘口'})]),
+      el('td', {text: fixed(item.odds)}),
+      el('td', {class:kind, text:status}),
+      el('td', {class:kind, text:['pending','void'].includes(item.status) ? '—' : (item.pnl > 0 ? '+' : '') + fixed(item.pnl)})
+    ]);
+  });
+  $('closed-recommendations').replaceChildren(...rows);
+  $('closed-recommendations-empty').hidden = !!rows.length;
+}
+
+async function loadRecommendations() {
+  const request = ++S.recommendationsRequest;
+  $('recommendations-refresh').disabled = true;
+  try {
+    const data = await get('/recommendations?type=' + encodeURIComponent(S.type));
+    if (request !== S.recommendationsRequest || S.view !== 'recommendations') return;
+    renderRecommendationsPage(data);
+    notice('recommendations-notice', data.source_age_s != null ? '实时盘口更新于 ' + fixed(data.source_age_s, 1) + 's 前' : '');
+  } catch (error) {
+    if (request === S.recommendationsRequest) notice('recommendations-notice', error.message + '，可点击刷新重试。', true);
+  } finally {
+    if (request === S.recommendationsRequest) $('recommendations-refresh').disabled = false;
+  }
 }
 function renderMatches() {
   const query = S.search.toLocaleLowerCase().trim();
   const rows = S.matches.filter(m => (!S.league || m.league === S.league) &&
     (!query || [m.league, m.home, m.away, m.match_id].join(' ').toLocaleLowerCase().includes(query)));
-  renderRecommendations(rows);
   $('list-count').textContent = rows.length + ' 场';
   $('list-title').textContent = S.league || '实时赛事';
   const focus = document.activeElement?.getAttribute('data-focus');
@@ -536,7 +595,12 @@ for (const button of document.querySelectorAll('[data-type]')) button.addEventLi
   loadLive();
 });
 document.addEventListener('keydown', event => {if (event.key === 'Escape') closeDetail();});
-window.addEventListener('hashchange', () => {const view = ['history', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live'; if (S.view !== view) switchView(view);});
-async function poll() {await loadLive(); S.timer = setTimeout(poll, POLL_MS);}
-if (['history', 'settings'].includes(location.hash.slice(1))) switchView(location.hash.slice(1));
+window.addEventListener('hashchange', () => {const view = ['recommendations', 'history', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live'; if (S.view !== view) switchView(view);});
+async function poll() {
+  if (S.view === 'recommendations') await loadRecommendations();
+  else if (S.view === 'live') await loadLive();
+  S.timer = setTimeout(poll, POLL_MS);
+}
+$('nav-recommendations').addEventListener('click', () => switchView('recommendations'));
+if (['recommendations', 'history', 'settings'].includes(location.hash.slice(1))) switchView(location.hash.slice(1));
 poll();

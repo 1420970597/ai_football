@@ -295,6 +295,7 @@ class ApiApp:
             ("GET", "/board", self.h_board),
             ("GET", "/workbench", self.h_workbench),
             ("GET", "/workbench/<id>", self.h_workbench_detail),
+            ("GET", "/recommendations", self.h_recommendations),
             ("GET", "/llm", self.h_llm),
             ("GET", "/settings", self.h_settings),
             ("POST", "/settings", self.h_settings_save),
@@ -574,8 +575,12 @@ class ApiApp:
         rows = []
         for row in result.pop("decisions"):
             public = self._public_live_row(row, bool(realtime.get("connected")))
-            if not public.get('picks') and persisted_recommendations.get(str(public.get('match_id', ''))):
-                public['picks'] = persisted_recommendations[str(public['match_id'])]
+            persisted = persisted_recommendations.get(str(public.get('match_id', '')), [])
+            if persisted:
+                existing_keys = {(str(p.get('market', '')), str(p.get('line', '')), str(p.get('outcome', '')))
+                                 for p in public.get('picks') or []}
+                public['picks'] = list(public.get('picks') or []) + [p for p in persisted
+                    if (str(p.get('market', '')), str(p.get('line', '')), str(p.get('outcome', ''))) not in existing_keys]
                 public['has_buy'] = True
                 public['decision'] = 'recommend'
                 public['recommendation_retained'] = True
@@ -694,19 +699,82 @@ class ApiApp:
         rt = self.analysis.realtime
         connected = bool(rt is not None and rt.stats.connected)
         public = self._public_live_row(row, connected)
-        if not public.get('picks'):
-            try:
-                persisted = self.analysis.ledger.live_recommendations([match_id]).get(str(match_id), [])
-            except (AttributeError, TypeError, ValueError):
-                persisted = []
-            if persisted:
-                public['picks'] = persisted
-                public['has_buy'] = True
-                public['decision'] = 'recommend'
-                public['recommendation_retained'] = True
+        try:
+            persisted = self.analysis.ledger.live_recommendations([match_id]).get(str(match_id), [])
+        except (AttributeError, TypeError, ValueError):
+            persisted = []
+        if persisted:
+            existing_keys = {(str(p.get('market', '')), str(p.get('line', '')), str(p.get('outcome', '')))
+                             for p in public.get('picks') or []}
+            public['picks'] = list(public.get('picks') or []) + [p for p in persisted
+                if (str(p.get('market', '')), str(p.get('line', '')), str(p.get('outcome', ''))) not in existing_keys]
+            public['has_buy'] = True
+            public['decision'] = 'recommend'
+            public['recommendation_retained'] = True
         self._attach_recommendation_evidence(public)
         public["llm_review"] = self.analysis.live_review.public(row)
         return public
+
+    def h_recommendations(self, query: Mapping[str, List[str]],
+                          body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """Return recommended quotes split by current market availability.
+
+        ``open`` is based on the current live book: a quote remains open when
+        its market is still present, even if the recommendation was made only
+        once or the latest quote is temporarily stale. ``closed`` contains
+        persisted recommendation decisions no longer present in that live
+        book, including their settlement result.
+        """
+        kind = _q1(query, "type", "real")
+        if kind not in ("real", "virtual", "unknown", "all"):
+            raise BadRequest("type 必须是 real/virtual/unknown/all")
+        live = self.h_workbench({"type": [kind]}, {}, "")
+        live_rows = {str(row.get("match_id")): row for row in live.get("matches", [])}
+        current: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+        for mid, row in live_rows.items():
+            for pick in row.get("picks") or []:
+                market = next((m for m in row.get("markets") or []
+                               if str(m.get("market")) == str(pick.get("market"))
+                               and str(m.get("line", "")) == str(pick.get("line", ""))), None)
+                quote = next((q for q in (market or {}).get("quotes", [])
+                              if str(q.get("outcome")) == str(pick.get("outcome"))), None)
+                # A market being stale is not the same as being closed. The
+                # retained decision remains in the open section as long as
+                # the live feed still publishes that market.
+                market_open = bool(market and not row.get("finished") and
+                                   not row.get("suspended"))
+                item = {"match_id": mid, "league": row.get("league", ""),
+                        "home": row.get("home", ""), "away": row.get("away", ""),
+                        "score": row.get("score"), "clock": row.get("clock"),
+                        "market_open": market_open, "stale": row.get("stale", False),
+                        "pick": dict(pick)}
+                if quote:
+                    item["pick"]["odds"] = quote.get("odds", item["pick"].get("odds"))
+                    item["pick"]["odds_live"] = True
+                key = (mid, str(pick.get("market", "")), str(pick.get("line", "")),
+                       str(pick.get("outcome", "")))
+                current[key] = item
+        entries = self.analysis.ledger.recommendation_entries(competition_type=kind)
+        closed: List[Dict[str, Any]] = []
+        for entry in entries:
+            key = (str(entry.get("match_id", "")), str(entry.get("market", "")),
+                   str(entry.get("line", "")), str(entry.get("outcome", "")))
+            current_item = current.get(key)
+            if current_item and current_item.get("market_open"):
+                continue
+            closed.append(entry)
+        open_items = [item for item in current.values() if item.get("market_open")]
+        open_items.sort(key=lambda item: -float((item.get("pick") or {}).get("composite_confidence") or 0))
+        closed.sort(key=lambda entry: str(entry.get("at", "")), reverse=True)
+        summary = {
+            "open": len(open_items), "closed": len(closed),
+            "won": sum(entry.get("status") in ("won", "half_won") for entry in closed),
+            "lost": sum(entry.get("status") in ("lost", "half_lost") for entry in closed),
+            "pending": sum(entry.get("status") == "pending" for entry in closed),
+        }
+        return {"open": open_items, "closed": closed[:1000], "summary": summary,
+                "source_age_s": live.get("coverage", {}).get("source_age_s"),
+                "generated_at": datetime.now(timezone.utc).isoformat()}
 
     def h_settings(self, query: Mapping[str, List[str]],
                    body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:

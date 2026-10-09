@@ -932,6 +932,21 @@ class DecisionLedger:
                 out.setdefault(str(item.get('match_id', '')), []).append(pick)
             return out
 
+    def recommendation_entries(self, competition_type: Optional[str] = None,
+                              limit: int = 5000) -> List[Dict[str, Any]]:
+        """Return persisted recommendation decisions for the split board."""
+        with self._lock:
+            self._sync_db()
+            if not self._db:
+                return []
+            where = "trigger='live_recommendation' AND is_pick=1"
+            params: list[str] = []
+            if competition_type and competition_type != 'all':
+                where += ' AND competition_type=?'
+                params.append(competition_type)
+            rows = self._db.entries(where, params, max(1, min(limit, 10000)))
+            return [LedgerEntry.from_dict(row).as_dict() for row in rows]
+
     def experiment_stats(self, competition_type: Optional[str] = None, days: int = 0) -> Dict[str, Any]:
         if not self._db:
             return {}

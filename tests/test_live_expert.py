@@ -181,6 +181,29 @@ class LiveExpertTests(unittest.TestCase):
         code, _ = app.dispatch('GET', '/api/v1/workbench', {'type': ['bogus']}, {})
         self.assertEqual(code, 400)
 
+    def test_recommendations_api_splits_open_and_closed_quotes(self):
+        from api.app import ApiApp
+        from service.ledger import LedgerEntry
+        import tempfile
+        hub = self.hub()
+        with tempfile.TemporaryDirectory() as root:
+            svc = AnalysisService(MagicMock(), realtime=hub, config=AnalysisConfig(use_llm=False, ledger_root=root))
+            svc.decide_matches(['m'])
+            pick = {'market': 'OU', 'line': '2.25', 'outcome': 'over', 'label': '全场大2.25',
+                    'odds': 1.9, 'p_model': .6, 'confidence': .6}
+            svc.ledger._append([LedgerEntry(at='2026-01-01T00:00:00Z', match_id='closed',
+                                             decision_id='closed', competition_type='real', is_pick=True,
+                                             algorithm='economic_ensemble', trigger='live_recommendation',
+                                             market='OU', line='2.25', outcome='over', label='关闭盘口',
+                                             odds=2.0, status='won', pnl=1.0)])
+            # Inject a single current decision; its market is present in the live book.
+            svc.live_expert._recommendations['m'] = {'at': '2026-01-01T00:00:00Z', 'at_epoch': time.time(), 'picks': [pick]}
+            app = ApiApp(MagicMock(), analysis=svc)
+            code, response = app.dispatch('GET', '/api/v1/recommendations', {'type': ['real']}, {})
+            self.assertEqual(code, 200)
+            self.assertTrue(any(item['match_id'] == 'm' for item in response['open']))
+            self.assertTrue(any(item['match_id'] == 'closed' and item['status'] == 'won' for item in response['closed']))
+
     def test_unknown_coverage_does_not_count_virtual_as_real(self):
         from api.app import ApiApp
         hub = self.hub()

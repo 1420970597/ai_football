@@ -79,6 +79,14 @@ class LedgerDatabaseTests(unittest.TestCase):
             self.assertEqual(restored[0]['odds'], 2.1)
             self.assertEqual(ledger.live_recommendations(['missing']), {})
 
+    def test_recommendation_entries_include_pending_and_settled(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            ledger._append([self.row(decision_id='open', trigger='live_recommendation', status='pending'),
+                            self.row(decision_id='done', trigger='live_recommendation', status='won')])
+            entries = ledger.recommendation_entries('real')
+            self.assertEqual({entry['status'] for entry in entries}, {'pending', 'won'})
+
     def test_portfolio_excludes_algorithm_duplicates_but_ignores_display_cohort(self):
         with tempfile.TemporaryDirectory() as root:
             ledger=DecisionLedger(root)
