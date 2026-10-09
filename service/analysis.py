@@ -1786,6 +1786,17 @@ class AnalysisService:
             self._live_type_cache = None
             live = self._live_ids_from_push()
             if live is not None:
+                by_type = {}
+                for mid in live:
+                    snapshot = (getattr(self.realtime, "decision_snapshot", None)
+                                if self.realtime is not None else None)
+                    try:
+                        info = (snapshot(mid).get("info", {})
+                                if callable(snapshot) else {})
+                    except (AttributeError, TypeError):
+                        info = {}
+                    by_type.setdefault(competition_type(info), set()).add(mid)
+                self._live_type_cache = (now, by_type)
                 self._live_source = "push"
                 self._live_error = err
             else:
@@ -1798,11 +1809,13 @@ class AnalysisService:
         self._live_cache = (now, live)
         return live
 
-    def live_match_ids_by_type(self, kind: str = "all") -> Optional[set]:
+    def live_match_ids_by_type(self, kind: str = "all", *,
+                               refresh: bool = True) -> Optional[set]:
         """Return current football IDs split by real/virtual/unknown type."""
-        self.live_match_ids()
+        if refresh:
+            self.live_match_ids()
         cached = self._live_type_cache
-        if cached is None or time.time() - cached[0] >= 30.0:
+        if cached is None:
             return None
         if kind in ("", "all"):
             out: set = set()
@@ -1810,6 +1823,27 @@ class AnalysisService:
                 out.update(mids)
             return out
         return set(cached[1].get(kind, set()))
+
+    def live_coverage(self, kind: str = "all") -> Dict[str, Any]:
+        """Read background coverage caches without REST, disk or book scans.
+
+        The upstream football counter includes virtual matches and the venue's
+        pre-kickoff grace window. It is only comparable with the all-type view.
+        Preserve cache age so an outage cannot turn old counts into fresh ones.
+        """
+        ids = self.live_match_ids_by_type(kind, refresh=False)
+        cached = self._live_cache
+        upstream = self._upstream_count_cache
+        return {
+            "source_current": len(ids) if ids is not None else None,
+            "source_status": self._live_source or "unknown",
+            "source_age_s": (round(max(0.0, time.time() - cached[0]), 1)
+                             if cached is not None else None),
+            "source_upstream": (upstream[1].get("upstream")
+                                if kind == "all" and upstream else None),
+            "source_derived": (upstream[1].get("derived")
+                               if kind == "all" and upstream else None),
+        }
 
     def _live_ids_from_push(self) -> Optional[set]:
         """从推送流推导进行中赛事（`LiveBook` 留存的最新赔率表）。

@@ -200,6 +200,15 @@ function renderDetail(match) {
       el('div', {class: 'probability-bar'}, [bar]), el('span', {text: pct(value)})]));
   }
   if (!Object.keys(match.probabilities || {}).length) probability.appendChild(el('p', {class: 'chart-note', text: '暂无概率'}));
+  const intensity = detailSection('剩余进球强度');
+  const rates = Array.isArray(match.remaining_goals) ? match.remaining_goals : [];
+  if (rates.length >= 2) {
+    for (const [label, value] of [['主队', rates[0]], ['客队', rates[1]]]) {
+      intensity.appendChild(el('div', {class: 'probability-row'}, [el('span', {text: label}),
+        el('div', {class: 'probability-bar'}, [el('span', {style: 'width:' + Math.min(100, Math.max(0, Number(value) * 100)) + '%'})]),
+        el('span', {text: fixed(value, 2)})]));
+    }
+  } else intensity.appendChild(el('p', {class: 'chart-note', text: '暂无强度'}));
   const trend = detailSection('盘口走势');
   const series = Object.entries(match.price_history || {}).find(([key, points]) => key.startsWith('OU|') && points.length > 1) ||
     Object.entries(match.price_history || {}).find(([, points]) => points.length > 1);
@@ -218,7 +227,7 @@ function renderDetail(match) {
   context.appendChild(el('p', {class: 'chart-note', text: '报价 ' + fixed(match.quote_age_s, 1) + 's · 结果 ' + fixed(match.result_age_s, 1) + 's · 计算 ' + fixed(match.compute_ms, 1) + 'ms'}));
   const events = match.events || [];
   context.appendChild(el('p', {class: 'chart-note', text: events.length ? events.length + ' 条状态事件' : '暂无状态事件'}));
-  panel.replaceChildren(header, evidence, probability, trend, candidates, markets, context);
+  panel.replaceChildren(header, evidence, probability, intensity, trend, candidates, markets, context);
   panel.scrollTop = scroll;
 }
 async function loadHistory() {

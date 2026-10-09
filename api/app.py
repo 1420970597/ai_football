@@ -613,15 +613,15 @@ class ApiApp:
         except Exception:  # noqa: BLE001 - counters must not break the board
             pass
         try:
-            health = self.analysis.health()
-            live = health.get("live") if isinstance(health, Mapping) else None
-            if kind in ("real", "all") and isinstance(live, Mapping):
-                source_upstream = _as_int_or_none(live.get("upstream"))
-                source_derived = _as_int_or_none(live.get("derived"))
-                source_status = str(live.get("source") or source_status)
-                if source_current is None:
-                    source_current = _as_int_or_none(live.get("count"))
-        except Exception:  # noqa: BLE001 - optional observability only
+            cached = self.analysis.live_coverage(kind)
+            if isinstance(cached, Mapping):
+                source_current = (_as_int_or_none(cached.get("source_current"))
+                                  if source_current is None else source_current)
+                source_upstream = _as_int_or_none(cached.get("source_upstream"))
+                source_derived = _as_int_or_none(cached.get("source_derived"))
+                source_status = str(cached.get("source_status") or source_status)
+        except (AttributeError, TypeError):
+            # Compatibility with small test doubles and older service objects.
             pass
         subscribed: Optional[int] = None
         subscribed_total: Optional[int] = None
@@ -636,11 +636,10 @@ class ApiApp:
                 subscribed = _as_int_or_none(getattr(realtime.stats, "subscribed", None))
                 subscribed_total = subscribed
             try:
-                rt_health = realtime.health()
-                book = rt_health.get("live_book") if isinstance(rt_health, Mapping) else None
-                if isinstance(book, Mapping):
-                    book_matches = _as_int_or_none(book.get("matches"))
-            except Exception:  # noqa: BLE001 - optional observability only
+                book = getattr(realtime, "live", None)
+                count = getattr(book, "n_matches", None)
+                book_matches = _as_int_or_none(count() if callable(count) else None)
+            except (AttributeError, TypeError):
                 pass
         return {
             "source_current": source_current,

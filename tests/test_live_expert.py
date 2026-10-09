@@ -123,6 +123,7 @@ class LiveExpertTests(unittest.TestCase):
         self.assertEqual(response['coverage']['source_current'], 2)
         self.assertEqual(response['coverage']['subscribed'], 1)
         self.assertEqual(response['coverage']['analyzed'], 1)
+        self.assertEqual(response['coverage']['displayed'], 1)
         with patch.object(hub.live, 'health', side_effect=AssertionError('full book scan')):
             code, _ = app.dispatch('GET', '/api/v1/workbench', {}, {})
             self.assertEqual(code, 200)
