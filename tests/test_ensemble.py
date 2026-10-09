@@ -1,11 +1,21 @@
 import unittest
 from dataclasses import replace
 
-from core.ensemble import adaptive_weights, pool
+from core.ensemble import adaptive_weights, algorithm_alerts, pool
 from service.runtime_settings import RuntimeConfig
 
 
 class EnsembleTests(unittest.TestCase):
+    def test_algorithm_alert_requires_minimum_samples_and_threshold(self):
+        evidence = {'rows': [dict(algorithm='a', wins=0, losses=1)] * 29 +
+                            [dict(algorithm='b', wins=0, losses=1)] * 30}
+        alerts = algorithm_alerts(['a', 'b'], evidence, min_samples=30, threshold=.5)
+        self.assertEqual(alerts[0]['status'], 'insufficient')
+        self.assertEqual(alerts[1]['status'], 'warning')
+        self.assertEqual(alerts[1]['accuracy'], 0.0)
+
+    def test_algorithm_alert_can_be_disabled(self):
+        self.assertEqual(algorithm_alerts(['a'], {'rows': []}, enabled=False), [])
     def test_sparse_prior_clusters_and_weight_cap(self):
         empty=adaptive_weights(['a','b'],{'rows':[]})
         self.assertEqual(empty['weights'],{'a':.5,'b':.5})

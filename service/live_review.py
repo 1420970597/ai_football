@@ -35,10 +35,14 @@ class LiveReview:
         self.record_error = ""
 
     def configure(self, cfg: RuntimeConfig, version: int) -> None:
-        client = (LLMClient(LLMConfig(base_url=cfg.llm_base_url, model=cfg.llm_model,
-                                    api_key=cfg.llm_api_key or None, timeout_s=cfg.llm_timeout_s,
-                                    max_retries=1, temperature=cfg.llm_temperature,
-                                    max_tokens=cfg.llm_max_tokens)) if cfg.llm_enabled else None)
+        client = None
+        if cfg.llm_enabled:
+            client = LLMClient(LLMConfig(
+                base_url=cfg.llm_base_url, model=cfg.llm_model,
+                api_key=cfg.llm_api_key or None, timeout_s=cfg.llm_timeout_s,
+                max_retries=2, temperature=cfg.llm_temperature,
+                max_tokens=cfg.llm_max_tokens,
+                fallback_models=tuple(x.strip() for x in cfg.llm_fallback_models.split(',') if x.strip())))
         with self._lock:
             self._config, self._version, self._client = cfg, version, client
             self._queue.clear()
@@ -94,7 +98,8 @@ class LiveReview:
                 return False
             mid, row = self._queue.popitem(last=False)
             client, cfg, version = self._client, self._config, self._version
-        if not client or row["config_version"] != version or time.time() * 1000 - row["published_at_ms"] > 30000:
+        max_age_ms = cfg.llm_review_max_age_s * 1000
+        if not client or row["config_version"] != version or time.time() * 1000 - row["published_at_ms"] > max_age_ms:
             self.discarded += 1
             self._record(row, {"status":"expired"})
             return True
@@ -133,7 +138,7 @@ class LiveReview:
             review.update(status='error',reason='LLM审核失败或超时',error_code=code)
             self.errors += 1
         review['latency_ms'] = round((time.monotonic()-started)*1000,3)
-        if time.time()*1000-row['published_at_ms']>30000 or version!=self._version:
+        if time.time()*1000-row['published_at_ms'] > cfg.llm_review_max_age_s * 1000 or version!=self._version:
             review['status']='expired'
         self._record(row,review)
         with self._lock:
@@ -153,11 +158,14 @@ class LiveReview:
             if not review:
                 return {"status": "pending"}
             if (review["config_version"] != row["config_version"] or review["score"] != row["score"]
-                    or time.time() * 1000 - review["published_at_ms"] > 30000):
+                    or time.time() * 1000 - review["published_at_ms"] > self._config.llm_review_max_age_s * 1000):
                 return {"status": "expired", "input_at": review["input_at"]}
             return dict(review)
 
     def health(self) -> Dict[str, Any]:
         with self._lock:
+            client_health = self._client.health() if self._client else {}
             return {"enabled": self._config.llm_enabled, "pending": len(self._queue),
-                    "completed": self.completed, "errors": self.errors, "discarded": self.discarded, "experiment_enabled": self._config.llm_experiment_enabled, "record_error":self.record_error}
+                    "completed": self.completed, "errors": self.errors, "discarded": self.discarded,
+                    "experiment_enabled": self._config.llm_experiment_enabled,
+                    "record_error": self.record_error, "client": client_health}

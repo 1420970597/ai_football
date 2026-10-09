@@ -69,6 +69,15 @@ class LiveExpertTests(unittest.TestCase):
         labels = {q['label'] for q in raw['quotes']}
         self.assertEqual(labels, {'其他玩法（RAW_998）是', '其他玩法（RAW_998）否'})
 
+    def test_missing_ah_line_does_not_discard_match(self):
+        hub = self.hub()
+        ts = int(time.time() * 1000)
+        hub._record_ticks([PriceTick('m', '4', '', '', oc, oc, odds, odds, ts)
+                           for oc, odds in [('1', 1.9), ('2', 2.0)]])
+        row = LiveExpertService().compute(hub.decision_snapshot('m'), hub)
+        self.assertTrue(row)
+        self.assertTrue(row['evaluations'])
+
     def test_realtime_health_exposes_session_provider_state(self):
         hub = RealtimeHub(NullSessionProvider("test"), resume=False)
         health = hub.health()

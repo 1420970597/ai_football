@@ -68,6 +68,7 @@ ENV_API_KEY = "PI_LLM_API_KEY"
 ENV_PROVIDER = "PI_LLM_PROVIDER"
 ENV_MODEL = "PI_LLM_MODEL"
 ENV_BASE_URL = "PI_LLM_BASE_URL"
+ENV_FALLBACK_MODELS = "PI_LLM_FALLBACK_MODELS"
 
 DEFAULT_TIMEOUT_S = 120.0
 #: 默认重试次数。上游实测会间歇返回 502
@@ -129,6 +130,8 @@ class LLMConfig:
     cooldown_s: float = DEFAULT_COOLDOWN_S
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = 2048
+    #: 仅在上游返回 502/503 时尝试，逗号分隔的可选模型。
+    fallback_models: Sequence[str] = ()
     source: str = ""   # 配置来源说明（排障用）
 
     def __post_init__(self) -> None:
@@ -157,6 +160,7 @@ class LLMConfig:
             "timeout_s": self.timeout_s,
             "failure_threshold": self.failure_threshold,
             "cooldown_s": self.cooldown_s,
+            "fallback_models": list(self.fallback_models),
         }
 
 
@@ -319,6 +323,7 @@ def load_pi_config(
     return LLMConfig(
         base_url=_safe_base_url(base), model=mdl, provider=prov, api_key=key,
         max_tokens=max_tokens, source=src,
+        fallback_models=tuple(x.strip() for x in (e.get(ENV_FALLBACK_MODELS) or "").split(",") if x.strip()),
         # 熔断阈值：0 = 关闭（恢复“每次都真打”的旧行为，便于对比排查）
         failure_threshold=_env_int("ANALYSIS_LLM_FAILURE_THRESHOLD",
                                    DEFAULT_FAILURE_THRESHOLD),
@@ -476,6 +481,7 @@ class LLMClient:
         self._open_until = 0.0          # 单调时钟；>now 表示熔断中
         self._skipped = 0               # 被熔断拦下、未发网络的调用数
         self._half_open = False         # 本次探测是否半开
+        self._last_model = ""
 
     # -- 熔断 ---------------------------------------------------------------
 
@@ -532,15 +538,35 @@ class LLMClient:
         return ctx
 
     def _post(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(self.config.chat_url, data=body, method="POST")
-        req.add_header("Content-Type", "application/json")
-        if self.config.api_key:
-            req.add_header("Authorization", "Bearer " + self.config.api_key)
-        req.add_header("Accept", "application/json")
-        with urllib.request.urlopen(req, timeout=self.config.timeout_s,
-                                    context=self._ssl_ctx()) as resp:
-            raw = resp.read().decode("utf-8", "replace")
+        models = [str(payload.get("model") or self.config.model)]
+        models.extend(m for m in self.config.fallback_models if m and m not in models)
+        last_error: Optional[Exception] = None
+        raw = ""
+        for index, model in enumerate(models):
+            request_payload = dict(payload)
+            request_payload["model"] = model
+            body = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(self.config.chat_url, data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
+            if self.config.api_key:
+                req.add_header("Authorization", "Bearer " + self.config.api_key)
+            req.add_header("Accept", "application/json")
+            try:
+                with urllib.request.urlopen(req, timeout=self.config.timeout_s,
+                                            context=self._ssl_ctx()) as resp:
+                    raw = resp.read().decode("utf-8", "replace")
+                self._last_model = model
+                break
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                if exc.code < 500 or index == len(models) - 1:
+                    raise
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                last_error = exc
+                if index == len(models) - 1:
+                    raise
+        if last_error is not None and not raw:
+            raise last_error
         try:
             data = json.loads(raw)
         except ValueError as exc:
@@ -725,6 +751,7 @@ class LLMClient:
             "avg_latency_s": round(self.total_latency_s / self.calls, 2)
                              if self.calls else None,
             "last_error": self.last_error,
+            "last_model": self._last_model,
             "breaker": {
                 "open": until > 0.0,
                 "consecutive_failures": self._consecutive_failures,

@@ -1328,7 +1328,11 @@ class AnalysisService:
         out["summary"] = out["overall"]
         cfg = self.runtime_settings.config
         from core.ensemble import adaptive_weights
-        out["algorithm_weights"] = adaptive_weights(cfg.algorithms, self.ledger.performance_evidence(), cfg.weight_prior_matches, cfg.max_algorithm_weight)
+        evidence = self.ledger.performance_evidence()
+        out["algorithm_weights"] = adaptive_weights(cfg.algorithms, evidence, cfg.weight_prior_matches, cfg.max_algorithm_weight)
+        from core.ensemble import algorithm_alerts
+        out["algorithm_alerts"] = algorithm_alerts(cfg.algorithms, evidence, cfg.algorithm_alert_min_samples,
+                                                     cfg.algorithm_alert_threshold, cfg.algorithm_alert_enabled)
         return out
 
     def refresh_live_matches(self, max_matches: int = 0,

@@ -40,15 +40,20 @@ class RuntimeConfig:
     execution_cost: float = 0.001
     weight_prior_matches: float = 20.0
     max_algorithm_weight: float = 0.60
+    algorithm_alert_enabled: bool = True
+    algorithm_alert_min_samples: int = 30
+    algorithm_alert_threshold: float = 0.50
     llm_experiment_enabled: bool = True
     llm_enabled: bool = False
     llm_base_url: str = ""
     llm_model: str = ""
+    llm_fallback_models: str = ""
     llm_api_key: str = field(default="", repr=False)
     llm_timeout_s: float = 20.0
     llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
     llm_interval_s: float = 60.0
+    llm_review_max_age_s: float = 120.0
 
 
 RANGES = {
@@ -61,6 +66,9 @@ RANGES = {
     "execution_cost": (0.0, 0.1),
     "llm_temperature": (0.0, 2.0), "llm_max_tokens": (256, 8192),
     "llm_interval_s": (10.0, 3600.0),
+    "llm_review_max_age_s": (30.0, 600.0),
+    "algorithm_alert_min_samples": (1, 100000),
+    "algorithm_alert_threshold": (0.0, 1.0),
 }
 
 
@@ -77,7 +85,7 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
             raise ValueError("%s 必须在 %s~%s 之间" % (key, lo, hi))
         if key == "llm_max_tokens" and (not isinstance(v, int)):
             raise ValueError("llm_max_tokens 必须是整数")
-    for name in ("llm_enabled", "llm_experiment_enabled"):
+    for name in ("llm_enabled", "llm_experiment_enabled", "algorithm_alert_enabled"):
         if name in values and not isinstance(values[name], bool):
             raise ValueError(name + " 必须是布尔值")
     if "algorithms" in values:
@@ -85,7 +93,7 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
         if not isinstance(a, (list, tuple)) or not a or any(not isinstance(x, str) or x not in ALGORITHMS for x in a):
             raise ValueError("至少启用一个有效算法")
         values["algorithms"] = tuple(dict.fromkeys(a))
-    for key in ("primary_algorithm", "devig_method", "llm_base_url", "llm_model", "llm_api_key"):
+    for key in ("primary_algorithm", "devig_method", "llm_base_url", "llm_model", "llm_fallback_models", "llm_api_key"):
         if key in values:
             if not isinstance(values[key], str) or len(values[key]) > 4096:
                 raise ValueError("%s 必须是有效字符串" % key)

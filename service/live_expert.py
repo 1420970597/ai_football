@@ -347,7 +347,14 @@ class LiveExpertService:
                             settlement_dist = remaining_distribution(model_rates[0]*fraction_half, model_rates[1]*fraction_half, score)
                         else:
                             settlement_dist = dist
-                        pay = payment(settlement_dist, base_family, quote['outcome'], market['line'])
+                        # Some feeds publish an AH family row without a handicap
+                        # line.  It is still useful to show the raw quote, but it
+                        # cannot be valued; skip that quote without discarding the
+                        # rest of the match or its LLM review.
+                        try:
+                            pay = payment(settlement_dist, base_family, quote['outcome'], market['line'])
+                        except (TypeError, ValueError):
+                            continue
                         raw_p = pay.effective_probability or 0.0
                         consensus, spread = self._market_consensus(market, cfg.devig_spread_warn_pp)
                         if algorithm == 'devig_consensus' and quote['outcome'] in consensus:

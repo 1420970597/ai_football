@@ -5,6 +5,46 @@ import math
 from typing import Any, Dict, Mapping, Sequence
 
 
+def algorithm_alerts(algorithms: Sequence[str], evidence: Mapping[str, Any],
+                     min_samples: int = 30, threshold: float = .5,
+                     enabled: bool = True) -> list[Dict[str, Any]]:
+    """Return low-accuracy warnings from settled real-football evidence.
+
+    Evidence is grouped by match, so each row is one independent match
+    observation.  Alerts never change weights or disable an algorithm.
+    """
+    if not enabled:
+        return []
+    buckets: Dict[str, list] = {a: [] for a in algorithms}
+    for row in evidence.get('rows', []):
+        algorithm = row.get('algorithm')
+        if algorithm in buckets:
+            buckets[algorithm].append(row)
+    alerts: list[Dict[str, Any]] = []
+    for algorithm, rows in buckets.items():
+        # Evidence rows are already clustered by match. Split outcomes affect
+        # accuracy, but must not reduce the number of effective matches.
+        samples = len(rows)
+        wins = sum(float(r.get('wins') or 0) for r in rows)
+        accuracy = wins / samples if samples else None
+        item: Dict[str, Any] = {
+            'algorithm': algorithm, 'samples': samples,
+            'accuracy': round(accuracy, 6) if accuracy is not None else None,
+            'threshold': threshold,
+            'status': 'insufficient' if samples < min_samples else 'ok',
+        }
+        if samples >= min_samples and accuracy is not None and accuracy < threshold:
+            item.update(status='warning', severity='warning',
+                        message='过去%d个有效样本正确率%.1f%%，低于%.1f%%' %
+                        (samples, accuracy * 100, threshold * 100))
+        elif samples < min_samples:
+            item['message'] = '有效样本不足（%d/%d）' % (samples, min_samples)
+        else:
+            item['message'] = '正确率未低于阈值'
+        alerts.append(item)
+    return alerts
+
+
 def adaptive_weights(algorithms: Sequence[str], evidence: Mapping[str, Any],
                      prior_matches: float = 20.0, max_weight: float = .6) -> Dict[str, Any]:
     buckets: Dict[str, list] = {a: [] for a in algorithms}

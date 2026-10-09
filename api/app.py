@@ -648,7 +648,13 @@ class ApiApp:
 
     def h_settings(self, query: Mapping[str, List[str]],
                    body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
-        return {**self.analysis.runtime_settings.public(), "llm_review": self.analysis.live_review.health()}
+        out = {**self.analysis.runtime_settings.public(), "llm_review": self.analysis.live_review.health()}
+        from core.ensemble import algorithm_alerts
+        cfg = self.analysis.runtime_settings.config
+        out["algorithm_alerts"] = algorithm_alerts(cfg.algorithms, self.analysis.ledger.performance_evidence(),
+                                                     cfg.algorithm_alert_min_samples, cfg.algorithm_alert_threshold,
+                                                     cfg.algorithm_alert_enabled)
+        return out
 
     def h_settings_save(self, query: Mapping[str, List[str]],
                         body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:

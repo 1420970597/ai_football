@@ -121,7 +121,7 @@ function renderMatches() {
     if (forecast && !match.stale) card.appendChild(el('div', {class: 'signal-row'}, [
       el('strong', {text: forecast.label}), el('span', {text: 'P ' + pct(forecast.p_model) + ' · EV ' + pct(forecast.ev)})]));
     if (Object.keys(match.probabilities || {}).length) card.appendChild(probabilityRows(match, true));
-    card.appendChild(el('div', {class: 'match-bottom'}, [el('span', {class: 'observation', text: match.suspended ? '暂停' : (match.has_buy ? '模拟建议' : match.decision === 'forecast' && !match.stale ? '模拟判断' : '观察')}),
+  card.appendChild(el('div', {class: 'match-bottom'}, [el('span', {class: 'observation', text: match.suspended ? '暂停' : (match.has_buy ? '研究建议' : match.decision === 'forecast' && !match.stale ? '研究判断' : '观察')}),
       el('button', {class: 'analysis-link', text: '详情', title: '查看比赛分析', onclick: () => selectMatch(match.match_id)})]));
     return card;
   });
@@ -263,7 +263,7 @@ function renderDetail(match) {
   }
   if (!(match.forecasts || []).length) decisions.appendChild(el('p', {class: 'chart-note', text: '数据未满足判断条件'}));
   for (const pick of match.picks || []) decisions.appendChild(el('div', {class: 'recommendation-row'}, [
-    el('strong', {text: '模拟建议 · ' + pick.label}), el('span', {text: '@' + fixed(pick.odds) + ' · P ' + pct(pick.p_model) + ' · EV ' + pct(pick.ev)})]));
+    el('strong', {text: '研究建议 · ' + pick.label}), el('span', {text: '@' + fixed(pick.odds) + ' · P ' + pct(pick.p_model) + ' · EV ' + pct(pick.ev)})]));
   const review = match.llm_review || {status: 'disabled'};
   if (review.status !== 'disabled') decisions.appendChild(el('p', {class: 'chart-note', text: 'LLM · ' +
     ({ready: {confirm:'认可', watch:'观察', reject:'不认可'}[review.verdict] + ' ' + pct(review.confidence),
@@ -351,6 +351,8 @@ async function loadHistory(reset = true) {
         el('td',{text:pct(stats.roi)}), el('td',{text:pct(stats.confidence_roi)}), el('td',{text:pct(stats.allocated_roi)}),
         el('td',{text:pct(w.weight)}),el('td',{text:(w.matches ?? '—') + ' / ' + fixed(w.brier,3)})]);
     }));
+    const alerts = (data.algorithm_alerts || []).filter(a => a.status === 'warning');
+    $('algorithm-alerts').replaceChildren(...(alerts.length ? alerts.map(a => el('div', {class: 'notice error', text: algorithmLabel(a.algorithm) + '：' + a.message})) : []));
     $('confidence-returns').replaceChildren(...Object.entries(data.by_confidence || {}).map(([band,stats])=>el('div',{class:'algorithm-card'},[
       el('strong',{text:band}),el('span',{text:'正确率 ' + pct(stats.accuracy) + ' · ' + stats.accuracy_samples + ' 注 · ROI ' + pct(stats.roi)})])));
     const timeline = data.timeline || [];
@@ -358,7 +360,7 @@ async function loadHistory(reset = true) {
     $('profit-chart').replaceChildren();
     if (points.length) {
       const max = Math.max(1,...points.map(p=>Math.abs(p[1])));
-      const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.setAttribute('viewBox','0 0 640 100'); svg.setAttribute('role','img'); svg.setAttribute('aria-label','累计模拟净收益');
+      const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.setAttribute('viewBox','0 0 640 100'); svg.setAttribute('role','img'); svg.setAttribute('aria-label','累计研究净收益');
       const path=document.createElementNS(svg.namespaceURI,'polyline');path.setAttribute('points',points.map(([x,y])=>(20+x*600/Math.max(1,points.length-1))+','+(50-y/max*40)).join(' '));
       path.setAttribute('fill','none');path.setAttribute('stroke','#d89a35');path.setAttribute('stroke-width','2');svg.appendChild(path);$('profit-chart').appendChild(svg);
       $('profit-chart').appendChild(el('small',{text:timeline[0].date + ' → ' + timeline.at(-1).date + ' · 累计净收益 ' + fixed(timeline.at(-1).cum_profit) + 'u'}));
@@ -410,6 +412,9 @@ const SETTING_FIELDS = [
     ['fractional_kelly', '分数 Kelly', 'number', [0,1,.05]],
     ['weight_prior_matches', '权重收缩先验 / 场', 'number', [2,1000,1]],
     ['max_algorithm_weight', '单算法最大权重', 'number', [.2,1,.05]],
+    ['algorithm_alert_enabled', '低正确率预警', 'checkbox'],
+    ['algorithm_alert_min_samples', '预警最小有效样本', 'number', [1,100000,1]],
+    ['algorithm_alert_threshold', '预警正确率阈值', 'number', [0,1,.01]],
     ['max_total_exposure', '同场最大敞口', 'number', [0,1,.01]],
     ['risk_correlation', '同场风险相关性', 'number', [0,.99,.01]],
     ['execution_cost', '执行成本', 'number', [0,.1,.001]],
@@ -423,17 +428,21 @@ const SETTING_FIELDS = [
     ['llm_experiment_enabled', '记录经济学 / LLM 配对实验', 'checkbox'],
     ['llm_base_url', 'API 地址', 'url'],
     ['llm_model', '模型', 'text'],
+    ['llm_fallback_models', '备用模型（逗号分隔）', 'text'],
     ['llm_api_key', 'API Key', 'password'],
     ['llm_timeout_s', '超时 / 秒', 'number', [1,120,1]],
     ['llm_temperature', 'Temperature', 'number', [0,2,.1]],
     ['llm_max_tokens', '输出 Token 上限', 'number', [256,8192,1]],
     ['llm_interval_s', '单场审核间隔 / 秒', 'number', [10,3600,1]],
+    ['llm_review_max_age_s', '审核输入有效期 / 秒', 'number', [30,600,1]],
   ]],
 ];
 function renderSettings(data) {
   S.settingsVersion = data.version;
   $('settings-version').textContent = 'v' + data.version + ' · ' + (data.persistent ? '已持久保存' : '内存配置');
   const cfg = data.settings;
+  const alerts = (data.algorithm_alerts || []).filter(a => a.status === 'warning');
+  notice('settings-notice', alerts.length ? alerts.map(a => a.message).join('；') : data.restore_error || '', !!alerts.length);
   const sections = SETTING_FIELDS.map(([title,fields], index) => {
     const section = el('fieldset', {class: 'settings-section'}, [el('legend', {text: title})]);
     if (index === 0) {
@@ -468,7 +477,7 @@ function renderSettings(data) {
     return section;
   });
   $('settings-fields').replaceChildren(...sections);
-  notice('settings-notice', data.restore_error || '');
+  notice('settings-notice', alerts.length ? alerts.map(a => algorithmLabel(a.algorithm) + '：' + a.message).join('；') : data.restore_error || '', !!alerts.length);
 }
 async function loadSettings() {
   if (S.settingsBusy) return;
