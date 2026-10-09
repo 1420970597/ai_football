@@ -432,13 +432,13 @@ class TestLedgerPersistence(unittest.TestCase):
         self.assertEqual(out["skipped"], 1)
         self.assertEqual(led.load()[0].status, SETTLE_PENDING)
 
-    def test_settle_void_for_half_market_without_ht(self) -> None:
-        """缺半场比分 → void（不得用全场比分硬算上半场盘口）。"""
+    def test_settle_pending_for_half_market_without_ht(self) -> None:
+        """缺半场比分保留待核验，可收到半场证据后重试。"""
         led = DecisionLedger(self.root)
         led._append([self._entry(market="OU_1H(1.5)", outcome="over")])
         out = led.settle({"m1": {"ft": [2, 1]}})
-        self.assertEqual(out["void"], 1)
-        self.assertEqual(led.load()[0].status, SETTLE_VOID)
+        self.assertEqual(out["void"], 0)
+        self.assertEqual(led.load()[0].status, SETTLE_PENDING)
 
     def test_settle_is_idempotent(self) -> None:
         """已结算的条目不会被重复结算（否则 pnl 会累加）。"""
@@ -564,13 +564,13 @@ class TestLedgerFromMatchResult(unittest.TestCase):
 
 
 class TestHalfScoreParsing(unittest.TestCase):
-    """`LEYUMatch.half_score`：S0 = 半场，S1 = 全场。"""
+    """`LEYUMatch.half_score`：S2 = 半场，S1 = 全场。"""
 
     def test_half_and_full(self) -> None:
         from collector.leyu_client import LEYUMatch
         m = LEYUMatch(mid="1", sport_id="1", sport="足球", tid="t",
                       tournament="T", home="A", away="B", start_ms=0,
-                      status=3, score_raw="S0|0:1,S1|2:1")
+                      status=3, score_raw="S2|0:1,S1|2:1")
         self.assertEqual(m.score, (2, 1))
         self.assertEqual(m.half_score, (0, 1))
 
@@ -586,7 +586,7 @@ class TestHalfScoreParsing(unittest.TestCase):
         from collector.leyu_client import LEYUMatch
         m = LEYUMatch(mid="1", sport_id="1", sport="足球", tid="t",
                       tournament="T", home="A", away="B", start_ms=0,
-                      status=3, score_raw="S10|9:9,S1|1:2,S0|0:1")
+                      status=3, score_raw="S10|9:9,S1|1:2,S2|0:1")
         self.assertEqual(m.score, (1, 2))
         self.assertEqual(m.half_score, (0, 1))
 
@@ -1111,7 +1111,7 @@ class TestFinishedMatchesFetchScoresViaOdds(unittest.TestCase):
       * `source.schedule()`（`getOriginalDataPB`）**不返回 `msc` 字段** ——
         全部已结束赛事的 `score_raw` 都是空串，`score` 恒为 `(None, None)`；
       * `source.odds(mids)`（`structureMatchBaseInfoByMidsPB`）**带 `msc`**
-        （`S0|0:1,S1|1:2,…`），是全仓唯一可靠的赛果来源。
+        （`S2|0:1,S1|1:2,…`），是全仓唯一可靠的赛果来源。
 
     因此 `_finished_matches()` 必须用 `odds()` 补比分，否则
     `settle_finished()` 永远集不到赛果 → `graded=0` → 命中率算不出来。
@@ -1191,7 +1191,7 @@ class TestConfirmedFinishedFromSchedule(unittest.TestCase):
 
     修法：结束证据取**并集** ——
       1. `C109` 推送（实时，但覆盖窄）；
-      2. **赛程 `ms==110`**（覆盖全，重启后仍有）。
+      2. **赛程 `ms==3`**（覆盖全，重启后仍有）。
 
     ⚠️ 安全前提不变：仍必须**确证结束**才结算，
     否则会把还在踢的比赛按当前比分算成已定输赢。
@@ -1296,9 +1296,9 @@ class TestAccuracyEndToEndWithRealHub(unittest.TestCase):
             # 1) 真实 Hub 收到比分与结束通知
             hub = RealtimeHub(session_provider=None, trend_root=trend_root)
             hub._handle_message({"cmd": "C103", "cd": _enc(
-                {"mid": "m1", "msc": ["S0|1:0", "S1|2:1"], "mst": "90"})})
+                {"mid": "m1", "msc": ["S2|1:0", "S1|2:1"], "mst": "90"})})
             hub._handle_message({"cmd": "C109", "cd": _enc(
-                [{"mid": "m1", "ms": 110}])})
+                [{"mid": "m1", "ms": 3}])})
             self.assertEqual(hub.score("m1"), (2, 1))
             self.assertTrue(hub.is_finished("m1"))
 
@@ -1516,6 +1516,10 @@ class TestClosingOddsOnlyForSettleableMatches(unittest.TestCase):
 
         svc.ledger = mock.MagicMock()
         svc.ledger.load.return_value = [_Row()]
+        svc.ledger.pending_match_ids.return_value = ['m1']
+        svc.ledger.pregame_pending_ids.return_value = {'m1'}
+        svc.ledger.settle.return_value = {'settled':1,'void':0,'scanned':1,'skipped':0}
+        svc.ledger.performance_evidence.return_value = {'rows':[]}
         svc.ledger.stats.return_value = {}
 
         svc.settle_finished()

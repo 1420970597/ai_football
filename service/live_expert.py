@@ -18,6 +18,7 @@ from core.live_model import (
     MODEL_VERSION, REGULATION_SECONDS, clock_label, clock_seconds,
     competition_type, fit_share, fit_total, payment, remaining_distribution, valid_score,
 )
+from core.ensemble import adaptive_weights, pool
 from core.market_labels import format_market, format_raw_market, normalize_market_name
 from core.economics import effective_ev as economics_effective_ev
 from core.economics import fractional_kelly, q_fill_model, shrink_probabilities
@@ -72,6 +73,11 @@ class LiveExpertService:
         self._recorded: set = set()
         self._recording: set = set()
         self.record_error = ''
+        self.performance_evidence: Dict[str, Any] = {'at':'', 'rows':[]}
+
+    def update_evidence(self, evidence: Mapping[str, Any]) -> None:
+        with self._compute_lock:
+            self.performance_evidence = dict(evidence)
 
     def configure(self, config: RuntimeConfig, version: int) -> None:
         with self._compute_lock:
@@ -163,7 +169,7 @@ class LiveExpertService:
                 return {}
             self._results[mid] = result
             if self.on_decision:
-                for evaluation in result.get('evaluations', []):
+                for evaluation in [*result.get('evaluations', []), result['ensemble']]:
                     for record_kind, items in (('forecast', evaluation['forecasts']),
                                                ('recommendation', evaluation['recommendations'])):
                         for forecast in items:
@@ -209,11 +215,11 @@ class LiveExpertService:
     def _calculate(self, snapshot: Mapping[str, Any]) -> Dict[str, Any]:
         now = time.time()
         cfg = self.config
+        performance = adaptive_weights(cfg.algorithms, self.performance_evidence, cfg.weight_prior_matches, cfg.max_algorithm_weight)
         mid = str(snapshot['match_id'])
         info = dict(snapshot.get('info') or {})
         kind = competition_type(info)
         score = valid_score(snapshot.get('score'))
-        half_score = valid_score(snapshot.get('half_score'))
         status = snapshot.get('status') or {}
         phase = str(status.get('mmp') or '')
         elapsed_s = clock_seconds(status.get('mst'), phase)
@@ -336,8 +342,11 @@ class LiveExpertService:
                         continue
                     for quote in market['quotes']:
                         half_market = family.endswith('_1H')
-                        settlement_dist = (((half_score[0], half_score[1], 1.0),)
-                                           if half_market and half_score is not None else dist)
+                        if half_market and elapsed_s is not None and elapsed_s < 2700:
+                            fraction_half = (2700-elapsed_s)/max(1,REGULATION_SECONDS-elapsed_s)
+                            settlement_dist = remaining_distribution(model_rates[0]*fraction_half, model_rates[1]*fraction_half, score)
+                        else:
+                            settlement_dist = dist
                         pay = payment(settlement_dist, base_family, quote['outcome'], market['line'])
                         raw_p = pay.effective_probability or 0.0
                         consensus, spread = self._market_consensus(market, cfg.devig_spread_warn_pp)
@@ -346,27 +355,29 @@ class LiveExpertService:
                         if algorithm == 'economics_risk_adjusted':
                             prior = quote.get('p_market') or raw_p
                             raw_p = shrink_probabilities((raw_p,), (prior,), 1, k=2.0)[0][0]
-                        ev = pay.ev(quote['odds']) if algorithm != 'devig_consensus' else raw_p * quote['odds'] - 1.0
+                        risk_penalty = 0.0
+                        if algorithm == 'microstructure_adjusted':
+                            risk_penalty = min(0.5, abs(float(quote.get('trend_pct') or 0.0)) / 100.0)
+                            raw_p = min(1.0, max(0.0, raw_p-risk_penalty*(1 if quote.get('trend_pct',0)>0 else -1)))
+                        # Effective probability is conditional on the non-push stake.
+                        # Recalculate price economics after every probability adjustment.
+                        nonpush = pay.win + pay.loss
+                        ev = (raw_p*quote['odds']-1.0)*nonpush
                         q_fill = q_fill_model(ev, 1.0)
                         effective = economics_effective_ev(ev, q_fill, cfg.execution_cost)
                         kelly = max(0.0, fractional_kelly(raw_p, quote['odds'], cfg.fractional_kelly))
-                        risk_penalty = 0.0
                         if algorithm == 'economics_risk_adjusted':
-                            # 同场盘口共享比赛状态，相关性越高，可执行仓位越保守。
-                            risk_penalty = min(0.5, cfg.risk_correlation * kelly)
-                            kelly *= max(0.0, 1.0 - cfg.risk_correlation)
+                            risk_penalty = min(.5, cfg.risk_correlation*kelly)
+                            kelly *= max(0.0,1-cfg.risk_correlation)
                             effective -= risk_penalty
-                        if algorithm == 'microstructure_adjusted':
-                            risk_penalty = min(0.5, abs(float(quote.get('trend_pct') or 0.0)) / 100.0)
-                            raw_p = min(1.0, max(0.0, raw_p - risk_penalty * (1 if quote.get('trend_pct', 0) > 0 else -1)))
-                            ev = raw_p * quote['odds'] - 1.0
-                            effective = economics_effective_ev(ev, q_fill, cfg.execution_cost)
-                        research_only = half_market and half_score is None
+                        research_only = half_market and (elapsed_s is None or elapsed_s>=2700)
                         settlement_basis = 'half_score_required' if half_market else 'full_score'
                         if not market.get('known', False):
                             research_only, settlement_basis = True, 'unknown'
                         estimate = {**quote, 'market': family, 'line': market['line'], 'algorithm': algorithm,
                                     'p_model': round(min(1.0, max(0.0, raw_p)), 6),
+                                    'confidence': performance['algorithms'][algorithm]['posterior_accuracy'],
+                                    'evidence_at':performance.get('at',''),
                                     'ev': round(ev, 6), 'raw_ev': round(pay.ev(quote['odds']), 6),
                                     'effective_ev': round(effective, 6), 'q_fill': round(q_fill, 6),
                                     'kelly': round(min(cfg.max_total_exposure, kelly), 6),
@@ -391,27 +402,28 @@ class LiveExpertService:
                                                     and c['effective_ev'] >= cfg.min_ev
                                                     and c['tail'] < .001]})
         primary = next(e for e in evaluations if e['algorithm'] == cfg.primary_algorithm)
-        candidates = primary['candidates']
-        picks = primary['recommendations']
+        ensemble = pool(evaluations, performance, cfg)
+        candidates = ensemble['candidates']
+        picks = ensemble['recommendations']
         if not direction_available:
             reasons.append('缺少独赢盘口，球队进球强度无法分别识别')
         reasons.append('市场基准模型，独立预测优势待验证')
         return {
             'match_id': mid, **info, 'competition_type': kind, 'version': snapshot['version'],
             'model_version': MODEL_VERSION, 'config_version': self.config_version,
-            'algorithm': cfg.primary_algorithm, 'computed_at': datetime.now(timezone.utc).isoformat(),
+            'algorithm': 'economic_ensemble', 'computed_at': datetime.now(timezone.utc).isoformat(),
             'published_at_ms': int(now * 1000), 'quote_time_ms': newest,
             'score': list(score) if score is not None else None, 'phase': phase,
             'clock': clock_label(status.get('mst'), phase), 'elapsed_s': elapsed_s,
             'finished': bool(snapshot.get('finished')) or phase == '999', 'suspended': bool(snapshot.get('suspended')),
-            'markets': markets, 'candidates': candidates, 'probabilities': primary['probabilities'],
+            'markets': markets, 'candidates': candidates, 'probabilities': {c['outcome']:c['p_model'] for c in candidates if c['market']=='HAD'},
             'remaining_goals': primary['remaining_goals'], 'evaluations': evaluations,
-            'forecasts': primary['forecasts'],
+            'forecasts': ensemble['forecasts'], 'ensemble': ensemble, 'algorithm_performance': performance,
             'market_coverage': {'total': len(markets), 'complete': sum(m['complete'] for m in markets),
                                 'fresh': sum(m['fresh'] for m in markets),
                                 'valued': sum(m['complete'] and m['fresh'] and m['supported'] for m in markets)},
             'reasons': list(dict.fromkeys(reasons)),
-            'decision': 'recommend' if picks else 'forecast' if primary['forecasts'] else 'observe',
+            'decision': 'recommend' if picks else 'forecast' if ensemble['forecasts'] else 'observe',
             'picks': picks, 'has_buy': bool(picks),
             'validation_status': 'research', 'llm_used': False,
             'events': list(snapshot.get('events') or [])[-12:],

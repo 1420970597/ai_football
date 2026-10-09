@@ -38,6 +38,9 @@ class RuntimeConfig:
     max_total_exposure: float = 0.25
     risk_correlation: float = 0.40
     execution_cost: float = 0.001
+    weight_prior_matches: float = 20.0
+    max_algorithm_weight: float = 0.60
+    llm_experiment_enabled: bool = True
     llm_enabled: bool = False
     llm_base_url: str = ""
     llm_model: str = ""
@@ -49,6 +52,7 @@ class RuntimeConfig:
 
 
 RANGES = {
+    "weight_prior_matches": (2.0, 1000.0), "max_algorithm_weight": (0.2, 1.0),
     "min_probability": (0.0, 1.0), "min_ev": (0.0, 1.0),
     "quote_max_age_s": (1.0, 300.0), "state_max_age_s": (5.0, 600.0),
     "anchor_max_age_s": (5.0, 600.0), "llm_timeout_s": (1.0, 120.0),
@@ -73,8 +77,9 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
             raise ValueError("%s 必须在 %s~%s 之间" % (key, lo, hi))
         if key == "llm_max_tokens" and (not isinstance(v, int)):
             raise ValueError("llm_max_tokens 必须是整数")
-    if "llm_enabled" in values and not isinstance(values["llm_enabled"], bool):
-        raise ValueError("llm_enabled 必须是布尔值")
+    for name in ("llm_enabled", "llm_experiment_enabled"):
+        if name in values and not isinstance(values[name], bool):
+            raise ValueError(name + " 必须是布尔值")
     if "algorithms" in values:
         a = values["algorithms"]
         if not isinstance(a, (list, tuple)) or not a or any(not isinstance(x, str) or x not in ALGORITHMS for x in a):

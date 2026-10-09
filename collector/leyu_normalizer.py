@@ -33,7 +33,7 @@
 
 | 条件 | SnapshotState |
 | --- | --- |
-| `ms == 110`（已结束）或盘口缺失 | `DELISTED` |
+| `ms == 3`（已结束）或盘口缺失 | `DELISTED` |
 | 报价(`ctsp`)早于采集时刻超过 `stale_after` | `STALE` |
 | 其余 | `ACTIVE` |
 

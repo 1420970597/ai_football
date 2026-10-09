@@ -51,7 +51,6 @@ from collector.leyu_normalizer import (
 from collector.leyu_realtime import RealtimeHub
 from collector.sources import SOCCER_SPORT_ID
 from core.live_model import competition_type
-from core.settlement import SETTLE_PENDING
 
 from .decision import (
     DECISION_AVOID,
@@ -430,6 +429,8 @@ class AnalysisService:
         self.ledger = DecisionLedger(self.config.ledger_root)        #: 结算线程（定期把已结束赛事的比分回填进台账）
         self._settle_thread: Optional[threading.Thread] = None
         self._settle_stop = threading.Event()
+        self._settle_wake = threading.Event()
+        self._settle_run_lock = threading.Lock()
         self.settle_stats: Dict[str, Any] = {
             "rounds": 0, "settled": 0, "void": 0,
             "last_at": 0.0, "last_error": "",
@@ -479,6 +480,8 @@ class AnalysisService:
     def _bind_runtime_settings(self) -> None:
         self.runtime_settings.bind(self.config.ledger_root)
         self.live_expert.on_decision = self.ledger.record_live if self.ledger.enabled else None
+        self.live_expert.update_evidence(self.ledger.performance_evidence())
+        self.live_review.on_experiment = self.ledger.record_experiment if self.ledger.enabled else None
         self._apply_runtime_settings(self.runtime_settings.config, self.runtime_settings.version)
 
     def update_settings(self, patch: Mapping[str, Any], version: Any) -> Dict[str, Any]:
@@ -590,6 +593,9 @@ class AnalysisService:
         Args:
             mids: 本批发生真实变动的赛事 ID（Hub 已去重）。
         """
+        rt = self.realtime
+        if rt is not None and any(rt.is_finished(str(mid)) for mid in mids):
+            self._settle_wake.set()
         if not self.config.change_trigger or not mids:
             return
         debounce = max(0.0, _to_float(self.config.change_debounce_s,
@@ -914,6 +920,7 @@ class AnalysisService:
 
     def stop_settler(self, timeout: float = 5.0) -> None:
         self._settle_stop.set()
+        self._settle_wake.set()
         t = self._settle_thread
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
@@ -932,10 +939,19 @@ class AnalysisService:
             except Exception as exc:  # noqa: BLE001 - 单轮失败不得退出循环
                 self.settle_stats["last_error"] = "%s: %s" % (
                     type(exc).__name__, exc)
-            if self._settle_stop.wait(interval):
-                return
+            self._settle_wake.wait(interval)
+            self._settle_wake.clear()
 
     def settle_finished(self) -> Dict[str, Any]:
+        # Manual requests cannot run the same upstream batch concurrently.
+        if not self._settle_run_lock.acquire(blocking=False):
+            return {'pending':True, 'reason':'结算正在进行', 'settle':dict(self.settle_stats)}
+        try:
+            return self._settle_finished_once()
+        finally:
+            self._settle_run_lock.release()
+
+    def _settle_finished_once(self) -> Dict[str, Any]:
         """拉取已结束赛事的比分，回填台账并算出本地统计。
 
         ## 三条比分来源（按优先级）
@@ -954,8 +970,7 @@ class AnalysisService:
             结算统计（含 `stats`，即当前命中率/ROI/CLV）。
         """
         self.settle_stats["last_at"] = time.time()
-        pending = {r.match_id for r in self.ledger.load()
-                   if r.status == SETTLE_PENDING}
+        pending = set(self.ledger.pending_match_ids())
         if not pending:
             self.settle_stats["rounds"] = \
                 _to_int(self.settle_stats.get("rounds")) + 1
@@ -975,13 +990,28 @@ class AnalysisService:
         # 新顺序：先用廉价手段（赛程/本地推送）算出能结算的场次，
         # 只对它们补收盘价 —— 既省时间，又完全契合 CLV 的语义
         # （收盘价本就是“该场即将结算时最后一次看到的价”）。
-        confirmed = self._confirmed_finished_mids(pending)
         scores: Dict[str, Any] = {}
+        # Settle persisted terminal push evidence before any upstream work.
+        local_used = self._merge_local_scores(scores, pending, confirmed=set())
+        local_out = self.ledger.settle(scores) if scores else {'settled':0,'void':0,'scanned':0,'skipped':0}
+        self.live_expert.update_evidence(self.ledger.performance_evidence())
+        ordered = sorted(pending - set(scores))
+        cursor = getattr(self, '_settle_cursor', 0) % max(1,len(ordered))
+        batch = set((ordered+ordered)[cursor:cursor+min(60,len(ordered))])
+        self._settle_cursor = cursor + len(batch)
+        if time.monotonic()-getattr(self,'_settle_remote_at',-math.inf)<60:
+            self.settle_stats['rounds'] = _to_int(self.settle_stats.get('rounds'))+1
+            for key in ('settled','void'):
+                self.settle_stats[key] = _to_int(self.settle_stats.get(key))+local_out[key]
+            self.settle_stats.update(pending_matches=len(self.ledger.pending_match_ids()), scores_found=len(scores))
+            return {**local_out,'scores_total':len(scores),'scores_from_push':local_used,
+                    'closing_captured':0,'stats':self.ledger.stats()}
+        self._settle_remote_at = time.monotonic()
+        confirmed = self._confirmed_finished_mids(batch)
         # 本地推送兑底（廉价：纯内存）—— 先做，以便确定可结算集合
-        local_used = self._merge_local_scores(scores, pending,
-                                              confirmed=confirmed)
+        local_used += self._merge_local_scores(scores, batch, confirmed=confirmed)
         # REST 补比分：只对**待结算**的场次调上游
-        for mt in self._finished_matches(mids=pending):
+        for mt in self._finished_matches(mids=batch):
             mid = str(getattr(mt, "mid", "") or "")
             if mid not in pending:
                 continue
@@ -997,10 +1027,16 @@ class AnalysisService:
         # **只对确实能结算的场次**补收盘赔率（CLV 的前置条件，不能事后重建）。
         # 必须在 settle 之前做：settle 会把条目改成终结态，
         # 之后 capture_closing 就不再碰它（避免把状态改回 pending）。
-        closing = self._capture_closing_odds(set(scores)) if scores else 0
+        pregame = self.ledger.pregame_pending_ids()
+        closing = self._capture_closing_odds(set(scores) & pregame) if set(scores) & pregame else 0
         # 显式注解：`settle()` 返回 Dict[str, int]，但下面要挂 `stats`（嵌套字典），
         # 不收宽类型会让静态检查拒绝赋值。
         out: Dict[str, Any] = dict(self.ledger.settle(scores))
+        for key in ('settled','void','scanned','skipped'):
+            out[key] += local_out[key]
+        self.live_expert.update_evidence(self.ledger.performance_evidence())
+        self.settle_stats.update(pending_matches=len(self.ledger.pending_match_ids()), scores_found=len(scores),
+                                 source_batch=len(batch), evidence_missing=len(pending-set(scores)))
         out["closing_captured"] = closing
         out["scores_from_push"] = local_used
         out["scores_total"] = len(scores)
@@ -1140,7 +1176,7 @@ class AnalysisService:
           `settle_finished()` 因此永远集不到赛果 → `graded=0`
           → 命中率/ROI/CLV **永远算不出来**。
         * 而 `source.odds(mids)`（走 `structureMatchBaseInfoByMidsPB`）
-          **带 `msc`**（实测 `S0|0:1,S1|1:2,…`），是全仓唯一可靠的赛果来源。
+          **带 `msc`**（实测 `S2|0:1,S1|1:2,…`），是全仓唯一可靠的赛果来源。
 
         因此这里改为：先用赛程筛出「已结束」的场次，再用 `odds()` 批量
         拉回它们的比分。只对**台账里真的待结算**的场次调 `odds()`
@@ -1176,7 +1212,7 @@ class AnalysisService:
         return [m for m in ready.values() if getattr(m, 'score', (None, None))[0] is not None]
 
     def _confirmed_finished_mids(self, pending: Any) -> set:
-        """赛程中 `ms==110`（已结束）且属于待结算集合的 mid。
+        """赛程中 `ms==3`（已结束）且属于待结算集合的 mid。
 
         为何单独抽一个方法（而不用 `_finished_matches`）：
         后者会额外调 `odds()` 补比分，**on `odds()` 失败就返回空**，
@@ -1216,7 +1252,7 @@ class AnalysisService:
 
           1. `C109` 推送（`rt.finished_mids()`）—— 实时、但只覆盖
              推送存活期间且订阅到的场次；
-          2. **赛程 `ms==110`**（由调用方通过 `confirmed` 传入）——
+          2. **赛程 `ms==3`**（由调用方通过 `confirmed` 传入）——
              覆盖更全（重启后仍有）。
 
         Args:
@@ -1277,7 +1313,7 @@ class AnalysisService:
 
     def ledger_history(self, only_picks: bool = True, limit: int = 300,
                        days: int = 0, competition_type: Optional[str] = None,
-                       algorithm: Optional[str] = None, cohort: str = "all") -> Dict[str, Any]:
+                       algorithm: Optional[str] = None, cohort: str = "all", offset: int = 0) -> Dict[str, Any]:
         """历史决策 vs 实际结果的分组统计 + 明细（用户要求的菜单数据）。
 
         与 `ledger_stats` 的分工：后者是“一句话结论”（总命中率/ROI），
@@ -1287,9 +1323,12 @@ class AnalysisService:
         同时补上结算线程的状态，让用户知道“未结算的还要等多久”。
         """
         out = self.ledger.history(picks_only=only_picks, limit=limit,
-                                  days=days, competition_type=competition_type, algorithm=algorithm, cohort=cohort)
+                                  days=days, competition_type=competition_type, algorithm=algorithm, cohort=cohort, offset=offset)
         out["settle"] = dict(self.settle_stats)
-        out["summary"] = self.ledger.stats(only_picks=only_picks)
+        out["summary"] = out["overall"]
+        cfg = self.runtime_settings.config
+        from core.ensemble import adaptive_weights
+        out["algorithm_weights"] = adaptive_weights(cfg.algorithms, self.ledger.performance_evidence(), cfg.weight_prior_matches, cfg.max_algorithm_weight)
         return out
 
     def refresh_live_matches(self, max_matches: int = 0,

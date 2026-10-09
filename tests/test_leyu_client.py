@@ -304,7 +304,7 @@ class TestParsing(unittest.TestCase):
                     "ms": 1,
                     "mst": "45:00",
                     "mmp": "6",
-                    "msc": "S0|0:1,S1|2:1,S555|3:4",
+                    "msc": "S2|0:1,S1|2:1,S555|3:4",
                     "mcid": "周六019",
                     "betAmount": "136304.12",
                     "mhlu": ["group1/a.png"],
@@ -325,7 +325,7 @@ class TestParsing(unittest.TestCase):
         self.assertAlmostEqual(m.bet_amount, 136304.12, places=2)
 
     def test_score_missing_returns_none(self) -> None:
-        blob = {"matchsList": [{"mid": "1", "msc": "S0|0:1"}]}
+        blob = {"matchsList": [{"mid": "1", "msc": "S2|0:1"}]}
         self.assertEqual(parse_match_list(blob)[0].score, (None, None))
 
     def test_parse_match_list_rejects_non_mapping(self) -> None:
@@ -547,7 +547,7 @@ class TestLiveFieldsRegression(unittest.TestCase):
             "data": [{
                 "mid": "5714088", "mhn": "A", "man": "B", "ms": 1,
                 "mst": "1563", "mmp": "6",
-                "msc": ["S0|0:1", "S1|2:1", "S555|3:4"],
+                "msc": ["S2|0:1", "S1|2:1", "S555|3:4"],
                 "hpsPns": [], "hpsData": [],
             }]
         }

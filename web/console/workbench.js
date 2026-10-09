@@ -1,10 +1,10 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const S = {view: 'live', type: 'real', league: '', search: '', matches: [], selected: null,
-  request: 0, detailRequest: 0, historyRequest: 0, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false};
+  request: 0, detailRequest: 0, historyRequest: 0, historyOffset: 0, historyNext: null, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false};
 const API = '/api/v1';
 const POLL_MS = 1000;
-const algorithmLabel = a => ({poisson_market: '盘口 Poisson', poisson_time_decay: '衰减 Poisson',
+const algorithmLabel = a => ({economic_ensemble:'经济学汇总', economics_control:'纯经济学', economics_llm:'经济学 + LLM', poisson_market: '盘口 Poisson', poisson_time_decay: '衰减 Poisson',
   devig_consensus: '去水共识', economics_risk_adjusted: '经济学风控',
   microstructure_adjusted: '盘口微观结构', legacy: '旧算法'}[a] || a || '—');
 const pct = n => Number.isFinite(Number(n)) && n !== null ? (Number(n) * 100).toFixed(1) + '%' : '—';
@@ -79,10 +79,24 @@ function probabilityRows(match, compact = false) {
   }
   return rows;
 }
+function renderRecommendations(rows) {
+  const picks = rows.flatMap(match => match.stale || match.suspended ? [] : (match.picks || []).map(pick => ({match,pick})))
+    .sort((a,b) => b.pick.effective_ev - a.pick.effective_ev);
+  $('recommendation-count').textContent = picks.length + ' 项';
+  $('recommendations').replaceChildren(...picks.slice(0,12).map(({match,pick}) => el('button', {class:'buy-card', onclick:()=>selectMatch(match.match_id)}, [
+    el('span',{class:'buy-match',text:match.home + ' · ' + match.away}),
+    el('strong',{text:pick.label + ' @' + fixed(pick.odds)}),
+    el('div',{class:'buy-metrics'},[
+      el('span',{text:'概率 ' + pct(pick.p_model)}), el('span',{text:'置信度 ' + pct(pick.confidence)}),
+      el('span',{text:'净EV ' + pct(pick.effective_ev)}), el('span',{text:'仓位 ' + pct(pick.kelly)})])
+  ])));
+  if (!picks.length) $('recommendations').appendChild(el('div',{class:'buy-empty',text:'暂无满足门槛的推荐'}));
+}
 function renderMatches() {
   const query = S.search.toLocaleLowerCase().trim();
   const rows = S.matches.filter(m => (!S.league || m.league === S.league) &&
     (!query || [m.league, m.home, m.away, m.match_id].join(' ').toLocaleLowerCase().includes(query)));
+  renderRecommendations(rows);
   $('list-count').textContent = rows.length + ' 场';
   $('list-title').textContent = S.league || '实时赛事';
   const focus = document.activeElement?.getAttribute('data-focus');
@@ -236,14 +250,16 @@ function renderDetail(match) {
     el('button', {class: 'close-detail', text: '关闭 ×', onclick: closeDetail})]),
     el('h2', {text: (match.home || '主队') + ' vs ' + (match.away || '客队'), title: (match.home || '') + ' vs ' + (match.away || '')}),
     el('span', {class: 'observation', text: (match.score ? match.score.join(' : ') : '— : —') + ' · ' + match.clock})]);
-  const decisions = detailSection('模拟判断');
+  const decisions = detailSection('汇总判断');
   decisions.appendChild(el('div', {class: 'config-version', text: algorithmLabel(match.algorithm) + ' · v' + (match.config_version || '—') +
     ' · ' + ({recorded: '首判已记录', queued: '首判写入中', none: '暂无首判'}[match.recording_status] || '')}));
-  for (const evaluation of match.evaluations || [{algorithm: match.algorithm, forecasts: match.forecasts || []}]) {
-    for (const f of evaluation.forecasts || []) decisions.appendChild(el('div', {class: 'decision-row'}, [
-      el('span', {}, [el('strong', {text: f.label}), el('small', {text: algorithmLabel(evaluation.algorithm)})]),
-      el('span', {text: '@' + fixed(f.odds) + ' · ' + pct(f.p_model)}, [el('small', {text: 'EV ' + pct(f.ev)})])
-    ]));
+  for (const f of match.forecasts || []) {
+    const row = el('div', {class:'decision-row'}, [el('span',{},[el('strong',{text:f.label}),
+      el('small',{text:'置信度 ' + pct(f.confidence) + ' · 分歧 ' + pct(f.disagreement)})]),
+      el('span',{text:'@' + fixed(f.odds) + ' · P ' + pct(f.p_model)},[el('small',{text:'净EV ' + pct(f.effective_ev)})])]);
+    if ((f.members || []).length) row.appendChild(el('details',{class:'member-breakdown'},[el('summary',{text:f.members.length + ' 算法'}),
+      ...f.members.map(m=>el('div',{text:algorithmLabel(m.algorithm) + ' · P ' + pct(m.p_model) + ' · 权重 ' + pct(m.weight)}))]));
+    decisions.appendChild(row);
   }
   if (!(match.forecasts || []).length) decisions.appendChild(el('p', {class: 'chart-note', text: '数据未满足判断条件'}));
   for (const pick of match.picks || []) decisions.appendChild(el('div', {class: 'recommendation-row'}, [
@@ -314,22 +330,55 @@ function renderDetail(match) {
   panel.replaceChildren(header, decisions, probability, intensity, trend, candidates, markets, context, evidence);
   panel.scrollTop = scroll;
 }
-async function loadHistory() {
+async function loadHistory(reset = true) {
+  if (reset !== false) S.historyOffset = 0;
   const request = ++S.historyRequest;
   $('history-refresh').disabled = true;
   try {
-    const data = await get('/ledger/history?limit=300&days=' + encodeURIComponent($('history-days').value) + '&type=' + encodeURIComponent($('history-type').value) + '&algorithm=' + encodeURIComponent($('history-algorithm').value) + '&cohort=' + encodeURIComponent($('history-cohort').value));
+    const data = await get('/ledger/history?limit=100&offset=' + S.historyOffset + '&days=' + encodeURIComponent($('history-days').value) + '&type=' + encodeURIComponent($('history-type').value) + '&algorithm=' + encodeURIComponent($('history-algorithm').value) + '&cohort=' + encodeURIComponent($('history-cohort').value));
     if (request !== S.historyRequest) return;
     const summary = data.overall || {};
-    const metrics = [['独赢正确率', pct(summary.direction_accuracy)], ['独赢样本', String(summary.direction_samples || 0)], ['半注命中率', pct(summary.hit_rate)], ['模拟收益率 ROI', pct(summary.roi)],
-      ['已结算建议', String(summary.graded || 0)], ['待确认赛果', String(summary.pending || 0)]];
+    const metrics = [['全盘口正确率', pct(summary.accuracy ?? summary.hit_rate)], ['有效样本 / 场次', String(summary.accuracy_samples ?? ((summary.won || 0) + (summary.lost || 0))) + ' / ' + (data.settled?.matches || 0)], ['等额 ROI', pct(summary.roi)], ['置信度 ROI', pct(summary.confidence_roi)], ['仓位 ROI', pct(summary.allocated_roi)], ['待确认赛果', String(summary.pending || 0)]];
     $('history-stats').replaceChildren(...metrics.map(([label, value]) => el('div', {}, [el('span', {text: label}), el('strong', {text: value})])));
-    $('history-algorithms').replaceChildren(...Object.entries(data.by_algorithm || {}).map(([algorithm, stats]) => el('div', {class: 'algorithm-card'}, [
-      el('strong', {text: algorithmLabel(algorithm)}), el('span', {text: '独赢 ' + pct(stats.direction_accuracy) + ' / ' + (stats.direction_samples || 0) +
-        ' · 命中 ' + pct(stats.hit_rate) + ' · ROI ' + pct(stats.roi)})])));
+    const portfolio = data.portfolio_summary || {};
+    $('history-portfolio').replaceChildren(...[['正确率',pct(portfolio.accuracy)],['有效样本',String(portfolio.accuracy_samples || 0)],['等额 ROI',pct(portfolio.roi)],['置信度 ROI',pct(portfolio.confidence_roi)],['仓位 ROI',pct(portfolio.allocated_roi)],['净收益',fixed(portfolio.profit_units) + 'u']].map(([label,value])=>el('div',{},[el('span',{text:label}),el('strong',{text:value})])));
+    const weights = data.algorithm_weights?.algorithms || {};
+    $('weight-at').textContent = data.algorithm_weights?.at ? '证据截至 ' + new Date(data.algorithm_weights.at).toLocaleTimeString('zh-CN',{hour12:false}) : '';
+    $('history-algorithms').replaceChildren(...Object.entries(data.by_algorithm || {}).map(([algorithm, stats]) => {
+      const w = weights[algorithm] || {};
+      return el('tr',{},[el('td',{text:algorithmLabel(algorithm)}),
+        el('td',{text:pct(stats.accuracy ?? stats.hit_rate) + ' / ' + (stats.accuracy_samples ?? (stats.won+stats.lost) ?? 0)}),
+        el('td',{text:pct(stats.roi)}), el('td',{text:pct(stats.confidence_roi)}), el('td',{text:pct(stats.allocated_roi)}),
+        el('td',{text:pct(w.weight)}),el('td',{text:(w.matches ?? '—') + ' / ' + fixed(w.brier,3)})]);
+    }));
+    $('confidence-returns').replaceChildren(...Object.entries(data.by_confidence || {}).map(([band,stats])=>el('div',{class:'algorithm-card'},[
+      el('strong',{text:band}),el('span',{text:'正确率 ' + pct(stats.accuracy) + ' · ' + stats.accuracy_samples + ' 注 · ROI ' + pct(stats.roi)})])));
+    const timeline = data.timeline || [];
+    const points = timeline.map((v,i)=>[i,v.cum_profit]);
+    $('profit-chart').replaceChildren();
+    if (points.length) {
+      const max = Math.max(1,...points.map(p=>Math.abs(p[1])));
+      const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.setAttribute('viewBox','0 0 640 100'); svg.setAttribute('role','img'); svg.setAttribute('aria-label','累计模拟净收益');
+      const path=document.createElementNS(svg.namespaceURI,'polyline');path.setAttribute('points',points.map(([x,y])=>(20+x*600/Math.max(1,points.length-1))+','+(50-y/max*40)).join(' '));
+      path.setAttribute('fill','none');path.setAttribute('stroke','#d89a35');path.setAttribute('stroke-width','2');svg.appendChild(path);$('profit-chart').appendChild(svg);
+      $('profit-chart').appendChild(el('small',{text:timeline[0].date + ' → ' + timeline.at(-1).date + ' · 累计净收益 ' + fixed(timeline.at(-1).cum_profit) + 'u'}));
+    }
+    const experiment = data.experiments || {};
+    const paired = experiment.paired || {};
+    $('experiment-status').textContent = '配对 ' + (experiment.paired_opportunities || 0) + ' · ' + (experiment.conclusion || '等待实验样本');
+    $('experiment-results').replaceChildren(...Object.entries(paired).map(([arm,stats])=>el('div',{class:'algorithm-card'},[
+      el('strong',{text:algorithmLabel(arm)}),el('span',{text:'正确率 ' + pct(stats.accuracy) + ' · ROI ' + pct(stats.roi) + ' · 本金 ' + fixed(stats.stake_units) + 'u'})])));
+    $('experiment-results').appendChild(el('div',{class:'algorithm-card'},[el('strong',{text:'配对差异'}),el('span',{text:'正确率 Δ ' + pct(experiment.accuracy_difference) + ' · 净收益 Δ ' + fixed(experiment.profit_difference) + 'u · 覆盖 ' + pct(experiment.coverage)})]));
+    $('experiment-results').appendChild(el('div',{class:'algorithm-card'},[el('strong',{text:'审核状态'}),el('span',{text:Object.entries(experiment.review_status || {}).map(([k,v])=>({ready:'已审核',error:'失败',expired:'迟到',pending:'等待'}[k] || k) + ' ' + v).join(' · ') || '未开始；在设置启用 LLM'})]));
+    const experimentErrors = Object.entries(experiment.errors || {}).filter(([code])=>code && code!=='null');
+    if (experimentErrors.length) $('experiment-results').appendChild(el('div',{class:'algorithm-card'},[el('strong',{text:'接口诊断'}),el('span',{text:experimentErrors.map(([code,n])=>code+' ×'+n).join(' · ')})]));
+    S.historyNext = data.next_offset ?? null;
+    $('history-prev').disabled = S.historyOffset === 0;
+    $('history-next').disabled = S.historyNext === null;
+    $('history-page').textContent = '第 ' + (Math.floor(S.historyOffset/100)+1) + ' 页 · 查询 ' + fixed(data.query_ms,0) + 'ms';
     $('history-count').textContent = (data.entries_total || 0) + ' 条 · ' + (summary.matches || 0) + ' 场';
     const warning = data.legacy_identity_rows ? '旧记录 ' + data.legacy_identity_rows + ' 条，身份不完整。' : '';
-    notice('history-notice', warning + (summary.graded ? '' : ' 待终场确认后统计正确率。'));
+    notice('history-notice', warning + (summary.graded ? '' : '待确认终场赛果 · ' + (data.settle?.evidence_missing ?? summary.pending ?? 0) + ' 场未取得证据'));
     const statusLabel = {won: '正确', lost: '错误', half_won: '赢半', half_lost: '输半', push: '走水', pending: '待结算', void: '无法结算'};
     const rows = (data.entries || []).map(entry => {
       const date = new Date(entry.at);
@@ -352,13 +401,15 @@ async function loadHistory() {
 }
 const SETTING_FIELDS = [
   ['算法与门槛', [
-    ['primary_algorithm', '主显示算法', 'select', {poisson_market: '当前盘口 Poisson', poisson_time_decay: '时间衰减 Poisson', devig_consensus: '去水共识', economics_risk_adjusted: '经济学风控', microstructure_adjusted: '盘口微观结构'}],
+    ['primary_algorithm', '强度参考算法', 'select', {poisson_market: '当前盘口 Poisson', poisson_time_decay: '时间衰减 Poisson', devig_consensus: '去水共识', economics_risk_adjusted: '经济学风控', microstructure_adjusted: '盘口微观结构'}],
     ['devig_method', '去水方法', 'select', {proportional: '比例法', power: 'Power 法'}],
     ['min_probability', '建议最低概率', 'number', [0,1,.01]],
     ['min_ev', '建议最低 EV', 'number', [0,1,.01]],
     ['anchor_max_age_s', '衰减锚点重置 / 秒', 'number', [5,600,1]],
     ['devig_spread_warn_pp', '去水方法分歧阈值 / pp', 'number', [.1,20,.1]],
     ['fractional_kelly', '分数 Kelly', 'number', [0,1,.05]],
+    ['weight_prior_matches', '权重收缩先验 / 场', 'number', [2,1000,1]],
+    ['max_algorithm_weight', '单算法最大权重', 'number', [.2,1,.05]],
     ['max_total_exposure', '同场最大敞口', 'number', [0,1,.01]],
     ['risk_correlation', '同场风险相关性', 'number', [0,.99,.01]],
     ['execution_cost', '执行成本', 'number', [0,.1,.001]],
@@ -369,6 +420,7 @@ const SETTING_FIELDS = [
   ]],
   ['LLM 审核', [
     ['llm_enabled', '启用后台审核', 'checkbox'],
+    ['llm_experiment_enabled', '记录经济学 / LLM 配对实验', 'checkbox'],
     ['llm_base_url', 'API 地址', 'url'],
     ['llm_model', '模型', 'text'],
     ['llm_api_key', 'API Key', 'password'],
@@ -454,6 +506,8 @@ $('nav-live').addEventListener('click', () => switchView('live'));
 $('nav-history').addEventListener('click', () => switchView('history'));
 $('nav-settings').addEventListener('click', () => switchView('settings'));
 $('refresh').addEventListener('click', loadLive);
+$('history-prev').addEventListener('click',()=>{S.historyOffset=Math.max(0,S.historyOffset-100);loadHistory(false);});
+$('history-next').addEventListener('click',()=>{if(S.historyNext!==null){S.historyOffset=S.historyNext;loadHistory(false);}});
 $('history-refresh').addEventListener('click', loadHistory);
 $('history-days').addEventListener('change', loadHistory);
 $('history-type').addEventListener('change', loadHistory);

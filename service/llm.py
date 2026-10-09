@@ -561,6 +561,11 @@ class LLMClient:
         思考过程当答案（会把 JSON 解析成一堆无关文本）。现改为抛错并提供
         可操作提示：这是“上下文预算不足”，而非“模型没回答”。
         """
+        # The configured gateway returns {success:true,data:ChatCompletion}.
+        # Only unwrap an explicit success; error envelopes remain errors.
+        wrapped = resp.get("data")
+        if resp.get("success") is True and isinstance(wrapped, Mapping):
+            resp = wrapped
         choices = resp.get("choices") or []
         if not isinstance(choices, Sequence) or not choices:
             raise LLMError("响应缺少 choices: %s" % str(resp)[:160])

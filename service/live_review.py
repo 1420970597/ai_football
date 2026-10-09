@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from service.llm import LLMClient, LLMConfig, LLMError, extract_json
 from service.runtime_settings import RuntimeConfig
@@ -30,6 +31,8 @@ class LiveReview:
         self.completed = 0
         self.errors = 0
         self.discarded = 0
+        self.on_experiment: Optional[Callable[[Mapping[str, Any], Mapping[str, Any]], int]] = None
+        self.record_error = ""
 
     def configure(self, cfg: RuntimeConfig, version: int) -> None:
         client = (LLMClient(LLMConfig(base_url=cfg.llm_base_url, model=cfg.llm_model,
@@ -77,6 +80,14 @@ class LiveReview:
             while not self._stop.is_set() and self.process_one():
                 continue
 
+    def _record(self, row: Mapping[str, Any], review: Mapping[str, Any]) -> None:
+        if self.on_experiment and self._config.llm_experiment_enabled:
+            try:
+                self.on_experiment(row,review)
+                self.record_error = ''
+            except (OSError,ValueError,TypeError):
+                self.record_error = '实验记录写入失败'
+
     def process_one(self) -> bool:
         with self._lock:
             if not self._queue:
@@ -85,15 +96,21 @@ class LiveReview:
             client, cfg, version = self._client, self._config, self._version
         if not client or row["config_version"] != version or time.time() * 1000 - row["published_at_ms"] > 30000:
             self.discarded += 1
+            self._record(row, {"status":"expired"})
             return True
+        self._record(row, {"status":"pending"})
+        started = time.monotonic()
         review = {"status": "ready", "config_version": version, "score": row["score"],
                   "input_at": row["computed_at"], "model": cfg.llm_model,
                   "published_at_ms": row["published_at_ms"]}
         try:
-            prompt = json.dumps({k: row.get(k) for k in ("home", "away", "league", "score", "clock", "forecasts", "events")}, ensure_ascii=False)
+            inputs = {k: row.get(k) for k in ('home','away','league','score','clock','events')}
+            inputs['forecasts'] = [{k:f.get(k) for k in ('market','line','outcome','odds','p_model','p_market','effective_ev','confidence')} for f in list(row.get('forecasts') or [])[:12]]
+            prompt = json.dumps(inputs,ensure_ascii=False)
             result = extract_json(client.complete(prompt, system=(
                 "审核一份当时的足球滚球模型判断。只能使用输入的即时赛况，禁止编造终场或红牌。"
-                "市场拟合概率没有独立预测优势。输出JSON: verdict(confirm/watch/reject), confidence(0到1), reason(简短中文)。"),
+                "市场拟合概率没有独立预测优势。输出JSON: verdict(confirm/watch/reject), confidence(0到1), reason(简短中文), "
+                "assessments数组，逐盘口包含market,line,outcome,verdict,confidence。只评输入中的盘口，不要修改盘口或赔率。"),
                 max_tokens=cfg.llm_max_tokens))
             if not isinstance(result, dict) or result.get("verdict") not in ("confirm", "watch", "reject"):
                 raise ValueError("无效审核结果")
@@ -101,10 +118,24 @@ class LiveReview:
             if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
                 raise ValueError("无效置信度")
             review.update(verdict=result["verdict"], confidence=confidence, reason=str(result.get("reason") or "")[:160])
+            assessments = []
+            for item in result.get('assessments',[]) if isinstance(result.get('assessments'),list) else []:
+                if not isinstance(item,dict) or item.get('verdict') not in ('confirm','watch','reject'):
+                    continue
+                value = item.get('confidence')
+                if isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and 0<=value<=1:
+                    assessments.append({k:item.get(k) for k in ('market','line','outcome','verdict','confidence')})
+            review['assessments'] = assessments
             self.completed += 1
-        except (LLMError, ValueError, TypeError):
-            review.update(status="error", reason="LLM审核失败或超时")
+        except (LLMError, ValueError, TypeError) as exc:
+            codes = re.findall(r'HTTP ([0-9]{3})',str(exc))
+            code = 'upstream_http_'+codes[0] if codes else 'invalid_response' if isinstance(exc,(ValueError,TypeError)) else 'llm_unavailable'
+            review.update(status='error',reason='LLM审核失败或超时',error_code=code)
             self.errors += 1
+        review['latency_ms'] = round((time.monotonic()-started)*1000,3)
+        if time.time()*1000-row['published_at_ms']>30000 or version!=self._version:
+            review['status']='expired'
+        self._record(row,review)
         with self._lock:
             if version == self._version:
                 self._reviews[mid] = review
@@ -129,4 +160,4 @@ class LiveReview:
     def health(self) -> Dict[str, Any]:
         with self._lock:
             return {"enabled": self._config.llm_enabled, "pending": len(self._queue),
-                    "completed": self.completed, "errors": self.errors, "discarded": self.discarded}
+                    "completed": self.completed, "errors": self.errors, "discarded": self.discarded, "experiment_enabled": self._config.llm_experiment_enabled, "record_error":self.record_error}

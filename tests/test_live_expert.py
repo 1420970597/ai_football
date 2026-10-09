@@ -112,7 +112,7 @@ class LiveExpertTests(unittest.TestCase):
         for message in [dict(cmd='C102', cd={'mid': 'm', 'mst': '3660', 'mmp': '7'}),
                         dict(cmd='C110', cd={'mid': 'm', 'mc': 99999}),
                         dict(cmd='C303', cd={'mid': 'm', 'hpid': '2'}),
-                        dict(cmd='C109', cd=[{'mid': 'm', 'ms': 110}])]:
+                        dict(cmd='C109', cd=[{'mid': 'm', 'ms': 3}])]:
             hub._handle_message(message)
         self.assertEqual(callback.call_count, 4)
         self.assertTrue(hub.decision_snapshot('m')['finished'])

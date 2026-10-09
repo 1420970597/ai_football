@@ -7,6 +7,8 @@ async (page) => {
     markets: [{market: 'OU', line: '2.25', quotes: [{outcome: 'over', label: '全场大2.25', odds: 1.95, p_market: .5, trend_pct: .8},
       {outcome: 'under', label: '全场小2.25', odds: 1.96, p_market: .5, trend_pct: -.8}]}],
     remaining_goals: [.8, .4],
+    algorithm:'economic_ensemble', forecasts:[{label:'全场大2.25',market:'OU',line:'2.25',outcome:'over',odds:1.95,p_model:.6,ev:.17,effective_ev:.15,confidence:.55,disagreement:.03,members:[{algorithm:'poisson_market',p_model:.6,weight:.5},{algorithm:'poisson_time_decay',p_model:.6,weight:.5}]}],
+    picks:[{label:'全场大2.25',odds:1.95,p_model:.6,effective_ev:.15,confidence:.55,kelly:.03}],has_buy:true,
     candidates: [{label: '全场大2.25', ev: .02, odds: 1.95, p_model: .52}],
     price_history: {'OU|2.25|over': [[1000, 1.9], [2000, 1.95]], 'OU|2.25|under': [[1000, 2], [2000, 1.96]]}, events: []
   };
@@ -14,7 +16,7 @@ async (page) => {
     settings:{algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',
       min_probability:.52,min_ev:.02,quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,
       devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
-      llm_enabled:false,llm_base_url:'http://localhost:9999/v1',llm_model:'test-model',has_llm_key:true,
+      weight_prior_matches:20,max_algorithm_weight:.6,llm_experiment_enabled:true,llm_enabled:false,llm_base_url:'http://localhost:9999/v1',llm_model:'test-model',has_llm_key:true,
       llm_timeout_s:20,llm_temperature:.2,llm_max_tokens:2048,llm_interval_s:60}};
   let mode = 'default';
   const errors = [];
@@ -34,6 +36,10 @@ async (page) => {
       return route.fulfill({json:_PLACEHOLDER_SETTINGS});
     }
     if (url.pathname.includes('/ledger/history')) return route.fulfill({json: {entries_total: 1, legacy_identity_rows: 0,
+      query_ms:10,next_offset:null,by_algorithm:{economic_ensemble:{accuracy:.7,accuracy_samples:10,roi:.2,confidence_roi:.21,allocated_roi:.22}},
+      portfolio_summary:{accuracy:.7,accuracy_samples:10,roi:.2,confidence_roi:.21,allocated_roi:.22,profit_units:2},
+      by_confidence:{'60–80%':{accuracy:.7,accuracy_samples:10,roi:.2}},algorithm_weights:{at:'2026-10-09T09:00:00Z',algorithms:{poisson_market:{weight:.5,matches:20,brier:.2}}},
+      experiments:{paired_opportunities:10,paired:{economics_control:{accuracy:.7,roi:.2,stake_units:10},economics_llm:{accuracy:.8,roi:.3,stake_units:5}},coverage:.5,profit_difference:-.5,accuracy_difference:.1,review_status:{ready:10},conclusion:'样本不足'},
       overall: {graded: 1, pending: 0, hit_rate: 1, roi: .5, matches: 1}, entries: [{at: '2026-01-01T12:00:00Z',
         home: '测试主队', away: '测试客队', label: '全场小2.25', odds: 2, ft_score: [1, 1], status: 'half_won', pnl: .5, competition_type: 'real'}]}});
     if (url.pathname.startsWith('/api/v1/workbench/')) return route.fulfill({json: _PLACEHOLDER_MATCH});
@@ -50,6 +56,8 @@ async (page) => {
   const baseURL = new URL(page.url()).origin;
   await page.goto(baseURL + '/');
   await page.locator('.match-card').waitFor();
+  assert(await page.locator('.buy-card').count() === 1, 'homepage displays aggregated recommended buy');
+  assert(await page.locator('.buy-metrics').textContent().then(t=>t.includes('置信度') && t.includes('仓位')), 'recommendation contains confidence and position');
   assert(await page.locator('header nav button').count() === 3, 'live/history/settings primary pages');
   assert(await page.locator('#source-match-count').textContent() === '3', 'source coverage is distinct from results');
   assert(await page.locator('#subscribed-count').textContent() === '2', 'typed subscription coverage');
@@ -70,6 +78,8 @@ async (page) => {
   await page.getByRole('button', {name: '清除筛选', exact: true}).click();
   await page.getByRole('button', {name: '战绩', exact: true}).click();
   await page.getByText('赢半', {exact: true}).waitFor();
+  assert(await page.locator('#history-portfolio').textContent().then(t=>t.includes('20.0%')), 'aggregated portfolio returns');
+  assert(await page.locator('#experiment-status').textContent().then(t=>t.includes('配对 10')), 'paired LLM comparison');
   assert(await page.getByText('+0.50', {exact: true}).isVisible(), 'half stake history');
   await page.getByRole('button', {name: '设置', exact: true}).click();
   await page.locator('#setting-min_ev').waitFor();

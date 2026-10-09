@@ -153,21 +153,21 @@ class CoverageAndProspectiveTests(unittest.TestCase):
             svc = AnalysisService(MagicMock(), realtime=hub, config=AnalysisConfig(use_llm=False, ledger_root=root + '/ledger'))
             row = svc.decide_matches(['m'])['decisions'][0]
             self.assertEqual(svc.ledger.load(), [])  # writer is outside the fast path
-            self.assertEqual(svc.live_expert.flush_decisions(), 4)
+            self.assertEqual(svc.live_expert.flush_decisions(), 6)
             original = svc.ledger.load()
             for _ in range(3):
                 svc.decide_matches(['m'])
                 svc.live_expert.flush_decisions()
-            self.assertEqual(len(svc.ledger.load()), 4)
+            self.assertEqual(len(svc.ledger.load()), 6)
             restarted = DecisionLedger(root + '/ledger')
             e = row['evaluations'][0]
             self.assertEqual(restarted.record_live({**row, 'algorithm': e['algorithm'], 'forecast': e['forecasts'][0]}), 0)
             self.assertEqual(restarted.settle({'m': {'ft': [2, 1], 'done': False}})['settled'], 0)
-            self.assertEqual(restarted.settle({'m': {'ft': [2, 1], 'done': True}})['settled'], 4)
+            self.assertEqual(restarted.settle({'m': {'ft': [2, 1], 'done': True}})['settled'], 6)
             history = restarted.history(cohort='prospective')
-            self.assertEqual(history['overall']['direction_samples'], 2)
+            self.assertEqual(history['overall']['direction_samples'], 3)
             self.assertEqual(history['overall']['direction_accuracy'], 1)
-            self.assertEqual(len(history['by_algorithm']), 2)
+            self.assertEqual(len(history['by_algorithm']), 3)
             for before, after in zip(original, restarted.load()):
                 self.assertEqual((before.at, before.odds, before.entry_score), (after.at, after.odds, after.entry_score))
             self.assertTrue(all(e['correct'] is not None for e in history['entries']))

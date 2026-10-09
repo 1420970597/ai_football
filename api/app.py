@@ -570,6 +570,7 @@ class ApiApp:
             public = self._public_live_row(row, bool(realtime.get("connected")))
             public["llm_review"] = self.analysis.live_review.public(row)
             public.pop("evaluations", None)
+            public.pop("ensemble", None)
             public.pop("candidates", None)
             public.pop("events", None)
             rows.append(public)
@@ -1279,11 +1280,12 @@ class ApiApp:
         if kind not in (None, "all", "real", "virtual", "unknown"):
             raise BadRequest("type 必须是 real/virtual/unknown/all")
         cohort = _q1(query, "cohort", "all")
-        if cohort not in ("all", "prospective", "recommendations", "legacy"):
-            raise BadRequest("cohort 必须是 all/prospective/recommendations/legacy")
+        if cohort not in ("all", "prospective", "recommendations", "ensemble", "legacy"):
+            raise BadRequest("cohort 必须是 all/prospective/recommendations/ensemble/legacy")
         return self.analysis.ledger_history(only_picks=only_picks,
                                             limit=limit, days=days, competition_type=kind,
-                                            algorithm=_q1(query, "algorithm"), cohort=cohort)
+                                            algorithm=_q1(query, "algorithm"), cohort=cohort,
+                                            offset=_q_int(query, "offset", 0, minimum=0, maximum=10000000))
 
     def h_ledger_entries(self, query: Mapping[str, List[str]],
                          body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
