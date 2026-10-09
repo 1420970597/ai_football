@@ -114,10 +114,15 @@ class LiveExpertTests(unittest.TestCase):
         svc.decide_matches(['m'])
         app = ApiApp(MagicMock())
         app._analysis = svc
+        svc.live_match_ids = lambda: {'m', 'other'}
+        hub._subscribed = ['m']
         code, response = app.dispatch('GET', '/api/v1/workbench', {}, {})
         self.assertEqual(code, 200)
         self.assertEqual(response['count'], 1)
         self.assertTrue(response['matches'][0]['stale'])
+        self.assertEqual(response['coverage']['source_current'], 2)
+        self.assertEqual(response['coverage']['subscribed'], 1)
+        self.assertEqual(response['coverage']['analyzed'], 1)
         with patch.object(hub.live, 'health', side_effect=AssertionError('full book scan')):
             code, _ = app.dispatch('GET', '/api/v1/workbench', {}, {})
             self.assertEqual(code, 200)

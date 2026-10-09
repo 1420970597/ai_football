@@ -79,8 +79,8 @@ function renderMatches() {
       onclick: () => selectMatch(match.match_id)}, [el('span', {class: 'team', text: match.home || '队名待补齐', title: match.home || ''}), score,
       el('span', {class: 'team away', text: match.away || '队名待补齐', title: match.away || ''})]));
     for (const market of match.markets || []) card.appendChild(marketRow(market, match));
-    card.appendChild(el('div', {class: 'match-bottom'}, [el('span', {class: 'observation', text: match.suspended ? '暂停观察' : '研究观察'}),
-      el('button', {class: 'analysis-link', text: '赛况与算法依据 →', onclick: () => selectMatch(match.match_id)})]));
+    card.appendChild(el('div', {class: 'match-bottom'}, [el('span', {class: 'observation', text: match.suspended ? '暂停' : (match.has_buy ? 'EV' : '观察')}),
+      el('button', {class: 'analysis-link', text: '详情', title: '查看比赛分析', onclick: () => selectMatch(match.match_id)})]));
     return card;
   });
   $('matches').replaceChildren(...nodes);
@@ -115,7 +115,11 @@ async function loadLive() {
     $('connection').classList.toggle('online', online);
     $('connection').querySelector('span').textContent = online ? '实时连接正常' : '采集暂未连接';
     $('match-count').textContent = S.matches.length;
-    $('match-count').previousElementSibling.textContent = type === 'real' ? '进行中的真实足球' : type === 'virtual' ? '虚拟 / EAFC' : '全部实时赛事';
+    $('match-count').previousElementSibling.textContent = '已分析赛事';
+    const coverage = data.coverage || {};
+    const sourceCount = coverage.source_current ?? coverage.source_upstream ?? coverage.source_derived;
+    $('source-match-count').textContent = Number.isFinite(Number(sourceCount)) ? sourceCount : '—';
+    $('subscribed-count').textContent = Number.isFinite(Number(coverage.subscribed)) ? coverage.subscribed : '—';
     const quoteAges = S.matches.map(m => m.quote_age_s).filter(Number.isFinite);
     $('quote-freshness').textContent = quoteAges.length ? fixed(Math.min(...quoteAges), 1) + 's 前' : '—';
     const p95 = (data.performance?.by_type_event_to_result_ms?.[type] || data.performance?.event_to_result_ms)?.p95;
@@ -158,7 +162,7 @@ function closeDetail() {
   S.selected = null; S.detailRequest++;
   $('detail').classList.remove('has-detail');
   $('detail').replaceChildren(el('div', {class: 'detail-placeholder'}, [el('span', {class: 'placeholder-icon', text: '◎'}),
-    el('h2', {text: '把目光放到一场比赛'}), el('p', {text: '选择赛事，查看完整盘口、概率与赛况依据。'})]));
+    el('h2', {text: '选择比赛'})]));
   renderMatches();
 }
 function detailSection(title) {
@@ -187,7 +191,7 @@ function renderDetail(match) {
     el('h2', {text: (match.home || '主队') + ' vs ' + (match.away || '客队'), title: (match.home || '') + ' vs ' + (match.away || '')}),
     el('span', {class: 'observation', text: (match.score ? match.score.join(' : ') : '— : —') + ' · ' + match.clock})]);
   const evidence = detailSection('决策依据');
-  if (match.stale) evidence.appendChild(el('p', {class: 'evidence', text: '当前为已保存数据，等待报价恢复。'}));
+  if (match.stale) evidence.appendChild(el('p', {class: 'evidence', text: '报价已过期'}));
   for (const reason of match.reasons || []) evidence.appendChild(el('p', {class: 'evidence', text: reason}));
   const probability = detailSection('胜平负概率 · 研究基准');
   for (const [oc, value] of Object.entries(match.probabilities || {})) {
@@ -195,26 +199,25 @@ function renderDetail(match) {
     probability.appendChild(el('div', {class: 'probability-row'}, [el('span', {text: {home: '主胜', draw: '平局', away: '客胜'}[oc] || oc}),
       el('div', {class: 'probability-bar'}, [bar]), el('span', {text: pct(value)})]));
   }
-  if (!Object.keys(match.probabilities || {}).length) probability.appendChild(el('p', {class: 'chart-note', text: '赛况或盘口不足，暂不生成方向概率。'}));
+  if (!Object.keys(match.probabilities || {}).length) probability.appendChild(el('p', {class: 'chart-note', text: '暂无概率'}));
   const trend = detailSection('盘口走势');
   const series = Object.entries(match.price_history || {}).find(([key, points]) => key.startsWith('OU|') && points.length > 1) ||
     Object.entries(match.price_history || {}).find(([, points]) => points.length > 1);
   if (series) {
     trend.appendChild(el('p', {class: 'chart-note', text: series[0].replaceAll('|', ' · ')}));
     trend.appendChild(priceChart(series[1]));
-    trend.appendChild(el('p', {class: 'chart-note', text: '时间向右 · ' + series[1].length + ' 个已接收报价点'}));
-  } else trend.appendChild(el('p', {class: 'chart-note', text: '等待至少两个报价点形成走势。'}));
+    trend.appendChild(el('p', {class: 'chart-note', text: series[1].length + ' 个报价点'}));
+  } else trend.appendChild(el('p', {class: 'chart-note', text: '暂无走势'}));
   const candidates = detailSection('盘口定价与期望收益');
-  candidates.appendChild(el('p', {class: 'chart-note', text: '每单位本金的模型期望；含走水与半注。观察信号不代表可信买入建议。'}));
   for (const candidate of match.candidates || []) candidates.appendChild(el('div', {class: 'candidate'}, [
     el('span', {text: candidate.label}), el('strong', {text: 'EV ' + pct(candidate.ev)})]));
-  if (!(match.candidates || []).length) candidates.appendChild(el('p', {class: 'chart-note', text: '输入未核验，保留当前报价供观察。'}));
+  if (!(match.candidates || []).length) candidates.appendChild(el('p', {class: 'chart-note', text: '暂无 EV'}));
   const markets = detailSection('完整盘口'); markets.classList.add('detail-markets');
   for (const market of match.markets || []) markets.appendChild(marketRow(market, match));
   const context = detailSection('赛况与数据时间');
-  context.appendChild(el('p', {class: 'chart-note', text: '报价 ' + fixed(match.quote_age_s, 1) + 's 前 · 计算 ' + fixed(match.result_age_s, 1) + 's 前 · 耗时 ' + fixed(match.compute_ms, 1) + 'ms'}));
+  context.appendChild(el('p', {class: 'chart-note', text: '报价 ' + fixed(match.quote_age_s, 1) + 's · 结果 ' + fixed(match.result_age_s, 1) + 's · 计算 ' + fixed(match.compute_ms, 1) + 'ms'}));
   const events = match.events || [];
-  context.appendChild(el('p', {class: 'chart-note', text: events.length ? '已接收 ' + events.length + ' 条近期状态事件。未知事件类型不会被解释成红牌或射门。' : '详细场上事件尚未提供。'}));
+  context.appendChild(el('p', {class: 'chart-note', text: events.length ? events.length + ' 条状态事件' : '暂无状态事件'}));
   panel.replaceChildren(header, evidence, probability, trend, candidates, markets, context);
   panel.scrollTop = scroll;
 }

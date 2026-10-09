@@ -574,8 +574,85 @@ class ApiApp:
             public.pop("events", None)
             rows.append(public)
         rows.sort(key=lambda r: (r["stale"], r.get("league", ""), r["match_id"]))
-        result.update(matches=rows, realtime=realtime, generated_at=datetime.now(timezone.utc).isoformat())
+        result.update(
+            matches=rows,
+            realtime=realtime,
+            coverage=self._workbench_coverage(kind, len(rows), rt),
+            generated_at=datetime.now(timezone.utc).isoformat(),
+        )
         return result
+
+    def _workbench_coverage(self, kind: str, displayed: int,
+                            realtime: Optional[Any]) -> Dict[str, Any]:
+        """Expose the four counts needed to audit the workbench list.
+
+        ``live_expert.results`` only contains matches that have completed at
+        least one local computation.  Treating that number as the source
+        total made a healthy subscription look like a one-match feed while
+        the rest of the current schedule was still entering the pipeline.
+        Keep source, subscription, analysis and display counts separate.
+        """
+        source_current: Optional[int] = None
+        source_upstream: Optional[int] = None
+        source_derived: Optional[int] = None
+        source_status = "unknown"
+        current_ids: Optional[set] = None
+        try:
+            typed_ids = self.analysis.live_match_ids_by_type(kind)
+            if isinstance(typed_ids, (set, list, tuple, frozenset)):
+                current_ids = set(typed_ids)
+                source_current = len(current_ids)
+                source_status = "fresh"
+            else:
+                typed_ids = self.analysis.live_match_ids()
+            if (source_current is None
+                    and isinstance(typed_ids, (set, list, tuple, frozenset))):
+                current_ids = set(typed_ids)
+                source_current = len(current_ids)
+                source_status = "fresh"
+        except Exception:  # noqa: BLE001 - counters must not break the board
+            pass
+        try:
+            health = self.analysis.health()
+            live = health.get("live") if isinstance(health, Mapping) else None
+            if kind in ("real", "all") and isinstance(live, Mapping):
+                source_upstream = _as_int_or_none(live.get("upstream"))
+                source_derived = _as_int_or_none(live.get("derived"))
+                source_status = str(live.get("source") or source_status)
+                if source_current is None:
+                    source_current = _as_int_or_none(live.get("count"))
+        except Exception:  # noqa: BLE001 - optional observability only
+            pass
+        subscribed: Optional[int] = None
+        subscribed_total: Optional[int] = None
+        book_matches: Optional[int] = None
+        if realtime is not None:
+            try:
+                subscribed_ids = set(realtime.subscribed())
+                subscribed_total = len(subscribed_ids)
+                subscribed = (len(current_ids & subscribed_ids)
+                              if current_ids is not None else subscribed_total)
+            except (AttributeError, TypeError):
+                subscribed = _as_int_or_none(getattr(realtime.stats, "subscribed", None))
+                subscribed_total = subscribed
+            try:
+                rt_health = realtime.health()
+                book = rt_health.get("live_book") if isinstance(rt_health, Mapping) else None
+                if isinstance(book, Mapping):
+                    book_matches = _as_int_or_none(book.get("matches"))
+            except Exception:  # noqa: BLE001 - optional observability only
+                pass
+        return {
+            "source_current": source_current,
+            "source_upstream": source_upstream,
+            "source_derived": source_derived,
+            "source_status": source_status,
+            "subscribed": subscribed,
+            "subscribed_total": subscribed_total,
+            "quotes": book_matches,
+            "analyzed": int(displayed),
+            "displayed": int(displayed),
+        }
 
     @staticmethod
     def _public_live_row(row: Mapping[str, Any], connected: bool) -> Dict[str, Any]:
