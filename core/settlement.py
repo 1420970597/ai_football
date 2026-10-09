@@ -414,6 +414,12 @@ def summarise(rows: Sequence[Any]) -> dict:
         "clv_positive_rate": (round(sum(1 for c in clvs if c > 0) / len(clvs), 4)
                               if clvs else None),
     }
+    directions = [r for r in staked if _get(r, "market") in ("HAD", "HAD_1H")
+                  and _get(r, "status") in (SETTLE_WON, SETTLE_LOST)]
+    correct = sum(_get(r, "status") == SETTLE_WON for r in directions)
+    out["direction_samples"] = len(directions)
+    out["direction_correct"] = correct
+    out["direction_accuracy"] = round(correct / len(directions), 4) if directions else None
     # 被门控拦截的盘口表现：用于回答「门控是在帮忙还是误杀」
     uw, ul = _wins(unpicked), _losses(unpicked)
     out["unpicked_n"] = len(unpicked)

@@ -351,6 +351,9 @@ class LiveBook:
                 odds = _to_float(t.new_ov, 0.0)
                 if odds <= 1.0:
                     continue        # 非法赔率不入表（1.0 以下不可能成交）
+                previous = self._rows.get(key)
+                if previous and previous.ts_ms > _to_int(t.ts_ms, 0):
+                    continue  # REST enrichment must not roll back newer push quotes.
                 self._rows[key] = LiveQuote(
                     mid=t.mid, chpid=t.chpid, hv=t.hv, oid=t.oid, ot=t.ot,
                     odds=odds, ts_ms=_to_int(t.ts_ms, 0), at=now)
@@ -1058,6 +1061,7 @@ class RealtimeHub:
         self._status: Dict[str, Dict[str, Any]] = {}
         self._events: Dict[str, Deque[Dict[str, Any]]] = {}
         self._info: Dict[str, Dict[str, Any]] = {}
+        self._market_meta: Dict[str, Dict[str, Any]] = {}
         self._versions: Dict[str, int] = {}
         self._received_at: Dict[str, float] = {}
         self._status_at: Dict[str, float] = {}
@@ -1243,6 +1247,17 @@ class RealtimeHub:
                     "home": match.home, "away": match.away,
                     "sport": match.sport, "sport_id": match.sport_id,
                 }
+                ticks = []
+                meta = self._market_meta.setdefault(mid, {})
+                for market in getattr(match, "markets", ()):
+                    meta[str(market.chpid)] = {"name": market.name, "hpt": market.hpt}
+                    for q in market.quotes:
+                        ot = {"home": "1", "away": "2", "draw": "X",
+                              "over": "Over", "under": "Under"}.get(q.outcome, q.label or q.oid)
+                        ticks.append(PriceTick(mid, str(market.chpid), "", market.hv,
+                                               q.oid, ot, q.decimal, q.decimal,
+                                               q.ctsp or market.ctsp))
+                self.live.upsert_many(ticks)
                 if now - self._status_at.get(mid, 0) > 10:
                     self._status[mid] = {**self._status.get(mid, {}),
                                          "mst": match.minute, "mmp": match.period}
@@ -1283,6 +1298,7 @@ class RealtimeHub:
                 "suspended_ids": list(self._suspensions.get(mid, {})),
                 "events": [dict(e) for e in self._events.get(mid, ())],
                 "quotes": self.live.book(mid),
+                "market_meta": dict(self._market_meta.get(mid, {})),
             }
 
     def state_version(self, mid: str) -> int:

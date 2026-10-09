@@ -1,9 +1,10 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const S = {view: 'live', type: 'real', league: '', search: '', matches: [], selected: null,
-  request: 0, detailRequest: 0, historyRequest: 0, busy: false, loaded: false, timer: null, chartKey: ''};
+  request: 0, detailRequest: 0, historyRequest: 0, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false};
 const API = '/api/v1';
 const POLL_MS = 1000;
+const algorithmLabel = a => ({poisson_market: '盘口 Poisson', poisson_time_decay: '衰减 Poisson', legacy: '旧算法'}[a] || a || '—');
 const pct = n => Number.isFinite(Number(n)) && n !== null ? (Number(n) * 100).toFixed(1) + '%' : '—';
 const fixed = (n, digits = 2) => n !== null && n !== undefined && Number.isFinite(Number(n)) ? Number(n).toFixed(digits) : '—';
 function el(tag, attrs = {}, children = []) {
@@ -29,7 +30,7 @@ async function get(path) {
 }
 function switchView(view) {
   S.view = view;
-  for (const key of ['live', 'history']) {
+  for (const key of ['live', 'history', 'settings']) {
     $(key + '-view').hidden = key !== view;
     $('nav-' + key).classList.toggle('active', key === view);
     if (key === view) $('nav-' + key).setAttribute('aria-current', 'page');
@@ -37,6 +38,7 @@ function switchView(view) {
   }
   location.hash = view;
   if (view === 'history') loadHistory();
+  else if (view === 'settings') loadSettings();
   else loadLive();
 }
 function emptyMessage(title, description, retry) {
@@ -50,8 +52,9 @@ function marketRow(market, match) {
   const family = market.market.replace('_1H', '');
   const name = {HAD: '独赢', AH: '让球', OU: '大小球'}[family] || market.market;
   const prefix = market.market.includes('_1H') ? '上半场 ' : '';
-  const row = el('div', {class: 'market-row' + (market.quotes.length === 2 ? ' two' : '')},
-    [el('span', {class: 'market-name', text: prefix + name + (market.line ? '\n' + market.line : '')})]);
+  const coverage = market.market.startsWith('RAW_') ? ' · 原始' : market.complete === false ? ' · 缺项' : market.fresh === false ? ' · 过期' : '';
+  const row = el('div', {class: 'market-row' + (market.quotes.length === 2 ? ' two' : '') + (market.market.startsWith('RAW_') ? ' raw' : '')},
+    [el('span', {class: 'market-name', text: prefix + (market.market.startsWith('RAW_') ? market.name || market.market : name) + (market.line ? '\n' + market.line : '') + coverage})]);
   for (const quote of market.quotes) {
     const trend = Number(quote.trend_pct || 0);
     row.appendChild(el('button', {class: 'odd', title: quote.label + ' · 赔率 ' + quote.odds,
@@ -89,9 +92,20 @@ function renderMatches() {
     card.appendChild(el('button', {class: 'match-title', 'data-focus': match.match_id, 'aria-label': '分析' + match.home + '对' + match.away,
       onclick: () => selectMatch(match.match_id)}, [el('span', {class: 'team', text: match.home || '队名待补齐', title: match.home || ''}), score,
       el('span', {class: 'team away', text: match.away || '队名待补齐', title: match.away || ''})]));
-    for (const market of match.markets || []) card.appendChild(marketRow(market, match));
+    const full = (match.markets || []).filter(m => ['HAD', 'AH', 'OU'].includes(m.market));
+    const shown = S.expandedMatches.has(match.match_id) ? match.markets || [] : ['HAD', 'AH', 'OU'].map(family =>
+      full.filter(m => m.market === family).sort((a,b) => Number(b.complete !== false) - Number(a.complete !== false) ||
+        Math.abs((a.quotes[0]?.p_market ?? .5) - .5) - Math.abs((b.quotes[0]?.p_market ?? .5) - .5))[0]).filter(Boolean);
+    for (const market of shown) card.appendChild(marketRow(market, match));
+    if ((match.markets || []).length > 3) card.appendChild(el('button', {class: 'market-expand',
+      text: (S.expandedMatches.has(match.match_id) ? '收起' : '全部盘口') + ' · ' + match.markets.length,
+      onclick: () => {if (S.expandedMatches.has(match.match_id)) S.expandedMatches.delete(match.match_id);
+        else S.expandedMatches.add(match.match_id); renderMatches();}}));
+    const forecast = match.picks?.[0] || match.forecasts?.[0];
+    if (forecast && !match.stale) card.appendChild(el('div', {class: 'signal-row'}, [
+      el('strong', {text: forecast.label}), el('span', {text: 'P ' + pct(forecast.p_model) + ' · EV ' + pct(forecast.ev)})]));
     if (Object.keys(match.probabilities || {}).length) card.appendChild(probabilityRows(match, true));
-    card.appendChild(el('div', {class: 'match-bottom'}, [el('span', {class: 'observation', text: match.suspended ? '暂停' : (match.has_buy ? 'EV' : '观察')}),
+    card.appendChild(el('div', {class: 'match-bottom'}, [el('span', {class: 'observation', text: match.suspended ? '暂停' : (match.has_buy ? '模拟建议' : match.decision === 'forecast' && !match.stale ? '模拟判断' : '观察')}),
       el('button', {class: 'analysis-link', text: '详情', title: '查看比赛分析', onclick: () => selectMatch(match.match_id)})]));
     return card;
   });
@@ -220,6 +234,22 @@ function renderDetail(match) {
     el('button', {class: 'close-detail', text: '关闭 ×', onclick: closeDetail})]),
     el('h2', {text: (match.home || '主队') + ' vs ' + (match.away || '客队'), title: (match.home || '') + ' vs ' + (match.away || '')}),
     el('span', {class: 'observation', text: (match.score ? match.score.join(' : ') : '— : —') + ' · ' + match.clock})]);
+  const decisions = detailSection('模拟判断');
+  decisions.appendChild(el('div', {class: 'config-version', text: algorithmLabel(match.algorithm) + ' · v' + (match.config_version || '—') +
+    ' · ' + ({recorded: '首判已记录', queued: '首判写入中', none: '暂无首判'}[match.recording_status] || '')}));
+  for (const evaluation of match.evaluations || [{algorithm: match.algorithm, forecasts: match.forecasts || []}]) {
+    for (const f of evaluation.forecasts || []) decisions.appendChild(el('div', {class: 'decision-row'}, [
+      el('span', {}, [el('strong', {text: f.label}), el('small', {text: algorithmLabel(evaluation.algorithm)})]),
+      el('span', {text: '@' + fixed(f.odds) + ' · ' + pct(f.p_model)}, [el('small', {text: 'EV ' + pct(f.ev)})])
+    ]));
+  }
+  if (!(match.forecasts || []).length) decisions.appendChild(el('p', {class: 'chart-note', text: '数据未满足判断条件'}));
+  for (const pick of match.picks || []) decisions.appendChild(el('div', {class: 'recommendation-row'}, [
+    el('strong', {text: '模拟建议 · ' + pick.label}), el('span', {text: '@' + fixed(pick.odds) + ' · P ' + pct(pick.p_model) + ' · EV ' + pct(pick.ev)})]));
+  const review = match.llm_review || {status: 'disabled'};
+  if (review.status !== 'disabled') decisions.appendChild(el('p', {class: 'chart-note', text: 'LLM · ' +
+    ({ready: {confirm:'认可', watch:'观察', reject:'不认可'}[review.verdict] + ' ' + pct(review.confidence),
+      error:'失败', pending:'审核中', expired:'已过时'}[review.status] || review.status), title: review.reason || ''}));
   const evidence = el('details', {class: 'detail-section evidence-toggle'}, [el('summary', {text: '模型基准 · 数据状态'})]);
   if (match.stale) evidence.appendChild(el('p', {class: 'evidence', text: '报价已过期'}));
   for (const reason of match.reasons || []) evidence.appendChild(el('p', {class: 'evidence', text: reason}));
@@ -255,41 +285,55 @@ function renderDetail(match) {
   const candidates = detailSection('盘口估值 · 模型基准');
   const estimates = el('table', {class: 'ev-table'}, [el('thead', {}, [el('tr', {}, ['方向', '赔率', '模型', 'EV'].map(text => el('th', {text})))])]);
   const estimatesBody = el('tbody');
-  for (const candidate of match.candidates || []) estimatesBody.appendChild(el('tr', {}, [
+  for (const candidate of (match.candidates || []).slice(0, 8)) estimatesBody.appendChild(el('tr', {}, [
     el('td', {text: candidate.label}), el('td', {text: fixed(candidate.odds)}),
     el('td', {text: pct(candidate.p_model)}), el('td', {class: Number(candidate.ev) > 0 ? 'history-win' : 'history-loss', text: pct(candidate.ev)})]));
   estimates.appendChild(estimatesBody);
   if ((match.candidates || []).length) candidates.appendChild(estimates);
   if (!(match.candidates || []).length) candidates.appendChild(el('p', {class: 'chart-note', text: '暂无 EV'}));
-  const markets = detailSection('完整盘口'); markets.classList.add('detail-markets');
-  for (const market of match.markets || []) markets.appendChild(marketRow(market, match));
+  const coverage = match.market_coverage || {};
+  const markets = detailSection('盘口 · ' + (coverage.total ?? match.markets?.length ?? 0)); markets.classList.add('detail-markets');
+  const marketTabs = el('div', {class: 'market-tabs'});
+  for (const [scope,label] of [['all','全部'],['full','全场'],['half','半场'],['other','其他']]) marketTabs.appendChild(el('button', {
+    class: S.marketScope === scope ? 'active' : '', text: label, onclick: () => {S.marketScope = scope; renderDetail(match);}}));
+  markets.appendChild(marketTabs);
+  markets.appendChild(el('p', {class: 'chart-note', text: '完整 ' + (coverage.complete ?? '—') + ' · 新鲜 ' + (coverage.fresh ?? '—') + ' · 估值 ' + (coverage.valued ?? '—')}));
+  const marketList = (match.markets || []).filter(m => S.marketScope === 'all' ||
+    (S.marketScope === 'half' && m.market.includes('_1H')) || (S.marketScope === 'other' && m.market.startsWith('RAW_')) ||
+    (S.marketScope === 'full' && ['HAD','AH','OU'].includes(m.market)));
+  for (const market of marketList) markets.appendChild(marketRow(market, match));
+  if (!marketList.length) markets.appendChild(el('p', {class: 'chart-note', text: '暂无盘口'}));
   const context = detailSection('赛况与数据时间');
   context.appendChild(el('p', {class: 'chart-note', text: '报价 ' + fixed(match.quote_age_s, 1) + 's · 结果 ' + fixed(match.result_age_s, 1) + 's · 计算 ' + fixed(match.compute_ms, 1) + 'ms'}));
   const events = match.events || [];
   context.appendChild(el('p', {class: 'chart-note', text: events.length ? events.length + ' 条状态事件' : '暂无状态事件'}));
-  panel.replaceChildren(header, probability, intensity, trend, candidates, markets, context, evidence);
+  panel.replaceChildren(header, decisions, probability, intensity, trend, candidates, markets, context, evidence);
   panel.scrollTop = scroll;
 }
 async function loadHistory() {
   const request = ++S.historyRequest;
   $('history-refresh').disabled = true;
   try {
-    const data = await get('/ledger/history?limit=300&days=' + encodeURIComponent($('history-days').value) + '&type=' + encodeURIComponent($('history-type').value));
+    const data = await get('/ledger/history?limit=300&days=' + encodeURIComponent($('history-days').value) + '&type=' + encodeURIComponent($('history-type').value) + '&algorithm=' + encodeURIComponent($('history-algorithm').value) + '&cohort=' + encodeURIComponent($('history-cohort').value));
     if (request !== S.historyRequest) return;
     const summary = data.overall || {};
-    const metrics = [['半注命中率', pct(summary.hit_rate)], ['模拟收益率 ROI', pct(summary.roi)],
+    const metrics = [['独赢正确率', pct(summary.direction_accuracy)], ['独赢样本', String(summary.direction_samples || 0)], ['半注命中率', pct(summary.hit_rate)], ['模拟收益率 ROI', pct(summary.roi)],
       ['已结算建议', String(summary.graded || 0)], ['待确认赛果', String(summary.pending || 0)]];
     $('history-stats').replaceChildren(...metrics.map(([label, value]) => el('div', {}, [el('span', {text: label}), el('strong', {text: value})])));
+    $('history-algorithms').replaceChildren(...Object.entries(data.by_algorithm || {}).map(([algorithm, stats]) => el('div', {class: 'algorithm-card'}, [
+      el('strong', {text: algorithmLabel(algorithm)}), el('span', {text: '独赢 ' + pct(stats.direction_accuracy) + ' / ' + (stats.direction_samples || 0) +
+        ' · 命中 ' + pct(stats.hit_rate) + ' · ROI ' + pct(stats.roi)})])));
     $('history-count').textContent = (data.entries_total || 0) + ' 条 · ' + (summary.matches || 0) + ' 场';
-    const warning = data.legacy_identity_rows ? '旧格式有 ' + data.legacy_identity_rows + ' 条记录缺少独立建议身份；被历史覆盖的建议无法恢复。' : '';
-    notice('history-notice', warning + (summary.graded ? '' : ' 尚无已确认结算样本，暂不能评估模型正确率。'));
-    const statusLabel = {won: '赢', lost: '输', half_won: '赢半', half_lost: '输半', push: '走水', pending: '待结算', void: '无法结算'};
+    const warning = data.legacy_identity_rows ? '旧记录 ' + data.legacy_identity_rows + ' 条，身份不完整。' : '';
+    notice('history-notice', warning + (summary.graded ? '' : ' 待终场确认后统计正确率。'));
+    const statusLabel = {won: '正确', lost: '错误', half_won: '赢半', half_lost: '输半', push: '走水', pending: '待结算', void: '无法结算'};
     const rows = (data.entries || []).map(entry => {
       const date = new Date(entry.at);
       const time = Number.isNaN(date.getTime()) ? entry.at : date.toLocaleString('zh-CN', {hour12: false});
       const kind = entry.pnl > 0 ? 'history-win' : entry.pnl < 0 ? 'history-loss' : '';
       return el('tr', {}, [el('td', {text: time}, [el('small', {text: entry.competition_type === 'virtual' ? '虚拟比赛' : entry.competition_type === 'real' ? '真实足球' : '旧记录 / 类型未核验'})]),
         el('td', {text: (entry.home || '主队') + ' vs ' + (entry.away || '客队')}, [el('small', {text: entry.label || entry.market})]),
+        el('td', {text: algorithmLabel(entry.algorithm)}, [el('small', {text: 'v' + (entry.config_version || 0) + ' · P ' + pct(entry.p_fused)})]),
         el('td', {text: fixed(entry.odds)}), el('td', {text: entry.ft_score ? entry.ft_score.join(' : ') : '—'}),
         el('td', {class: kind, text: statusLabel[entry.status] || entry.status, title: entry.settle_note || ''}),
         el('td', {class: kind, text: ['pending', 'void'].includes(entry.status) ? '—' : (entry.pnl > 0 ? '+' : '') + fixed(entry.pnl)})]);
@@ -302,12 +346,110 @@ async function loadHistory() {
     if (request === S.historyRequest) $('history-refresh').disabled = false;
   }
 }
+const SETTING_FIELDS = [
+  ['算法与门槛', [
+    ['primary_algorithm', '主显示算法', 'select', {poisson_market: '当前盘口 Poisson', poisson_time_decay: '时间衰减 Poisson'}],
+    ['devig_method', '去水方法', 'select', {proportional: '比例法', power: 'Power 法'}],
+    ['min_probability', '建议最低概率', 'number', [0,1,.01]],
+    ['min_ev', '建议最低 EV', 'number', [0,1,.01]],
+    ['anchor_max_age_s', '衰减锚点重置 / 秒', 'number', [5,600,1]],
+  ]],
+  ['数据时效', [
+    ['quote_max_age_s', '报价有效期 / 秒', 'number', [1,300,1]],
+    ['state_max_age_s', '比分与时钟有效期 / 秒', 'number', [5,600,1]],
+  ]],
+  ['LLM 审核', [
+    ['llm_enabled', '启用后台审核', 'checkbox'],
+    ['llm_base_url', 'API 地址', 'url'],
+    ['llm_model', '模型', 'text'],
+    ['llm_api_key', 'API Key', 'password'],
+    ['llm_timeout_s', '超时 / 秒', 'number', [1,120,1]],
+    ['llm_temperature', 'Temperature', 'number', [0,2,.1]],
+    ['llm_max_tokens', '输出 Token 上限', 'number', [256,8192,1]],
+    ['llm_interval_s', '单场审核间隔 / 秒', 'number', [10,3600,1]],
+  ]],
+];
+function renderSettings(data) {
+  S.settingsVersion = data.version;
+  $('settings-version').textContent = 'v' + data.version + ' · ' + (data.persistent ? '已持久保存' : '内存配置');
+  const cfg = data.settings;
+  const sections = SETTING_FIELDS.map(([title,fields], index) => {
+    const section = el('fieldset', {class: 'settings-section'}, [el('legend', {text: title})]);
+    if (index === 0) {
+      const algorithms = el('div', {class: 'enabled-algorithms'});
+      for (const [key,name] of Object.entries(data.algorithms)) {
+        const input = el('input', {type: 'checkbox', name: 'algorithm', value: key});
+        input.checked = cfg.algorithms.includes(key);
+        algorithms.appendChild(el('label', {}, [input, name]));
+      }
+      section.appendChild(algorithms);
+    }
+    for (const [key,label,type,options] of fields) {
+      const attrs = {id: 'setting-' + key, name: key};
+      let input;
+      if (type === 'select') {
+        input = el('select', attrs, Object.entries(options).map(([value,text]) => el('option', {value,text})));
+        input.value = cfg[key];
+      } else {
+        input = el('input', {...attrs, type});
+        if (type === 'checkbox') input.checked = cfg[key];
+        else if (type === 'password') {
+          input.autocomplete = 'new-password';
+          input.placeholder = cfg.has_llm_key ? '已配置，留空保留' : '未配置';
+          input.value = '';
+        } else input.value = cfg[key];
+        if (type === 'number') {input.min=options[0]; input.max=options[1]; input.step=options[2];}
+      }
+      section.appendChild(el('label', {class: type === 'checkbox' ? 'setting-toggle' : 'setting-field'}, [el('span', {text: label}), input]));
+    }
+    if (index === 2) section.appendChild(el('label', {class: 'setting-toggle'}, [
+      el('span', {text: '清除已保存 API Key'}), el('input', {type: 'checkbox', id: 'clear-llm-key'})]));
+    return section;
+  });
+  $('settings-fields').replaceChildren(...sections);
+  notice('settings-notice', data.restore_error || '');
+}
+async function loadSettings() {
+  if (S.settingsBusy) return;
+  S.settingsBusy = true;
+  $('settings-save').disabled = true; $('settings-reload').disabled = true;
+  try {renderSettings(await get('/settings'));}
+  catch (error) {notice('settings-notice', error.message, true);}
+  finally {S.settingsBusy = false; $('settings-save').disabled = !S.settingsVersion; $('settings-reload').disabled = false;}
+}
+async function saveSettings(event) {
+  event.preventDefault();
+  if (S.settingsBusy || !S.settingsVersion) return;
+  const settings = {algorithms: Array.from(document.querySelectorAll('input[name="algorithm"]:checked')).map(n => n.value)};
+  for (const [,fields] of SETTING_FIELDS) for (const [key,,type] of fields) {
+    const input = $('setting-' + key);
+    if (type === 'password') {if (input.value) settings[key] = input.value;}
+    else settings[key] = type === 'checkbox' ? input.checked : type === 'number' ? Number(input.value) : input.value;
+  }
+  if ($('clear-llm-key').checked) settings.llm_api_key = '';
+  S.settingsBusy = true;
+  $('settings-save').disabled = true;
+  try {
+    const response = await fetch(API + '/settings', {method:'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({version: S.settingsVersion, settings}), signal: AbortSignal.timeout(8000)});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '保存失败（' + response.status + '）');
+    renderSettings(data);
+    notice('settings-notice', 'v' + data.version + ' 已生效');
+  } catch (error) {notice('settings-notice', error.message, true);}
+  finally {S.settingsBusy = false; $('settings-save').disabled = false;}
+}
+$('settings-form').addEventListener('submit', saveSettings);
+$('settings-reload').addEventListener('click', loadSettings);
 $('nav-live').addEventListener('click', () => switchView('live'));
 $('nav-history').addEventListener('click', () => switchView('history'));
+$('nav-settings').addEventListener('click', () => switchView('settings'));
 $('refresh').addEventListener('click', loadLive);
 $('history-refresh').addEventListener('click', loadHistory);
 $('history-days').addEventListener('change', loadHistory);
 $('history-type').addEventListener('change', loadHistory);
+$('history-algorithm').addEventListener('change', loadHistory);
+$('history-cohort').addEventListener('change', loadHistory);
 $('all-leagues').addEventListener('click', () => {S.league = ''; renderLeagues(); renderMatches();});
 $('search').addEventListener('input', event => {S.search = event.target.value; renderMatches();});
 for (const button of document.querySelectorAll('[data-type]')) button.addEventListener('click', () => {
@@ -316,7 +458,7 @@ for (const button of document.querySelectorAll('[data-type]')) button.addEventLi
   loadLive();
 });
 document.addEventListener('keydown', event => {if (event.key === 'Escape') closeDetail();});
-window.addEventListener('hashchange', () => {const view = location.hash === '#history' ? 'history' : 'live'; if (S.view !== view) switchView(view);});
+window.addEventListener('hashchange', () => {const view = ['history', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live'; if (S.view !== view) switchView(view);});
 async function poll() {await loadLive(); S.timer = setTimeout(poll, POLL_MS);}
-if (location.hash === '#history') switchView('history');
+if (['history', 'settings'].includes(location.hash.slice(1))) switchView(location.hash.slice(1));
 poll();

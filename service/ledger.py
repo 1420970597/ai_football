@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import math
 import uuid
+import hashlib
 import os
 import threading
 from dataclasses import dataclass, field, replace
@@ -111,6 +112,8 @@ class LedgerEntry:
     entry_clock_s: Optional[float] = None
     settlement_basis: str = "legacy_full_score"
     model_version: str = "legacy"
+    algorithm: str = "legacy"
+    config_version: int = 0
     league: str = ""
     home: str = ""
     away: str = ""
@@ -181,6 +184,8 @@ class LedgerEntry:
         d["clv"] = self.clv
         d["price_drift"] = clv(self.odds, self.closing_odds) if self.closing_odds else None
         d["legacy_identity"] = not bool(self.decision_id)
+        d["correct"] = (True if self.status in ("won", "half_won") else
+                        False if self.status in ("lost", "half_lost") else None)
         # 用户要求：盘口信息一律以中文展示，与乐鱼一致
         # （如「曼联上半场-1」「上半场进球数>1/1.5」）。
         # `label` 只在是买入建议时被写入（取自 picks），历史条目可能为空，
@@ -228,6 +233,7 @@ class DecisionLedger:
         self._loaded_rows: List[LedgerEntry] = []
         self._warned = ""
         self.last_error = ""
+        self._live_ids: Optional[set] = None
         if self.root is not None:
             try:
                 self.root.mkdir(parents=True, exist_ok=True)
@@ -329,6 +335,48 @@ class DecisionLedger:
         return [replace(e) for e in rows]
 
     # -- 记录决策 --------------------------------------------------------
+
+    def record_live(self, row: Mapping[str, Any]) -> int:
+        """Freeze the first prospective direction per match/algorithm/market.
+
+        The writer calls this outside the fast path. Deterministic identities
+        survive restarts and hot edits without overwriting the entry price.
+        """
+        if not self.enabled:
+            raise OSError("台账未启用")
+        forecast = row.get("forecast") or {}
+        mid, algorithm = str(row["match_id"]), str(row["algorithm"])
+        record_kind = "recommendation" if row.get("record_kind") == "recommendation" else "forecast"
+        market = str(forecast.get("market", ""))
+        if row.get("finished") or row.get("competition_type") != "real" or market not in ("HAD", "OU"):
+            return 0
+        identity = hashlib.sha256((mid + "|" + algorithm + "|" + market + "|" + record_kind + "|first-live-v1").encode()).hexdigest()
+        with self._lock:
+            if self._live_ids is None:
+                self._live_ids = {e.decision_id for e in self.load() if e.decision_id}
+            if identity in self._live_ids:
+                return 0
+            entry = LedgerEntry(
+                at=str(row["computed_at"]), updated_at=str(row["computed_at"]),
+                decision_id=identity, match_id=mid, competition_type="real", is_live=True,
+                entry_score=row.get("score"), entry_clock_s=row.get("elapsed_s"),
+                settlement_basis=str(forecast["settlement_basis"]),
+                model_version=str(row["model_version"]), algorithm=algorithm,
+                config_version=int(row["config_version"]), league=str(row.get("league", "")),
+                home=str(row.get("home", "")), away=str(row.get("away", "")),
+                market=market, line=str(forecast.get("line", "")), outcome=str(forecast["outcome"]),
+                odds=float(forecast["odds"]), is_pick=True, decision=record_kind,
+                trigger="live_recommendation" if record_kind == "recommendation" else "live_forecast",
+                edge=float(forecast["ev"]), p_market=float(forecast["p_market"]),
+                p_fused=float(forecast["p_model"]),
+            )
+            if entry.odds <= 1 or not math.isfinite(entry.odds) or entry.entry_score is None:
+                return 0
+            n = self._append([entry])
+            if not n:
+                raise OSError("决策留痕写入失败")
+            self._live_ids.add(identity)
+            return n
 
     @staticmethod
     def _f(value: Any) -> float:
@@ -621,6 +669,8 @@ class DecisionLedger:
         limit: int = 300,
         days: int = 0,
         competition_type: Optional[str] = None,
+        algorithm: Optional[str] = None,
+        cohort: str = "all",
     ) -> Dict[str, Any]:
         """历史决策 vs 实际结果的**分组统计 + 明细**。
 
@@ -651,6 +701,14 @@ class DecisionLedger:
             rows = [r for r in rows if r.is_pick]
         if competition_type and competition_type != "all":
             rows = [r for r in rows if r.competition_type == competition_type]
+        if algorithm and algorithm != "all":
+            rows = [r for r in rows if r.algorithm == algorithm]
+        if cohort == "prospective":
+            rows = [r for r in rows if r.trigger == "live_forecast"]
+        elif cohort == "recommendations":
+            rows = [r for r in rows if r.trigger == "live_recommendation"]
+        elif cohort == "legacy":
+            rows = [r for r in rows if r.trigger not in ("live_forecast", "live_recommendation")]
         if days and days > 0:
             cutoff = (_now() - timedelta(days=days)).isoformat()
             # `at` 是 ISO8601 UTC 字符串，字典序即时间序（同格式可比）
@@ -674,6 +732,8 @@ class DecisionLedger:
             "by_league": self._group_by(rows, "league"),
             "by_market": self._group_by(rows, "market"),
             "by_decision": self._group_by(rows, "decision"),
+            "by_algorithm": self._group_by(rows, "algorithm"),
+            "by_config_version": self._group_by(rows, "config_version"),
             "by_trigger": self._group_by(rows, "trigger"),
             "by_status": self._count_by(rows, "status"),
             "timeline": self._timeline(graded),

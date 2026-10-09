@@ -40,7 +40,7 @@ import os
 import random
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
@@ -457,6 +457,32 @@ class AnalysisService:
             "last_batch_s": 0.0,
         }
         self._restore_latest()
+        from service.runtime_settings import RuntimeConfig, RuntimeSettings
+        from service.live_review import LiveReview
+        runtime_cfg = RuntimeConfig()
+        if self.llm is not None:
+            runtime_cfg = replace(runtime_cfg, llm_base_url=self.llm.config.base_url,
+                                  llm_model=self.llm.config.model, llm_api_key=self.llm.config.api_key or "")
+        self.runtime_settings = RuntimeSettings(runtime_cfg)
+        self.live_review = LiveReview()
+        self._bind_runtime_settings()
+
+    def _apply_runtime_settings(self, cfg: Any, version: int) -> None:
+        self.live_expert.configure(cfg, version)
+        self.live_review.configure(cfg, version)
+        with self._lock:
+            self._cache.clear()
+        subscribed = getattr(self.realtime, "subscribed", None)
+        if callable(subscribed):
+            self.notify_price_change(subscribed())
+
+    def _bind_runtime_settings(self) -> None:
+        self.runtime_settings.bind(self.config.ledger_root)
+        self.live_expert.on_decision = self.ledger.record_live if self.ledger.enabled else None
+        self._apply_runtime_settings(self.runtime_settings.config, self.runtime_settings.version)
+
+    def update_settings(self, patch: Mapping[str, Any], version: Any) -> Dict[str, Any]:
+        return self.runtime_settings.update(patch, version, self._apply_runtime_settings)
 
     # -- 配置（支持运行期注入 ledger_root，且台账会跟着换） -------------------
 
@@ -487,6 +513,8 @@ class AnalysisService:
         if old is None or old_root != new_root:
             # 重建台账（保留已有对象则改用新路径；已有的落盘数据仍在磁盘）
             self.ledger = DecisionLedger(new_root)
+            if hasattr(self, "runtime_settings"):
+                self._bind_runtime_settings()
         # ⚠️ `result_path` 变化时必须**重新读回上次结果**。
         #
         # 为何必需（用户报“加载不出来比赛场次”的直接根因）：
@@ -595,6 +623,7 @@ class AnalysisService:
         if self._sched_thread is not None and self._sched_thread.is_alive():
             return False
         self.live_expert.start(self.config.ledger_root)
+        self.live_review.start()
         self._sched_stop.clear()
         self._sched_thread = threading.Thread(
             target=self._sched_loop, name="analysis-trigger", daemon=True)
@@ -603,6 +632,7 @@ class AnalysisService:
 
     def stop_scheduler(self, timeout: float = 5.0) -> None:
         self.live_expert.stop()
+        self.live_review.stop()
         self._sched_stop.set()
         self._sched_wake.set()
         t = self._sched_thread
@@ -741,6 +771,8 @@ class AnalysisService:
                 row = self.live_expert.compute(snapshot, rt, first)
                 if not row:
                     self.notify_price_change([mid])
+                else:
+                    self.live_review.submit(row)
             except (ValueError, TypeError, ArithmeticError) as exc:
                 self.live_expert.errors += 1
                 self.cycle_stats["last_error"] = "实时模型: %s" % exc
@@ -1122,34 +1154,26 @@ class AnalysisService:
         """
         try:
             sched = self.valuation.source.schedule()
-        except Exception:  # noqa: BLE001 - 拿不到赛程不影响其它功能
-            return []
-        finished = [m for m in (sched or [])
-                    if getattr(m, "is_finished", False)]
-        if not finished:
-            return []
-        # 只对关心的场次补比分
-        if mids:
-            want = {str(m) for m in mids if m}
-            finished = [m for m in finished if str(getattr(m, "mid", "")) in want]
-            if not finished:
-                return []
-        # 赛程里已带比分（理论上不会）则直接用；否则用 odds() 补
-        if all(getattr(m, "score", (None, None))[0] is not None
-               for m in finished):
-            return finished
-        try:
-            detailed = self.valuation.source.odds(
-                [str(getattr(m, "mid", "")) for m in finished])
-        except Exception:  # noqa: BLE001 - 补比分失败则交回空（未结算）
-            return []
-        by_mid = {str(getattr(m, "mid", "")): m for m in detailed}
-        out: List[Any] = []
-        for m in finished:
-            got = by_mid.get(str(getattr(m, "mid", "")))
-            # 优先用带比分的那份；它没有则退回赛程原件（至少不丢场次）
-            out.append(got if got is not None else m)
-        return out
+        except Exception:  # noqa: BLE001 - direct historical lookup can still work
+            sched = []
+        by_schedule = {str(m.mid): m for m in (sched or [])}
+        want = {str(m) for m in mids} if mids else set(by_schedule)
+        ready = {mid: m for mid, m in by_schedule.items() if mid in want and m.is_finished}
+        # Query absent IDs directly: the current live schedule omits old matches.
+        missing = want - set(by_schedule)
+        fetch = missing | {mid for mid, m in ready.items() if getattr(m, 'score', (None, None))[0] is None}
+        if fetch:
+            try:
+                detailed = self.valuation.source.odds(sorted(fetch))
+            except Exception:  # noqa: BLE001
+                detailed = []
+            for m in detailed:
+                mid = str(m.mid)
+                if mid in fetch and getattr(m, 'is_finished', False) is True:
+                    ready[mid] = m
+                elif mid in ready:
+                    ready.pop(mid, None)  # contradictory new status is not a final-score proof
+        return [m for m in ready.values() if getattr(m, 'score', (None, None))[0] is not None]
 
     def _confirmed_finished_mids(self, pending: Any) -> set:
         """赛程中 `ms==110`（已结束）且属于待结算集合的 mid。
@@ -1252,7 +1276,8 @@ class AnalysisService:
         return out
 
     def ledger_history(self, only_picks: bool = True, limit: int = 300,
-                       days: int = 0, competition_type: Optional[str] = None) -> Dict[str, Any]:
+                       days: int = 0, competition_type: Optional[str] = None,
+                       algorithm: Optional[str] = None, cohort: str = "all") -> Dict[str, Any]:
         """历史决策 vs 实际结果的分组统计 + 明细（用户要求的菜单数据）。
 
         与 `ledger_stats` 的分工：后者是“一句话结论”（总命中率/ROI），
@@ -1262,7 +1287,7 @@ class AnalysisService:
         同时补上结算线程的状态，让用户知道“未结算的还要等多久”。
         """
         out = self.ledger.history(picks_only=only_picks, limit=limit,
-                                  days=days, competition_type=competition_type)
+                                  days=days, competition_type=competition_type, algorithm=algorithm, cohort=cohort)
         out["settle"] = dict(self.settle_stats)
         out["summary"] = self.ledger.stats(only_picks=only_picks)
         return out

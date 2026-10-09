@@ -296,6 +296,8 @@ class ApiApp:
             ("GET", "/workbench", self.h_workbench),
             ("GET", "/workbench/<id>", self.h_workbench_detail),
             ("GET", "/llm", self.h_llm),
+            ("GET", "/settings", self.h_settings),
+            ("POST", "/settings", self.h_settings_save),
             ("GET", "/ledger/stats", self.h_ledger_stats),
             # 历史战绩：分日期/联赛/盘口 的分组统计 + 逐条明细（含实际比分）。
             # 与 /ledger/stats 互补：后者是“一句话结论”，本端点是
@@ -361,6 +363,9 @@ class ApiApp:
         except NotFound as exc:
             return HTTPStatus.NOT_FOUND, {"error": str(exc)}
         except ValueError as exc:
+            from service.runtime_settings import VersionConflict
+            if isinstance(exc, VersionConflict):
+                return HTTPStatus.CONFLICT, {"error": str(exc)}
             return HTTPStatus.BAD_REQUEST, {"error": str(exc)}
         except Exception as exc:  # 兜底：绝不把堆栈泄露给客户端
             return HTTPStatus.INTERNAL_SERVER_ERROR, {
@@ -563,14 +568,9 @@ class ApiApp:
         rows = []
         for row in result.pop("decisions"):
             public = self._public_live_row(row, bool(realtime.get("connected")))
-            # All markets remain available in details; the list stays compact.
-            displayed = []
-            for family in ("HAD", "AH", "OU"):
-                options = [m for m in row["markets"] if m["market"] == family]
-                options.sort(key=lambda m: abs(m["quotes"][0]["p_market"] - .5))
-                if options:
-                    displayed.append(options[0])
-            public["markets"] = displayed
+            public["llm_review"] = self.analysis.live_review.public(row)
+            public.pop("evaluations", None)
+            public.pop("candidates", None)
             public.pop("events", None)
             rows.append(public)
         rows.sort(key=lambda r: (r["stale"], r.get("league", ""), r["match_id"]))
@@ -631,6 +631,7 @@ class ApiApp:
         if public["stale"]:
             public["picks"] = []
             public["has_buy"] = False
+            public["decision"] = "observe"
         return public
 
     def h_workbench_detail(self, query: Mapping[str, List[str]],
@@ -640,7 +641,20 @@ class ApiApp:
             raise NotFound("该场尚未收到实时算法结果")
         rt = self.analysis.realtime
         connected = bool(rt is not None and rt.stats.connected)
-        return self._public_live_row(row, connected)
+        public = self._public_live_row(row, connected)
+        public["llm_review"] = self.analysis.live_review.public(row)
+        return public
+
+    def h_settings(self, query: Mapping[str, List[str]],
+                   body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        return {**self.analysis.runtime_settings.public(), "llm_review": self.analysis.live_review.health()}
+
+    def h_settings_save(self, query: Mapping[str, List[str]],
+                        body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        patch = body.get("settings")
+        if not isinstance(patch, Mapping):
+            raise BadRequest("settings 必须是对象")
+        return self.analysis.update_settings(patch, body.get("version"))
 
     def h_decisions(self, query: Mapping[str, List[str]],
                     body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
@@ -1264,8 +1278,12 @@ class ApiApp:
         kind = _q1(query, "type")
         if kind not in (None, "all", "real", "virtual", "unknown"):
             raise BadRequest("type 必须是 real/virtual/unknown/all")
+        cohort = _q1(query, "cohort", "all")
+        if cohort not in ("all", "prospective", "recommendations", "legacy"):
+            raise BadRequest("cohort 必须是 all/prospective/recommendations/legacy")
         return self.analysis.ledger_history(only_picks=only_picks,
-                                            limit=limit, days=days, competition_type=kind)
+                                            limit=limit, days=days, competition_type=kind,
+                                            algorithm=_q1(query, "algorithm"), cohort=cohort)
 
     def h_ledger_entries(self, query: Mapping[str, List[str]],
                          body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:

@@ -37,7 +37,9 @@ class LiveExpertTests(unittest.TestCase):
         row = result['decisions'][0]
         self.assertTrue(row['probabilities'])
         self.assertTrue(row['candidates'])
-        self.assertEqual(row['decision'], 'observe')
+        self.assertEqual(row['decision'], 'forecast')
+        self.assertEqual(len(row['evaluations']), 2)
+        self.assertTrue(row['forecasts'])
         self.assertFalse(row['has_buy'])
         self.assertFalse(row['llm_used'])
         self.assertEqual(row['clock'], '60:00')
