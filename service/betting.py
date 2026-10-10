@@ -26,6 +26,10 @@ class BettingProtocolError(BettingBlocked):
     """The recommendation does not contain enough App order identifiers."""
 
 
+class BettingRecomputeNeeded(BettingBlocked):
+    """A new decision can resolve this gate without replaying an order."""
+
+
 VENUE_BET_PATH = "/yewu13/v1/betOrder/client/bet"
 ENSEMBLE_ALGORITHM = "economic_ensemble"
 EXECUTOR_QUEUE_LIMIT = 256
@@ -288,10 +292,14 @@ class BettingExecutor:
     """
 
     def __init__(self, settings: Any, hub: Callable[[], Any], ledger: Callable[[], Any],
-                 client_factory: Callable[[], Any] | None = None) -> None:
+                 client_factory: Callable[[], Any] | None = None,
+                 on_recompute: Callable[[list[str]], None] | None = None) -> None:
         self.settings = settings
         self.hub, self.ledger = hub, ledger
         self.client_factory = client_factory
+        self.on_recompute = on_recompute
+        self._client: Any = None
+        self._client_key = ""
         self.path: Path | None = None
         self._lock = threading.RLock()
         self._run_lock = threading.Lock()
@@ -396,6 +404,65 @@ class BettingExecutor:
             previous.update(status="unknown", submitted=None, reason="上次提交未取得回执；请核对场馆注单")
         return {**previous, "duplicate": True}
 
+    def _check_state(self, row: Mapping[str, Any], pick: Mapping[str, Any],
+                     snapshot: Mapping[str, Any], detail: Mapping[str, Any], cfg: Any,
+                     *, original: Mapping[str, Any] | None = None) -> None:
+        """Validate the selected quote and match state, not a global event counter.
+
+        C105 refreshes the counter even for unchanged prices. Score and phase
+        belong to the decision; timestamps and unrelated quote updates do not.
+        """
+        if time.time() * 1000 - float(row.get("published_at_ms") or 0) > cfg.quote_max_age_s * 1000:
+            raise BettingRecomputeNeeded("综合推荐已过期，需要重新计算")
+        if (snapshot.get("finished") or row.get("finished") or snapshot.get("suspended")
+                or str(snapshot.get("status", {}).get("mmp")) not in ("6", "7")):
+            raise BettingBlocked("比赛未进行或盘口暂停")
+        for field in ("score_age_s", "status_age_s"):
+            age = snapshot.get(field)
+            if age is None or not math.isfinite(float(age)) or float(age) > cfg.state_max_age_s:
+                raise BettingRecomputeNeeded("比分或比赛时钟已过期")
+        expected = original if original is not None else row
+        expected_score = expected.get("score")
+        expected_phase = (expected.get("status", {}).get("mmp") if original is not None
+                          else expected.get("phase"))
+        actual_score = snapshot.get("score")
+        if (expected_score is None or actual_score is None or tuple(expected_score) != tuple(actual_score)
+                or str(expected_phase) != str(snapshot.get("status", {}).get("mmp"))):
+            raise BettingRecomputeNeeded("比分或比赛阶段已变化，需要重新计算")
+        matches = []
+        for quote in snapshot.get("quotes", []):
+            native = getattr(quote, "order_detail", {})
+            if (str(quote.oid) != str(detail["playOptionsId"])
+                    or str(quote.hv or "") != str(pick.get("line") or "")
+                    or str(quote.ot) != str(detail["playOptions"])
+                    or str(quote.chpid) != str(detail.get("chpid") or detail["playId"])):
+                continue
+            # Native identifiers prevent matching another half/market with
+            # a reused option ID. Older local quotes have no native metadata.
+            if any(native.get(key) not in (None, "", detail[key])
+                   and str(native[key]) != str(detail[key]) for key in ("matchId", "marketId", "playId")):
+                continue
+            matches.append(quote)
+        if not matches:
+            raise BettingRecomputeNeeded("推荐盘口或选项已更新，需要重新计算")
+        quote = max(matches, key=lambda q: q.ts_ms)
+        if quote.quote_age_s > cfg.quote_max_age_s:
+            raise BettingRecomputeNeeded("推荐盘口报价已过期，需要重新计算")
+        if not math.isclose(quote.odds, float(detail["oddFinally"]), abs_tol=0.000005):
+            raise BettingRecomputeNeeded("推荐盘口赔率已变化，需要重新计算")
+
+    def _account_client(self, default_factory: Callable[[], Any]) -> Any:
+        if self.client_factory is not None:
+            return self.client_factory()
+        # Keep authentication within the executor. Recreating the client for
+        # every pick used to repeat venue launch and consume quote validity.
+        key = _identity([k + "=" + v for k, v in sorted(os.environ.items()) if k.startswith("LEYU_")])
+        with self._lock:
+            if self._client is None or key != self._client_key:
+                self._client = default_factory()
+                self._client_key = key
+            return self._client
+
     def execute(self, row: Mapping[str, Any], pick: Mapping[str, Any]) -> dict[str, Any]:
         """Execute only an in-memory server recommendation, never an API pick."""
         from collector.leyu_account import (BetSubmissionRejected, BetSubmissionUnknown,
@@ -411,6 +478,9 @@ class BettingExecutor:
                                   "line": pick.get("line"), "outcome": pick.get("outcome"),
                                   "status": "blocked", "submitted": False,
                                   "checked_at_ms": int(time.time() * 1000)}
+        result["decision_at_ms"] = row.get("published_at_ms")
+        stage = "recommendation"
+        started = time.monotonic()
         with self._lock:
             path = self.path
             blocked = self._blocked.get(identity)
@@ -423,7 +493,9 @@ class BettingExecutor:
                 raise BettingBlocked("未配置持久化订单目录，无法防止重启重复提交")
             if blocked is not None:
                 remaining = blocked[0] + BLOCKED_RECHECK_S - time.monotonic()
-                if remaining > 0:
+                fresh_retry = (blocked[1].get("retry_on_new_decision") and
+                               float(row.get("published_at_ms") or 0) > float(blocked[1].get("decision_at_ms") or 0))
+                if remaining > 0 and not fresh_retry:
                     # Repeated recommendations must not restart the cooldown
                     # or overwrite the failure that explains why no order was sent.
                     return {**blocked[1], "recheck_deferred": True,
@@ -438,23 +510,16 @@ class BettingExecutor:
             if hub is None:
                 raise BettingBlocked("实时行情未启动")
             snapshot = hub.decision_snapshot(mid)
-            if snapshot.get("version") != row.get("version"):
-                raise BettingBlocked("实时比赛/盘口已变化，等待重新计算")
-            if time.time() * 1000 - float(row.get("published_at_ms") or 0) > cfg.quote_max_age_s * 1000:
-                raise BettingBlocked("综合推荐已过期")
-            if (snapshot.get("finished") or row.get("finished") or snapshot.get("suspended")
-                    or str(snapshot.get("status", {}).get("mmp")) not in ("6", "7")):
-                raise BettingBlocked("比赛未进行或盘口暂停")
-            for field in ("score_age_s", "status_age_s"):
-                age = snapshot.get(field)
-                if age is None or not math.isfinite(float(age)) or age > cfg.state_max_age_s:
-                    raise BettingBlocked("比分或比赛时钟已过期")
+            stage = "live_quote"
+            metadata = {key: (snapshot.get("info") or {}).get(key) or row.get(key)
+                        for key in ("home", "away", "league")}
+            detail = build_ybty_order_detail({**pick, **metadata}, cfg.betting_fixed_stake)
+            self._check_state(row, pick, snapshot, detail, cfg)
+            stage = "historical_evidence"
             evidence = self.ledger().recommendation_performance(
                 str(pick["market"]), str(pick.get("line") or ""), str(pick["outcome"]))
             confidence = recommendation_confidence(pick, evidence)
             plan = plan_bet({**pick, **evidence, "match_id": mid, "composite_confidence": confidence}, cfg)
-            info = snapshot.get("info") or {}
-            metadata = {key: info.get(key) or row.get(key) for key in ("home", "away", "league")}
             detail = build_ybty_order_detail({**pick, **metadata}, plan.stake)
             if detail["matchId"] != mid or detail["sportId"] != "1" or detail["matchType"] != 2:
                 raise BettingBlocked("原始订单标识与当前真实足球推荐不一致")
@@ -463,24 +528,19 @@ class BettingExecutor:
             previous = self._existing_order(db, selection_key, account_key)
             if previous is not None:
                 return previous
-            factory = self.client_factory or account_client_from_env
-            client = factory()
+            stage = "venue_preflight"
+            client = self._account_client(account_client_from_env)
             if client is None:
                 raise BettingBlocked("未配置乐鱼 App 账户会话")
             detail = client.prepare_bet(detail, plan.stake)
             payload = build_ybty_bet_payload({"order_detail": detail}, plan.stake)
             current, current_version = self.settings.snapshot()
             final = hub.decision_snapshot(mid)
-            quote = next((q for q in final.get("quotes", []) if str(q.oid) == detail["playOptionsId"]
-                          and str(q.hv or "") == str(pick.get("line") or "")), None)
-            if (not current.betting_enabled or current_version != version or self._stop.is_set()
-                    or final.get("finished") or final.get("suspended")
-                    or final.get("score") != snapshot.get("score")
-                    or final.get("status", {}).get("mmp") != snapshot.get("status", {}).get("mmp")
-                    or quote is None or quote.quote_age_s > cfg.quote_max_age_s
-                    or not math.isclose(quote.odds, float(detail["oddFinally"]), abs_tol=0.000005)
-                    or time.time() * 1000 - float(row["published_at_ms"]) > cfg.quote_max_age_s * 1000):
-                raise BettingBlocked("提交前配置或行情已变化")
+            stage = "final_quote"
+            if not current.betting_enabled or current_version != version or self._stop.is_set():
+                raise BettingBlocked("提交前投注配置已变化或执行器已停止")
+            self._check_state(row, pick, final, detail, cfg, original=snapshot)
+            stage = "durable_claim"
             sending = {**result, "status": "sending", "reason": "已提交发送意图，等待场馆回执"}
             try:
                 # Serialize the final duplicate check with the durable claim.
@@ -499,6 +559,7 @@ class BettingExecutor:
                 db.rollback()
                 return {**result, "status": "duplicate", "duplicate": True, "reason": "该推荐已有订单提交记录"}
             claimed = True
+            stage = "submission"
             try:
                 result.update(client.submit_bet(payload))
             except BetSubmissionRejected as exc:
@@ -511,21 +572,85 @@ class BettingExecutor:
         except Exception as exc:  # Each failure stops this order, never the worker.
             # No provider exception/body can leak credentials into public state.
             reason = str(exc) if isinstance(exc, (BettingBlocked, SessionError)) else "订单校验或持久化失败"
+            result.update(stage=stage, elapsed_ms=round((time.monotonic() - started) * 1000, 1))
             if claimed:
                 result.update(status="unknown", submitted=None, reason="提交结果未知；请核对场馆注单，不会自动重发")
             else:
                 result["reason"] = reason
+                recompute = isinstance(exc, BettingRecomputeNeeded) or (
+                    isinstance(exc, SessionError) and any(text in reason for text in
+                    ("赔率已变化", "盘口线已变化", "找不到推荐的比赛与盘口", "选项已关闭或不存在")))
+                result["retry_on_new_decision"] = recompute
                 result["retry_after_s"] = BLOCKED_RECHECK_S
                 with self._lock:
                     if identity not in self._blocked and len(self._blocked) >= EXECUTOR_QUEUE_LIMIT:
                         self._blocked.pop(next(iter(self._blocked)))
                     self._blocked[identity] = (time.monotonic(), dict(result))
-                LOGGER.warning("Betting blocked: match_id=%s market=%s line=%s outcome=%s reason=%s",
-                               mid, result["market"], result["line"], result["outcome"], reason)
+                LOGGER.warning("Betting blocked: match_id=%s market=%s line=%s outcome=%s stage=%s elapsed_ms=%s reason=%s",
+                               mid, result["market"], result["line"], result["outcome"], stage, result["elapsed_ms"], reason)
+                if recompute and self.on_recompute is not None:
+                    try:
+                        self.on_recompute([mid])
+                    except Exception:
+                        LOGGER.warning("Betting recompute notification failed: match_id=%s", mid)
             return result
         finally:
             if db is not None:
                 db.close()
+
+    def statuses(self, selections: list[tuple[str, str, str, str]]) -> dict[tuple[str, str, str, str], dict[str, Any]]:
+        """Read execution evidence for each visible pick without venue calls."""
+        wanted = {_identity(list(key)): key for key in selections}
+        account = os.environ.get("LEYU_APP_LOGIN_NAME", "").strip().casefold() or "default"
+        account_key = _identity([account])
+        with self._lock:
+            path = self.path
+            attempts = [dict(item[1]) for item in self._blocked.values()]
+            queued = dict(self._queue)
+        cfg, _ = self.settings.snapshot()
+        out: dict[tuple[str, str, str, str], dict[str, Any]] = {key: {"status": "not_submitted" if cfg.betting_enabled else "disabled",
+                     "submitted": False, "reason": "尚无订单提交记录" if cfg.betting_enabled else "投注功能未启用"}
+               for key in selections}
+        for mid, row in queued.items():
+            for pick in row.get("picks", []):
+                parts = _bet_selection(mid, pick)
+                key = (parts[0], parts[1], parts[2], parts[3])
+                if key in out:
+                    out[key] = {"status": "queued", "submitted": False, "reason": "等待执行检查"}
+        for attempt in attempts:
+            parts = _bet_selection(str(attempt.get("match_id") or ""), attempt)
+            key = (parts[0], parts[1], parts[2], parts[3])
+            if key in out:
+                out[key] = attempt
+        if not path or not path.exists() or not wanted:
+            return out
+        try:
+            with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
+                columns = {col[1] for col in db.execute("PRAGMA table_info(orders)")}
+                # GET must not migrate an old DB; execution owns that transaction.
+                if "selection_key" not in columns:
+                    rows = db.execute("SELECT payload FROM orders ORDER BY at").fetchall()
+                else:
+                    hashes = list(wanted)
+                    rows = []
+                    for offset in range(0, len(hashes), 200):
+                        batch = hashes[offset:offset+200]
+                        rows.extend(db.execute("SELECT payload FROM orders WHERE selection_key IN (" +
+                            ",".join("?" for _ in batch) + ") AND (account_key=? OR account_key IS NULL) ORDER BY at",
+                            [*batch, account_key]).fetchall())
+                for (raw,) in rows:
+                    order = json.loads(raw)
+                    parts = _bet_selection(str(order.get("match_id") or ""), order)
+                    key = (parts[0], parts[1], parts[2], parts[3])
+                    if key not in out:
+                        continue
+                    if order.get("status") == "sending":
+                        order.update(status="unknown", submitted=None, reason="发送意图已有记录，等待或核对场馆回执")
+                    out[key] = order
+        except (OSError, sqlite3.Error, ValueError):
+            for key in out:
+                out[key] = {"status": "blocked", "submitted": False, "reason": "订单记录不可读取"}
+        return out
 
     def health(self) -> dict[str, Any]:
         cfg, _ = self.settings.snapshot()

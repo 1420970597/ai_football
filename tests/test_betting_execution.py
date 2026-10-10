@@ -31,6 +31,7 @@ class BettingExecutionTests(unittest.TestCase):
                      'odds': 1.95, 'algorithm': 'economic_ensemble', 'order_detail': detail}
         self.row = {'match_id': 'm', 'algorithm': 'economic_ensemble', 'competition_type': 'real',
                     'config_version': 1, 'version': 10, 'published_at_ms': time.time() * 1000,
+                    'score': [1, 0], 'phase': '7',
                     'picks': [self.pick]}
         self.snapshot = {'version': 10, 'score': (1, 0), 'score_age_s': 0, 'status_age_s': 0,
                          'status': {'mmp': '7'}, 'finished': False, 'suspended': False,
@@ -350,7 +351,7 @@ class BettingExecutionTests(unittest.TestCase):
         self.client.submit_bet.assert_not_called()
 
     def test_state_and_protocol_gates(self):
-        for change in ({'finished': True}, {'suspended': True}, {'version': 11},
+        for change in ({'finished': True}, {'suspended': True}, {'score': (2, 0)},
                        {'score_age_s': 999}, {'status': {'mmp': '999'}}):
             with self.subTest(change=change):
                 before = dict(self.snapshot)
@@ -367,6 +368,72 @@ class BettingExecutionTests(unittest.TestCase):
             return detail
         self.client.prepare_bet.side_effect = prepare
         self.assertEqual(self.executor.execute(self.row, self.pick)['status'], 'accepted')
+
+    def test_unchanged_c105_version_before_checks_does_not_block_bet(self):
+        self.snapshot['version'] = 999
+        result = self.executor.execute(self.row, self.pick)
+        self.assertEqual(result['status'], 'accepted', result)
+        self.client.submit_bet.assert_called_once()
+
+    def test_new_decision_bypasses_quote_failure_cooldown_but_never_repeats_order(self):
+        self.executor.on_recompute = MagicMock()
+        self.snapshot['quotes'][0].odds = 2.05
+        with self.assertLogs('service.betting', level='WARNING'):
+            blocked = self.executor.execute(self.row, self.pick)
+        self.assertEqual(blocked['stage'], 'live_quote')
+        self.assertTrue(blocked['retry_on_new_decision'])
+        self.executor.on_recompute.assert_called_once_with(['m'])
+        self.client.prepare_bet.assert_not_called()
+        self.refresh_recommendation(2.05)
+        result = self.executor.execute(self.row, self.pick)
+        self.assertEqual(result['status'], 'accepted', result)
+        self.refresh_recommendation(2.15)
+        self.assertTrue(self.executor.execute(self.row, self.pick)['duplicate'])
+        self.client.submit_bet.assert_called_once()
+
+    def test_preflight_failures_report_specific_final_cause(self):
+        for mutation, reason in (
+            (lambda: setattr(self.snapshot['quotes'][0], 'odds', 2.05), '赔率已变化'),
+            (lambda: self.snapshot.update(quotes=[]), '盘口或选项已更新'),
+            (lambda: self.snapshot.update(score=(2, 0)), '比分或比赛阶段已变化'),
+            (lambda: self.row.update(published_at_ms=(time.time()-16)*1000), '综合推荐已过期'),
+            (lambda: self.snapshot.update(score_age_s=999), '比赛时钟已过期'),
+        ):
+            with self.subTest(reason=reason):
+                self.setUp()
+                def prepare(detail, stake, mutate=mutation):
+                    mutate()
+                    return detail
+                self.client.prepare_bet.side_effect = prepare
+                with self.assertLogs('service.betting', level='WARNING'):
+                    result = self.executor.execute(self.row, self.pick)
+                self.assertEqual(result['stage'], 'final_quote', result)
+                self.assertIn(reason, result['reason'])
+                self.client.submit_bet.assert_not_called()
+
+    def test_cached_account_client_reuses_venue_session_and_invalidates_credentials(self):
+        self.executor.client_factory = None
+        factory = MagicMock(return_value=self.client)
+        with patch.dict('os.environ', {'LEYU_APP_LOGIN_NAME': 'account-a'}):
+            self.assertIs(self.executor._account_client(factory), self.client)
+            self.assertIs(self.executor._account_client(factory), self.client)
+        factory.assert_called_once()
+        with patch.dict('os.environ', {'LEYU_APP_LOGIN_NAME': 'account-b'}):
+            self.executor._account_client(factory)
+        self.assertEqual(factory.call_count, 2)
+
+    def test_status_for_each_selection_preserves_receipt_over_last_blocked_result(self):
+        self.assertEqual(self.executor.execute(self.row, self.pick)['status'], 'accepted')
+        self.refresh_recommendation(line='3.5')
+        self.ledger.recommendation_performance.return_value = {'hit_count':0,'settled_samples':0}
+        with self.assertLogs('service.betting', level='WARNING'):
+            self.executor.execute(self.row, self.pick)
+        keys = [('m','OU','2.5','over'),('m','OU','3.5','over'),('other','OU','2.5','over')]
+        state = self.executor.statuses(keys)
+        self.assertEqual(state[keys[0]]['order_no'], 'ORDER-1')
+        self.assertEqual(state[keys[1]]['status'], 'blocked')
+        self.assertIn('命中次数不足', state[keys[1]]['reason'])
+        self.assertEqual(state[keys[2]]['status'], 'not_submitted')
 
     def test_score_change_during_checks_blocks_execution(self):
         def prepare(detail, stake):
