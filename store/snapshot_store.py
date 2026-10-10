@@ -339,7 +339,7 @@ class SnapshotStore:
 
     # -- 写入 ---------------------------------------------------------------
 
-    def append(self, snapshot: OddsSnapshot) -> Path:
+    def append(self, snapshot: OddsSnapshot, *, _index_batch: Optional[Dict[Path, list]] = None) -> Path:
         """追加一个快照（永不覆盖既有文件）。
 
         Returns:
@@ -369,13 +369,27 @@ class SnapshotStore:
             payload = snapshot.as_dict()
             payload["_schema"] = "odds_snapshot/v1"
             self._atomic_write_json(target, payload)
-            self._update_index(d, target.name, payload)
+            if _index_batch is None:
+                self._update_index(d, target.name, payload)
+            else:
+                _index_batch.setdefault(d, []).append((target.name, payload))
         self.cache_invalidate(snapshot.match_id)
         return target
 
     def append_many(self, snapshots: Iterable[OddsSnapshot]) -> List[Path]:
         """批量追加，返回写入路径列表。"""
-        return [self.append(s) for s in snapshots]
+        batches: Dict[Path, list] = {}
+        written = []
+        with self._lock:
+            try:
+                for snapshot in snapshots:
+                    written.append(self.append(snapshot, _index_batch=batches))
+            finally:
+                # Successfully written files remain indexed even if a later
+                # snapshot fails; no historical file is rolled back or deleted.
+                for directory, rows in batches.items():
+                    self._update_index_many(directory, rows)
+        return written
 
     @staticmethod
     def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -399,6 +413,9 @@ class SnapshotStore:
 
     def _update_index(self, d: Path, filename: str,
                       payload: Dict[str, Any]) -> None:
+        self._update_index_many(d, [(filename, payload)])
+
+    def _update_index_many(self, d: Path, rows: list) -> None:
         """维护赛事级别的快照索引（便于快速列举与统计）。"""
         idx_path = d / "_index.json"
         idx: Dict[str, Any] = {"files": [], "count": 0}
@@ -409,9 +426,9 @@ class SnapshotStore:
             except (OSError, ValueError):
                 idx = {"files": [], "count": 0}
 
-        files = idx.get("files") or []
-        if filename not in files:
-            files.append(filename)
+        files = set(idx.get("files") or [])
+        files.update(filename for filename, _ in rows)
+        payload = rows[-1][1]
         idx["files"] = sorted(files)
         idx["count"] = len(idx["files"])
         idx["match_id"] = payload.get("match_id")

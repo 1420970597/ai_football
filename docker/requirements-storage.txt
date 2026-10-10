@@ -1,1 +1,3 @@
 boto3>=1.35,<2
+# Accelerate the large recoverable live-book cache in the API container.
+orjson>=3.10,<4

@@ -11,7 +11,8 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from collector.leyu_account import BetPreflightRetryable, BetSubmissionRejected, BetSubmissionUnknown
+from collector.leyu_account import (BetPreflightBudgetExpired, BetPreflightRetryable,
+                                   BetSubmissionRejected, BetSubmissionUnknown)
 from collector.leyu_realtime import LiveQuote, parse_c105
 from service.analysis import AnalysisConfig, AnalysisService
 from service.betting import BettingExecutor
@@ -51,6 +52,113 @@ class BettingExecutionTests(unittest.TestCase):
         executor = BettingExecutor(self.settings, lambda: self.hub, lambda: self.ledger, self.factory)
         executor.bind(self.temp.name + '/ledger')
         return executor
+
+    def test_parallel_prechecks_still_serialize_debits(self):
+        active, maximum = 0, 0
+        state_lock = threading.Lock()
+        barrier = threading.Barrier(2)
+        def prepare(detail, stake):
+            barrier.wait(1)
+            return detail
+        def submit(payload):
+            nonlocal active, maximum
+            with state_lock:
+                active += 1
+                maximum = max(maximum, active)
+            time.sleep(.02)
+            with state_lock:
+                active -= 1
+            return {'status': 'accepted', 'submitted': True}
+        self.client.prepare_bet.side_effect = prepare
+        self.client.submit_bet.side_effect = submit
+        second = {**self.pick, 'line': '3.5', 'order_detail': {**self.pick['order_detail'],
+                  'marketValue': '3.5', 'playOptionsId': 'option2'}}
+        self.row['picks'].append(second)
+        self.snapshot['quotes'].append(replace(self.snapshot['quotes'][0], hv='3.5', oid='option2'))
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            results = list(workers.map(lambda p: self.executor.execute(self.row, p), self.row['picks']))
+        self.assertEqual([r['status'] for r in results], ['accepted', 'accepted'])
+        self.assertEqual(maximum, 1)
+
+    def test_expired_quote_does_not_schedule_recomputation_of_old_input(self):
+        self.pick.update(quote_received_at=time.monotonic()-3, quote_received_at_ms=int(time.time()*1000)-3000)
+        result = self.executor.execute(self.row, self.pick)
+        self.assertTrue(result['awaiting_new_quote'])
+        self.assertFalse(result['retry_scheduled'])
+        self.assertEqual(self.executor.health()['retry_pending'], 0)
+        with patch('service.betting.time.monotonic', return_value=time.monotonic()+60):
+            deferred = self.executor.execute(self.row, self.pick)
+        self.assertTrue(deferred['recheck_deferred'])
+        self.assertEqual(self.executor.health()['latency']['deadline_blocked'], 1)
+        self.pick.update(quote_received_at=time.monotonic(), quote_received_at_ms=int(time.time()*1000))
+        self.row['published_at_ms'] = time.time()*1000
+        self.executor.enqueue(self.row)
+        self.assertEqual(self.executor.flush()[0]['status'], 'accepted')
+        self.client.submit_bet.assert_called_once()
+
+    def test_preflight_budget_expiry_waits_for_new_quote_without_retry_timer(self):
+        self.pick.update(quote_received_at=time.monotonic(), quote_received_at_ms=int(time.time()*1000))
+        self.client.prepare_bet.side_effect = BetPreflightBudgetExpired('预算耗尽')
+        result = self.executor.execute(self.row, self.pick)
+        self.assertTrue(result['deadline_exceeded'])
+        self.assertTrue(result['awaiting_new_quote'])
+        self.assertFalse(result['retry_scheduled'])
+        self.client.submit_bet.assert_not_called()
+        # A newer result may arrive before the old preflight error is stored.
+        # Direct execution must also recognize the newer input in that race.
+        self.pick['quote_received_at_ms'] += 1
+        self.client.prepare_bet.side_effect = lambda detail, stake: detail
+        self.assertEqual(self.executor.execute(self.row, self.pick)['status'], 'accepted')
+
+    def test_original_quote_budget_is_not_renewed_by_new_decision(self):
+        self.pick['quote_received_at'] = time.monotonic()-2.1
+        self.row['published_at_ms'] = time.time()*1000
+        result = self.executor.execute(self.row, self.pick)
+        self.assertTrue(result['deadline_exceeded'])
+        self.assertFalse(result['latency_target_met'])
+        self.client.submit_bet.assert_not_called()
+        self.assertEqual(self.executor.health()['latency']['submissions'], 0)
+
+    def test_restored_quote_cannot_be_given_a_new_execution_clock(self):
+        self.pick['quote_received_at'] = None
+        result = self.executor.execute(self.row, self.pick)
+        self.assertEqual(result['status'], 'blocked')
+        self.client.submit_bet.assert_not_called()
+
+    def test_durable_replay_is_required_before_claim_or_submit(self):
+        self.executor.on_persisted = MagicMock(return_value=False)
+        result = self.executor.execute(self.row, self.pick)
+        self.assertTrue(result['deadline_exceeded'])
+        self.client.submit_bet.assert_not_called()
+        with closing(sqlite3.connect(self.executor.path)) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM orders').fetchone()[0], 0)
+
+    def test_success_records_submit_and_receipt_from_original_quote(self):
+        self.pick['quote_received_at'] = time.monotonic()-.1
+        result = self.executor.execute(self.row, self.pick)
+        self.assertEqual(result['status'], 'accepted')
+        self.assertTrue(result['latency_target_met'])
+        self.assertGreaterEqual(result['quote_to_submit_ms'], 100)
+        self.assertGreaterEqual(result['quote_to_receipt_ms'], result['quote_to_submit_ms'])
+        self.assertIn('venue_preflight', result['timings_ms'])
+
+    def test_deadline_client_receives_same_absolute_budget_in_both_calls(self):
+        self.pick['quote_received_at'] = time.monotonic()
+        deadlines = []
+        self.client.supports_deadline = True
+        def prepare(detail, stake, *, deadline):
+            deadlines.append(deadline)
+            return detail
+        def submit(payload, *, deadline):
+            deadlines.append(deadline)
+            self.client.last_submission_sent_at = time.monotonic()
+            return {'status': 'accepted', 'submitted': True}
+        self.client.prepare_bet.side_effect = prepare
+        self.client.submit_bet.side_effect = submit
+        result = self.executor.execute(self.row, self.pick)
+        self.assertEqual(result['status'], 'accepted')
+        self.assertLessEqual(deadlines[0], deadlines[1])
+        self.assertAlmostEqual(deadlines[1], self.pick['quote_received_at']+2)
 
     def refresh_recommendation(self, odds=2.05, **selection):
         self.pick.update(odds=odds, **selection)
@@ -625,6 +733,7 @@ class BettingExecutionTests(unittest.TestCase):
         self.assertTrue(all(p['order_detail']['marketId'] for p in row['picks']))
         svc.betting.client_factory = self.factory
         svc.ledger.recommendation_performance = self.ledger.recommendation_performance
+        svc.live_expert.flush()  # Full decision must be durable before fake debit.
         result = svc.betting.flush()
         self.assertTrue(any(r['status'] == 'accepted' for r in result), result)
 

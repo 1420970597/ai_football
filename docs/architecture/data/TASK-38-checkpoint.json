@@ -1,0 +1,20 @@
+{
+  "mode": "read_only_live_cache_encoding",
+  "rows": 52469,
+  "bytes": 15484128,
+  "repeats": 5,
+  "python": "3.12",
+  "orjson_version": "3.13.0",
+  "measurements": {
+    "stdlib": {
+      "min_ms": 159.724,
+      "mean_ms": 179.631,
+      "max_ms": 220.525
+    },
+    "orjson": {
+      "min_ms": 12.758,
+      "mean_ms": 24.644,
+      "max_ms": 42.716
+    }
+  }
+}

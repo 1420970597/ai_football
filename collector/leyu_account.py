@@ -18,6 +18,8 @@ import math
 import http.client
 import ssl
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
@@ -28,6 +30,7 @@ from .leyu_app_login import AppLoginSessionProvider, login_provider_from_env
 from .leyu_app_session import AppSessionBootstrapper, bootstrapper_from_env
 from .leyu_client import DEFAULT_LANG, SUCCESS_CODES, OV_SCALE, decode_envelope
 from .session import SessionError
+from .http_transport import PersistentHTTPTransport
 
 BALANCE_PATH = "/game/api/v1/venue/getBalance"
 ALL_BALANCE_PATH = "/game/api/v1/venue/allBalance"
@@ -58,6 +61,10 @@ class BetSubmissionRejected(SessionError):
 
 class BetPreflightRetryable(SessionError):
     """A read-only venue check failed transiently; no debit was attempted."""
+
+class BetPreflightBudgetExpired(BetPreflightRetryable):
+    """A read consumed this quote's execution budget; wait for a new quote."""
+
 
 
 def _bet_number(value: Any, label: str) -> float:
@@ -337,11 +344,31 @@ class LeyuAccountClient:
 
     def __init__(self, bootstrapper: AppSessionBootstrapper,
                  login_provider: Optional[AppLoginSessionProvider] = None,
-                 timeout: float = 12.0) -> None:
+                 timeout: float = 12.0, *, fast_execution: bool = False) -> None:
         self.bootstrapper = bootstrapper
         self.login_provider = login_provider
         self.timeout = timeout
         self._venue_session: Any = None
+        self.supports_deadline = fast_execution
+        self._session_lock = threading.Lock()
+        self._transport = PersistentHTTPTransport(context=ssl._create_unverified_context()) if fast_execution else None
+        self._preflight_pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix='venue-preflight') if fast_execution else None
+        self.last_submission_sent_at: float | None = None
+
+    def betting_ready(self) -> bool:
+        current = self._venue_session
+        return current is not None and not getattr(current, 'expired', False)
+
+    def warm_betting(self) -> None:
+        self._acquire_venue_session()
+        if self._transport:
+            self._venue_request(VENUE_AMOUNT_PATH, deadline=time.monotonic()+3.0)
+
+    def close(self) -> None:
+        if self._preflight_pool:
+            self._preflight_pool.shutdown(wait=False, cancel_futures=True)
+        if self._transport:
+            self._transport.close()
 
     def _refresh_token(self) -> bool:
         if self.login_provider is None:
@@ -469,15 +496,19 @@ class LeyuAccountClient:
         current = self._venue_session
         if current is not None and not getattr(current, "expired", False):
             return current
-        provider = self.login_provider
-        if provider is not None and hasattr(provider, "acquire"):
-            current = provider.acquire(previous=current)
-        elif hasattr(self.bootstrapper, "acquire"):
-            current = self.bootstrapper.acquire()
-        else:
-            raise SessionError("未配置乐鱼体育场馆会话引导器")
-        self._venue_session = current
-        return current
+        with self._session_lock:
+            current = self._venue_session
+            if current is not None and not getattr(current, 'expired', False):
+                return current
+            provider = self.login_provider
+            if provider is not None and hasattr(provider, "acquire"):
+                current = provider.acquire(previous=current)
+            elif hasattr(self.bootstrapper, "acquire"):
+                current = self.bootstrapper.acquire()
+            else:
+                raise SessionError("未配置乐鱼体育场馆会话引导器")
+            self._venue_session = current
+            return current
 
     def _venue_headers(self, session: Any) -> Dict[str, str]:
         origin = str(getattr(session, "origin", "") or "").rstrip("/")
@@ -499,8 +530,11 @@ class LeyuAccountClient:
         }
 
     def _venue_request(self, path: str, body: Optional[Mapping[str, Any]] = None,
-                       *, decode: bool = False, _auth_retry: bool = False) -> Any:
+                       *, decode: bool = False, _auth_retry: bool = False,
+                       deadline: float | None = None) -> Any:
         """Call a YBTY business endpoint and optionally decode its gzip envelope."""
+        if deadline is not None and not self.betting_ready():
+            raise BetPreflightRetryable('场馆会话正在后台预热，等待新报价')
         session = self._acquire_venue_session()
         host = str(getattr(session, "host", "") or "").rstrip("/")
         if not host:
@@ -512,22 +546,35 @@ class LeyuAccountClient:
         for key, value in self._venue_headers(session).items():
             req.add_header(key, value)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout,
-                                        context=ssl._create_unverified_context()) as response:
-                raw = response.read()
-                if str(response.headers.get("Content-Encoding", "")).lower() == "gzip":
-                    raw = gzip.decompress(raw)
-                payload = json.loads(raw.decode("utf-8", "replace"))
+            if self._transport:
+                def sent(at: float) -> None:
+                    if path == VENUE_BET_PATH:
+                        self.last_submission_sent_at = at
+                raw, headers = self._transport.request(host+path, data, self._venue_headers(session),
+                    timeout=self.timeout, deadline=deadline, on_sent=sent,
+                    deadline_for_send_only=path == VENUE_BET_PATH)
+            else:
+                with urllib.request.urlopen(req, timeout=PersistentHTTPTransport.remaining(self.timeout, deadline),
+                                            context=ssl._create_unverified_context()) as response:
+                    raw, headers = response.read(), response.headers
+            if str(headers.get("Content-Encoding", "")).lower() == "gzip":
+                raw = gzip.decompress(raw)
+            payload = json.loads(raw.decode("utf-8", "replace"))
         except urllib.error.HTTPError as exc:
-            if path != VENUE_BET_PATH and not _auth_retry and exc.code in (401, 403):
+            if exc.code in (401, 403):
                 self._venue_session = None
+                if deadline is not None and path != VENUE_BET_PATH:
+                    raise BetPreflightRetryable('场馆会话过期，等待后台刷新') from exc
+            if deadline is None and path != VENUE_BET_PATH and not _auth_retry and exc.code in (401, 403):
                 self._acquire_venue_session()
                 return self._venue_request(path, body, decode=decode, _auth_retry=True)
             error = (BetPreflightRetryable if path != VENUE_BET_PATH and exc.code in
                      (408, 429, 500, 502, 503, 504) else SessionError)
             raise error("乐鱼体育场馆接口请求失败（HTTP %s）" % exc.code) from exc
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException) as exc:
-            error = BetPreflightRetryable if path != VENUE_BET_PATH else SessionError
+            error = (BetPreflightBudgetExpired if path != VENUE_BET_PATH and deadline is not None
+                     and isinstance(exc, TimeoutError) else
+                     BetPreflightRetryable if path != VENUE_BET_PATH else SessionError)
             raise error("乐鱼体育场馆接口请求失败（%s）" % type(exc).__name__) from exc
         if not isinstance(payload, Mapping):
             raise SessionError("乐鱼体育场馆接口响应结构异常")
@@ -542,14 +589,19 @@ class LeyuAccountClient:
             result = decode_envelope(payload) if (decode or "code" in payload) else payload
         except Exception as exc:
             text = str(exc)
-            if (not _auth_retry and any(token in text for token in ("0401013", "0401014", "0401015", "过期"))):
+            expired = any(token in text for token in ("0401013", "0401014", "0401015", "过期"))
+            if expired:
                 self._venue_session = None
+                if deadline is not None:
+                    raise BetPreflightRetryable('场馆会话过期，等待后台刷新') from exc
+            if deadline is None and not _auth_retry and expired:
                 self._acquire_venue_session()
                 return self._venue_request(path, body, decode=decode, _auth_retry=True)
             raise SessionError("乐鱼体育场馆接口返回失败") from exc
         return result
 
-    def prepare_bet(self, detail: Mapping[str, Any], stake: float) -> Dict[str, Any]:
+    def prepare_bet(self, detail: Mapping[str, Any], stake: float, *,
+                    deadline: float | None = None) -> Dict[str, Any]:
         """Recheck the selected live market, native odds, limits and wallet."""
         query = {"idList": [{
             "marketId": detail["marketId"], "matchInfoId": detail["matchId"],
@@ -558,7 +610,29 @@ class LeyuAccountClient:
             "matchType": detail["matchType"], "sportId": int(detail["sportId"]),
             **({"placeNum": detail["placeNum"]} if "placeNum" in detail else {}),
         }]}
-        rows = _bet_rows(self._venue_request(VENUE_LATEST_MARKET_PATH, query))
+        request_options: Dict[str, Any] = {'deadline': deadline} if deadline is not None else {}
+        pending_limits = pending_wallet = None
+        expected_raw = str(round(_bet_number(detail['oddFinally'], '推荐赔率')*OV_SCALE))
+        if self._preflight_pool and deadline is not None:
+            # All three reads refer to the same selected native IDs and price.
+            # Validate their complete replies together before any durable claim.
+            expected_limit = {'marketId': detail['marketId'], 'matchId': detail['matchId'],
+                'playId': detail['playId'], 'playOptionId': detail['playOptionsId'],
+                'oddsValue': expected_raw, 'matchType': 2, 'deviceType': 3}
+            latest_future = self._preflight_pool.submit(self._venue_request, VENUE_LATEST_MARKET_PATH,
+                                                       query, deadline=deadline)
+            pending_limits = self._preflight_pool.submit(self._venue_request, VENUE_LIMIT_PATH,
+                {'orderMaxBetMoney': [expected_limit]}, deadline=deadline)
+            pending_wallet = self._preflight_pool.submit(self._venue_request, VENUE_AMOUNT_PATH, deadline=deadline)
+            try:
+                rows = _bet_rows(latest_future.result(timeout=PersistentHTTPTransport.remaining(self.timeout, deadline)))
+            except TimeoutError as exc:
+                latest_future.cancel()
+                pending_limits.cancel()
+                pending_wallet.cancel()
+                raise BetPreflightBudgetExpired('场馆盘口校验超过两秒预算') from exc
+        else:
+            rows = _bet_rows(self._venue_request(VENUE_LATEST_MARKET_PATH, query, **request_options))
         market = next((row for row in rows if str(row.get("id")) == str(detail["marketId"])
                        and str(row.get("matchInfoId")) == str(detail["matchId"])
                        and str(row.get("playId")) == str(detail["playId"])), None)
@@ -587,7 +661,24 @@ class LeyuAccountClient:
             "playId": fresh["playId"], "playOptionId": fresh["playOptionsId"],
             "oddsValue": fresh["odds"], "matchType": 2, "deviceType": 3,
         }
-        limits = _bet_rows(self._venue_request(VENUE_LIMIT_PATH, {"orderMaxBetMoney": [limit_detail]}))
+        if pending_limits is not None and pending_wallet is not None:
+            try:
+                if fresh['odds'] == expected_raw:
+                    limits = _bet_rows(pending_limits.result(timeout=PersistentHTTPTransport.remaining(self.timeout, deadline)))
+                else:
+                    # The original tolerance can accept a sub-tick price change.
+                    # Never apply an odds-specific limit to a different raw price.
+                    pending_limits.cancel()
+                    limits = _bet_rows(self._venue_request(VENUE_LIMIT_PATH,
+                        {'orderMaxBetMoney': [limit_detail]}, **request_options))
+                amount = pending_wallet.result(timeout=PersistentHTTPTransport.remaining(self.timeout, deadline))
+            except TimeoutError as exc:
+                pending_limits.cancel()
+                pending_wallet.cancel()
+                raise BetPreflightBudgetExpired('场馆预检超过两秒链路预算') from exc
+        else:
+            limits = _bet_rows(self._venue_request(VENUE_LIMIT_PATH, {"orderMaxBetMoney": [limit_detail]}))
+            amount = None
         # The captured Android single-bet response identifies the option but
         # explicitly leaves playId/type empty. Empty optional echoes are not
         # contradictions; nonempty echoes must still match the requested bet.
@@ -605,16 +696,19 @@ class LeyuAccountClient:
         maximum = _bet_number(limit.get("orderMaxPay"), "最大投注额")
         if minimum < 0 or maximum <= 0 or not minimum <= stake <= maximum:
             raise SessionError("投注额不在场馆限额内（%g~%g）" % (minimum, maximum))
-        amount = self._venue_request(VENUE_AMOUNT_PATH)
+        if amount is None:
+            amount = self._venue_request(VENUE_AMOUNT_PATH, **request_options)
         balance = _find_number(amount, {"amount", "balance", "availableamount", "availablebalance"})
         if balance is None or not math.isfinite(balance) or balance < stake:
             raise SessionError("体育场馆余额不足或不可读取")
         return fresh
 
-    def submit_bet(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
+    def submit_bet(self, payload: Mapping[str, Any], *, deadline: float | None = None) -> Dict[str, Any]:
         """Send exactly one debit request and report accepted/pending/rejected."""
         try:
-            response = self._venue_request(VENUE_BET_PATH, payload)
+            self.last_submission_sent_at = None
+            response = (self._venue_request(VENUE_BET_PATH, payload, deadline=deadline)
+                        if deadline is not None else self._venue_request(VENUE_BET_PATH, payload))
         except SessionError as exc:
             raise BetSubmissionUnknown("提交结果未知，请核对场馆注单；系统不会自动重发") from exc
         if not isinstance(response, Mapping) or "code" not in response:
@@ -792,4 +886,5 @@ def account_client_from_env(env: Optional[Mapping[str, str]] = None) -> Optional
         token = login.cached_token or login.refresh_token()
         if token:
             bootstrapper.credentials.token = token
-    return LeyuAccountClient(bootstrapper, login_provider=login)
+    return LeyuAccountClient(bootstrapper, login_provider=login,
+        fast_execution=values.get('LEYU_FAST_BETTING', '').lower() in ('1', 'true'))

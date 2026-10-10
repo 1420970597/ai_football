@@ -2,12 +2,22 @@
 from __future__ import annotations
 
 import gzip
+import importlib
 import json
 import os
 import threading
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from store.archive import journal_path
+
+
+def encode_checkpoint(payload: Mapping[str, Any]) -> bytes:
+    """Encode a recoverable JSON cache; permanent journals retain strict JSONL."""
+    try:
+        codec = importlib.import_module('orjson')
+    except ModuleNotFoundError:
+        return json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    return codec.dumps(payload)
 
 
 class HistoryJournal:

@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import copy
 import math
-import pickle
+import os
+import sqlite3
 import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
-from dataclasses import asdict
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -29,6 +29,7 @@ from core.devig import devig as devig_snapshot
 from core.models import OddsSnapshot, SnapshotState, DevigMethod
 from service.runtime_settings import RuntimeConfig
 from store.history import HistoryJournal
+from service.live_workers import FrozenReplay, LiveCalculationPool, ReplayProcessWriter, freeze_replay
 
 QUOTE_MAX_AGE_S = 15.0
 STATE_MAX_AGE_S = 90.0
@@ -37,6 +38,10 @@ MAX_RESULTS = 256
 DECISION_WRITE_BATCH = 64
 CHPID = {'1': ('HAD', False), '2': ('OU', False), '4': ('AH', False),
          '17': ('HAD', True), '18': ('OU', True), '19': ('AH', True)}
+# Fitting depends on prices/score, never the advancing match clock.
+# Bounded caches avoid refitting identical inputs on every clock push.
+_fit_total = lru_cache(maxsize=8192)(fit_total)
+_fit_share = lru_cache(maxsize=8192)(fit_share)
 OUTCOMES = {'1': 'home', '2': 'away', 'X': 'draw', 'x': 'draw', 'Over': 'over', 'over': 'over',
             'Under': 'under', 'under': 'under'}
 
@@ -62,6 +67,7 @@ class LiveExpertService:
         self._lock = threading.RLock()
         self._compute_lock = threading.Lock()
         self._results: Dict[str, Dict[str, Any]] = {}
+        self._detail_replays: Dict[str, FrozenReplay] = {}
         # A recommendation is a decision event, not a transient quote. Keep
         # the last valid ensemble pick while the match is still live so a
         # short quote gap or a stale refresh cannot make the buy board blink.
@@ -71,11 +77,21 @@ class LiveExpertService:
         self._training_series: Dict[Tuple[str, str, str, str], deque] = {}
         self._training_prefixes: Dict[Tuple[str, str, str, str], tuple[tuple, int, tuple]] = {}
         self._compute_ms: deque = deque(maxlen=2048)
+        self._freeze_ms: deque = deque(maxlen=2048)
         self._latency_ms: deque = deque(maxlen=2048)
+        self._input_latency_ms: deque = deque(maxlen=2048)
+        self._full_compute_ms: deque = deque(maxlen=2048)
+        self._persisted: deque = deque(maxlen=4096)
+        self._persisted_ids: set[str] = set()
+        self._persist_wake = threading.Condition(self._lock)
         self._by_type: Dict[str, deque] = {}
+        self._input_by_type: Dict[str, deque] = {}
         self._journal: deque = deque()
         self._journal_flush_lock = threading.Lock()
-        self._history: Optional[HistoryJournal] = None
+        self._decision_flush_lock = threading.Lock()
+        self._projection_writer: Optional[threading.Thread] = None
+        self._history: Any = None
+        self.calculation_pool: Optional[LiveCalculationPool] = None
         self._stop = threading.Event()
         self._writer: Optional[threading.Thread] = None
         self.journal_root: Optional[str] = None
@@ -87,6 +103,7 @@ class LiveExpertService:
         self.config = RuntimeConfig()
         self.config_version = 1
         self.on_decision: Optional[Callable[[Mapping[str, Any]], int]] = None
+        self.on_decisions: Optional[Callable[[Sequence[Mapping[str, Any]]], int]] = None
         self._decisions: Dict[tuple, Dict[str, Any]] = {}
         self._recorded: set = set()
         self._recording: set = set()
@@ -109,52 +126,111 @@ class LiveExpertService:
                                                      config.weight_prior_matches, config.max_algorithm_weight)
                 self._anchors.clear()
                 self._results.clear()
+                self._detail_replays.clear()
                 self._recommendations.clear()
 
     def start(self, root: Optional[str]) -> None:
         self.journal_root = root
         if self._writer and self._writer.is_alive():
             return
+        try:
+            processes = max(0, min(4, int(os.environ.get('LIVE_COMPUTE_PROCESSES', '0'))))
+        except ValueError:
+            processes = 0
+        if processes and self.calculation_pool is None:
+            self.calculation_pool = LiveCalculationPool(processes)
+            self.calculation_pool.start()
+        if root and processes:
+            path = Path(root) / 'live-replay.jsonl.gz'
+            if self._history is None:
+                self._history = ReplayProcessWriter(path)
         self._stop.clear()
         self._writer = threading.Thread(target=self._write_loop, name='live-replay-writer', daemon=True)
         self._writer.start()
+        self._projection_writer = threading.Thread(target=self._decision_loop, name="live-ledger-writer", daemon=True)
+        self._projection_writer.start()
 
     def stop(self) -> None:
         self._stop.set()
         if self._writer:
-            self._writer.join(3)
+            self._writer.join(12)
+        if self._projection_writer:
+            self._projection_writer.join(12)
         self.flush()
+        if self.calculation_pool:
+            self.calculation_pool.close()
+            self.calculation_pool = None
+        if isinstance(self._history, ReplayProcessWriter):
+            self._history.close()
+            self._history = None
 
     def _write_loop(self) -> None:
-        while not self._stop.wait(1):
-            self.flush(max_decisions=DECISION_WRITE_BATCH)
-        self.flush()
+        while not self._stop.wait(0.02):
+            self.flush(max_decisions=DECISION_WRITE_BATCH, include_decisions=False)
+        self.flush(include_decisions=False)
 
-    def flush(self, *, max_decisions: Optional[int] = None) -> int:
-        self.flush_decisions(max_decisions)
+    def _decision_loop(self) -> None:
+        while not self._stop.wait(0.02):
+            self.flush_decisions(DECISION_WRITE_BATCH)
+        self.flush_decisions()
+
+    def flush(self, *, max_decisions: Optional[int] = None, include_decisions: bool = True) -> int:
         if not self.journal_root:
+            if include_decisions:
+                self.flush_decisions(max_decisions)
             return 0
         with self._journal_flush_lock:
             with self._lock:
                 rows = list(self._journal)
+            if max_decisions is not None:
+                rows = rows[:DECISION_WRITE_BATCH]
             if not rows:
+                if include_decisions:
+                    self.flush_decisions(max_decisions)
                 return 0
             try:
                 path = Path(self.journal_root) / 'live-replay.jsonl.gz'
                 if self._history is None or self._history.path != path:
                     self._history = HistoryJournal(path)
-                n = self._history.append(rows)
+                n = self._history.append(rows if isinstance(self._history, ReplayProcessWriter) else [
+                    row.materialize() if isinstance(row, FrozenReplay) else row for row in rows])
                 with self._lock:
                     for _ in range(n):
                         self._journal.popleft()
+                    for row in rows[:n]:
+                        metadata = row.metadata if isinstance(row, FrozenReplay) else row
+                        identity = str(metadata.get('publication_id') or '')
+                        if identity and identity not in self._persisted_ids:
+                            if len(self._persisted) == self._persisted.maxlen:
+                                self._persisted_ids.discard(self._persisted[0])
+                            self._persisted.append(identity)
+                            self._persisted_ids.add(identity)
+                    self._persist_wake.notify_all()
                 self.journal_error = ''
+                if include_decisions:
+                    self.flush_decisions(max_decisions)
                 return n
             except (OSError, ValueError, TypeError) as exc:
                 self.journal_error = '%s: %s，记录保留待重试' % (type(exc).__name__, exc)
                 return 0
 
+    def wait_replay(self, row: Mapping[str, Any], timeout: float) -> bool:
+        """A debit can require its full training record's durable confirmation."""
+        if not self.journal_root:
+            return True
+        identity = str(row.get('publication_id') or '')
+        if not identity:
+            return False
+        with self._persist_wake:
+            return self._persist_wake.wait_for(lambda: identity in self._persisted_ids,
+                                              timeout=max(0.0, timeout))
+
     def flush_decisions(self, limit: Optional[int] = None) -> int:
-        if not self.on_decision:
+        with self._decision_flush_lock:
+            return self._flush_decisions(limit)
+
+    def _flush_decisions(self, limit: Optional[int] = None) -> int:
+        if not self.on_decision and not self.on_decisions:
             return 0
         with self._lock:
             keys = list(self._decisions)
@@ -163,14 +239,29 @@ class LiveExpertService:
             rows = {key: self._decisions.pop(key) for key in keys}
             self._recording.update(rows)
         n = 0
+        if self.on_decisions and rows:
+            try:
+                n = self.on_decisions(list(rows.values()))
+                with self._lock:
+                    self._recorded.update(rows)
+                    self._recording.difference_update(rows)
+                self.record_error = ''
+                return n
+            except (OSError, ValueError, TypeError, sqlite3.Error):
+                self.record_error = '决策批量留痕失败，等待重试'
+                with self._lock:
+                    self._recording.difference_update(rows)
+                    for key, row in rows.items():
+                        self._decisions.setdefault(key, row)
+                return 0
         for key, row in rows.items():
             try:
-                n += self.on_decision(row)
+                n += self.on_decision(row) if self.on_decision else 0
                 with self._lock:
                     self._recorded.add(key)
                     self._recording.discard(key)
                 self.record_error = ''
-            except (OSError, ValueError, TypeError):
+            except (OSError, ValueError, TypeError, sqlite3.Error):
                 self.record_error = '决策留痕失败，等待重试'
                 with self._lock:
                     self._recording.discard(key)
@@ -180,11 +271,34 @@ class LiveExpertService:
     def compute(self, snapshot: Mapping[str, Any], hub: Any,
                 first_event_at: Optional[float] = None) -> Dict[str, Any]:
         started = time.perf_counter()
-        with self._compute_lock:
-            result = self._calculate(snapshot)
-            frozen_config = asdict(self.config)
-            frozen_config.pop('llm_api_key')
-            frozen_anchor = dict(self._anchors.get(str(snapshot['match_id']), {}))
+        calculation_pool = self.calculation_pool
+        record: Any = None
+        frozen_ms = 0.0
+        if calculation_pool:
+            with self._compute_lock:
+                config, version = self.config, self.config_version
+                performance = copy.deepcopy(self._performance)
+            calculated = calculation_pool.calculate(snapshot, config, version, performance,
+                                                    replay=bool(self.journal_root), compact=bool(self.journal_root))
+            result, frozen_anchor, histories = calculated[:3]
+            if self.journal_root:
+                record = calculated[3]
+            frozen_ms = result.pop('freeze_ms', 0.0)
+            with self._compute_lock:
+                if version != self.config_version:
+                    self.superseded += 1
+                    return {}
+                self._anchors[str(snapshot['match_id'])] = frozen_anchor
+                for key, values in histories.items():
+                    self._series[key] = deque(values, maxlen=40)
+        else:
+            with self._compute_lock:
+                result = self._calculate(snapshot)
+                frozen_anchor = dict(self._anchors.get(str(snapshot['match_id']), {}))
+                if self.journal_root:
+                    frozen_started = time.perf_counter()
+                    record = freeze_replay(result, snapshot, self.config, frozen_anchor).materialize()
+                    frozen_ms = (time.perf_counter()-frozen_started)*1000
         elapsed = (time.perf_counter() - started) * 1000
         result['compute_ms'] = round(elapsed, 3)
         result['input_cutoff_ms'] = snapshot.get('captured_at_ms')
@@ -194,12 +308,23 @@ class LiveExpertService:
             return {}  # New state must be recomputed; never publish a mixed version.
         now = time.monotonic()
         latency = (now - (first_event_at or snapshot.get('received_at') or now)) * 1000
-        result['event_to_result_ms'] = round(max(0, latency), 3)
+        latest = snapshot.get('received_at') or now
+        result.update(event_to_result_ms=round(max(0, latency), 3),
+                      input_to_result_ms=round(max(0, (now-latest)*1000), 3),
+                      freeze_ms=round(frozen_ms, 3),
+                      full_compute_ms=round((time.perf_counter()-started)*1000, 3),
+                      published_at_ms=int(time.time()*1000))
+        result['publication_id'] = '%s:%s:%s:%s' % (mid, result['version'], result['config_version'], result['computed_at'])
         with self._lock:
             if result['config_version'] != self.config_version:
                 return {}
+            if hub.state_version(mid) != snapshot['version']:
+                self.superseded += 1
+                return {}
             self._remember_recommendation(result)
             self._results[mid] = result
+            if isinstance(record, FrozenReplay):
+                self._detail_replays[mid] = record
             if self.on_decision:
                 for evaluation in [*result.get('evaluations', []), result['ensemble']]:
                     for record_kind, items in (('forecast', evaluation['forecasts']),
@@ -213,12 +338,17 @@ class LiveExpertService:
             result['recording_status'] = ('queued' if any(k[0] == mid for k in self._decisions)
                                           else 'recorded' if any(k[0] == mid for k in self._recorded) else 'none')
             self._compute_ms.append(elapsed)
+            self._freeze_ms.append(frozen_ms)
+            self._full_compute_ms.append(result['full_compute_ms'])
+            self._input_latency_ms.append(result['input_to_result_ms'])
+            self._input_by_type.setdefault(result['competition_type'], deque(maxlen=2048)).append(result['input_to_result_ms'])
             self._latency_ms.append(max(0, latency))
             self._by_type.setdefault(result["competition_type"], deque(maxlen=2048)).append(max(0, latency))
             self.computations += 1
             if len(self._results) > MAX_RESULTS:
                 oldest = min(self._results, key=lambda k: self._results[k]['published_at_ms'])
                 self._results.pop(oldest, None)
+                self._detail_replays.pop(oldest, None)
                 self._anchors.pop(oldest, None)
                 for series_key in list(self._series):
                     if series_key[0] == oldest:
@@ -227,17 +357,12 @@ class LiveExpertService:
                         self._training_prefixes.pop(series_key, None)
             # Every published computation with configured storage is a training record, including
             # observe/reject states and every algorithm's full candidate set.
-            if self.journal_root:
-                record = {**result, 'at': result['computed_at'], 'schema_version': 2,
-                    'config': frozen_config, 'anchor': frozen_anchor,
-                    'input_state': {k: snapshot.get(k) for k in
-                        ('info', 'status', 'score_age_s', 'status_age_s', 'half_score',
-                         'finished', 'suspended', 'suspended_ids', 'received_at_ms', 'captured_at_ms')},
-                    'input_events': list(snapshot.get('events') or [])}
-                # Only our own in-memory record is serialized/deserialized.
-                # The C implementation freezes aliases and nested histories
-                # without deepcopy's Python walk holding up the socket thread.
-                self._journal.append(pickle.loads(pickle.dumps(record, protocol=5)))
+            if record is not None:
+                metadata = record.metadata if isinstance(record, FrozenReplay) else record
+                metadata.update({k: result[k] for k in ('published_at_ms', 'event_to_result_ms',
+                    'input_to_result_ms', 'freeze_ms', 'full_compute_ms', 'publication_id',
+                    'compute_ms', 'input_cutoff_ms')})
+                self._journal.append(record)
         return result
 
     def _calculate(self, snapshot: Mapping[str, Any]) -> Dict[str, Any]:
@@ -309,20 +434,26 @@ class LiveExpertService:
                     series.append((q.ts_ms, q.odds))
                 drift = (q.odds / series[0][1] - 1) * 100 if len(series) > 1 else 0
                 captured = snapshot.get('captured_at_ms')
-                training_series = self._training_series.setdefault(series_key, deque(maxlen=40))
-                if captured is not None and q.ts_ms <= captured:
-                    if not training_series or q.ts_ms > training_series[-1][0]:
-                        training_series.append((q.ts_ms, captured, q.odds))
-                stamp = (len(training_series), training_series[0], training_series[-1]) if training_series else ()
-                cache = self._training_prefixes.get(series_key)
-                if cache and cache[0] == stamp and captured is not None and captured >= cache[1]:
-                    prefix = [list(point) for point in cache[2]]
-                else:
-                    prefix = [[point[0], point[2]] for point in training_series
-                              if captured is not None and point[0] <= captured and point[1] <= captured]
-                    visible_after = max((max(point[:2]) for point in training_series), default=0)
-                    if captured is not None and captured >= visible_after:
-                        self._training_prefixes[series_key] = (stamp, visible_after, tuple(map(tuple, prefix)))
+                prefix = []
+                # RAW prices remain in the record and full persistent TrendStore.
+                # No algorithm consumes RAW prefixes, so do not duplicate forty
+                # historical points for every unvalued option on every decision.
+                if group['known']:
+                    training_series = self._training_series.setdefault(series_key, deque(maxlen=40))
+                    observed = getattr(q, 'received_at_ms', 0) or captured
+                    if captured is not None and q.ts_ms <= captured and observed <= captured:
+                        if not training_series or q.ts_ms > training_series[-1][0]:
+                            training_series.append((q.ts_ms, observed, q.odds))
+                    stamp = (len(training_series), training_series[0], training_series[-1]) if training_series else ()
+                    cache = self._training_prefixes.get(series_key)
+                    if cache and cache[0] == stamp and captured is not None and captured >= cache[1]:
+                        prefix = [list(point) for point in cache[2]]
+                    else:
+                        prefix = [[point[0], point[2]] for point in training_series
+                                  if captured is not None and point[0] <= captured and point[1] <= captured]
+                        visible_after = max((max(point[:2]) for point in training_series), default=0)
+                        if captured is not None and captured >= visible_after:
+                            self._training_prefixes[series_key] = (stamp, visible_after, tuple(map(tuple, prefix)))
                 label = _quote_label(str(group['market']), str(oc), str(group['line']),
                                      bool(group['known']), str(group['name']),
                                      str(info.get('home') or ''), str(info.get('away') or ''))
@@ -331,6 +462,8 @@ class LiveExpertService:
                                'order_detail': {**getattr(q, 'order_detail', {}), 'oddFinally': str(q.odds)},
                                'p_market': round(probability, 6) if probability is not None else None,
                                'trend_pct': round(drift, 3), 'ts_ms': q.ts_ms,
+                               'quote_received_at': q.at if getattr(q, 'received_at_ms', 0) else None,
+                               'quote_received_at_ms': getattr(q, 'received_at_ms', 0),
                                'training_history': prefix})
             markets.append({'market': group['market'], 'line': group['line'],
                             'name': group['name'] if group['known'] else normalize_market_name(group['name'], group['market']),
@@ -351,10 +484,10 @@ class LiveExpertService:
         if not reasons and score is not None and elapsed_s is not None:
             totals = [m for m in markets if m['market'] == 'OU' and m['fresh'] and m['complete'] and m['margin'] <= .15]
             totals.sort(key=lambda m: abs(m['quotes'][0]['p_market'] - .5))
-            total = (fit_total(totals[0]['line'], totals[0]['quotes'][0]['p_market'], sum(score)) if totals else None)
+            total = (_fit_total(totals[0]['line'], totals[0]['quotes'][0]['p_market'], sum(score)) if totals else None)
             if total is not None:
                 had = next((m for m in markets if m['market'] == 'HAD' and m['fresh'] and m['complete']), None)
-                h, a = (fit_share(total, score, had['quotes'][0]['p_market'], had['quotes'][2]['p_market'])
+                h, a = (_fit_share(total, score, had['quotes'][0]['p_market'], had['quotes'][2]['p_market'])
                         if had else (total / 2, total / 2))
                 direction_available = had is not None
                 current_rates = (h, a)
@@ -368,6 +501,10 @@ class LiveExpertService:
                 rates = (anchor['h'] * fraction, anchor['a'] * fraction)
             else:
                 reasons.append('没有可拟合的全场大小球盘口')
+        consensuses = {(m['market'], m['line']): self._market_consensus(m, cfg.devig_spread_warn_pp)
+                       for m in markets if not reasons and m['supported'] and m['fresh'] and m['complete']}
+        payments: Dict[tuple, Any] = {}
+        distributions: Dict[tuple, Any] = {}
         evaluations: List[Dict[str, Any]] = []
         for algorithm in cfg.algorithms:
             model_rates = current_rates if algorithm == 'poisson_market' else rates
@@ -375,7 +512,17 @@ class LiveExpertService:
             probabilities: Dict[str, float] = {}
             forecasts: List[Dict[str, Any]] = []
             if model_rates and score is not None:
-                dist = remaining_distribution(model_rates[0], model_rates[1], score)
+                rate_key = tuple(model_rates)
+                if rate_key not in distributions:
+                    distributions[rate_key] = remaining_distribution(model_rates[0], model_rates[1], score)
+                dist = distributions[rate_key]
+                half_dist = None
+                if elapsed_s is not None and elapsed_s < 2700:
+                    half_fraction = (2700-elapsed_s)/max(1, REGULATION_SECONDS-elapsed_s)
+                    half_key = (*rate_key, 'half')
+                    if half_key not in distributions:
+                        distributions[half_key] = remaining_distribution(model_rates[0]*half_fraction, model_rates[1]*half_fraction, score)
+                    half_dist = distributions[half_key]
                 if direction_available:
                     probabilities = {oc: round(payment(dist, 'HAD', oc).win, 6) for oc in ('home', 'draw', 'away')}
                 for market in markets:
@@ -388,8 +535,7 @@ class LiveExpertService:
                     for quote in market['quotes']:
                         half_market = family.endswith('_1H')
                         if half_market and elapsed_s is not None and elapsed_s < 2700:
-                            fraction_half = (2700-elapsed_s)/max(1,REGULATION_SECONDS-elapsed_s)
-                            settlement_dist = remaining_distribution(model_rates[0]*fraction_half, model_rates[1]*fraction_half, score)
+                            settlement_dist = half_dist if half_dist is not None else dist
                         else:
                             settlement_dist = dist
                         # Some feeds publish an AH family row without a handicap
@@ -397,11 +543,14 @@ class LiveExpertService:
                         # cannot be valued; skip that quote without discarding the
                         # rest of the match or its LLM review.
                         try:
-                            pay = payment(settlement_dist, base_family, quote['outcome'], market['line'])
+                            pay_key = (rate_key, family, market['line'], quote['outcome'])
+                            if pay_key not in payments:
+                                payments[pay_key] = payment(settlement_dist, base_family, quote['outcome'], market['line'])
+                            pay = payments[pay_key]
                         except (TypeError, ValueError):
                             continue
                         raw_p = pay.effective_probability or 0.0
-                        consensus, spread = self._market_consensus(market, cfg.devig_spread_warn_pp)
+                        consensus, spread = consensuses[(market['market'], market['line'])]
                         if algorithm == 'devig_consensus' and quote['outcome'] in consensus:
                             raw_p = consensus[quote['outcome']]
                         if algorithm == 'economics_risk_adjusted':
@@ -582,6 +731,7 @@ class LiveExpertService:
                 row = self._results.get(mid)
                 if row is None:
                     return None
+                frozen = self._detail_replays.get(mid)
                 histories = {"|".join(key[1:]): list(series)
                              for key, series in self._series.items() if key[0] == mid}
                 out = {**row, 'price_history': histories}
@@ -593,11 +743,25 @@ class LiveExpertService:
                     out['recommendation_at'] = saved['at']
                     out['recommendation_retained'] = not bool(row.get('picks'))
                     self._refresh_recommendation_quotes(out)
-                return out
+        # Decode all RAW markets and history only for a detail read, outside
+        # both locks. The immutable replay corresponds to this exact result.
+        if frozen is not None:
+            complete = frozen.materialize()
+            for field in ('markets','candidates','evaluations','ensemble'):
+                out[field] = complete[field]
+            out['price_history'] = frozen.price_history() or histories
+        return out
 
     def health(self) -> Dict[str, Any]:
         with self._lock:
             return {'computations': self.computations, 'compute_ms': percentiles(self._compute_ms),
+                    'freeze_ms': percentiles(self._freeze_ms),
+                    'full_compute_ms': percentiles(self._full_compute_ms),
+                    'input_to_result_ms': percentiles(self._input_latency_ms),
+                    'by_type_input_to_result_ms': {k: {'samples': len(v), **percentiles(v)}
+                                                   for k, v in self._input_by_type.items()},
+                    'calculation': (self.calculation_pool.health() if self.calculation_pool else
+                                    {'mode': 'local', 'processes': 0}),
                     'event_to_result_ms': percentiles(self._latency_ms), 'samples': len(self._compute_ms),
                     'by_type_event_to_result_ms': {k: {'samples': len(v), **percentiles(v)}
                                                  for k, v in self._by_type.items()},

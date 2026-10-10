@@ -28,6 +28,42 @@ class LeyuAccountTests(unittest.TestCase):
                     client._venue_request(VENUE_BET_PATH, {})
                 self.assertNotIsInstance(caught.exception, BetPreflightRetryable)
 
+    def test_fast_preflight_runs_quote_limits_and_wallet_concurrently(self):
+        import threading
+        import time
+        from collector.leyu_account import VENUE_LATEST_MARKET_PATH, VENUE_LIMIT_PATH
+        client = LeyuAccountClient(SimpleNamespace(app_host='https://offline.invalid'), fast_execution=True)
+        self.addCleanup(client.close)
+        barrier = threading.Barrier(3)
+        def request(path, body=None, *, deadline=None):
+            barrier.wait(1)
+            if path == VENUE_LATEST_MARKET_PATH:
+                return [{'id': 'market1', 'matchInfoId': 'm', 'playId': '2', 'matchStatus': 1,
+                         'matchHandicapStatus': 0, 'status': 0, 'marketValue': '2.5',
+                         'marketOddsList': [{'id': 'option1', 'oddsStatus': 1,
+                                             'oddsType': 'Over', 'oddsValue': '195000'}]}]
+            if path == VENUE_LIMIT_PATH:
+                return [{'code': 0, 'playOptionsId': 'option1', 'minBet': '1', 'orderMaxPay': '10'}]
+            return {'amount': 20}
+        client._venue_request = request
+        self.assertEqual(client.prepare_bet(self.bet_detail(), 2, deadline=time.monotonic()+1)['oddFinally'], '1.95')
+
+    def test_deadline_auth_failure_invalidates_without_inline_login(self):
+        import time
+        import urllib.error
+        from unittest.mock import MagicMock
+        from collector.leyu_account import VENUE_AMOUNT_PATH
+        client = LeyuAccountClient(SimpleNamespace(app_host='https://offline.invalid'), fast_execution=True)
+        self.addCleanup(client.close)
+        client._venue_session = SimpleNamespace(request_id='offline', host='https://offline.invalid')
+        client._transport = MagicMock()
+        client._transport.request.side_effect = urllib.error.HTTPError('', 401, '', {}, None)
+        with patch.object(client, '_acquire_venue_session', wraps=client._acquire_venue_session) as acquire:
+            with self.assertRaises(BetPreflightRetryable):
+                client._venue_request(VENUE_AMOUNT_PATH, deadline=time.monotonic()+1)
+            acquire.assert_called_once()
+        self.assertFalse(client.betting_ready())
+
     def bet_detail(self):
         return {'matchId': 'm', 'marketId': 'market1', 'playId': '2',
                 'playOptions': 'Over', 'playOptionsId': 'option1', 'oddFinally': '1.95',

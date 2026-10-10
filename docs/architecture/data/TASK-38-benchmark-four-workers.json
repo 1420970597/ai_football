@@ -1,0 +1,95 @@
+{
+  "mode": "offline_fake_venue",
+  "matches": 24,
+  "rounds": 3,
+  "scheduler": "production_async_shards",
+  "algorithms": [
+    "poisson_market",
+    "poisson_time_decay",
+    "devig_consensus",
+    "economics_risk_adjusted",
+    "microstructure_adjusted"
+  ],
+  "raw_quotes_per_match": 200,
+  "preflight_s": 0.08,
+  "receipt_s": 0.04,
+  "decisions": 72,
+  "decision_ms": {
+    "p50": 95.676,
+    "p95": 150.707,
+    "p99": 156.801,
+    "max": 156.801
+  },
+  "accepted": 72,
+  "submission_ms": {
+    "p50": 715.026,
+    "p95": 1178.85,
+    "p99": 1219.163,
+    "max": 1219.163
+  },
+  "receipt_ms": {
+    "p50": 755.105,
+    "p95": 1218.947,
+    "p99": 1259.303,
+    "max": 1259.303
+  },
+  "deadline_blocked": 0,
+  "within_budget": 72,
+  "stages_ms": {
+    "historical_evidence": {
+      "p50": 0.734,
+      "p95": 1.685,
+      "p99": 3.167,
+      "max": 3.167
+    },
+    "durable_claim": {
+      "p50": 0.352,
+      "p95": 1.698,
+      "p99": 14.415,
+      "max": 14.415
+    },
+    "live_quote": {
+      "p50": 0.093,
+      "p95": 0.145,
+      "p99": 0.478,
+      "max": 0.478
+    },
+    "submission": {
+      "p50": 40.11,
+      "p95": 42.115,
+      "p99": 43.011,
+      "max": 43.011
+    },
+    "recommendation": {
+      "p50": 0.151,
+      "p95": 0.217,
+      "p99": 0.314,
+      "max": 0.314
+    },
+    "submit_queue": {
+      "p50": 44.454,
+      "p95": 85.826,
+      "p99": 127.733,
+      "max": 127.733
+    },
+    "final_quote": {
+      "p50": 0.131,
+      "p95": 0.218,
+      "p99": 0.429,
+      "max": 0.429
+    },
+    "venue_preflight": {
+      "p50": 80.199,
+      "p95": 81.331,
+      "p99": 83.989,
+      "max": 83.989
+    },
+    "decision_persistence": {
+      "p50": 0.009,
+      "p95": 0.021,
+      "p99": 12.391,
+      "max": 12.391
+    }
+  },
+  "history": "permanent"
+}

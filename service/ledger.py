@@ -267,7 +267,7 @@ class DecisionLedger:
         if path is None or not rows:
             return 0
         with self._lock:
-            self._sync_db()
+            self._sync_db(force=False)
             try:
                 payload = ''.join(json.dumps(r.as_dict(), ensure_ascii=False, allow_nan=False) + '\n'
                                   for r in rows).encode('utf-8')
@@ -321,10 +321,16 @@ class DecisionLedger:
             self._db.connection.execute("INSERT OR REPLACE INTO imports VALUES (?,?,?)",
                                         (str(path), st.st_size, st.st_mtime_ns))
 
-    def _sync_db(self) -> None:
+    def _sync_db(self, *, force: bool = True) -> None:
         if not self._db:
             return
-        for path in self._files():
+        if self._db_synchronized and not force:
+            # Check just the active journal before our append. An external
+            # revision must be imported before we advance its import offset.
+            paths = [self.path] if self.path is not None and self.path.exists() else []
+        else:
+            paths = self._files()
+        for path in paths:
             st = path.stat()
             mark = self._db.connection.execute("SELECT size,mtime FROM imports WHERE path=?", (str(path),)).fetchone()
             if mark and tuple(mark) == (st.st_size, st.st_mtime_ns):
@@ -348,14 +354,8 @@ class DecisionLedger:
 
     # -- 记录决策 --------------------------------------------------------
 
-    def record_live(self, row: Mapping[str, Any]) -> int:
-        """Freeze the first prospective direction per match/algorithm/market.
-
-        The writer calls this outside the fast path. Deterministic identities
-        survive restarts and hot edits without overwriting the entry price.
-        """
-        if not self.enabled:
-            raise OSError("台账未启用")
+    @staticmethod
+    def _live_entry(row: Mapping[str, Any]) -> Optional[LedgerEntry]:
         forecast = row.get("forecast") or {}
         mid, algorithm = str(row["match_id"]), str(row["algorithm"])
         record_kind = "recommendation" if row.get("record_kind") == "recommendation" else "forecast"
@@ -364,45 +364,61 @@ class DecisionLedger:
                 or market.split("_1H")[0] not in ("HAD", "OU", "AH")
                 or forecast.get("research_only")
                 or forecast.get("decision_status") not in (None, "settleable")):
-            return 0
+            return None
         line = str(forecast.get("line", ""))
         identity = hashlib.sha256((mid + "|" + algorithm + "|" + market + "|" + line + "|" + record_kind + "|first-live-v2").encode()).hexdigest()
+        entry = LedgerEntry(
+            at=str(row["computed_at"]), updated_at=str(row["computed_at"]),
+            decision_id=identity, match_id=mid, competition_type="real", is_live=True,
+            entry_score=row.get("score"), entry_clock_s=row.get("elapsed_s"),
+            settlement_basis=str(forecast["settlement_basis"]),
+            decision_status=str(forecast.get("decision_status", "settleable")),
+            research_only=bool(forecast.get("research_only", False)),
+            model_version=str(row["model_version"]), algorithm=algorithm,
+            config_version=int(row["config_version"]), league=str(row.get("league", "")),
+            home=str(row.get("home", "")), away=str(row.get("away", "")),
+            market=market, line=line, outcome=str(forecast["outcome"]),
+            odds=float(forecast["odds"]), is_pick=True, decision=record_kind,
+            trigger="live_recommendation" if record_kind == "recommendation" else "live_forecast",
+            edge=float(forecast["ev"]), p_market=float(forecast["p_market"]),
+            p_fused=float(forecast["p_model"]),
+            confidence=float(forecast.get("confidence", 0.0)),
+            kelly=float(forecast.get("kelly", 0.0)),
+            weights=dict(forecast.get("weights") or {}), evidence_at=str(forecast.get("evidence_at") or ""),
+            llm_used=bool(row.get("llm_used", False)), llm_confidence=float(row.get("llm_confidence", 0)),
+        )
+        if entry.odds <= 1 or not math.isfinite(entry.odds) or entry.entry_score is None:
+            return None
+        return entry
+
+    def record_live(self, row: Mapping[str, Any]) -> int:
+        return self.record_live_many([row])
+
+    def record_live_many(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        """One durable commit for an idempotent batch of independent markets."""
+        if not self.enabled:
+            raise OSError("台账未启用")
+        entries = [entry for row in rows if (entry := self._live_entry(row)) is not None]
         with self._lock:
             if self._live_ids is None:
                 self._live_ids = set()
-            if identity in self._live_ids:
+            self._sync_db(force=False)
+            pending: Dict[str, LedgerEntry] = {}
+            for entry in entries:
+                identity = entry.decision_id
+                if identity in self._live_ids or identity in pending:
+                    continue
+                if self._db and self._db.connection.execute(
+                        'SELECT 1 FROM decisions WHERE decision_id=? LIMIT 1', (identity,)).fetchone():
+                    self._live_ids.add(identity)
+                    continue
+                pending[identity] = entry
+            if not pending:
                 return 0
-            self._sync_db()
-            if self._db and self._db.connection.execute(
-                    'SELECT 1 FROM decisions WHERE decision_id=? LIMIT 1', (identity,)).fetchone():
-                self._live_ids.add(identity)
-                return 0
-            entry = LedgerEntry(
-                at=str(row["computed_at"]), updated_at=str(row["computed_at"]),
-                decision_id=identity, match_id=mid, competition_type="real", is_live=True,
-                entry_score=row.get("score"), entry_clock_s=row.get("elapsed_s"),
-                settlement_basis=str(forecast["settlement_basis"]),
-                decision_status=str(forecast.get("decision_status", "settleable")),
-                research_only=bool(forecast.get("research_only", False)),
-                model_version=str(row["model_version"]), algorithm=algorithm,
-                config_version=int(row["config_version"]), league=str(row.get("league", "")),
-                home=str(row.get("home", "")), away=str(row.get("away", "")),
-                market=market, line=line, outcome=str(forecast["outcome"]),
-                odds=float(forecast["odds"]), is_pick=True, decision=record_kind,
-                trigger="live_recommendation" if record_kind == "recommendation" else "live_forecast",
-                edge=float(forecast["ev"]), p_market=float(forecast["p_market"]),
-                p_fused=float(forecast["p_model"]),
-                confidence=float(forecast.get("confidence", 0.0)),
-                kelly=float(forecast.get("kelly", 0.0)),
-                weights=dict(forecast.get("weights") or {}), evidence_at=str(forecast.get("evidence_at") or ""),
-                llm_used=bool(row.get("llm_used", False)), llm_confidence=float(row.get("llm_confidence", 0)),
-            )
-            if entry.odds <= 1 or not math.isfinite(entry.odds) or entry.entry_score is None:
-                return 0
-            n = self._append([entry])
-            if not n:
-                raise OSError("决策留痕写入失败")
-            self._live_ids.add(identity)
+            n = self._append(list(pending.values()))
+            if n != len(pending):
+                raise OSError("决策批量留痕写入失败")
+            self._live_ids.update(pending)
             return n
 
     def record_experiment(self, row: Mapping[str, Any], review: Mapping[str, Any]) -> int:
@@ -410,7 +426,7 @@ class DecisionLedger:
             return 0
         updates = []
         with self._lock:
-            self._sync_db()
+            self._sync_db(force=False)
             for forecast in list(row.get('forecasts') or [])[:12]:
                 if forecast.get('research_only') or forecast.get('decision_status')!='settleable':
                     continue
@@ -698,20 +714,22 @@ class DecisionLedger:
     # -- 统计 ------------------------------------------------------------
 
     @contextmanager
-    def _read_db(self) -> Iterator[Optional[LedgerDB]]:
+    def _read_db(self, *, active_only: bool = False) -> Iterator[Optional[LedgerDB]]:
         db = self._db
         if db is None or db.path == Path(':memory:'):
             with self._lock:
-                self._sync_db()
+                self._sync_db(force=not active_only)
                 yield db
                 return
         # Initial import must finish before evidence is usable. Afterwards a
         # busy writer must not make an API/venue check wait for fsync or a
         # settlement batch: WAL readers see the last committed projection.
+        # Execution evidence checks only the active journal after recovery;
+        # ordinary history/regrade readers still scan all legacy revisions.
         acquired = self._lock.acquire(blocking=not self._db_synchronized)
         if acquired:
             try:
-                self._sync_db()
+                self._sync_db(force=not active_only)
             finally:
                 self._lock.release()
         with db.reader() as reader:
@@ -861,7 +879,7 @@ class DecisionLedger:
                                     for a, m, line_value, o in keys))
         if not wanted:
             return {}
-        with self._read_db() as db:
+        with self._read_db(active_only=True) as db:
             if not db:
                 return {}
             clauses = []

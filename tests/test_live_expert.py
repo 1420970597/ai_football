@@ -13,6 +13,43 @@ from service.live_expert import LiveExpertService, percentiles
 
 
 class LiveExpertTests(unittest.TestCase):
+    def test_clock_only_update_reuses_fit_but_score_and_prices_invalidate_it(self):
+        from service.live_expert import _fit_total, _fit_share
+        hub = self.hub()
+        svc = LiveExpertService()
+        _fit_total.cache_clear()
+        _fit_share.cache_clear()
+        svc.compute(hub.decision_snapshot('m'), hub)
+        before = (_fit_total.cache_info(), _fit_share.cache_info())
+        hub._status['m']['mst'] = '3660'
+        svc.compute(hub.decision_snapshot('m'), hub)
+        self.assertGreater(_fit_total.cache_info().hits, before[0].hits)
+        self.assertGreater(_fit_share.cache_info().hits, before[1].hits)
+        self.assertEqual(_fit_total.cache_info().misses, before[0].misses)
+        hub._scores['m'] = (2, 0)
+        svc.compute(hub.decision_snapshot('m'), hub)
+        self.assertGreater(_fit_total.cache_info().misses, before[0].misses)
+        self.assertGreater(_fit_share.cache_info().misses, before[1].misses)
+        misses = _fit_total.cache_info().misses
+        self.ticks(hub, over=2.1)
+        svc.compute(hub.decision_snapshot('m'), hub)
+        self.assertGreater(_fit_total.cache_info().misses, misses)
+
+    def test_shared_distribution_preserves_all_algorithm_market_values(self):
+        from dataclasses import replace
+        from service.runtime_settings import RuntimeConfig
+        hub = self.hub()
+        svc = LiveExpertService()
+        algorithms = ('poisson_time_decay', 'devig_consensus', 'economics_risk_adjusted', 'microstructure_adjusted')
+        svc.configure(replace(RuntimeConfig(), algorithms=algorithms), 1)
+        snapshot = hub.decision_snapshot('m')
+        combined = svc.compute(snapshot, hub)
+        for evaluation in combined['evaluations']:
+            one = LiveExpertService()
+            one.configure(replace(RuntimeConfig(), algorithms=(evaluation['algorithm'],), primary_algorithm=evaluation['algorithm']), 1)
+            alone = one.compute(snapshot, hub)['evaluations'][0]
+            self.assertEqual(evaluation['candidates'], alone['candidates'])
+
     def test_large_settlement_queue_cannot_starve_complete_replay_archive(self):
         hub = self.hub()
         with tempfile.TemporaryDirectory() as root:
