@@ -134,7 +134,11 @@ def prospective_metrics(db: Path, path: Path, model: Mapping[str, Any]) -> dict[
         con.row_factory = sqlite3.Row
         for row in con.execute('SELECT * FROM predictions WHERE version=?', (model['version'],)):
             final = finals.get(row['match_id'])
-            if not final or final['settled_at'] <= row['at']:
+            # A journal replay performed after settlement is retrospective.
+            # Legacy predictions without a wall-clock timestamp are unproven.
+            predicted_at = row['predicted_at'] if 'predicted_at' in row.keys() else None
+            if (not final or not predicted_at or final['settled_at'] <= row['at']
+                    or final['settled_at'] <= predicted_at):
                 continue
             status, _ = settle_pick(row['market'], row['outcome'], row['line'], final['ft_score'], final.get('ht_score'))
             if status not in GRADED:

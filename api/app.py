@@ -656,6 +656,14 @@ class ApiApp:
     def _public_live_row(row: Mapping[str, Any], connected: bool) -> Dict[str, Any]:
         import time
         public = dict(row)
+        # Frozen training prefixes belong to the journal, not every UI poll.
+        # Rebuild the containers without touching the immutable computation.
+        public['markets'] = [{**market, 'quotes': [
+            {k: v for k, v in quote.items() if k not in ('training_history', 'order_detail')}
+            for quote in market.get('quotes') or []]} for market in row.get('markets') or []]
+        for field in ('picks', 'forecasts'):
+            public[field] = [{k: v for k, v in pick.items() if k not in ('training_history', 'order_detail')}
+                             for pick in row.get(field) or []]
         age = max(0, time.time() - _as_float(row.get("published_at_ms")) / 1000)
         quote_age = max(0, time.time() - _as_float(row.get("quote_time_ms")) / 1000)
         public.update(result_age_s=round(age, 1), quote_age_s=round(quote_age, 1),

@@ -106,6 +106,27 @@ services:
   # Web 控制台静态资源（B/S 的 B）。
   # 用 nginx 托管 static，并把 /api 反向代理到 analytics-api，
   # 从而让 Browser 端与 Server 端同源 —— 免除 CORS 配置。
+  model-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.model
+    container_name: ai_football_model_worker
+    environment:
+      - MODEL_LEDGER_ROOT=/app/output/ledger
+    volumes:
+      - ../output:/app/output
+    cpus: "${MODEL_WORKER_CPUS:-2.0}"
+    mem_limit: "${MODEL_WORKER_MEMORY:-5g}"
+    stop_grace_period: 60s
+    restart: unless-stopped
+    network_mode: none
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,time,datetime; from pathlib import Path; d=json.loads(Path('/app/output/models/dashboard.json').read_text()); assert d['running'] and time.time()-datetime.datetime.fromisoformat(d['heartbeat_at']).timestamp()<90"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+
   web-console:
     image: nginx:1.27-alpine
     container_name: ai_football_web_console

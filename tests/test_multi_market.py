@@ -239,6 +239,8 @@ class TestStoreStatsSingleFlight(unittest.TestCase):
             t.start()
         for t in threads:
             t.join()
+        assert svc._stats_thread is not None
+        svc._stats_thread.join(timeout=5)
 
         self.assertEqual(len(results), n)
         self.assertEqual(len(calls), 1,
@@ -246,7 +248,29 @@ class TestStoreStatsSingleFlight(unittest.TestCase):
 
     def test_cached_after_first_call(self) -> None:
         svc = self._svc()
+        svc._store_stats_cached()
+        assert svc._stats_thread is not None
+        svc._stats_thread.join(timeout=5)
         first = svc._store_stats_cached()
         second = svc._store_stats_cached()
         self.assertEqual(first, second)
         self.assertIs(second, svc._stats_cache)
+
+    def test_cold_health_returns_while_statistics_are_blocked(self) -> None:
+        svc = self._svc()
+        entered, release = threading.Event(), threading.Event()
+        def blocked():
+            entered.set()
+            release.wait(5)
+            return {'snapshot_files': 123}
+        svc.store.stats = blocked
+        try:
+            result = svc.health()
+            self.assertEqual(result['snapshot_store']['statistics_state'], 'loading')
+            self.assertTrue(entered.wait(1))
+            self.assertEqual(svc.health()['status'], 'healthy')
+        finally:
+            release.set()
+            assert svc._stats_thread is not None
+            svc._stats_thread.join(timeout=5)
+        self.assertEqual(svc.health()['snapshot_store']['snapshot_files'], 123)
