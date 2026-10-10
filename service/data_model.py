@@ -60,10 +60,18 @@ def storage_stats(root: Path) -> dict[str, Any]:
         except sqlite3.Error as exc:
             errors.append(str(exc))
     disk = shutil.disk_usage(root)
-    return {'at': datetime.now(timezone.utc).isoformat(), 'categories': categories,
+    archive: dict[str, Any] = {'backend': 'local'}
+    catalog = root / '_archive' / 'catalog.sqlite3'
+    if catalog.exists():
+        with closing(sqlite3.connect(catalog.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con:
+            files, remote_bytes, cleaned = con.execute('SELECT count(*),coalesce(sum(size),0),coalesce(sum(cleaned),0) FROM files').fetchone()
+            packs, object_bytes = con.execute('SELECT count(*),coalesce(sum(bytes),0) FROM packs').fetchone()
+        archive = {'backend': 's3', 'files': files, 'bytes': remote_bytes,
+                   'packs': packs, 'object_bytes': object_bytes, 'cleaned_files': cleaned}
+    return {'at': datetime.now(timezone.utc).isoformat(), 'categories': categories, 'archive': archive,
             'bytes': sum(c['bytes'] for c in categories), 'files': sum(c['files'] for c in categories),
             'records': records, 'disk': {'total': disk.total, 'used': disk.used, 'free': disk.free}, 'errors': errors,
-            'retention': '永久保存，不轮转、不删除；文件大小为压缩后的逻辑字节数'}
+            'retention': '归档永久保存；S3 模式在上传回读校验后清理本地历史副本。运行状态与索引保留本地。'}
 
 
 class DataModelService:
@@ -122,4 +130,19 @@ class DataModelService:
                                'cycle_matches': self.cfg.model_training_matches,
                                'cpu_cores': self.cfg.model_training_cpu,
                                'memory_mb': self.cfg.model_training_memory_mb}
+            if self.root is not None:
+                disk = shutil.disk_usage(self.root.parent)
+                out.setdefault('storage', {})['disk'] = {'total': disk.total, 'used': disk.used, 'free': disk.free}
+                path = self.root.parent / '_archive' / 'status.json'
+                try:
+                    if path.exists():
+                        out.setdefault('storage', {})['archive'] = json.loads(path.read_text())
+                except (OSError, ValueError):
+                    out.setdefault('storage', {})['archive'] = {'error': 'S3 迁移状态不可读取'}
+                progress = path.with_name('progress.json')
+                if progress.exists():
+                    try:
+                        out.setdefault('storage', {}).setdefault('archive', {})['migration'] = json.loads(progress.read_text())
+                    except (OSError, ValueError):
+                        pass
             return out

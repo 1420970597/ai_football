@@ -68,6 +68,7 @@ services:
       - SNAPSHOT_ROOT=/app/output/snapshots
       # 缓存后端：redis 可达则用 redis，否则自动回退内存
       - REDIS_URL=redis://redis:6379/0
+      - S3_CONFIG_FILE=/app/client/credentials.json
     # ⚠️ 可外部注入的变量（DATA_SOURCE、LEYU_*）一律**只经上面的 env_file** 传入，
     #    不写进 environment。原因：compose 中 environment 优先级高于 env_file，
     #    写成 `- FOO=${FOO:-}` 时，未在 shell 设置就会被展开为空串并覆盖 .env，
@@ -92,6 +93,7 @@ services:
     volumes:
       # 宿主机快照存储（乐鱼实时采集写入）
       - ../output:/app/output
+      - ../client:/app/client:ro
       # 乐鱼抓包（离线回放时才需要；文件缺失不影响在线模式）
       - ../leyu.saz:/app/leyu.saz:ro
     depends_on:
@@ -126,6 +128,23 @@ services:
       timeout: 3s
       retries: 3
       start_period: 60s
+
+  archive-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.archive
+    container_name: ai_football_archive_worker
+    environment:
+      - S3_CONFIG_FILE=/app/client/credentials.json
+    volumes:
+      - ../output:/app/output
+      - ../client:/app/client:ro
+    cpus: "${ARCHIVE_WORKER_CPUS:-0.5}"
+    mem_limit: 512m
+    stop_grace_period: 60s
+    restart: unless-stopped
+    networks:
+      - ai_football_network
 
   web-console:
     image: nginx:1.27-alpine

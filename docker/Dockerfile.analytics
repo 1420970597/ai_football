@@ -23,7 +23,8 @@ RUN apt-get update \
 
 # redis 客户端：store.make_cache() 用它连接缓存后端；
 # 缺失时自动回退到进程内 MemoryCache（可用但不跨进程共享）。
-RUN pip install --no-cache-dir "redis>=5.0.1"
+COPY docker/requirements-storage.txt /tmp/requirements-storage.txt
+RUN pip install --no-cache-dir "redis>=5.0.1" -r /tmp/requirements-storage.txt
 
 WORKDIR /app
 

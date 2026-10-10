@@ -711,6 +711,11 @@ class TrendStore:
             failed = False
             for mid, lines in batches.items():
                 path = self._path(mid)
+                from store.archive import output_root, storage_mode
+                archive_root = output_root(path)
+                if archive_root is not None and storage_mode(archive_root) == 's3':
+                    hour = datetime.now(timezone.utc).strftime('%Y%m%d%H')
+                    path = path.parent / path.stem / (hour + '.jsonl')
                 try:
                     path.parent.mkdir(parents=True, exist_ok=True)
                     payload = ("\n".join(lines) + "\n").encode('utf-8')
@@ -743,6 +748,25 @@ class TrendStore:
         if not self.enabled:
             return []
         path = self._path(mid)
+        from store.archive import archive_for
+        archive = archive_for(path)
+        if archive is not None:
+            try:
+                directory = path.parent / path.stem
+                segments = sorted(set(directory.glob('*.jsonl')) | set(archive.list(directory)), reverse=True)
+                segments.append(path)
+                lines: list[bytes] = []
+                for segment in segments:
+                    if segment == path and not segment.exists() and not archive.contains(segment):
+                        continue
+                    raw = archive.read_many([segment])[segment]
+                    lines = raw.splitlines() + lines
+                    if len(lines) >= max(1, limit):
+                        break
+                return [json.loads(line) for line in lines[-max(1, limit):] if line.strip()]
+            except (OSError, ValueError) as exc:
+                self.last_error = 'S3 走势读取失败: ' + str(exc)
+                return []
         if not path.exists():
             return []
         try:

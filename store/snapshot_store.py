@@ -357,8 +357,10 @@ class SnapshotStore:
             )
             # 加入纳秒与序号后缀，避免同微秒内多次采集相互覆盖
             target = d / ("%s_%s.json" % (ts, safe_name(snapshot.market)))
+            from store.archive import archive_for
+            archive = archive_for(self.root)
             seq = 0
-            while target.exists():
+            while target.exists() or (archive is not None and archive.contains(target)):
                 seq += 1
                 target = d / (
                     "%s_%s_%d.json" % (ts, safe_name(snapshot.market), seq)
@@ -436,7 +438,19 @@ class SnapshotStore:
         return out
 
     def _load_dir(self, d: Path) -> List[OddsSnapshot]:
+        from store.archive import archive_for
+        archive = archive_for(self.root)
         out: List[OddsSnapshot] = []
+        if archive is not None:
+            files = sorted(set(d.glob('*.json')) | set(archive.list(d)))
+            files = [f for f in files if f.name != '_index.json']
+            payloads = archive.read_many(files)
+            for f in files:
+                try:
+                    out.append(self._from_payload(json.loads(payloads[f])))
+                except (ValueError, KeyError, TypeError):
+                    continue
+            return out
         for f in sorted(d.glob("*.json")):
             if f.name == "_index.json":
                 continue
