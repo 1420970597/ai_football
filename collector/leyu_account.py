@@ -20,7 +20,8 @@ import ssl
 import time
 import urllib.error
 import urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .leyu_app_login import AppLoginSessionProvider, login_provider_from_env
@@ -42,6 +43,9 @@ VENUE_PREBET_ORDER_PATH = "/yewurecord/v1/betOrder/client/getH5PreBetOrderList"
 VENUE_LATEST_MARKET_PATH = "/yewu13/v1/betOrder/client/queryLatestMarketInfo"
 VENUE_LIMIT_PATH = "/yewu13/v1/betOrder/client/queryMarketMaxMinBetMoney"
 VENUE_BET_PATH = "/yewu13/v1/betOrder/client/bet"
+ACCOUNT_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+ACCOUNT_ORDER_PAGE_SIZE = 100
+ACCOUNT_PNL_MAX_PAGES = 20
 
 
 class BetSubmissionUnknown(SessionError):
@@ -208,9 +212,83 @@ def _first_value(row: Mapping[str, Any], names: Sequence[str]) -> Any:
 
 def _as_optional_float(value: Any) -> Optional[float]:
     try:
-        return None if value is None or value == "" else float(value)
-    except (TypeError, ValueError):
+        number = None if value is None or value == "" or isinstance(value, bool) else float(value)
+        return number if number is not None and math.isfinite(number) else None
+    except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _net_profit(row: Mapping[str, Any]) -> Optional[float]:
+    net = _first_value(row, ("profitAmount", "profit"))
+    if net is not None:
+        return _as_optional_float(net)
+    # backAmount is the returned principal plus winnings, not net profit.
+    returned = _as_optional_float(_first_value(row, ("backAmount", "payout")))
+    stake = _as_optional_float(_first_value(row, ("orderAmountTotal", "betAmount", "amount", "stake")))
+    if returned is None or stake is None:
+        return None
+    return _as_optional_float(Decimal(str(returned)) - Decimal(str(stake)))
+
+
+def _settlement_time(row: Mapping[str, Any]) -> Optional[datetime]:
+    value = _first_value(row, ("settleTime", "settled_at", "settleAt", "settlementTime"))
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        stamp = float(value)
+        if not math.isfinite(stamp) or stamp <= 0:
+            return None
+        return datetime.fromtimestamp(stamp / 1000 if stamp > 100000000000 else stamp, ACCOUNT_TIMEZONE)
+    except (ValueError, TypeError):
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed.replace(tzinfo=ACCOUNT_TIMEZONE) if parsed.tzinfo is None else parsed.astimezone(ACCOUNT_TIMEZONE)
+        except ValueError:
+            return None
+    except (OverflowError, OSError):
+        return None
+
+
+def _daily_profit(items: Sequence[Mapping[str, Any]], at: float,
+                  complete: bool = True) -> Dict[str, Any]:
+    today = datetime.fromtimestamp(at, ACCOUNT_TIMEZONE).date()
+    output: Dict[str, Any] = {"date": today.isoformat(), "timezone": "Asia/Shanghai",
+                              "basis": "settlement_time", "available": False,
+                              "amount": None, "settled_count": 0, "reason": None}
+    if not complete:
+        output["reason"] = "结算记录未完整读取，暂不能统计今日盈亏"
+        return output
+    total, count = Decimal(0), 0
+    seen: set[str] = set()
+    for item in items:
+        if item.get("status") != "settled":
+            continue
+        order_no = str(_first_value(item, ("order_no", "orderNo", "orderNumber")) or "")
+        if order_no and order_no in seen:
+            continue
+        if order_no:
+            seen.add(order_no)
+        settled_at = _settlement_time(item)
+        if settled_at is None:
+            output["reason"] = "结算记录缺少有效结算时间，暂不能统计今日盈亏"
+            return output
+        if settled_at.date() != today:
+            continue
+        profit = _net_profit(item)
+        if profit is None:
+            output["reason"] = "今日结算记录缺少有效净盈亏，暂不能汇总"
+            return output
+        total += Decimal(str(profit))
+        count += 1
+    try:
+        amount = _as_optional_float(total.quantize(Decimal("0.01")))
+    except InvalidOperation:
+        amount = None
+    if amount is None:
+        output["reason"] = "结算净盈亏超出有效金额范围，暂不能汇总"
+        return output
+    output.update(available=True, amount=amount, settled_count=count)
+    return output
 
 
 def _items_amount(items: Sequence[Mapping[str, Any]]) -> float:
@@ -243,7 +321,7 @@ def _normalise_venue_record(row: Mapping[str, Any], status: str) -> Dict[str, An
     item["outcome"] = item["option"]
     item["odds"] = _as_optional_float(_first_value(merged, ("odds", "oddFinally", "oddsFinally", "odd")))
     item["amount"] = _as_optional_float(_first_value(merged, ("betAmount", "orderAmountTotal", "amount", "stake", "betMoney")))
-    item["profit"] = _as_optional_float(_first_value(merged, ("profit", "profitAmount", "winAmount", "payout")))
+    item["profit"] = _net_profit(merged)
     item["score"] = _first_value(detail, ("settleScore", "scoreBenchmark", "matchScore", "score", "比分")) or _first_value(merged, ("score", "settleScore", "scoreBenchmark", "matchScore", "比分"))
     item["result"] = _first_value(detail, ("result", "betResult", "settleResult", "winStatus")) or _first_value(row, ("result", "betResult", "settleResult", "winStatus"))
     item["details"] = [dict(entry) for entry in details if isinstance(entry, Mapping)] if isinstance(details, list) else []
@@ -553,10 +631,10 @@ class LeyuAccountClient:
                 "submitted": True, "order_no": str(order["orderNo"]),
                 "provider_status": int(status), "provider_code": code}
 
-    def _fetch_venue_records(self, flag: int) -> Dict[str, Any]:
+    def _fetch_venue_records(self, flag: int, page: int = 1) -> Dict[str, Any]:
         """Fetch one settled state from the native YBTY order endpoint."""
         body = {
-            "orderStatus": int(flag), "timeType": 0, "page": 1, "size": 100,
+            "orderStatus": int(flag), "timeType": 0, "page": page, "size": ACCOUNT_ORDER_PAGE_SIZE,
             "beginTime": 0, "endTime": 9999999999999, "outright": 0,
         }
         decoded = self._venue_request(VENUE_ORDER_PATH, body, decode=True)
@@ -569,7 +647,35 @@ class LeyuAccountClient:
             "items": rows,
             "status": "unsettled" if flag == 0 else "settled",
             "source": "leyu_ybty",
+            "total_known": count is not None,
+            "has_more": count > page * ACCOUNT_ORDER_PAGE_SIZE if count is not None else len(rows) >= ACCOUNT_ORDER_PAGE_SIZE,
         }
+
+    def _fetch_today_pnl(self, settled: Mapping[str, Any], at: float) -> Dict[str, Any]:
+        rows = list(settled.get("items") or [])
+        if (settled.get("source") != "leyu_ybty" or not settled.get("total_known")
+                or settled.get("count") is None or settled["count"] < 0):
+            return _daily_profit(rows, at, complete=False)
+        expected = settled["count"]
+        has_more = settled.get("has_more", int(settled["count"]) > len(rows))
+        try:
+            for page in range(2, ACCOUNT_PNL_MAX_PAGES + 1):
+                if not has_more:
+                    break
+                previous_ids = {row.get("order_no") for row in rows if row.get("order_no")}
+                batch = self._fetch_venue_records(1, page=page)
+                if not batch.get("total_known") or batch["count"] != expected:
+                    return _daily_profit(rows, at, complete=False)
+                new_rows = batch["items"]
+                if not new_rows or all(row.get("order_no") in previous_ids for row in new_rows):
+                    return _daily_profit(rows, at, complete=False)
+                rows.extend(new_rows)
+                has_more = batch["has_more"]
+        except SessionError:
+            return _daily_profit(rows, at, complete=False)
+        ids = {row.get("order_no") for row in rows if row.get("order_no")}
+        complete = not has_more and len(ids) == expected and all(row.get("order_no") for row in rows)
+        return _daily_profit(rows, at, complete=complete)
 
     def _fetch_venue_account(self) -> Dict[str, Any]:
         """Read YBTY balance and both order states in one launched session."""
@@ -653,6 +759,7 @@ class LeyuAccountClient:
                 "sports_balance": sports_balance,
                 "venue_balances": [dict(row) for row in venue_rows],
                 "unsettled": unsettled, "settled": settled,
+                "today_pnl": self._fetch_today_pnl(settled, fetched_at),
                 "fetched_at": fetched_at, "error": "; ".join(errors) or None}
 
 

@@ -34,6 +34,19 @@ async function get(path) {
   }
   return response.json();
 }
+function accountPnl(data) {
+  const pnl = data?.today_pnl;
+  const available = pnl?.available === true && typeof pnl.amount === 'number' && Number.isFinite(pnl.amount);
+  const amount = available ? pnl.amount : null;
+  const value = available ? (amount > 0 ? '+' : '') + fixed(amount) : '—';
+  const basis = '北京时间 · 按结算时间统计 · 不含未结算订单';
+  const note = available ? `${pnl.date} · 今日已结 ${pnl.settled_count} 笔` : (pnl?.reason || '今日结算盈亏暂不可用');
+  return {value, note, basis, className:'account-pnl' + (amount > 0 ? ' positive' : amount < 0 ? ' negative' : '')};
+}
+function accountPnlNode(data) {
+  const pnl = accountPnl(data);
+  return el('span', {class:pnl.className, text:'今日盈亏 ' + pnl.value, title:pnl.note + ' · ' + pnl.basis});
+}
 function renderAccount(data) {
   const node = $('account-summary');
   if (!node) return;
@@ -49,8 +62,9 @@ function renderAccount(data) {
   const pendingAmount = data.unsettled?.amount == null ? '' : ' · ' + fixed(data.unsettled.amount);
   const pending = pendingCount + pendingAmount;
   const settled = data.settled?.count == null ? '—' : String(data.settled.count);
-  node.replaceChildren(...[['体育余额', balance], ['未结', pending], ['已结', settled]].map(([label, value]) =>
-    el('span', {text: label + ' ' + value})));
+  node.replaceChildren(el('span', {class:'account-balance', text:'体育余额 ' + balance}), accountPnlNode(data),
+    ...[['未结', pending], ['已结', settled]].map(([label, value]) =>
+      el('span', {class:'account-record-stats', text: label + ' ' + value})));
   node.title = data.error || ('中心钱包 ' + (data.center_balance == null ? '—' : fixed(data.center_balance)) + ' · 乐鱼体育场馆 YBTY');
   renderAccountDetails(data);
 }
@@ -63,6 +77,7 @@ function renderAccountDetails(data) {
   }
   const summary = el('div', {class:'account-detail-stats'}, [
     el('span', {text:'体育余额 ' + fixed(data.sports_balance ?? data.balance)}),
+    accountPnlNode(data),
     el('span', {text:'未结 ' + String(data.unsettled?.count ?? '—') + ' · ' + fixed(data.unsettled?.amount)}),
     el('span', {text:'已结 ' + String(data.settled?.count ?? '—') + ' · ' + fixed(data.settled?.amount)})
   ]);
@@ -75,7 +90,8 @@ function renderAccountDetails(data) {
     ])) : [el('span', {class:'account-muted', text:'暂无记录'})];
     return el('section', {class:'account-orders'}, [el('h4', {text:title}), ...rows]);
   });
-  root.replaceChildren(summary, ...sections);
+  const pnl = accountPnl(data);
+  root.replaceChildren(summary, el('p', {class:'account-muted account-pnl-note', text:pnl.note + ' · ' + pnl.basis}), ...sections);
 }
 async function loadAccount() {
   const now = Date.now();
