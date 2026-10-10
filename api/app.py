@@ -574,8 +574,51 @@ class ApiApp:
             public.pop("events", None)
             rows.append(public)
         rows.sort(key=lambda r: (r["stale"], r.get("league", ""), r["match_id"]))
-        result.update(matches=rows, realtime=realtime, generated_at=datetime.now(timezone.utc).isoformat())
+        result.update(
+            matches=rows,
+            realtime=realtime,
+            coverage=self._workbench_coverage(kind, len(rows), rt),
+            generated_at=datetime.now(timezone.utc).isoformat(),
+        )
         return result
+
+    def _workbench_coverage(self, kind: str, displayed: int,
+                            realtime: Optional[Any]) -> Dict[str, Any]:
+        """Expose the four counts needed to audit the workbench list.
+
+        ``live_expert.results`` only contains matches that have completed at
+        least one local computation.  Treating that number as the source
+        total made a healthy subscription look like a one-match feed while
+        the rest of the current schedule was still entering the pipeline.
+        Keep source, subscription, analysis and display counts separate.
+        """
+        try:
+            coverage = self.analysis.live_coverage(kind)
+        except (AttributeError, TypeError):
+            coverage = {}
+        if not isinstance(coverage, dict):
+            coverage = dict(coverage) if isinstance(coverage, Mapping) else {}
+        try:
+            current_ids = self.analysis.live_match_ids_by_type(kind, refresh=False)
+        except (AttributeError, TypeError):
+            current_ids = None
+        try:
+            subscribed_ids = set(realtime.subscribed()) if realtime is not None else set()
+        except (AttributeError, TypeError):
+            subscribed_ids = set()
+        try:
+            quote_matches = realtime.live.n_matches() if realtime is not None else None
+        except (AttributeError, TypeError):
+            quote_matches = None
+        coverage.update(
+            subscribed=(len(current_ids & subscribed_ids)
+                        if current_ids is not None else None),
+            subscribed_total=len(subscribed_ids),
+            quotes=quote_matches,
+            analyzed=displayed,
+            displayed=displayed,
+        )
+        return coverage
 
     @staticmethod
     def _public_live_row(row: Mapping[str, Any], connected: bool) -> Dict[str, Any]:
@@ -1421,10 +1464,14 @@ def _start_background(
                 live = list(source.live_match_ids(SOCCER_SPORT_ID))
             except Exception as exc:  # noqa: BLE001 - 订阅源失败不终止推送
                 print("警告：获取订阅列表失败：%s" % exc)
+                if hub.subscribed():
+                    raise  # Hub preserves the active subscription on provider failure.
                 live = _mids_from_local_trends()
                 if live:
                     print("提示：改用本地已知 %d 场建立订阅（会话不可用时的自愈）"
                           % len(live))
+                else:
+                    raise  # An unavailable source is not an authoritative empty schedule.
             if max_matches > 0:
                 live = live[:max_matches]
             return live

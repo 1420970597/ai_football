@@ -6,7 +6,9 @@ async (page) => {
     probabilities: {home: .7, draw: .2, away: .1}, compute_ms: 2, result_age_s: .1, quote_age_s: .1,
     markets: [{market: 'OU', line: '2.25', quotes: [{outcome: 'over', label: '全场大2.25', odds: 1.95, p_market: .5, trend_pct: .8},
       {outcome: 'under', label: '全场小2.25', odds: 1.96, p_market: .5, trend_pct: -.8}]}],
-    candidates: [{label: '全场大2.25', ev: .02}], price_history: {'OU|2.25|over': [[1000, 1.9], [2000, 1.95]]}, events: []
+    remaining_goals: [.8, .4],
+    candidates: [{label: '全场大2.25', ev: .02, odds: 1.95, p_model: .52}],
+    price_history: {'OU|2.25|over': [[1000, 1.9], [2000, 1.95]], 'OU|2.25|under': [[1000, 2], [2000, 1.96]]}, events: []
   };
   let mode = 'default';
   const errors = [];
@@ -24,18 +26,28 @@ async (page) => {
     if (mode === 'edge') match.home = '测试长队名'.repeat(14) + '<script>window.__bad=true</script>';
     if (type === 'virtual') {match.match_id = 'test-virtual'; match.league = 'EAFC 测试占位'; match.competition_type = 'virtual';}
     return route.fulfill({json: {count: mode === 'empty' ? 0 : 1, matches: mode === 'empty' ? [] : [match],
+      coverage: {source_current: mode === 'empty' ? 0 : 3, subscribed: mode === 'empty' ? 0 : 2},
       realtime: {connected: 1}, performance: {event_to_result_ms: {p95: 150}}}});
   });
   function assert(condition, message) {if (!condition) throw new Error(message);}
   await page.setViewportSize({width: 1440, height: 1000});
-  await page.goto('http://127.0.0.1:18025/');
+  await page.goto('http://127.0.0.1:3003/');
   await page.locator('.match-card').waitFor();
   assert(await page.locator('header nav button').count() === 2, 'only two primary pages');
+  assert(await page.locator('#source-match-count').textContent() === '3', 'source coverage is distinct from results');
+  assert(await page.locator('#subscribed-count').textContent() === '2', 'typed subscription coverage');
+  assert(await page.locator('.match-probabilities .probability-row').count() === 3, 'list includes probability bars');
   await page.screenshot({path: '/root/ai_football/output/playwright/task25-default.png', fullPage: true});
   await page.getByRole('button', {name: '分析测试主队对测试客队', exact: true}).click();
   await page.locator('#detail .probability-row').first().waitFor();
   await page.waitForTimeout(1200);
   assert(await page.locator('#detail svg').count() === 1, 'detail persists during polling');
+  assert(await page.locator('#detail svg text').count() >= 5, 'trend has odds and time axes');
+  assert(await page.locator('.intensity-grid strong').first().textContent() === '0.80', 'remaining goal intensity');
+  assert(await page.locator('.ev-table tbody tr').count() === 1, 'numeric pricing table');
+  await page.getByLabel('走势图盘口').selectOption('OU|2.25|under');
+  await page.waitForTimeout(1200);
+  assert(await page.getByLabel('走势图盘口').inputValue() === 'OU|2.25|under', 'selected trend preserved on polling');
   await page.getByRole('searchbox').fill('不存在的球队');
   assert(await page.getByText('没有符合筛选的赛事').isVisible(), 'search empty state');
   await page.getByRole('button', {name: '清除筛选', exact: true}).click();

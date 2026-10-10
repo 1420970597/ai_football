@@ -645,6 +645,66 @@ class TestNoArtificialCap(unittest.TestCase):
                         max_matches=10)
         self.assertEqual(len(h._pick_mids()), 10)
 
+    def test_realtime_hub_current_schedule_ignores_historical_finished(self) -> None:
+        """历史比分不能把同一 mid 的新一轮当前赛程过滤掉。"""
+        from collector.leyu_realtime import RealtimeHub
+
+        h = RealtimeHub(session_provider=None,
+                        mids_provider=lambda: ["current", "new"])
+        h._finished.add("current")
+        self.assertEqual(h._pick_mids(), ["current", "new"])
+        h._runtime_finished.add("current")
+        self.assertEqual(h._pick_mids(), ["new"])
+
+    def test_seed_current_match_clears_historical_finished_state(self) -> None:
+        from types import SimpleNamespace
+        from collector.leyu_realtime import RealtimeHub
+
+        h = RealtimeHub(session_provider=None, resume=False)
+        h._finished.add("current")
+        h.seed_matches([SimpleNamespace(
+            mid="current", tournament="联赛", home="主队", away="客队",
+            sport="足球", sport_id="1", minute="12", period="1",
+            score=(0, 0), is_finished=False)])
+        self.assertFalse(h.decision_snapshot("current")["finished"])
+
+    def test_realtime_hub_marks_provider_failure_for_refresh_policy(self) -> None:
+        from collector.leyu_realtime import RealtimeHub
+
+        def fail() -> list[str]:
+            raise RuntimeError("temporary source outage")
+
+        h = RealtimeHub(session_provider=None, mids_provider=fail)
+        self.assertEqual(h._pick_mids(), [])
+        self.assertTrue(h._mids_provider_failed)
+
+    def test_subscription_refresh_preserves_failure_but_clears_confirmed_empty(self) -> None:
+        from types import SimpleNamespace
+        from collector.leyu_realtime import RealtimeHub
+
+        for refreshed, expected in [(RuntimeError("source unavailable"), ["current"]),
+                                    ([], [])]:
+            with self.subTest(refreshed=refreshed):
+                provider = mock.Mock(side_effect=[["current"], refreshed])
+                session_provider = SimpleNamespace(
+                    acquire=lambda: SimpleNamespace(host="https://example.test",
+                                                   request_id="test", origin=""))
+                h = RealtimeHub(
+                    session_provider, mids_provider=provider,
+                    subscribe_interval_s=0, resume=False)
+                feed = mock.Mock()
+                calls = [0]
+                def recv(calls=calls, hub=h) -> None:
+                    calls[0] += 1
+                    if calls[0] > 1:
+                        hub._stop.set()
+                    return None
+                feed.recv.side_effect = recv
+                with mock.patch("collector.leyu_realtime.LEYUFeed", return_value=feed):
+                    h._run()
+                self.assertEqual(h.subscribed(), expected)
+                self.assertEqual(feed.subscribe_odds.call_args.args[0], expected)
+
     def test_subscription_source_filters_soccer(self) -> None:
         """订阅源必须只取**进行中的足球**：乐鱼同网关也返回篮球/网球。
 
@@ -686,6 +746,26 @@ class TestNoArtificialCap(unittest.TestCase):
         self.assertEqual(counts["live"], 1)
         self.assertEqual(counts["live_all_sports"], 3)
         self.assertEqual(counts["scheduled"], 2)
+
+    def test_live_match_ids_are_split_by_competition_type(self) -> None:
+        from types import SimpleNamespace
+        from service.analysis import AnalysisConfig, AnalysisService
+
+        source = SimpleNamespace(schedule=lambda: [
+            SimpleNamespace(mid="real", sport_id="1", sport="足球",
+                            tournament="英超", home="A", away="B", is_live=True),
+            SimpleNamespace(mid="virtual", sport_id="1", sport="足球",
+                            tournament="EAFC 联赛", home="A", away="B", is_live=True),
+            SimpleNamespace(mid="basket", sport_id="2", sport="篮球",
+                            tournament="篮球", home="A", away="B", is_live=True),
+        ])
+        valuation = mock.MagicMock()
+        valuation.source = source
+        svc = AnalysisService(valuation=valuation, realtime=None,
+                              config=AnalysisConfig(use_llm=False))
+        self.assertEqual(svc.live_match_ids_by_type("real"), {"real"})
+        self.assertEqual(svc.live_match_ids_by_type("virtual"), {"virtual"})
+        self.assertEqual(svc.live_match_ids_by_type("all"), {"real", "virtual"})
 
     def test_api_delegates_live_filtering_to_source(self) -> None:
         """API 层应**委托**而不是重复实现过滤（避免两处逻辑漂移）。

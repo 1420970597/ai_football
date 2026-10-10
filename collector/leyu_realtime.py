@@ -1063,6 +1063,12 @@ class RealtimeHub:
         self._status_at: Dict[str, float] = {}
         self._suspensions: Dict[str, Dict[str, float]] = {}
         self._finished: set = set()
+        # `_finished` also contains historical terminal scores restored at boot.
+        # Those records must not suppress a match that appears in the current
+        # schedule.  This set only tracks terminal events from this process and
+        # is safe to use for the next subscription refresh.
+        self._runtime_finished: set = set()
+        self._mids_provider_failed = False
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._subscribed: List[str] = []
@@ -1249,6 +1255,12 @@ class RealtimeHub:
                         self._score_at[mid] = now
                 if match.is_finished:
                     self._finished.add(mid)
+                    self._runtime_finished.add(mid)
+                else:
+                    # 当前赛程是权威状态：旧快照/旧进程留下的终场记录不能
+                    # 把这次仍在进行的赛事标成 finished，或阻断实时分析。
+                    self._finished.discard(mid)
+                    self._runtime_finished.discard(mid)
                 self._changed_state(mid)
                 mids.append(mid)
         self._notify_state_change(mids)
@@ -1564,6 +1576,7 @@ class RealtimeHub:
                     if isinstance(it, Mapping):
                         mid = str(it.get("mid", ""))
                         self._finished.add(mid)
+                        self._runtime_finished.add(mid)
                         self._changed_state(mid)
             self._notify_state_change([str(it.get("mid", ""))
                                        for it in items if isinstance(it, Mapping)])
@@ -1611,14 +1624,19 @@ class RealtimeHub:
     def _pick_mids(self) -> List[str]:
         if self.mids_provider is None:
             return []
+        self._mids_provider_failed = False
         try:
             mids = [str(m) for m in (self.mids_provider() or ())]
         except Exception as exc:  # noqa: BLE001 - 订阅来源失败不应终止推送线程
             self.stats.last_error = "mids_provider 失败: %s" % exc
+            self._mids_provider_failed = True
             return []
-        # 已结束的不再订阅
+        # 当前赛程是权威状态。不能把启动时从历史比分文件恢复的
+        # `_finished` 集合用于过滤，否则今天重新出现的 mid 会被永久漏掉。
+        # 只过滤本进程刚收到的终场事件，避免在上游状态刷新前继续订阅已结束场。
         with self._lock:
-            mids = [m for m in mids if m not in self._finished]
+            mids = [m for m in dict.fromkeys(mids)
+                    if m not in self._runtime_finished]
         # max_matches <= 0 表示不截断（全部订阅）
         cap = _to_int(self.max_matches)
         return mids[:cap] if cap > 0 else mids
@@ -1665,7 +1683,10 @@ class RealtimeHub:
                     # 定期刷新订阅列表（赛事会陆续开始/结束）
                     if time.time() - last_sub >= self.subscribe_interval_s:
                         new_mids = self._pick_mids()
-                        if new_mids and new_mids != self._subscribed:
+                        provider_failed = self._mids_provider_failed
+                        should_clear = not new_mids and not provider_failed
+                        if ((new_mids and new_mids != self._subscribed)
+                                or (should_clear and self._subscribed)):
                             feed.subscribe_odds(new_mids)
                             with self._lock:
                                 self._subscribed = new_mids
