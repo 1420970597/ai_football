@@ -291,6 +291,7 @@ class LiveExpertService:
                                            home=info.get('home') or '', away=info.get('away') or ''))
                 probability = fair[i]
                 quotes.append({'outcome': oc, 'label': label, 'odds': q.odds,
+                               'order_detail': {**getattr(q, 'order_detail', {}), 'oddFinally': str(q.odds)},
                                'p_market': round(probability, 6) if probability is not None else None,
                                'trend_pct': round(drift, 3), 'ts_ms': q.ts_ms})
             markets.append({'market': group['market'], 'line': group['line'],

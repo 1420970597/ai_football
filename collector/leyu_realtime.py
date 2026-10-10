@@ -220,6 +220,7 @@ class PriceTick:
     new_ov: float     # 本次赔率（十进制）
     ts_ms: int        # 上游时间戳（毫秒）
     upstream_obv: float = 0.0   # 上游给出的 obv（用于交叉校验）
+    order_detail: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def delta(self) -> float:
@@ -277,6 +278,7 @@ class LiveQuote:
     ts_ms: int
     #: 本机写入时刻（单调时钟不可回拨）；用于算“这个价多旧了”
     at: float = 0.0
+    order_detail: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def age_s(self) -> float:
@@ -356,7 +358,8 @@ class LiveBook:
                     continue  # REST enrichment must not roll back newer push quotes.
                 self._rows[key] = LiveQuote(
                     mid=t.mid, chpid=t.chpid, hv=t.hv, oid=t.oid, ot=t.ot,
-                    odds=odds, ts_ms=_to_int(t.ts_ms, 0), at=now)
+                    odds=odds, ts_ms=_to_int(t.ts_ms, 0), at=now,
+                    order_detail=dict(t.order_detail))
                 self._by_mid.setdefault(t.mid, {})[key] = None
                 self.updates += 1
 
@@ -489,7 +492,7 @@ class LiveBook:
             "version": 1,
             "saved_at": datetime.now(timezone.utc).isoformat(),
             "rows": [[r.mid, r.chpid, r.hv, r.oid, r.ot,
-                      round(_to_float(r.odds, 0.0), 6), _to_int(r.ts_ms, 0)]
+                      round(_to_float(r.odds, 0.0), 6), _to_int(r.ts_ms, 0), dict(r.order_detail)]
                      for r in rows],
         }
         tmp = path.with_name(path.name + ".tmp")
@@ -565,7 +568,8 @@ class LiveBook:
                 key = (str(mid), str(chpid), str(hv), str(oid))
                 self._rows[key] = LiveQuote(
                     mid=str(mid), chpid=str(chpid), hv=str(hv), oid=str(oid),
-                    ot=str(ot), odds=f_odds, ts_ms=i_ts, at=at)
+                    ot=str(ot), odds=f_odds, ts_ms=i_ts, at=at,
+                    order_detail=dict(item[7]) if len(item) > 7 and isinstance(item[7], Mapping) else {})
                 self._by_mid.setdefault(str(mid), {})[key] = None
                 n += 1
         return n
@@ -956,6 +960,15 @@ def parse_c105(decoded: Mapping[str, Any]) -> List[PriceTick]:
                 old_ov=new_val, new_ov=new_val,
                 ts_ms=bts or ts,
                 upstream_obv=(obv_int / OV_SCALE) if obv_int > 0 else new_val,
+                order_detail={
+                    "matchId": mid, "marketId": hid,
+                    "playId": str(block.get("hpid") or chpid),
+                    "playOptions": str(entry.get("ot") or ""),
+                    "playOptionsId": str(entry.get("oid") or ""),
+                    "marketValue": hv, "marketTypeFinally": "EU",
+                    "oddFinally": str(new_val), "matchType": 2, "sportId": "1",
+                    **({"dataSource": str(entry["cds"])} if entry.get("cds") else {}),
+                },
             ))
 
     hls = decoded.get("hls2") or decoded.get("hls") or {}
@@ -1281,12 +1294,22 @@ class RealtimeHub:
                     for q in market.quotes:
                         ot = {"home": "1", "away": "2", "draw": "X",
                               "over": "Over", "under": "Under"}.get(q.outcome, q.label or q.oid)
-                        ticks.append(PriceTick(mid, str(market.chpid), "", market.hv,
+                        ticks.append(PriceTick(mid, str(market.chpid), market.market_id, market.hv,
                                                q.oid, ot, q.decimal, q.decimal,
-                                               q.ctsp or market.ctsp))
+                                               q.ctsp or market.ctsp,
+                                               order_detail={
+                                                   "matchId": mid, "marketId": market.market_id,
+                                                   "playId": market.play_id or str(market.chpid),
+                                                   "playOptions": ot, "playOptionsId": q.oid,
+                                                   "marketValue": market.hv, "marketTypeFinally": "EU",
+                                                   "oddFinally": str(q.decimal), "matchType": 2 if match.is_live else 1,
+                                                   "sportId": str(match.sport_id), "dataSource": q.source,
+                                                   "tournamentId": str(match.tid),
+                                               }))
                 self.live.upsert_many(ticks)
                 if match.is_finished or now - self._status_at.get(mid, 0) > 10:
                     self._status[mid] = {**self._status.get(mid, {}),
+                                         "ms": getattr(match, "status", 1 if not match.is_finished else 3),
                                          "mst": match.minute, "mmp": match.period}
                     half = getattr(match, "half_score", (None, None))
                     if half and half[0] is not None and half[1] is not None:

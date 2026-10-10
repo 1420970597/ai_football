@@ -616,6 +616,8 @@ class MarketQuote:
     hv: str                 # 盘口线（让球族为**主队让球线**，可带符号）
     quotes: Tuple[OddsQuote, ...]
     ctsp: int = 0           # 该盘口报价的变更时间戳(ms)
+    market_id: str = ""     # hl.hid; required by the native order endpoint
+    play_id: str = ""       # hpid can differ from display chpid
 
     @property
     def booksum(self) -> float:
@@ -814,6 +816,8 @@ def parse_market_quote(
                         hv=hv,
                         quotes=tuple(quotes),
                         ctsp=ctsp,
+                        market_id=str(hl.get("hid") or ""),
+                        play_id=str(block.get("hpid") or chpid),
                     )
                 )
     return tuple(out)

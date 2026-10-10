@@ -466,11 +466,18 @@ class AnalysisService:
                                   llm_model=self.llm.config.model, llm_api_key=self.llm.config.api_key or "")
         self.runtime_settings = RuntimeSettings(runtime_cfg)
         self.live_review = LiveReview()
+        from service.betting import BettingExecutor
+        self.betting = BettingExecutor(self.runtime_settings, lambda: self.realtime, lambda: self.ledger)
         self._bind_runtime_settings()
 
     def _apply_runtime_settings(self, cfg: Any, version: int) -> None:
         self.live_expert.configure(cfg, version)
         self.live_review.configure(cfg, version)
+        self.betting.configure()
+        if cfg.betting_enabled:
+            self.betting.start()
+        else:
+            self.betting.stop()
         with self._lock:
             self._cache.clear()
         subscribed = getattr(self.realtime, "subscribed", None)
@@ -479,13 +486,20 @@ class AnalysisService:
 
     def _bind_runtime_settings(self) -> None:
         self.runtime_settings.bind(self.config.ledger_root)
+        self.betting.bind(self.config.ledger_root)
         self.live_expert.on_decision = self.ledger.record_live if self.ledger.enabled else None
         self.live_expert.update_evidence(self.ledger.performance_evidence())
         self.live_review.on_experiment = self.ledger.record_experiment if self.ledger.enabled else None
         self._apply_runtime_settings(self.runtime_settings.config, self.runtime_settings.version)
 
     def update_settings(self, patch: Mapping[str, Any], version: Any) -> Dict[str, Any]:
-        return self.runtime_settings.update(patch, version, self._apply_runtime_settings)
+        self.runtime_settings.update(patch, version, self._apply_runtime_settings)
+        return self.settings_status()
+
+    def settings_status(self) -> Dict[str, Any]:
+        out = self.runtime_settings.public()
+        out["capabilities"]["betting"] = self.betting.health()
+        return out
 
     # -- 配置（支持运行期注入 ledger_root，且台账会跟着换） -------------------
 
@@ -542,6 +556,7 @@ class AnalysisService:
             return False
         if self.config.cycle_interval_s <= 0:
             return False
+        self.betting.start()
         self._cycle_stop.clear()
         self._cycle_thread = threading.Thread(
             target=self._cycle_loop, name="analysis-cycle", daemon=True)
@@ -549,6 +564,7 @@ class AnalysisService:
         return True
 
     def stop_cycle(self, timeout: float = 5.0) -> None:
+        self.betting.stop()
         self._cycle_stop.set()
         t = self._cycle_thread
         if t is not None and t.is_alive():
@@ -630,6 +646,7 @@ class AnalysisService:
             return False
         self.live_expert.start(self.config.ledger_root)
         self.live_review.start()
+        self.betting.start()
         self._sched_stop.clear()
         self._sched_thread = threading.Thread(
             target=self._sched_loop, name="analysis-trigger", daemon=True)
@@ -637,6 +654,7 @@ class AnalysisService:
         return True
 
     def stop_scheduler(self, timeout: float = 5.0) -> None:
+        self.betting.stop()
         self.live_expert.stop()
         self.live_review.stop()
         self._sched_stop.set()
@@ -779,6 +797,7 @@ class AnalysisService:
                     self.notify_price_change([mid])
                 else:
                     self.live_review.submit(row)
+                    self.betting.enqueue(row)
             except (ValueError, TypeError, ArithmeticError) as exc:
                 self.live_expert.errors += 1
                 self.cycle_stats["last_error"] = "实时模型: %s" % exc
@@ -2242,6 +2261,7 @@ class AnalysisService:
             },
             "cycle": dict(self.cycle_stats),
             "scheduler": self.scheduler_health(),
+            "betting": self.betting.health(),
             # 进行中覆盖的可观测性：用户要能自己查「为什么比 leyu 少」。
             #
             # `upstream` 是**乐鱼页面滚动球计数同源**的值

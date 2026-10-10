@@ -4,13 +4,95 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from collector.leyu_account import (LeyuAccountClient,
+from collector.leyu_account import (BetSubmissionRejected, BetSubmissionUnknown, LeyuAccountClient,
                                      _find_number, _find_records, _normalise_venue_record,
                                      _venue_balances)
 from collector.session import SessionError
 
 
 class LeyuAccountTests(unittest.TestCase):
+    def bet_detail(self):
+        return {'matchId': 'm', 'marketId': 'market1', 'playId': '2',
+                'playOptions': 'Over', 'playOptionsId': 'option1', 'oddFinally': '1.95',
+                'odds': '195000', 'marketValue': '2.5', 'matchType': 2,
+                'sportId': '1', 'scoreBenchmark': ''}
+
+    def test_bet_preflight_uses_native_queries_and_validates_wallet(self):
+        from collector.leyu_account import VENUE_LATEST_MARKET_PATH, VENUE_LIMIT_PATH
+        client = LeyuAccountClient(SimpleNamespace(app_host='https://app.invalid'))
+        calls = []
+        def request(path, body=None):
+            calls.append((path, body))
+            if path == VENUE_LATEST_MARKET_PATH:
+                return [{'id': 'market1', 'matchInfoId': 'm', 'playId': '2', 'matchStatus': 1,
+                         'matchHandicapStatus': 0, 'status': 0, 'marketValue': '2.5',
+                         'marketOddsList': [{'id': 'option1', 'oddsStatus': 1,
+                                             'oddsType': 'Over', 'oddsValue': '195000'}]}]
+            if path == VENUE_LIMIT_PATH:
+                return [{'playOptionsId': 'option1', 'playId': '2', 'minBet': '1', 'orderMaxPay': '10'}]
+            return {'amount': '20'}
+        client._venue_request = request
+        fresh = client.prepare_bet(self.bet_detail(), 2)
+        self.assertEqual(fresh['oddFinally'], '1.95')
+        self.assertEqual(calls[0][1]['idList'][0]['oddsId'], 'option1')
+        self.assertEqual(calls[1][1]['orderMaxBetMoney'][0]['playOptionId'], 'option1')
+        with self.assertRaisesRegex(SessionError, '限额'):
+            client.prepare_bet(self.bet_detail(), 100)
+        changed = self.bet_detail()
+        changed['oddFinally'] = '1.94'
+        with self.assertRaisesRegex(SessionError, '赔率已变化'):
+            client.prepare_bet(changed, 2)
+
+    def test_bet_preflight_fails_closed_on_closed_or_missing_market(self):
+        client = LeyuAccountClient(SimpleNamespace(app_host='https://app.invalid'))
+        for response in ([], None, [{'id': 'other'}], [{'id': 'market1', 'matchInfoId': 'm',
+                                                        'playId': '2', 'matchStatus': 3}]):
+            with self.subTest(response=response), self.assertRaises(SessionError):
+                client._venue_request = lambda *_a, response=response, **_k: response
+                client.prepare_bet(self.bet_detail(), 2)
+
+    def test_bet_receipts_require_explicit_code_order_number_and_status(self):
+        client = LeyuAccountClient(SimpleNamespace(app_host='https://app.invalid'))
+        for code, expected in ((1, 'accepted'), (2, 'pending')):
+            client._venue_request = lambda *_a, code=code: {'code': '0000000', 'data': {
+                'orderDetailRespList': [{'orderNo': 'ORDER1', 'orderStatusCode': code}]}}
+            result = client.submit_bet({})
+            self.assertEqual(result['status'], expected)
+            self.assertTrue(result['submitted'])
+        for response in ({'code': '0400469'}, {'code': '0000000', 'data': {
+                'orderDetailRespList': [{'orderStatusCode': 0}]}}):
+            client._venue_request = lambda *_a, response=response: response
+            with self.assertRaises(BetSubmissionRejected):
+                client.submit_bet({})
+        for response in ({}, {'code': '0000000'}, {'code': '0000000', 'data': {
+                'orderDetailRespList': [{'orderStatusCode': 1}]}}):
+            client._venue_request = lambda *_a, response=response: response
+            with self.assertRaises(BetSubmissionUnknown):
+                client.submit_bet({})
+
+    def test_bet_http_and_business_auth_failures_do_not_retry(self):
+        from unittest.mock import patch
+        from collector.leyu_account import VENUE_BET_PATH
+        import urllib.error
+        client = LeyuAccountClient(SimpleNamespace(app_host='https://app.invalid'))
+        client._acquire_venue_session = lambda: SimpleNamespace(
+            request_id='test-session', host='https://api.invalid', origin='https://h5.invalid')
+        for exc in (urllib.error.HTTPError('https://api.invalid', 401, 'expired', {}, None), TimeoutError()):
+            with patch('collector.leyu_account.urllib.request.urlopen', side_effect=exc) as send:
+                with self.assertRaises(BetSubmissionUnknown):
+                    client.submit_bet({})
+                send.assert_called_once()
+        class Response:
+            headers = {}
+            def __enter__(self): return self
+            def __exit__(self, *_a): return False
+            def read(self): return b'{"code":"0401013"}'
+        with patch('collector.leyu_account.urllib.request.urlopen', return_value=Response()) as send:
+            with self.assertRaises(BetSubmissionRejected):
+                client.submit_bet({})
+            self.assertEqual(send.call_args.args[0].full_url, 'https://api.invalid' + VENUE_BET_PATH)
+            send.assert_called_once()
+
     def test_normalises_native_venue_order(self):
         row = _normalise_venue_record({
             'orderNo': 'O-1', 'matchName': '切尔西 v 伯恩茅斯',

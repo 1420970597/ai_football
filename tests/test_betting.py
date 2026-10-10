@@ -20,18 +20,18 @@ class BettingTests(unittest.TestCase):
         self.assertFalse(result['allowed'])
         self.assertIn('未启用', result['reason'])
         self.assertFalse(result['submitted'])
-        self.assertFalse(result['execution']['execution_supported'])
+        self.assertTrue(result['execution']['execution_supported'])
 
     def test_enabled_gate_still_reports_preview_without_execution(self):
         cfg = replace(RuntimeConfig(), betting_enabled=True)
         result = preview_bet(self.pick(), cfg)
         self.assertTrue(result['allowed'])
         self.assertTrue(result['execution']['configured_enabled'])
-        self.assertFalse(result['execution']['execution_enabled'])
+        self.assertTrue(result['execution']['execution_enabled'])
         self.assertFalse(result['submitted'])
         self.assertFalse(result['plan']['executable'])
         self.assertEqual(result['submission'], 'preview_only')
-        self.assertIn('没有下单执行器', result['execution']['reason'])
+        self.assertIn('自动提交', result['execution']['reason'])
 
     def test_hit_gate_and_stake_modes(self):
         cfg = replace(RuntimeConfig(), betting_enabled=True, betting_fixed_stake=20,
@@ -69,7 +69,7 @@ class BettingTests(unittest.TestCase):
             oddFinally='1.69'), cfg)
         self.assertTrue(result['allowed'])
         self.assertEqual(result['plan']['stake'], 2.0)
-        self.assertEqual(result['payload']['seriesOrders'][0]['orderDetailList'][0]['betAmount'], 2.0)
+        self.assertEqual(result['payload']['seriesOrders'][0]['orderDetailList'][0]['betAmount'], '2.00')
         self.assertEqual(result['submission'], 'manual_only')
 
     def test_invalid_stake_mode_rejected_by_settings(self):
@@ -89,16 +89,22 @@ class BettingTests(unittest.TestCase):
                       'playOptionsId': '141234580127215829', 'oddFinally': '1.69'}])
         payload = build_ybty_bet_payload(pick, 15)
         detail = payload['seriesOrders'][0]['orderDetailList'][0]
-        self.assertEqual(payload['preBet'], False)
+        self.assertEqual(payload['preBet'], '0')
+        self.assertEqual(payload['acceptOdds'], 2)
+        self.assertIs(type(payload['acceptOdds']), int)
+        self.assertEqual(payload['deviceType'], '3')
         self.assertEqual(detail['matchId'], '5676526')
-        self.assertEqual(detail['betAmount'], 15.0)
+        self.assertEqual(detail['betAmount'], '15.00')
+        self.assertEqual(detail['playId'], '1')
+        self.assertEqual(detail['sportId'], '1')
+        self.assertEqual(detail['odds'], '169000')
 
         draft = draft_ybty_bet(pick, cfg)
         self.assertTrue(draft['allowed'])
         self.assertTrue(draft['requires_manual_confirmation'])
         self.assertEqual(draft['submission'], 'manual_only')
         self.assertFalse(draft['submitted'])
-        self.assertFalse(draft['execution']['execution_enabled'])
+        self.assertTrue(draft['execution']['execution_enabled'])
 
     def test_app_payload_requires_provider_identifiers(self):
         with self.assertRaisesRegex(ValueError, '缺少 App 字段'):
@@ -111,7 +117,7 @@ class BettingTests(unittest.TestCase):
         self.assertFalse(result['submitted'])
         self.assertEqual(result['submission'], 'blocked')
         self.assertIn('缺少 App 字段', result['reason'])
-        self.assertEqual(result['execution']['mode'], 'manual_only')
+        self.assertEqual(result['execution']['mode'], 'automatic_single')
 
 
 if __name__ == '__main__':

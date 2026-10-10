@@ -45,8 +45,7 @@ class RuntimeConfig:
     algorithm_alert_enabled: bool = True
     algorithm_alert_min_samples: int = 30
     algorithm_alert_threshold: float = 0.50
-    # Legacy gate for previews/drafts only.  Execution support is reported
-    # separately so a restored opt-in is never presented as active wagering.
+    # Opt-in for the background YBTY order executor; default remains off.
     betting_enabled: bool = False
     betting_stake_mode: str = "fixed"
     betting_fixed_stake: float = 10.0
@@ -136,6 +135,17 @@ class RuntimeSettings:
         self.path: Optional[Path] = None
         self.restore_error = ""
 
+    def snapshot(self) -> Tuple[RuntimeConfig, int]:
+        with self._lock:
+            return self.config, self.version
+
+    def claim_bet(self, version: int, claim: Callable[[], None]) -> None:
+        """Serialize a durable send intent with switch/version changes; no network here."""
+        with self._lock:
+            if version != self.version or not self.config.betting_enabled:
+                raise VersionConflict("提交前投注配置已变化")
+            claim()
+
     def bind(self, root: Optional[str]) -> None:
         with self._lock:
             self.path = Path(root).parent / "runtime-settings.json" if root else None
@@ -165,8 +175,6 @@ class RuntimeSettings:
         with self._lock:
             if isinstance(version, bool) or not isinstance(version, int) or version != self.version:
                 raise VersionConflict("配置已被其他页面更新，请重新读取")
-            if patch.get("betting_enabled") is True:
-                raise ValueError(betting_capability(self.config)["reason"])
             cfg = validated(self.config, patch)
             new_version = self.version + 1
             if self.path:

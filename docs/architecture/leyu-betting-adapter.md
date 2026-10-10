@@ -15,13 +15,16 @@ POST /yewu13/v1/betOrder/client/bet
 flowchart LR
     A[综合决策] --> B[命中次数/比赛/盘口门控]
     B --> C[重新核对盘口与赔率]
-    C --> D[生成 OBBetRequest 草稿]
-    D --> E[人工在官方 App 确认]
-    E --> F[官方 App 扣款并提交]
+    C --> D[生成 OBBetRequest]
+    D --> E[SQLite claim 去重]
+    E --> F[提交单关订单]
+    F --> G[接受 / 拒单 / 未知回执]
 ```
 
-服务端提供 `POST /api/v1/bet/draft`，只返回可核对的请求草稿和
-`submission=manual_only` 标记。它不会访问扣款端点，也不会保存账号 token 或密码。
+服务端提供 `POST /api/v1/bet/draft`（只生成草稿）和后台执行器。执行器使用同一
+App 会话调用 `queryLatestMarketInfo`、`queryMarketMaxMinBetMoney`、余额接口，随后调用
+`POST /yewu13/v1/betOrder/client/bet`。提交意图先写入 `betting-orders.sqlite3`，
+唯一键由账号、赛事、玩法、盘口线和选项组成；超时或缺少唯一订单号标记为未知，禁止自动重发。
 `POST /api/v1/bet/preview` 只计算金额与门控结果。
 
 投注配置默认关闭。对于旧配置中已开启的计划开关，草稿仍要求：来源必须是
@@ -31,32 +34,31 @@ flowchart LR
 
 ## 当前限制
 
-系统不提供后台自动提交真实资金订单的接口。真实订单由官方 App 的最终确认页提交；这样可以在提交前重新确认比赛、盘口、最终赔率、金额和余额，避免赔率变化、盘口关闭或重复请求造成不可逆扣款。
+执行器只支持真实足球的经济学综合推荐和单关订单；不执行虚拟赛事、单一算法结果、过期推荐或历史赔率。订单执行依赖运维注入的有效 App 会话和体育场馆余额。系统无法撤销已接受订单，未知回执必须人工到 App 注单页核对。
 
 ## 开关与实际能力的诊断
 
-设置中的 `betting_enabled` 是计划门控，开启后不会产生实际订单。可核验的代码证据（A级）：
-`RuntimeSettings` 只保存配置；`plan_bet` 返回 `executable=false`；`draft_ybty_bet`
-返回 `submission=manual_only`；API 只有预览和草稿路由，实时分析没有下单调用。
+设置中的 `betting_enabled` 是后台执行器的总开关。可核验的代码证据（A级）：
+`RuntimeSettings` 保存开关并在提交前再次校验；`BettingExecutor` 只接收服务端综合推荐；
+`LeyuAccountClient.prepare_bet` 复核最新盘口、限额和余额；`submit_bet` 严格解析唯一订单回执。
 
 ```mermaid
 flowchart TD
-    S[已保存的投注开关] --> P[预览/草稿门控]
-    P --> R[计划结果: submitted=false]
-    C[服务实际能力] --> U[设置页执行状态]
-    C --> N[execution_supported=false]
-    N --> D[禁用真实投注开关]
-    N --> E[拒绝开启请求并解释原因]
+    S[已保存的投注开关] --> P[综合推荐与命中次数门控]
+    P --> R[后台单订单队列]
+    R --> C[最新盘口/限额/余额复核]
+    C --> D[SQLite claim 去重]
+    D --> E[App 下单与回执]
 ```
 
 | 场景 | API 状态 | 界面行为 |
 | --- | --- | --- |
-| 默认关闭 | `configured_enabled=false`，执行未启用 | 禁用真实投注开关，显示不支持说明 |
-| 从旧文件恢复开启 | `configured_enabled=true`，执行仍未启用 | 开关不显示为执行中，说明旧配置不代表下单 |
-| 请求开启 `betting_enabled` | HTTP 400，配置与版本不变 | 显示没有下单执行器的具体原因 |
-| 保存其他设置 | 能力信息随响应返回 | 保存成功提示与投注能力说明同时保留 |
-| 预览或草稿被拒绝 | `allowed=false`，`submitted=false` | 返回门控原因，同时说明执行不支持 |
+| 默认关闭 | `configured_enabled=false` | 队列不提交订单，设置页显示关闭 |
+| 开启但执行器未启动 | `configured_enabled=true`，`execution_enabled=false` | 继续显示未启动原因 |
+| 开启且执行器就绪 | `execution_enabled=true` | 满足全部门控后提交单关订单 |
+| 回执明确拒单 | `status=rejected` | 写入最近执行状态，不自动重试 |
+| 回执未知 | `status=unknown` | 停止重发，要求到 App 注单页核对 |
 
-`GET/POST /api/v1/settings` 的 `capabilities.betting` 将保存的配置与实际能力分开报告。
-预览和草稿响应的 `execution` 使用同一能力信息，`allowed` 仅表示计划门控结果。
-本次验证范围为离线 API 与浏览器模拟响应，没有验证或发送真实资金订单。
+`GET/POST /api/v1/settings` 的 `capabilities.betting` 报告保存配置、执行器就绪状态和最近订单；
+`GET /api/v1/bet/status` 可单独读取。预览和草稿响应的 `execution` 使用同一能力信息，
+`allowed` 仅表示计划门控结果。测试使用模拟场馆接口，没有发送真实资金订单。
