@@ -23,13 +23,19 @@ async (page) => {
       betting_enabled:true,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_min_hit_count:3,
       llm_timeout_s:20,llm_temperature:.2,llm_max_tokens:2048,llm_interval_s:60,llm_review_max_age_s:120}};
   let mode = 'default';
+  let betStatusMissing = false;
+  let betStatusRequests = 0;
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/api/v1/**', async route => {
     if (mode === 'error') return route.abort();
     if (mode === 'loading') await new Promise(resolve => setTimeout(resolve, 1500));
     const url = new URL(route.request().url());
-    if (url.pathname.endsWith('/bet/status')) return route.fulfill({json:_PLACEHOLDER_SETTINGS.capabilities.betting});
+    if (url.pathname.endsWith('/bet/status')) {
+      betStatusRequests++;
+      if (betStatusMissing) return route.fulfill({status:404,json:{error:'未知端点'}});
+      return route.fulfill({json:_PLACEHOLDER_SETTINGS.capabilities.betting});
+    }
     if (url.pathname.endsWith('/settings')) {
       if (route.request().method() === 'POST') {
         const body = route.request().postDataJSON();
@@ -100,6 +106,13 @@ async (page) => {
   assert(await page.locator('#setting-betting_enabled').isChecked(), 'saved opt-in shown');
   assert(await page.locator('#betting-capability-notice').textContent().then(t=>t.includes('命中次数不足')), 'blocked execution reason visible');
   assert(await page.locator('#setting-llm_api_key').inputValue() === '', 'credentials never prefilled');
+  betStatusMissing = true;
+  await page.waitForTimeout(6000);
+  assert(await page.locator('#betting-capability-notice').textContent().then(t=>t.includes('命中次数不足')), 'settings capability fallback survives missing status endpoint');
+  const requestsAfterFallback = betStatusRequests;
+  await page.waitForTimeout(5500);
+  assert(betStatusRequests === requestsAfterFallback, 'missing status endpoint is not polled repeatedly');
+  betStatusMissing = false;
   await page.locator('#setting-min_ev').fill('0.04');
   await page.getByRole('button', {name:'保存并立即生效',exact:true}).click();
   await page.getByText('v2 已生效', {exact:true}).waitFor();

@@ -1,7 +1,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const S = {view: 'live', type: 'real', league: '', search: '', matches: [], selected: null,
-  request: 0, detailRequest: 0, historyRequest: 0, recommendationsRequest: 0, historyOffset: 0, historyNext: null, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false, accountBusy: false, accountAt: 0};
+  request: 0, detailRequest: 0, historyRequest: 0, recommendationsRequest: 0, historyOffset: 0, historyNext: null, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false, accountBusy: false, accountAt: 0, betStatusUnsupported: false};
 const API = '/api/v1';
 const POLL_MS = 5000;
 const algorithmLabel = a => ({economic_ensemble:'经济学汇总', economics_control:'纯经济学', economics_llm:'经济学 + LLM', poisson_market: '盘口 Poisson', poisson_time_decay: '衰减 Poisson',
@@ -27,7 +27,11 @@ function notice(id, message = '', error = false) {
 }
 async function get(path) {
   const response = await fetch(API + path, {signal: AbortSignal.timeout(8000), cache: 'no-store'});
-  if (!response.ok) throw new Error('读取失败（' + response.status + '）');
+  if (!response.ok) {
+    const error = new Error('读取失败（' + response.status + '）');
+    error.status = response.status;
+    throw error;
+  }
   return response.json();
 }
 function renderAccount(data) {
@@ -646,6 +650,25 @@ async function saveSettings(event) {
   } catch (error) {notice('settings-notice', error.message, true);}
   finally {S.settingsBusy = false; $('settings-save').disabled = false;}
 }
+async function loadBettingStatus() {
+  if (S.betStatusUnsupported) return;
+  try {
+    renderBettingStatus(await get('/bet/status'));
+  } catch (error) {
+    if (error.status === 404) {
+      // Older API containers expose the same capability data through /settings.
+      S.betStatusUnsupported = true;
+      try {
+        const settings = await get('/settings');
+        renderBettingStatus(settings.capabilities?.betting);
+        return;
+      } catch (fallbackError) {
+        error = fallbackError;
+      }
+    }
+    notice('betting-capability-notice', '无法读取投注执行状态：' + error.message, true);
+  }
+}
 $('settings-form').addEventListener('submit', saveSettings);
 $('settings-reload').addEventListener('click', loadSettings);
 $('account-summary').addEventListener('click', () => {
@@ -683,8 +706,7 @@ async function poll() {
   if (S.view === 'recommendations') await loadRecommendations();
   else if (S.view === 'live') await loadLive();
   else if (S.view === 'settings') {
-    try {renderBettingStatus(await get('/bet/status'));}
-    catch (error) {notice('betting-capability-notice', '无法读取投注执行状态：' + error.message, true);}
+    await loadBettingStatus();
   }
   S.timer = setTimeout(poll, POLL_MS);
 }
