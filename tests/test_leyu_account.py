@@ -29,19 +29,63 @@ class LeyuAccountTests(unittest.TestCase):
                          'marketOddsList': [{'id': 'option1', 'oddsStatus': 1,
                                              'oddsType': 'Over', 'oddsValue': '195000'}]}]
             if path == VENUE_LIMIT_PATH:
-                return [{'playOptionsId': 'option1', 'playId': '2', 'minBet': '1', 'orderMaxPay': '10'}]
+                return [{'code': 0, 'playOptionsId': 'option1', 'playId': '2', 'minBet': '1', 'orderMaxPay': '10'}]
             return {'amount': '20'}
         client._venue_request = request
         fresh = client.prepare_bet(self.bet_detail(), 2)
         self.assertEqual(fresh['oddFinally'], '1.95')
         self.assertEqual(calls[0][1]['idList'][0]['oddsId'], 'option1')
         self.assertEqual(calls[1][1]['orderMaxBetMoney'][0]['playOptionId'], 'option1')
+        self.assertEqual(set(calls[1][1]['orderMaxBetMoney'][0]), {
+            'deviceType', 'marketId', 'matchId', 'matchType', 'oddsValue', 'playId', 'playOptionId'})
         with self.assertRaisesRegex(SessionError, '限额'):
             client.prepare_bet(self.bet_detail(), 100)
         changed = self.bet_detail()
         changed['oddFinally'] = '1.94'
         with self.assertRaisesRegex(SessionError, '赔率已变化'):
             client.prepare_bet(changed, 2)
+
+    def test_captured_limit_blank_echoes_pass_and_invalid_limits_stop_before_wallet(self):
+        from collector.leyu_account import VENUE_LATEST_MARKET_PATH, VENUE_LIMIT_PATH, VENUE_AMOUNT_PATH
+        client = LeyuAccountClient(SimpleNamespace(app_host='https://offline.invalid'))
+        market = {'id': 'market1', 'matchInfoId': 'm', 'playId': 2, 'matchStatus': 1,
+                  'matchHandicapStatus': 0, 'status': 0, 'marketValue': '2.5',
+                  'marketOddsList': [{'id': 'option1', 'oddsStatus': 1,
+                                      'oddsType': 'Over', 'oddsValue': 195000}]}
+        # Sanitized session 18 schema; only option identifiers are replaced.
+        limit = {'code': 0, 'minBet': '2', 'orderMaxPay': '60000',
+                 'playId': '', 'playOptionsId': 'option1', 'type': ''}
+        calls = []
+        response = [limit]
+
+        def request(path, body=None):
+            calls.append(path)
+            if path == VENUE_LATEST_MARKET_PATH:
+                return [market]
+            if path == VENUE_LIMIT_PATH:
+                return response
+            if path == VENUE_AMOUNT_PATH:
+                return {'amount': 111.86}
+            self.fail('unexpected endpoint: ' + path)
+
+        client._venue_request = request
+        self.assertEqual(client.prepare_bet(self.bet_detail(), 2)['oddFinally'], '1.95')
+        self.assertEqual(calls[-1], VENUE_AMOUNT_PATH)
+        for change in ({'playId': 'other'}, {'type': '2'}, {'code': '0400469'},
+                       {'code': None}, {'playOptionsId': 'other'}, {'minBet': '3'},
+                       {'minBet': 'nan'}, {'orderMaxPay': 'inf'}, {'orderMaxPay': '0'}):
+            with self.subTest(change=change):
+                response = [{**limit, **change}]
+                calls.clear()
+                with self.assertRaises(SessionError):
+                    client.prepare_bet(self.bet_detail(), 2)
+                self.assertNotIn(VENUE_AMOUNT_PATH, calls)
+        for invalid_response in ([], [limit, dict(limit)], [{k: v for k, v in limit.items() if k != 'code'}]):
+            response = invalid_response
+            calls.clear()
+            with self.assertRaises(SessionError):
+                client.prepare_bet(self.bet_detail(), 2)
+            self.assertNotIn(VENUE_AMOUNT_PATH, calls)
 
     def test_bet_preflight_fails_closed_on_closed_or_missing_market(self):
         client = LeyuAccountClient(SimpleNamespace(app_host='https://app.invalid'))

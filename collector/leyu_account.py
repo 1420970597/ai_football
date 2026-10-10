@@ -497,18 +497,21 @@ class LeyuAccountClient:
         limit_detail = {
             "marketId": fresh["marketId"], "matchId": fresh["matchId"],
             "playId": fresh["playId"], "playOptionId": fresh["playOptionsId"],
-            "playOptions": fresh["playOptions"], "marketValue": fresh["marketValue"],
-            "oddsFinally": fresh["oddFinally"], "oddsValue": fresh["odds"],
-            "matchType": 2, "sportId": int(fresh["sportId"]), "deviceType": 3,
-            "seriesType": 1, "openMiltSingle": 0, "scoreBenchmark": fresh["scoreBenchmark"],
+            "oddsValue": fresh["odds"], "matchType": 2, "deviceType": 3,
         }
-        for key in ("dataSource", "tournamentId", "tournamentLevel", "matchProcessId"):
-            if key in fresh:
-                limit_detail[key] = fresh[key]
         limits = _bet_rows(self._venue_request(VENUE_LIMIT_PATH, {"orderMaxBetMoney": [limit_detail]}))
-        limit = next((row for row in limits if str(row.get("playOptionsId")) == str(fresh["playOptionsId"])
-                      and str(row.get("playId")) == str(fresh["playId"]) and str(row.get("type", "1")) == "1"), None)
-        if limit is None or str(limit.get("code", "0")) not in SUCCESS_CODES:
+        # The captured Android single-bet response identifies the option but
+        # explicitly leaves playId/type empty. Empty optional echoes are not
+        # contradictions; nonempty echoes must still match the requested bet.
+        matching = [row for row in limits
+                    if str(row.get("playOptionsId")) == str(fresh["playOptionsId"])]
+        if len(matching) != 1:
+            raise SessionError("场馆未返回该单关的有效投注限额")
+        limit = matching[0]
+        if ((limit.get("playId") not in (None, "")
+             and str(limit["playId"]) != str(fresh["playId"]))
+                or (limit.get("type") not in (None, "") and str(limit["type"]) != "1")
+                or str(limit.get("code")) not in SUCCESS_CODES):
             raise SessionError("场馆未返回该单关的有效投注限额")
         minimum = _bet_number(limit.get("minBet"), "最小投注额")
         maximum = _bet_number(limit.get("orderMaxPay"), "最大投注额")
