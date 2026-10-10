@@ -16,6 +16,86 @@ class BettingBlocked(ValueError):
     """The configured safety gate rejected an order plan."""
 
 
+class BettingProtocolError(BettingBlocked):
+    """The recommendation does not contain enough App order identifiers."""
+
+
+VENUE_BET_PATH = "/yewu13/v1/betOrder/client/bet"
+
+
+def _pick_value(source: Mapping[str, Any], *names: str) -> Any:
+    for name in names:
+        value = source.get(name)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _required(source: Mapping[str, Any], *names: str) -> Any:
+    value = _pick_value(source, *names)
+    if value is None:
+        raise BettingProtocolError("下注盘口缺少 App 字段：%s" % "/".join(names))
+    return value
+
+
+def _positive_number(value: Any, name: str) -> float:
+    result = _number(value, name)
+    if result <= 0:
+        raise BettingProtocolError("%s 必须大于 0" % name)
+    return result
+
+
+def build_ybty_order_detail(pick: Mapping[str, Any], stake: float) -> dict[str, Any]:
+    """Build one ``OBBetRequest.OBOrderDetail`` from App odds metadata.
+
+    The live recommendation normally carries ``details[0]`` from the YBTY
+    order DTO.  Keeping the aliases here also lets a caller pass the raw
+    ``detailList`` item captured from the App.  No network request is made.
+    """
+    raw = pick.get("order_detail") or pick.get("detail")
+    detail: Mapping[str, Any] = raw if isinstance(raw, Mapping) else {}
+    details = pick.get("details")
+    if not detail and isinstance(details, list) and details and isinstance(details[0], Mapping):
+        detail = details[0]
+    merged = dict(detail)
+    merged.update({key: value for key, value in pick.items() if value is not None and value != ""})
+    odd = _positive_number(_required(merged, "oddFinally", "odds", "odd"), "最终赔率")
+    amount = _positive_number(stake, "投注金额")
+    return {
+        "betAmount": round(amount, 2),
+        "matchId": str(_required(merged, "matchId", "match_id")),
+        "marketId": str(_required(merged, "marketId", "market_id")),
+        "playId": int(_required(merged, "playId", "play_id")),
+        "playOptions": str(_required(merged, "playOptions", "play_options", "outcome")),
+        "playOptionsId": str(_required(merged, "playOptionsId", "play_options_id", "optionId")),
+        "oddFinally": str(odd),
+        "marketValue": str(_pick_value(merged, "marketValue", "market_value", "line") or ""),
+        "marketTypeFinally": str(_pick_value(merged, "marketTypeFinally", "marketType", "market_type") or "EU"),
+        "matchType": int(_pick_value(merged, "matchType", "match_type") or 1),
+        "sportId": int(_pick_value(merged, "sportId", "sport_id") or 1),
+        "scoreBenchmark": str(_pick_value(merged, "scoreBenchmark", "score_benchmark") or ""),
+    }
+
+
+def build_ybty_bet_payload(pick: Mapping[str, Any], stake: float, *, device_imei: str = "") -> dict[str, Any]:
+    """Build the Android App's single-bet request body without submitting it."""
+    detail = build_ybty_order_detail(pick, stake)
+    return {
+        "acceptOdds": True,
+        "currencyCode": "CNY",
+        "deviceImei": str(device_imei),
+        "deviceType": "android",
+        "openMiltSingle": False,
+        "preBet": False,
+        "seriesOrders": [{
+            "seriesType": "1",
+            "seriesSum": 1,
+            "fullBet": False,
+            "orderDetailList": [detail],
+        }],
+    }
+
+
 @dataclass(frozen=True)
 class BetPlan:
     match_id: str
@@ -95,3 +175,25 @@ def preview_bet(pick: Mapping[str, Any], config: Any, **kwargs: Any) -> dict[str
         return {"allowed": True, "plan": plan_bet(pick, config, **kwargs).as_dict()}
     except BettingBlocked as exc:
         return {"allowed": False, "reason": str(exc), "plan": None}
+
+
+def draft_ybty_bet(pick: Mapping[str, Any], config: Any, **kwargs: Any) -> dict[str, Any]:
+    """Create a reviewable App payload; never sends it to the venue.
+
+    The returned ``payload`` matches the App's single-bet request shape, but
+    the service deliberately does not expose a submit operation.  A human can
+    compare it with the App confirmation screen and place the order there.
+    """
+    try:
+        plan = plan_bet(pick, config, **kwargs)
+        payload = build_ybty_bet_payload(pick, plan.stake)
+        return {
+            "allowed": True,
+            "submission": "manual_only",
+            "requires_manual_confirmation": True,
+            "provider_path": VENUE_BET_PATH,
+            "plan": plan.as_dict(),
+            "payload": payload,
+        }
+    except BettingBlocked as exc:
+        return {"allowed": False, "submission": "blocked", "reason": str(exc), "plan": None}

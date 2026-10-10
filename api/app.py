@@ -301,6 +301,7 @@ class ApiApp:
             ("GET", "/recommendations", self.h_recommendations),
             ("GET", "/account", self.h_account),
             ("POST", "/bet/preview", self.h_bet_preview),
+            ("POST", "/bet/draft", self.h_bet_draft),
             ("GET", "/llm", self.h_llm),
             ("GET", "/settings", self.h_settings),
             ("POST", "/settings", self.h_settings_save),
@@ -834,6 +835,25 @@ class ApiApp:
             raise BadRequest("pick 必须是对象")
         from service.betting import preview_bet
         return preview_bet(
+            pick, self.analysis.runtime_settings.config,
+            match_live=bool(body.get("match_live", True)),
+            market_open=bool(body.get("market_open", True)),
+        )
+
+    def h_bet_draft(self, query: Mapping[str, List[str]],
+                    body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """Build the App-compatible order for manual review only.
+
+        No provider request is made here.  Keeping this separate from
+        ``/bet/preview`` makes it explicit when a payload contains real-money
+        order identifiers, while the response still requires the operator to
+        confirm the order in the official App.
+        """
+        pick = body.get("pick")
+        if not isinstance(pick, Mapping):
+            raise BadRequest("pick 必须是对象")
+        from service.betting import draft_ybty_bet
+        return draft_ybty_bet(
             pick, self.analysis.runtime_settings.config,
             match_live=bool(body.get("match_live", True)),
             market_open=bool(body.get("market_open", True)),
