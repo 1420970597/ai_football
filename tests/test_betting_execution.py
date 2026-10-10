@@ -221,6 +221,20 @@ class BettingExecutionTests(unittest.TestCase):
         self.client.submit_bet.assert_called_once()
         self.assertNotIn('requestId', json.dumps(self.executor.health()))
 
+    def test_automatic_submission_includes_live_chinese_match_metadata(self):
+        self.row.update(home='旧主队名', away='旧客队名', league='旧联赛')
+        self.snapshot['info'] = {'home': '当前主队', 'away': '当前客队', 'league': '当前中文联赛'}
+        self.executor.enqueue(self.row)
+        self.assertEqual(self.executor.flush()[0]['status'], 'accepted')
+        detail = self.client.submit_bet.call_args.args[0]['seriesOrders'][0]['orderDetailList'][0]
+        self.assertEqual(detail['matchInfo'], '当前主队 v 当前客队')
+        self.assertEqual(detail['matchName'], '当前中文联赛')
+        self.assertEqual(detail['playName'], '全场大小')
+        self.assertEqual(detail['playOptionName'], '全场进球数>2.5')
+        self.assertEqual(detail['sportName'], '足球')
+        self.assertEqual(detail['playOptions'], 'Over')
+        self.assertEqual(detail['playOptionsId'], 'option1')
+
     def test_claim_precedes_transport_and_second_process_cannot_submit(self):
         def submit(payload):
             with closing(sqlite3.connect(self.executor.path)) as db:

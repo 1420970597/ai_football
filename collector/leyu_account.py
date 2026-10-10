@@ -25,7 +25,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .leyu_app_login import AppLoginSessionProvider, login_provider_from_env
 from .leyu_app_session import AppSessionBootstrapper, bootstrapper_from_env
-from .leyu_client import SUCCESS_CODES, OV_SCALE, decode_envelope
+from .leyu_client import DEFAULT_LANG, SUCCESS_CODES, OV_SCALE, decode_envelope
 from .session import SessionError
 
 BALANCE_PATH = "/game/api/v1/venue/getBalance"
@@ -233,13 +233,13 @@ def _normalise_venue_record(row: Mapping[str, Any], status: str) -> Dict[str, An
     item["source"] = "leyu_ybty"
     item["status"] = status
     item["order_no"] = _first_value(merged, ("orderNo", "orderNumber", "orderId", "id"))
-    item["match"] = _first_value(merged, ("matchInfo", "match", "matchNameCn", "eventName", "matchName"))
+    item["match"] = _first_value(merged, ("matchNameCn", "matchInfo", "match", "eventName", "matchName"))
     item["league"] = _first_value(merged, ("leagueName", "tournamentName", "matchName"))
     item["match_id"] = _first_value(merged, ("matchId", "eventId", "mid"))
     item["home"] = _first_value(merged, ("homeName", "homeTeamName", "home", "matchHomeName"))
     item["away"] = _first_value(merged, ("awayName", "awayTeamName", "away", "matchAwayName"))
-    item["market"] = _first_value(merged, ("marketName", "market", "playName", "playNameCn", "marketTypeName"))
-    item["option"] = _first_value(merged, ("optionName", "playOptionsName", "playOptionName", "option", "outcome"))
+    item["market"] = _first_value(merged, ("playNameCn", "marketName", "market", "playName", "marketTypeName"))
+    item["option"] = _first_value(merged, ("playOptionNameCn", "optionName", "playOptionsName", "playOptionName", "option", "outcome"))
     item["outcome"] = item["option"]
     item["odds"] = _as_optional_float(_first_value(merged, ("odds", "oddFinally", "oddsFinally", "odd")))
     item["amount"] = _as_optional_float(_first_value(merged, ("betAmount", "orderAmountTotal", "amount", "stake", "betMoney")))
@@ -403,7 +403,10 @@ class LeyuAccountClient:
             origin = str(getattr(session, "host", "") or self.bootstrapper.app_host).rstrip("/")
         return {
             "requestId": str(getattr(session, "request_id", "")),
-            "Lang": "zh-CN",
+            # YBTY's application language enum is `zh`, as in the native App
+            # capture and the odds client; `zh-CN` is only an HTTP locale.
+            "Lang": DEFAULT_LANG,
+            "Accept-Language": "zh-CN,zh;q=0.9",
             "clientVersionType": "4",
             "Origin": origin,
             "Referer": origin + "/",

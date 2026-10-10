@@ -15,6 +15,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from core.market_labels import describe_market, format_market, parse_market_code
+
 
 class BettingBlocked(ValueError):
     """The configured safety gate rejected an order plan."""
@@ -110,6 +112,28 @@ def build_ybty_order_detail(pick: Mapping[str, Any], stake: float) -> dict[str, 
                 "placeNum", "matchName", "matchInfo", "playName", "playOptionName", "sportName", "chpid"):
         if merged.get(key) is not None:
             result[key] = merged[key]
+    # The venue retains these display strings with the order. Changing the
+    # query language later does not rewrite names stored on an old receipt.
+    names = {}
+    home, away, league = (str(pick.get(key) or "") for key in ("home", "away", "league"))
+    if home and away:
+        names["matchInfo"] = home + " v " + away
+    if league:
+        names["matchName"] = league
+    market = str(pick.get("market") or "")
+    parsed = parse_market_code(market)
+    if parsed:
+        family, half, _ = parsed
+        code = family + ("_1H" if half else "")
+        names["playName"] = describe_market(code)
+        if pick.get("outcome"):
+            names["playOptionName"] = format_market(market, pick["outcome"], result["marketValue"], home, away)
+    if result["sportId"] == "1":
+        names["sportName"] = "足球"
+    for key, value in names.items():
+        if (any("\u4e00" <= c <= "\u9fff" for c in value)
+                and not any("\u4e00" <= c <= "\u9fff" for c in str(result.get(key) or ""))):
+            result[key] = value
     return result
 
 
@@ -429,7 +453,9 @@ class BettingExecutor:
                 str(pick["market"]), str(pick.get("line") or ""), str(pick["outcome"]))
             confidence = recommendation_confidence(pick, evidence)
             plan = plan_bet({**pick, **evidence, "match_id": mid, "composite_confidence": confidence}, cfg)
-            detail = build_ybty_order_detail(pick, plan.stake)
+            info = snapshot.get("info") or {}
+            metadata = {key: info.get(key) or row.get(key) for key in ("home", "away", "league")}
+            detail = build_ybty_order_detail({**pick, **metadata}, plan.stake)
             if detail["matchId"] != mid or detail["sportId"] != "1" or detail["matchType"] != 2:
                 raise BettingBlocked("原始订单标识与当前真实足球推荐不一致")
             result["stake"] = plan.stake

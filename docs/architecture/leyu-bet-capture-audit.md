@@ -69,7 +69,7 @@ sequenceDiagram
 
 session 15/17/18/19 使用 `x-api-client=android`、`x-api-site=2001`、
 `x-api-token`、`requestid`、`lang=zh`、`user-agent=okhttp/4.12.0`。
-当前 `_venue_headers` 使用 `requestId`、`Lang=zh-CN`、浏览器 User-Agent、
+审计时 `_venue_headers` 使用 `requestId`、`Lang=zh-CN`、浏览器 User-Agent、
 `clientVersionType=4`、Origin/Referer，缺少以上三个 `x-api-*` 字段。
 
 HTTP 头名称大小写不构成协议差异，但头值和缺失字段构成差异。
@@ -117,3 +117,14 @@ HTTP 头名称大小写不构成协议差异，但头值和缺失字段构成差
 
 请求头、`acceptOdds` 和后续订单状态枚举未在本次限额修复中改变；
 后续确认查询仍是未实现的独立事项。未更改配置或重启运行容器。
+
+## 注单中文名称修复
+
+后续排查新自动注单的英文球队/联赛名称，确认 App 捕获请求使用 `lang=zh`，
+当前语言值已改为 `Lang=zh` 并增加中文 `Accept-Language`。另外，自动执行器
+从实时赛事信息补齐中文 `matchInfo/matchName/sportName/playName/playOptionName`，
+此前行情 DTO 只带投注编号，没有这些名称，直接依赖了场馆的默认展示。
+回归测试验证中文名称与原始投注选项、编号、盘口线同时保留。
+
+对既有自动注单使用 `Lang=zh` 做只读查询，名字仍为英文；历史记录不会随语言头
+改动而回写，因此本次补充请求展示字段只影响新订单。没有发送测试资金订单。

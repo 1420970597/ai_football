@@ -3,6 +3,7 @@ import gzip
 import json
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from collector.leyu_account import (BetSubmissionRejected, BetSubmissionUnknown, LeyuAccountClient,
                                      _find_number, _find_records, _normalise_venue_record,
@@ -16,6 +17,38 @@ class LeyuAccountTests(unittest.TestCase):
                 'playOptions': 'Over', 'playOptionsId': 'option1', 'oddFinally': '1.95',
                 'odds': '195000', 'marketValue': '2.5', 'matchType': 2,
                 'sportId': '1', 'scoreBenchmark': ''}
+
+    def test_submission_and_order_query_use_captured_chinese_language(self):
+        from collector.leyu_account import VENUE_BET_PATH, VENUE_ORDER_PATH
+        client = LeyuAccountClient(SimpleNamespace(app_host='https://offline.invalid'))
+        client._acquire_venue_session = lambda: SimpleNamespace(
+            request_id='offline-session', host='https://offline.invalid', origin='https://offline.invalid')
+        class Response:
+            headers = {}
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self): return b'{"code":"0000000","data":{"total":0,"data":[]}}'
+        with patch('collector.leyu_account.urllib.request.urlopen', return_value=Response()) as transport:
+            for path in (VENUE_BET_PATH, VENUE_ORDER_PATH):
+                with self.subTest(path=path):
+                    client._venue_request(path, {'playOptions': 'Over'})
+                    request = transport.call_args.args[0]
+                    headers = {k.lower(): v for k, v in request.header_items()}
+                    self.assertEqual(headers['lang'], 'zh')
+                    self.assertEqual(headers['accept-language'], 'zh-CN,zh;q=0.9')
+                    self.assertEqual(json.loads(request.data)['playOptions'], 'Over')
+
+    def test_order_display_prefers_chinese_aliases_over_english_names(self):
+        row = _normalise_venue_record({'detailList': [{
+            'matchInfo': 'Home v Away', 'matchNameCn': '主队 v 客队',
+            'marketName': 'Full Time Handicap', 'playNameCn': '全场让球',
+            'playOptionName': 'Home +0.5', 'playOptionNameCn': '主队 +0.5',
+            'playOptions': '1', 'playOptionsId': 'option-1',
+        }]}, 'settled')
+        self.assertEqual(row['match'], '主队 v 客队')
+        self.assertEqual(row['market'], '全场让球')
+        self.assertEqual(row['option'], '主队 +0.5')
+        self.assertEqual(row['details'][0]['playOptions'], '1')
 
     def test_bet_preflight_uses_native_queries_and_validates_wallet(self):
         from collector.leyu_account import VENUE_LATEST_MARKET_PATH, VENUE_LIMIT_PATH

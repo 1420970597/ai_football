@@ -11,6 +11,21 @@ POST /yewu13/v1/betOrder/client/bet
 标识：`matchId`、`marketId`、`playId`、`playOptions`、`playOptionsId`、
 `oddFinally`。赔率必须使用提交前重新读取的最终值，不能使用历史快照中的旧赔率。
 
+下注、盘口复核和场馆注单查询统一使用抓包中的 `Lang: zh`，并发送
+`Accept-Language: zh-CN,zh;q=0.9`；中心钱包及 App 会话仍使用
+`x-api-language: CHS`。`zh-CN` 是 HTTP 语言地区值，不作为场馆 `lang` 的枚举值。
+这些协议字段在传输层保持一致。
+
+自动执行器从当前赛事快照补充 `matchInfo`（对阵）、`matchName`（联赛）、
+`sportName`（足球）、`playName` 和 `playOptionName`。优先保留已提供的中文名称；
+缺失或仅有英文时使用赛事中文数据和既有盘口标签转换函数。球队、联赛数据缺失时
+不虚构名称。展示名称与 `playOptions` 等协议编号分开：`Over/Under/1/2/X`
+和原始盘口线照常传输，客队让球的中文标签按已有格式函数取反展示。
+
+只读排查发现，旧自动注单的球队/联赛字段为英文，而 App 原生注单为中文。
+使用 `Lang: zh` 再次查询旧自动注单，名称仍为英文，因此不能依靠查询语言修正
+已保存的回执。此次修复针对新订单；历史注单不会重发或修改上游记录。
+
 ```mermaid
 flowchart LR
     A[综合决策] --> B[命中次数/比赛/盘口门控]

@@ -110,6 +110,48 @@ class BettingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '缺少 App 字段'):
             build_ybty_bet_payload(self.pick(), 10)
 
+    def test_chinese_order_names_preserve_protocol_selection(self):
+        for market, outcome, native, line, name, option in (
+            ('AH', 'away', '2', '-0.5', '全场让球', '客队全场+0.5'),
+            ('AH_1H', 'home', '1', '0/0.5', '上半场让球', '主队上半场+0/0.5'),
+            ('OU', 'over', 'Over', '2.5', '全场大小', '全场进球数>2.5'),
+            ('OU_1H', 'under', 'Under', '1.5', '上半场大小', '上半场进球数<1.5'),
+            ('HAD', 'draw', 'X', '', '全场独赢', '全场平局'),
+        ):
+            with self.subTest(market=market, outcome=outcome):
+                pick = self.pick(market=market, outcome=outcome, line=line, home='主队', away='客队', league='中文联赛',
+                    order_detail={'matchId': 'm1', 'marketId': 'market1', 'playId': '4',
+                                  'playOptions': native, 'playOptionsId': 'option1', 'oddFinally': '1.95',
+                                  'marketValue': line, 'playName': 'English market', 'playOptionName': 'English option'})
+                detail = build_ybty_bet_payload(pick, 2)['seriesOrders'][0]['orderDetailList'][0]
+                self.assertEqual(detail['matchInfo'], '主队 v 客队')
+                self.assertEqual(detail['matchName'], '中文联赛')
+                self.assertEqual(detail['sportName'], '足球')
+                self.assertEqual(detail['playName'], name)
+                self.assertEqual(detail['playOptionName'], option)
+                self.assertEqual(detail['playOptions'], native)
+                self.assertEqual(detail['playOptionsId'], 'option1')
+                self.assertEqual(detail['marketValue'], line)
+                self.assertEqual(detail['odds'], '195000')
+
+    def test_native_chinese_display_names_are_preserved(self):
+        pick = self.pick(home='主队', away='客队', league='联赛', order_detail={
+            'matchId': 'm1', 'marketId': 'market1', 'playId': '2', 'playOptions': 'Over',
+            'playOptionsId': 'option1', 'oddFinally': '1.95', 'playName': '全场大小球',
+            'playOptionName': '大 2.5', 'matchInfo': '主队VS客队', 'matchName': '官方中文联赛',
+            'sportName': '足球'})
+        detail = build_ybty_bet_payload(pick, 2)['seriesOrders'][0]['orderDetailList'][0]
+        for key in ('playName', 'playOptionName', 'matchInfo', 'matchName', 'sportName'):
+            self.assertEqual(detail[key], pick['order_detail'][key])
+
+    def test_draft_without_team_metadata_does_not_invent_team_names(self):
+        pick = self.pick(order_detail={'matchId': 'm1', 'marketId': 'market1', 'playId': '2',
+                                      'playOptions': 'Over', 'playOptionsId': 'option1', 'oddFinally': '1.95'})
+        detail = build_ybty_bet_payload(pick, 2)['seriesOrders'][0]['orderDetailList'][0]
+        self.assertNotIn('matchInfo', detail)
+        self.assertNotIn('matchName', detail)
+        self.assertEqual(detail['playOptions'], 'Over')
+
     def test_incomplete_draft_reports_both_gate_and_execution_status(self):
         cfg = replace(RuntimeConfig(), betting_enabled=True)
         result = draft_ybty_bet(self.pick(), cfg)
