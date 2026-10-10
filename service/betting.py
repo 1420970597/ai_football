@@ -327,6 +327,7 @@ class BettingExecutor:
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()
+        self.configure()
         if self._thread:
             self._thread.join(3)
 
@@ -760,6 +761,11 @@ class BettingExecutor:
             blocked = self._blocked.get(str(last.get('identity') or ''))
             if blocked:
                 last.update(blocked[1])
+            elif last.get('retry_scheduled') or last.get('awaiting_new_decision'):
+                # The historical failure remains useful, but a withdrawn,
+                # cleared or evicted retry must not look like an active timer.
+                last.update(retry_scheduled=False, awaiting_new_decision=False,
+                            retry_cancelled=True)
             queued = len(self._queue)
             retry_pending = len(self._retry_due)
         ready = running and path is not None

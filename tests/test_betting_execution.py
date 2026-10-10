@@ -436,22 +436,57 @@ class BettingExecutionTests(unittest.TestCase):
 
     def test_observe_decision_cancels_pending_retry_and_queued_pick(self):
         self.client.prepare_bet.side_effect = BetPreflightRetryable('读取失败')
+        self.executor.enqueue(self.row)
         with self.assertLogs('service.betting'):
-            self.executor.execute(self.row, self.pick)
+            self.executor.flush()
+        self.assertTrue(self.executor.health()['last_result']['retry_scheduled'])
         self.executor.enqueue(self.row)
         self.executor.enqueue({**self.row, 'published_at_ms': self.row['published_at_ms'] + 1, 'picks': []})
-        self.assertEqual(self.executor.health()['retry_pending'], 0)
+        health = self.executor.health()
+        self.assertEqual(health['retry_pending'], 0)
+        self.assertTrue(health['last_result']['retry_cancelled'])
+        self.assertFalse(health['last_result']['retry_scheduled'])
+        self.assertFalse(health['last_result']['awaiting_new_decision'])
         self.assertEqual(self.executor.flush(), [])
         self.client.submit_bet.assert_not_called()
 
     def test_disable_cancels_retry_timers(self):
         self.client.prepare_bet.side_effect = BetPreflightRetryable('读取失败')
+        self.executor.enqueue(self.row)
         with self.assertLogs('service.betting'):
-            self.executor.execute(self.row, self.pick)
+            self.executor.flush()
         self.settings.update({'betting_enabled': False}, 1, lambda *_: self.executor.configure())
-        self.assertEqual(self.executor.health()['retry_pending'], 0)
+        health = self.executor.health()
+        self.assertEqual(health['retry_pending'], 0)
+        self.assertTrue(health['last_result']['retry_cancelled'])
+        self.assertFalse(health['last_result']['retry_scheduled'])
         self.assertEqual(self.executor.flush(), [])
         self.client.submit_bet.assert_not_called()
+
+    def test_stop_clears_retry_queue_and_reports_cancellation(self):
+        self.client.prepare_bet.side_effect = BetPreflightRetryable('读取失败')
+        self.executor.enqueue(self.row)
+        with self.assertLogs('service.betting'):
+            self.executor.flush()
+        self.executor.enqueue(self.row)
+        self.executor.stop()
+        health = self.executor.health()
+        self.assertEqual(health['queued'], 0)
+        self.assertEqual(health['retry_pending'], 0)
+        self.assertTrue(health['last_result']['retry_cancelled'])
+        self.assertFalse(health['last_result']['retry_scheduled'])
+        self.assertEqual(self.executor.flush(), [])
+        self.client.submit_bet.assert_not_called()
+
+    def test_stop_preserves_accepted_receipt_without_marking_it_cancelled(self):
+        self.executor.enqueue(self.row)
+        self.assertEqual(self.executor.flush()[0]['status'], 'accepted')
+        self.executor.stop()
+        last = self.executor.health()['last_result']
+        self.assertEqual(last['status'], 'accepted')
+        self.assertFalse(last.get('retry_cancelled'))
+        self.assertEqual(last['order_no'], 'ORDER-1')
+        self.client.submit_bet.assert_called_once()
 
     def test_slow_first_order_does_not_freeze_following_decision_batch(self):
         other = {**self.row, 'match_id': 'other'}

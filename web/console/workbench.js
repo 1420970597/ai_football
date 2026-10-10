@@ -192,7 +192,7 @@ function renderRecommendationCard(item) {
     ...(betting ? [el('small',{class:'buy-execution',text:'投注：' + (executionLabels[betting.status] || betting.status) +
       (betting.order_no ? ' · 注单 ' + betting.order_no : '') + (betting.reason ? ' · ' + betting.reason : '') +
       (betting.attempt ? ' · 第' + betting.attempt + '次检查' : '') +
-      (betting.retry_scheduled ? ' · ' + betting.retry_after_s + '秒后重新决策' :
+      (betting.retry_cancelled ? ' · 重试已取消' : betting.retry_scheduled ? ' · ' + betting.retry_after_s + '秒后重新决策' :
         betting.awaiting_new_decision ? ' · 等待更新决策' : betting.retry_exhausted ? ' · 本轮暂停30秒' : '')})] : [])
   ]);
 }
@@ -692,7 +692,8 @@ function renderBettingStatus(betting) {
   const order = last?.status ? last : betting?.orders?.[0];
   notice('betting-capability-notice', '真实投注：' + (betting?.reason || '无法读取投注执行状态，请重新读取设置。') +
     (order?.status ? '；最近执行：' + (statusLabels[order.status] || order.status) +
-      (order.order_no ? ' · 注单 ' + order.order_no : '') + (order.reason ? ' · ' + order.reason : '') : '') +
+      (order.order_no ? ' · 注单 ' + order.order_no : '') + (order.reason ? ' · ' + order.reason : '') +
+      (order.retry_cancelled ? ' · 重试已取消' : '') : '') +
     (betting?.retry_pending ? '；待重试 ' + betting.retry_pending + ' 项' : '') +
     '。仅对满足命中次数、最新盘口、限额与余额条件的综合推荐下单；已发出的订单不会因关闭而撤销。');
 }

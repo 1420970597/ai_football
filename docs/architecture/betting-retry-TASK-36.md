@@ -7,6 +7,7 @@ flowchart TD
   W[实时推送] --> B[更新内存盘口与完整走势]
   B --> C[最新综合决策]
   B --> K[独立缓存线程定时原子落盘]
+  B --> H[独立线程恢复旧走势 锁外读取S3]
   C --> Q[按比赛覆盖旧队列项]
   Q --> G[状态与历史命中校验]
   G --> P[场馆报价 限额 余额校验]
@@ -34,6 +35,8 @@ flowchart TD
 | 决策和落盘抢占接收线程 | 每次重算统计权重、中文标签、完整训练前缀与deepcopy；首轮台账批量写入阻塞replay | 按证据更新缓存权重；缓存标签和时间前缀；可信内存记录用pickle冻结；台账每轮最多64项；每场调度短暂让出执行时间 |
 | account偶发慢请求 | 每次缓存过期同步获取场馆账户；并发请求重复获取 | 独立单飞后台刷新；GET立即读缓存；失败保留旧值并明确标记stale/error，凭据变化清空旧账户 |
 | settings打开慢 | 每次读取重新汇总全部历史表现 | 读取结算后台已更新的证据快照 |
+| 新赛事首次出现时行情暂停 | 在Hub锁内恢复旧走势，S3回读可能很慢 | 单独走势恢复线程，锁外读取；历史与并发新走势按时间合并去重，保留当前价格；启动只排队，查询显示history_loading |
+| 重试已取消但最近状态仍显示计时 | 空推荐清除了队列，但last_result保留旧retry_scheduled | 状态读取明确标记取消；停止执行器清空未发送队列；已接受回执保留 |
 
 默认最多5次检查，失败后依次等待2、4、8、16秒；达到上限暂停30秒，之后仅更新的有效决策可以启动下一轮。设置页“执行 → 真实投注 → 提交前重试”可配置次数1～20与基础间隔0.5～30秒，单次间隔封顶30秒。
 
@@ -57,8 +60,8 @@ flowchart TD
 
 | 验证 | 命令/方式 | 结果 |
 | --- | --- | --- |
-| 宿主完整回归 | `./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q` | 1299项，11跳过，46.597秒 |
-| 容器Python3.12完整回归 | `docker run --rm --cpus=2 --network=none -v /root/ai_football:/w:ro -w /w -e PYTHONPATH=/w --entrypoint python ai_football-analytics-api -m unittest discover -s tests -q` | 1299项，11跳过，77.740秒 |
+| 宿主完整回归 | `./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q` | 最终1304项，11跳过，46.840秒 |
+| 容器Python3.12完整回归 | `docker run --rm --cpus=2 --network=none -v /root/ai_football:/w:ro -w /w -e PYTHONPATH=/w --entrypoint python ai_football-analytics-api -m unittest discover -s tests -q` | 最终1304项，11跳过，77.174秒 |
 | 类型与lint | 容器中`python -m mypy`、`python -m ruff check .` | 80文件无类型错误；lint通过 |
 | 语法 | 对git列出的110个Python文件执行py_compile；`node --check web/console/workbench.js`；`bash -n scripts/cpu-limited.sh` | 通过 |
 | 真实运行依赖 | `docker run --rm --cpus=2 --network=none --entrypoint python ai_football-analytics-api -c 'import sys, redis, boto3; print(sys.version); print("runtime storage dependencies OK")'` | Python3.12.15，运行依赖通过；当前仓库无旧版requirements.txt |
@@ -66,7 +69,11 @@ flowchart TD
 | 部署 | `./scripts/cpu-limited.sh up -d --no-deps analytics-api model-worker` | 两个最新镜像运行；API、模型、Redis、控制台healthy |
 | 页面 | Playwright访问真实域名，只读打开设置和数据与模型页 | 重试字段可见；1440/390/320宽无溢出；S3统计渲染；无未捕获JS异常 |
 | 第一段稳定探针 | 36轮，每轮并发6项GET，部署结束后单独采样 | 216请求均200；最新上游报价年龄0.6～3.4秒；recommendations p95 3.215秒，account p95 1.063秒 |
+| 后续两段稳定探针 | 72轮、432项GET；真实域名curl另36项 | 共648次本机请求及36次域名请求均200；报价年龄最高7.2秒。最终走势恢复补丁部署后另采样，不混部署窗口 |
+| 文档渲染 | md_to_html生成临时HTML，Playwright打开；禁用CDN再加载 | 1个Mermaid正常渲染，离线显示可读源码 |
 
 较早测试曾发现C105集成用例未隔离update_settings启动的后台执行器，修正测试生命周期后重新冻结并执行上述完整回归。首次容器回归命令未挂载测试目录，报Start directory is not importable；改用只读工作区挂载后完整回归通过。旧AGENTS中的requirements.txt已不存在，依赖核验改为真实运行镜像的redis/boto3导入。
 
 S3全量迁移与进一步持续采样仍在进行，最终核验追加到本文与S3文档。永久走势、全部已发布决策与赛果未因本轮性能修复被轮转或删除。
+
+走势恢复补丁部署后，清理期间另216次GET与36次真实域名curl均200，但报价年龄曾达到22.4秒、决策排队p95达到数十秒。线程栈显示决策留痕等待台账写锁，归档同时进行大量本地删除，主机IO等待升高。此样本明确保留，不将此前正常采样或解除CPU配额当成“所有延迟完全消失”的证明。

@@ -1086,6 +1086,10 @@ class RealtimeHub:
         self._trends: Dict[Tuple[str, str, str], TrendSeries] = {}
         self._resume_trends = resume
         self._resumed_mids: set[str] = set()
+        self._resuming_mids: set[str] = set()
+        self._resume_pending: Dict[str, None] = {}
+        self._resume_wake = threading.Event()
+        self._resume_thread: Optional[threading.Thread] = None
         # 上次观测到的赔率（key = mid|chpid|hv|oid）→ 仅当变化时才记 tick
         self._last_price: Dict[Tuple[str, str, str, str], float] = {}
         self._snapshots = 0
@@ -1218,18 +1222,29 @@ class RealtimeHub:
             self.stats.last_error = "比分落盘失败: %s" % exc
 
     def _resume_from_store(self) -> None:
-        """Warm only the current book; other match tails load when first used."""
+        """Queue current-book tails without waiting for S3 during startup."""
         for mid in self.live.live_mids():
-            self._resume_match(mid)
+            self._queue_resume(mid)
 
     def _resume_match(self, mid: str) -> None:
-        if not self._resume_trends or mid in self._resumed_mids:
-            return
-        self._resumed_mids.add(mid)
+        with self._lock:
+            if not self._resume_trends or mid in self._resumed_mids or mid in self._resuming_mids:
+                return
+            self._resuming_mids.add(mid)
+        try:
+            self._load_match_trends(mid)
+        finally:
+            with self._lock:
+                self._resuming_mids.discard(mid)
+
+    def _load_match_trends(self, mid: str) -> None:
         store = self.trend_store
         if not store.enabled:
             return
+        # Local/S3 IO is outside the hub lock. New quotes may arrive while the
+        # historical tail loads; merge them without rolling back live prices.
         rows = store.load(mid, limit=MAX_TICKS_PER_MARKET)
+        restored: Dict[Tuple[str, str, str], List[PriceTick]] = {}
         for row in rows:
             if not isinstance(row, Mapping):
                 continue
@@ -1249,13 +1264,42 @@ class RealtimeHub:
                 ot=str(row.get("ot") or ""), old_ov=old, new_ov=new,
                 ts_ms=ts)
             key = (mid, chpid, hv)
-            series = self._trends.get(key)
-            if series is None:
-                series = TrendSeries(mid=mid, chpid=chpid, hv=hv)
-                self._trends[key] = series
-            series.add(tick)
-            self._last_price[(mid, chpid, hv, oid)] = new
-        self.stats.resumed_markets = len(self._trends)
+            restored.setdefault(key, []).append(tick)
+        with self._lock:
+            for key, ticks in restored.items():
+                series = self._trends.setdefault(key, TrendSeries(mid=mid, chpid=key[1], hv=key[2]))
+                merged = {(t.ts_ms, t.hid, t.oid, t.old_ov, t.new_ov): t
+                          for t in [*ticks, *series.ticks]}
+                series.ticks = deque(sorted(merged.values(), key=lambda t: t.ts_ms),
+                                     maxlen=MAX_TICKS_PER_MARKET)
+                for tick in reversed(ticks):
+                    self._last_price.setdefault((mid, tick.chpid, tick.hv, tick.oid), tick.new_ov)
+            self._resumed_mids.add(mid)
+            self._resume_pending.pop(mid, None)
+            self.stats.resumed_markets = len(self._trends)
+
+    def _queue_resume(self, mid: str) -> None:
+        with self._lock:
+            if (self._resume_trends and self.trend_store.enabled
+                    and mid not in self._resumed_mids and mid not in self._resuming_mids):
+                self._resume_pending[mid] = None
+                self._resume_wake.set()
+
+    def _resume_loop(self) -> None:
+        while not self._stop.is_set():
+            self._resume_wake.wait(0.5)
+            self._resume_wake.clear()
+            while not self._stop.is_set():
+                with self._lock:
+                    mid = next(iter(self._resume_pending), None)
+                    if mid is not None:
+                        self._resume_pending.pop(mid)
+                if mid is None:
+                    break
+                try:
+                    self._resume_match(mid)
+                except (OSError, ValueError, TypeError) as exc:
+                    self.stats.last_error = '走势恢复失败: %s' % type(exc).__name__
 
     # -- 生命周期 -----------------------------------------------------------
 
@@ -1264,6 +1308,10 @@ class RealtimeHub:
         if self._thread is not None and self._thread.is_alive():
             return False
         self._stop.clear()
+        if self._resume_thread is None or not self._resume_thread.is_alive():
+            self._resume_thread = threading.Thread(target=self._resume_loop,
+                                                    name="leyu-trend-resume", daemon=True)
+            self._resume_thread.start()
         self._cache_thread = threading.Thread(target=self._cache_loop, name="leyu-book-cache", daemon=True)
         self._cache_thread.start()
         self._subscription_thread = threading.Thread(target=self._subscription_loop,
@@ -1276,6 +1324,7 @@ class RealtimeHub:
 
     def stop(self, timeout: float = 3.0) -> None:
         self._stop.set()
+        self._resume_wake.set()
         if self._feed is not None:
             try:
                 self._feed.close()
@@ -1288,6 +1337,8 @@ class RealtimeHub:
             self._cache_thread.join()
         if self._subscription_thread is not None:
             self._subscription_thread.join(timeout=timeout)
+        if self._resume_thread is not None:
+            self._resume_thread.join(timeout=timeout)
         self.trend_store.flush()
         self._flush_events()
         self._save_scores(force=True)
@@ -1438,20 +1489,24 @@ class RealtimeHub:
 
     def trend(self, mid: str, chpid: str = "", hv: str = "") -> Dict[str, Any]:
         """某场某个盘口的走势摘要；不指定 chpid 时返回该场全部盘口。"""
-        with self._lock:
+        if self.running:
+            self._queue_resume(mid)
+        else:
             self._resume_match(mid)
+        with self._lock:
             items = [s for (m, c, h), s in self._trends.items() if m == mid
                      and (not chpid or c == chpid)
                      and (not hv or h == hv)]
             if chpid and hv:
                 key = (mid, chpid, hv)
                 s = self._trends.get(key)
-                return s.summary() if s else {"mid": mid, "chpid": chpid,
-                                              "hv": hv, "n": 0}
+                return {**(s.summary() if s else {"mid": mid, "chpid": chpid, "hv": hv, "n": 0}),
+                        "history_loading": mid in self._resume_pending or mid in self._resuming_mids}
             return {
                 "mid": mid,
                 "n_markets": len(items),
                 "markets": [s.summary() for s in items],
+                "history_loading": mid in self._resume_pending or mid in self._resuming_mids,
             }
 
     def score(self, mid: str) -> Optional[Tuple[int, int]]:
@@ -1588,9 +1643,12 @@ class RealtimeHub:
         # 实时表用全量 ticks（当前值），必须在过滤“变动”之前就写。
         changed: List[PriceTick] = []
         baselines: List[PriceTick] = []
-        with self._lock:
-            for mid in dict.fromkeys(t.mid for t in ticks):
+        for mid in dict.fromkeys(t.mid for t in ticks):
+            if self.running:
+                self._queue_resume(mid)
+            else:
                 self._resume_match(mid)
+        with self._lock:
             ticks = self.live.upsert_many(ticks)
             for mid in dict.fromkeys(t.mid for t in ticks):
                 self._changed_state(mid)
