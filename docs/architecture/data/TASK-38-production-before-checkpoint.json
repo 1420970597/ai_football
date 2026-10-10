@@ -1,0 +1,261 @@
+{
+  "evidence": "A: read-only production probes, no manual debit request",
+  "scope": "latest deployed version; limited observation, not a 30-minute acceptance proof",
+  "deployed_at_utc": "2026-10-10T18:34:05.734749+00:00",
+  "probe_start_utc": "2026-10-10T18:35:01.662597+00:00",
+  "probe_end_utc": "2026-10-10T18:40:59.848309+00:00",
+  "duration_s": 358.186,
+  "api": {
+    "workbench": {
+      "samples": 180,
+      "status_counts": {
+        "200": 180
+      },
+      "response_ms": {
+        "p50": 124.145,
+        "p95": 517.597,
+        "p99": 965.833,
+        "max": 1021.982
+      }
+    },
+    "recommendations": {
+      "samples": 180,
+      "status_counts": {
+        "200": 180
+      },
+      "response_ms": {
+        "p50": 122.085,
+        "p95": 568.981,
+        "p99": 933.148,
+        "max": 949.53
+      }
+    },
+    "account": {
+      "samples": 180,
+      "status_counts": {
+        "200": 180
+      },
+      "response_ms": {
+        "p50": 95.25,
+        "p95": 531.679,
+        "p99": 863.117,
+        "max": 1002.767
+      }
+    },
+    "bet": {
+      "samples": 180,
+      "status_counts": {
+        "200": 180
+      },
+      "response_ms": {
+        "p50": 132.318,
+        "p95": 691.92,
+        "p99": 1006.574,
+        "max": 1044.907
+      }
+    }
+  },
+  "public_curl": {
+    "samples": 90,
+    "status_counts": {
+      "200": 90
+    },
+    "response_ms": {
+      "p50": 220.667,
+      "p95": 665.024,
+      "p99": 1328.102,
+      "max": 1328.102
+    }
+  },
+  "decision_metrics_latest": {
+    "computations": 14641,
+    "compute_ms": {
+      "p50": 33.62,
+      "p95": 105.47,
+      "p99": 629.784,
+      "max": 964.492
+    },
+    "freeze_ms": {
+      "p50": 4.951,
+      "p95": 22.673,
+      "p99": 36.335,
+      "max": 57.622
+    },
+    "full_compute_ms": {
+      "p50": 33.745,
+      "p95": 108.008,
+      "p99": 629.809,
+      "max": 1002.244
+    },
+    "input_to_result_ms": {
+      "p50": 612.616,
+      "p95": 2385.812,
+      "p99": 6545.74,
+      "max": 22550.832
+    },
+    "by_type_input_to_result_ms": {
+      "unknown": {
+        "samples": 931,
+        "p50": 161.044,
+        "p95": 2112.609,
+        "p99": 15616.901,
+        "max": 26544.045
+      },
+      "real": {
+        "samples": 2048,
+        "p50": 389.648,
+        "p95": 2053.015,
+        "p99": 4433.618,
+        "max": 16759.564
+      },
+      "virtual": {
+        "samples": 2048,
+        "p50": 432.949,
+        "p95": 1931.986,
+        "p99": 2942.486,
+        "max": 22550.832
+      }
+    },
+    "calculation": {
+      "mode": "process",
+      "processes": 2,
+      "ready": 2,
+      "failures": 0
+    },
+    "event_to_result_ms": {
+      "p50": 1083.197,
+      "p95": 2932.36,
+      "p99": 4121.236,
+      "max": 4455.083
+    },
+    "samples": 2048,
+    "by_type_event_to_result_ms": {
+      "unknown": {
+        "samples": 931,
+        "p50": 233.704,
+        "p95": 1837.788,
+        "p99": 2779.841,
+        "max": 4308.321
+      },
+      "real": {
+        "samples": 2048,
+        "p50": 691.072,
+        "p95": 2834.017,
+        "p99": 4107.7,
+        "max": 4455.083
+      },
+      "virtual": {
+        "samples": 2048,
+        "p50": 604.5,
+        "p95": 2202.723,
+        "p99": 2954.21,
+        "max": 4358.273
+      }
+    },
+    "superseded": 1126,
+    "errors": 0,
+    "journal_dropped": 0,
+    "journal_error": "",
+    "journal_pending": 4,
+    "history_retention": "permanent",
+    "history_sampling": "every_published_decision",
+    "record_error": "",
+    "decisions_pending": 0,
+    "config_version": 10,
+    "model_version": "live-poisson-market-v1",
+    "validation_status": "research"
+  },
+  "real_rolling_p95_after_first_minute": {
+    "windows": 149,
+    "min_ms": 990.193,
+    "max_ms": 2323.444
+  },
+  "projection_latest": {
+    "loading": false,
+    "age_s": 0.131,
+    "stale": false,
+    "error": ""
+  },
+  "execution_metrics_latest": {
+    "budget_ms": 2000,
+    "basis": "selected_quote_receive_to_socket_send",
+    "submissions": 12,
+    "within_budget": 12,
+    "deadline_blocked": 165,
+    "quote_to_submit_ms": {
+      "p50": 972.482,
+      "p95": 1874.289,
+      "p99": 1874.289,
+      "max": 1874.289
+    },
+    "quote_to_receipt_ms": {
+      "p50": 1335.383,
+      "p95": 2267.842,
+      "p99": 2267.842,
+      "max": 2267.842
+    }
+  },
+  "durable_order_status_counts_since_deployment": {
+    "pending": 9,
+    "rejected": 1,
+    "accepted": 3
+  },
+  "durable_order_stages_ms": {
+    "decision_persistence": {
+      "p50": 0.011,
+      "p95": 11.9,
+      "p99": 11.9,
+      "max": 11.9
+    },
+    "durable_claim": {
+      "p50": 5.204,
+      "p95": 115.767,
+      "p99": 115.767,
+      "max": 115.767
+    },
+    "final_quote": {
+      "p50": 0.192,
+      "p95": 7.314,
+      "p99": 7.314,
+      "max": 7.314
+    },
+    "historical_evidence": {
+      "p50": 6.717,
+      "p95": 59.562,
+      "p99": 59.562,
+      "max": 59.562
+    },
+    "live_quote": {
+      "p50": 0.278,
+      "p95": 3.943,
+      "p99": 3.943,
+      "max": 3.943
+    },
+    "recommendation": {
+      "p50": 0.51,
+      "p95": 0.941,
+      "p99": 0.941,
+      "max": 0.941
+    },
+    "submission": {
+      "p50": 369.92,
+      "p95": 440.642,
+      "p99": 440.642,
+      "max": 440.642
+    },
+    "submit_queue": {
+      "p50": 0.462,
+      "p95": 8.425,
+      "p99": 8.425,
+      "max": 8.425
+    },
+    "venue_preflight": {
+      "p50": 632.316,
+      "p95": 1588.67,
+      "p99": 1588.67,
+      "max": 1588.67
+    }
+  },
+  "runtime_nano_cpus": 0,
+  "limitation": "Deadline-blocked attempts are not successful bets; remote acceptance/receipt may exceed 2 seconds."
+}

@@ -18,13 +18,41 @@ from service.ledger import DecisionLedger, LedgerEntry
 from service.live_expert import LiveExpertService
 from service.live_review import LiveReview
 from service.runtime_settings import RuntimeConfig
-from store.history import HistoryJournal
+from store.history import HistoryJournal, encode_checkpoint
 from tests import test_live_expert
 
 
 def read_history(path):
     with gzip.open(path, 'rt', encoding='utf-8') as file:
         return [json.loads(line) for line in file]
+
+
+class CheckpointCodecTests(unittest.TestCase):
+    def test_checkpoint_preserves_native_fields_with_installed_codec(self):
+        payload = {'version':1, 'rows':[['比赛甲','2','2.5','123456789012345678',
+                    'Over',1.951234,1791656800123,{'marketValue':'2.5','oddFinally':'1.951234'}]]}
+        encoded = encode_checkpoint(payload)
+        self.assertIsInstance(encoded, bytes)
+        self.assertEqual(json.loads(encoded), payload)
+
+    def test_missing_optional_codec_uses_readable_standard_json(self):
+        payload = {'rows':[['比赛',2.0,123]], 'version':1}
+        with patch('store.history.importlib.import_module', side_effect=ModuleNotFoundError):
+            encoded = encode_checkpoint(payload)
+        self.assertEqual(json.loads(encoded), payload)
+
+    def test_encoder_failure_preserves_previous_atomic_checkpoint(self):
+        from collector.leyu_realtime import LiveBook
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root)/'live.json'
+            book = LiveBook(str(path))
+            book.upsert_many([PriceTick('m','2','','','over','Over',2,2,int(time.time()*1000))])
+            self.assertTrue(book.save(force=True))
+            old = path.read_bytes()
+            with patch('collector.leyu_realtime.encode_checkpoint', side_effect=TypeError('invalid')):
+                self.assertFalse(book.save(force=True))
+            self.assertEqual(path.read_bytes(), old)
+            self.assertTrue(book.last_error)
 
 
 class TrendResumeTests(unittest.TestCase):

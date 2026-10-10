@@ -10,6 +10,8 @@ import os
 import sqlite3
 import threading
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from contextlib import closing
 from pathlib import Path
@@ -30,10 +32,15 @@ class BettingRecomputeNeeded(BettingBlocked):
     """A new decision can resolve this gate without replaying an order."""
 
 
+class BettingLatencyExceeded(BettingRecomputeNeeded):
+    """The original quote's two-second budget expired before submission."""
+
+
 VENUE_BET_PATH = "/yewu13/v1/betOrder/client/bet"
 ENSEMBLE_ALGORITHM = "economic_ensemble"
 EXECUTOR_QUEUE_LIMIT = 256
 BLOCKED_RECHECK_S = 30.0
+EXECUTION_BUDGET_S = 2.0
 LOGGER = logging.getLogger(__name__)
 
 
@@ -293,19 +300,33 @@ class BettingExecutor:
 
     def __init__(self, settings: Any, hub: Callable[[], Any], ledger: Callable[[], Any],
                  client_factory: Callable[[], Any] | None = None,
-                 on_recompute: Callable[[list[str]], None] | None = None) -> None:
+                 on_recompute: Callable[[list[str]], None] | None = None,
+                 on_persisted: Callable[[Mapping[str, Any], float], bool] | None = None) -> None:
         self.settings = settings
         self.hub, self.ledger = hub, ledger
         self.client_factory = client_factory
         self.on_recompute = on_recompute
+        self.on_persisted = on_persisted
         self._client: Any = None
         self._client_key = ""
         self.path: Path | None = None
         self._lock = threading.RLock()
         self._run_lock = threading.Lock()
+        self._submission_lock = threading.Lock()
+        self._execution_pool: ThreadPoolExecutor | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
+        self._warm_thread: threading.Thread | None = None
+        self._warm_wake = threading.Event()
+        self._client_build_lock = threading.Lock()
+        self._warm_state = 'not_started'
+        self._schema_ready = False
+        self._submit_latency: deque = deque(maxlen=2048)
+        self._receipt_latency: deque = deque(maxlen=2048)
+        self._deadline_misses = 0
+        self._submissions = 0
+        self._within_budget = 0
         self._queue: dict[str, dict[str, Any]] = {}
         self._latest: dict[str, dict[str, Any]] = {}
         self._retry_due: dict[str, tuple[str, float]] = {}
@@ -315,21 +336,63 @@ class BettingExecutor:
     def bind(self, root: str | None) -> None:
         with self._lock:
             self.path = Path(root).parent / "betting-orders.sqlite3" if root else None
+            self._schema_ready = False
 
     def start(self) -> None:
         with self._lock:
             if self._thread and self._thread.is_alive():
                 return
             self._stop.clear()
+            if os.environ.get('LEYU_FAST_BETTING', '').lower() in ('1', 'true') and self._execution_pool is None:
+                self._execution_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='bet-precheck')
             self._thread = threading.Thread(target=self._loop, name="bet-order-executor", daemon=True)
             self._thread.start()
+            if (self.client_factory is None and os.environ.get('LEYU_FAST_BETTING', '').lower() in ('1', 'true')
+                    and not (self._warm_thread and self._warm_thread.is_alive())):
+                self._warm_thread = threading.Thread(target=self._warm_loop, name='bet-session-warm', daemon=True)
+                self._warm_thread.start()
+
+    def _warm_loop(self) -> None:
+        from collector.leyu_account import account_client_from_env
+        while not self._stop.is_set():
+            cfg, _ = self.settings.snapshot()
+            if cfg.betting_enabled:
+                self._warm_state = 'warming'
+                try:
+                    client = self._account_client(account_client_from_env)
+                    if client is None:
+                        self._warm_state = 'unconfigured'
+                    else:
+                        client.warm_betting()
+                        self._warm_state = 'ready'
+                    if self.path and not self._schema_ready:
+                        self._db(self.path).close()
+                except Exception:
+                    self._warm_state = 'retrying'
+            else:
+                self._warm_state = 'disabled'
+            self._warm_wake.wait(10)
+            self._warm_wake.clear()
 
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()
+        self._warm_wake.set()
         self.configure()
         if self._thread:
-            self._thread.join(3)
+            self._thread.join(15)
+        if self._warm_thread:
+            self._warm_thread.join(3)
+        if (not (self._thread and self._thread.is_alive())
+                and not (self._warm_thread and self._warm_thread.is_alive())):
+            with self._lock:
+                client, self._client = self._client, None
+                self._client_key = ''
+            if client is not None and callable(getattr(client, 'close', None)):
+                client.close()
+            if self._execution_pool:
+                self._execution_pool.shutdown(wait=True, cancel_futures=True)
+                self._execution_pool = None
 
     def configure(self) -> None:
         with self._lock:
@@ -350,6 +413,15 @@ class BettingExecutor:
             if mid not in self._latest and len(self._latest) >= EXECUTOR_QUEUE_LIMIT:
                 self._latest.pop(next(iter(self._latest)))
             self._latest[mid] = dict(row)
+            for pick in row.get('picks', []):
+                identity = _identity([(os.environ.get('LEYU_APP_LOGIN_NAME', '').strip().casefold() or 'default'),
+                                      *_bet_selection(mid, pick)])
+                blocked = self._blocked.get(identity)
+                if (blocked and blocked[1].get('awaiting_new_quote') and
+                        float(pick.get('quote_received_at_ms') or 0) >
+                        float(blocked[1].get('quote_received_at_ms') or 0)):
+                    self._blocked.pop(identity, None)
+                    self._retry_due.pop(identity, None)
             selections = {_identity(_bet_selection(mid, p)) for p in row.get("picks", [])}
             for identity, (_, blocked_result) in list(self._blocked.items()):
                 if blocked_result.get("match_id") == mid and _identity(_bet_selection(mid, blocked_result)) not in selections:
@@ -406,21 +478,25 @@ class BettingExecutor:
             self._request_due_retries()
             with self._lock:
                 mids = list(self._queue)
-            results = []
+            selections: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
             for mid in mids:
                 with self._lock:
                     row = self._queue.pop(mid, None)
-                if row is None:
-                    continue
-                for pick in row.get("picks", []):
-                    try:
-                        current_row, current_pick = self._current_pick(row, pick)
-                    except BettingRecomputeNeeded:
-                        continue
-                    result = self.execute(current_row, current_pick)
-                    with self._lock:
-                        self.last_result = result
-                    results.append(result)
+                if row is not None:
+                    selections.extend((row, pick) for pick in row.get('picks', []))
+            def execute_latest(selection):
+                row, pick = selection
+                try:
+                    current_row, current_pick = self._current_pick(row, pick)
+                except BettingRecomputeNeeded:
+                    return None
+                result = self.execute(current_row, current_pick)
+                with self._lock:
+                    self.last_result = result
+                return result
+            completed = (self._execution_pool.map(execute_latest, selections) if self._execution_pool
+                         else map(execute_latest, selections))
+            results = [result for result in completed if result is not None]
             return results
         finally:
             self._run_lock.release()
@@ -430,6 +506,8 @@ class BettingExecutor:
         db = sqlite3.connect(path, timeout=5, isolation_level=None)
         try:
             db.execute("PRAGMA synchronous=FULL")
+            if self._schema_ready:
+                return db
             db.execute("BEGIN IMMEDIATE")
             db.execute("""CREATE TABLE IF NOT EXISTS orders (
                 identity TEXT PRIMARY KEY, at REAL NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
@@ -449,6 +527,7 @@ class BettingExecutor:
             db.execute("CREATE INDEX IF NOT EXISTS orders_selection ON orders(selection_key,account_key)")
             os.chmod(path, 0o600)
             db.commit()
+            self._schema_ready = True
         except BaseException:
             db.rollback()
             db.close()
@@ -522,14 +601,38 @@ class BettingExecutor:
         # every pick used to repeat venue launch and consume quote validity.
         key = _identity([k + "=" + v for k, v in sorted(os.environ.items()) if k.startswith("LEYU_")])
         with self._lock:
-            if self._client is None or key != self._client_key:
-                self._client = default_factory()
-                self._client_key = key
-            return self._client
+            if self._client is not None and key == self._client_key:
+                return self._client
+        # Login/network operations must not hold the enqueue/status lock.
+        with self._client_build_lock:
+            with self._lock:
+                if self._client is not None and key == self._client_key:
+                    return self._client
+            client = default_factory()
+            with self._lock:
+                self._client, self._client_key = client, key
+            return client
+
+    @staticmethod
+    def _check_budget(deadline: float) -> None:
+        if time.monotonic() >= deadline:
+            raise BettingLatencyExceeded('最新盘口至提交已超过两秒预算，等待新报价重新计算')
+
+    def _ready_account_client(self, default_factory: Callable[[], Any]) -> Any:
+        if self.client_factory is not None or os.environ.get('LEYU_FAST_BETTING', '').lower() not in ('1', 'true'):
+            return self._account_client(default_factory)
+        key = _identity([k+'='+v for k,v in sorted(os.environ.items()) if k.startswith('LEYU_')])
+        with self._lock:
+            client = self._client if key == self._client_key else None
+        if client is None or not client.betting_ready():
+            self._warm_wake.set()
+            from collector.leyu_account import BetPreflightRetryable
+            raise BetPreflightRetryable('场馆会话尚未预热完成，等待新报价')
+        return client
 
     def execute(self, row: Mapping[str, Any], pick: Mapping[str, Any]) -> dict[str, Any]:
         """Execute only an in-memory server recommendation, never an API pick."""
-        from collector.leyu_account import (BetPreflightRetryable, BetSubmissionRejected, BetSubmissionUnknown,
+        from collector.leyu_account import (BetPreflightBudgetExpired, BetPreflightRetryable, BetSubmissionRejected, BetSubmissionUnknown,
                                             account_client_from_env)
         from collector.session import SessionError
         cfg, version = self.settings.snapshot()
@@ -545,17 +648,53 @@ class BettingExecutor:
         result["decision_at_ms"] = row.get("published_at_ms")
         stage = "recommendation"
         started = time.monotonic()
+        received = started
+        invalid_clock = False
+        try:
+            raw_clock = pick.get('quote_received_at')
+            if raw_clock is None:
+                raw_clock = started-max(0.0, time.time()-float(row.get('published_at_ms') or time.time()*1000)/1000)
+            received = float(raw_clock)
+            invalid_clock = not math.isfinite(received) or received > started+0.01
+        except (TypeError, ValueError, OverflowError):
+            invalid_clock = True
+        deadline = received+EXECUTION_BUDGET_S
+        result.update(budget_ms=2000, quote_received_at_ms=pick.get('quote_received_at_ms'),
+                      source_quote_at_ms=pick.get('ts_ms'),
+                      quote_to_execute_ms=round(max(0.0, started-received)*1000, 3),
+                      decision_compute_ms=row.get('full_compute_ms'), timings_ms={})
+        stage_started = started
+        def enter_stage(name: str) -> None:
+            nonlocal stage, stage_started
+            now = time.monotonic()
+            result['timings_ms'][stage] = round((now-stage_started)*1000, 3)
+            stage, stage_started = name, now
+            self._check_budget(deadline)
         with self._lock:
             path = self.path
             blocked = self._blocked.get(identity)
         db: sqlite3.Connection | None = None
         claimed = False
+        submit_owned = False
         attempt = 1
         try:
+            if invalid_clock:
+                raise BettingBlocked('盘口接收时钟无效')
             if not cfg.betting_enabled:
                 raise BettingBlocked("投注功能未启用")
             if path is None:
                 raise BettingBlocked("未配置持久化订单目录，无法防止重启重复提交")
+            if blocked is not None and blocked[1].get('awaiting_new_quote'):
+                if (float(pick.get('quote_received_at_ms') or 0) <=
+                        float(blocked[1].get('quote_received_at_ms') or 0)):
+                    return {**blocked[1], 'recheck_deferred': True}
+                # The fresh publication can race with the previous attempt's
+                # timeout, so enqueue alone cannot reliably clear this block.
+                with self._lock:
+                    if self._blocked.get(identity) is blocked:
+                        self._blocked.pop(identity, None)
+                        self._retry_due.pop(identity, None)
+                blocked = None
             if blocked is not None:
                 remaining = blocked[0] + float(blocked[1].get("retry_after_s", BLOCKED_RECHECK_S)) - time.monotonic()
                 if remaining > 0:
@@ -579,12 +718,14 @@ class BettingExecutor:
             if hub is None:
                 raise BettingBlocked("实时行情未启动")
             snapshot = hub.decision_snapshot(mid)
-            stage = "live_quote"
+            enter_stage('live_quote')
             metadata = {key: (snapshot.get("info") or {}).get(key) or row.get(key)
                         for key in ("home", "away", "league")}
             detail = build_ybty_order_detail({**pick, **metadata}, cfg.betting_fixed_stake)
             self._check_state(row, pick, snapshot, detail, cfg)
-            stage = "historical_evidence"
+            if 'quote_received_at' in pick and pick['quote_received_at'] is None:
+                raise BettingRecomputeNeeded('尚未接收到该盘口的新报价，不能使用重启恢复的接收时钟')
+            enter_stage('historical_evidence')
             evidence = self.ledger().recommendation_performance(
                 str(pick["market"]), str(pick.get("line") or ""), str(pick["outcome"]))
             confidence = recommendation_confidence(pick, evidence)
@@ -597,15 +738,23 @@ class BettingExecutor:
             previous = self._existing_order(db, selection_key, account_key)
             if previous is not None:
                 return previous
-            stage = "venue_preflight"
-            client = self._account_client(account_client_from_env)
+            enter_stage('venue_preflight')
+            client = self._ready_account_client(account_client_from_env)
             if client is None:
                 raise BettingBlocked("未配置乐鱼 App 账户会话")
-            detail = client.prepare_bet(detail, plan.stake)
+            if getattr(client, 'supports_deadline', False) is True:
+                detail = client.prepare_bet(detail, plan.stake, deadline=deadline-0.05)
+            else:
+                detail = client.prepare_bet(detail, plan.stake)
             payload = build_ybty_bet_payload({"order_detail": detail}, plan.stake)
+            enter_stage('submit_queue')
+            if not self._submission_lock.acquire(timeout=max(0.0, deadline-time.monotonic())):
+                raise BettingLatencyExceeded('提交队列超过两秒预算，等待新报价')
+            submit_owned = True
+            self._check_budget(deadline)
             current, current_version = self.settings.snapshot()
             final = hub.decision_snapshot(mid)
-            stage = "final_quote"
+            enter_stage('final_quote')
             if not current.betting_enabled or current_version != version or self._stop.is_set():
                 raise BettingBlocked("提交前投注配置已变化或执行器已停止")
             final_row, final_pick = self._current_pick(row, pick)
@@ -621,7 +770,12 @@ class BettingExecutor:
                 raise BettingRecomputeNeeded("最新综合决策的投注额度已变化，需要重新校验")
             self._check_state(final_row, final_pick, final, detail, cfg, original=snapshot)
             result["decision_at_ms"] = final_row.get("published_at_ms")
-            stage = "durable_claim"
+            result['publication_id'] = final_row.get('publication_id')
+            if self.on_persisted:
+                enter_stage('decision_persistence')
+                if not self.on_persisted(final_row, max(0.0, deadline-time.monotonic()-0.05)):
+                    raise BettingLatencyExceeded('完整决策记录未在两秒预算内持久化，等待重新计算')
+            enter_stage('durable_claim')
             sending = {**result, "status": "sending", "reason": "已提交发送意图，等待场馆回执"}
             try:
                 # Serialize the final duplicate check with the durable claim.
@@ -631,6 +785,9 @@ class BettingExecutor:
                 if previous is not None:
                     db.rollback()
                     return previous
+                # Leave time for the fsync and socket send; deadlines are never
+                # renewed when a newer row happens to appear during preflight.
+                self._check_budget(deadline-0.025)
                 self.settings.claim_bet(version, lambda: db.execute("""INSERT INTO orders
                     (identity,at,status,payload,selection_key,account_key) VALUES (?,?,?,?,?,?)""", (
                     identity, time.time(), "sending", json.dumps(sending, ensure_ascii=False),
@@ -640,13 +797,32 @@ class BettingExecutor:
                 db.rollback()
                 return {**result, "status": "duplicate", "duplicate": True, "reason": "该推荐已有订单提交记录"}
             claimed = True
-            stage = "submission"
+            enter_stage('submission')
+            submission_started = time.monotonic()
             try:
-                result.update(client.submit_bet(payload))
+                if getattr(client, 'supports_deadline', False) is True:
+                    result.update(client.submit_bet(payload, deadline=deadline))
+                else:
+                    result.update(client.submit_bet(payload))
             except BetSubmissionRejected as exc:
                 result.update(status="rejected", reason=str(exc))
             except (BetSubmissionUnknown, SessionError) as exc:
                 result.update(status="unknown", submitted=None, reason=str(exc))
+            sent = (client.last_submission_sent_at if getattr(client, 'supports_deadline', False) is True
+                    else submission_started)
+            if sent is not None:
+                latency = max(0.0, (sent-received)*1000)
+                result.update(quote_to_submit_ms=round(latency, 3), latency_target_met=latency <= 2000,
+                              quote_to_receipt_ms=round((time.monotonic()-received)*1000, 3))
+                with self._lock:
+                    self._submit_latency.append(latency)
+                    self._receipt_latency.append(result['quote_to_receipt_ms'])
+                    self._submissions += 1
+                    self._within_budget += int(latency <= 2000)
+            else:
+                result.update(latency_target_met=None, send_time_unknown=True)
+            result['timings_ms'][stage] = round((time.monotonic()-stage_started)*1000, 3)
+            result.update(stage=stage, elapsed_ms=round((time.monotonic()-started)*1000, 3))
             db.execute("UPDATE orders SET status=?,payload=? WHERE identity=?", (
                 result["status"], json.dumps(result, ensure_ascii=False), identity))
             with self._lock:
@@ -657,6 +833,15 @@ class BettingExecutor:
             # No provider exception/body can leak credentials into public state.
             reason = str(exc) if isinstance(exc, (BettingBlocked, SessionError)) else "订单校验或持久化失败"
             result.update(stage=stage, elapsed_ms=round((time.monotonic() - started) * 1000, 1))
+            result['timings_ms'][stage] = round((time.monotonic()-stage_started)*1000, 3)
+            if isinstance(exc, (BettingLatencyExceeded, BetPreflightBudgetExpired)):
+                result.update(deadline_exceeded=True, latency_target_met=False)
+                with self._lock:
+                    self._deadline_misses += 1
+            elif not claimed and time.monotonic() >= deadline:
+                result.update(deadline_exceeded=True, latency_target_met=False)
+                with self._lock:
+                    self._deadline_misses += 1
             if claimed:
                 result.update(status="unknown", submitted=None, reason="提交结果未知；请核对场馆注单，不会自动重发")
             else:
@@ -666,11 +851,15 @@ class BettingExecutor:
                     ("赔率已变化", "盘口线已变化", "找不到推荐的比赛与盘口", "选项已关闭或不存在")))
                 result["retry_on_new_decision"] = recompute
                 retryable = recompute or isinstance(exc, BetPreflightRetryable)
+                if isinstance(exc, BetPreflightRetryable):
+                    self._warm_wake.set()
+                wait_quote = bool(result.get('deadline_exceeded'))
                 exhausted = retryable and attempt >= cfg.betting_retry_max_attempts
                 delay = (min(BLOCKED_RECHECK_S, cfg.betting_retry_base_delay_s * 2 ** (attempt - 1))
                          if retryable and not exhausted else BLOCKED_RECHECK_S)
                 result.update(retryable=retryable, retry_exhausted=exhausted,
-                              retry_scheduled=retryable and not exhausted, retry_after_s=delay)
+                              retry_scheduled=retryable and not exhausted and not wait_quote,
+                              awaiting_new_quote=wait_quote, retry_after_s=delay)
                 current_cfg, current_version = self.settings.snapshot()
                 with self._lock:
                     latest = self._latest.get(mid)
@@ -688,7 +877,7 @@ class BettingExecutor:
                         self._blocked.pop(evicted)
                         self._retry_due.pop(evicted, None)
                     self._blocked[identity] = (time.monotonic(), dict(result))
-                    if retryable and not exhausted:
+                    if retryable and not exhausted and not wait_quote:
                         self._retry_due[identity] = (mid, time.monotonic() + delay)
                     else:
                         self._retry_due.pop(identity, None)
@@ -696,6 +885,8 @@ class BettingExecutor:
                                mid, result["market"], result["line"], result["outcome"], stage, result["elapsed_ms"], reason)
             return result
         finally:
+            if submit_owned:
+                self._submission_lock.release()
             if db is not None:
                 db.close()
 
@@ -754,6 +945,7 @@ class BettingExecutor:
         return out
 
     def health(self) -> dict[str, Any]:
+        from service.live_expert import percentiles
         cfg, _ = self.settings.snapshot()
         with self._lock:
             running = bool(self._thread and self._thread.is_alive())
@@ -787,4 +979,10 @@ class BettingExecutor:
                 "retry_pending": retry_pending,
                 "retry_policy": {"max_attempts": cfg.betting_retry_max_attempts,
                                  "base_delay_s": cfg.betting_retry_base_delay_s},
+                'session_warmup': self._warm_state,
+                'latency': {'budget_ms': 2000, 'basis': 'selected_quote_receive_to_socket_send',
+                            'submissions': self._submissions, 'within_budget': self._within_budget,
+                            'deadline_blocked': self._deadline_misses,
+                            'quote_to_submit_ms': percentiles(list(self._submit_latency)),
+                            'quote_to_receipt_ms': percentiles(list(self._receipt_latency))},
                 "reason": reason, "last_result": last, "orders": orders}

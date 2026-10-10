@@ -63,6 +63,9 @@ services:
         required: false
     environment:
       - API_HOST=0.0.0.0
+      - LIVE_COMPUTE_PROCESSES=${LIVE_COMPUTE_PROCESSES:-2}
+      - LEYU_FAST_BETTING=1
+      - API_BACKGROUND_PROJECTION=1
       - API_PORT=8000
       - SNAPSHOT_ROOT=/app/output/snapshots
       # 缓存后端：redis 可达则用 redis，否则自动回退内存

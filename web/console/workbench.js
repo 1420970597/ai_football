@@ -190,9 +190,11 @@ function renderRecommendationCard(item) {
       el('span',{text:'综合 ' + pct(pick.composite_confidence ?? item.composite_confidence)}),
       el('span',{text:'赔率状态 ' + (item.market_open ? '开启' : '已关闭')})]),
     ...(betting ? [el('small',{class:'buy-execution',text:'投注：' + (executionLabels[betting.status] || betting.status) +
+      (betting.quote_to_submit_ms !== undefined ? ' · 盘口至提交 ' + fixed(betting.quote_to_submit_ms, 0) + 'ms' : '') +
+      (betting.deadline_exceeded ? ' · 两秒预算超时，等待新行情' : '') +
       (betting.order_no ? ' · 注单 ' + betting.order_no : '') + (betting.reason ? ' · ' + betting.reason : '') +
       (betting.attempt ? ' · 第' + betting.attempt + '次检查' : '') +
-      (betting.retry_cancelled ? ' · 重试已取消' : betting.retry_scheduled ? ' · ' + betting.retry_after_s + '秒后重新决策' :
+      (betting.awaiting_new_quote ? ' · 等待新盘口' : betting.retry_cancelled ? ' · 重试已取消' : betting.retry_scheduled ? ' · ' + betting.retry_after_s + '秒后重新决策' :
         betting.awaiting_new_decision ? ' · 等待更新决策' : betting.retry_exhausted ? ' · 本轮暂停30秒' : '')})] : [])
   ]);
 }
@@ -317,9 +319,10 @@ async function loadLive() {
     $('source-match-count').title = coverage.source_age_s !== null && coverage.source_age_s !== undefined ? '赛程缓存 ' + fixed(coverage.source_age_s, 1) + 's' : '赛程未确认';
     const quoteAges = S.matches.map(m => m.quote_age_s).filter(Number.isFinite);
     $('quote-freshness').textContent = quoteAges.length ? fixed(Math.min(...quoteAges), 1) + 's 前' : '—';
-    const p95 = (data.performance?.by_type_event_to_result_ms?.[type] || data.performance?.event_to_result_ms)?.p95;
+    const p95 = (data.performance?.by_type_input_to_result_ms?.[type] || data.performance?.input_to_result_ms)?.p95;
+    $('algorithm-latency').title = '最新输入至决策 P95；投注接收至提交耗时见执行状态';
     $('algorithm-latency').textContent = p95 !== null && p95 !== undefined ? fixed(p95, 0) + ' ms' : '—';
-    notice('notice', online ? (S.matches.some(m => m.stale) ? '部分报价过期' : '') : '采集断开 · 显示缓存');
+    notice('notice', data.projection?.loading ? '正在生成数据视图' : data.projection?.stale ? '后台视图更新延迟 · 显示缓存' : online ? (S.matches.some(m => m.stale) ? '部分报价过期' : '') : '采集断开 · 显示缓存');
     renderMatches(); renderLeagues();
     if (S.selected) await loadDetail(S.selected);
   } catch (error) {
@@ -694,6 +697,9 @@ function renderBettingStatus(betting) {
     (order?.status ? '；最近执行：' + (statusLabels[order.status] || order.status) +
       (order.order_no ? ' · 注单 ' + order.order_no : '') + (order.reason ? ' · ' + order.reason : '') +
       (order.retry_cancelled ? ' · 重试已取消' : '') : '') +
+    (betting?.latency?.quote_to_submit_ms?.p95 !== null && betting?.latency?.quote_to_submit_ms?.p95 !== undefined ? '；盘口至提交 P95 ' + fixed(betting.latency.quote_to_submit_ms.p95, 0) + 'ms' : '') +
+    (betting?.latency?.deadline_blocked ? '；超时未执行 ' + betting.latency.deadline_blocked + ' 次' : '') +
+    (betting?.session_warmup ? '；会话 ' + ({ready:'已预热',warming:'预热中',retrying:'刷新中',disabled:'未启用',not_started:'未启动',unconfigured:'未配置'}[betting.session_warmup] || betting.session_warmup) : '') +
     (betting?.retry_pending ? '；待重试 ' + betting.retry_pending + ' 项' : '') +
     '。仅对满足命中次数、最新盘口、限额与余额条件的综合推荐下单；已发出的订单不会因关闭而撤销。');
 }

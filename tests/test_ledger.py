@@ -1,8 +1,10 @@
 """Independent decisions, immutable timestamps and safe historical repairs."""
 import tempfile
+import json
 import threading
 import unittest
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import patch
 
 from core.settlement import settle_pick, split_line, summarise
@@ -10,6 +12,38 @@ from service.ledger import DecisionLedger, LedgerEntry
 
 
 class LedgerRegressionTests(unittest.TestCase):
+    def test_hot_evidence_imports_active_revisions_without_scanning_archive(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            entry = self.entry(algorithm='economic_ensemble', trigger='live_recommendation')
+            ledger._append([entry])
+            self.assertEqual(ledger.recommendation_performance('OU','2.25','over')['pending_count'], 1)
+            revised = replace(entry, status='won', pnl=1, updated_at='2026-01-02T00:00:00Z')
+            with ledger.path.open('a') as stream:
+                stream.write(json.dumps(revised.as_dict())+'\n')
+            with patch.object(ledger, '_files', side_effect=AssertionError('archive scan in execution')):
+                result = ledger.recommendation_performance('OU','2.25','over')
+            self.assertEqual(result['settled_samples'], 1)
+            self.assertEqual(result['hit_count'], 1)
+            self.assertEqual(result['pending_count'], 0)
+
+    def test_live_batch_retains_each_market_once_and_retries_failed_write(self):
+        from tests.test_live_expert import LiveExpertTests
+        from service.live_expert import LiveExpertService
+        hub = LiveExpertTests().hub()
+        row = LiveExpertService().compute(hub.decision_snapshot('m'), hub)
+        forecasts = row['evaluations'][0]['forecasts']
+        inputs = [{**row, 'algorithm': row['evaluations'][0]['algorithm'], 'forecast': f} for f in forecasts]
+        self.assertGreater(len(inputs), 1)
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            with patch.object(ledger, '_append', return_value=0):
+                with self.assertRaises(OSError):
+                    ledger.record_live_many(inputs)
+            self.assertEqual(ledger.record_live_many(inputs), len(inputs))
+            self.assertEqual(ledger.record_live_many(inputs), 0)
+            self.assertEqual(len(ledger.load()), len(inputs))
+
     def test_numeric_quarters_equal_split_notation(self):
         for n in range(-16, 17):
             line = n / 4

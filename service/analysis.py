@@ -41,6 +41,7 @@ import copy
 import random
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -371,6 +372,8 @@ class AnalysisService:
         self.realtime = realtime
         from service.live_expert import LiveExpertService
         self.live_expert = LiveExpertService()
+        self._live_threads: Optional[ThreadPoolExecutor] = None
+        self._live_inflight: set[int] = set()
         self._config = config or AnalysisConfig()
         #: 是否成功接上 LLM（决定决策是否可能是 buy）
         self.llm_error = ""
@@ -474,7 +477,8 @@ class AnalysisService:
         self.live_review = LiveReview()
         from service.betting import BettingExecutor
         self.betting = BettingExecutor(self.runtime_settings, lambda: self.realtime, lambda: self.ledger,
-                                       on_recompute=self.notify_price_change)
+                                       on_recompute=self.notify_price_change,
+                                       on_persisted=self.live_expert.wait_replay)
         from service.data_model import DataModelService
         self.data_model = DataModelService()
         self._bind_runtime_settings()
@@ -499,6 +503,7 @@ class AnalysisService:
         self.betting.bind(self.config.ledger_root)
         self.data_model.bind(self.config.ledger_root)
         self.live_expert.on_decision = self.ledger.record_live if self.ledger.enabled else None
+        self.live_expert.on_decisions = self.ledger.record_live_many if self.ledger.enabled else None
         self.live_expert.journal_root = self.config.ledger_root
         self.live_expert.update_evidence(self.ledger.performance_evidence())
         self.live_review.on_experiment = self.ledger.record_experiment if self.ledger.enabled else None
@@ -631,7 +636,7 @@ class AnalysisService:
         debounce = max(0.0, _to_float(self.config.change_debounce_s,
                                       DEFAULT_CHANGE_DEBOUNCE_S))
         if self._fast_live_enabled():
-            debounce = min(debounce, 0.15)
+            debounce = min(debounce, 0.02)
         due = time.time() + debounce
         queue_max = max(1, _to_int(self.config.change_queue_max,
                                    DEFAULT_CHANGE_QUEUE_MAX))
@@ -659,6 +664,9 @@ class AnalysisService:
         if self._sched_thread is not None and self._sched_thread.is_alive():
             return False
         self.live_expert.start(self.config.ledger_root)
+        if self.live_expert.calculation_pool and self._live_threads is None:
+            self._live_threads = ThreadPoolExecutor(
+                max_workers=len(self.live_expert.calculation_pool.slots), thread_name_prefix='live-dispatch')
         self.live_review.start()
         self.betting.start()
         self._sched_stop.clear()
@@ -673,6 +681,9 @@ class AnalysisService:
         t = self._sched_thread
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
+        if self._live_threads is not None:
+            self._live_threads.shutdown(wait=True, cancel_futures=True)
+            self._live_threads = None
         self.betting.stop()
         self.live_review.stop()
         self.live_expert.stop()
@@ -708,15 +719,23 @@ class AnalysisService:
         min_gap = max(0.0, _to_float(self.config.change_min_interval_s,
                                      DEFAULT_CHANGE_MIN_INTERVAL_S))
         if self._fast_live_enabled():
-            min_gap = min(min_gap, 0.05)
+            min_gap = 0.0
         now = time.time()
         with self._sched_lock:
             if not self._pending:
                 return None
+            pool = self.live_expert.calculation_pool
+            eligible = [at for mid, at in self._pending.items()
+                        if not pool or pool.shard(mid) not in self._live_inflight]
+            if not eligible:
+                # A pending match may belong only to an occupied shard while
+                # another shard is idle. Wait for completion instead of busy
+                # looping at zero timeout and starving the feed/API GIL.
+                return None
             last = _to_float(self._sched_stats.get("last_trigger_at"), 0.0)
             throttle = (last + min_gap) - now
-            earliest = min(self._pending.values()) - now
-        return max(earliest, throttle)
+            earliest = min(eligible) - now
+        return max(0.0, earliest, throttle)
 
     def _effective_batch(self) -> int:
         """本批该取多少场（自适应限流，HANDOVER §3.4）。
@@ -733,7 +752,8 @@ class AnalysisService:
             本批最多处理的场次数（>= 1）。
         """
         if self._fast_live_enabled():
-            return 64
+            pool = self.live_expert.calculation_pool
+            return len(pool.slots) if pool else 2
         base = max(1, _to_int(self.config.change_batch, DEFAULT_CHANGE_BATCH))
         if not self.config.adaptive_throttle:
             return base
@@ -775,11 +795,35 @@ class AnalysisService:
                 return
             # 最久等待的优先（它们变动最早，行情已稳定）
             due.sort(key=lambda m: self._pending[m])
-            picked = due[:batch_max]
+            pool = self.live_expert.calculation_pool
+            if pool:
+                # One job per owner keeps a busy match from blocking the other
+                # shard behind a same-shard lock in the dispatch thread pool.
+                shards: set[int] = set()
+                picked = []
+                for mid in due:
+                    shard = pool.shard(mid)
+                    if shard not in shards and shard not in self._live_inflight:
+                        picked.append(mid)
+                        shards.add(shard)
+            else:
+                picked = due[:batch_max]
+            if not picked:
+                return
             for m in picked:
                 self._pending.pop(m, None)
             self._sched_stats["last_trigger_at"] = now
             self._sched_stats["last_trigger_mids"] = list(picked)
+        if pool and self._live_threads:
+            # Each shard advances independently. Waiting for both futures in a
+            # batch left the faster process idle behind the slower match.
+            with self._sched_lock:
+                self._live_inflight.update(pool.shard(mid) for mid in picked)
+                self._sched_stats['batches'] += 1
+                self._sched_stats['triggered'] += len(picked)
+            for mid in picked:
+                self._live_threads.submit(self._complete_live_match, mid, pool.shard(mid))
+            return
         t0 = time.time()
         try:
             res = self.decide_matches(picked)
@@ -794,39 +838,54 @@ class AnalysisService:
             self.cycle_stats["last_error"] = "触发决策失败: %s: %s" % (
                 type(exc).__name__, exc)
 
+    def _complete_live_match(self, mid: str, shard: int) -> None:
+        started = time.monotonic()
+        try:
+            self._compute_live_match(mid)
+            self._observe_batch(1, time.monotonic()-started)
+        finally:
+            with self._sched_lock:
+                self._live_inflight.discard(shard)
+            self._sched_wake.set()
+
     def _fast_live_enabled(self) -> bool:
         return bool(self.config.fast_live and self.realtime is not None
                     and callable(getattr(self.realtime, "decision_snapshot", None)))
 
-    def _decide_live_matches(self, mids: Sequence[str]) -> Dict[str, Any]:
+    def _compute_live_match(self, mid: str) -> Dict[str, Any]:
         rt = self.realtime
         if rt is None:
-            return self.live_expert.results()
-        for mid in mids:
-            started = time.perf_counter()
-            with self._sched_lock:
-                first = self._pending_first.pop(mid, None)
-            snapshot = rt.decision_snapshot(mid)
-            try:
-                row = self.live_expert.compute(snapshot, rt, first)
-                if not row:
-                    self.notify_price_change([mid])
-                else:
-                    self.betting.enqueue(row)
-                    self.live_review.submit(row)
-            except (ValueError, TypeError, ArithmeticError) as exc:
-                self.live_expert.errors += 1
-                self.cycle_stats["last_error"] = "实时模型: %s" % exc
-            # Additional cores cannot parallelize this process's Python GIL.
-            # Give the quote receiver and durable writer time between matches;
-            # the scheduler already coalesces updates to each match's latest
-            # state, and every decision actually published remains archived.
-            if threading.current_thread() is self._sched_thread:
-                self._sched_stop.wait(min(0.05, time.perf_counter() - started))
-        result = self.live_expert.results()
+            return {}
+        with self._sched_lock:
+            first = self._pending_first.pop(mid, None)
+        snapshot = rt.decision_snapshot(mid)
+        try:
+            row = self.live_expert.compute(snapshot, rt, first)
+            if not row:
+                self.notify_price_change([mid])
+            else:
+                self.betting.enqueue(row)
+                self.live_review.submit(row)
+            return row
+        except (ValueError, TypeError, ArithmeticError) as exc:
+            self.live_expert.errors += 1
+            self.cycle_stats["last_error"] = "实时模型: %s" % exc
+            self.notify_price_change([mid])
+            return {}
+
+    def _decide_live_matches(self, mids: Sequence[str]) -> Dict[str, Any]:
+        if self._live_threads:
+            rows = list(self._live_threads.map(self._compute_live_match, mids))
+        else:
+            rows = [self._compute_live_match(mid) for mid in mids]
+        # The hot scheduler publishes each match directly. Building the complete
+        # UI board after every two matches needlessly scans thousands of quotes.
+        result = ({'count': len(mids), 'decisions': [row for row in rows if row]}
+                  if threading.current_thread() is self._sched_thread else self.live_expert.results())
         result["finished_at"] = datetime.now(timezone.utc).isoformat()
-        with self._lock:
-            self._latest = result
+        if threading.current_thread() is not self._sched_thread:
+            with self._lock:
+                self._latest = result
         return result
 
     def decide_matches(self, mids: Sequence[str]) -> Dict[str, Any]:
@@ -1036,7 +1095,8 @@ class AnalysisService:
         # Settle persisted terminal push evidence before any upstream work.
         local_used = self._merge_local_scores(scores, pending, confirmed=set())
         local_out = self.ledger.settle(scores) if scores else {'settled':0,'void':0,'scanned':0,'skipped':0}
-        self.live_expert.update_evidence(self.ledger.performance_evidence())
+        if local_out['settled'] or local_out['void']:
+            self.live_expert.update_evidence(self.ledger.performance_evidence())
         ordered = sorted(pending - set(scores))
         cursor = getattr(self, '_settle_cursor', 0) % max(1,len(ordered))
         batch = set((ordered+ordered)[cursor:cursor+min(60,len(ordered))])
@@ -1076,7 +1136,8 @@ class AnalysisService:
         out: Dict[str, Any] = dict(self.ledger.settle(scores))
         for key in ('settled','void','scanned','skipped'):
             out[key] += local_out[key]
-        self.live_expert.update_evidence(self.ledger.performance_evidence())
+        if out['settled'] or out['void']:
+            self.live_expert.update_evidence(self.ledger.performance_evidence())
         self.settle_stats.update(pending_matches=len(self.ledger.pending_match_ids()), scores_found=len(scores),
                                  source_batch=len(batch), evidence_missing=len(pending-set(scores)))
         out["closing_captured"] = closing
@@ -1573,8 +1634,14 @@ class AnalysisService:
         Args:
             max_age_s: 超过该年龄则返回 None（调用方可据此提示“数据较旧”）。
         """
-        with self._lock:
-            res = self._latest
+        res: Optional[Dict[str, Any]]
+        if self._fast_live_enabled() and self.live_expert.computations:
+            res = self.live_expert.results()
+            published = max((row.get('published_at_ms', 0) for row in res['decisions']), default=0)
+            res['finished_at'] = datetime.fromtimestamp(published/1000, timezone.utc).isoformat()
+        else:
+            with self._lock:
+                res = self._latest
         if res is None:
             return None
         if max_age_s is not None:

@@ -259,6 +259,7 @@ class ApiApp:
         #: 分析层（实时推送 + 决策引擎）。未注入时按需惰性构造，
         #: 避免每次测试构造 API 都去连上游。
         self._analysis = analysis
+        self._projection: Any = None
         self._response_cache: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
         from service.account_summary import AccountSummary
         self._account_summary = AccountSummary()
@@ -569,6 +570,15 @@ class ApiApp:
     # -- 决策与实时（T5/T7） ------------------------------------------------
 
     def h_workbench(self, query: Mapping[str, List[str]],
+                     body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        kind = _q1(query, "type", "real")
+        if kind not in ("real", "virtual", "unknown", "all"):
+            raise BadRequest("type 必须是 real/virtual/unknown/all")
+        if self._projection is not None:
+            return self._projection.read(kind, "workbench", {'matches': [], 'count': 0, 'coverage': {}, 'realtime': {}, 'performance': {}})
+        return self._build_workbench(query, body, *_a)
+
+    def _build_workbench(self, query: Mapping[str, List[str]],
                     body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
         kind = _q1(query, "type", "real")
         if kind not in ("real", "virtual", "unknown", "all"):
@@ -589,11 +599,11 @@ class ApiApp:
             persisted_recommendations = {}
         rows = []
         for row in result.pop("decisions"):
-            public = self._public_live_row(row, bool(realtime.get("connected")))
             # The list only renders the six supported football market families.
             # Hundreds of unvalued raw markets remain available in match detail.
-            public['markets'] = [m for m in public.get('markets') or []
-                                 if str(m.get('market', '')).split('_1H')[0] in ('HAD', 'AH', 'OU')]
+            list_row = {**row, 'markets': [m for m in row.get('markets') or []
+                if str(m.get('market', '')).split('_1H')[0] in ('HAD', 'AH', 'OU')]}
+            public = self._public_live_row(list_row, bool(realtime.get("connected")))
             persisted = persisted_recommendations.get(str(public.get('match_id', '')), [])
             if persisted:
                 existing_keys = {(str(p.get('market', '')), str(p.get('line', '')), str(p.get('outcome', '')))
@@ -716,12 +726,14 @@ class ApiApp:
     def _cached_response(self, kind: str, name: str, ttl_s: float) -> Optional[Dict[str, Any]]:
         value = self._response_cache.get((kind, name))
         if value and time.monotonic() - value[0] < ttl_s:
-            return copy.deepcopy(value[1])
+            # Background builders only read published containers; callers
+            # create their own pick/item dictionaries before enrichment.
+            return value[1] if self._projection is not None else copy.deepcopy(value[1])
         return None
 
     def _store_response(self, kind: str, name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._response_cache[(kind, name)] = (time.monotonic(), payload)
-        return copy.deepcopy(payload)
+        return payload if self._projection is not None else copy.deepcopy(payload)
 
     def h_workbench_detail(self, query: Mapping[str, List[str]],
                            body: Mapping[str, Any], match_id: str) -> Dict[str, Any]:
@@ -748,6 +760,15 @@ class ApiApp:
         return public
 
     def h_recommendations(self, query: Mapping[str, List[str]],
+                     body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        kind = _q1(query, "type", "real")
+        if kind not in ("real", "virtual", "unknown", "all"):
+            raise BadRequest("type 必须是 real/virtual/unknown/all")
+        if self._projection is not None:
+            return self._projection.read(kind, "recommendations", {'open': [], 'closed': [], 'summary': {}})
+        return self._build_recommendations(query, body, *_a)
+
+    def _build_recommendations(self, query: Mapping[str, List[str]],
                           body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
         """Return recommended quotes split by current market availability.
 
@@ -763,7 +784,7 @@ class ApiApp:
         cached = self._cached_response(kind, "recommendations", 3.0)
         if cached is not None:
             return cached
-        live = self.h_workbench({"type": [kind]}, {}, "")
+        live = self._build_workbench({"type": [kind]}, {}, "")
         live_rows = {str(row.get("match_id")): row for row in live.get("matches", [])}
         current: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
         for mid, row in live_rows.items():
@@ -1815,6 +1836,12 @@ def run_server(host: str = "0.0.0.0", port: int = 8000,
     hub = None
     if os.environ.get("REALTIME_DISABLED", "").strip() not in ("1", "true"):
         hub = _start_background(app.svc, app)
+    if os.environ.get('API_BACKGROUND_PROJECTION', '0').lower() in ('1', 'true'):
+        from service.response_projection import ResponseProjection
+        app._projection = ResponseProjection(lambda kind, name: getattr(app, '_build_'+name)({'type': [kind]}, {}))
+        app._projection.start()
+        app._projection.read('real', 'workbench', {})
+        app._projection.read('real', 'recommendations', {})
     srv = make_server(app, host, port)
     print("ai_football API 监听 http://%s:%d" % (host, port))
     previous_sigterm = None
@@ -1832,6 +1859,8 @@ def run_server(host: str = "0.0.0.0", port: int = 8000,
     finally:
         if previous_sigterm is not None:
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        if app._projection is not None:
+            app._projection.stop()
         ana = getattr(app, "_analysis", None)
         if ana is not None:
             ana.stop_cycle()

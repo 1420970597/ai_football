@@ -49,7 +49,7 @@ from typing import Any, Callable, Deque, Dict, List, Mapping, Optional, Sequence
 
 from .leyu_client import OV_SCALE
 from .leyu_ws import LEYUFeed
-from store.history import HistoryJournal
+from store.history import HistoryJournal, encode_checkpoint
 
 #: 实时表落盘节流（秒）。
 #:
@@ -266,6 +266,9 @@ class LiveQuote:
     #: 本机写入时刻（单调时钟不可回拨）；用于算“这个价多旧了”
     at: float = 0.0
     order_detail: Mapping[str, Any] = field(default_factory=dict)
+    # Actual observation time is separate from the upstream price timestamp.
+    # Persisted prices deliberately do not gain a new receive clock on resume.
+    received_at_ms: int = 0
 
     @property
     def age_s(self) -> float:
@@ -333,6 +336,7 @@ class LiveBook:
         if not ticks:
             return []
         now = time.monotonic()
+        received_ms = int(time.time() * 1000)
         accepted = []
         with self._lock:
             for t in ticks:
@@ -347,7 +351,7 @@ class LiveBook:
                 self._rows[key] = LiveQuote(
                     mid=t.mid, chpid=t.chpid, hv=t.hv, oid=t.oid, ot=t.ot,
                     odds=odds, ts_ms=_to_int(t.ts_ms, 0), at=now,
-                    order_detail=dict(t.order_detail))
+                    order_detail=dict(t.order_detail), received_at_ms=received_ms)
                 self._by_mid.setdefault(t.mid, {})[key] = None
                 self.updates += 1
                 accepted.append(t)
@@ -482,14 +486,15 @@ class LiveBook:
             "version": 1,
             "saved_at": datetime.now(timezone.utc).isoformat(),
             "rows": [[r.mid, r.chpid, r.hv, r.oid, r.ot,
-                      round(_to_float(r.odds, 0.0), 6), _to_int(r.ts_ms, 0), dict(r.order_detail)]
+                      round(r.odds, 6), r.ts_ms, dict(r.order_detail)]
                      for r in rows],
         }
         tmp = path.with_name(path.name + ".tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+            encoded = encode_checkpoint(payload)
+            with open(tmp, "wb") as fh:
+                fh.write(encoded)
             os.replace(tmp, path)          # 原子替换，避免读到半写文件
             self.last_save_at = now
             self.last_error = ""
