@@ -21,6 +21,7 @@ class BettingProtocolError(BettingBlocked):
 
 
 VENUE_BET_PATH = "/yewu13/v1/betOrder/client/bet"
+ENSEMBLE_ALGORITHM = "economic_ensemble"
 
 
 def _pick_value(source: Mapping[str, Any], *names: str) -> Any:
@@ -140,6 +141,12 @@ def plan_bet(pick: Mapping[str, Any], config: Any,
     """
     if not bool(getattr(config, "betting_enabled", False)):
         raise BettingBlocked("投注功能未启用")
+    # A provider order may only be produced from the persisted, aggregated
+    # recommendation.  Individual algorithm forecasts do not represent the
+    # portfolio decision and must never reach the order adapter.
+    algorithm = str(pick.get("algorithm") or "")
+    if algorithm != ENSEMBLE_ALGORITHM:
+        raise BettingBlocked("只允许经济学综合推荐进入投注流程")
     if not match_live:
         raise BettingBlocked("比赛不在进行中")
     if not market_open:

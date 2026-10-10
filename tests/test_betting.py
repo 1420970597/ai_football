@@ -10,7 +10,7 @@ class BettingTests(unittest.TestCase):
     def pick(self, **changes):
         value = {
             'match_id': 'm1', 'market': 'OU', 'line': '2.5', 'outcome': 'over',
-            'confidence': .8, 'hit_count': 4,
+            'confidence': .8, 'hit_count': 4, 'algorithm': 'economic_ensemble',
         }
         value.update(changes)
         return value
@@ -40,6 +40,24 @@ class BettingTests(unittest.TestCase):
         cfg = replace(RuntimeConfig(), betting_enabled=True)
         self.assertFalse(preview_bet(self.pick(), cfg, match_live=False)['allowed'])
         self.assertFalse(preview_bet(self.pick(), cfg, market_open=False)['allowed'])
+
+    def test_individual_algorithm_is_never_bet(self):
+        cfg = replace(RuntimeConfig(), betting_enabled=True, betting_fixed_stake=2)
+        result = preview_bet(self.pick(algorithm='poisson_market'), cfg)
+        self.assertFalse(result['allowed'])
+        self.assertIn('综合推荐', result['reason'])
+
+    def test_ensemble_fixed_two_yuan_draft(self):
+        cfg = replace(RuntimeConfig(), betting_enabled=True, betting_fixed_stake=2,
+                      betting_stake_mode='fixed', betting_min_hit_count=1)
+        result = draft_ybty_bet(self.pick(
+            matchId='5676526', marketId='144205358038450133', playId=1,
+            playOptions='1', playOptionsId='141234580127215829',
+            oddFinally='1.69'), cfg)
+        self.assertTrue(result['allowed'])
+        self.assertEqual(result['plan']['stake'], 2.0)
+        self.assertEqual(result['payload']['seriesOrders'][0]['orderDetailList'][0]['betAmount'], 2.0)
+        self.assertEqual(result['submission'], 'manual_only')
 
     def test_invalid_stake_mode_rejected_by_settings(self):
         with self.assertRaises(ValueError):
