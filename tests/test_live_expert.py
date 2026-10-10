@@ -31,6 +31,20 @@ class LiveExpertTests(unittest.TestCase):
                  for oc, odds in quotes]
         hub._record_ticks(ticks)
 
+    def test_training_history_excludes_data_first_seen_after_input_capture(self):
+        hub = self.hub()
+        svc = LiveExpertService()
+        snapshot = hub.decision_snapshot('m')
+        capture = snapshot['captured_at_ms']
+        # Older event timestamp, but first seen in a later computation: must not leak backward.
+        svc._training_series[('m','HAD','','home')] = __import__('collections').deque(
+            [(capture-10000,capture-9000,1.8),(capture-1000,capture+5000,1.4)],maxlen=40)
+        row = svc.compute(snapshot,hub)
+        home=next(c for c in row['evaluations'][0]['candidates'] if c['market']=='HAD' and c['outcome']=='home')
+        self.assertNotIn([capture-1000,1.4],home['training_history'])
+        self.assertIn([capture-10000,1.8],home['training_history'])
+        self.assertEqual(row['input_cutoff_ms'],capture)
+
     def test_memory_compute_without_disk_network_or_llm(self):
         hub = self.hub()
         svc = AnalysisService(MagicMock(), realtime=hub, config=AnalysisConfig(use_llm=False))

@@ -61,9 +61,15 @@ class RuntimeConfig:
     llm_max_tokens: int = 2048
     llm_interval_s: float = 60.0
     llm_review_max_age_s: float = 120.0
+    model_training_enabled: bool = True
+    model_training_matches: int = 100
+    model_training_cpu: int = 1
+    model_training_memory_mb: int = 512
 
 
 RANGES = {
+    "model_training_matches": (1, 100000), "model_training_cpu": (1, 2),
+    "model_training_memory_mb": (256, 4096),
     "weight_prior_matches": (2.0, 1000.0), "max_algorithm_weight": (0.2, 1.0),
     "min_probability": (0.0, 1.0), "min_ev": (0.0, 1.0),
     "quote_max_age_s": (1.0, 300.0), "state_max_age_s": (5.0, 600.0),
@@ -90,6 +96,8 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
         if key not in values:
             continue
         v = values[key]
+        if key.startswith("model_training_") and not isinstance(v, int):
+            raise ValueError(key + " 必须是整数")
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not lo <= v <= hi:
             raise ValueError("%s 必须在 %s~%s 之间" % (key, lo, hi))
         if key == "llm_max_tokens" and (not isinstance(v, int)):
@@ -97,7 +105,7 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
         if key == "betting_min_hit_count" and not isinstance(v, int):
             raise ValueError("betting_min_hit_count 必须是整数")
     for name in ("llm_enabled", "llm_experiment_enabled", "algorithm_alert_enabled",
-                 "betting_enabled"):
+                 "betting_enabled", "model_training_enabled"):
         if name in values and not isinstance(values[name], bool):
             raise ValueError(name + " 必须是布尔值")
     if "algorithms" in values:

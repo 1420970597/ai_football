@@ -474,11 +474,14 @@ class AnalysisService:
         self.live_review = LiveReview()
         from service.betting import BettingExecutor
         self.betting = BettingExecutor(self.runtime_settings, lambda: self.realtime, lambda: self.ledger)
+        from service.data_model import DataModelService
+        self.data_model = DataModelService()
         self._bind_runtime_settings()
 
     def _apply_runtime_settings(self, cfg: Any, version: int) -> None:
         self.live_expert.configure(cfg, version)
         self.live_review.configure(cfg, version)
+        self.data_model.configure(cfg)
         self.betting.configure()
         if cfg.betting_enabled:
             self.betting.start()
@@ -493,6 +496,7 @@ class AnalysisService:
     def _bind_runtime_settings(self) -> None:
         self.runtime_settings.bind(self.config.ledger_root)
         self.betting.bind(self.config.ledger_root)
+        self.data_model.bind(self.config.ledger_root)
         self.live_expert.on_decision = self.ledger.record_live if self.ledger.enabled else None
         self.live_expert.journal_root = self.config.ledger_root
         self.live_expert.update_evidence(self.ledger.performance_evidence())
@@ -649,6 +653,7 @@ class AnalysisService:
 
     def start_scheduler(self) -> bool:
         """启动变动触发式决策线程（幂等）。返回是否实际启动。"""
+        self.data_model.start()
         if not self.config.change_trigger:
             return False
         if self._sched_thread is not None and self._sched_thread.is_alive():
@@ -669,6 +674,7 @@ class AnalysisService:
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
         self.betting.stop()
+        self.data_model.stop()
         self.live_review.stop()
         self.live_expert.stop()
         self._flush_decision_history()
@@ -806,6 +812,7 @@ class AnalysisService:
                 if not row:
                     self.notify_price_change([mid])
                 else:
+                    self.data_model.observe(row)
                     self.live_review.submit(row)
                     self.betting.enqueue(row)
             except (ValueError, TypeError, ArithmeticError) as exc:

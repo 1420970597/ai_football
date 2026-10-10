@@ -278,6 +278,7 @@ class ApiApp:
         """把请求分发到处理函数，返回 (HTTP 状态码, 响应体)。"""
         routes: List[Tuple[str, str, Callable[..., Dict[str, Any]]]] = [
             ("GET", "/health", self.h_health),
+            ("GET", "/data-model", self.h_data_model),
             ("GET", "/matches", self.h_matches),
             ("GET", "/matches/<id>", self.h_match_detail),
             ("GET", "/odds/<id>", self.h_odds),
@@ -797,6 +798,10 @@ class ApiApp:
                    "source_age_s": live.get("coverage", {}).get("source_age_s"),
                    "generated_at": datetime.now(timezone.utc).isoformat()}
         return self._store_response(kind, "recommendations", payload)
+
+    def h_data_model(self, query: Mapping[str, List[str]],
+                     body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        return self.analysis.data_model.status()
 
     def h_settings(self, query: Mapping[str, List[str]],
                    body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
