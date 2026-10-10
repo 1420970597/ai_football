@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import json
+import copy
 import math
 import re
 import threading
 import time
 from collections import OrderedDict
+from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from service.llm import LLMClient, LLMConfig, LLMError, extract_json
 from service.runtime_settings import RuntimeConfig
+from store.history import HistoryJournal
 
 MAX_QUEUE = 64
 MAX_REVIEWS = 256
@@ -33,6 +37,25 @@ class LiveReview:
         self.discarded = 0
         self.on_experiment: Optional[Callable[[Mapping[str, Any], Mapping[str, Any]], int]] = None
         self.record_error = ""
+        self.history: Optional[HistoryJournal] = None
+        self._history_pending: list[Mapping[str, Any]] = []
+        self._history_lock = threading.RLock()
+
+    def bind_history(self, root: Optional[str]) -> None:
+        with self._history_lock:
+            path = Path(root) / 'llm-reviews.jsonl.gz' if root else None
+            if path and (self.history is None or self.history.path != path):
+                self.history = HistoryJournal(path)
+
+    def flush_history(self) -> None:
+        with self._history_lock:
+            if self.history is None:
+                return
+            try:
+                self.history.append(self._history_pending)
+                self._history_pending.clear()
+            except (OSError, ValueError, TypeError):
+                pass  # Error is visible through history.health(); retry retains the batch.
 
     def configure(self, cfg: RuntimeConfig, version: int) -> None:
         client = None
@@ -61,6 +84,7 @@ class LiveReview:
         self._wake.set()
         if self._thread:
             self._thread.join(1)
+        self.flush_history()
 
     def submit(self, row: Mapping[str, Any]) -> None:
         mid = str(row["match_id"])
@@ -83,8 +107,15 @@ class LiveReview:
             self._wake.clear()
             while not self._stop.is_set() and self.process_one():
                 continue
+            self.flush_history()
 
     def _record(self, row: Mapping[str, Any], review: Mapping[str, Any]) -> None:
+        with self._history_lock:
+            if self.history is not None:
+                self._history_pending.append(copy.deepcopy({
+                    'at': datetime.now(timezone.utc).isoformat(), 'schema_version': 1,
+                    'decision': row, 'review': review}))
+                self.flush_history()
         if self.on_experiment and self._config.llm_experiment_enabled:
             try:
                 self.on_experiment(row,review)
@@ -168,4 +199,6 @@ class LiveReview:
             return {"enabled": self._config.llm_enabled, "pending": len(self._queue),
                     "completed": self.completed, "errors": self.errors, "discarded": self.discarded,
                     "experiment_enabled": self._config.llm_experiment_enabled,
+                    "history": {**(self.history.health() if self.history else {}),
+                                'pending': len(self._history_pending)},
                     "record_error": self.record_error, "client": client_health}

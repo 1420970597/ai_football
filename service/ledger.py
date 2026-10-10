@@ -66,10 +66,6 @@ __all__ = ["LedgerEntry", "DecisionLedger"]
 #: 台账文件名
 LEDGER_FILE = "ledger.jsonl"
 
-#: 单文件上限（MB）。超过后轮转为 `ledger.<时间戳>.jsonl`，
-#: 避免一个文件无限增长导致统计时全量读入内存。
-MAX_FILE_MB = 64.0
-
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -254,7 +250,7 @@ class DecisionLedger:
         if self._db is None:
             self._db = LedgerDB(Path(':memory:'))
 
-    # -- 路径与轮转 ------------------------------------------------------
+    # -- 永久追加存储 ----------------------------------------------------
 
     @property
     def enabled(self) -> bool:
@@ -264,35 +260,32 @@ class DecisionLedger:
     def path(self) -> Optional[Path]:
         return (self.root / LEDGER_FILE) if self.root else None
 
-    def _rotate_if_needed(self, path: Path) -> None:
-        """文件超过上限则改名归档（调用方持锁）。"""
-        try:
-            if not path.exists():
-                return
-            if path.stat().st_size < MAX_FILE_MB * 1024 * 1024:
-                return
-            stamp = _now().strftime("%Y%m%d-%H%M%S")
-            path.rename(path.with_name("ledger.%s.jsonl" % stamp))
-        except OSError as exc:
-            self.last_error = "台账轮转失败: %s" % exc
-
     def _append(self, rows: Sequence[LedgerEntry]) -> int:
         path = self.path
         if path is None or not rows:
             return 0
         with self._lock:
             self._sync_db()
-            self._rotate_if_needed(path)
             try:
-                with open(path, "a", encoding="utf-8") as fh:
-                    for r in rows:
-                        fh.write(json.dumps(r.as_dict(), ensure_ascii=False))
-                        fh.write("\n")
+                payload = ''.join(json.dumps(r.as_dict(), ensure_ascii=False, allow_nan=False) + '\n'
+                                  for r in rows).encode('utf-8')
+                with open(path, "a+b", buffering=0) as fh:
+                    offset = fh.tell()
+                    try:
+                        if fh.write(payload) != len(payload):
+                            raise OSError('incomplete ledger write')
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    except OSError:
+                        fh.seek(offset)
+                        fh.truncate()
+                        raise
                 if self._db:
                     with self._db.connection:
                         self._db.put([LedgerEntry.from_dict(r.as_dict()).as_dict() for r in rows], _epoch)
                         self._mark_import(path)
                 self._loaded_stamp = ()
+                self.last_error = ''
                 return len(rows)
             except (OSError, TypeError, ValueError) as exc:
                 self.last_error = "台账写入失败: %s" % exc
@@ -694,31 +687,6 @@ class DecisionLedger:
             return None
         return v if math.isfinite(v) and v > 1.0 else None
 
-    def _rewrite(self, rows: Sequence[LedgerEntry]) -> None:
-        """原子重写台账（临时文件 + rename）。"""
-        path = self.path
-        if path is None:
-            return
-        with self._lock:
-            # 用 with_name 而不是 with_suffix：文件名是 `ledger.jsonl`，
-            # with_suffix(".tmp") 会把它改成 `ledger.tmp`（丢掉 .jsonl），
-            # 虽然此处可用，但语义不对且容易被后续改动误伤。
-            tmp = path.with_name(path.name + ".tmp")
-            try:
-                with open(tmp, "w", encoding="utf-8") as fh:
-                    for r in rows:
-                        fh.write(json.dumps(r.as_dict(), ensure_ascii=False))
-                        fh.write("\n")
-                os.replace(tmp, path)
-                if self._db:
-                    with self._db.connection:
-                        self._db.connection.execute('DELETE FROM decisions')
-                        self._db.put([LedgerEntry.from_dict(r.as_dict()).as_dict() for r in rows], _epoch)
-                        self._mark_import(path)
-                self._loaded_stamp = ()
-            except (OSError, TypeError, ValueError) as exc:
-                self.last_error = "台账重写失败: %s" % exc
-
     # -- 统计 ------------------------------------------------------------
 
     def stats(self, only_picks: bool = True,
@@ -1037,6 +1005,7 @@ class DecisionLedger:
                 size = 0
         return {
             "enabled": self.enabled,
+            "retention": "permanent",
             "storage": "sqlite-wal",
             "database": str(self._db.path) if self._db else "",
             "path": str(path) if path else "",

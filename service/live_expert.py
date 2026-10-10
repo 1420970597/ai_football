@@ -5,12 +5,13 @@ from a market-fit baseline are explicitly observational until out-of-sample proo
 """
 from __future__ import annotations
 
-import json
+import copy
 import math
 import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -25,13 +26,12 @@ from core.economics import fractional_kelly, q_fill_model, shrink_probabilities
 from core.devig import devig as devig_snapshot
 from core.models import OddsSnapshot, SnapshotState, DevigMethod
 from service.runtime_settings import RuntimeConfig
+from store.history import HistoryJournal
 
 QUOTE_MAX_AGE_S = 15.0
 STATE_MAX_AGE_S = 90.0
 ANCHOR_MAX_AGE_S = 120.0
-JOURNAL_INTERVAL_S = 15.0
 MAX_RESULTS = 256
-MAX_JOURNAL_MB = 32
 CHPID = {'1': ('HAD', False), '2': ('OU', False), '4': ('AH', False),
          '17': ('HAD', True), '18': ('OU', True), '19': ('AH', True)}
 OUTCOMES = {'1': 'home', '2': 'away', 'X': 'draw', 'x': 'draw', 'Over': 'over', 'over': 'over',
@@ -60,8 +60,9 @@ class LiveExpertService:
         self._compute_ms: deque = deque(maxlen=2048)
         self._latency_ms: deque = deque(maxlen=2048)
         self._by_type: Dict[str, deque] = {}
-        self._journal: deque = deque(maxlen=512)
-        self._journal_at: Dict[str, float] = {}
+        self._journal: deque = deque()
+        self._journal_flush_lock = threading.Lock()
+        self._history: Optional[HistoryJournal] = None
         self._stop = threading.Event()
         self._writer: Optional[threading.Thread] = None
         self.journal_root: Optional[str] = None
@@ -103,6 +104,7 @@ class LiveExpertService:
         self._stop.set()
         if self._writer:
             self._writer.join(3)
+        self.flush()
 
     def _write_loop(self) -> None:
         while not self._stop.wait(1):
@@ -113,25 +115,24 @@ class LiveExpertService:
         self.flush_decisions()
         if not self.journal_root:
             return 0
-        with self._lock:
-            rows = list(self._journal)
-            self._journal.clear()
-        if not rows:
-            return 0
-        try:
-            path = Path(self.journal_root) / 'live-replay.jsonl'
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists() and path.stat().st_size > MAX_JOURNAL_MB * 1024 * 1024:
-                path.rename(path.with_name('live-replay.%d.jsonl' % time.time_ns()))
-            with path.open('a', encoding='utf-8') as f:
-                for row in rows:
-                    f.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + '\n')
-            self.journal_error = ''
-            return len(rows)
-        except (OSError, ValueError) as exc:
-            self.journal_error = '%s: %s' % (type(exc).__name__, exc)
-            self.journal_dropped += len(rows)
-            return 0
+        with self._journal_flush_lock:
+            with self._lock:
+                rows = list(self._journal)
+            if not rows:
+                return 0
+            try:
+                path = Path(self.journal_root) / 'live-replay.jsonl.gz'
+                if self._history is None or self._history.path != path:
+                    self._history = HistoryJournal(path)
+                n = self._history.append(rows)
+                with self._lock:
+                    for _ in range(n):
+                        self._journal.popleft()
+                self.journal_error = ''
+                return n
+            except (OSError, ValueError, TypeError) as exc:
+                self.journal_error = '%s: %s，记录保留待重试' % (type(exc).__name__, exc)
+                return 0
 
     def flush_decisions(self) -> int:
         if not self.on_decision:
@@ -160,6 +161,9 @@ class LiveExpertService:
         started = time.perf_counter()
         with self._compute_lock:
             result = self._calculate(snapshot)
+            frozen_config = asdict(self.config)
+            frozen_config.pop('llm_api_key')
+            frozen_anchor = dict(self._anchors.get(str(snapshot['match_id']), {}))
         elapsed = (time.perf_counter() - started) * 1000
         result['compute_ms'] = round(elapsed, 3)
         mid = str(snapshot['match_id'])
@@ -194,28 +198,18 @@ class LiveExpertService:
                 oldest = min(self._results, key=lambda k: self._results[k]['published_at_ms'])
                 self._results.pop(oldest, None)
                 self._anchors.pop(oldest, None)
-                self._journal_at.pop(oldest, None)
                 for series_key in list(self._series):
                     if series_key[0] == oldest:
                         self._series.pop(series_key, None)
-            if now - self._journal_at.get(mid, 0) >= JOURNAL_INTERVAL_S:
-                if len(self._journal) == self._journal.maxlen:
-                    self.journal_dropped += 1
-                self._journal.append({
-                    'at': result['computed_at'], 'match_id': mid,
-                    'competition_type': result['competition_type'], 'model_version': MODEL_VERSION,
-                    'version': result['version'], 'score': result['score'],
-                    'elapsed_s': result['elapsed_s'], 'phase': result['phase'],
-                    'reasons': result['reasons'], 'candidates': result['candidates'],
-                    'probabilities': result['probabilities'], 'quote_time_ms': result['quote_time_ms'],
-                    'schema_version': 1, 'remaining_goals': result['remaining_goals'],
-                    'markets': result['markets'], 'events': result['events'],
+            # Every published computation with configured storage is a training record, including
+            # observe/reject states and every algorithm's full candidate set.
+            if self.journal_root:
+                self._journal.append(copy.deepcopy({**result, 'at': result['computed_at'], 'schema_version': 2,
+                    'config': frozen_config, 'anchor': frozen_anchor,
                     'input_state': {k: snapshot.get(k) for k in
-                                    ('info', 'status', 'score_age_s', 'status_age_s',
-                                     'finished', 'suspended', 'suspended_ids')},
-                    'anchor': dict(self._anchors.get(mid, {})),
-                })
-                self._journal_at[mid] = now
+                        ('info', 'status', 'score_age_s', 'status_age_s', 'half_score',
+                         'finished', 'suspended', 'suspended_ids', 'received_at_ms', 'captured_at_ms')},
+                    'input_events': list(snapshot.get('events') or [])}))
         return result
 
     def _calculate(self, snapshot: Mapping[str, Any]) -> Dict[str, Any]:
@@ -291,6 +285,7 @@ class LiveExpertService:
                                            home=info.get('home') or '', away=info.get('away') or ''))
                 probability = fair[i]
                 quotes.append({'outcome': oc, 'label': label, 'odds': q.odds,
+                               'order_detail': {**getattr(q, 'order_detail', {}), 'oddFinally': str(q.odds)},
                                'p_market': round(probability, 6) if probability is not None else None,
                                'trend_pct': round(drift, 3), 'ts_ms': q.ts_ms})
             markets.append({'market': group['market'], 'line': group['line'],
@@ -564,6 +559,7 @@ class LiveExpertService:
                                                  for k, v in self._by_type.items()},
                     'superseded': self.superseded, 'errors': self.errors, 'journal_dropped': self.journal_dropped,
                     'journal_error': self.journal_error, 'journal_pending': len(self._journal),
+                    'history_retention': 'permanent', 'history_sampling': 'every_published_decision',
                     'record_error': self.record_error, 'decisions_pending': len(self._decisions),
                     'config_version': self.config_version,
                     'model_version': MODEL_VERSION, 'validation_status': 'research'}

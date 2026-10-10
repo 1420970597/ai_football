@@ -15,6 +15,47 @@ from tests import test_live_expert
 
 
 class RuntimeSettingsTests(unittest.TestCase):
+    def test_restored_enabled_flag_preserves_opt_in(self):
+        with tempfile.TemporaryDirectory() as root:
+            settings = RuntimeSettings()
+            settings.bind(root + '/ledger')
+            settings.path.write_text(json.dumps({
+                'version': 7, 'settings': {'betting_enabled': True},
+            }), encoding='utf-8')
+            restored = RuntimeSettings()
+            restored.bind(root + '/ledger')
+            status = restored.public()
+            self.assertEqual(status['version'], 7)
+            self.assertTrue(status['settings']['betting_enabled'])
+            self.assertTrue(status['capabilities']['betting']['configured_enabled'])
+            self.assertTrue(status['capabilities']['betting']['execution_enabled'])
+            self.assertTrue(status['capabilities']['betting']['execution_supported'])
+            self.assertIn('自动提交', status['capabilities']['betting']['reason'])
+
+    def test_api_switch_updates_gate_and_reports_runtime_readiness(self):
+        with tempfile.TemporaryDirectory() as root:
+            svc = AnalysisService(MagicMock(), config=AnalysisConfig(
+                use_llm=False, ledger_root=root + '/ledger'))
+            app = ApiApp(MagicMock(), analysis=svc)
+            code, out = app.dispatch('GET', '/api/v1/settings', {}, {})
+            self.assertEqual(code, 200)
+            self.assertTrue(out['capabilities']['betting']['execution_supported'])
+            code, saved = app.dispatch('POST', '/api/v1/settings', {}, {
+                'version': 1, 'settings': {'betting_enabled': True, 'min_ev': .1},
+            })
+            self.assertEqual(code, 200)
+            self.assertEqual(saved['version'], 2)
+            self.assertTrue(saved['settings']['betting_enabled'])
+            self.assertTrue(saved['capabilities']['betting']['configured_enabled'])
+            self.assertTrue(saved['capabilities']['betting']['execution_enabled'])
+            self.assertTrue(saved['capabilities']['betting']['running'])
+            code, off = app.dispatch('POST', '/api/v1/settings', {}, {
+                'version': 2, 'settings': {'betting_enabled': False},
+            })
+            self.assertEqual(code, 200)
+            self.assertFalse(off['capabilities']['betting']['execution_enabled'])
+            self.assertFalse(off['capabilities']['betting']['configured_enabled'])
+
     def test_atomic_validation_secret_persistence_and_restore(self):
         with tempfile.TemporaryDirectory() as root:
             settings = RuntimeSettings()

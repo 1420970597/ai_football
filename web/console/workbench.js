@@ -1,7 +1,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const S = {view: 'live', type: 'real', league: '', search: '', matches: [], selected: null,
-  request: 0, detailRequest: 0, historyRequest: 0, recommendationsRequest: 0, historyOffset: 0, historyNext: null, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false, accountBusy: false, accountAt: 0};
+  request: 0, detailRequest: 0, historyRequest: 0, recommendationsRequest: 0, historyOffset: 0, historyNext: null, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false, accountBusy: false, accountAt: 0, betStatusUnsupported: false};
 const API = '/api/v1';
 const POLL_MS = 5000;
 const algorithmLabel = a => ({economic_ensemble:'经济学汇总', economics_control:'纯经济学', economics_llm:'经济学 + LLM', poisson_market: '盘口 Poisson', poisson_time_decay: '衰减 Poisson',
@@ -27,8 +27,25 @@ function notice(id, message = '', error = false) {
 }
 async function get(path) {
   const response = await fetch(API + path, {signal: AbortSignal.timeout(8000), cache: 'no-store'});
-  if (!response.ok) throw new Error('读取失败（' + response.status + '）');
+  if (!response.ok) {
+    const error = new Error('读取失败（' + response.status + '）');
+    error.status = response.status;
+    throw error;
+  }
   return response.json();
+}
+function accountPnl(data) {
+  const pnl = data?.today_pnl;
+  const available = pnl?.available === true && typeof pnl.amount === 'number' && Number.isFinite(pnl.amount);
+  const amount = available ? pnl.amount : null;
+  const value = available ? (amount > 0 ? '+' : '') + fixed(amount) : '—';
+  const basis = '北京时间 · 按结算时间统计 · 不含未结算订单';
+  const note = available ? `${pnl.date} · 今日已结 ${pnl.settled_count} 笔` : (pnl?.reason || '今日结算盈亏暂不可用');
+  return {value, note, basis, className:'account-pnl' + (amount > 0 ? ' positive' : amount < 0 ? ' negative' : '')};
+}
+function accountPnlNode(data) {
+  const pnl = accountPnl(data);
+  return el('span', {class:pnl.className, text:'今日盈亏 ' + pnl.value, title:pnl.note + ' · ' + pnl.basis});
 }
 function renderAccount(data) {
   const node = $('account-summary');
@@ -45,8 +62,9 @@ function renderAccount(data) {
   const pendingAmount = data.unsettled?.amount == null ? '' : ' · ' + fixed(data.unsettled.amount);
   const pending = pendingCount + pendingAmount;
   const settled = data.settled?.count == null ? '—' : String(data.settled.count);
-  node.replaceChildren(...[['体育余额', balance], ['未结', pending], ['已结', settled]].map(([label, value]) =>
-    el('span', {text: label + ' ' + value})));
+  node.replaceChildren(el('span', {class:'account-balance', text:'体育余额 ' + balance}), accountPnlNode(data),
+    ...[['未结', pending], ['已结', settled]].map(([label, value]) =>
+      el('span', {class:'account-record-stats', text: label + ' ' + value})));
   node.title = data.error || ('中心钱包 ' + (data.center_balance == null ? '—' : fixed(data.center_balance)) + ' · 乐鱼体育场馆 YBTY');
   renderAccountDetails(data);
 }
@@ -59,6 +77,7 @@ function renderAccountDetails(data) {
   }
   const summary = el('div', {class:'account-detail-stats'}, [
     el('span', {text:'体育余额 ' + fixed(data.sports_balance ?? data.balance)}),
+    accountPnlNode(data),
     el('span', {text:'未结 ' + String(data.unsettled?.count ?? '—') + ' · ' + fixed(data.unsettled?.amount)}),
     el('span', {text:'已结 ' + String(data.settled?.count ?? '—') + ' · ' + fixed(data.settled?.amount)})
   ]);
@@ -71,7 +90,8 @@ function renderAccountDetails(data) {
     ])) : [el('span', {class:'account-muted', text:'暂无记录'})];
     return el('section', {class:'account-orders'}, [el('h4', {text:title}), ...rows]);
   });
-  root.replaceChildren(summary, ...sections);
+  const pnl = accountPnl(data);
+  root.replaceChildren(summary, el('p', {class:'account-muted account-pnl-note', text:pnl.note + ' · ' + pnl.basis}), ...sections);
 }
 async function loadAccount() {
   const now = Date.now();
@@ -532,10 +552,10 @@ const SETTING_FIELDS = [
     ['algorithm_alert_enabled', '低正确率预警', 'checkbox'],
     ['algorithm_alert_min_samples', '预警最小有效样本', 'number', [1,100000,1]],
     ['algorithm_alert_threshold', '预警正确率阈值', 'number', [0,1,.01]],
-    ['betting_enabled', '投注功能（默认关闭）', 'checkbox'],
-    ['betting_stake_mode', '单次额度模式', 'select', {fixed: '固定值', confidence_multiplier: '综合置信度 × 固定值'}],
-    ['betting_fixed_stake', '单次固定额度 / CNY', 'number', [.01,100000,.01]],
-    ['betting_min_hit_count', '允许投注的最小盘口命中次数', 'number', [1,100000,1]],
+    ['betting_enabled', '自动真实投注', 'checkbox'],
+    ['betting_stake_mode', '投注额度模式', 'select', {fixed: '固定值', confidence_multiplier: '综合置信度 × 固定值'}],
+    ['betting_fixed_stake', '固定投注额度 / CNY', 'number', [.01,100000,.01]],
+    ['betting_min_hit_count', '最小历史盘口命中次数', 'number', [1,100000,1]],
     ['max_total_exposure', '同场最大敞口', 'number', [0,1,.01]],
     ['risk_correlation', '同场风险相关性', 'number', [0,.99,.01]],
     ['execution_cost', '执行成本', 'number', [0,.1,.001]],
@@ -558,10 +578,21 @@ const SETTING_FIELDS = [
     ['llm_review_max_age_s', '审核输入有效期 / 秒', 'number', [30,600,1]],
   ]],
 ];
+function renderBettingStatus(betting) {
+  const statusLabels = {accepted:'已接受',pending:'等待场馆确认',rejected:'场馆拒单',unknown:'提交结果未知',blocked:'未提交',duplicate:'重复推荐已跳过'};
+  const last = betting?.last_result;
+  const order = last?.status ? last : betting?.orders?.[0];
+  notice('betting-capability-notice', '真实投注：' + (betting?.reason || '无法读取投注执行状态，请重新读取设置。') +
+    (order?.status ? '；最近执行：' + (statusLabels[order.status] || order.status) +
+      (order.order_no ? ' · 注单 ' + order.order_no : '') + (order.reason ? ' · ' + order.reason : '') : '') +
+    '。仅对满足命中次数、最新盘口、限额与余额条件的综合推荐下单；已发出的订单不会因关闭而撤销。');
+}
 function renderSettings(data) {
   S.settingsVersion = data.version;
   $('settings-version').textContent = 'v' + data.version + ' · ' + (data.persistent ? '已持久保存' : '内存配置');
   const cfg = data.settings;
+  const betting = data.capabilities?.betting;
+  renderBettingStatus(betting);
   const alerts = (data.algorithm_alerts || []).filter(a => a.status === 'warning');
   notice('settings-notice', alerts.length ? alerts.map(a => a.message).join('；') : data.restore_error || '', !!alerts.length);
   const sections = SETTING_FIELDS.map(([title,fields], index) => {
@@ -591,6 +622,10 @@ function renderSettings(data) {
         } else input.value = cfg[key];
         if (type === 'number') {input.min=options[0]; input.max=options[1]; input.step=options[2];}
       }
+      if (key === 'betting_enabled') {
+        input.disabled = betting?.execution_supported !== true;
+        input.setAttribute('aria-describedby', 'betting-capability-notice');
+      }
       section.appendChild(el('label', {class: type === 'checkbox' ? 'setting-toggle' : 'setting-field'}, [el('span', {text: label}), input]));
     }
     if (index === 2) section.appendChild(el('label', {class: 'setting-toggle'}, [
@@ -614,6 +649,7 @@ async function saveSettings(event) {
   const settings = {algorithms: Array.from(document.querySelectorAll('input[name="algorithm"]:checked')).map(n => n.value)};
   for (const [,fields] of SETTING_FIELDS) for (const [key,,type] of fields) {
     const input = $('setting-' + key);
+    if (input.disabled) continue;
     if (type === 'password') {if (input.value) settings[key] = input.value;}
     else settings[key] = type === 'checkbox' ? input.checked : type === 'number' ? Number(input.value) : input.value;
   }
@@ -629,6 +665,25 @@ async function saveSettings(event) {
     notice('settings-notice', 'v' + data.version + ' 已生效');
   } catch (error) {notice('settings-notice', error.message, true);}
   finally {S.settingsBusy = false; $('settings-save').disabled = false;}
+}
+async function loadBettingStatus() {
+  if (S.betStatusUnsupported) return;
+  try {
+    renderBettingStatus(await get('/bet/status'));
+  } catch (error) {
+    if (error.status === 404) {
+      // Older API containers expose the same capability data through /settings.
+      S.betStatusUnsupported = true;
+      try {
+        const settings = await get('/settings');
+        renderBettingStatus(settings.capabilities?.betting);
+        return;
+      } catch (fallbackError) {
+        error = fallbackError;
+      }
+    }
+    notice('betting-capability-notice', '无法读取投注执行状态：' + error.message, true);
+  }
 }
 $('settings-form').addEventListener('submit', saveSettings);
 $('settings-reload').addEventListener('click', loadSettings);
@@ -666,6 +721,9 @@ async function poll() {
   loadAccount();
   if (S.view === 'recommendations') await loadRecommendations();
   else if (S.view === 'live') await loadLive();
+  else if (S.view === 'settings') {
+    await loadBettingStatus();
+  }
   S.timer = setTimeout(poll, POLL_MS);
 }
 $('nav-recommendations').addEventListener('click', () => switchView('recommendations'));

@@ -38,6 +38,8 @@ import math
 import os
 import copy
 import time
+import signal
+import threading
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -302,6 +304,7 @@ class ApiApp:
             ("GET", "/account", self.h_account),
             ("POST", "/bet/preview", self.h_bet_preview),
             ("POST", "/bet/draft", self.h_bet_draft),
+            ("GET", "/bet/status", self.h_bet_status),
             ("GET", "/llm", self.h_llm),
             ("GET", "/settings", self.h_settings),
             ("POST", "/settings", self.h_settings_save),
@@ -686,11 +689,8 @@ class ApiApp:
                 pick.update({'hit_count': evidence['hit_count'], 'miss_count': evidence['miss_count'],
                              'pending_count': evidence['pending_count'], 'settled_samples': evidence['settled_samples'],
                              'historical_accuracy': evidence['accuracy']})
-                sample = float(evidence['settled_samples'] or 0)
-                observed = (float(evidence['hit_count']) + 1.0) / (sample + 2.0)
-                base = float(pick.get('confidence') or pick.get('p_model') or 0.0)
-                freshness = 0.75 if row.get('stale') else 1.0
-                pick['composite_confidence'] = round(base * (0.5 + 0.5 * observed) * freshness, 6)
+                from service.betting import recommendation_confidence
+                pick['composite_confidence'] = recommendation_confidence(pick, evidence, stale=bool(row.get('stale')))
                 if best is None or pick['composite_confidence'] > best['composite_confidence']:
                     best = pick
             if best is not None:
@@ -800,13 +800,17 @@ class ApiApp:
 
     def h_settings(self, query: Mapping[str, List[str]],
                    body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
-        out = {**self.analysis.runtime_settings.public(), "llm_review": self.analysis.live_review.health()}
+        out = {**self.analysis.settings_status(), "llm_review": self.analysis.live_review.health()}
         from core.ensemble import algorithm_alerts
         cfg = self.analysis.runtime_settings.config
         out["algorithm_alerts"] = algorithm_alerts(cfg.algorithms, self.analysis.ledger.performance_evidence(),
                                                      cfg.algorithm_alert_min_samples, cfg.algorithm_alert_threshold,
                                                      cfg.algorithm_alert_enabled)
         return out
+
+    def h_bet_status(self, query: Mapping[str, List[str]],
+                     body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        return self.analysis.betting.health()
 
     def h_account(self, query: Mapping[str, List[str]],
                   body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
@@ -1791,19 +1795,32 @@ def run_server(host: str = "0.0.0.0", port: int = 8000,
         hub = _start_background(app.svc, app)
     srv = make_server(app, host, port)
     print("ai_football API 监听 http://%s:%d" % (host, port))
+    previous_sigterm = None
+    if threading.current_thread() is threading.main_thread():
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+        def stop_on_sigterm(signum: int, frame: Any) -> None:
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, stop_on_sigterm)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
         ana = getattr(app, "_analysis", None)
         if ana is not None:
-            ana.stop_scheduler()
             ana.stop_cycle()
             ana.stop_settler()
         if hub is not None:
             hub.stop()
+        if ana is not None:
+            ana.stop_scheduler()
         srv.server_close()
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == "__main__":  # pragma: no cover

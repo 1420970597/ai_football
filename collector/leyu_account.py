@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Read-only account summary from the official sports App API.
+"""Account telemetry and explicit YBTY single-order transport.
 
 The centre wallet exposes ``venue/getBalance`` and ``allBalance``.  Sports
 orders themselves live behind the YBTY business gateway opened by
@@ -14,16 +14,19 @@ from __future__ import annotations
 
 import json
 import gzip
+import math
+import http.client
 import ssl
 import time
 import urllib.error
 import urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .leyu_app_login import AppLoginSessionProvider, login_provider_from_env
 from .leyu_app_session import AppSessionBootstrapper, bootstrapper_from_env
-from .leyu_client import decode_envelope
+from .leyu_client import DEFAULT_LANG, SUCCESS_CODES, OV_SCALE, decode_envelope
 from .session import SessionError
 
 BALANCE_PATH = "/game/api/v1/venue/getBalance"
@@ -37,6 +40,36 @@ BET_TOTAL_PATH = "/game/api/v1/record/betRecordTotal"
 VENUE_AMOUNT_PATH = "/yewu12/api/user/amount"
 VENUE_ORDER_PATH = "/yewu13/v1/betOrder/client/getOrderListV4PB"
 VENUE_PREBET_ORDER_PATH = "/yewurecord/v1/betOrder/client/getH5PreBetOrderList"
+VENUE_LATEST_MARKET_PATH = "/yewu13/v1/betOrder/client/queryLatestMarketInfo"
+VENUE_LIMIT_PATH = "/yewu13/v1/betOrder/client/queryMarketMaxMinBetMoney"
+VENUE_BET_PATH = "/yewu13/v1/betOrder/client/bet"
+ACCOUNT_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+ACCOUNT_ORDER_PAGE_SIZE = 100
+ACCOUNT_PNL_MAX_PAGES = 20
+
+
+class BetSubmissionUnknown(SessionError):
+    """A write may have reached the provider. Never replay it automatically."""
+
+
+class BetSubmissionRejected(SessionError):
+    """The provider explicitly rejected a submitted order."""
+
+
+def _bet_number(value: Any, label: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise SessionError("场馆未返回有效的" + label) from exc
+    if isinstance(value, bool) or not math.isfinite(number):
+        raise SessionError("场馆未返回有效的" + label)
+    return number
+
+
+def _bet_rows(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list) or not all(isinstance(row, Mapping) for row in value):
+        raise SessionError("投注前置接口响应结构异常")
+    return value
 
 
 def _walk(value: Any) -> Sequence[Any]:
@@ -179,9 +212,83 @@ def _first_value(row: Mapping[str, Any], names: Sequence[str]) -> Any:
 
 def _as_optional_float(value: Any) -> Optional[float]:
     try:
-        return None if value is None or value == "" else float(value)
-    except (TypeError, ValueError):
+        number = None if value is None or value == "" or isinstance(value, bool) else float(value)
+        return number if number is not None and math.isfinite(number) else None
+    except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _net_profit(row: Mapping[str, Any]) -> Optional[float]:
+    net = _first_value(row, ("profitAmount", "profit"))
+    if net is not None:
+        return _as_optional_float(net)
+    # backAmount is the returned principal plus winnings, not net profit.
+    returned = _as_optional_float(_first_value(row, ("backAmount", "payout")))
+    stake = _as_optional_float(_first_value(row, ("orderAmountTotal", "betAmount", "amount", "stake")))
+    if returned is None or stake is None:
+        return None
+    return _as_optional_float(Decimal(str(returned)) - Decimal(str(stake)))
+
+
+def _settlement_time(row: Mapping[str, Any]) -> Optional[datetime]:
+    value = _first_value(row, ("settleTime", "settled_at", "settleAt", "settlementTime"))
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        stamp = float(value)
+        if not math.isfinite(stamp) or stamp <= 0:
+            return None
+        return datetime.fromtimestamp(stamp / 1000 if stamp > 100000000000 else stamp, ACCOUNT_TIMEZONE)
+    except (ValueError, TypeError):
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed.replace(tzinfo=ACCOUNT_TIMEZONE) if parsed.tzinfo is None else parsed.astimezone(ACCOUNT_TIMEZONE)
+        except ValueError:
+            return None
+    except (OverflowError, OSError):
+        return None
+
+
+def _daily_profit(items: Sequence[Mapping[str, Any]], at: float,
+                  complete: bool = True) -> Dict[str, Any]:
+    today = datetime.fromtimestamp(at, ACCOUNT_TIMEZONE).date()
+    output: Dict[str, Any] = {"date": today.isoformat(), "timezone": "Asia/Shanghai",
+                              "basis": "settlement_time", "available": False,
+                              "amount": None, "settled_count": 0, "reason": None}
+    if not complete:
+        output["reason"] = "结算记录未完整读取，暂不能统计今日盈亏"
+        return output
+    total, count = Decimal(0), 0
+    seen: set[str] = set()
+    for item in items:
+        if item.get("status") != "settled":
+            continue
+        order_no = str(_first_value(item, ("order_no", "orderNo", "orderNumber")) or "")
+        if order_no and order_no in seen:
+            continue
+        if order_no:
+            seen.add(order_no)
+        settled_at = _settlement_time(item)
+        if settled_at is None:
+            output["reason"] = "结算记录缺少有效结算时间，暂不能统计今日盈亏"
+            return output
+        if settled_at.date() != today:
+            continue
+        profit = _net_profit(item)
+        if profit is None:
+            output["reason"] = "今日结算记录缺少有效净盈亏，暂不能汇总"
+            return output
+        total += Decimal(str(profit))
+        count += 1
+    try:
+        amount = _as_optional_float(total.quantize(Decimal("0.01")))
+    except InvalidOperation:
+        amount = None
+    if amount is None:
+        output["reason"] = "结算净盈亏超出有效金额范围，暂不能汇总"
+        return output
+    output.update(available=True, amount=amount, settled_count=count)
+    return output
 
 
 def _items_amount(items: Sequence[Mapping[str, Any]]) -> float:
@@ -204,17 +311,17 @@ def _normalise_venue_record(row: Mapping[str, Any], status: str) -> Dict[str, An
     item["source"] = "leyu_ybty"
     item["status"] = status
     item["order_no"] = _first_value(merged, ("orderNo", "orderNumber", "orderId", "id"))
-    item["match"] = _first_value(merged, ("matchInfo", "match", "matchNameCn", "eventName", "matchName"))
+    item["match"] = _first_value(merged, ("matchNameCn", "matchInfo", "match", "eventName", "matchName"))
     item["league"] = _first_value(merged, ("leagueName", "tournamentName", "matchName"))
     item["match_id"] = _first_value(merged, ("matchId", "eventId", "mid"))
     item["home"] = _first_value(merged, ("homeName", "homeTeamName", "home", "matchHomeName"))
     item["away"] = _first_value(merged, ("awayName", "awayTeamName", "away", "matchAwayName"))
-    item["market"] = _first_value(merged, ("marketName", "market", "playName", "playNameCn", "marketTypeName"))
-    item["option"] = _first_value(merged, ("optionName", "playOptionsName", "playOptionName", "option", "outcome"))
+    item["market"] = _first_value(merged, ("playNameCn", "marketName", "market", "playName", "marketTypeName"))
+    item["option"] = _first_value(merged, ("playOptionNameCn", "optionName", "playOptionsName", "playOptionName", "option", "outcome"))
     item["outcome"] = item["option"]
     item["odds"] = _as_optional_float(_first_value(merged, ("odds", "oddFinally", "oddsFinally", "odd")))
     item["amount"] = _as_optional_float(_first_value(merged, ("betAmount", "orderAmountTotal", "amount", "stake", "betMoney")))
-    item["profit"] = _as_optional_float(_first_value(merged, ("profit", "profitAmount", "winAmount", "payout")))
+    item["profit"] = _net_profit(merged)
     item["score"] = _first_value(detail, ("settleScore", "scoreBenchmark", "matchScore", "score", "比分")) or _first_value(merged, ("score", "settleScore", "scoreBenchmark", "matchScore", "比分"))
     item["result"] = _first_value(detail, ("result", "betResult", "settleResult", "winStatus")) or _first_value(row, ("result", "betResult", "settleResult", "winStatus"))
     item["details"] = [dict(entry) for entry in details if isinstance(entry, Mapping)] if isinstance(details, list) else []
@@ -222,7 +329,7 @@ def _normalise_venue_record(row: Mapping[str, Any], status: str) -> Dict[str, An
 
 
 class LeyuAccountClient:
-    """Small read-only client using the same App signer as venue launch."""
+    """Reuse venue authentication; write calls are explicit and never retried."""
 
     def __init__(self, bootstrapper: AppSessionBootstrapper,
                  login_provider: Optional[AppLoginSessionProvider] = None,
@@ -374,7 +481,10 @@ class LeyuAccountClient:
             origin = str(getattr(session, "host", "") or self.bootstrapper.app_host).rstrip("/")
         return {
             "requestId": str(getattr(session, "request_id", "")),
-            "Lang": "zh-CN",
+            # YBTY's application language enum is `zh`, as in the native App
+            # capture and the odds client; `zh-CN` is only an HTTP locale.
+            "Lang": DEFAULT_LANG,
+            "Accept-Language": "zh-CN,zh;q=0.9",
             "clientVersionType": "4",
             "Origin": origin,
             "Referer": origin + "/",
@@ -405,15 +515,19 @@ class LeyuAccountClient:
                     raw = gzip.decompress(raw)
                 payload = json.loads(raw.decode("utf-8", "replace"))
         except urllib.error.HTTPError as exc:
-            if not _auth_retry and exc.code in (401, 403):
+            if path != VENUE_BET_PATH and not _auth_retry and exc.code in (401, 403):
                 self._venue_session = None
                 self._acquire_venue_session()
                 return self._venue_request(path, body, decode=decode, _auth_retry=True)
             raise SessionError("乐鱼体育场馆接口请求失败（HTTP %s）" % exc.code) from exc
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException) as exc:
             raise SessionError("乐鱼体育场馆接口请求失败（%s）" % type(exc).__name__) from exc
         if not isinstance(payload, Mapping):
             raise SessionError("乐鱼体育场馆接口响应结构异常")
+        if path == VENUE_BET_PATH:
+            # Preserve the business envelope for explicit receipt validation.
+            # Unlike reads, a debit request must never refresh and replay.
+            return payload
         try:
             # Amount is a plain JSON endpoint on some gateways, while other
             # versions still wrap it in the same ``code/data`` envelope as
@@ -428,10 +542,99 @@ class LeyuAccountClient:
             raise SessionError("乐鱼体育场馆接口返回失败") from exc
         return result
 
-    def _fetch_venue_records(self, flag: int) -> Dict[str, Any]:
+    def prepare_bet(self, detail: Mapping[str, Any], stake: float) -> Dict[str, Any]:
+        """Recheck the selected live market, native odds, limits and wallet."""
+        query = {"idList": [{
+            "marketId": detail["marketId"], "matchInfoId": detail["matchId"],
+            "oddsId": detail["playOptionsId"], "oddsType": detail["playOptions"],
+            "playId": detail["playId"], "chpid": detail.get("chpid", detail["playId"]),
+            "matchType": detail["matchType"], "sportId": int(detail["sportId"]),
+            **({"placeNum": detail["placeNum"]} if "placeNum" in detail else {}),
+        }]}
+        rows = _bet_rows(self._venue_request(VENUE_LATEST_MARKET_PATH, query))
+        market = next((row for row in rows if str(row.get("id")) == str(detail["marketId"])
+                       and str(row.get("matchInfoId")) == str(detail["matchId"])
+                       and str(row.get("playId")) == str(detail["playId"])), None)
+        if market is None:
+            raise SessionError("最新盘口中找不到推荐的比赛与盘口")
+        if (str(market.get("matchStatus")) != "1" or str(market.get("matchOver", 0)) != "0"
+                or str(market.get("matchHandicapStatus")) != "0" or str(market.get("status")) != "0"):
+            raise SessionError("最新比赛未进行或盘口已关闭/暂停")
+        options = _bet_rows(market.get("marketOddsList"))
+        option = next((row for row in options if str(row.get("id")) == str(detail["playOptionsId"])), None)
+        if option is None or str(option.get("oddsStatus")) not in ("0", "1"):
+            raise SessionError("投注选项已关闭或不存在")
+        if str(option.get("oddsType")) != str(detail["playOptions"]):
+            raise SessionError("投注选项方向已变化")
+        raw_odds = _bet_number(option.get("oddsValue"), "最新赔率")
+        odds = raw_odds / OV_SCALE
+        if odds <= 1 or not math.isclose(odds, _bet_number(detail["oddFinally"], "推荐赔率"), abs_tol=0.000005):
+            raise SessionError("赔率已变化，等待新综合推荐重新估值")
+        if str(market.get("marketValue") or "") != str(detail.get("marketValue") or ""):
+            raise SessionError("盘口线已变化，等待新综合推荐")
+        fresh = {**detail, "oddFinally": str(odds), "odds": str(round(raw_odds)), "matchType": 2}
+        if market.get("placeNum") is not None:
+            fresh["placeNum"] = market["placeNum"]
+        limit_detail = {
+            "marketId": fresh["marketId"], "matchId": fresh["matchId"],
+            "playId": fresh["playId"], "playOptionId": fresh["playOptionsId"],
+            "oddsValue": fresh["odds"], "matchType": 2, "deviceType": 3,
+        }
+        limits = _bet_rows(self._venue_request(VENUE_LIMIT_PATH, {"orderMaxBetMoney": [limit_detail]}))
+        # The captured Android single-bet response identifies the option but
+        # explicitly leaves playId/type empty. Empty optional echoes are not
+        # contradictions; nonempty echoes must still match the requested bet.
+        matching = [row for row in limits
+                    if str(row.get("playOptionsId")) == str(fresh["playOptionsId"])]
+        if len(matching) != 1:
+            raise SessionError("场馆未返回该单关的有效投注限额")
+        limit = matching[0]
+        if ((limit.get("playId") not in (None, "")
+             and str(limit["playId"]) != str(fresh["playId"]))
+                or (limit.get("type") not in (None, "") and str(limit["type"]) != "1")
+                or str(limit.get("code")) not in SUCCESS_CODES):
+            raise SessionError("场馆未返回该单关的有效投注限额")
+        minimum = _bet_number(limit.get("minBet"), "最小投注额")
+        maximum = _bet_number(limit.get("orderMaxPay"), "最大投注额")
+        if minimum < 0 or maximum <= 0 or not minimum <= stake <= maximum:
+            raise SessionError("投注额不在场馆限额内（%g~%g）" % (minimum, maximum))
+        amount = self._venue_request(VENUE_AMOUNT_PATH)
+        balance = _find_number(amount, {"amount", "balance", "availableamount", "availablebalance"})
+        if balance is None or not math.isfinite(balance) or balance < stake:
+            raise SessionError("体育场馆余额不足或不可读取")
+        return fresh
+
+    def submit_bet(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
+        """Send exactly one debit request and report accepted/pending/rejected."""
+        try:
+            response = self._venue_request(VENUE_BET_PATH, payload)
+        except SessionError as exc:
+            raise BetSubmissionUnknown("提交结果未知，请核对场馆注单；系统不会自动重发") from exc
+        if not isinstance(response, Mapping) or "code" not in response:
+            raise BetSubmissionUnknown("下单回执缺少业务码，需核对场馆注单")
+        code = str(response["code"])
+        if code not in SUCCESS_CODES:
+            raise BetSubmissionRejected("场馆拒单，业务码 " + code)
+        data = response.get("data")
+        if not isinstance(data, Mapping):
+            raise BetSubmissionUnknown("下单回执缺少订单数据，需核对场馆注单")
+        rows = data.get("orderDetailRespList")
+        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], Mapping):
+            raise BetSubmissionUnknown("单关回执缺少唯一订单，需核对场馆注单")
+        order = rows[0]
+        status = str(order.get("orderStatusCode"))
+        if status == "0":
+            raise BetSubmissionRejected("场馆明确拒单")
+        if not order.get("orderNo") or status not in ("1", "2"):
+            raise BetSubmissionUnknown("下单回执缺少订单号或状态，需核对场馆注单")
+        return {"status": "accepted" if status == "1" else "pending",
+                "submitted": True, "order_no": str(order["orderNo"]),
+                "provider_status": int(status), "provider_code": code}
+
+    def _fetch_venue_records(self, flag: int, page: int = 1) -> Dict[str, Any]:
         """Fetch one settled state from the native YBTY order endpoint."""
         body = {
-            "orderStatus": int(flag), "timeType": 0, "page": 1, "size": 100,
+            "orderStatus": int(flag), "timeType": 0, "page": page, "size": ACCOUNT_ORDER_PAGE_SIZE,
             "beginTime": 0, "endTime": 9999999999999, "outright": 0,
         }
         decoded = self._venue_request(VENUE_ORDER_PATH, body, decode=True)
@@ -444,7 +647,35 @@ class LeyuAccountClient:
             "items": rows,
             "status": "unsettled" if flag == 0 else "settled",
             "source": "leyu_ybty",
+            "total_known": count is not None,
+            "has_more": count > page * ACCOUNT_ORDER_PAGE_SIZE if count is not None else len(rows) >= ACCOUNT_ORDER_PAGE_SIZE,
         }
+
+    def _fetch_today_pnl(self, settled: Mapping[str, Any], at: float) -> Dict[str, Any]:
+        rows = list(settled.get("items") or [])
+        if (settled.get("source") != "leyu_ybty" or not settled.get("total_known")
+                or settled.get("count") is None or settled["count"] < 0):
+            return _daily_profit(rows, at, complete=False)
+        expected = settled["count"]
+        has_more = settled.get("has_more", int(settled["count"]) > len(rows))
+        try:
+            for page in range(2, ACCOUNT_PNL_MAX_PAGES + 1):
+                if not has_more:
+                    break
+                previous_ids = {row.get("order_no") for row in rows if row.get("order_no")}
+                batch = self._fetch_venue_records(1, page=page)
+                if not batch.get("total_known") or batch["count"] != expected:
+                    return _daily_profit(rows, at, complete=False)
+                new_rows = batch["items"]
+                if not new_rows or all(row.get("order_no") in previous_ids for row in new_rows):
+                    return _daily_profit(rows, at, complete=False)
+                rows.extend(new_rows)
+                has_more = batch["has_more"]
+        except SessionError:
+            return _daily_profit(rows, at, complete=False)
+        ids = {row.get("order_no") for row in rows if row.get("order_no")}
+        complete = not has_more and len(ids) == expected and all(row.get("order_no") for row in rows)
+        return _daily_profit(rows, at, complete=complete)
 
     def _fetch_venue_account(self) -> Dict[str, Any]:
         """Read YBTY balance and both order states in one launched session."""
@@ -528,6 +759,7 @@ class LeyuAccountClient:
                 "sports_balance": sports_balance,
                 "venue_balances": [dict(row) for row in venue_rows],
                 "unsettled": unsettled, "settled": settled,
+                "today_pnl": self._fetch_today_pnl(settled, fetched_at),
                 "fetched_at": fetched_at, "error": "; ".join(errors) or None}
 
 

@@ -37,11 +37,13 @@ import inspect
 import json
 import math
 import os
+import copy
 import random
 import threading
 import time
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 from collector.leyu_normalizer import (
@@ -50,6 +52,7 @@ from collector.leyu_normalizer import (
 )
 from collector.leyu_realtime import RealtimeHub
 from collector.sources import SOCCER_SPORT_ID
+from store.history import HistoryJournal
 from core.live_model import competition_type
 
 from .decision import (
@@ -410,6 +413,9 @@ class AnalysisService:
         }
         #: 最近一轮结果（页面只读它，**不触发 LLM**）
         self._latest: Optional[Dict[str, Any]] = None
+        self._decision_history: Optional[HistoryJournal] = None
+        self._decision_history_pending: List[Mapping[str, Any]] = []
+        self._history_lock = threading.RLock()
         #: 进行中赛事缓存：`(取时时刻, mid 集合)`。
         #: 命中与否可观测（`_live_source`/`_live_error`），便于定位
         #: 「leyu 67 场 vs 系统 34 场」这类覆盖差异到底来自哪条数据源。
@@ -466,11 +472,18 @@ class AnalysisService:
                                   llm_model=self.llm.config.model, llm_api_key=self.llm.config.api_key or "")
         self.runtime_settings = RuntimeSettings(runtime_cfg)
         self.live_review = LiveReview()
+        from service.betting import BettingExecutor
+        self.betting = BettingExecutor(self.runtime_settings, lambda: self.realtime, lambda: self.ledger)
         self._bind_runtime_settings()
 
     def _apply_runtime_settings(self, cfg: Any, version: int) -> None:
         self.live_expert.configure(cfg, version)
         self.live_review.configure(cfg, version)
+        self.betting.configure()
+        if cfg.betting_enabled:
+            self.betting.start()
+        else:
+            self.betting.stop()
         with self._lock:
             self._cache.clear()
         subscribed = getattr(self.realtime, "subscribed", None)
@@ -479,13 +492,22 @@ class AnalysisService:
 
     def _bind_runtime_settings(self) -> None:
         self.runtime_settings.bind(self.config.ledger_root)
+        self.betting.bind(self.config.ledger_root)
         self.live_expert.on_decision = self.ledger.record_live if self.ledger.enabled else None
+        self.live_expert.journal_root = self.config.ledger_root
         self.live_expert.update_evidence(self.ledger.performance_evidence())
         self.live_review.on_experiment = self.ledger.record_experiment if self.ledger.enabled else None
+        self.live_review.bind_history(self.config.ledger_root)
         self._apply_runtime_settings(self.runtime_settings.config, self.runtime_settings.version)
 
     def update_settings(self, patch: Mapping[str, Any], version: Any) -> Dict[str, Any]:
-        return self.runtime_settings.update(patch, version, self._apply_runtime_settings)
+        self.runtime_settings.update(patch, version, self._apply_runtime_settings)
+        return self.settings_status()
+
+    def settings_status(self) -> Dict[str, Any]:
+        out = self.runtime_settings.public()
+        out["capabilities"]["betting"] = self.betting.health()
+        return out
 
     # -- 配置（支持运行期注入 ledger_root，且台账会跟着换） -------------------
 
@@ -542,6 +564,7 @@ class AnalysisService:
             return False
         if self.config.cycle_interval_s <= 0:
             return False
+        self.betting.start()
         self._cycle_stop.clear()
         self._cycle_thread = threading.Thread(
             target=self._cycle_loop, name="analysis-cycle", daemon=True)
@@ -549,10 +572,12 @@ class AnalysisService:
         return True
 
     def stop_cycle(self, timeout: float = 5.0) -> None:
+        self.betting.stop()
         self._cycle_stop.set()
         t = self._cycle_thread
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
+        self._flush_decision_history()
 
     @property
     def cycle_running(self) -> bool:
@@ -630,6 +655,7 @@ class AnalysisService:
             return False
         self.live_expert.start(self.config.ledger_root)
         self.live_review.start()
+        self.betting.start()
         self._sched_stop.clear()
         self._sched_thread = threading.Thread(
             target=self._sched_loop, name="analysis-trigger", daemon=True)
@@ -637,13 +663,15 @@ class AnalysisService:
         return True
 
     def stop_scheduler(self, timeout: float = 5.0) -> None:
-        self.live_expert.stop()
-        self.live_review.stop()
         self._sched_stop.set()
         self._sched_wake.set()
         t = self._sched_thread
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
+        self.betting.stop()
+        self.live_review.stop()
+        self.live_expert.stop()
+        self._flush_decision_history()
 
     @property
     def scheduler_running(self) -> bool:
@@ -779,6 +807,7 @@ class AnalysisService:
                     self.notify_price_change([mid])
                 else:
                     self.live_review.submit(row)
+                    self.betting.enqueue(row)
             except (ValueError, TypeError, ArithmeticError) as exc:
                 self.live_expert.errors += 1
                 self.cycle_stats["last_error"] = "实时模型: %s" % exc
@@ -893,6 +922,7 @@ class AnalysisService:
     def _record_ledger(self, results: Sequence[MatchPicks],
                        trigger: str) -> None:
         """把决策写进台账（失败只记录，不影响决策返回）。"""
+        self._archive_decision_run({'trigger': trigger, 'decisions': [r.as_dict() for r in results]})
         if not self.ledger.enabled:
             return
         try:
@@ -1479,6 +1509,34 @@ class AnalysisService:
             os.replace(tmp, path)  # 原子替换，避免读到半写文件
         except (OSError, ValueError, TypeError) as exc:
             self.cycle_stats["last_error"] = "落盘失败: %s" % exc
+
+    def _archive_decision_run(self, res: Mapping[str, Any]) -> None:
+        path = self.config.result_path
+        root = Path(path).parent if path else Path(self.config.ledger_root) if self.config.ledger_root else None
+        if root is None:
+            return
+        cfg, version = self.runtime_settings.snapshot()
+        params = asdict(cfg)
+        params.pop('llm_api_key')
+        with self._history_lock:
+            history_path = root / 'decision-runs.jsonl.gz'
+            if self._decision_history is None or self._decision_history.path != history_path:
+                self._decision_history = HistoryJournal(history_path)
+            self._decision_history_pending.append(copy.deepcopy({**res,
+                'at': datetime.now(timezone.utc).isoformat(), 'schema_version': 2,
+                'config_version': version, 'config': params}))
+            self._flush_decision_history()
+
+    def _flush_decision_history(self) -> None:
+        with self._history_lock:
+            if self._decision_history is None:
+                return
+            try:
+                self._decision_history.append(self._decision_history_pending)
+                self._decision_history_pending.clear()
+            except (OSError, ValueError, TypeError):
+                # Do not overwrite this diagnostic at the end of a successful cycle.
+                pass  # HistoryJournal exposes the error; queued rows stay pending.
 
     def _restore_latest(self) -> None:
         """启动时读回上次结果，使页面在首轮完成前也能看到数据。"""
@@ -2092,6 +2150,7 @@ class AnalysisService:
             snap, trend=trend, context=ctx, n_markets=n_markets)
         with self._lock:
             self._cache[key] = (now, decision)
+        self._archive_decision_run({'trigger': 'manual', 'decisions': [decision.as_dict()]})
         return decision
 
     def decide_list(
@@ -2242,6 +2301,9 @@ class AnalysisService:
             },
             "cycle": dict(self.cycle_stats),
             "scheduler": self.scheduler_health(),
+            "betting": self.betting.health(),
+            "decision_history": {**(self._decision_history.health() if self._decision_history else {}),
+                                 'pending': len(self._decision_history_pending)},
             # 进行中覆盖的可观测性：用户要能自己查「为什么比 leyu 少」。
             #
             # `upstream` 是**乐鱼页面滚动球计数同源**的值

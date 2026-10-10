@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
+from .betting import betting_capability
+
 ALGORITHMS = {
     "poisson_market": "当前盘口 Poisson",
     "poisson_time_decay": "时间衰减 Poisson",
@@ -43,8 +45,7 @@ class RuntimeConfig:
     algorithm_alert_enabled: bool = True
     algorithm_alert_min_samples: int = 30
     algorithm_alert_threshold: float = 0.50
-    # Betting is an explicit opt-in.  The gate is evaluated before an
-    # adapter can submit any provider order.
+    # Opt-in for the background YBTY order executor; default remains off.
     betting_enabled: bool = False
     betting_stake_mode: str = "fixed"
     betting_fixed_stake: float = 10.0
@@ -134,6 +135,17 @@ class RuntimeSettings:
         self.path: Optional[Path] = None
         self.restore_error = ""
 
+    def snapshot(self) -> Tuple[RuntimeConfig, int]:
+        with self._lock:
+            return self.config, self.version
+
+    def claim_bet(self, version: int, claim: Callable[[], None]) -> None:
+        """Serialize a durable send intent with switch/version changes; no network here."""
+        with self._lock:
+            if version != self.version or not self.config.betting_enabled:
+                raise VersionConflict("提交前投注配置已变化")
+            claim()
+
     def bind(self, root: Optional[str]) -> None:
         with self._lock:
             self.path = Path(root).parent / "runtime-settings.json" if root else None
@@ -155,7 +167,8 @@ class RuntimeSettings:
             cfg["has_llm_key"] = bool(cfg.pop("llm_api_key"))
             return {"version": self.version, "settings": cfg,
                     "algorithms": ALGORITHMS, "persistent": self.path is not None,
-                    "restore_error": self.restore_error}
+                    "restore_error": self.restore_error,
+                    "capabilities": {"betting": betting_capability(self.config)}}
 
     def update(self, patch: Mapping[str, Any], version: Any,
                apply: Callable[[RuntimeConfig, int], None]) -> Dict[str, Any]:
