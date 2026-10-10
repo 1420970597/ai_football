@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Betting gates and Android YBTY single-order protocol (no I/O here)."""
+"""Betting gates and controlled Android YBTY single-order execution."""
 from __future__ import annotations
 
 import math
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -27,6 +28,7 @@ VENUE_BET_PATH = "/yewu13/v1/betOrder/client/bet"
 ENSEMBLE_ALGORITHM = "economic_ensemble"
 EXECUTOR_QUEUE_LIMIT = 256
 BLOCKED_RECHECK_S = 30.0
+LOGGER = logging.getLogger(__name__)
 
 
 def betting_capability(config: Any) -> dict[str, Any]:
@@ -261,7 +263,7 @@ class BettingExecutor:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._queue: dict[str, dict[str, Any]] = {}
-        self._blocked_at: dict[str, float] = {}
+        self._blocked: dict[str, tuple[float, dict[str, Any]]] = {}
         self.last_result: dict[str, Any] = {}
 
     def bind(self, root: str | None) -> None:
@@ -284,7 +286,7 @@ class BettingExecutor:
     def configure(self) -> None:
         with self._lock:
             self._queue.clear()
-            self._blocked_at.clear()
+            self._blocked.clear()
 
     def enqueue(self, row: Mapping[str, Any]) -> None:
         cfg, version = self.settings.snapshot()
@@ -343,10 +345,11 @@ class BettingExecutor:
         identity = hashlib.sha256(json.dumps([account, *logical], ensure_ascii=False).encode()).hexdigest()
         result: dict[str, Any] = {"identity": identity, "match_id": mid, "market": pick.get("market"),
                                   "line": pick.get("line"), "outcome": pick.get("outcome"),
-                                  "status": "blocked", "submitted": False}
+                                  "status": "blocked", "submitted": False,
+                                  "checked_at_ms": int(time.time() * 1000)}
         with self._lock:
             path = self.path
-            blocked_at = self._blocked_at.get(identity, 0)
+            blocked = self._blocked.get(identity)
         db: sqlite3.Connection | None = None
         claimed = False
         try:
@@ -354,8 +357,13 @@ class BettingExecutor:
                 raise BettingBlocked("投注功能未启用")
             if path is None:
                 raise BettingBlocked("未配置持久化订单目录，无法防止重启重复提交")
-            if time.monotonic() - blocked_at < BLOCKED_RECHECK_S:
-                raise BettingBlocked("前置校验失败，等待下一次核验")
+            if blocked is not None:
+                remaining = blocked[0] + BLOCKED_RECHECK_S - time.monotonic()
+                if remaining > 0:
+                    # Repeated recommendations must not restart the cooldown
+                    # or overwrite the failure that explains why no order was sent.
+                    return {**blocked[1], "recheck_deferred": True,
+                            "retry_after_s": round(remaining, 3)}
             if row.get("algorithm") != ENSEMBLE_ALGORITHM or row.get("competition_type") != "real":
                 raise BettingBlocked("只执行真实足球的经济学综合推荐")
             if pick not in row.get("picks", []) or pick.get("research_only"):
@@ -433,10 +441,13 @@ class BettingExecutor:
                 result.update(status="unknown", submitted=None, reason="提交结果未知；请核对场馆注单，不会自动重发")
             else:
                 result["reason"] = reason
+                result["retry_after_s"] = BLOCKED_RECHECK_S
                 with self._lock:
-                    if len(self._blocked_at) >= EXECUTOR_QUEUE_LIMIT:
-                        self._blocked_at.pop(next(iter(self._blocked_at)))
-                    self._blocked_at[identity] = time.monotonic()
+                    if identity not in self._blocked and len(self._blocked) >= EXECUTOR_QUEUE_LIMIT:
+                        self._blocked.pop(next(iter(self._blocked)))
+                    self._blocked[identity] = (time.monotonic(), dict(result))
+                LOGGER.warning("Betting blocked: match_id=%s market=%s line=%s outcome=%s reason=%s",
+                               mid, result["market"], result["line"], result["outcome"], reason)
             return result
         finally:
             if db is not None:

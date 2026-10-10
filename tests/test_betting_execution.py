@@ -98,6 +98,45 @@ class BettingExecutionTests(unittest.TestCase):
         self.assertIn('命中次数不足', result['reason'])
         self.factory.assert_not_called()
 
+    def test_frequent_recommendations_preserve_reason_and_do_not_extend_cooldown(self):
+        self.ledger.recommendation_performance.return_value = {'hit_count': 0, 'settled_samples': 0}
+        with self.assertLogs('service.betting', level='WARNING') as logs:
+            with patch('service.betting.time.monotonic', return_value=100):
+                first = self.executor.execute(self.row, self.pick)
+            self.assertIn('命中次数不足', first['reason'])
+            self.ledger.recommendation_performance.return_value = {'hit_count': 4, 'settled_samples': 6}
+            for moment in (110, 120, 129):
+                with patch('service.betting.time.monotonic', return_value=moment):
+                    deferred = self.executor.execute(self.row, self.pick)
+                self.assertEqual(deferred['reason'], first['reason'])
+                self.assertEqual(deferred['checked_at_ms'], first['checked_at_ms'])
+                self.assertTrue(deferred['recheck_deferred'])
+                self.assertEqual(deferred['retry_after_s'], 130 - moment)
+                self.client.submit_bet.assert_not_called()
+            with patch('service.betting.time.monotonic', return_value=130):
+                recovered = self.executor.execute(self.row, self.pick)
+        self.assertEqual(recovered['status'], 'accepted')
+        self.assertEqual(self.ledger.recommendation_performance.call_count, 2)
+        self.client.submit_bet.assert_called_once()
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn(first['reason'], logs.output[0])
+
+    def test_failed_recheck_starts_one_new_cooldown_and_logs_actual_cause(self):
+        self.ledger.recommendation_performance.return_value = {'hit_count': 0, 'settled_samples': 0}
+        with self.assertLogs('service.betting', level='WARNING') as logs:
+            for moment in (100, 110, 130):
+                with patch('service.betting.time.monotonic', return_value=moment):
+                    result = self.executor.execute(self.row, self.pick)
+                self.assertEqual(result['status'], 'blocked')
+                self.assertIn('命中次数不足', result['reason'])
+            with patch('service.betting.time.monotonic', return_value=131):
+                deferred = self.executor.execute(self.row, self.pick)
+        self.assertEqual(deferred['retry_after_s'], 29)
+        self.assertEqual(self.ledger.recommendation_performance.call_count, 2)
+        self.assertEqual(len(logs.output), 2)
+        self.factory.assert_not_called()
+        self.client.submit_bet.assert_not_called()
+
     def test_confidence_multiplier_uses_board_confidence(self):
         self.settings.config = replace(self.settings.config, betting_fixed_stake=20,
                                        betting_stake_mode='confidence_multiplier')
