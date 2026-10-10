@@ -532,10 +532,10 @@ const SETTING_FIELDS = [
     ['algorithm_alert_enabled', '低正确率预警', 'checkbox'],
     ['algorithm_alert_min_samples', '预警最小有效样本', 'number', [1,100000,1]],
     ['algorithm_alert_threshold', '预警正确率阈值', 'number', [0,1,.01]],
-    ['betting_enabled', '投注功能（默认关闭）', 'checkbox'],
-    ['betting_stake_mode', '单次额度模式', 'select', {fixed: '固定值', confidence_multiplier: '综合置信度 × 固定值'}],
-    ['betting_fixed_stake', '单次固定额度 / CNY', 'number', [.01,100000,.01]],
-    ['betting_min_hit_count', '允许投注的最小盘口命中次数', 'number', [1,100000,1]],
+    ['betting_enabled', '真实投注（当前不支持）', 'checkbox'],
+    ['betting_stake_mode', '计划额度模式（仅预览）', 'select', {fixed: '固定值', confidence_multiplier: '综合置信度 × 固定值'}],
+    ['betting_fixed_stake', '计划固定额度 / CNY（仅预览）', 'number', [.01,100000,.01]],
+    ['betting_min_hit_count', '计划预览的最小盘口命中次数', 'number', [1,100000,1]],
     ['max_total_exposure', '同场最大敞口', 'number', [0,1,.01]],
     ['risk_correlation', '同场风险相关性', 'number', [0,.99,.01]],
     ['execution_cost', '执行成本', 'number', [0,.1,.001]],
@@ -562,6 +562,10 @@ function renderSettings(data) {
   S.settingsVersion = data.version;
   $('settings-version').textContent = 'v' + data.version + ' · ' + (data.persistent ? '已持久保存' : '内存配置');
   const cfg = data.settings;
+  const betting = data.capabilities?.betting;
+  const bettingReason = betting?.reason || '当前版本只提供投注计划预览和手工草稿，没有下单执行器；开启配置也不会提交订单。';
+  notice('betting-capability-notice', '真实投注未执行：' + bettingReason +
+    (betting?.configured_enabled || cfg.betting_enabled ? ' 已保存的旧开关为开启，执行状态仍为未启用。' : ''));
   const alerts = (data.algorithm_alerts || []).filter(a => a.status === 'warning');
   notice('settings-notice', alerts.length ? alerts.map(a => a.message).join('；') : data.restore_error || '', !!alerts.length);
   const sections = SETTING_FIELDS.map(([title,fields], index) => {
@@ -591,6 +595,11 @@ function renderSettings(data) {
         } else input.value = cfg[key];
         if (type === 'number') {input.min=options[0]; input.max=options[1]; input.step=options[2];}
       }
+      if (key === 'betting_enabled') {
+        input.checked = false;
+        input.disabled = true;
+        input.setAttribute('aria-describedby', 'betting-capability-notice');
+      }
       section.appendChild(el('label', {class: type === 'checkbox' ? 'setting-toggle' : 'setting-field'}, [el('span', {text: label}), input]));
     }
     if (index === 2) section.appendChild(el('label', {class: 'setting-toggle'}, [
@@ -614,6 +623,7 @@ async function saveSettings(event) {
   const settings = {algorithms: Array.from(document.querySelectorAll('input[name="algorithm"]:checked')).map(n => n.value)};
   for (const [,fields] of SETTING_FIELDS) for (const [key,,type] of fields) {
     const input = $('setting-' + key);
+    if (input.disabled) continue;
     if (type === 'password') {if (input.value) settings[key] = input.value;}
     else settings[key] = type === 'checkbox' ? input.checked : type === 'number' ? Number(input.value) : input.value;
   }

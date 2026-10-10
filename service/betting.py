@@ -24,6 +24,21 @@ VENUE_BET_PATH = "/yewu13/v1/betOrder/client/bet"
 ENSEMBLE_ALGORITHM = "economic_ensemble"
 
 
+def betting_capability(config: Any) -> dict[str, Any]:
+    """Describe actual execution support independently of the saved gate.
+
+    ``betting_enabled`` only controls plan generation in this build.  A
+    restored true value cannot make the read-only adapter submit an order.
+    """
+    return {
+        "configured_enabled": bool(getattr(config, "betting_enabled", False)),
+        "execution_supported": False,
+        "execution_enabled": False,
+        "mode": "manual_only",
+        "reason": "当前版本只提供投注计划预览和手工草稿，没有下单执行器；开启配置也不会提交订单。",
+    }
+
+
 def _pick_value(source: Mapping[str, Any], *names: str) -> Any:
     for name in names:
         value = source.get(name)
@@ -178,10 +193,13 @@ def plan_bet(pick: Mapping[str, Any], config: Any,
 
 def preview_bet(pick: Mapping[str, Any], config: Any, **kwargs: Any) -> dict[str, Any]:
     """Return a stable UI/API response without submitting an order."""
+    execution = betting_capability(config)
     try:
-        return {"allowed": True, "plan": plan_bet(pick, config, **kwargs).as_dict()}
+        return {"allowed": True, "plan": plan_bet(pick, config, **kwargs).as_dict(),
+                "submitted": False, "submission": "preview_only", "execution": execution}
     except BettingBlocked as exc:
-        return {"allowed": False, "reason": str(exc), "plan": None}
+        return {"allowed": False, "reason": str(exc), "plan": None,
+                "submitted": False, "submission": "blocked", "execution": execution}
 
 
 def draft_ybty_bet(pick: Mapping[str, Any], config: Any, **kwargs: Any) -> dict[str, Any]:
@@ -196,6 +214,8 @@ def draft_ybty_bet(pick: Mapping[str, Any], config: Any, **kwargs: Any) -> dict[
         payload = build_ybty_bet_payload(pick, plan.stake)
         return {
             "allowed": True,
+            "submitted": False,
+            "execution": betting_capability(config),
             "submission": "manual_only",
             "requires_manual_confirmation": True,
             "provider_path": VENUE_BET_PATH,
@@ -203,4 +223,5 @@ def draft_ybty_bet(pick: Mapping[str, Any], config: Any, **kwargs: Any) -> dict[
             "payload": payload,
         }
     except BettingBlocked as exc:
-        return {"allowed": False, "submission": "blocked", "reason": str(exc), "plan": None}
+        return {"allowed": False, "submission": "blocked", "reason": str(exc), "plan": None,
+                "submitted": False, "execution": betting_capability(config)}

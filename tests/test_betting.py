@@ -19,6 +19,19 @@ class BettingTests(unittest.TestCase):
         result = preview_bet(self.pick(), RuntimeConfig())
         self.assertFalse(result['allowed'])
         self.assertIn('未启用', result['reason'])
+        self.assertFalse(result['submitted'])
+        self.assertFalse(result['execution']['execution_supported'])
+
+    def test_enabled_gate_still_reports_preview_without_execution(self):
+        cfg = replace(RuntimeConfig(), betting_enabled=True)
+        result = preview_bet(self.pick(), cfg)
+        self.assertTrue(result['allowed'])
+        self.assertTrue(result['execution']['configured_enabled'])
+        self.assertFalse(result['execution']['execution_enabled'])
+        self.assertFalse(result['submitted'])
+        self.assertFalse(result['plan']['executable'])
+        self.assertEqual(result['submission'], 'preview_only')
+        self.assertIn('没有下单执行器', result['execution']['reason'])
 
     def test_hit_gate_and_stake_modes(self):
         cfg = replace(RuntimeConfig(), betting_enabled=True, betting_fixed_stake=20,
@@ -84,10 +97,21 @@ class BettingTests(unittest.TestCase):
         self.assertTrue(draft['allowed'])
         self.assertTrue(draft['requires_manual_confirmation'])
         self.assertEqual(draft['submission'], 'manual_only')
+        self.assertFalse(draft['submitted'])
+        self.assertFalse(draft['execution']['execution_enabled'])
 
     def test_app_payload_requires_provider_identifiers(self):
         with self.assertRaisesRegex(ValueError, '缺少 App 字段'):
             build_ybty_bet_payload(self.pick(), 10)
+
+    def test_incomplete_draft_reports_both_gate_and_execution_status(self):
+        cfg = replace(RuntimeConfig(), betting_enabled=True)
+        result = draft_ybty_bet(self.pick(), cfg)
+        self.assertFalse(result['allowed'])
+        self.assertFalse(result['submitted'])
+        self.assertEqual(result['submission'], 'blocked')
+        self.assertIn('缺少 App 字段', result['reason'])
+        self.assertEqual(result['execution']['mode'], 'manual_only')
 
 
 if __name__ == '__main__':

@@ -13,11 +13,15 @@ async (page) => {
     price_history: {'OU|2.25|over': [[1000, 1.9], [2000, 1.95]], 'OU|2.25|under': [[1000, 2], [2000, 1.96]]}, events: []
   };
   const _PLACEHOLDER_SETTINGS = {version:1, persistent:true, algorithms:{poisson_market:'当前盘口 Poisson', poisson_time_decay:'时间衰减 Poisson', devig_consensus:'去水共识', economics_risk_adjusted:'经济学风控', microstructure_adjusted:'盘口微观结构'},
+    capabilities:{betting:{configured_enabled:true,execution_supported:false,execution_enabled:false,mode:'manual_only',
+      reason:'当前版本只提供投注计划预览和手工草稿，没有下单执行器；开启配置也不会提交订单。'}},
     settings:{algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',
       min_probability:.52,min_ev:.02,quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,
       devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
+      algorithm_alert_enabled:true,algorithm_alert_min_samples:30,algorithm_alert_threshold:.5,
       weight_prior_matches:20,max_algorithm_weight:.6,llm_experiment_enabled:true,llm_enabled:false,llm_base_url:'http://localhost:9999/v1',llm_model:'test-model',has_llm_key:true,
-      llm_timeout_s:20,llm_temperature:.2,llm_max_tokens:2048,llm_interval_s:60}};
+      betting_enabled:true,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_min_hit_count:3,
+      llm_timeout_s:20,llm_temperature:.2,llm_max_tokens:2048,llm_interval_s:60,llm_review_max_age_s:120}};
   let mode = 'default';
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -28,6 +32,7 @@ async (page) => {
     if (url.pathname.endsWith('/settings')) {
       if (route.request().method() === 'POST') {
         const body = route.request().postDataJSON();
+        assert(!Object.hasOwn(body.settings, 'betting_enabled'), 'unsupported execution flag omitted from save');
         if (!body.settings.algorithms.length) return route.fulfill({status:400,json:{error:'至少启用一个有效算法'}});
         _PLACEHOLDER_SETTINGS.settings = {..._PLACEHOLDER_SETTINGS.settings, ...body.settings};
         delete _PLACEHOLDER_SETTINGS.settings.llm_api_key;
@@ -87,11 +92,16 @@ async (page) => {
   assert(await page.getByText('+0.50', {exact: true}).isVisible(), 'half stake history');
   await page.getByRole('button', {name: '设置', exact: true}).click();
   await page.locator('#setting-min_ev').waitFor();
+  assert(await page.locator('#setting-betting_enabled').isDisabled(), 'unsupported real-money execution toggle disabled');
+  assert(!await page.locator('#setting-betting_enabled').isChecked(), 'legacy saved flag never shown as active execution');
+  assert(await page.locator('#betting-capability-notice').textContent().then(t=>t.includes('没有下单执行器') && t.includes('旧开关')), 'legacy flag has visible execution diagnosis');
   assert(await page.locator('#setting-llm_api_key').inputValue() === '', 'credentials never prefilled');
   await page.locator('#setting-min_ev').fill('0.04');
   await page.getByRole('button', {name:'保存并立即生效',exact:true}).click();
   await page.getByText('v2 已生效', {exact:true}).waitFor();
   assert(await page.locator('#setting-min_ev').inputValue() === '0.04', 'hot saved value');
+  assert(await page.locator('#betting-capability-notice').isVisible(), 'execution limitation remains visible after save success');
+  await page.screenshot({path: '/root/ai_football/output/playwright/task31-betting-status.png', fullPage: true});
   for (const input of await page.locator('input[name="algorithm"]').all()) await input.uncheck();
   await page.getByRole('button', {name:'保存并立即生效',exact:true}).click();
   await page.getByText('至少启用一个有效算法', {exact:true}).waitFor();

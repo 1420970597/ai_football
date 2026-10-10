@@ -15,6 +15,46 @@ from tests import test_live_expert
 
 
 class RuntimeSettingsTests(unittest.TestCase):
+    def test_restored_enabled_flag_never_claims_execution_support(self):
+        with tempfile.TemporaryDirectory() as root:
+            settings = RuntimeSettings()
+            settings.bind(root + '/ledger')
+            settings.path.write_text(json.dumps({
+                'version': 7, 'settings': {'betting_enabled': True},
+            }), encoding='utf-8')
+            restored = RuntimeSettings()
+            restored.bind(root + '/ledger')
+            status = restored.public()
+            self.assertEqual(status['version'], 7)
+            self.assertTrue(status['settings']['betting_enabled'])
+            self.assertTrue(status['capabilities']['betting']['configured_enabled'])
+            self.assertFalse(status['capabilities']['betting']['execution_enabled'])
+            self.assertFalse(status['capabilities']['betting']['execution_supported'])
+            self.assertIn('没有下单执行器', status['capabilities']['betting']['reason'])
+
+    def test_api_rejects_unsupported_enable_atomically_and_allows_other_edits(self):
+        with tempfile.TemporaryDirectory() as root:
+            svc = AnalysisService(MagicMock(), config=AnalysisConfig(
+                use_llm=False, ledger_root=root + '/ledger'))
+            app = ApiApp(MagicMock(), analysis=svc)
+            code, out = app.dispatch('GET', '/api/v1/settings', {}, {})
+            self.assertEqual(code, 200)
+            self.assertFalse(out['capabilities']['betting']['execution_supported'])
+            code, rejected = app.dispatch('POST', '/api/v1/settings', {}, {
+                'version': 1, 'settings': {'betting_enabled': True, 'min_ev': .1},
+            })
+            self.assertEqual(code, 400)
+            self.assertIn('没有下单执行器', rejected['error'])
+            self.assertEqual(svc.runtime_settings.version, 1)
+            self.assertEqual(svc.runtime_settings.config.min_ev, .02)
+            self.assertFalse(svc.runtime_settings.path.exists())
+            code, saved = app.dispatch('POST', '/api/v1/settings', {}, {
+                'version': 1, 'settings': {'betting_enabled': False, 'min_ev': .04},
+            })
+            self.assertEqual(code, 200)
+            self.assertEqual(saved['settings']['min_ev'], .04)
+            self.assertFalse(saved['capabilities']['betting']['execution_enabled'])
+
     def test_atomic_validation_secret_persistence_and_restore(self):
         with tempfile.TemporaryDirectory() as root:
             settings = RuntimeSettings()

@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
+from .betting import betting_capability
+
 ALGORITHMS = {
     "poisson_market": "当前盘口 Poisson",
     "poisson_time_decay": "时间衰减 Poisson",
@@ -43,8 +45,8 @@ class RuntimeConfig:
     algorithm_alert_enabled: bool = True
     algorithm_alert_min_samples: int = 30
     algorithm_alert_threshold: float = 0.50
-    # Betting is an explicit opt-in.  The gate is evaluated before an
-    # adapter can submit any provider order.
+    # Legacy gate for previews/drafts only.  Execution support is reported
+    # separately so a restored opt-in is never presented as active wagering.
     betting_enabled: bool = False
     betting_stake_mode: str = "fixed"
     betting_fixed_stake: float = 10.0
@@ -155,13 +157,16 @@ class RuntimeSettings:
             cfg["has_llm_key"] = bool(cfg.pop("llm_api_key"))
             return {"version": self.version, "settings": cfg,
                     "algorithms": ALGORITHMS, "persistent": self.path is not None,
-                    "restore_error": self.restore_error}
+                    "restore_error": self.restore_error,
+                    "capabilities": {"betting": betting_capability(self.config)}}
 
     def update(self, patch: Mapping[str, Any], version: Any,
                apply: Callable[[RuntimeConfig, int], None]) -> Dict[str, Any]:
         with self._lock:
             if isinstance(version, bool) or not isinstance(version, int) or version != self.version:
                 raise VersionConflict("配置已被其他页面更新，请重新读取")
+            if patch.get("betting_enabled") is True:
+                raise ValueError(betting_capability(self.config)["reason"])
             cfg = validated(self.config, patch)
             new_version = self.version + 1
             if self.path:
