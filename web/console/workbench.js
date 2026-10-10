@@ -173,6 +173,8 @@ function renderRecommendations(rows) {
 function renderRecommendationCard(item) {
   const match = item.match || item;
   const pick = item.pick || {};
+  const betting = item.betting;
+  const executionLabels = {accepted:'已接受',pending:'等待场馆确认',queued:'等待检查',rejected:'场馆拒单',unknown:'待核对回执',blocked:'未提交',disabled:'投注已关闭',not_submitted:'尚未提交'};
   return el('button', {class:'buy-card', onclick:()=> {
     if (match.match_id) { S.view = 'live'; switchView('live'); selectMatch(match.match_id); }
   }}, [
@@ -183,7 +185,9 @@ function renderRecommendationCard(item) {
       el('span',{text:'置信度 ' + pct(pick.confidence ?? item.confidence)}),
       el('span',{text:'命中 ' + fixed(pick.hit_count ?? item.hit_count, 1) + ' · 未中 ' + fixed(pick.miss_count ?? item.miss_count, 1)}),
       el('span',{text:'综合 ' + pct(pick.composite_confidence ?? item.composite_confidence)}),
-      el('span',{text:'赔率状态 ' + (item.market_open ? '开启' : '已关闭')})])
+      el('span',{text:'赔率状态 ' + (item.market_open ? '开启' : '已关闭')})]),
+    ...(betting ? [el('small',{class:'buy-execution',text:'投注：' + (executionLabels[betting.status] || betting.status) +
+      (betting.order_no ? ' · 注单 ' + betting.order_no : '') + (betting.reason ? ' · ' + betting.reason : '')})] : [])
   ]);
 }
 

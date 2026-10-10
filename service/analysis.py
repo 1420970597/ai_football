@@ -473,7 +473,8 @@ class AnalysisService:
         self.runtime_settings = RuntimeSettings(runtime_cfg)
         self.live_review = LiveReview()
         from service.betting import BettingExecutor
-        self.betting = BettingExecutor(self.runtime_settings, lambda: self.realtime, lambda: self.ledger)
+        self.betting = BettingExecutor(self.runtime_settings, lambda: self.realtime, lambda: self.ledger,
+                                       on_recompute=self.notify_price_change)
         from service.data_model import DataModelService
         self.data_model = DataModelService()
         self._bind_runtime_settings()
@@ -812,9 +813,9 @@ class AnalysisService:
                 if not row:
                     self.notify_price_change([mid])
                 else:
+                    self.betting.enqueue(row)
                     self.data_model.observe(row)
                     self.live_review.submit(row)
-                    self.betting.enqueue(row)
             except (ValueError, TypeError, ArithmeticError) as exc:
                 self.live_expert.errors += 1
                 self.cycle_stats["last_error"] = "实时模型: %s" % exc

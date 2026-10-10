@@ -767,6 +767,7 @@ class ApiApp:
                 item = {"match_id": mid, "league": row.get("league", ""),
                         "home": row.get("home", ""), "away": row.get("away", ""),
                         "score": row.get("score"), "clock": row.get("clock"),
+                        "recommendation_retained": bool(row.get("recommendation_retained")),
                         "market_open": market_open, "stale": row.get("stale", False),
                         "pick": dict(pick)}
                 if quote:
@@ -786,6 +787,16 @@ class ApiApp:
                 continue
             closed.append(entry)
         open_items = [item for item in current.values() if item.get("market_open")]
+        execution = self.analysis.betting.statuses([
+            (item["match_id"], str(item["pick"].get("market") or ""),
+             str(item["pick"].get("line") or ""), str(item["pick"].get("outcome") or ""))
+            for item in open_items])
+        for item in open_items:
+            pick = item["pick"]
+            item["betting"] = execution.get((item["match_id"], str(pick.get("market") or ""),
+                                            str(pick.get("line") or ""), str(pick.get("outcome") or "")), {})
+            if item["recommendation_retained"] and item["betting"].get("status") == "not_submitted":
+                item["betting"]["reason"] = "历史推荐仍展示，当前计算未生成可执行买入"
         open_items.sort(key=lambda item: -float((item.get("pick") or {}).get("composite_confidence") or 0))
         closed.sort(key=lambda entry: str(entry.get("at", "")), reverse=True)
         summary = {
