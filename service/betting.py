@@ -31,6 +31,17 @@ BLOCKED_RECHECK_S = 30.0
 LOGGER = logging.getLogger(__name__)
 
 
+def _bet_selection(match_id: str, pick: Mapping[str, Any]) -> list[str]:
+    """Logical selection only: prices, quote versions and provider IDs may change."""
+    return [match_id, str(pick.get("market") or ""),
+            str(pick["line"] if pick.get("line") is not None else ""),
+            str(pick.get("outcome") or "")]
+
+
+def _identity(parts: list[str]) -> str:
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
+
+
 def betting_capability(config: Any) -> dict[str, Any]:
     """Describe the implementation; runtime readiness is added by the executor."""
     return {
@@ -324,13 +335,42 @@ class BettingExecutor:
         db = sqlite3.connect(path, timeout=5, isolation_level=None)
         try:
             db.execute("PRAGMA synchronous=FULL")
+            db.execute("BEGIN IMMEDIATE")
             db.execute("""CREATE TABLE IF NOT EXISTS orders (
-                identity TEXT PRIMARY KEY, at REAL NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL)""")
+                identity TEXT PRIMARY KEY, at REAL NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
+                selection_key TEXT NOT NULL, account_key TEXT)""")
+            columns = {col[1] for col in db.execute("PRAGMA table_info(orders)")}
+            for name in ("selection_key", "account_key"):
+                if name not in columns:
+                    db.execute("ALTER TABLE orders ADD COLUMN " + name + " TEXT")
+            for old_identity, raw in db.execute("SELECT identity,payload FROM orders WHERE selection_key IS NULL").fetchall():
+                previous = json.loads(raw)
+                if not isinstance(previous, dict) or not all(previous.get(k) for k in ("match_id", "market", "outcome")):
+                    raise BettingBlocked("历史订单标识不完整，无法安全去重")
+                # Legacy payloads did not retain account/odds. Keep every receipt
+                # and conservatively reserve this selection for every account.
+                selection = _identity(_bet_selection(str(previous["match_id"]), previous))
+                db.execute("UPDATE orders SET selection_key=? WHERE identity=?", (selection, old_identity))
+            db.execute("CREATE INDEX IF NOT EXISTS orders_selection ON orders(selection_key,account_key)")
             os.chmod(path, 0o600)
-        except (OSError, sqlite3.Error):
+            db.commit()
+        except BaseException:
+            db.rollback()
             db.close()
             raise
         return db
+
+    def _existing_order(self, db: sqlite3.Connection, selection_key: str,
+                        account_key: str) -> dict[str, Any] | None:
+        existing = db.execute("""SELECT payload FROM orders WHERE selection_key=?
+            AND (account_key=? OR account_key IS NULL) ORDER BY at DESC,identity LIMIT 1""",
+                              (selection_key, account_key)).fetchone()
+        if existing is None:
+            return None
+        previous = json.loads(existing[0])
+        if previous.get("status") == "sending":
+            previous.update(status="unknown", submitted=None, reason="上次提交未取得回执；请核对场馆注单")
+        return {**previous, "duplicate": True}
 
     def execute(self, row: Mapping[str, Any], pick: Mapping[str, Any]) -> dict[str, Any]:
         """Execute only an in-memory server recommendation, never an API pick."""
@@ -339,10 +379,10 @@ class BettingExecutor:
         from collector.session import SessionError
         cfg, version = self.settings.snapshot()
         mid = str(row.get("match_id") or "")
-        logical = [mid, pick.get("market"), str(pick.get("line") or ""), pick.get("outcome"),
-                   str(pick.get("odds") or pick.get("order_detail", {}).get("oddFinally") or "")]
+        logical = _bet_selection(mid, pick)
         account = os.environ.get("LEYU_APP_LOGIN_NAME", "").strip().casefold() or "default"
-        identity = hashlib.sha256(json.dumps([account, *logical], ensure_ascii=False).encode()).hexdigest()
+        identity = _identity([account, *logical])
+        selection_key, account_key = _identity(logical), _identity([account])
         result: dict[str, Any] = {"identity": identity, "match_id": mid, "market": pick.get("market"),
                                   "line": pick.get("line"), "outcome": pick.get("outcome"),
                                   "status": "blocked", "submitted": False,
@@ -394,12 +434,9 @@ class BettingExecutor:
                 raise BettingBlocked("原始订单标识与当前真实足球推荐不一致")
             result["stake"] = plan.stake
             db = self._db(path)
-            existing = db.execute("SELECT payload FROM orders WHERE identity=?", (identity,)).fetchone()
-            if existing:
-                previous = json.loads(existing[0])
-                if previous.get("status") == "sending":
-                    previous.update(status="unknown", submitted=None, reason="上次提交未取得回执；请核对场馆注单")
-                return {**previous, "duplicate": True}
+            previous = self._existing_order(db, selection_key, account_key)
+            if previous is not None:
+                return previous
             factory = self.client_factory or account_client_from_env
             client = factory()
             if client is None:
@@ -420,10 +457,21 @@ class BettingExecutor:
                 raise BettingBlocked("提交前配置或行情已变化")
             sending = {**result, "status": "sending", "reason": "已提交发送意图，等待场馆回执"}
             try:
-                self.settings.claim_bet(version, lambda: db.execute("INSERT INTO orders VALUES (?,?,?,?)", (
-                    identity, time.time(), "sending", json.dumps(sending, ensure_ascii=False))))
+                # Serialize the final duplicate check with the durable claim.
+                # Never keep a SQLite transaction open during provider calls.
+                db.execute("BEGIN IMMEDIATE")
+                previous = self._existing_order(db, selection_key, account_key)
+                if previous is not None:
+                    db.rollback()
+                    return previous
+                self.settings.claim_bet(version, lambda: db.execute("""INSERT INTO orders
+                    (identity,at,status,payload,selection_key,account_key) VALUES (?,?,?,?,?,?)""", (
+                    identity, time.time(), "sending", json.dumps(sending, ensure_ascii=False),
+                    selection_key, account_key)))
+                db.commit()
             except sqlite3.IntegrityError:
-                return {**result, "status": "duplicate", "reason": "该推荐已有订单提交记录"}
+                db.rollback()
+                return {**result, "status": "duplicate", "duplicate": True, "reason": "该推荐已有订单提交记录"}
             claimed = True
             try:
                 result.update(client.submit_bet(payload))

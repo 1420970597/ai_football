@@ -1,8 +1,11 @@
 import json
+import hashlib
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from contextlib import closing
 from pathlib import Path
@@ -47,6 +50,164 @@ class BettingExecutionTests(unittest.TestCase):
         executor = BettingExecutor(self.settings, lambda: self.hub, lambda: self.ledger, self.factory)
         executor.bind(self.temp.name + '/ledger')
         return executor
+
+    def refresh_recommendation(self, odds=2.05, **selection):
+        self.pick.update(odds=odds, **selection)
+        self.pick['order_detail'].update(oddFinally=str(odds), marketValue=self.pick['line'],
+                                         playOptions=self.pick['outcome'])
+        self.row['version'] += 1
+        self.row['published_at_ms'] = time.time() * 1000
+        self.snapshot.update(version=self.row['version'], quotes=[LiveQuote(
+            self.row['match_id'], '2', self.pick['line'], 'option1', self.pick['outcome'],
+            odds, int(time.time() * 1000))])
+
+    def test_odds_changes_and_restart_preserve_one_order(self):
+        first = self.executor.execute(self.row, self.pick)
+        self.assertEqual(first['status'], 'accepted')
+        for executor, odds in ((self.executor, 2.05), (self.make_executor(), 1.85),
+                               (self.make_executor(), 1.95)):
+            with self.subTest(odds=odds):
+                self.refresh_recommendation(odds)
+                executor.enqueue(self.row)
+                duplicate = executor.flush()[0]
+                self.assertTrue(duplicate.get('duplicate'), duplicate)
+                self.assertEqual(duplicate['identity'], first['identity'])
+                self.assertEqual(duplicate['order_no'], 'ORDER-1')
+        self.client.submit_bet.assert_called_once()
+        self.client.prepare_bet.assert_called_once()
+
+    def test_changed_odds_never_replay_rejected_pending_or_unknown_orders(self):
+        for receipt in (BetSubmissionRejected('拒单'), BetSubmissionUnknown('未知'),
+                        RuntimeError('transport failure'),
+                        {'submitted': True, 'status': 'pending', 'order_no': 'ORDER-1'}):
+            with self.subTest(receipt=receipt):
+                self.row['match_id'] = self.pick['order_detail']['matchId'] = str(receipt)
+                self.client.submit_bet.side_effect = receipt if isinstance(receipt, Exception) else None
+                if isinstance(receipt, dict):
+                    self.client.submit_bet.return_value = receipt
+                self.refresh_recommendation(1.95)
+                first = self.executor.execute(self.row, self.pick)
+                self.assertIn(first['status'], ('rejected', 'pending', 'unknown'))
+                self.refresh_recommendation(2.05)
+                duplicate = self.make_executor().execute(self.row, self.pick)
+                self.assertTrue(duplicate.get('duplicate'), duplicate)
+                self.assertEqual(duplicate['status'], first['status'])
+        self.assertEqual(self.client.submit_bet.call_count, 4)
+
+    def test_changed_odds_during_transport_cannot_submit_second_order(self):
+        def submit(payload):
+            self.refresh_recommendation()
+            duplicate = self.make_executor().execute(self.row, self.pick)
+            self.assertTrue(duplicate.get('duplicate'), duplicate)
+            self.assertEqual(duplicate['status'], 'unknown')
+            self.assertIsNone(duplicate['submitted'])
+            return {'submitted': True, 'status': 'accepted', 'order_no': 'ORDER-1'}
+        self.client.submit_bet.side_effect = submit
+        self.assertEqual(self.executor.execute(self.row, self.pick)['status'], 'accepted')
+        self.client.submit_bet.assert_called_once()
+
+    def test_concurrent_changed_odds_claim_only_one_order(self):
+        barrier = threading.Barrier(2)
+        def prepare(detail, stake):
+            barrier.wait(timeout=5)
+            return detail
+        self.client.prepare_bet.side_effect = prepare
+        workers = []
+        for odds in (1.95, 2.05):
+            pick = {**self.pick, 'odds': odds, 'order_detail': {**self.pick['order_detail'], 'oddFinally': str(odds)}}
+            row = {**self.row, 'picks': [pick]}
+            snapshot = {**self.snapshot, 'quotes': [replace(self.snapshot['quotes'][0], odds=odds)]}
+            hub = MagicMock()
+            hub.decision_snapshot.return_value = snapshot
+            executor = BettingExecutor(RuntimeSettings(self.settings.config), lambda h=hub: h,
+                                       lambda: self.ledger, self.factory)
+            executor.bind(self.temp.name + '/ledger')
+            workers.append((executor, row, pick))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(executor.execute, row, pick) for executor, row, pick in workers]
+            results = [future.result(timeout=10) for future in futures]
+        self.assertEqual(sum(r['status'] == 'accepted' and not r.get('duplicate') for r in results), 1, results)
+        self.assertEqual(sum(bool(r.get('duplicate')) or r['status'] == 'duplicate' for r in results), 1, results)
+        self.client.submit_bet.assert_called_once()
+
+    def test_legacy_price_keys_survive_upgrade_with_receipts_intact(self):
+        legacy = []
+        with closing(sqlite3.connect(self.executor.path)) as db:
+            db.execute('CREATE TABLE orders (identity TEXT PRIMARY KEY, at REAL NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL)')
+            for index, status in enumerate(('accepted', 'pending', 'sending', 'unknown', 'rejected')):
+                mid = 'legacy-' + status
+                for odds in (1.95, 1.85):
+                    # Exact old format; payloads did not retain the account or odds.
+                    identity = hashlib.sha256(json.dumps(['old-account', mid, 'OU', '2.5', 'over', str(odds)],
+                                                         ensure_ascii=False).encode()).hexdigest()
+                    payload = {'identity': identity, 'match_id': mid, 'market': 'OU', 'line': '2.5',
+                               'outcome': 'over', 'status': status, 'submitted': status in ('accepted', 'pending'),
+                               'order_no': identity, 'checked_at_ms': index}
+                    raw = json.dumps(payload, ensure_ascii=False)
+                    db.execute('INSERT INTO orders VALUES (?,?,?,?)', (identity, index, status, raw))
+                    legacy.append((identity, status, raw))
+            db.commit()
+        for status in ('accepted', 'pending', 'sending', 'unknown', 'rejected'):
+            with self.subTest(status=status), patch.dict('os.environ', {'LEYU_APP_LOGIN_NAME': 'current-account'}):
+                self.row['match_id'] = self.pick['order_detail']['matchId'] = 'legacy-' + status
+                self.refresh_recommendation()
+                for executor in (self.executor, self.make_executor()):
+                    duplicate = executor.execute(self.row, self.pick)
+                    self.assertTrue(duplicate.get('duplicate'), duplicate)
+                    self.assertEqual(duplicate['status'], 'unknown' if status == 'sending' else status)
+                    self.assertEqual(duplicate['order_no'], duplicate['identity'])
+        with closing(sqlite3.connect(self.executor.path)) as db:
+            saved = db.execute('SELECT identity,status,payload FROM orders ORDER BY identity').fetchall()
+        self.assertEqual(saved, sorted(legacy))
+        self.factory.assert_not_called()
+        self.client.submit_bet.assert_not_called()
+
+    def test_distinct_lines_directions_and_accounts_remain_separate(self):
+        with patch.dict('os.environ', {'LEYU_APP_LOGIN_NAME': 'account-a'}):
+            self.assertEqual(self.executor.execute(self.row, self.pick)['status'], 'accepted')
+            self.refresh_recommendation(line='3.5')
+            self.assertEqual(self.executor.execute(self.row, self.pick)['status'], 'accepted')
+            self.refresh_recommendation(outcome='under')
+            self.assertEqual(self.executor.execute(self.row, self.pick)['status'], 'accepted')
+            self.refresh_recommendation(outcome='over')
+            self.assertTrue(self.executor.execute(self.row, self.pick).get('duplicate'))
+            self.refresh_recommendation(market='OU_1H')
+            self.assertEqual(self.executor.execute(self.row, self.pick)['status'], 'accepted')
+            self.row['match_id'] = self.pick['order_detail']['matchId'] = 'another-match'
+            self.refresh_recommendation()
+            self.assertEqual(self.executor.execute(self.row, self.pick)['status'], 'accepted')
+        with patch.dict('os.environ', {'LEYU_APP_LOGIN_NAME': ' ACCOUNT-A '}):
+            self.assertTrue(self.make_executor().execute(self.row, self.pick).get('duplicate'))
+        with patch.dict('os.environ', {'LEYU_APP_LOGIN_NAME': 'account-b'}):
+            self.assertEqual(self.make_executor().execute(self.row, self.pick)['status'], 'accepted')
+        self.assertEqual(self.client.submit_bet.call_count, 6)
+
+    def test_invalid_legacy_payload_blocks_send_and_rolls_back_migration(self):
+        with closing(sqlite3.connect(self.executor.path)) as db:
+            db.execute('CREATE TABLE orders (identity TEXT PRIMARY KEY, at REAL NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL)')
+            db.execute('INSERT INTO orders VALUES (?,?,?,?)', ('legacy', 1, 'sending', '{}'))
+            db.commit()
+        with self.assertLogs('service.betting', level='WARNING'):
+            result = self.executor.execute(self.row, self.pick)
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn('历史订单标识不完整', result['reason'])
+        with closing(sqlite3.connect(self.executor.path)) as db:
+            self.assertEqual(db.execute('SELECT * FROM orders').fetchall(), [('legacy', 1, 'sending', '{}')])
+            self.assertEqual([col[1] for col in db.execute('PRAGMA table_info(orders)')],
+                             ['identity', 'at', 'status', 'payload'])
+        self.factory.assert_not_called()
+        self.client.submit_bet.assert_not_called()
+
+    def test_claim_failure_rolls_back_without_sending_or_reserving_order(self):
+        self.settings.claim_bet = MagicMock(side_effect=RuntimeError('persistence failure'))
+        with self.assertLogs('service.betting', level='WARNING'):
+            result = self.executor.execute(self.row, self.pick)
+        self.assertEqual(result['status'], 'blocked')
+        with closing(sqlite3.connect(self.executor.path)) as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM orders').fetchone()[0], 0)
+        self.client.submit_bet.assert_not_called()
+        del self.settings.claim_bet
+        self.assertEqual(self.make_executor().execute(self.row, self.pick)['status'], 'accepted')
 
     def test_enabled_background_queue_submits_protocol_once_and_survives_restart(self):
         self.executor.enqueue(self.row)
