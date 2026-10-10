@@ -1,0 +1,23 @@
+# Analytics image copies only these source directories and its entrypoint.
+**
+!core/
+!core/**
+!store/
+!store/**
+!collector/
+!collector/**
+!service/
+!service/**
+!api/
+!api/**
+!tools/
+!tools/leyu_session_doctor.py
+!web/
+!web/console/
+!web/console/**
+!docker/
+!docker/**
+**/__pycache__/
+**/*.pyc
+**/.env*
+**/*.log

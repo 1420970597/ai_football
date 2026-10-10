@@ -13,7 +13,7 @@
 | `C0`   | 心跳应答 | `"Heartbeat Reply Success"` |
 | `C103` | 比分更新 | `cd.msc`（`S1: 2-1` 序列）、`cd.mpid` |
 | `C105` | **盘口赔率更新** | `cd` 为 base64+gzip；`hls2.<chpid>[].ol[]` 含 **`obv`(旧值) / `ov`(新值)** |
-| `C102` | 赛事事件/状态 | `cd.cmec`/`cd.mmp`/`cd.mst` || `C109` | 批量赛事结束 | `[{mid, ms:110}]` |
+| `C102` | 赛事事件/状态 | `cd.cmec`/`cd.mmp`/`cd.mst` || `C109` | 批量赛事结束 | `[{mid, ms:3}]` |
 | `C110` | 玩法计数 | `{mid, mc}` |
 | `C153` | 链接切换 | `{mid, linkId, hids}` |
 | `C303` | 玩法暂停 | `{mid, hpid}` |
@@ -351,6 +351,9 @@ class LiveBook:
                 odds = _to_float(t.new_ov, 0.0)
                 if odds <= 1.0:
                     continue        # 非法赔率不入表（1.0 以下不可能成交）
+                previous = self._rows.get(key)
+                if previous and previous.ts_ms > _to_int(t.ts_ms, 0):
+                    continue  # REST enrichment must not roll back newer push quotes.
                 self._rows[key] = LiveQuote(
                     mid=t.mid, chpid=t.chpid, hv=t.hv, oid=t.oid, ot=t.ot,
                     odds=odds, ts_ms=_to_int(t.ts_ms, 0), at=now)
@@ -596,7 +599,8 @@ class ScoreStore:
         self._lock = threading.RLock()
 
     def save(self, scores: Mapping[str, Any], finished: Any,
-             force: bool = False) -> bool:
+             force: bool = False, half_scores: Optional[Mapping[str, Any]] = None,
+             final_proofs: Optional[Mapping[str, Any]] = None) -> bool:
         """原子写入 `{mid: {"ft": [h,a], "ht": [h,a]|null, "done": bool}}`。"""
         path = self.path
         if path is None:
@@ -605,12 +609,13 @@ class ScoreStore:
         if not force and (now - self.last_save_at) < _SCORE_SAVE_INTERVAL_S:
             return False
         done = {str(m) for m in (finished or ())}
-        payload: Dict[str, Any] = {"version": 1}
+        payload: Dict[str, Any] = {"version": 2}
         try:
             payload["saved_at"] = datetime.now(timezone.utc).isoformat()
             payload["scores"] = {
                 str(mid): {"ft": [int(v[0]), int(v[1])],
-                           "done": str(mid) in done}
+                           "done": str(mid) in done, "ht": (half_scores or {}).get(str(mid)),
+                           "final_proof": (final_proofs or {}).get(str(mid))}
                 for mid, v in (scores or {}).items()
                 if v and v[0] is not None and v[1] is not None}
         except (TypeError, ValueError, IndexError):
@@ -985,6 +990,23 @@ def parse_c103(decoded: Mapping[str, Any]) -> Optional[Tuple[str, Tuple[int, int
     return None
 
 
+def _period_score_from_payload(value: Any, period: str) -> Optional[Tuple[int, int]]:
+    """从推送 `msc` 的 S2/S1 片段提取阶段比分。"""
+    chunks = [value] if isinstance(value, str) else value if isinstance(value, Sequence) else ()
+    prefix = period + "|"
+    for chunk in chunks:
+        text = str(chunk).strip().strip("'")
+        if not text.startswith(prefix):
+            continue
+        _, _, score = text.partition("|")
+        left, _, right = score.partition(":")
+        try:
+            return int(left), int(right)
+        except ValueError:
+            return None
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Hub：后台推送消费 + 共享只读状态
 # --------------------------------------------------------------------------- #
@@ -1058,11 +1080,13 @@ class RealtimeHub:
         self._status: Dict[str, Dict[str, Any]] = {}
         self._events: Dict[str, Deque[Dict[str, Any]]] = {}
         self._info: Dict[str, Dict[str, Any]] = {}
+        self._market_meta: Dict[str, Dict[str, Any]] = {}
         self._versions: Dict[str, int] = {}
         self._received_at: Dict[str, float] = {}
         self._status_at: Dict[str, float] = {}
         self._suspensions: Dict[str, Dict[str, float]] = {}
         self._finished: set = set()
+        self._final_proofs: Dict[str, Dict[str, Any]] = {}
         # `_finished` also contains historical terminal scores restored at boot.
         # Those records must not suppress a match that appears in the current
         # schedule.  This set only tracks terminal events from this process and
@@ -1139,8 +1163,13 @@ class RealtimeHub:
                     continue
                 mid = str(mid)
                 self._scores[mid] = (h, a)
-                if rec.get("done"):
+                ht = rec.get("ht")
+                if isinstance(ht, (list,tuple)) and len(ht)==2 and all(isinstance(v,int) and not isinstance(v,bool) and v>=0 for v in ht):
+                    self._status.setdefault(mid,{})['half_score'] = list(ht)
+                proof = rec.get('final_proof')
+                if rec.get('done') and isinstance(proof,Mapping) and (str(proof.get('ms'))=='3' or str(proof.get('mmp'))=='999'):
                     self._finished.add(mid)
+                    self._final_proofs[mid] = dict(proof)
 
     def _save_scores(self, force: bool = False) -> None:
         """把当前比分/结束集合落盘（节流；失败不影响推送）。
@@ -1154,8 +1183,10 @@ class RealtimeHub:
         with self._lock:
             scores = dict(self._scores)
             finished = set(self._finished)
+            half_scores = {mid: list(st['half_score']) for mid,st in self._status.items() if st.get('half_score')}
+            final_proofs = dict(self._final_proofs)
         try:
-            self.scores_store.save(scores, finished, force=force)
+            self.scores_store.save(scores, finished, force=force, half_scores=half_scores, final_proofs=final_proofs)
         except (AttributeError, OSError, TypeError, ValueError) as exc:
             self.stats.last_error = "比分落盘失败: %s" % exc
 
@@ -1243,23 +1274,39 @@ class RealtimeHub:
                     "home": match.home, "away": match.away,
                     "sport": match.sport, "sport_id": match.sport_id,
                 }
-                if now - self._status_at.get(mid, 0) > 10:
+                ticks = []
+                meta = self._market_meta.setdefault(mid, {})
+                for market in getattr(match, "markets", ()):
+                    meta[str(market.chpid)] = {"name": market.name, "hpt": market.hpt}
+                    for q in market.quotes:
+                        ot = {"home": "1", "away": "2", "draw": "X",
+                              "over": "Over", "under": "Under"}.get(q.outcome, q.label or q.oid)
+                        ticks.append(PriceTick(mid, str(market.chpid), "", market.hv,
+                                               q.oid, ot, q.decimal, q.decimal,
+                                               q.ctsp or market.ctsp))
+                self.live.upsert_many(ticks)
+                if match.is_finished or now - self._status_at.get(mid, 0) > 10:
                     self._status[mid] = {**self._status.get(mid, {}),
                                          "mst": match.minute, "mmp": match.period}
+                    half = getattr(match, "half_score", (None, None))
+                    if half and half[0] is not None and half[1] is not None:
+                        self._status[mid]["half_score"] = [int(half[0]), int(half[1])]
                     self._status_at[mid] = now
-                if now - self._score_at.get(mid, 0) > 10:
+                if match.is_finished or now - self._score_at.get(mid, 0) > 10:
                     from core.live_model import valid_score
                     score = valid_score(match.score)
                     if score is not None:
                         self._scores[mid] = score
                         self._score_at[mid] = now
                 if match.is_finished:
+                    self._final_proofs[mid] = {'ms':match.status,'mmp':match.period}
                     self._finished.add(mid)
                     self._runtime_finished.add(mid)
                 else:
                     # 当前赛程是权威状态：旧快照/旧进程留下的终场记录不能
                     # 把这次仍在进行的赛事标成 finished，或阻断实时分析。
                     self._finished.discard(mid)
+                    self._final_proofs.pop(mid,None)
                     self._runtime_finished.discard(mid)
                 self._changed_state(mid)
                 mids.append(mid)
@@ -1274,6 +1321,7 @@ class RealtimeHub:
                 "version": self._versions.get(mid, 0),
                 "received_at": self._received_at.get(mid, 0),
                 "score": self._scores.get(mid),
+                "half_score": self.half_score(mid),
                 "score_age_s": self.score_age_s(mid),
                 "status_age_s": (time.monotonic() - self._status_at[mid]
                                  if mid in self._status_at else None),
@@ -1283,6 +1331,7 @@ class RealtimeHub:
                 "suspended_ids": list(self._suspensions.get(mid, {})),
                 "events": [dict(e) for e in self._events.get(mid, ())],
                 "quotes": self.live.book(mid),
+                "market_meta": dict(self._market_meta.get(mid, {})),
             }
 
     def state_version(self, mid: str) -> int:
@@ -1402,8 +1451,14 @@ class RealtimeHub:
         with self._lock:
             baseline = len(self._last_price)
             snaps = self._snapshots
+        try:
+            session = self.session_provider.describe()
+        except Exception as exc:  # noqa: BLE001 - health must remain available
+            session = {"provider": type(self.session_provider).__name__,
+                       "describe_error": type(exc).__name__}
         return {
             "running": self.running,
+            "session": session,
             # 已建立基线的赔率选项数：对比它可判断推送是否在正常覆盖盘口
             "price_options": baseline,
             # 收到的赔率快照条数（含未变化的），用于区分“推送正常但没变化”
@@ -1535,10 +1590,13 @@ class RealtimeHub:
                 parsed = parse_c103(decoded)
                 if parsed:
                     mid, score = parsed
+                    half = _period_score_from_payload(decoded.get("msc"), "S2")
                     with self._lock:
                         self._touch_seen(mid)
                         self._scores[mid] = score
                         self._score_at[mid] = time.monotonic()
+                        if half is not None:
+                            self._status.setdefault(mid, {})["half_score"] = list(half)
                         self._changed_state(mid)
                     self.stats.score_updates += 1
                     # 落盘赛果（见 ScoreStore：结束之后就再也拿不到了）
@@ -1556,13 +1614,26 @@ class RealtimeHub:
                 with self._lock:
                     self._touch_seen(mid)
                     self._status[mid] = {
+                        **self._status.get(mid, {}),
                         "cmec": decoded.get("cmec"),
                         "mmp": decoded.get("mmp"),
                         "mst": decoded.get("mst"),
                         "ha": decoded.get("ha"),
                     }
+                    half = _period_score_from_payload(decoded.get("msc"), "S2")
+                    if half is not None:
+                        self._status[mid]["half_score"] = list(half)
+                    final = str(decoded.get('mmp'))=='999' or str(decoded.get('ms'))=='3'
+                    if final:
+                        self._final_proofs[mid] = {'ms':decoded.get('ms'),'mmp':decoded.get('mmp')}
+                        final_score = _period_score_from_payload(decoded.get('msc'), 'S1')
+                        if final_score is not None:
+                            self._scores[mid] = final_score
+                        self._finished.add(mid)
+                        self._runtime_finished.add(mid)
                     self._status_at[mid] = time.monotonic()
                     self._changed_state(mid)
+                self._save_scores(force=final)
                 self._notify_state_change([mid])
                 self.stats.status_updates += 1
                 self._record_event(mid, {"cmd": cmd, "cmec": decoded.get("cmec")})
@@ -1575,7 +1646,14 @@ class RealtimeHub:
                 for it in items:
                     if isinstance(it, Mapping):
                         mid = str(it.get("mid", ""))
-                        self._finished.add(mid)
+                        # C109 is removal, which can also mean cancelled/closed.
+                        # Only an explicit final status certifies the score.
+                        if str(it.get('ms'))=='3' or str(it.get('mmp'))=='999':
+                            self._finished.add(mid)
+                            self._final_proofs[mid] = {'ms':it.get('ms'),'mmp':it.get('mmp')}
+                            final_score = _period_score_from_payload(it.get('msc'),'S1')
+                            if final_score is not None:
+                                self._scores[mid]=final_score
                         self._runtime_finished.add(mid)
                         self._changed_state(mid)
             self._notify_state_change([str(it.get("mid", ""))

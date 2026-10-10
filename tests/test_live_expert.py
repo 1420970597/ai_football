@@ -5,6 +5,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from collector.leyu_realtime import PriceTick, RealtimeHub
+from collector.session import NullSessionProvider
 from service.analysis import AnalysisConfig, AnalysisService
 from service.live_expert import LiveExpertService, percentiles
 
@@ -37,10 +38,51 @@ class LiveExpertTests(unittest.TestCase):
         row = result['decisions'][0]
         self.assertTrue(row['probabilities'])
         self.assertTrue(row['candidates'])
-        self.assertEqual(row['decision'], 'observe')
+        self.assertEqual(row['decision'], 'forecast')
+        self.assertEqual(len(row['evaluations']), 2)
+        self.assertTrue(row['forecasts'])
         self.assertFalse(row['has_buy'])
         self.assertFalse(row['llm_used'])
         self.assertEqual(row['clock'], '60:00')
+
+    def test_all_standard_market_families_get_candidates(self):
+        hub = self.hub()
+        ts = int(time.time() * 1000)
+        hub._record_ticks([PriceTick('m', '4', '', '0.5', oc, oc, odds, odds, ts)
+                           for oc, odds in [('1', 1.9), ('2', 2.0)]])
+        hub._record_ticks([PriceTick('m', '19', '', '0.5', oc, oc, odds, odds, ts)
+                           for oc, odds in [('1', 1.9), ('2', 2.0)]])
+        row = LiveExpertService().compute(hub.decision_snapshot('m'), hub)
+        families = {c['market'] for c in row['evaluations'][0]['candidates']}
+        self.assertIn('AH', families)
+        self.assertIn('AH_1H', families)
+        self.assertTrue(all('decision_status' in c and 'effective_ev' in c for c in row['evaluations'][0]['candidates']))
+
+    def test_unknown_market_label_is_chinese_and_research_only(self):
+        hub = self.hub()
+        ts = int(time.time() * 1000)
+        hub._record_ticks([PriceTick('m', '998', '', '', oc, oc, 2.0, 2.0, ts)
+                           for oc in ('yes', 'no')])
+        row = LiveExpertService().compute(hub.decision_snapshot('m'), hub)
+        raw = next(m for m in row['markets'] if m['market'] == 'RAW_998')
+        self.assertIn('其他玩法', raw['name'])
+        labels = {q['label'] for q in raw['quotes']}
+        self.assertEqual(labels, {'其他玩法（RAW_998）是', '其他玩法（RAW_998）否'})
+
+    def test_missing_ah_line_does_not_discard_match(self):
+        hub = self.hub()
+        ts = int(time.time() * 1000)
+        hub._record_ticks([PriceTick('m', '4', '', '', oc, oc, odds, odds, ts)
+                           for oc, odds in [('1', 1.9), ('2', 2.0)]])
+        row = LiveExpertService().compute(hub.decision_snapshot('m'), hub)
+        self.assertTrue(row)
+        self.assertTrue(row['evaluations'])
+
+    def test_realtime_health_exposes_session_provider_state(self):
+        hub = RealtimeHub(NullSessionProvider("test"), resume=False)
+        health = hub.health()
+        self.assertEqual(health['session']['provider'], 'none')
+        self.assertIn('last_error', health)
 
     def test_continuous_ticks_keep_first_due(self):
         svc = AnalysisService(MagicMock(), realtime=self.hub(), config=AnalysisConfig(use_llm=False))
@@ -79,7 +121,7 @@ class LiveExpertTests(unittest.TestCase):
         for message in [dict(cmd='C102', cd={'mid': 'm', 'mst': '3660', 'mmp': '7'}),
                         dict(cmd='C110', cd={'mid': 'm', 'mc': 99999}),
                         dict(cmd='C303', cd={'mid': 'm', 'hpid': '2'}),
-                        dict(cmd='C109', cd=[{'mid': 'm', 'ms': 110}])]:
+                        dict(cmd='C109', cd=[{'mid': 'm', 'ms': 3}])]:
             hub._handle_message(message)
         self.assertEqual(callback.call_count, 4)
         self.assertTrue(hub.decision_snapshot('m')['finished'])
@@ -138,6 +180,29 @@ class LiveExpertTests(unittest.TestCase):
         self.assertEqual(code, 404)
         code, _ = app.dispatch('GET', '/api/v1/workbench', {'type': ['bogus']}, {})
         self.assertEqual(code, 400)
+
+    def test_recommendations_api_splits_open_and_closed_quotes(self):
+        from api.app import ApiApp
+        from service.ledger import LedgerEntry
+        import tempfile
+        hub = self.hub()
+        with tempfile.TemporaryDirectory() as root:
+            svc = AnalysisService(MagicMock(), realtime=hub, config=AnalysisConfig(use_llm=False, ledger_root=root))
+            svc.decide_matches(['m'])
+            pick = {'market': 'OU', 'line': '2.25', 'outcome': 'over', 'label': '全场大2.25',
+                    'odds': 1.9, 'p_model': .6, 'confidence': .6}
+            svc.ledger._append([LedgerEntry(at='2026-01-01T00:00:00Z', match_id='closed',
+                                             decision_id='closed', competition_type='real', is_pick=True,
+                                             algorithm='economic_ensemble', trigger='live_recommendation',
+                                             market='OU', line='2.25', outcome='over', label='关闭盘口',
+                                             odds=2.0, status='won', pnl=1.0)])
+            # Inject a single current decision; its market is present in the live book.
+            svc.live_expert._recommendations['m'] = {'at': '2026-01-01T00:00:00Z', 'at_epoch': time.time(), 'picks': [pick]}
+            app = ApiApp(MagicMock(), analysis=svc)
+            code, response = app.dispatch('GET', '/api/v1/recommendations', {'type': ['real']}, {})
+            self.assertEqual(code, 200)
+            self.assertTrue(any(item['match_id'] == 'm' for item in response['open']))
+            self.assertTrue(any(item['match_id'] == 'closed' and item['status'] == 'won' for item in response['closed']))
 
     def test_unknown_coverage_does_not_count_virtual_as_real(self):
         from api.app import ApiApp
@@ -206,6 +271,23 @@ class UnknownStateMessageTests(unittest.TestCase):
 
 
 class CurrentBookRetentionTests(unittest.TestCase):
+    def test_results_retain_last_recommendation_after_quote_gap(self):
+        svc = LiveExpertService()
+        svc._results['m'] = {
+            'match_id': 'm', 'competition_type': 'real', 'finished': False,
+            'has_buy': False, 'decision': 'observe', 'picks': [], 'markets': [],
+        }
+        svc._recommendations['m'] = {
+            'at': '2026-10-09T10:00:00+00:00', 'at_epoch': time.time() - 3,
+            'picks': [{'market': 'OU', 'line': '2.25', 'outcome': 'over',
+                       'label': '全场大2.25', 'odds': 1.95, 'confidence': .62}],
+        }
+        row = svc.results()['decisions'][0]
+        self.assertTrue(row['has_buy'])
+        self.assertEqual(row['decision'], 'recommend')
+        self.assertTrue(row['recommendation_retained'])
+        self.assertEqual(row['picks'][0]['label'], '全场大2.25')
+
     def test_load_ignores_expired_or_nonfinite_quotes(self):
         from pathlib import Path
         from collector.leyu_realtime import LiveBook, DEFAULT_QUOTE_MAX_AGE_S

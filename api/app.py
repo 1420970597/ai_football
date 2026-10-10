@@ -36,6 +36,8 @@ import json
 import re
 import math
 import os
+import copy
+import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -255,6 +257,7 @@ class ApiApp:
         #: 分析层（实时推送 + 决策引擎）。未注入时按需惰性构造，
         #: 避免每次测试构造 API 都去连上游。
         self._analysis = analysis
+        self._response_cache: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
 
     @property
     def analysis(self) -> Any:
@@ -295,7 +298,13 @@ class ApiApp:
             ("GET", "/board", self.h_board),
             ("GET", "/workbench", self.h_workbench),
             ("GET", "/workbench/<id>", self.h_workbench_detail),
+            ("GET", "/recommendations", self.h_recommendations),
+            ("GET", "/account", self.h_account),
+            ("POST", "/bet/preview", self.h_bet_preview),
+            ("POST", "/bet/draft", self.h_bet_draft),
             ("GET", "/llm", self.h_llm),
+            ("GET", "/settings", self.h_settings),
+            ("POST", "/settings", self.h_settings_save),
             ("GET", "/ledger/stats", self.h_ledger_stats),
             # 历史战绩：分日期/联赛/盘口 的分组统计 + 逐条明细（含实际比分）。
             # 与 /ledger/stats 互补：后者是“一句话结论”，本端点是
@@ -361,6 +370,9 @@ class ApiApp:
         except NotFound as exc:
             return HTTPStatus.NOT_FOUND, {"error": str(exc)}
         except ValueError as exc:
+            from service.runtime_settings import VersionConflict
+            if isinstance(exc, VersionConflict):
+                return HTTPStatus.CONFLICT, {"error": str(exc)}
             return HTTPStatus.BAD_REQUEST, {"error": str(exc)}
         except Exception as exc:  # 兜底：绝不把堆栈泄露给客户端
             return HTTPStatus.INTERNAL_SERVER_ERROR, {
@@ -555,32 +567,48 @@ class ApiApp:
         kind = _q1(query, "type", "real")
         if kind not in ("real", "virtual", "unknown", "all"):
             raise BadRequest("type 必须是 real/virtual/unknown/all")
+        cached = self._cached_response(kind, "workbench", 1.5)
+        if cached is not None:
+            return cached
         result = self.analysis.live_expert.results(kind)
         rt = self.analysis.realtime
         # A one-second UI poll must not scan/lock the complete persisted book.
         realtime = ({"running": rt.running, **rt.stats.as_dict()} if rt is not None
                     else {"running": False, "connected": 0})
+        persisted_recommendations: Dict[str, List[Dict[str, Any]]] = {}
+        try:
+            persisted_recommendations = self.analysis.ledger.live_recommendations(
+                [str(row.get('match_id', '')) for row in result.get('decisions', [])])
+        except (AttributeError, TypeError, ValueError):
+            persisted_recommendations = {}
         rows = []
         for row in result.pop("decisions"):
             public = self._public_live_row(row, bool(realtime.get("connected")))
-            # All markets remain available in details; the list stays compact.
-            displayed = []
-            for family in ("HAD", "AH", "OU"):
-                options = [m for m in row["markets"] if m["market"] == family]
-                options.sort(key=lambda m: abs(m["quotes"][0]["p_market"] - .5))
-                if options:
-                    displayed.append(options[0])
-            public["markets"] = displayed
+            persisted = persisted_recommendations.get(str(public.get('match_id', '')), [])
+            if persisted:
+                existing_keys = {(str(p.get('market', '')), str(p.get('line', '')), str(p.get('outcome', '')))
+                                 for p in public.get('picks') or []}
+                public['picks'] = list(public.get('picks') or []) + [p for p in persisted
+                    if (str(p.get('market', '')), str(p.get('line', '')), str(p.get('outcome', ''))) not in existing_keys]
+                public['has_buy'] = True
+                public['decision'] = 'recommend'
+                public['recommendation_retained'] = True
+            public["llm_review"] = self.analysis.live_review.public(row)
+            public.pop("evaluations", None)
+            public.pop("ensemble", None)
+            public.pop("candidates", None)
             public.pop("events", None)
             rows.append(public)
-        rows.sort(key=lambda r: (r["stale"], r.get("league", ""), r["match_id"]))
+        self._attach_recommendation_evidence_many(rows)
+        rows.sort(key=lambda r: (-float(r.get("recommendation_confidence", 0.0)),
+                                r["stale"], r.get("league", ""), r["match_id"]))
         result.update(
             matches=rows,
             realtime=realtime,
             coverage=self._workbench_coverage(kind, len(rows), rt),
             generated_at=datetime.now(timezone.utc).isoformat(),
         )
-        return result
+        return self._store_response(kind, "workbench", result)
 
     def _workbench_coverage(self, kind: str, displayed: int,
                             realtime: Optional[Any]) -> Dict[str, Any]:
@@ -628,10 +656,57 @@ class ApiApp:
         quote_age = max(0, time.time() - _as_float(row.get("quote_time_ms")) / 1000)
         public.update(result_age_s=round(age, 1), quote_age_s=round(quote_age, 1),
                       stale=not connected or age > 15 or quote_age > 15)
-        if public["stale"]:
-            public["picks"] = []
-            public["has_buy"] = False
+        # Retained recommendations remain visible while the match is live.
+        # Only the live quote is marked stale; the decision itself is not
+        # silently erased after one missed refresh.
+        if public["stale"] and not public.get("picks"):
+            public["decision"] = "observe"
         return public
+
+    def _attach_recommendation_evidence(self, row: Dict[str, Any]) -> None:
+        self._attach_recommendation_evidence_many([row])
+
+    def _attach_recommendation_evidence_many(self, rows: Sequence[Dict[str, Any]]) -> None:
+        keys = [(str(p.get("algorithm") or "economic_ensemble"), str(p.get("market") or ""),
+                 str(p.get("line") or ""), str(p.get("outcome") or ""))
+                for row in rows if not row.get("finished") for p in row.get("picks") or []]
+        try:
+            evidence_by_key = self.analysis.ledger.recommendation_performance_many(keys)
+        except (AttributeError, TypeError, ValueError):
+            evidence_by_key = {}
+        for row in rows:
+            if row.get("finished"):
+                continue
+            best = None
+            for pick in row.get("picks") or []:
+                key = (str(pick.get("algorithm") or "economic_ensemble"), str(pick.get("market") or ""),
+                       str(pick.get("line") or ""), str(pick.get("outcome") or ""))
+                evidence = evidence_by_key.get(key, {'hit_count': 0, 'miss_count': 0,
+                    'pending_count': 0, 'settled_samples': 0, 'accuracy': None})
+                pick.update({'hit_count': evidence['hit_count'], 'miss_count': evidence['miss_count'],
+                             'pending_count': evidence['pending_count'], 'settled_samples': evidence['settled_samples'],
+                             'historical_accuracy': evidence['accuracy']})
+                sample = float(evidence['settled_samples'] or 0)
+                observed = (float(evidence['hit_count']) + 1.0) / (sample + 2.0)
+                base = float(pick.get('confidence') or pick.get('p_model') or 0.0)
+                freshness = 0.75 if row.get('stale') else 1.0
+                pick['composite_confidence'] = round(base * (0.5 + 0.5 * observed) * freshness, 6)
+                if best is None or pick['composite_confidence'] > best['composite_confidence']:
+                    best = pick
+            if best is not None:
+                row['recommendation_confidence'] = best['composite_confidence']
+                row['recommendation_pick'] = best
+                row['recommendation_retained'] = bool(row.get('recommendation_retained'))
+
+    def _cached_response(self, kind: str, name: str, ttl_s: float) -> Optional[Dict[str, Any]]:
+        value = self._response_cache.get((kind, name))
+        if value and time.monotonic() - value[0] < ttl_s:
+            return copy.deepcopy(value[1])
+        return None
+
+    def _store_response(self, kind: str, name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self._response_cache[(kind, name)] = (time.monotonic(), payload)
+        return copy.deepcopy(payload)
 
     def h_workbench_detail(self, query: Mapping[str, List[str]],
                            body: Mapping[str, Any], match_id: str) -> Dict[str, Any]:
@@ -640,7 +715,156 @@ class ApiApp:
             raise NotFound("该场尚未收到实时算法结果")
         rt = self.analysis.realtime
         connected = bool(rt is not None and rt.stats.connected)
-        return self._public_live_row(row, connected)
+        public = self._public_live_row(row, connected)
+        try:
+            persisted = self.analysis.ledger.live_recommendations([match_id]).get(str(match_id), [])
+        except (AttributeError, TypeError, ValueError):
+            persisted = []
+        if persisted:
+            existing_keys = {(str(p.get('market', '')), str(p.get('line', '')), str(p.get('outcome', '')))
+                             for p in public.get('picks') or []}
+            public['picks'] = list(public.get('picks') or []) + [p for p in persisted
+                if (str(p.get('market', '')), str(p.get('line', '')), str(p.get('outcome', ''))) not in existing_keys]
+            public['has_buy'] = True
+            public['decision'] = 'recommend'
+            public['recommendation_retained'] = True
+        self._attach_recommendation_evidence(public)
+        public["llm_review"] = self.analysis.live_review.public(row)
+        return public
+
+    def h_recommendations(self, query: Mapping[str, List[str]],
+                          body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """Return recommended quotes split by current market availability.
+
+        ``open`` is based on the current live book: a quote remains open when
+        its market is still present, even if the recommendation was made only
+        once or the latest quote is temporarily stale. ``closed`` contains
+        persisted recommendation decisions no longer present in that live
+        book, including their settlement result.
+        """
+        kind = _q1(query, "type", "real")
+        if kind not in ("real", "virtual", "unknown", "all"):
+            raise BadRequest("type 必须是 real/virtual/unknown/all")
+        cached = self._cached_response(kind, "recommendations", 3.0)
+        if cached is not None:
+            return cached
+        live = self.h_workbench({"type": [kind]}, {}, "")
+        live_rows = {str(row.get("match_id")): row for row in live.get("matches", [])}
+        current: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+        for mid, row in live_rows.items():
+            for pick in row.get("picks") or []:
+                market = next((m for m in row.get("markets") or []
+                               if str(m.get("market")) == str(pick.get("market"))
+                               and str(m.get("line", "")) == str(pick.get("line", ""))), None)
+                quote = next((q for q in (market or {}).get("quotes", [])
+                              if str(q.get("outcome")) == str(pick.get("outcome"))), None)
+                # A market being stale is not the same as being closed. The
+                # retained decision remains in the open section as long as
+                # the live feed still publishes that market.
+                market_open = bool(market and not row.get("finished") and
+                                   not row.get("suspended"))
+                item = {"match_id": mid, "league": row.get("league", ""),
+                        "home": row.get("home", ""), "away": row.get("away", ""),
+                        "score": row.get("score"), "clock": row.get("clock"),
+                        "market_open": market_open, "stale": row.get("stale", False),
+                        "pick": dict(pick)}
+                if quote:
+                    item["pick"]["odds"] = quote.get("odds", item["pick"].get("odds"))
+                    item["pick"]["odds_live"] = True
+                key = (mid, str(pick.get("market", "")), str(pick.get("line", "")),
+                       str(pick.get("outcome", "")))
+                current[key] = item
+        entries = self.analysis.ledger.recommendation_entries(
+            competition_type=kind, algorithm="economic_ensemble", limit=3000)
+        closed: List[Dict[str, Any]] = []
+        for entry in entries:
+            key = (str(entry.get("match_id", "")), str(entry.get("market", "")),
+                   str(entry.get("line", "")), str(entry.get("outcome", "")))
+            current_item = current.get(key)
+            if current_item and current_item.get("market_open"):
+                continue
+            closed.append(entry)
+        open_items = [item for item in current.values() if item.get("market_open")]
+        open_items.sort(key=lambda item: -float((item.get("pick") or {}).get("composite_confidence") or 0))
+        closed.sort(key=lambda entry: str(entry.get("at", "")), reverse=True)
+        summary = {
+            "open": len(open_items), "closed": len(closed),
+            "won": sum(entry.get("status") in ("won", "half_won") for entry in closed),
+            "lost": sum(entry.get("status") in ("lost", "half_lost") for entry in closed),
+            "pending": sum(entry.get("status") == "pending" for entry in closed),
+        }
+        payload = {"open": open_items, "closed": closed[:1000], "summary": summary,
+                   "source_age_s": live.get("coverage", {}).get("source_age_s"),
+                   "generated_at": datetime.now(timezone.utc).isoformat()}
+        return self._store_response(kind, "recommendations", payload)
+
+    def h_settings(self, query: Mapping[str, List[str]],
+                   body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        out = {**self.analysis.runtime_settings.public(), "llm_review": self.analysis.live_review.health()}
+        from core.ensemble import algorithm_alerts
+        cfg = self.analysis.runtime_settings.config
+        out["algorithm_alerts"] = algorithm_alerts(cfg.algorithms, self.analysis.ledger.performance_evidence(),
+                                                     cfg.algorithm_alert_min_samples, cfg.algorithm_alert_threshold,
+                                                     cfg.algorithm_alert_enabled)
+        return out
+
+    def h_account(self, query: Mapping[str, List[str]],
+                  body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """Return the authenticated sports account summary, when configured."""
+        cached = self._cached_response("account", "summary", 5.0)
+        if cached is not None:
+            return cached
+        try:
+            from collector.leyu_account import account_client_from_env
+            client = account_client_from_env()
+            if client is None:
+                return {"available": False, "source": "leyu_app", "error": "未配置 App 会话"}
+            return self._store_response("account", "summary", client.fetch())
+        except Exception as exc:  # account telemetry must not break the workbench
+            return {"available": False, "source": "leyu_app", "error": str(exc)[:160]}
+
+    def h_bet_preview(self, query: Mapping[str, List[str]],
+                      body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """Validate a recommendation against the betting gate.
+
+        This endpoint only calculates a plan.  It never calls a venue order
+        endpoint; an explicit provider adapter is required for execution.
+        """
+        pick = body.get("pick")
+        if not isinstance(pick, Mapping):
+            raise BadRequest("pick 必须是对象")
+        from service.betting import preview_bet
+        return preview_bet(
+            pick, self.analysis.runtime_settings.config,
+            match_live=bool(body.get("match_live", True)),
+            market_open=bool(body.get("market_open", True)),
+        )
+
+    def h_bet_draft(self, query: Mapping[str, List[str]],
+                    body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        """Build the App-compatible order for manual review only.
+
+        No provider request is made here.  Keeping this separate from
+        ``/bet/preview`` makes it explicit when a payload contains real-money
+        order identifiers, while the response still requires the operator to
+        confirm the order in the official App.
+        """
+        pick = body.get("pick")
+        if not isinstance(pick, Mapping):
+            raise BadRequest("pick 必须是对象")
+        from service.betting import draft_ybty_bet
+        return draft_ybty_bet(
+            pick, self.analysis.runtime_settings.config,
+            match_live=bool(body.get("match_live", True)),
+            market_open=bool(body.get("market_open", True)),
+        )
+
+    def h_settings_save(self, query: Mapping[str, List[str]],
+                        body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
+        patch = body.get("settings")
+        if not isinstance(patch, Mapping):
+            raise BadRequest("settings 必须是对象")
+        return self.analysis.update_settings(patch, body.get("version"))
 
     def h_decisions(self, query: Mapping[str, List[str]],
                     body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
@@ -1264,8 +1488,13 @@ class ApiApp:
         kind = _q1(query, "type")
         if kind not in (None, "all", "real", "virtual", "unknown"):
             raise BadRequest("type 必须是 real/virtual/unknown/all")
+        cohort = _q1(query, "cohort", "all")
+        if cohort not in ("all", "prospective", "recommendations", "ensemble", "legacy"):
+            raise BadRequest("cohort 必须是 all/prospective/recommendations/ensemble/legacy")
         return self.analysis.ledger_history(only_picks=only_picks,
-                                            limit=limit, days=days, competition_type=kind)
+                                            limit=limit, days=days, competition_type=kind,
+                                            algorithm=_q1(query, "algorithm"), cohort=cohort,
+                                            offset=_q_int(query, "offset", 0, minimum=0, maximum=10000000))
 
     def h_ledger_entries(self, query: Mapping[str, List[str]],
                          body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:

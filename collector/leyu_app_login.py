@@ -68,6 +68,11 @@ LOGIN_ENV_STATE = "LEYU_APP_LOGIN_STATE"
 DEFAULT_LOGIN_STATE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "output", "auth", "_app_login_state.json")
 MIN_LOGIN_INTERVAL_S = 30.0
+# 网络超时或进程被杀死时，登录请求的最终结果可能无法确认。
+# 短时间内必须阻止重发，避免同一账号被重复计数；但永久保留 pending
+# 会让一次故障把自动续期永久锁死（历史上曾出现 8 小时 pending）。
+# 超过该窗口后允许一次新的受保护尝试，并刷新 pending 时间戳。
+PENDING_RECOVERY_S = 15.0 * 60.0
 
 #: 客户端版本（上游会校验；低版本返回 6606「版本过低」）
 CLIENT_VERSION = "2.0.1"
@@ -179,7 +184,12 @@ class LoginAttemptGuard:
             raise LoginRejected(entry["code"],
                                 "已停止自动账号登录；持久化保护需人工核对后解除。")
         if entry["outcome"] == "pending":
-            raise SessionError("上次账号请求结果不明；已停止自动账号登录，请先核对官方状态。")
+            age = time.time() - entry["at"]
+            if age < PENDING_RECOVERY_S:
+                raise SessionError("上次账号请求结果不明；已停止自动账号登录，请先核对官方状态。")
+            # 允许 login() 继续。它会在真正发送前再次 record(pending)，
+            # 因此并发进程仍受同一文件锁和恢复窗口保护。
+            return
         elapsed = time.time() - entry["at"]
         if elapsed < MIN_LOGIN_INTERVAL_S:
             raise SessionError("登录过于频繁；共享冷却期间已跳过账号提交。")
@@ -494,6 +504,12 @@ class AppLoginSessionProvider(SessionProvider):
     def cached_token(self) -> str:
         with self._lock:
             return self._token
+
+    def refresh_token(self) -> str:
+        """Force one guarded credential refresh after a token-only API rejects it."""
+        with self._lock:
+            self._token = ""
+        return self._do_login()
 
     # -- SessionProvider --------------------------------------------------
 
