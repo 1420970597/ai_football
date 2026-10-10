@@ -38,6 +38,8 @@ import math
 import os
 import copy
 import time
+import signal
+import threading
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1793,19 +1795,32 @@ def run_server(host: str = "0.0.0.0", port: int = 8000,
         hub = _start_background(app.svc, app)
     srv = make_server(app, host, port)
     print("ai_football API 监听 http://%s:%d" % (host, port))
+    previous_sigterm = None
+    if threading.current_thread() is threading.main_thread():
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+        def stop_on_sigterm(signum: int, frame: Any) -> None:
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, stop_on_sigterm)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
         ana = getattr(app, "_analysis", None)
         if ana is not None:
-            ana.stop_scheduler()
             ana.stop_cycle()
             ana.stop_settler()
         if hub is not None:
             hub.stop()
+        if ana is not None:
+            ana.stop_scheduler()
         srv.server_close()
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == "__main__":  # pragma: no cover

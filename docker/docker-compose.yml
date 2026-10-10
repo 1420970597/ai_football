@@ -50,6 +50,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.analytics
     container_name: ai_football_analytics_api
+    # SIGTERM stops producers and fsyncs queued history before container exit.
+    stop_grace_period: 60s
     ports:
       # 可覆盖： ANALYTICS_PORT=18000 docker compose ... up -d
       - "${ANALYTICS_PORT:-8000}:8000"

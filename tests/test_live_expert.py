@@ -2,6 +2,7 @@ import tempfile
 import time
 import unittest
 import json
+import gzip
 from unittest.mock import MagicMock, patch
 
 from collector.leyu_realtime import PriceTick, RealtimeHub
@@ -137,7 +138,8 @@ class LiveExpertTests(unittest.TestCase):
             self.assertEqual(row['score'], [1, 0])
             self.assertEqual(service.flush(), 1)
             from pathlib import Path
-            record = json.loads((Path(root) / 'live-replay.jsonl').read_text())
+            with gzip.open(Path(root) / 'live-replay.jsonl.gz', 'rt', encoding='utf-8') as file:
+                record = json.loads(file.read())
             self.assertEqual(record['input_state']['status']['mst'], '3600')
             self.assertTrue(record['markets'])
             self.assertTrue(record['anchor'])
