@@ -659,7 +659,7 @@ function renderDataModel(data) {
   ]));
   $('storage-description').textContent = storage.retention || '统计由后台更新，刷新页面不会扫描归档或启动训练。';
   const error = training.error || (storage.errors || []).join('；');
-  notice('data-model-notice',error || (!data.running ? '模型与数据后台尚未启动。启动分析服务后会自动检查。' : ''),!!error);
+  notice('data-model-notice',error || (!data.running ? '独立模型服务尚未启动，请启动 model-worker。' : ''),!!error);
 }
 async function loadDataModel(force = false) {
   if (dataModelBusy || (S.dataModelUnsupported && force !== true)) return;

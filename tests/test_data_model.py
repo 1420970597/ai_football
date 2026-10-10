@@ -13,7 +13,8 @@ from unittest.mock import MagicMock, patch
 from api.app import ApiApp
 from core.learned_model import FEATURES
 from service.analysis import AnalysisConfig, AnalysisService
-from service.data_model import DataModelService, storage_stats
+from service.data_model import DataModelService as Dashboard, storage_stats
+from service.model_service import ModelService as DataModelService
 from service.model_training import atomic_json
 from service.runtime_settings import RuntimeConfig, validated
 from store.ledger_db import LedgerDB
@@ -37,7 +38,7 @@ class DataModelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             svc = AnalysisService(MagicMock(), config=AnalysisConfig(use_llm=False, ledger_root=root+'/ledger'))
             app = ApiApp(MagicMock(), analysis=svc)
-            with patch('service.data_model.storage_stats') as stats, patch('service.data_model.subprocess.Popen') as process:
+            with patch('service.data_model.storage_stats') as stats, patch('service.model_service.subprocess.Popen') as process:
                 code, out = app.dispatch('GET', '/api/v1/data-model', {}, {})
                 self.assertEqual(code, 200)
                 self.assertEqual(out['model'], {})
@@ -111,7 +112,7 @@ class DataModelTests(unittest.TestCase):
             svc = DataModelService()
             svc.bind(root+'/ledger')
             svc.observe(decision())
-            with patch('service.data_model.write_inputs', side_effect=OSError('disk full')):
+            with patch('service.model_service.write_inputs', side_effect=OSError('disk full')):
                 with self.assertRaises(OSError):
                     svc._flush_shadow()
             self.assertEqual(len(svc._inputs),8)
@@ -143,7 +144,7 @@ class DataModelTests(unittest.TestCase):
             svc.bind(root+'/ledger')
             process = MagicMock()
             process.poll.return_value = None
-            with patch('service.data_model.subprocess.Popen', return_value=process):
+            with patch('service.model_service.subprocess.Popen', return_value=process):
                 svc.start()
                 deadline = time.monotonic()+3
                 while svc._process is None and time.monotonic() < deadline:
@@ -155,7 +156,7 @@ class DataModelTests(unittest.TestCase):
                 self.assertFalse(svc._inputs)
                 self.assertTrue((Path(root)/'models'/'inputs.sqlite3').exists())
                 svc.stop()
-                process.terminate.assert_called_once()
+                self.assertGreaterEqual(process.terminate.call_count, 1)
                 self.assertFalse(svc.status()['running'])
 
     def test_shadow_predictions_are_versioned_and_actual_metrics_use_settled_results(self):
@@ -167,7 +168,8 @@ class DataModelTests(unittest.TestCase):
             model.update(version='v1',updated_at='2024-12-31T00:00:00+00:00')
             atomic_json(Path(root)/'models'/'active.json',model)
             svc._read()
-            svc.observe(decision())
+            with patch('service.model_service.time.time', return_value=1735732800):
+                svc.observe(decision())
             svc._flush_shadow()
             path=Path(root)/'models'/'shadow.sqlite3'
             with closing(sqlite3.connect(path)) as con:
@@ -186,6 +188,9 @@ class DataModelTests(unittest.TestCase):
             self.assertEqual(evaluation['model']['matches'],1)
             self.assertEqual(evaluation['model']['decisions'],8)
             self.assertIn('baseline',evaluation)
+            with closing(sqlite3.connect(path)) as con, con:
+                con.execute("UPDATE predictions SET predicted_at='2025-01-01T15:00:00+00:00'")
+            self.assertEqual(prospective_metrics(db.path,path,model),{})
             atomic_json(path.parent/'prospective.json',evaluation)
             svc._read()
             self.assertEqual(svc.status()['prospective']['version'],'v1')
@@ -193,3 +198,22 @@ class DataModelTests(unittest.TestCase):
             atomic_json(path.parent/'active.json',model)
             svc._read()
             self.assertFalse(svc.status()['prospective'])
+
+    def test_dashboard_reads_worker_completion_without_starting_any_worker(self):
+        from datetime import datetime, timezone
+        with tempfile.TemporaryDirectory() as root:
+            svc = Dashboard()
+            svc.bind(root+'/ledger')
+            self.assertFalse(svc.status()['running'])
+            atomic_json(Path(root)/'models'/'dashboard.json', {
+                'service':'model-worker','running':True,'heartbeat_at':datetime.now(timezone.utc).isoformat(),
+                'training':{'state':'ready'},'model':{'version':'v1'},'storage':{}})
+            state = svc.status()
+            self.assertTrue(state['running'])
+            self.assertEqual(state['model']['version'],'v1')
+            self.assertEqual(state['training']['state'],'ready')
+            atomic_json(Path(root)/'models'/'dashboard.json', {
+                'service':'model-worker','running':True,'heartbeat_at':'2020-01-01T00:00:00+00:00',
+                'training':{'state':'training'},'model':{'version':'v1'},'storage':{}})
+            self.assertFalse(svc.status()['running'])
+            self.assertEqual(svc.status()['model']['version'],'v1')

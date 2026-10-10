@@ -197,6 +197,16 @@ class LiveExpertTests(unittest.TestCase):
         code, _ = app.dispatch('GET', '/api/v1/workbench', {'type': ['bogus']}, {})
         self.assertEqual(code, 400)
 
+    def test_public_quotes_preserve_journal_prefix_without_copying_it_to_ui(self):
+        from api.app import ApiApp
+        raw = {'markets': [{'quotes': [{'odds': 1.9, 'training_history': [[1, 1.8]],
+                                       'order_detail': {'id': 'native'}}]}],
+               'picks': [{'odds': 1.9, 'training_history': [[1, 1.8]]}]}
+        public = ApiApp._public_live_row(raw, True)
+        self.assertEqual(public['markets'][0]['quotes'][0], {'odds': 1.9})
+        self.assertEqual(public['picks'], [{'odds': 1.9}])
+        self.assertEqual(raw['markets'][0]['quotes'][0]['training_history'], [[1, 1.8]])
+
     def test_recommendations_api_splits_open_and_closed_quotes(self):
         from api.app import ApiApp
         from service.ledger import LedgerEntry

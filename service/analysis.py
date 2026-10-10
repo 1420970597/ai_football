@@ -654,7 +654,6 @@ class AnalysisService:
 
     def start_scheduler(self) -> bool:
         """启动变动触发式决策线程（幂等）。返回是否实际启动。"""
-        self.data_model.start()
         if not self.config.change_trigger:
             return False
         if self._sched_thread is not None and self._sched_thread.is_alive():
@@ -675,7 +674,6 @@ class AnalysisService:
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
         self.betting.stop()
-        self.data_model.stop()
         self.live_review.stop()
         self.live_expert.stop()
         self._flush_decision_history()
@@ -814,7 +812,6 @@ class AnalysisService:
                     self.notify_price_change([mid])
                 else:
                     self.betting.enqueue(row)
-                    self.data_model.observe(row)
                     self.live_review.submit(row)
             except (ValueError, TypeError, ArithmeticError) as exc:
                 self.live_expert.errors += 1
