@@ -112,6 +112,11 @@ class DoctorFingerprintTest(unittest.TestCase):
 
 
 class DoctorCredentialVerdictTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = directory.name
+
     def _env(self):
         return {
             "LEYU_APP_LOGIN_NAME": "example-user",
@@ -119,6 +124,8 @@ class DoctorCredentialVerdictTest(unittest.TestCase):
             "LEYU_APP_UUID": "example-device",
             "LEYU_APP_HOST": "https://app.test",
             "LEYU_APP_SIGNATURE": "a" * 64,
+            "LEYU_APP_LOGIN_STATE": os.path.join(self.directory, "guard.json"),
+            "LEYU_SESSION_CACHE": os.path.join(self.directory, "_session.json"),
         }
 
     def _run(self, login_reply, allow_login=False):
@@ -185,6 +192,22 @@ class DoctorCredentialVerdictTest(unittest.TestCase):
         self.assertNotIn("private-server-response", out)
         self.assertNotIn("口令错误", out)
         client.assert_not_called()
+
+    def test_repeated_doctor_invocations_share_login_rejection(self):
+        self._run({"status_code": 6002}, allow_login=True)
+        status, out, sent, client = self._run({"status_code": 6000}, allow_login=True)
+        self.assertEqual(status, 1)
+        self.assertEqual(sent, [])
+        self.assertIn("6002", out)
+        client.assert_not_called()
+
+    def test_doctor_retains_production_token_cache_without_duplicate_login(self):
+        self._run({"status_code": 6000, "data": {"token": "cached-app-token"}}, allow_login=True)
+        self.assertTrue(os.path.exists(os.path.join(self.directory, "_app_token.json")))
+        status, _, sent, _ = self._run({}, allow_login=True)
+        self.assertEqual(status, 0)
+        self.assertEqual(len(sent), 1)
+        self.assertTrue(sent[0].full_url.endswith("/venue/launch"))
 
     def test_commented_credentials_are_reported_but_never_enabled(self):
         import io

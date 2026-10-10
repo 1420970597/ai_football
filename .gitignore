@@ -17,6 +17,8 @@ env/
 .env
 .env.*
 !.env.example
+# 用户提供的账号口令列表
+/list.txt
 
 # 运行产物与日志
 output/

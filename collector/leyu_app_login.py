@@ -7,7 +7,8 @@ Kaptchcate=99；动态头算法与官方 Android 2.0.1 代码匹配。
 正常网页登录返回 6022 并显示人机验证，不能将网页验证模式套用到 App。
 离线测试验证协议实现，不能据此宣称当前账号登录已成功。
 本模块不处理或跳过人机验证。上游拒绝登录时停止后台账号重试，
-网络失败才按冷却间隔重试；已有有效 token 可继续用于场馆续期。
+初始化失败可按冷却间隔重试；已发送而结果不明时也停止账号重试。
+已有有效 token 可继续用于场馆续期。
 
 6002/6008 只表示当前请求未获接受，不能排除请求协议不匹配。
 登录签名必须属于 /site/api，场馆签名属于 /game/api。
@@ -17,15 +18,19 @@ Kaptchcate=99；动态头算法与官方 Android 2.0.1 代码匹配。
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
+import math
 import os
 import ssl
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, Mapping, Optional
 
 from .leyu_app_session import (
     APP_ENV_HOST,
@@ -59,6 +64,10 @@ LOGIN_ENV_NAME = "LEYU_APP_LOGIN_NAME"
 LOGIN_ENV_PASSWORD = "LEYU_APP_LOGIN_PASSWORD"
 #: /site/api 登录签名，与 LEYU_APP_SIGNATURE（/game/api）分开配置。
 LOGIN_ENV_SIGNATURE = "LEYU_APP_LOGIN_SIGNATURE"
+LOGIN_ENV_STATE = "LEYU_APP_LOGIN_STATE"
+DEFAULT_LOGIN_STATE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "output", "auth", "_app_login_state.json")
+MIN_LOGIN_INTERVAL_S = 30.0
 
 #: 客户端版本（上游会校验；低版本返回 6606「版本过低」）
 CLIENT_VERSION = "2.0.1"
@@ -80,11 +89,115 @@ VERSION_TOO_LOW = 6606
 
 
 class LoginRejected(SessionError):
-    """上游业务拒绝；同一 provider 不应自动重复提交账号口令。"""
+    """上游业务拒绝；同一账号不应自动重复提交口令。"""
 
     def __init__(self, status_code: str, detail: str) -> None:
         self.status_code = status_code
         super().__init__("登录被上游拒绝（status_code=%s）：%s" % (status_code, detail))
+
+
+class LoginAttemptGuard:
+    """在共享数据卷中保护账号，进程重启与配置变化不会清除拒绝记录。
+
+    锁文件保持稳定；状态原子替换。发送前先持久化 pending，故崩溃、
+    超时或无法解析响应都不能自动重发已经可能被上游处理的口令请求。
+    文件不可读、损坏或不可写时停止登录，不退回无保护的网络请求。
+    """
+
+    def __init__(self, path: str, account: str) -> None:
+        self.path = path
+        # 上游按账号计数，不能用换密码、设备或网关清除同一账号的保护。
+        identity = SITE_ID + ":" + account.strip().casefold()
+        self.account_key = hashlib.sha256(identity.encode()).hexdigest()
+
+    def _load(self) -> dict:
+        try:
+            with open(self.path, encoding="utf-8") as source:
+                state = json.load(source)
+        except FileNotFoundError:
+            return {"version": 1, "accounts": {}}
+        except (OSError, ValueError) as exc:
+            raise SessionError("登录保护状态无法读取；已停止账号提交。") from exc
+        if (not isinstance(state, dict) or state.get("version") != 1
+                or not isinstance(state.get("accounts"), dict)):
+            raise SessionError("登录保护状态结构异常；已停止账号提交。")
+        for key, entry in state["accounts"].items():
+            if (not isinstance(key, str) or not isinstance(entry, dict)
+                    or entry.get("outcome") not in ("pending", "rejected", "success")
+                    or type(entry.get("at")) not in (int, float)
+                    or not math.isfinite(entry["at"]) or entry["at"] < 0
+                    or (entry["outcome"] == "rejected" and (
+                        not isinstance(entry.get("code"), str)
+                        or not entry["code"].isdigit() or len(entry["code"]) > 8))):
+                raise SessionError("登录保护记录异常；已停止账号提交。")
+        return state
+
+    def _save(self, state: dict) -> None:
+        temporary = ""
+        try:
+            fd, temporary = tempfile.mkstemp(
+                prefix=".login-state-", dir=os.path.dirname(self.path) or ".")
+            with os.fdopen(fd, "w", encoding="utf-8") as target:
+                os.fchmod(target.fileno(), 0o600)
+                json.dump(state, target)
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary, self.path)
+            directory = os.open(os.path.dirname(self.path) or ".", os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError as exc:
+            raise SessionError("登录保护状态无法保存；已停止账号提交。") from exc
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
+
+    @contextmanager
+    def locked(self) -> Iterator[dict]:
+        fd: Optional[int] = None
+        try:
+            os.makedirs(os.path.dirname(self.path) or ".", mode=0o700, exist_ok=True)
+            fd = os.open(self.path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+            os.fchmod(fd, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if fd is not None:
+                os.close(fd)
+            raise SessionError("登录保护锁不可用或有另一进程正在登录；已跳过账号提交。") from exc
+        try:
+            yield self._load()
+        finally:
+            os.close(fd)
+
+    def check(self, state: dict) -> None:
+        entry = state["accounts"].get(self.account_key)
+        if not entry:
+            return
+        if entry["outcome"] == "rejected":
+            raise LoginRejected(entry["code"],
+                                "已停止自动账号登录；持久化保护需人工核对后解除。")
+        if entry["outcome"] == "pending":
+            raise SessionError("上次账号请求结果不明；已停止自动账号登录，请先核对官方状态。")
+        elapsed = time.time() - entry["at"]
+        if elapsed < MIN_LOGIN_INTERVAL_S:
+            raise SessionError("登录过于频繁；共享冷却期间已跳过账号提交。")
+
+    def record(self, state: dict, outcome: str, code: str = "") -> None:
+        entry: dict = {"at": time.time(), "outcome": outcome}
+        if code:
+            entry["code"] = code
+        state["accounts"][self.account_key] = entry
+        self._save(state)
+
+    def blocked(self) -> bool:
+        try:
+            with self.locked() as state:
+                entry = state["accounts"].get(self.account_key, {})
+                return entry.get("outcome") in ("pending", "rejected")
+        except SessionError:
+            return True
 
 
 def _md5_hex(text: str) -> str:
@@ -157,6 +270,7 @@ class AppLoginClient:
         timeout: float = HTTP_TIMEOUT_S,
         signature: str = "",
         signer: Optional[NativeAppSigner] = None,
+        login_state_path: Optional[str] = None,
     ) -> None:
         self.credentials = credentials
         self.app_host = _safe_base_url(app_host)
@@ -165,6 +279,10 @@ class AppLoginClient:
         self.signature = str(signature or "").strip()
         self.last_error = ""
         self.signer = signer
+        self.login_submissions = 0
+        self.guard = LoginAttemptGuard(
+            login_state_path or os.environ.get(LOGIN_ENV_STATE) or DEFAULT_LOGIN_STATE_PATH,
+            credentials.name)
 
     def _headers(self) -> Dict[str, str]:
         h: Dict[str, str] = {
@@ -186,6 +304,26 @@ class AppLoginClient:
         return h
 
     def login(self) -> str:
+        """持有共享锁，并在发送前写入账号尝试，防止任何客户端实例重发。"""
+        try:
+            with self.guard.locked() as state:
+                self.guard.check(state)
+                if self.signer is not None:
+                    self.signer.initialize(self.app_host, self.credentials.uuid, self.timeout)
+                self.guard.record(state, "pending")
+                try:
+                    self.login_submissions += 1
+                    token = self._submit_login()
+                except LoginRejected as exc:
+                    self.guard.record(state, "rejected", exc.status_code)
+                    raise
+                self.guard.record(state, "success")
+                return token
+        except SessionError as exc:
+            self.last_error = str(exc)
+            raise
+
+    def _submit_login(self) -> str:
         """执行登录并返回新的 `x-api-token`。
 
         Returns:
@@ -196,8 +334,6 @@ class AppLoginClient:
                 对 `6031 地区ip限制` 会给出**明确可操作**的说明，
                 因为这属于环境限制而非代码问题。
         """
-        if self.signer is not None:
-            self.signer.initialize(self.app_host, self.credentials.uuid, self.timeout)
         body = {
             "uuid": self.credentials.uuid,
             "name": self.credentials.name,
@@ -302,7 +438,7 @@ class AppLoginSessionProvider(SessionProvider):
         self._lock = threading.RLock()
         self._token = ""
         self._token_at = 0.0
-        # Monotonic timestamp of the last login attempt, including failures.
+        # 本实例冷却；客户端边界另有共享、持久化的账号保护。
         self._login_attempt_at: Optional[float] = None
         self.login_attempts = 0
         self._login_rejection: Optional[LoginRejected] = None
@@ -377,7 +513,7 @@ class AppLoginSessionProvider(SessionProvider):
             if self._login_rejection is not None:
                 raise SessionError(
                     "%s；已停止自动账号登录。请完成官方登录并更新 %s，"
-                    "或修正配置后重建服务再试。"
+                    "核对协议和账号状态后人工解除持久化保护。"
                     % (self._login_rejection, APP_ENV_TOKEN))
 
             if self._login_attempt_at is not None:
@@ -455,7 +591,9 @@ class AppLoginSessionProvider(SessionProvider):
             "has_cached_token": bool(self.cached_token),
             "logins": self.logins,
             "login_attempts": self.login_attempts,
-            "login_blocked": self._login_rejection is not None,
+            "credential_submissions": self.client.login_submissions,
+            "login_blocked": self._login_rejection is not None or self.client.guard.blocked(),
+            "login_state": self.client.guard.path,
             "refreshes": self.refreshes,
             "token_cache": self.token_cache_path or "",
             "last_error": self.last_error or self.client.last_error,
@@ -508,6 +646,7 @@ def login_provider_from_env(
         app_host=(e.get(APP_ENV_HOST) or "").strip() or DEFAULT_APP_HOST,
         signature=(e.get(LOGIN_ENV_SIGNATURE) or "").strip(),
         signer=signer_from_env(e),
+        login_state_path=(e.get(LOGIN_ENV_STATE) or "").strip() or None,
     )
     # 延迟导入避免循环：本模块与 leyu_app_session 互不依赖对方顶层符号
     from .leyu_app_session import AppCredentials, AppSessionBootstrapper

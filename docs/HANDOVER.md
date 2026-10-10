@@ -215,7 +215,12 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 
 ### 3.2 乐鱼鉴权与自动续期（2026-10-08 状态）
 
-**当前结论**：旧 token 已过期；用户已将刚注册的账号口令填入 `.env`。
+**当前结论**：按用户最新指定的正常账号及列表凭据完成一次 App 登录，已取得
+有效 token 与场馆会话，后台实时采集和 3003 盘口页面已恢复。App 自动续期
+已启用，缓存加载验证通过；真实 token 自然到期续期尚未观察。详细恢复证据
+见本节末尾“账号冻结与跨进程保护”。以下失败响应均为恢复前的历史排查记录。
+
+**恢复前诊断记录**：旧 token 已过期；用户已将刚注册的账号口令填入 `.env`。
 现有 App 登录请求返回 6002，但这不能证明该账号无效，也不能排除请求协议不匹配。
 旧诊断曾使用伪口令和错误字段，不能作为凭据无效或 IP 闸门已通过的证据（issue #10）。
 
@@ -242,7 +247,7 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 均未得到新 token。已停止重复账号提交，继续核对新账号注册入口与账号所属网关。
 这组结果不能证明新账号密码错误，也不能证明所有请求要求已被排除。
 
-**后续线上复核（2026-10-08，一手证据 A；数据源仍未恢复）**：
+**恢复前线上复核（2026-10-08，一手证据 A；当时数据源未恢复）**：
 - 用户明确确认 `.env` 账号状态正常；不能据接口拒绝把结论改写为密码错误。
 - 根 `.env` 两项登录凭据与 Compose 生效值逐字一致，没有变量插值、引号或
   首尾空格改变；原生 preInfo 返回 6000，测得客户端与响应 Date 偏差约 0.7 秒。
@@ -271,7 +276,7 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 - 成功登录得到的 token 缓存权限为 0600，并继续用于场馆续期和重启恢复。
 - 缓存绑定账号、设备和网关的 SHA-256 标识；换账号不复用旧账号缓存，旧无绑定缓存忽略。
 - 业务会话失效保留 App token，先重新 launch；launch 明确返回 token 过期才重登。
-- 配置变更需重新创建服务；重启允许重新尝试登录，不能把重启当作反复试密码的手段。
+- 配置变更需重新创建服务；issue #21 后的共享保护不会因重启解除账号拒绝记录。
 
 **恢复路径**：按用户要求优先核对当前官方 App 登录协议；也可在官方 App 登录后，将有效 x-api-token 更新到
 `.env` 的 `LEYU_APP_TOKEN`（网页 token 则同时更新 `LEYU_H5_TOKEN`），然后重新创建容器。
@@ -280,9 +285,9 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 仅健康检查 200 或已有历史快照不代表实时数据已恢复。
 
 生产部署端口为 API 8001、控制台 3003；重建不得误用默认 8000。
-诊断期间通过临时 compose override 暂停后台账号登录，以免锁定新账号。
+恢复前诊断期间曾通过临时 compose override 暂停后台账号登录；恢复后该暂停已清空。
 
-本轮最终验证：`./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q`
+PR #13 早期验证：`./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q`
 为 1011 tests / 14 skipped（exit 0）；Docker Python 3.12 的 mypy 为 49 文件无错误、
 ruff 为 All checks passed（均 exit 0）；受限 pyright 为 0 errors / warnings（exit 0）。
 Python 文件在验证期间保持不变，语法编译通过。线上 App token 仍未取得，实时计数仍为零。
@@ -304,6 +309,86 @@ JSON 为 `routes` 对象，包含空前缀、`/site/api`、`/game/api` 三个条
 读取容器实际配置，避免宿主工作区的旧脚本误导诊断。组合分支全量验证为
 1010 tests / 14 skipped（exit 0），Docker mypy 为 49 文件无错误、ruff 全绿、
 pyright 为 0 errors / warnings（均 exit 0）。
+
+#### 账号冻结与跨进程保护（issue #21）
+
+2026-10-08 用户提供账号列表后做了离线核对（证据 A）：列表第 3 行与
+`.env` 为同一账号，但 `.env` 密码多一个字符；Compose 确实原样读取该值。
+这证明两份配置不一致，不能推断用户记错密码。MD5 计算与官方 Android
+代码一致；动态请求头与成功抓包的离线契约一致，仍不等于当前线上登录成功。
+此前 6002 后又提交协议对照请求，随后返回 6030；不得用更多账号请求复核冻结。
+
+保护缺陷已确认：旧 `_login_rejection` 仅在 provider 内存，重启、独立诊断、
+直接调用客户端均可丢失保护。现在登录客户端使用共享文件锁和原子状态文件，
+默认 `/app/output/auth/_app_login_state.json`（宿主映射至仓库 `output/auth/`），
+也可用 `LEYU_APP_LOGIN_STATE` 指定所有进程共用的路径。保护按站点及账号绑定，
+密码、设备或网关变化不会自动解除。文件仅保存账号散列、时间、结果和业务码，
+不保存账号明文、密码、MD5、设备或 token；新文件权限 0600。
+
+| 情况 | 处理 |
+| --- | --- |
+| 已有有效 App token | 直接 launch，不提交账号 |
+| 登录成功 | 保存成功时间，30 秒共享冷却后允许正常续期 |
+| 上游业务拒绝，包括 6002/6030 | 持久化停止重试，重启仍有效 |
+| 请求已发但超时、崩溃或响应无法确认成功 | 保留 pending，停止自动重发 |
+| 初始化失败，尚未发送账号请求 | 不写账号提交记录，可按 provider 冷却重试 |
+| 状态文件损坏、不可写或锁被另一进程持有 | 停止本次账号提交 |
+
+```mermaid
+flowchart LR
+    A[账号登录] --> B[共享锁与账号记录]
+    B --> C{拒绝或结果不明?}
+    C -->|是| D[停止提交，人工核对]
+    C -->|否且冷却结束| E[持久化 pending]
+    E --> F[发送一次请求]
+    F -->|成功| G[保存成功时间与 token]
+    F -->|业务拒绝| H[保存拒绝码]
+    F -->|超时或进程中断| D
+```
+
+生产诊断在容器内运行，以便共用 output 卷；诊断保留 App token 缓存和保护
+状态，只跳过业务会话的历史回退。`--login` 也受共享保护约束。
+官方确认解冻且核定凭据/协议之后才可人工解除指定账号记录；不得通过删除
+锁文件、换设备、换网关或轮换列表账号继续尝试。初次部署曾为已有 6030 账号
+预置拒绝记录并暂停后台登录，随后按用户确认恢复，见下文。
+`list.txt` 已加入忽略规则；本机文件设为 0600，不提交内容。
+
+**2026-10-08 线上恢复验证（证据 A）**：用户明确指定列表中原账号状态正常，
+要求恢复采集。仅解除该账号的历史保护记录，使用已与列表一致的 `.env`
+密码执行一次生产 App 登录：成功取得 token、场馆业务会话，赛程读取
+**2196 场**（不是全部进行中比赛）。本轮账号提交 **1 次**，没有轮换账号。
+
+App 登录取得的新 token 写回私有 `.env`，沿既有 provider 链换取业务会话；启用
+`LEYU_SESSION_CACHE=/app/output/auth/_session.json`，App token 缓存位于同目录
+`_app_token.json`。旧暂停 override 已清空，后续使用旧部署命令也不会覆盖
+账号口令为空。账号拒绝/结果不明保护继续生效，不会自动解除。
+生产进程确认 token 缓存可加载、与运行配置一致；自动登录续期已启用。
+尚未等待真实 token 自然到期，不能把缓存验证称为到期续期实测。
+
+后台恢复后，WebSocket 建立连接并订阅 **65 场**，随赛事结束继续更新订阅。
+两次采样间隔 **32.7 秒**，推送新增 **1395 条**、盘口变动新增 **5478 次**、
+赔率快照新增 **18193 条**；第二次采样新鲜盘口 **9916 条**，最新报价年龄
+**1.2 秒**，重连次数 **0**。这些是当时测量值，会随赛事状态变化。
+`3003/api/v1/realtime` 和盘口 API 均返回 200；Playwright 实测控制台显示
+“实时推送已连接”，盘口页显示 **46 场 / 2149 个表格行**，空态及错误态未显示，
+控制台错误数 0。默认生产诊断（不提交账号）读取 **2213 场**，exit 0：
+
+```bash
+docker exec ai_football_analytics_api python /app/tools/leyu_session_doctor.py
+```
+
+生产 compose 恢复命令及采样断言均 exit 0：
+
+```bash
+ANALYTICS_PORT=8001 CONSOLE_PORT=3003 AI_FOOTBALL_CPUS=2 \
+  docker compose -f docker/docker-compose.yml \
+  -f output/deploy/console-fixes.compose.json \
+  up -d --no-deps --wait --wait-timeout 60 analytics-api
+```
+
+生产保持 API 8001 / 控制台 3003，三容器各 2 核。仅运行配置和文档更新，
+业务代码仍为已通过 1025 用例的 `2b8b548`。私有凭据、token、账号列表和
+截图/采样产物均保留于已忽略的本机路径，不提交 Git。
 
 ### 3.3 进行中场次与乐鱼"完全一致"（P1）
 

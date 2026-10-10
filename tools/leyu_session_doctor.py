@@ -115,12 +115,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("  – 注释配置（未生效）：" + ", ".join(sorted(disabled)))
     _report_credentials(env, disabled, allow_login=args.login)
 
-    env.pop(S.SESSION_ENV_CACHE, None)
     if not args.login:
         env.pop("LEYU_APP_LOGIN_NAME", None)
         env.pop("LEYU_APP_LOGIN_PASSWORD", None)
         env.pop(S.SESSION_ENV_COMMAND, None)
     provider = S.make_session_provider(env=env)
+    # 跳过业务会话的历史回退，但保留生产 token 缓存与持久化登录保护。
+    if isinstance(provider, S.CachedSessionProvider):
+        provider = provider.inner
     providers = provider.providers if isinstance(provider, S.ChainSessionProvider) else [provider]
     session: Optional[S.Session] = None
     print("\n=== provider 探测（每项一次）===")
