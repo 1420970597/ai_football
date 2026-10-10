@@ -29,7 +29,7 @@ class BettingTests(unittest.TestCase):
         self.assertTrue(result['execution']['configured_enabled'])
         self.assertTrue(result['execution']['execution_enabled'])
         self.assertFalse(result['submitted'])
-        self.assertFalse(result['plan']['executable'])
+        self.assertTrue(result['plan']['executable'])
         self.assertEqual(result['submission'], 'preview_only')
         self.assertIn('自动提交', result['execution']['reason'])
 
@@ -38,7 +38,7 @@ class BettingTests(unittest.TestCase):
                       betting_stake_mode='confidence_multiplier', betting_min_hit_count=3)
         plan = plan_bet(self.pick(), cfg)
         self.assertEqual(plan.stake, 16.0)
-        self.assertFalse(plan.executable)
+        self.assertTrue(plan.executable)
         blocked = preview_bet(self.pick(hit_count=2), cfg)
         self.assertFalse(blocked['allowed'])
         self.assertIn('命中次数不足', blocked['reason'])

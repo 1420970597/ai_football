@@ -130,7 +130,7 @@ class BetPlan:
     confidence: float
     hit_count: float
     mode: str
-    executable: bool = False
+    executable: bool = True
 
     def as_dict(self) -> dict[str, Any]:
         return {
