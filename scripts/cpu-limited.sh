@@ -13,7 +13,7 @@
 # 环境变量：
 #   AI_FOOTBALL_CPU_PERCENT  允许占用的宿主机 CPU 百分比（默认 50）
 #   AI_FOOTBALL_CPUSET       可选的硬钉核集（如 "0-1"）；设了就用 cpuset 而非 quota
-#   AI_FOOTBALL_CPUS         容器运行期限额（默认由百分比算出，由 compose 读取）
+#   AI_FOOTBALL_CPUS         容器运行期限额（默认 0.0，不限制；独立于构建预算）
 #
 # ---------------------------------------------------------------------------
 # 实测结论（勿"简化"掉这段，我踩过）：
@@ -52,9 +52,10 @@ NPROC="$(nproc)"
 # CFS 周期固定 100ms（=100000us，docker 默认）。配额 = 百分比 × 核数 × 周期。
 CFS_PERIOD=100000
 CPU_QUOTA=$(( NPROC * CFS_PERIOD * CPU_PERCENT / 100 ))
-# 容器运行期用 cores 表示（compose 的 `cpus`），保留一位小数。
+# 构建预算以 cores 表示；运行期配额单独配置。
 CORES="$(python3 -c "print(f'{$CPU_PERCENT / 100 * $NPROC:.1f}')")"
-export AI_FOOTBALL_CPUS="${AI_FOOTBALL_CPUS:-${CORES}}"
+# Build/test limits are independent of the runtime quota; 0.0 is unlimited.
+export AI_FOOTBALL_CPUS="${AI_FOOTBALL_CPUS:-0.0}"
 
 # 非 docker 命令（unittest/mypy/ruff）用 taskset 钉核。核数**向下取整**，
 # 保证「最多」不超过百分比（50% × 4 核 → 2 核 = cpu 0-1）。

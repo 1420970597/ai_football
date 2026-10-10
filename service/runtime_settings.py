@@ -50,6 +50,8 @@ class RuntimeConfig:
     betting_stake_mode: str = "fixed"
     betting_fixed_stake: float = 10.0
     betting_min_hit_count: int = 3
+    betting_retry_max_attempts: int = 5
+    betting_retry_base_delay_s: float = 2.0
     llm_experiment_enabled: bool = True
     llm_enabled: bool = False
     llm_base_url: str = ""
@@ -84,6 +86,8 @@ RANGES = {
     "algorithm_alert_threshold": (0.0, 1.0),
     "betting_fixed_stake": (0.01, 100000.0),
     "betting_min_hit_count": (1, 100000),
+    "betting_retry_max_attempts": (1, 20),
+    "betting_retry_base_delay_s": (0.5, 30.0),
 }
 
 
@@ -102,8 +106,8 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
             raise ValueError("%s 必须在 %s~%s 之间" % (key, lo, hi))
         if key == "llm_max_tokens" and (not isinstance(v, int)):
             raise ValueError("llm_max_tokens 必须是整数")
-        if key == "betting_min_hit_count" and not isinstance(v, int):
-            raise ValueError("betting_min_hit_count 必须是整数")
+        if key in ("betting_min_hit_count", "betting_retry_max_attempts") and not isinstance(v, int):
+            raise ValueError(key + " 必须是整数")
     for name in ("llm_enabled", "llm_experiment_enabled", "algorithm_alert_enabled",
                  "betting_enabled", "model_training_enabled"):
         if name in values and not isinstance(values[name], bool):

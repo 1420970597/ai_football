@@ -11,7 +11,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from collector.leyu_account import BetSubmissionRejected, BetSubmissionUnknown
+from collector.leyu_account import BetPreflightRetryable, BetSubmissionRejected, BetSubmissionUnknown
 from collector.leyu_realtime import LiveQuote, parse_c105
 from service.analysis import AnalysisConfig, AnalysisService
 from service.betting import BettingExecutor
@@ -89,6 +89,7 @@ class BettingExecutionTests(unittest.TestCase):
                 self.refresh_recommendation(1.95)
                 first = self.executor.execute(self.row, self.pick)
                 self.assertIn(first['status'], ('rejected', 'pending', 'unknown'))
+                self.assertEqual(self.executor.health()['retry_pending'], 0)
                 self.refresh_recommendation(2.05)
                 duplicate = self.make_executor().execute(self.row, self.pick)
                 self.assertTrue(duplicate.get('duplicate'), duplicate)
@@ -378,18 +379,167 @@ class BettingExecutionTests(unittest.TestCase):
     def test_new_decision_bypasses_quote_failure_cooldown_but_never_repeats_order(self):
         self.executor.on_recompute = MagicMock()
         self.snapshot['quotes'][0].odds = 2.05
-        with self.assertLogs('service.betting', level='WARNING'):
+        with self.assertLogs('service.betting', level='WARNING'), patch('service.betting.time.monotonic', return_value=100):
             blocked = self.executor.execute(self.row, self.pick)
         self.assertEqual(blocked['stage'], 'live_quote')
         self.assertTrue(blocked['retry_on_new_decision'])
-        self.executor.on_recompute.assert_called_once_with(['m'])
+        self.executor.on_recompute.assert_not_called()
         self.client.prepare_bet.assert_not_called()
         self.refresh_recommendation(2.05)
-        result = self.executor.execute(self.row, self.pick)
+        with patch('service.betting.time.monotonic', return_value=101):
+            self.assertTrue(self.executor.execute(self.row, self.pick)['recheck_deferred'])
+        with patch('service.betting.time.monotonic', return_value=102):
+            self.executor.flush()
+            result = self.executor.execute(self.row, self.pick)
+        self.executor.on_recompute.assert_called_once_with(['m'])
         self.assertEqual(result['status'], 'accepted', result)
         self.refresh_recommendation(2.15)
         self.assertTrue(self.executor.execute(self.row, self.pick)['duplicate'])
         self.client.submit_bet.assert_called_once()
+
+    def test_preflight_timeout_retries_fresh_decisions_with_bounded_exponential_backoff(self):
+        self.settings.config = replace(self.settings.config, betting_retry_max_attempts=3)
+        self.executor.on_recompute = MagicMock()
+        self.client.prepare_bet.side_effect = BetPreflightRetryable('读取超时')
+        for index, moment, delay in ((1, 100, 2), (2, 102, 4), (3, 106, 30)):
+            self.row['published_at_ms'] += 1
+            with patch('service.betting.time.monotonic', return_value=moment), self.assertLogs('service.betting'):
+                result = self.executor.execute(self.row, self.pick)
+            self.assertEqual(result['attempt'], index)
+            self.assertEqual(result['retry_after_s'], delay)
+        self.assertTrue(result['retry_exhausted'])
+        self.assertFalse(result['retry_scheduled'])
+        self.assertEqual(self.executor.health()['retry_pending'], 0)
+        self.client.submit_bet.assert_not_called()
+        with patch('service.betting.time.monotonic', return_value=107):
+            self.assertTrue(self.executor.execute(self.row, self.pick)['recheck_deferred'])
+        self.client.prepare_bet.side_effect = lambda d, s: d
+        self.row['published_at_ms'] += 1
+        with patch('service.betting.time.monotonic', return_value=136):
+            accepted = self.executor.execute(self.row, self.pick)
+        self.assertEqual(accepted['status'], 'accepted')
+        self.assertEqual(accepted['attempt'], 1)
+        self.client.submit_bet.assert_called_once()
+
+    def test_retry_timer_requests_recomputation_without_replaying_old_row(self):
+        self.executor.on_recompute = MagicMock()
+        self.client.prepare_bet.side_effect = BetPreflightRetryable('读取失败')
+        with patch('service.betting.time.monotonic', return_value=100), self.assertLogs('service.betting'):
+            self.executor.execute(self.row, self.pick)
+        with patch('service.betting.time.monotonic', return_value=102):
+            self.assertEqual(self.executor.flush(), [])
+            self.assertTrue(self.executor.execute(self.row, self.pick)['awaiting_new_decision'])
+            self.executor.flush()
+        self.executor.on_recompute.assert_called_once_with(['m'])
+        self.client.prepare_bet.assert_called_once()
+        self.client.submit_bet.assert_not_called()
+
+    def test_observe_decision_cancels_pending_retry_and_queued_pick(self):
+        self.client.prepare_bet.side_effect = BetPreflightRetryable('读取失败')
+        self.executor.enqueue(self.row)
+        with self.assertLogs('service.betting'):
+            self.executor.flush()
+        self.assertTrue(self.executor.health()['last_result']['retry_scheduled'])
+        self.executor.enqueue(self.row)
+        self.executor.enqueue({**self.row, 'published_at_ms': self.row['published_at_ms'] + 1, 'picks': []})
+        health = self.executor.health()
+        self.assertEqual(health['retry_pending'], 0)
+        self.assertTrue(health['last_result']['retry_cancelled'])
+        self.assertFalse(health['last_result']['retry_scheduled'])
+        self.assertFalse(health['last_result']['awaiting_new_decision'])
+        self.assertEqual(self.executor.flush(), [])
+        self.client.submit_bet.assert_not_called()
+
+    def test_disable_cancels_retry_timers(self):
+        self.client.prepare_bet.side_effect = BetPreflightRetryable('读取失败')
+        self.executor.enqueue(self.row)
+        with self.assertLogs('service.betting'):
+            self.executor.flush()
+        self.settings.update({'betting_enabled': False}, 1, lambda *_: self.executor.configure())
+        health = self.executor.health()
+        self.assertEqual(health['retry_pending'], 0)
+        self.assertTrue(health['last_result']['retry_cancelled'])
+        self.assertFalse(health['last_result']['retry_scheduled'])
+        self.assertEqual(self.executor.flush(), [])
+        self.client.submit_bet.assert_not_called()
+
+    def test_stop_clears_retry_queue_and_reports_cancellation(self):
+        self.client.prepare_bet.side_effect = BetPreflightRetryable('读取失败')
+        self.executor.enqueue(self.row)
+        with self.assertLogs('service.betting'):
+            self.executor.flush()
+        self.executor.enqueue(self.row)
+        self.executor.stop()
+        health = self.executor.health()
+        self.assertEqual(health['queued'], 0)
+        self.assertEqual(health['retry_pending'], 0)
+        self.assertTrue(health['last_result']['retry_cancelled'])
+        self.assertFalse(health['last_result']['retry_scheduled'])
+        self.assertEqual(self.executor.flush(), [])
+        self.client.submit_bet.assert_not_called()
+
+    def test_stop_preserves_accepted_receipt_without_marking_it_cancelled(self):
+        self.executor.enqueue(self.row)
+        self.assertEqual(self.executor.flush()[0]['status'], 'accepted')
+        self.executor.stop()
+        last = self.executor.health()['last_result']
+        self.assertEqual(last['status'], 'accepted')
+        self.assertFalse(last.get('retry_cancelled'))
+        self.assertEqual(last['order_no'], 'ORDER-1')
+        self.client.submit_bet.assert_called_once()
+
+    def test_slow_first_order_does_not_freeze_following_decision_batch(self):
+        other = {**self.row, 'match_id': 'other'}
+        newest = {**other, 'published_at_ms': other['published_at_ms'] + 1000}
+        self.executor.enqueue(self.row)
+        self.executor.enqueue(other)
+        seen = []
+        def execute(row, pick):
+            seen.append(row)
+            if row['match_id'] == 'm':
+                self.executor.enqueue(newest)
+            return {'status': 'accepted'}
+        with patch.object(self.executor, 'execute', side_effect=execute):
+            self.executor.flush()
+        self.assertEqual([r['match_id'] for r in seen], ['m', 'other'])
+        self.assertEqual(seen[1]['published_at_ms'], newest['published_at_ms'])
+
+    def test_enqueue_wakes_background_executor_and_submits_fake_order_once(self):
+        submitted = threading.Event()
+        def submit(payload):
+            submitted.set()
+            return {'submitted': True, 'status': 'accepted', 'order_no': 'TEST'}
+        self.client.submit_bet.side_effect = submit
+        self.executor.start()
+        self.addCleanup(self.executor.stop)
+        self.executor.enqueue(self.row)
+        self.assertTrue(submitted.wait(2))
+        self.executor.stop()
+        self.client.submit_bet.assert_called_once()
+
+    def test_new_identical_decision_during_preflight_renews_decision_validity(self):
+        self.executor.enqueue(self.row)
+        def prepare(detail, stake):
+            self.executor.enqueue({**self.row, 'published_at_ms': self.row['published_at_ms'] + 1})
+            self.row['published_at_ms'] = (time.time() - 16) * 1000
+            return detail
+        self.client.prepare_bet.side_effect = prepare
+        result = self.executor.execute(self.row, self.pick)
+        self.assertEqual(result['status'], 'accepted', result)
+        self.client.submit_bet.assert_called_once()
+
+    def test_withdrawn_recommendation_during_preflight_never_submits(self):
+        self.executor.enqueue(self.row)
+        def prepare(detail, stake):
+            self.executor.enqueue({**self.row, 'picks': [], 'published_at_ms': self.row['published_at_ms'] + 1})
+            return detail
+        self.client.prepare_bet.side_effect = prepare
+        with self.assertLogs('service.betting'):
+            result = self.executor.execute(self.row, self.pick)
+        self.assertIn('撤回', result['reason'])
+        self.assertTrue(result['retry_cancelled'])
+        self.assertEqual(self.executor.health()['retry_pending'], 0)
+        self.client.submit_bet.assert_not_called()
 
     def test_preflight_failures_report_specific_final_cause(self):
         for mutation, reason in (
@@ -457,10 +607,17 @@ class BettingExecutionTests(unittest.TestCase):
             'ol': [{'oid': 'Over', 'ot': 'Over', 'ov': '1000000'},
                    {'oid': 'Under', 'ot': 'Under', 'ov': '198000'}]}]}})
         hub._record_ticks(ticks)
-        svc = AnalysisService(MagicMock(), realtime=hub,
-                              config=AnalysisConfig(use_llm=False, ledger_root=self.temp.name + '/ledger'))
-        svc.update_settings({'betting_enabled': True, 'min_ev': 0, 'min_probability': 0,
-                             'algorithms': ['poisson_market'], 'primary_algorithm': 'poisson_market'}, 1)
+        # This case owns flush() explicitly. The background wake-up is covered
+        # separately with its fake client installed before enqueue.
+        with patch.object(BettingExecutor, 'start'):
+            svc = AnalysisService(MagicMock(), realtime=hub,
+                                  config=AnalysisConfig(use_llm=False, ledger_root=self.temp.name + '/ledger'))
+        with patch.object(svc.betting, 'start'):
+            svc.update_settings({'betting_enabled': True, 'min_ev': 0, 'min_probability': 0,
+                                 'algorithms': ['poisson_market'], 'primary_algorithm': 'poisson_market'}, 1)
+        # Simulate start's lifecycle transition while keeping manual flush
+        # ownership. Construction with disabled betting called stop().
+        svc.betting._stop.clear()
         with patch.object(svc.betting, 'enqueue', wraps=svc.betting.enqueue) as enqueue:
             row = svc.decide_matches(['m'])['decisions'][0]
         self.assertTrue(row['picks'])

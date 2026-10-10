@@ -75,6 +75,8 @@ class RuntimeSettingsTests(unittest.TestCase):
                             {'algorithms': []}, {'primary_algorithm': 'fake'}, {'devig_method': 'fake'},
                             {'llm_enabled': 'yes'}, {'llm_base_url': 'file:///etc/passwd'},
                             {'llm_base_url': 'https://user:password@example.org/v1'}, {'llm_max_tokens': 256.5},
+                            {'betting_retry_max_attempts': 0}, {'betting_retry_max_attempts': 21},
+                            {'betting_retry_max_attempts': 1.5}, {'betting_retry_base_delay_s': 0},
                             {'llm_enabled': True}, {'unknown': 1}):
                 with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                     settings.update(invalid, 2, callback)
@@ -207,7 +209,8 @@ class CoverageAndProspectiveTests(unittest.TestCase):
             self.assertEqual(len(svc.ledger.load()), 6)
             restarted = DecisionLedger(root + '/ledger')
             e = row['evaluations'][0]
-            self.assertEqual(restarted.record_live({**row, 'algorithm': e['algorithm'], 'forecast': e['forecasts'][0]}), 0)
+            with patch.object(restarted, 'load', side_effect=AssertionError('full history scan')):
+                self.assertEqual(restarted.record_live({**row, 'algorithm': e['algorithm'], 'forecast': e['forecasts'][0]}), 0)
             self.assertEqual(restarted.settle({'m': {'ft': [2, 1], 'done': False}})['settled'], 0)
             self.assertEqual(restarted.settle({'m': {'ft': [2, 1], 'done': True}})['settled'], 6)
             history = restarted.history(cohort='prospective')

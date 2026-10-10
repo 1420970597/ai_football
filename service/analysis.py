@@ -803,6 +803,7 @@ class AnalysisService:
         if rt is None:
             return self.live_expert.results()
         for mid in mids:
+            started = time.perf_counter()
             with self._sched_lock:
                 first = self._pending_first.pop(mid, None)
             snapshot = rt.decision_snapshot(mid)
@@ -816,6 +817,12 @@ class AnalysisService:
             except (ValueError, TypeError, ArithmeticError) as exc:
                 self.live_expert.errors += 1
                 self.cycle_stats["last_error"] = "实时模型: %s" % exc
+            # Additional cores cannot parallelize this process's Python GIL.
+            # Give the quote receiver and durable writer time between matches;
+            # the scheduler already coalesces updates to each match's latest
+            # state, and every decision actually published remains archived.
+            if threading.current_thread() is self._sched_thread:
+                self._sched_stop.wait(min(0.05, time.perf_counter() - started))
         result = self.live_expert.results()
         result["finished_at"] = datetime.now(timezone.utc).isoformat()
         with self._lock:

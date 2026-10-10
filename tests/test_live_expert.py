@@ -3,6 +3,7 @@ import time
 import unittest
 import json
 import gzip
+import threading
 from unittest.mock import MagicMock, patch
 
 from collector.leyu_realtime import PriceTick, RealtimeHub
@@ -12,6 +13,144 @@ from service.live_expert import LiveExpertService, percentiles
 
 
 class LiveExpertTests(unittest.TestCase):
+    def test_large_settlement_queue_cannot_starve_complete_replay_archive(self):
+        hub = self.hub()
+        with tempfile.TemporaryDirectory() as root:
+            svc = LiveExpertService()
+            svc.journal_root = root
+            svc.on_decision = MagicMock(return_value=1)
+            svc.compute(hub.decision_snapshot('m'), hub)
+            pending = len(svc._decisions)
+            self.assertGreater(pending, 1)
+            self.assertEqual(svc.flush(max_decisions=1), 1)
+            self.assertEqual(len(svc._decisions), pending-1)
+            self.assertEqual(svc.health()['journal_pending'], 0)
+            svc.stop()
+            self.assertEqual(len(svc._decisions), 0)
+            self.assertEqual(svc.on_decision.call_count, pending)
+
+    def test_returned_history_changes_cannot_corrupt_the_next_decision(self):
+        hub = self.hub()
+        svc = LiveExpertService()
+        snapshot = hub.decision_snapshot('m')
+        first = svc.compute(snapshot, hub)
+        quote = next(m for m in first['markets'] if m['market']=='HAD')['quotes'][0]
+        expected = [point[:] for point in quote['training_history']]
+        quote['training_history'][0][1] = -1
+        quote['training_history'].clear()
+        second = svc.compute(snapshot, hub)
+        quote = next(m for m in second['markets'] if m['market']=='HAD')['quotes'][0]
+        self.assertEqual(quote['training_history'], expected)
+
+    def test_cached_training_prefix_never_leaks_later_observed_prices_on_earlier_capture(self):
+        from collections import deque
+        hub = self.hub()
+        svc = LiveExpertService()
+        snapshot = hub.decision_snapshot('m')
+        capture = snapshot['captured_at_ms']
+        key = ('m', 'HAD', '', 'home')
+        svc._training_series[key] = deque([(capture-10000, capture-9000, 1.8),
+                                          (capture-1000, capture+5000, 1.4)], maxlen=40)
+        later = svc.compute({**snapshot, 'captured_at_ms': capture+6000}, hub)
+        late_quote = next(m for m in later['markets'] if m['market']=='HAD')['quotes'][0]
+        self.assertIn([capture-1000, 1.4], late_quote['training_history'])
+        earlier = svc.compute(snapshot, hub)
+        early_quote = next(m for m in earlier['markets'] if m['market']=='HAD')['quotes'][0]
+        self.assertNotIn([capture-1000, 1.4], early_quote['training_history'])
+        self.assertIn([capture-10000, 1.8], early_quote['training_history'])
+
+    def test_settings_alerts_use_last_settled_evidence_without_full_database_query(self):
+        from api.app import ApiApp
+        svc = AnalysisService(MagicMock(), realtime=self.hub(), config=AnalysisConfig(use_llm=False))
+        svc.live_expert.update_evidence({'at': 'settled', 'rows': []})
+        with patch.object(svc.ledger, 'performance_evidence', side_effect=AssertionError('full query')):
+            status = ApiApp(MagicMock(), analysis=svc).h_settings({}, {})
+        self.assertTrue(status['algorithm_alerts'])
+        self.assertTrue(all(a['status'] == 'insufficient' for a in status['algorithm_alerts']))
+
+    def test_performance_weights_refresh_with_evidence_and_config_not_every_quote(self):
+        from dataclasses import replace
+        from core.ensemble import adaptive_weights
+        hub = self.hub()
+        with patch('service.live_expert.adaptive_weights', wraps=adaptive_weights) as weights:
+            svc = LiveExpertService()
+            first = svc.compute(hub.decision_snapshot('m'), hub)
+            svc.compute(hub.decision_snapshot('m'), hub)
+            self.assertEqual(weights.call_count, 1)
+            first['algorithm_performance']['weights'].clear()
+            again = svc.compute(hub.decision_snapshot('m'), hub)
+            self.assertTrue(again['algorithm_performance']['weights'])
+            svc.update_evidence({'at': 'new', 'rows': []})
+            newer = svc.compute(hub.decision_snapshot('m'), hub)
+            self.assertEqual(newer['algorithm_performance']['at'], 'new')
+            self.assertEqual(weights.call_count, 2)
+            svc.configure(replace(svc.config, weight_prior_matches=30), 2)
+            revised = svc.compute(hub.decision_snapshot('m'), hub)
+            self.assertEqual(revised['algorithm_performance']['prior_matches'], 30)
+            self.assertEqual(weights.call_count, 3)
+
+    def test_slow_subscription_refresh_does_not_block_socket_reader(self):
+        from types import SimpleNamespace
+        entered, release, received = threading.Event(), threading.Event(), threading.Event()
+        def provider():
+            entered.set()
+            release.wait(3)
+            return ['next']
+        session = SimpleNamespace(host='https://example.test', request_id='r', origin='')
+        hub = RealtimeHub(SimpleNamespace(acquire=lambda: session), mids_provider=provider,
+                          subscribe_interval_s=.1, resume=False)
+        hub._subscribed = ['current']
+        feed = MagicMock()
+        def recv():
+            if entered.wait(.02):
+                received.set()
+            return None
+        feed.recv.side_effect = recv
+        with patch('collector.leyu_realtime.LEYUFeed', return_value=feed):
+            hub.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                self.assertTrue(received.wait(1), '行情必须在 REST 刷新未完成时继续接收')
+                self.assertFalse(release.is_set())
+            finally:
+                release.set()
+                hub.stop()
+        self.assertFalse(hub._subscription_thread.is_alive())
+
+    def test_push_health_distinguishes_frequent_delivery_from_stale_source_prices(self):
+        hub = RealtimeHub(MagicMock(), resume=False)
+        ts = int((time.time() - 100) * 1000)
+        hub._handle_message({'cmd': 'C105', 'cd': {'mid': 'm', 'time': ts, 'hls2': {'2': [{
+            'chpid': '2', 'hid': 'h', 'hv': '2.5', 't': ts,
+            'ol': [{'oid': 'o', 'ot': 'Over', 'ov': '200000'}]}]}}})
+        health = hub.stats.as_dict()
+        self.assertEqual(health['price_messages'], 1)
+        self.assertLess(health['price_idle_s'], 1)
+        self.assertGreaterEqual(health['price_source_age_s'], 100)
+        self.assertEqual(health['commands']['C105'], 1)
+
+    def test_live_cache_checkpoint_does_not_block_receiving_new_prices(self):
+        hub = RealtimeHub(MagicMock(), resume=False)
+        entered, release = threading.Event(), threading.Event()
+        def checkpoint(*args, **kwargs):
+            entered.set()
+            release.wait(3)
+        hub.live.save = MagicMock(side_effect=checkpoint)
+        hub._run = lambda: hub._stop.wait()
+        with patch('collector.leyu_realtime._LIVE_SAVE_INTERVAL_S', .01):
+            hub.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                now = int(time.time() * 1000)
+                hub._record_ticks([PriceTick('m', '2', 'h', '2.5', 'o', 'Over', 2, 2, now)])
+                self.assertEqual(hub.live.book('m')[0].ts_ms, now)
+                self.assertEqual(hub.live.save.call_count, 1)
+            finally:
+                release.set()
+                hub.stop()
+        self.assertFalse(hub._cache_thread.is_alive())
+        self.assertTrue(hub.live.save.call_args.kwargs['force'])
+
     def hub(self):
         hub = RealtimeHub(MagicMock(), resume=False)
         now = time.monotonic()

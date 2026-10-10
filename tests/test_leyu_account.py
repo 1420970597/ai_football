@@ -6,7 +6,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from collector.leyu_account import (BetSubmissionRejected, BetSubmissionUnknown, LeyuAccountClient,
+from collector.leyu_account import (BetPreflightRetryable, BetSubmissionRejected, BetSubmissionUnknown, LeyuAccountClient,
                                      _daily_profit, _find_number, _find_records, _net_profit,
                                      _normalise_venue_record, _settlement_time,
                                      _venue_balances)
@@ -14,6 +14,20 @@ from collector.session import SessionError
 
 
 class LeyuAccountTests(unittest.TestCase):
+    def test_transient_reads_are_retryable_but_debit_transport_never_is(self):
+        import urllib.error
+        from collector.leyu_account import VENUE_AMOUNT_PATH, VENUE_BET_PATH
+        client = LeyuAccountClient(SimpleNamespace(app_host='https://offline.invalid'))
+        client._acquire_venue_session = lambda: SimpleNamespace(
+            request_id='offline-session', host='https://offline.invalid', origin='https://offline.invalid')
+        for error in (TimeoutError(), urllib.error.HTTPError('https://offline.invalid', 503, '', {}, None)):
+            with patch('collector.leyu_account.urllib.request.urlopen', side_effect=error):
+                with self.assertRaises(BetPreflightRetryable):
+                    client._venue_request(VENUE_AMOUNT_PATH)
+                with self.assertRaises(SessionError) as caught:
+                    client._venue_request(VENUE_BET_PATH, {})
+                self.assertNotIsInstance(caught.exception, BetPreflightRetryable)
+
     def bet_detail(self):
         return {'matchId': 'm', 'marketId': 'market1', 'playId': '2',
                 'playOptions': 'Over', 'playOptionsId': 'option1', 'oddFinally': '1.95',

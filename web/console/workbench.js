@@ -65,7 +65,9 @@ function renderAccount(data) {
   node.replaceChildren(el('span', {class:'account-balance', text:'体育余额 ' + balance}), accountPnlNode(data),
     ...[['未结', pending], ['已结', settled]].map(([label, value]) =>
       el('span', {class:'account-record-stats', text: label + ' ' + value})));
-  node.title = data.error || ('中心钱包 ' + (data.center_balance == null ? '—' : fixed(data.center_balance)) + ' · 乐鱼体育场馆 YBTY');
+  node.title = data.error || ('中心钱包 ' + (data.center_balance == null ? '—' : fixed(data.center_balance)) + ' · 乐鱼体育场馆 YBTY' +
+    (data.stale || data.refresh_error ? ' · 账户数据待更新' : '') +
+    (data.updated_at_ms ? ' · 更新于 ' + new Date(data.updated_at_ms).toLocaleTimeString() : ''));
   renderAccountDetails(data);
 }
 function renderAccountDetails(data) {
@@ -76,6 +78,7 @@ function renderAccountDetails(data) {
     return;
   }
   const summary = el('div', {class:'account-detail-stats'}, [
+    ...(data.stale || data.refresh_error ? [el('span', {class:'account-error',text:data.refresh_error || '正在更新，当前展示上次账户数据'})] : []),
     el('span', {text:'体育余额 ' + fixed(data.sports_balance ?? data.balance)}),
     accountPnlNode(data),
     el('span', {text:'未结 ' + String(data.unsettled?.count ?? '—') + ' · ' + fixed(data.unsettled?.amount)}),
@@ -187,7 +190,10 @@ function renderRecommendationCard(item) {
       el('span',{text:'综合 ' + pct(pick.composite_confidence ?? item.composite_confidence)}),
       el('span',{text:'赔率状态 ' + (item.market_open ? '开启' : '已关闭')})]),
     ...(betting ? [el('small',{class:'buy-execution',text:'投注：' + (executionLabels[betting.status] || betting.status) +
-      (betting.order_no ? ' · 注单 ' + betting.order_no : '') + (betting.reason ? ' · ' + betting.reason : '')})] : [])
+      (betting.order_no ? ' · 注单 ' + betting.order_no : '') + (betting.reason ? ' · ' + betting.reason : '') +
+      (betting.attempt ? ' · 第' + betting.attempt + '次检查' : '') +
+      (betting.retry_cancelled ? ' · 重试已取消' : betting.retry_scheduled ? ' · ' + betting.retry_after_s + '秒后重新决策' :
+        betting.awaiting_new_decision ? ' · 等待更新决策' : betting.retry_exhausted ? ' · 本轮暂停30秒' : '')})] : [])
   ]);
 }
 
@@ -567,6 +573,8 @@ const ORIGINAL_SETTING_FIELDS = [
     ['betting_stake_mode', '投注额度模式', 'select', {fixed: '固定值', confidence_multiplier: '综合置信度 × 固定值'}],
     ['betting_fixed_stake', '固定投注额度 / CNY', 'number', [.01,100000,.01]],
     ['betting_min_hit_count', '最小历史盘口命中次数', 'number', [1,100000,1]],
+    ['betting_retry_max_attempts', '每轮最多尝试次数', 'number', [1,20,1]],
+    ['betting_retry_base_delay_s', '重试基础间隔 / 秒', 'number', [.5,30,.5]],
     ['max_total_exposure', '同场最大敞口', 'number', [0,1,.01]],
     ['risk_correlation', '同场风险相关性', 'number', [0,.99,.01]],
     ['execution_cost', '执行成本', 'number', [0,.1,.001]],
@@ -601,7 +609,7 @@ const SETTING_TREE = [
     ['模型与信号', [['算法与概率', ['primary_algorithm','devig_method','min_probability','min_ev']], ['时间与共识', ['anchor_max_age_s','devig_spread_warn_pp']], ['算法融合', ['weight_prior_matches','max_algorithm_weight']]]],
     ['风险与预警', [['仓位控制', ['fractional_kelly','max_total_exposure','risk_correlation','execution_cost']], ['表现预警', ['algorithm_alert_enabled','algorithm_alert_min_samples','algorithm_alert_threshold']]]],
   ]],
-  ['执行', [['真实投注', [['功能开关', ['betting_enabled']], ['额度与条件', ['betting_stake_mode','betting_fixed_stake','betting_min_hit_count']]]]]],
+  ['执行', [['真实投注', [['功能开关', ['betting_enabled']], ['额度与条件', ['betting_stake_mode','betting_fixed_stake','betting_min_hit_count']], ['提交前重试', ['betting_retry_max_attempts','betting_retry_base_delay_s']]]]]],
   ['数据与模型', [
     ['模型训练', [['更新周期', ['model_training_enabled','model_training_matches']], ['资源限制', ['model_training_cpu','model_training_memory_mb']]]],
     ['实时数据', [['新鲜度', ['quote_max_age_s','state_max_age_s']]]],
@@ -684,7 +692,9 @@ function renderBettingStatus(betting) {
   const order = last?.status ? last : betting?.orders?.[0];
   notice('betting-capability-notice', '真实投注：' + (betting?.reason || '无法读取投注执行状态，请重新读取设置。') +
     (order?.status ? '；最近执行：' + (statusLabels[order.status] || order.status) +
-      (order.order_no ? ' · 注单 ' + order.order_no : '') + (order.reason ? ' · ' + order.reason : '') : '') +
+      (order.order_no ? ' · 注单 ' + order.order_no : '') + (order.reason ? ' · ' + order.reason : '') +
+      (order.retry_cancelled ? ' · 重试已取消' : '') : '') +
+    (betting?.retry_pending ? '；待重试 ' + betting.retry_pending + ' 项' : '') +
     '。仅对满足命中次数、最新盘口、限额与余额条件的综合推荐下单；已发出的订单不会因关闭而撤销。');
 }
 function renderSettings(data) {

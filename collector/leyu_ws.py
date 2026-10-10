@@ -224,6 +224,7 @@ class WebSocketConnection:
         self._fragments: List[bytes] = []
         self._fragment_opcode = OPCODE_CONT
         self.closed = False
+        self._send_lock = threading.Lock()
 
     # -- 连接管理 -----------------------------------------------------------
 
@@ -263,6 +264,10 @@ class WebSocketConnection:
         if got and got != expect:
             self.close()
             raise TransportError("Sec-WebSocket-Accept 校验失败: %s" % got)
+        # select readability can mean an incomplete TLS/control record, not
+        # available plaintext. A blocking SSL recv would then wait the full
+        # socket timeout and delay consuming subsequent prices.
+        raw.setblocking(False)
 
     def _require_sock(self) -> socket.socket:
         """取得已连接的 socket；未连接则抛错（不用 assert，避免被 -O 剃掉）。"""
@@ -310,12 +315,27 @@ class WebSocketConnection:
         self._send(encode_frame(text.encode("utf-8"), OPCODE_TEXT))
 
     def _send(self, data: bytes) -> None:
-        if self._sock is None:
-            raise TransportError("连接未建立")
-        try:
-            self._sock.sendall(data)
-        except OSError as exc:
-            raise TransportError("发送失败: %s" % exc) from exc
+        sock = self._require_sock()
+        deadline = time.monotonic() + self.timeout
+        with self._send_lock:
+            remaining_data = memoryview(data)
+            while remaining_data:
+                try:
+                    sent = sock.send(remaining_data)
+                    if sent <= 0:
+                        raise TransportError("发送期间连接被关闭")
+                    remaining_data = remaining_data[sent:]
+                except (ssl.SSLWantReadError, ssl.SSLWantWriteError, BlockingIOError) as exc:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TransportError("WebSocket 发送超时") from exc
+                    wait_read = isinstance(exc, ssl.SSLWantReadError)
+                    readable, writable, _ = select.select([sock] if wait_read else [],
+                                                          [] if wait_read else [sock], [], remaining)
+                    if not readable and not writable:
+                        raise TransportError("WebSocket 发送超时") from exc
+                except OSError as exc:
+                    raise TransportError("发送失败: %s" % exc) from exc
 
     def recv(self, timeout: Optional[float] = None) -> Optional[Frame]:
         """接收下一个数据帧。
@@ -326,6 +346,7 @@ class WebSocketConnection:
         """
         sock = self._require_sock()
         deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
+        wait_write = False
         while True:
             parsed = decode_frame(bytes(self._buffer))
             if parsed is not None:
@@ -339,11 +360,23 @@ class WebSocketConnection:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
-            ready, _, _ = select.select([sock], [], [], remaining)
-            if not ready:
-                return None
+            # TLS may have already decrypted bytes buffered above the kernel
+            # fd. Waiting on select in that case stalls until another network
+            # record (often the next heartbeat), accumulating old quotations.
+            if wait_write or not (isinstance(sock, ssl.SSLSocket) and sock.pending() > 0):
+                ready, writable, _ = select.select([] if wait_write else [sock],
+                                                  [sock] if wait_write else [], [], remaining)
+                if not ready and not writable:
+                    return None
             try:
                 chunk = sock.recv(65536)
+                wait_write = False
+            except (ssl.SSLWantReadError, BlockingIOError):
+                wait_write = False
+                continue
+            except ssl.SSLWantWriteError:
+                wait_write = True
+                continue
             except (socket.timeout, TimeoutError):
                 return None
             except OSError as exc:
@@ -511,6 +544,10 @@ class LEYUFeed:
             market_level=market_level, es_market_level=es_market_level,
             odds_type=odds_type,
         )
+        # Retain the latest subscription for each key. Replaying every old
+        # schedule on reconnect resurrects removed matches and wastes bandwidth.
+        self._pending = [item for item in self._pending
+                         if not (json.loads(item).get('cmd') == 'C8' and json.loads(item).get('key') == key)]
         if payload not in self._pending:
             self._pending.append(payload)
         if self._conn is not None and not self._conn.closed:

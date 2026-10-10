@@ -3,12 +3,13 @@ import gzip
 import json
 import signal
 import tempfile
+import threading
 import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 from collector.leyu_client import parse_odds_block
 from collector.leyu_realtime import PriceTick, RealtimeHub, ScoreStore, TrendStore, parse_c103
@@ -24,6 +25,78 @@ from tests import test_live_expert
 def read_history(path):
     with gzip.open(path, 'rt', encoding='utf-8') as file:
         return [json.loads(line) for line in file]
+
+
+class TrendResumeTests(unittest.TestCase):
+    def test_startup_queues_history_without_reading_archive(self):
+        with tempfile.TemporaryDirectory() as root:
+            hub = RealtimeHub(MagicMock(), trend_root=str(Path(root) / '_trends'))
+            with patch.object(hub.live, 'live_mids', return_value=['m']), \
+                    patch.object(hub.trend_store, 'load') as load:
+                hub._resume_from_store()
+            load.assert_not_called()
+            self.assertIn('m', hub._resume_pending)
+            with patch.object(hub.trend_store, 'load', return_value=[]):
+                self.assertFalse(hub.trend('m')['history_loading'])
+            self.assertNotIn('m', hub._resume_pending)
+
+    def test_slow_history_load_does_not_block_quotes_or_reads_and_preserves_live_tail(self):
+        with tempfile.TemporaryDirectory() as root:
+            hub = RealtimeHub(MagicMock(), trend_root=str(Path(root) / '_trends'))
+            now = int(time.time() * 1000)
+            old = PriceTick('m', '2', 'h', '2.5', 'o', 'Over', 1.8, 1.9, now - 2000)
+            baseline = replace(old, old_ov=1.95, new_ov=1.95, ts_ms=now)
+            latest = replace(old, old_ov=1.95, new_ov=2.05, ts_ms=now + 1)
+            entered, release = threading.Event(), threading.Event()
+            def load(*_a, **_kw):
+                entered.set()
+                release.wait(5)
+                return [old.as_dict(), latest.as_dict()]
+            worker = threading.Thread(target=hub._resume_loop)
+            publisher = threading.Thread(target=lambda: hub._record_ticks([latest]))
+            reader = threading.Thread(target=lambda: hub.trend('m'))
+            with patch.object(RealtimeHub, 'running', new_callable=PropertyMock, return_value=True), \
+                    patch.object(hub.trend_store, 'load', side_effect=load) as loader:
+                try:
+                    hub._record_ticks([baseline])
+                    worker.start()
+                    self.assertTrue(entered.wait(2))
+                    publisher.start()
+                    publisher.join(1)
+                    self.assertFalse(publisher.is_alive(), 'history IO blocks live quote writer')
+                    reader.start()
+                    reader.join(1)
+                    self.assertFalse(reader.is_alive(), 'history IO blocks trend query')
+                    self.assertTrue(hub.trend('m')['history_loading'])
+                    self.assertEqual(hub.decision_snapshot('m')['quotes'][0].odds, 2.05)
+                finally:
+                    release.set()
+                    hub._stop.set()
+                    hub._resume_wake.set()
+                    worker.join(3)
+                    if publisher.ident is not None:
+                        publisher.join(3)
+                    if reader.ident is not None:
+                        reader.join(3)
+                loader.assert_called_once()
+            summary = hub.trend('m', '2', '2.5')
+            self.assertEqual(summary['n'], 2)
+            self.assertFalse(summary['history_loading'])
+            self.assertEqual(summary['last']['new'], 2.05)
+            self.assertEqual(hub._last_price[('m', '2', '2.5', 'o')], 2.05)
+
+    def test_failed_resume_releases_single_flight_and_can_retry(self):
+        with tempfile.TemporaryDirectory() as root:
+            hub = RealtimeHub(MagicMock(), trend_root=str(Path(root) / '_trends'))
+            old = PriceTick('m', '2', 'h', '2.5', 'o', 'Over', 1.8, 1.9, 1000)
+            with patch.object(hub.trend_store, 'load', side_effect=[OSError('offline'), [old.as_dict()]]):
+                with self.assertRaises(OSError):
+                    hub._resume_match('m')
+                self.assertNotIn('m', hub._resuming_mids)
+                self.assertNotIn('m', hub._resumed_mids)
+                hub._resume_match('m')
+            self.assertIn('m', hub._resumed_mids)
+            self.assertEqual(hub.trend('m', '2', '2.5')['n'], 1)
 
 
 class HistoryJournalTests(unittest.TestCase):
@@ -147,6 +220,57 @@ class TrendHistoryTests(unittest.TestCase):
 
 
 class ScoreAndEventHistoryTests(unittest.TestCase):
+    def test_per_match_score_staging_preserves_restored_matches_and_all_revisions(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'scores.json'
+            initial = ScoreStore(str(path))
+            initial.save({'old': (2, 1)}, ['old'], force=True,
+                         final_proofs={'old': {'mmp': '999'}})
+            store = ScoreStore(str(path))
+            store.load()
+            store.stage('m', (0, 0), False, None, None)
+            store.stage('m', (1, 0), False, (0, 0), None)
+            store.stage('m', (1, 0), True, (0, 0), {'mmp': '999'})
+            self.assertEqual(store.history_health()['pending'], 3)
+            self.assertTrue(store.flush(force=True))
+            restored = ScoreStore(str(path)).load()
+            self.assertEqual(restored['old']['ft'], [2, 1])
+            self.assertTrue(restored['old']['done'])
+            self.assertTrue(restored['m']['done'])
+            self.assertEqual(restored['m']['ht'], [0, 0])
+            self.assertEqual([r['ft'] for r in read_history(store.history.path) if r['match_id'] == 'm'],
+                             [[0, 0], [1, 0], [1, 0]])
+
+    def test_deferred_scores_keep_every_revision_and_retry_failed_flush(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = ScoreStore(str(Path(root) / 'scores.json'))
+            for score in ((0, 0), (1, 0), (1, 1)):
+                store.save({'m': score}, [], defer=True)
+            self.assertFalse(store.path.exists())
+            self.assertEqual(store.history_health()['pending'], 3)
+            with patch.object(store.history, 'append', side_effect=OSError('disk full')):
+                self.assertFalse(store.flush(force=True))
+            self.assertEqual(store.history_health()['pending'], 3)
+            store.save({'m': (1, 1)}, ['m'], final_proofs={'m': {'mmp': '999'}}, defer=True)
+            self.assertTrue(store.flush(force=True))
+            rows = read_history(store.history.path)
+            self.assertEqual([r['ft'] for r in rows], [[0, 0], [1, 0], [1, 1], [1, 1]])
+            self.assertTrue(rows[-1]['done'])
+            self.assertEqual(store.history_health()['pending'], 0)
+
+    def test_deferred_trends_keep_all_changes_without_socket_thread_io(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = TrendStore(root)
+            ticks = [PriceTick('m', '2', 'h', '2.5', 'o', 'Over', 2, value, index)
+                     for index, value in enumerate((2, 2.1, 2.2), 1)]
+            with patch.object(store, 'flush', wraps=store.flush) as flush:
+                for tick in ticks:
+                    store.append_many([tick], defer=True)
+                flush.assert_not_called()
+            self.assertEqual(store.health()['pending'], 3)
+            self.assertEqual(store.flush(), 3)
+            self.assertEqual([r['new'] for r in store.load('m')], [2, 2.1, 2.2])
+
     def test_each_score_revision_survives_throttle_failure_and_final_correction(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'scores.json'

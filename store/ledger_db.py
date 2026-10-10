@@ -8,13 +8,15 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Mapping, Sequence
+from typing import Any, Dict, Iterator, Mapping, Sequence
 
 
 FIELDS = {
     'match_id': 'TEXT', 'at': 'TEXT', 'algorithm': 'TEXT', 'competition_type': 'TEXT',
     'trigger': 'TEXT', 'decision': 'TEXT', 'market': 'TEXT', 'league': 'TEXT',
+    'line': 'TEXT', 'outcome': 'TEXT',
     'config_version': 'INTEGER', 'status': 'TEXT', 'is_pick': 'INTEGER',
     'is_live': 'INTEGER', 'odds': 'REAL', 'pnl': 'REAL', 'confidence': 'REAL',
     'kelly': 'REAL', 'p_fused': 'REAL', 'p_market': 'REAL', 'closing_odds': 'REAL',
@@ -36,12 +38,24 @@ class LedgerDB:
         columns = ','.join(k + ' ' + v for k, v in FIELDS.items())
         self.connection.execute('CREATE TABLE IF NOT EXISTS decisions '
                                 '(identity TEXT PRIMARY KEY, revision REAL, payload TEXT,' + columns + ')')
+        existing = {row[1] for row in self.connection.execute('PRAGMA table_info(decisions)')}
+        missing = [name for name in ('line', 'outcome') if name not in existing]
+        if missing:
+            # Atomic migration: a crash must not leave added columns unfilled.
+            with self.connection:
+                self.connection.execute('BEGIN IMMEDIATE')
+                for name in missing:
+                    self.connection.execute('ALTER TABLE decisions ADD COLUMN ' + name + ' TEXT')
+                    self.connection.execute('UPDATE decisions SET ' + name +
+                        "=coalesce(CAST(json_extract(payload,'$." + name + "') AS TEXT),'')")
         for name, cols in {
             'history': 'competition_type,trigger,algorithm,at',
             'pending': 'status,match_id', 'date': 'at',
             'performance': 'competition_type,trigger,status,algorithm,settled_at',
             'experiment': 'experiment_id,algorithm',
             'recommendation_match': 'trigger,algorithm,match_id,at',
+            'decision_identity': 'decision_id',
+            'recommendation_quote': 'trigger,is_pick,algorithm,market,line,outcome,status',
         }.items():
             self.connection.execute('CREATE INDEX IF NOT EXISTS idx_' + name + ' ON decisions(' + cols + ')')
         self.connection.execute('CREATE TABLE IF NOT EXISTS imports '
@@ -50,6 +64,19 @@ class LedgerDB:
 
     def __del__(self) -> None:
         self.connection.close()
+
+    @contextmanager
+    def reader(self) -> Iterator[LedgerDB]:
+        """A separate WAL snapshot lets aggregation run alongside the writer."""
+        reader = object.__new__(LedgerDB)
+        reader.path = self.path
+        reader.connection = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)
+        reader.connection.row_factory = sqlite3.Row
+        try:
+            reader.connection.execute('BEGIN')
+            yield reader
+        finally:
+            reader.connection.close()
 
     @staticmethod
     def identity(row: Mapping[str, Any]) -> str:

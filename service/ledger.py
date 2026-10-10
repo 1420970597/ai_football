@@ -44,10 +44,11 @@ import hashlib
 import os
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, cast
 
 from core.settlement import (
     SETTLE_PENDING,
@@ -238,6 +239,7 @@ class DecisionLedger:
         self._warned = ""
         self.last_error = ""
         self._live_ids: Optional[set] = None
+        self._db_synchronized = False
         self._db: Optional[LedgerDB] = None
         if self.root is not None:
             try:
@@ -342,6 +344,7 @@ class DecisionLedger:
                         batch.clear()
                 self._db.put(batch, _epoch)
                 self._mark_import(path)
+        self._db_synchronized = True
 
     # -- 记录决策 --------------------------------------------------------
 
@@ -366,8 +369,13 @@ class DecisionLedger:
         identity = hashlib.sha256((mid + "|" + algorithm + "|" + market + "|" + line + "|" + record_kind + "|first-live-v2").encode()).hexdigest()
         with self._lock:
             if self._live_ids is None:
-                self._live_ids = {e.decision_id for e in self.load() if e.decision_id}
+                self._live_ids = set()
             if identity in self._live_ids:
+                return 0
+            self._sync_db()
+            if self._db and self._db.connection.execute(
+                    'SELECT 1 FROM decisions WHERE decision_id=? LIMIT 1', (identity,)).fetchone():
+                self._live_ids.add(identity)
                 return 0
             entry = LedgerEntry(
                 at=str(row["computed_at"]), updated_at=str(row["computed_at"]),
@@ -689,6 +697,26 @@ class DecisionLedger:
 
     # -- 统计 ------------------------------------------------------------
 
+    @contextmanager
+    def _read_db(self) -> Iterator[Optional[LedgerDB]]:
+        db = self._db
+        if db is None or db.path == Path(':memory:'):
+            with self._lock:
+                self._sync_db()
+                yield db
+                return
+        # Initial import must finish before evidence is usable. Afterwards a
+        # busy writer must not make an API/venue check wait for fsync or a
+        # settlement batch: WAL readers see the last committed projection.
+        acquired = self._lock.acquire(blocking=not self._db_synchronized)
+        if acquired:
+            try:
+                self._sync_db()
+            finally:
+                self._lock.release()
+        with db.reader() as reader:
+            yield reader
+
     def stats(self, only_picks: bool = True,
               trigger: Optional[str] = None) -> Dict[str, Any]:
         """本地统计：命中率 / ROI / CLV。
@@ -702,14 +730,13 @@ class DecisionLedger:
         params = [trigger] if trigger else []
         if trigger:
             where += ' AND trigger=?'
-        with self._lock:
-            self._sync_db()
-            if not self._db:
+        with self._read_db() as db:
+            if not db:
                 return summarise([])
-            base = self._db.aggregate(where, params)
+            base = db.aggregate(where, params)
             for attr in ('competition_type', 'trigger', 'decision'):
-                base['by_' + ('type' if attr == 'competition_type' else attr)] = self._db.aggregate(where, params, attr)
-            base['pending_matches'] = [r[0] for r in self._db.connection.execute(
+                base['by_' + ('type' if attr == 'competition_type' else attr)] = db.aggregate(where, params, attr)
+            base['pending_matches'] = [r[0] for r in db.connection.execute(
                 'SELECT DISTINCT match_id FROM decisions WHERE status=\'pending\' AND ' + where, params)]
             return base
 
@@ -782,21 +809,20 @@ class DecisionLedger:
         if days>0:
             portfolio_where += ' AND at>=?'
             portfolio_params.append((_now()-timedelta(days=days)).isoformat())
-        with self._lock:
-            self._sync_db()
-            if not self._db:
+        with self._read_db() as db:
+            if not db:
                 return {'overall': summarise([]), 'entries': [], 'entries_total': 0}
-            overall = self._db.aggregate(where, params)
+            overall = db.aggregate(where, params)
             settled_where = where + " AND status IN ('won','lost','push','half_won','half_lost')"
-            out = {'overall': overall, 'settled': self._db.aggregate(settled_where, params),
+            out = {'overall': overall, 'settled': db.aggregate(settled_where, params),
                    'legacy_identity_rows': overall['legacy_identity_rows']}
             for attr in ('competition_type','date_key','league','market','decision','algorithm','config_version','trigger','status','confidence_band'):
-                groups = self._db.aggregate(where, params, attr)
+                groups = db.aggregate(where, params, attr)
                 out['by_' + {'competition_type':'type','date_key':'date','confidence_band':'confidence'}.get(attr,attr)] = (
                     {k: v['total'] for k,v in groups.items()} if attr=='status' else groups)
-            entries = [LedgerEntry.from_dict(r).as_dict() for r in self._db.entries(where, params, max(0,limit), offset)]
+            entries = [LedgerEntry.from_dict(r).as_dict() for r in db.entries(where, params, max(0,limit), offset)]
             timeline, cum_stake, cum_profit = [], 0.0, 0.0
-            for day, st in sorted(self._db.aggregate(settled_where, params, 'date_key').items()):
+            for day, st in sorted(db.aggregate(settled_where, params, 'date_key').items()):
                 cum_stake += st['stake_units']
                 cum_profit += st['profit_units']
                 timeline.append({'date':day, 'n':st['graded'], 'won':st['won'], 'lost':st['lost'],
@@ -807,15 +833,14 @@ class DecisionLedger:
                        timeline=timeline, picks_only=picks_only, days=days, offset=offset,
                        next_offset=offset+len(entries) if offset+len(entries)<overall['total'] else None,
                        ledger=self.health(), experiments=self.experiment_stats(competition_type, days),
-                       portfolio_summary=self._db.aggregate(portfolio_where,portfolio_params))
+                       portfolio_summary=db.aggregate(portfolio_where,portfolio_params))
         out['query_ms'] = round((time.perf_counter()-started)*1000,3)
         return out
 
     def performance_evidence(self) -> Dict[str, Any]:
         cutoff = _now().isoformat()
-        with self._lock:
-            self._sync_db()
-            return {'at': cutoff, 'rows': self._db.evidence(cutoff) if self._db else []}
+        with self._read_db() as db:
+            return {'at': cutoff, 'rows': db.evidence(cutoff) if db else []}
 
     def recommendation_performance(self, market: str, line: str, outcome: str,
                                    algorithm: str = 'economic_ensemble') -> Dict[str, Any]:
@@ -836,18 +861,16 @@ class DecisionLedger:
                                     for a, m, line_value, o in keys))
         if not wanted:
             return {}
-        with self._lock:
-            self._sync_db()
-            if not self._db:
+        with self._read_db() as db:
+            if not db:
                 return {}
             clauses = []
             params: list[str] = []
             for algorithm, market, line_value, outcome in wanted:
-                clauses.append("(algorithm=? AND market=? AND json_extract(payload,'$.line')=? AND json_extract(payload,'$.outcome')=?)")
+                clauses.append("(algorithm=? AND market=? AND line=? AND outcome=?)")
                 params.extend((algorithm, market, line_value, outcome))
-            rows = self._db.connection.execute(
-                """SELECT algorithm, market, json_extract(payload,'$.line') AS line,
-                   json_extract(payload,'$.outcome') AS outcome,
+            rows = db.connection.execute(
+                """SELECT algorithm, market, line, outcome,
                    sum(status IN ('won','half_won') * CASE status WHEN 'half_won' THEN .5 ELSE 1 END) AS hits,
                    sum(status IN ('lost','half_lost') * CASE status WHEN 'half_lost' THEN .5 ELSE 1 END) AS misses,
                    sum(status='pending') AS pending
@@ -870,12 +893,11 @@ class DecisionLedger:
         ids = [str(mid) for mid in match_ids if str(mid)]
         if not ids:
             return {}
-        with self._lock:
-            self._sync_db()
-            if not self._db:
+        with self._read_db() as db:
+            if not db:
                 return {}
             placeholders = ','.join('?' for _ in ids)
-            rows = self._db.connection.execute(
+            rows = db.connection.execute(
                 "SELECT payload FROM decisions WHERE trigger='live_recommendation' "
                 "AND algorithm='economic_ensemble' AND match_id IN (" + placeholders + ") "
                 "ORDER BY at DESC", ids).fetchall()
@@ -904,20 +926,23 @@ class DecisionLedger:
                               algorithm: str = "economic_ensemble",
                               limit: int = 5000) -> List[Dict[str, Any]]:
         """Return persisted recommendation decisions for the split board."""
-        with self._lock:
-            self._sync_db()
-            if not self._db:
+        with self._read_db() as db:
+            if not db:
                 return []
             where = "trigger='live_recommendation' AND is_pick=1 AND algorithm=?"
             params: list[str] = [str(algorithm or "economic_ensemble")]
             if competition_type and competition_type != 'all':
                 where += ' AND competition_type=?'
                 params.append(competition_type)
-            rows = self._db.entries(where, params, max(1, min(limit, 10000)))
+            rows = db.entries(where, params, max(1, min(limit, 10000)))
             return [LedgerEntry.from_dict(row).as_dict() for row in rows]
 
     def experiment_stats(self, competition_type: Optional[str] = None, days: int = 0) -> Dict[str, Any]:
-        if not self._db:
+        with self._read_db() as db:
+            return self._experiment_stats(db, competition_type, days)
+
+    def _experiment_stats(self, db: Optional[LedgerDB], competition_type: Optional[str] = None, days: int = 0) -> Dict[str, Any]:
+        if not db:
             return {}
         where = "experiment_id!=''"
         params: list = []
@@ -927,18 +952,18 @@ class DecisionLedger:
         if days > 0:
             where += ' AND at>=?'
             params.append((_now()-timedelta(days=days)).isoformat())
-        arms = self._db.aggregate(where, params, 'algorithm')
-        counts = {r[0]:r[1] for r in self._db.connection.execute(
+        arms = db.aggregate(where, params, 'algorithm')
+        counts = {r[0]:r[1] for r in db.connection.execute(
             'SELECT review_status,count(*) FROM decisions WHERE ' + where + " AND algorithm='economics_llm' GROUP BY review_status", params)}
         # A paired cohort includes only quotes with both arms and a graded outcome.
         pair_where = (where + " AND experiment_id IN (SELECT experiment_id FROM decisions WHERE " + where +
                      " AND status IN ('won','lost','half_won','half_lost','push') GROUP BY experiment_id HAVING count(DISTINCT algorithm)=2)")
-        operation = self._db.aggregate(pair_where, [*params,*params], 'algorithm')
+        operation = db.aggregate(pair_where, [*params,*params], 'algorithm')
         pair_where += " AND review_status='ready'"
-        paired = self._db.aggregate(pair_where, [*params,*params], 'algorithm')
+        paired = db.aggregate(pair_where, [*params,*params], 'algorithm')
         a,b = paired.get('economics_control',{}), paired.get('economics_llm',{})
         opportunities = a.get('total',0)
-        errors = {r[0]:r[1] for r in self._db.connection.execute(
+        errors = {r[0]:r[1] for r in db.connection.execute(
             "SELECT json_extract(payload,'$.review_error'),count(*) FROM decisions WHERE "+where+" AND algorithm='economics_llm' AND review_status='error' GROUP BY json_extract(payload,'$.review_error')",params)}
         return {'arms':arms, 'paired':paired, 'operation':operation, 'review_status':counts, 'errors':errors, 'paired_opportunities':opportunities,
                 'coverage': b.get('stake_units',0)/opportunities if opportunities else None,

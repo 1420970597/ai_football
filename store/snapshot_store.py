@@ -531,12 +531,12 @@ class SnapshotStore:
         """统计快照规模（用于 /health 与运维观察）。"""
         n_files = 0
         n_matches = 0
-        for d in self.root.rglob("*"):
-            if d.is_dir() and (d / "_index.json").exists():
-                n_matches += 1
-        for f in self.root.rglob("*.json"):
-            if f.name != "_index.json":
-                n_files += 1
+        # Count names from one scandir traversal. Stat-ing each of a million
+        # snapshots and then walking again monopolized disk/GIL during live
+        # collection, despite this telemetry running on a background thread.
+        for _, _, names in os.walk(self.root):
+            n_matches += int("_index.json" in names)
+            n_files += sum(name.endswith(".json") and name != "_index.json" for name in names)
         return {
             "root": str(self.root),
             "match_dirs": n_matches,
