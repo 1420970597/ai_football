@@ -2,9 +2,8 @@
 # -*- coding: utf-8 -*-
 """`tools/leyu_session_doctor.py` 的单元测试。
 
-只测**纯逻辑**（.env 解析、凭据判定分支、指纹脱敏），不碰网络：
-诊断工具的价值在于「把 IP 被拦 与 凭据失效 区分开」，
-这个区分逻辑必须被测死，否则会把排障方向指反。
+离线验证 Compose 配置读取、脱敏、默认不登录和显式登录只提交一次。
+mock 不能证明当前上游账号登录成功。
 """
 
 from __future__ import annotations
@@ -21,7 +20,8 @@ sys.path.insert(0, _ROOT)
 sys.path.insert(0, os.path.join(_ROOT, "tools"))
 
 # tools/ 不是包（无 __init__.py），导入路径靠在上面手工插入。
-# 单测的目的就是把「IP 被拦 / 凭据无效」的判定钉死。
+# 所有 HTTP 与 Compose 配置查询均在用例中隔离。
+import leyu_session_doctor as doctor  # noqa: E402
 from leyu_session_doctor import (  # noqa: E402
     _disabled_credentials,
     _fp,
@@ -95,10 +95,12 @@ class DoctorFingerprintTest(unittest.TestCase):
     """脱敏输出：诊断要能贴给别人看，不能泄漏明文。"""
 
     def test_masks_middle_of_long_value(self) -> None:
-        out = _fp("e0a669ad474c33a0db386812cfc5a734faa9da1ad60a187142b7e35b2")
+        value = "example-private-token" * 4
+        out = _fp(value)
         self.assertIn("len=", out)
-        self.assertIn("head=e0a6", out)
-        self.assertNotIn("fa9da1ad60a187142b7e35b2", out)  # 尾部不外泄
+        self.assertIn("sha256=", out)
+        self.assertNotIn("example", out)
+        self.assertEqual(out, _fp(value))
 
     def test_empty_value_marked_empty(self) -> None:
         self.assertIn("empty", _fp(""))
@@ -110,90 +112,104 @@ class DoctorFingerprintTest(unittest.TestCase):
 
 
 class DoctorCredentialVerdictTest(unittest.TestCase):
-    """判定分支：IP 被拦 / 凭据无效 / 口令错 —— 方向不能反。"""
+    def _env(self):
+        return {
+            "LEYU_APP_LOGIN_NAME": "example-user",
+            "LEYU_APP_LOGIN_PASSWORD": "example-password",
+            "LEYU_APP_UUID": "example-device",
+            "LEYU_APP_HOST": "https://app.test",
+            "LEYU_APP_SIGNATURE": "a" * 64,
+        }
 
-    def _run(self, real: dict, ctrl: dict) -> str:
-        """用假响应跑 _report_credentials，捕获 stdout。"""
-        import io
+    def _run(self, login_reply, allow_login=False):
         import contextlib
+        import io
+        import json
 
-        with mock.patch("urllib.request.urlopen") as uo:
-            def _resp(payload: dict):
-                m = mock.MagicMock()
-                import json as _json
-                m.read.return_value = _json.dumps(payload).encode()
-                m.__enter__ = lambda s: s
-                m.__exit__ = lambda *a: False
-                return m
+        sent = []
 
-            calls = {"n": 0}
+        def response(request, **kwargs):
+            sent.append(request)
+            if request.full_url.endswith("/user/login"):
+                payload = login_reply
+            elif request.full_url.endswith("/venue/launch"):
+                payload = {"status_code": 6000, "data": {"url": "https://api.test?token=business-session"}}
+            else:
+                raise AssertionError("Unexpected request")
+            obj = mock.MagicMock()
+            obj.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+            return obj
 
-            def _side_effect(*_a, **_kw):
-                calls["n"] += 1
-                return _resp(real if calls["n"] == 1 else ctrl)
+        buf = io.StringIO()
+        with mock.patch.object(doctor, "_environment", return_value=self._env()), \
+                mock.patch.object(doctor, "_disabled_credentials", return_value={}), \
+                mock.patch("urllib.request.urlopen", side_effect=response), \
+                mock.patch("collector.leyu_client.LEYUClient") as client, \
+                contextlib.redirect_stdout(buf):
+            client.return_value.all_matches.return_value = []
+            status = doctor.main(["--login"] if allow_login else [])
+        return status, buf.getvalue(), sent, client
 
-            uo.side_effect = _side_effect
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                _report_credentials(
-                    {"LEYU_APP_LOGIN_NAME": "u", "LEYU_APP_LOGIN_PASSWORD": "p"},
-                    {})
-            return buf.getvalue()
+    def test_default_diagnostic_never_submits_credentials(self):
+        status, out, sent, client = self._run({})
+        self.assertEqual(sent, [])
+        self.assertEqual(status, 1)
+        self.assertIn("本次未提交", out)
+        self.assertNotIn("example-password", out)
+        client.assert_not_called()
 
-    def test_6031_means_ip_blocked(self) -> None:
-        out = self._run({"status_code": 6031, "message": "地区ip限制"},
-                        {"status_code": 6031, "message": "地区ip限制"})
-        self.assertIn("IP 被拦", out)
+    def test_explicit_login_uses_production_protocol_once_and_reuses_session(self):
+        import hashlib
+        import json
 
-    def test_6008_with_matching_control_means_bad_credentials(self) -> None:
-        """服务端不区分「账号不存在」与「口令错」→ 只能判「凭据无效」。"""
-        out = self._run({"status_code": 6008, "message": "用户名或密码错误"},
-                        {"status_code": 6008, "message": "用户名或密码错误"})
-        self.assertIn("凭据无效", out)
-        self.assertNotIn("IP 被拦", out)
+        status, out, sent, client = self._run(
+            {"status_code": 6000, "data": {"token": "private-app-token"}}, allow_login=True)
+        self.assertEqual(status, 0)
+        self.assertEqual(sum(r.full_url.endswith("/user/login") for r in sent), 1)
+        self.assertEqual(len(sent), 2)
+        body = json.loads(sent[0].data)
+        self.assertEqual(body["name"], "example-user")
+        self.assertEqual(body["password"], hashlib.md5(b"example-password").hexdigest())
+        self.assertEqual(body["Kaptchcate"], 99)
+        self.assertEqual(client.call_args.kwargs["request_id"], "business-session")
+        self.assertNotIn("private-app-token", out)
+        self.assertNotIn("example-password", out)
+        self.assertNotIn("example-user", out)
 
-    def test_6008_without_matching_control_means_wrong_password(self) -> None:
-        """账号存在但口令错 —— 与「账号不存在」可区分时要说清。"""
-        out = self._run({"status_code": 6008, "message": "密码错误"},
-                        {"status_code": 6002, "message": "账号不存在"})
-        self.assertIn("口令错误", out)
+    def test_rejection_is_reported_once_without_echo_or_password_verdict(self):
+        status, out, sent, client = self._run(
+            {"status_code": 6002, "message": "private-server-response"}, allow_login=True)
+        self.assertEqual(status, 1)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("6002", out)
+        self.assertNotIn("private-server-response", out)
+        self.assertNotIn("口令错误", out)
+        client.assert_not_called()
 
-    def test_unexpected_code_is_reported_not_guessed(self) -> None:
-        out = self._run({"status_code": 9999, "message": "???"},
-                        {"status_code": 6008, "message": "x"})
-        self.assertIn("非预期响应", out)
-
-    def test_no_credentials_says_so(self) -> None:
+    def test_commented_credentials_are_reported_but_never_enabled(self):
         import io
         import contextlib
 
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            _report_credentials({}, {})
-        self.assertIn("未配置", buf.getvalue())
+        with mock.patch("urllib.request.urlopen") as request, contextlib.redirect_stdout(buf):
+            _report_credentials({}, {"LEYU_APP_LOGIN_NAME": "example-user",
+                                     "LEYU_APP_LOGIN_PASSWORD": "example-password"}, allow_login=True)
+        request.assert_not_called()
+        self.assertIn("注释行", buf.getvalue())
+        self.assertNotIn("example-password", buf.getvalue())
 
-    def test_commented_credentials_are_used_when_active_absent(self) -> None:
-        """生效配置为空时回退测注释行，并**标明来源**（否则用户会误以为已启用）。"""
-        import io
-        import contextlib
-        import json as _json
+    def test_compose_environment_values_are_preserved(self):
+        import json
 
-        with mock.patch("urllib.request.urlopen") as uo:
-            def _resp(payload: dict):
-                m = mock.MagicMock()
-                m.read.return_value = _json.dumps(payload).encode()
-                m.__enter__ = lambda s: s
-                m.__exit__ = lambda *a: False
-                return m
-
-            uo.return_value = _resp({"status_code": 6008, "message": "x"})
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                _report_credentials({}, {"LEYU_APP_LOGIN_NAME": "a",
-                                         "LEYU_APP_LOGIN_PASSWORD": "b"})
-        out = buf.getvalue()
-        self.assertIn("注释行", out)
-        self.assertIn("无效", out)
+        data = {"services": {"analytics-api": {"environment": {
+            "LEYU_APP_LOGIN_PASSWORD": "quoted$example-password",
+        }}}}
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch("os.path.exists", return_value=True), \
+                mock.patch("subprocess.check_output", return_value=json.dumps(data)) as compose:
+            env = doctor._environment("/repo/.env")
+        self.assertEqual(env["LEYU_APP_LOGIN_PASSWORD"], "quoted$example-password")
+        self.assertIn("--format", compose.call_args.args[0])
 
 
 if __name__ == "__main__":

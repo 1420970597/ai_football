@@ -242,6 +242,25 @@ python3 -c "import json;d=json.load(open('output/_live/scores.json'))['scores'];
 均未得到新 token。已停止重复账号提交，继续核对新账号注册入口与账号所属网关。
 这组结果不能证明新账号密码错误，也不能证明所有请求要求已被排除。
 
+**后续线上复核（2026-10-08，一手证据 A；数据源仍未恢复）**：
+- 用户明确确认 `.env` 账号状态正常；不能据接口拒绝把结论改写为密码错误。
+- 根 `.env` 两项登录凭据与 Compose 生效值逐字一致，没有变量插值、引号或
+  首尾空格改变；原生 preInfo 返回 6000，测得客户端与响应 Date 偏差约 0.7 秒。
+- 配置的 App 网关与 H5 入口返回相同乐鱼站点信息。账号实际成功登录使用的
+  注册/登录域名仍未提供，尚不能核对新账号是否属于该入口。
+- 原生登录抓包协议为 h2；当前 urllib 客户端为 HTTP/1.1。
+  本轮一次生产 provider 登录返回 6002；App 的 kaptchcate 预检查返回 6022。
+  随后对齐 HTTP/2、gzip 与紧凑 JSON 的一次对照请求返回 6030（登录次数限制），
+  没有取得 token。继续提交这次对照不够谨慎，已经停止账号请求。
+  这些结果不能证明 HTTP/2 是此前失败的根因，不能把协议对照记录为修复成功。
+- `Domain2CallbackImplKt.g(username)` 仅上报域名测速日志，不负责按账号选择网关；
+  不能把它描述为遗漏的账号路由初始化。
+- 只读验证用户 App 抓包中的业务会话：原生请求网关与 launch 返回网关
+  均返回 AuthError 0401013，无法恢复采集；临时会话探测文件已删除，未写入缓存。
+- 生产 API 仍保留诊断 override 的后台登录暂停；新 token、有效业务会话和实时推送
+  均未取得。实时 connected/subscribed/messages/price_ticks 与 fresh_rows 均为 0。
+  下一步需要新账号实际注册或成功登录使用的域名，优先核对该站点的正常 App 流程。
+
 **代码修复（issues #12 / #14 / #15 / #16）**：
 - 整次 acquire 串行执行，网络失败也计入至少默认 30 秒的登录冷却。
 - 明确的上游登录业务拒绝会停止该 provider 的自动账号提交，invalidate 不会解除。
@@ -274,6 +293,17 @@ JSON 为 `routes` 对象，包含空前缀、`/site/api`、`/game/api` 三个条
 每个条目有 UTF-8 `key`（16/24/32 字节）和 `iv`（16 字节）。
 取值从用户提供的 App 协议配置取得，不能提交私有文件或复制密钥到代码中。
 `LEYU_APP_HOST` 应指向已核对的体育 App 网关，不能套用全站下载 App 的默认网关。
+
+诊断工具（PR #11，基于 PR #13）：`python3 tools/leyu_session_doctor.py`
+默认不提交账号口令或执行登录命令；`--login` 显式允许一次生产 provider 登录。
+使用 Compose 解析 `.env`，不再用虚构字段或占位密码推断真实凭据状态。
+注释中的账号口令仅提示未生效，不自动启用；已取得的会话直接用于赛程验证，
+不再次 acquire。不显示账号、密码或原始异常；移除无依据的 IP 闸门探针结论。
+镜像包含该工具，生产诊断使用
+`docker exec ai_football_analytics_api python /app/tools/leyu_session_doctor.py`，
+读取容器实际配置，避免宿主工作区的旧脚本误导诊断。组合分支全量验证为
+1010 tests / 14 skipped（exit 0），Docker mypy 为 49 文件无错误、ruff 全绿、
+pyright 为 0 errors / warnings（均 exit 0）。
 
 ### 3.3 进行中场次与乐鱼"完全一致"（P1）
 
