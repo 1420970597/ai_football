@@ -588,6 +588,10 @@ class ApiApp:
         rows = []
         for row in result.pop("decisions"):
             public = self._public_live_row(row, bool(realtime.get("connected")))
+            # The list only renders the six supported football market families.
+            # Hundreds of unvalued raw markets remain available in match detail.
+            public['markets'] = [m for m in public.get('markets') or []
+                                 if str(m.get('market', '')).split('_1H')[0] in ('HAD', 'AH', 'OU')]
             persisted = persisted_recommendations.get(str(public.get('match_id', '')), [])
             if persisted:
                 existing_keys = {(str(p.get('market', '')), str(p.get('line', '')), str(p.get('outcome', '')))

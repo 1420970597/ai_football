@@ -7,6 +7,7 @@ import os
 import threading
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from store.archive import journal_path
 
 
 class HistoryJournal:
@@ -37,8 +38,9 @@ class HistoryJournal:
         payload = gzip.compress(('\n'.join(lines) + '\n').encode('utf-8'), compresslevel=1, mtime=0)
         with self._lock:
             try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                with self.path.open('a+b', buffering=0) as file:
+                target = journal_path(self.path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open('a+b', buffering=0) as file:
                     offset = file.tell()
                     try:
                         if file.write(payload) != len(payload):

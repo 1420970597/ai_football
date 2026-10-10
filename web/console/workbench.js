@@ -650,15 +650,17 @@ function renderDataModel(data) {
   ]));
   $('storage-at').textContent = storage.at ? '统计于 ' + timeLabel(storage.at) : '后台统计中';
   $('storage-summary').replaceChildren(...metricCards([
-    ['台账决策 / 比赛',(storage.records?.decisions ?? '—') + ' / ' + (storage.records?.matches ?? '—')], ['已结算决策',storage.records?.settled_decisions ?? '—'], ['持久化文件',storage.files ?? '—'],['持久化数据',bytes(storage.bytes)],['硬盘容量',bytes(storage.disk?.total)],
+    ['台账决策 / 比赛',(storage.records?.decisions ?? '—') + ' / ' + (storage.records?.matches ?? '—')], ['已结算决策',storage.records?.settled_decisions ?? '—'], ['本地文件',storage.files ?? '—'],['本地数据',bytes(storage.bytes)],['硬盘容量',bytes(storage.disk?.total)],
     ['硬盘已用',bytes(storage.disk?.used)],['硬盘可用',bytes(storage.disk?.free)],
+    ['S3 归档文件', storage.archive?.backend === 's3' ? storage.archive.files : '未启用'],
+    ['S3 原始数据', bytes(storage.archive?.bytes)], ['S3 对象占用', bytes(storage.archive?.object_bytes)],
   ]));
   $('storage-categories').replaceChildren(el('table',{},[
     el('thead',{},[el('tr',{},['数据类别','文件数','存储量','实际占用'].map(text=>el('th',{text})))]),
     el('tbody',{},(storage.categories || []).map(c=>el('tr',{},[c.name,String(c.files),bytes(c.bytes),bytes(c.allocated_bytes)].map(text=>el('td',{text}))))),
   ]));
   $('storage-description').textContent = storage.retention || '统计由后台更新，刷新页面不会扫描归档或启动训练。';
-  const error = training.error || (storage.errors || []).join('；');
+  const error = training.error || storage.archive?.error || (storage.errors || []).join('；');
   notice('data-model-notice',error || (!data.running ? '独立模型服务尚未启动，请启动 model-worker。' : ''),!!error);
 }
 async function loadDataModel(force = false) {
