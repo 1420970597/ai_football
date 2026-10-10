@@ -104,7 +104,7 @@ async function loadAccount() {
 }
 function switchView(view) {
   S.view = view;
-  for (const key of ['live', 'recommendations', 'history', 'settings']) {
+  for (const key of ['live', 'recommendations', 'history', 'data-model', 'settings']) {
     $(key + '-view').hidden = key !== view;
     $('nav-' + key).classList.toggle('active', key === view);
     if (key === view) $('nav-' + key).setAttribute('aria-current', 'page');
@@ -113,7 +113,9 @@ function switchView(view) {
   location.hash = view;
   if (view === 'recommendations') loadRecommendations();
   else if (view === 'history') loadHistory();
-  else if (view === 'settings') loadSettings();
+  else if (view === 'settings' && !S.settingsVersion) loadSettings();
+  else if (view === 'settings') return;
+  else if (view === 'data-model') loadDataModel();
   else loadLive();
 }
 function emptyMessage(title, description, retry) {
@@ -214,17 +216,22 @@ function renderRecommendationsPage(data) {
   $('closed-recommendations-empty').hidden = !!rows.length;
 }
 
-async function loadRecommendations() {
+async function loadRecommendations(force = false) {
+  if (S.recommendationsBusy || (force !== true && Date.now() < (S.recommendationsNextAt || 0))) return;
+  S.recommendationsBusy = true;
   const request = ++S.recommendationsRequest;
   $('recommendations-refresh').disabled = true;
   try {
     const data = await get('/recommendations?type=' + encodeURIComponent(S.type));
     if (request !== S.recommendationsRequest || S.view !== 'recommendations') return;
+    S.recommendationsNextAt = 0;
     renderRecommendationsPage(data);
     notice('recommendations-notice', data.source_age_s != null ? '实时盘口更新于 ' + fixed(data.source_age_s, 1) + 's 前' : '');
   } catch (error) {
-    if (request === S.recommendationsRequest) notice('recommendations-notice', error.message + '，可点击刷新重试。', true);
+    if ([502,503,504].includes(error.status)) S.recommendationsNextAt = Date.now() + 30000;
+    if (request === S.recommendationsRequest) notice('recommendations-notice', [502,503,504].includes(error.status) ? '后端服务暂不可用，保留上次结果，30秒后自动重试，也可点击刷新。' : error.message + '，可点击刷新重试。', true);
   } finally {
+    S.recommendationsBusy = false;
     if (request === S.recommendationsRequest) $('recommendations-refresh').disabled = false;
   }
 }
@@ -538,7 +545,7 @@ async function loadHistory(reset = true) {
     if (request === S.historyRequest) $('history-refresh').disabled = false;
   }
 }
-const SETTING_FIELDS = [
+const ORIGINAL_SETTING_FIELDS = [
   ['算法与门槛', [
     ['primary_algorithm', '强度参考算法', 'select', {poisson_market: '当前盘口 Poisson', poisson_time_decay: '时间衰减 Poisson', devig_consensus: '去水共识', economics_risk_adjusted: '经济学风控', microstructure_adjusted: '盘口微观结构'}],
     ['devig_method', '去水方法', 'select', {proportional: '比例法', power: 'Power 法'}],
@@ -578,6 +585,93 @@ const SETTING_FIELDS = [
     ['llm_review_max_age_s', '审核输入有效期 / 秒', 'number', [30,600,1]],
   ]],
 ];
+const TRAINING_FIELDS = [
+  ['model_training_enabled', '自动更新训练模型', 'checkbox'],
+  ['model_training_matches', '更新周期 / 新增已结算比赛数', 'number', [1,100000,1]],
+  ['model_training_cpu', '训练 CPU / 核', 'number', [1,2,1]],
+  ['model_training_memory_mb', '训练内存上限 / MiB', 'number', [256,4096,1]],
+];
+const FIELD_MAP = Object.fromEntries([...ORIGINAL_SETTING_FIELDS.flatMap(([,fields]) => fields), ...TRAINING_FIELDS].map(f => [f[0],f]));
+const SETTING_TREE = [
+  ['决策', [
+    ['模型与信号', [['算法与概率', ['primary_algorithm','devig_method','min_probability','min_ev']], ['时间与共识', ['anchor_max_age_s','devig_spread_warn_pp']], ['算法融合', ['weight_prior_matches','max_algorithm_weight']]]],
+    ['风险与预警', [['仓位控制', ['fractional_kelly','max_total_exposure','risk_correlation','execution_cost']], ['表现预警', ['algorithm_alert_enabled','algorithm_alert_min_samples','algorithm_alert_threshold']]]],
+  ]],
+  ['执行', [['真实投注', [['功能开关', ['betting_enabled']], ['额度与条件', ['betting_stake_mode','betting_fixed_stake','betting_min_hit_count']]]]]],
+  ['数据与模型', [
+    ['模型训练', [['更新周期', ['model_training_enabled','model_training_matches']], ['资源限制', ['model_training_cpu','model_training_memory_mb']]]],
+    ['实时数据', [['新鲜度', ['quote_max_age_s','state_max_age_s']]]],
+  ]],
+  ['LLM', [
+    ['审核服务', [['服务与密钥', ['llm_enabled','llm_base_url','llm_model','llm_fallback_models','llm_api_key']], ['调用参数', ['llm_timeout_s','llm_temperature','llm_max_tokens']]]],
+    ['审核实验', [['周期与记录', ['llm_experiment_enabled','llm_interval_s','llm_review_max_age_s']]]],
+  ]],
+];
+const SETTING_FIELDS = SETTING_TREE.flatMap(([,menus]) => menus.flatMap(([,groups]) => groups.map(([name,keys]) => [name,keys.map(k => FIELD_MAP[k])])));
+S.settingsPath = [0,0,0];
+function selectSetting(category, menu, group) {
+  S.settingsPath = [category,menu,group];
+  const [title,menus] = SETTING_TREE[category];
+  const [subtitle,groups] = menus[menu];
+  const buttons = (items, active, callback) => items.map(([name], i) => el('button', {type:'button',class:'setting-nav-button' + (i === active ? ' active' : ''),text:name,'aria-pressed':String(i===active),onclick:()=>callback(i)}));
+  $('settings-categories').replaceChildren(...buttons(SETTING_TREE,category,i=>selectSetting(i,0,0)));
+  $('settings-submenus').replaceChildren(...buttons(menus,menu,i=>selectSetting(category,i,0)));
+  $('settings-groups').replaceChildren(...buttons(groups,group,i=>selectSetting(category,menu,i)));
+  $('settings-breadcrumb').textContent = title + ' / ' + subtitle + ' / ' + groups[group][0];
+  for (const section of $('settings-fields').children) section.hidden = section.dataset.group !== groups[group][0];
+}
+let dataModelBusy = false;
+const bytes = value => Number.isFinite(value) ? (value / 1024**3).toFixed(2) + ' GiB' : '—';
+const timeLabel = value => value ? new Date(value).toLocaleString('zh-CN', {hour12:false}) : '—';
+function metricCards(items) {
+  return items.map(([label,value]) => el('div', {class:'model-metric'}, [el('span',{text:label}),el('strong',{text:String(value ?? '—')})]));
+}
+function renderDataModel(data) {
+  const model = data.model || {}, training = data.training || {}, storage = data.storage || {};
+  const labels = {not_started:'尚未启动',checking:'检查训练数据',waiting:'等待新增已结算比赛',training:'训练中',ready:'已更新',failed:'训练失败',disabled:'自动训练已关闭'};
+  $('model-state').textContent = labels[training.state] || '未训练';
+  $('model-summary').replaceChildren(...metricCards([
+    ['最新更新时间',timeLabel(model.updated_at)], ['训练参数量',model.parameter_count ?? '未训练'],
+    ['模型版本',model.version || '未训练'], ['有效已结算比赛',training.eligible_matches ?? model.eligible_matches ?? '—'], ['有效训练决策',training.eligible_decisions ?? '—'],
+    ['距更新周期', (training.new_matches ?? '—') + ' / ' + (data.settings?.cycle_matches ?? '—') + ' 场'],
+    ['当前实际训练限制',training.limits ? training.limits.cpu_cores + ' 核 / ' + training.limits.memory_mb + ' MiB' : '尚未执行'],
+    ['训练资源上限',(data.settings?.cpu_cores ?? '—') + ' 核 / ' + (data.settings?.memory_mb ?? '—') + ' MiB'],
+  ]));
+  $('model-description').textContent = (model.architecture || '待训练：L2 Logistic 多盘口概率校准') + '。' + (data.note || '') +
+    ' 首次训练至少需要100场有效已结算比赛。验证按比赛和时间隔离，训练与评价按比赛等权；走盘排除，赢半/输半按非走盘方向判定。';
+  const rows = [['时间隔离验证',model.validation],['同组盘口基准',model.baseline],['当前版本前瞻验证',data.prospective?.model],['前瞻盘口基准',data.prospective?.baseline]];
+  $('model-performance').replaceChildren(el('table',{},[
+    el('thead',{},[el('tr',{},['表现口径','比赛 / 决策','正确率','Brier ↓','Log loss ↓'].map(text=>el('th',{text})))]),
+    el('tbody',{},rows.map(([label,m])=>el('tr',{},[label,m ? m.matches + ' / ' + m.decisions : '暂无有效样本',pct(m?.accuracy),fixed(m?.brier,4),fixed(m?.log_loss,4)].map(text=>el('td',{text}))))),
+  ]));
+  $('storage-at').textContent = storage.at ? '统计于 ' + timeLabel(storage.at) : '后台统计中';
+  $('storage-summary').replaceChildren(...metricCards([
+    ['台账决策 / 比赛',(storage.records?.decisions ?? '—') + ' / ' + (storage.records?.matches ?? '—')], ['已结算决策',storage.records?.settled_decisions ?? '—'], ['持久化文件',storage.files ?? '—'],['持久化数据',bytes(storage.bytes)],['硬盘容量',bytes(storage.disk?.total)],
+    ['硬盘已用',bytes(storage.disk?.used)],['硬盘可用',bytes(storage.disk?.free)],
+  ]));
+  $('storage-categories').replaceChildren(el('table',{},[
+    el('thead',{},[el('tr',{},['数据类别','文件数','存储量','实际占用'].map(text=>el('th',{text})))]),
+    el('tbody',{},(storage.categories || []).map(c=>el('tr',{},[c.name,String(c.files),bytes(c.bytes),bytes(c.allocated_bytes)].map(text=>el('td',{text}))))),
+  ]));
+  $('storage-description').textContent = storage.retention || '统计由后台更新，刷新页面不会扫描归档或启动训练。';
+  const error = training.error || (storage.errors || []).join('；');
+  notice('data-model-notice',error || (!data.running ? '模型与数据后台尚未启动。启动分析服务后会自动检查。' : ''),!!error);
+}
+async function loadDataModel(force = false) {
+  if (dataModelBusy || (S.dataModelUnsupported && force !== true)) return;
+  dataModelBusy = true;
+  $('data-model-refresh').disabled = true;
+  try {renderDataModel(await get('/data-model')); S.dataModelUnsupported = false;}
+  catch (error) {
+    if (error.status === 404) S.dataModelUnsupported = true;
+    if ($('model-summary').querySelector('.skeleton')) {
+      $('model-state').textContent = error.status === 404 ? '接口待更新' : '读取失败';
+      $('model-summary').replaceChildren(el('p',{text:'等待后端返回实际模型信息。'}));
+    }
+    notice('data-model-notice',error.status === 404 ? '当前后端版本尚未提供数据与模型接口，请构建并更新 analytics-api 后手动刷新。' : error.message + '，请刷新重试。',true);
+  }
+  finally {dataModelBusy=false; $('data-model-refresh').disabled=false;}
+}
 function renderBettingStatus(betting) {
   const statusLabels = {accepted:'已接受',pending:'等待场馆确认',rejected:'场馆拒单',unknown:'提交结果未知',blocked:'未提交',duplicate:'重复推荐已跳过'};
   const last = betting?.last_result;
@@ -596,7 +690,7 @@ function renderSettings(data) {
   const alerts = (data.algorithm_alerts || []).filter(a => a.status === 'warning');
   notice('settings-notice', alerts.length ? alerts.map(a => a.message).join('；') : data.restore_error || '', !!alerts.length);
   const sections = SETTING_FIELDS.map(([title,fields], index) => {
-    const section = el('fieldset', {class: 'settings-section'}, [el('legend', {text: title})]);
+    const section = el('fieldset', {class: 'settings-section', 'data-group':title}, [el('legend', {text: title})]);
     if (index === 0) {
       const algorithms = el('div', {class: 'enabled-algorithms'});
       for (const [key,name] of Object.entries(data.algorithms)) {
@@ -619,8 +713,9 @@ function renderSettings(data) {
           input.autocomplete = 'new-password';
           input.placeholder = cfg.has_llm_key ? '已配置，留空保留' : '未配置';
           input.value = '';
-        } else input.value = cfg[key];
-        if (type === 'number') {input.min=options[0]; input.max=options[1]; input.step=options[2];}
+        } else input.value = cfg[key] ?? '';
+        if (key.startsWith('model_training_') && cfg[key] === undefined) input.disabled = true;
+        if (type === 'number') {input.required=true; input.min=options[0]; input.max=options[1]; input.step=options[2];}
       }
       if (key === 'betting_enabled') {
         input.disabled = betting?.execution_supported !== true;
@@ -628,11 +723,13 @@ function renderSettings(data) {
       }
       section.appendChild(el('label', {class: type === 'checkbox' ? 'setting-toggle' : 'setting-field'}, [el('span', {text: label}), input]));
     }
-    if (index === 2) section.appendChild(el('label', {class: 'setting-toggle'}, [
+    if (fields.some(f => f[0].startsWith('model_training_')) && cfg.model_training_matches === undefined) section.appendChild(el('p',{class:'config-version',text:'当前后端版本没有训练配置，请更新 analytics-api 后重新读取设置。'}));
+    if (fields.some(f => f[0] === 'llm_api_key')) section.appendChild(el('label', {class: 'setting-toggle'}, [
       el('span', {text: '清除已保存 API Key'}), el('input', {type: 'checkbox', id: 'clear-llm-key'})]));
     return section;
   });
   $('settings-fields').replaceChildren(...sections);
+  selectSetting(...S.settingsPath);
   notice('settings-notice', alerts.length ? alerts.map(a => algorithmLabel(a.algorithm) + '：' + a.message).join('；') : data.restore_error || '', !!alerts.length);
 }
 async function loadSettings() {
@@ -646,6 +743,12 @@ async function loadSettings() {
 async function saveSettings(event) {
   event.preventDefault();
   if (S.settingsBusy || !S.settingsVersion) return;
+  const invalid = Array.from($('settings-form').querySelectorAll('input,select')).find(n => !n.disabled && !n.checkValidity());
+  if (invalid) {
+    const name = invalid.closest('fieldset').dataset.group;
+    SETTING_TREE.forEach(([,menus],c)=>menus.forEach(([,groups],m)=>groups.forEach(([label],g)=>{if(label===name) selectSetting(c,m,g);})));
+    invalid.reportValidity(); return;
+  }
   const settings = {algorithms: Array.from(document.querySelectorAll('input[name="algorithm"]:checked')).map(n => n.value)};
   for (const [,fields] of SETTING_FIELDS) for (const [key,,type] of fields) {
     const input = $('setting-' + key);
@@ -699,6 +802,8 @@ $('account-close').addEventListener('click', () => {
 });
 $('nav-live').addEventListener('click', () => switchView('live'));
 $('nav-history').addEventListener('click', () => switchView('history'));
+$('nav-data-model').addEventListener('click', () => switchView('data-model'));
+$('data-model-refresh').addEventListener('click', () => loadDataModel(true));
 $('nav-settings').addEventListener('click', () => switchView('settings'));
 $('refresh').addEventListener('click', loadLive);
 $('history-prev').addEventListener('click',()=>{S.historyOffset=Math.max(0,S.historyOffset-100);loadHistory(false);});
@@ -716,16 +821,18 @@ for (const button of document.querySelectorAll('[data-type]')) button.addEventLi
   loadLive();
 });
 document.addEventListener('keydown', event => {if (event.key === 'Escape') closeDetail();});
-window.addEventListener('hashchange', () => {const view = ['recommendations', 'history', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live'; if (S.view !== view) switchView(view);});
+window.addEventListener('hashchange', () => {const view = ['recommendations', 'history', 'data-model', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live'; if (S.view !== view) switchView(view);});
 async function poll() {
   loadAccount();
   if (S.view === 'recommendations') await loadRecommendations();
   else if (S.view === 'live') await loadLive();
+  else if (S.view === 'data-model') await loadDataModel();
   else if (S.view === 'settings') {
     await loadBettingStatus();
   }
   S.timer = setTimeout(poll, POLL_MS);
 }
 $('nav-recommendations').addEventListener('click', () => switchView('recommendations'));
-if (['recommendations', 'history', 'settings'].includes(location.hash.slice(1))) switchView(location.hash.slice(1));
+$('recommendations-refresh').addEventListener('click', () => loadRecommendations(true));
+if (['recommendations', 'history', 'data-model', 'settings'].includes(location.hash.slice(1))) switchView(location.hash.slice(1));
 poll();

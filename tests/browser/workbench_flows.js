@@ -15,7 +15,7 @@ async (page) => {
   const _PLACEHOLDER_SETTINGS = {version:1, persistent:true, algorithms:{poisson_market:'当前盘口 Poisson', poisson_time_decay:'时间衰减 Poisson', devig_consensus:'去水共识', economics_risk_adjusted:'经济学风控', microstructure_adjusted:'盘口微观结构'},
     capabilities:{betting:{configured_enabled:true,execution_supported:true,execution_enabled:true,mode:'automatic_single',
       reason:'等待满足门控的实时综合推荐',last_result:{status:'blocked',reason:'盘口历史命中次数不足（1/3）'}}},
-    settings:{algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',
+    settings:{model_training_enabled:true,model_training_matches:100,model_training_cpu:1,model_training_memory_mb:512,algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',
       min_probability:.52,min_ev:.02,quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,
       devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
       algorithm_alert_enabled:true,algorithm_alert_min_samples:30,algorithm_alert_threshold:.5,
@@ -73,7 +73,7 @@ async (page) => {
   const baseURL = new URL(page.url()).origin;
   await page.goto(baseURL + '/');
   await page.locator('.match-card').waitFor();
-  assert(await page.locator('header nav button').count() === 4, 'recommendation/live/history/settings primary pages');
+  assert(await page.locator('header nav button').count() === 5, 'recommendation/live/history/settings primary pages');
   assert(await page.locator('#source-match-count').textContent() === '3', 'source coverage is distinct from results');
   assert(await page.locator('#subscribed-count').textContent() === '2', 'typed subscription coverage');
   assert(await page.locator('.match-probabilities .probability-row').count() === 3, 'list includes probability bars');
@@ -118,6 +118,7 @@ async (page) => {
   await page.getByText('v2 已生效', {exact:true}).waitFor();
   assert(await page.locator('#setting-min_ev').inputValue() === '0.04', 'hot saved value');
   assert(await page.locator('#betting-capability-notice').isVisible(), 'execution status remains visible after save success');
+  await page.locator('#settings-categories').getByRole('button',{name:'执行',exact:true}).click();
   await page.locator('#setting-betting_enabled').uncheck();
   await page.getByRole('button', {name:'保存并立即生效',exact:true}).click();
   await page.getByText('v3 已生效', {exact:true}).waitFor();
@@ -126,6 +127,7 @@ async (page) => {
   await page.getByRole('button', {name:'保存并立即生效',exact:true}).click();
   await page.getByText('v4 已生效', {exact:true}).waitFor();
   await page.screenshot({path: '/root/ai_football/output/playwright/task31-betting-status.png', fullPage: true});
+  await page.locator('#settings-categories').getByRole('button',{name:'决策',exact:true}).click();
   for (const input of await page.locator('input[name="algorithm"]').all()) await input.uncheck();
   await page.getByRole('button', {name:'保存并立即生效',exact:true}).click();
   await page.getByText('至少启用一个有效算法', {exact:true}).waitFor();
@@ -139,7 +141,7 @@ async (page) => {
   await page.getByText('测试占位联赛', {exact: true}).first().waitFor();
   mode = 'loading';
   await page.reload({waitUntil: 'domcontentloaded'});
-  assert(await page.locator('.skeleton').count() === 3, 'loading skeleton');
+  assert(await page.locator('#live-view .skeleton').count() === 3, 'loading skeleton');
   await page.screenshot({path: '/root/ai_football/output/playwright/task30-loading.png'});
   await page.locator('.match-card').waitFor();
   mode = 'empty';

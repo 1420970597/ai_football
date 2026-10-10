@@ -57,6 +57,7 @@ class LiveExpertService:
         self._recommendations: Dict[str, Dict[str, Any]] = {}
         self._anchors: Dict[str, Dict[str, Any]] = {}
         self._series: Dict[Tuple[str, str, str, str], deque] = {}
+        self._training_series: Dict[Tuple[str, str, str, str], deque] = {}
         self._compute_ms: deque = deque(maxlen=2048)
         self._latency_ms: deque = deque(maxlen=2048)
         self._by_type: Dict[str, deque] = {}
@@ -166,6 +167,7 @@ class LiveExpertService:
             frozen_anchor = dict(self._anchors.get(str(snapshot['match_id']), {}))
         elapsed = (time.perf_counter() - started) * 1000
         result['compute_ms'] = round(elapsed, 3)
+        result['input_cutoff_ms'] = snapshot.get('captured_at_ms')
         mid = str(snapshot['match_id'])
         if hub.state_version(mid) != snapshot['version'] or result['config_version'] != self.config_version:
             self.superseded += 1
@@ -201,6 +203,7 @@ class LiveExpertService:
                 for series_key in list(self._series):
                     if series_key[0] == oldest:
                         self._series.pop(series_key, None)
+                        self._training_series.pop(series_key, None)
             # Every published computation with configured storage is a training record, including
             # observe/reject states and every algorithm's full candidate set.
             if self.journal_root:
@@ -279,6 +282,13 @@ class LiveExpertService:
                 if not series or (q.ts_ms > series[-1][0] and now - series[-1][0] / 1000 >= 1):
                     series.append((q.ts_ms, q.odds))
                 drift = (q.odds / series[0][1] - 1) * 100 if len(series) > 1 else 0
+                captured = snapshot.get('captured_at_ms')
+                training_series = self._training_series.setdefault(series_key, deque(maxlen=40))
+                if captured is not None and q.ts_ms <= captured:
+                    if not training_series or q.ts_ms > training_series[-1][0]:
+                        training_series.append((q.ts_ms, captured, q.odds))
+                prefix = [[point[0], point[2]] for point in training_series
+                          if captured is not None and point[0] <= captured and point[1] <= captured]
                 label = (format_market(group['market'], oc, group['line'], home=info.get('home') or '',
                                        away=info.get('away') or '') if group['known'] else
                          format_raw_market(group['market'], oc, group['line'], group['name'],
@@ -287,7 +297,8 @@ class LiveExpertService:
                 quotes.append({'outcome': oc, 'label': label, 'odds': q.odds,
                                'order_detail': {**getattr(q, 'order_detail', {}), 'oddFinally': str(q.odds)},
                                'p_market': round(probability, 6) if probability is not None else None,
-                               'trend_pct': round(drift, 3), 'ts_ms': q.ts_ms})
+                               'trend_pct': round(drift, 3), 'ts_ms': q.ts_ms,
+                               'training_history': prefix})
             markets.append({'market': group['market'], 'line': group['line'],
                             'name': group['name'] if group['known'] else normalize_market_name(group['name'], group['market']),
                             'chpid': group['chpid'], 'quotes': quotes, 'complete': complete,
