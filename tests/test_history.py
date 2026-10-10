@@ -147,6 +147,57 @@ class TrendHistoryTests(unittest.TestCase):
 
 
 class ScoreAndEventHistoryTests(unittest.TestCase):
+    def test_per_match_score_staging_preserves_restored_matches_and_all_revisions(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'scores.json'
+            initial = ScoreStore(str(path))
+            initial.save({'old': (2, 1)}, ['old'], force=True,
+                         final_proofs={'old': {'mmp': '999'}})
+            store = ScoreStore(str(path))
+            store.load()
+            store.stage('m', (0, 0), False, None, None)
+            store.stage('m', (1, 0), False, (0, 0), None)
+            store.stage('m', (1, 0), True, (0, 0), {'mmp': '999'})
+            self.assertEqual(store.history_health()['pending'], 3)
+            self.assertTrue(store.flush(force=True))
+            restored = ScoreStore(str(path)).load()
+            self.assertEqual(restored['old']['ft'], [2, 1])
+            self.assertTrue(restored['old']['done'])
+            self.assertTrue(restored['m']['done'])
+            self.assertEqual(restored['m']['ht'], [0, 0])
+            self.assertEqual([r['ft'] for r in read_history(store.history.path) if r['match_id'] == 'm'],
+                             [[0, 0], [1, 0], [1, 0]])
+
+    def test_deferred_scores_keep_every_revision_and_retry_failed_flush(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = ScoreStore(str(Path(root) / 'scores.json'))
+            for score in ((0, 0), (1, 0), (1, 1)):
+                store.save({'m': score}, [], defer=True)
+            self.assertFalse(store.path.exists())
+            self.assertEqual(store.history_health()['pending'], 3)
+            with patch.object(store.history, 'append', side_effect=OSError('disk full')):
+                self.assertFalse(store.flush(force=True))
+            self.assertEqual(store.history_health()['pending'], 3)
+            store.save({'m': (1, 1)}, ['m'], final_proofs={'m': {'mmp': '999'}}, defer=True)
+            self.assertTrue(store.flush(force=True))
+            rows = read_history(store.history.path)
+            self.assertEqual([r['ft'] for r in rows], [[0, 0], [1, 0], [1, 1], [1, 1]])
+            self.assertTrue(rows[-1]['done'])
+            self.assertEqual(store.history_health()['pending'], 0)
+
+    def test_deferred_trends_keep_all_changes_without_socket_thread_io(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = TrendStore(root)
+            ticks = [PriceTick('m', '2', 'h', '2.5', 'o', 'Over', 2, value, index)
+                     for index, value in enumerate((2, 2.1, 2.2), 1)]
+            with patch.object(store, 'flush', wraps=store.flush) as flush:
+                for tick in ticks:
+                    store.append_many([tick], defer=True)
+                flush.assert_not_called()
+            self.assertEqual(store.health()['pending'], 3)
+            self.assertEqual(store.flush(), 3)
+            self.assertEqual([r['new'] for r in store.load('m')], [2, 2.1, 2.2])
+
     def test_each_score_revision_survives_throttle_failure_and_final_correction(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'scores.json'

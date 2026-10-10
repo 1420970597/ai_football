@@ -260,6 +260,8 @@ class ApiApp:
         #: 避免每次测试构造 API 都去连上游。
         self._analysis = analysis
         self._response_cache: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
+        from service.account_summary import AccountSummary
+        self._account_summary = AccountSummary()
 
     @property
     def analysis(self) -> Any:
@@ -831,7 +833,9 @@ class ApiApp:
         out = {**self.analysis.settings_status(), "llm_review": self.analysis.live_review.health()}
         from core.ensemble import algorithm_alerts
         cfg = self.analysis.runtime_settings.config
-        out["algorithm_alerts"] = algorithm_alerts(cfg.algorithms, self.analysis.ledger.performance_evidence(),
+        # Settlement already refreshes this immutable evidence snapshot.
+        # Opening settings must not run another full historical SQL aggregate.
+        out["algorithm_alerts"] = algorithm_alerts(cfg.algorithms, self.analysis.live_expert.performance_evidence,
                                                      cfg.algorithm_alert_min_samples, cfg.algorithm_alert_threshold,
                                                      cfg.algorithm_alert_enabled)
         return out
@@ -843,17 +847,7 @@ class ApiApp:
     def h_account(self, query: Mapping[str, List[str]],
                   body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
         """Return the authenticated sports account summary, when configured."""
-        cached = self._cached_response("account", "summary", 5.0)
-        if cached is not None:
-            return cached
-        try:
-            from collector.leyu_account import account_client_from_env
-            client = account_client_from_env()
-            if client is None:
-                return {"available": False, "source": "leyu_app", "error": "未配置 App 会话"}
-            return self._store_response("account", "summary", client.fetch())
-        except Exception as exc:  # account telemetry must not break the workbench
-            return {"available": False, "source": "leyu_app", "error": str(exc)[:160]}
+        return self._account_summary.read()
 
     def h_bet_preview(self, query: Mapping[str, List[str]],
                       body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:

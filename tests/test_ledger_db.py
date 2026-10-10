@@ -1,14 +1,107 @@
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from core.settlement import summarise
 from service.ledger import DecisionLedger, LedgerEntry
+from store.ledger_db import LedgerDB
 
 
 class LedgerDatabaseTests(unittest.TestCase):
+    def test_betting_evidence_reads_committed_projection_while_writer_is_busy(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            ledger._append([self.row(trigger='live_recommendation', status='won')])
+            entered, release = threading.Event(), threading.Event()
+            def writer():
+                with ledger._lock:
+                    entered.set()
+                    release.wait(5)
+            thread = threading.Thread(target=writer)
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                result = []
+                read = threading.Thread(target=lambda: result.append(
+                    ledger.recommendation_performance('OU', '2.25', 'over')))
+                read.start()
+                read.join(2)
+                self.assertFalse(read.is_alive(), '投注命中查询不得等待台账写锁')
+                self.assertEqual(result[0]['hit_count'], 1)
+            finally:
+                release.set()
+                thread.join(5)
+                read.join(5)
+
+    def test_old_quote_projection_migrates_without_losing_evidence(self):
+        import sqlite3
+        from store.ledger_db import FIELDS
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'ledger.sqlite3'
+            fields = {k: v for k, v in FIELDS.items() if k not in ('line', 'outcome')}
+            row = self.row(trigger='live_recommendation', status='won').as_dict()
+            with sqlite3.connect(path) as db:
+                db.execute('CREATE TABLE decisions (identity TEXT PRIMARY KEY, revision REAL, payload TEXT,' +
+                           ','.join(k + ' ' + v for k, v in fields.items()) + ')')
+                values = ['old', 0, json.dumps(row), *[row.get(k) for k in fields]]
+                db.execute('INSERT INTO decisions VALUES (' + ','.join('?' for _ in values) + ')', values)
+            ledger = DecisionLedger(root)
+            self.assertEqual(ledger.recommendation_performance('OU', '2.25', 'over')['hit_count'], 1)
+            projected = ledger._db.connection.execute('SELECT line,outcome FROM decisions').fetchone()
+            self.assertEqual(tuple(projected), ('2.25', 'over'))
+            plan = ledger._db.connection.execute(
+                "EXPLAIN QUERY PLAN SELECT 1 FROM decisions WHERE trigger='live_recommendation' "
+                "AND is_pick=1 AND algorithm=? AND market=? AND line=? AND outcome=?",
+                ('economic_ensemble', 'OU', '2.25', 'over')).fetchall()
+            self.assertTrue(any('idx_recommendation_quote' in r[3] for r in plan))
+
+    def test_slow_evidence_does_not_hold_writer_or_betting_evidence_lock(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            ledger._append([self.row(trigger='live_recommendation', status='won')])
+            entered, release, written = threading.Event(), threading.Event(), threading.Event()
+            original = LedgerDB.evidence
+            errors = []
+            def slow(db, cutoff):
+                entered.set()
+                release.wait(5)
+                return original(db, cutoff)
+            def write():
+                try:
+                    ledger._append([self.row(decision_id='b')])
+                    ledger.recommendation_performance('OU', '2.25', 'over')
+                    written.set()
+                except Exception as exc:
+                    errors.append(exc)
+            with patch.object(LedgerDB, 'evidence', slow):
+                reader = threading.Thread(target=ledger.performance_evidence)
+                reader.start()
+                self.assertTrue(entered.wait(2))
+                writer = threading.Thread(target=write)
+                writer.start()
+                try:
+                    self.assertTrue(written.wait(2), 'aggregation blocked live writers/checks')
+                finally:
+                    release.set()
+                    reader.join(5)
+                    writer.join(5)
+            self.assertEqual(errors, [])
+            self.assertEqual(ledger.stats()['total'], 2)
+
+    def test_read_projection_is_read_only_and_memory_mode_remains_supported(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            with ledger._read_db() as reader:
+                with self.assertRaises(sqlite3.OperationalError):
+                    reader.connection.execute('DELETE FROM decisions')
+        ledger = DecisionLedger()
+        self.assertEqual(ledger.stats()['total'], 0)
+        self.assertEqual(ledger.performance_evidence()['rows'], [])
+
     def row(self, **kw):
         values = dict(at='2026-10-01T12:00:00+00:00',match_id='m',decision_id='a',
                       market='OU',line='2.25',outcome='over',odds=2,is_pick=True,

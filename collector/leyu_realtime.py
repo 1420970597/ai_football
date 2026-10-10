@@ -63,6 +63,7 @@ _LIVE_SAVE_INTERVAL_S = 5.0
 #: **终场比分**，因此取更短的 3s —— 让“比赛刚结束”的比分尽快落盘，
 #: 以免重启后丢掉那场唯一的赛果来源（详见 `ScoreStore`）。
 _SCORE_SAVE_INTERVAL_S = 3.0
+_HISTORY_FLUSH_INTERVAL_S = 0.25
 
 
 def _live_snapshot_path(trend_root: Optional[str]) -> Optional[str]:
@@ -488,7 +489,7 @@ class LiveBook:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False)
+                fh.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
             os.replace(tmp, path)          # 原子替换，避免读到半写文件
             self.last_save_at = now
             self.last_error = ""
@@ -590,18 +591,19 @@ class ScoreStore:
         self.last_save_at = 0.0
         self.last_error = ""
         self._lock = threading.RLock()
+        self._flush_lock = threading.Lock()
         self.history = HistoryJournal(self.path.with_name('score-history.jsonl.gz')) if self.path else None
         self._archived: Dict[str, Any] = {}
         self._pending: List[Mapping[str, Any]] = []
+        self._cache_payload: Dict[str, Any] = {}
 
     def save(self, scores: Mapping[str, Any], finished: Any,
              force: bool = False, half_scores: Optional[Mapping[str, Any]] = None,
-             final_proofs: Optional[Mapping[str, Any]] = None) -> bool:
+             final_proofs: Optional[Mapping[str, Any]] = None, *, defer: bool = False) -> bool:
         """Archive each score revision before refreshing the latest-state cache."""
         path = self.path
         if path is None:
             return False
-        now = time.monotonic()
         done = {str(m) for m in (finished or ())}
         payload: Dict[str, Any] = {"version": 2}
         try:
@@ -619,21 +621,51 @@ class ScoreStore:
                        for mid, row in payload['scores'].items() if row != self._archived.get(mid)]
             self._pending.extend(changes)
             self._archived.update(payload['scores'])
+            self._cache_payload = payload
+        return True if defer else self.flush(force=force)
+
+    def stage(self, mid: str, score: Any, done: bool, half: Any, proof: Any) -> None:
+        """Queue one match revision without rebuilding every historical score."""
+        if self.path is None or score is None:
+            return
+        row = {'ft': [int(score[0]), int(score[1])], 'done': done,
+               'ht': list(half) if half else None, 'final_proof': dict(proof) if proof else None}
+        at = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            if row != self._archived.get(mid):
+                self._pending.append({'match_id': mid, 'at': at, **row})
+                self._archived[mid] = row
+            self._cache_payload.setdefault('scores', {})[mid] = row
+            self._cache_payload.update(version=2, saved_at=at)
+
+    def flush(self, force: bool = False) -> bool:
+        path = self.path
+        if path is None:
+            return False
+        now = time.monotonic()
+        with self._flush_lock:
+            with self._lock:
+                pending = list(self._pending)
+                payload = ({**self._cache_payload, 'scores': dict(self._cache_payload.get('scores', {}))}
+                           if self._cache_payload else {})
             try:
                 if self.history:
-                    self.history.append(self._pending)
-                self._pending.clear()
+                    self.history.append(pending)
+                with self._lock:
+                    del self._pending[:len(pending)]
             except (OSError, TypeError, ValueError) as exc:
                 self.last_error = "比分历史写入失败: %s" % exc
                 return False
             self.last_error = ""
+            if not payload:
+                return False
             if not force and (now - self.last_save_at) < _SCORE_SAVE_INTERVAL_S:
                 return False
             tmp = path.with_name(path.name + ".tmp")
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 with open(tmp, "w", encoding="utf-8") as fh:
-                    json.dump(payload, fh, ensure_ascii=False)
+                    fh.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
                 os.replace(tmp, path)
                 self.last_save_at = now
                 return True
@@ -658,6 +690,9 @@ class ScoreStore:
             self.last_error = "比分读取失败: %s" % exc
             return {}
         rows = payload.get("scores") if isinstance(payload, dict) else None
+        if isinstance(rows, dict):
+            self._cache_payload = dict(payload)
+            self._archived = dict(rows)
         return dict(rows) if isinstance(rows, dict) else {}
 
 
@@ -690,7 +725,7 @@ class TrendStore:
         safe = "".join(ch for ch in str(mid) if ch.isalnum() or ch in "-_")
         return self.root / ("%s.jsonl" % (safe or "unknown"))
 
-    def append_many(self, ticks: Sequence[PriceTick]) -> None:
+    def append_many(self, ticks: Sequence[PriceTick], *, defer: bool = False) -> None:
         if not self.enabled or not ticks:
             return
         received = int(time.time() * 1000)
@@ -699,7 +734,8 @@ class TrendStore:
                 self._buf.setdefault(tick.mid, []).append(json.dumps(
                     {**tick.as_dict(), "received_at_ms": received},
                     ensure_ascii=False, separators=(",", ":")))
-        self.flush()
+        if not defer:
+            self.flush()
 
     def flush(self) -> int:
         if not self.enabled:
@@ -849,6 +885,10 @@ class RealtimeStats:
     reconnects: int = 0
     messages: int = 0
     price_ticks: int = 0
+    price_messages: int = 0
+    last_price_at: float = 0.0
+    last_price_source_ms: int = 0
+    commands: Dict[str, int] = field(default_factory=dict)
     score_updates: int = 0
     status_updates: int = 0
     finished: int = 0
@@ -866,6 +906,11 @@ class RealtimeStats:
             "reconnects": self.reconnects,
             "messages": self.messages,
             "price_ticks": self.price_ticks,
+            "price_messages": self.price_messages,
+            "price_idle_s": round(now - self.last_price_at, 1) if self.last_price_at else None,
+            "price_source_age_s": (round(max(0, now - self.last_price_source_ms / 1000), 1)
+                                   if self.last_price_source_ms else None),
+            "commands": dict(self.commands),
             "score_updates": self.score_updates,
             "status_updates": self.status_updates,
             "finished": self.finished,
@@ -1063,6 +1108,9 @@ class RealtimeHub:
         self._runtime_finished: set = set()
         self._mids_provider_failed = False
         self._thread: Optional[threading.Thread] = None
+        self._cache_thread: Optional[threading.Thread] = None
+        self._subscription_thread: Optional[threading.Thread] = None
+        self._subscription_update: Optional[Tuple[List[str], bool]] = None
         self._feed: Optional[LEYUFeed] = None
         self._stop = threading.Event()
         self._subscribed: List[str] = []
@@ -1071,6 +1119,7 @@ class RealtimeHub:
         self.event_history = HistoryJournal(Path(trend_root).parent / '_live' / 'events.jsonl.gz') if trend_root else None
         self._event_pending: List[Mapping[str, Any]] = []
         self._event_lock = threading.RLock()
+        self._event_flush_lock = threading.Lock()
         #: **内存实时赔率表**（关键：查询路径不再碰磁盘）。
         #:
         #: 与 `_last_price` 的分工：
@@ -1144,7 +1193,7 @@ class RealtimeHub:
                     self._finished.add(mid)
                     self._final_proofs[mid] = dict(proof)
 
-    def _save_scores(self, force: bool = False) -> None:
+    def _save_scores(self, force: bool = False, *, mid: Optional[str] = None) -> None:
         """把当前比分/结束集合落盘（节流；失败不影响推送）。
 
         ⚠️ **`C109`（比赛结束）必须传 `force=True`**：它会在只有几秒间隔的
@@ -1154,12 +1203,17 @@ class RealtimeHub:
         本项目测试真实拓到该缺陷。
         """
         with self._lock:
+            if mid is not None and self.running:
+                self.scores_store.stage(mid, self._scores.get(mid), mid in self._finished,
+                                        self._status.get(mid, {}).get('half_score'), self._final_proofs.get(mid))
+                return
             scores = dict(self._scores)
             finished = set(self._finished)
             half_scores = {mid: list(st['half_score']) for mid,st in self._status.items() if st.get('half_score')}
             final_proofs = dict(self._final_proofs)
         try:
-            self.scores_store.save(scores, finished, force=force, half_scores=half_scores, final_proofs=final_proofs)
+            self.scores_store.save(scores, finished, force=force, half_scores=half_scores,
+                                   final_proofs=final_proofs, defer=self.running)
         except (AttributeError, OSError, TypeError, ValueError) as exc:
             self.stats.last_error = "比分落盘失败: %s" % exc
 
@@ -1210,6 +1264,11 @@ class RealtimeHub:
         if self._thread is not None and self._thread.is_alive():
             return False
         self._stop.clear()
+        self._cache_thread = threading.Thread(target=self._cache_loop, name="leyu-book-cache", daemon=True)
+        self._cache_thread.start()
+        self._subscription_thread = threading.Thread(target=self._subscription_loop,
+                                                     name="leyu-subscriptions", daemon=True)
+        self._subscription_thread.start()
         self._thread = threading.Thread(target=self._run, name="leyu-realtime",
                                         daemon=True)
         self._thread.start()
@@ -1225,10 +1284,33 @@ class RealtimeHub:
         t = self._thread
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
+        if self._cache_thread is not None:
+            self._cache_thread.join()
+        if self._subscription_thread is not None:
+            self._subscription_thread.join(timeout=timeout)
         self.trend_store.flush()
         self._flush_events()
         self._save_scores(force=True)
         self.live.save(force=True)
+
+    def _cache_loop(self) -> None:
+        """The recoverable current-book cache must never block socket consumption.
+
+        Complete baseline/change history remains in TrendStore. This cache is
+        an atomic checkpoint; its original upstream timestamps are preserved.
+        """
+        while not self._stop.wait(_HISTORY_FLUSH_INTERVAL_S):
+            self.live.save()
+            self.trend_store.flush()
+            self._flush_events(force=True)
+            self.scores_store.flush()
+
+    def _subscription_loop(self) -> None:
+        """REST schedule refreshes must not pause the live socket reader."""
+        while not self._stop.wait(max(0.1, self.subscribe_interval_s)):
+            update = self._read_subscription()
+            with self._lock:
+                self._subscription_update = update
 
     @property
     def running(self) -> bool:
@@ -1546,12 +1628,12 @@ class RealtimeHub:
         # 落盘在锁外：磁盘 IO 不应阻塞推送消费
         self._notify_state_change([t.mid for t in ticks])
         if baselines or changed:
-            self.trend_store.append_many([*baselines, *changed])
+            self.trend_store.append_many([*baselines, *changed], defer=self.running)
         if changed:
             self._notify_price_change(changed)
         # 实时表落盘（节流 5s；内部自会判断是否需要写）。
         # 放在锁外，与走势落盘同理：磁盘 IO 不应阻塞推送消费。
-        if ticks:
+        if ticks and not self.running:
             self.live.save()
 
     def _notify_price_change(self, changed: Sequence[PriceTick]) -> None:
@@ -1589,19 +1671,23 @@ class RealtimeHub:
                 self._events[mid] = dq
             dq.append(row)
 
-    def _flush_events(self) -> None:
-        if not self.event_history:
+    def _flush_events(self, *, force: bool = False) -> None:
+        if not self.event_history or (self.running and not force):
             return
-        with self._event_lock:
+        with self._event_flush_lock:
+            with self._event_lock:
+                pending = list(self._event_pending)
             try:
-                self.event_history.append(self._event_pending)
-                self._event_pending.clear()
+                self.event_history.append(pending)
+                with self._event_lock:
+                    del self._event_pending[:len(pending)]
             except (OSError, TypeError, ValueError) as exc:
                 self.stats.last_error = '赛况历史写入失败: %s' % exc
 
     def _handle_message(self, msg: Mapping[str, Any]) -> None:
         cmd = str(msg.get("cmd") or "")
         self.stats.messages += 1
+        self.stats.commands[cmd] = self.stats.commands.get(cmd, 0) + 1
         self.stats.last_message_at = time.time()
         # Preserve decoded state messages before any lossy field selection or
         # bounded UI event cache. Session/auth messages are deliberately absent.
@@ -1616,6 +1702,9 @@ class RealtimeHub:
             if isinstance(decoded, Mapping):
                 ticks = parse_c105(decoded)
                 if ticks:
+                    self.stats.price_messages += 1
+                    self.stats.last_price_at = time.time()
+                    self.stats.last_price_source_ms = max(t.ts_ms for t in ticks)
                     self._record_ticks(ticks)
             return
 
@@ -1637,7 +1726,7 @@ class RealtimeHub:
                     self.stats.score_updates += 1
                     # 落盘赛果（见 ScoreStore：结束之后就再也拿不到了）
                     self._notify_state_change([mid])
-                    self._save_scores()
+                    self._save_scores(mid=mid)
                 self._record_event(str(decoded.get("mid", "")),
                                    {"cmd": cmd, "cmec": decoded.get("cmec"),
                                     "mmp": decoded.get("mmp"), "mst": decoded.get("mst"),
@@ -1671,7 +1760,7 @@ class RealtimeHub:
                         self._runtime_finished.add(mid)
                     self._status_at[mid] = time.monotonic()
                     self._changed_state(mid)
-                self._save_scores(force=final)
+                self._save_scores(force=final, mid=mid)
                 self._notify_state_change([mid])
                 self.stats.status_updates += 1
                 self._record_event(mid, {"cmd": cmd, "cmec": decoded.get("cmec"),
@@ -1701,7 +1790,12 @@ class RealtimeHub:
             # **关键**：比赛刚结束时把终场比分与结束标记落盘。
             # 这是结算**唯一**能拿到过时赛果的时机（之后上游不再提供），
             # 且必须 `force=True` —— 不能因节流丢掉“已结束”标记（见 _save_scores）。
-            self._save_scores(force=True)
+            if self.running:
+                for it in items:
+                    if isinstance(it, Mapping):
+                        self._save_scores(force=True, mid=str(it.get('mid', '')))
+            else:
+                self._save_scores(force=True)
             return
 
         if cmd == "C110":
@@ -1739,15 +1833,19 @@ class RealtimeHub:
             return
 
     def _pick_mids(self) -> List[str]:
+        mids, failed = self._read_subscription()
+        self._mids_provider_failed = failed
+        return mids
+
+    def _read_subscription(self) -> Tuple[List[str], bool]:
+        """Return failure together with its list, without shared flag races."""
         if self.mids_provider is None:
-            return []
-        self._mids_provider_failed = False
+            return [], False
         try:
             mids = [str(m) for m in (self.mids_provider() or ())]
         except Exception as exc:  # noqa: BLE001 - 订阅来源失败不应终止推送线程
             self.stats.last_error = "mids_provider 失败: %s" % exc
-            self._mids_provider_failed = True
-            return []
+            return [], True
         # 当前赛程是权威状态。不能把启动时从历史比分文件恢复的
         # `_finished` 集合用于过滤，否则今天重新出现的 mid 会被永久漏掉。
         # 只过滤本进程刚收到的终场事件，避免在上游状态刷新前继续订阅已结束场。
@@ -1756,7 +1854,7 @@ class RealtimeHub:
                     if m not in self._runtime_finished]
         # max_matches <= 0 表示不截断（全部订阅）
         cap = _to_int(self.max_matches)
-        return mids[:cap] if cap > 0 else mids
+        return (mids[:cap] if cap > 0 else mids), False
 
     def _run(self) -> None:
         """推送主循环：连接 → 订阅 → 消费 → 断线重连。"""
@@ -1786,22 +1884,28 @@ class RealtimeHub:
             try:
                 feed.connect()
                 self.stats.connected += 1
-                mids = self._pick_mids()
+                with self._lock:
+                    mids = [mid for mid in self._subscribed if mid not in self._runtime_finished]
+                if not mids:
+                    mids = self._pick_mids()
                 if mids:
                     feed.subscribe_odds(mids)
                     with self._lock:
                         self._subscribed = mids
                     self.stats.subscribed = len(mids)
 
-                last_sub = time.time()
                 while not self._stop.is_set():
                     msg = feed.recv()
                     if msg is not None and not self._stop.is_set():
                         self._handle_message(msg)
                     # 定期刷新订阅列表（赛事会陆续开始/结束）
-                    if time.time() - last_sub >= self.subscribe_interval_s:
-                        new_mids = self._pick_mids()
-                        provider_failed = self._mids_provider_failed
+                    with self._lock:
+                        update = self._subscription_update
+                        self._subscription_update = None
+                    if update is not None:
+                        new_mids, provider_failed = update
+                        with self._lock:
+                            new_mids = [mid for mid in new_mids if mid not in self._runtime_finished]
                         should_clear = not new_mids and not provider_failed
                         if ((new_mids and new_mids != self._subscribed)
                                 or (should_clear and self._subscribed)):
@@ -1809,7 +1913,6 @@ class RealtimeHub:
                             with self._lock:
                                 self._subscribed = new_mids
                             self.stats.subscribed = len(new_mids)
-                        last_sub = time.time()
             except Exception as exc:  # noqa: BLE001 - 任何异常都要重连而不是退出
                 self.stats.last_error = "%s: %s" % (type(exc).__name__, exc)
             finally:

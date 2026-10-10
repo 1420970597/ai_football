@@ -192,6 +192,18 @@ class TestSnapshotStore(unittest.TestCase):
         self.assertEqual(st["snapshot_files"], 1)
         self.assertEqual(st["cache_backend"], "memory")
 
+    def test_stats_keep_match_indexes_after_s3_removes_snapshot_files(self):
+        snapshot = snap()
+        path = self.store.append(snapshot)
+        path.unlink()
+        metadata = self.store.root / 'unindexed'
+        metadata.mkdir()
+        (metadata / 'sample.json').write_text('{}')
+        (metadata / 'ignored.txt').write_text('other')
+        stats = self.store.stats()
+        self.assertEqual(stats['match_dirs'], 1)
+        self.assertEqual(stats['snapshot_files'], 1)
+
     def test_multi_source_separated(self):
         self.store.append(snap(source="源A"))
         self.store.append(snap(source="源B"))

@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import copy
 import math
+import pickle
 import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
 from dataclasses import asdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -32,6 +34,7 @@ QUOTE_MAX_AGE_S = 15.0
 STATE_MAX_AGE_S = 90.0
 ANCHOR_MAX_AGE_S = 120.0
 MAX_RESULTS = 256
+DECISION_WRITE_BATCH = 64
 CHPID = {'1': ('HAD', False), '2': ('OU', False), '4': ('AH', False),
          '17': ('HAD', True), '18': ('OU', True), '19': ('AH', True)}
 OUTCOMES = {'1': 'home', '2': 'away', 'X': 'draw', 'x': 'draw', 'Over': 'over', 'over': 'over',
@@ -46,6 +49,14 @@ def percentiles(values: Sequence[float]) -> Dict[str, Optional[float]]:
             'max': round(max(ordered), 3) if ordered else None}
 
 
+@lru_cache(maxsize=8192)
+def _quote_label(market: str, outcome: str, line: str, known: bool,
+                 name: str, home: str, away: str) -> str:
+    if known:
+        return format_market(market, outcome, line, home=home, away=away)
+    return format_raw_market(market, outcome, line, name, home=home, away=away)
+
+
 class LiveExpertService:
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -58,6 +69,7 @@ class LiveExpertService:
         self._anchors: Dict[str, Dict[str, Any]] = {}
         self._series: Dict[Tuple[str, str, str, str], deque] = {}
         self._training_series: Dict[Tuple[str, str, str, str], deque] = {}
+        self._training_prefixes: Dict[Tuple[str, str, str, str], tuple[tuple, int, tuple]] = {}
         self._compute_ms: deque = deque(maxlen=2048)
         self._latency_ms: deque = deque(maxlen=2048)
         self._by_type: Dict[str, deque] = {}
@@ -80,15 +92,21 @@ class LiveExpertService:
         self._recording: set = set()
         self.record_error = ''
         self.performance_evidence: Dict[str, Any] = {'at':'', 'rows':[]}
+        self._performance = adaptive_weights(self.config.algorithms, self.performance_evidence,
+                                             self.config.weight_prior_matches, self.config.max_algorithm_weight)
 
     def update_evidence(self, evidence: Mapping[str, Any]) -> None:
         with self._compute_lock:
             self.performance_evidence = dict(evidence)
+            self._performance = adaptive_weights(self.config.algorithms, self.performance_evidence,
+                                                 self.config.weight_prior_matches, self.config.max_algorithm_weight)
 
     def configure(self, config: RuntimeConfig, version: int) -> None:
         with self._compute_lock:
             with self._lock:
                 self.config, self.config_version = config, version
+                self._performance = adaptive_weights(config.algorithms, self.performance_evidence,
+                                                     config.weight_prior_matches, config.max_algorithm_weight)
                 self._anchors.clear()
                 self._results.clear()
                 self._recommendations.clear()
@@ -109,11 +127,11 @@ class LiveExpertService:
 
     def _write_loop(self) -> None:
         while not self._stop.wait(1):
-            self.flush()
+            self.flush(max_decisions=DECISION_WRITE_BATCH)
         self.flush()
 
-    def flush(self) -> int:
-        self.flush_decisions()
+    def flush(self, *, max_decisions: Optional[int] = None) -> int:
+        self.flush_decisions(max_decisions)
         if not self.journal_root:
             return 0
         with self._journal_flush_lock:
@@ -135,12 +153,14 @@ class LiveExpertService:
                 self.journal_error = '%s: %s，记录保留待重试' % (type(exc).__name__, exc)
                 return 0
 
-    def flush_decisions(self) -> int:
+    def flush_decisions(self, limit: Optional[int] = None) -> int:
         if not self.on_decision:
             return 0
         with self._lock:
-            rows = dict(self._decisions)
-            self._decisions.clear()
+            keys = list(self._decisions)
+            if limit is not None:
+                keys = keys[:max(0, limit)]
+            rows = {key: self._decisions.pop(key) for key in keys}
             self._recording.update(rows)
         n = 0
         for key, row in rows.items():
@@ -204,21 +224,27 @@ class LiveExpertService:
                     if series_key[0] == oldest:
                         self._series.pop(series_key, None)
                         self._training_series.pop(series_key, None)
+                        self._training_prefixes.pop(series_key, None)
             # Every published computation with configured storage is a training record, including
             # observe/reject states and every algorithm's full candidate set.
             if self.journal_root:
-                self._journal.append(copy.deepcopy({**result, 'at': result['computed_at'], 'schema_version': 2,
+                record = {**result, 'at': result['computed_at'], 'schema_version': 2,
                     'config': frozen_config, 'anchor': frozen_anchor,
                     'input_state': {k: snapshot.get(k) for k in
                         ('info', 'status', 'score_age_s', 'status_age_s', 'half_score',
                          'finished', 'suspended', 'suspended_ids', 'received_at_ms', 'captured_at_ms')},
-                    'input_events': list(snapshot.get('events') or [])}))
+                    'input_events': list(snapshot.get('events') or [])}
+                # Only our own in-memory record is serialized/deserialized.
+                # The C implementation freezes aliases and nested histories
+                # without deepcopy's Python walk holding up the socket thread.
+                self._journal.append(pickle.loads(pickle.dumps(record, protocol=5)))
         return result
 
     def _calculate(self, snapshot: Mapping[str, Any]) -> Dict[str, Any]:
         now = time.time()
         cfg = self.config
-        performance = adaptive_weights(cfg.algorithms, self.performance_evidence, cfg.weight_prior_matches, cfg.max_algorithm_weight)
+        # Evidence changes on settlement/configuration, not on every quote.
+        performance = copy.deepcopy(self._performance)
         mid = str(snapshot['match_id'])
         info = dict(snapshot.get('info') or {})
         kind = competition_type(info)
@@ -287,12 +313,19 @@ class LiveExpertService:
                 if captured is not None and q.ts_ms <= captured:
                     if not training_series or q.ts_ms > training_series[-1][0]:
                         training_series.append((q.ts_ms, captured, q.odds))
-                prefix = [[point[0], point[2]] for point in training_series
-                          if captured is not None and point[0] <= captured and point[1] <= captured]
-                label = (format_market(group['market'], oc, group['line'], home=info.get('home') or '',
-                                       away=info.get('away') or '') if group['known'] else
-                         format_raw_market(group['market'], oc, group['line'], group['name'],
-                                           home=info.get('home') or '', away=info.get('away') or ''))
+                stamp = (len(training_series), training_series[0], training_series[-1]) if training_series else ()
+                cache = self._training_prefixes.get(series_key)
+                if cache and cache[0] == stamp and captured is not None and captured >= cache[1]:
+                    prefix = [list(point) for point in cache[2]]
+                else:
+                    prefix = [[point[0], point[2]] for point in training_series
+                              if captured is not None and point[0] <= captured and point[1] <= captured]
+                    visible_after = max((max(point[:2]) for point in training_series), default=0)
+                    if captured is not None and captured >= visible_after:
+                        self._training_prefixes[series_key] = (stamp, visible_after, tuple(map(tuple, prefix)))
+                label = _quote_label(str(group['market']), str(oc), str(group['line']),
+                                     bool(group['known']), str(group['name']),
+                                     str(info.get('home') or ''), str(info.get('away') or ''))
                 probability = fair[i]
                 quotes.append({'outcome': oc, 'label': label, 'odds': q.odds,
                                'order_detail': {**getattr(q, 'order_detail', {}), 'oddFinally': str(q.odds)},

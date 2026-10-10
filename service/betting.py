@@ -304,8 +304,11 @@ class BettingExecutor:
         self._lock = threading.RLock()
         self._run_lock = threading.Lock()
         self._stop = threading.Event()
+        self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._queue: dict[str, dict[str, Any]] = {}
+        self._latest: dict[str, dict[str, Any]] = {}
+        self._retry_due: dict[str, tuple[str, float]] = {}
         self._blocked: dict[str, tuple[float, dict[str, Any]]] = {}
         self.last_result: dict[str, Any] = {}
 
@@ -323,38 +326,97 @@ class BettingExecutor:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
         if self._thread:
             self._thread.join(3)
 
     def configure(self) -> None:
         with self._lock:
             self._queue.clear()
+            self._latest.clear()
+            self._retry_due.clear()
             self._blocked.clear()
 
     def enqueue(self, row: Mapping[str, Any]) -> None:
         cfg, version = self.settings.snapshot()
-        if not cfg.betting_enabled or row.get("config_version") != version or not row.get("picks"):
+        if not cfg.betting_enabled or row.get("config_version") != version:
             return
         with self._lock:
+            mid = str(row["match_id"])
+            previous = self._latest.get(mid)
+            if previous and float(previous.get("published_at_ms") or 0) > float(row.get("published_at_ms") or 0):
+                return
+            if mid not in self._latest and len(self._latest) >= EXECUTOR_QUEUE_LIMIT:
+                self._latest.pop(next(iter(self._latest)))
+            self._latest[mid] = dict(row)
+            selections = {_identity(_bet_selection(mid, p)) for p in row.get("picks", [])}
+            for identity, (_, blocked_result) in list(self._blocked.items()):
+                if blocked_result.get("match_id") == mid and _identity(_bet_selection(mid, blocked_result)) not in selections:
+                    self._retry_due.pop(identity, None)
+                    self._blocked.pop(identity, None)
+            if not row.get("picks"):
+                self._queue.pop(mid, None)
+                return
             if len(self._queue) >= EXECUTOR_QUEUE_LIMIT:
                 self._queue.pop(next(iter(self._queue)))
-            self._queue[str(row["match_id"])] = dict(row)
+            self._queue[mid] = dict(row)
+        self._wake.set()
 
     def _loop(self) -> None:
-        while not self._stop.wait(1):
+        while not self._stop.is_set():
+            self._wake.wait(0.25)
+            self._wake.clear()
+            if self._stop.is_set():
+                return
             self.flush()
+
+    def _request_due_retries(self) -> None:
+        with self._lock:
+            due = [(identity, mid) for identity, (mid, at) in self._retry_due.items()
+                   if at <= time.monotonic()]
+            for identity, _ in due:
+                self._retry_due.pop(identity, None)
+                if identity in self._blocked:
+                    self._blocked[identity][1].update(retry_scheduled=False, awaiting_new_decision=True)
+        if due and self.on_recompute:
+            try:
+                self.on_recompute(list(dict.fromkeys(mid for _, mid in due)))
+            except Exception:
+                # Retain the timer if notification failed; never replay its old row.
+                with self._lock:
+                    for identity, mid in due:
+                        if identity in self._blocked:
+                            self._retry_due[identity] = (mid, time.monotonic() + 1)
+
+    def _current_pick(self, row: Mapping[str, Any], pick: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+        mid = str(row.get("match_id") or "")
+        with self._lock:
+            latest = self._latest.get(mid, row)
+        selection = _bet_selection(mid, pick)
+        for candidate in latest.get("picks", []):
+            if _bet_selection(mid, candidate) == selection:
+                return latest, candidate
+        raise BettingRecomputeNeeded("最新综合决策已撤回该推荐")
 
     def flush(self) -> list[dict[str, Any]]:
         if not self._run_lock.acquire(blocking=False):
             return []
         try:
+            self._request_due_retries()
             with self._lock:
-                rows = list(self._queue.values())
-                self._queue.clear()
+                mids = list(self._queue)
             results = []
-            for row in rows:
+            for mid in mids:
+                with self._lock:
+                    row = self._queue.pop(mid, None)
+                if row is None:
+                    continue
                 for pick in row.get("picks", []):
-                    result = self.execute(row, pick)
+                    try:
+                        current_row, current_pick = self._current_pick(row, pick)
+                    except BettingRecomputeNeeded:
+                        continue
+                    result = self.execute(current_row, current_pick)
                     with self._lock:
                         self.last_result = result
                     results.append(result)
@@ -412,7 +474,8 @@ class BettingExecutor:
         C105 refreshes the counter even for unchanged prices. Score and phase
         belong to the decision; timestamps and unrelated quote updates do not.
         """
-        if time.time() * 1000 - float(row.get("published_at_ms") or 0) > cfg.quote_max_age_s * 1000:
+        decision_age = (time.time() * 1000 - float(row.get("published_at_ms") or 0)) / 1000
+        if not math.isfinite(decision_age) or decision_age < -1 or decision_age > cfg.quote_max_age_s:
             raise BettingRecomputeNeeded("综合推荐已过期，需要重新计算")
         if (snapshot.get("finished") or row.get("finished") or snapshot.get("suspended")
                 or str(snapshot.get("status", {}).get("mmp")) not in ("6", "7")):
@@ -446,7 +509,7 @@ class BettingExecutor:
         if not matches:
             raise BettingRecomputeNeeded("推荐盘口或选项已更新，需要重新计算")
         quote = max(matches, key=lambda q: q.ts_ms)
-        if quote.quote_age_s > cfg.quote_max_age_s:
+        if not math.isfinite(quote.quote_age_s) or quote.quote_age_s > cfg.quote_max_age_s:
             raise BettingRecomputeNeeded("推荐盘口报价已过期，需要重新计算")
         if not math.isclose(quote.odds, float(detail["oddFinally"]), abs_tol=0.000005):
             raise BettingRecomputeNeeded("推荐盘口赔率已变化，需要重新计算")
@@ -465,7 +528,7 @@ class BettingExecutor:
 
     def execute(self, row: Mapping[str, Any], pick: Mapping[str, Any]) -> dict[str, Any]:
         """Execute only an in-memory server recommendation, never an API pick."""
-        from collector.leyu_account import (BetSubmissionRejected, BetSubmissionUnknown,
+        from collector.leyu_account import (BetPreflightRetryable, BetSubmissionRejected, BetSubmissionUnknown,
                                             account_client_from_env)
         from collector.session import SessionError
         cfg, version = self.settings.snapshot()
@@ -486,20 +549,25 @@ class BettingExecutor:
             blocked = self._blocked.get(identity)
         db: sqlite3.Connection | None = None
         claimed = False
+        attempt = 1
         try:
             if not cfg.betting_enabled:
                 raise BettingBlocked("投注功能未启用")
             if path is None:
                 raise BettingBlocked("未配置持久化订单目录，无法防止重启重复提交")
             if blocked is not None:
-                remaining = blocked[0] + BLOCKED_RECHECK_S - time.monotonic()
-                fresh_retry = (blocked[1].get("retry_on_new_decision") and
-                               float(row.get("published_at_ms") or 0) > float(blocked[1].get("decision_at_ms") or 0))
-                if remaining > 0 and not fresh_retry:
+                remaining = blocked[0] + float(blocked[1].get("retry_after_s", BLOCKED_RECHECK_S)) - time.monotonic()
+                if remaining > 0:
                     # Repeated recommendations must not restart the cooldown
                     # or overwrite the failure that explains why no order was sent.
                     return {**blocked[1], "recheck_deferred": True,
                             "retry_after_s": round(remaining, 3)}
+                if blocked[1].get("retryable") and not blocked[1].get("retry_exhausted"):
+                    attempt = int(blocked[1].get("attempt", 1)) + 1
+                if (blocked[1].get("retryable") and
+                        float(row.get("published_at_ms") or 0) <= float(blocked[1].get("decision_at_ms") or 0)):
+                    return {**blocked[1], "recheck_deferred": True, "awaiting_new_decision": True}
+            result["attempt"] = attempt
             if row.get("algorithm") != ENSEMBLE_ALGORITHM or row.get("competition_type") != "real":
                 raise BettingBlocked("只执行真实足球的经济学综合推荐")
             if pick not in row.get("picks", []) or pick.get("research_only"):
@@ -539,7 +607,19 @@ class BettingExecutor:
             stage = "final_quote"
             if not current.betting_enabled or current_version != version or self._stop.is_set():
                 raise BettingBlocked("提交前投注配置已变化或执行器已停止")
-            self._check_state(row, pick, final, detail, cfg, original=snapshot)
+            final_row, final_pick = self._current_pick(row, pick)
+            # A newer decision may renew validity only if it still recommends
+            # exactly the same native quote and odds checked by the venue.
+            latest_detail = build_ybty_order_detail(final_pick, plan.stake)
+            if any(str(latest_detail[k]) != str(detail[k]) for k in
+                   ("matchId", "marketId", "playId", "playOptionsId", "playOptions", "marketValue", "oddFinally")):
+                raise BettingRecomputeNeeded("最新综合决策的报价已变化，需要重新校验")
+            latest_plan = plan_bet({**final_pick, **evidence, "match_id": mid,
+                                   "composite_confidence": recommendation_confidence(final_pick, evidence)}, cfg)
+            if latest_plan.stake != plan.stake:
+                raise BettingRecomputeNeeded("最新综合决策的投注额度已变化，需要重新校验")
+            self._check_state(final_row, final_pick, final, detail, cfg, original=snapshot)
+            result["decision_at_ms"] = final_row.get("published_at_ms")
             stage = "durable_claim"
             sending = {**result, "status": "sending", "reason": "已提交发送意图，等待场馆回执"}
             try:
@@ -568,6 +648,9 @@ class BettingExecutor:
                 result.update(status="unknown", submitted=None, reason=str(exc))
             db.execute("UPDATE orders SET status=?,payload=? WHERE identity=?", (
                 result["status"], json.dumps(result, ensure_ascii=False), identity))
+            with self._lock:
+                self._blocked.pop(identity, None)
+                self._retry_due.pop(identity, None)
             return result
         except Exception as exc:  # Each failure stops this order, never the worker.
             # No provider exception/body can leak credentials into public state.
@@ -581,18 +664,35 @@ class BettingExecutor:
                     isinstance(exc, SessionError) and any(text in reason for text in
                     ("赔率已变化", "盘口线已变化", "找不到推荐的比赛与盘口", "选项已关闭或不存在")))
                 result["retry_on_new_decision"] = recompute
-                result["retry_after_s"] = BLOCKED_RECHECK_S
+                retryable = recompute or isinstance(exc, BetPreflightRetryable)
+                exhausted = retryable and attempt >= cfg.betting_retry_max_attempts
+                delay = (min(BLOCKED_RECHECK_S, cfg.betting_retry_base_delay_s * 2 ** (attempt - 1))
+                         if retryable and not exhausted else BLOCKED_RECHECK_S)
+                result.update(retryable=retryable, retry_exhausted=exhausted,
+                              retry_scheduled=retryable and not exhausted, retry_after_s=delay)
+                current_cfg, current_version = self.settings.snapshot()
                 with self._lock:
+                    latest = self._latest.get(mid)
+                    still_selected = latest is None or any(_bet_selection(mid, p) == logical
+                                                           for p in latest.get("picks", []))
+                    if (not still_selected or not current_cfg.betting_enabled
+                            or current_version != version or self._stop.is_set()):
+                        self._blocked.pop(identity, None)
+                        self._retry_due.pop(identity, None)
+                        result.update(retry_scheduled=False, retry_cancelled=True)
+                        LOGGER.info("Betting retry cancelled: match_id=%s stage=%s reason=%s", mid, stage, reason)
+                        return result
                     if identity not in self._blocked and len(self._blocked) >= EXECUTOR_QUEUE_LIMIT:
-                        self._blocked.pop(next(iter(self._blocked)))
+                        evicted = next(iter(self._blocked))
+                        self._blocked.pop(evicted)
+                        self._retry_due.pop(evicted, None)
                     self._blocked[identity] = (time.monotonic(), dict(result))
+                    if retryable and not exhausted:
+                        self._retry_due[identity] = (mid, time.monotonic() + delay)
+                    else:
+                        self._retry_due.pop(identity, None)
                 LOGGER.warning("Betting blocked: match_id=%s market=%s line=%s outcome=%s stage=%s elapsed_ms=%s reason=%s",
                                mid, result["market"], result["line"], result["outcome"], stage, result["elapsed_ms"], reason)
-                if recompute and self.on_recompute is not None:
-                    try:
-                        self.on_recompute([mid])
-                    except Exception:
-                        LOGGER.warning("Betting recompute notification failed: match_id=%s", mid)
             return result
         finally:
             if db is not None:
@@ -657,7 +757,11 @@ class BettingExecutor:
         with self._lock:
             running = bool(self._thread and self._thread.is_alive())
             path, last = self.path, dict(self.last_result)
+            blocked = self._blocked.get(str(last.get('identity') or ''))
+            if blocked:
+                last.update(blocked[1])
             queued = len(self._queue)
+            retry_pending = len(self._retry_due)
         ready = running and path is not None
         reason = ("投注已关闭" if not cfg.betting_enabled else "执行器未启动" if not running
                   else "未配置持久化订单目录" if path is None else "等待满足门控的实时综合推荐")
@@ -674,4 +778,7 @@ class BettingExecutor:
                 ready, reason = False, "订单记录不可读取，执行将被阻止"
         return {**betting_capability(cfg), "execution_enabled": cfg.betting_enabled and ready,
                 "running": running, "ready": ready, "queued": queued,
+                "retry_pending": retry_pending,
+                "retry_policy": {"max_attempts": cfg.betting_retry_max_attempts,
+                                 "base_delay_s": cfg.betting_retry_base_delay_s},
                 "reason": reason, "last_result": last, "orders": orders}

@@ -56,6 +56,10 @@ class BetSubmissionRejected(SessionError):
     """The provider explicitly rejected a submitted order."""
 
 
+class BetPreflightRetryable(SessionError):
+    """A read-only venue check failed transiently; no debit was attempted."""
+
+
 def _bet_number(value: Any, label: str) -> float:
     try:
         number = float(value)
@@ -519,9 +523,12 @@ class LeyuAccountClient:
                 self._venue_session = None
                 self._acquire_venue_session()
                 return self._venue_request(path, body, decode=decode, _auth_retry=True)
-            raise SessionError("乐鱼体育场馆接口请求失败（HTTP %s）" % exc.code) from exc
+            error = (BetPreflightRetryable if path != VENUE_BET_PATH and exc.code in
+                     (408, 429, 500, 502, 503, 504) else SessionError)
+            raise error("乐鱼体育场馆接口请求失败（HTTP %s）" % exc.code) from exc
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException) as exc:
-            raise SessionError("乐鱼体育场馆接口请求失败（%s）" % type(exc).__name__) from exc
+            error = BetPreflightRetryable if path != VENUE_BET_PATH else SessionError
+            raise error("乐鱼体育场馆接口请求失败（%s）" % type(exc).__name__) from exc
         if not isinstance(payload, Mapping):
             raise SessionError("乐鱼体育场馆接口响应结构异常")
         if path == VENUE_BET_PATH:
