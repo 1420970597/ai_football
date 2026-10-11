@@ -60,6 +60,9 @@ class TrainingDataTests(unittest.TestCase):
             self.assertEqual(a,b)
             self.assertEqual(len(a),3)
             self.assertEqual(quality['source_eligible_decisions'],8)
+            self.assertEqual(quality['input_records'],8)
+            self.assertEqual(quality['valid_training_decisions'],8)
+            self.assertEqual(quality['invalid_training_records'],0)
             final['ft_score'] = [0,3]
             final['ht_score'] = [0,1]
             db.put([final],lambda _:2.0)
@@ -84,6 +87,8 @@ class TrainingDataTests(unittest.TestCase):
             quality = {}
             self.assertEqual(dataset(db.path,path,audit=quality), [])
             self.assertEqual(quality['quarantined_inputs'],8)
+            self.assertEqual(quality['valid_training_decisions'],0)
+            self.assertEqual(quality['invalid_training_records'],8)
 
     def test_remaining_labels_require_benchmark_and_weight_half_stake(self):
         from store.training_data import target

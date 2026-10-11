@@ -183,7 +183,8 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
     con = sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)
     rows = []
     seen: set[bytes] = set()
-    counts = {'quarantined_inputs': 0, 'quarantined_ledger': 0, 'ungraded_inputs': 0,
+    counts = {'input_records': 0, 'valid_training_decisions': 0, 'waiting_for_label': 0,
+              'quarantined_inputs': 0, 'quarantined_ledger': 0, 'ungraded_inputs': 0,
               'quarantined_missing_time_contract': 0, 'eligible_time_contract': 0}
     buckets: dict[str, list] = {}
     source_count = 0
@@ -207,6 +208,9 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
         if inputs_path and inputs_path.exists():
             with closing(sqlite3.connect(inputs_path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as inputs:
                 inputs.row_factory = sqlite3.Row
+                has_inputs = inputs.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='inputs'").fetchone()
+                if has_inputs:
+                    counts['input_records'] = inputs.execute('SELECT count(*) FROM inputs').fetchone()[0]
                 columns = {r[1] for r in inputs.execute('PRAGMA table_info(inputs)')}
                 source: Iterable[sqlite3.Row]
                 if set(BASIS_COLUMNS) <= columns:
@@ -230,6 +234,7 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                     counts['eligible_time_contract'] += 1
                     final = finals.get(row['match_id'])
                     if not final or final['settled_at'] <= row['at']:
+                        counts['waiting_for_label'] += 1
                         continue
                     paid = target(row, final)
                     if paid is None:
@@ -241,6 +246,7 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                                  'x': json.loads(row['x']), 'y': y, 'observation_weight': weight,
                                  'baseline': row['baseline'], 'algorithm': row['algorithm'],
                                  'market': row['market'], 'line': row['line'], 'outcome': row['outcome']}, key)
+                    counts['valid_training_decisions'] += 1
                     seen.add(hashlib.sha256(json.dumps(key).encode()).digest()[:16])
         # Only corrected model generations can supply fallback features. Old peer logits
         # and predictions cannot be repaired by relabeling their final outcomes.
@@ -254,7 +260,10 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                 "AND trigger IN ('live_forecast','live_recommendation') AND research_only=0 "
                 "AND model_version=? AND status IN ('won','lost','half_won','half_lost')", (MODEL_VERSION,)).fetchone()[0]
         if audit is not None:
-            audit.update(counts, data_version=DATA_VERSION, source_eligible_decisions=source_count,
+            invalid = (counts['quarantined_inputs'] + counts['quarantined_ledger'] +
+                       counts['quarantined_missing_time_contract'] + counts['ungraded_inputs'])
+            audit.update(counts, invalid_training_records=invalid,
+                         source_eligible_decisions=source_count,
                          training_max_rows_per_match=max_per_match)
         if max_per_match is not None:
             rows = sorted((item[2] for bucket in buckets.values() for item in bucket), key=lambda r:r['at'])

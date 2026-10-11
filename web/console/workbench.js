@@ -663,11 +663,14 @@ function metricCards(items) {
 }
 function renderDataModel(data) {
   const model = data.model || {}, training = data.training || {}, storage = data.storage || {};
+  const quality = training.data_quality || {};
   const labels = {not_started:'尚未启动',restoring:'历史数据恢复中',checking:'检查训练数据',waiting:'等待新增已结算比赛',training:'训练中',ready:'已更新',failed:'训练失败',disabled:'自动训练已关闭'};
   $('model-state').textContent = labels[training.state] || '未训练';
   $('model-summary').replaceChildren(...metricCards([
     ['决策模式',data.mode === 'active' ? '参与决策（无可用模型时使用经济算法）' : '影子模式（仅观察）'], ['最新更新时间',timeLabel(model.updated_at)], ['训练参数量',model.parameter_count ?? '未训练'],
     ['模型版本',model.version || '未训练'], ['有效已结算比赛',training.eligible_matches ?? model.eligible_matches ?? '—'], ['有效训练决策',training.eligible_decisions ?? '—'],
+    ['持久化训练输入',quality.input_records ?? '—'], ['无效 / 隔离训练数据',quality.invalid_training_records ?? '—'],
+    ['等待赛果标签',quality.waiting_for_label ?? '—'],
     ['距更新周期', (training.new_matches ?? '—') + ' / ' + (data.settings?.cycle_matches ?? '—') + ' 场'],
     ['当前实际训练限制',training.limits ? training.limits.cpu_cores + ' 核 / ' + training.limits.memory_mb + ' MiB' : '尚未执行'],
     ['训练资源上限',(data.settings?.cpu_cores ?? '—') + ' 核 / ' + (data.settings?.memory_mb ?? '—') + ' MiB'],
@@ -676,6 +679,7 @@ function renderDataModel(data) {
   const calibration = model.calibration || data.training?.candidate?.calibration;
   $('model-description').textContent = (model.architecture || '待训练：L2 Logistic 多盘口概率校准') + '。' + (data.note || '') +
     ' 首次训练至少需要100场有效已结算比赛。验证按比赛和时间隔离，训练与评价按比赛等权；走盘排除，赢半/输半按非走盘方向判定。' +
+    (quality.invalid_training_records !== undefined ? ' 数据资格口径：有效数为通过版本、双时间和结算校验的训练决策；无效/隔离数包含旧版本、缺失或越界时间、不可结算输入及不符合新契约的旧台账；等待标签的数据单独统计，不计为无效。' : '') +
     (calibration ? ' 校准：' + (calibration.method === 'logistic' ? 'Logistic slope/intercept' : '恒等映射') + '（' + (calibration.samples || 0) + ' 条样本）。' : ' 尚无独立校准制品。') +
     (promotion.approved === false ? ' 当前候选未晋级：' + (promotion.reasons || []).join('；') : ' 当前模型已通过晋级门槛。');
   const rows = [['时间隔离验证',model.validation],['同组盘口基准',model.baseline],['当前版本前瞻验证',data.prospective?.model],['前瞻盘口基准',data.prospective?.baseline]];

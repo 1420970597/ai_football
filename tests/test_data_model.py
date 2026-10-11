@@ -87,6 +87,13 @@ class DataModelTests(unittest.TestCase):
             svc.configure(replace(RuntimeConfig(), model_training_enabled=False))
             self.assertEqual(svc.status()['training']['state'], 'disabled')
 
+    def test_data_model_ui_labels_valid_and_quarantined_training_records(self):
+        source = Path(__file__).parents[1] / 'web' / 'console' / 'workbench.js'
+        code = source.read_text(encoding='utf-8')
+        self.assertIn("['有效训练决策',training.eligible_decisions", code)
+        self.assertIn("['无效 / 隔离训练数据',quality.invalid_training_records", code)
+        self.assertIn("['等待赛果标签',quality.waiting_for_label", code)
+
     def test_worker_actual_limits_versions_restart_and_failure_preserve_model(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)/'ledger'
