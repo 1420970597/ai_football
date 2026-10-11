@@ -164,7 +164,7 @@ def main():
               'limitation':'Re-scoring retains contaminated features; it is not a clean backtest or retraining. Clipped input score differences cannot be recovered.'}
     (REPORT/'data/training_contamination.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
     with (REPORT/'data/training_contamination.csv').open('w',newline='') as target:
-        w=csv.DictWriter(target,fieldnames=['source','market','graded','changed_status','flipped_label','new_excluded']);w.writeheader()
+        w=csv.DictWriter(target,fieldnames=['source','market','graded','changed_status','flipped_label','new_excluded'],lineterminator='\n');w.writeheader()
         for (source,market), values in sorted(groups.items()):
             w.writerow({'source':source,'market':market,**{k:values[k] for k in w.fieldnames[2:]}})
     print(json.dumps(result,ensure_ascii=False,indent=2))
