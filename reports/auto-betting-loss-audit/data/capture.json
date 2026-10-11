@@ -1,0 +1,30 @@
+{
+  "captured_at": "2026-10-11T03:15:33.114233+00:00",
+  "code_commit": "4f3861b",
+  "ledger": {
+    "records": 222522,
+    "first_at": "2026-10-04T19:56:30.174389+00:00",
+    "last_at": "2026-10-11T03:14:44.104448+00:00"
+  },
+  "ledger_groups": 263,
+  "ensemble_records": 1219,
+  "venue_fetched_at_ms": 1791688340144,
+  "venue_complete": true,
+  "venue_total_per_page": [
+    165,
+    165
+  ],
+  "venue_unique_count": 165,
+  "execution_records": 183,
+  "database_snapshot_note": "每个SQLite库分别用一致只读视图；跨库不是同一事务",
+  "source_hashes": {
+    "service/live_expert.py": "331d25a7bd70ad84f61787d233b8b81bfc300385f1ba6f1fa8ad5915ce14c7dc",
+    "service/betting.py": "6856e86d8309fd2a46739c049452426e3581853f97f178cb452c182c83aaa228",
+    "core/live_model.py": "d0e2bcf709f514251f106a1a034214d60d38bcc59f0d0f003a861e769b301ba9",
+    "core/ensemble.py": "c0f933dd97bc763818448f16e02d2ec98fbf3aa59c3ebde4221511a511a33d3a",
+    "core/settlement.py": "ff001e05ce612c7749136a86cadd12405dd18f7c69090efd558ff13effe67ff0",
+    "core/economics.py": "99c12225b922e8b085d132e0186ab7b7013b4d457a24493ae2c973408ed1d9a7",
+    "store/training_data.py": "38d60365d200a8c333b7c67fc46bf935fa43701696d1b1b19f2328c5c60a19ad",
+    "service/ledger.py": "af1735c65b47de036be279209dd2bf2c6147c3cec683c0f4c71fe0fe1b5883de"
+  }
+}

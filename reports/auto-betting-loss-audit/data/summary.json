@@ -1,0 +1,99 @@
+{
+  "account_all": {
+    "orders": 165,
+    "matches": 125,
+    "stake": 792.0,
+    "profit": -29.42,
+    "roi": -0.03714646464646465
+  },
+  "matched_auto": {
+    "orders": 160,
+    "matches": 120,
+    "stake": 758.0,
+    "profit": -10.67,
+    "roi": -0.014076517150395778
+  },
+  "unmatched_account": {
+    "orders": 5,
+    "matches": 5,
+    "stake": 34.0,
+    "profit": -18.75,
+    "roi": -0.5514705882352942
+  },
+  "auto_roi_cluster_bootstrap_95": [
+    -0.11518565941101151,
+    0.08255813953488372
+  ],
+  "handicap_comparison": {
+    "orders": 160,
+    "actual": {
+      "orders": 160,
+      "matches": 120,
+      "stake": 758.0,
+      "profit": -10.67,
+      "roi": -0.014076517150395778
+    },
+    "scenarios": [
+      {
+        "scenario": "production",
+        "orders": 160,
+        "agrees": 81,
+        "profit": 235.825
+      },
+      {
+        "scenario": "full_correct_sign",
+        "orders": 160,
+        "agrees": 88,
+        "profit": 217.8
+      },
+      {
+        "scenario": "remaining_current_sign",
+        "orders": 160,
+        "agrees": 143,
+        "profit": 6.095
+      },
+      {
+        "scenario": "remaining_correct_sign",
+        "orders": 160,
+        "agrees": 160,
+        "profit": -10.605
+      },
+      {
+        "scenario": "venue_actual",
+        "orders": 160,
+        "agrees": 160,
+        "profit": -10.67
+      }
+    ]
+  },
+  "ledger_first_recommendations": {
+    "graded": 1024,
+    "production_profit_units": 266.455,
+    "remaining_signed_profit_units": -46.095,
+    "changed_grades": 427,
+    "matches": 510
+  },
+  "duplicates": {
+    "groups": 1,
+    "additional_submitted_intents": 2,
+    "max_per_selection": 3
+  },
+  "execution_status": {
+    "pending": 136,
+    "accepted": 28,
+    "rejected": 16,
+    "unknown": 2,
+    "sending": 1
+  },
+  "latency": {
+    "orders_with_metric": 97,
+    "within_2000ms": 97,
+    "max_ms": 1989.923
+  },
+  "bootstrap": {
+    "replicates": 2000,
+    "seed": 40,
+    "unit": "match"
+  },
+  "profit_tolerance_cny": 0.025
+}

@@ -1,0 +1,4 @@
+kelly,hit_count,miss_count,confidence,actual_plan_stake
+0.001,5,995,0.01,5.0
+0.05,5,995,0.01,5.0
+0.25,5,995,0.01,5.0
