@@ -4,21 +4,27 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
-FEATURES = ('bias', 'market_logit', 'algorithm_logit', 'elapsed', 'score_difference',
+from core.decision_features import (EXTRA_FEATURES, extra_features, residual_vector,
+                                    upgrade_vector)
+from core.decision_features import FEATURE_VERSION
+
+BASE_FEATURES = ('bias', 'market_logit', 'algorithm_logit', 'elapsed', 'score_difference',
             'home', 'draw', 'away', 'over', 'under', 'ou', 'ah', 'half', 'line',
             'trend_return', 'trend_missing', 'trend_volatility', 'trend_points', 'poisson_market', 'poisson_time_decay',
             'devig_consensus', 'economics_risk_adjusted', 'microstructure_adjusted', 'economic_ensemble',
             'peer_poisson_market', 'peer_poisson_time_decay', 'peer_devig_consensus',
             'peer_economics_risk_adjusted', 'peer_microstructure_adjusted', 'peer_missing')
+FEATURES = BASE_FEATURES + EXTRA_FEATURES
 MIN_MATCHES = 100
 EPOCHS = 250
 LEARNING_RATE = 0.08
 REGULARIZATION = 0.01
-DATA_VERSION = 'remaining-ah-signed-lines-bernoulli-v2'
+DATA_VERSION = 'remaining-ah-signed-lines-bernoulli-v3-offset-windows'
 
 
 def compatible_model(model: Mapping[str, Any]) -> bool:
     return (model.get('data_version') == DATA_VERSION and
+            model.get('feature_version') == FEATURE_VERSION and
             model.get('features') == list(FEATURES) and bool(model.get('version')))
 
 
@@ -78,7 +84,7 @@ def features(row: Mapping[str, Any]) -> list[float]:
                 raise ValueError('同一快照算法概率无效')
             p = max(.01, min(.99, p))
             peer_logits.append(math.log(p / (1-p)))
-    return [1, *logits, elapsed / 5400, max(-5, min(5, diff)) / 5,
+    base = [1, *logits, elapsed / 5400, max(-5, min(5, diff)) / 5,
             *[float(row['outcome'] == outcome) for outcome in ('home', 'draw', 'away', 'over', 'under')],
             float(row['market'].startswith('OU')), float(row['market'].startswith('AH')),
             float(row['market'].endswith('_1H')), max(-10, min(10, line)) / 10,
@@ -87,6 +93,9 @@ def features(row: Mapping[str, Any]) -> list[float]:
             *[float(row.get('algorithm') == a) for a in ('poisson_market', 'poisson_time_decay',
                 'devig_consensus', 'economics_risk_adjusted', 'microstructure_adjusted', 'economic_ensemble')],
             *peer_logits, missing / 5]
+    if len(base) != len(BASE_FEATURES):
+        raise ValueError('基础特征版本不匹配')
+    return base + extra_features(row, base)
 
 
 
@@ -95,7 +104,11 @@ def predict(weights: Sequence[float], x: Sequence[float]) -> float:
         raise ValueError('模型特征版本不匹配')
     if not all(math.isfinite(v) for v in [*weights, *x]):
         raise ValueError('无效模型参数')
-    return sigmoid(sum(w * v for w, v in zip(weights, x)))
+    vector = upgrade_vector(x)
+    residual = residual_vector(vector)
+    # The market logit is an offset. Model weights are only allowed to learn a
+    # residual; this makes a zero-weight model exactly equal to the market.
+    return sigmoid(vector[1] + sum(w * v for w, v in zip(weights, residual)))
 
 
 def metrics(rows: Sequence[Mapping[str, Any]], weights: Sequence[float] | None) -> dict[str, Any]:
@@ -115,6 +128,38 @@ def metrics(rows: Sequence[Mapping[str, Any]], weights: Sequence[float] | None) 
             'brier': brier, 'log_loss': logloss}
 
 
+def fit_weights(rows: Sequence[Mapping[str, Any]], *, epochs: int = EPOCHS) -> list[float]:
+    """Fit only the residual parameters on an already time-isolated cohort.
+
+    The caller owns the chronological split.  Keeping this primitive separate
+    from :func:`train` lets the worker run rolling folds without accidentally
+    training on a fold's validation labels.
+    """
+    if not rows:
+        raise ValueError('训练样本为空')
+    counts: dict[str, float] = {}
+    for row in rows:
+        if row['y'] not in (0, 1):
+            raise ValueError('无效训练标签')
+        predict([0.0] * len(FEATURES), row['x'])
+        counts[row['match_id']] = counts.get(row['match_id'], 0) + observation_weight(row)
+    if len(counts) < 2:
+        raise ValueError('训练比赛不足')
+    weights = [0.0] * len(FEATURES)
+    transformed = [residual_vector(row['x']) for row in rows]
+    for _ in range(max(1, int(epochs))):
+        gradients = [0.0] * len(weights)
+        for row, vector in zip(rows, transformed):
+            market_logit = upgrade_vector(row['x'])[1]
+            error = ((sigmoid(market_logit + sum(w*v for w, v in zip(weights, vector))) - row['y']) *
+                     observation_weight(row) / counts[row['match_id']])
+            for i, value in enumerate(vector):
+                gradients[i] += error * value
+        weights = [w - LEARNING_RATE * (g / len(counts) + (REGULARIZATION*w if i else 0))
+                   for i, (w, g) in enumerate(zip(weights, gradients))]
+    return weights
+
+
 
 def train(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     ordered = sorted(rows, key=lambda r: (r['at'], r['match_id']))
@@ -131,25 +176,10 @@ def train(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     training = [r for r in ordered if r['match_id'] in training_ids and r['settled_at'] < validation[0]['at']]
     if len({r['match_id'] for r in training}) < 60 or len({r['y'] for r in training}) < 2:
         raise ValueError('时间隔离后训练样本不足或只有一种标签')
-    counts: dict[str, float] = {}
-    for row in training:
-        predict([0.0] * len(FEATURES), row['x'])
-        if row['y'] not in (0, 1):
-            raise ValueError('无效训练标签')
-        counts[row['match_id']] = counts.get(row['match_id'], 0) + observation_weight(row)
-    weights = [0.0] * len(FEATURES)
-    weights[1] = 1.0  # start at the market prior
-    for _ in range(EPOCHS):
-        gradients = [0.0] * len(weights)
-        for row in training:
-            error = ((sigmoid(sum(w*v for w,v in zip(weights,row['x']))) - row['y']) *
-                     observation_weight(row) / counts[row['match_id']])
-            for i, value in enumerate(row['x']):
-                gradients[i] += error * value
-        weights = [w - LEARNING_RATE * (g / len(counts) + (REGULARIZATION*w if i else 0))
-                   for i, (w, g) in enumerate(zip(weights, gradients))]
-    return {'architecture': 'L2 Logistic / 按非走盘本金加权概率校准', 'features': list(FEATURES),
+    weights = fit_weights(training)
+    return {'architecture': 'L2 Logistic offset / 固定市场先验 + 时间窗残差校准', 'features': list(FEATURES),
             'data_version': DATA_VERSION,
+            'feature_version': FEATURE_VERSION, 'offset': 'market_logit',
             'weights': weights, 'parameter_count': len(weights), 'training': metrics(training, weights),
             'validation': metrics(validation, weights), 'baseline': metrics(validation, None),
             'validation_from': validation[0]['at'], 'validation_to': validation[-1]['at'],

@@ -464,7 +464,11 @@ class LiveExpertService:
                                'trend_pct': round(drift, 3), 'ts_ms': q.ts_ms,
                                'quote_received_at': q.at if getattr(q, 'received_at_ms', 0) else None,
                                'quote_received_at_ms': getattr(q, 'received_at_ms', 0),
-                               'training_history': prefix})
+                               'training_history': prefix,
+                               # Bucket age to a stable decision feature; raw age
+                               # remains in market metadata for execution audits.
+                               'feature_context': {'quote_age_s': round(age / 30) * 30,
+                                                   'overround': margin}})
             markets.append({'market': group['market'], 'line': group['line'],
                             'name': group['name'] if group['known'] else normalize_market_name(group['name'], group['market']),
                             'chpid': group['chpid'], 'quotes': quotes, 'complete': complete,

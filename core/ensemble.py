@@ -3,6 +3,26 @@ from __future__ import annotations
 
 import math
 from typing import Any, Dict, Mapping, Sequence
+from core.economics import effective_ev as economics_effective_ev, fractional_kelly, q_fill_model
+
+
+def cohere_candidates(candidates: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    """Normalize complete same-line outcomes without inventing missing quotes."""
+    groups: Dict[tuple, list[Dict[str, Any]]] = {}
+    for candidate in candidates:
+        groups.setdefault((candidate.get('market'), str(candidate.get('line', ''))), []).append(candidate)
+    expected = {'HAD': {'home', 'draw', 'away'}, 'OU': {'over', 'under'}, 'AH': {'home', 'away'}}
+    for (market, _line), items in groups.items():
+        family = str(market).split('_1H')[0]
+        if family not in expected or {str(c.get('outcome')) for c in items} != expected[family]:
+            continue
+        total = sum(max(0.0, float(c.get('p_model') or 0.0)) for c in items)
+        if total <= 0:
+            continue
+        for candidate in items:
+            candidate['p_model'] = round(max(0.0, float(candidate['p_model'])) / total, 6)
+            candidate['probability_sum'] = 1.0
+    return candidates
 
 
 def algorithm_alerts(algorithms: Sequence[str], evidence: Mapping[str, Any],
@@ -113,6 +133,22 @@ def pool(evaluations: Sequence[Mapping[str, Any]], performance: Mapping[str, Any
                  research_only=any(m['research_only'] for m in members),
                  tail=max(m['tail'] for m in members))
         all_candidates.append(c)
+    cohere_candidates(all_candidates)
+    for candidate in all_candidates:
+        nonpush = float(candidate.get('win_stake') or 0) + float(candidate.get('loss_stake') or 0)
+        if nonpush <= 0:
+            # Some research/test projections have no stake decomposition. Keep
+            # their supplied economic fields; a zero notional must not turn a
+            # valid recommendation into an artificial zero-EV quote.
+            continue
+        probability = float(candidate['p_model'])
+        odds = float(candidate['odds'])
+        ev = (probability * odds - 1) * nonpush
+        fill = q_fill_model(ev, 1.0)
+        candidate['ev'] = round(ev, 6)
+        candidate['q_fill'] = round(fill, 6)
+        candidate['effective_ev'] = round(economics_effective_ev(ev, fill, cfg.execution_cost), 6)
+        candidate['kelly'] = round(max(0.0, fractional_kelly(probability, odds, cfg.fractional_kelly)), 6)
     markets: Dict[tuple, list] = {}
     for c in all_candidates:
         markets.setdefault((c['market'],c['line']), []).append(c)

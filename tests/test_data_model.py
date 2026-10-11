@@ -93,21 +93,26 @@ class DataModelTests(unittest.TestCase):
             result = subprocess.run(args, capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stderr)
             active = root.parent/'models'/'active.json'
-            model = json.loads(active.read_text())
+            status = json.loads((active.parent/'status.json').read_text())
+            self.assertEqual(status['state'], 'candidate')
+            candidate = next(active.parent.glob('candidate-*.json'))
+            model = json.loads(candidate.read_text())
             self.assertEqual(model['limits']['cpu_cores'], 1)
             self.assertEqual(model['limits']['memory_mb'], 256)
             self.assertEqual(model['parameter_count'], len(FEATURES))
-            original = active.read_bytes()
+            self.assertFalse(active.exists())
+            candidate_bytes = candidate.read_bytes()
             result = subprocess.run(args, capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(active.read_bytes(), original)
-            self.assertEqual(json.loads((active.parent/'status.json').read_text())['new_matches'], 0)
+            self.assertFalse(active.exists())
+            self.assertEqual(json.loads((active.parent/'status.json').read_text())['state'], 'candidate')
+            self.assertEqual(candidate.read_bytes(), candidate_bytes)
             # A corrupt projection fails loudly and retains the prior successful artifact.
             with closing(sqlite3.connect(db.path)) as con, con:
                 con.execute('DROP TABLE decisions')
             result = subprocess.run(args, capture_output=True, text=True, timeout=60)
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(active.read_bytes(), original)
+            self.assertFalse(active.exists())
             self.assertEqual(json.loads((active.parent/'status.json').read_text())['state'], 'failed')
 
     def test_failed_input_write_keeps_retry_queue(self):

@@ -18,7 +18,7 @@ class ModelServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'models'/'active.json'
             model = {'features':list(FEATURES),'weights':[0]*len(FEATURES),'version':'v',
-                     'data_version':DATA_VERSION,'updated_at':'2024-01-01'}
+                     'data_version':DATA_VERSION,'feature_version':'market-offset-windows-v3','updated_at':'2024-01-01'}
             atomic_json(path,model)
             worker = ModelService()
             worker.bind(directory+'/ledger')

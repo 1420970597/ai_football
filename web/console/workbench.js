@@ -662,13 +662,24 @@ function renderDataModel(data) {
     ['当前实际训练限制',training.limits ? training.limits.cpu_cores + ' 核 / ' + training.limits.memory_mb + ' MiB' : '尚未执行'],
     ['训练资源上限',(data.settings?.cpu_cores ?? '—') + ' 核 / ' + (data.settings?.memory_mb ?? '—') + ' MiB'],
   ]));
+  const promotion = model.promotion || data.training?.candidate?.promotion || {};
+  const calibration = model.calibration || data.training?.candidate?.calibration;
   $('model-description').textContent = (model.architecture || '待训练：L2 Logistic 多盘口概率校准') + '。' + (data.note || '') +
-    ' 首次训练至少需要100场有效已结算比赛。验证按比赛和时间隔离，训练与评价按比赛等权；走盘排除，赢半/输半按非走盘方向判定。';
+    ' 首次训练至少需要100场有效已结算比赛。验证按比赛和时间隔离，训练与评价按比赛等权；走盘排除，赢半/输半按非走盘方向判定。' +
+    (calibration ? ' 校准：' + (calibration.method === 'logistic' ? 'Logistic slope/intercept' : '恒等映射') + '（' + (calibration.samples || 0) + ' 条样本）。' : ' 尚无独立校准制品。') +
+    (promotion.approved === false ? ' 当前候选未晋级：' + (promotion.reasons || []).join('；') : ' 当前模型已通过晋级门槛。');
   const rows = [['时间隔离验证',model.validation],['同组盘口基准',model.baseline],['当前版本前瞻验证',data.prospective?.model],['前瞻盘口基准',data.prospective?.baseline]];
   $('model-performance').replaceChildren(el('table',{},[
-    el('thead',{},[el('tr',{},['表现口径','比赛 / 决策','正确率','Brier ↓','Log loss ↓'].map(text=>el('th',{text})))]),
-    el('tbody',{},rows.map(([label,m])=>el('tr',{},[label,m ? m.matches + ' / ' + m.decisions : '暂无有效样本',pct(m?.accuracy),fixed(m?.brier,4),fixed(m?.log_loss,4)].map(text=>el('td',{text}))))),
+    el('thead',{},[el('tr',{},['表现口径','比赛 / 决策','二分类准确率','HAD Top-1','Brier ↓','Log loss ↓','ECE ↓'].map(text=>el('th',{text})))]),
+    el('tbody',{},rows.map(([label,m])=>el('tr',{},[label,m ? m.matches + ' / ' + m.decisions : '暂无有效样本',pct(m?.accuracy),pct(m?.had_top1_accuracy),fixed(m?.brier,4),fixed(m?.log_loss,4),fixed(m?.ece,4)].map(text=>el('td',{text}))))),
   ]));
+  const folds = model.rolling_validation || data.training?.candidate?.rolling_validation || [];
+  const foldPanel = folds.length ? el('div',{class:'model-folds'},[
+    el('h3',{text:'滚动时间折'}),
+    el('table',{},[el('thead',{},[el('tr',{},['折','训练场次','验证场次','模型 Brier','盘口 Brier','差值'].map(text=>el('th',{text})))]),
+      el('tbody',{},folds.map(f=>el('tr',{},[f.fold,f.training_matches,f.validation_matches,f.model?.brier,f.baseline?.brier,f.delta_brier].map(value=>el('td',{text:typeof value === 'number' ? fixed(value,4) : String(value ?? '—')})))))]),
+  ]) : null;
+  if (foldPanel) $('model-performance').appendChild(foldPanel);
   $('storage-at').textContent = storage.at ? '统计于 ' + timeLabel(storage.at) : '后台统计中';
   $('storage-summary').replaceChildren(...metricCards([
     ['台账决策 / 比赛',(storage.records?.decisions ?? '—') + ' / ' + (storage.records?.matches ?? '—')], ['已结算决策',storage.records?.settled_decisions ?? '—'], ['本地文件',storage.files ?? '—'],['本地数据',bytes(storage.bytes)],['硬盘容量',bytes(storage.disk?.total)],

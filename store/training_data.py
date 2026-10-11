@@ -4,11 +4,14 @@ from __future__ import annotations
 from contextlib import closing
 
 import json
+import hashlib
+import heapq
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterable, Mapping
 
 from core.learned_model import DATA_VERSION, compatible_model, features
+from core.decision_features import FEATURE_VERSION, verified_context
 from core.live_model import MODEL_VERSION
 from core.settlement import _score_of, settle_with_basis
 
@@ -16,7 +19,7 @@ GRADED = ('won', 'lost', 'half_won', 'half_lost')
 
 
 def snapshot_inputs(row: Mapping[str, Any]) -> list[dict[str, Any]]:
-    if (row.get('model_version') != MODEL_VERSION or row.get('competition_type') != 'real'
+    if (row.get('training_eligible') is False or row.get('model_version') != MODEL_VERSION or row.get('competition_type') != 'real'
             or row.get('finished') or row.get('stale') or _score_of(row.get('score')) is None):
         return []
     cutoff = row.get('input_cutoff_ms')
@@ -24,8 +27,8 @@ def snapshot_inputs(row: Mapping[str, Any]) -> list[dict[str, Any]]:
         return []
     inputs = []
     evaluations = list(row.get('evaluations', []))
-    if row.get('ensemble'):
-        evaluations.append(row['ensemble'])
+    if row.get('baseline_ensemble') or row.get('ensemble'):
+        evaluations.append(row.get('baseline_ensemble') or row['ensemble'])
     peers: dict[tuple[str, str, str], dict[str, float]] = {}
     for evaluation in evaluations:
         for candidate in evaluation.get('candidates', []):
@@ -45,7 +48,8 @@ def snapshot_inputs(row: Mapping[str, Any]) -> list[dict[str, Any]]:
                               'algorithm_probabilities': peers.get((candidate['market'],str(candidate['line']),candidate['outcome']), {}),
                               'algorithm': evaluation['algorithm'], 'entry_score': row['score'],
                               'entry_clock_s': row['elapsed_s'],
-                              'training_trend_pct': trend})
+                              'training_trend_pct': trend, 'input_cutoff_ms': cutoff,
+                              'feature_context': verified_context(row)})
             except (ValueError, TypeError, KeyError):
                 continue
             inputs.append({'match_id': row['match_id'], 'at': row['computed_at'], 'cutoff_ms': cutoff,
@@ -53,13 +57,17 @@ def snapshot_inputs(row: Mapping[str, Any]) -> list[dict[str, Any]]:
                            'line': str(candidate['line']), 'outcome': candidate['outcome'],
                            'baseline': candidate['p_market'], 'x': json.dumps(x),
                            'entry_score': json.dumps(row['score']), 'settlement_basis': candidate.get('settlement_basis', 'unknown'),
-                           'model_version': MODEL_VERSION, 'data_version': DATA_VERSION})
+                           'model_version': MODEL_VERSION, 'data_version': DATA_VERSION,
+                           'feature_version': FEATURE_VERSION})
     return inputs
 
 
-def write_inputs(path: Path, rows: list[dict[str, Any]]) -> None:
+def write_inputs(path: Path, rows: list[dict[str, Any]], *, repair: bool = False) -> None:
     if not rows:
         return
+    # Repair/test callers may provide a v3 vector without repeating the schema
+    # marker; normalize it once at the storage boundary.
+    rows = [{**row, 'feature_version': row.get('feature_version', FEATURE_VERSION)} for row in rows]
     path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path, timeout=2)) as con, con:
         con.execute('PRAGMA journal_mode=WAL')
@@ -70,12 +78,12 @@ def write_inputs(path: Path, rows: list[dict[str, Any]]) -> None:
         con.execute('CREATE INDEX IF NOT EXISTS idx_inputs_at ON inputs(at)')
         migrate_basis_columns(con, 'inputs')
         con.execute('CREATE INDEX IF NOT EXISTS idx_inputs_version ON inputs(data_version,model_version,at)')
-        columns = 'match_id,at,cutoff_ms,algorithm,market,line,outcome,baseline,x,entry_score,settlement_basis,model_version,data_version'
-        con.executemany('INSERT OR IGNORE INTO inputs (' + columns + ') VALUES (' +
+        columns = 'match_id,at,cutoff_ms,algorithm,market,line,outcome,baseline,x,entry_score,settlement_basis,model_version,data_version,feature_version'
+        con.executemany(('INSERT OR REPLACE' if repair else 'INSERT OR IGNORE') + ' INTO inputs (' + columns + ') VALUES (' +
                         ','.join(':' + name for name in columns.split(',')) + ')', rows)
 
 
-BASIS_COLUMNS = ('entry_score', 'settlement_basis', 'model_version', 'data_version')
+BASIS_COLUMNS = ('entry_score', 'settlement_basis', 'model_version', 'data_version', 'feature_version')
 
 
 def migrate_basis_columns(con: sqlite3.Connection, table: str) -> None:
@@ -122,13 +130,33 @@ def target(row: Mapping[str, Any], final: Mapping[str, Any]) -> tuple[int, float
     return int(status in ('won', 'half_won')), .5 if status.startswith('half_') else 1.0
 
 
-def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] | None = None,
+            max_per_match: int | None = None) -> list[dict[str, Any]]:
+    if max_per_match is not None and (isinstance(max_per_match, bool) or not isinstance(max_per_match, int) or max_per_match < 1):
+        raise ValueError('每场训练样本上限必须为正整数')
     if not db.exists():
         return []
     con = sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)
     rows = []
-    seen: set[tuple[str, ...]] = set()
+    seen: set[bytes] = set()
     counts = {'quarantined_inputs': 0, 'quarantined_ledger': 0, 'ungraded_inputs': 0}
+    buckets: dict[str, list] = {}
+    source_count = 0
+    def collect(row: dict[str, Any], identity: tuple) -> None:
+        nonlocal source_count
+        source_count += 1
+        if max_per_match is None:
+            rows.append(row)
+            return
+        # Deterministic min-hash sampling depends only on pre-result identity.
+        # Restore every input, but bound training memory/CPU without favoring wins.
+        priority = int.from_bytes(hashlib.sha256(json.dumps(identity).encode()).digest()[:8], 'big')
+        bucket = buckets.setdefault(row['match_id'], [])
+        item = (-priority, source_count, row)
+        if len(bucket) < max_per_match:
+            heapq.heappush(bucket, item)
+        elif item[0] > bucket[0][0]:
+            heapq.heapreplace(bucket, item)
     try:
         finals = labels(con)
         if inputs_path and inputs_path.exists():
@@ -138,10 +166,10 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                 source: Iterable[sqlite3.Row]
                 if set(BASIS_COLUMNS) <= columns:
                     counts['quarantined_inputs'] = inputs.execute(
-                        "SELECT count(*) FROM inputs WHERE data_version IS NOT ? OR model_version IS NOT ?",
-                        (DATA_VERSION, MODEL_VERSION)).fetchone()[0]
-                    source = inputs.execute('SELECT * FROM inputs WHERE data_version=? AND model_version=? ORDER BY at',
-                                            (DATA_VERSION, MODEL_VERSION))
+                        "SELECT count(*) FROM inputs WHERE data_version IS NOT ? OR model_version IS NOT ? OR feature_version IS NOT ?",
+                        (DATA_VERSION, MODEL_VERSION, FEATURE_VERSION)).fetchone()[0]
+                    source = inputs.execute('SELECT * FROM inputs WHERE data_version=? AND model_version=? AND feature_version=? ORDER BY at',
+                                            (DATA_VERSION, MODEL_VERSION, FEATURE_VERSION))
                 else:
                     counts['quarantined_inputs'] = inputs.execute('SELECT count(*) FROM inputs').fetchone()[0]
                     source = iter(())
@@ -155,10 +183,12 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                         counts['ungraded_inputs'] += 1
                         continue
                     y, weight = paid
-                    rows.append({'match_id': row['match_id'], 'at': row['at'], 'settled_at': final['settled_at'],
+                    key = tuple(row[k] for k in ('match_id', 'at', 'algorithm', 'market', 'line', 'outcome'))
+                    collect({'match_id': row['match_id'], 'at': row['at'], 'settled_at': final['settled_at'],
                                  'x': json.loads(row['x']), 'y': y, 'observation_weight': weight,
-                                 'baseline': row['baseline']})
-                    seen.add(tuple(row[k] for k in ('match_id', 'at', 'algorithm', 'market', 'line', 'outcome')))
+                                 'baseline': row['baseline'], 'algorithm': row['algorithm'],
+                                 'market': row['market'], 'line': row['line'], 'outcome': row['outcome']}, key)
+                    seen.add(hashlib.sha256(json.dumps(key).encode()).digest()[:16])
         # Only corrected model generations can supply fallback features. Old peer logits
         # and predictions cannot be repaired by relabeling their final outcomes.
         counts['quarantined_ledger'] = con.execute("SELECT count(*) FROM decisions WHERE competition_type='real' "
@@ -170,7 +200,7 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                 "AND status IN ('won','lost','half_won','half_lost') ORDER BY at,identity", (MODEL_VERSION,)):
             r = json.loads(payload)
             key = tuple(str(r.get(k, '')) for k in ('match_id', 'at', 'algorithm', 'market', 'line', 'outcome'))
-            if key in seen:
+            if hashlib.sha256(json.dumps(key).encode()).digest()[:16] in seen:
                 continue
             try:
                 final = finals.get(str(r['match_id']))
@@ -180,13 +210,18 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                 if paid is None:
                     continue
                 y, weight = paid
-                rows.append({'match_id': r['match_id'], 'at': r['at'], 'settled_at': final['settled_at'],
-                             'x': features(r), 'y': y, 'observation_weight': weight, 'baseline': r['p_market']})
-                seen.add(key)
+                collect({'match_id': r['match_id'], 'at': r['at'], 'settled_at': final['settled_at'],
+                             'x': features(r), 'y': y, 'observation_weight': weight, 'baseline': r['p_market'],
+                             'algorithm': r.get('algorithm', ''), 'market': r.get('market', ''),
+                             'line': r.get('line', ''), 'outcome': r.get('outcome', '')}, key)
+                seen.add(hashlib.sha256(json.dumps(key).encode()).digest()[:16])
             except (ValueError, TypeError, KeyError):
                 continue
         if audit is not None:
-            audit.update(counts, data_version=DATA_VERSION)
+            audit.update(counts, data_version=DATA_VERSION, source_eligible_decisions=source_count,
+                         training_max_rows_per_match=max_per_match)
+        if max_per_match is not None:
+            rows = sorted((item[2] for bucket in buckets.values() for item in bucket), key=lambda r:r['at'])
         return rows
     finally:
         con.close()
@@ -210,7 +245,8 @@ def prospective_metrics(db: Path, path: Path, model: Mapping[str, Any]) -> dict[
             final = finals.get(row['match_id'])
             predicted_at = row['predicted_at']
             if (not final or not predicted_at or final['settled_at'] <= row['at']
-                    or final['settled_at'] <= predicted_at):
+                    or final['settled_at'] <= predicted_at
+                    or not model.get('updated_at') or row['at'] <= model['updated_at']):
                 continue
             paid = target(row, final)
             if paid is None:

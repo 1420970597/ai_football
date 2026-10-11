@@ -156,9 +156,9 @@ class ModelService:
                 migrate_basis_columns(con, 'predictions')
                 con.executemany('INSERT OR IGNORE INTO predictions '
                     '(version,match_id,at,cutoff_ms,algorithm,market,line,outcome,baseline,x,probability,predicted_at,'
-                    'entry_score,settlement_basis,model_version,data_version) VALUES '
+                    'entry_score,settlement_basis,model_version,data_version,feature_version) VALUES '
                     '(:version,:match_id,:at,:cutoff_ms,:algorithm,:market,:line,:outcome,:baseline,:x,:probability,:predicted_at,'
-                    ':entry_score,:settlement_basis,:model_version,:data_version)', pending.values())
+                    ':entry_score,:settlement_basis,:model_version,:data_version,:feature_version)', pending.values())
         with self._lock:
             del self._inputs[:len(inputs)]
             for key in pending:

@@ -8,10 +8,59 @@ from pathlib import Path
 import resource
 import sys
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 
-from core.learned_model import DATA_VERSION, compatible_model, train
+from core.learned_model import DATA_VERSION, compatible_model, fit_weights, train
+from core.decision_features import FEATURE_VERSION
+from core.model_validation import evaluate, paired_evidence, promotion, rolling_folds
+from core.probability_calibration import fit_logistic
+from core.probability_calibration import calibrate_probability
 from store.training_data import dataset
+
+TRAINING_MAX_ROWS_PER_MATCH = 64
+
+
+def rolling_validation(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    """Evaluate the residual model on chronological, match-disjoint folds."""
+    fold_reports: list[dict[str, Any]] = []
+    fold_rows: list[list[dict[str, Any]]] = []
+    fold_candidates: list[list[float]] = []
+    fold_baselines: list[list[float]] = []
+    fold_outcomes: list[list[int]] = []
+    for index, (training, validation) in enumerate(rolling_folds(rows), 1):
+        weights = fit_weights(training)
+        candidate = [train_probability(row, weights) for row in validation]
+        baseline = [float(row['baseline']) for row in validation]
+        candidate_metrics = evaluate(validation, candidate)
+        baseline_metrics = evaluate(validation, baseline)
+        fold_rows.append([dict(row) for row in validation])
+        fold_candidates.append(candidate)
+        fold_baselines.append(baseline)
+        fold_outcomes.append([int(row['y']) for row in validation])
+        fold_reports.append({'fold': index, 'training_matches': len({r['match_id'] for r in training}),
+                             'validation_matches': len({r['match_id'] for r in validation}),
+                             'validation_from': min(r['at'] for r in validation),
+                             'validation_to': max(r['at'] for r in validation),
+                             'model': candidate_metrics, 'baseline': baseline_metrics,
+                             'delta_brier': candidate_metrics['brier'] - baseline_metrics['brier']})
+    calibration_probs = [p for values in fold_candidates[:-1] for p in values]
+    calibration_outcomes = [y for values in fold_outcomes[:-1] for y in values]
+    calibration = fit_logistic(calibration_probs, calibration_outcomes) if calibration_probs else {
+        'method': 'identity', 'samples': 0, 'reason': '无独立校准样本'}
+    test_rows = fold_rows[-1] if fold_rows else []
+    test_candidate = [calibrate_probability(p, calibration) for p in (fold_candidates[-1] if fold_candidates else [])]
+    test_baseline = fold_baselines[-1] if fold_baselines else []
+    evidence = paired_evidence(test_rows, test_candidate, test_baseline) if test_rows else {
+        'matches': 0, 'delta_brier': 0, 'ci95': [0, 0], 'method': 'paired match-cluster bootstrap'}
+    if fold_reports:
+        fold_reports[-1]['model_calibrated'] = evaluate(test_rows, test_candidate)
+        fold_reports[-1]['baseline_calibrated'] = evaluate(test_rows, test_baseline)
+    return fold_reports, evidence, calibration
+
+
+def train_probability(row: Mapping[str, Any], weights: list[float]) -> float:
+    from core.learned_model import predict
+    return predict(weights, row['x'])
 
 
 def atomic_json(path: Path, data: Any) -> None:
@@ -39,6 +88,13 @@ def run(root: Path, cycle: int, cpu: int, memory: int) -> dict[str, Any]:
     model_root = root.parent / 'models'
     active = model_root / 'active.json'
     old = json.loads(active.read_text()) if active.exists() else {}
+    if not old:
+        candidates = sorted(model_root.glob('candidate-*.json'))
+        if candidates:
+            try:
+                old = json.loads(candidates[-1].read_text())
+            except (OSError, ValueError, TypeError):
+                old = {}
     incompatible = bool(old and not compatible_model(old))
     if incompatible:
         # Retain the artifact; it may be audited but must never seed a clean cycle.
@@ -46,29 +102,55 @@ def run(root: Path, cycle: int, cpu: int, memory: int) -> dict[str, Any]:
         active.unlink()
         old = {}
     quality: dict[str, Any] = {}
-    rows = dataset(root / 'ledger.sqlite3', model_root / 'inputs.sqlite3', audit=quality)
+    rows = dataset(root / 'ledger.sqlite3', model_root / 'inputs.sqlite3', audit=quality,
+                   max_per_match=TRAINING_MAX_ROWS_PER_MATCH)
     consumed = set(old.get('cohort_ids', []))
     new_count = len({r['match_id'] for r in rows} - consumed)
     status: dict[str, Any] = {'state': 'waiting', 'checked_at': datetime.now(timezone.utc).isoformat(),
                              'eligible_matches': len({r['match_id'] for r in rows}), 'eligible_decisions': len(rows), 'new_matches': new_count, 'cycle_matches': cycle,
                              'limits': limits, 'minimum_matches': 100, 'error': ''}
-    status.update(data_version=DATA_VERSION, data_quality=quality,
+    status.update(data_version=DATA_VERSION, feature_version=FEATURE_VERSION, data_quality=quality,
                   old_model_quarantined=incompatible or any(model_root.glob('quarantined-*.json')))
+    if not active.exists() and old.get('version') and old.get('promotion'):
+        status.update(state='candidate', candidate_version=old['version'],
+                      promotion_reasons=old['promotion'].get('reasons', []),
+                      candidate={'version': old['version'], 'promotion': old['promotion'],
+                                'calibration': old.get('calibration'),
+                                'rolling_validation': old.get('rolling_validation', [])})
     model: dict[str, Any] = {}
     if new_count >= cycle and status['eligible_matches'] >= 100:
         status['state'] = 'training'
         atomic_json(model_root / 'status.json', status)
         model = train(rows)
+        folds, evidence, calibration = rolling_validation(rows)
+        test_metrics = folds[-1].get('model_calibrated', model['validation']) if folds else model['validation']
+        baseline_metrics = folds[-1].get('baseline_calibrated', model['baseline']) if folds else model['baseline']
+        decision = promotion(test_metrics, baseline_metrics, evidence, folds)
+        model['sampling'] = {'method':'deterministic identity min-hash, independent of results',
+                             'max_rows_per_match':TRAINING_MAX_ROWS_PER_MATCH,
+                             'source_eligible_decisions':quality['source_eligible_decisions']}
+        model['rolling_validation'] = folds
+        model['promotion'] = decision
+        model['promotion_evidence'] = evidence
+        model['calibration'] = calibration
+        model['feature_version'] = FEATURE_VERSION
         model['updated_at'] = datetime.now(timezone.utc).isoformat()
         model['version'] = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
         model['limits'] = limits
-        atomic_json(model_root / (model['version'] + '.json'), model)
-        status.update(state='ready', new_matches=0)
+        candidate_path = model_root / ('candidate-' + model['version'] + '.json')
+        atomic_json(candidate_path, model)
+        status['candidate'] = {'version': model['version'], 'promotion': decision,
+                               'calibration': calibration, 'rolling_validation': folds}
+        if decision['approved']:
+            atomic_json(active, model)
+            status.update(state='ready', new_matches=0, promoted_version=model['version'])
+        else:
+            status.update(state='candidate', candidate_version=model['version'],
+                          promotion_reasons=decision['reasons'])
     from store.training_data import prospective_metrics
-    current = model or (json.loads(active.read_text()) if active.exists() else {})
+    current = (model if model and status.get('state') == 'ready' else
+               (json.loads(active.read_text()) if active.exists() else {}))
     atomic_json(model_root / 'prospective.json', prospective_metrics(root / 'ledger.sqlite3', model_root / 'shadow.sqlite3', current))
-    if model:
-        atomic_json(active, model)
     atomic_json(model_root / 'status.json', status)
     return status
 
