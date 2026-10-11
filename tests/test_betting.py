@@ -8,6 +8,12 @@ from core.live_model import MODEL_VERSION
 
 
 class BettingTests(unittest.TestCase):
+    def test_calibration_cannot_borrow_baseline_or_other_version_evidence(self):
+        cfg = replace(RuntimeConfig(),betting_enabled=True)
+        for evidence in ('','old'):
+            self.assertFalse(preview_bet(self.pick(decision_model_version='new',calibration_evidence_version=evidence),cfg)['allowed'])
+        self.assertTrue(preview_bet(self.pick(decision_model_version='new',calibration_evidence_version='new'),cfg)['allowed'])
+
     def test_hit_counts_do_not_override_losing_or_uncertified_history(self):
         cfg = replace(RuntimeConfig(),betting_enabled=True)
         for patch in ({'roi':-.1},{'roi':None},{'model_version':'live-poisson-market-v1'},
@@ -49,6 +55,16 @@ class BettingTests(unittest.TestCase):
         blocked = preview_bet(self.pick(hit_count=2), cfg)
         self.assertFalse(blocked['allowed'])
         self.assertIn('命中次数不足', blocked['reason'])
+
+    def test_decision_occurrence_gate_is_independent_of_settlement_hits(self):
+        cfg = replace(RuntimeConfig(), betting_enabled=True, betting_min_hit_count=2)
+        first = preview_bet(self.pick(hit_count=0, decision_count=1), cfg)
+        self.assertFalse(first['allowed'])
+        self.assertIn('决策出现次数', first['reason'])
+        repeated = preview_bet(self.pick(hit_count=0, decision_count=2), cfg)
+        self.assertTrue(repeated['allowed'])
+        self.assertEqual(repeated['plan']['decision_count'], 2)
+        self.assertEqual(repeated['plan']['hit_count'], 2)
 
     def test_multiplier_prefers_ensemble_confidence(self):
         cfg = replace(RuntimeConfig(), betting_enabled=True, betting_fixed_stake=20,

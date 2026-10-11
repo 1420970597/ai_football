@@ -167,6 +167,13 @@ function probabilityRows(match, compact = false) {
   }
   return rows;
 }
+function evidenceSummary(item) {
+  const decisions = fixed(item.decision_count ?? item.decision_occurrences, 1);
+  const hit = fixed(item.settled_hit_count ?? item.hit_count, 1);
+  const miss = fixed(item.miss_count, 1);
+  const pending = fixed(item.pending_decisions ?? item.pending_count, 1);
+  return '决策次数 ' + decisions + ' · 历史命中 ' + hit + ' · 历史未中 ' + miss + ' · 待结算 ' + pending;
+}
 function renderRecommendations(rows) {
   const picks = rows.flatMap(match => match.suspended ? [] : (match.picks || []).map(pick => ({match,pick})))
     .sort((a,b) => Number(b.pick.composite_confidence ?? b.match.recommendation_confidence ?? b.pick.confidence ?? 0) -
@@ -177,7 +184,7 @@ function renderRecommendations(rows) {
     el('div',{class:'buy-metrics'},[
       el('span',{text:'概率 ' + pct(pick.p_model)}), el('span',{text:'置信度 ' + pct(pick.confidence)}),
       el('span',{text:'净EV ' + pct(pick.effective_ev_live ?? pick.effective_ev)}),
-      el('span',{text:'命中 ' + fixed(pick.hit_count, 1) + ' · 未中 ' + fixed(pick.miss_count, 1)}),
+      el('span',{text:evidenceSummary(pick)}),
       el('span',{text:'综合 ' + pct(pick.composite_confidence ?? match.recommendation_confidence)}),
       el('span',{text:'仓位 ' + pct(pick.kelly)})])
   ]));
@@ -196,12 +203,14 @@ function renderRecommendationCard(item) {
     el('div',{class:'buy-metrics'},[
       el('span',{text:'概率 ' + pct(pick.p_model ?? item.p_fused)}),
       el('span',{text:'置信度 ' + pct(pick.confidence ?? item.confidence)}),
-      el('span',{text:'命中 ' + fixed(pick.hit_count ?? item.hit_count, 1) + ' · 未中 ' + fixed(pick.miss_count ?? item.miss_count, 1)}),
+      el('span',{text:evidenceSummary({hit_count: pick.hit_count ?? item.hit_count,
+        miss_count: pick.miss_count ?? item.miss_count,
+        pending_count: pick.pending_count ?? item.pending_count})}),
       el('span',{text:'综合 ' + pct(pick.composite_confidence ?? item.composite_confidence)}),
       el('span',{text:'赔率状态 ' + (item.market_open ? '开启' : '已关闭')})]),
     ...(betting ? [el('small',{class:'buy-execution',text:'投注：' + (executionLabels[betting.status] || betting.status) +
       (betting.quote_to_submit_ms !== undefined ? ' · 盘口至提交 ' + fixed(betting.quote_to_submit_ms, 0) + 'ms' : '') +
-      (betting.deadline_exceeded ? ' · 两秒预算超时，等待新行情' : '') +
+      (betting.quote_to_submit_ms > 2000 ? ' · 超过2秒性能目标，继续执行' : '') +
       (betting.order_no ? ' · 注单 ' + betting.order_no : '') + (betting.reason ? ' · ' + betting.reason : '') +
       (betting.attempt ? ' · 第' + betting.attempt + '次检查' : '') +
       (betting.awaiting_new_quote ? ' · 等待新盘口' : betting.retry_cancelled ? ' · 重试已取消' : betting.retry_scheduled ? ' · ' + betting.retry_after_s + '秒后重新决策' :
@@ -585,7 +594,7 @@ const ORIGINAL_SETTING_FIELDS = [
     ['betting_enabled', '自动真实投注', 'checkbox'],
     ['betting_stake_mode', '投注额度模式', 'select', {fixed: '固定值', confidence_multiplier: '综合置信度 × 固定值'}],
     ['betting_fixed_stake', '固定投注额度 / CNY', 'number', [.01,100000,.01]],
-    ['betting_min_hit_count', '最小历史盘口命中次数', 'number', [1,100000,1]],
+    ['betting_min_hit_count', '最小决策出现次数', 'number', [1,100000,1]],
     ['betting_retry_max_attempts', '每轮最多尝试次数', 'number', [1,20,1]],
     ['betting_retry_base_delay_s', '重试基础间隔 / 秒', 'number', [.5,30,.5]],
     ['max_total_exposure', '同场最大敞口', 'number', [0,1,.01]],
@@ -611,6 +620,7 @@ const ORIGINAL_SETTING_FIELDS = [
   ]],
 ];
 const TRAINING_FIELDS = [
+  ['model_shadow_enabled', '模型影子模式（仅观察，不参与决策）', 'checkbox'],
   ['model_training_enabled', '自动更新训练模型', 'checkbox'],
   ['model_training_matches', '更新周期 / 新增已结算比赛数', 'number', [1,100000,1]],
   ['model_training_cpu', '训练 CPU / 核', 'number', [1,2,1]],
@@ -624,7 +634,7 @@ const SETTING_TREE = [
   ]],
   ['执行', [['真实投注', [['功能开关', ['betting_enabled']], ['额度与条件', ['betting_stake_mode','betting_fixed_stake','betting_min_hit_count']], ['提交前重试', ['betting_retry_max_attempts','betting_retry_base_delay_s']]]]]],
   ['数据与模型', [
-    ['模型训练', [['更新周期', ['model_training_enabled','model_training_matches']], ['资源限制', ['model_training_cpu','model_training_memory_mb']]]],
+    ['模型训练', [['决策模式', ['model_shadow_enabled']], ['更新周期', ['model_training_enabled','model_training_matches']], ['资源限制', ['model_training_cpu','model_training_memory_mb']]]],
     ['实时数据', [['新鲜度', ['quote_max_age_s','state_max_age_s']]]],
   ]],
   ['LLM', [
@@ -653,10 +663,10 @@ function metricCards(items) {
 }
 function renderDataModel(data) {
   const model = data.model || {}, training = data.training || {}, storage = data.storage || {};
-  const labels = {not_started:'尚未启动',checking:'检查训练数据',waiting:'等待新增已结算比赛',training:'训练中',ready:'已更新',failed:'训练失败',disabled:'自动训练已关闭'};
+  const labels = {not_started:'尚未启动',restoring:'历史数据恢复中',checking:'检查训练数据',waiting:'等待新增已结算比赛',training:'训练中',ready:'已更新',failed:'训练失败',disabled:'自动训练已关闭'};
   $('model-state').textContent = labels[training.state] || '未训练';
   $('model-summary').replaceChildren(...metricCards([
-    ['最新更新时间',timeLabel(model.updated_at)], ['训练参数量',model.parameter_count ?? '未训练'],
+    ['决策模式',data.mode === 'active' ? '参与决策（无可用模型时使用经济算法）' : '影子模式（仅观察）'], ['最新更新时间',timeLabel(model.updated_at)], ['训练参数量',model.parameter_count ?? '未训练'],
     ['模型版本',model.version || '未训练'], ['有效已结算比赛',training.eligible_matches ?? model.eligible_matches ?? '—'], ['有效训练决策',training.eligible_decisions ?? '—'],
     ['距更新周期', (training.new_matches ?? '—') + ' / ' + (data.settings?.cycle_matches ?? '—') + ' 场'],
     ['当前实际训练限制',training.limits ? training.limits.cpu_cores + ' 核 / ' + training.limits.memory_mb + ' MiB' : '尚未执行'],
@@ -692,6 +702,7 @@ function renderDataModel(data) {
     el('tbody',{},(storage.categories || []).map(c=>el('tr',{},[c.name,String(c.files),bytes(c.bytes),bytes(c.allocated_bytes)].map(text=>el('td',{text}))))),
   ]));
   $('storage-description').textContent = storage.retention || '统计由后台更新，刷新页面不会扫描归档或启动训练。';
+  if (data.history_repair?.totals) $('storage-description').textContent += ' 历史恢复：已处理 ' + data.history_repair.files + ' 个归档文件，剩余 ' + data.history_repair.remaining_files + ' 个；已重建 ' + (data.history_repair.totals.rebuilt_inputs || 0).toLocaleString() + ' 条训练输入。';
   const error = training.error || storage.archive?.error || (storage.errors || []).join('；');
   notice('data-model-notice',error || (!data.running ? '独立模型服务尚未启动，请启动 model-worker。' : ''),!!error);
 }
@@ -719,10 +730,10 @@ function renderBettingStatus(betting) {
       (order.order_no ? ' · 注单 ' + order.order_no : '') + (order.reason ? ' · ' + order.reason : '') +
       (order.retry_cancelled ? ' · 重试已取消' : '') : '') +
     (betting?.latency?.quote_to_submit_ms?.p95 !== null && betting?.latency?.quote_to_submit_ms?.p95 !== undefined ? '；盘口至提交 P95 ' + fixed(betting.latency.quote_to_submit_ms.p95, 0) + 'ms' : '') +
-    (betting?.latency?.deadline_blocked ? '；超时未执行 ' + betting.latency.deadline_blocked + ' 次' : '') +
+    (betting?.latency?.target_misses ? '；超过2秒性能目标 ' + betting.latency.target_misses + ' 次（未阻止下单）' : '') +
     (betting?.session_warmup ? '；会话 ' + ({ready:'已预热',warming:'预热中',retrying:'刷新中',disabled:'未启用',not_started:'未启动',unconfigured:'未配置'}[betting.session_warmup] || betting.session_warmup) : '') +
     (betting?.retry_pending ? '；待重试 ' + betting.retry_pending + ' 项' : '') +
-    '。仅对满足命中次数、最新盘口、限额与余额条件的综合推荐下单；已发出的订单不会因关闭而撤销。');
+    '。仅对满足决策出现次数、最新盘口、限额与余额条件的综合推荐下单；已发出的订单不会因关闭而撤销。');
 }
 function renderSettings(data) {
   S.settingsVersion = data.version;
@@ -757,7 +768,7 @@ function renderSettings(data) {
           input.placeholder = cfg.has_llm_key ? '已配置，留空保留' : '未配置';
           input.value = '';
         } else input.value = cfg[key] ?? '';
-        if (key.startsWith('model_training_') && cfg[key] === undefined) input.disabled = true;
+        if ((key.startsWith('model_training_') || key === 'model_shadow_enabled') && cfg[key] === undefined) input.disabled = true;
         if (type === 'number') {input.required=true; input.min=options[0]; input.max=options[1]; input.step=options[2];}
       }
       if (key === 'betting_enabled') {

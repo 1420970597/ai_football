@@ -24,6 +24,22 @@ from tests.test_training_data import decision
 
 
 class DataModelTests(unittest.TestCase):
+    def test_dashboard_reports_repair_progress_without_running_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger = root/'ledger'
+            ledger.mkdir()
+            path = root/'_archive'/'repairs'/'task42'/'status.json'
+            atomic_json(path,{'phase':'repairing','files':3,'remaining_files':8,'totals':{'rebuilt_inputs':123}})
+            dashboard = Dashboard()
+            dashboard.bind(str(ledger))
+            out = dashboard.status()
+            self.assertEqual(out['training']['state'],'restoring')
+            self.assertEqual(out['history_repair']['totals']['rebuilt_inputs'],123)
+            self.assertFalse(out['running'])
+            path.write_text('{invalid')
+            self.assertIn('error',dashboard.status()['history_repair'])
+
     def test_settings_strict_and_persisted(self):
         cfg = RuntimeConfig()
         out = validated(cfg, {'model_training_matches': 2, 'model_training_cpu': 2, 'model_training_memory_mb': 256})

@@ -63,6 +63,7 @@ class RuntimeConfig:
     llm_max_tokens: int = 2048
     llm_interval_s: float = 60.0
     llm_review_max_age_s: float = 120.0
+    model_shadow_enabled: bool = True
     model_training_enabled: bool = True
     model_training_matches: int = 100
     model_training_cpu: int = 1
@@ -109,7 +110,7 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
         if key in ("betting_min_hit_count", "betting_retry_max_attempts") and not isinstance(v, int):
             raise ValueError(key + " 必须是整数")
     for name in ("llm_enabled", "llm_experiment_enabled", "algorithm_alert_enabled",
-                 "betting_enabled", "model_training_enabled"):
+                 "betting_enabled", "model_training_enabled", "model_shadow_enabled"):
         if name in values and not isinstance(values[name], bool):
             raise ValueError(name + " 必须是布尔值")
     if "algorithms" in values:
@@ -161,17 +162,22 @@ class RuntimeSettings:
     def bind(self, root: Optional[str]) -> None:
         with self._lock:
             self.path = Path(root).parent / "runtime-settings.json" if root else None
-            if self.path is None or not self.path.exists():
-                return
-            try:
-                raw = json.loads(self.path.read_text(encoding="utf-8"))
-                cfg = validated(self.config, raw["settings"])
-                v = raw["version"]
-                if not isinstance(v, int) or isinstance(v, bool) or v < 1:
-                    raise ValueError("配置版本无效")
-                self.config, self.version = cfg, v
-            except (OSError, ValueError, KeyError, TypeError):
-                self.restore_error = "持久配置无效，已保留当前配置"
+            if self.path is not None and self.path.exists():
+                try:
+                    raw = json.loads(self.path.read_text(encoding="utf-8"))
+                    cfg = validated(self.config, raw["settings"])
+                    v = raw["version"]
+                    if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+                        raise ValueError("配置版本无效")
+                    self.config, self.version = cfg, v
+                except (OSError, ValueError, KeyError, TypeError):
+                    self.restore_error = "持久配置无效，已保留当前配置"
+            # Production containers may opt into automatic startup activation.
+            # Runtime API updates can still disable it until the next restart.
+            auto_enable = os.environ.get("AUTO_ENABLE_BETTING", "").strip().lower() in (
+                "1", "true", "yes", "on")
+            if auto_enable and not self.config.betting_enabled:
+                self.config = replace(self.config, betting_enabled=True)
 
     def public(self) -> Dict[str, Any]:
         with self._lock:

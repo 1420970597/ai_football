@@ -696,7 +696,8 @@ class ApiApp:
 
     def _attach_recommendation_evidence_many(self, rows: Sequence[Dict[str, Any]]) -> None:
         keys = [(str(p.get("algorithm") or "economic_ensemble"), str(p.get("market") or ""),
-                 str(p.get("line") or ""), str(p.get("outcome") or ""))
+                 str(p.get("line") or ""), str(p.get("outcome") or "")) +
+                ((str(p["decision_model_version"]),) if p.get("decision_model_version") else ())
                 for row in rows if not row.get("finished") for p in row.get("picks") or []]
         try:
             evidence_by_key = self.analysis.ledger.recommendation_performance_many(keys)
@@ -708,11 +709,17 @@ class ApiApp:
             best = None
             for pick in row.get("picks") or []:
                 key = (str(pick.get("algorithm") or "economic_ensemble"), str(pick.get("market") or ""),
-                       str(pick.get("line") or ""), str(pick.get("outcome") or ""))
+                       str(pick.get("line") or ""), str(pick.get("outcome") or "")) + \
+                      ((str(pick["decision_model_version"]),) if pick.get("decision_model_version") else ())
                 evidence = evidence_by_key.get(key, {'hit_count': 0, 'miss_count': 0,
-                    'pending_count': 0, 'settled_samples': 0, 'accuracy': None})
+                    'settled_hit_count': 0, 'decision_count': 0, 'decision_occurrences': 0,
+                    'pending_count': 0, 'pending_decisions': 0, 'settled_samples': 0, 'accuracy': None})
                 pick.update({'hit_count': evidence['hit_count'], 'miss_count': evidence['miss_count'],
+                             'settled_hit_count': evidence.get('settled_hit_count', evidence['hit_count']),
+                             'decision_count': evidence.get('decision_count', 0),
+                             'decision_occurrences': evidence.get('decision_occurrences', evidence.get('decision_count', 0)),
                              'pending_count': evidence['pending_count'], 'settled_samples': evidence['settled_samples'],
+                             'pending_decisions': evidence.get('pending_decisions', evidence['pending_count']),
                              'historical_accuracy': evidence['accuracy']})
                 from service.betting import recommendation_confidence
                 pick['composite_confidence'] = recommendation_confidence(pick, evidence, stale=bool(row.get('stale')))

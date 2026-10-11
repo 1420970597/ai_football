@@ -114,6 +114,7 @@ class LedgerEntry:
     research_only: bool = False
     model_version: str = "legacy"
     grading_version: str = "legacy"
+    decision_model_version: str = ""
     algorithm: str = "legacy"
     config_version: int = 0
     league: str = ""
@@ -127,6 +128,10 @@ class LedgerEntry:
     odds: float = 0.0
     #: 该结果是否被 LLM 判为可买入
     is_pick: bool = False
+    #: 同一盘口决策被算法发布的次数；与赛果命中次数分开统计。
+    decision_count: int = 1
+    #: 最近一次计入 decision_count 的发布事件，用于重试幂等。
+    decision_event_id: str = ""
     #: 未通过门控时的原因码（`is_pick=False` 时有意义）
     rejects: List[str] = field(default_factory=list)
     #: 动态门槛（仅 pick 有意义）
@@ -225,6 +230,10 @@ class LedgerEntry:
                     kw[num] = value if math.isfinite(value) else 0.0
                 except (TypeError, ValueError):
                     kw[num] = 0.0
+        try:
+            kw["decision_count"] = max(1, int(kw.get("decision_count", 1) or 1))
+        except (TypeError, ValueError):
+            kw["decision_count"] = 1
         if "rejects" in kw and not isinstance(kw["rejects"], list):
             kw["rejects"] = []
         return cls(**kw)
@@ -368,7 +377,11 @@ class DecisionLedger:
                 or forecast.get("decision_status") not in (None, "settleable")):
             return None
         line = str(forecast.get("line", ""))
-        identity = hashlib.sha256((mid + "|" + algorithm + "|" + market + "|" + line + "|" + record_kind + "|first-live-v2|" + str(row['model_version'])).encode()).hexdigest()
+        identity = hashlib.sha256((mid + "|" + algorithm + "|" + market + "|" + line + "|" +
+                                   str(forecast.get("outcome") or "") + "|" + record_kind +
+                                   "|first-live-v3|" + str(row['model_version']) +
+                                   ('|calibration|' + str(forecast['decision_model_version'])
+                                    if forecast.get('decision_model_version') else '')).encode()).hexdigest()
         entry = LedgerEntry(
             at=str(row["computed_at"]), updated_at=str(row["computed_at"]),
             decision_id=identity, match_id=mid, competition_type="real", is_live=True,
@@ -377,6 +390,10 @@ class DecisionLedger:
             decision_status=str(forecast.get("decision_status", "settleable")),
             research_only=bool(forecast.get("research_only", False)),
             model_version=str(row["model_version"]), algorithm=algorithm,
+            decision_model_version=str(forecast.get("decision_model_version") or ""),
+            decision_count=max(1, int(forecast.get("decision_count") or row.get("decision_count") or 1)),
+            decision_event_id=str(row.get("decision_event_id") or row.get("publication_id") or
+                                  row.get("computed_at") or row.get("at") or ""),
             config_version=int(row["config_version"]), league=str(row.get("league", "")),
             home=str(row.get("home", "")), away=str(row.get("away", "")),
             market=market, line=line, outcome=str(forecast["outcome"]),
@@ -405,22 +422,42 @@ class DecisionLedger:
             if self._live_ids is None:
                 self._live_ids = set()
             self._sync_db(force=False)
-            pending: Dict[str, LedgerEntry] = {}
+            latest: Dict[str, LedgerEntry] = {}
             for entry in entries:
                 identity = entry.decision_id
-                if identity in self._live_ids or identity in pending:
+                previous = latest.get(identity)
+                if previous is None:
+                    latest[identity] = entry
+                elif entry.decision_event_id and entry.decision_event_id == previous.decision_event_id:
                     continue
-                if self._db and self._db.connection.execute(
-                        'SELECT 1 FROM decisions WHERE decision_id=? LIMIT 1', (identity,)).fetchone():
-                    self._live_ids.add(identity)
+                else:
+                    previous.decision_count += max(1, entry.decision_count)
+                    previous.decision_event_id = entry.decision_event_id or previous.decision_event_id
+            updates: List[LedgerEntry] = []
+            for identity, entry in latest.items():
+                existing = None
+                if self._db:
+                    raw = self._db.connection.execute(
+                        'SELECT payload FROM decisions WHERE decision_id=? ORDER BY revision DESC LIMIT 1',
+                        (identity,)).fetchone()
+                    if raw:
+                        existing = LedgerEntry.from_dict(json.loads(raw[0]))
+                if existing is None:
+                    updates.append(entry)
                     continue
-                pending[identity] = entry
-            if not pending:
+                event_id = entry.decision_event_id
+                if event_id and event_id == existing.decision_event_id:
+                    continue
+                existing.decision_count = max(1, existing.decision_count) + max(1, entry.decision_count)
+                existing.decision_event_id = event_id or existing.decision_event_id
+                existing.updated_at = entry.updated_at or existing.updated_at
+                updates.append(existing)
+            if not updates:
                 return 0
-            n = self._append(list(pending.values()))
-            if n != len(pending):
+            n = self._append(updates)
+            if n != len(updates):
                 raise OSError("决策批量留痕写入失败")
-            self._live_ids.update(pending)
+            self._live_ids.update(entry.decision_id for entry in updates)
             return n
 
     def record_experiment(self, row: Mapping[str, Any], review: Mapping[str, Any]) -> int:
@@ -863,22 +900,25 @@ class DecisionLedger:
             return {'at': cutoff, 'rows': db.evidence(cutoff) if db else []}
 
     def recommendation_performance(self, market: str, line: str, outcome: str,
-                                   algorithm: str = 'economic_ensemble') -> Dict[str, Any]:
+                                   algorithm: str = 'economic_ensemble', decision_model_version: str = '') -> Dict[str, Any]:
         """Return settled and pending counts for one recommended quote.
 
         The board uses this as evidence for ranking. Pending rows are exposed
         separately and never enter accuracy or ROI calculations.
         """
-        key = (algorithm, market, str(line), outcome)
+        key = (algorithm, market, str(line), outcome) + ((decision_model_version,) if decision_model_version else ())
         return self.recommendation_performance_many([key]).get(key, {
             'hit_count': 0, 'miss_count': 0, 'pending_count': 0,
+            'pending_decisions': 0, 'decision_count': 0,
+            'decision_occurrences': 0, 'settled_hit_count': 0,
             'settled_samples': 0, 'accuracy': None})
 
     def recommendation_performance_many(
-            self, keys: Sequence[tuple[str, str, str, str]]) -> Dict[tuple, Dict[str, Any]]:
+            self, keys: Sequence[tuple]) -> Dict[tuple, Dict[str, Any]]:
         """Aggregate many recommendation quotes with one indexed SQLite scan."""
-        wanted = list(dict.fromkeys((str(a), str(m), str(line_value), str(o))
-                                    for a, m, line_value, o in keys))
+        wanted = list(dict.fromkeys(tuple(str(v) for v in key) for key in keys))
+        if any(len(key) not in (4,5) for key in wanted):
+            raise ValueError('无效推荐身份')
         if not wanted:
             return {}
         with self._read_db(active_only=True) as db:
@@ -886,27 +926,39 @@ class DecisionLedger:
                 return {}
             clauses = []
             params: list[str] = []
-            for algorithm, market, line_value, outcome in wanted:
-                clauses.append("(algorithm=? AND market=? AND line=? AND outcome=?)")
-                params.extend((algorithm, market, line_value, outcome))
+            for key in wanted:
+                algorithm, market, line_value, outcome = key[:4]
+                calibration = key[4] if len(key) == 5 else ''
+                clauses.append("(algorithm=? AND market=? AND line=? AND outcome=? AND "
+                               "coalesce(json_extract(payload,'$.decision_model_version'),'')=?)")
+                params.extend((algorithm, market, line_value, outcome, calibration))
             rows = db.connection.execute(
                 """SELECT algorithm, market, line, outcome,
+                   coalesce(json_extract(payload,'$.decision_model_version'),'') AS calibration,
                    sum(status IN ('won','half_won') * CASE status WHEN 'half_won' THEN .5 ELSE 1 END) AS hits,
                    sum(status IN ('lost','half_lost') * CASE status WHEN 'half_lost' THEN .5 ELSE 1 END) AS misses,
                    sum(status='pending') AS pending,
+                   sum(coalesce(decision_count, 1)) AS decision_count,
+                   sum(CASE WHEN status='pending' THEN coalesce(decision_count, 1) ELSE 0 END) AS pending_decisions,
                    sum(CASE WHEN """ + GRADED_SQL + """ THEN pnl ELSE 0 END) AS profit,
                    sum(""" + GRADED_SQL + """) AS stake,
                    count(DISTINCT CASE WHEN """ + GRADED_SQL + """ THEN match_id END) AS matches
                    FROM decisions WHERE is_pick=1 AND trigger='live_recommendation' AND model_version=? AND (""" +
-                " OR ".join(clauses) + ") GROUP BY algorithm,market,line,outcome", [MODEL_VERSION, *params]).fetchall()
+                " OR ".join(clauses) + ") GROUP BY algorithm,market,line,outcome,calibration", [MODEL_VERSION, *params]).fetchall()
             out: Dict[tuple, Dict[str, Any]] = {}
             for row in rows:
                 hits = float(row['hits'] or 0.0)
                 misses = float(row['misses'] or 0.0)
                 settled = hits + misses
                 key = (str(row['algorithm']), str(row['market']), str(row['line'] or ''), str(row['outcome']))
-                out[key] = {'hit_count': round(hits, 3), 'miss_count': round(misses, 3),
+                if row['calibration']:
+                    key += (str(row['calibration']),)
+                decisions = int(row['decision_count'] or 0)
+                out[key] = {'calibration_evidence_version':str(row['calibration']), 'hit_count': round(hits, 3), 'miss_count': round(misses, 3),
+                            'settled_hit_count': round(hits, 3),
+                            'decision_count': decisions, 'decision_occurrences': decisions,
                             'pending_count': int(row['pending'] or 0),
+                            'pending_decisions': int(row['pending_decisions'] or 0),
                             'settled_samples': round(settled, 3),
                             'model_version': MODEL_VERSION, 'independent_matches': int(row['matches']),
                             'roi': float(row['profit']) / row['stake'] if row['stake'] else None,
@@ -942,6 +994,7 @@ class DecisionLedger:
                     'p_model': item.get('p_fused', 0), 'confidence': item.get('confidence', 0),
                     'effective_ev': item.get('edge', 0), 'ev': item.get('edge', 0),
                     'kelly': item.get('kelly', 0), 'algorithm': 'economic_ensemble',
+                    'decision_model_version':item.get('decision_model_version',''),
                     'odds_live': False, 'recommendation_at': item.get('at', ''),
                 }
                 out.setdefault(str(item.get('match_id', '')), []).append(pick)

@@ -113,13 +113,13 @@ class ModelService:
             if not self.cfg.model_training_enabled:
                 status['state'] = 'disabled'
             return {'model': model, 'training': status, 'storage': deepcopy(self._storage),
-                    'settings': {'enabled': self.cfg.model_training_enabled,
+                    'settings': {'enabled': self.cfg.model_training_enabled, 'shadow_enabled': self.cfg.model_shadow_enabled,
                                  'cycle_matches': self.cfg.model_training_matches,
                                  'cpu_cores': self.cfg.model_training_cpu,
                                  'memory_mb': self.cfg.model_training_memory_mb},
-                    'mode': 'shadow', 'running': bool(self._thread and self._thread.is_alive()),
+                    'mode': 'shadow' if self.cfg.model_shadow_enabled else 'active', 'running': bool(self._thread and self._thread.is_alive()),
                     'prospective': prospective,
-                    'note': '独立观察预测，不参与真实投注。保留各算法、盘口、盘口线、方向和决策时点；按比赛分组、等权训练。走势特征冻结在决策输入截点，旧记录缺少走势时显式标记缺失。'}
+                    'note': ('影子模式：模型仅记录预测。' if self.cfg.model_shadow_enabled else '实际模式：兼容模型参与概率校准；不可用时使用经济算法。') + '保留各算法、盘口、盘口线、方向和决策时点；按比赛分组、等权训练。走势特征冻结在决策输入截点，旧记录缺少走势时显式标记缺失。'}
 
     def observe(self, row: dict[str, Any]) -> None:
         inputs = snapshot_inputs(row)
@@ -204,7 +204,7 @@ class ModelService:
         path = self.root.parent / 'runtime-settings.json'
         if path.exists() and path.stat().st_mtime_ns != self._settings_mtime:
             data = json.loads(path.read_text())
-            patch = {k: v for k, v in data['settings'].items() if k.startswith('model_training_')}
+            patch = {k: v for k, v in data['settings'].items() if k.startswith('model_training_') or k == 'model_shadow_enabled'}
             self.configure(validated(self.cfg, patch))
             self._settings_mtime = path.stat().st_mtime_ns
 
@@ -224,9 +224,23 @@ class ModelService:
     def _consume_replay(self) -> None:
         if self.root is None:
             return
+        lock_path = self.root.parent / 'models' / 'replay.lock'
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_SH)
+            try:
+                self._consume_replay_locked()
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+    def _consume_replay_locked(self) -> None:
+        if self.root is None:
+            return
         cursor_path = self.root.parent / 'models' / 'replay-cursor.json'
-        if not self._cursor and cursor_path.exists():
-            self._cursor = json.loads(cursor_path.read_text())
+        if cursor_path.exists():
+            persisted = json.loads(cursor_path.read_text())
+            if isinstance(persisted, dict):
+                self._cursor.update(persisted)
         # Only schema-v2 immutable journals carry proven input cutoffs. Legacy
         # rows remain available to dataset() with explicitly missing trends.
         paths = sorted(self.root.glob('live-replay*.jsonl.gz'))
@@ -307,6 +321,13 @@ class ModelService:
             except (OSError, ValueError, sqlite3.Error) as exc:
                 with self._lock:
                     self._status.update(state='failed', error=str(exc))
+                # Publish the worker heartbeat even when replay validation
+                # fails. The dashboard must distinguish a running worker with
+                # quarantined input from a worker that never started.
+                try:
+                    self._publish()
+                except (OSError, ValueError, TypeError, sqlite3.Error):
+                    pass
                 next_check = time.monotonic() + 60
             self._stop.wait(1)
             if self._wake.is_set():

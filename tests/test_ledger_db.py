@@ -161,6 +161,35 @@ class LedgerDatabaseTests(unittest.TestCase):
             self.assertEqual(evidence['pending_count'], 1)
             self.assertAlmostEqual(evidence['accuracy'], 2 / 3, places=6)
 
+    def test_repeated_live_decisions_increment_occurrences_without_fake_hits(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+
+            def live(event_id, computed_at):
+                return {
+                    'match_id': 'm', 'model_version': MODEL_VERSION, 'config_version': 1,
+                    'competition_type': 'real', 'computed_at': computed_at,
+                    'score': [0, 0], 'elapsed_s': 120, 'publication_id': event_id,
+                    'forecast': {'market': 'OU', 'line': '2.25', 'outcome': 'over',
+                                 'odds': 2, 'ev': .1, 'p_market': .5, 'p_model': .6,
+                                 'settlement_basis': 'legacy_full_score',
+                                 'decision_status': 'settleable'},
+                    'algorithm': 'economic_ensemble', 'record_kind': 'recommendation',
+                    'decision_event_id': event_id,
+                }
+
+            self.assertEqual(ledger.record_live_many([live('p1', '2026-10-01T12:00:00+00:00')]), 1)
+            self.assertEqual(ledger.record_live_many([live('p2', '2026-10-01T12:00:01+00:00')]), 1)
+            evidence = ledger.recommendation_performance('OU', '2.25', 'over')
+            self.assertEqual(evidence['decision_count'], 2)
+            self.assertEqual(evidence['decision_occurrences'], 2)
+            self.assertEqual(evidence['hit_count'], 0)
+            self.assertEqual(evidence['pending_decisions'], 2)
+
+            # Retrying the same publication must not increment the counter again.
+            self.assertEqual(ledger.record_live_many([live('p2', '2026-10-01T12:00:01+00:00')]), 0)
+            self.assertEqual(ledger.recommendation_performance('OU', '2.25', 'over')['decision_count'], 2)
+
     def test_live_recommendations_restores_latest_pick_by_match(self):
         with tempfile.TemporaryDirectory() as root:
             ledger = DecisionLedger(root)
@@ -172,6 +201,22 @@ class LedgerDatabaseTests(unittest.TestCase):
             self.assertEqual(len(restored), 1)
             self.assertEqual(restored[0]['odds'], 2.1)
             self.assertEqual(ledger.live_recommendations(['missing']), {})
+
+    def test_calibration_generations_cannot_borrow_baseline_hits(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            ledger._append([
+                self.row(decision_id='base',status='won',trigger='live_recommendation',pnl=1),
+                self.row(decision_id='v1',status='lost',trigger='live_recommendation',pnl=-1,decision_model_version='v1'),
+                self.row(decision_id='v2',status='won',trigger='live_recommendation',pnl=1,decision_model_version='v2'),
+            ])
+            baseline = ledger.recommendation_performance('OU','2.25','over')
+            calibrated = ledger.recommendation_performance('OU','2.25','over',decision_model_version='v1')
+            self.assertEqual(baseline['hit_count'],1)
+            self.assertEqual(calibrated['hit_count'],0)
+            self.assertEqual(calibrated['roi'],-1)
+            self.assertEqual(calibrated['calibration_evidence_version'],'v1')
+            self.assertEqual(ledger.recommendation_performance('OU','2.25','over',decision_model_version='unknown')['settled_samples'],0)
 
     def test_recommendation_entries_include_pending_and_settled(self):
         with tempfile.TemporaryDirectory() as root:

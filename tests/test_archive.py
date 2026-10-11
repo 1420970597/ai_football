@@ -47,6 +47,40 @@ class FakeS3:
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_verified_stream_and_revision_survive_catalog_rebuild(self):
+        path = self.source('ledger/old.jsonl', b'old\n')
+        self.archive.migrate([path], cleanup=True)
+        with closing(self.archive._db()) as db:
+            db.row_factory = sqlite3.Row
+            original = dict(db.execute('SELECT * FROM files').fetchone())
+        staged = self.root / 'stage'
+        self.archive.copy_verified(original, staged)
+        self.assertEqual(staged.read_bytes(), b'old\n')
+        staged.write_bytes(b'corrected\n')
+        self.archive.revise(path, staged)
+        self.assertEqual(self.archive.read_many([path])[path], b'corrected\n')
+        self.archive.rebuild_catalog()
+        self.assertEqual(self.archive.read_many([path])[path], b'corrected\n')
+        self.archive.copy_verified(original, staged)
+        self.assertEqual(staged.read_bytes(), b'old\n')
+        self.client.corrupt = True
+        with self.assertRaises((OSError, __import__('zlib').error)):
+            self.archive.copy_verified(original, staged)
+        self.assertFalse(staged.exists())
+
+    def test_parallel_ranges_preserve_compressed_member_order(self):
+        raw = bytes(range(256))*100
+        path = self.source('ledger/data.jsonl',raw)
+        self.archive.migrate([path],cleanup=True)
+        with closing(self.archive._db()) as db:
+            db.row_factory = sqlite3.Row
+            record = dict(db.execute('SELECT * FROM files').fetchone())
+        target = self.root/'streamed'
+        with patch('store.archive.READ_CHUNK_BYTES',13):
+            self.archive.copy_verified(record,target)
+            self.archive.verify_pack(record['object_key'])
+        self.assertEqual(target.read_bytes(),raw)
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

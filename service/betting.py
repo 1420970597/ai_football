@@ -33,14 +33,21 @@ class BettingRecomputeNeeded(BettingBlocked):
 
 
 class BettingLatencyExceeded(BettingRecomputeNeeded):
-    """The original quote's two-second budget expired before submission."""
+    """Backward-compatible name for an obsolete latency-budget failure."""
 
 
 VENUE_BET_PATH = "/yewu13/v1/betOrder/client/bet"
 ENSEMBLE_ALGORITHM = "economic_ensemble"
 EXECUTOR_QUEUE_LIMIT = 256
 BLOCKED_RECHECK_S = 30.0
-EXECUTION_BUDGET_S = 2.0
+LATENCY_TARGET_S = 2.0
+# Compatibility alias for callers that imported the old metric name. It is a
+# target for telemetry only and is never used to reject a business operation.
+EXECUTION_BUDGET_S = LATENCY_TARGET_S
+# These waits bound resource contention and persistence confirmation. They are
+# transport safeguards, not business deadlines for a selected quote.
+SUBMISSION_LOCK_WAIT_S = 15.0
+PERSISTENCE_CONFIRM_TIMEOUT_S = 5.0
 LOGGER = logging.getLogger(__name__)
 
 
@@ -62,7 +69,7 @@ def betting_capability(config: Any) -> dict[str, Any]:
         "execution_supported": True,
         "execution_enabled": bool(getattr(config, "betting_enabled", False)),
         "mode": "automatic_single",
-        "reason": "开启后自动提交满足门控的经济学综合推荐；关闭后不再提交新订单。",
+        "reason": "开启后自动提交满足决策出现次数等门控的经济学综合推荐；关闭后不再提交新订单。",
     }
 
 
@@ -176,7 +183,7 @@ class BetPlan:
     outcome: str
     stake: float
     confidence: float
-    hit_count: float
+    decision_count: float
     mode: str
     executable: bool = True
 
@@ -185,7 +192,10 @@ class BetPlan:
             "match_id": self.match_id, "market": self.market,
             "line": self.line, "outcome": self.outcome,
             "stake": self.stake, "confidence": self.confidence,
-            "hit_count": self.hit_count, "mode": self.mode,
+            # Keep hit_count as a compatibility alias; the execution gate now
+            # uses the explicitly named decision occurrence count.
+            "decision_count": self.decision_count,
+            "hit_count": self.decision_count, "mode": self.mode,
             "executable": self.executable,
         }
 
@@ -201,7 +211,7 @@ def _number(value: Any, name: str) -> float:
 
 
 def recommendation_confidence(pick: Mapping[str, Any], evidence: Mapping[str, Any], *, stale: bool = False) -> float:
-    """Shared board/execution confidence using settled quote evidence."""
+    """Shared board/execution confidence using settled outcome evidence."""
     samples = _number(evidence.get("settled_samples", 0) or 0, "已结算样本")
     observed = (_number(evidence.get("hit_count", 0) or 0, "命中次数") + 1) / (samples + 2)
     base = _number(pick.get("confidence") or pick.get("p_model") or 0, "置信度")
@@ -214,9 +224,8 @@ def plan_bet(pick: Mapping[str, Any], config: Any,
     """Validate a recommendation and calculate its configured stake.
 
     ``pick`` must contain the ensemble recommendation's confidence and its
-    historical hit count.  Hit count is intentionally checked before stake
-    calculation, so a high confidence with no settled evidence cannot result
-    in an order plan.
+    decision occurrence count.  Settled outcome statistics remain separate
+    evidence and are not treated as a decision occurrence.
     """
     if not bool(getattr(config, "betting_enabled", False)):
         raise BettingBlocked("投注功能未启用")
@@ -230,17 +239,26 @@ def plan_bet(pick: Mapping[str, Any], config: Any,
         raise BettingBlocked("比赛不在进行中")
     if not market_open:
         raise BettingBlocked("盘口已关闭或暂停")
-    hit_count = _number(pick.get("hit_count", pick.get("historical_hit_count", 0)), "盘口命中次数")
+    uses_decision_occurrences = ('decision_count' in pick or 'decision_occurrences' in pick)
+    decision_count = _number(
+        pick.get("decision_count", pick.get("decision_occurrences", pick.get("hit_count", 0))),
+        "决策出现次数")
     minimum = _number(getattr(config, "betting_min_hit_count", 3), "最小命中次数")
-    if hit_count < minimum:
-        raise BettingBlocked("盘口历史命中次数不足（%.0f/%g）" % (hit_count, minimum))
+    if decision_count < minimum:
+        raise BettingBlocked("投注所需命中次数不足（决策出现次数 %.0f/%g）" % (decision_count, minimum))
     from core.live_model import MODEL_VERSION
+    if (pick.get('decision_model_version') or '') != (pick.get('calibration_evidence_version') or ''):
+        raise BettingBlocked('校准模型尚无同版本独立结算证据')
     if pick.get('model_version') != MODEL_VERSION:
         raise BettingBlocked('历史证据来自未核验的模型版本')
-    if _number(pick.get('independent_matches', 0), '独立比赛样本') < minimum:
-        raise BettingBlocked('修复后的独立比赛样本不足')
-    if pick.get('roi') is None or _number(pick['roi'], '历史收益率') <= 0:
-        raise BettingBlocked('修复后的历史收益率尚未为正')
+    if not uses_decision_occurrences:
+        # Legacy callers that only provide hit_count retain the old strict
+        # evidence gate. New live recommendations use decision_count, where
+        # the configured threshold is explicitly an occurrence threshold.
+        if _number(pick.get('independent_matches', 0), '独立比赛样本') < minimum:
+            raise BettingBlocked('修复后的独立比赛样本不足')
+        if pick.get('roi') is None or _number(pick['roi'], '历史收益率') <= 0:
+            raise BettingBlocked('修复后的历史收益率尚未为正')
     confidence = min(1.0, max(0.0, _number(
         pick.get("composite_confidence", pick.get("confidence", 0)), "综合置信度")))
     base = _number(getattr(config, "betting_fixed_stake", 10.0), "固定额度")
@@ -259,7 +277,7 @@ def plan_bet(pick: Mapping[str, Any], config: Any,
     if not match_id or not market or not outcome:
         raise BettingBlocked("盘口缺少比赛、玩法或选项标识")
     return BetPlan(match_id, market, str(pick.get("line") or ""), outcome,
-                   round(stake, 2), round(confidence, 6), hit_count, mode)
+                   round(stake, 2), round(confidence, 6), decision_count, mode)
 
 
 def preview_bet(pick: Mapping[str, Any], config: Any, **kwargs: Any) -> dict[str, Any]:
@@ -331,7 +349,7 @@ class BettingExecutor:
         self._schema_ready = False
         self._submit_latency: deque = deque(maxlen=2048)
         self._receipt_latency: deque = deque(maxlen=2048)
-        self._deadline_misses = 0
+        self._latency_target_misses = 0
         self._submissions = 0
         self._within_budget = 0
         self._queue: dict[str, dict[str, Any]] = {}
@@ -620,11 +638,6 @@ class BettingExecutor:
                 self._client, self._client_key = client, key
             return client
 
-    @staticmethod
-    def _check_budget(deadline: float) -> None:
-        if time.monotonic() >= deadline:
-            raise BettingLatencyExceeded('最新盘口至提交已超过两秒预算，等待新报价重新计算')
-
     def _ready_account_client(self, default_factory: Callable[[], Any]) -> Any:
         if self.client_factory is not None or os.environ.get('LEYU_FAST_BETTING', '').lower() not in ('1', 'true'):
             return self._account_client(default_factory)
@@ -665,8 +678,9 @@ class BettingExecutor:
             invalid_clock = not math.isfinite(received) or received > started+0.01
         except (TypeError, ValueError, OverflowError):
             invalid_clock = True
-        deadline = received+EXECUTION_BUDGET_S
-        result.update(budget_ms=2000, quote_received_at_ms=pick.get('quote_received_at_ms'),
+        target_ms = int(LATENCY_TARGET_S * 1000)
+        result.update(budget_ms=target_ms, latency_target_ms=target_ms,
+                      quote_received_at_ms=pick.get('quote_received_at_ms'),
                       source_quote_at_ms=pick.get('ts_ms'),
                       quote_to_execute_ms=round(max(0.0, started-received)*1000, 3),
                       decision_compute_ms=row.get('full_compute_ms'), timings_ms={})
@@ -676,7 +690,6 @@ class BettingExecutor:
             now = time.monotonic()
             result['timings_ms'][stage] = round((now-stage_started)*1000, 3)
             stage, stage_started = name, now
-            self._check_budget(deadline)
         with self._lock:
             path = self.path
             blocked = self._blocked.get(identity)
@@ -734,7 +747,8 @@ class BettingExecutor:
                 raise BettingRecomputeNeeded('尚未接收到该盘口的新报价，不能使用重启恢复的接收时钟')
             enter_stage('historical_evidence')
             evidence = self.ledger().recommendation_performance(
-                str(pick["market"]), str(pick.get("line") or ""), str(pick["outcome"]))
+                str(pick["market"]), str(pick.get("line") or ""), str(pick["outcome"]),
+                decision_model_version=str(pick.get("decision_model_version") or ""))
             confidence = recommendation_confidence(pick, evidence)
             plan = plan_bet({**pick, **evidence, "match_id": mid, "composite_confidence": confidence}, cfg)
             detail = build_ybty_order_detail({**pick, **metadata}, plan.stake)
@@ -749,16 +763,14 @@ class BettingExecutor:
             client = self._ready_account_client(account_client_from_env)
             if client is None:
                 raise BettingBlocked("未配置乐鱼 App 账户会话")
-            if getattr(client, 'supports_deadline', False) is True:
-                detail = client.prepare_bet(detail, plan.stake, deadline=deadline-0.05)
-            else:
-                detail = client.prepare_bet(detail, plan.stake)
+            # The latency target is measured below; it is never passed to the
+            # provider as an absolute business deadline.
+            detail = client.prepare_bet(detail, plan.stake)
             payload = build_ybty_bet_payload({"order_detail": detail}, plan.stake)
             enter_stage('submit_queue')
-            if not self._submission_lock.acquire(timeout=max(0.0, deadline-time.monotonic())):
-                raise BettingLatencyExceeded('提交队列超过两秒预算，等待新报价')
+            if not self._submission_lock.acquire(timeout=SUBMISSION_LOCK_WAIT_S):
+                raise BetPreflightRetryable('提交队列繁忙，稍后重试')
             submit_owned = True
-            self._check_budget(deadline)
             current, current_version = self.settings.snapshot()
             final = hub.decision_snapshot(mid)
             enter_stage('final_quote')
@@ -780,8 +792,8 @@ class BettingExecutor:
             result['publication_id'] = final_row.get('publication_id')
             if self.on_persisted:
                 enter_stage('decision_persistence')
-                if not self.on_persisted(final_row, max(0.0, deadline-time.monotonic()-0.05)):
-                    raise BettingLatencyExceeded('完整决策记录未在两秒预算内持久化，等待重新计算')
+                if not self.on_persisted(final_row, PERSISTENCE_CONFIRM_TIMEOUT_S):
+                    raise BetPreflightRetryable('完整决策记录未能持久化，无法安全下注')
             enter_stage('durable_claim')
             sending = {**result, "status": "sending", "reason": "已提交发送意图，等待场馆回执"}
             try:
@@ -792,9 +804,6 @@ class BettingExecutor:
                 if previous is not None:
                     db.rollback()
                     return previous
-                # Leave time for the fsync and socket send; deadlines are never
-                # renewed when a newer row happens to appear during preflight.
-                self._check_budget(deadline-0.025)
                 self.settings.claim_bet(version, lambda: db.execute("""INSERT INTO orders
                     (identity,at,status,payload,selection_key,account_key) VALUES (?,?,?,?,?,?)""", (
                     identity, time.time(), "sending", json.dumps(sending, ensure_ascii=False),
@@ -807,10 +816,9 @@ class BettingExecutor:
             enter_stage('submission')
             submission_started = time.monotonic()
             try:
-                if getattr(client, 'supports_deadline', False) is True:
-                    result.update(client.submit_bet(payload, deadline=deadline))
-                else:
-                    result.update(client.submit_bet(payload))
+                # The client may record the socket-send timestamp in fast mode,
+                # but it always uses its normal network timeout.
+                result.update(client.submit_bet(payload))
             except BetSubmissionRejected as exc:
                 result.update(status="rejected", reason=str(exc))
             except (BetSubmissionUnknown, SessionError) as exc:
@@ -819,13 +827,14 @@ class BettingExecutor:
                     else submission_started)
             if sent is not None:
                 latency = max(0.0, (sent-received)*1000)
-                result.update(quote_to_submit_ms=round(latency, 3), latency_target_met=latency <= 2000,
+                result.update(quote_to_submit_ms=round(latency, 3), latency_target_met=latency <= target_ms,
                               quote_to_receipt_ms=round((time.monotonic()-received)*1000, 3))
                 with self._lock:
                     self._submit_latency.append(latency)
                     self._receipt_latency.append(result['quote_to_receipt_ms'])
                     self._submissions += 1
-                    self._within_budget += int(latency <= 2000)
+                    self._within_budget += int(latency <= target_ms)
+                    self._latency_target_misses += int(latency > target_ms)
             else:
                 result.update(latency_target_met=None, send_time_unknown=True)
             result['timings_ms'][stage] = round((time.monotonic()-stage_started)*1000, 3)
@@ -842,13 +851,10 @@ class BettingExecutor:
             result.update(stage=stage, elapsed_ms=round((time.monotonic() - started) * 1000, 1))
             result['timings_ms'][stage] = round((time.monotonic()-stage_started)*1000, 3)
             if isinstance(exc, (BettingLatencyExceeded, BetPreflightBudgetExpired)):
-                result.update(deadline_exceeded=True, latency_target_met=False)
-                with self._lock:
-                    self._deadline_misses += 1
-            elif not claimed and time.monotonic() >= deadline:
-                result.update(deadline_exceeded=True, latency_target_met=False)
-                with self._lock:
-                    self._deadline_misses += 1
+                # Kept only for compatibility with older clients. A transport
+                # timeout is retryable, but never means that a quote must be
+                # discarded solely because the 2-second target was missed.
+                result.update(latency_target_met=False)
             if claimed:
                 result.update(status="unknown", submitted=None, reason="提交结果未知；请核对场馆注单，不会自动重发")
             else:
@@ -860,7 +866,7 @@ class BettingExecutor:
                 retryable = recompute or isinstance(exc, BetPreflightRetryable)
                 if isinstance(exc, BetPreflightRetryable):
                     self._warm_wake.set()
-                wait_quote = bool(result.get('deadline_exceeded'))
+                wait_quote = False
                 exhausted = retryable and attempt >= cfg.betting_retry_max_attempts
                 delay = (min(BLOCKED_RECHECK_S, cfg.betting_retry_base_delay_s * 2 ** (attempt - 1))
                          if retryable and not exhausted else BLOCKED_RECHECK_S)
@@ -987,9 +993,14 @@ class BettingExecutor:
                 "retry_policy": {"max_attempts": cfg.betting_retry_max_attempts,
                                  "base_delay_s": cfg.betting_retry_base_delay_s},
                 'session_warmup': self._warm_state,
-                'latency': {'budget_ms': 2000, 'basis': 'selected_quote_receive_to_socket_send',
+                'latency': {'budget_ms': int(LATENCY_TARGET_S * 1000),
+                            'latency_target_ms': int(LATENCY_TARGET_S * 1000),
+                            'basis': 'selected_quote_receive_to_socket_send',
                             'submissions': self._submissions, 'within_budget': self._within_budget,
-                            'deadline_blocked': self._deadline_misses,
+                            'target_misses': self._latency_target_misses,
+                            # Kept for older dashboards; this is no longer a
+                            # count of orders blocked by the latency target.
+                            'deadline_blocked': 0,
                             'quote_to_submit_ms': percentiles(list(self._submit_latency)),
                             'quote_to_receipt_ms': percentiles(list(self._receipt_latency))},
                 "reason": reason, "last_result": last, "orders": orders}

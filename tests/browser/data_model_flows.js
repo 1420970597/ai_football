@@ -7,9 +7,9 @@ async (page) => {
     settings:{algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',min_probability:.52,min_ev:.02,
       quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
       weight_prior_matches:20,max_algorithm_weight:.6,algorithm_alert_enabled:true,algorithm_alert_min_samples:30,algorithm_alert_threshold:.5,
-      betting_enabled:false,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_min_hit_count:3,
+      betting_enabled:false,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_min_hit_count:3,betting_retry_max_attempts:5,betting_retry_base_delay_s:2,
       llm_enabled:false,llm_experiment_enabled:true,llm_base_url:'',llm_model:'',llm_fallback_models:'',llm_timeout_s:20,llm_temperature:.2,llm_max_tokens:2048,llm_interval_s:60,llm_review_max_age_s:120,
-      model_training_enabled:true,model_training_matches:100,model_training_cpu:1,model_training_memory_mb:512}};
+      model_shadow_enabled:true,model_training_enabled:true,model_training_matches:100,model_training_cpu:1,model_training_memory_mb:512}};
   const fixture={model:{},training:{state:'waiting',eligible_matches:42,new_matches:42},settings:{cycle_matches:100,cpu_cores:1,memory_mb:512},running:true,
     note:'独立观察预测，走势冻结在决策输入截点。',prospective:{},storage:{at:'2026-10-10T08:00:00Z',bytes:1073741824,files:99,
     disk:{total:100*1073741824,used:80*1073741824,free:20*1073741824},records:{decisions:1234,matches:42,settled_decisions:900},categories:[{name:'走势',files:99,bytes:1073741824,allocated_bytes:1073741824}]}};
@@ -56,7 +56,10 @@ async (page) => {
   await page.locator('#nav-settings').click();
   await page.locator('#setting-min_ev').fill('0.07');
   await page.locator('#settings-categories').getByRole('button',{name:'数据与模型',exact:true}).click();
-  assert(await page.locator('#setting-model_training_matches').isVisible(),'three level default group');
+  assert(await page.locator('#setting-model_shadow_enabled').isVisible(),'model mode switch shown');
+  await page.locator('#setting-model_shadow_enabled').uncheck();
+  await page.locator('#settings-groups').getByRole('button',{name:'更新周期',exact:true}).click();
+  assert(await page.locator('#setting-model_training_matches').isVisible(),'training cycle group shown');
   await page.locator('#setting-model_training_matches').fill('12');
   await page.locator('#settings-groups').getByRole('button',{name:'资源限制',exact:true}).click();
   await page.locator('#setting-model_training_cpu').fill('2');
@@ -66,6 +69,7 @@ async (page) => {
   assert(await page.locator('#setting-min_ev').inputValue()==='0.07','draft retained across categories');
   await page.locator('#settings-save').click();
   await page.getByText('v2 已生效',{exact:true}).waitFor();
+  assert(saved.settings.model_shadow_enabled===false,'model mode saved');
   assert(saved.settings.model_training_cpu===2 && saved.settings.model_training_memory_mb===768 && saved.settings.model_training_matches===12,'hidden groups submitted');
   await page.locator('#settings-categories').getByRole('button',{name:'数据与模型',exact:true}).click();
   await page.locator('#settings-groups').getByRole('button',{name:'资源限制',exact:true}).click();

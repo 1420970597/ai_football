@@ -23,6 +23,32 @@ def decision():
 
 
 class TrainingDataTests(unittest.TestCase):
+    def test_training_sample_is_bounded_reproducible_and_result_independent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = LedgerDB(root/'ledger.sqlite3')
+            final = {'match_id':'m1', 'at':'2025-01-01T12:00:00+00:00',
+                     'settled_at':'2025-01-01T14:00:00+00:00', 'competition_type':'real',
+                     'status':'won', 'ft_score':[2,1], 'ht_score':[1,0]}
+            db.put([final], lambda _:1.0)
+            db.connection.commit()
+            path = root/'inputs.sqlite3'
+            write_inputs(path, snapshot_inputs(decision()))
+            quality = {}
+            a = dataset(db.path,path,max_per_match=3,audit=quality)
+            b = dataset(db.path,path,max_per_match=3)
+            self.assertEqual(a,b)
+            self.assertEqual(len(a),3)
+            self.assertEqual(quality['source_eligible_decisions'],8)
+            final['ft_score'] = [0,3]
+            final['ht_score'] = [0,1]
+            db.put([final],lambda _:2.0)
+            db.connection.commit()
+            c = dataset(db.path,path,max_per_match=3)
+            self.assertEqual([r['x'] for r in a],[r['x'] for r in c])
+            with self.assertRaises(ValueError):
+                dataset(db.path,path,max_per_match=0)
+
     def test_old_features_are_quarantined_without_relabeling_as_clean(self):
         old = decision()
         old['model_version'] = 'live-poisson-market-v1'

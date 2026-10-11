@@ -67,3 +67,20 @@ class ModelServiceTests(unittest.TestCase):
             import sqlite3
             with sqlite3.connect(Path(root)/'models'/'inputs.sqlite3') as con:
                 self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0],16)
+
+    def test_replay_reloads_cursor_after_repaired_gzip_replacement(self):
+        from service.model_training import atomic_json
+        with tempfile.TemporaryDirectory() as root:
+            ledger = Path(root)/'ledger'
+            ledger.mkdir()
+            path = ledger/'live-replay.2025010100.jsonl.gz'
+            path.write_bytes(gzip.compress((json.dumps(decision())+'\n').encode()))
+            worker = ModelService()
+            worker.bind(str(ledger))
+            worker._consume_replay()
+            cursor_path = Path(root)/'models'/'replay-cursor.json'
+            revised = gzip.compress((json.dumps({**decision(),'computed_at':'2025-01-01T12:01:00+00:00'})+'\n').encode())
+            path.write_bytes(revised)
+            atomic_json(cursor_path, {path.name: len(revised)})
+            worker._consume_replay()
+            self.assertEqual(worker._cursor[path.name], len(revised))

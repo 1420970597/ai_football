@@ -126,11 +126,23 @@ class DataModelService:
                 out['training']['error'] = error
             if not self.cfg.model_training_enabled:
                 out['training']['state'] = 'disabled'
-            out['settings'] = {'enabled': self.cfg.model_training_enabled,
+            out['mode'] = 'shadow' if self.cfg.model_shadow_enabled else 'active'
+            out['settings'] = {'enabled': self.cfg.model_training_enabled, 'shadow_enabled': self.cfg.model_shadow_enabled,
                                'cycle_matches': self.cfg.model_training_matches,
                                'cpu_cores': self.cfg.model_training_cpu,
                                'memory_mb': self.cfg.model_training_memory_mb}
             if self.root is not None:
+                repair_path = self.root.parent / '_archive' / 'repairs' / 'task42' / 'status.json'
+                try:
+                    if repair_path.exists():
+                        repair = json.loads(repair_path.read_text())
+                        out['history_repair'] = repair
+                        if repair.get('phase') == 'repairing' and not alive and self.cfg.model_training_enabled:
+                            out['training']['state'] = 'restoring'
+                            out['training']['error'] = ''
+                            out['note'] = '历史数据正在恢复，完成后重新训练；实际模式在没有合格模型时使用经济算法。'
+                except (OSError, ValueError):
+                    out['history_repair'] = {'error':'历史修复状态暂不可读取'}
                 disk = shutil.disk_usage(self.root.parent)
                 out.setdefault('storage', {})['disk'] = {'total': disk.total, 'used': disk.used, 'free': disk.free}
                 path = self.root.parent / '_archive' / 'status.json'

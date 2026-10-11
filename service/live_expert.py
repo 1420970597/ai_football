@@ -270,6 +270,8 @@ class LiveExpertService:
     def compute(self, snapshot: Mapping[str, Any], hub: Any,
                 first_event_at: Optional[float] = None) -> Dict[str, Any]:
         started = time.perf_counter()
+        if self.journal_root:
+            snapshot = {**snapshot, '_model_path': str(Path(self.journal_root).parent / 'models' / 'active.json')}
         calculation_pool = self.calculation_pool
         record: Any = None
         frozen_ms = 0.0
@@ -331,7 +333,19 @@ class LiveExpertService:
                         for forecast in items:
                             key = (mid, evaluation['algorithm'], forecast['market'],
                                    str(forecast.get('line', '')), record_kind)
-                            if key not in self._recorded and key not in self._decisions and key not in self._recording:
+                            if record_kind == 'recommendation':
+                                # A recommendation is an occurrence event. Coalesce
+                                # events waiting for the writer, then let the ledger
+                                # add the accumulated count idempotently.
+                                key = key + (str(forecast.get('outcome') or ''),)
+                                queued = self._decisions.get(key)
+                                count = int((queued or {}).get('decision_count', 0) or 0) + 1
+                                self._decisions[key] = {
+                                    **result, 'forecast': forecast, 'record_kind': record_kind,
+                                    'algorithm': evaluation['algorithm'], 'decision_count': count,
+                                    'decision_event_id': result['publication_id'],
+                                }
+                            elif key not in self._recorded and key not in self._decisions and key not in self._recording:
                                 self._decisions[key] = {**result, 'forecast': forecast, 'record_kind': record_kind,
                                                         'algorithm': evaluation['algorithm']}
             result['recording_status'] = ('queued' if any(k[0] == mid for k in self._decisions)
@@ -505,8 +519,49 @@ class LiveExpertService:
                 rates = (anchor['h'] * fraction, anchor['a'] * fraction)
             else:
                 reasons.append('没有可拟合的全场大小球盘口')
-        consensuses = {(m['market'], m['line']): self._market_consensus(m, cfg.devig_spread_warn_pp)
-                       for m in markets if not reasons and m['supported'] and m['fresh'] and m['complete']}
+        evaluations = self.evaluate_markets(markets, score, elapsed_s, current_rates, rates,
+                                            performance, cfg, direction_available, not reasons)
+        primary = next(e for e in evaluations if e['algorithm'] == cfg.primary_algorithm)
+        ensemble = pool(evaluations, performance, cfg)
+        baseline_ensemble = copy.deepcopy(ensemble)
+        if not cfg.model_shadow_enabled:
+            # Lazy import: inference executes in the isolated live calculation process.
+            from core.learned_decision import calibrate
+            ensemble = calibrate(ensemble, evaluations, snapshot, cfg, MODEL_VERSION)
+        candidates = ensemble['candidates']
+        picks = ensemble['recommendations']
+        if not direction_available:
+            reasons.append('缺少独赢盘口，球队进球强度无法分别识别')
+        reasons.append('市场基准模型，独立预测优势待验证')
+        return {
+            'match_id': mid, **info, 'competition_type': kind, 'version': snapshot['version'],
+            'model_version': MODEL_VERSION, 'config_version': self.config_version,
+            'algorithm': 'economic_ensemble', 'computed_at': datetime.now(timezone.utc).isoformat(),
+            'published_at_ms': int(now * 1000), 'quote_time_ms': newest,
+            'score': list(score) if score is not None else None, 'phase': phase,
+            'clock': clock_label(status.get('mst'), phase), 'elapsed_s': elapsed_s,
+            'finished': bool(snapshot.get('finished')) or phase == '999', 'suspended': bool(snapshot.get('suspended')),
+            'markets': markets, 'candidates': candidates, 'probabilities': {c['outcome']:c['p_model'] for c in candidates if c['market']=='HAD'},
+            'remaining_goals': primary['remaining_goals'], 'evaluations': evaluations,
+            'forecasts': ensemble['forecasts'], 'ensemble': ensemble, 'baseline_ensemble': baseline_ensemble, 'algorithm_performance': performance,
+            'market_coverage': {'total': len(markets), 'complete': sum(m['complete'] for m in markets),
+                                'fresh': sum(m['fresh'] for m in markets),
+                                'valued': sum(m['complete'] and m['fresh'] and m['supported'] for m in markets)},
+            'reasons': list(dict.fromkeys(reasons)),
+            'decision': 'recommend' if picks else 'forecast' if ensemble['forecasts'] else 'observe',
+            'picks': picks, 'has_buy': bool(picks),
+            'validation_status': 'research', 'llm_used': False,
+            'events': list(snapshot.get('events') or [])[-12:],
+            'note': '概率是研究基准。以即时比分、比赛时间和当前报价计算；未知事件码未映射为红牌或xG。',
+        }
+
+    @classmethod
+    def evaluate_markets(cls, markets: Sequence[Mapping[str, Any]], score: Any, elapsed_s: Any,
+                         current_rates: Any, rates: Any, performance: Mapping[str, Any],
+                         cfg: RuntimeConfig, direction_available: bool, enabled: bool = True) -> List[Dict[str, Any]]:
+        """Value immutable markets identically for live decisions and historical repair."""
+        consensuses = {(m['market'], m['line']): cls._market_consensus(m, cfg.devig_spread_warn_pp)
+                       for m in markets if enabled and m['supported'] and m['fresh'] and m['complete']}
         payments: Dict[tuple, Any] = {}
         distributions: Dict[tuple, Any] = {}
         evaluations: List[Dict[str, Any]] = []
@@ -613,34 +668,7 @@ class LiveExpertService:
                                                     and c['p_model'] >= cfg.min_probability
                                                     and c['effective_ev'] >= cfg.min_ev
                                                     and c['tail'] < .001]})
-        primary = next(e for e in evaluations if e['algorithm'] == cfg.primary_algorithm)
-        ensemble = pool(evaluations, performance, cfg)
-        candidates = ensemble['candidates']
-        picks = ensemble['recommendations']
-        if not direction_available:
-            reasons.append('缺少独赢盘口，球队进球强度无法分别识别')
-        reasons.append('市场基准模型，独立预测优势待验证')
-        return {
-            'match_id': mid, **info, 'competition_type': kind, 'version': snapshot['version'],
-            'model_version': MODEL_VERSION, 'config_version': self.config_version,
-            'algorithm': 'economic_ensemble', 'computed_at': datetime.now(timezone.utc).isoformat(),
-            'published_at_ms': int(now * 1000), 'quote_time_ms': newest,
-            'score': list(score) if score is not None else None, 'phase': phase,
-            'clock': clock_label(status.get('mst'), phase), 'elapsed_s': elapsed_s,
-            'finished': bool(snapshot.get('finished')) or phase == '999', 'suspended': bool(snapshot.get('suspended')),
-            'markets': markets, 'candidates': candidates, 'probabilities': {c['outcome']:c['p_model'] for c in candidates if c['market']=='HAD'},
-            'remaining_goals': primary['remaining_goals'], 'evaluations': evaluations,
-            'forecasts': ensemble['forecasts'], 'ensemble': ensemble, 'algorithm_performance': performance,
-            'market_coverage': {'total': len(markets), 'complete': sum(m['complete'] for m in markets),
-                                'fresh': sum(m['fresh'] for m in markets),
-                                'valued': sum(m['complete'] and m['fresh'] and m['supported'] for m in markets)},
-            'reasons': list(dict.fromkeys(reasons)),
-            'decision': 'recommend' if picks else 'forecast' if ensemble['forecasts'] else 'observe',
-            'picks': picks, 'has_buy': bool(picks),
-            'validation_status': 'research', 'llm_used': False,
-            'events': list(snapshot.get('events') or [])[-12:],
-            'note': '概率是研究基准。以即时比分、比赛时间和当前报价计算；未知事件码未映射为红牌或xG。',
-        }
+        return evaluations
 
     @staticmethod
     def _devig(inv: Sequence[float], method: str) -> List[float]:

@@ -19,6 +19,7 @@ FIELDS = {
     'trigger': 'TEXT', 'decision': 'TEXT', 'market': 'TEXT', 'league': 'TEXT',
     'line': 'TEXT', 'outcome': 'TEXT',
     'config_version': 'INTEGER', 'status': 'TEXT', 'is_pick': 'INTEGER',
+    'decision_count': 'INTEGER', 'decision_event_id': 'TEXT',
     'is_live': 'INTEGER', 'odds': 'REAL', 'pnl': 'REAL', 'confidence': 'REAL',
     'kelly': 'REAL', 'p_fused': 'REAL', 'p_market': 'REAL', 'closing_odds': 'REAL',
     'settled_at': 'TEXT', 'decision_id': 'TEXT', 'experiment_id': 'TEXT',
@@ -41,15 +42,20 @@ class LedgerDB:
         self.connection.execute('CREATE TABLE IF NOT EXISTS decisions '
                                 '(identity TEXT PRIMARY KEY, revision REAL, payload TEXT,' + columns + ')')
         existing = {row[1] for row in self.connection.execute('PRAGMA table_info(decisions)')}
-        missing = [name for name in ('line', 'outcome', 'model_version') if name not in existing]
+        missing = [name for name in ('line', 'outcome', 'model_version',
+                                     'decision_count', 'decision_event_id') if name not in existing]
         if missing:
             # Atomic migration: a crash must not leave added columns unfilled.
             with self.connection:
                 self.connection.execute('BEGIN IMMEDIATE')
                 for name in missing:
-                    self.connection.execute('ALTER TABLE decisions ADD COLUMN ' + name + ' TEXT')
-                    self.connection.execute('UPDATE decisions SET ' + name +
-                        "=coalesce(CAST(json_extract(payload,'$." + name + "') AS TEXT),'')")
+                    self.connection.execute('ALTER TABLE decisions ADD COLUMN ' + name + ' ' + FIELDS[name])
+                    if name == 'decision_count':
+                        self.connection.execute(
+                            "UPDATE decisions SET decision_count=coalesce(CAST(json_extract(payload,'$.decision_count') AS INTEGER),1)")
+                    else:
+                        self.connection.execute('UPDATE decisions SET ' + name +
+                            "=coalesce(CAST(json_extract(payload,'$." + name + "') AS TEXT),'')")
         for name, cols in {
             'history': 'competition_type,trigger,algorithm,at',
             'pending': 'status,match_id', 'date': 'at',

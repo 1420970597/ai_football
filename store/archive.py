@@ -3,22 +3,27 @@
 from __future__ import annotations
 
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 import gzip
 import hashlib
 import importlib
 import io
+from itertools import islice
 import json
 import os
 from pathlib import Path
 import sqlite3
 import tempfile
 import time
-from typing import Any, Iterable, Sequence, List
+from typing import Any, Iterable, Sequence, List, Mapping
 import uuid
+import zlib
 from functools import lru_cache
 
 PACK_BYTES = 32 * 1024**2
 BATCH_FILES = 2000
+READ_CHUNK_BYTES = 8 * 1024**2
+READ_CONCURRENCY = 4
 
 
 def storage_mode(root: Path) -> str:
@@ -118,6 +123,55 @@ class S3Archive:
                 is not None
             )
 
+    def _range_blocks(self, key: str, start: int, length: int) -> Iterable[bytes]:
+        """Ordered, bounded downloads shared by source and full-object checks."""
+        def fetch(offset: int) -> bytes:
+            count = min(READ_CHUNK_BYTES, length-offset)
+            response = self.client.get_object(Bucket=self.bucket, Key=key,
+                                              Range=f'bytes={start+offset}-{start+offset+count-1}')
+            body = response['Body']
+            try:
+                block = body.read()
+                if len(block) != count:
+                    raise OSError('冻结归档返回不完整范围')
+                return block
+            finally:
+                body.close()
+        with ThreadPoolExecutor(max_workers=READ_CONCURRENCY) as executor:
+            offsets = iter(range(0,length,READ_CHUNK_BYTES))
+            pending_ranges = [(offset,executor.submit(fetch,offset))
+                              for offset in list(islice(offsets, READ_CONCURRENCY))]
+            while pending_ranges:
+                _, future = pending_ranges.pop(0)
+                block = future.result()
+                next_offset = next(offsets,None)
+                if next_offset is not None:
+                    pending_ranges.append((next_offset,executor.submit(fetch,next_offset)))
+                yield block
+
+    def copy_verified(self, record: Mapping[str, Any], target: Path) -> None:
+        """Stream one frozen catalogue member, including multi-GB gzip journals."""
+        start, length = record['offset'], record['compressed']
+        decoder, digest, size, received = zlib.decompressobj(31), hashlib.sha256(), 0, 0
+        try:
+            with target.open('wb') as file:
+                for block in self._range_blocks(record['object_key'], start, length):
+                    received += len(block)
+                    # Limit expansion independently of source compression ratio.
+                    pending = block
+                    while pending:
+                        raw = decoder.decompress(pending, 1024**2)
+                        pending = decoder.unconsumed_tail
+                        file.write(raw)
+                        digest.update(raw)
+                        size += len(raw)
+                if (received != length or not decoder.eof or decoder.unused_data or
+                        size != record['size'] or digest.hexdigest() != record['sha256']):
+                    raise OSError('冻结归档成员长度或 SHA256 校验失败')
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+
     def read_many(self, paths: Iterable[Path]) -> dict[Path, bytes]:
         result = {}
         remote: dict[str, list[tuple[Path, int, int, int, str]]] = {}
@@ -165,19 +219,11 @@ class S3Archive:
             ExtraArgs={"Metadata": {"sha256": digest}},
             Config=self._transfer_config,
         )
-        response = self.client.get_object(Bucket=self.bucket, Key=key)
         actual = hashlib.sha256()
         total = 0
-        body = response["Body"]
-        try:
-            while True:
-                block = body.read(1024**2)
-                if not block:
-                    break
-                actual.update(block)
-                total += len(block)
-        finally:
-            body.close()
+        for block in self._range_blocks(key, 0, size):
+            actual.update(block)
+            total += len(block)
         if total != size or actual.hexdigest() != digest:
             raise OSError("S3 上传后回读 SHA256 校验失败")
 
@@ -209,7 +255,18 @@ class S3Archive:
             self._pack(batch, cleanup, totals)
         return totals
 
-    def _pack(self, paths: Sequence[Path], cleanup: bool, totals: dict[str, int]) -> None:
+    def revise(self, path: Path, source: Path) -> dict[str, int]:
+        """Publish a verified revision; immutable original packs stay recoverable."""
+        with closing(self._db()) as db:
+            old = db.execute('SELECT mtime_ns FROM files WHERE path=?', (self._relative(path),)).fetchone()
+        stamp = max(time.time_ns(), old[0] + 1 if old else 0)
+        os.utime(source, ns=(stamp, stamp))
+        totals = {"uploaded_files": 0, "uploaded_bytes": 0, "cleaned_files": 0, "cleaned_bytes": 0}
+        self._pack([source], False, totals, aliases={source: self._relative(path)})
+        return totals
+
+    def _pack(self, paths: Sequence[Path], cleanup: bool, totals: dict[str, int],
+              *, aliases: Mapping[Path, str] | None = None) -> None:
         records: List[dict[str, Any]] = []
         key = "ai-football/packs/" + uuid.uuid4().hex + ".pack"
         # Temporary pack is removed only after remote verification. Original
@@ -244,7 +301,7 @@ class S3Archive:
                     continue
                 records.append(
                     {
-                        "path": self._relative(path),
+                        "path": aliases[path] if aliases else self._relative(path),
                         "object_key": key,
                         "offset": offset,
                         "compressed": stream.tell() - offset,
@@ -330,15 +387,10 @@ class S3Archive:
             ).fetchone()
         if expected is None:
             raise OSError("归档缺少完整对象校验信息")
-        response = self.client.get_object(Bucket=self.bucket, Key=key)
         digest, size = hashlib.sha256(), 0
-        body = response["Body"]
-        try:
-            while block := body.read(1024**2):
-                digest.update(block)
-                size += len(block)
-        finally:
-            body.close()
+        for block in self._range_blocks(key, 0, expected[0]):
+            digest.update(block)
+            size += len(block)
         if (size, digest.hexdigest()) != tuple(expected):
             raise OSError("清理前远端归档校验失败")
 
