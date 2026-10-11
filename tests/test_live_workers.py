@@ -15,6 +15,26 @@ from tests import test_live_expert
 
 
 class LiveWorkersTests(unittest.TestCase):
+    def test_replay_flush_limit_preserves_unwritten_records_and_retries(self):
+        from unittest.mock import MagicMock
+        with tempfile.TemporaryDirectory() as root:
+            service = LiveExpertService()
+            service.journal_root = root
+            writer = MagicMock()
+            writer.path = Path(root)/'live-replay.jsonl.gz'
+            service._history = writer
+            service._journal.extend({'publication_id': str(i)} for i in range(100))
+            writer.append.side_effect = OSError('disk unavailable')
+            self.assertEqual(service.flush(max_decisions=3, include_decisions=False), 0)
+            self.assertEqual(len(service._journal), 100)
+            writer.append.side_effect = None
+            writer.append.return_value = 3
+            self.assertEqual(service.flush(max_decisions=3, include_decisions=False), 3)
+            self.assertEqual(len(writer.append.call_args.args[0]), 3)
+            self.assertEqual(len(service._journal), 97)
+            self.assertEqual(service._journal[0]['publication_id'], '3')
+            self.assertEqual(service._persisted_ids, {'0','1','2'})
+
     def test_scheduler_waits_when_all_pending_matches_belong_to_busy_shard(self):
         import time
         from unittest.mock import MagicMock

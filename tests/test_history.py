@@ -127,6 +127,82 @@ class TrendResumeTests(unittest.TestCase):
             self.assertEqual(hub.trend('m', '2', '2.5')['n'], 1)
 
 
+class PriceCacheLifecycleTests(unittest.TestCase):
+    def tick(self, mid='m', price=2.0):
+        return PriceTick(mid, '2', 'market', '2.5', 'over', 'Over', price, price,
+                         int(time.time()*1000), order_detail={'marketId': 'market', 'oddFinally': str(price)})
+
+    def test_expired_cache_preserves_journal_scores_and_restores_tail(self):
+        from collector.leyu_realtime import DEFAULT_QUOTE_MAX_AGE_S
+        with tempfile.TemporaryDirectory() as root:
+            hub = RealtimeHub(MagicMock(), trend_root=str(Path(root)/'_trends'))
+            hub._record_ticks([self.tick()])
+            hub._record_ticks([self.tick(price=2.1)])
+            path = hub.trend_store._path('m')
+            original = path.read_bytes()
+            hub._scores['m'] = (2, 1)
+            hub._final_proofs['m'] = {'ms': 3}
+            hub._price_cache_seen['m'] = time.monotonic()-DEFAULT_QUOTE_MAX_AGE_S-1
+            self.assertEqual(hub.prune_price_cache(force=True), 1)
+            self.assertEqual(hub._last_price, {})
+            self.assertEqual(hub._trends, {})
+            self.assertEqual(hub.live.book('m'), [])
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(hub.score('m'), (2, 1))
+            self.assertEqual(hub._final_proofs['m'], {'ms': 3})
+            restored = hub.trend('m', '2', '2.5')
+            self.assertEqual(restored['n'], 2)
+            self.assertEqual(restored['last']['new'], 2.1)
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_failed_archive_and_inflight_resume_protect_cache(self):
+        with tempfile.TemporaryDirectory() as root:
+            hub = RealtimeHub(MagicMock(), trend_root=str(Path(root)/'_trends'), resume=False)
+            with patch.object(hub.trend_store, 'flush', return_value=0):
+                hub._record_ticks([self.tick()])
+            hub._price_cache_seen['m'] = time.monotonic()-1000
+            self.assertEqual(hub.prune_price_cache(force=True), 0)
+            self.assertTrue(hub.live.book('m'))
+            hub.trend_store.flush()
+            hub._resuming_mids.add('m')
+            self.assertEqual(hub.prune_price_cache(force=True), 0)
+            hub._resuming_mids.clear()
+            self.assertEqual(hub.prune_price_cache(force=True), 1)
+            self.assertEqual(len(hub.trend_store.load('m')), 1)
+
+    def test_finished_churn_stays_bounded_while_active_match_survives(self):
+        hub = RealtimeHub(MagicMock(), resume=False)
+        hub._record_ticks([self.tick('active')])
+        for i in range(300):
+            mid = str(i)
+            hub._record_ticks([self.tick(mid)])
+            hub._record_ticks([self.tick(mid, 2.1)])
+            hub._runtime_finished.add(mid)
+            hub._price_cache_seen[mid] = time.monotonic()-31
+            self.assertEqual(hub.prune_price_cache(force=True), 1)
+        self.assertEqual(set(hub._price_cache_seen), {'active'})
+        self.assertEqual(len(hub._last_price), 1)
+        self.assertEqual(hub._trends, {})
+        self.assertEqual(hub.health()['price_cache']['evicted_matches'], 300)
+        self.assertTrue(hub.live.book('active'))
+
+    def test_trends_do_not_retain_order_details_but_execution_keeps_them(self):
+        from collector.leyu_realtime import TrendSeries
+        import pickle
+        tick = self.tick()
+        series = TrendSeries('m', '2', '2.5')
+        series.add(tick)
+        self.assertEqual(series.ticks[0].order_detail, {})
+        self.assertEqual(series.ticks[0].as_dict(), tick.as_dict())
+        self.assertEqual(pickle.loads(pickle.dumps(tick)), tick)
+        hub = RealtimeHub(MagicMock(), resume=False)
+        hub._record_ticks([tick])
+        hub._record_ticks([self.tick(price=2.1)])
+        self.assertEqual(hub._trends[('m','2','2.5')].ticks[0].order_detail, {})
+        self.assertEqual(hub.live.book('m')[0].order_detail['marketId'], 'market')
+        self.assertEqual(tick.order_detail['marketId'], 'market')
+
+
 class HistoryJournalTests(unittest.TestCase):
     def test_multiple_members_and_restart_preserve_old_bytes(self):
         with tempfile.TemporaryDirectory() as root:

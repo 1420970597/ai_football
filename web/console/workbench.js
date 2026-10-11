@@ -26,14 +26,24 @@ function notice(id, message = '', error = false) {
   $(id).classList.toggle('error', error);
 }
 async function get(path) {
-  const response = await fetch(API + path, {signal: AbortSignal.timeout(8000), cache: 'no-store'});
-  if (!response.ok) {
-    const error = new Error('读取失败（' + response.status + '）');
-    error.status = response.status;
+  try {
+    const response = await fetch(API + path, {signal: AbortSignal.timeout(8000), cache: 'no-store'});
+    if (!response.ok) {
+      const error = new Error('读取失败（' + response.status + '）');
+      error.status = response.status;
+      throw error;
+    }
+    return await response.json();
+  } catch (error) {
+    if (error.name === 'TimeoutError') {
+      const timeout = new Error('读取超时，服务暂未响应');
+      timeout.name = 'TimeoutError';
+      throw timeout;
+    }
     throw error;
   }
-  return response.json();
 }
+const temporaryReadError = error => error.name === 'TimeoutError' || error.name === 'TypeError' || [502,503,504].includes(error.status);
 function accountPnl(data) {
   const pnl = data?.today_pnl;
   const available = pnl?.available === true && typeof pnl.amount === 'number' && Number.isFinite(pnl.amount);
@@ -101,8 +111,8 @@ async function loadAccount() {
   if (S.accountBusy || now - S.accountAt < 30000) return;
   S.accountBusy = true;
   S.accountAt = now;
-  try { renderAccount(await get('/account')); }
-  catch (error) { renderAccount({available: false, error: error.message}); }
+  try { S.accountData = await get('/account'); renderAccount(S.accountData); }
+  catch (error) { renderAccount(S.accountData ? {...S.accountData, stale:true, refresh_error:error.message, error:error.message} : {available: false, error: error.message}); }
   finally { S.accountBusy = false; }
 }
 function switchView(view) {
@@ -240,8 +250,8 @@ async function loadRecommendations(force = false) {
     renderRecommendationsPage(data);
     notice('recommendations-notice', data.source_age_s != null ? '实时盘口更新于 ' + fixed(data.source_age_s, 1) + 's 前' : '');
   } catch (error) {
-    if ([502,503,504].includes(error.status)) S.recommendationsNextAt = Date.now() + 30000;
-    if (request === S.recommendationsRequest) notice('recommendations-notice', [502,503,504].includes(error.status) ? '后端服务暂不可用，保留上次结果，30秒后自动重试，也可点击刷新。' : error.message + '，可点击刷新重试。', true);
+    if (temporaryReadError(error)) S.recommendationsNextAt = Date.now() + 30000;
+    if (request === S.recommendationsRequest) notice('recommendations-notice', temporaryReadError(error) ? '后端服务暂不可用，保留上次结果，30秒后自动重试，也可点击刷新。' : error.message + '，可点击刷新重试。', true);
   } finally {
     S.recommendationsBusy = false;
     if (request === S.recommendationsRequest) $('recommendations-refresh').disabled = false;
@@ -788,7 +798,7 @@ async function saveSettings(event) {
     if (!response.ok) throw new Error(data.error || '保存失败（' + response.status + '）');
     renderSettings(data);
     notice('settings-notice', 'v' + data.version + ' 已生效');
-  } catch (error) {notice('settings-notice', error.message, true);}
+  } catch (error) {notice('settings-notice', error.name === 'TimeoutError' ? '保存请求超时，结果尚未确认，请重新读取设置确认是否生效。' : error.message, true);}
   finally {S.settingsBusy = false; $('settings-save').disabled = false;}
 }
 async function loadBettingStatus() {

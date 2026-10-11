@@ -14,6 +14,7 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 from functools import lru_cache
+from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -181,9 +182,7 @@ class LiveExpertService:
             return 0
         with self._journal_flush_lock:
             with self._lock:
-                rows = list(self._journal)
-            if max_decisions is not None:
-                rows = rows[:DECISION_WRITE_BATCH]
+                rows = list(islice(self._journal, max(0, max_decisions))) if max_decisions is not None else list(self._journal)
             if not rows:
                 if include_decisions:
                     self.flush_decisions(max_decisions)
@@ -349,6 +348,7 @@ class LiveExpertService:
                 oldest = min(self._results, key=lambda k: self._results[k]['published_at_ms'])
                 self._results.pop(oldest, None)
                 self._detail_replays.pop(oldest, None)
+                self._recommendations.pop(oldest, None)
                 self._anchors.pop(oldest, None)
                 for series_key in list(self._series):
                     if series_key[0] == oldest:

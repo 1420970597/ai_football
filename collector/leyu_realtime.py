@@ -42,7 +42,7 @@ import os
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -64,6 +64,8 @@ _LIVE_SAVE_INTERVAL_S = 5.0
 #: 以免重启后丢掉那场唯一的赛果来源（详见 `ScoreStore`）。
 _SCORE_SAVE_INTERVAL_S = 3.0
 _HISTORY_FLUSH_INTERVAL_S = 0.25
+_PRICE_CACHE_PRUNE_INTERVAL_S = 30.0
+_FINISHED_PRICE_CACHE_GRACE_S = 30.0
 
 
 def _live_snapshot_path(trend_root: Optional[str]) -> Optional[str]:
@@ -184,7 +186,7 @@ class _MarketState:
         self.seen = 0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PriceTick:
     """一次**真实**赔率变动。
 
@@ -843,6 +845,11 @@ class TrendStore:
                 "retention": "permanent", "written": self.written, "dropped": 0,
                 "rotated": 0, "pruned": 0, "pending": pending, "last_error": self.last_error}
 
+    def pending_mids(self) -> set[str]:
+        """Unconfirmed archive batches must survive any cache eviction."""
+        with self._lock:
+            return {mid for mid, lines in self._buf.items() if lines}
+
 
 @dataclass
 class TrendSeries:
@@ -854,7 +861,9 @@ class TrendSeries:
     ticks: Deque[PriceTick] = field(default_factory=lambda: deque(maxlen=MAX_TICKS_PER_MARKET))
 
     def add(self, tick: PriceTick) -> None:
-        self.ticks.append(tick)
+        # Trend readers use price/time only. Execution keeps the full order
+        # fields in LiveBook and the original callback, never in every old tick.
+        self.ticks.append(replace(tick, order_detail={}) if tick.order_detail else tick)
 
     @property
     def n(self) -> int:
@@ -1097,6 +1106,9 @@ class RealtimeHub:
         self._resume_thread: Optional[threading.Thread] = None
         # 上次观测到的赔率（key = mid|chpid|hv|oid）→ 仅当变化时才记 tick
         self._last_price: Dict[Tuple[str, str, str, str], float] = {}
+        self._price_cache_seen: Dict[str, float] = {}
+        self._price_cache_pruned_matches = 0
+        self._last_price_cache_prune = 0.0
         self._snapshots = 0
         self._scores: Dict[str, Tuple[int, int]] = {}
         self._status: Dict[str, Dict[str, Any]] = {}
@@ -1271,6 +1283,7 @@ class RealtimeHub:
             key = (mid, chpid, hv)
             restored.setdefault(key, []).append(tick)
         with self._lock:
+            self._price_cache_seen[mid] = time.monotonic()
             for key, ticks in restored.items():
                 series = self._trends.setdefault(key, TrendSeries(mid=mid, chpid=key[1], hv=key[2]))
                 merged = {(t.ts_ms, t.hid, t.oid, t.old_ov, t.new_ov): t
@@ -1358,8 +1371,41 @@ class RealtimeHub:
         while not self._stop.wait(_HISTORY_FLUSH_INTERVAL_S):
             self.live.save()
             self.trend_store.flush()
+            self.prune_price_cache()
             self._flush_events(force=True)
             self.scores_store.flush()
+
+    def prune_price_cache(self, *, force: bool = False) -> int:
+        """Evict inactive query windows; complete local/S3 journals stay intact.
+
+        Keep failed archive batches and concurrent history loads. A subsequent
+        trend read can restore its bounded tail through the normal resume path.
+        Scores and final proofs remain available for settlement.
+        """
+        now = time.monotonic()
+        if not force and now - self._last_price_cache_prune < _PRICE_CACHE_PRUNE_INTERVAL_S:
+            return 0
+        with self._lock:
+            pending = self.trend_store.pending_mids()
+            expired = {mid for mid, at in self._price_cache_seen.items()
+                       if mid not in pending and mid not in self._resuming_mids and
+                       (now - at >= DEFAULT_QUOTE_MAX_AGE_S or
+                        (mid in self._runtime_finished and now - at >= _FINISHED_PRICE_CACHE_GRACE_S))}
+            for key in list(self._trends):
+                if key[0] in expired:
+                    self._trends.pop(key, None)
+            for price_key in list(self._last_price):
+                if price_key[0] in expired:
+                    self._last_price.pop(price_key, None)
+            for mid in expired:
+                self._price_cache_seen.pop(mid, None)
+                self._market_meta.pop(mid, None)
+                self._resumed_mids.discard(mid)
+                self._resume_pending.pop(mid, None)
+                self.live.drop_match(mid)
+            self._last_price_cache_prune = now
+            self._price_cache_pruned_matches += len(expired)
+            return len(expired)
 
     def _subscription_loop(self) -> None:
         """REST schedule refreshes must not pause the live socket reader."""
@@ -1602,6 +1648,11 @@ class RealtimeHub:
         with self._lock:
             baseline = len(self._last_price)
             snaps = self._snapshots
+            price_cache = {'matches': len(self._price_cache_seen), 'markets': len(self._trends),
+                           'ticks': sum(len(series.ticks) for series in self._trends.values()),
+                           'evicted_matches': self._price_cache_pruned_matches,
+                           'inactive_ttl_s': DEFAULT_QUOTE_MAX_AGE_S,
+                           'finished_grace_s': _FINISHED_PRICE_CACHE_GRACE_S}
         try:
             session = self.session_provider.describe()
         except Exception as exc:  # noqa: BLE001 - health must remain available
@@ -1612,6 +1663,7 @@ class RealtimeHub:
             "session": session,
             # 已建立基线的赔率选项数：对比它可判断推送是否在正常覆盖盘口
             "price_options": baseline,
+            "price_cache": price_cache,
             # 收到的赔率快照条数（含未变化的），用于区分“推送正常但没变化”
             "price_snapshots": snaps,
             "changed_ratio": round(self.stats.price_ticks / snaps, 4) if snaps else 0.0,
@@ -1656,6 +1708,7 @@ class RealtimeHub:
         with self._lock:
             ticks = self.live.upsert_many(ticks)
             for mid in dict.fromkeys(t.mid for t in ticks):
+                self._price_cache_seen[mid] = time.monotonic()
                 self._changed_state(mid)
             for t in ticks:
                 suspended = self._suspensions.get(t.mid, {})
