@@ -17,11 +17,11 @@ import time
 from typing import Any
 import zlib
 
-from core.learned_model import FEATURES, predict
+from core.learned_model import FEATURES, compatible_model, predict
 from service.runtime_settings import RuntimeConfig, validated
 from service.model_training import atomic_json
 
-from store.training_data import snapshot_inputs, write_inputs
+from store.training_data import migrate_basis_columns, snapshot_inputs, write_inputs
 
 
 class ModelService:
@@ -39,7 +39,7 @@ class ModelService:
         self._shadow: dict[tuple[Any, ...], dict[str, Any]] = {}
         self._inputs: list[dict[str, Any]] = []
         self._live_metrics: dict[str, Any] = {}
-        self._read_times: dict[str, int] = {}
+        self._read_times: dict[str, tuple[int, int, int]] = {}
         self._process_started = 0.0
         self._stats_process: subprocess.Popen[Any] | None = None
         self._cursor: dict[str, int] = {}
@@ -77,22 +77,31 @@ class ModelService:
         read_error = ''
         for filename, target in [('active.json', '_model'), ('status.json', '_status'), ('prospective.json', '_live_metrics'), ('storage.json', '_storage')]:
             path = self.root.parent / 'models' / filename
+            if target == '_model' and not path.exists():
+                self._model = {}
+                self._live_metrics = {}
+                self._read_times.pop(filename, None)
             if path.exists():
                 try:
-                    mtime = path.stat().st_mtime_ns
-                    if self._read_times.get(filename) == mtime:
+                    stat = path.stat()
+                    signature = (stat.st_mtime_ns, stat.st_ino, stat.st_size)
+                    if self._read_times.get(filename) == signature:
                         continue
                     data = json.loads(path.read_text(encoding='utf-8'))
                     if not isinstance(data, dict):
                         raise ValueError('无效模型元数据')
                     if target == '_model':
-                        if data.get('features') != list(FEATURES) or not data.get('version'):
-                            raise ValueError('模型特征版本不匹配')
+                        if not compatible_model(data):
+                            self._model = {}
+                            self._live_metrics = {}
+                            raise ValueError('模型训练数据版本未通过核验')
                         predict(data['weights'], [0.0]*len(FEATURES))
                     setattr(self, target, data)
-                    self._read_times[filename] = mtime
-                except (OSError, ValueError, TypeError, KeyError):
-                    read_error = '模型元数据读取失败'
+                    self._read_times[filename] = signature
+                except (OSError, ValueError, TypeError, KeyError) as exc:
+                    if target == '_model':
+                        self._model = {}
+                    read_error = '模型元数据读取失败: ' + str(exc)
         if read_error:
             self._status.update(state='failed', error=read_error)
 
@@ -144,9 +153,12 @@ class ModelService:
                     'PRIMARY KEY(version,match_id,at,algorithm,market,line,outcome))')
                 if 'predicted_at' not in {r[1] for r in con.execute('PRAGMA table_info(predictions)')}:
                     con.execute('ALTER TABLE predictions ADD COLUMN predicted_at TEXT')
+                migrate_basis_columns(con, 'predictions')
                 con.executemany('INSERT OR IGNORE INTO predictions '
-                    '(version,match_id,at,cutoff_ms,algorithm,market,line,outcome,baseline,x,probability,predicted_at) VALUES '
-                    '(:version,:match_id,:at,:cutoff_ms,:algorithm,:market,:line,:outcome,:baseline,:x,:probability,:predicted_at)', pending.values())
+                    '(version,match_id,at,cutoff_ms,algorithm,market,line,outcome,baseline,x,probability,predicted_at,'
+                    'entry_score,settlement_basis,model_version,data_version) VALUES '
+                    '(:version,:match_id,:at,:cutoff_ms,:algorithm,:market,:line,:outcome,:baseline,:x,:probability,:predicted_at,'
+                    ':entry_score,:settlement_basis,:model_version,:data_version)', pending.values())
         with self._lock:
             del self._inputs[:len(inputs)]
             for key in pending:

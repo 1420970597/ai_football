@@ -18,6 +18,7 @@ from service.analysis import AnalysisConfig, AnalysisService
 from service.betting import BettingExecutor
 from service.runtime_settings import RuntimeConfig, RuntimeSettings
 from tests import test_live_expert
+from core.live_model import MODEL_VERSION
 
 
 class BettingExecutionTests(unittest.TestCase):
@@ -41,7 +42,7 @@ class BettingExecutionTests(unittest.TestCase):
         self.hub = MagicMock()
         self.hub.decision_snapshot.side_effect = lambda mid: dict(self.snapshot)
         self.ledger = MagicMock()
-        self.ledger.recommendation_performance.return_value = {'hit_count': 4, 'settled_samples': 6}
+        self.ledger.recommendation_performance.return_value = {'hit_count': 4, 'settled_samples': 6, 'independent_matches': 6, 'roi': .1, 'model_version': MODEL_VERSION}
         self.client = MagicMock()
         self.client.prepare_bet.side_effect = lambda detail, stake: detail
         self.client.submit_bet.return_value = {'submitted': True, 'status': 'accepted', 'order_no': 'ORDER-1'}
@@ -389,7 +390,7 @@ class BettingExecutionTests(unittest.TestCase):
             with patch('service.betting.time.monotonic', return_value=100):
                 first = self.executor.execute(self.row, self.pick)
             self.assertIn('命中次数不足', first['reason'])
-            self.ledger.recommendation_performance.return_value = {'hit_count': 4, 'settled_samples': 6}
+            self.ledger.recommendation_performance.return_value = {'hit_count': 4, 'settled_samples': 6, 'independent_matches': 6, 'roi': .1, 'model_version': MODEL_VERSION}
             for moment in (110, 120, 129):
                 with patch('service.betting.time.monotonic', return_value=moment):
                     deferred = self.executor.execute(self.row, self.pick)

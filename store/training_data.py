@@ -6,16 +6,18 @@ from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
-from core.learned_model import features
-from core.settlement import settle_pick
+from core.learned_model import DATA_VERSION, compatible_model, features
+from core.live_model import MODEL_VERSION
+from core.settlement import _score_of, settle_with_basis
 
 GRADED = ('won', 'lost', 'half_won', 'half_lost')
 
 
 def snapshot_inputs(row: Mapping[str, Any]) -> list[dict[str, Any]]:
-    if row.get('competition_type') != 'real' or row.get('finished') or row.get('stale'):
+    if (row.get('model_version') != MODEL_VERSION or row.get('competition_type') != 'real'
+            or row.get('finished') or row.get('stale') or _score_of(row.get('score')) is None):
         return []
     cutoff = row.get('input_cutoff_ms')
     if isinstance(cutoff, bool) or not isinstance(cutoff, (int, float)):
@@ -49,7 +51,9 @@ def snapshot_inputs(row: Mapping[str, Any]) -> list[dict[str, Any]]:
             inputs.append({'match_id': row['match_id'], 'at': row['computed_at'], 'cutoff_ms': cutoff,
                            'algorithm': evaluation['algorithm'], 'market': candidate['market'],
                            'line': str(candidate['line']), 'outcome': candidate['outcome'],
-                           'baseline': candidate['p_market'], 'x': json.dumps(x)})
+                           'baseline': candidate['p_market'], 'x': json.dumps(x),
+                           'entry_score': json.dumps(row['score']), 'settlement_basis': candidate.get('settlement_basis', 'unknown'),
+                           'model_version': MODEL_VERSION, 'data_version': DATA_VERSION})
     return inputs
 
 
@@ -64,60 +68,125 @@ def write_inputs(path: Path, rows: list[dict[str, Any]]) -> None:
                     'market TEXT,line TEXT,outcome TEXT,baseline REAL,x TEXT,'
                     'PRIMARY KEY(match_id,at,algorithm,market,line,outcome))')
         con.execute('CREATE INDEX IF NOT EXISTS idx_inputs_at ON inputs(at)')
-        con.executemany('INSERT OR IGNORE INTO inputs VALUES '
-                        '(:match_id,:at,:cutoff_ms,:algorithm,:market,:line,:outcome,:baseline,:x)', rows)
+        migrate_basis_columns(con, 'inputs')
+        con.execute('CREATE INDEX IF NOT EXISTS idx_inputs_version ON inputs(data_version,model_version,at)')
+        columns = 'match_id,at,cutoff_ms,algorithm,market,line,outcome,baseline,x,entry_score,settlement_basis,model_version,data_version'
+        con.executemany('INSERT OR IGNORE INTO inputs (' + columns + ') VALUES (' +
+                        ','.join(':' + name for name in columns.split(',')) + ')', rows)
+
+
+BASIS_COLUMNS = ('entry_score', 'settlement_basis', 'model_version', 'data_version')
+
+
+def migrate_basis_columns(con: sqlite3.Connection, table: str) -> None:
+    if table not in ('inputs', 'predictions'):
+        raise ValueError('不支持的训练表')
+    existing = {r[1] for r in con.execute('PRAGMA table_info(' + table + ')')}
+    for name in BASIS_COLUMNS:
+        if name not in existing:
+            # NULL old values remain quarantined. A migration cannot certify old features.
+            con.execute('ALTER TABLE ' + table + ' ADD COLUMN ' + name + ' TEXT')
 
 
 def labels(con: sqlite3.Connection) -> dict[str, dict[str, Any]]:
-    result = {}
-    for (payload,) in con.execute("SELECT payload FROM decisions WHERE competition_type='real' "
-                                 "AND status IN ('won','lost','half_won','half_lost','push') ORDER BY settled_at"):
-        row = json.loads(payload)
-        if row.get('ft_score') and row.get('settled_at'):
-            result[str(row['match_id'])] = row
+    result: dict[str, dict[str, Any]] = {}
+    # Project only score evidence, rather than loading all historical decision payloads.
+    for mid, at, ft, ht in con.execute("SELECT match_id,settled_at,json_extract(payload,'$.ft_score'),"
+            "json_extract(payload,'$.ht_score') FROM decisions WHERE competition_type='real' "
+            "AND status IN ('won','lost','half_won','half_lost','push','void') "
+            "AND settled_at!='' AND json_extract(payload,'$.ft_score') IS NOT NULL ORDER BY settled_at"):
+        ft_score = _score_of(json.loads(ft))
+        ht_score = _score_of(json.loads(ht)) if ht else None
+        if ft_score is not None:
+            previous = result.get(str(mid), {})
+            result[str(mid)] = {'ft_score': ft_score, 'ht_score': ht_score or previous.get('ht_score'),
+                                'settled_at': at}
     return result
 
 
-def dataset(db: Path, inputs_path: Path | None = None) -> list[dict[str, Any]]:
+def target(row: Mapping[str, Any], final: Mapping[str, Any]) -> tuple[int, float] | None:
+    entry = row.get('entry_score')
+    if isinstance(entry, str):
+        try:
+            entry = json.loads(entry)
+        except ValueError:
+            return None
+    expected = ('remaining_score' if str(row['market']).startswith('AH') else
+                'half_score_required' if str(row['market']).endswith('_1H') else 'full_score')
+    if row.get('settlement_basis') != expected:
+        return None
+    status, _ = settle_with_basis(row['market'], row['outcome'], row['line'], final['ft_score'],
+                                 final.get('ht_score'), settlement_basis=expected, entry_score=entry)
+    if status not in GRADED:
+        return None
+    return int(status in ('won', 'half_won')), .5 if status.startswith('half_') else 1.0
+
+
+def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if not db.exists():
         return []
     con = sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)
     rows = []
     seen: set[tuple[str, ...]] = set()
+    counts = {'quarantined_inputs': 0, 'quarantined_ledger': 0, 'ungraded_inputs': 0}
     try:
         finals = labels(con)
         if inputs_path and inputs_path.exists():
-            with closing(sqlite3.connect(inputs_path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as inputs, inputs:
+            with closing(sqlite3.connect(inputs_path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as inputs:
                 inputs.row_factory = sqlite3.Row
-                for r in inputs.execute('SELECT * FROM inputs ORDER BY at'):
-                    final = finals.get(r['match_id'])
-                    if not final or final['settled_at'] <= r['at']:
+                columns = {r[1] for r in inputs.execute('PRAGMA table_info(inputs)')}
+                source: Iterable[sqlite3.Row]
+                if set(BASIS_COLUMNS) <= columns:
+                    counts['quarantined_inputs'] = inputs.execute(
+                        "SELECT count(*) FROM inputs WHERE data_version IS NOT ? OR model_version IS NOT ?",
+                        (DATA_VERSION, MODEL_VERSION)).fetchone()[0]
+                    source = inputs.execute('SELECT * FROM inputs WHERE data_version=? AND model_version=? ORDER BY at',
+                                            (DATA_VERSION, MODEL_VERSION))
+                else:
+                    counts['quarantined_inputs'] = inputs.execute('SELECT count(*) FROM inputs').fetchone()[0]
+                    source = iter(())
+                for r in source:
+                    row = dict(r)
+                    final = finals.get(row['match_id'])
+                    if not final or final['settled_at'] <= row['at']:
                         continue
-                    status, _ = settle_pick(r['market'], r['outcome'], r['line'], final['ft_score'], final.get('ht_score'))
-                    if status not in GRADED:
+                    paid = target(row, final)
+                    if paid is None:
+                        counts['ungraded_inputs'] += 1
                         continue
-                    rows.append({'match_id': r['match_id'], 'at': r['at'], 'settled_at': final['settled_at'],
-                                 'x': json.loads(r['x']), 'y': int(status in ('won', 'half_won')),
-                                 'baseline': r['baseline']})
-                    seen.add((r['match_id'], r['at'], r['algorithm'], r['market'], r['line'], r['outcome']))
-        # Legacy immutable entries preserve every available market/line/algorithm. No future trend join.
+                    y, weight = paid
+                    rows.append({'match_id': row['match_id'], 'at': row['at'], 'settled_at': final['settled_at'],
+                                 'x': json.loads(row['x']), 'y': y, 'observation_weight': weight,
+                                 'baseline': row['baseline']})
+                    seen.add(tuple(row[k] for k in ('match_id', 'at', 'algorithm', 'market', 'line', 'outcome')))
+        # Only corrected model generations can supply fallback features. Old peer logits
+        # and predictions cannot be repaired by relabeling their final outcomes.
+        counts['quarantined_ledger'] = con.execute("SELECT count(*) FROM decisions WHERE competition_type='real' "
+                "AND trigger IN ('live_forecast','live_recommendation') AND "
+                "model_version!=?", (MODEL_VERSION,)).fetchone()[0]
         for (payload,) in con.execute("SELECT payload FROM decisions WHERE competition_type='real' "
                 "AND trigger IN ('live_forecast','live_recommendation') AND research_only=0 "
-                "AND status IN ('won','lost','half_won','half_lost') ORDER BY at,identity"):
+                "AND model_version=? "
+                "AND status IN ('won','lost','half_won','half_lost') ORDER BY at,identity", (MODEL_VERSION,)):
             r = json.loads(payload)
             key = tuple(str(r.get(k, '')) for k in ('match_id', 'at', 'algorithm', 'market', 'line', 'outcome'))
             if key in seen:
                 continue
             try:
-                if not r.get('ft_score') or not r.get('settled_at') or r['settled_at'] <= r['at']:
+                final = finals.get(str(r['match_id']))
+                if not final or final['settled_at'] <= r['at']:
                     continue
-                # Older ledger does not retain snapshot trend; keep explicit missingness.
-                x = features(r)
-                rows.append({'match_id': r['match_id'], 'at': r['at'], 'settled_at': r['settled_at'],
-                             'x': x, 'y': int(r['status'] in ('won', 'half_won')), 'baseline': r['p_market']})
+                paid = target(r, final)
+                if paid is None:
+                    continue
+                y, weight = paid
+                rows.append({'match_id': r['match_id'], 'at': r['at'], 'settled_at': final['settled_at'],
+                             'x': features(r), 'y': y, 'observation_weight': weight, 'baseline': r['p_market']})
                 seen.add(key)
             except (ValueError, TypeError, KeyError):
                 continue
+        if audit is not None:
+            audit.update(counts, data_version=DATA_VERSION)
         return rows
     finally:
         con.close()
@@ -125,25 +194,29 @@ def dataset(db: Path, inputs_path: Path | None = None) -> list[dict[str, Any]]:
 
 def prospective_metrics(db: Path, path: Path, model: Mapping[str, Any]) -> dict[str, Any]:
     from core.learned_model import metrics
-    if not model or not db.exists() or not path.exists():
+    if not compatible_model(model) or not db.exists() or not path.exists():
         return {}
-    with closing(sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con, con:
+    with closing(sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con:
         finals = labels(con)
     evaluated = []
-    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con, con:
+    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con:
         con.row_factory = sqlite3.Row
-        for row in con.execute('SELECT * FROM predictions WHERE version=?', (model['version'],)):
+        columns = {r[1] for r in con.execute('PRAGMA table_info(predictions)')}
+        if not set(BASIS_COLUMNS) <= columns or 'predicted_at' not in columns:
+            return {}
+        for raw in con.execute('SELECT * FROM predictions WHERE version=? AND data_version=? AND model_version=?',
+                               (model['version'], DATA_VERSION, MODEL_VERSION)):
+            row = dict(raw)
             final = finals.get(row['match_id'])
-            # A journal replay performed after settlement is retrospective.
-            # Legacy predictions without a wall-clock timestamp are unproven.
-            predicted_at = row['predicted_at'] if 'predicted_at' in row.keys() else None
+            predicted_at = row['predicted_at']
             if (not final or not predicted_at or final['settled_at'] <= row['at']
                     or final['settled_at'] <= predicted_at):
                 continue
-            status, _ = settle_pick(row['market'], row['outcome'], row['line'], final['ft_score'], final.get('ht_score'))
-            if status not in GRADED:
+            paid = target(row, final)
+            if paid is None:
                 continue
+            y, weight = paid
             evaluated.append({'match_id': row['match_id'], 'x': json.loads(row['x']),
-                              'baseline': row['baseline'], 'y': int(status in ('won','half_won'))})
-    return {'version': model['version'], 'model': metrics(evaluated, model['weights']),
+                              'baseline': row['baseline'], 'y': y, 'observation_weight': weight})
+    return {'version': model['version'], 'data_version': DATA_VERSION, 'model': metrics(evaluated, model['weights']),
             'baseline': metrics(evaluated, None)} if evaluated else {}

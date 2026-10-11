@@ -234,6 +234,13 @@ def plan_bet(pick: Mapping[str, Any], config: Any,
     minimum = _number(getattr(config, "betting_min_hit_count", 3), "最小命中次数")
     if hit_count < minimum:
         raise BettingBlocked("盘口历史命中次数不足（%.0f/%g）" % (hit_count, minimum))
+    from core.live_model import MODEL_VERSION
+    if pick.get('model_version') != MODEL_VERSION:
+        raise BettingBlocked('历史证据来自未核验的模型版本')
+    if _number(pick.get('independent_matches', 0), '独立比赛样本') < minimum:
+        raise BettingBlocked('修复后的独立比赛样本不足')
+    if pick.get('roi') is None or _number(pick['roi'], '历史收益率') <= 0:
+        raise BettingBlocked('修复后的历史收益率尚未为正')
     confidence = min(1.0, max(0.0, _number(
         pick.get("composite_confidence", pick.get("confidence", 0)), "综合置信度")))
     base = _number(getattr(config, "betting_fixed_stake", 10.0), "固定额度")

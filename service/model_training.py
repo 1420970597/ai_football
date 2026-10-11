@@ -10,7 +10,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
-from core.learned_model import train
+from core.learned_model import DATA_VERSION, compatible_model, train
 from store.training_data import dataset
 
 
@@ -39,12 +39,21 @@ def run(root: Path, cycle: int, cpu: int, memory: int) -> dict[str, Any]:
     model_root = root.parent / 'models'
     active = model_root / 'active.json'
     old = json.loads(active.read_text()) if active.exists() else {}
-    rows = dataset(root / 'ledger.sqlite3', model_root / 'inputs.sqlite3')
+    incompatible = bool(old and not compatible_model(old))
+    if incompatible:
+        # Retain the artifact; it may be audited but must never seed a clean cycle.
+        atomic_json(model_root / ('quarantined-' + active.name), old)
+        active.unlink()
+        old = {}
+    quality: dict[str, Any] = {}
+    rows = dataset(root / 'ledger.sqlite3', model_root / 'inputs.sqlite3', audit=quality)
     consumed = set(old.get('cohort_ids', []))
     new_count = len({r['match_id'] for r in rows} - consumed)
     status: dict[str, Any] = {'state': 'waiting', 'checked_at': datetime.now(timezone.utc).isoformat(),
                              'eligible_matches': len({r['match_id'] for r in rows}), 'eligible_decisions': len(rows), 'new_matches': new_count, 'cycle_matches': cycle,
                              'limits': limits, 'minimum_matches': 100, 'error': ''}
+    status.update(data_version=DATA_VERSION, data_quality=quality,
+                  old_model_quarantined=incompatible or any(model_root.glob('quarantined-*.json')))
     model: dict[str, Any] = {}
     if new_count >= cycle and status['eligible_matches'] >= 100:
         status['state'] = 'training'

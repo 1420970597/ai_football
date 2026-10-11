@@ -56,11 +56,12 @@ from core.settlement import (
     TERMINAL_STATUSES,
     clv,
     pnl_for,
-    settle_pick,
+    settle_with_basis,
     summarise,
 )
-from store.ledger_db import LedgerDB
+from store.ledger_db import GRADED as GRADED_SQL, LedgerDB
 from core.market_labels import describe_market
+from core.live_model import MODEL_VERSION
 
 __all__ = ["LedgerEntry", "DecisionLedger"]
 
@@ -112,6 +113,7 @@ class LedgerEntry:
     decision_status: str = "settleable"
     research_only: bool = False
     model_version: str = "legacy"
+    grading_version: str = "legacy"
     algorithm: str = "legacy"
     config_version: int = 0
     league: str = ""
@@ -366,7 +368,7 @@ class DecisionLedger:
                 or forecast.get("decision_status") not in (None, "settleable")):
             return None
         line = str(forecast.get("line", ""))
-        identity = hashlib.sha256((mid + "|" + algorithm + "|" + market + "|" + line + "|" + record_kind + "|first-live-v2").encode()).hexdigest()
+        identity = hashlib.sha256((mid + "|" + algorithm + "|" + market + "|" + line + "|" + record_kind + "|first-live-v2|" + str(row['model_version'])).encode()).hexdigest()
         entry = LedgerEntry(
             at=str(row["computed_at"]), updated_at=str(row["computed_at"]),
             decision_id=identity, match_id=mid, competition_type="real", is_live=True,
@@ -654,28 +656,28 @@ class DecisionLedger:
             if ft is None:
                 out["skipped"] += 1
                 continue
-            grade_ft, grade_ht = ft, ht
-            if e.settlement_basis == "remaining_score":
-                from core.settlement import _score_of
-                entry = _score_of(e.entry_score)
-                if entry is None or ft[0] < entry[0] or ft[1] < entry[1]:
-                    out["skipped"] += 1
-                    continue
-                grade_ft = (ft[0] - entry[0], ft[1] - entry[1])
-                if ht is not None and ht[0] >= entry[0] and ht[1] >= entry[1]:
-                    grade_ht = (ht[0] - entry[0], ht[1] - entry[1])
-            if '_1H' in e.market and grade_ht is None:
+            if '_1H' in e.market and ht is None:
                 # Missing evidence remains retryable; it is not a void bet.
                 out['skipped'] += 1
                 continue
-            status, note = settle_pick(e.market, e.outcome, e.line, grade_ft, grade_ht)
+            status, note = settle_with_basis(e.market, e.outcome, e.line, ft, ht,
+                                            settlement_basis=e.settlement_basis, entry_score=e.entry_score)
+            if e.settlement_basis == 'remaining_score' and status == SETTLE_VOID:
+                out['skipped'] += 1
+                continue
             if e.settlement_basis == "unknown" or not math.isfinite(e.odds) or e.odds <= 1:
                 status, note = SETTLE_VOID, "结算口径或入场赔率未核验"
+            score_changed = (e.ft_score != list(ft) or
+                             ('_1H' in e.market and e.ht_score != (list(ht) if ht is not None else None)))
             e.status, e.settle_note = status, note
             e.ft_score = list(ft)
             e.ht_score = list(ht) if ht is not None else None
-            e.settled_at = _now().isoformat()
-            e.updated_at = e.settled_at
+            # A repair learns no new result: preserve when the original score
+            # became available, and timestamp the revision independently.
+            now = _now().isoformat()
+            e.settled_at = now if score_changed else (e.settled_at or now)
+            e.updated_at = now
+            e.grading_version = 'remaining-ah-signed-lines-v2'
             e.pnl = round(pnl_for(status, e.odds), 6) if e.is_pick else 0.0
             close = self._closing_of(sc, e)
             if close is not None:
@@ -891,9 +893,12 @@ class DecisionLedger:
                 """SELECT algorithm, market, line, outcome,
                    sum(status IN ('won','half_won') * CASE status WHEN 'half_won' THEN .5 ELSE 1 END) AS hits,
                    sum(status IN ('lost','half_lost') * CASE status WHEN 'half_lost' THEN .5 ELSE 1 END) AS misses,
-                   sum(status='pending') AS pending
-                   FROM decisions WHERE is_pick=1 AND trigger='live_recommendation' AND (""" +
-                " OR ".join(clauses) + ") GROUP BY algorithm,market,line,outcome", params).fetchall()
+                   sum(status='pending') AS pending,
+                   sum(CASE WHEN """ + GRADED_SQL + """ THEN pnl ELSE 0 END) AS profit,
+                   sum(""" + GRADED_SQL + """) AS stake,
+                   count(DISTINCT CASE WHEN """ + GRADED_SQL + """ THEN match_id END) AS matches
+                   FROM decisions WHERE is_pick=1 AND trigger='live_recommendation' AND model_version=? AND (""" +
+                " OR ".join(clauses) + ") GROUP BY algorithm,market,line,outcome", [MODEL_VERSION, *params]).fetchall()
             out: Dict[tuple, Dict[str, Any]] = {}
             for row in rows:
                 hits = float(row['hits'] or 0.0)
@@ -903,6 +908,8 @@ class DecisionLedger:
                 out[key] = {'hit_count': round(hits, 3), 'miss_count': round(misses, 3),
                             'pending_count': int(row['pending'] or 0),
                             'settled_samples': round(settled, 3),
+                            'model_version': MODEL_VERSION, 'independent_matches': int(row['matches']),
+                            'roi': float(row['profit']) / row['stake'] if row['stake'] else None,
                             'accuracy': round(hits / settled, 6) if settled else None}
             return out
 
@@ -917,8 +924,8 @@ class DecisionLedger:
             placeholders = ','.join('?' for _ in ids)
             rows = db.connection.execute(
                 "SELECT payload FROM decisions WHERE trigger='live_recommendation' "
-                "AND algorithm='economic_ensemble' AND match_id IN (" + placeholders + ") "
-                "ORDER BY at DESC", ids).fetchall()
+                "AND algorithm='economic_ensemble' AND model_version=? AND match_id IN (" + placeholders + ") "
+                "ORDER BY at DESC", [MODEL_VERSION, *ids]).fetchall()
             out: Dict[str, List[Dict[str, Any]]] = {}
             seen: set[tuple] = set()
             for raw in rows:

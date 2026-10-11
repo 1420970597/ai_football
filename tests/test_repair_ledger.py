@@ -13,6 +13,24 @@ SPEC.loader.exec_module(MODULE)
 
 
 class RepairLedgerTests(unittest.TestCase):
+    def test_live_basis_repaired_but_input_version_and_result_time_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            led = DecisionLedger(root)
+            led._append([LedgerEntry(at='2026-01-01T12:00:00+00:00', match_id='m', market='AH',
+                         line='-0/0.5',outcome='home',odds=1.49,is_pick=True,is_live=True,
+                         entry_score=[1,0],settlement_basis='full_score',model_version='live-poisson-market-v1',
+                         status='won',pnl=.49,ft_score=[1,0],settled_at='2026-01-01T14:00:00+00:00')])
+            scores = root/'scores.json'
+            scores.write_text(json.dumps({'scores':{'m':{'ft':[1,0],'done':True}}}))
+            result = MODULE.repair(root,scores)
+            self.assertEqual(result['migrated_live_handicap_basis'],1)
+            row = led.load()[0]
+            self.assertEqual(row.status,'half_lost')
+            self.assertEqual(row.settled_at,'2026-01-01T14:00:00+00:00')
+            self.assertEqual(row.model_version,'live-poisson-market-v1')
+            self.assertEqual(MODULE.repair(root,scores)['migrated_live_handicap_basis'],0)
+
     def test_confirmed_results_only_and_repeat_repair(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

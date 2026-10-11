@@ -14,6 +14,19 @@ MIN_MATCHES = 100
 EPOCHS = 250
 LEARNING_RATE = 0.08
 REGULARIZATION = 0.01
+DATA_VERSION = 'remaining-ah-signed-lines-bernoulli-v2'
+
+
+def compatible_model(model: Mapping[str, Any]) -> bool:
+    return (model.get('data_version') == DATA_VERSION and
+            model.get('features') == list(FEATURES) and bool(model.get('version')))
+
+
+def observation_weight(row: Mapping[str, Any]) -> float:
+    weight = float(row.get('observation_weight', 1.0))
+    if not math.isfinite(weight) or not 0 < weight <= 1:
+        raise ValueError('无效非走盘本金权重')
+    return weight
 
 
 def sigmoid(x: float) -> float:
@@ -88,13 +101,13 @@ def predict(weights: Sequence[float], x: Sequence[float]) -> float:
 def metrics(rows: Sequence[Mapping[str, Any]], weights: Sequence[float] | None) -> dict[str, Any]:
     if not rows:
         raise ValueError('评估样本为空')
-    counts: dict[str, int] = {}
+    counts: dict[str, float] = {}
     for row in rows:
-        counts[row['match_id']] = counts.get(row['match_id'], 0) + 1
+        counts[row['match_id']] = counts.get(row['match_id'], 0) + observation_weight(row)
     accuracy = brier = logloss = 0.0
     for row in rows:
         p = predict(weights, row['x']) if weights is not None else row['baseline']
-        y, weight = row['y'], 1 / counts[row['match_id']] / len(counts)
+        y, weight = row['y'], observation_weight(row) / counts[row['match_id']] / len(counts)
         accuracy += weight * ((p >= .5) == bool(y))
         brier += weight * (p-y)**2
         logloss -= weight * (y*math.log(max(1e-12,p))+(1-y)*math.log(max(1e-12,1-p)))
@@ -118,23 +131,25 @@ def train(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     training = [r for r in ordered if r['match_id'] in training_ids and r['settled_at'] < validation[0]['at']]
     if len({r['match_id'] for r in training}) < 60 or len({r['y'] for r in training}) < 2:
         raise ValueError('时间隔离后训练样本不足或只有一种标签')
-    counts: dict[str, int] = {}
+    counts: dict[str, float] = {}
     for row in training:
         predict([0.0] * len(FEATURES), row['x'])
         if row['y'] not in (0, 1):
             raise ValueError('无效训练标签')
-        counts[row['match_id']] = counts.get(row['match_id'], 0) + 1
+        counts[row['match_id']] = counts.get(row['match_id'], 0) + observation_weight(row)
     weights = [0.0] * len(FEATURES)
     weights[1] = 1.0  # start at the market prior
     for _ in range(EPOCHS):
         gradients = [0.0] * len(weights)
         for row in training:
-            error = sigmoid(sum(w*v for w,v in zip(weights,row['x']))) - row['y']
+            error = ((sigmoid(sum(w*v for w,v in zip(weights,row['x']))) - row['y']) *
+                     observation_weight(row) / counts[row['match_id']])
             for i, value in enumerate(row['x']):
-                gradients[i] += error * value / counts[row['match_id']]
+                gradients[i] += error * value
         weights = [w - LEARNING_RATE * (g / len(counts) + (REGULARIZATION*w if i else 0))
                    for i, (w, g) in enumerate(zip(weights, gradients))]
-    return {'architecture': 'L2 Logistic / 多盘口非走盘概率校准', 'features': list(FEATURES),
+    return {'architecture': 'L2 Logistic / 按非走盘本金加权概率校准', 'features': list(FEATURES),
+            'data_version': DATA_VERSION,
             'weights': weights, 'parameter_count': len(weights), 'training': metrics(training, weights),
             'validation': metrics(validation, weights), 'baseline': metrics(validation, None),
             'validation_from': validation[0]['at'], 'validation_to': validation[-1]['at'],

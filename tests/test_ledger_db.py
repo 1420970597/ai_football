@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from core.settlement import summarise
+from core.live_model import MODEL_VERSION
 from service.ledger import DecisionLedger, LedgerEntry
 from store.ledger_db import LedgerDB
 
@@ -41,7 +42,7 @@ class LedgerDatabaseTests(unittest.TestCase):
         from store.ledger_db import FIELDS
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'ledger.sqlite3'
-            fields = {k: v for k, v in FIELDS.items() if k not in ('line', 'outcome')}
+            fields = {k: v for k, v in FIELDS.items() if k not in ('line', 'outcome', 'model_version')}
             row = self.row(trigger='live_recommendation', status='won').as_dict()
             with sqlite3.connect(path) as db:
                 db.execute('CREATE TABLE decisions (identity TEXT PRIMARY KEY, revision REAL, payload TEXT,' +
@@ -105,7 +106,7 @@ class LedgerDatabaseTests(unittest.TestCase):
     def row(self, **kw):
         values = dict(at='2026-10-01T12:00:00+00:00',match_id='m',decision_id='a',
                       market='OU',line='2.25',outcome='over',odds=2,is_pick=True,
-                      algorithm='economic_ensemble',competition_type='real',trigger='live_forecast')
+                      algorithm='economic_ensemble',competition_type='real',trigger='live_forecast',model_version=MODEL_VERSION)
         values.update(kw)
         return LedgerEntry(**values)
 

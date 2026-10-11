@@ -13,6 +13,35 @@ from service.live_expert import LiveExpertService, percentiles
 
 
 class LiveExpertTests(unittest.TestCase):
+    def test_live_and_half_handicap_value_future_goals_and_bernoulli_shrink(self):
+        from core.live_model import payment, remaining_distribution
+        from dataclasses import replace
+        from service.runtime_settings import RuntimeConfig
+        for elapsed, phase in ((1200, '6'), (3600, '7')):
+            hub = self.hub()
+            hub._status['m'] = {'mmp': phase, 'mst': str(elapsed)}
+            ts = int(time.time()*1000)
+            hub._record_ticks([PriceTick('m', family, '', '-0/0.5', oc, oc, 1.9, 1.9, ts)
+                               for family in ('4','19') for oc in ('1','2')])
+            svc = LiveExpertService()
+            svc.configure(replace(RuntimeConfig(), algorithms=('poisson_market','economics_risk_adjusted'),
+                                  primary_algorithm='poisson_market'), 1)
+            row = svc.compute(hub.decision_snapshot('m'),hub)
+            poisson, risk = row['evaluations']
+            for c in poisson['candidates']:
+                if not c['market'].startswith('AH'):
+                    continue
+                rates = poisson['remaining_goals']
+                factor = (2700-elapsed)/(5400-elapsed) if c['market']=='AH_1H' and elapsed<2700 else 1
+                expected = payment(remaining_distribution(rates[0]*factor,rates[1]*factor,(0,0)),
+                                   'AH', c['outcome'], c['line'])
+                self.assertAlmostEqual(c['win_stake'],expected.win,places=6)
+                self.assertEqual(c['settlement_basis'],'remaining_score')
+                self.assertEqual(c['research_only'],c['market']=='AH_1H' and elapsed>=2700)
+            for c in risk['candidates']:
+                self.assertLess(c['p_model'],1)
+                self.assertGreater(c['p_model'],0)
+
     def test_clock_only_update_reuses_fit_but_score_and_prices_invalidate_it(self):
         from service.live_expert import _fit_total, _fit_share
         hub = self.hub()

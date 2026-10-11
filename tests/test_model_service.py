@@ -12,6 +12,24 @@ from tests.test_training_data import decision
 
 
 class ModelServiceTests(unittest.TestCase):
+    def test_incompatible_model_clears_previously_loaded_predictions(self):
+        from core.learned_model import DATA_VERSION, FEATURES
+        from service.model_training import atomic_json
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'models'/'active.json'
+            model = {'features':list(FEATURES),'weights':[0]*len(FEATURES),'version':'v',
+                     'data_version':DATA_VERSION,'updated_at':'2024-01-01'}
+            atomic_json(path,model)
+            worker = ModelService()
+            worker.bind(directory+'/ledger')
+            self.assertTrue(worker.status()['model'])
+            model.pop('data_version')
+            atomic_json(path,model)
+            worker._read()
+            self.assertFalse(worker.status()['model'])
+            worker.observe(decision())
+            self.assertFalse(worker._shadow)
+
     def test_api_does_not_import_train_or_inference_or_launch_worker(self):
         result = subprocess.run([sys.executable, '-c',
             'import sys; from service.analysis import AnalysisService; '

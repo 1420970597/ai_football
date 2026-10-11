@@ -2,25 +2,55 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import sqlite3
 
-from core.learned_model import FEATURES
+from core.learned_model import DATA_VERSION, FEATURES
+from core.live_model import MODEL_VERSION
 from store.ledger_db import LedgerDB
 from store.training_data import dataset, snapshot_inputs, write_inputs
 
 
 def decision():
     common = {'p_market': .5, 'p_model': .6, 'ts_ms': 1000, 'research_only': False,
-              'decision_status': 'settleable', 'training_history': [[100, 2], [900, 2.1], [2000, 9]], 'trend_pct': 350}
+              'decision_status': 'settleable', 'settlement_basis': 'full_score', 'training_history': [[100, 2], [900, 2.1], [2000, 9]], 'trend_pct': 350}
     candidates = [{**common, 'market': 'HAD', 'line': '', 'outcome': 'home'},
                   {**common, 'market': 'OU', 'line': '2/2.5', 'outcome': 'over'},
-                  {**common, 'market': 'AH', 'line': '-0.5', 'outcome': 'away'},
-                  {**common, 'market': 'HAD_1H', 'line': '', 'outcome': 'home'}]
-    return {'competition_type': 'real', 'match_id': 'm1', 'computed_at': '2025-01-01T12:00:00+00:00',
+                  {**common, 'settlement_basis': 'remaining_score', 'market': 'AH', 'line': '-0.5', 'outcome': 'away'},
+                  {**common, 'settlement_basis': 'half_score_required', 'market': 'HAD_1H', 'line': '', 'outcome': 'home'}]
+    return {'model_version': MODEL_VERSION, 'competition_type': 'real', 'match_id': 'm1', 'computed_at': '2025-01-01T12:00:00+00:00',
             'score': [0,0], 'elapsed_s': 1200, 'input_cutoff_ms': 1000,
             'evaluations': [{'algorithm': a, 'candidates': candidates} for a in ('poisson_market', 'poisson_time_decay')]}
 
 
 class TrainingDataTests(unittest.TestCase):
+    def test_old_features_are_quarantined_without_relabeling_as_clean(self):
+        old = decision()
+        old['model_version'] = 'live-poisson-market-v1'
+        self.assertEqual(snapshot_inputs(old), [])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = LedgerDB(root/'ledger.sqlite3')
+            path = root/'inputs.sqlite3'
+            rows = snapshot_inputs(decision())
+            write_inputs(path, rows)
+            with sqlite3.connect(path) as con:
+                con.execute('UPDATE inputs SET data_version=NULL,entry_score=NULL')
+            quality = {}
+            self.assertEqual(dataset(db.path,path,audit=quality), [])
+            self.assertEqual(quality['quarantined_inputs'],8)
+
+    def test_remaining_labels_require_benchmark_and_weight_half_stake(self):
+        from store.training_data import target
+        final = {'ft_score':[1,0],'ht_score':[1,0]}
+        row = {'market':'AH','outcome':'home','line':'-0/0.5',
+               'entry_score':'[1,0]','settlement_basis':'remaining_score'}
+        self.assertEqual(target(row,final),(0,.5))
+        self.assertEqual(target({**row,'market':'AH_1H'},final),(0,.5))
+        self.assertIsNone(target({**row,'settlement_basis':'full_score'},final))
+        self.assertIsNone(target({**row,'entry_score':None},final))
+        self.assertIsNone(target({**row,'entry_score':'[2,0]'},final))
+        self.assertEqual(snapshot_inputs(decision())[0]['data_version'],DATA_VERSION)
+
     def test_all_markets_algorithms_and_strict_prefix(self):
         rows = snapshot_inputs(decision())
         self.assertEqual(len(rows), 8)

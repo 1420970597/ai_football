@@ -82,7 +82,10 @@ class DataModelTests(unittest.TestCase):
                 finals.append({'match_id': str(i), 'at': row['at'], 'settled_at': row['settled_at'],
                                'competition_type': 'real','status':'won','ft_score': [2,0] if row['y'] else [0,2]})
                 inputs.append({'match_id':str(i), 'at':row['at'],'cutoff_ms':1,'algorithm':'poisson_time_decay',
-                               'market':'HAD','line':'','outcome':'home','baseline':row['baseline'],'x':json.dumps(row['x'])})
+                               'market':'HAD','line':'','outcome':'home','baseline':row['baseline'],'x':json.dumps(row['x']),
+                               'entry_score':'[0,0]','settlement_basis':'full_score',
+                               'model_version':__import__('core.live_model',fromlist=['MODEL_VERSION']).MODEL_VERSION,
+                               'data_version':__import__('core.learned_model',fromlist=['DATA_VERSION']).DATA_VERSION})
             db.put(finals, lambda _: 1.0)
             db.connection.commit()
             write_inputs(root.parent/'models'/'inputs.sqlite3', inputs)

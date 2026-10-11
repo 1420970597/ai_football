@@ -530,7 +530,7 @@ class LiveExpertService:
                     base_family = family.split('_1H')[0]
                     if base_family not in ('HAD', 'OU', 'AH') or not market['fresh'] or not market['complete']:
                         continue
-                    if base_family == 'HAD' and not direction_available:
+                    if base_family in ('HAD', 'AH') and not direction_available:
                         continue
                     for quote in market['quotes']:
                         half_market = family.endswith('_1H')
@@ -538,6 +538,11 @@ class LiveExpertService:
                             settlement_dist = half_dist if half_dist is not None else dist
                         else:
                             settlement_dist = dist
+                        if base_family == 'AH':
+                            # remaining_distribution normally adds the entry score.
+                            # AH pays on future goals, for both full and first half.
+                            settlement_dist = [(home-score[0], away-score[1], probability)
+                                               for home, away, probability in settlement_dist]
                         # Some feeds publish an AH family row without a handicap
                         # line.  It is still useful to show the raw quote, but it
                         # cannot be valued; skip that quote without discarding the
@@ -555,7 +560,7 @@ class LiveExpertService:
                             raw_p = consensus[quote['outcome']]
                         if algorithm == 'economics_risk_adjusted':
                             prior = quote.get('p_market') or raw_p
-                            raw_p = shrink_probabilities((raw_p,), (prior,), 1, k=2.0)[0][0]
+                            raw_p = shrink_probabilities((raw_p, 1-raw_p), (prior, 1-prior), 1, k=2.0)[0][0]
                         risk_penalty = 0.0
                         if algorithm == 'microstructure_adjusted':
                             risk_penalty = min(0.5, abs(float(quote.get('trend_pct') or 0.0)) / 100.0)
@@ -573,6 +578,8 @@ class LiveExpertService:
                             effective -= risk_penalty
                         research_only = half_market and (elapsed_s is None or elapsed_s>=2700)
                         settlement_basis = 'half_score_required' if half_market else 'full_score'
+                        if base_family == 'AH':
+                            settlement_basis = 'remaining_score'
                         if not market.get('known', False):
                             research_only, settlement_basis = True, 'unknown'
                         estimate = {**quote, 'market': family, 'line': market['line'], 'algorithm': algorithm,

@@ -11,6 +11,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, Mapping, Sequence
+from core.live_model import MODEL_VERSION
 
 
 FIELDS = {
@@ -22,6 +23,7 @@ FIELDS = {
     'kelly': 'REAL', 'p_fused': 'REAL', 'p_market': 'REAL', 'closing_odds': 'REAL',
     'settled_at': 'TEXT', 'decision_id': 'TEXT', 'experiment_id': 'TEXT',
     'review_status': 'TEXT', 'research_only': 'INTEGER',
+    'model_version': 'TEXT',
 }
 GRADED = "status IN ('won','lost','half_won','half_lost','push')"
 CLASSIFIED = "status IN ('won','lost','half_won','half_lost')"
@@ -39,7 +41,7 @@ class LedgerDB:
         self.connection.execute('CREATE TABLE IF NOT EXISTS decisions '
                                 '(identity TEXT PRIMARY KEY, revision REAL, payload TEXT,' + columns + ')')
         existing = {row[1] for row in self.connection.execute('PRAGMA table_info(decisions)')}
-        missing = [name for name in ('line', 'outcome') if name not in existing]
+        missing = [name for name in ('line', 'outcome', 'model_version') if name not in existing]
         if missing:
             # Atomic migration: a crash must not leave added columns unfilled.
             with self.connection:
@@ -56,6 +58,7 @@ class LedgerDB:
             'recommendation_match': 'trigger,algorithm,match_id,at',
             'decision_identity': 'decision_id',
             'recommendation_quote': 'trigger,is_pick,algorithm,market,line,outcome,status',
+            'generation': 'model_version,competition_type,trigger,at',
         }.items():
             self.connection.execute('CREATE INDEX IF NOT EXISTS idx_' + name + ' ON decisions(' + cols + ')')
         self.connection.execute('CREATE TABLE IF NOT EXISTS imports '
@@ -181,9 +184,14 @@ class LedgerDB:
         sql = """SELECT algorithm, match_id, count(*) AS quotes,
           avg(CASE status WHEN 'won' THEN 1.0 WHEN 'half_won' THEN 0.5 ELSE 0 END) AS wins,
           avg(CASE status WHEN 'lost' THEN 1.0 WHEN 'half_lost' THEN 0.5 ELSE 0 END) AS losses,
-          avg((p_fused-(status IN ('won','half_won')))*(p_fused-(status IN ('won','half_won')))) AS brier,
-          avg((p_market-(status IN ('won','half_won')))*(p_market-(status IN ('won','half_won')))) AS market_brier
+          sum((p_fused-(status IN ('won','half_won')))*(p_fused-(status IN ('won','half_won')))*
+              CASE WHEN status IN ('half_won','half_lost') THEN .5 ELSE 1 END) /
+              sum(CASE WHEN status IN ('half_won','half_lost') THEN .5 ELSE 1 END) AS brier,
+          sum((p_market-(status IN ('won','half_won')))*(p_market-(status IN ('won','half_won')))*
+              CASE WHEN status IN ('half_won','half_lost') THEN .5 ELSE 1 END) /
+              sum(CASE WHEN status IN ('half_won','half_lost') THEN .5 ELSE 1 END) AS market_brier
           FROM decisions WHERE competition_type='real' AND trigger='live_forecast'
+          AND model_version=?
           AND research_only=0 AND """ + CLASSIFIED + """ AND settled_at<=? AND at<settled_at
           AND p_fused>0 AND p_market>0 GROUP BY algorithm,match_id"""
-        return [dict(r) for r in self.connection.execute(sql, (cutoff,))]
+        return [dict(r) for r in self.connection.execute(sql, (MODEL_VERSION, cutoff))]

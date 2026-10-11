@@ -12,7 +12,7 @@ from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from core.settlement import _score_of, split_line
 
-MODEL_VERSION = 'live-poisson-market-v1'
+MODEL_VERSION = 'live-poisson-market-v2'
 REGULATION_SECONDS = 90 * 60
 MAX_REMAINING_GOALS = 20
 FIT_ITERATIONS = 18

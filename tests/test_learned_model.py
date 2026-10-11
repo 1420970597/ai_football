@@ -14,6 +14,15 @@ def sample_row(index=0):
 
 
 class LearnedModelTests(unittest.TestCase):
+    def test_half_payout_scores_use_nonpush_stake_weight(self):
+        rows = [{**sample_row(0),'y':1,'baseline':.8,'observation_weight':1},
+                {**sample_row(0),'y':0,'baseline':.8,'observation_weight':.5}]
+        result = metrics(rows,None)
+        self.assertAlmostEqual(result['accuracy'],2/3)
+        self.assertAlmostEqual(result['brier'],(.04+.5*.64)/1.5)
+        with self.assertRaises(ValueError):
+            metrics([{**rows[0],'observation_weight':0}],None)
+
     def test_train_and_group_split_retains_multiple_decisions(self):
         rows = [sample_row(i) for i in range(120)]
         for i in range(120):

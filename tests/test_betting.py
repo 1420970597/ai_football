@@ -4,13 +4,20 @@ from dataclasses import replace
 from service.betting import (build_ybty_bet_payload, draft_ybty_bet,
                               preview_bet, plan_bet)
 from service.runtime_settings import RuntimeConfig, validated
+from core.live_model import MODEL_VERSION
 
 
 class BettingTests(unittest.TestCase):
+    def test_hit_counts_do_not_override_losing_or_uncertified_history(self):
+        cfg = replace(RuntimeConfig(),betting_enabled=True)
+        for patch in ({'roi':-.1},{'roi':None},{'model_version':'live-poisson-market-v1'},
+                      {'independent_matches':1}):
+            self.assertFalse(preview_bet(self.pick(**patch),cfg)['allowed'])
+
     def pick(self, **changes):
         value = {
             'match_id': 'm1', 'market': 'OU', 'line': '2.5', 'outcome': 'over',
-            'confidence': .8, 'hit_count': 4, 'algorithm': 'economic_ensemble',
+            'confidence': .8, 'hit_count': 4, 'independent_matches': 6, 'roi': .1, 'model_version': MODEL_VERSION, 'algorithm': 'economic_ensemble',
         }
         value.update(changes)
         return value

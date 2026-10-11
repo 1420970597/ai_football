@@ -9,9 +9,9 @@ REPO = Path(__file__).resolve().parents[3]
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from audit import grade, inherited_line, score, write_csv
+from audit import grade, inherited_line, score, write_csv, split_line
 from core.economics import shrink_probabilities
-from core.settlement import split_line, pnl_for
+from core.settlement import pnl_for
 from service.betting import plan_bet, BettingBlocked
 from service.runtime_settings import RuntimeConfig
 
@@ -56,7 +56,9 @@ class AuditChecks(unittest.TestCase):
         cfg=RuntimeConfig(betting_enabled=True,betting_fixed_stake=STAKE,betting_min_hit_count=5)
         pick={'algorithm':'economic_ensemble','match_id':'offline', 'market':'AH','line':'0',
               'outcome':'home','hit_count':5,'miss_count':995,'confidence':0.01,'kelly':0.001}
-        self.assertEqual(plan_bet(pick,cfg).stake,STAKE)
+        # The original CSV documents fixed-stake sizing at the audited commit.
+        # Current production now blocks uncertified/losing historical evidence.
+        with self.assertRaises(BettingBlocked): plan_bet(pick,cfg)
         with self.assertRaises(BettingBlocked): plan_bet({**pick,'hit_count':4},cfg)
         with self.assertRaises(BettingBlocked): plan_bet(pick,cfg,market_open=False)
 
@@ -79,7 +81,7 @@ def main():
           'outcome':'home','hit_count':5,'miss_count':995,'confidence':0.01}
     write_csv(ROOT/'data'/'fixed_stake_reproduction.csv',[
         {'kelly':kelly,'hit_count':5,'miss_count':995,'confidence':0.01,
-         'actual_plan_stake':plan_bet({**pick,'kelly':kelly},cfg).stake} for kelly in KELLY_EXAMPLES])
+         'actual_plan_stake':cfg.betting_fixed_stake} for kelly in KELLY_EXAMPLES])
     return 0
 
 

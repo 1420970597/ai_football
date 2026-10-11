@@ -8,10 +8,33 @@ from dataclasses import replace
 from unittest.mock import patch
 
 from core.settlement import settle_pick, split_line, summarise
+from core.live_model import MODEL_VERSION
 from service.ledger import DecisionLedger, LedgerEntry
 
 
 class LedgerRegressionTests(unittest.TestCase):
+    def test_changed_final_evidence_does_not_backdate_new_training_labels(self):
+        with tempfile.TemporaryDirectory() as root:
+            led = DecisionLedger(root)
+            led._append([self.entry(status='lost',ft_score=[1,0],settled_at='2026-01-01T14:00:00+00:00')])
+            led.settle({'m':{'ft':[2,1],'done':True}},regrade=True)
+            self.assertGreater(led.load()[0].settled_at,'2026-01-01T14:00:00+00:00')
+
+    def test_old_generation_never_drives_new_betting_or_algorithm_weights(self):
+        with tempfile.TemporaryDirectory() as root:
+            led = DecisionLedger(root)
+            led._append([self.entry('old',algorithm='economic_ensemble',trigger='live_recommendation',
+                         model_version='live-poisson-market-v1',status='won',pnl=1),
+                         self.entry('old-model',trigger='live_forecast',status='won',pnl=1,
+                         model_version='live-poisson-market-v1',settled_at='2026-01-02')])
+            self.assertEqual(led.recommendation_performance('OU','2.25','over')['hit_count'],0)
+            self.assertEqual(led.performance_evidence()['rows'],[])
+            led._append([self.entry('new',algorithm='economic_ensemble',trigger='live_recommendation',
+                         status='lost',pnl=-1)])
+            result = led.recommendation_performance('OU','2.25','over')
+            self.assertEqual(result['miss_count'],1)
+            self.assertEqual(result['roi'],-1)
+
     def test_hot_evidence_imports_active_revisions_without_scanning_archive(self):
         with tempfile.TemporaryDirectory() as root:
             ledger = DecisionLedger(root)
@@ -65,7 +88,7 @@ class LedgerRegressionTests(unittest.TestCase):
 
     def entry(self, identity='a', **kwargs):
         values = dict(at='2026-01-01T12:00:00+00:00', match_id='m', market='OU',
-                      line='2.25', outcome='over', odds=2, is_pick=True, decision_id=identity)
+                      line='2.25', outcome='over', odds=2, is_pick=True, decision_id=identity, model_version=MODEL_VERSION)
         values.update(kwargs)
         return LedgerEntry(**values)
 

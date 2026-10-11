@@ -304,6 +304,31 @@ python3 reports/auto-betting-loss-audit/scripts/md_to_html.py \
 <div class="tw"><table><thead><tr><th>验证</th><th>结果</th></tr></thead><tbody><tr><td>全套unittest</td><td>退出码0，1329 tests，14 skipped，55.425秒；宿主实际Python 3.13.5</td></tr><tr><td>相关模块专项unittest</td><td>退出码0，140 tests；仅模拟网络/订单，无新实盘交易</td></tr><tr><td>报告诊断</td><td>退出码0，5项检查，覆盖正常/异常、缺比分、无效盘口与门控边界</td></tr><tr><td>脚本编译</td><td>退出码0</td></tr><tr><td>全仓库编译</td><td>退出码0，121个Python文件；冻结业务源码哈希保持一致</td></tr><tr><td>类型与lint</td><td>Python3.12受限临时容器内执行<code>python -m mypy</code>、<code>python -m ruff check .</code>，两者退出码0；84文件无类型问题、All checks passed</td></tr><tr><td>容器图表全量重建</td><td>退出码0，3张PNG，具名参数与CSV可复核，中文字体已挂载</td></tr><tr><td>真实结算对照</td><td>160/160在0.025元逐笔舍入容差内一致</td></tr></tbody></table></div>
 <p><strong>现有测试全绿并不证明实盘结算规则正确。</strong> 这些测试没有覆盖真实滚球AH的基准比分，也没有断言“经济学风控”标量收缩后的概率应处于输入与先验之间；本报告的诊断是在独立离线条件下把这两类缺陷明确复现出来。</p>
 <p>类型/lint、HTML在线/离线浏览器核验与交付卫生结果记录在<a href="data/verification.json">data/verification.json</a>。业务模块和实时开关未修改，未重新部署运行服务。</p>
+<h2>12. 已执行修复与训练污染核验（2026-10-11）</h2>
+<p><strong>训练受到错误数据影响，已证实。</strong> 本节采用修复前一致 SQLite 备份，源码基线 <code>4ca1897</code>，旧模型版本 <code>20261010T145431899567Z</code>。前文是原始审计截面；本节是后续修复测量，数量不同源于截点不同。</p>
+<div class="tw"><table><thead><tr><th>数据层</th><th class="right">测量值</th><th>含义与处置</th></tr></thead><tbody><tr><td>训练输入快照</td><td class="right">904,473 条 / 494 场</td><td>全部包含风险算法同伴概率 1 的特征；按旧数据版本隔离，保留原始记录</td></tr><tr><td>可用原标签的输入</td><td class="right">735,839 条</td><td>其中 104,684 条结算状态变化；79,972 条赢/输标签翻转</td></tr><tr><td>输入的新排除项</td><td class="right">5,759 条</td><td>走水/不可恢复标签退出二分类；其中 2,850 条比分差已被截断，无法恢复</td></tr><tr><td>台账补充样本</td><td class="right">50,871 条</td><td>去除与输入同键重复后，3,929 条状态变化、2,460 条标签翻转</td></tr><tr><td>旧模型实际训练样本</td><td class="right">36,794 条 / 528 场</td><td>2,997 条状态变化，1,890 条赢/输标签翻转（约 5.14%）</td></tr><tr><td>原验证集重建</td><td class="right">147,904 条 / 139 场</td><td>重建准确率、Brier、log loss 与旧模型制品一致，浮点差小于 1e-12</td></tr><tr><td>同验证集可恢复目标</td><td class="right">145,897 条 / 139 场</td><td>2,007 条退出，剩余样本作严格同集合比较</td></tr></tbody></table></div>
+<p>全量旧训练输入都有 <code>peer_economics_risk_adjusted≈logit(.99)</code>，来源是决策中的错误概率 1。部分 AH 特征还使用了错误盘口线、累计比分概率。<strong>仅重新标注 y，不能把旧 x 变成干净特征。</strong> 因此修复后不直接拿这些向量重训，也不把改标签后的指标宣称为新模型成绩。</p>
+<div class="tw"><table><thead><tr><th>相同可恢复验证样本</th><th class="right">准确率</th><th class="right">Brier（低为好）</th><th class="right">Log loss（低为好）</th></tr></thead><tbody><tr><td>旧模型＋原错误标签</td><td class="right">62.41%</td><td class="right">0.21533</td><td class="right">0.61485</td></tr><tr><td>旧模型＋修正标签，仍保留旧特征</td><td class="right"><strong>59.88%</strong></td><td class="right"><strong>0.22748</strong></td><td class="right"><strong>0.64388</strong></td></tr><tr><td>市场基准＋修正标签</td><td class="right"><strong>63.53%</strong></td><td class="right"><strong>0.21773</strong></td><td class="right"><strong>0.62216</strong></td></tr><tr><td>旧模型＋修正标签，按非走盘本金加权</td><td class="right">60.82%</td><td class="right">0.22351</td><td class="right">0.63461</td></tr></tbody></table></div>
+<p>旧制品原表的 62.70% 是完整原验证集成绩；62.41% 是剔除不可恢复/走水项目后、用于同集合比较的原成绩。修正目标后旧模型落后市场基准，这比“训练有可能受影响”更强，但仍不是独立的新策略收益回测。</p>
+<p>输入库没有保存完整入场比分，只保存归一化并截断的比分差。AH 判赢只需要净胜球，因此未截断的差可以恢复标签；本次离线分析只对此计算入场后净胜球，不伪造完整比分。生产训练要求显式保存完整入场比分、结算口径和版本，不接受这种旧数据推断。冻结赛果来自台账，场馆一致性则由原审计 160 笔真实回执独立核验。</p>
+<div class="mmd"><pre class="mermaid">flowchart LR
+  A[旧输入与模型制品] --&gt; B[原样保留并隔离]
+  B --&gt; C[可恢复标签离线复核]
+  C --&gt; D[污染量与旧模型重新评分]
+  E[修复后行情快照] --&gt; F[明确比分与结算基准]
+  F --&gt; G[新特征版本白名单]
+  G --&gt; H[至少100场有效比赛]
+  H --&gt; I[按比赛与时间隔离训练]
+  I --&gt; J[影子预测与前瞻验证]</pre></div>
+<h3>12.1 修复后的行为</h3>
+<ul><li><code>split_line</code> 保留负号继承和显式第二半注符号：<code>-0/0.5 → [0,-0.5]</code>、<code>-0.5/1 → [-0.5,-1]</code>。非法线值仍拒绝。</li><li>AH/AH_1H 的概率计算使用剩余进球分布，台账、训练标签、前瞻验证共同调用 <code>settle_with_basis</code>。HAD、OU 保留累计比分口径；缺比分、倒退比分或缺半场比分不猜测。</li><li>风险算法使用完整 Bernoulli 向量收缩，<code>.6</code> 向 <code>.5</code> 收缩得到 <code>.533333</code>。缺少球队方向证据时不产生 HAD/AH 可执行候选。</li><li>实时模型更新为 <code>live-poisson-market-v2</code>；训练数据版本更新为 <code>remaining-ah-signed-lines-bernoulli-v2</code>。旧模型读取时拒绝，旧输入 SQLite 迁移后保持 NULL 版本、供审计而不进入新训练。</li><li>新训练输入和影子预测保存完整入场比分、结算基准、实时模型版本、训练数据版本。标签按入场后进球重算；赢半/输半按 0.5 非走盘本金加权，比赛仍等权，时间隔离保留。</li><li>算法动态权重与下注历史证据仅接受新实时模型版本。首次记录身份包含模型版本，旧首判不会阻挡新模型记录；原订单去重继续生效。</li><li>自动下注除原命中门槛外，还要求当前模型版本、足够独立比赛数、历史 ROI 为正。固定金额仍是配置行为；尚未实现账户级 Kelly/未结算敞口，不能把这些检查包装成盈利保证。</li><li>历史修复追加版本修订，保留决策时点、原概率与原模型版本；保留赛果首次可知的 <code>settled_at</code>，仅更新修订时间，避免制造新的训练时间泄漏。</li></ul>
+<h3>12.2 可复现性与恢复</h3>
+<p>测量来源为 <code>data/training_contamination.json</code>、<code>data/training_contamination.csv</code>。运行：</p>
+<pre><code class="language-bash">./scripts/cpu-limited.sh run -- python3 reports/auto-betting-loss-audit/scripts/training_audit.py \
+  --backup /root/football-task41-backup</code></pre>
+<p>备份目录含一致 SQLite 副本、旧模型和安全权限保护的运行配置，不入 Git。原压缩决策日志保留；无法恢复旧算法概率的向量不改写为新版本。<code>tools/repair_ledger.py</code> 已在副本运行后用于停止写入的生产台账。最终生产修复数量与部署核验另见 <code>data/repair_verification.json</code>。</p>
+<p>使用 <code>./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q</code>：1,346 用例，14 跳过，退出码 0。Docker Python 3.12 中 <code>python -m mypy</code>：84 文件无错误，退出码 0；<code>python -m ruff check .</code>：通过，退出码 0。真实回执回归覆盖 160 笔全部匹配；新增用例覆盖半场/全场基准、负号继承、未知模型隔离、半注权重、历史亏损门控、修复幂等与赛果时间保留。</p>
+<p>生产修复最终迁移 64,733 条旧滚球让球基准；依据 1,095 场已有终场证据重结算 149,616 条记录，缺少证据的条目继续等待。原训练输入 904,473 条全部隔离；训练核验可用新样本为 0，活动模型为空，后续按新版本积累至少 100 场有效比赛。自动下注维持关闭。Python 3.12 容器全量测试曾通过 1,345 用例（14 跳过）；最后新增“赛果修正不得回填旧标签时间”的回归后，宿主机全量通过 1,346 用例，容器针对修改模块再验证。</p>
 </main>
 </body>
 </html>

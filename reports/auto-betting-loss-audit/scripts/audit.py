@@ -18,7 +18,7 @@ import sys
 REPO = Path(__file__).resolve().parents[3]
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-from core.settlement import pnl_for, settle_pick, split_line
+from core.settlement import pnl_for, settle_pick, split_line as current_split_line
 
 GRADED = {'won', 'lost', 'push', 'half_won', 'half_lost'}
 PROFIT_TOLERANCE = 0.025  # Venue rounds monetary returns to cents.
@@ -31,6 +31,17 @@ SCORE_PATTERN = re.compile(r'(\d+)\s*[:\-]\s*(\d+)')
 EVIDENCE_FILES = ('service/live_expert.py','service/betting.py','core/live_model.py',
                   'core/ensemble.py','core/settlement.py','core/economics.py',
                   'store/training_data.py','service/ledger.py')
+
+
+def split_line(value):
+    """Freeze the audited v1 sign semantics even after production is repaired."""
+    parts = str(value).split('/')
+    if len(parts)==2:
+        try:
+            value = '/'.join('%+g' % float(part) for part in parts)
+        except ValueError:
+            return []
+    return current_split_line(value)
 
 
 def dump(path, data):
@@ -79,6 +90,11 @@ def grade(market, outcome, line, result, benchmark=None, inherit=False):
         result = tuple(a-b for a, b in zip(result, benchmark))
         if min(result) < 0:
             return 'void'
+    if not inherit and market.startswith('AH'):
+        old_parts = split_line(line)
+        if not old_parts:
+            return 'void'
+        line = '/'.join('%+g' % part for part in old_parts)
     return settle_pick(market, outcome, line,
                        ft_score=result if not market.endswith('_1H') else None,
                        ht_score=result if market.endswith('_1H') else None)[0]
