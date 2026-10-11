@@ -6,12 +6,13 @@ from contextlib import closing
 import json
 import hashlib
 import heapq
+import math
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterable, Mapping
 
 from core.learned_model import DATA_VERSION, compatible_model, features
-from core.decision_features import FEATURE_VERSION, verified_context
+from core.decision_features import FEATURE_VERSION, verified_context, visible_history
 from core.live_model import MODEL_VERSION
 from core.settlement import _score_of, settle_with_basis
 
@@ -23,7 +24,14 @@ def snapshot_inputs(row: Mapping[str, Any]) -> list[dict[str, Any]]:
             or row.get('finished') or row.get('stale') or _score_of(row.get('score')) is None):
         return []
     cutoff = row.get('input_cutoff_ms')
-    if isinstance(cutoff, bool) or not isinstance(cutoff, (int, float)):
+    if (isinstance(cutoff, bool) or not isinstance(cutoff, (int, float)) or
+            not math.isfinite(cutoff) or cutoff <= 0):
+        return []
+    # A snapshot cutoff says when the decision was captured; it does not prove
+    # when each quote became visible. New training rows require both clocks.
+    decision_received = row.get('received_at_ms')
+    if (isinstance(decision_received, bool) or not isinstance(decision_received, (int, float))
+            or not math.isfinite(decision_received) or decision_received <= 0 or decision_received > cutoff):
         return []
     inputs = []
     evaluations = list(row.get('evaluations', []))
@@ -33,16 +41,27 @@ def snapshot_inputs(row: Mapping[str, Any]) -> list[dict[str, Any]]:
     for evaluation in evaluations:
         for candidate in evaluation.get('candidates', []):
             key = (candidate['market'], str(candidate['line']), candidate['outcome'])
-            if candidate.get('ts_ms', float('inf')) <= cutoff:
+            received = candidate.get('quote_received_at_ms')
+            if (candidate.get('ts_ms', float('inf')) <= cutoff and
+                    isinstance(received, (int, float)) and not isinstance(received, bool) and math.isfinite(received) and
+                    0 < received <= cutoff):
                 peers.setdefault(key, {})[evaluation['algorithm']] = candidate['p_model']
     for evaluation in evaluations:
         for candidate in evaluation.get('candidates', []):
             if (candidate.get('research_only') or candidate.get('decision_status') != 'settleable'
-                    or candidate.get('ts_ms', float('inf')) > cutoff):
+                    or candidate.get('ts_ms', float('inf')) > cutoff
+                    or isinstance(candidate.get('quote_received_at_ms'), bool)
+                    or not isinstance(candidate.get('quote_received_at_ms'), (int, float))
+                    or not math.isfinite(candidate.get('quote_received_at_ms'))
+                    or candidate.get('quote_received_at_ms', 0) <= 0
+                    or candidate.get('quote_received_at_ms', float('inf')) > cutoff):
                 continue
             try:
-                history = [point for point in candidate.get('training_history', [])
-                           if isinstance(point, (list, tuple)) and len(point) == 2 and point[0] <= cutoff]
+                # Reuse the online as-of filter. Besides event time, richer
+                # history rows carry their first-received time in slot 2; a
+                # quote that happened before cutoff but arrived afterwards is
+                # not part of the information set for this decision.
+                history = visible_history({**candidate, 'input_cutoff_ms': cutoff})
                 trend = (history[-1][1] / history[0][1] - 1) * 100 if len(history) > 1 else None
                 x = features({**candidate, 'training_history': history, 'p_fused': candidate['p_model'],
                               'algorithm_probabilities': peers.get((candidate['market'],str(candidate['line']),candidate['outcome']), {}),
@@ -53,6 +72,8 @@ def snapshot_inputs(row: Mapping[str, Any]) -> list[dict[str, Any]]:
             except (ValueError, TypeError, KeyError):
                 continue
             inputs.append({'match_id': row['match_id'], 'at': row['computed_at'], 'cutoff_ms': cutoff,
+                           'decision_received_at_ms': decision_received,
+                           'quote_received_at_ms': candidate['quote_received_at_ms'],
                            'algorithm': evaluation['algorithm'], 'market': candidate['market'],
                            'line': str(candidate['line']), 'outcome': candidate['outcome'],
                            'baseline': candidate['p_market'], 'x': json.dumps(x),
@@ -67,18 +88,25 @@ def write_inputs(path: Path, rows: list[dict[str, Any]], *, repair: bool = False
         return
     # Repair/test callers may provide a v3 vector without repeating the schema
     # marker; normalize it once at the storage boundary.
-    rows = [{**row, 'feature_version': row.get('feature_version', FEATURE_VERSION)} for row in rows]
+    rows = [{**row, 'feature_version': row.get('feature_version', FEATURE_VERSION),
+             'decision_received_at_ms': row.get('decision_received_at_ms'),
+             'quote_received_at_ms': row.get('quote_received_at_ms')} for row in rows]
     path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path, timeout=2)) as con, con:
         con.execute('PRAGMA journal_mode=WAL')
         con.execute('PRAGMA synchronous=FULL')
         con.execute('CREATE TABLE IF NOT EXISTS inputs (match_id TEXT,at TEXT,cutoff_ms REAL,algorithm TEXT,'
                     'market TEXT,line TEXT,outcome TEXT,baseline REAL,x TEXT,'
+                    'decision_received_at_ms REAL,quote_received_at_ms REAL,'
                     'PRIMARY KEY(match_id,at,algorithm,market,line,outcome))')
         con.execute('CREATE INDEX IF NOT EXISTS idx_inputs_at ON inputs(at)')
         migrate_basis_columns(con, 'inputs')
         con.execute('CREATE INDEX IF NOT EXISTS idx_inputs_version ON inputs(data_version,model_version,at)')
-        columns = 'match_id,at,cutoff_ms,algorithm,market,line,outcome,baseline,x,entry_score,settlement_basis,model_version,data_version,feature_version'
+        for name in ('decision_received_at_ms', 'quote_received_at_ms'):
+            existing = {r[1] for r in con.execute('PRAGMA table_info(inputs)')}
+            if name not in existing:
+                con.execute('ALTER TABLE inputs ADD COLUMN ' + name + ' REAL')
+        columns = 'match_id,at,cutoff_ms,algorithm,market,line,outcome,baseline,x,decision_received_at_ms,quote_received_at_ms,entry_score,settlement_basis,model_version,data_version,feature_version'
         con.executemany(('INSERT OR REPLACE' if repair else 'INSERT OR IGNORE') + ' INTO inputs (' + columns + ') VALUES (' +
                         ','.join(':' + name for name in columns.split(',')) + ')', rows)
 
@@ -98,17 +126,33 @@ def migrate_basis_columns(con: sqlite3.Connection, table: str) -> None:
 
 def labels(con: sqlite3.Connection) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
-    # Project only score evidence, rather than loading all historical decision payloads.
-    for mid, at, ft, ht in con.execute("SELECT match_id,settled_at,json_extract(payload,'$.ft_score'),"
-            "json_extract(payload,'$.ht_score') FROM decisions WHERE competition_type='real' "
+    # Select the latest explicitly available revision per match. Never infer
+    # availability from settled_at: old repaired rows may have been discovered
+    # much later than the event they describe.
+    has_revisions = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='label_revisions'").fetchone()
+    if has_revisions:
+        source = con.execute("SELECT match_id,available_at,ft_score,ht_score FROM label_revisions "
+                             "ORDER BY revision_order,revision_id")
+    else:
+        # Older projections may not have the indexed column yet. Read the
+        # explicit point-in-time timestamp from the immutable payload; never
+        # substitute settled_at for repaired legacy records.
+        source = con.execute("SELECT match_id,json_extract(payload,'$.label_available_at'),"
+            "json_extract(payload,'$.ft_score'),json_extract(payload,'$.ht_score') "
+            "FROM decisions WHERE competition_type='real' "
             "AND status IN ('won','lost','half_won','half_lost','push','void') "
-            "AND settled_at!='' AND json_extract(payload,'$.ft_score') IS NOT NULL ORDER BY settled_at"):
-        ft_score = _score_of(json.loads(ft))
-        ht_score = _score_of(json.loads(ht)) if ht else None
+            "AND json_extract(payload,'$.label_available_at') IS NOT NULL "
+            "AND json_extract(payload,'$.label_available_at')!='' "
+            "AND json_extract(payload,'$.ft_score') IS NOT NULL "
+            "ORDER BY json_extract(payload,'$.label_available_at')")
+    for mid, at, ft, ht in source:
+        ft_score = _score_of(json.loads(ft) if isinstance(ft, str) else ft)
+        ht_score = _score_of(json.loads(ht) if isinstance(ht, str) and ht else ht) if ht else None
         if ft_score is not None:
             previous = result.get(str(mid), {})
-            result[str(mid)] = {'ft_score': ft_score, 'ht_score': ht_score or previous.get('ht_score'),
-                                'settled_at': at}
+            if at >= previous.get('settled_at', ''):
+                result[str(mid)] = {'ft_score': ft_score, 'ht_score': ht_score,
+                                    'settled_at': at}
     return result
 
 
@@ -139,7 +183,8 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
     con = sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)
     rows = []
     seen: set[bytes] = set()
-    counts = {'quarantined_inputs': 0, 'quarantined_ledger': 0, 'ungraded_inputs': 0}
+    counts = {'quarantined_inputs': 0, 'quarantined_ledger': 0, 'ungraded_inputs': 0,
+              'quarantined_missing_time_contract': 0, 'eligible_time_contract': 0}
     buckets: dict[str, list] = {}
     source_count = 0
     def collect(row: dict[str, Any], identity: tuple) -> None:
@@ -175,6 +220,14 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                     source = iter(())
                 for r in source:
                     row = dict(r)
+                    clocks = (row.get('decision_received_at_ms'), row.get('quote_received_at_ms'), row.get('cutoff_ms'))
+                    if (any(isinstance(value, bool) or not isinstance(value, (int, float)) or
+                            not math.isfinite(value) or value <= 0 for value in clocks) or
+                            row['decision_received_at_ms'] > row['cutoff_ms'] or
+                            row['quote_received_at_ms'] > row['cutoff_ms']):
+                        counts['quarantined_missing_time_contract'] += 1
+                        continue
+                    counts['eligible_time_contract'] += 1
                     final = finals.get(row['match_id'])
                     if not final or final['settled_at'] <= row['at']:
                         continue
@@ -194,29 +247,12 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
         counts['quarantined_ledger'] = con.execute("SELECT count(*) FROM decisions WHERE competition_type='real' "
                 "AND trigger IN ('live_forecast','live_recommendation') AND "
                 "model_version!=?", (MODEL_VERSION,)).fetchone()[0]
-        for (payload,) in con.execute("SELECT payload FROM decisions WHERE competition_type='real' "
+        # Ledger payloads are not a certified feature snapshot: they may lack
+        # quote-received clocks and the frozen replay schema. Never let this
+        # convenience fallback bypass the dual-time training contract.
+        counts['quarantined_ledger'] += con.execute("SELECT count(*) FROM decisions WHERE competition_type='real' "
                 "AND trigger IN ('live_forecast','live_recommendation') AND research_only=0 "
-                "AND model_version=? "
-                "AND status IN ('won','lost','half_won','half_lost') ORDER BY at,identity", (MODEL_VERSION,)):
-            r = json.loads(payload)
-            key = tuple(str(r.get(k, '')) for k in ('match_id', 'at', 'algorithm', 'market', 'line', 'outcome'))
-            if hashlib.sha256(json.dumps(key).encode()).digest()[:16] in seen:
-                continue
-            try:
-                final = finals.get(str(r['match_id']))
-                if not final or final['settled_at'] <= r['at']:
-                    continue
-                paid = target(r, final)
-                if paid is None:
-                    continue
-                y, weight = paid
-                collect({'match_id': r['match_id'], 'at': r['at'], 'settled_at': final['settled_at'],
-                             'x': features(r), 'y': y, 'observation_weight': weight, 'baseline': r['p_market'],
-                             'algorithm': r.get('algorithm', ''), 'market': r.get('market', ''),
-                             'line': r.get('line', ''), 'outcome': r.get('outcome', '')}, key)
-                seen.add(hashlib.sha256(json.dumps(key).encode()).digest()[:16])
-            except (ValueError, TypeError, KeyError):
-                continue
+                "AND model_version=? AND status IN ('won','lost','half_won','half_lost')", (MODEL_VERSION,)).fetchone()[0]
         if audit is not None:
             audit.update(counts, data_version=DATA_VERSION, source_eligible_decisions=source_count,
                          training_max_rows_per_match=max_per_match)

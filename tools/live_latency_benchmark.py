@@ -101,7 +101,9 @@ def run(matches: int) -> dict:
                    'decision_ms': percentiles(result_latency), 'accepted': len(accepted),
                    'submission_ms': percentiles([r['quote_to_submit_ms'] for r in accepted]),
                    'receipt_ms': percentiles([r['quote_to_receipt_ms'] for r in accepted]),
-                   'deadline_blocked': health['deadline_blocked'],
+                   # The two-second value is a telemetry target; it no longer
+                   # blocks submission. Keep the result name explicit.
+                   'target_misses': health.get('target_misses', health.get('deadline_blocked', 0)),
                    'within_budget': health['within_budget'],
                    'stages_ms': {key: percentiles([v[key] for v in stages if key in v])
                                  for key in {k for row in stages for k in row}},

@@ -6,7 +6,7 @@ from typing import Any, Mapping, Sequence
 
 from core.decision_features import (EXTRA_FEATURES, extra_features, residual_vector,
                                     upgrade_vector)
-from core.decision_features import FEATURE_VERSION
+from core.decision_features import FEATURE_VERSION, visible_history
 
 BASE_FEATURES = ('bias', 'market_logit', 'algorithm_logit', 'elapsed', 'score_difference',
             'home', 'draw', 'away', 'over', 'under', 'ou', 'ah', 'half', 'line',
@@ -19,7 +19,7 @@ MIN_MATCHES = 100
 EPOCHS = 250
 LEARNING_RATE = 0.08
 REGULARIZATION = 0.01
-DATA_VERSION = 'remaining-ah-signed-lines-bernoulli-v3-offset-windows'
+DATA_VERSION = 'remaining-ah-signed-lines-bernoulli-v4-offset-windows-asof'
 
 
 def compatible_model(model: Mapping[str, Any]) -> bool:
@@ -66,7 +66,10 @@ def features(row: Mapping[str, Any]) -> list[float]:
     if not lines or not math.isfinite(trend_value):
         raise ValueError('走势或盘口线无效')
     line = sum(lines) / len(lines)
-    history = row.get('training_history') or []
+    # Keep every training feature on the exact same as-of history used by the
+    # online feature builder. This also excludes pre-cutoff quotes received
+    # after the decision cutoff when rows carry a received timestamp.
+    history = visible_history(row)
     changes = [math.log(float(b[1]) / float(a[1])) for a, b in zip(history, history[1:])]
     volatility = math.sqrt(sum(v*v for v in changes) / len(changes)) if changes else 0.0
     peer_logits = []
@@ -176,12 +179,18 @@ def train(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     training = [r for r in ordered if r['match_id'] in training_ids and r['settled_at'] < validation[0]['at']]
     if len({r['match_id'] for r in training}) < 60 or len({r['y'] for r in training}) < 2:
         raise ValueError('时间隔离后训练样本不足或只有一种标签')
-    weights = fit_weights(training)
-    return {'architecture': 'L2 Logistic offset / 固定市场先验 + 时间窗残差校准', 'features': list(FEATURES),
+    from core.oof_peer import (apply_peer_calibration, crossfit_peer_features,
+                               peer_calibrations)
+    peer_calibration = peer_calibrations(training)
+    training_oof = crossfit_peer_features(training)
+    validation_calibrated = apply_peer_calibration(training, validation)
+    weights = fit_weights(training_oof)
+    return {'architecture': 'L2 Logistic offset + chronological OOF peer residual calibration', 'features': list(FEATURES),
             'data_version': DATA_VERSION,
             'feature_version': FEATURE_VERSION, 'offset': 'market_logit',
-            'weights': weights, 'parameter_count': len(weights), 'training': metrics(training, weights),
-            'validation': metrics(validation, weights), 'baseline': metrics(validation, None),
+            'weights': weights, 'parameter_count': len(weights), 'peer_calibration': peer_calibration,
+            'training': metrics(training_oof, weights),
+            'validation': metrics(validation_calibrated, weights), 'baseline': metrics(validation, None),
             'validation_from': validation[0]['at'], 'validation_to': validation[-1]['at'],
             'training_cutoff': max(r['settled_at'] for r in training),
             'cohort_ids': matches, 'eligible_matches': len(matches),

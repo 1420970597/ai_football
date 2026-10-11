@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
-FEATURE_VERSION = 'market-offset-windows-v3'
+FEATURE_VERSION = 'market-offset-windows-v4'
 BASE_FEATURE_COUNT = 30
 WINDOW_SECONDS = (15, 60, 180)
 HISTORY_MAX_POINTS = 256

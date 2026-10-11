@@ -12,6 +12,15 @@ from store.ledger_db import LedgerDB
 
 
 class LedgerDatabaseTests(unittest.TestCase):
+    def test_history_read_does_not_rescan_archived_jsonl_after_projection_sync(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            ledger._append([self.row(trigger='live_recommendation', status='won')])
+            self.assertTrue(ledger._db_synchronized)
+            with patch.object(ledger, '_files', side_effect=AssertionError('archive rescan')):
+                result = ledger.history(limit=10)
+            self.assertEqual(result['overall']['total'], 1)
+
     def test_betting_evidence_reads_committed_projection_while_writer_is_busy(self):
         with tempfile.TemporaryDirectory() as root:
             ledger = DecisionLedger(root)

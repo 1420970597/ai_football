@@ -12,7 +12,8 @@ from typing import Any, Mapping
 from core.economics import effective_ev as economics_effective_ev, fractional_kelly, q_fill_model
 from core.ensemble import cohere_candidates
 from core.learned_model import compatible_model, features, predict
-from core.decision_features import FEATURE_VERSION, verified_context
+from core.oof_peer import calibrate_peer_vector
+from core.decision_features import FEATURE_VERSION, verified_context, visible_history
 from core.live_model import clock_seconds
 from core.probability_calibration import calibrate_probability
 
@@ -50,7 +51,7 @@ def calibrate(ensemble: Mapping[str, Any], evaluations: list[dict[str, Any]],
             for c in evaluation['candidates']:
                 peers.setdefault((c['market'], c['line'], c['outcome']), {})[evaluation['algorithm']] = c['p_model']
         for c in out['candidates']:
-            history = [p for p in c.get('training_history', []) if p[0] <= cutoff]
+            history = visible_history({**c, 'input_cutoff_ms': cutoff})
             trend = (history[-1][1] / history[0][1] - 1) * 100 if len(history) > 1 else None
             x = features({**c, 'p_fused': c['p_model'], 'entry_score': snapshot['score'],
                           'entry_clock_s': clock_seconds(
@@ -58,7 +59,8 @@ def calibrate(ensemble: Mapping[str, Any], evaluations: list[dict[str, Any]],
                           'training_history': history, 'input_cutoff_ms': cutoff,
                           'feature_context': verified_context(snapshot), 'training_trend_pct': trend,
                           'algorithm_probabilities': peers.get((c['market'], c['line'], c['outcome']), {})})
-            p = calibrate_probability(predict(model['weights'], x), model.get('calibration'))
+            calibrated_x = calibrate_peer_vector(x, model.get('peer_calibration'))
+            p = calibrate_probability(predict(model['weights'], calibrated_x), model.get('calibration'))
             c['baseline_p_model'] = c['p_model']
             c['p_model'] = round(p, 6)
             c['decision_model_version'] = model['version']

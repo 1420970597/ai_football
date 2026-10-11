@@ -23,6 +23,7 @@ FIELDS = {
     'is_live': 'INTEGER', 'odds': 'REAL', 'pnl': 'REAL', 'confidence': 'REAL',
     'kelly': 'REAL', 'p_fused': 'REAL', 'p_market': 'REAL', 'closing_odds': 'REAL',
     'settled_at': 'TEXT', 'decision_id': 'TEXT', 'experiment_id': 'TEXT',
+    'label_available_at': 'TEXT',
     'review_status': 'TEXT', 'research_only': 'INTEGER',
     'model_version': 'TEXT',
 }
@@ -43,7 +44,8 @@ class LedgerDB:
                                 '(identity TEXT PRIMARY KEY, revision REAL, payload TEXT,' + columns + ')')
         existing = {row[1] for row in self.connection.execute('PRAGMA table_info(decisions)')}
         missing = [name for name in ('line', 'outcome', 'model_version',
-                                     'decision_count', 'decision_event_id') if name not in existing]
+                                     'decision_count', 'decision_event_id',
+                                     'label_available_at') if name not in existing]
         if missing:
             # Atomic migration: a crash must not leave added columns unfilled.
             with self.connection:
@@ -69,6 +71,14 @@ class LedgerDB:
             self.connection.execute('CREATE INDEX IF NOT EXISTS idx_' + name + ' ON decisions(' + cols + ')')
         self.connection.execute('CREATE TABLE IF NOT EXISTS imports '
                                 '(path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER)')
+        # Append-only label snapshots preserve the point-in-time truth available
+        # when each result or correction first reached the system.
+        self.connection.execute('CREATE TABLE IF NOT EXISTS label_revisions '
+                                '(revision_id TEXT PRIMARY KEY, match_id TEXT NOT NULL, available_at TEXT NOT NULL, '
+                                'ft_score TEXT NOT NULL, ht_score TEXT, status TEXT NOT NULL, source_revision TEXT NOT NULL, '
+                                'revision_order REAL NOT NULL DEFAULT 0)')
+        self.connection.execute('CREATE INDEX IF NOT EXISTS idx_label_revisions_match_time '
+                                'ON label_revisions(match_id,available_at)')
         self.connection.commit()
 
     def __del__(self) -> None:
@@ -105,6 +115,26 @@ class LedgerDB:
             values.append([self.identity(row), revision, json.dumps(dict(row), ensure_ascii=False),
                            *[row.get(k, defaults[k]) for k in FIELDS]])
         self.connection.executemany(sql, values)
+        labels = []
+        for row in rows:
+            ft = row.get('ft_score')
+            available = str(row.get('label_available_at') or '')
+            if (row.get('competition_type') != 'real' or row.get('status') not in
+                    ('won', 'lost', 'half_won', 'half_lost', 'push', 'void') or
+                    not available or not isinstance(ft, (list, tuple)) or len(ft) != 2):
+                continue
+            ht = row.get('ht_score')
+            identity = [str(row.get('match_id') or ''), available, list(ft), list(ht) if isinstance(ht, (list, tuple)) else None,
+                        str(row.get('status') or ''), str(row.get('updated_at') or '')]
+            revision_id = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
+            labels.append((revision_id, identity[0], available,
+                           json.dumps(list(ft)), json.dumps(identity[3]) if identity[3] is not None else None,
+                           identity[4], identity[5], float(epoch(available))))
+        if labels:
+            self.connection.executemany(
+                'INSERT OR IGNORE INTO label_revisions '
+                '(revision_id,match_id,available_at,ft_score,ht_score,status,source_revision,revision_order) '
+                'VALUES (?,?,?,?,?,?,?,?)', labels)
 
     def entries(self, where: str = '1', params: Sequence[Any] = (),
                 limit: int | None = None, offset: int = 0) -> list:

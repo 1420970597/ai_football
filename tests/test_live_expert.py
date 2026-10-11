@@ -119,11 +119,11 @@ class LiveExpertTests(unittest.TestCase):
                                           (capture-1000, capture+5000, 1.4)], maxlen=40)
         later = svc.compute({**snapshot, 'captured_at_ms': capture+6000}, hub)
         late_quote = next(m for m in later['markets'] if m['market']=='HAD')['quotes'][0]
-        self.assertIn([capture-1000, 1.4], late_quote['training_history'])
+        self.assertIn([capture-1000, 1.4, capture+5000], late_quote['training_history'])
         earlier = svc.compute(snapshot, hub)
         early_quote = next(m for m in earlier['markets'] if m['market']=='HAD')['quotes'][0]
-        self.assertNotIn([capture-1000, 1.4], early_quote['training_history'])
-        self.assertIn([capture-10000, 1.8], early_quote['training_history'])
+        self.assertNotIn([capture-1000, 1.4, capture+5000], early_quote['training_history'])
+        self.assertIn([capture-10000, 1.8, capture-9000], early_quote['training_history'])
 
     def test_settings_alerts_use_last_settled_evidence_without_full_database_query(self):
         from api.app import ApiApp
@@ -246,8 +246,8 @@ class LiveExpertTests(unittest.TestCase):
             [(capture-10000,capture-9000,1.8),(capture-1000,capture+5000,1.4)],maxlen=40)
         row = svc.compute(snapshot,hub)
         home=next(c for c in row['evaluations'][0]['candidates'] if c['market']=='HAD' and c['outcome']=='home')
-        self.assertNotIn([capture-1000,1.4],home['training_history'])
-        self.assertIn([capture-10000,1.8],home['training_history'])
+        self.assertNotIn([capture-1000,1.4,capture+5000],home['training_history'])
+        self.assertIn([capture-10000,1.8,capture-9000],home['training_history'])
         self.assertEqual(row['input_cutoff_ms'],capture)
 
     def test_memory_compute_without_disk_network_or_llm(self):

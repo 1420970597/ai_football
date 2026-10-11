@@ -143,11 +143,18 @@ def repair_replay(row: Mapping[str, Any], finals: Mapping[str, Any]) -> dict[str
     rebuilt = LiveExpertService.evaluate_markets(markets, score, row.get('elapsed_s'), current, decayed,
                                                 performance, cfg, direction)
     ensemble = pool(rebuilt, performance, cfg)
+    cutoff = row.get('input_cutoff_ms')
+    received = row.get('received_at_ms')
+    time_contract = (row.get('schema_version') == 3 and
+                     isinstance(cutoff, (int, float)) and not isinstance(cutoff, bool) and
+                     math.isfinite(cutoff) and cutoff > 0 and
+                     isinstance(received, (int, float)) and not isinstance(received, bool) and
+                     math.isfinite(received) and 0 < received <= cutoff)
     out.update(model_version=MODEL_VERSION, original_model_version=row.get('model_version'),
                repair_status='rebuilt_frozen_inputs', markets=markets, evaluations=rebuilt,
                ensemble=ensemble, baseline_ensemble=ensemble, candidates=ensemble['candidates'],
                forecasts=ensemble['forecasts'], picks=ensemble['recommendations'],
                has_buy=bool(ensemble['recommendations']), algorithm_performance=performance,
-               training_eligible=row.get('schema_version') == 2 and row.get('input_cutoff_ms') is not None,
+               training_eligible=time_contract,
                repaired_weight_basis='neutral_prior; old settlement evidence was contaminated')
     return out

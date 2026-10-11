@@ -96,8 +96,10 @@ class DataModelTests(unittest.TestCase):
             for i in range(120):
                 row = sample_row(i)
                 finals.append({'match_id': str(i), 'at': row['at'], 'settled_at': row['settled_at'],
+                               'label_available_at': row['settled_at'],
                                'competition_type': 'real','status':'won','ft_score': [2,0] if row['y'] else [0,2]})
-                inputs.append({'match_id':str(i), 'at':row['at'],'cutoff_ms':1,'algorithm':'poisson_time_decay',
+                inputs.append({'match_id':str(i), 'at':row['at'],'cutoff_ms':1000,
+                               'decision_received_at_ms':900,'quote_received_at_ms':900,'algorithm':'poisson_time_decay',
                                'market':'HAD','line':'','outcome':'home','baseline':row['baseline'],'x':json.dumps(row['x']),
                                'entry_score':'[0,0]','settlement_basis':'full_score',
                                'model_version':__import__('core.live_model',fromlist=['MODEL_VERSION']).MODEL_VERSION,
@@ -205,6 +207,7 @@ class DataModelTests(unittest.TestCase):
             svc.root.mkdir()
             db=LedgerDB(svc.root/'ledger.sqlite3')
             db.put([{'match_id':'m1','at':decision()['computed_at'],'settled_at':'2025-01-01T14:00:00+00:00',
+                     'label_available_at':'2025-01-01T14:00:00+00:00',
                      'competition_type':'real','status':'won','ft_score':[2,1],'ht_score':[1,0]}],lambda _:1.)
             db.connection.commit()
             from store.training_data import prospective_metrics

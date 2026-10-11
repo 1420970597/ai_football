@@ -165,6 +165,8 @@ class LedgerEntry:
     #: 收盘赔率（用于 CLV）；结算时记录
     closing_odds: float = 0.0
     settled_at: str = ""
+    #: First time the result label became available to the system; preserved on repair.
+    label_available_at: str = ""
     settle_note: str = ""
 
     @property
@@ -709,10 +711,13 @@ class DecisionLedger:
             e.status, e.settle_note = status, note
             e.ft_score = list(ft)
             e.ht_score = list(ht) if ht is not None else None
-            # A repair learns no new result: preserve when the original score
-            # became available, and timestamp the revision independently.
+            # A repair cannot prove when a legacy score first became available.
+            # Timestamp this observed revision now; never backdate availability
+            # using the settlement/event timestamp.
             now = _now().isoformat()
             e.settled_at = now if score_changed else (e.settled_at or now)
+            if score_changed or not e.label_available_at:
+                e.label_available_at = now
             e.updated_at = now
             e.grading_version = 'remaining-ah-signed-lines-v2'
             e.pnl = round(pnl_for(status, e.odds), 6) if e.is_pick else 0.0
@@ -765,10 +770,15 @@ class DecisionLedger:
         # settlement batch: WAL readers see the last committed projection.
         # Execution evidence checks only the active journal after recovery;
         # ordinary history/regrade readers still scan all legacy revisions.
+        # Ordinary history reads must stay on the indexed SQLite projection.
+        # Forcing a complete JSONL/archive rescan on every page load made the
+        # endpoint scale with retained history (the production journal is
+        # multi-GB). Appends/imports update the projection transactionally;
+        # only the active journal needs checking after initial synchronization.
         acquired = self._lock.acquire(blocking=not self._db_synchronized)
         if acquired:
             try:
-                self._sync_db(force=not active_only)
+                self._sync_db(force=not active_only and not self._db_synchronized)
             finally:
                 self._lock.release()
         with db.reader() as reader:
@@ -1106,13 +1116,19 @@ class DecisionLedger:
                 size = path.stat().st_size
             except OSError:
                 size = 0
+        files = 0
+        if self._db is not None:
+            try:
+                files = int(self._db.connection.execute('SELECT count(*) FROM imports').fetchone()[0])
+            except Exception:
+                files = 0
         return {
             "enabled": self.enabled,
             "retention": "permanent",
             "storage": "sqlite-wal",
             "database": str(self._db.path) if self._db else "",
             "path": str(path) if path else "",
-            "files": len(self._files()),
+            "files": files,
             "size_bytes": size,
             "last_error": self.last_error,
         }

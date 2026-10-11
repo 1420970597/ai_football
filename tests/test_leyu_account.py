@@ -30,7 +30,6 @@ class LeyuAccountTests(unittest.TestCase):
 
     def test_fast_preflight_runs_quote_limits_and_wallet_concurrently(self):
         import threading
-        import time
         from collector.leyu_account import VENUE_LATEST_MARKET_PATH, VENUE_LIMIT_PATH
         client = LeyuAccountClient(SimpleNamespace(app_host='https://offline.invalid'), fast_execution=True)
         self.addCleanup(client.close)
@@ -46,7 +45,7 @@ class LeyuAccountTests(unittest.TestCase):
                 return [{'code': 0, 'playOptionsId': 'option1', 'minBet': '1', 'orderMaxPay': '10'}]
             return {'amount': 20}
         client._venue_request = request
-        self.assertEqual(client.prepare_bet(self.bet_detail(), 2, deadline=time.monotonic()+1)['oddFinally'], '1.95')
+        self.assertEqual(client.prepare_bet(self.bet_detail(), 2)['oddFinally'], '1.95')
 
     def test_deadline_auth_failure_invalidates_without_inline_login(self):
         import time

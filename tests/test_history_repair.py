@@ -40,7 +40,10 @@ class HistoryRepairTests(unittest.TestCase):
         service.configure(cfg, 1)
         snapshot = hub.decision_snapshot('m')
         row = service.compute(snapshot, hub)
-        row.update(model_version='live-poisson-market-v1', schema_version=2, config=asdict(cfg))
+        row.update(model_version='live-poisson-market-v1', schema_version=3, config=asdict(cfg), received_at_ms=row['input_cutoff_ms'])
+        for evaluation in row['evaluations']:
+            for candidate in evaluation['candidates']:
+                candidate['quote_received_at_ms'] = row['input_cutoff_ms']
         return row
 
     def test_rebuild_uses_frozen_peers_and_preserves_cutoff(self):
@@ -59,6 +62,13 @@ class HistoryRepairTests(unittest.TestCase):
         risk = next(e for e in repaired['evaluations'] if e['algorithm'] == 'economics_risk_adjusted')
         self.assertTrue(all(0 < c['p_model'] < 1 for c in risk['candidates']))
         self.assertEqual(repair_replay(repaired, {})['evaluations'], repaired['evaluations'])
+
+    def test_rebuild_quarantines_invalid_decision_receive_clock(self):
+        row = self.frozen()
+        row['received_at_ms'] = row['input_cutoff_ms'] + 1
+        repaired = repair_replay(row, {})
+        self.assertFalse(repaired['training_eligible'])
+        self.assertEqual(snapshot_inputs(repaired), [])
 
     def test_missing_distribution_is_explicit_not_certified(self):
         row = {'match_id':'m', 'model_version':'live-poisson-market-v1', 'score':[1,0],

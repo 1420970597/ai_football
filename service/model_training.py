@@ -6,6 +6,7 @@ import fcntl
 import os
 from pathlib import Path
 import resource
+import shutil
 import sys
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -15,9 +16,13 @@ from core.decision_features import FEATURE_VERSION
 from core.model_validation import evaluate, paired_evidence, promotion, rolling_folds
 from core.probability_calibration import fit_logistic
 from core.probability_calibration import calibrate_probability
+from core.oof_peer import apply_peer_calibration, crossfit_peer_features
 from store.training_data import dataset
 
-TRAINING_MAX_ROWS_PER_MATCH = 64
+# A training run must use every qualified decision.  The previous min-hash
+# cap was useful as a temporary resource guard, but it silently discarded
+# valid observations and made the reported accuracy depend on the cap.
+TRAINING_MAX_ROWS_PER_MATCH: int | None = None
 
 
 def rolling_validation(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
@@ -28,12 +33,14 @@ def rolling_validation(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
     fold_baselines: list[list[float]] = []
     fold_outcomes: list[list[int]] = []
     for index, (training, validation) in enumerate(rolling_folds(rows), 1):
-        weights = fit_weights(training)
-        candidate = [train_probability(row, weights) for row in validation]
+        training_oof = crossfit_peer_features(training)
+        validation_peers = apply_peer_calibration(training, validation)
+        weights = fit_weights(training_oof)
+        candidate = [train_probability(row, weights) for row in validation_peers]
         baseline = [float(row['baseline']) for row in validation]
-        candidate_metrics = evaluate(validation, candidate)
+        candidate_metrics = evaluate(validation_peers, candidate)
         baseline_metrics = evaluate(validation, baseline)
-        fold_rows.append([dict(row) for row in validation])
+        fold_rows.append([dict(row) for row in validation_peers])
         fold_candidates.append(candidate)
         fold_baselines.append(baseline)
         fold_outcomes.append([int(row['y']) for row in validation])
@@ -71,6 +78,65 @@ def atomic_json(path: Path, data: Any) -> None:
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
+
+
+def backup_active_model(model_root: Path, active: Path | None = None) -> Path | None:
+    """Preserve the current active artifact before a promotion.
+
+    Backups are immutable, version-addressable artifacts.  An invalid or
+    missing active model is deliberately ignored; promotion can still create
+    the first active artifact.  The copy is made before ``active.json`` is
+    replaced so an interrupted promotion never destroys the last known-good
+    model.
+    """
+    active = active or (model_root / 'active.json')
+    if not active.exists():
+        return None
+    try:
+        previous = json.loads(active.read_text(encoding='utf-8'))
+        version = str(previous.get('version') or '')
+    except (OSError, ValueError, TypeError):
+        return None
+    if (not version or any(ch not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-' for ch in version)
+            or not compatible_model(previous)):
+        return None
+    destination = model_root / ('active-backup-' + version + '.json')
+    if not destination.exists():
+        model_root.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix('.tmp')
+        shutil.copyfile(active, temporary)
+        os.replace(temporary, destination)
+    return destination
+
+
+def rollback_active_model(model_root: Path, version: str | None = None) -> dict[str, Any]:
+    """Explicitly restore a previously approved active backup.
+
+    This function is intentionally never called by the worker automatically.
+    Only artifacts carrying a compatible data/feature version and an explicit
+    ``promotion.approved`` flag are eligible, preventing accidental downgrade
+    to an unvalidated candidate.
+    """
+    backups = sorted(model_root.glob('active-backup-*.json'))
+    if version:
+        version = str(version)
+        if any(ch not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-' for ch in version):
+            return {'restored': False, 'reason': '无效模型版本'}
+        backups = [p for p in backups if p.name == 'active-backup-' + version + '.json']
+    for path in reversed(backups):
+        try:
+            model = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError, TypeError):
+            continue
+        promotion = model.get('promotion')
+        if not compatible_model(model) or not isinstance(promotion, dict) or promotion.get('approved') is not True:
+            continue
+        atomic_json(model_root / 'active.json', model)
+        return {'restored': True, 'version': str(model.get('version')), 'source': str(path)}
+    reason = '未找到兼容且已批准的 active 备份'
+    if version:
+        reason += ': ' + str(version)
+    return {'restored': False, 'reason': reason}
 
 
 def constrain(cpu: int, memory_mb: int) -> dict[str, Any]:
@@ -126,7 +192,7 @@ def run(root: Path, cycle: int, cpu: int, memory: int) -> dict[str, Any]:
         test_metrics = folds[-1].get('model_calibrated', model['validation']) if folds else model['validation']
         baseline_metrics = folds[-1].get('baseline_calibrated', model['baseline']) if folds else model['baseline']
         decision = promotion(test_metrics, baseline_metrics, evidence, folds)
-        model['sampling'] = {'method':'deterministic identity min-hash, independent of results',
+        model['sampling'] = {'method':'all qualified decisions; no per-match sampling',
                              'max_rows_per_match':TRAINING_MAX_ROWS_PER_MATCH,
                              'source_eligible_decisions':quality['source_eligible_decisions']}
         model['rolling_validation'] = folds
@@ -142,8 +208,10 @@ def run(root: Path, cycle: int, cpu: int, memory: int) -> dict[str, Any]:
         status['candidate'] = {'version': model['version'], 'promotion': decision,
                                'calibration': calibration, 'rolling_validation': folds}
         if decision['approved']:
+            previous_backup = backup_active_model(model_root, active)
             atomic_json(active, model)
-            status.update(state='ready', new_matches=0, promoted_version=model['version'])
+            status.update(state='ready', new_matches=0, promoted_version=model['version'],
+                          previous_active_backup=str(previous_backup) if previous_backup else None)
         else:
             status.update(state='candidate', candidate_version=model['version'],
                           promotion_reasons=decision['reasons'])

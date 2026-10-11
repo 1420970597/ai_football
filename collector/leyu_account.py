@@ -63,7 +63,7 @@ class BetPreflightRetryable(SessionError):
     """A read-only venue check failed transiently; no debit was attempted."""
 
 class BetPreflightBudgetExpired(BetPreflightRetryable):
-    """A read consumed this quote's execution budget; wait for a new quote."""
+    """Backward-compatible name for a bounded preflight transport timeout."""
 
 
 
@@ -613,9 +613,11 @@ class LeyuAccountClient:
         request_options: Dict[str, Any] = {'deadline': deadline} if deadline is not None else {}
         pending_limits = pending_wallet = None
         expected_raw = str(round(_bet_number(detail['oddFinally'], '推荐赔率')*OV_SCALE))
-        if self._preflight_pool and deadline is not None:
+        if self._preflight_pool:
             # All three reads refer to the same selected native IDs and price.
             # Validate their complete replies together before any durable claim.
+            # ``deadline`` is optional compatibility input; normal execution
+            # leaves it unset and each request uses the client's normal timeout.
             expected_limit = {'marketId': detail['marketId'], 'matchId': detail['matchId'],
                 'playId': detail['playId'], 'playOptionId': detail['playOptionsId'],
                 'oddsValue': expected_raw, 'matchType': 2, 'deviceType': 3}
@@ -630,7 +632,7 @@ class LeyuAccountClient:
                 latest_future.cancel()
                 pending_limits.cancel()
                 pending_wallet.cancel()
-                raise BetPreflightBudgetExpired('场馆盘口校验超过两秒预算') from exc
+                raise BetPreflightRetryable('场馆盘口校验超时') from exc
         else:
             rows = _bet_rows(self._venue_request(VENUE_LATEST_MARKET_PATH, query, **request_options))
         market = next((row for row in rows if str(row.get("id")) == str(detail["marketId"])
@@ -675,7 +677,7 @@ class LeyuAccountClient:
             except TimeoutError as exc:
                 pending_limits.cancel()
                 pending_wallet.cancel()
-                raise BetPreflightBudgetExpired('场馆预检超过两秒链路预算') from exc
+                raise BetPreflightRetryable('场馆预检超时') from exc
         else:
             limits = _bet_rows(self._venue_request(VENUE_LIMIT_PATH, {"orderMaxBetMoney": [limit_detail]}))
             amount = None

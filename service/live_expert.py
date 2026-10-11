@@ -463,7 +463,10 @@ class LiveExpertService:
                     if cache and cache[0] == stamp and captured is not None and captured >= cache[1]:
                         prefix = [list(point) for point in cache[2]]
                     else:
-                        prefix = [[point[0], point[2]] for point in training_series
+                        # Preserve event time and first receive time in the
+                        # immutable training snapshot. The third field lets
+                        # offline/online as-of filters exclude delayed quotes.
+                        prefix = [[point[0], point[2], point[1]] for point in training_series
                                   if captured is not None and point[0] <= captured and point[1] <= captured]
                         visible_after = max((max(point[:2]) for point in training_series), default=0)
                         if captured is not None and captured >= visible_after:

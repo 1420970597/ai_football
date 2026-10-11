@@ -122,6 +122,9 @@ class ModelService:
                     'note': ('影子模式：模型仅记录预测。' if self.cfg.model_shadow_enabled else '实际模式：兼容模型参与概率校准；不可用时使用经济算法。') + '保留各算法、盘口、盘口线、方向和决策时点；按比赛分组、等权训练。走势特征冻结在决策输入截点，旧记录缺少走势时显式标记缺失。'}
 
     def observe(self, row: dict[str, Any]) -> None:
+        state = row.get('input_state') or {}
+        if not row.get('received_at_ms') and state.get('received_at_ms'):
+            row = {**row, 'received_at_ms': state['received_at_ms']}
         inputs = snapshot_inputs(row)
         with self._lock:
             if self.root is None:

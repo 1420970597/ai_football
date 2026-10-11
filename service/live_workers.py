@@ -34,7 +34,8 @@ def freeze_replay(result: Mapping[str, Any], snapshot: Mapping[str, Any],
                   config: Any, anchor: Mapping[str, Any], histories: Mapping | None = None) -> FrozenReplay:
     frozen_config = asdict(config)
     frozen_config.pop('llm_api_key', None)
-    record = {**result, 'at': result['computed_at'], 'schema_version': 2,
+    record = {**result, 'at': result['computed_at'], 'schema_version': 3,
+              'received_at_ms': snapshot.get('received_at_ms'),
               'config': frozen_config, 'anchor': dict(anchor),
               'input_state': {k: snapshot.get(k) for k in
                   ('info', 'status', 'score_age_s', 'status_age_s', 'half_score',
