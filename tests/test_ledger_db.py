@@ -137,6 +137,23 @@ class LedgerDatabaseTests(unittest.TestCase):
             self.assertEqual(again.history(limit=1,offset=1)['next_offset'],None)
             self.assertEqual(again._db.connection.execute('PRAGMA journal_mode').fetchone()[0],'wal')
 
+    def test_late_observed_label_backfill_is_idempotent_and_does_not_backdate(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            first = self.row(match_id='m1', status='won', updated_at='2026-10-08T12:00:00+00:00')
+            first.ft_score = [2, 1]
+            first.ht_score = [1, 0]
+            ledger._append([first])
+            result = ledger._db.backfill_observed_labels('2026-10-11T12:00:00+00:00')
+            self.assertEqual(result['backfilled_matches'], 1)
+            self.assertEqual(ledger._db.connection.execute('SELECT count(*) FROM label_revisions').fetchone()[0], 1)
+            available = ledger._db.connection.execute(
+                'SELECT available_at FROM label_revisions WHERE match_id=?', ('m1',)).fetchone()[0]
+            self.assertEqual(available, '2026-10-11T12:00:00+00:00')
+            again = ledger._db.backfill_observed_labels('2026-10-11T12:05:00+00:00')
+            self.assertEqual(again['backfilled_matches'], 0)
+            self.assertEqual(ledger._db.connection.execute('SELECT count(*) FROM label_revisions').fetchone()[0], 1)
+
     def test_sql_metrics_equal_settlement_and_frozen_returns(self):
         with tempfile.TemporaryDirectory() as root:
             ledger=DecisionLedger(root)

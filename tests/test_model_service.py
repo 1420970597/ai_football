@@ -1,6 +1,7 @@
 from pathlib import Path
 import gzip
 import json
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -67,6 +68,26 @@ class ModelServiceTests(unittest.TestCase):
             import sqlite3
             with sqlite3.connect(Path(root)/'models'/'inputs.sqlite3') as con:
                 self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0],16)
+
+    def test_recent_replay_is_consumed_before_large_historical_backlog(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = Path(root) / 'ledger'
+            ledger.mkdir()
+            old = ledger / 'live-replay.2026101000.jsonl.gz'
+            recent = ledger / 'live-replay.2026101100.jsonl.gz'
+            old_row = {**decision(), 'competition_type': 'virtual'}
+            HistoryJournal(old).append([old_row])
+            HistoryJournal(recent).append([decision()])
+            import os
+            os.utime(old, ns=(1_000_000_000, 1_000_000_000))
+            worker = ModelService()
+            worker.bind(str(ledger))
+            worker._consume_replay()
+            self.assertEqual(worker._cursor, {recent.name: recent.stat().st_size})
+            self.assertEqual(worker._replay_stats['last_file'], recent.name)
+            self.assertEqual(worker._replay_stats['last_batch_inputs'], 8)
+            with sqlite3.connect(Path(root) / 'models' / 'inputs.sqlite3') as con:
+                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0], 8)
 
     def test_replay_reloads_cursor_after_repaired_gzip_replacement(self):
         from service.model_training import atomic_json

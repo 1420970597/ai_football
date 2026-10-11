@@ -23,6 +23,8 @@ from service.model_training import atomic_json
 
 from store.training_data import migrate_basis_columns, snapshot_inputs, write_inputs
 
+REPLAY_MEMBERS_PER_CYCLE = 128
+
 
 class ModelService:
     def __init__(self) -> None:
@@ -45,6 +47,11 @@ class ModelService:
         self._cursor: dict[str, int] = {}
         self._settings_mtime = 0
         self._retry_requested = False
+        self._replay_stats: dict[str, Any] = {
+            'last_file': '', 'last_at': '', 'last_batch_records': 0,
+            'last_batch_inputs': 0, 'total_records': 0, 'total_inputs': 0,
+            'backlog_files': 0,
+        }
 
     def bind(self, root: str | None) -> None:
         self.stop()
@@ -57,6 +64,11 @@ class ModelService:
             self._inputs.clear()
             self._storage = {}
             self._status = {'state': 'not_started'}
+            self._replay_stats = {
+                'last_file': '', 'last_at': '', 'last_batch_records': 0,
+                'last_batch_inputs': 0, 'total_records': 0, 'total_inputs': 0,
+                'backlog_files': 0,
+            }
             self._read()
 
     def configure(self, cfg: RuntimeConfig) -> None:
@@ -220,6 +232,7 @@ class ModelService:
                       training_running=bool(self._process and self._process.poll() is None),
                       heartbeat_at=datetime.now(timezone.utc).isoformat(),
                       process_id=os.getpid(), service='model-worker')
+        status['replay'] = dict(self._replay_stats)
         status['model'].pop('weights', None)
         status['model'].pop('cohort_ids', None)
         atomic_json(self.root.parent / 'models' / 'dashboard.json', status)
@@ -244,40 +257,65 @@ class ModelService:
             persisted = json.loads(cursor_path.read_text())
             if isinstance(persisted, dict):
                 self._cursor.update(persisted)
-        # Only schema-v2 immutable journals carry proven input cutoffs. Legacy
-        # rows remain available to dataset() with explicitly missing trends.
-        paths = sorted(self.root.glob('live-replay*.jsonl.gz'))
+        # Prefer the newest journal first. In S3 mode old hourly chunks can be
+        # multi-gigabyte; draining them in lexical order starves today's live
+        # decisions and leaves the training input projection empty.
+        paths = sorted(self.root.glob('live-replay*.jsonl.gz'),
+                       key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
         for path in paths:
             offset = self._cursor.get(path.name, 0)
             if path.stat().st_size < offset:
                 raise ValueError('永久决策日志被截断，不能跳过输入')
             if path.stat().st_size == offset:
                 continue
-            decoder = zlib.decompressobj(31)
-            linebuf = b''
+            start_offset = offset
+            batch_records = batch_inputs = members = 0
             with path.open('rb') as source:
                 source.seek(offset)
-                while not decoder.eof:
-                    compressed = source.read(64 * 1024)
-                    if not compressed:
-                        return  # Writer is finishing a gzip member; retry it.
-                    linebuf += decoder.decompress(compressed)
+                while members < REPLAY_MEMBERS_PER_CYCLE:
+                    decoder = zlib.decompressobj(31)
+                    linebuf = b''
+                    while not decoder.eof:
+                        compressed = source.read(64 * 1024)
+                        if not compressed:
+                            break
+                        linebuf += decoder.decompress(compressed)
+                    if not decoder.eof:
+                        break  # Writer is finishing a gzip member; retry it.
+                    end = source.tell() - len(decoder.unused_data)
+                    if end <= offset:
+                        raise ValueError('决策日志 gzip 成员游标未前进')
                     lines = linebuf.split(b'\n')
-                    linebuf = lines.pop()
-                    for line in lines:
+                    if lines[-1]:
+                        raise ValueError('决策归档成员缺少完整记录边界')
+                    for line in lines[:-1]:
                         if line:
-                            self.observe(json.loads(line))
-                        if len(self._inputs) >= 1000:
-                            self._flush_shadow()
-                            self._publish()
-                if linebuf:
-                    raise ValueError('决策归档成员缺少完整记录边界')
-                end = source.tell() - len(decoder.unused_data)
-            # Commit records before cursor. Replay after a crash is idempotent.
+                            row = json.loads(line)
+                            batch_records += 1
+                            before = len(self._inputs)
+                            self.observe(row)
+                            batch_inputs += len(self._inputs) - before
+                            self._replay_stats['last_at'] = str(row.get('computed_at') or '')
+                    offset = end
+                    members += 1
+                    source.seek(offset)
+                    if len(self._inputs) >= 1000:
+                        self._flush_shadow()
+            if offset == start_offset:
+                continue
+            # Commit all decoded members before advancing the cursor. Replay
+            # after a crash is idempotent through the inputs primary key.
             self._flush_shadow()
-            self._cursor[path.name] = end
+            self._cursor[path.name] = offset
             atomic_json(cursor_path, self._cursor)
-            return  # Bound each loop to one member; heartbeat/training continue.
+            self._replay_stats.update(last_file=path.name, last_batch_records=batch_records,
+                                      last_batch_inputs=batch_inputs,
+                                      total_records=self._replay_stats['total_records'] + batch_records,
+                                      total_inputs=self._replay_stats['total_inputs'] + batch_inputs)
+            self._replay_stats['backlog_files'] = sum(
+                1 for item in paths if self._cursor.get(item.name, 0) < item.stat().st_size)
+            return  # Bound each loop to a finite batch; heartbeat/training continue.
+        self._replay_stats.update(last_batch_records=0, last_batch_inputs=0, backlog_files=0)
 
     def _loop(self) -> None:
         next_check = 0.0

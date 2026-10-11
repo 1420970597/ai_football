@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, Mapping, Sequence
 from core.live_model import MODEL_VERSION
+from core.settlement import _score_of
 
 
 FIELDS = {
@@ -135,6 +136,62 @@ class LedgerDB:
                 'INSERT OR IGNORE INTO label_revisions '
                 '(revision_id,match_id,available_at,ft_score,ht_score,status,source_revision,revision_order) '
                 'VALUES (?,?,?,?,?,?,?,?)', labels)
+
+    def backfill_observed_labels(self, available_at: str,
+                                 source: str = 'late_observed_migration') -> dict[str, int]:
+        """Create point-in-time labels for old terminal rows missing a revision.
+
+        Older ledger rows were settled with a score but before the explicit
+        ``label_available_at`` field existed.  Their score is durable evidence,
+        but their first observation time is not recoverable.  This migration
+        records the time it is run as the availability time instead of
+        backdating the label to an event or settlement timestamp.  Existing
+        revisions are left untouched and the operation is idempotent per match.
+        """
+        available = str(available_at or '').strip()
+        if not available:
+            raise ValueError('标签可用时间不能为空')
+        terminal = ('won', 'lost', 'half_won', 'half_lost', 'push', 'void')
+        existing = {str(row[0]) for row in self.connection.execute(
+            'SELECT DISTINCT match_id FROM label_revisions')}
+        latest: dict[str, tuple[str, float, dict[str, Any], tuple[int, int], tuple[int, int] | None]] = {}
+        scanned = 0
+        skipped = 0
+        rows = self.connection.execute(
+            "SELECT identity,revision,payload FROM decisions "
+            "WHERE competition_type='real' AND status IN (?,?,?,?,?,?) "
+            "ORDER BY revision DESC,identity", terminal)
+        for identity, revision, raw in rows:
+            scanned += 1
+            try:
+                payload = json.loads(raw)
+                mid = str(payload.get('match_id') or '')
+                ft = _score_of(payload.get('ft_score'))
+                ht = _score_of(payload.get('ht_score'))
+                status = str(payload.get('status') or '')
+            except (TypeError, ValueError, json.JSONDecodeError):
+                skipped += 1
+                continue
+            if not mid or mid in existing or mid in latest or ft is None or status not in terminal:
+                skipped += 1
+                continue
+            latest[mid] = (str(identity), float(revision or 0), payload, ft, ht)
+        labels = []
+        for mid, (identity, revision, payload, ft, ht) in latest.items():
+            source_revision = '%s:%s:%s' % (source, identity, revision)
+            revision_key = [mid, available, list(ft), list(ht) if ht is not None else None,
+                            str(payload.get('status') or ''), source_revision]
+            revision_id = hashlib.sha256(json.dumps(revision_key, ensure_ascii=False).encode()).hexdigest()
+            labels.append((revision_id, mid, available, json.dumps(list(ft)),
+                           json.dumps(list(ht)) if ht is not None else None,
+                           str(payload.get('status') or ''), source_revision, float(revision or 0)))
+        if labels:
+            with self.connection:
+                self.connection.executemany(
+                    'INSERT OR IGNORE INTO label_revisions '
+                    '(revision_id,match_id,available_at,ft_score,ht_score,status,source_revision,revision_order) '
+                    'VALUES (?,?,?,?,?,?,?,?)', labels)
+        return {'scanned': scanned, 'backfilled_matches': len(labels), 'skipped': skipped}
 
     def entries(self, where: str = '1', params: Sequence[Any] = (),
                 limit: int | None = None, offset: int = 0) -> list:
