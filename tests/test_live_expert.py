@@ -326,6 +326,18 @@ class LiveExpertTests(unittest.TestCase):
             self.assertTrue(any(expected in r for r in row['reasons']))
             self.assertIsNone(row['remaining_goals'])
 
+    def test_one_suspended_market_does_not_disable_other_markets(self):
+        hub = self.hub()
+        hub._suspensions['m'] = {'1': time.time()}
+        service = LiveExpertService()
+        row = service.compute(hub.decision_snapshot('m'), hub)
+        self.assertTrue(row['suspended'])
+        self.assertEqual(row['suspended_ids'], ['1'])
+        self.assertFalse(next(m for m in row['markets'] if m['chpid'] == '1')['fresh'])
+        self.assertTrue(next(m for m in row['markets'] if m['chpid'] == '2')['fresh'])
+        self.assertTrue(row['evaluations'])
+        self.assertTrue(any(c['market'].startswith('OU') for c in row['evaluations'][0]['candidates']))
+
     def test_version_changed_cannot_publish_mixed_state(self):
         hub = self.hub()
         service = LiveExpertService()
@@ -417,6 +429,9 @@ class LiveExpertTests(unittest.TestCase):
         from service.ledger import LedgerEntry
         import tempfile
         hub = self.hub()
+        # C303 suspends only the referenced market; an OU recommendation on
+        # chpid 2 must remain open while the HAD market (chpid 1) is paused.
+        hub._suspensions['m'] = {'1': time.time()}
         with tempfile.TemporaryDirectory() as root:
             svc = AnalysisService(MagicMock(), realtime=hub, config=AnalysisConfig(use_llm=False, ledger_root=root))
             svc.decide_matches(['m'])

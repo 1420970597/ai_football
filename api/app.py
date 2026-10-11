@@ -804,8 +804,14 @@ class ApiApp:
                 # A market being stale is not the same as being closed. The
                 # retained decision remains in the open section as long as
                 # the live feed still publishes that market.
-                market_open = bool(market and not row.get("finished") and
-                                   not row.get("suspended"))
+                suspended_ids = {str(value) for value in (row.get('suspended_ids') or ())}
+                market_suspended = bool((market or {}).get('suspended')) or (
+                    str((market or {}).get('chpid') or '') in suspended_ids)
+                # A legacy row with only the aggregate flag has no way to
+                # identify the affected market, so keep the conservative gate.
+                if row.get('suspended') and not suspended_ids and not market_suspended:
+                    market_suspended = True
+                market_open = bool(market and not row.get("finished") and not market_suspended)
                 item = {"match_id": mid, "league": row.get("league", ""),
                         "home": row.get("home", ""), "away": row.get("away", ""),
                         "score": row.get("score"), "clock": row.get("clock"),

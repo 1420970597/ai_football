@@ -394,7 +394,10 @@ class LiveExpertService:
         reasons: List[str] = []
         if snapshot.get('finished'):
             reasons.append('比赛已结束')
-        if snapshot.get('suspended'):
+        suspended_ids = {str(value) for value in (snapshot.get('suspended_ids') or ()) if value not in (None, '')}
+        # C303 identifies one suspended hpid/chpid.  Older snapshots without
+        # that list retain the conservative whole-match gate.
+        if snapshot.get('suspended') and not suspended_ids:
             reasons.append('盘口暂停，等待已核验的新报价')
         if kind != 'real':
             reasons.append('虚拟比赛使用独立统计；本模型仅适用于真实足球' if kind == 'virtual' else '比赛类型尚未核验')
@@ -431,6 +434,7 @@ class LiveExpertService:
         for key in sorted(groups, key=lambda k: (k[0].startswith('RAW'), '_1H' in k[0], k[0], k[1])):
             group = groups[key]
             outcomes = group['outcomes']
+            market_suspended = str(group['chpid']) in suspended_ids
             expected = ('home', 'draw', 'away') if group['market'].startswith('HAD') else (
                 ('over', 'under') if group['market'].startswith('OU') else ('home', 'away'))
             complete = group['known'] and all(o in outcomes for o in expected)
@@ -494,7 +498,8 @@ class LiveExpertService:
                             'known': group['known'],
                             'margin': round(margin, 6) if margin is not None else None,
                             'age_s': round(age, 1) if math.isfinite(age) else None,
-                            'fresh': age <= cfg.quote_max_age_s, 'quote_time_ms': group['quote_time_ms']})
+                            'fresh': age <= cfg.quote_max_age_s and not market_suspended,
+                            'suspended': market_suspended, 'quote_time_ms': group['quote_time_ms']})
         if not any(m['fresh'] and m['complete'] for m in markets):
             reasons.append('报价过期或尚无完整盘口')
         if elapsed_s is not None and elapsed_s >= REGULATION_SECONDS:
@@ -543,7 +548,8 @@ class LiveExpertService:
             'published_at_ms': int(now * 1000), 'quote_time_ms': newest,
             'score': list(score) if score is not None else None, 'phase': phase,
             'clock': clock_label(status.get('mst'), phase), 'elapsed_s': elapsed_s,
-            'finished': bool(snapshot.get('finished')) or phase == '999', 'suspended': bool(snapshot.get('suspended')),
+            'finished': bool(snapshot.get('finished')) or phase == '999',
+            'suspended': bool(snapshot.get('suspended')), 'suspended_ids': sorted(suspended_ids),
             'markets': markets, 'candidates': candidates, 'probabilities': {c['outcome']:c['p_model'] for c in candidates if c['market']=='HAD'},
             'remaining_goals': primary['remaining_goals'], 'evaluations': evaluations,
             'forecasts': ensemble['forecasts'], 'ensemble': ensemble, 'baseline_ensemble': baseline_ensemble, 'algorithm_performance': performance,

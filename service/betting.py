@@ -582,9 +582,13 @@ class BettingExecutor:
         decision_age = (time.time() * 1000 - float(row.get("published_at_ms") or 0)) / 1000
         if not math.isfinite(decision_age) or decision_age < -1 or decision_age > cfg.quote_max_age_s:
             raise BettingRecomputeNeeded("综合推荐已过期，需要重新计算")
-        if (snapshot.get("finished") or row.get("finished") or snapshot.get("suspended")
+        if (snapshot.get("finished") or row.get("finished")
                 or str(snapshot.get("status", {}).get("mmp")) not in ("6", "7")):
             raise BettingBlocked("比赛未进行或盘口暂停")
+        suspended_ids = {str(value) for value in (snapshot.get('suspended_ids') or ())}
+        detail_ids = {str(detail.get('playId') or ''), str(detail.get('chpid') or '')}
+        if (snapshot.get('suspended') and not suspended_ids) or suspended_ids.intersection(detail_ids):
+            raise BettingBlocked("推荐盘口暂停，等待该盘口的新报价")
         for field in ("score_age_s", "status_age_s"):
             age = snapshot.get(field)
             if age is None or not math.isfinite(float(age)) or float(age) > cfg.state_max_age_s:
