@@ -1,0 +1,347 @@
+{
+  "generated_at": "2026-10-11T10:26:46.426606+00:00",
+  "repository": "/root/ai_football",
+  "code_manifest": [
+    {
+      "path": "core/live_model.py",
+      "exists": true,
+      "sha256": "b046df492dd8a2d72ec53d29c8d5cb042212c90652bd57faaf9eb90f3486ece7",
+      "lines": 162
+    },
+    {
+      "path": "core/ensemble.py",
+      "exists": true,
+      "sha256": "cc034b26ff53fa9349d64a6b9af522a3bf24935511f1d3388787b5aaa27b104a",
+      "lines": 172
+    },
+    {
+      "path": "core/decision_features.py",
+      "exists": true,
+      "sha256": "0f2eaee994d04caa1ffa8d7941b00326848accb3eec46ca991441a2092e2a42b",
+      "lines": 134
+    },
+    {
+      "path": "core/learned_model.py",
+      "exists": true,
+      "sha256": "8e5b14f5a08e1883472cb732be09a25b07bd504d4ebfc2bc23dc70b923abf8ee",
+      "lines": 191
+    },
+    {
+      "path": "service/model_training.py",
+      "exists": true,
+      "sha256": "a5967d219e43277a29f499870fac547ee1237c5f7fbb32bf1086eee9ba648edf",
+      "lines": 174
+    },
+    {
+      "path": "service/model_service.py",
+      "exists": true,
+      "sha256": "ee13b5a9964a4a904119851fdea2826ec8635c2b0b7bd107cdb05b7f8fe0ea83",
+      "lines": 372
+    },
+    {
+      "path": "store/training_data.py",
+      "exists": true,
+      "sha256": "363bbb527bd24ac66b3c743f3826abb5db9325cb459fb1aa88f6410e4a62a966",
+      "lines": 261
+    }
+  ],
+  "dashboard": {
+    "model": {},
+    "training": {
+      "state": "disabled",
+      "checked_at": "2026-10-11T09:51:59.882830+00:00",
+      "eligible_matches": 125,
+      "eligible_decisions": 100658,
+      "new_matches": 125,
+      "cycle_matches": 100,
+      "limits": {
+        "cpu_cores": 1,
+        "memory_mb": 512,
+        "cpu_time_limit_s": 600
+      },
+      "minimum_matches": 100,
+      "error": "",
+      "data_version": "remaining-ah-signed-lines-bernoulli-v3-offset-windows",
+      "data_quality": {
+        "quarantined_inputs": 1926802,
+        "quarantined_ledger": 147039,
+        "ungraded_inputs": 4403,
+        "data_version": "remaining-ah-signed-lines-bernoulli-v3-offset-windows",
+        "source_eligible_decisions": 100658,
+        "training_max_rows_per_match": null
+      },
+      "old_model_quarantined": true,
+      "feature_version": "market-offset-windows-v3"
+    },
+    "storage": {
+      "at": "2026-10-11T10:14:40.235327+00:00",
+      "categories": [
+        {
+          "name": "采集快照",
+          "files": 32923,
+          "bytes": 96890931,
+          "allocated_bytes": 191905792
+        },
+        {
+          "name": "走势",
+          "files": 487,
+          "bytes": 514232124,
+          "allocated_bytes": 516751360
+        },
+        {
+          "name": "赛况与实际赛果",
+          "files": 6,
+          "bytes": 29132737,
+          "allocated_bytes": 29159424
+        },
+        {
+          "name": "决策与结算台账",
+          "files": 20,
+          "bytes": 14829666682,
+          "allocated_bytes": 14829797376
+        },
+        {
+          "name": "模型版本",
+          "files": 15,
+          "bytes": 2316726038,
+          "allocated_bytes": 2316754944
+        },
+        {
+          "name": "旧归档与当前缓存",
+          "files": 4,
+          "bytes": 2132840,
+          "allocated_bytes": 2146304
+        }
+      ],
+      "archive": {
+        "backend": "s3",
+        "files": 1911218,
+        "bytes": 42563948546,
+        "packs": 3487,
+        "object_bytes": 75941465984,
+        "cleaned_files": 1888218
+      },
+      "bytes": 17788781352,
+      "files": 33455,
+      "records": {
+        "decisions": 244433,
+        "matches": 2997,
+        "settled_decisions": 164633
+      },
+      "disk": {
+        "total": 269205880832,
+        "used": 201643180032,
+        "free": 56510853120
+      },
+      "errors": [],
+      "retention": "归档永久保存；S3 模式在上传回读校验后清理本地历史副本。运行状态与索引保留本地。"
+    },
+    "settings": {
+      "enabled": false,
+      "shadow_enabled": true,
+      "cycle_matches": 100,
+      "cpu_cores": 1,
+      "memory_mb": 512
+    },
+    "mode": "shadow",
+    "running": true,
+    "prospective": {},
+    "note": "影子模式：模型仅记录预测。保留各算法、盘口、盘口线、方向和决策时点；按比赛分组、等权训练。走势特征冻结在决策输入截点，旧记录缺少走势时显式标记缺失。",
+    "inference_running": true,
+    "training_running": false,
+    "heartbeat_at": "2026-10-11T10:26:45.605631+00:00",
+    "process_id": 1,
+    "service": "model-worker"
+  },
+  "historical_audit": {
+    "baseline_commit": "4ca1897",
+    "model_version": "20261010T145431899567Z",
+    "counts": {
+      "input_total": 904473,
+      "input_bad_peer_probability": 904473,
+      "input_graded": 735839,
+      "input_changed_status": 104684,
+      "input_label_comparable": 730080,
+      "input_flipped_label": 79972,
+      "input_new_excluded": 5759,
+      "input_clipped_score_unrecoverable": 2850,
+      "ledger_graded": 50871,
+      "ledger_changed_status": 3929,
+      "ledger_label_comparable": 50148,
+      "ledger_flipped_label": 2460,
+      "ledger_new_excluded": 723
+    },
+    "training_cohort": {
+      "decisions": 36794,
+      "changed_status": 2997,
+      "flipped_label": 1890
+    },
+    "validation": {
+      "original_reconstruction": {
+        "matches": 139,
+        "decisions": 147904,
+        "accuracy": 0.6270060356803965,
+        "brier": 0.2140467916797277,
+        "log_loss": 0.6118518603195696
+      },
+      "original_common": {
+        "matches": 139,
+        "decisions": 145897,
+        "accuracy": 0.6240919405647172,
+        "brier": 0.21533210325536994,
+        "log_loss": 0.614852100409968
+      },
+      "corrected_targets_same_features": {
+        "matches": 139,
+        "decisions": 145897,
+        "accuracy": 0.5988058733866449,
+        "brier": 0.22748263867884647,
+        "log_loss": 0.6438756436384288
+      },
+      "corrected_baseline": {
+        "matches": 139,
+        "decisions": 145897,
+        "accuracy": 0.6353059151525726,
+        "brier": 0.21772562166476475,
+        "log_loss": 0.6221634774544748
+      },
+      "corrected_paid_stake_weight": {
+        "matches": 139,
+        "decisions": 145897,
+        "accuracy": 0.6082204329066564,
+        "brier": 0.2235124793796178,
+        "log_loss": 0.634609898719322
+      }
+    },
+    "artifact_validation": {
+      "matches": 139,
+      "decisions": 147904,
+      "accuracy": 0.6270060356805017,
+      "brier": 0.21404679167972887,
+      "log_loss": 0.611851860319579
+    },
+    "original_decisions_match_artifact": true,
+    "limitation": "Re-scoring retains contaminated features; it is not a clean backtest or retraining. Clipped input score differences cannot be recovered."
+  },
+  "confidence_non_empty_bands": [
+    {
+      "scope": "all",
+      "model_version": "all",
+      "confidence_band": "20%-30%",
+      "lower_bound": "0.2",
+      "upper_bound": "0.3",
+      "records": "57",
+      "matches": "54",
+      "decision_occurrences": "57",
+      "settled_records": "47",
+      "settled_occurrences": "47",
+      "pending_records": "10",
+      "pending_occurrences": "10",
+      "void_records": "0",
+      "void_occurrences": "0",
+      "full_won_occurrences": "14",
+      "half_won_occurrences": "3",
+      "full_lost_occurrences": "14",
+      "half_lost_occurrences": "3",
+      "push_occurrences": "13",
+      "weighted_wins": "15.5",
+      "weighted_losses": "15.5",
+      "accuracy": "0.5",
+      "accuracy_ci95_low": "0.333974",
+      "accuracy_ci95_high": "0.666026",
+      "profit_units": "-7.045",
+      "settled_unit_roi": "-0.149894",
+      "avg_composite_confidence": "0.286529",
+      "min_composite_confidence": "0.254842",
+      "max_composite_confidence": "0.299855",
+      "avg_persisted_confidence": "0.428843",
+      "min_persisted_confidence": "0.364028",
+      "max_persisted_confidence": "0.482778",
+      "first_decision_at": "2026-10-09T09:38:17.276639+00:00",
+      "last_decision_at": "2026-10-11T07:35:09.941838+00:00",
+      "accuracy_definition": "weighted_wins/(weighted_wins+weighted_losses); half win/loss=0.5; push excluded",
+      "confidence_definition": "as-of replay of runtime composite: persisted base confidence plus prior same-quote settled evidence; no future labels"
+    },
+    {
+      "scope": "all",
+      "model_version": "all",
+      "confidence_band": "30%-40%",
+      "lower_bound": "0.3",
+      "upper_bound": "0.4",
+      "records": "987",
+      "matches": "564",
+      "decision_occurrences": "1476",
+      "settled_records": "822",
+      "settled_occurrences": "984",
+      "pending_records": "165",
+      "pending_occurrences": "492",
+      "void_records": "0",
+      "void_occurrences": "0",
+      "full_won_occurrences": "428",
+      "half_won_occurrences": "95",
+      "full_lost_occurrences": "261",
+      "half_lost_occurrences": "95",
+      "push_occurrences": "105",
+      "weighted_wins": "475.5",
+      "weighted_losses": "308.5",
+      "accuracy": "0.606505",
+      "accuracy_ci95_low": "0.571869",
+      "accuracy_ci95_high": "0.640103",
+      "profit_units": "-34.16",
+      "settled_unit_roi": "-0.034715",
+      "avg_composite_confidence": "0.36152",
+      "min_composite_confidence": "0.300191",
+      "max_composite_confidence": "0.399944",
+      "avg_persisted_confidence": "0.455742",
+      "min_persisted_confidence": "0.400734",
+      "max_persisted_confidence": "0.532632",
+      "first_decision_at": "2026-10-09T12:12:28.527692+00:00",
+      "last_decision_at": "2026-10-11T08:39:41.589593+00:00",
+      "accuracy_definition": "weighted_wins/(weighted_wins+weighted_losses); half win/loss=0.5; push excluded",
+      "confidence_definition": "as-of replay of runtime composite: persisted base confidence plus prior same-quote settled evidence; no future labels"
+    },
+    {
+      "scope": "all",
+      "model_version": "all",
+      "confidence_band": "40%-50%",
+      "lower_bound": "0.4",
+      "upper_bound": "0.5",
+      "records": "284",
+      "matches": "231",
+      "decision_occurrences": "744",
+      "settled_records": "214",
+      "settled_occurrences": "334",
+      "pending_records": "70",
+      "pending_occurrences": "410",
+      "void_records": "0",
+      "void_occurrences": "0",
+      "full_won_occurrences": "147",
+      "half_won_occurrences": "119",
+      "full_lost_occurrences": "48",
+      "half_lost_occurrences": "14",
+      "push_occurrences": "6",
+      "weighted_wins": "206.5",
+      "weighted_losses": "55.0",
+      "accuracy": "0.789675",
+      "accuracy_ci95_low": "0.736265",
+      "accuracy_ci95_high": "0.834697",
+      "profit_units": "30.235",
+      "settled_unit_roi": "0.090524",
+      "avg_composite_confidence": "0.417695",
+      "min_composite_confidence": "0.400178",
+      "max_composite_confidence": "0.482292",
+      "avg_persisted_confidence": "0.49773",
+      "min_persisted_confidence": "0.431611",
+      "max_persisted_confidence": "0.584744",
+      "first_decision_at": "2026-10-09T13:56:28.279732+00:00",
+      "last_decision_at": "2026-10-11T08:39:41.589593+00:00",
+      "accuracy_definition": "weighted_wins/(weighted_wins+weighted_losses); half win/loss=0.5; push excluded",
+      "confidence_definition": "as-of replay of runtime composite: persisted base confidence plus prior same-quote settled evidence; no future labels"
+    }
+  ],
+  "limitations": [
+    "dashboard and SQLite sources are read independently; repair workers may change counts",
+    "historical audit retains contaminated features and is diagnostic, not a clean retrain",
+    "confidence bands contain pending decisions and are not a production betting claim"
+  ]
+}

@@ -37,11 +37,14 @@ import inspect
 import json
 import math
 import os
+import copy
 import random
 import threading
 import time
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 from collector.leyu_normalizer import (
@@ -50,8 +53,8 @@ from collector.leyu_normalizer import (
 )
 from collector.leyu_realtime import RealtimeHub
 from collector.sources import SOCCER_SPORT_ID
+from store.history import HistoryJournal
 from core.live_model import competition_type
-from core.settlement import SETTLE_PENDING
 
 from .decision import (
     DECISION_AVOID,
@@ -369,6 +372,8 @@ class AnalysisService:
         self.realtime = realtime
         from service.live_expert import LiveExpertService
         self.live_expert = LiveExpertService()
+        self._live_threads: Optional[ThreadPoolExecutor] = None
+        self._live_inflight: set[int] = set()
         self._config = config or AnalysisConfig()
         #: 是否成功接上 LLM（决定决策是否可能是 buy）
         self.llm_error = ""
@@ -411,6 +416,9 @@ class AnalysisService:
         }
         #: 最近一轮结果（页面只读它，**不触发 LLM**）
         self._latest: Optional[Dict[str, Any]] = None
+        self._decision_history: Optional[HistoryJournal] = None
+        self._decision_history_pending: List[Mapping[str, Any]] = []
+        self._history_lock = threading.RLock()
         #: 进行中赛事缓存：`(取时时刻, mid 集合)`。
         #: 命中与否可观测（`_live_source`/`_live_error`），便于定位
         #: 「leyu 67 场 vs 系统 34 场」这类覆盖差异到底来自哪条数据源。
@@ -430,6 +438,8 @@ class AnalysisService:
         self.ledger = DecisionLedger(self.config.ledger_root)        #: 结算线程（定期把已结束赛事的比分回填进台账）
         self._settle_thread: Optional[threading.Thread] = None
         self._settle_stop = threading.Event()
+        self._settle_wake = threading.Event()
+        self._settle_run_lock = threading.Lock()
         self.settle_stats: Dict[str, Any] = {
             "rounds": 0, "settled": 0, "void": 0,
             "last_at": 0.0, "last_error": "",
@@ -457,6 +467,57 @@ class AnalysisService:
             "last_batch_s": 0.0,
         }
         self._restore_latest()
+        from service.runtime_settings import RuntimeConfig, RuntimeSettings
+        from service.live_review import LiveReview
+        runtime_cfg = RuntimeConfig()
+        if self.llm is not None:
+            runtime_cfg = replace(runtime_cfg, llm_base_url=self.llm.config.base_url,
+                                  llm_model=self.llm.config.model, llm_api_key=self.llm.config.api_key or "")
+        self.runtime_settings = RuntimeSettings(runtime_cfg)
+        self.live_review = LiveReview()
+        from service.betting import BettingExecutor
+        self.betting = BettingExecutor(self.runtime_settings, lambda: self.realtime, lambda: self.ledger,
+                                       on_recompute=self.notify_price_change,
+                                       on_persisted=self.live_expert.wait_replay)
+        from service.data_model import DataModelService
+        self.data_model = DataModelService()
+        self._bind_runtime_settings()
+
+    def _apply_runtime_settings(self, cfg: Any, version: int) -> None:
+        self.live_expert.configure(cfg, version)
+        self.live_review.configure(cfg, version)
+        self.data_model.configure(cfg)
+        self.betting.configure()
+        if cfg.betting_enabled:
+            self.betting.start()
+        else:
+            self.betting.stop()
+        with self._lock:
+            self._cache.clear()
+        subscribed = getattr(self.realtime, "subscribed", None)
+        if callable(subscribed):
+            self.notify_price_change(subscribed())
+
+    def _bind_runtime_settings(self) -> None:
+        self.runtime_settings.bind(self.config.ledger_root)
+        self.betting.bind(self.config.ledger_root)
+        self.data_model.bind(self.config.ledger_root)
+        self.live_expert.on_decision = self.ledger.record_live if self.ledger.enabled else None
+        self.live_expert.on_decisions = self.ledger.record_live_many if self.ledger.enabled else None
+        self.live_expert.journal_root = self.config.ledger_root
+        self.live_expert.update_evidence(self.ledger.performance_evidence())
+        self.live_review.on_experiment = self.ledger.record_experiment if self.ledger.enabled else None
+        self.live_review.bind_history(self.config.ledger_root)
+        self._apply_runtime_settings(self.runtime_settings.config, self.runtime_settings.version)
+
+    def update_settings(self, patch: Mapping[str, Any], version: Any) -> Dict[str, Any]:
+        self.runtime_settings.update(patch, version, self._apply_runtime_settings)
+        return self.settings_status()
+
+    def settings_status(self) -> Dict[str, Any]:
+        out = self.runtime_settings.public()
+        out["capabilities"]["betting"] = self.betting.health()
+        return out
 
     # -- 配置（支持运行期注入 ledger_root，且台账会跟着换） -------------------
 
@@ -487,6 +548,8 @@ class AnalysisService:
         if old is None or old_root != new_root:
             # 重建台账（保留已有对象则改用新路径；已有的落盘数据仍在磁盘）
             self.ledger = DecisionLedger(new_root)
+            if hasattr(self, "runtime_settings"):
+                self._bind_runtime_settings()
         # ⚠️ `result_path` 变化时必须**重新读回上次结果**。
         #
         # 为何必需（用户报“加载不出来比赛场次”的直接根因）：
@@ -511,6 +574,7 @@ class AnalysisService:
             return False
         if self.config.cycle_interval_s <= 0:
             return False
+        self.betting.start()
         self._cycle_stop.clear()
         self._cycle_thread = threading.Thread(
             target=self._cycle_loop, name="analysis-cycle", daemon=True)
@@ -518,10 +582,12 @@ class AnalysisService:
         return True
 
     def stop_cycle(self, timeout: float = 5.0) -> None:
+        self.betting.stop()
         self._cycle_stop.set()
         t = self._cycle_thread
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
+        self._flush_decision_history()
 
     @property
     def cycle_running(self) -> bool:
@@ -562,12 +628,15 @@ class AnalysisService:
         Args:
             mids: 本批发生真实变动的赛事 ID（Hub 已去重）。
         """
+        rt = self.realtime
+        if rt is not None and any(rt.is_finished(str(mid)) for mid in mids):
+            self._settle_wake.set()
         if not self.config.change_trigger or not mids:
             return
         debounce = max(0.0, _to_float(self.config.change_debounce_s,
                                       DEFAULT_CHANGE_DEBOUNCE_S))
         if self._fast_live_enabled():
-            debounce = min(debounce, 0.15)
+            debounce = min(debounce, 0.02)
         due = time.time() + debounce
         queue_max = max(1, _to_int(self.config.change_queue_max,
                                    DEFAULT_CHANGE_QUEUE_MAX))
@@ -595,6 +664,11 @@ class AnalysisService:
         if self._sched_thread is not None and self._sched_thread.is_alive():
             return False
         self.live_expert.start(self.config.ledger_root)
+        if self.live_expert.calculation_pool and self._live_threads is None:
+            self._live_threads = ThreadPoolExecutor(
+                max_workers=len(self.live_expert.calculation_pool.slots), thread_name_prefix='live-dispatch')
+        self.live_review.start()
+        self.betting.start()
         self._sched_stop.clear()
         self._sched_thread = threading.Thread(
             target=self._sched_loop, name="analysis-trigger", daemon=True)
@@ -602,12 +676,18 @@ class AnalysisService:
         return True
 
     def stop_scheduler(self, timeout: float = 5.0) -> None:
-        self.live_expert.stop()
         self._sched_stop.set()
         self._sched_wake.set()
         t = self._sched_thread
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
+        if self._live_threads is not None:
+            self._live_threads.shutdown(wait=True, cancel_futures=True)
+            self._live_threads = None
+        self.betting.stop()
+        self.live_review.stop()
+        self.live_expert.stop()
+        self._flush_decision_history()
 
     @property
     def scheduler_running(self) -> bool:
@@ -639,15 +719,23 @@ class AnalysisService:
         min_gap = max(0.0, _to_float(self.config.change_min_interval_s,
                                      DEFAULT_CHANGE_MIN_INTERVAL_S))
         if self._fast_live_enabled():
-            min_gap = min(min_gap, 0.05)
+            min_gap = 0.0
         now = time.time()
         with self._sched_lock:
             if not self._pending:
                 return None
+            pool = self.live_expert.calculation_pool
+            eligible = [at for mid, at in self._pending.items()
+                        if not pool or pool.shard(mid) not in self._live_inflight]
+            if not eligible:
+                # A pending match may belong only to an occupied shard while
+                # another shard is idle. Wait for completion instead of busy
+                # looping at zero timeout and starving the feed/API GIL.
+                return None
             last = _to_float(self._sched_stats.get("last_trigger_at"), 0.0)
             throttle = (last + min_gap) - now
-            earliest = min(self._pending.values()) - now
-        return max(earliest, throttle)
+            earliest = min(eligible) - now
+        return max(0.0, earliest, throttle)
 
     def _effective_batch(self) -> int:
         """本批该取多少场（自适应限流，HANDOVER §3.4）。
@@ -664,7 +752,8 @@ class AnalysisService:
             本批最多处理的场次数（>= 1）。
         """
         if self._fast_live_enabled():
-            return 64
+            pool = self.live_expert.calculation_pool
+            return len(pool.slots) if pool else 2
         base = max(1, _to_int(self.config.change_batch, DEFAULT_CHANGE_BATCH))
         if not self.config.adaptive_throttle:
             return base
@@ -706,11 +795,35 @@ class AnalysisService:
                 return
             # 最久等待的优先（它们变动最早，行情已稳定）
             due.sort(key=lambda m: self._pending[m])
-            picked = due[:batch_max]
+            pool = self.live_expert.calculation_pool
+            if pool:
+                # One job per owner keeps a busy match from blocking the other
+                # shard behind a same-shard lock in the dispatch thread pool.
+                shards: set[int] = set()
+                picked = []
+                for mid in due:
+                    shard = pool.shard(mid)
+                    if shard not in shards and shard not in self._live_inflight:
+                        picked.append(mid)
+                        shards.add(shard)
+            else:
+                picked = due[:batch_max]
+            if not picked:
+                return
             for m in picked:
                 self._pending.pop(m, None)
             self._sched_stats["last_trigger_at"] = now
             self._sched_stats["last_trigger_mids"] = list(picked)
+        if pool and self._live_threads:
+            # Each shard advances independently. Waiting for both futures in a
+            # batch left the faster process idle behind the slower match.
+            with self._sched_lock:
+                self._live_inflight.update(pool.shard(mid) for mid in picked)
+                self._sched_stats['batches'] += 1
+                self._sched_stats['triggered'] += len(picked)
+            for mid in picked:
+                self._live_threads.submit(self._complete_live_match, mid, pool.shard(mid))
+            return
         t0 = time.time()
         try:
             res = self.decide_matches(picked)
@@ -725,29 +838,54 @@ class AnalysisService:
             self.cycle_stats["last_error"] = "触发决策失败: %s: %s" % (
                 type(exc).__name__, exc)
 
+    def _complete_live_match(self, mid: str, shard: int) -> None:
+        started = time.monotonic()
+        try:
+            self._compute_live_match(mid)
+            self._observe_batch(1, time.monotonic()-started)
+        finally:
+            with self._sched_lock:
+                self._live_inflight.discard(shard)
+            self._sched_wake.set()
+
     def _fast_live_enabled(self) -> bool:
         return bool(self.config.fast_live and self.realtime is not None
                     and callable(getattr(self.realtime, "decision_snapshot", None)))
 
-    def _decide_live_matches(self, mids: Sequence[str]) -> Dict[str, Any]:
+    def _compute_live_match(self, mid: str) -> Dict[str, Any]:
         rt = self.realtime
         if rt is None:
-            return self.live_expert.results()
-        for mid in mids:
-            with self._sched_lock:
-                first = self._pending_first.pop(mid, None)
-            snapshot = rt.decision_snapshot(mid)
-            try:
-                row = self.live_expert.compute(snapshot, rt, first)
-                if not row:
-                    self.notify_price_change([mid])
-            except (ValueError, TypeError, ArithmeticError) as exc:
-                self.live_expert.errors += 1
-                self.cycle_stats["last_error"] = "实时模型: %s" % exc
-        result = self.live_expert.results()
+            return {}
+        with self._sched_lock:
+            first = self._pending_first.pop(mid, None)
+        snapshot = rt.decision_snapshot(mid)
+        try:
+            row = self.live_expert.compute(snapshot, rt, first)
+            if not row:
+                self.notify_price_change([mid])
+            else:
+                self.betting.enqueue(row)
+                self.live_review.submit(row)
+            return row
+        except (ValueError, TypeError, ArithmeticError) as exc:
+            self.live_expert.errors += 1
+            self.cycle_stats["last_error"] = "实时模型: %s" % exc
+            self.notify_price_change([mid])
+            return {}
+
+    def _decide_live_matches(self, mids: Sequence[str]) -> Dict[str, Any]:
+        if self._live_threads:
+            rows = list(self._live_threads.map(self._compute_live_match, mids))
+        else:
+            rows = [self._compute_live_match(mid) for mid in mids]
+        # The hot scheduler publishes each match directly. Building the complete
+        # UI board after every two matches needlessly scans thousands of quotes.
+        result = ({'count': len(mids), 'decisions': [row for row in rows if row]}
+                  if threading.current_thread() is self._sched_thread else self.live_expert.results())
         result["finished_at"] = datetime.now(timezone.utc).isoformat()
-        with self._lock:
-            self._latest = result
+        if threading.current_thread() is not self._sched_thread:
+            with self._lock:
+                self._latest = result
         return result
 
     def decide_matches(self, mids: Sequence[str]) -> Dict[str, Any]:
@@ -855,6 +993,7 @@ class AnalysisService:
     def _record_ledger(self, results: Sequence[MatchPicks],
                        trigger: str) -> None:
         """把决策写进台账（失败只记录，不影响决策返回）。"""
+        self._archive_decision_run({'trigger': trigger, 'decisions': [r.as_dict() for r in results]})
         if not self.ledger.enabled:
             return
         try:
@@ -882,6 +1021,7 @@ class AnalysisService:
 
     def stop_settler(self, timeout: float = 5.0) -> None:
         self._settle_stop.set()
+        self._settle_wake.set()
         t = self._settle_thread
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
@@ -900,10 +1040,19 @@ class AnalysisService:
             except Exception as exc:  # noqa: BLE001 - 单轮失败不得退出循环
                 self.settle_stats["last_error"] = "%s: %s" % (
                     type(exc).__name__, exc)
-            if self._settle_stop.wait(interval):
-                return
+            self._settle_wake.wait(interval)
+            self._settle_wake.clear()
 
     def settle_finished(self) -> Dict[str, Any]:
+        # Manual requests cannot run the same upstream batch concurrently.
+        if not self._settle_run_lock.acquire(blocking=False):
+            return {'pending':True, 'reason':'结算正在进行', 'settle':dict(self.settle_stats)}
+        try:
+            return self._settle_finished_once()
+        finally:
+            self._settle_run_lock.release()
+
+    def _settle_finished_once(self) -> Dict[str, Any]:
         """拉取已结束赛事的比分，回填台账并算出本地统计。
 
         ## 三条比分来源（按优先级）
@@ -922,8 +1071,7 @@ class AnalysisService:
             结算统计（含 `stats`，即当前命中率/ROI/CLV）。
         """
         self.settle_stats["last_at"] = time.time()
-        pending = {r.match_id for r in self.ledger.load()
-                   if r.status == SETTLE_PENDING}
+        pending = set(self.ledger.pending_match_ids())
         if not pending:
             self.settle_stats["rounds"] = \
                 _to_int(self.settle_stats.get("rounds")) + 1
@@ -943,13 +1091,29 @@ class AnalysisService:
         # 新顺序：先用廉价手段（赛程/本地推送）算出能结算的场次，
         # 只对它们补收盘价 —— 既省时间，又完全契合 CLV 的语义
         # （收盘价本就是“该场即将结算时最后一次看到的价”）。
-        confirmed = self._confirmed_finished_mids(pending)
         scores: Dict[str, Any] = {}
+        # Settle persisted terminal push evidence before any upstream work.
+        local_used = self._merge_local_scores(scores, pending, confirmed=set())
+        local_out = self.ledger.settle(scores) if scores else {'settled':0,'void':0,'scanned':0,'skipped':0}
+        if local_out['settled'] or local_out['void']:
+            self.live_expert.update_evidence(self.ledger.performance_evidence())
+        ordered = sorted(pending - set(scores))
+        cursor = getattr(self, '_settle_cursor', 0) % max(1,len(ordered))
+        batch = set((ordered+ordered)[cursor:cursor+min(60,len(ordered))])
+        self._settle_cursor = cursor + len(batch)
+        if time.monotonic()-getattr(self,'_settle_remote_at',-math.inf)<60:
+            self.settle_stats['rounds'] = _to_int(self.settle_stats.get('rounds'))+1
+            for key in ('settled','void'):
+                self.settle_stats[key] = _to_int(self.settle_stats.get(key))+local_out[key]
+            self.settle_stats.update(pending_matches=len(self.ledger.pending_match_ids()), scores_found=len(scores))
+            return {**local_out,'scores_total':len(scores),'scores_from_push':local_used,
+                    'closing_captured':0,'stats':self.ledger.stats()}
+        self._settle_remote_at = time.monotonic()
+        confirmed = self._confirmed_finished_mids(batch)
         # 本地推送兑底（廉价：纯内存）—— 先做，以便确定可结算集合
-        local_used = self._merge_local_scores(scores, pending,
-                                              confirmed=confirmed)
+        local_used += self._merge_local_scores(scores, batch, confirmed=confirmed)
         # REST 补比分：只对**待结算**的场次调上游
-        for mt in self._finished_matches(mids=pending):
+        for mt in self._finished_matches(mids=batch):
             mid = str(getattr(mt, "mid", "") or "")
             if mid not in pending:
                 continue
@@ -965,10 +1129,17 @@ class AnalysisService:
         # **只对确实能结算的场次**补收盘赔率（CLV 的前置条件，不能事后重建）。
         # 必须在 settle 之前做：settle 会把条目改成终结态，
         # 之后 capture_closing 就不再碰它（避免把状态改回 pending）。
-        closing = self._capture_closing_odds(set(scores)) if scores else 0
+        pregame = self.ledger.pregame_pending_ids()
+        closing = self._capture_closing_odds(set(scores) & pregame) if set(scores) & pregame else 0
         # 显式注解：`settle()` 返回 Dict[str, int]，但下面要挂 `stats`（嵌套字典），
         # 不收宽类型会让静态检查拒绝赋值。
         out: Dict[str, Any] = dict(self.ledger.settle(scores))
+        for key in ('settled','void','scanned','skipped'):
+            out[key] += local_out[key]
+        if out['settled'] or out['void']:
+            self.live_expert.update_evidence(self.ledger.performance_evidence())
+        self.settle_stats.update(pending_matches=len(self.ledger.pending_match_ids()), scores_found=len(scores),
+                                 source_batch=len(batch), evidence_missing=len(pending-set(scores)))
         out["closing_captured"] = closing
         out["scores_from_push"] = local_used
         out["scores_total"] = len(scores)
@@ -1108,7 +1279,7 @@ class AnalysisService:
           `settle_finished()` 因此永远集不到赛果 → `graded=0`
           → 命中率/ROI/CLV **永远算不出来**。
         * 而 `source.odds(mids)`（走 `structureMatchBaseInfoByMidsPB`）
-          **带 `msc`**（实测 `S0|0:1,S1|1:2,…`），是全仓唯一可靠的赛果来源。
+          **带 `msc`**（实测 `S2|0:1,S1|1:2,…`），是全仓唯一可靠的赛果来源。
 
         因此这里改为：先用赛程筛出「已结束」的场次，再用 `odds()` 批量
         拉回它们的比分。只对**台账里真的待结算**的场次调 `odds()`
@@ -1122,37 +1293,29 @@ class AnalysisService:
         """
         try:
             sched = self.valuation.source.schedule()
-        except Exception:  # noqa: BLE001 - 拿不到赛程不影响其它功能
-            return []
-        finished = [m for m in (sched or [])
-                    if getattr(m, "is_finished", False)]
-        if not finished:
-            return []
-        # 只对关心的场次补比分
-        if mids:
-            want = {str(m) for m in mids if m}
-            finished = [m for m in finished if str(getattr(m, "mid", "")) in want]
-            if not finished:
-                return []
-        # 赛程里已带比分（理论上不会）则直接用；否则用 odds() 补
-        if all(getattr(m, "score", (None, None))[0] is not None
-               for m in finished):
-            return finished
-        try:
-            detailed = self.valuation.source.odds(
-                [str(getattr(m, "mid", "")) for m in finished])
-        except Exception:  # noqa: BLE001 - 补比分失败则交回空（未结算）
-            return []
-        by_mid = {str(getattr(m, "mid", "")): m for m in detailed}
-        out: List[Any] = []
-        for m in finished:
-            got = by_mid.get(str(getattr(m, "mid", "")))
-            # 优先用带比分的那份；它没有则退回赛程原件（至少不丢场次）
-            out.append(got if got is not None else m)
-        return out
+        except Exception:  # noqa: BLE001 - direct historical lookup can still work
+            sched = []
+        by_schedule = {str(m.mid): m for m in (sched or [])}
+        want = {str(m) for m in mids} if mids else set(by_schedule)
+        ready = {mid: m for mid, m in by_schedule.items() if mid in want and m.is_finished}
+        # Query absent IDs directly: the current live schedule omits old matches.
+        missing = want - set(by_schedule)
+        fetch = missing | {mid for mid, m in ready.items() if getattr(m, 'score', (None, None))[0] is None}
+        if fetch:
+            try:
+                detailed = self.valuation.source.odds(sorted(fetch))
+            except Exception:  # noqa: BLE001
+                detailed = []
+            for m in detailed:
+                mid = str(m.mid)
+                if mid in fetch and getattr(m, 'is_finished', False) is True:
+                    ready[mid] = m
+                elif mid in ready:
+                    ready.pop(mid, None)  # contradictory new status is not a final-score proof
+        return [m for m in ready.values() if getattr(m, 'score', (None, None))[0] is not None]
 
     def _confirmed_finished_mids(self, pending: Any) -> set:
-        """赛程中 `ms==110`（已结束）且属于待结算集合的 mid。
+        """赛程中 `ms==3`（已结束）且属于待结算集合的 mid。
 
         为何单独抽一个方法（而不用 `_finished_matches`）：
         后者会额外调 `odds()` 补比分，**on `odds()` 失败就返回空**，
@@ -1192,7 +1355,7 @@ class AnalysisService:
 
           1. `C109` 推送（`rt.finished_mids()`）—— 实时、但只覆盖
              推送存活期间且订阅到的场次；
-          2. **赛程 `ms==110`**（由调用方通过 `confirmed` 传入）——
+          2. **赛程 `ms==3`**（由调用方通过 `confirmed` 传入）——
              覆盖更全（重启后仍有）。
 
         Args:
@@ -1252,7 +1415,8 @@ class AnalysisService:
         return out
 
     def ledger_history(self, only_picks: bool = True, limit: int = 300,
-                       days: int = 0, competition_type: Optional[str] = None) -> Dict[str, Any]:
+                       days: int = 0, competition_type: Optional[str] = None,
+                       algorithm: Optional[str] = None, cohort: str = "all", offset: int = 0) -> Dict[str, Any]:
         """历史决策 vs 实际结果的分组统计 + 明细（用户要求的菜单数据）。
 
         与 `ledger_stats` 的分工：后者是“一句话结论”（总命中率/ROI），
@@ -1262,9 +1426,18 @@ class AnalysisService:
         同时补上结算线程的状态，让用户知道“未结算的还要等多久”。
         """
         out = self.ledger.history(picks_only=only_picks, limit=limit,
-                                  days=days, competition_type=competition_type)
+                                  days=days, competition_type=competition_type, algorithm=algorithm, cohort=cohort, offset=offset)
         out["settle"] = dict(self.settle_stats)
-        out["summary"] = self.ledger.stats(only_picks=only_picks)
+        out["summary"] = out["overall"]
+        cfg = self.runtime_settings.config
+        from core.ensemble import adaptive_weights
+        # The live service refreshes evidence independently. A history page
+        # must not trigger a full PG scan after its cached page was returned.
+        evidence = dict(self.live_expert.performance_evidence)
+        out["algorithm_weights"] = adaptive_weights(cfg.algorithms, evidence, cfg.weight_prior_matches, cfg.max_algorithm_weight)
+        from core.ensemble import algorithm_alerts
+        out["algorithm_alerts"] = algorithm_alerts(cfg.algorithms, evidence, cfg.algorithm_alert_min_samples,
+                                                     cfg.algorithm_alert_threshold, cfg.algorithm_alert_enabled)
         return out
 
     def refresh_live_matches(self, max_matches: int = 0,
@@ -1412,6 +1585,34 @@ class AnalysisService:
         except (OSError, ValueError, TypeError) as exc:
             self.cycle_stats["last_error"] = "落盘失败: %s" % exc
 
+    def _archive_decision_run(self, res: Mapping[str, Any]) -> None:
+        path = self.config.result_path
+        root = Path(path).parent if path else Path(self.config.ledger_root) if self.config.ledger_root else None
+        if root is None:
+            return
+        cfg, version = self.runtime_settings.snapshot()
+        params = asdict(cfg)
+        params.pop('llm_api_key')
+        with self._history_lock:
+            history_path = root / 'decision-runs.jsonl.gz'
+            if self._decision_history is None or self._decision_history.path != history_path:
+                self._decision_history = HistoryJournal(history_path)
+            self._decision_history_pending.append(copy.deepcopy({**res,
+                'at': datetime.now(timezone.utc).isoformat(), 'schema_version': 2,
+                'config_version': version, 'config': params}))
+            self._flush_decision_history()
+
+    def _flush_decision_history(self) -> None:
+        with self._history_lock:
+            if self._decision_history is None:
+                return
+            try:
+                self._decision_history.append(self._decision_history_pending)
+                self._decision_history_pending.clear()
+            except (OSError, ValueError, TypeError):
+                # Do not overwrite this diagnostic at the end of a successful cycle.
+                pass  # HistoryJournal exposes the error; queued rows stay pending.
+
     def _restore_latest(self) -> None:
         """启动时读回上次结果，使页面在首轮完成前也能看到数据。"""
         path = self.config.result_path
@@ -1435,8 +1636,14 @@ class AnalysisService:
         Args:
             max_age_s: 超过该年龄则返回 None（调用方可据此提示“数据较旧”）。
         """
-        with self._lock:
-            res = self._latest
+        res: Optional[Dict[str, Any]]
+        if self._fast_live_enabled() and self.live_expert.computations:
+            res = self.live_expert.results()
+            published = max((row.get('published_at_ms', 0) for row in res['decisions']), default=0)
+            res['finished_at'] = datetime.fromtimestamp(published/1000, timezone.utc).isoformat()
+        else:
+            with self._lock:
+                res = self._latest
         if res is None:
             return None
         if max_age_s is not None:
@@ -2024,6 +2231,7 @@ class AnalysisService:
             snap, trend=trend, context=ctx, n_markets=n_markets)
         with self._lock:
             self._cache[key] = (now, decision)
+        self._archive_decision_run({'trigger': 'manual', 'decisions': [decision.as_dict()]})
         return decision
 
     def decide_list(
@@ -2174,6 +2382,9 @@ class AnalysisService:
             },
             "cycle": dict(self.cycle_stats),
             "scheduler": self.scheduler_health(),
+            "betting": self.betting.health(),
+            "decision_history": {**(self._decision_history.health() if self._decision_history else {}),
+                                 'pending': len(self._decision_history_pending)},
             # 进行中覆盖的可观测性：用户要能自己查「为什么比 leyu 少」。
             #
             # `upstream` 是**乐鱼页面滚动球计数同源**的值

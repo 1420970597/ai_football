@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>运行参数优化：论文依据、当前证据与保守配置</title>
+<style>
+:root{--fg:#1c2733;--mut:#5d6b7a;--line:#d9e0e7;--bg:#fff;--acc:#2c6fa8;
+      --red:#b3271e;--redbg:#fdf0ee;--amb:#8a5a00;--ambbg:#fdf6e6;
+      --grn:#1e7b46;--grnbg:#eef9f2;--code:#f4f6f8}
+*{box-sizing:border-box}
+body{margin:0;background:#eef1f4;color:var(--fg);
+     font:16px/1.85 -apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",
+          "WenQuanYi Zen Hei","Noto Sans CJK SC",sans-serif;}
+.wrap{max-width:980px;margin:0 auto;background:var(--bg);
+      padding:56px 68px 90px;box-shadow:0 2px 18px rgba(0,0,0,.07)}
+h1{font-size:1.95em;line-height:1.4;margin:.2em 0 .6em;padding-bottom:.5em;
+   border-bottom:3px solid var(--acc);color:#12212e}
+h2{font-size:1.42em;margin:2.4em 0 .8em;padding:.35em 0 .35em .7em;
+   border-left:5px solid var(--acc);background:#f7fafc;color:#12212e}
+h3{font-size:1.16em;margin:1.9em 0 .6em;color:#1d3a52}
+h4{font-size:1.04em;margin:1.5em 0 .5em;color:#2b4a63}
+p{margin:.85em 0}
+a{color:var(--acc);text-decoration:none;border-bottom:1px solid #b9d3e6}
+a:hover{border-bottom-color:var(--acc)}
+hr{border:0;border-top:1px solid var(--line);margin:2.4em 0}
+strong{color:#0f1e2b}
+code{background:var(--code);padding:.14em .42em;border-radius:4px;
+     font:0.88em/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+     color:#8a2b4a;border:1px solid #e6eaee}
+pre{background:#1e2a36;color:#e6edf3;padding:18px 20px;border-radius:8px;
+    overflow:auto;font-size:13.5px;line-height:1.7}
+pre code{background:none;border:0;color:inherit;padding:0;font-size:1em}
+.math{background:var(--code);border:1px solid var(--line);border-left:4px solid var(--acc);
+      padding:14px 18px;margin:1.2em 0;white-space:pre-wrap;word-break:break-word;
+      overflow-x:auto;border-radius:6px;
+      font:14px/1.9 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#243342}
+.imath{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       font-size:.95em;color:#8a2b4a;background:#f4f6f8;padding:.05em .28em;border-radius:3px}
+.mmd{margin:1.6em 0;padding:10px 6px;border:1px solid var(--line);border-radius:8px;
+     background:#fcfdfe;overflow-x:auto}
+pre.mermaid{background:none;border:0;color:#1c2733;padding:0;margin:0;
+            font-size:13px;text-align:center;display:block}
+pre.mermaid.mermaid-fallback{background:#f7f9fb;border:1px dashed #c3ccd6;border-radius:6px;
+            padding:14px 16px;text-align:left;color:#33475b;font-size:12.5px;
+            white-space:pre;overflow:auto}
+pre.mermaid.mermaid-fallback::before{content:"⚠ Mermaid 未渲染（离线）—— 以下为图源文本";
+            display:block;margin-bottom:8px;color:var(--amb);font-weight:600;font-size:12px}
+pre.mermaid svg{max-width:100%;height:auto}
+blockquote{margin:1.2em 0;padding:14px 20px;background:#f8f9fb;
+           border-left:4px solid var(--acc);border-radius:0 6px 6px 0;color:#33475b}
+blockquote p{margin:.4em 0}
+blockquote blockquote{margin:.6em 0;background:#fff}
+.tw{overflow-x:auto;margin:1.3em 0;
+    border:1px solid var(--line);border-radius:8px;background:#fff}
+table{border-collapse:collapse;width:100%;font-size:14.5px}
+th,td{padding:9px 13px;border-bottom:1px solid var(--line);text-align:left;
+      vertical-align:top}
+th{background:#f1f5f9;font-weight:600;color:#1d3a52;white-space:nowrap}
+tbody tr:nth-child(even){background:#fafcfd}
+tbody tr:last-child td{border-bottom:0}
+.center{text-align:center}.right{text-align:right}
+img{max-width:100%;height:auto;display:block;margin:1.6em auto;
+    border:1px solid var(--line);border-radius:8px;background:#fff}
+ul,ol{margin:.8em 0;padding-left:1.7em}
+li{margin:.35em 0}
+.tag{display:inline-block;padding:.1em .55em;border-radius:4px;font-size:.86em;
+     font-weight:600;white-space:nowrap}
+@media print{body{background:#fff}.wrap{box-shadow:none;max-width:none;padding:0}
+  h2{page-break-after:avoid}table,img,pre,.math{page-break-inside:avoid}}
+@media(max-width:760px){.wrap{padding:26px 18px 60px}h1{font-size:1.5em}}
+</style>
+<script type="module">
+/* Mermaid 运行时：CDN 可用则渲染；离线/失败则优雅降级为可读代码块。
+   关键：渲染成功必须清除降级标记，避免出现「已渲染但仍显示未渲染警告」。 */
+const CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+const SEL = "pre.mermaid";
+
+function degrade(reason) {
+  var n = 0;
+  document.querySelectorAll(SEL).forEach(function (el) {
+    if (el.querySelector("svg")) return;   // 已成功渲染的不动
+    el.classList.add("mermaid-fallback");
+    n++;
+  });
+  if (n) console.warn("Mermaid fallback:", reason, "(" + n + " blocks)");
+  return n;
+}
+
+function clearFallback() {
+  document.querySelectorAll(SEL).forEach(function (el) {
+    el.classList.remove("mermaid-fallback");
+    el.removeAttribute("title");
+  });
+}
+
+(function () {
+  var settled = false;
+  var timer = setTimeout(function () {
+    if (!settled) degrade("加载超时（CDN 不可达）");
+  }, 15000);
+
+  import(CDN).then(function (mod) {
+    var mermaid = mod.default;
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "neutral",
+      securityLevel: "strict",
+      fontFamily: '-apple-system,"PingFang SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif',
+      flowchart: { useMaxWidth: true, htmlLabels: false },
+      sequence: { useMaxWidth: true },
+      state: { useMaxWidth: true }
+    });
+    return mermaid.run({ querySelector: SEL });
+  }).then(function () {
+    settled = true;
+    clearTimeout(timer);
+    clearFallback();                       // 成功后必须清除降级标记
+    window.__mermaidStatus = { ok: true, blocks: document.querySelectorAll(SEL + " svg").length };
+  }).catch(function (e) {
+    settled = true;
+    clearTimeout(timer);
+    var msg = String((e && e.message) || e);
+    degrade(msg);
+    window.__mermaidStatus = { ok: false, error: msg };
+  });
+})();
+</script>
+</head>
+<body>
+<main class="wrap">
+<h1>运行参数优化：论文依据、当前证据与保守配置</h1>
+<p>核验日期：2026-10-12。本报告针对当前 Python 算法融合、独立 Logistic 校准模型、按比赛时间隔离验证与 PG/S3 持久化路线。推荐范围是待验证的工程搜索空间，<strong>不是论文给出的通用最优值</strong>。本次没有保存线上设置、改变投注金额、开启模型/混合模式或放宽提交门槛。</p>
+<h2>当前证据与可执行结论</h2>
+<p>生产只读 <code>/api/v1/data-model</code> 响应显示：已有候选版本 <code>20261012T060805554349Z</code>，其晋级为 <code>approved=false</code>；独立测试为 132 场，配对按场 Brier 差值 -0.000136896，95% bootstrap 区间 [-0.000737113, 0.000569694] 跨过 0。3 个未校准滚动时间折的 Brier 差值分别约 +0.000153、+0.000204、+0.000048，均未稳定优于同样本市场。证据来源为真实响应，A级；这些数值不是新影子模型的前瞻正确率。只读响应留在忽略目录 <code>output/playwright/data-model-production-before.json</code>。</p>
+<p>因此具体建议是：<strong>保持纯算法模式；保留现有最低概率、净EV、真实提交优势、训练周期；不因候选已训练而提高仓位或降低门槛。</strong> 新增影子候选观察，在结果揭晓前持久化真实预测，再根据按比赛独立的前瞻证据调整。现有 30 场证据门槛只能作为运行最低值，不是统计可靠性保证；先在报告和 UI 明示误差，后续至少积累 100~300 场独立前瞻比赛复核。</p>
+<p>正确率与收益率必须分开：赔率 1.50 时，即便 60% 全赢率也有 <code>EV=0.60×1.50−1=−10%</code>；赔率 2.20 时，48% 全赢率的毛EV为 <code>+5.6%</code>。这只是理想二元例子，不代表已实现收益；真实净收益还受走盘/半注、报价变化、成本、重复合约相关性和成交影响。单纯提高 <code>min_probability</code> 可能提高正确率却减少净收益。</p>
+<div class="mmd"><pre class="mermaid">flowchart LR
+  P[现有配置冻结] --&gt; T[按比赛及时间隔离的离线搜索]
+  T --&gt; B[同样本市场基准与净成本]
+  B --&gt; C{优势区间不跨零?}
+  C --&gt;|否| K[保留现有参数]
+  C --&gt;|是| S[候选影子预测先持久化]
+  S --&gt; F[结果揭晓后前瞻评估]
+  F --&gt; G{校准/收益/覆盖稳定?}
+  G --&gt;|否| K
+  G --&gt;|是| R[小幅参数调整并保存版本]</pre></div>
+<h2>学术依据及适用边界</h2>
+<div class="tw"><table><thead><tr><th>来源</th><th>已核验证据</th><th>本项目适用结论</th><th>不能推出的结论</th><th>分级</th></tr></thead><tbody><tr><td>Dixon &amp; Coles (1997), <a href="https://doi.org/10.1111/1467-9876.00065">DOI 10.1111/1467-9876.00065</a></td><td>Crossref 标题、作者和出版记录</td><td>足球进球强度及低比分依赖修正值得作为下一阶段候选；当前盘口反推 Poisson 不是已实现 Dixon-Coles 球队模型</td><td>该论文不能证明本项目的5400秒缩放、100场周期或即时盘口参数最优</td><td>A 元数据；未在本次取得全文，模型效果属待验证</td></tr><tr><td>Gneiting &amp; Raftery (2007), <a href="https://doi.org/10.1198/016214506000001437">Strictly Proper Scoring Rules</a></td><td>Crossref 出版记录与研究主题</td><td>采用 Brier/Log loss 比只看阈值准确率更适合选择概率模型</td><td>更低离线 Brier 不自动等于可交易盈利</td><td>A 元数据；理论结论 B</td></tr><tr><td>Clarke, Kovalchik &amp; Ingram (2017), <a href="https://www.sciencepublishinggroup.com/article/10.11648/j.ajss.20170506.12">Adjusting Bookmaker’s Odds</a></td><td>期刊页摘要：Power 处理 favorite-longshot bias，并在三个数据集优于比例法或与 Shin 相当</td><td>离线比较比例/Power/现有去水共识，同比分组公平概率、校准及收益</td><td>三个其他数据集的结果不能直接推广为乐鱼滚球最优去水法</td><td>A 原始摘要</td></tr><tr><td>Baker &amp; McHale (2013), <a href="https://doi.org/10.1287/deca.2013.0271">Optimal Betting Under Parameter Uncertainty</a></td><td>Crossref 精确题名、作者、DOI</td><td>参数估计不确定性需要进入仓位风险评估，避免按点估计提高 Kelly</td><td>未取得全文，不能声称论文指定0.1或0.25系数</td><td>A 元数据；具体系数为工程建议</td></tr><tr><td>Busseti, Ryu &amp; Boyd (2016), <a href="https://arxiv.org/abs/1603.06183">Risk-Constrained Kelly Gambling</a></td><td>arXiv 原始摘要与 HTML 全文；回撤约束、凸近似和数值实验</td><td>不把半 Kelly/四分之一 Kelly 当作已证明回撤保证；本项目还需组合回撤约束</td><td>不应照搬模拟收益，也不能把同场仓位缩放当作论文的完整凸优化</td><td>A 预印本全文</td></tr><tr><td>Walsh &amp; Joshi (2023), <a href="https://arxiv.org/abs/2303.06021">Accuracy or Calibration?</a></td><td>原始摘要明确研究 NBA、单赛季赔率实验，强调校准选择</td><td>校准、Brier、可靠性应与方向正确率同时展示</td><td>文中的 ROI 数值不适用于足球滚球，也不是本项目测量值</td><td>A 原始预印本摘要；外推 B</td></tr></tbody></table></div>
+<p>已抓取的7个来源 HTTP 均为200，记录见 <a href="data/source_fetches.json">source_fetches.json</a>。自动 Crossref 题名查询还返回两个无关投资/信号论文；本报告明确排除，仅引用 Baker &amp; McHale 的精确题名匹配，不把搜索结果都当作证据。Dixon-Coles 和 proper-scoring 本次只核验出版元数据，未伪称逐页阅读全文。</p>
+<h2>三种成熟路线比较</h2>
+<p>此表为架构比较，不是主观数值评分；没有延迟实测的项目标为需测量。</p>
+<div class="tw"><table><thead><tr><th>路线</th><th>输入与数据要求</th><th>概率表达</th><th>选择指标</th><th>风险表达</th><th>在线开销</th><th>维护成本</th><th>本项目现状</th></tr></thead><tbody><tr><td>市场去水 + Poisson 算法</td><td>实时完整盘口、比分/时钟</td><td>强度/分布与市场公平概率</td><td>时间验证、按场Brier、净EV</td><td>现有仓位与同场缩放</td><td>已有本地CPU路径，延迟需持续监测</td><td>较低</td><td>当前生产路线</td></tr><tr><td>Offset Logistic 校准</td><td>决策前冻结特征、多盘口标签</td><td>市场logit偏置加残差校正</td><td>Brier/Log loss/校准、独立测试</td><td>需另接执行和仓位风控</td><td>数十参数，推理开销低但需测量</td><td>中等</td><td>候选未稳定优于市场，先影子</td></tr><tr><td>Dixon-Coles/动态球队强度</td><td>跨赛季球队、对手、主场、时间和低比分依赖</td><td>结构化比分联合分布</td><td>时间外比分概率、市场对照</td><td>仍需参数不确定性/组合约束</td><td>推理较低，训练和冷启动需测量</td><td>较高</td><td>当前盘口反推不能冒称此路线</td></tr></tbody></table></div>
+<h2>参数清单：保持、候选范围与调整条件</h2>
+<p>以下“初值”是 <code>service/runtime_settings.py</code> 的代码默认值，<strong>不是未经读取就宣称线上配置相同</strong>；不改已有持久化配置。数值范围是工程先验，必须离线冻结搜索，再用新时间段/影子评估确认，禁止在同一测试集反复挑最优后报告。</p>
+<div class="tw"><table><thead><tr><th>参数</th><th>当前代码初值</th><th>本次动作</th><th>离线候选范围</th><th>必须观测的条件</th></tr></thead><tbody><tr><td><code>decision_mode</code></td><td>algorithm</td><td>保持现有纯算法，不启用model/hybrid</td><td>仅影子候选</td><td>晋级门槛未通过；前瞻净成本优势需另证</td></tr><tr><td><code>devig_method</code></td><td>proportional</td><td>保持；增加问号研究建议</td><td>proportional / power；AUTO共识为独立算法对照</td><td>同场完整组、赔率极端段Brier/校准、三向归一化</td></tr><tr><td><code>fractional_kelly</code></td><td>0.25</td><td>不提高；固定金额模式另有金额风险</td><td>0.10 / 0.15 / 0.25</td><td>回撤与错估敏感性；不改变预测正确率</td></tr><tr><td><code>min_probability</code></td><td>0.52</td><td>保持，不为追求命中率上调</td><td>0.50~0.60</td><td>各盘口覆盖/赔率、净收益区间及正确率一起看</td></tr><tr><td><code>min_ev</code></td><td>0.02</td><td>保持，不放宽真实门控</td><td>0.02~0.05</td><td>执行成本、成交概率/改价偏差；冻结输入</td></tr><tr><td><code>betting_min_edge</code></td><td>0.05</td><td>保持真实提交阈值</td><td>0.03~0.08仅离线</td><td>没有成本与前瞻收益证据不下调</td></tr><tr><td><code>betting_min_evidence_matches</code></td><td>30</td><td>不降低；UI明确证据薄弱</td><td>100~300用于复核/小步提高候选</td><td>按独立比赛cluster而不是同场重复条目</td></tr><tr><td><code>model_training_matches</code></td><td>100</td><td>保持更新周期</td><td>100 / 200 / 300新增有效已结场次</td><td>无数据泄漏、更新次数/资源/漂移与时间外校准</td></tr><tr><td><code>weight_prior_matches</code></td><td>20</td><td>保持；小样本时加收缩候选</td><td>20 / 50 / 100</td><td>按场Brier技能权重、极端权重稳定性</td></tr><tr><td><code>max_algorithm_weight</code></td><td>0.60</td><td>保持，不让单成员支配</td><td>0.40 / 0.50 / 0.60</td><td>多成员有效数、相关性、最弱时间折；注意cap≥1/N</td></tr><tr><td><code>execution_cost</code></td><td>0.001</td><td>保持，先测量后校准</td><td>根据真实请求报价/成交日志估计分层成本</td><td>当前参数是估算，不能当准确已知0.1%成本</td></tr><tr><td><code>betting_min_hit_count</code></td><td>代码3，线上1（用户要求首次计数）</td><td><strong>保留线上1，不调回3</strong></td><td>不进行改变用户次数偏好的搜索</td><td>这是决策出现次数，不是独立结果样本；赔率变化不新增注单身份</td></tr><tr><td><code>max_total_exposure</code></td><td>0.25</td><td>保持现状；不扩大同场敞口</td><td>0.10 / 0.15 / 0.25仅研究仓位敏感性</td><td>同场多盘口实际相关性；这是研究Kelly仓位缩放，不替代真实固定金额限额</td></tr><tr><td><code>risk_correlation</code></td><td>0.40</td><td>保留；不得称已测量相关系数</td><td>0.20~0.60仅离线</td><td>联合损益/算法分歧与按场回撤；不是提高预测正确率的万能系数</td></tr><tr><td><code>quote_max_age_s</code></td><td>15秒</td><td>保留当前新鲜度策略</td><td>5~30秒仅历史推送时钟覆盖研究</td><td>测量接收年龄分布、暂停/改价和请求行为，避免误删有效信号</td></tr><tr><td><code>state_max_age_s</code></td><td>90秒</td><td>保留比分时钟校验</td><td>30~120秒仅研究</td><td>实测赛况推送间隔与过期状态下的估值风险</td></tr><tr><td><code>anchor_max_age_s</code></td><td>120秒</td><td>保留衰减锚点，比分变化必须重置</td><td>60 / 120 / 180秒</td><td>同比分时间窗与强度漂移，分开评估全场/半场</td></tr></tbody></table></div>
+<p>这里的报价/赛况/锚点新鲜度针对输入本身是否可用；<strong>盘口接收至提交不超过2秒是性能目标，不是业务拒单阈值</strong>，不得因为流程超过2秒就拒绝自动下单。保留用户现有真实投注金额、启停和纯算法模式；本次不进行真实下注验证。</p>
+<h3>方程与样本敏感性</h3>
+<p>市场基准 <code>q_i=1/o_i</code>；比例去水 <code>p_i=q_i/Σq</code>；Power 找到 <code>k</code> 使 <code>Σq_i^k=1</code>，再归一化。二元无走盘 Kelly <code>f*=max(0,(op−1)/(o−1))</code>、折扣后 <code>f=λf*</code>；因此胜率误差对仓位的导数为 <code>λo/(o−1)</code>，低赔率下误差更敏感。含走盘/半注应使用项目支付质量，不能把该简化方程替代实际结算。</p>
+<p>样本独立近似下，50%正确率的95%误差半宽为 <code>1.96√(0.25/n)</code>：30场约17.9pp、100场9.8pp、300场5.7pp。这是解释量级的正态近似，不能用于同场上千条决策；实际评估应按比赛cluster重采样并给出区间。可复现结果见 <a href="data/sensitivity.csv">sensitivity.csv</a>，脚本为 <a href="scripts/parameter_sensitivity.py">parameter_sensitivity.py</a>。参数从30改100/300时区间缩小，决策频次增加却不增加独立比赛数；0.10~0.25 Kelly均不能使负EV成为正EV。</p>
+<p><img alt="独立比赛正确率区间量级示意，非实际成绩" src="images/independent-match-ci-sensitivity.png"></p>
+<p>图由 <a href="scripts/make_figures.py">make_figures.py</a>读取上述CSV绘制，强制挂载文泉驿中文字体；没有模型盈利或实际战绩预测。</p>
+<div class="mmd"><pre class="mermaid">sequenceDiagram
+  participant W as 模型Worker
+  participant P as PG影子预测
+  participant L as 赛果标签
+  participant U as 数据与模型页面
+  W-&gt;&gt;P: 预测时保存版本/可用时间/概率/输入时钟
+  L-&gt;&gt;P: 结果揭晓后按冻结合约结算
+  W-&gt;&gt;W: 同版本近期窗口与市场配对指标
+  W-&gt;&gt;U: 独立dashboard原子快照
+  U-&gt;&gt;U: Top1/亚洲支付/二分类分别展示
+  U-&gt;&gt;U: 待结算或无适用样本不能显示0%正确率</pre></div>
+<h2>执行与验收</h2>
+<ol><li>本次先修复观察链路和统计展示：候选可影子观察但不冒充生产；必须使用已持久化预测概率，而非事后按新权重重算。全库未审查标为null且有说明，抽样/估计数量标明口径。</li><li>冻结一段新时间期，运行上述离散候选参数；市场组、盘口/半场、模型版本、标签可见时间保持一致。记录正确率、Brier、Log loss、ECE、覆盖、净收益/回撤和资源开销。</li><li>在另一个未来时间段前瞻确认；每场多个盘口保留，但统计按比赛等权。对成本/概率误差5%与50%的情景作敏感性检查，方向不稳时保持参数。</li><li>当前证据只支持保守“保持”清单，不支持保证收益提升或启用候选模型。下次调整建议应附可核验差值区间和版本，最多小步提高证据/收缩，不放宽业务门控。</li></ol>
+</main>
+</body>
+</html>

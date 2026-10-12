@@ -16,6 +16,8 @@ import struct
 import threading
 import time
 import unittest
+import ssl
+from unittest.mock import MagicMock, patch
 from typing import List, Optional
 
 from collector.leyu_client import WS_HEARTBEAT_INTERVAL_S, TransportError
@@ -41,6 +43,71 @@ from collector.leyu_ws import (
 # --------------------------------------------------------------------------- #
 
 class TestFrameCodec(unittest.TestCase):
+    def test_tls_partial_record_retries_readiness_without_disconnect(self):
+        conn = WebSocketConnection('wss://offline.invalid', '')
+        sock = MagicMock(spec=ssl.SSLSocket)
+        sock.pending.return_value = 0
+        sock.recv.side_effect = [ssl.SSLWantReadError(),
+                                encode_frame(b'latest', OPCODE_TEXT, mask=False)]
+        conn._sock = sock
+        with patch('collector.leyu_ws.select.select', return_value=([sock], [], [])) as ready:
+            frame = conn.recv(timeout=.1)
+        self.assertEqual(frame.payload, b'latest')
+        self.assertEqual(ready.call_count, 2)
+
+    def test_tls_write_requirement_and_timeout_are_observed_during_read(self):
+        conn = WebSocketConnection('wss://offline.invalid', '')
+        sock = MagicMock(spec=ssl.SSLSocket)
+        sock.pending.return_value = 0
+        sock.recv.side_effect = ssl.SSLWantWriteError()
+        conn._sock = sock
+        with patch('collector.leyu_ws.select.select', side_effect=[([sock], [], []), ([], [], [])]) as ready:
+            self.assertIsNone(conn.recv(timeout=.1))
+        self.assertEqual(ready.call_args.args[:2], ([], [sock]))
+
+    def test_nonblocking_partial_send_preserves_complete_frame(self):
+        conn = WebSocketConnection('ws://offline.invalid', '')
+        sock = MagicMock(spec=socket.socket)
+        sent = bytearray()
+        calls = [0]
+        def send(data):
+            calls[0] += 1
+            if calls[0] == 2:
+                raise BlockingIOError()
+            n = min(3, len(data))
+            sent.extend(data[:n])
+            return n
+        sock.send.side_effect = send
+        conn._sock = sock
+        with patch('collector.leyu_ws.select.select', return_value=([], [sock], [])):
+            conn.send_text('完整推送')
+        frame, count = decode_frame(bytes(sent))
+        self.assertEqual(frame.text, '完整推送')
+        self.assertEqual(count, len(sent))
+
+    def test_tls_pending_plaintext_completes_frame_without_waiting_for_new_network_bytes(self):
+        conn = WebSocketConnection('wss://offline.invalid', '')
+        sock = MagicMock(spec=ssl.SSLSocket)
+        raw = encode_frame(b'current-price', OPCODE_TEXT, mask=False)
+        conn._buffer.extend(raw[:4])
+        sock.pending.return_value = len(raw) - 4
+        sock.recv.return_value = raw[4:]
+        conn._sock = sock
+        with patch('collector.leyu_ws.select.select', return_value=([], [], [])) as select:
+            frame = conn.recv(timeout=.1)
+        self.assertIsNotNone(frame)
+        self.assertEqual(frame.payload, b'current-price')
+        select.assert_not_called()
+
+    def test_tls_without_pending_plaintext_still_observes_network_timeout(self):
+        conn = WebSocketConnection('wss://offline.invalid', '')
+        sock = MagicMock(spec=ssl.SSLSocket)
+        sock.pending.return_value = 0
+        conn._sock = sock
+        with patch('collector.leyu_ws.select.select', return_value=([], [], [])):
+            self.assertIsNone(conn.recv(timeout=.1))
+        sock.recv.assert_not_called()
+
     def test_small_payload_roundtrip_masked(self) -> None:
         raw = encode_frame(b"hello", OPCODE_TEXT, mask=True, mask_key=b"\x01\x02\x03\x04")
         parsed = decode_frame(raw)
@@ -177,7 +244,12 @@ class _FakeServer:
         buf = bytearray(rest)
 
         def send(payload: bytes, opcode: int) -> None:
-            conn.sendall(encode_frame(payload, opcode, mask=False))
+            if self._stop.is_set():
+                return
+            try:
+                conn.sendall(encode_frame(payload, opcode, mask=False))
+            except OSError:
+                self._stop.set()  # A test may close immediately after its first frame.
 
         # 主动推 1 条业务消息 + 1 个 ping，随后回显收到的客户端帧
         send(b'{"cmd":"C118","mid":"5714088"}', OPCODE_TEXT)
@@ -188,6 +260,8 @@ class _FakeServer:
                 chunk = conn.recv(65536)
             except (socket.timeout, TimeoutError):
                 continue
+            except OSError:
+                break
             if not chunk:
                 break
             buf.extend(chunk)
@@ -339,6 +413,22 @@ class TestFeedPolicy(unittest.TestCase):
         feed.subscribe_odds(["1"])
         feed.subscribe_odds(["1"])
         self.assertEqual(len(feed._pending), 1)
+
+    def test_reconnect_replays_only_latest_odds_list_for_each_key(self) -> None:
+        feed = LEYUFeed("wss://x/push", "r", "https://w")
+        feed.subscribe_match("detail")
+        feed.subscribe_odds(["old"])
+        feed.subscribe_odds(["other"], key="secondary")
+        feed.subscribe_odds(["current"])
+        latest = feed.subscribe_odds([])
+        with patch("collector.leyu_ws.WebSocketConnection") as connection, \
+                patch.object(feed, "_start_heartbeat"):
+            feed.connect()
+        replay = [json.loads(call.args[0]) for call in connection.return_value.send_text.call_args_list]
+        self.assertEqual([item['cmd'] for item in replay], ['C13', 'C4', 'C8', 'C8'])
+        by_key = {item['key']: item['list'] for item in replay if item['cmd'] == 'C8'}
+        self.assertEqual(by_key, {'secondary': [{'mid': 'other'}], 'leyu': []})
+        self.assertEqual(feed._pending[-1], latest)
 
     def test_close_is_idempotent(self) -> None:
         feed = LEYUFeed("wss://x/yewuws2/push?requestId=r", "r", "https://w")

@@ -1,0 +1,277 @@
+{
+  "evidence": "A: read-only production probes, no manual debit request",
+  "scope": "Complete two-worker reference window on the final frozen business source, before the four-worker capacity trial; final runtime restored to two workers.",
+  "deployed_at_utc": "2026-10-10T19:02:01.036410+00:00",
+  "probe_start_utc": "2026-10-10T19:03:12.477394+00:00",
+  "probe_end_utc": "2026-10-10T19:09:11.245243+00:00",
+  "duration_s": 358.768,
+  "api": {
+    "workbench": {
+      "samples": 180,
+      "status_counts": {
+        "200": 180
+      },
+      "response_ms": {
+        "p50": 119.757,
+        "p95": 473.595,
+        "p99": 656.533,
+        "max": 736.617
+      }
+    },
+    "recommendations": {
+      "samples": 180,
+      "status_counts": {
+        "200": 180
+      },
+      "response_ms": {
+        "p50": 126.714,
+        "p95": 486.974,
+        "p99": 674.169,
+        "max": 675.037
+      }
+    },
+    "account": {
+      "samples": 180,
+      "status_counts": {
+        "200": 180
+      },
+      "response_ms": {
+        "p50": 94.23,
+        "p95": 443.224,
+        "p99": 643.762,
+        "max": 675.9
+      }
+    },
+    "bet": {
+      "samples": 180,
+      "status_counts": {
+        "200": 180
+      },
+      "response_ms": {
+        "p50": 136.123,
+        "p95": 513.28,
+        "p99": 725.715,
+        "max": 744.057
+      }
+    }
+  },
+  "public_curl": {
+    "samples": 90,
+    "status_counts": {
+      "200": 90
+    },
+    "response_ms": {
+      "p50": 195.38,
+      "p95": 500.647,
+      "p99": 849.219,
+      "max": 849.219
+    }
+  },
+  "decision_metrics_latest": {
+    "computations": 13822,
+    "compute_ms": {
+      "p50": 27.458,
+      "p95": 99.595,
+      "p99": 301.945,
+      "max": 800.947
+    },
+    "freeze_ms": {
+      "p50": 3.984,
+      "p95": 27.271,
+      "p99": 43.324,
+      "max": 65.501
+    },
+    "full_compute_ms": {
+      "p50": 27.481,
+      "p95": 100.378,
+      "p99": 301.954,
+      "max": 800.973
+    },
+    "input_to_result_ms": {
+      "p50": 474.362,
+      "p95": 2781.319,
+      "p99": 9005.799,
+      "max": 15083.1
+    },
+    "by_type_input_to_result_ms": {
+      "unknown": {
+        "samples": 376,
+        "p50": 111.886,
+        "p95": 728.155,
+        "p99": 1527.58,
+        "max": 2493.974
+      },
+      "real": {
+        "samples": 2048,
+        "p50": 394.197,
+        "p95": 2551.751,
+        "p99": 9005.799,
+        "max": 15083.1
+      },
+      "virtual": {
+        "samples": 2048,
+        "p50": 389.838,
+        "p95": 1635.38,
+        "p99": 3595.537,
+        "max": 14692.598
+      }
+    },
+    "calculation": {
+      "mode": "process",
+      "processes": 2,
+      "ready": 2,
+      "failures": 0
+    },
+    "event_to_result_ms": {
+      "p50": 689.062,
+      "p95": 2327.111,
+      "p99": 2913.685,
+      "max": 3126.404
+    },
+    "samples": 2048,
+    "by_type_event_to_result_ms": {
+      "unknown": {
+        "samples": 376,
+        "p50": 121.212,
+        "p95": 1001.929,
+        "p99": 1679.591,
+        "max": 2566.216
+      },
+      "real": {
+        "samples": 2048,
+        "p50": 597.327,
+        "p95": 2219.996,
+        "p99": 2834.157,
+        "max": 3126.404
+      },
+      "virtual": {
+        "samples": 2048,
+        "p50": 479.432,
+        "p95": 1749.495,
+        "p99": 2645.563,
+        "max": 3350.547
+      }
+    },
+    "superseded": 1410,
+    "errors": 0,
+    "journal_dropped": 0,
+    "journal_error": "",
+    "journal_pending": 1,
+    "history_retention": "permanent",
+    "history_sampling": "every_published_decision",
+    "record_error": "",
+    "decisions_pending": 0,
+    "config_version": 10,
+    "model_version": "live-poisson-market-v1",
+    "validation_status": "research"
+  },
+  "real_rolling_p95_after_first_minute": {
+    "windows": 149,
+    "min_ms": 1249.716,
+    "max_ms": 2551.751
+  },
+  "projection_latest": {
+    "loading": false,
+    "age_s": 0.079,
+    "stale": false,
+    "error": ""
+  },
+  "execution_metrics_latest": {
+    "budget_ms": 2000,
+    "basis": "selected_quote_receive_to_socket_send",
+    "submissions": 8,
+    "within_budget": 8,
+    "deadline_blocked": 111,
+    "quote_to_submit_ms": {
+      "p50": 878.317,
+      "p95": 1950.942,
+      "p99": 1950.942,
+      "max": 1950.942
+    },
+    "quote_to_receipt_ms": {
+      "p50": 1239.866,
+      "p95": 2320.749,
+      "p99": 2320.749,
+      "max": 2320.749
+    }
+  },
+  "durable_order_status_counts_since_deployment": {
+    "pending": 6,
+    "rejected": 2
+  },
+  "durable_order_stages_ms": {
+    "decision_persistence": {
+      "p50": 0.014,
+      "p95": 22.125,
+      "p99": 22.125,
+      "max": 22.125
+    },
+    "durable_claim": {
+      "p50": 10.02,
+      "p95": 18.843,
+      "p99": 18.843,
+      "max": 18.843
+    },
+    "final_quote": {
+      "p50": 0.262,
+      "p95": 0.835,
+      "p99": 0.835,
+      "max": 0.835
+    },
+    "historical_evidence": {
+      "p50": 3.572,
+      "p95": 21.904,
+      "p99": 21.904,
+      "max": 21.904
+    },
+    "live_quote": {
+      "p50": 0.202,
+      "p95": 0.337,
+      "p99": 0.337,
+      "max": 0.337
+    },
+    "recommendation": {
+      "p50": 0.427,
+      "p95": 0.682,
+      "p99": 0.682,
+      "max": 0.682
+    },
+    "submission": {
+      "p50": 356.434,
+      "p95": 380.244,
+      "p99": 380.244,
+      "max": 380.244
+    },
+    "submit_queue": {
+      "p50": 1.653,
+      "p95": 359.079,
+      "p99": 359.079,
+      "max": 359.079
+    },
+    "venue_preflight": {
+      "p50": 620.105,
+      "p95": 1859.636,
+      "p99": 1859.636,
+      "max": 1859.636
+    }
+  },
+  "runtime_nano_cpus": 0,
+  "limitation": "Deadline-blocked attempts are not successful bets; remote acceptance/receipt may exceed 2 seconds.",
+  "restored_runtime_verification": {
+    "verified_at_utc": "2026-10-10T19:22:29.024830+00:00",
+    "started_at_utc": "2026-10-10T19:20:03.64504107Z",
+    "source_sha256_files_matched": 12,
+    "health": "healthy",
+    "calculation": {
+      "mode": "process",
+      "processes": 2,
+      "ready": 2,
+      "failures": 0
+    },
+    "errors": 0,
+    "computations": 5069,
+    "nano_cpus": 0,
+    "cpu_max": "max 100000",
+    "limitation": "Short health verification after configuration restore; latency percentiles above belong to the complete reference window."
+  }
+}

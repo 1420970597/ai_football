@@ -1,0 +1,6 @@
+scenario,orders,agrees,profit
+production,160,81,235.825
+full_correct_sign,160,88,217.8
+remaining_current_sign,160,143,6.095
+remaining_correct_sign,160,160,-10.605
+venue_actual,160,160,-10.67

@@ -1,0 +1,13 @@
+source,market,graded,changed_status,flipped_label,new_excluded
+input,AH,202212,88478,65578,5348
+input,AH_1H,36724,16206,14394,411
+input,HAD,94228,0,0,0
+input,HAD_1H,27331,0,0,0
+input,OU,315615,0,0,0
+input,OU_1H,59729,0,0,0
+ledger,AH,10573,2412,1479,452
+ledger,AH_1H,5806,1517,981,271
+ledger,HAD,3118,0,0,0
+ledger,HAD_1H,2250,0,0,0
+ledger,OU,19873,0,0,0
+ledger,OU_1H,9251,0,0,0

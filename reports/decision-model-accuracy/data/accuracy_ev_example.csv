@@ -1,0 +1,3 @@
+scenario,probability,odds,expected_return,evidence
+高胜率低赔率,0.78,1.2,-0.06400000000000006,theoretical
+低胜率高赔率,0.52,2.05,0.06599999999999984,theoretical

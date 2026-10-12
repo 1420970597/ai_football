@@ -2,9 +2,9 @@
 #       "the attribute `version` is obsolete" 警告。
 
 # ---------------------------------------------------------------------------
-# CPU 预算：本机同时运行 LLM 网关，编译/采集打满 CPU 会拖垮网关（进而
-# 打断交互会话）。因此**所有容器**都声明 `cpus`，默认 2.0 核
-# （4 vCPU 的 50%）。覆盖： AI_FOOTBALL_CPUS=3.0 docker compose ...
+# 运行期：用户已授权解除容器 CPU 配额，默认 0.0（不设硬上限）。
+# 如需限额，可显式设置 AI_FOOTBALL_CPUS / MODEL_WORKER_CPUS /
+# ARCHIVE_WORKER_CPUS。模型训练子进程仍遵守设置页面的 CPU/内存限制。
 #
 # ⚠️ `cpus` 只约束**运行期**。构建期用的是 BuildKit，它**忽略**
 #    `--cgroup-parent`（实测 cpu.max 仍为 max，4 核跑满）。构建请走
@@ -32,8 +32,7 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
-    # CPU 硬上限（见文件头「CPU 预算」）。cpus = 核数，与宿主机核数无关。
-    cpus: "${AI_FOOTBALL_CPUS:-2.0}"
+    cpus: "${AI_FOOTBALL_CPUS:-0.0}"
     networks:
       - ai_football_network
 
@@ -50,6 +49,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.analytics
     container_name: ai_football_analytics_api
+    # SIGTERM stops producers and fsyncs queued history before container exit.
+    stop_grace_period: 60s
     ports:
       # 可覆盖： ANALYTICS_PORT=18000 docker compose ... up -d
       - "${ANALYTICS_PORT:-8000}:8000"
@@ -61,11 +62,17 @@ services:
       - path: ../.env
         required: false
     environment:
+      - DATABASE_BACKEND=postgres
       - API_HOST=0.0.0.0
+      - LIVE_COMPUTE_PROCESSES=${LIVE_COMPUTE_PROCESSES:-2}
+      - LEYU_FAST_BETTING=1
+      - AUTO_ENABLE_BETTING=1
+      - API_BACKGROUND_PROJECTION=1
       - API_PORT=8000
       - SNAPSHOT_ROOT=/app/output/snapshots
       # 缓存后端：redis 可达则用 redis，否则自动回退内存
       - REDIS_URL=redis://redis:6379/0
+      - S3_CONFIG_FILE=/app/client/credentials.json
     # ⚠️ 可外部注入的变量（DATA_SOURCE、LEYU_*）一律**只经上面的 env_file** 传入，
     #    不写进 environment。原因：compose 中 environment 优先级高于 env_file，
     #    写成 `- FOO=${FOO:-}` 时，未在 shell 设置就会被展开为空串并覆盖 .env，
@@ -90,13 +97,12 @@ services:
     volumes:
       # 宿主机快照存储（乐鱼实时采集写入）
       - ../output:/app/output
+      - ../client:/app/client:ro
       # 乐鱼抓包（离线回放时才需要；文件缺失不影响在线模式）
       - ../leyu.saz:/app/leyu.saz:ro
     depends_on:
       - redis
-    # 决策/采集是 CPU 敏感路径（全量采集时会打满多核）。
-    # 限到 cpus 核，避免抢占同机上 LLM 网关的算力。
-    cpus: "${AI_FOOTBALL_CPUS:-2.0}"
+    cpus: "${AI_FOOTBALL_CPUS:-0.0}"
     networks:
       - ai_football_network
     restart: unless-stopped
@@ -104,6 +110,57 @@ services:
   # Web 控制台静态资源（B/S 的 B）。
   # 用 nginx 托管 static，并把 /api 反向代理到 analytics-api，
   # 从而让 Browser 端与 Server 端同源 —— 免除 CORS 配置。
+  model-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.model
+    container_name: ai_football_model_worker
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      - DATABASE_BACKEND=postgres
+      - MODEL_LEDGER_ROOT=/app/output/ledger
+    volumes:
+      - ../output:/app/output
+    cpus: "${MODEL_WORKER_CPUS:-0.0}"
+    mem_limit: "${MODEL_WORKER_MEMORY:-5g}"
+    stop_grace_period: 60s
+    restart: unless-stopped
+    networks:
+      - ai_football_network
+    healthcheck:
+      # A bounded replay/training pass can legitimately hold the worker loop
+      # for several minutes.  The worker status distinguishes that state from
+      # a dead process, so do not turn a long but bounded pass into a false
+      # unhealthy result (the training wall watchdog remains authoritative).
+      test: ["CMD", "python", "-c", "import json,time,datetime; from pathlib import Path; d=json.loads(Path('/app/output/models/dashboard.json').read_text()); age=time.time()-datetime.datetime.fromisoformat(d['heartbeat_at']).timestamp(); busy=bool(d.get('training_running') or d.get('replay',{}).get('backlog_files')); assert d['running'] and (age<90 or (busy and age<900))"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+
+  archive-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.archive
+    container_name: ai_football_archive_worker
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      - DATABASE_BACKEND=postgres
+      - S3_CONFIG_FILE=/app/client/credentials.json
+    volumes:
+      - ../output:/app/output
+      - ../client:/app/client:ro
+    cpus: "${ARCHIVE_WORKER_CPUS:-0.0}"
+    mem_limit: 512m
+    stop_grace_period: 60s
+    restart: unless-stopped
+    networks:
+      - ai_football_network
+
   web-console:
     image: nginx:1.27-alpine
     container_name: ai_football_web_console
@@ -115,14 +172,15 @@ services:
       start_period: 5s
     ports:
       # 可覆盖： CONSOLE_PORT=13000 docker compose ... up -d
-      - "${CONSOLE_PORT:-3000}:80"
+      # 本机 3000 为 Grafana 使用，控制台沿用 3003。
+      - "${CONSOLE_PORT:-3003}:80"
     volumes:
       - ../web/console:/usr/share/nginx/html:ro
       - ./nginx.console.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - analytics-api
-    # nginx 静态托管几乎不吃 CPU，但统一限上，防止异常流量下的突发。
-    cpus: "${AI_FOOTBALL_CPUS:-2.0}"
+      analytics-api:
+        condition: service_healthy
+    cpus: "${AI_FOOTBALL_CPUS:-0.0}"
     networks:
       - ai_football_network
     restart: unless-stopped

@@ -121,6 +121,26 @@ class TestSnapshotStore(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_batch_updates_directory_index_once_without_losing_snapshots(self):
+        from unittest.mock import patch
+        with patch.object(self.store, '_update_index_many', wraps=self.store._update_index_many) as update:
+            paths = self.store.append_many([snap(t=utcnow()+timedelta(seconds=i)) for i in range(4)])
+            self.assertEqual(update.call_count, 1)
+        self.assertEqual(len(self.store.load_match('体彩官方API', '日职', '2001')), 4)
+        with (paths[0].parent/'_index.json').open() as source:
+            self.assertEqual(json.load(source)['count'], 4)
+
+    def test_partial_batch_failure_indexes_previously_written_files(self):
+        def snapshots():
+            yield snap()
+            raise OSError('failed source')
+        with self.assertRaises(OSError):
+            self.store.append_many(snapshots())
+        rows = self.store.load_match('体彩官方API', '日职', '2001')
+        self.assertEqual(len(rows), 1)
+        with (self.store.match_dir(snap())/'_index.json').open() as source:
+            self.assertEqual(json.load(source)['count'], 1)
+
     def test_append_and_load(self):
         p = self.store.append(snap())
         self.assertTrue(os.path.isfile(p))
@@ -191,6 +211,18 @@ class TestSnapshotStore(unittest.TestCase):
         self.assertEqual(st["match_dirs"], 1)
         self.assertEqual(st["snapshot_files"], 1)
         self.assertEqual(st["cache_backend"], "memory")
+
+    def test_stats_keep_match_indexes_after_s3_removes_snapshot_files(self):
+        snapshot = snap()
+        path = self.store.append(snapshot)
+        path.unlink()
+        metadata = self.store.root / 'unindexed'
+        metadata.mkdir()
+        (metadata / 'sample.json').write_text('{}')
+        (metadata / 'ignored.txt').write_text('other')
+        stats = self.store.stats()
+        self.assertEqual(stats['match_dirs'], 1)
+        self.assertEqual(stats['snapshot_files'], 1)
 
     def test_multi_source_separated(self):
         self.store.append(snap(source="源A"))

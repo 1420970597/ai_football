@@ -252,7 +252,7 @@ class TestNormalization(unittest.TestCase):
     def test_finished_match_is_delisted(self) -> None:
         m = _match([_mq("1", "全场独赢", 1, quotes=[
             _q("home", 2.0), _q("draw", 3.0), _q("away", 4.0),
-        ])], ms=110)
+        ])], ms=3)
         snaps, _ = normalize_leyu_matches([m], captured=CAPTURED)
         self.assertEqual(snaps[0].state, SnapshotState.DELISTED)
 

@@ -339,7 +339,7 @@ class SnapshotStore:
 
     # -- 写入 ---------------------------------------------------------------
 
-    def append(self, snapshot: OddsSnapshot) -> Path:
+    def append(self, snapshot: OddsSnapshot, *, _index_batch: Optional[Dict[Path, list]] = None) -> Path:
         """追加一个快照（永不覆盖既有文件）。
 
         Returns:
@@ -357,8 +357,10 @@ class SnapshotStore:
             )
             # 加入纳秒与序号后缀，避免同微秒内多次采集相互覆盖
             target = d / ("%s_%s.json" % (ts, safe_name(snapshot.market)))
+            from store.archive import archive_for
+            archive = archive_for(self.root)
             seq = 0
-            while target.exists():
+            while target.exists() or (archive is not None and archive.contains(target)):
                 seq += 1
                 target = d / (
                     "%s_%s_%d.json" % (ts, safe_name(snapshot.market), seq)
@@ -367,13 +369,27 @@ class SnapshotStore:
             payload = snapshot.as_dict()
             payload["_schema"] = "odds_snapshot/v1"
             self._atomic_write_json(target, payload)
-            self._update_index(d, target.name, payload)
+            if _index_batch is None:
+                self._update_index(d, target.name, payload)
+            else:
+                _index_batch.setdefault(d, []).append((target.name, payload))
         self.cache_invalidate(snapshot.match_id)
         return target
 
     def append_many(self, snapshots: Iterable[OddsSnapshot]) -> List[Path]:
         """批量追加，返回写入路径列表。"""
-        return [self.append(s) for s in snapshots]
+        batches: Dict[Path, list] = {}
+        written = []
+        with self._lock:
+            try:
+                for snapshot in snapshots:
+                    written.append(self.append(snapshot, _index_batch=batches))
+            finally:
+                # Successfully written files remain indexed even if a later
+                # snapshot fails; no historical file is rolled back or deleted.
+                for directory, rows in batches.items():
+                    self._update_index_many(directory, rows)
+        return written
 
     @staticmethod
     def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -397,6 +413,9 @@ class SnapshotStore:
 
     def _update_index(self, d: Path, filename: str,
                       payload: Dict[str, Any]) -> None:
+        self._update_index_many(d, [(filename, payload)])
+
+    def _update_index_many(self, d: Path, rows: list) -> None:
         """维护赛事级别的快照索引（便于快速列举与统计）。"""
         idx_path = d / "_index.json"
         idx: Dict[str, Any] = {"files": [], "count": 0}
@@ -407,9 +426,9 @@ class SnapshotStore:
             except (OSError, ValueError):
                 idx = {"files": [], "count": 0}
 
-        files = idx.get("files") or []
-        if filename not in files:
-            files.append(filename)
+        files = set(idx.get("files") or [])
+        files.update(filename for filename, _ in rows)
+        payload = rows[-1][1]
         idx["files"] = sorted(files)
         idx["count"] = len(idx["files"])
         idx["match_id"] = payload.get("match_id")
@@ -436,7 +455,19 @@ class SnapshotStore:
         return out
 
     def _load_dir(self, d: Path) -> List[OddsSnapshot]:
+        from store.archive import archive_for
+        archive = archive_for(self.root)
         out: List[OddsSnapshot] = []
+        if archive is not None:
+            files = sorted(set(d.glob('*.json')) | set(archive.list(d)))
+            files = [f for f in files if f.name != '_index.json']
+            payloads = archive.read_many(files)
+            for f in files:
+                try:
+                    out.append(self._from_payload(json.loads(payloads[f])))
+                except (ValueError, KeyError, TypeError):
+                    continue
+            return out
         for f in sorted(d.glob("*.json")):
             if f.name == "_index.json":
                 continue
@@ -517,12 +548,12 @@ class SnapshotStore:
         """统计快照规模（用于 /health 与运维观察）。"""
         n_files = 0
         n_matches = 0
-        for d in self.root.rglob("*"):
-            if d.is_dir() and (d / "_index.json").exists():
-                n_matches += 1
-        for f in self.root.rglob("*.json"):
-            if f.name != "_index.json":
-                n_files += 1
+        # Count names from one scandir traversal. Stat-ing each of a million
+        # snapshots and then walking again monopolized disk/GIL during live
+        # collection, despite this telemetry running on a background thread.
+        for _, _, names in os.walk(self.root):
+            n_matches += int("_index.json" in names)
+            n_files += sum(name.endswith(".json") and name != "_index.json" for name in names)
         return {
             "root": str(self.root),
             "match_dirs": n_matches,

@@ -43,6 +43,9 @@ __all__ = [
     "describe_market",
     "ah_side_label",
     "negate_line",
+    "normalize_outcome_label",
+    "format_raw_market",
+    "normalize_market_name",
 ]
 
 #: 盘口族 → 中文名（不含线值）
@@ -160,6 +163,54 @@ TOTAL_OUTCOME_ZH: Mapping[str, str] = {
     "over": "大", "under": "小",
     "Over": "大", "Under": "小",
 }
+
+# 乐鱼不同接口/版本会同时返回英文 ot、英文 on，或已经本地化的 onb。
+# 这张表只做稳定的词汇归一化；玩法语义仍由 format_market 决定。
+_RAW_OUTCOME_ZH: Mapping[str, str] = {
+    "home": "主队", "away": "客队", "draw": "平局", "tie": "平局",
+    "1": "主队", "2": "客队", "x": "平局", "yes": "是", "no": "否",
+    "over": "大", "under": "小", "odd": "单", "even": "双",
+    "yes_goal": "有进球", "no_goal": "无进球",
+}
+
+
+def normalize_outcome_label(value: object) -> str:
+    """把乐鱼选项原文转换为中文，已是中文或未知值时不丢失信息。"""
+    text = str(value or "").strip()
+    if not text:
+        return "其他选项"
+    mapped = _RAW_OUTCOME_ZH.get(text.lower())
+    if mapped:
+        return mapped
+    # 常见复合英文选项，避免把单词原样暴露给用户。
+    lowered = text.lower()
+    for source, target in (("over", "大"), ("under", "小"),
+                           ("home", "主队"), ("away", "客队"),
+                           ("draw", "平局"), ("yes", "是"), ("no", "否")):
+        lowered = lowered.replace(source, target)
+    return lowered if lowered != text.lower() else text
+
+
+def normalize_market_name(value: object, market: object = "") -> str:
+    """返回可直接显示的中文玩法名；英文未知玩法使用中文编号兜底。"""
+    text = str(value or "").strip()
+    if any("\u4e00" <= c <= "\u9fff" for c in text):
+        return text
+    return "其他玩法（%s）" % str(market or "未知")
+
+
+def format_raw_market(market: object, outcome: object = "", line: object = "",
+                      market_name: object = "", home: object = "",
+                      away: object = "") -> str:
+    """未知玩法的中文兜底标签。
+
+    上游中文玩法名优先；没有中文名时使用“其他玩法（编号）”，并只把
+    选项字段做词汇归一化。原始编号仍由调用方单独保留，便于排查协议变化。
+    """
+    name = normalize_market_name(market_name, market)
+    option = normalize_outcome_label(outcome)
+    suffix = (" " + str(line).strip()) if str(line or "").strip() else ""
+    return "%s%s%s" % (name, suffix, option if option else "")
 #: 兼容旧名（内部引用）
 _WINNER_OUTCOME = WINNER_OUTCOME_ZH
 _TOTAL_OUTCOME = TOTAL_OUTCOME_ZH
@@ -201,7 +252,7 @@ def format_market(market: object, outcome: object = "",
     parsed = parse_market_code(market)
     oc = str(outcome or "").strip()
     if parsed is None:
-        return ("%s %s" % (market, oc)).strip()
+        return format_raw_market(market, oc, line, home=home, away=away)
     fam, is_half, code_line = parsed
     ln = str(line or "").strip() or code_line
     prefix = _HALF_PREFIX if is_half else _FULL_PREFIX

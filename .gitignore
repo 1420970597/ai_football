@@ -19,6 +19,13 @@ env/
 !.env.example
 # 用户提供的账号口令列表
 /list.txt
+# 用户提供的 S3 客户端配置与凭据
+/client/
+
+# 临时远端维护凭据（只在项目目录内生成，禁止入库）
+.ssh-vps
+.ssh-vps-*
+.ssh-vps/
 
 # 运行产物与日志
 output/
@@ -57,3 +64,6 @@ Thumbs.db
 # 抓包含真实凭据（token/登录口令/签名），严禁入库
 乐鱼app.zip
 *.zip
+
+# Browser inspection artifacts
+.playwright-cli/

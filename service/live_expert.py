@@ -5,31 +5,45 @@ from a market-fit baseline are explicitly observational until out-of-sample proo
 """
 from __future__ import annotations
 
-import json
+import copy
 import math
+import os
 import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
+from functools import lru_cache
+from itertools import islice
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from core.live_model import (
     MODEL_VERSION, REGULATION_SECONDS, clock_label, clock_seconds,
     competition_type, fit_share, fit_total, payment, remaining_distribution, valid_score,
 )
-from core.market_labels import format_market
+from core.ensemble import adaptive_weights, pool
+from core.market_labels import format_market, format_raw_market, normalize_market_name
+from core.economics import effective_ev as economics_effective_ev
+from core.economics import fractional_kelly, q_fill_model, shrink_probabilities
+from core.devig import devig as devig_snapshot
+from core.models import OddsSnapshot, SnapshotState, DevigMethod
+from service.runtime_settings import RuntimeConfig
+from store.history import HistoryJournal
+from service.live_workers import FrozenReplay, LiveCalculationPool, ReplayProcessWriter, freeze_replay
 
 QUOTE_MAX_AGE_S = 15.0
 STATE_MAX_AGE_S = 90.0
 ANCHOR_MAX_AGE_S = 120.0
-JOURNAL_INTERVAL_S = 15.0
-MAX_MARKETS = 48
 MAX_RESULTS = 256
-MAX_JOURNAL_MB = 32
+DECISION_WRITE_BATCH = 64
 CHPID = {'1': ('HAD', False), '2': ('OU', False), '4': ('AH', False),
          '17': ('HAD', True), '18': ('OU', True), '19': ('AH', True)}
-OUTCOMES = {'1': 'home', '2': 'away', 'X': 'draw', 'Over': 'over', 'Under': 'under'}
+# Fitting depends on prices/score, never the advancing match clock.
+# Bounded caches avoid refitting identical inputs on every clock push.
+_fit_total = lru_cache(maxsize=8192)(fit_total)
+_fit_share = lru_cache(maxsize=8192)(fit_share)
+OUTCOMES = {'1': 'home', '2': 'away', 'X': 'draw', 'x': 'draw', 'Over': 'over', 'over': 'over',
+            'Under': 'under', 'under': 'under'}
 
 
 def percentiles(values: Sequence[float]) -> Dict[str, Optional[float]]:
@@ -40,18 +54,44 @@ def percentiles(values: Sequence[float]) -> Dict[str, Optional[float]]:
             'max': round(max(ordered), 3) if ordered else None}
 
 
+@lru_cache(maxsize=8192)
+def _quote_label(market: str, outcome: str, line: str, known: bool,
+                 name: str, home: str, away: str) -> str:
+    if known:
+        return format_market(market, outcome, line, home=home, away=away)
+    return format_raw_market(market, outcome, line, name, home=home, away=away)
+
+
 class LiveExpertService:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._compute_lock = threading.Lock()
         self._results: Dict[str, Dict[str, Any]] = {}
+        self._detail_replays: Dict[str, FrozenReplay] = {}
+        # A recommendation is a decision event, not a transient quote. Keep
+        # the last valid ensemble pick while the match is still live so a
+        # short quote gap or a stale refresh cannot make the buy board blink.
+        self._recommendations: Dict[str, Dict[str, Any]] = {}
         self._anchors: Dict[str, Dict[str, Any]] = {}
         self._series: Dict[Tuple[str, str, str, str], deque] = {}
+        self._training_series: Dict[Tuple[str, str, str, str], deque] = {}
+        self._training_prefixes: Dict[Tuple[str, str, str, str], tuple[tuple, int, tuple]] = {}
         self._compute_ms: deque = deque(maxlen=2048)
+        self._freeze_ms: deque = deque(maxlen=2048)
         self._latency_ms: deque = deque(maxlen=2048)
+        self._input_latency_ms: deque = deque(maxlen=2048)
+        self._full_compute_ms: deque = deque(maxlen=2048)
+        self._persisted: deque = deque(maxlen=4096)
+        self._persisted_ids: set[str] = set()
+        self._persist_wake = threading.Condition(self._lock)
         self._by_type: Dict[str, deque] = {}
-        self._journal: deque = deque(maxlen=512)
-        self._journal_at: Dict[str, float] = {}
+        self._input_by_type: Dict[str, deque] = {}
+        self._journal: deque = deque()
+        self._journal_flush_lock = threading.Lock()
+        self._decision_flush_lock = threading.Lock()
+        self._projection_writer: Optional[threading.Thread] = None
+        self._history: Any = None
+        self.calculation_pool: Optional[LiveCalculationPool] = None
         self._stop = threading.Event()
         self._writer: Optional[threading.Thread] = None
         self.journal_root: Optional[str] = None
@@ -60,98 +100,297 @@ class LiveExpertService:
         self.journal_dropped = 0
         self.journal_error = ''
         self.computations = 0
+        self.config = RuntimeConfig()
+        self.config_version = 1
+        self.on_decision: Optional[Callable[[Mapping[str, Any]], int]] = None
+        self.on_decisions: Optional[Callable[[Sequence[Mapping[str, Any]]], int]] = None
+        self._decisions: Dict[tuple, Dict[str, Any]] = {}
+        self._recorded: set = set()
+        self._recording: set = set()
+        self.record_error = ''
+        self.performance_evidence: Dict[str, Any] = {'at':'', 'rows':[]}
+        self._performance = adaptive_weights(self.config.algorithms, self.performance_evidence,
+                                             self.config.weight_prior_matches, self.config.max_algorithm_weight)
+
+    def update_evidence(self, evidence: Mapping[str, Any]) -> None:
+        with self._compute_lock:
+            self.performance_evidence = dict(evidence)
+            self._performance = adaptive_weights(self.config.algorithms, self.performance_evidence,
+                                                 self.config.weight_prior_matches, self.config.max_algorithm_weight)
+
+    def configure(self, config: RuntimeConfig, version: int) -> None:
+        with self._compute_lock:
+            with self._lock:
+                self.config, self.config_version = config, version
+                self._performance = adaptive_weights(config.algorithms, self.performance_evidence,
+                                                     config.weight_prior_matches, config.max_algorithm_weight)
+                self._anchors.clear()
+                self._results.clear()
+                self._detail_replays.clear()
+                self._recommendations.clear()
 
     def start(self, root: Optional[str]) -> None:
         self.journal_root = root
         if self._writer and self._writer.is_alive():
             return
+        try:
+            processes = max(0, min(4, int(os.environ.get('LIVE_COMPUTE_PROCESSES', '0'))))
+        except ValueError:
+            processes = 0
+        if processes and self.calculation_pool is None:
+            self.calculation_pool = LiveCalculationPool(processes)
+            self.calculation_pool.start()
+        if root and processes:
+            path = Path(root) / 'live-replay.jsonl.gz'
+            if self._history is None:
+                self._history = ReplayProcessWriter(path)
         self._stop.clear()
         self._writer = threading.Thread(target=self._write_loop, name='live-replay-writer', daemon=True)
         self._writer.start()
+        self._projection_writer = threading.Thread(target=self._decision_loop, name="live-ledger-writer", daemon=True)
+        self._projection_writer.start()
 
     def stop(self) -> None:
         self._stop.set()
         if self._writer:
-            self._writer.join(3)
+            self._writer.join(12)
+        if self._projection_writer:
+            self._projection_writer.join(12)
+        self.flush()
+        if self.calculation_pool:
+            self.calculation_pool.close()
+            self.calculation_pool = None
+        if isinstance(self._history, ReplayProcessWriter):
+            self._history.close()
+            self._history = None
 
     def _write_loop(self) -> None:
-        while not self._stop.wait(1):
-            self.flush()
-        self.flush()
+        while not self._stop.wait(0.02):
+            self.flush(max_decisions=DECISION_WRITE_BATCH, include_decisions=False)
+        self.flush(include_decisions=False)
 
-    def flush(self) -> int:
+    def _decision_loop(self) -> None:
+        while not self._stop.wait(0.02):
+            self.flush_decisions(DECISION_WRITE_BATCH)
+        self.flush_decisions()
+
+    def flush(self, *, max_decisions: Optional[int] = None, include_decisions: bool = True) -> int:
         if not self.journal_root:
+            if include_decisions:
+                self.flush_decisions(max_decisions)
+            return 0
+        with self._journal_flush_lock:
+            with self._lock:
+                rows = list(islice(self._journal, max(0, max_decisions))) if max_decisions is not None else list(self._journal)
+            if not rows:
+                if include_decisions:
+                    self.flush_decisions(max_decisions)
+                return 0
+            try:
+                path = Path(self.journal_root) / 'live-replay.jsonl.gz'
+                if self._history is None or self._history.path != path:
+                    self._history = HistoryJournal(path)
+                n = self._history.append(rows if isinstance(self._history, ReplayProcessWriter) else [
+                    row.materialize() if isinstance(row, FrozenReplay) else row for row in rows])
+                with self._lock:
+                    for _ in range(n):
+                        self._journal.popleft()
+                    for row in rows[:n]:
+                        metadata = row.metadata if isinstance(row, FrozenReplay) else row
+                        identity = str(metadata.get('publication_id') or '')
+                        if identity and identity not in self._persisted_ids:
+                            if len(self._persisted) == self._persisted.maxlen:
+                                self._persisted_ids.discard(self._persisted[0])
+                            self._persisted.append(identity)
+                            self._persisted_ids.add(identity)
+                    self._persist_wake.notify_all()
+                self.journal_error = ''
+                if include_decisions:
+                    self.flush_decisions(max_decisions)
+                return n
+            except (OSError, ValueError, TypeError) as exc:
+                self.journal_error = '%s: %s，记录保留待重试' % (type(exc).__name__, exc)
+                return 0
+
+    def wait_replay(self, row: Mapping[str, Any], timeout: float) -> bool:
+        """A debit can require its full training record's durable confirmation."""
+        if not self.journal_root:
+            return True
+        identity = str(row.get('publication_id') or '')
+        if not identity:
+            return False
+        with self._persist_wake:
+            return self._persist_wake.wait_for(lambda: identity in self._persisted_ids,
+                                              timeout=max(0.0, timeout))
+
+    def flush_decisions(self, limit: Optional[int] = None) -> int:
+        with self._decision_flush_lock:
+            return self._flush_decisions(limit)
+
+    def _flush_decisions(self, limit: Optional[int] = None) -> int:
+        if not self.on_decision and not self.on_decisions:
             return 0
         with self._lock:
-            rows = list(self._journal)
-            self._journal.clear()
-        if not rows:
-            return 0
-        try:
-            path = Path(self.journal_root) / 'live-replay.jsonl'
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists() and path.stat().st_size > MAX_JOURNAL_MB * 1024 * 1024:
-                path.rename(path.with_name('live-replay.%d.jsonl' % time.time_ns()))
-            with path.open('a', encoding='utf-8') as f:
-                for row in rows:
-                    f.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + '\n')
-            self.journal_error = ''
-            return len(rows)
-        except (OSError, ValueError) as exc:
-            self.journal_error = '%s: %s' % (type(exc).__name__, exc)
-            self.journal_dropped += len(rows)
-            return 0
+            keys = list(self._decisions)
+            if limit is not None:
+                keys = keys[:max(0, limit)]
+            rows = {key: self._decisions.pop(key) for key in keys}
+            self._recording.update(rows)
+        n = 0
+        if self.on_decisions and rows:
+            try:
+                n = self.on_decisions(list(rows.values()))
+                with self._lock:
+                    self._recorded.update(rows)
+                    self._recording.difference_update(rows)
+                self.record_error = ''
+                return n
+            except Exception:
+                # Persistence callbacks can use SQLite or PostgreSQL. Driver
+                # failures must restore the popped batch and keep the writer
+                # alive; neither driver is a runtime dependency of this layer.
+                self.record_error = '决策批量留痕失败，等待重试'
+                with self._lock:
+                    self._recording.difference_update(rows)
+                    for key, row in rows.items():
+                        self._decisions.setdefault(key, row)
+                return 0
+        if rows:
+            self.record_error = ''
+        for key, row in rows.items():
+            try:
+                n += self.on_decision(row) if self.on_decision else 0
+                with self._lock:
+                    self._recorded.add(key)
+                    self._recording.discard(key)
+            except Exception:
+                self.record_error = '决策留痕失败，等待重试'
+                with self._lock:
+                    self._recording.discard(key)
+                    self._decisions.setdefault(key, row)
+        return n
 
     def compute(self, snapshot: Mapping[str, Any], hub: Any,
                 first_event_at: Optional[float] = None) -> Dict[str, Any]:
         started = time.perf_counter()
-        with self._compute_lock:
-            result = self._calculate(snapshot)
+        if self.journal_root:
+            snapshot = {**snapshot, '_model_path': str(Path(self.journal_root).parent / 'models' / 'active.json')}
+        calculation_pool = self.calculation_pool
+        record: Any = None
+        frozen_ms = 0.0
+        if calculation_pool:
+            with self._compute_lock:
+                config, version = self.config, self.config_version
+                performance = copy.deepcopy(self._performance)
+            calculated = calculation_pool.calculate(snapshot, config, version, performance,
+                                                    replay=bool(self.journal_root), compact=bool(self.journal_root))
+            result, frozen_anchor, histories = calculated[:3]
+            if self.journal_root:
+                record = calculated[3]
+            frozen_ms = result.pop('freeze_ms', 0.0)
+            with self._compute_lock:
+                if version != self.config_version:
+                    self.superseded += 1
+                    return {}
+                self._anchors[str(snapshot['match_id'])] = frozen_anchor
+                for key, values in histories.items():
+                    self._series[key] = deque(values, maxlen=40)
+        else:
+            with self._compute_lock:
+                result = self._calculate(snapshot)
+                frozen_anchor = dict(self._anchors.get(str(snapshot['match_id']), {}))
+                if self.journal_root:
+                    frozen_started = time.perf_counter()
+                    record = freeze_replay(result, snapshot, self.config, frozen_anchor).materialize()
+                    frozen_ms = (time.perf_counter()-frozen_started)*1000
         elapsed = (time.perf_counter() - started) * 1000
         result['compute_ms'] = round(elapsed, 3)
+        result['input_cutoff_ms'] = snapshot.get('captured_at_ms')
         mid = str(snapshot['match_id'])
-        if hub.state_version(mid) != snapshot['version']:
+        if hub.state_version(mid) != snapshot['version'] or result['config_version'] != self.config_version:
             self.superseded += 1
             return {}  # New state must be recomputed; never publish a mixed version.
         now = time.monotonic()
         latency = (now - (first_event_at or snapshot.get('received_at') or now)) * 1000
-        result['event_to_result_ms'] = round(max(0, latency), 3)
+        latest = snapshot.get('received_at') or now
+        result.update(event_to_result_ms=round(max(0, latency), 3),
+                      input_to_result_ms=round(max(0, (now-latest)*1000), 3),
+                      freeze_ms=round(frozen_ms, 3),
+                      full_compute_ms=round((time.perf_counter()-started)*1000, 3),
+                      published_at_ms=int(time.time()*1000))
+        result['publication_id'] = '%s:%s:%s:%s' % (mid, result['version'], result['config_version'], result['computed_at'])
         with self._lock:
+            if result['config_version'] != self.config_version:
+                return {}
+            if hub.state_version(mid) != snapshot['version']:
+                self.superseded += 1
+                return {}
+            self._remember_recommendation(result)
             self._results[mid] = result
+            if isinstance(record, FrozenReplay):
+                self._detail_replays[mid] = record
+            if self.on_decision:
+                for evaluation in [*result.get('evaluations', []), result['ensemble']]:
+                    for record_kind, items in (('forecast', evaluation['forecasts']),
+                                               ('recommendation', evaluation['recommendations'])):
+                        for forecast in items:
+                            key = (mid, evaluation['algorithm'], forecast['market'],
+                                   str(forecast.get('line', '')), record_kind)
+                            if evaluation['algorithm'] == 'economic_ensemble':
+                                key += (result.get('decision_mode', 'algorithm'),
+                                        forecast.get('decision_model_version', ''),
+                                        (forecast.get('blend_weights') or {}).get('model', 0.0))
+                            if record_kind == 'recommendation':
+                                # A recommendation is an occurrence event. Coalesce
+                                # events waiting for the writer, then let the ledger
+                                # add the accumulated count idempotently.
+                                key = key + (str(forecast.get('outcome') or ''),)
+                                queued = self._decisions.get(key)
+                                count = int((queued or {}).get('decision_count', 0) or 0) + 1
+                                self._decisions[key] = {
+                                    **result, 'forecast': forecast, 'record_kind': record_kind,
+                                    'algorithm': evaluation['algorithm'], 'decision_count': count,
+                                    'decision_event_id': result['publication_id'],
+                                }
+                            elif key not in self._recorded and key not in self._decisions and key not in self._recording:
+                                self._decisions[key] = {**result, 'forecast': forecast, 'record_kind': record_kind,
+                                                        'algorithm': evaluation['algorithm']}
+            result['recording_status'] = ('queued' if any(k[0] == mid for k in self._decisions)
+                                          else 'recorded' if any(k[0] == mid for k in self._recorded) else 'none')
             self._compute_ms.append(elapsed)
+            self._freeze_ms.append(frozen_ms)
+            self._full_compute_ms.append(result['full_compute_ms'])
+            self._input_latency_ms.append(result['input_to_result_ms'])
+            self._input_by_type.setdefault(result['competition_type'], deque(maxlen=2048)).append(result['input_to_result_ms'])
             self._latency_ms.append(max(0, latency))
             self._by_type.setdefault(result["competition_type"], deque(maxlen=2048)).append(max(0, latency))
             self.computations += 1
             if len(self._results) > MAX_RESULTS:
                 oldest = min(self._results, key=lambda k: self._results[k]['published_at_ms'])
                 self._results.pop(oldest, None)
+                self._detail_replays.pop(oldest, None)
+                self._recommendations.pop(oldest, None)
                 self._anchors.pop(oldest, None)
-                self._journal_at.pop(oldest, None)
-                for key in list(self._series):
-                    if key[0] == oldest:
-                        self._series.pop(key, None)
-            if now - self._journal_at.get(mid, 0) >= JOURNAL_INTERVAL_S:
-                if len(self._journal) == self._journal.maxlen:
-                    self.journal_dropped += 1
-                self._journal.append({
-                    'at': result['computed_at'], 'match_id': mid,
-                    'competition_type': result['competition_type'], 'model_version': MODEL_VERSION,
-                    'version': result['version'], 'score': result['score'],
-                    'elapsed_s': result['elapsed_s'], 'phase': result['phase'],
-                    'reasons': result['reasons'], 'candidates': result['candidates'],
-                    'probabilities': result['probabilities'], 'quote_time_ms': result['quote_time_ms'],
-                    'schema_version': 1, 'remaining_goals': result['remaining_goals'],
-                    'markets': result['markets'], 'events': result['events'],
-                    'input_state': {k: snapshot.get(k) for k in
-                                    ('info', 'status', 'score_age_s', 'status_age_s',
-                                     'finished', 'suspended', 'suspended_ids')},
-                    'anchor': dict(self._anchors.get(mid, {})),
-                })
-                self._journal_at[mid] = now
+                for series_key in list(self._series):
+                    if series_key[0] == oldest:
+                        self._series.pop(series_key, None)
+                        self._training_series.pop(series_key, None)
+                        self._training_prefixes.pop(series_key, None)
+            # Every published computation with configured storage is a training record, including
+            # observe/reject states and every algorithm's full candidate set.
+            if record is not None:
+                metadata = record.metadata if isinstance(record, FrozenReplay) else record
+                metadata.update({k: result[k] for k in ('published_at_ms', 'event_to_result_ms',
+                    'input_to_result_ms', 'freeze_ms', 'full_compute_ms', 'publication_id',
+                    'compute_ms', 'input_cutoff_ms')})
+                self._journal.append(record)
         return result
 
     def _calculate(self, snapshot: Mapping[str, Any]) -> Dict[str, Any]:
         now = time.time()
+        cfg = self.config
+        # Evidence changes on settlement/configuration, not on every quote.
+        performance = copy.deepcopy(self._performance)
         mid = str(snapshot['match_id'])
         info = dict(snapshot.get('info') or {})
         kind = competition_type(info)
@@ -162,7 +401,10 @@ class LiveExpertService:
         reasons: List[str] = []
         if snapshot.get('finished'):
             reasons.append('比赛已结束')
-        if snapshot.get('suspended'):
+        suspended_ids = {str(value) for value in (snapshot.get('suspended_ids') or ()) if value not in (None, '')}
+        # C303 identifies one suspended hpid/chpid.  Older snapshots without
+        # that list retain the conservative whole-match gate.
+        if snapshot.get('suspended') and not suspended_ids:
             reasons.append('盘口暂停，等待已核验的新报价')
         if kind != 'real':
             reasons.append('虚拟比赛使用独立统计；本模型仅适用于真实足球' if kind == 'virtual' else '比赛类型尚未核验')
@@ -172,128 +414,414 @@ class LiveExpertService:
             reasons.append('比赛时钟或阶段尚未核验')
         for name, label in (('score_age_s', '比分'), ('status_age_s', '比赛时钟')):
             age = snapshot.get(name)
-            if age is None or age > STATE_MAX_AGE_S:
+            if age is None or age > cfg.state_max_age_s:
                 reasons.append(label + '数据过期或未接收')
         groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
         newest = 0
+        meta = snapshot.get('market_meta') or {}
         for q in snapshot.get('quotes') or []:
             chpid = str(q.chpid)
-            oc = OUTCOMES.get(str(q.ot))
-            if chpid not in CHPID or not oc or not math.isfinite(q.odds) or q.odds <= 1:
+            if not math.isfinite(q.odds) or q.odds <= 1:
                 continue
-            family, half = CHPID[chpid]
+            family, half = CHPID.get(chpid, ('RAW_' + chpid, False))
             code = family + ('_1H' if half else '')
-            line = str(q.hv or '')
-            key = (code, line)
-            group = groups.setdefault(key, {'market': code, 'line': line, 'chpid': chpid,
-                                             'outcomes': {}, 'age_s': 0, 'quote_time_ms': 0})
+            known = chpid in CHPID
+            oc = OUTCOMES.get(str(q.ot), str(q.ot)) if known else str(q.ot)
+            key = (code, str(q.hv or ''))
+            group = groups.setdefault(key, {'market': code, 'line': key[1], 'chpid': chpid,
+                                             'name': meta.get(chpid, {}).get('name', code),
+                                             'outcomes': {}, 'known': known, 'quote_time_ms': 0})
             previous = group['outcomes'].get(oc)
             if previous and previous.ts_ms >= q.ts_ms:
                 continue
             group['outcomes'][oc] = q
-            group['age_s'] = max(group['age_s'], q.quote_age_s)
             group['quote_time_ms'] = max(group['quote_time_ms'], q.ts_ms)
             newest = max(newest, q.ts_ms)
         markets = []
-        for key in sorted(groups, key=lambda k: ('_1H' in k[0], k[0], k[1]))[:MAX_MARKETS]:
+        for key in sorted(groups, key=lambda k: (k[0].startswith('RAW'), '_1H' in k[0], k[0], k[1])):
             group = groups[key]
             outcomes = group['outcomes']
+            market_suspended = str(group['chpid']) in suspended_ids
             expected = ('home', 'draw', 'away') if group['market'].startswith('HAD') else (
                 ('over', 'under') if group['market'].startswith('OU') else ('home', 'away'))
-            if any(o not in outcomes for o in expected):
-                continue
-            inv = [1 / outcomes[o].odds for o in expected]
-            margin = sum(inv) - 1
-            fair = [p / sum(inv) for p in inv]
-            age = max(outcomes[o].quote_age_s for o in expected)
+            complete = group['known'] and all(o in outcomes for o in expected)
+            ordered = [o for o in expected if o in outcomes] + [o for o in outcomes if o not in expected]
+            inv = [1 / outcomes[o].odds for o in ordered]
+            margin = sum(inv) - 1 if complete else None
+            fair = self._devig(inv, cfg.devig_method) if complete else [None] * len(inv)
+            age = max(q.quote_age_s for q in outcomes.values())
             quotes = []
-            for i, oc in enumerate(expected):
+            for i, oc in enumerate(ordered):
                 q = outcomes[oc]
                 series_key = (mid, group['market'], group['line'], oc)
                 series = self._series.setdefault(series_key, deque(maxlen=40))
                 if not series or (q.ts_ms > series[-1][0] and now - series[-1][0] / 1000 >= 1):
                     series.append((q.ts_ms, q.odds))
                 drift = (q.odds / series[0][1] - 1) * 100 if len(series) > 1 else 0
-                quotes.append({'outcome': oc, 'label': format_market(group['market'], oc, group['line'],
-                                home=info.get('home') or '', away=info.get('away') or ''),
-                               'odds': q.odds, 'p_market': round(fair[i], 6),
-                               'trend_pct': round(drift, 3), 'ts_ms': q.ts_ms})
-            markets.append({'market': group['market'], 'line': group['line'], 'quotes': quotes,
-                            'margin': round(margin, 6), 'age_s': round(age, 1) if math.isfinite(age) else None,
-                            'fresh': age <= QUOTE_MAX_AGE_S, 'quote_time_ms': group['quote_time_ms']})
-        if not any(m['fresh'] for m in markets):
+                captured = snapshot.get('captured_at_ms')
+                prefix = []
+                # RAW prices remain in the record and full persistent TrendStore.
+                # No algorithm consumes RAW prefixes, so do not duplicate forty
+                # historical points for every unvalued option on every decision.
+                if group['known']:
+                    training_series = self._training_series.setdefault(series_key, deque(maxlen=40))
+                    observed = getattr(q, 'received_at_ms', 0) or captured
+                    if captured is not None and q.ts_ms <= captured and observed <= captured:
+                        if not training_series or q.ts_ms > training_series[-1][0]:
+                            training_series.append((q.ts_ms, observed, q.odds))
+                    stamp = (len(training_series), training_series[0], training_series[-1]) if training_series else ()
+                    cache = self._training_prefixes.get(series_key)
+                    if cache and cache[0] == stamp and captured is not None and captured >= cache[1]:
+                        prefix = [list(point) for point in cache[2]]
+                    else:
+                        # Preserve event time and first receive time in the
+                        # immutable training snapshot. The third field lets
+                        # offline/online as-of filters exclude delayed quotes.
+                        prefix = [[point[0], point[2], point[1]] for point in training_series
+                                  if captured is not None and point[0] <= captured and point[1] <= captured]
+                        visible_after = max((max(point[:2]) for point in training_series), default=0)
+                        if captured is not None and captured >= visible_after:
+                            self._training_prefixes[series_key] = (stamp, visible_after, tuple(map(tuple, prefix)))
+                label = _quote_label(str(group['market']), str(oc), str(group['line']),
+                                     bool(group['known']), str(group['name']),
+                                     str(info.get('home') or ''), str(info.get('away') or ''))
+                probability = fair[i]
+                quotes.append({'outcome': oc, 'label': label, 'odds': q.odds,
+                               'order_detail': {**getattr(q, 'order_detail', {}), 'oddFinally': str(q.odds)},
+                               'p_market': round(probability, 6) if probability is not None else None,
+                               'trend_pct': round(drift, 3), 'ts_ms': q.ts_ms,
+                               'quote_received_at': q.at if getattr(q, 'received_at_ms', 0) else None,
+                               'quote_received_at_ms': getattr(q, 'received_at_ms', 0),
+                               'training_history': prefix,
+                               # Bucket age to a stable decision feature; raw age
+                               # remains in market metadata for execution audits.
+                               'feature_context': {'quote_age_s': round(age / 30) * 30,
+                                                   'overround': margin}})
+            markets.append({'market': group['market'], 'line': group['line'],
+                            'name': group['name'] if group['known'] else normalize_market_name(group['name'], group['market']),
+                            'chpid': group['chpid'], 'quotes': quotes, 'complete': complete,
+                            'missing_outcomes': [o for o in expected if o not in outcomes] if group['known'] else [],
+                            'supported': group['market'].split('_1H')[0] in ('HAD', 'OU', 'AH'),
+                            'known': group['known'],
+                            'margin': round(margin, 6) if margin is not None else None,
+                            'age_s': round(age, 1) if math.isfinite(age) else None,
+                            'fresh': age <= cfg.quote_max_age_s and not market_suspended,
+                            'suspended': market_suspended, 'quote_time_ms': group['quote_time_ms']})
+        if not any(m['fresh'] and m['complete'] for m in markets):
             reasons.append('报价过期或尚无完整盘口')
         if elapsed_s is not None and elapsed_s >= REGULATION_SECONDS:
             reasons.append('补时长度未知，剩余时间模型暂停')
-        rates = None
+        rates: Optional[Tuple[float, float]] = None
+        current_rates: Optional[Tuple[float, float]] = None
+        direction_available = False
         if not reasons and score is not None and elapsed_s is not None:
-            anchor = self._anchors.get(mid)
-            if (anchor is None or anchor['score'] != score or now - anchor['at'] > ANCHOR_MAX_AGE_S
-                    or elapsed_s < anchor['elapsed_s']):
-                totals = [m for m in markets if m['market'] == 'OU' and m['fresh'] and m['margin'] <= .15]
-                totals.sort(key=lambda m: abs(m['quotes'][0]['p_market'] - .5))
-                total = (fit_total(totals[0]['line'], totals[0]['quotes'][0]['p_market'], sum(score))
-                         if totals else None)
-                if total is not None:
-                    had = next((m for m in markets if m['market'] == 'HAD' and m['fresh']), None)
-                    h, a = (fit_share(total, score, had['quotes'][0]['p_market'], had['quotes'][2]['p_market'])
-                            if had else (total / 2, total / 2))
+            totals = [m for m in markets if m['market'] == 'OU' and m['fresh'] and m['complete'] and m['margin'] <= .15]
+            totals.sort(key=lambda m: abs(m['quotes'][0]['p_market'] - .5))
+            total = (_fit_total(totals[0]['line'], totals[0]['quotes'][0]['p_market'], sum(score)) if totals else None)
+            if total is not None:
+                had = next((m for m in markets if m['market'] == 'HAD' and m['fresh'] and m['complete']), None)
+                h, a = (_fit_share(total, score, had['quotes'][0]['p_market'], had['quotes'][2]['p_market'])
+                        if had else (total / 2, total / 2))
+                direction_available = had is not None
+                current_rates = (h, a)
+                anchor = self._anchors.get(mid)
+                if (anchor is None or anchor['score'] != score or now - anchor['at'] > cfg.anchor_max_age_s
+                        or elapsed_s < anchor['elapsed_s'] or anchor['direction_available'] != direction_available):
                     anchor = {'score': score, 'elapsed_s': elapsed_s, 'h': h, 'a': a, 'at': now,
-                              'direction_available': had is not None}
+                              'direction_available': direction_available}
                     self._anchors[mid] = anchor
-                else:
-                    anchor = None
-                    reasons.append('没有可拟合的全场大小球盘口')
-            if anchor:
                 fraction = max(0, REGULATION_SECONDS - elapsed_s) / max(1, REGULATION_SECONDS - anchor['elapsed_s'])
                 rates = (anchor['h'] * fraction, anchor['a'] * fraction)
-        probabilities: Dict[str, float] = {}
-        candidates: List[Dict[str, Any]] = []
-        if rates and score is not None:
-            dist = remaining_distribution(*rates, score)
-            if self._anchors[mid]['direction_available']:
-                probabilities = {oc: round(payment(dist, 'HAD', oc).win, 6) for oc in ('home', 'draw', 'away')}
-            for market in markets:
-                family = market['market']
-                # Live AH can settle only the remaining score; unknown venue rules
-                # must never be silently graded using the full match score.
-                if family not in ('HAD', 'OU') or not market['fresh']:
-                    continue
-                if family == 'HAD' and not self._anchors[mid]['direction_available']:
-                    continue
-                for quote in market['quotes']:
-                    pay = payment(dist, family, quote['outcome'], market['line'])
-                    quote.update(p_model=round(pay.effective_probability or 0, 6),
-                                 ev=round(pay.ev(quote['odds']), 6),
-                                 win_stake=round(pay.win, 6), loss_stake=round(pay.loss, 6),
-                                 push_stake=round(pay.push, 6), tail=round(pay.tail, 6))
-                    candidates.append({'market': family, 'line': market['line'], **quote})
-            candidates.sort(key=lambda c: c['ev'], reverse=True)
-        if not self._anchors.get(mid, {}).get('direction_available'):
+            else:
+                reasons.append('没有可拟合的全场大小球盘口')
+        evaluations = self.evaluate_markets(markets, score, elapsed_s, current_rates, rates,
+                                            performance, cfg, direction_available, not reasons)
+        primary = next(e for e in evaluations if e['algorithm'] == cfg.primary_algorithm)
+        ensemble = pool(evaluations, performance, cfg)
+        baseline_ensemble = copy.deepcopy(ensemble)
+        decision_mode = getattr(cfg, 'decision_mode', 'algorithm')
+        if decision_mode in ('model', 'hybrid'):
+            # Lazy import: inference executes in the isolated live calculation process.
+            from core.learned_decision import calibrate
+            ensemble = calibrate(ensemble, evaluations, snapshot, cfg, MODEL_VERSION,
+                                 mode=decision_mode,
+                                 blend_weight=getattr(cfg, 'model_blend_weight', 1.0))
+        else:
+            # Worker shadow observation is independent from the selected live
+            # route. An algorithm decision must not require an active model.
+            ensemble['model_application'] = {
+                'mode': 'algorithm', 'applied': False, 'available': True, 'state': 'ready',
+                'execution_enabled': True, 'observation_shadow': cfg.model_shadow_enabled,
+                'input_cutoff_ms': snapshot.get('captured_at_ms'),
+                'weights': {'algorithm': 1.0, 'model': 0.0},
+            }
+            recommended = {(c['market'], c['line'], c['outcome']) for c in ensemble['recommendations']}
+            for collection in (ensemble['candidates'], ensemble['recommendations']):
+                for candidate in collection:
+                    candidate.update(decision_mode='algorithm',
+                                     algorithm_probability=candidate['p_model'],
+                                     learned_probability=None,
+                                     blend_weights={'algorithm': 1.0, 'model': 0.0},
+                                     input_cutoff_ms=snapshot.get('captured_at_ms'))
+                    candidate['decision_evidence'] = {
+                        'mode': 'algorithm', 'algorithm_probability': candidate['p_model'],
+                        'model_probability': None, 'weights': {'algorithm': 1.0, 'model': 0.0},
+                        'final_probability': candidate['p_model'], 'model_version': '',
+                        'input_cutoff_ms': snapshot.get('captured_at_ms'),
+                        'conclusion': 'recommend' if (candidate['market'], candidate['line'],
+                            candidate['outcome']) in recommended else 'forecast',
+                    }
+        application = ensemble['model_application']
+        if application.get('state') == 'unavailable':
+            reasons.append('所选决策模式不可用：' + application.get('reason', '没有有效模型'))
+        candidates = ensemble['candidates']
+        picks = ensemble['recommendations']
+        if not direction_available:
             reasons.append('缺少独赢盘口，球队进球强度无法分别识别')
-        reasons.append('市场拟合与时间衰减模型尚未证明独立预测优势')
+        reasons.append('市场基准模型，独立预测优势待验证')
         return {
             'match_id': mid, **info, 'competition_type': kind, 'version': snapshot['version'],
-            'model_version': MODEL_VERSION, 'computed_at': datetime.now(timezone.utc).isoformat(),
+            'model_version': MODEL_VERSION, 'config_version': self.config_version,
+            'algorithm': 'economic_ensemble', 'decision_mode': decision_mode,
+            'decision_model_version': application.get('version', ''),
+            'decision_mode_status': application.get('state', 'ready'),
+            'model_application': copy.deepcopy(application),
+            'computed_at': datetime.now(timezone.utc).isoformat(),
             'published_at_ms': int(now * 1000), 'quote_time_ms': newest,
             'score': list(score) if score is not None else None, 'phase': phase,
             'clock': clock_label(status.get('mst'), phase), 'elapsed_s': elapsed_s,
-            'finished': bool(snapshot.get('finished')) or phase == '999', 'suspended': bool(snapshot.get('suspended')),
-            'markets': markets, 'candidates': candidates[:6], 'probabilities': probabilities,
-            'remaining_goals': list(rates) if rates else None,
-            'reasons': list(dict.fromkeys(reasons)), 'decision': 'observe', 'picks': [], 'has_buy': False,
+            'finished': bool(snapshot.get('finished')) or phase == '999',
+            'suspended': bool(snapshot.get('suspended')), 'suspended_ids': sorted(suspended_ids),
+            'markets': markets, 'candidates': candidates, 'probabilities': {c['outcome']:c['p_model'] for c in candidates if c['market']=='HAD'},
+            'remaining_goals': primary['remaining_goals'], 'evaluations': evaluations,
+            'forecasts': ensemble['forecasts'], 'ensemble': ensemble, 'baseline_ensemble': baseline_ensemble, 'algorithm_performance': performance,
+            'market_coverage': {'total': len(markets), 'complete': sum(m['complete'] for m in markets),
+                                'fresh': sum(m['fresh'] for m in markets),
+                                'valued': sum(m['complete'] and m['fresh'] and m['supported'] for m in markets)},
+            'reasons': list(dict.fromkeys(reasons)),
+            'decision': ('unavailable' if application.get('state') == 'unavailable' else
+                         'recommend' if picks else 'forecast' if ensemble['forecasts'] else 'observe'),
+            'picks': picks, 'has_buy': bool(picks),
             'validation_status': 'research', 'llm_used': False,
             'events': list(snapshot.get('events') or [])[-12:],
             'note': '概率是研究基准。以即时比分、比赛时间和当前报价计算；未知事件码未映射为红牌或xG。',
         }
 
+    @classmethod
+    def evaluate_markets(cls, markets: Sequence[Mapping[str, Any]], score: Any, elapsed_s: Any,
+                         current_rates: Any, rates: Any, performance: Mapping[str, Any],
+                         cfg: RuntimeConfig, direction_available: bool, enabled: bool = True) -> List[Dict[str, Any]]:
+        """Value immutable markets identically for live decisions and historical repair."""
+        consensuses = {(m['market'], m['line']): cls._market_consensus(m, cfg.devig_spread_warn_pp)
+                       for m in markets if enabled and m['supported'] and m['fresh'] and m['complete']}
+        payments: Dict[tuple, Any] = {}
+        distributions: Dict[tuple, Any] = {}
+        evaluations: List[Dict[str, Any]] = []
+        for algorithm in cfg.algorithms:
+            model_rates = current_rates if algorithm == 'poisson_market' else rates
+            candidates: List[Dict[str, Any]] = []
+            probabilities: Dict[str, float] = {}
+            forecasts: List[Dict[str, Any]] = []
+            if model_rates and score is not None:
+                rate_key = tuple(model_rates)
+                if rate_key not in distributions:
+                    distributions[rate_key] = remaining_distribution(model_rates[0], model_rates[1], score)
+                dist = distributions[rate_key]
+                half_dist = None
+                if elapsed_s is not None and elapsed_s < 2700:
+                    half_fraction = (2700-elapsed_s)/max(1, REGULATION_SECONDS-elapsed_s)
+                    half_key = (*rate_key, 'half')
+                    if half_key not in distributions:
+                        distributions[half_key] = remaining_distribution(model_rates[0]*half_fraction, model_rates[1]*half_fraction, score)
+                    half_dist = distributions[half_key]
+                if direction_available:
+                    probabilities = {oc: round(payment(dist, 'HAD', oc).win, 6) for oc in ('home', 'draw', 'away')}
+                for market in markets:
+                    family = market['market']
+                    base_family = family.split('_1H')[0]
+                    if base_family not in ('HAD', 'OU', 'AH') or not market['fresh'] or not market['complete']:
+                        continue
+                    if base_family in ('HAD', 'AH') and not direction_available:
+                        continue
+                    for quote in market['quotes']:
+                        half_market = family.endswith('_1H')
+                        if half_market and elapsed_s is not None and elapsed_s < 2700:
+                            settlement_dist = half_dist if half_dist is not None else dist
+                        else:
+                            settlement_dist = dist
+                        if base_family == 'AH':
+                            # remaining_distribution normally adds the entry score.
+                            # AH pays on future goals, for both full and first half.
+                            settlement_dist = [(home-score[0], away-score[1], probability)
+                                               for home, away, probability in settlement_dist]
+                        # Some feeds publish an AH family row without a handicap
+                        # line.  It is still useful to show the raw quote, but it
+                        # cannot be valued; skip that quote without discarding the
+                        # rest of the match or its LLM review.
+                        try:
+                            pay_key = (rate_key, family, market['line'], quote['outcome'])
+                            if pay_key not in payments:
+                                payments[pay_key] = payment(settlement_dist, base_family, quote['outcome'], market['line'])
+                            pay = payments[pay_key]
+                        except (TypeError, ValueError):
+                            continue
+                        raw_p = pay.effective_probability or 0.0
+                        consensus, spread = consensuses[(market['market'], market['line'])]
+                        if algorithm == 'devig_consensus' and quote['outcome'] in consensus:
+                            raw_p = consensus[quote['outcome']]
+                        if algorithm == 'economics_risk_adjusted':
+                            prior = quote.get('p_market') or raw_p
+                            raw_p = shrink_probabilities((raw_p, 1-raw_p), (prior, 1-prior), 1, k=2.0)[0][0]
+                        risk_penalty = 0.0
+                        if algorithm == 'microstructure_adjusted':
+                            risk_penalty = min(0.5, abs(float(quote.get('trend_pct') or 0.0)) / 100.0)
+                            raw_p = min(1.0, max(0.0, raw_p-risk_penalty*(1 if quote.get('trend_pct',0)>0 else -1)))
+                        # Effective probability is conditional on the non-push stake.
+                        # Recalculate price economics after every probability adjustment.
+                        nonpush = pay.win + pay.loss
+                        ev = (raw_p*quote['odds']-1.0)*nonpush
+                        q_fill = q_fill_model(ev, 1.0)
+                        effective = economics_effective_ev(ev, q_fill, cfg.execution_cost)
+                        kelly = max(0.0, fractional_kelly(raw_p, quote['odds'], cfg.fractional_kelly))
+                        if algorithm == 'economics_risk_adjusted':
+                            risk_penalty = min(.5, cfg.risk_correlation*kelly)
+                            kelly *= max(0.0,1-cfg.risk_correlation)
+                            effective -= risk_penalty
+                        research_only = half_market and (elapsed_s is None or elapsed_s>=2700)
+                        settlement_basis = 'half_score_required' if half_market else 'full_score'
+                        if base_family == 'AH':
+                            settlement_basis = 'remaining_score'
+                        if not market.get('known', False):
+                            research_only, settlement_basis = True, 'unknown'
+                        estimate = {**quote, 'market': family, 'line': market['line'], 'algorithm': algorithm,
+                                    'p_model': round(min(1.0, max(0.0, raw_p)), 6),
+                                    'confidence': performance['algorithms'][algorithm]['posterior_accuracy'],
+                                    'evidence_at':performance.get('at',''),
+                                    'ev': round(ev, 6), 'raw_ev': round(pay.ev(quote['odds']), 6),
+                                    'effective_ev': round(effective, 6), 'q_fill': round(q_fill, 6),
+                                    'kelly': round(min(cfg.max_total_exposure, kelly), 6),
+                                    'risk_penalty': round(risk_penalty, 6),
+                                    'devig_spread_pp': round(spread, 6),
+                                    'win_stake': round(pay.win, 6), 'loss_stake': round(pay.loss, 6),
+                                    'push_stake': round(pay.push, 6), 'tail': round(pay.tail, 6),
+                                    'settlement_basis': settlement_basis, 'research_only': research_only,
+                                    'decision_status': 'research_only' if research_only else 'settleable'}
+                        candidates.append(estimate)
+                forecast_groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+                for candidate in candidates:
+                    forecast_groups.setdefault((candidate['market'], candidate['line']), []).append(candidate)
+                forecasts.extend(max(choices, key=lambda c: c['p_model'])
+                                 for choices in forecast_groups.values() if choices)
+                candidates.sort(key=lambda c: c['ev'], reverse=True)
+            evaluations.append({'algorithm': algorithm, 'probabilities': probabilities,
+                                'remaining_goals': list(model_rates) if model_rates else None,
+                                'candidates': candidates, 'forecasts': forecasts,
+                                'recommendations': [c for c in candidates if not c['research_only']
+                                                    and c['p_model'] >= cfg.min_probability
+                                                    and c['effective_ev'] >= cfg.min_ev
+                                                    and c['tail'] < .001]})
+        return evaluations
+
+    @staticmethod
+    def _devig(inv: Sequence[float], method: str) -> List[float]:
+        if method == 'power':
+            low, high = .05, 10.0
+            for _ in range(40):
+                k = (low + high) / 2
+                if sum(p ** k for p in inv) > 1:
+                    low = k
+                else:
+                    high = k
+            values = [p ** ((low + high) / 2) for p in inv]
+        else:
+            values = list(inv)
+        return [p / sum(values) for p in values]
+
+    @staticmethod
+    def _market_consensus(market: Mapping[str, Any], spread_warn_pp: float) -> Tuple[Dict[str, float], float]:
+        """用已有五种去水方法计算同一盘口的共识概率与方法分歧。"""
+        quotes = list(market.get('quotes') or [])
+        if not quotes:
+            return {}, 0.0
+        outcomes = tuple(str(q.get('outcome', '')) for q in quotes)
+        odds = tuple(float(q.get('odds', 0.0)) for q in quotes)
+        try:
+            snap = OddsSnapshot(match_id='live', league='', home='', away='', market=str(market.get('market', '')),
+                                outcomes=outcomes, odds=odds, state=SnapshotState.ACTIVE)
+            fair = devig_snapshot(snap, method=DevigMethod.AUTO, spread_warn_pp=spread_warn_pp)
+            return dict(zip(outcomes, fair.probabilities)), float(fair.method_spread_pp)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return {}, 0.0
+
     def results(self, kind: Optional[str] = None) -> Dict[str, Any]:
         with self._lock:
-            rows = [r for r in self._results.values() if not r['finished'] and
-                    (kind in (None, '', 'all') or r['competition_type'] == kind)]
+            rows = []
+            for raw in self._results.values():
+                if raw['finished'] or (kind not in (None, '', 'all') and
+                                        raw['competition_type'] != kind):
+                    continue
+                row = dict(raw)
+                saved = self._recommendations.get(str(row.get('match_id', '')))
+                if saved:
+                    row['picks'] = [dict(p) for p in saved['picks']]
+                    row['has_buy'] = True
+                    row['decision'] = 'recommend'
+                    row['recommendation_at'] = saved['at']
+                    row['recommendation_age_s'] = round(
+                        max(0.0, time.time() - saved['at_epoch']), 1)
+                    self._refresh_recommendation_quotes(row)
+                    row['recommendation_retained'] = not bool(raw.get('picks'))
+                rows.append(row)
             return {'count': len(rows), 'decisions': list(rows),
-                    'summary': {'n': len(rows), 'buy': 0, 'observe': len(rows)},
+                    'summary': {'n': len(rows), 'buy': sum(r['has_buy'] for r in rows),
+                                'observe': sum(r['decision'] == 'observe' for r in rows)},
                     'model_version': MODEL_VERSION, 'mode': 'live', 'performance': self.health()}
+
+    def _remember_recommendation(self, result: Mapping[str, Any]) -> None:
+        """Freeze the latest valid ensemble recommendation for this live match."""
+        mid = str(result.get('match_id', ''))
+        saved = self._recommendations.get(mid)
+        if (result.get('decision_mode_status') == 'unavailable' or
+                (saved and (saved.get('decision_mode') != result.get('decision_mode') or
+                            saved.get('model_version') != result.get('decision_model_version')))):
+            self._recommendations.pop(mid, None)
+        picks = result.get('picks') or []
+        if not picks or result.get('finished') or result.get('competition_type') != 'real':
+            return
+        if not mid:
+            return
+        now = time.time()
+        self._recommendations[mid] = {
+            'at': str(result.get('computed_at') or ''),
+            'at_epoch': now,
+            'picks': [dict(p) for p in picks],
+            'config_version': result.get('config_version'),
+            'decision_mode': result.get('decision_mode'),
+            'model_version': result.get('decision_model_version'),
+        }
+
+    @staticmethod
+    def _refresh_recommendation_quotes(row: Dict[str, Any]) -> None:
+        """Attach the newest quote to a retained pick without changing its model."""
+        quotes = {}
+        for market in row.get('markets') or []:
+            for quote in market.get('quotes') or []:
+                quotes[(market.get('market'), str(market.get('line', '')), quote.get('outcome'))] = (
+                    quote, market)
+        for pick in row.get('picks') or []:
+            quote, market = quotes.get((pick.get('market'), str(pick.get('line', '')), pick.get('outcome')), (None, None))
+            if quote is None:
+                pick['odds_live'] = False
+                continue
+            if 'decision_odds' not in pick:
+                pick['decision_odds'] = pick.get('odds')
+            pick['odds'] = quote.get('odds', pick.get('odds'))
+            pick['odds_live'] = True
+            pick['quote_time_ms'] = market.get('quote_time_ms') if market else None
+            try:
+                pick['effective_ev_live'] = round(float(pick.get('p_model', 0)) * float(pick['odds']) - 1.0, 6)
+            except (TypeError, ValueError):
+                pick['effective_ev_live'] = pick.get('effective_ev')
 
     def detail(self, mid: str) -> Optional[Dict[str, Any]]:
         with self._compute_lock:
@@ -301,16 +829,43 @@ class LiveExpertService:
                 row = self._results.get(mid)
                 if row is None:
                     return None
+                frozen = self._detail_replays.get(mid)
                 histories = {"|".join(key[1:]): list(series)
                              for key, series in self._series.items() if key[0] == mid}
-                return {**row, 'price_history': histories}
+                out = {**row, 'price_history': histories}
+                saved = self._recommendations.get(str(mid))
+                if saved and not out.get('finished'):
+                    out['picks'] = [dict(p) for p in saved['picks']]
+                    out['has_buy'] = True
+                    out['decision'] = 'recommend'
+                    out['recommendation_at'] = saved['at']
+                    out['recommendation_retained'] = not bool(row.get('picks'))
+                    self._refresh_recommendation_quotes(out)
+        # Decode all RAW markets and history only for a detail read, outside
+        # both locks. The immutable replay corresponds to this exact result.
+        if frozen is not None:
+            complete = frozen.materialize()
+            for field in ('markets','candidates','evaluations','ensemble'):
+                out[field] = complete[field]
+            out['price_history'] = frozen.price_history() or histories
+        return out
 
     def health(self) -> Dict[str, Any]:
         with self._lock:
             return {'computations': self.computations, 'compute_ms': percentiles(self._compute_ms),
+                    'freeze_ms': percentiles(self._freeze_ms),
+                    'full_compute_ms': percentiles(self._full_compute_ms),
+                    'input_to_result_ms': percentiles(self._input_latency_ms),
+                    'by_type_input_to_result_ms': {k: {'samples': len(v), **percentiles(v)}
+                                                   for k, v in self._input_by_type.items()},
+                    'calculation': (self.calculation_pool.health() if self.calculation_pool else
+                                    {'mode': 'local', 'processes': 0}),
                     'event_to_result_ms': percentiles(self._latency_ms), 'samples': len(self._compute_ms),
                     'by_type_event_to_result_ms': {k: {'samples': len(v), **percentiles(v)}
                                                  for k, v in self._by_type.items()},
                     'superseded': self.superseded, 'errors': self.errors, 'journal_dropped': self.journal_dropped,
                     'journal_error': self.journal_error, 'journal_pending': len(self._journal),
+                    'history_retention': 'permanent', 'history_sampling': 'every_published_decision',
+                    'record_error': self.record_error, 'decisions_pending': len(self._decisions),
+                    'config_version': self.config_version,
                     'model_version': MODEL_VERSION, 'validation_status': 'research'}

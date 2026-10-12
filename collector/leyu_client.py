@@ -41,7 +41,7 @@
     matchsList[].mhn / man          主队 / 客队名
     matchsList[].mhlu / malu        主队 / 客队 logo（相对路径）
     matchsList[].mgt                开赛时间（毫秒字符串，EPOCH）
-    matchsList[].ms                 0=未开赛 1=进行中 110=已结束
+    matchsList[].ms                 0=未开赛 1=进行中 3=已结束 110=即将开赛
     matchsList[].mst / mmp / msc    即时分钟 / 比赛阶段 / 比分序列
     matchsList[].mcid               场次编号（如 "周六019"，部分为空）
     matchsList[].betAmount          投注额（字符串小数）
@@ -232,7 +232,7 @@ HPT_TOTAL = 5      # 大小球
 # 赛事状态 ms
 MS_NOT_STARTED = 0
 MS_LIVE = 1
-MS_FINISHED = 110
+MS_FINISHED = 3
 
 # 选项标识
 OUTCOME_HOME = "home"
@@ -616,6 +616,8 @@ class MarketQuote:
     hv: str                 # 盘口线（让球族为**主队让球线**，可带符号）
     quotes: Tuple[OddsQuote, ...]
     ctsp: int = 0           # 该盘口报价的变更时间戳(ms)
+    market_id: str = ""     # hl.hid; required by the native order endpoint
+    play_id: str = ""       # hpid can differ from display chpid
 
     @property
     def booksum(self) -> float:
@@ -656,7 +658,7 @@ class LEYUMatch:
 
     @property
     def is_finished(self) -> bool:
-        return self.status == MS_FINISHED
+        return self.status == MS_FINISHED or self.period == "999"
 
     @property
     def score(self) -> Tuple[Optional[int], Optional[int]]:
@@ -665,14 +667,14 @@ class LEYUMatch:
 
     @property
     def half_score(self) -> Tuple[Optional[int], Optional[int]]:
-        """从 msc 里取 S0 的**半场**比分（主, 客）。
+        """从 msc 里取 S2 的**半场**比分（主, 客）。
 
         为何必需：上半场盘口（`*_1H`）必须用半场比分结算；拿全场比分去
         结算上半场盘口会把结果算反。实测 `msc` 形如
-        `"S0|0:1,S1|2:1"` —— S0 是半场、S1 是全场。
+        `"S2|0:1,S1|2:1"` —— S2 是半场、S1 是全场。
         缺失时返回 `(None, None)`，调用方应据此**拒绝结算**而非猜测。
         """
-        return self._period_score("S0")
+        return self._period_score("S2")
 
     def _period_score(self, period: str) -> Tuple[Optional[int], Optional[int]]:
         """按 `S<period>|主:客` 取某阶段比分。
@@ -814,6 +816,8 @@ def parse_market_quote(
                         hv=hv,
                         quotes=tuple(quotes),
                         ctsp=ctsp,
+                        market_id=str(hl.get("hid") or ""),
+                        play_id=str(block.get("hpid") or chpid),
                     )
                 )
     return tuple(out)
@@ -894,7 +898,7 @@ def parse_match_list(blob: Mapping[str, Any]) -> List[LEYUMatch]:
                 status=_to_int(m.get("ms")),
                 minute=str(m.get("mst", "")),
                 period=str(m.get("mmp", "")),
-                score_raw=str(m.get("msc", "")),
+                score_raw=_score_raw(m.get("msc")),
                 mcid=str(m.get("mcid", "")),
                 bet_amount=_to_float(m.get("betAmount")),
                 home_logo=_first(m.get("mhlu")),

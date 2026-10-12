@@ -13,7 +13,7 @@
 | `C0`   | 心跳应答 | `"Heartbeat Reply Success"` |
 | `C103` | 比分更新 | `cd.msc`（`S1: 2-1` 序列）、`cd.mpid` |
 | `C105` | **盘口赔率更新** | `cd` 为 base64+gzip；`hls2.<chpid>[].ol[]` 含 **`obv`(旧值) / `ov`(新值)** |
-| `C102` | 赛事事件/状态 | `cd.cmec`/`cd.mmp`/`cd.mst` || `C109` | 批量赛事结束 | `[{mid, ms:110}]` |
+| `C102` | 赛事事件/状态 | `cd.cmec`/`cd.mmp`/`cd.mst` || `C109` | 批量赛事结束 | `[{mid, ms:3}]` |
 | `C110` | 玩法计数 | `{mid, mc}` |
 | `C153` | 链接切换 | `{mid, linkId, hids}` |
 | `C303` | 玩法暂停 | `{mid, hpid}` |
@@ -42,13 +42,14 @@ import os
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .leyu_client import OV_SCALE
 from .leyu_ws import LEYUFeed
+from store.history import HistoryJournal, encode_checkpoint
 
 #: 实时表落盘节流（秒）。
 #:
@@ -62,6 +63,9 @@ _LIVE_SAVE_INTERVAL_S = 5.0
 #: **终场比分**，因此取更短的 3s —— 让“比赛刚结束”的比分尽快落盘，
 #: 以免重启后丢掉那场唯一的赛果来源（详见 `ScoreStore`）。
 _SCORE_SAVE_INTERVAL_S = 3.0
+_HISTORY_FLUSH_INTERVAL_S = 0.25
+_PRICE_CACHE_PRUNE_INTERVAL_S = 30.0
+_FINISHED_PRICE_CACHE_GRACE_S = 30.0
 
 
 def _live_snapshot_path(trend_root: Optional[str]) -> Optional[str]:
@@ -110,22 +114,6 @@ MAX_TICKS_PER_MARKET = 400
 
 #: 走势落盘目录（相对快照根）
 TREND_SUBDIR = "_trends"
-
-#: 落盘批大小：累积这么多 tick 后刷一次盘
-TREND_FLUSH_EVERY = 25
-
-#: 落盘间隔上限（秒）：即使不足批大小也要写，保证不丢数据
-TREND_FLUSH_INTERVAL_S = 20.0
-
-#: 单场走势文件轮转阈值（MB）。
-#: 实测：高频推送下单个活跃赛事的走势文件几小时就到 10MB，
-#: 而原阈值 64MB × 百来场 → 磁盘可达数 GB，属**无界增长**。
-#: 现改为 4MB，并把旧文件滚动为 `.1`（只保留最近两代）。
-TREND_FILE_MAX_MB = 4.0
-
-#: 走势目录总量上限（MB）。超过时删除最旧的文件。
-#: 内存侧已有 maxlen 限流，但落盘必须同样有硬上限。
-TREND_DIR_MAX_MB = 256.0
 
 #: 每场赛事保留的最大事件数
 MAX_EVENTS_PER_MATCH = 120
@@ -198,7 +186,7 @@ class _MarketState:
         self.seen = 0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PriceTick:
     """一次**真实**赔率变动。
 
@@ -220,6 +208,7 @@ class PriceTick:
     new_ov: float     # 本次赔率（十进制）
     ts_ms: int        # 上游时间戳（毫秒）
     upstream_obv: float = 0.0   # 上游给出的 obv（用于交叉校验）
+    order_detail: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def delta(self) -> float:
@@ -245,12 +234,13 @@ class PriceTick:
 
     def as_dict(self) -> Dict[str, Any]:
         return {
-            "mid": self.mid, "chpid": self.chpid, "hv": self.hv,
+            "mid": self.mid, "chpid": self.chpid, "hid": self.hid, "hv": self.hv,
             "oid": self.oid, "ot": self.ot,
             "old": round(self.old_ov, 4), "new": round(self.new_ov, 4),
             "delta": round(self.delta, 4),
             "delta_pct": round(self.delta_pct, 3),
             "direction": self.direction, "ts": self.ts_ms,
+            "upstream_obv": self.upstream_obv,
         }
 
 
@@ -277,6 +267,10 @@ class LiveQuote:
     ts_ms: int
     #: 本机写入时刻（单调时钟不可回拨）；用于算“这个价多旧了”
     at: float = 0.0
+    order_detail: Mapping[str, Any] = field(default_factory=dict)
+    # Actual observation time is separate from the upstream price timestamp.
+    # Persisted prices deliberately do not gain a new receive clock on resume.
+    received_at_ms: int = 0
 
     @property
     def age_s(self) -> float:
@@ -339,11 +333,13 @@ class LiveBook:
         self.last_save_at = 0.0
         self.last_error = ""
 
-    def upsert_many(self, ticks: Sequence[PriceTick]) -> None:
+    def upsert_many(self, ticks: Sequence[PriceTick]) -> List[PriceTick]:
         """写入/更新一批赔率（来自推送快照，**含未变动的项**）。"""
         if not ticks:
-            return
+            return []
         now = time.monotonic()
+        received_ms = int(time.time() * 1000)
+        accepted = []
         with self._lock:
             for t in ticks:
                 key = (t.mid, t.chpid, t.hv, t.oid)
@@ -351,11 +347,17 @@ class LiveBook:
                 odds = _to_float(t.new_ov, 0.0)
                 if odds <= 1.0:
                     continue        # 非法赔率不入表（1.0 以下不可能成交）
+                previous = self._rows.get(key)
+                if previous and previous.ts_ms > _to_int(t.ts_ms, 0):
+                    continue  # REST enrichment must not roll back newer push quotes.
                 self._rows[key] = LiveQuote(
                     mid=t.mid, chpid=t.chpid, hv=t.hv, oid=t.oid, ot=t.ot,
-                    odds=odds, ts_ms=_to_int(t.ts_ms, 0), at=now)
+                    odds=odds, ts_ms=_to_int(t.ts_ms, 0), at=now,
+                    order_detail=dict(t.order_detail), received_at_ms=received_ms)
                 self._by_mid.setdefault(t.mid, {})[key] = None
                 self.updates += 1
+                accepted.append(t)
+        return accepted
 
     def drop_match(self, mid: str) -> int:
         """移除某场全部行（比赛结束时调用，防止内存无限增长）。"""
@@ -486,14 +488,15 @@ class LiveBook:
             "version": 1,
             "saved_at": datetime.now(timezone.utc).isoformat(),
             "rows": [[r.mid, r.chpid, r.hv, r.oid, r.ot,
-                      round(_to_float(r.odds, 0.0), 6), _to_int(r.ts_ms, 0)]
+                      round(r.odds, 6), r.ts_ms, dict(r.order_detail)]
                      for r in rows],
         }
         tmp = path.with_name(path.name + ".tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False)
+            encoded = encode_checkpoint(payload)
+            with open(tmp, "wb") as fh:
+                fh.write(encoded)
             os.replace(tmp, path)          # 原子替换，避免读到半写文件
             self.last_save_at = now
             self.last_error = ""
@@ -562,7 +565,8 @@ class LiveBook:
                 key = (str(mid), str(chpid), str(hv), str(oid))
                 self._rows[key] = LiveQuote(
                     mid=str(mid), chpid=str(chpid), hv=str(hv), oid=str(oid),
-                    ot=str(ot), odds=f_odds, ts_ms=i_ts, at=at)
+                    ot=str(ot), odds=f_odds, ts_ms=i_ts, at=at,
+                    order_detail=dict(item[7]) if len(item) > 7 and isinstance(item[7], Mapping) else {})
                 self._by_mid.setdefault(str(mid), {})[key] = None
                 n += 1
         return n
@@ -594,39 +598,92 @@ class ScoreStore:
         self.last_save_at = 0.0
         self.last_error = ""
         self._lock = threading.RLock()
+        self._flush_lock = threading.Lock()
+        self.history = HistoryJournal(self.path.with_name('score-history.jsonl.gz')) if self.path else None
+        self._archived: Dict[str, Any] = {}
+        self._pending: List[Mapping[str, Any]] = []
+        self._cache_payload: Dict[str, Any] = {}
 
     def save(self, scores: Mapping[str, Any], finished: Any,
-             force: bool = False) -> bool:
-        """原子写入 `{mid: {"ft": [h,a], "ht": [h,a]|null, "done": bool}}`。"""
+             force: bool = False, half_scores: Optional[Mapping[str, Any]] = None,
+             final_proofs: Optional[Mapping[str, Any]] = None, *, defer: bool = False) -> bool:
+        """Archive each score revision before refreshing the latest-state cache."""
         path = self.path
         if path is None:
             return False
-        now = time.monotonic()
-        if not force and (now - self.last_save_at) < _SCORE_SAVE_INTERVAL_S:
-            return False
         done = {str(m) for m in (finished or ())}
-        payload: Dict[str, Any] = {"version": 1}
+        payload: Dict[str, Any] = {"version": 2}
         try:
             payload["saved_at"] = datetime.now(timezone.utc).isoformat()
             payload["scores"] = {
                 str(mid): {"ft": [int(v[0]), int(v[1])],
-                           "done": str(mid) in done}
+                           "done": str(mid) in done, "ht": (half_scores or {}).get(str(mid)),
+                           "final_proof": (final_proofs or {}).get(str(mid))}
                 for mid, v in (scores or {}).items()
                 if v and v[0] is not None and v[1] is not None}
         except (TypeError, ValueError, IndexError):
             return False
-        tmp = path.with_name(path.name + ".tmp")
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False)
-            os.replace(tmp, path)
-            self.last_save_at = now
-            self.last_error = ""
-            return True
-        except (OSError, TypeError, ValueError) as exc:
-            self.last_error = "比分落盘失败: %s" % exc
+        with self._lock:
+            changes = [{"match_id": mid, "at": payload['saved_at'], **row}
+                       for mid, row in payload['scores'].items() if row != self._archived.get(mid)]
+            self._pending.extend(changes)
+            self._archived.update(payload['scores'])
+            self._cache_payload = payload
+        return True if defer else self.flush(force=force)
+
+    def stage(self, mid: str, score: Any, done: bool, half: Any, proof: Any) -> None:
+        """Queue one match revision without rebuilding every historical score."""
+        if self.path is None or score is None:
+            return
+        row = {'ft': [int(score[0]), int(score[1])], 'done': done,
+               'ht': list(half) if half else None, 'final_proof': dict(proof) if proof else None}
+        at = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            if row != self._archived.get(mid):
+                self._pending.append({'match_id': mid, 'at': at, **row})
+                self._archived[mid] = row
+            self._cache_payload.setdefault('scores', {})[mid] = row
+            self._cache_payload.update(version=2, saved_at=at)
+
+    def flush(self, force: bool = False) -> bool:
+        path = self.path
+        if path is None:
             return False
+        now = time.monotonic()
+        with self._flush_lock:
+            with self._lock:
+                pending = list(self._pending)
+                payload = ({**self._cache_payload, 'scores': dict(self._cache_payload.get('scores', {}))}
+                           if self._cache_payload else {})
+            try:
+                if self.history:
+                    self.history.append(pending)
+                with self._lock:
+                    del self._pending[:len(pending)]
+            except (OSError, TypeError, ValueError) as exc:
+                self.last_error = "比分历史写入失败: %s" % exc
+                return False
+            self.last_error = ""
+            if not payload:
+                return False
+            if not force and (now - self.last_save_at) < _SCORE_SAVE_INTERVAL_S:
+                return False
+            tmp = path.with_name(path.name + ".tmp")
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+                os.replace(tmp, path)
+                self.last_save_at = now
+                return True
+            except (OSError, TypeError, ValueError) as exc:
+                self.last_error = "比分落盘失败: %s" % exc
+                return False
+
+    def history_health(self) -> Dict[str, Any]:
+        with self._lock:
+            return {**(self.history.health() if self.history else {'enabled': False}),
+                    'pending': len(self._pending), 'last_error': self.last_error}
 
     def load(self) -> Dict[str, Any]:
         """读回 `{mid: {"ft": [...], "done": bool}}`；缺失/损坏返回空。"""
@@ -640,68 +697,30 @@ class ScoreStore:
             self.last_error = "比分读取失败: %s" % exc
             return {}
         rows = payload.get("scores") if isinstance(payload, dict) else None
+        if isinstance(rows, dict):
+            self._cache_payload = dict(payload)
+            self._archived = dict(rows)
         return dict(rows) if isinstance(rows, dict) else {}
 
 
 class TrendStore:
-    """走势持久化：JSONL 追写，进程重启后可恢复。
+    """Append every baseline/change batch permanently; never rotate or prune.
 
-    为何需要：走势原本只在内存（`RealtimeHub._trends`），
-    容器重启即全部丢失，历史无法回溯、也无法供后续分析与回测使用。
-
-    设计：
-    * 每场一个文件 `<_trends>/<mid>.jsonl`，**追写**（append）——
-      不重写整个文件，避免高频写入时的写放大。
-    * 先写缓冲，达到 `flush_every` 条或超过 `flush_interval_s` 时刷盘，
-      避免每条都 fsync 拖慢推送消费。
-    * 写入失败只告警不抛错——采集不能因为磁盘问题而中断。
+    Failed batches remain pending for retry. Memory query windows remain
+    bounded independently of this complete disk archive.
     """
 
-    def __init__(
-        self,
-        root: Optional[str] = None,
-        flush_every: int = TREND_FLUSH_EVERY,
-        flush_interval_s: float = TREND_FLUSH_INTERVAL_S,
-        max_file_mb: float = TREND_FILE_MAX_MB,
-        max_dir_mb: float = TREND_DIR_MAX_MB,
-    ) -> None:
+    def __init__(self, root: Optional[str] = None) -> None:
         self.root = Path(root) if root else None
-        # 以下参数可能来自环境变量（字符串），非法值一律回退默认，
-        # 构造 TrendStore 不应因为一个坏配置就抛异常。
-        try:
-            self.flush_every = max(1, int(str(flush_every)))
-        except (TypeError, ValueError, OverflowError):
-            self.flush_every = TREND_FLUSH_EVERY
-        try:
-            self.flush_interval_s = float(str(flush_interval_s))
-        except (TypeError, ValueError, OverflowError):
-            self.flush_interval_s = TREND_FLUSH_INTERVAL_S
-        try:
-            mb = float(str(max_file_mb))
-            self.max_file_bytes = int(mb * 1024 * 1024) if mb > 0 else int(
-                TREND_FILE_MAX_MB * 1024 * 1024)
-        except (TypeError, ValueError, OverflowError):
-            self.max_file_bytes = int(TREND_FILE_MAX_MB * 1024 * 1024)
-        try:
-            mb = float(str(max_dir_mb))
-            self.max_dir_bytes = int(mb * 1024 * 1024) if mb > 0 else int(
-                TREND_DIR_MAX_MB * 1024 * 1024)
-        except (TypeError, ValueError, OverflowError):
-            self.max_dir_bytes = int(TREND_DIR_MAX_MB * 1024 * 1024)
         self._buf: Dict[str, List[str]] = {}
-        self._last_flush = time.time()
         self._lock = threading.RLock()
+        self._flush_lock = threading.Lock()
         self.written = 0
-        self.dropped = 0
-        self.rotated = 0
-        self.pruned = 0
         self.last_error = ""
-        self._last_prune = 0.0
         if self.root:
             try:
                 self.root.mkdir(parents=True, exist_ok=True)
             except OSError as exc:
-                self.root = None
                 self.last_error = "创建走势目录失败: %s" % exc
 
     @property
@@ -709,128 +728,127 @@ class TrendStore:
         return self.root is not None
 
     def _path(self, mid: str) -> Path:
-        """该场赛事的走势文件路径。
-
-        `mid` 来自上游，做字符白名单过滤以防路径穿越（如 `../`）。
-        """
         assert self.root is not None
         safe = "".join(ch for ch in str(mid) if ch.isalnum() or ch in "-_")
         return self.root / ("%s.jsonl" % (safe or "unknown"))
 
-    def append_many(self, ticks: Sequence[PriceTick]) -> None:
-        """缓冲一批 tick；按批/按时间自动刷盘。"""
+    def append_many(self, ticks: Sequence[PriceTick], *, defer: bool = False) -> None:
         if not self.enabled or not ticks:
             return
+        received = int(time.time() * 1000)
         with self._lock:
-            for t in ticks:
-                self._buf.setdefault(t.mid, []).append(
-                    json.dumps(t.as_dict(), ensure_ascii=False, separators=(",", ":")))
-            total = sum(len(v) for v in self._buf.values())
-            due = (total >= self.flush_every
-                   or (time.time() - self._last_flush) >= self.flush_interval_s)
-        if due:
+            for tick in ticks:
+                self._buf.setdefault(tick.mid, []).append(json.dumps(
+                    {**tick.as_dict(), "received_at_ms": received},
+                    ensure_ascii=False, separators=(",", ":")))
+        if not defer:
             self.flush()
 
     def flush(self) -> int:
-        """把缓冲区写入磁盘。返回写入条数（失败不抛错）。"""
         if not self.enabled:
             return 0
-        with self._lock:
-            buf, self._buf = self._buf, {}
-            self._last_flush = time.time()
-        n = 0
-        for mid, lines in buf.items():
-            path = self._path(mid)
-            try:
-                if path.exists() and path.stat().st_size > self.max_file_bytes:
-                    # 单场文件过大时轮转，避免单个文件无限增大。
-                    # 只保留最近两代（.1 会被覆盖），所以单场磁盘占用有上界。
-                    try:
-                        path.replace(path.with_suffix(".jsonl.1"))
-                        self.rotated += 1
-                    except OSError:
-                        pass
-                with path.open("a", encoding="utf-8") as fh:
-                    fh.write("\n".join(lines) + "\n")
-                n += len(lines)
-            except OSError as exc:
-                # 磁盘异常不应中断采集；记录并丢弃这批（内存中仍保有最近数据）
-                self.dropped += len(lines)
-                self.last_error = "写入 %s 失败: %s" % (path.name, exc)
-        self.written += n
-        if n:
-            self._prune_if_needed()
-        return n
-
-    def _prune_if_needed(self) -> None:
-        """目录总量超限时删除最旧文件（保证磁盘有界）。
-
-        遍历成本不低，所以最多每 60s 做一次。
-        """
-        now = time.time()
-        if now - self._last_prune < 60.0:
-            return
-        self._last_prune = now
-        assert self.root is not None
-        try:
-            entries = []
-            total = 0
-            for f in self.root.iterdir():
-                if not f.is_file():
-                    continue
+        with self._flush_lock:
+            with self._lock:
+                batches = {mid: list(lines) for mid, lines in self._buf.items()}
+            written = 0
+            failed = False
+            for mid, lines in batches.items():
+                path = self._path(mid)
+                from store.archive import output_root, storage_mode
+                archive_root = output_root(path)
+                if archive_root is not None and storage_mode(archive_root) == 's3':
+                    hour = datetime.now(timezone.utc).strftime('%Y%m%d%H')
+                    path = path.parent / path.stem / (hour + '.jsonl')
                 try:
-                    st = f.stat()
-                except OSError:
-                    continue
-                total += st.st_size
-                entries.append((st.st_mtime, st.st_size, f))
-        except OSError as exc:
-            self.last_error = "扫描走势目录失败: %s" % exc
-            return
-        if total <= self.max_dir_bytes:
-            return
-        entries.sort()  # 最旧在前
-        for _mt, size, f in entries:
-            if total <= self.max_dir_bytes:
-                break
-            try:
-                f.unlink()
-                total -= size
-                self.pruned += 1
-            except OSError:
-                continue
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    payload = ("\n".join(lines) + "\n").encode('utf-8')
+                    with path.open("a+b", buffering=0) as file:
+                        offset = file.tell()
+                        try:
+                            if file.write(payload) != len(payload):
+                                raise OSError('incomplete trend write')
+                            file.flush()
+                            os.fsync(file.fileno())
+                        except OSError:
+                            file.seek(offset)
+                            file.truncate()
+                            raise
+                    with self._lock:
+                        del self._buf[mid][:len(lines)]
+                        if not self._buf[mid]:
+                            self._buf.pop(mid)
+                    written += len(lines)
+                except OSError as exc:
+                    failed = True
+                    self.last_error = "写入 %s 失败，保留待重试: %s" % (path.name, exc)
+            self.written += written
+            if not failed:
+                self.last_error = ""
+            return written
 
     def load(self, mid: str, limit: int = MAX_TICKS_PER_MARKET) -> List[Dict[str, Any]]:
-        """读取某场的历史走势（重启后恢复用）。"""
+        """Load a bounded tail for the live cache; the full disk history stays intact."""
         if not self.enabled:
             return []
         path = self._path(mid)
+        from store.archive import archive_for
+        archive = archive_for(path)
+        if archive is not None:
+            try:
+                directory = path.parent / path.stem
+                segments = sorted(set(directory.glob('*.jsonl')) | set(archive.list(directory)), reverse=True)
+                segments.append(path)
+                lines: list[bytes] = []
+                for segment in segments:
+                    if segment == path and not segment.exists() and not archive.contains(segment):
+                        continue
+                    raw = archive.read_many([segment])[segment]
+                    lines = raw.splitlines() + lines
+                    if len(lines) >= max(1, limit):
+                        break
+                return [json.loads(line) for line in lines[-max(1, limit):] if line.strip()]
+            except (OSError, ValueError) as exc:
+                self.last_error = 'S3 走势读取失败: ' + str(exc)
+                return []
         if not path.exists():
             return []
         try:
-            with path.open(encoding="utf-8") as fh:
-                lines = fh.readlines()
+            # Seek backwards instead of scanning an ever-growing match archive.
+            with path.open('rb') as file:
+                file.seek(0, os.SEEK_END)
+                position = file.tell()
+                chunks = []
+                count = 0
+                while position > 0 and count <= max(1, limit):
+                    size = min(position, 64 * 1024)
+                    position -= size
+                    file.seek(position)
+                    chunk = file.read(size)
+                    chunks.append(chunk)
+                    count += chunk.count(b'\n')
+                lines = b''.join(reversed(chunks)).splitlines()[-max(1, limit):]
         except OSError as exc:
             self.last_error = "读取 %s 失败: %s" % (path.name, exc)
             return []
-        out: List[Dict[str, Any]] = []
-        for line in lines[-max(1, limit):]:
-            line = line.strip()
-            if not line:
-                continue
+        rows: List[Dict[str, Any]] = []
+        for line in lines:
             try:
-                out.append(json.loads(line))
+                rows.append(json.loads(line))
             except ValueError:
-                continue  # 半行/脏行直接跳过
-        return out
+                continue
+        return rows
 
     def health(self) -> Dict[str, Any]:
         with self._lock:
-            pending = sum(len(v) for v in self._buf.values())
+            pending = sum(len(lines) for lines in self._buf.values())
         return {"enabled": self.enabled, "root": str(self.root) if self.root else None,
-                "written": self.written, "dropped": self.dropped,
-                "rotated": self.rotated, "pruned": self.pruned,
-                "pending": pending, "last_error": self.last_error}
+                "retention": "permanent", "written": self.written, "dropped": 0,
+                "rotated": 0, "pruned": 0, "pending": pending, "last_error": self.last_error}
+
+    def pending_mids(self) -> set[str]:
+        """Unconfirmed archive batches must survive any cache eviction."""
+        with self._lock:
+            return {mid for mid, lines in self._buf.items() if lines}
 
 
 @dataclass
@@ -843,7 +861,9 @@ class TrendSeries:
     ticks: Deque[PriceTick] = field(default_factory=lambda: deque(maxlen=MAX_TICKS_PER_MARKET))
 
     def add(self, tick: PriceTick) -> None:
-        self.ticks.append(tick)
+        # Trend readers use price/time only. Execution keeps the full order
+        # fields in LiveBook and the original callback, never in every old tick.
+        self.ticks.append(replace(tick, order_detail={}) if tick.order_detail else tick)
 
     @property
     def n(self) -> int:
@@ -879,6 +899,10 @@ class RealtimeStats:
     reconnects: int = 0
     messages: int = 0
     price_ticks: int = 0
+    price_messages: int = 0
+    last_price_at: float = 0.0
+    last_price_source_ms: int = 0
+    commands: Dict[str, int] = field(default_factory=dict)
     score_updates: int = 0
     status_updates: int = 0
     finished: int = 0
@@ -896,6 +920,11 @@ class RealtimeStats:
             "reconnects": self.reconnects,
             "messages": self.messages,
             "price_ticks": self.price_ticks,
+            "price_messages": self.price_messages,
+            "price_idle_s": round(now - self.last_price_at, 1) if self.last_price_at else None,
+            "price_source_age_s": (round(max(0, now - self.last_price_source_ms / 1000), 1)
+                                   if self.last_price_source_ms else None),
+            "commands": dict(self.commands),
             "score_updates": self.score_updates,
             "status_updates": self.status_updates,
             "finished": self.finished,
@@ -951,6 +980,15 @@ def parse_c105(decoded: Mapping[str, Any]) -> List[PriceTick]:
                 old_ov=new_val, new_ov=new_val,
                 ts_ms=bts or ts,
                 upstream_obv=(obv_int / OV_SCALE) if obv_int > 0 else new_val,
+                order_detail={
+                    "matchId": mid, "marketId": hid,
+                    "playId": str(block.get("hpid") or chpid),
+                    "playOptions": str(entry.get("ot") or ""),
+                    "playOptionsId": str(entry.get("oid") or ""),
+                    "marketValue": hv, "marketTypeFinally": "EU",
+                    "oddFinally": str(new_val), "matchType": 2, "sportId": "1",
+                    **({"dataSource": str(entry["cds"])} if entry.get("cds") else {}),
+                },
             ))
 
     hls = decoded.get("hls2") or decoded.get("hls") or {}
@@ -972,14 +1010,23 @@ def parse_c105(decoded: Mapping[str, Any]) -> List[PriceTick]:
 def parse_c103(decoded: Mapping[str, Any]) -> Optional[Tuple[str, Tuple[int, int]]]:
     """解析 `C103`（比分）→ `(mid, (主队比分, 客队比分))`；无 `S1` 返回 None。"""
     mid = str(decoded.get("mid", ""))
-    for chunk in (decoded.get("msc") or ()):
+    score = _period_score_from_payload(decoded.get('msc'), 'S1')
+    return (mid, score) if score is not None else None
+
+
+def _period_score_from_payload(value: Any, period: str) -> Optional[Tuple[int, int]]:
+    """从推送 `msc` 的 S2/S1 片段提取阶段比分。"""
+    chunks = value.split(',') if isinstance(value, str) else value if isinstance(value, Sequence) else ()
+    prefix = period + "|"
+    for chunk in chunks:
         text = str(chunk).strip().strip("'")
-        if not text.startswith("S1|"):
+        if not text.startswith(prefix):
             continue
-        _, _, val = text.partition("|")
-        left, _, right = val.partition(":")
+        _, _, score = text.partition("|")
+        left, _, right = score.partition(":")
         try:
-            return mid, (int(left), int(right))
+            home, away = int(left), int(right)
+            return (home, away) if home >= 0 and away >= 0 else None
         except ValueError:
             return None
     return None
@@ -1051,18 +1098,30 @@ class RealtimeHub:
         self.stats = RealtimeStats()
         self._lock = threading.RLock()
         self._trends: Dict[Tuple[str, str, str], TrendSeries] = {}
+        self._resume_trends = resume
+        self._resumed_mids: set[str] = set()
+        self._resuming_mids: set[str] = set()
+        self._resume_pending: Dict[str, None] = {}
+        self._resume_wake = threading.Event()
+        self._resume_thread: Optional[threading.Thread] = None
         # 上次观测到的赔率（key = mid|chpid|hv|oid）→ 仅当变化时才记 tick
         self._last_price: Dict[Tuple[str, str, str, str], float] = {}
+        self._price_cache_seen: Dict[str, float] = {}
+        self._price_cache_pruned_matches = 0
+        self._last_price_cache_prune = 0.0
         self._snapshots = 0
         self._scores: Dict[str, Tuple[int, int]] = {}
         self._status: Dict[str, Dict[str, Any]] = {}
         self._events: Dict[str, Deque[Dict[str, Any]]] = {}
         self._info: Dict[str, Dict[str, Any]] = {}
+        self._market_meta: Dict[str, Dict[str, Any]] = {}
         self._versions: Dict[str, int] = {}
         self._received_at: Dict[str, float] = {}
+        self._received_at_ms: Dict[str, int] = {}
         self._status_at: Dict[str, float] = {}
         self._suspensions: Dict[str, Dict[str, float]] = {}
         self._finished: set = set()
+        self._final_proofs: Dict[str, Dict[str, Any]] = {}
         # `_finished` also contains historical terminal scores restored at boot.
         # Those records must not suppress a match that appears in the current
         # schedule.  This set only tracks terminal events from this process and
@@ -1070,10 +1129,18 @@ class RealtimeHub:
         self._runtime_finished: set = set()
         self._mids_provider_failed = False
         self._thread: Optional[threading.Thread] = None
+        self._cache_thread: Optional[threading.Thread] = None
+        self._subscription_thread: Optional[threading.Thread] = None
+        self._subscription_update: Optional[Tuple[List[str], bool]] = None
+        self._feed: Optional[LEYUFeed] = None
         self._stop = threading.Event()
         self._subscribed: List[str] = []
         #: 走势持久化（供经济学算法/LLM 与重启后回填使用）
         self.trend_store = TrendStore(trend_root)
+        self.event_history = HistoryJournal(Path(trend_root).parent / '_live' / 'events.jsonl.gz') if trend_root else None
+        self._event_pending: List[Mapping[str, Any]] = []
+        self._event_lock = threading.RLock()
+        self._event_flush_lock = threading.Lock()
         #: **内存实时赔率表**（关键：查询路径不再碰磁盘）。
         #:
         #: 与 `_last_price` 的分工：
@@ -1139,10 +1206,15 @@ class RealtimeHub:
                     continue
                 mid = str(mid)
                 self._scores[mid] = (h, a)
-                if rec.get("done"):
+                ht = rec.get("ht")
+                if isinstance(ht, (list,tuple)) and len(ht)==2 and all(isinstance(v,int) and not isinstance(v,bool) and v>=0 for v in ht):
+                    self._status.setdefault(mid,{})['half_score'] = list(ht)
+                proof = rec.get('final_proof')
+                if rec.get('done') and isinstance(proof,Mapping) and (str(proof.get('ms'))=='3' or str(proof.get('mmp'))=='999'):
                     self._finished.add(mid)
+                    self._final_proofs[mid] = dict(proof)
 
-    def _save_scores(self, force: bool = False) -> None:
+    def _save_scores(self, force: bool = False, *, mid: Optional[str] = None) -> None:
         """把当前比分/结束集合落盘（节流；失败不影响推送）。
 
         ⚠️ **`C109`（比赛结束）必须传 `force=True`**：它会在只有几秒间隔的
@@ -1152,56 +1224,100 @@ class RealtimeHub:
         本项目测试真实拓到该缺陷。
         """
         with self._lock:
+            if mid is not None and self.running:
+                self.scores_store.stage(mid, self._scores.get(mid), mid in self._finished,
+                                        self._status.get(mid, {}).get('half_score'), self._final_proofs.get(mid))
+                return
             scores = dict(self._scores)
             finished = set(self._finished)
+            half_scores = {mid: list(st['half_score']) for mid,st in self._status.items() if st.get('half_score')}
+            final_proofs = dict(self._final_proofs)
         try:
-            self.scores_store.save(scores, finished, force=force)
+            self.scores_store.save(scores, finished, force=force, half_scores=half_scores,
+                                   final_proofs=final_proofs, defer=self.running)
         except (AttributeError, OSError, TypeError, ValueError) as exc:
             self.stats.last_error = "比分落盘失败: %s" % exc
 
     def _resume_from_store(self) -> None:
-        """从落盘文件回填历史走势（重启不丢）。
+        """Queue current-book tails without waiting for S3 during startup."""
+        for mid in self.live.live_mids():
+            self._queue_resume(mid)
 
-        同时重建 `_last_price` 基线：否则重启后的第一条推送会被当作
-        “首次观测”，丢失一次真实变动。
-        """
-        store = self.trend_store
-        if not store.enabled or store.root is None:
-            return
+    def _resume_match(self, mid: str) -> None:
+        with self._lock:
+            if not self._resume_trends or mid in self._resumed_mids or mid in self._resuming_mids:
+                return
+            self._resuming_mids.add(mid)
         try:
-            files = list(store.root.glob("*.jsonl"))
-        except OSError:
+            self._load_match_trends(mid)
+        finally:
+            with self._lock:
+                self._resuming_mids.discard(mid)
+
+    def _load_match_trends(self, mid: str) -> None:
+        store = self.trend_store
+        if not store.enabled:
             return
-        for path in files:
-            mid = path.stem
-            rows = store.load(mid, limit=MAX_TICKS_PER_MARKET)
-            for row in rows:
-                if not isinstance(row, Mapping):
-                    continue
-                try:
-                    chpid = str(row.get("chpid") or "")
-                    hv = str(row.get("hv") or "")
-                    oid = str(row.get("oid") or "")
-                    old = float(row.get("old", 0.0))
-                    new = float(row.get("new", 0.0))
-                    ts = int(row.get("ts") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if chpid == "" and oid == "":
-                    continue
-                tick = PriceTick(
-                    mid=mid, chpid=chpid, hid="", hv=hv, oid=oid,
-                    ot=str(row.get("ot") or ""), old_ov=old, new_ov=new,
-                    ts_ms=ts)
-                key = (mid, chpid, hv)
-                series = self._trends.get(key)
-                if series is None:
-                    series = TrendSeries(mid=mid, chpid=chpid, hv=hv)
-                    self._trends[key] = series
-                series.add(tick)
-                self._last_price[(mid, chpid, hv, oid)] = new
-        if self._trends:
+        # Local/S3 IO is outside the hub lock. New quotes may arrive while the
+        # historical tail loads; merge them without rolling back live prices.
+        rows = store.load(mid, limit=MAX_TICKS_PER_MARKET)
+        restored: Dict[Tuple[str, str, str], List[PriceTick]] = {}
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            try:
+                chpid = str(row.get("chpid") or "")
+                hv = str(row.get("hv") or "")
+                oid = str(row.get("oid") or "")
+                old = float(row.get("old", 0.0))
+                new = float(row.get("new", 0.0))
+                ts = int(row.get("ts") or 0)
+            except (TypeError, ValueError):
+                continue
+            if chpid == "" and oid == "":
+                continue
+            tick = PriceTick(
+                mid=mid, chpid=chpid, hid=str(row.get("hid") or ""), hv=hv, oid=oid,
+                ot=str(row.get("ot") or ""), old_ov=old, new_ov=new,
+                ts_ms=ts)
+            key = (mid, chpid, hv)
+            restored.setdefault(key, []).append(tick)
+        with self._lock:
+            self._price_cache_seen[mid] = time.monotonic()
+            for key, ticks in restored.items():
+                series = self._trends.setdefault(key, TrendSeries(mid=mid, chpid=key[1], hv=key[2]))
+                merged = {(t.ts_ms, t.hid, t.oid, t.old_ov, t.new_ov): t
+                          for t in [*ticks, *series.ticks]}
+                series.ticks = deque(sorted(merged.values(), key=lambda t: t.ts_ms),
+                                     maxlen=MAX_TICKS_PER_MARKET)
+                for tick in reversed(ticks):
+                    self._last_price.setdefault((mid, tick.chpid, tick.hv, tick.oid), tick.new_ov)
+            self._resumed_mids.add(mid)
+            self._resume_pending.pop(mid, None)
             self.stats.resumed_markets = len(self._trends)
+
+    def _queue_resume(self, mid: str) -> None:
+        with self._lock:
+            if (self._resume_trends and self.trend_store.enabled
+                    and mid not in self._resumed_mids and mid not in self._resuming_mids):
+                self._resume_pending[mid] = None
+                self._resume_wake.set()
+
+    def _resume_loop(self) -> None:
+        while not self._stop.is_set():
+            self._resume_wake.wait(0.5)
+            self._resume_wake.clear()
+            while not self._stop.is_set():
+                with self._lock:
+                    mid = next(iter(self._resume_pending), None)
+                    if mid is not None:
+                        self._resume_pending.pop(mid)
+                if mid is None:
+                    break
+                try:
+                    self._resume_match(mid)
+                except (OSError, ValueError, TypeError) as exc:
+                    self.stats.last_error = '走势恢复失败: %s' % type(exc).__name__
 
     # -- 生命周期 -----------------------------------------------------------
 
@@ -1210,6 +1326,15 @@ class RealtimeHub:
         if self._thread is not None and self._thread.is_alive():
             return False
         self._stop.clear()
+        if self._resume_thread is None or not self._resume_thread.is_alive():
+            self._resume_thread = threading.Thread(target=self._resume_loop,
+                                                    name="leyu-trend-resume", daemon=True)
+            self._resume_thread.start()
+        self._cache_thread = threading.Thread(target=self._cache_loop, name="leyu-book-cache", daemon=True)
+        self._cache_thread.start()
+        self._subscription_thread = threading.Thread(target=self._subscription_loop,
+                                                     name="leyu-subscriptions", daemon=True)
+        self._subscription_thread.start()
         self._thread = threading.Thread(target=self._run, name="leyu-realtime",
                                         daemon=True)
         self._thread.start()
@@ -1217,9 +1342,77 @@ class RealtimeHub:
 
     def stop(self, timeout: float = 3.0) -> None:
         self._stop.set()
+        self._resume_wake.set()
+        if self._feed is not None:
+            try:
+                self._feed.close()
+            except OSError as exc:
+                self.stats.last_error = '推送关闭失败: %s' % exc
         t = self._thread
         if t is not None and t.is_alive():
             t.join(timeout=timeout)
+        if self._cache_thread is not None:
+            self._cache_thread.join()
+        if self._subscription_thread is not None:
+            self._subscription_thread.join(timeout=timeout)
+        if self._resume_thread is not None:
+            self._resume_thread.join(timeout=timeout)
+        self.trend_store.flush()
+        self._flush_events()
+        self._save_scores(force=True)
+        self.live.save(force=True)
+
+    def _cache_loop(self) -> None:
+        """The recoverable current-book cache must never block socket consumption.
+
+        Complete baseline/change history remains in TrendStore. This cache is
+        an atomic checkpoint; its original upstream timestamps are preserved.
+        """
+        while not self._stop.wait(_HISTORY_FLUSH_INTERVAL_S):
+            self.live.save()
+            self.trend_store.flush()
+            self.prune_price_cache()
+            self._flush_events(force=True)
+            self.scores_store.flush()
+
+    def prune_price_cache(self, *, force: bool = False) -> int:
+        """Evict inactive query windows; complete local/S3 journals stay intact.
+
+        Keep failed archive batches and concurrent history loads. A subsequent
+        trend read can restore its bounded tail through the normal resume path.
+        Scores and final proofs remain available for settlement.
+        """
+        now = time.monotonic()
+        if not force and now - self._last_price_cache_prune < _PRICE_CACHE_PRUNE_INTERVAL_S:
+            return 0
+        with self._lock:
+            pending = self.trend_store.pending_mids()
+            expired = {mid for mid, at in self._price_cache_seen.items()
+                       if mid not in pending and mid not in self._resuming_mids and
+                       (now - at >= DEFAULT_QUOTE_MAX_AGE_S or
+                        (mid in self._runtime_finished and now - at >= _FINISHED_PRICE_CACHE_GRACE_S))}
+            for key in list(self._trends):
+                if key[0] in expired:
+                    self._trends.pop(key, None)
+            for price_key in list(self._last_price):
+                if price_key[0] in expired:
+                    self._last_price.pop(price_key, None)
+            for mid in expired:
+                self._price_cache_seen.pop(mid, None)
+                self._market_meta.pop(mid, None)
+                self._resumed_mids.discard(mid)
+                self._resume_pending.pop(mid, None)
+                self.live.drop_match(mid)
+            self._last_price_cache_prune = now
+            self._price_cache_pruned_matches += len(expired)
+            return len(expired)
+
+    def _subscription_loop(self) -> None:
+        """REST schedule refreshes must not pause the live socket reader."""
+        while not self._stop.wait(max(0.1, self.subscribe_interval_s)):
+            update = self._read_subscription()
+            with self._lock:
+                self._subscription_update = update
 
     @property
     def running(self) -> bool:
@@ -1230,10 +1423,13 @@ class RealtimeHub:
     def _changed_state(self, mid: str) -> None:
         self._versions[mid] = self._versions.get(mid, 0) + 1
         self._received_at[mid] = time.monotonic()
+        self._received_at_ms[mid] = int(time.time() * 1000)
 
     def seed_matches(self, matches: Sequence[Any]) -> None:
         """Background REST enrichment; never performed by the decision worker."""
         mids = []
+        histories = []
+        all_ticks = []
         now = time.monotonic()
         with self._lock:
             for match in matches:
@@ -1243,26 +1439,67 @@ class RealtimeHub:
                     "home": match.home, "away": match.away,
                     "sport": match.sport, "sport_id": match.sport_id,
                 }
-                if now - self._status_at.get(mid, 0) > 10:
+                raw_msc = getattr(match, 'score_raw', None)
+                raw_msc = raw_msc if isinstance(raw_msc, (str, list, tuple)) else None
+                histories.append({'source': 'rest', 'match_id': mid,
+                    'received_at': time.time(), 'info': dict(self._info[mid]), 'msc': raw_msc,
+                    **{key: value if isinstance(value, (str, int, float)) else None for key, value in
+                       [('ms', getattr(match, 'status', None)), ('mmp', getattr(match, 'period', None)),
+                        ('mst', getattr(match, 'minute', None))]}})
+                ticks = []
+                meta = self._market_meta.setdefault(mid, {})
+                for market in getattr(match, "markets", ()):
+                    meta[str(market.chpid)] = {"name": market.name, "hpt": market.hpt}
+                    for q in market.quotes:
+                        ot = {"home": "1", "away": "2", "draw": "X",
+                              "over": "Over", "under": "Under"}.get(q.outcome, q.label or q.oid)
+                        ticks.append(PriceTick(mid, str(market.chpid), market.market_id, market.hv,
+                                               q.oid, ot, q.decimal, q.decimal,
+                                               q.ctsp or market.ctsp,
+                                               order_detail={
+                                                   "matchId": mid, "marketId": market.market_id,
+                                                   "playId": market.play_id or str(market.chpid),
+                                                   "playOptions": ot, "playOptionsId": q.oid,
+                                                   "marketValue": market.hv, "marketTypeFinally": "EU",
+                                                   "oddFinally": str(q.decimal), "matchType": 2 if match.is_live else 1,
+                                                   "sportId": str(match.sport_id), "dataSource": q.source,
+                                                   "tournamentId": str(match.tid),
+                                               }))
+                self.live.upsert_many(ticks)
+                all_ticks.extend(ticks)
+                histories[-1]['quotes'] = [tick.as_dict() for tick in ticks]
+                if match.is_finished or now - self._status_at.get(mid, 0) > 10:
                     self._status[mid] = {**self._status.get(mid, {}),
-                                         "mst": match.minute, "mmp": match.period}
+                                         "ms": getattr(match, "status", 1 if not match.is_finished else 3),
+                                         "mst": match.minute, "mmp": match.period,
+                                         "msc": raw_msc}
+                    half = getattr(match, "half_score", (None, None))
+                    if half and half[0] is not None and half[1] is not None:
+                        self._status[mid]["half_score"] = [int(half[0]), int(half[1])]
                     self._status_at[mid] = now
-                if now - self._score_at.get(mid, 0) > 10:
+                if match.is_finished or now - self._score_at.get(mid, 0) > 10:
                     from core.live_model import valid_score
                     score = valid_score(match.score)
                     if score is not None:
                         self._scores[mid] = score
                         self._score_at[mid] = now
                 if match.is_finished:
+                    self._final_proofs[mid] = {'ms':match.status,'mmp':match.period}
                     self._finished.add(mid)
                     self._runtime_finished.add(mid)
                 else:
                     # 当前赛程是权威状态：旧快照/旧进程留下的终场记录不能
                     # 把这次仍在进行的赛事标成 finished，或阻断实时分析。
                     self._finished.discard(mid)
+                    self._final_proofs.pop(mid,None)
                     self._runtime_finished.discard(mid)
                 self._changed_state(mid)
                 mids.append(mid)
+        if self.event_history:
+            with self._event_lock:
+                self._event_pending.extend(histories)
+            self._flush_events()
+        self._record_ticks(all_ticks)
         self._notify_state_change(mids)
         self._save_scores(force=True)
 
@@ -1273,7 +1510,10 @@ class RealtimeHub:
                 "match_id": mid, "info": dict(self._info.get(mid, {})),
                 "version": self._versions.get(mid, 0),
                 "received_at": self._received_at.get(mid, 0),
+                "received_at_ms": self._received_at_ms.get(mid),
+                "captured_at_ms": int(time.time() * 1000),
                 "score": self._scores.get(mid),
+                "half_score": self.half_score(mid),
                 "score_age_s": self.score_age_s(mid),
                 "status_age_s": (time.monotonic() - self._status_at[mid]
                                  if mid in self._status_at else None),
@@ -1283,6 +1523,7 @@ class RealtimeHub:
                 "suspended_ids": list(self._suspensions.get(mid, {})),
                 "events": [dict(e) for e in self._events.get(mid, ())],
                 "quotes": self.live.book(mid),
+                "market_meta": dict(self._market_meta.get(mid, {})),
             }
 
     def state_version(self, mid: str) -> int:
@@ -1299,6 +1540,10 @@ class RealtimeHub:
 
     def trend(self, mid: str, chpid: str = "", hv: str = "") -> Dict[str, Any]:
         """某场某个盘口的走势摘要；不指定 chpid 时返回该场全部盘口。"""
+        if self.running:
+            self._queue_resume(mid)
+        else:
+            self._resume_match(mid)
         with self._lock:
             items = [s for (m, c, h), s in self._trends.items() if m == mid
                      and (not chpid or c == chpid)
@@ -1306,12 +1551,13 @@ class RealtimeHub:
             if chpid and hv:
                 key = (mid, chpid, hv)
                 s = self._trends.get(key)
-                return s.summary() if s else {"mid": mid, "chpid": chpid,
-                                              "hv": hv, "n": 0}
+                return {**(s.summary() if s else {"mid": mid, "chpid": chpid, "hv": hv, "n": 0}),
+                        "history_loading": mid in self._resume_pending or mid in self._resuming_mids}
             return {
                 "mid": mid,
                 "n_markets": len(items),
                 "markets": [s.summary() for s in items],
+                "history_loading": mid in self._resume_pending or mid in self._resuming_mids,
             }
 
     def score(self, mid: str) -> Optional[Tuple[int, int]]:
@@ -1402,14 +1648,28 @@ class RealtimeHub:
         with self._lock:
             baseline = len(self._last_price)
             snaps = self._snapshots
+            price_cache = {'matches': len(self._price_cache_seen), 'markets': len(self._trends),
+                           'ticks': sum(len(series.ticks) for series in self._trends.values()),
+                           'evicted_matches': self._price_cache_pruned_matches,
+                           'inactive_ttl_s': DEFAULT_QUOTE_MAX_AGE_S,
+                           'finished_grace_s': _FINISHED_PRICE_CACHE_GRACE_S}
+        try:
+            session = self.session_provider.describe()
+        except Exception as exc:  # noqa: BLE001 - health must remain available
+            session = {"provider": type(self.session_provider).__name__,
+                       "describe_error": type(exc).__name__}
         return {
             "running": self.running,
+            "session": session,
             # 已建立基线的赔率选项数：对比它可判断推送是否在正常覆盖盘口
             "price_options": baseline,
+            "price_cache": price_cache,
             # 收到的赔率快照条数（含未变化的），用于区分“推送正常但没变化”
             "price_snapshots": snaps,
             "changed_ratio": round(self.stats.price_ticks / snaps, 4) if snaps else 0.0,
             "trend_store": self.trend_store.health(),
+            "event_history": {**self.event_history.health(), 'pending': len(self._event_pending)} if self.event_history else None,
+            "score_history": self.scores_store.history_health(),
             # 内存实时表：用户要求「采集落本地、查询读本地」的落地情况。
             # 看 `rows`/`matches` 能直接回答“现在到底有多少场在看”
             # （与 leyu 页面对账时最有用），`oldest_age_s` 则能看出
@@ -1439,9 +1699,16 @@ class RealtimeHub:
         """
         # 实时表用全量 ticks（当前值），必须在过滤“变动”之前就写。
         changed: List[PriceTick] = []
+        baselines: List[PriceTick] = []
+        for mid in dict.fromkeys(t.mid for t in ticks):
+            if self.running:
+                self._queue_resume(mid)
+            else:
+                self._resume_match(mid)
         with self._lock:
-            self.live.upsert_many(ticks)
+            ticks = self.live.upsert_many(ticks)
             for mid in dict.fromkeys(t.mid for t in ticks):
+                self._price_cache_seen[mid] = time.monotonic()
                 self._changed_state(mid)
             for t in ticks:
                 suspended = self._suspensions.get(t.mid, {})
@@ -1455,6 +1722,7 @@ class RealtimeHub:
                 self._last_price[key] = t.new_ov
                 if prev is None:
                     # 首次观测到该选项：建立基线，不算变动
+                    baselines.append(t)
                     continue
                 if abs(prev - t.new_ov) < 1e-9:
                     continue
@@ -1462,6 +1730,7 @@ class RealtimeHub:
                     mid=t.mid, chpid=t.chpid, hid=t.hid, hv=t.hv,
                     oid=t.oid, ot=t.ot, old_ov=prev, new_ov=t.new_ov,
                     ts_ms=t.ts_ms, upstream_obv=t.upstream_obv,
+                    order_detail=t.order_detail,
                 )
                 mkey = (real.mid, real.chpid, real.hv)
                 series = self._trends.get(mkey)
@@ -1474,12 +1743,13 @@ class RealtimeHub:
             self.stats.price_ticks += len(changed)
         # 落盘在锁外：磁盘 IO 不应阻塞推送消费
         self._notify_state_change([t.mid for t in ticks])
+        if baselines or changed:
+            self.trend_store.append_many([*baselines, *changed], defer=self.running)
         if changed:
             self._notify_price_change(changed)
-            self.trend_store.append_many(changed)
         # 实时表落盘（节流 5s；内部自会判断是否需要写）。
         # 放在锁外，与走势落盘同理：磁盘 IO 不应阻塞推送消费。
-        if ticks:
+        if ticks and not self.running:
             self.live.save()
 
     def _notify_price_change(self, changed: Sequence[PriceTick]) -> None:
@@ -1509,23 +1779,48 @@ class RealtimeHub:
             return len(self._last_price)
 
     def _record_event(self, mid: str, event: Mapping[str, Any]) -> None:
+        row = {**dict(event), "received_at": time.time()}
         with self._lock:
             dq = self._events.get(mid)
             if dq is None:
                 dq = deque(maxlen=MAX_EVENTS_PER_MATCH)
                 self._events[mid] = dq
-            dq.append({**dict(event), "received_at": time.time()})
+            dq.append(row)
+
+    def _flush_events(self, *, force: bool = False) -> None:
+        if not self.event_history or (self.running and not force):
+            return
+        with self._event_flush_lock:
+            with self._event_lock:
+                pending = list(self._event_pending)
+            try:
+                self.event_history.append(pending)
+                with self._event_lock:
+                    del self._event_pending[:len(pending)]
+            except (OSError, TypeError, ValueError) as exc:
+                self.stats.last_error = '赛况历史写入失败: %s' % exc
 
     def _handle_message(self, msg: Mapping[str, Any]) -> None:
         cmd = str(msg.get("cmd") or "")
         self.stats.messages += 1
+        self.stats.commands[cmd] = self.stats.commands.get(cmd, 0) + 1
         self.stats.last_message_at = time.time()
+        # Preserve decoded state messages before any lossy field selection or
+        # bounded UI event cache. Session/auth messages are deliberately absent.
+        if self.event_history and cmd in ('C101', 'C103', 'C1021', 'C102', 'C109', 'C110', 'C104', 'C303', 'C153'):
+            decoded_event = decode_push_payload(msg.get('cd'))
+            with self._event_lock:
+                self._event_pending.append({'cmd': cmd, 'received_at': time.time(), 'payload': decoded_event})
+            self._flush_events()
 
         if cmd in ("C105", "C2", "C21"):
             decoded = decode_push_payload(msg.get("cd"))
             if isinstance(decoded, Mapping):
                 ticks = parse_c105(decoded)
                 if ticks:
+                    self.stats.price_messages += 1
+                    self.stats.last_price_at = time.time()
+                    self.stats.last_price_source_ms = max(t.ts_ms for t in ticks)
                     self._record_ticks(ticks)
             return
 
@@ -1535,18 +1830,23 @@ class RealtimeHub:
                 parsed = parse_c103(decoded)
                 if parsed:
                     mid, score = parsed
+                    half = _period_score_from_payload(decoded.get("msc"), "S2")
                     with self._lock:
                         self._touch_seen(mid)
                         self._scores[mid] = score
                         self._score_at[mid] = time.monotonic()
+                        if half is not None:
+                            self._status.setdefault(mid, {})["half_score"] = list(half)
+                        self._status.setdefault(mid, {})['msc'] = decoded.get('msc')
                         self._changed_state(mid)
                     self.stats.score_updates += 1
                     # 落盘赛果（见 ScoreStore：结束之后就再也拿不到了）
                     self._notify_state_change([mid])
-                    self._save_scores()
+                    self._save_scores(mid=mid)
                 self._record_event(str(decoded.get("mid", "")),
                                    {"cmd": cmd, "cmec": decoded.get("cmec"),
-                                    "mmp": decoded.get("mmp"), "mst": decoded.get("mst")})
+                                    "mmp": decoded.get("mmp"), "mst": decoded.get("mst"),
+                                    "msc": decoded.get('msc')})
             return
 
         if cmd == "C102":
@@ -1556,16 +1856,31 @@ class RealtimeHub:
                 with self._lock:
                     self._touch_seen(mid)
                     self._status[mid] = {
+                        **self._status.get(mid, {}),
                         "cmec": decoded.get("cmec"),
                         "mmp": decoded.get("mmp"),
                         "mst": decoded.get("mst"),
                         "ha": decoded.get("ha"),
+                        "msc": decoded.get('msc', self._status.get(mid, {}).get('msc')),
                     }
+                    half = _period_score_from_payload(decoded.get("msc"), "S2")
+                    if half is not None:
+                        self._status[mid]["half_score"] = list(half)
+                    final = str(decoded.get('mmp'))=='999' or str(decoded.get('ms'))=='3'
+                    if final:
+                        self._final_proofs[mid] = {'ms':decoded.get('ms'),'mmp':decoded.get('mmp')}
+                        final_score = _period_score_from_payload(decoded.get('msc'), 'S1')
+                        if final_score is not None:
+                            self._scores[mid] = final_score
+                        self._finished.add(mid)
+                        self._runtime_finished.add(mid)
                     self._status_at[mid] = time.monotonic()
                     self._changed_state(mid)
+                self._save_scores(force=final, mid=mid)
                 self._notify_state_change([mid])
                 self.stats.status_updates += 1
-                self._record_event(mid, {"cmd": cmd, "cmec": decoded.get("cmec")})
+                self._record_event(mid, {"cmd": cmd, "cmec": decoded.get("cmec"),
+                                        "msc": decoded.get('msc')})
             return
 
         if cmd == "C109":
@@ -1575,7 +1890,14 @@ class RealtimeHub:
                 for it in items:
                     if isinstance(it, Mapping):
                         mid = str(it.get("mid", ""))
-                        self._finished.add(mid)
+                        # C109 is removal, which can also mean cancelled/closed.
+                        # Only an explicit final status certifies the score.
+                        if str(it.get('ms'))=='3' or str(it.get('mmp'))=='999':
+                            self._finished.add(mid)
+                            self._final_proofs[mid] = {'ms':it.get('ms'),'mmp':it.get('mmp')}
+                            final_score = _period_score_from_payload(it.get('msc'),'S1')
+                            if final_score is not None:
+                                self._scores[mid]=final_score
                         self._runtime_finished.add(mid)
                         self._changed_state(mid)
             self._notify_state_change([str(it.get("mid", ""))
@@ -1584,7 +1906,12 @@ class RealtimeHub:
             # **关键**：比赛刚结束时把终场比分与结束标记落盘。
             # 这是结算**唯一**能拿到过时赛果的时机（之后上游不再提供），
             # 且必须 `force=True` —— 不能因节流丢掉“已结束”标记（见 _save_scores）。
-            self._save_scores(force=True)
+            if self.running:
+                for it in items:
+                    if isinstance(it, Mapping):
+                        self._save_scores(force=True, mid=str(it.get('mid', '')))
+            else:
+                self._save_scores(force=True)
             return
 
         if cmd == "C110":
@@ -1622,15 +1949,19 @@ class RealtimeHub:
             return
 
     def _pick_mids(self) -> List[str]:
+        mids, failed = self._read_subscription()
+        self._mids_provider_failed = failed
+        return mids
+
+    def _read_subscription(self) -> Tuple[List[str], bool]:
+        """Return failure together with its list, without shared flag races."""
         if self.mids_provider is None:
-            return []
-        self._mids_provider_failed = False
+            return [], False
         try:
             mids = [str(m) for m in (self.mids_provider() or ())]
         except Exception as exc:  # noqa: BLE001 - 订阅来源失败不应终止推送线程
             self.stats.last_error = "mids_provider 失败: %s" % exc
-            self._mids_provider_failed = True
-            return []
+            return [], True
         # 当前赛程是权威状态。不能把启动时从历史比分文件恢复的
         # `_finished` 集合用于过滤，否则今天重新出现的 mid 会被永久漏掉。
         # 只过滤本进程刚收到的终场事件，避免在上游状态刷新前继续订阅已结束场。
@@ -1639,7 +1970,7 @@ class RealtimeHub:
                     if m not in self._runtime_finished]
         # max_matches <= 0 表示不截断（全部订阅）
         cap = _to_int(self.max_matches)
-        return mids[:cap] if cap > 0 else mids
+        return (mids[:cap] if cap > 0 else mids), False
 
     def _run(self) -> None:
         """推送主循环：连接 → 订阅 → 消费 → 断线重连。"""
@@ -1665,25 +1996,32 @@ class RealtimeHub:
 
             feed = LEYUFeed(ws_url, session.request_id,
                             session.origin or "", timeout=25.0)
+            self._feed = feed
             try:
                 feed.connect()
                 self.stats.connected += 1
-                mids = self._pick_mids()
+                with self._lock:
+                    mids = [mid for mid in self._subscribed if mid not in self._runtime_finished]
+                if not mids:
+                    mids = self._pick_mids()
                 if mids:
                     feed.subscribe_odds(mids)
                     with self._lock:
                         self._subscribed = mids
                     self.stats.subscribed = len(mids)
 
-                last_sub = time.time()
                 while not self._stop.is_set():
                     msg = feed.recv()
-                    if msg is not None:
+                    if msg is not None and not self._stop.is_set():
                         self._handle_message(msg)
                     # 定期刷新订阅列表（赛事会陆续开始/结束）
-                    if time.time() - last_sub >= self.subscribe_interval_s:
-                        new_mids = self._pick_mids()
-                        provider_failed = self._mids_provider_failed
+                    with self._lock:
+                        update = self._subscription_update
+                        self._subscription_update = None
+                    if update is not None:
+                        new_mids, provider_failed = update
+                        with self._lock:
+                            new_mids = [mid for mid in new_mids if mid not in self._runtime_finished]
                         should_clear = not new_mids and not provider_failed
                         if ((new_mids and new_mids != self._subscribed)
                                 or (should_clear and self._subscribed)):
@@ -1691,7 +2029,6 @@ class RealtimeHub:
                             with self._lock:
                                 self._subscribed = new_mids
                             self.stats.subscribed = len(new_mids)
-                        last_sub = time.time()
             except Exception as exc:  # noqa: BLE001 - 任何异常都要重连而不是退出
                 self.stats.last_error = "%s: %s" % (type(exc).__name__, exc)
             finally:
@@ -1699,6 +2036,7 @@ class RealtimeHub:
                     feed.close()
                 except Exception as exc:  # noqa: BLE001 - 关闭失败不应阻止重连
                     self.stats.last_error = "close 失败: %s" % exc
+                self._feed = None
 
             if self._stop.is_set():
                 return

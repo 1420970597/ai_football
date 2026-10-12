@@ -55,6 +55,7 @@ __all__ = [
     "TERMINAL_STATUSES",
     "split_line",
     "settle_pick",
+    "settle_with_basis",
     "pnl_for",
     "implied_probability",
     "clv",
@@ -103,9 +104,14 @@ def split_line(line: object) -> List[float]:
     """
     if isinstance(line, bool):
         return []
-    s = str(line if line is not None else "").strip().replace("＋", "+")
+    s = str(line if line is not None else "").strip().replace("＋", "+").replace("－", "-")
+    parts = [x.strip() for x in s.split("/")]
+    # The feed abbreviates -0/-0.5 as -0/0.5. Preserve the textual
+    # leading sign (including negative zero), but respect explicit leg signs.
+    if len(parts) == 2 and parts[0].startswith("-") and not parts[1].startswith(("-", "+")):
+        parts[1] = "-" + parts[1]
     try:
-        values = [float(x.strip()) for x in s.split("/")]
+        values = [float(x) for x in parts]
     except (ValueError, OverflowError):
         return []
     if not values or len(values) > 2 or any(not math.isfinite(x) or abs(x) > 100 for x in values):
@@ -284,6 +290,31 @@ def settle_pick(market: object, outcome: object,
     return SETTLE_VOID, "未知盘口族"
 
 
+def settle_with_basis(market: object, outcome: object, line: object,
+                      ft_score: object, ht_score: object = None, *,
+                      settlement_basis: str, entry_score: object = None) -> Tuple[str, str]:
+    """Use the same proven score basis for ledger, training and evaluation.
+
+    In-play Asian handicaps settle on goals after the order's score benchmark.
+    HAD/OU continue to use cumulative scores. Never infer a missing benchmark.
+    """
+    parsed = parse_market_code(market)
+    if parsed is None:
+        return SETTLE_VOID, "无法解析盘口代码"
+    _, half, _ = parsed
+    if settlement_basis == "remaining_score":
+        entry = _score_of(entry_score)
+        final = _score_of(ht_score if half else ft_score)
+        if entry is None or final is None or any(a < b for a, b in zip(final, entry)):
+            return SETTLE_VOID, "缺少或无效的滚球结算基准"
+        remaining = (final[0] - entry[0], final[1] - entry[1])
+        return settle_pick(market, outcome, line, None if half else remaining,
+                           remaining if half else None)
+    if settlement_basis not in ("full_score", "half_score_required", "legacy_full_score"):
+        return SETTLE_VOID, "结算口径未核验"
+    return settle_pick(market, outcome, line, ft_score, ht_score)
+
+
 def implied_probability(odds: float) -> Optional[float]:
     """赔率 → 隐含概率（含水位）。赔率非法时返回 None。"""
     try:
@@ -414,6 +445,12 @@ def summarise(rows: Sequence[Any]) -> dict:
         "clv_positive_rate": (round(sum(1 for c in clvs if c > 0) / len(clvs), 4)
                               if clvs else None),
     }
+    directions = [r for r in staked if _get(r, "market") in ("HAD", "HAD_1H")
+                  and _get(r, "status") in (SETTLE_WON, SETTLE_LOST)]
+    correct = sum(_get(r, "status") == SETTLE_WON for r in directions)
+    out["direction_samples"] = len(directions)
+    out["direction_correct"] = correct
+    out["direction_accuracy"] = round(correct / len(directions), 4) if directions else None
     # 被门控拦截的盘口表现：用于回答「门控是在帮忙还是误杀」
     uw, ul = _wins(unpicked), _losses(unpicked)
     out["unpicked_n"] = len(unpicked)

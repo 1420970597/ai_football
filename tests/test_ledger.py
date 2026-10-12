@@ -1,15 +1,72 @@
 """Independent decisions, immutable timestamps and safe historical repairs."""
 import tempfile
+import json
 import threading
 import unittest
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import patch
 
 from core.settlement import settle_pick, split_line, summarise
+from core.live_model import MODEL_VERSION
 from service.ledger import DecisionLedger, LedgerEntry
 
 
 class LedgerRegressionTests(unittest.TestCase):
+    def test_changed_final_evidence_does_not_backdate_new_training_labels(self):
+        with tempfile.TemporaryDirectory() as root:
+            led = DecisionLedger(root)
+            led._append([self.entry(status='lost',ft_score=[1,0],settled_at='2026-01-01T14:00:00+00:00')])
+            led.settle({'m':{'ft':[2,1],'done':True}},regrade=True)
+            self.assertGreater(led.load()[0].settled_at,'2026-01-01T14:00:00+00:00')
+
+    def test_old_generation_never_drives_new_betting_or_algorithm_weights(self):
+        with tempfile.TemporaryDirectory() as root:
+            led = DecisionLedger(root)
+            led._append([self.entry('old',algorithm='economic_ensemble',trigger='live_recommendation',
+                         model_version='live-poisson-market-v1',status='won',pnl=1),
+                         self.entry('old-model',trigger='live_forecast',status='won',pnl=1,
+                         model_version='live-poisson-market-v1',settled_at='2026-01-02')])
+            self.assertEqual(led.recommendation_performance('OU','2.25','over')['hit_count'],0)
+            self.assertEqual(led.performance_evidence()['rows'],[])
+            led._append([self.entry('new',algorithm='economic_ensemble',trigger='live_recommendation',
+                         status='lost',pnl=-1)])
+            result = led.recommendation_performance('OU','2.25','over')
+            self.assertEqual(result['miss_count'],1)
+            self.assertEqual(result['roi'],-1)
+
+    def test_hot_evidence_imports_active_revisions_without_scanning_archive(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            entry = self.entry(algorithm='economic_ensemble', trigger='live_recommendation')
+            ledger._append([entry])
+            self.assertEqual(ledger.recommendation_performance('OU','2.25','over')['pending_count'], 1)
+            revised = replace(entry, status='won', pnl=1, updated_at='2026-01-02T00:00:00Z')
+            with ledger.path.open('a') as stream:
+                stream.write(json.dumps(revised.as_dict())+'\n')
+            with patch.object(ledger, '_files', side_effect=AssertionError('archive scan in execution')):
+                result = ledger.recommendation_performance('OU','2.25','over')
+            self.assertEqual(result['settled_samples'], 1)
+            self.assertEqual(result['hit_count'], 1)
+            self.assertEqual(result['pending_count'], 0)
+
+    def test_live_batch_retains_each_market_once_and_retries_failed_write(self):
+        from tests.test_live_expert import LiveExpertTests
+        from service.live_expert import LiveExpertService
+        hub = LiveExpertTests().hub()
+        row = LiveExpertService().compute(hub.decision_snapshot('m'), hub)
+        forecasts = row['evaluations'][0]['forecasts']
+        inputs = [{**row, 'algorithm': row['evaluations'][0]['algorithm'], 'forecast': f} for f in forecasts]
+        self.assertGreater(len(inputs), 1)
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            with patch.object(ledger, '_append', return_value=0):
+                with self.assertRaises(OSError):
+                    ledger.record_live_many(inputs)
+            self.assertEqual(ledger.record_live_many(inputs), len(inputs))
+            self.assertEqual(ledger.record_live_many(inputs), 0)
+            self.assertEqual(len(ledger.load()), len(inputs))
+
     def test_numeric_quarters_equal_split_notation(self):
         for n in range(-16, 17):
             line = n / 4
@@ -31,7 +88,7 @@ class LedgerRegressionTests(unittest.TestCase):
 
     def entry(self, identity='a', **kwargs):
         values = dict(at='2026-01-01T12:00:00+00:00', match_id='m', market='OU',
-                      line='2.25', outcome='over', odds=2, is_pick=True, decision_id=identity)
+                      line='2.25', outcome='over', odds=2, is_pick=True, decision_id=identity, model_version=MODEL_VERSION)
         values.update(kwargs)
         return LedgerEntry(**values)
 

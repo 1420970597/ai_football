@@ -226,6 +226,7 @@ class ValuationService:
         self._index_cache: Optional[List[Dict[str, Any]]] = None
         self._index_at: float = 0.0
         self._cache_lock = threading.RLock()
+        self._match_snap_cache: Dict[str, Tuple[tuple, List[OddsSnapshot]]] = {}
 
         if source_obj is not None:
             self.source = source_obj
@@ -624,15 +625,21 @@ class ValuationService:
         要逐场调用（实测 74 场 × 6.5 万条 ≈ 480 万次比较）。
         索引与缓存同生命周期，任何重建/合并都会同步维护。
         """
-        allsnaps = self._all_snapshots()
+        # A single match read must never deserialize every retained match.
+        base = self.store.root / safe_name(self.source.display_source)
+        directories = sorted(base.glob('*/' + safe_name(match_id) + '_*'))
+        stamp = tuple((str(d), (d / '_index.json').stat().st_mtime_ns)
+                      for d in directories if (d / '_index.json').is_file())
         with self._cache_lock:
-            idx = self._snap_by_match
-            cache = self._snap_cache
-        if idx is None or cache is not allsnaps:
-            snaps = [s for s in allsnaps if s.match_id == match_id]
-        else:
-            snaps = [allsnaps[i] for i in idx.get(match_id, ())]
+            hit = self._match_snap_cache.get(match_id)
+            if hit is not None and hit[0] == stamp:
+                return list(hit[1])
+        snaps = [s for directory in directories for s in self.store._load_dir(directory)]
         snaps.sort(key=lambda s: s.captured_at)
+        with self._cache_lock:
+            if len(self._match_snap_cache) >= 128:
+                self._match_snap_cache.pop(next(iter(self._match_snap_cache)))
+            self._match_snap_cache[match_id] = (stamp, snaps)
         return snaps
     #: 遗留市场名 → 规范市场名（既有 output JSON 用 1X2/AH，
     #: 新目录用 HAD/HHAD(line)。不做这层映射会导致
@@ -1239,16 +1246,12 @@ class ValuationService:
                 # 陈旧但可用：立即返回，后台刷新（不阻塞调用方）
                 self._spawn_stats_refresh()
                 return cached
-            # 首次（无任何缓存）：**持锁**同步算一次。
-            #
-            # ⚠️ 必须在锁内（本项目测试真实抓到过回归）：若把计算放到锁外，
-            # 冷启动时 8 个并发请求会**同时**全盘扫描（实测 6~8 次），
-            # 正是当初 CPU 吃满的同一类错误。首次只发生在启动阶段，
-            # 让其余线程短暂等待是合理的。
-            stats = self.store.stats()
-            self._stats_cache = stats
-            self._stats_at = time.monotonic()
-            return stats
+            # Cold startup also returns immediately. A million retained files
+            # make an initial synchronous scan take minutes, holding this lock
+            # and blocking health probes and snapshot cache readers together.
+            self._spawn_stats_refresh()
+            return {'root': str(self.store.root), 'snapshot_files': None,
+                    'statistics_state': 'loading'}
 
     def _spawn_stats_refresh(self) -> None:
         """后台刷新存储统计（幂等：同一时刻只允许一个在跑）。"""

@@ -696,7 +696,9 @@ class TestNoArtificialCap(unittest.TestCase):
                 calls = [0]
                 def recv(calls=calls, hub=h) -> None:
                     calls[0] += 1
-                    if calls[0] > 1:
+                    if calls[0] == 1:
+                        hub._subscription_update = hub._read_subscription()
+                    else:
                         hub._stop.set()
                     return None
                 feed.recv.side_effect = recv
@@ -704,6 +706,23 @@ class TestNoArtificialCap(unittest.TestCase):
                     h._run()
                 self.assertEqual(h.subscribed(), expected)
                 self.assertEqual(feed.subscribe_odds.call_args.args[0], expected)
+
+    def test_reconnect_resubscribes_current_matches_without_slow_rest_refresh(self) -> None:
+        from types import SimpleNamespace
+        from collector.leyu_realtime import RealtimeHub
+
+        session_provider = SimpleNamespace(acquire=lambda: SimpleNamespace(
+            host="https://example.test", request_id="test", origin=""))
+        provider = mock.Mock(side_effect=AssertionError("REST on reconnect"))
+        h = RealtimeHub(session_provider, mids_provider=provider, resume=False)
+        h._subscribed = ["current", "finished"]
+        h._runtime_finished.add("finished")
+        feed = mock.Mock()
+        feed.recv.side_effect = lambda: h._stop.set()
+        with mock.patch("collector.leyu_realtime.LEYUFeed", return_value=feed):
+            h._run()
+        feed.subscribe_odds.assert_called_once_with(["current"])
+        provider.assert_not_called()
 
     def test_subscription_source_filters_soccer(self) -> None:
         """订阅源必须只取**进行中的足球**：乐鱼同网关也返回篮球/网球。

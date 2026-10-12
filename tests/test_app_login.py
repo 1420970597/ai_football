@@ -26,6 +26,7 @@ from collector.leyu_app_login import (
     LOGIN_ENV_SIGNATURE,
     LOGIN_ENV_STATE,
     LOGIN_PATH,
+    PENDING_RECOVERY_S,
     VERSION_TOO_LOW,
     AppLoginClient,
     AppLoginSessionProvider,
@@ -602,14 +603,18 @@ class TestPersistentLoginProtection(unittest.TestCase):
             self.assertEqual(self.client().login(), "example-token")
             self.assertEqual(send.call_count, 1)
 
-    def test_sent_timeout_never_retries_even_after_cooldown(self):
-        with mock.patch("urllib.request.urlopen", side_effect=TimeoutError()) as send:
+    def test_sent_timeout_retries_only_after_recovery_window(self):
+        with mock.patch("time.time", return_value=1000), \
+                mock.patch("urllib.request.urlopen", side_effect=TimeoutError()) as send:
             with self.assertRaises(SessionError):
                 self.client().login()
-            with mock.patch("time.time", return_value=10**10):
+            with mock.patch("time.time", return_value=1000 + PENDING_RECOVERY_S - 1):
                 with self.assertRaisesRegex(SessionError, "结果不明"):
                     self.client().login()
-            self.assertEqual(send.call_count, 1)
+            with mock.patch("time.time", return_value=1000 + PENDING_RECOVERY_S + 1):
+                with self.assertRaises(SessionError):
+                    self.client().login()
+            self.assertEqual(send.call_count, 2)
 
     def test_unparseable_or_missing_token_responses_preserve_pending(self):
         for index, raw in enumerate((b"not json", b"[]", b'{}',
@@ -662,6 +667,23 @@ class TestPersistentLoginProtection(unittest.TestCase):
             client.guard.record(state, "pending")
         with mock.patch("urllib.request.urlopen") as send:
             with self.assertRaisesRegex(SessionError, "结果不明"):
+                self.client().login()
+        send.assert_not_called()
+
+    def test_stale_pending_recovers_once_after_safety_window(self):
+        """进程崩溃留下的旧 pending 不能永久锁死自动续期。"""
+        client = self.client()
+        with mock.patch("time.time", return_value=1000):
+            with client.guard.locked() as state:
+                client.guard.record(state, "pending")
+        response = self.response(token="recovered-token")
+        with mock.patch("time.time", return_value=1000 + 15 * 60 + 1), \
+                mock.patch("urllib.request.urlopen", return_value=response) as send:
+            self.assertEqual(client.login(), "recovered-token")
+        self.assertEqual(send.call_count, 1)
+        with mock.patch("time.time", return_value=1000 + 15 * 60 + 1), \
+                mock.patch("urllib.request.urlopen") as send:
+            with self.assertRaisesRegex(SessionError, "频繁"):
                 self.client().login()
         send.assert_not_called()
 

@@ -19,6 +19,9 @@ from core.market_labels import (
     describe_market,
     format_market,
     format_pick,
+    format_raw_market,
+    normalize_market_name,
+    normalize_outcome_label,
     parse_market_code,
 )
 
@@ -119,6 +122,12 @@ class TestFormatMarket(unittest.TestCase):
         """展示层不能因为陌生盘口就崩掉。"""
         out = format_market("WEIRD(9)", "x")
         self.assertIn("WEIRD", out)
+
+    def test_english_upstream_fields_are_localized(self) -> None:
+        self.assertEqual(normalize_outcome_label("Over"), "大")
+        self.assertEqual(normalize_outcome_label("away"), "客队")
+        self.assertEqual(normalize_market_name("Both Teams To Score", "RAW_998"), "其他玩法（RAW_998）")
+        self.assertEqual(format_raw_market("RAW_998", "yes", market_name="双方进球"), "双方进球是")
 
     def test_format_pick_is_alias(self) -> None:
         self.assertEqual(format_pick("OU_1H(1.5)", "over", "1.5"),

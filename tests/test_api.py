@@ -8,14 +8,16 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import shutil
 import tempfile
 import unittest
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from api.app import ApiApp, BadRequest, NotFound, create_app
+from api.app import ApiApp, BadRequest, NotFound, _Handler, create_app
 from core.models import OddsSnapshot
 from datetime import datetime, timezone
 from service.valuation import LEYU_SOURCE_NAME
@@ -41,6 +43,31 @@ def build_app() -> ApiApp:
 def call(app, verb, path, body=None, q=None):
     query = {k: [str(v)] for k, v in (q or {}).items()}
     return app.dispatch(verb, path, query, body or {})
+
+
+class TestPostgresJSONResponse(unittest.TestCase):
+    def handler(self):
+        handler = object.__new__(_Handler)
+        handler.wfile = io.BytesIO()
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        return handler
+
+    def test_decimal_aggregate_response_preserves_json_numbers(self):
+        handler = self.handler()
+        handler._send(200, {'overall': {'stake_units': Decimal('3.0'),
+                                       'accuracy': Decimal('0.6667')}})
+        data = json.loads(handler.wfile.getvalue())
+        self.assertEqual(data['overall']['stake_units'], 3)
+        self.assertEqual(data['overall']['accuracy'], .6667)
+        handler.send_response.assert_called_once_with(200)
+
+    def test_json_response_still_rejects_nonfinite_and_unknown_values(self):
+        with self.assertRaises(ValueError):
+            self.handler()._send(200, {'value': Decimal('NaN')})
+        with self.assertRaises(TypeError):
+            self.handler()._send(200, {'value': object()})
 
 
 class TestHealth(unittest.TestCase):

@@ -1,0 +1,68 @@
+{
+  "checked_at": "2026-10-11T05:11:00.433468+00:00",
+  "scope": "research scripts, formulas, artifacts and rendering; not model accuracy improvement or production integration",
+  "checks": [
+    {
+      "command": "./scripts/cpu-limited.sh run -- python3 reports/decision-model-accuracy/scripts/probe_current_model.py",
+      "exit_code": 0,
+      "result": "30 features; 2s/600s histories equal; HAD top1 false while per-direction accuracy 2/3"
+    },
+    {
+      "command": "./scripts/cpu-limited.sh run -- python3 -m unittest discover -s reports/decision-model-accuracy/scripts -p 'test_*.py' -v",
+      "exit_code": 0,
+      "result": "6 tests passed"
+    },
+    {
+      "command": "python3 -m py_compile reports/decision-model-accuracy/scripts/*.py",
+      "exit_code": 0
+    },
+    {
+      "command": "./scripts/cpu-limited.sh run -- python3 - (py_compile root/search_tools/web-entry/report scripts)",
+      "exit_code": 0,
+      "result": "5 existing files compiled in frozen worktree"
+    },
+    {
+      "command": "./scripts/cpu-limited.sh run -- /root/.pi-lens/pip-tools/bin/ruff check reports/decision-model-accuracy/scripts",
+      "exit_code": 0,
+      "result": "All checks passed"
+    },
+    {
+      "command": "./scripts/cpu-limited.sh run -- /root/.pi-lens/pip-tools/bin/mypy --follow-imports=silent --ignore-missing-imports reports/decision-model-accuracy/scripts",
+      "exit_code": 0,
+      "result": "No issues in 4 source files; report scripts only"
+    },
+    {
+      "command": "docker run --rm --cpus=2 --memory=512m --memory-swap=512m -v /tmp/ai-football-task43:/w -v /usr/share/fonts/truetype/wqy:/usr/share/fonts/truetype/wqy:ro -w /w python:3.12-slim sh -c 'pip install -q matplotlib==3.10.7 && python3 reports/decision-model-accuracy/scripts/make_figures.py'",
+      "exit_code": 0,
+      "result": "3 figures / 4 quantitative CSVs; Chinese glyphs visually checked"
+    },
+    {
+      "command": "python3 reports/decision-model-accuracy/scripts/md_to_html.py reports/decision-model-accuracy/REPORT.md reports/decision-model-accuracy/REPORT.html",
+      "exit_code": 0,
+      "result": "49.0KB; shared renderer"
+    },
+    {
+      "command": "Playwright task43-research run-code: final online reload and DOM inspection",
+      "exit_code": 0,
+      "result": {
+        "mermaid_svg_count": 3,
+        "images_loaded": 3,
+        "horizontal_overflow": false
+      }
+    },
+    {
+      "command": "Playwright task43-research run-code: block CDN and reload final report",
+      "exit_code": 0,
+      "result": {
+        "readable_fallback_blocks": 3,
+        "images_loaded": true
+      }
+    }
+  ],
+  "notes": [
+    "Initial script mypy check found three heterogeneous-dictionary typing errors; explicit annotations fixed them and final command passed.",
+    "One temporary HTTP preview session stopped; detached localhost-only server restored it and final checks passed.",
+    "Preview favicon.ico 404 is unrelated to report assets.",
+    "Some publisher sources unavailable; fetch failures and irrelevant search hits are recorded rather than cited."
+  ]
+}
