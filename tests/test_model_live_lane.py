@@ -210,6 +210,53 @@ class ModelLiveLaneTests(unittest.TestCase):
                 worker._reload_settings()
                 self.assertNotIn('settings_error',worker._status)
 
+    def test_first_pg_settings_failure_or_missing_document_prevents_threads_and_training(self):
+        for result in (TimeoutError('PG unavailable'),None):
+            with self.subTest(result=result), TemporaryDirectory(
+                    dir=Path.cwd()/'output',prefix='lane-start-settings-') as directory:
+                worker,_ = self.setup_worker(directory)
+                with patch('service.model_service.projection_target_from_env',return_value=object()), \
+                        patch('service.model_service.load_runtime_settings',side_effect=[result]), \
+                        patch('service.model_service.prepare_postgres_schema') as schema, \
+                        patch.object(worker,'_initialize_live_cursor') as initialize:
+                    with self.assertRaisesRegex(RuntimeError,'首次PG设置加载失败'):
+                        worker.start()
+                self.assertIsNone(worker._settings_version)
+                self.assertIsNone(worker._thread)
+                self.assertIsNone(worker._live_thread)
+                self.assertIsNone(worker._persist_thread)
+                self.assertIsNone(worker._process)
+                self.assertTrue(worker._status['settings_error'])
+                schema.assert_not_called()
+                initialize.assert_not_called()
+
+    def test_pg_start_applies_saved_settings_and_preserves_them_on_later_pg_failure(self):
+        with TemporaryDirectory(dir=Path.cwd()/'output',prefix='lane-start-saved-') as directory:
+            worker,_ = self.setup_worker(directory)
+            saved = {'version':7,'settings':{'model_training_enabled':False,
+                'model_shadow_enabled':False,'decision_mode':'hybrid','model_blend_weight':.7}}
+            with patch('service.model_service.projection_target_from_env',return_value=object()), \
+                    patch('service.model_service.load_runtime_settings',side_effect=[saved,TimeoutError('PG')]), \
+                    patch('service.model_service.prepare_postgres_schema'), \
+                    patch.object(worker,'_initialize_live_cursor'), \
+                    patch('service.model_service.threading.Thread') as thread:
+                worker.start()
+                self.assertEqual(thread.call_count,3)
+                self.assertFalse(worker.cfg.model_training_enabled)
+                self.assertFalse(worker.cfg.model_shadow_enabled)
+                self.assertEqual(worker.cfg.decision_mode,'hybrid')
+                self.assertEqual(worker.cfg.model_blend_weight,.7)
+                self.assertEqual(worker._settings_version,7)
+                worker._thread = worker._live_thread = worker._persist_thread = None
+                worker._next_settings_reload = 0
+                worker.start()
+                self.assertEqual(thread.call_count,6)
+                self.assertFalse(worker.cfg.model_training_enabled)
+                self.assertFalse(worker.cfg.model_shadow_enabled)
+                self.assertEqual(worker.cfg.decision_mode,'hybrid')
+                self.assertEqual(worker._settings_version,7)
+                self.assertIn('PG',worker._status['settings_error'])
+
     def test_initial_tail_skips_old_shadow_and_partial_member_retries(self):
         with TemporaryDirectory(dir=Path.cwd()/'output',prefix='lane-tail-') as directory:
             worker,ledger = self.setup_worker(directory)
