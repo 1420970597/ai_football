@@ -100,3 +100,11 @@ flowchart LR
 冻结465文件的全量验证：1578 unittest、14 skipped、91.221秒、mypy116文件、ruff、compileall退出码均0。日志 `output/pg-cleanup/pg-settings-final-frozen-validation-recheck.log`。后续outbox恢复目录fsync补丁另跑19项live lane测试及单模块mypy/ruff，退出0。7组浏览器流程退出0；生产域名真实浏览器已打开100条战绩，配置后端为postgres、第43版，无页面异常或写入请求。
 
 容器重建完成后API、模型、web、Redis健康。旧影子积压保留恢复，PG确认总时长继续暴露历史等待；不能把计算延迟低当成端到端已达标。大表原23,050,041行COPY已完成，metadata-only续验先验证当前DB与WAL完整SHA256同固定备份一致，保留旧/新身份审计；逐行目标核验继续，成功前不得删除本机源。远程备份13个成员完整字节、整个压缩tar SHA、8表schema与边界读取均已通过；行数依据字节一致的原源审计，并未重新计算全部表行数。
+
+## SQLite 清理完成（2026-10-12）
+
+`model-inputs-cutover-20261012` 已完成 23,050,041 / 23,050,041 条完整字段 SHA256 核验，missing、content mismatch、lagging revision 全为 0；metadata-only 续验记录了固定备份 DB/WAL 完整 SHA 与 WAL ctime 变化审计。其 UNLOGGED stage/state 已由核验工具在报告持久化后精准删除，独立 `to_regclass` 复核均为 `NULL`。
+
+远程备份 13 个成员与整个压缩包 SHA256 通过，压缩包摘要为 `0d3b3df5de4fa9f9d86bd166f40b9b18f06b7d5a7481cdfb555352b5cf5d096b`。本机白名单中的 5 个 SQLite 数据库及其 WAL/SHM（共15个路径）已不存在；原始 `jsonl.gz` 走势与运行日志仍保留。清理后的 API health 为 200/healthy，模型服务、归档 worker、Redis 和控制台容器继续运行，data-model 未重新创建 SQLite。最终证据为 `output/pg-cleanup/sqlite-post-cleanup-verification.json`。
+
+清理报告中的“释放字节”不以一次 `df` 差值冒充精确值：文件可能存在已删除但仍打开的句柄，且同机其他服务同时写盘；验收依据是白名单路径缺失、备份完整性、stage 清理、服务健康和连续复查。
