@@ -92,3 +92,11 @@ flowchart LR
 影子标签使用首次有效终态结果的实际可用时间防泄漏，最新有效修订用于支付结算；首次时间不依赖源 revision_order。已结回放在写预测前过滤，避免挤出当前窗口。PG 16.15 真实只读子集和非单调修订、非法日期、无时区/非终态标签 SQL 验证退出 0。
 
 最新 API、模型和归档 worker 镜像已发布，三个服务仍使用 `DATABASE_BACKEND=postgres`；API/model-worker/web/Redis healthy。线上当前候选版本 `20261012T060805554349Z`、60 个参数、未晋级；新影子窗口从 312 条待结增至 8312 条（观测快照），无有效已结时正确率为 null。存储汇总已返回 S3 文件、逻辑字节和对象字节，worker 阶段字段没有再覆盖这些数字。账户、推荐、设置接口均实测 HTTP 200 / <0.34 秒。这些是该次测量，不是延迟保证或模型获利证据。
+
+## 2026-10-12 最新发布核验
+
+设置已迁至 PG `runtime_settings`，第43版的44个公共字段在迁移前后和容器重建后规范JSON SHA256完全一致。公共摘要 `50f5c9d9f521d0c2bb0f1c6d69067a9b9563c598578856b13fed03de8a087afe`，不包含密钥原文；完整配置包含密钥但不回显。已有开关不会被 `AUTO_ENABLE_BETTING` 覆盖。
+
+冻结465文件的全量验证：1578 unittest、14 skipped、91.221秒、mypy116文件、ruff、compileall退出码均0。日志 `output/pg-cleanup/pg-settings-final-frozen-validation-recheck.log`。后续outbox恢复目录fsync补丁另跑19项live lane测试及单模块mypy/ruff，退出0。7组浏览器流程退出0；生产域名真实浏览器已打开100条战绩，配置后端为postgres、第43版，无页面异常或写入请求。
+
+容器重建完成后API、模型、web、Redis健康。旧影子积压保留恢复，PG确认总时长继续暴露历史等待；不能把计算延迟低当成端到端已达标。大表原23,050,041行COPY已完成，metadata-only续验先验证当前DB与WAL完整SHA256同固定备份一致，保留旧/新身份审计；逐行目标核验继续，成功前不得删除本机源。远程备份13个成员完整字节、整个压缩tar SHA、8表schema与边界读取均已通过；行数依据字节一致的原源审计，并未重新计算全部表行数。
