@@ -1020,6 +1020,10 @@ class DecisionLedger:
             else:
                 out.update(entries=[], entries_total=None, entries_shown=None,
                            next_offset=None, entries_at=None, entries_status='loading')
+            if page is not None and out.get('entries_total') is None and snapshot is not None:
+                overall = snapshot.get('overall')
+                if isinstance(overall, Mapping) and overall.get('total') is not None:
+                    out['entries_total'] = overall['total']
             stale = self._history_stale(page, 'entries_at', HISTORY_PAGE_TTL_S)
             now = time.monotonic()
             if (stale and page_key not in self._history_pages_refreshing and
@@ -1071,32 +1075,22 @@ class DecisionLedger:
                     reader.connection.execute("SET LOCAL lock_timeout='3s'").close()
                     reader.connection.execute('SET LOCAL max_parallel_workers_per_gather=0').close()
                     self._history_read_budget(reader, deadline)
-                    # Loading the persisted filter snapshot also stays in the
-                    # background. A cold HTTP response never invents totals.
-                    snapshot = self._cached_history_snapshot(reader, cache_key, where, params,
-                        portfolio_where, portfolio_params, competition_type, days)
-                    refresh_statistics = snapshot.pop('_refresh_statistics', False)
-                    if refresh_statistics:
-                        self._refresh_history_snapshot(db, cache_key, where, params, portfolio_where,
-                                                       portfolio_params, competition_type, days)
-                    self._history_read_budget(reader, deadline)
-                    table = reader._statistics_table()
-                    self._history_read_budget(reader, deadline)
-                    count_row = reader.connection.execute('SELECT count(*) FROM ' + table +
-                                                           ' WHERE ' + where, params).fetchone()
-                    if count_row is None:
-                        raise ValueError('历史记录总数不可用')
-                    total = int(count_row[0])
-                    self._history_read_budget(reader, deadline)
-                    entries = [LedgerEntry.from_dict(row).as_dict()
-                               for row in reader.entries(where, params, limit, offset)]
+                    # A bounded page must be available before any aggregate or
+                    # persisted statistics lookup. One extra row proves whether
+                    # another page exists without a full filtered COUNT scan.
+                    rows = reader.entries(where, params, limit+1, offset) if limit > 0 else []
+                    has_more = limit > 0 and len(rows) > limit
+                    entries = [LedgerEntry.from_dict(row).as_dict() for row in rows[:limit]]
+                    total = len(entries) if offset == 0 and limit > 0 and not has_more else None
                     page = dict(entries=entries, entries_total=total, entries_shown=len(entries),
-                        next_offset=offset+len(entries) if offset+len(entries)<total else None,
+                        next_offset=offset+len(entries) if has_more else None,
                         entries_at=entries_at, entries_status='ready')
                 with self._history_cache_lock:
                     self._remember_history(self._history_pages, page_key, page)
                     self._history_page_errors.pop(page_key, None)
                     self._history_page_retry_at.pop(page_key, None)
+                self._refresh_history_snapshot(db, cache_key, where, params, portfolio_where,
+                                               portfolio_params, competition_type, days)
             except Exception as exc:
                 with self._history_cache_lock:
                     self._history_page_errors[page_key] = type(exc).__name__
@@ -1212,6 +1206,10 @@ class DecisionLedger:
                         reader.connection.execute("SET LOCAL statement_timeout='60s'").close()
                         reader.connection.execute("SET LOCAL lock_timeout='3s'").close()
                         reader.connection.execute('SET LOCAL max_parallel_workers_per_gather=0').close()
+                        cached = self._cached_history_snapshot(reader, cache_key, where, params,
+                            portfolio_where, portfolio_params, competition_type, days)
+                        if not cached.pop('_refresh_statistics', False):
+                            continue
                         snapshot = self._history_snapshot(reader, where, params, portfolio_where,
                                                           portfolio_params, competition_type, days)
                 from store.postgres import connect

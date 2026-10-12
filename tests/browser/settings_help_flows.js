@@ -3,7 +3,7 @@ async (page) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   let mode = 'loading', saved;
-  const fixture = {version:1, persistent:true, algorithms:{
+  const fixture = {version:1, persistent:true, persistence_backend:"postgres", algorithms:{
     poisson_market:'当前盘口 Poisson', poisson_time_decay:'时间衰减 Poisson', devig_consensus:'去水共识',
     economics_risk_adjusted:'经济学风控', microstructure_adjusted:'盘口微观结构'},
     capabilities:{betting:{execution_supported:true,reason:'测试配置',configured_enabled:false}},
@@ -39,6 +39,7 @@ async (page) => {
   assert(await page.locator('#settings-save').isDisabled(), 'save disabled while settings load');
   await page.locator('#setting-decision_mode').waitFor();
   mode = 'normal';
+  assert((await page.locator('#settings-version').textContent()).includes('已保存至 PostgreSQL · 重启保留'), 'PG persistence visible');
   const controls = await page.locator('#settings-fields input,#settings-fields select').count();
   assert(await page.locator('#settings-fields .setting-help').count() === controls, 'every setting has one help icon');
   assert(await page.evaluate(() => Array.from(document.querySelectorAll('#settings-fields .setting-help')).every(button =>

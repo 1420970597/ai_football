@@ -30,7 +30,7 @@ class ModelServiceTests(unittest.TestCase):
                 self.assertEqual(len(worker._inputs), 1)
                 self.assertEqual(len(worker._shadow), 1)
                 worker._flush_shadow()
-            self.assertEqual(inputs.call_count, 2)
+            self.assertEqual(inputs.call_count, 1)
             self.assertEqual(predictions.call_count, 2)
             self.assertFalse(worker._inputs)
             self.assertFalse(worker._shadow)

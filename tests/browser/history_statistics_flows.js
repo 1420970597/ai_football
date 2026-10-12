@@ -17,6 +17,7 @@ async page => {
     if (mode === 'loading') Object.assign(data,{entries:[],entries_status:'loading',entries_total:null,overall:null,settled:null,portfolio_summary:null,statistics_status:'loading',statistics_refreshing:true,statistics_at:''});
     if (mode === 'page-error') Object.assign(data,{entries:[],entries_status:'error',entries_error:'后台查询暂时失败',overall:null,statistics_status:'loading'});
     if (mode === 'page-ready') Object.assign(data,{entries_status:'ready',entries_at:'2026-10-12T08:05:00Z'});
+    if (mode === 'unknown-total') Object.assign(data,{entries_total:null,next_offset:100,entries_status:'ready',entries_at:'2026-10-12T08:05:00Z',overall:null,statistics_status:'loading',statistics_refreshing:true,statistics_at:''});
     if (mode === 'stale') Object.assign(data,{statistics_refreshing:true,statistics_stale:true,legacy_identity_rows:2});
     if (mode === 'invalid-time') data.statistics_at = 'invalid';
     if (mode === 'empty') Object.assign(data,{entries:[],entries_total:0,overall:{pending:2},statistics_at:''});
@@ -35,6 +36,11 @@ async page => {
   mode='page-ready';await page.locator('#history-rows').filter({hasText:'测试主队'}).waitFor();
   assert(historyRequests>loadingRequests,'loading state automatically polls bounded page cache');
   assert((await page.locator('#history-notice').textContent()).includes('记录页时点：'),'row snapshot time shown');
+  mode='unknown-total';await page.locator('#history-refresh').click();
+  await page.locator('#history-count').filter({hasText:'— 条'}).waitFor();
+  assert((await page.locator('#history-rows').textContent()).includes('测试主队'),'unknown total does not hide loaded entries');
+  assert(await page.locator('#history-next').isEnabled(),'sentinel enables next page before aggregate total exists');
+  assert(!(await page.locator('#history-count').textContent()).includes('0 条'),'unknown total is not reported as zero');
   mode='page-error';await page.locator('#history-refresh').click();
   await page.locator('#history-notice.error').filter({hasText:'后台查询暂时失败'}).waitFor();
   assert(!(await page.locator('#history-rows').textContent()).includes('测试主队'),'different cold/error page does not preserve wrong previous rows');

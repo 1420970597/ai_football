@@ -19,6 +19,7 @@ import math
 import os
 from pathlib import Path
 import sqlite3
+import threading
 from typing import Any, Iterator, Literal, Protocol, Sequence
 from urllib.parse import quote, urlsplit
 
@@ -222,6 +223,47 @@ def writable_connection(target: ProjectionTarget, *, driver: Any | None = None) 
         connection.close()
 
 
+_PERSISTENT_WRITER = threading.local()
+
+
+def close_persistent_writer() -> None:
+    connection = getattr(_PERSISTENT_WRITER,'connection',None)
+    _PERSISTENT_WRITER.connection = None
+    if connection is not None:
+        connection.close()
+
+
+@contextmanager
+def persistent_writer(target: ProjectionTarget) -> Iterator[Any]:
+    """Thread-owned live writer; reconnect on failure, never share sessions."""
+    if target.backend != 'postgresql':
+        raise ProjectionConfigError('实时持久化连接必须是PostgreSQL')
+    connection = getattr(_PERSISTENT_WRITER,'connection',None)
+    if getattr(_PERSISTENT_WRITER,'target',None) != target:
+        close_persistent_writer()
+        connection = None
+    try:
+        if connection is None:
+            connection = _connect_postgres(target)
+            _PERSISTENT_WRITER.connection = connection
+            _PERSISTENT_WRITER.target = target
+            cursor = connection.cursor()
+            try:
+                cursor.execute("SELECT set_config('statement_timeout', %s, false)",
+                               (str(max(1,round(target.statement_timeout_s*1000))),))
+            finally:
+                cursor.close()
+        yield connection
+        connection.commit()
+    except Exception:
+        try:
+            if connection is not None:
+                connection.rollback()
+        finally:
+            close_persistent_writer()
+        raise
+
+
 @contextmanager
 def readonly_snapshot(target: ProjectionTarget, *, driver: Any | None = None) -> Iterator[Any]:
     """Open one repeatable read snapshot for a bounded training pass."""
@@ -355,6 +397,44 @@ CREATE TABLE IF NOT EXISTS model_predictions (
 )
 """
 
+SHADOW_LABEL_TIMESTAMP_PATTERN = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$'
+SHADOW_LABEL_SCORE_PATTERN = (r'^[[:space:]]*\[[[:space:]]*(100|[0-9]{1,2})[[:space:]]*,'
+                              r'[[:space:]]*(100|[0-9]{1,2})[[:space:]]*\][[:space:]]*$')
+SHADOW_LABEL_EPOCH_FUNCTION = """
+CREATE OR REPLACE FUNCTION shadow_label_available_epoch(value TEXT)
+RETURNS DOUBLE PRECISION LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE
+SET TimeZone TO 'UTC' SET DateStyle TO 'ISO, YMD' AS $$
+SELECT CASE WHEN value ~ '%s' AND pg_input_is_valid(value,'timestamp with time zone')
+THEN EXTRACT(EPOCH FROM value::timestamptz)::double precision ELSE NULL END
+$$
+""" % SHADOW_LABEL_TIMESTAMP_PATTERN
+
+SHADOW_LABEL_INDEXES = tuple(
+    f'CREATE INDEX IF NOT EXISTS idx_{table}_shadow_available ON {table} '
+    '(shadow_label_available_epoch(available_at),revision_id,match_id) '
+    "WHERE status IN ('won','lost','half_won','half_lost','push','void') "
+    'AND shadow_label_available_epoch(available_at) IS NOT NULL '
+    "AND ft_score ~ '" + SHADOW_LABEL_SCORE_PATTERN + "'"
+    for table in ('model_labels','label_revisions'))
+
+_PREPARED_SCHEMA_LOCATIONS: set[str] = set()
+_SCHEMA_PREPARATION_LOCK = threading.Lock()
+
+
+def prepare_postgres_schema(target: ProjectionTarget) -> None:
+    """Commit DDL once, separately from normal input/prediction upserts.
+
+    Holding the schema advisory lock until a large input batch commits makes
+    an independent live writer wait for historical replay. Successful setup
+    is cached per process/DSN; failures remain retryable.
+    """
+    with _SCHEMA_PREPARATION_LOCK:
+        if target.location in _PREPARED_SCHEMA_LOCATIONS:
+            return
+        with writable_connection(target) as connection:
+            ensure_postgres_schema(connection)
+        _PREPARED_SCHEMA_LOCATIONS.add(target.location)
+
 
 def ensure_postgres_schema(connection: Any) -> None:
     """Create the model projection tables and indexes on a writer connection."""
@@ -370,6 +450,10 @@ def ensure_postgres_schema(connection: Any) -> None:
         for statement in (POSTGRES_INPUTS_SCHEMA, POSTGRES_LABELS_SCHEMA,
                           POSTGRES_LABEL_REVISIONS_SCHEMA, POSTGRES_PREDICTIONS_SCHEMA):
             cursor.execute(statement)
+        # Only explicit ISO timestamps with a numeric offset/Z are admitted.
+        # Their epoch is independent of session TimeZone; marking this safe
+        # wrapper immutable permits a true indexed chronological label cursor.
+        cursor.execute(SHADOW_LABEL_EPOCH_FUNCTION)
         for column, kind in (("repair_status", "TEXT"), ("original_x_sha256", "TEXT"),
                              ("original_probability", "DOUBLE PRECISION"),
                              ("decision_received_at_ms", "DOUBLE PRECISION"),
@@ -390,6 +474,8 @@ def ensure_postgres_schema(connection: Any) -> None:
             "CREATE INDEX IF NOT EXISTS idx_label_revisions_match_time ON label_revisions "
             "(match_id, available_at)",
         ):
+            cursor.execute(statement)
+        for statement in SHADOW_LABEL_INDEXES:
             cursor.execute(statement)
     finally:
         cursor.close()

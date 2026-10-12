@@ -11,12 +11,73 @@ from store.training_projection import (
     ProjectionTarget,
     fetch_batches,
     ensure_postgres_schema,
+    prepare_postgres_schema,
     readonly_connection,
     readonly_snapshot,
 )
 
 
 class TrainingProjectionTests(unittest.TestCase):
+    def test_live_writer_reuses_thread_connection_and_reconnects_after_failed_commit(self):
+        import store.training_projection as projection
+        events = []
+        class Cursor:
+            def execute(self,*args):
+                events.append('configure')
+            def close(self):
+                pass
+        class Connection:
+            fail = False
+            def cursor(self):
+                return Cursor()
+            def commit(self):
+                events.append('commit')
+                if self.fail:
+                    raise TimeoutError('confirmation lost')
+            def rollback(self):
+                events.append('rollback')
+            def close(self):
+                events.append('close')
+        first,second = Connection(),Connection()
+        target = ProjectionTarget.parse('postgresql://live-writer-test/model')
+        with patch.object(projection,'_PERSISTENT_WRITER',types.SimpleNamespace()), \
+                patch.object(projection,'_connect_postgres',side_effect=[first,second]) as connect:
+            with projection.persistent_writer(target) as con:
+                self.assertIs(con,first)
+            with projection.persistent_writer(target) as con:
+                self.assertIs(con,first)
+            first.fail = True
+            with self.assertRaises(TimeoutError):
+                with projection.persistent_writer(target):
+                    pass
+            with projection.persistent_writer(target) as con:
+                self.assertIs(con,second)
+            projection.close_persistent_writer()
+            self.assertEqual(connect.call_count,2)
+        self.assertEqual(events.count('configure'),2)
+        self.assertEqual(events.count('rollback'),1)
+        self.assertEqual(events.count('close'),2)
+
+    def test_schema_preparation_commits_once_and_failed_setup_remains_retryable(self):
+        from contextlib import contextmanager
+        import store.training_projection as projection
+        events = []
+        @contextmanager
+        def writer(target):
+            events.append('begin')
+            yield object()
+            events.append('commit')
+        target = ProjectionTarget.parse('postgresql://schema-cache-test/model')
+        with patch.object(projection,'_PREPARED_SCHEMA_LOCATIONS',set()), \
+                patch.object(projection,'writable_connection',side_effect=writer), \
+                patch.object(projection,'ensure_postgres_schema',side_effect=[TimeoutError('DDL'),None]) as ddl:
+            with self.assertRaises(TimeoutError):
+                prepare_postgres_schema(target)
+            prepare_postgres_schema(target)
+            prepare_postgres_schema(target)
+        self.assertEqual(ddl.call_count,2)
+        self.assertEqual(events,['begin','begin','commit'])
+
     def test_postgres_schema_setup_is_serialized_and_reuses_migration_index(self):
         statements = []
 

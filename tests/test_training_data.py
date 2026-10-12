@@ -33,6 +33,46 @@ def decision():
 
 
 class TrainingDataTests(unittest.TestCase):
+    def test_postgres_insert_batches_are_bounded_and_parameterized(self):
+        from store.training_data import _insert_postgres_rows
+        calls = []
+        class Cursor:
+            def execute(self,sql,values):
+                calls.append((sql,values))
+        rows = [(str(i),"a'b") for i in range(513)]
+        _insert_postgres_rows(Cursor(),'model_predictions',('version','match_id'),rows,
+                              '(version,match_id) DO NOTHING')
+        self.assertEqual(len(calls),3)
+        self.assertEqual([len(values) for _,values in calls],[512,512,2])
+        self.assertFalse(any("a'b" in sql for sql,_ in calls))
+        self.assertEqual(calls[0][1][:2],('0',"a'b"))
+        with self.assertRaises(ValueError):
+            _insert_postgres_rows(Cursor(),'unsafe',('version',),[], '(version) DO NOTHING')
+
+    def test_prospective_persist_uses_same_pg_session_and_preserves_prediction(self):
+        from store.training_data import persist_prospective_predictions
+        from tests.test_shadow_observation import ShadowObservationTests
+        row = ShadowObservationTests().source_row()
+        connection = object()
+        class Cursor:
+            def close(self):
+                pass
+        class Connection:
+            def cursor(self):
+                return Cursor()
+        connection = Connection()
+        with patch('store.training_data.prepare_postgres_schema'), \
+                patch('store.training_data.persistent_writer',return_value=nullcontext(connection)) as writer, \
+                patch('store.training_data._shadow_label_subset',return_value={}) as labels, \
+                patch('store.training_data._insert_postgres_rows') as insert:
+            actual = persist_prospective_predictions(Path('ledger'),Path('shadow'),[row],
+                target=ProjectionTarget.parse('postgresql://fixture/model'))
+        self.assertEqual(actual,[row])
+        self.assertEqual(writer.call_count,1)
+        self.assertIs(labels.call_args.args[0],connection)
+        self.assertEqual(insert.call_args.args[3][0][10],row['probability'])
+        self.assertEqual(insert.call_args.args[3][0][11],row['predicted_at'])
+
     def postgres_audit(self, source_rows, estimate=(23_000_000, -.0001), *, max_per_match=40):
         statements = []
         columns = list(source_rows[0]) if source_rows else []

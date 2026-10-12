@@ -118,3 +118,38 @@ flowchart LR
 | 真实留痕 | `/ledger/history?cohort=prospective&type=real` | 首场4条、两算法各2条，0已结算，等待确认赛果；旧70条真实比赛建议暂无可核验比分 |
 
 生产静态资源已冻结；`output/deploy/current.compose.json` 指向本次版本。关键截图仅本地运行产物：`output/playwright/task30-production-{live,detail,history,settings}.png`。预览fixture未写入生产API或账本。LLM异步请求、过期版本隔离、错误/超时由单测验证；生产默认保持审核关闭，可在设置页启用。没有把新产生的概率包装成正确率，也没有补造旧比赛终场。
+
+## PostgreSQL 配置持久化（2026-10-12）
+
+启用 PostgreSQL 时，`runtime_settings` 表的 `runtime` 行是运行参数的唯一持久来源，完整 JSONB 参数与递增版本在同一事务保存。API 启动只在不存在该行时用现有 `runtime-settings.json` 初始化一次；已有 PG 参数始终优先，不再向本地 JSON 写入新版本。没有配置 PG 的部署保留原本地文件方式。
+
+```mermaid
+sequenceDiagram
+  participant UI as 设置页面
+  participant API as API 内存配置
+  participant PG as PostgreSQL runtime_settings
+  participant Model as 独立模型服务
+  API->>PG: 启动时初始化（仅不存在）并读取
+  PG-->>API: 已保存参数与版本
+  UI->>API: 参数补丁与预期版本
+  API->>PG: 条件更新版本并提交
+  PG-->>API: 成功或版本冲突
+  API-->>UI: 成功后应用，冲突要求重新读取
+  Model->>PG: 启动及后台定期读取
+```
+
+| 场景 | 行为 |
+| --- | --- |
+| 容器启动、重启或重建 | 加载 PG 中已保存的同一版本和参数 |
+| 已保存关闭自动投注 | 重启保持关闭；`AUTO_ENABLE_BETTING` 只初始化全新安装 |
+| 多实例同时修改 | PG 版本条件更新只允许一个成功，失败者刷新最新配置 |
+| 保存失败 | 不应用新参数，页面返回错误 |
+| API 启动读取 PG 失败 | 启动失败并报告错误，不静默回退默认投注参数 |
+| 模型服务暂时无法读取 PG | 保留最后已加载版本，报告同步错误并后台重试 |
+| 页面读取设置 | 仅读内存，不把远程 PG 延迟引入每次浏览器请求 |
+
+PG 中的完整配置包含密钥，公共接口仍仅返回密钥是否配置，不返回密钥内容。备份、日志与审计只记录版本及脱敏摘要。设置修改仍受现有字段校验约束。
+
+### 战绩冷启动查询
+
+记录页与统计独立：后台分页查询最多读取 `limit+1` 条记录，以额外一条确定是否存在下一页，不再在显示记录前运行全量 `COUNT(*)` 或读取持久统计缓存。总数尚不可用时返回 `entries_total=null`，前端显示“—”，允许依据 `next_offset` 翻页。统计完成后补充真实总数；首页已经没有下一页时可由实际返回记录数确定总数。零条请求不发起无上限明细扫描。错误和缓存时点继续显式显示。

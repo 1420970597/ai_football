@@ -18,7 +18,9 @@ from core.live_model import MODEL_VERSION
 from core.settlement import _score_of, settle_with_basis
 from store.training_projection import (
     ProjectionTarget,
-    ensure_postgres_schema,
+    SHADOW_LABEL_SCORE_PATTERN,
+    prepare_postgres_schema,
+    persistent_writer,
     projection_target_from_env,
     readonly_snapshot,
     writable_connection,
@@ -147,13 +149,28 @@ INPUT_COLUMNS = ('match_id', 'at', 'cutoff_ms', 'algorithm', 'market', 'line', '
                  'entry_score', 'settlement_basis', 'model_version', 'data_version',
                  'feature_version')
 
+POSTGRES_INSERT_BATCH_ROWS = 256
+
+
+def _insert_postgres_rows(cursor: Any, table: str, columns: tuple[str,...],
+                          rows: list[tuple[Any,...]], conflict: str) -> None:
+    """One bounded SQL roundtrip per batch, including psycopg2 deployments."""
+    if table not in ('model_inputs','model_predictions'):
+        raise ValueError('不支持的模型投影表')
+    placeholders = '('+','.join('%s' for _ in columns)+')'
+    for offset in range(0,len(rows),POSTGRES_INSERT_BATCH_ROWS):
+        batch = rows[offset:offset+POSTGRES_INSERT_BATCH_ROWS]
+        sql = ('INSERT INTO '+table+' ('+','.join(columns)+') VALUES '+
+               ','.join(placeholders for _ in batch)+' ON CONFLICT '+conflict)
+        cursor.execute(sql,tuple(value for row in batch for value in row))
+
 
 def _write_inputs_postgres(rows: list[dict[str, Any]], *, repair: bool,
                            target: ProjectionTarget) -> None:
     if target.backend != 'postgresql':
         raise ValueError('训练输入写入目标必须是 PostgreSQL')
+    prepare_postgres_schema(target)
     with writable_connection(target) as con:
-        ensure_postgres_schema(con)
         placeholders = ','.join('%s' for _ in INPUT_COLUMNS)
         columns = ','.join(INPUT_COLUMNS)
         action = ('DO UPDATE SET ' + ','.join(f'{name}=EXCLUDED.{name}' for name in INPUT_COLUMNS[1:])
@@ -163,7 +180,11 @@ def _write_inputs_postgres(rows: list[dict[str, Any]], *, repair: bool,
         cursor = con.cursor()
         try:
             values = [tuple(row.get(name) for name in INPUT_COLUMNS) for row in rows]
-            cursor.executemany(sql, values)
+            if repair:
+                cursor.executemany(sql, values)
+            else:
+                _insert_postgres_rows(cursor,'model_inputs',INPUT_COLUMNS,values,
+                                      '(match_id,at,algorithm,market,line,outcome) DO NOTHING')
         finally:
             cursor.close()
 
@@ -184,16 +205,13 @@ def write_predictions(path: Path, rows: Iterable[Mapping[str, Any]], *,
     if target is not None:
         if target.backend != 'postgresql':
             raise ValueError('训练预测写入目标必须是 PostgreSQL')
+        prepare_postgres_schema(target)
         with writable_connection(target) as con:
-            ensure_postgres_schema(con)
-            columns = ','.join(PREDICTION_COLUMNS)
-            placeholders = ','.join('%s' for _ in PREDICTION_COLUMNS)
-            sql = (f'INSERT INTO model_predictions ({columns}) VALUES ({placeholders}) '
-                   'ON CONFLICT (version,match_id,at,algorithm,market,line,outcome) DO NOTHING')
             cursor = con.cursor()
             try:
-                cursor.executemany(sql, [tuple(row.get(name) for name in PREDICTION_COLUMNS)
-                                         for row in values])
+                _insert_postgres_rows(cursor,'model_predictions',PREDICTION_COLUMNS,
+                    [tuple(row.get(name) for name in PREDICTION_COLUMNS) for row in values],
+                    '(version,match_id,at,algorithm,market,line,outcome) DO NOTHING')
             finally:
                 cursor.close()
         return
@@ -688,6 +706,13 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
 
 SHADOW_WINDOW_LIMIT = 20_000
 SHADOW_FETCH_LIMIT = 2_000
+SHADOW_LABEL_FETCH_LIMIT = 64
+SHADOW_SETTLED_MATCHES_PER_CYCLE = 4
+SHADOW_SETTLED_MATCH_LIMIT = 64
+SHADOW_CONTRACTS_PER_MATCH = 128
+SHADOW_MATCH_FETCH_LIMIT = SHADOW_CONTRACTS_PER_MATCH * 3 + 3
+SHADOW_AWAITING_MATCH_LIMIT = 64
+SHADOW_AWAITING_RETRY_S = 2 * 60 * 60
 SHADOW_IDENTITY = ('at', 'match_id', 'algorithm', 'market', 'line', 'outcome')
 SHADOW_CURSOR = ('predicted_at', *SHADOW_IDENTITY)
 
@@ -762,6 +787,33 @@ def prospective_prediction_rows(db: Path, rows: list[dict[str, Any]], *,
             for offset in range(0, len(mids), 500):
                 finals.update(labels(con, mids[offset:offset+500]))
     return _without_known_settled_predictions(rows, finals)
+
+
+def persist_prospective_predictions(db: Path, path: Path, rows: list[dict[str,Any]], *,
+                                   target: ProjectionTarget | None = None) -> list[dict[str,Any]]:
+    """Validate labels and confirm an outbox batch in one reused PG session."""
+    target = target or projection_target_from_env()
+    if target is None:
+        prospective = prospective_prediction_rows(db,rows)
+        write_predictions(path,prospective)
+        return prospective
+    if not rows:
+        return []
+    prepare_postgres_schema(target)
+    mids = sorted({str(row['match_id']) for row in rows})
+    with persistent_writer(target) as connection:
+        finals = {}
+        for offset in range(0,len(mids),SHADOW_FETCH_LIMIT):
+            finals.update(_shadow_label_subset(connection,mids[offset:offset+SHADOW_FETCH_LIMIT]))
+        prospective = _without_known_settled_predictions(rows,finals)
+        cursor = connection.cursor()
+        try:
+            _insert_postgres_rows(cursor,'model_predictions',PREDICTION_COLUMNS,
+                [tuple(row.get(name) for name in PREDICTION_COLUMNS) for row in prospective],
+                '(version,match_id,at,algorithm,market,line,outcome) DO NOTHING')
+        finally:
+            cursor.close()
+    return prospective
 
 
 def _without_known_settled_predictions(rows: list[dict[str, Any]],
@@ -878,6 +930,92 @@ def _shadow_metrics(rows: list[dict[str, Any]], finals: Mapping[str, Any],
                         if latencies else None for percentile in (50,95,99)}}
 
 
+def _shadow_label_events(connection: Any, model: Mapping[str, Any],
+                         label_cursor: list[Any] | None) -> tuple[list[dict[str, Any]], bool]:
+    """Merge two bounded, indexed chronological terminal-label streams."""
+    available = _label_time(model.get('available_at') or model['updated_at'])
+    if available is None:
+        raise ValueError('模型可用时间无效')
+    start = label_cursor
+    if start is None:
+        first_cursor = connection.cursor()
+        try:
+            first_cursor.execute('SELECT predicted_at FROM model_predictions '
+                'WHERE version=%s AND data_version=%s AND model_version=%s AND feature_version=%s '
+                'AND predicted_at IS NOT NULL ORDER BY predicted_at,at,match_id,algorithm,market,line,outcome LIMIT 1',
+                (model['version'], DATA_VERSION, MODEL_VERSION, FEATURE_VERSION))
+            first_row = first_cursor.fetchone()
+        finally:
+            first_cursor.close()
+        first = _label_time(first_row[0]) if first_row else None
+        if first is None:
+            return [], False
+        # A candidate can predate actual shadow collection by hours. Scores
+        # already known before the very first persisted prediction cannot
+        # produce prospective evidence and must not flood the retry queue.
+        start = [max(available.timestamp(),first.timestamp()), '']
+    parts, arguments = [], []
+    for table in ('model_labels', 'label_revisions'):
+        parts.append('(SELECT match_id,revision_id,shadow_label_available_epoch(available_at) available_epoch '
+                     'FROM ' + table + " WHERE status IN ('won','lost','half_won','half_lost','push','void') "
+                     'AND shadow_label_available_epoch(available_at) IS NOT NULL '
+                     "AND ft_score ~ '" + SHADOW_LABEL_SCORE_PATTERN + "' "
+                     'AND (shadow_label_available_epoch(available_at),revision_id) > (%s,%s) '
+                     'ORDER BY shadow_label_available_epoch(available_at),revision_id LIMIT %s)')
+        arguments.extend([*start, SHADOW_LABEL_FETCH_LIMIT])
+    cursor = connection.cursor()
+    try:
+        # Duplicate copies of the same immutable revision in migration/live
+        # projections are one event; bounded UNION sorts at most 128 rows.
+        cursor.execute('SELECT * FROM (' + ' UNION '.join(parts) + ') events '
+                       'ORDER BY available_epoch,revision_id LIMIT %s',
+                       (*arguments, SHADOW_LABEL_FETCH_LIMIT))
+        events = [_pg_row(cursor, values) for values in cursor.fetchall()]
+        return events, len(events) == SHADOW_LABEL_FETCH_LIMIT
+    finally:
+        cursor.close()
+
+
+def _sample_shadow_contracts(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """Bound memory by full multi-direction contracts, never by single picks."""
+    unique = {_prediction_identity(row): row for row in rows}
+    groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for row in sorted(unique.values(), key=lambda r:_prediction_identity(r), reverse=True):
+        key = tuple(str(row[k]) for k in ('at', 'algorithm', 'market', 'line'))
+        groups.setdefault(key, []).append(row)
+    result: list[dict[str, Any]] = []
+    accepted = 0
+    complete = []
+    for group in groups.values():
+        market = str(group[0]['market'])
+        expected = {'home','draw','away'} if market.startswith('HAD') else (
+            {'over','under'} if market.startswith('OU') else {'home','away'} if market.startswith('AH') else set())
+        if expected and {str(row['outcome']) for row in group} == expected and len(group) == len(expected):
+            complete.append(group)
+    for group in complete[:SHADOW_CONTRACTS_PER_MATCH]:
+        result.extend({key:value for key,value in row.items() if key != 'x'} for row in group)
+        accepted += 1
+    return result, len(complete) > accepted
+
+
+def _shadow_match_predictions(connection: Any, model: Mapping[str, Any], mid: str) -> dict[str, Any]:
+    cursor = connection.cursor()
+    try:
+        # The immutable PK begins (version,match_id,at,algorithm,market,line,
+        # outcome), so one match seek never scans all predictions or inputs.
+        columns = ','.join(key for key in PREDICTION_COLUMNS if key != 'x')
+        cursor.execute('SELECT ' + columns + ' FROM model_predictions WHERE version=%s AND match_id=%s '
+                       'AND data_version=%s AND model_version=%s AND feature_version=%s '
+                       'AND predicted_at IS NOT NULL ORDER BY at DESC,algorithm DESC,market DESC,line DESC,outcome DESC LIMIT %s',
+                       (model['version'], mid, DATA_VERSION, MODEL_VERSION, FEATURE_VERSION, SHADOW_MATCH_FETCH_LIMIT))
+        raw = [_pg_row(cursor, values) for values in cursor.fetchall()]
+        rows, sampled = _sample_shadow_contracts(raw)
+        return {'rows':rows, 'sampled':sampled or len(raw) == SHADOW_MATCH_FETCH_LIMIT,
+                'fetched_predictions':len(raw), 'refreshed_at':datetime.now(timezone.utc).isoformat()}
+    finally:
+        cursor.close()
+
+
 def _prospective_metrics_postgres(projection: ProjectionTarget, model: Mapping[str, Any], *,
                                   state: dict[str, Any] | None = None) -> dict[str, Any]:
     if not compatible_model(model):
@@ -886,6 +1024,12 @@ def _prospective_metrics_postgres(projection: ProjectionTarget, model: Mapping[s
     if state.get('version') != model['version']:
         state.clear()
         state.update(version=model['version'], rows=[], cursor=None)
+    # Work on new containers: failed queries leave both persistent and in-memory
+    # cursors retryable. Upgrade keeps the old prediction cursor/pending rows,
+    # while the new label stream starts at candidate availability.
+    working = {**state, 'settled_buckets':dict(state.get('settled_buckets', {})),
+               'awaiting_prediction_matches':dict(state.get('awaiting_prediction_matches',{})),
+               'schema_version':2}
     columns = ','.join(SHADOW_CURSOR)
     with readonly_snapshot(projection) as con:
         cursor = con.cursor()
@@ -893,9 +1037,9 @@ def _prospective_metrics_postgres(projection: ProjectionTarget, model: Mapping[s
             query = ('SELECT * FROM model_predictions WHERE version=%s AND data_version=%s '
                      'AND model_version=%s AND feature_version=%s AND predicted_at IS NOT NULL')
             args: list[Any] = [model['version'], DATA_VERSION, MODEL_VERSION, FEATURE_VERSION]
-            if state.get('cursor'):
+            if working.get('cursor'):
                 query += ' AND (' + columns + ') > (' + ','.join(['%s']*len(SHADOW_CURSOR)) + ')'
-                args.extend(state['cursor'])
+                args.extend(working['cursor'])
             query += ' ORDER BY ' + columns + ' LIMIT %s'
             args.append(SHADOW_FETCH_LIMIT)
             cursor.execute(query, tuple(args))
@@ -903,18 +1047,132 @@ def _prospective_metrics_postgres(projection: ProjectionTarget, model: Mapping[s
         finally:
             cursor.close()
         if batch:
-            state['cursor'] = [str(batch[-1][key]) for key in SHADOW_CURSOR]
-        combined = (list(state.get('rows', [])) +
+            working['cursor'] = [str(batch[-1][key]) for key in SHADOW_CURSOR]
+        events, label_has_more = _shadow_label_events(con, model, working.get('label_cursor'))
+        consumed: list[dict[str, Any]] = []
+        refresh_mids: list[str] = []
+        event_lookups = set()
+        buckets = working['settled_buckets']
+        awaiting = working['awaiting_prediction_matches']
+        now = datetime.now(timezone.utc).timestamp()
+        expired = [mid for mid, value in awaiting.items() if now-float(value['first_seen_epoch']) >= SHADOW_AWAITING_RETRY_S]
+        for mid in expired:
+            awaiting.pop(mid)
+        working['awaiting_prediction_matches_expired'] = working.get('awaiting_prediction_matches_expired',0)+len(expired)
+        for event in events:
+            mid = str(event['match_id'])
+            if mid not in refresh_mids:
+                if len(refresh_mids) == SHADOW_SETTLED_MATCHES_PER_CYCLE:
+                    break
+                refresh_mids.append(mid)
+                event_lookups.add(mid)
+                bucket = _shadow_match_predictions(con, model, mid)
+                if bucket['rows']:
+                    buckets[mid] = bucket
+                    awaiting.pop(mid,None)
+                else:
+                    if mid not in awaiting and len(awaiting) == SHADOW_AWAITING_MATCH_LIMIT:
+                        # Missing forecasts from unrelated settled games must
+                        # not block the global label stream. Keep the newest
+                        # bounded retries and disclose eviction; late writes
+                        # can still recover through the prediction cursor.
+                        oldest = min(awaiting,key=lambda key:(awaiting[key]['first_seen_epoch'],key))
+                        awaiting.pop(oldest)
+                        working['awaiting_prediction_matches_evicted'] = working.get('awaiting_prediction_matches_evicted',0)+1
+                    awaiting.setdefault(mid,{'first_seen_epoch':now})
+                    buckets.pop(mid,None)
+            consumed.append(event)
+        if consumed:
+            last = consumed[-1]
+            working['label_cursor'] = [float(last['available_epoch']),str(last['revision_id'])]
+        label_has_more = label_has_more or len(consumed) < len(events)
+        # A bounded rotation reconciles delayed prediction writes and label
+        # corrections without depending solely on the new-label stream.
+        rotation = sorted(set(buckets) | set(awaiting))
+        offset = int(working.get('refresh_offset', 0))
+        visited = 0
+        while rotation and visited < len(rotation) and len(refresh_mids) < SHADOW_SETTLED_MATCHES_PER_CYCLE:
+            mid = rotation[(offset+visited) % len(rotation)]
+            visited += 1
+            if mid not in refresh_mids:
+                refresh_mids.append(mid)
+        working['refresh_offset'] = offset+visited
+        for mid in refresh_mids:
+            if mid in event_lookups:
+                continue  # New events already used their one indexed seek.
+            bucket = _shadow_match_predictions(con, model, mid)
+            if bucket['rows']:
+                buckets[mid] = bucket
+                awaiting.pop(mid,None)
+            elif mid in buckets:
+                # No compatible persisted predictions now: remove derived
+                # rows rather than preserving stale data after a repair.
+                buckets.pop(mid)
+                if len(awaiting) < SHADOW_AWAITING_MATCH_LIMIT:
+                    awaiting.setdefault(mid,{'first_seen_epoch':now})
+        combined = (list(working.get('rows', [])) +
                     [{key:value for key,value in row.items() if key != 'x'} for row in batch])
-        finals = _shadow_label_subset(con, sorted({str(r['match_id']) for r in combined}))
+        finals = _shadow_label_subset(con, sorted({str(r['match_id']) for r in combined} | set(buckets)))
         prospective = _without_known_settled_predictions(combined, finals)
-        state['excluded_replay_predictions'] = (state.get('excluded_replay_predictions', 0) +
+        working['excluded_replay_predictions'] = (working.get('excluded_replay_predictions', 0) +
                                                len(combined)-len(prospective))
-        state['rows'] = prospective[-SHADOW_WINDOW_LIMIT:]
-    result = _shadow_metrics(state['rows'], finals, model)
-    result['cursor'] = {'batch_records': len(batch), 'has_more': len(batch) == SHADOW_FETCH_LIMIT}
-    result['counts']['excluded_replay_predictions'] = state['excluded_replay_predictions']
+        pending: list[dict[str, Any]] = []
+        newly_settled: dict[str, list[dict[str, Any]]] = {}
+        for row in prospective:
+            mid = str(row['match_id'])
+            if mid in finals:
+                newly_settled.setdefault(mid, []).append(row)
+            else:
+                pending.append(row)
+        for mid, rows in newly_settled.items():
+            previous = buckets.get(mid, {})
+            selected, sampled = _sample_shadow_contracts(list(previous.get('rows', []))+rows)
+            # A split incremental batch may expose only one direction first.
+            # Keep a bounded empty bucket so rotation can fetch the now-atomic
+            # complete persisted contract even after its label cursor moved on.
+            buckets[mid] = {**previous,'rows':selected,'sampled':previous.get('sampled',False) or sampled}
+            if selected:
+                awaiting.pop(mid,None)
+        # Results arriving an hour later recover their own persisted match
+        # predictions through the label cursor even after pending eviction.
+        # Recency is first actual settlement availability, not later corrections.
+        retained = sorted((mid for mid in buckets if mid in finals),
+                          key=lambda mid:(_label_time(finals[mid]['first_label_available_at']),mid),
+                          reverse=True)[:SHADOW_SETTLED_MATCH_LIMIT]
+        working['settled_buckets'] = {mid:buckets[mid] for mid in retained}
+        working['rows'] = pending[-SHADOW_WINDOW_LIMIT:]
+    settled_rows = [row for bucket in working['settled_buckets'].values() for row in bucket['rows']]
+    all_rows = settled_rows+working['rows']
+    result = _shadow_metrics(all_rows, finals, model)
+    result['cursor'] = {'batch_records':len(batch),
+                        'has_more':len(batch) == SHADOW_FETCH_LIMIT or label_has_more,
+                        'label_records':len(consumed), 'label_has_more':label_has_more,
+                        'settled_matches_refreshed':len(refresh_mids)}
+    result['counts']['excluded_replay_predictions'] = working['excluded_replay_predictions']
     result['counts']['excluded_replay_scope'] = 'cursor_history_not_window'
+    result['counts']['awaiting_prediction_matches'] = len(working['awaiting_prediction_matches'])
+    result['counts']['awaiting_prediction_matches_expired'] = working['awaiting_prediction_matches_expired']
+    result['counts']['awaiting_prediction_matches_evicted'] = working.get('awaiting_prediction_matches_evicted',0)
+    result['windows'] = {'pending':{
+        'scope':'recent_pending_predictions', 'from':min((r['at'] for r in working['rows']),default=None),
+        'to':max((r['at'] for r in working['rows']),default=None), 'predictions':len(working['rows']),
+        'max_predictions':SHADOW_WINDOW_LIMIT}, 'settled':{
+        'scope':'recent_settled_matches', 'from':min((r['at'] for r in settled_rows),default=None),
+        'to':max((r['at'] for r in settled_rows),default=None),
+        'matches':len(working['settled_buckets']), 'predictions':len(settled_rows),
+        'max_matches':SHADOW_SETTLED_MATCH_LIMIT,'max_contracts_per_match':SHADOW_CONTRACTS_PER_MATCH}}
+    result['window'].update(scope='separate_pending_and_settled_windows',
+                            max_predictions=SHADOW_WINDOW_LIMIT+SHADOW_SETTLED_MATCH_LIMIT*SHADOW_CONTRACTS_PER_MATCH*3)
+    result['sampling'] = {'scope':'settled_window','method':'latest_complete_contracts_per_match',
+        'max_matches':SHADOW_SETTLED_MATCH_LIMIT,'max_contracts_per_match':SHADOW_CONTRACTS_PER_MATCH,
+        'per_match_fetch_limit':SHADOW_MATCH_FETCH_LIMIT,
+        'awaiting_match_limit':SHADOW_AWAITING_MATCH_LIMIT,'awaiting_retry_seconds':SHADOW_AWAITING_RETRY_S,
+        'label_start_basis':'max_candidate_available_and_first_actual_prediction',
+        'sampled_matches':sum(bool(bucket.get('sampled')) for bucket in working['settled_buckets'].values()),
+        'full_population':False,
+        'note':'原始预测在PG永久保留；每场在最近最多387条原始预测中保留最多128个完整盘口/时点/算法合约；已结窗口仅最近64场，不代表全量正确率'}
+    state.clear()
+    state.update(working)
     return result
 
 

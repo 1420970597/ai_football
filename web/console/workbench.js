@@ -559,10 +559,11 @@ async function loadHistory(reset = true, automatic = false) {
     $('history-prev').disabled = S.historyOffset === 0;
     $('history-next').disabled = S.historyNext === null;
     $('history-page').textContent = '第 ' + (Math.floor(S.historyOffset/100)+1) + ' 页 · 查询 ' + fixed(data.query_ms,0) + 'ms';
-    $('history-count').textContent = (data.entries_total ?? (entriesLoading ? '—' : 0)) + ' 条 · ' + (statisticsLoading ? '—' : summary.matches || 0) + ' 场 · 待结算 ' + pendingEntries + ' 个盘口';
+    $('history-count').textContent = (data.entries_total ?? '—') + ' 条 · ' + (statisticsLoading ? '—' : summary.matches || 0) + ' 场 · 待结算 ' + pendingEntries + ' 个盘口';
     const historyMessages = [];
     if (data.statistics_refreshing || statisticsLoading) historyMessages.push('战绩统计正在后台汇总，完成后刷新可查看最新统计。');
     if (entriesLoading) historyMessages.push('当前筛选的记录页正在后台读取，自动等待更新。');
+    if (data.entries_total == null && !entriesLoading) historyMessages.push('记录已加载，总条数仍在后台统计；可继续翻页。');
     if (data.entries_refreshing) historyMessages.push('后台正在更新当前记录页。');
     if (data.entries_stale) historyMessages.push('当前记录页为上次缓存，可能暂未包含新记录。');
     if (data.entries_at) historyMessages.push('记录页时点：' + (timeLabel(data.entries_at) === '—' ? '暂不可用' : timeLabel(data.entries_at)) + '。');
@@ -845,6 +846,8 @@ function renderDataModel(data) {
     (calibration ? ' 校准：' + (calibration.method === 'logistic' ? 'Logistic slope/intercept' : '恒等映射') + '（' + (calibration.samples || 0) + ' 条样本）。' : ' 尚无独立校准制品。') +
     promotionText;
   const prospective = prospectiveMetricRows(data), shadow = data.shadow || {}, shadowView = shadowStatus(data);
+  const livePerformance = shadow.performance || {};
+  const latencyP95 = field => livePerformance[field]?.p95 == null ? '尚未统计' : fixed(livePerformance[field].p95,0) + ' ms';
   const prospectiveLabels = {ready:'已有前瞻结算样本',waiting_for_settlement:'等待赛果结算',no_predictions:'等待首条影子预测',unavailable:'前瞻统计尚不可用',error:'前瞻统计读取失败'};
   const performanceCards = [
     ['影子模型',shadowView.text], ['影子观察状态',prospectiveLabels[prospective.status] || '等待统计'],
@@ -852,6 +855,11 @@ function renderDataModel(data) {
     ['前瞻已结样本',unknownMetric(prospective.prospective.counts?.settled_predictions,'尚未统计')],
     ['前瞻待结样本',unknownMetric(prospective.prospective.counts?.pending_predictions,'尚未统计')],
     ['前瞻已结比赛',unknownMetric(prospective.prospective.counts?.settled_matches,'尚未统计')],
+    ...(prospective.prospective.sampling ? [
+      ['有效已结决策',unknownMetric(prospective.model.decisions,'尚未审查')],
+      ['已结窗口上限',String(prospective.prospective.sampling.max_matches ?? '—') + ' 场'],
+      ['每场完整合约上限',String(prospective.prospective.sampling.max_contracts_per_match ?? '—') + ' 个'],
+    ] : []),
     ['前瞻方向二分类（非推荐命中）',prospective.status === 'ready' ? prospective.metric(prospective.model.binary_accuracy ?? prospective.model.accuracy) : '等待前瞻样本'],
     ['胜平负 Top-1 正确率',prospective.status === 'ready' ? prospective.metric(prospective.model.had_top1_accuracy) : '等待前瞻样本'],
     ['胜平负市场 Top-1',prospective.status === 'ready' ? prospective.metric(prospective.baseline.had_top1_accuracy) : '等待前瞻样本'],
@@ -863,7 +871,18 @@ function renderDataModel(data) {
     ['前瞻排除样本',unknownMetric(prospective.prospective.counts?.excluded_predictions,'尚未审查')],
     ['本进程跳过已结回放',unknownMetric(shadow.skipped_settled_replay,'尚未统计')],
     ['历史游标隔离回放（非本窗口）',unknownMetric(prospective.prospective.counts?.excluded_replay_predictions,'尚未统计')],
-    ['影子推理延迟 P95',prospective.prospective.latency?.p95_ms == null ? '尚未统计' : fixed(prospective.prospective.latency.p95_ms,0) + ' ms'],
+    ['影子计算 P95',latencyP95('compute_ms')],
+    ['实时排队 P95',latencyP95('queue_ms')],
+    ['决策至影子输出 P95',latencyP95('decision_to_prediction_ms')],
+    ['决策至本地可靠保存 P95',latencyP95('decision_to_durable_ms')],
+    ['决策至 PG 确认 P95',latencyP95('decision_to_pg_confirmed_ms')],
+    ['影子持久化 P95',latencyP95('prediction_persist_ms')],
+    ['待同步 PG 批次',unknownMetric(shadow.live?.outbox_batches,'尚未统计')],
+    ['待同步 PG 预测',unknownMetric(shadow.live?.outbox_predictions,'尚未统计')],
+    ['最旧待同步等待',shadow.live?.outbox_oldest_wait_ms == null ? '尚未统计' : fixed(shadow.live.outbox_oldest_wait_ms,0) + ' ms'],
+    ['PG 同步状态',({idle:'已同步',following:'同步正常',pending:'等待同步',persisting:'同步中',error:'同步失败，保留待重试数据'})[shadow.live?.persist_state] || shadow.live?.persist_state || '尚未统计'],
+    ['实时延迟样本',unknownMetric(livePerformance.samples,'尚未统计')],
+    ['已存历史预测端到端 P95',prospective.prospective.latency?.p95_ms == null ? '尚未统计' : fixed(prospective.prospective.latency.p95_ms,0) + ' ms'],
   ];
   const rows = [[model.version ? '生产模型离线时间验证' : '候选离线时间验证',offlineModel.validation],['离线同组市场基准',offlineModel.baseline],['当前版本前瞻验证',prospective.status === 'ready' ? prospective.model : null],['前瞻市场基准',prospective.status === 'ready' ? prospective.baseline : null]];
   const shadowPanel = el('section',{class:'shadow-performance', 'aria-label':'影子模型前瞻表现'},[
@@ -871,8 +890,12 @@ function renderDataModel(data) {
     el('p',{text:(prospective.reason || shadow.reason || (shadowView.available ? '当前影子预测只供观察，不代表候选已晋级。' : shadowView.text)) +
       ' 统计生成于 ' + (timeLabel(prospective.prospective.updated_at) === '—' ? '尚未提供' : timeLabel(prospective.prospective.updated_at)) +
       '；最近预测 ' + (timeLabel(shadow.last_prediction_at) === '—' ? '尚未生成' : timeLabel(shadow.last_prediction_at)) + '。' +
-      (prospective.prospective.window ? ' 统计范围：当前版本最近 ' + unknownMetric(prospective.prospective.window.max_predictions,'未提供上限') + ' 条预测；' + timeLabel(prospective.prospective.window.from) + ' 至 ' + timeLabel(prospective.prospective.window.to) + '。' : '')}),
+      (prospective.prospective.windows ? ' 统计范围：已结窗口与待结窗口分别维护；已结比赛最多 ' + unknownMetric(prospective.prospective.windows.settled?.max_matches,'未提供上限') + ' 场；待结窗口最多 ' + unknownMetric(prospective.prospective.windows.pending?.max_predictions,'未提供上限') + ' 条预测。' : prospective.prospective.window ? ' 统计范围：当前版本最近 ' + unknownMetric(prospective.prospective.window.max_predictions,'未提供上限') + ' 条预测；' + timeLabel(prospective.prospective.window.from) + ' 至 ' + timeLabel(prospective.prospective.window.to) + '。' : '')}),
     el('p',{text:'方向二分类按每个候选 p≥0.5 判断事件发生，不能当作买入推荐命中率。胜平负 Top-1：在同一时点完整的主胜、平、客胜组中选择概率最高方向；亚洲盘：在完整双向组中选择最高概率方向，以实际支付判定，赢半/输半计半注权重，走盘排除输赢分母，各比赛等权。前瞻只使用模型可用后、结果揭晓前记录的预测；离线验证与前瞻统计分开展示。市场基准使用相同前瞻样本，窗口统计不代表全库正确率。'}),
+    el('p',{text:'实时延迟按本进程最近 ' + unknownMetric(livePerformance.sample_limit,'尚未提供上限') + ' 个有效样本计算：计算包含特征构建与模型推理；排队从算法决策生成计时；输出包含排队与计算。本地可靠保存与 PG 确认分别计时，等待同步的数据不会删除，PG 写入失败会重试。已存历史预测端到端延迟保留过去的积压记录。重启恢复记录不参与计算、排队和输出延迟统计；PG 确认延迟包含保留下来的积压与恢复记录；持久化耗时按包含实时预测的合批事务统计，批中也可能包含恢复预测。历史训练输入仍在独立后台完整保存。' +
+      ' 延迟统计于 ' + timeLabel(livePerformance.updated_at) + '。'}),
+    ...(shadow.live?.persist_error ? [el('p',{class:'warning',text:'PG 同步错误：' + shadow.live.persist_error})] : []),
+    ...(prospective.prospective.sampling ? [el('p',{text:prospective.prospective.sampling.note || '已结表现按比赛及完整合约有界抽样，原始预测永久保留；该窗口不代表全量正确率。'})] : []),
   ]);
   $('model-performance').replaceChildren(shadowPanel,el('table',{},[
     el('thead',{},[el('tr',{},['表现口径','比赛 / 决策','二分类准确率','HAD Top-1','Brier ↓','Log loss ↓','ECE ↓'].map(text=>el('th',{text})))]),
@@ -940,7 +963,7 @@ function renderBettingStatus(betting) {
 }
 function renderSettings(data) {
   S.settingsVersion = data.version;
-  $('settings-version').textContent = 'v' + data.version + ' · ' + (data.persistent ? '已持久保存' : '内存配置');
+  $('settings-version').textContent = 'v' + data.version + ' · ' + (data.persistence_backend === 'postgres' ? '已保存至 PostgreSQL · 重启保留' : data.persistent ? '已持久保存' : '内存配置');
   const cfg = data.settings;
   const betting = data.capabilities?.betting;
   renderBettingStatus(betting);

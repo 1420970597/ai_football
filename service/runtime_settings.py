@@ -11,6 +11,8 @@ from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
 from .betting import betting_capability
+from store.postgres import postgres_enabled
+from store.runtime_settings_db import load_runtime_settings, save_runtime_settings
 
 ALGORITHMS = {
     "poisson_market": "当前盘口 Poisson",
@@ -164,6 +166,7 @@ class RuntimeSettings:
         self.version = 1
         self.path: Optional[Path] = None
         self.restore_error = ""
+        self.persistence_backend = 'memory'
 
     def snapshot(self) -> Tuple[RuntimeConfig, int]:
         with self._lock:
@@ -179,6 +182,9 @@ class RuntimeSettings:
     def bind(self, root: Optional[str]) -> None:
         with self._lock:
             self.path = Path(root).parent / "runtime-settings.json" if root else None
+            self.persistence_backend = 'postgres' if self.path is not None and postgres_enabled() else ('local' if self.path else 'memory')
+            restored = False
+            seed_cfg, seed_version = self.config, self.version
             if self.path is not None and self.path.exists():
                 try:
                     raw = json.loads(self.path.read_text(encoding="utf-8"))
@@ -186,15 +192,32 @@ class RuntimeSettings:
                     v = raw["version"]
                     if not isinstance(v, int) or isinstance(v, bool) or v < 1:
                         raise ValueError("配置版本无效")
-                    self.config, self.version = cfg, v
+                    seed_cfg, seed_version = cfg, v
+                    restored = True
                 except (OSError, ValueError, KeyError, TypeError):
                     self.restore_error = "持久配置无效，已保留当前配置"
-            # Production containers may opt into automatic startup activation.
-            # Runtime API updates can still disable it until the next restart.
+            # Startup activation only seeds a new installation. Explicitly
+            # saved switches and parameters survive every subsequent restart.
             auto_enable = os.environ.get("AUTO_ENABLE_BETTING", "").strip().lower() in (
                 "1", "true", "yes", "on")
-            if auto_enable and not self.config.betting_enabled:
-                self.config = replace(self.config, betting_enabled=True)
+            if auto_enable and not restored:
+                seed_cfg = replace(seed_cfg, betting_enabled=True)
+            if self.persistence_backend == 'postgres':
+                try:
+                    raw = load_runtime_settings({'version':seed_version,'settings':asdict(seed_cfg)})
+                    if raw is None:
+                        raise ValueError('PG 配置不存在')
+                    cfg = validated(self.config, raw['settings'])
+                    v = raw['version']
+                    if isinstance(v,bool) or not isinstance(v,int) or v<1:
+                        raise ValueError('PG 配置版本无效')
+                except Exception as exc:
+                    self.restore_error = 'PG 持久配置不可读取，未回退默认参数'
+                    raise ValueError(self.restore_error) from exc
+                self.config,self.version = cfg,v
+                self.restore_error = ''
+            else:
+                self.config,self.version = seed_cfg,seed_version
 
     def public(self) -> Dict[str, Any]:
         with self._lock:
@@ -203,6 +226,7 @@ class RuntimeSettings:
             return {"version": self.version, "settings": cfg,
                     "algorithms": ALGORITHMS, "decision_modes": DECISION_MODES,
                     "persistent": self.path is not None,
+                    "persistence_backend": self.persistence_backend,
                     "restore_error": self.restore_error,
                     "capabilities": {"betting": betting_capability(self.config)}}
 
@@ -213,7 +237,19 @@ class RuntimeSettings:
                 raise VersionConflict("配置已被其他页面更新，请重新读取")
             cfg = validated(self.config, patch)
             new_version = self.version + 1
-            if self.path:
+            if self.persistence_backend == 'postgres':
+                try:
+                    changed = save_runtime_settings({'version':new_version,'settings':asdict(cfg)}, self.version)
+                except Exception as exc:
+                    raise ValueError('保存 PG 配置失败，当前配置未修改') from exc
+                if not changed:
+                    raw = load_runtime_settings()
+                    if raw is not None:
+                        latest = validated(self.config,raw['settings'])
+                        apply(latest,raw['version'])
+                        self.config,self.version = latest,raw['version']
+                    raise VersionConflict('配置已被其他实例更新，请重新读取')
+            elif self.path:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 tmp = self.path.with_suffix(".tmp")
                 try:

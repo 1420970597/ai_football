@@ -32,7 +32,7 @@ class RuntimeSettingsTests(unittest.TestCase):
             self.assertTrue(status['capabilities']['betting']['execution_supported'])
             self.assertIn('自动提交', status['capabilities']['betting']['reason'])
 
-    def test_container_startup_can_auto_enable_persisted_disabled_betting(self):
+    def test_container_startup_preserves_persisted_disabled_betting(self):
         with tempfile.TemporaryDirectory() as root, patch.dict('os.environ', {'AUTO_ENABLE_BETTING': '1'}):
             settings = RuntimeSettings()
             settings.bind(root + '/ledger')
@@ -41,8 +41,8 @@ class RuntimeSettingsTests(unittest.TestCase):
             }), encoding='utf-8')
             restored = RuntimeSettings()
             restored.bind(root + '/ledger')
-            self.assertTrue(restored.config.betting_enabled)
-            self.assertTrue(restored.public()['capabilities']['betting']['execution_enabled'])
+            self.assertFalse(restored.config.betting_enabled)
+            self.assertFalse(restored.public()['capabilities']['betting']['execution_enabled'])
 
     def test_api_switch_updates_gate_and_reports_runtime_readiness(self):
         with tempfile.TemporaryDirectory() as root:

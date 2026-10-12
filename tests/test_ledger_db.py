@@ -64,7 +64,7 @@ class LedgerDatabaseTests(unittest.TestCase):
                 db.backend = 'sqlite'
                 db.connection = original_connection
 
-    def test_postgres_pages_keep_filters_offsets_and_limit_separate_and_cache_exact_count(self):
+    def test_postgres_pages_keep_filters_offsets_and_limit_separate_without_count(self):
         with tempfile.TemporaryDirectory() as root:
             ledger = DecisionLedger(root)
             original = ledger._db
@@ -73,7 +73,8 @@ class LedgerDatabaseTests(unittest.TestCase):
             db.reader.side_effect = lambda: nullcontext(reader)
             reader._statistics_table.return_value = 'decision_statistics'
             reader.connection.execute.return_value.fetchone.return_value = (123,)
-            reader.entries.return_value = [self.row(decision_id='page-2').as_dict()]
+            reader.entries.return_value = [self.row(decision_id='page-2').as_dict(),
+                                           self.row(decision_id='sentinel').as_dict()]
             ledger._db = db
             snapshot = {'overall': {'total': 123}, 'statistics_status': 'ready',
                         'statistics_at': datetime.now(timezone.utc).isoformat()}
@@ -87,11 +88,14 @@ class LedgerDatabaseTests(unittest.TestCase):
                     thread.assert_called_once()
                     ledger._history_page_loop()
                     ready = ledger.history(limit=1, offset=1, competition_type='real', cohort='prospective')
-                    self.assertEqual(ready['entries_total'], 123)
+                    self.assertIsNone(ready['entries_total'])
+                    self.assertEqual(len(ready['entries']), 1)
                     self.assertEqual(ready['entries'][0]['decision_id'], 'page-2')
                     self.assertEqual(ready['next_offset'], 2)
                     self.assertTrue(ready['entries_at'])
-                    self.assertEqual(reader.entries.call_args.args[2:], (1, 1))
+                    self.assertEqual(reader.entries.call_args.args[2:], (2, 1))
+                    self.assertFalse(any('count(' in call.args[0].lower()
+                                         for call in reader.connection.execute.call_args_list))
                     for changes in ({'offset': 0}, {'limit': 2}, {'competition_type': 'virtual'},
                                     {'algorithm': 'different'}, {'cohort': 'recommendations'}, {'days': 1},
                                     {'picks_only': False}):
@@ -103,6 +107,80 @@ class LedgerDatabaseTests(unittest.TestCase):
                     ready['entries'][0]['decision_id'] = 'changed'
                     self.assertEqual(ledger.history(limit=1, offset=1, competition_type='real',
                                                     cohort='prospective')['entries'][0]['decision_id'], 'page-2')
+            finally:
+                ledger._db = original
+
+    def test_postgres_rows_publish_before_statistics_and_exact_total_arrives_from_snapshot(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            original = ledger._db
+            db = MagicMock(backend='postgres')
+            reader = MagicMock(backend='postgres')
+            db.reader.side_effect = lambda: nullcontext(reader)
+            reader.entries.return_value = [self.row(decision_id='visible').as_dict(),
+                                           self.row(decision_id='sentinel').as_dict()]
+            ledger._db = db
+            try:
+                with patch('service.ledger.threading.Thread'), \
+                        patch.object(ledger, '_cached_history_snapshot', side_effect=AssertionError('page reads statistics')), \
+                        patch.object(ledger, '_refresh_history_snapshot') as schedule:
+                    ledger.history(limit=1, offset=10)
+                    ledger._history_page_loop()
+                    ready = ledger.history(limit=1, offset=10)
+                    self.assertEqual(ready['entries_status'], 'ready')
+                    self.assertEqual(ready['next_offset'], 11)
+                    self.assertIsNone(ready['entries_total'])
+                    self.assertEqual(ready['entries'][0]['decision_id'], 'visible')
+                    schedule.assert_called_once()
+                    cache_key = schedule.call_args.args[1]
+                    ledger._history_cache[cache_key] = {'overall': {'total': 55},
+                        'statistics_status': 'ready', 'statistics_at': datetime.now(timezone.utc).isoformat()}
+                    self.assertEqual(ledger.history(limit=1, offset=10)['entries_total'], 55)
+                    self.assertFalse(any('count(' in call.args[0].lower()
+                                         for call in reader.connection.execute.call_args_list))
+            finally:
+                ledger._db = original
+
+    def test_postgres_out_of_range_empty_page_does_not_invent_total_from_offset(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            original = ledger._db
+            db = MagicMock(backend='postgres')
+            reader = MagicMock(backend='postgres')
+            db.reader.side_effect = lambda: nullcontext(reader)
+            reader.entries.return_value = []
+            ledger._db = db
+            try:
+                with patch('service.ledger.threading.Thread'):
+                    ledger.history(limit=1, offset=100)
+                    ledger._history_page_loop()
+                    ready = ledger.history(limit=1, offset=100)
+                self.assertEqual(ready['entries_status'], 'ready')
+                self.assertIsNone(ready['entries_total'])
+                self.assertIsNone(ready['next_offset'])
+                self.assertEqual(ready['entries'], [])
+            finally:
+                ledger._db = original
+
+    def test_postgres_zero_limit_never_queries_entries_or_invents_total(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            original = ledger._db
+            db = MagicMock(backend='postgres')
+            reader = MagicMock(backend='postgres')
+            db.reader.side_effect = lambda: nullcontext(reader)
+            reader.entries.side_effect = AssertionError('zero limit must not read any payloads')
+            ledger._db = db
+            try:
+                with patch('service.ledger.threading.Thread'):
+                    ledger.history(limit=0)
+                    ledger._history_page_loop()
+                    ready = ledger.history(limit=0)
+                self.assertEqual(ready['entries_status'], 'ready')
+                self.assertEqual(ready['entries'], [])
+                self.assertIsNone(ready['next_offset'])
+                self.assertIsNone(ready['entries_total'])
+                reader.entries.assert_not_called()
             finally:
                 ledger._db = original
 
