@@ -33,6 +33,9 @@ REPLAY_MEMBERS_PER_CYCLE = 16
 REPLAY_CYCLE_BUDGET_S = .25
 LIVE_MEMBERS_PER_CYCLE = 16
 LIVE_CYCLE_BUDGET_S = .1
+LIVE_RECOVERY_MEMBERS_PER_CYCLE = 64
+LIVE_RECOVERY_CYCLE_BUDGET_S = .25
+LIVE_NEWEST_CYCLES_PER_OLD = 4
 LIVE_POLL_S = .05
 LIVE_TAIL_SCAN_BYTES = 4 * 1024 * 1024
 GZIP_MEMBER_MAX_BYTES = 64 * 1024 * 1024
@@ -897,17 +900,20 @@ class ModelService:
             return {},[],False,0
         before_cursor,before_inodes = dict(self._live_cursor),dict(self._live_inodes)
         self._register_live_journals(paths)
-        previous = self._live_stats.get('last_poll_file')
         old_pending = [path for path in paths[1:] if path.name in self._live_cursor and
                        self._live_cursor[path.name]<path.stat().st_size]
-        # Newest journal gets priority; every other poll can drain one known
-        # older suffix so rollover never abandons its final complete member.
-        if old_pending and previous == paths[0].name:
+        newest_pending = self._live_cursor.get(paths[0].name,0)<paths[0].stat().st_size
+        newest_cycles = int(self._live_stats.get('newest_cycles',0))
+        # Bound recovery work, but allocate four newest batches for every
+        # older suffix batch. Once newest catches up, drain old continuously.
+        if old_pending and (not newest_pending or newest_cycles >= LIVE_NEWEST_CYCLES_PER_OLD):
             rotation = int(self._live_stats.get('old_suffix_rotation',0))
             path = old_pending[rotation % len(old_pending)]
             self._live_stats['old_suffix_rotation'] = rotation+1
+            self._live_stats['newest_cycles'] = 0
         else:
             path = paths[0]
+            self._live_stats['newest_cycles'] = newest_cycles+1 if newest_pending else 0
         self._live_stats['last_poll_file'] = path.name
         offset = self._live_cursor.get(path.name,0)
         if path.stat().st_size < offset:
@@ -915,7 +921,12 @@ class ModelService:
         next_offset = offset
         records = 0
         realtime_batch = True
-        for end,rows in journal_members(path,offset,limit=LIVE_MEMBERS_PER_CYCLE,budget_s=LIVE_CYCLE_BUDGET_S):
+        recovering = bool(old_pending or self._live_stats.get('catching_up'))
+        # A journal suffix larger than one normal batch is visible backlog.
+        # Once it drains to the current tail, normal polling resumes.
+        members_limit = LIVE_RECOVERY_MEMBERS_PER_CYCLE if recovering else LIVE_MEMBERS_PER_CYCLE
+        budget = LIVE_RECOVERY_CYCLE_BUDGET_S if recovering else LIVE_CYCLE_BUDGET_S
+        for end,rows in journal_members(path,offset,limit=members_limit,budget_s=budget):
             for row in rows:
                 decision_at = datetime.fromisoformat(row['computed_at'])
                 recovered = path != paths[0] or decision_at.timestamp() <= float(self._live_stats.get('recovery_until',0))
@@ -927,12 +938,15 @@ class ModelService:
                 self._live_stats['last_decision_at'] = row['computed_at']
             next_offset = end
         if next_offset == offset:
+            self._live_stats['catching_up'] = False
             if self._live_cursor != before_cursor or self._live_inodes != before_inodes:
                 self._save_live_checkpoint()
             return {},[],False,0
         with self._lock:
             predictions = list(self._shadow.values())
-        self._live_stats.update(last_file=path.name,backlog_bytes=max(0,path.stat().st_size-next_offset))
+        backlog = max(0,path.stat().st_size-next_offset)
+        self._live_stats.update(last_file=path.name,backlog_bytes=backlog,
+            catching_up=bool(backlog or (old_pending and path == paths[0])))
         return {path.name:next_offset},predictions,realtime_batch,records
 
     def _live_loop(self) -> None:
@@ -949,7 +963,7 @@ class ModelService:
                 except Exception as exc:
                     self._live_stats['last_error'] = str(exc)
                 next_publish = time.monotonic()+1
-            self._stop.wait(LIVE_POLL_S)
+            self._stop.wait(0 if self._live_stats.get('catching_up') else LIVE_POLL_S)
 
     def _loop(self) -> None:
         next_check = 0.0

@@ -355,6 +355,42 @@ class ModelLiveLaneTests(unittest.TestCase):
             self.assertEqual(worker._live_cursor[older.name],older.stat().st_size)
             self.assertEqual(worker._live_cursor[newest.name],newest.stat().st_size)
 
+    def test_recovery_scheduler_gives_four_newest_batches_then_an_old_batch(self):
+        with TemporaryDirectory(dir=Path.cwd()/'output',prefix='lane-recovery-schedule-') as directory:
+            worker,ledger = self.setup_worker(directory)
+            older = ledger/'live-replay.2025010111.jsonl.gz'
+            newest = ledger/'live-replay.2025010112.jsonl.gz'
+            older.write_bytes(b'x'*100)
+            newest.write_bytes(b'x'*100)
+            worker._live_cursor = {older.name:0,newest.name:0}
+            worker._live_inodes = {p.name:[p.stat().st_dev,p.stat().st_ino] for p in (older,newest)}
+            visits=[]
+            def parser(path,offset,*,limit,budget_s):
+                visits.append(path.name)
+                self.assertEqual(limit,64)
+                self.assertEqual(budget_s,.25)
+                yield offset+1,[]
+            with patch('service.model_service.journal_members',side_effect=parser):
+                for _ in range(10):
+                    cursor,_,_,_ = worker._read_live_batch_locked()
+                    worker._live_cursor.update(cursor)
+            self.assertEqual(visits,[newest.name]*4+[older.name]+[newest.name]*4+[older.name])
+            self.assertTrue(worker._live_stats['catching_up'])
+
+    def test_live_loop_removes_idle_wait_only_when_recovery_backlog_exists(self):
+        for backlog in (False,True):
+            with self.subTest(backlog=backlog):
+                worker=ModelService()
+                worker._live_stats['catching_up']=backlog
+                waits=[]
+                def wait(delay,waits=waits,worker=worker):
+                    waits.append(delay)
+                    worker._stop.set()
+                with patch.object(worker,'_consume_live_shadow'),patch.object(worker,'_publish'), \
+                        patch.object(worker._stop,'wait',side_effect=wait):
+                    worker._live_loop()
+                self.assertEqual(waits,[0 if backlog else .05])
+
     def test_oversized_member_is_rejected_before_unbounded_allocation_and_partial_cursor_preserved(self):
         with TemporaryDirectory(dir=Path.cwd()/'output',prefix='lane-size-') as directory:
             path = Path(directory)/'live-replay.jsonl.gz'
