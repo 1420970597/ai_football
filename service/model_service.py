@@ -476,6 +476,10 @@ class ModelService:
         self._reload_settings()
         target = projection_target_from_env()
         if target is not None:
+            with self._lock:
+                if self._settings_version is None:
+                    reason = self._status.get('settings_error') or '尚未读取PG权威设置'
+                    raise RuntimeError('模型服务拒绝启动：首次PG设置加载失败：'+str(reason))
             prepare_postgres_schema(target)
         self._initialize_live_cursor()
         self._live_thread = threading.Thread(target=self._live_loop,name='model-live-shadow',daemon=True)
@@ -536,8 +540,11 @@ class ModelService:
                     self._status['settings_error'] = str(exc)
                 return  # Preserve the last applied PG configuration.
             with self._lock:
+                if not data:
+                    self._status['settings_error'] = 'PG权威设置不存在；不能使用默认模型配置'
+                    return
                 self._status.pop('settings_error',None)
-            if not data or data.get('version') == self._settings_version:
+            if data.get('version') == self._settings_version:
                 return
             patch = {k:v for k,v in data['settings'].items() if k.startswith('model_training_') or
                      k in ('model_shadow_enabled','decision_mode','model_blend_weight')}
