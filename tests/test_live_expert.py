@@ -13,6 +13,72 @@ from service.live_expert import LiveExpertService, percentiles
 
 
 class LiveExpertTests(unittest.TestCase):
+    def test_postgres_batch_failure_retains_pending_and_retries_successfully(self):
+        class PostgresFailure(Exception):
+            pass
+        svc = LiveExpertService()
+        rows = {('first',): {'match_id': 'm1'}, ('second',): {'match_id': 'm2'}}
+        svc._decisions.update(rows)
+        svc.on_decisions = MagicMock(side_effect=[PostgresFailure('connection lost'), 2])
+        self.assertEqual(svc.flush_decisions(), 0)
+        self.assertEqual(svc._decisions, rows)
+        self.assertFalse(svc._recording)
+        self.assertFalse(svc._recorded)
+        self.assertTrue(svc.record_error)
+        self.assertEqual(svc.flush_decisions(), 2)
+        self.assertFalse(svc._decisions)
+        self.assertEqual(svc._recorded, set(rows))
+        self.assertFalse(svc.record_error)
+
+    def test_postgres_single_failure_preserves_newer_queued_row_and_other_success(self):
+        class PostgresFailure(Exception):
+            pass
+        svc = LiveExpertService()
+        old = {'match_id': 'm1', 'revision': 1}
+        new = {'match_id': 'm1', 'revision': 2}
+        svc._decisions.update({('first',): old, ('second',): {'match_id': 'm2'}})
+        def persist(row):
+            if row == old:
+                svc._decisions[('first',)] = new
+                raise PostgresFailure('connection lost')
+            return 1
+        svc.on_decision = persist
+        self.assertEqual(svc.flush_decisions(), 1)
+        self.assertEqual(svc._decisions, {('first',): new})
+        self.assertEqual(svc._recorded, {('second',)})
+        self.assertFalse(svc._recording)
+        self.assertTrue(svc.record_error)
+        self.assertEqual(svc.flush_decisions(), 1)
+        self.assertFalse(svc._decisions)
+        self.assertFalse(svc.record_error)
+
+    def test_decision_writer_survives_driver_error_and_confirms_retry(self):
+        class PostgresFailure(Exception):
+            pass
+        svc = LiveExpertService()
+        svc._decisions[('first',)] = {'match_id': 'm'}
+        retried = threading.Event()
+        calls = []
+        def persist(rows):
+            calls.append(list(rows))
+            if len(calls) == 1:
+                raise PostgresFailure('temporary failure')
+            retried.set()
+            svc._stop.set()
+            return len(rows)
+        svc.on_decisions = persist
+        writer = threading.Thread(target=svc._decision_loop, daemon=True)
+        writer.start()
+        try:
+            self.assertTrue(retried.wait(2))
+        finally:
+            svc._stop.set()
+            writer.join(2)
+        self.assertFalse(writer.is_alive())
+        self.assertEqual(calls[0], calls[1])
+        self.assertFalse(svc._decisions)
+        self.assertEqual(svc._recorded, {('first',)})
+
     def test_live_and_half_handicap_value_future_goals_and_bernoulli_shrink(self):
         from core.live_model import payment, remaining_distribution
         from dataclasses import replace

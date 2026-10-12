@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from service.model_service import ModelService
 from store.history import HistoryJournal
@@ -13,6 +14,60 @@ from tests.test_training_data import decision
 
 
 class ModelServiceTests(unittest.TestCase):
+    def test_postgres_projection_failure_keeps_inputs_and_predictions_for_retry(self):
+        class PostgresFailure(Exception):
+            pass
+        with tempfile.TemporaryDirectory(dir=Path.cwd() / 'output', prefix='model-projection-') as root:
+            worker = ModelService()
+            worker.bind(str(Path(root)/'ledger'))
+            worker._inputs = [{'match_id': 'm'}]
+            worker._shadow = {('version', 'm'): {'match_id': 'm'}}
+            with patch('service.model_service.write_inputs') as inputs, \
+                    patch('service.model_service.write_predictions',
+                          side_effect=[PostgresFailure('connection lost'), None]) as predictions:
+                with self.assertRaises(PostgresFailure):
+                    worker._flush_shadow()
+                self.assertEqual(len(worker._inputs), 1)
+                self.assertEqual(len(worker._shadow), 1)
+                worker._flush_shadow()
+            self.assertEqual(inputs.call_count, 2)
+            self.assertEqual(predictions.call_count, 2)
+            self.assertFalse(worker._inputs)
+            self.assertFalse(worker._shadow)
+
+    def test_postgres_input_failure_does_not_advance_replay_cursor(self):
+        class PostgresFailure(Exception):
+            pass
+        with tempfile.TemporaryDirectory(dir=Path.cwd() / 'output', prefix='model-replay-') as root:
+            ledger = Path(root)/'ledger'
+            ledger.mkdir()
+            path = ledger/'live-replay.jsonl.gz'
+            HistoryJournal(path).append([decision()])
+            path = next(ledger.glob('live-replay*.jsonl.gz'))
+            worker = ModelService()
+            worker.bind(str(ledger))
+            with patch('service.model_service.write_inputs', side_effect=PostgresFailure('connection lost')):
+                with self.assertRaises(PostgresFailure):
+                    worker._consume_replay()
+            self.assertNotIn(path.name, worker._cursor)
+            self.assertTrue(worker._inputs)
+            worker._consume_replay()
+            self.assertEqual(worker._cursor[path.name], path.stat().st_size)
+            self.assertFalse(worker._inputs)
+            with sqlite3.connect(Path(root)/'models'/'inputs.sqlite3') as con:
+                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0], 8)
+
+    def test_training_retains_all_qualification_counts_with_multi_decision_sample_cap(self):
+        from service.model_training import TRAINING_MAX_ROWS_PER_MATCH
+        self.assertEqual(TRAINING_MAX_ROWS_PER_MATCH, 40)
+
+    def test_training_process_exit_status_is_actionable(self):
+        self.assertEqual(ModelService._process_exit_error(1, False), '训练进程异常退出，退出码 1')
+        self.assertEqual(ModelService._process_exit_error(-9, False), '训练进程被信号终止：SIGKILL (9)')
+        from service.model_service import TRAINING_WALL_LIMIT_S
+        self.assertEqual(ModelService._process_exit_error(-9, True),
+                         '训练进程超过 %s 秒运行上限' % TRAINING_WALL_LIMIT_S)
+
     def test_incompatible_model_clears_previously_loaded_predictions(self):
         from core.learned_model import DATA_VERSION, FEATURES
         from service.model_training import atomic_json

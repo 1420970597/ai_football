@@ -1,5 +1,4 @@
 import unittest
-import math
 from datetime import datetime, timedelta, timezone
 
 from core.oof_peer import chronological_oof

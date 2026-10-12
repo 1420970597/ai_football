@@ -16,7 +16,10 @@ BASE_FEATURES = ('bias', 'market_logit', 'algorithm_logit', 'elapsed', 'score_di
             'peer_economics_risk_adjusted', 'peer_microstructure_adjusted', 'peer_missing')
 FEATURES = BASE_FEATURES + EXTRA_FEATURES
 MIN_MATCHES = 100
-EPOCHS = 250
+# The learner is intentionally small and runs in a dependency-free worker.
+# Keep the iteration budget bounded: rolling validation fits several models
+# and an uncached 250-epoch Python loop exceeded the worker wall-clock limit.
+EPOCHS = 80
 LEARNING_RATE = 0.08
 REGULARIZATION = 0.01
 DATA_VERSION = 'remaining-ah-signed-lines-bernoulli-v4-offset-windows-asof'
@@ -149,13 +152,23 @@ def fit_weights(rows: Sequence[Mapping[str, Any]], *, epochs: int = EPOCHS) -> l
     if len(counts) < 2:
         raise ValueError('训练比赛不足')
     weights = [0.0] * len(FEATURES)
-    transformed = [residual_vector(row['x']) for row in rows]
+    # Cache all row-local work once. The previous implementation rebuilt the
+    # upgraded feature vector and market logit on every epoch, multiplying
+    # the cost of rolling validation by hundreds of millions of operations.
+    prepared = []
+    for row in rows:
+        vector = residual_vector(row['x'])
+        market_logit = upgrade_vector(row['x'])[1]
+        scale = observation_weight(row) / counts[row['match_id']]
+        prepared.append((vector, market_logit, float(row['y']), scale))
+    feature_count = len(FEATURES)
     for _ in range(max(1, int(epochs))):
         gradients = [0.0] * len(weights)
-        for row, vector in zip(rows, transformed):
-            market_logit = upgrade_vector(row['x'])[1]
-            error = ((sigmoid(market_logit + sum(w*v for w, v in zip(weights, vector))) - row['y']) *
-                     observation_weight(row) / counts[row['match_id']])
+        for vector, market_logit, target, scale in prepared:
+            score = market_logit
+            for i in range(feature_count):
+                score += weights[i] * vector[i]
+            error = (sigmoid(score) - target) * scale
             for i, value in enumerate(vector):
                 gradients[i] += error * value
         weights = [w - LEARNING_RATE * (g / len(counts) + (REGULARIZATION*w if i else 0))

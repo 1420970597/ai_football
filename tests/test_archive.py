@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 from collector.leyu_realtime import TrendStore
 from core.models import OddsSnapshot
-from service.archive_service import cleanable
+from service.archive_service import backup_databases, cleanable, data_files, record_database_backups
+from service import archive_service
 from store.archive import S3Archive, journal_path, storage_mode
 from store.snapshot_store import SnapshotStore
 
@@ -47,6 +48,34 @@ class FakeS3:
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_archive_worker_replaces_stale_failure_status_on_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "output"
+            root.mkdir()
+            stale = root / "_archive" / "status.json"
+            stale.parent.mkdir()
+            stale.write_text(json.dumps({"running": False, "error": "TypeError"}))
+
+            class FakeArchive:
+                def __init__(self, _root):
+                    self.state = _root / "_archive"
+                    self.state.mkdir(parents=True, exist_ok=True)
+
+                def stats(self):
+                    return {"backend": "s3", "files": 0, "bytes": 0}
+
+                def migrate(self, _paths, cleanup=False):
+                    return {"uploaded_files": 0, "uploaded_bytes": 0,
+                            "cleaned_files": 0, "cleaned_bytes": 0}
+
+            with patch.object(archive_service, "storage_mode", return_value="s3"), \
+                 patch.object(archive_service, "S3Archive", FakeArchive), \
+                 patch.object(archive_service, "data_files", return_value=iter(())):
+                archive_service.run(root, cleanup=False, once=True)
+
+            status = json.loads(stale.read_text())
+            self.assertFalse(status["running"])
+            self.assertEqual(status["error"], "")
     def test_verified_stream_and_revision_survive_catalog_rebuild(self):
         path = self.source('ledger/old.jsonl', b'old\n')
         self.archive.migrate([path], cleanup=True)
@@ -128,6 +157,31 @@ class ArchiveTests(unittest.TestCase):
             self.assertEqual(self.archive.stats()["files"], 0)
             setattr(self.client, flag, False)
 
+    def test_cleanup_recovers_catalog_after_unlink_before_commit(self):
+        path = self.source()
+        self.archive.migrate([path], cleanup=True)
+        with closing(self.archive._db()) as db, db:
+            db.execute("UPDATE files SET cleaned=0")
+        self.assertFalse(path.exists())
+        self.assertEqual(self.archive.cleanup([path]), {"files": 0, "bytes": 0})
+        self.assertEqual(self.archive.stats()["cleaned_files"], 1)
+
+    def test_stats_normalizes_postgres_decimal_totals(self):
+        from decimal import Decimal
+        from unittest.mock import MagicMock
+
+        db = MagicMock()
+        db.execute.side_effect = [
+            MagicMock(fetchone=lambda: (Decimal("2"), Decimal("123"), Decimal("1"))),
+            MagicMock(fetchone=lambda: (Decimal("1"), Decimal("456"))),
+        ]
+        self.archive.backend = "postgres"
+        with patch.object(self.archive, "_db", return_value=db):
+            stats = self.archive.stats()
+
+        self.assertEqual(stats["bytes"], 123)
+        self.assertEqual(stats["object_bytes"], 456)
+
     def test_changed_original_is_not_removed_and_remote_failure_blocks_cleanup(self):
         path = self.source()
         self.client.on_upload = lambda: path.write_bytes(b"changed original")
@@ -184,3 +238,22 @@ class ArchiveTests(unittest.TestCase):
         cursor.parent.mkdir()
         cursor.write_text(json.dumps({replay.name: replay.stat().st_size}))
         self.assertTrue(cleanable(self.root, replay))
+
+    def test_database_backups_are_daily_and_repair_files_are_migrated(self):
+        source = self.root / "ledger" / "ledger.sqlite3"
+        source.parent.mkdir(parents=True)
+        with sqlite3.connect(source) as db:
+            db.execute("create table decisions (id integer)")
+            db.execute("insert into decisions values (1)")
+        backups = backup_databases(self.root)
+        self.assertEqual(len(backups), 1)
+        record_database_backups(self.root, backups)
+        backups[0].unlink()
+        self.assertEqual(backup_databases(self.root), [])
+
+        repair = self.root / "_archive" / "repairs" / "task42" / "catalog.sqlite3"
+        repair.parent.mkdir(parents=True)
+        repair.write_bytes(b"repair")
+        paths = list(data_files(self.root))
+        self.assertIn(repair, paths)
+        self.assertTrue(cleanable(self.root, repair))

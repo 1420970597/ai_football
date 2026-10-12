@@ -1,0 +1,8 @@
+area,file_or_symbol,current_behavior,basketball_impact,evidence
+sport_filter,collector/sources.py SOCCER_SPORT_ID,sport_id默认1且选择/实时计数按1过滤,篮球场次被排除,A
+analysis_filter,service/analysis.py analysis loop,仅接受match.is_live且sport_id==1,篮球不会进入分析,A
+model,core/live_model.py,Poisson剩余进球和足球半场结算,得分率和状态空间不适用,A
+markets,core/market_labels.py; core/settlement.py,HAD/AH/OU及1H足球结算,篮球让分/大小分/节盘语义不同,A
+execution,service/betting.py,订单校验sportId==1且matchType==2,篮球订单被硬阻断,A
+parser,collector/leyu_client.py LEYUMatch,保留sport_id/sport/period/score_raw,可作采集底座但阶段语义需核验,A
+normalizer,collector/leyu_normalizer.py,输出足球市场规范和快照,篮球盘口映射缺失,A

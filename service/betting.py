@@ -13,11 +13,12 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from core.market_labels import describe_market, format_market, parse_market_code
+from store.order_store import OrderStore, postgres_configured
+from store.sql_backend import SQLiteAdapter, StorageBackendError
 
 
 class BettingBlocked(ValueError):
@@ -239,26 +240,36 @@ def plan_bet(pick: Mapping[str, Any], config: Any,
         raise BettingBlocked("比赛不在进行中")
     if not market_open:
         raise BettingBlocked("盘口已关闭或暂停")
-    uses_decision_occurrences = ('decision_count' in pick or 'decision_occurrences' in pick)
     decision_count = _number(
         pick.get("decision_count", pick.get("decision_occurrences", pick.get("hit_count", 0))),
         "决策出现次数")
     minimum = _number(getattr(config, "betting_min_hit_count", 3), "最小命中次数")
     if decision_count < minimum:
         raise BettingBlocked("投注所需命中次数不足（决策出现次数 %.0f/%g）" % (decision_count, minimum))
+    # Recommendations may still be displayed at the lower research threshold.
+    # Real orders require a positive, current-quote advantage so a stale or
+    # merely high-confidence pick cannot debit the account.
+    edge = _pick_value(pick, "effective_ev_live", "effective_ev", "edge")
+    if edge is not None:
+        minimum_edge = _number(getattr(config, "betting_min_edge", 0.05), "最小下注优势")
+        if _number(edge, "当前下注优势") < minimum_edge:
+            raise BettingBlocked("当前下注优势不足（%.4f/%g）" % (float(edge), minimum_edge))
     from core.live_model import MODEL_VERSION
     if (pick.get('decision_model_version') or '') != (pick.get('calibration_evidence_version') or ''):
         raise BettingBlocked('校准模型尚无同版本独立结算证据')
     if pick.get('model_version') != MODEL_VERSION:
         raise BettingBlocked('历史证据来自未核验的模型版本')
-    if not uses_decision_occurrences:
-        # Legacy callers that only provide hit_count retain the old strict
-        # evidence gate. New live recommendations use decision_count, where
-        # the configured threshold is explicitly an occurrence threshold.
-        if _number(pick.get('independent_matches', 0), '独立比赛样本') < minimum:
-            raise BettingBlocked('修复后的独立比赛样本不足')
-        if pick.get('roi') is None or _number(pick['roi'], '历史收益率') <= 0:
-            raise BettingBlocked('修复后的历史收益率尚未为正')
+    # Occurrence count is a stability signal for the current quote, never a
+    # substitute for settled performance evidence.  The old decision_count
+    # branch skipped these checks, allowing a repeatedly published losing
+    # selection to pass the real-money gate without any positive history.
+    # Keep both checks mandatory for legacy and current recommendation shapes.
+    evidence_minimum = _number(getattr(config, 'betting_min_evidence_matches', 30), '最小独立样本')
+    if _number(pick.get('independent_matches', 0), '独立比赛样本') < evidence_minimum:
+        raise BettingBlocked('修复后的独立比赛样本不足（%.0f/%g）' %
+                             (_number(pick.get('independent_matches', 0), '独立比赛样本'), evidence_minimum))
+    if pick.get('roi') is None or _number(pick['roi'], '历史收益率') <= 0:
+        raise BettingBlocked('修复后的历史收益率尚未为正')
     confidence = min(1.0, max(0.0, _number(
         pick.get("composite_confidence", pick.get("confidence", 0)), "综合置信度")))
     base = _number(getattr(config, "betting_fixed_stake", 10.0), "固定额度")
@@ -335,6 +346,9 @@ class BettingExecutor:
         self._client: Any = None
         self._client_key = ""
         self.path: Path | None = None
+        self._root: str | None = None
+        self._storage_url = ""
+        self._order_store: OrderStore | None = None
         self._lock = threading.RLock()
         self._run_lock = threading.Lock()
         self._submission_lock = threading.Lock()
@@ -356,12 +370,46 @@ class BettingExecutor:
         self._latest: dict[str, dict[str, Any]] = {}
         self._retry_due: dict[str, tuple[str, float]] = {}
         self._blocked: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._active_executions = 0
         self.last_result: dict[str, Any] = {}
 
     def bind(self, root: str | None) -> None:
         with self._lock:
-            self.path = Path(root).parent / "betting-orders.sqlite3" if root else None
+            if self._order_store is not None:
+                self._order_store.close()
+            self._order_store = None
+            self._root = root
+            self._storage_url = (os.environ.get("BETTING_DB_URL") or
+                                 os.environ.get("ORDER_DB_URL") or "").strip()
+            if (self._storage_url.startswith(("postgres://", "postgresql://")) or
+                    (not self._storage_url and postgres_configured())):
+                self.path = None
+            elif self._storage_url.startswith("sqlite:///"):
+                self.path = Path(self._storage_url[9:]).expanduser()
+            else:
+                self.path = Path(root).parent / "betting-orders.sqlite3" if root else None
             self._schema_ready = False
+
+    def _ensure_order_store(self) -> OrderStore:
+        with self._lock:
+            existing = self._order_store
+        if existing is not None:
+            return existing
+        store = OrderStore.from_config(self._root, self._storage_url)
+        try:
+            store.initialize()
+        except BaseException:
+            store.close()
+            raise
+        with self._lock:
+            if self._order_store is None:
+                self._order_store = store
+                self.path = store.path
+                self._schema_ready = True
+                return store
+        store.close()
+        assert self._order_store is not None
+        return self._order_store
 
     def start(self) -> None:
         with self._lock:
@@ -390,8 +438,8 @@ class BettingExecutor:
                     else:
                         client.warm_betting()
                         self._warm_state = 'ready'
-                    if self.path and not self._schema_ready:
-                        self._db(self.path).close()
+                    if self._order_store is None and (self.path or self._storage_url):
+                        self._ensure_order_store()
                 except Exception:
                     self._warm_state = 'retrying'
             else:
@@ -418,6 +466,10 @@ class BettingExecutor:
             if self._execution_pool:
                 self._execution_pool.shutdown(wait=True, cancel_futures=True)
                 self._execution_pool = None
+            with self._lock:
+                store, self._order_store = self._order_store, None
+            if store is not None:
+                store.close()
 
     def configure(self) -> None:
         with self._lock:
@@ -527,49 +579,16 @@ class BettingExecutor:
             self._run_lock.release()
 
     def _db(self, path: Path) -> sqlite3.Connection:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        db = sqlite3.connect(path, timeout=5, isolation_level=None)
-        try:
-            db.execute("PRAGMA synchronous=FULL")
-            if self._schema_ready:
-                return db
-            db.execute("BEGIN IMMEDIATE")
-            db.execute("""CREATE TABLE IF NOT EXISTS orders (
-                identity TEXT PRIMARY KEY, at REAL NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
-                selection_key TEXT NOT NULL, account_key TEXT)""")
-            columns = {col[1] for col in db.execute("PRAGMA table_info(orders)")}
-            for name in ("selection_key", "account_key"):
-                if name not in columns:
-                    db.execute("ALTER TABLE orders ADD COLUMN " + name + " TEXT")
-            for old_identity, raw in db.execute("SELECT identity,payload FROM orders WHERE selection_key IS NULL").fetchall():
-                previous = json.loads(raw)
-                if not isinstance(previous, dict) or not all(previous.get(k) for k in ("match_id", "market", "outcome")):
-                    raise BettingBlocked("历史订单标识不完整，无法安全去重")
-                # Legacy payloads did not retain account/odds. Keep every receipt
-                # and conservatively reserve this selection for every account.
-                selection = _identity(_bet_selection(str(previous["match_id"]), previous))
-                db.execute("UPDATE orders SET selection_key=? WHERE identity=?", (selection, old_identity))
-            db.execute("CREATE INDEX IF NOT EXISTS orders_selection ON orders(selection_key,account_key)")
-            os.chmod(path, 0o600)
-            db.commit()
-            self._schema_ready = True
-        except BaseException:
-            db.rollback()
-            db.close()
-            raise
-        return db
+        """Compatibility handle for maintenance callers and legacy tests.
 
-    def _existing_order(self, db: sqlite3.Connection, selection_key: str,
-                        account_key: str) -> dict[str, Any] | None:
-        existing = db.execute("""SELECT payload FROM orders WHERE selection_key=?
-            AND (account_key=? OR account_key IS NULL) ORDER BY at DESC,identity LIMIT 1""",
-                              (selection_key, account_key)).fetchone()
-        if existing is None:
-            return None
-        previous = json.loads(existing[0])
-        if previous.get("status") == "sending":
-            previous.update(status="unknown", submitted=None, reason="上次提交未取得回执；请核对场馆注单")
-        return {**previous, "duplicate": True}
+        Production reads and writes use ``OrderStore`` directly.  The returned
+        SQLite connection is owned by the store and must not be closed by a
+        caller while the executor is running.
+        """
+        store = self._ensure_order_store()
+        if store.path != path or not isinstance(store.adapter, SQLiteAdapter):
+            raise StorageBackendError("当前订单存储不是该 SQLite 文件")
+        return store.adapter.connection
 
     def _check_state(self, row: Mapping[str, Any], pick: Mapping[str, Any],
                      snapshot: Mapping[str, Any], detail: Mapping[str, Any], cfg: Any,
@@ -695,19 +714,25 @@ class BettingExecutor:
             result['timings_ms'][stage] = round((now-stage_started)*1000, 3)
             stage, stage_started = name, now
         with self._lock:
-            path = self.path
+            store = self._order_store
             blocked = self._blocked.get(identity)
-        db: sqlite3.Connection | None = None
         claimed = False
         submit_owned = False
         attempt = 1
+        with self._lock:
+            self._active_executions += 1
         try:
             if invalid_clock:
                 raise BettingBlocked('盘口接收时钟无效')
             if not cfg.betting_enabled:
                 raise BettingBlocked("投注功能未启用")
-            if path is None:
-                raise BettingBlocked("未配置持久化订单目录，无法防止重启重复提交")
+            if store is None:
+                try:
+                    store = self._ensure_order_store()
+                except (StorageBackendError, OSError, sqlite3.Error) as exc:
+                    if isinstance(exc, StorageBackendError) and str(exc):
+                        raise BettingBlocked(str(exc)) from exc
+                    raise BettingBlocked("订单持久化不可用，无法防止重启重复提交") from exc
             if blocked is not None and blocked[1].get('awaiting_new_quote'):
                 if (float(pick.get('quote_received_at_ms') or 0) <=
                         float(blocked[1].get('quote_received_at_ms') or 0)):
@@ -736,8 +761,38 @@ class BettingExecutor:
                 raise BettingBlocked("只执行真实足球的经济学综合推荐")
             if pick not in row.get("picks", []) or pick.get("research_only"):
                 raise BettingBlocked("该盘口不是当前综合推荐")
+            # The explicit live route is independent from model-worker shadow
+            # observation. Algorithm mode keeps its evidence/ROI gates; model
+            # routes must have applied an approved artifact.
+            model_application = (row.get("ensemble") or {}).get("model_application")
+            if "ensemble" in row:
+                if not isinstance(model_application, Mapping):
+                    raise BettingBlocked("决策模式未通过执行核验，禁止真实下注")
+                mode = model_application.get('mode')
+                permitted = model_application.get('execution_enabled') is True
+                # Preserve the previously verified active-model contract.
+                if 'execution_enabled' not in model_application:
+                    permitted = mode == 'active' and model_application.get('applied') is True
+                if mode in ('model', 'hybrid') and model_application.get('applied') is not True:
+                    permitted = False
+                if not permitted:
+                    raise BettingBlocked("所选决策模式不可用、模型处于影子模式或未通过晋级，禁止真实下注")
             if row.get("config_version") != version:
                 raise BettingBlocked("推荐的设置版本已过期")
+            decision_mode = str(row.get('decision_mode') or 'algorithm')
+            if decision_mode != cfg.decision_mode:
+                raise BettingBlocked("推荐的决策模式已变化")
+            if isinstance(model_application, Mapping) and 'execution_enabled' in model_application:
+                if model_application.get('mode') != decision_mode:
+                    raise BettingBlocked("决策执行契约与当前模式不一致")
+            if pick.get('decision_mode') and pick.get('decision_mode') != decision_mode:
+                raise BettingBlocked("盘口结论与当前决策模式不一致")
+            if decision_mode in ('model', 'hybrid'):
+                if (not pick.get('decision_model_version') or
+                        pick.get('decision_model_version') != row.get('decision_model_version')):
+                    raise BettingBlocked("盘口结论与当前模型版本不一致")
+            if decision_mode == 'hybrid' and (pick.get('blend_weights') or {}).get('model') != cfg.model_blend_weight:
+                raise BettingBlocked("推荐的模型混合权重已变化")
             hub = self.hub()
             if hub is None:
                 raise BettingBlocked("实时行情未启动")
@@ -752,15 +807,17 @@ class BettingExecutor:
             enter_stage('historical_evidence')
             evidence = self.ledger().recommendation_performance(
                 str(pick["market"]), str(pick.get("line") or ""), str(pick["outcome"]),
-                decision_model_version=str(pick.get("decision_model_version") or ""))
+                decision_model_version=str(pick.get("decision_model_version") or ""),
+                decision_mode=decision_mode,
+                model_blend_weight=cfg.model_blend_weight if decision_mode == 'hybrid' else
+                    1.0 if decision_mode == 'model' else 0.0)
             confidence = recommendation_confidence(pick, evidence)
             plan = plan_bet({**pick, **evidence, "match_id": mid, "composite_confidence": confidence}, cfg)
             detail = build_ybty_order_detail({**pick, **metadata}, plan.stake)
             if detail["matchId"] != mid or detail["sportId"] != "1" or detail["matchType"] != 2:
                 raise BettingBlocked("原始订单标识与当前真实足球推荐不一致")
             result["stake"] = plan.stake
-            db = self._db(path)
-            previous = self._existing_order(db, selection_key, account_key)
+            previous = store.existing_order(selection_key, account_key)
             if previous is not None:
                 return previous
             enter_stage('venue_preflight')
@@ -802,20 +859,27 @@ class BettingExecutor:
             sending = {**result, "status": "sending", "reason": "已提交发送意图，等待场馆回执"}
             try:
                 # Serialize the final duplicate check with the durable claim.
-                # Never keep a SQLite transaction open during provider calls.
-                db.execute("BEGIN IMMEDIATE")
-                previous = self._existing_order(db, selection_key, account_key)
-                if previous is not None:
-                    db.rollback()
-                    return previous
-                self.settings.claim_bet(version, lambda: db.execute("""INSERT INTO orders
-                    (identity,at,status,payload,selection_key,account_key) VALUES (?,?,?,?,?,?)""", (
-                    identity, time.time(), "sending", json.dumps(sending, ensure_ascii=False),
-                    selection_key, account_key)))
-                db.commit()
-            except sqlite3.IntegrityError:
-                db.rollback()
-                return {**result, "status": "duplicate", "duplicate": True, "reason": "该推荐已有订单提交记录"}
+                # Never keep a SQL transaction open during provider calls.
+                def authorize_claim(claim: Callable[[], Any]) -> Any:
+                    # RuntimeSettings intentionally exposes a void callback;
+                    # retain the DB cursor so PostgreSQL/SQLite rowcount=0
+                    # conflicts cannot be mistaken for a successful claim.
+                    captured: list[Any] = []
+                    def invoke() -> Any:
+                        value = claim()
+                        captured.append(value)
+                        return value
+                    self.settings.claim_bet(version, invoke)
+                    return captured[0] if captured else None
+
+                inserted, previous = store.claim(
+                    identity, sending, selection_key, account_key,
+                    authorize=authorize_claim)
+                if not inserted:
+                    return previous or {**result, "status": "duplicate", "duplicate": True,
+                                         "reason": "该推荐已有订单提交记录"}
+            except (sqlite3.IntegrityError, StorageBackendError):
+                return {**result, "status": "blocked", "reason": "订单持久化失败"}
             claimed = True
             enter_stage('submission')
             submission_started = time.monotonic()
@@ -843,15 +907,15 @@ class BettingExecutor:
                 result.update(latency_target_met=None, send_time_unknown=True)
             result['timings_ms'][stage] = round((time.monotonic()-stage_started)*1000, 3)
             result.update(stage=stage, elapsed_ms=round((time.monotonic()-started)*1000, 3))
-            db.execute("UPDATE orders SET status=?,payload=? WHERE identity=?", (
-                result["status"], json.dumps(result, ensure_ascii=False), identity))
+            store.update(identity, result["status"], result)
             with self._lock:
                 self._blocked.pop(identity, None)
                 self._retry_due.pop(identity, None)
             return result
         except Exception as exc:  # Each failure stops this order, never the worker.
             # No provider exception/body can leak credentials into public state.
-            reason = str(exc) if isinstance(exc, (BettingBlocked, SessionError)) else "订单校验或持久化失败"
+            reason = (str(exc) if isinstance(exc, (BettingBlocked, SessionError, StorageBackendError))
+                      else "订单校验或持久化失败")
             result.update(stage=stage, elapsed_ms=round((time.monotonic() - started) * 1000, 1))
             result['timings_ms'][stage] = round((time.monotonic()-stage_started)*1000, 3)
             if isinstance(exc, (BettingLatencyExceeded, BetPreflightBudgetExpired)):
@@ -904,8 +968,18 @@ class BettingExecutor:
         finally:
             if submit_owned:
                 self._submission_lock.release()
-            if db is not None:
-                db.close()
+            # Synchronous maintenance/tests do not own a worker thread. Close
+            # their idle store after the operation; the live background loop
+            # keeps one connection for PostgreSQL latency and claim locking.
+            with self._lock:
+                self._active_executions = max(0, self._active_executions - 1)
+                idle_store = (self._order_store
+                              if self._active_executions == 0
+                              and not (self._thread and self._thread.is_alive()) else None)
+                if idle_store is not None:
+                    self._order_store = None
+            if idle_store is not None:
+                idle_store.close()
 
     def statuses(self, selections: list[tuple[str, str, str, str]]) -> dict[tuple[str, str, str, str], dict[str, Any]]:
         """Read execution evidence for each visible pick without venue calls."""
@@ -913,7 +987,7 @@ class BettingExecutor:
         account = os.environ.get("LEYU_APP_LOGIN_NAME", "").strip().casefold() or "default"
         account_key = _identity([account])
         with self._lock:
-            path = self.path
+            store = self._order_store
             attempts = [dict(item[1]) for item in self._blocked.values()]
             queued = dict(self._queue)
         cfg, _ = self.settings.snapshot()
@@ -931,32 +1005,17 @@ class BettingExecutor:
             key = (parts[0], parts[1], parts[2], parts[3])
             if key in out:
                 out[key] = attempt
-        if not path or not path.exists() or not wanted:
+        if not wanted:
             return out
         try:
-            with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
-                columns = {col[1] for col in db.execute("PRAGMA table_info(orders)")}
-                # GET must not migrate an old DB; execution owns that transaction.
-                if "selection_key" not in columns:
-                    rows = db.execute("SELECT payload FROM orders ORDER BY at").fetchall()
-                else:
-                    hashes = list(wanted)
-                    rows = []
-                    for offset in range(0, len(hashes), 200):
-                        batch = hashes[offset:offset+200]
-                        rows.extend(db.execute("SELECT payload FROM orders WHERE selection_key IN (" +
-                            ",".join("?" for _ in batch) + ") AND (account_key=? OR account_key IS NULL) ORDER BY at",
-                            [*batch, account_key]).fetchall())
-                for (raw,) in rows:
-                    order = json.loads(raw)
-                    parts = _bet_selection(str(order.get("match_id") or ""), order)
-                    key = (parts[0], parts[1], parts[2], parts[3])
-                    if key not in out:
-                        continue
-                    if order.get("status") == "sending":
-                        order.update(status="unknown", submitted=None, reason="发送意图已有记录，等待或核对场馆回执")
+            if store is None:
+                store = self._ensure_order_store()
+            for order in store.orders_for_selections(list(wanted), account_key):
+                parts = _bet_selection(str(order.get("match_id") or ""), order)
+                key = (parts[0], parts[1], parts[2], parts[3])
+                if key in out:
                     out[key] = order
-        except (OSError, sqlite3.Error, ValueError):
+        except (OSError, sqlite3.Error, StorageBackendError, ValueError):
             for key in out:
                 out[key] = {"status": "blocked", "submitted": False, "reason": "订单记录不可读取"}
         return out
@@ -966,7 +1025,7 @@ class BettingExecutor:
         cfg, _ = self.settings.snapshot()
         with self._lock:
             running = bool(self._thread and self._thread.is_alive())
-            path, last = self.path, dict(self.last_result)
+            store, last = self._order_store, dict(self.last_result)
             blocked = self._blocked.get(str(last.get('identity') or ''))
             if blocked:
                 last.update(blocked[1])
@@ -977,19 +1036,19 @@ class BettingExecutor:
                             retry_cancelled=True)
             queued = len(self._queue)
             retry_pending = len(self._retry_due)
-        ready = running and path is not None
-        reason = ("投注已关闭" if not cfg.betting_enabled else "执行器未启动" if not running
-                  else "未配置持久化订单目录" if path is None else "等待满足门控的实时综合推荐")
-        orders: list[dict[str, Any]] = []
-        if path and path.exists():
+        if store is None and running and (self.path or self._storage_url):
             try:
-                with closing(sqlite3.connect("file:" + str(path) + "?mode=ro", uri=True, timeout=1)) as db:
-                    for (raw,) in db.execute("SELECT payload FROM orders ORDER BY at DESC LIMIT 20"):
-                        order = json.loads(raw)
-                        if order.get("status") == "sending":
-                            order.update(status="unknown", submitted=None, reason="等待回执或提交被中断；请核对场馆注单")
-                        orders.append(order)
-            except (OSError, sqlite3.Error, ValueError):
+                store = self._ensure_order_store()
+            except (OSError, sqlite3.Error, StorageBackendError):
+                store = None
+        ready = running and store is not None
+        reason = ("投注已关闭" if not cfg.betting_enabled else "执行器未启动" if not running
+                  else "未配置持久化订单目录" if store is None else "等待满足门控的实时综合推荐")
+        orders: list[dict[str, Any]] = []
+        if store is not None:
+            try:
+                orders = store.recent(20)
+            except (OSError, sqlite3.Error, StorageBackendError, ValueError):
                 ready, reason = False, "订单记录不可读取，执行将被阻止"
         return {**betting_capability(cfg), "execution_enabled": cfg.betting_enabled and ready,
                 "running": running, "ready": ready, "queued": queued,

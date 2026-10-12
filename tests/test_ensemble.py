@@ -6,6 +6,17 @@ from service.runtime_settings import RuntimeConfig
 
 
 class EnsembleTests(unittest.TestCase):
+    def test_adaptive_weights_accepts_postgres_decimal_aggregates(self):
+        from decimal import Decimal
+
+        result = adaptive_weights(['a'], {'rows': [{
+            'algorithm': 'a', 'wins': Decimal('0.75'), 'losses': Decimal('0.25'),
+            'brier': Decimal('0.20'), 'market_brier': Decimal('0.22'),
+        }]})
+
+        self.assertIn('a', result['weights'])
+        self.assertIsInstance(result['algorithms']['a']['posterior_accuracy'], float)
+
     def test_algorithm_alert_requires_minimum_samples_and_threshold(self):
         evidence = {'rows': [dict(algorithm='a', wins=0, losses=1)] * 29 +
                             [dict(algorithm='b', wins=0, losses=1)] * 30}

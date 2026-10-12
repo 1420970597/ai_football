@@ -40,6 +40,7 @@ import copy
 import time
 import signal
 import threading
+from decimal import Decimal
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -604,7 +605,8 @@ class ApiApp:
             list_row = {**row, 'markets': [m for m in row.get('markets') or []
                 if str(m.get('market', '')).split('_1H')[0] in ('HAD', 'AH', 'OU')]}
             public = self._public_live_row(list_row, bool(realtime.get("connected")))
-            persisted = persisted_recommendations.get(str(public.get('match_id', '')), [])
+            persisted = [p for p in persisted_recommendations.get(str(public.get('match_id', '')), [])
+                         if self._same_decision_route(public, p)]
             if persisted:
                 existing_keys = {(str(p.get('market', '')), str(p.get('line', '')), str(p.get('outcome', '')))
                                  for p in public.get('picks') or []}
@@ -687,17 +689,34 @@ class ApiApp:
         # Retained recommendations remain visible while the match is live.
         # Only the live quote is marked stale; the decision itself is not
         # silently erased after one missed refresh.
-        if public["stale"] and not public.get("picks"):
+        if public["stale"] and not public.get("picks") and public.get('decision_mode_status') != 'unavailable':
             public["decision"] = "observe"
         return public
 
     def _attach_recommendation_evidence(self, row: Dict[str, Any]) -> None:
         self._attach_recommendation_evidence_many([row])
 
+    @staticmethod
+    def _same_decision_route(row: Mapping[str, Any], pick: Mapping[str, Any]) -> bool:
+        """A retained pick must still belong to the selected live route."""
+        if row.get('decision_mode_status') == 'unavailable':
+            return False
+        mode = str(row.get('decision_mode') or 'algorithm')
+        if str(pick.get('decision_mode') or 'algorithm') != mode:
+            return False
+        if pick.get('config_version') is not None and pick.get('config_version') != row.get('config_version'):
+            return False
+        if mode in ('model', 'hybrid'):
+            if not row.get('decision_model_version') or pick.get('decision_model_version') != row.get('decision_model_version'):
+                return False
+        if mode == 'hybrid':
+            selected = (row.get('model_application') or {}).get('weights') or {}
+            return (pick.get('blend_weights') or {}) == selected
+        return True
+
     def _attach_recommendation_evidence_many(self, rows: Sequence[Dict[str, Any]]) -> None:
-        keys = [(str(p.get("algorithm") or "economic_ensemble"), str(p.get("market") or ""),
-                 str(p.get("line") or ""), str(p.get("outcome") or "")) +
-                ((str(p["decision_model_version"]),) if p.get("decision_model_version") else ())
+        from service.ledger import recommendation_evidence_key
+        keys = [recommendation_evidence_key(p)
                 for row in rows if not row.get("finished") for p in row.get("picks") or []]
         try:
             evidence_by_key = self.analysis.ledger.recommendation_performance_many(keys)
@@ -708,9 +727,7 @@ class ApiApp:
                 continue
             best = None
             for pick in row.get("picks") or []:
-                key = (str(pick.get("algorithm") or "economic_ensemble"), str(pick.get("market") or ""),
-                       str(pick.get("line") or ""), str(pick.get("outcome") or "")) + \
-                      ((str(pick["decision_model_version"]),) if pick.get("decision_model_version") else ())
+                key = recommendation_evidence_key(pick)
                 evidence = evidence_by_key.get(key, {'hit_count': 0, 'miss_count': 0,
                     'settled_hit_count': 0, 'decision_count': 0, 'decision_occurrences': 0,
                     'pending_count': 0, 'pending_decisions': 0, 'settled_samples': 0, 'accuracy': None})
@@ -751,7 +768,8 @@ class ApiApp:
         connected = bool(rt is not None and rt.stats.connected)
         public = self._public_live_row(row, connected)
         try:
-            persisted = self.analysis.ledger.live_recommendations([match_id]).get(str(match_id), [])
+            persisted = [p for p in self.analysis.ledger.live_recommendations([match_id]).get(str(match_id), [])
+                         if self._same_decision_route(public, p)]
         except (AttributeError, TypeError, ValueError):
             persisted = []
         if persisted:
@@ -1619,9 +1637,16 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = "ai_football/1.0"
     app: ApiApp  # 由 make_server 注入
 
+    @staticmethod
+    def _json_default(value: Any) -> Any:
+        """Encode PostgreSQL NUMERIC values returned by aggregate queries."""
+        if isinstance(value, Decimal):
+            return float(value)
+        raise TypeError("Object of type %s is not JSON serializable" % type(value).__name__)
+
     def _send(self, status: int, payload: Mapping[str, Any]) -> None:
         raw = json.dumps(payload, ensure_ascii=False,
-                         allow_nan=False).encode("utf-8")
+                         allow_nan=False, default=self._json_default).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))

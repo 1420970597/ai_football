@@ -1,3 +1,6 @@
 boto3>=1.35,<2
 # Accelerate the large recoverable live-book cache in the API container.
 orjson>=3.10,<4
+# Runtime persistence is PostgreSQL in production.  The binary extra keeps
+# libpq out of the slim images while still allowing local SQLite test paths.
+psycopg[binary]>=3.2,<4

@@ -19,6 +19,7 @@ ALGORITHMS = {
     "economics_risk_adjusted": "经济学风控",
     "microstructure_adjusted": "盘口微观结构",
 }
+DECISION_MODES = {'algorithm': '纯算法', 'model': '纯决策模型', 'hybrid': '算法 + 决策模型'}
 
 
 class VersionConflict(ValueError):
@@ -50,6 +51,13 @@ class RuntimeConfig:
     betting_stake_mode: str = "fixed"
     betting_fixed_stake: float = 10.0
     betting_min_hit_count: int = 3
+    # Settled evidence is independent from repeated appearances of one quote.
+    # Keep real-money execution fail-closed until the performance sample is
+    # large enough to be meaningful.
+    betting_min_evidence_matches: int = 30
+    # Require a measurable, current-quote advantage before a real order.
+    # This is deliberately stricter than the recommendation display gate.
+    betting_min_edge: float = 0.05
     betting_retry_max_attempts: int = 5
     betting_retry_base_delay_s: float = 2.0
     llm_experiment_enabled: bool = True
@@ -64,10 +72,14 @@ class RuntimeConfig:
     llm_interval_s: float = 60.0
     llm_review_max_age_s: float = 120.0
     model_shadow_enabled: bool = True
+    # Live inference route.  ``algorithm`` is the existing market ensemble,
+    # ``model`` requires an approved active model, and ``hybrid`` blends both.
+    decision_mode: str = "algorithm"
+    model_blend_weight: float = 0.50
     model_training_enabled: bool = True
     model_training_matches: int = 100
     model_training_cpu: int = 1
-    model_training_memory_mb: int = 512
+    model_training_memory_mb: int = 2048
 
 
 RANGES = {
@@ -87,8 +99,11 @@ RANGES = {
     "algorithm_alert_threshold": (0.0, 1.0),
     "betting_fixed_stake": (0.01, 100000.0),
     "betting_min_hit_count": (1, 100000),
+    "betting_min_evidence_matches": (1, 100000),
+    "betting_min_edge": (0.0, 1.0),
     "betting_retry_max_attempts": (1, 20),
     "betting_retry_base_delay_s": (0.5, 30.0),
+    "model_blend_weight": (0.0, 1.0),
 }
 
 
@@ -107,7 +122,7 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
             raise ValueError("%s 必须在 %s~%s 之间" % (key, lo, hi))
         if key == "llm_max_tokens" and (not isinstance(v, int)):
             raise ValueError("llm_max_tokens 必须是整数")
-        if key in ("betting_min_hit_count", "betting_retry_max_attempts") and not isinstance(v, int):
+        if key in ("betting_min_hit_count", "betting_min_evidence_matches", "betting_retry_max_attempts") and not isinstance(v, int):
             raise ValueError(key + " 必须是整数")
     for name in ("llm_enabled", "llm_experiment_enabled", "algorithm_alert_enabled",
                  "betting_enabled", "model_training_enabled", "model_shadow_enabled"):
@@ -119,7 +134,7 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
             raise ValueError("至少启用一个有效算法")
         values["algorithms"] = tuple(dict.fromkeys(a))
     for key in ("primary_algorithm", "devig_method", "llm_base_url", "llm_model",
-                "llm_fallback_models", "llm_api_key", "betting_stake_mode"):
+                "llm_fallback_models", "llm_api_key", "betting_stake_mode", "decision_mode"):
         if key in values:
             if not isinstance(values[key], str) or len(values[key]) > 4096:
                 raise ValueError("%s 必须是有效字符串" % key)
@@ -131,6 +146,8 @@ def validated(base: RuntimeConfig, patch: Mapping[str, Any]) -> RuntimeConfig:
         raise ValueError("去水方法必须是 proportional 或 power")
     if cfg.betting_stake_mode not in ("fixed", "confidence_multiplier"):
         raise ValueError("投注额度模式必须是 fixed 或 confidence_multiplier")
+    if cfg.decision_mode not in ("algorithm", "model", "hybrid"):
+        raise ValueError("decision_mode 必须是 algorithm、model 或 hybrid")
     if cfg.llm_base_url:
         u = urlsplit(cfg.llm_base_url)
         if u.scheme not in ("http", "https") or not u.hostname or u.username or u.password or u.query or u.fragment:
@@ -184,7 +201,8 @@ class RuntimeSettings:
             cfg = asdict(self.config)
             cfg["has_llm_key"] = bool(cfg.pop("llm_api_key"))
             return {"version": self.version, "settings": cfg,
-                    "algorithms": ALGORITHMS, "persistent": self.path is not None,
+                    "algorithms": ALGORITHMS, "decision_modes": DECISION_MODES,
+                    "persistent": self.path is not None,
                     "restore_error": self.restore_error,
                     "capabilities": {"betting": betting_capability(self.config)}}
 

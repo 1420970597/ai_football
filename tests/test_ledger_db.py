@@ -1,17 +1,205 @@
 import json
+import re
 import tempfile
 import threading
 import unittest
+from contextlib import nullcontext
+from decimal import Decimal
+from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from core.settlement import summarise
 from core.live_model import MODEL_VERSION
 from service.ledger import DecisionLedger, LedgerEntry
-from store.ledger_db import LedgerDB
+from store.ledger_db import LedgerDB, prepare_postgres_statistics
+
+
+class _PostgresAggregateConnection:
+    """Exercise generated SQL with PG predicate and numeric semantics."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def execute(self, sql, params=()):
+        if re.search(r'\bWHERE\s+1(?:\s|$)(?!\s*=)', sql, re.IGNORECASE):
+            raise AssertionError('PostgreSQL WHERE requires a boolean predicate')
+        if re.search(r'\bsum\(\s*\(status\s+IN', sql, re.IGNORECASE):
+            raise AssertionError('PostgreSQL cannot aggregate boolean predicates')
+        rows = self.connection.execute(sql, params)
+        if ' AS win_stake_units' not in sql:
+            return rows
+        # PG returns Decimal for SUM(CASE ... THEN 1.0 ...).  Converting all
+        # float aggregate values also catches downstream mixed arithmetic.
+        return [{key: Decimal(str(value)) if isinstance(value, float) else value
+                 for key, value in dict(row).items()} for row in rows]
+
+    def close(self):
+        self.connection.close()
 
 
 class LedgerDatabaseTests(unittest.TestCase):
+    def test_journal_alias_checkpoint_preserves_incremental_offset(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            ledger._append([self.row(status='won')])
+            path = ledger.path
+            canonical = str(path.resolve())
+            alias = str(path.parent / '..' / path.parent.name / path.name)
+            ledger._db.connection.execute('UPDATE imports SET path=? WHERE path=?', (alias, canonical))
+            ledger._db.connection.commit()
+            with patch.object(ledger._db, 'put', side_effect=AssertionError('full journal reimport')):
+                ledger._sync_db()
+            with path.open('a') as stream:
+                stream.write(json.dumps(self.row(decision_id='new').as_dict()) + '\n')
+            original = ledger._db.put
+            with patch.object(ledger._db, 'put', wraps=original) as put:
+                ledger._sync_db()
+            self.assertEqual(sum(len(call.args[0]) for call in put.call_args_list), 1)
+            self.assertEqual(ledger.stats()['total'], 2)
+
+    def test_journal_identity_matches_only_the_same_output_volume(self):
+        self.assertEqual(DecisionLedger._journal_identity(Path('/root/ai_football/output/ledger/ledger.jsonl')),
+                         DecisionLedger._journal_identity(Path('/app/output/snapshots/../ledger/ledger.jsonl')))
+        self.assertNotEqual(DecisionLedger._journal_identity(Path('/other/data/ledger/ledger.jsonl')),
+                            DecisionLedger._journal_identity(Path('/app/output/ledger/ledger.jsonl')))
+
+    def test_postgres_many_groups_keep_settled_and_date_scopes(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            ledger._append([self.row(status='won', pnl=1),
+                            self.row(decision_id='pending', status='pending')])
+            db = ledger._db
+            metrics = db._metric_expressions()
+            overall = db.aggregate()
+            statuses = db.aggregate(group='status')
+            settled = db.aggregate("status='won'")
+            def raw(stats, **buckets):
+                values = {key: stats.get(key, 0) for key in metrics}
+                for group in ('status', 'settlement_bucket', 'settled_date'):
+                    values['mask_' + group] = int(group not in buckets)
+                    values['bucket_' + group] = buckets.get(group)
+                return values
+            rows = [raw(overall), *[raw(stats, status=status) for status, stats in statuses.items()],
+                    raw(settled, settlement_bucket='graded'),
+                    raw(settled, settlement_bucket='graded', settled_date='2026-10-01'),
+                    raw(statuses['pending'], settlement_bucket='ungraded', settled_date='2026-10-01')]
+            connection = MagicMock()
+            connection.execute.side_effect = [MagicMock(), rows]
+            original = db.connection
+            db.connection, db.backend = connection, 'postgres'
+            try:
+                with patch.object(db, '_statistics_table', return_value='decision_statistics'):
+                    result = db.aggregate_many('1=1', (), ('status',))
+                self.assertEqual(result['overall']['total'], 2)
+                self.assertEqual(result['settled']['total'], 1)
+                self.assertEqual(result['status']['pending']['total'], 1)
+                self.assertEqual(result['settled_by_date']['2026-10-01']['profit_units'], 1)
+                query = connection.execute.call_args_list[1].args[0]
+                self.assertIn('GROUP BY GROUPING SETS', query)
+                self.assertIn('FROM decision_statistics WHERE', query)
+                self.assertNotIn('payload', query)
+                self.assertEqual(connection.execute.call_count, 2)
+            finally:
+                db.connection, db.backend = original, 'sqlite'
+
+    def test_postgres_cached_history_returns_stale_snapshot_without_recomputing(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            snapshot = {'overall': {'total': 10, 'accuracy': .75}, 'statistics_status': 'ready',
+                        'statistics_at': '2020-01-01T00:00:00+00:00'}
+            db = MagicMock()
+            db.connection.execute.return_value.fetchone.return_value = (json.dumps(snapshot),)
+            db.aggregate.side_effect = AssertionError('browser request recalculated history')
+            with patch.object(ledger, '_refresh_history_snapshot') as refresh:
+                result = ledger._cached_history_snapshot(db, 'cached', '1=1', (), '1=1', (), 'real', 0)
+            self.assertEqual(result['overall']['accuracy'], .75)
+            self.assertTrue(result['statistics_stale'])
+            self.assertTrue(result['_refresh_statistics'])
+            refresh.assert_not_called()  # start only after the exact page read
+            result['overall']['total'] = 0
+            self.assertEqual(ledger._history_cache['cached']['overall']['total'], 10)
+
+    def test_postgres_cache_first_read_is_explicitly_pending_and_exact(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            db = MagicMock()
+            db.connection.execute.return_value.fetchone.return_value = None
+            db.aggregate.return_value = {'total': 12, 'graded': 10, 'accuracy': .6, 'legacy_identity_rows': 0}
+            with patch.object(ledger, '_refresh_history_snapshot'):
+                result = ledger._cached_history_snapshot(db, 'new', '1=1', (), '1=1', (), 'real', 0)
+            self.assertEqual(result['overall']['total'], 12)
+            self.assertEqual(result['overall']['accuracy'], .6)
+            self.assertEqual(result['statistics_status'], 'refreshing')
+            self.assertEqual(result['timeline'], [])
+            self.assertEqual(result['statistics_at'], '')
+
+    def test_postgres_cache_fresh_snapshot_skips_background_refresh(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            ledger._history_cache['fresh'] = {'overall': {'total': 10},
+                'statistics_at': datetime.now(timezone.utc).isoformat(), 'statistics_status': 'ready'}
+            with patch.object(ledger, '_refresh_history_snapshot') as refresh:
+                result = ledger._cached_history_snapshot(MagicMock(), 'fresh', '1=1', (), '1=1', (), 'real', 0)
+            self.assertFalse(result['statistics_stale'])
+            refresh.assert_not_called()
+
+    def test_postgres_projection_trigger_is_published_before_backfill(self):
+        connection = MagicMock()
+        def execute(sql, params=()):
+            result = MagicMock()
+            result.fetchone.return_value = None
+            result.rowcount = 123
+            return result
+        connection.execute.side_effect = execute
+        with patch('store.ledger_db.pg_connect', return_value=connection):
+            result = prepare_postgres_statistics()
+        calls = connection.mock_calls
+        sql_calls = [call.args[0] for call in connection.execute.call_args_list]
+        trigger = next(i for i, call in enumerate(calls)
+                       if call[0] == 'execute' and call.args[0].startswith('CREATE TRIGGER'))
+        backfill = next(i for i, call in enumerate(calls)
+                        if call[0] == 'execute' and call.args[0].startswith('INSERT INTO decision_statistics'))
+        self.assertTrue(any(call[0] == 'commit' for call in calls[trigger:backfill]))
+        self.assertTrue(any('AFTER INSERT OR UPDATE OR DELETE' in sql for sql in sql_calls))
+        self.assertEqual(result['backfilled'], 123)
+        connection.close.assert_called_once()
+
+    def test_postgres_aggregate_sql_and_decimal_values_support_history(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            ledger._append([
+                self.row(status='won', pnl=1, confidence=.8, kelly=.1),
+                self.row(decision_id='lost', status='half_lost', pnl=-.5, confidence=.4, kelly=.05),
+                self.row(decision_id='ignored', status='won', pnl=1, is_pick=False),
+            ])
+            db = ledger._db
+            db.connection = _PostgresAggregateConnection(db.connection)
+            with patch.object(ledger, '_read_db', side_effect=lambda: nullcontext(db)):
+                result = ledger.history(picks_only=False)
+                stats = ledger.stats(only_picks=False)
+                default_stats = db.aggregate()
+                default_entries = db.entries()
+            self.assertEqual(result['overall']['total'], 3)
+            self.assertEqual(result['overall']['stake_units'], 2)
+            self.assertEqual(result['overall']['accuracy'], .6667)
+            self.assertEqual(result['timeline'][0]['cum_profit'], .5)
+            self.assertEqual(stats['stake_units'], 2)
+            self.assertEqual(default_stats['total'], 3)
+            self.assertEqual(len(default_entries), 3)
+            json.dumps(result, allow_nan=False)
+
+    def test_postgres_aggregate_empty_values_are_safe(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = LedgerDB(Path(root) / 'ledger.sqlite3')
+            db.connection = _PostgresAggregateConnection(db.connection)
+            stats = db.aggregate()
+            self.assertEqual(stats['total'], 0)
+            self.assertEqual(stats['stake_units'], 0)
+            self.assertIsNone(stats['accuracy'])
+            self.assertEqual(db.aggregate(group='algorithm'), {})
+            json.dumps(stats, allow_nan=False)
+
     def test_history_read_does_not_rescan_archived_jsonl_after_projection_sync(self):
         with tempfile.TemporaryDirectory() as root:
             ledger = DecisionLedger(root)

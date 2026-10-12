@@ -74,10 +74,16 @@ def adaptive_weights(algorithms: Sequence[str], evidence: Mapping[str, Any],
     scores, details = {}, {}
     for algorithm, rows in buckets.items():
         n = len(rows)
-        win, loss = sum(r['wins'] for r in rows), sum(r['losses'] for r in rows)
+        # SQLite returns Python floats while psycopg returns Decimal for
+        # numeric aggregates. Normalize at the model boundary so the live
+        # service does not fail when a remote PostgreSQL projection is used.
+        win = sum(float(r.get('wins') or 0.0) for r in rows)
+        loss = sum(float(r.get('losses') or 0.0) for r in rows)
         posterior = (win + prior_matches / 2) / (win + loss + prior_matches)
-        brier = sum(r['brier'] for r in rows) / n if n else None
-        market = sum(r['market_brier'] for r in rows) / n if n else None
+        brier = (sum(float(r.get('brier') or 0.0) for r in rows) / n
+                 if n else None)
+        market = (sum(float(r.get('market_brier') or 0.0) for r in rows) / n
+                  if n else None)
         skill = ((float(market) - float(brier)) * n / (n + prior_matches)) if market is not None and brier is not None else 0.0
         # Shrink accuracy AND price-relative proper-score skill; cap noisy evidence.
         scores[algorithm] = min(2.0, max(.25, posterior / .5 * math.exp(3 * skill)))

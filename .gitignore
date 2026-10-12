@@ -22,6 +22,11 @@ env/
 # 用户提供的 S3 客户端配置与凭据
 /client/
 
+# 临时远端维护凭据（只在项目目录内生成，禁止入库）
+.ssh-vps
+.ssh-vps-*
+.ssh-vps/
+
 # 运行产物与日志
 output/
 *.log

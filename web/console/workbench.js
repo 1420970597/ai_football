@@ -554,8 +554,16 @@ async function loadHistory(reset = true) {
     $('history-next').disabled = S.historyNext === null;
     $('history-page').textContent = '第 ' + (Math.floor(S.historyOffset/100)+1) + ' 页 · 查询 ' + fixed(data.query_ms,0) + 'ms';
     $('history-count').textContent = (data.entries_total || 0) + ' 条 · ' + (summary.matches || 0) + ' 场 · 待结算 ' + pendingEntries + ' 个盘口';
-    const warning = data.legacy_identity_rows ? '旧记录 ' + data.legacy_identity_rows + ' 条，身份不完整。' : '';
-    notice('history-notice', warning + (summary.graded ? '' : '待确认终场赛果 · ' + (data.settle?.evidence_missing ?? summary.pending ?? 0) + ' 场未取得证据'));
+    const historyMessages = [];
+    if (data.statistics_refreshing) historyMessages.push('战绩统计正在后台汇总，完成后刷新可查看最新统计。');
+    if (data.statistics_stale) historyMessages.push('当前显示上次统计缓存，可能暂未包含最新结算。');
+    if (data.statistics_at) {
+      const at = new Date(data.statistics_at);
+      historyMessages.push(Number.isNaN(at.getTime()) ? '统计时点暂不可用。' : '统计时点：' + at.toLocaleString('zh-CN', {hour12:false}) + '。');
+    }
+    if (data.legacy_identity_rows) historyMessages.push('旧记录 ' + data.legacy_identity_rows + ' 条，身份不完整。');
+    if (!summary.graded && !data.statistics_refreshing) historyMessages.push('待确认终场赛果 · ' + (data.settle?.evidence_missing ?? summary.pending ?? 0) + ' 场未取得证据');
+    notice('history-notice', historyMessages.join(' '));
     const statusLabel = {won: '正确', lost: '错误', half_won: '赢半', half_lost: '输半', push: '走水', pending: '待结算', void: '无法结算'};
     const rows = (data.entries || []).map(entry => {
       const date = new Date(entry.at);
@@ -579,6 +587,8 @@ async function loadHistory(reset = true) {
 }
 const ORIGINAL_SETTING_FIELDS = [
   ['算法与门槛', [
+    ['decision_mode', '决策模式', 'select', {algorithm: '纯算法', model: '纯决策模型', hybrid: '算法 + 决策模型'}],
+    ['model_blend_weight', '混合模型权重', 'number', [0,1,.01]],
     ['primary_algorithm', '强度参考算法', 'select', {poisson_market: '当前盘口 Poisson', poisson_time_decay: '时间衰减 Poisson', devig_consensus: '去水共识', economics_risk_adjusted: '经济学风控', microstructure_adjusted: '盘口微观结构'}],
     ['devig_method', '去水方法', 'select', {proportional: '比例法', power: 'Power 法'}],
     ['min_probability', '建议最低概率', 'number', [0,1,.01]],
@@ -595,6 +605,8 @@ const ORIGINAL_SETTING_FIELDS = [
     ['betting_stake_mode', '投注额度模式', 'select', {fixed: '固定值', confidence_multiplier: '综合置信度 × 固定值'}],
     ['betting_fixed_stake', '固定投注额度 / CNY', 'number', [.01,100000,.01]],
     ['betting_min_hit_count', '最小决策出现次数', 'number', [1,100000,1]],
+    ['betting_min_evidence_matches', '最小独立结算比赛数', 'number', [1,100000,1]],
+    ['betting_min_edge', '真实下注最低优势', 'number', [0,1,.01]],
     ['betting_retry_max_attempts', '每轮最多尝试次数', 'number', [1,20,1]],
     ['betting_retry_base_delay_s', '重试基础间隔 / 秒', 'number', [.5,30,.5]],
     ['max_total_exposure', '同场最大敞口', 'number', [0,1,.01]],
@@ -620,7 +632,7 @@ const ORIGINAL_SETTING_FIELDS = [
   ]],
 ];
 const TRAINING_FIELDS = [
-  ['model_shadow_enabled', '模型影子模式（仅观察，不参与决策）', 'checkbox'],
+  ['model_shadow_enabled', '记录模型影子预测', 'checkbox'],
   ['model_training_enabled', '自动更新训练模型', 'checkbox'],
   ['model_training_matches', '更新周期 / 新增已结算比赛数', 'number', [1,100000,1]],
   ['model_training_cpu', '训练 CPU / 核', 'number', [1,2,1]],
@@ -629,10 +641,10 @@ const TRAINING_FIELDS = [
 const FIELD_MAP = Object.fromEntries([...ORIGINAL_SETTING_FIELDS.flatMap(([,fields]) => fields), ...TRAINING_FIELDS].map(f => [f[0],f]));
 const SETTING_TREE = [
   ['决策', [
-    ['模型与信号', [['算法与概率', ['primary_algorithm','devig_method','min_probability','min_ev']], ['时间与共识', ['anchor_max_age_s','devig_spread_warn_pp']], ['算法融合', ['weight_prior_matches','max_algorithm_weight']]]],
+    ['模型与信号', [['算法与概率', ['decision_mode','model_blend_weight','primary_algorithm','devig_method','min_probability','min_ev']], ['时间与共识', ['anchor_max_age_s','devig_spread_warn_pp']], ['算法融合', ['weight_prior_matches','max_algorithm_weight']]]],
     ['风险与预警', [['仓位控制', ['fractional_kelly','max_total_exposure','risk_correlation','execution_cost']], ['表现预警', ['algorithm_alert_enabled','algorithm_alert_min_samples','algorithm_alert_threshold']]]],
   ]],
-  ['执行', [['真实投注', [['功能开关', ['betting_enabled']], ['额度与条件', ['betting_stake_mode','betting_fixed_stake','betting_min_hit_count']], ['提交前重试', ['betting_retry_max_attempts','betting_retry_base_delay_s']]]]]],
+  ['执行', [['真实投注', [['功能开关', ['betting_enabled']], ['额度与条件', ['betting_stake_mode','betting_fixed_stake','betting_min_hit_count','betting_min_evidence_matches','betting_min_edge']], ['提交前重试', ['betting_retry_max_attempts','betting_retry_base_delay_s']]]]]],
   ['数据与模型', [
     ['模型训练', [['决策模式', ['model_shadow_enabled']], ['更新周期', ['model_training_enabled','model_training_matches']], ['资源限制', ['model_training_cpu','model_training_memory_mb']]]],
     ['实时数据', [['新鲜度', ['quote_max_age_s','state_max_age_s']]]],
@@ -643,6 +655,72 @@ const SETTING_TREE = [
   ]],
 ];
 const SETTING_FIELDS = SETTING_TREE.flatMap(([,menus]) => menus.flatMap(([,groups]) => groups.map(([name,keys]) => [name,keys.map(k => FIELD_MAP[k])])));
+const ALGORITHM_HELP = {
+  poisson_market: '由当前大小球和独赢盘口拟合主客队剩余进球强度 λ。公式：P(X=k)=e^(−λ)·λ^k/k!；主客队独立时 P(H=h,A=a)=P(H=h)·P(A=a)。在当前比分上累加剩余进球，按盘口结算规则求胜、负和走盘权重。',
+  poisson_time_decay: '使用盘口锚点的剩余进球强度随比赛时间衰减。公式：λ_i(t)=λ_i(anchor)·max(0,5400−t)/max(1,5400−t_anchor)；P(X=k)=e^(−λ_i(t))·λ_i(t)^k/k!。比分变化或锚点过期时重新拟合。t 的单位为秒。',
+  devig_consensus: '计算多种去水方法及其分歧，当前结论优先采用 Shin，失败时回退比例法。公式：q_i=1/o_i，B=Σq_i；Shin p_i=(√(z²+4(1−z)q_i²/B)−z)/(2(1−z))，求 z 使 Σp_i=1；比例法 p_i=q_i/B。',
+  economics_risk_adjusted: '将衰减 Poisson 概率向当前市场概率收缩，并折扣相关风险。公式：p=(p_Poisson+2·p_market)/3；f=max(0,λ_Kelly·(o·p−1)/(o−1))；成员仓位 f_risk=f·(1−ρ)，有效 EV 另扣 min(0.5,ρ·f)。',
+  microstructure_adjusted: '按已接收盘口走势对衰减 Poisson 概率作调整。公式：r=min(0.5,|trend_pct|/100)；p=clip(p_Poisson−r·s,0,1)，trend_pct>0 时 s=1，否则 s=−1。调整后按当前赔率重新计算 EV。',
+};
+const SETTING_HELP = {
+  decision_mode: '纯算法采用现有算法融合概率；纯决策模型采用通过版本和晋级校验的模型概率，无有效模型时不产生买入；混合模式结合二者。公式：p_hybrid=(1−w)·p_algorithm+w·p_model，再按同盘口约束校正并重新计算 EV 与仓位。',
+  model_blend_weight: '混合模式中决策模型的权重 w，取值 0~1。公式：p_hybrid=(1−w)·p_algorithm+w·p_model。0 完全使用算法，1 完全使用模型；纯算法和纯模型模式不使用此值。',
+  primary_algorithm: '选择页面展示主客队剩余进球强度时的参考算法，必须属于已启用算法；综合推荐仍由启用的算法融合生成。Poisson 公式：P(X=k)=e^(−λ)·λ^k/k!。各算法的具体公式见对应算法名称后的问号。',
+  devig_method: '从盘口赔率中扣除水钱，生成市场公平概率。令 q_i=1/o_i；比例法 p_i=q_i/Σq_j；Power 法 p_i=q_i^k/Σq_j^k，数值求 k 使 Σq_i^k=1。用于当前市场概率及 Poisson 强度拟合；去水共识算法使用自己的 AUTO 方法。',
+  min_probability: '显示买入建议的最低有效胜率，要求 p_model≥此值。含走盘盘口使用 p=P(win)/(P(win)+P(loss))，走盘份额单独计入期望收益；概率高仍须满足 EV、仓位等条件。',
+  min_ev: '显示买入建议的最低有效期望收益率。公式：EV=(p·o−1)·(P(win)+P(loss))；EV_eff=q_fill·EV−cost_exec。此处比较 EV_eff；0.02 表示每单位注额的有效期望为 2%。',
+  anchor_max_age_s: '时间衰减 Poisson 的盘口锚点最长复用时间。超过此秒数、比分变化或时钟回退时重置锚点。公式：λ(t)=λ_anchor·max(0,5400−t)/max(1,5400−t_anchor)。',
+  devig_spread_warn_pp: '不同去水方法概率分歧的告警阈值，单位为百分点 pp。公式：spread=100·max_(a,b) Σ_i |p_(a,i)−p_(b,i)|。超过阈值标记去水差异；1 pp 对应概率差 0.01。',
+  fractional_kelly: '建议仓位的 Kelly 折扣系数 λ。公式：f=max(0,λ·(o·p−1)/(o−1))；o 为十进制赔率，p 为非走盘部分的胜率。随后按同场最大敞口缩放；真实固定额度模式独立计算金额。',
+  weight_prior_matches: '算法融合权重的收缩先验场次 k。后验正确率 a=(wins+k/2)/(wins+losses+k)；相对市场技能 s=(Brier_market−Brier_model)·n/(n+k)；评分 score=clip((a/0.5)·exp(3s),0.25,2)，按评分归一化权重。k 越大，少量历史证据影响越小。',
+  max_algorithm_weight: '限制融合中单算法权重并将剩余权重重新分配。实际 cap=max(设置值,1/启用算法数)，确保权重总和为 1；概率融合 p=Σ_i w_i·p_i。仅启用一个算法时权重为 1。',
+  algorithm_alert_enabled: '开启后，已结算有效样本达到门槛且算法正确率低于阈值时，页面显示预警；此开关不会直接关闭算法。',
+  algorithm_alert_min_samples: '触发表现预警所需的最小有效已结算样本数。样本不足时显示证据不足，不据少量结果判定算法失效。',
+  algorithm_alert_threshold: '算法表现预警正确率阈值。公式：accuracy=wins/(wins+losses)；有效样本达到门槛且 accuracy<此值时告警。走盘和未结算不计入正确率分母。',
+  betting_enabled: '允许后台执行满足决策出现次数、同版本独立结算证据、当前优势、盘口和余额校验的真实综合推荐。关闭后取消尚未提交的重试；已提交注单不会撤销。',
+  betting_stake_mode: '真实投注金额计算方式。固定值：stake=base；综合置信度模式：stake=base·clip(composite_confidence,0,1)。最终按场馆限额和可用余额校验，金额精确到分。',
+  betting_fixed_stake: '真实投注的基础金额，单位 CNY。固定模式直接使用此金额；置信度模式以此金额乘综合置信度。它与研究推荐的 Kelly 本金比例分开计算。',
+  betting_min_hit_count: '同一比赛、盘口线和方向在获取新盘口后计算得到的决策最少出现次数。每次符合决策条件计一次；赔率变化不会改变已经提交注单的去重身份。此次数不代表赛果正确次数。',
+  betting_min_evidence_matches: '真实投注所需的同版本独立已结算比赛数量，避免同场重复决策充当多个独立样本；同时还要求历史 ROI 为正。此项与决策出现次数分别校验。',
+  betting_min_edge: '真实提交前要求的当前报价最低优势。优先使用最新报价的 effective_ev_live，否则使用有效 EV；优势低于此值时等待新决策。研究推荐可采用较低的建议 EV 门槛。',
+  betting_retry_max_attempts: '可重试的会话、网络或盘口变化错误，每轮最多尝试次数，包含首次尝试。提交结果未知时核对场馆订单，不自动重发；达到上限后等待重新检查。',
+  betting_retry_base_delay_s: '可重试错误的基础退避间隔。公式：delay=min(后台复查上限,base·2^(attempt−1)) 秒。重试前重新校验当前配置、决策和盘口；关闭投注会取消尚未提交的重试。',
+  max_total_exposure: '单场研究推荐的 Kelly 总仓位上限，以本金比例表示。公式：scale=min(1,cap/Σf_i)，各推荐仓位 f_scaled=f_i·scale；0.25 表示同场最多 25%。此项不替代真实固定额度或场馆限额。',
+  risk_correlation: '同场算法分歧与相关风险参数 ρ。经济学风控成员采用 f_risk=f·(1−ρ)、EV_penalty=min(0.5,ρ·f)；融合前分歧惩罚为 ρ·σ_p·odds。综合候选按一致性校正后的概率重新计算 EV 和 Kelly。',
+  execution_cost: '每单位注额的执行成本比例。公式：EV_eff=q_fill·EV−cost_exec。当前 q_fill=clip(0.95·exp(−2·max(EV,0)),0.01,1)，为估算参数；0.001 表示扣除 0.1% 成本。',
+  quote_max_age_s: '完整盘口报价允许参与估值的最长年龄。报价年龄超过此秒数或盘口暂停时，不用于生成新买入建议。',
+  state_max_age_s: '比分和比赛时钟允许使用的最长年龄。超过此秒数时暂停基于该状态计算新决策，防止使用陈旧赛况。',
+  llm_enabled: '启用独立后台 LLM 审核。经济学计算先完成，再异步审核同场盘口；此开关需要同时配置服务地址和模型。',
+  llm_experiment_enabled: '记录纯经济学与经济学加 LLM 的配对实验，供战绩页比较同一机会上的结果与收益；不以未审核输出充当实验结论。',
+  llm_base_url: 'OpenAI 兼容服务的基础 HTTP/HTTPS 地址。使用无用户名、密码、查询参数的服务地址；后台调用 chat/completions 接口。',
+  llm_model: '后台 LLM 审核使用的服务模型标识，需要与配置的 API 服务支持的名称一致。',
+  llm_fallback_models: '主模型请求失败时按顺序尝试的备用模型名称，使用英文逗号分隔；留空表示不配置备用模型。',
+  llm_api_key: 'LLM 服务密钥仅写入后端，不在读取设置时回显。已有密钥时留空保留；需要删除时勾选下方“清除已保存 API Key”。',
+  llm_timeout_s: '单次 LLM 请求的超时秒数。请求超过时限后记录审核错误，并按备用模型配置处理。',
+  llm_temperature: 'LLM 输出采样温度。较低值通常使审核结果更稳定；实际支持范围与行为取决于服务提供方。',
+  llm_max_tokens: '单次 LLM 审核允许生成的最大输出 token 数。较小值减少输出长度，也可能截断结构化结果。',
+  llm_interval_s: '同一比赛两次后台审核之间的最小间隔秒数，避免每次盘口推送都触发远程请求。',
+  llm_review_max_age_s: '审核输入的最大有效年龄。超过时限的审核结果标记为迟到，避免旧盘口审核覆盖新的决策。',
+  model_shadow_enabled: '由独立 model-worker 记录模型影子预测和前瞻验证表现。此开关控制观察记录，与决策模式分别配置；纯算法、纯模型或混合结论由“决策模式”选择，模型参与时仍需有效模型与晋级校验。',
+  model_training_enabled: '允许独立 model-worker 自动检查训练周期并生成候选模型。训练与 API 服务解耦，候选通过时间隔离验证和晋级门槛后才可用于决策。',
+  model_training_matches: '上次训练后新增的有效已结算独立比赛数达到此值时触发更新。每场保留多盘口、多决策输入；仅使用决策时点前可见的走势。首次训练仍须达到最低有效比赛门槛。',
+  model_training_cpu: '独立模型训练进程允许使用的 CPU 核数上限，降低值可减少训练对采集与 API 响应的竞争。此项不设置系统服务 CPU 限制。',
+  model_training_memory_mb: '独立训练进程的内存上限，单位 MiB。候选训练超过限制可能被终止；失败状态会显示原因并保留已有可用模型。',
+  clear_llm_key: '保存时删除后端已配置的 LLM API Key；不勾选且密钥输入留空时保留已有密钥。',
+};
+function settingControl(key, label, input, type, help) {
+  const descriptionId = 'setting-help-' + key;
+  const description = el('p', {id:descriptionId, class:'setting-description', role:'tooltip', text:help || SETTING_HELP[key] || '此设置的说明暂不可用。', hidden:''});
+  const button = el('button', {type:'button', class:'setting-help', text:'?', title:description.textContent,
+    'aria-label':label + '的设置说明', 'aria-expanded':'false', 'aria-controls':descriptionId, 'aria-describedby':descriptionId});
+  const show = visible => {description.hidden = !visible; button.setAttribute('aria-expanded', String(visible));};
+  button.addEventListener('click', () => show(description.hidden));
+  button.addEventListener('keydown', event => {if (event.key === 'Escape') {show(false); event.stopPropagation();}});
+  input.setAttribute('aria-describedby', [input.getAttribute('aria-describedby'), descriptionId].filter(Boolean).join(' '));
+  const name = el('span', {class:'setting-label'}, [el('label', {for:input.id, text:label}), button]);
+  return el('div', {class:type === 'algorithm' ? 'setting-algorithm' : type === 'checkbox' ? 'setting-toggle' : 'setting-field'},
+    type === 'algorithm' ? [input, name, description] : [name, input, description]);
+}
 S.settingsPath = [0,0,0];
 function selectSetting(category, menu, group) {
   S.settingsPath = [category,menu,group];
@@ -658,30 +736,63 @@ function selectSetting(category, menu, group) {
 let dataModelBusy = false;
 const bytes = value => Number.isFinite(value) ? (value / 1024**3).toFixed(2) + ' GiB' : '—';
 const timeLabel = value => value ? new Date(value).toLocaleString('zh-CN', {hour12:false}) : '—';
+const decisionModeLabel = mode => ({algorithm:'纯算法',model:'纯决策模型',hybrid:'算法 + 决策模型'}[mode] || '待后端更新');
+function decisionModelStatus(data) {
+  const mode = data.decision_mode || data.settings?.decision_mode;
+  if (mode === 'algorithm') return {mode, state:'算法服务决策', reason:''};
+  if (!['model','hybrid'].includes(mode)) return {mode, state:'模式信息暂不可用', reason:''};
+  const unavailable = data.decision_mode_status === 'unavailable' || !data.model?.version || data.model?.promotion?.approved === false;
+  const reason = unavailable ? data.decision_mode_reason || '暂无通过校验的已晋级模型，此模式暂不产生买入推荐。' : '';
+  return {mode, state:unavailable ? '不可用' : '已加载 · 实际结果见实时决策', reason};
+}
 function metricCards(items) {
   return items.map(([label,value]) => el('div', {class:'model-metric'}, [el('span',{text:label}),el('strong',{text:String(value ?? '—')})]));
 }
 function renderDataModel(data) {
   const model = data.model || {}, training = data.training || {}, storage = data.storage || {};
   const quality = training.data_quality || {};
+  const sampledQuality = quality.sampled === true || quality.counts_scope === 'sampled_qualified_inputs';
+  const qualityCards = sampledQuality ? [
+    ['全量训练输入',quality.input_records ?? '尚未统计'], ['全量输入比赛',quality.input_matches ?? '尚未统计'],
+    ['全量有效训练决策',training.eligible_decisions ?? '尚未审查'], ['全量无效 / 隔离数据',quality.invalid_training_records ?? '尚未审查'],
+    ['等待赛果标签（全量）',quality.waiting_for_label ?? '尚未统计'],
+    ...(quality.estimated_input_records != null ? [['训练输入（估计）',quality.estimated_input_records]] : []),
+    ...(quality.estimated_input_matches != null ? [['输入比赛（估计）',quality.estimated_input_matches]] : []),
+    ['已核验样本数',quality.sample_examined_records ?? '尚未审查'], ['已核验样本比赛',quality.sample_examined_matches ?? '尚未审查'],
+    ['已核验样本有效决策',quality.sample_valid_training_decisions ?? training.sampled_eligible_decisions ?? '尚未审查'],
+    ['已核验样本无效（不可结算）',quality.sample_ungraded_inputs ?? '尚未审查'],
+  ] : [
+    ['有效训练决策',training.eligible_decisions ?? '尚未审查'], ['已有输入比赛',quality.input_matches ?? '尚未统计'],
+    ['持久化训练输入',quality.input_records ?? '尚未统计'], ['无效 / 隔离训练数据',quality.invalid_training_records ?? '尚未审查'],
+    ['等待赛果标签',quality.waiting_for_label ?? '尚未统计'],
+  ];
+  const decisionStatus = decisionModelStatus(data);
   const labels = {not_started:'尚未启动',restoring:'历史数据恢复中',checking:'检查训练数据',waiting:'等待新增已结算比赛',training:'训练中',ready:'已更新',failed:'训练失败',disabled:'自动训练已关闭'};
   $('model-state').textContent = labels[training.state] || '未训练';
   $('model-summary').replaceChildren(...metricCards([
-    ['决策模式',data.mode === 'active' ? '参与决策（无可用模型时使用经济算法）' : '影子模式（仅观察）'], ['最新更新时间',timeLabel(model.updated_at)], ['训练参数量',model.parameter_count ?? '未训练'],
-    ['模型版本',model.version || '未训练'], ['有效已结算比赛',training.eligible_matches ?? model.eligible_matches ?? '—'], ['有效训练决策',training.eligible_decisions ?? '—'],
-    ['持久化训练输入',quality.input_records ?? '—'], ['无效 / 隔离训练数据',quality.invalid_training_records ?? '—'],
-    ['等待赛果标签',quality.waiting_for_label ?? '—'],
+    ['决策模式',decisionModeLabel(decisionStatus.mode)], ['模式状态',decisionStatus.state],
+    ['模型影子记录',data.settings?.shadow_enabled === false ? '已关闭' : '已开启 · 独立观察'],
+    ...(decisionStatus.mode === 'hybrid' ? [['混合模型权重',pct(data.settings?.model_blend_weight)]] : []),
+    ['最新更新时间',timeLabel(model.updated_at)], ['训练参数量',model.parameter_count ?? '未训练'],
+    ['模型版本',model.version || '未训练'], [sampledQuality ? '样本有效已结算比赛' : '有效已结算比赛',training.eligible_matches ?? model.eligible_matches ?? '—'],
+    ['本轮训练样本',training.training_decisions ?? '—'], ['每场样本上限',quality.training_max_rows_per_match ?? '—'],
+    ...qualityCards,
     ['距更新周期', (training.new_matches ?? '—') + ' / ' + (data.settings?.cycle_matches ?? '—') + ' 场'],
     ['当前实际训练限制',training.limits ? training.limits.cpu_cores + ' 核 / ' + training.limits.memory_mb + ' MiB' : '尚未执行'],
     ['训练资源上限',(data.settings?.cpu_cores ?? '—') + ' 核 / ' + (data.settings?.memory_mb ?? '—') + ' MiB'],
   ]));
   const promotion = model.promotion || data.training?.candidate?.promotion || {};
   const calibration = model.calibration || data.training?.candidate?.calibration;
+  const promotionText = promotion.approved === true ? (model.version ? ' 当前模型已通过晋级门槛。' : ' 当前候选已通过晋级校验，尚未加载生产模型。') :
+    promotion.approved === false ? ' 当前候选未晋级：' + ((promotion.reasons || []).join('；') || '独立验证尚未满足晋级要求。') :
+      model.version ? ' 当前模型的晋级证据暂未提供。' : training.candidate ? ' 当前候选等待晋级校验。' : ' 尚无已晋级模型。';
   $('model-description').textContent = (model.architecture || '待训练：L2 Logistic 多盘口概率校准') + '。' + (data.note || '') +
+    (decisionStatus.reason ? ' 决策模式不可用：' + decisionStatus.reason : '') +
     ' 首次训练至少需要100场有效已结算比赛。验证按比赛和时间隔离，训练与评价按比赛等权；走盘排除，赢半/输半按非走盘方向判定。' +
-    (quality.invalid_training_records !== undefined ? ' 数据资格口径：有效数为通过版本、双时间和结算校验的训练决策；无效/隔离数包含旧版本、缺失或越界时间、不可结算输入及不符合新契约的旧台账；等待标签的数据单独统计，不计为无效。' : '') +
+    (sampledQuality ? ' 数据资格口径：已核验有效/无效数量仅覆盖本轮按比赛限量抽取的样本，不代表全库资格；全量尚未审查的数量单独标明。标注“估计”的输入量来自数据库统计信息，可能滞后；等待赛果标签不计为无效。' :
+      quality.invalid_training_records !== undefined ? ' 数据资格口径：有效数为通过版本、双时间和结算校验的训练决策；无效/隔离数包含旧版本、缺失或越界时间、不可结算输入及不符合新契约的旧台账；等待标签的数据单独统计，不计为无效。' : '') +
     (calibration ? ' 校准：' + (calibration.method === 'logistic' ? 'Logistic slope/intercept' : '恒等映射') + '（' + (calibration.samples || 0) + ' 条样本）。' : ' 尚无独立校准制品。') +
-    (promotion.approved === false ? ' 当前候选未晋级：' + (promotion.reasons || []).join('；') : ' 当前模型已通过晋级门槛。');
+    promotionText;
   const rows = [['时间隔离验证',model.validation],['同组盘口基准',model.baseline],['当前版本前瞻验证',data.prospective?.model],['前瞻盘口基准',data.prospective?.baseline]];
   $('model-performance').replaceChildren(el('table',{},[
     el('thead',{},[el('tr',{},['表现口径','比赛 / 决策','二分类准确率','HAD Top-1','Brier ↓','Log loss ↓','ECE ↓'].map(text=>el('th',{text})))]),
@@ -752,9 +863,9 @@ function renderSettings(data) {
     if (index === 0) {
       const algorithms = el('div', {class: 'enabled-algorithms'});
       for (const [key,name] of Object.entries(data.algorithms)) {
-        const input = el('input', {type: 'checkbox', name: 'algorithm', value: key});
+        const input = el('input', {type: 'checkbox', name: 'algorithm', value: key, id:'setting-algorithm-' + key});
         input.checked = cfg.algorithms.includes(key);
-        algorithms.appendChild(el('label', {}, [input, name]));
+        algorithms.appendChild(settingControl('algorithm-' + key, name, input, 'algorithm', ALGORITHM_HELP[key]));
       }
       section.appendChild(algorithms);
     }
@@ -763,7 +874,8 @@ function renderSettings(data) {
       let input;
       if (type === 'select') {
         input = el('select', attrs, Object.entries(options).map(([value,text]) => el('option', {value,text})));
-        input.value = cfg[key];
+        input.value = cfg[key] ?? (key === 'decision_mode' ? 'algorithm' : '');
+        if (key === 'decision_mode' && cfg[key] === undefined) input.disabled = true;
       } else {
         input = el('input', {...attrs, type});
         if (type === 'checkbox') input.checked = cfg[key];
@@ -772,18 +884,17 @@ function renderSettings(data) {
           input.placeholder = cfg.has_llm_key ? '已配置，留空保留' : '未配置';
           input.value = '';
         } else input.value = cfg[key] ?? '';
-        if ((key.startsWith('model_training_') || key === 'model_shadow_enabled') && cfg[key] === undefined) input.disabled = true;
+        if ((key.startsWith('model_training_') || key === 'model_shadow_enabled' || key === 'model_blend_weight') && cfg[key] === undefined) input.disabled = true;
         if (type === 'number') {input.required=true; input.min=options[0]; input.max=options[1]; input.step=options[2];}
       }
       if (key === 'betting_enabled') {
         input.disabled = betting?.execution_supported !== true;
         input.setAttribute('aria-describedby', 'betting-capability-notice');
       }
-      section.appendChild(el('label', {class: type === 'checkbox' ? 'setting-toggle' : 'setting-field'}, [el('span', {text: label}), input]));
+      section.appendChild(settingControl(key, label, input, type));
     }
     if (fields.some(f => f[0].startsWith('model_training_')) && cfg.model_training_matches === undefined) section.appendChild(el('p',{class:'config-version',text:'当前后端版本没有训练配置，请更新 analytics-api 后重新读取设置。'}));
-    if (fields.some(f => f[0] === 'llm_api_key')) section.appendChild(el('label', {class: 'setting-toggle'}, [
-      el('span', {text: '清除已保存 API Key'}), el('input', {type: 'checkbox', id: 'clear-llm-key'})]));
+    if (fields.some(f => f[0] === 'llm_api_key')) section.appendChild(settingControl('clear_llm_key', '清除已保存 API Key', el('input', {type:'checkbox', id:'clear-llm-key'}), 'checkbox'));
     return section;
   });
   $('settings-fields').replaceChildren(...sections);

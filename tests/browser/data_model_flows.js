@@ -4,13 +4,13 @@ async (page) => {
   page.on('pageerror',error=>errors.push(error.message));
   let mode='empty',saved,modelRequests=0,recommendationRequests=0,unavailableRecommendations=true;
   const settings={version:1,persistent:true,algorithms:{poisson_market:'当前盘口 Poisson',poisson_time_decay:'时间衰减 Poisson'},capabilities:{betting:{execution_supported:true}},
-    settings:{algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',min_probability:.52,min_ev:.02,
+    settings:{decision_mode:'algorithm',model_blend_weight:.5,algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',min_probability:.52,min_ev:.02,
       quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
       weight_prior_matches:20,max_algorithm_weight:.6,algorithm_alert_enabled:true,algorithm_alert_min_samples:30,algorithm_alert_threshold:.5,
-      betting_enabled:false,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_min_hit_count:3,betting_retry_max_attempts:5,betting_retry_base_delay_s:2,
+      betting_enabled:false,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_min_hit_count:3,betting_min_evidence_matches:30,betting_min_edge:.05,betting_retry_max_attempts:5,betting_retry_base_delay_s:2,
       llm_enabled:false,llm_experiment_enabled:true,llm_base_url:'',llm_model:'',llm_fallback_models:'',llm_timeout_s:20,llm_temperature:.2,llm_max_tokens:2048,llm_interval_s:60,llm_review_max_age_s:120,
       model_shadow_enabled:true,model_training_enabled:true,model_training_matches:100,model_training_cpu:1,model_training_memory_mb:512}};
-  const fixture={model:{},training:{state:'waiting',eligible_matches:42,new_matches:42},settings:{cycle_matches:100,cpu_cores:1,memory_mb:512},running:true,
+  const fixture={decision_mode:'algorithm',model:{},training:{state:'waiting',eligible_matches:42,new_matches:42},settings:{decision_mode:'algorithm',model_blend_weight:.5,shadow_enabled:true,cycle_matches:100,cpu_cores:1,memory_mb:512},running:true,
     note:'独立观察预测，走势冻结在决策输入截点。',prospective:{},storage:{at:'2026-10-10T08:00:00Z',bytes:1073741824,files:99,
     disk:{total:100*1073741824,used:80*1073741824,free:20*1073741824},records:{decisions:1234,matches:42,settled_decisions:900},categories:[{name:'走势',files:99,bytes:1073741824,allocated_bytes:1073741824}]}};
   await page.route('**/api/v1/**',async route=>{
@@ -22,7 +22,13 @@ async (page) => {
       if(mode==='error') return route.fulfill({status:502,json:{error:'fixture offline'}});
       if(mode==='loading') await new Promise(resolve=>setTimeout(resolve,800));
       const data=JSON.parse(JSON.stringify(fixture));
-      if(mode==='trained') {data.model={architecture:'L2 Logistic',version:'test-20261010',parameter_count:30,updated_at:'2026-10-10T07:00:00Z',validation:{matches:24,decisions:480,accuracy:.7,brier:.21,log_loss:.62},baseline:{matches:24,decisions:480,accuracy:.6,brier:.24,log_loss:.7}};data.training.state='ready';}
+      data.decision_mode=settings.settings.decision_mode;
+      Object.assign(data.settings,{decision_mode:settings.settings.decision_mode,model_blend_weight:settings.settings.model_blend_weight,shadow_enabled:settings.settings.model_shadow_enabled});
+      if(mode==='trained') {data.model={architecture:'L2 Logistic',version:'test-20261010',parameter_count:30,updated_at:'2026-10-10T07:00:00Z',promotion:{approved:true},validation:{matches:24,decisions:480,accuracy:.7,brier:.21,log_loss:.62},baseline:{matches:24,decisions:480,accuracy:.6,brier:.24,log_loss:.7}};data.training.state='ready';}
+      if(mode==='sampled') Object.assign(data.training,{eligible_decisions:null,sampled_eligible_decisions:29857,
+        data_quality:{counts_scope:'sampled_qualified_inputs',sampled:true,full_audit_complete:false,training_max_rows_per_match:40,
+          input_records:null,input_matches:null,invalid_training_records:null,waiting_for_label:null,estimated_input_records:23050041,
+          estimated_input_matches:790,sample_examined_records:30000,sample_examined_matches:790,sample_valid_training_decisions:29857,sample_ungraded_inputs:143}});
       if(mode==='failed') {data.training.state='failed';data.training.error='训练进程被终止（资源限制或超时）';}
       return route.fulfill({json:data});
     }
@@ -37,8 +43,17 @@ async (page) => {
   await page.goto(origin+'/#data-model');
   await page.getByText('等待新增已结算比赛',{exact:true}).waitFor();
   assert((await page.locator('#model-summary').textContent()).includes('未训练'),'no fictional model parameters');
+  assert((await page.locator('#model-description').textContent()).includes('尚无已晋级模型'),'untrained model has no promotion claim');
+  assert((await page.locator('#model-summary').textContent()).includes('纯算法'),'algorithm mode shown independently from shadow');
   assert((await page.locator('#model-performance').textContent()).includes('暂无有效样本'),'no fake zero accuracy');
   assert((await page.locator('#storage-summary').textContent()).includes('20.00 GiB'),'real disk free shown');
+  mode='sampled';await page.locator('#data-model-refresh').click();
+  await page.getByText('已核验样本有效决策',{exact:true}).waitFor();
+  const sampledCards=await page.locator('#model-summary').textContent();
+  assert(sampledCards.includes('训练输入（估计）23050041'),'database estimate explicitly labelled');
+  assert(sampledCards.includes('全量有效训练决策尚未审查') && sampledCards.includes('全量无效 / 隔离数据尚未审查'),'unknown full-audit counts are not zero');
+  assert(sampledCards.includes('已核验样本有效决策29857') && sampledCards.includes('已核验样本无效（不可结算）143'),'sampled valid and invalid counts separated');
+  assert((await page.locator('#model-description').textContent()).includes('不代表全库资格'),'sampled scope explained');
   mode='missing';await page.locator('#data-model-refresh').click();
   await page.getByText('当前后端版本尚未提供数据与模型接口，请构建并更新 analytics-api 后手动刷新。',{exact:true}).waitFor();
   const afterMissing=modelRequests;await page.waitForTimeout(5500);
@@ -71,13 +86,31 @@ async (page) => {
   await page.getByText('v2 已生效',{exact:true}).waitFor();
   assert(saved.settings.model_shadow_enabled===false,'model mode saved');
   assert(saved.settings.model_training_cpu===2 && saved.settings.model_training_memory_mb===768 && saved.settings.model_training_matches===12,'hidden groups submitted');
+  await page.locator('#setting-decision_mode').selectOption('model');
+  await page.locator('#settings-save').click();
+  await page.getByText('v3 已生效',{exact:true}).waitFor();
+  mode='empty';await page.locator('#nav-data-model').click();
+  await page.getByText('不可用',{exact:true}).waitFor();
+  assert((await page.locator('#model-summary').textContent()).includes('纯决策模型'),'pure model mode shown');
+  assert((await page.locator('#model-description').textContent()).includes('此模式暂不产生买入推荐'),'missing model reason shown');
+  await page.locator('#nav-settings').click();
+  await page.locator('#setting-decision_mode').selectOption('hybrid');
+  await page.locator('#setting-model_blend_weight').fill('0.35');
+  await page.locator('#settings-save').click();
+  await page.getByText('v4 已生效',{exact:true}).waitFor();
+  mode='trained';await page.locator('#nav-data-model').click();
+  await page.getByText('test-20261010',{exact:true}).waitFor();
+  assert((await page.locator('#model-summary').textContent()).includes('算法 + 决策模型'),'hybrid mode shown');
+  assert((await page.locator('#model-summary').textContent()).includes('35.0%'),'blend weight shown');
+  assert((await page.locator('#model-summary').textContent()).includes('已加载'),'model availability shown');
+  await page.locator('#nav-settings').click();
   await page.locator('#settings-categories').getByRole('button',{name:'数据与模型',exact:true}).click();
   await page.locator('#settings-groups').getByRole('button',{name:'资源限制',exact:true}).click();
   await page.locator('#setting-model_training_cpu').fill('3');
   await page.locator('#settings-categories').getByRole('button',{name:'决策',exact:true}).click();
   await page.locator('#settings-save').click();
   assert(await page.locator('#setting-model_training_cpu').isVisible(),'validation navigates to invalid hidden group');
-  assert(settings.version===2,'invalid value not submitted');
+  assert(settings.version===4,'invalid value not submitted');
   await page.locator('#setting-model_training_cpu').fill('2');
   for(const width of [390,320]){
     await page.setViewportSize({width,height:844});

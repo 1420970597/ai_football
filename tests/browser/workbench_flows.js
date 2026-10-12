@@ -15,12 +15,12 @@ async (page) => {
   const _PLACEHOLDER_SETTINGS = {version:1, persistent:true, algorithms:{poisson_market:'当前盘口 Poisson', poisson_time_decay:'时间衰减 Poisson', devig_consensus:'去水共识', economics_risk_adjusted:'经济学风控', microstructure_adjusted:'盘口微观结构'},
     capabilities:{betting:{configured_enabled:true,execution_supported:true,execution_enabled:true,mode:'automatic_single',
       reason:'等待满足门控的实时综合推荐',last_result:{status:'blocked',reason:'盘口历史命中次数不足（1/3）'}}},
-    settings:{model_training_enabled:true,model_training_matches:100,model_training_cpu:1,model_training_memory_mb:512,algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',
+    settings:{decision_mode:'algorithm',model_blend_weight:.5,model_training_enabled:true,model_training_matches:100,model_training_cpu:1,model_training_memory_mb:512,algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',
       min_probability:.52,min_ev:.02,quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,
       devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
       algorithm_alert_enabled:true,algorithm_alert_min_samples:30,algorithm_alert_threshold:.5,
       weight_prior_matches:20,max_algorithm_weight:.6,llm_experiment_enabled:true,llm_enabled:false,llm_base_url:'http://localhost:9999/v1',llm_model:'test-model',has_llm_key:true,
-      betting_enabled:true,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_min_hit_count:3,
+      betting_enabled:true,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_min_hit_count:3,betting_min_evidence_matches:30,betting_min_edge:.05,betting_retry_max_attempts:5,betting_retry_base_delay_s:2,
       llm_timeout_s:20,llm_temperature:.2,llm_max_tokens:2048,llm_interval_s:60,llm_review_max_age_s:120}};
   let mode = 'default';
   let betStatusMissing = false;

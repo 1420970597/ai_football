@@ -8,7 +8,6 @@ from __future__ import annotations
 import copy
 import math
 import os
-import sqlite3
 import threading
 import time
 from collections import deque
@@ -246,21 +245,25 @@ class LiveExpertService:
                     self._recording.difference_update(rows)
                 self.record_error = ''
                 return n
-            except (OSError, ValueError, TypeError, sqlite3.Error):
+            except Exception:
+                # Persistence callbacks can use SQLite or PostgreSQL. Driver
+                # failures must restore the popped batch and keep the writer
+                # alive; neither driver is a runtime dependency of this layer.
                 self.record_error = '决策批量留痕失败，等待重试'
                 with self._lock:
                     self._recording.difference_update(rows)
                     for key, row in rows.items():
                         self._decisions.setdefault(key, row)
                 return 0
+        if rows:
+            self.record_error = ''
         for key, row in rows.items():
             try:
                 n += self.on_decision(row) if self.on_decision else 0
                 with self._lock:
                     self._recorded.add(key)
                     self._recording.discard(key)
-                self.record_error = ''
-            except (OSError, ValueError, TypeError, sqlite3.Error):
+            except Exception:
                 self.record_error = '决策留痕失败，等待重试'
                 with self._lock:
                     self._recording.discard(key)
@@ -333,6 +336,10 @@ class LiveExpertService:
                         for forecast in items:
                             key = (mid, evaluation['algorithm'], forecast['market'],
                                    str(forecast.get('line', '')), record_kind)
+                            if evaluation['algorithm'] == 'economic_ensemble':
+                                key += (result.get('decision_mode', 'algorithm'),
+                                        forecast.get('decision_model_version', ''),
+                                        (forecast.get('blend_weights') or {}).get('model', 0.0))
                             if record_kind == 'recommendation':
                                 # A recommendation is an occurrence event. Coalesce
                                 # events waiting for the writer, then let the ledger
@@ -532,10 +539,41 @@ class LiveExpertService:
         primary = next(e for e in evaluations if e['algorithm'] == cfg.primary_algorithm)
         ensemble = pool(evaluations, performance, cfg)
         baseline_ensemble = copy.deepcopy(ensemble)
-        if not cfg.model_shadow_enabled:
+        decision_mode = getattr(cfg, 'decision_mode', 'algorithm')
+        if decision_mode in ('model', 'hybrid'):
             # Lazy import: inference executes in the isolated live calculation process.
             from core.learned_decision import calibrate
-            ensemble = calibrate(ensemble, evaluations, snapshot, cfg, MODEL_VERSION)
+            ensemble = calibrate(ensemble, evaluations, snapshot, cfg, MODEL_VERSION,
+                                 mode=decision_mode,
+                                 blend_weight=getattr(cfg, 'model_blend_weight', 1.0))
+        else:
+            # Worker shadow observation is independent from the selected live
+            # route. An algorithm decision must not require an active model.
+            ensemble['model_application'] = {
+                'mode': 'algorithm', 'applied': False, 'available': True, 'state': 'ready',
+                'execution_enabled': True, 'observation_shadow': cfg.model_shadow_enabled,
+                'input_cutoff_ms': snapshot.get('captured_at_ms'),
+                'weights': {'algorithm': 1.0, 'model': 0.0},
+            }
+            recommended = {(c['market'], c['line'], c['outcome']) for c in ensemble['recommendations']}
+            for collection in (ensemble['candidates'], ensemble['recommendations']):
+                for candidate in collection:
+                    candidate.update(decision_mode='algorithm',
+                                     algorithm_probability=candidate['p_model'],
+                                     learned_probability=None,
+                                     blend_weights={'algorithm': 1.0, 'model': 0.0},
+                                     input_cutoff_ms=snapshot.get('captured_at_ms'))
+                    candidate['decision_evidence'] = {
+                        'mode': 'algorithm', 'algorithm_probability': candidate['p_model'],
+                        'model_probability': None, 'weights': {'algorithm': 1.0, 'model': 0.0},
+                        'final_probability': candidate['p_model'], 'model_version': '',
+                        'input_cutoff_ms': snapshot.get('captured_at_ms'),
+                        'conclusion': 'recommend' if (candidate['market'], candidate['line'],
+                            candidate['outcome']) in recommended else 'forecast',
+                    }
+        application = ensemble['model_application']
+        if application.get('state') == 'unavailable':
+            reasons.append('所选决策模式不可用：' + application.get('reason', '没有有效模型'))
         candidates = ensemble['candidates']
         picks = ensemble['recommendations']
         if not direction_available:
@@ -544,7 +582,11 @@ class LiveExpertService:
         return {
             'match_id': mid, **info, 'competition_type': kind, 'version': snapshot['version'],
             'model_version': MODEL_VERSION, 'config_version': self.config_version,
-            'algorithm': 'economic_ensemble', 'computed_at': datetime.now(timezone.utc).isoformat(),
+            'algorithm': 'economic_ensemble', 'decision_mode': decision_mode,
+            'decision_model_version': application.get('version', ''),
+            'decision_mode_status': application.get('state', 'ready'),
+            'model_application': copy.deepcopy(application),
+            'computed_at': datetime.now(timezone.utc).isoformat(),
             'published_at_ms': int(now * 1000), 'quote_time_ms': newest,
             'score': list(score) if score is not None else None, 'phase': phase,
             'clock': clock_label(status.get('mst'), phase), 'elapsed_s': elapsed_s,
@@ -557,7 +599,8 @@ class LiveExpertService:
                                 'fresh': sum(m['fresh'] for m in markets),
                                 'valued': sum(m['complete'] and m['fresh'] and m['supported'] for m in markets)},
             'reasons': list(dict.fromkeys(reasons)),
-            'decision': 'recommend' if picks else 'forecast' if ensemble['forecasts'] else 'observe',
+            'decision': ('unavailable' if application.get('state') == 'unavailable' else
+                         'recommend' if picks else 'forecast' if ensemble['forecasts'] else 'observe'),
             'picks': picks, 'has_buy': bool(picks),
             'validation_status': 'research', 'llm_used': False,
             'events': list(snapshot.get('events') or [])[-12:],
@@ -736,10 +779,15 @@ class LiveExpertService:
 
     def _remember_recommendation(self, result: Mapping[str, Any]) -> None:
         """Freeze the latest valid ensemble recommendation for this live match."""
+        mid = str(result.get('match_id', ''))
+        saved = self._recommendations.get(mid)
+        if (result.get('decision_mode_status') == 'unavailable' or
+                (saved and (saved.get('decision_mode') != result.get('decision_mode') or
+                            saved.get('model_version') != result.get('decision_model_version')))):
+            self._recommendations.pop(mid, None)
         picks = result.get('picks') or []
         if not picks or result.get('finished') or result.get('competition_type') != 'real':
             return
-        mid = str(result.get('match_id', ''))
         if not mid:
             return
         now = time.time()
@@ -748,6 +796,8 @@ class LiveExpertService:
             'at_epoch': now,
             'picks': [dict(p) for p in picks],
             'config_version': result.get('config_version'),
+            'decision_mode': result.get('decision_mode'),
+            'model_version': result.get('decision_model_version'),
         }
 
     @staticmethod

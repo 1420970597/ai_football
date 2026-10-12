@@ -12,6 +12,7 @@
 !api/**
 !tools/
 !tools/leyu_session_doctor.py
+!tools/prepare_ledger_statistics.py
 !web/
 !web/console/
 !web/console/**

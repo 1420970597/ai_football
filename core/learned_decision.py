@@ -1,4 +1,9 @@
-"""Apply compatible calibration in the isolated live calculator."""
+"""Apply an approved model or blend its probability in the isolated calculator.
+
+The learner remains a market-offset model with algorithm probabilities as
+features. ``model`` selects its output directly; ``hybrid`` explicitly pools
+that output with the economic ensemble. Training never runs on this path.
+"""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -21,31 +26,54 @@ from core.probability_calibration import calibrate_probability
 @lru_cache(maxsize=4)
 def _load(path: str, signature: tuple[int, int, int]) -> dict[str, Any]:
     model = json.loads(Path(path).read_text())
-    if not compatible_model(model):
+    if not isinstance(model, dict) or not compatible_model(model):
         raise ValueError('训练数据版本不兼容')
+    promotion = model.get('promotion')
+    if not isinstance(promotion, dict) or promotion.get('approved') is not True:
+        raise ValueError('模型尚未通过独立晋级门槛')
+    # Validate the complete parameter vector even when this snapshot contains
+    # no supported candidates. A corrupted active file must not appear ready.
+    from core.learned_model import FEATURES
+    predict(model['weights'], [0.0] * len(FEATURES))
     return model
 
 
 def calibrate(ensemble: Mapping[str, Any], evaluations: list[dict[str, Any]],
-              snapshot: Mapping[str, Any], cfg: Any, model_version: str) -> dict[str, Any]:
+              snapshot: Mapping[str, Any], cfg: Any, model_version: str,
+              *, mode: str = 'model', blend_weight: float = 1.0) -> dict[str, Any]:
     out = deepcopy(dict(ensemble))
-    out['model_application'] = {'mode': 'active', 'applied': False}
+    application: dict[str, Any] = {
+        'mode': mode, 'applied': False, 'available': False, 'state': 'unavailable',
+        'observation_shadow': bool(cfg.model_shadow_enabled), 'execution_enabled': False,
+        'input_cutoff_ms': snapshot.get('captured_at_ms'),
+    }
+    out['model_application'] = application
     try:
-        path = Path(snapshot.get('_model_path') or '')
+        if mode not in ('model', 'hybrid'):
+            raise ValueError('无效模型决策模式')
+        weight = 1.0 if mode == 'model' else float(blend_weight)
+        if not math.isfinite(weight) or not 0 <= weight <= 1:
+            raise ValueError('模型混合权重必须在0~1之间')
+        configured_path = snapshot.get('_model_path')
+        if not configured_path:
+            raise ValueError('尚无通过晋级的决策模型')
+        path = Path(configured_path)
         stat = path.stat()
         model = _load(str(path), (stat.st_mtime_ns, stat.st_ino, stat.st_size))
-        cutoff = snapshot['captured_at_ms']
-        trained_ms = datetime.fromisoformat(model['updated_at']).timestamp() * 1000
+        cutoff = float(snapshot['captured_at_ms'])
+        if not math.isfinite(cutoff) or cutoff <= 0:
+            raise ValueError('决策输入截点无效')
+        trained_at = datetime.fromisoformat(model['updated_at'])
+        if trained_at.tzinfo is None:
+            raise ValueError('模型更新时间缺少时区')
+        trained_ms = trained_at.timestamp() * 1000
         if trained_ms > cutoff:
             raise ValueError('模型尚未在输入截点前可用')
         if model.get('feature_version') != FEATURE_VERSION:
             raise ValueError('模型特征版本不兼容')
-        promotion = model.get('promotion')
-        if promotion is not None:
-            if promotion.get('approved') is not True:
-                raise ValueError('模型尚未通过独立晋级门槛')
-        elif model['validation']['brier'] >= model['baseline']['brier']:
-            raise ValueError('时间隔离验证未优于盘口基准')
+        application.update(available=True, state='ready', version=model['version'],
+                           model_version=model_version,
+                           weights={'algorithm': round(1 - weight, 6), 'model': weight})
         peers: dict[tuple, dict[str, float]] = {}
         for evaluation in evaluations:
             for c in evaluation['candidates']:
@@ -61,16 +89,26 @@ def calibrate(ensemble: Mapping[str, Any], evaluations: list[dict[str, Any]],
                           'algorithm_probabilities': peers.get((c['market'], c['line'], c['outcome']), {})})
             calibrated_x = calibrate_peer_vector(x, model.get('peer_calibration'))
             p = calibrate_probability(predict(model['weights'], calibrated_x), model.get('calibration'))
-            c['baseline_p_model'] = c['p_model']
+            c['baseline_p_model'] = float(c['p_model'])
+            c['algorithm_probability'] = float(c['p_model'])
             c['p_model'] = round(p, 6)
             c['decision_model_version'] = model['version']
-            nonpush = c['win_stake'] + c['loss_stake']
-            c['ev'] = round((p * c['odds'] - 1) * nonpush, 6)
-            c['q_fill'] = q_fill_model(c['ev'], 1.0)
-            c['effective_ev'] = economics_effective_ev(c['ev'], c['q_fill'], cfg.execution_cost)
-            c['kelly'] = min(cfg.max_total_exposure, max(0, fractional_kelly(p, c['odds'], cfg.fractional_kelly)))
+        # Cohere the learned outcomes first, then blend with the already
+        # coherent economic ensemble. This makes the documented formula exact.
         cohere_candidates(out['candidates'])
         for c in out['candidates']:
+            c['learned_probability'] = float(c['p_model'])
+            c['p_model'] = round((1 - weight) * c['algorithm_probability'] +
+                                 weight * c['learned_probability'], 6)
+            c['decision_mode'] = mode
+            c['blend_weights'] = dict(application['weights'])
+            c['input_cutoff_ms'] = snapshot['captured_at_ms']
+            c['decision_evidence'] = {
+                'mode': mode, 'algorithm_probability': c['algorithm_probability'],
+                'model_probability': c['learned_probability'],
+                'weights': dict(application['weights']), 'final_probability': c['p_model'],
+                'model_version': model['version'], 'input_cutoff_ms': snapshot['captured_at_ms'],
+            }
             nonpush = float(c.get('win_stake') or 0) + float(c.get('loss_stake') or 0)
             if nonpush <= 0:
                 continue
@@ -96,9 +134,21 @@ def calibrate(ensemble: Mapping[str, Any], evaluations: list[dict[str, Any]],
             c['kelly'] = math.floor(c['kelly'] * scale * 1e6) / 1e6
         out['recommendations'] = [c for c in picks if c['kelly'] > 0]
         out['total_exposure'] = sum(c['kelly'] for c in out['recommendations'])
-        out['model_application'].update(applied=True, version=model['version'], model_version=model_version)
+        recommended = {(c['market'], c['line'], c['outcome']) for c in out['recommendations']}
+        for collection in (out['candidates'], out['recommendations']):
+            for c in collection:
+                c['decision_evidence']['conclusion'] = (
+                    'recommend' if (c['market'], c['line'], c['outcome']) in recommended else 'forecast')
+        application.update(applied=True, execution_enabled=True)
         return out
     except (OSError, ValueError, TypeError, KeyError, ArithmeticError) as exc:
         fallback = deepcopy(dict(ensemble))
-        fallback['model_application'] = {'mode': 'active', 'applied': False, 'reason': str(exc)}
+        fallback['model_application'] = {
+            **application, 'applied': False, 'available': False, 'state': 'unavailable',
+            'execution_enabled': False, 'reason': str(exc),
+        }
+        fallback['candidates'] = []
+        fallback['forecasts'] = []
+        fallback['recommendations'] = []
+        fallback['total_exposure'] = 0
         return fallback

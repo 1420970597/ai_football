@@ -1,0 +1,443 @@
+[
+  {
+    "id": "beta-calibration",
+    "url": "https://proceedings.mlr.press/v54/kull17a.html",
+    "final_url": "https://proceedings.mlr.press/v54/kull17a.html",
+    "accessed_at": "2026-10-11T04:54:25.316791+00:00",
+    "status": 200,
+    "bytes": 16056,
+    "sha256": "f0e0aa19cc510f7b0a5e35275da87e89a9a7857c15e3eb75057ab2bf8f2e64dc",
+    "path": "beta-calibration.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "dirichlet-calibration",
+    "url": "https://arxiv.org/abs/1910.12656",
+    "final_url": "https://arxiv.org/abs/1910.12656",
+    "accessed_at": "2026-10-11T04:54:25.321142+00:00",
+    "status": 200,
+    "bytes": 43771,
+    "sha256": "07f1e78262fb6b745b705d580743df2294cbd14858a601472f02710393bbefc7",
+    "path": "dirichlet-calibration.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "sklearn-calibration",
+    "url": "https://scikit-learn.org/stable/modules/calibration.html",
+    "final_url": "https://scikit-learn.org/stable/modules/calibration.html",
+    "accessed_at": "2026-10-11T04:54:25.321541+00:00",
+    "status": 200,
+    "bytes": 72417,
+    "sha256": "00860ac6c19e425758b76adf27721d343ad3d5cbc72f865da7a9fe1aa32b9864",
+    "path": "sklearn-calibration.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "sklearn-timeseries",
+    "url": "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html",
+    "final_url": "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html",
+    "accessed_at": "2026-10-11T04:54:25.325140+00:00",
+    "status": 200,
+    "bytes": 138409,
+    "sha256": "bd5b51d06ac0ab50b62badb7d35de9bb2bdaa10a059235b3bf19cd17b57cdcc3",
+    "path": "sklearn-timeseries.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "sklearn-group",
+    "url": "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.GroupKFold.html",
+    "final_url": "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.GroupKFold.html",
+    "accessed_at": "2026-10-11T04:54:25.369929+00:00",
+    "status": 200,
+    "bytes": 136140,
+    "sha256": "3b1650ea09f365c82decfa1bbf742b726ada91ea547a50e5e605836381df99b9",
+    "path": "sklearn-group.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "sklearn-stacking",
+    "url": "https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.StackingClassifier.html",
+    "final_url": "https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.StackingClassifier.html",
+    "accessed_at": "2026-10-11T04:54:25.373724+00:00",
+    "status": 200,
+    "bytes": 168935,
+    "sha256": "0d7881a4b075c2f1e4213d8cc7883cd6a9837020464e05e8e98305ffcbf8bddc",
+    "path": "sklearn-stacking.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "lightgbm",
+    "url": "https://lightgbm.readthedocs.io/en/stable/Parameters.html",
+    "final_url": "https://lightgbm.readthedocs.io/en/stable/Parameters.html",
+    "accessed_at": "2026-10-11T04:54:25.493953+00:00",
+    "status": 200,
+    "bytes": 189655,
+    "sha256": "595b919bed07bef745a8983a4208116906ad60b5de557373be709158007d2f94",
+    "path": "lightgbm.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "xgboost",
+    "url": "https://xgboost.readthedocs.io/en/stable/parameter.html",
+    "final_url": "https://xgboost.readthedocs.io/en/stable/parameter.html",
+    "accessed_at": "2026-10-11T04:54:25.508066+00:00",
+    "status": 200,
+    "bytes": 83900,
+    "sha256": "c585b6f793d98415e963d72800fc23dc5b81b03b8053ca70b0c2fe059633f00b",
+    "path": "xgboost.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "catboost",
+    "url": "https://catboost.ai/docs/en/concepts/parameter-tuning",
+    "final_url": "https://catboost.ai/docs/en/concepts/parameter-tuning",
+    "accessed_at": "2026-10-11T04:54:25.513186+00:00",
+    "status": 200,
+    "bytes": 326574,
+    "sha256": "9fb3a7d2c765513cab886d8eb7b8ec166754633527e1fa886afe3ebdee18afae",
+    "path": "catboost.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "statsmodels-gam",
+    "url": "https://www.statsmodels.org/stable/gam.html",
+    "final_url": "https://www.statsmodels.org/stable/gam.html",
+    "accessed_at": "2026-10-11T04:54:25.514312+00:00",
+    "status": 200,
+    "bytes": 65563,
+    "sha256": "48249ec224e3b5deaa792d7b9ec4ae579c869fe795ebea4b9e3379a6bf12aa04",
+    "path": "statsmodels-gam.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "statsmodels-glm",
+    "url": "https://www.statsmodels.org/stable/generated/statsmodels.genmod.generalized_linear_model.GLM.html",
+    "final_url": "https://www.statsmodels.org/stable/generated/statsmodels.genmod.generalized_linear_model.GLM.html",
+    "accessed_at": "2026-10-11T04:54:25.675503+00:00",
+    "status": 200,
+    "bytes": 86976,
+    "sha256": "7822f7f00387996401b9e1818c6a1648f63b3c65c9f7f639b26a22c44bec5888",
+    "path": "statsmodels-glm.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "tabular-benchmark",
+    "url": "https://arxiv.org/abs/2207.08815",
+    "final_url": "https://arxiv.org/abs/2207.08815",
+    "accessed_at": "2026-10-11T04:54:25.746933+00:00",
+    "status": 200,
+    "bytes": 42849,
+    "sha256": "518b7e0289dd3f84fac9434a4128ce425cd748624d71af004726ba8492bdd6cd",
+    "path": "tabular-benchmark.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "proper-scoring",
+    "url": "https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf",
+    "final_url": "https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf",
+    "accessed_at": "2026-10-11T04:54:25.777533+00:00",
+    "status": 200,
+    "bytes": 556804,
+    "sha256": "d31a0c5f0ae8fec1a0a6544db5d056645b2d7296d71b44a2e8efb293c7d87ba2",
+    "path": "proper-scoring.pdf",
+    "content_type": "application/pdf"
+  },
+  {
+    "id": "pooling",
+    "url": "https://arxiv.org/abs/1106.1638",
+    "final_url": "https://arxiv.org/abs/1106.1638",
+    "accessed_at": "2026-10-11T04:54:25.811863+00:00",
+    "status": 200,
+    "bytes": 39590,
+    "sha256": "2a94aabae4640068e090baf7191cdf9e0dfa7c391b47d76dcf8053fc0ba37716",
+    "path": "pooling.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "concept-drift",
+    "url": "https://dl.acm.org/doi/10.1145/2523813",
+    "accessed_at": "2026-10-11T04:54:25.832068+00:00",
+    "error": "HTTP Error 403: Forbidden"
+  },
+  {
+    "id": "football-calibration",
+    "url": "https://arxiv.org/abs/2303.06021",
+    "final_url": "https://arxiv.org/abs/2303.06021",
+    "accessed_at": "2026-10-11T04:54:25.876586+00:00",
+    "status": 200,
+    "bytes": 42982,
+    "sha256": "9399ca255bce1dba0a4a247de0dc28cb1e52eae40d0f0dcf2b2fca7c3bf2aad7",
+    "path": "football-calibration.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "goal-model-package",
+    "url": "https://opisthokonta.net/?p=1340",
+    "accessed_at": "2026-10-11T04:54:25.905941+00:00",
+    "error": "HTTP Error 404: Not Found"
+  },
+  {
+    "id": "skorch-cost",
+    "url": "https://scikit-learn.org/stable/modules/model_evaluation.html",
+    "final_url": "https://scikit-learn.org/stable/modules/model_evaluation.html",
+    "accessed_at": "2026-10-11T04:54:26.019548+00:00",
+    "status": 200,
+    "bytes": 438145,
+    "sha256": "7e740e140ba75771bb1c7de132babfd958c277b5529d187e7ba744e69729120c",
+    "path": "skorch-cost.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  {
+    "id": "football-data",
+    "url": "https://www.football-data.co.uk/data.php",
+    "final_url": "https://football-data.co.uk/data.php",
+    "accessed_at": "2026-10-11T04:54:26.067548+00:00",
+    "status": 200,
+    "bytes": 46534,
+    "sha256": "acaafc66b30fe145f97489c6650fbac7a527904bcd6362aadd3df442b023bc0d",
+    "path": "football-data.html",
+    "content_type": "text/html; charset=UTF-8"
+  },
+  {
+    "id": "dixon-coles",
+    "url": "https://api.crossref.org/works?rows=3&query.title=Modelling%20association%20football%20scores%20and%20inefficiencies%20in%20the%20football%20betting%20market",
+    "final_url": "https://api.crossref.org/works?rows=3&query.title=Modelling%20association%20football%20scores%20and%20inefficiencies%20in%20the%20football%20betting%20market",
+    "accessed_at": "2026-10-11T04:54:26.207957+00:00",
+    "status": 200,
+    "bytes": 10056,
+    "sha256": "19003842b70f742dccf031627a0c95ba78a856e50576f2a992f9bbfcddeb843f",
+    "path": "dixon-coles.json",
+    "content_type": "application/json"
+  },
+  {
+    "id": "dixon-robinson",
+    "url": "https://api.crossref.org/works?rows=3&query.title=A%20birth%20process%20model%20for%20association%20football%20matches",
+    "accessed_at": "2026-10-11T04:54:26.220828+00:00",
+    "error": "HTTP Error 429: Too Many Requests"
+  },
+  {
+    "id": "bivariate-poisson",
+    "url": "https://api.crossref.org/works?rows=3&query.title=Analysis%20of%20sports%20data%20by%20using%20bivariate%20Poisson%20models",
+    "final_url": "https://api.crossref.org/works?rows=3&query.title=Analysis%20of%20sports%20data%20by%20using%20bivariate%20Poisson%20models",
+    "accessed_at": "2026-10-11T04:54:26.517277+00:00",
+    "status": 200,
+    "bytes": 9568,
+    "sha256": "f78d7c1c803395a77afcb6516da3d0e9ecd93b6de1e25acbfa4bd74ca7089c1a",
+    "path": "bivariate-poisson.json",
+    "content_type": "application/json"
+  },
+  {
+    "id": "dynamic-poisson",
+    "url": "https://api.crossref.org/works?rows=3&query.title=A%20dynamic%20bivariate%20Poisson%20model%20for%20analysing%20and%20forecasting%20match%20results%20in%20the%20English%20Premier%20League",
+    "final_url": "https://api.crossref.org/works?rows=3&query.title=A%20dynamic%20bivariate%20Poisson%20model%20for%20analysing%20and%20forecasting%20match%20results%20in%20the%20English%20Premier%20League",
+    "accessed_at": "2026-10-11T04:54:26.618014+00:00",
+    "status": 200,
+    "bytes": 25903,
+    "sha256": "331faaaf9ac4015fdd8acacabadd9df6b95be6e819e945b6dc1e02d769ce5be8",
+    "path": "dynamic-poisson.json",
+    "content_type": "application/json"
+  },
+  {
+    "id": "remove-margin",
+    "url": "https://api.crossref.org/works?rows=3&query.title=Adjusting%20Bookmaker%20Odds%20to%20Allow%20for%20Overround",
+    "accessed_at": "2026-10-11T04:54:26.703100+00:00",
+    "error": "HTTP Error 429: Too Many Requests"
+  },
+  {
+    "id": "red-cards",
+    "url": "https://api.crossref.org/works?rows=3&query.title=The%20effect%20of%20red%20cards%20on%20goal%20scoring%20in%20football",
+    "accessed_at": "2026-10-11T04:54:26.963446+00:00",
+    "error": "HTTP Error 429: Too Many Requests"
+  },
+  {
+    "id": "inplay-football",
+    "url": "https://api.crossref.org/works?rows=3&query.title=Football%20in-play%20betting%20modelling%20stochastic%20processes%20time",
+    "accessed_at": "2026-10-11T04:54:26.991532+00:00",
+    "error": "HTTP Error 429: Too Many Requests",
+    "verification": "Query results irrelevant or not selected; not cited"
+  },
+  {
+    "id": "backtest-overfitting",
+    "url": "https://api.crossref.org/works?rows=3&query.title=The%20Probability%20of%20Backtest%20Overfitting",
+    "accessed_at": "2026-10-11T04:54:27.103031+00:00",
+    "error": "HTTP Error 429: Too Many Requests"
+  },
+  {
+    "id": "dixon-robinson",
+    "url": "https://api.crossref.org/works?rows=2&query.title=A%20birth%20process%20model%20for%20association%20football%20matches",
+    "accessed_at": "2026-10-11T04:55:40.218534+00:00",
+    "status": 200,
+    "path": "dixon-robinson.json",
+    "bytes": 7685,
+    "sha256": "aaf9331eac63db1bf6a9e657360bca6e5f7e853726d7a5f41a3c4805ab999e27"
+  },
+  {
+    "id": "remove-margin",
+    "url": "https://api.crossref.org/works?rows=2&query.title=Adjusting%20Bookmaker%20Odds%20to%20Allow%20for%20Overround%20Clarke%20Kovalchik%20Ingram",
+    "accessed_at": "2026-10-11T04:55:41.724129+00:00",
+    "status": 200,
+    "path": "remove-margin.json",
+    "bytes": 3441,
+    "sha256": "29ccdb4be6929814f5efa824bb43d8d7efe4feae62306b2ef2aecff13a82065f"
+  },
+  {
+    "id": "red-cards",
+    "url": "https://api.crossref.org/works?rows=2&query.title=Down%20to%20Ten%20Estimating%20the%20Effect%20of%20a%20Red%20Card%20in%20Soccer",
+    "accessed_at": "2026-10-11T04:55:43.420049+00:00",
+    "status": 200,
+    "path": "red-cards.json",
+    "bytes": 5422,
+    "sha256": "135ddcb36bc1558fd6965d10ba5f6576d0b15ac0995870381533a395024acad2"
+  },
+  {
+    "id": "inplay-football",
+    "url": "https://api.crossref.org/works?rows=2&query.title=Dynamic%20In-Play%20Prediction%20of%20Soccer%20Match%20Results",
+    "accessed_at": "2026-10-11T04:55:44.828914+00:00",
+    "status": 200,
+    "path": "inplay-football.json",
+    "bytes": 4329,
+    "sha256": "e0c806c554455128e8cca3191b559e160c8710a226e349196de8e9dcf53df7a2",
+    "verification": "Query results irrelevant or not selected; not cited"
+  },
+  {
+    "id": "backtest-overfitting",
+    "url": "https://api.crossref.org/works?rows=2&query.title=The%20Probability%20of%20Backtest%20Overfitting",
+    "accessed_at": "2026-10-11T04:55:46.278257+00:00",
+    "status": 200,
+    "path": "backtest-overfitting.json",
+    "bytes": 11856,
+    "sha256": "5b98f970573997ae8deb2a52d5bff98373a9e35aeac1e238ac969778b0061831"
+  },
+  {
+    "id": "beta-full",
+    "url": "https://proceedings.mlr.press/v54/kull17a/kull17a.pdf",
+    "final_url": "https://proceedings.mlr.press/v54/kull17a/kull17a.pdf",
+    "accessed_at": "2026-10-11T04:56:39.434296+00:00",
+    "status": 200,
+    "bytes": 389366,
+    "sha256": "3d3de5ee33d442c415c689c59b490ef09f310dc0c0e4bde47fb92a8c6f5f0e1a",
+    "path": "beta-full.pdf",
+    "content_type": "application/pdf"
+  },
+  {
+    "id": "pooling-full",
+    "url": "https://arxiv.org/pdf/1106.1638",
+    "final_url": "https://arxiv.org/pdf/1106.1638",
+    "accessed_at": "2026-10-11T04:56:39.437168+00:00",
+    "status": 200,
+    "bytes": 505857,
+    "sha256": "0729ae01b02a39f5cdc1f65879d7869b11ba5b53436363e1d93e2ece50e24f3d",
+    "path": "pooling-full.pdf",
+    "content_type": "application/pdf"
+  },
+  {
+    "id": "football-calibration-full",
+    "url": "https://arxiv.org/pdf/2303.06021",
+    "final_url": "https://arxiv.org/pdf/2303.06021",
+    "accessed_at": "2026-10-11T04:56:39.441182+00:00",
+    "status": 200,
+    "bytes": 431509,
+    "sha256": "60373fb2b63c846c959e19fb3934497a6599c90e0fea68d710d72dda73df5349",
+    "path": "football-calibration-full.pdf",
+    "content_type": "application/pdf"
+  },
+  {
+    "id": "dirichlet-full",
+    "url": "https://arxiv.org/pdf/1910.12656",
+    "final_url": "https://arxiv.org/pdf/1910.12656",
+    "accessed_at": "2026-10-11T04:56:39.513194+00:00",
+    "status": 200,
+    "bytes": 2223574,
+    "sha256": "4a891404fb5bd7a929a8eb8ed325323f799e126148ec10e8a29896506cb66a55",
+    "path": "dirichlet-full.pdf",
+    "content_type": "application/pdf"
+  },
+  {
+    "id": "dixon-birth-publisher",
+    "url": "https://academic.oup.com/jrsssd/article/47/3/523/7110720",
+    "accessed_at": "2026-10-11T04:56:39.550440+00:00",
+    "error": "HTTP Error 403: Forbidden"
+  },
+  {
+    "id": "dixon-coles-publisher",
+    "url": "https://academic.oup.com/jrsssc/article/46/2/265/6990546",
+    "accessed_at": "2026-10-11T04:56:39.557361+00:00",
+    "error": "HTTP Error 403: Forbidden"
+  },
+  {
+    "id": "remove-margin-publisher",
+    "url": "https://www.sciencepublishinggroup.com/article/10.11648/j.ajss.20170506.12",
+    "final_url": "https://www.sciencepublishinggroup.com/article/10.11648/j.ajss.20170506.12",
+    "accessed_at": "2026-10-11T04:56:39.620931+00:00",
+    "status": 200,
+    "bytes": 72829,
+    "sha256": "39e8b0f5b814823eec90a5a35961661f5254e4cc34f341b43fa9a5a18180df67",
+    "path": "remove-margin-publisher.html",
+    "content_type": "text/html;charset=UTF-8"
+  },
+  {
+    "id": "remove-margin-full",
+    "url": "https://article.sciencepublishinggroup.com/pdf/10.11648.j.ajss.20170506.12.pdf",
+    "final_url": "https://article.sciencepublishinggroup.com/pdf/10.11648.j.ajss.20170506.12.pdf",
+    "accessed_at": "2026-10-11T04:56:39.688203+00:00",
+    "status": 200,
+    "bytes": 31,
+    "sha256": "503a18a08167d6538d64fb88911f1f74cc28499c048b63bab5ff059a5fa47a1f",
+    "path": "remove-margin-full.html",
+    "content_type": "text/html;charset=UTF-8",
+    "verification": "HTTP 200 but 31-byte HTML, not usable paper"
+  },
+  {
+    "id": "bayesian-red-cards",
+    "url": "https://api.crossref.org/works?rows=3&query.bibliographic=Titman%20soccer%20in-play",
+    "final_url": "https://api.crossref.org/works?rows=3&query.bibliographic=Titman%20soccer%20in-play",
+    "accessed_at": "2026-10-11T04:56:39.699185+00:00",
+    "status": 200,
+    "bytes": 11114,
+    "sha256": "0790a07f4776b133fb1959c970befb65ccf48a9309c6a7314cf21ada79750e8c",
+    "path": "bayesian-red-cards.json",
+    "content_type": "application/json",
+    "verification": "Query results irrelevant or not selected; not cited"
+  },
+  {
+    "id": "backtest-full",
+    "url": "https://scholarworks.wmich.edu/cgi/viewcontent.cgi?article=1393&context=math_pubs",
+    "accessed_at": "2026-10-11T04:56:40.044217+00:00",
+    "error": "HTTP Error 403: Forbidden"
+  },
+  {
+    "id": "inplay-title",
+    "url": "https://api.crossref.org/works?rows=2&query.title=In-play%20forecasting%20of%20football%20match%20results%20and%20evaluation%20of%20related%20trading%20strategies",
+    "final_url": "https://api.crossref.org/works?rows=2&query.title=In-play%20forecasting%20of%20football%20match%20results%20and%20evaluation%20of%20related%20trading%20strategies",
+    "accessed_at": "2026-10-11T04:59:28.860655+00:00",
+    "status": 200,
+    "bytes": 12957,
+    "sha256": "e8cea74ab5265a6f707fef2df2b2509942cd70a6bdf98c444807e9d4fc660656",
+    "path": "inplay-title.json",
+    "content_type": "application/json",
+    "verification": "Query results irrelevant or not selected; not cited"
+  },
+  {
+    "id": "bayesian-football",
+    "url": "https://api.crossref.org/works?rows=2&query.title=A%20Bayesian%20hierarchical%20model%20for%20the%20prediction%20of%20football%20results",
+    "final_url": "https://api.crossref.org/works?rows=2&query.title=A%20Bayesian%20hierarchical%20model%20for%20the%20prediction%20of%20football%20results",
+    "accessed_at": "2026-10-11T04:59:30.329772+00:00",
+    "status": 200,
+    "bytes": 9874,
+    "sha256": "410149e0d7f2941528d58d8de53af1ce20f19bb0e1b2633481262a3bd8f15c21",
+    "path": "bayesian-football.json",
+    "content_type": "application/json"
+  },
+  {
+    "id": "football-events",
+    "url": "https://api.crossref.org/works?rows=2&query.title=Dynamic%20modelling%20of%20football%20results%20with%20time%20varying%20strength%20and%20red%20cards",
+    "final_url": "https://api.crossref.org/works?rows=2&query.title=Dynamic%20modelling%20of%20football%20results%20with%20time%20varying%20strength%20and%20red%20cards",
+    "accessed_at": "2026-10-11T04:59:31.706621+00:00",
+    "status": 200,
+    "bytes": 31055,
+    "sha256": "4f3105172714960ef9503a6ddb4a3c5af185df41390080a13fd8b55423626772",
+    "path": "football-events.json",
+    "content_type": "application/json",
+    "verification": "Query results irrelevant or not selected; not cited"
+  }
+]

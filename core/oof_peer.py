@@ -9,7 +9,6 @@ from __future__ import annotations
 import math
 from datetime import datetime
 from typing import Any, Callable, Mapping, Sequence
-import math
 
 from core.decision_features import EXTRA_INDEX, PEERS
 from core.learned_model import FEATURES
@@ -106,9 +105,9 @@ def _peer_probability(row: Mapping[str, Any], peer: str) -> float | None:
 
 
 def _fit_peer_calibrator(rows: Sequence[Mapping[str, Any]], peer: str) -> dict[str, Any]:
-    eligible = [(raw, _peer_probability(raw, peer)) for raw in rows]
-    eligible = [(row, probability) for row, probability in eligible if probability is not None]
-    return fit_logistic([float(probability) for _, probability in eligible],
+    eligible = [(row, probability) for row in rows
+                if (probability := _peer_probability(row, peer)) is not None]
+    return fit_logistic([probability for _, probability in eligible],
                         [int(row['y']) for row, _ in eligible])
 
 

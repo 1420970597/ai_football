@@ -13,6 +13,7 @@ import threading
 from typing import Any
 
 from service.runtime_settings import RuntimeConfig
+from store.postgres import connect as pg_connect, postgres_enabled
 
 CATEGORIES = {'采集快照': 'snapshots', '走势': '_trends', '赛况与实际赛果': '_live', '决策与结算台账': 'ledger', '模型版本': 'models'}
 
@@ -51,23 +52,48 @@ def storage_stats(root: Path) -> dict[str, Any]:
     categories.append({'name': '旧归档与当前缓存', 'files': count, 'bytes': size, 'allocated_bytes': allocated})
     records: dict[str, Any] = {}
     db = root / 'ledger' / 'ledger.sqlite3'
-    if db.exists():
+    if postgres_enabled():
         try:
-            with closing(sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con, con:
-                entries, matches, settled = con.execute("SELECT count(*),count(DISTINCT match_id),"
-                    "sum(status IN ('won','lost','half_won','half_lost','push')) FROM decisions").fetchone()
+            with closing(pg_connect()) as pg_db:
+                entries, matches, settled = pg_db.execute(
+                    "SELECT count(*),count(DISTINCT match_id),"
+                    "sum(CASE WHEN status IN ('won','lost','half_won','half_lost','push') THEN 1 ELSE 0 END) "
+                    "FROM decisions").fetchone() or (0, 0, 0)
+                records = {'decisions': int(entries or 0), 'matches': int(matches or 0),
+                           'settled_decisions': int(settled or 0)}
+        except Exception as exc:
+            errors.append('PostgreSQL 台账不可读: ' + str(exc))
+    elif db.exists():
+        try:
+            with closing(sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as local_db, local_db:
+                entries, matches, settled = local_db.execute("SELECT count(*),count(DISTINCT match_id),"
+                    "sum(status IN ('won','lost','half_won','half_lost','push')) FROM decisions").fetchone() or (0, 0, 0)
                 records = {'decisions': entries, 'matches': matches, 'settled_decisions': settled or 0}
         except sqlite3.Error as exc:
             errors.append(str(exc))
     disk = shutil.disk_usage(root)
     archive: dict[str, Any] = {'backend': 'local'}
     catalog = root / '_archive' / 'catalog.sqlite3'
-    if catalog.exists():
-        with closing(sqlite3.connect(catalog.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con:
-            files, remote_bytes, cleaned = con.execute('SELECT count(*),coalesce(sum(size),0),coalesce(sum(cleaned),0) FROM files').fetchone()
-            packs, object_bytes = con.execute('SELECT count(*),coalesce(sum(bytes),0) FROM packs').fetchone()
-        archive = {'backend': 's3', 'files': files, 'bytes': remote_bytes,
-                   'packs': packs, 'object_bytes': object_bytes, 'cleaned_files': cleaned}
+    try:
+        if postgres_enabled():
+            with closing(pg_connect()) as pg_db:
+                file_row = pg_db.execute(
+                    'SELECT count(*),coalesce(sum(size),0),coalesce(sum(cleaned),0) FROM files').fetchone() or (0, 0, 0)
+                pack_row = pg_db.execute(
+                    'SELECT count(*),coalesce(sum(bytes),0) FROM packs').fetchone() or (0, 0)
+                file_count, remote_bytes, cleaned = file_row
+                packs, object_bytes = pack_row
+            archive = {'backend': 's3', 'catalog_backend': 'postgres', 'files': int(file_count or 0),
+                       'bytes': int(remote_bytes or 0), 'packs': int(packs or 0),
+                       'object_bytes': int(object_bytes or 0), 'cleaned_files': int(cleaned or 0)}
+        elif catalog.exists():
+            with closing(sqlite3.connect(catalog.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as local_db:
+                file_count, remote_bytes, cleaned = local_db.execute('SELECT count(*),coalesce(sum(size),0),coalesce(sum(cleaned),0) FROM files').fetchone() or (0, 0, 0)
+                packs, object_bytes = local_db.execute('SELECT count(*),coalesce(sum(bytes),0) FROM packs').fetchone() or (0, 0)
+            archive = {'backend': 's3', 'files': file_count, 'bytes': remote_bytes,
+                       'packs': packs, 'object_bytes': object_bytes, 'cleaned_files': cleaned}
+    except Exception as exc:
+        errors.append('归档索引不可读: ' + str(exc))
     return {'at': datetime.now(timezone.utc).isoformat(), 'categories': categories, 'archive': archive,
             'bytes': sum(c['bytes'] for c in categories), 'files': sum(c['files'] for c in categories),
             'records': records, 'disk': {'total': disk.total, 'used': disk.used, 'free': disk.free}, 'errors': errors,
@@ -127,7 +153,10 @@ class DataModelService:
             if not self.cfg.model_training_enabled:
                 out['training']['state'] = 'disabled'
             out['mode'] = 'shadow' if self.cfg.model_shadow_enabled else 'active'
+            out['decision_mode'] = self.cfg.decision_mode
             out['settings'] = {'enabled': self.cfg.model_training_enabled, 'shadow_enabled': self.cfg.model_shadow_enabled,
+                               'decision_mode': self.cfg.decision_mode,
+                               'model_blend_weight': self.cfg.model_blend_weight,
                                'cycle_matches': self.cfg.model_training_matches,
                                'cpu_cores': self.cfg.model_training_cpu,
                                'memory_mb': self.cfg.model_training_memory_mb}

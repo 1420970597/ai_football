@@ -38,6 +38,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import math
 import uuid
 import hashlib
@@ -64,6 +65,18 @@ from core.market_labels import describe_market
 from core.live_model import MODEL_VERSION
 
 __all__ = ["LedgerEntry", "DecisionLedger"]
+
+
+def recommendation_evidence_key(pick: Mapping[str, Any]) -> tuple:
+    """Keep model route and blend evidence separate while accepting old picks."""
+    base = (str(pick.get('algorithm') or 'economic_ensemble'), str(pick.get('market') or ''),
+            str(pick.get('line') or ''), str(pick.get('outcome') or ''))
+    version = str(pick.get('decision_model_version') or '')
+    mode = pick.get('decision_mode')
+    if mode:
+        weight = (pick.get('blend_weights') or {}).get('model', 1.0 if version else 0.0)
+        return (*base, version, str(mode), str(float(weight)))
+    return (*base, version) if version else base
 
 #: 台账文件名
 LEDGER_FILE = "ledger.jsonl"
@@ -115,6 +128,12 @@ class LedgerEntry:
     model_version: str = "legacy"
     grading_version: str = "legacy"
     decision_model_version: str = ""
+    decision_mode: str = "algorithm"
+    algorithm_probability: Optional[float] = None
+    learned_probability: Optional[float] = None
+    blend_weights: Dict[str, float] = field(default_factory=dict)
+    input_cutoff_ms: Optional[int] = None
+    model_application: Dict[str, Any] = field(default_factory=dict)
     algorithm: str = "legacy"
     config_version: int = 0
     league: str = ""
@@ -253,6 +272,13 @@ class DecisionLedger:
         self.last_error = ""
         self._live_ids: Optional[set] = None
         self._db_synchronized = False
+        self._history_cache_lock = threading.Lock()
+        self._history_compute_lock = threading.Lock()
+        self._history_cache: dict[str, dict[str, Any]] = {}
+        self._history_refreshing: set[str] = set()
+        self._history_errors: dict[str, str] = {}
+        self._performance_cache: Optional[dict[str, Any]] = None
+        self._performance_cache_at = 0.0
         self._db: Optional[LedgerDB] = None
         if self.root is not None:
             try:
@@ -332,7 +358,34 @@ class DecisionLedger:
         if self._db:
             st = path.stat()
             self._db.connection.execute("INSERT OR REPLACE INTO imports VALUES (?,?,?)",
-                                        (str(path), st.st_size, st.st_mtime_ns))
+                                        (str(path.resolve()), st.st_size, st.st_mtime_ns))
+
+    @staticmethod
+    def _journal_identity(path: Path) -> str:
+        resolved = path.resolve()
+        if resolved.parent.name == 'ledger' and resolved.parent.parent.name == 'output':
+            # The same data volume is /root/ai_football/output on the host and
+            # /app/output inside containers. Keep pre-migration checkpoints
+            # valid across that mount alias without matching unrelated files.
+            return 'output/ledger/' + resolved.name
+        return str(resolved)
+
+    def _import_checkpoint(self, path: Path, size: int, mtime_ns: int) -> Any:
+        if not self._db:
+            return None
+        canonical = str(path.resolve())
+        mark = self._db.connection.execute('SELECT size,mtime FROM imports WHERE path=?',
+                                           (canonical,)).fetchone()
+        if mark:
+            return mark
+        identity = self._journal_identity(path)
+        aliases = [row for row in self._db.connection.execute('SELECT path,size,mtime FROM imports')
+                   if self._journal_identity(Path(row[0])) == identity and
+                   int(row[1]) <= size and int(row[2]) <= mtime_ns]
+        if not aliases:
+            return None
+        latest = max(aliases, key=lambda row: (int(row[1]), int(row[2])))
+        return (latest[1], latest[2])
 
     def _sync_db(self, *, force: bool = True) -> None:
         if not self._db:
@@ -345,7 +398,7 @@ class DecisionLedger:
             paths = self._files()
         for path in paths:
             st = path.stat()
-            mark = self._db.connection.execute("SELECT size,mtime FROM imports WHERE path=?", (str(path),)).fetchone()
+            mark = self._import_checkpoint(path, st.st_size, st.st_mtime_ns)
             if mark and tuple(mark) == (st.st_size, st.st_mtime_ns):
                 continue
             offset = mark[0] if mark and st.st_size > mark[0] else 0
@@ -379,11 +432,15 @@ class DecisionLedger:
                 or forecast.get("decision_status") not in (None, "settleable")):
             return None
         line = str(forecast.get("line", ""))
+        mode = str(forecast.get('decision_mode') or row.get('decision_mode') or 'algorithm')
+        mode_identity = (('|mode|' + mode + '|blend|' +
+                          str((forecast.get('blend_weights') or {}).get('model', 1.0)))
+                         if algorithm == 'economic_ensemble' and mode != 'algorithm' else '')
         identity = hashlib.sha256((mid + "|" + algorithm + "|" + market + "|" + line + "|" +
                                    str(forecast.get("outcome") or "") + "|" + record_kind +
                                    "|first-live-v3|" + str(row['model_version']) +
                                    ('|calibration|' + str(forecast['decision_model_version'])
-                                    if forecast.get('decision_model_version') else '')).encode()).hexdigest()
+                                    if forecast.get('decision_model_version') else '') + mode_identity).encode()).hexdigest()
         entry = LedgerEntry(
             at=str(row["computed_at"]), updated_at=str(row["computed_at"]),
             decision_id=identity, match_id=mid, competition_type="real", is_live=True,
@@ -393,6 +450,12 @@ class DecisionLedger:
             research_only=bool(forecast.get("research_only", False)),
             model_version=str(row["model_version"]), algorithm=algorithm,
             decision_model_version=str(forecast.get("decision_model_version") or ""),
+            decision_mode=mode if algorithm == 'economic_ensemble' else 'algorithm',
+            algorithm_probability=forecast.get('algorithm_probability', forecast.get('p_model')),
+            learned_probability=forecast.get('learned_probability'),
+            blend_weights=dict(forecast.get('blend_weights') or {}),
+            input_cutoff_ms=forecast.get('input_cutoff_ms', row.get('input_cutoff_ms')),
+            model_application=dict(row.get('model_application') or {}),
             decision_count=max(1, int(forecast.get("decision_count") or row.get("decision_count") or 1)),
             decision_event_id=str(row.get("decision_event_id") or row.get("publication_id") or
                                   row.get("computed_at") or row.get("at") or ""),
@@ -680,7 +743,9 @@ class DecisionLedger:
             entries = [LedgerEntry.from_dict(r) for r in raw]
         else:
             entries = []
-        missing = self._db.connection.execute("SELECT count(*) FROM decisions WHERE status='pending'").fetchone()[0]-len(entries) if self._db else 0
+        pending_row = (self._db.connection.execute("SELECT count(*) FROM decisions WHERE status='pending'").fetchone()
+                       if self._db else None)
+        missing = int(pending_row[0])-len(entries) if pending_row is not None else 0
         out = {"scanned": max(0,missing), "settled": 0, "void": 0, "skipped": max(0,missing)}
         updates: List[LedgerEntry] = []
         for e in entries:
@@ -793,7 +858,7 @@ class DecisionLedger:
                 记录（含被门控拦截的），用于校准门控阈值。
             trigger: 只看某个触发来源（`price_change` / `cycle`）。
         """
-        where = 'is_pick=1' if only_picks else '1'
+        where = 'is_pick=1' if only_picks else '1=1'
         params = [trigger] if trigger else []
         if trigger:
             where += ' AND trigger=?'
@@ -851,7 +916,8 @@ class DecisionLedger:
             `timeline` 的字典，全部**可在容器内复核**，不依赖外部服务。
         """
         started = time.perf_counter()
-        where = 'is_pick=1' if picks_only else '1'
+        refresh_statistics = False
+        where = 'is_pick=1' if picks_only else '1=1'
         params: list = []
         for col, value in (('competition_type', competition_type), ('algorithm', algorithm)):
             if value and value != 'all':
@@ -879,44 +945,163 @@ class DecisionLedger:
         with self._read_db() as db:
             if not db:
                 return {'overall': summarise([]), 'entries': [], 'entries_total': 0}
-            overall = db.aggregate(where, params)
-            settled_where = where + " AND status IN ('won','lost','push','half_won','half_lost')"
-            out = {'overall': overall, 'settled': db.aggregate(settled_where, params),
-                   'legacy_identity_rows': overall['legacy_identity_rows']}
-            for attr in ('competition_type','date_key','league','market','decision','algorithm','config_version','trigger','status','confidence_band'):
-                groups = db.aggregate(where, params, attr)
-                out['by_' + {'competition_type':'type','date_key':'date','confidence_band':'confidence'}.get(attr,attr)] = (
-                    {k: v['total'] for k,v in groups.items()} if attr=='status' else groups)
+            cache_key = hashlib.sha256(json.dumps([picks_only, days, competition_type, algorithm, cohort]).encode()).hexdigest()
+            if db.backend == 'postgres':
+                out = self._cached_history_snapshot(db, cache_key, where, params, portfolio_where,
+                                                    portfolio_params, competition_type, days)
+                refresh_statistics = out.pop('_refresh_statistics', False)
+                if out.pop('_total_current', False):
+                    total = out['overall']['total']
+                else:
+                    count_row = db.connection.execute('SELECT count(*) FROM ' + db._statistics_table() +
+                                                      ' WHERE ' + where, params).fetchone()
+                    total = int(count_row[0]) if count_row is not None else 0
+            else:
+                out = self._history_snapshot(db, where, params, portfolio_where, portfolio_params,
+                                             competition_type, days)
+                total = out['overall']['total']
             entries = [LedgerEntry.from_dict(r).as_dict() for r in db.entries(where, params, max(0,limit), offset)]
-            timeline, cum_stake, cum_profit = [], 0.0, 0.0
-            for day, st in sorted(db.aggregate(settled_where, params, 'date_key').items()):
-                cum_stake += st['stake_units']
-                cum_profit += st['profit_units']
-                timeline.append({'date':day, 'n':st['graded'], 'won':st['won'], 'lost':st['lost'],
-                                 'hit_rate':st['hit_rate'], 'profit_units':st['profit_units'],
-                                 'cum_stake':cum_stake, 'cum_profit':round(cum_profit,4),
-                                 'cum_roi':round(cum_profit/cum_stake,6) if cum_stake else None})
-            out.update(entries=entries, entries_shown=len(entries), entries_total=overall['total'],
-                       timeline=timeline, picks_only=picks_only, days=days, offset=offset,
-                       next_offset=offset+len(entries) if offset+len(entries)<overall['total'] else None,
-                       ledger=self.health(), experiments=self.experiment_stats(competition_type, days),
-                       portfolio_summary=db.aggregate(portfolio_where,portfolio_params))
+            out.update(entries=entries, entries_shown=len(entries), entries_total=total,
+                       picks_only=picks_only, days=days, offset=offset,
+                       next_offset=offset+len(entries) if offset+len(entries)<total else None,
+                       ledger=self.health())
+        if refresh_statistics:
+            self._refresh_history_snapshot(db, cache_key, where, tuple(params), portfolio_where,
+                                           tuple(portfolio_params), competition_type, days)
+            out['statistics_refreshing'] = True
         out['query_ms'] = round((time.perf_counter()-started)*1000,3)
         return out
 
+    def _history_snapshot(self, db: LedgerDB, where: str, params: Sequence[Any],
+                          portfolio_where: str, portfolio_params: Sequence[Any],
+                          competition_type: Optional[str], days: int) -> dict[str, Any]:
+        statistics_at = _now().isoformat()
+        settled_where = where + " AND status IN ('won','lost','push','half_won','half_lost')"
+        attrs = ('competition_type','date_key','league','market','decision','algorithm','config_version','trigger','status','confidence_band')
+        aggregates = db.aggregate_many(where, params, attrs)
+        overall = aggregates['overall']
+        settled = aggregates.get('settled') or db.aggregate(settled_where, params)
+        out = {'overall': overall, 'settled': settled,
+               'legacy_identity_rows': overall['legacy_identity_rows']}
+        for attr in attrs:
+            groups = aggregates[attr]
+            out['by_' + {'competition_type':'type','date_key':'date','confidence_band':'confidence'}.get(attr,attr)] = (
+                {k: v['total'] for k,v in groups.items()} if attr=='status' else groups)
+        timeline, cum_stake, cum_profit = [], 0.0, 0.0
+        settled_days = aggregates.get('settled_by_date')
+        if settled_days is None:
+            settled_days = db.aggregate(settled_where, params, 'date_key')
+        for day, st in sorted(settled_days.items()):
+            cum_stake += st['stake_units']
+            cum_profit += st['profit_units']
+            timeline.append({'date':day, 'n':st['graded'], 'won':st['won'], 'lost':st['lost'],
+                             'hit_rate':st['hit_rate'], 'profit_units':st['profit_units'],
+                             'cum_stake':cum_stake, 'cum_profit':round(cum_profit,4),
+                             'cum_roi':round(cum_profit/cum_stake,6) if cum_stake else None})
+        out.update(timeline=timeline, experiments=self._experiment_stats(db, competition_type, days),
+                   portfolio_summary=db.aggregate(portfolio_where, portfolio_params),
+                   statistics_status='ready', statistics_at=statistics_at)
+        return out
+
+    def _cached_history_snapshot(self, db: LedgerDB, cache_key: str, where: str, params: Sequence[Any],
+                                 portfolio_where: str, portfolio_params: Sequence[Any],
+                                 competition_type: Optional[str], days: int) -> dict[str, Any]:
+        """Return persisted totals immediately; refresh expensive groups off GET."""
+        with self._history_cache_lock:
+            snapshot = self._history_cache.get(cache_key)
+        total_current = False
+        if snapshot is None:
+            stored = db.connection.execute('SELECT payload FROM ledger_history_cache WHERE cache_key=?',
+                                           (cache_key,)).fetchone()
+            if stored:
+                snapshot = json.loads(stored[0])
+            else:
+                # First read exposes exact overall numbers and page records.
+                # Group comparisons are explicitly pending until their first
+                # background snapshot, rather than being presented as zeros.
+                overall = db.aggregate(where, params)
+                total_current = True
+                snapshot = {'overall': overall, 'settled': {}, 'timeline': [],
+                            'legacy_identity_rows': overall['legacy_identity_rows'],
+                            'portfolio_summary': {}, 'experiments': {},
+                            'statistics_status': 'refreshing', 'statistics_at': ''}
+            with self._history_cache_lock:
+                if len(self._history_cache) >= 16:
+                    self._history_cache.pop(next(iter(self._history_cache)))
+                self._history_cache[cache_key] = snapshot
+        at = str(snapshot.get('statistics_at') or '')
+        stale = not at or (_now() - datetime.fromisoformat(at)).total_seconds() >= 60
+        out = copy.deepcopy(snapshot)
+        out['_refresh_statistics'] = stale
+        out['_total_current'] = total_current
+        out['statistics_stale'] = stale
+        with self._history_cache_lock:
+            out['statistics_refreshing'] = cache_key in self._history_refreshing
+            if cache_key in self._history_errors:
+                out['statistics_error'] = self._history_errors[cache_key]
+        return out
+
+    def _refresh_history_snapshot(self, db: LedgerDB, cache_key: str, where: str, params: Sequence[Any],
+                                  portfolio_where: str, portfolio_params: Sequence[Any],
+                                  competition_type: Optional[str], days: int) -> None:
+        with self._history_cache_lock:
+            if cache_key in self._history_refreshing:
+                return
+            self._history_refreshing.add(cache_key)
+
+        def refresh() -> None:
+            try:
+                with self._history_compute_lock:
+                    with db.reader() as reader:
+                        snapshot = self._history_snapshot(reader, where, params, portfolio_where,
+                                                          portfolio_params, competition_type, days)
+                from store.postgres import connect
+                connection = connect()
+                try:
+                    with connection:
+                        connection.execute('INSERT INTO ledger_history_cache(cache_key,payload,refreshed_at) '
+                            'VALUES (?,?,now()) ON CONFLICT(cache_key) DO UPDATE '
+                            'SET payload=excluded.payload,refreshed_at=excluded.refreshed_at',
+                            (cache_key, json.dumps(snapshot, ensure_ascii=False, allow_nan=False))).close()
+                finally:
+                    connection.close()
+                with self._history_cache_lock:
+                    self._history_cache[cache_key] = snapshot
+                    self._history_errors.pop(cache_key, None)
+            except Exception as exc:
+                with self._history_cache_lock:
+                    self._history_errors[cache_key] = type(exc).__name__
+            finally:
+                with self._history_cache_lock:
+                    self._history_refreshing.discard(cache_key)
+        threading.Thread(target=refresh, name='ledger-history-statistics', daemon=True).start()
+
     def performance_evidence(self) -> Dict[str, Any]:
+        with self._history_cache_lock:
+            if self._performance_cache is not None and time.monotonic() - self._performance_cache_at < 15:
+                return copy.deepcopy(self._performance_cache)
         cutoff = _now().isoformat()
         with self._read_db() as db:
-            return {'at': cutoff, 'rows': db.evidence(cutoff) if db else []}
+            result = {'at': cutoff, 'rows': db.evidence(cutoff) if db else []}
+        with self._history_cache_lock:
+            self._performance_cache = result
+            self._performance_cache_at = time.monotonic()
+        return copy.deepcopy(result)
 
     def recommendation_performance(self, market: str, line: str, outcome: str,
-                                   algorithm: str = 'economic_ensemble', decision_model_version: str = '') -> Dict[str, Any]:
+                                   algorithm: str = 'economic_ensemble', decision_model_version: str = '',
+                                   decision_mode: Optional[str] = None,
+                                   model_blend_weight: Optional[float] = None) -> Dict[str, Any]:
         """Return settled and pending counts for one recommended quote.
 
         The board uses this as evidence for ranking. Pending rows are exposed
         separately and never enter accuracy or ROI calculations.
         """
-        key = (algorithm, market, str(line), outcome) + ((decision_model_version,) if decision_model_version else ())
+        key = recommendation_evidence_key({
+            'algorithm': algorithm, 'market': market, 'line': line, 'outcome': outcome,
+            'decision_model_version': decision_model_version, 'decision_mode': decision_mode,
+            'blend_weights': {'model': model_blend_weight} if model_blend_weight is not None else {},
+        })
         return self.recommendation_performance_many([key]).get(key, {
             'hit_count': 0, 'miss_count': 0, 'pending_count': 0,
             'pending_decisions': 0, 'decision_count': 0,
@@ -927,34 +1112,52 @@ class DecisionLedger:
             self, keys: Sequence[tuple]) -> Dict[tuple, Dict[str, Any]]:
         """Aggregate many recommendation quotes with one indexed SQLite scan."""
         wanted = list(dict.fromkeys(tuple(str(v) for v in key) for key in keys))
-        if any(len(key) not in (4,5) for key in wanted):
+        if any(len(key) not in (4,5,7) for key in wanted):
             raise ValueError('无效推荐身份')
         if not wanted:
             return {}
+        legacy_keys = [key for key in wanted if len(key) < 7]
+        routed_keys = [key for key in wanted if len(key) == 7]
+        if legacy_keys and routed_keys:
+            # Legacy consumers intentionally aggregate all matching calibration
+            # records; explicit routes must group by mode/weight. Preserve both
+            # semantics when an API response contains old and new picks.
+            return {**self.recommendation_performance_many(legacy_keys),
+                    **self.recommendation_performance_many(routed_keys)}
         with self._read_db(active_only=True) as db:
             if not db:
                 return {}
             clauses = []
             params: list[str] = []
+            detailed = any(len(key) == 7 for key in wanted)
+            route_sql = "coalesce(json_extract(payload,'$.decision_mode'),'algorithm')"
+            blend_sql = ("coalesce(CAST(json_extract(payload,'$.blend_weights.model') AS DOUBLE PRECISION),"
+                         "CASE WHEN coalesce(json_extract(payload,'$.decision_model_version'),'')='' THEN 0.0 ELSE 1.0 END)")
             for key in wanted:
                 algorithm, market, line_value, outcome = key[:4]
-                calibration = key[4] if len(key) == 5 else ''
-                clauses.append("(algorithm=? AND market=? AND line=? AND outcome=? AND "
-                               "coalesce(json_extract(payload,'$.decision_model_version'),'')=?)")
+                calibration = key[4] if len(key) >= 5 else ''
+                clause = ("(algorithm=? AND market=? AND line=? AND outcome=? AND "
+                          "coalesce(json_extract(payload,'$.decision_model_version'),'')=?")
                 params.extend((algorithm, market, line_value, outcome, calibration))
+                if len(key) == 7:
+                    clause += ' AND ' + route_sql + '=? AND ' + blend_sql + '=CAST(? AS DOUBLE PRECISION)'
+                    params.extend((key[5], key[6]))
+                clauses.append(clause + ')')
             rows = db.connection.execute(
                 """SELECT algorithm, market, line, outcome,
                    coalesce(json_extract(payload,'$.decision_model_version'),'') AS calibration,
-                   sum(status IN ('won','half_won') * CASE status WHEN 'half_won' THEN .5 ELSE 1 END) AS hits,
-                   sum(status IN ('lost','half_lost') * CASE status WHEN 'half_lost' THEN .5 ELSE 1 END) AS misses,
-                   sum(status='pending') AS pending,
+                   """ + (route_sql + ' AS route,' + blend_sql + ' AS blend,' if detailed else '') + """
+                   sum(CASE WHEN status IN ('won','half_won') THEN CASE status WHEN 'half_won' THEN .5 ELSE 1 END ELSE 0 END) AS hits,
+                   sum(CASE WHEN status IN ('lost','half_lost') THEN CASE status WHEN 'half_lost' THEN .5 ELSE 1 END ELSE 0 END) AS misses,
+                   sum(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
                    sum(coalesce(decision_count, 1)) AS decision_count,
                    sum(CASE WHEN status='pending' THEN coalesce(decision_count, 1) ELSE 0 END) AS pending_decisions,
                    sum(CASE WHEN """ + GRADED_SQL + """ THEN pnl ELSE 0 END) AS profit,
-                   sum(""" + GRADED_SQL + """) AS stake,
+                   sum(CASE WHEN """ + GRADED_SQL + """ THEN 1 ELSE 0 END) AS stake,
                    count(DISTINCT CASE WHEN """ + GRADED_SQL + """ THEN match_id END) AS matches
                    FROM decisions WHERE is_pick=1 AND trigger='live_recommendation' AND model_version=? AND (""" +
-                " OR ".join(clauses) + ") GROUP BY algorithm,market,line,outcome,calibration", [MODEL_VERSION, *params]).fetchall()
+                " OR ".join(clauses) + ") GROUP BY algorithm,market,line,outcome,calibration" +
+                (',route,blend' if detailed else ''), [MODEL_VERSION, *params]).fetchall()
             out: Dict[tuple, Dict[str, Any]] = {}
             for row in rows:
                 hits = float(row['hits'] or 0.0)
@@ -963,16 +1166,22 @@ class DecisionLedger:
                 key = (str(row['algorithm']), str(row['market']), str(row['line'] or ''), str(row['outcome']))
                 if row['calibration']:
                     key += (str(row['calibration']),)
+                matches: list[tuple[str, ...]] = [key]
+                if detailed:
+                    route_key = (*key[:4], str(row['calibration']), str(row['route']), str(float(row['blend'])))
+                    matches = [wanted_key for wanted_key in wanted if wanted_key in (key, route_key)]
                 decisions = int(row['decision_count'] or 0)
-                out[key] = {'calibration_evidence_version':str(row['calibration']), 'hit_count': round(hits, 3), 'miss_count': round(misses, 3),
+                result = {'calibration_evidence_version':str(row['calibration']), 'hit_count': round(hits, 3), 'miss_count': round(misses, 3),
                             'settled_hit_count': round(hits, 3),
                             'decision_count': decisions, 'decision_occurrences': decisions,
                             'pending_count': int(row['pending'] or 0),
                             'pending_decisions': int(row['pending_decisions'] or 0),
                             'settled_samples': round(settled, 3),
                             'model_version': MODEL_VERSION, 'independent_matches': int(row['matches']),
-                            'roi': float(row['profit']) / row['stake'] if row['stake'] else None,
+                            'roi': float(row['profit']) / float(row['stake']) if row['stake'] else None,
                             'accuracy': round(hits / settled, 6) if settled else None}
+                for wanted_key in matches:
+                    out[wanted_key] = result
             return out
 
     def live_recommendations(self, match_ids: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
@@ -1005,6 +1214,12 @@ class DecisionLedger:
                     'effective_ev': item.get('edge', 0), 'ev': item.get('edge', 0),
                     'kelly': item.get('kelly', 0), 'algorithm': 'economic_ensemble',
                     'decision_model_version':item.get('decision_model_version',''),
+                    'decision_mode': item.get('decision_mode', 'algorithm'),
+                    'algorithm_probability': item.get('algorithm_probability'),
+                    'learned_probability': item.get('learned_probability'),
+                    'blend_weights': item.get('blend_weights') or {},
+                    'input_cutoff_ms': item.get('input_cutoff_ms'),
+                    'config_version': item.get('config_version'),
                     'odds_live': False, 'recommendation_at': item.get('at', ''),
                 }
                 out.setdefault(str(item.get('match_id', '')), []).append(pick)
@@ -1119,14 +1334,16 @@ class DecisionLedger:
         files = 0
         if self._db is not None:
             try:
-                files = int(self._db.connection.execute('SELECT count(*) FROM imports').fetchone()[0])
+                import_row = self._db.connection.execute('SELECT count(*) FROM imports').fetchone()
+                files = int(import_row[0]) if import_row is not None else 0
             except Exception:
                 files = 0
         return {
             "enabled": self.enabled,
             "retention": "permanent",
-            "storage": "sqlite-wal",
-            "database": str(self._db.path) if self._db else "",
+            "storage": "postgres" if self._db and getattr(self._db, "backend", "sqlite") == "postgres" else "sqlite-wal",
+            "database": ("remote-postgresql" if self._db and getattr(self._db, "backend", "sqlite") == "postgres"
+                          else str(self._db.path) if self._db else ""),
             "path": str(path) if path else "",
             "files": files,
             "size_bytes": size,

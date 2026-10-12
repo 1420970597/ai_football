@@ -20,6 +20,8 @@ import uuid
 import zlib
 from functools import lru_cache
 
+from store.postgres import connect as pg_connect, postgres_enabled
+
 PACK_BYTES = 32 * 1024**2
 BATCH_FILES = 2000
 READ_CHUNK_BYTES = 8 * 1024**2
@@ -50,6 +52,7 @@ class S3Archive:
         self.state = self.root / "_archive"
         self.state.mkdir(parents=True, exist_ok=True)
         self.catalog = self.state / "catalog.sqlite3"
+        self.backend = "postgres" if postgres_enabled() else "sqlite"
         self._transfer_config: Any = None
         self._verified: set[str] = set()
         if client is None:
@@ -89,14 +92,16 @@ class S3Archive:
         with closing(self._db()) as db, db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, object_key TEXT NOT NULL, "
-                "offset INTEGER NOT NULL, compressed INTEGER NOT NULL, size INTEGER NOT NULL, "
+                '"offset" INTEGER NOT NULL, compressed INTEGER NOT NULL, size INTEGER NOT NULL, '
                 "sha256 TEXT NOT NULL, mtime_ns INTEGER NOT NULL, cleaned INTEGER NOT NULL DEFAULT 0)"
             )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS packs (object_key TEXT PRIMARY KEY, bytes INTEGER, sha256 TEXT, at REAL)"
             )
 
-    def _db(self) -> sqlite3.Connection:
+    def _db(self) -> Any:
+        if self.backend == "postgres":
+            return pg_connect()
         db = sqlite3.connect(self.catalog, timeout=30)
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA synchronous=FULL")
@@ -184,7 +189,7 @@ class S3Archive:
                     except FileNotFoundError:
                         pass  # Cleanup after the existence check; read the committed object.
                 row = db.execute(
-                    "SELECT object_key,offset,compressed,size,sha256 FROM files WHERE path=?",
+                    'SELECT object_key,"offset",compressed,size,sha256 FROM files WHERE path=?',
                     (self._relative(path),),
                 ).fetchone()
                 if row is None:
@@ -333,12 +338,17 @@ class S3Archive:
             )
             with closing(self._db()) as db, db:
                 db.executemany(
-                    "INSERT OR REPLACE INTO files(path,object_key,offset,compressed,size,sha256,mtime_ns,cleaned) "
-                    "VALUES (:path,:object_key,:offset,:compressed,:size,:sha256,:mtime_ns,0)",
+                    'INSERT INTO files(path,object_key,"offset",compressed,size,sha256,mtime_ns,cleaned) '
+                    "VALUES (:path,:object_key,:offset,:compressed,:size,:sha256,:mtime_ns,0) "
+                    "ON CONFLICT(path) DO UPDATE SET object_key=excluded.object_key,"
+                    '"offset"=excluded."offset",compressed=excluded.compressed,size=excluded.size,'
+                    "sha256=excluded.sha256,mtime_ns=excluded.mtime_ns,cleaned=0",
                     records,
                 )
                 db.execute(
-                    "INSERT OR REPLACE INTO packs VALUES (?,?,?,?)",
+                    "INSERT INTO packs(object_key,bytes,sha256,at) VALUES (?,?,?,?) "
+                    "ON CONFLICT(object_key) DO UPDATE SET bytes=excluded.bytes,"
+                    "sha256=excluded.sha256,at=excluded.at",
                     (key, length, digest, time.time()),
                 )
             totals["uploaded_files"] += len(records)
@@ -363,7 +373,16 @@ class S3Archive:
                     "SELECT size,mtime_ns,sha256,object_key FROM files WHERE path=?",
                     (self._relative(path),),
                 ).fetchone()
-                if row is None or not path.exists():
+                if row is None:
+                    continue
+                if not path.exists():
+                    # A worker can be terminated after unlink() but before
+                    # the catalog transaction commits. A row is inserted only
+                    # after upload and read-back verification, so the remote
+                    # pack is already the authoritative copy here. Do not
+                    # download a multi-gigabyte pack again just to repair the
+                    # local bookkeeping transaction.
+                    db.execute("UPDATE files SET cleaned=1 WHERE path=?", (self._relative(path),))
                     continue
                 stat = path.stat()
                 if (stat.st_size, stat.st_mtime_ns) != (row[0], row[1]):
@@ -427,13 +446,15 @@ class S3Archive:
                         raise ValueError("无效归档路径")
                 with closing(self._db()) as db, db:
                     db.execute(
-                        "INSERT OR REPLACE INTO packs VALUES (?,?,?,?)",
+                        "INSERT INTO packs(object_key,bytes,sha256,at) VALUES (?,?,?,?) "
+                        "ON CONFLICT(object_key) DO UPDATE SET bytes=excluded.bytes,"
+                        "sha256=excluded.sha256,at=excluded.at",
                         (manifest["key"], manifest["bytes"], manifest["sha256"], time.time()),
                     )
                     db.executemany(
-                        "INSERT INTO files(path,object_key,offset,compressed,size,sha256,mtime_ns) "
+                        'INSERT INTO files(path,object_key,"offset",compressed,size,sha256,mtime_ns) '
                         "VALUES (:path,:object_key,:offset,:compressed,:size,:sha256,:mtime_ns) "
-                        "ON CONFLICT(path) DO UPDATE SET object_key=excluded.object_key,offset=excluded.offset,"
+                        'ON CONFLICT(path) DO UPDATE SET object_key=excluded.object_key,"offset"=excluded."offset",'
                         "compressed=excluded.compressed,size=excluded.size,sha256=excluded.sha256,mtime_ns=excluded.mtime_ns "
                         "WHERE excluded.mtime_ns>=files.mtime_ns",
                         records,
@@ -486,11 +507,13 @@ class S3Archive:
         return {
             "backend": "s3",
             "bucket": self.bucket,
-            "files": files,
-            "bytes": size,
-            "packs": objects,
-            "object_bytes": stored,
-            "cleaned_files": cleaned,
+            # psycopg exposes BIGINT/SUM values as Decimal. Convert at the
+            # storage boundary so status.json remains JSON serializable.
+            "files": int(files or 0),
+            "bytes": int(size or 0),
+            "packs": int(objects or 0),
+            "object_bytes": int(stored or 0),
+            "cleaned_files": int(cleaned or 0),
             "verification": "远端回读 SHA256 与长度核验",
         }
 

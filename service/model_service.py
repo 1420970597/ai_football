@@ -1,7 +1,6 @@
 """Independent model process: input extraction, inference, evaluation and training."""
 from __future__ import annotations
 
-from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timezone
 import fcntl
@@ -9,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import signal
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -21,9 +19,10 @@ from core.learned_model import FEATURES, compatible_model, predict
 from service.runtime_settings import RuntimeConfig, validated
 from service.model_training import atomic_json
 
-from store.training_data import migrate_basis_columns, snapshot_inputs, write_inputs
+from store.training_data import snapshot_inputs, write_inputs, write_predictions
 
 REPLAY_MEMBERS_PER_CYCLE = 128
+TRAINING_WALL_LIMIT_S = int(os.environ.get('MODEL_TRAINING_WALL_LIMIT_S', '3600'))
 
 
 class ModelService:
@@ -33,6 +32,7 @@ class ModelService:
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen[Any] | None = None
+        self._process_log_path: Path | None = None
         self.root: Path | None = None
         self.cfg = RuntimeConfig()
         self._status: dict[str, Any] = {'state': 'not_started'}
@@ -126,12 +126,18 @@ class ModelService:
                 status['state'] = 'disabled'
             return {'model': model, 'training': status, 'storage': deepcopy(self._storage),
                     'settings': {'enabled': self.cfg.model_training_enabled, 'shadow_enabled': self.cfg.model_shadow_enabled,
+                                 'decision_mode': self.cfg.decision_mode,
+                                 'model_blend_weight': self.cfg.model_blend_weight,
                                  'cycle_matches': self.cfg.model_training_matches,
                                  'cpu_cores': self.cfg.model_training_cpu,
                                  'memory_mb': self.cfg.model_training_memory_mb},
                     'mode': 'shadow' if self.cfg.model_shadow_enabled else 'active', 'running': bool(self._thread and self._thread.is_alive()),
+                    'decision_mode': self.cfg.decision_mode,
+                    'decision_model_available': bool(self._model and
+                        isinstance(self._model.get('promotion'), dict) and
+                        self._model['promotion'].get('approved') is True),
                     'prospective': prospective,
-                    'note': ('影子模式：模型仅记录预测。' if self.cfg.model_shadow_enabled else '实际模式：兼容模型参与概率校准；不可用时使用经济算法。') + '保留各算法、盘口、盘口线、方向和决策时点；按比赛分组、等权训练。走势特征冻结在决策输入截点，旧记录缺少走势时显式标记缺失。'}
+                    'note': '独立模型服务负责训练与观察预测；实时决策模式独立选择纯算法、纯决策模型或混合。纯模型是当前盘口offset与算法特征训练模型的输出，不进行额外算法加权。模型或混合模式缺少已晋级模型时不可用。保留各算法、盘口、盘口线、方向和决策时点；按比赛分组、等权训练。走势特征冻结在决策输入截点。'}
 
     def observe(self, row: dict[str, Any]) -> None:
         state = row.get('input_state') or {}
@@ -158,22 +164,11 @@ class ModelService:
                 return
             pending, inputs = dict(self._shadow), list(self._inputs)
             path = self.root.parent / 'models' / 'shadow.sqlite3'
+        # write_inputs/write_predictions select the configured projection DSN.
+        # With no DSN they preserve the existing local SQLite files; with a PG
+        # DSN no model data is written to local SQLite at all.
         write_inputs(path.parent / 'inputs.sqlite3', inputs)
-        if pending:
-            with closing(sqlite3.connect(path, timeout=2)) as con, con:
-                con.execute('PRAGMA journal_mode=WAL')
-                con.execute('PRAGMA synchronous=FULL')
-                con.execute('CREATE TABLE IF NOT EXISTS predictions (version TEXT,match_id TEXT,at TEXT,cutoff_ms REAL,'
-                    'algorithm TEXT,market TEXT,line TEXT,outcome TEXT,baseline REAL,x TEXT,probability REAL,'
-                    'PRIMARY KEY(version,match_id,at,algorithm,market,line,outcome))')
-                if 'predicted_at' not in {r[1] for r in con.execute('PRAGMA table_info(predictions)')}:
-                    con.execute('ALTER TABLE predictions ADD COLUMN predicted_at TEXT')
-                migrate_basis_columns(con, 'predictions')
-                con.executemany('INSERT OR IGNORE INTO predictions '
-                    '(version,match_id,at,cutoff_ms,algorithm,market,line,outcome,baseline,x,probability,predicted_at,'
-                    'entry_score,settlement_basis,model_version,data_version,feature_version) VALUES '
-                    '(:version,:match_id,:at,:cutoff_ms,:algorithm,:market,:line,:outcome,:baseline,:x,:probability,:predicted_at,'
-                    ':entry_score,:settlement_basis,:model_version,:data_version,:feature_version)', pending.values())
+        write_predictions(path, pending.values())
         with self._lock:
             del self._inputs[:len(inputs)]
             for key in pending:
@@ -219,7 +214,8 @@ class ModelService:
         path = self.root.parent / 'runtime-settings.json'
         if path.exists() and path.stat().st_mtime_ns != self._settings_mtime:
             data = json.loads(path.read_text())
-            patch = {k: v for k, v in data['settings'].items() if k.startswith('model_training_') or k == 'model_shadow_enabled'}
+            patch = {k: v for k, v in data['settings'].items() if k.startswith('model_training_') or
+                     k in ('model_shadow_enabled', 'decision_mode', 'model_blend_weight')}
             self.configure(validated(self.cfg, patch))
             self._settings_mtime = path.stat().st_mtime_ns
 
@@ -332,15 +328,22 @@ class ModelService:
                     return
                 if process is not None:
                     code = process.poll()
-                    if code is None and time.monotonic() - self._process_started > 900:
+                    timed_out = False
+                    if code is None and time.monotonic() - self._process_started > TRAINING_WALL_LIMIT_S:
+                        timed_out = True
                         process.kill()
                         code = process.wait(timeout=3)
                     with self._lock:
                         self._read()
                         if code is not None:
                             if code and not self._retry_requested:
-                                self._status.update(state='failed', error=self._status.get('error') or '训练进程被终止（资源限制或超时）')
+                                error = self._status.get('error') or self._process_exit_error(code, timed_out)
+                                self._status.update(state='failed', error=error,
+                                    process_exit_code=code,
+                                    process_elapsed_s=round(time.monotonic() - self._process_started, 1),
+                                    training_log=str(self._process_log_path or ''))
                             self._process = None
+                            self._process_log_path = None
                             next_check = 0 if self._retry_requested else time.monotonic() + 60
                             self._retry_requested = False
                 if time.monotonic() >= next_check:
@@ -353,13 +356,19 @@ class ModelService:
                         self._read()
                         cfg = self.cfg
                         if cfg.model_training_enabled and self._process is None and not self._stop.is_set():
-                            self._process = subprocess.Popen([sys.executable, '-m', 'service.model_training',
-                                str(root.resolve()), str(cfg.model_training_matches), str(cfg.model_training_cpu),
-                                str(cfg.model_training_memory_mb)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            log_stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+                            self._process_log_path = root.parent / 'models' / ('training-' + log_stamp + '.log')
+                            with self._process_log_path.open('a', encoding='utf-8') as training_log:
+                                training_log.write('training process started at ' + datetime.now(timezone.utc).isoformat() + '\n')
+                                training_log.flush()
+                                self._process = subprocess.Popen([sys.executable, '-u', '-m', 'service.model_training',
+                                    str(root.resolve()), str(cfg.model_training_matches), str(cfg.model_training_cpu),
+                                    str(cfg.model_training_memory_mb)], stdout=training_log,
+                                    stderr=subprocess.STDOUT)
                             self._process_started = time.monotonic()
                             self._status = {**self._status, 'state': 'checking'}
                     next_check = time.monotonic() + 60
-            except (OSError, ValueError, sqlite3.Error) as exc:
+            except Exception as exc:
                 with self._lock:
                     self._status.update(state='failed', error=str(exc))
                 # Publish the worker heartbeat even when replay validation
@@ -367,7 +376,7 @@ class ModelService:
                 # quarantined input from a worker that never started.
                 try:
                     self._publish()
-                except (OSError, ValueError, TypeError, sqlite3.Error):
+                except Exception:
                     pass
                 next_check = time.monotonic() + 60
             self._stop.wait(1)
@@ -376,9 +385,21 @@ class ModelService:
                 next_check = 0
         try:
             self._flush_shadow()
-        except (OSError, sqlite3.Error) as exc:
+        except Exception as exc:
             with self._lock:
                 self._status.update(state='failed', error='模型输入保存失败: ' + str(exc))
+
+    @staticmethod
+    def _process_exit_error(code: int, timed_out: bool) -> str:
+        if timed_out:
+            return '训练进程超过 %s 秒运行上限' % TRAINING_WALL_LIMIT_S
+        if code < 0:
+            try:
+                name = signal.Signals(-code).name
+            except ValueError:
+                name = 'UNKNOWN'
+            return '训练进程被信号终止：%s (%s)' % (name, -code)
+        return '训练进程异常退出，退出码 %s' % code
 
 
 def main() -> None:

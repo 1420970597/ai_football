@@ -35,16 +35,16 @@ class LearnedDecisionTests(unittest.TestCase):
             model = {'version':'test','data_version':DATA_VERSION,'features':list(FEATURES),
                      'weights':weights,'updated_at':'2025-01-01T00:00:00+00:00',
                      'feature_version':FEATURE_VERSION,
-                     'validation':{'brier':.1},'baseline':{'brier':.2}}
+                     'validation':{'brier':.1},'baseline':{'brier':.2},'promotion':{'approved':True}}
             atomic_json(root/'models'/'active.json', model)
             hub = test_live_expert.LiveExpertTests().hub()
             svc = LiveExpertService()
             snapshot = {**hub.decision_snapshot('m'), '_model_path':str(root/'models'/'active.json')}
             shadow = svc._calculate(snapshot)
-            svc.configure(replace(RuntimeConfig(), model_shadow_enabled=False), 2)
+            svc.configure(replace(RuntimeConfig(), model_shadow_enabled=False, decision_mode='model'), 2)
             active = svc._calculate(snapshot)
             self.assertTrue(active['ensemble']['model_application']['applied'], active['ensemble']['model_application'])
-            self.assertEqual(active['baseline_ensemble']['candidates'], shadow['ensemble']['candidates'])
+            self.assertEqual(active['baseline_ensemble']['candidates'], shadow['baseline_ensemble']['candidates'])
             self.assertGreater(max(c['p_model'] for c in active['ensemble']['candidates']), .5)
             self.assertTrue(any(a['p_model'] != b['p_model'] for a, b in zip(
                 active['ensemble']['candidates'], active['baseline_ensemble']['candidates'])))
@@ -53,12 +53,13 @@ class LearnedDecisionTests(unittest.TestCase):
             atomic_json(root/'models'/'active.json', model)
             future = svc._calculate(snapshot)
             self.assertFalse(future['ensemble']['model_application']['applied'])
-            self.assertEqual(future['ensemble']['candidates'], future['baseline_ensemble']['candidates'])
+            self.assertEqual(future['ensemble']['candidates'], [])
 
-    def test_missing_model_falls_back_without_halting_live_calculation(self):
+    def test_missing_model_does_not_halt_algorithm_calculation(self):
         svc = LiveExpertService()
         svc.configure(replace(RuntimeConfig(), model_shadow_enabled=False), 2)
         hub = test_live_expert.LiveExpertTests().hub()
         row = svc._calculate(hub.decision_snapshot('m'))
         self.assertFalse(row['ensemble']['model_application']['applied'])
-        self.assertEqual(row['ensemble']['candidates'], row['baseline_ensemble']['candidates'])
+        self.assertEqual([c['p_model'] for c in row['ensemble']['candidates']],
+                         [c['p_model'] for c in row['baseline_ensemble']['candidates']])

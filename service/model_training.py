@@ -19,10 +19,15 @@ from core.probability_calibration import calibrate_probability
 from core.oof_peer import apply_peer_calibration, crossfit_peer_features
 from store.training_data import dataset
 
-# A training run must use every qualified decision.  The previous min-hash
-# cap was useful as a temporary resource guard, but it silently discarded
-# valid observations and made the reported accuracy depend on the cap.
-TRAINING_MAX_ROWS_PER_MATCH: int | None = None
+# Quotes arrive repeatedly for the same match, line and direction, so adjacent
+# training rows are highly correlated. Keep the complete qualified-input and
+# validity counts, while giving each match a deterministic, multi-decision cap
+# for fitting and validation.
+# A match produces many adjacent quote observations. Keep enough decisions to
+# represent multiple markets/algorithms while bounding the pure-Python learner
+# and every rolling-validation fold.
+TRAINING_MAX_ROWS_PER_MATCH: int | None = 40
+TRAINING_CPU_TIME_LIMIT_S = int(os.environ.get('MODEL_TRAINING_CPU_TIME_LIMIT_S', '1800'))
 
 
 def rolling_validation(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
@@ -144,9 +149,10 @@ def constrain(cpu: int, memory_mb: int) -> dict[str, Any]:
     os.sched_setaffinity(0, allowed[:cpu])
     memory = memory_mb * 1024**2
     resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
-    resource.setrlimit(resource.RLIMIT_CPU, (600, 600))
+    resource.setrlimit(resource.RLIMIT_CPU, (TRAINING_CPU_TIME_LIMIT_S, TRAINING_CPU_TIME_LIMIT_S))
     os.nice(10)
-    return {'cpu_cores': len(os.sched_getaffinity(0)), 'memory_mb': memory_mb, 'cpu_time_limit_s': 600}
+    return {'cpu_cores': len(os.sched_getaffinity(0)), 'memory_mb': memory_mb,
+            'cpu_time_limit_s': TRAINING_CPU_TIME_LIMIT_S}
 
 
 def run(root: Path, cycle: int, cpu: int, memory: int) -> dict[str, Any]:
@@ -165,15 +171,21 @@ def run(root: Path, cycle: int, cpu: int, memory: int) -> dict[str, Any]:
     if incompatible:
         # Retain the artifact; it may be audited but must never seed a clean cycle.
         atomic_json(model_root / ('quarantined-' + active.name), old)
-        active.unlink()
+        active.unlink(missing_ok=True)
         old = {}
     quality: dict[str, Any] = {}
+    print('training: loading time-isolated dataset', flush=True)
     rows = dataset(root / 'ledger.sqlite3', model_root / 'inputs.sqlite3', audit=quality,
                    max_per_match=TRAINING_MAX_ROWS_PER_MATCH)
     consumed = set(old.get('cohort_ids', []))
     new_count = len({r['match_id'] for r in rows} - consumed)
     status: dict[str, Any] = {'state': 'waiting', 'checked_at': datetime.now(timezone.utc).isoformat(),
-                             'eligible_matches': len({r['match_id'] for r in rows}), 'eligible_decisions': len(rows), 'new_matches': new_count, 'cycle_matches': cycle,
+                             'eligible_matches': len({r['match_id'] for r in rows}),
+                             'eligible_decisions': quality.get('valid_training_decisions'),
+                             'sampled_eligible_decisions': quality.get('sample_valid_training_decisions'),
+                             'eligible_decisions_scope': quality.get('counts_scope', 'full_inputs'),
+                             'eligible_matches_scope': quality.get('counts_scope', 'full_inputs'),
+                             'training_decisions': len(rows), 'new_matches': new_count, 'cycle_matches': cycle,
                              'limits': limits, 'minimum_matches': 100, 'error': ''}
     status.update(data_version=DATA_VERSION, feature_version=FEATURE_VERSION, data_quality=quality,
                   old_model_quarantined=incompatible or any(model_root.glob('quarantined-*.json')))
@@ -187,14 +199,18 @@ def run(root: Path, cycle: int, cpu: int, memory: int) -> dict[str, Any]:
     if new_count >= cycle and status['eligible_matches'] >= 100:
         status['state'] = 'training'
         atomic_json(model_root / 'status.json', status)
+        print('training: fitting model', flush=True)
         model = train(rows)
+        print('training: rolling validation', flush=True)
         folds, evidence, calibration = rolling_validation(rows)
         test_metrics = folds[-1].get('model_calibrated', model['validation']) if folds else model['validation']
         baseline_metrics = folds[-1].get('baseline_calibrated', model['baseline']) if folds else model['baseline']
         decision = promotion(test_metrics, baseline_metrics, evidence, folds)
-        model['sampling'] = {'method':'all qualified decisions; no per-match sampling',
+        model['sampling'] = {'method':quality.get('sampling_method', 'unknown'),
                              'max_rows_per_match':TRAINING_MAX_ROWS_PER_MATCH,
-                             'source_eligible_decisions':quality['source_eligible_decisions']}
+                             'source_eligible_decisions':quality.get('source_eligible_decisions'),
+                             'source_eligible_decisions_scope':quality.get('counts_scope', 'full_inputs'),
+                             'sampled_eligible_decisions':quality.get('sample_valid_training_decisions')}
         model['rolling_validation'] = folds
         model['promotion'] = decision
         model['promotion_evidence'] = evidence

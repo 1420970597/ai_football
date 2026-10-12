@@ -42,7 +42,7 @@ class BettingExecutionTests(unittest.TestCase):
         self.hub = MagicMock()
         self.hub.decision_snapshot.side_effect = lambda mid: dict(self.snapshot)
         self.ledger = MagicMock()
-        self.ledger.recommendation_performance.return_value = {'hit_count': 4, 'settled_samples': 6, 'independent_matches': 6, 'roi': .1, 'model_version': MODEL_VERSION}
+        self.ledger.recommendation_performance.return_value = {'hit_count': 4, 'settled_samples': 6, 'independent_matches': 30, 'roi': .1, 'model_version': MODEL_VERSION}
         self.client = MagicMock()
         self.client.prepare_bet.side_effect = lambda detail, stake: detail
         self.client.submit_bet.return_value = {'submitted': True, 'status': 'accepted', 'order_no': 'ORDER-1'}
@@ -327,6 +327,55 @@ class BettingExecutionTests(unittest.TestCase):
         self.client.submit_bet.assert_called_once()
         self.assertNotIn('requestId', json.dumps(self.executor.health()))
 
+    def test_shadow_model_is_never_sent_to_real_venue(self):
+        row = {**self.row, 'ensemble': {'model_application': {'mode': 'shadow', 'applied': False}}}
+        result = self.executor.execute(row, self.pick)
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn('影子模式', result['reason'])
+        self.client.submit_bet.assert_not_called()
+
+    def test_explicit_algorithm_route_can_execute_without_an_active_model(self):
+        row = {**self.row, 'decision_mode': 'algorithm', 'ensemble': {'model_application': {
+            'mode': 'algorithm', 'applied': False, 'execution_enabled': True, 'observation_shadow': True}}}
+        self.pick['decision_mode'] = 'algorithm'
+        self.assertEqual(self.executor.execute(row, self.pick)['status'], 'accepted')
+        self.client.submit_bet.assert_called_once()
+
+    def test_model_and_hybrid_routes_reject_unapplied_or_mismatched_artifacts(self):
+        for mode in ('model', 'hybrid'):
+            with self.subTest(mode=mode):
+                self.settings.config = replace(self.settings.config, decision_mode=mode)
+                row = {**self.row, 'decision_mode': mode, 'decision_model_version': 'approved',
+                    'ensemble': {'model_application': {'mode': mode, 'applied': False, 'execution_enabled': True}}}
+                self.pick.update(decision_mode=mode, decision_model_version='approved', blend_weights={'model': .5})
+                executor = self.make_executor()
+                result = executor.execute(row, self.pick)
+                self.assertEqual(result['status'], 'blocked')
+        self.client.submit_bet.assert_not_called()
+
+    def test_wrong_mode_blocks_even_with_same_configuration_version(self):
+        row = {**self.row, 'decision_mode': 'model', 'ensemble': {'model_application': {
+            'mode': 'model', 'applied': True, 'execution_enabled': True}}}
+        result = self.executor.execute(row, self.pick)
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn('决策模式已变化', result['reason'])
+        self.client.submit_bet.assert_not_called()
+
+    def test_model_artifact_and_hybrid_weight_must_match_final_pick(self):
+        for mode, pick_changes, expected in (('model', {'decision_model_version': 'old'}, '模型版本'),
+                ('hybrid', {'blend_weights': {'model': .35}}, '混合权重'),
+                ('model', {'decision_mode': 'algorithm'}, '决策模式不一致')):
+            with self.subTest(mode=mode, patch=pick_changes):
+                self.settings.config = replace(self.settings.config, decision_mode=mode)
+                pick = {**self.pick, 'decision_mode': mode, 'decision_model_version': 'approved',
+                        'blend_weights': {'model': .5}, **pick_changes}
+                row = {**self.row, 'picks': [pick], 'decision_mode': mode, 'decision_model_version': 'approved',
+                       'ensemble': {'model_application': {'mode': mode, 'applied': True, 'execution_enabled': True}}}
+                result = self.make_executor().execute(row, pick)
+                self.assertEqual(result['status'], 'blocked')
+                self.assertIn(expected, result['reason'])
+        self.client.submit_bet.assert_not_called()
+
     def test_automatic_submission_includes_live_chinese_match_metadata(self):
         self.row.update(home='旧主队名', away='旧客队名', league='旧联赛')
         self.snapshot['info'] = {'home': '当前主队', 'away': '当前客队', 'league': '当前中文联赛'}
@@ -385,7 +434,7 @@ class BettingExecutionTests(unittest.TestCase):
             with patch('service.betting.time.monotonic', return_value=100):
                 first = self.executor.execute(self.row, self.pick)
             self.assertIn('命中次数不足', first['reason'])
-            self.ledger.recommendation_performance.return_value = {'hit_count': 4, 'settled_samples': 6, 'independent_matches': 6, 'roi': .1, 'model_version': MODEL_VERSION}
+            self.ledger.recommendation_performance.return_value = {'hit_count': 4, 'settled_samples': 30, 'independent_matches': 30, 'roi': .1, 'model_version': MODEL_VERSION}
             for moment in (110, 120, 129):
                 with patch('service.betting.time.monotonic', return_value=moment):
                     deferred = self.executor.execute(self.row, self.pick)
@@ -727,6 +776,10 @@ class BettingExecutionTests(unittest.TestCase):
         self.assertTrue(row['picks'])
         enqueue.assert_called_once()
         self.assertTrue(all(p['order_detail']['marketId'] for p in row['picks']))
+        # The live venue only accepts a row carrying an approved model marker.
+        row['ensemble']['model_application'] = {'mode': 'active', 'applied': True}
+        with svc.betting._lock:
+            svc.betting._latest['m']['ensemble']['model_application'] = {'mode': 'active', 'applied': True}
         svc.betting.client_factory = self.factory
         svc.ledger.recommendation_performance = self.ledger.recommendation_performance
         svc.live_expert.flush()  # Full decision must be durable before fake debit.

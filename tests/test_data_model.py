@@ -46,6 +46,7 @@ class DataModelTests(unittest.TestCase):
         self.assertEqual(out.model_training_matches, 2)
         for patch_value in ({'model_training_matches': 0}, {'model_training_cpu': 3},
                             {'model_training_memory_mb': 100}, {'model_training_cpu': 1.5},
+                            {'betting_min_edge': 1.1},
                             {'model_training_enabled': 1}, {'model_training_matches': True}):
             with self.subTest(patch=patch_value), self.assertRaises(ValueError):
                 validated(cfg, patch_value)
@@ -91,6 +92,8 @@ class DataModelTests(unittest.TestCase):
         source = Path(__file__).parents[1] / 'web' / 'console' / 'workbench.js'
         code = source.read_text(encoding='utf-8')
         self.assertIn("['有效训练决策',training.eligible_decisions", code)
+        self.assertIn("['本轮训练样本',training.training_decisions", code)
+        self.assertIn("['已有输入比赛',quality.input_matches", code)
         self.assertIn("['无效 / 隔离训练数据',quality.invalid_training_records", code)
         self.assertIn("['等待赛果标签',quality.waiting_for_label", code)
 

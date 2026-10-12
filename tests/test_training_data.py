@@ -4,11 +4,20 @@ import tempfile
 import unittest
 import sqlite3
 from datetime import datetime
+from contextlib import nullcontext
+from unittest.mock import patch
 
 from core.learned_model import DATA_VERSION, FEATURES
 from core.live_model import MODEL_VERSION
 from store.ledger_db import LedgerDB
-from store.training_data import dataset, snapshot_inputs, write_inputs
+from store.training_data import (
+    _dataset_postgres,
+    _postgres_training_sample_query,
+    dataset,
+    snapshot_inputs,
+    write_inputs,
+)
+from store.training_projection import ProjectionTarget
 
 
 def decision():
@@ -24,6 +33,111 @@ def decision():
 
 
 class TrainingDataTests(unittest.TestCase):
+    def postgres_audit(self, source_rows, estimate=(23_000_000, -.0001), *, max_per_match=40):
+        statements = []
+        columns = list(source_rows[0]) if source_rows else []
+
+        class Cursor:
+            description = [(name,) for name in columns]
+
+            def execute(self, operation, parameters=()):
+                statements.append(operation)
+
+            def fetchone(self):
+                return estimate
+
+            def fetchmany(self, size):
+                batch, source_rows[:] = source_rows[:size], source_rows[size:]
+                return [tuple(row[name] for name in columns) for row in batch]
+
+            def close(self):
+                pass
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+        finals = {'m1': {'ft_score': (2, 1), 'ht_score': (1, 0),
+                         'settled_at': '2025-01-01T14:00:00+00:00'}}
+        quality = {}
+        with patch('store.training_data.readonly_snapshot', return_value=nullcontext(Connection())), \
+                patch('store.training_data._labels_postgres', return_value=finals):
+            rows = _dataset_postgres(ProjectionTarget.parse('postgresql://localhost/model'),
+                                     audit=quality, max_per_match=max_per_match)
+        return rows, quality, statements
+
+    def test_postgres_quality_does_not_certify_unaudited_archive_totals(self):
+        source = snapshot_inputs(decision())[:2]
+        source[1]['settlement_basis'] = 'unknown'
+        rows, quality, statements = self.postgres_audit(source)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(quality['sampled'])
+        self.assertEqual(quality['counts_scope'], 'sampled_qualified_inputs')
+        self.assertFalse(quality['full_audit_complete'])
+        self.assertEqual(quality['sample_examined_records'], 2)
+        self.assertEqual(quality['sample_examined_matches'], 1)
+        self.assertEqual(quality['sample_valid_training_decisions'], 1)
+        self.assertEqual(quality['sample_ungraded_inputs'], 1)
+        self.assertEqual(quality['estimated_input_records'], 23_000_000)
+        self.assertEqual(quality['estimated_input_matches'], 2300)
+        for field in ('input_records', 'input_matches', 'valid_training_decisions', 'waiting_for_label',
+                      'quarantined_inputs', 'quarantined_ledger', 'quarantined_missing_time_contract',
+                      'eligible_time_contract', 'labelled_time_contract', 'invalid_training_records',
+                      'source_eligible_decisions'):
+            with self.subTest(field=field):
+                self.assertIsNone(quality[field])
+        self.assertFalse(any('COUNT(' in operation.upper() for operation in statements))
+        self.assertEqual(quality['sampling_method'], 'earliest_qualified_inputs_per_match')
+
+    def test_postgres_empty_sample_leaves_unknown_quality_unknown(self):
+        for estimate in (None, (-1, None), (0, None)):
+            with self.subTest(estimate=estimate):
+                rows, quality, _ = self.postgres_audit([], estimate)
+                self.assertEqual(rows, [])
+                self.assertEqual(quality['sample_examined_records'], 0)
+                self.assertEqual(quality['sample_valid_training_decisions'], 0)
+                self.assertIsNone(quality['valid_training_decisions'])
+                self.assertIsNone(quality['invalid_training_records'])
+                self.assertIsNone(quality['waiting_for_label'])
+                self.assertIsNone(quality['estimated_input_matches'])
+                self.assertEqual(quality['estimated_input_records'], 0 if estimate == (0, None) else None)
+
+    def test_postgres_uncapped_quality_only_certifies_qualified_inputs(self):
+        source = snapshot_inputs(decision())[:1]
+        rows, quality, _ = self.postgres_audit(source, max_per_match=None)
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(quality['sampled'])
+        self.assertEqual(quality['counts_scope'], 'qualified_inputs')
+        self.assertFalse(quality['full_audit_complete'])
+        self.assertEqual(quality['source_eligible_decisions'], 1)
+        self.assertEqual(quality['valid_training_decisions'], 1)
+        self.assertIsNone(quality['quarantined_inputs'])
+        self.assertIsNone(quality['waiting_for_label'])
+
+    def test_postgres_training_query_uses_index_driven_lateral_sampling(self):
+        labels = "(SELECT match_id, available_at FROM latest_labels)"
+        time_filter = "cutoff_ms > 0 AND decision_received_at_ms <= cutoff_ms AND quote_received_at_ms <= cutoff_ms"
+        query, args = _postgres_training_sample_query(
+            labels, time_filter, ("data-v", "model-v", "feature-v"), 40)
+
+        self.assertIn("CROSS JOIN LATERAL", query)
+        self.assertIn("ORDER BY i.at,i.algorithm,i.market,i.line,i.outcome LIMIT %s", query)
+        self.assertNotIn("ROW_NUMBER() OVER (PARTITION BY i", query)
+        self.assertEqual(args, ("data-v", "model-v", "feature-v", 40))
+        self.assertIn("l.available_at > i.at", query)
+        self.assertIn("i.decision_received_at_ms <= i.cutoff_ms", query)
+        self.assertIn("i.quote_received_at_ms <= i.cutoff_ms", query)
+
+    def test_postgres_training_query_without_sampling_keeps_time_boundary(self):
+        labels = "(SELECT match_id, available_at FROM latest_labels)"
+        query, args = _postgres_training_sample_query(
+            labels, "cutoff_ms > 0", ("d", "m", "f"), None)
+
+        self.assertNotIn("CROSS JOIN LATERAL", query)
+        self.assertIn("SELECT i.* FROM model_inputs i JOIN", query)
+        self.assertIn("l.available_at > i.at", query)
+        self.assertEqual(args, ("d", "m", "f"))
+
     def test_label_revisions_are_append_only_and_latest_available_score_is_selected(self):
         from store.training_data import labels
         with tempfile.TemporaryDirectory() as directory:
@@ -63,6 +177,9 @@ class TrainingDataTests(unittest.TestCase):
             self.assertEqual(quality['input_records'],8)
             self.assertEqual(quality['valid_training_decisions'],8)
             self.assertEqual(quality['invalid_training_records'],0)
+            self.assertEqual(quality['counts_scope'], 'full_inputs')
+            self.assertTrue(quality['full_audit_complete'])
+            self.assertFalse(quality['sampled'])
             final['ft_score'] = [0,3]
             final['ht_score'] = [0,1]
             db.put([final],lambda _:2.0)
@@ -71,6 +188,31 @@ class TrainingDataTests(unittest.TestCase):
             self.assertEqual([r['x'] for r in a],[r['x'] for r in c])
             with self.assertRaises(ValueError):
                 dataset(db.path,path,max_per_match=0)
+
+    def test_dataset_counts_input_matches_and_prefilters_labels_by_availability_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = LedgerDB(root / 'ledger.sqlite3')
+            final = {'match_id': 'm1', 'at': '2025-01-01T10:00:00+00:00',
+                     'settled_at': '2025-01-01T11:00:00+00:00',
+                     'label_available_at': '2025-01-01T11:00:00+00:00',
+                     'competition_type': 'real', 'status': 'won',
+                     'ft_score': [2, 1], 'ht_score': [1, 0]}
+            db.put([final], lambda _: 1.0)
+            db.connection.commit()
+            path = root / 'inputs.sqlite3'
+            write_inputs(path, snapshot_inputs(decision()))
+
+            quality = {}
+            rows = dataset(db.path, path, audit=quality)
+
+            self.assertEqual(rows, [])
+            self.assertEqual(quality['input_matches'], 1)
+            self.assertEqual(quality['eligible_time_contract'], 8)
+            self.assertEqual(quality['waiting_for_label'], 8)
+            self.assertEqual(quality['valid_training_decisions'], 0)
+            self.assertGreaterEqual(quality['quarantined_missing_time_contract'], 0)
+            self.assertLessEqual(quality['eligible_time_contract'], quality['input_records'])
 
     def test_old_features_are_quarantined_without_relabeling_as_clean(self):
         old = decision()

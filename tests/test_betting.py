@@ -23,7 +23,7 @@ class BettingTests(unittest.TestCase):
     def pick(self, **changes):
         value = {
             'match_id': 'm1', 'market': 'OU', 'line': '2.5', 'outcome': 'over',
-            'confidence': .8, 'hit_count': 4, 'independent_matches': 6, 'roi': .1, 'model_version': MODEL_VERSION, 'algorithm': 'economic_ensemble',
+            'confidence': .8, 'hit_count': 4, 'independent_matches': 30, 'roi': .1, 'model_version': MODEL_VERSION, 'algorithm': 'economic_ensemble',
         }
         value.update(changes)
         return value
@@ -56,6 +56,13 @@ class BettingTests(unittest.TestCase):
         self.assertFalse(blocked['allowed'])
         self.assertIn('命中次数不足', blocked['reason'])
 
+    def test_real_order_requires_configured_current_quote_edge(self):
+        cfg = replace(RuntimeConfig(), betting_enabled=True, betting_min_edge=.05)
+        blocked = preview_bet(self.pick(effective_ev=.049), cfg)
+        self.assertFalse(blocked['allowed'])
+        self.assertIn('下注优势不足', blocked['reason'])
+        self.assertTrue(preview_bet(self.pick(effective_ev=.05), cfg)['allowed'])
+
     def test_decision_occurrence_gate_is_independent_of_settlement_hits(self):
         cfg = replace(RuntimeConfig(), betting_enabled=True, betting_min_hit_count=2)
         first = preview_bet(self.pick(hit_count=0, decision_count=1), cfg)
@@ -65,6 +72,23 @@ class BettingTests(unittest.TestCase):
         self.assertTrue(repeated['allowed'])
         self.assertEqual(repeated['plan']['decision_count'], 2)
         self.assertEqual(repeated['plan']['hit_count'], 2)
+
+    def test_decision_occurrences_cannot_bypass_losing_settled_evidence(self):
+        cfg = replace(RuntimeConfig(), betting_enabled=True, betting_min_hit_count=2)
+        cases = (({'decision_count': 2, 'roi': -0.01}, '历史收益率'),
+                 ({'decision_count': 2, 'independent_matches': 1}, '独立比赛样本'),
+                 ({'decision_count': 2, 'roi': None}, '历史收益率'))
+        for patch, expected in cases:
+            with self.subTest(patch=patch):
+                result = preview_bet(self.pick(**patch), cfg)
+                self.assertFalse(result['allowed'])
+                self.assertIn(expected, result['reason'])
+
+    def test_repeated_quote_cannot_replace_independent_evidence(self):
+        cfg = replace(RuntimeConfig(), betting_enabled=True, betting_min_evidence_matches=30)
+        result = preview_bet(self.pick(independent_matches=29, decision_count=100), cfg)
+        self.assertFalse(result['allowed'])
+        self.assertIn('独立比赛样本不足', result['reason'])
 
     def test_multiplier_prefers_ensemble_confidence(self):
         cfg = replace(RuntimeConfig(), betting_enabled=True, betting_fixed_stake=20,
