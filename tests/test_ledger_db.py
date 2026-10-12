@@ -2,6 +2,7 @@ import json
 import re
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import nullcontext
 from decimal import Decimal
@@ -39,6 +40,198 @@ class _PostgresAggregateConnection:
 
 
 class LedgerDatabaseTests(unittest.TestCase):
+    def test_postgres_history_cold_get_never_imports_or_reads_pg_or_shared_health(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            db = ledger._db
+            db.backend = 'postgres'
+            original_connection = db.connection
+            db.connection = MagicMock()
+            db.connection.execute.side_effect = AssertionError('shared connection')
+            try:
+                with patch.object(ledger, '_read_db', side_effect=AssertionError('foreground read')), \
+                        patch.object(ledger, '_sync_db', side_effect=AssertionError('foreground import')), \
+                        patch('service.ledger.threading.Thread') as thread:
+                    result = ledger.history(limit=100, offset=100, competition_type='real', cohort='prospective')
+                self.assertEqual(result['entries_status'], 'loading')
+                self.assertIsNone(result['entries_total'])
+                self.assertIsNone(result['overall'])
+                self.assertEqual(result['offset'], 100)
+                self.assertIsNone(result['ledger']['files'])
+                self.assertEqual(len(ledger._history_page_jobs), 1)
+                thread.assert_called_once()
+            finally:
+                db.backend = 'sqlite'
+                db.connection = original_connection
+
+    def test_postgres_pages_keep_filters_offsets_and_limit_separate_and_cache_exact_count(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            original = ledger._db
+            db = MagicMock(backend='postgres')
+            reader = MagicMock(backend='postgres')
+            db.reader.side_effect = lambda: nullcontext(reader)
+            reader._statistics_table.return_value = 'decision_statistics'
+            reader.connection.execute.return_value.fetchone.return_value = (123,)
+            reader.entries.return_value = [self.row(decision_id='page-2').as_dict()]
+            ledger._db = db
+            snapshot = {'overall': {'total': 123}, 'statistics_status': 'ready',
+                        'statistics_at': datetime.now(timezone.utc).isoformat()}
+            try:
+                with patch('service.ledger.threading.Thread') as thread, \
+                        patch.object(ledger, '_cached_history_snapshot', return_value=snapshot):
+                    cold = ledger.history(limit=1, offset=1, competition_type='real', cohort='prospective')
+                    again = ledger.history(limit=1, offset=1, competition_type='real', cohort='prospective')
+                    self.assertEqual(cold['entries_status'], 'loading')
+                    self.assertEqual(again['entries_status'], 'loading')
+                    thread.assert_called_once()
+                    ledger._history_page_loop()
+                    ready = ledger.history(limit=1, offset=1, competition_type='real', cohort='prospective')
+                    self.assertEqual(ready['entries_total'], 123)
+                    self.assertEqual(ready['entries'][0]['decision_id'], 'page-2')
+                    self.assertEqual(ready['next_offset'], 2)
+                    self.assertTrue(ready['entries_at'])
+                    self.assertEqual(reader.entries.call_args.args[2:], (1, 1))
+                    for changes in ({'offset': 0}, {'limit': 2}, {'competition_type': 'virtual'},
+                                    {'algorithm': 'different'}, {'cohort': 'recommendations'}, {'days': 1},
+                                    {'picks_only': False}):
+                        kwargs = {'limit': 1, 'offset': 1, 'competition_type': 'real', 'cohort': 'prospective', **changes}
+                        different = ledger.history(**kwargs)
+                        self.assertEqual(different['entries_status'], 'loading', kwargs)
+                        self.assertEqual(different['entries'], [], kwargs)
+                        self.assertIsNone(different['entries_total'], kwargs)
+                    ready['entries'][0]['decision_id'] = 'changed'
+                    self.assertEqual(ledger.history(limit=1, offset=1, competition_type='real',
+                                                    cohort='prospective')['entries'][0]['decision_id'], 'page-2')
+            finally:
+                ledger._db = original
+
+    def test_postgres_page_failure_retains_stale_page_and_rate_limits_retry(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            original = ledger._db
+            db = MagicMock(backend='postgres')
+            db.reader.side_effect = TimeoutError('IO timeout')
+            ledger._db = db
+            try:
+                with patch('service.ledger.threading.Thread'):
+                    ledger.history(limit=1, offset=10)
+                    key = next(iter(ledger._history_page_jobs))
+                    ledger._history_pages[key] = {'entries': [{'decision_id': 'old'}], 'entries_total': 20,
+                        'entries_shown': 1, 'entries_status': 'ready', 'entries_at': '2020-01-01T00:00:00+00:00'}
+                    ledger._history_page_loop()
+                    result = ledger.history(limit=1, offset=10)
+                    self.assertEqual(result['entries'][0]['decision_id'], 'old')
+                    self.assertEqual(result['entries_total'], 20)
+                    self.assertTrue(result['entries_stale'])
+                    self.assertEqual(result['entries_error'], 'TimeoutError')
+                    self.assertFalse(result['entries_refreshing'])
+                    self.assertFalse(ledger._history_page_jobs)
+                    self.assertFalse(ledger._history_page_worker_running)
+                    ledger._history_page_retry_at[key] = 0
+                    ledger.history(limit=1, offset=10)
+                    self.assertEqual(len(ledger._history_page_jobs), 1)
+            finally:
+                ledger._db = original
+
+    def test_postgres_slow_background_query_does_not_delay_cold_http_read(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            original = ledger._db
+            db = MagicMock(backend='postgres')
+            entered, release = threading.Event(), threading.Event()
+            def reader():
+                entered.set()
+                release.wait(2)
+                raise TimeoutError('database busy')
+            db.reader.side_effect = reader
+            ledger._db = db
+            try:
+                started = time.monotonic()
+                result = ledger.history(limit=100, competition_type='real')
+                self.assertLess(time.monotonic()-started, .5)
+                self.assertEqual(result['entries_status'], 'loading')
+                self.assertTrue(entered.wait(1))
+                started = time.monotonic()
+                ledger.history(limit=100, competition_type='real')
+                self.assertLess(time.monotonic()-started, .5)
+            finally:
+                release.set()
+                deadline = time.monotonic()+2
+                while ledger._history_page_worker_running and time.monotonic()<deadline:
+                    time.sleep(.005)
+                ledger._db = original
+
+    def test_history_page_lru_and_pending_jobs_are_bounded(self):
+        from service.ledger import HISTORY_CACHE_ENTRIES
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            original = ledger._db
+            ledger._db = MagicMock(backend='postgres')
+            try:
+                with patch('service.ledger.threading.Thread'):
+                    for offset in range(100):
+                        ledger.history(limit=1, offset=offset)
+                self.assertEqual(len(ledger._history_page_jobs), HISTORY_CACHE_ENTRIES)
+                with ledger._history_cache_lock:
+                    for key in range(HISTORY_CACHE_ENTRIES):
+                        ledger._remember_history(ledger._history_pages, str(key), {'entries': [key]})
+                    ledger._history_pages.move_to_end('0')
+                    ledger._remember_history(ledger._history_pages, 'new', {'entries': ['new']})
+                self.assertEqual(len(ledger._history_pages), HISTORY_CACHE_ENTRIES)
+                self.assertIn('0', ledger._history_pages)
+                self.assertNotIn('1', ledger._history_pages)
+            finally:
+                ledger._db = original
+
+    def test_postgres_empty_page_has_exact_zero_only_after_successful_background_read(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            original = ledger._db
+            db = MagicMock(backend='postgres')
+            reader = MagicMock(backend='postgres')
+            db.reader.side_effect = lambda: nullcontext(reader)
+            reader._statistics_table.return_value = 'decision_statistics'
+            reader.connection.execute.return_value.fetchone.return_value = (0,)
+            reader.entries.return_value = []
+            ledger._db = db
+            try:
+                with patch('service.ledger.threading.Thread'), \
+                        patch.object(ledger, '_cached_history_snapshot', return_value={}):
+                    self.assertIsNone(ledger.history()['entries_total'])
+                    ledger._history_page_loop()
+                    ready = ledger.history()
+                self.assertEqual(ready['entries_status'], 'ready')
+                self.assertEqual(ready['entries_total'], 0)
+                self.assertEqual(ready['entries_shown'], 0)
+                self.assertIsNone(ready['next_offset'])
+            finally:
+                ledger._db = original
+
+    def test_history_cache_bytes_and_statistics_jobs_are_bounded(self):
+        from service.ledger import HISTORY_CACHE_ENTRIES
+        with tempfile.TemporaryDirectory() as root:
+            ledger = DecisionLedger(root)
+            with patch('service.ledger.HISTORY_CACHE_BYTES', 150):
+                with ledger._history_cache_lock:
+                    ledger._remember_history(ledger._history_pages, 'first', {'entries': ['x'*60]})
+                    ledger._remember_history(ledger._history_pages, 'second', {'entries': ['y'*60]})
+                self.assertEqual(list(ledger._history_pages), ['second'])
+                with self.assertRaisesRegex(ValueError, '页面过大'):
+                    with ledger._history_cache_lock:
+                        ledger._remember_history(ledger._history_pages, 'too-large', {'entries': ['z'*200]})
+            with patch('service.ledger.threading.Thread') as thread:
+                for key in range(100):
+                    ledger._refresh_history_snapshot(MagicMock(), str(key), '1=1', (), '1=1', (), 'real', 0)
+            self.assertEqual(len(ledger._history_jobs), HISTORY_CACHE_ENTRIES)
+            thread.assert_called_once()
+
+    def test_postgres_history_read_budget_stops_expired_work_before_query(self):
+        db = MagicMock()
+        with self.assertRaises(TimeoutError):
+            DecisionLedger._history_read_budget(db, time.monotonic()-1)
+        db.connection.execute.assert_not_called()
+
     def test_journal_alias_checkpoint_preserves_incremental_offset(self):
         with tempfile.TemporaryDirectory() as root:
             ledger = DecisionLedger(root)
@@ -120,19 +313,18 @@ class LedgerDatabaseTests(unittest.TestCase):
             result['overall']['total'] = 0
             self.assertEqual(ledger._history_cache['cached']['overall']['total'], 10)
 
-    def test_postgres_cache_first_read_is_explicitly_pending_and_exact(self):
+    def test_postgres_cache_first_read_is_unknown_without_synchronous_aggregate(self):
         with tempfile.TemporaryDirectory() as root:
             ledger = DecisionLedger(root)
             db = MagicMock()
             db.connection.execute.return_value.fetchone.return_value = None
-            db.aggregate.return_value = {'total': 12, 'graded': 10, 'accuracy': .6, 'legacy_identity_rows': 0}
+            db.aggregate.side_effect = AssertionError('cold aggregate must remain in background')
             with patch.object(ledger, '_refresh_history_snapshot'):
                 result = ledger._cached_history_snapshot(db, 'new', '1=1', (), '1=1', (), 'real', 0)
-            self.assertEqual(result['overall']['total'], 12)
-            self.assertEqual(result['overall']['accuracy'], .6)
-            self.assertEqual(result['statistics_status'], 'refreshing')
+            self.assertIsNone(result['overall'])
+            self.assertEqual(result['statistics_status'], 'loading')
             self.assertEqual(result['timeline'], [])
-            self.assertEqual(result['statistics_at'], '')
+            self.assertIsNone(result['statistics_at'])
 
     def test_postgres_cache_fresh_snapshot_skips_background_refresh(self):
         with tempfile.TemporaryDirectory() as root:

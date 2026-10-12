@@ -92,7 +92,7 @@ class DataModelTests(unittest.TestCase):
         source = Path(__file__).parents[1] / 'web' / 'console' / 'workbench.js'
         code = source.read_text(encoding='utf-8')
         self.assertIn("['有效训练决策',training.eligible_decisions", code)
-        self.assertIn("['本轮训练样本',training.training_decisions", code)
+        self.assertIn("['本轮训练样本',unknownMetric(training.training_decisions)", code)
         self.assertIn("['已有输入比赛',quality.input_matches", code)
         self.assertIn("['无效 / 隔离训练数据',quality.invalid_training_records", code)
         self.assertIn("['等待赛果标签',quality.waiting_for_label", code)
@@ -204,13 +204,18 @@ class DataModelTests(unittest.TestCase):
             model.update(version='v1',updated_at='2024-12-31T00:00:00+00:00')
             atomic_json(Path(root)/'models'/'active.json',model)
             svc._read()
+            row = decision()
+            row.update(input_cutoff_ms=1735732800000, received_at_ms=1735732800000)
+            for evaluation in row['evaluations']:
+                for candidate in evaluation['candidates']:
+                    candidate.update(ts_ms=1735732800000, quote_received_at_ms=1735732800000)
             with patch('service.model_service.time.time', return_value=1735732800):
-                svc.observe(decision())
+                svc.observe(row)
             svc._flush_shadow()
             path=Path(root)/'models'/'shadow.sqlite3'
             with closing(sqlite3.connect(path)) as con:
                 self.assertEqual(con.execute('SELECT count(*) FROM predictions').fetchone()[0],8)
-            svc.observe(decision())
+            svc.observe(row)
             svc._flush_shadow()
             with closing(sqlite3.connect(path)) as con:
                 self.assertEqual(con.execute('SELECT count(*) FROM predictions').fetchone()[0],8)
@@ -227,7 +232,9 @@ class DataModelTests(unittest.TestCase):
             self.assertIn('baseline',evaluation)
             with closing(sqlite3.connect(path)) as con, con:
                 con.execute("UPDATE predictions SET predicted_at='2025-01-01T15:00:00+00:00'")
-            self.assertEqual(prospective_metrics(db.path,path,model),{})
+            invalid = prospective_metrics(db.path,path,model)
+            self.assertIsNone(invalid['model']['accuracy'])
+            self.assertEqual(invalid['counts']['excluded_predictions'],8)
             atomic_json(path.parent/'prospective.json',evaluation)
             svc._read()
             self.assertEqual(svc.status()['prospective']['version'],'v1')

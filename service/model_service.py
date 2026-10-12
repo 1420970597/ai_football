@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,10 +20,15 @@ from core.learned_model import FEATURES, compatible_model, predict
 from service.runtime_settings import RuntimeConfig, validated
 from service.model_training import atomic_json
 
-from store.training_data import snapshot_inputs, write_inputs, write_predictions
+from store.training_data import (snapshot_inputs, write_inputs, write_predictions,
+                                 prospective_metrics, prospective_prediction_rows)
 
 REPLAY_MEMBERS_PER_CYCLE = 128
 TRAINING_WALL_LIMIT_S = int(os.environ.get('MODEL_TRAINING_WALL_LIMIT_S', '3600'))
+
+
+def hashlib_version(version: str) -> str:
+    return hashlib.sha256(str(version).encode()).hexdigest()[:24]
 
 
 class ModelService:
@@ -37,6 +43,11 @@ class ModelService:
         self.cfg = RuntimeConfig()
         self._status: dict[str, Any] = {'state': 'not_started'}
         self._model: dict[str, Any] = {}
+        self._shadow_model: dict[str, Any] = {}
+        self._shadow_info: dict[str, Any] = {}
+        self._candidate_cache: dict[str, tuple[tuple[int, int, int], dict[str, Any]]] = {}
+        self._evaluation_state: dict[str, Any] = {}
+        self._next_evaluation = 0.0
         self._storage: dict[str, Any] = {}
         self._shadow: dict[tuple[Any, ...], dict[str, Any]] = {}
         self._inputs: list[dict[str, Any]] = []
@@ -58,6 +69,10 @@ class ModelService:
         with self._lock:
             self.root = Path(root) if root else None
             self._model = {}
+            self._shadow_model = {}
+            self._shadow_info = {}
+            self._candidate_cache = {}
+            self._evaluation_state = {}
             self._read_times.clear()
             self._live_metrics.clear()
             self._shadow.clear()
@@ -91,7 +106,6 @@ class ModelService:
             path = self.root.parent / 'models' / filename
             if target == '_model' and not path.exists():
                 self._model = {}
-                self._live_metrics = {}
                 self._read_times.pop(filename, None)
             if path.exists():
                 try:
@@ -105,7 +119,6 @@ class ModelService:
                     if target == '_model':
                         if not compatible_model(data):
                             self._model = {}
-                            self._live_metrics = {}
                             raise ValueError('模型训练数据版本未通过核验')
                         predict(data['weights'], [0.0]*len(FEATURES))
                     setattr(self, target, data)
@@ -116,12 +129,67 @@ class ModelService:
                     read_error = '模型元数据读取失败: ' + str(exc)
         if read_error:
             self._status.update(state='failed', error=read_error)
+        # Observation may use an unapproved candidate, but this never changes
+        # active.json or the live executor's approval requirement.
+        model_root = self.root.parent / 'models'
+        candidate_path = model_root / ('candidate-' + str(self._status.get('candidate_version') or '') + '.json')
+        paths = ([candidate_path] if candidate_path.exists() else [])
+        paths += sorted(model_root.glob('candidate-*.json'), reverse=True)
+        paths += [model_root / 'active.json']
+        chosen = {}
+        reason = '尚无兼容的影子候选或已晋级模型'
+        for path in dict.fromkeys(paths):
+            if not path.exists():
+                continue
+            try:
+                stat = path.stat()
+                signature = (stat.st_mtime_ns,stat.st_ino,stat.st_size)
+                cached = self._candidate_cache.get(str(path))
+                if cached and cached[0] == signature:
+                    data = cached[1]
+                else:
+                    data = json.loads(path.read_text())
+                    if len(self._candidate_cache) >= 4:
+                        self._candidate_cache.pop(next(iter(self._candidate_cache)))
+                    self._candidate_cache[str(path)] = (signature,data)
+                if not isinstance(data, dict) or not compatible_model(data):
+                    raise ValueError('模型训练数据版本未通过核验')
+                predict(data['weights'], [0.0]*len(FEATURES))
+                at = datetime.fromisoformat(data['updated_at'])
+                if at.tzinfo is None:
+                    raise ValueError('模型更新时间缺少时区')
+                if at > datetime.now(timezone.utc):
+                    raise ValueError('模型尚未可用')
+                chosen = {**data, 'artifact_kind': 'candidate' if path.name.startswith('candidate-') else 'active'}
+                break
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                reason = str(exc)
+        previous = self._shadow_model.get('version')
+        if chosen.get('version') != previous:
+            self._live_metrics = {}
+            self._evaluation_state = {}
+            self._next_evaluation = 0
+            self._shadow_info.update(last_prediction_at=None,last_decision_at=None)
+        self._shadow_model = chosen
+        self._shadow_info = {**self._shadow_info, 'available': bool(chosen),
+            'version': chosen.get('version'), 'artifact_kind': chosen.get('artifact_kind'),
+            'approved': bool((chosen.get('promotion') or {}).get('approved')),
+            'updated_at': chosen.get('updated_at'), 'available_at': chosen.get('updated_at'),
+            'parameter_count': chosen.get('parameter_count'), 'architecture': chosen.get('architecture'),
+            'reason': '' if chosen else reason}
 
     def status(self) -> dict[str, Any]:
         with self._lock:
             model = deepcopy({k: v for k, v in self._model.items() if k not in ('weights', 'cohort_ids')})
             status = deepcopy(self._status)
-            prospective = deepcopy(self._live_metrics) if self._live_metrics.get('version') == self._model.get('version') else {}
+            prospective = deepcopy(self._live_metrics) if self._live_metrics.get('version') == self._shadow_model.get('version') else {}
+            shadow = deepcopy(self._shadow_info)
+            shadow['enabled'] = self.cfg.model_shadow_enabled
+            if not self.cfg.model_shadow_enabled:
+                shadow['reason'] = '影子预测记录已关闭；展示已有版本窗口，未生成新预测'
+            if self._shadow_model:
+                shadow['model'] = {k: deepcopy(v) for k,v in self._shadow_model.items()
+                                   if k not in ('weights', 'cohort_ids')}
             if not self.cfg.model_training_enabled:
                 status['state'] = 'disabled'
             return {'model': model, 'training': status, 'storage': deepcopy(self._storage),
@@ -136,7 +204,7 @@ class ModelService:
                     'decision_model_available': bool(self._model and
                         isinstance(self._model.get('promotion'), dict) and
                         self._model['promotion'].get('approved') is True),
-                    'prospective': prospective,
+                    'prospective': prospective, 'shadow': shadow,
                     'note': '独立模型服务负责训练与观察预测；实时决策模式独立选择纯算法、纯决策模型或混合。纯模型是当前盘口offset与算法特征训练模型的输出，不进行额外算法加权。模型或混合模式缺少已晋级模型时不可用。保留各算法、盘口、盘口线、方向和决策时点；按比赛分组、等权训练。走势特征冻结在决策输入截点。'}
 
     def observe(self, row: dict[str, Any]) -> None:
@@ -148,15 +216,31 @@ class ModelService:
             if self.root is None:
                 return
             self._inputs.extend(inputs)
-            if not self._model or row['computed_at'] <= self._model['updated_at']:
+            model = self._shadow_model
+            if not inputs or not self.cfg.model_shadow_enabled or not model:
                 return
-            for item in inputs:
-                key = tuple([self._model['version'], *[item[k] for k in ('match_id','at','algorithm','market','line','outcome')]])
+            available = datetime.fromisoformat(model['updated_at'])
+            decision_at = datetime.fromisoformat(row['computed_at'])
+            if (decision_at.tzinfo is None or available.timestamp()*1000 > float(row['input_cutoff_ms'])
+                    or decision_at < available):
+                self._shadow_info['skipped_before_available'] = self._shadow_info.get('skipped_before_available',0)+len(inputs)
+                return
+            from core.oof_peer import calibrate_peer_vector
+            from core.probability_calibration import calibrate_probability
+            from core.model_validation import coherent_probabilities
+            probabilities = [calibrate_probability(predict(model['weights'],
+                calibrate_peer_vector(json.loads(item['x']),model.get('peer_calibration'))),
+                model.get('calibration')) for item in inputs]
+            probabilities = coherent_probabilities(inputs, probabilities)
+            predicted_at = datetime.fromtimestamp(time.time(), timezone.utc).isoformat()
+            for item, p in zip(inputs, probabilities):
+                key = tuple([model['version'], *[item[k] for k in ('match_id','at','algorithm','market','line','outcome')]])
                 if key in self._shadow:
                     continue
-                p = predict(self._model['weights'], json.loads(item['x']))
-                self._shadow[key] = {**item, 'version': self._model['version'], 'probability': p,
-                                     'predicted_at': datetime.fromtimestamp(time.time(), timezone.utc).isoformat()}
+                self._shadow[key] = {**item, 'version': model['version'], 'probability': p,
+                                     'predicted_at': predicted_at}
+            if inputs:
+                self._shadow_info.update(last_prediction_at=predicted_at,last_decision_at=row['computed_at'])
 
     def _flush_shadow(self) -> None:
         with self._lock:
@@ -168,11 +252,37 @@ class ModelService:
         # With no DSN they preserve the existing local SQLite files; with a PG
         # DSN no model data is written to local SQLite at all.
         write_inputs(path.parent / 'inputs.sqlite3', inputs)
-        write_predictions(path, pending.values())
+        prospective = prospective_prediction_rows(self.root / 'ledger.sqlite3', list(pending.values()))
+        write_predictions(path, prospective)
         with self._lock:
             del self._inputs[:len(inputs)]
             for key in pending:
                 self._shadow.pop(key, None)
+            self._shadow_info['predictions_written'] = self._shadow_info.get('predictions_written',0)+len(prospective)
+            self._shadow_info['skipped_settled_replay'] = self._shadow_info.get('skipped_settled_replay',0)+len(pending)-len(prospective)
+            self._shadow_info['predictions_written_scope'] = '本进程提交写入条数，包含幂等重放；窗口数量以prospective.counts为准'
+
+    def _evaluate_shadow(self) -> None:
+        if self.root is None or time.monotonic() < self._next_evaluation:
+            return
+        model = self._shadow_model
+        if not model:
+            self._live_metrics = {'status': 'unavailable', 'reason': self._shadow_info.get('reason'),
+                                  'version': None}
+            return
+        state_path = self.root.parent / 'models' / ('shadow-window-' + hashlib_version(model['version']) + '.json')
+        try:
+            if not self._evaluation_state and state_path.exists():
+                self._evaluation_state = json.loads(state_path.read_text())
+            result = prospective_metrics(self.root / 'ledger.sqlite3', self.root.parent / 'models' / 'shadow.sqlite3',
+                                         model, state=self._evaluation_state)
+            self._live_metrics = result
+            atomic_json(state_path, self._evaluation_state)
+            atomic_json(self.root.parent / 'models' / 'prospective.json', result)
+            self._next_evaluation = time.monotonic() + (5 if result.get('cursor',{}).get('has_more') else 30)
+        except Exception as exc:
+            self._live_metrics = {'version': model['version'], 'status':'error', 'reason': str(exc)}
+            self._next_evaluation = time.monotonic()+30
 
     def start(self) -> None:
         if self.root is None or self._thread and self._thread.is_alive():
@@ -319,8 +429,10 @@ class ModelService:
         while not self._stop.is_set():
             try:
                 self._reload_settings()
+                self._read()
                 self._consume_replay()
                 self._flush_shadow()
+                self._evaluate_shadow()
                 self._publish()
                 with self._lock:
                     cfg, root, process = self.cfg, self.root, self._process

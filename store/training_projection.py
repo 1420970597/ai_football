@@ -341,6 +341,8 @@ CREATE TABLE IF NOT EXISTS model_predictions (
     x TEXT NOT NULL,
     probability DOUBLE PRECISION NOT NULL,
     predicted_at TEXT,
+    decision_received_at_ms DOUBLE PRECISION,
+    quote_received_at_ms DOUBLE PRECISION,
     entry_score TEXT,
     settlement_basis TEXT,
     model_version TEXT,
@@ -369,7 +371,9 @@ def ensure_postgres_schema(connection: Any) -> None:
                           POSTGRES_LABEL_REVISIONS_SCHEMA, POSTGRES_PREDICTIONS_SCHEMA):
             cursor.execute(statement)
         for column, kind in (("repair_status", "TEXT"), ("original_x_sha256", "TEXT"),
-                             ("original_probability", "DOUBLE PRECISION")):
+                             ("original_probability", "DOUBLE PRECISION"),
+                             ("decision_received_at_ms", "DOUBLE PRECISION"),
+                             ("quote_received_at_ms", "DOUBLE PRECISION")):
             cursor.execute("ALTER TABLE model_predictions ADD COLUMN IF NOT EXISTS " + column + " " + kind)
         for statement in (
             # The migration's idx_migrate_model_inputs has this exact key
@@ -379,6 +383,8 @@ def ensure_postgres_schema(connection: Any) -> None:
             "(data_version, model_version, feature_version, match_id, at)",
             "CREATE INDEX IF NOT EXISTS idx_model_predictions_version ON model_predictions "
             "(version, data_version, model_version, at)",
+            "CREATE INDEX IF NOT EXISTS idx_model_predictions_observation ON model_predictions "
+            "(version,data_version,model_version,feature_version,predicted_at,at,match_id,algorithm,market,line,outcome)",
             "CREATE INDEX IF NOT EXISTS idx_model_labels_available ON model_labels "
             "(available_at, match_id)",
             "CREATE INDEX IF NOT EXISTS idx_label_revisions_match_time ON label_revisions "
@@ -387,4 +393,3 @@ def ensure_postgres_schema(connection: Any) -> None:
             cursor.execute(statement)
     finally:
         cursor.close()
-

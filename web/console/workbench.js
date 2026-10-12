@@ -504,19 +504,25 @@ function renderDetail(match) {
   panel.replaceChildren(header, decisions, probability, intensity, trend, candidates, markets, context, evidence);
   panel.scrollTop = scroll;
 }
-async function loadHistory(reset = true) {
+const HISTORY_LOADING_RETRY_MS = 2000;
+const HISTORY_LOADING_MAX_RETRIES = 15;
+async function loadHistory(reset = true, automatic = false) {
+  clearTimeout(S.historyRetryTimer);
+  if (!automatic) S.historyLoadingRetries = 0;
   if (reset !== false) S.historyOffset = 0;
   const request = ++S.historyRequest;
   $('history-refresh').disabled = true;
   try {
     const data = await get('/ledger/history?limit=100&offset=' + S.historyOffset + '&days=' + encodeURIComponent($('history-days').value) + '&type=' + encodeURIComponent($('history-type').value) + '&algorithm=' + encodeURIComponent($('history-algorithm').value) + '&cohort=' + encodeURIComponent($('history-cohort').value));
     if (request !== S.historyRequest) return;
+    const statisticsLoading = data.statistics_status === 'loading' || data.overall === null;
+    const entriesLoading = data.entries_status === 'loading';
     const summary = data.overall || {};
-    const pendingEntries = Number(summary.pending || 0);
-    const metrics = [['全盘口正确率', pct(summary.accuracy ?? summary.hit_rate)], ['有效样本 / 场次', String(summary.accuracy_samples ?? ((summary.won || 0) + (summary.lost || 0))) + ' / ' + (data.settled?.matches || 0)], ['等额 ROI', pct(summary.roi)], ['置信度 ROI', pct(summary.confidence_roi)], ['仓位 ROI', pct(summary.allocated_roi)], ['待结算盘口', String(pendingEntries)]];
+    const pendingEntries = statisticsLoading ? '—' : Number(summary.pending || 0);
+    const metrics = [['全盘口正确率', pct(summary.accuracy ?? summary.hit_rate)], ['有效样本 / 场次', statisticsLoading ? '— / —' : String(summary.accuracy_samples ?? ((summary.won || 0) + (summary.lost || 0))) + ' / ' + (data.settled?.matches || 0)], ['等额 ROI', pct(summary.roi)], ['置信度 ROI', pct(summary.confidence_roi)], ['仓位 ROI', pct(summary.allocated_roi)], ['待结算盘口', String(pendingEntries)]];
     $('history-stats').replaceChildren(...metrics.map(([label, value]) => el('div', {}, [el('span', {text: label}), el('strong', {text: value})])));
     const portfolio = data.portfolio_summary || {};
-    $('history-portfolio').replaceChildren(...[['正确率',pct(portfolio.accuracy)],['有效样本',String(portfolio.accuracy_samples || 0)],['等额 ROI',pct(portfolio.roi)],['置信度 ROI',pct(portfolio.confidence_roi)],['仓位 ROI',pct(portfolio.allocated_roi)],['净收益',fixed(portfolio.profit_units) + 'u']].map(([label,value])=>el('div',{},[el('span',{text:label}),el('strong',{text:value})])));
+    $('history-portfolio').replaceChildren(...[['正确率',pct(portfolio.accuracy)],['有效样本',statisticsLoading ? '—' : String(portfolio.accuracy_samples || 0)],['等额 ROI',pct(portfolio.roi)],['置信度 ROI',pct(portfolio.confidence_roi)],['仓位 ROI',pct(portfolio.allocated_roi)],['净收益',fixed(portfolio.profit_units) + 'u']].map(([label,value])=>el('div',{},[el('span',{text:label}),el('strong',{text:value})])));
     const weights = data.algorithm_weights?.algorithms || {};
     $('weight-at').textContent = data.algorithm_weights?.at ? '证据截至 ' + new Date(data.algorithm_weights.at).toLocaleTimeString('zh-CN',{hour12:false}) : '';
     $('history-algorithms').replaceChildren(...Object.entries(data.by_algorithm || {}).map(([algorithm, stats]) => {
@@ -553,17 +559,23 @@ async function loadHistory(reset = true) {
     $('history-prev').disabled = S.historyOffset === 0;
     $('history-next').disabled = S.historyNext === null;
     $('history-page').textContent = '第 ' + (Math.floor(S.historyOffset/100)+1) + ' 页 · 查询 ' + fixed(data.query_ms,0) + 'ms';
-    $('history-count').textContent = (data.entries_total || 0) + ' 条 · ' + (summary.matches || 0) + ' 场 · 待结算 ' + pendingEntries + ' 个盘口';
+    $('history-count').textContent = (data.entries_total ?? (entriesLoading ? '—' : 0)) + ' 条 · ' + (statisticsLoading ? '—' : summary.matches || 0) + ' 场 · 待结算 ' + pendingEntries + ' 个盘口';
     const historyMessages = [];
-    if (data.statistics_refreshing) historyMessages.push('战绩统计正在后台汇总，完成后刷新可查看最新统计。');
+    if (data.statistics_refreshing || statisticsLoading) historyMessages.push('战绩统计正在后台汇总，完成后刷新可查看最新统计。');
+    if (entriesLoading) historyMessages.push('当前筛选的记录页正在后台读取，自动等待更新。');
+    if (data.entries_refreshing) historyMessages.push('后台正在更新当前记录页。');
+    if (data.entries_stale) historyMessages.push('当前记录页为上次缓存，可能暂未包含新记录。');
+    if (data.entries_at) historyMessages.push('记录页时点：' + (timeLabel(data.entries_at) === '—' ? '暂不可用' : timeLabel(data.entries_at)) + '。');
+    if (data.entries_error) historyMessages.push('记录页读取失败：' + data.entries_error + '，可刷新重试。');
+    if (data.statistics_error) historyMessages.push('战绩汇总暂不可用：' + data.statistics_error + '。');
     if (data.statistics_stale) historyMessages.push('当前显示上次统计缓存，可能暂未包含最新结算。');
     if (data.statistics_at) {
       const at = new Date(data.statistics_at);
       historyMessages.push(Number.isNaN(at.getTime()) ? '统计时点暂不可用。' : '统计时点：' + at.toLocaleString('zh-CN', {hour12:false}) + '。');
     }
     if (data.legacy_identity_rows) historyMessages.push('旧记录 ' + data.legacy_identity_rows + ' 条，身份不完整。');
-    if (!summary.graded && !data.statistics_refreshing) historyMessages.push('待确认终场赛果 · ' + (data.settle?.evidence_missing ?? summary.pending ?? 0) + ' 场未取得证据');
-    notice('history-notice', historyMessages.join(' '));
+    if (!summary.graded && !data.statistics_refreshing && !statisticsLoading) historyMessages.push('待确认终场赛果 · ' + (data.settle?.evidence_missing ?? summary.pending ?? 0) + ' 场未取得证据');
+    notice('history-notice', historyMessages.join(' '),data.entries_status === 'error' || data.statistics_status === 'error' || !!data.statistics_error);
     const statusLabel = {won: '正确', lost: '错误', half_won: '赢半', half_lost: '输半', push: '走水', pending: '待结算', void: '无法结算'};
     const rows = (data.entries || []).map(entry => {
       const date = new Date(entry.at);
@@ -579,6 +591,11 @@ async function loadHistory(reset = true) {
     });
     $('history-rows').replaceChildren(...rows);
     $('history-empty').hidden = !!rows.length;
+    $('history-empty').textContent = entriesLoading ? '记录页正在加载，请稍候。' : data.entries_status === 'error' ? '记录页暂不可读取，请刷新重试。' : '暂无符合筛选条件的记录。';
+    if ((entriesLoading || statisticsLoading) && (S.historyLoadingRetries || 0) < HISTORY_LOADING_MAX_RETRIES) {
+      S.historyLoadingRetries = (S.historyLoadingRetries || 0) + 1;
+      S.historyRetryTimer = setTimeout(() => {if (S.view === 'history' && S.historyRequest === request) loadHistory(false,true);},HISTORY_LOADING_RETRY_MS);
+    }
   } catch (error) {
     if (request === S.historyRequest) notice('history-notice', error.message + '，可刷新重试。', true);
   } finally {
@@ -708,6 +725,17 @@ const SETTING_HELP = {
   model_training_memory_mb: '独立训练进程的内存上限，单位 MiB。候选训练超过限制可能被终止；失败状态会显示原因并保留已有可用模型。',
   clear_llm_key: '保存时删除后端已配置的 LLM API Key；不勾选且密钥输入留空时保留已有密钥。',
 };
+const PARAMETER_RESEARCH_HELP = {
+  devig_method: '研究建议：保留当前方法，离线比较 proportional 与 power；不按短期正确率切换。按同比赛时间折的 Brier、Log loss 和可靠性选择，Power 的候选优势需要独立前瞻证据。',
+  fractional_kelly: '研究建议范围 0.10~0.25，仅用于仓位控制；概率尚未证明优于市场时不提高折扣系数。参数不确定性会使全 Kelly 过度下注；真实固定金额模式不受此系数保护。',
+  betting_min_evidence_matches: '研究建议：30场只适合最低运行门槛，100~300场独立前瞻比赛才适合初步复核。30场在正确率约50%时，95%误差约±18百分点；不因决策条目多就降低独立比赛门槛。',
+  model_training_matches: '研究建议：保留100场更新周期，离线评估100~300场新增独立有效已结比赛的周期；每个周期保留独立时间测试，训练频繁不等于预测更准确。',
+  min_probability: '研究建议：先保留0.52作为现有初值，仅离线比较0.50~0.60，并同时看覆盖率、赔率和净EV。不同盘口不能靠提高胜率阈值直接保证收益。',
+  min_ev: '研究建议：保留0.02作为现有初值，仅离线比较0.02~0.05；成本、改价和成交偏差必须纳入净EV，不用提高历史正确率替代独立收益检验。',
+  betting_min_edge: '研究建议：保留现有0.05提交门槛，研究区间0.03~0.08仅供冻结时间验证；没有净成本与成交证据前不放宽真实提交门槛。',
+  weight_prior_matches: '研究建议：小样本时收缩先验20~100场，比只靠近期正确率分配权重稳健；采用按场Brier和独立时间验证后再调整。',
+};
+for (const [key, help] of Object.entries(PARAMETER_RESEARCH_HELP)) SETTING_HELP[key] += '\n' + help;
 function settingControl(key, label, input, type, help) {
   const descriptionId = 'setting-help-' + key;
   const description = el('p', {id:descriptionId, class:'setting-description', role:'tooltip', text:help || SETTING_HELP[key] || '此设置的说明暂不可用。', hidden:''});
@@ -735,21 +763,42 @@ function selectSetting(category, menu, group) {
 }
 let dataModelBusy = false;
 const bytes = value => Number.isFinite(value) ? (value / 1024**3).toFixed(2) + ' GiB' : '—';
-const timeLabel = value => value ? new Date(value).toLocaleString('zh-CN', {hour12:false}) : '—';
+const timeLabel = value => value && Number.isFinite(new Date(value).getTime()) ? new Date(value).toLocaleString('zh-CN', {hour12:false}) : '—';
+const STORAGE_STALE_MS = 5 * 60 * 1000;
 const decisionModeLabel = mode => ({algorithm:'纯算法',model:'纯决策模型',hybrid:'算法 + 决策模型'}[mode] || '待后端更新');
 function decisionModelStatus(data) {
   const mode = data.decision_mode || data.settings?.decision_mode;
   if (mode === 'algorithm') return {mode, state:'算法服务决策', reason:''};
   if (!['model','hybrid'].includes(mode)) return {mode, state:'模式信息暂不可用', reason:''};
-  const unavailable = data.decision_mode_status === 'unavailable' || !data.model?.version || data.model?.promotion?.approved === false;
+  const unavailable = data.decision_mode_status === 'unavailable' || data.decision_model_available === false || !data.model?.version || data.model?.promotion?.approved !== true;
   const reason = unavailable ? data.decision_mode_reason || '暂无通过校验的已晋级模型，此模式暂不产生买入推荐。' : '';
   return {mode, state:unavailable ? '不可用' : '已加载 · 实际结果见实时决策', reason};
+}
+const unknownMetric = (value, label = '尚未审查') => value === null || value === undefined || value === '' ? label : value;
+function shadowStatus(data) {
+  const shadow = data.shadow || {};
+  if (shadow.available === false) return {available:false, text:shadow.reason || '影子预测尚未可用'};
+  if (!shadow.version) return {available:false, text:shadow.reason || '尚无影子模型版本'};
+  const state = shadow.approved === true ? '已晋级影子模型' : shadow.artifact_kind === 'candidate' ? '候选影子模型（未晋级）' : '影子模型';
+  return {available:true, text:state + ' · ' + shadow.version};
+}
+function prospectiveMetricRows(data) {
+  const prospective = data.prospective || {};
+  const model = prospective.model || {}, baseline = prospective.baseline || {};
+  const status = prospective.status || (Object.keys(model).length ? 'ready' : 'unavailable');
+  const reason = prospective.reason || (status === 'waiting_for_settlement' ? '已生成预测正在等待赛果结算。' : status === 'no_predictions' ? '尚未记录影子预测。' : status === 'unavailable' ? '当前没有可用的前瞻统计。' : '');
+  const metric = value => value == null ? '暂无适用样本' : pct(value);
+  const rows = [
+    ['前瞻模型', status === 'ready' ? model : null], ['前瞻市场基准', status === 'ready' ? baseline : null],
+  ];
+  return {prospective,status,reason,model,baseline,rows,metric};
 }
 function metricCards(items) {
   return items.map(([label,value]) => el('div', {class:'model-metric'}, [el('span',{text:label}),el('strong',{text:String(value ?? '—')})]));
 }
 function renderDataModel(data) {
   const model = data.model || {}, training = data.training || {}, storage = data.storage || {};
+  const candidate = training.candidate || {}, offlineModel = model.version ? model : candidate;
   const quality = training.data_quality || {};
   const sampledQuality = quality.sampled === true || quality.counts_scope === 'sampled_qualified_inputs';
   const qualityCards = sampledQuality ? [
@@ -767,15 +816,17 @@ function renderDataModel(data) {
     ['等待赛果标签',quality.waiting_for_label ?? '尚未统计'],
   ];
   const decisionStatus = decisionModelStatus(data);
-  const labels = {not_started:'尚未启动',restoring:'历史数据恢复中',checking:'检查训练数据',waiting:'等待新增已结算比赛',training:'训练中',ready:'已更新',failed:'训练失败',disabled:'自动训练已关闭'};
+  const labels = {not_started:'尚未启动',restoring:'历史数据恢复中',checking:'检查训练数据',waiting:'等待新增已结算比赛',training:'训练中',ready:'已更新',candidate:'候选已训练 · 未晋级',failed:'训练失败',disabled:'自动训练已关闭'};
   $('model-state').textContent = labels[training.state] || '未训练';
   $('model-summary').replaceChildren(...metricCards([
     ['决策模式',decisionModeLabel(decisionStatus.mode)], ['模式状态',decisionStatus.state],
     ['模型影子记录',data.settings?.shadow_enabled === false ? '已关闭' : '已开启 · 独立观察'],
     ...(decisionStatus.mode === 'hybrid' ? [['混合模型权重',pct(data.settings?.model_blend_weight)]] : []),
-    ['最新更新时间',timeLabel(model.updated_at)], ['训练参数量',model.parameter_count ?? '未训练'],
-    ['模型版本',model.version || '未训练'], [sampledQuality ? '样本有效已结算比赛' : '有效已结算比赛',training.eligible_matches ?? model.eligible_matches ?? '—'],
-    ['本轮训练样本',training.training_decisions ?? '—'], ['每场样本上限',quality.training_max_rows_per_match ?? '—'],
+    ['最新更新时间',timeLabel(offlineModel.updated_at || training.checked_at)], ['训练参数量',offlineModel.parameter_count ?? (candidate.version ? '候选参数暂未提供' : '未训练')],
+    ['生产模型版本',model.version || '尚无已晋级模型'],
+    ...(candidate.version ? [['候选模型版本',candidate.version],['候选晋级状态',candidate.promotion?.approved === true ? '已通过 · 等待加载' : '未晋级']] : []),
+    [sampledQuality ? '样本有效已结算比赛' : '有效已结算比赛',unknownMetric(training.eligible_matches ?? model.eligible_matches)],
+    ['本轮训练样本',unknownMetric(training.training_decisions)], ['每场样本上限',unknownMetric(quality.training_max_rows_per_match,'未配置')],
     ...qualityCards,
     ['距更新周期', (training.new_matches ?? '—') + ' / ' + (data.settings?.cycle_matches ?? '—') + ' 场'],
     ['当前实际训练限制',training.limits ? training.limits.cpu_cores + ' 核 / ' + training.limits.memory_mb + ' MiB' : '尚未执行'],
@@ -786,17 +837,46 @@ function renderDataModel(data) {
   const promotionText = promotion.approved === true ? (model.version ? ' 当前模型已通过晋级门槛。' : ' 当前候选已通过晋级校验，尚未加载生产模型。') :
     promotion.approved === false ? ' 当前候选未晋级：' + ((promotion.reasons || []).join('；') || '独立验证尚未满足晋级要求。') :
       model.version ? ' 当前模型的晋级证据暂未提供。' : training.candidate ? ' 当前候选等待晋级校验。' : ' 尚无已晋级模型。';
-  $('model-description').textContent = (model.architecture || '待训练：L2 Logistic 多盘口概率校准') + '。' + (data.note || '') +
+  $('model-description').textContent = (offlineModel.architecture || (candidate.version ? '候选已训练：L2 Logistic 多盘口概率校准' : '待训练：L2 Logistic 多盘口概率校准')) + '。' + (data.note || '') +
     (decisionStatus.reason ? ' 决策模式不可用：' + decisionStatus.reason : '') +
     ' 首次训练至少需要100场有效已结算比赛。验证按比赛和时间隔离，训练与评价按比赛等权；走盘排除，赢半/输半按非走盘方向判定。' +
     (sampledQuality ? ' 数据资格口径：已核验有效/无效数量仅覆盖本轮按比赛限量抽取的样本，不代表全库资格；全量尚未审查的数量单独标明。标注“估计”的输入量来自数据库统计信息，可能滞后；等待赛果标签不计为无效。' :
       quality.invalid_training_records !== undefined ? ' 数据资格口径：有效数为通过版本、双时间和结算校验的训练决策；无效/隔离数包含旧版本、缺失或越界时间、不可结算输入及不符合新契约的旧台账；等待标签的数据单独统计，不计为无效。' : '') +
     (calibration ? ' 校准：' + (calibration.method === 'logistic' ? 'Logistic slope/intercept' : '恒等映射') + '（' + (calibration.samples || 0) + ' 条样本）。' : ' 尚无独立校准制品。') +
     promotionText;
-  const rows = [['时间隔离验证',model.validation],['同组盘口基准',model.baseline],['当前版本前瞻验证',data.prospective?.model],['前瞻盘口基准',data.prospective?.baseline]];
-  $('model-performance').replaceChildren(el('table',{},[
+  const prospective = prospectiveMetricRows(data), shadow = data.shadow || {}, shadowView = shadowStatus(data);
+  const prospectiveLabels = {ready:'已有前瞻结算样本',waiting_for_settlement:'等待赛果结算',no_predictions:'等待首条影子预测',unavailable:'前瞻统计尚不可用',error:'前瞻统计读取失败'};
+  const performanceCards = [
+    ['影子模型',shadowView.text], ['影子观察状态',prospectiveLabels[prospective.status] || '等待统计'],
+    ['影子预测已记录',unknownMetric(prospective.prospective.counts?.predictions,'尚未统计')],
+    ['前瞻已结样本',unknownMetric(prospective.prospective.counts?.settled_predictions,'尚未统计')],
+    ['前瞻待结样本',unknownMetric(prospective.prospective.counts?.pending_predictions,'尚未统计')],
+    ['前瞻已结比赛',unknownMetric(prospective.prospective.counts?.settled_matches,'尚未统计')],
+    ['前瞻方向二分类（非推荐命中）',prospective.status === 'ready' ? prospective.metric(prospective.model.binary_accuracy ?? prospective.model.accuracy) : '等待前瞻样本'],
+    ['胜平负 Top-1 正确率',prospective.status === 'ready' ? prospective.metric(prospective.model.had_top1_accuracy) : '等待前瞻样本'],
+    ['胜平负市场 Top-1',prospective.status === 'ready' ? prospective.metric(prospective.baseline.had_top1_accuracy) : '等待前瞻样本'],
+    ['胜平负完整组比赛',unknownMetric(prospective.model.had_top1_matches,'尚未审查')],
+    ['亚洲盘选中方向获利率',prospective.status === 'ready' ? prospective.metric(prospective.model.asian_payment_accuracy) : '等待前瞻样本'],
+    ['亚洲盘市场方向获利率',prospective.status === 'ready' ? prospective.metric(prospective.baseline.asian_payment_accuracy) : '等待前瞻样本'],
+    ['亚洲盘选中合约',unknownMetric(prospective.model.asian_selected_contracts,'尚未审查')],
+    ['不可结算影子样本',unknownMetric(prospective.prospective.counts?.ungraded_predictions,'尚未审查')],
+    ['前瞻排除样本',unknownMetric(prospective.prospective.counts?.excluded_predictions,'尚未审查')],
+    ['本进程跳过已结回放',unknownMetric(shadow.skipped_settled_replay,'尚未统计')],
+    ['历史游标隔离回放（非本窗口）',unknownMetric(prospective.prospective.counts?.excluded_replay_predictions,'尚未统计')],
+    ['影子推理延迟 P95',prospective.prospective.latency?.p95_ms == null ? '尚未统计' : fixed(prospective.prospective.latency.p95_ms,0) + ' ms'],
+  ];
+  const rows = [[model.version ? '生产模型离线时间验证' : '候选离线时间验证',offlineModel.validation],['离线同组市场基准',offlineModel.baseline],['当前版本前瞻验证',prospective.status === 'ready' ? prospective.model : null],['前瞻市场基准',prospective.status === 'ready' ? prospective.baseline : null]];
+  const shadowPanel = el('section',{class:'shadow-performance', 'aria-label':'影子模型前瞻表现'},[
+    el('h3',{text:'影子模型前瞻表现'}),el('div',{class:'model-metrics'},metricCards(performanceCards)),
+    el('p',{text:(prospective.reason || shadow.reason || (shadowView.available ? '当前影子预测只供观察，不代表候选已晋级。' : shadowView.text)) +
+      ' 统计生成于 ' + (timeLabel(prospective.prospective.updated_at) === '—' ? '尚未提供' : timeLabel(prospective.prospective.updated_at)) +
+      '；最近预测 ' + (timeLabel(shadow.last_prediction_at) === '—' ? '尚未生成' : timeLabel(shadow.last_prediction_at)) + '。' +
+      (prospective.prospective.window ? ' 统计范围：当前版本最近 ' + unknownMetric(prospective.prospective.window.max_predictions,'未提供上限') + ' 条预测；' + timeLabel(prospective.prospective.window.from) + ' 至 ' + timeLabel(prospective.prospective.window.to) + '。' : '')}),
+    el('p',{text:'方向二分类按每个候选 p≥0.5 判断事件发生，不能当作买入推荐命中率。胜平负 Top-1：在同一时点完整的主胜、平、客胜组中选择概率最高方向；亚洲盘：在完整双向组中选择最高概率方向，以实际支付判定，赢半/输半计半注权重，走盘排除输赢分母，各比赛等权。前瞻只使用模型可用后、结果揭晓前记录的预测；离线验证与前瞻统计分开展示。市场基准使用相同前瞻样本，窗口统计不代表全库正确率。'}),
+  ]);
+  $('model-performance').replaceChildren(shadowPanel,el('table',{},[
     el('thead',{},[el('tr',{},['表现口径','比赛 / 决策','二分类准确率','HAD Top-1','Brier ↓','Log loss ↓','ECE ↓'].map(text=>el('th',{text})))]),
-    el('tbody',{},rows.map(([label,m])=>el('tr',{},[label,m ? m.matches + ' / ' + m.decisions : '暂无有效样本',pct(m?.accuracy),pct(m?.had_top1_accuracy),fixed(m?.brier,4),fixed(m?.log_loss,4),fixed(m?.ece,4)].map(text=>el('td',{text}))))),
+    el('tbody',{},rows.map(([label,m])=>el('tr',{},[label,m && Number(m.decisions)>0 ? unknownMetric(m.matches,'尚未统计') + ' / ' + m.decisions : '暂无有效样本',pct(m?.accuracy),pct(m?.had_top1_accuracy),fixed(m?.brier,4),fixed(m?.log_loss,4),fixed(m?.ece,4)].map(text=>el('td',{text}))))),
   ]));
   const folds = model.rolling_validation || data.training?.candidate?.rolling_validation || [];
   const foldPanel = folds.length ? el('div',{class:'model-folds'},[
@@ -805,18 +885,26 @@ function renderDataModel(data) {
       el('tbody',{},folds.map(f=>el('tr',{},[f.fold,f.training_matches,f.validation_matches,f.model?.brier,f.baseline?.brier,f.delta_brier].map(value=>el('td',{text:typeof value === 'number' ? fixed(value,4) : String(value ?? '—')})))))]),
   ]) : null;
   if (foldPanel) $('model-performance').appendChild(foldPanel);
-  $('storage-at').textContent = storage.at ? '统计于 ' + timeLabel(storage.at) : '后台统计中';
+  const storageTimestamp = storage.summary_at || storage.at;
+  const storageAt = storageTimestamp && Number.isFinite(new Date(storageTimestamp).getTime()) ? new Date(storageTimestamp) : null;
+  const storageStale = storage.stale === true || storage.summary_status === 'stale' || (!storage.summary_status && storageAt && Date.now() - storageAt.getTime() > STORAGE_STALE_MS);
+  $('storage-at').textContent = storageAt ? (storageStale ? '上次统计 · ' : '统计于 ') + timeLabel(storageTimestamp) : '尚未生成存储统计';
   $('storage-summary').replaceChildren(...metricCards([
-    ['台账决策 / 比赛',(storage.records?.decisions ?? '—') + ' / ' + (storage.records?.matches ?? '—')], ['已结算决策',storage.records?.settled_decisions ?? '—'], ['本地文件',storage.files ?? '—'],['本地数据',bytes(storage.bytes)],['硬盘容量',bytes(storage.disk?.total)],
+    ['台账决策 / 比赛',unknownMetric(storage.records?.decisions,'尚未统计') + ' / ' + unknownMetric(storage.records?.matches,'尚未统计')], ['已结算决策',unknownMetric(storage.records?.settled_decisions,'尚未统计')], ['本地文件',unknownMetric(storage.files,'尚未统计')],['本地数据',storage.bytes == null ? '尚未统计' : bytes(storage.bytes)],['硬盘容量',bytes(storage.disk?.total)],
     ['硬盘已用',bytes(storage.disk?.used)],['硬盘可用',bytes(storage.disk?.free)],
-    ['S3 归档文件', storage.archive?.backend === 's3' ? storage.archive.files : '未启用'],
-    ['S3 原始数据', bytes(storage.archive?.bytes)], ['S3 对象占用', bytes(storage.archive?.object_bytes)],
+    ['S3 归档文件', storage.archive?.backend === 'local' ? '未启用' : unknownMetric(storage.archive?.files,'尚未统计')],
+    ['S3 原始数据', storage.archive?.bytes == null ? '尚未统计' : bytes(storage.archive.bytes)], ['S3 对象占用', storage.archive?.object_bytes == null ? '尚未统计' : bytes(storage.archive.object_bytes)],
   ]));
   $('storage-categories').replaceChildren(el('table',{},[
     el('thead',{},[el('tr',{},['数据类别','文件数','存储量','实际占用'].map(text=>el('th',{text})))]),
-    el('tbody',{},(storage.categories || []).map(c=>el('tr',{},[c.name,String(c.files),bytes(c.bytes),bytes(c.allocated_bytes)].map(text=>el('td',{text}))))),
+    el('tbody',{},(storage.categories || []).length ? storage.categories.map(c=>el('tr',{},[c.name,String(unknownMetric(c.files,'尚未统计')),c.bytes == null ? '尚未统计' : bytes(c.bytes),c.allocated_bytes == null ? '尚未统计' : bytes(c.allocated_bytes)].map(text=>el('td',{text})))) : [el('tr',{},[el('td',{colspan:'4',text:'分类统计尚未生成，独立后台服务更新后显示。'})])]),
   ]));
   $('storage-description').textContent = storage.retention || '统计由后台更新，刷新页面不会扫描归档或启动训练。';
+  if (!storageAt) $('storage-description').textContent += ' 尚未取得存储汇总；请等待后台统计，不代表持久化数据为零。';
+  if (storageStale) $('storage-description').textContent += ' 当前统计已过期，保留上次结果；后台服务更新后自动刷新。';
+  if (storage.refreshing) $('storage-description').textContent += ' 后台正在更新存储统计。';
+  if (storage.reason) $('storage-description').textContent += ' ' + storage.reason;
+  if (storage.summary_reason && storage.summary_reason !== storage.reason) $('storage-description').textContent += ' ' + storage.summary_reason;
   if (data.history_repair?.totals) $('storage-description').textContent += ' 历史恢复：已处理 ' + data.history_repair.files + ' 个归档文件，剩余 ' + data.history_repair.remaining_files + ' 个；已重建 ' + (data.history_repair.totals.rebuilt_inputs || 0).toLocaleString() + ' 条训练输入。';
   const error = training.error || storage.archive?.error || (storage.errors || []).join('；');
   notice('data-model-notice',error || (!data.running ? '独立模型服务尚未启动，请启动 model-worker。' : ''),!!error);

@@ -13,6 +13,17 @@ from service.live_expert import LiveExpertService, percentiles
 
 
 class LiveExpertTests(unittest.TestCase):
+    def test_history_uses_published_algorithm_evidence_without_foreground_scan(self):
+        from api.app import ApiApp
+        svc = AnalysisService(MagicMock(), realtime=self.hub(), config=AnalysisConfig(use_llm=False))
+        svc.live_expert.update_evidence({'at': 'published', 'rows': []})
+        with patch.object(svc.ledger, 'performance_evidence', side_effect=AssertionError('foreground scan')), \
+                patch.object(svc.ledger, 'history', return_value={'overall': None, 'entries_status': 'loading'}):
+            code, result = ApiApp(MagicMock(), analysis=svc).dispatch('GET', '/api/v1/ledger/history', {}, {})
+        self.assertEqual(code, 200)
+        self.assertIsNone(result['overall'])
+        self.assertEqual(result['algorithm_weights']['at'], 'published')
+
     def test_postgres_batch_failure_retains_pending_and_retries_successfully(self):
         class PostgresFailure(Exception):
             pass

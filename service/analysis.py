@@ -1431,7 +1431,9 @@ class AnalysisService:
         out["summary"] = out["overall"]
         cfg = self.runtime_settings.config
         from core.ensemble import adaptive_weights
-        evidence = self.ledger.performance_evidence()
+        # The live service refreshes evidence independently. A history page
+        # must not trigger a full PG scan after its cached page was returned.
+        evidence = dict(self.live_expert.performance_evidence)
         out["algorithm_weights"] = adaptive_weights(cfg.algorithms, evidence, cfg.weight_prior_matches, cfg.max_algorithm_weight)
         from core.ensemble import algorithm_alerts
         out["algorithm_alerts"] = algorithm_alerts(cfg.algorithms, evidence, cfg.algorithm_alert_min_samples,

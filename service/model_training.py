@@ -193,6 +193,9 @@ def run(root: Path, cycle: int, cpu: int, memory: int) -> dict[str, Any]:
         status.update(state='candidate', candidate_version=old['version'],
                       promotion_reasons=old['promotion'].get('reasons', []),
                       candidate={'version': old['version'], 'promotion': old['promotion'],
+                                'parameter_count': old.get('parameter_count'), 'architecture': old.get('architecture'),
+                                'validation': old.get('validation'), 'baseline': old.get('baseline'),
+                                'updated_at': old.get('updated_at'),
                                 'calibration': old.get('calibration'),
                                 'rolling_validation': old.get('rolling_validation', [])})
     model: dict[str, Any] = {}
@@ -222,6 +225,9 @@ def run(root: Path, cycle: int, cpu: int, memory: int) -> dict[str, Any]:
         candidate_path = model_root / ('candidate-' + model['version'] + '.json')
         atomic_json(candidate_path, model)
         status['candidate'] = {'version': model['version'], 'promotion': decision,
+                               'parameter_count': model.get('parameter_count'), 'architecture': model.get('architecture'),
+                               'validation': model.get('validation'), 'baseline': model.get('baseline'),
+                               'updated_at': model.get('updated_at'),
                                'calibration': calibration, 'rolling_validation': folds}
         if decision['approved']:
             previous_backup = backup_active_model(model_root, active)
@@ -231,10 +237,8 @@ def run(root: Path, cycle: int, cpu: int, memory: int) -> dict[str, Any]:
         else:
             status.update(state='candidate', candidate_version=model['version'],
                           promotion_reasons=decision['reasons'])
-    from store.training_data import prospective_metrics
-    current = (model if model and status.get('state') == 'ready' else
-               (json.loads(active.read_text()) if active.exists() else {}))
-    atomic_json(model_root / 'prospective.json', prospective_metrics(root / 'ledger.sqlite3', model_root / 'shadow.sqlite3', current))
+    # Independent observation loop grades persisted predictions. Training
+    # must not overwrite its versioned prospective window on completion.
     atomic_json(model_root / 'status.json', status)
     return status
 

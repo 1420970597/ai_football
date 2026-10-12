@@ -177,13 +177,26 @@ class DataModelService:
                 path = self.root.parent / '_archive' / 'status.json'
                 try:
                     if path.exists():
-                        out.setdefault('storage', {})['archive'] = json.loads(path.read_text())
+                        archive_status = json.loads(path.read_text())
+                        archive = out.setdefault('storage', {}).setdefault('archive', {})
+                        archive.update(archive_status)
                 except (OSError, ValueError):
-                    out.setdefault('storage', {})['archive'] = {'error': 'S3 迁移状态不可读取'}
+                    out.setdefault('storage', {}).setdefault('archive', {})['error'] = 'S3 迁移状态不可读取'
                 progress = path.with_name('progress.json')
                 if progress.exists():
                     try:
                         out.setdefault('storage', {}).setdefault('archive', {})['migration'] = json.loads(progress.read_text())
                     except (OSError, ValueError):
                         pass
+            storage = out.setdefault('storage', {})
+            storage['summary_at'] = storage.get('at')
+            try:
+                storage_age = (datetime.now(timezone.utc)-datetime.fromisoformat(storage.get('at',''))).total_seconds()
+                storage['summary_status'] = 'ready' if 0 <= storage_age < 1800 else 'stale'
+            except (ValueError, TypeError):
+                storage['summary_status'] = 'unavailable'
+            if storage.get('errors'):
+                storage['summary_status'] = 'error'
+            storage['summary_reason'] = ('；'.join(storage.get('errors') or []) or
+                ('等待独立模型服务更新存储统计' if storage['summary_status'] != 'ready' else ''))
             return out

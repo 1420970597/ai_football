@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+from datetime import datetime, timezone
 
 import json
 import hashlib
@@ -25,6 +26,14 @@ from store.training_projection import (
 
 GRADED = ('won', 'lost', 'half_won', 'half_lost')
 TARGET_CACHE_LIMIT = 100_000
+
+
+def _label_time(value: Any) -> datetime | None:
+    try:
+        at = datetime.fromisoformat(str(value))
+        return at.astimezone(timezone.utc) if at.tzinfo is not None else None
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def snapshot_inputs(row: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -161,7 +170,8 @@ def _write_inputs_postgres(rows: list[dict[str, Any]], *, repair: bool,
 
 PREDICTION_COLUMNS = ('version', 'match_id', 'at', 'cutoff_ms', 'algorithm', 'market', 'line',
                       'outcome', 'baseline', 'x', 'probability', 'predicted_at', 'entry_score',
-                      'settlement_basis', 'model_version', 'data_version', 'feature_version')
+                      'settlement_basis', 'model_version', 'data_version', 'feature_version',
+                      'decision_received_at_ms', 'quote_received_at_ms')
 
 
 def write_predictions(path: Path, rows: Iterable[Mapping[str, Any]], *,
@@ -187,6 +197,7 @@ def write_predictions(path: Path, rows: Iterable[Mapping[str, Any]], *,
             finally:
                 cursor.close()
         return
+    path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path, timeout=2)) as con, con:
         con.execute('PRAGMA journal_mode=WAL')
         con.execute('PRAGMA synchronous=FULL')
@@ -195,6 +206,9 @@ def write_predictions(path: Path, rows: Iterable[Mapping[str, Any]], *,
                     'PRIMARY KEY(version,match_id,at,algorithm,market,line,outcome))')
         if 'predicted_at' not in {r[1] for r in con.execute('PRAGMA table_info(predictions)')}:
             con.execute('ALTER TABLE predictions ADD COLUMN predicted_at TEXT')
+        for column in ('decision_received_at_ms', 'quote_received_at_ms'):
+            if column not in {r[1] for r in con.execute('PRAGMA table_info(predictions)')}:
+                con.execute('ALTER TABLE predictions ADD COLUMN ' + column + ' REAL')
         migrate_basis_columns(con, 'predictions')
         columns = ','.join(PREDICTION_COLUMNS)
         names = ','.join(':' + name for name in PREDICTION_COLUMNS)
@@ -214,35 +228,49 @@ def migrate_basis_columns(con: sqlite3.Connection, table: str) -> None:
             con.execute('ALTER TABLE ' + table + ' ADD COLUMN ' + name + ' TEXT')
 
 
-def labels(con: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+def labels(con: sqlite3.Connection, mids: list[str] | None = None) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     # Select the latest explicitly available revision per match. Never infer
     # availability from settled_at: old repaired rows may have been discovered
     # much later than the event they describe.
     has_revisions = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='label_revisions'").fetchone()
     if has_revisions:
-        source = con.execute("SELECT match_id,available_at,ft_score,ht_score FROM label_revisions "
-                             "ORDER BY revision_order,revision_id")
+        query = "SELECT match_id,available_at,ft_score,ht_score,revision_id FROM label_revisions "
+        query += "WHERE status IN ('won','lost','half_won','half_lost','push','void') "
+        if mids is not None:
+            query += 'AND match_id IN (' + ','.join('?' for _ in mids) + ') '
+        source = con.execute(query + 'ORDER BY revision_order,revision_id', mids or [])
     else:
         # Older projections may not have the indexed column yet. Read the
         # explicit point-in-time timestamp from the immutable payload; never
         # substitute settled_at for repaired legacy records.
-        source = con.execute("SELECT match_id,json_extract(payload,'$.label_available_at'),"
-            "json_extract(payload,'$.ft_score'),json_extract(payload,'$.ht_score') "
+        query = ("SELECT match_id,json_extract(payload,'$.label_available_at'),"
+            "json_extract(payload,'$.ft_score'),json_extract(payload,'$.ht_score'),decision_id "
             "FROM decisions WHERE competition_type='real' "
             "AND status IN ('won','lost','half_won','half_lost','push','void') "
             "AND json_extract(payload,'$.label_available_at') IS NOT NULL "
             "AND json_extract(payload,'$.label_available_at')!='' "
-            "AND json_extract(payload,'$.ft_score') IS NOT NULL "
-            "ORDER BY json_extract(payload,'$.label_available_at')")
-    for mid, at, ft, ht in source:
-        ft_score = _score_of(json.loads(ft) if isinstance(ft, str) else ft)
-        ht_score = _score_of(json.loads(ht) if isinstance(ht, str) and ht else ht) if ht else None
+            "AND json_extract(payload,'$.ft_score') IS NOT NULL ")
+        if mids is not None:
+            query += 'AND match_id IN (' + ','.join('?' for _ in mids) + ') '
+        source = con.execute(query + "ORDER BY json_extract(payload,'$.label_available_at')", mids or [])
+    for mid, at, ft, ht, revision in source:
+        available = _label_time(at)
+        if available is None:
+            continue
+        try:
+            ft_score = _score_of(json.loads(ft) if isinstance(ft, str) else ft)
+            ht_score = _score_of(json.loads(ht) if isinstance(ht, str) and ht else ht) if ht else None
+        except (TypeError, ValueError):
+            continue
         if ft_score is not None:
             previous = result.get(str(mid), {})
-            if at >= previous.get('settled_at', ''):
-                result[str(mid)] = {'ft_score': ft_score, 'ht_score': ht_score,
-                                    'settled_at': at}
+            first_at = min(available.isoformat(), previous.get('first_label_available_at', available.isoformat()))
+            # The source is revision ordered; corrected payment uses its latest
+            # valid row while eligibility uses earliest actual availability.
+            result[str(mid)] = {'ft_score': ft_score, 'ht_score': ht_score,
+                                'settled_at': available.isoformat(), 'first_label_available_at': first_at,
+                                'label_version': revision}
     return result
 
 
@@ -658,73 +686,258 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
         con.close()
 
 
-def _prospective_metrics_postgres(projection: ProjectionTarget, model: Mapping[str, Any]) -> dict[str, Any]:
-    from core.learned_model import metrics
+SHADOW_WINDOW_LIMIT = 20_000
+SHADOW_FETCH_LIMIT = 2_000
+SHADOW_IDENTITY = ('at', 'match_id', 'algorithm', 'market', 'line', 'outcome')
+SHADOW_CURSOR = ('predicted_at', *SHADOW_IDENTITY)
+
+
+def _prediction_identity(row: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(str(row[key]) for key in SHADOW_IDENTITY)
+
+
+def _shadow_label_subset(connection: Any, mids: list[str]) -> dict[str, dict[str, Any]]:
+    """Only resolve labels for the bounded prediction window, never inputs."""
+    if not mids:
+        return {}
+    cursor = connection.cursor()
+    try:
+        placeholders = ','.join(['%s'] * len(mids))
+        # First terminal score controls whether a prediction was prospective;
+        # the newest valid revision supplies the corrected settlement target.
+        # Filtering happens before both windows, so invalid/pending scores
+        # cannot move first availability or hide a valid earlier revision.
+        score_pattern = (r'^[[:space:]]*\[[[:space:]]*(100|[0-9]{1,2})[[:space:]]*,'
+                         r'[[:space:]]*(100|[0-9]{1,2})[[:space:]]*\][[:space:]]*$')
+        cursor.execute('SELECT match_id,available_at,ft_score,ht_score,revision_id,first_label_available_at FROM ('
+            'SELECT match_id,available_at,ft_score,ht_score,revision_id,FIRST_VALUE(available_at) OVER '
+            '(PARTITION BY match_id ORDER BY available_time,revision_id) first_label_available_at,ROW_NUMBER() OVER '
+            '(PARTITION BY match_id ORDER BY revision_order DESC,revision_id DESC) rn FROM ('
+            'SELECT labels.*,CASE WHEN pg_input_is_valid(available_at,\'timestamp with time zone\') '
+            "AND available_at ~ %s THEN available_at::timestamptz ELSE NULL END available_time FROM ("
+            'SELECT match_id,available_at,ft_score,ht_score,status,revision_order,revision_id '
+            'FROM model_labels WHERE match_id IN (' + placeholders + ') UNION ALL '
+            'SELECT match_id,available_at,ft_score,ht_score,status,revision_order,revision_id '
+            'FROM label_revisions WHERE match_id IN (' + placeholders + ')) labels) timed '
+            "WHERE status IN ('won','lost','half_won','half_lost','push','void') "
+            "AND available_time IS NOT NULL AND ft_score ~ %s) ranked WHERE rn=1",
+            (r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$', *mids, *mids, score_pattern))
+        finals = {}
+        for values in cursor.fetchall():
+            row = _pg_row(cursor, values)
+            ft = _score_of(json.loads(row['ft_score']) if isinstance(row['ft_score'], str) else row['ft_score'])
+            ht = row.get('ht_score')
+            try:
+                ht = _score_of(json.loads(ht) if isinstance(ht, str) else ht) if ht else None
+            except (TypeError, ValueError):
+                ht = None
+            if ft is not None:
+                finals[str(row['match_id'])] = {'ft_score': ft, 'ht_score': ht,
+                    'settled_at': str(row['available_at']),
+                    'first_label_available_at': str(row['first_label_available_at']),
+                    'label_version': str(row['revision_id'])}
+        return finals
+    finally:
+        cursor.close()
+
+
+def prospective_prediction_rows(db: Path, rows: list[dict[str, Any]], *,
+                                 projection_target: ProjectionTarget | None = None) -> list[dict[str, Any]]:
+    """Do not persist settled replay as prospective predictions.
+
+    Labels are resolved only for the submitted match ids. A failed label read
+    fails closed and leaves the worker's pending batch retryable.
+    """
+    if not rows:
+        return []
+    mids = sorted({str(row['match_id']) for row in rows})
+    target = projection_target or projection_target_from_env()
+    finals = {}
+    if target is not None:
+        with readonly_snapshot(target) as con:
+            for offset in range(0, len(mids), SHADOW_FETCH_LIMIT):
+                finals.update(_shadow_label_subset(con, mids[offset:offset+SHADOW_FETCH_LIMIT]))
+    elif db.exists():
+        with closing(sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con:
+            for offset in range(0, len(mids), 500):
+                finals.update(labels(con, mids[offset:offset+500]))
+    return _without_known_settled_predictions(rows, finals)
+
+
+def _without_known_settled_predictions(rows: list[dict[str, Any]],
+                                       finals: Mapping[str, Any]) -> list[dict[str, Any]]:
+    from datetime import datetime
+    result = []
+    for row in rows:
+        final = finals.get(str(row['match_id']))
+        if not final:
+            result.append(row)
+            continue
+        try:
+            first = datetime.fromisoformat(final.get('first_label_available_at') or final['settled_at'])
+            predicted = datetime.fromisoformat(str(row['predicted_at']))
+            if first.tzinfo is not None and predicted.tzinfo is not None and first > predicted:
+                result.append(row)
+        except (KeyError, TypeError, ValueError):
+            continue
+    return result
+
+
+def _shadow_metrics(rows: list[dict[str, Any]], finals: Mapping[str, Any],
+                    model: Mapping[str, Any]) -> dict[str, Any]:
+    from datetime import datetime, timezone
+    from core.model_validation import evaluate, coherent_probabilities
+    valid, probabilities, baseline = [], [], []
+    pending = ungraded = excluded = settled = 0
+    latencies = []
+    for raw in rows:
+        try:
+            if raw.get('version') != model['version'] or any(raw.get(key) != value for key,value in (
+                    ('data_version', DATA_VERSION), ('model_version', MODEL_VERSION), ('feature_version', FEATURE_VERSION))):
+                raise ValueError('预测版本不匹配')
+            at = datetime.fromisoformat(str(raw['at']))
+            predicted = datetime.fromisoformat(str(raw.get('predicted_at') or ''))
+            available = datetime.fromisoformat(str(model.get('available_at') or model['updated_at']))
+            cutoff = float(raw['cutoff_ms'])
+            if (any(t.tzinfo is None for t in (at, predicted, available)) or
+                    not math.isfinite(cutoff) or cutoff <= 0 or cutoff > at.timestamp()*1000 or
+                    at < available or available.timestamp() * 1000 > cutoff or predicted < at or
+                    any(not isinstance(raw.get(k), (float, int)) or isinstance(raw.get(k), bool) or
+                        not math.isfinite(raw[k]) or not 0 < raw[k] <= cutoff
+                        for k in ('decision_received_at_ms', 'quote_received_at_ms'))):
+                excluded += 1
+                continue
+            p, b = float(raw['probability']), float(raw['baseline'])
+            if not all(math.isfinite(v) and 0 <= v <= 1 for v in (p, b)):
+                raise ValueError('无效概率')
+            final = finals.get(str(raw['match_id']))
+            if not final:
+                latencies.append((predicted-at).total_seconds()*1000)
+                pending += 1
+                continue
+            first_label = datetime.fromisoformat(final.get('first_label_available_at') or final['settled_at'])
+            if first_label.tzinfo is None or first_label <= predicted:
+                excluded += 1
+                continue
+            latencies.append((predicted-at).total_seconds()*1000)
+            settled += 1
+            paid = target(raw, final)
+            if paid is None:
+                ungraded += 1
+                continue
+            y, weight = paid
+            valid.append({**raw, 'y': y, 'observation_weight': weight,
+                          'label_version': final.get('label_version'),
+                          'first_label_available_at': first_label.isoformat()})
+            probabilities.append(p)
+            baseline.append(b)
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            excluded += 1
+    empty: dict[str, Any] = {'accuracy': None, 'binary_accuracy': None, 'had_top1_accuracy': None,
+             'had_top1_matches': 0, 'matches': 0, 'decisions': 0, 'brier': None,
+             'log_loss': None, 'asian_payment_accuracy': None, 'asian_selected_contracts': 0}
+    scores = []
+    for ps in (probabilities, baseline):
+        score = evaluate(valid, ps) if valid else dict(empty)
+        coherent = coherent_probabilities(valid, ps)
+        groups: dict[tuple, list[int]] = {}
+        for i, row in enumerate(valid):
+            if str(row['market']).startswith(('OU', 'AH')):
+                groups.setdefault((row['match_id'], row['at'], row['algorithm'], row['market'], row['line']), []).append(i)
+        selected = [max(indices, key=lambda i: coherent[i]) for indices in groups.values()
+                    if len(indices) == 2 and len({valid[i]['outcome'] for i in indices}) == 2]
+        by_match: dict[str, list[tuple[int, float]]] = {}
+        for i in selected:
+            by_match.setdefault(str(valid[i]['match_id']), []).append((valid[i]['y'], valid[i]['observation_weight']))
+        score['asian_payment_accuracy'] = (sum(sum(y*w for y,w in pairs)/sum(w for _,w in pairs)
+            for pairs in by_match.values())/len(by_match)) if by_match else None
+        score['asian_selected_contracts'] = len(selected)
+        score['asian_payment_basis'] = '每个盘口时点选择最高概率方向；半赢半输按0.5本金、比赛等权；走盘不计有效输赢分母'
+        scores.append(score)
+    latencies.sort()
+    settled_mids = {str(row['match_id']) for row in valid}
+    return {'version': model['version'], 'data_version': DATA_VERSION,
+            'artifact_kind': model.get('artifact_kind', 'active'),
+            'status': 'ready' if valid else 'waiting_for_settlement' if pending else 'no_predictions',
+            'reason': '' if valid else '影子预测等待确认赛果' if pending else
+                '已结算预测暂无有效输赢样本（走盘或结算口径不可核验）' if ungraded else '尚无可结算的前瞻影子预测',
+            'accuracy_basis': '按比赛等权；保留同场多个盘口/时点/算法；二元正确率为各候选概率>=0.5与支付标签比较，并非推荐下注胜率；HAD另报完整三向argmax命中',
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+            'window': {'from': min((r['at'] for r in rows), default=None),
+                       'to': max((r['at'] for r in rows), default=None),
+                       'max_predictions': SHADOW_WINDOW_LIMIT, 'scope': 'recent_versioned_predictions'},
+            'counts': {'predictions': len(rows), 'settled_predictions': settled,
+                       'pending_predictions': pending, 'ungraded_predictions': ungraded,
+                       'excluded_predictions': excluded, 'settled_matches': len({r['match_id'] for r in valid})},
+            'model': scores[0], 'baseline': scores[1],
+            'labels': {str(mid): {'version': final.get('label_version'),
+                                  'first_available_at': final.get('first_label_available_at') or final['settled_at'],
+                                  'latest_available_at': final['settled_at']}
+                       for mid, final in finals.items() if str(mid) in settled_mids},
+            'latency': {f'p{percentile}_ms': latencies[min(len(latencies)-1, int((len(latencies)-1)*percentile/100))]
+                        if latencies else None for percentile in (50,95,99)}}
+
+
+def _prospective_metrics_postgres(projection: ProjectionTarget, model: Mapping[str, Any], *,
+                                  state: dict[str, Any] | None = None) -> dict[str, Any]:
     if not compatible_model(model):
         return {}
-    evaluated: list[dict[str, Any]] = []
+    state = state if state is not None else {}
+    if state.get('version') != model['version']:
+        state.clear()
+        state.update(version=model['version'], rows=[], cursor=None)
+    columns = ','.join(SHADOW_CURSOR)
     with readonly_snapshot(projection) as con:
-        finals = _labels_postgres(con, fetch_size=projection.fetch_size)
         cursor = con.cursor()
         try:
-            cursor.execute('SELECT * FROM model_predictions WHERE version=%s AND data_version=%s '
-                           'AND model_version=%s', (model['version'], DATA_VERSION, MODEL_VERSION))
-            while True:
-                batch = cursor.fetchmany(projection.fetch_size)
-                if not batch:
-                    break
-                for values in batch:
-                    row = _pg_row(cursor, values)
-                    final = finals.get(str(row['match_id']))
-                    predicted_at = row.get('predicted_at')
-                    if (not final or not predicted_at or final['settled_at'] <= row['at']
-                            or final['settled_at'] <= predicted_at
-                            or not model.get('updated_at') or row['at'] <= model['updated_at']):
-                        continue
-                    paid = target(row, final)
-                    if paid is None:
-                        continue
-                    y, weight = paid
-                    evaluated.append({'match_id': row['match_id'], 'x': json.loads(row['x']),
-                                      'baseline': row['baseline'], 'y': y,
-                                      'observation_weight': weight})
+            query = ('SELECT * FROM model_predictions WHERE version=%s AND data_version=%s '
+                     'AND model_version=%s AND feature_version=%s AND predicted_at IS NOT NULL')
+            args: list[Any] = [model['version'], DATA_VERSION, MODEL_VERSION, FEATURE_VERSION]
+            if state.get('cursor'):
+                query += ' AND (' + columns + ') > (' + ','.join(['%s']*len(SHADOW_CURSOR)) + ')'
+                args.extend(state['cursor'])
+            query += ' ORDER BY ' + columns + ' LIMIT %s'
+            args.append(SHADOW_FETCH_LIMIT)
+            cursor.execute(query, tuple(args))
+            batch = [_pg_row(cursor, values) for values in cursor.fetchall()]
         finally:
             cursor.close()
-    return {'version': model['version'], 'data_version': DATA_VERSION,
-            'model': metrics(evaluated, model['weights']),
-            'baseline': metrics(evaluated, None)} if evaluated else {}
+        if batch:
+            state['cursor'] = [str(batch[-1][key]) for key in SHADOW_CURSOR]
+        combined = (list(state.get('rows', [])) +
+                    [{key:value for key,value in row.items() if key != 'x'} for row in batch])
+        finals = _shadow_label_subset(con, sorted({str(r['match_id']) for r in combined}))
+        prospective = _without_known_settled_predictions(combined, finals)
+        state['excluded_replay_predictions'] = (state.get('excluded_replay_predictions', 0) +
+                                               len(combined)-len(prospective))
+        state['rows'] = prospective[-SHADOW_WINDOW_LIMIT:]
+    result = _shadow_metrics(state['rows'], finals, model)
+    result['cursor'] = {'batch_records': len(batch), 'has_more': len(batch) == SHADOW_FETCH_LIMIT}
+    result['counts']['excluded_replay_predictions'] = state['excluded_replay_predictions']
+    result['counts']['excluded_replay_scope'] = 'cursor_history_not_window'
+    return result
 
 
 def prospective_metrics(db: Path, path: Path, model: Mapping[str, Any], *,
-                        projection_target: ProjectionTarget | None = None) -> dict[str, Any]:
-    from core.learned_model import metrics
+                        projection_target: ProjectionTarget | None = None,
+                        state: dict[str, Any] | None = None) -> dict[str, Any]:
     projection_target = projection_target or projection_target_from_env()
     if projection_target is not None:
-        return _prospective_metrics_postgres(projection_target, model)
-    if not compatible_model(model) or not db.exists() or not path.exists():
+        return _prospective_metrics_postgres(projection_target, model, state=state)
+    if not compatible_model(model):
         return {}
-    with closing(sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con:
-        finals = labels(con)
-    evaluated = []
-    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con:
-        con.row_factory = sqlite3.Row
-        columns = {r[1] for r in con.execute('PRAGMA table_info(predictions)')}
-        if not set(BASIS_COLUMNS) <= columns or 'predicted_at' not in columns:
-            return {}
-        for raw in con.execute('SELECT * FROM predictions WHERE version=? AND data_version=? AND model_version=?',
-                               (model['version'], DATA_VERSION, MODEL_VERSION)):
-            row = dict(raw)
-            final = finals.get(row['match_id'])
-            predicted_at = row['predicted_at']
-            if (not final or not predicted_at or final['settled_at'] <= row['at']
-                    or final['settled_at'] <= predicted_at
-                    or not model.get('updated_at') or row['at'] <= model['updated_at']):
-                continue
-            paid = target(row, final)
-            if paid is None:
-                continue
-            y, weight = paid
-            evaluated.append({'match_id': row['match_id'], 'x': json.loads(row['x']),
-                              'baseline': row['baseline'], 'y': y, 'observation_weight': weight})
-    return {'version': model['version'], 'data_version': DATA_VERSION, 'model': metrics(evaluated, model['weights']),
-            'baseline': metrics(evaluated, None)} if evaluated else {}
+    finals = {}
+    if db.exists():
+        with closing(sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con:
+            finals = labels(con)
+    rows: list[dict[str, Any]] = []
+    if path.exists():
+        with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as con:
+            con.row_factory = sqlite3.Row
+            columns = {r[1] for r in con.execute('PRAGMA table_info(predictions)')}
+            if set(BASIS_COLUMNS) <= columns and 'predicted_at' in columns:
+                rows = [dict(raw) for raw in con.execute(
+                    'SELECT * FROM predictions WHERE version=? AND data_version=? AND model_version=? '
+                    'AND feature_version=? ORDER BY at DESC,match_id DESC,algorithm DESC,market DESC,line DESC,outcome DESC LIMIT ?',
+                    (model['version'], DATA_VERSION, MODEL_VERSION, FEATURE_VERSION, SHADOW_WINDOW_LIMIT))]
+    return _shadow_metrics(rows, finals, model)

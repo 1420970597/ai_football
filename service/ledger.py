@@ -45,6 +45,7 @@ import hashlib
 import os
 import threading
 import time
+from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -80,6 +81,12 @@ def recommendation_evidence_key(pick: Mapping[str, Any]) -> tuple:
 
 #: 台账文件名
 LEDGER_FILE = "ledger.jsonl"
+HISTORY_PAGE_TTL_S = 30.0
+HISTORY_STATISTICS_TTL_S = 60.0
+HISTORY_RETRY_DELAY_S = 15.0
+HISTORY_REFRESH_DEADLINE_S = 60.0
+HISTORY_CACHE_ENTRIES = 16
+HISTORY_CACHE_BYTES = 16 * 1024 * 1024
 
 
 def _now() -> datetime:
@@ -274,9 +281,18 @@ class DecisionLedger:
         self._db_synchronized = False
         self._history_cache_lock = threading.Lock()
         self._history_compute_lock = threading.Lock()
-        self._history_cache: dict[str, dict[str, Any]] = {}
+        self._history_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._history_refreshing: set[str] = set()
         self._history_errors: dict[str, str] = {}
+        self._history_jobs: OrderedDict[str, tuple[Any, ...]] = OrderedDict()
+        self._history_worker_running = False
+        self._history_retry_at: dict[str, float] = {}
+        self._history_pages: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._history_page_jobs: OrderedDict[str, tuple[Any, ...]] = OrderedDict()
+        self._history_pages_refreshing: set[str] = set()
+        self._history_page_errors: dict[str, str] = {}
+        self._history_page_retry_at: dict[str, float] = {}
+        self._history_page_worker_running = False
         self._performance_cache: Optional[dict[str, Any]] = None
         self._performance_cache_at = 0.0
         self._db: Optional[LedgerDB] = None
@@ -916,7 +932,6 @@ class DecisionLedger:
             `timeline` 的字典，全部**可在容器内复核**，不依赖外部服务。
         """
         started = time.perf_counter()
-        refresh_statistics = False
         where = 'is_pick=1' if picks_only else '1=1'
         params: list = []
         for col, value in (('competition_type', competition_type), ('algorithm', algorithm)):
@@ -942,45 +957,175 @@ class DecisionLedger:
         if days>0:
             portfolio_where += ' AND at>=?'
             portfolio_params.append((_now()-timedelta(days=days)).isoformat())
+        cache_key = hashlib.sha256(json.dumps([picks_only, days, competition_type, algorithm, cohort]).encode()).hexdigest()
+        if self._db is not None and self._db.backend == 'postgres':
+            out = self._postgres_history_page(cache_key, where, tuple(params), portfolio_where,
+                tuple(portfolio_params), competition_type, days, picks_only, max(0, limit), max(0, offset))
+            out['query_ms'] = round((time.perf_counter()-started)*1000, 3)
+            return out
         with self._read_db() as db:
             if not db:
                 return {'overall': summarise([]), 'entries': [], 'entries_total': 0}
-            cache_key = hashlib.sha256(json.dumps([picks_only, days, competition_type, algorithm, cohort]).encode()).hexdigest()
-            if db.backend == 'postgres':
-                out = self._cached_history_snapshot(db, cache_key, where, params, portfolio_where,
-                                                    portfolio_params, competition_type, days)
-                refresh_statistics = out.pop('_refresh_statistics', False)
-                if out.pop('_total_current', False):
-                    total = out['overall']['total']
-                else:
-                    count_row = db.connection.execute('SELECT count(*) FROM ' + db._statistics_table() +
-                                                      ' WHERE ' + where, params).fetchone()
-                    total = int(count_row[0]) if count_row is not None else 0
-            else:
-                out = self._history_snapshot(db, where, params, portfolio_where, portfolio_params,
-                                             competition_type, days)
-                total = out['overall']['total']
+            out = self._history_snapshot(db, where, params, portfolio_where, portfolio_params,
+                                         competition_type, days)
+            total = out['overall']['total']
             entries = [LedgerEntry.from_dict(r).as_dict() for r in db.entries(where, params, max(0,limit), offset)]
             out.update(entries=entries, entries_shown=len(entries), entries_total=total,
                        picks_only=picks_only, days=days, offset=offset,
                        next_offset=offset+len(entries) if offset+len(entries)<total else None,
                        ledger=self.health())
-        if refresh_statistics:
-            self._refresh_history_snapshot(db, cache_key, where, tuple(params), portfolio_where,
-                                           tuple(portfolio_params), competition_type, days)
-            out['statistics_refreshing'] = True
         out['query_ms'] = round((time.perf_counter()-started)*1000,3)
         return out
+
+    @staticmethod
+    def _history_stale(snapshot: Mapping[str, Any] | None, field: str, ttl: float) -> bool:
+        try:
+            stamp = str((snapshot or {}).get(field) or '')
+            return not stamp or (_now()-datetime.fromisoformat(stamp)).total_seconds() >= ttl
+        except (ValueError, TypeError):
+            return True
+
+    def _remember_history(self, cache: OrderedDict[str, dict[str, Any]], key: str,
+                          value: dict[str, Any]) -> None:
+        """Bound large JSON caches by both count and bytes; caller holds lock."""
+        size = len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
+        if size > HISTORY_CACHE_BYTES:
+            raise ValueError('历史页面过大，请减少每页记录数')
+        value = {**value, '_cache_bytes': size}
+        cache.pop(key, None)
+        cache[key] = value
+        while (len(cache) > HISTORY_CACHE_ENTRIES or
+               sum(int(item.get('_cache_bytes', 0)) for item in cache.values()) > HISTORY_CACHE_BYTES):
+            cache.popitem(last=False)
+
+    def _postgres_history_page(self, cache_key: str, where: str, params: Sequence[Any],
+            portfolio_where: str, portfolio_params: Sequence[Any], competition_type: Optional[str],
+            days: int, picks_only: bool, limit: int, offset: int) -> dict[str, Any]:
+        """HTTP reads memory only; all PG reads and import locks stay off GET."""
+        page_key = hashlib.sha256(json.dumps([cache_key, limit, offset]).encode()).hexdigest()
+        with self._history_cache_lock:
+            snapshot = self._history_cache.get(cache_key)
+            page = self._history_pages.get(page_key)
+            if snapshot is not None:
+                self._history_cache.move_to_end(cache_key)
+            if page is not None:
+                self._history_pages.move_to_end(page_key)
+            out = copy.deepcopy(snapshot) if snapshot is not None else {
+                'overall': None, 'settled': None, 'timeline': [], 'portfolio_summary': None,
+                'experiments': {}, 'statistics_status': 'loading', 'statistics_at': None,
+            }
+            out.pop('_cache_bytes', None)
+            if page is not None:
+                out.update({key: copy.deepcopy(value) for key, value in page.items() if key != '_cache_bytes'})
+            else:
+                out.update(entries=[], entries_total=None, entries_shown=None,
+                           next_offset=None, entries_at=None, entries_status='loading')
+            stale = self._history_stale(page, 'entries_at', HISTORY_PAGE_TTL_S)
+            now = time.monotonic()
+            if (stale and page_key not in self._history_pages_refreshing and
+                    len(self._history_pages_refreshing) < HISTORY_CACHE_ENTRIES and
+                    now >= self._history_page_retry_at.get(page_key, 0)):
+                self._history_pages_refreshing.add(page_key)
+                self._history_page_jobs[page_key] = (
+                    self._db, cache_key, where, params, portfolio_where, portfolio_params,
+                    competition_type, days, limit, offset)
+            start_worker = bool(self._history_page_jobs) and not self._history_page_worker_running
+            if start_worker:
+                self._history_page_worker_running = True
+            out.update(entries_stale=stale, entries_refreshing=page_key in self._history_pages_refreshing,
+                       statistics_stale=self._history_stale(snapshot, 'statistics_at', HISTORY_STATISTICS_TTL_S),
+                       statistics_refreshing=cache_key in self._history_refreshing or snapshot is None)
+            if page_key in self._history_page_errors:
+                out['entries_error'] = self._history_page_errors[page_key]
+                if page is None:
+                    out['entries_status'] = 'error'
+            if cache_key in self._history_errors:
+                out['statistics_error'] = self._history_errors[cache_key]
+        if start_worker:
+            threading.Thread(target=self._history_page_loop, name='ledger-history-pages', daemon=True).start()
+        out.update(picks_only=picks_only, days=days, offset=offset, ledger=self.health(include_files=False))
+        return out
+
+    @staticmethod
+    def _history_read_budget(db: LedgerDB, deadline: float) -> None:
+        remaining = deadline-time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('历史后台读取超时')
+        db.connection.execute("SELECT set_config('statement_timeout', ?, true)",
+                              (str(max(1, int(remaining*1000))),)).close()
+
+    def _history_page_loop(self) -> None:
+        while True:
+            with self._history_cache_lock:
+                if not self._history_page_jobs:
+                    self._history_page_worker_running = False
+                    return
+                page_key, job = self._history_page_jobs.popitem(last=False)
+            (db, cache_key, where, params, portfolio_where, portfolio_params,
+             competition_type, days, limit, offset) = job
+            try:
+                deadline = time.monotonic()+HISTORY_REFRESH_DEADLINE_S
+                entries_at = _now().isoformat()
+                with db.reader() as reader:
+                    reader.connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ').close()
+                    reader.connection.execute("SET LOCAL lock_timeout='3s'").close()
+                    reader.connection.execute('SET LOCAL max_parallel_workers_per_gather=0').close()
+                    self._history_read_budget(reader, deadline)
+                    # Loading the persisted filter snapshot also stays in the
+                    # background. A cold HTTP response never invents totals.
+                    snapshot = self._cached_history_snapshot(reader, cache_key, where, params,
+                        portfolio_where, portfolio_params, competition_type, days)
+                    refresh_statistics = snapshot.pop('_refresh_statistics', False)
+                    if refresh_statistics:
+                        self._refresh_history_snapshot(db, cache_key, where, params, portfolio_where,
+                                                       portfolio_params, competition_type, days)
+                    self._history_read_budget(reader, deadline)
+                    table = reader._statistics_table()
+                    self._history_read_budget(reader, deadline)
+                    count_row = reader.connection.execute('SELECT count(*) FROM ' + table +
+                                                           ' WHERE ' + where, params).fetchone()
+                    if count_row is None:
+                        raise ValueError('历史记录总数不可用')
+                    total = int(count_row[0])
+                    self._history_read_budget(reader, deadline)
+                    entries = [LedgerEntry.from_dict(row).as_dict()
+                               for row in reader.entries(where, params, limit, offset)]
+                    page = dict(entries=entries, entries_total=total, entries_shown=len(entries),
+                        next_offset=offset+len(entries) if offset+len(entries)<total else None,
+                        entries_at=entries_at, entries_status='ready')
+                with self._history_cache_lock:
+                    self._remember_history(self._history_pages, page_key, page)
+                    self._history_page_errors.pop(page_key, None)
+                    self._history_page_retry_at.pop(page_key, None)
+            except Exception as exc:
+                with self._history_cache_lock:
+                    self._history_page_errors[page_key] = type(exc).__name__
+                    self._history_page_retry_at[page_key] = time.monotonic()+HISTORY_RETRY_DELAY_S
+                    while len(self._history_page_errors) > HISTORY_CACHE_ENTRIES:
+                        expired = next(iter(self._history_page_errors))
+                        self._history_page_errors.pop(expired)
+                        self._history_page_retry_at.pop(expired, None)
+            finally:
+                with self._history_cache_lock:
+                    self._history_pages_refreshing.discard(page_key)
 
     def _history_snapshot(self, db: LedgerDB, where: str, params: Sequence[Any],
                           portfolio_where: str, portfolio_params: Sequence[Any],
                           competition_type: Optional[str], days: int) -> dict[str, Any]:
         statistics_at = _now().isoformat()
+        deadline = time.monotonic()+HISTORY_REFRESH_DEADLINE_S
+        def budget() -> None:
+            if db.backend == 'postgres':
+                self._history_read_budget(db, deadline)
+        budget()
         settled_where = where + " AND status IN ('won','lost','push','half_won','half_lost')"
         attrs = ('competition_type','date_key','league','market','decision','algorithm','config_version','trigger','status','confidence_band')
         aggregates = db.aggregate_many(where, params, attrs)
         overall = aggregates['overall']
-        settled = aggregates.get('settled') or db.aggregate(settled_where, params)
+        settled = aggregates.get('settled')
+        if settled is None:
+            budget()
+            settled = db.aggregate(settled_where, params)
         out = {'overall': overall, 'settled': settled,
                'legacy_identity_rows': overall['legacy_identity_rows']}
         for attr in attrs:
@@ -990,6 +1135,7 @@ class DecisionLedger:
         timeline, cum_stake, cum_profit = [], 0.0, 0.0
         settled_days = aggregates.get('settled_by_date')
         if settled_days is None:
+            budget()
             settled_days = db.aggregate(settled_where, params, 'date_key')
         for day, st in sorted(settled_days.items()):
             cum_stake += st['stake_units']
@@ -998,7 +1144,10 @@ class DecisionLedger:
                              'hit_rate':st['hit_rate'], 'profit_units':st['profit_units'],
                              'cum_stake':cum_stake, 'cum_profit':round(cum_profit,4),
                              'cum_roi':round(cum_profit/cum_stake,6) if cum_stake else None})
-        out.update(timeline=timeline, experiments=self._experiment_stats(db, competition_type, days),
+        budget()
+        experiments = self._experiment_stats(db, competition_type, days, deadline=deadline)
+        budget()
+        out.update(timeline=timeline, experiments=experiments,
                    portfolio_summary=db.aggregate(portfolio_where, portfolio_params),
                    statistics_status='ready', statistics_at=statistics_at)
         return out
@@ -1009,31 +1158,22 @@ class DecisionLedger:
         """Return persisted totals immediately; refresh expensive groups off GET."""
         with self._history_cache_lock:
             snapshot = self._history_cache.get(cache_key)
-        total_current = False
         if snapshot is None:
             stored = db.connection.execute('SELECT payload FROM ledger_history_cache WHERE cache_key=?',
                                            (cache_key,)).fetchone()
             if stored:
                 snapshot = json.loads(stored[0])
             else:
-                # First read exposes exact overall numbers and page records.
-                # Group comparisons are explicitly pending until their first
-                # background snapshot, rather than being presented as zeros.
-                overall = db.aggregate(where, params)
-                total_current = True
-                snapshot = {'overall': overall, 'settled': {}, 'timeline': [],
-                            'legacy_identity_rows': overall['legacy_identity_rows'],
-                            'portfolio_summary': {}, 'experiments': {},
-                            'statistics_status': 'refreshing', 'statistics_at': ''}
+                # Cold reads remain unknown until their background snapshot;
+                # a missing cache must never be presented as zero performance.
+                snapshot = {'overall': None, 'settled': None, 'timeline': [],
+                            'portfolio_summary': None, 'experiments': {},
+                            'statistics_status': 'loading', 'statistics_at': None}
             with self._history_cache_lock:
-                if len(self._history_cache) >= 16:
-                    self._history_cache.pop(next(iter(self._history_cache)))
-                self._history_cache[cache_key] = snapshot
-        at = str(snapshot.get('statistics_at') or '')
-        stale = not at or (_now() - datetime.fromisoformat(at)).total_seconds() >= 60
+                self._remember_history(self._history_cache, cache_key, snapshot)
+        stale = self._history_stale(snapshot, 'statistics_at', HISTORY_STATISTICS_TTL_S)
         out = copy.deepcopy(snapshot)
         out['_refresh_statistics'] = stale
-        out['_total_current'] = total_current
         out['statistics_stale'] = stale
         with self._history_cache_lock:
             out['statistics_refreshing'] = cache_key in self._history_refreshing
@@ -1045,20 +1185,41 @@ class DecisionLedger:
                                   portfolio_where: str, portfolio_params: Sequence[Any],
                                   competition_type: Optional[str], days: int) -> None:
         with self._history_cache_lock:
-            if cache_key in self._history_refreshing:
+            if (cache_key in self._history_refreshing or len(self._history_refreshing) >= HISTORY_CACHE_ENTRIES
+                    or time.monotonic() < self._history_retry_at.get(cache_key, 0)):
                 return
             self._history_refreshing.add(cache_key)
+            self._history_jobs[cache_key] = (db, where, params, portfolio_where, portfolio_params,
+                                             competition_type, days)
+            if self._history_worker_running:
+                return
+            self._history_worker_running = True
 
-        def refresh() -> None:
+        threading.Thread(target=self._history_statistics_loop, name='ledger-history-statistics', daemon=True).start()
+
+    def _history_statistics_loop(self) -> None:
+        while True:
+            with self._history_cache_lock:
+                if not self._history_jobs:
+                    self._history_worker_running = False
+                    return
+                cache_key, job = self._history_jobs.popitem(last=False)
+            db, where, params, portfolio_where, portfolio_params, competition_type, days = job
             try:
                 with self._history_compute_lock:
                     with db.reader() as reader:
+                        reader.connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ').close()
+                        reader.connection.execute("SET LOCAL statement_timeout='60s'").close()
+                        reader.connection.execute("SET LOCAL lock_timeout='3s'").close()
+                        reader.connection.execute('SET LOCAL max_parallel_workers_per_gather=0').close()
                         snapshot = self._history_snapshot(reader, where, params, portfolio_where,
                                                           portfolio_params, competition_type, days)
                 from store.postgres import connect
                 connection = connect()
                 try:
                     with connection:
+                        connection.execute("SET LOCAL statement_timeout='10s'").close()
+                        connection.execute("SET LOCAL lock_timeout='3s'").close()
                         connection.execute('INSERT INTO ledger_history_cache(cache_key,payload,refreshed_at) '
                             'VALUES (?,?,now()) ON CONFLICT(cache_key) DO UPDATE '
                             'SET payload=excluded.payload,refreshed_at=excluded.refreshed_at',
@@ -1066,15 +1227,20 @@ class DecisionLedger:
                 finally:
                     connection.close()
                 with self._history_cache_lock:
-                    self._history_cache[cache_key] = snapshot
+                    self._remember_history(self._history_cache, cache_key, snapshot)
                     self._history_errors.pop(cache_key, None)
+                    self._history_retry_at.pop(cache_key, None)
             except Exception as exc:
                 with self._history_cache_lock:
                     self._history_errors[cache_key] = type(exc).__name__
+                    self._history_retry_at[cache_key] = time.monotonic()+HISTORY_RETRY_DELAY_S
+                    while len(self._history_errors) > HISTORY_CACHE_ENTRIES:
+                        expired = next(iter(self._history_errors))
+                        self._history_errors.pop(expired)
+                        self._history_retry_at.pop(expired, None)
             finally:
                 with self._history_cache_lock:
                     self._history_refreshing.discard(cache_key)
-        threading.Thread(target=refresh, name='ledger-history-statistics', daemon=True).start()
 
     def performance_evidence(self) -> Dict[str, Any]:
         with self._history_cache_lock:
@@ -1244,7 +1410,8 @@ class DecisionLedger:
         with self._read_db() as db:
             return self._experiment_stats(db, competition_type, days)
 
-    def _experiment_stats(self, db: Optional[LedgerDB], competition_type: Optional[str] = None, days: int = 0) -> Dict[str, Any]:
+    def _experiment_stats(self, db: Optional[LedgerDB], competition_type: Optional[str] = None, days: int = 0,
+                          *, deadline: Optional[float] = None) -> Dict[str, Any]:
         if not db:
             return {}
         where = "experiment_id!=''"
@@ -1255,17 +1422,25 @@ class DecisionLedger:
         if days > 0:
             where += ' AND at>=?'
             params.append((_now()-timedelta(days=days)).isoformat())
+        def budget() -> None:
+            if db is not None and db.backend == 'postgres' and deadline is not None:
+                self._history_read_budget(db, deadline)
+        budget()
         arms = db.aggregate(where, params, 'algorithm')
+        budget()
         counts = {r[0]:r[1] for r in db.connection.execute(
             'SELECT review_status,count(*) FROM decisions WHERE ' + where + " AND algorithm='economics_llm' GROUP BY review_status", params)}
         # A paired cohort includes only quotes with both arms and a graded outcome.
         pair_where = (where + " AND experiment_id IN (SELECT experiment_id FROM decisions WHERE " + where +
                      " AND status IN ('won','lost','half_won','half_lost','push') GROUP BY experiment_id HAVING count(DISTINCT algorithm)=2)")
+        budget()
         operation = db.aggregate(pair_where, [*params,*params], 'algorithm')
         pair_where += " AND review_status='ready'"
+        budget()
         paired = db.aggregate(pair_where, [*params,*params], 'algorithm')
         a,b = paired.get('economics_control',{}), paired.get('economics_llm',{})
         opportunities = a.get('total',0)
+        budget()
         errors = {r[0]:r[1] for r in db.connection.execute(
             "SELECT json_extract(payload,'$.review_error'),count(*) FROM decisions WHERE "+where+" AND algorithm='economics_llm' AND review_status='error' GROUP BY json_extract(payload,'$.review_error')",params)}
         return {'arms':arms, 'paired':paired, 'operation':operation, 'review_status':counts, 'errors':errors, 'paired_opportunities':opportunities,
@@ -1323,7 +1498,7 @@ class DecisionLedger:
             })
         return out
 
-    def health(self) -> Dict[str, Any]:
+    def health(self, *, include_files: bool = True) -> Dict[str, Any]:
         path = self.path
         size = 0
         if path is not None and path.exists():
@@ -1331,8 +1506,8 @@ class DecisionLedger:
                 size = path.stat().st_size
             except OSError:
                 size = 0
-        files = 0
-        if self._db is not None:
+        files: Optional[int] = 0 if include_files else None
+        if self._db is not None and include_files:
             try:
                 import_row = self._db.connection.execute('SELECT count(*) FROM imports').fetchone()
                 files = int(import_row[0]) if import_row is not None else 0
