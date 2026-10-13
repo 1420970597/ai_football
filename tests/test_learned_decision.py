@@ -2,6 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from core.learned_model import DATA_VERSION, FEATURES
 from core.decision_features import FEATURE_VERSION
@@ -13,6 +14,45 @@ from tests import test_live_expert
 
 
 class LearnedDecisionTests(unittest.TestCase):
+    def test_live_model_and_shadow_projection_match_and_hybrid_keeps_formula(self):
+        from core.learned_decision import calibrate
+        from core.model_validation import coherent_probabilities
+        from core.live_model import MODEL_VERSION
+        learned = [.4, .6, .7, .3]
+        algorithm = [.6, .4, .3, .7]
+        candidates = [
+            {'match_id': 'm', 'at': '2025-01-02T00:00:00+00:00',
+             'algorithm': 'economic_ensemble', 'market': 'OU', 'line': line,
+             'outcome': outcome, 'p_model': probability, 'p_market': probability,
+             'odds': 2., 'win_stake': .5, 'loss_stake': .5, 'research_only': False,
+             'tail': 0., 'training_history': []}
+            for (line, outcome), probability in zip(
+                [('2.5', 'over'), ('2.5', 'under'), ('3.5', 'over'), ('3.5', 'under')], algorithm)]
+        model = {'version': 'projection-test', 'data_version': DATA_VERSION,
+                 'feature_version': FEATURE_VERSION, 'features': list(FEATURES),
+                 'weights': [0.] * len(FEATURES),
+                 'updated_at': '2025-01-01T00:00:00+00:00',
+                 'promotion': {'approved': True}}
+        expected = coherent_probabilities(candidates, learned)
+        self.assertEqual([round(p, 6) for p in expected], [.55, .45, .55, .45])
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            path = Path(directory) / 'active.json'
+            atomic_json(path, model)
+            snapshot = {'_model_path': str(path), 'captured_at_ms': 1735776000000.,
+                        'score': [0, 0], 'status': {'mst': 1200, 'mmp': '6'}}
+            for mode, weight in [('model', 1.), ('hybrid', .25)]:
+                with self.subTest(mode=mode), \
+                        patch('core.learned_decision._load', return_value=model), \
+                        patch('core.learned_decision.predict', side_effect=learned):
+                    result = calibrate({'candidates': candidates}, [], snapshot,
+                                       RuntimeConfig(), MODEL_VERSION, mode=mode, blend_weight=weight)
+                    self.assertTrue(result['model_application']['applied'], result['model_application'])
+                    for candidate, raw_algorithm, projected in zip(result['candidates'], algorithm, expected):
+                        self.assertAlmostEqual(candidate['learned_probability'], projected)
+                        self.assertAlmostEqual(candidate['p_model'],
+                                               (1 - weight) * raw_algorithm + weight * projected)
+                        self.assertEqual(candidate['decision_evidence']['final_probability'], candidate['p_model'])
+
     def test_setting_is_validated_and_persisted(self):
         with self.assertRaises(ValueError):
             validated(RuntimeConfig(), {'model_shadow_enabled':1})

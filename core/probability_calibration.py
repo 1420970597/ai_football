@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Any, Mapping, Sequence
 
 MIN_SAMPLES = 30
@@ -27,7 +28,10 @@ def calibrate_probability(p: float, calibration: Mapping[str, Any] | None) -> fl
     return min(1 - EPS, max(EPS, 1 / (1 + math.exp(-z))))
 
 
-def fit_logistic(probs: Sequence[float], outcomes: Sequence[int], *, epochs: int = 200) -> dict[str, Any]:
+CALIBRATION_EPOCHS = max(1, int(os.environ.get('MODEL_CALIBRATION_EPOCHS', '40')))
+
+
+def fit_logistic(probs: Sequence[float], outcomes: Sequence[int], *, epochs: int = CALIBRATION_EPOCHS) -> dict[str, Any]:
     """Fit Platt-style calibration with two parameters using Newton updates.
 
     The returned identity artifact is explicit when data are too sparse or

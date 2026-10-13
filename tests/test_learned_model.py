@@ -1,6 +1,7 @@
 """Real model behavior: grouped time validation, calibration and feature boundaries."""
 from datetime import datetime, timedelta, timezone
 import unittest
+from unittest.mock import patch
 
 from core.learned_model import FEATURES, features, metrics, predict, train
 
@@ -22,6 +23,19 @@ class LearnedModelTests(unittest.TestCase):
         self.assertAlmostEqual(result['brier'],(.04+.5*.64)/1.5)
         with self.assertRaises(ValueError):
             metrics([{**rows[0],'observation_weight':0}],None)
+
+    def test_metrics_match_live_complete_group_normalization(self):
+        rows = []
+        for outcome, probability, target in (('home', .6, 1), ('draw', .3, 0), ('away', .3, 0)):
+            source = {'market': 'HAD', 'outcome': outcome, 'line': '',
+                      'algorithm': 'poisson_time_decay', 'entry_score': [0, 0],
+                      'entry_clock_s': 1200, 'p_market': probability, 'p_fused': probability}
+            rows.append({**sample_row(0), 'market': 'HAD', 'outcome': outcome,
+                         'algorithm': 'poisson_time_decay', 'line': '',
+                         'x': features(source), 'baseline': probability, 'y': target})
+        result = metrics(rows, None)
+        # Live inference normalizes .6/.3/.3 to .5/.25/.25 before scoring.
+        self.assertAlmostEqual(result['brier'], (.25 + .0625 + .0625) / 3)
 
     def test_train_and_group_split_retains_multiple_decisions(self):
         rows = [sample_row(i) for i in range(120)]
@@ -56,6 +70,32 @@ class LearnedModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '100'):
             train(rows[:10])
 
+    def test_explicit_final_partition_keeps_epochs_and_membership(self):
+        rows = [sample_row(i) for i in range(120)]
+        from core.model_validation import rolling_folds
+        partition = rolling_folds(rows)[-1]
+        model = train(rows, partition=partition, epochs=2)
+        self.assertEqual(model['training_epochs'], 2)
+        self.assertEqual(set(model['training_match_ids']), {r['match_id'] for r in partition[0]})
+        self.assertEqual(set(model['validation_match_ids']), {r['match_id'] for r in partition[1]})
+        self.assertEqual(model['validation']['matches'], len(partition[1]))
+        self.assertLess(model['training_cutoff'], model['validation_from'])
+
+    def test_explicit_partition_rejects_overlap_and_unavailable_labels(self):
+        rows = [sample_row(i) for i in range(120)]
+        with self.assertRaisesRegex(ValueError, '重复比赛'):
+            train(rows, partition=(rows[:100], rows[99:]))
+        training = [dict(r) for r in rows[:100]]
+        training[0]['settled_at'] = rows[100]['at']
+        with self.assertRaisesRegex(ValueError, '尚不可用'):
+            train(rows, partition=(training, rows[100:]))
+
+    def test_final_partition_fit_receives_explicit_epoch_budget(self):
+        rows = [sample_row(i) for i in range(120)]
+        with patch('core.learned_model.fit_weights', return_value=[0.] * len(FEATURES)) as fit:
+            train(rows, partition=(rows[:100], rows[100:]), epochs=7)
+        self.assertEqual(fit.call_args.kwargs['epochs'], 7)
+
     def test_multi_market_features_and_missingness(self):
         row = {'market': 'OU_1H', 'outcome': 'over', 'line': '2/2.5', 'entry_score': [1, 0],
                'entry_clock_s': 1500, 'p_market': .5, 'p_fused': .6,
@@ -68,8 +108,8 @@ class LearnedModelTests(unittest.TestCase):
         self.assertGreater(x[FEATURES.index('trend_volatility')], 0)
         row.pop('training_trend_pct')
         self.assertEqual(features(row)[FEATURES.index('trend_missing')], 1)
-        for patch in ({'entry_clock_s': 5400}, {'p_fused': float('nan')}, {'line': 'bad'}, {'entry_score': None}):
-            with self.subTest(patch=patch), self.assertRaises(ValueError):
-                features({**row, **patch})
+        for override in ({'entry_clock_s': 5400}, {'p_fused': float('nan')}, {'line': 'bad'}, {'entry_score': None}):
+            with self.subTest(override=override), self.assertRaises(ValueError):
+                features({**row, **override})
         with self.assertRaises(ValueError):
             predict([0], x)

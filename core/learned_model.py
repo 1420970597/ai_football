@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Any, Mapping, Sequence
 
 from core.decision_features import (EXTRA_FEATURES, extra_features, residual_vector,
@@ -17,9 +18,12 @@ BASE_FEATURES = ('bias', 'market_logit', 'algorithm_logit', 'elapsed', 'score_di
 FEATURES = BASE_FEATURES + EXTRA_FEATURES
 MIN_MATCHES = 100
 # The learner is intentionally small and runs in a dependency-free worker.
-# Keep the iteration budget bounded: rolling validation fits several models
-# and an uncached 250-epoch Python loop exceeded the worker wall-clock limit.
-EPOCHS = 80
+# Rolling validation fits several models.  Keep separate, bounded budgets so
+# the 1-core production worker cannot exhaust its RLIMIT_CPU before it writes
+# a candidate artifact.  Both values remain environment-tunable for offline
+# experiments without changing the production defaults.
+EPOCHS = max(1, int(os.environ.get('MODEL_TRAINING_EPOCHS', '24')))
+VALIDATION_EPOCHS = max(1, int(os.environ.get('MODEL_VALIDATION_EPOCHS', '12')))
 LEARNING_RATE = 0.08
 REGULARIZATION = 0.01
 DATA_VERSION = 'remaining-ah-signed-lines-bernoulli-v4-offset-windows-asof'
@@ -123,9 +127,17 @@ def metrics(rows: Sequence[Mapping[str, Any]], weights: Sequence[float] | None) 
     counts: dict[str, float] = {}
     for row in rows:
         counts[row['match_id']] = counts.get(row['match_id'], 0) + observation_weight(row)
+    # Production inference normalizes every complete same-line outcome group
+    # before selecting a direction. Apply the same coherence transform here so
+    # the artifact's train/validation scores cannot use a different probability
+    # space from the live path. Binary accuracy remains a diagnostic metric;
+    # HAD top-1 accuracy is reported by ``model_validation.evaluate``.
+    from core.model_validation import coherent_probabilities
+    raw_probabilities = [predict(weights, row['x']) if weights is not None else row['baseline']
+                         for row in rows]
+    probabilities = coherent_probabilities(rows, raw_probabilities)
     accuracy = brier = logloss = 0.0
-    for row in rows:
-        p = predict(weights, row['x']) if weights is not None else row['baseline']
+    for row, p in zip(rows, probabilities):
         y, weight = row['y'], observation_weight(row) / counts[row['match_id']] / len(counts)
         accuracy += weight * ((p >= .5) == bool(y))
         brier += weight * (p-y)**2
@@ -177,19 +189,35 @@ def fit_weights(rows: Sequence[Mapping[str, Any]], *, epochs: int = EPOCHS) -> l
 
 
 
-def train(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    ordered = sorted(rows, key=lambda r: (r['at'], r['match_id']))
-    match_times: dict[str, str] = {}
-    for row in ordered:
-        match_times.setdefault(row['match_id'], row['at'])
-    matches = sorted(match_times, key=lambda mid: (match_times[mid], mid))
+def train(rows: Sequence[Mapping[str, Any]], *,
+          partition: tuple[Sequence[Mapping[str, Any]], Sequence[Mapping[str, Any]]] | None = None,
+          epochs: int = EPOCHS) -> dict[str, Any]:
+    from core.model_validation import instant, ordered_matches
+    ordered = sorted(rows, key=lambda r: (instant(r['at']), str(r['match_id'])))
+    matches = ordered_matches(ordered)
     if len(matches) < MIN_MATCHES:
         raise ValueError('至少需要100场有效比赛')
     cut = int(len(matches) * .8)
-    training_ids = set(matches[:cut])
-    validation = [r for r in ordered if r['match_id'] not in training_ids]
-    # At validation entry time, every training label must already be known.
-    training = [r for r in ordered if r['match_id'] in training_ids and r['settled_at'] < validation[0]['at']]
+    if partition is None:
+        training_ids = set(matches[:cut])
+        validation = [r for r in ordered if str(r['match_id']) not in training_ids]
+        # At validation entry time, every training label must already be known.
+        boundary = instant(validation[0]['at'])
+        training = [r for r in ordered if str(r['match_id']) in training_ids
+                    and instant(r['settled_at']) < boundary]
+    else:
+        training, validation = (sorted(cohort, key=lambda r: (instant(r['at']), str(r['match_id'])))
+                                for cohort in partition)
+        if not training or not validation:
+            raise ValueError('明确时间分区不能为空')
+        training_ids = {str(r['match_id']) for r in training}
+        validation_ids = {str(r['match_id']) for r in validation}
+        if training_ids & validation_ids or not training_ids | validation_ids <= set(matches):
+            raise ValueError('明确时间分区包含重复比赛或未知比赛')
+        boundary = instant(validation[0]['at'])
+        if any(instant(r['settled_at']) >= boundary for r in training):
+            raise ValueError('时间隔离分区包含测试前尚不可用的标签')
+        cut = len(training_ids)
     if len({r['match_id'] for r in training}) < 60 or len({r['y'] for r in training}) < 2:
         raise ValueError('时间隔离后训练样本不足或只有一种标签')
     from core.oof_peer import (apply_peer_calibration, crossfit_peer_features,
@@ -197,7 +225,7 @@ def train(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     peer_calibration = peer_calibrations(training)
     training_oof = crossfit_peer_features(training)
     validation_calibrated = apply_peer_calibration(training, validation)
-    weights = fit_weights(training_oof)
+    weights = fit_weights(training_oof, epochs=epochs)
     return {'architecture': 'L2 Logistic offset + chronological OOF peer residual calibration', 'features': list(FEATURES),
             'data_version': DATA_VERSION,
             'feature_version': FEATURE_VERSION, 'offset': 'market_logit',
@@ -205,6 +233,9 @@ def train(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             'training': metrics(training_oof, weights),
             'validation': metrics(validation_calibrated, weights), 'baseline': metrics(validation, None),
             'validation_from': validation[0]['at'], 'validation_to': validation[-1]['at'],
-            'training_cutoff': max(r['settled_at'] for r in training),
+            'training_cutoff': max(training, key=lambda r: instant(r['settled_at']))['settled_at'],
+            'training_epochs': max(1, int(epochs)),
+            'training_match_ids': sorted(str(mid) for mid in {r['match_id'] for r in training}),
+            'validation_match_ids': sorted(str(mid) for mid in {r['match_id'] for r in validation}),
             'cohort_ids': matches, 'eligible_matches': len(matches),
             'excluded_by_embargo': cut - len({r['match_id'] for r in training})}

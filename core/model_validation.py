@@ -12,6 +12,7 @@ from core.settlement import split_line
 BOOTSTRAP_REPETITIONS = 300
 VALIDATION_SEED = 44001
 MIN_PROMOTION_MATCHES = 100
+EXECUTION_ALGORITHM = 'economic_ensemble'
 
 
 def observation_weight(row: Mapping[str, Any]) -> float:
@@ -107,7 +108,7 @@ def coherent_probabilities(rows: Sequence[Mapping[str, Any]], probabilities: Seq
     return result
 
 
-def evaluate(rows: Sequence[Mapping[str, Any]], probabilities: Sequence[float]) -> dict[str, Any]:
+def _evaluate(rows: Sequence[Mapping[str, Any]], probabilities: Sequence[float]) -> dict[str, Any]:
     if not rows:
         raise ValueError('评估样本为空')
     ps = coherent_probabilities(rows, probabilities)
@@ -159,6 +160,23 @@ def evaluate(rows: Sequence[Mapping[str, Any]], probabilities: Sequence[float]) 
             'complete_had_groups': sum(len(v) for v in top1.values())}
 
 
+def evaluate(rows: Sequence[Mapping[str, Any]], probabilities: Sequence[float]) -> dict[str, Any]:
+    """Report pooled scores and each algorithm's own match-weighted scores.
+
+    An auxiliary algorithm has a different one-hot/algorithm-probability input
+    from the ensemble used by live execution. Its improvement must therefore
+    remain separately visible instead of certifying the execution subgroup.
+    """
+    result = _evaluate(rows, probabilities)
+    positions: dict[str, list[int]] = defaultdict(list)
+    for index, row in enumerate(rows):
+        positions[str(row.get('algorithm') or 'unknown')].append(index)
+    result['by_algorithm'] = {
+        algorithm: _evaluate([rows[i] for i in indices], [probabilities[i] for i in indices])
+        for algorithm, indices in positions.items()}
+    return result
+
+
 def paired_evidence(rows: Sequence[Mapping[str, Any]], candidate: Sequence[float], baseline: Sequence[float]) -> dict[str, Any]:
     ps, bs = coherent_probabilities(rows, candidate), coherent_probabilities(rows, baseline)
     deltas: dict[str, list[tuple[float, float]]] = defaultdict(list)
@@ -175,19 +193,55 @@ def paired_evidence(rows: Sequence[Mapping[str, Any]], candidate: Sequence[float
             'seed': VALIDATION_SEED}
 
 
-def promotion(test: Mapping[str, Any], baseline: Mapping[str, Any], evidence: Mapping[str, Any], folds: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def execution_evidence(rows: Sequence[Mapping[str, Any]], candidate: Sequence[float],
+                       baseline: Sequence[float]) -> dict[str, Any]:
+    """Certify only the actual live ensemble route on identical held-out rows."""
+    if len(rows) != len(candidate) or len(rows) != len(baseline):
+        raise ValueError('执行子群预测数量与输入不一致')
+    indices = [i for i, row in enumerate(rows) if row.get('algorithm') == EXECUTION_ALGORITHM]
+    result: dict[str, Any] = {'algorithm': EXECUTION_ALGORITHM,
+                             'scope': 'chronological final fold; identical execution-contract rows',
+                             'available': bool(indices)}
+    if not indices:
+        return {**result, 'reason': '最终独立测试缺少实际执行算法样本'}
+    selected = [rows[i] for i in indices]
+    ps, bs = [candidate[i] for i in indices], [baseline[i] for i in indices]
+    return {**result, 'model': _evaluate(selected, ps), 'baseline': _evaluate(selected, bs),
+            'evidence': paired_evidence(selected, ps, bs)}
+
+
+def _score_reasons(test: Mapping[str, Any], baseline: Mapping[str, Any],
+                   evidence: Mapping[str, Any], prefix: str = '') -> list[str]:
     reasons = []
     if evidence['matches'] < MIN_PROMOTION_MATCHES:
-        reasons.append(f'独立测试比赛不足{MIN_PROMOTION_MATCHES}场')
-    if len(folds) < 3 or sum(f.get('delta_brier', 0) < 0 for f in folds) < 2:
-        reasons.append('滚动时间验证没有稳定优于市场')
+        reasons.append(prefix + f'独立测试比赛不足{MIN_PROMOTION_MATCHES}场')
     if evidence['ci95'][1] >= 0:
-        reasons.append('按比赛配对Brier区间尚未证明优于市场')
+        reasons.append(prefix + '按比赛配对Brier区间尚未证明优于市场')
     if test['log_loss'] > baseline['log_loss']:
-        reasons.append('测试log loss劣于市场')
+        reasons.append(prefix + '测试log loss劣于市场')
     for market, score in test.get('by_market', {}).items():
         ref = baseline.get('by_market', {}).get(market)
         if ref and score['matches'] >= 20 and score['brier'] > ref['brier'] + .01:
-            reasons.append(market + '测试表现明显退化')
+            reasons.append(prefix + market + '测试表现明显退化')
+    return reasons
+
+
+def promotion(test: Mapping[str, Any], baseline: Mapping[str, Any], evidence: Mapping[str, Any], folds: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    reasons = _score_reasons(test, baseline, evidence)
+    if len(folds) < 3 or sum(f.get('delta_brier', 0) < 0 for f in folds) < 2:
+        reasons.append('滚动时间验证没有稳定优于市场')
+    execution = evidence.get('execution_cohort')
+    execution_reasons = []
+    if (not isinstance(execution, Mapping) or not execution.get('available')
+            or execution.get('algorithm') != EXECUTION_ALGORITHM
+            or any(not isinstance(execution.get(key), Mapping) for key in ('model', 'baseline', 'evidence'))):
+        execution_reasons.append('实际执行算法缺少独立测试证据，不能晋级')
+    else:
+        execution_reasons = _score_reasons(execution['model'], execution['baseline'],
+                                          execution['evidence'], '实际执行算法：')
+    reasons.extend(execution_reasons)
     return {'approved': not reasons, 'reasons': reasons, 'evidence': dict(evidence),
-            'minimum_test_matches': MIN_PROMOTION_MATCHES, 'basis': '独立测试与按场置信区间；前瞻表现另行记录'}
+            'execution_required': True, 'execution_algorithm': EXECUTION_ALGORITHM,
+            'execution_approved': not execution_reasons,
+            'minimum_test_matches': MIN_PROMOTION_MATCHES,
+            'basis': '独立测试与按场置信区间；实际执行算法单独过门槛；前瞻表现另行记录'}

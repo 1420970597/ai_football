@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.economics import effective_ev as economics_effective_ev, fractional_kelly, q_fill_model
-from core.ensemble import cohere_candidates
+from core.model_validation import coherent_probabilities
 from core.learned_model import compatible_model, features, predict
 from core.oof_peer import calibrate_peer_vector
 from core.decision_features import FEATURE_VERSION, verified_context, visible_history
@@ -95,7 +95,10 @@ def calibrate(ensemble: Mapping[str, Any], evaluations: list[dict[str, Any]],
             c['decision_model_version'] = model['version']
         # Cohere the learned outcomes first, then blend with the already
         # coherent economic ensemble. This makes the documented formula exact.
-        cohere_candidates(out['candidates'])
+        probabilities = coherent_probabilities(
+            out['candidates'], [float(c['p_model']) for c in out['candidates']])
+        for c, probability in zip(out['candidates'], probabilities):
+            c['p_model'] = round(probability, 6)
         for c in out['candidates']:
             c['learned_probability'] = float(c['p_model'])
             c['p_model'] = round((1 - weight) * c['algorithm_probability'] +

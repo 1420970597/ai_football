@@ -1,8 +1,8 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from core.model_validation import (coherent_probabilities, evaluate, paired_evidence,
-                                   promotion, rolling_folds)
+from core.model_validation import (coherent_probabilities, evaluate, execution_evidence,
+                                   paired_evidence, promotion, rolling_folds)
 
 
 def rows(count=120):
@@ -17,6 +17,80 @@ def rows(count=120):
 
 
 class ModelValidationTests(unittest.TestCase):
+    def execution_case(self, execution_probability=.8, count=120, include_execution=True):
+        source, candidate, baseline = [], [], []
+        algorithms = ['a', 'b', 'c', 'd', 'e'] + (['economic_ensemble'] if include_execution else [])
+        for match in range(count):
+            for algorithm in algorithms:
+                for outcome, target in [('over', 1), ('under', 0)]:
+                    source.append({'match_id': str(match), 'at': 't', 'algorithm': algorithm,
+                                   'market': 'OU', 'line': '2.5', 'outcome': outcome, 'y': target})
+                    probability = execution_probability if algorithm == 'economic_ensemble' else .8
+                    candidate.append(probability if target else 1 - probability)
+                    baseline.append(.55 if target else .45)
+        test, market = evaluate(source, candidate), evaluate(source, baseline)
+        evidence = paired_evidence(source, candidate, baseline)
+        evidence['execution_cohort'] = execution_evidence(source, candidate, baseline)
+        folds = [{'delta_brier': test['brier'] - market['brier']}] * 3
+        return test, market, evidence, folds
+
+    def test_actual_execution_subgroup_can_certify_normal_promotion(self):
+        test, market, evidence, folds = self.execution_case()
+        self.assertEqual(test['by_algorithm']['economic_ensemble']['matches'], 120)
+        self.assertLess(test['by_algorithm']['economic_ensemble']['brier'],
+                        market['by_algorithm']['economic_ensemble']['brier'])
+        decision = promotion(test, market, evidence, folds)
+        self.assertTrue(decision['approved'], decision['reasons'])
+        self.assertTrue(decision['execution_approved'])
+        self.assertTrue(decision['execution_required'])
+
+    def test_aggregate_improvement_cannot_hide_execution_subgroup_regression(self):
+        test, market, evidence, folds = self.execution_case(.35)
+        self.assertLess(evidence['ci95'][1], 0)
+        self.assertLess(test['log_loss'], market['log_loss'])
+        self.assertLess(test['brier'], market['brier'])
+        execution = evidence['execution_cohort']
+        self.assertGreater(execution['model']['brier'], execution['baseline']['brier'])
+        decision = promotion(test, market, evidence, folds)
+        self.assertFalse(decision['approved'])
+        self.assertFalse(decision['execution_approved'])
+        self.assertTrue(any('实际执行算法' in reason for reason in decision['reasons']))
+
+    def test_missing_or_small_execution_cohort_cannot_promote(self):
+        for include_execution, count in [(False, 120), (True, 30)]:
+            with self.subTest(include_execution=include_execution, count=count):
+                test, market, evidence, folds = self.execution_case(
+                    count=count, include_execution=include_execution)
+                decision = promotion(test, market, evidence, folds)
+                self.assertFalse(decision['approved'])
+                self.assertFalse(decision['execution_approved'])
+        test, market, evidence, folds = self.execution_case()
+        del evidence['execution_cohort']
+        decision = promotion(test, market, evidence, folds)
+        self.assertFalse(decision['approved'])
+        self.assertIn('实际执行算法缺少独立测试证据，不能晋级', decision['reasons'])
+
+    def test_execution_market_regression_is_rejected_despite_execution_aggregate_gain(self):
+        source, candidate, baseline = [], [], []
+        for match in range(120):
+            for market, line, probability, outcomes in [
+                    ('OU', '2.5', .35, ('over', 'under')),
+                    ('AH', '0.5', .95, ('home', 'away')),
+                    ('AH', '1.5', .95, ('home', 'away')),
+                    ('AH', '2.5', .95, ('home', 'away'))]:
+                for outcome, target in zip(outcomes, (1, 0)):
+                    source.append({'match_id': str(match), 'at': 't', 'algorithm': 'economic_ensemble',
+                                   'market': market, 'line': line, 'outcome': outcome, 'y': target})
+                    candidate.append(probability if target else 1 - probability)
+                    baseline.append(.55 if target else .45)
+        test, market = evaluate(source, candidate), evaluate(source, baseline)
+        evidence = paired_evidence(source, candidate, baseline)
+        evidence['execution_cohort'] = execution_evidence(source, candidate, baseline)
+        self.assertLess(evidence['ci95'][1], 0)
+        decision = promotion(test, market, evidence, [{'delta_brier': -.01}] * 3)
+        self.assertFalse(decision['approved'])
+        self.assertIn('实际执行算法：OU测试表现明显退化', decision['reasons'])
+
     def test_active_backup_and_explicit_rollback_require_approved_compatible_model(self):
         import json
         import tempfile

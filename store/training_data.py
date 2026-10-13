@@ -5,11 +5,11 @@ from contextlib import closing
 from datetime import datetime, timezone
 
 import json
-import hashlib
-import heapq
+from itertools import groupby
 import math
 from pathlib import Path
 import sqlite3
+import time
 from typing import Any, Iterable, Mapping
 
 from core.learned_model import DATA_VERSION, compatible_model, features
@@ -150,6 +150,8 @@ INPUT_COLUMNS = ('match_id', 'at', 'cutoff_ms', 'algorithm', 'market', 'line', '
                  'feature_version')
 
 POSTGRES_INSERT_BATCH_ROWS = 256
+POSTGRES_SAMPLE_TIME_POINTS = 8
+POSTGRES_SAMPLE_MATCH_BATCH = 64
 
 
 def _insert_postgres_rows(cursor: Any, table: str, columns: tuple[str,...],
@@ -323,11 +325,12 @@ def _labels_postgres(connection: Any, *, fetch_size: int) -> dict[str, dict[str,
         # compact migration projection. A missing table or failed query must
         # fail closed; retrying inside a PostgreSQL aborted transaction would
         # only hide the real schema/replication problem.
-        cursor.execute("SELECT match_id,available_at,ft_score,ht_score,revision_order,revision_id "
+        cursor.execute("SELECT DISTINCT ON (match_id) match_id,available_at,ft_score,ht_score,revision_order,revision_id "
+                       "FROM (SELECT match_id,available_at,ft_score,ht_score,revision_order,revision_id "
                        "FROM model_labels WHERE status IN ('won','lost','half_won','half_lost','push','void') "
                        "UNION ALL SELECT match_id,available_at,ft_score,ht_score,revision_order,revision_id "
-                       "FROM label_revisions WHERE status IN ('won','lost','half_won','half_lost','push','void') "
-                       "ORDER BY revision_order,revision_id")
+                       "FROM label_revisions WHERE status IN ('won','lost','half_won','half_lost','push','void')) labels "
+                       "ORDER BY match_id,revision_order DESC,revision_id DESC")
         while True:
             batch = cursor.fetchmany(fetch_size)
             if not batch:
@@ -342,10 +345,8 @@ def _labels_postgres(connection: Any, *, fetch_size: int) -> dict[str, dict[str,
                 if ft_score is None:
                     continue
                 mid = str(row['match_id'])
-                if (str(row['available_at']), str(row.get('revision_id') or '')) >= (
-                        str(result.get(mid, {}).get('settled_at', '')), ''):
-                    result[mid] = {'ft_score': ft_score, 'ht_score': ht_score,
-                                   'settled_at': str(row['available_at'])}
+                result[mid] = {'ft_score': ft_score, 'ht_score': ht_score,
+                               'settled_at': str(row['available_at'])}
     finally:
         cursor.close()
     return result
@@ -371,7 +372,6 @@ def _dataset_postgres(projection: ProjectionTarget, *, audit: dict[str, Any] | N
         'sample_valid_training_decisions': 0, 'sample_ungraded_inputs': 0,
         'sample_missing_labels': 0,
     }
-    buckets: dict[str, list] = {}
     target_cache: dict[tuple[Any, ...], tuple[int, float] | None] = {}
     source_count = 0
     with readonly_snapshot(projection) as con:
@@ -405,20 +405,11 @@ def _dataset_postgres(projection: ProjectionTarget, *, audit: dict[str, Any] | N
                 " AND decision_received_at_ms <= cutoff_ms"
                 " AND quote_received_at_ms > 0 AND quote_received_at_ms < " + finite +
                 " AND quote_received_at_ms <= cutoff_ms")
-            # LedgerDB writes append-only label_revisions. model_labels is a
-            # compact migration projection, so the join must use the latest
-            # row from both tables instead of requiring the compact table to
-            # be populated first.
-            label_source = ("SELECT match_id,available_at,revision_order,revision_id "
-                            "FROM model_labels WHERE status IN "
-                            "('won','lost','half_won','half_lost','push','void') "
-                            "UNION ALL SELECT match_id,available_at,revision_order,revision_id "
-                            "FROM label_revisions WHERE status IN "
-                            "('won','lost','half_won','half_lost','push','void')")
-            latest_labels = ('(SELECT match_id,available_at FROM ('
-                             'SELECT match_id,available_at,ROW_NUMBER() OVER '
-                             '(PARTITION BY match_id ORDER BY revision_order DESC,revision_id DESC) AS rn '
-                             'FROM (' + label_source + ') AS all_labels) AS ranked WHERE rn=1)')
+            # Reuse the same latest revisions used to grade rows. Sorting the
+            # append-only revision log again costs another large remote scan
+            # and could select a different revision from the Python grader.
+            latest_labels = ('(SELECT match_id,available_at FROM '
+                             'unnest(%s::text[],%s::text[]) AS labels(match_id,available_at))')
             # Bound the remote result before Python decodes feature JSON. A
             # global ROW_NUMBER over 23M rows is too expensive on a remote PG
             # server, so drive the query from the small latest-label set and
@@ -427,57 +418,84 @@ def _dataset_postgres(projection: ProjectionTarget, *, audit: dict[str, Any] | N
             # enter the training sample.
             source_sql, source_args = _postgres_training_sample_query(
                 latest_labels, time_filter, version_args, max_per_match)
-            cursor.execute(source_sql, source_args)
             seen_by_match: dict[str, int] = {}
-            while True:
-                batch = cursor.fetchmany(projection.fetch_size)
-                if not batch:
-                    break
-                for values in batch:
-                    raw = _pg_row(cursor, values)
-                    mid = str(raw['match_id'])
-                    seen_by_match[mid] = seen_by_match.get(mid, 0) + 1
-                    counts['sample_examined_records'] += 1
-                    final = finals.get(mid)
-                    if not final:
-                        counts['sample_missing_labels'] += 1
-                        continue
-                    target_key = (raw.get('market'), raw.get('outcome'), raw.get('line'),
-                                  raw.get('settlement_basis'), raw.get('entry_score'),
-                                  final['ft_score'], final.get('ht_score'))
-                    if target_key not in target_cache:
-                        if len(target_cache) >= TARGET_CACHE_LIMIT:
-                            target_cache.clear()
-                        target_cache[target_key] = target(raw, final)
-                    paid = target_cache[target_key]
-                    if paid is None:
-                        counts['sample_ungraded_inputs'] += 1
-                        continue
-                    y, weight = paid
-                    source_count += 1
-                    key = tuple(raw[k] for k in ('match_id', 'at', 'algorithm', 'market', 'line', 'outcome'))
-                    item = {'match_id': raw['match_id'], 'at': raw['at'],
-                            'settled_at': final['settled_at'], 'x': json.loads(raw['x']), 'y': y,
-                            'observation_weight': weight, 'baseline': raw['baseline'],
-                            'algorithm': raw['algorithm'], 'market': raw['market'],
-                            'line': raw['line'], 'outcome': raw['outcome']}
-                    if max_per_match is None:
+            sampled_buckets: set[tuple[str, int]] = set()
+            empty_buckets: set[tuple[str, int]] = set()
+            empty_curves: set[tuple[str, int]] = set()
+            no_input_matches: set[str] = set()
+            match_ids = sorted(finals)
+            batch_seconds = []
+            cursor.execute('SET LOCAL jit=off')
+            for offset in range(0, len(match_ids), POSTGRES_SAMPLE_MATCH_BATCH):
+                label_batch = match_ids[offset:offset + POSTGRES_SAMPLE_MATCH_BATCH]
+                label_args = (label_batch, [finals[mid]['settled_at'] for mid in label_batch])
+                batch_started = time.monotonic()
+                cursor.execute(source_sql, (*label_args, *source_args))
+                while True:
+                    batch = cursor.fetchmany(projection.fetch_size)
+                    if not batch:
+                        break
+                    for values in batch:
+                        raw = _pg_row(cursor, values)
+                        if max_per_match is not None and '_sample_label_match' in raw:
+                            bucket_key = (str(raw['_sample_label_match']), int(raw['_sample_bucket']))
+                            sampled_buckets.add(bucket_key)
+                            if raw.get('_sample_first_at') is None:
+                                no_input_matches.add(bucket_key[0])
+                            elif raw.get('_sample_at') is None:
+                                empty_buckets.add(bucket_key)
+                            elif raw.get('match_id') is None:
+                                empty_curves.add(bucket_key)
+                            if raw.get('match_id') is None:
+                                continue
+                        mid = str(raw['match_id'])
+                        seen_by_match[mid] = seen_by_match.get(mid, 0) + 1
+                        counts['sample_examined_records'] += 1
+                        final = finals.get(mid)
+                        if not final:
+                            counts['sample_missing_labels'] += 1
+                            continue
+                        target_key = (raw.get('market'), raw.get('outcome'), raw.get('line'),
+                                      raw.get('settlement_basis'), raw.get('entry_score'),
+                                      final['ft_score'], final.get('ht_score'))
+                        if target_key not in target_cache:
+                            if len(target_cache) >= TARGET_CACHE_LIMIT:
+                                target_cache.clear()
+                            target_cache[target_key] = target(raw, final)
+                        paid = target_cache[target_key]
+                        if paid is None:
+                            counts['sample_ungraded_inputs'] += 1
+                            continue
+                        y, weight = paid
+                        source_count += 1
+                        item = {'match_id': raw['match_id'], 'at': raw['at'],
+                                'settled_at': final['settled_at'], 'x': json.loads(raw['x']), 'y': y,
+                                'observation_weight': weight, 'baseline': raw['baseline'],
+                                'algorithm': raw['algorithm'], 'market': raw['market'],
+                                'line': raw['line'], 'outcome': raw['outcome']}
+                        # SQL caps complete contract groups. A second row-level
+                        # reservoir here would split those groups again.
                         rows.append(item)
-                    else:
-                        priority = int.from_bytes(hashlib.sha256(json.dumps(key).encode()).digest()[:8], 'big')
-                        bucket = buckets.setdefault(mid, [])
-                        candidate = (-priority, source_count, item)
-                        if len(bucket) < max_per_match:
-                            heapq.heappush(bucket, candidate)
-                        elif candidate[0] > bucket[0][0]:
-                            heapq.heapreplace(bucket, candidate)
-                    counts['sample_valid_training_decisions'] += 1
+                        counts['sample_valid_training_decisions'] += 1
+                batch_seconds.append(time.monotonic() - batch_started)
             counts['sample_examined_matches'] = len(seen_by_match)
+            counts.update(sample_label_matches=len(finals),
+                          sample_query_batches=len(batch_seconds),
+                          sample_query_match_batch=POSTGRES_SAMPLE_MATCH_BATCH,
+                          sample_query_seconds=sum(batch_seconds),
+                          sample_max_query_batch_seconds=max(batch_seconds, default=0.0),
+                          sample_label_matches_without_inputs=len(no_input_matches),
+                          sample_label_matches_without_rows=len(set(finals) - set(seen_by_match)),
+                          sample_time_buckets=len(sampled_buckets),
+                          sample_empty_time_buckets=len(empty_buckets),
+                          sample_time_buckets_without_valid_curves=len(empty_curves),
+                          sample_max_rows_per_match=max(seen_by_match.values(), default=0),
+                          sample_mean_rows_per_nonempty_match=(sum(seen_by_match.values()) / len(seen_by_match)
+                                                              if seen_by_match else 0.0))
         finally:
             cursor.close()
-        if max_per_match is not None:
-            rows = sorted((item[2] for bucket in buckets.values() for item in bucket),
-                          key=lambda row: row['at'])
+        rows.sort(key=lambda row: (row['at'], row['match_id'], row['algorithm'],
+                                  row['market'], row['line'], row['outcome']))
         if audit is not None:
             if max_per_match is None:
                 # All qualified inputs were graded, but rows excluded by SQL
@@ -488,7 +506,11 @@ def _dataset_postgres(projection: ProjectionTarget, *, audit: dict[str, Any] | N
                          source_eligible_decisions=source_count if max_per_match is None else None,
                          source_eligible_decisions_scope=counts['counts_scope'],
                          training_max_rows_per_match=max_per_match,
-                         sampling_method=('earliest_qualified_inputs_per_match' if max_per_match is not None
+                         sampling_cap_basis='soft row target; preserve every line/outcome in selected market curves',
+                         sampling_row_bound=None,
+                         sampling_time_axis='version-qualified pre-settlement decision times; complete curve clock gates applied afterwards',
+                         sampling_unit='match_id,at,algorithm,market',
+                         sampling_method=('time_stratified_market_curves_per_match' if max_per_match is not None
                                           else 'all_qualified_inputs'),
                          projection_backend='postgresql')
     return rows
@@ -512,12 +534,87 @@ def _postgres_training_sample_query(latest_labels: str, time_filter: str,
                 'ON l.match_id=i.match_id WHERE i.data_version=%s AND i.model_version=%s '
                 'AND i.feature_version=%s AND ' + qualified_time + ' AND l.available_at > i.at',
                 version_args)
-    sql = ('SELECT i.* FROM ' + latest_labels + ' l CROSS JOIN LATERAL '
-           '(SELECT i.* FROM model_inputs i WHERE i.match_id=l.match_id '
-           'AND i.data_version=%s AND i.model_version=%s AND i.feature_version=%s AND ' +
-           qualified_time + ' AND l.available_at > i.at '
-           'ORDER BY i.at,i.algorithm,i.market,i.line,i.outcome LIMIT %s) i')
-    return sql, (*version_args, max_per_match)
+    # The old PG path selected the earliest rows. Ranking every row per match
+    # spreads the sample correctly but scans too much of the remote projection.
+    # Find the first/last qualified timestamps through the existing index,
+    # divide that observed range into a small fixed number of time buckets,
+    # and sample a bounded set of rows from one quote snapshot in each bucket.
+    # Bucket boundaries use decision timestamps only; result labels only gate
+    # eligibility and never affect the selected point.
+    # The version/match/time index covers this decision-time axis. Applying
+    # clock predicates here forces a remote heap lookup per candidate point.
+    # Every selected curve below still must satisfy all clock predicates.
+    eligible_axis = ('i.match_id=l.match_id AND i.data_version=%s AND i.model_version=%s '
+                     'AND i.feature_version=%s AND l.available_at > i.at')
+    endpoint = ('SELECT i.at FROM model_inputs i WHERE ' + eligible_axis +
+                ' ORDER BY i.at {direction} LIMIT 1')
+    points = min(POSTGRES_SAMPLE_TIME_POINTS, max_per_match)
+    rows_per_point, extra_rows = divmod(max_per_match, points)
+    lower_epoch = ("extract(epoch FROM bounds.first_at::timestamptz) + "
+                   "(extract(epoch FROM bounds.last_at::timestamptz) - "
+                   "extract(epoch FROM bounds.first_at::timestamptz)) * bucket.bucket_no / "
+                   + str(points))
+    upper_epoch = ("extract(epoch FROM bounds.first_at::timestamptz) + "
+                   "(extract(epoch FROM bounds.last_at::timestamptz) - "
+                   "extract(epoch FROM bounds.first_at::timestamptz)) * (bucket.bucket_no + 1) / "
+                   + str(points))
+    timestamp_format = "'YYYY-MM-DD\"T\"HH24:MI:SS.US'"
+    lower_at = "to_char(to_timestamp(" + lower_epoch + ") AT TIME ZONE 'UTC'," + timestamp_format + ") || '+00:00'"
+    upper_at = "to_char(to_timestamp(" + upper_epoch + ") AT TIME ZONE 'UTC'," + timestamp_format + ") || '+00:00'"
+    sql = ('WITH sampling_labels AS MATERIALIZED ' + latest_labels +
+           ' SELECT picked.*,l.match_id AS _sample_label_match,bucket.bucket_no AS _sample_bucket, '
+           'bounds.first_at AS _sample_first_at,selected_point.at AS _sample_at '
+           'FROM sampling_labels l CROSS JOIN LATERAL '
+           '(SELECT (' + endpoint.format(direction='ASC') + ') AS first_at, '
+           '(' + endpoint.format(direction='DESC') + ') AS last_at OFFSET 0) bounds '
+           'CROSS JOIN LATERAL (SELECT bucket_no FROM generate_series(0,' +
+           str(points - 1) + ') AS fixed_buckets(bucket_no) WHERE bounds.first_at<>bounds.last_at '
+           'OR bucket_no=0 OFFSET 0) AS bucket '
+           'CROSS JOIN LATERAL (SELECT ' + lower_at + ' AS lower_at, ' + upper_at + ' AS upper_at) time_bucket '
+           'LEFT JOIN LATERAL (SELECT i.at FROM model_inputs i WHERE ' + eligible_axis +
+           ' AND i.at>=time_bucket.lower_at AND i.at<=time_bucket.upper_at '
+           'AND (i.at<time_bucket.upper_at OR '
+           '((bucket.bucket_no=' + str(points - 1) + ' OR bounds.first_at=bounds.last_at) '
+           'AND i.at<=time_bucket.upper_at)) '
+           'ORDER BY i.at LIMIT 1) selected_point ON TRUE '
+           'LEFT JOIN LATERAL (SELECT grouped.* FROM (SELECT identities.*, '
+           '1 + COALESCE(SUM(_curve_rows) OVER (ORDER BY '
+           'hashtextextended(concat_ws(\'|\',algorithm,market),bucket.bucket_no),'
+           'algorithm,market ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) AS _group_start '
+           'FROM (SELECT i.algorithm,i.market,COUNT(*) AS _curve_rows FROM model_inputs i '
+           'WHERE i.match_id=l.match_id AND i.at=selected_point.at '
+           'GROUP BY i.algorithm,i.market) identities) grouped '
+           'WHERE grouped._group_start<=CASE WHEN bounds.first_at=bounds.last_at THEN ' +
+           str(max_per_match) + ' ELSE ' + str(rows_per_point) +
+           '+CASE WHEN bucket.bucket_no<' + str(extra_rows) + ' THEN 1 ELSE 0 END END) selected_curve ON TRUE '
+           'LEFT JOIN LATERAL (SELECT checked.* FROM (SELECT i.*, '
+           'BOOL_AND(COALESCE((' + qualified_time + ' AND i.data_version=%s '
+           'AND i.model_version=%s AND i.feature_version=%s),FALSE)) OVER () AS _curve_valid '
+           'FROM model_inputs i WHERE i.match_id=l.match_id AND i.at=selected_point.at '
+           'AND i.algorithm=selected_curve.algorithm AND i.market=selected_curve.market) checked '
+           'WHERE checked._curve_valid) picked ON TRUE')
+    return sql, (*version_args, *version_args, *version_args, *version_args)
+
+
+def _selected_contract_rows(source: Iterable[sqlite3.Row], totals: Mapping[str, int],
+                            cap: int | None) -> Iterable[tuple[sqlite3.Row, bool]]:
+    """Mark evenly spaced market curves without splitting lines or outcomes."""
+    if cap is None:
+        for row in source:
+            yield row, True
+        return
+    seen: dict[str, int] = {}
+    def identity(row: sqlite3.Row) -> tuple:
+        return tuple(row[k] for k in ('match_id', 'at', 'algorithm', 'market'))
+    for key, members in groupby(source, identity):
+        group = list(members)
+        mid = str(key[0])
+        before = seen.get(mid, 0)
+        after = before + len(group)
+        seen[mid] = after
+        selected = after * cap // totals[mid] > before * cap // totals[mid]
+        for row in group:
+            yield row, selected
 
 
 def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] | None = None,
@@ -534,27 +631,12 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
     counts = {'input_records': 0, 'input_matches': 0, 'valid_training_decisions': 0, 'waiting_for_label': 0,
               'quarantined_inputs': 0, 'quarantined_ledger': 0, 'ungraded_inputs': 0,
               'quarantined_missing_time_contract': 0, 'eligible_time_contract': 0}
-    buckets: dict[str, list] = {}
     source_count = 0
     # Most rows in a match share the same score/line/basis.  Settlement is
     # deterministic, so memoizing it removes millions of repeated JSON parses
     # and split-line calculations while preserving the exact target function.
     target_cache: dict[tuple[Any, ...], tuple[int, float] | None] = {}
     match_totals: dict[str, int] = {}
-    def collect(row: dict[str, Any], identity: tuple) -> None:
-        nonlocal source_count
-        if max_per_match is None:
-            rows.append(row)
-            return
-        # Deterministic min-hash sampling depends only on pre-result identity.
-        # Restore every input, but bound training memory/CPU without favoring wins.
-        priority = int.from_bytes(hashlib.sha256(json.dumps(identity).encode()).digest()[:8], 'big')
-        bucket = buckets.setdefault(row['match_id'], [])
-        item = (-priority, source_count, row)
-        if len(bucket) < max_per_match:
-            heapq.heappush(bucket, item)
-        elif item[0] > bucket[0][0]:
-            heapq.heapreplace(bucket, item)
     try:
         finals = labels(con)
         if inputs_path and inputs_path.exists():
@@ -619,22 +701,36 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                             'SELECT count(*)' + available_filter, version_args).fetchone()[0]
                         counts['waiting_for_label'] = (counts['eligible_time_contract'] -
                                                        counts['labelled_time_contract'])
+                        # Cross-line coherence needs every outcome/line from
+                        # the original market curve. Dropping just an invalid
+                        # clock row would silently change the evaluated curve.
+                        curve_filter = (" AND NOT EXISTS (SELECT 1 FROM inputs AS j "
+                            "WHERE j.match_id=i.match_id AND j.at=i.at AND j.algorithm=i.algorithm "
+                            "AND j.market=i.market AND j.data_version=i.data_version "
+                            "AND j.model_version=i.model_version AND j.feature_version=i.feature_version "
+                            "AND NOT COALESCE((" + qualified_time_filter.replace('i.', 'j.') + "),0))")
+                        complete_curve_filter = available_filter + curve_filter
+                        complete_count = inputs.execute('SELECT count(*)' + complete_curve_filter,
+                                                        version_args).fetchone()[0]
+                        counts['quarantined_incomplete_market_curve_inputs'] = (
+                            counts['labelled_time_contract'] - complete_count)
                         # Do not sort millions of rows in a temporary SQLite
                         # result. The final sampled rows are sorted in Python.
-                        source = inputs.execute('SELECT i.*' + available_filter, version_args)
+                        source_query = 'SELECT i.*' + complete_curve_filter
+                        if max_per_match is not None:
+                            source_query += ' ORDER BY i.match_id,i.at,i.algorithm,i.market,i.line,i.outcome'
+                        source = inputs.execute(source_query, version_args)
                         match_totals = {
                             str(mid): int(total) for mid, total in inputs.execute(
-                                'SELECT i.match_id, count(*)' + available_filter +
+                                'SELECT i.match_id, count(*)' + complete_curve_filter +
                                 ' GROUP BY i.match_id', version_args)
                         }
                     else:
                         counts['quarantined_missing_time_contract'] = versioned_rows
                 else:
                     counts['quarantined_inputs'] = inputs.execute('SELECT count(*) FROM inputs').fetchone()[0]
-                seen_by_match: dict[str, int] = {}
-                for r in source:
+                for r, selected in _selected_contract_rows(source, match_totals, max_per_match):
                     mid = str(r['match_id'])
-                    seen_by_match[mid] = seen_by_match.get(mid, 0) + 1
                     final = finals.get(mid)
                     if not final:
                         continue
@@ -662,16 +758,13 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                         continue
                     y, weight = paid
                     source_count += 1
-                    total = match_totals.get(mid, 0)
-                    if (max_per_match is not None and total > max_per_match and
-                            ((seen_by_match[mid] - 1) * max_per_match) % total >= max_per_match):
+                    if not selected:
                         counts['valid_training_decisions'] += 1
                         continue
-                    key = tuple(r[k] for k in ('match_id', 'at', 'algorithm', 'market', 'line', 'outcome'))
-                    collect({'match_id': r['match_id'], 'at': r['at'], 'settled_at': final['settled_at'],
+                    rows.append({'match_id': r['match_id'], 'at': r['at'], 'settled_at': final['settled_at'],
                              'x': json.loads(r['x']), 'y': y, 'observation_weight': weight,
                              'baseline': r['baseline'], 'algorithm': r['algorithm'],
-                             'market': r['market'], 'line': r['line'], 'outcome': r['outcome']}, key)
+                             'market': r['market'], 'line': r['line'], 'outcome': r['outcome']})
                     counts['valid_training_decisions'] += 1
         # Only corrected model generations can supply fallback features. Old peer logits
         # and predictions cannot be repaired by relabeling their final outcomes.
@@ -686,7 +779,8 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                 "AND model_version=? AND status IN ('won','lost','half_won','half_lost')", (MODEL_VERSION,)).fetchone()[0]
         if audit is not None:
             invalid = (counts['quarantined_inputs'] + counts['quarantined_ledger'] +
-                       counts['quarantined_missing_time_contract'] + counts['ungraded_inputs'])
+                       counts['quarantined_missing_time_contract'] + counts['ungraded_inputs'] +
+                       counts.get('quarantined_incomplete_market_curve_inputs', 0))
             audit.update(counts, invalid_training_records=invalid,
                          source_eligible_decisions=source_count,
                          training_max_rows_per_match=max_per_match,
@@ -694,11 +788,14 @@ def dataset(db: Path, inputs_path: Path | None = None, *, audit: dict[str, Any] 
                          full_audit_complete=True, sampled=False,
                          training_sampled=max_per_match is not None,
                          source_eligible_decisions_scope='full_inputs',
-                         sampling_method=('evenly_spaced_then_min_hash_per_match' if max_per_match is not None
+                         sampling_cap_basis='soft row target; preserve every line/outcome in selected market curves',
+                         sampling_row_bound=None,
+                         sampling_unit='match_id,at,algorithm,market',
+                         sampling_method=('evenly_spaced_market_curves_per_match' if max_per_match is not None
                                           else 'all_qualified_inputs'),
                          projection_backend='sqlite')
-        if max_per_match is not None:
-            rows = sorted((item[2] for bucket in buckets.values() for item in bucket), key=lambda r:r['at'])
+        rows.sort(key=lambda row: (row['at'], row['match_id'], row['algorithm'],
+                                  row['market'], row['line'], row['outcome']))
         return rows
     finally:
         con.close()

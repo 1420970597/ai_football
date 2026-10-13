@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import nullcontext
 from unittest.mock import patch
 
@@ -33,6 +33,7 @@ def decision():
 
 
 class TrainingDataTests(unittest.TestCase):
+
     def test_postgres_insert_batches_are_bounded_and_parameterized(self):
         from store.training_data import _insert_postgres_rows
         calls = []
@@ -126,8 +127,11 @@ class TrainingDataTests(unittest.TestCase):
                       'source_eligible_decisions'):
             with self.subTest(field=field):
                 self.assertIsNone(quality[field])
-        self.assertFalse(any('COUNT(' in operation.upper() for operation in statements))
-        self.assertEqual(quality['sampling_method'], 'earliest_qualified_inputs_per_match')
+        # Sampling is bounded independently from exact archive quality counts.
+        self.assertFalse(any('SELECT COUNT(' in operation.upper() for operation in statements))
+        self.assertEqual(quality['sampling_method'], 'time_stratified_market_curves_per_match')
+        self.assertEqual(quality['sample_label_matches'], 1)
+        self.assertEqual(quality['sample_max_rows_per_match'], 2)
 
     def test_postgres_empty_sample_leaves_unknown_quality_unknown(self):
         for estimate in (None, (-1, None), (0, None)):
@@ -154,19 +158,153 @@ class TrainingDataTests(unittest.TestCase):
         self.assertIsNone(quality['quarantined_inputs'])
         self.assertIsNone(quality['waiting_for_label'])
 
-    def test_postgres_training_query_uses_index_driven_lateral_sampling(self):
+    def test_postgres_training_query_uses_bounded_stratified_time_sampling(self):
         labels = "(SELECT match_id, available_at FROM latest_labels)"
         time_filter = "cutoff_ms > 0 AND decision_received_at_ms <= cutoff_ms AND quote_received_at_ms <= cutoff_ms"
         query, args = _postgres_training_sample_query(
             labels, time_filter, ("data-v", "model-v", "feature-v"), 40)
 
         self.assertIn("CROSS JOIN LATERAL", query)
-        self.assertIn("ORDER BY i.at,i.algorithm,i.market,i.line,i.outcome LIMIT %s", query)
-        self.assertNotIn("ROW_NUMBER() OVER (PARTITION BY i", query)
-        self.assertEqual(args, ("data-v", "model-v", "feature-v", 40))
+        self.assertIn("generate_series(0,7)", query)
+        self.assertIn("GROUP BY i.algorithm,i.market", query)
+        self.assertIn("BOOL_AND(COALESCE(", query)
+        self.assertIn("ORDER BY i.at ASC", query)
+        self.assertIn("ORDER BY i.at DESC", query)
+        self.assertIn("time_bucket.lower_at", query)
+        self.assertIn("i.at<=time_bucket.upper_at", query)
+        self.assertIn("selected_point.at", query)
+        self.assertIn("hashtextextended(concat_ws", query)
+        self.assertNotIn("COUNT(*) OVER", query)
+        self.assertEqual(args, ("data-v", "model-v", "feature-v") * 4)
         self.assertIn("l.available_at > i.at", query)
         self.assertIn("i.decision_received_at_ms <= i.cutoff_ms", query)
         self.assertIn("i.quote_received_at_ms <= i.cutoff_ms", query)
+
+    def test_evenly_spaced_sampling_returns_exact_cap_for_shared_divisors(self):
+        for total, cap in ((100, 40), (120, 40), (12, 4), (41, 40), (4, 40)):
+            selected = [row for row in range(1, total + 1)
+                        if row * cap // total > (row - 1) * cap // total]
+            with self.subTest(total=total, cap=cap):
+                self.assertEqual(len(selected), min(total, cap))
+                if total > cap:
+                    self.assertEqual(selected[-1], total)
+
+    def test_sqlite_sampling_keeps_full_cap_across_match_timeline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = LedgerDB(root/'ledger.sqlite3')
+            final = {'match_id':'m1', 'at':'2025-01-01T12:00:00+00:00',
+                     'settled_at':'2025-01-01T14:00:00+00:00', 'competition_type':'real',
+                     'status':'won', 'ft_score':[2,1], 'ht_score':[1,0],
+                     'label_available_at':'2025-01-01T14:00:00+00:00'}
+            db.put([final], lambda _:1.0)
+            db.connection.commit()
+            base = datetime.fromisoformat('2025-01-01T12:00:00+00:00')
+            rows = []
+            for second in range(100):
+                source = decision()
+                source['computed_at'] = (base + timedelta(seconds=second)).isoformat()
+                source['input_cutoff_ms'] = 1000 + second
+                source['received_at_ms'] = 1000 + second
+                rows.extend(snapshot_inputs(source))
+            path = root/'inputs.sqlite3'
+            write_inputs(path, rows)
+
+            sampled = dataset(db.path, path, max_per_match=40)
+
+            sampled_times = sorted({row['at'] for row in sampled})
+            self.assertEqual(len(sampled), 40)
+            self.assertEqual(len(sampled_times), 40)
+            self.assertGreater(sampled_times[0], base.isoformat())
+            self.assertEqual(sampled_times[-1], (base + timedelta(seconds=99)).isoformat())
+
+    def test_grouped_sampling_preserves_complete_had_across_time_and_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = LedgerDB(root/'ledger.sqlite3')
+            final = {'match_id':'m1', 'at':'2025-01-01T12:00:00+00:00',
+                     'settled_at':'2025-01-01T14:00:00+00:00', 'competition_type':'real',
+                     'status':'won', 'ft_score':[2,1], 'ht_score':[1,0],
+                     'label_available_at':'2025-01-01T14:00:00+00:00'}
+            db.put([final], lambda _:1.0)
+            db.connection.commit()
+            rows = []
+            base = datetime.fromisoformat(final['at'])
+            for second in range(100):
+                source = decision()
+                source['computed_at'] = (base + timedelta(seconds=second)).isoformat()
+                common = source['evaluations'][0]['candidates'][0]
+                source['evaluations'] = [{'algorithm':'poisson_market',
+                    'candidates':[{**common, 'outcome':o} for o in ('home','draw','away')]}]
+                rows.extend(snapshot_inputs(source))
+            path = root/'inputs.sqlite3'
+            write_inputs(path, rows)
+            sampled = dataset(db.path, path, max_per_match=40)
+            groups = {}
+            for row in sampled:
+                groups.setdefault(row['at'], set()).add(row['outcome'])
+            self.assertTrue(groups)
+            self.assertTrue(all(outcomes == {'home','draw','away'} for outcomes in groups.values()))
+            self.assertLessEqual(len(sampled), 120)
+            self.assertEqual(max(groups), (base + timedelta(seconds=99)).isoformat())
+            final.update(ft_score=[1,1], ht_score=[0,0])
+            db.put([final], lambda _:2.0)
+            db.connection.commit()
+            changed = dataset(db.path, path, max_per_match=40)
+            def identity(values):
+                return [(r['at'],r['algorithm'],r['market'],r['line'],r['outcome']) for r in values]
+            self.assertEqual(identity(sampled), identity(changed))
+            self.assertNotEqual([r['y'] for r in sampled], [r['y'] for r in changed])
+
+    def test_postgres_capped_reader_does_not_split_group_a_second_time(self):
+        source = snapshot_inputs(decision())[:1]
+        common = source[0]
+        source = [{**common, 'outcome':o} for o in ('home','draw','away')]
+        rows, quality, _ = self.postgres_audit(source, max_per_match=1)
+        self.assertEqual({r['outcome'] for r in rows}, {'home','draw','away'})
+        self.assertIsNone(quality['sampling_row_bound'])
+        self.assertEqual(quality['sampling_unit'], 'match_id,at,algorithm,market')
+
+    def test_market_curve_sampling_preserves_cross_line_coherence(self):
+        from core.model_validation import coherent_probabilities
+        from store.training_data import _selected_contract_rows
+        source = []
+        for second in range(10):
+            for line, probabilities in (('2.5', (.4, .6)), ('3.5', (.7, .3))):
+                for outcome, probability in zip(('over', 'under'), probabilities):
+                    source.append({'match_id':'m1', 'at':str(second), 'algorithm':'a',
+                                   'market':'OU', 'line':line, 'outcome':outcome,
+                                   'probability':probability})
+        sampled = [row for row, selected in _selected_contract_rows(source, {'m1':40}, 1) if selected]
+        self.assertEqual(len(sampled), 4)
+        self.assertEqual({row['line'] for row in sampled}, {'2.5', '3.5'})
+        full_curve = source[-4:]
+        self.assertEqual(coherent_probabilities(sampled, [r['probability'] for r in sampled]),
+                         coherent_probabilities(full_curve, [r['probability'] for r in full_curve]))
+        for actual, expected in zip(coherent_probabilities(sampled, [r['probability'] for r in sampled]),
+                                    [.55, .45, .55, .45]):
+            self.assertAlmostEqual(actual, expected)
+
+    def test_sqlite_invalid_clock_quarantines_whole_market_curve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = LedgerDB(root/'ledger.sqlite3')
+            final = {'match_id':'m1', 'at':'2025-01-01T12:00:00+00:00',
+                     'settled_at':'2025-01-01T14:00:00+00:00', 'competition_type':'real',
+                     'status':'won', 'ft_score':[2,1], 'ht_score':[1,0],
+                     'label_available_at':'2025-01-01T14:00:00+00:00'}
+            db.put([final], lambda _:1.0)
+            db.connection.commit()
+            common = snapshot_inputs(decision())[1]
+            rows = [{**common, 'line':line, 'outcome':outcome}
+                    for line in ('2.5','3.5') for outcome in ('over','under')]
+            rows[-1]['quote_received_at_ms'] = 1001
+            path = root/'inputs.sqlite3'
+            write_inputs(path, rows)
+            quality = {}
+            self.assertEqual(dataset(db.path, path, audit=quality, max_per_match=1), [])
+            self.assertEqual(quality['quarantined_missing_time_contract'], 1)
+            self.assertEqual(quality['quarantined_incomplete_market_curve_inputs'], 3)
 
     def test_postgres_training_query_without_sampling_keeps_time_boundary(self):
         labels = "(SELECT match_id, available_at FROM latest_labels)"

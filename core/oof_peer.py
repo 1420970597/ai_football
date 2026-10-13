@@ -66,8 +66,12 @@ def chronological_oof(
         train_ids = set(ordered[:start])
         valid_ids = set(ordered[start:end])
         validation = [r for r in normalized if str(r['match_id']) in valid_ids]
+        # Compute the temporal boundary once.  Re-evaluating the minimum
+        # validation timestamp inside the training-row comprehension made the
+        # cost O(training_rows * validation_rows) for every peer and fold.
+        cutoff = min(_timestamp(v['at']) for v in validation)
         training = [r for r in normalized if str(r['match_id']) in train_ids
-                    and _timestamp(r['settled_at']) < min(_timestamp(v['at']) for v in validation)]
+                    and _timestamp(r['settled_at']) < cutoff]
         if len({str(r['match_id']) for r in training}) < min_training_matches:
             continue
         if {str(r['match_id']) for r in training} & valid_ids:
