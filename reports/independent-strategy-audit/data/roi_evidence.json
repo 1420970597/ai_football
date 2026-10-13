@@ -1,0 +1,72 @@
+{
+  "sim_all_real_labelled": {
+    "matches": 1395,
+    "stake": 8609.0,
+    "pnl": 1119.83,
+    "roi": 0.1301,
+    "ci95": [
+      0.1012,
+      0.1589
+    ]
+  },
+  "sim_exclude_8min_virtual": {
+    "matches": 1209,
+    "stake": 7575.0,
+    "pnl": 1075.14,
+    "roi": 0.1419,
+    "ci95": [
+      0.1092,
+      0.1717
+    ]
+  },
+  "sim_gap_le_20pp_non_virtual": {
+    "matches": 972,
+    "stake": 5409.0,
+    "pnl": 24.55,
+    "roi": 0.0045,
+    "ci95": [
+      -0.0223,
+      0.031
+    ]
+  },
+  "sim_gap_le_10pp_non_virtual": {
+    "matches": 697,
+    "stake": 3329.0,
+    "pnl": -39.17,
+    "roi": -0.0118,
+    "ci95": [
+      -0.0432,
+      0.0221
+    ]
+  },
+  "sim_gap_gt_30pp_non_virtual": {
+    "matches": 274,
+    "stake": 649.0,
+    "pnl": 854.14,
+    "roi": 1.3161,
+    "ci95": [
+      1.1455,
+      1.4892
+    ]
+  },
+  "real_orders_all_graded": {
+    "matches": 233,
+    "stake": 1384.03,
+    "pnl": -118.03,
+    "roi": -0.0853,
+    "ci95": [
+      -0.1752,
+      0.0029
+    ]
+  },
+  "real_orders_gap_le_20pp_non_virtual": {
+    "matches": 192,
+    "stake": 1072.1,
+    "pnl": -33.14,
+    "roi": -0.0309,
+    "ci95": [
+      -0.1248,
+      0.0637
+    ]
+  }
+}
