@@ -416,6 +416,18 @@ class LiveExpertService:
             age = snapshot.get(name)
             if age is None or age > cfg.state_max_age_s:
                 reasons.append(label + '数据过期或未接收')
+        # Score-change cooldown (TASK-58): the venue keeps publishing pre-goal
+        # prices for several seconds after the score feed moves.  Comparing a
+        # post-goal score with those prices manufactures large false edges, so
+        # no market of this match is fresh until the cooldown has elapsed.
+        cutoff_ms = float(snapshot.get('captured_at_ms') or now * 1000)
+        changed_at = snapshot.get('score_changed_at_ms')
+        cooldown_s = float(getattr(cfg, 'score_change_cooldown_s', 0.0) or 0.0)
+        since_change_s = ((cutoff_ms - float(changed_at)) / 1000
+                          if isinstance(changed_at, (int, float)) and not isinstance(changed_at, bool) else None)
+        score_cooling = since_change_s is not None and cooldown_s > 0 and since_change_s < cooldown_s
+        if score_cooling:
+            reasons.append('比分刚变化，等待盘口重定价（冷却 %.0f 秒）' % cooldown_s)
         groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
         newest = 0
         meta = snapshot.get('market_meta') or {}
@@ -450,6 +462,10 @@ class LiveExpertService:
             margin = sum(inv) - 1 if complete else None
             fair = self._devig(inv, cfg.devig_method) if complete else [None] * len(inv)
             age = max(q.quote_age_s for q in outcomes.values())
+            # Every outcome must be quoted after the cooldown that follows the
+            # last score change; an older tick may still be a pre-goal price.
+            prices_repriced = (changed_at is None or cooldown_s <= 0 or since_change_s is None or
+                               min(q.ts_ms for q in outcomes.values()) >= float(changed_at) + cooldown_s * 1000)
             quotes = []
             for i, oc in enumerate(ordered):
                 q = outcomes[oc]
@@ -505,7 +521,7 @@ class LiveExpertService:
                             'known': group['known'],
                             'margin': round(margin, 6) if margin is not None else None,
                             'age_s': round(age, 1) if math.isfinite(age) else None,
-                            'fresh': age <= cfg.quote_max_age_s and not market_suspended,
+                            'fresh': age <= cfg.quote_max_age_s and not market_suspended and not score_cooling and prices_repriced,
                             'suspended': market_suspended, 'quote_time_ms': group['quote_time_ms']})
         if not any(m['fresh'] and m['complete'] for m in markets):
             reasons.append('报价过期或尚无完整盘口')
@@ -590,6 +606,9 @@ class LiveExpertService:
             'published_at_ms': int(now * 1000), 'quote_time_ms': newest,
             'score': list(score) if score is not None else None, 'phase': phase,
             'clock': clock_label(status.get('mst'), phase), 'elapsed_s': elapsed_s,
+            'score_changed_at_ms': changed_at if since_change_s is not None else None,
+            'seconds_since_score_change': round(since_change_s, 3) if since_change_s is not None else None,
+            'score_cooling': score_cooling,
             'finished': bool(snapshot.get('finished')) or phase == '999',
             'suspended': bool(snapshot.get('suspended')), 'suspended_ids': sorted(suspended_ids),
             'markets': markets, 'candidates': candidates, 'probabilities': {c['outcome']:c['p_model'] for c in candidates if c['market']=='HAD'},

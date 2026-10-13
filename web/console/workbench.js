@@ -612,6 +612,7 @@ const ORIGINAL_SETTING_FIELDS = [
     ['min_probability', '建议最低概率', 'number', [0,1,.01]],
     ['min_ev', '建议最低 EV', 'number', [0,1,.01]],
     ['anchor_max_age_s', '衰减锚点重置 / 秒', 'number', [5,600,1]],
+    ['score_change_cooldown_s', '比分变化冷却 / 秒', 'number', [0,600,1]],
     ['devig_spread_warn_pp', '去水方法分歧阈值 / pp', 'number', [.1,20,.1]],
     ['fractional_kelly', '分数 Kelly', 'number', [0,1,.05]],
     ['weight_prior_matches', '权重收缩先验 / 场', 'number', [2,1000,1]],
@@ -659,7 +660,7 @@ const TRAINING_FIELDS = [
 const FIELD_MAP = Object.fromEntries([...ORIGINAL_SETTING_FIELDS.flatMap(([,fields]) => fields), ...TRAINING_FIELDS].map(f => [f[0],f]));
 const SETTING_TREE = [
   ['决策', [
-    ['模型与信号', [['算法与概率', ['decision_mode','model_blend_weight','primary_algorithm','devig_method','min_probability','min_ev']], ['时间与共识', ['anchor_max_age_s','devig_spread_warn_pp']], ['算法融合', ['weight_prior_matches','max_algorithm_weight']]]],
+    ['模型与信号', [['算法与概率', ['decision_mode','model_blend_weight','primary_algorithm','devig_method','min_probability','min_ev']], ['时间与共识', ['anchor_max_age_s','score_change_cooldown_s','devig_spread_warn_pp']], ['算法融合', ['weight_prior_matches','max_algorithm_weight']]]],
     ['风险与预警', [['仓位控制', ['fractional_kelly','max_total_exposure','risk_correlation','execution_cost']], ['表现预警', ['algorithm_alert_enabled','algorithm_alert_min_samples','algorithm_alert_threshold']]]],
   ]],
   ['执行', [['真实投注', [['功能开关', ['betting_enabled']], ['额度与条件', ['betting_stake_mode','betting_fixed_stake','betting_min_hit_count','betting_min_evidence_matches','betting_min_edge']], ['提交前重试', ['betting_retry_max_attempts','betting_retry_base_delay_s']]]]]],
@@ -687,6 +688,7 @@ const SETTING_HELP = {
   devig_method: '从盘口赔率中扣除水钱，生成市场公平概率。令 q_i=1/o_i；比例法 p_i=q_i/Σq_j；Power 法 p_i=q_i^k/Σq_j^k，数值求 k 使 Σq_i^k=1。用于当前市场概率及 Poisson 强度拟合；去水共识算法使用自己的 AUTO 方法。',
   min_probability: '显示买入建议的最低有效胜率，要求 p_model≥此值。含走盘盘口使用 p=P(win)/(P(win)+P(loss))，走盘份额单独计入期望收益；概率高仍须满足 EV、仓位等条件。',
   min_ev: '显示买入建议的最低有效期望收益率。公式：EV=(p·o−1)·(P(win)+P(loss))；EV_eff=q_fill·EV−cost_exec。此处比较 EV_eff；0.02 表示每单位注额的有效期望为 2%。',
+  score_change_cooldown_s: '比分变化后的冷却秒数。场馆在比分推送后仍会发布数秒进球前的旧价格；冷却期内该场全部盘口视为不新鲜，不产生推荐，执行器也拒绝下单。0 表示关闭（不建议）。',
   anchor_max_age_s: '时间衰减 Poisson 的盘口锚点最长复用时间。超过此秒数、比分变化或时钟回退时重置锚点。公式：λ(t)=λ_anchor·max(0,5400−t)/max(1,5400−t_anchor)。',
   devig_spread_warn_pp: '不同去水方法概率分歧的告警阈值，单位为百分点 pp。公式：spread=100·max_(a,b) Σ_i |p_(a,i)−p_(b,i)|。超过阈值标记去水差异；1 pp 对应概率差 0.01。',
   fractional_kelly: '建议仓位的 Kelly 折扣系数 λ。公式：f=max(0,λ·(o·p−1)/(o−1))；o 为十进制赔率，p 为非走盘部分的胜率。随后按同场最大敞口缩放；真实固定额度模式独立计算金额。',
