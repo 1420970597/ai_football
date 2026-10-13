@@ -66,7 +66,8 @@ services:
       - API_HOST=0.0.0.0
       - LIVE_COMPUTE_PROCESSES=${LIVE_COMPUTE_PROCESSES:-2}
       - LEYU_FAST_BETTING=1
-      - AUTO_ENABLE_BETTING=1
+      # AUTO_ENABLE_BETTING is deliberately absent: a fresh install starts with
+      # real-money betting off until shadow CLV evidence exists (TASK-58).
       - API_BACKGROUND_PROJECTION=1
       - API_PORT=8000
       - SNAPSHOT_ROOT=/app/output/snapshots

@@ -89,6 +89,17 @@ HISTORY_CACHE_ENTRIES = 16
 HISTORY_CACHE_BYTES = 16 * 1024 * 1024
 
 
+def _optional_ms(value: object) -> Optional[int]:
+    """Positive integer milliseconds, or None for absent/invalid values."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        out = int(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return out if out > 0 else None
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -140,6 +151,12 @@ class LedgerEntry:
     learned_probability: Optional[float] = None
     blend_weights: Dict[str, float] = field(default_factory=dict)
     input_cutoff_ms: Optional[int] = None
+    #: Venue timestamp of the quote used for the decision (ms).
+    quote_ts_ms: Optional[int] = None
+    #: First local receipt of that quote (ms).
+    quote_received_at_ms: Optional[int] = None
+    #: Last observed score change before the decision (ms); audits stale prices.
+    score_changed_at_ms: Optional[int] = None
     model_application: Dict[str, Any] = field(default_factory=dict)
     algorithm: str = "legacy"
     config_version: int = 0
@@ -472,6 +489,9 @@ class DecisionLedger:
             blend_weights=dict(forecast.get('blend_weights') or {}),
             input_cutoff_ms=forecast.get('input_cutoff_ms', row.get('input_cutoff_ms')),
             model_application=dict(row.get('model_application') or {}),
+            quote_ts_ms=_optional_ms(forecast.get('ts_ms')),
+            quote_received_at_ms=_optional_ms(forecast.get('quote_received_at_ms')),
+            score_changed_at_ms=_optional_ms(row.get('score_changed_at_ms')),
             decision_count=max(1, int(forecast.get("decision_count") or row.get("decision_count") or 1)),
             decision_event_id=str(row.get("decision_event_id") or row.get("publication_id") or
                                   row.get("computed_at") or row.get("at") or ""),

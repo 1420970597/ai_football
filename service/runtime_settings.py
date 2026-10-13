@@ -38,6 +38,11 @@ class RuntimeConfig:
     quote_max_age_s: float = 15.0
     state_max_age_s: float = 90.0
     anchor_max_age_s: float = 120.0
+    # After a score change the venue reprices markets with a delay of several
+    # seconds while still publishing the pre-goal prices.  Treat every market
+    # of that match as stale for this long; audit TASK-58 found half of all
+    # recommendations were published within 30s of a goal at pre-goal prices.
+    score_change_cooldown_s: float = 45.0
     devig_spread_warn_pp: float = 1.0
     fractional_kelly: float = 0.25
     max_total_exposure: float = 0.25
@@ -90,7 +95,7 @@ RANGES = {
     "weight_prior_matches": (2.0, 1000.0), "max_algorithm_weight": (0.2, 1.0),
     "min_probability": (0.0, 1.0), "min_ev": (0.0, 1.0),
     "quote_max_age_s": (1.0, 300.0), "state_max_age_s": (5.0, 600.0),
-    "anchor_max_age_s": (5.0, 600.0), "llm_timeout_s": (1.0, 120.0),
+    "anchor_max_age_s": (5.0, 600.0), "score_change_cooldown_s": (0.0, 600.0), "llm_timeout_s": (1.0, 120.0),
     "devig_spread_warn_pp": (0.1, 20.0), "fractional_kelly": (0.0, 1.0),
     "max_total_exposure": (0.0, 1.0), "risk_correlation": (0.0, 0.99),
     "execution_cost": (0.0, 0.1),
