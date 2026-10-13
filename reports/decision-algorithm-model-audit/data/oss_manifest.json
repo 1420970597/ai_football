@@ -1,0 +1,184 @@
+{
+  "authenticated": true,
+  "errors": [],
+  "min_stars": 3,
+  "provider": "GitHub search repositories API",
+  "retrieved_at": "2026-10-13T05:27:07.428451+00:00",
+  "select_per_track": 100,
+  "tracks": {
+    "algorithm": {
+      "candidates": 100,
+      "fetched": [
+        {
+          "query": "kelly criterion betting",
+          "returned": 15,
+          "total_count": 15
+        },
+        {
+          "query": "sports betting model",
+          "returned": 33,
+          "total_count": 33
+        },
+        {
+          "query": "value betting odds",
+          "returned": 13,
+          "total_count": 13
+        },
+        {
+          "query": "implied probability devig odds",
+          "returned": 0,
+          "total_count": 0
+        },
+        {
+          "query": "sports betting arbitrage",
+          "returned": 39,
+          "total_count": 39
+        },
+        {
+          "query": "probability calibration",
+          "returned": 57,
+          "total_count": 57
+        },
+        {
+          "query": "conformal prediction",
+          "returned": 100,
+          "total_count": 255
+        },
+        {
+          "query": "ensemble forecast combination",
+          "returned": 3,
+          "total_count": 3
+        },
+        {
+          "query": "online learning concept drift",
+          "returned": 9,
+          "total_count": 9
+        },
+        {
+          "query": "risk constrained portfolio optimization",
+          "returned": 3,
+          "total_count": 3
+        },
+        {
+          "query": "sports odds api",
+          "returned": 33,
+          "total_count": 33
+        },
+        {
+          "query": "backtesting framework strategy",
+          "returned": 100,
+          "total_count": 112
+        }
+      ],
+      "queries": [
+        "kelly criterion betting",
+        "sports betting model",
+        "value betting odds",
+        "implied probability devig odds",
+        "sports betting arbitrage",
+        "probability calibration",
+        "conformal prediction",
+        "ensemble forecast combination",
+        "online learning concept drift",
+        "risk constrained portfolio optimization",
+        "sports odds api",
+        "backtesting framework strategy"
+      ],
+      "saved": "oss_algorithm_projects.csv",
+      "top_by_stars": [
+        "kernc/backtesting.py",
+        "fasiondog/hikyuu",
+        "whchien/ai-trader",
+        "51bitquant/howtrader",
+        "pretrehr/Sports-betting"
+      ]
+    },
+    "model": {
+      "candidates": 100,
+      "fetched": [
+        {
+          "query": "football prediction model",
+          "returned": 57,
+          "total_count": 57
+        },
+        {
+          "query": "soccer match prediction",
+          "returned": 34,
+          "total_count": 34
+        },
+        {
+          "query": "football poisson model goals",
+          "returned": 2,
+          "total_count": 2
+        },
+        {
+          "query": "dixon coles model",
+          "returned": 6,
+          "total_count": 6
+        },
+        {
+          "query": "expected goals xg",
+          "returned": 26,
+          "total_count": 26
+        },
+        {
+          "query": "football machine learning prediction",
+          "returned": 51,
+          "total_count": 51
+        },
+        {
+          "query": "in-play football prediction",
+          "returned": 1,
+          "total_count": 1
+        },
+        {
+          "query": "football betting prediction",
+          "returned": 20,
+          "total_count": 20
+        },
+        {
+          "query": "soccer analytics",
+          "returned": 81,
+          "total_count": 81
+        },
+        {
+          "query": "elo rating football",
+          "returned": 13,
+          "total_count": 13
+        },
+        {
+          "query": "football event data",
+          "returned": 34,
+          "total_count": 34
+        },
+        {
+          "query": "soccer scoreline prediction",
+          "returned": 0,
+          "total_count": 0
+        }
+      ],
+      "queries": [
+        "football prediction model",
+        "soccer match prediction",
+        "football poisson model goals",
+        "dixon coles model",
+        "expected goals xg",
+        "football machine learning prediction",
+        "in-play football prediction",
+        "football betting prediction",
+        "soccer analytics",
+        "elo rating football",
+        "football event data",
+        "soccer scoreline prediction"
+      ],
+      "saved": "oss_model_projects.csv",
+      "top_by_stars": [
+        "eddwebster/football_analytics",
+        "kochlisGit/ProphitBet-Soccer-Bets-Predictor",
+        "mhaythornthwaite/Football_Prediction_Project",
+        "jrbadiabo/Bet-on-Sibyl",
+        "ML-KULeuven/soccer_xg"
+      ]
+    }
+  }
+}
