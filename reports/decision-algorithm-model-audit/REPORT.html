@@ -190,7 +190,7 @@ function clearFallback() {
 <h2>已执行优化</h2>
 <h3>1. PostgreSQL 训练采样修复</h3>
 <p>修改 <a href="/root/ai_football/store/training_data.py">store/training_data.py</a> 的 <code>_postgres_training_sample_query()</code>：</p>
-<ul><li>仍由已结算比赛集合驱动 <code>CROSS JOIN LATERAL</code>，避免 2300 万行输入的全局排序。</li><li>每场在 <code>at, algorithm, market, line, outcome</code> 的稳定顺序上计算 <code>ROW_NUMBER</code> 与 <code>COUNT</code>。</li><li>用 <code>MOD((row_number - 1) * cap, total) &lt; cap</code> 选出均匀时间样本。</li><li>状态中的采样口径从 <code>earliest_qualified_inputs_per_match</code> 改为 <code>evenly_spaced_per_match</code>。</li></ul>
+<ul><li>仍由已结算比赛集合驱动 <code>CROSS JOIN LATERAL</code>，避免 2300 万行输入的全局排序。</li><li>每场在 <code>at, algorithm, market, line, outcome</code> 的稳定顺序上计算 <code>ROW_NUMBER</code> 与 <code>COUNT</code>。</li><li>用分桶边界 <code>floor(row_number * cap / total) &gt; floor((row_number - 1) * cap / total)</code> 选出均匀时间样本；样本足够时每场严格取满 cap，避免总量与上限有公因数时少取。</li><li>状态中的采样口径从 <code>earliest_qualified_inputs_per_match</code> 改为 <code>evenly_spaced_per_match</code>。</li></ul>
 <p>这样保留同场多盘口和多算法，同时不把训练分布锁死在最早 40 条报价。</p>
 <h3>2. 离线指标与线上概率空间统一</h3>
 <p>修改 <a href="/root/ai_football/core/learned_model.py">core/learned_model.py</a> 的 <code>metrics()</code>：先对完整 HAD/OU/AH 组调用 <code>coherent_probabilities()</code>，再计算 Brier、Log loss 和二分类诊断。生产推荐方向仍使用同一组归一化概率，HAD Top-1 仍由 <code>model_validation.evaluate()</code> 单独报告。</p>

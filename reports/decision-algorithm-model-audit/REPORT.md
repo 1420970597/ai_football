@@ -161,7 +161,7 @@ sequenceDiagram
 
 - 仍由已结算比赛集合驱动 `CROSS JOIN LATERAL`，避免 2300 万行输入的全局排序。
 - 每场在 `at, algorithm, market, line, outcome` 的稳定顺序上计算 `ROW_NUMBER` 与 `COUNT`。
-- 用 `MOD((row_number - 1) * cap, total) < cap` 选出均匀时间样本。
+- 用分桶边界 `floor(row_number * cap / total) > floor((row_number - 1) * cap / total)` 选出均匀时间样本；样本足够时每场严格取满 cap，避免总量与上限有公因数时少取。
 - 状态中的采样口径从 `earliest_qualified_inputs_per_match` 改为 `evenly_spaced_per_match`。
 
 这样保留同场多盘口和多算法，同时不把训练分布锁死在最早 40 条报价。
