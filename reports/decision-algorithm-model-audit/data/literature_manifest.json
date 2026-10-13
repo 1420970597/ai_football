@@ -1,0 +1,36 @@
+{
+  "retrieved_at": "2026-10-13T05:06:56.586692+00:00",
+  "provider": "OpenAlex works API",
+  "algorithm_queries": [
+    "sports betting algorithm wagering decision",
+    "football betting strategy value betting odds",
+    "Kelly criterion portfolio betting risk",
+    "risk constrained Kelly gambling",
+    "proper scoring rules probabilistic forecast",
+    "probability calibration reliability forecast",
+    "forecast combination ensemble weighting",
+    "time series cross validation concept drift leakage",
+    "sports bookmaker odds market efficiency",
+    "betting exchange expected value staking",
+    "online learning adaptive ensemble prediction",
+    "decision theory uncertainty probability forecast"
+  ],
+  "model_queries": [
+    "football match prediction poisson model",
+    "soccer outcome prediction machine learning",
+    "football Dixon Coles model",
+    "dynamic poisson football goals",
+    "in play soccer goal prediction model",
+    "football Bayesian prediction model",
+    "soccer neural network match prediction",
+    "football random forest match outcome",
+    "football gradient boosting prediction",
+    "expected goals football model",
+    "football hazard survival goal model",
+    "bivariate poisson soccer scores"
+  ],
+  "algorithm_count": 80,
+  "model_count": 80,
+  "errors": [],
+  "classification": "keyword ranking over title and abstract; manual audit in REPORT.md"
+}
