@@ -1170,6 +1170,11 @@ class RealtimeHub:
         #: 而分析层会把比分喂给 LLM —— LLM 直接“抄答案”给出虚假买入
         #: （本项目真实故障：p_llm=1.0 vs 市场 0.35，理由是“终场0:0…”）。
         self._score_at: Dict[str, float] = {}
+        # Wall-clock ms of the last observed score *change* per match.  A
+        # restored or first-seen score is not a change; only a live transition
+        # between two known scores is.  Decisions use it to ignore the
+        # pre-goal prices the venue keeps publishing for several seconds.
+        self._score_changed_at_ms: Dict[str, int] = {}
         #: mid → 本 Hub **首次见到**该场推送的时刻（单调时钟不可回拨）。
         #:
         #: 用途：区分「从未有过比分推送、且已存在很久」的场次（几乎可以
@@ -1481,7 +1486,7 @@ class RealtimeHub:
                     from core.live_model import valid_score
                     score = valid_score(match.score)
                     if score is not None:
-                        self._scores[mid] = score
+                        self._set_score(mid, score)
                         self._score_at[mid] = now
                 if match.is_finished:
                     self._final_proofs[mid] = {'ms':match.status,'mmp':match.period}
@@ -1515,6 +1520,7 @@ class RealtimeHub:
                 "score": self._scores.get(mid),
                 "half_score": self.half_score(mid),
                 "score_age_s": self.score_age_s(mid),
+                "score_changed_at_ms": self._score_changed_at_ms.get(mid),
                 "status_age_s": (time.monotonic() - self._status_at[mid]
                                  if mid in self._status_at else None),
                 "status": dict(self._status.get(mid, {})),
@@ -1576,6 +1582,17 @@ class RealtimeHub:
         if not at:
             return None
         return max(0.0, time.monotonic() - at)
+
+    def _set_score(self, mid: str, score: Tuple[int, int]) -> None:
+        """Store a live score and stamp the moment it changed (caller holds lock)."""
+        previous = self._scores.get(mid)
+        if previous is not None and tuple(previous) != tuple(score):
+            self._score_changed_at_ms[mid] = int(time.time() * 1000)
+        self._scores[mid] = score
+
+    def score_changed_at_ms(self, mid: str) -> Optional[int]:
+        with self._lock:
+            return self._score_changed_at_ms.get(str(mid))
 
     def first_seen_age_s(self, mid: str) -> Optional[float]:
         """本 Hub 首次见到该场推送距今秒数；从未见过返回 None。"""
@@ -1833,7 +1850,7 @@ class RealtimeHub:
                     half = _period_score_from_payload(decoded.get("msc"), "S2")
                     with self._lock:
                         self._touch_seen(mid)
-                        self._scores[mid] = score
+                        self._set_score(mid, score)
                         self._score_at[mid] = time.monotonic()
                         if half is not None:
                             self._status.setdefault(mid, {})["half_score"] = list(half)

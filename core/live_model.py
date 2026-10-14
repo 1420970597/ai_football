@@ -16,7 +16,12 @@ MODEL_VERSION = 'live-poisson-market-v2'
 REGULATION_SECONDS = 90 * 60
 MAX_REMAINING_GOALS = 20
 FIT_ITERATIONS = 18
-VIRTUAL_PATTERN = re.compile(r'eafc|e-football|esoccer|e-soccer|fifa|虚拟|电竞|电子足球', re.I)
+# Short-format simulated tournaments are labelled by duration, for example
+# "瓦尔基里杯 2026 (8分钟)" or "瓦尔哈拉杯_2026_8分钟".  A real fixture never
+# carries a minute count in its league name (audit TASK-58: 415 such matches
+# were classified as real football and reached training and real orders).
+VIRTUAL_PATTERN = re.compile(r'eafc|e-football|esoccer|e-soccer|fifa|虚拟|电竞|电子足球|'
+                             r'\d+\s*分钟|\d+\s*mins?\b', re.I)
 
 
 def competition_type(info: Mapping[str, Any]) -> str:

@@ -641,6 +641,18 @@ class BettingExecutor:
             raise BettingRecomputeNeeded("推荐盘口报价已过期，需要重新计算")
         if not math.isclose(quote.odds, float(detail["oddFinally"]), abs_tol=0.000005):
             raise BettingRecomputeNeeded("推荐盘口赔率已变化，需要重新计算")
+        # TASK-58: never submit on a pre-goal price.  The venue keeps quoting
+        # the old line for several seconds after the score moves; an order on
+        # that quote is either rejected, repriced or (worse) filled at a price
+        # whose apparent edge exists only because the model saw the new score.
+        changed_at = snapshot.get("score_changed_at_ms")
+        cooldown_s = float(getattr(cfg, "score_change_cooldown_s", 0.0) or 0.0)
+        if isinstance(changed_at, (int, float)) and not isinstance(changed_at, bool) and cooldown_s > 0:
+            now_ms = time.time() * 1000
+            if now_ms - float(changed_at) < cooldown_s * 1000:
+                raise BettingRecomputeNeeded("比分刚变化，等待盘口重定价")
+            if float(quote.ts_ms) < float(changed_at) + cooldown_s * 1000:
+                raise BettingRecomputeNeeded("推荐盘口报价早于比分变化后的重定价，需要新报价")
 
     def _account_client(self, default_factory: Callable[[], Any]) -> Any:
         if self.client_factory is not None:

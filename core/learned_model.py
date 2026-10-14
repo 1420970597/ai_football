@@ -146,12 +146,45 @@ def metrics(rows: Sequence[Mapping[str, Any]], weights: Sequence[float] | None) 
             'brier': brier, 'log_loss': logloss}
 
 
-def fit_weights(rows: Sequence[Mapping[str, Any]], *, epochs: int = EPOCHS) -> list[float]:
-    """Fit only the residual parameters on an already time-isolated cohort.
+#: Residual coordinates the learner may move (TASK-61).  A chronological
+#: benchmark on the production training set (1,118 matches, 3 rolling folds)
+#: found that a market-offset stack over the five algorithms' disagreements
+#: beat the market in every fold (pooled delta Brier -0.00084, 95% CI
+#: [-0.0017, -0.00001]), while the full 60-coordinate residual fit did not
+#: (-0.00007, CI crossing zero).  The other coordinates stay exactly zero, so
+#: the artifact format and live inference are unchanged.
+STACK_FEATURES = ('bias', 'algorithm_logit', 'peer_poisson_market', 'peer_poisson_time_decay',
+                  'peer_devig_consensus', 'peer_economics_risk_adjusted',
+                  'peer_microstructure_adjusted')
+STACK_INDICES = tuple(FEATURES.index(name) for name in STACK_FEATURES)
+STACK_L2 = 1.0
+NEWTON_ITERATIONS = 30
 
-    The caller owns the chronological split.  Keeping this primitive separate
-    from :func:`train` lets the worker run rolling folds without accidentally
-    training on a fold's validation labels.
+
+def _solve(matrix: list[list[float]], vector: list[float]) -> list[float]:
+    """Gauss-Jordan with partial pivoting; singular directions get a zero step."""
+    n = len(vector)
+    m = [row[:] + [vector[i]] for i, row in enumerate(matrix)]
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(m[r][col]))
+        m[col], m[pivot] = m[pivot], m[col]
+        if abs(m[col][col]) < 1e-14:
+            continue
+        for r in range(n):
+            if r != col and m[r][col]:
+                factor = m[r][col] / m[col][col]
+                for j in range(col, n + 1):
+                    m[r][j] -= factor * m[col][j]
+    return [m[i][n] / m[i][i] if abs(m[i][i]) > 1e-14 else 0.0 for i in range(n)]
+
+
+def fit_weights(rows: Sequence[Mapping[str, Any]], *, epochs: int = EPOCHS) -> list[float]:
+    """Fit the stacked residual parameters on an already time-isolated cohort.
+
+    The caller owns the chronological split.  Only :data:`STACK_INDICES` are
+    estimated, by regularized Newton steps on the match-weighted log loss;
+    every other coordinate of the returned vector is zero.  ``epochs`` is kept
+    for call compatibility and caps the Newton iterations.
     """
     if not rows:
         raise ValueError('训练样本为空')
@@ -163,28 +196,41 @@ def fit_weights(rows: Sequence[Mapping[str, Any]], *, epochs: int = EPOCHS) -> l
         counts[row['match_id']] = counts.get(row['match_id'], 0) + observation_weight(row)
     if len(counts) < 2:
         raise ValueError('训练比赛不足')
-    weights = [0.0] * len(FEATURES)
-    # Cache all row-local work once. The previous implementation rebuilt the
-    # upgraded feature vector and market logit on every epoch, multiplying
-    # the cost of rolling validation by hundreds of millions of operations.
+    k = len(STACK_INDICES)
     prepared = []
     for row in rows:
         vector = residual_vector(row['x'])
         market_logit = upgrade_vector(row['x'])[1]
-        scale = observation_weight(row) / counts[row['match_id']]
-        prepared.append((vector, market_logit, float(row['y']), scale))
-    feature_count = len(FEATURES)
-    for _ in range(max(1, int(epochs))):
-        gradients = [0.0] * len(weights)
-        for vector, market_logit, target, scale in prepared:
-            score = market_logit
-            for i in range(feature_count):
-                score += weights[i] * vector[i]
-            error = (sigmoid(score) - target) * scale
-            for i, value in enumerate(vector):
-                gradients[i] += error * value
-        weights = [w - LEARNING_RATE * (g / len(counts) + (REGULARIZATION*w if i else 0))
-                   for i, (w, g) in enumerate(zip(weights, gradients))]
+        scale = observation_weight(row) / counts[row['match_id']] / len(counts)
+        prepared.append(([vector[i] for i in STACK_INDICES], market_logit, float(row['y']), scale))
+    beta = [0.0] * k
+    for _ in range(max(1, min(int(epochs), NEWTON_ITERATIONS))):
+        gradient = [0.0] * k
+        hessian = [[0.0] * k for _ in range(k)]
+        for features_, offset, target, scale in prepared:
+            p = sigmoid(offset + sum(b * f for b, f in zip(beta, features_)))
+            error, curvature = (p - target) * scale, p * (1 - p) * scale
+            for i in range(k):
+                gradient[i] += error * features_[i]
+                row_h = hessian[i]
+                for j in range(k):
+                    row_h[j] += curvature * features_[i] * features_[j]
+        # Ridge on everything except the intercept, scaled per match.
+        ridge = STACK_L2 / len(counts)
+        for i in range(1, k):
+            gradient[i] += ridge * beta[i]
+            hessian[i][i] += ridge
+        for i in range(k):
+            hessian[i][i] += 1e-12
+        step = _solve(hessian, gradient)
+        beta = [b - s for b, s in zip(beta, step)]
+        if not all(math.isfinite(b) for b in beta):
+            raise ValueError('残差堆叠求解发散')
+        if sum(abs(s) for s in step) < 1e-9:
+            break
+    weights = [0.0] * len(FEATURES)
+    for index, value in zip(STACK_INDICES, beta):
+        weights[index] = value
     return weights
 
 
@@ -226,7 +272,9 @@ def train(rows: Sequence[Mapping[str, Any]], *,
     training_oof = crossfit_peer_features(training)
     validation_calibrated = apply_peer_calibration(training, validation)
     weights = fit_weights(training_oof, epochs=epochs)
-    return {'architecture': 'L2 Logistic offset + chronological OOF peer residual calibration', 'features': list(FEATURES),
+    return {'architecture': 'Market-offset stacked algorithm residuals (7 active) + chronological OOF peer calibration',
+            'active_parameters': list(STACK_FEATURES), 'active_parameter_count': len(STACK_FEATURES),
+            'features': list(FEATURES),
             'data_version': DATA_VERSION,
             'feature_version': FEATURE_VERSION, 'offset': 'market_logit',
             'weights': weights, 'parameter_count': len(weights), 'peer_calibration': peer_calibration,
