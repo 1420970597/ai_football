@@ -1,0 +1,176 @@
+{
+  "date": "2026-10-13",
+  "checks": [
+    {
+      "scope": "historical frozen PR tree before #60/#61 integration",
+      "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/pr-tree:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m unittest discover -s tests -q",
+      "exit_code": 0,
+      "tests": 1604,
+      "skipped": 14,
+      "seconds": 92.202
+    },
+    {
+      "scope": "historical frozen PR tree before #60/#61 integration",
+      "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/pr-tree:/w:ro -w /w --entrypoint python ai_football-validation:task-52 -m mypy --cache-dir /tmp/mypy",
+      "exit_code": 0,
+      "source_files": 116
+    },
+    {
+      "scope": "historical frozen PR tree before #60/#61 integration",
+      "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/pr-tree:/w:ro -w /w --entrypoint python ai_football-validation:task-52 -m ruff check --no-cache .",
+      "exit_code": 0
+    },
+    {
+      "scope": "historical workspace including inherited edits",
+      "command": "./scripts/cpu-limited.sh run -- python3 -m unittest discover -s tests -q",
+      "exit_code": 0,
+      "tests": 1626,
+      "skipped": 11,
+      "seconds": 55.592
+    },
+    {
+      "scope": "initial integrated full-suite run",
+      "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m unittest discover -s tests -q",
+      "exit_code": 1,
+      "tests": 1618,
+      "seconds": 90.509,
+      "skipped": 14
+    },
+    {
+      "scope": "isolated repeat before ctime fixture correction",
+      "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m unittest tests.test_verify_sqlite_postgres -q",
+      "exit_code": 1,
+      "tests": 22,
+      "seconds": 0.132,
+      "skipped": 0
+    },
+    {
+      "scope": "isolated module after ctime fixture correction",
+      "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m unittest tests.test_verify_sqlite_postgres -q",
+      "exit_code": 0,
+      "tests": 22,
+      "seconds": 0.181,
+      "skipped": 0
+    },
+    {
+      "scope": "frozen final integration tree",
+      "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m unittest discover -s tests -q",
+      "exit_code": 0,
+      "tests": 1618,
+      "seconds": 90.143,
+      "skipped": 14
+    },
+    {
+      "scope": "frozen final integration tree",
+      "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w:ro -w /w --entrypoint python ai_football-validation:task-52 -m mypy --cache-dir /tmp/mypy",
+      "exit_code": 0,
+      "source_files": 118
+    },
+    {
+      "scope": "frozen final integration tree",
+      "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w:ro -w /w --entrypoint python ai_football-validation:task-52 -m ruff check --no-cache .",
+      "exit_code": 0
+    }
+  ],
+  "git_blob_fingerprints_for_tested_PR_changes": {
+    "core/learned_decision.py": "7f8bc8106bf2c75cd39fe54dea33d34991c86228",
+    "core/learned_model.py": "abac79fd6157c095b29079e4088c7354a4b74996",
+    "core/model_validation.py": "d1ff4f0c3209920399df73513ba4e3de06117ad4",
+    "core/oof_peer.py": "1fe983997ff0f6810b4c3f7cde80f8ef5f04a723",
+    "core/probability_calibration.py": "c0211c3c94b1f0eae891bb1081e601550ae87c51",
+    "service/model_training.py": "773af96e945f588d063290fd45e1ac80ffd32a8f",
+    "store/training_data.py": "d9145405815e400097e878e14bb0b6ec08bc46f4",
+    "tests/test_learned_decision.py": "56436c016952b7ab723c3e12afffb3ea1d6c4d1e",
+    "tests/test_learned_model.py": "b7c1310c72a78e79a7fcdd5d344e98da429d8611",
+    "tests/test_model_training.py": "f65e16aa535d95b0e7de8186779bb5018481edb5",
+    "tests/test_model_validation.py": "0b36481d5c0091b55d5439d24f96b7dbea5daa90",
+    "tests/test_training_data.py": "869a89df34ff8c4a00167b8355bf6c1e1ae8a267"
+  },
+  "limitations": [
+    "Initial read-only mount test failed because tests create project temporary files; corrected isolated writable tree passed.",
+    "Tests do not prove profitability, full-curve context equivalence after target filtering, or production deployment.",
+    "PG dataset verification measures loading only, not end-to-end training.",
+    "Final integration initial full suite and module repeat failed on ctime clock-resolution fixture; deterministic metadata-change fixture corrected, without changing the production verifier. Full suite then passed."
+  ],
+  "final_integration_date": "2026-10-14",
+  "integration_baseline_commit": "f2d1aa6",
+  "integration_code_commit": "2754fda72b295d1c7f8e436117bf72bd7b79a3ae",
+  "integrated_git_blob_fingerprints": {
+    "core/learned_decision.py": "7f8bc8106bf2c75cd39fe54dea33d34991c86228",
+    "core/learned_model.py": "dbefc40b5f0bbb3ec018970b0e8858b7c919e0c3",
+    "core/model_validation.py": "d1ff4f0c3209920399df73513ba4e3de06117ad4",
+    "core/oof_peer.py": "1fe983997ff0f6810b4c3f7cde80f8ef5f04a723",
+    "core/probability_calibration.py": "c0211c3c94b1f0eae891bb1081e601550ae87c51",
+    "service/model_training.py": "773af96e945f588d063290fd45e1ac80ffd32a8f",
+    "store/training_data.py": "d9145405815e400097e878e14bb0b6ec08bc46f4",
+    "tests/test_learned_decision.py": "56436c016952b7ab723c3e12afffb3ea1d6c4d1e",
+    "tests/test_learned_model.py": "b7c1310c72a78e79a7fcdd5d344e98da429d8611",
+    "tests/test_model_training.py": "f65e16aa535d95b0e7de8186779bb5018481edb5",
+    "tests/test_model_validation.py": "0b36481d5c0091b55d5439d24f96b7dbea5daa90",
+    "tests/test_training_data.py": "869a89df34ff8c4a00167b8355bf6c1e1ae8a267",
+    "tests/test_verify_sqlite_postgres.py": "91754b0f7422410ccf8bd3e773517e686d3af67e"
+  },
+  "report_checks": {
+    "literature_verify_exit_code": 0,
+    "algorithm_included": 66,
+    "model_included": 51,
+    "cross_track_included_doi_overlap": 0,
+    "compile_exit_code": 0,
+    "python_files_compiled": 182,
+    "figure_generation_exit_code": 0,
+    "font": "WenQuanYi Zen Hei",
+    "images_generated": 1,
+    "html_generation_exit_code": 0,
+    "browser_online": {
+      "mermaid_svgs": 3,
+      "loaded_images": 1,
+      "chart_natural_width": 1350
+    },
+    "browser_offline": {
+      "readable_mermaid_fallbacks": 3,
+      "source_text_characters": 1005,
+      "chart_loaded": true
+    },
+    "runtime_dependency_probe": {
+      "command": "docker exec ai_football_analytics_api python -c \"import redis,psycopg\"",
+      "exit_code": 0
+    },
+    "ruff_after_csv_line_ending_fix": {
+      "exit_code": 0,
+      "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w:ro -w /w --entrypoint python ai_football-validation:task-52 -m ruff check --no-cache reports/decision-algorithm-model-audit/scripts"
+    }
+  },
+  "other_agent_references": [
+    {
+      "number": 58,
+      "title": "audit(TASK-58): 独立策略审计——模拟虚盈来自进球后旧价，真实下单ROI -8.5%",
+      "updatedAt": "2026-10-13T14:46:11Z",
+      "url": "https://github.com/1420970597/ai_football/issues/58"
+    },
+    {
+      "mergeCommit": {
+        "oid": "379d392fb59c80051d31626dac7605fb0224acca"
+      },
+      "number": 60,
+      "state": "MERGED",
+      "title": "fix(live): 比分变化冷却期阻断进球前旧价推荐与下单 (TASK-60)",
+      "url": "https://github.com/1420970597/ai_football/pull/60"
+    },
+    {
+      "mergeCommit": {
+        "oid": "f2d1aa61685fce6303b106e402f82b4aadf08c1b"
+      },
+      "number": 61,
+      "state": "MERGED",
+      "title": "feat(model): 学习模型改为五算法分歧堆叠 (TASK-61)",
+      "url": "https://github.com/1420970597/ai_football/pull/61"
+    }
+  ],
+  "report_script_git_blob_fingerprints": {
+    "reports/decision-algorithm-model-audit/scripts/collect_literature.py": "a3260d1c3af8bced61e7bb336eeccf761c074b1e",
+    "reports/decision-algorithm-model-audit/scripts/collect_oss.py": "a69518f520ddc0da03e82cfa756e1e2a450be6fa",
+    "reports/decision-algorithm-model-audit/scripts/make_figures.py": "632d969f565d53ba72cef1d3c1384d3ac367671f",
+    "reports/decision-algorithm-model-audit/scripts/verify_literature.py": "a84f1ba82645c167cb4cf84e5b313f4ebe590731",
+    "reports/decision-algorithm-model-audit/scripts/verify_training_sample.py": "dcb9d4f34bb89651e8f849c2b618dfc4fe299158"
+  }
+}
