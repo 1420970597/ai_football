@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import copy
+import logging
 import math
 import uuid
 import hashlib
@@ -85,6 +86,11 @@ HISTORY_PAGE_TTL_S = 30.0
 HISTORY_STATISTICS_TTL_S = 60.0
 HISTORY_RETRY_DELAY_S = 15.0
 HISTORY_REFRESH_DEADLINE_S = 60.0
+HISTORY_EXPERIMENT_DEADLINE_S = 30.0
+HISTORY_CACHE_WRITE_DEADLINE_S = 10
+EXPERIMENT_ERROR_BATCH = 256
+EXPERIMENT_ERROR_LIMIT = 10000
+EXPERIMENT_ERROR_DEADLINE_S = 5.0
 HISTORY_CACHE_ENTRIES = 16
 HISTORY_CACHE_BYTES = 16 * 1024 * 1024
 
@@ -300,7 +306,7 @@ class DecisionLedger:
         self._history_compute_lock = threading.Lock()
         self._history_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._history_refreshing: set[str] = set()
-        self._history_errors: dict[str, str] = {}
+        self._history_errors: dict[str, Any] = {}
         self._history_jobs: OrderedDict[str, tuple[Any, ...]] = OrderedDict()
         self._history_worker_running = False
         self._history_retry_at: dict[str, float] = {}
@@ -460,6 +466,7 @@ class DecisionLedger:
         record_kind = "recommendation" if row.get("record_kind") == "recommendation" else "forecast"
         market = str(forecast.get("market", ""))
         if (row.get("finished") or row.get("competition_type") != "real"
+                or row.get('state_qualified') is False
                 or market.split("_1H")[0] not in ("HAD", "OU", "AH")
                 or forecast.get("research_only")
                 or forecast.get("decision_status") not in (None, "settleable")):
@@ -1033,6 +1040,7 @@ class DecisionLedger:
             out = copy.deepcopy(snapshot) if snapshot is not None else {
                 'overall': None, 'settled': None, 'timeline': [], 'portfolio_summary': None,
                 'experiments': {}, 'statistics_status': 'loading', 'statistics_at': None,
+                'experiments_status': 'loading', 'experiments_at': None,
             }
             out.pop('_cache_bytes', None)
             if page is not None:
@@ -1059,6 +1067,8 @@ class DecisionLedger:
             out.update(entries_stale=stale, entries_refreshing=page_key in self._history_pages_refreshing,
                        statistics_stale=self._history_stale(snapshot, 'statistics_at', HISTORY_STATISTICS_TTL_S),
                        statistics_refreshing=cache_key in self._history_refreshing or snapshot is None)
+            out['experiments_stale'] = self._history_stale(
+                snapshot, 'experiments_at', HISTORY_STATISTICS_TTL_S)
             if page_key in self._history_page_errors:
                 out['entries_error'] = self._history_page_errors[page_key]
                 if page is None:
@@ -1125,16 +1135,19 @@ class DecisionLedger:
 
     def _history_snapshot(self, db: LedgerDB, where: str, params: Sequence[Any],
                           portfolio_where: str, portfolio_params: Sequence[Any],
-                          competition_type: Optional[str], days: int) -> dict[str, Any]:
+                          competition_type: Optional[str], days: int,
+                          *, include_experiments: bool = True) -> dict[str, Any]:
         statistics_at = _now().isoformat()
         deadline = time.monotonic()+HISTORY_REFRESH_DEADLINE_S
+        timings: dict[str, Any] = {}
         def budget() -> None:
             if db.backend == 'postgres':
                 self._history_read_budget(db, deadline)
         budget()
         settled_where = where + " AND status IN ('won','lost','push','half_won','half_lost')"
         attrs = ('competition_type','date_key','league','market','decision','algorithm','config_version','trigger','status','confidence_band')
-        aggregates = db.aggregate_many(where, params, attrs)
+        with self._history_phase('aggregate_many', timings):
+            aggregates = db.aggregate_many(where, params, attrs)
         overall = aggregates['overall']
         settled = aggregates.get('settled')
         if settled is None:
@@ -1159,12 +1172,69 @@ class DecisionLedger:
                              'cum_stake':cum_stake, 'cum_profit':round(cum_profit,4),
                              'cum_roi':round(cum_profit/cum_stake,6) if cum_stake else None})
         budget()
-        experiments = self._experiment_stats(db, competition_type, days, deadline=deadline)
-        budget()
-        out.update(timeline=timeline, experiments=experiments,
-                   portfolio_summary=db.aggregate(portfolio_where, portfolio_params),
-                   statistics_status='ready', statistics_at=statistics_at)
+        with self._history_phase('portfolio', timings):
+            portfolio = db.aggregate(portfolio_where, portfolio_params)
+        out.update(timeline=timeline, portfolio_summary=portfolio,
+                   statistics_status='ready', statistics_at=statistics_at,
+                   statistics_timings=timings)
+        if include_experiments:
+            budget()
+            out.update(experiments=self._experiment_stats(db, competition_type, days, deadline=deadline),
+                       experiments_at=statistics_at, experiments_status='ready')
         return out
+
+    @staticmethod
+    @contextmanager
+    def _history_phase(stage: str, timings: dict[str, Any]) -> Iterator[None]:
+        started = time.monotonic()
+        try:
+            yield
+        except Exception as exc:
+            try:
+                exc.history_stage = stage  # type: ignore[attr-defined]
+                exc.history_elapsed_ms = round((time.monotonic()-started)*1000)  # type: ignore[attr-defined]
+            except (AttributeError, TypeError):
+                pass
+            raise
+        finally:
+            timings[stage] = {'elapsed_ms': round((time.monotonic()-started)*1000)}
+
+    @staticmethod
+    def _history_failure(stage: str, exc: Exception, started: float) -> dict[str, Any]:
+        detail = {'stage': str(getattr(exc, 'history_stage', stage)),
+                  'exception_type': type(exc).__name__,
+                  'sqlstate': str(getattr(exc, 'sqlstate', '') or ''),
+                  'elapsed_ms': int(getattr(exc, 'history_elapsed_ms',
+                                           round((time.monotonic()-started)*1000)))}
+        logging.getLogger(__name__).warning('history refresh failed: %s', detail)
+        return detail
+
+    def _save_history_snapshot(self, cache_key: str, snapshot: dict[str, Any]) -> Optional[dict[str, Any]]:
+        """Publish successful work even if the separate bounded cache write fails."""
+        snapshot.pop('statistics_persist_error', None)
+        with self._history_cache_lock:
+            self._remember_history(self._history_cache, cache_key, snapshot)
+        started = time.monotonic()
+        try:
+            from store.postgres import connect
+            connection = connect()
+            try:
+                with connection:
+                    connection.execute("SET LOCAL statement_timeout='" + str(HISTORY_CACHE_WRITE_DEADLINE_S) + "s'").close()
+                    connection.execute("SET LOCAL lock_timeout='3s'").close()
+                    connection.execute('INSERT INTO ledger_history_cache(cache_key,payload,refreshed_at) '
+                        'VALUES (?,?,now()) ON CONFLICT(cache_key) DO UPDATE '
+                        'SET payload=excluded.payload,refreshed_at=excluded.refreshed_at',
+                        (cache_key, json.dumps(snapshot, ensure_ascii=False, allow_nan=False))).close()
+            finally:
+                connection.close()
+        except Exception as exc:
+            detail = self._history_failure('cache_write', exc, started)
+            snapshot['statistics_persist_error'] = detail
+            with self._history_cache_lock:
+                self._remember_history(self._history_cache, cache_key, snapshot)
+            return detail
+        return None
 
     def _cached_history_snapshot(self, db: LedgerDB, cache_key: str, where: str, params: Sequence[Any],
                                  portfolio_where: str, portfolio_params: Sequence[Any],
@@ -1182,7 +1252,8 @@ class DecisionLedger:
                 # a missing cache must never be presented as zero performance.
                 snapshot = {'overall': None, 'settled': None, 'timeline': [],
                             'portfolio_summary': None, 'experiments': {},
-                            'statistics_status': 'loading', 'statistics_at': None}
+                            'statistics_status': 'loading', 'statistics_at': None,
+                            'experiments_status': 'loading', 'experiments_at': None}
             with self._history_cache_lock:
                 self._remember_history(self._history_cache, cache_key, snapshot)
         stale = self._history_stale(snapshot, 'statistics_at', HISTORY_STATISTICS_TTL_S)
@@ -1219,6 +1290,8 @@ class DecisionLedger:
                     return
                 cache_key, job = self._history_jobs.popitem(last=False)
             db, where, params, portfolio_where, portfolio_params, competition_type, days = job
+            started = time.monotonic()
+            stage = 'core'
             try:
                 with self._history_compute_lock:
                     with db.reader() as reader:
@@ -1228,29 +1301,44 @@ class DecisionLedger:
                         reader.connection.execute('SET LOCAL max_parallel_workers_per_gather=0').close()
                         cached = self._cached_history_snapshot(reader, cache_key, where, params,
                             portfolio_where, portfolio_params, competition_type, days)
-                        if not cached.pop('_refresh_statistics', False):
+                        refresh_core = cached.pop('_refresh_statistics', False)
+                        refresh_experiments = self._history_stale(cached, 'experiments_at', HISTORY_STATISTICS_TTL_S)
+                        if not refresh_core and not refresh_experiments:
                             continue
-                        snapshot = self._history_snapshot(reader, where, params, portfolio_where,
-                                                          portfolio_params, competition_type, days)
-                from store.postgres import connect
-                connection = connect()
-                try:
-                    with connection:
-                        connection.execute("SET LOCAL statement_timeout='10s'").close()
-                        connection.execute("SET LOCAL lock_timeout='3s'").close()
-                        connection.execute('INSERT INTO ledger_history_cache(cache_key,payload,refreshed_at) '
-                            'VALUES (?,?,now()) ON CONFLICT(cache_key) DO UPDATE '
-                            'SET payload=excluded.payload,refreshed_at=excluded.refreshed_at',
-                            (cache_key, json.dumps(snapshot, ensure_ascii=False, allow_nan=False))).close()
-                finally:
-                    connection.close()
-                with self._history_cache_lock:
-                    self._remember_history(self._history_cache, cache_key, snapshot)
-                    self._history_errors.pop(cache_key, None)
-                    self._history_retry_at.pop(cache_key, None)
+                        snapshot = (self._history_snapshot(reader, where, params, portfolio_where,
+                            portfolio_params, competition_type, days, include_experiments=False)
+                            if refresh_core else copy.deepcopy(cached))
+                    # The core transaction is closed before either cache writes
+                    # or experiments. A cancelled experiment cannot abort it.
+                    snapshot.update(experiments=copy.deepcopy(cached.get('experiments', {})),
+                        experiments_at=cached.get('experiments_at', cached.get('statistics_at')),
+                        experiments_status='loading' if refresh_experiments else cached.get('experiments_status', 'ready'))
+                    snapshot.pop('statistics_error', None)
+                    snapshot.pop('experiments_error', None)
+                    self._save_history_snapshot(cache_key, snapshot)
+                    with self._history_cache_lock:
+                        self._history_errors.pop(cache_key, None)
+                        self._history_retry_at.pop(cache_key, None)
+                    if refresh_experiments:
+                        stage = 'experiments'
+                        experiment_started = time.monotonic()
+                        experiment_at = _now().isoformat()
+                        try:
+                            with db.reader() as reader:
+                                reader.connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ').close()
+                                reader.connection.execute("SET LOCAL lock_timeout='3s'").close()
+                                reader.connection.execute('SET LOCAL max_parallel_workers_per_gather=0').close()
+                                experiments = self._experiment_stats(reader, competition_type, days,
+                                    deadline=experiment_started+HISTORY_EXPERIMENT_DEADLINE_S)
+                            snapshot.update(experiments=experiments, experiments_at=experiment_at,
+                                            experiments_status='ready', experiments_stale=False)
+                        except Exception as exc:
+                            snapshot.update(experiments_status='error', experiments_stale=True,
+                                experiments_error=self._history_failure(stage, exc, experiment_started))
+                        self._save_history_snapshot(cache_key, snapshot)
             except Exception as exc:
                 with self._history_cache_lock:
-                    self._history_errors[cache_key] = type(exc).__name__
+                    self._history_errors[cache_key] = self._history_failure(stage, exc, started)
                     self._history_retry_at[cache_key] = time.monotonic()+HISTORY_RETRY_DELAY_S
                     while len(self._history_errors) > HISTORY_CACHE_ENTRIES:
                         expired = next(iter(self._history_errors))
@@ -1443,25 +1531,112 @@ class DecisionLedger:
         def budget() -> None:
             if db is not None and db.backend == 'postgres' and deadline is not None:
                 self._history_read_budget(db, deadline)
+        timings: dict[str, Any] = {}
         budget()
-        arms = db.aggregate(where, params, 'algorithm')
+        with self._history_phase('experiment_arms', timings):
+            arms = db.aggregate(where, params, 'algorithm')
         budget()
-        counts = {r[0]:r[1] for r in db.connection.execute(
-            'SELECT review_status,count(*) FROM decisions WHERE ' + where + " AND algorithm='economics_llm' GROUP BY review_status", params)}
+        table = db._statistics_table()
+        with self._history_phase('experiment_review_status', timings):
+            counts = {r[0]:r[1] for r in db.connection.execute(
+                'SELECT review_status,count(*) FROM ' + table + ' WHERE ' + where +
+                " AND algorithm='economics_llm' GROUP BY review_status", params)}
         # A paired cohort includes only quotes with both arms and a graded outcome.
-        pair_where = (where + " AND experiment_id IN (SELECT experiment_id FROM decisions WHERE " + where +
+        pair_where = (where + " AND experiment_id IN (SELECT experiment_id FROM " + table + " WHERE " + where +
                      " AND status IN ('won','lost','half_won','half_lost','push') GROUP BY experiment_id HAVING count(DISTINCT algorithm)=2)")
         budget()
-        operation = db.aggregate(pair_where, [*params,*params], 'algorithm')
+        with self._history_phase('experiment_operation', timings):
+            operation = db.aggregate(pair_where, [*params,*params], 'algorithm')
         pair_where += " AND review_status='ready'"
         budget()
-        paired = db.aggregate(pair_where, [*params,*params], 'algorithm')
+        with self._history_phase('experiment_paired', timings):
+            paired = db.aggregate(pair_where, [*params,*params], 'algorithm')
         a,b = paired.get('economics_control',{}), paired.get('economics_llm',{})
         opportunities = a.get('total',0)
-        budget()
-        errors = {r[0]:r[1] for r in db.connection.execute(
-            "SELECT json_extract(payload,'$.review_error'),count(*) FROM decisions WHERE "+where+" AND algorithm='economics_llm' AND review_status='error' GROUP BY json_extract(payload,'$.review_error')",params)}
+        # Error payloads are diagnostics only. They must never prevent the
+        # already-computed arms/paired metrics from being published. The
+        # narrow projection count is the denominator for this diagnostic; it
+        # is not a claim that every source payload is present or valid.
+        errors_total = max(0, _to_int_safe(counts.get('error', 0)))
+        errors_status = 'complete'
+        errors_limit = EXPERIMENT_ERROR_LIMIT
+        errors_counted = 0
+        errors: dict[Any, int] = {}
+        diagnostic_error: Optional[dict[str, Any]] = None
+        error_where = where + " AND algorithm='economics_llm' AND review_status='error'"
+        error_started = time.monotonic()
+        error_deadline = error_started + EXPERIMENT_ERROR_DEADLINE_S
+        if deadline is not None:
+            error_deadline = min(error_deadline, deadline)
+
+        def error_budget() -> None:
+            if db.backend == 'postgres':
+                self._history_read_budget(db, error_deadline)
+
+        try:
+            # The projection intentionally excludes the large payload. Read
+            # identities in keyset pages and immediately hydrate each page so
+            # a slow payload query cannot consume an unbounded identity scan.
+            target = min(errors_total, errors_limit)
+            last = None
+            identities_read = 0
+            while identities_read < target:
+                query = 'SELECT identity FROM ' + table + ' WHERE ' + error_where
+                query_params = list(params)
+                if last is not None:
+                    query += ' AND identity>?'
+                    query_params.append(last)
+                query += ' ORDER BY identity LIMIT ?'
+                query_params.append(EXPERIMENT_ERROR_BATCH)
+                with self._history_phase('experiment_error_identities', timings):
+                    error_budget()
+                    batch = [str(row[0]) for row in db.connection.execute(query, query_params)]
+                if not batch:
+                    break
+                last = batch[-1]
+                chunk = batch[:target-identities_read]
+                identities_read += len(chunk)
+                marks = ','.join('?' for _ in chunk)
+                with self._history_phase('experiment_error_payloads', timings):
+                    error_budget()
+                    payload_rows = list(db.connection.execute(
+                        'SELECT identity,payload FROM decisions WHERE identity IN (' + marks + ')', chunk))
+                payload_by_identity = {str(row[0]): row[1] for row in payload_rows}
+                if len(payload_by_identity) != len(chunk):
+                    errors_status = 'partial'
+                for identity in chunk:
+                    if identity not in payload_by_identity:
+                        continue
+                    raw_payload = payload_by_identity[identity]
+                    try:
+                        payload = json.loads(raw_payload)
+                    except (TypeError, ValueError):
+                        errors_status = 'partial'
+                        continue
+                    if not isinstance(payload, dict):
+                        errors_status = 'partial'
+                        continue
+                    errors_counted += 1
+                    code = payload.get('review_error') or 'unknown'
+                    errors[code] = errors.get(code, 0) + 1
+                if len(batch) < EXPERIMENT_ERROR_BATCH:
+                    break
+            if errors_counted < errors_total:
+                errors_status = 'partial'
+        except Exception as exc:
+            # PostgreSQL aborts a transaction after SQLSTATE 57014. Do not
+            # issue a compensating query on this reader; it is closed by the
+            # caller. Only expected resource exhaustion is diagnostic-only.
+            sqlstate = str(getattr(exc, 'sqlstate', '') or '')
+            if not isinstance(exc, TimeoutError) and sqlstate != '57014':
+                raise
+            errors_status = 'partial'
+            diagnostic_error = self._history_failure('experiment_error', exc, error_started)
         return {'arms':arms, 'paired':paired, 'operation':operation, 'review_status':counts, 'errors':errors, 'paired_opportunities':opportunities,
+                'errors_status': errors_status, 'errors_counted': errors_counted,
+                'errors_total': errors_total, 'errors_limit': errors_limit,
+                **({'diagnostic_error': diagnostic_error} if diagnostic_error else {}),
+                'timings': timings,
                 'coverage': b.get('stake_units',0)/opportunities if opportunities else None,
                 'profit_difference': round(b.get('profit_units',0)-a.get('profit_units',0),6) if opportunities else None,
                 'accuracy_difference': (round(b['accuracy']-a['accuracy'],6) if a.get('accuracy') is not None and b.get('accuracy') is not None else None),

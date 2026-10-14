@@ -214,10 +214,23 @@ class ResumableVerificationTests(unittest.TestCase):
             self.verify(db)
         evidence, _ = self.metadata_evidence()
         os.chmod(self.path,0o400)
-        with self.assertRaisesRegex(ValueError, '拒绝续验'):
-            self.verify(_FakePG(self.targets,db.data))
-        fresh = _FakePG(self.targets,db.data)
-        result = self.verify(fresh,metadata_only_evidence=evidence)
+        pinned = json.loads(next(iter(db.data['states'].values())))['source_signature']
+
+        def changed_ctime(path, schema):
+            signature = _source_signature(path, schema)
+            # Fast filesystems may give chmod and file creation the same
+            # timestamp. Model the metadata-only event explicitly so this
+            # rejection/resume test never depends on filesystem clock ticks.
+            signature['files']['database']['ctime_ns'] = max(
+                signature['files']['database']['ctime_ns'],
+                pinned['files']['database']['ctime_ns'] + 1)
+            return signature
+
+        with patch('tools.verify_sqlite_postgres._source_signature', side_effect=changed_ctime):
+            with self.assertRaisesRegex(ValueError, '拒绝续验'):
+                self.verify(_FakePG(self.targets,db.data))
+            fresh = _FakePG(self.targets,db.data)
+            result = self.verify(fresh,metadata_only_evidence=evidence)
         self.assertTrue(result['complete'])
         self.assertEqual(fresh.copy_rows,0)
         self.assertEqual(result['verified_rows'],3)

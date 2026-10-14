@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.economics import effective_ev as economics_effective_ev, fractional_kelly, q_fill_model
-from core.ensemble import cohere_candidates
-from core.learned_model import compatible_model, features, predict
+from core.model_validation import coherent_probabilities
+from core.learned_model import approved_model, features, model_compatibility_reason, predict
 from core.oof_peer import calibrate_peer_vector
 from core.decision_features import FEATURE_VERSION, verified_context, visible_history
 from core.live_model import clock_seconds
@@ -26,11 +26,10 @@ from core.probability_calibration import calibrate_probability
 @lru_cache(maxsize=4)
 def _load(path: str, signature: tuple[int, int, int]) -> dict[str, Any]:
     model = json.loads(Path(path).read_text())
-    if not isinstance(model, dict) or not compatible_model(model):
-        raise ValueError('训练数据版本不兼容')
-    promotion = model.get('promotion')
-    if not isinstance(promotion, dict) or promotion.get('approved') is not True:
-        raise ValueError('模型尚未通过独立晋级门槛')
+    if not isinstance(model, dict):
+        raise ValueError('模型文件结构无效')
+    if not approved_model(model):
+        raise ValueError(model_compatibility_reason(model, require_approval=True))
     # Validate the complete parameter vector even when this snapshot contains
     # no supported candidates. A corrupted active file must not appear ready.
     from core.learned_model import FEATURES
@@ -95,7 +94,10 @@ def calibrate(ensemble: Mapping[str, Any], evaluations: list[dict[str, Any]],
             c['decision_model_version'] = model['version']
         # Cohere the learned outcomes first, then blend with the already
         # coherent economic ensemble. This makes the documented formula exact.
-        cohere_candidates(out['candidates'])
+        probabilities = coherent_probabilities(
+            out['candidates'], [float(c['p_model']) for c in out['candidates']])
+        for c, probability in zip(out['candidates'], probabilities):
+            c['p_model'] = round(probability, 6)
         for c in out['candidates']:
             c['learned_probability'] = float(c['p_model'])
             c['p_model'] = round((1 - weight) * c['algorithm_probability'] +

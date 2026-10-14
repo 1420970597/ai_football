@@ -548,13 +548,18 @@ async function loadHistory(reset = true, automatic = false) {
     }
     const experiment = data.experiments || {};
     const paired = experiment.paired || {};
-    $('experiment-status').textContent = '配对 ' + (experiment.paired_opportunities || 0) + ' · ' + (experiment.conclusion || '等待实验样本');
+    $('experiment-status').textContent = '配对 ' + (experiment.paired_opportunities ?? '—') + ' · ' + (experiment.conclusion || '等待实验样本');
     $('experiment-results').replaceChildren(...Object.entries(paired).map(([arm,stats])=>el('div',{class:'algorithm-card'},[
       el('strong',{text:algorithmLabel(arm)}),el('span',{text:'正确率 ' + pct(stats.accuracy) + ' · ROI ' + pct(stats.roi) + ' · 本金 ' + fixed(stats.stake_units) + 'u'})])));
     $('experiment-results').appendChild(el('div',{class:'algorithm-card'},[el('strong',{text:'配对差异'}),el('span',{text:'正确率 Δ ' + pct(experiment.accuracy_difference) + ' · 净收益 Δ ' + fixed(experiment.profit_difference) + 'u · 覆盖 ' + pct(experiment.coverage)})]));
     $('experiment-results').appendChild(el('div',{class:'algorithm-card'},[el('strong',{text:'审核状态'}),el('span',{text:Object.entries(experiment.review_status || {}).map(([k,v])=>({ready:'已审核',error:'失败',expired:'迟到',pending:'等待'}[k] || k) + ' ' + v).join(' · ') || '未开始；在设置启用 LLM'})]));
     const experimentErrors = Object.entries(experiment.errors || {}).filter(([code])=>code && code!=='null');
     if (experimentErrors.length) $('experiment-results').appendChild(el('div',{class:'algorithm-card'},[el('strong',{text:'接口诊断'}),el('span',{text:experimentErrors.map(([code,n])=>code+' ×'+n).join(' · ')})]));
+    if (experiment.errors_status === 'partial') $('experiment-results').appendChild(el('div',{class:'algorithm-card'},[el('strong',{text:'诊断范围'}),el('span',{text:'错误详情未完成：已统计 ' + experiment.errors_counted + ' / ' + experiment.errors_total + ' 条审核失败；已读分类为下界，未读取不代表没有错误。'})]));
+    if (experiment.diagnostic_error) $('experiment-results').appendChild(el('div',{class:'algorithm-card'},[el('strong',{text:'诊断状态'}),el('span',{text:'错误详情读取超时；实验主指标已更新。阶段：' + experiment.diagnostic_error.stage})]));
+    if (data.experiments_status === 'error') $('experiment-results').appendChild(el('div',{class:'algorithm-card'},[el('strong',{text:'实验统计'}),el('span',{text:'实验统计暂不可用，已保留上次结果。' + (data.experiments_error?.stage ? '阶段：' + data.experiments_error.stage : '')})]));
+    else if (data.experiments_status === 'loading') $('experiment-results').appendChild(el('div',{class:'algorithm-card'},[el('strong',{text:'实验统计'}),el('span',{text:'实验统计正在后台更新。'})]));
+    if (data.experiments_at) $('experiment-results').appendChild(el('div',{class:'algorithm-card'},[el('strong',{text:'实验统计时点'}),el('span',{text:timeLabel(data.experiments_at) + (data.experiments_stale ? ' · 上次缓存' : '')})]));
     S.historyNext = data.next_offset ?? null;
     $('history-prev').disabled = S.historyOffset === 0;
     $('history-next').disabled = S.historyNext === null;
@@ -568,7 +573,9 @@ async function loadHistory(reset = true, automatic = false) {
     if (data.entries_stale) historyMessages.push('当前记录页为上次缓存，可能暂未包含新记录。');
     if (data.entries_at) historyMessages.push('记录页时点：' + (timeLabel(data.entries_at) === '—' ? '暂不可用' : timeLabel(data.entries_at)) + '。');
     if (data.entries_error) historyMessages.push('记录页读取失败：' + data.entries_error + '，可刷新重试。');
-    if (data.statistics_error) historyMessages.push('战绩汇总暂不可用：' + data.statistics_error + '。');
+    const historyErrorText = detail => typeof detail === 'object' && detail ? [detail.stage, detail.exception_type, detail.sqlstate].filter(Boolean).join(' / ') : String(detail);
+    if (data.statistics_error) historyMessages.push('战绩汇总暂不可用：' + historyErrorText(data.statistics_error) + '。');
+    if (data.statistics_persist_error) historyMessages.push('最新统计已计算，持久缓存写入待恢复：' + historyErrorText(data.statistics_persist_error) + '。');
     if (data.statistics_stale) historyMessages.push('当前显示上次统计缓存，可能暂未包含最新结算。');
     if (data.statistics_at) {
       const at = new Date(data.statistics_at);
@@ -623,6 +630,8 @@ const ORIGINAL_SETTING_FIELDS = [
     ['betting_enabled', '自动真实投注', 'checkbox'],
     ['betting_stake_mode', '投注额度模式', 'select', {fixed: '固定值', confidence_multiplier: '综合置信度 × 固定值'}],
     ['betting_fixed_stake', '固定投注额度 / CNY', 'number', [.01,100000,.01]],
+    ['betting_max_total_exposure', '真实全账户未结敞口', 'number', [0,1,.01]],
+    ['betting_max_match_exposure', '真实单场未结敞口', 'number', [0,1,.01]],
     ['betting_min_hit_count', '最小决策出现次数', 'number', [1,100000,1]],
     ['betting_min_evidence_matches', '最小独立结算比赛数', 'number', [1,100000,1]],
     ['betting_min_edge', '真实下注最低优势', 'number', [0,1,.01]],
@@ -663,7 +672,7 @@ const SETTING_TREE = [
     ['模型与信号', [['算法与概率', ['decision_mode','model_blend_weight','primary_algorithm','devig_method','min_probability','min_ev']], ['时间与共识', ['anchor_max_age_s','score_change_cooldown_s','devig_spread_warn_pp']], ['算法融合', ['weight_prior_matches','max_algorithm_weight']]]],
     ['风险与预警', [['仓位控制', ['fractional_kelly','max_total_exposure','risk_correlation','execution_cost']], ['表现预警', ['algorithm_alert_enabled','algorithm_alert_min_samples','algorithm_alert_threshold']]]],
   ]],
-  ['执行', [['真实投注', [['功能开关', ['betting_enabled']], ['额度与条件', ['betting_stake_mode','betting_fixed_stake','betting_min_hit_count','betting_min_evidence_matches','betting_min_edge']], ['提交前重试', ['betting_retry_max_attempts','betting_retry_base_delay_s']]]]]],
+  ['执行', [['真实投注', [['功能开关', ['betting_enabled']], ['额度与条件', ['betting_stake_mode','betting_fixed_stake','betting_max_total_exposure','betting_max_match_exposure','betting_min_hit_count','betting_min_evidence_matches','betting_min_edge']], ['提交前重试', ['betting_retry_max_attempts','betting_retry_base_delay_s']]]]]],
   ['数据与模型', [
     ['模型训练', [['决策模式', ['model_shadow_enabled']], ['更新周期', ['model_training_enabled','model_training_matches']], ['资源限制', ['model_training_cpu','model_training_memory_mb']]]],
     ['实时数据', [['新鲜度', ['quote_max_age_s','state_max_age_s']]]],
@@ -682,6 +691,8 @@ const ALGORITHM_HELP = {
   microstructure_adjusted: '按已接收盘口走势对衰减 Poisson 概率作调整。公式：r=min(0.5,|trend_pct|/100)；p=clip(p_Poisson−r·s,0,1)，trend_pct>0 时 s=1，否则 s=−1。调整后按当前赔率重新计算 EV。',
 };
 const SETTING_HELP = {
+  betting_max_total_exposure: '真实全账户待发、未知回执与未结注单的本金上限比例。权益 B=体育可用余额+场馆全部未结本金，要求 Σ本金+新注额≤比例×B。默认0.10；0阻止新注。PG原子预占，明确拒单或逐订单号权威结算后释放。缺完整或新鲜资金快照时暂停提交。',
+  betting_max_match_exposure: '同一场比赛所有盘口、盘口线与方向共同占用的真实本金上限，要求 Σ同场本金+新注额≤比例×B。默认0.02。固定注额同样受此约束；预算不足会拒绝提交，不改变用户注额。未知结果不会因超时自动释放。',
   decision_mode: '纯算法采用现有算法融合概率；纯决策模型采用通过版本和晋级校验的模型概率，无有效模型时不产生买入；混合模式结合二者。公式：p_hybrid=(1−w)·p_algorithm+w·p_model，再按同盘口约束校正并重新计算 EV 与仓位。',
   model_blend_weight: '混合模式中决策模型的权重 w，取值 0~1。公式：p_hybrid=(1−w)·p_algorithm+w·p_model。0 完全使用算法，1 完全使用模型；纯算法和纯模型模式不使用此值。',
   primary_algorithm: '选择页面展示主客队剩余进球强度时的参考算法，必须属于已启用算法；综合推荐仍由启用的算法融合生成。Poisson 公式：P(X=k)=e^(−λ)·λ^k/k!。各算法的具体公式见对应算法名称后的问号。',
@@ -775,7 +786,7 @@ function decisionModelStatus(data) {
   if (!['model','hybrid'].includes(mode)) return {mode, state:'模式信息暂不可用', reason:''};
   const unavailable = data.decision_mode_status === 'unavailable' || data.decision_model_available === false || !data.model?.version || data.model?.promotion?.approved !== true;
   const reason = unavailable ? data.decision_mode_reason || '暂无通过校验的已晋级模型，此模式暂不产生买入推荐。' : '';
-  return {mode, state:unavailable ? '不可用' : '已加载 · 实际结果见实时决策', reason};
+  return {mode, state:unavailable ? (reason.startsWith('候选模型') ? '不可用 · 候选未晋级' : '不可用') : '已加载 · 实际结果见实时决策', reason};
 }
 const unknownMetric = (value, label = '尚未审查') => value === null || value === undefined || value === '' ? label : value;
 function shadowStatus(data) {
@@ -812,7 +823,7 @@ function renderDataModel(data) {
     ...(quality.estimated_input_matches != null ? [['输入比赛（估计）',quality.estimated_input_matches]] : []),
     ['已核验样本数',quality.sample_examined_records ?? '尚未审查'], ['已核验样本比赛',quality.sample_examined_matches ?? '尚未审查'],
     ['已核验样本有效决策',quality.sample_valid_training_decisions ?? training.sampled_eligible_decisions ?? '尚未审查'],
-    ['已核验样本无效（不可结算）',quality.sample_ungraded_inputs ?? '尚未审查'],
+    ['样本分类未评分（含走盘）',quality.sample_ungraded_inputs ?? '尚未审查'],
   ] : [
     ['有效训练决策',training.eligible_decisions ?? '尚未审查'], ['已有输入比赛',quality.input_matches ?? '尚未统计'],
     ['持久化训练输入',quality.input_records ?? '尚未统计'], ['无效 / 隔离训练数据',quality.invalid_training_records ?? '尚未审查'],
@@ -822,16 +833,23 @@ function renderDataModel(data) {
   const labels = {not_started:'尚未启动',restoring:'历史数据恢复中',checking:'检查训练数据',waiting:'等待新增已结算比赛',training:'训练中',ready:'已更新',candidate:'候选已训练 · 未晋级',failed:'训练失败',disabled:'自动训练已关闭'};
   $('model-state').textContent = labels[training.state] || '未训练';
   $('model-summary').replaceChildren(...metricCards([
+    ['模型服务',data.running ? '运行中' : '未运行'],
     ['决策模式',decisionModeLabel(decisionStatus.mode)], ['模式状态',decisionStatus.state],
     ['模型影子记录',data.settings?.shadow_enabled === false ? '已关闭' : '已开启 · 独立观察'],
     ...(decisionStatus.mode === 'hybrid' ? [['混合模型权重',pct(data.settings?.model_blend_weight)]] : []),
     ['最新更新时间',timeLabel(offlineModel.updated_at || training.checked_at)], ['训练参数量',offlineModel.parameter_count ?? (candidate.version ? '候选参数暂未提供' : '未训练')],
+    ['实际可估计参数',unknownMetric(offlineModel.active_parameter_count,'待新模型训练')],
     ['生产模型版本',model.version || '尚无已晋级模型'],
     ...(candidate.version ? [['候选模型版本',candidate.version],['候选晋级状态',candidate.promotion?.approved === true ? '已通过 · 等待加载' : '未晋级']] : []),
     [sampledQuality ? '样本有效已结算比赛' : '有效已结算比赛',unknownMetric(training.eligible_matches ?? model.eligible_matches)],
     ['本轮训练样本',unknownMetric(training.training_decisions)], ['每场样本上限',unknownMetric(quality.training_max_rows_per_match,'未配置')],
     ...qualityCards,
     ['距更新周期', (training.new_matches ?? '—') + ' / ' + (data.settings?.cycle_matches ?? '—') + ' 场'],
+    ['训练资格检查',training.cohort_verified === true ? '已核验' : quality.coverage_status === 'partial' ? '继续核验中' : '尚未核验'],
+    ['最近完成训练',training.last_completed_version || '新契约尚未完成训练'],
+    ['本代已消费比赛',unknownMetric(training.completed_matches)],
+    ['推理完整上下文',unknownMetric(quality.prediction_context_records,'加载训练集后统计')],
+    ['资格检查耗时',quality.query_seconds == null ? '尚未统计' : fixed(quality.query_seconds,2) + ' s'],
     ['当前实际训练限制',training.limits ? training.limits.cpu_cores + ' 核 / ' + training.limits.memory_mb + ' MiB' : '尚未执行'],
     ['训练资源上限',(data.settings?.cpu_cores ?? '—') + ' 核 / ' + (data.settings?.memory_mb ?? '—') + ' MiB'],
   ]));
@@ -841,13 +859,17 @@ function renderDataModel(data) {
     promotion.approved === false ? ' 当前候选未晋级：' + ((promotion.reasons || []).join('；') || '独立验证尚未满足晋级要求。') :
       model.version ? ' 当前模型的晋级证据暂未提供。' : training.candidate ? ' 当前候选等待晋级校验。' : ' 尚无已晋级模型。';
   $('model-description').textContent = (offlineModel.architecture || (candidate.version ? '候选已训练：L2 Logistic 多盘口概率校准' : '待训练：L2 Logistic 多盘口概率校准')) + '。' + (data.note || '') +
+    ' 模型服务状态：' + (data.running ? '运行中' : '未运行') + '；' +
     (decisionStatus.reason ? ' 决策模式不可用：' + decisionStatus.reason : '') +
-    ' 首次训练至少需要100场有效已结算比赛。验证按比赛和时间隔离，训练与评价按比赛等权；走盘排除，赢半/输半按非走盘方向判定。' +
+    ' 首次训练至少需要100场通过当前数据资格的已结算比赛。验证按比赛和时间隔离、比赛等权；推理保留完整盘口，分类评分排除走盘，单位本金收益保留走盘，赢半/输半按实际支付计算。' +
+    (training.old_model_quarantined ? ' 旧模型和原始数据保留供审计；旧版本批准不沿用，新代积累符合报价与赛况时序要求的数据后重新训练。' : '') +
     (sampledQuality ? ' 数据资格口径：已核验有效/无效数量仅覆盖本轮按比赛限量抽取的样本，不代表全库资格；全量尚未审查的数量单独标明。标注“估计”的输入量来自数据库统计信息，可能滞后；等待赛果标签不计为无效。' :
       quality.invalid_training_records !== undefined ? ' 数据资格口径：有效数为通过版本、双时间和结算校验的训练决策；无效/隔离数包含旧版本、缺失或越界时间、不可结算输入及不符合新契约的旧台账；等待标签的数据单独统计，不计为无效。' : '') +
     (calibration ? ' 校准：' + (calibration.method === 'logistic' ? 'Logistic slope/intercept' : '恒等映射') + '（' + (calibration.samples || 0) + ' 条样本）。' : ' 尚无独立校准制品。') +
     promotionText;
   const prospective = prospectiveMetricRows(data), shadow = data.shadow || {}, shadowView = shadowStatus(data);
+  const modelMoney = prospective.model.unit_stake || {}, marketMoney = prospective.baseline.unit_stake || {};
+  const byTimeMoney = prospective.model.unit_stake_by_time || {};
   const livePerformance = shadow.performance || {};
   const latencyP95 = field => livePerformance[field]?.p95 == null ? '尚未统计' : fixed(livePerformance[field].p95,0) + ' ms';
   const prospectiveLabels = {ready:'已有前瞻结算样本',waiting_for_settlement:'等待赛果结算',no_predictions:'等待首条影子预测',unavailable:'前瞻统计尚不可用',error:'前瞻统计读取失败'};
@@ -869,7 +891,18 @@ function renderDataModel(data) {
     ['亚洲盘选中方向获利率',prospective.status === 'ready' ? prospective.metric(prospective.model.asian_payment_accuracy) : '等待前瞻样本'],
     ['亚洲盘市场方向获利率',prospective.status === 'ready' ? prospective.metric(prospective.baseline.asian_payment_accuracy) : '等待前瞻样本'],
     ['亚洲盘选中合约',unknownMetric(prospective.model.asian_selected_contracts,'尚未审查')],
-    ['不可结算影子样本',unknownMetric(prospective.prospective.counts?.ungraded_predictions,'尚未审查')],
+    ['影子首次合约净收益（本金1）',modelMoney.profit_units == null ? '暂无适用样本' : fixed(modelMoney.profit_units,4)],
+    ['影子首次合约 ROI',modelMoney.roi == null ? '暂无适用样本' : pct(modelMoney.roi)],
+    ['市场首次合约净收益（本金1）',marketMoney.profit_units == null ? '暂无适用样本' : fixed(marketMoney.profit_units,4)],
+    ['市场首次合约 ROI',marketMoney.roi == null ? '暂无适用样本' : pct(marketMoney.roi)],
+    ['首次合约模拟注数',unknownMetric(modelMoney.selected_contracts,'尚未审查')],
+    ['首次合约赢 / 输 / 走',modelMoney.selected_contracts == null ? '尚未审查' : [modelMoney.won,modelMoney.lost,modelMoney.push].map(v=>v ?? 0).join(' / ')],
+    ['首次合约半赢 / 半输',modelMoney.selected_contracts == null ? '尚未审查' : [modelMoney.half_won,modelMoney.half_lost].map(v=>v ?? 0).join(' / ')],
+    ['逐时点模拟净收益',byTimeMoney.profit_units == null ? '暂无适用样本' : fixed(byTimeMoney.profit_units,4)],
+    ['逐时点模拟注数',unknownMetric(byTimeMoney.selected_contracts,'尚未审查')],
+    ['缺赔率合约',unknownMetric(modelMoney.missing_odds_contracts,'尚未审查')],
+    ['不可核验结算合约',unknownMetric(modelMoney.unverifiable_settlement_contracts,'尚未审查')],
+    ['分类未评分影子样本（含走盘）',unknownMetric(prospective.prospective.counts?.ungraded_predictions,'尚未审查')],
     ['前瞻排除样本',unknownMetric(prospective.prospective.counts?.excluded_predictions,'尚未审查')],
     ['本进程跳过已结回放',unknownMetric(shadow.skipped_settled_replay,'尚未统计')],
     ['历史游标隔离回放（非本窗口）',unknownMetric(prospective.prospective.counts?.excluded_replay_predictions,'尚未统计')],
@@ -894,6 +927,7 @@ function renderDataModel(data) {
       '；最近预测 ' + (timeLabel(shadow.last_prediction_at) === '—' ? '尚未生成' : timeLabel(shadow.last_prediction_at)) + '。' +
       (prospective.prospective.windows ? ' 统计范围：已结窗口与待结窗口分别维护；已结比赛最多 ' + unknownMetric(prospective.prospective.windows.settled?.max_matches,'未提供上限') + ' 场；待结窗口最多 ' + unknownMetric(prospective.prospective.windows.pending?.max_predictions,'未提供上限') + ' 条预测。' : prospective.prospective.window ? ' 统计范围：当前版本最近 ' + unknownMetric(prospective.prospective.window.max_predictions,'未提供上限') + ' 条预测；' + timeLabel(prospective.prospective.window.from) + ' 至 ' + timeLabel(prospective.prospective.window.to) + '。' : '')}),
     el('p',{text:'方向二分类按每个候选 p≥0.5 判断事件发生，不能当作买入推荐命中率。胜平负 Top-1：在同一时点完整的主胜、平、客胜组中选择概率最高方向；亚洲盘：在完整双向组中选择最高概率方向，以实际支付判定，赢半/输半计半注权重，走盘排除输赢分母，各比赛等权。前瞻只使用模型可用后、结果揭晓前记录的预测；离线验证与前瞻统计分开展示。市场基准使用相同前瞻样本，窗口统计不代表全库正确率。'}),
+    el('p',{text:'单位本金收益独立于分类评分：赢为赔率−1，输为−1，半赢为(赔率−1)/2，半输为−0.5，走盘本金1、净收益0。首次合约按比赛/市场/盘口线去重，同一时刻优先综合算法；逐时点统计保留不同算法与时间的重复模拟，分别展示。缺赔率、方向不全和不可核验结算不伪填为0收益。这些是影子模拟统计，账号今日盈亏使用场馆实际结算。'}),
     el('p',{text:'实时延迟按本进程最近 ' + unknownMetric(livePerformance.sample_limit,'尚未提供上限') + ' 个有效样本计算：计算包含特征构建与模型推理；排队从算法决策生成计时；输出包含排队与计算。本地可靠保存与 PG 确认分别计时，等待同步的数据不会删除，PG 写入失败会重试。已存历史预测端到端延迟保留过去的积压记录。重启恢复记录不参与计算、排队和输出延迟统计；PG 确认延迟包含保留下来的积压与恢复记录；持久化耗时按包含实时预测的合批事务统计，批中也可能包含恢复预测。历史训练输入仍在独立后台完整保存。' +
       ' 延迟统计于 ' + timeLabel(livePerformance.updated_at) + '。'}),
     ...(shadow.live?.persist_error ? [el('p',{class:'warning',text:'PG 同步错误：' + shadow.live.persist_error})] : []),

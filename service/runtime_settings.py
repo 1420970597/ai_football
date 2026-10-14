@@ -57,6 +57,8 @@ class RuntimeConfig:
     betting_enabled: bool = False
     betting_stake_mode: str = "fixed"
     betting_fixed_stake: float = 10.0
+    betting_max_total_exposure: float = 0.10
+    betting_max_match_exposure: float = 0.02
     betting_min_hit_count: int = 3
     # Settled evidence is independent from repeated appearances of one quote.
     # Keep real-money execution fail-closed until the performance sample is
@@ -105,6 +107,8 @@ RANGES = {
     "algorithm_alert_min_samples": (1, 100000),
     "algorithm_alert_threshold": (0.0, 1.0),
     "betting_fixed_stake": (0.01, 100000.0),
+    "betting_max_total_exposure": (0.0, 1.0),
+    "betting_max_match_exposure": (0.0, 1.0),
     "betting_min_hit_count": (1, 100000),
     "betting_min_evidence_matches": (1, 100000),
     "betting_min_edge": (0.0, 1.0),

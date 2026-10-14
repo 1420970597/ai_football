@@ -1175,6 +1175,7 @@ class RealtimeHub:
         # between two known scores is.  Decisions use it to ignore the
         # pre-goal prices the venue keeps publishing for several seconds.
         self._score_changed_at_ms: Dict[str, int] = {}
+        self._score_observed_since_ms: Dict[str, int] = {}
         #: mid → 本 Hub **首次见到**该场推送的时刻（单调时钟不可回拨）。
         #:
         #: 用途：区分「从未有过比分推送、且已存在很久」的场次（几乎可以
@@ -1521,6 +1522,7 @@ class RealtimeHub:
                 "half_score": self.half_score(mid),
                 "score_age_s": self.score_age_s(mid),
                 "score_changed_at_ms": self._score_changed_at_ms.get(mid),
+                "score_state_boundary_ms": self._score_changed_at_ms.get(mid) or self._score_observed_since_ms.get(mid),
                 "status_age_s": (time.monotonic() - self._status_at[mid]
                                  if mid in self._status_at else None),
                 "status": dict(self._status.get(mid, {})),
@@ -1586,6 +1588,8 @@ class RealtimeHub:
     def _set_score(self, mid: str, score: Tuple[int, int]) -> None:
         """Store a live score and stamp the moment it changed (caller holds lock)."""
         previous = self._scores.get(mid)
+        if mid not in self._score_observed_since_ms:
+            self._score_observed_since_ms[mid] = int(time.time() * 1000)
         if previous is not None and tuple(previous) != tuple(score):
             self._score_changed_at_ms[mid] = int(time.time() * 1000)
         self._scores[mid] = score

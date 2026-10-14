@@ -2,17 +2,53 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from core.learned_model import DATA_VERSION, FEATURES
-from core.decision_features import FEATURE_VERSION
+from core.learned_model import FEATURES
 from service.live_expert import LiveExpertService
 from service.model_service import ModelService
 from service.model_training import atomic_json
 from service.runtime_settings import RuntimeConfig, RuntimeSettings, validated
 from tests import test_live_expert
+from tests.test_model_validation import approved_artifact
 
 
 class LearnedDecisionTests(unittest.TestCase):
+    def test_live_model_and_shadow_projection_match_and_hybrid_keeps_formula(self):
+        from core.learned_decision import calibrate
+        from core.model_validation import coherent_probabilities
+        from core.live_model import MODEL_VERSION
+        learned = [.4, .6, .7, .3]
+        algorithm = [.6, .4, .3, .7]
+        candidates = [
+            {'match_id': 'm', 'at': '2025-01-02T00:00:00+00:00',
+             'algorithm': 'economic_ensemble', 'market': 'OU', 'line': line,
+             'outcome': outcome, 'p_model': probability, 'p_market': probability,
+             'odds': 2., 'win_stake': .5, 'loss_stake': .5, 'research_only': False,
+             'tail': 0., 'training_history': []}
+            for (line, outcome), probability in zip(
+                [('2.5', 'over'), ('2.5', 'under'), ('3.5', 'over'), ('3.5', 'under')], algorithm)]
+        model = approved_artifact('projection-test')
+        expected = coherent_probabilities(candidates, learned)
+        self.assertEqual([round(p, 6) for p in expected], [.55, .45, .55, .45])
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            path = Path(directory) / 'active.json'
+            atomic_json(path, model)
+            snapshot = {'_model_path': str(path), 'captured_at_ms': 1735776000000.,
+                        'score': [0, 0], 'status': {'mst': 1200, 'mmp': '6'}}
+            for mode, weight in [('model', 1.), ('hybrid', .25)]:
+                with self.subTest(mode=mode), \
+                        patch('core.learned_decision._load', return_value=model), \
+                        patch('core.learned_decision.predict', side_effect=learned):
+                    result = calibrate({'candidates': candidates}, [], snapshot,
+                                       RuntimeConfig(), MODEL_VERSION, mode=mode, blend_weight=weight)
+                    self.assertTrue(result['model_application']['applied'], result['model_application'])
+                    for candidate, raw_algorithm, projected in zip(result['candidates'], algorithm, expected):
+                        self.assertAlmostEqual(candidate['learned_probability'], projected)
+                        self.assertAlmostEqual(candidate['p_model'],
+                                               (1 - weight) * raw_algorithm + weight * projected)
+                        self.assertEqual(candidate['decision_evidence']['final_probability'], candidate['p_model'])
+
     def test_setting_is_validated_and_persisted(self):
         with self.assertRaises(ValueError):
             validated(RuntimeConfig(), {'model_shadow_enabled':1})
@@ -32,10 +68,7 @@ class LearnedDecisionTests(unittest.TestCase):
             (root/'models').mkdir()
             weights = [0.] * len(FEATURES)
             weights[0] = 2
-            model = {'version':'test','data_version':DATA_VERSION,'features':list(FEATURES),
-                     'weights':weights,'updated_at':'2025-01-01T00:00:00+00:00',
-                     'feature_version':FEATURE_VERSION,
-                     'validation':{'brier':.1},'baseline':{'brier':.2},'promotion':{'approved':True}}
+            model = approved_artifact('test', weights=weights)
             atomic_json(root/'models'/'active.json', model)
             hub = test_live_expert.LiveExpertTests().hub()
             svc = LiveExpertService()
@@ -63,3 +96,15 @@ class LearnedDecisionTests(unittest.TestCase):
         self.assertFalse(row['ensemble']['model_application']['applied'])
         self.assertEqual([c['p_model'] for c in row['ensemble']['candidates']],
                          [c['p_model'] for c in row['baseline_ensemble']['candidates']])
+
+    def test_actual_loader_rejects_legacy_approval_and_retains_artifact(self):
+        from core.learned_decision import _load
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            path = Path(directory) / 'legacy.json'
+            model = approved_artifact()
+            model.pop('validation_contract_version')
+            atomic_json(path, model)
+            stat = path.stat()
+            with self.assertRaisesRegex(ValueError, '验证契约'):
+                _load(str(path), (stat.st_mtime_ns, stat.st_ino, stat.st_size))
+            self.assertTrue(path.exists())

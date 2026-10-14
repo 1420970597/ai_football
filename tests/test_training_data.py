@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import nullcontext
 from unittest.mock import patch
 
@@ -15,24 +15,31 @@ from store.training_data import (
     _postgres_training_sample_query,
     dataset,
     snapshot_inputs,
+    training_cohort_progress,
+    _cohort_curve_graded,
     write_inputs,
 )
 from store.training_projection import ProjectionTarget
 
 
 def decision():
-    common = {'p_market': .5, 'p_model': .6, 'ts_ms': 1000, 'quote_received_at_ms': 1000, 'research_only': False,
+    common = {'p_market': .5, 'p_model': .6, 'odds':2., 'ts_ms': 1000, 'quote_received_at_ms': 1000, 'research_only': False,
               'decision_status': 'settleable', 'settlement_basis': 'full_score', 'training_history': [[100, 2], [900, 2.1], [2000, 9]], 'trend_pct': 350}
     candidates = [{**common, 'market': 'HAD', 'line': '', 'outcome': 'home'},
                   {**common, 'market': 'OU', 'line': '2/2.5', 'outcome': 'over'},
                   {**common, 'settlement_basis': 'remaining_score', 'market': 'AH', 'line': '-0.5', 'outcome': 'away'},
                   {**common, 'settlement_basis': 'half_score_required', 'market': 'HAD_1H', 'line': '', 'outcome': 'home'}]
+    candidates += [{**candidates[index],'outcome':outcome} for index,outcomes in
+                   ((0,('draw','away')),(1,('under',)),(2,('home',)),(3,('draw','away')))
+                   for outcome in outcomes]
     return {'model_version': MODEL_VERSION, 'competition_type': 'real', 'match_id': 'm1', 'computed_at': '2025-01-01T12:00:00+00:00',
             'score': [0,0], 'elapsed_s': 1200, 'input_cutoff_ms': 1000, 'received_at_ms': 1000,
+            'state_qualified':True, 'score_state_boundary_ms':1., 'score_change_cooldown_s':0.,
             'evaluations': [{'algorithm': a, 'candidates': candidates} for a in ('poisson_market', 'poisson_time_decay')]}
 
 
 class TrainingDataTests(unittest.TestCase):
+
     def test_postgres_insert_batches_are_bounded_and_parameterized(self):
         from store.training_data import _insert_postgres_rows
         calls = []
@@ -107,16 +114,20 @@ class TrainingDataTests(unittest.TestCase):
         return rows, quality, statements
 
     def test_postgres_quality_does_not_certify_unaudited_archive_totals(self):
-        source = snapshot_inputs(decision())[:2]
-        source[1]['settlement_basis'] = 'unknown'
+        source = snapshot_inputs(decision())[:3]
+        source[2]['settlement_basis'] = 'unknown'
         rows, quality, statements = self.postgres_audit(source)
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(sum(row['graded'] for row in rows),2)
+        ungraded = next(row for row in rows if not row['graded'])
+        self.assertIsNone(ungraded['y'])
+        self.assertEqual(ungraded['observation_weight'],0.)
         self.assertTrue(quality['sampled'])
         self.assertEqual(quality['counts_scope'], 'sampled_qualified_inputs')
         self.assertFalse(quality['full_audit_complete'])
-        self.assertEqual(quality['sample_examined_records'], 2)
+        self.assertEqual(quality['sample_examined_records'], 3)
         self.assertEqual(quality['sample_examined_matches'], 1)
-        self.assertEqual(quality['sample_valid_training_decisions'], 1)
+        self.assertEqual(quality['sample_valid_training_decisions'], 2)
         self.assertEqual(quality['sample_ungraded_inputs'], 1)
         self.assertEqual(quality['estimated_input_records'], 23_000_000)
         self.assertEqual(quality['estimated_input_matches'], 2300)
@@ -126,8 +137,11 @@ class TrainingDataTests(unittest.TestCase):
                       'source_eligible_decisions'):
             with self.subTest(field=field):
                 self.assertIsNone(quality[field])
-        self.assertFalse(any('COUNT(' in operation.upper() for operation in statements))
-        self.assertEqual(quality['sampling_method'], 'earliest_qualified_inputs_per_match')
+        # Sampling is bounded independently from exact archive quality counts.
+        self.assertFalse(any('SELECT COUNT(' in operation.upper() for operation in statements))
+        self.assertEqual(quality['sampling_method'], 'time_stratified_market_curves_per_match')
+        self.assertEqual(quality['sample_label_matches'], 1)
+        self.assertEqual(quality['sample_max_rows_per_match'], 3)
 
     def test_postgres_empty_sample_leaves_unknown_quality_unknown(self):
         for estimate in (None, (-1, None), (0, None)):
@@ -143,30 +157,169 @@ class TrainingDataTests(unittest.TestCase):
                 self.assertEqual(quality['estimated_input_records'], 0 if estimate == (0, None) else None)
 
     def test_postgres_uncapped_quality_only_certifies_qualified_inputs(self):
-        source = snapshot_inputs(decision())[:1]
+        source = snapshot_inputs(decision())[:3]
         rows, quality, _ = self.postgres_audit(source, max_per_match=None)
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 3)
         self.assertFalse(quality['sampled'])
         self.assertEqual(quality['counts_scope'], 'qualified_inputs')
         self.assertFalse(quality['full_audit_complete'])
-        self.assertEqual(quality['source_eligible_decisions'], 1)
-        self.assertEqual(quality['valid_training_decisions'], 1)
+        self.assertEqual(quality['source_eligible_decisions'], 3)
+        self.assertEqual(quality['valid_training_decisions'], 3)
         self.assertIsNone(quality['quarantined_inputs'])
         self.assertIsNone(quality['waiting_for_label'])
 
-    def test_postgres_training_query_uses_index_driven_lateral_sampling(self):
+    def test_postgres_training_query_uses_bounded_stratified_time_sampling(self):
         labels = "(SELECT match_id, available_at FROM latest_labels)"
         time_filter = "cutoff_ms > 0 AND decision_received_at_ms <= cutoff_ms AND quote_received_at_ms <= cutoff_ms"
         query, args = _postgres_training_sample_query(
             labels, time_filter, ("data-v", "model-v", "feature-v"), 40)
 
         self.assertIn("CROSS JOIN LATERAL", query)
-        self.assertIn("ORDER BY i.at,i.algorithm,i.market,i.line,i.outcome LIMIT %s", query)
-        self.assertNotIn("ROW_NUMBER() OVER (PARTITION BY i", query)
-        self.assertEqual(args, ("data-v", "model-v", "feature-v", 40))
+        self.assertIn("generate_series(0,7)", query)
+        self.assertIn("GROUP BY i.algorithm,i.market", query)
+        self.assertIn("BOOL_AND(COALESCE(", query)
+        self.assertIn("ORDER BY i.at ASC", query)
+        self.assertIn("ORDER BY i.at DESC", query)
+        self.assertIn("time_bucket.lower_at", query)
+        self.assertIn("i.at<=time_bucket.upper_at", query)
+        self.assertIn("selected_point.at", query)
+        self.assertIn("hashtextextended(concat_ws", query)
+        self.assertNotIn("COUNT(*) OVER", query)
+        self.assertEqual(args, ("data-v", "model-v", "feature-v") * 4)
         self.assertIn("l.available_at > i.at", query)
         self.assertIn("i.decision_received_at_ms <= i.cutoff_ms", query)
         self.assertIn("i.quote_received_at_ms <= i.cutoff_ms", query)
+
+    def test_evenly_spaced_sampling_returns_exact_cap_for_shared_divisors(self):
+        for total, cap in ((100, 40), (120, 40), (12, 4), (41, 40), (4, 40)):
+            selected = [row for row in range(1, total + 1)
+                        if row * cap // total > (row - 1) * cap // total]
+            with self.subTest(total=total, cap=cap):
+                self.assertEqual(len(selected), min(total, cap))
+                if total > cap:
+                    self.assertEqual(selected[-1], total)
+
+    def test_sqlite_sampling_keeps_full_cap_across_match_timeline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = LedgerDB(root/'ledger.sqlite3')
+            final = {'match_id':'m1', 'at':'2025-01-01T12:00:00+00:00',
+                     'settled_at':'2025-01-01T14:00:00+00:00', 'competition_type':'real',
+                     'status':'won', 'ft_score':[2,1], 'ht_score':[1,0],
+                     'label_available_at':'2025-01-01T14:00:00+00:00'}
+            db.put([final], lambda _:1.0)
+            db.connection.commit()
+            base = datetime.fromisoformat('2025-01-01T12:00:00+00:00')
+            rows = []
+            for second in range(100):
+                source = decision()
+                source['computed_at'] = (base + timedelta(seconds=second)).isoformat()
+                source['input_cutoff_ms'] = 1000 + second
+                source['received_at_ms'] = 1000 + second
+                common = source['evaluations'][0]['candidates'][1]
+                source['evaluations'] = [{'algorithm':'economic_ensemble','candidates':[
+                    {**common,'outcome':outcome} for outcome in ('over','under')]}]
+                rows.extend(snapshot_inputs(source))
+            path = root/'inputs.sqlite3'
+            write_inputs(path, rows)
+
+            sampled = dataset(db.path, path, max_per_match=40)
+
+            sampled_times = sorted({row['at'] for row in sampled})
+            self.assertEqual(len(sampled), 40)
+            self.assertEqual(len(sampled_times), 20)
+            self.assertGreater(sampled_times[0], base.isoformat())
+            self.assertEqual(sampled_times[-1], (base + timedelta(seconds=99)).isoformat())
+
+    def test_grouped_sampling_preserves_complete_had_across_time_and_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = LedgerDB(root/'ledger.sqlite3')
+            final = {'match_id':'m1', 'at':'2025-01-01T12:00:00+00:00',
+                     'settled_at':'2025-01-01T14:00:00+00:00', 'competition_type':'real',
+                     'status':'won', 'ft_score':[2,1], 'ht_score':[1,0],
+                     'label_available_at':'2025-01-01T14:00:00+00:00'}
+            db.put([final], lambda _:1.0)
+            db.connection.commit()
+            rows = []
+            base = datetime.fromisoformat(final['at'])
+            for second in range(100):
+                source = decision()
+                source['computed_at'] = (base + timedelta(seconds=second)).isoformat()
+                common = source['evaluations'][0]['candidates'][0]
+                source['evaluations'] = [{'algorithm':'poisson_market',
+                    'candidates':[{**common, 'outcome':o} for o in ('home','draw','away')]}]
+                rows.extend(snapshot_inputs(source))
+            path = root/'inputs.sqlite3'
+            write_inputs(path, rows)
+            sampled = dataset(db.path, path, max_per_match=40)
+            groups = {}
+            for row in sampled:
+                groups.setdefault(row['at'], set()).add(row['outcome'])
+            self.assertTrue(groups)
+            self.assertTrue(all(outcomes == {'home','draw','away'} for outcomes in groups.values()))
+            self.assertEqual(len(sampled),39)
+            self.assertEqual(len(groups),13)
+            self.assertEqual(max(groups), (base + timedelta(seconds=99)).isoformat())
+            final.update(ft_score=[1,1], ht_score=[0,0])
+            db.put([final], lambda _:2.0)
+            db.connection.commit()
+            changed = dataset(db.path, path, max_per_match=40)
+            def identity(values):
+                return [(r['at'],r['algorithm'],r['market'],r['line'],r['outcome']) for r in values]
+            self.assertEqual(identity(sampled), identity(changed))
+            self.assertNotEqual([r['y'] for r in sampled], [r['y'] for r in changed])
+
+    def test_postgres_capped_reader_does_not_split_group_a_second_time(self):
+        source = snapshot_inputs(decision())[:1]
+        common = source[0]
+        source = [{**common, 'outcome':o} for o in ('home','draw','away')]
+        rows, quality, _ = self.postgres_audit(source, max_per_match=1)
+        self.assertEqual({r['outcome'] for r in rows}, {'home','draw','away'})
+        self.assertIsNone(quality['sampling_row_bound'])
+        self.assertEqual(quality['sampling_unit'], 'match_id,at,algorithm,market')
+
+    def test_market_curve_sampling_preserves_cross_line_coherence(self):
+        from core.model_validation import coherent_probabilities
+        from store.training_data import _selected_contract_rows
+        source = []
+        for second in range(10):
+            for line, probabilities in (('2.5', (.4, .6)), ('3.5', (.7, .3))):
+                for outcome, probability in zip(('over', 'under'), probabilities):
+                    source.append({'match_id':'m1', 'at':str(second), 'algorithm':'a',
+                                   'market':'OU', 'line':line, 'outcome':outcome,
+                                   'probability':probability})
+        sampled = [row for row, selected in _selected_contract_rows(source, {'m1':40}, 1,
+                                                                    curve_totals={'m1':10}) if selected]
+        self.assertEqual(len(sampled), 4)
+        self.assertEqual({row['line'] for row in sampled}, {'2.5', '3.5'})
+        full_curve = source[-4:]
+        self.assertEqual(coherent_probabilities(sampled, [r['probability'] for r in sampled]),
+                         coherent_probabilities(full_curve, [r['probability'] for r in full_curve]))
+        for actual, expected in zip(coherent_probabilities(sampled, [r['probability'] for r in sampled]),
+                                    [.55, .45, .55, .45]):
+            self.assertAlmostEqual(actual, expected)
+
+    def test_sqlite_invalid_clock_quarantines_whole_market_curve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = LedgerDB(root/'ledger.sqlite3')
+            final = {'match_id':'m1', 'at':'2025-01-01T12:00:00+00:00',
+                     'settled_at':'2025-01-01T14:00:00+00:00', 'competition_type':'real',
+                     'status':'won', 'ft_score':[2,1], 'ht_score':[1,0],
+                     'label_available_at':'2025-01-01T14:00:00+00:00'}
+            db.put([final], lambda _:1.0)
+            db.connection.commit()
+            common = next(row for row in snapshot_inputs(decision()) if row['market']=='OU')
+            rows = [{**common, 'line':line, 'outcome':outcome}
+                    for line in ('2.5','3.5') for outcome in ('over','under')]
+            rows[-1]['quote_received_at_ms'] = 1001
+            path = root/'inputs.sqlite3'
+            write_inputs(path, rows)
+            quality = {}
+            self.assertEqual(dataset(db.path, path, audit=quality, max_per_match=1), [])
+            self.assertEqual(quality['quarantined_missing_time_contract'], 1)
+            self.assertEqual(quality['quarantined_incomplete_market_curve_inputs'], 3)
 
     def test_postgres_training_query_without_sampling_keeps_time_boundary(self):
         labels = "(SELECT match_id, available_at FROM latest_labels)"
@@ -174,7 +327,9 @@ class TrainingDataTests(unittest.TestCase):
             labels, "cutoff_ms > 0", ("d", "m", "f"), None)
 
         self.assertNotIn("CROSS JOIN LATERAL", query)
-        self.assertIn("SELECT i.* FROM model_inputs i JOIN", query)
+        self.assertTrue(query.startswith('SELECT i.*,('))
+        self.assertIn('AS _curve_complete FROM model_inputs i JOIN',query)
+        self.assertIn('GROUP BY j.line HAVING COUNT(*)',query)
         self.assertIn("l.available_at > i.at", query)
         self.assertEqual(args, ("d", "m", "f"))
 
@@ -212,10 +367,11 @@ class TrainingDataTests(unittest.TestCase):
             a = dataset(db.path,path,max_per_match=3,audit=quality)
             b = dataset(db.path,path,max_per_match=3)
             self.assertEqual(a,b)
-            self.assertEqual(len(a),3)
-            self.assertEqual(quality['source_eligible_decisions'],8)
-            self.assertEqual(quality['input_records'],8)
-            self.assertEqual(quality['valid_training_decisions'],8)
+            self.assertEqual(len(a),2)  # mean curve size -> one complete last OU curve
+            self.assertEqual({row['outcome'] for row in a},{'over','under'})
+            self.assertEqual(quality['source_eligible_decisions'],20)
+            self.assertEqual(quality['input_records'],20)
+            self.assertEqual(quality['valid_training_decisions'],20)
             self.assertEqual(quality['invalid_training_records'],0)
             self.assertEqual(quality['counts_scope'], 'full_inputs')
             self.assertTrue(quality['full_audit_complete'])
@@ -248,8 +404,8 @@ class TrainingDataTests(unittest.TestCase):
 
             self.assertEqual(rows, [])
             self.assertEqual(quality['input_matches'], 1)
-            self.assertEqual(quality['eligible_time_contract'], 8)
-            self.assertEqual(quality['waiting_for_label'], 8)
+            self.assertEqual(quality['eligible_time_contract'], 20)
+            self.assertEqual(quality['waiting_for_label'], 20)
             self.assertEqual(quality['valid_training_decisions'], 0)
             self.assertGreaterEqual(quality['quarantined_missing_time_contract'], 0)
             self.assertLessEqual(quality['eligible_time_contract'], quality['input_records'])
@@ -268,9 +424,9 @@ class TrainingDataTests(unittest.TestCase):
                 con.execute('UPDATE inputs SET data_version=NULL,entry_score=NULL')
             quality = {}
             self.assertEqual(dataset(db.path,path,audit=quality), [])
-            self.assertEqual(quality['quarantined_inputs'],8)
+            self.assertEqual(quality['quarantined_inputs'],20)
             self.assertEqual(quality['valid_training_decisions'],0)
-            self.assertEqual(quality['invalid_training_records'],8)
+            self.assertEqual(quality['invalid_training_records'],20)
 
     def test_remaining_labels_require_benchmark_and_weight_half_stake(self):
         from store.training_data import target
@@ -304,14 +460,14 @@ class TrainingDataTests(unittest.TestCase):
 
     def test_all_markets_algorithms_and_strict_prefix(self):
         rows = snapshot_inputs(decision())
-        self.assertEqual(len(rows), 8)
+        self.assertEqual(len(rows), 20)
         for row in rows:
             x = json.loads(row['x'])
             self.assertAlmostEqual(x[FEATURES.index('trend_return')], .05)
             self.assertEqual(x[FEATURES.index('trend_points')], 2/40)
         source = decision()
         source['evaluations'][0]['candidates'][0]['ts_ms'] = 1001
-        self.assertEqual(len(snapshot_inputs(source)), 6)  # candidate list shared by two test algorithms
+        self.assertEqual(len(snapshot_inputs(source)), 14)  # both complete HAD curves are excluded
         source.pop('input_cutoff_ms')
         self.assertEqual(snapshot_inputs(source), [])
 
@@ -334,7 +490,7 @@ class TrainingDataTests(unittest.TestCase):
         source = decision()
         source['evaluations'][0]['candidates'][0]['quote_received_at_ms'] = 1001
         rows = snapshot_inputs(source)
-        self.assertEqual(len(rows), 6)
+        self.assertEqual(len(rows), 14)
 
     def test_ledger_fallback_cannot_bypass_dual_time_contract(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -380,20 +536,200 @@ class TrainingDataTests(unittest.TestCase):
             path = root / 'inputs.sqlite3'
             write_inputs(path, snapshot_inputs(decision()))
             rows = dataset(db.path, path)
-            self.assertEqual(len(rows), 8)
+            self.assertEqual(len(rows), 20)
             self.assertEqual(len({r['match_id'] for r in rows}), 1)
             self.assertEqual({r['y'] for r in rows}, {0,1})
             write_inputs(path, snapshot_inputs(decision()))
-            self.assertEqual(len(dataset(db.path, path)), 8)
+            self.assertEqual(len(dataset(db.path, path)), 20)
             final.pop('ht_score')
             final['label_available_at'] = '2025-01-01T14:30:00+00:00'
             db.put([final], lambda value: datetime.fromisoformat(value).timestamp())
             db.connection.commit()
-            self.assertEqual(len(dataset(db.path, path)), 6)
+            after = dataset(db.path,path)
+            self.assertEqual(len(after),20)
+            self.assertEqual(sum(row['graded'] for row in after),14)
             final['settled_at'] = '2025-01-01T11:00:00+00:00'
             final['label_available_at'] = '2025-01-01T11:00:00+00:00'
             db.put([final], lambda value: datetime.fromisoformat(value).timestamp())
             db.connection.commit()
-            # Append-only labels retain the latest actually available revision;
-            # a later-arriving backdated correction cannot erase it.
-            self.assertEqual(len(dataset(db.path, path)), 6)
+            # A backdated correction cannot erase the last available revision.
+            after = dataset(db.path,path)
+            self.assertEqual(len(after),20)
+            self.assertEqual(sum(row['graded'] for row in after),14)
+
+    def complete_input_curve(self, *, at='2025-01-01T12:00:00+00:00', line='2.5'):
+        source = decision()
+        source['computed_at'] = at
+        common = source['evaluations'][0]['candidates'][1]
+        source['evaluations'] = [{'algorithm':'economic_ensemble', 'candidates':[
+            {**common,'market':'OU','line':line,'outcome':outcome} for outcome in ('over','under')]}]
+        return snapshot_inputs(source)
+
+    def settled_ledger(self, root, *, score=(2,1)):
+        db = LedgerDB(root/'ledger.sqlite3')
+        db.put([{'match_id':'m1','at':'2025-01-01T12:00:00+00:00',
+            'settled_at':'2025-01-01T14:00:00+00:00','label_available_at':'2025-01-01T14:00:00+00:00',
+            'competition_type':'real','status':'won','ft_score':list(score),'ht_score':[1,0]}],
+            lambda value:datetime.fromisoformat(value).timestamp())
+        db.connection.commit()
+        self.addCleanup(db.connection.close)
+        return db
+
+    def test_new_generation_requires_score_state_and_post_cooldown_quote_proof(self):
+        self.assertEqual(len(snapshot_inputs(decision())),20)
+        for changes in ({'state_qualified':False},{'state_qualified':None},
+                        {'score_state_boundary_ms':0},{'score_state_boundary_ms':float('nan')},
+                        {'score_change_cooldown_s':-1},{'score_change_cooldown_s':None},
+                        {'score_state_boundary_ms':900,'score_change_cooldown_s':.2}):
+            with self.subTest(changes=changes):
+                self.assertEqual(snapshot_inputs({**decision(),**changes}),[])
+        source = decision()
+        source.update(score_state_boundary_ms=900,score_change_cooldown_s=.1)
+        self.assertEqual(len(snapshot_inputs(source)),20)
+        source['evaluations'][0]['candidates'][0]['ts_ms'] = 999
+        self.assertEqual(len(snapshot_inputs(source)),14)
+        source = decision()
+        source.update(score_state_boundary_ms=900,score_change_cooldown_s=.1)
+        source['evaluations'][0]['candidates'][0]['quote_received_at_ms'] = 999
+        self.assertEqual(len(snapshot_inputs(source)),14)
+
+    def test_cohort_curve_requires_complete_outcomes_clocks_and_a_graded_target(self):
+        rows = self.complete_input_curve()
+        final = {'ft_score':(2,1),'ht_score':(1,0),'settled_at':'2025-01-01T14:00:00+00:00'}
+        self.assertTrue(_cohort_curve_graded(rows,final))
+        self.assertFalse(_cohort_curve_graded(rows[:1],final))
+        for key,value in (('decision_received_at_ms',None),('quote_received_at_ms',1001),
+                          ('cutoff_ms',float('inf')),('at','2025-01-01T14:00:00+00:00')):
+            with self.subTest(key=key):
+                self.assertFalse(_cohort_curve_graded([{**rows[0],key:value},rows[1]],final))
+        self.assertFalse(_cohort_curve_graded(self.complete_input_curve(line='3'),final))
+
+    def test_snapshot_never_persists_remaining_directions_of_rejected_curve(self):
+        source = decision()
+        source['evaluations'][0]['candidates'][0]['research_only'] = True
+        rows = snapshot_inputs(source)
+        self.assertEqual(len(rows),14)
+        self.assertFalse(any(row['market']=='HAD' for row in rows))
+        source = decision()
+        source['evaluations'][0]['candidates'].pop(4)  # missing draw in both shared HAD curves
+        rows = snapshot_inputs(source)
+        self.assertEqual(len(rows),14)
+        self.assertFalse(any(row['market']=='HAD' for row in rows))
+
+    def test_sqlite_dataset_quarantines_entire_curve_with_one_incomplete_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = self.settled_ledger(root,score=(2,0))
+            path = root/'inputs.sqlite3'
+            # A complete push line is context. A missing direction at another
+            # line invalidates the entire market curve, including its push.
+            rows = self.complete_input_curve(line='2')+self.complete_input_curve(line='2.5')[:1]
+            write_inputs(path,rows)
+            quality = {}
+            with patch('store.training_data.projection_target_from_env',return_value=None):
+                actual = dataset(db.path,path,audit=quality)
+            self.assertEqual(actual,[])
+            self.assertEqual(quality['quarantined_incomplete_outcome_curve_inputs'],3)
+            self.assertEqual(quality['invalid_training_records'],3)
+
+    def test_pg_dataset_reports_incomplete_curve_exclusion_without_decoding_features(self):
+        source = snapshot_inputs(decision())[:3]
+        for row in source:
+            row['_curve_complete'] = False
+            row['x'] = 'must not be decoded'
+        rows,quality,statements = self.postgres_audit(source)
+        self.assertEqual(rows,[])
+        self.assertEqual(quality['sample_incomplete_outcome_curve_inputs'],3)
+        self.assertEqual(quality['sample_valid_training_decisions'],0)
+        self.assertTrue(any('GROUP BY j.line HAVING COUNT(*)' in sql for sql in statements))
+
+    def test_sqlite_push_is_valid_context_and_classification_unscored_not_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = self.settled_ledger(root,score=(2,0))
+            path = root/'inputs.sqlite3'
+            write_inputs(path,self.complete_input_curve(line='2')+self.complete_input_curve(line='2.5'))
+            quality = {}
+            with patch('store.training_data.projection_target_from_env',return_value=None):
+                rows = dataset(db.path,path,audit=quality)
+            self.assertEqual(len(rows),4)
+            self.assertEqual(sum(row['graded'] for row in rows),2)
+            self.assertEqual(quality['valid_context_records'],4)
+            self.assertEqual(quality['classification_unscored_records'],2)
+            self.assertEqual(quality['invalid_training_records'],0)
+
+    def test_cohort_progress_exact_matches_cached_and_separate_input_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = self.settled_ledger(root)
+            first,second = root/'inputs-a.sqlite3',root/'inputs-b.sqlite3'
+            write_inputs(first,self.complete_input_curve())
+            write_inputs(second,self.complete_input_curve()[:1])
+            with patch('store.training_data.projection_target_from_env',return_value=None):
+                progress = training_cohort_progress(db.path,first)
+                self.assertTrue(progress['cohort_verified'])
+                self.assertEqual(progress['match_ids'],['m1'])
+                self.assertEqual(progress['new_matches'],1)
+                cached = training_cohort_progress(db.path,first,consumed_match_ids=['m1'])
+                self.assertEqual(cached['certificate_cache_hits'],1)
+                self.assertEqual(cached['new_matches'],0)
+                other = training_cohort_progress(db.path,second)
+                self.assertEqual(other['eligible_matches'],0)
+                self.assertTrue(other['cohort_verified'])
+            self.assertEqual(len(list((root/'models').glob('qualified-cohort-*.json'))),2)
+            self.assertIsNone(progress['eligible_decisions'])
+
+    def test_cohort_partial_scan_continues_and_never_advertises_ready(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = self.settled_ledger(root)
+            path = root/'inputs.sqlite3'
+            rows = self.complete_input_curve()
+            rows += self.complete_input_curve(at='2025-01-01T12:01:00+00:00')[:1]
+            rows += self.complete_input_curve(at='2025-01-01T12:02:00+00:00')[:1]
+            write_inputs(path,rows)
+            with patch('store.training_data.projection_target_from_env',return_value=None), \
+                    patch('store.training_data.COHORT_CURVE_PROBE_LIMIT',1):
+                first = training_cohort_progress(db.path,path)
+                second = training_cohort_progress(db.path,path)
+                third = training_cohort_progress(db.path,path)
+            self.assertFalse(first['cohort_verified'])
+            self.assertFalse(second['cohort_verified'])
+            self.assertTrue(third['cohort_verified'])
+            self.assertEqual(third['match_ids'],['m1'])
+
+    def test_cohort_negative_certificate_restarts_when_new_inputs_arrive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = self.settled_ledger(root)
+            path = root/'inputs.sqlite3'
+            write_inputs(path,self.complete_input_curve()[:1])
+            with patch('store.training_data.projection_target_from_env',return_value=None):
+                before = training_cohort_progress(db.path,path)
+                write_inputs(path,self.complete_input_curve(at='2025-01-01T12:01:00+00:00'))
+                after = training_cohort_progress(db.path,path)
+            self.assertEqual(before['eligible_matches'],0)
+            self.assertEqual(after['eligible_matches'],1)
+
+    def test_frozen_labels_and_input_cutoff_exclude_later_decisions_and_revisions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = self.settled_ledger(root)
+            path = root/'inputs.sqlite3'
+            write_inputs(path,self.complete_input_curve())
+            frozen = {'m1':{'ft_score':(2,1),'ht_score':(1,0),'settled_at':'2025-01-01T14:00:00+00:00'}}
+            write_inputs(path,self.complete_input_curve(at='2025-01-01T12:01:00+00:00'))
+            db.put([{'match_id':'m1','at':'2025-01-01T12:00:00+00:00',
+                'settled_at':'2025-01-01T14:30:00+00:00','label_available_at':'2025-01-01T14:30:00+00:00',
+                'competition_type':'real','status':'lost','ft_score':[0,0],'ht_score':[0,0]}],
+                lambda value:datetime.fromisoformat(value).timestamp())
+            db.connection.commit()
+            with patch('store.training_data.projection_target_from_env',return_value=None):
+                rows = dataset(db.path,path,cohort_labels=frozen,input_cutoff='2025-01-01T12:00:00+00:00')
+                empty = dataset(db.path,path,cohort_labels={},input_cutoff='2025-01-01T12:00:00+00:00')
+                with self.assertRaises(ValueError):
+                    dataset(db.path,path,cohort_labels=frozen,input_cutoff='2025-01-01T12:00:00')
+            self.assertEqual(len(rows),2)
+            self.assertTrue(all(row['at']=='2025-01-01T12:00:00+00:00' for row in rows))
+            self.assertEqual(next(row['y'] for row in rows if row['outcome']=='over'),1)
+            self.assertEqual(empty,[])

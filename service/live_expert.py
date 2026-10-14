@@ -422,10 +422,20 @@ class LiveExpertService:
         # no market of this match is fresh until the cooldown has elapsed.
         cutoff_ms = float(snapshot.get('captured_at_ms') or now * 1000)
         changed_at = snapshot.get('score_changed_at_ms')
+        state_boundary = snapshot.get('score_state_boundary_ms')
         cooldown_s = float(getattr(cfg, 'score_change_cooldown_s', 0.0) or 0.0)
         since_change_s = ((cutoff_ms - float(changed_at)) / 1000
                           if isinstance(changed_at, (int, float)) and not isinstance(changed_at, bool) else None)
         score_cooling = since_change_s is not None and cooldown_s > 0 and since_change_s < cooldown_s
+        # Initial/restarted score observation is a separate boundary; it is
+        # never invented as a goal timestamp. Only newly observed quotes can
+        # certify the current state for the new training/evidence generation.
+        state_qualified = (isinstance(state_boundary, (int, float)) and not isinstance(state_boundary, bool)
+                           and math.isfinite(state_boundary) and 0 < state_boundary <= cutoff_ms
+                           and cutoff_ms - state_boundary >= cooldown_s * 1000
+                           and all(snapshot.get(key) is not None and
+                                   0 <= float(snapshot[key]) <= cfg.state_max_age_s
+                                   for key in ('score_age_s', 'status_age_s')))
         if score_cooling:
             reasons.append('比分刚变化，等待盘口重定价（冷却 %.0f 秒）' % cooldown_s)
         groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -466,6 +476,11 @@ class LiveExpertService:
             # last score change; an older tick may still be a pre-goal price.
             prices_repriced = (changed_at is None or cooldown_s <= 0 or since_change_s is None or
                                min(q.ts_ms for q in outcomes.values()) >= float(changed_at) + cooldown_s * 1000)
+            if isinstance(state_boundary, (int, float)) and not isinstance(state_boundary, bool):
+                ready_at = float(state_boundary) + cooldown_s * 1000
+                prices_repriced = prices_repriced and all(
+                    q.ts_ms >= ready_at and float(getattr(q, 'received_at_ms', 0)) >= ready_at
+                    for q in outcomes.values())
             quotes = []
             for i, oc in enumerate(ordered):
                 q = outcomes[oc]
@@ -609,6 +624,9 @@ class LiveExpertService:
             'score_changed_at_ms': changed_at if since_change_s is not None else None,
             'seconds_since_score_change': round(since_change_s, 3) if since_change_s is not None else None,
             'score_cooling': score_cooling,
+            'score_state_boundary_ms': state_boundary,
+            'score_change_cooldown_s': cooldown_s,
+            'state_qualified': state_qualified,
             'finished': bool(snapshot.get('finished')) or phase == '999',
             'suspended': bool(snapshot.get('suspended')), 'suspended_ids': sorted(suspended_ids),
             'markets': markets, 'candidates': candidates, 'probabilities': {c['outcome']:c['p_model'] for c in candidates if c['market']=='HAD'},

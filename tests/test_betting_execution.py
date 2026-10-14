@@ -44,6 +44,9 @@ class BettingExecutionTests(unittest.TestCase):
         self.ledger = MagicMock()
         self.ledger.recommendation_performance.return_value = {'hit_count': 4, 'settled_samples': 6, 'independent_matches': 30, 'roi': .1, 'model_version': MODEL_VERSION}
         self.client = MagicMock()
+        self.client.fetch_betting_budget.side_effect = lambda: {
+            'source':'leyu_ybty','currency':'CNY','complete':True,
+            'observed_at':time.time(),'available':10000,'unsettled':[],'settled_receipts':[]}
         self.client.prepare_bet.side_effect = lambda detail, stake: detail
         self.client.submit_bet.return_value = {'submitted': True, 'status': 'accepted', 'order_no': 'ORDER-1'}
         self.factory = MagicMock(return_value=self.client)
@@ -80,6 +83,85 @@ class BettingExecutionTests(unittest.TestCase):
             results = list(workers.map(lambda p: self.executor.execute(self.row, p), self.row['picks']))
         self.assertEqual([r['status'] for r in results], ['accepted', 'accepted'])
         self.assertEqual(maximum, 1)
+
+    def test_submit_budget_refresh_never_scans_settled_history(self):
+        self.executor._refresh_budget(self.client, force=True)
+        self.client.fetch_settled_receipts.assert_not_called()
+        self.client.submit_bet.assert_not_called()
+
+    def test_background_reconciliation_exposes_partial_and_releases_exact_receipt(self):
+        from service.betting import _identity
+        account = _identity(['default'])
+        store = self.executor._ensure_order_store()
+        store.claim('old', {'stake': 2, 'match_id': 'm'}, 'old', account)
+        store.update('old', 'accepted', {'stake': 2, 'match_id': 'm', 'order_no': 'old-native'})
+        self.client.fetch_settled_receipts.return_value = {
+            'items': [{'source': 'leyu_ybty', 'status': 'settled', 'order_no': 'old-native'}],
+            'status': 'partial', 'complete': False, 'counted': 200, 'total': 301, 'next_page': 3}
+        with patch.dict('os.environ', {'LEYU_APP_LOGIN_NAME': ''}):
+            self.executor._reconcile_background(self.client)
+        status = self.executor.health()['settlement_reconciliation']
+        self.assertEqual(status['status'], 'partial')
+        self.assertEqual(status['released'], 1)
+        self.assertEqual(status['held_count'], 0)
+        self.assertEqual(status['next_page'], 3)
+        self.client.submit_bet.assert_not_called()
+
+    def test_background_scan_failure_preserves_valid_budget(self):
+        self.executor._refresh_budget(self.client, force=True)
+        expected = dict(self.executor._budget)
+        self.client.fetch_settled_receipts.side_effect = TimeoutError()
+        self.executor._reconcile_background(self.client)
+        self.assertEqual(self.executor._budget, expected)
+        self.assertEqual(self.executor.health()['settlement_reconciliation']['status'], 'partial')
+        self.client.submit_bet.assert_not_called()
+
+    def test_warm_loop_scans_after_budget_lock_is_released(self):
+        self.executor._stop = MagicMock()
+        self.executor._stop.is_set.side_effect = [False, True]
+        self.executor._warm_wake = MagicMock()
+        calls = []
+        def scan(_client):
+            self.assertFalse(self.executor._budget_lock.locked())
+            calls.append('scan')
+        with patch.object(self.executor, '_refresh_budget',
+                          side_effect=lambda *_args, **_kwargs: calls.append('budget')), patch.object(
+                self.executor, '_reconcile_background', side_effect=scan):
+            self.executor._warm_loop()
+        self.assertEqual(calls, ['budget', 'scan'])
+        self.client.submit_bet.assert_not_called()
+
+    def test_slow_real_client_starts_background_without_submitting(self):
+        self.executor.client_factory = None
+        with patch.dict('os.environ', {'LEYU_FAST_BETTING': '0'}), patch(
+                'service.betting.threading.Thread') as thread, patch.object(
+                self.executor, 'execute') as execute:
+            self.executor.start()
+        self.assertEqual(thread.call_count, 2)
+        self.assertEqual(thread.return_value.start.call_count, 2)
+        self.assertIsNone(self.executor._execution_pool)
+        execute.assert_not_called()
+        self.client.submit_bet.assert_not_called()
+
+    def test_disabled_warm_iteration_stops_reads_and_exits_cooperatively(self):
+        enabled = self.settings.snapshot()[0]
+        self.executor._stop = MagicMock()
+        self.executor._stop.is_set.side_effect = [False, False, True]
+        self.executor._warm_wake = MagicMock()
+        with patch.object(self.settings, 'snapshot', side_effect=[
+                (enabled, 1), (replace(enabled, betting_enabled=False), 2)]), patch.object(
+                self.executor, '_account_client', return_value=self.client) as login, patch.object(
+                self.executor, '_refresh_budget') as budget, patch.object(
+                self.executor, '_reconcile_background') as scan, patch.object(
+                self.executor, 'execute') as execute:
+            self.executor._warm_loop()
+        login.assert_called_once()
+        self.client.warm_betting.assert_called_once()
+        budget.assert_called_once()
+        scan.assert_called_once()
+        self.assertEqual(self.executor._warm_state, 'disabled')
+        execute.assert_not_called()
+        self.client.submit_bet.assert_not_called()
 
     def test_expired_quote_still_blocks_but_is_not_a_latency_deadline(self):
         self.snapshot['quotes'][0] = replace(

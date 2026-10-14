@@ -30,7 +30,7 @@ class RepairHistoryToolTests(unittest.TestCase):
                 self.assertEqual(revised['repair_status'],'already_current')
                 self.assertIn('sha256',revised['repair_source'])
                 with sqlite3.connect(root/'models'/'inputs.sqlite3') as con:
-                    self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0],8)
+                    self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0],20)
                 count = archive.stats()['packs']
                 run(root,state,Path(directory)/'backup')
                 # Source revisions are not republished on resume.

@@ -340,6 +340,7 @@ CREATE TABLE IF NOT EXISTS model_inputs (
     model_version TEXT,
     data_version TEXT,
     feature_version TEXT,
+    odds DOUBLE PRECISION,
     PRIMARY KEY (match_id, at, algorithm, market, line, outcome)
 )
 """
@@ -385,6 +386,7 @@ CREATE TABLE IF NOT EXISTS model_predictions (
     predicted_at TEXT,
     decision_received_at_ms DOUBLE PRECISION,
     quote_received_at_ms DOUBLE PRECISION,
+    odds DOUBLE PRECISION,
     entry_score TEXT,
     settlement_basis TEXT,
     model_version TEXT,
@@ -457,8 +459,10 @@ def ensure_postgres_schema(connection: Any) -> None:
         for column, kind in (("repair_status", "TEXT"), ("original_x_sha256", "TEXT"),
                              ("original_probability", "DOUBLE PRECISION"),
                              ("decision_received_at_ms", "DOUBLE PRECISION"),
-                             ("quote_received_at_ms", "DOUBLE PRECISION")):
+                             ("quote_received_at_ms", "DOUBLE PRECISION"),
+                             ("odds", "DOUBLE PRECISION")):
             cursor.execute("ALTER TABLE model_predictions ADD COLUMN IF NOT EXISTS " + column + " " + kind)
+        cursor.execute("ALTER TABLE model_inputs ADD COLUMN IF NOT EXISTS odds DOUBLE PRECISION")
         for statement in (
             # The migration's idx_migrate_model_inputs has this exact key
             # order. Reuse it so cutover never scans the 23M-row projection

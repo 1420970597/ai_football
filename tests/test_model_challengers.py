@@ -54,6 +54,18 @@ class ModelChallengersTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     fit_market_stump(rows, feature='signal')
 
+    def test_stump_ignores_push_loss_but_checks_context_clocks(self):
+        rows = training_rows()
+        pushes = [{**row, 'graded': False, 'y': None, 'observation_weight': 0,
+                   'features': {'signal': 999.}} for row in rows]
+        self.assertEqual(fit_market_stump(rows, feature='signal'),
+                         fit_market_stump(rows + pushes, feature='signal'))
+        with self.assertRaisesRegex(ValueError, '二元损失'):
+            fit_market_stump(pushes, feature='signal')
+        pushes[0]['received_at_ms'] = 1001
+        with self.assertRaisesRegex(ValueError, '截点'):
+            fit_market_stump(rows + pushes, feature='signal')
+
     def test_event_filter_excludes_late_arrivals_and_dynamic_poisson_uses_visible_red_card(self):
         events = [
             {'type': 'red_card', 'side': 'home', 'event_at_ms': 800, 'received_at_ms': 900},

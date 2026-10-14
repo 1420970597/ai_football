@@ -95,27 +95,37 @@ def _create_target(db: PGConnection) -> None:
         market TEXT, line TEXT, outcome TEXT, baseline DOUBLE PRECISION, x TEXT,
         decision_received_at_ms DOUBLE PRECISION, quote_received_at_ms DOUBLE PRECISION,
         entry_score TEXT, settlement_basis TEXT, model_version TEXT,
-        data_version TEXT, feature_version TEXT,
+        data_version TEXT, feature_version TEXT, odds DOUBLE PRECISION,
         PRIMARY KEY(match_id,at,algorithm,market,line,outcome))""")
     db.execute("""CREATE TABLE IF NOT EXISTS model_predictions(
         version TEXT, match_id TEXT, at TEXT, cutoff_ms DOUBLE PRECISION,
         algorithm TEXT, market TEXT, line TEXT, outcome TEXT, baseline DOUBLE PRECISION,
         x TEXT, probability DOUBLE PRECISION, predicted_at TEXT, entry_score TEXT,
         settlement_basis TEXT, model_version TEXT, data_version TEXT, feature_version TEXT,
+        odds DOUBLE PRECISION, decision_received_at_ms DOUBLE PRECISION, quote_received_at_ms DOUBLE PRECISION,
         repair_status TEXT, original_x_sha256 TEXT, original_probability DOUBLE PRECISION,
         PRIMARY KEY(version,match_id,at,algorithm,market,line,outcome))""")
     db.execute("""CREATE TABLE IF NOT EXISTS model_labels(
         match_id TEXT NOT NULL, available_at TEXT NOT NULL, ft_score TEXT NOT NULL,
         ht_score TEXT, status TEXT NOT NULL, revision_id TEXT PRIMARY KEY,
         revision_order DOUBLE PRECISION NOT NULL DEFAULT 0)""")
-    for column, kind in (("repair_status", "TEXT"), ("original_x_sha256", "TEXT"),
-                         ("original_probability", "DOUBLE PRECISION")):
-        db.execute("ALTER TABLE model_predictions ADD COLUMN IF NOT EXISTS " + column + " " + kind)
+    for table, column, kind in (("model_inputs", "odds", "DOUBLE PRECISION"),
+                                ("model_predictions", "odds", "DOUBLE PRECISION"),
+                                ("model_predictions", "decision_received_at_ms", "DOUBLE PRECISION"),
+                                ("model_predictions", "quote_received_at_ms", "DOUBLE PRECISION"),
+                                ("model_predictions", "repair_status", "TEXT"),
+                                ("model_predictions", "original_x_sha256", "TEXT"),
+                                ("model_predictions", "original_probability", "DOUBLE PRECISION")):
+        db.execute("ALTER TABLE " + table + " ADD COLUMN IF NOT EXISTS " + column + " " + kind)
     db.execute("""CREATE TABLE IF NOT EXISTS files(
         path TEXT PRIMARY KEY, object_key TEXT NOT NULL, "offset" BIGINT NOT NULL,
         compressed BIGINT NOT NULL, size BIGINT NOT NULL, sha256 TEXT NOT NULL,
         mtime_ns BIGINT NOT NULL, cleaned INTEGER NOT NULL DEFAULT 0)""")
     db.execute("CREATE TABLE IF NOT EXISTS packs(object_key TEXT PRIMARY KEY,bytes BIGINT,sha256 TEXT,at DOUBLE PRECISION)")
+    db.execute('CREATE TABLE IF NOT EXISTS model_schema_migrations '
+               '(version TEXT PRIMARY KEY,completed_at TIMESTAMPTZ NOT NULL DEFAULT now())')
+    db.execute("INSERT INTO model_schema_migrations(version) VALUES ('TASK-55-prediction-clocks-odds') "
+               'ON CONFLICT(version) DO NOTHING')
     for table, columns in {
         "decisions": "match_id,at,algorithm,trigger,status",
         "orders": "selection_key,account_key",

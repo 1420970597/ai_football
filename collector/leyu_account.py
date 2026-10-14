@@ -49,6 +49,8 @@ VENUE_BET_PATH = "/yewu13/v1/betOrder/client/bet"
 ACCOUNT_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 ACCOUNT_ORDER_PAGE_SIZE = 100
 ACCOUNT_PNL_MAX_PAGES = 20
+ACCOUNT_READ_RETRIES = 4
+SETTLED_RECEIPT_PAGES_PER_REFRESH = 2
 
 
 class BetSubmissionUnknown(SessionError):
@@ -321,7 +323,11 @@ def _normalise_venue_record(row: Mapping[str, Any], status: str) -> Dict[str, An
             merged[key] = value
     item["source"] = "leyu_ybty"
     item["status"] = status
-    item["order_no"] = _first_value(merged, ("orderNo", "orderNumber", "orderId", "id"))
+    # Some YBTY gateway revisions omit the parent orderNo and expose only the
+    # detail betNo. Keep that stable identifier so pagination completeness and
+    # duplicate protection do not incorrectly mark today's P&L unavailable.
+    item["order_no"] = _first_value(merged, ("orderNo", "orderNumber", "orderId", "id",
+                                               "betNo", "bet_no"))
     item["match"] = _first_value(merged, ("matchNameCn", "matchInfo", "match", "eventName", "matchName"))
     item["league"] = _first_value(merged, ("leagueName", "tournamentName", "matchName"))
     item["match_id"] = _first_value(merged, ("matchId", "eventId", "mid"))
@@ -333,10 +339,53 @@ def _normalise_venue_record(row: Mapping[str, Any], status: str) -> Dict[str, An
     item["odds"] = _as_optional_float(_first_value(merged, ("odds", "oddFinally", "oddsFinally", "odd")))
     item["amount"] = _as_optional_float(_first_value(merged, ("betAmount", "orderAmountTotal", "amount", "stake", "betMoney")))
     item["profit"] = _net_profit(merged)
+    if _first_value(item, ("settleTime", "settled_at", "settleAt", "settlementTime")) is None:
+        settlement = _first_value(merged, ("settleTime", "settled_at", "settleAt", "settlementTime"))
+        if settlement is not None:
+            item["settleTime"] = settlement
     item["score"] = _first_value(detail, ("settleScore", "scoreBenchmark", "matchScore", "score", "比分")) or _first_value(merged, ("score", "settleScore", "scoreBenchmark", "matchScore", "比分"))
     item["result"] = _first_value(detail, ("result", "betResult", "settleResult", "winStatus")) or _first_value(row, ("result", "betResult", "settleResult", "winStatus"))
     item["details"] = [dict(entry) for entry in details if isinstance(entry, Mapping)] if isinstance(details, list) else []
     return item
+
+
+def _settled_receipt_rows(page: Any) -> tuple[list[dict[str, Any]], int | None, str]:
+    """Keep only independently identified native settled receipts.
+
+    Page completeness is separate from each receipt's authority. A malformed
+    neighbour or changing total cannot make a valid native order disappear,
+    but cannot certify an absent order as settled either.
+    """
+    if not isinstance(page, Mapping):
+        return [], None, 'invalid_page'
+    total = page.get('count')
+    known = (page.get('total_known') is True and isinstance(total, int)
+             and not isinstance(total, bool) and total >= 0)
+    reason = '' if known else 'unknown_total'
+    if page.get('source') != 'leyu_ybty' or page.get('status') != 'settled':
+        reason = 'invalid_page'
+    rows = page.get('items')
+    if not isinstance(rows, list):
+        return [], total if known else None, 'invalid_page'
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            reason = 'invalid_receipt'
+            continue
+        number = row.get('order_no')
+        no = str(number).strip() if isinstance(number, (str, int)) and not isinstance(number, bool) else ''
+        if row.get('source') != 'leyu_ybty' or row.get('status') != 'settled' or not no:
+            reason = 'invalid_receipt'
+            continue
+        if no in seen:
+            reason = 'duplicate_receipt'
+            continue
+        seen.add(no)
+        items.append({**row, 'order_no': no})
+    if len(rows) > ACCOUNT_ORDER_PAGE_SIZE:
+        reason = 'invalid_page'
+    return items, total if known else None, reason
 
 
 class LeyuAccountClient:
@@ -354,6 +403,8 @@ class LeyuAccountClient:
         self._transport = PersistentHTTPTransport(context=ssl._create_unverified_context()) if fast_execution else None
         self._preflight_pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix='venue-preflight') if fast_execution else None
         self.last_submission_sent_at: float | None = None
+        self._settled_receipts_lock = threading.Lock()
+        self._settled_receipts_cursor: dict[str, Any] = {}
 
     def betting_ready(self) -> bool:
         current = self._venue_session
@@ -590,10 +641,13 @@ class LeyuAccountClient:
         except Exception as exc:
             text = str(exc)
             expired = any(token in text for token in ("0401013", "0401014", "0401015", "过期"))
+            transient = any(token in text for token in ("0403001", "网关限流", "限流", "429", "502", "503", "504"))
             if expired:
                 self._venue_session = None
                 if deadline is not None:
                     raise BetPreflightRetryable('场馆会话过期，等待后台刷新') from exc
+            if transient and path != VENUE_BET_PATH:
+                raise BetPreflightRetryable('乐鱼体育场馆读取暂时限流') from exc
             if deadline is None and not _auth_retry and expired:
                 self._acquire_venue_session()
                 return self._venue_request(path, body, decode=decode, _auth_retry=True)
@@ -740,7 +794,7 @@ class LeyuAccountClient:
             "orderStatus": int(flag), "timeType": 0, "page": page, "size": ACCOUNT_ORDER_PAGE_SIZE,
             "beginTime": 0, "endTime": 9999999999999, "outright": 0,
         }
-        decoded = self._venue_request(VENUE_ORDER_PATH, body, decode=True)
+        decoded = self._venue_read(VENUE_ORDER_PATH, body, decode=True)
         rows = [_normalise_venue_record(row, "unsettled" if flag == 0 else "settled")
                 for row in _find_records(decoded)]
         count = _record_count(decoded)
@@ -753,6 +807,25 @@ class LeyuAccountClient:
             "total_known": count is not None,
             "has_more": count > page * ACCOUNT_ORDER_PAGE_SIZE if count is not None else len(rows) >= ACCOUNT_ORDER_PAGE_SIZE,
         }
+
+    def _venue_read(self, path: str, body: Optional[Mapping[str, Any]] = None,
+                    *, decode: bool = False) -> Any:
+        """Retry only transient, read-only venue failures.
+
+        Account refresh runs in a background thread and must not turn one
+        gateway disconnect into a permanently partial settled list. Debit
+        requests never use this helper; they retain the single-send contract.
+        """
+        delay = 0.5
+        for attempt in range(ACCOUNT_READ_RETRIES):
+            try:
+                return self._venue_request(path, body, decode=decode)
+            except BetPreflightRetryable:
+                if attempt + 1 >= ACCOUNT_READ_RETRIES:
+                    raise
+                time.sleep(delay)
+                delay *= 2
+        raise SessionError("账户读取失败")
 
     def _fetch_today_pnl(self, settled: Mapping[str, Any], at: float) -> Dict[str, Any]:
         rows = list(settled.get("items") or [])
@@ -782,19 +855,139 @@ class LeyuAccountClient:
 
     def _fetch_venue_account(self) -> Dict[str, Any]:
         """Read YBTY balance and both order states in one launched session."""
-        amount_payload = self._venue_request(VENUE_AMOUNT_PATH)
+        amount_payload = self._venue_read(VENUE_AMOUNT_PATH)
         amount = _find_number(amount_payload, {"amount", "balance", "availableamount", "availablebalance"})
         output: Dict[str, Any] = {"sports_balance": amount, "source": "leyu_ybty"}
         errors: list[str] = []
         for flag, key in ((0, "unsettled"), (1, "settled")):
             try:
                 output[key] = self._fetch_venue_records(flag)
-            except SessionError as exc:
+            except (SessionError, TimeoutError) as exc:
                 output[key] = {"count": None, "items": [], "status": key, "source": "leyu_ybty"}
+                output[key + '_error'] = True
                 errors.append(str(exc))
         if errors:
             output["error"] = "; ".join(errors)
         return output
+
+    def fetch_settled_receipts(self) -> Dict[str, Any]:
+        """Advance an all-history receipt scan only from the background loop.
+
+        At most two native pages are read per refresh. A bounded previous-page
+        identity set catches repeated/overlapping pages without retaining the
+        entire account history. Cross-refresh traversal is therefore always
+        partial, even at its observed end; exact present receipts can release
+        reservations, while an absent receipt never can.
+        """
+        # Some offline fixtures deliberately bypass __init__. setdefault keeps
+        # their lazy lock shared when two callers arrive together.
+        lock = self.__dict__.setdefault('_settled_receipts_lock', threading.Lock())
+        with lock:
+            state = self.__dict__.setdefault('_settled_receipts_cursor', {})
+            page = int(state.get('next_page', 1))
+            started_page = page
+            expected = state.get('total')
+            counted = int(state.get('counted', 0))
+            previous_ids = set(state.get('previous_ids', ()))
+            items: list[dict[str, Any]] = []
+            batch_ids: set[str] = set()
+            pages = 0
+            reached_end = complete = False
+            reason = 'more_pages'
+            for _ in range(SETTLED_RECEIPT_PAGES_PER_REFRESH):
+                pages += 1
+                try:
+                    response = self._fetch_venue_records(1, page=page)
+                except (SessionError, TimeoutError) as exc:
+                    reason = 'read_timeout' if isinstance(exc, TimeoutError) else 'read_failed'
+                    break
+                receipts, total, problem = _settled_receipt_rows(response)
+                for receipt in receipts:
+                    no = receipt['order_no']
+                    if no not in batch_ids:
+                        batch_ids.add(no)
+                        items.append(receipt)
+                counted += len(receipts)
+                if total is not None:
+                    if expected is not None and expected != total:
+                        problem = 'count_changed'
+                    expected = total
+                ids = {receipt['order_no'] for receipt in receipts}
+                if ids & previous_ids:
+                    problem = 'duplicate_receipt'
+                if not problem and total is not None:
+                    page_size = min(ACCOUNT_ORDER_PAGE_SIZE,
+                                    max(0, total - (page - 1) * ACCOUNT_ORDER_PAGE_SIZE))
+                    more = page * ACCOUNT_ORDER_PAGE_SIZE < total
+                    if not receipts and page_size:
+                        problem = 'empty_page'
+                    elif len(receipts) != page_size or response.get('has_more') is not more:
+                        problem = 'incomplete_page'
+                    else:
+                        reached_end = not more
+                if problem:
+                    reason = problem
+                    state.clear()
+                    page = 1
+                    break
+                if reached_end:
+                    complete = started_page == 1 and counted == expected
+                    reason = '' if complete else 'multi_refresh_snapshot'
+                    state.clear()
+                    page = 1
+                    break
+                page += 1
+                previous_ids = ids
+                state.update(next_page=page, total=expected, counted=counted,
+                             previous_ids=sorted(previous_ids))
+            return {'source': 'leyu_ybty', 'status': 'complete' if complete else 'partial',
+                    'complete': complete, 'items': items, 'counted': counted,
+                    'batch_counted': len(items), 'total': expected, 'pages': pages,
+                    'next_page': page, 'scan_reached_end': reached_end, 'reason': reason,
+                    'counted_basis': 'validated receipt occurrences in pass; not globally distinct'}
+
+    def fetch_betting_budget(self) -> Dict[str, Any]:
+        """Read native funds and all unresolved receipts, never submit a bet.
+
+        Truncated lists cannot certify exposure. Missing balances and changing
+        pagination totals make this snapshot unavailable, rather than zero.
+        """
+        observed = time.time()
+        venue = self._fetch_venue_account()
+        settled = venue.get('settled') or {}
+        receipts, settled_total, settled_problem = _settled_receipt_rows(settled)
+        settled_complete = (not settled_problem and settled_total == len(receipts)
+                            and settled.get('has_more') is False)
+        diagnostics = {'settled_receipts': receipts,
+                       'settled_receipts_status': 'complete' if settled_complete else 'partial',
+                       'settled_receipts_complete': settled_complete,
+                       'settled_receipts_counted': len(receipts),
+                       'settled_receipts_total': settled_total}
+        first = venue.get('unsettled') or {}
+        count = first.get('count')
+        rows = list(first.get('items') or [])
+        funds_error = venue.get('unsettled_error') or (venue.get('error') and not venue.get('settled_error'))
+        complete = (venue.get('sports_balance') is not None and not funds_error
+                    and first.get('total_known') is True and isinstance(count, int)
+                    and not isinstance(count, bool) and 0 <= count <= 10000)
+        if not complete:
+            return {'source':'leyu_ybty','currency':'CNY','complete':False,'observed_at':observed,
+                    'available':venue.get('sports_balance'),'unsettled':rows,**diagnostics}
+        assert isinstance(count, int)
+        page = 1
+        while complete and len(rows) < count:
+            page += 1
+            more = self._fetch_venue_records(0, page)
+            batch = more.get('items') or []
+            if not batch or more.get('count') != count or more.get('total_known') is not True:
+                complete = False
+                break
+            rows.extend(batch)
+        numbers = [str(row.get('order_no') or '') for row in rows]
+        complete = bool(complete and len(rows) == count and len(set(numbers)) == len(numbers))
+        return {'source': 'leyu_ybty', 'currency': 'CNY', 'complete': complete,
+                'observed_at': observed, 'available': venue.get('sports_balance'),
+                'unsettled': rows, **diagnostics}
 
     def fetch(self) -> Dict[str, Any]:
         fetched_at = time.time()

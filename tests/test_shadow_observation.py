@@ -12,11 +12,14 @@ from unittest.mock import patch
 from core.learned_model import DATA_VERSION, FEATURES
 from core.decision_features import FEATURE_VERSION
 from core.live_model import MODEL_VERSION
+from core.model_validation import VALIDATION_CONTRACT_VERSION
 from service.model_service import ModelService, hashlib_version
 from service.model_training import atomic_json
 from store.training_data import (_shadow_metrics, _prospective_metrics_postgres,
                                  _shadow_label_subset, labels, prospective_prediction_rows,
-                                 _sample_shadow_contracts, _shadow_label_events)
+                                 _sample_shadow_contracts, _shadow_label_events,
+                                 _shadow_profit_summary, _shadow_match_predictions,
+                                 _bounded_prediction_curves, prospective_metrics, write_predictions)
 from store.training_projection import ProjectionTarget
 from tests.test_training_data import decision
 
@@ -25,6 +28,7 @@ class ShadowObservationTests(unittest.TestCase):
     def artifact(self, version='candidate-v1', **changes):
         return {'version': version, 'features': list(FEATURES), 'weights': [0.] * len(FEATURES),
                 'data_version': DATA_VERSION, 'feature_version': FEATURE_VERSION,
+                'validation_contract_version':VALIDATION_CONTRACT_VERSION,
                 'updated_at': '2025-01-01T10:00:00+00:00', 'parameter_count': len(FEATURES),
                 'promotion': {'approved': False, 'reasons': ['insufficient evidence']}, **changes}
 
@@ -34,7 +38,7 @@ class ShadowObservationTests(unittest.TestCase):
                 'decision_received_at_ms': 1735732800000., 'quote_received_at_ms': 1735732800000.,
                 'algorithm': 'economic_ensemble', 'market': 'OU', 'line': '1/1.5', 'outcome': 'under',
                 'settlement_basis': 'full_score', 'entry_score': '[0,0]', 'x': '[0]',
-                'baseline': .4, 'probability': .8, 'model_version': MODEL_VERSION,
+                'baseline': .4, 'probability': .8, 'odds':2., 'model_version': MODEL_VERSION,
                 'data_version': DATA_VERSION, 'feature_version': FEATURE_VERSION, **changes}
 
     def test_unapproved_candidate_observes_without_active_or_execution_availability(self):
@@ -51,7 +55,7 @@ class ShadowObservationTests(unittest.TestCase):
                     candidate.update(ts_ms=1735732800000., quote_received_at_ms=1735732800000.)
             with patch('service.model_service.time.time', return_value=1735732801):
                 worker.observe(row)
-            self.assertEqual(len(worker._shadow), 8)
+            self.assertEqual(len(worker._shadow), 20)
             status = worker.status()
             self.assertFalse(status['decision_model_available'])
             self.assertFalse(status['model'])
@@ -61,7 +65,7 @@ class ShadowObservationTests(unittest.TestCase):
             self.assertFalse((root/'models'/'active.json').exists())
             old_row = {**row, 'input_cutoff_ms': 1000}
             worker.observe(old_row)
-            self.assertEqual(len(worker._shadow), 8)
+            self.assertEqual(len(worker._shadow), 20)
             atomic_json(root/'models'/'candidate-candidate-v2.json', self.artifact('candidate-v2'))
             worker._live_metrics = {'version': 'candidate-v1', 'model': {'accuracy': .9}}
             worker._read()
@@ -152,7 +156,8 @@ class ShadowObservationTests(unittest.TestCase):
                 self.assertEqual(worker._next_evaluation,0)
                 self.assertFalse(original_state['rows'])
                 self.assertFalse((root/'models'/'prospective.json').exists())
-                self.assertFalse(list((root/'models').glob('shadow-window-*.json')))
+                self.assertEqual(len(list((root/'models').glob('shadow-window-*.json'))),
+                                 0 if failure else 1)
 
     def test_candidate_reader_is_not_blocked_by_large_evaluation_window_write(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()/'output',prefix='shadow-window-write-') as directory:
@@ -590,3 +595,104 @@ class ShadowObservationTests(unittest.TestCase):
             self.assertEqual(result['storage']['archive']['phase'],'idle')
             self.assertEqual(result['storage']['summary_status'],'ready')
             json.dumps(result,allow_nan=False)
+
+    def test_push_context_changes_curve_projection_but_never_binary_labels(self):
+        rows = [self.source_row(line=line,outcome=outcome,probability=p,baseline=.5)
+                for line,over in [('2',.3),('2.5',.8)]
+                for outcome,p in [('over',over),('under',1-over)]]
+        final = {'m1':{'ft_score':(2,0),'ht_score':(1,0),'settled_at':'2025-01-01T14:00:00+00:00'}}
+        actual = _shadow_metrics(rows,final,self.artifact())
+        self.assertEqual(actual['counts']['prediction_context_records'],4)
+        self.assertEqual(actual['counts']['graded_predictions'],2)
+        self.assertEqual(actual['counts']['ungraded_predictions'],2)
+        # The push line's .3 over probability pools with .8 at the higher
+        # line before grading: .55 over / .45 under, not .8 / .2.
+        self.assertAlmostEqual(actual['model']['brier'],.55**2)
+        without_push = _shadow_metrics(rows[2:],final,self.artifact())
+        self.assertAlmostEqual(without_push['model']['brier'],.8**2)
+
+    def test_unit_stake_money_includes_push_and_full_half_payments(self):
+        rows = [self.source_row(line=line,outcome=outcome,probability=p)
+                for line in ('.5/1','1','1/1.5')
+                for outcome,p in [('under',.8),('over',.2)]]
+        final = {'m1':{'ft_score':(1,0),'ht_score':(1,0),'settled_at':'2025-01-01T14:00:00+00:00'}}
+        actual = _shadow_metrics(rows,final,self.artifact())
+        money = actual['model']['unit_stake']
+        self.assertEqual(money['stake_units'],3.)
+        self.assertEqual(money['profit_units'],0.)
+        self.assertEqual(money['push'],1)
+        self.assertEqual(money['half_won'],1)
+        self.assertEqual(money['half_lost'],1)
+        self.assertEqual(actual['counts']['graded_predictions'],4)
+        self.assertEqual(actual['model']['unit_stake_by_algorithm']['economic_ensemble']['first_contract'],money)
+
+    def test_first_contract_cannot_be_replaced_after_missing_price_or_void(self):
+        first = [self.source_row(outcome=outcome,odds=None,settlement_status='won')
+                 for outcome in ('under','over')]
+        later = [{**row,'at':'2025-01-01T12:01:00+00:00','odds':3.} for row in first]
+        ps = [.8,.2,.8,.2]
+        one = _shadow_profit_summary(first+later,ps,first_only=True)
+        repeated = _shadow_profit_summary(first+later,ps,first_only=False)
+        self.assertEqual(one['stake_units'],0.)
+        self.assertEqual(one['missing_odds_contracts'],1)
+        self.assertEqual(one['duplicate_contracts'],1)
+        self.assertEqual(repeated['stake_units'],1.)
+        self.assertEqual(repeated['profit_units'],2.)
+        void = [{**row,'odds':2.,'settlement_status':'void'} for row in first]
+        one = _shadow_profit_summary(void+later,ps,first_only=True)
+        self.assertEqual(one['stake_units'],0.)
+        self.assertEqual(one['unverifiable_settlement_contracts'],1)
+        for odds in (True,1.,float('nan'),float('inf')):
+            with self.subTest(odds=odds):
+                bad = [{**row,'odds':odds} for row in first]
+                self.assertEqual(_shadow_profit_summary(bad,[.8,.2],first_only=True)['missing_odds_contracts'],1)
+
+    def test_curve_sampling_and_pending_target_keep_all_lines_and_outcomes(self):
+        full = [self.source_row(line=line,outcome=outcome) for line in ('2','2.5','3')
+                for outcome in ('over','under')]
+        with patch('store.training_data.SHADOW_CONTRACTS_PER_MATCH',1):
+            selected,sampled = _sample_shadow_contracts(full)
+            incomplete,_ = _sample_shadow_contracts(full[:-1])
+        self.assertEqual(len(selected),6)
+        self.assertFalse(sampled)
+        self.assertEqual(incomplete,[])
+        self.assertEqual(len(_bounded_prediction_curves(full,1)),6)
+
+    def test_pg_match_loader_limits_curve_keys_instead_of_result_rows(self):
+        rows = [self.source_row(line=line,outcome=outcome) for line in ('2','2.5','3')
+                for outcome in ('over','under')]
+        calls = []
+        class Cursor:
+            description = [(key,) for key in rows[0]]
+            def execute(self,query,args):
+                calls.append((query,args))
+            def fetchall(self):
+                return [tuple(row.values()) for row in rows]
+            def close(self):
+                pass
+        class Connection:
+            def cursor(self):
+                return Cursor()
+        with patch('store.training_data.SHADOW_CONTRACTS_PER_MATCH',1):
+            actual = _shadow_match_predictions(Connection(),self.artifact(),'m1')
+        self.assertEqual(len(actual['rows']),6)
+        query,args = calls[0]
+        self.assertIn('SELECT DISTINCT at,algorithm,market',query)
+        self.assertIn('curve_keys AS MATERIALIZED',query)
+        self.assertNotIn('p.x',query)
+        self.assertEqual(args[5],2)
+        self.assertEqual(query.count('LIMIT'),1)
+
+    def test_sqlite_shadow_loader_preserves_wide_curve_under_small_soft_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db,path = root/'missing-ledger.sqlite3',root/'shadow.sqlite3'
+            rows = [self.source_row(line=line,outcome=outcome) for line in ('2','2.5','3')
+                    for outcome in ('over','under')]
+            with patch('store.training_data.projection_target_from_env',return_value=None):
+                write_predictions(path,rows)
+                with patch('store.training_data.SHADOW_WINDOW_LIMIT',1):
+                    actual = prospective_metrics(db,path,self.artifact())
+            self.assertEqual(actual['counts']['pending_predictions'],6)
+            with sqlite3.connect(path) as con:
+                self.assertEqual(con.execute('SELECT DISTINCT odds FROM predictions').fetchall(),[(2.,)])

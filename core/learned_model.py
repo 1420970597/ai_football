@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Any, Mapping, Sequence
 
 from core.decision_features import (EXTRA_FEATURES, extra_features, residual_vector,
                                     upgrade_vector)
 from core.decision_features import FEATURE_VERSION, visible_history
+from core.model_validation import (EXECUTION_ALGORITHM, VALIDATION_CONTRACT_VERSION,
+                                   evaluate, is_graded_row, promotion)
 
 BASE_FEATURES = ('bias', 'market_logit', 'algorithm_logit', 'elapsed', 'score_difference',
             'home', 'draw', 'away', 'over', 'under', 'ou', 'ah', 'half', 'line',
@@ -17,18 +20,59 @@ BASE_FEATURES = ('bias', 'market_logit', 'algorithm_logit', 'elapsed', 'score_di
 FEATURES = BASE_FEATURES + EXTRA_FEATURES
 MIN_MATCHES = 100
 # The learner is intentionally small and runs in a dependency-free worker.
-# Keep the iteration budget bounded: rolling validation fits several models
-# and an uncached 250-epoch Python loop exceeded the worker wall-clock limit.
-EPOCHS = 80
+# Rolling validation fits several models.  Keep separate, bounded budgets so
+# the 1-core production worker cannot exhaust its RLIMIT_CPU before it writes
+# a candidate artifact.  Both values remain environment-tunable for offline
+# experiments without changing the production defaults.
+EPOCHS = max(1, int(os.environ.get('MODEL_TRAINING_EPOCHS', '24')))
+VALIDATION_EPOCHS = max(1, int(os.environ.get('MODEL_VALIDATION_EPOCHS', '12')))
 LEARNING_RATE = 0.08
 REGULARIZATION = 0.01
-DATA_VERSION = 'remaining-ah-signed-lines-bernoulli-v4-offset-windows-asof'
+DATA_VERSION = 'remaining-ah-signed-lines-bernoulli-v5-offset-windows-asof-quote-qualified'
 
 
 def compatible_model(model: Mapping[str, Any]) -> bool:
-    return (model.get('data_version') == DATA_VERSION and
-            model.get('feature_version') == FEATURE_VERSION and
-            model.get('features') == list(FEATURES) and bool(model.get('version')))
+    return not model_compatibility_reason(model)
+
+
+def model_compatibility_reason(model: Mapping[str, Any], *, require_approval: bool = False) -> str:
+    """Explain quarantine without treating old approvals as current evidence."""
+    if model.get('data_version') != DATA_VERSION:
+        return '训练数据版本不兼容：需要新代报价与赛况资格数据'
+    if model.get('feature_version') != FEATURE_VERSION or model.get('features') != list(FEATURES):
+        return '模型特征版本不兼容'
+    if model.get('validation_contract_version') != VALIDATION_CONTRACT_VERSION:
+        return '模型验证契约不兼容：缺少完整盘口上下文与实际执行算法验证'
+    if not model.get('version'):
+        return '模型版本缺失'
+    if not require_approval:
+        return ''
+    decision = model.get('promotion')
+    if not isinstance(decision, Mapping) or decision.get('approved') is not True:
+        return '模型尚未通过独立晋级门槛'
+    if decision.get('validation_contract_version') != VALIDATION_CONTRACT_VERSION:
+        return '模型晋级记录使用旧验证契约'
+    if (decision.get('execution_required') is not True
+            or decision.get('execution_algorithm') != EXECUTION_ALGORITHM
+            or decision.get('execution_approved') is not True):
+        return '模型缺少实际执行算法的独立晋级批准'
+    test, baseline, evidence, folds = (model.get('validation'), model.get('baseline'),
+                                      decision.get('evidence'), model.get('rolling_validation'))
+    if (not isinstance(test, Mapping) or not isinstance(baseline, Mapping)
+            or not isinstance(evidence, Mapping)
+            or not isinstance(folds, list)):
+        return '模型晋级证据缺失，不能复核实际执行门槛'
+    try:
+        reviewed = promotion(test, baseline, evidence, folds)
+    except (KeyError, ValueError, TypeError, IndexError, ArithmeticError):
+        return '模型晋级证据无效，不能复核实际执行门槛'
+    if not reviewed['approved']:
+        return '模型晋级证据未通过当前门槛：' + '；'.join(reviewed['reasons'])
+    return ''
+
+
+def approved_model(model: Mapping[str, Any]) -> bool:
+    return not model_compatibility_reason(model, require_approval=True)
 
 
 def observation_weight(row: Mapping[str, Any]) -> float:
@@ -120,18 +164,14 @@ def predict(weights: Sequence[float], x: Sequence[float]) -> float:
 def metrics(rows: Sequence[Mapping[str, Any]], weights: Sequence[float] | None) -> dict[str, Any]:
     if not rows:
         raise ValueError('评估样本为空')
-    counts: dict[str, float] = {}
-    for row in rows:
-        counts[row['match_id']] = counts.get(row['match_id'], 0) + observation_weight(row)
-    accuracy = brier = logloss = 0.0
-    for row in rows:
-        p = predict(weights, row['x']) if weights is not None else row['baseline']
-        y, weight = row['y'], observation_weight(row) / counts[row['match_id']] / len(counts)
-        accuracy += weight * ((p >= .5) == bool(y))
-        brier += weight * (p-y)**2
-        logloss -= weight * (y*math.log(max(1e-12,p))+(1-y)*math.log(max(1e-12,1-p)))
-    return {'matches': len(counts), 'decisions': len(rows), 'accuracy': accuracy,
-            'brier': brier, 'log_loss': logloss}
+    # Production inference normalizes every complete same-line outcome group
+    # before selecting a direction. Apply the same coherence transform here so
+    # the artifact's train/validation scores cannot use a different probability
+    # space from the live path. Binary accuracy remains a diagnostic metric;
+    # HAD top-1 accuracy is reported by ``model_validation.evaluate``.
+    raw_probabilities = [predict(weights, row['x']) if weights is not None else row['baseline']
+                         for row in rows]
+    return evaluate(rows, raw_probabilities)
 
 
 #: Residual coordinates the learner may move (TASK-61).  A chronological
@@ -176,17 +216,19 @@ def fit_weights(rows: Sequence[Mapping[str, Any]], *, epochs: int = EPOCHS) -> l
     """
     if not rows:
         raise ValueError('训练样本为空')
+    graded = []
     counts: dict[str, float] = {}
     for row in rows:
-        if row['y'] not in (0, 1):
-            raise ValueError('无效训练标签')
         predict([0.0] * len(FEATURES), row['x'])
+        if not is_graded_row(row):
+            continue
+        graded.append(row)
         counts[row['match_id']] = counts.get(row['match_id'], 0) + observation_weight(row)
     if len(counts) < 2:
         raise ValueError('训练比赛不足')
     k = len(STACK_INDICES)
     prepared = []
-    for row in rows:
+    for row in graded:
         vector = residual_vector(row['x'])
         market_logit = upgrade_vector(row['x'])[1]
         scale = observation_weight(row) / counts[row['match_id']] / len(counts)
@@ -223,36 +265,58 @@ def fit_weights(rows: Sequence[Mapping[str, Any]], *, epochs: int = EPOCHS) -> l
 
 
 
-def train(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    ordered = sorted(rows, key=lambda r: (r['at'], r['match_id']))
-    match_times: dict[str, str] = {}
-    for row in ordered:
-        match_times.setdefault(row['match_id'], row['at'])
-    matches = sorted(match_times, key=lambda mid: (match_times[mid], mid))
+def train(rows: Sequence[Mapping[str, Any]], *,
+          partition: tuple[Sequence[Mapping[str, Any]], Sequence[Mapping[str, Any]]] | None = None,
+          epochs: int = EPOCHS) -> dict[str, Any]:
+    from core.model_validation import instant, ordered_matches
+    ordered = sorted(rows, key=lambda r: (instant(r['at']), str(r['match_id'])))
+    matches = ordered_matches(ordered)
     if len(matches) < MIN_MATCHES:
         raise ValueError('至少需要100场有效比赛')
     cut = int(len(matches) * .8)
-    training_ids = set(matches[:cut])
-    validation = [r for r in ordered if r['match_id'] not in training_ids]
-    # At validation entry time, every training label must already be known.
-    training = [r for r in ordered if r['match_id'] in training_ids and r['settled_at'] < validation[0]['at']]
-    if len({r['match_id'] for r in training}) < 60 or len({r['y'] for r in training}) < 2:
+    if partition is None:
+        training_ids = set(matches[:cut])
+        validation_ids = set(matches[cut:])
+        validation = [r for r in ordered if str(r['match_id']) in validation_ids]
+        # At validation entry time, every training label must already be known.
+        boundary = instant(validation[0]['at'])
+        training = [r for r in ordered if str(r['match_id']) in training_ids
+                    and instant(r['settled_at']) < boundary]
+    else:
+        training, validation = (sorted(cohort, key=lambda r: (instant(r['at']), str(r['match_id'])))
+                                for cohort in partition)
+        if not training or not validation:
+            raise ValueError('明确时间分区不能为空')
+        training_ids = {str(r['match_id']) for r in training}
+        validation_ids = {str(r['match_id']) for r in validation}
+        if training_ids & validation_ids or not training_ids | validation_ids <= set(matches):
+            raise ValueError('明确时间分区包含重复比赛或未知比赛')
+        boundary = instant(validation[0]['at'])
+        if any(instant(r['settled_at']) >= boundary for r in training):
+            raise ValueError('时间隔离分区包含测试前尚不可用的标签')
+        cut = len(training_ids)
+    graded_training = [r for r in training if is_graded_row(r)]
+    if len({r['match_id'] for r in graded_training}) < 60 or len({r['y'] for r in graded_training}) < 2:
         raise ValueError('时间隔离后训练样本不足或只有一种标签')
     from core.oof_peer import (apply_peer_calibration, crossfit_peer_features,
                                peer_calibrations)
     peer_calibration = peer_calibrations(training)
     training_oof = crossfit_peer_features(training)
     validation_calibrated = apply_peer_calibration(training, validation)
-    weights = fit_weights(training_oof)
+    weights = fit_weights(training_oof, epochs=epochs)
     return {'architecture': 'Market-offset stacked algorithm residuals (7 active) + chronological OOF peer calibration',
             'active_parameters': list(STACK_FEATURES), 'active_parameter_count': len(STACK_FEATURES),
             'features': list(FEATURES),
             'data_version': DATA_VERSION,
+            'validation_contract_version': VALIDATION_CONTRACT_VERSION,
             'feature_version': FEATURE_VERSION, 'offset': 'market_logit',
             'weights': weights, 'parameter_count': len(weights), 'peer_calibration': peer_calibration,
             'training': metrics(training_oof, weights),
             'validation': metrics(validation_calibrated, weights), 'baseline': metrics(validation, None),
             'validation_from': validation[0]['at'], 'validation_to': validation[-1]['at'],
-            'training_cutoff': max(r['settled_at'] for r in training),
+            'training_cutoff': max(training, key=lambda r: instant(r['settled_at']))['settled_at'],
+            'training_epochs': max(1, int(epochs)),
+            'training_match_ids': sorted(str(mid) for mid in {r['match_id'] for r in graded_training}),
+            'validation_match_ids': sorted(str(mid) for mid in {r['match_id'] for r in validation if is_graded_row(r)}),
             'cohort_ids': matches, 'eligible_matches': len(matches),
-            'excluded_by_embargo': cut - len({r['match_id'] for r in training})}
+            'excluded_by_embargo': cut - len({r['match_id'] for r in graded_training})}

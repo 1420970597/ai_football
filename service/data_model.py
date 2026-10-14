@@ -160,6 +160,34 @@ class DataModelService:
                                'cycle_matches': self.cfg.model_training_matches,
                                'cpu_cores': self.cfg.model_training_cpu,
                                'memory_mb': self.cfg.model_training_memory_mb}
+            # Older dashboard snapshots predate the explicit route fields.
+            # Derive them here so the page never conflates a live worker with
+            # an unavailable, unapproved model route during the rollout.
+            if self.cfg.decision_mode == 'algorithm':
+                route_status, route_reason = 'ready', ''
+            else:
+                model = out.get('model') or {}
+                promotion = model.get('promotion') if isinstance(model, dict) else None
+                from core.learned_model import approved_model
+                approved = isinstance(model, dict) and approved_model(model)
+                route_status = 'ready' if approved else 'unavailable'
+                reasons: list[str] = []
+                if isinstance(promotion, dict):
+                    reasons.extend(str(item) for item in promotion.get('reasons') or [] if item)
+                training = out.get('training') or {}
+                reasons.extend(str(item) for item in training.get('promotion_reasons') or [] if item)
+                candidate = training.get('candidate') or {}
+                candidate_promotion = candidate.get('promotion') if isinstance(candidate, dict) else None
+                if isinstance(candidate_promotion, dict):
+                    reasons.extend(str(item) for item in candidate_promotion.get('reasons') or [] if item)
+                route_reason = ('候选模型未通过晋级门槛：' + '；'.join(dict.fromkeys(reasons))) if reasons else (
+                    '暂无通过晋级门槛的生产模型' if not approved else '')
+            out.setdefault('decision_mode_status', route_status)
+            out.setdefault('decision_mode_reason', route_reason)
+            out.setdefault('service_status', {'state': 'running' if alive else 'stopped',
+                                               'running': bool(alive),
+                                               'training_running': bool(out.get('training_running')),
+                                               'inference_running': bool(out.get('inference_running'))})
             if self.root is not None:
                 repair_path = self.root.parent / '_archive' / 'repairs' / 'task42' / 'status.json'
                 try:

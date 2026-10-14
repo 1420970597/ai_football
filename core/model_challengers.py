@@ -12,6 +12,7 @@ import math
 from typing import Any, Mapping, Sequence, cast
 
 from core.live_model import remaining_distribution
+from core.model_validation import is_graded_row
 
 MIN_LEAF_MATCHES = 2
 MAX_CANDIDATE_THRESHOLDS = 64
@@ -50,8 +51,9 @@ def validate_training_rows(rows: Sequence[Mapping[str, Any]]) -> None:
         label_at = _instant(row.get('label_available_at'))
         if label_at <= cutoff_at:
             raise ValueError('标签必须在决策截点之后才可用')
-        if row.get('match_id') in (None, '') or row.get('y') not in (0, 1):
-            raise ValueError('缺少比赛身份或标签')
+        if row.get('match_id') in (None, ''):
+            raise ValueError('缺少比赛身份')
+        is_graded_row(row)
 
 
 def _logit(p: float) -> float:
@@ -98,6 +100,9 @@ def _loss(rows: Sequence[Mapping[str, Any]], indices: Sequence[int], delta: floa
 def fit_market_stump(rows: Sequence[Mapping[str, Any]], *, feature: str) -> dict[str, Any]:
     """Fit one depth-1 split; rows must be an already isolated training fold."""
     validate_training_rows(rows)
+    rows = [row for row in rows if is_graded_row(row)]
+    if not rows:
+        raise ValueError('训练上下文没有可计二元损失的样本')
     if not feature:
         raise ValueError('必须指定单一挑战特征')
     values = []

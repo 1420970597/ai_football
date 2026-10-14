@@ -35,10 +35,13 @@ class HubScoreChangeTests(unittest.TestCase):
         with hub._lock:
             hub._set_score('m', (0, 0))
         self.assertIsNone(hub.score_changed_at_ms('m'))
+        boundary = hub.decision_snapshot('m')['score_state_boundary_ms']
+        self.assertGreater(boundary, 0)
         before = int(time.time() * 1000)
         with hub._lock:
             hub._set_score('m', (0, 0))
         self.assertIsNone(hub.score_changed_at_ms('m'))
+        self.assertEqual(hub.decision_snapshot('m')['score_state_boundary_ms'], boundary)
         with hub._lock:
             hub._set_score('m', (0, 1))
         self.assertGreaterEqual(hub.score_changed_at_ms('m'), before)
@@ -46,6 +49,18 @@ class HubScoreChangeTests(unittest.TestCase):
 
 
 class LiveCooldownTests(unittest.TestCase):
+    def test_initial_state_needs_cooldown_and_newly_received_quotes_to_certify(self):
+        hub = make_hub()
+        snapshot = hub.decision_snapshot('m')
+        snapshot['score_state_boundary_ms'] = snapshot['captured_at_ms'] - 1000
+        svc = LiveExpertService()
+        row = svc.compute(snapshot, hub)
+        self.assertFalse(row['state_qualified'])
+        self.assertFalse(any(m['fresh'] for m in row['markets']))
+        snapshot['score_state_boundary_ms'] = snapshot['captured_at_ms'] - 120_000
+        row = svc.compute(snapshot, hub)
+        self.assertTrue(row['state_qualified'])
+
     def test_recent_score_change_makes_every_market_stale(self):
         hub = make_hub()
         svc = LiveExpertService()

@@ -1,239 +1,227 @@
-# 决策算法与决策模型文献审计
+# 决策算法与决策模型：117篇独立论文与当前实现审计
 
-研究日期：2026-10-13。研究对象是当前工作区 `main` 代码和 PostgreSQL 训练投影；没有开启真实投注，也没有把未晋级候选模型切入生产。文献清单由 OpenAlex Works API 串行抓取，保留查询词、DOI、作者、摘要片段和引用量，见 [`algorithm_papers.csv`](data/algorithm_papers.csv) 与 [`model_papers.csv`](data/model_papers.csv)，两组各 80 篇；开源项目清单由 GitHub 检索 API 获取，算法/模型各 100 个，见 [`oss_algorithm_projects.csv`](data/oss_algorithm_projects.csv)、[`oss_model_projects.csv`](data/oss_model_projects.csv)；两份 manifest 记录检索时间和请求结果。
+文献与PG测量日期：2026-10-13；最终整合复核：2026-10-14。审计分支为 `fix/TASK-55-literature-validation-audit`，整合基线 `f2d1aa6`（含已合并的 #60、#61），最终冻结代码指纹记录于 [`validation_results.json`](data/validation_results.json)。源码、摘要来源、修复、历史证据和生产测量分别标明；工作区中其他任务的未提交修改不作为本PR实现。
 
-文献证据分级如下：A 表示源码、原始论文页面或可复核的论文元数据/摘要；B 表示从论文方法抽取的可迁移原则；C 表示工程建议或本项目尚未测量的假设。OpenAlex 元数据不是逐篇全文审阅，因此报告只使用摘要和可核验方法结论，不把外部收益率迁移为本项目效果。
+## 1. 结论与交付边界
 
-## 结论
+严格纳入**决策算法66篇、直接足球决策模型51篇独立论文**，均超过各50篇的要求。逐篇来源、方法、代码映射、排除理由、适用性和阅读深度见[算法审计CSV](data/algorithm_paper_audit.csv)与[模型审计CSV](data/model_paper_audit.csv)。这是**元数据/摘要级审计**，全文阅读与论文实验复现均为0，不能称117篇全文系统综述。
 
-当前系统**没有结构性架构错误**，但有三个已确证的 P0 实现缺陷：它们使“模型计算的赢”与“场馆结算的赢”不是同一个事件，并在权重、门控与训练标签中自我强化，已在 [auto-betting-loss-audit](../auto-betting-loss-audit/REPORT.md) 用 160 笔真实订单逐笔定量。其余方向与文献主流一致：赔率作为市场先验，Poisson/盘口支付分布提供结构化概率，按时间和比赛分组做前瞻验证，使用 Brier、Log loss 和校准信息，而不是只看命中率；候选模型还必须和同样本市场基准做配对比较。结论已整理为远程 issue #55（见文末）。
+市场先验、残差学习、时间外验证和按比赛聚类的方向有文献依据。但已确认的采样、校准时间泄漏、评估与持久化参数不一致、汇总指标掩盖执行子群退化会使验证结论失真，属于重大实现偏差。相关代码已在本分支修复；[issue #55](https://github.com/1420970597/ai_football/issues/55)中的完整预测上下文、新验证契约、现金原子预占、影子收益及训练调度已实现并通过冻结回归；独立审查又发现已结回执只读第一页100条，已实现后台轮转补扫及回填，最终源码/刷新与浏览器部署检查已通过，但投注关闭时未调用场馆补扫。统计增量、状态可比CLV及独立挑战者仍需前瞻数据，不能由工程修复替代。较早新代资格探针确认 3,154 条输入覆盖 5 场比赛，但完整可训练 cohort 为 0，故 `cycle_matches=100` 时保持等待是正确状态，不应为了展示训练成功而使用旧代历史。
 
-发现了一个确定的实现偏差和一个口径不一致，已经在本轮执行修复：
+其他agent在[issue #58](https://github.com/1420970597/ai_football/issues/58)提供了进球后旧价格与虚拟赛误分类证据。本次整合其已合并的[#60报价冷却修复](https://github.com/1420970597/ai_football/pull/60)及[#61七坐标堆叠学习器](https://github.com/1420970597/ai_football/pull/61)，保留本分支的验证修复。先修输入和评价的有效性，再验证模型增量；没有证据支持仅调高阈值或增加参数就能获得正收益。
 
-1. PostgreSQL 训练采样原来对每场使用 `ORDER BY i.at ... LIMIT 40`，只保留最早的 40 条输入；SQLite 路径已经使用均匀时间采样。远程部署因此偏向开场阶段，和代码声明的多时点训练分布不一致。现在改为由已结算比赛驱动的 `LATERAL` 查询，在每场内部按决策时间均匀抽样，保留索引驱动和有界内存。
-2. `core.learned_model.metrics()` 原来没有执行与线上推理相同的完整盘口概率归一化，候选 artifact 的训练/验证 Brier 可能和线上输出口径不同。现在先调用完整盘口的 coherent normalization，再计算离线分数；二分类准确率仍保留为诊断指标，HAD Top-1 由 `model_validation.evaluate()` 单独报告。
+本轮验证使用隔离测试与只读生产查询，不提交真实投注或强制晋升候选。容器发布与实际运行结果单独记录于验证章节；早先#58的上线结论不冒充本次测量。
 
-这两项会影响模型训练分布和离线报告的可比性，但真正解释真实资金亏损的是更早一轮的逐笔对账（[auto-betting-loss-audit](../auto-betting-loss-audit/REPORT.md)）：滚球 AH 以累计比分为结算对象、负号复合盘口解析错误、“经济学风控”把单元素概率归一化为 100%。160 笔可匹配真实订单实际净亏 10.67 元（ROI **-1.41%**），而旧代码把同一批订单算成 **+235.83 元**；修复口径后 160/160 与场馆逐笔一致。缺陷经由算法权重、命中门控和训练标签自我强化，构成“设计方向正确、结果仍然亏损”的完整机制链。修复已落地、自动下注保持关闭；本报告新增的系统总评、亏损归因与开源对照用于回答“接下来怎么优化”。
+## 2. 纳入规则与论文覆盖
+
+| 轨道 | 审计记录 | 严格纳入独立论文 | 未纳入 | 阅读深度 |
+| --- | ---: | ---: | ---: | --- |
+| 决策算法 | 124 | **66** | 58 | 28元数据+摘要、22保存摘要片段、16元数据与既有方法核验 |
+| 决策模型 | 109 | **51** | 58：29辅助、29排除 | 44 OpenAlex摘要、3出版社登记摘要、3 arXiv摘要、1机构摘要 |
+
+算法组有65个独立DOI与1条可核验无DOI来源；4篇直接体育研究、62篇可迁移统计/经济方法。模型组51个不同DOI，42篇期刊文章、6篇会议论文、3篇预印本。跨轨道纳入DOI重叠为0。独立论文不等于独立数据集：若干模型论文复用Soccer Prediction Challenge样本。
+
+证据分级：**A** 为本仓库可核验源码/测试/测量和原作者、机构、出版社登记材料；**B** 为聚合摘要与方法迁移；**C** 为待测工程假设。44篇模型组OpenAlex摘要本轮未逐一对照原出版物；算法组16篇只有元数据与既有方法核验，不能将未读全文的实验细节当作已确认结论。[算法审计说明](data/algorithm_review_notes.md)、[模型审计说明](data/model_review_notes.md)逐项保留限制。
+
+去重同时核对DOI、题名、作者和版本。NFL、球员位置/门将/疲劳、合作价值等错目标条目排除；xG/action-process、书章、综述、信息时点未明的候选不计入直接模型门槛。高准确率但无时间设计/指标口径的记录不用于参数调优。模型审计披露了Kaggle数据赛季矛盾、摘要拼接污染、重复期刊/预印本版本等情况，没有据此断言论文造假。访问遇到Crossref 429、出版社403等限制均保留记录。
+
+![逐篇审计数量；该图不衡量准确率](images/audit_counts.png)
+
+图由[审计数量CSV](data/audit_summary.csv)和`make_figures.py`重现，使用WenQuanYi中文字体。改变严格性只会改变覆盖数量，不会使文献自动成为生产收益证据；不使用主观分数冒充测量值。
+
+### 算法论文的关键对应
+
+| 方法族 | 可核验代表论文 | 当前代码/判断 |
+| --- | --- | --- |
+| 概率评分 | Gneiting & Raftery, Strictly Proper Scoring Rules（[DOI](https://doi.org/10.1198/016214506000001437)）；Brier（[DOI](https://doi.org/10.1175/1520-0493%281950%29078%3C0001:VOFEIT%3E2.0.CO;2)） | `core/model_validation.py`、`core/learned_model.py`；Brier/log loss与准确率分开 |
+| 融合/stacking | Wolpert, Stacked generalization（[DOI](https://doi.org/10.1016/S0893-6080%2805%2980023-1)）；Breiman, Stacked regressions（[DOI](https://doi.org/10.1007/BF00117832)） | `core/ensemble.py`、`core/oof_peer.py`；同源算法数量不等于独立信息数量 |
+| 校准 | Beta calibration（[DOI](https://doi.org/10.1214/17-EJS1338SI)）；Stable reliability diagrams（[DOI](https://doi.org/10.1073/pnas.2016191118)） | `core/probability_calibration.py`；挑战方法需时间外校准，不能用测试标签拟合 |
+| 去水 | Štrumbelj（[DOI](https://doi.org/10.1016/j.ijforecast.2014.02.008)）；Clarke等（[DOI](https://doi.org/10.11648/j.ajss.20170506.12)） | `core/devig.py`；proportional/power/Shin不是本身的优势来源 |
+| 多重搜索/漂移 | White Reality Check（[DOI](https://doi.org/10.1111/1468-0262.00152)）；Hansen SPA（[DOI](https://doi.org/10.1198/073500105000000063)）；concept drift survey（[DOI](https://doi.org/10.1145/2523813)） | 当前缺完整候选登记、嵌套搜索与分层漂移监控 |
+| 不确定性/资金 | Baker & McHale（[DOI](https://doi.org/10.1287/deca.2013.0271)）；Risk-Constrained Kelly（[DOI](https://doi.org/10.3905/joi.2016.25.3.118)） | 现金限额与研究Kelly分开：PG账户锁＋发送意图原子预占，全账户和单场共同约束 |
+
+66篇的完整结论逐行保存于CSV；天气等研究只用于评分/校准方法迁移，不当作足球盈利证据。
+
+### 模型论文的关键对应
+
+| 模型族 | 可核验代表论文 | 与本实现的关系 |
+| --- | --- | --- |
+| 独立/低比分Poisson | Maher（[DOI](https://doi.org/10.1111/j.1467-9574.1982.tb00782.x)）；Dixon & Coles（[DOI](https://doi.org/10.1111/1467-9876.00065)） | `core/live_model.py`是市场反推剩余比分基线，并非已实现动态球队能力或低比分ρ |
+| 动态/双变量 | Dixon & Robinson（[DOI](https://doi.org/10.1111/1467-9884.00308)）；Karlis & Ntzoufras（[DOI](https://doi.org/10.1111/1467-9884.00366)）；Koopman & Lit（[DOI](https://doi.org/10.1111/rssa.12042)） | 相依比分、状态强度是挑战方向，需同窗口消融 |
+| 历史数据+赔率 | Combining historical data and bookmakers' odds（[DOI](https://doi.org/10.1177/1471082X18798414)） | 当前独立球队历史/评级信息不足；多数peer仍由同源盘口产生 |
+| 树/领域知识 | Relational gradient boosted trees（[DOI](https://doi.org/10.1007/s10994-018-5704-6)）；domain knowledge（[DOI](https://doi.org/10.1007/s10994-018-5747-8)） | 先确认可见特征和增量，再增加容量 |
+| 滚球模型 | Bayesian In-Play Prediction Model（[DOI](https://doi.org/10.3390/app10082904)）；Stochastic modelling（[arXiv](https://arxiv.org/abs/2312.04338)） | 事件、阶段与补时需要可靠时钟；不能使用决策后的走势 |
+| 深度预测 | Deep learning framework（[DOI](https://doi.org/10.1007/s42452-019-1821-5)）；2024评估研究（[DOI](https://doi.org/10.1007/s10994-024-06608-w)） | 复杂度不保证优势；目前资源和独立样本优先支持小模型 |
+
+## 3. 最新系统架构与公式
 
 ```mermaid
 flowchart LR
-    A[乐鱼盘口与赛况] --> B[去水市场先验]
-    B --> C[Poisson/支付分布]
-    B --> D[走势与微结构特征]
-    C --> E[算法候选]
+    A[乐鱼盘口/可见比分] --> B[去水市场先验]
+    B --> C[剩余比分Poisson]
+    A --> D[走势/微结构变体]
+    C --> E[经济学融合算法]
     D --> E
-    E --> F[按比赛聚类的融合]
-    F --> G[Offset Logistic 影子模型]
-    G --> H[完整盘口归一化]
-    H --> I[EV/风险/执行门控]
-    I --> J[推荐与下注]
-    K[赛果可见时间] --> L[时间隔离训练]
-    L --> G
+    E --> F[市场offset残差堆叠]
+    F --> G[完整市场曲线一致化]
+    G --> H[同时间市场配对评分]
+    H --> I[实际执行子群门控]
+    I --> J[影子/推荐]
+    K[比分变化与报价时钟] --> J
+    L[标签可知时间] --> M[时间隔离训练/校准]
+    M --> F
 ```
 
-## 研究方法与文献覆盖
+#61已将原60坐标梯度残差学习器改为**7个可估计坐标**：截距、融合算法残差、5个peer算法残差；其余权重为0。保存的权重向量仍长60，因此应区分`parameter_count=60`与`active_parameter_count=7`。本分支保留该实现，并保留明确分区、持久化权重最终测试和执行子群门槛。
 
-两组文献的检索不是把标题按领域硬凑到篇数上限。脚本对每个查询取公开元数据，按标题和摘要关键词打分、去重并保留原始查询；模型组要求摘要包含 football/soccer/goal/match/sport 之一，算法组覆盖两类：直接体育投注/赔率方法，以及可迁移的概率预测、校准、评分规则、融合、在线学习和风险决策方法。算法组中约 19 篇是直接体育/投注研究，其余是通用于概率决策的统计方法；模型组约 79 篇含足球或足球进球模型。这个区分写入审计表，避免把天气预测论文伪装成足球收益证据。
+概率形式为 `p = sigmoid(logit(p_market) + w · residual_vector(x))`；市场logit是固定offset，权重全0时回到市场。peer经训练期/OOF校准，再投影到完整盘口的概率空间。市场OU/HAD反推Poisson不等于独立球队强度、xG、红牌hazard或Dixon-Coles；已验证可见的部分赛况进入特征也不等于完整事件编码。
 
-### 决策算法组（80 篇）
-
-算法清单完整记录在 CSV。代表性方法覆盖：
-
-| 主题 | 代表论文（CSV 中有 DOI/摘要） | 对当前系统的审计启示 |
-| --- | --- | --- |
-| 概率质量 | Gneiting & Raftery, *Strictly Proper Scoring Rules, Prediction, and Estimation*；Wilks, *Probabilistic Forecasts, Calibration and Sharpness*；Walsh & Joshi, *Machine learning for sports betting: should model selection be based on accuracy or calibration?* | Brier、Log loss、可靠性必须和准确率同时报告；当前已有，且前端已区分 Top-1 与二分类。 |
-| 去水与赔率 | Clarke, Kovalchik & Ingram, *Adjusting bookmaker’s odds to allow for overround*；*Betting Markets: Defining odds restrictions, exploring market inefficiencies and measuring bookmaker solvency*；*Is the soccer betting market efficient?* | 比例去水不是普适最优；Power/Shin 只能作为同样本挑战方法，不能凭外部联赛结果切换。 |
-| 融合与校准 | *Forecast Combination in Predictive Analytics*；*Ensembles for Time Series Forecasting*；*Enforcing calibration in ensemble postprocessing*；*Learning Calibration Functions on the Fly...Concept Drift* | OOF 生成和时间隔离正确；融合权重还需要跨时间漂移监控和不确定性收缩。 |
-| 下注与风险 | Baker & McHale, *Optimal Betting Under Parameter Uncertainty*；Busseti, Ryu & Boyd, *Risk-Constrained Kelly Gambling*；*Extending Kelly Staking Strategies to Peer-to-Peer Betting Exchanges* | Kelly/成交概率是资金决策层，不能被当作提高预测准确率的模型；当前 `q_fill_model` 参数仍是量级示意。 |
-| 验证与漂移 | *Time Series Cross-Validation* 相关研究；*A robust machine learning framework for detecting temporal drift...*；*Deployable Machine Learning...Leakage-Safe Prediction and Calibration* | 时间外验证和 label-as-of 约束是必要条件；应补充漂移指标、嵌套调参和多重比较控制。 |
-
-算法组中还包含评分规则、集合预报、概率区间、组合仓位、在线更新、概念漂移和体育市场效率研究。清单中的未来年份条目按 OpenAlex 当前元数据保留为“可检索条目”，不在报告中使用尚未公开验证的效果结论。
-
-### 决策模型组（80 篇）
-
-模型清单完整记录在 CSV。代表性方法覆盖：
-
-| 模型族 | 代表论文（CSV 中有 DOI/摘要） | 对当前系统的审计启示 |
-| --- | --- | --- |
-| Poisson/动态强度 | Dixon & Coles, *Modelling Association Football Scores and Inefficiencies in the Football Betting Market*；*Dynamic modelling and prediction of English Football League matches for betting*；*Stochastic modelling of football matches* | 当前 Poisson 盘口反演是合理基线，但并非已实现 Dixon-Coles 的低比分依赖和球队强度动态。 |
-| 双变量/相关比分 | *On the dependency of soccer scores – a sparse bivariate Poisson model...*；*Who’s the Favourite? A Bivariate Poisson Model...*；*A Bayesian bivariate conditional Poisson regression...* | 独立主客 Poisson 可能错估 0-0、1-0、1-1 和平局；应作为挑战模型做同样时间外消融。 |
-| 机器学习 | *Machine Learning in Football Betting*；*Data-driven prediction of soccer outcomes using enhanced machine and deep learning techniques*；*Soccer match outcome prediction with random forest and gradient boosting models*；*Predicting match outcomes in football by an Ordered Forest estimator* | 树/神经网络不是自动优于市场；需限制容量、校准并记录训练资源，当前 offset Logistic 的保守门控是正确方向。 |
-| 滚球模型 | *A Bayesian In-Play Prediction Model for Association Football Outcomes*；*Forecasting the opening goal in second-half...*；*A big data analysis of Twitter data...in-play forecasting* | 事件只有在 cutoff 前可靠收到才可用；当前 `visible_history` 和双时间契约遵守这一点，事件增益仍需消融。 |
-| xG/事件 | *A Goal Scoring Probability Model for Shots...*；*A new xG model for football analytics*；*A machine learning approach for player and position adjusted expected goals* | 当前系统没有独立 shot/xG 数据，不能把比分和赔率特征称作 xG；外部 xG 论文只支持未来数据接入研究。 |
-| 深度模型 | *Deep learning for football outcomes prediction based on football rating system*；*Predicting Soccer Match Outcomes Using Deep Learning: LSTM*；*Large-Scale In-Game Outcome Forecasting...Axial Transformer* | 在没有足够独立赛事和 GPU 预算前，深度模型会增加过拟合和延迟风险，不应直接替换当前路线。 |
-
-## 当前实现逐项审计
-
-| 维度 | 论文共识 | 当前实现 | 结论 | 处理 |
-| --- | --- | --- | --- | --- |
-| 市场先验 | 赔率是强基线，模型增益必须和同样本市场比较 | `p_market` 作为 offset，候选晋级比较 market Brier/Log loss | 一致 | 保持 |
-| 盘口支付 | 亚洲盘要按完整盘口和半赢/半输结算 | `settle_with_basis`、完整组选择、半注权重 | 一致 | 保持并继续按组统计 |
-| 时间泄漏 | 训练输入只能使用决策截点前可见信息 | cutoff、decision/quote received 时间和 label availability 均校验 | 一致 | 增加自动审计计数 |
-| 训练分组 | 同一比赛多个盘口/时点不是独立样本 | 训练按比赛归一权重，paired bootstrap 按比赛聚类 | 一致 | 保持 |
-| 概率校准 | 先 OOF，再在未来校准集评估 | OOF peer/calibration、Brier/Log loss/ECE | 基本一致 | 增加校准漂移监控 |
-| 训练采样 | 采样不能只取某一比赛阶段 | PG 曾取最早 40 条，SQLite 均匀采样 | **实现偏差** | 已改为 PG 每场均匀时间采样 |
-| 线上/离线口径 | 评估必须复现线上归一化和盘口约束 | `metrics` 曾跳过 coherent normalization | **口径偏差** | 已修复并加回归测试 |
-| 进球分布 | 低比分相关性和时变强度需要专门模型 | 独立 Poisson + 盘口反演 | 基线限制 | P1 研发 Dixon-Coles/bivariate challenger |
-| 多算法融合 | 相关模型不能被误当独立投票 | 同一盘口多算法，Beta/Brier 收缩和权重 cap | 基本合理 | 加相关性/漂移诊断 |
-| 模型不确定性 | 概率误差应进入仓位和晋级 | 晋级 bootstrap；下注为 fractional Kelly + 启发式 q_fill | 预测与资金层尚未完全闭环 | P1 估计参数不确定性 |
-| 调参选择 | 多次看测试集会造成选择偏差 | 固定滚动折，尚无系统的嵌套调参记录 | 优化缺口 | P1 增加预注册搜索与独立前瞻集 |
-| 漂移 | 市场/联赛/盘口结构变化需监控 | 只保存版本和窗口指标 | 优化缺口 | P1 增加 PSI、分层 Brier、报警 |
-| 事件特征 | 事件必须有可审计发生/接收时间 | 仅 verified red-card context；未知事件不解释 | 一致 | 保持保守输入 |
+训练不是强化学习。它以已结算标签监督拟合，按比赛权重而非相邻报价独立计权；模型推理/训练仍由worker承担。默认训练/较早验证预算24/12，#61 Newton求解另设最多30次；这是CPU资源取舍，不能从迭代次数宣称准确率提高。
 
 ```mermaid
 sequenceDiagram
     participant Q as 盘口/赛况接收
     participant F as 特征快照
-    participant M as 模型 worker
-    participant P as PG 预测
+    participant W as 独立模型worker
+    participant P as PG预测
     participant L as 赛果标签
-    Q->>F: event_at, received_at, cutoff
-    F->>M: 只交付 received_at <= cutoff
-    M->>P: 保存版本、概率、赔率和输入哈希
-    L->>P: label_available_at > predicted_at
-    P->>M: 按完整盘口/比赛聚类评估
-    M->>M: Brier、Log loss、Top-1、ROI 分开
+    Q->>F: event_at/received_at/cutoff
+    F->>W: received_at <= cutoff 的完整context
+    W->>P: artifact版本/概率/赔率/输入哈希
+    L->>P: 结算标签与available_at
+    P->>W: 按比赛分组的未来评估
+    W->>W: 校准标签须在最终测试入口前可见
+    Note over F,W: 完整context先推理，再应用graded分类mask
 ```
 
-## 系统设计合理性总评
+## 4. 实现偏差、修复与未完成项目
 
-| 维度 | 结论 | 依据 |
+| 审计项 | 原问题/当前限制 | 本PR状态 |
 | --- | --- | --- |
-| 概率建模路线 | **合理** | 赔率先验 + Poisson 盘口反演是文献主流基线；全盘口归一化、proper scores、市场配对比较均已具备 |
-| 验证设计 | **基本合理** | 时间隔离、按比赛聚类、前瞻预测时间校验正确；缺漂移监控、嵌套调参和 CLV |
-| 资金决策层 | **不合理（部分修复）** | Kelly 只存在于展示层（≤25%），执行层固定 5 元且无全局未结算敞口；与文献及开源注码层共识不符 |
-| 信息独立性 | **不合理** | 五个算法共享同一 OU/HAD 输入；方法分歧不是新增信息，同庄家公平赔率期望恒为 `-m/(1+m)` |
-| 结算与执行 | **曾严重错误（已修复）** | AH 结算对象、负号解析、标量归一化三个 P0；订单终态对账仍缺 |
-| 工程纪律 | **合理** | 版本化、影子部署、旧数据隔离、未知回执不重发、报价新鲜度检查 |
-| 数据覆盖 | **受限** | 单庄单源、无事件/xG、无第二市场价格参照、无 CLV |
+| PG取样 | 每场按最早输入LIMIT40，偏向早期；SQLite MOD也欠采样 | 已改时间分层完整曲线 |
+| 全局校准 | 使用最终测试入口尚不可知的标签 | 已按settled_at严格排除 |
+| 最终认证 | 验证的是另一次临时fit而非保存权重/peer校准 | 已复用持久化参数和明确分区 |
+| 概率后处理 | `metrics`、live/hybrid的coherence路径不一致 | 已统一函数；本轮保留未评分context，先完整投影再分类评分 |
+| 执行子群 | 辅助算法提升可掩盖真正执行的ensemble退化 | 已要求economic_ensemble单独过门槛 |
+| 走盘/无评级 | 事后标签过滤改变跨线context | 已保留完整context；push/ungraded y=None，分类mask独立 |
+| 旧artifact | 旧approved沿用，缺独立验证契约 | 新数据/验证契约统一校验load/shadow/promotion/rollback；保留旧文件 |
+| 资金执行 | 固定注额缺全账户pending/unsettled预算，已结回执仅前100条 | PG原子预占已验证；后台每次最多2页轮转全历史，关闭投注跳过读取、保留可重用线程；回填/精确释放/重启经隔离PG验证，最终发布源核验与刷新通过；关闭投注时不调用场馆补扫。无号或缺权威回执继续占额，无TTL释放 |
+| 影子收益 | 分类过滤漏计走盘本金 | 独立金融人口，走盘本金1净0、半赢半输按实际支付；首次合约/逐时点分列 |
+| 训练调度 | 候选未晋级重复fit；检查全量载入 | 独立完成cohort水位；metadata-only资格证书；训练截点与标签冻结 |
+| 迁移工具 | 新空PG预测表缺双接收时钟 | CREATE/ALTER补时钟与赔率，真实隔离空PG迁移、重复迁移实测 |
+| 战绩读取 | 宽表诊断拖住核心/实验、取消事务使主结果丢失 | 核心/实验独立reader与缓存；诊断最后5秒，部分计数明确为下界；真实PG和生产连续刷新已测 |
 
-总评：**方向合理、执行曾有严重缺陷、信息源单薄**。文献与开源对照同时支持三点：(1) 以赔率为先验、只信 proper scores 与同市场配对比较的框架正确；(2) 资金决策层必须与预测层闭合（分数 Kelly、回撤约束、全局敞口），当前尚未闭合；(3) 单一庄家赔率源是信息上限而非 bug——它使系统难以区分“模型错”与“价格错”。修复三个 P0 只恢复可评价性，不产生正期望：修正后同 160 笔的 ROI 聚类区间仍跨零。
+执行子群合成反例：120场、5个辅助算法加ensemble时，pooled Brier delta为−0.09875且区间全负，旧门控批准；实际ensemble Brier从市场0.2025退化到0.4225。新增门槛正确拒绝。它是单元测试反例，不是生产收益测量。
 
-## 亏损归因：为什么真实资金会亏
+完整context反例：OU2.5概率[.4,.6]与OU3概率[.7,.3]同时投影为[.55,.45,.55,.45]；3球赛果使OU3双向走盘被过滤后，离线只剩[.4,.6]。必须先完整推理再graded mask计分，不能把走盘伪造成二元标签。
 
-文献与开源对照只能回答“设计方向是否正确”，真实亏损需要逐笔证据。[auto-betting-loss-audit](../auto-betting-loss-audit/REPORT.md) 对 165 笔场馆已结算订单做了完整核验（证据等级 A），机制链如下：
+## 5. 对其他agent issue的复核与分歧
 
-| 因果层 | 机制 | 实测证据 | 处置 |
-| --- | --- | --- | --- |
-| 直接原因 | 滚球 AH/AH_1H 用累计比分而非“下注后净胜球”结算 | 160 笔旧代码重算 +235.83 元 vs 场馆实际 -10.67 元；改为剩余比分后 143/160 一致 | 已修（`settle_with_basis` + 剩余进球分布） |
-| 直接原因 | `-0/0.5`、`-0.5/1` 等复合盘口第二半注符号丢失 | 只修比分仍有 17 笔不符，继承负号后 160/160 一致 | 已修（`split_line` + 真实回执回归） |
-| 直接原因 | 单元素向量收缩被归一化为 p=1.0 | 17,570 条 `live_forecast` 的 `economics_risk_adjusted` 全为 1.0 | 已修（完整 Bernoulli 向量） |
-| 放大器 | 错误结算 → 算法权重、命中门控、训练标签 | 735,839 条可恢复标签输入中 79,972 条赢/输翻转；旧模型修正标签后 59.88% / Brier 0.22748，落后市场 63.53% / 0.21773 | 旧数据版本全部隔离 |
-| 放大器 | 命中次数 ≠ 优势：5 胜 995 负仍可下单；执行层不用 Kelly | 代码与离线诊断 | 已加版本/ROI/独立比赛数门槛；全局资金预算仍缺（P2） |
-| 结构性 | 同源赔率被当独立信息；同一庄家去水后期望为负 | 五算法共享同一 OU/HAD 推导 | 需第二价格源与 CLV（P1/P2） |
-
-**“看起来设计合理、结果还是亏”的完整解释**：方向正确 + 三个实现缺陷让“模型计算的赢”和“场馆结算的赢”不是同一个事件，于是模拟利润是假的（同批订单由 +235.83 元修正为 -10.67 元），错误标签又自我强化地挑选“已领先球队”。修复后真实订单仍是 -1.41%（95% 聚类区间 -11.52%～+8.26%），没有证据表明存在正优势——这是先熄火、再验证的依据。
-
-## 开源项目对照审计（算法 / 模型各 100 个）
-
-为交叉验证设计合理性，除 160 篇论文外，另以固定查询从 GitHub 采集两个各 100 个项目的可复核目录（查询词、命中数与检索时间见 `data/oss_manifest.json`）。证据等级：**A** 为仓库元数据与描述原文（未逐个审阅源码，不以 star 数推断效果）；**B** 为从主流项目设计抽取的可迁移模式；**C** 为本项目建议。
-
-### 算法组（投注决策 / 概率 / 风险）
-
-| 设计簇 | 代表项目（stars） | 主流做法 | 当前系统 | 判定 |
-| --- | --- | --- | --- | --- |
-| 套利 / 交易所 | `pretrehr/Sports-betting`(536)、`HintikkaKimmo/surebet`(88)、`odds-api`(33) | 跨庄家对齐同一事件、以交易所价格做参照 | 单一来源（乐鱼），无第二价格 | **缺口**：无法区分模型错与价格错 |
-| 价值投注 / EV | `DevanshDaxini/Sports-EV-Bot`(12)、`Sanju311/plusEV-odds-finder`、`brodyautomates/sports-betting-intelligence` | 多庄家扫描 + 收盘线比较 | 单庄家 EV，无收盘线/CLV | **缺口**：P1 记录 CLV |
-| Kelly / 注码 | `subodh101/bet-optimizer`、`sergeisukhovmkt/...Drawdown-Constrained-Kelly`、`jensolson/Kelly-Criterion-optimal-betting` | 分数 Kelly + 回撤约束 + 参数不确定性 | 展示层 ≤25%，执行层固定 5 元 | **脱节**（已确认） |
-| 去水 / 隐含概率 | `stuartread7/Unibet-Scraper`、`carterlasalle/SportsArbFinder`(16) | 多方法去水（proportional/power/Shin）并保留分歧诊断 | 5 种方法 + 分歧诊断 | **一致** |
-| 概率校准 | `FilippoMB/Ensemble-Conformalized-Quantile-Regression`(104)、`turingism/worldcup-predictor` | 校准 + 预测区间/覆盖 | Brier/Log loss/ECE | **基本一致**；缺漂移监控 |
-| 回测 / 验证 | `kernc/backtesting.py`(9040)、`ml4t/backtest`(31)、`fasiondog/hikyuu`(3560) | 事件驱动、可配置成交与费用、防前视 | 时间隔离 + 报价时点校验 | **一致**；缺嵌套调参与候选登记 |
-| 组合 / 风控 | `ml4t/backtest`、`AllenLiu45/LightQuant`(15) | 组合级敞口、回撤、相关性约束 | 单场计算上限，无全局占用 | **缺口**（已确认） |
-
-### 模型组（比分 / 滚球 / 事件）
-
-| 设计簇 | 代表项目（stars） | 主流做法 | 当前系统 | 判定 |
-| --- | --- | --- | --- | --- |
-| Poisson / Dixon-Coles | `martineastwood/penaltyblog`(236)、`octosport/octopy`(77)、`scibrokes/dixon-coles1996`、`jpmouracodex/football-mle` | 低比分相关性 + 时变强度 | 独立 Poisson + 盘口反演 | **基线合理**；DC/bivariate 挑战是共识路径 |
-| Elo / 评级 | `Hicruben/world-cup-2026-prediction-model`(93)、`avpv/team-balance` | Elo 作为长期强度先验 | 无独立评级，HAD 缺失即停 | **可选**：仅在缺少 HAD 时需要 |
-| xG / 事件 | `ML-KULeuven/soccer_xg`(261)、`eddwebster/football_analytics`(2808)、`Dato-Futbol/xg-model`(81) | shot 级事件特征 | 无 shot/xG 数据，不冒充 | **诚实边界**；接入需事件源与接收时间契约 |
-| 机器学习 | `kochlisGit/ProphitBet`(580)、`MauroAndretta/AIFootballPredictions`(62)、`abailey81/MatchOracle` | 容量限制 + 校准后与市场比较 | 30 参数 offset Logistic（shadow） | **方向一致**，暂不升级复杂度 |
-| 滚球 / in-play | `martineastwood/penaltyblog`、`umitkaanusta/MacTahminBotu`(26) | 状态相关强度 + 事件更新 | 无已验证事件特征 | **缺口**：P3 在接收时间契约下消融 |
-| 蒙特卡洛 / 模拟 | `vickyfriss/football-league-predictions`、`manuelpeba/world-cup-2026-forecast` | 全赛季/锦标赛模拟 | 单场完整盘口分布 | **一致**（目标是盘口结算，不是赛季模拟） |
-
-从 200 个项目抽取的三条共性模式（B）：(1) 成熟方案普遍以**多庄家/交易所报价**作为独立信息源，单源是当前系统与主流最大的结构性差距；(2) 注码层普遍把**回撤约束与参数不确定性**写进公式，而不是只放一个 Kelly 上限；(3) 验证层普遍区分**收盘线价值（CLV）**与命中率，当前系统还没有 CLV 字段。
-
-## 已执行优化
-
-### 1. PostgreSQL 训练采样修复
-
-修改 [store/training_data.py](/root/ai_football/store/training_data.py) 的 `_postgres_training_sample_query()`：
-
-- 仍由已结算比赛集合驱动 `CROSS JOIN LATERAL`，避免 2300 万行输入的全局排序。
-- 每场在 `at, algorithm, market, line, outcome` 的稳定顺序上计算 `ROW_NUMBER` 与 `COUNT`。
-- 用 `MOD((row_number - 1) * cap, total) < cap` 选出均匀时间样本。
-- 状态中的采样口径从 `earliest_qualified_inputs_per_match` 改为 `evenly_spaced_per_match`。
-
-这样保留同场多盘口和多算法，同时不把训练分布锁死在最早 40 条报价。
-
-### 2. 离线指标与线上概率空间统一
-
-修改 [core/learned_model.py](/root/ai_football/core/learned_model.py) 的 `metrics()`：先对完整 HAD/OU/AH 组调用 `coherent_probabilities()`，再计算 Brier、Log loss 和二分类诊断。生产推荐方向仍使用同一组归一化概率，HAD Top-1 仍由 `model_validation.evaluate()` 单独报告。
-
-### 3. 回归验证
-
-已执行：
-
-```text
-./scripts/cpu-limited.sh run -- python3 -m unittest \
-  tests.test_training_data tests.test_learned_model tests.test_model_training -q
-Ran 31 tests ... OK
-```
-
-新增/更新测试覆盖了 PG 均匀采样 SQL、采样口径、时间边界和模型训练路径。完整流水线在最终交付前继续执行；远程 PostgreSQL 查询本身不在宿主机伪造验证，需通过 model-worker 容器的真实配置复核执行时间和返回行数。
-
-## 后续优化计划
-
-这些是优化项，不是当前生产致命缺陷；按优先级执行，不改变真实投注金额：
-
-| 优先级 | 事项 | 验收门槛 |
+| 来源 | 可采纳结论 | 必须保留的边界 |
 | --- | --- | --- |
-| P0 | 在 model-worker 真实 PG 上比较修复前后每场采样的时间分位数、盘口/算法覆盖和查询耗时 | 采样不集中在前 10% 比赛时间；查询 p95 在训练墙钟预算内；标签可见时间审计为 0 泄漏 |
-| P1 | Dixon-Coles/稀疏双变量 Poisson 挑战模型 | 3 个滚动时间折至少 2 折优于市场，按场 Brier 95% CI 上界 < 0，且资源/推理延迟合格 |
-| P1 | 漂移与分层校准监控 | 按盘口、联赛/比赛类型、赔率分箱输出 Brier、ECE、覆盖、样本独立比赛数；异常才报警 |
-| P1 | 嵌套时间调参和候选登记 | 调参集、校准集、最终测试集不重叠；每次候选记录搜索空间和停止原因 |
-| P2 | 盘口线迁移和跨市场相关风险 | 同场联合收益与最大回撤进入门控，避免把多个相关盘口当独立下注 |
-| P2 | 用真实提交/改价日志估计 q_fill 和执行成本 | q_fill 分层 Brier/校准通过；实测成本替代当前量级示意参数 |
-| P2 | 同场多线/多方向的联合风险预算与最大回撤纳入门控 | 同场累计敞口有硬上限；模拟回撤不超预算 |
-| P1 | 记录收盘线并计算 CLV（收盘线价值） | 每笔推荐保留收盘价快照；CLV 分布与校准指标同时报告 |
-| P2 | 第二来源报价对照（交易所/多庄家） | 与乐鱼同一事件可对齐；分歧时只记录不自动下单 |
-| P3 | 可靠事件输入的增量消融 | 同一时间窗口加入事件后，独立前瞻 Brier/Log loss 改善且不存在接收延迟泄漏 |
+| #58逐帧回放 | 进球后旧价可以在年龄门槛内被误判fresh；模拟利润被不可成交价格放大 | 一小时回放是机制证据，不是全库统计；本次未重新跑全量生产对账 |
+| #58 ROI附件 | 本地233场订单按决策赔率重算ROI −8.53%，聚类区间[−17.52%,+0.29%] | 不是场馆权威已结算盈亏；与TASK-40样本/时间/口径不同 |
+| #60已合并 | 45秒默认比分变化冷却、报价晚于变化+冷却、执行同检查；N分钟虚拟赛识别 | 本轮新代隔离缺状态证据的旧历史，原始记录保留；冷却长度不是普适最优 |
+| #61已合并 | 7坐标堆叠候选、60维artifact格式；报告称尚未过晋级门 | 其benchmark不是本PR完整context/执行子群认证；需新独立数据复核 |
+
+同源算法不提供额外外部信息，但跨盘口约束是否有可成交增量必须实测，不能仅从同源断言所有定价方法必然无效。对于比例去水的同一完备市场，若`S=sum(1/odds)>1`，`q=(1/odds)/S`，则`odds*q−1=1/S−1<0`；这不是所有去水方法或跨盘口策略的无盈利定理。
+
+外部锐价、独立球队历史/事件、校准与状态建模都是可研究增量，不将“外部参照是唯一盈利路线”视为已证定理。也不把30/60秒未来同盘口变化直接称为公平CLV：必须区分同状态、状态变更、半场/全场基准和未成交报价，否则新的指标仍会混入比分事件。
+
+#58涉及密钥/API权限建议作为独立安全事项引用；本轮没有轮换用户凭据、采购数据源或更改真实下注开关。历史污染必须先隔离/重标，然后重新建立权重和训练基线；只修当前输入不能自动使旧利润和旧模型有效。
+
+## 6. 成熟方案对照与后续优化顺序
+
+下表是**定性工程评估，不是测量分数**；代表成熟工具以官方资料为参照，未执行其本机速度对照。
+
+| 方案 | 接入层级 | 数据要求 | 盘口完整性 | 资源/延迟 | 校准/验证 | 维护成本 | 本项目适用性 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [penaltyblog](https://penaltyblog.readthedocs.io/) Poisson/DC/双变量 | 比分预测 | 历史球队结果/赔率 | 比分分布支持AH/OU | 小-中；需实测 | 需自建时间外评估 | 中 | 候选基线，不能冒充已实现 |
+| [scikit-learn](https://scikit-learn.org/stable/modules/linear_model.html#logistic-regression) Logistic/校准 | 概率预测 | 冻结特征与标签 | 需外部coherence | 小；offset需专门实现 | 支持常规校准，时序契约由项目负责 | 低-中 | 当前手写offset路线参照 |
+| [LightGBM](https://lightgbm.readthedocs.io/) | 非线性预测 | 足量独立特征 | 需外部支付/context | CPU中等；需限制线程 | 需时间外校准 | 中 | 后续挑战者，不直接替换 |
+| [PyTorch](https://pytorch.org/docs/stable/) 序列/事件网络 | 序列预测 | 大量可见事件与历史 | 需外部结算/context | 高；训练资源压力大 | 全部由项目验证 | 高 | 当前不优先 |
+
+优化先后：输入可成交性/历史污染 → 完整context与契约 → 可信概率/收益评估 → 增量信息与候选调参 → 资金执行。正CLV、低Brier或高胜率各自只证明相应指标，不能单独推出正净收益。
+
+| 优先级 | 任务与状态 | 验收标准 |
+| --- | --- | --- |
+| P0 | 最新报价冷却/虚拟赛新规则：#60已合并，本分支保留 | 不回退新规则；历史污染隔离另验收 |
+| P0 | 本PR采样/时间/持久化/执行子群：已实现 | 正常+泄漏/退化回归通过；数据与artifact可追溯 |
+| P1 | 完整context与graded mask：本轮实现 | 走盘、半赢半输、缺方向、无评级的线上/离线逐方向概率一致 |
+| P1 | validation-contract版本：本轮实现 | 旧artifact拒绝；load/shadow/rollback/promotion统一检查 |
+| P1 | 历史旧价/虚拟赛污染隔离、shadow收益口径 | 走盘计本金1利润0；分类和完整收益样本分离；同场去重清晰 |
+| P1 | 资金原子预占、后台回执补扫：实现、冻结测试及发布可用性通过，原生现场补扫未调用 | 并发/未知回执/重试不超预算；首100条外回执可逐轮发现；无号保持held，关闭投注停止读而可重新启用 |
+| P2 | 完成训练cohort独立进度、增量check-only：本轮实现 | 新比赛训练期间不丢；未晋级不重复fit；探针不全量重载 |
+| P2 | 候选登记/nested时间调参/漂移 | 调参/校准/最终测试分离，按盘口/联赛/时段报独立比赛数 |
+| P2 | 外部价格或独立球队历史；DC/动态强度/事件消融 | 同一前瞻窗口配对Brier CI上界<0、log loss不劣，至少3折中2折改进；执行子群和资源另过门槛 |
+| P2 | 状态可比的CLV与成交成本 | quote/state/成交价可追溯；未来事件分层，缺价不伪填0 |
+
+训练24/12预算和报价45秒冷却均是可调配置；更改预算应重跑同一冻结评估，改变冷却应衡量状态污染/推荐覆盖/可成交性，不能凭默认值宣称最优。执行子群100场门槛是最低样本约束，仍要求配对置信区间；放宽为50场可能降低检出可靠性，加严到200场可能延迟晋级，均不消除context偏差。
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Audit: 文献与代码审计
-    Audit --> Fixed: 采样/口径偏差修复
-    Fixed --> Challenger: Dixon-Coles/漂移候选
-    Challenger --> Shadow: 同一前瞻输入影子评估
-    Shadow --> Active: 按场区间和资源门槛通过
-    Shadow --> Fixed: 未通过或样本不足
-    Active --> Shadow: 新数据/漂移触发复核
+    [*] --> Audit
+    Audit --> InputFixed: 报价/历史污染修复
+    InputFixed --> ValidationFixed: context与契约闭合
+    ValidationFixed --> Challenger: 注册候选与独立窗口
+    Challenger --> Shadow: 同一前瞻输入
+    Shadow --> Approved: 实际执行子群与资源门槛
+    Shadow --> Challenger: 样本不足/退化
+    Approved --> Shadow: 新cohort/漂移复核
 ```
 
-## 远程 issue：已发布
+## 7. 真实PG采样与性能
 
-用户要求把建议发布到远程仓库。已于 2026-10-13 在 [1420970597/ai_football](https://github.com/1420970597/ai_football) 发布 **issue #55：决策链路文献与开源审计 —— 亏损归因、设计合理性与 P0–P3 优化建议**，正文包含：三个 P0 缺陷的逐笔证据、系统设计总评、P0–P3 优化清单与验收门槛、恢复自动下注的停牌条件，并交叉引用 #52（P0-P4 优化计划）与 #41（经济学+LLM 配对评估）。本文档与 `data/` 清单是该 issue 的证据附件。
+[PG数据加载附件](data/pg_dataset_verification.json)记录一次只读repeatable snapshot检查：978.4195秒（约16.3分钟），SQL 973.9919秒，35批、每批最多64个标签比赛，最慢批55.0012秒。检查50,075行，得到47,437有效行/1,057场；未评级2,638、缺标签0。2,193标签比赛中1,136场无匹配输入；9,508时间桶中1,959空桶。
 
-只有出现以下任一证据才**重开/升级**：
+PG最多8个索引驱动时间桶，SQLite按稳定时间点分桶，采样单元为完整`(match_id,at,algorithm,market)`曲线，保留所有盘口线/方向。因此40行是**软目标**：每场最大87，均值47.3746，没有40行硬上界；内存需按真实行数预算。目录估计25,371,612行/957场与本次1,057场抽样口径不同，`full_audit_complete=false`，不能当作全库准确计数。
 
-- 新版本标签累计 ≥100 场后，前瞻校准/Brier 仍不能在同一集合上优于市场基准；
-- 修复后的采样仍在特定比赛阶段偏斜，且导致滚动 Brier/收益显著变化；
-- 生产路由绕过 `promotion.approved` 使用候选模型；
-- 完整盘口组在写入、评估或下注之间发生身份丢失，导致同一合约重复执行；
-- 出现 `label_available_at <= predicted_at` 的新训练/影子记录。
+[PG采样fixture附件](data/pg_sampling_verification.json)覆盖HAD单/多点、OU多线、无效receipt-clock整曲线拒绝和重复检查。生产5519689有75行/8点/36完整line组；5767981有43行/7点但1个源方向组不完整。采样保留曲线不修复上游已缺失的数据。单次加载与批次最慢值不是p95，也不是训练一轮时长；新#60/#61尚未重跑该生产抽样。
 
-## 复现与边界
+较早的新代资格探针在独立PG上返回 2,484 个标签比赛、3,154 条输入涉及 5 场最新比赛，但 `eligible_matches=0`、`cohort_verified=true`、`coverage_status=complete`；原因是没有同时满足版本、双时钟、完整盘口曲线和不可变特征资格的比赛。两次只读探针分别约 10.26 秒和 8.46 秒，未提交任何盘口或投注请求。该结果解释当时模型页面的等待状态；它不作为后续时刻的最新数量或完整训练时长。
+
+同一独立PG的现金预占并发探针验证了全局 1,000 分上限（8 个并发请求中接受 5 个、持有 1,000 分）和同 selection 只能接受 1 笔；探针没有提交到场馆。旧 reservation 若缺少权威回执继续占用预算，故不会因超时自动释放。该结果是原子预算行为验证，不代表真实投注或盈利。
+
+## 8. 验证与复现
+
+最终业务源码冻结为 `source-freeze-v6.json`，202个源文件哈希复核无变化。Python3.12 Docker全量测试 **1,716项、跳过14、99.110秒、退出码0**；mypy **120文件**、ruff、184个Python文件编译、15个JavaScript语法与`git diff --check`均退出码0。编译产物留在项目output。JavaScript首次检查误把Playwright CLI匿名函数表达式当函数声明而失败；按真实表达式载体加括号复验通过，没有为此修改业务源码。
+
+历史freeze-v5的1,695项/14跳过/92.721秒、freeze-v3的1,678项/14跳过/92.338秒及1,618项整合测试继续保留，不能覆盖后来的代码。早先ctime、完整曲线fixture、只读挂载等失败和依赖检查失败均不删除；实际命令、退出码和源码哈希见[验证附件](data/validation_results.json)。旧AGENTS要求的根`requirements.txt`当前不存在，旧依赖命令失败不伪称通过；本轮不宣称旧爬虫链路已验收。
+
+### 战绩读取及诊断语义
+
+核心全历史统计和实验主要指标各在独立repeatable-read reader中读取，预算分别60秒、30秒；关闭核心reader并通过独立缓存连接发布后，再读实验。实验取消不会回滚核心。GET返回缓存、时间和状态，初始未知显示loading。缓存持久化另有10秒预算，失败不丢已完成的内存快照。
+
+实验先完成arms、审核状态、operation和paired；最后才读errors诊断，最多5秒且不超过实验剩余预算。identity按keyset每批256回源，cap10000。`errors_total`仅是当前窄projection同一reader快照中的审核失败count，不代表全库已认证完整；`errors_counted`只计成功读取的有效dict payload。cap、缺payload、无效JSON或资源预算耗尽均标`partial`，分类计数为下界，未读取不等于没有错误。只对TimeoutError/SQLSTATE57014降级；取消后不向该连接再发SQL，其它程序异常继续抛出。
+
+真实只读PG三轮：核心 **27.4066/26.2588/28.8482秒**，主要实验 **11.0773/11.9859/10.6196秒**，均ready。错误诊断分别只读 **512/512/768条，分母均36,284**，全部明确partial；三轮取消后的SQL数均0。三次测量不是持续运行P95，实验ready也不等于诊断详情完整。
+
+既有history发布已核验API/model容器镜像及源码一致；生产v6观测 **263.66秒、18次HTTP请求均200**，核心与实验各至少3个刷新周期推进，最终分页/核心/实验均ready。PG设置version52和SHA256 `8de50a9ab53f89392a97f723ad50820f478908bbc97ae03938b286fb22b3218b`保持不变，投注关闭、训练开启。生产浏览器v5把允许的partial诊断“读取超时”误判为整页失败，记录保留；修正后v6读取真实页面HTTP200，核心/实验/记录ready、partial768/36284解释可见、无pageerror或写请求。该短观察不是4小时稳定性测试。
+
+### 资金回执补扫与最终部署边界
+
+独立审查发现已结回执只取page1/100条，会让更老订单长期占额；只看`held_count=0`也会漏掉尚未回填的旧订单。修复前只读生产inventory记录unknown3、rejected76、pending330、sending1、accepted58，而held0；这不能解释为没有敞口风险。
+
+现已实现后台warm每次最多2页的全历史轮转补扫，提交预算仍保持原第一页读取，不把全历史扫描放进submit路径。关闭投注时下一轮跳过读，线程可复用；超时/计数漂移/缺失回执保持partial，无号unknown继续held，不凭缺席释放。隔离PG24项断言通过（65.2241秒、退出码0）：351条accepted和1条无号unknown回填352笔/70,500分，精确native回执只释放1笔，重启后351笔/70,300分保持且无号unknown仍held。该PG探针不调用场馆HTTP，不代替原生分页验证。
+
+最终freeze-v6构建、部署及后续观测退出码0：**186.98秒、13次HTTP200**，核心时点10:27:43/10:28:44/10:29:47 UTC，实验时点10:28:13/10:29:18/10:30:20 UTC，均为此次部署后的3个新刷新周期。4个容器healthy，API与model源哈希匹配冻结代码；API镜像`205cb6489528…`、model镜像`e465679e7845…`完整指纹见附件。设置version52及原SHA256不变，投注关闭、训练开启，queue/retry均0。原生补扫状态`not_started`符合关闭投注时不读场馆的行为，不能称已完成真实现场补扫。最终生产浏览器v7 HTTP200、core/experiments/entries ready，partial768/36284解释一致，无pageerror或写请求。上文263.66秒与浏览器v6属于较早history发布，各自保留其证据范围。新代完整训练资源时长、前瞻相对市场增量、状态可比CLV及权威净收益均未由本轮工程测试证明。
 
 ```bash
-python3 -m py_compile reports/decision-algorithm-model-audit/scripts/collect_literature.py \
-                        reports/decision-algorithm-model-audit/scripts/collect_oss.py
-python3 reports/decision-algorithm-model-audit/scripts/collect_literature.py
-python3 reports/decision-algorithm-model-audit/scripts/collect_oss.py
-./scripts/cpu-limited.sh run -- python3 -m unittest \
-  tests.test_training_data tests.test_learned_model tests.test_model_training -q
+python3 reports/decision-algorithm-model-audit/scripts/verify_literature.py
+python3 -m py_compile reports/decision-algorithm-model-audit/scripts/*.py
 python3 reports/decision-model-accuracy/scripts/md_to_html.py \
   reports/decision-algorithm-model-audit/REPORT.md \
   reports/decision-algorithm-model-audit/REPORT.html
 ```
 
-论文与开源项目样本来自公开元数据 API，检索结果会随数据库更新；两份 CSV 中的查询词和时间戳用于复核。报告不承诺任何盈利，不执行真实下注，也不把候选模型当前 26 场前瞻窗口当作稳定准确率。
+图表必须在容器挂载`/usr/share/fonts/truetype/wqy`后执行`make_figures.py`，输出本报告1张图；不在宿主机安装包。原始`collect_literature.py`仅重抓来源目录，不能替代逐篇审计CSV或覆盖本次人工判定。
+
+## 9. 历史与远程跟踪
+
+TASK-40的160笔/758本金/−10.67利润/−1.41%ROI，以及旧代码+235.83与修正160/160对账，来自[历史亏损报告](../auto-betting-loss-audit/REPORT.md)。本轮未重测。#58的−8.53%是另一日期/样本下按决策赔率重算，不是“修复后权威资金又亏8.53%”的因果证明。较早新代资格探针没有合格训练比赛，旧模型/artifact因数据与验证契约不兼容而隔离，不能把旧版本收益或准确率当作当前模型效果。默认Python User-Agent的请求曾被Cloudflare阻止；普通浏览器User-Agent的域名/账号接口为200，该探针差异不当作服务故障。
+
+最终工程发布已核验，原生现场补扫、前瞻统计与研究项仍有证据边界，保持[#55](https://github.com/1420970597/ai_football/issues/55) open，关联[#58](https://github.com/1420970597/ai_football/issues/58)和[#52](https://github.com/1420970597/ai_football/issues/52)。本PR不关闭这些issue；已合并#60/#61的功能保留。原两组80篇/160篇有效、200个成熟项目共性的表述撤回；GitHub清单只保留元数据目录，未逐个审源码，不能作为成熟实践证据。
+
+### 最终报告页面验收
+
+Chromium 实测：3 个 Mermaid 在线渲染，中文数量图加载正常；阻断 CDN 后 3 个图均回退为可见图源，页面异常为 0。命令、结果与退出码 0 记录在 `data/validation_results.json` 的 `report_visual_acceptance`。图表仅展示文献审计数量，不展示模型正确率。

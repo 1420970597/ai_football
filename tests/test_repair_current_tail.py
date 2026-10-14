@@ -56,9 +56,9 @@ class CurrentTailRepairTests(unittest.TestCase):
                 stream.write(json.dumps(decision())+'\n')
             archive = Mock()
             out = repair_file(root, path, {}, archive)
-            self.assertEqual(out['rebuilt_inputs'], 8)
+            self.assertEqual(out['rebuilt_inputs'], 20)
             with sqlite3.connect(root/'models'/'inputs.sqlite3') as con:
-                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0], 8)
+                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0], 20)
             cursor = json.loads((root/'models'/'replay-cursor.json').read_text())
             self.assertEqual(cursor[path.name], path.stat().st_size)
 

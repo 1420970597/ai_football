@@ -16,6 +16,9 @@ async (page) => {
       Object.assign(data.prospective,{status:'ready',reason:'当前版本前瞻样本',counts:{predictions:600,settled_predictions:400,pending_predictions:200,settled_matches:20,ungraded_predictions:3,excluded_predictions:10},model:{matches:20,decisions:400,accuracy:.63,had_top1_accuracy:.55,had_top1_matches:12,asian_payment_accuracy:.575,asian_selected_contracts:80,brier:.22},baseline:{matches:20,decisions:400,accuracy:.60,had_top1_accuracy:.50,asian_payment_accuracy:.525,brier:.23},window:{from:'2026-10-12T08:00:00Z',to:'2026-10-12T09:00:00Z',max_predictions:10000},latency:{p95_ms:572005}});
       data.shadow.live={outbox_batches:3,outbox_predictions:300,outbox_oldest_wait_ms:1000,persist_state:'pending'};
       data.shadow.performance={scope:'live_lane_recent_process_samples',sample_limit:512,samples:100,updated_at:'2026-10-12T09:00:00Z',compute_ms:{p95:4},queue_ms:{p95:121},decision_to_prediction_ms:{p95:125},prediction_persist_ms:{p95:90},decision_to_durable_ms:{p95:130},decision_to_pg_confirmed_ms:{p95:220}};
+      data.prospective.model.unit_stake={stake_units:5,profit_units:0,roi:0,selected_contracts:5,won:1,lost:1,push:1,half_won:1,half_lost:1,missing_odds_contracts:2,unverifiable_settlement_contracts:1};
+      data.prospective.model.unit_stake_by_time={selected_contracts:10,profit_units:1.5};
+      data.prospective.baseline.unit_stake={selected_contracts:5,profit_units:-1,roi:-.2};
     }
     if (mode === 'no-sample') Object.assign(data.prospective,{status:'ready',model:{accuracy:0,had_top1_accuracy:null,asian_payment_accuracy:null},baseline:{accuracy:0,had_top1_accuracy:null,asian_payment_accuracy:null}});
     if (mode === 'unapproved') Object.assign(data,{decision_mode:'model',model:{version:'wrongly-loaded',promotion:{}},decision_model_available:false});
@@ -40,6 +43,7 @@ async (page) => {
   shadow=await page.locator('.shadow-performance').textContent();
   for (const text of ['胜平负 Top-1 正确率55.0%','胜平负市场 Top-150.0%','亚洲盘选中方向获利率57.5%','亚洲盘市场方向获利率52.5%','前瞻已结样本400','前瞻待结样本200','125 ms','当前版本最近 10000 条预测']) assert(shadow.includes(text),'shadow metric '+text);
   for (const text of ['影子计算 P954 ms','实时排队 P95121 ms','决策至影子输出 P95125 ms','影子持久化 P9590 ms','决策至本地可靠保存 P95130 ms','决策至 PG 确认 P95220 ms','待同步 PG 批次3','待同步 PG 预测300','已存历史预测端到端 P95572005 ms','实时延迟样本100','最近 512 个有效样本','重启恢复记录不参与计算、排队和输出延迟统计']) assert(shadow.includes(text),'latency scope '+text);
+  for (const text of ['影子首次合约净收益（本金1）0.0000','影子首次合约 ROI0.0%','市场首次合约 ROI-20.0%','首次合约模拟注数5','首次合约赢 / 输 / 走1 / 1 / 1','首次合约半赢 / 半输1 / 1','逐时点模拟净收益1.5000','逐时点模拟注数10','缺赔率合约2','不可核验结算合约1']) assert(shadow.includes(text),'unit-stake schema '+text);
   await page.route('**/api/v1/data-model', async route => route.fulfill({json:{model:{},training:{state:'candidate',candidate},settings:{shadow_enabled:true},shadow:{available:true,artifact_kind:'candidate',version:'candidate-v5'},running:true,
     prospective:{version:'candidate-v5',status:'ready',model:{matches:20,decisions:400,had_top1_accuracy:.55},baseline:{matches:20,decisions:400,had_top1_accuracy:.5},counts:{predictions:600,settled_predictions:400,pending_predictions:200,settled_matches:20},
       windows:{pending:{max_predictions:20000},settled:{max_matches:64}},sampling:{max_matches:64,max_contracts_per_match:128,full_population:false,note:'原始预测在PG永久保留；已结窗口仅最近64场，不代表全量正确率'}}}}));
