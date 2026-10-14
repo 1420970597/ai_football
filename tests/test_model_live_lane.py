@@ -69,8 +69,8 @@ class ModelLiveLaneTests(unittest.TestCase):
                     release.set()
                     consumer.join(2)
                 worker._persist_live_outbox()
-            self.assertEqual(len(committed),24)
-            self.assertEqual(len({(r['at'],r['algorithm'],r['market'],r['line'],r['outcome']) for r in committed}),24)
+            self.assertEqual(len(committed),60)
+            self.assertEqual(len({(r['at'],r['algorithm'],r['market'],r['line'],r['outcome']) for r in committed}),60)
             self.assertEqual(worker._live_stats['last_persist_batch_files'],2)
             self.assertEqual(worker._live_stats['outbox_batches'],0)
 
@@ -97,7 +97,7 @@ class ModelLiveLaneTests(unittest.TestCase):
             self.assertEqual(fresh._live_cursor,saved_cursor)
             with patch('service.model_service.persist_prospective_predictions',side_effect=lambda db,path,rows:rows) as writer:
                 fresh._persist_live_outbox()
-            self.assertEqual(writer.call_args.args[2][:8],original['predictions'])
+            self.assertEqual(writer.call_args.args[2][:len(original['predictions'])],original['predictions'])
             self.assertFalse(list(queue.glob('*.json')))
             self.assertFalse(fresh._shadow)
 
@@ -110,7 +110,7 @@ class ModelLiveLaneTests(unittest.TestCase):
                 for _ in range(3):
                     with self.assertRaises(TimeoutError):
                         worker._consume_replay()
-                    self.assertEqual(len(worker._inputs),8)
+                    self.assertEqual(len(worker._inputs),20)
                     self.assertFalse(worker._cursor)
             with patch('service.model_service.write_inputs') as writer:
                 worker._consume_replay()
@@ -162,7 +162,7 @@ class ModelLiveLaneTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'磁盘预算'):
                     worker._consume_live_shadow(enqueue_only=True)
             self.assertEqual(worker._live_cursor,cursor)
-            self.assertEqual(worker._live_stats['outbox_predictions'],8)
+            self.assertEqual(worker._live_stats['outbox_predictions'],20)
             self.assertEqual(len(list((Path(directory)/'models'/'live-shadow-outbox').glob('*.json'))),1)
 
     def test_outbox_directory_sync_failure_does_not_acknowledge_journal(self):
@@ -182,7 +182,7 @@ class ModelLiveLaneTests(unittest.TestCase):
             self.assertTrue(all(offset == cursor.get(name, 0)
                                 for name, offset in worker._live_cursor.items()))
             queued = json.loads(next(queue.glob('*.json')).read_text())
-            self.assertEqual(len(queued['predictions']),8)
+            self.assertEqual(len(queued['predictions']),20)
             fresh = ModelService()
             fresh.bind(str(ledger))
             fresh._initialize_live_cursor()
@@ -278,7 +278,7 @@ class ModelLiveLaneTests(unittest.TestCase):
             with patch('service.model_service.time.time',return_value=1735732861):
                 worker._consume_live_shadow()
             self.assertEqual(worker._live_cursor[path.name],path.stat().st_size)
-            self.assertEqual(worker._shadow_info['predictions_written'],8)
+            self.assertEqual(worker._shadow_info['predictions_written'],20)
             self.assertFalse(worker._inputs)
             self.assertEqual(worker._live_stats['skipped_existing_journals'],1)
 
@@ -305,7 +305,7 @@ class ModelLiveLaneTests(unittest.TestCase):
                     worker._consume_live_shadow()
                 self.assertTrue(replay.is_alive())
                 self.assertEqual(writer.call_count,1)
-                self.assertEqual(worker._shadow_info['predictions_written'],8)
+                self.assertEqual(worker._shadow_info['predictions_written'],20)
                 self.assertEqual(worker.status()['shadow']['performance']['samples'],1)
                 release.set()
                 replay.join(2)
@@ -327,7 +327,7 @@ class ModelLiveLaneTests(unittest.TestCase):
                     worker._consume_live_shadow()
             outbox = Path(directory)/'models'/'live-shadow-outbox.json'
             original = json.loads(outbox.read_text())
-            self.assertEqual(len(original['predictions']),8)
+            self.assertEqual(len(original['predictions']),20)
             fresh = ModelService()
             fresh.bind(str(ledger))
             fresh._initialize_live_cursor()
@@ -338,7 +338,7 @@ class ModelLiveLaneTests(unittest.TestCase):
             self.assertFalse(outbox.exists())
             self.assertEqual(fresh._live_cursor,original['cursor'])
             self.assertEqual(fresh.status()['shadow']['performance']['samples'],0)
-            self.assertEqual(fresh._live_stats['recovered_outbox_predictions'],8)
+            self.assertEqual(fresh._live_stats['recovered_outbox_predictions'],20)
 
     def test_latency_has_real_compute_queue_generation_and_commit_segments(self):
         with TemporaryDirectory(dir=Path.cwd()/'output',prefix='lane-metrics-') as directory:
@@ -510,7 +510,7 @@ class ModelLiveLaneTests(unittest.TestCase):
                     fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             with patch('service.model_service.write_predictions',side_effect=writer):
                 worker._consume_live_shadow()
-            self.assertEqual(worker._shadow_info['predictions_written'],8)
+            self.assertEqual(worker._shadow_info['predictions_written'],20)
             self.assertEqual(worker._live_cursor[path.name],path.stat().st_size)
 
     def test_failed_pg_outbox_then_maintenance_then_restart_cannot_restore_old_inode_offset(self):

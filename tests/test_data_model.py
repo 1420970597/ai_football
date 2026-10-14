@@ -83,7 +83,7 @@ class DataModelTests(unittest.TestCase):
             svc.observe(decision())
             svc._flush_shadow()
             with closing(sqlite3.connect(Path(root)/'models'/'inputs.sqlite3')) as con:
-                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0], 8)
+                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0], 20)
             self.assertFalse(svc.status()['model'])
             svc.configure(replace(RuntimeConfig(), model_training_enabled=False))
             self.assertEqual(svc.status()['training']['state'], 'disabled')
@@ -91,13 +91,30 @@ class DataModelTests(unittest.TestCase):
     def test_data_model_ui_labels_valid_and_quarantined_training_records(self):
         source = Path(__file__).parents[1] / 'web' / 'console' / 'workbench.js'
         code = source.read_text(encoding='utf-8')
+        self.assertIn("['模型服务',data.running ? '运行中' : '未运行']", code)
+        self.assertIn("data.decision_mode_reason ||", code)
         self.assertIn("['有效训练决策',training.eligible_decisions", code)
         self.assertIn("['本轮训练样本',unknownMetric(training.training_decisions)", code)
         self.assertIn("['已有输入比赛',quality.input_matches", code)
         self.assertIn("['无效 / 隔离训练数据',quality.invalid_training_records", code)
         self.assertIn("['等待赛果标签',quality.waiting_for_label", code)
 
+    def test_dashboard_explains_unapproved_model_route(self):
+        with tempfile.TemporaryDirectory() as root:
+            svc = AnalysisService(MagicMock(), config=AnalysisConfig(use_llm=False, ledger_root=root+'/ledger'))
+            svc.data_model.configure(replace(RuntimeConfig(), decision_mode='model'))
+            svc.data_model.bind(root+'/ledger')
+            app = ApiApp(MagicMock(), analysis=svc)
+            code, out = app.dispatch('GET', '/api/v1/data-model', {}, {})
+            self.assertEqual(code, 200)
+            self.assertFalse(out['running'])
+            self.assertEqual(out['decision_mode_status'], 'unavailable')
+            self.assertIn('暂无通过晋级门槛', out['decision_mode_reason'])
+            self.assertEqual(out['service_status']['state'], 'stopped')
+
     def test_worker_actual_limits_versions_restart_and_failure_preserve_model(self):
+        from core.learned_model import DATA_VERSION, features
+        from core.live_model import MODEL_VERSION
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)/'ledger'
             root.mkdir()
@@ -108,12 +125,15 @@ class DataModelTests(unittest.TestCase):
                 finals.append({'match_id': str(i), 'at': row['at'], 'settled_at': row['settled_at'],
                                'label_available_at': row['settled_at'],
                                'competition_type': 'real','status':'won','ft_score': [2,0] if row['y'] else [0,2]})
-                inputs.append({'match_id':str(i), 'at':row['at'],'cutoff_ms':1000,
+                for outcome, baseline, fused in (('home', .6, .7), ('draw', .1, .1), ('away', .3, .2)):
+                    vector = features({'market':'HAD', 'outcome':outcome, 'line':'',
+                        'algorithm':'poisson_time_decay', 'entry_score':[0,0], 'entry_clock_s':1200,
+                        'p_market':baseline, 'p_fused':fused})
+                    inputs.append({'match_id':str(i), 'at':row['at'],'cutoff_ms':1000,
                                'decision_received_at_ms':900,'quote_received_at_ms':900,'algorithm':'poisson_time_decay',
-                               'market':'HAD','line':'','outcome':'home','baseline':row['baseline'],'x':json.dumps(row['x']),
+                               'market':'HAD','line':'','outcome':outcome,'baseline':baseline,'x':json.dumps(vector),
                                'entry_score':'[0,0]','settlement_basis':'full_score',
-                               'model_version':__import__('core.live_model',fromlist=['MODEL_VERSION']).MODEL_VERSION,
-                               'data_version':__import__('core.learned_model',fromlist=['DATA_VERSION']).DATA_VERSION})
+                               'model_version':MODEL_VERSION,'data_version':DATA_VERSION})
             db.put(finals, lambda _: 1.0)
             db.connection.commit()
             write_inputs(root.parent/'models'/'inputs.sqlite3', inputs)
@@ -128,20 +148,32 @@ class DataModelTests(unittest.TestCase):
             self.assertEqual(model['limits']['cpu_cores'], 1)
             self.assertEqual(model['limits']['memory_mb'], 256)
             self.assertEqual(model['parameter_count'], len(FEATURES))
+            completed = json.loads((active.parent/'completed-training.json').read_text())
+            self.assertEqual(completed['candidate_version'], model['version'])
+            self.assertEqual(len(completed['cohort_ids']), 120)
             self.assertFalse(active.exists())
             candidate_bytes = candidate.read_bytes()
             result = subprocess.run(args, capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(active.exists())
-            self.assertEqual(json.loads((active.parent/'status.json').read_text())['state'], 'candidate')
+            restarted = json.loads((active.parent/'status.json').read_text())
+            self.assertEqual(restarted['state'], 'candidate')
+            self.assertEqual(restarted['new_matches'], 0)
+            self.assertEqual(restarted['last_completed_version'], model['version'])
+            self.assertEqual(len(list(active.parent.glob('candidate-*.json'))), 1)
             self.assertEqual(candidate.read_bytes(), candidate_bytes)
-            # A corrupt projection fails loudly and retains the prior successful artifact.
-            with closing(sqlite3.connect(db.path)) as con, con:
-                con.execute('DROP TABLE decisions')
+            # Corrupt the input projection queried by the inexpensive cohort
+            # check. An already consumed cohort must still fail this read,
+            # while its completed watermark and candidate stay untouched.
+            completed_bytes = (active.parent/'completed-training.json').read_bytes()
+            with closing(sqlite3.connect(active.parent/'inputs.sqlite3')) as con, con:
+                con.execute('DROP TABLE inputs')
             result = subprocess.run(args, capture_output=True, text=True, timeout=60)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(active.exists())
             self.assertEqual(json.loads((active.parent/'status.json').read_text())['state'], 'failed')
+            self.assertEqual((active.parent/'completed-training.json').read_bytes(), completed_bytes)
+            self.assertEqual(candidate.read_bytes(), candidate_bytes)
 
     def test_failed_input_write_keeps_retry_queue(self):
         with tempfile.TemporaryDirectory() as root:
@@ -151,7 +183,7 @@ class DataModelTests(unittest.TestCase):
             with patch('service.model_service.write_inputs', side_effect=OSError('disk full')):
                 with self.assertRaises(OSError):
                     svc._flush_shadow()
-            self.assertEqual(len(svc._inputs),8)
+            self.assertEqual(len(svc._inputs),20)
             svc._flush_shadow()
             self.assertEqual(len(svc._inputs),0)
 
@@ -214,11 +246,11 @@ class DataModelTests(unittest.TestCase):
             svc._flush_shadow()
             path=Path(root)/'models'/'shadow.sqlite3'
             with closing(sqlite3.connect(path)) as con:
-                self.assertEqual(con.execute('SELECT count(*) FROM predictions').fetchone()[0],8)
+                self.assertEqual(con.execute('SELECT count(*) FROM predictions').fetchone()[0],20)
             svc.observe(row)
             svc._flush_shadow()
             with closing(sqlite3.connect(path)) as con:
-                self.assertEqual(con.execute('SELECT count(*) FROM predictions').fetchone()[0],8)
+                self.assertEqual(con.execute('SELECT count(*) FROM predictions').fetchone()[0],20)
             svc.root.mkdir()
             db=LedgerDB(svc.root/'ledger.sqlite3')
             db.put([{'match_id':'m1','at':decision()['computed_at'],'settled_at':'2025-01-01T14:00:00+00:00',
@@ -228,13 +260,13 @@ class DataModelTests(unittest.TestCase):
             from store.training_data import prospective_metrics
             evaluation=prospective_metrics(db.path,path,model)
             self.assertEqual(evaluation['model']['matches'],1)
-            self.assertEqual(evaluation['model']['decisions'],8)
+            self.assertEqual(evaluation['model']['decisions'],20)
             self.assertIn('baseline',evaluation)
             with closing(sqlite3.connect(path)) as con, con:
                 con.execute("UPDATE predictions SET predicted_at='2025-01-01T15:00:00+00:00'")
             invalid = prospective_metrics(db.path,path,model)
             self.assertIsNone(invalid['model']['accuracy'])
-            self.assertEqual(invalid['counts']['excluded_predictions'],8)
+            self.assertEqual(invalid['counts']['excluded_predictions'],20)
             atomic_json(path.parent/'prospective.json',evaluation)
             svc._read()
             self.assertEqual(svc.status()['prospective']['version'],'v1')

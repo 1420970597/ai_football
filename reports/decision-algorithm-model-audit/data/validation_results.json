@@ -53,7 +53,7 @@
       "skipped": 0
     },
     {
-      "scope": "frozen final integration tree",
+      "scope": "historical #60/#61 integration before final TASK-55 closure",
       "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m unittest discover -s tests -q",
       "exit_code": 0,
       "tests": 1618,
@@ -61,15 +61,191 @@
       "skipped": 14
     },
     {
-      "scope": "frozen final integration tree",
+      "scope": "historical #60/#61 integration before final TASK-55 closure",
       "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w:ro -w /w --entrypoint python ai_football-validation:task-52 -m mypy --cache-dir /tmp/mypy",
       "exit_code": 0,
       "source_files": 118
     },
     {
-      "scope": "frozen final integration tree",
+      "scope": "historical #60/#61 integration before final TASK-55 closure",
       "command": "docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w:ro -w /w --entrypoint python ai_football-validation:task-52 -m ruff check --no-cache .",
       "exit_code": 0
+    },
+    {
+      "scope": "final TASK-55 integration before complete-curve fixture corrections",
+      "command": "./scripts/cpu-limited.sh run -- docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m unittest discover -s tests -q",
+      "exit_code": 1,
+      "tests": 1677,
+      "seconds": 93.003,
+      "skipped": 14,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/unittest-v2.log",
+        "sha256": "3e3c46d62543f10e3fa1684f768fd57490a783b64d5789c45e3bc2d726833989"
+      },
+      "notes": "Preserved failed fixture migration run; test expected old 8-row inputs instead of complete 20-row curves. Background temporary-file race and worker fixture mismatch also appear in this log."
+    },
+    {
+      "scope": "final TASK-55 frozen integration (source-freeze-v3; excludes later ledger/UI changes)",
+      "command": "./scripts/cpu-limited.sh run -- docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m unittest discover -s tests -q",
+      "exit_code": 0,
+      "tests": 1678,
+      "seconds": 92.338,
+      "skipped": 14,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/unittest-v3.log",
+        "sha256": "fde5cff3a0075b96c353a38016ce9357d2e86bf95e3d480e76893b34fc338cdf"
+      }
+    },
+    {
+      "scope": "final TASK-55 frozen integration (source-freeze-v3; excludes later ledger/UI changes)",
+      "command": "./scripts/cpu-limited.sh run -- docker run --rm --cpus=0.75 -v /root/ai_football/output/audit-task55/integration:/w:ro -w /w --entrypoint python ai_football-validation:task-52 -B -m mypy --cache-dir=/tmp/mypy",
+      "exit_code": 0,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/mypy-v3.log",
+        "sha256": "f97ef665d6bf2e130b681f54a60ab658b2bc84414bc83a27f315313233270e71"
+      },
+      "source_files": 119
+    },
+    {
+      "scope": "final TASK-55 frozen integration (source-freeze-v3; excludes later ledger/UI changes)",
+      "command": "./scripts/cpu-limited.sh run -- docker run --rm --cpus=0.25 -v /root/ai_football/output/audit-task55/integration:/w:ro -w /w --entrypoint python ai_football-validation:task-52 -B -m ruff check --no-cache .",
+      "exit_code": 0,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/ruff-v4.log",
+        "sha256": "854edebdedd7354275f881b84df3de80ce19e7efc5ab6f88146a873229cbde3e"
+      }
+    },
+    {
+      "scope": "isolated frozen training fixture corrections",
+      "command_argv": [
+        "docker",
+        "run",
+        "--rm",
+        "--cpus=1",
+        "-v",
+        "/root/ai_football/output/audit-task55/pi-consensus/training-targeted-tree:/w",
+        "-w",
+        "/w",
+        "--entrypoint",
+        "python",
+        "ai_football-validation:task-52",
+        "-B",
+        "-m",
+        "unittest",
+        "tests.test_data_model",
+        "tests.test_model_live_lane",
+        "tests.test_repair_current_tail",
+        "tests.test_repair_history",
+        "-q"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 5.563,
+      "tests": 42,
+      "unittest_seconds": 3.964,
+      "recorded_at": "2026-10-14T05:42:20.522602+00:00",
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/training-targeted-tests.json",
+        "sha256": "20bffd3249459fc35ec2572515f425a75a55a5a52badbe53f7d7cbcb6bb10e09"
+      },
+      "test_log": {
+        "path": "output/audit-task55/pi-consensus/training-targeted-tests.log",
+        "sha256": "0bb28532a3236c4a4c829a8480be8148d30a5fb058b786d36d84a9b7d78ce46b"
+      }
+    },
+    {
+      "scope": "frozen TASK-55 v5 business source",
+      "command": "taskset -c 0-1 docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m unittest discover -s tests -q",
+      "exit_code": 0,
+      "tests": 1695,
+      "skipped": 14,
+      "seconds": 92.721,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/unittest-v5.log",
+        "sha256": "ca07978c2a921a09e063c68547ba3162a8f7f0f52f26f7761ae4a7ed7c6eccde"
+      },
+      "source_freeze": {
+        "path": "output/audit-task55/pi-consensus/source-freeze-v5.json",
+        "sha256": "693f7d0ae035c3221b4ae27c8b699076da4f9e72ba5fd4a9397930c11e56b33d"
+      }
+    },
+    {
+      "scope": "frozen TASK-55 v6 business source",
+      "command": "taskset -c 0-1 docker run --rm --cpus=1 -v /root/ai_football/output/audit-task55/integration:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m unittest discover -s tests -q",
+      "exit_code": 0,
+      "tests": 1716,
+      "skipped": 14,
+      "seconds": 99.11,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/unittest-v6.log",
+        "sha256": "e77b8407e85e850c0f1a7a0d465d18f7397b248bc01ebe7c71e5e6b686764484"
+      },
+      "source_freeze": {
+        "path": "output/audit-task55/pi-consensus/source-freeze-v6.json",
+        "sha256": "f3d5465974fb826cf1a5ae5639635a53f50f449d93e1a7d8c45a5eeb40fdf52f"
+      }
+    },
+    {
+      "scope": "historical frozen TASK-55 v5 source",
+      "command": "taskset -c 0-1 docker run --rm --cpus=0.75 -v /root/ai_football/output/audit-task55/integration:/w:ro -w /w --entrypoint python ai_football-validation:task-52 -B -m mypy --cache-dir=/tmp/mypy",
+      "exit_code": 0,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/mypy-v5.log",
+        "sha256": "c92766bc040c719ec12703e781e157a4229ace0ce005bba5f20e2b1acc2a957e"
+      },
+      "source_files": 120
+    },
+    {
+      "scope": "frozen TASK-55 v6 source",
+      "command": "taskset -c 0-1 docker run --rm --cpus=0.5 -v /root/ai_football/output/audit-task55/integration:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m mypy",
+      "exit_code": 0,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/mypy-v6.log",
+        "sha256": "7e698c0aca1f783b7fff1eba1437b7336260da235c8452852a779963de7cdb02"
+      },
+      "source_files": 120
+    },
+    {
+      "scope": "historical frozen TASK-55 v5 source",
+      "command": "taskset -c 0-1 docker run --rm --cpus=0.25 -v /root/ai_football/output/audit-task55/integration:/w:ro -w /w --entrypoint python ai_football-validation:task-52 -B -m ruff check --no-cache .",
+      "exit_code": 0,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/ruff-v5.log",
+        "sha256": "854edebdedd7354275f881b84df3de80ce19e7efc5ab6f88146a873229cbde3e"
+      }
+    },
+    {
+      "scope": "frozen TASK-55 v6 source",
+      "command": "taskset -c 0-1 docker run --rm --cpus=0.25 -v /root/ai_football/output/audit-task55/integration:/w -w /w --entrypoint python ai_football-validation:task-52 -B -m ruff check .",
+      "exit_code": 0,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/ruff-v7.log",
+        "sha256": "b7f82819b6e8e5bab939c94c84ad974aacb90e15f112e1db24fc1e627e2d9471"
+      }
+    },
+    {
+      "scope": "frozen TASK-55 v6 source",
+      "command": "./scripts/cpu-limited.sh run -- python3 - (standard-library compile and JavaScript syntax harness)",
+      "exit_code": 1,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/compile-js-diff-v6.log",
+        "sha256": "1d66daae8877c145b1e3646ce71698892d58b5eb033e928fc9e33eb046f79956"
+      },
+      "notes": "Original harness treated Playwright CLI anonymous async function expressions as named function statements. Failure preserved; no source change was needed."
+    },
+    {
+      "scope": "frozen TASK-55 v6 source",
+      "command": "./scripts/cpu-limited.sh run -- python3 - (standard-library compile and JavaScript syntax harness)",
+      "exit_code": 0,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/compile-js-diff-v7.log",
+        "sha256": "c83f6ae1b47487843453174b11b5b0e7a8a1e0054a97a70e75d1ab5e9f765368"
+      },
+      "python_files": 184,
+      "js_files": 15,
+      "python_compile_exit": 0,
+      "node_check_exit": 0,
+      "git_diff_check_exit": 0,
+      "notes": "Python cfile outputs remain in project output; Playwright CLI function expressions are wrapped in parentheses for syntax checking."
     }
   ],
   "git_blob_fingerprints_for_tested_PR_changes": {
@@ -88,9 +264,20 @@
   },
   "limitations": [
     "Initial read-only mount test failed because tests create project temporary files; corrected isolated writable tree passed.",
-    "Tests do not prove profitability, full-curve context equivalence after target filtering, or production deployment.",
+    "Tests do not prove profitability or a statistical advantage over the market. Complete-context fixtures and short runtime checks do not replace prospective production evaluation.",
     "PG dataset verification measures loading only, not end-to-end training.",
-    "Final integration initial full suite and module repeat failed on ctime clock-resolution fixture; deterministic metadata-change fixture corrected, without changing the production verifier. Full suite then passed."
+    "Final integration initial full suite and module repeat failed on ctime clock-resolution fixture; deterministic metadata-change fixture corrected, without changing the production verifier. Full suite then passed.",
+    "The 1,678-test suite and 119-file mypy check are bound to source-freeze-v3.json; later ledger/UI changes are not covered by those results.",
+    "New-generation inputs cover five matches, but qualified settled training cohort is zero; no full production fit duration or successful new-generation model training was measured.",
+    "Runtime HTTP 200 responses are short health checks. History statistics have an unresolved slow-query path and are not certified complete.",
+    "Cash-budget probes used an isolated PG schema, not real venue submissions; no real-money execution was used as verification.",
+    "The 1,716-test v6 source freeze covers implementation and synthetic regression behavior, not model profitability or a new approved production fit.",
+    "Reservation PG checks certify isolated backfill/exact release/restart behavior, not native live pagination completeness; final scanner source/refresh observation remains pending.",
+    "The earlier read-only production inventory contained unknown3, pending330, sending1, accepted58 and zero backfilled reservations; held_count=0 was not evidence of zero risk.",
+    "Production browser v5 failed due to an overly broad diagnostic-timeout assertion; the corrected read-only v6 structural check passed. Failures remain available.",
+    "History v3 three-round timings and the 263.66-second production observation do not constitute sustained P95 or four-hour monitoring.",
+    "No real-money submission, forced model promotion, configuration change or new profitability result was performed for verification.",
+    "Pending-deployment statements in earlier scoped entries are historical. Final deployment_v6 and browser v7 now verify source and refresh availability; the live native sweep remains intentionally unexercised with betting disabled."
   ],
   "final_integration_date": "2026-10-14",
   "integration_baseline_commit": "f2d1aa6",
@@ -172,5 +359,1197 @@
     "reports/decision-algorithm-model-audit/scripts/make_figures.py": "632d969f565d53ba72cef1d3c1384d3ac367671f",
     "reports/decision-algorithm-model-audit/scripts/verify_literature.py": "a84f1ba82645c167cb4cf84e5b313f4ebe590731",
     "reports/decision-algorithm-model-audit/scripts/verify_training_sample.py": "dcb9d4f34bb89651e8f849c2b618dfc4fe299158"
+  },
+  "final_closure": {
+    "date": "2026-10-14",
+    "source_freeze_evidence": {
+      "path": "output/audit-task55/pi-consensus/source-freeze-v3.json",
+      "sha256": "dffbd724422854e592f4a49b4c29abd212f777c68721f7c44a3f65703253c4ab"
+    },
+    "sha256_fingerprints": {
+      "api/__init__.py": "b7e82c54e3e73ad1a9d6a9e112319661540ddbb4d03abc9ee1cc1bc03452a13a",
+      "api/app.py": "2426ab75de153607f9ae516c62a0a6d689fd8ca51385e05dd0cc4286b97936b3",
+      "collector/__init__.py": "f0515d8dd54192a3563dd73c223e3d20bdf8db159ffa0e01b91be6144bbf564d",
+      "collector/http_transport.py": "b5d79c01340b35b9ec08a01e30201dfdc5e83caae03a566163183e5625150453",
+      "collector/leyu_account.py": "bb6ace4cc1dd289b8fbfbc0bb338e6102c7624b5b94f548ef5f6f0a7b17d6db0",
+      "collector/leyu_app_login.py": "e34a1908deda8c3aea3709e1416df4958a6c2910a6e85c86fa28398e4fac19c9",
+      "collector/leyu_app_session.py": "483c35b7778c3cbaa58fc6a101dbf0c908a0a1fb00d575f88667485d4d787012",
+      "collector/leyu_app_signing.py": "3d2d26837e7d4458574339ae552c710c65f44756f46f5c9c083915ec669193fe",
+      "collector/leyu_client.py": "1f950b6442b76ce1ec5973b2637be27bca2f6a8d4d6694f268afbf278c8b3a9d",
+      "collector/leyu_h5_session.py": "8624b4fb46bf5a8e008aa9b5c845152ee5493abae21e70b24d1036cb3b6dad52",
+      "collector/leyu_normalizer.py": "a0429930433adb11a9977ab1e969f4c1c058b92685c42afb7e130a4d716e0c92",
+      "collector/leyu_realtime.py": "c705db7af8d19304c08c92f5e0363dbeffbf5fd1acbf53885045aaab50f65e96",
+      "collector/leyu_ws.py": "2a980e8ce70d174b83b21dec744755bbe98640f2f1139e5a23e1de75fa18542d",
+      "collector/session.py": "59cc8b20c58111e805ad6fa1c49a5f70801e268aa12c1bc9e5efe0ee6ff868be",
+      "collector/sources.py": "dbbb7a5c8228aedaf879c9523a1fad56e07eddf55f27ebdc9ce968dc15ffa88b",
+      "conftest.py": "5c787b4f70b51281934cc5849888604921fdb731be20f0cbd5d56f746946d772",
+      "core/__init__.py": "fd7069dd5ca2b4f3bb8cf7ff63660ba735af13ee1bec91ac3ef64a04624d158f",
+      "core/calibration.py": "92caa31fec29e5dc5b9eeee8aed515158c85603879c993bf8ef3ef5f973c7af0",
+      "core/decision_features.py": "0f2eaee994d04caa1ffa8d7941b00326848accb3eec46ca991441a2092e2a42b",
+      "core/devig.py": "31a8845c6405eb8e9bb1b10f2825b2e50623e36f3000892a3b394eb5ed2f1113",
+      "core/economics.py": "99c12225b922e8b085d132e0186ab7b7013b4d457a24493ae2c973408ed1d9a7",
+      "core/ensemble.py": "024eb4294948584a114d1e1f92f8e9910abfd949be97ded5da0bf654c40ab0af",
+      "core/entry_gate.py": "f4743abe95e8c5c40faecc8786db671394de885dd4fc56a8e921266f761c254d",
+      "core/learned_decision.py": "13c54a9003b1f2d095d8339e2847d4fd5053d5ec0a377ad9a6bee2461d704e0f",
+      "core/learned_model.py": "21c8d24594bbe8b80862e3c77eb1707f1b810113bd46bb12f2214826dede8194",
+      "core/live_model.py": "0875262e0bc72adf2cb0e84cbdb5b963569f2f1d07bceb8d64d64c694487d16d",
+      "core/market_labels.py": "358f5f0572ca6b99fc82af476e95759e3248454dbc9dde30d429f36b9bb2c4ea",
+      "core/markets.py": "2c94d2a38955390ac88cfdf4fa13b5ae65dceff36bc2972318ce1dba898b574e",
+      "core/microstructure.py": "65174f57125eabbbdc33fa0329c5f3cd78468aa5c364566c76f7b6ce5e50e8ba",
+      "core/model_challengers.py": "793cae96742d13fe9127c8f171bc34a1f474c944b920891ea4939f2c948ef176",
+      "core/model_validation.py": "460eafb91ae0201176bc61c3bc0b3429c38b2146b8a884fe3680f8b400665c22",
+      "core/models.py": "3d8115a4d6d328a7af65bb8287145551843b4765a466a9ee0b69ca98ca2f67b5",
+      "core/oof_peer.py": "6faafa2ba42b4c5f1a0aa078cdd987befdfe43ecaecc0b2c7dcb6170a6bde9e8",
+      "core/probability_calibration.py": "15c3d237415af124e4d12dfe7b0d028f9dbfe188aa81245b4fa00d5fa07c807d",
+      "core/replay.py": "4f0b451f2a0913e08ce88a189abd26662953e93b45cec7d3e96cf07c6585cae7",
+      "core/settlement.py": "f779d2b10dca1e160ee7df0fc6f5cdd0f5ca28500fb42b298a229c41371512fa",
+      "docker/entrypoint.analytics.sh": "c70a919a4124aed67f656ac1c8747e23cbf5739b9662bbaff377fbd5bd3114ac",
+      "docs/architecture/leyu-api-protocol.html": "80a37f45c0069383b550041e055176054a8d54356a12499d40a27d9978df7fba",
+      "reports/auto-betting-loss-audit/REPORT.html": "c7f82c8ae632863b25489c9b40e4803967e9635acd24c5b249f5ae5d35fcc0a2",
+      "reports/auto-betting-loss-audit/scripts/audit.py": "389abaa2e40ff9cb2ec6c7d6ecbe824ce71c26da14343f04e060e2e4a7af7655",
+      "reports/auto-betting-loss-audit/scripts/make_figures.py": "ab13abb22d978296cc199be4bd542f0a4aee60ce0ae4067ab7ea6337247e9c6c",
+      "reports/auto-betting-loss-audit/scripts/md_to_html.py": "4e73843cee806540c127e0a5ae937b5e9e06bdd7c051681d5c9d21df947ccb25",
+      "reports/auto-betting-loss-audit/scripts/reproduce.py": "53656ad3a36dd4e3111be2fb26f04201514f374a333dfcc8934abdfd19a187ba",
+      "reports/auto-betting-loss-audit/scripts/training_audit.py": "d2d958d9defd191d9e2bb9313756846e07ac07119a36571d2bc7cda86dc1a2b0",
+      "reports/basketball-model-feasibility/REPORT.html": "0edcd2c418cd75fbe730246bd405c212b3ba07a636ae7619bf04645765e76bc7",
+      "reports/basketball-model-feasibility/scripts/md_to_html.py": "c16ee7d6303edb079a8263e138894c3502a3bb89fac83c5821ac2ff3f8512477",
+      "reports/dashboard-data-stats-optimization/REPORT.html": "5ca9b83646bf7df8ec57192678193cf4468a66585d478fcd4d68021e69bf53e7",
+      "reports/dashboard-data-stats-optimization/scripts/analyze_fixes.py": "4d3bc9ecb8e75f2ac22df76f194f1783469a66b4da298d4da78a170047e61d42",
+      "reports/dashboard-data-stats-optimization/scripts/md_to_html.py": "4b8e60e63dda0e7ac1f2ec766d68e03c7c0c9bd3381fb08986d68ef46c9f1222",
+      "reports/decision-accuracy-maximization/REPORT.html": "a97ac80380812d2c5e50ad65bf87e9fe50f279ff151612ebf1288234565bf416",
+      "reports/decision-accuracy-maximization/scripts/build_assets.py": "98c94432a59e02213f7909e702e6bc0814d13c928feec42cfdeccf8d13c758f1",
+      "reports/decision-accuracy-maximization/scripts/make_current_baseline.py": "ac8595864b4c615f0e82c4f411c43e93b6e01fef1a76438c515d189a33d007ad",
+      "reports/decision-algorithm-model-audit/REPORT.html": "fab7ae6072ba55daf6935a4fef4679586a5f045d63d3873e9ba28748bc343e5a",
+      "reports/decision-algorithm-model-audit/scripts/collect_literature.py": "6abf3a62a4f6258df16d69e738df38b0d2bc1316301c3f68d37c5f8722100c17",
+      "reports/decision-algorithm-model-audit/scripts/collect_oss.py": "f8d1a2f7ae1a637e93c133b3269ef6c645c366cfb0170ce0436ac5d716505c44",
+      "reports/decision-algorithm-model-audit/scripts/make_figures.py": "05c21197c68aa971ffdb17d94e15b4894d69a24278dc3ec5da9cdc389071f3b1",
+      "reports/decision-algorithm-model-audit/scripts/verify_literature.py": "aff49e6da85c65e3d5e18bf1be194cf7e658b16e9debb38045d56c7ca6d55327",
+      "reports/decision-algorithm-model-audit/scripts/verify_training_sample.py": "697e91ba92908a8db3098ef2ab45026203c7a80b0133a27cab3b4f2093938b69",
+      "reports/decision-model-accuracy/REPORT.html": "e01c66c2be95470d1149b32d64c328e06d95d7d88d1ef6a92e0ee548b2f86d39",
+      "reports/decision-model-accuracy/scripts/analyze_confidence.py": "4accaee5f28ccbe8d4f95511fe575351efa998bba540c13f4aca872a3dceffe7",
+      "reports/decision-model-accuracy/scripts/make_figures.py": "d1b6dfa1e5ba4600d7797257d77bd39fc27f195cba1438a57943d405533cf9cf",
+      "reports/decision-model-accuracy/scripts/md_to_html.py": "c16ee7d6303edb079a8263e138894c3502a3bb89fac83c5821ac2ff3f8512477",
+      "reports/decision-model-accuracy/scripts/probe_current_model.py": "161e1d16583cd21ebead227762bd657b2ee53874b5fb189689591c559775da1c",
+      "reports/decision-model-accuracy/scripts/test_analysis.py": "1e3e011ed3c83d7e6cd574761513d395749a8ffcdb94b3fef65ca1f4db06805f",
+      "reports/leyu-kaiyun-odds-bot-feasibility/REPORT.html": "af951f12f87a330aa5599f4c8618ec225df049afa1913d0c6b8bf4c6c1a0b6f6",
+      "reports/leyu-kaiyun-odds-bot-feasibility/scripts/make_figures.py": "cc41b92cc7cea2e2ee1ff8cc79f8a57311c1384a5f6e4513c8e25926158f2dbe",
+      "reports/leyu-kaiyun-odds-bot-feasibility/scripts/md_to_html.py": "4b8e60e63dda0e7ac1f2ec766d68e03c7c0c9bd3381fb08986d68ef46c9f1222",
+      "reports/live-expert-decision/REPORT.html": "c95143a85f5417c172a595e5cc106f194f4318d27130915a14ec0d2e32eab3ee",
+      "reports/live-expert-decision/scripts/capture_performance.py": "0a23582433e6258fed30e5c6f26605f90b0022a73e9350a1131994c51c595591",
+      "reports/live-expert-decision/scripts/make_figures.py": "571505d6a0b45bfd2199d07227a51bfa1f54d31997833d887b47eb34050abfac",
+      "reports/live-expert-decision/scripts/public_replay.py": "2cf4133717d1ad10bf5a3ad2e4ab82c608584bff7b998207a8e23ac6bb41128b",
+      "reports/runtime-parameter-optimization/REPORT.html": "b553943cd746b5bfb38e9d7d4dfa335894112be17a627bf32e98288a1569e350",
+      "reports/runtime-parameter-optimization/scripts/make_figures.py": "2ac77295a795a7da897cc1cc5fae19a46b2d4438bead586e4574fc9bf70db683",
+      "reports/runtime-parameter-optimization/scripts/md_to_html.py": "be89493b346f3943d76b23cfa123c30219fdb03aa1552fe9c80364f125fff7fa",
+      "reports/runtime-parameter-optimization/scripts/parameter_sensitivity.py": "73a6fad92faf5501aeab3c487e649c8b5d9615d1027433cb9b81c1c02c098e2e",
+      "scripts/cpu-limited.sh": "ddbb8b0fb773f0a994e26a704cb484c62a85ddc5929f39c3069e62b3dd99c74b",
+      "scripts/up.sh": "9d4da56a7886fcb2260be1004b299cc9e398bfd7bc89d4b1c2d97b12ef586a2b",
+      "service/__init__.py": "14e644563b2d59976c26fadd13ac78d0a828c4eeaa1f05dbf99398fc85a5ac53",
+      "service/account_summary.py": "21b2a971fdcec08bd6397d9c234a76652715039c5fe5dab8abeb57fc6b2a4214",
+      "service/analysis.py": "5adc2f46afc587829479fa88751ee9fa950d4245992b3c472ef18c652674b62f",
+      "service/archive_service.py": "ae00875cc64e1c26d9e61bbee165d533c095caff755e48792849cfb6e69e1c45",
+      "service/betting.py": "6692a0a82dd74a3148f1715bd7c11c7e12c57517075d227c725e542944922877",
+      "service/data_model.py": "02ac1d2a232774d218bb33c8024fdc6f907e37083eb29c9bfae932be4519710a",
+      "service/decision.py": "1548a675d51d56f8d5ecfbf93a6dfa07c90c7f3f91046b6b966b534ec30ccdfc",
+      "service/history_repair.py": "dc7912185843dc301390b257bf0bd1184039c934dab71c48d049247a4f574698",
+      "service/ledger.py": "5d99e948cfaf92e2f05b0ef01edd75ed25c4f279f9e4c9d3d1d1b38d83d4eaf5",
+      "service/live_expert.py": "cc75121f2eb0f9f4e250d20ef5cdc719316343b9c39be9a25b3d2638062cfe58",
+      "service/live_review.py": "69bfc6b997e4b3029b919754be4ce908ad9a37cb96e506da513d9a8ff91103a0",
+      "service/live_workers.py": "5162cfc22424925d39ff7d62b7b59034e4299e7ec6a5c5bde6a22d56b2a7bb9b",
+      "service/llm.py": "0d0900e9aa6dccf0867a11326d20734dbf0a220b351951d2287ba0c7580e77b4",
+      "service/match_decision.py": "59be47111db459d43ecf7741f813db9c2ce4b8bb6b6b6e548f6fe16e5017cf44",
+      "service/model_service.py": "1d78327c1b1d0eccfef0e2e5a764d202a11efc1edf0b8351927abb3caa252149",
+      "service/model_training.py": "2d1474e07642c53a75e803b91272566e8fb101371452435745cc290fc0ae923c",
+      "service/response_projection.py": "f221a366eff09ff3ee54b32f5afa2a0ff666e93e0748beda9427e71ad0052a18",
+      "service/runtime_settings.py": "cb266f3d5b044e750520b9793fb1a3c061fac02ccca0c8807f391e6d493440d8",
+      "service/valuation.py": "b9ab2e306e0a9212b4669675bacd1b03e46ef5e6e7bfe02817f69ead4aa9bcd2",
+      "store/__init__.py": "7e9490ff5fb08758068ab8201bf67efc987141b6105ee4375f182a5cdf0ec93b",
+      "store/archive.py": "88a1ab1e11ab4100d0d53762d3a107f34d2f7ed4967e4c950555b18127c47d9d",
+      "store/history.py": "25fc1571d15e7d9837aa20960c62038b36f6106cc408ac777be3c0156c4d20cd",
+      "store/ledger_db.py": "fd87aebe6f80a36744731a75af50cb6235ad3317d21965748e626a389912019d",
+      "store/order_store.py": "10bf188768910f152acde52c6bc463017856959b3c8842886e6fbd9e51b3ea75",
+      "store/postgres.py": "798e663414ed874d4a7ca11181e3755945e1d13bd4adf39c22f9ad2fe33eff4c",
+      "store/runtime_settings_db.py": "99c1860e6282d15b7d2f80bd4442d7bdc48a88d28777a7eda3f1c7614b33d20b",
+      "store/snapshot_store.py": "ba3ae214689d2f718568794d96d29eccf65a8e9e24db518f40c4b8e3b0f7f5b9",
+      "store/sql_backend.py": "17a8e72d9eab9aead64b953b70dc89d9b30a5b1d8e3f515237072fc8000f7bcd",
+      "store/training_data.py": "375be41f79b79474f4ab73d716f83f5ab5232474a731fb9d121b9191557516d8",
+      "store/training_projection.py": "1fd669ae025a8bdaa243d613d4ddb87be80ccf026f27ecdac8156d33fcca9962",
+      "tests/__init__.py": "d2d8701fc0886be02fc6d93c8d2be80e842bdc0127a6001332ee6f005ae3c8a8",
+      "tests/browser/account_flows.js": "530c4a1c70f471d4e501e55b50006e48dad067c93df93fd8fd32c9205154a82a",
+      "tests/browser/board_flows.js": "e04e3a34d777caf502525e451abdb863e9d1787149914133c0fd9f01670b550e",
+      "tests/browser/collection_status.js": "368c19492b21b153b3dcff1413375bfe507adccac837e0be41c8cf6ed7394b76",
+      "tests/browser/console_flows.js": "1381c0f2c61321dc91d0c174e52b5ba8e2ecd2c6a8a34228a9ad55bfc7e9e8d0",
+      "tests/browser/data_model_flows.js": "4602446a5674214d82204d4e2b512c32fbfc93a775a93ac62d32253f3305e76d",
+      "tests/browser/data_model_production_readonly.js": "6d6bef9a2bbb39cefb2d14aa66060633091e0e44c4105e2191049e3a4dbb74a1",
+      "tests/browser/history_clv.js": "5710f65121f58a6d347171f9473814e4f19ded3156613d163c5a5060b63e2ee1",
+      "tests/browser/history_statistics_flows.js": "427e64425622585318950cf8f67381dd31c808795e47fc4e7a793cef322056e1",
+      "tests/browser/parameter_report_flows.js": "1f42b0d110bf9ca73072287480de0c3fe631f74fe346b3a672046640ff67bafe",
+      "tests/browser/parameter_report_online_flows.js": "df208c537f2c868b8bd7a53b2981986606ce5876c30c73d937c9750d40feb022",
+      "tests/browser/settings_help_flows.js": "a214e41cd0ad1c0bcee4448c0e32722f4ec4ad6f873a5adfbebd4cbe84cf0107",
+      "tests/browser/shadow_statistics_flows.js": "201d3c6575ae6c00121833c9bab3b8305aa2b3f5a82c398a80440d8096e28392",
+      "tests/browser/timeout_flows.js": "6a754d02ea6a2b810c1ed0dc80e5a5ec46286be982206d8bc5f6d1fe441dc399",
+      "tests/browser/workbench_flows.js": "3cdd720aab77c3fac80293e5c53fb9bf1111dce5825f44862ca1b815b6a511fa",
+      "tests/test_account_summary.py": "6d8d2c588bfd90e084e588da1dc20a84a1b963357c0d3172e86a6155fbec22c6",
+      "tests/test_api.py": "084fa95e61a51996dc3ec543345288706828fb7342b6e4600d8f66e520b0108f",
+      "tests/test_app_login.py": "d26c6ba92531b8ee5710cb0ac8ab391b20e951228ee95acc221653ce97b4bec5",
+      "tests/test_app_session.py": "2ddfb822445d24a3e4dfd9ae3beb8b50f5170c42e76d6dcc9ad54df86f80f0a4",
+      "tests/test_archive.py": "380e1797d61454b983601ed2dd8dd22761d3a11e03436fa4b63a1e289c5f29f6",
+      "tests/test_betting.py": "51b061a9a5893edf16a2ab306fefeeacb20aa95f9eaf84916dd0a778a769ee90",
+      "tests/test_betting_execution.py": "a25b8964ebc6742a130c88b05aa8a3642b849a7b94b4df80d91ac4484fd327a5",
+      "tests/test_board_quotes.py": "bf751953b3be30870e6bcacdacdeebca19745f9bd3709ee2e1f82c853628a862",
+      "tests/test_calibration.py": "fc737ba91fb4fc3b395bb5f929e67c8fed2f46107aee0c56a9d7f85dec9d55c4",
+      "tests/test_data_model.py": "ee67a7c349762baae27e2df4e7de122cbb1d3d4715e73c897abadae13addddad",
+      "tests/test_decision_features.py": "fb9ca3a68a3e7190f561bdc9491884d463888048b1f60f2fb6a83a9e698de970",
+      "tests/test_decision_modes.py": "2ea65863a9fc3ddaa9871c5ba343e8980abe33e2e65ed02e93739b9d30a99b6f",
+      "tests/test_devig.py": "92dc2f5f88342cd2497adc2fc73dcae455d33d1461021aff3124bec7533997a6",
+      "tests/test_economics.py": "6e45124e16695aae4ac3aabc50699690477b5bc950ddfc413fc37593cf9b746f",
+      "tests/test_ensemble.py": "b481561a697c17a58fa1f30d18c58e0350090429995f4f3aecb22d2e66246012",
+      "tests/test_ensemble_coherence.py": "9750337ecc74e00551f49854a5f9a54ffd694402dbd5fcbae355da2e48755dd7",
+      "tests/test_entry_gate.py": "e9b3f0f55f93c6e9273fbed7bf45f4b263b49ff70f40fa9c55cbf94f4032a8d9",
+      "tests/test_final_evidence.py": "8f7167569886ee52341818870df3828d420ffe6cb377e40ed16330848c357078",
+      "tests/test_h5_session.py": "a7326f34e6f10e459ce896d3e12ea533bac9b5c97cb5efdee44340cf048ff842",
+      "tests/test_history.py": "4b02d3a2d537af014a8cab72658e00d17184ddd1d1f1ef189b1e334afbf456ad",
+      "tests/test_history_repair.py": "5b632231ca9eb0362cbb2fe3f690661e174b11398eebffed5c70ded3c6ed6fd2",
+      "tests/test_http_transport.py": "b5881a587acda86fb9753f6845b98a3b6ac3698a456829e7edfc8cd4f0f5e39f",
+      "tests/test_learned_decision.py": "36a715ac316ae4d90c56a235c25b358f4b2948ac5cefb99b349b91fe08d4e49b",
+      "tests/test_learned_model.py": "6c0b69bfa1f883f0d9484b3bc8ff5e7f16d10ec29b5e5a58d0a9407ef3f7fbcb",
+      "tests/test_ledger.py": "caa0076dc637e570096399f03bc2806cfefbae143d62042debe6636dfb297111",
+      "tests/test_ledger_db.py": "e0c251a83864f096666fa149c08c302d2a2760cccfc81007264cfd23df15a469",
+      "tests/test_leyu_account.py": "8c1a4c7621fe137283f8d9677a6991693ce0f0c09d6385aa947cc9252be84c71",
+      "tests/test_leyu_app_signing.py": "a4a8d1dd324d3f80bfa578e36d6ba783ba2083ee38e08ce0ea2c554725b01542",
+      "tests/test_leyu_client.py": "9ba7c19bf514f57a61bd8151af134d31ead69120eef5c3649a5d79dd2e2a6025",
+      "tests/test_leyu_session_doctor.py": "05c1bb77570fcf55217b8c7d0e6fdad181bb33665cf0c1e709fd9a83c58113be",
+      "tests/test_leyu_ws.py": "cbf62a4b5c839b010cec4311b3805942d115a21558c0ccc9b2aa0df8b372a36b",
+      "tests/test_live_expert.py": "cb21af73899956a89031bdb2bff55661717a08f35fec93ef6bab300b45668295",
+      "tests/test_live_model.py": "dce1b700afc6be4aae00ffd5b1347b7736299ac5f83ee587a6ee1e010ea3eea6",
+      "tests/test_live_review.py": "f5e67a14d9e27010587941a1b9a5194f2c48301a06ed8c0329ce2f3e3dcacb40",
+      "tests/test_live_workers.py": "81be3d5e2e67d9027ff2c6791c4e86a411b71a75a228cba776c2e555f95600f6",
+      "tests/test_llm_decision.py": "fc44a111cfcb8805d107a6b612e4bd1dd6219c7996e80e6aeb412f622c92bb46",
+      "tests/test_llm_envelope.py": "15a43f3eb0b4d888e7bf884fcb2f993cebd6b81f64cadba779189b754effd6fb",
+      "tests/test_market_labels.py": "23c7cb01fca03ec0fb1d50eaafcc66bf5d1946093bed38cb0a9056223b68db94",
+      "tests/test_markets.py": "95ad68dd94ed2d207e2db2899726a1fcf259c6702272f6504aa93748929d872c",
+      "tests/test_match_decision.py": "900bda77e301487fe14d6d7e55324dc6091071b56389f1d549d59f3f2cc752b2",
+      "tests/test_microstructure.py": "b684454749be53425986bc81bf19ac74f3eac02fbf603d50068d6d3312e5f646",
+      "tests/test_migrate_sqlite_to_postgres.py": "25e5ec9d9e6980d8bf0a0cf8cc78dff4365477c77e8f6eb3b4677106f3c15dd7",
+      "tests/test_model_challengers.py": "7325ad0c06d7e3d8263589cda6e72756064a8447ba616d772158f056950baf0e",
+      "tests/test_model_live_lane.py": "0c20c34b5d7012f4ac50a6672bc0d5ec5d39f0538762ed0957a3ea9eae154552",
+      "tests/test_model_service.py": "ec30fc5903863bf62433becec0d7fdb3948c4752f457e0fc07df11a98af19215",
+      "tests/test_model_training.py": "7582dcc4850143ea911157f4cda5339897e34fb074a3ba4ddf6ee26057deb245",
+      "tests/test_model_validation.py": "5ee207646b73f779fd258c7eef54bbdf15eb9e6053cb565f6d40961905913230",
+      "tests/test_models.py": "fe2eee5d30f704b48110b61112ec6ccb8965fe2790af7b21c732cbb3dee82d7b",
+      "tests/test_multi_market.py": "cedebb1977508ad3b8255d7b913bac92d5e1d52a060392dbcc62d30f4b36fc74",
+      "tests/test_oof_peer.py": "20e271c52fafc2f74054e466db1c3024421dc12eaee096f98d21888978ed65c6",
+      "tests/test_order_exposure.py": "c21112de04dc2e0a4f3741cb76d2833fb43b9c5d9c5553ddfe088e257f7420bb",
+      "tests/test_order_store.py": "436134531268ca15826f440e45f8048a58d9aacfa8345a2c35e0d9b640ed1094",
+      "tests/test_probability_calibration.py": "f6548e20fb0ae0ac47283f39ea932d31ee8f4d6f9f7c22c767fd9c3fe1c36466",
+      "tests/test_repair_current_tail.py": "f1c6511e655759091705b41b6da67f4d208f2bed206a4aabeea1498766b86c1a",
+      "tests/test_repair_history.py": "46adfb732b902945218eac87682227f44286d24de0e66c5be2bac4d64dc10918",
+      "tests/test_repair_ledger.py": "96c0bd56404230bb90eb37ce650f6774f4e5dd70688da917c07b91b4bb7da615",
+      "tests/test_repair_model_databases.py": "bb88d6b2c6613a85c8e0f3de6dfa952af17e4e63a9ff81c4a7e2f88b97af3b84",
+      "tests/test_replay.py": "9aaf94d309d888b5a2b1a4fb3784cc6f5d4d77438a4d2bc0e4d219bb6230b1d5",
+      "tests/test_response_projection.py": "b19e971455c944ff5b454c59ed7c83d3a8bda5fbb81ba2cc0b66a313bc864104",
+      "tests/test_runtime_settings.py": "1c9b27fbf8c6a82d6dd2d040720072e7132b342ba96faa31f292d5527f2ab821",
+      "tests/test_runtime_settings_db.py": "6b36c7b8fbb6e3b4ddb91652b0377099c2199399ae20423aa2f11a309d18587a",
+      "tests/test_score_change_cooldown.py": "d6fe17429c1806bc40955412b924a55407b0dec5ee1226e2a265e660fe911ae4",
+      "tests/test_session.py": "8c9578a2ef582c4bf2493af913bac2e2c6e7029ab3752fb4b4fd3fbb45de66bc",
+      "tests/test_settlement.py": "066629961748e28ee97c1a7d6195e3c4126e8890476e26219ec54a1a671b7149",
+      "tests/test_shadow_observation.py": "0eb4d56efbdf3977a4d2211a7a92973c6f0be650a88a25a7d061159ea75a37b0",
+      "tests/test_sources.py": "4be8e45a14d60d8c2ffd3ea90c5807c7d0b10750b1f3274ce9625ee3990ef3c8",
+      "tests/test_sql_backend.py": "21e8a195216a9cf5169cc913da1d50fa80447c6e918e216ad2a2bd7b6c32526b",
+      "tests/test_stacked_learner.py": "ccd83dfcd999332dce88b626443b61a83faea6e72a30f0be097f6d051da0c9e3",
+      "tests/test_store.py": "8a7ca9f620e83fa0456be7b2f71f8b726283853d8d25fa00c9125009e632b697",
+      "tests/test_training_data.py": "70fdf0147fb189d2e77749a5aeb7fe15a7ab1d043f8d5871556eb997efd0f22f",
+      "tests/test_training_projection.py": "eb5058c05d4dfcd41161aab29fd57318ef7fe6fc96834a7e2aa8eddd0d27b128",
+      "tests/test_verify_sqlite_postgres.py": "5a2fa1eb78600a8eb4c29fed52d596a308d83e23a4341fb3777221ef1f3062a7",
+      "tools/audit_leyu_bet_capture.py": "91a24f80d869218e8386c00da1d1761eb8c0f8531002b28e0747dc5372f826f4",
+      "tools/backfill_label_revisions.py": "c028ba508e12dc83d20b8a145b140f7e9f36184c4ae6eb691f20a7a28662f3b8",
+      "tools/leyu_collect.py": "7910fa61004ba915ae417914096abfaeeec6e0439064988e537dc56df8de0de1",
+      "tools/leyu_ip_probe.py": "dc1ed01dbc0aa3dd721d75c0967df7612fbb25d95501ec2c8963606f75a0c15d",
+      "tools/leyu_session_doctor.py": "0562e3e11d9176775099350539cd6dee2bb69ddfb9efcdbaa309fe1edfc858a6",
+      "tools/live_latency_benchmark.py": "3a50d3657d8ef51cbac8938649e1ae4b1edbb9c47abaeb1b7bb7f4d28b94d8d7",
+      "tools/migrate_sqlite_to_postgres.py": "220637f4fe5b52c502a96a876619f18c4069d431acf8b4f28ed5ddf53c4c4ea3",
+      "tools/prepare_ledger_statistics.py": "59b0c82ef791b923f17e28c520275b2d92068836ff875dbf84e0e99fc7724cff",
+      "tools/recover_archive_orphans.py": "8c717c3b6a8dc3b23dee81a1352495e1b94c1696e37ae7f391d829285d822751",
+      "tools/repair_current_tail.py": "7f518368d57892d533ca9c94741b42c83696349f0a0ff326a7cb0a71c0cf0662",
+      "tools/repair_history.py": "6fcfcb8522c2335134bf6adc60aad7b48638d374b4c2d7d4c54972fa3da1124c",
+      "tools/repair_ledger.py": "8b3402179aaedbf811612da9e38851ec86b596a8cdd90fa8eba8363ef35cfa37",
+      "tools/repair_model_databases.py": "0775cf3ae4c67c27a4fda16c8a7edc38ca4b78ef9308333ae93b6e9ac28d38ff",
+      "tools/saz_extract.py": "219279074b9731fec598e5152ebf8deb00491c490f8eff55787c11a2fc4d5ab8",
+      "tools/verify_repair.py": "3a6e701f387d7f52527276ce290add5b7fab7b2e8a0bf4b81eedb488301e5079",
+      "tools/verify_sqlite_postgres.py": "6400975cbf77f919b7c608bfad3c46f821aad1db819bfa3594c555c507d5c246",
+      "web/console/index.html": "0552c53c821013f9cbc11849c05c561316c124ef593910b57d14f05d13d10cbc",
+      "web/console/workbench.js": "513074a27f5a661cf70e9fa20c4777806f2100eaa94b5ba74ae9536bafcead01"
+    },
+    "python_files_in_frozen_manifest": 183,
+    "later_changes_not_covered_by_these_checks": [
+      "service/ledger.py",
+      "tests/browser/shadow_statistics_flows.js",
+      "web/console/workbench.js"
+    ],
+    "checked_at": "2026-10-14T07:46:07.010221+00:00",
+    "scope_note": "Frozen tests certify the source-freeze-v3 snapshot. Later ledger and browser/UI changes require separate final verification by the coordinating agent."
+  },
+  "production_probes": {
+    "pg_integrity": {
+      "result": {
+        "empty_schema_and_repeat_migration": {
+          "rows": 1,
+          "clocks_and_odds_preserved": true
+        },
+        "old_schema_missing_column_repaired": true,
+        "postgres_concurrent_claims": {
+          "attempts": 8,
+          "accepted": 5,
+          "held_cents": 1000,
+          "global_limit_cents": 1000,
+          "venue_submissions": 0
+        },
+        "same_selection_atomicity": {
+          "attempts": 8,
+          "accepted": 1
+        },
+        "exit_code": 0,
+        "seconds": 67.49460249207914,
+        "isolated_schema_removed": true
+      },
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/pg-integrity-result.json",
+        "sha256": "9bf40423c0599dff3ee61abdd3f8a36161966bdb00dfca310264f8f52b8f64c1"
+      },
+      "scope": "isolated PostgreSQL schema; actual concurrent cash claims and repeat migration; no venue submission"
+    },
+    "pg_cohort": {
+      "result": {
+        "checks": [
+          {
+            "eligible_matches": 0,
+            "new_matches": 0,
+            "eligible_decisions": null,
+            "counts_scope": "qualified_labelled_match_cohort",
+            "cohort_verified": true,
+            "coverage_status": "complete",
+            "unverified_candidate_matches": 0,
+            "candidate_matches": 0,
+            "label_matches": 2484,
+            "examined_matches": 0,
+            "certificate_cache_hits": 0,
+            "certificate_cache_persisted": true,
+            "qualification_basis": "complete version-qualified market curves; metadata clock and settlement checks; immutable features validated by writer",
+            "label_cutoff": "2026-10-14T05:47:15.001210+00:00",
+            "checked_at": "2026-10-14T05:47:15.001210+00:00",
+            "query_seconds": 10.263099029660225
+          },
+          {
+            "eligible_matches": 0,
+            "new_matches": 0,
+            "eligible_decisions": null,
+            "counts_scope": "qualified_labelled_match_cohort",
+            "cohort_verified": true,
+            "coverage_status": "complete",
+            "unverified_candidate_matches": 0,
+            "candidate_matches": 0,
+            "label_matches": 2484,
+            "examined_matches": 0,
+            "certificate_cache_hits": 0,
+            "certificate_cache_persisted": true,
+            "qualification_basis": "complete version-qualified market curves; metadata clock and settlement checks; immutable features validated by writer",
+            "label_cutoff": "2026-10-14T05:47:25.264730+00:00",
+            "checked_at": "2026-10-14T05:47:25.264730+00:00",
+            "query_seconds": 8.464632339775562
+          }
+        ],
+        "venue_submissions": 0,
+        "exit_code": 0
+      },
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/pg-cohort-result.json",
+        "sha256": "0ca45014f6ad87f705517aa89912e2944d7516faa63cfe2748cba316b7fb316f"
+      },
+      "scope": "qualified settled match cohort; repeated read-only probes; single query times are not P95"
+    },
+    "new_generation_inputs": {
+      "result": {
+        "qualified_inputs": 3154,
+        "qualified_input_matches": 5,
+        "latest_at": "2026-10-14T06:01:40.624093+00:00"
+      },
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/new-generation-pg-inputs.log",
+        "sha256": "9c7a85d0efdbe772880f62049e851853c634dbc377339e7a1809d3de860e72a3"
+      },
+      "scope": "version-qualified input rows and input matches; not a qualified settled training cohort"
+    },
+    "complete_curves": {
+      "result": {
+        "incomplete_groups": [],
+        "exit_code": 0
+      },
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/new-generation-complete-curves.log",
+        "sha256": "6d2ca28fa6e68368a649a994c38cd9cc0145ff74f9917643bf9994ad61495e10"
+      },
+      "scope": "examined new-generation curves; does not certify all historical inputs"
+    },
+    "runtime": {
+      "result": {
+        "checks": [
+          {
+            "url": "http://127.0.0.1:3003/health",
+            "status": 200,
+            "seconds": 0.0034423768520355225
+          },
+          {
+            "url": "http://127.0.0.1:3003/api/v1/data-model",
+            "status": 200,
+            "seconds": 0.002131320536136627
+          },
+          {
+            "url": "http://127.0.0.1:3003/api/v1/ledger/history?limit=10&days=7&type=real",
+            "status": 200,
+            "seconds": 0.0032176151871681213
+          },
+          {
+            "url": "http://127.0.0.1:3003/api/v1/account",
+            "status": 200,
+            "seconds": 0.006767762824892998
+          },
+          {
+            "url": "https://football.5545.eu.cc/",
+            "status": 200,
+            "seconds": 0.11675393767654896
+          },
+          {
+            "url": "https://football.5545.eu.cc/api/v1/data-model",
+            "status": 200,
+            "seconds": 0.05251498334109783
+          }
+        ],
+        "model_service_running": true,
+        "training": {
+          "state": "waiting",
+          "eligible_matches": 0,
+          "new_matches": 0,
+          "cycle_ready": false,
+          "cohort_verified": true,
+          "data_version": "remaining-ah-signed-lines-bernoulli-v5-offset-windows-asof-quote-qualified",
+          "old_model_quarantined": true,
+          "error": "",
+          "limits": {
+            "cpu_cores": 1,
+            "memory_mb": 2048,
+            "cpu_time_limit_s": 1800
+          }
+        },
+        "live": {
+          "running": true,
+          "connected": 1,
+          "reconnects": 0,
+          "price_source_age_s": 2.2,
+          "idle_s": 0.2,
+          "last_error": "",
+          "uptime_s": 982.1
+        },
+        "exit_code": 0,
+        "observation_scope": "short post-deployment check, not a four-hour soak test"
+      },
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/runtime-final.json",
+        "sha256": "e42c97be7f6ebb8d62d2a23eb5d5aa17bcda48afd9b096bedef1669652bd94c2"
+      },
+      "scope": "short post-deployment HTTP and worker check, not a four-hour soak test"
+    },
+    "settings": {
+      "result": {
+        "version_before": 52,
+        "version_after": 52,
+        "same_existing_settings": true,
+        "betting_enabled": false,
+        "model_training_enabled": true
+      },
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/settings-after-deploy.json",
+        "sha256": "c824758258bfb05e9cca85b5c04b562c8407c7667eb2165353d23f64d4e2abd9"
+      },
+      "scope": "PG settings unchanged during deployment"
+    },
+    "runtime_source": {
+      "result": {
+        "ai_football_analytics_api": {
+          "files": 68,
+          "matches_verified_source": true
+        },
+        "ai_football_model_worker": {
+          "files": 63,
+          "matches_verified_source": true
+        }
+      },
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/runtime-source-verified.json",
+        "sha256": "3c9b1c9bf4179c7e3a473c4a45ae94835268b04c82023fc248c6c046fb236cb0"
+      },
+      "scope": "runtime source match at deployment; later changes need separate deployment verification"
+    },
+    "history_pg_v3": {
+      "summary": {
+        "core": {
+          "attempts": 3,
+          "successes": 3,
+          "failures": 0,
+          "seconds": [
+            27.406597539782524,
+            26.25877945125103,
+            28.84817197173834
+          ],
+          "partial_diagnostic_results": 0,
+          "small_sample_p95_seconds": 28.84817197173834,
+          "successful_small_sample_p95_seconds": 28.84817197173834
+        },
+        "experiments": {
+          "attempts": 3,
+          "successes": 3,
+          "failures": 0,
+          "seconds": [
+            11.077277621254325,
+            11.98587423376739,
+            10.619590617716312
+          ],
+          "partial_diagnostic_results": 3,
+          "small_sample_p95_seconds": 11.98587423376739,
+          "successful_small_sample_p95_seconds": 11.98587423376739
+        }
+      },
+      "runs": [
+        {
+          "round": 1,
+          "stage": "core",
+          "status": "ready",
+          "seconds": 27.406597539782524,
+          "errors_status": null,
+          "errors_counted": null,
+          "errors_total": null,
+          "errors_count_sum": null,
+          "major_metrics_returned": null,
+          "sql_calls_after_cancellation": null,
+          "no_sql_after_cancellation_verified": null
+        },
+        {
+          "round": 1,
+          "stage": "experiments",
+          "status": "ready",
+          "seconds": 11.077277621254325,
+          "errors_status": "partial",
+          "errors_counted": 512,
+          "errors_total": 36284,
+          "errors_count_sum": 512,
+          "major_metrics_returned": true,
+          "sql_calls_after_cancellation": 0,
+          "no_sql_after_cancellation_verified": true
+        },
+        {
+          "round": 2,
+          "stage": "core",
+          "status": "ready",
+          "seconds": 26.25877945125103,
+          "errors_status": null,
+          "errors_counted": null,
+          "errors_total": null,
+          "errors_count_sum": null,
+          "major_metrics_returned": null,
+          "sql_calls_after_cancellation": null,
+          "no_sql_after_cancellation_verified": null
+        },
+        {
+          "round": 2,
+          "stage": "experiments",
+          "status": "ready",
+          "seconds": 11.98587423376739,
+          "errors_status": "partial",
+          "errors_counted": 512,
+          "errors_total": 36284,
+          "errors_count_sum": 512,
+          "major_metrics_returned": true,
+          "sql_calls_after_cancellation": 0,
+          "no_sql_after_cancellation_verified": true
+        },
+        {
+          "round": 3,
+          "stage": "core",
+          "status": "ready",
+          "seconds": 28.84817197173834,
+          "errors_status": null,
+          "errors_counted": null,
+          "errors_total": null,
+          "errors_count_sum": null,
+          "major_metrics_returned": null,
+          "sql_calls_after_cancellation": null,
+          "no_sql_after_cancellation_verified": null
+        },
+        {
+          "round": 3,
+          "stage": "experiments",
+          "status": "ready",
+          "seconds": 10.619590617716312,
+          "errors_status": "partial",
+          "errors_counted": 768,
+          "errors_total": 36284,
+          "errors_count_sum": 768,
+          "major_metrics_returned": true,
+          "sql_calls_after_cancellation": 0,
+          "no_sql_after_cancellation_verified": true
+        }
+      ],
+      "source_unchanged": true,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/history-stage-result-v3.json",
+        "sha256": "3003a61eaac04f8c250855f16605f538949dfa0adefc70ac9d14f77e971b25a5"
+      },
+      "execution": {
+        "path": "output/audit-task55/pi-consensus/history-stage-execution-v3.json",
+        "sha256": "e113504a6420f066031e348ae5584dc69e7ca51ab17366b3e3732562956bb593"
+      },
+      "exit_code": 0,
+      "verification": {
+        "six_stages_successful": true,
+        "all_main_experiment_metrics_returned": true,
+        "diagnostics_explicitly_partial": true,
+        "error_counts_cohere": true,
+        "no_followup_sql_after_every_cancel": true,
+        "diagnostic_statement_budgets_max5000ms": true,
+        "source_hashes_match_before_after_and_host": true,
+        "cpu_quota_half_core": true
+      },
+      "contract": {
+        "read_only": true,
+        "independent_connection_per_stage": true,
+        "repeatable_read": true,
+        "core_budget_seconds": 60,
+        "experiment_budget_seconds": 30,
+        "error_diagnostic_budget_seconds": 5,
+        "max_parallel_workers": 0,
+        "max_parallel_workers_per_gather": 0,
+        "container_cpu_limit": 0.5,
+        "venue_submissions": 0,
+        "source_mutations": 0,
+        "settings_or_cache_writes": 0
+      },
+      "interpretation": "Three measurements only, not sustained production P95. Ready certifies principal experiment metrics; every error-detail result is an explicit partial lower bound in the current narrow-projection reader snapshot."
+    },
+    "history_runtime_v6": {
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/history-production-observation-v6.json",
+        "sha256": "9bce22c5e616d326832c834760694ee51050be71e0a49ebe76e0f37495756e38"
+      },
+      "summary_evidence": {
+        "path": "output/audit-task55/pi-consensus/history-production-observation-v6-summary.json",
+        "sha256": "8d4248dc0c3317e1dbabf3b868b465d2989c8bfefbb7bfadfc7a5b47cbf9ef66"
+      },
+      "exit_code": 0,
+      "seconds": 263.65757234953344,
+      "http_samples": 18,
+      "all_http_200": true,
+      "core_refreshes": [
+        "2026-10-12T10:32:29.245547+00:00",
+        "2026-10-14T08:48:10.943071+00:00",
+        "2026-10-14T08:49:39.812662+00:00",
+        "2026-10-14T08:50:41.606826+00:00",
+        "2026-10-14T08:51:43.579490+00:00"
+      ],
+      "experiment_refreshes": [
+        "2026-10-14T08:48:39.171871+00:00",
+        "2026-10-14T08:50:05.793588+00:00",
+        "2026-10-14T08:52:10.224143+00:00"
+      ],
+      "last": {
+        "statistics_status": "ready",
+        "statistics_at": "2026-10-14T08:51:43.579490+00:00",
+        "statistics_stale": false,
+        "statistics_error": null,
+        "experiments_status": "ready",
+        "experiments_at": "2026-10-14T08:52:10.224143+00:00",
+        "experiments_stale": false,
+        "experiments_error": null,
+        "entries_status": "ready",
+        "entries_at": "2026-10-14T08:52:11.285747+00:00",
+        "error_diagnostic": {
+          "errors_status": "partial",
+          "errors_counted": 768,
+          "errors_total": 36284,
+          "diagnostic_error": {
+            "stage": "experiment_error_payloads",
+            "exception_type": "QueryCanceled",
+            "sqlstate": "57014",
+            "elapsed_ms": 923
+          }
+        },
+        "total_decisions": 318438,
+        "statistics_timings": {
+          "aggregate_many": {
+            "elapsed_ms": 24215
+          },
+          "portfolio": {
+            "elapsed_ms": 250
+          }
+        }
+      },
+      "settings": {
+        "version": 52,
+        "sha256": "8de50a9ab53f89392a97f723ad50820f478908bbc97ae03938b286fb22b3218b",
+        "all_samples_unchanged": true,
+        "betting_enabled": false,
+        "model_training_enabled_before": true,
+        "persistence_backend": "postgres"
+      },
+      "venue_submissions_by_probe": 0,
+      "scope": "263.66-second observation with at least three refresh cycles; historical orders were excluded from this sanitized summary. Not a four-hour soak."
+    },
+    "runtime_source_history_v5": {
+      "result": {
+        "at": "2026-10-14T08:47:42.795519+00:00",
+        "containers": {
+          "ai_football_analytics_api": {
+            "image": "sha256:2fbf0b2f5261472c3f82e861d5b8abf340312566fe817f429d0f817ae615c5af",
+            "status": "running",
+            "health": "healthy",
+            "hashes": {
+              "service/ledger.py": "005d1462a1f30ef2362b4a2a2c3edad7e59ac02c12ae23bc0e082045fb799d40",
+              "core/live_model.py": "0875262e0bc72adf2cb0e84cbdb5b963569f2f1d07bceb8d64d64c694487d16d",
+              "store/training_data.py": "375be41f79b79474f4ab73d716f83f5ab5232474a731fb9d121b9191557516d8",
+              "service/model_training.py": "2d1474e07642c53a75e803b91272566e8fb101371452435745cc290fc0ae923c",
+              "service/model_service.py": "1d78327c1b1d0eccfef0e2e5a764d202a11efc1edf0b8351927abb3caa252149",
+              "web/console/workbench.js": "3ec4f2ecbf757ddf6e9127731908ebcdf289320039e521f0902f92229955b9c6"
+            },
+            "source_matches": true
+          },
+          "ai_football_model_worker": {
+            "image": "sha256:cb3e43f3e26891ae8728e4971fa60113f66177bf93dc13daaab97f812715959c",
+            "status": "running",
+            "health": "healthy",
+            "hashes": {
+              "service/ledger.py": "005d1462a1f30ef2362b4a2a2c3edad7e59ac02c12ae23bc0e082045fb799d40",
+              "core/live_model.py": "0875262e0bc72adf2cb0e84cbdb5b963569f2f1d07bceb8d64d64c694487d16d",
+              "store/training_data.py": "375be41f79b79474f4ab73d716f83f5ab5232474a731fb9d121b9191557516d8",
+              "service/model_training.py": "2d1474e07642c53a75e803b91272566e8fb101371452435745cc290fc0ae923c",
+              "service/model_service.py": "1d78327c1b1d0eccfef0e2e5a764d202a11efc1edf0b8351927abb3caa252149"
+            },
+            "source_matches": true
+          }
+        }
+      },
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/runtime-source-history-v5.json",
+        "sha256": "c38147c64c1816a6663dff509d6ca90058d8acaec517bd865752d6eff70798fc"
+      },
+      "scope": "API/model image and selected source hashes verified at previous history deployment; final v6 deployment observation remains pending."
+    },
+    "history_browser_v6": {
+      "result": {
+        "http": 200,
+        "statistics_at": "2026-10-14T08:51:43.579490+00:00",
+        "experiments_at": "2026-10-14T08:52:10.224143+00:00",
+        "entries_status": "ready",
+        "statistics_status": "ready",
+        "experiments_status": "ready",
+        "errors_status": "partial",
+        "errors_counted": 768,
+        "errors_total": 36284,
+        "errors": [],
+        "writes": []
+      },
+      "exit_code": 0,
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/browser-history-production-v6.log",
+        "sha256": "32c91fec23b1220d3763a08d656b41782c516fc473d92dc947534bb99658fe34"
+      },
+      "scope": "Actual production history HTTP200, core/entries/principal experiments ready, explicit partial diagnostics, no page errors or writes. This browser run predates final settlement scanner deployment."
+    },
+    "history_browser_v5_failure": {
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/browser-history-production-v5.log",
+        "sha256": "a1c9c1cd4622322cbadc99cf7fa7880954aabbca64ae9e78b9b3a3cae2b17855"
+      },
+      "status": "failed",
+      "reason": "Acceptance script matched allowed diagnostic timeout text as a page-level failure; preserved, corrected structural v6 check passed."
+    },
+    "history_http_v5_failure": {
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/history-production-observation-v5.json",
+        "sha256": "15f67596f19a42d34306736074b0c0afeab5c07d9d87134576434ca741635ddc"
+      },
+      "status": "interrupted_after_http_errors",
+      "scope": "Probe used unsupported cohort=forecast; corrected v6 uses cohort=prospective. Not counted as successful observations."
+    },
+    "reservation_inventory_before_fix": {
+      "result": {
+        "order_status_counts": {
+          "unknown": 3,
+          "rejected": 76,
+          "pending": 330,
+          "sending": 1,
+          "accepted": 58
+        },
+        "held_count": 0,
+        "held_cents": 0,
+        "held_without_order_number": 0,
+        "venue_calls": 0,
+        "source_mutations": 0
+      },
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/reservation-production-inventory-v1.json",
+        "sha256": "04675a2e442ac5d427a4f5484dff71f8f627bdbc43467b6808e0517114cd4532"
+      },
+      "scope": "Read-only production inventory before backfill while betting disabled. Zero reservation rows do not mean zero outstanding exposure."
+    },
+    "reservation_pg_v2": {
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/reservation-pg-v2-result.json",
+        "sha256": "69e7f143f9ef88856a11846bd652f5ad93dd54b304b622d4c0603cea097b526d"
+      },
+      "execution": {
+        "path": "output/audit-task55/pi-consensus/reservation-pg-v2-execution.json",
+        "sha256": "3dfa06a2605c47a800a1ce5dae4eae7744f7e6e69c872b3239f3a9b7739227c2"
+      },
+      "exit_code": 0,
+      "seconds": 65.22412156686187,
+      "assertions": 24,
+      "all_assertions_passed": true,
+      "fixture": {
+        "accepted_history_rows": 351,
+        "unknown_without_order_number_rows": 1,
+        "target_history_index": 350
+      },
+      "stages": [
+        {
+          "stage": "before_backfill",
+          "summary": {
+            "held_count": 0,
+            "held_cents": 0,
+            "held_without_order_number": 0
+          }
+        },
+        {
+          "stage": "empty_reconcile_backfilled",
+          "summary": {
+            "held_count": 352,
+            "held_cents": 70500,
+            "held_without_order_number": 1
+          }
+        },
+        {
+          "stage": "exact_native_receipt",
+          "summary": {
+            "held_count": 351,
+            "held_cents": 70300,
+            "held_without_order_number": 1
+          },
+          "released": 1
+        },
+        {
+          "stage": "after_restart_empty_reconcile",
+          "summary": {
+            "held_count": 351,
+            "held_cents": 70300,
+            "held_without_order_number": 1
+          }
+        },
+        {
+          "stage": "final",
+          "summary": {
+            "held_count": 351,
+            "held_cents": 70300,
+            "held_without_order_number": 1
+          }
+        }
+      ],
+      "isolated_schema_removed": true,
+      "source_unchanged": true,
+      "venue_submissions": 0,
+      "production_source_mutations": 0,
+      "scope": "Only a random temporary PG schema was mutated and removed. This regression does not invoke the venue HTTP client or validate account pagination."
+    },
+    "history_browser_v7": {
+      "evidence": {
+        "path": "output/audit-task55/pi-consensus/browser-history-production-v7.log",
+        "sha256": "0ed8a865497f6517c3072b2c11d8d025ce9443bf24142a0d0239b7ffab357fe0"
+      },
+      "exit_code": 0,
+      "result": {
+        "http": 200,
+        "statistics_at": "2026-10-14T10:30:49.433247+00:00",
+        "experiments_at": "2026-10-14T10:30:20.893307+00:00",
+        "entries_status": "ready",
+        "statistics_status": "ready",
+        "experiments_status": "ready",
+        "errors_status": "partial",
+        "errors_counted": 768,
+        "errors_total": 36284,
+        "errors": [],
+        "writes": []
+      },
+      "scope": "Actual final production publication, HTTP200, principal core/experiments/entries ready, explicit diagnostic partial lower bound, pageerrors/writes empty."
+    }
+  },
+  "final_business_freeze": {
+    "version": "v6",
+    "source_freeze": {
+      "path": "output/audit-task55/pi-consensus/source-freeze-v6.json",
+      "sha256": "f3d5465974fb826cf1a5ae5639635a53f50f449d93e1a7d8c45a5eeb40fdf52f"
+    },
+    "source_verification": {
+      "path": "output/audit-task55/pi-consensus/source-freeze-v6-verified.json",
+      "sha256": "5ba277da4f4b5c2791f2ae06f8c560ba8f4c262b0fdea69ba70c4a0c8fd9ed1f"
+    },
+    "source_sha256": {
+      "api/__init__.py": "b7e82c54e3e73ad1a9d6a9e112319661540ddbb4d03abc9ee1cc1bc03452a13a",
+      "api/app.py": "2426ab75de153607f9ae516c62a0a6d689fd8ca51385e05dd0cc4286b97936b3",
+      "collector/__init__.py": "f0515d8dd54192a3563dd73c223e3d20bdf8db159ffa0e01b91be6144bbf564d",
+      "collector/http_transport.py": "b5d79c01340b35b9ec08a01e30201dfdc5e83caae03a566163183e5625150453",
+      "collector/leyu_account.py": "a3cce1cad5d56048244c16da0ace5a55712422ff7c5ace2ae06968b718976fce",
+      "collector/leyu_app_login.py": "e34a1908deda8c3aea3709e1416df4958a6c2910a6e85c86fa28398e4fac19c9",
+      "collector/leyu_app_session.py": "483c35b7778c3cbaa58fc6a101dbf0c908a0a1fb00d575f88667485d4d787012",
+      "collector/leyu_app_signing.py": "3d2d26837e7d4458574339ae552c710c65f44756f46f5c9c083915ec669193fe",
+      "collector/leyu_client.py": "1f950b6442b76ce1ec5973b2637be27bca2f6a8d4d6694f268afbf278c8b3a9d",
+      "collector/leyu_h5_session.py": "8624b4fb46bf5a8e008aa9b5c845152ee5493abae21e70b24d1036cb3b6dad52",
+      "collector/leyu_normalizer.py": "a0429930433adb11a9977ab1e969f4c1c058b92685c42afb7e130a4d716e0c92",
+      "collector/leyu_realtime.py": "c705db7af8d19304c08c92f5e0363dbeffbf5fd1acbf53885045aaab50f65e96",
+      "collector/leyu_ws.py": "2a980e8ce70d174b83b21dec744755bbe98640f2f1139e5a23e1de75fa18542d",
+      "collector/session.py": "59cc8b20c58111e805ad6fa1c49a5f70801e268aa12c1bc9e5efe0ee6ff868be",
+      "collector/sources.py": "dbbb7a5c8228aedaf879c9523a1fad56e07eddf55f27ebdc9ce968dc15ffa88b",
+      "conftest.py": "5c787b4f70b51281934cc5849888604921fdb731be20f0cbd5d56f746946d772",
+      "core/__init__.py": "fd7069dd5ca2b4f3bb8cf7ff63660ba735af13ee1bec91ac3ef64a04624d158f",
+      "core/calibration.py": "92caa31fec29e5dc5b9eeee8aed515158c85603879c993bf8ef3ef5f973c7af0",
+      "core/decision_features.py": "0f2eaee994d04caa1ffa8d7941b00326848accb3eec46ca991441a2092e2a42b",
+      "core/devig.py": "31a8845c6405eb8e9bb1b10f2825b2e50623e36f3000892a3b394eb5ed2f1113",
+      "core/economics.py": "99c12225b922e8b085d132e0186ab7b7013b4d457a24493ae2c973408ed1d9a7",
+      "core/ensemble.py": "024eb4294948584a114d1e1f92f8e9910abfd949be97ded5da0bf654c40ab0af",
+      "core/entry_gate.py": "f4743abe95e8c5c40faecc8786db671394de885dd4fc56a8e921266f761c254d",
+      "core/learned_decision.py": "13c54a9003b1f2d095d8339e2847d4fd5053d5ec0a377ad9a6bee2461d704e0f",
+      "core/learned_model.py": "21c8d24594bbe8b80862e3c77eb1707f1b810113bd46bb12f2214826dede8194",
+      "core/live_model.py": "0875262e0bc72adf2cb0e84cbdb5b963569f2f1d07bceb8d64d64c694487d16d",
+      "core/market_labels.py": "358f5f0572ca6b99fc82af476e95759e3248454dbc9dde30d429f36b9bb2c4ea",
+      "core/markets.py": "2c94d2a38955390ac88cfdf4fa13b5ae65dceff36bc2972318ce1dba898b574e",
+      "core/microstructure.py": "65174f57125eabbbdc33fa0329c5f3cd78468aa5c364566c76f7b6ce5e50e8ba",
+      "core/model_challengers.py": "793cae96742d13fe9127c8f171bc34a1f474c944b920891ea4939f2c948ef176",
+      "core/model_validation.py": "460eafb91ae0201176bc61c3bc0b3429c38b2146b8a884fe3680f8b400665c22",
+      "core/models.py": "3d8115a4d6d328a7af65bb8287145551843b4765a466a9ee0b69ca98ca2f67b5",
+      "core/oof_peer.py": "6faafa2ba42b4c5f1a0aa078cdd987befdfe43ecaecc0b2c7dcb6170a6bde9e8",
+      "core/probability_calibration.py": "15c3d237415af124e4d12dfe7b0d028f9dbfe188aa81245b4fa00d5fa07c807d",
+      "core/replay.py": "4f0b451f2a0913e08ce88a189abd26662953e93b45cec7d3e96cf07c6585cae7",
+      "core/settlement.py": "f779d2b10dca1e160ee7df0fc6f5cdd0f5ca28500fb42b298a229c41371512fa",
+      "docker/Dockerfile.analytics": "13216e6a43210bec468446d47db1d17f8ca896c06c00b88ee47fe1316572f35f",
+      "pyproject.toml": "4563e843022772040ba01d05de36246b0c59a756c65f816fd1e9c6e53542eb47",
+      "pyrightconfig.json": "2151ba4c2d4aabb855b22510845550157034f29452bd3215df458dafb3efcf18",
+      "reports/auto-betting-loss-audit/scripts/audit.py": "389abaa2e40ff9cb2ec6c7d6ecbe824ce71c26da14343f04e060e2e4a7af7655",
+      "reports/auto-betting-loss-audit/scripts/make_figures.py": "ab13abb22d978296cc199be4bd542f0a4aee60ce0ae4067ab7ea6337247e9c6c",
+      "reports/auto-betting-loss-audit/scripts/md_to_html.py": "4e73843cee806540c127e0a5ae937b5e9e06bdd7c051681d5c9d21df947ccb25",
+      "reports/auto-betting-loss-audit/scripts/reproduce.py": "53656ad3a36dd4e3111be2fb26f04201514f374a333dfcc8934abdfd19a187ba",
+      "reports/auto-betting-loss-audit/scripts/training_audit.py": "d2d958d9defd191d9e2bb9313756846e07ac07119a36571d2bc7cda86dc1a2b0",
+      "reports/basketball-model-feasibility/scripts/md_to_html.py": "c16ee7d6303edb079a8263e138894c3502a3bb89fac83c5821ac2ff3f8512477",
+      "reports/dashboard-data-stats-optimization/scripts/analyze_fixes.py": "4d3bc9ecb8e75f2ac22df76f194f1783469a66b4da298d4da78a170047e61d42",
+      "reports/dashboard-data-stats-optimization/scripts/md_to_html.py": "4b8e60e63dda0e7ac1f2ec766d68e03c7c0c9bd3381fb08986d68ef46c9f1222",
+      "reports/decision-accuracy-maximization/scripts/build_assets.py": "98c94432a59e02213f7909e702e6bc0814d13c928feec42cfdeccf8d13c758f1",
+      "reports/decision-accuracy-maximization/scripts/make_current_baseline.py": "ac8595864b4c615f0e82c4f411c43e93b6e01fef1a76438c515d189a33d007ad",
+      "reports/decision-algorithm-model-audit/scripts/collect_literature.py": "6abf3a62a4f6258df16d69e738df38b0d2bc1316301c3f68d37c5f8722100c17",
+      "reports/decision-algorithm-model-audit/scripts/collect_oss.py": "f8d1a2f7ae1a637e93c133b3269ef6c645c366cfb0170ce0436ac5d716505c44",
+      "reports/decision-algorithm-model-audit/scripts/make_figures.py": "05c21197c68aa971ffdb17d94e15b4894d69a24278dc3ec5da9cdc389071f3b1",
+      "reports/decision-algorithm-model-audit/scripts/verify_literature.py": "aff49e6da85c65e3d5e18bf1be194cf7e658b16e9debb38045d56c7ca6d55327",
+      "reports/decision-algorithm-model-audit/scripts/verify_training_sample.py": "697e91ba92908a8db3098ef2ab45026203c7a80b0133a27cab3b4f2093938b69",
+      "reports/decision-model-accuracy/scripts/analyze_confidence.py": "4accaee5f28ccbe8d4f95511fe575351efa998bba540c13f4aca872a3dceffe7",
+      "reports/decision-model-accuracy/scripts/make_figures.py": "d1b6dfa1e5ba4600d7797257d77bd39fc27f195cba1438a57943d405533cf9cf",
+      "reports/decision-model-accuracy/scripts/md_to_html.py": "c16ee7d6303edb079a8263e138894c3502a3bb89fac83c5821ac2ff3f8512477",
+      "reports/decision-model-accuracy/scripts/probe_current_model.py": "161e1d16583cd21ebead227762bd657b2ee53874b5fb189689591c559775da1c",
+      "reports/decision-model-accuracy/scripts/test_analysis.py": "1e3e011ed3c83d7e6cd574761513d395749a8ffcdb94b3fef65ca1f4db06805f",
+      "reports/leyu-kaiyun-odds-bot-feasibility/scripts/make_figures.py": "cc41b92cc7cea2e2ee1ff8cc79f8a57311c1384a5f6e4513c8e25926158f2dbe",
+      "reports/leyu-kaiyun-odds-bot-feasibility/scripts/md_to_html.py": "4b8e60e63dda0e7ac1f2ec766d68e03c7c0c9bd3381fb08986d68ef46c9f1222",
+      "reports/live-expert-decision/scripts/capture_performance.py": "0a23582433e6258fed30e5c6f26605f90b0022a73e9350a1131994c51c595591",
+      "reports/live-expert-decision/scripts/make_figures.py": "571505d6a0b45bfd2199d07227a51bfa1f54d31997833d887b47eb34050abfac",
+      "reports/live-expert-decision/scripts/public_replay.py": "2cf4133717d1ad10bf5a3ad2e4ab82c608584bff7b998207a8e23ac6bb41128b",
+      "reports/runtime-parameter-optimization/scripts/make_figures.py": "2ac77295a795a7da897cc1cc5fae19a46b2d4438bead586e4574fc9bf70db683",
+      "reports/runtime-parameter-optimization/scripts/md_to_html.py": "be89493b346f3943d76b23cfa123c30219fdb03aa1552fe9c80364f125fff7fa",
+      "reports/runtime-parameter-optimization/scripts/parameter_sensitivity.py": "73a6fad92faf5501aeab3c487e649c8b5d9615d1027433cb9b81c1c02c098e2e",
+      "service/__init__.py": "14e644563b2d59976c26fadd13ac78d0a828c4eeaa1f05dbf99398fc85a5ac53",
+      "service/account_summary.py": "21b2a971fdcec08bd6397d9c234a76652715039c5fe5dab8abeb57fc6b2a4214",
+      "service/analysis.py": "5adc2f46afc587829479fa88751ee9fa950d4245992b3c472ef18c652674b62f",
+      "service/archive_service.py": "ae00875cc64e1c26d9e61bbee165d533c095caff755e48792849cfb6e69e1c45",
+      "service/betting.py": "6a5ab6d82b41faf100cb2b0602bf4cd8a0586e582ae395eca1bde6ae522509ef",
+      "service/data_model.py": "02ac1d2a232774d218bb33c8024fdc6f907e37083eb29c9bfae932be4519710a",
+      "service/decision.py": "1548a675d51d56f8d5ecfbf93a6dfa07c90c7f3f91046b6b966b534ec30ccdfc",
+      "service/history_repair.py": "dc7912185843dc301390b257bf0bd1184039c934dab71c48d049247a4f574698",
+      "service/ledger.py": "005d1462a1f30ef2362b4a2a2c3edad7e59ac02c12ae23bc0e082045fb799d40",
+      "service/live_expert.py": "cc75121f2eb0f9f4e250d20ef5cdc719316343b9c39be9a25b3d2638062cfe58",
+      "service/live_review.py": "69bfc6b997e4b3029b919754be4ce908ad9a37cb96e506da513d9a8ff91103a0",
+      "service/live_workers.py": "5162cfc22424925d39ff7d62b7b59034e4299e7ec6a5c5bde6a22d56b2a7bb9b",
+      "service/llm.py": "0d0900e9aa6dccf0867a11326d20734dbf0a220b351951d2287ba0c7580e77b4",
+      "service/match_decision.py": "59be47111db459d43ecf7741f813db9c2ce4b8bb6b6b6e548f6fe16e5017cf44",
+      "service/model_service.py": "1d78327c1b1d0eccfef0e2e5a764d202a11efc1edf0b8351927abb3caa252149",
+      "service/model_training.py": "2d1474e07642c53a75e803b91272566e8fb101371452435745cc290fc0ae923c",
+      "service/response_projection.py": "f221a366eff09ff3ee54b32f5afa2a0ff666e93e0748beda9427e71ad0052a18",
+      "service/runtime_settings.py": "cb266f3d5b044e750520b9793fb1a3c061fac02ccca0c8807f391e6d493440d8",
+      "service/valuation.py": "b9ab2e306e0a9212b4669675bacd1b03e46ef5e6e7bfe02817f69ead4aa9bcd2",
+      "store/__init__.py": "7e9490ff5fb08758068ab8201bf67efc987141b6105ee4375f182a5cdf0ec93b",
+      "store/archive.py": "88a1ab1e11ab4100d0d53762d3a107f34d2f7ed4967e4c950555b18127c47d9d",
+      "store/history.py": "25fc1571d15e7d9837aa20960c62038b36f6106cc408ac777be3c0156c4d20cd",
+      "store/ledger_db.py": "fd87aebe6f80a36744731a75af50cb6235ad3317d21965748e626a389912019d",
+      "store/order_store.py": "3799cf6e81d2330adf9d796c6bb29723f768d314ebf1533bb20fa76705cbc95c",
+      "store/postgres.py": "798e663414ed874d4a7ca11181e3755945e1d13bd4adf39c22f9ad2fe33eff4c",
+      "store/runtime_settings_db.py": "99c1860e6282d15b7d2f80bd4442d7bdc48a88d28777a7eda3f1c7614b33d20b",
+      "store/snapshot_store.py": "ba3ae214689d2f718568794d96d29eccf65a8e9e24db518f40c4b8e3b0f7f5b9",
+      "store/sql_backend.py": "17a8e72d9eab9aead64b953b70dc89d9b30a5b1d8e3f515237072fc8000f7bcd",
+      "store/training_data.py": "375be41f79b79474f4ab73d716f83f5ab5232474a731fb9d121b9191557516d8",
+      "store/training_projection.py": "1fd669ae025a8bdaa243d613d4ddb87be80ccf026f27ecdac8156d33fcca9962",
+      "tests/__init__.py": "d2d8701fc0886be02fc6d93c8d2be80e842bdc0127a6001332ee6f005ae3c8a8",
+      "tests/browser/account_flows.js": "530c4a1c70f471d4e501e55b50006e48dad067c93df93fd8fd32c9205154a82a",
+      "tests/browser/board_flows.js": "e04e3a34d777caf502525e451abdb863e9d1787149914133c0fd9f01670b550e",
+      "tests/browser/collection_status.js": "368c19492b21b153b3dcff1413375bfe507adccac837e0be41c8cf6ed7394b76",
+      "tests/browser/console_flows.js": "1381c0f2c61321dc91d0c174e52b5ba8e2ecd2c6a8a34228a9ad55bfc7e9e8d0",
+      "tests/browser/data_model_flows.js": "4602446a5674214d82204d4e2b512c32fbfc93a775a93ac62d32253f3305e76d",
+      "tests/browser/data_model_production_readonly.js": "6d6bef9a2bbb39cefb2d14aa66060633091e0e44c4105e2191049e3a4dbb74a1",
+      "tests/browser/history_clv.js": "5710f65121f58a6d347171f9473814e4f19ded3156613d163c5a5060b63e2ee1",
+      "tests/browser/history_statistics_flows.js": "427e64425622585318950cf8f67381dd31c808795e47fc4e7a793cef322056e1",
+      "tests/browser/parameter_report_flows.js": "1f42b0d110bf9ca73072287480de0c3fe631f74fe346b3a672046640ff67bafe",
+      "tests/browser/parameter_report_online_flows.js": "df208c537f2c868b8bd7a53b2981986606ce5876c30c73d937c9750d40feb022",
+      "tests/browser/settings_help_flows.js": "a214e41cd0ad1c0bcee4448c0e32722f4ec4ad6f873a5adfbebd4cbe84cf0107",
+      "tests/browser/shadow_statistics_flows.js": "78fffaf006c628522f4b57c375b093e600af3d7a4c269f9df015d017e672e954",
+      "tests/browser/timeout_flows.js": "6a754d02ea6a2b810c1ed0dc80e5a5ec46286be982206d8bc5f6d1fe441dc399",
+      "tests/browser/workbench_flows.js": "3cdd720aab77c3fac80293e5c53fb9bf1111dce5825f44862ca1b815b6a511fa",
+      "tests/test_account_summary.py": "6d8d2c588bfd90e084e588da1dc20a84a1b963357c0d3172e86a6155fbec22c6",
+      "tests/test_api.py": "084fa95e61a51996dc3ec543345288706828fb7342b6e4600d8f66e520b0108f",
+      "tests/test_app_login.py": "d26c6ba92531b8ee5710cb0ac8ab391b20e951228ee95acc221653ce97b4bec5",
+      "tests/test_app_session.py": "2ddfb822445d24a3e4dfd9ae3beb8b50f5170c42e76d6dcc9ad54df86f80f0a4",
+      "tests/test_archive.py": "380e1797d61454b983601ed2dd8dd22761d3a11e03436fa4b63a1e289c5f29f6",
+      "tests/test_betting.py": "51b061a9a5893edf16a2ab306fefeeacb20aa95f9eaf84916dd0a778a769ee90",
+      "tests/test_betting_execution.py": "cedf80d571d5b80bd6ae7a40241b6d40bc1f5b08bfdaa07112c1ca597841a141",
+      "tests/test_board_quotes.py": "bf751953b3be30870e6bcacdacdeebca19745f9bd3709ee2e1f82c853628a862",
+      "tests/test_calibration.py": "fc737ba91fb4fc3b395bb5f929e67c8fed2f46107aee0c56a9d7f85dec9d55c4",
+      "tests/test_data_model.py": "ee67a7c349762baae27e2df4e7de122cbb1d3d4715e73c897abadae13addddad",
+      "tests/test_decision_features.py": "fb9ca3a68a3e7190f561bdc9491884d463888048b1f60f2fb6a83a9e698de970",
+      "tests/test_decision_modes.py": "2ea65863a9fc3ddaa9871c5ba343e8980abe33e2e65ed02e93739b9d30a99b6f",
+      "tests/test_devig.py": "92dc2f5f88342cd2497adc2fc73dcae455d33d1461021aff3124bec7533997a6",
+      "tests/test_economics.py": "6e45124e16695aae4ac3aabc50699690477b5bc950ddfc413fc37593cf9b746f",
+      "tests/test_ensemble.py": "b481561a697c17a58fa1f30d18c58e0350090429995f4f3aecb22d2e66246012",
+      "tests/test_ensemble_coherence.py": "9750337ecc74e00551f49854a5f9a54ffd694402dbd5fcbae355da2e48755dd7",
+      "tests/test_entry_gate.py": "e9b3f0f55f93c6e9273fbed7bf45f4b263b49ff70f40fa9c55cbf94f4032a8d9",
+      "tests/test_final_evidence.py": "8f7167569886ee52341818870df3828d420ffe6cb377e40ed16330848c357078",
+      "tests/test_h5_session.py": "a7326f34e6f10e459ce896d3e12ea533bac9b5c97cb5efdee44340cf048ff842",
+      "tests/test_history.py": "4b02d3a2d537af014a8cab72658e00d17184ddd1d1f1ef189b1e334afbf456ad",
+      "tests/test_history_repair.py": "5b632231ca9eb0362cbb2fe3f690661e174b11398eebffed5c70ded3c6ed6fd2",
+      "tests/test_history_statistics.py": "fa64b63a7a481e4ec088e21549a5a9ee881f8d76d6d7e0131cbd6f970fd21681",
+      "tests/test_http_transport.py": "b5881a587acda86fb9753f6845b98a3b6ac3698a456829e7edfc8cd4f0f5e39f",
+      "tests/test_learned_decision.py": "36a715ac316ae4d90c56a235c25b358f4b2948ac5cefb99b349b91fe08d4e49b",
+      "tests/test_learned_model.py": "6c0b69bfa1f883f0d9484b3bc8ff5e7f16d10ec29b5e5a58d0a9407ef3f7fbcb",
+      "tests/test_ledger.py": "caa0076dc637e570096399f03bc2806cfefbae143d62042debe6636dfb297111",
+      "tests/test_ledger_db.py": "e0c251a83864f096666fa149c08c302d2a2760cccfc81007264cfd23df15a469",
+      "tests/test_leyu_account.py": "acc1e6e9041b8a82b4a5d52e7ebeedb6d1be669a2ffeeb8fce5962542fa34635",
+      "tests/test_leyu_app_signing.py": "a4a8d1dd324d3f80bfa578e36d6ba783ba2083ee38e08ce0ea2c554725b01542",
+      "tests/test_leyu_client.py": "9ba7c19bf514f57a61bd8151af134d31ead69120eef5c3649a5d79dd2e2a6025",
+      "tests/test_leyu_session_doctor.py": "05c1bb77570fcf55217b8c7d0e6fdad181bb33665cf0c1e709fd9a83c58113be",
+      "tests/test_leyu_ws.py": "cbf62a4b5c839b010cec4311b3805942d115a21558c0ccc9b2aa0df8b372a36b",
+      "tests/test_live_expert.py": "cb21af73899956a89031bdb2bff55661717a08f35fec93ef6bab300b45668295",
+      "tests/test_live_model.py": "dce1b700afc6be4aae00ffd5b1347b7736299ac5f83ee587a6ee1e010ea3eea6",
+      "tests/test_live_review.py": "f5e67a14d9e27010587941a1b9a5194f2c48301a06ed8c0329ce2f3e3dcacb40",
+      "tests/test_live_workers.py": "81be3d5e2e67d9027ff2c6791c4e86a411b71a75a228cba776c2e555f95600f6",
+      "tests/test_llm_decision.py": "fc44a111cfcb8805d107a6b612e4bd1dd6219c7996e80e6aeb412f622c92bb46",
+      "tests/test_llm_envelope.py": "15a43f3eb0b4d888e7bf884fcb2f993cebd6b81f64cadba779189b754effd6fb",
+      "tests/test_market_labels.py": "23c7cb01fca03ec0fb1d50eaafcc66bf5d1946093bed38cb0a9056223b68db94",
+      "tests/test_markets.py": "95ad68dd94ed2d207e2db2899726a1fcf259c6702272f6504aa93748929d872c",
+      "tests/test_match_decision.py": "900bda77e301487fe14d6d7e55324dc6091071b56389f1d549d59f3f2cc752b2",
+      "tests/test_microstructure.py": "b684454749be53425986bc81bf19ac74f3eac02fbf603d50068d6d3312e5f646",
+      "tests/test_migrate_sqlite_to_postgres.py": "25e5ec9d9e6980d8bf0a0cf8cc78dff4365477c77e8f6eb3b4677106f3c15dd7",
+      "tests/test_model_challengers.py": "7325ad0c06d7e3d8263589cda6e72756064a8447ba616d772158f056950baf0e",
+      "tests/test_model_live_lane.py": "0c20c34b5d7012f4ac50a6672bc0d5ec5d39f0538762ed0957a3ea9eae154552",
+      "tests/test_model_service.py": "ec30fc5903863bf62433becec0d7fdb3948c4752f457e0fc07df11a98af19215",
+      "tests/test_model_training.py": "7582dcc4850143ea911157f4cda5339897e34fb074a3ba4ddf6ee26057deb245",
+      "tests/test_model_validation.py": "5ee207646b73f779fd258c7eef54bbdf15eb9e6053cb565f6d40961905913230",
+      "tests/test_models.py": "fe2eee5d30f704b48110b61112ec6ccb8965fe2790af7b21c732cbb3dee82d7b",
+      "tests/test_multi_market.py": "cedebb1977508ad3b8255d7b913bac92d5e1d52a060392dbcc62d30f4b36fc74",
+      "tests/test_oof_peer.py": "20e271c52fafc2f74054e466db1c3024421dc12eaee096f98d21888978ed65c6",
+      "tests/test_order_exposure.py": "f4584bc82fb48c53501cc0ea10d5f14b5c698b020031ee5e9c851f368b83f3c4",
+      "tests/test_order_store.py": "436134531268ca15826f440e45f8048a58d9aacfa8345a2c35e0d9b640ed1094",
+      "tests/test_probability_calibration.py": "f6548e20fb0ae0ac47283f39ea932d31ee8f4d6f9f7c22c767fd9c3fe1c36466",
+      "tests/test_repair_current_tail.py": "f1c6511e655759091705b41b6da67f4d208f2bed206a4aabeea1498766b86c1a",
+      "tests/test_repair_history.py": "46adfb732b902945218eac87682227f44286d24de0e66c5be2bac4d64dc10918",
+      "tests/test_repair_ledger.py": "96c0bd56404230bb90eb37ce650f6774f4e5dd70688da917c07b91b4bb7da615",
+      "tests/test_repair_model_databases.py": "bb88d6b2c6613a85c8e0f3de6dfa952af17e4e63a9ff81c4a7e2f88b97af3b84",
+      "tests/test_replay.py": "9aaf94d309d888b5a2b1a4fb3784cc6f5d4d77438a4d2bc0e4d219bb6230b1d5",
+      "tests/test_response_projection.py": "b19e971455c944ff5b454c59ed7c83d3a8bda5fbb81ba2cc0b66a313bc864104",
+      "tests/test_runtime_settings.py": "1c9b27fbf8c6a82d6dd2d040720072e7132b342ba96faa31f292d5527f2ab821",
+      "tests/test_runtime_settings_db.py": "6b36c7b8fbb6e3b4ddb91652b0377099c2199399ae20423aa2f11a309d18587a",
+      "tests/test_score_change_cooldown.py": "d6fe17429c1806bc40955412b924a55407b0dec5ee1226e2a265e660fe911ae4",
+      "tests/test_session.py": "8c9578a2ef582c4bf2493af913bac2e2c6e7029ab3752fb4b4fd3fbb45de66bc",
+      "tests/test_settlement.py": "066629961748e28ee97c1a7d6195e3c4126e8890476e26219ec54a1a671b7149",
+      "tests/test_shadow_observation.py": "0eb4d56efbdf3977a4d2211a7a92973c6f0be650a88a25a7d061159ea75a37b0",
+      "tests/test_sources.py": "4be8e45a14d60d8c2ffd3ea90c5807c7d0b10750b1f3274ce9625ee3990ef3c8",
+      "tests/test_sql_backend.py": "21e8a195216a9cf5169cc913da1d50fa80447c6e918e216ad2a2bd7b6c32526b",
+      "tests/test_stacked_learner.py": "ccd83dfcd999332dce88b626443b61a83faea6e72a30f0be097f6d051da0c9e3",
+      "tests/test_store.py": "8a7ca9f620e83fa0456be7b2f71f8b726283853d8d25fa00c9125009e632b697",
+      "tests/test_training_data.py": "70fdf0147fb189d2e77749a5aeb7fe15a7ab1d043f8d5871556eb997efd0f22f",
+      "tests/test_training_projection.py": "eb5058c05d4dfcd41161aab29fd57318ef7fe6fc96834a7e2aa8eddd0d27b128",
+      "tests/test_verify_sqlite_postgres.py": "5a2fa1eb78600a8eb4c29fed52d596a308d83e23a4341fb3777221ef1f3062a7",
+      "tools/audit_leyu_bet_capture.py": "91a24f80d869218e8386c00da1d1761eb8c0f8531002b28e0747dc5372f826f4",
+      "tools/backfill_label_revisions.py": "c028ba508e12dc83d20b8a145b140f7e9f36184c4ae6eb691f20a7a28662f3b8",
+      "tools/leyu_collect.py": "7910fa61004ba915ae417914096abfaeeec6e0439064988e537dc56df8de0de1",
+      "tools/leyu_ip_probe.py": "dc1ed01dbc0aa3dd721d75c0967df7612fbb25d95501ec2c8963606f75a0c15d",
+      "tools/leyu_session_doctor.py": "0562e3e11d9176775099350539cd6dee2bb69ddfb9efcdbaa309fe1edfc858a6",
+      "tools/live_latency_benchmark.py": "3a50d3657d8ef51cbac8938649e1ae4b1edbb9c47abaeb1b7bb7f4d28b94d8d7",
+      "tools/migrate_sqlite_to_postgres.py": "220637f4fe5b52c502a96a876619f18c4069d431acf8b4f28ed5ddf53c4c4ea3",
+      "tools/prepare_ledger_statistics.py": "59b0c82ef791b923f17e28c520275b2d92068836ff875dbf84e0e99fc7724cff",
+      "tools/recover_archive_orphans.py": "8c717c3b6a8dc3b23dee81a1352495e1b94c1696e37ae7f391d829285d822751",
+      "tools/repair_current_tail.py": "7f518368d57892d533ca9c94741b42c83696349f0a0ff326a7cb0a71c0cf0662",
+      "tools/repair_history.py": "6fcfcb8522c2335134bf6adc60aad7b48638d374b4c2d7d4c54972fa3da1124c",
+      "tools/repair_ledger.py": "8b3402179aaedbf811612da9e38851ec86b596a8cdd90fa8eba8363ef35cfa37",
+      "tools/repair_model_databases.py": "0775cf3ae4c67c27a4fda16c8a7edc38ca4b78ef9308333ae93b6e9ac28d38ff",
+      "tools/saz_extract.py": "219279074b9731fec598e5152ebf8deb00491c490f8eff55787c11a2fc4d5ab8",
+      "tools/verify_repair.py": "3a6e701f387d7f52527276ce290add5b7fab7b2e8a0bf4b81eedb488301e5079",
+      "tools/verify_sqlite_postgres.py": "6400975cbf77f919b7c608bfad3c46f821aad1db819bfa3594c555c507d5c246",
+      "web/console/workbench.js": "3ec4f2ecbf757ddf6e9127731908ebcdf289320039e521f0902f92229955b9c6"
+    },
+    "files_verified": 202,
+    "changed_during_checks": [],
+    "exit_code": 0,
+    "note": "Report-only updates and final deployment observation follow this business-code freeze; no profitability is certified.",
+    "post_deployment_verification": "deployment_v6 with deployment-observation-v7.json and production browser v7"
+  },
+  "deployment_v6": {
+    "build_exit_code": 0,
+    "deploy_exit_code": 0,
+    "observation_exit_code": 0,
+    "evidence": {
+      "path": "output/audit-task55/pi-consensus/deployment-observation-v7.json",
+      "sha256": "4c60046ec365c57d3a1dc594fcea8e79d3aba50c8e81a0a01b07a5f8416a9d05"
+    },
+    "log_evidence": {
+      "path": "output/audit-task55/pi-consensus/deployment-observation-v7.log",
+      "sha256": "b2f562ab12011023f5d5a042c460dd7dca4b8fadf4aac12011b02ed1f91d0d60"
+    },
+    "seconds": 186.98,
+    "http_samples": 13,
+    "all_http_200": true,
+    "new_core_at": [
+      "2026-10-14T10:27:43.504040+00:00",
+      "2026-10-14T10:28:44.958795+00:00",
+      "2026-10-14T10:29:47.424101+00:00"
+    ],
+    "new_experiments_at": [
+      "2026-10-14T10:28:13.540423+00:00",
+      "2026-10-14T10:29:18.469478+00:00",
+      "2026-10-14T10:30:20.893307+00:00"
+    ],
+    "containers": {
+      "ai_football_analytics_api": {
+        "image": "sha256:205cb6489528168b182c445933fb9b2ac3f85ffbbee40ddf1af97099388f391c",
+        "status": "running",
+        "health": "healthy",
+        "hashes": {
+          "service/ledger.py": "005d1462a1f30ef2362b4a2a2c3edad7e59ac02c12ae23bc0e082045fb799d40",
+          "service/betting.py": "6a5ab6d82b41faf100cb2b0602bf4cd8a0586e582ae395eca1bde6ae522509ef",
+          "collector/leyu_account.py": "a3cce1cad5d56048244c16da0ace5a55712422ff7c5ace2ae06968b718976fce",
+          "store/order_store.py": "3799cf6e81d2330adf9d796c6bb29723f768d314ebf1533bb20fa76705cbc95c",
+          "store/training_data.py": "375be41f79b79474f4ab73d716f83f5ab5232474a731fb9d121b9191557516d8",
+          "service/model_training.py": "2d1474e07642c53a75e803b91272566e8fb101371452435745cc290fc0ae923c"
+        },
+        "source_matches": true
+      },
+      "ai_football_model_worker": {
+        "image": "sha256:e465679e7845602d19b22a5d3a6bfe767663f4a04aa3ea57d04ab0e77311c9a2",
+        "status": "running",
+        "health": "healthy",
+        "hashes": {
+          "service/ledger.py": "005d1462a1f30ef2362b4a2a2c3edad7e59ac02c12ae23bc0e082045fb799d40",
+          "service/betting.py": "6a5ab6d82b41faf100cb2b0602bf4cd8a0586e582ae395eca1bde6ae522509ef",
+          "collector/leyu_account.py": "a3cce1cad5d56048244c16da0ace5a55712422ff7c5ace2ae06968b718976fce",
+          "store/order_store.py": "3799cf6e81d2330adf9d796c6bb29723f768d314ebf1533bb20fa76705cbc95c",
+          "store/training_data.py": "375be41f79b79474f4ab73d716f83f5ab5232474a731fb9d121b9191557516d8",
+          "service/model_training.py": "2d1474e07642c53a75e803b91272566e8fb101371452435745cc290fc0ae923c"
+        },
+        "source_matches": true
+      },
+      "ai_football_web_console": {
+        "image": "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10",
+        "status": "running",
+        "health": "healthy"
+      },
+      "ai_football_redis": {
+        "image": "sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+        "status": "running",
+        "health": "healthy"
+      }
+    },
+    "settings": {
+      "version": 52,
+      "sha256": "8de50a9ab53f89392a97f723ad50820f478908bbc97ae03938b286fb22b3218b",
+      "betting_enabled": false,
+      "training_enabled": true,
+      "persistence_backend": "postgres"
+    },
+    "betting": {
+      "configured_enabled": false,
+      "execution_enabled": false,
+      "running": true,
+      "queued": 0,
+      "retry_pending": 0,
+      "session_warmup": "disabled",
+      "settlement_reconciliation": {
+        "status": "not_started"
+      }
+    },
+    "venue_submissions_by_probe": 0,
+    "status": "verified_source_and_at_least_three_new_refresh_cycles",
+    "scope": "Read-only observation while betting disabled; settlement scanner correctly remains not_started. Does not certify an actual venue-history sweep or profitability."
+  },
+  "report_update_at": "2026-10-14T10:32:53.136623+00:00",
+  "final_open_items": [
+    "No successful new-generation full production training fit or measured fit CPU/memory/wall duration is claimed without a sufficient eligible cohort.",
+    "No prospective superiority over market, state-comparable CLV, authoritative venue long-run net profit, or independent challenger advantage is certified.",
+    "Historical virtual/old-price records are conservatively isolated; full historical relabelling and weight-baseline remeasurement remain research/acceptance work.",
+    "The native all-time settlement pagination is covered by mocks and bounded background implementation; no actual venue sweep was invoked while betting was disabled.",
+    "Old or unknown receipts without an authoritative order number remain held by design; absence is never evidence of settlement."
+  ],
+  "report_visual_acceptance": {
+    "command": "docker exec -w /root/ai_football ai_football_browser_validation env npm_config_cache=/root/ai_football/output/audit-task55/npm-cache npx --yes --package @playwright/cli playwright-cli -s=task55history run-code --filename=/root/ai_football/output/audit-task55/pi-consensus/report_browser_v10.js",
+    "exit_code": 0,
+    "log_path": "output/audit-task55/pi-consensus/report-browser-v10.log",
+    "log_sha256": "25e917e335fa726b7fe6d646fa02137fd5d759c4a29c8e209335a6226a9a1379",
+    "result": {
+      "online": {
+        "diagrams": 3,
+        "fallbacks": 0,
+        "images": [
+          {
+            "src": "images/audit_counts.png",
+            "loaded": true
+          }
+        ],
+        "status": {
+          "ok": true,
+          "blocks": 3
+        },
+        "width": 1440,
+        "viewport": 1440
+      },
+      "offline": {
+        "diagrams": 0,
+        "blocks": [
+          {
+            "fallback": true,
+            "visible": true,
+            "text": 302
+          },
+          {
+            "fallback": true,
+            "visible": true,
+            "text": 396
+          },
+          {
+            "fallback": true,
+            "visible": true,
+            "text": 308
+          }
+        ]
+      },
+      "pageerrors": [],
+      "exit_code": 0
+    },
+    "chart_generation_exit_code": 0,
+    "chart_font": "WenQuanYi Zen Hei",
+    "scope": "Local report rendered in Chromium; CDN diagrams online and deliberately blocked-CDN source fallback checked. Not a business-runtime test."
   }
 }

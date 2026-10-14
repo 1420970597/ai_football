@@ -17,6 +17,19 @@ class ProbabilityCalibrationTests(unittest.TestCase):
         self.assertTrue(0 < calibrate_probability(.5, artifact) < 1)
         self.assertTrue(0 < calibrate_probability(.99, artifact) < 1)
 
+    def test_invalid_labels_and_probabilities_are_rejected_before_sparse_fallback(self):
+        for target in (None, .5, -1, 2, '1'):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                fit_logistic([.5], [target])
+        for probability in (float('nan'), float('inf'), -.1, 1.1):
+            with self.subTest(probability=probability):
+                with self.assertRaises(ValueError):
+                    fit_logistic([probability], [0])
+                with self.assertRaises(ValueError):
+                    calibrate_probability(probability, {'method': 'identity'})
+                with self.assertRaises(ValueError):
+                    calibrate_probability(probability, {'method': 'logistic', 'slope': 1, 'intercept': 0})
+
 
 if __name__ == '__main__':
     unittest.main()

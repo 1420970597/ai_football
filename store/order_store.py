@@ -11,6 +11,8 @@ import json
 import os
 import sqlite3
 import threading
+import time
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import quote
@@ -18,6 +20,48 @@ from urllib.parse import quote
 from store.sql_backend import (POSTGRES, SQLiteAdapter, SQLAdapter,
                                StorageBackendError, backend_from_url)
 from store.postgres import connect as pg_connect, postgres_enabled
+
+BUDGET_MAX_AGE_S = 30.0
+
+
+def money_cents(value: Any) -> int:
+    """CNY debit precision, never rounded up or treated as unknown zero."""
+    try:
+        amount = Decimal(str(value))
+        if isinstance(value, bool) or not amount.is_finite() or amount < 0:
+            raise ValueError('资金金额无效')
+        return int((amount * 100).to_integral_value(rounding=ROUND_DOWN))
+    except (InvalidOperation, ValueError, OverflowError) as exc:
+        raise StorageBackendError('资金金额无效') from exc
+
+
+def validated_budget(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """A complete native venue snapshot is required; no wallet fallback."""
+    if (snapshot.get('source') != 'leyu_ybty' or snapshot.get('currency') != 'CNY'
+            or snapshot.get('complete') is not True):
+        raise StorageBackendError('体育资金与未结注单尚未完整核验')
+    try:
+        at = float(snapshot['observed_at'])
+        if not 0 <= time.time() - at <= BUDGET_MAX_AGE_S:
+            raise ValueError
+        available = money_cents(snapshot['available'])
+        rows = snapshot['unsettled']
+        if not isinstance(rows, list):
+            raise ValueError
+        external: dict[str, dict[str, Any]] = {}
+        for item in rows:
+            no, mid = str(item.get('order_no') or ''), str(item.get('match_id') or '')
+            stake = money_cents(item.get('amount'))
+            if not no or not mid or stake <= 0:
+                raise ValueError
+            value = {'order_no': no, 'match_id': mid, 'cents': stake}
+            if no in external and external[no] != value:
+                raise ValueError
+            external[no] = value
+        return {'observed_at': at, 'available_cents': available,
+                'external': list(external.values())}
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise StorageBackendError('资金快照缺失、过期或存在不一致注单') from exc
 
 
 class OrderStore:
@@ -69,6 +113,15 @@ class OrderStore:
                 self._initialize_sqlite()
             else:
                 self._initialize_postgres()
+            with self.adapter.transaction(write=True):
+                self.adapter.execute('CREATE TABLE IF NOT EXISTS order_reservations ('
+                    'identity TEXT PRIMARY KEY, account_key TEXT NOT NULL, match_id TEXT NOT NULL, '
+                    'cents BIGINT NOT NULL, held INTEGER NOT NULL, order_no TEXT, '
+                    'reconciled_at DOUBLE PRECISION, source TEXT)')
+                self.adapter.execute('CREATE INDEX IF NOT EXISTS reservations_account '
+                                     'ON order_reservations(account_key,held)')
+                self.adapter.execute('CREATE TABLE IF NOT EXISTS betting_budget_snapshots ('
+                    'account_key TEXT PRIMARY KEY, observed_at DOUBLE PRECISION NOT NULL, payload TEXT NOT NULL)')
 
     def _initialize_sqlite(self) -> None:
         assert self.path is not None
@@ -143,15 +196,22 @@ class OrderStore:
 
     def claim(self, identity: str, sending: Mapping[str, Any], selection_key: str,
               account_key: str, *, authorize: Callable[[Callable[[], Any]], Any] | None = None,
-              on_duplicate: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+              on_duplicate: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+              budget: Mapping[str, Any] | None = None,
+              total_fraction: float = .10, match_fraction: float = .02
               ) -> tuple[bool, dict[str, Any] | None]:
         """Atomically check and reserve an order before any provider call."""
         with self._lock:
             with self.adapter.transaction(write=True):
+                self._account_lock(account_key)
                 previous = self.existing_order(selection_key, account_key,
                                                 for_update=self.is_postgres)
                 if previous is not None:
                     return False, previous if on_duplicate is None else on_duplicate(previous)
+
+                if budget is not None:
+                    self._reserve(identity, sending, account_key, budget,
+                                  total_fraction, match_fraction)
 
                 insert_sql = self.dialect.insert_ignore(
                     "orders", ("identity", "at", "status", "payload", "selection_key", "account_key"))
@@ -162,6 +222,7 @@ class OrderStore:
                 else:
                     cursor = authorize(lambda: self.adapter.execute(insert_sql, params))
                 if getattr(cursor, "rowcount", 1) == 0:
+                    self.adapter.execute('DELETE FROM order_reservations WHERE identity=?', (identity,))
                     previous = self.existing_order(selection_key, account_key,
                                                     for_update=self.is_postgres)
                     if previous is not None:
@@ -173,8 +234,110 @@ class OrderStore:
     def update(self, identity: str, status: str, payload: Mapping[str, Any]) -> None:
         with self._lock:
             with self.adapter.transaction(write=True):
+                account = self.adapter.execute('SELECT account_key FROM orders WHERE identity=?',
+                                               (identity,)).fetchone()
+                if account:
+                    self._account_lock(str(account[0] or 'legacy-unattributed'))
                 self.adapter.execute("UPDATE orders SET status=?,payload=? WHERE identity=?",
                                      (status, json.dumps(dict(payload), ensure_ascii=False), identity))
+                self.adapter.execute('UPDATE order_reservations SET held=?,order_no=COALESCE(?,order_no) '
+                    'WHERE identity=?', (0 if status == 'rejected' else 1, payload.get('order_no'), identity))
+
+    def _account_lock(self, account_key: str) -> None:
+        if self.is_postgres:
+            self.adapter.execute('SELECT pg_advisory_xact_lock(hashtextextended(?,0))',
+                                 ('football-bet-budget:' + account_key,)).fetchone()
+
+    def _backfill_reservations(self, account_key: str) -> None:
+        # Backfill old unresolved claims conservatively. Their absence from a
+        # venue page never certifies settlement or releases an unknown debit.
+        old = self.adapter.execute('SELECT o.identity,o.account_key,o.payload FROM orders o '
+            "WHERE o.status IN ('sending','unknown','accepted','pending') "
+            'AND (o.account_key=? OR o.account_key IS NULL) '
+            'AND NOT EXISTS (SELECT 1 FROM order_reservations r WHERE r.identity=o.identity)',
+            (account_key,)).fetchall()
+        for old_id, old_account, raw in old:
+            data = json.loads(str(raw))
+            cents = money_cents(data.get('stake'))
+            if cents <= 0 or not data.get('match_id') or not old_account:
+                raise StorageBackendError('历史未结发送意图缺少资金或账号信息，需权威对账')
+            self.adapter.execute(self.dialect.insert_ignore('order_reservations',
+                ('identity','account_key','match_id','cents','held','order_no')),
+                (old_id, old_account, str(data['match_id']), cents, 1, data.get('order_no')))
+
+    def _reserve(self, identity: str, sending: Mapping[str, Any], account_key: str,
+                 snapshot: Mapping[str, Any], total_fraction: float, match_fraction: float) -> None:
+        budget = validated_budget(snapshot)
+        for fraction in (total_fraction, match_fraction):
+            if isinstance(fraction, bool) or not 0 <= float(fraction) <= 1:
+                raise StorageBackendError('资金敞口比例无效')
+        self._backfill_reservations(account_key)
+        persisted = self.adapter.execute('SELECT observed_at,payload FROM betting_budget_snapshots '
+                                         'WHERE account_key=?', (account_key,)).fetchone()
+        if persisted and float(persisted[0]) > budget['observed_at']:
+            budget = json.loads(str(persisted[1]))
+        if not 0 <= time.time() - float(budget['observed_at']) <= BUDGET_MAX_AGE_S:
+            raise StorageBackendError('资金快照已过期')
+        self.adapter.execute('INSERT INTO betting_budget_snapshots(account_key,observed_at,payload) '
+            'VALUES (?,?,?) ON CONFLICT(account_key) DO UPDATE SET '
+            'observed_at=EXCLUDED.observed_at,payload=EXCLUDED.payload',
+            (account_key, budget['observed_at'], json.dumps(budget)))
+        external = {item['order_no']: item for item in budget['external']}
+        mid = str(sending.get('match_id') or '')
+        stake = money_cents(sending.get('stake'))
+        if not mid or stake <= 0:
+            raise StorageBackendError('预占订单缺少比赛或金额')
+        equity = budget['available_cents'] + sum(item['cents'] for item in external.values())
+        global_used = sum(item['cents'] for item in external.values())
+        match_used = sum(item['cents'] for item in external.values() if item['match_id'] == mid)
+        unseen = 0
+        held = self.adapter.execute('SELECT match_id,cents,order_no FROM order_reservations '
+                                    'WHERE account_key=? AND held=1', (account_key,)).fetchall()
+        for match, cents, no in held:
+            venue = external.get(no)
+            if venue is not None:
+                if venue['match_id'] != match or venue['cents'] != cents:
+                    raise StorageBackendError('场馆注单与资金预占不一致')
+                continue
+            unseen += int(cents)
+            global_used += int(cents)
+            match_used += int(cents) if match == mid else 0
+        global_cap = int(Decimal(str(total_fraction)) * equity)
+        match_cap = int(Decimal(str(match_fraction)) * equity)
+        if (stake > budget['available_cents'] - unseen or global_used + stake > global_cap
+                or match_used + stake > match_cap):
+            raise StorageBackendError('真实投注超过可用资金、全账户或单场未结敞口上限')
+        self.adapter.execute(self.dialect.insert_ignore('order_reservations',
+            ('identity','account_key','match_id','cents','held','order_no')),
+            (identity, account_key, mid, stake, 1, None))
+
+    def reconcile_settled(self, account_key: str, receipts: list[Mapping[str, Any]]) -> int:
+        """Only exact native settled order numbers release held principal."""
+        with self._lock, self.adapter.transaction(write=True):
+            self._account_lock(account_key)
+            self._backfill_reservations(account_key)
+            count = 0
+            for receipt in receipts:
+                no = str(receipt.get('order_no') or '')
+                if receipt.get('source') != 'leyu_ybty' or receipt.get('status') != 'settled' or not no:
+                    continue
+                cursor = self.adapter.execute('UPDATE order_reservations SET held=0,reconciled_at=?,source=? '
+                    'WHERE account_key=? AND order_no=? AND held=1',
+                    (time.time(), 'leyu_ybty_settled_receipt', account_key, no))
+                count += max(0, getattr(cursor, 'rowcount', 0))
+            return count
+
+    def reservation_summary(self, account_key: str) -> dict[str, int]:
+        """Aggregate diagnostics only; never expose native order identifiers."""
+        with self._lock:
+            row = self.adapter.execute(
+                'SELECT count(*),COALESCE(sum(cents),0),'
+                "COALESCE(sum(CASE WHEN order_no IS NULL OR order_no='' THEN 1 ELSE 0 END),0) "
+                'FROM order_reservations WHERE account_key=? AND held=1',
+                (account_key,)).fetchone()
+            return {'held_count': int(row[0]), 'held_cents': int(row[1]),
+                    'held_without_order_number': int(row[2])} if row else {
+                        'held_count': 0, 'held_cents': 0, 'held_without_order_number': 0}
 
     def orders_for_selections(self, selection_keys: list[str], account_key: str
                               ) -> list[dict[str, Any]]:

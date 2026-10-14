@@ -1,8 +1,30 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from core.model_validation import (coherent_probabilities, evaluate, execution_evidence,
-                                   paired_evidence, promotion, rolling_folds)
+from core.model_validation import (VALIDATION_CONTRACT_VERSION, coherent_probabilities,
+                                   evaluate, execution_evidence, is_graded_row,
+                                   ordered_matches, paired_evidence, promotion, rolling_folds)
+
+
+def approved_artifact(version='synthetic-approved', **changes):
+    """Synthetic gate evidence for loader tests; never a deployable model."""
+    from core.decision_features import FEATURE_VERSION
+    from core.learned_model import DATA_VERSION, FEATURES
+    score = {'matches': 120, 'decisions': 240, 'brier': .04,
+             'log_loss': .223, 'by_market': {}}
+    baseline = {**score, 'brier': .2025, 'log_loss': .598}
+    paired = {'matches': 120, 'delta_brier': -.1625, 'ci95': [-.1625, -.1625]}
+    evidence = {**paired, 'execution_cohort': {'available': True,
+        'algorithm': 'economic_ensemble', 'model': score, 'baseline': baseline,
+        'evidence': dict(paired)}}
+    folds = [{'delta_brier': -.1625} for _ in range(3)]
+    return {'version': version, 'features': list(FEATURES),
+            'weights': [0.] * len(FEATURES), 'data_version': DATA_VERSION,
+            'feature_version': FEATURE_VERSION,
+            'validation_contract_version': VALIDATION_CONTRACT_VERSION,
+            'updated_at': '2025-01-01T00:00:00+00:00',
+            'validation': score, 'baseline': baseline, 'rolling_validation': folds,
+            'promotion': promotion(score, baseline, evidence, folds), **changes}
 
 
 def rows(count=120):
@@ -95,15 +117,14 @@ class ModelValidationTests(unittest.TestCase):
         import json
         import tempfile
         from pathlib import Path
-        from core.learned_model import DATA_VERSION, FEATURES
         from service.model_training import atomic_json, backup_active_model, rollback_active_model
 
         def artifact(version, approved=True, feature_version=None):
-            return {'version': version, 'features': list(FEATURES), 'weights': [0.0] * len(FEATURES),
-                    'data_version': DATA_VERSION, 'feature_version': feature_version or
-                    __import__('core.decision_features', fromlist=['FEATURE_VERSION']).FEATURE_VERSION,
-                    'updated_at': '2025-01-01T00:00:00+00:00',
-                    'promotion': {'approved': approved}}
+            result = approved_artifact(version)
+            result['promotion']['approved'] = approved
+            if feature_version:
+                result['feature_version'] = feature_version
+            return result
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -113,6 +134,14 @@ class ModelValidationTests(unittest.TestCase):
             self.assertEqual(backup.name, 'active-backup-old-approved.json')
             atomic_json(active, artifact('new-active'))
             self.assertTrue(rollback_active_model(root, 'old-approved')['restored'])
+            self.assertEqual(json.loads(active.read_text())['version'], 'old-approved')
+
+            legacy = artifact('legacy-approved')
+            legacy.pop('validation_contract_version')
+            legacy_path = root / 'active-backup-legacy-approved.json'
+            atomic_json(legacy_path, legacy)
+            self.assertFalse(rollback_active_model(root, 'legacy-approved')['restored'])
+            self.assertTrue(legacy_path.exists())
             self.assertEqual(json.loads(active.read_text())['version'], 'old-approved')
 
             atomic_json(root / 'active-backup-unapproved.json', artifact('unapproved', approved=False))
@@ -130,6 +159,54 @@ class ModelValidationTests(unittest.TestCase):
         self.assertGreaterEqual(len(folds), 2)
         for training, validation in folds:
             self.assertLess(max(r['settled_at'] for r in training), min(r['at'] for r in validation))
+
+    def test_push_curve_context_is_projected_before_loss_mask(self):
+        source = []
+        for line, labels in [('2.5', (1, 0)), ('3', (None, None))]:
+            for outcome, target in zip(('over', 'under'), labels):
+                source.append({**rows(1)[0], 'market': 'OU', 'line': line,
+                               'outcome': outcome, 'y': target,
+                               'graded': target is not None,
+                               'observation_weight': 1 if target is not None else 0})
+        ps = [.4, .6, .7, .3]
+        result = evaluate(source, ps)
+        self.assertEqual(result['decisions'], 2)
+        self.assertEqual(result['prediction_context_decisions'], 4)
+        self.assertEqual(result['excluded_from_binary_loss'], 2)
+        self.assertAlmostEqual(result['brier'], .45 ** 2)
+        baseline = [.5] * 4
+        evidence = paired_evidence(source, ps, baseline)
+        self.assertAlmostEqual(evidence['delta_brier'], .45 ** 2 - .25)
+        without_context = evaluate(source[:2], ps[:2])
+        self.assertAlmostEqual(without_context['brier'], .6 ** 2)
+
+    def test_all_push_context_has_no_binary_score_or_promotion(self):
+        source = [{**rows(1)[0], 'y': None, 'graded': False, 'observation_weight': 0}]
+        result = evaluate(source, [.8])
+        self.assertEqual(result['matches'], 0)
+        self.assertEqual(result['decisions'], 0)
+        self.assertIsNone(result['accuracy'])
+        self.assertIsNone(result['brier'])
+        evidence = paired_evidence(source, [.8], [.5])
+        self.assertEqual(evidence['ci95'], [None, None])
+        self.assertFalse(promotion(result, result, evidence, [])['approved'])
+        self.assertEqual(ordered_matches(source), [])
+        execution = execution_evidence([{**source[0], 'algorithm': 'economic_ensemble'}], [.8], [.5])
+        self.assertFalse(execution['available'])
+
+    def test_invalid_binary_masks_cannot_fake_labels_or_weights(self):
+        for update in ({'graded': 1}, {'graded': False, 'y': 0},
+                       {'graded': False, 'y': None, 'observation_weight': 1},
+                       {'graded': True, 'y': None}, {'graded': True, 'observation_weight': 0}):
+            with self.subTest(update=update), self.assertRaises(ValueError):
+                is_graded_row({**rows(1)[0], **update})
+
+    def test_nonfinite_evidence_cannot_approve_an_artifact(self):
+        test, market, evidence, folds = self.execution_case()
+        evidence['ci95'][1] = float('nan')
+        self.assertFalse(promotion(test, market, evidence, folds)['approved'])
+        test['log_loss'] = float('nan')
+        self.assertFalse(promotion(test, market, evidence, folds)['approved'])
 
     def test_complete_had_group_is_normalized_and_top1_is_separate(self):
         source = []

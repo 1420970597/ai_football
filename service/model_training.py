@@ -11,15 +11,15 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from core.learned_model import (DATA_VERSION, VALIDATION_EPOCHS, compatible_model,
-                                fit_weights, train)
+from core.learned_model import (DATA_VERSION, VALIDATION_EPOCHS, approved_model,
+                                compatible_model, fit_weights, train)
 from core.decision_features import FEATURE_VERSION
-from core.model_validation import (evaluate, execution_evidence, instant, paired_evidence,
-                                   promotion, rolling_folds)
+from core.model_validation import (VALIDATION_CONTRACT_VERSION, evaluate, execution_evidence,
+                                   instant, is_graded_row, paired_evidence, promotion, rolling_folds)
 from core.probability_calibration import fit_logistic
 from core.probability_calibration import calibrate_probability
 from core.oof_peer import apply_peer_calibration, calibrate_peer_vector, crossfit_peer_features
-from store.training_data import dataset
+from store.training_data import dataset, training_cohort_progress
 
 # Quotes arrive repeatedly for the same match, line and direction, so adjacent
 # training rows are highly correlated. Keep the complete qualified-input and
@@ -80,13 +80,17 @@ def rolling_validation(rows: list[dict[str, Any]], *,
     calibration_pairs = [(row, probability)
                          for earlier_rows, values in zip(fold_rows[:-1], fold_candidates[:-1])
                          for row, probability in zip(earlier_rows, values)
-                         if instant(row['settled_at']) < test_cutoff]
+                         if is_graded_row(row) and instant(row['settled_at']) < test_cutoff]
     calibration_probs = [p for _, p in calibration_pairs]
     calibration_outcomes = [int(row['y']) for row, _ in calibration_pairs]
     calibration = fit_logistic(calibration_probs, calibration_outcomes) if calibration_probs else {
         'method': 'identity', 'samples': 0, 'reason': '无独立校准样本'}
     calibration.update(label_availability_cutoff=min(final_test, key=lambda row: instant(row['at']))['at'],
-                       excluded_unavailable_labels=sum(len(values) for values in fold_rows[:-1])-len(calibration_pairs),
+                       excluded_unavailable_labels=sum(
+                           is_graded_row(row) and instant(row['settled_at']) >= test_cutoff
+                           for earlier_rows in fold_rows[:-1] for row in earlier_rows),
+                       excluded_context_rows=sum(not is_graded_row(row)
+                           for earlier_rows in fold_rows[:-1] for row in earlier_rows),
                        matches=len({str(row['match_id']) for row, _ in calibration_pairs}))
     test_rows = fold_rows[-1] if fold_rows else []
     test_candidate = [calibrate_probability(p, calibration) for p in (fold_candidates[-1] if fold_candidates else [])]
@@ -133,7 +137,7 @@ def backup_active_model(model_root: Path, active: Path | None = None) -> Path | 
     except (OSError, ValueError, TypeError):
         return None
     if (not version or any(ch not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-' for ch in version)
-            or not compatible_model(previous)):
+            or not approved_model(previous)):
         return None
     destination = model_root / ('active-backup-' + version + '.json')
     if not destination.exists():
@@ -163,8 +167,7 @@ def rollback_active_model(model_root: Path, version: str | None = None) -> dict[
             model = json.loads(path.read_text(encoding='utf-8'))
         except (OSError, ValueError, TypeError):
             continue
-        promotion = model.get('promotion')
-        if not compatible_model(model) or not isinstance(promotion, dict) or promotion.get('approved') is not True:
+        if not approved_model(model):
             continue
         atomic_json(model_root / 'active.json', model)
         return {'restored': True, 'version': str(model.get('version')), 'source': str(path)}
@@ -185,42 +188,96 @@ def constrain(cpu: int, memory_mb: int) -> dict[str, Any]:
             'cpu_time_limit_s': TRAINING_CPU_TIME_LIMIT_S}
 
 
+def _artifact(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _completed_cohort(model_root: Path, artifacts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Training completion, independent of whether a candidate was promoted.
+
+    Existing successful artifacts provide a one-time migration of the water
+    mark. Only the latest completed compatible generation seeds progress;
+    an older active model cannot hide a newer unapproved candidate.
+    """
+    completed = _artifact(model_root / 'completed-training.json')
+    compatible = [model for model in artifacts if compatible_model(model)]
+    completed_valid = (completed.get('data_version') == DATA_VERSION
+            and completed.get('feature_version') == FEATURE_VERSION
+            and completed.get('validation_contract_version') == VALIDATION_CONTRACT_VERSION
+            and isinstance(completed.get('cohort_ids'), list)
+            and any(model.get('version') == completed.get('candidate_version') for model in compatible))
+    if not compatible:
+        return {}
+    latest = max(compatible, key=lambda model: (str(model.get('updated_at') or ''),
+                                               str(model.get('version') or '')))
+    if completed_valid and str(completed.get('completed_at') or '') >= str(latest.get('updated_at') or ''):
+        return completed
+    # A crash may occur after candidate commit and before watermark commit.
+    # Its embedded consumed cohort recovers that completion without refitting.
+    consumed = set(completed.get('cohort_ids', [])) if completed_valid else set()
+    consumed.update(latest.get('completed_cohort_ids') or latest.get('cohort_ids') or [])
+    return {'cohort_ids': sorted(str(mid) for mid in consumed),
+            'candidate_version': latest.get('version'), 'completed_at': latest.get('updated_at'),
+            'source': 'compatible_artifact_recovery'}
+
+
 def run(root: Path, cycle: int, cpu: int, memory: int, *, check_only: bool = False) -> dict[str, Any]:
     limits = constrain(cpu, memory)
     model_root = root.parent / 'models'
     active = model_root / 'active.json'
-    old = json.loads(active.read_text()) if active.exists() else {}
-    if not old:
-        candidates = sorted(model_root.glob('candidate-*.json'))
-        if candidates:
-            try:
-                old = json.loads(candidates[-1].read_text())
-            except (OSError, ValueError, TypeError):
-                old = {}
-    incompatible = bool(old and not compatible_model(old))
-    if incompatible:
-        # Retain the artifact; it may be audited but must never seed a clean cycle.
-        atomic_json(model_root / ('quarantined-' + active.name), old)
-        active.unlink(missing_ok=True)
-        old = {}
-    quality: dict[str, Any] = {}
-    print('training: loading time-isolated dataset', flush=True)
-    rows = dataset(root / 'ledger.sqlite3', model_root / 'inputs.sqlite3', audit=quality,
-                   max_per_match=TRAINING_MAX_ROWS_PER_MATCH)
-    consumed = set(old.get('cohort_ids', []))
-    new_count = len({r['match_id'] for r in rows} - consumed)
+    active_model = _artifact(active)
+    incompatible = bool(active.exists() and not approved_model(active_model))
+    if incompatible and active_model:
+        # Preserve both source and quarantine evidence. Loading contracts,
+        # rather than deleting the artifact, block legacy execution.
+        quarantine = model_root / ('quarantined-' + active.name)
+        if not quarantine.exists() or _artifact(quarantine) != active_model:
+            atomic_json(quarantine, active_model)
+    old: dict[str, Any] = {}
+    for candidate in sorted(model_root.glob('candidate-*.json'), reverse=True):
+        artifact = _artifact(candidate)
+        if compatible_model(artifact):
+            old = artifact
+            break
+        incompatible = True
+        if artifact and not (model_root / ('quarantined-' + candidate.name)).exists():
+            atomic_json(model_root / ('quarantined-' + candidate.name), artifact)
+    completed = _completed_cohort(model_root, [active_model, old])
+    consumed = {str(mid) for mid in completed.get('cohort_ids', [])}
+    print('training: checking qualified match cohort', flush=True)
+    progress = training_cohort_progress(root / 'ledger.sqlite3', model_root / 'inputs.sqlite3',
+                                        consumed_match_ids=consumed)
+    cohort_ids = {str(mid) for mid in progress.get('match_ids', [])}
+    frozen_labels = progress.get('qualified_labels')
+    cohort_verified = (progress.get('cohort_verified') is True and isinstance(frozen_labels, dict)
+                       and cohort_ids <= {str(mid) for mid in frozen_labels})
+    new_count = len(cohort_ids - consumed) if cohort_verified else None
+    quality = {key: value for key, value in progress.items()
+               if key not in ('match_ids', 'qualified_labels')}
     status: dict[str, Any] = {'state': 'waiting', 'checked_at': datetime.now(timezone.utc).isoformat(),
-                             'eligible_matches': len({r['match_id'] for r in rows}),
-                             'eligible_decisions': quality.get('valid_training_decisions'),
-                             'sampled_eligible_decisions': quality.get('sample_valid_training_decisions'),
-                             'eligible_decisions_scope': quality.get('counts_scope', 'full_inputs'),
-                             'eligible_matches_scope': quality.get('counts_scope', 'full_inputs'),
-                             'training_decisions': len(rows), 'new_matches': new_count, 'cycle_matches': cycle,
+                             'eligible_matches': len(cohort_ids) if cohort_verified else progress.get('eligible_matches'),
+                             'eligible_decisions': progress.get('eligible_decisions'),
+                             'sampled_eligible_decisions': None,
+                             'eligible_decisions_scope': progress.get('counts_scope'),
+                             'eligible_matches_scope': progress.get('counts_scope'),
+                             'training_decisions': None, 'new_matches': new_count, 'cycle_matches': cycle,
+                             'cohort_verified': cohort_verified, 'check_only': check_only,
+                             'last_completed_version': completed.get('candidate_version'),
+                             'completed_matches': len(consumed),
+                             'cycle_ready': cohort_verified and new_count is not None and new_count >= cycle and len(cohort_ids) >= 100,
                              'limits': limits, 'minimum_matches': 100, 'error': ''}
-    status.update(data_version=DATA_VERSION, feature_version=FEATURE_VERSION, data_quality=quality,
+    status.update(data_version=DATA_VERSION, feature_version=FEATURE_VERSION,
+                  validation_contract_version=VALIDATION_CONTRACT_VERSION, data_quality=quality,
                   old_model_quarantined=incompatible or any(model_root.glob('quarantined-*.json')))
-    if not active.exists() and old.get('version') and old.get('promotion'):
-        status.update(state='candidate', candidate_version=old['version'],
+    if approved_model(active_model):
+        status.update(state='ready', active_version=active_model.get('version'))
+    if old.get('version') and old.get('promotion'):
+        status.update(state='ready' if approved_model(active_model) and active_model.get('version') == old.get('version') else 'candidate',
+                      candidate_version=old['version'],
                       promotion_reasons=old['promotion'].get('reasons', []),
                       candidate={'version': old['version'], 'promotion': old['promotion'],
                                 'parameter_count': old.get('parameter_count'), 'architecture': old.get('architecture'),
@@ -229,7 +286,32 @@ def run(root: Path, cycle: int, cpu: int, memory: int, *, check_only: bool = Fal
                                 'calibration': old.get('calibration'),
                                 'rolling_validation': old.get('rolling_validation', [])})
     model: dict[str, Any] = {}
-    if not check_only and new_count >= cycle and status['eligible_matches'] >= 100:
+    if not check_only and status['cycle_ready']:
+        print('training: loading time-isolated dataset', flush=True)
+        quality = {}
+        cutoff = progress.get('label_cutoff') or progress.get('checked_at') or status['checked_at']
+        rows = dataset(root / 'ledger.sqlite3', model_root / 'inputs.sqlite3', audit=quality,
+                       max_per_match=TRAINING_MAX_ROWS_PER_MATCH,
+                       cohort_labels=frozen_labels, input_cutoff=str(cutoff))
+        # Freeze the cohort at the cheap probe boundary. Even when the loader
+        # transaction starts later, newly arrived matches/labels cannot be
+        # silently consumed by this training round.
+        boundary = instant(str(cutoff))
+        rows = [row for row in rows if str(row['match_id']) in cohort_ids
+                and instant(row['settled_at']) <= boundary and instant(row['at']) < boundary]
+        status['cohort_cutoff'] = cutoff
+        graded_ids = {str(row['match_id']) for row in rows if is_graded_row(row)}
+        status.update(training_decisions=len(rows), eligible_matches=len(graded_ids),
+                      eligible_decisions=quality.get('valid_training_decisions'),
+                      sampled_eligible_decisions=quality.get('sample_valid_training_decisions'),
+                      eligible_decisions_scope=quality.get('counts_scope', 'full_inputs'),
+                      eligible_matches_scope=quality.get('counts_scope', 'full_inputs'),
+                      new_matches=len(graded_ids - consumed), data_quality=quality)
+        if status['new_matches'] < cycle or len(graded_ids) < 100:
+            status['cycle_ready'] = False
+            status['cycle_reason'] = '完整曲线采样后有效比赛尚未达到训练门槛'
+            atomic_json(model_root / 'status.json', status)
+            return status
         status['state'] = 'training'
         atomic_json(model_root / 'status.json', status)
         print('training: fitting model', flush=True)
@@ -261,21 +343,45 @@ def run(root: Path, cycle: int, cpu: int, memory: int, *, check_only: bool = Fal
         model['updated_at'] = datetime.now(timezone.utc).isoformat()
         model['version'] = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
         model['limits'] = limits
+        completed_ids = consumed | graded_ids
+        model['completed_cohort_ids'] = sorted(completed_ids)
+        model['cohort_cutoff'] = cutoff
         candidate_path = model_root / ('candidate-' + model['version'] + '.json')
         atomic_json(candidate_path, model)
+        # Advance only after a complete, durable candidate exists. The data
+        # snapshot consumed here excludes inputs arriving during fitting;
+        # they remain in the projection and are counted on the next check.
+        atomic_json(model_root / 'completed-training.json', {
+            'data_version': DATA_VERSION, 'feature_version': FEATURE_VERSION,
+            'validation_contract_version': VALIDATION_CONTRACT_VERSION,
+            'candidate_version': model['version'], 'completed_at': model['updated_at'],
+            'cohort_ids': sorted(completed_ids), 'training_decisions': len(rows),
+            'approved': bool(decision.get('approved'))})
+        status.update(last_completed_version=model['version'], completed_matches=len(completed_ids),
+                      new_matches=None, pending_cohort_verified=False, cycle_ready=False)
         status['candidate'] = {'version': model['version'], 'promotion': decision,
                                'parameter_count': model.get('parameter_count'), 'architecture': model.get('architecture'),
                                'validation': model.get('validation'), 'baseline': model.get('baseline'),
                                'updated_at': model.get('updated_at'),
                                'calibration': calibration, 'rolling_validation': folds}
-        if decision['approved']:
+        if approved_model(model):
             previous_backup = backup_active_model(model_root, active)
             atomic_json(active, model)
-            status.update(state='ready', new_matches=0, promoted_version=model['version'],
+            status.update(state='ready', promoted_version=model['version'],
                           previous_active_backup=str(previous_backup) if previous_backup else None)
         else:
             status.update(state='candidate', candidate_version=model['version'],
                           promotion_reasons=decision['reasons'])
+        try:
+            remaining = training_cohort_progress(root / 'ledger.sqlite3', model_root / 'inputs.sqlite3',
+                                                consumed_match_ids=completed_ids)
+            status.update(new_matches=(len({str(mid) for mid in remaining.get('match_ids', [])} - completed_ids)
+                          if remaining.get('cohort_verified') is True else None),
+                          pending_cohort_verified=remaining.get('cohort_verified') is True,
+                          progress_checked_at=datetime.now(timezone.utc).isoformat())
+        except Exception as exc:
+            # Completion stays durable even if a later progress read fails.
+            status['progress_error'] = str(exc)
     # Independent observation loop grades persisted predictions. Training
     # must not overwrite its versioned prospective window on completion.
     atomic_json(model_root / 'status.json', status)

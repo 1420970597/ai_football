@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from core.decision_features import EXTRA_INDEX, PEERS
 from core.learned_model import FEATURES
+from core.model_validation import is_graded_row
 from core.probability_calibration import calibrate_probability, fit_logistic
 
 
@@ -40,6 +41,7 @@ def chronological_oof(
         raise ValueError('folds 与 min_training_matches 必须为正数')
     result: list[float] = []
     starts: dict[str, float] = {}
+    graded_ids: set[str] = set()
     normalized: list[dict[str, Any]] = []
     for raw in rows:
         row = dict(raw)
@@ -53,8 +55,10 @@ def chronological_oof(
         if label_at <= at:
             raise ValueError('标签早于或等于特征截点')
         starts[match_id] = min(starts.get(match_id, at), at)
+        if is_graded_row(row):
+            graded_ids.add(match_id)
         normalized.append(row)
-    ordered = sorted(starts, key=lambda mid: (starts[mid], mid))
+    ordered = sorted(graded_ids, key=lambda mid: (starts[mid], mid))
     if len(ordered) <= min_training_matches:
         return result
     warmup = max(min_training_matches, len(ordered) // 2)
@@ -71,7 +75,7 @@ def chronological_oof(
         # cost O(training_rows * validation_rows) for every peer and fold.
         cutoff = min(_timestamp(v['at']) for v in validation)
         training = [r for r in normalized if str(r['match_id']) in train_ids
-                    and _timestamp(r['settled_at']) < cutoff]
+                    and _timestamp(r['settled_at']) < cutoff and is_graded_row(r)]
         if len({str(r['match_id']) for r in training}) < min_training_matches:
             continue
         if {str(r['match_id']) for r in training} & valid_ids:
@@ -110,7 +114,7 @@ def _peer_probability(row: Mapping[str, Any], peer: str) -> float | None:
 
 def _fit_peer_calibrator(rows: Sequence[Mapping[str, Any]], peer: str) -> dict[str, Any]:
     eligible = [(row, probability) for row in rows
-                if (probability := _peer_probability(row, peer)) is not None]
+                if is_graded_row(row) and (probability := _peer_probability(row, peer)) is not None]
     return fit_logistic([probability for _, probability in eligible],
                         [int(row['y']) for row, _ in eligible])
 

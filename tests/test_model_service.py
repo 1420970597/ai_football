@@ -1,4 +1,5 @@
 from pathlib import Path
+from dataclasses import replace
 import gzip
 import json
 import sqlite3
@@ -6,11 +7,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from service.model_service import ModelService
+from service.runtime_settings import RuntimeConfig
 from store.history import HistoryJournal
 from tests.test_training_data import decision
+from tests.test_model_validation import approved_artifact
 
 
 class ModelServiceTests(unittest.TestCase):
@@ -55,7 +58,7 @@ class ModelServiceTests(unittest.TestCase):
             self.assertEqual(worker._cursor[path.name], path.stat().st_size)
             self.assertFalse(worker._inputs)
             with sqlite3.connect(Path(root)/'models'/'inputs.sqlite3') as con:
-                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0], 8)
+                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0], 20)
 
     def test_training_retains_all_qualification_counts_with_multi_decision_sample_cap(self):
         from service.model_training import TRAINING_MAX_ROWS_PER_MATCH
@@ -69,12 +72,10 @@ class ModelServiceTests(unittest.TestCase):
                          '训练进程超过 %s 秒运行上限' % TRAINING_WALL_LIMIT_S)
 
     def test_incompatible_model_clears_previously_loaded_predictions(self):
-        from core.learned_model import DATA_VERSION, FEATURES
         from service.model_training import atomic_json
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'models'/'active.json'
-            model = {'features':list(FEATURES),'weights':[0]*len(FEATURES),'version':'v',
-                     'data_version':DATA_VERSION,'feature_version':'market-offset-windows-v4','updated_at':'2024-01-01'}
+            model = approved_artifact('v', updated_at='2024-01-01T00:00:00+00:00')
             atomic_json(path,model)
             worker = ModelService()
             worker.bind(directory+'/ledger')
@@ -85,6 +86,131 @@ class ModelServiceTests(unittest.TestCase):
             self.assertFalse(worker.status()['model'])
             worker.observe(decision())
             self.assertFalse(worker._shadow)
+
+    def test_training_schedule_is_independent_of_execution_and_shadow_switches(self):
+        for mode in ('algorithm', 'model', 'hybrid'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+                worker = ModelService()
+                root = Path(directory) / 'ledger'
+                cfg = replace(RuntimeConfig(), betting_enabled=False, algorithm_alert_enabled=False,
+                              model_shadow_enabled=False, model_training_enabled=True, decision_mode=mode)
+                process = MagicMock()
+                with patch('service.model_service.subprocess.Popen', return_value=process) as spawn:
+                    worker._start_training_check(root, cfg)
+                self.assertIs(worker._process, process)
+                spawn.assert_called_once()
+                self.assertIn('service.model_training', spawn.call_args.args[0])
+
+    def test_disabled_training_does_not_schedule_worker_even_when_execution_enabled(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            worker = ModelService()
+            cfg = replace(RuntimeConfig(), betting_enabled=True, model_training_enabled=False)
+            with patch('service.model_service.subprocess.Popen') as spawn:
+                worker._start_training_check(Path(directory) / 'ledger', cfg)
+            spawn.assert_not_called()
+
+    def test_legacy_approval_cannot_be_loaded_as_active_model(self):
+        from core.learned_model import DATA_VERSION, FEATURES
+        from service.model_training import atomic_json
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            path = Path(directory) / 'models' / 'active.json'
+            model = {'features':list(FEATURES),'weights':[0]*len(FEATURES),'version':'legacy',
+                     'data_version':DATA_VERSION,'feature_version':'market-offset-windows-v4',
+                     'updated_at':'2024-01-01T00:00:00+00:00','promotion':{'approved':True}}
+            atomic_json(path, model)
+            worker = ModelService()
+            worker.bind(str(Path(directory) / 'ledger'))
+            status = worker.status()
+            self.assertFalse(status['decision_model_available'])
+            self.assertFalse(status['model'])
+            self.assertIn('验证契约', status['training']['error'])
+            self.assertEqual(json.loads(path.read_text()), model)
+
+    def test_new_unapproved_candidate_is_available_only_for_shadow(self):
+        from core.learned_model import DATA_VERSION, FEATURES
+        from core.model_validation import VALIDATION_CONTRACT_VERSION
+        from service.model_training import atomic_json
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            model = {'features':list(FEATURES),'weights':[0]*len(FEATURES),'version':'shadow-v1',
+                     'data_version':DATA_VERSION,'feature_version':'market-offset-windows-v4',
+                     'updated_at':'2024-01-01T00:00:00+00:00',
+                     'validation_contract_version':VALIDATION_CONTRACT_VERSION,
+                     'promotion':{'approved':False}}
+            atomic_json(Path(directory) / 'models' / 'candidate-shadow.json', model)
+            worker = ModelService()
+            worker.bind(str(Path(directory) / 'ledger'))
+            status = worker.status()
+            self.assertTrue(status['shadow']['available'])
+            self.assertEqual(status['shadow']['version'], 'shadow-v1')
+            self.assertFalse(status['decision_model_available'])
+
+    def test_shadow_evaluation_retains_separate_unit_return_summary_per_version(self):
+        from service.model_service import hashlib_version
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            worker = ModelService()
+            worker.bind(str(Path(directory) / 'ledger'))
+            for version, net in (('v1', -1.0), ('v2', 0.9)):
+                worker._shadow_model = {'version':version}
+                worker._next_evaluation = 0.
+                result = {'version':version,'unit_stake':{'stake':1.0,'net':net}}
+                with patch('service.model_service.prospective_metrics', return_value=result):
+                    worker._evaluate_shadow()
+            for version, net in (('v1', -1.0), ('v2', 0.9)):
+                path = Path(directory) / 'models' / ('shadow-metrics-' + hashlib_version(version) + '.json')
+                self.assertEqual(json.loads(path.read_text())['unit_stake']['net'], net)
+
+    def test_historical_shadow_keeps_grading_after_candidate_switch_without_replacing_live_summary(self):
+        from service.model_service import hashlib_version
+        from service.model_training import atomic_json
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            model_root = root / 'models'
+            old = approved_artifact('v1', promotion={'approved': False})
+            current = approved_artifact('v2', promotion={'approved': False},
+                                        updated_at='2025-01-02T00:00:00+00:00')
+            atomic_json(model_root / 'candidate-v1.json', old)
+            atomic_json(model_root / 'candidate-v2.json', current)
+            legacy = {**old, 'version':'legacy', 'validation_contract_version':'obsolete'}
+            atomic_json(model_root / 'candidate-legacy.json', legacy)
+            worker = ModelService()
+            worker.bind(str(root / 'ledger'))
+            worker._shadow_model = current
+            worker._live_metrics = {'version':'v2', 'counts': {'pending':1}}
+            before = dict(worker._live_metrics)
+            first = {'version':'v1', 'status':'waiting', 'counts':{'pending':1},
+                     'unit_stake':{'stake':0, 'net':0}}
+            second = {'version':'v1', 'status':'ready', 'counts':{'settled':1},
+                      'unit_stake':{'stake':1, 'net':.9}}
+            with patch('service.model_service.prospective_metrics', side_effect=[first, second]) as evaluate:
+                worker._evaluate_historical_shadow()
+                worker._next_historical_evaluation = 0.
+                worker._evaluate_historical_shadow()
+            self.assertEqual(evaluate.call_count, 2)
+            self.assertTrue(all(call.args[2]['version'] == 'v1' for call in evaluate.call_args_list))
+            self.assertEqual(worker._live_metrics, before)
+            summary = json.loads((model_root / ('shadow-metrics-' + hashlib_version('v1') + '.json')).read_text())
+            self.assertEqual(summary['unit_stake']['net'], .9)
+            self.assertEqual(summary['summary_schema_version'], 'versioned-shadow-metrics-v1')
+            self.assertEqual(worker.status()['shadow']['historical_evaluation']['versions'], 1)
+            self.assertEqual(json.loads((model_root / 'candidate-legacy.json').read_text()), legacy)
+
+    def test_historical_shadow_refresh_is_bounded_to_one_version_per_cycle(self):
+        from service.model_training import atomic_json
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            for version in ('v1', 'v2', 'v3'):
+                atomic_json(root / 'models' / ('candidate-' + version + '.json'),
+                            approved_artifact(version, promotion={'approved': False}))
+            worker = ModelService()
+            worker.bind(str(root / 'ledger'))
+            worker._shadow_model = {'version':'v3'}
+            with patch('service.model_service.prospective_metrics', return_value={'status':'waiting'}) as evaluate:
+                worker._evaluate_historical_shadow()
+                worker._evaluate_historical_shadow()
+                self.assertEqual(evaluate.call_count, 1)
+                worker._next_historical_evaluation = 0.
+                worker._evaluate_historical_shadow()
+            self.assertEqual([call.args[2]['version'] for call in evaluate.call_args_list], ['v1', 'v2'])
 
     def test_api_does_not_import_train_or_inference_or_launch_worker(self):
         result = subprocess.run([sys.executable, '-c',
@@ -122,7 +248,7 @@ class ModelServiceTests(unittest.TestCase):
             self.assertEqual(other._cursor,worker._cursor)
             import sqlite3
             with sqlite3.connect(Path(root)/'models'/'inputs.sqlite3') as con:
-                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0],16)
+                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0],40)
 
     def test_recent_replay_is_consumed_before_large_historical_backlog(self):
         with tempfile.TemporaryDirectory() as root:
@@ -140,9 +266,9 @@ class ModelServiceTests(unittest.TestCase):
             worker._consume_replay()
             self.assertEqual(worker._cursor, {recent.name: recent.stat().st_size})
             self.assertEqual(worker._replay_stats['last_file'], recent.name)
-            self.assertEqual(worker._replay_stats['last_batch_inputs'], 8)
+            self.assertEqual(worker._replay_stats['last_batch_inputs'], 20)
             with sqlite3.connect(Path(root) / 'models' / 'inputs.sqlite3') as con:
-                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0], 8)
+                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0], 20)
 
     def test_replay_reloads_cursor_after_repaired_gzip_replacement(self):
         from service.model_training import atomic_json

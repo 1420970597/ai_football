@@ -4,13 +4,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from core.learned_model import DATA_VERSION, FEATURES
-from core.decision_features import FEATURE_VERSION
+from core.learned_model import FEATURES
 from service.live_expert import LiveExpertService
 from service.model_service import ModelService
 from service.model_training import atomic_json
 from service.runtime_settings import RuntimeConfig, RuntimeSettings, validated
 from tests import test_live_expert
+from tests.test_model_validation import approved_artifact
 
 
 class LearnedDecisionTests(unittest.TestCase):
@@ -28,11 +28,7 @@ class LearnedDecisionTests(unittest.TestCase):
              'tail': 0., 'training_history': []}
             for (line, outcome), probability in zip(
                 [('2.5', 'over'), ('2.5', 'under'), ('3.5', 'over'), ('3.5', 'under')], algorithm)]
-        model = {'version': 'projection-test', 'data_version': DATA_VERSION,
-                 'feature_version': FEATURE_VERSION, 'features': list(FEATURES),
-                 'weights': [0.] * len(FEATURES),
-                 'updated_at': '2025-01-01T00:00:00+00:00',
-                 'promotion': {'approved': True}}
+        model = approved_artifact('projection-test')
         expected = coherent_probabilities(candidates, learned)
         self.assertEqual([round(p, 6) for p in expected], [.55, .45, .55, .45])
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
@@ -72,10 +68,7 @@ class LearnedDecisionTests(unittest.TestCase):
             (root/'models').mkdir()
             weights = [0.] * len(FEATURES)
             weights[0] = 2
-            model = {'version':'test','data_version':DATA_VERSION,'features':list(FEATURES),
-                     'weights':weights,'updated_at':'2025-01-01T00:00:00+00:00',
-                     'feature_version':FEATURE_VERSION,
-                     'validation':{'brier':.1},'baseline':{'brier':.2},'promotion':{'approved':True}}
+            model = approved_artifact('test', weights=weights)
             atomic_json(root/'models'/'active.json', model)
             hub = test_live_expert.LiveExpertTests().hub()
             svc = LiveExpertService()
@@ -103,3 +96,15 @@ class LearnedDecisionTests(unittest.TestCase):
         self.assertFalse(row['ensemble']['model_application']['applied'])
         self.assertEqual([c['p_model'] for c in row['ensemble']['candidates']],
                          [c['p_model'] for c in row['baseline_ensemble']['candidates']])
+
+    def test_actual_loader_rejects_legacy_approval_and_retains_artifact(self):
+        from core.learned_decision import _load
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            path = Path(directory) / 'legacy.json'
+            model = approved_artifact()
+            model.pop('validation_contract_version')
+            atomic_json(path, model)
+            stat = path.stat()
+            with self.assertRaisesRegex(ValueError, '验证契约'):
+                _load(str(path), (stat.st_mtime_ns, stat.st_ino, stat.st_size))
+            self.assertTrue(path.exists())

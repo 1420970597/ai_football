@@ -10,6 +10,8 @@ EPS = 1e-6
 
 
 def _logit(p: float) -> float:
+    if not math.isfinite(float(p)) or not 0 <= float(p) <= 1:
+        raise ValueError('校准概率必须为有限的0至1数值')
     p = min(1 - EPS, max(EPS, float(p)))
     return math.log(p / (1 - p))
 
@@ -17,6 +19,7 @@ def _logit(p: float) -> float:
 def calibrate_probability(p: float, calibration: Mapping[str, Any] | None) -> float:
     """Apply a logistic slope/intercept, or identity when unavailable."""
     if not calibration or calibration.get('method') in (None, 'identity'):
+        _logit(p)
         return min(1 - EPS, max(EPS, float(p)))
     if calibration.get('method') != 'logistic':
         raise ValueError('未知概率校准方法')
@@ -39,12 +42,12 @@ def fit_logistic(probs: Sequence[float], outcomes: Sequence[int], *, epochs: int
     """
     if len(probs) != len(outcomes):
         raise ValueError('校准输入长度不一致')
-    if len(probs) < MIN_SAMPLES or len(set(int(y) for y in outcomes)) < 2:
-        return {'method': 'identity', 'samples': len(probs), 'reason': '样本不足或标签单一'}
+    if any(y not in (0, 1) for y in outcomes):
+        raise ValueError('校准标签必须为0或1')
     xs = [_logit(float(p)) for p in probs]
     ys = [int(y) for y in outcomes]
-    if any(y not in (0, 1) for y in ys):
-        raise ValueError('校准标签必须为0或1')
+    if len(probs) < MIN_SAMPLES or len(set(ys)) < 2:
+        return {'method': 'identity', 'samples': len(probs), 'reason': '样本不足或标签单一'}
     slope, intercept = 1.0, 0.0
     for _ in range(max(1, int(epochs))):
         g0 = g1 = h00 = h01 = h11 = 0.0

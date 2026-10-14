@@ -18,7 +18,8 @@ from typing import Any
 from typing import Iterator
 import zlib
 
-from core.learned_model import FEATURES, compatible_model, predict
+from core.learned_model import (FEATURES, approved_model, compatible_model,
+                                model_compatibility_reason, predict)
 from service.runtime_settings import RuntimeConfig, validated
 from service.model_training import atomic_json
 
@@ -45,6 +46,8 @@ PERSIST_BATCH_PREDICTIONS = 8192
 PERSIST_BATCH_BYTES = 8 * 1024 * 1024
 LIVE_OUTBOX_MAX_BYTES = 1024 * 1024 * 1024
 TRAINING_WALL_LIMIT_S = int(os.environ.get('MODEL_TRAINING_WALL_LIMIT_S', '3600'))
+TRAINING_CHECK_INTERVAL_S = 60
+HISTORICAL_SHADOW_EVALUATION_INTERVAL_S = 60
 
 
 def hashlib_version(version: str) -> str:
@@ -148,6 +151,9 @@ class ModelService:
         self._candidate_cache: dict[str, tuple[tuple[int, int, int], dict[str, Any]]] = {}
         self._evaluation_state: dict[str, Any] = {}
         self._next_evaluation = 0.0
+        self._next_historical_evaluation = 0.0
+        self._historical_evaluation: dict[str, Any] = {'versions': 0, 'evaluated_versions': 0}
+        self._historical_version = ''
         self._storage: dict[str, Any] = {}
         self._shadow: dict[tuple[Any, ...], dict[str, Any]] = {}
         self._inputs: list[dict[str, Any]] = []
@@ -182,6 +188,9 @@ class ModelService:
             self._shadow_info = {}
             self._candidate_cache = {}
             self._evaluation_state = {}
+            self._next_historical_evaluation = 0.
+            self._historical_evaluation = {'versions': 0, 'evaluated_versions': 0}
+            self._historical_version = ''
             self._read_times.clear()
             self._live_metrics.clear()
             self._shadow.clear()
@@ -241,9 +250,9 @@ class ModelService:
                     if not isinstance(data, dict):
                         raise ValueError('无效模型元数据')
                     if target == '_model':
-                        if not compatible_model(data):
+                        if not approved_model(data):
                             self._model = {}
-                            raise ValueError('模型训练数据版本未通过核验')
+                            raise ValueError(model_compatibility_reason(data, require_approval=True))
                         predict(data['weights'], [0.0]*len(FEATURES))
                     setattr(self, target, data)
                     self._read_times[filename] = signature
@@ -277,7 +286,7 @@ class ModelService:
                         self._candidate_cache.pop(next(iter(self._candidate_cache)))
                     self._candidate_cache[str(path)] = (signature,data)
                 if not isinstance(data, dict) or not compatible_model(data):
-                    raise ValueError('模型训练数据版本未通过核验')
+                    raise ValueError(model_compatibility_reason(data) if isinstance(data, dict) else '无效模型元数据')
                 predict(data['weights'], [0.0]*len(FEATURES))
                 at = datetime.fromisoformat(data['updated_at'])
                 if at.tzinfo is None:
@@ -314,6 +323,7 @@ class ModelService:
             shadow = deepcopy(self._shadow_info)
             shadow['enabled'] = self.cfg.model_shadow_enabled
             shadow['live'] = dict(self._live_stats)
+            shadow['historical_evaluation'] = deepcopy(self._historical_evaluation)
             shadow['performance'] = {'scope':'live_lane_recent_process_samples','sample_limit':PERFORMANCE_SAMPLE_LIMIT,
                 'version':self._shadow_model.get('version'),'samples':len(self._performance_samples),
                 'persist_batches':len(self._persist_samples),'updated_at':datetime.now(timezone.utc).isoformat(),
@@ -339,9 +349,7 @@ class ModelService:
                                  'memory_mb': self.cfg.model_training_memory_mb},
                     'mode': 'shadow' if self.cfg.model_shadow_enabled else 'active', 'running': bool(self._thread and self._thread.is_alive()),
                     'decision_mode': self.cfg.decision_mode,
-                    'decision_model_available': bool(self._model and
-                        isinstance(self._model.get('promotion'), dict) and
-                        self._model['promotion'].get('approved') is True),
+                    'decision_model_available': approved_model(self._model),
                     'prospective': prospective, 'shadow': shadow,
                     'note': '独立模型服务负责训练与观察预测；实时决策模式独立选择纯算法、纯决策模型或混合。纯模型是当前盘口offset与算法特征训练模型的输出，不进行额外算法加权。模型或混合模式缺少已晋级模型时不可用。保留各算法、盘口、盘口线、方向和决策时点；按比赛分组、等权训练。走势特征冻结在决策输入截点。'}
 
@@ -448,11 +456,12 @@ class ModelService:
             result = prospective_metrics(root / 'ledger.sqlite3', root.parent / 'models' / 'shadow.sqlite3',
                                          model, state=state)
             with self._lock:
-                if self.root != root or self._shadow_model.get('version') != model['version']:
+                if self.root != root:
                     return
             # The large rolling window is version-specific; its serialization
             # must not block the live lane's metadata/prediction lock.
             atomic_json(state_path, state)
+            self._persist_shadow_summary(root, model, result)
             with self._lock:
                 if self.root != root or self._shadow_model.get('version') != model['version']:
                     return
@@ -468,6 +477,66 @@ class ModelService:
                     return
                 self._live_metrics = {'version': model['version'], 'status':'error', 'reason': str(exc)}
                 self._next_evaluation = time.monotonic()+30
+
+    @staticmethod
+    def _persist_shadow_summary(root: Path, model: dict[str, Any], result: dict[str, Any]) -> None:
+        atomic_json(root.parent / 'models' / ('shadow-metrics-' + hashlib_version(model['version']) + '.json'), {
+            **result, 'version': model['version'], 'summary_schema_version': 'versioned-shadow-metrics-v1',
+            'data_version': model.get('data_version'),
+            'validation_contract_version': model.get('validation_contract_version'),
+            'evaluated_at': datetime.now(timezone.utc).isoformat()})
+
+    def _evaluate_historical_shadow(self) -> None:
+        """Refresh one compatible historical version per bounded cycle.
+
+        A newer candidate does not stop settlement of predictions made by a
+        prior candidate. Historical results have separate windows/summaries
+        and never replace the current version displayed by the live route.
+        """
+        with self._lock:
+            if self.root is None or time.monotonic() < self._next_historical_evaluation:
+                return
+            root, current_version = self.root, self._shadow_model.get('version')
+            self._next_historical_evaluation = time.monotonic() + HISTORICAL_SHADOW_EVALUATION_INTERVAL_S
+        model_root = root.parent / 'models'
+        models: dict[str, dict[str, Any]] = {}
+        for path in sorted(model_root.glob('candidate-*.json')) + sorted(model_root.glob('active-backup-*.json')):
+            try:
+                model = json.loads(path.read_text(encoding='utf-8'))
+                if (not isinstance(model, dict) or not compatible_model(model)
+                        or model.get('version') == current_version):
+                    continue
+                available = datetime.fromisoformat(model['updated_at'])
+                if available.tzinfo is None or available > datetime.now(timezone.utc):
+                    continue
+                predict(model['weights'], [0.0] * len(FEATURES))
+                models[str(model['version'])] = model
+            except (OSError, ValueError, TypeError, KeyError):
+                continue
+        versions = sorted(models)
+        summaries = sum((model_root / ('shadow-metrics-' + hashlib_version(version) + '.json')).exists()
+                        for version in versions)
+        with self._lock:
+            self._historical_evaluation.update(versions=len(versions), evaluated_versions=summaries,
+                interval_s=HISTORICAL_SHADOW_EVALUATION_INTERVAL_S,
+                scope='one compatible historical version per cycle; pending outcomes remain pending')
+        if not versions:
+            return
+        version = next((item for item in versions if item > self._historical_version), versions[0])
+        self._historical_version = version
+        state_path = model_root / ('shadow-window-' + hashlib_version(version) + '.json')
+        try:
+            state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {}
+            result = prospective_metrics(root / 'ledger.sqlite3', model_root / 'shadow.sqlite3', models[version], state=state)
+            atomic_json(state_path, state)
+            self._persist_shadow_summary(root, models[version], result)
+            with self._lock:
+                self._historical_evaluation.update(last_version=version,
+                    last_evaluated_at=datetime.now(timezone.utc).isoformat(),
+                    last_status=result.get('status'), last_counts=deepcopy(result.get('counts', {})), error='')
+        except Exception as exc:
+            with self._lock:
+                self._historical_evaluation.update(last_version=version, error=str(exc))
 
     def start(self) -> None:
         if self.root is None or self._thread and self._thread.is_alive():
@@ -982,6 +1051,7 @@ class ModelService:
                 self._consume_replay()
                 self._flush_inputs()
                 self._evaluate_shadow()
+                self._evaluate_historical_shadow()
                 self._publish()
                 with self._lock:
                     cfg, root, process = self.cfg, self.root, self._process
@@ -1005,7 +1075,7 @@ class ModelService:
                                     training_log=str(self._process_log_path or ''))
                             self._process = None
                             self._process_log_path = None
-                            next_check = 0 if self._retry_requested else time.monotonic() + 60
+                            next_check = 0 if self._retry_requested else time.monotonic() + TRAINING_CHECK_INTERVAL_S
                             self._retry_requested = False
                 if time.monotonic() >= next_check:
                     root.parent.mkdir(parents=True, exist_ok=True)
@@ -1016,19 +1086,8 @@ class ModelService:
                     with self._lock:
                         self._read()
                         cfg = self.cfg
-                        if cfg.model_training_enabled and self._process is None and not self._stop.is_set():
-                            log_stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-                            self._process_log_path = root.parent / 'models' / ('training-' + log_stamp + '.log')
-                            with self._process_log_path.open('a', encoding='utf-8') as training_log:
-                                training_log.write('training process started at ' + datetime.now(timezone.utc).isoformat() + '\n')
-                                training_log.flush()
-                                self._process = subprocess.Popen([sys.executable, '-u', '-m', 'service.model_training',
-                                    str(root.resolve()), str(cfg.model_training_matches), str(cfg.model_training_cpu),
-                                    str(cfg.model_training_memory_mb)], stdout=training_log,
-                                    stderr=subprocess.STDOUT)
-                            self._process_started = time.monotonic()
-                            self._status = {**self._status, 'state': 'checking'}
-                    next_check = time.monotonic() + 60
+                        self._start_training_check(root, cfg)
+                    next_check = time.monotonic() + TRAINING_CHECK_INTERVAL_S
             except Exception as exc:
                 with self._lock:
                     self._status.update(state='failed', error=str(exc))
@@ -1039,7 +1098,7 @@ class ModelService:
                     self._publish()
                 except Exception:
                     pass
-                next_check = time.monotonic() + 60
+                next_check = time.monotonic() + TRAINING_CHECK_INTERVAL_S
             self._stop.wait(1)
             if self._wake.is_set():
                 self._wake.clear()
@@ -1049,6 +1108,28 @@ class ModelService:
         except Exception as exc:
             with self._lock:
                 self._status.update(state='failed', error='模型输入保存失败: ' + str(exc))
+
+    def _start_training_check(self, root: Path, cfg: RuntimeConfig) -> None:
+        """Schedule learning using its own switch, independent of execution.
+
+        The child checks a cheap qualified-match cohort before loading any
+        feature dataset. Neither betting, decision mode nor shadow recording
+        gates the training clock.
+        """
+        if not cfg.model_training_enabled or self._process is not None or self._stop.is_set():
+            return
+        model_root = root.parent / 'models'
+        model_root.mkdir(parents=True, exist_ok=True)
+        log_stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+        self._process_log_path = model_root / ('training-' + log_stamp + '.log')
+        with self._process_log_path.open('a', encoding='utf-8') as training_log:
+            training_log.write('training process started at ' + datetime.now(timezone.utc).isoformat() + '\n')
+            training_log.flush()
+            self._process = subprocess.Popen([sys.executable, '-u', '-m', 'service.model_training',
+                str(root.resolve()), str(cfg.model_training_matches), str(cfg.model_training_cpu),
+                str(cfg.model_training_memory_mb)], stdout=training_log, stderr=subprocess.STDOUT)
+        self._process_started = time.monotonic()
+        self._status = {**self._status, 'state': 'checking'}
 
     @staticmethod
     def _process_exit_error(code: int, timed_out: bool) -> str:

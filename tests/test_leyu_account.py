@@ -497,6 +497,22 @@ class LeyuDailyProfitTests(unittest.TestCase):
         with patch.object(client, '_venue_request', return_value={'data': []}):
             self.assertFalse(client._fetch_venue_records(1)['total_known'])
 
+    def test_venue_records_retry_transient_disconnect_without_replaying_debits(self):
+        client = self.client()
+        response = {'total': 1, 'data': [self.row('one')]}
+        with patch.object(client, '_venue_request', side_effect=[BetPreflightRetryable('断连'), response]) as request:
+            result = client._fetch_venue_records(1)
+        self.assertEqual(result['count'], 1)
+        self.assertEqual(request.call_count, 2)
+
+    def test_detail_bet_number_is_a_valid_pnl_identity_when_parent_order_is_missing(self):
+        item = _normalise_venue_record({'detailList': [{'betNo': 'detail-1', 'settleTime': self.at * 1000,
+                                                        'profitAmount': '1.25'}]}, 'settled')
+        self.assertEqual(item['order_no'], 'detail-1')
+        result = _daily_profit([item], self.at)
+        self.assertTrue(result['available'])
+        self.assertEqual(result['amount'], 1.25)
+
     def test_pagination_includes_today_settlement_after_first_hundred_orders(self):
         client = self.client()
         first = self.page([self.row(str(i), 1, '2026-10-09') for i in range(100)], 101, True)
@@ -544,6 +560,271 @@ class LeyuDailyProfitTests(unittest.TestCase):
             result = client.fetch()
         self.assertEqual(result['today_pnl']['amount'], .82)
         self.assertEqual(result['today_pnl']['settled_count'], 1)
+
+
+class LeyuBudgetTests(unittest.TestCase):
+    def test_native_budget_requires_complete_pagination_and_does_not_submit(self):
+        client = LeyuAccountClient.__new__(LeyuAccountClient)
+        first = {'count': 2, 'total_known': True, 'items': [
+            {'order_no': 'one', 'match_id': 'm', 'amount': 2}]}
+        with patch.object(client, '_fetch_venue_account', return_value={
+                'sports_balance': 100, 'unsettled': first}), patch.object(client, '_fetch_venue_records',
+                return_value={'count': 2, 'total_known': True, 'items': [
+                    {'order_no':'two','match_id':'m','amount':2}]}), patch.object(client,'submit_bet') as submit:
+            budget = client.fetch_betting_budget()
+        self.assertTrue(budget['complete'])
+        self.assertEqual(len(budget['unsettled']), 2)
+        submit.assert_not_called()
+
+    def test_missing_wallet_or_changing_totals_is_not_complete(self):
+        client = LeyuAccountClient.__new__(LeyuAccountClient)
+        for value in ({'sports_balance':None,'unsettled':{'count':0,'total_known':True,'items':[]}},
+                      {'sports_balance':100,'unsettled':{'count':2,'total_known':True,'items':[]}}):
+            with patch.object(client, '_fetch_venue_account', return_value=value), patch.object(client,
+                    '_fetch_venue_records', return_value={'count':3,'total_known':True,'items':[{}]}):
+                self.assertFalse(client.fetch_betting_budget()['complete'])
+
+    def test_settled_diagnostics_do_not_add_synchronous_pagination_or_invalidate_funds(self):
+        client = LeyuAccountClient.__new__(LeyuAccountClient)
+        receipts = LeyuSettledReceiptTests.receipts(100)
+        venue = {'sports_balance': 100, 'unsettled': {'count': 0, 'total_known': True, 'items': []},
+                 'settled': LeyuSettledReceiptTests.page(receipts, 301)}
+        with patch.object(client, '_fetch_venue_account', return_value=venue), \
+                patch.object(client, '_fetch_venue_records') as query, \
+                patch.object(client, 'fetch_settled_receipts') as scan:
+            result = client.fetch_betting_budget()
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['settled_receipts_status'], 'partial')
+        self.assertFalse(result['settled_receipts_complete'])
+        self.assertEqual(result['settled_receipts_counted'], 100)
+        self.assertEqual(result['settled_receipts_total'], 301)
+        self.assertEqual(result['settled_receipts'], receipts)
+        query.assert_not_called()
+        scan.assert_not_called()
+
+    def test_settled_page_failure_preserves_valid_budget_and_reports_partial(self):
+        for error in (SessionError('offline'), TimeoutError('offline')):
+            client = LeyuAccountClient.__new__(LeyuAccountClient)
+            unsettled = {'count': 0, 'total_known': True, 'items': [], 'source': 'leyu_ybty',
+                         'status': 'unsettled', 'has_more': False}
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(client, '_venue_read', return_value={'amount': 100}), \
+                    patch.object(client, '_fetch_venue_records', side_effect=[unsettled, error]):
+                result = client.fetch_betting_budget()
+            self.assertTrue(result['complete'])
+            self.assertEqual(result['settled_receipts_status'], 'partial')
+            self.assertFalse(result['settled_receipts_complete'])
+            self.assertEqual(result['settled_receipts'], [])
+            self.assertIsNone(result['settled_receipts_total'])
+
+    def test_invalid_settled_neighbours_cannot_release_and_do_not_block_valid_funds(self):
+        client = LeyuAccountClient.__new__(LeyuAccountClient)
+        good = LeyuSettledReceiptTests.receipts(1)[0]
+        bad = [{**good, 'order_no': None}, {**good, 'source': 'leyu_app'},
+               {**good, 'status': 'unsettled'}, 'bad row']
+        venue = {'sports_balance': 100, 'unsettled': {'count': 0, 'total_known': True, 'items': []},
+                 'settled': LeyuSettledReceiptTests.page([good, *bad], 5, more=False)}
+        with patch.object(client, '_fetch_venue_account', return_value=venue):
+            result = client.fetch_betting_budget()
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['settled_receipts'], [good])
+        self.assertEqual(result['settled_receipts_counted'], 1)
+        self.assertEqual(result['settled_receipts_status'], 'partial')
+
+    def test_complete_empty_settled_page_is_distinct_from_unknown(self):
+        client = LeyuAccountClient.__new__(LeyuAccountClient)
+        venue = {'sports_balance': 100, 'unsettled': {'count': 0, 'total_known': True, 'items': []},
+                 'settled': LeyuSettledReceiptTests.page([], 0, more=False)}
+        with patch.object(client, '_fetch_venue_account', return_value=venue):
+            result = client.fetch_betting_budget()
+        self.assertTrue(result['complete'])
+        self.assertTrue(result['settled_receipts_complete'])
+        self.assertEqual(result['settled_receipts_status'], 'complete')
+        self.assertEqual(result['settled_receipts_counted'], 0)
+        self.assertEqual(result['settled_receipts_total'], 0)
+
+
+class LeyuSettledReceiptTests(unittest.TestCase):
+    @staticmethod
+    def receipts(count, start=0):
+        return [{'order_no': 'order-' + str(index), 'source': 'leyu_ybty', 'status': 'settled'}
+                for index in range(start, start + count)]
+
+    @staticmethod
+    def page(items, total, *, more=None):
+        return {'source': 'leyu_ybty', 'status': 'settled', 'count': total,
+                'total_known': True, 'has_more': total > 100 if more is None else more,
+                'items': items}
+
+    def test_native_receipt_after_first_hundred_is_available_without_debits(self):
+        client = LeyuAccountClient.__new__(LeyuAccountClient)
+        pages = [self.page(self.receipts(100), 101),
+                 self.page(self.receipts(1, 100), 101, more=False)]
+        with patch.object(client, '_fetch_venue_records', side_effect=pages) as query, \
+                patch.object(client, 'submit_bet') as submit:
+            result = client.fetch_settled_receipts()
+        self.assertEqual([call.kwargs['page'] for call in query.call_args_list], [1, 2])
+        self.assertEqual(result['items'][-1]['order_no'], 'order-100')
+        self.assertEqual(result['counted'], 101)
+        self.assertEqual(result['batch_counted'], 101)
+        self.assertEqual(result['total'], 101)
+        self.assertTrue(result['complete'])
+        self.assertTrue(result['scan_reached_end'])
+        self.assertEqual(result['next_page'], 1)
+        submit.assert_not_called()
+
+    def test_over_three_hundred_receipts_continue_across_bounded_refreshes(self):
+        client = LeyuAccountClient.__new__(LeyuAccountClient)
+        def query_page(_flag, *, page):
+            begin = (page - 1) * 100
+            return self.page(self.receipts(min(100, 351 - begin), begin), 351, more=page < 4)
+        with patch.object(client, '_fetch_venue_records', side_effect=query_page) as query:
+            first = client.fetch_settled_receipts()
+            self.assertEqual(query.call_count, 2)
+            second = client.fetch_settled_receipts()
+            self.assertEqual(query.call_count, 4)
+            third = client.fetch_settled_receipts()
+        self.assertEqual([call.kwargs['page'] for call in query.call_args_list], [1, 2, 3, 4, 1, 2])
+        self.assertEqual(first['next_page'], 3)
+        self.assertEqual(first['counted'], 200)
+        self.assertEqual(first['status'], 'partial')
+        self.assertEqual(second['items'][-1]['order_no'], 'order-350')
+        self.assertEqual(second['counted'], 351)
+        self.assertEqual(second['batch_counted'], 151)
+        self.assertTrue(second['scan_reached_end'])
+        self.assertFalse(second['complete'])
+        self.assertEqual(second['reason'], 'multi_refresh_snapshot')
+        self.assertEqual(second['next_page'], 1)
+        self.assertEqual(third['counted'], 200)
+        self.assertLessEqual(len(client._settled_receipts_cursor['previous_ids']), 100)
+
+    def test_nonadjacent_duplicate_after_three_hundred_cannot_certify_complete(self):
+        client = LeyuAccountClient.__new__(LeyuAccountClient)
+        pages = [self.page(self.receipts(100), 351),
+                 self.page(self.receipts(100, 100), 351),
+                 self.page(self.receipts(100), 351),
+                 self.page(self.receipts(51, 300), 351, more=False)]
+        with patch.object(client, '_fetch_venue_records', side_effect=pages):
+            first = client.fetch_settled_receipts()
+            last = client.fetch_settled_receipts()
+        self.assertFalse(first['complete'])
+        self.assertEqual(last['counted'], 351)
+        self.assertTrue(last['scan_reached_end'])
+        self.assertFalse(last['complete'])
+        self.assertEqual(last['status'], 'partial')
+        self.assertEqual(last['reason'], 'multi_refresh_snapshot')
+
+    def test_count_drift_keeps_authoritative_receipts_and_restarts_scan(self):
+        client = LeyuAccountClient.__new__(LeyuAccountClient)
+        pages = [self.page(self.receipts(100), 301),
+                 self.page(self.receipts(100, 100), 301),
+                 self.page(self.receipts(100, 200), 302)]
+        with patch.object(client, '_fetch_venue_records', side_effect=pages) as query:
+            client.fetch_settled_receipts()
+            changed = client.fetch_settled_receipts()
+        self.assertEqual(query.call_count, 3)
+        self.assertEqual(changed['status'], 'partial')
+        self.assertEqual(changed['reason'], 'count_changed')
+        self.assertEqual(changed['total'], 302)
+        self.assertEqual(len(changed['items']), 100)
+        self.assertEqual(changed['next_page'], 1)
+        self.assertEqual(client._settled_receipts_cursor, {})
+
+    def test_duplicate_empty_or_missing_identifier_pages_are_partial(self):
+        first = self.page(self.receipts(100), 101)
+        for last, reason in ((self.page(self.receipts(1), 101, more=False), 'duplicate_receipt'),
+                             (self.page([], 101, more=False), 'empty_page'),
+                             (self.page([{'source': 'leyu_ybty', 'status': 'settled'}], 101,
+                                        more=False), 'invalid_receipt')):
+            client = LeyuAccountClient.__new__(LeyuAccountClient)
+            with self.subTest(reason=reason), \
+                    patch.object(client, '_fetch_venue_records', side_effect=[first, last]):
+                result = client.fetch_settled_receipts()
+            self.assertFalse(result['complete'])
+            self.assertEqual(result['status'], 'partial')
+            self.assertEqual(result['reason'], reason)
+            self.assertEqual(result['next_page'], 1)
+            self.assertEqual(result['items'], first['items'])
+
+    def test_repeated_page_across_refresh_boundary_is_partial(self):
+        client = LeyuAccountClient.__new__(LeyuAccountClient)
+        pages = [self.page(self.receipts(100), 301),
+                 self.page(self.receipts(100, 100), 301),
+                 self.page(self.receipts(100, 100), 301)]
+        with patch.object(client, '_fetch_venue_records', side_effect=pages):
+            client.fetch_settled_receipts()
+            result = client.fetch_settled_receipts()
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['reason'], 'duplicate_receipt')
+        self.assertEqual(result['next_page'], 1)
+
+    def test_unknown_total_and_invalid_rows_keep_only_independent_native_receipts(self):
+        good = self.receipts(1)[0]
+        malformed = [None, [], {'source': 'leyu_ybty', 'status': 'settled', 'count': 1,
+                                'total_known': True, 'items': None}]
+        for page in [*malformed, {**self.page([good], 1, more=False), 'total_known': False},
+                     self.page([good, good], 2, more=False),
+                     self.page([good, {**good, 'order_no': 'wrong', 'source': 'leyu_app'},
+                                {**good, 'order_no': 'open', 'status': 'unsettled'}, 3], 4, more=False)]:
+            client = LeyuAccountClient.__new__(LeyuAccountClient)
+            with self.subTest(page=page), patch.object(client, '_fetch_venue_records', return_value=page) as query:
+                result = client.fetch_settled_receipts()
+            self.assertFalse(result['complete'])
+            self.assertEqual(result['status'], 'partial')
+            self.assertEqual(result['next_page'], 1)
+            self.assertEqual(query.call_count, 1)
+            self.assertEqual(result['items'], [] if page in malformed else [good])
+
+    def test_timeout_or_session_failure_preserves_valid_first_page_and_retries_cursor(self):
+        for error in (SessionError('offline secret'), TimeoutError('offline secret')):
+            client = LeyuAccountClient.__new__(LeyuAccountClient)
+            first = self.page(self.receipts(100), 101)
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(client, '_fetch_venue_records', side_effect=[first, error]) as query:
+                result = client.fetch_settled_receipts()
+            self.assertEqual(query.call_count, 2)
+            self.assertEqual(result['items'], first['items'])
+            self.assertEqual(result['counted'], 100)
+            self.assertFalse(result['complete'])
+            self.assertEqual(result['next_page'], 2)
+            self.assertNotIn('secret', json.dumps(result))
+            with patch.object(client, '_fetch_venue_records',
+                              return_value=self.page(self.receipts(1, 100), 101, more=False)) as retry:
+                recovered = client.fetch_settled_receipts()
+            retry.assert_called_once_with(1, page=2)
+            self.assertEqual(recovered['items'][0]['order_no'], 'order-100')
+            self.assertTrue(recovered['scan_reached_end'])
+            self.assertFalse(recovered['complete'])
+            self.assertEqual(recovered['reason'], 'multi_refresh_snapshot')
+
+    def test_initial_failure_does_not_advance_cursor_or_invent_receipts(self):
+        for error in (SessionError('offline'), TimeoutError('offline')):
+            client = LeyuAccountClient.__new__(LeyuAccountClient)
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(client, '_fetch_venue_records', side_effect=error) as query:
+                result = client.fetch_settled_receipts()
+            query.assert_called_once_with(1, page=1)
+            self.assertEqual(result['items'], [])
+            self.assertEqual(result['counted'], 0)
+            self.assertIsNone(result['total'])
+            self.assertEqual(result['next_page'], 1)
+            self.assertFalse(result['complete'])
+
+    def test_restart_starts_first_page_and_exact_empty_scan_is_complete(self):
+        old = LeyuAccountClient.__new__(LeyuAccountClient)
+        pages = [self.page(self.receipts(100), 301), self.page(self.receipts(100, 100), 301)]
+        with patch.object(old, '_fetch_venue_records', side_effect=pages):
+            self.assertEqual(old.fetch_settled_receipts()['next_page'], 3)
+        restarted = LeyuAccountClient.__new__(LeyuAccountClient)
+        with patch.object(restarted, '_fetch_venue_records', return_value=self.page([], 0, more=False)) as query:
+            result = restarted.fetch_settled_receipts()
+        query.assert_called_once_with(1, page=1)
+        self.assertEqual(result['items'], [])
+        self.assertEqual(result['counted'], 0)
+        self.assertEqual(result['total'], 0)
+        self.assertTrue(result['complete'])
+        self.assertTrue(result['scan_reached_end'])
+        self.assertEqual(result['next_page'], 1)
 
 
 if __name__ == '__main__':

@@ -7,8 +7,7 @@ import unittest
 from unittest.mock import MagicMock
 
 from api.app import ApiApp
-from core.decision_features import FEATURE_VERSION
-from core.learned_model import DATA_VERSION, FEATURES
+from core.learned_model import FEATURES
 from core.live_model import MODEL_VERSION
 from service.analysis import AnalysisConfig, AnalysisService
 from service.ledger import DecisionLedger, LedgerEntry, recommendation_evidence_key
@@ -17,6 +16,7 @@ from service.model_service import ModelService
 from service.model_training import atomic_json
 from service.runtime_settings import RuntimeConfig, RuntimeSettings, validated
 from tests import test_live_expert
+from tests.test_model_validation import approved_artifact
 
 
 class DecisionModeTests(unittest.TestCase):
@@ -31,10 +31,7 @@ class DecisionModeTests(unittest.TestCase):
     def artifact(self, **changes):
         weights = [0.] * len(FEATURES)
         weights[0] = 2.
-        result = {'version': 'approved-test', 'data_version': DATA_VERSION,
-                  'feature_version': FEATURE_VERSION, 'features': list(FEATURES), 'weights': weights,
-                  'updated_at': '2025-01-01T00:00:00+00:00', 'promotion': {'approved': True}}
-        return {**result, **changes}
+        return approved_artifact('approved-test', **{'weights': weights, **changes})
 
     def calculate(self, mode='algorithm', weight=.5):
         service = LiveExpertService()
@@ -125,6 +122,22 @@ class DecisionModeTests(unittest.TestCase):
         service._recommendations['m'] = {'picks': [{}]}
         service.configure(replace(RuntimeConfig(), decision_mode='hybrid'), 3)
         self.assertFalse(service._recommendations)
+
+    def test_legacy_approval_is_unavailable_in_both_routes_and_preserved(self):
+        cases = [self.artifact(validation_contract_version='legacy-contract'),
+                 self.artifact(promotion={'approved': True})]
+        missing = self.artifact()
+        missing.pop('validation_contract_version')
+        cases.append(missing)
+        for artifact in cases:
+            atomic_json(self.path, artifact)
+            for mode in ('model', 'hybrid'):
+                with self.subTest(artifact=artifact, mode=mode):
+                    row = self.calculate(mode)
+                    self.assertEqual(row['decision'], 'unavailable')
+                    self.assertFalse(row['ensemble']['model_application']['execution_enabled'])
+                    self.assertTrue(row['baseline_ensemble']['candidates'])
+                    self.assertEqual(json.loads(self.path.read_text()), artifact)
 
     def test_ledger_records_components_and_separates_model_and_blend_identities(self):
         atomic_json(self.path, self.artifact())

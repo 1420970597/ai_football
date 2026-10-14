@@ -3,7 +3,11 @@ from datetime import datetime, timedelta, timezone
 import unittest
 from unittest.mock import patch
 
-from core.learned_model import FEATURES, features, metrics, predict, train
+from core.learned_model import (FEATURES, STACK_INDICES, approved_model, compatible_model,
+                                features, fit_weights, metrics, model_compatibility_reason,
+                                predict, train)
+from core.model_validation import VALIDATION_CONTRACT_VERSION
+from tests.test_model_validation import approved_artifact
 
 
 def sample_row(index=0):
@@ -15,6 +19,55 @@ def sample_row(index=0):
 
 
 class LearnedModelTests(unittest.TestCase):
+    def test_candidate_compatibility_and_approval_are_separate_current_contracts(self):
+        model = approved_artifact()
+        self.assertTrue(compatible_model(model))
+        self.assertTrue(approved_model(model))
+        candidate = {**model, 'promotion': {'approved': False}}
+        self.assertTrue(compatible_model(candidate))
+        self.assertFalse(approved_model(candidate))
+        for field in ('data_version', 'validation_contract_version'):
+            with self.subTest(field=field):
+                legacy = {**model, field: 'legacy'}
+                self.assertFalse(compatible_model(legacy))
+                self.assertFalse(approved_model(legacy))
+                self.assertTrue(model_compatibility_reason(legacy))
+        for field, value in [('validation_contract_version', 'legacy'),
+                             ('execution_required', False), ('execution_approved', False),
+                             ('execution_algorithm', 'auxiliary')]:
+            with self.subTest(promotion_field=field):
+                invalid = {**model, 'promotion': {**model['promotion'], field: value}}
+                self.assertTrue(compatible_model(invalid))
+                self.assertFalse(approved_model(invalid))
+
+    def test_approval_flags_cannot_override_execution_evidence_regression(self):
+        model = approved_artifact()
+        evidence = model['promotion']['evidence']['execution_cohort']
+        evidence['model'] = {**evidence['model'], 'log_loss': 1.5}
+        self.assertTrue(model['promotion']['approved'])
+        self.assertFalse(approved_model(model))
+        self.assertIn('实际执行算法', model_compatibility_reason(model, require_approval=True))
+
+    def test_ungraded_context_does_not_fit_or_count_as_training_match(self):
+        rows = [sample_row(i) for i in range(120)]
+        pushes = [{**sample_row(i), 'graded': False, 'y': None, 'observation_weight': 0}
+                  for i in range(130)]
+        expected = fit_weights(rows, epochs=2)
+        actual = fit_weights(rows + pushes, epochs=2)
+        self.assertEqual(expected, actual)
+        self.assertTrue(all(value == 0 for index, value in enumerate(actual)
+                            if index not in STACK_INDICES))
+        model = train(rows + pushes, epochs=2)
+        self.assertEqual(model['eligible_matches'], 120)
+        self.assertEqual(model['validation']['matches'], 24)
+        self.assertEqual(model['validation']['prediction_context_decisions'], 48)
+        self.assertEqual(model['validation_contract_version'], VALIDATION_CONTRACT_VERSION)
+        with self.assertRaises(ValueError):
+            fit_weights(pushes)
+        empty_metrics = metrics(pushes, None)
+        self.assertIsNone(empty_metrics['brier'])
+        self.assertEqual(empty_metrics['matches'], 0)
+
     def test_half_payout_scores_use_nonpush_stake_weight(self):
         rows = [{**sample_row(0),'y':1,'baseline':.8,'observation_weight':1},
                 {**sample_row(0),'y':0,'baseline':.8,'observation_weight':.5}]

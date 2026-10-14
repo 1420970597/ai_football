@@ -299,6 +299,7 @@ class LiveExpertTests(unittest.TestCase):
         now = time.monotonic()
         hub._info['m'] = {'match_id': 'm', 'league': '真实足球联赛', 'home': '甲', 'away': '乙', 'sport_id': '1'}
         hub._scores['m'] = (1, 0)
+        hub._score_observed_since_ms['m'] = int((time.time() - 120) * 1000)
         hub._score_at['m'] = now
         hub._status_at['m'] = now
         hub._status['m'] = {'mmp': '7', 'mst': '3600'}

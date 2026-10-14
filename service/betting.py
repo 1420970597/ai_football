@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from core.market_labels import describe_market, format_market, parse_market_code
-from store.order_store import OrderStore, postgres_configured
+from store.order_store import OrderStore, money_cents, postgres_configured, validated_budget
 from store.sql_backend import SQLiteAdapter, StorageBackendError
 
 
@@ -280,7 +280,7 @@ def plan_bet(pick: Mapping[str, Any], config: Any,
         stake = base * confidence
     else:
         raise BettingBlocked("未知投注额度模式")
-    if round(stake, 2) <= 0:
+    if money_cents(stake) <= 0:
         raise BettingBlocked("计算出的投注额度必须大于 0")
     match_id = str(pick.get("match_id") or "")
     market = str(pick.get("market") or "")
@@ -288,7 +288,7 @@ def plan_bet(pick: Mapping[str, Any], config: Any,
     if not match_id or not market or not outcome:
         raise BettingBlocked("盘口缺少比赛、玩法或选项标识")
     return BetPlan(match_id, market, str(pick.get("line") or ""), outcome,
-                   round(stake, 2), round(confidence, 6), decision_count, mode)
+                   money_cents(stake) / 100, round(confidence, 6), decision_count, mode)
 
 
 def preview_bet(pick: Mapping[str, Any], config: Any, **kwargs: Any) -> dict[str, Any]:
@@ -371,6 +371,10 @@ class BettingExecutor:
         self._retry_due: dict[str, tuple[str, float]] = {}
         self._blocked: dict[str, tuple[float, dict[str, Any]]] = {}
         self._active_executions = 0
+        self._budget_lock = threading.Lock()
+        self._budget: dict[str, Any] = {}
+        self._budget_account = ''
+        self._settlement_reconciliation: dict[str, Any] = {'status': 'not_started'}
         self.last_result: dict[str, Any] = {}
 
     def bind(self, root: str | None) -> None:
@@ -389,6 +393,7 @@ class BettingExecutor:
             else:
                 self.path = Path(root).parent / "betting-orders.sqlite3" if root else None
             self._schema_ready = False
+            self._settlement_reconciliation = {'status': 'not_started'}
 
     def _ensure_order_store(self) -> OrderStore:
         with self._lock:
@@ -420,7 +425,7 @@ class BettingExecutor:
                 self._execution_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='bet-precheck')
             self._thread = threading.Thread(target=self._loop, name="bet-order-executor", daemon=True)
             self._thread.start()
-            if (self.client_factory is None and os.environ.get('LEYU_FAST_BETTING', '').lower() in ('1', 'true')
+            if (self.client_factory is None
                     and not (self._warm_thread and self._warm_thread.is_alive())):
                 self._warm_thread = threading.Thread(target=self._warm_loop, name='bet-session-warm', daemon=True)
                 self._warm_thread.start()
@@ -437,7 +442,9 @@ class BettingExecutor:
                         self._warm_state = 'unconfigured'
                     else:
                         client.warm_betting()
+                        self._refresh_budget(client, force=True)
                         self._warm_state = 'ready'
+                        self._reconcile_background(client)
                     if self._order_store is None and (self.path or self._storage_url):
                         self._ensure_order_store()
                 except Exception:
@@ -548,6 +555,53 @@ class BettingExecutor:
                 return latest, candidate
         raise BettingRecomputeNeeded("最新综合决策已撤回该推荐")
 
+    def _refresh_budget(self, client: Any, *, force: bool = False) -> dict[str, Any]:
+        account = _identity([os.environ.get('LEYU_APP_LOGIN_NAME', '').strip().casefold() or 'default'])
+        with self._budget_lock:
+            if not force and self._budget_account == account:
+                try:
+                    validated_budget(self._budget)
+                    return dict(self._budget)
+                except StorageBackendError:
+                    pass
+            read = getattr(client, 'fetch_betting_budget', None)
+            if not callable(read):
+                raise BettingBlocked('场馆资金预算读取不可用')
+            value = read()
+            if not isinstance(value, Mapping):
+                raise BettingBlocked('场馆资金预算读取不可用')
+            validated_budget(value)
+            store = self._ensure_order_store()
+            store.reconcile_settled(account, list(value.get('settled_receipts') or []))
+            self._budget, self._budget_account = dict(value), account
+            return dict(value)
+
+    def _reconcile_background(self, client: Any) -> None:
+        """Scan historical receipts off the submit path; absence never releases funds."""
+        from collector.session import SessionError
+        read = getattr(client, 'fetch_settled_receipts', None)
+        if not callable(read):
+            return
+        account = _identity([os.environ.get('LEYU_APP_LOGIN_NAME', '').strip().casefold() or 'default'])
+        try:
+            value = read()
+            if not isinstance(value, Mapping):
+                raise ValueError('结算对账响应格式无效')
+            store = self._ensure_order_store()
+            released = store.reconcile_settled(account, list(value.get('items') or []))
+            status = {key: value.get(key) for key in
+                      ('status', 'complete', 'counted', 'total', 'next_page',
+                       'batch_counted', 'scan_reached_end', 'reason', 'counted_basis')}
+            status.update(released=released, observed_at=time.time(),
+                          **store.reservation_summary(account))
+        except (SessionError, TimeoutError, OSError, sqlite3.Error, StorageBackendError, ValueError) as exc:
+            with self._lock:
+                status = {**self._settlement_reconciliation, 'status': 'partial',
+                          'complete': False, 'exception_type': type(exc).__name__,
+                          'observed_at': time.time()}
+        with self._lock:
+            self._settlement_reconciliation = status
+
     def flush(self) -> list[dict[str, Any]]:
         if not self._run_lock.acquire(blocking=False):
             return []
@@ -604,6 +658,13 @@ class BettingExecutor:
         if (snapshot.get("finished") or row.get("finished")
                 or str(snapshot.get("status", {}).get("mmp")) not in ("6", "7")):
             raise BettingBlocked("比赛未进行或盘口暂停")
+        boundary = snapshot.get('score_state_boundary_ms')
+        if 'state_qualified' in row:
+            if row.get('state_qualified') is not True or not isinstance(boundary, (int, float)):
+                raise BettingRecomputeNeeded('当前比分状态尚未取得可核验的新报价')
+            ready_at = float(boundary) + cfg.score_change_cooldown_s * 1000
+            if time.time() * 1000 < ready_at:
+                raise BettingRecomputeNeeded('首次比分观察或比分变化仍在冷却')
         suspended_ids = {str(value) for value in (snapshot.get('suspended_ids') or ())}
         detail_ids = {str(detail.get('playId') or ''), str(detail.get('chpid') or '')}
         if (snapshot.get('suspended') and not suspended_ids) or suspended_ids.intersection(detail_ids):
@@ -637,6 +698,9 @@ class BettingExecutor:
         if not matches:
             raise BettingRecomputeNeeded("推荐盘口或选项已更新，需要重新计算")
         quote = max(matches, key=lambda q: q.ts_ms)
+        if 'state_qualified' in row and (quote.ts_ms < ready_at or
+                float(getattr(quote, 'received_at_ms', 0)) < ready_at):
+            raise BettingRecomputeNeeded('报价早于当前比分状态冷却边界')
         if not math.isfinite(quote.quote_age_s) or quote.quote_age_s > cfg.quote_max_age_s:
             raise BettingRecomputeNeeded("推荐盘口报价已过期，需要重新计算")
         if not math.isclose(quote.odds, float(detail["oddFinally"]), abs_tol=0.000005):
@@ -840,6 +904,8 @@ class BettingExecutor:
             # provider as an absolute business deadline.
             detail = client.prepare_bet(detail, plan.stake)
             payload = build_ybty_bet_payload({"order_detail": detail}, plan.stake)
+            enter_stage('funds_snapshot')
+            budget = self._refresh_budget(client)
             enter_stage('submit_queue')
             if not self._submission_lock.acquire(timeout=SUBMISSION_LOCK_WAIT_S):
                 raise BetPreflightRetryable('提交队列繁忙，稍后重试')
@@ -886,11 +952,13 @@ class BettingExecutor:
 
                 inserted, previous = store.claim(
                     identity, sending, selection_key, account_key,
-                    authorize=authorize_claim)
+                    authorize=authorize_claim, budget=budget,
+                    total_fraction=cfg.betting_max_total_exposure,
+                    match_fraction=cfg.betting_max_match_exposure)
                 if not inserted:
                     return previous or {**result, "status": "duplicate", "duplicate": True,
                                          "reason": "该推荐已有订单提交记录"}
-            except (sqlite3.IntegrityError, StorageBackendError):
+            except sqlite3.IntegrityError:
                 return {**result, "status": "blocked", "reason": "订单持久化失败"}
             claimed = True
             enter_stage('submission')
@@ -1038,6 +1106,7 @@ class BettingExecutor:
         with self._lock:
             running = bool(self._thread and self._thread.is_alive())
             store, last = self._order_store, dict(self.last_result)
+            reconciliation = dict(self._settlement_reconciliation)
             blocked = self._blocked.get(str(last.get('identity') or ''))
             if blocked:
                 last.update(blocked[1])
@@ -1068,6 +1137,7 @@ class BettingExecutor:
                 "retry_policy": {"max_attempts": cfg.betting_retry_max_attempts,
                                  "base_delay_s": cfg.betting_retry_base_delay_s},
                 'session_warmup': self._warm_state,
+                'settlement_reconciliation': reconciliation,
                 'latency': {'budget_ms': int(LATENCY_TARGET_S * 1000),
                             'latency_target_ms': int(LATENCY_TARGET_S * 1000),
                             'basis': 'selected_quote_receive_to_socket_send',

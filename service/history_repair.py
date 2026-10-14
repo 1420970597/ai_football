@@ -100,6 +100,11 @@ def repair_replay(row: Mapping[str, Any], finals: Mapping[str, Any]) -> dict[str
     if row.get('model_version') == MODEL_VERSION:
         out['repair_status'] = 'already_current'
         return out
+    # Recomputing old prices/labels cannot reconstruct a missing state clock
+    # or certify an executable post-goal quote. Retain the replay for audit.
+    out['state_qualified'] = False
+    out['training_eligible'] = False
+    out['qualification_reason'] = '旧代重算保留审计；缺少当前比分状态与冷却后报价认证'
     score = valid_score(row.get('score'))
     evaluations = row.get('evaluations') or []
     candidates = [c for e in evaluations for c in e.get('candidates', [])] or row.get('candidates') or []
@@ -155,6 +160,6 @@ def repair_replay(row: Mapping[str, Any], finals: Mapping[str, Any]) -> dict[str
                ensemble=ensemble, baseline_ensemble=ensemble, candidates=ensemble['candidates'],
                forecasts=ensemble['forecasts'], picks=ensemble['recommendations'],
                has_buy=bool(ensemble['recommendations']), algorithm_performance=performance,
-               training_eligible=time_contract,
+               training_eligible=False, original_time_contract=time_contract,
                repaired_weight_basis='neutral_prior; old settlement evidence was contaminated')
     return out

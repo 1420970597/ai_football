@@ -13,6 +13,10 @@ BOOTSTRAP_REPETITIONS = 300
 VALIDATION_SEED = 44001
 MIN_PROMOTION_MATCHES = 100
 EXECUTION_ALGORITHM = 'economic_ensemble'
+# Input/feature versions describe the stored vector. This separate contract
+# describes which prediction population, masks and execution gates certified
+# an artifact; an old approval cannot certify changed evaluation semantics.
+VALIDATION_CONTRACT_VERSION = 'execution-market-curves-graded-context-v1'
 
 
 def observation_weight(row: Mapping[str, Any]) -> float:
@@ -20,6 +24,27 @@ def observation_weight(row: Mapping[str, Any]) -> float:
     if not math.isfinite(weight) or not 0 < weight <= 1:
         raise ValueError('无效非走盘本金权重')
     return weight
+
+
+def is_graded_row(row: Mapping[str, Any]) -> bool:
+    """Validate the binary-loss mask without inventing labels for pushes.
+
+    Context rows remain part of a complete market curve for prediction and
+    coherence, but carry no binary outcome or loss weight. Legacy graded rows
+    without an explicit mask retain their original positive-weight contract.
+    """
+    graded = row.get('graded', True)
+    if not isinstance(graded, bool):
+        raise ValueError('无效二元标签掩码')
+    if not graded:
+        weight = float(row.get('observation_weight', 0.0))
+        if row.get('y') is not None or not math.isfinite(weight) or weight != 0:
+            raise ValueError('曲线上下文必须没有二元标签且损失权重为零')
+        return False
+    if row.get('y') not in (0, 1):
+        raise ValueError('无效训练标签')
+    observation_weight(row)
+    return True
 
 
 def instant(value: str) -> float:
@@ -36,12 +61,15 @@ def temporal_split(rows: Sequence[Mapping[str, Any]], ids: set[str], cutoff: str
 
 def ordered_matches(rows: Sequence[Mapping[str, Any]]) -> list[str]:
     times: dict[str, float] = {}
+    graded_ids: set[str] = set()
     for row in rows:
         mid, at = str(row['match_id']), instant(row['at'])
         if instant(row['settled_at']) <= at:
             raise ValueError('标签早于或等于输入截点')
         times[mid] = min(times.get(mid, at), at)
-    return sorted(times, key=lambda mid: (times[mid], mid))
+        if is_graded_row(row):
+            graded_ids.add(mid)
+    return sorted(graded_ids, key=lambda mid: (times[mid], mid))
 
 
 def rolling_folds(rows: Sequence[Mapping[str, Any]], count: int = 3) -> list[tuple[list[dict[str, Any]], list[dict[str, Any]]]]:
@@ -55,7 +83,9 @@ def rolling_folds(rows: Sequence[Mapping[str, Any]], count: int = 3) -> list[tup
         validation = [dict(r) for r in rows if str(r['match_id']) in set(mids[start:end])]
         cutoff = min(validation, key=lambda r: instant(r['at']))['at']
         training = temporal_split(rows, set(mids[:start]), cutoff)
-        if len({r['match_id'] for r in training}) >= 30 and len({r['y'] for r in training}) == 2:
+        graded_training = [r for r in training if is_graded_row(r)]
+        if (len({r['match_id'] for r in graded_training}) >= 30
+                and len({r['y'] for r in graded_training}) == 2):
             folds.append((training, validation))
     return folds
 
@@ -112,16 +142,25 @@ def _evaluate(rows: Sequence[Mapping[str, Any]], probabilities: Sequence[float])
     if not rows:
         raise ValueError('评估样本为空')
     ps = coherent_probabilities(rows, probabilities)
+    graded_indices = [i for i, row in enumerate(rows) if is_graded_row(row)]
+    context_fields = {'prediction_context_decisions': len(rows),
+                      'excluded_from_binary_loss': len(rows) - len(graded_indices)}
+    if not graded_indices:
+        return {'matches': 0, 'decisions': 0, 'accuracy': None, 'binary_accuracy': None,
+                'accuracy_basis': '按比赛等权的方向二分类；不是推荐命中率',
+                'coverage': 0.0, 'had_top1_accuracy': None, 'had_top1_matches': 0,
+                'brier': None, 'log_loss': None, 'ece': None, 'reliability': [],
+                'by_market': {}, 'complete_had_groups': 0, **context_fields}
     counts: dict[str, float] = defaultdict(float)
-    for row in rows:
-        if row['y'] not in (0, 1):
-            raise ValueError('无效训练标签')
+    for i in graded_indices:
+        row = rows[i]
         counts[str(row['match_id'])] += observation_weight(row)
     accuracy = brier = loss = 0.0
     bins = [[0.0, 0.0, 0.0] for _ in range(10)]
     by_market: dict[str, list[tuple[Mapping[str, Any], float]]] = defaultdict(list)
     had_groups: dict[tuple, list[int]] = defaultdict(list)
-    for i, (row, probability) in enumerate(zip(rows, ps)):
+    for i in graded_indices:
+        row, probability = rows[i], ps[i]
         weight = observation_weight(row) / counts[str(row['match_id'])] / len(counts)
         y = row['y']
         p = min(1 - 1e-12, max(1e-12, probability))
@@ -150,14 +189,14 @@ def _evaluate(rows: Sequence[Mapping[str, Any]], probabilities: Sequence[float])
             totals[str(row['match_id'])] += observation_weight(row)
         per_market[market] = {'matches': len(totals), 'decisions': len(items),
             'brier': sum(observation_weight(r) / totals[str(r['match_id'])] / len(totals) * (p - r['y']) ** 2 for r, p in items)}
-    return {'matches': len(counts), 'decisions': len(rows), 'accuracy': accuracy,
+    return {'matches': len(counts), 'decisions': len(graded_indices), 'accuracy': accuracy,
             'binary_accuracy': accuracy, 'accuracy_basis': '按比赛等权的方向二分类；不是推荐命中率',
-            'coverage': 1.0,
+            'coverage': len(graded_indices) / len(rows),
             'had_top1_accuracy': sum(sum(v) / len(v) for v in top1.values()) / len(top1) if top1 else None,
             'had_top1_matches': len(top1), 'brier': brier, 'log_loss': loss,
             'ece': sum(w * abs(p / w - y / w) for w, p, y in bins if w),
             'reliability': reliability, 'by_market': per_market,
-            'complete_had_groups': sum(len(v) for v in top1.values())}
+            'complete_had_groups': sum(len(v) for v in top1.values()), **context_fields}
 
 
 def evaluate(rows: Sequence[Mapping[str, Any]], probabilities: Sequence[float]) -> dict[str, Any]:
@@ -181,10 +220,14 @@ def paired_evidence(rows: Sequence[Mapping[str, Any]], candidate: Sequence[float
     ps, bs = coherent_probabilities(rows, candidate), coherent_probabilities(rows, baseline)
     deltas: dict[str, list[tuple[float, float]]] = defaultdict(list)
     for row, p, b in zip(rows, ps, bs):
+        if not is_graded_row(row):
+            continue
         deltas[str(row['match_id'])].append((observation_weight(row), (p - row['y']) ** 2 - (b - row['y']) ** 2))
     values = [sum(w * delta for w, delta in items) / sum(w for w, _ in items) for items in deltas.values()]
     if not values:
-        raise ValueError('配对评估样本为空')
+        return {'matches': 0, 'delta_brier': None, 'ci95': [None, None],
+                'method': 'paired match-cluster bootstrap', 'repetitions': 0,
+                'seed': VALIDATION_SEED, 'reason': '完整预测上下文没有可计二元损失的样本'}
     rng = random.Random(VALIDATION_SEED)
     draws = sorted(sum(rng.choice(values) for _ in values) / len(values) for _ in range(BOOTSTRAP_REPETITIONS))
     return {'matches': len(values), 'delta_brier': sum(values) / len(values),
@@ -199,10 +242,11 @@ def execution_evidence(rows: Sequence[Mapping[str, Any]], candidate: Sequence[fl
     if len(rows) != len(candidate) or len(rows) != len(baseline):
         raise ValueError('执行子群预测数量与输入不一致')
     indices = [i for i, row in enumerate(rows) if row.get('algorithm') == EXECUTION_ALGORITHM]
+    available = any(is_graded_row(rows[i]) for i in indices)
     result: dict[str, Any] = {'algorithm': EXECUTION_ALGORITHM,
                              'scope': 'chronological final fold; identical execution-contract rows',
-                             'available': bool(indices)}
-    if not indices:
+                             'available': available}
+    if not available:
         return {**result, 'reason': '最终独立测试缺少实际执行算法样本'}
     selected = [rows[i] for i in indices]
     ps, bs = [candidate[i] for i in indices], [baseline[i] for i in indices]
@@ -213,11 +257,22 @@ def execution_evidence(rows: Sequence[Mapping[str, Any]], candidate: Sequence[fl
 def _score_reasons(test: Mapping[str, Any], baseline: Mapping[str, Any],
                    evidence: Mapping[str, Any], prefix: str = '') -> list[str]:
     reasons = []
-    if evidence['matches'] < MIN_PROMOTION_MATCHES:
+    matches = evidence.get('matches')
+    if isinstance(matches, bool) or not isinstance(matches, int) or matches < MIN_PROMOTION_MATCHES:
         reasons.append(prefix + f'独立测试比赛不足{MIN_PROMOTION_MATCHES}场')
-    if evidence['ci95'][1] >= 0:
+    interval = evidence.get('ci95')
+    delta = evidence.get('delta_brier')
+    if (not isinstance(interval, (list, tuple)) or len(interval) != 2
+            or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in interval)
+            or interval[0] > interval[1] or interval[1] >= 0 or not isinstance(delta, (int, float))
+            or not math.isfinite(delta) or delta >= 0):
         reasons.append(prefix + '按比赛配对Brier区间尚未证明优于市场')
-    if test['log_loss'] > baseline['log_loss']:
+    loss, baseline_loss = test.get('log_loss'), baseline.get('log_loss')
+    if (not isinstance(loss, (int, float)) or not math.isfinite(loss) or loss < 0
+            or not isinstance(baseline_loss, (int, float)) or not math.isfinite(baseline_loss)
+            or baseline_loss < 0):
+        reasons.append(prefix + '测试log loss缺少有效标签')
+    elif loss > baseline_loss:
         reasons.append(prefix + '测试log loss劣于市场')
     for market, score in test.get('by_market', {}).items():
         ref = baseline.get('by_market', {}).get(market)
@@ -228,7 +283,10 @@ def _score_reasons(test: Mapping[str, Any], baseline: Mapping[str, Any],
 
 def promotion(test: Mapping[str, Any], baseline: Mapping[str, Any], evidence: Mapping[str, Any], folds: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     reasons = _score_reasons(test, baseline, evidence)
-    if len(folds) < 3 or sum(f.get('delta_brier', 0) < 0 for f in folds) < 2:
+    stable_folds = sum(isinstance(f.get('delta_brier'), (int, float))
+                       and math.isfinite(f['delta_brier']) and f['delta_brier'] < 0
+                       for f in folds)
+    if len(folds) < 3 or stable_folds < 2:
         reasons.append('滚动时间验证没有稳定优于市场')
     execution = evidence.get('execution_cohort')
     execution_reasons = []
@@ -241,6 +299,7 @@ def promotion(test: Mapping[str, Any], baseline: Mapping[str, Any], evidence: Ma
                                           execution['evidence'], '实际执行算法：')
     reasons.extend(execution_reasons)
     return {'approved': not reasons, 'reasons': reasons, 'evidence': dict(evidence),
+            'validation_contract_version': VALIDATION_CONTRACT_VERSION,
             'execution_required': True, 'execution_algorithm': EXECUTION_ALGORITHM,
             'execution_approved': not execution_reasons,
             'minimum_test_matches': MIN_PROMOTION_MATCHES,
