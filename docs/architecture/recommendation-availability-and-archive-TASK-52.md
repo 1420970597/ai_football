@@ -90,6 +90,30 @@ PG 保存结构化业务记录、训练输入、预测、配置和归档目录�
 最旧待处理批次；训练落后不再强制所有已上传文件留在本机。当前盘口的影子
 推理仍从本地读取，保持独立线程与持久化队列。
 
+## 生产 PG 排序规则与目录索引
+
+首次生产远端能力验收发现，原目录查询 `path >= prefix AND path < prefix + \\uffff`
+在远程 PG 的 `en_US.utf8` 排序规则下返回 0，而同一目录实际有 89 个回放源。
+这不是对象丢失：原范围上界依赖二进制 Unicode 排序，PG 使用 locale 排序。
+归档清理因此保持停止，模型能力标记也保持未验证。
+
+修正采用转义 `%`、`_` 和反斜杠的绑定 `LIKE` 前缀，同时用 `substr` 保证精确
+大小写。共享目录枚举与回放枚举均使用该语义。生产以 autocommit 连接先执行
+`CREATE INDEX CONCURRENTLY IF NOT EXISTS archive_files_path_prefix_idx ON files(path text_pattern_ops)`，
+索引 valid/ready 均为 true；新建 PG 库在归档 schema 初始化中幂等声明该索引，
+SQLite 不执行 PG 专属索引语句。
+
+未建索引的只读目录查询返回 983 条（包含 89 个回放源），客户端测得约 1,999 ms，
+计划为并行全表扫描。建索引后完整修正查询的 `EXPLAIN (ANALYZE, BUFFERS)` 显示
+`Index Only Scan using archive_files_path_prefix_idx`，服务端执行约 8.92 ms。
+首个客户端请求为约 679 ms，包含远程返回等开销，不能以服务端执行时间冒充
+全链路延迟。回归测试使用真正的内存 SQLite SQL 与忽略 U+FFFF 的排序规则，
+补足假目录比较器漏掉的排序差异。
+
+生产部署 JSON 在根目录 `docker/docker-compose.deploy.yml` 有符号链接。
+增加模型只读凭据挂载会同步改变该链接的目标内容；验收对整个 JSON 进行精确
+比对，只允许这项已授权差异，并核验其他根工作树文件哈希。
+
 ## 本地副本清理与回滚
 
 | 情况 | 清理规则 |
@@ -131,6 +155,8 @@ SDK 与应用重试有上限；原文件在上传、校验或暂时限流失败�
 core/store/collector/service/api 使用标准库 HTTP 客户端，无 requests/bs4 导入。
 
 这些测量是录制样本与受控慢链路结果，不是生产 P95，也不证明任意网络故障都
-已消除。存储部署和真实磁盘释放另行验收，不能用单元测试代替生产 S3 回读。
+已消除。目录查询补充修复再次冻结为 `freeze-v3`，全量 unittest 实际为 1,783 项、14 项跳过、
+退出 0；前一版本 1,776 项结果保留。新增的真实 SQL、排序与转义用例覆盖生产
+发现的差异。存储部署和真实磁盘释放另行验收，不能用单元测试代替生产 S3 回读。
 执行原始命令、退出码、Pi 指定模型两阶段共识、只读目录调查及哈希保存在项目
 `output/backend-availability-20261014/`，不提交含实际业务数据的响应或凭据。

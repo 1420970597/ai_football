@@ -17,7 +17,7 @@ import threading
 from typing import Any, Iterator, Mapping
 import zlib
 
-from store.archive import archive_for
+from store.archive import archive_for, literal_prefix_pattern
 
 REPLAY_SOURCE_PROTOCOL = 1
 DECODE_CHUNK_BYTES = 128 * 1024
@@ -241,7 +241,8 @@ class ReplaySources:
             with closing(archive._db()) as db:
                 rows = db.execute(
                     'SELECT path,object_key,"offset",compressed,size,sha256,mtime_ns '
-                    'FROM files WHERE path>=? AND path<? ORDER BY path', (prefix, prefix + '\uffff'))
+                    "FROM files WHERE path LIKE ? ESCAPE '\\' AND substr(path,1,?)=? ORDER BY path",
+                    (literal_prefix_pattern(prefix), len(prefix), prefix))
                 records = [dict(zip(_RECORD_COLUMNS, row)) for row in rows]
         except Exception as exc:
             raise OSError('S3 回放源目录读取失败') from exc

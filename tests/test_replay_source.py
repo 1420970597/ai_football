@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import random
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -19,18 +20,28 @@ from store.replay_source import (DECODE_CHUNK_BYTES, REPLAY_SOURCE_PROTOCOL,
 class FakeCatalog:
     def __init__(self, archive):
         self.archive = archive
+        self.connection = sqlite3.connect(':memory:')
 
-    def execute(self, _sql, params):
+        def ignore_sentinel(left, right):
+            left, right = left.replace('\uffff', ''), right.replace('\uffff', '')
+            return (left > right) - (left < right)
+
+        self.connection.create_collation('path_locale', ignore_sentinel)
+        self.connection.execute(
+            'CREATE TABLE files(path TEXT PRIMARY KEY COLLATE path_locale, object_key TEXT, '
+            '"offset" INTEGER, compressed INTEGER, size INTEGER, sha256 TEXT, mtime_ns INTEGER)')
+        columns = ('path', 'object_key', 'offset', 'compressed', 'size', 'sha256', 'mtime_ns')
+        self.connection.executemany('INSERT INTO files VALUES(?,?,?,?,?,?,?)', [
+            tuple(record[key] for key in columns) for record in archive.records.values()])
+
+    def execute(self, sql, params):
         self.archive.catalog_reads += 1
         if self.archive.catalog_error:
             raise OSError('private database endpoint')
-        columns = ('path', 'object_key', 'offset', 'compressed', 'size', 'sha256', 'mtime_ns')
-        return [tuple(record[key] for key in columns)
-                for name, record in sorted(self.archive.records.items())
-                if params[0] <= name < params[1]]
+        return self.connection.execute(sql, params)
 
     def close(self):
-        pass
+        self.connection.close()
 
 
 class FakeArchive:
@@ -46,16 +57,16 @@ class FakeArchive:
         self.range_transform = lambda raw: raw
         self.chunk_bytes = 8192
 
-    def add(self, name, raw, *, mtime=100, local=False):
+    def add(self, name, raw, *, mtime=100, local=False, directory='ledger'):
         wire = gzip.compress(raw, mtime=0)
         key = f'pack-{len(self.packs)}'
         prefix = b'other-pack-member'
         self.packs[key] = prefix + wire + b'next-pack-member'
-        record = {'path': 'ledger/' + name, 'object_key': key, 'offset': len(prefix),
+        record = {'path': (Path(directory) / name).as_posix(), 'object_key': key, 'offset': len(prefix),
                   'compressed': len(wire), 'size': len(raw),
                   'sha256': hashlib.sha256(raw).hexdigest(), 'mtime_ns': mtime}
         self.records[record['path']] = record
-        path = self.root / 'ledger' / name
+        path = self.root / directory / name
         if local:
             path.write_bytes(raw)
             import os
@@ -127,6 +138,32 @@ class ReplaySourceTests(unittest.TestCase):
         self.assertFalse(next(row for row in listed if row.name.endswith('0100.jsonl.gz')).remote)
         self.assertTrue(next(row for row in listed if row.name == remote.name).remote)
         self.assertTrue(self.sources.probe_source().remote)
+        self.assertEqual(self.archive.requests, [])
+
+    def test_real_sql_catalog_ignoring_unicode_sentinel_finds_remote_journals(self):
+        source = self.add()
+        database = self.archive._db()
+        try:
+            old = database.execute('SELECT path FROM files WHERE path>=? AND path<?',
+                                   ('ledger/', 'ledger/\uffff')).fetchall()
+        finally:
+            database.close()
+        self.assertEqual(old, [])
+        self.assertEqual(self.sources.list_sources(), [source])
+        self.assertEqual(self.sources.probe_source(), source)
+
+    def test_remote_directory_like_wildcards_backslash_and_case_are_literal(self):
+        directory = r'l_ed%g\er'
+        ledger = self.root / directory
+        ledger.mkdir()
+        name = 'live-replay.2020010100.jsonl.gz'
+        expected = self.archive.add(name, self.raw, directory=directory)
+        for other in (r'lXedYYg\er', r'l_ed%ger', r'L_ed%g\er', directory + 'suffix'):
+            self.archive.add(name, self.raw, directory=other)
+        sources = ReplaySources(ledger, self.archive)
+        self.addCleanup(sources.close)
+        self.assertEqual(sources.list_sources(), [expected])
+        self.assertEqual(sources.probe_source(), expected)
         self.assertEqual(self.archive.requests, [])
 
     def test_remote_original_gzip_bytes_and_resume_do_not_redownload_prefix(self):

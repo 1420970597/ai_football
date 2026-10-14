@@ -34,6 +34,15 @@ UPLOAD_RETRY_MAX_S = 8.0
 S3_SLOWDOWN_CODES = frozenset({'SlowDownRead', 'SlowDownWrite', 'SlowDown'})
 
 
+def literal_prefix_pattern(prefix: str) -> str:
+    """Bind a literal path prefix to LIKE with an explicit backslash escape.
+
+    Unicode sentinel ranges depend on the database's collation. LIKE also
+    needs escaping because filesystem names may contain SQL wildcard bytes.
+    """
+    return prefix.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+
+
 def s3_retry_code(error: Exception) -> str:
     """Recognize vendor rate limits without publishing SDK response details."""
     response = getattr(error, 'response', None)
@@ -115,6 +124,11 @@ class S3Archive:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS packs (object_key TEXT PRIMARY KEY, bytes INTEGER, sha256 TEXT, at REAL)"
             )
+            if self.backend == "postgres":
+                db.execute(
+                    "CREATE INDEX IF NOT EXISTS archive_files_path_prefix_idx "
+                    "ON files(path text_pattern_ops)"
+                )
 
     def _db(self) -> Any:
         if self.backend == "postgres":
@@ -133,8 +147,9 @@ class S3Archive:
             return [
                 self.root / r[0]
                 for r in db.execute(
-                    "SELECT path FROM files WHERE path>=? AND path<? ORDER BY path",
-                    (prefix, prefix + "\uffff"),
+                    "SELECT path FROM files WHERE path LIKE ? ESCAPE '\\' "
+                    "AND substr(path,1,?)=? ORDER BY path",
+                    (literal_prefix_pattern(prefix), len(prefix), prefix),
                 )
             ]
 

@@ -10,7 +10,7 @@ import signal
 import sqlite3
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from collector.leyu_realtime import TrendStore
 from core.models import OddsSnapshot
@@ -68,6 +68,63 @@ class FakeS3:
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_list_uses_exact_directory_prefix_and_retains_nested_archived_files(self):
+        first = self.source('ledger/a.jsonl', b'first')
+        nested = self.source('ledger/nested/b.jsonl', b'nested')
+        sibling = self.source('ledger-other/c.jsonl', b'sibling')
+        self.archive.migrate([first, nested, sibling], cleanup=True)
+        self.assertEqual(self.archive.list(self.root / 'ledger'), [first, nested])
+        self.assertEqual(self.archive.list(self.root / 'missing'), [])
+        self.assertFalse(first.exists())
+
+    def test_list_treats_wildcard_backslash_and_case_sensitive_directory_as_literals(self):
+        directory = r'l_ed%g\er'
+        expected = self.source(directory + '/a.jsonl', b'wanted')
+        other = [self.source(name + '/a.jsonl', b'other') for name in (
+            r'lXedYYg\er', r'l_ed%ger', r'L_ed%g\er', directory + 'suffix')]
+        self.archive.migrate([expected, *other])
+        self.assertEqual(self.archive.list(self.root / directory), [expected])
+
+    def test_list_works_when_path_collation_ignores_the_unicode_sentinel(self):
+        def ignore_sentinel(left, right):
+            left, right = left.replace('\uffff', ''), right.replace('\uffff', '')
+            return (left > right) - (left < right)
+
+        database = sqlite3.connect(':memory:')
+        database.create_collation('path_locale', ignore_sentinel)
+        database.execute('CREATE TABLE files(path TEXT COLLATE path_locale)')
+        database.execute('INSERT INTO files VALUES(?)', ('ledger/a.jsonl',))
+        old = database.execute('SELECT path FROM files WHERE path>=? AND path<?',
+                               ('ledger/', 'ledger/\uffff')).fetchall()
+        self.assertEqual(old, [])
+        with patch.object(self.archive, '_db', return_value=database):
+            self.assertEqual(self.archive.list(self.root / 'ledger'), [self.root / 'ledger/a.jsonl'])
+
+    def test_postgres_schema_ensures_pattern_index_idempotently(self):
+        database = MagicMock()
+        database.__enter__.return_value = database
+        with patch('store.archive.postgres_enabled', return_value=True), \
+             patch.object(S3Archive, '_db', return_value=database):
+            first = S3Archive(self.root, self.client)
+            second = S3Archive(self.root, self.client)
+        self.assertEqual((first.backend, second.backend), ('postgres', 'postgres'))
+        indexes = [call.args[0] for call in database.execute.call_args_list
+                   if call.args[0].startswith('CREATE INDEX')]
+        self.assertEqual(indexes, [
+            'CREATE INDEX IF NOT EXISTS archive_files_path_prefix_idx ON files(path text_pattern_ops)'
+        ] * 2)
+        self.assertEqual(database.close.call_count, 2)
+
+    def test_sqlite_schema_does_not_run_postgres_pattern_index_ddl(self):
+        database = MagicMock()
+        database.__enter__.return_value = database
+        with patch('store.archive.postgres_enabled', return_value=False), \
+             patch.object(S3Archive, '_db', return_value=database):
+            archive = S3Archive(self.root, self.client)
+        self.assertEqual(archive.backend, 'sqlite')
+        self.assertFalse(any('text_pattern_ops' in call.args[0]
+                             for call in database.execute.call_args_list))
+
     def reader_state(self, path, **changes):
         models = self.root / 'models'
         models.mkdir(exist_ok=True)
