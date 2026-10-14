@@ -16,11 +16,11 @@ async (page) => {
     capabilities:{betting:{configured_enabled:true,execution_supported:true,execution_enabled:true,mode:'automatic_single',
       reason:'等待满足门控的实时综合推荐',last_result:{status:'blocked',reason:'盘口历史命中次数不足（1/3）'}}},
     settings:{decision_mode:'algorithm',model_blend_weight:.5,model_training_enabled:true,model_training_matches:100,model_training_cpu:1,model_training_memory_mb:512,algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',
-      min_probability:.52,min_ev:.02,quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,
+      min_probability:.52,min_ev:.02,quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,score_change_cooldown_s:45,
       devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
       algorithm_alert_enabled:true,algorithm_alert_min_samples:30,algorithm_alert_threshold:.5,
       weight_prior_matches:20,max_algorithm_weight:.6,llm_experiment_enabled:true,llm_enabled:false,llm_base_url:'http://localhost:9999/v1',llm_model:'test-model',has_llm_key:true,
-      betting_enabled:true,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_min_hit_count:3,betting_min_evidence_matches:30,betting_min_edge:.05,betting_retry_max_attempts:5,betting_retry_base_delay_s:2,
+      betting_enabled:true,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_max_total_exposure:.1,betting_max_match_exposure:.02,betting_min_hit_count:3,betting_min_evidence_matches:30,betting_min_edge:.05,betting_retry_max_attempts:5,betting_retry_base_delay_s:2,
       llm_timeout_s:20,llm_temperature:.2,llm_max_tokens:2048,llm_interval_s:60,llm_review_max_age_s:120}};
   let mode = 'default';
   let betStatusMissing = false;
@@ -58,7 +58,7 @@ async (page) => {
       overall: {graded: 1, pending: 0, hit_rate: 1, roi: .5, matches: 1}, entries: [{at: '2026-01-01T12:00:00Z',
         home: '测试主队', away: '测试客队', label: '全场小2.25', odds: 2, ft_score: [1, 1], status: 'half_won', pnl: .5, competition_type: 'real'}]}});
     if (url.pathname.endsWith('/recommendations')) return route.fulfill({json: {open: [{match_id:'test-real', home:'测试主队', away:'测试客队', market_open:true,
-      pick: {label:'全场大2.25', odds:1.95, p_model:.6, confidence:.55, composite_confidence:.55, hit_count:1, miss_count:0}}], closed: [], summary:{open:1,closed:0,won:0,lost:0,pending:0}}});
+      pick: {label:'全场大2.25', odds:1.95, p_model:.6, confidence:.55, composite_confidence:.55, hit_count:1, miss_count:0}}], closed: [], summary:{open:1,closed:0,won:0,lost:0,pending:0},closed_page:{offset:0,limit:100,returned:0,total_available:0,next_offset:null,prev_offset:null,summary_total:0,window_truncated:false,scope:'recent_recommendations'}}});
     if (url.pathname.startsWith('/api/v1/workbench/')) return route.fulfill({json: _PLACEHOLDER_MATCH});
     const type = url.searchParams.get('type');
     const match = {..._PLACEHOLDER_MATCH};

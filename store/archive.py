@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, nullcontext
 from concurrent.futures import ThreadPoolExecutor
+import fcntl
 import gzip
 import hashlib
 import importlib
@@ -13,9 +14,10 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat as stat_module
 import tempfile
 import time
-from typing import Any, Iterable, Sequence, List, Mapping
+from typing import Any, Callable, Iterable, Sequence, List, Mapping
 import uuid
 import zlib
 from functools import lru_cache
@@ -26,6 +28,22 @@ PACK_BYTES = 32 * 1024**2
 BATCH_FILES = 2000
 READ_CHUNK_BYTES = 8 * 1024**2
 READ_CONCURRENCY = 4
+UPLOAD_ATTEMPTS = 4
+UPLOAD_RETRY_BASE_S = 1.0
+UPLOAD_RETRY_MAX_S = 8.0
+S3_SLOWDOWN_CODES = frozenset({'SlowDownRead', 'SlowDownWrite', 'SlowDown'})
+
+
+def s3_retry_code(error: Exception) -> str:
+    """Recognize vendor rate limits without publishing SDK response details."""
+    response = getattr(error, 'response', None)
+    detail = response.get('Error') if isinstance(response, dict) else None
+    code = detail.get('Code') if isinstance(detail, dict) else None
+    return code if isinstance(code, str) and code in S3_SLOWDOWN_CODES else ''
+
+
+def _source_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 def storage_mode(root: Path) -> str:
@@ -54,7 +72,6 @@ class S3Archive:
         self.catalog = self.state / "catalog.sqlite3"
         self.backend = "postgres" if postgres_enabled() else "sqlite"
         self._transfer_config: Any = None
-        self._verified: set[str] = set()
         if client is None:
             config_path = config_path or Path(
                 os.environ.get(
@@ -79,12 +96,12 @@ class S3Archive:
                     s3={"addressing_style": cfg.get("addressing_style", "path")},
                     connect_timeout=10,
                     read_timeout=120,
-                    retries={"max_attempts": 3},
+                    retries={"mode": "adaptive", "total_max_attempts": 8},
                 ),
             )
             self.bucket = cfg["bucket"]
             self._transfer_config = importlib.import_module("boto3.s3.transfer").TransferConfig(
-                max_concurrency=2, use_threads=True
+                max_concurrency=1, use_threads=True
             )
         else:
             self.bucket = "test-archive"
@@ -216,21 +233,21 @@ class S3Archive:
         return result
 
     def _upload_verified(self, key: str, stream: Any, size: int, digest: str) -> None:
-        stream.seek(0)
-        self.client.upload_fileobj(
-            stream,
-            self.bucket,
-            key,
-            ExtraArgs={"Metadata": {"sha256": digest}},
-            Config=self._transfer_config,
-        )
-        actual = hashlib.sha256()
-        total = 0
-        for block in self._range_blocks(key, 0, size):
-            actual.update(block)
-            total += len(block)
-        if total != size or actual.hexdigest() != digest:
-            raise OSError("S3 上传后回读 SHA256 校验失败")
+        for attempt in range(UPLOAD_ATTEMPTS):
+            # Multipart failures may consume all or part of the stream.
+            stream.seek(0)
+            try:
+                self.client.upload_fileobj(
+                    stream, self.bucket, key,
+                    ExtraArgs={"Metadata": {"sha256": digest}},
+                    Config=self._transfer_config,
+                )
+                self.verify_pack(key, expected=(size, digest))
+                return
+            except Exception as error:
+                if not s3_retry_code(error) or attempt + 1 == UPLOAD_ATTEMPTS:
+                    raise
+                time.sleep(min(UPLOAD_RETRY_MAX_S, UPLOAD_RETRY_BASE_S * 2 ** attempt))
 
     def migrate(self, paths: Iterable[Path], *, cleanup: bool = False) -> dict[str, int]:
         totals = {"uploaded_files": 0, "uploaded_bytes": 0, "cleaned_files": 0, "cleaned_bytes": 0}
@@ -321,7 +338,6 @@ class S3Archive:
             stream.seek(0)
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
             self._upload_verified(key, stream, length, digest)
-            self._verified.add(key)
             manifest = gzip.compress(
                 json.dumps(
                     {"version": 1, "key": key, "bytes": length, "sha256": digest, "files": records},
@@ -364,54 +380,114 @@ class S3Archive:
         )
         os.replace(temporary, progress)
 
-    def cleanup(self, paths: Iterable[Path]) -> dict[str, int]:
-        """Only immutable/closed archives; caller must exclude active state."""
+    def cleanup(self, paths: Iterable[Path], *, lock_path: Path | None = None,
+                guard: Callable[[Path], bool] | None = None) -> dict[str, int]:
+        """Verify outside the replay lock; recheck identity/guard before unlink.
+
+        Full-pack proofs are shared only within this invocation. Every candidate
+        rechecks the remote length and immutable ETag/version, never a lifetime
+        set of previously verified object keys.
+        """
         total = {"files": 0, "bytes": 0}
-        with closing(self._db()) as db, db:
+        verified: dict[tuple[Any, ...], tuple[Any, ...]] = {}
+        record_sql = ('SELECT f.size,f.mtime_ns,f.sha256,f.object_key,f."offset",'
+                      'f.compressed,p.bytes,p.sha256 FROM files f LEFT JOIN packs p '
+                      'ON p.object_key=f.object_key WHERE f.path=?')
+        if lock_path is not None:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+        # A catalogue may contain tens of thousands of members. Reuse the
+        # connection, while ending every read transaction before hashing or I/O.
+        with closing(self._db()) as db:
             for path in paths:
-                row = db.execute(
-                    "SELECT size,mtime_ns,sha256,object_key FROM files WHERE path=?",
-                    (self._relative(path),),
-                ).fetchone()
-                if row is None:
+                if path.is_symlink():
                     continue
-                if not path.exists():
-                    # A worker can be terminated after unlink() but before
-                    # the catalog transaction commits. A row is inserted only
-                    # after upload and read-back verification, so the remote
-                    # pack is already the authoritative copy here. Do not
-                    # download a multi-gigabyte pack again just to repair the
-                    # local bookkeeping transaction.
-                    db.execute("UPDATE files SET cleaned=1 WHERE path=?", (self._relative(path),))
+                relative = self._relative(path)
+                raw = db.execute(record_sql, (relative,)).fetchone()
+                db.commit()
+                if raw is None:
                     continue
-                stat = path.stat()
-                if (stat.st_size, stat.st_mtime_ns) != (row[0], row[1]):
+                row = tuple(raw)
+                try:
+                    before = path.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    # Repair bookkeeping after an earlier verified unlink. No
+                    # remaining source is deleted by this recovery branch.
+                    with db:
+                        if tuple(db.execute(record_sql, (relative,)).fetchone() or ()) == row:
+                            db.execute('UPDATE files SET cleaned=1 WHERE path=?', (relative,))
                     continue
-                if row[3] not in self._verified:
-                    self.verify_pack(row[3])
-                    self._verified.add(row[3])
-                with path.open("rb") as original:
-                    if hashlib.file_digest(original, "sha256").hexdigest() != row[2]:
+                if (not stat_module.S_ISREG(before.st_mode)
+                        or (before.st_size, before.st_mtime_ns) != row[:2]
+                        or (guard is not None and not guard(path))):
+                    continue
+                if row[6] is None or row[7] is None:
+                    raise OSError('归档缺少完整对象校验信息')
+                pack_identity = (row[3], int(row[6]), row[7])
+                remote = self._remote_identity(row[3])
+                if verified.get(pack_identity) != remote:
+                    remote = self.verify_pack(row[3], expected=(int(row[6]), row[7]))
+                    # Without an immutable remote identity, never reuse the proof.
+                    if remote[1] or remote[2]:
+                        verified[pack_identity] = remote
+                with path.open('rb') as original:
+                    if _source_identity(os.fstat(original.fileno())) != _source_identity(before):
                         continue
-                path.unlink()
-                db.execute("UPDATE files SET cleaned=1 WHERE path=?", (self._relative(path),))
-                total["files"] += 1
-                total["bytes"] += stat.st_size
+                    digest = hashlib.file_digest(original, 'sha256').hexdigest()
+                    if (digest != row[2] or _source_identity(os.fstat(original.fileno()))
+                            != _source_identity(before)):
+                        continue
+                # Both network I/O and the potentially multi-GB local hash finished
+                # before acquiring the shared replay deletion lock.
+                with (lock_path.open('a') if lock_path else nullcontext(None)) as lock:
+                    if lock is not None:
+                        fcntl.flock(lock, fcntl.LOCK_EX)
+                    try:
+                        with db:
+                            current = db.execute(record_sql, (relative,)).fetchone()
+                            if current is None or tuple(current) != row:
+                                continue
+                            if guard is not None and not guard(path):
+                                continue
+                            try:
+                                latest = path.stat(follow_symlinks=False)
+                            except FileNotFoundError:
+                                continue
+                            if _source_identity(latest) != _source_identity(before):
+                                continue
+                            path.unlink()
+                            db.execute('UPDATE files SET cleaned=1 WHERE path=?', (relative,))
+                            total['files'] += 1
+                            total['bytes'] += before.st_size
+                    finally:
+                        if lock is not None:
+                            fcntl.flock(lock, fcntl.LOCK_UN)
         return total
 
-    def verify_pack(self, key: str) -> None:
-        with closing(self._db()) as db:
-            expected = db.execute(
-                "SELECT bytes,sha256 FROM packs WHERE object_key=?", (key,)
-            ).fetchone()
+    def _remote_identity(self, key: str) -> tuple[Any, ...]:
+        metadata = self.client.head_object(Bucket=self.bucket, Key=key)
+        length = metadata.get('ContentLength')
+        if isinstance(length, bool) or not isinstance(length, int) or length < 0:
+            raise OSError('远端归档缺少完整长度')
+        return (length, metadata.get('ETag'), metadata.get('VersionId'))
+
+    def verify_pack(self, key: str, *, expected: tuple[int, str] | None = None) -> tuple[Any, ...]:
+        if expected is None:
+            with closing(self._db()) as db:
+                raw = db.execute('SELECT bytes,sha256 FROM packs WHERE object_key=?', (key,)).fetchone()
+            expected = (int(raw[0]), raw[1]) if raw is not None else None
         if expected is None:
             raise OSError("归档缺少完整对象校验信息")
+        remote = self._remote_identity(key)
+        if remote[0] != expected[0]:
+            raise OSError('清理前远端归档长度校验失败')
         digest, size = hashlib.sha256(), 0
         for block in self._range_blocks(key, 0, expected[0]):
             digest.update(block)
             size += len(block)
-        if (size, digest.hexdigest()) != tuple(expected):
+        if ((size, digest.hexdigest()) != tuple(expected)
+                or self._remote_identity(key) != remote):
             raise OSError("清理前远端归档校验失败")
+        return remote
 
     def rebuild_catalog(self) -> int:
         """Recover the local index from permanent remote pack manifests."""

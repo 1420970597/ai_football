@@ -29,9 +29,11 @@ from store.training_data import (snapshot_inputs, write_inputs, write_prediction
 from store.training_projection import (prepare_postgres_schema, projection_target_from_env,
                                        close_persistent_writer)
 from store.runtime_settings_db import load_runtime_settings
+from store.replay_source import REPLAY_SOURCE_PROTOCOL, ReplaySource, ReplaySources
 
 REPLAY_MEMBERS_PER_CYCLE = 16
 REPLAY_CYCLE_BUDGET_S = .25
+REPLAY_NEWEST_CYCLES_PER_OLD = 4
 LIVE_MEMBERS_PER_CYCLE = 16
 LIVE_CYCLE_BUDGET_S = .1
 LIVE_RECOVERY_MEMBERS_PER_CYCLE = 64
@@ -62,32 +64,41 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def journal_members(path: Path, offset: int, *, limit: int, budget_s: float) -> Iterator[tuple[int,list[dict[str,Any]]]]:
-    """One gzip parser shared by historical inputs and the live tail."""
+def stream_journal_members(source: Any, offset: int, *, limit: int,
+                           budget_s: float) -> Iterator[tuple[int,list[dict[str,Any]]]]:
+    """Decode source-byte gzip members identically for files and S3 streams."""
     deadline = time.monotonic()+budget_s
-    with path.open('rb') as source:
+    source.seek(offset)
+    for _ in range(limit):
+        if time.monotonic() >= deadline:
+            return
+        decoder = zlib.decompressobj(31)
+        linebuf = bytearray()
+        while not decoder.eof:
+            compressed = source.read(64*1024)
+            if not compressed:
+                return  # Partial member remains retryable at the same cursor.
+            linebuf.extend(decoder.decompress(compressed,GZIP_MEMBER_MAX_BYTES-len(linebuf)+1))
+            if len(linebuf) > GZIP_MEMBER_MAX_BYTES or decoder.unconsumed_tail:
+                raise ValueError('决策日志成员超过解码内存上限')
+        end = source.tell()-len(decoder.unused_data)
+        if end <= offset:
+            raise ValueError('决策日志 gzip 成员游标未前进')
+        lines = linebuf.split(b'\n')
+        if lines[-1]:
+            raise ValueError('决策归档成员缺少完整记录边界')
+        rows = [json.loads(line) for line in lines[:-1] if line]
+        if not all(isinstance(row,dict) for row in rows):
+            raise ValueError('决策归档记录必须为 JSON 对象')
+        yield end,rows
+        offset = end
         source.seek(offset)
-        for _ in range(limit):
-            if time.monotonic() >= deadline:
-                return
-            decoder = zlib.decompressobj(31)
-            linebuf = bytearray()
-            while not decoder.eof:
-                compressed = source.read(64*1024)
-                if not compressed:
-                    return  # Partial member remains retryable at same cursor.
-                linebuf.extend(decoder.decompress(compressed,GZIP_MEMBER_MAX_BYTES-len(linebuf)+1))
-                if len(linebuf) > GZIP_MEMBER_MAX_BYTES or decoder.unconsumed_tail:
-                    raise ValueError('决策日志成员超过解码内存上限')
-            end = source.tell()-len(decoder.unused_data)
-            if end <= offset:
-                raise ValueError('决策日志 gzip 成员游标未前进')
-            lines = linebuf.split(b'\n')
-            if lines[-1]:
-                raise ValueError('决策归档成员缺少完整记录边界')
-            yield end,[json.loads(line) for line in lines[:-1] if line]
-            offset = end
-            source.seek(offset)
+
+
+def journal_members(path: Path, offset: int, *, limit: int, budget_s: float) -> Iterator[tuple[int,list[dict[str,Any]]]]:
+    """Local-only wrapper retained for the independently checkpointed live tail."""
+    with path.open('rb') as source:
+        yield from stream_journal_members(source,offset,limit=limit,budget_s=budget_s)
 
 
 def journal_tail_boundary(path: Path) -> int:
@@ -162,6 +173,9 @@ class ModelService:
         self._process_started = 0.0
         self._stats_process: subprocess.Popen[Any] | None = None
         self._cursor: dict[str, int] = {}
+        self._replay_sources: ReplaySources | None = None
+        self._replay_oldest_name = ''
+        self._replay_newest_cycles = 0
         self._live_cursor: dict[str, int] = {}
         self._live_inodes: dict[str,list[int]] = {}
         self._live_stats: dict[str,Any] = {'state':'not_started'}
@@ -176,7 +190,8 @@ class ModelService:
         self._replay_stats: dict[str, Any] = {
             'last_file': '', 'last_at': '', 'last_batch_records': 0,
             'last_batch_inputs': 0, 'total_records': 0, 'total_inputs': 0,
-            'backlog_files': 0,
+            'backlog_files': 0, 'source_protocol': 0, 'source_backend': 'local',
+            'remote_read_verified': False,
         }
 
     def bind(self, root: str | None) -> None:
@@ -198,6 +213,9 @@ class ModelService:
             self._storage = {}
             self._status = {'state': 'not_started'}
             self._cursor = {}
+            self._replay_sources = None
+            self._replay_oldest_name = ''
+            self._replay_newest_cycles = 0
             self._live_cursor = {}
             self._live_inodes = {}
             self._live_stats = {'state':'not_started'}
@@ -211,7 +229,8 @@ class ModelService:
             self._replay_stats = {
                 'last_file': '', 'last_at': '', 'last_batch_records': 0,
                 'last_batch_inputs': 0, 'total_records': 0, 'total_inputs': 0,
-                'backlog_files': 0,
+                'backlog_files': 0, 'source_protocol': 0, 'source_backend': 'local',
+                'remote_read_verified': False,
             }
             self._read()
 
@@ -341,6 +360,7 @@ class ModelService:
             if not self.cfg.model_training_enabled:
                 status['state'] = 'disabled'
             return {'model': model, 'training': status, 'storage': deepcopy(self._storage),
+                    'replay':dict(self._replay_stats),
                     'settings': {'enabled': self.cfg.model_training_enabled, 'shadow_enabled': self.cfg.model_shadow_enabled,
                                  'decision_mode': self.cfg.decision_mode,
                                  'model_blend_weight': self.cfg.model_blend_weight,
@@ -561,6 +581,9 @@ class ModelService:
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()
+        if self._replay_sources is not None:
+            self._replay_sources.close()
+        self._replay_stats.update(source_protocol=0,source_backend='local',remote_read_verified=False)
         with self._lock:
             process = self._process
         if process and process.poll() is None:
@@ -592,7 +615,11 @@ class ModelService:
         self._thread = None
         self._live_thread = None
         self._persist_thread = None
+        if self._replay_sources is not None:
+            self._replay_sources.close()
+            self._replay_sources = None
         self._flush_shadow()
+        self._replay_stats.update(source_protocol=0,source_backend='local',remote_read_verified=False)
         self._publish(False)
 
     def _reload_settings(self) -> None:
@@ -658,54 +685,115 @@ class ModelService:
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
+    def _replay_source_failure(self, exc: Exception) -> None:
+        # Never copy provider responses, object paths or credentials into status.
+        self._replay_stats.update(source_protocol=0,source_backend='local',remote_read_verified=False,
+            source_state='error',source_error='历史归档读取失败，保留游标并等待重试',
+            source_error_type=type(exc).__name__,last_batch_records=0,last_batch_inputs=0)
+
+    def _verify_remote_replay(self, sources: ReplaySources) -> None:
+        if self._replay_stats.get('remote_read_verified'):
+            return
+        remote = sources.probe_source()
+        if remote is None:
+            self._replay_stats.update(source_protocol=0,source_backend='local',remote_read_verified=False,
+                source_state='local',source_error='',source_error_type='')
+            return
+        # probe_source deliberately bypasses local preference. A catalog entry
+        # is insufficient: decode a complete JSON member from its remote pack.
+        with sources.open(remote,offset=0) as stream:
+            decoded = next(stream_journal_members(stream,0,limit=1,budget_s=REPLAY_CYCLE_BUDGET_S),None)
+        if decoded is None or not decoded[1]:
+            raise ValueError('远程决策归档尚未解出完整 JSON 成员')
+        self._replay_stats.update(source_protocol=REPLAY_SOURCE_PROTOCOL,source_backend='s3_stream',
+            remote_read_verified=True,source_state='ready',source_error='',source_error_type='')
+
+    def _pending_replay_sources(self, sources: list[ReplaySource]) -> list[ReplaySource]:
+        pending = []
+        for source in sorted(sources,key=lambda item:(item.mtime_ns,item.name),reverse=True):
+            offset = self._cursor.get(source.name,0)
+            if source.size < offset:
+                raise ValueError('永久决策日志被截断，不能跳过输入')
+            if source.size > offset:
+                pending.append(source)
+        return pending
+
+    def _choose_replay_source(self, pending: list[ReplaySource]) -> ReplaySource:
+        oldest = next((source for source in pending if source.name == self._replay_oldest_name),None)
+        if oldest is None:
+            oldest = pending[-1]
+            self._replay_oldest_name = oldest.name
+        if self._replay_newest_cycles >= REPLAY_NEWEST_CYCLES_PER_OLD or pending[0].name == oldest.name:
+            self._replay_newest_cycles = 0
+            return oldest
+        self._replay_newest_cycles += 1
+        return pending[0]
+
     def _consume_replay_locked(self) -> None:
         if self.root is None:
             return
-        # A failed PG write retains this batch. Never decode/append the same
-        # unconfirmed journal range repeatedly during a prolonged outage.
+        # Failed PG writes retain the batch. Decode it again only after the
+        # retained inputs have committed; identity makes crash replay idempotent.
         if self._inputs:
             self._flush_inputs()
         cursor_path = self.root.parent / 'models' / 'replay-cursor.json'
         if cursor_path.exists():
             persisted = json.loads(cursor_path.read_text())
-            if isinstance(persisted, dict):
+            if isinstance(persisted,dict):
                 self._cursor.update(persisted)
-        # Prefer the newest journal first. In S3 mode old hourly chunks can be
-        # multi-gigabyte; draining them in lexical order starves today's live
-        # decisions and leaves the training input projection empty.
-        paths = sorted(self.root.glob('live-replay*.jsonl.gz'),
-                       key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
-        for path in paths:
-            offset = self._cursor.get(path.name, 0)
-            if path.stat().st_size < offset:
-                raise ValueError('永久决策日志被截断，不能跳过输入')
-            if path.stat().st_size == offset:
-                continue
-            start_offset = offset
-            batch_records = batch_inputs = 0
-            for end, rows in journal_members(path,offset,limit=REPLAY_MEMBERS_PER_CYCLE,budget_s=REPLAY_CYCLE_BUDGET_S):
-                for row in rows:
-                    batch_records += 1
-                    before = len(self._inputs)
-                    self.observe(row,predict_shadow=False)
-                    batch_inputs += len(self._inputs)-before
-                    self._replay_stats['last_at'] = str(row.get('computed_at') or '')
-                offset = end
-            if offset == start_offset:
-                continue
-            # Commit all decoded members before advancing the cursor. Replay
-            # after a crash is idempotent through the inputs primary key.
-            self._flush_inputs()
-            self._cursor[path.name] = offset
-            atomic_json(cursor_path, self._cursor)
-            self._replay_stats.update(last_file=path.name, last_batch_records=batch_records,
-                                      last_batch_inputs=batch_inputs,
-                                      total_records=self._replay_stats['total_records'] + batch_records,
-                                      total_inputs=self._replay_stats['total_inputs'] + batch_inputs)
-            self._replay_stats['backlog_files'] = sum(
-                1 for item in paths if self._cursor.get(item.name, 0) < item.stat().st_size)
-            return  # Bound each loop to a finite batch; heartbeat/training continue.
-        self._replay_stats.update(last_batch_records=0, last_batch_inputs=0, backlog_files=0)
+        try:
+            if self._replay_sources is None:
+                self._replay_sources = ReplaySources(self.root)
+            sources = self._replay_sources
+            listed = sources.list_sources()
+            self._verify_remote_replay(sources)
+            pending = self._pending_replay_sources(listed)
+        except Exception as exc:
+            self._replay_source_failure(exc)
+            return  # Only history is unavailable; live inference remains local.
+        self._replay_stats['backlog_files'] = len(pending)
+        if not pending:
+            self._replay_stats.update(last_batch_records=0,last_batch_inputs=0)
+            return
+        source = self._choose_replay_source(pending)
+        start_offset = offset = self._cursor.get(source.name,0)
+        batch_records = batch_inputs = 0
+        inputs_start = len(self._inputs)
+        try:
+            with sources.open(source,offset=offset) as stream:
+                for end,rows in stream_journal_members(stream,offset,limit=REPLAY_MEMBERS_PER_CYCLE,
+                                                       budget_s=REPLAY_CYCLE_BUDGET_S):
+                    for row in rows:
+                        batch_records += 1
+                        before = len(self._inputs)
+                        self.observe(row,predict_shadow=False)
+                        batch_inputs += len(self._inputs)-before
+                        self._replay_stats['last_at'] = str(row.get('computed_at') or '')
+                    offset = end
+                if source.remote and offset == source.size and stream.read(1):
+                    raise ValueError('远程决策归档长度与目录不符')
+        except Exception as exc:
+            # An unverified/corrupt source must not leak staged rows into the
+            # next cycle's PG retry flush. PG submission failures below retain
+            # their already verified input batch instead.
+            with self._lock:
+                del self._inputs[inputs_start:]
+            self._replay_source_failure(exc)
+            return
+        if offset == start_offset:
+            self._replay_stats.update(last_batch_records=0,last_batch_inputs=0)
+            return
+        # A source cursor is durable only after the entire decoded PG batch.
+        self._flush_inputs()
+        checkpoint = {**self._cursor,source.name:offset}
+        atomic_json(cursor_path,checkpoint)
+        self._cursor = checkpoint
+        if source.name == self._replay_oldest_name and offset >= source.size:
+            self._replay_oldest_name = ''
+        self._replay_stats.update(last_file=source.name,last_batch_records=batch_records,
+            last_batch_inputs=batch_inputs,total_records=self._replay_stats['total_records']+batch_records,
+            total_inputs=self._replay_stats['total_inputs']+batch_inputs,
+            backlog_files=sum(1 for item in listed if self._cursor.get(item.name,0) < item.size))
 
     def _initialize_live_cursor(self) -> None:
         if self.root is None:

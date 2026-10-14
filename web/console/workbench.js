@@ -1,7 +1,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const S = {view: 'live', type: 'real', league: '', search: '', matches: [], selected: null,
-  request: 0, detailRequest: 0, historyRequest: 0, recommendationsRequest: 0, historyOffset: 0, historyNext: null, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false, accountBusy: false, accountAt: 0, betStatusUnsupported: false};
+  request: 0, detailRequest: 0, historyRequest: 0, recommendationsRequest: 0, recommendationsEpoch: 0, recommendationsOffset: 0, recommendationsDesiredOffset: 0, recommendationsLimit: 100, recommendationsTotal: 0, historyOffset: 0, historyNext: null, busy: false, loaded: false, timer: null, chartKey: '', marketScope: 'all', expandedMatches: new Set(), settingsVersion: 0, settingsBusy: false, accountBusy: false, accountAt: 0, betStatusUnsupported: false};
 const API = '/api/v1';
 const POLL_MS = 5000;
 const algorithmLabel = a => ({economic_ensemble:'经济学汇总', economics_control:'纯经济学', economics_llm:'经济学 + LLM', poisson_market: '盘口 Poisson', poisson_time_decay: '衰减 Poisson',
@@ -26,24 +26,43 @@ function notice(id, message = '', error = false) {
   $(id).classList.toggle('error', error);
 }
 async function get(path) {
+  const requestSignal = AbortSignal.timeout(8000);
+  let readStage = 'fetch';
   try {
-    const response = await fetch(API + path, {signal: AbortSignal.timeout(8000), cache: 'no-store'});
+    const response = await fetch(API + path, {signal: requestSignal, cache: 'no-store'});
     if (!response.ok) {
       const error = new Error('读取失败（' + response.status + '）');
       error.status = response.status;
+      error.readFailureKind = 'http';
       throw error;
     }
+    readStage = 'body';
     return await response.json();
-  } catch (error) {
-    if (error.name === 'TimeoutError') {
-      const timeout = new Error('读取超时，服务暂未响应');
-      timeout.name = 'TimeoutError';
-      throw timeout;
+  } catch (cause) {
+    const error = new Error(cause.message || '读取失败');
+    error.name = cause.name || 'Error';
+    error.readStage = readStage;
+    error.readAbortReason = requestSignal.aborted ? requestSignal.reason?.name : undefined;
+    error.status = cause.status;
+    const timedOut = cause.name === 'TimeoutError' || (requestSignal.aborted && requestSignal.reason?.name === 'TimeoutError');
+    error.readFailureKind = cause.readFailureKind || (timedOut ? 'timeout' :
+      cause.name === 'SyntaxError' ? 'json' : cause.name === 'TypeError' ? 'network' : 'read');
+    if (error.readFailureKind === 'timeout') {
+      error.name = 'TimeoutError';
+      error.message = '请求读取超时';
     }
     throw error;
   }
 }
-const temporaryReadError = error => error.name === 'TimeoutError' || error.name === 'TypeError' || [502,503,504].includes(error.status);
+const temporaryReadError = error => !!error.readStage && (['timeout','network'].includes(error.readFailureKind) || [502,503,504].includes(error.status));
+function recommendationReadMessage(error) {
+  const retry = '，保留上次结果，30秒后自动重试，也可点击刷新。';
+  if ([502,503,504].includes(error.status)) return '后端服务暂不可用（' + error.status + '）' + retry;
+  if (error.readFailureKind === 'timeout') return '请求读取超时' + retry;
+  if (error.readFailureKind === 'network') return '连接失败' + retry;
+  if (error.readFailureKind === 'json') return '响应数据格式异常，保留上次结果，可点击刷新重试。';
+  return error.message + '，保留上次结果，可点击刷新重试。';
+}
 function accountPnl(data) {
   const pnl = data?.today_pnl;
   const available = pnl?.available === true && typeof pnl.amount === 'number' && Number.isFinite(pnl.amount);
@@ -116,6 +135,7 @@ async function loadAccount() {
   finally { S.accountBusy = false; }
 }
 function switchView(view) {
+  if (view !== S.view && (view === 'recommendations' || S.view === 'recommendations')) S.recommendationsEpoch++;
   S.view = view;
   for (const key of ['live', 'recommendations', 'history', 'data-model', 'settings']) {
     $(key + '-view').hidden = key !== view;
@@ -203,9 +223,11 @@ function renderRecommendationCard(item) {
     el('div',{class:'buy-metrics'},[
       el('span',{text:'概率 ' + pct(pick.p_model ?? item.p_fused)}),
       el('span',{text:'置信度 ' + pct(pick.confidence ?? item.confidence)}),
-      el('span',{text:evidenceSummary({hit_count: pick.hit_count ?? item.hit_count,
-        miss_count: pick.miss_count ?? item.miss_count,
-        pending_count: pick.pending_count ?? item.pending_count})}),
+      el('span',{text:evidenceSummary({decision_count:pick.decision_count ?? item.decision_count,
+        decision_occurrences:pick.decision_occurrences ?? item.decision_occurrences,
+        settled_hit_count:pick.settled_hit_count ?? item.settled_hit_count, hit_count:pick.hit_count ?? item.hit_count,
+        miss_count:pick.miss_count ?? item.miss_count, pending_decisions:pick.pending_decisions ?? item.pending_decisions,
+        pending_count:pick.pending_count ?? item.pending_count})}),
       el('span',{text:'综合 ' + pct(pick.composite_confidence ?? item.composite_confidence)}),
       el('span',{text:'赔率状态 ' + (item.market_open ? '开启' : '已关闭')})]),
     ...(betting ? [el('small',{class:'buy-execution',text:'投注：' + (executionLabels[betting.status] || betting.status) +
@@ -218,17 +240,35 @@ function renderRecommendationCard(item) {
   ]);
 }
 
+function recommendationPageData(data) {
+  const invalid = () => {const error = new Error('推荐响应结构异常'); error.name = 'RecommendationDataError'; throw error;};
+  if (!data || typeof data !== 'object' || !Array.isArray(data.open) || !Array.isArray(data.closed) ||
+      !data.summary || typeof data.summary !== 'object' || Array.isArray(data.summary)) invalid();
+  const page = data.closed_page;
+  if (!page || page.scope !== 'recent_recommendations' ||
+      !['offset','limit','returned','total_available','summary_total'].every(key => Number.isSafeInteger(page[key]) && page[key] >= 0) ||
+      page.limit < 1 || page.limit > 100 || page.returned !== data.closed.length || page.returned > page.limit ||
+      page.offset + page.returned > page.total_available || (page.total_available === 0 && page.offset !== 0) ||
+      typeof page.window_truncated !== 'boolean' ||
+      !['next_offset','prev_offset'].every(key => page[key] === null || Number.isSafeInteger(page[key]) && page[key] >= 0)) invalid();
+  if (![...data.open,...data.closed].every(item => item && typeof item === 'object' && !Array.isArray(item))) invalid();
+  return page;
+}
 function renderRecommendationsPage(data) {
-  const open = data.open || [];
-  const closed = data.closed || [];
-  const summary = data.summary || {};
-  $('recommendations-stats').replaceChildren(...[
-    ['开启盘口', open.length], ['关闭盘口', closed.length], ['正确', summary.won || 0],
+  const page = recommendationPageData(data);
+  const open = data.open;
+  const closed = data.closed;
+  const summary = data.summary;
+  // Prepare and validate every node before replacing the previously visible result.
+  const ids = ['recommendations-stats','open-recommendation-count','open-recommendations','closed-recommendation-count',
+    'closed-recommendations','closed-recommendations-empty','closed-recommendations-page','closed-recommendations-scope',
+    'closed-recommendations-prev','closed-recommendations-next'];
+  const targets = Object.fromEntries(ids.map(id => {const node = $(id); if (!node) throw new Error('推荐视图不完整'); return [id,node];}));
+  const stats = [
+    ['开启盘口', open.length], ['窗口内关闭盘口', page.total_available], ['正确', summary.won || 0],
     ['错误', summary.lost || 0], ['待结算', summary.pending || 0]
-  ].map(([label, value]) => el('div', {}, [el('span', {text: label}), el('strong', {text: String(value)})])));
-  $('open-recommendation-count').textContent = open.length + ' 个';
-  $('open-recommendations').replaceChildren(...(open.length ? open.map(renderRecommendationCard) : [el('div',{class:'buy-empty',text:'暂无开启盘口推荐'})]));
-  $('closed-recommendation-count').textContent = closed.length + ' 个';
+  ].map(([label, value]) => el('div', {}, [el('span', {text: label}), el('strong', {text: String(value)})]));
+  const openNodes = open.length ? open.map(renderRecommendationCard) : [el('div',{class:'buy-empty',text:'暂无开启盘口推荐'})];
   const statusLabel = {won:'正确', lost:'错误', half_won:'赢半', half_lost:'输半', push:'走水', pending:'待结算', void:'无法结算'};
   const rows = closed.map(item => {
     const date = new Date(item.at);
@@ -243,27 +283,83 @@ function renderRecommendationsPage(data) {
       el('td', {class:kind, text:['pending','void'].includes(item.status) ? '—' : (item.pnl > 0 ? '+' : '') + fixed(item.pnl)})
     ]);
   });
-  $('closed-recommendations').replaceChildren(...rows);
-  $('closed-recommendations-empty').hidden = !!rows.length;
+  const range = rows.length ? (page.offset + 1) + '–' + (page.offset + rows.length) : '0';
+  const pageText = range + ' / 窗口内 ' + page.total_available + ' 条';
+  const scope = '关闭盘口仅展示最近推荐窗口（最多1000条' + (page.window_truncated ? '，已截断' : '') +
+    '）；正确 / 错误 / 待结算来自最近推荐汇总（' + page.summary_total + '条）。以上均非全部历史，完整记录请查看战绩。';
+  const sourceNote = data.source_age_s != null ? '实时盘口更新于 ' + fixed(data.source_age_s, 1) + 's 前' : '';
+  targets['recommendations-stats'].replaceChildren(...stats);
+  targets['open-recommendation-count'].textContent = open.length + ' 个';
+  targets['open-recommendations'].replaceChildren(...openNodes);
+  targets['closed-recommendation-count'].textContent = '本页 ' + rows.length + ' 个';
+  targets['closed-recommendations'].replaceChildren(...rows);
+  targets['closed-recommendations-empty'].hidden = !!rows.length;
+  targets['closed-recommendations-page'].textContent = pageText;
+  targets['closed-recommendations-scope'].textContent = scope;
+  targets['closed-recommendations-prev'].disabled = page.prev_offset === null;
+  targets['closed-recommendations-next'].disabled = page.next_offset === null;
+  S.recommendationsOffset = page.offset;
+  S.recommendationsDesiredOffset = page.offset;
+  S.recommendationsLimit = page.limit;
+  S.recommendationsTotal = page.total_available;
+  S.recommendationsPrev = page.prev_offset;
+  S.recommendationsNext = page.next_offset;
+  return sourceNote;
 }
-
+function changeRecommendationsPage(direction) {
+  const limit = S.recommendationsLimit;
+  const maxOffset = Math.max(0, Math.ceil(S.recommendationsTotal / limit) - 1) * limit;
+  S.recommendationsDesiredOffset = Math.max(0, Math.min(maxOffset, S.recommendationsDesiredOffset + direction * limit));
+  $('closed-recommendations-prev').disabled = S.recommendationsDesiredOffset === 0;
+  $('closed-recommendations-next').disabled = S.recommendationsDesiredOffset >= maxOffset;
+  loadRecommendations(true);
+}
 async function loadRecommendations(force = false) {
-  if (S.recommendationsBusy || (force !== true && Date.now() < (S.recommendationsNextAt || 0))) return;
+  if (S.view !== 'recommendations') return;
+  if (S.recommendationsBusy) {
+    if (force === true || S.recommendationsDesiredOffset !== S.recommendationsActiveOffset || S.recommendationsEpoch !== S.recommendationsActiveEpoch)
+      S.recommendationsPending = true;
+    return;
+  }
+  if (force !== true && Date.now() < (S.recommendationsNextAt || 0)) return;
   S.recommendationsBusy = true;
+  S.recommendationsPending = false;
   const request = ++S.recommendationsRequest;
+  const offset = S.recommendationsDesiredOffset;
+  const type = S.type;
+  const epoch = S.recommendationsEpoch;
+  S.recommendationsActiveOffset = offset;
+  S.recommendationsActiveEpoch = epoch;
+  const current = () => request === S.recommendationsRequest && S.view === 'recommendations' &&
+    epoch === S.recommendationsEpoch && offset === S.recommendationsDesiredOffset && type === S.type;
   $('recommendations-refresh').disabled = true;
   try {
-    const data = await get('/recommendations?type=' + encodeURIComponent(S.type));
-    if (request !== S.recommendationsRequest || S.view !== 'recommendations') return;
+    let data;
+    try {
+      data = await get('/recommendations?type=' + encodeURIComponent(type) + '&compact=1&closed_limit=100&closed_offset=' + offset);
+    } catch (error) {
+      if (current()) {
+        S.recommendationsNextAt = temporaryReadError(error) ? Date.now() + 30000 : 0;
+        notice('recommendations-notice', recommendationReadMessage(error), true);
+      }
+      return;
+    }
+    if (!current()) return;
     S.recommendationsNextAt = 0;
-    renderRecommendationsPage(data);
-    notice('recommendations-notice', data.source_age_s != null ? '实时盘口更新于 ' + fixed(data.source_age_s, 1) + 's 前' : '');
-  } catch (error) {
-    if (temporaryReadError(error)) S.recommendationsNextAt = Date.now() + 30000;
-    if (request === S.recommendationsRequest) notice('recommendations-notice', temporaryReadError(error) ? '后端服务暂不可用，保留上次结果，30秒后自动重试，也可点击刷新。' : error.message + '，可点击刷新重试。', true);
+    try {
+      const sourceNote = renderRecommendationsPage(data);
+      notice('recommendations-notice', sourceNote);
+    } catch (error) {
+      notice('recommendations-notice', error.name === 'RecommendationDataError' ?
+        '推荐响应结构异常，保留上次结果，可点击刷新重试。' : '页面展示异常，保留上次结果，可点击刷新重试。', true);
+    }
   } finally {
     S.recommendationsBusy = false;
-    if (request === S.recommendationsRequest) $('recommendations-refresh').disabled = false;
+    $('recommendations-refresh').disabled = false;
+    if (S.recommendationsPending && S.view === 'recommendations') {
+      S.recommendationsPending = false;
+      void loadRecommendations(true);
+    }
   }
 }
 function renderMatches() {
@@ -1150,5 +1246,7 @@ async function poll() {
 }
 $('nav-recommendations').addEventListener('click', () => switchView('recommendations'));
 $('recommendations-refresh').addEventListener('click', () => loadRecommendations(true));
+$('closed-recommendations-prev').addEventListener('click', () => changeRecommendationsPage(-1));
+$('closed-recommendations-next').addEventListener('click', () => changeRecommendationsPage(1));
 if (['recommendations', 'history', 'data-model', 'settings'].includes(location.hash.slice(1))) switchView(location.hash.slice(1));
 poll();

@@ -1,7 +1,12 @@
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
+import fcntl
+import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import signal
 import sqlite3
 import tempfile
 import unittest
@@ -11,7 +16,7 @@ from collector.leyu_realtime import TrendStore
 from core.models import OddsSnapshot
 from service.archive_service import backup_databases, cleanable, data_files, record_database_backups
 from service import archive_service
-from store.archive import S3Archive, journal_path, storage_mode
+from store.archive import S3Archive, UPLOAD_ATTEMPTS, journal_path, storage_mode
 from store.snapshot_store import SnapshotStore
 
 
@@ -22,16 +27,25 @@ class FakeS3:
         self.fail = False
         self.corrupt = False
         self.on_upload = None
+        self.on_get = None
+        self.upload_errors = []
+        self.upload_payloads = []
 
     def upload_fileobj(self, stream, bucket, key, **kwargs):
+        if self.upload_errors:
+            self.upload_payloads.append(stream.read())
+            raise self.upload_errors.pop(0)
         if self.fail:
             raise OSError("upload failed")
         self.objects[key] = stream.read()
+        self.upload_payloads.append(self.objects[key])
         self.metadata[key] = kwargs["ExtraArgs"]["Metadata"]
         if self.on_upload:
             self.on_upload()
 
     def get_object(self, *, Bucket, Key, Range=None):
+        if self.on_get:
+            self.on_get()
         raw = self.objects[Key]
         if self.corrupt:
             raw = b"corrupt" + raw
@@ -39,6 +53,12 @@ class FakeS3:
             first, last = map(int, Range[6:].split("-"))
             raw = raw[first : last + 1]
         return {"Body": io.BytesIO(raw), "Metadata": self.metadata[Key]}
+
+    def head_object(self, *, Bucket, Key):
+        raw = self.objects[Key]
+        if self.corrupt:
+            raw = b'corrupt' + raw
+        return {'ContentLength': len(raw), 'ETag': hashlib.md5(raw).hexdigest()}
 
     def get_paginator(self, operation):
         return self
@@ -48,6 +68,358 @@ class FakeS3:
 
 
 class ArchiveTests(unittest.TestCase):
+    def reader_state(self, path, **changes):
+        models = self.root / 'models'
+        models.mkdir(exist_ok=True)
+        info = path.stat()
+        live = {'schema_version': 2, 'cursor': {path.name: info.st_size},
+                'inodes': {path.name: [info.st_dev, info.st_ino]}}
+        dashboard = {'running': True, 'heartbeat_at': datetime.now(timezone.utc).isoformat(),
+                     'replay': {'source_protocol': 1, 'source_backend': 's3_stream',
+                                'remote_read_verified': True}}
+        dashboard.update(changes)
+        (models / 'live-shadow-cursor.json').write_text(json.dumps(live))
+        (models / 'dashboard.json').write_text(json.dumps(dashboard))
+        return live, dashboard
+
+    def test_sealed_replay_early_cleanup_requires_fresh_verified_reader_and_live_eof(self):
+        path = self.source('ledger/live-replay.2020010100.jsonl.gz')
+        live, dashboard = self.reader_state(path)
+        self.assertTrue(cleanable(self.root, path))
+        model_root = self.root / 'models'
+        for changes in ({'running': False},
+                        {'heartbeat_at': (datetime.now(timezone.utc)-timedelta(seconds=91)).isoformat()},
+                        {'heartbeat_at': (datetime.now(timezone.utc)+timedelta(seconds=5)).isoformat()},
+                        {'heartbeat_at': 'invalid'},
+                        {'replay': {'source_protocol': 1, 'source_backend': 'local', 'remote_read_verified': True}},
+                        {'replay': {'source_protocol': 1, 'source_backend': 's3_stream', 'remote_read_verified': False}},
+                        {'replay': {'source_protocol': True, 'source_backend': 's3_stream', 'remote_read_verified': True}}):
+            with self.subTest(changes=changes):
+                (model_root / 'dashboard.json').write_text(json.dumps({**dashboard, **changes}))
+                self.assertFalse(cleanable(self.root, path))
+        (model_root / 'dashboard.json').write_text(json.dumps(dashboard))
+        for changes in ({'schema_version': 1}, {'cursor': {path.name: 0}},
+                        {'inodes': {path.name: [0, 0]}}):
+            with self.subTest(live=changes):
+                (model_root / 'live-shadow-cursor.json').write_text(json.dumps({**live, **changes}))
+                self.assertFalse(cleanable(self.root, path))
+
+    def test_training_eof_fallback_and_active_hour_protection_remain(self):
+        path = self.source('ledger/live-replay.2020010100.jsonl.gz')
+        models = self.root / 'models'
+        models.mkdir()
+        (models / 'replay-cursor.json').write_text(json.dumps({path.name: path.stat().st_size}))
+        (models / 'dashboard.json').write_text('{broken')
+        self.assertTrue(cleanable(self.root, path))
+        hour = datetime.now(timezone.utc).strftime('%Y%m%d%H')
+        active = self.source('ledger/live-replay.'+hour+'.jsonl.gz')
+        self.reader_state(active)
+        (models / 'replay-cursor.json').write_text(json.dumps({active.name: active.stat().st_size}))
+        self.assertFalse(cleanable(self.root, active))
+
+    def test_malformed_reader_state_never_authorizes_early_cleanup(self):
+        path = self.source('ledger/live-replay.2020010100.jsonl.gz')
+        self.reader_state(path)
+        for name in ('replay-cursor.json', 'live-shadow-cursor.json', 'dashboard.json'):
+            state = self.root / 'models' / name
+            before = state.read_text() if state.exists() else None
+            state.write_text('{broken')
+            if name != 'replay-cursor.json':
+                self.assertFalse(cleanable(self.root, path))
+            if before is None:
+                state.unlink()
+            else:
+                state.write_text(before)
+
+    def test_cleanup_network_and_source_hash_are_outside_short_replay_lock(self):
+        path = self.source('ledger/live-replay.2020010100.jsonl.gz')
+        self.archive.migrate([path])
+        lock_path = self.root / 'models/replay.lock'
+        lock_path.parent.mkdir()
+
+        def free_lock():
+            with lock_path.open('a') as handle:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return False
+                finally:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+            return True
+
+        network = []
+        self.client.on_get = lambda: network.append(free_lock())
+        guards = []
+
+        def guard(_path):
+            guards.append(free_lock())
+            return True
+
+        file_digest = hashlib.file_digest
+
+        def local_hash(stream, name):
+            self.assertTrue(free_lock())
+            return file_digest(stream, name)
+
+        with patch('store.archive.hashlib.file_digest', side_effect=local_hash):
+            self.assertEqual(self.archive.cleanup([path], lock_path=lock_path, guard=guard)['files'], 1)
+        self.assertTrue(network and all(network))
+        self.assertEqual(guards, [True, False])
+        self.assertFalse(path.exists())
+
+    def test_cleanup_rechecks_guard_catalogue_and_inode_after_verification(self):
+        for failure in ('guard', 'catalogue', 'inode'):
+            with self.subTest(failure=failure):
+                path = self.source('snapshots/'+failure+'.json', b'original')
+                self.archive.migrate([path])
+                original_stat = path.stat()
+                state = {'touched': False}
+
+                def change(failure=failure, path=path, original_stat=original_stat, state=state):
+                    if state['touched']:
+                        return
+                    state['touched'] = True
+                    if failure == 'catalogue':
+                        with closing(self.archive._db()) as db, db:
+                            db.execute('UPDATE files SET compressed=compressed+1 WHERE path=?',
+                                       (path.relative_to(self.root).as_posix(),))
+                    elif failure == 'inode':
+                        replacement = path.with_suffix('.replacement')
+                        replacement.write_bytes(b'original')
+                        os.utime(replacement, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+                        os.replace(replacement, path)
+
+                self.client.on_get = change
+
+                def guard(_path, failure=failure, state=state):
+                    return not (failure == 'guard' and state['touched'])
+
+                self.assertEqual(self.archive.cleanup([path], guard=guard)['files'], 0)
+                self.assertEqual(path.read_bytes(), b'original')
+                self.client.on_get = None
+
+    def test_cleanup_revalidates_remote_on_later_calls_and_rejects_extra_bytes(self):
+        path = self.source()
+        self.archive.migrate([path])
+        self.assertEqual(self.archive.cleanup([path], guard=lambda _path: False)['files'], 0)
+        with closing(self.archive._db()) as db:
+            key = db.execute('SELECT object_key FROM files').fetchone()[0]
+        self.client.objects[key] += b'extra'
+        with self.assertRaises(OSError):
+            self.archive.cleanup([path])
+        self.assertTrue(path.exists())
+
+    def test_cleanup_reuses_pack_proof_only_inside_current_invocation(self):
+        first = self.source('snapshots/first.json')
+        second = self.source('snapshots/second.json')
+        self.archive.migrate([first, second])
+        with patch.object(self.archive, 'verify_pack', wraps=self.archive.verify_pack) as verify:
+            self.archive.cleanup([first, second])
+            self.assertEqual(verify.call_count, 1)
+        self.archive.restore([first])
+        with patch.object(self.archive, 'verify_pack', wraps=self.archive.verify_pack) as verify:
+            self.archive.cleanup([first])
+            self.assertEqual(verify.call_count, 1)
+
+    def test_cleanup_without_etag_or_version_reverifies_each_member(self):
+        first = self.source('snapshots/first.json')
+        second = self.source('snapshots/second.json')
+        self.archive.migrate([first, second])
+        head = self.client.head_object
+
+        def length_only(**kwargs):
+            return {'ContentLength': head(**kwargs)['ContentLength']}
+
+        with patch.object(self.client, 'head_object', side_effect=length_only), \
+             patch.object(self.archive, 'verify_pack', wraps=self.archive.verify_pack) as verify:
+            self.assertEqual(self.archive.cleanup([first, second])['files'], 2)
+        self.assertEqual(verify.call_count, 2)
+
+    def test_cleanup_reuses_one_connection_and_releases_transactions_before_io(self):
+        paths = [self.source('snapshots/'+name+'.json') for name in ('first', 'second', 'missing')]
+        self.archive.migrate(paths)
+        paths[-1].unlink()
+        connection = self.archive._db()
+
+        class TransactionalConnection:
+            """Make SELECT start a transaction, as a non-autocommit PG read does."""
+            def execute(inner, sql, params=()):
+                if not connection.in_transaction:
+                    connection.execute('BEGIN')
+                return connection.execute(sql, params)
+
+            def commit(inner):
+                connection.commit()
+
+            def close(inner):
+                connection.close()
+
+            def __enter__(inner):
+                return inner
+
+            def __exit__(inner, *args):
+                return connection.__exit__(*args)
+
+        network = []
+
+        def network_read():
+            network.append(True)
+            self.assertFalse(connection.in_transaction)
+
+        self.client.on_get = network_read
+        file_digest = hashlib.file_digest
+        hashes = []
+
+        def local_hash(stream, name):
+            hashes.append(True)
+            self.assertFalse(connection.in_transaction)
+            return file_digest(stream, name)
+
+        with patch.object(self.archive, '_db', return_value=TransactionalConnection()) as connect, \
+             patch('store.archive.hashlib.file_digest', side_effect=local_hash):
+            self.assertEqual(self.archive.cleanup(paths)['files'], 2)
+        connect.assert_called_once_with()
+        self.assertTrue(network)
+        self.assertEqual(len(hashes), 2)
+        with closing(self.archive._db()) as db:
+            self.assertEqual(db.execute('SELECT SUM(cleaned) FROM files').fetchone()[0], 3)
+
+    def test_cleanup_local_hash_mismatch_and_missing_remote_length_preserve_sources(self):
+        path = self.source(raw=b'original')
+        self.archive.migrate([path])
+        before = path.stat()
+        path.write_bytes(b'altered!')
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.assertEqual(self.archive.cleanup([path])['files'], 0)
+        self.assertTrue(path.exists())
+        path.write_bytes(b'original')
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        with patch.object(self.client, 'head_object', return_value={'ETag': 'missing-length'}):
+            with self.assertRaises(OSError):
+                self.archive.cleanup([path])
+        self.assertTrue(path.exists())
+
+    def test_catalogued_sealed_replays_are_prioritized_before_snapshot_walk(self):
+        snapshot = self.source('snapshots/a.json', b'snapshot')
+        small = self.source('ledger/live-replay.2020010100.jsonl.gz', b'small')
+        large = self.source('ledger/live-replay.2020010101.jsonl.gz', b'larger replay')
+        self.archive.migrate([snapshot, small, large])
+        ordered = []
+
+        def capture(_root, _archive, paths):
+            ordered.extend(paths)
+            return {'files': 0, 'bytes': 0}
+
+        with patch.object(archive_service, '_cleanup_paths', side_effect=capture):
+            archive_service._cleanup_catalogued(self.root, self.archive)
+        self.assertEqual(ordered, [large, small, snapshot])
+
+    def test_cleanup_paths_processes_replay_group_before_ordinary_files(self):
+        snapshot = self.source('snapshots/a.json', b'snapshot')
+        replay = self.source('ledger/live-replay.2020010100.jsonl.gz', b'replay')
+        self.reader_state(replay)
+        calls = []
+
+        def capture(paths, **kwargs):
+            calls.append((paths, kwargs))
+            return {'files': 0, 'bytes': 0}
+
+        with patch.object(self.archive, 'cleanup', side_effect=capture):
+            archive_service._cleanup_paths(self.root, self.archive, iter([snapshot, replay]))
+        self.assertEqual([entry[0] for entry in calls], [[replay], [snapshot]])
+        self.assertEqual(calls[0][1]['lock_path'], self.root / 'models/replay.lock')
+        self.assertIsNone(calls[1][1]['lock_path'])
+        self.assertTrue(calls[0][1]['guard'](replay))
+
+    def test_upload_slowdown_retries_rewind_stream_and_are_bounded(self):
+        class SlowDown(Exception):
+            response = {'Error': {'Code': 'SlowDownWrite'}}
+
+        raw = b'verified upload'
+        digest = hashlib.sha256(raw).hexdigest()
+        self.client.upload_errors = [SlowDown('private SDK response')] * 2
+        with patch('store.archive.time.sleep') as sleep:
+            self.archive._upload_verified('retry', io.BytesIO(raw), len(raw), digest)
+        self.assertEqual(self.client.upload_payloads, [raw] * 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+        self.client.upload_payloads.clear()
+        self.client.upload_errors = [SlowDown()] * UPLOAD_ATTEMPTS
+        with patch('store.archive.time.sleep') as sleep:
+            with self.assertRaises(SlowDown):
+                self.archive._upload_verified('exhausted', io.BytesIO(raw), len(raw), digest)
+        self.assertEqual(self.client.upload_payloads, [raw] * UPLOAD_ATTEMPTS)
+        self.assertEqual(sleep.call_count, UPLOAD_ATTEMPTS - 1)
+
+    def test_upload_read_slowdown_rewinds_but_unrelated_failure_is_not_retried(self):
+        class SlowDown(Exception):
+            response = {'Error': {'Code': 'SlowDownRead'}}
+
+        raw = b'upload'
+        original = self.client.get_object
+        failures = [SlowDown()]
+
+        def get(**kwargs):
+            if failures:
+                raise failures.pop()
+            return original(**kwargs)
+
+        with patch.object(self.client, 'get_object', side_effect=get), patch('store.archive.time.sleep'):
+            self.archive._upload_verified('read-retry', io.BytesIO(raw), len(raw), hashlib.sha256(raw).hexdigest())
+        self.assertEqual(self.client.upload_payloads, [raw, raw])
+        self.client.upload_errors = [TypeError('programming defect')]
+        with patch('store.archive.time.sleep') as sleep:
+            with self.assertRaises(TypeError):
+                self.archive._upload_verified('unrelated', io.BytesIO(raw), len(raw), hashlib.sha256(raw).hexdigest())
+        sleep.assert_not_called()
+
+    def test_archive_loop_reports_safe_retry_phase_and_recovers_without_deleting_input(self):
+        path = self.source()
+        captured = []
+        handlers = {}
+        failures = [True]
+
+        class SlowDown(Exception):
+            response = {'Error': {'Code': 'SlowDown'}}
+
+        class Worker:
+            def __init__(worker, root):
+                worker.state = root / '_archive'
+
+            def stats(worker):
+                return {'backend': 's3', 'files': 0, 'bytes': 0}
+
+            def migrate(worker, paths, cleanup=False):
+                list(paths)
+                if failures:
+                    failures.pop()
+                    raise SlowDown('secret response must never be exposed')
+                handlers[signal.SIGTERM]()
+                return {}
+
+        writer = archive_service.atomic_json
+
+        def capture(target, value):
+            captured.append(json.loads(json.dumps(value)))
+            writer(target, value)
+
+        with patch.object(archive_service, 'S3Archive', Worker), \
+             patch.object(archive_service, 'storage_mode', return_value='s3'), \
+             patch.object(archive_service, 'database_backups_enabled', return_value=False), \
+             patch.object(archive_service, 'data_files', side_effect=lambda _root: iter([path])), \
+             patch.object(archive_service, 'atomic_json', side_effect=capture), \
+             patch.object(archive_service.signal, 'signal', side_effect=lambda number, handler: handlers.update({number: handler})), \
+             patch.object(archive_service, 'ARCHIVE_RETRY_BASE_S', .01):
+            archive_service.run(self.root, cleanup=False, once=False)
+        retry = next(item for item in captured if item.get('retrying'))
+        self.assertEqual(retry['error_code'], 'SlowDown')
+        self.assertEqual(retry['phase'], 'uploading')
+        self.assertTrue(retry['running'])
+        self.assertIn('heartbeat_at', retry)
+        self.assertNotIn('secret response', json.dumps(captured))
+        self.assertFalse(captured[-1]['running'])
+        self.assertEqual(captured[-1]['error'], '')
+        self.assertTrue(path.exists())
+
     def test_archive_worker_replaces_stale_failure_status_on_start(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "output"
