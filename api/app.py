@@ -50,6 +50,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 from service.valuation import ValuationService
+from service.response_projection import compact_recommendations
 
 __all__ = ["create_app", "ApiApp", "run_server"]
 
@@ -789,9 +790,28 @@ class ApiApp:
         kind = _q1(query, "type", "real")
         if kind not in ("real", "virtual", "unknown", "all"):
             raise BadRequest("type 必须是 real/virtual/unknown/all")
+        for name in ('compact', 'closed_limit', 'closed_offset'):
+            if name in query and len(query[name]) != 1:
+                raise BadRequest("参数 %s 必须提供一个值" % name)
+        compact = _q1(query, "compact", "0")
+        if compact not in ("0", "1"):
+            raise BadRequest("compact 必须是 0/1")
+        page_values = {}
+        for name, default, minimum, maximum in (
+                ("closed_limit", 100, 1, 100), ("closed_offset", 0, 0, None)):
+            raw = _q1(query, name, str(default))
+            if raw is None or re.fullmatch(r"[0-9]+", raw) is None:
+                raise BadRequest("参数 %s 必须是整数" % name)
+            value = int(raw)
+            if value < minimum or (maximum is not None and value > maximum):
+                raise BadRequest("参数 %s 超出允许范围" % name)
+            page_values[name] = value
         if self._projection is not None:
-            return self._projection.read(kind, "recommendations", {'open': [], 'closed': [], 'summary': {}})
-        return self._build_recommendations(query, body, *_a)
+            payload = self._projection.read(kind, "recommendations", {'open': [], 'closed': [], 'summary': {}})
+        else:
+            payload = self._build_recommendations(query, body, *_a)
+        return (compact_recommendations(payload, page_values['closed_limit'], page_values['closed_offset'])
+                if compact == "1" else payload)
 
     def _build_recommendations(self, query: Mapping[str, List[str]],
                           body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
@@ -1662,6 +1682,13 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query, keep_blank_values=False)
+            if parsed.path.rstrip('/') == API_PREFIX + '/recommendations':
+                # Empty new page parameters are invalid, rather than omitted;
+                # old parameters retain their existing empty-query behavior.
+                page_query = parse_qs(parsed.query, keep_blank_values=True)
+                for name in ('compact', 'closed_limit', 'closed_offset'):
+                    if name in page_query:
+                        query[name] = page_query[name]
             body: Mapping[str, Any] = {}
             if method == "POST":
                 length = int(self.headers.get("Content-Length") or 0)

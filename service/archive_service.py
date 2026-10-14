@@ -16,7 +16,7 @@ import threading
 import time
 from typing import Any, Iterator
 
-from store.archive import S3Archive, storage_mode
+from store.archive import S3Archive, s3_retry_code, storage_mode
 from store.postgres import postgres_enabled
 from service.model_training import atomic_json
 
@@ -25,6 +25,10 @@ SEALED_HOUR = re.compile(r"\.(\d{10})\.jsonl\.gz$")
 DATABASE_BACKUP_INTERVAL_S = 24 * 60 * 60
 DATABASE_BACKUP_STATE = "_archive/db-backup-state.json"
 ARCHIVE_BATCH_FILES = 2000
+MODEL_READER_FRESH_S = 90
+ARCHIVE_HEARTBEAT_S = 30
+ARCHIVE_RETRY_BASE_S = 30
+ARCHIVE_RETRY_MAX_S = 300
 
 
 def database_backups_enabled() -> bool:
@@ -95,8 +99,53 @@ def data_files(root: Path) -> Iterator[Path]:
             yield path
 
 
+def _replay_consumed(root: Path, path: Path) -> bool:
+    """Keep the training EOF fallback; early eviction needs a live S3 reader."""
+    try:
+        info = path.stat()
+    except OSError:
+        return False
+    try:
+        training = json.loads((root / 'models/replay-cursor.json').read_text())
+    except (OSError, ValueError, TypeError):
+        training = {}
+    if isinstance(training, dict):
+        cursor = training.get(path.name)
+        if isinstance(cursor, int) and not isinstance(cursor, bool) and cursor >= info.st_size:
+            return True
+    try:
+        # Re-read all conditions under the cleanup replay lock before unlink.
+        info = path.stat()
+        live = json.loads((root / 'models/live-shadow-cursor.json').read_text())
+        dashboard = json.loads((root / 'models/dashboard.json').read_text())
+        if not isinstance(live, dict) or not isinstance(dashboard, dict):
+            return False
+        cursors, inodes = live.get('cursor'), live.get('inodes')
+        if live.get('schema_version') != 2 or not isinstance(cursors, dict) or not isinstance(inodes, dict):
+            return False
+        cursor = cursors.get(path.name)
+        if (not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < info.st_size
+                or inodes.get(path.name) != [info.st_dev, info.st_ino]):
+            return False
+        replay = dashboard.get('replay')
+        stamp = datetime.fromisoformat(str(dashboard.get('heartbeat_at', '')).replace('Z', '+00:00'))
+        if stamp.tzinfo is None:
+            return False
+        age = (datetime.now(timezone.utc) - stamp).total_seconds()
+        return (dashboard.get('running') is True and 0 <= age < MODEL_READER_FRESH_S
+                and isinstance(replay, dict) and type(replay.get('source_protocol')) is int
+                and replay['source_protocol'] == 1 and replay.get('source_backend') == 's3_stream'
+                and replay.get('remote_read_verified') is True)
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
 def cleanable(root: Path, path: Path) -> bool:
     relative = path.relative_to(root)
+    hour = SEALED_HOUR.search(path.name)
+    current_hour = datetime.now(timezone.utc).strftime('%Y%m%d%H')
+    if hour and hour[1] >= current_hour:
+        return False
     if relative.parts[0] == "snapshots":
         return path.name != "_index.json" and not path.name.startswith(".tmp_")
     if relative.parts[0] == "ledger" and OLD_REPLAY.match(path.name):
@@ -106,11 +155,7 @@ def cleanable(root: Path, path: Path) -> bool:
         and relative.parts[0] == "ledger"
     ):
         if path.name.startswith("live-replay"):
-            cursor = root / "models" / "replay-cursor.json"
-            return (
-                cursor.exists()
-                and json.loads(cursor.read_text()).get(path.name, 0) >= path.stat().st_size
-            )
+            return _replay_consumed(root, path)
         return True
     if relative.parts[0] == "_trends" and len(relative.parts) == 2 and path.suffix == ".jsonl":
         return True  # S3 writers now append to per-hour match segments.
@@ -118,14 +163,9 @@ def cleanable(root: Path, path: Path) -> bool:
         return relative.parts[1] in {"backups", "repairs"}
     if relative.parts[0] == "_live" and path.suffix == ".gz" and not SEALED_HOUR.search(path.name):
         return True  # Legacy compressed journals are sealed after switching backend.
-    hour = SEALED_HOUR.search(path.name)
-    if hour and hour[1] < datetime.now(timezone.utc).strftime("%Y%m%d%H"):
+    if hour and hour[1] < current_hour:
         if path.name.startswith("live-replay."):
-            cursor = root / "models" / "replay-cursor.json"
-            return (
-                cursor.exists()
-                and json.loads(cursor.read_text()).get(path.name, 0) >= path.stat().st_size
-            )
+            return _replay_consumed(root, path)
         return True
     if (
         relative.parts[0] == "_trends"
@@ -209,18 +249,12 @@ def _cleanup_paths(root: Path, archive: S3Archive, paths: Iterator[Path]) -> dic
             continue
         (replay if path.name.startswith("live-replay") else ordinary).append(path)
     totals = {"files": 0, "bytes": 0}
-    for candidates in (ordinary, replay):
+    for candidates in (replay, ordinary):
         if not candidates:
             continue
-        if candidates is replay:
-            lock_path = root / "models" / "replay.lock"
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            with lock_path.open("a") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-                cleaned = archive.cleanup(candidates)
-                fcntl.flock(lock, fcntl.LOCK_UN)
-        else:
-            cleaned = archive.cleanup(candidates)
+        cleaned = archive.cleanup(candidates,
+                                  lock_path=(root / 'models/replay.lock' if candidates is replay else None),
+                                  guard=lambda path: cleanable(root, path))
         totals["files"] += cleaned["files"]
         totals["bytes"] += cleaned["bytes"]
     return totals
@@ -230,7 +264,8 @@ def _cleanup_catalogued(root: Path, archive: S3Archive) -> dict[str, int]:
     """Release already-uploaded local files before scanning new input."""
     with closing(archive._db()) as db:
         paths = [root / row[0] for row in db.execute(
-            "SELECT path FROM files WHERE cleaned=0 ORDER BY path"
+            "SELECT path FROM files WHERE cleaned=0 ORDER BY "
+            "CASE WHEN path LIKE 'ledger/live-replay.%.jsonl.gz' THEN 0 ELSE 1 END,size DESC,path"
         )]
     totals = {"files": 0, "bytes": 0}
     for batch in _batches(iter(paths)):
@@ -263,51 +298,86 @@ def run(root: Path, *, cleanup: bool, once: bool) -> None:
     archive = S3Archive(root)
     with (archive.state / "migration.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        while not event.is_set():
-            # Cleanup only becomes possible when the deployed reader supports S3.
-            # Explicit --cleanup is still required; upload failures never delete.
-            mode = storage_mode(root)
-            if cleanup and mode != "s3":
-                raise ValueError("清理前必须启用 S3 回读后端")
-            # Create snapshots before walking the tree. Upload and clean in
-            # bounded batches so a multi-million-file catalog cannot postpone
-            # all cleanup until the end of a many-hour pass.
-            backups = backup_databases(root) if database_backups_enabled() else []
-            uploaded = {"uploaded_files": 0, "uploaded_bytes": 0,
-                        "cleaned_files": 0, "cleaned_bytes": 0}
-            cleaned = {"files": 0, "bytes": 0}
-            if cleanup:
-                # Do this before the filesystem walk. A previous run may have
-                # uploaded millions of files but stopped before its final
-                # cleanup phase; waiting for another full walk wastes disk.
-                cleaned = _cleanup_catalogued(root, archive)
-            for batch in _batches(data_files(root)):
-                current = archive.migrate(batch, cleanup=False)
-                for key in uploaded:
-                    uploaded[key] += current.get(key, 0)
-                if cleanup:
-                    current_cleaned = _cleanup_paths(root, archive, iter(batch))
-                    cleaned["files"] += current_cleaned["files"]
-                    cleaned["bytes"] += current_cleaned["bytes"]
-            if backups:
-                backup_upload = archive.migrate(backups, cleanup=cleanup)
-                for key in uploaded:
-                    uploaded[key] += backup_upload.get(key, 0)
-                if cleanup:
-                    record_database_backups(root, backups)
-            status = {
-                **archive.stats(),
-                "at": datetime.now(timezone.utc).isoformat(),
-                "last_upload": uploaded,
-                "last_cleanup": cleaned,
-                "running": not once,
-                "error": "",
-            }
-            atomic_json(status_path, status)
-            print(json.dumps(status, ensure_ascii=False), flush=True)
-            if once:
-                break
-            event.wait(300)
+        status_lock = threading.Lock()
+        status: dict[str, Any] = {'running': True, 'error': '', 'retrying': False,
+                                  'retry_count': 0, 'phase': 'starting'}
+
+        def publish(**values: Any) -> None:
+            with status_lock:
+                status.update(values)
+                now = datetime.now(timezone.utc).isoformat()
+                status.update(at=now, heartbeat_at=now)
+                atomic_json(status_path, status)
+
+        heartbeat_stop = threading.Event()
+
+        def heartbeat() -> None:
+            while not heartbeat_stop.wait(ARCHIVE_HEARTBEAT_S):
+                publish()
+
+        publisher = threading.Thread(target=heartbeat, name='archive-heartbeat', daemon=True)
+        publish()
+        publisher.start()
+        retry_count = 0
+        try:
+            while not event.is_set():
+                try:
+                    mode = storage_mode(root)
+                    if cleanup and mode != 's3':
+                        raise ValueError('清理前必须启用 S3 回读后端')
+                    publish(phase='backup', retrying=False)
+                    backups = backup_databases(root) if database_backups_enabled() else []
+                    uploaded = {'uploaded_files': 0, 'uploaded_bytes': 0,
+                                'cleaned_files': 0, 'cleaned_bytes': 0}
+                    cleaned = {'files': 0, 'bytes': 0}
+                    if cleanup:
+                        publish(phase='cleanup_catalogued')
+                        # Sealed large replay files sort before the small-file
+                        # walk, freeing disk independently of training catchup.
+                        cleaned = _cleanup_catalogued(root, archive)
+                    publish(phase='uploading', last_cleanup=cleaned)
+                    for batch in _batches(data_files(root)):
+                        if event.is_set():
+                            break
+                        current = archive.migrate(batch, cleanup=False)
+                        for key in uploaded:
+                            uploaded[key] += current.get(key, 0)
+                        if cleanup:
+                            publish(phase='cleanup_uploaded', last_upload=uploaded)
+                            current_cleaned = _cleanup_paths(root, archive, iter(batch))
+                            cleaned['files'] += current_cleaned['files']
+                            cleaned['bytes'] += current_cleaned['bytes']
+                        publish(phase='uploading', last_upload=uploaded, last_cleanup=cleaned)
+                    if backups and not event.is_set():
+                        backup_upload = archive.migrate(backups, cleanup=cleanup)
+                        for key in uploaded:
+                            uploaded[key] += backup_upload.get(key, 0)
+                        if cleanup:
+                            record_database_backups(root, backups)
+                    publish(**archive.stats(), last_upload=uploaded, last_cleanup=cleaned,
+                            running=not once and not event.is_set(), error='', error_code='',
+                            retrying=False, retry_count=0, phase='idle')
+                    with status_lock:
+                        print(json.dumps(status, ensure_ascii=False), flush=True)
+                    retry_count = 0
+                    if once:
+                        break
+                    event.wait(300)
+                except Exception as error:
+                    code = s3_retry_code(error)
+                    if not code:
+                        raise
+                    retry_count += 1
+                    delay = min(ARCHIVE_RETRY_MAX_S, ARCHIVE_RETRY_BASE_S * 2 ** min(retry_count - 1, 4))
+                    publish(error='S3RateLimit', error_code=code, retrying=True,
+                            retry_count=retry_count, retry_after_s=delay)
+                    if once:
+                        raise
+                    event.wait(delay)
+        finally:
+            heartbeat_stop.set()
+            publisher.join(2)
+            publish(running=False)
 
 
 def main() -> None:

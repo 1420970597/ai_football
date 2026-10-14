@@ -122,8 +122,10 @@ services:
     environment:
       - DATABASE_BACKEND=postgres
       - MODEL_LEDGER_ROOT=/app/output/ledger
+      - S3_CONFIG_FILE=/app/client/credentials.json
     volumes:
       - ../output:/app/output
+      - ../client:/app/client:ro
     cpus: "${MODEL_WORKER_CPUS:-0.0}"
     mem_limit: "${MODEL_WORKER_MEMORY:-5g}"
     stop_grace_period: 60s

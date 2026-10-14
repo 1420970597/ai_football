@@ -21,6 +21,7 @@ from api.app import ApiApp, BadRequest, NotFound, _Handler, create_app
 from core.models import OddsSnapshot
 from datetime import datetime, timezone
 from service.valuation import LEYU_SOURCE_NAME
+from service.response_projection import ResponseProjection
 
 #: 真实乐鱼快照离线夹具（无网、不依赖仓库 output/）。
 FIXTURE_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -68,6 +69,112 @@ class TestPostgresJSONResponse(unittest.TestCase):
             self.handler()._send(200, {'value': Decimal('NaN')})
         with self.assertRaises(TypeError):
             self.handler()._send(200, {'value': object()})
+
+
+class TestCompactRecommendationsAPI(unittest.TestCase):
+    def setUp(self):
+        self.analysis = Mock()
+        self.app = ApiApp(Mock(), analysis=self.analysis)
+        self.source = {
+            'open': [{'match_id': 'live', 'pick': {'label': '大2.5', 'odds': 1.95,
+                      'decision_count': 7, 'weights': {'private': 1}},
+                      'betting': {'status': 'disabled', 'reason': '投注已关闭'}}],
+            'closed': [{'decision_id': str(i), 'match_id': f'match-{i // 3}',
+                        'market': 'OU', 'line': '2.5', 'outcome': 'over',
+                        'status': 'pending', 'pnl': 0, 'weights': {'private': 1}}
+                       for i in range(1000)],
+            'summary': {'open': 1, 'closed': 2300, 'pending': 2300},
+            'generated_at': '2026-10-14T12:00:00Z',
+        }
+        self.builder = Mock(return_value=self.source)
+        self.cache = ResponseProjection(self.builder)
+        self.app._projection = self.cache
+        self.cache.read('real', 'recommendations', {})
+        self.cache.refresh()
+
+    def test_compact_pages_read_only_the_cache_and_preserve_open_values(self):
+        for offset in (0, 100, 900):
+            status, result = call(self.app, 'GET', '/api/v1/recommendations',
+                                  q={'compact': 1, 'closed_offset': offset})
+            self.assertEqual(status, 200)
+            self.assertEqual(len(result['closed']), 100)
+            self.assertEqual(result['closed'][0]['decision_id'], str(offset))
+            self.assertEqual(result['closed_page']['summary_total'], 2300)
+            self.assertEqual(result['open'][0]['pick'],
+                             {'label': '大2.5', 'odds': 1.95, 'decision_count': 7})
+            self.assertEqual(result['open'][0]['betting'], self.source['open'][0]['betting'])
+        self.builder.assert_called_once_with('real', 'recommendations')
+        self.assertEqual(self.analysis.mock_calls, [])
+        self.assertEqual(len(self.source['closed']), 1000)
+        self.assertIn('weights', self.source['open'][0]['pick'])
+
+    def test_default_and_explicit_zero_preserve_original_payload_fields_values(self):
+        for query in ({}, {'compact': 0, 'closed_limit': 1, 'closed_offset': 900}):
+            status, result = call(self.app, 'GET', '/api/v1/recommendations', q=query)
+            self.assertEqual(status, 200)
+            self.assertEqual({k: v for k, v in result.items() if k != 'projection'}, self.source)
+            self.assertNotIn('closed_page', result)
+            self.assertEqual(len(result['closed']), 1000)
+        self.builder.assert_called_once()
+
+    def test_cold_compact_cache_returns_loading_empty_page_without_analysis(self):
+        self.app._projection = ResponseProjection(Mock())
+        status, result = call(self.app, 'GET', '/api/v1/recommendations', q={'compact': 1})
+        self.assertEqual(status, 200)
+        self.assertTrue(result['projection']['loading'])
+        self.assertEqual(result['closed_page']['total_available'], 0)
+        self.assertEqual(result['closed_page']['offset'], 0)
+        self.assertEqual(self.analysis.mock_calls, [])
+
+    def test_non_projection_fallback_remains_compatible_and_opt_in(self):
+        self.app._projection = None
+        self.app._build_recommendations = Mock(return_value=self.source)
+        status, original = call(self.app, 'GET', '/api/v1/recommendations')
+        self.assertEqual(status, 200)
+        self.assertIs(original, self.source)
+        status, projected = call(self.app, 'GET', '/api/v1/recommendations', q={'compact': 1})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(projected['closed']), 100)
+        self.assertEqual(len(self.source['closed']), 1000)
+
+    def test_invalid_compact_and_pagination_values_return_400(self):
+        invalid = [
+            {'compact': value} for value in ('', 'true', 'false', '-1', '2', '1.0')
+        ] + [
+            {'compact': 1, 'closed_limit': value}
+            for value in ('', '0', '-1', '101', '1.5', 'abc')
+        ] + [
+            {'compact': 1, 'closed_offset': value} for value in ('', '-1', '.5', 'abc')
+        ]
+        for query in invalid:
+            with self.subTest(query=query):
+                status, result = call(self.app, 'GET', '/api/v1/recommendations', q=query)
+                self.assertEqual(status, 400)
+                self.assertIn('error', result)
+        status, _ = self.app.dispatch('GET', '/api/v1/recommendations',
+                                      {'compact': ['1', 'invalid']}, {})
+        self.assertEqual(status, 400)
+        self.builder.assert_called_once()
+
+    def test_http_adapter_rejects_explicit_blank_page_parameters(self):
+        for query in ('compact=', 'compact=1&closed_limit=', 'compact=1&closed_offset='):
+            with self.subTest(query=query):
+                handler = object.__new__(_Handler)
+                handler.path = '/api/v1/recommendations?' + query
+                handler.app = self.app
+                handler._send = Mock()
+                handler._handle('GET')
+                self.assertEqual(handler._send.call_args.args[0], 400)
+
+    def test_http_adapter_keeps_legacy_empty_type_query_compatibility(self):
+        for query in ('type=', 'type=&type=real', 'type=&compact=1'):
+            with self.subTest(query=query):
+                handler = object.__new__(_Handler)
+                handler.path = '/api/v1/recommendations?' + query
+                handler.app = self.app
+                handler._send = Mock()
+                handler._handle('GET')
+                self.assertEqual(handler._send.call_args.args[0], 200)
 
 
 class TestHealth(unittest.TestCase):

@@ -5,9 +5,9 @@ async (page) => {
   let mode='empty',saved,modelRequests=0,recommendationRequests=0,unavailableRecommendations=true;
   const settings={version:1,persistent:true,algorithms:{poisson_market:'当前盘口 Poisson',poisson_time_decay:'时间衰减 Poisson'},capabilities:{betting:{execution_supported:true}},
     settings:{decision_mode:'algorithm',model_blend_weight:.5,algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',min_probability:.52,min_ev:.02,
-      quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
+      quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,score_change_cooldown_s:45,devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
       weight_prior_matches:20,max_algorithm_weight:.6,algorithm_alert_enabled:true,algorithm_alert_min_samples:30,algorithm_alert_threshold:.5,
-      betting_enabled:false,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_min_hit_count:3,betting_min_evidence_matches:30,betting_min_edge:.05,betting_retry_max_attempts:5,betting_retry_base_delay_s:2,
+      betting_enabled:false,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_max_total_exposure:.1,betting_max_match_exposure:.02,betting_min_hit_count:3,betting_min_evidence_matches:30,betting_min_edge:.05,betting_retry_max_attempts:5,betting_retry_base_delay_s:2,
       llm_enabled:false,llm_experiment_enabled:true,llm_base_url:'',llm_model:'',llm_fallback_models:'',llm_timeout_s:20,llm_temperature:.2,llm_max_tokens:2048,llm_interval_s:60,llm_review_max_age_s:120,
       model_shadow_enabled:true,model_training_enabled:true,model_training_matches:100,model_training_cpu:1,model_training_memory_mb:512}};
   const fixture={decision_mode:'algorithm',model:{},training:{state:'waiting',eligible_matches:42,new_matches:42},settings:{decision_mode:'algorithm',model_blend_weight:.5,shadow_enabled:true,cycle_matches:100,cpu_cores:1,memory_mb:512},running:true,
@@ -15,7 +15,7 @@ async (page) => {
     disk:{total:100*1073741824,used:80*1073741824,free:20*1073741824},records:{decisions:1234,matches:42,settled_decisions:900},categories:[{name:'走势',files:99,bytes:1073741824,allocated_bytes:1073741824}]}};
   await page.route('**/api/v1/**',async route=>{
     const path=new URL(route.request().url()).pathname;
-    if(path.endsWith('/recommendations')) {recommendationRequests++;return route.fulfill(unavailableRecommendations ? {status:502,json:{error:'test upstream unavailable'}} : {json:{open:[],closed:[],summary:{}}});}
+    if(path.endsWith('/recommendations')) {recommendationRequests++;return route.fulfill(unavailableRecommendations ? {status:502,json:{error:'test upstream unavailable'}} : {json:{open:[],closed:[],summary:{},closed_page:{offset:0,limit:100,returned:0,total_available:0,next_offset:null,prev_offset:null,summary_total:0,window_truncated:false,scope:'recent_recommendations'}}});}
     if(path.endsWith('/data-model')){
       modelRequests++;
       if(mode==='missing') return route.fulfill({status:404,json:{error:'unknown endpoint'}});
@@ -52,7 +52,7 @@ async (page) => {
   const sampledCards=await page.locator('#model-summary').textContent();
   assert(sampledCards.includes('训练输入（估计）23050041'),'database estimate explicitly labelled');
   assert(sampledCards.includes('全量有效训练决策尚未审查') && sampledCards.includes('全量无效 / 隔离数据尚未审查'),'unknown full-audit counts are not zero');
-  assert(sampledCards.includes('已核验样本有效决策29857') && sampledCards.includes('已核验样本无效（不可结算）143'),'sampled valid and invalid counts separated');
+  assert(sampledCards.includes('已核验样本有效决策29857') && sampledCards.includes('样本分类未评分（含走盘）143'),'sampled graded and ungraded counts separated');
   assert((await page.locator('#model-description').textContent()).includes('不代表全库资格'),'sampled scope explained');
   mode='missing';await page.locator('#data-model-refresh').click();
   await page.getByText('当前后端版本尚未提供数据与模型接口，请构建并更新 analytics-api 后手动刷新。',{exact:true}).waitFor();
@@ -123,7 +123,7 @@ async (page) => {
     await page.locator('#nav-settings').click();
   }
   await page.locator('#nav-recommendations').click();
-  await page.getByText('后端服务暂不可用，保留上次结果，30秒后自动重试，也可点击刷新。',{exact:true}).waitFor();
+  await page.getByText('后端服务暂不可用（502），保留上次结果，30秒后自动重试，也可点击刷新。',{exact:true}).waitFor();
   const failedRequests=recommendationRequests;await page.waitForTimeout(5500);
   assert(recommendationRequests===failedRequests,'502 polling backs off');
   unavailableRecommendations=false;await page.locator('#recommendations-refresh').click();
