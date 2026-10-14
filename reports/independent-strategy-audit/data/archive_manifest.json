@@ -1,0 +1,120 @@
+{
+  "archive_date": "2026-10-13",
+  "correction_date": "2026-10-14",
+  "source_report_commit": "d05451e5d7dda7e21f05c322e7023b3416e5a324",
+  "exact_database_asof": null,
+  "algorithm_version_filter_recorded": false,
+  "purpose": "Fixed historical report artifacts; not current production measurements or authoritative venue PNL. Current-data scripts cannot reproduce this fixed snapshot.",
+  "scope": [
+    "Wording and metric definitions corrected; original ROI JSON bytes and numerical observations preserved.",
+    "Transaction match IDs consistently pseudonymized; absolute timestamps and league names omitted; original virtual split retained as is_virtual.",
+    "Rows, row order, all remaining field values and per-match clusters retained; public deterministic aliases do not guarantee irreversible anonymity."
+  ],
+  "counts": {
+    "paper_category_entries": 137,
+    "normalized_title_groups": 119,
+    "title_normalization": "re.sub(r'[^a-z0-9]', '', title.casefold())",
+    "duplicate_title_pairs": 18,
+    "title_groups_are_not_doi_or_independent_study_verification": true,
+    "repository_category_entries": 140,
+    "normalized_repository_names": 128,
+    "repository_normalization": "repo.strip().casefold()",
+    "repository_maturity_audited": false
+  },
+  "gap_definitions": {
+    "simulated": "p_fused - p_market",
+    "local_orders": "p_fused - 1 / decision_odds",
+    "historical_json_key": "real_orders_gap_le_20pp_non_virtual",
+    "current_script_key": "real_orders_model_minus_inverse_decision_odds_le_20pp_non_virtual"
+  },
+  "historical_local_order_summary": {
+    "matches": 233,
+    "stake": 1384.03,
+    "pnl": -118.03,
+    "roi": -0.0853,
+    "ci95": [
+      -0.1752,
+      0.0029
+    ]
+  },
+  "artifacts": {
+    "oss_A_betting_tools.csv": {
+      "sha256": "cf19ec4299bb19d8381a4c6c3f5799f7005f59b8a57d5c3f59dfcfacd67ce5fc",
+      "bytes": 19271,
+      "source_sha256": "cf19ec4299bb19d8381a4c6c3f5799f7005f59b8a57d5c3f59dfcfacd67ce5fc",
+      "unchanged_from_source": true,
+      "rows": 70
+    },
+    "oss_B_models.csv": {
+      "sha256": "c88251853cb83f49542ca2d194a15a40bd17429565198af6bf3608b3fdb5f97d",
+      "bytes": 24247,
+      "source_sha256": "c88251853cb83f49542ca2d194a15a40bd17429565198af6bf3608b3fdb5f97d",
+      "unchanged_from_source": true,
+      "rows": 70
+    },
+    "papers_A_markets.csv": {
+      "sha256": "da6f7cdeca19a5c1a03f7c87b571472c4237dd812d9f0229cde2142e89765dbc",
+      "bytes": 27580,
+      "source_sha256": "da6f7cdeca19a5c1a03f7c87b571472c4237dd812d9f0229cde2142e89765dbc",
+      "unchanged_from_source": true,
+      "rows": 70
+    },
+    "papers_B_models.csv": {
+      "sha256": "89d9c3d91c20a239a5e4fb1fa81aeb85e650fcc9a661f7131404bd48e467424b",
+      "bytes": 38661,
+      "source_sha256": "89d9c3d91c20a239a5e4fb1fa81aeb85e650fcc9a661f7131404bd48e467424b",
+      "unchanged_from_source": true,
+      "rows": 67
+    },
+    "post_goal_picks_2026101219.csv": {
+      "sha256": "2d89c95c95b1d07af7be2762ee5bb86485656512539d8e71a4decbbb5362fd44",
+      "bytes": 34117,
+      "source_sha256": "4696e89881dcad5e3a3a56ac134ba908ca449df17b243e3a12adaef15f290cb8",
+      "rows": 390,
+      "matches": 52,
+      "ordered_values_and_match_clusters_preserved": true,
+      "normalized_cluster_sha256": "6dd4165926c138f9190b247d216fa52e62b9d2124d62a32c2fc127f37e3d2dd4"
+    },
+    "real_orders_joined.csv": {
+      "sha256": "695673ed56909043e8a1c0c4a1ddfc2ab514080b680026eb54e7f4fbe5231069",
+      "bytes": 32641,
+      "source_sha256": "3c42e323b7e186b354e0e3dfdb54efac7ee5cc9df9eb44f2d6fc9c104d0ff9a0",
+      "rows": 362,
+      "matches": 263,
+      "ordered_values_and_match_clusters_preserved": true,
+      "normalized_cluster_sha256": "2c41478f593de7e568986e1e14737e6e4a5cb520df86aad628e089dc1da0ab7c",
+      "local_graded_summary": {
+        "rows": 321,
+        "matches": 233,
+        "stake_exact_decimal": "1384.03",
+        "profit_exact_decimal": "-118.02560",
+        "status_counts": {
+          "lost": 106,
+          "won": 130,
+          "half_won": 47,
+          "pending": 41,
+          "half_lost": 27,
+          "push": 11
+        }
+      }
+    },
+    "roi_evidence.json": {
+      "sha256": "f9a0e84166e1f72ca68ff6f1d756c1e1b01fb8807b3b47eca9058366e0f20d99",
+      "bytes": 1168,
+      "source_sha256": "f9a0e84166e1f72ca68ff6f1d756c1e1b01fb8807b3b47eca9058366e0f20d99",
+      "unchanged_from_source": true
+    },
+    "sim_roi_by_gap.csv": {
+      "sha256": "b456d17c05ca2641f238f62169b0c66964203e72532faca942cd4cdf0069a849",
+      "bytes": 275,
+      "source_sha256": "b456d17c05ca2641f238f62169b0c66964203e72532faca942cd4cdf0069a849",
+      "unchanged_from_source": true,
+      "rows": 8
+    }
+  },
+  "limitations": [
+    "No PG query, bootstrap rerun, venue request, or real bet during archive correction.",
+    "The 79.4445% ratio is archived nonvirtual simulated subgroup net profit divided by archived nonvirtual simulated net profit, not causal attribution.",
+    "The separate replay is one hour; future 30/60s drift is not automatically state-comparable CLV or promotion evidence."
+  ]
+}
