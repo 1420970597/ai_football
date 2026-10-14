@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>独立策略审计：2026-10-13 历史快照</title>
+<style>
+:root{--fg:#1c2733;--mut:#5d6b7a;--line:#d9e0e7;--bg:#fff;--acc:#2c6fa8;
+      --red:#b3271e;--redbg:#fdf0ee;--amb:#8a5a00;--ambbg:#fdf6e6;
+      --grn:#1e7b46;--grnbg:#eef9f2;--code:#f4f6f8}
+*{box-sizing:border-box}
+body{margin:0;background:#eef1f4;color:var(--fg);
+     font:16px/1.85 -apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",
+          "WenQuanYi Zen Hei","Noto Sans CJK SC",sans-serif;}
+.wrap{max-width:980px;margin:0 auto;background:var(--bg);
+      padding:56px 68px 90px;box-shadow:0 2px 18px rgba(0,0,0,.07)}
+h1{font-size:1.95em;line-height:1.4;margin:.2em 0 .6em;padding-bottom:.5em;
+   border-bottom:3px solid var(--acc);color:#12212e}
+h2{font-size:1.42em;margin:2.4em 0 .8em;padding:.35em 0 .35em .7em;
+   border-left:5px solid var(--acc);background:#f7fafc;color:#12212e}
+h3{font-size:1.16em;margin:1.9em 0 .6em;color:#1d3a52}
+h4{font-size:1.04em;margin:1.5em 0 .5em;color:#2b4a63}
+p{margin:.85em 0}
+a{color:var(--acc);text-decoration:none;border-bottom:1px solid #b9d3e6}
+a:hover{border-bottom-color:var(--acc)}
+hr{border:0;border-top:1px solid var(--line);margin:2.4em 0}
+strong{color:#0f1e2b}
+code{background:var(--code);padding:.14em .42em;border-radius:4px;
+     font:0.88em/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+     color:#8a2b4a;border:1px solid #e6eaee}
+pre{background:#1e2a36;color:#e6edf3;padding:18px 20px;border-radius:8px;
+    overflow:auto;font-size:13.5px;line-height:1.7}
+pre code{background:none;border:0;color:inherit;padding:0;font-size:1em}
+.math{background:var(--code);border:1px solid var(--line);border-left:4px solid var(--acc);
+      padding:14px 18px;margin:1.2em 0;white-space:pre-wrap;word-break:break-word;
+      overflow-x:auto;border-radius:6px;
+      font:14px/1.9 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#243342}
+.imath{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       font-size:.95em;color:#8a2b4a;background:#f4f6f8;padding:.05em .28em;border-radius:3px}
+.mmd{margin:1.6em 0;padding:10px 6px;border:1px solid var(--line);border-radius:8px;
+     background:#fcfdfe;overflow-x:auto}
+pre.mermaid{background:none;border:0;color:#1c2733;padding:0;margin:0;
+            font-size:13px;text-align:center;display:block}
+pre.mermaid.mermaid-fallback{background:#f7f9fb;border:1px dashed #c3ccd6;border-radius:6px;
+            padding:14px 16px;text-align:left;color:#33475b;font-size:12.5px;
+            white-space:pre;overflow:auto}
+pre.mermaid.mermaid-fallback::before{content:"⚠ Mermaid 未渲染（离线）—— 以下为图源文本";
+            display:block;margin-bottom:8px;color:var(--amb);font-weight:600;font-size:12px}
+pre.mermaid svg{max-width:100%;height:auto}
+blockquote{margin:1.2em 0;padding:14px 20px;background:#f8f9fb;
+           border-left:4px solid var(--acc);border-radius:0 6px 6px 0;color:#33475b}
+blockquote p{margin:.4em 0}
+blockquote blockquote{margin:.6em 0;background:#fff}
+.tw{overflow-x:auto;margin:1.3em 0;
+    border:1px solid var(--line);border-radius:8px;background:#fff}
+table{border-collapse:collapse;width:100%;font-size:14.5px}
+th,td{padding:9px 13px;border-bottom:1px solid var(--line);text-align:left;
+      vertical-align:top}
+th{background:#f1f5f9;font-weight:600;color:#1d3a52;white-space:nowrap}
+tbody tr:nth-child(even){background:#fafcfd}
+tbody tr:last-child td{border-bottom:0}
+.center{text-align:center}.right{text-align:right}
+img{max-width:100%;height:auto;display:block;margin:1.6em auto;
+    border:1px solid var(--line);border-radius:8px;background:#fff}
+ul,ol{margin:.8em 0;padding-left:1.7em}
+li{margin:.35em 0}
+.tag{display:inline-block;padding:.1em .55em;border-radius:4px;font-size:.86em;
+     font-weight:600;white-space:nowrap}
+@media print{body{background:#fff}.wrap{box-shadow:none;max-width:none;padding:0}
+  h2{page-break-after:avoid}table,img,pre,.math{page-break-inside:avoid}}
+@media(max-width:760px){.wrap{padding:26px 18px 60px}h1{font-size:1.5em}}
+</style>
+<script type="module">
+/* Mermaid 运行时：CDN 可用则渲染；离线/失败则优雅降级为可读代码块。
+   关键：渲染成功必须清除降级标记，避免出现「已渲染但仍显示未渲染警告」。 */
+const CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+const SEL = "pre.mermaid";
+
+function degrade(reason) {
+  var n = 0;
+  document.querySelectorAll(SEL).forEach(function (el) {
+    if (el.querySelector("svg")) return;   // 已成功渲染的不动
+    el.classList.add("mermaid-fallback");
+    n++;
+  });
+  if (n) console.warn("Mermaid fallback:", reason, "(" + n + " blocks)");
+  return n;
+}
+
+function clearFallback() {
+  document.querySelectorAll(SEL).forEach(function (el) {
+    el.classList.remove("mermaid-fallback");
+    el.removeAttribute("title");
+  });
+}
+
+(function () {
+  var settled = false;
+  var timer = setTimeout(function () {
+    if (!settled) degrade("加载超时（CDN 不可达）");
+  }, 15000);
+
+  import(CDN).then(function (mod) {
+    var mermaid = mod.default;
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "neutral",
+      securityLevel: "strict",
+      fontFamily: '-apple-system,"PingFang SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif',
+      flowchart: { useMaxWidth: true, htmlLabels: false },
+      sequence: { useMaxWidth: true },
+      state: { useMaxWidth: true }
+    });
+    return mermaid.run({ querySelector: SEL });
+  }).then(function () {
+    settled = true;
+    clearTimeout(timer);
+    clearFallback();                       // 成功后必须清除降级标记
+    window.__mermaidStatus = { ok: true, blocks: document.querySelectorAll(SEL + " svg").length };
+  }).catch(function (e) {
+    settled = true;
+    clearTimeout(timer);
+    var msg = String((e && e.message) || e);
+    degrade(msg);
+    window.__mermaidStatus = { ok: false, error: msg };
+  });
+})();
+</script>
+</head>
+<body>
+<main class="wrap">
+<h1>独立策略审计：2026-10-13 历史快照</h1>
+<p>审计日期：2026-10-13。数据截点：生产 PostgreSQL 与 <code>output/ledger</code> 于当日读取。 本报告独立于仓库中其他审计（TASK-40、#52、#55），只采信本次亲自复现的数字；引用他人结论时注明。</p>
+<p><strong>归档说明（2026-10-14）</strong>：本文描述 2026-10-13 读取时的历史实现和配置，来源报告提交为 <code>d05451e5d7dda7e21f05c322e7023b3416e5a324</code>；未保存精确数据库 as-of 或算法版本筛选，不能据此推断当前系统状态。<a href="https://github.com/1420970597/ai_football/pull/60">#60</a>、<a href="https://github.com/1420970597/ai_football/pull/61">#61</a> 与 <a href="https://github.com/1420970597/ai_football/pull/62">#62</a> 的后续修复另行记录。本轮仅修正措辞、统计口径说明和公开数据脱敏，不查询 PG 或重跑历史 bootstrap。历史 ROI JSON 保持原字节，固定附件哈希见 <a href="data/archive_manifest.json">archive_manifest.json</a>。</p>
+<p>证据等级：<strong>A</strong> 本仓库代码、生产库查询、回放日志逐帧追踪；<strong>B</strong> 统计推导或文献共识；<strong>C</strong> 工程判断。</p>
+<h2>0. 一句话结论</h2>
+<p><strong>历史非虚拟模拟样本中，高模型—市场分歧组贡献了 79.4445% 的净利润；另一份单小时回放发现比分变化后旧价被推荐的机制。二者不能合并为“79.4% 利润由不可成交旧价造成”的因果比例。历史本地订单按推荐决策价和本地结算重算 ROI 为 −8.53%（约 −8.5%），并非场馆权威资金盈亏。</strong> 历史证据提示应先修正价格状态一致性与评价，再验证独立增量。单源同盘口去水本身不证明优势；跨盘口模型是否存在可成交增量仍须检验。30/60 秒后的价格变化可能夹带进球、红牌、比赛时钟和阶段变化，只能先作为未来价格漂移诊断，不能直接称为状态可比 CLV。</p>
+<h2>1. 这个项目实际在做什么（不看 README）</h2>
+<p>README 把它描述为"LLM + 经济学算法决策平台"。历史代码与当时读取的生产配置显示：</p>
+<div class="tw"><table><thead><tr><th>环节</th><th>实际实现</th><th>证据</th></tr></thead><tbody><tr><td>数据</td><td>单一软庄（乐鱼/YBTY 场馆）App 协议 + WebSocket 滚球赔率</td><td><code>collector/leyu_realtime.py</code></td></tr><tr><td>定价核心</td><td>用当前大小球 + 独赢反推剩余进球 Poisson 强度，再给让球/半场盘重新定价</td><td><code>core/live_model.py</code>、<code>service/live_expert.py:_calculate</code></td></tr><tr><td>"五个算法"</td><td>同一 Poisson 分布的五种变体：原样、锚定衰减、去水共识、收缩、走势修正</td><td><code>service/live_expert.py:evaluate_markets</code></td></tr><tr><td>融合</td><td>按历史"命中率"加权平均五个变体，得到 <code>economic_ensemble</code></td><td><code>core/ensemble.py:pool</code></td></tr><tr><td>学习模型</td><td>60 参数逻辑回归，市场 logit 作偏移项；<strong>从未通过晋级门</strong></td><td><code>output/models/status.json</code></td></tr><tr><td>LLM</td><td>每场一次调用的配对实验；<strong>96% 请求失败或过期</strong></td><td>生产库 <code>decisions</code> 表</td></tr><tr><td>执行</td><td>自动真钱下单，<code>betting_enabled=true</code>，<code>decision_mode=algorithm</code></td><td>生产 <code>runtime_settings</code> v50</td></tr></tbody></table></div>
+<p>它本质上是一个<strong>滚球软庄价差捕捉器</strong>：用庄家自己的大小球/独赢价格推一个模型价，去买同一庄家其他盘口里"看起来便宜"的选项。 LLM 和学习模型在该历史截点的生产路径上都未发挥已认证的决策作用。</p>
+<div class="mmd"><pre class="mermaid">flowchart LR
+    WS[乐鱼 WebSocket 赔率+比分] --&gt; SNAP[快照 captured_at]
+    SNAP --&gt; FIT[大小球+独赢 反推 λ主/λ客]
+    FIT --&gt; P5[五种 Poisson 变体]
+    P5 --&gt; POOL[命中率加权融合]
+    POOL --&gt; GATE{p≥0.52 且 EV≥2%}
+    GATE --&gt;|是| REC[推荐]
+    REC --&gt; EXEC[自动下单 executor]
+    EXEC --&gt; VENUE[场馆: 接受/拒单/改价]
+    REC --&gt; SIM[模拟结算台账]
+    SIM --&gt;|命中率| POOL
+    style SIM fill:#fde,stroke:#c33</pre></div>
+<p>红色节点是本次审计发现的主要失真来源：模拟台账按"决策时看到的赔率"结算，并回流成算法权重。</p>
+<h2>2. 历史模拟收益与本地订单重算的差异</h2>
+<h3>2.1 账面：模拟收益与推荐价本地重算（A）</h3>
+<div class="tw"><table><thead><tr><th>口径</th><th class="right">场次</th><th class="right">注数/本金</th><th class="right">盈亏</th><th class="right">ROI</th><th>按场聚类 95% 区间</th></tr></thead><tbody><tr><td>台账全部 forecast（单位注）</td><td class="right">2,426</td><td class="right">241,906</td><td class="right">−12,093</td><td class="right">−5.0%</td><td>—</td></tr><tr><td>综合推荐 <code>economic_ensemble</code>，标为真实足球</td><td class="right">1,395</td><td class="right">8,609</td><td class="right">+1,120</td><td class="right">+13.0%</td><td>+10.1% ～ +15.9%</td></tr><tr><td>同上，剔除 8 分钟虚拟赛</td><td class="right">1,209</td><td class="right">7,575</td><td class="right">+1,075</td><td class="right">+14.2%</td><td>+10.9% ～ +17.2%</td></tr><tr><td>同上，且模型−市场概率差 ≤ 20pp</td><td class="right">972</td><td class="right">5,409</td><td class="right">+25</td><td class="right">+0.5%</td><td>−2.2% ～ +3.1%</td></tr><tr><td>同上，且概率差 ≤ 10pp</td><td class="right">697</td><td class="right">3,329</td><td class="right">−39</td><td class="right">−1.2%</td><td>−4.3% ～ +2.2%</td></tr><tr><td>同上，<strong>概率差 &gt; 30pp</strong></td><td class="right">274</td><td class="right">649</td><td class="right"><strong>+854</strong></td><td class="right"><strong>+131.6%</strong></td><td>+114.6% ～ +148.9%</td></tr><tr><td><strong>真实已下单</strong>（按决策赔率重算）</td><td class="right">233</td><td class="right">¥1,384</td><td class="right"><strong>−¥118</strong></td><td class="right"><strong>−8.5%</strong></td><td>−17.5% ～ +0.3%</td></tr></tbody></table></div>
+<p>数据：<code>data/roi_evidence.json</code>，历史计算脚本为 <code>scripts/roi_evidence.py</code>。该脚本现在重跑读取当前库，无法恢复固定历史快照。</p>
+<p>非虚拟历史模拟样本的净利润中，<code>854.14 / 1075.14 = 79.4445%</code> 来自仅占 8.6% 本金、模型与市场分歧超过 30 个百分点的子群。它是子群净利润占比与相关性描述，不是旧价造成的利润比例，也未证明该群每笔价格能否成交。“132% ROI”提示需审查输入与成交假设，不能单凭数值断言每笔都不可成交。 另一个本地订单子群中，模型相对推荐赔率倒数的概率差 &gt; 20pp 的 45 笔，按决策价与本地结算重算亏 <strong>33.8%</strong>；没有逐笔场馆成交与权威结算支持因果归因。</p>
+<p><strong>两个分歧口径不同</strong>：模拟表用 <code>p_fused − p_market</code>，其中 <code>p_market</code> 来自记录的市场概率；订单子群用 <code>p_fused − 1/decision_odds</code>，后者是推荐赔率倒数，含水钱且不等于去水市场概率。旧 JSON 的 <code>real_orders_gap_le_20pp_non_virtual</code> 保留历史名称与数值；重算脚本改用明确键名 <code>real_orders_model_minus_inverse_decision_odds_le_20pp_non_virtual</code>，不能将两类“20pp”直接合并比较。</p>
+<h3>2.2 根因一：进球后的旧价格被当作"新鲜报价"（A，本次新发现）</h3>
+<p><code>service/live_expert.py</code> 判定盘口新鲜的规则是 <code>age &lt;= quote_max_age_s(15s) 且未停盘</code>，<strong>不检查报价是否早于最近一次比分变化</strong>。 场馆在比分推送与赔率重定价之间有数秒延迟，这段时间内系统用"进球后的比分 + 进球前的价格"计算，必然得到巨大的假优势。</p>
+<p>回放日志逐帧追踪（比赛标识已去除，2026-10-12，<code>output/ledger/live-replay.2026101218.jsonl.gz</code>）：</p>
+<div class="tw"><table><thead><tr><th>相对推荐时刻</th><th>时钟</th><th>比分</th><th>上半场独赢 主/平/客</th><th>报价年龄</th><th>判定</th><th>推荐</th></tr></thead><tbody><tr><td>−31.5s</td><td>41:52</td><td>0-0</td><td>9.2 / 1.11 / 9.1</td><td>2s</td><td>fresh</td><td>—</td></tr><tr><td><strong>−7.7s</strong></td><td>41:52</td><td><strong>0-1</strong></td><td>9.7 / 1.10 / <strong>9.6</strong></td><td>2s</td><td><strong>fresh</strong></td><td><strong>买客胜 @9.6，p_model=0.648</strong></td></tr><tr><td>+16.8s</td><td>41:52</td><td>0-1</td><td>56 / 8.4 / <strong>1.02</strong></td><td>2s</td><td>fresh</td><td>—</td></tr></tbody></table></div>
+<p>回放中客队上半场取胜价格在比分变化后由 9.6 改为 1.02。系统在这 24 秒窗口里给出"EV=+522%"的推荐，同一帧还给出一笔全场让球的同类推荐；这证明输入状态可能错配，未提供逐笔提交和场馆成交回执。 模拟台账按 9.6 结算并记为盈利，这笔"盈利"进而抬高该算法的命中率权重。</p>
+<p>一小时全量回放统计（<code>data/post_goal_picks_2026101219.csv</code>，脚本 <code>scripts/post_goal_picks.py</code>，统计每个选项的首次推荐）：</p>
+<div class="tw"><table><thead><tr><th>距最近比分变化</th><th class="right">推荐数</th><th class="right">占比</th><th class="right">平均概率差</th><th class="right">概率差 &gt; 30pp 占比</th></tr></thead><tbody><tr><td>≤ 30 秒</td><td class="right">195</td><td class="right">50.0%</td><td class="right">0.200</td><td class="right">13.8%</td></tr><tr><td>30–120 秒</td><td class="right">61</td><td class="right">15.6%</td><td class="right">0.077</td><td class="right">0.0%</td></tr><tr><td>&gt; 120 秒</td><td class="right">56</td><td class="right">14.4%</td><td class="right">0.091</td><td class="right">1.8%</td></tr><tr><td>本小时内无比分变化</td><td class="right">78</td><td class="right">20.0%</td><td class="right">0.127</td><td class="right">1.3%</td></tr></tbody></table></div>
+<p><strong>该一小时样本中，一半的首次推荐出现在比分变化后 30 秒内，大分歧推荐集中于该窗口。</strong> 这是机制与相关性证据，不能外推全库旧价比例或全量利润归因。 同类历史诊断：上半场独赢推荐中，买"当前领先方且赔率 ≥ 4"的 63 笔贡献 +299 单位，提示应逐笔核查报价状态与可成交性；该数值本身不能证明所有报价无法成交。 大小球上半场推荐的 ROI 随入场时间单调上升（&lt;30 分 +20%，30–40 分 +59%，40–45 分 +97%），与"临近半场、每个进球对价格冲击更大、旧价更离谱"一致。</p>
+<p>下单执行器 <code>service/betting.py:_check_state</code> 只校验"决策时比分 == 下单时比分"，同样不校验报价是否晚于比分变化，所以拦不住这一类。 历史记录有改价、拒单（业务码 0400459/0400455 共 67 笔）；该汇总不证明这些回执逐笔对应上述旧价窗口，也不提供权威已结净收益。</p>
+<h3>2.3 根因二：单一软庄"自己和自己比"，没有独立信息（B）</h3>
+<p>五个"算法"共用同一组输入：同一庄家、同一时刻的大小球与独赢价格。 对同一完备市场做比例去水，令 <code>S=sum(1/odds)=1+m</code>，则 <code>q=(1/odds)/S</code>，原赔率下 <code>odds*q−1=−m/(1+m)</code>。该恒等式仅覆盖这组同盘口比例去水概率，不是所有去水方法、跨盘口约束或独立模型均不可能盈利的定理。Poisson 反推使用同源输入，能否贡献可成交增量需消融检验：</p>
+<ul><li>相关研究使用多庄共识（Kaunitz 2017，A46/B43）、交易所（Franck 2010，A23/A38）或独立统计模型（Koopman &amp; Lit 2015，B04）；它们是可研究路线，不证明唯一性。</li><li>Hubáček 等研究强调模型误差与市场的相关性（2019，A37/B32；2023，A36），准确率提高仍需检验成本后收益，不能将去相关表述为充分条件。</li><li>部分目录项目使用 Pinnacle/交易所/多庄共识（OA01、OA08、OA10、OA16、OA17、OA25）。目录未经逐项成熟度与源码审计，不能代表全部开源实践。</li></ul>
+<h3>2.4 根因三：独立 Poisson 在滚球场景下的系统性偏差（B）</h3>
+<ul><li>恒定强度 × 剩余时间比例：进球率随比赛进程上升，且依赖当前比分（Dixon &amp; Robinson 1998，A42/B16；B21；B26）。</li><li>半场结束固定在 2700 秒（<code>service/live_expert.py:631</code>），忽略上半场补时，40 分钟后剩余进球被低估。</li><li>无低比分相关修正（Dixon-Coles ρ，B02）和过度离散（Weibull，B05），恰好错在让球和小球的关键比分。</li><li>红牌未映射（代码注释已承认），而红牌对进球率影响显著（B22、B23、B24）。</li></ul>
+<p>校准表（非虚拟、已结算推荐 7,333 笔）显示模型越自信越过度：</p>
+<div class="tw"><table><thead><tr><th>p_model 区间</th><th class="right">笔数</th><th class="right">平均预测</th><th class="right">实际兑现</th><th class="right">市场隐含</th></tr></thead><tbody><tr><td>0.5–0.6</td><td class="right">1,693</td><td class="right">0.557</td><td class="right">0.527</td><td class="right">0.492</td></tr><tr><td>0.6–0.7</td><td class="right">1,918</td><td class="right">0.651</td><td class="right">0.598</td><td class="right">0.558</td></tr><tr><td>0.7–0.8</td><td class="right">1,916</td><td class="right">0.746</td><td class="right">0.645</td><td class="right">0.602</td></tr><tr><td>0.8–0.9</td><td class="right">1,399</td><td class="right">0.846</td><td class="right">0.716</td><td class="right">0.672</td></tr><tr><td>0.9–1.0</td><td class="right">407</td><td class="right">0.923</td><td class="right"><strong>0.699</strong></td><td class="right">0.784</td></tr></tbody></table></div>
+<p>实际兑现率处处落在"模型"与"市场"之间，说明模型的增量大部分是噪声。最高档甚至低于市场。</p>
+<h3>2.5 放大器：错误被反馈回系统（A）</h3>
+<div class="tw"><table><thead><tr><th>放大器</th><th>实测</th><th>后果</th></tr></thead><tbody><tr><td>模拟台账回流成权重</td><td><code>adaptive_weights</code> 用台账命中率与 Brier 给五个变体加权</td><td>吃到旧价的变体被加权，形成自我强化</td></tr><tr><td>虚拟赛被标为真实足球</td><td>"瓦尔基里杯/瓦尔哈拉杯 (8分钟)"共 415 场被判为 <code>real</code>；<code>VIRTUAL_PATTERN</code> 不含"分钟"</td><td>136 场进入训练输入；28 笔真实订单 ¥114 下在虚拟赛上</td></tr><tr><td>CLV 从未采集</td><td>89,077 条推荐的 <code>closing_odds</code> 全为 0</td><td>系统没有任何"是否买到好价"的领先指标</td></tr><tr><td>LLM 臂基本失效</td><td>40,380 次配对实验中仅 1,402 次（3.5%）返回可用结果，其余为 <code>llm_unavailable</code>/502/过期</td><td>"LLM + 经济学"的配对评估（#41）没有可用样本</td></tr><tr><td>学习模型不达标</td><td>候选模型配对 Brier 差 −0.0003，95% 区间 [−0.0017, +0.0009] 跨零；前瞻 ECE 0.106</td><td>门控正确地拒绝了晋级，但真钱下单仍在继续</td></tr><tr><td>资金管理</td><td>当时执行用 <code>confidence_multiplier × 10 元</code>，与分析层 Kelly 无关</td><td>下注额与估计优势、组合敞口的关系需单独核验</td></tr></tbody></table></div>
+<h3>2.6 对既有结论的独立复核</h3>
+<div class="tw"><table><thead><tr><th>既有结论</th><th>本次复核</th></tr></thead><tbody><tr><td>TASK-40：滚球让球结算口径与负号错误导致模拟虚盈</td><td>历史结算修复不等于报价状态和成交假设有效；§2.2 补充旧价错配机制，未量化其全库因果贡献</td></tr><tr><td>#55：结算修复后"只恢复可评价性"</td><td>仍须校验报价/状态、完整上下文、实际执行子群和真实成本；不能因工程修复直接宣称盈利</td></tr><tr><td>#52/#55：研究 Dixon-Coles 等模型</td><td>应先保证输入与评价有效，再按同一前瞻窗口检验挑战者；外部参照是候选增量而非唯一先决条件</td></tr></tbody></table></div>
+<h2>3. 当前设计是否合理</h2>
+<div class="tw"><table><thead><tr><th>维度</th><th>判定</th><th>理由</th></tr></thead><tbody><tr><td>工程纪律（幂等下单、版本隔离、时间安全训练、配对 bootstrap 晋级门）</td><td>历史基线有相关门控</td><td>当时配对区间跨零，未认证优于市场；不能由此断言全部实现无偏差</td></tr><tr><td>去水实现（五法 + 分歧诊断）</td><td>市场基线</td><td>同盘口比例去水不自动产生优势，跨盘口增量另测（A34、A35）</td></tr><tr><td>优势来源</td><td>未认证</td><td>同源输入与旧价机制需控制，尚无独立前瞻净收益证据（§2.2、§2.3）</td></tr><tr><td>报价新鲜度</td><td>❌ 缺陷</td><td>只看报价年龄，不看比分变化时间</td></tr><tr><td>评估口径</td><td>❌ 不合理</td><td>用模拟结算命中率做权重与门控；无 CLV；文献明确收益率是噪声大的指标（A63/B34）</td></tr><tr><td>多算法融合</td><td>需消融</td><td>同源变体数量不等于独立信息数量；预测变换有无增量须实测</td></tr><tr><td>LLM 臂</td><td>❌ 不可用且无依据</td><td>96% 失败；2026 年多项基准显示 LLM 赛果预测不胜市场（B65、B66、B67）</td></tr><tr><td>资金管理</td><td>⚠️ 脱节</td><td>执行层未使用 Kelly 与组合敞口；同场多盘口高度相关（A60）</td></tr><tr><td>真钱开关</td><td>❌ 应关闭</td><td>没有任何证据证明正期望时仍在自动下注</td></tr></tbody></table></div>
+<h2>4. 如何高效盈利：可行路线与诚实边界</h2>
+<p><strong>该历史样本未证明任何路线可稳定盈利。</strong> 以下为当时研究方向的定性工程判断，未进行本机成本/速度对照，不是主观评分的测量值；不因列出路线自动采购数据源或恢复实盘。</p>
+<div class="tw"><table><thead><tr><th>路线</th><th>机制</th><th>证据</th><th>可行性</th><th>主要风险</th></tr></thead><tbody><tr><td>R1 外部锐价参照的价值投注</td><td>使用 Pinnacle/交易所/多庄共识作候选参照，验证乐鱼价格与其差异</td><td>A46、A23、A34；OA01、OA16、OA25、OA67</td><td>可研究，未证明唯一性或当前适用收益</td><td>限额、数据费、时间与盘口对齐误差</td></tr><tr><td>R2 状态可比价格评价</td><td>记录未来参照价并区分状态变化，另行定义可比较的 CLV</td><td>A63、OA33；待本系统验证</td><td>需补齐状态/时钟/报价与成交证据</td><td>30/60 秒后同盘口也可能比分、红牌、阶段变化，价格漂移不能直接作为 CLV 或晋级证据</td></tr><tr><td>R3 交易所做市/对冲</td><td>在交易所上做价差或用交易所对冲软庄头寸</td><td>A47、OA17、OA18</td><td>中，需交易所账户与流动性</td><td>地域可用性；佣金</td></tr><tr><td>R4 真正独立的统计模型</td><td>赛前用多季结果/xG/阵容建 Dixon-Coles 或双变量 Poisson，滚球用时变强度更新</td><td>B02、B04、B05、B19、B20</td><td>中低，文献中正收益多限于特定联赛和时期</td><td>市场持续变得更有效（A20、A28）</td></tr><tr><td>旧价错配诊断</td><td>检查比分变化前后输入是否一致</td><td>本审计 §2.2</td><td>优先修正数据有效性</td><td>不将回放报价当作成交；本地订单重算不等于场馆权威收益</td></tr></tbody></table></div>
+<p><strong>候选研究方案（R1 + R2，不作为实盘恢复授权）</strong>：</p>
+<ol><li>接入一个锐价参照源（如 The Odds API 的 Pinnacle 价，或 Betfair 交易所），按 match/market/line 对齐。</li><li>比较参照源的比例/Power/Shin 去水与成本后收益；<code>edge = 乐鱼赔率 × 候选公平概率 − 1</code>，阈值须以独立窗口验证，不能将固定比例当成已证最优。</li><li>每笔推荐记录 30s/60s/终点参照价、比赛状态、时钟和实际成交价；先称未来价格漂移，只有状态和基准可比时才进入预先定义的 CLV。</li><li>历史建议的 ≥ 300 场仅是候选样本下限，不能以价格漂移或单一 CLV 下界决定晋级。仍须实际执行子群的配对概率/校准、状态可比价格、成交成本与权威结算收益，以及资源和资金约束。</li></ol>
+<h2>5. 算法能否扩展</h2>
+<p>可以；先保证价格状态与评价有效，再比较外部参照或独立模型的增量。未来价格漂移、状态可比 CLV 与实际收益需分开报告。</p>
+<div class="tw"><table><thead><tr><th>扩展</th><th>解决什么</th><th>依据</th><th>优先级</th></tr></thead><tbody><tr><td>比分变化后的价格冷却期</td><td>消除 §2.2 的旧价假优势</td><td>本审计；A39、A40</td><td>P0</td></tr><tr><td>外部参照价与跨源分歧特征</td><td>产生真正独立的信息</td><td>A46、OA16、OA17</td><td>P0</td></tr><tr><td>时变进球强度 + 补时 + 比分状态</td><td>修正剩余进球分布</td><td>B16、B17、B21、B25、B26</td><td>P1</td></tr><tr><td>Dixon-Coles ρ / 双变量 / Weibull 计数</td><td>修正低比分与让球关键比分</td><td>B02、B03、B05；OB02、OB05</td><td>P1</td></tr><tr><td>红牌与事件特征（xG、射门、角球）</td><td>独立于价格的状态信息</td><td>B18、B22–B24、B45；OB21、OB23、OB27</td><td>P2</td></tr><tr><td>不确定性感知下注（Bayesian Kelly、回撤约束、同场联合求解）</td><td>控制估计误差与相关性</td><td>A55、A56、A58、A60；OA42、OA44</td><td>P2</td></tr><tr><td>按校准而非准确率选模型；Venn-ABERS/保形区间弃权</td><td>让概率可直接用于定价</td><td>A66、B52；OB55、OB57、OB58</td><td>P2</td></tr><tr><td>LLM 臂</td><td>当前无证据支持；仅保留离线研究</td><td>B63–B67；OB64–OB69</td><td>暂停</td></tr></tbody></table></div>
+<h2>6. 其他问题</h2>
+<div class="tw"><table><thead><tr><th>级别</th><th>问题</th><th>证据</th></tr></thead><tbody><tr><td>高</td><td>运行配置 <code>output/runtime-settings.json</code> 以明文保存 LLM API Key</td><td>文件内容（未在此复述值）</td></tr><tr><td>高</td><td><code>.env</code> 保存账号口令、PG 口令与 App token；PG 服务暴露在公网地址</td><td><code>.env</code> 与 <code>store/postgres.py</code></td></tr><tr><td>高</td><td><code>api/app.py</code> 无鉴权，<code>8000</code> 端口对外映射，包含账户与下注草稿接口</td><td><code>docker/docker-compose.yml</code>、<code>api/app.py</code></td></tr><tr><td>高</td><td><code>AUTO_ENABLE_BETTING=1</code> 写死在 compose 中，重建容器会自动恢复真钱下注</td><td><code>docker/docker-compose.yml</code></td></tr><tr><td>中</td><td>虚拟赛识别缺"分钟"等关键词，415 场虚拟赛被当成真实足球</td><td>§2.5</td></tr><tr><td>中</td><td>台账未保存报价时间戳（<code>ts_ms</code>、<code>quote_received_at_ms</code> 为空），无法事后审计新鲜度</td><td>生产 <code>decisions.payload</code></td></tr><tr><td>中</td><td>订单状态 325 笔长期 <code>pending</code>，未与场馆终态对账</td><td>生产 <code>orders</code> 表</td></tr><tr><td>中</td><td>台账 JSONL 达 2.5 GB、回放日志单小时 1.3 GB，分析需逐行解压，审计成本高</td><td><code>output/ledger</code></td></tr><tr><td>低</td><td>README 与 AGENTS.md 描述与现状不符（容器数量、浏览器沙盒、文件名）</td><td>文档对照</td></tr></tbody></table></div>
+<h2>7. 改进路线（含验收门槛）</h2>
+<div class="mmd"><pre class="mermaid">stateDiagram-v2
+    [*] --&gt; 停止真钱: P0-1
+    停止真钱 --&gt; 修正新鲜度: P0-2 比分变化冷却
+    修正新鲜度 --&gt; 重算台账: 剔除冷却期内推荐
+    重算台账 --&gt; 候选增量: 外部参照或独立模型
+    候选增量 --&gt; 影子评估: 状态可比与执行子群
+    影子评估 --&gt; 停止真钱: 样本不足或增量未认证
+    影子评估 --&gt; 人工复核: 概率校准及真实成本收益证据
+    人工复核 --&gt; 模型扩展: P1/P2另行授权
+    模型扩展 --&gt; 影子评估: 每个新臂重新验证</pre></div>
+<div class="tw"><table><thead><tr><th>编号</th><th>动作</th><th>验收门槛</th></tr></thead><tbody><tr><td>P0-1</td><td>关闭 <code>betting_enabled</code>，从 compose 移除 <code>AUTO_ENABLE_BETTING=1</code></td><td>重建容器后执行器保持关闭</td></tr><tr><td>P0-2</td><td>盘口在比分/阶段变化后进入冷却：只接受 <code>ts_ms &gt; 比分变化时间 + 冷却秒数</code> 的报价；执行器做同样检查</td><td>回放中"进球后 30s 内推荐"占比降到接近 0；概率差 &gt; 30pp 的推荐消失</td></tr><tr><td>P0-3</td><td>修正虚拟赛识别（加入"分钟"、联赛名白名单），重标历史并从训练集剔除</td><td>名称含"(8分钟)"的赛事 <code>competition_type</code> 全部为 <code>virtual</code></td></tr><tr><td>P0-4</td><td>台账保存报价 <code>ts_ms</code>、接收时间、最近比分变化时间</td><td>新记录字段非空率 100%</td></tr><tr><td>P0-5</td><td>撤换明文密钥，给 API 加鉴权或只绑定内网</td><td>设置文件中不再出现密钥；未带凭据访问返回 401</td></tr><tr><td>P1-1</td><td>记录未来参照价/状态，区分价格漂移与状态可比 CLV</td><td>缺价或状态不可比时明确标记，不伪填有效 CLV</td></tr><tr><td>P1-2</td><td>权重与门控使用时间外配对概率/校准及真实成本后收益；CLV 仅为补充</td><td>同时间市场与实际执行子群独立评价，不以单一漂移/模拟 pnl 晋级</td></tr><tr><td>P1-3</td><td>时变强度 + 补时 + Dixon-Coles 挑战模型</td><td>3 个滚动折中 ≥ 2 折 Brier 优于市场，且按场聚类区间上界 &lt; 0</td></tr><tr><td>P2</td><td>事件特征、不确定性下注、校准选模</td><td>各自通过同一晋级门</td></tr></tbody></table></div>
+<h2>8. 调研覆盖</h2>
+<div class="tw"><table><thead><tr><th>类别</th><th class="right">数量</th><th>文件</th></tr></thead><tbody><tr><td>论文：市场效率、去水、滚球、锐庄/限额、Kelly、评分规则</td><td class="right">70</td><td><code>data/papers_A_markets.csv</code></td></tr><tr><td>论文：比分模型、滚球强度、红牌、市场 vs 模型、机器学习、回测偏差、LLM 预测</td><td class="right">67</td><td><code>data/papers_B_models.csv</code></td></tr><tr><td>开源：价值/套利扫描、交易所与锐庄客户端、CLV、Kelly、去水、回测、数据源</td><td class="right">70</td><td><code>data/oss_A_betting_tools.csv</code></td></tr><tr><td>开源：比分模型、滚球胜率、xG/事件数据、机器学习、评分与校准、LLM 预测基准</td><td class="right">70</td><td><code>data/oss_B_models.csv</code></td></tr><tr><td><strong>分类条目合计</strong></td><td class="right"><strong>论文 137 条，开源 140 条</strong></td><td></td></tr></tbody></table></div>
+<p>两组存在重复（如 Dixon-Coles 1997、penaltyblog）。按 <code>re.sub(r'[^a-z0-9]', '', title.casefold())</code> 得到 <strong>119 个规范化标题组</strong>（18 对重复）；它不是 DOI/独立研究身份核验，也不证明已阅读全文。按 repo 的 <code>strip().casefold()</code> 得到 <strong>128 个唯一仓库名</strong>。目录保存检索/GitHub 元数据及方法说明，未逐一审核源码、成熟度、实验或收益，不能称 140 个成熟项目，也不能将目录条数纳入 #55 的严格论文数量。</p>
+<p>调研中与本系统最相关的共识：</p>
+<ol><li>同盘口比例去水本身不产生优势；外部参照、独立统计或跨盘口约束均须通过增量检验（A34、A46、OA01、OA16）。</li><li>滚球市场对进球的反应总体迅速且完整，可利用的是信息差而不是时间差（A39、A40、B40、B42）。</li><li>能赚钱的价值投注者会被软庄限额，这是成功的标志也是上限（A46、B43、OA14）。</li><li>独立 Poisson 在平局和低比分上有系统偏差，滚球强度随时间与比分变化（B01–B03、B16、B26）。</li><li>收益率噪声较大，应同时报告概率/校准、明确状态可比的 CLV 与真实成本后收益，不能用 30/60 秒漂移替代（A63、A66、B34、B52）。</li><li>参数不确定时应缩小 Kelly，同场多注需联合求解（A55、A57、A60）。</li><li>截至 2026 年，LLM 赛果预测未能稳定战胜博彩市场（B65、B66、B67、OB64–OB66）。</li></ol>
+<h2>9. 固定归档与当前数据重算</h2>
+<p>固定归档保留当日读出的历史数字。<code>roi_evidence.py</code> 没有 as-of/算法版本过滤，当前运行会读取当前 PG；默认订单输入仍是本归档 CSV，两者不保证属于同一观察窗口，不能声称复现精确历史快照。脚本只读数据库，默认输出到项目 <code>output/independent-strategy-audit/current/</code>，不覆盖固定附件。本次归档修正未连接 PG、未重跑 bootstrap。</p>
+<pre><code class="language-bash"># 需要仓库根 .env 中的 PG_* 变量
+set -a &amp;&amp; . ./.env &amp;&amp; set +a
+python3 reports/independent-strategy-audit/scripts/roi_evidence.py \
+    --output-dir output/independent-strategy-audit/current
+python3 reports/independent-strategy-audit/scripts/post_goal_picks.py \
+    output/ledger/live-replay.2026101219.jsonl.gz \
+    output/independent-strategy-audit/current/post_goal_picks.csv</code></pre>
+<ul><li><code>data/real_orders_joined.csv</code>：历史本地订单与推荐的连接，保留推荐赔率、本地模拟结算与所有数值；去除绝对交易时间和联赛名，增加 <code>is_virtual</code> 保留原“分钟”筛选口径。</li><li><code>data/roi_evidence.json</code>：§2.1 全部口径与 bootstrap 区间（2,000 次，按场重采样，种子 20261013）。</li><li><code>data/sim_roi_by_gap.csv</code>：按模型−市场概率差分桶的模拟收益。</li><li><code>data/post_goal_picks_2026101219.csv</code>：一小时回放中每个选项首次推荐距最近比分变化的秒数；去除绝对发布时间，保留比赛时钟与相对秒数。</li><li>两份逐条 CSV 的比赛 ID 使用相同确定性别名，行序、比赛分组和其余字段不变；公开别名不保证不可再识别。无原生订单号字段，不宣称曾泄漏场馆订单号。</li><li><a href="data/archive_manifest.json">archive_manifest.json</a>：固定数据附件的 SHA256、来源提交、统计与更正范围；<code>roi_evidence.json</code> 历史键名、数字和字节不变。</li></ul>
+<p><strong>局限</strong>：历史审计时场馆结算因维护无法读取；订单 ROI 按推荐决策赔率与本地结算重算，并非场馆权威金额。TASK-40 的 160/160 是其他样本的历史核对，不能认证本报告 321 笔/233 场的权威已结收益，改价后成交订单仍可能有差异。 "进球后 30 秒"统计只覆盖一个小时的回放，作为机制证据而非全量估计。</p>
+<p>本报告不构成投注建议，也不承诺任何收益。</p>
+</main>
+</body>
+</html>
