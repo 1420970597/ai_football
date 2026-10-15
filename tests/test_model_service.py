@@ -230,6 +230,7 @@ class ModelServiceTests(unittest.TestCase):
             worker = ModelService()
             worker.bind(str(ledger))
             worker._consume_replay()
+            worker._consume_replay()
             cursor = worker._cursor[path.name]
             self.assertEqual(cursor,path.stat().st_size)
             second = {**decision(),'computed_at':'2025-01-01T12:01:00+00:00'}
@@ -286,3 +287,25 @@ class ModelServiceTests(unittest.TestCase):
             atomic_json(cursor_path, {path.name: len(revised)})
             worker._consume_replay()
             self.assertEqual(worker._cursor[path.name], len(revised))
+
+    def test_replay_short_source_is_frozen_as_gap_without_resetting_cursor(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = Path(root) / 'ledger'
+            ledger.mkdir()
+            truncated = ledger / 'live-replay.2025010100.jsonl.gz'
+            valid = ledger / 'live-replay.2025010101.jsonl.gz'
+            HistoryJournal(truncated).append([decision()])
+            HistoryJournal(valid).append([decision()])
+            truncated.write_bytes(truncated.read_bytes()[:8])
+            cursor_path = Path(root) / 'models' / 'replay-cursor.json'
+            cursor_path.parent.mkdir()
+            cursor_path.write_text(json.dumps({truncated.name: 1000}))
+            worker = ModelService()
+            worker.bind(str(ledger))
+            worker._consume_replay()
+            worker._consume_replay()
+            self.assertEqual(worker._cursor[truncated.name], 1000)
+            self.assertIn(truncated.name, worker._replay_gaps)
+            self.assertEqual(worker._replay_gaps[truncated.name]['frozen'], True)
+            self.assertTrue((Path(root) / 'models' / 'replay-gaps.json').exists())
+            self.assertNotEqual(worker._replay_stats['gap_files'], 0)

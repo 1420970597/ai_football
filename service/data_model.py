@@ -14,6 +14,7 @@ from typing import Any
 
 from service.runtime_settings import RuntimeConfig
 from store.postgres import connect as pg_connect, postgres_enabled
+from store.disk_pressure import disk_pressure
 
 CATEGORIES = {'采集快照': 'snapshots', '走势': '_trends', '赛况与实际赛果': '_live', '决策与结算台账': 'ledger', '模型版本': 'models'}
 
@@ -202,6 +203,7 @@ class DataModelService:
                     out['history_repair'] = {'error':'历史修复状态暂不可读取'}
                 disk = shutil.disk_usage(self.root.parent)
                 out.setdefault('storage', {})['disk'] = {'total': disk.total, 'used': disk.used, 'free': disk.free}
+                out['storage']['disk_pressure'] = disk_pressure(self.root.parent, publish=False)
                 path = self.root.parent / '_archive' / 'status.json'
                 try:
                     if path.exists():

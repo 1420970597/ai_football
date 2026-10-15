@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat as file_stat
 import tempfile
 import time
 from typing import Any, Iterable, Sequence, List, Mapping
@@ -25,7 +26,24 @@ from store.postgres import connect as pg_connect, postgres_enabled
 PACK_BYTES = 32 * 1024**2
 BATCH_FILES = 2000
 READ_CHUNK_BYTES = 8 * 1024**2
-READ_CONCURRENCY = 4
+READ_CONCURRENCY = 1
+UPLOAD_ATTEMPTS = 4
+UPLOAD_RETRY_BASE_S = 1.0
+UPLOAD_RETRY_MAX_S = 8.0
+S3_SLOWDOWN_CODES = frozenset({'SlowDownRead', 'SlowDownWrite', 'SlowDown'})
+
+
+def literal_prefix_pattern(prefix: str) -> str:
+    """Return a LIKE pattern for a literal catalog path prefix."""
+    return prefix.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+
+
+def s3_retry_code(error: Exception) -> str:
+    """Expose only known provider throttling codes to retry logic/status."""
+    response = getattr(error, 'response', None)
+    detail = response.get('Error') if isinstance(response, dict) else None
+    code = detail.get('Code') if isinstance(detail, dict) else None
+    return code if isinstance(code, str) and code in S3_SLOWDOWN_CODES else ''
 
 
 def storage_mode(root: Path) -> str:
@@ -79,12 +97,12 @@ class S3Archive:
                     s3={"addressing_style": cfg.get("addressing_style", "path")},
                     connect_timeout=10,
                     read_timeout=120,
-                    retries={"max_attempts": 3},
+                    retries={"mode": "adaptive", "total_max_attempts": 8},
                 ),
             )
             self.bucket = cfg["bucket"]
             self._transfer_config = importlib.import_module("boto3.s3.transfer").TransferConfig(
-                max_concurrency=2, use_threads=True
+                max_concurrency=1, use_threads=True
             )
         else:
             self.bucket = "test-archive"
@@ -93,11 +111,23 @@ class S3Archive:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, object_key TEXT NOT NULL, "
                 '"offset" INTEGER NOT NULL, compressed INTEGER NOT NULL, size INTEGER NOT NULL, '
-                "sha256 TEXT NOT NULL, mtime_ns INTEGER NOT NULL, cleaned INTEGER NOT NULL DEFAULT 0)"
+                "sha256 TEXT NOT NULL, mtime_ns INTEGER NOT NULL, cleaned INTEGER NOT NULL DEFAULT 0, "
+                "encoding TEXT NOT NULL DEFAULT 'gzip')"
             )
+            if self.backend == "postgres":
+                db.execute("ALTER TABLE files ADD COLUMN IF NOT EXISTS encoding TEXT NOT NULL DEFAULT 'gzip'")
+            else:
+                columns = {row[1] for row in db.execute("PRAGMA table_info(files)")}
+                if "encoding" not in columns:
+                    db.execute("ALTER TABLE files ADD COLUMN encoding TEXT NOT NULL DEFAULT 'gzip'")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS packs (object_key TEXT PRIMARY KEY, bytes INTEGER, sha256 TEXT, at REAL)"
             )
+            if self.backend == "postgres":
+                db.execute(
+                    "CREATE INDEX IF NOT EXISTS archive_files_path_prefix_idx "
+                    "ON files(path text_pattern_ops)"
+                )
 
     def _db(self) -> Any:
         if self.backend == "postgres":
@@ -157,6 +187,20 @@ class S3Archive:
     def copy_verified(self, record: Mapping[str, Any], target: Path) -> None:
         """Stream one frozen catalogue member, including multi-GB gzip journals."""
         start, length = record['offset'], record['compressed']
+        if record.get('encoding') == 'identity':
+            digest, size = hashlib.sha256(), 0
+            try:
+                with target.open('wb') as file:
+                    for block in self._range_blocks(record['object_key'], start, length):
+                        file.write(block)
+                        digest.update(block)
+                        size += len(block)
+                if size != record['size'] or digest.hexdigest() != record['sha256']:
+                    raise OSError('冻结归档成员长度或 SHA256 校验失败')
+            except BaseException:
+                target.unlink(missing_ok=True)
+                raise
+            return
         decoder, digest, size, received = zlib.decompressobj(31), hashlib.sha256(), 0, 0
         try:
             with target.open('wb') as file:
@@ -179,7 +223,7 @@ class S3Archive:
 
     def read_many(self, paths: Iterable[Path]) -> dict[Path, bytes]:
         result = {}
-        remote: dict[str, list[tuple[Path, int, int, int, str]]] = {}
+        remote: dict[str, list[tuple[Path, int, int, int, str, str]]] = {}
         with closing(self._db()) as db:
             for path in paths:
                 if path.exists():
@@ -189,7 +233,7 @@ class S3Archive:
                     except FileNotFoundError:
                         pass  # Cleanup after the existence check; read the committed object.
                 row = db.execute(
-                    'SELECT object_key,"offset",compressed,size,sha256 FROM files WHERE path=?',
+                    'SELECT object_key,"offset",compressed,size,sha256,encoding FROM files WHERE path=?',
                     (self._relative(path),),
                 ).fetchone()
                 if row is None:
@@ -208,29 +252,30 @@ class S3Archive:
                 body.close()
             if len(payload) != end - first:
                 raise OSError("S3 返回不完整的归档范围")
-            for path, offset, length, size, digest in members:
-                raw = gzip.decompress(payload[offset - first : offset - first + length])
+            for path, offset, length, size, digest, encoding in members:
+                compressed = payload[offset - first : offset - first + length]
+                raw = compressed if encoding == 'identity' else gzip.decompress(compressed)
                 if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
                     raise OSError("S3 归档内容校验失败：" + path.name)
                 result[path] = raw
         return result
 
+
     def _upload_verified(self, key: str, stream: Any, size: int, digest: str) -> None:
-        stream.seek(0)
-        self.client.upload_fileobj(
-            stream,
-            self.bucket,
-            key,
-            ExtraArgs={"Metadata": {"sha256": digest}},
-            Config=self._transfer_config,
-        )
-        actual = hashlib.sha256()
-        total = 0
-        for block in self._range_blocks(key, 0, size):
-            actual.update(block)
-            total += len(block)
-        if total != size or actual.hexdigest() != digest:
-            raise OSError("S3 上传后回读 SHA256 校验失败")
+        for attempt in range(UPLOAD_ATTEMPTS):
+            stream.seek(0)
+            try:
+                self.client.upload_fileobj(
+                    stream, self.bucket, key,
+                    ExtraArgs={"Metadata": {"sha256": digest}},
+                    Config=self._transfer_config,
+                )
+                self.verify_pack(key, expected=(size, digest))
+                return
+            except Exception as error:
+                if not s3_retry_code(error) or attempt + 1 == UPLOAD_ATTEMPTS:
+                    raise
+                time.sleep(min(UPLOAD_RETRY_MAX_S, UPLOAD_RETRY_BASE_S * 2 ** attempt))
 
     def migrate(self, paths: Iterable[Path], *, cleanup: bool = False) -> dict[str, int]:
         totals = {"uploaded_files": 0, "uploaded_bytes": 0, "cleaned_files": 0, "cleaned_bytes": 0}
@@ -270,8 +315,62 @@ class S3Archive:
         self._pack([source], False, totals, aliases={source: self._relative(path)})
         return totals
 
+    def _pack_direct_gzip(self, path: Path, cleanup: bool, totals: dict[str, int],
+                          *, aliases: Mapping[Path, str] | None = None) -> None:
+        """Upload a large existing gzip journal without a local pack copy."""
+        before = path.stat()
+        after = path.stat()
+        if (before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_ino, after.st_size, after.st_mtime_ns):
+            return
+        key = "ai-football/packs/" + uuid.uuid4().hex + ".pack"
+        with path.open("rb") as stream:
+            length = after.st_size
+            original_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            pack_digest = original_digest
+            self._upload_verified(key, stream, length, pack_digest)
+        self._verified.add(key)
+        record = {
+            "path": aliases[path] if aliases else self._relative(path),
+            "object_key": key, "offset": 0, "compressed": length,
+            "size": length, "sha256": original_digest,
+            "mtime_ns": after.st_mtime_ns, "encoding": "identity",
+        }
+        manifest = gzip.compress(json.dumps(
+            {"version": 1, "key": key, "bytes": length, "sha256": pack_digest,
+             "files": [record]}, ensure_ascii=False).encode(), compresslevel=1, mtime=0)
+        self._upload_verified(key + ".manifest.json.gz", io.BytesIO(manifest),
+                              len(manifest), hashlib.sha256(manifest).hexdigest())
+        with closing(self._db()) as db, db:
+            db.execute(
+                'INSERT INTO files(path,object_key,"offset",compressed,size,sha256,mtime_ns,cleaned,encoding) '
+                "VALUES (:path,:object_key,:offset,:compressed,:size,:sha256,:mtime_ns,0,:encoding) "
+                "ON CONFLICT(path) DO UPDATE SET object_key=excluded.object_key,"
+                '"offset"=excluded."offset",compressed=excluded.compressed,size=excluded.size,'
+                "sha256=excluded.sha256,mtime_ns=excluded.mtime_ns,cleaned=0,encoding=excluded.encoding", record)
+            db.execute(
+                "INSERT INTO packs(object_key,bytes,sha256,at) VALUES (?,?,?,?) "
+                "ON CONFLICT(object_key) DO UPDATE SET bytes=excluded.bytes,"
+                "sha256=excluded.sha256,at=excluded.at",
+                (key, length, pack_digest, time.time()))
+        totals["uploaded_files"] += 1
+        totals["uploaded_bytes"] += length
+        if cleanup:
+            cleaned = self.cleanup([path])
+            totals["cleaned_files"] += cleaned["files"]
+            totals["cleaned_bytes"] += cleaned["bytes"]
+        progress = self.state / "progress.json"
+        temporary = progress.with_suffix(".tmp")
+        temporary.write_text(json.dumps({**totals, "at": time.time(),
+                                         "backend": "s3", "phase": "uploading"}))
+        os.replace(temporary, progress)
+
     def _pack(self, paths: Sequence[Path], cleanup: bool, totals: dict[str, int],
               *, aliases: Mapping[Path, str] | None = None) -> None:
+        if (len(paths) == 1 and paths[0].suffix == ".gz"
+                and paths[0].stat().st_size > PACK_BYTES):
+            self._pack_direct_gzip(paths[0], cleanup, totals, aliases=aliases)
+            return
         records: List[dict[str, Any]] = []
         key = "ai-football/packs/" + uuid.uuid4().hex + ".pack"
         # Temporary pack is removed only after remote verification. Original
@@ -312,7 +411,7 @@ class S3Archive:
                         "compressed": stream.tell() - offset,
                         "size": count,
                         "sha256": file_hash.hexdigest(),
-                        "mtime_ns": after.st_mtime_ns,
+                        "mtime_ns": after.st_mtime_ns, "encoding": "gzip",
                     }
                 )
             if not records:
@@ -338,11 +437,11 @@ class S3Archive:
             )
             with closing(self._db()) as db, db:
                 db.executemany(
-                    'INSERT INTO files(path,object_key,"offset",compressed,size,sha256,mtime_ns,cleaned) '
-                    "VALUES (:path,:object_key,:offset,:compressed,:size,:sha256,:mtime_ns,0) "
+                    'INSERT INTO files(path,object_key,"offset",compressed,size,sha256,mtime_ns,cleaned,encoding) '
+                    "VALUES (:path,:object_key,:offset,:compressed,:size,:sha256,:mtime_ns,0,:encoding) "
                     "ON CONFLICT(path) DO UPDATE SET object_key=excluded.object_key,"
                     '"offset"=excluded."offset",compressed=excluded.compressed,size=excluded.size,'
-                    "sha256=excluded.sha256,mtime_ns=excluded.mtime_ns,cleaned=0",
+                    "sha256=excluded.sha256,mtime_ns=excluded.mtime_ns,cleaned=0,encoding=excluded.encoding",
                     records,
                 )
                 db.execute(
@@ -364,44 +463,77 @@ class S3Archive:
         )
         os.replace(temporary, progress)
 
+    @staticmethod
+    def _cleanup_identity(stat: os.stat_result) -> tuple[int, ...]:
+        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+    def prepare_cleanup(self, path: Path) -> dict[str, Any] | None:
+        """Verify remote bytes and local identity outside the replay EX lock."""
+        before = path.lstat()
+        if not file_stat.S_ISREG(before.st_mode):
+            return None
+        with closing(self._db()) as db:
+            row = db.execute(
+                'SELECT size,mtime_ns,sha256,object_key,"offset",compressed,encoding '
+                'FROM files WHERE path=?', (self._relative(path),),
+            ).fetchone()
+        if row is None or (before.st_size, before.st_mtime_ns) != (row[0], row[1]):
+            return None
+        if row[3] not in self._verified:
+            self.verify_pack(row[3])
+            self._verified.add(row[3])
+        identity = self._cleanup_identity(before)
+        with path.open('rb') as original:
+            if self._cleanup_identity(os.fstat(original.fileno())) != identity:
+                return None
+            digest = hashlib.file_digest(original, 'sha256').hexdigest()
+            if self._cleanup_identity(os.fstat(original.fileno())) != identity:
+                return None
+        if digest != row[2] or self._cleanup_identity(path.lstat()) != identity:
+            return None
+        return {'identity': identity, 'catalog': tuple(row)}
+
+    def commit_cleanup(self, path: Path, token: Mapping[str, Any]) -> dict[str, int]:
+        """Only fast identity/catalog checks and unlink inside the EX lock."""
+        total = {'files': 0, 'bytes': 0}
+        with closing(self._db()) as db, db:
+            row = db.execute(
+                'SELECT size,mtime_ns,sha256,object_key,"offset",compressed,encoding '
+                'FROM files WHERE path=?', (self._relative(path),),
+            ).fetchone()
+            if row is None or tuple(row) != token.get('catalog'):
+                return total
+            try:
+                current = path.lstat()
+            except FileNotFoundError:
+                db.execute('UPDATE files SET cleaned=1 WHERE path=?', (self._relative(path),))
+                return total
+            if (not file_stat.S_ISREG(current.st_mode)
+                    or self._cleanup_identity(current) != token.get('identity')):
+                return total
+            path.unlink()
+            db.execute('UPDATE files SET cleaned=1 WHERE path=?', (self._relative(path),))
+            return {'files': 1, 'bytes': current.st_size}
+
     def cleanup(self, paths: Iterable[Path]) -> dict[str, int]:
         """Only immutable/closed archives; caller must exclude active state."""
-        total = {"files": 0, "bytes": 0}
-        with closing(self._db()) as db, db:
-            for path in paths:
-                row = db.execute(
-                    "SELECT size,mtime_ns,sha256,object_key FROM files WHERE path=?",
-                    (self._relative(path),),
-                ).fetchone()
-                if row is None:
-                    continue
-                if not path.exists():
-                    # A worker can be terminated after unlink() but before
-                    # the catalog transaction commits. A row is inserted only
-                    # after upload and read-back verification, so the remote
-                    # pack is already the authoritative copy here. Do not
-                    # download a multi-gigabyte pack again just to repair the
-                    # local bookkeeping transaction.
-                    db.execute("UPDATE files SET cleaned=1 WHERE path=?", (self._relative(path),))
-                    continue
-                stat = path.stat()
-                if (stat.st_size, stat.st_mtime_ns) != (row[0], row[1]):
-                    continue
-                if row[3] not in self._verified:
-                    self.verify_pack(row[3])
-                    self._verified.add(row[3])
-                with path.open("rb") as original:
-                    if hashlib.file_digest(original, "sha256").hexdigest() != row[2]:
-                        continue
-                path.unlink()
-                db.execute("UPDATE files SET cleaned=1 WHERE path=?", (self._relative(path),))
-                total["files"] += 1
-                total["bytes"] += stat.st_size
+        total = {'files': 0, 'bytes': 0}
+        for path in paths:
+            if not path.exists():
+                # Recover unlink-before-catalog-commit without another GB read.
+                with closing(self._db()) as db, db:
+                    db.execute('UPDATE files SET cleaned=1 WHERE path=?', (self._relative(path),))
+                continue
+            token = self.prepare_cleanup(path)
+            if token is not None:
+                cleaned = self.commit_cleanup(path, token)
+                total['files'] += cleaned['files']
+                total['bytes'] += cleaned['bytes']
         return total
 
-    def verify_pack(self, key: str) -> None:
+    def verify_pack(self, key: str, *, expected: tuple[int, str] | None = None) -> None:
         with closing(self._db()) as db:
-            expected = db.execute(
+            expected = expected or db.execute(
                 "SELECT bytes,sha256 FROM packs WHERE object_key=?", (key,)
             ).fetchone()
         if expected is None:
@@ -444,6 +576,7 @@ class S3Archive:
                         or record["object_key"] != manifest["key"]
                     ):
                         raise ValueError("无效归档路径")
+                    record.setdefault("encoding", "gzip")
                 with closing(self._db()) as db, db:
                     db.execute(
                         "INSERT INTO packs(object_key,bytes,sha256,at) VALUES (?,?,?,?) "
@@ -452,10 +585,10 @@ class S3Archive:
                         (manifest["key"], manifest["bytes"], manifest["sha256"], time.time()),
                     )
                     db.executemany(
-                        'INSERT INTO files(path,object_key,"offset",compressed,size,sha256,mtime_ns) '
-                        "VALUES (:path,:object_key,:offset,:compressed,:size,:sha256,:mtime_ns) "
+                        'INSERT INTO files(path,object_key,"offset",compressed,size,sha256,mtime_ns,encoding) '
+                        "VALUES (:path,:object_key,:offset,:compressed,:size,:sha256,:mtime_ns,:encoding) "
                         'ON CONFLICT(path) DO UPDATE SET object_key=excluded.object_key,"offset"=excluded."offset",'
-                        "compressed=excluded.compressed,size=excluded.size,sha256=excluded.sha256,mtime_ns=excluded.mtime_ns "
+                        "compressed=excluded.compressed,size=excluded.size,sha256=excluded.sha256,mtime_ns=excluded.mtime_ns,encoding=excluded.encoding "
                         "WHERE excluded.mtime_ns>=files.mtime_ns",
                         records,
                     )

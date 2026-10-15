@@ -17,6 +17,7 @@ import time
 from typing import Any, Iterator
 
 from store.archive import S3Archive, storage_mode
+from store.disk_pressure import disk_pressure
 from store.postgres import postgres_enabled
 from service.model_training import atomic_json
 
@@ -25,6 +26,12 @@ SEALED_HOUR = re.compile(r"\.(\d{10})\.jsonl\.gz$")
 DATABASE_BACKUP_INTERVAL_S = 24 * 60 * 60
 DATABASE_BACKUP_STATE = "_archive/db-backup-state.json"
 ARCHIVE_BATCH_FILES = 2000
+# Deletion is the disk-pressure relief valve.  A cleanup run must not hold
+# verified files until a large upload batch finishes; each file gets its own
+# upload/catalog/cleanup boundary.  Non-cleanup migrations retain batching.
+ARCHIVE_CLEANUP_BATCH_FILES = 1
+ARCHIVE_HEARTBEAT_INTERVAL_S = 5
+_STATUS_LOCK = threading.Lock()
 
 
 def database_backups_enabled() -> bool:
@@ -66,10 +73,12 @@ def _write_backup_state(root: Path, state: dict[str, dict[str, Any]]) -> None:
 
 
 def data_files(root: Path) -> Iterator[Path]:
-    for folder in ("snapshots", "ledger", "_trends", "_live", "models"):
+    # Process the largest, fastest-growing ledger first. A full snapshot pass
+    # can take hours and leaves the local disk full while replay journals wait.
+    for folder in ("ledger", "snapshots", "_trends", "_live", "models"):
         base = root / folder
         for directory, _, files in os.walk(base):
-            for filename in sorted(files):
+            for filename in sorted(files, key=lambda item: (0 if item.startswith("live-replay") else 1, item)):
                 path = Path(directory) / filename
                 if path.suffix in (".json", ".jsonl", ".gz"):
                     yield path
@@ -95,41 +104,45 @@ def data_files(root: Path) -> Iterator[Path]:
             yield path
 
 
+def _cursor_covers(root: Path, path: Path, size: int | None = None) -> bool:
+    try:
+        cursor = json.loads((root / "models" / "replay-cursor.json").read_text(encoding="utf-8"))
+        value = int(cursor.get(path.name, 0))
+        return value >= (path.stat().st_size if size is None else size)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
 def cleanable(root: Path, path: Path) -> bool:
     relative = path.relative_to(root)
-    if relative.parts[0] == "snapshots":
+    parts = list(relative.parts)
+    if not parts:
+        return False
+    if parts[0] == "snapshots":
         return path.name != "_index.json" and not path.name.startswith(".tmp_")
-    if relative.parts[0] == "ledger" and OLD_REPLAY.match(path.name):
+    if parts[0] == "ledger" and OLD_REPLAY.match(path.name):
         return True  # Old rotated files are permanently sealed.
     if (
         path.name in ("live-replay.jsonl.gz", "decision-runs.jsonl.gz")
-        and relative.parts[0] == "ledger"
+        and parts[0] == "ledger"
     ):
         if path.name.startswith("live-replay"):
-            cursor = root / "models" / "replay-cursor.json"
-            return (
-                cursor.exists()
-                and json.loads(cursor.read_text()).get(path.name, 0) >= path.stat().st_size
-            )
+            return _cursor_covers(root, path)
         return True
-    if relative.parts[0] == "_trends" and len(relative.parts) == 2 and path.suffix == ".jsonl":
+    if parts[0] == "_trends" and len(parts) == 2 and path.suffix == ".jsonl":
         return True  # S3 writers now append to per-hour match segments.
-    if relative.parts[0] == "_archive" and len(relative.parts) >= 2:
-        return relative.parts[1] in {"backups", "repairs"}
-    if relative.parts[0] == "_live" and path.suffix == ".gz" and not SEALED_HOUR.search(path.name):
+    if parts[0] == "_archive" and len(parts) >= 2:
+        return parts[1] in {"backups", "repairs"}
+    if parts[0] == "_live" and path.suffix == ".gz" and SEALED_HOUR.search(path.name) is None:
         return True  # Legacy compressed journals are sealed after switching backend.
     hour = SEALED_HOUR.search(path.name)
-    if hour and hour[1] < datetime.now(timezone.utc).strftime("%Y%m%d%H"):
+    if hour and hour.group(1) < datetime.now(timezone.utc).strftime("%Y%m%d%H"):
         if path.name.startswith("live-replay."):
-            cursor = root / "models" / "replay-cursor.json"
-            return (
-                cursor.exists()
-                and json.loads(cursor.read_text()).get(path.name, 0) >= path.stat().st_size
-            )
+            return _cursor_covers(root, path)
         return True
     if (
-        relative.parts[0] == "_trends"
-        and len(relative.parts) == 3
+        parts[0] == "_trends"
+        and len(parts) == 3
         and path.stem.isdigit()
         and len(path.stem) == 10
     ):
@@ -144,6 +157,8 @@ def backup_databases(root: Path, *, interval_s: int = DATABASE_BACKUP_INTERVAL_S
     left each copy in ``_archive``. A successful snapshot is now reused for a
     day; a failed upload leaves the temporary file in place and is retried.
     """
+    if disk_pressure(root).get("pause_optional_writes", True):
+        return []
     state = _read_backup_state(root)
     now = time.time()
     backups = []
@@ -204,26 +219,153 @@ def _cleanup_paths(root: Path, archive: S3Archive, paths: Iterator[Path]) -> dic
     """Clean ordinary files and coordinate replay deletion with model reads."""
     ordinary: list[Path] = []
     replay: list[Path] = []
+    replay_meta: dict[str, Any] = {}
+    replay_gaps: dict[str, Any] = {}
+    remote_replay_ready = False
+    try:
+        loaded = json.loads((root / "models" / "replay-source-meta.json").read_text())
+        replay_meta = loaded.get("sources", {}) if isinstance(loaded, dict) else {}
+    except (OSError, ValueError, TypeError):
+        replay_meta = {}
+    try:
+        loaded = json.loads((root / "models" / "replay-gaps.json").read_text())
+        replay_gaps = loaded.get("gaps", {}) if isinstance(loaded, dict) else {}
+    except (OSError, ValueError, TypeError):
+        replay_gaps = {}
+    try:
+        dashboard = json.loads((root / "models" / "dashboard.json").read_text())
+        replay_status = dashboard.get("replay", {}) if isinstance(dashboard, dict) else {}
+        remote_replay_ready = (
+            replay_status.get("source_protocol") == 1
+            and replay_status.get("source_backend") == "s3"
+            and replay_status.get("remote_read_verified") is True
+        )
+    except (OSError, ValueError, TypeError):
+        pass
     for path in paths:
-        if not path.is_file() or not cleanable(root, path):
+        if not path.is_file():
             continue
+        replay_path = path.name.startswith("live-replay")
+        sealed_replay = bool(
+            path.name.startswith("live-replay.")
+            and (hour := SEALED_HOUR.search(path.name))
+            and hour.group(1) < datetime.now(timezone.utc).strftime("%Y%m%d%H")
+        )
+        if not cleanable(root, path) and not (replay_path and remote_replay_ready and sealed_replay):
+            continue
+        if replay_path:
+            try:
+                cursor = json.loads((root / "models" / "replay-cursor.json").read_text())
+                offset = int(cursor.get(path.name, 0))
+                proof = replay_meta.get(path.name)
+                with closing(archive._db()) as db:
+                    catalog = db.execute(
+                        'SELECT size,mtime_ns,sha256,object_key FROM files WHERE path=?',
+                        (path.relative_to(root).as_posix(),)).fetchone()
+                if (path.name in replay_gaps or catalog is None
+                        or int(catalog[0]) != path.stat().st_size
+                        or int(catalog[1]) != path.stat().st_mtime_ns
+                        or (not remote_replay_ready and (
+                            not isinstance(proof, dict)
+                            or offset < path.stat().st_size
+                            or int(proof.get("size", -1)) != path.stat().st_size
+                            or int(proof.get("mtime_ns", -1)) != path.stat().st_mtime_ns
+                            or (proof.get("remote") is True
+                                and proof.get("object_key") != catalog[3])
+                            or (proof.get("remote") is True
+                                and proof.get("sha256") != catalog[2])))):
+                    continue
+            except (OSError, ValueError, TypeError):
+                continue
         (replay if path.name.startswith("live-replay") else ordinary).append(path)
     totals = {"files": 0, "bytes": 0}
-    for candidates in (ordinary, replay):
-        if not candidates:
+    if ordinary:
+        cleaned = archive.cleanup(ordinary)
+        totals["files"] += cleaned["files"]
+        totals["bytes"] += cleaned["bytes"]
+    # A replay cleanup can perform a remote pack verification and a full local
+    # SHA256 read. Hold the writer lock for one file only so a large catalog
+    # cleanup cannot starve the model worker's bounded shared-lock replay.
+    lock_path = root / "models" / "replay.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    for path in replay:
+        try:
+            token = archive.prepare_cleanup(path)
+        except (OSError, ValueError, TypeError):
             continue
-        if candidates is replay:
-            lock_path = root / "models" / "replay.lock"
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            with lock_path.open("a") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-                cleaned = archive.cleanup(candidates)
+        if token is None:
+            continue
+        with lock_path.open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not _replay_cleanup_allowed(root, archive, path):
                 fcntl.flock(lock, fcntl.LOCK_UN)
-        else:
-            cleaned = archive.cleanup(candidates)
+                continue
+            cleaned = archive.commit_cleanup(path, token)
+            fcntl.flock(lock, fcntl.LOCK_UN)
         totals["files"] += cleaned["files"]
         totals["bytes"] += cleaned["bytes"]
     return totals
+
+
+def _replay_cleanup_allowed(root: Path, archive: S3Archive, path: Path) -> bool:
+    """Re-read replay gates immediately before the unlink commit."""
+    replay_meta: dict[str, Any] = {}
+    replay_gaps: dict[str, Any] = {}
+    remote_replay_ready = False
+    try:
+        loaded = json.loads((root / "models" / "replay-source-meta.json").read_text())
+        replay_meta = loaded.get("sources", {}) if isinstance(loaded, dict) else {}
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        loaded = json.loads((root / "models" / "replay-gaps.json").read_text())
+        replay_gaps = loaded.get("gaps", {}) if isinstance(loaded, dict) else {}
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        loaded = json.loads((root / "models" / "dashboard.json").read_text())
+        replay_status = loaded.get("replay", {}) if isinstance(loaded, dict) else {}
+        remote_replay_ready = (
+            replay_status.get("source_protocol") == 1
+            and replay_status.get("source_backend") == "s3"
+            and replay_status.get("remote_read_verified") is True
+        )
+    except (OSError, ValueError, TypeError):
+        # A local source proof is sufficient when the optional dashboard has
+        # not been published yet; remote-read readiness remains false.
+        remote_replay_ready = False
+    try:
+        if path.name in replay_gaps or not path.is_file():
+            return False
+        sealed = bool(
+            (hour := SEALED_HOUR.search(path.name))
+            and hour.group(1) < datetime.now(timezone.utc).strftime("%Y%m%d%H")
+        )
+        if not cleanable(root, path) and not (remote_replay_ready and sealed):
+            return False
+        cursor = json.loads((root / "models" / "replay-cursor.json").read_text())
+        offset = int(cursor.get(path.name, 0))
+        stat = path.stat()
+        with closing(archive._db()) as db:
+            catalog = db.execute(
+                'SELECT size,mtime_ns,sha256,object_key FROM files WHERE path=?',
+                (path.relative_to(root).as_posix(),),
+            ).fetchone()
+        if catalog is None or int(catalog[0]) != stat.st_size or int(catalog[1]) != stat.st_mtime_ns:
+            return False
+        if remote_replay_ready:
+            return True
+        proof = replay_meta.get(path.name)
+        return (
+            isinstance(proof, dict)
+            and offset >= stat.st_size
+            and int(proof.get("size", -1)) == stat.st_size
+            and int(proof.get("mtime_ns", -1)) == stat.st_mtime_ns
+            and (proof.get("remote") is not True or proof.get("object_key") == catalog[3])
+            and (proof.get("remote") is not True or proof.get("sha256") == catalog[2])
+        )
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
 
 
 def _cleanup_catalogued(root: Path, archive: S3Archive) -> dict[str, int]:
@@ -233,11 +375,70 @@ def _cleanup_catalogued(root: Path, archive: S3Archive) -> dict[str, int]:
             "SELECT path FROM files WHERE cleaned=0 ORDER BY path"
         )]
     totals = {"files": 0, "bytes": 0}
-    for batch in _batches(iter(paths)):
+    for batch in _batches(iter(paths), size=ARCHIVE_CLEANUP_BATCH_FILES):
         cleaned = _cleanup_paths(root, archive, iter(batch))
         totals["files"] += cleaned["files"]
         totals["bytes"] += cleaned["bytes"]
+        if cleaned['files']:
+            _status_update(root / '_archive' / 'status.json', phase='cleanup',
+                           cleanup_released_files=totals['files'], cleanup_released_bytes=totals['bytes'],
+                           last_cleaned_path=str(batch[-1].relative_to(root)))
     return totals
+
+
+def _status_update_locked(path: Path, **updates: Any) -> None:
+    """Publish a small durable heartbeat while a long archive pass runs."""
+    current: dict[str, Any] = {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            current = loaded
+    except (OSError, ValueError, TypeError):
+        pass
+    current.update(updates)
+    current["at"] = datetime.now(timezone.utc).isoformat()
+    atomic_json(path, current)
+
+
+def _status_update(path: Path, **updates: Any) -> None:
+    with _STATUS_LOCK:
+        _status_update_locked(path, **updates)
+
+
+def _migrate_resilient(root: Path, archive: S3Archive, batch: list[Path], *, cleanup: bool,
+                       status_path: Path, retry_count: int) -> tuple[dict[str, int], int]:
+    """Keep one bad/rate-limited file from terminating the archive worker.
+
+    A pack is retried as a whole first. If that fails, files are isolated so a
+    transiently missing or permanently malformed file does not block all other
+    local data from being released. The failed file remains local and is retried
+    on the next worker cycle.
+    """
+    zero = {"uploaded_files": 0, "uploaded_bytes": 0,
+            "cleaned_files": 0, "cleaned_bytes": 0}
+    if not batch:
+        return zero, retry_count
+    _status_update(status_path, phase="uploading", last_path=str(batch[0].relative_to(root)),
+                   last_error="")
+    try:
+        return archive.migrate(batch, cleanup=False), retry_count
+    except FileNotFoundError:
+        # The collector rotated or removed the file between walk and stat.
+        return zero, retry_count
+    except Exception as exc:
+        retry_count += 1
+        _status_update(status_path, phase="retrying", retry_count=retry_count,
+                       last_error=type(exc).__name__, last_path=str(batch[0].relative_to(root)))
+        if len(batch) > 1:
+            totals = dict(zero)
+            for path in batch:
+                current, retry_count = _migrate_resilient(
+                    root, archive, [path], cleanup=cleanup, status_path=status_path,
+                    retry_count=retry_count)
+                for key in totals:
+                    totals[key] += current[key]
+            return totals, retry_count
+        return zero, retry_count
 
 
 def run(root: Path, *, cleanup: bool, once: bool) -> None:
@@ -252,6 +453,7 @@ def run(root: Path, *, cleanup: bool, once: bool) -> None:
         "running": True,
         "error": "",
         "phase": "waiting_for_s3",
+        "retry_count": 0,
         "at": datetime.now(timezone.utc).isoformat(),
     })
     while storage_mode(root) != "s3" and not event.is_set():
@@ -261,6 +463,12 @@ def run(root: Path, *, cleanup: bool, once: bool) -> None:
     if event.is_set():
         return
     archive = S3Archive(root)
+    retry_count = 0
+    def heartbeat() -> None:
+        while not event.wait(ARCHIVE_HEARTBEAT_INTERVAL_S):
+            _status_update(status_path, running=True, disk_pressure=disk_pressure(root))
+    heartbeat_thread = threading.Thread(target=heartbeat, name="archive-heartbeat", daemon=True)
+    heartbeat_thread.start()
     with (archive.state / "migration.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         while not event.is_set():
@@ -280,34 +488,67 @@ def run(root: Path, *, cleanup: bool, once: bool) -> None:
                 # Do this before the filesystem walk. A previous run may have
                 # uploaded millions of files but stopped before its final
                 # cleanup phase; waiting for another full walk wastes disk.
-                cleaned = _cleanup_catalogued(root, archive)
-            for batch in _batches(data_files(root)):
-                current = archive.migrate(batch, cleanup=False)
+                try:
+                    _status_update(status_path, phase="cleanup", retry_count=retry_count)
+                    cleaned = _cleanup_catalogued(root, archive)
+                except FileNotFoundError:
+                    cleaned = {"files": 0, "bytes": 0}
+                except Exception as exc:
+                    retry_count += 1
+                    _status_update(status_path, phase="retrying", retry_count=retry_count,
+                                   last_error=type(exc).__name__)
+            batch_size = ARCHIVE_CLEANUP_BATCH_FILES if cleanup else ARCHIVE_BATCH_FILES
+            for batch in _batches(data_files(root), size=batch_size):
+                current, retry_count = _migrate_resilient(
+                    root, archive, batch, cleanup=cleanup, status_path=status_path,
+                    retry_count=retry_count)
                 for key in uploaded:
                     uploaded[key] += current.get(key, 0)
                 if cleanup:
-                    current_cleaned = _cleanup_paths(root, archive, iter(batch))
-                    cleaned["files"] += current_cleaned["files"]
-                    cleaned["bytes"] += current_cleaned["bytes"]
+                    try:
+                        _status_update(status_path, phase="cleanup", retry_count=retry_count)
+                        current_cleaned = _cleanup_paths(root, archive, iter(batch))
+                        cleaned["files"] += current_cleaned["files"]
+                        cleaned["bytes"] += current_cleaned["bytes"]
+                    except FileNotFoundError:
+                        pass
+                    except Exception as exc:
+                        retry_count += 1
+                        _status_update(status_path, phase="retrying", retry_count=retry_count,
+                                       last_error=type(exc).__name__)
             if backups:
-                backup_upload = archive.migrate(backups, cleanup=cleanup)
+                backup_upload, retry_count = _migrate_resilient(
+                    root, archive, backups, cleanup=cleanup, status_path=status_path,
+                    retry_count=retry_count)
                 for key in uploaded:
                     uploaded[key] += backup_upload.get(key, 0)
                 if cleanup:
                     record_database_backups(root, backups)
+            prior_status: dict[str, Any] = {}
+            try:
+                loaded = json.loads(status_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    prior_status = loaded
+            except (OSError, ValueError, TypeError):
+                pass
             status = {
                 **archive.stats(),
                 "at": datetime.now(timezone.utc).isoformat(),
                 "last_upload": uploaded,
                 "last_cleanup": cleaned,
                 "running": not once,
-                "error": "",
+                "error": "" if retry_count == 0 else "部分文件待重试",
+                "last_error": prior_status.get("last_error", ""),
+                "phase": "idle" if retry_count == 0 else "retrying",
+                "retry_count": retry_count,
             }
-            atomic_json(status_path, status)
+            _status_update(status_path, **status)
             print(json.dumps(status, ensure_ascii=False), flush=True)
             if once:
                 break
             event.wait(300)
+    event.set()
+    heartbeat_thread.join(timeout=1)
 
 
 def main() -> None:
