@@ -1,0 +1,8 @@
+id,method,objective,needs,limitation
+B0,market + no trade,audit baseline,complete fresh same-state prices,cannot create an edge
+B1,market-offset residual,remove unvalidated transformations,as-of features and labels,same-source info may have no gain
+B2,hierarchical league offset,conditional residuals,stable league IDs and independent matches,overshrinkage or overfit
+B3,DC/dynamic bivariate Poisson,score dependency/dynamic strengths,"teams, seasons, visible history",prematch model not automatically in-play
+B4,event intensity/hazard,state-dependent goal rates,verified cards/events and double clocks,information may already be priced
+B5,bounded boosting,nonlinear residual interactions,enough time-isolated labelled data,"calibration, overfit and resources"
+D1,uncertainty-aware selection/sizing,net payment and exposure,"accepted odds, costs, payment distribution",sizing cannot fix negative expectation

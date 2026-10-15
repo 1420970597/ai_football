@@ -1,0 +1,55 @@
+{
+  "baseline_commit": "4a1c1cd",
+  "history": {
+    "path": "reports/independent-strategy-audit/data/real_orders_joined.csv",
+    "sha256": "695673ed56909043e8a1c0c4a1ddfc2ab514080b680026eb54e7f4fbe5231069",
+    "scope": "archived TASK-58 snapshot, not current live orders"
+  },
+  "public": [
+    {
+      "id": "E0",
+      "url": "https://www.football-data.co.uk/mmz4281/2425/E0.csv",
+      "status": 200,
+      "bytes": 197110,
+      "sha256": "d0c8ce4a96d886cf60cf101f570f4a3893844226f91c7bd769eb568c49edbfa4",
+      "at": "2026-10-15T11:17:26.592076+00:00",
+      "rows": 380
+    },
+    {
+      "id": "D1",
+      "url": "https://www.football-data.co.uk/mmz4281/2425/D1.csv",
+      "status": 200,
+      "bytes": 156414,
+      "sha256": "a295c58033cfe6393cbbc28f7db85671839b960c5f1153fd3678e20ad2adb92e",
+      "at": "2026-10-15T11:17:26.586822+00:00",
+      "rows": 306
+    },
+    {
+      "id": "I1",
+      "url": "https://www.football-data.co.uk/mmz4281/2425/I1.csv",
+      "status": 200,
+      "bytes": 191722,
+      "sha256": "79d87a5b18771e066ac7419b7876bfd9771a68ca117a9712375d6bc9685abee3",
+      "at": "2026-10-15T11:17:26.567750+00:00",
+      "rows": 380
+    },
+    {
+      "id": "SP1",
+      "url": "https://www.football-data.co.uk/mmz4281/2425/SP1.csv",
+      "status": 200,
+      "bytes": 192863,
+      "sha256": "c086e96d6a53f6e6c0fce4e35db0d1728c773b4362323da0161a34769e315a36",
+      "at": "2026-10-15T11:17:26.710567+00:00",
+      "rows": 380
+    },
+    {
+      "id": "F1",
+      "url": "https://www.football-data.co.uk/mmz4281/2425/F1.csv",
+      "status": 200,
+      "bytes": 154703,
+      "sha256": "fe6ae6a0c30d05f0ac88e0fc4a31452c7203e2b444703dfa941e22f38f20ab63",
+      "at": "2026-10-15T11:17:26.704675+00:00",
+      "rows": 306
+    }
+  ]
+}

@@ -1,0 +1,387 @@
+{
+  "at_utc": "2026-10-15T11:30:35.313279+00:00",
+  "scope": "new report and offline analysis only; no production integration, model fit or venue calls",
+  "checks": [
+    {
+      "name": "compile",
+      "command": [
+        "./scripts/cpu-limited.sh",
+        "run",
+        "--",
+        "python3",
+        "-m",
+        "py_compile",
+        "reports/profitability-league-research/scripts/analyze.py",
+        "reports/profitability-league-research/scripts/make_figures.py",
+        "reports/profitability-league-research/scripts/md_to_html.py",
+        "reports/profitability-league-research/scripts/test_analysis.py",
+        "reports/leyu-kaiyun-odds-bot-feasibility/scripts/md_to_html.py",
+        "reports/leyu-kaiyun-odds-bot-feasibility/scripts/make_figures.py"
+      ],
+      "started_utc": "2026-10-15T11:30:20.827823+00:00",
+      "exit_code": 0,
+      "log_sha256": "0f4cc6a8605cbe3ccb396920c7ffc59f80238b900270fc406393d33a2fab8237",
+      "output_tail": "==> 受限执行（taskset -c 0-1，≈50% × 4 核）：taskset -c 0-1 python3 -m py_compile reports/profitability-league-research/scripts/analyze.py reports/profitability-league-research/scripts/make_figures.py reports/profitability-league-research/scripts/md_to_html.py reports/profitability-league-research/scripts/test_analysis.py reports/leyu-kaiyun-odds-bot-feasibility/scripts/md_to_html.py reports/leyu-kaiyun-odds-bot-feasibility/scripts/make_figures.py\n"
+    },
+    {
+      "name": "unit",
+      "command": [
+        "./scripts/cpu-limited.sh",
+        "run",
+        "--",
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "reports/profitability-league-research/scripts",
+        "-p",
+        "test_*.py",
+        "-v"
+      ],
+      "started_utc": "2026-10-15T11:30:21.008751+00:00",
+      "exit_code": 0,
+      "log_sha256": "3ed6b58592aa6b463162442f8a9a4a611fe9dfcf17b5e984c46c35104cd5c116",
+      "output_tail": "==> 受限执行（taskset -c 0-1，≈50% × 4 核）：taskset -c 0-1 python3 -m unittest discover -s reports/profitability-league-research/scripts -p test_*.py -v\ntest_empty_and_inconsistent_public_result_rejected (test_analysis.AnalysisTests.test_empty_and_inconsistent_public_result_rejected) ... ok\ntest_empty_and_zero_stake_history_rejected (test_analysis.AnalysisTests.test_empty_and_zero_stake_history_rejected) ... ok\ntest_nonfinite_and_invalid_quotes_rejected (test_analysis.AnalysisTests.test_nonfinite_and_invalid_quotes_rejected) ... ok\ntest_pending_excluded_and_market_totals_reconcile (test_analysis.AnalysisTests.test_pending_excluded_and_market_totals_reconcile) ... ok\ntest_public_missing_odds_keep_match_denominator (test_analysis.AnalysisTests.test_public_missing_odds_keep_match_denominator) ... ok\ntest_same_quote_devig_identity (test_analysis.AnalysisTests.test_same_quote_devig_identity) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.000s\n\nOK\n"
+    },
+    {
+      "name": "public_fetch_and_analysis",
+      "command": [
+        "./scripts/cpu-limited.sh",
+        "run",
+        "--",
+        "python3",
+        "reports/profitability-league-research/scripts/analyze.py",
+        "--source-dir",
+        "/root/ai_football/output/league-research-20261015/public-verified",
+        "--fetch"
+      ],
+      "started_utc": "2026-10-15T11:30:21.368352+00:00",
+      "exit_code": 0,
+      "log_sha256": "758b06af58f6f0cbbe077842c621d1999cf01d29cb2170541f883b865d1b7e5f",
+      "output_tail": "_1H\",\n        \"orders\": 22,\n        \"matches\": 22,\n        \"stake\": \"107.0\",\n        \"net_recomputed\": \"-23.3500\",\n        \"roi_recomputed\": -0.21822429906542057\n      },\n      {\n        \"market\": \"HAD\",\n        \"orders\": 4,\n        \"matches\": 4,\n        \"stake\": \"17.41\",\n        \"net_recomputed\": \"-2.8799\",\n        \"roi_recomputed\": -0.16541642734060885\n      },\n      {\n        \"market\": \"HAD_1H\",\n        \"orders\": 8,\n        \"matches\": 8,\n        \"stake\": \"35.13\",\n        \"net_recomputed\": \"-5.3645\",\n        \"roi_recomputed\": -0.1527042413891261\n      },\n      {\n        \"market\": \"OU\",\n        \"orders\": 47,\n        \"matches\": 34,\n        \"stake\": \"171.09\",\n        \"net_recomputed\": \"6.7021\",\n        \"roi_recomputed\": 0.039172949909404405\n      },\n      {\n        \"market\": \"OU_1H\",\n        \"orders\": 48,\n        \"matches\": 40,\n        \"stake\": \"192.80\",\n        \"net_recomputed\": \"-36.94560\",\n        \"roi_recomputed\": -0.1916265560165975\n      }\n    ],\n    \"basis\": \"historical decision odds and local settlement; not venue authoritative P&L\"\n  },\n  \"public_matches\": 1752,\n  \"public_odds_complete\": 1752,\n  \"public_basis\": \"descriptive pre-match 1X2; no strategy ROI or fitted model\"\n}\n"
+    },
+    {
+      "name": "lint",
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--cpus=2",
+        "--memory=2g",
+        "--entrypoint",
+        "python",
+        "-v",
+        "/root/ai_football/output/league-research-20261015/worktree:/w:ro",
+        "-w",
+        "/w",
+        "ai_football-validation:task-52",
+        "-m",
+        "ruff",
+        "check",
+        "--no-cache",
+        "reports/profitability-league-research/scripts"
+      ],
+      "started_utc": "2026-10-15T11:30:22.100937+00:00",
+      "exit_code": 0,
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "output_tail": "All checks passed!\n"
+    },
+    {
+      "name": "figures",
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--cpus=2",
+        "--memory=2g",
+        "--pids-limit=128",
+        "-v",
+        "/root/ai_football/output/league-research-20261015/worktree:/w",
+        "-v",
+        "/usr/share/fonts/truetype/wqy:/usr/share/fonts/truetype/wqy:ro",
+        "-w",
+        "/w",
+        "python:3.12-slim",
+        "sh",
+        "-c",
+        "pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore -q matplotlib==3.10.8 && python -W error reports/profitability-league-research/scripts/make_figures.py"
+      ],
+      "started_utc": "2026-10-15T11:30:22.816299+00:00",
+      "exit_code": 0,
+      "log_sha256": "111d28e838b9ed69a35174629ee7483c319fb00cccc303f7a7a56fef3f42d1f3",
+      "output_tail": "4 figures generated with WQY; theory and measurements labelled separately\n"
+    },
+    {
+      "name": "html",
+      "command": [
+        "python3",
+        "reports/profitability-league-research/scripts/md_to_html.py",
+        "reports/profitability-league-research/REPORT.md",
+        "reports/profitability-league-research/REPORT.html"
+      ],
+      "started_utc": "2026-10-15T11:30:35.147294+00:00",
+      "exit_code": 0,
+      "log_sha256": "1b6a21d14298c76f90528895e635b6d3dbee57a5124d69764da0fba7677d5ebb",
+      "output_tail": "HTML -> reports/profitability-league-research/REPORT.html (43.9 KB)\n"
+    },
+    {
+      "name": "diff_check",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "started_utc": "2026-10-15T11:30:35.205394+00:00",
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_tail": ""
+    }
+  ],
+  "deterministic_csv_regeneration": true,
+  "public_matches": 1752,
+  "graded_historical_orders": 321,
+  "figures": 4,
+  "mermaid_blocks": 3,
+  "python_version": "Python 3.13.5",
+  "script_hashes": {
+    "make_figures.py": "e82bf552c9a90bce3fe4b9f35ea402684651f3d4617c7d16028c3258e4d4cee8",
+    "analyze.py": "97b454ee09d6800aebdffc5720d2dbaa075fade4871567005d51822c11b00d5f",
+    "test_analysis.py": "1e24d37e436f5cbcb36352c6e73f7266046b70518eefc6034189ed87f8b819c6",
+    "md_to_html.py": "d01461141cb77f0f0f92dae6bef66945539c96d2995b2a0538a17fb8c306c76c"
+  },
+  "resolved_attempts": [
+    {
+      "name": "initial figure render",
+      "exit_code": 0,
+      "finding": "Glyph 8722 missing in label, despite unicode_minus=False",
+      "resolution": "replace literal S−1 label with S-1; final -W error render required"
+    },
+    {
+      "name": "first read-only-container ruff",
+      "exit_code": 2,
+      "finding": "cannot initialize /w/.ruff_cache on read-only mount",
+      "resolution": "--no-cache, final check exits 0"
+    },
+    {
+      "name": "initial staged diff check",
+      "exit_code": 2,
+      "finding": "csv.writer default CRLF flagged as trailing whitespace",
+      "resolution": "explicit LF writer and all new CSVs normalized; final regeneration and staged check passed"
+    }
+  ],
+  "browser": {
+    "at_utc": "2026-10-15T11:31:34.937948+00:00",
+    "tool": "Playwright CLI skill",
+    "command": [
+      "playwright_cli.sh",
+      "-s=league-research",
+      "run-code",
+      "<recorded script SHA256>"
+    ],
+    "script_sha256": "00ff067ec68e65c800c3ce337562581d12f48fa217f1e867bca3bc685db4f4db",
+    "exit_code": 0,
+    "result": {
+      "online": {
+        "status": {
+          "ok": true,
+          "blocks": 3
+        },
+        "diagrams": 3,
+        "images": [
+          {
+            "src": "images/historical_markets.png",
+            "loaded": true
+          },
+          {
+            "src": "images/pricing_theory.png",
+            "loaded": true
+          },
+          {
+            "src": "images/league_profiles.png",
+            "loaded": true
+          },
+          {
+            "src": "images/pooling_and_sampling.png",
+            "loaded": true
+          }
+        ],
+        "fallback": []
+      },
+      "offline": {
+        "status": {
+          "ok": false,
+          "error": "Failed to fetch dynamically imported module: https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
+        },
+        "diagrams": 0,
+        "images": [
+          {
+            "src": "images/historical_markets.png",
+            "loaded": true
+          },
+          {
+            "src": "images/pricing_theory.png",
+            "loaded": true
+          },
+          {
+            "src": "images/league_profiles.png",
+            "loaded": true
+          },
+          {
+            "src": "images/pooling_and_sampling.png",
+            "loaded": true
+          }
+        ],
+        "fallback": [
+          {
+            "readable": true,
+            "text": "flowchart LR\n    Q[乐鱼报价与接收时间] --> S[同状态完整盘口与比分时钟]\n    S --> P[OU与HAD反演进球分布]\n    P --> H[去水 时间衰减 收缩 趋势修正]\n    H --> E[全局算法权重与融合]\n    E --> D[选单与仓位]\n    D --> X[场馆接受价与回执]\n    X --> C[权威结算及实际成本]\n    S --> M[去水市场基线]\n    M --> V[相同时间样本上的配对评价]\n    E --> V\n    C --> V\n    V --> G[验证增量后才晋级]"
+          },
+          {
+            "readable": true,
+            "text": "flowchart TD\n    I[版本化赛事身份与赛季] --> Q{数据与报价合格}\n    Q -->|否| O[隔离并记录原因]\n    Q -->|是| B[全局市场 offset 基线]\n    B --> C[按赛制和数据质量共享赛事簇]\n    C --> L[联赛与盘口的收缩残差]\n    L --> N{独立时间证据足够}\n    N -->|否| F[回退上层参数或不交易]\n    N -->|是| E[同窗选择合格局部候选]\n    E --> P[支付一致性与真实成本选单]\n    P --> R[受限影子 验收 晋级 回滚]"
+          },
+          {
+            "readable": true,
+            "text": "stateDiagram-v2\n    [*] --> Registered\n    Registered --> InnerTimeFit: 固定候选与资格数据\n    InnerTimeFit --> FrozenOuter: 仅内层选超参数\n    FrozenOuter --> Shadow: 外层与执行子群通过\n    FrozenOuter --> Rejected: 优势或资源证据不足\n    Shadow --> Eligible: 完整前瞻窗口与真实成本评价通过\n    Shadow --> Rejected: 概率或执行退化\n    Eligible --> Active: 独立资金授权与发布条件满足\n    Active --> Rollback: 质量失效或预设漂移规则触发\n    Rollback --> Registered: 新版本重新登记\n    Rejected --> Registered: 新数据或新假说并记录搜索次数"
+          }
+        ]
+      },
+      "semantics": "three expected diagram topics present"
+    },
+    "log_sha256": "614f21e14b8a02bd2ad8025455771ec13cdfe42604f88161edbbf9840e6f41e7",
+    "note": "offline means Mermaid CDN blocked, local server and images available"
+  },
+  "final_freeze_checks": [
+    {
+      "name": "compile",
+      "command": [
+        "./scripts/cpu-limited.sh",
+        "run",
+        "--",
+        "python3",
+        "-m",
+        "py_compile",
+        "reports/profitability-league-research/scripts/make_figures.py",
+        "reports/profitability-league-research/scripts/analyze.py",
+        "reports/profitability-league-research/scripts/test_analysis.py",
+        "reports/profitability-league-research/scripts/md_to_html.py"
+      ],
+      "exit_code": 0,
+      "at_utc": "2026-10-15T11:32:46.300968+00:00",
+      "log_sha256": "e5c42a31294a20ee70b12851729bc70f26755c1aa2975b88b6c68b8bf97a8069",
+      "output_tail": "==> 受限执行（taskset -c 0-1，≈50% × 4 核）：taskset -c 0-1 python3 -m py_compile reports/profitability-league-research/scripts/make_figures.py reports/profitability-league-research/scripts/analyze.py reports/profitability-league-research/scripts/test_analysis.py reports/profitability-league-research/scripts/md_to_html.py\n"
+    },
+    {
+      "name": "unit",
+      "command": [
+        "./scripts/cpu-limited.sh",
+        "run",
+        "--",
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "reports/profitability-league-research/scripts",
+        "-p",
+        "test_*.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "at_utc": "2026-10-15T11:32:46.437773+00:00",
+      "log_sha256": "3ed6b58592aa6b463162442f8a9a4a611fe9dfcf17b5e984c46c35104cd5c116",
+      "output_tail": "d_zero_stake_history_rejected (test_analysis.AnalysisTests.test_empty_and_zero_stake_history_rejected) ... ok\ntest_nonfinite_and_invalid_quotes_rejected (test_analysis.AnalysisTests.test_nonfinite_and_invalid_quotes_rejected) ... ok\ntest_pending_excluded_and_market_totals_reconcile (test_analysis.AnalysisTests.test_pending_excluded_and_market_totals_reconcile) ... ok\ntest_public_missing_odds_keep_match_denominator (test_analysis.AnalysisTests.test_public_missing_odds_keep_match_denominator) ... ok\ntest_same_quote_devig_identity (test_analysis.AnalysisTests.test_same_quote_devig_identity) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.000s\n\nOK\n"
+    },
+    {
+      "name": "analysis",
+      "command": [
+        "./scripts/cpu-limited.sh",
+        "run",
+        "--",
+        "python3",
+        "reports/profitability-league-research/scripts/analyze.py",
+        "--source-dir",
+        "/root/ai_football/output/league-research-20261015/public-verified"
+      ],
+      "exit_code": 0,
+      "at_utc": "2026-10-15T11:32:46.566402+00:00",
+      "log_sha256": "0a05401c647ccc794d9a9d1b3a9c854cbb750b1265fcb93be8a64c0b082ce105",
+      "output_tail": ".3645\",\n        \"roi_recomputed\": -0.1527042413891261\n      },\n      {\n        \"market\": \"OU\",\n        \"orders\": 47,\n        \"matches\": 34,\n        \"stake\": \"171.09\",\n        \"net_recomputed\": \"6.7021\",\n        \"roi_recomputed\": 0.039172949909404405\n      },\n      {\n        \"market\": \"OU_1H\",\n        \"orders\": 48,\n        \"matches\": 40,\n        \"stake\": \"192.80\",\n        \"net_recomputed\": \"-36.94560\",\n        \"roi_recomputed\": -0.1916265560165975\n      }\n    ],\n    \"basis\": \"historical decision odds and local settlement; not venue authoritative P&L\"\n  },\n  \"public_matches\": 1752,\n  \"public_odds_complete\": 1752,\n  \"public_basis\": \"descriptive pre-match 1X2; no strategy ROI or fitted model\"\n}\n"
+    },
+    {
+      "name": "lint",
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "--cpus=2",
+        "--memory=2g",
+        "--entrypoint",
+        "python",
+        "-v",
+        "/root/ai_football/output/league-research-20261015/worktree:/w:ro",
+        "-w",
+        "/w",
+        "ai_football-validation:task-52",
+        "-m",
+        "ruff",
+        "check",
+        "--no-cache",
+        "reports/profitability-league-research/scripts"
+      ],
+      "exit_code": 0,
+      "at_utc": "2026-10-15T11:32:47.305738+00:00",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "output_tail": "All checks passed!\n"
+    },
+    {
+      "name": "stage",
+      "command": [
+        "git",
+        "add",
+        "reports/profitability-league-research"
+      ],
+      "exit_code": 0,
+      "at_utc": "2026-10-15T11:32:47.313634+00:00",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_tail": ""
+    },
+    {
+      "name": "staged_diff_check",
+      "command": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "exit_code": 0,
+      "at_utc": "2026-10-15T11:32:47.317952+00:00",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_tail": ""
+    }
+  ],
+  "final_script_hashes": {
+    "make_figures.py": "e82bf552c9a90bce3fe4b9f35ea402684651f3d4617c7d16028c3258e4d4cee8",
+    "analyze.py": "550d87ce7a557c263ef7ba62c01f1e087a337a25e390a5c376f1fa84de459095",
+    "test_analysis.py": "1e24d37e436f5cbcb36352c6e73f7266046b70518eefc6034189ed87f8b819c6",
+    "md_to_html.py": "d01461141cb77f0f0f92dae6bef66945539c96d2995b2a0538a17fb8c306c76c"
+  },
+  "final_csv_hashes": {
+    "sources.csv": "c15fb7d02d87101d91e2cc5f9cceee6377a203baca12b76aa7bb141e3dd6c421",
+    "probability_sensitivity.csv": "d1a8d9bad342293bae2e048d1243487c5749b3e48a53536ca17159dc5dd32580",
+    "pooling_sensitivity.csv": "7d270a96b646babb13f542ea3fe40896068baf36526e5f88721a9462ac669be8",
+    "tick_correlation.csv": "1debc27c4a489451dbddc1b15073f22b405e84ec354294c3cd7f189b69ac275c",
+    "historical_by_market.csv": "23b8c04d8efd016940e281c1f06e8e2a8321ea0e148b417f3695eff599d6533a",
+    "algorithm_options.csv": "a05a511b63639c02f33cf22e3bacbe4ee6b6e0fa9da205165f211c48d14c8685",
+    "public_league_profiles.csv": "e34fc950ad2d46f3fde6b5e94069f84883a6ec7c5afd6bc937388bb0e70d3f88",
+    "software_comparison.csv": "5b6a60143b7162482e684ebfa137aa755a6417b8de6b7f25bd1ca4fa3c2d7678",
+    "margin_identity.csv": "65f99774abdba324df25d5b1a51500c22b943882b6cbec335f430377661766fb"
+  },
+  "staged_hygiene": {
+    "checked_paths": 25,
+    "scope_only": true,
+    "runtime_artifacts": false,
+    "hardcoded_credentials": false
+  }
+}

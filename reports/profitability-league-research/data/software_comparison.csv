@@ -1,0 +1,5 @@
+solution,structure,market_prior,league,uncertainty,resources,integration,role,basis
+statsmodels GLM/GAM,"offset,linear,splines",native offset,fixed effects; hierarchy requires extension,diagnostics; separate calibration,lightweight hypothesis; not measured,Python,B1/B2 reference,qualitative official capability review; not benchmark
+footBayes,"Poisson,bivariate,DC,dynamic",custom integration,"team/time hierarchy, routing custom",Bayesian posterior/MLE,R/Stan offline; not measured,"R, cross-language artifact",B3 offline reference,qualitative official capability review; not benchmark
+XGBoost,nonlinear table residual,base margin with correct link,features/interactions; no automatic pooling,regularization; calibration separate,bounded threads/depth; not measured,Python SDK,B5 challenger,qualitative official capability review; not benchmark
+current stdlib residual,"7 active coordinates,60-vector",implemented offset,not implemented,time validation/execution algorithm gate,full fit not measured this round,existing Python contracts,fallback/controlled extension,frozen repository code; no new fit

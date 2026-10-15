@@ -1,0 +1,65 @@
+{
+  "history": {
+    "all_rows": 362,
+    "pending_excluded": 41,
+    "orders": 321,
+    "matches": 233,
+    "stake": "1384.03",
+    "net_recomputed": "-118.02560",
+    "roi_recomputed": -0.0852767642319892,
+    "by_market": [
+      {
+        "market": "AH",
+        "orders": 192,
+        "matches": 152,
+        "stake": "860.60",
+        "net_recomputed": "-56.18770",
+        "roi_recomputed": -0.06528898442946782
+      },
+      {
+        "market": "AH_1H",
+        "orders": 22,
+        "matches": 22,
+        "stake": "107.0",
+        "net_recomputed": "-23.3500",
+        "roi_recomputed": -0.21822429906542057
+      },
+      {
+        "market": "HAD",
+        "orders": 4,
+        "matches": 4,
+        "stake": "17.41",
+        "net_recomputed": "-2.8799",
+        "roi_recomputed": -0.16541642734060885
+      },
+      {
+        "market": "HAD_1H",
+        "orders": 8,
+        "matches": 8,
+        "stake": "35.13",
+        "net_recomputed": "-5.3645",
+        "roi_recomputed": -0.1527042413891261
+      },
+      {
+        "market": "OU",
+        "orders": 47,
+        "matches": 34,
+        "stake": "171.09",
+        "net_recomputed": "6.7021",
+        "roi_recomputed": 0.039172949909404405
+      },
+      {
+        "market": "OU_1H",
+        "orders": 48,
+        "matches": 40,
+        "stake": "192.80",
+        "net_recomputed": "-36.94560",
+        "roi_recomputed": -0.1916265560165975
+      }
+    ],
+    "basis": "historical decision odds and local settlement; not venue authoritative P&L"
+  },
+  "public_matches": 1752,
+  "public_odds_complete": 1752,
+  "public_basis": "descriptive pre-match 1X2; no strategy ROI or fitted model"
+}

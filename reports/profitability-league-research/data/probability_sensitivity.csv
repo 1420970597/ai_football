@@ -1,0 +1,10 @@
+decimal_odds,probability_error,ev_error,basis
+1.5,0.01,0.015,"theory, no-push"
+1.5,0.02,0.03,"theory, no-push"
+1.5,0.05,0.07500000000000001,"theory, no-push"
+2.0,0.01,0.02,"theory, no-push"
+2.0,0.02,0.04,"theory, no-push"
+2.0,0.05,0.1,"theory, no-push"
+3.0,0.01,0.03,"theory, no-push"
+3.0,0.02,0.06,"theory, no-push"
+3.0,0.05,0.15000000000000002,"theory, no-push"

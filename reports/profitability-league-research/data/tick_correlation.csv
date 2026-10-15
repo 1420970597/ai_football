@@ -1,0 +1,6 @@
+ticks,assumed_within_match_correlation,effective_observations_per_match,basis
+40,0.0,40.0,equal-correlation illustration; no measured rho
+40,0.1,8.16326530612245,equal-correlation illustration; no measured rho
+40,0.5,1.951219512195122,equal-correlation illustration; no measured rho
+40,0.9,1.1080332409972298,equal-correlation illustration; no measured rho
+40,1.0,1.0,equal-correlation illustration; no measured rho
