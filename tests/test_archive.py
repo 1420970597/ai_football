@@ -1,5 +1,7 @@
 from contextlib import closing
 import io
+import os
+import fcntl
 import json
 from pathlib import Path
 import sqlite3
@@ -9,7 +11,8 @@ from unittest.mock import patch
 
 from collector.leyu_realtime import TrendStore
 from core.models import OddsSnapshot
-from service.archive_service import backup_databases, cleanable, data_files, record_database_backups
+from service.archive_service import (backup_databases, cleanable, data_files,
+                                     record_database_backups, _cleanup_paths)
 from service import archive_service
 from store.archive import S3Archive, journal_path, storage_mode
 from store.snapshot_store import SnapshotStore
@@ -48,6 +51,47 @@ class FakeS3:
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_cleanup_run_uploads_and_releases_each_file_before_next_batch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "output"
+            root.mkdir()
+            paths = [root / "ledger" / "live-replay.2020010100.jsonl.gz",
+                     root / "ledger" / "live-replay.2020010101.jsonl.gz"]
+            for path in paths:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"journal")
+            uploaded_batches = []
+            cleaned_batches = []
+
+            class FakeArchive:
+                def __init__(self, _root):
+                    self.state = _root / "_archive"
+                    self.state.mkdir(parents=True, exist_ok=True)
+
+                def stats(self):
+                    return {"backend": "s3", "files": 0, "bytes": 0}
+
+            def migrate(_root, _archive, batch, **_kwargs):
+                uploaded_batches.append(list(batch))
+                return ({"uploaded_files": 1, "uploaded_bytes": 7,
+                         "cleaned_files": 0, "cleaned_bytes": 0}, 0)
+
+            def cleanup(_root, _archive, batch):
+                cleaned_batches.append(list(batch))
+                return {"files": 1, "bytes": 7}
+
+            with patch.object(archive_service, "storage_mode", return_value="s3"), \
+                 patch.object(archive_service, "S3Archive", FakeArchive), \
+                 patch.object(archive_service, "data_files", return_value=iter(paths)), \
+                 patch.object(archive_service, "backup_databases", return_value=[]), \
+                 patch.object(archive_service, "_cleanup_catalogued", return_value={"files": 0, "bytes": 0}), \
+                 patch.object(archive_service, "_migrate_resilient", side_effect=migrate), \
+                 patch.object(archive_service, "_cleanup_paths", side_effect=cleanup):
+                archive_service.run(root, cleanup=True, once=True)
+
+            self.assertEqual(uploaded_batches, [[paths[0]], [paths[1]]])
+            self.assertEqual(cleaned_batches, [[paths[0]], [paths[1]]])
+
     def test_archive_worker_replaces_stale_failure_status_on_start(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "output"
@@ -109,6 +153,17 @@ class ArchiveTests(unittest.TestCase):
             self.archive.copy_verified(record,target)
             self.archive.verify_pack(record['object_key'])
         self.assertEqual(target.read_bytes(),raw)
+
+    def test_large_gzip_journal_upload_does_not_create_local_pack_copy(self):
+        import gzip
+        path = self.root / 'ledger' / 'live-replay.2026101500.jsonl.gz'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = b'{"row":1}\n' * 100
+        path.write_bytes(gzip.compress(raw, mtime=0))
+        with patch('store.archive.PACK_BYTES', 1):
+            self.archive.migrate([path], cleanup=True)
+        self.assertFalse(path.exists())
+        self.assertEqual(self.archive.read_many([path])[path], gzip.compress(raw, mtime=0))
 
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -238,6 +293,125 @@ class ArchiveTests(unittest.TestCase):
         cursor.parent.mkdir()
         cursor.write_text(json.dumps({replay.name: replay.stat().st_size}))
         self.assertTrue(cleanable(self.root, replay))
+
+    def test_replay_cleanup_requires_source_fingerprint_proof(self):
+        replay = self.source("ledger/live-replay.2020010100.jsonl.gz", b"journal")
+        self.archive.migrate([replay])
+        models = self.root / "models"
+        models.mkdir()
+        (models / "replay-cursor.json").write_text(json.dumps({replay.name: replay.stat().st_size}))
+        self.assertEqual(_cleanup_paths(self.root, self.archive, iter([replay])),
+                         {"files": 0, "bytes": 0})
+        (models / "replay-source-meta.json").write_text(json.dumps({"sources": {
+            replay.name: {"size": replay.stat().st_size, "mtime_ns": replay.stat().st_mtime_ns}
+        }}))
+        self.assertEqual(_cleanup_paths(self.root, self.archive, iter([replay])),
+                         {"files": 1, "bytes": len(b"journal")})
+
+    def test_verified_remote_replay_backend_allows_local_prefix_cleanup(self):
+        replay = self.source("ledger/live-replay.2020010101.jsonl.gz", b"journal")
+        self.archive.migrate([replay])
+        models = self.root / "models"
+        models.mkdir()
+        (models / "replay-cursor.json").write_text(json.dumps({replay.name: 1}))
+        (models / "dashboard.json").write_text(json.dumps({"replay": {
+            "source_protocol": 1, "source_backend": "s3", "remote_read_verified": True
+        }}))
+        self.assertEqual(_cleanup_paths(self.root, self.archive, iter([replay])),
+                         {"files": 1, "bytes": len(b"journal")})
+        self.assertFalse(replay.exists())
+
+    def replay_ready(self):
+        replay = self.source('ledger/live-replay.2020010102.jsonl.gz', b'journal')
+        self.archive.migrate([replay])
+        models = self.root / 'models'
+        models.mkdir(exist_ok=True)
+        (models/'replay-cursor.json').write_text(json.dumps({replay.name: 1}))
+        (models/'dashboard.json').write_text(json.dumps({'replay': {
+            'source_protocol':1, 'source_backend':'s3', 'remote_read_verified':True}}))
+        return replay
+
+    def test_commit_rejects_replacement_append_and_same_size_rewrite(self):
+        for mutation in ('replace','append','rewrite'):
+            with self.subTest(mutation=mutation):
+                path = self.source('snapshots/race.json', b'journal')
+                self.archive.migrate([path])
+                token = self.archive.prepare_cleanup(path)
+                old = path.stat()
+                if mutation == 'replace':
+                    other = path.with_suffix('.new')
+                    other.write_bytes(b'journal')
+                    os.utime(other, ns=(old.st_atime_ns,old.st_mtime_ns))
+                    other.replace(path)
+                elif mutation == 'append':
+                    with path.open('ab') as stream:
+                        stream.write(b'new')
+                else:
+                    path.write_bytes(b'changed')
+                    os.utime(path, ns=(old.st_atime_ns,old.st_mtime_ns))
+                self.assertEqual(self.archive.commit_cleanup(path, token), {'files':0,'bytes':0})
+                self.assertTrue(path.exists())
+
+    def test_commit_rejects_catalog_range_change(self):
+        path = self.source()
+        self.archive.migrate([path])
+        token = self.archive.prepare_cleanup(path)
+        with closing(self.archive._db()) as db, db:
+            db.execute('UPDATE files SET "offset"="offset"+1')
+        self.assertEqual(self.archive.commit_cleanup(path,token)['files'],0)
+        self.assertTrue(path.exists())
+
+    def test_replay_commit_rechecks_gap_readiness_and_cursor(self):
+        for gate in ('gap','readiness','cursor'):
+            with self.subTest(gate=gate):
+                replay = self.replay_ready()
+                original = self.archive.prepare_cleanup
+                def prepare(path, original=original, gate=gate, replay=replay):
+                    token = original(path)
+                    models = self.root/'models'
+                    if gate == 'gap':
+                        (models/'replay-gaps.json').write_text(json.dumps({'gaps':{replay.name:{'frozen':True}}}))
+                    else:
+                        (models/'dashboard.json').write_text('{}')
+                        if gate == 'cursor':
+                            (models/'replay-source-meta.json').write_text(json.dumps({'sources':{
+                                replay.name:{'size':replay.stat().st_size,'mtime_ns':replay.stat().st_mtime_ns}}}))
+                    return token
+                with patch.object(self.archive,'prepare_cleanup',side_effect=prepare):
+                    self.assertEqual(_cleanup_paths(self.root,self.archive,iter([replay]))['files'],0)
+                self.assertTrue(replay.exists())
+                (self.root/'models'/'replay-gaps.json').unlink(missing_ok=True)
+                (self.root/'models'/'replay-source-meta.json').unlink(missing_ok=True)
+
+    def test_verify_does_not_hold_replay_lock_and_commit_does(self):
+        replay = self.replay_ready()
+        self.archive._verified.clear()
+        lock_path = self.root/'models'/'replay.lock'
+        original_verify, original_commit = self.archive.verify_pack, self.archive.commit_cleanup
+        observed = []
+        def verify(key, **kwargs):
+            with lock_path.open('a') as reader:
+                fcntl.flock(reader,fcntl.LOCK_SH|fcntl.LOCK_NB)
+                observed.append('readable-during-verify')
+            original_verify(key,**kwargs)
+        def commit(path, token):
+            with lock_path.open('a') as reader:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(reader,fcntl.LOCK_SH|fcntl.LOCK_NB)
+            observed.append('exclusive-commit')
+            return original_commit(path,token)
+        with patch.object(self.archive,'verify_pack',side_effect=verify), \
+             patch.object(self.archive,'commit_cleanup',side_effect=commit):
+            self.assertEqual(_cleanup_paths(self.root,self.archive,iter([replay]))['files'],1)
+        self.assertEqual(observed,['readable-during-verify','exclusive-commit'])
+
+    def test_active_journal_and_symlinks_are_never_cleanup_candidates(self):
+        active = self.source('ledger/live-replay.jsonl.gz')
+        self.assertFalse(cleanable(self.root,active))
+        target = self.source('snapshots/safe.json')
+        link = self.root/'snapshots'/'link.json'
+        link.symlink_to(target)
+        self.assertIsNone(self.archive.prepare_cleanup(link))
 
     def test_database_backups_are_daily_and_repair_files_are_migrated(self):
         source = self.root / "ledger" / "ledger.sqlite3"

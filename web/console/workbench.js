@@ -951,6 +951,7 @@ function renderDataModel(data) {
   $('storage-summary').replaceChildren(...metricCards([
     ['台账决策 / 比赛',unknownMetric(storage.records?.decisions,'尚未统计') + ' / ' + unknownMetric(storage.records?.matches,'尚未统计')], ['已结算决策',unknownMetric(storage.records?.settled_decisions,'尚未统计')], ['本地文件',unknownMetric(storage.files,'尚未统计')],['本地数据',storage.bytes == null ? '尚未统计' : bytes(storage.bytes)],['硬盘容量',bytes(storage.disk?.total)],
     ['硬盘已用',bytes(storage.disk?.used)],['硬盘可用',bytes(storage.disk?.free)],
+    ['磁盘保护',({normal:'正常',warning:'空间偏低',critical:'暂停新训练与可选备份',unknown:'等待水位核验'})[storage.disk_pressure?.state] || '尚未统计'],
     ['S3 归档文件', storage.archive?.backend === 'local' ? '未启用' : unknownMetric(storage.archive?.files,'尚未统计')],
     ['S3 原始数据', storage.archive?.bytes == null ? '尚未统计' : bytes(storage.archive.bytes)], ['S3 对象占用', storage.archive?.object_bytes == null ? '尚未统计' : bytes(storage.archive.object_bytes)],
   ]));
@@ -965,7 +966,7 @@ function renderDataModel(data) {
   if (storage.reason) $('storage-description').textContent += ' ' + storage.reason;
   if (storage.summary_reason && storage.summary_reason !== storage.reason) $('storage-description').textContent += ' ' + storage.summary_reason;
   if (data.history_repair?.totals) $('storage-description').textContent += ' 历史恢复：已处理 ' + data.history_repair.files + ' 个归档文件，剩余 ' + data.history_repair.remaining_files + ' 个；已重建 ' + (data.history_repair.totals.rebuilt_inputs || 0).toLocaleString() + ' 条训练输入。';
-  const error = training.error || storage.archive?.error || (storage.errors || []).join('；');
+  const error = training.error || storage.disk_pressure?.reason || training.resource_wait_reason || storage.archive?.error || (storage.errors || []).join('；');
   notice('data-model-notice',error || (!data.running ? '独立模型服务尚未启动，请启动 model-worker。' : ''),!!error);
 }
 async function loadDataModel(force = false) {

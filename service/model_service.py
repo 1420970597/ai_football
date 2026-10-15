@@ -29,6 +29,8 @@ from store.training_data import (snapshot_inputs, write_inputs, write_prediction
 from store.training_projection import (prepare_postgres_schema, projection_target_from_env,
                                        close_persistent_writer)
 from store.runtime_settings_db import load_runtime_settings
+from store.replay_source import ReplaySource, ReplaySources
+from store.disk_pressure import disk_pressure
 
 REPLAY_MEMBERS_PER_CYCLE = 16
 REPLAY_CYCLE_BUDGET_S = .25
@@ -62,10 +64,13 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def journal_members(path: Path, offset: int, *, limit: int, budget_s: float) -> Iterator[tuple[int,list[dict[str,Any]]]]:
+def journal_members(path: Path | Any, offset: int, *, limit: int,
+                    budget_s: float) -> Iterator[tuple[int,list[dict[str,Any]]]]:
     """One gzip parser shared by historical inputs and the live tail."""
     deadline = time.monotonic()+budget_s
-    with path.open('rb') as source:
+    managed = path.open('rb') if isinstance(path, Path) else None
+    source: Any = managed or path
+    try:
         source.seek(offset)
         for _ in range(limit):
             if time.monotonic() >= deadline:
@@ -88,6 +93,9 @@ def journal_members(path: Path, offset: int, *, limit: int, budget_s: float) -> 
             yield end,[json.loads(line) for line in lines[:-1] if line]
             offset = end
             source.seek(offset)
+    finally:
+        if managed is not None:
+            managed.close()
 
 
 def journal_tail_boundary(path: Path) -> int:
@@ -162,6 +170,9 @@ class ModelService:
         self._process_started = 0.0
         self._stats_process: subprocess.Popen[Any] | None = None
         self._cursor: dict[str, int] = {}
+        self._replay_sources: ReplaySources | None = None
+        self._replay_source_meta: dict[str, dict[str, Any]] = {}
+        self._replay_gaps: dict[str, dict[str, Any]] = {}
         self._live_cursor: dict[str, int] = {}
         self._live_inodes: dict[str,list[int]] = {}
         self._live_stats: dict[str,Any] = {'state':'not_started'}
@@ -198,6 +209,9 @@ class ModelService:
             self._storage = {}
             self._status = {'state': 'not_started'}
             self._cursor = {}
+            self._replay_sources = ReplaySources(self.root) if self.root else None
+            self._replay_source_meta = {}
+            self._replay_gaps = {}
             self._live_cursor = {}
             self._live_inodes = {}
             self._live_stats = {'state':'not_started'}
@@ -211,7 +225,7 @@ class ModelService:
             self._replay_stats = {
                 'last_file': '', 'last_at': '', 'last_batch_records': 0,
                 'last_batch_inputs': 0, 'total_records': 0, 'total_inputs': 0,
-                'backlog_files': 0,
+                'backlog_files': 0, 'gap_files': 0,
             }
             self._read()
 
@@ -315,6 +329,32 @@ class ModelService:
             'parameter_count': chosen.get('parameter_count'), 'architecture': chosen.get('architecture'),
             'reason': '' if chosen else reason}
 
+    def _decision_route_status(self) -> tuple[str, str]:
+        """Report live-route readiness separately from the worker heartbeat.
+
+        Candidate artifacts are useful for shadow evaluation, but the live
+        calculator may only load an approved ``active.json``.  Keeping this
+        distinction in the dashboard prevents a healthy worker from being
+        reported as stopped when only the selected decision route is blocked.
+        """
+        if self.cfg.decision_mode == 'algorithm':
+            return 'ready', ''
+        promotion = self._model.get('promotion') if isinstance(self._model, dict) else None
+        if approved_model(self._model):
+            return 'ready', ''
+        reasons: list[str] = []
+        if isinstance(promotion, dict):
+            reasons.extend(str(item) for item in promotion.get('reasons') or [] if item)
+        shadow_promotion = self._shadow_model.get('promotion') if isinstance(self._shadow_model, dict) else None
+        if isinstance(shadow_promotion, dict):
+            reasons.extend(str(item) for item in shadow_promotion.get('reasons') or [] if item)
+        reasons.extend(str(item) for item in self._status.get('promotion_reasons') or [] if item)
+        if reasons:
+            return 'unavailable', '候选模型未通过晋级门槛：' + '；'.join(dict.fromkeys(reasons))
+        if self._status.get('state') == 'candidate' or self._shadow_model.get('artifact_kind') == 'candidate':
+            return 'unavailable', '已有候选模型，但尚未通过晋级门槛'
+        return 'unavailable', '暂无通过晋级门槛的生产模型'
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             model = deepcopy({k: v for k, v in self._model.items() if k not in ('weights', 'cohort_ids')})
@@ -340,6 +380,8 @@ class ModelService:
                                    if k not in ('weights', 'cohort_ids')}
             if not self.cfg.model_training_enabled:
                 status['state'] = 'disabled'
+            decision_status, decision_reason = self._decision_route_status()
+            service_running = bool(self._thread and self._thread.is_alive())
             return {'model': model, 'training': status, 'storage': deepcopy(self._storage),
                     'settings': {'enabled': self.cfg.model_training_enabled, 'shadow_enabled': self.cfg.model_shadow_enabled,
                                  'decision_mode': self.cfg.decision_mode,
@@ -347,9 +389,15 @@ class ModelService:
                                  'cycle_matches': self.cfg.model_training_matches,
                                  'cpu_cores': self.cfg.model_training_cpu,
                                  'memory_mb': self.cfg.model_training_memory_mb},
-                    'mode': 'shadow' if self.cfg.model_shadow_enabled else 'active', 'running': bool(self._thread and self._thread.is_alive()),
+                    'mode': 'shadow' if self.cfg.model_shadow_enabled else 'active', 'running': service_running,
                     'decision_mode': self.cfg.decision_mode,
                     'decision_model_available': approved_model(self._model),
+                    'decision_mode_status': decision_status,
+                    'decision_mode_reason': decision_reason,
+                    'service_status': {'state': 'running' if service_running else 'stopped',
+                                       'running': service_running,
+                                       'training_running': bool(self._process and self._process.poll() is None),
+                                       'inference_running': service_running},
                     'prospective': prospective, 'shadow': shadow,
                     'note': '独立模型服务负责训练与观察预测；实时决策模式独立选择纯算法、纯决策模型或混合。纯模型是当前盘口offset与算法特征训练模型的输出，不进行额外算法加权。模型或混合模式缺少已晋级模型时不可用。保留各算法、盘口、盘口线、方向和决策时点；按比赛分组、等权训练。走势特征冻结在决策输入截点。'}
 
@@ -592,6 +640,9 @@ class ModelService:
         self._thread = None
         self._live_thread = None
         self._persist_thread = None
+        if self._replay_sources is not None:
+            self._replay_sources.close()
+            self._replay_sources = None
         self._flush_shadow()
         self._publish(False)
 
@@ -642,6 +693,7 @@ class ModelService:
                       heartbeat_at=datetime.now(timezone.utc).isoformat(),
                       process_id=os.getpid(), service='model-worker')
         status['replay'] = dict(self._replay_stats)
+        status.setdefault('storage', {})['disk_pressure'] = disk_pressure(self.root.parent)
         status['model'].pop('weights', None)
         status['model'].pop('cohort_ids', None)
         atomic_json(self.root.parent / 'models' / 'dashboard.json', status)
@@ -658,6 +710,80 @@ class ModelService:
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
+    def _replay_state_paths(self) -> tuple[Path, Path, Path]:
+        assert self.root is not None
+        model_root = self.root.parent / 'models'
+        return (model_root / 'replay-cursor.json',
+                model_root / 'replay-source-meta.json',
+                model_root / 'replay-gaps.json')
+
+    @staticmethod
+    def _source_descriptor(source: ReplaySource) -> dict[str, Any]:
+        record = dict(source.record or {})
+        return {
+            'protocol': 1,
+            'size': int(source.size),
+            'mtime_ns': int(source.mtime_ns),
+            'remote': bool(source.remote),
+            'object_key': record.get('object_key', ''),
+            'offset': int(record.get('offset', 0) or 0),
+            'compressed': int(record.get('compressed', 0) or 0),
+            'sha256': str(record.get('sha256', '')),
+        }
+
+    def _load_replay_state(self) -> None:
+        cursor_path, meta_path, gap_path = self._replay_state_paths()
+        try:
+            data = json.loads(cursor_path.read_text(encoding='utf-8'))
+            if isinstance(data, dict):
+                self._cursor.update({str(k): int(v) for k, v in data.items()})
+        except (OSError, ValueError, TypeError):
+            pass
+        try:
+            data = json.loads(meta_path.read_text(encoding='utf-8'))
+            if isinstance(data, dict) and isinstance(data.get('sources'), dict):
+                self._replay_source_meta = {
+                    str(k): dict(v) for k, v in data['sources'].items()
+                    if isinstance(v, dict)
+                }
+        except (OSError, ValueError, TypeError):
+            pass
+        try:
+            data = json.loads(gap_path.read_text(encoding='utf-8'))
+            if isinstance(data, dict) and isinstance(data.get('gaps'), dict):
+                self._replay_gaps = {
+                    str(k): dict(v) for k, v in data['gaps'].items()
+                    if isinstance(v, dict)
+                }
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _save_replay_state(self, *, cursor: bool = False, metadata: bool = False,
+                           gaps: bool = False) -> None:
+        cursor_path, meta_path, gap_path = self._replay_state_paths()
+        if cursor:
+            atomic_json(cursor_path, self._cursor)
+        if metadata:
+            atomic_json(meta_path, {'protocol': 1, 'sources': self._replay_source_meta})
+        if gaps:
+            atomic_json(gap_path, {'protocol': 1, 'gaps': self._replay_gaps})
+
+    def _record_replay_gap(self, source: ReplaySource, cursor: int, reason: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        previous = self._replay_gaps.get(source.name, {})
+        self._replay_gaps[source.name] = {
+            'source': self._source_descriptor(source),
+            'cursor': int(cursor),
+            'observed_size': int(source.size),
+            'reason': reason,
+            'first_at': previous.get('first_at', now),
+            'last_at': now,
+            'attempts': int(previous.get('attempts', 0) or 0) + 1,
+            'frozen': True,
+        }
+        self._save_replay_state(gaps=True)
+        self._replay_stats['gap_files'] = len(self._replay_gaps)
+
     def _consume_replay_locked(self) -> None:
         if self.root is None:
             return
@@ -665,47 +791,65 @@ class ModelService:
         # unconfirmed journal range repeatedly during a prolonged outage.
         if self._inputs:
             self._flush_inputs()
-        cursor_path = self.root.parent / 'models' / 'replay-cursor.json'
-        if cursor_path.exists():
-            persisted = json.loads(cursor_path.read_text())
-            if isinstance(persisted, dict):
-                self._cursor.update(persisted)
+        self._load_replay_state()
+        sources = self._replay_sources or ReplaySources(self.root)
+        self._replay_sources = sources
         # Prefer the newest journal first. In S3 mode old hourly chunks can be
         # multi-gigabyte; draining them in lexical order starves today's live
         # decisions and leaves the training input projection empty.
-        paths = sorted(self.root.glob('live-replay*.jsonl.gz'),
-                       key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
-        for path in paths:
-            offset = self._cursor.get(path.name, 0)
-            if path.stat().st_size < offset:
-                raise ValueError('永久决策日志被截断，不能跳过输入')
-            if path.stat().st_size == offset:
+        replay_sources = sources.list_sources()
+        self._replay_stats.update(
+            source_protocol=1,
+            source_backend='s3' if sources.remote_available else 'local',
+            remote_read_verified=sources.verify_remote_read() if sources.remote_available else False,
+        )
+        for source in replay_sources:
+            offset = int(self._cursor.get(source.name, 0) or 0)
+            if offset < 0:
+                self._record_replay_gap(source, offset, 'cursor 为负数')
+                continue
+            if source.size < offset:
+                historical = sources.historical_sources(source.name, offset)
+                if historical:
+                    source = max(historical, key=lambda item: (item.size, item.mtime_ns))
+                else:
+                    self._record_replay_gap(source, offset, '远端源长度小于持久 cursor，未找到可恢复历史 pack')
+                    continue
+            if source.size == offset:
+                self._replay_source_meta[source.name] = self._source_descriptor(source)
+                self._save_replay_state(metadata=True, gaps=True)
                 continue
             start_offset = offset
             batch_records = batch_inputs = 0
-            for end, rows in journal_members(path,offset,limit=REPLAY_MEMBERS_PER_CYCLE,budget_s=REPLAY_CYCLE_BUDGET_S):
-                for row in rows:
-                    batch_records += 1
-                    before = len(self._inputs)
-                    self.observe(row,predict_shadow=False)
-                    batch_inputs += len(self._inputs)-before
-                    self._replay_stats['last_at'] = str(row.get('computed_at') or '')
-                offset = end
+            with sources.open(source, offset) as stream:
+                for end, rows in journal_members(stream, offset, limit=REPLAY_MEMBERS_PER_CYCLE,
+                                                 budget_s=REPLAY_CYCLE_BUDGET_S):
+                    for row in rows:
+                        batch_records += 1
+                        before = len(self._inputs)
+                        self.observe(row, predict_shadow=False)
+                        batch_inputs += len(self._inputs) - before
+                        self._replay_stats['last_at'] = str(row.get('computed_at') or '')
+                    offset = end
             if offset == start_offset:
                 continue
             # Commit all decoded members before advancing the cursor. Replay
             # after a crash is idempotent through the inputs primary key.
             self._flush_inputs()
-            self._cursor[path.name] = offset
-            atomic_json(cursor_path, self._cursor)
-            self._replay_stats.update(last_file=path.name, last_batch_records=batch_records,
+            self._cursor[source.name] = offset
+            self._replay_source_meta[source.name] = self._source_descriptor(source)
+            self._replay_gaps.pop(source.name, None)
+            self._save_replay_state(cursor=True, metadata=True, gaps=True)
+            self._replay_stats.update(last_file=source.name, last_batch_records=batch_records,
                                       last_batch_inputs=batch_inputs,
                                       total_records=self._replay_stats['total_records'] + batch_records,
                                       total_inputs=self._replay_stats['total_inputs'] + batch_inputs)
             self._replay_stats['backlog_files'] = sum(
-                1 for item in paths if self._cursor.get(item.name, 0) < item.stat().st_size)
+                1 for item in replay_sources if self._cursor.get(item.name, 0) < item.size
+                and item.name not in self._replay_gaps)
             return  # Bound each loop to a finite batch; heartbeat/training continue.
-        self._replay_stats.update(last_batch_records=0, last_batch_inputs=0, backlog_files=0)
+        self._replay_stats.update(last_batch_records=0, last_batch_inputs=0,
+                                  backlog_files=0, gap_files=len(self._replay_gaps))
 
     def _initialize_live_cursor(self) -> None:
         if self.root is None:
@@ -1118,6 +1262,12 @@ class ModelService:
         """
         if not cfg.model_training_enabled or self._process is not None or self._stop.is_set():
             return
+        pressure = disk_pressure(root.parent)
+        if pressure.get('pause_optional_writes', True):
+            self._status.update(state='waiting_for_disk', resource_wait_reason=pressure['reason'],
+                                disk_pressure=pressure)
+            return
+        self._status.pop('resource_wait_reason', None)
         model_root = root.parent / 'models'
         model_root.mkdir(parents=True, exist_ok=True)
         log_stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')

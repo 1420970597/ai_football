@@ -28,6 +28,33 @@ class ModelTrainingLifecycleTests(unittest.TestCase):
     def approval():
         return approved_artifact()['promotion']
 
+    def test_large_round_dispatches_frozen_cohort_without_local_dataset(self):
+        rows = [sample_row(i) for i in range(120)]
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory, \
+             patch('service.model_training.constrain',return_value={}), \
+             patch('service.model_training.training_cohort_progress',return_value=self.progress(rows)), \
+             patch('service.model_training.estimated_temp_bytes',return_value=101*1024**3), \
+             patch('service.model_training.dispatch_remote_training',side_effect=RuntimeError('remote offline')) as remote, \
+             patch('service.model_training.dataset') as dataset:
+            with self.assertRaisesRegex(RuntimeError,'remote offline'):
+                run(Path(directory)/'ledger',100,1,256)
+            dataset.assert_not_called()
+            self.assertEqual(len(remote.call_args.kwargs['cohort']['match_ids']),120)
+            self.assertFalse((Path(directory)/'models'/'active.json').exists())
+
+    def test_estimate_exceeding_free_space_preserves_reserve_and_does_not_load(self):
+        rows = [sample_row(i) for i in range(120)]
+        pressure = {'pause_optional_writes':False,'free':4*1024**3,
+                    'critical_free_bytes':3*1024**3,'reason':''}
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory, \
+             patch('service.model_training.constrain',return_value={}), \
+             patch('service.model_training.disk_pressure',return_value=pressure), \
+             patch('service.model_training.training_cohort_progress',return_value=self.progress(rows)), \
+             patch('service.model_training.estimated_temp_bytes',return_value=2*1024**3), \
+             patch('service.model_training.dataset') as dataset:
+            self.assertEqual(run(Path(directory)/'ledger',100,1,256)['state'],'waiting_for_disk')
+            dataset.assert_not_called()
+
     def test_rolling_validation_persists_actual_execution_final_fold(self):
         from core.model_validation import evaluate, rolling_folds
         rows = [{**sample_row(i), 'algorithm': algorithm}

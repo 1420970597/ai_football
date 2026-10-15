@@ -6,6 +6,7 @@ import fcntl
 import os
 from pathlib import Path
 import resource
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -20,6 +21,10 @@ from core.probability_calibration import fit_logistic
 from core.probability_calibration import calibrate_probability
 from core.oof_peer import apply_peer_calibration, calibrate_peer_vector, crossfit_peer_features
 from store.training_data import dataset, training_cohort_progress
+from store.disk_pressure import disk_pressure
+from store.training_projection import projection_target_from_env
+from service.remote_training import (dispatch as dispatch_remote_training, estimated_temp_bytes,
+                                     local_pipeline_estimate, remote_training_required)
 
 # Quotes arrive repeatedly for the same match, line and direction, so adjacent
 # training rows are highly correlated. Keep the complete qualified-input and
@@ -225,9 +230,54 @@ def _completed_cohort(model_root: Path, artifacts: list[dict[str, Any]]) -> dict
             'source': 'compatible_artifact_recovery'}
 
 
+def publish_remote_model(model_root: Path, model: dict[str, Any], status: dict[str, Any],
+                         consumed: set[str], cohort: set[str], cutoff: str,
+                         limits: dict[str, Any], estimate: int) -> dict[str, Any]:
+    """Apply the same certification/completion rules to a returned artifact."""
+    if not isinstance(model.get('cohort_ids'), list):
+        raise ValueError('远程训练 cohort 格式无效')
+    if instant(str(model.get('updated_at') or '')) > datetime.now(timezone.utc).timestamp():
+        raise ValueError('远程模型时间戳超前')
+    trained = {str(mid) for mid in model.get('cohort_ids', [])}
+    if (not trained or not trained <= cohort or len(trained) < 100
+            or len(trained - consumed) < int(status['cycle_matches'])
+            or model.get('cohort_cutoff') != cutoff):
+        raise ValueError('远程训练回传 cohort 不符合冻结边界')
+    if set(map(str, model.get('training_match_ids', []))) & set(map(str, model.get('validation_match_ids', []))):
+        raise ValueError('远程训练与验证比赛重叠')
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', str(model.get('version') or '')):
+        raise ValueError('远程模型版本格式无效')
+    decision = promotion(model.get('validation', {}), model.get('baseline', {}),
+                         model.get('promotion_evidence', {}), model.get('rolling_validation', []))
+    model = {**model, 'promotion': decision,
+             'limits': {**limits, 'execution': 'remote_s3', 'estimated_temp_bytes': estimate},
+             'completed_cohort_ids': sorted(consumed | trained), 'training_execution': 'remote_s3'}
+    atomic_json(model_root / ('candidate-' + model['version'] + '.json'), model)
+    atomic_json(model_root / 'completed-training.json', {
+        'data_version': DATA_VERSION, 'feature_version': FEATURE_VERSION,
+        'validation_contract_version': VALIDATION_CONTRACT_VERSION,
+        'candidate_version': model['version'], 'completed_at': model['updated_at'],
+        'cohort_ids': sorted(consumed | trained), 'approved': bool(decision['approved'])})
+    if approved_model(model):
+        backup_active_model(model_root)
+        atomic_json(model_root / 'active.json', model)
+    status.update(state='ready' if approved_model(model) else 'candidate',
+                  candidate_version=model['version'], promotion_reasons=decision['reasons'],
+                  training_execution='remote_s3', last_completed_version=model['version'],
+                  completed_matches=len(consumed | trained), cycle_ready=False, new_matches=None)
+    atomic_json(model_root / 'status.json', status)
+    return status
+
+
 def run(root: Path, cycle: int, cpu: int, memory: int, *, check_only: bool = False) -> dict[str, Any]:
     limits = constrain(cpu, memory)
     model_root = root.parent / 'models'
+    pressure = disk_pressure(root.parent)
+    if pressure.get('pause_optional_writes', True):
+        blocked_status = {'state': 'waiting_for_disk', 'checked_at': datetime.now(timezone.utc).isoformat(),
+                          'resource_wait_reason': pressure['reason'], 'disk_pressure': pressure}
+        atomic_json(model_root / 'status.json', blocked_status)
+        return blocked_status
     active = model_root / 'active.json'
     active_model = _artifact(active)
     incompatible = bool(active.exists() and not approved_model(active_model))
@@ -287,6 +337,33 @@ def run(root: Path, cycle: int, cpu: int, memory: int, *, check_only: bool = Fal
                                 'rolling_validation': old.get('rolling_validation', [])})
     model: dict[str, Any] = {}
     if not check_only and status['cycle_ready']:
+        estimate = estimated_temp_bytes(root)
+        estimate_source = 'configured' if estimate is not None else 'bounded_in_memory_pipeline'
+        if estimate is None:
+            sqlite_bytes = 0
+            if projection_target_from_env() is None:
+                for database in (root / 'ledger.sqlite3', model_root / 'inputs.sqlite3'):
+                    for candidate in (database, Path(str(database) + '-wal')):
+                        if candidate.exists():
+                            sqlite_bytes += candidate.stat().st_size
+                estimate_source = 'bounded_indexed_pipeline_with_sqlite_reserve'
+            estimate = local_pipeline_estimate(memory, sqlite_bytes=sqlite_bytes)
+        status.update(estimated_temp_bytes=estimate, estimate_source=estimate_source)
+        cutoff = str(progress.get('label_cutoff') or progress.get('checked_at') or status['checked_at'])
+        if remote_training_required(estimate):
+            status.update(state='remote_training', training_execution='remote_s3')
+            atomic_json(model_root / 'status.json', status)
+            model = dispatch_remote_training(root, cycle=cycle, cpu=cpu, memory_mb=memory,
+                estimate_bytes=estimate, cohort={'match_ids': sorted(cohort_ids),
+                    'qualified_labels': frozen_labels, 'cutoff': cutoff, 'consumed': sorted(consumed)})
+            return publish_remote_model(model_root, model, status, consumed, cohort_ids, cutoff, limits, estimate)
+        pressure = disk_pressure(root.parent)
+        if (pressure.get('pause_optional_writes', True)
+                or int(pressure.get('free', 0)) - estimate < int(pressure.get('critical_free_bytes', 0))):
+            status.update(state='waiting_for_disk', resource_wait_reason='本地训练预计空间侵占磁盘保留额',
+                          disk_pressure=pressure)
+            atomic_json(model_root / 'status.json', status)
+            return status
         print('training: loading time-isolated dataset', flush=True)
         quality = {}
         cutoff = progress.get('label_cutoff') or progress.get('checked_at') or status['checked_at']
