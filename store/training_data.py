@@ -609,11 +609,14 @@ def _postgres_training_sample_query(latest_labels: str, time_filter: str,
                                     version_args: tuple[str, str, str],
                                     max_per_match: int | None) -> tuple[str, tuple[Any, ...]]:
     """Build a bounded, label-time-safe PostgreSQL training query."""
+    # psycopg parses percent signs inside LIKE literals when binding params.
+    # Escape this SQLite-shared fragment before adding native %s markers.
+    curve_complete = _curve_complete_sql('model_inputs').replace('%', '%%')
     qualified_time = (time_filter.replace('cutoff_ms', 'i.cutoff_ms')
                       .replace('decision_received_at_ms', 'i.decision_received_at_ms')
                       .replace('quote_received_at_ms', 'i.quote_received_at_ms'))
     if max_per_match is None:
-        return ('SELECT i.*,('+_curve_complete_sql('model_inputs')+') AS _curve_complete FROM model_inputs i JOIN ' + latest_labels + ' l '
+        return ('SELECT i.*,('+curve_complete+') AS _curve_complete FROM model_inputs i JOIN ' + latest_labels + ' l '
                 'ON l.match_id=i.match_id WHERE i.data_version=%s AND i.model_version=%s '
                 'AND i.feature_version=%s AND ' + qualified_time + ' AND l.available_at > i.at',
                 version_args)
@@ -672,7 +675,7 @@ def _postgres_training_sample_query(latest_labels: str, time_filter: str,
            'WHERE grouped._group_start<=CASE WHEN bounds.first_at=bounds.last_at THEN ' +
            str(max_per_match) + ' ELSE ' + str(rows_per_point) +
            '+CASE WHEN bucket.bucket_no<' + str(extra_rows) + ' THEN 1 ELSE 0 END END) selected_curve ON TRUE '
-           'LEFT JOIN LATERAL (SELECT checked.* FROM (SELECT i.*, ('+_curve_complete_sql('model_inputs')+') AS _curve_complete, '
+           'LEFT JOIN LATERAL (SELECT checked.* FROM (SELECT i.*, ('+curve_complete+') AS _curve_complete, '
            'BOOL_AND(COALESCE((' + qualified_time + ' AND i.data_version=%s '
            'AND i.model_version=%s AND i.feature_version=%s),FALSE)) OVER () AS _curve_valid '
            'FROM model_inputs i WHERE i.match_id=l.match_id AND i.at=selected_point.at '

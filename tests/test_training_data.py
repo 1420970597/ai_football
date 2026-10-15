@@ -40,6 +40,35 @@ def decision():
 
 class TrainingDataTests(unittest.TestCase):
 
+    def test_postgres_training_queries_bind_with_real_driver(self):
+        try:
+            from psycopg.adapt import Transformer
+            from psycopg._queries import PostgresQuery
+        except ImportError:
+            self.skipTest('psycopg is exercised in the storage runtime image')
+        labels = ('(SELECT match_id,available_at FROM '
+                  'unnest(%s::text[],%s::text[]) AS labels(match_id,available_at))')
+        versions = ("data-%'value", 'model-v', 'feature-v')
+        for cap in (40, None, 1):
+            with self.subTest(max_per_match=cap):
+                sql, args = _postgres_training_sample_query(labels, 'cutoff_ms>0', versions, cap)
+                params = (["match-%'value"], ['2026-10-15T12:00:00+00:00'], *args)
+                query = PostgresQuery(Transformer())
+                query.convert(sql, params)
+                bound_sql = query.query.decode()
+                self.assertEqual(len(query.params), len(params))
+                self.assertEqual(len(params), 5 if cap is None else 14)
+                for market in ('HAD', 'OU', 'AH'):
+                    self.assertIn("LIKE '" + market + "%'", bound_sql)
+                self.assertNotIn('%%', bound_sql)
+                self.assertNotIn('%s', bound_sql)
+                self.assertNotIn("data-%'value", bound_sql)
+                self.assertNotIn("match-%'value", bound_sql)
+                self.assertIn(versions[0].encode(), query.params)
+                # The real driver must still reject a missing bound value.
+                with self.assertRaisesRegex(Exception, 'placeholders.*parameters'):
+                    PostgresQuery(Transformer()).convert(sql, params[:-1])
+
     def test_postgres_insert_batches_are_bounded_and_parameterized(self):
         from store.training_data import _insert_postgres_rows
         calls = []
