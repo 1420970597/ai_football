@@ -817,6 +817,8 @@ function renderDataModel(data) {
   const model = data.model || {}, training = data.training || {}, storage = data.storage || {};
   const candidate = training.candidate || {}, offlineModel = model.version ? model : candidate;
   const quality = training.data_quality || {};
+  const replay = data.replay || {};
+  const replayStates = {processing:'正在处理',waiting:'等待新输入',error:'输入处理失败'};
   const sampledQuality = quality.sampled === true || quality.counts_scope === 'sampled_qualified_inputs';
   const qualityCards = sampledQuality ? [
     ['全量训练输入',quality.input_records ?? '尚未统计'], ['全量输入比赛',quality.input_matches ?? '尚未统计'],
@@ -851,6 +853,17 @@ function renderDataModel(data) {
     ['训练资格检查',training.cohort_verified === true ? '已核验' : quality.coverage_status === 'partial' ? '继续核验中' : '尚未核验'],
     ['最近完成训练',training.last_completed_version || '新契约尚未完成训练'],
     ['本代已消费比赛',unknownMetric(training.completed_matches)],
+    ['上次完成训练样本',unknownMetric(training.completed_training_decisions,'尚未提供')],
+    ['上次完成训练时间',timeLabel(training.completed_training_at)],
+    ['真实比赛训练输入',replayStates[replay.state] || '尚未提供'],
+    ['最新日志已处理至',replay.newest_processed_at ? timeLabel(replay.newest_processed_at) : '尚未提供'],
+    ['最新日志处理延迟',replay.newest_lag_s == null ? '尚未提供' : fixed(replay.newest_lag_s,1) + ' s'],
+    ['待处理日志文件',unknownMetric(replay.backlog_files,'尚未提供')],
+    ['待处理日志大小',replay.backlog_bytes == null ? '尚未提供' : bytes(replay.backlog_bytes)],
+    ['本进程已提交训练输入（含幂等重放）',unknownMetric(replay.total_inputs,'尚未提供')],
+    ['上批跳过虚拟 / 未核验比赛',replay.last_batch_virtual_records == null ? '尚未提供' : replay.last_batch_virtual_records + ' / ' + (replay.last_batch_unknown_records ?? '—')],
+    ['上批无合格输入的真实比赛记录',unknownMetric(replay.last_batch_unqualified_real_records,'尚未提供')],
+    ['训练输入处理错误',replay.error || '无'],
     ['推理完整上下文',unknownMetric(quality.prediction_context_records,'加载训练集后统计')],
     ['资格检查耗时',quality.query_seconds == null ? '尚未统计' : fixed(quality.query_seconds,2) + ' s'],
     ['当前实际训练限制',training.limits ? training.limits.cpu_cores + ' 核 / ' + training.limits.memory_mb + ' MiB' : '尚未执行'],
@@ -865,6 +878,7 @@ function renderDataModel(data) {
     ' 模型服务状态：' + (data.running ? '运行中' : '未运行') + '；' +
     (decisionStatus.reason ? ' 决策模式不可用：' + decisionStatus.reason : '') +
     ' 首次训练至少需要100场通过当前数据资格的已结算比赛。验证按比赛和时间隔离、比赛等权；推理保留完整盘口，分类评分排除走盘，单位本金收益保留走盘，赢半/输半按实际支付计算。' +
+    ' 仅决策真实足球；虚拟比赛和类型未核验数据不进入决策或训练。训练输入持续入库，新增有效已结算比赛达到更新周期才重新训练；上次完成训练样本与本轮样本分别显示。输入提交数仅覆盖当前进程，包含幂等重放，不代表全库唯一记录数。' +
     (training.old_model_quarantined ? ' 旧模型和原始数据保留供审计；旧版本批准不沿用，新代积累符合报价与赛况时序要求的数据后重新训练。' : '') +
     (sampledQuality ? ' 数据资格口径：已核验有效/无效数量仅覆盖本轮按比赛限量抽取的样本，不代表全库资格；全量尚未审查的数量单独标明。标注“估计”的输入量来自数据库统计信息，可能滞后；等待赛果标签不计为无效。' :
       quality.invalid_training_records !== undefined ? ' 数据资格口径：有效数为通过版本、双时间和结算校验的训练决策；无效/隔离数包含旧版本、缺失或越界时间、不可结算输入及不符合新契约的旧台账；等待标签的数据单独统计，不计为无效。' : '') +
@@ -969,7 +983,7 @@ function renderDataModel(data) {
   if (storage.reason) $('storage-description').textContent += ' ' + storage.reason;
   if (storage.summary_reason && storage.summary_reason !== storage.reason) $('storage-description').textContent += ' ' + storage.summary_reason;
   if (data.history_repair?.totals) $('storage-description').textContent += ' 历史恢复：已处理 ' + data.history_repair.files + ' 个归档文件，剩余 ' + data.history_repair.remaining_files + ' 个；已重建 ' + (data.history_repair.totals.rebuilt_inputs || 0).toLocaleString() + ' 条训练输入。';
-  const error = training.error || storage.disk_pressure?.reason || training.resource_wait_reason || storage.archive?.error || (storage.errors || []).join('；');
+  const error = replay.error || training.error || storage.disk_pressure?.reason || training.resource_wait_reason || storage.archive?.error || (storage.errors || []).join('；');
   notice('data-model-notice',error || (!data.running ? '独立模型服务尚未启动，请启动 model-worker。' : ''),!!error);
 }
 async function loadDataModel(force = false) {

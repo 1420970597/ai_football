@@ -241,16 +241,16 @@ class ModelLiveLaneTests(unittest.TestCase):
                     patch.object(worker,'_initialize_live_cursor'), \
                     patch('service.model_service.threading.Thread') as thread:
                 worker.start()
-                self.assertEqual(thread.call_count,3)
+                self.assertEqual(thread.call_count,4)
                 self.assertFalse(worker.cfg.model_training_enabled)
                 self.assertFalse(worker.cfg.model_shadow_enabled)
                 self.assertEqual(worker.cfg.decision_mode,'hybrid')
                 self.assertEqual(worker.cfg.model_blend_weight,.7)
                 self.assertEqual(worker._settings_version,7)
-                worker._thread = worker._live_thread = worker._persist_thread = None
+                worker._thread = worker._live_thread = worker._persist_thread = worker._replay_thread = None
                 worker._next_settings_reload = 0
                 worker.start()
-                self.assertEqual(thread.call_count,6)
+                self.assertEqual(thread.call_count,8)
                 self.assertFalse(worker.cfg.model_training_enabled)
                 self.assertFalse(worker.cfg.model_shadow_enabled)
                 self.assertEqual(worker.cfg.decision_mode,'hybrid')

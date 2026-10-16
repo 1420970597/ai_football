@@ -6,6 +6,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -17,6 +19,72 @@ from tests.test_model_validation import approved_artifact
 
 
 class ModelServiceTests(unittest.TestCase):
+    def test_input_replay_commits_while_evaluator_is_blocked_and_stops_cleanly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory)/'ledger'
+            ledger.mkdir()
+            HistoryJournal(ledger/'live-replay.jsonl.gz').append([decision()])
+            worker = ModelService()
+            worker.bind(str(ledger))
+            worker._stop.clear()
+            evaluating, release, committed = threading.Event(), threading.Event(), threading.Event()
+
+            def blocked_evaluation():
+                evaluating.set()
+                release.wait(3)
+
+            from store.training_data import write_inputs as persist
+            def persisted(*args):
+                persist(*args)
+                committed.set()
+
+            with patch.object(worker, '_reload_settings'), patch.object(worker, '_read'), \
+                    patch.object(worker, '_evaluate_shadow', side_effect=blocked_evaluation), \
+                    patch.object(worker, '_publish'), patch.object(worker, '_start_training_check'), \
+                    patch('service.model_service.subprocess.Popen'), \
+                    patch('service.model_service.write_inputs', side_effect=persisted):
+                worker._thread = threading.Thread(target=worker._loop)
+                worker._replay_thread = threading.Thread(target=worker._replay_loop)
+                coordinator, replay = worker._thread, worker._replay_thread
+                coordinator.start()
+                self.assertTrue(evaluating.wait(2))
+                replay.start()
+                try:
+                    self.assertTrue(committed.wait(2), 'blocked evaluation must not block input commit')
+                    self.assertTrue(coordinator.is_alive())
+                    deadline = time.monotonic()+2
+                    while not worker._cursor and time.monotonic()<deadline:
+                        time.sleep(.01)
+                    self.assertTrue(worker._cursor)
+                finally:
+                    release.set()
+                    worker.stop()
+                self.assertFalse(coordinator.is_alive())
+                self.assertFalse(replay.is_alive())
+                self.assertIsNone(worker._replay_thread)
+            with sqlite3.connect(Path(directory)/'models'/'inputs.sqlite3') as con:
+                self.assertEqual(con.execute('SELECT count(*) FROM inputs').fetchone()[0], 20)
+
+    def test_growing_newest_journal_does_not_starve_older_qualified_inputs(self):
+        import os
+        from service.model_service import REPLAY_NEWEST_BATCHES
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory)/'ledger'
+            ledger.mkdir()
+            old = ledger/'live-replay.2026101000.jsonl.gz'
+            recent = ledger/'live-replay.2026101100.jsonl.gz'
+            HistoryJournal(old).append([decision()])
+            worker = ModelService()
+            worker.bind(str(ledger))
+            for _index in range(REPLAY_NEWEST_BATCHES+1):
+                HistoryJournal(recent).append([{**decision(), 'competition_type':'virtual'}])
+                os.utime(old,ns=(1_000_000_000,1_000_000_000))
+                worker._consume_replay()
+            self.assertEqual(worker._cursor[old.name],old.stat().st_size)
+            self.assertEqual(worker._replay_stats['total_inputs'],20)
+            self.assertGreater(worker._replay_stats['backlog_bytes'],0)
+            self.assertEqual(worker._replay_stats['counts_scope'],'current_process_committed_idempotent_rows')
+
     def test_postgres_projection_failure_keeps_inputs_and_predictions_for_retry(self):
         class PostgresFailure(Exception):
             pass

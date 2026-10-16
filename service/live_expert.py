@@ -272,6 +272,8 @@ class LiveExpertService:
 
     def compute(self, snapshot: Mapping[str, Any], hub: Any,
                 first_event_at: Optional[float] = None) -> Dict[str, Any]:
+        if competition_type(snapshot.get('info') or {}) != 'real':
+            return {}
         started = time.perf_counter()
         if self.journal_root:
             snapshot = {**snapshot, '_model_path': str(Path(self.journal_root).parent / 'models' / 'active.json')}

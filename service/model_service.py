@@ -34,6 +34,9 @@ from store.disk_pressure import disk_pressure
 
 REPLAY_MEMBERS_PER_CYCLE = 16
 REPLAY_CYCLE_BUDGET_S = .25
+REPLAY_POLL_S = .05
+REPLAY_IDLE_S = 1.0
+REPLAY_NEWEST_BATCHES = max(1, int(os.environ.get('MODEL_INPUT_REPLAY_NEWEST_BATCHES', '4')))
 LIVE_MEMBERS_PER_CYCLE = 16
 LIVE_CYCLE_BUDGET_S = .1
 LIVE_RECOVERY_MEMBERS_PER_CYCLE = 64
@@ -144,6 +147,7 @@ class ModelService:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
+        self._replay_thread: threading.Thread | None = None
         self._live_thread: threading.Thread | None = None
         self._persist_thread: threading.Thread | None = None
         self._publish_lock = threading.Lock()
@@ -189,6 +193,8 @@ class ModelService:
             'last_batch_inputs': 0, 'total_records': 0, 'total_inputs': 0,
             'backlog_files': 0,
         }
+        self._replay_newest_batches = 0
+        self._replay_older_rotation = 0
 
     def bind(self, root: str | None) -> None:
         self.stop()
@@ -209,6 +215,8 @@ class ModelService:
             self._storage = {}
             self._status = {'state': 'not_started'}
             self._cursor = {}
+            self._replay_newest_batches = 0
+            self._replay_older_rotation = 0
             self._replay_sources = ReplaySources(self.root) if self.root else None
             self._replay_source_meta = {}
             self._replay_gaps = {}
@@ -601,9 +609,11 @@ class ModelService:
         self._initialize_live_cursor()
         self._live_thread = threading.Thread(target=self._live_loop,name='model-live-shadow',daemon=True)
         self._persist_thread = threading.Thread(target=self._persist_loop,name='model-shadow-persist',daemon=True)
+        self._replay_thread = threading.Thread(target=self._replay_loop, name='model-input-replay', daemon=True)
         self._thread = threading.Thread(target=self._loop, name='data-model', daemon=True)
         self._live_thread.start()
         self._persist_thread.start()
+        self._replay_thread.start()
         self._thread.start()
 
     def stop(self) -> None:
@@ -622,6 +632,10 @@ class ModelService:
             self._thread.join(timeout=5)
         if self._thread and self._thread.is_alive():
             raise ValueError('数据与模型后台尚未停止')
+        if self._replay_thread and self._replay_thread.is_alive():
+            self._replay_thread.join(timeout=5)
+        if self._replay_thread and self._replay_thread.is_alive():
+            raise ValueError('训练输入后台尚未停止，保留游标等待恢复')
         if self._live_thread and self._live_thread.is_alive():
             self._live_thread.join(timeout=5)
         if self._live_thread and self._live_thread.is_alive():
@@ -638,6 +652,7 @@ class ModelService:
                 self._stats_process.kill()
                 self._stats_process.wait(timeout=3)
         self._thread = None
+        self._replay_thread = None
         self._live_thread = None
         self._persist_thread = None
         if self._replay_sources is not None:
@@ -692,7 +707,11 @@ class ModelService:
                       training_running=bool(self._process and self._process.poll() is None),
                       heartbeat_at=datetime.now(timezone.utc).isoformat(),
                       process_id=os.getpid(), service='model-worker')
-        status['replay'] = dict(self._replay_stats)
+        with self._lock:
+            status['replay'] = dict(self._replay_stats)
+        processed = status['replay'].get('newest_processed_at')
+        if processed:
+            status['replay']['newest_lag_s'] = max(0., time.time()-datetime.fromisoformat(processed).timestamp())
         status.setdefault('storage', {})['disk_pressure'] = disk_pressure(self.root.parent)
         status['model'].pop('weights', None)
         status['model'].pop('cohort_ids', None)
@@ -794,15 +813,13 @@ class ModelService:
         self._load_replay_state()
         sources = self._replay_sources or ReplaySources(self.root)
         self._replay_sources = sources
-        # Prefer the newest journal first. In S3 mode old hourly chunks can be
-        # multi-gigabyte; draining them in lexical order starves today's live
-        # decisions and leaves the training input projection empty.
         replay_sources = sources.list_sources()
         self._replay_stats.update(
             source_protocol=1,
             source_backend='s3' if sources.remote_available else 'local',
             remote_read_verified=sources.verify_remote_read() if sources.remote_available else False,
         )
+        pending = []
         for source in replay_sources:
             offset = int(self._cursor.get(source.name, 0) or 0)
             if offset < 0:
@@ -817,39 +834,88 @@ class ModelService:
                     continue
             if source.size == offset:
                 self._replay_source_meta[source.name] = self._source_descriptor(source)
-                self._save_replay_state(metadata=True, gaps=True)
                 continue
-            start_offset = offset
-            batch_records = batch_inputs = 0
-            with sources.open(source, offset) as stream:
-                for end, rows in journal_members(stream, offset, limit=REPLAY_MEMBERS_PER_CYCLE,
-                                                 budget_s=REPLAY_CYCLE_BUDGET_S):
-                    for row in rows:
-                        batch_records += 1
-                        before = len(self._inputs)
-                        self.observe(row, predict_shadow=False)
-                        batch_inputs += len(self._inputs) - before
-                        self._replay_stats['last_at'] = str(row.get('computed_at') or '')
-                    offset = end
-            if offset == start_offset:
-                continue
-            # Commit all decoded members before advancing the cursor. Replay
-            # after a crash is idempotent through the inputs primary key.
-            self._flush_inputs()
-            self._cursor[source.name] = offset
-            self._replay_source_meta[source.name] = self._source_descriptor(source)
-            self._replay_gaps.pop(source.name, None)
-            self._save_replay_state(cursor=True, metadata=True, gaps=True)
-            self._replay_stats.update(last_file=source.name, last_batch_records=batch_records,
-                                      last_batch_inputs=batch_inputs,
-                                      total_records=self._replay_stats['total_records'] + batch_records,
-                                      total_inputs=self._replay_stats['total_inputs'] + batch_inputs)
-            self._replay_stats['backlog_files'] = sum(
-                1 for item in replay_sources if self._cursor.get(item.name, 0) < item.size
-                and item.name not in self._replay_gaps)
-            return  # Bound each loop to a finite batch; heartbeat/training continue.
-        self._replay_stats.update(last_batch_records=0, last_batch_inputs=0,
-                                  backlog_files=0, gap_files=len(self._replay_gaps))
+            pending.append(source)
+        if not pending:
+            self._save_replay_state(metadata=True, gaps=True)
+            with self._lock:
+                self._replay_stats.update(last_batch_records=0, last_batch_inputs=0,
+                    backlog_files=0, backlog_bytes=0, gap_files=len(self._replay_gaps))
+            return
+        # Keep current input moving while granting every older journal a turn.
+        # A continuously growing newest file must not starve settled matches.
+        if len(pending)>1 and self._replay_newest_batches >= REPLAY_NEWEST_BATCHES:
+            source = pending[1+self._replay_older_rotation % (len(pending)-1)]
+            self._replay_older_rotation += 1
+            self._replay_newest_batches = 0
+        else:
+            source = pending[0]
+            self._replay_newest_batches += 1
+        offset = int(self._cursor.get(source.name, 0) or 0)
+        start_offset = offset
+        batch_records = batch_inputs = 0
+        virtual_records = unqualified_real_records = unknown_records = 0
+        newest_at = ''
+        with sources.open(source, offset) as stream:
+            for end, rows in journal_members(stream, offset, limit=REPLAY_MEMBERS_PER_CYCLE,
+                                             budget_s=REPLAY_CYCLE_BUDGET_S):
+                for row in rows:
+                    batch_records += 1
+                    before = len(self._inputs)
+                    self.observe(row, predict_shadow=False)
+                    added = len(self._inputs) - before
+                    batch_inputs += added
+                    kind = row.get('competition_type')
+                    virtual_records += kind == 'virtual'
+                    unknown_records += kind not in ('real', 'virtual')
+                    unqualified_real_records += kind == 'real' and not added
+                    newest_at = max(newest_at, str(row.get('computed_at') or ''))
+                offset = end
+        if offset == start_offset:
+            return
+        # Commit all decoded members before advancing the cursor. Replay
+        # after a crash is idempotent through the inputs primary key.
+        self._flush_inputs()
+        self._cursor[source.name] = offset
+        self._replay_source_meta[source.name] = self._source_descriptor(source)
+        self._replay_gaps.pop(source.name, None)
+        self._save_replay_state(cursor=True, metadata=True, gaps=True)
+        with self._lock:
+            self._replay_stats.update(last_file=source.name, last_at=newest_at,
+                last_batch_records=batch_records, last_batch_inputs=batch_inputs,
+                last_batch_virtual_records=virtual_records,
+                last_batch_unqualified_real_records=unqualified_real_records,
+                last_batch_unknown_records=unknown_records,
+                committed_at=datetime.now(timezone.utc).isoformat(),
+                total_records=self._replay_stats['total_records']+batch_records,
+                total_inputs=self._replay_stats['total_inputs']+batch_inputs,
+                counts_scope='current_process_committed_idempotent_rows',
+                gap_files=len(self._replay_gaps),
+                backlog_files=sum(self._cursor.get(item.name,0)<item.size for item in pending),
+                backlog_bytes=sum(max(0,item.size-self._cursor.get(item.name,0)) for item in pending))
+            if replay_sources and source.name == replay_sources[0].name:
+                self._replay_stats['newest_processed_at'] = newest_at
+
+    def _replay_loop(self) -> None:
+        """One bounded input writer, independent of settlement and training IO."""
+        try:
+            while not self._stop.is_set():
+                previous = self._replay_stats.get('total_records', 0)
+                delay = REPLAY_IDLE_S
+                try:
+                    self._consume_replay()
+                    progressed = self._replay_stats.get('total_records', 0) != previous
+                    with self._lock:
+                        self._replay_stats.update(state='processing' if progressed else 'waiting',
+                                                  running=True, error='')
+                    delay = REPLAY_POLL_S if progressed else REPLAY_IDLE_S
+                except Exception as exc:
+                    with self._lock:
+                        self._replay_stats.update(state='error', running=True, error=str(exc))
+                self._stop.wait(delay)
+        finally:
+            with self._lock:
+                self._replay_stats['running'] = False
 
     def _initialize_live_cursor(self) -> None:
         if self.root is None:
@@ -1192,8 +1258,6 @@ class ModelService:
             try:
                 self._reload_settings()
                 self._read()
-                self._consume_replay()
-                self._flush_inputs()
                 self._evaluate_shadow()
                 self._evaluate_historical_shadow()
                 self._publish()
@@ -1247,11 +1311,6 @@ class ModelService:
             if self._wake.is_set():
                 self._wake.clear()
                 next_check = 0
-        try:
-            self._flush_inputs()
-        except Exception as exc:
-            with self._lock:
-                self._status.update(state='failed', error='模型输入保存失败: ' + str(exc))
 
     def _start_training_check(self, root: Path, cfg: RuntimeConfig) -> None:
         """Schedule learning using its own switch, independent of execution.
