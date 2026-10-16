@@ -36,6 +36,7 @@ REPLAY_MEMBERS_PER_CYCLE = 16
 REPLAY_CYCLE_BUDGET_S = .25
 REPLAY_POLL_S = .05
 REPLAY_IDLE_S = 1.0
+REPLAY_GAP_RECHECK_S = 300.0
 REPLAY_NEWEST_BATCHES = max(1, int(os.environ.get('MODEL_INPUT_REPLAY_NEWEST_BATCHES', '4')))
 LIVE_MEMBERS_PER_CYCLE = 16
 LIVE_CYCLE_BUDGET_S = .1
@@ -177,6 +178,7 @@ class ModelService:
         self._replay_sources: ReplaySources | None = None
         self._replay_source_meta: dict[str, dict[str, Any]] = {}
         self._replay_gaps: dict[str, dict[str, Any]] = {}
+        self._replay_gap_probes: dict[str, tuple[dict[str, Any], int, float]] = {}
         self._live_cursor: dict[str, int] = {}
         self._live_inodes: dict[str,list[int]] = {}
         self._live_stats: dict[str,Any] = {'state':'not_started'}
@@ -220,6 +222,7 @@ class ModelService:
             self._replay_sources = ReplaySources(self.root) if self.root else None
             self._replay_source_meta = {}
             self._replay_gaps = {}
+            self._replay_gap_probes = {}
             self._live_cursor = {}
             self._live_inodes = {}
             self._live_stats = {'state':'not_started'}
@@ -822,8 +825,16 @@ class ModelService:
         pending = []
         for source in replay_sources:
             offset = int(self._cursor.get(source.name, 0) or 0)
+            descriptor = self._source_descriptor(source)
+            if offset < 0 or source.size < offset:
+                previous = self._replay_gap_probes.get(source.name)
+                if (previous and previous[:2] == (descriptor, offset)
+                        and time.monotonic() < previous[2]):
+                    continue
             if offset < 0:
                 self._record_replay_gap(source, offset, 'cursor 为负数')
+                self._replay_gap_probes[source.name] = (descriptor, offset,
+                    time.monotonic()+REPLAY_GAP_RECHECK_S)
                 continue
             if source.size < offset:
                 historical = sources.historical_sources(source.name, offset)
@@ -831,7 +842,10 @@ class ModelService:
                     source = max(historical, key=lambda item: (item.size, item.mtime_ns))
                 else:
                     self._record_replay_gap(source, offset, '远端源长度小于持久 cursor，未找到可恢复历史 pack')
+                    self._replay_gap_probes[source.name] = (descriptor, offset,
+                        time.monotonic()+REPLAY_GAP_RECHECK_S)
                     continue
+            self._replay_gap_probes.pop(source.name, None)
             if source.size == offset:
                 self._replay_source_meta[source.name] = self._source_descriptor(source)
                 continue

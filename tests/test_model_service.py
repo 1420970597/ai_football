@@ -370,10 +370,65 @@ class ModelServiceTests(unittest.TestCase):
             cursor_path.write_text(json.dumps({truncated.name: 1000}))
             worker = ModelService()
             worker.bind(str(ledger))
-            worker._consume_replay()
-            worker._consume_replay()
+            with patch.object(worker._replay_sources, 'historical_sources', return_value=[]) as lookup:
+                worker._consume_replay()
+                worker._consume_replay()
+                self.assertEqual(lookup.call_count, 1)
             self.assertEqual(worker._cursor[truncated.name], 1000)
             self.assertIn(truncated.name, worker._replay_gaps)
             self.assertEqual(worker._replay_gaps[truncated.name]['frozen'], True)
             self.assertTrue((Path(root) / 'models' / 'replay-gaps.json').exists())
             self.assertNotEqual(worker._replay_stats['gap_files'], 0)
+
+    def test_frozen_gap_rechecks_on_expiry_source_or_cursor_change(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = Path(root)/'ledger'
+            ledger.mkdir()
+            path = ledger/'live-replay.2025010100.jsonl.gz'
+            path.write_bytes(b'truncated')
+            cursor_path = Path(root)/'models'/'replay-cursor.json'
+            cursor_path.parent.mkdir()
+            cursor_path.write_text(json.dumps({path.name:1000}))
+            worker = ModelService()
+            worker.bind(str(ledger))
+            with patch.object(worker._replay_sources, 'historical_sources', return_value=[]) as lookup:
+                worker._consume_replay()
+                descriptor, offset, _deadline = worker._replay_gap_probes[path.name]
+                worker._replay_gap_probes[path.name] = (descriptor, offset, -1.)
+                worker._consume_replay()
+                self.assertEqual(lookup.call_count, 2)
+                path.write_bytes(b'new truncated source')
+                worker._consume_replay()
+                self.assertEqual(lookup.call_count, 3)
+                cursor_path.write_text(json.dumps({path.name:1001}))
+                worker._consume_replay()
+                self.assertEqual(lookup.call_count, 4)
+                self.assertEqual(worker._cursor[path.name], 1001)
+                cursor_path.write_text(json.dumps({path.name:-1}))
+                worker._consume_replay()
+                worker._consume_replay()
+                self.assertEqual(worker._cursor[path.name], -1)
+                self.assertEqual(lookup.call_count, 4)
+                self.assertEqual(worker._replay_gaps[path.name]['reason'], 'cursor 为负数')
+
+    def test_restored_gap_resumes_from_preserved_member_boundary(self):
+        with tempfile.TemporaryDirectory() as root:
+            ledger = Path(root)/'ledger'
+            ledger.mkdir()
+            path = ledger/'live-replay.2025010100.jsonl.gz'
+            first = gzip.compress((json.dumps(decision())+'\n').encode())
+            second = gzip.compress((json.dumps({**decision(),'computed_at':'2025-01-01T12:01:00+00:00'})+'\n').encode())
+            path.write_bytes(first[:8])
+            cursor_path = Path(root)/'models'/'replay-cursor.json'
+            cursor_path.parent.mkdir()
+            cursor_path.write_text(json.dumps({path.name:len(first)}))
+            worker = ModelService()
+            worker.bind(str(ledger))
+            worker._consume_replay()
+            self.assertEqual(worker._cursor[path.name], len(first))
+            path.write_bytes(first+second)
+            worker._consume_replay()
+            self.assertEqual(worker._cursor[path.name], len(first+second))
+            self.assertNotIn(path.name, worker._replay_gaps)
+            self.assertNotIn(path.name, worker._replay_gap_probes)
+            self.assertEqual(worker._replay_stats['total_inputs'], 20)
