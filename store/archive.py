@@ -494,7 +494,7 @@ class S3Archive:
         return {'identity': identity, 'catalog': tuple(row)}
 
     def commit_cleanup(self, path: Path, token: Mapping[str, Any]) -> dict[str, int]:
-        """Only fast identity/catalog checks and unlink inside the EX lock."""
+        """Revalidate content and unlink inside the EX lock."""
         total = {'files': 0, 'bytes': 0}
         with closing(self._db()) as db, db:
             row = db.execute(
@@ -510,6 +510,17 @@ class S3Archive:
                 return total
             if (not file_stat.S_ISREG(current.st_mode)
                     or self._cleanup_identity(current) != token.get('identity')):
+                return total
+            # Some filesystems can preserve all stat timestamps for a rapid
+            # same-size rewrite. A final digest check closes that race before
+            # unlinking, even when ``prepare_cleanup`` observed the old bytes.
+            with path.open('rb') as original:
+                digest = hashlib.file_digest(original, 'sha256').hexdigest()
+            try:
+                if (digest != row[2]
+                        or self._cleanup_identity(path.lstat()) != token.get('identity')):
+                    return total
+            except FileNotFoundError:
                 return total
             path.unlink()
             db.execute('UPDATE files SET cleaned=1 WHERE path=?', (self._relative(path),))

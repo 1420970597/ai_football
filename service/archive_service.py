@@ -302,12 +302,20 @@ def _cleanup_paths(root: Path, archive: S3Archive, paths: Iterator[Path]) -> dic
         if token is None:
             continue
         with lock_path.open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                # Model replay reads hold a shared lock.  Waiting here would
+                # pin the archive worker to one multi-GB file; retry it on the
+                # next bounded cleanup pass instead.
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                continue
             if not _replay_cleanup_allowed(root, archive, path):
                 fcntl.flock(lock, fcntl.LOCK_UN)
                 continue
-            cleaned = archive.commit_cleanup(path, token)
-            fcntl.flock(lock, fcntl.LOCK_UN)
+            try:
+                cleaned = archive.commit_cleanup(path, token)
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
         totals["files"] += cleaned["files"]
         totals["bytes"] += cleaned["bytes"]
     return totals

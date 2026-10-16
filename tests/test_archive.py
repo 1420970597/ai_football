@@ -405,6 +405,17 @@ class ArchiveTests(unittest.TestCase):
             self.assertEqual(_cleanup_paths(self.root,self.archive,iter([replay]))['files'],1)
         self.assertEqual(observed,['readable-during-verify','exclusive-commit'])
 
+    def test_replay_cleanup_skips_busy_reader_lock_without_blocking(self):
+        replay = self.replay_ready()
+        lock_path = self.root / 'models' / 'replay.lock'
+        with lock_path.open('a') as reader:
+            fcntl.flock(reader, fcntl.LOCK_EX)
+            self.assertEqual(
+                _cleanup_paths(self.root, self.archive, iter([replay])),
+                {'files': 0, 'bytes': 0},
+            )
+        self.assertTrue(replay.exists())
+
     def test_active_journal_and_symlinks_are_never_cleanup_candidates(self):
         active = self.source('ledger/live-replay.jsonl.gz')
         self.assertFalse(cleanable(self.root,active))
