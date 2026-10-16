@@ -27,7 +27,7 @@ flowchart LR
 
 | 来源 | 已核验证据 | 本项目适用结论 | 不能推出的结论 | 分级 |
 | --- | --- | --- | --- | --- |
-| Dixon & Coles (1997), [DOI 10.1111/1467-9876.00065](https://doi.org/10.1111/1467-9876.00065) | Crossref 标题、作者和出版记录 | 足球进球强度及低比分依赖修正值得作为下一阶段候选；当前盘口反推 Poisson 不是已实现 Dixon-Coles 球队模型 | 该论文不能证明本项目的5400秒缩放、100场周期或即时盘口参数最优 | A 元数据；未在本次取得全文，模型效果属待验证 |
+| Dixon & Coles (1997), [DOI 10.1111/1467-9876.00065](https://doi.org/10.1111/1467-9876.00065) | Crossref 标题、作者和出版记录 | 足球进球强度及低比分依赖修正值得作为下一阶段候选；当前盘口反推 Poisson 不是已实现 Dixon-Coles 球队模型 | 该论文不能证明本项目的5400秒缩放、50场周期或即时盘口参数最优 | A 元数据；未在本次取得全文，模型效果属待验证 |
 | Gneiting & Raftery (2007), [Strictly Proper Scoring Rules](https://doi.org/10.1198/016214506000001437) | Crossref 出版记录与研究主题 | 采用 Brier/Log loss 比只看阈值准确率更适合选择概率模型 | 更低离线 Brier 不自动等于可交易盈利 | A 元数据；理论结论 B |
 | Clarke, Kovalchik & Ingram (2017), [Adjusting Bookmaker’s Odds](https://www.sciencepublishinggroup.com/article/10.11648/j.ajss.20170506.12) | 期刊页摘要：Power 处理 favorite-longshot bias，并在三个数据集优于比例法或与 Shin 相当 | 离线比较比例/Power/现有去水共识，同比分组公平概率、校准及收益 | 三个其他数据集的结果不能直接推广为乐鱼滚球最优去水法 | A 原始摘要 |
 | Baker & McHale (2013), [Optimal Betting Under Parameter Uncertainty](https://doi.org/10.1287/deca.2013.0271) | Crossref 精确题名、作者、DOI | 参数估计不确定性需要进入仓位风险评估，避免按点估计提高 Kelly | 未取得全文，不能声称论文指定0.1或0.25系数 | A 元数据；具体系数为工程建议 |
@@ -59,7 +59,7 @@ flowchart LR
 | `min_ev` | 0.02 | 保持，不放宽真实门控 | 0.02~0.05 | 执行成本、成交概率/改价偏差；冻结输入 |
 | `betting_min_edge` | 0.05 | 保持真实提交阈值 | 0.03~0.08仅离线 | 没有成本与前瞻收益证据不下调 |
 | `betting_min_evidence_matches` | 30 | 不降低；UI明确证据薄弱 | 100~300用于复核/小步提高候选 | 按独立比赛cluster而不是同场重复条目 |
-| `model_training_matches` | 100 | 保持更新周期 | 100 / 200 / 300新增有效已结场次 | 无数据泄漏、更新次数/资源/漂移与时间外校准 |
+| `model_training_matches` | 50 | 调整为每50场新增有效已结场次更新 | 50 / 100 / 200新增有效已结场次 | 无数据泄漏、更新次数/资源/漂移与时间外校准；首次/完整训练资格仍至少100场 |
 | `weight_prior_matches` | 20 | 保持；小样本时加收缩候选 | 20 / 50 / 100 | 按场Brier技能权重、极端权重稳定性 |
 | `max_algorithm_weight` | 0.60 | 保持，不让单成员支配 | 0.40 / 0.50 / 0.60 | 多成员有效数、相关性、最弱时间折；注意cap≥1/N |
 | `execution_cost` | 0.001 | 保持，先测量后校准 | 根据真实请求报价/成交日志估计分层成本 | 当前参数是估算，不能当准确已知0.1%成本 |

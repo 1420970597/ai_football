@@ -86,7 +86,7 @@ class RuntimeConfig:
     decision_mode: str = "algorithm"
     model_blend_weight: float = 0.50
     model_training_enabled: bool = True
-    model_training_matches: int = 100
+    model_training_matches: int = 50
     model_training_cpu: int = 1
     model_training_memory_mb: int = 2048
 

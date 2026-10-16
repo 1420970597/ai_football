@@ -67,6 +67,25 @@ class RemoteTrainingTests(unittest.TestCase):
                     model['cohort_cutoff'],{},101*1024**3)
             self.assertFalse((Path(directory)/'active.json').exists())
 
+    def test_remote_cycle_accepts_50_new_matches_but_requires_100_total(self):
+        from service.model_training import publish_remote_model
+        model = self.model()
+        total = {str(i) for i in range(100)}
+        model.update(cohort_ids=sorted(total), cohort_cutoff='2025-02-01T00:00:00+00:00',
+                     promotion_evidence=model['promotion']['evidence'])
+        consumed = {str(i) for i in range(50)}
+        with tempfile.TemporaryDirectory() as directory:
+            status = publish_remote_model(Path(directory), model, {'cycle_matches': 50}, consumed,
+                                          total, model['cohort_cutoff'], {}, 101 * 1024**3)
+            self.assertEqual(status['completed_matches'], 100)
+        with tempfile.TemporaryDirectory() as directory:
+            small = {str(i) for i in range(99)}
+            model['cohort_ids'] = sorted(small)
+            with self.assertRaisesRegex(ValueError, '冻结边界'):
+                publish_remote_model(Path(directory), model, {'cycle_matches': 50},
+                                     {str(i) for i in range(49)}, small,
+                                     model['cohort_cutoff'], {}, 101 * 1024**3)
+
     def test_sqlite_space_is_included_in_automatic_estimate(self):
         from service.remote_training import local_pipeline_estimate
         self.assertEqual(local_pipeline_estimate(256,sqlite_bytes=100),local_pipeline_estimate(256)+200)

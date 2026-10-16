@@ -28,6 +28,21 @@ class ModelTrainingLifecycleTests(unittest.TestCase):
     def approval():
         return approved_artifact()['promotion']
 
+    def test_training_cycle_boundary_uses_50_new_matches_but_keeps_100_match_qualification(self):
+        cases = ((100, 51, False), (100, 50, True), (50, 0, False))
+        for total_count, consumed_count, expected_ready in cases:
+            rows = [sample_row(i) for i in range(total_count)]
+            with self.subTest(total_count=total_count, consumed_count=consumed_count), tempfile.TemporaryDirectory(dir=Path.cwd()) as directory, \
+                    patch('service.model_training.constrain', return_value={}), \
+                    patch('service.model_training._completed_cohort', return_value={
+                        'cohort_ids': [str(i) for i in range(consumed_count)]}), \
+                    patch('service.model_training.training_cohort_progress', return_value=self.progress(rows)), \
+                    patch('service.model_training.dataset') as dataset:
+                status = run(Path(directory) / 'ledger', 50, 1, 256, check_only=True)
+            self.assertEqual(status['new_matches'], total_count - consumed_count)
+            self.assertEqual(status['cycle_ready'], expected_ready)
+            dataset.assert_not_called()
+
     def test_large_round_dispatches_frozen_cohort_without_local_dataset(self):
         rows = [sample_row(i) for i in range(120)]
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory, \

@@ -42,6 +42,7 @@ class DataModelTests(unittest.TestCase):
 
     def test_settings_strict_and_persisted(self):
         cfg = RuntimeConfig()
+        self.assertEqual(cfg.model_training_matches, 50)
         out = validated(cfg, {'model_training_matches': 2, 'model_training_cpu': 2, 'model_training_memory_mb': 256})
         self.assertEqual(out.model_training_matches, 2)
         for patch_value in ({'model_training_matches': 0}, {'model_training_cpu': 3},
