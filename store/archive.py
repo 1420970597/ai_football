@@ -538,6 +538,21 @@ class S3Archive:
             ).fetchone()
         if expected is None:
             raise OSError("归档缺少完整对象校验信息")
+        # Every pack uploaded by this worker carries its immutable SHA256 in
+        # object metadata.  HEAD avoids downloading multi-GB packs merely to
+        # prove a fact already recorded by the upload transaction.  Older
+        # objects or S3-compatible gateways that do not expose metadata use
+        # the original range-read verification below.
+        head = getattr(self.client, "head_object", None)
+        if callable(head):
+            try:
+                response = head(Bucket=self.bucket, Key=key)
+                metadata = response.get("Metadata", {})
+                advertised = metadata.get("sha256") or metadata.get("x-amz-meta-sha256")
+                if (int(response.get("ContentLength", -1)), advertised) == tuple(expected):
+                    return
+            except (OSError, KeyError, TypeError, ValueError):
+                pass
         digest, size = hashlib.sha256(), 0
         for block in self._range_blocks(key, 0, expected[0]):
             digest.update(block)
