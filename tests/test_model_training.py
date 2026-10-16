@@ -149,6 +149,26 @@ class ModelTrainingLifecycleTests(unittest.TestCase):
         return {**approved_artifact('candidate'), 'promotion': {'approved': False,
                 'reasons': ['insufficient evidence']}, **changes}
 
+    def test_waiting_cycle_retains_last_completed_samples_separately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate = self.artifact(version='previous',cohort_ids=['a'])
+            atomic_json(root/'models'/'candidate-previous.json',candidate)
+            atomic_json(root/'models'/'completed-training.json',{
+                'data_version':DATA_VERSION,'feature_version':FEATURE_VERSION,
+                'validation_contract_version':VALIDATION_CONTRACT_VERSION,
+                'candidate_version':'previous','cohort_ids':['a'],
+                'completed_at':candidate['updated_at'],'training_decisions':4786})
+            status = self.run_empty_cycle(root)
+            self.assertEqual(status['completed_training_decisions'],4786)
+            self.assertEqual(status['completed_training_at'],candidate['updated_at'])
+            self.assertIsNone(status['training_decisions'])
+            self.assertEqual(status['new_matches'],0)
+        with tempfile.TemporaryDirectory() as directory:
+            status = self.run_empty_cycle(Path(directory))
+            self.assertIsNone(status['completed_training_decisions'])
+            self.assertIsNone(status['completed_training_at'])
+
     def run_empty_cycle(self, root):
         def empty_dataset(*args, audit, **kwargs):
             audit.update(valid_training_decisions=0, source_eligible_decisions=0)

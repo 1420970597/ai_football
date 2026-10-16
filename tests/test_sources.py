@@ -403,6 +403,7 @@ class _FakeMatch:
     def __init__(self, mid: str, sport: str = "1", *, live: bool = False,
                  finished: bool = False, start_ms: int = 0) -> None:
         self.mid = mid
+        self.tournament = ''
         self.sport_id = sport
         self.is_live = live
         self.is_finished = finished
@@ -458,6 +459,17 @@ class TestLiveWindowAlignment(unittest.TestCase):
     def test_zero_grace_is_strict_ms1_only(self) -> None:
         """`grace_s=0` 退回严格口径（便于排障与对照）。"""
         self.assertEqual(self._src().live_match_ids(grace_s=0), ["live-now"])
+
+    def test_real_only_subscription_excludes_virtual_and_unknown(self) -> None:
+        matches = []
+        for mid, league in [('real', '英格兰超级联赛'), ('eafc', 'EAFC'),
+                            ('short', '瓦尔哈拉杯_2026_8分钟'), ('unknown', '')]:
+            match = _FakeMatch(mid, live=True)
+            match.tournament = league
+            matches.append(match)
+        source = _FakeSource(matches)
+        self.assertEqual(source.live_match_ids(real_only=True), ['real'])
+        self.assertEqual(source.live_match_ids(), ['real', 'eafc', 'short', 'unknown'])
 
     def test_finished_match_is_never_counted(self) -> None:
         """已结束的赛事即使开赛时间在窗口内也不能算进行中。"""

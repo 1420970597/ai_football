@@ -1,13 +1,15 @@
 async (page) => {
+  await page.unrouteAll({behavior:'wait'});
+  await page.evaluate(()=>localStorage.clear());
   const assert = (condition,message) => {if (!condition) throw new Error(message);};
   const errors=[];
   page.on('pageerror',error=>errors.push(error.message));
   let mode='empty',saved,modelRequests=0,recommendationRequests=0,unavailableRecommendations=true;
   const settings={version:1,persistent:true,algorithms:{poisson_market:'当前盘口 Poisson',poisson_time_decay:'时间衰减 Poisson'},capabilities:{betting:{execution_supported:true}},
     settings:{decision_mode:'algorithm',model_blend_weight:.5,algorithms:['poisson_market','poisson_time_decay'],primary_algorithm:'poisson_time_decay',devig_method:'proportional',min_probability:.52,min_ev:.02,
-      quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
+      quote_max_age_s:15,state_max_age_s:90,anchor_max_age_s:120,score_change_cooldown_s:15,devig_spread_warn_pp:1,fractional_kelly:.25,max_total_exposure:.25,risk_correlation:.4,execution_cost:.001,
       weight_prior_matches:20,max_algorithm_weight:.6,algorithm_alert_enabled:true,algorithm_alert_min_samples:30,algorithm_alert_threshold:.5,
-      betting_enabled:false,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_min_hit_count:3,betting_min_evidence_matches:30,betting_min_edge:.05,betting_retry_max_attempts:5,betting_retry_base_delay_s:2,
+      betting_enabled:false,betting_stake_mode:'fixed',betting_fixed_stake:10,betting_max_total_exposure:.1,betting_max_match_exposure:.02,betting_min_hit_count:3,betting_min_evidence_matches:30,betting_min_edge:.05,betting_retry_max_attempts:5,betting_retry_base_delay_s:2,
       llm_enabled:false,llm_experiment_enabled:true,llm_base_url:'',llm_model:'',llm_fallback_models:'',llm_timeout_s:20,llm_temperature:.2,llm_max_tokens:2048,llm_interval_s:60,llm_review_max_age_s:120,
       model_shadow_enabled:true,model_training_enabled:true,model_training_matches:100,model_training_cpu:1,model_training_memory_mb:512}};
   const fixture={decision_mode:'algorithm',model:{},training:{state:'waiting',eligible_matches:42,new_matches:42},settings:{decision_mode:'algorithm',model_blend_weight:.5,shadow_enabled:true,cycle_matches:100,cpu_cores:1,memory_mb:512},running:true,
@@ -30,6 +32,14 @@ async (page) => {
           input_records:null,input_matches:null,invalid_training_records:null,waiting_for_label:null,estimated_input_records:23050041,
           estimated_input_matches:790,sample_examined_records:30000,sample_examined_matches:790,sample_valid_training_decisions:29857,sample_ungraded_inputs:143}});
       if(mode==='failed') {data.training.state='failed';data.training.error='训练进程被终止（资源限制或超时）';}
+      if(mode==='progress') {
+        Object.assign(data.training,{eligible_matches:179,new_matches:59,training_decisions:null,
+          completed_training_decisions:4786,completed_training_at:'2026-10-15T14:43:17Z'});
+        data.replay={state:'processing',newest_processed_at:'2026-10-16T05:05:00Z',newest_lag_s:1800,
+          backlog_files:84,backlog_bytes:1073741824,total_inputs:361286,last_batch_virtual_records:15,
+          last_batch_unknown_records:0,last_batch_unqualified_real_records:1,error:''};
+      }
+      if(mode==='input-error') data.replay={state:'error',error:'训练输入连接失败'};
       return route.fulfill({json:data});
     }
     if(path.endsWith('/settings')){
@@ -40,19 +50,29 @@ async (page) => {
   });
   const origin=new URL(page.url()).origin;
   await page.setViewportSize({width:1440,height:1000});
-  await page.goto(origin+'/#data-model');
+  await page.goto(origin+'/?fixture='+Date.now()+'#data-model');
   await page.getByText('等待新增已结算比赛',{exact:true}).waitFor();
   assert((await page.locator('#model-summary').textContent()).includes('未训练'),'no fictional model parameters');
   assert((await page.locator('#model-description').textContent()).includes('尚无已晋级模型'),'untrained model has no promotion claim');
   assert((await page.locator('#model-summary').textContent()).includes('纯算法'),'algorithm mode shown independently from shadow');
   assert((await page.locator('#model-performance').textContent()).includes('暂无有效样本'),'no fake zero accuracy');
   assert((await page.locator('#storage-summary').textContent()).includes('20.00 GiB'),'real disk free shown');
+  assert((await page.locator('#model-summary').textContent()).includes('上次完成训练样本尚未提供'),'unknown completion is not zero');
+  mode='progress';await page.locator('#data-model-refresh').click();
+  await page.getByText('4786',{exact:true}).waitFor();
+  const progressCards=await page.locator('#model-summary').textContent();
+  assert(progressCards.includes('本轮训练样本尚未审查'),'current-cycle unknown remains separate');
+  assert(progressCards.includes('有效已结算比赛179')&&progressCards.includes('59 / 100 场'),'qualified cohort retained');
+  assert(progressCards.includes('待处理日志文件84')&&progressCards.includes('1800.0 s'),'replay backlog and lag shown');
+  assert(progressCards.includes('上批跳过虚拟 / 未核验比赛15 / 0'),'virtual replay exclusions shown');
+  mode='input-error';await page.locator('#data-model-refresh').click();
+  await page.locator('#data-model-notice.error').getByText('训练输入连接失败',{exact:true}).waitFor();
   mode='sampled';await page.locator('#data-model-refresh').click();
   await page.getByText('已核验样本有效决策',{exact:true}).waitFor();
   const sampledCards=await page.locator('#model-summary').textContent();
   assert(sampledCards.includes('训练输入（估计）23050041'),'database estimate explicitly labelled');
   assert(sampledCards.includes('全量有效训练决策尚未审查') && sampledCards.includes('全量无效 / 隔离数据尚未审查'),'unknown full-audit counts are not zero');
-  assert(sampledCards.includes('已核验样本有效决策29857') && sampledCards.includes('已核验样本无效（不可结算）143'),'sampled valid and invalid counts separated');
+  assert(sampledCards.includes('已核验样本有效决策29857') && sampledCards.includes('样本分类未评分（含走盘）143'),'sampled valid and ungraded counts separated');
   assert((await page.locator('#model-description').textContent()).includes('不代表全库资格'),'sampled scope explained');
   mode='missing';await page.locator('#data-model-refresh').click();
   await page.getByText('当前后端版本尚未提供数据与模型接口，请构建并更新 analytics-api 后手动刷新。',{exact:true}).waitFor();
