@@ -26,8 +26,9 @@ function notice(id, message = '', error = false) {
   $(id).classList.toggle('error', error);
 }
 async function get(path) {
+  const signal = AbortSignal.timeout(8000);
   try {
-    const response = await fetch(API + path, {signal: AbortSignal.timeout(8000), cache: 'no-store'});
+    const response = await fetch(API + path, {signal, cache: 'no-store'});
     if (!response.ok) {
       const error = new Error('读取失败（' + response.status + '）');
       error.status = response.status;
@@ -35,7 +36,9 @@ async function get(path) {
     }
     return await response.json();
   } catch (error) {
-    if (error.name === 'TimeoutError') {
+    // A timeout while reading JSON can surface as AbortError in Chromium.
+    if (error.name === 'TimeoutError' ||
+        (error.name === 'AbortError' && signal.aborted && signal.reason?.name === 'TimeoutError')) {
       const timeout = new Error('读取超时，服务暂未响应');
       timeout.name = 'TimeoutError';
       throw timeout;
@@ -253,7 +256,7 @@ async function loadRecommendations(force = false) {
   const request = ++S.recommendationsRequest;
   $('recommendations-refresh').disabled = true;
   try {
-    const data = await get('/recommendations?type=' + encodeURIComponent(S.type));
+    const data = await get('/recommendations?type=' + encodeURIComponent(S.type) + '&view=compact');
     if (request !== S.recommendationsRequest || S.view !== 'recommendations') return;
     S.recommendationsNextAt = 0;
     renderRecommendationsPage(data);

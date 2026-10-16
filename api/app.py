@@ -55,6 +55,11 @@ __all__ = ["create_app", "ApiApp", "run_server"]
 
 API_PREFIX = "/api/v1"
 MAX_BODY_BYTES = 64 * 1024
+# Fields rendered by the recommendation history table. Full ledger audit
+# details remain available through the default response and history endpoints.
+RECOMMENDATION_LIST_FIELDS = (
+    'at', 'match_id', 'home', 'away', 'label', 'market', 'odds', 'status', 'pnl',
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -789,9 +794,21 @@ class ApiApp:
         kind = _q1(query, "type", "real")
         if kind not in ("real", "virtual", "unknown", "all"):
             raise BadRequest("type 必须是 real/virtual/unknown/all")
+        view = _q1(query, 'view', 'full')
+        if view not in ('full', 'compact'):
+            raise BadRequest('view 必须是 full/compact')
         if self._projection is not None:
-            return self._projection.read(kind, "recommendations", {'open': [], 'closed': [], 'summary': {}})
-        return self._build_recommendations(query, body, *_a)
+            data = self._projection.read(kind, "recommendations", {'open': [], 'closed': [], 'summary': {}})
+        else:
+            data = self._build_recommendations(query, body, *_a)
+        if view == 'compact':
+            # Published snapshots are shared: leave their dicts/lists intact.
+            # Keep every row and all summary/open/age metadata; only omit
+            # unused audit fields from the browser's periodic table reads.
+            return {**data, 'closed': [
+                {key: row[key] for key in RECOMMENDATION_LIST_FIELDS if key in row}
+                for row in data.get('closed', [])]}
+        return data
 
     def _build_recommendations(self, query: Mapping[str, List[str]],
                           body: Mapping[str, Any], *_a: str) -> Dict[str, Any]:
