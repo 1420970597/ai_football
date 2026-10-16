@@ -30,6 +30,12 @@ ARCHIVE_BATCH_FILES = 2000
 # verified files until a large upload batch finishes; each file gets its own
 # upload/catalog/cleanup boundary.  Non-cleanup migrations retain batching.
 ARCHIVE_CLEANUP_BATCH_FILES = 1
+# A cleanup pass is deliberately bounded.  Without a byte budget the worker
+# can spend an entire cycle proving every catalog row while the collector keeps
+# producing new data.  The largest eligible files are attempted first so each
+# completed verification immediately relieves meaningful disk pressure.
+ARCHIVE_CLEANUP_MAX_BYTES = int(os.environ.get("ARCHIVE_CLEANUP_MAX_BYTES", str(16 * 1024**3)))
+ARCHIVE_CLEANUP_PROGRESS_EVERY = 100
 ARCHIVE_HEARTBEAT_INTERVAL_S = 5
 _STATUS_LOCK = threading.Lock()
 
@@ -369,20 +375,39 @@ def _replay_cleanup_allowed(root: Path, archive: S3Archive, path: Path) -> bool:
 
 
 def _cleanup_catalogued(root: Path, archive: S3Archive) -> dict[str, int]:
-    """Release already-uploaded local files before scanning new input."""
+    """Release already-uploaded local files before scanning new input.
+
+    The catalog is the work queue.  Sorting by size makes the worker useful
+    under pressure even when a large backlog contains stale or ineligible
+    rows, while the byte budget prevents one pass from monopolising the
+    archive lock and the S3 connection indefinitely.
+    """
     with closing(archive._db()) as db:
         paths = [root / row[0] for row in db.execute(
-            "SELECT path FROM files WHERE cleaned=0 ORDER BY path"
+            "SELECT path FROM files WHERE cleaned=0 ORDER BY size DESC, path"
         )]
     totals = {"files": 0, "bytes": 0}
+    examined = 0
+    skipped = 0
     for batch in _batches(iter(paths), size=ARCHIVE_CLEANUP_BATCH_FILES):
+        examined += len(batch)
         cleaned = _cleanup_paths(root, archive, iter(batch))
         totals["files"] += cleaned["files"]
         totals["bytes"] += cleaned["bytes"]
-        if cleaned['files']:
-            _status_update(root / '_archive' / 'status.json', phase='cleanup',
-                           cleanup_released_files=totals['files'], cleanup_released_bytes=totals['bytes'],
-                           last_cleaned_path=str(batch[-1].relative_to(root)))
+        skipped += len(batch) - cleaned["files"]
+        if (examined % ARCHIVE_CLEANUP_PROGRESS_EVERY == 0
+                or cleaned["files"] or totals["bytes"] >= ARCHIVE_CLEANUP_MAX_BYTES):
+            _status_update(
+                root / "_archive" / "status.json",
+                phase="cleanup",
+                cleanup_examined=examined,
+                cleanup_skipped=skipped,
+                cleanup_released_files=totals["files"],
+                cleanup_released_bytes=totals["bytes"],
+                last_cleaned_path=str(batch[-1].relative_to(root)),
+            )
+        if totals["bytes"] >= ARCHIVE_CLEANUP_MAX_BYTES:
+            break
     return totals
 
 

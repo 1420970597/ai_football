@@ -419,11 +419,17 @@ class ArchiveTests(unittest.TestCase):
         with sqlite3.connect(source) as db:
             db.execute("create table decisions (id integer)")
             db.execute("insert into decisions values (1)")
-        backups = backup_databases(self.root)
+        # The host running the test suite may itself be under disk pressure;
+        # this test exercises backup cadence, not the global pressure policy.
+        with patch.object(archive_service, "disk_pressure",
+                          return_value={"pause_optional_writes": False}):
+            backups = backup_databases(self.root)
         self.assertEqual(len(backups), 1)
         record_database_backups(self.root, backups)
         backups[0].unlink()
-        self.assertEqual(backup_databases(self.root), [])
+        with patch.object(archive_service, "disk_pressure",
+                          return_value={"pause_optional_writes": False}):
+            self.assertEqual(backup_databases(self.root), [])
 
         repair = self.root / "_archive" / "repairs" / "task42" / "catalog.sqlite3"
         repair.parent.mkdir(parents=True)
@@ -431,3 +437,18 @@ class ArchiveTests(unittest.TestCase):
         paths = list(data_files(self.root))
         self.assertIn(repair, paths)
         self.assertTrue(cleanable(self.root, repair))
+
+    def test_catalog_cleanup_prioritizes_largest_files_and_honors_budget(self):
+        paths = [
+            self.source("snapshots/small.json", b"1"),
+            self.source("snapshots/medium.json", b"222"),
+            self.source("snapshots/large.json", b"33333"),
+        ]
+        self.archive.migrate(paths, cleanup=False)
+        with patch.object(archive_service, "ARCHIVE_CLEANUP_MAX_BYTES", 8):
+            cleaned = archive_service._cleanup_catalogued(self.root, self.archive)
+
+        self.assertEqual(cleaned, {"files": 2, "bytes": 8})
+        self.assertFalse(paths[2].exists())
+        self.assertFalse(paths[1].exists())
+        self.assertTrue(paths[0].exists())
