@@ -83,9 +83,9 @@ docker run --name ai-football-v2-android-verify --cpus=1 --memory=1536m \
 
 独立入口 `./android/build-candidate.sh` 已完整执行成功，退出码 0（Gradle 2 分 35 秒），没有依赖临时 commit 的依赖缓存镜像。17 项单元/TLS 网络测试零失败、零跳过，Lint 0 错误。输入只挂本项目 Android 及测试目录，容器内复制冻结后再运行，输出源文件清单、父提交与脏树状态，证明此次源码尚未正式提交，不能冒称与已发布提交一致。
 
-入口输出为当前开发候选：
+入口输出为当前开发候选（提交 `defc97a`，Android 测试子树干净）：
 
-- 开发 APK：`233672fe57d67da7695290bd05b2b73b8637a383e5aff52f6051c323927de975`。
+- 开发 APK：`b58477e90e72fcd0fc78c57392552a526d145c7b91d442ec6897498fef0c6b0b`。
 - 未签名发布 APK：`b7e9b446432b268a4a174281a1edaea7aac0c7c62152faddd8ac03ff5d1978db`（与 sealed 轮完全相同）。
 - 开发签名 SHA-256：`b4bc55064651a417411a4dbb586442b7e1c2a480c1105f36a3ed7f6336019c73`，仅临时 Debug 身份。临时构建容器每次生成独立 Debug 签名，因此不同构建的开发包不能承诺直接覆盖升级；正式签名和升级连续性仍未配置，未伪造签名密钥。
 
