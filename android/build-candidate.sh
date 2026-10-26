@@ -39,6 +39,7 @@ docker run --rm --cpus=0.5 --memory=256m -v "$output_dir:/artifacts:ro" \
   --entrypoint sh ai-football-android-toolchain:v2.0.0-dev -c '
     set -eu
     apksigner verify --verbose --print-certs /artifacts/ballnews-2.0.0-dev-debug.apk
+    aapt dump badging /artifacts/ballnews-2.0.0-dev-debug.apk
     aapt dump badging /artifacts/ballnews-2.0.0-dev-unsigned.apk
     sha256sum /artifacts/ballnews-2.0.0-dev-debug.apk /artifacts/ballnews-2.0.0-dev-unsigned.apk
   ' > "$output_dir/package-verification.txt"

@@ -95,3 +95,7 @@ docker run --name ai-football-v2-android-verify --cpus=1 --memory=1536m \
 - [系统窗口原始 XML](../../reports/android-device/blocked-system-ui-anr.xml)
 
 设备样本证书与账号只存在任务容器，生产 APK 继续只信任系统 CA；没有放宽证书规则。由于系统 ANR，尚未执行成功的项目包括：实际原生配对、WebView 登录阅读、会话过期、断网恢复、更换服务、注销本机登录、旋转和大字号。`tests/android/device_smoke.py` 与本地 TLS 样本已准备，但只能将对应场景标为待设备验收，不应勾选 P36-07 或 P37-06。测试模拟器已停止以释放资源，后续需要具备足够资源/加速的模拟器或受控真机继续。
+
+## 候选包元数据策略（2026-10-26）
+
+`infra/release/manifest.py` 现在从 `aapt dump badging` 输出中选择 release 变体，严格要求包名 `com.aifootball.platform`、版本码 `20000`、版本名 `2.0.0-dev`；必须包含 `INTERNET` 和 `ACCESS_NETWORK_STATE`，拒绝读取/写入外部存储及读取电话状态权限。候选入口同时对 debug 和 unsigned 包输出 aapt 信息，并保留 apksigner v2、父提交、脏树状态和 SHA-256。该策略不等于正式签名或设备升级验收。

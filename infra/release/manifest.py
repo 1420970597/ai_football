@@ -10,6 +10,17 @@ import re
 
 
 DEVELOPMENT_VERSION = "2.0.0-dev"
+ANDROID_APPLICATION_ID = "com.aifootball.platform"
+ANDROID_VERSION_CODE = "20000"
+REQUIRED_ANDROID_PERMISSIONS = {
+    "android.permission.INTERNET",
+    "android.permission.ACCESS_NETWORK_STATE",
+}
+FORBIDDEN_ANDROID_PERMISSIONS = {
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+    "android.permission.READ_PHONE_STATE",
+}
 COMPONENT_SERVICES = {
     "api": ("api", "migrate", "review-worker"), "collector": ("collector",),
     "executor": ("executor",), "mcp": ("hermes-mcp",), "web": ("web",),
@@ -62,9 +73,7 @@ def make_manifest(root: Path, commit: str, images: dict, artifacts: Path) -> dic
     if parent != commit or dirty:
         raise ValueError("APKs must be built from the exact clean release source commit")
     package = (artifacts / 'package-verification.txt').read_text()
-    if (f"versionName='{DEVELOPMENT_VERSION}'" not in package or 'CN=Android Debug' not in package
-            or 'Verified using v2 scheme (APK Signature Scheme v2): true' not in package):
-        raise ValueError('development package version or signing verification is missing')
+    _validate_android_package(package)
     config_paths = ['integrations/hermes/config.yaml', 'integrations/hermes/AGENTS.md',
                     'integrations/hermes/runner.py', 'integrations/hermes/skills/expert-review/SKILL.md']
     configuration = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in config_paths}
@@ -75,6 +84,26 @@ def make_manifest(root: Path, commit: str, images: dict, artifacts: Path) -> dic
             "hermes": "nousresearch/hermes-agent@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",
             "limits": ["Real providers and production deployment remain unverified.",
                        "Debug and unsigned APKs are not production signing identities."]}
+
+
+def _validate_android_package(output: str) -> None:
+    """Validate aapt metadata without trusting a filename or Gradle source alone."""
+    expected = (f"name='{ANDROID_APPLICATION_ID}'", f"versionCode='{ANDROID_VERSION_CODE}'",
+                f"versionName='{DEVELOPMENT_VERSION}'")
+    package_line = next((line for line in output.splitlines()
+                         if line.startswith("package: ") and all(item in line for item in expected)), "")
+    if not package_line or any(item not in package_line for item in expected):
+        raise ValueError("Android package id, version code or version name is invalid")
+    permissions = {line.split("name='", 1)[1].split("'", 1)[0] for line in output.splitlines()
+                   if line.startswith("uses-permission: name='")}
+    missing = REQUIRED_ANDROID_PERMISSIONS - permissions
+    forbidden = FORBIDDEN_ANDROID_PERMISSIONS & permissions
+    if missing:
+        raise ValueError("Android required permissions are missing")
+    if forbidden:
+        raise ValueError("Android package requests forbidden permissions")
+    if "CN=Android Debug" not in output or "Verified using v2 scheme (APK Signature Scheme v2): true" not in output:
+        raise ValueError("development package signing verification is missing")
 
 
 def main() -> None:

@@ -16,7 +16,11 @@ class ReleaseManifestTests(unittest.TestCase):
             (artifacts / f"ballnews-2.0.0-dev-{kind}.apk").write_bytes(b"explicit test artifact")
         (artifacts / "source-parent-commit.txt").write_text("a" * 40)
         (artifacts / "source-worktree-status.txt").write_text("")
-        (artifacts / 'package-verification.txt').write_text("versionName='2.0.0-dev'\nCN=Android Debug\nVerified using v2 scheme (APK Signature Scheme v2): true")
+        (artifacts / 'package-verification.txt').write_text(
+            "package: name='com.aifootball.platform' versionCode='20000' versionName='2.0.0-dev'\n"
+            "uses-permission: name='android.permission.INTERNET'\n"
+            "uses-permission: name='android.permission.ACCESS_NETWORK_STATE'\n"
+            "CN=Android Debug\nVerified using v2 scheme (APK Signature Scheme v2): true")
         for name in ('config.yaml', 'AGENTS.md', 'runner.py', 'skills/expert-review/SKILL.md'):
             path = root / 'integrations/hermes' / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,6 +56,19 @@ class ReleaseManifestTests(unittest.TestCase):
             artifacts, images = self.fixture(root)
             file = artifacts / 'package-verification.txt'
             file.write_text(file.read_text().replace('2.0.0-dev', '1.0.0'))
+            with self.assertRaises(ValueError):
+                make_manifest(root, 'a' * 40, images, artifacts)
+
+    def test_package_identity_and_permission_policy_are_enforced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts, images = self.fixture(root)
+            package = artifacts / 'package-verification.txt'
+            package.write_text(package.read_text().replace("com.aifootball.platform", "com.example.wrong"))
+            with self.assertRaises(ValueError):
+                make_manifest(root, 'a' * 40, images, artifacts)
+            package.write_text(package.read_text().replace("com.example.wrong", "com.aifootball.platform") +
+                               "\nuses-permission: name='android.permission.READ_PHONE_STATE'")
             with self.assertRaises(ValueError):
                 make_manifest(root, 'a' * 40, images, artifacts)
 
