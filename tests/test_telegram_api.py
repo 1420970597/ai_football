@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import os
 from types import SimpleNamespace
 import unittest
@@ -11,7 +12,7 @@ from fastapi import FastAPI
 import httpx
 
 from app import auth, database
-from app.routes import telegram
+from app.routes import internal, telegram
 from app.security import decrypt_secret, token_hash
 
 
@@ -28,6 +29,8 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.pool = await database.open_pool(SimpleNamespace(database_url=url), migrate=True)
         self.app = FastAPI()
         self.app.state.settings = SimpleNamespace(collector_token="test-collector-token", encryption_key=bytes(range(32)))
+        self.app.state.decrypt_secret = lambda value: decrypt_secret(bytes(range(32)), value)
+        self.app.include_router(internal.router)
         self.app.include_router(telegram.router)
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://testserver",
                                         headers={"Authorization": "Bearer test-collector-token"})
@@ -207,6 +210,10 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session, decrypted["telegram_session"])
         self.assertNotIn("must-not-save", decrypted["telegram_account"])
         self.assertNotIn(session, str(rows))
+        config = await self.client.get("/internal/collector/config")
+        self.assertEqual(200, config.status_code, config.text)
+        self.assertEqual({"id": "1234", "display_name": "测试用户", "username": None},
+                         json.loads(config.json()["items"]["telegram_account"]))
 
     async def test_admin_password_proxy_does_not_save_password(self):
         await self.admin_client()

@@ -18,7 +18,7 @@ async def collector_config(request: Request):
         "SELECT setting_key,encrypted_value FROM v2_admin_settings "
         "WHERE setting_key = ANY($1::text[])",
         ["leyu_api_base", "leyu_api_token", "leyu_request_id", "telegram_api_id", "telegram_api_hash", "telegram_session",
-         "telegram_source_enabled", "telegram_monitored_chats"],
+         "telegram_account", "telegram_source_enabled", "telegram_monitored_chats"],
     )
     decrypt = request.app.state.decrypt_secret
     result: dict[str, str] = {}

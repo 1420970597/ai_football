@@ -1,6 +1,7 @@
 import asyncio
 import copy
 from datetime import datetime, timedelta, timezone
+import json
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -400,6 +401,55 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
             await self.collector.sync_once()
         self.assertEqual("authorized", self.collector.auth_state["state"])
         self.assertEqual(1, len(self.backend.saved_sessions))
+
+    async def test_revoked_saved_session_clears_identity_and_waits_for_config_change(self):
+        self.collector.config["telegram_account"] = json.dumps({"id": "1234", "display_name": "旧账号"})
+        self.client.authorized = False
+        self.assertFalse(await self.collector.connect())
+        self.assertEqual("session_invalid", self.collector.auth_state["state"])
+        self.assertIsNone(self.collector.account)
+        status = await self.collector.control("/status", {})
+        self.assertFalse(status["authorized"])
+        self.assertIsNone(status["account"])
+        self.assertFalse(await self.collector.connect())
+        self.assertEqual(1, len(self.created))
+
+        self.client.authorized = True
+        await self.collector.apply_config(CONFIG | {"telegram_session": "replacement-session-only",
+                                                    "telegram_account": json.dumps({"id": "5678", "display_name": "新账号"})})
+        self.assertTrue(await self.collector.connect())
+        self.assertEqual("5678", self.collector.account["id"])
+        self.assertEqual("authorized", self.collector.auth_state["state"])
+
+    async def test_connected_session_revocation_drops_client_and_account(self):
+        self.collector.config["telegram_account"] = json.dumps({"id": "1234", "display_name": "旧账号"})
+        self.assertTrue(await self.collector.connect())
+        self.assertIs(self.client, self.collector.client)
+        self.client.authorized = False
+        self.assertFalse(await self.collector.connect())
+        self.assertIsNone(self.collector.client)
+        self.assertIsNone(self.collector.account)
+        self.assertEqual("session_invalid", self.collector.auth_state["state"])
+        self.assertEqual(1, len(self.created))
+
+    async def test_saved_session_and_account_survive_collector_restart(self):
+        self.client.qr = QR(self.client, immediate=True)
+        with patch("collector.telegram.StringSession.save", return_value="test-session-only"):
+            await self.collector.control("/auth/qr", {})
+            await asyncio.sleep(0.01)
+        saved_session, saved_account = self.backend.saved_sessions[0]
+        restored_client = Client()
+        restored = TelegramCollector(CONFIG | {"telegram_session": saved_session,
+                                                "telegram_account": json.dumps(saved_account)},
+                                     backend=self.backend, client_factory=lambda *args: restored_client)
+        try:
+            self.assertTrue(await restored.connect())
+            status = await restored.control("/status", {})
+            self.assertTrue(status["authorized"])
+            self.assertEqual("1234", status["account"]["id"])
+            self.assertEqual("authorized", status["auth"]["state"])
+        finally:
+            await restored.disconnect()
 
 
 if __name__ == "__main__":

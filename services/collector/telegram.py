@@ -93,6 +93,29 @@ class TelegramCollector:
         self.auth_state: dict[str, Any] = {"state": "idle"}
         self.auth_deadline = 0.0
         self.account = None
+        self.invalid_session_fingerprint = None
+
+    @staticmethod
+    def _saved_account(config):
+        try:
+            account = json.loads(str(config.get("telegram_account", "")))
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(account, dict) or not account.get("id"):
+            return None
+        return {key: account.get(key) for key in ("id", "display_name", "username")}
+
+    @staticmethod
+    def _session_fingerprint(session):
+        return hashlib.sha256(session.encode("utf-8")).digest()
+
+    async def _mark_session_invalid(self, client, fingerprint):
+        await client.disconnect()
+        if self.client is client:
+            self.client = None
+        self.account = None
+        self.invalid_session_fingerprint = fingerprint
+        self.auth_state = {"state": "session_invalid"}
 
     def _new_client(self, session: str):
         api_id = config_int(self.config.get("telegram_api_id", ""))
@@ -105,20 +128,32 @@ class TelegramCollector:
         if self.client:
             if not self.client.is_connected():
                 await self.client.connect()
-            return bool(await self.client.is_user_authorized())
+            if not await self.client.is_user_authorized():
+                session = str(self.config.get("telegram_session", "")).strip()
+                await self._mark_session_invalid(self.client, self._session_fingerprint(session))
+                return False
+            self.account = self._saved_account(self.config)
+            self.auth_state = {"state": "authorized", "account": self.account} if self.account else {"state": "authorized"}
+            return True
         session = str(self.config.get("telegram_session", "")).strip()
         if not session:
+            return False
+        fingerprint = self._session_fingerprint(session)
+        if self.invalid_session_fingerprint == fingerprint:
             return False
         candidate = self._new_client(session)
         try:
             await candidate.connect()
             if not await candidate.is_user_authorized():
-                await candidate.disconnect()
+                await self._mark_session_invalid(candidate, fingerprint)
                 return False
         except BaseException:
             await candidate.disconnect()
             raise
         self.client = candidate
+        self.account = self._saved_account(self.config)
+        self.auth_state = {"state": "authorized", "account": self.account} if self.account else {"state": "authorized"}
+        self.invalid_session_fingerprint = None
         self._handlers(candidate)
         return True
 
@@ -134,6 +169,10 @@ class TelegramCollector:
         if changed and self.client:
             await self.client.disconnect()
             self.client = None
+        if changed:
+            self.account = None
+            self.invalid_session_fingerprint = None
+            self.auth_state = {"state": "idle" if str(config.get("telegram_session", "")).strip() else "disconnected"}
         self.config = dict(config)
 
     async def disconnect(self):
@@ -503,8 +542,10 @@ class TelegramCollector:
             await self.client.disconnect()
         self.client, self.auth_client = self.auth_client, None
         self.config["telegram_session"] = session
+        self.config["telegram_account"] = json.dumps(info, ensure_ascii=False)
         self.config["telegram_source_enabled"] = "true"
         self.account = info
+        self.invalid_session_fingerprint = None
         self._handlers(self.client)
         self.auth_state = {"state": "authorized", "attempt_id": self.auth_state.get("attempt_id"), "account": info}
 
@@ -551,6 +592,10 @@ class TelegramCollector:
                     self.client = None
             self.config["telegram_session"] = ""
             self.config["telegram_source_enabled"] = "false"
+            self.config["telegram_account"] = ""
+            self.account = None
+            self.invalid_session_fingerprint = None
+            self.auth_state = {"state": "disconnected"}
             return {"state": "disconnected"}
         if path in {"/dialogs", "/admins"}:
             try:
