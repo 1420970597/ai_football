@@ -8,6 +8,7 @@ import random
 import time
 import uuid
 
+import httpx
 from . import database
 from .config import load_settings
 from .hermes_client import delete_session, review_message
@@ -33,6 +34,31 @@ ELIGIBLE_MESSAGE = (
 
 class LeaseLost(RuntimeError):
     pass
+
+
+def failure_category(exc: BaseException) -> tuple[str, bool]:
+    """Return a bounded, non-sensitive failure class and retry policy."""
+    if isinstance(exc, LeaseLost):
+        return "lease_lost", True
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)):
+        return "timeout", True
+    if isinstance(exc, httpx.NetworkError):
+        return "network", True
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in {401, 403}:
+            return "provider_auth", False
+        if status in {408, 425, 429} or status >= 500:
+            return "provider_transient", True
+        return "provider_rejected", False
+    message = str(exc).lower()
+    if "unsupported telegram image" in message or "image type" in message or "image total bytes" in message:
+        return "visual_input_invalid", False
+    if "content_filter" in message or "did not finish" in message:
+        return "model_rejected", False
+    if "no assistant message" in message or "unsupported result shape" in message:
+        return "model_invalid_response", True
+    return "internal", True
 
 
 async def _scheduler_lock(conn):
@@ -118,7 +144,7 @@ async def _claim_job(pool):
             )
             await conn.execute("DELETE FROM v2_match_searches WHERE job_id=$1", row["id"])
             message = await conn.fetchrow(
-                "SELECT m.id,m.raw_text,m.media_objects,m.posted_at,m.revision,m.reply_context,e.display_nickname,"
+                "SELECT m.id,m.raw_text,m.media_objects,m.posted_at,m.revision,m.reply_context,m.created_at,e.display_nickname,"
                 "s.display_name AS source_name,"
                 "COALESCE((SELECT r.raw_text FROM v2_expert_messages r WHERE r.source_id=m.source_id "
                 "AND r.platform_message_id=m.reply_to_platform_message_id ORDER BY r.revision DESC LIMIT 1),m.reply_context->>'raw_text') AS reply_text "
@@ -127,7 +153,8 @@ async def _claim_job(pool):
             )
             await trace(conn, row["id"], "attempt_claimed", {"attempt_id": str(attempt), "attempt": row["attempts"] + 1,
                 'source_id': str(pair['source_id']), 'expert_id': str(pair['expert_id']), 'concurrency_limit': pair['concurrency_limit'],
-                'active_expert_leases_before': pair['active_leases'], 'scheduler_turn': turn, 'pair_probes': probe + 1})
+                'active_expert_leases_before': pair['active_leases'], 'scheduler_turn': turn, 'pair_probes': probe + 1,
+                'queue_wait_ms': max(0, round((datetime.now(timezone.utc) - message['created_at']).total_seconds() * 1000, 3))})
             return {"id": row["id"], "attempt_id": attempt, "attempts": row["attempts"] + 1, "message": dict(message),
                     'source_id': pair['source_id'], 'expert_id': pair['expert_id'], 'lease_until': lease_until}
 
@@ -192,6 +219,7 @@ async def keep_lease(pool, job: dict) -> None:
 
 async def process_job(pool, settings, job: dict) -> None:
     review_task = lease_task = None
+    started = time.monotonic()
     try:
         await _add_trace(pool, job, "hermes_request", {
             "message_id": str(job["message"]["id"]), "raw_text": job["message"]["raw_text"],
@@ -207,7 +235,8 @@ async def process_job(pool, settings, job: dict) -> None:
             await lease_task
             raise LeaseLost("heartbeat ended")
         _, summary = await review_task
-        await _add_trace(pool, job, "hermes_result", summary)
+        await _add_trace(pool, job, "hermes_result", {**summary,
+            "model_elapsed_ms": round((time.monotonic() - started) * 1000, 3)})
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await active_job(conn, job["id"], job["attempt_id"])
@@ -222,9 +251,19 @@ async def process_job(pool, settings, job: dict) -> None:
         raise
     except Exception as exc:
         category = type(exc).__name__
+        failure, retryable = failure_category(exc)
         log.warning("review failed review_id=%s attempt_id=%s category=%s", job["id"], job["attempt_id"], category)
-        exhausted = job["attempts"] >= MAX_ATTEMPTS
+        exhausted = job["attempts"] >= MAX_ATTEMPTS or not retryable
         delay = 0 if exhausted else min(300, 5 * 2 ** (job["attempts"] - 1)) + random.randint(0, 3)
+        try:
+            await _add_trace(pool, job, "review_failure", {
+                "failure_category": failure, "retryable": retryable, "exception_type": category,
+                "attempt": job["attempts"], "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+            })
+        except Exception:
+            # A lost lease or unavailable database must not mask the original
+            # bounded failure classification or prevent cleanup.
+            pass
         await pool.execute(
             "UPDATE v2_analysis_jobs SET state=$3,available_at=now()+($4::int*interval '1 second'),"
             "lease_until=NULL,last_error=$5,updated_at=now() WHERE id=$1 AND attempt_id=$2 AND state='running'",

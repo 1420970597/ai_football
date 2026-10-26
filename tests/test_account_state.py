@@ -244,6 +244,26 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
             await self.reserve(s2)
         self.assertEqual(Decimal('2'),await self.pool.fetchval('SELECT sum(reserved_stake) FROM v2_bet_orders'))
 
+    async def test_many_distinct_recommendations_never_exceed_limits_and_stop_is_available(self):
+        await self.healthy()
+        signals, experts = [], []
+        for _ in range(6):
+            signal, expert, _, _ = await self.signal()
+            signals.append(signal)
+            experts.append(expert)
+        await self.enable(experts, daily='4', exposure='4', tz='UTC')
+        results = await asyncio.gather(*(self.reserve(signal) for signal in signals), return_exceptions=True)
+        successful = [result for result in results if not isinstance(result, Exception)]
+        rejected = [result for result in results if isinstance(result, Exception)]
+        self.assertEqual(2, len(successful))
+        self.assertEqual(4, len(rejected))
+        self.assertEqual(2, await self.pool.fetchval("SELECT count(*) FROM v2_bet_orders WHERE state='pending'"))
+        self.assertEqual(Decimal('4'), await self.pool.fetchval('SELECT sum(reserved_stake) FROM v2_bet_orders'))
+        stopped = await self.api.post('/api/v1/accounts/leyu/emergency-stop')
+        self.assertEqual(200, stopped.status_code, stopped.text)
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_bet_orders WHERE state='pending'"))
+        self.assertEqual(Decimal('0'), await self.pool.fetchval('SELECT coalesce(sum(reserved_stake),0) FROM v2_bet_orders'))
+
     async def test_daily_calendar_boundaries_respect_dst_and_reject_naive_time(self):
         async with self.pool.acquire() as conn:
             for instant,expected_hours in [('2026-03-29T12:00:00+00:00',23),('2026-10-25T12:00:00+00:00',25)]:

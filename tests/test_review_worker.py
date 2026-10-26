@@ -107,7 +107,25 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("retry", row["state"])
         self.assertEqual("TimeoutError", row["last_error"])
         self.assertIsNone(row["lease_until"])
+        trace_row = await self.pool.fetchrow(
+            "SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_failure'",
+            self.job,
+        )
+        self.assertEqual("timeout", trace_row["payload"]["failure_category"])
+        self.assertTrue(trace_row["payload"]["retryable"])
         cleanup.assert_awaited_once()
+
+    async def test_permanent_visual_failure_enters_dead_letter_without_retry(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        with patch.object(worker, "review_message", AsyncMock(side_effect=RuntimeError("unsupported Telegram image media type"))), patch.object(worker, "delete_session", AsyncMock()):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model="hermes-agent"), job)
+        row = await self.pool.fetchrow("SELECT state,last_error FROM v2_analysis_jobs WHERE id=$1", self.job)
+        self.assertEqual("failed", row["state"])
+        self.assertEqual("RuntimeError", row["last_error"])
+        failure = await self.pool.fetchrow("SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_failure'", self.job)
+        self.assertEqual("visual_input_invalid", failure["payload"]["failure_category"])
+        self.assertFalse(failure["payload"]["retryable"])
 
     async def test_heartbeat_stops_when_attempt_is_replaced(self):
         await self.make_queued()
