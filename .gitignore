@@ -16,3 +16,4 @@ build/
 output/
 *.log
 .playwright-cli/
+.runtime/

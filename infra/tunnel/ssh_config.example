@@ -1,0 +1,9 @@
+Host storage-vps
+  HostName storage.example.invalid
+  User replace-with-dedicated-forwarding-user
+  Port 22
+  IdentityFile /run/storage/id_ed25519
+  IdentitiesOnly yes
+  UserKnownHostsFile /run/storage/known_hosts
+  StrictHostKeyChecking yes
+  BatchMode yes
