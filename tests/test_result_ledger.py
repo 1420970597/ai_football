@@ -29,7 +29,7 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
             await apply_migrations(conn)
         database.pool = self.pool
         self.app = FastAPI()
-        self.app.state.settings = SimpleNamespace(collector_token='isolated-collector', quote_max_age_seconds=60)
+        self.app.state.settings = SimpleNamespace(collector_token='isolated-collector', quote_max_age_seconds=60, session_secret=b'k'*32)
         for router in (results.router, public.router, expert_content.router):
             self.app.include_router(router)
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url='http://test')
@@ -85,6 +85,20 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.get(f'/api/v1/public/messages/{self.message}')
         self.assertEqual(200, response.status_code, response.text)
         self.assertEqual(quote_id, response.json()['signals'][0]['quote_id'])
+
+    async def test_public_fixture_pagination_rejects_changed_filters_and_tampering(self):
+        await self.pool.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) "
+                                "VALUES('second','second','football','League','Gamma','Delta',$1,'scheduled')", self.now)
+        first = await self.client.get('/api/v1/public/matches', params={'page_size':1})
+        cursor = first.json()['next_cursor']
+        self.assertTrue(cursor)
+        second = await self.client.get('/api/v1/public/matches', params={'page_size':1, 'cursor':cursor})
+        self.assertEqual(200, second.status_code, second.text)
+        self.assertNotEqual(first.json()['items'][0]['id'], second.json()['items'][0]['id'])
+        changed = await self.client.get('/api/v1/public/matches', params={'q':'Alpha', 'cursor':cursor})
+        self.assertEqual(400, changed.status_code)
+        tampered = await self.client.get('/api/v1/public/matches', params={'cursor':'AAAA'+cursor[4:]})
+        self.assertEqual(400, tampered.status_code)
 
     async def test_provisional_retraction_clears_profit_but_keeps_history(self):
         await self.signal()

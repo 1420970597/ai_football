@@ -60,7 +60,7 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def admin_client(self):
         await self.pool.execute("INSERT INTO v2_users(id,email,display_name,password_hash,role) VALUES($1,'test-admin@example.invalid','管理员','unused','admin')", self.admin_id)
-        await self.pool.execute("INSERT INTO v2_sessions(token_hash,csrf_hash,user_id,session_kind,expires_at) VALUES($1,$2,$3,'admin',now()+interval '1 hour')",
+        await self.pool.execute("INSERT INTO v2_sessions(token_hash,csrf_hash,user_id,session_kind,expires_at,reauthenticated_at) VALUES($1,$2,$3,'admin',now()+interval '1 hour',now())",
                                 token_hash("test-admin-session"), token_hash("test-admin-csrf"), self.admin_id)
         self.client.headers.pop("Authorization", None)
         self.client.cookies.set(auth.ADMIN_COOKIE, "test-admin-session")

@@ -65,14 +65,15 @@ async def status(request: Request):
     identity = await require_admin(request)
     pool = database.current_pool()
     db_ok = await pool.fetchval("SELECT 1") == 1
-    row = await pool.fetchrow("SELECT count(*) AS queued FROM v2_analysis_jobs WHERE state IN ('queued','retry')")
+    row = await pool.fetchrow("SELECT count(*) AS queued FROM (SELECT 1 FROM v2_analysis_jobs WHERE state IN ('queued','retry') LIMIT 5001) bounded")
     sources = await pool.fetchval("SELECT count(*) FROM v2_expert_sources WHERE enabled")
     return {
         "database": "healthy" if db_ok else "unavailable",
         "hermes": await request.app.state.hermes_probe.check(),
         "hermes_provider": "unverified",
         "telegram_sources": sources,
-        "review_queue": row["queued"],
+        "review_queue": min(row["queued"], 5000),
+        "review_queue_capped": row["queued"] > 5000,
         "actor": identity["email"],
     }
 

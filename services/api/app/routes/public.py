@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -9,6 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from .. import database
+from ..pagination import decode_cursor, encode_cursor
 from ..auth import get_identity
 from ..membership import has_entitlement
 from ..expert_statistics import DEFINITIONS, metrics, summaries, METRIC_SQL
@@ -23,23 +22,14 @@ async def client_info():
             'min_android_version_code': 1, 'capabilities': ['fixtures', 'expert_messages', 'membership', 'private_accounts']}
 
 
-def _encode_cursor(when: datetime, fixture_id: str) -> str:
-    raw = f"{when.isoformat()}\n{fixture_id}".encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+def _encode_cursor(when: datetime, identifier: str, request: Request, scope) -> str:
+    return encode_cursor(request.app.state.settings.session_secret, scope, when, identifier)
 
 
-def _decode_cursor(value: str | None) -> tuple[datetime, str] | None:
+def _decode_cursor(value: str | None, request: Request, scope) -> tuple[datetime, str] | None:
     if not value:
         return None
-    try:
-        raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode()
-        when, fixture_id = raw.split("\n", 1)
-        parsed = datetime.fromisoformat(when)
-        if parsed.tzinfo is None or not fixture_id or len(fixture_id) > 160:
-            raise ValueError('invalid cursor')
-        return parsed, fixture_id
-    except (ValueError, UnicodeDecodeError, binascii.Error):
-        raise HTTPException(status_code=400, detail="分页游标无效") from None
+    return decode_cursor(request.app.state.settings.session_secret, scope, value)
 
 
 async def _has_entitlement(request: Request, key: str) -> bool:
@@ -98,7 +88,9 @@ async def matches(
         start = datetime.combine(match_date, time.min, zone).astimezone(timezone.utc)
         end = datetime.combine(match_date + timedelta(days=1), time.min, zone).astimezone(timezone.utc)
         clauses.append(f"kickoff_at >= {bind(start)} AND kickoff_at < {bind(end)}")
-    decoded = _decode_cursor(cursor)
+    cursor_scope = {'kind': 'matches', 'phase': phase, 'sport': sport, 'league': league,
+                    'league_ids': sorted(set(league_ids or [])), 'q': q, 'date': match_date, 'tz': tz}
+    decoded = _decode_cursor(cursor, request, cursor_scope)
     if decoded:
         clauses.append(f"(kickoff_at,id) > ({bind(decoded[0])},{bind(decoded[1])})")
     where = " AND ".join(clauses)
@@ -128,7 +120,7 @@ async def matches(
         item['quote_fresh'] = any(q['fresh'] for q in item['markets']) and item['phase'] in {'scheduled','live'}
         item['markets_are_summary'] = True
         output.append(item)
-    next_cursor = _encode_cursor(items[-1]["kickoff_at"], items[-1]["id"]) if has_more and items else None
+    next_cursor = _encode_cursor(items[-1]["kickoff_at"], items[-1]["id"], request, cursor_scope) if has_more and items else None
     return {"items": output, "next_cursor": next_cursor, "page_size": page_size, "server_time": datetime.now(timezone.utc)}
 
 
@@ -178,7 +170,7 @@ async def signals(request: Request, cursor: str | None = None, page_size: int = 
     cursor_clause = ""
     if cursor and full_history:
         try:
-            created_at, signal_id = _decode_cursor(cursor)
+            created_at, signal_id = _decode_cursor(cursor, request, {'kind': 'signals'})
         except HTTPException:
             raise
         args.extend((created_at, signal_id))
@@ -200,7 +192,7 @@ async def signals(request: Request, cursor: str | None = None, page_size: int = 
         for item in items:
             item.pop("raw_text", None)
             item.pop("confidence", None)
-    next_cursor = _encode_cursor(items[-1]["created_at"], str(items[-1]["id"])) if has_more and items and full_history else None
+    next_cursor = _encode_cursor(items[-1]["created_at"], str(items[-1]["id"]), request, {'kind': 'signals'}) if has_more and items and full_history else None
     return {"items": items, "next_cursor": next_cursor, "limited": not full_history, "signed_in": bool(identity)}
 
 

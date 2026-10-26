@@ -7,10 +7,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from . import auth, database
+from . import admin_mfa, auth, database, identity_lifecycle
 from .config import load_settings
 from .health import HermesProbe
-from .routes import accounts, admin, expert_content, internal, public, renewal, results, reviews, telegram
+from .routes import accounts, admin, admin_reviews, expert_content, internal, operations, public, renewal, results, reviews, telegram
 from .security import decrypt_secret
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -80,8 +80,12 @@ async def readyz():
 
 
 app.include_router(auth.router)
+app.include_router(identity_lifecycle.router)
+app.include_router(admin_mfa.router)
 app.include_router(public.router)
 app.include_router(admin.router)
+app.include_router(operations.router)
+app.include_router(admin_reviews.router)
 app.include_router(accounts.router)
 app.include_router(accounts.executor_router)
 app.include_router(internal.router)

@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from .. import account_jobs as jobs, database, orders
-from ..auth import _limit, audit, require_user
+from ..auth import _limit, audit, require_recent, require_user, verify_sensitive_session
 from ..membership import has_entitlement
 from ..review_state import authorize
 from ..security import encrypt_secret
@@ -112,6 +112,7 @@ async def get_leyu_account(request: Request):
 @router.put("/leyu")
 async def bind_leyu_account(body: LeyuBindingInput, request: Request):
     user = await require_user(request)
+    require_recent(user)
     await _limit(request,'account_bind',str(user['id']),maximum=6)
     username, label = body.username.strip(), body.account_label.strip()
     if not username or not label or any(char in username for char in "\r\n"):
@@ -120,8 +121,10 @@ async def bind_leyu_account(body: LeyuBindingInput, request: Request):
     encrypted = encrypt_secret(settings.encryption_key, json.dumps({"username": username, "password": body.password, "device_uuid": uuid.uuid4().hex}, separators=(",", ":")))
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
+            await conn.fetchrow("SELECT id FROM v2_users WHERE id=$1 FOR UPDATE", user["id"])
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"user-account:{user['id']}")
             await conn.fetchrow('SELECT id FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE',user['id'])
+            await verify_sensitive_session(conn, user)
             await orders.protect_inflight_binding(conn,user['id'])
             try:
                 account = await conn.fetchrow("INSERT INTO v2_leyu_accounts(id,user_id,encrypted_credentials,account_label,provider_identity_hash) VALUES($1,$2,$3,$4,$5) "
@@ -178,13 +181,18 @@ async def verify_account(request: Request):
 @router.put("/leyu/auto-betting")
 async def configure_auto_betting(body: AutoBetInput, request: Request):
     user = await require_user(request)
+    if body.enabled:
+        require_recent(user)
     settings = request.app.state.settings
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
+            if body.enabled:
+                await conn.fetchrow("SELECT id FROM v2_users WHERE id=$1 FOR UPDATE", user["id"])
             account = await conn.fetchrow("SELECT * FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE", user["id"])
             if not body.enabled:
                 await disable_policy(conn, user["id"], "user_disabled")
                 return {"enabled": False, "emergency_stopped": True}
+            await verify_sensitive_session(conn, user)
             if body.confirmation_phrase != "I_UNDERSTAND" or not body.allowed_experts:
                 raise HTTPException(422, "需要明确本人许可并选择允许的专家")
             if min(body.stake_per_order, body.max_per_order, body.daily_limit, body.open_exposure_limit) <= 0 or body.stake_per_order > body.max_per_order or body.max_per_order > min(body.daily_limit, body.open_exposure_limit):
@@ -269,6 +277,10 @@ async def dispatch(request: Request):
     settings = request.app.state.settings
     count = 0
     async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            for policy in await orders.invalid_policies(conn):
+                await disable_policy(conn, policy['user_id'], 'permission_invalidated')
+                await audit(conn, policy['user_id'], 'system', 'automatic_betting_suspended', 'betting_settings', str(policy['user_id']))
         if orders.live_enabled(settings):
             pairs = await conn.fetch("SELECT b.user_id,s.id AS signal_id FROM v2_user_bet_settings b JOIN v2_expert_signals s ON s.expert_id=ANY(b.allowed_experts) "
                 "WHERE b.auto_enabled AND NOT b.emergency_stopped AND s.created_at>now()-interval '5 minutes' AND s.outcome='pending' "

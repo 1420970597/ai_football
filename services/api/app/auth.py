@@ -124,13 +124,15 @@ async def bootstrap_admin(pool, settings) -> None:
             await audit(conn, admin_id, "system", "bootstrap_admin_created", "user", str(admin_id))
 
 
-async def _create_session(request: Request, response: Response, user, session_kind: str, conn) -> dict:
+async def _create_session(request: Request, response: Response, user, session_kind: str, conn, *,
+                          verified_now: bool = True, reauthenticated_at: datetime | None = None) -> dict:
     settings = request.app.state.settings
     token, csrf = new_token(), new_token()
-    expires_at = datetime.now(timezone.utc) + (timedelta(hours=6) if session_kind == "admin" else timedelta(days=14))
+    expires_at = datetime.now(timezone.utc) + (timedelta(hours=1) if session_kind == "admin" else timedelta(days=14))
     await conn.execute(
-        "INSERT INTO v2_sessions(token_hash,csrf_hash,user_id,session_kind,expires_at) VALUES($1,$2,$3,$4,$5)",
+        "INSERT INTO v2_sessions(token_hash,csrf_hash,user_id,session_kind,expires_at,reauthenticated_at) VALUES($1,$2,$3,$4,$5,$6)",
         token_hash(token), token_hash(csrf), user["id"], session_kind, expires_at,
+        datetime.now(timezone.utc) if verified_now else reauthenticated_at,
     )
     session_cookie = ADMIN_COOKIE if session_kind == "admin" else USER_COOKIE
     csrf_cookie = ADMIN_CSRF_COOKIE if session_kind == "admin" else CSRF_COOKIE
@@ -164,9 +166,10 @@ async def get_identity(request: Request, required: bool = False, session_kind: s
             raise HTTPException(status_code=401, detail="需要登录")
         return None
     row = await database.current_pool().fetchrow(
-        "SELECT u.id,u.email,u.display_name,u.role,u.disabled_at,s.session_kind,s.csrf_hash,s.expires_at "
+        "SELECT u.id,u.email,u.display_name,u.role,u.disabled_at,u.closure_requested_at,s.session_kind,s.csrf_hash,s.expires_at,s.reauthenticated_at "
         "FROM v2_sessions s JOIN v2_users u ON u.id=s.user_id "
-        "WHERE s.token_hash=$1 AND s.expires_at>now()",
+        "WHERE s.token_hash=$1 AND s.expires_at>now() AND (s.session_kind<>'admin' OR "
+        "(s.last_seen_at>now()-interval '15 minutes' AND s.created_at>now()-interval '1 hour'))",
         token_hash(token),
     )
     if not row or row["disabled_at"] is not None:
@@ -184,15 +187,84 @@ async def get_identity(request: Request, required: bool = False, session_kind: s
             raise HTTPException(status_code=403, detail="CSRF 校验失败")
     identity = dict(row)
     identity["_token_hash"] = token_hash(token)
+    await database.current_pool().execute("UPDATE v2_sessions SET last_seen_at=now() WHERE token_hash=$1 AND last_seen_at<now()-interval '1 minute'", identity["_token_hash"])
     return identity
 
 
 async def require_user(request: Request) -> dict:
-    return await get_identity(request, required=True, session_kind="user")
+    identity = await get_identity(request, required=True, session_kind="user")
+    stopping = (request.url.path == "/api/v1/accounts/leyu/auto-betting" and request.method == "PUT"
+                and (await request.json()).get("enabled") is False)
+    if (identity["closure_requested_at"] is not None and request.method in WRITE_METHODS
+            and not stopping
+            and request.url.path not in {"/api/v1/auth/logout", "/api/v1/auth/logout-all", "/api/v1/auth/closure",
+                                         "/api/v1/auth/closure/cancel", "/api/v1/auth/reauthenticate",
+                                         "/api/v1/accounts/leyu/emergency-stop"}):
+        raise HTTPException(409, "账户正在注销核对中，仅可查看本人对账、停止投注或取消注销")
+    return identity
 
 
 async def require_admin(request: Request) -> dict:
-    return await get_identity(request, required=True, session_kind="admin")
+    identity = await get_identity(request, required=True, session_kind="admin")
+    if request.method in WRITE_METHODS and not request.url.path.endswith("/emergency-stop"):
+        require_recent(identity)
+    return identity
+
+
+def require_recent(identity: dict) -> None:
+    verified = identity.get("reauthenticated_at")
+    if verified is None or not (datetime.now(timezone.utc) - timedelta(minutes=5) < verified <= datetime.now(timezone.utc)):
+        raise HTTPException(403, detail={"code": "reauthentication_required", "session_kind": identity["session_kind"],
+                                         "message": "敏感操作需要再次验证当前凭据"})
+
+
+async def require_recent_user(request: Request) -> dict:
+    identity = await require_user(request)
+    require_recent(identity)
+    return identity
+
+
+async def verify_sensitive_admin_session(conn, identity: dict, *, require_fresh: bool = True):
+    # Recheck after acquiring the user lock: a request may have waited while
+    # another session rotated MFA or consumed a recovery code and revoked it.
+    # NO KEY UPDATE permits the audit actor FK check of concurrent logout.
+    user = await conn.fetchrow(
+        "SELECT id,email,totp_secret_ciphertext FROM v2_users "
+        "WHERE id=$1 AND role='admin' AND disabled_at IS NULL FOR NO KEY UPDATE", identity["id"],
+    )
+    if not user:
+        raise HTTPException(401, "管理身份已失效")
+    current = await conn.fetchrow(
+        "SELECT reauthenticated_at FROM v2_sessions WHERE token_hash=$1 AND user_id=$2 "
+        "AND session_kind='admin' AND expires_at>now() AND created_at>now()-interval '1 hour' "
+        "AND last_seen_at>now()-interval '15 minutes' FOR UPDATE", identity["_token_hash"], identity["id"],
+    )
+    if not current:
+        raise HTTPException(401, "管理会话已撤销或已过期")
+    if require_fresh:
+        require_recent({"reauthenticated_at": current["reauthenticated_at"], "session_kind": "admin"})
+    return user
+
+
+async def stop_betting_after_credential_change(conn, user_id, reason: str) -> None:
+    # The same account row serializes credential revocation with the executor's reservation/send checks.
+    from . import orders
+    await conn.fetchrow("SELECT id FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE", user_id)
+    await conn.execute("UPDATE v2_user_bet_settings SET auto_enabled=FALSE,emergency_stopped=TRUE,consent_account_id=NULL,consent_binding_revision=NULL,revision=revision+1,updated_at=now() WHERE user_id=$1", user_id)
+    await orders.cancel_unsent(conn, user_id, reason)
+
+
+async def verify_sensitive_session(conn, identity: dict) -> None:
+    current = await conn.fetchrow(
+        "SELECT s.reauthenticated_at,u.closure_requested_at FROM v2_sessions s JOIN v2_users u ON u.id=s.user_id "
+        "WHERE s.token_hash=$1 AND s.user_id=$2 AND s.session_kind='user' AND s.expires_at>now() AND u.disabled_at IS NULL",
+        identity.get("_token_hash", ""), identity["id"],
+    )
+    if not current:
+        raise HTTPException(401, "会话已经撤销，请重新登录")
+    if current["closure_requested_at"] is not None:
+        raise HTTPException(409, "账户正在注销核对中")
+    require_recent({"reauthenticated_at": current["reauthenticated_at"], "session_kind": "user"})
 
 
 @router.post("/auth/register", status_code=status.HTTP_201_CREATED)
@@ -240,6 +312,9 @@ async def login(body: LoginInput, request: Request, response: Response):
     user = {key: row[key] for key in ("id", "email", "display_name", "role")}
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
+            current = await conn.fetchrow("SELECT password_hash,disabled_at FROM v2_users WHERE id=$1 FOR UPDATE", row["id"])
+            if not current or current["disabled_at"] is not None or not hmac.compare_digest(current["password_hash"], row["password_hash"]):
+                raise HTTPException(401, "邮箱或密码无效")
             session = await _create_session(request, response, user, "user", conn)
     return {"user": user, **session}
 
@@ -267,8 +342,9 @@ async def admin_login(body: AdminLoginInput, request: Request, response: Respons
         async with conn.transaction():
             accepted = await conn.fetchval(
                 "UPDATE v2_users SET totp_last_step=$2 WHERE id=$1 "
-                "AND (totp_last_step IS NULL OR totp_last_step<$2) AND disabled_at IS NULL RETURNING id",
-                row["id"], step,
+                "AND (totp_last_step IS NULL OR totp_last_step<$2) AND disabled_at IS NULL AND password_hash=$3 "
+                "AND totp_secret_ciphertext=$4 RETURNING id",
+                row["id"], step, row["password_hash"], row["totp_secret_ciphertext"],
             )
             if not accepted:
                 raise HTTPException(status_code=401, detail="动态验证码无效或已使用")
@@ -280,7 +356,9 @@ async def _me(request: Request, kind: str):
     identity = await get_identity(request, required=True, session_kind=kind)
     membership = await get_membership(identity["id"]) if kind == "user" else None
     return {"user": {key: identity[key] for key in ("id", "email", "display_name", "role")},
-            "membership": membership, "session_kind": kind, "expires_at": identity["expires_at"]}
+            "membership": membership, "session_kind": kind, "expires_at": identity["expires_at"],
+            "reauthenticated_until": identity["reauthenticated_at"] + timedelta(minutes=5) if identity["reauthenticated_at"] else None,
+            "closure_requested_at": identity["closure_requested_at"]}
 
 
 @router.get("/auth/me")
@@ -336,7 +414,8 @@ async def refresh(request: Request, response: Response):
             removed = await conn.fetchval("DELETE FROM v2_sessions WHERE token_hash=$1 RETURNING token_hash", identity["_token_hash"])
             if not removed:
                 raise HTTPException(status_code=401, detail="会话已撤销")
-            result = await _create_session(request, response, identity, "user", conn)
+            result = await _create_session(request, response, identity, "user", conn,
+                                           verified_now=False, reauthenticated_at=identity["reauthenticated_at"])
     return result
 
 
@@ -368,7 +447,8 @@ async def change_password(body: PasswordInput, request: Request, response: Respo
             if not changed:
                 raise HTTPException(status_code=409, detail="凭据已经变更，请重新登录")
             await conn.execute("DELETE FROM v2_sessions WHERE user_id=$1", identity["id"])
+            await stop_betting_after_credential_change(conn, identity["id"], "platform_password_changed")
             await audit(conn, identity["id"], "user", "password_changed", "user", str(identity["id"]), _request_id(request))
     for name in (USER_COOKIE, CSRF_COOKIE):
         response.delete_cookie(name, path="/", secure=request.app.state.settings.cookie_secure, samesite="strict")
-    return {"ok": True, "reauthentication_required": True}
+    return {"ok": True, "reauthentication_required": True, "auto_betting": False}

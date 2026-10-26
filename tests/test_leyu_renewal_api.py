@@ -12,6 +12,7 @@ from fastapi import FastAPI
 import httpx
 
 from services.api.app import database
+from services.api.app.database import apply_migrations
 from services.api.app.routes import renewal
 from services.api.app.security import decrypt_secret
 
@@ -31,8 +32,7 @@ class RenewalAPITests(unittest.IsolatedAsyncioTestCase):
         self.pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4, init=init)
         root = Path(__file__).resolve().parents[1]
         async with self.pool.acquire() as conn:
-            await conn.execute((root / "services/api/migrations/001_core.sql").read_text())
-            await conn.execute((root / "services/api/migrations/005_leyu_renewal.sql").read_text())
+            await apply_migrations(conn, root / 'services/api/migrations')
             await conn.execute("TRUNCATE v2_renewal_accounts,v2_renewal_attempts,v2_admin_settings,v2_audit_log CASCADE")
             await conn.execute("UPDATE v2_configuration_revisions SET revision=1 WHERE namespace='leyu'")
         self.previous_pool = database.pool

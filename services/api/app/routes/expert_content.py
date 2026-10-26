@@ -84,7 +84,8 @@ def media_links(message: dict):
 async def expert_messages(expert_id: uuid.UUID, request: Request, cursor: str | None = Query(default=None, max_length=1000),
                           limit: int = Query(default=30, ge=1, le=100)):
     await require_history(request)
-    decoded = _decode_cursor(cursor)
+    cursor_scope = {'kind': 'expert_messages', 'expert_id': str(expert_id)}
+    decoded = _decode_cursor(cursor, request, cursor_scope)
     try:
         cursor_id = uuid.UUID(decoded[1]) if decoded else None
     except ValueError:
@@ -99,7 +100,7 @@ async def expert_messages(expert_id: uuid.UUID, request: Request, cursor: str | 
     )
     page = rows[:limit]
     return {'items': [media_links(dict(row)) for row in page],
-            'next_cursor': _encode_cursor(page[-1]['posted_at'], str(page[-1]['id'])) if len(rows)>limit and page else None}
+            'next_cursor': _encode_cursor(page[-1]['posted_at'], str(page[-1]['id']), request, cursor_scope) if len(rows)>limit and page else None}
 
 
 @router.get('/messages/{message_id}')

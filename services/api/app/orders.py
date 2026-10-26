@@ -27,6 +27,21 @@ async def global_enabled(conn, settings) -> bool:
         return False
 
 
+async def invalid_policies(conn):
+    """Select only invalid armed policies, locking in account then policy order."""
+    return await conn.fetch(
+        "SELECT a.user_id FROM v2_leyu_accounts a JOIN v2_users u ON u.id=a.user_id "
+        "JOIN v2_user_bet_settings b ON b.user_id=a.user_id WHERE b.auto_enabled AND ("
+        "u.disabled_at IS NOT NULL OR u.role<>'user' OR a.health_state<>'healthy' OR "
+        "a.renewal_state IN('unknown','rejected') OR a.encrypted_session IS NULL OR "
+        "b.consent_account_id IS DISTINCT FROM a.id OR b.consent_binding_revision IS DISTINCT FROM a.binding_revision OR "
+        "NOT EXISTS(SELECT 1 FROM v2_memberships m JOIN v2_membership_plans p ON p.id=m.plan_id "
+        "WHERE m.user_id=a.user_id AND m.status='active' AND p.enabled AND m.starts_at<=now() "
+        "AND (m.ends_at IS NULL OR m.ends_at>now()) AND p.entitlements @> '{\"automatic_betting\":true}'::jsonb)) "
+        "ORDER BY a.updated_at FOR UPDATE OF a,b SKIP LOCKED LIMIT 100"
+    )
+
+
 async def eligible_signal(conn, signal_id, max_age: int):
     row = await conn.fetchrow(
         "SELECT s.*,m.source_id,m.platform_message_id,m.revision AS message_revision,m.deleted_at,m.media_state,"
@@ -44,7 +59,7 @@ async def eligible_signal(conn, signal_id, max_age: int):
     now = datetime.now(timezone.utc)
     quote = {"source_updated_at": row["source_updated_at"], "price": row["current_price"], "status": row["status"]}
     if (row["outcome"] != "pending" or row["current_phase"] != "live" or row["sport"] != "football"
-            or row["deleted_at"] or row["media_state"] != "ready" or not all((row["expert_enabled"], row["source_enabled"], row["trusted"]))
+            or row["deleted_at"] or row["withdrawn_at"] or row["media_state"] != "ready" or not all((row["expert_enabled"], row["source_enabled"], row["trusted"]))
             or not fresh_quote(quote, max_age, now) or row["recommendation_price"] != row["current_price"]
             or any(not row[key] for key in ("play_id", "market_instance_id", "selection_id"))
             or row["current_kind"] not in {"winner", "handicap", "total"}

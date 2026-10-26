@@ -18,7 +18,7 @@ import httpx
 
 from services.api.app import account_jobs, database, orders
 from services.api.app.routes import accounts
-from services.api.app.security import decrypt_secret, encrypt_secret
+from services.api.app.security import decrypt_secret, encrypt_secret, token_hash
 from services.executor.account_protocol import AccountProtocolClient, BET_PATH, AMOUNT_PATH, LATEST_MARKET_PATH, LIMITS_PATH, ORDERS_PATH
 from services.executor.worker import Executor
 from services.executor.account_session import AccountScope,AccountSessionManager,RenewalHooks
@@ -50,8 +50,9 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(migration.read_text())
         self.old_pool=database.pool
         database.pool=self.pool
-        self.user={'id':uuid.uuid4(),'role':'user'}
+        self.user={'id':uuid.uuid4(),'role':'user','session_kind':'user','reauthenticated_at':datetime.now(timezone.utc)}
         await self.pool.execute("INSERT INTO v2_users(id,email,display_name,password_hash,role) VALUES($1,$2,'用户','hash','user')",self.user['id'],f"{self.user['id']}@test.invalid")
+        await self.recent_session()
         self.settings=SimpleNamespace(encryption_key=b'k'*32,executor_token='isolated-executor-token',live_orders_enabled=False,quote_max_age_seconds=60)
         self.app=FastAPI()
         self.app.state.settings=self.settings
@@ -78,6 +79,11 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
             await admin.execute('DROP DATABASE '+self.dbname+' WITH (FORCE)')
         finally:
             await admin.close()
+
+    async def recent_session(self):
+        self.user['_token_hash'] = token_hash('isolated-current-session-'+str(self.user['id']))
+        await self.pool.execute("INSERT INTO v2_sessions(token_hash,csrf_hash,user_id,session_kind,expires_at,reauthenticated_at) "
+                                "VALUES($1,$2,$3,'user',now()+interval '1 day',now())",self.user['_token_hash'],token_hash('isolated-csrf'),self.user['id'])
 
     async def bind(self,username='own-user'):
         response=await self.api.put('/api/v1/accounts/leyu',json={'account_label':'本人账户','username':username,'password':'own-password'})
@@ -253,6 +259,30 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
             await self.reserve(signal)
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
 
+    async def test_expiry_suspends_permission_and_renewal_does_not_silently_rearm(self):
+        await self.healthy()
+        signal, expert, _, _ = await self.signal()
+        await self.enable([expert])
+        order = await self.reserve(signal)
+        await self.pool.execute("UPDATE v2_memberships SET ends_at=now()-interval '1 second'")
+        response = await self.worker_api.post('/internal/executor/dispatch')
+        self.assertEqual(200, response.status_code, response.text)
+        policy = await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1', self.user['id'])
+        self.assertFalse(policy['auto_enabled'])
+        self.assertTrue(policy['emergency_stopped'])
+        self.assertEqual('cancelled', await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1', order['id']))
+        await self.pool.execute("UPDATE v2_memberships SET ends_at=now()+interval '1 day'")
+        await self.worker_api.post('/internal/executor/dispatch')
+        self.assertFalse(await self.pool.fetchval('SELECT auto_enabled FROM v2_user_bet_settings WHERE user_id=$1', self.user['id']))
+
+    async def test_withdrawn_recommendation_cannot_reserve_money(self):
+        await self.healthy()
+        signal, expert, _, _ = await self.signal()
+        await self.enable([expert])
+        await self.pool.execute('UPDATE v2_expert_signals SET withdrawn_at=now() WHERE id=$1', signal)
+        with self.assertRaises(Exception):
+            await self.reserve(signal)
+
     async def test_mock_order_full_flow_and_owner_only_orders(self):
         await self.healthy()
         signal,expert,_,_=await self.signal()
@@ -271,6 +301,7 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         other=uuid.uuid4()
         await self.pool.execute("INSERT INTO v2_users(id,email,display_name,password_hash,role) VALUES($1,$2,'另一用户','hash','user')",other,f'{other}@test.invalid')
         self.user['id']=other
+        await self.recent_session()
         self.assertEqual([],(await self.api.get('/api/v1/accounts/orders')).json()['items'])
 
     async def test_unknown_mock_submission_not_requeued_or_released(self):
@@ -432,6 +463,7 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         other=uuid.uuid4()
         await self.pool.execute("INSERT INTO v2_users(id,email,display_name,password_hash,role) VALUES($1,$2,'其他','hash','user')",other,f'{other}@test.invalid')
         self.user['id']=other
+        await self.recent_session()
         response=await self.api.put('/api/v1/accounts/leyu',json={'account_label':'另一绑定','username':'OWN-USER','password':'password'})
         self.assertEqual(409,response.status_code)
 
