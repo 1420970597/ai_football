@@ -4,6 +4,33 @@
 
 **当前范围：用户允许只读其他目录，但禁止在其他目录写入、移动或清理。以下路径只记录来源和字段形状，不回显值；项目内仍使用隔离假配置，未启动生产迁移。**
 
+## 本轮只读归档复核（2026-10-26）
+
+本轮仅读取用户已授权的归档 `/root/ai_football-v2-backups/ai_football-preclean-20261026.tar`，未解压到主机、未写入外部目录，也未建立网络连接。归档权限为 `0600`，大小为 `1,661,030,400` 字节，SHA-256 为 `831a0ded11a10a0ae790895af05f9187d8e3325ced11ab6a7df6556b41215a8c`，包含 `58,281` 个成员。归档内抽样确认旧环境、S3 客户端、乐鱼协议、运行台账和两份旧 Compose 均存在。
+
+旧 `.env` 仅记录了键名结构：数据库连接、PI/Hermes 地址与模型、乐鱼 App/H5 登录与签名字段，以及会话缓存；旧 `.env.inference` 只有推理令牌。旧 S3 配置的结构来自 `client/credentials.json`（`access_key`、`secret_key`、`endpoint`、`bucket`、`region`、`ca_file`、`addressing_style`），旧存储编排通过 `S3_CONFIG_FILE` 引用它。审计不会把这些文件的值写入报告。
+
+归档发现一个需要阻断迁移的权限问题：`client/credentials.json` 在归档中为 `0644`，但其结构包含访问凭据键名；该文件不得直接复制到新镜像或共享给服务。旧 `.env` 及签名前配置为 `0600`，旧 CA 为 `0644`。当前项目运行时环境保持 `0600`；`S3_CA_FILE` 指向的 CA 允许 `0644`，因为非 root API 需要读取公开信任材料，审计不会把 CA 误判为秘密文件。乐鱼签名/发现文件仍要求私有权限。
+
+当前项目静态策略复核结果：运行时目录和 `.env` 均被忽略，Dockerfile 未发现复制 `.env`、凭据或私钥的指令，仓库运行时密钥路径之外未发现待提交秘密文件；这只是源树检查，不能替代外部连通性、TLS/权限、令牌有效期或恢复演练。审计报告写在被忽略的 `.runtime/config-audit/read-only-config-audit.json`，仅含键名、结构、权限、哈希和未验证项。
+
+可复现命令（退出码均为 `0`）：
+
+```text
+docker run --rm --network none --cpus .5 --memory 256m --user "$(id -u):$(id -g)" \
+  -v /root/ai_football:/work \
+  -v /root/ai_football-v2-backups/ai_football-preclean-20261026.tar:/input/ai_football-preclean-20261026.tar:ro \
+  -w /work python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 \
+  python -m infra.config.read_only_audit --archive /input/ai_football-preclean-20261026.tar \
+  --project-root /work --output /work/.runtime/config-audit/read-only-config-audit.json
+
+docker run --rm --network none --cpus .5 --memory 256m --user "$(id -u):$(id -g)" \
+  -v /root/ai_football:/w:ro -w /w python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 \
+  python -m unittest tests.test_read_only_config_audit -v
+```
+
+这组证据可以支持 P01 的旧配置来源盘点和 P02 的权限/来源台账设计；P08 的旧拓扑仅完成归档结构核对，P11-01 的 S3 端点、TLS、授权和恢复仍未在本轮网络禁用条件下验证；P44-03/04 仍需按新编排完成外部权限收敛、备份恢复和正式发布检查。上述节点不因“审计脚本退出码为 0”自动标记为生产完成。
+
 ## 状态定义
 
 “找到”代表存在来源或保存路径，“已迁移”代表已放入受保护目标，“验证有效”必须指明验证范围。解密成功不等于 Telegram 授权仍有效；容器健康不等于最新采集正常；能列桶不等于可写或能恢复所有历史对象。
