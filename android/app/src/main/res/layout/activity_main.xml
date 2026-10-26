@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/client_root"
+    android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
+  <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp"
+      android:gravity="center_vertical" android:paddingStart="16dp" android:paddingEnd="8dp" android:background="#ffffff">
+    <TextView android:id="@+id/service_label" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+        android:text="@string/app_name" android:textColor="#29313d" android:textSize="14sp" android:maxLines="2" android:ellipsize="end" />
+    <Button android:id="@+id/client_menu" android:layout_width="wrap_content" android:layout_height="wrap_content" android:minHeight="48dp"
+        android:text="@string/client_settings" android:contentDescription="@string/client_settings" />
+  </LinearLayout>
+  <ProgressBar android:id="@+id/load_progress" style="?android:attr/progressBarStyleHorizontal"
+      android:layout_width="match_parent" android:layout_height="3dp" android:indeterminate="true" android:visibility="gone" />
+  <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+    <WebView android:id="@+id/platform_webview" android:layout_width="match_parent" android:layout_height="match_parent" />
+    <ScrollView android:id="@+id/pairing_panel" android:layout_width="match_parent" android:layout_height="match_parent"
+        android:fillViewport="true" android:background="#f3f5f7" android:visibility="gone">
+      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical"
+          android:padding="24dp" android:gravity="center_vertical">
+        <TextView android:id="@+id/pairing_heading" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/pairing_title"
+            android:textSize="24sp" android:textStyle="bold" android:textColor="#27313d" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/service_address"
+            android:layout_marginTop="24dp" android:labelFor="@id/service_input" android:textSize="14sp" />
+        <EditText android:id="@+id/service_input" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:minHeight="56dp" android:inputType="textUri" android:maxLines="1"
+            android:importantForAutofill="no" android:imeOptions="actionDone" android:textSize="16sp" />
+        <TextView android:id="@+id/pairing_message" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="16dp" android:text="@string/pairing_help" android:textSize="14sp" android:textColor="#596674"
+            android:accessibilityLiveRegion="polite" />
+        <Button android:id="@+id/verify_service" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:minHeight="48dp" android:layout_marginTop="24dp" android:text="@string/verify_service" />
+        <Button android:id="@+id/return_service" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:minHeight="48dp" android:text="@string/return_service" android:visibility="gone" />
+      </LinearLayout>
+    </ScrollView>
+    <ScrollView android:id="@+id/offline_panel" android:layout_width="match_parent" android:layout_height="match_parent"
+        android:background="#f3f5f7" android:fillViewport="true" android:visibility="gone">
+      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical"
+          android:padding="32dp" android:gravity="center">
+        <TextView android:id="@+id/offline_message" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:gravity="center" android:text="@string/offline_message" android:textColor="#4b5560" android:textSize="17sp"
+            android:accessibilityLiveRegion="polite" />
+        <Button android:id="@+id/retry_page" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp"
+            android:layout_marginTop="24dp" android:text="@string/retry" />
+        <Button android:id="@+id/change_service" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp"
+            android:text="@string/change_service" />
+      </LinearLayout>
+    </ScrollView>
+  </FrameLayout>
+</LinearLayout>
