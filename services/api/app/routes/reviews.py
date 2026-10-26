@@ -1,0 +1,255 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
+
+from .. import database
+from ..review_state import active_job, authorize, fresh_quote, quote_context, trace
+
+router = APIRouter(prefix="/internal/mcp")
+
+
+class AttemptInput(BaseModel):
+    review_id: uuid.UUID
+    attempt_id: uuid.UUID
+
+
+class SearchInput(AttemptInput):
+    team_query: str = Field(min_length=2, max_length=120)
+    phase: str = Field(default="all", pattern="^(all|live|scheduled)$")
+    competition_query: str | None = Field(default=None, max_length=120)
+    from_utc: AwareDatetime | None = None
+    to_utc: AwareDatetime | None = None
+    cursor: str | None = Field(default=None, max_length=1000)
+    page_size: int = Field(default=50, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def valid_window(self):
+        if self.from_utc and self.to_utc and self.from_utc > self.to_utc:
+            raise ValueError("start must precede end")
+        if not self.team_query.strip():
+            raise ValueError("team name is required")
+        return self
+
+
+class ResolveInput(AttemptInput):
+    search_key: str = Field(min_length=64, max_length=64)
+    team_a: str = Field(min_length=2, max_length=160)
+    team_b: str = Field(min_length=2, max_length=160)
+    competition: str | None = Field(default=None, max_length=160)
+    from_utc: AwareDatetime | None = None
+    to_utc: AwareDatetime | None = None
+
+
+class MarketInput(AttemptInput):
+    fixture_id: str = Field(min_length=1, max_length=160)
+
+
+class PickInput(BaseModel):
+    fixture_id: str = Field(min_length=1, max_length=160)
+    quote_id: uuid.UUID
+    evidence_text: str = Field(min_length=1, max_length=3000)
+    confidence: Decimal = Field(default=Decimal("0"), ge=0, le=1, max_digits=5, decimal_places=4)
+
+
+class RecordInput(AttemptInput):
+    signals: list[PickInput] = Field(min_length=1, max_length=32)
+
+
+def _key(request: Request) -> bytes:
+    return request.app.state.settings.mcp_internal_token.encode()
+
+
+def _cursor(request: Request, review_id, attempt_id, search_key: str, position: int) -> str:
+    body = json.dumps([str(review_id), str(attempt_id), search_key, position], separators=(",", ":")).encode()
+    signature = hmac.new(_key(request), body, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(body + signature).decode().rstrip("=")
+
+
+def _position(request: Request, body: SearchInput, search_key: str) -> int:
+    if body.cursor is None:
+        return 0
+    try:
+        raw = base64.b64decode(body.cursor + "=" * (-len(body.cursor) % 4), altchars=b"-_", validate=True)
+        encoded, signature = raw[:-32], raw[-32:]
+        if not hmac.compare_digest(signature, hmac.new(_key(request), encoded, hashlib.sha256).digest()):
+            raise ValueError
+        review_id, attempt_id, key, position = json.loads(encoded)
+        if (review_id, attempt_id, key) != (str(body.review_id), str(body.attempt_id), search_key) or not isinstance(position, int) or position < 1:
+            raise ValueError
+        return position
+    except (ValueError, TypeError, UnicodeError):
+        raise HTTPException(status_code=400, detail="invalid or cross-query cursor") from None
+
+
+@router.post("/search_matches")
+async def search_matches(body: SearchInput, request: Request):
+    authorize(request, request.app.state.settings.mcp_internal_token)
+    scope = {"team": body.team_query.strip().casefold(), "phase": body.phase, "competition": (body.competition_query or "").strip().casefold(),
+             "from": body.from_utc.astimezone(timezone.utc).isoformat() if body.from_utc else None,
+             "to": body.to_utc.astimezone(timezone.utc).isoformat() if body.to_utc else None}
+    search_key = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            await active_job(conn, body.review_id, body.attempt_id)
+            search = await conn.fetchrow("SELECT * FROM v2_match_searches WHERE job_id=$1 AND search_key=$2 FOR UPDATE", body.review_id, search_key)
+            if not search:
+                if body.cursor:
+                    raise HTTPException(status_code=409, detail="search has not started")
+                await conn.execute(
+                    "INSERT INTO v2_match_searches(job_id,search_key,team_query,phase,competition_query,from_utc,to_utc,attempt_id) "
+                    "VALUES($1,$2,$3,$4,$5,$6,$7,$8)", body.review_id, search_key, scope["team"], body.phase, scope["competition"], body.from_utc, body.to_utc, body.attempt_id,
+                )
+                # 一次 INSERT SELECT 形成完整候选快照，之后按不可变序号遍历，避免更新和新增造成漏场。
+                await conn.execute(
+                    "INSERT INTO v2_match_search_candidates(job_id,search_key,fixture_id,position,candidate_data) "
+                    "SELECT $1,$2,f.id,row_number() OVER(ORDER BY f.kickoff_at,f.id),to_jsonb(f) FROM v2_fixtures f "
+                    "WHERE f.phase IN ('live','scheduled') AND ($3='all' OR f.phase=$3) "
+                    "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 OR $5=ANY(f.home_aliases) OR $5=ANY(f.away_aliases)) "
+                    "AND ($6='' OR lower(f.competition_name) LIKE '%'||$6||'%') "
+                    "AND ($7::timestamptz IS NULL OR f.kickoff_at >= $7) AND ($8::timestamptz IS NULL OR f.kickoff_at <= $8)",
+                    body.review_id, search_key, body.phase, "%" + scope["team"] + "%", scope["team"], scope["competition"], body.from_utc, body.to_utc,
+                )
+                search = await conn.fetchrow("SELECT * FROM v2_match_searches WHERE job_id=$1 AND search_key=$2", body.review_id, search_key)
+            if search["attempt_id"] != body.attempt_id:
+                raise HTTPException(status_code=409, detail="search belongs to an earlier attempt")
+            if body.cursor != search["expected_cursor"] and not (body.cursor is None and search["page_count"] == 0):
+                raise HTTPException(status_code=409, detail="cursor is not the next page")
+            if search["complete"]:
+                raise HTTPException(status_code=409, detail="search already complete; use resolution tool")
+            position = _position(request, body, search_key)
+            rows = await conn.fetch(
+                "SELECT position,candidate_data FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2 "
+                "AND position>$3 ORDER BY position LIMIT $4", body.review_id, search_key, position, body.page_size + 1,
+            )
+            has_more = len(rows) > body.page_size
+            page = rows[:body.page_size]
+            cursor = _cursor(request, body.review_id, body.attempt_id, search_key, page[-1]["position"]) if has_more else None
+            total = await conn.fetchval("SELECT count(*) FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2", body.review_id, search_key)
+            await conn.execute(
+                "UPDATE v2_match_searches SET expected_cursor=$3,complete=$4,page_count=page_count+1,total_candidates=$5,updated_at=now() WHERE job_id=$1 AND search_key=$2",
+                body.review_id, search_key, cursor, not has_more, total,
+            )
+            result = {"search_key": search_key, "items": [row["candidate_data"] for row in page], "next_cursor": cursor, "search_complete": not has_more, "total_candidates": total}
+            await trace(conn, body.review_id, "mcp_search_matches", {"attempt_id": str(body.attempt_id), "scope": scope, "search_key": search_key, "after": position, "returned": len(page), "total": total, "complete": not has_more})
+            return result
+
+
+@router.post("/resolve_match")
+async def resolve_match(body: ResolveInput, request: Request):
+    authorize(request, request.app.state.settings.mcp_internal_token)
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            await active_job(conn, body.review_id, body.attempt_id)
+            complete = await conn.fetchval("SELECT complete FROM v2_match_searches WHERE job_id=$1 AND search_key=$2 AND attempt_id=$3", body.review_id, body.search_key, body.attempt_id)
+            if not complete:
+                raise HTTPException(status_code=409, detail="all candidate pages must be read first")
+            rows = await conn.fetch("SELECT fixture_id,candidate_data FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2", body.review_id, body.search_key)
+            matches = []
+            a, b = body.team_a.strip().casefold(), body.team_b.strip().casefold()
+            if a == b:
+                raise HTTPException(status_code=422, detail="two distinct team identities are required")
+            for row in rows:
+                fixture = row["candidate_data"]
+                home = {str(v).casefold() for v in [fixture["home_team"], *fixture.get("home_aliases", [])]}
+                away = {str(v).casefold() for v in [fixture["away_team"], *fixture.get("away_aliases", [])]}
+                if not ((a in home and b in away) or (b in home and a in away)):
+                    continue
+                if body.competition and body.competition.strip().casefold() != fixture["competition_name"].casefold():
+                    continue
+                kickoff = datetime.fromisoformat(fixture["kickoff_at"])
+                if body.from_utc and kickoff < body.from_utc or body.to_utc and kickoff > body.to_utc:
+                    continue
+                matches.append(row)
+            if len(matches) != 1:
+                result = {"resolved": False, "reason": "no_unique_fixture", "candidate_count": len(matches)}
+            else:
+                fixture = matches[0]
+                evidence = jsonable_encoder(body.model_dump(exclude={"review_id", "attempt_id"}))
+                await conn.execute(
+                    "INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
+                    body.review_id, body.attempt_id, fixture["fixture_id"], body.search_key, evidence,
+                )
+                result = {"resolved": True, "fixture": fixture["candidate_data"]}
+            await trace(conn, body.review_id, "mcp_resolve_match", jsonable_encoder(body.model_dump()) | {"result": result})
+            return result
+
+
+@router.post("/list_match_markets")
+async def list_match_markets(body: MarketInput, request: Request):
+    authorize(request, request.app.state.settings.mcp_internal_token)
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            await active_job(conn, body.review_id, body.attempt_id)
+            bound = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM v2_review_fixture_bindings WHERE job_id=$1 AND attempt_id=$2 AND fixture_id=$3)", body.review_id, body.attempt_id, body.fixture_id)
+            if not bound:
+                raise HTTPException(status_code=409, detail="fixture must be uniquely resolved first")
+            fixture = await conn.fetchrow("SELECT * FROM v2_fixtures WHERE id=$1 AND phase IN ('scheduled','live')", body.fixture_id)
+            if not fixture:
+                raise HTTPException(status_code=409, detail="fixture is no longer active")
+            quotes = await conn.fetch("SELECT * FROM v2_current_quotes WHERE fixture_id=$1 ORDER BY period,market_id,line,selection", body.fixture_id)
+            if quotes:
+                await conn.executemany(
+                    "INSERT INTO v2_review_market_reads(job_id,attempt_id,quote_id,source_updated_at,price,quote_context) VALUES($1,$2,$3,$4,$5,$6) "
+                    "ON CONFLICT(job_id,attempt_id,quote_id) DO UPDATE SET source_updated_at=EXCLUDED.source_updated_at,price=EXCLUDED.price,quote_context=EXCLUDED.quote_context,created_at=now()",
+                    [(body.review_id, body.attempt_id, q["id"], q["source_updated_at"], q["price"], quote_context(q, fixture)) for q in quotes],
+                )
+            result = {"fixture": dict(fixture), "markets": [dict(q) | {"quote_id": str(q["id"]), "fresh": fresh_quote(q, request.app.state.settings.quote_max_age_seconds)} for q in quotes]}
+            await trace(conn, body.review_id, "mcp_list_match_markets", {"attempt_id": str(body.attempt_id), "fixture_id": body.fixture_id, "quote_ids": [str(q["id"]) for q in quotes]})
+            return result
+
+
+@router.post("/record_expert_signals")
+async def record_expert_signals(body: RecordInput, request: Request):
+    authorize(request, request.app.state.settings.mcp_internal_token)
+    accepted, rejected = [], []
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            job = await active_job(conn, body.review_id, body.attempt_id)
+            for index, pick in enumerate(body.signals):
+                quote = await conn.fetchrow(
+                    "SELECT q.*,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context FROM v2_current_quotes q "
+                    "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
+                    "JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 "
+                    "WHERE q.id=$3 AND q.fixture_id=$4 AND q.price IS NOT DISTINCT FROM r.price AND q.source_updated_at IS NOT DISTINCT FROM r.source_updated_at FOR SHARE OF q,f",
+                    body.review_id, body.attempt_id, pick.quote_id, pick.fixture_id,
+                )
+                reason = None
+                if not quote:
+                    reason = "quote_not_read_or_changed"
+                elif quote['read_context'] != quote_context(quote, quote):
+                    reason = 'quote_or_score_context_changed'
+                elif quote["phase"] not in {"scheduled", "live"}:
+                    reason = "fixture_not_active"
+                elif not fresh_quote(quote, request.app.state.settings.quote_max_age_seconds):
+                    reason = "quote_inactive_unknown_or_stale"
+                if reason:
+                    rejected.append({"index": index, "reason": reason})
+                    continue
+                baseline = {"home": quote["home_score"], "away": quote["away_score"], "half_home": quote["half_home_score"], "half_away": quote["half_away_score"]}
+                new_id = uuid.uuid4()
+                result = await conn.fetchrow(
+                    "INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,period,market_kind,line,selection,recommendation_price,quote_time,confidence,evidence_text,score_baseline,score_basis) "
+                    "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(message_id,fixture_id,market_id,period,line,selection) DO NOTHING RETURNING id",
+                    new_id, job["message_id"], job["expert_id"], quote["fixture_id"], quote["phase"], quote["market_id"], quote["market_name"], quote["period"], quote["market_kind"], quote["line"], quote["selection"], quote["price"], quote["source_updated_at"], pick.confidence, pick.evidence_text, baseline, quote["score_basis"],
+                )
+                if result:
+                    await conn.execute(
+                        "INSERT INTO v2_quote_evidence(id,fixture_id,market_id,market_name,period,line,selection,price,evidence_kind,reference_id,source_updated_at,evidence,score_baseline) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'expert_signal',$9,$10,$11,$12)",
+                        uuid.uuid4(), quote["fixture_id"], quote["market_id"], quote["market_name"], quote["period"], quote["line"], quote["selection"], quote["price"], new_id, quote["source_updated_at"], {"job_id": str(body.review_id), "attempt_id": str(body.attempt_id), "quote_id": str(pick.quote_id), "score_basis": quote["score_basis"]}, baseline,
+                    )
+                else:
+                    new_id = await conn.fetchval("SELECT id FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND line=$5 AND selection=$6", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"])
+                accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]), "selection": quote["selection"], "price": str(quote["price"])})
+            result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
+            await trace(conn, body.review_id, "mcp_record_expert_signals", {"attempt_id": str(body.attempt_id), **result})
+            return result

@@ -1,0 +1,51 @@
+model:
+  provider: custom:cline
+  default: ${HERMES_MODEL}
+  supports_vision: true
+
+providers:
+  cline:
+    api: ${HERMES_PROVIDER_BASE_URL}
+    key_env: HERMES_PROVIDER_API_KEY
+    transport: chat_completions
+
+agent:
+  max_turns: 128
+  image_input_mode: native
+  disabled_toolsets:
+    - web
+    - search
+    - terminal
+    - file
+    - browser
+    - image_gen
+    - tts
+    - todo
+    - memory
+    - session_search
+    - cronjob
+    - code_execution
+    - delegation
+    - messaging
+    - debugging
+
+skills:
+  external_dirs:
+    - /workspace/skills
+
+platform_toolsets:
+  api_server:
+    - skills
+    - football
+
+mcp_servers:
+  football:
+    url: http://hermes-mcp:8090/mcp
+    headers:
+      Authorization: "Bearer ${EXPERT_MCP_TOKEN}"
+    tools:
+      include:
+        - search_matches
+        - resolve_match
+        - list_match_markets
+        - record_expert_signals

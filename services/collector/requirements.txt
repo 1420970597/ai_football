@@ -1,0 +1,5 @@
+httpx==0.28.1
+boto3==1.43.118
+telethon==1.42.0
+cryptography==50.0.2
+websockets==17.3
