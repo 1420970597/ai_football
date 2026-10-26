@@ -11,6 +11,7 @@ import time
 from types import SimpleNamespace
 import unittest
 import uuid
+from unittest.mock import AsyncMock
 
 import asyncpg
 from fastapi import FastAPI
@@ -95,6 +96,7 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.pool = await database.open_pool(SimpleNamespace(database_url=url), migrate=True)
         self.app = FastAPI()
         self.app.state.settings = SimpleNamespace(cookie_secure=False, encryption_key=bytes(range(32)), hermes_api_key="test")
+        self.app.state.hermes_probe = SimpleNamespace(check=AsyncMock(return_value="unverified"))
         self.app.state.decrypt_secret = lambda value: decrypt_secret(bytes(range(32)), value)
         for router in (auth.router, admin.router, accounts.router, public.router):
             self.app.include_router(router)
@@ -189,6 +191,53 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.admin_login()
         self.assertEqual(403, (await self.client.put("/api/v1/admin/settings", headers=self.csrf(), json={"values": {}})).status_code)
         self.assertEqual(200, (await self.client.put("/api/v1/admin/settings", headers=self.csrf(True), json={"values": {}})).status_code)
+
+    async def test_secure_cookie_attributes(self):
+        self.app.state.settings.cookie_secure = True
+        self.client.cookies.clear()
+        response = await self.client.post("/api/v1/auth/register", json={
+            "email": "secure@example.invalid", "display_name": "安全用户", "password": PASSWORD,
+        })
+        self.assertEqual(201, response.status_code, response.text)
+        cookies = "\n".join(response.headers.get_list("set-cookie")).lower()
+        self.assertIn("v2_session=", cookies)
+        self.assertIn("secure", cookies)
+        self.assertIn("httponly", cookies)
+        self.assertIn("samesite=strict", cookies)
+        csrf_cookie = next(item for item in response.headers.get_list("set-cookie") if item.startswith(auth.CSRF_COOKIE + "="))
+        self.assertNotIn("httponly", csrf_cookie.lower())
+
+
+    async def test_admin_settings_audit_diff_and_hot_update_state_are_truthful(self):
+        await self.admin_login()
+        response = await self.client.put(
+            "/api/v1/admin/settings", headers=self.csrf(True),
+            json={"expected_leyu_version": 1, "values": {
+                "leyu_api_base": "https://business.example.invalid",
+                "leyu_request_id": "private-session-for-test",
+            }},
+        )
+        self.assertEqual(200, response.status_code, response.text)
+        body = response.json()
+        self.assertEqual("persisted_unverified", body["application"]["state"])
+        self.assertFalse(body["application"]["runtime_acknowledged"])
+        self.assertEqual(2, body["leyu_version"])
+        details = await self.pool.fetchval(
+            "SELECT details FROM v2_audit_log WHERE action='settings_updated' ORDER BY created_at DESC LIMIT 1"
+        )
+        self.assertEqual(2, details["configuration_version"])
+        self.assertEqual("persisted_unverified", details["application_state"])
+        self.assertFalse(details["runtime_acknowledged"])
+        self.assertEqual("https://business.example.invalid", details["diff"]["leyu_api_base"]["after"]["value"])
+        self.assertIsNone(details["diff"]["leyu_request_id"]["after"]["value"])
+        self.assertNotIn("private-session-for-test", str(details))
+
+        status = await self.client.get("/api/v1/admin/status")
+        self.assertEqual(200, status.status_code, status.text)
+        state = status.json()["leyu_configuration"]
+        self.assertEqual(2, state["revision"])
+        self.assertEqual("persisted_unverified", state["application_state"])
+        self.assertFalse(state["runtime_acknowledged"])
 
     async def test_client_role_fields_cannot_promote_account(self):
         response = await self.client.post("/api/v1/auth/register", json={"email": "forged@example.invalid", "display_name": "用户", "password": PASSWORD, "role": "admin"})

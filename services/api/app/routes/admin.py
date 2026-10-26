@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import hmac
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
@@ -78,6 +79,43 @@ def configured_sender_identity(sender_id):
     return {"sender_identity_kind": kind, "individual_author_resolved": False}
 
 
+def _safe_setting_value(key: str, value: str | None):
+    """Return an audit-safe representation of a setting value.
+
+    Secret settings must never be copied into an audit record, even when the
+    caller changes only a non-secret setting in the same request.  Plain
+    settings are bounded so an accidentally large value cannot make the audit
+    table a second configuration store.
+    """
+    if key in SECRET_SETTINGS:
+        return {"configured": bool(value), "value": None}
+    if value is None:
+        return {"configured": False, "value": None}
+    text = str(value)
+    return {"configured": True, "value": text[:256], "truncated": len(text) > 256}
+
+
+def _setting_diff(key: str, before: str | None, after: str | None) -> dict:
+    if key in SECRET_SETTINGS:
+        before_configured = bool(before)
+        after_configured = bool(after)
+        # Comparing secret material is done in memory only.  The result is a
+        # boolean and the value itself is never serialized to JSON/audit logs.
+        equal = (before is None and after is None) or (
+            before is not None and after is not None and hmac.compare_digest(str(before), str(after))
+        )
+        return {
+            "before": _safe_setting_value(key, before),
+            "after": _safe_setting_value(key, after),
+            "changed": not (before_configured == after_configured == True and equal),
+        }
+    return {
+        "before": _safe_setting_value(key, before),
+        "after": _safe_setting_value(key, after),
+        "changed": before != after,
+    }
+
+
 class SettingsInput(BaseModel):
     values: dict[str, str | int | bool] = Field(max_length=30)
     expected_leyu_version: int | None = Field(default=None, ge=1)
@@ -112,6 +150,9 @@ async def status(request: Request):
     db_ok = await pool.fetchval("SELECT 1") == 1
     row = await pool.fetchrow("SELECT count(*) AS queued FROM (SELECT 1 FROM v2_analysis_jobs WHERE state IN ('queued','retry') LIMIT 5001) bounded")
     sources = await pool.fetchval("SELECT count(*) FROM v2_expert_sources WHERE enabled")
+    revision_row = await pool.fetchrow(
+        "SELECT revision,updated_at FROM v2_configuration_revisions WHERE namespace='leyu'"
+    )
     return {
         "database": "healthy" if db_ok else "unavailable",
         "hermes": await request.app.state.hermes_probe.check(),
@@ -120,6 +161,17 @@ async def status(request: Request):
         "review_queue": min(row["queued"], 5000),
         "review_queue_capped": row["queued"] > 5000,
         "actor": identity["email"],
+        # The API persists a version atomically; the collector must explicitly
+        # acknowledge consuming it before a UI can claim the hot update was
+        # applied.  No acknowledgement channel exists here, so report that
+        # limitation instead of presenting persistence as runtime health.
+        "leyu_configuration": {
+            "revision": revision_row["revision"] if revision_row else None,
+            "updated_at": revision_row["updated_at"] if revision_row else None,
+            "application_state": "persisted_unverified",
+            "runtime_acknowledged": False,
+            "reason": "配置已持久化，等待采集服务回执",
+        },
     }
 
 
@@ -268,12 +320,26 @@ async def update_settings(body: SettingsInput, request: Request):
                 if version != body.expected_leyu_version:
                     raise HTTPException(status_code=409, detail="乐鱼配置版本已变化，请刷新后重试")
             changed = []
+            before_values: dict[str, str | None] = {}
             for key, value in body.values.items():
                 text = str(value).strip()
                 if not text and key in SECRET_SETTINGS:
                     continue
                 if len(text) > 4096:
                     raise HTTPException(status_code=422, detail="配置值超出长度限制")
+                previous_ciphertext = await conn.fetchval(
+                    "SELECT encrypted_value FROM v2_admin_settings WHERE setting_key=$1 FOR UPDATE", key
+                )
+                previous = None
+                if previous_ciphertext is not None:
+                    try:
+                        previous = decrypt_secret(request.app.state.settings.encryption_key, previous_ciphertext)
+                    except Exception:
+                        # Do not copy an undecryptable ciphertext into an
+                        # audit record.  A replacement remains allowed and is
+                        # represented as an unconfigured prior value.
+                        previous = None
+                before_values[key] = previous
                 encrypted = encrypt_secret(request.app.state.settings.encryption_key, text)
                 await conn.execute(
                     "INSERT INTO v2_admin_settings(setting_key,encrypted_value,updated_by,updated_at) VALUES($1,$2,$3,now()) "
@@ -283,8 +349,27 @@ async def update_settings(body: SettingsInput, request: Request):
                 changed.append(key)
             if leyu_keys & set(changed):
                 version = await conn.fetchval("UPDATE v2_configuration_revisions SET revision=revision+1,updated_at=now() WHERE namespace='leyu' RETURNING revision")
-            await audit(conn, admin["id"], "admin", "settings_updated", "admin_settings", "", details={"changed_keys": sorted(changed), "leyu_version": version})
-    return {"updated": sorted(changed), "secrets_masked": sorted(SECRET_SETTINGS & set(body.values)), "leyu_version": version}
+            details = {
+                "changed_keys": sorted(changed),
+                "leyu_version": version,
+                "configuration_version": version,
+                "request_id": str(getattr(request.state, "request_id", ""))[:128],
+                "diff": {
+                    key: _setting_diff(key, before_values.get(key), str(body.values[key]).strip())
+                    for key in changed
+                },
+                "application_state": "persisted_unverified" if leyu_keys & set(changed) else "persisted",
+                "runtime_acknowledged": False,
+            }
+            await audit(conn, admin["id"], "admin", "settings_updated", "admin_settings", "", details=details)
+    application = {
+        "state": "persisted_unverified" if leyu_keys & set(changed) else "persisted",
+        "requested_revision": version,
+        "runtime_acknowledged": False,
+        "reason": "配置已写入数据库，等待采集服务回执" if leyu_keys & set(changed) else "配置已写入数据库",
+    }
+    return {"updated": sorted(changed), "secrets_masked": sorted(SECRET_SETTINGS & set(body.values)),
+            "leyu_version": version, "application": application}
 
 
 @router.get("/membership/plans")
