@@ -1,69 +1,18 @@
-# Python 运行产物
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-dist/
-*.egg-info/
-
-# 虚拟环境
-venv/
-.venv/
-env/
-
-# 密钥与环境（凭据必须改为环境变量注入；仓库已无 config.py）
 .env
 .env.*
 !.env.example
-# 用户提供的账号口令列表
-/list.txt
-# 用户提供的 S3 客户端配置与凭据
-/client/
-
-# 临时远端维护凭据（只在项目目录内生成，禁止入库）
-.ssh-vps
-.ssh-vps-*
-.ssh-vps/
-
-# 运行产物与日志
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+node_modules/
+dist/
+build/
+.gradle/
+*.apk
+*.aab
 output/
 *.log
-logs/
-
-# Agent 运行时产物（pi 后台任务的日志/状态，非源码）
-.pi/
-
-# 代码检索插件的本地索引缓存（非源码；重建代价只是重扫一次）
-.codebase-index/
-
-# 抓包归档（含会话级凭据与轮换域名，不入库）
-*.saz
-*.pcap
-*.pcapng
-*.cap
-
-# 数据缓存
-*.cache
-.cache/
-
-# IDE / 编辑器
-.idea/
-.vscode/
-*.swp
-*~
-
-# 系统文件
-.DS_Store
-Thumbs.db
-
-# 虚拟环境（pyright/jedi 用于解析源码根；不入库）
-.venv/
-
-# 抓包含真实凭据（token/登录口令/签名），严禁入库
-乐鱼app.zip
-*.zip
-
-# Browser inspection artifacts
 .playwright-cli/
