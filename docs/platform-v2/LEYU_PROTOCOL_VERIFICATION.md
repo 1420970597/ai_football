@@ -70,6 +70,24 @@ docker run --rm --cpus=0.5 --memory=384m \
 
 ## 长期工作器生命周期
 
+### 本次采集恢复修复（2026-10-27）
+
+运行时出现 `private_config_unreadable` 的原因是 Compose 以前把仅限 root 的 0600 签名与发现文件直接 bind mount 到 UID 10003 的 collector；文件权限无法由应用安全地绕过。现改为 Compose 顶层 `configs`，由 Compose 在启动时读取项目内运行时文件并以只读配置文件交给 collector 和 executor。Git 中的文件仍保持 0600，服务仍以非 root、只读根文件系统和 `no-new-privileges` 运行；API 不再获得这些配置。`docker compose ... config --quiet` 退出码 0，渲染结果确认 collector/executor 只有两个配置目标和 S3 CA bind，没有旧的签名/发现 bind。使用临时 Compose 配置以 UID 10003 读取同一配置的检查输出 UID 10003 及 JSON 开头，退出码 0，未输出配置值。
+
+实时连接的 HTTP 握手 403 原来没有落入重连异常分支，导致 `InvalidStatus` 冒泡并终止工作器。现在只记录脱敏类别 `websocket_http_403`（未知状态为 `websocket_handshake_rejected`），进入既有指数退避并持续运行；响应头和响应体不会写入状态或日志。新增合成 403 握手测试验证连接器被调用、重连计数、脱敏错误类别和正常停止。
+
+恢复修复验证命令（全部在 Docker 中）：
+
+```sh
+docker compose --env-file .runtime/compose-test.env config --quiet
+docker build --no-cache --progress=plain -t ai-football-collector:test -f services/collector/Dockerfile .
+docker run --rm --cpus=0.25 --memory=256m \
+  -v /root/ai_football:/w:ro -w /w ai-football-verifier:v2.0.0-dev \
+  python -m unittest tests.test_leyu_realtime tests.test_leyu_session -v
+```
+
+结果：Compose 校验退出码 0；collector 镜像构建退出码 0；25 个实时、协议、续期和代理测试通过，0.304 秒，退出码 0。另一次只读 collector 镜像 `compileall` 尝试因根文件系统不可写而退出 1（仅是工具试图创建 `/app/collector/__pycache__`，不是语法错误）；生产镜像本身按只读根文件系统运行，不能用该命令作为编译证据。
+
 ```mermaid
 flowchart LR
   Start[采集工作器] --> TG[Telegram 长连接及控制服务]

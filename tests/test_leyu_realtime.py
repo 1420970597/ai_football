@@ -6,6 +6,10 @@ import json
 import unittest
 from unittest.mock import AsyncMock
 
+from websockets.datastructures import Headers
+from websockets.exceptions import InvalidStatus
+from websockets.http11 import Response
+
 from services.collector.leyu_protocol import AuthExpired, LeyuError
 from services.collector.leyu_realtime import LeyuRealtime, push_events, subscription_frames
 
@@ -67,6 +71,24 @@ class RealtimeProtocolTests(unittest.TestCase):
 
 
 class RealtimeLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_http_403_handshake_backs_off_and_keeps_collector_alive(self):
+        stop = asyncio.Event()
+        attempts = 0
+
+        def connector(url, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            stop.set()
+            raise InvalidStatus(Response(403, "Forbidden", Headers()))
+
+        service = LeyuRealtime(lambda: {"leyu_api_base": "https://business.invalid", "leyu_request_id": "authorized"},
+                               lambda: [], AsyncMock(), AsyncMock(), connector=connector)
+        await service.run(stop)
+        self.assertEqual(1, attempts)
+        self.assertEqual(1, service.stats["reconnects"])
+        self.assertEqual("websocket_http_403", service.stats["last_error"])
+        self.assertEqual("stopped", service.stats["state"])
+
     async def test_changed_subscriptions_unsubscribe_then_replace(self):
         values = ["1", "2"]
         socket = type("Socket", (), {"send": AsyncMock()})()

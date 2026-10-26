@@ -22,6 +22,12 @@ x-storage: &storage
   AWS_CA_BUNDLE: /run/secrets/s3-ca.crt
   S3_OBJECT_PREFIX: v2/
 
+configs:
+  leyu_app_signing_runtime:
+    file: ${LEYU_SIGNING_FILE:-./.runtime/leyu-app-signing.json}
+  leyu_app_discovery_runtime:
+    file: ${LEYU_DISCOVERY_FILE:-./.runtime/leyu-app-discovery.json}
+
 services:
   storage-tunnel:
     image: ghcr.io/1420970597/ai-football-storage-tunnel:${APP_VERSION:-2.0.0-dev}
@@ -166,22 +172,15 @@ services:
       COLLECTOR_INTERVAL_SECONDS: ${COLLECTOR_INTERVAL_SECONDS:-20}
       TELEGRAM_CONTROL_HOST: 0.0.0.0
       TELEGRAM_CONTROL_PORT: 8092
+    configs:
+      - source: leyu_app_signing_runtime
+        target: /run/secrets/leyu-app-signing.json
+      - source: leyu_app_discovery_runtime
+        target: /run/secrets/leyu-app-discovery.json
     volumes:
       - type: bind
         source: ${S3_CA_FILE:-./.runtime/s3-ca.crt}
         target: /run/secrets/s3-ca.crt
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${LEYU_SIGNING_FILE:-./.runtime/leyu-app-signing.json}
-        target: /run/secrets/leyu-app-signing.json
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${LEYU_DISCOVERY_FILE:-./.runtime/leyu-app-discovery.json}
-        target: /run/secrets/leyu-app-discovery.json
         read_only: true
         bind:
           create_host_path: false
@@ -208,19 +207,11 @@ services:
       PLATFORM_EXECUTOR_API: http://api:8080/internal/executor
       EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Set the independent execution service token}
       EXECUTOR_LIVE_ORDERS_ENABLED: ${EXECUTOR_LIVE_ORDERS_ENABLED:-false}
-    volumes:
-      - type: bind
-        source: ${LEYU_SIGNING_FILE:-./.runtime/leyu-app-signing.json}
+    configs:
+      - source: leyu_app_signing_runtime
         target: /run/secrets/leyu-app-signing.json
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${LEYU_DISCOVERY_FILE:-./.runtime/leyu-app-discovery.json}
+      - source: leyu_app_discovery_runtime
         target: /run/secrets/leyu-app-discovery.json
-        read_only: true
-        bind:
-          create_host_path: false
     depends_on:
       api:
         condition: service_healthy

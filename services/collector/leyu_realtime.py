@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable, Iterable, Mapping
 from urllib.parse import urlencode, urlsplit
 
 from websockets.asyncio.client import connect
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from .leyu import LeyuClient
 from .leyu_protocol import AUTH_CODES, SUCCESS_CODES, AuthExpired, LeyuError, decode_envelope, decode_payload, objects, parse_quotes, phase_for, score, timestamp
@@ -251,8 +251,18 @@ class LeyuRealtime:
                                 except asyncio.QueueFull:
                                     self.stats["dropped"] += 1
                                     self._gap = True
-                except (LeyuError, OSError, ConnectionClosed, TimeoutError) as exc:
-                    self.stats.update(state="backoff", last_error=exc.category if isinstance(exc, LeyuError) else type(exc).__name__)
+                except (LeyuError, OSError, ConnectionClosed, InvalidStatus, TimeoutError) as exc:
+                    if isinstance(exc, LeyuError):
+                        category = exc.category
+                    elif isinstance(exc, InvalidStatus):
+                        # HTTP handshake refusals (notably 403) are an upstream
+                        # condition. Keep the collector alive and reconnect with
+                        # backoff; never expose response headers/body in status.
+                        status = getattr(getattr(exc, "response", None), "status_code", None)
+                        category = f"websocket_http_{status}" if isinstance(status, int) else "websocket_handshake_rejected"
+                    else:
+                        category = type(exc).__name__
+                    self.stats.update(state="backoff", last_error=category)
                     self.stats["reconnects"] += 1
                     failures += 1
                     wait = min(60, 2 ** min(failures, 5)) + random.random()
