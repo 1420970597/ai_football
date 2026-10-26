@@ -1,9 +1,0 @@
-priority,work,impact,evidence,cost,leakage_risk,owner,acceptance
-P0,重建可追溯标签与双时间 as-of 数据集,极高,"A: 904,473 条异常同伴概率、79,972 条标签翻转",中,降低最高,store/training_data.py + history repair,每行有 match/market/line/outcome/cutoff/received_at/label_available_at；未来值审计为0
-P0,拆分 HAD top-1、亚洲盘支付状态和概率评分,极高,A: 当前 metrics 把三向 HAD 当三个二分类,低,降低,core/learned_model.py + model worker,固定测试集同时输出 top-1、W/L/U、Brier、log loss、coverage
-P1,市场概率 offset Logistic/GAM 残差校准,高,A: GLM offset；S25 市场校准方向性证据,低-中,中,core/learned_model.py,滚动 OOF 配对 Brier/log loss 优于市场或标记不确定；delta=0 可退回市场
-P1,固定时间窗口的 fair-logit 走势与报价质量特征,中-高,A: 当前最近40 tick 不编码时间间距,中,高，需双时间审计,service/live_expert.py + decision_features.py,离线/在线同截点特征哈希一致；窗口消融在主要盘口不退化
-P1,同一盘口算法输出改为 OOF 残差融合并做概率一致性,中-高,A: 当前多算法共享盘口，线性平均存在相关重复计权风险,中,中-高,core/ensemble.py + validation,OOF 元模型；HAD/OU/AH 概率和支付状态约束通过
-P2,受限 LightGBM/XGBoost 挑战模型,未知,A: 官方参数文档；表格基准不保证足球增益,中-高,高,独立 model worker,严格时间+比赛分组 OOF；CPU/RSS/p99 预算内且显著优于 offset
-P2,动态/双变量 Poisson 或 hazard 作为结构化挑战,中,A: 经典足球计数过程文献；当前数据完整性仍是前置条件,高,中,core/live_model.py 的独立实现,目标盘口留出、低比分/红牌子群不退化；推理 p99 < 2 秒链路预算
-P3,影子前瞻、漂移监控、晋级/回滚,高（风险控制）,A: 现有 worker 已有 shadow/active 分离,中,降低,service/model_service.py + dashboard,候选/市场/当前模型同一输入；按比赛成组置信区间；自动回退不丢版本

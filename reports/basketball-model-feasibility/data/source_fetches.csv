@@ -1,7 +1,0 @@
-id,source,url,evidence,access,result
-S1,FIBA Official Basketball Rules 2024,https://www.fiba.basketball/official-basketball-rules,A,2026-10-11,官方规则入口；自动请求403，未把不可访问正文当作已下载全文
-S2,NBA Official Rule 5 Scoring and Timing,https://official.nba.com/rule-no-5-scoring-and-timing/,A,2026-10-11,官方规则入口；自动请求403，仅作规则交叉核验
-S3,Cervone et al. 2016,https://arxiv.org/abs/1604.01255,A,2026-10-11,公开论文页面可访问；按回合和比赛状态建模篮球结果
-S4,Basketball scoring dynamics,https://arxiv.org/abs/1906.11217,A,2026-10-11,公开论文页面可访问；支持分段/状态依赖得分过程
-S5,Sportradar Basketball API docs,https://developer.sportradar.com/basketball/reference,B,2026-10-11,公开字段入口；用于数据需求核对，不代表乐鱼字段等价
-S6,Pinnacle basketball betting rules,https://www.pinnacle.com/en/betting-articles/educational/basketball-betting-rules/,B,2026-10-11,公开盘口教育入口；用于盘口类别交叉核对
