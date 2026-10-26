@@ -1,0 +1,256 @@
+{
+  "recorded_at": "2026-10-26T12:15:22.064560+00:00",
+  "stage": "isolated_validation_passed; not production or release",
+  "web_source_commit": null,
+  "source_note": "Frozen candidate web files are identified by exact hashes. A commit is supplied only after this source has been committed; null means a not-yet-committed candidate. Report/docs are a separate verification artifact.",
+  "checks": [
+    {
+      "command": "sh tests/browser/check.sh",
+      "exit_code": 0,
+      "result": "tests/browser/results.json",
+      "passed": 24,
+      "sha256": "9ab00aecdd7fdd5fa2deb3d089ec05f6afaae05ff8849ddfb3f1d186dd2f3be0",
+      "limits": "isolated Docker / mock API / no real credentials or bets"
+    },
+    {
+      "command": "sh tests/browser/integration-check.sh",
+      "exit_code": 0,
+      "result": "tests/browser/integration-results.json",
+      "passed": 11,
+      "sha256": "dbd14e3f8a9965350179ddc7bdd50a60d53e70ca67a48d08952b4b7d1153f204",
+      "limits": "fresh source API + nginx + isolated temporary PostgreSQL; artificial seeded data; live orders disabled; no provider services"
+    },
+    {
+      "command": "Docker network none: tests/browser/report-check.mjs",
+      "exit_code": 0,
+      "result": "tests/browser/report-results.json",
+      "passed": 3,
+      "sha256": "0a4ce98e022368128ae69420cd4d15edddefa4e6b69045b339ce9e43fefc44d1",
+      "limits": "Docker network none; local report server; no external requests"
+    }
+  ],
+  "web_source_sha256": {
+    "web/app/Dockerfile": "8febd9aef658841bd896b6649c64aa60dba4a4911527f93a785a688ebc3c7dc6",
+    "web/app/admin.js": "5355f58b4088b5a4186a778cb4b5db2a43a7416efe31e39d139ac8eec47cd108",
+    "web/app/app.css": "7663bf5342d37117c2c2b917166fc01c16e609ff71df55b373a6b83c4677cfd4",
+    "web/app/app.js": "997fb7ae45fd865180e8ed809b4bf8afa34bfd53500e5c5af534a8527dbb96b4",
+    "web/app/identity.js": "1f373315756b27fc156760d8d5944aa296c3c1dc3b9ffff53d5d7265925fa581",
+    "web/app/index.html": "794df01fcfbfece7c54bcea82904cf6603b463236d85091f0bf9080bf4be387c",
+    "web/app/mfa.js": "9fcd6657e830b56f6ce2215172c65e5e67ac3585c6ab93a76bd0a018fcc83090",
+    "web/app/nginx.conf": "266a94eea9d70439043a0b569e490a7b1a590fb5fb8e16ccac747102cd551151",
+    "web/app/qrcode.LICENSE": "82c8fe2a92f2bd3914ae5d0f23e28e26e18228adf6ace6e2467f8420dc729b45",
+    "web/app/qrcode.js": "18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780",
+    "web/app/ui.js": "dc87c4385dc55145fdbe839f6cc3f64bf27f6c29b51115511d8f2b9b93cbcafb"
+  },
+  "report_html_sha256": "30bf34dcd76d3f7b11a94630f4142ae8b239f5a91773bfbf661d13e3d43437a2",
+  "screenshots_and_diagrams": [
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-1280-admin-fixture.png",
+      "sha256": "f98d18086e4b55b632a8f915b3d76d7d5d88479f251ee3b00dabd13d8659cf9e",
+      "artificial_sample": true,
+      "width": 1280,
+      "height": 900
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-360-admin-fixture.png",
+      "sha256": "3740b2783d987eae9f9832d9ec2b633fbacbcf05c7ecbc117a4d700d3f931fec",
+      "artificial_sample": true,
+      "width": 360,
+      "height": 900
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-768-admin-fixture.png",
+      "sha256": "b88659528a98dc9487e30ab55c7381e7bfcf300862081df5850c858ab9068a97",
+      "artificial_sample": true,
+      "width": 768,
+      "height": 900
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-desktop-admin-telegram-fixture.png",
+      "sha256": "74ed7f6caf25e7e30bd1df8caaf178136c1fd6c2cb441eac2ed9935bccb39567",
+      "artificial_sample": true,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-desktop-empty-fixture.png",
+      "sha256": "df43b467c640f9df5d846286d36f1571fb7b914240f2749b060b0828c4145b28",
+      "artificial_sample": true,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-desktop-original-fixture.png",
+      "sha256": "4becc905c6fbea404231718f5f02c86ac72f65b1bc8f491cdacc54f90cdc39a2",
+      "artificial_sample": true,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-desktop-scores-fixture.png",
+      "sha256": "7ec0a6ea582771fbdba09e2600908856d914c88dfaaa0358826452a1e3218247",
+      "artificial_sample": true,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-desktop-stale-fixture.png",
+      "sha256": "cf75c740e1132a24071273b70b60df17a690d401348f07763f7dab6a43d0a9fd",
+      "artificial_sample": true,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-mobile-detail-fixture.png",
+      "sha256": "5a7468d528393d23e5d1dcbb2ad2e84af2e9627585174240654aad5a34274253",
+      "artificial_sample": true,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-mobile-empty-fixture.png",
+      "sha256": "f27e76fd44123ee9bcbede5174d4e44397490dfc9e525ae08f592895658ebc2e",
+      "artificial_sample": true,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-mobile-error-fixture.png",
+      "sha256": "ab751b8b85fd0762ac4547daca3febc8d31482e1d2a2beac7b0275da387cd00b",
+      "artificial_sample": true,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-mobile-loading-fixture.png",
+      "sha256": "f40f1d2e229cfbb0861ad532444d1a2347696db62a71afdeb93aa0b45aa02d02",
+      "artificial_sample": true,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-mobile-long-album-fixture.png",
+      "sha256": "1604fc3167e68ab9a2d0a577832b79ea63436b3adbc3cfcedc68f914eed15465",
+      "artificial_sample": true,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-mobile-membership-fixture.png",
+      "sha256": "7f8a5c62abaa8f772dea700d3a2725f84c836ba5328bd15913dbbf712fcd4d1a",
+      "artificial_sample": true,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-mobile-scores-fixture.png",
+      "sha256": "ba1b46784d7e3b6d444ba3c29a3b3385aee153b75e5bdc3539ce4ca871e5bc9b",
+      "artificial_sample": true,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/desktop-home-verified-2026-10-26.png",
+      "sha256": "87fb6aec924442b47493bda14ea39a906c12baa6141167b13bc4254e1ff97bf9",
+      "artificial_sample": false,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/desktop-match-detail-verified-2026-10-26.png",
+      "sha256": "d5b2c726d228a6f17f87321abdab334a49b6d9b9d9221d4c2338b7e454b0515f",
+      "artificial_sample": false,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/desktop-scores-verified-2026-10-26.png",
+      "sha256": "ed70e40c2f4694ef4b08bb57705443f6ec88486f0795effc6972e2d4c52ee4c6",
+      "artificial_sample": false,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/flow-1.svg",
+      "sha256": "5615352dea626f1f0a547417f831e76677cafd2dcd4a0d7ac02683825964b481",
+      "artificial_sample": false
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/integration-desktop-original-real-api-fixture.png",
+      "sha256": "02fbfac1d57c8a1c6303fe18366a8e7fafe92766ba24ab13db85c944ee7029a9",
+      "artificial_sample": true,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/integration-mobile-scores-real-api-fixture.png",
+      "sha256": "f1215521c61f1e41dc2050e341daef2e3be7a70f657298f24c9e4f6f44e9d986",
+      "artificial_sample": true,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/mobile-membership-verified-2026-10-26.png",
+      "sha256": "7a80c0dc7c43d5126dde2b4f145b25f163ad5752621be3fdd34ee876c7af96eb",
+      "artificial_sample": false,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/mobile-scores-verified-2026-10-26.png",
+      "sha256": "a44ded868ecf138e1dfed235ecc56a61bf4ee7da9a02e772ad1f8681f0849e30",
+      "artificial_sample": false,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/nowscore-desktop-2026-10-26.png",
+      "sha256": "d67099bfed7a3731aea5875dafc4f963a87d38aea348f08ee4d69cb45f12ad6b",
+      "artificial_sample": false,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/nowscore-mobile-2026-10-26.png",
+      "sha256": "1048f2c20c6fc222d59d4069701560d02bf053f5efc19df04ad3ce56e416757b",
+      "artificial_sample": false,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/nowscore-vip-2026-10-26.png",
+      "sha256": "d6b80e4bdbef762daadc6290573d0107cfa4983c601fcd65ea16c7d19dc036d3",
+      "artificial_sample": false,
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/report-offline-1440-verified.png",
+      "sha256": "51b4515fd1323c550f36ff6906360bbb8b9cea77b6f2cf0c0206bf42b1ba8c73",
+      "artificial_sample": false,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/report-offline-390-verified.png",
+      "sha256": "ed82e845e66940fafd374dd06bf2b834fb102d640774bb5286c7008dab549f07",
+      "artificial_sample": false,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/tablet-scores-verified-2026-10-26.png",
+      "sha256": "981fb3856777dcd88ff86b9148d2a7e6039be5283b1982899fcd0506ebbb05f0",
+      "artificial_sample": false,
+      "width": 768,
+      "height": 1024
+    }
+  ],
+  "upstream_limits": [
+    "No real Leyu or Telegram login",
+    "No real money orders",
+    "S3 intentionally unconfigured; expected private media 503",
+    "No provider vision verification",
+    "No production freshness or configuration ack"
+  ]
+}

@@ -89,6 +89,14 @@
     {
       "name": "手机长文、相册、回复及昵称变更保持完整阅读",
       "status": "passed"
+    },
+    {
+      "name": "管理员换机保留原因子、再次验证上下文与新备用码",
+      "status": "passed"
+    },
+    {
+      "name": "管理员换机关闭清密钥、继续登记、明确替换、过期取消",
+      "status": "passed"
     }
   ],
   "browser_errors": []

@@ -258,6 +258,15 @@
             </button>
           </div>
           <div id="identity-panel"></div>
+          <div class="form-actions">
+            <button
+              id="account-admin-entry"
+              class="small-button"
+              data-page="admin"
+            >
+              独立管理入口</button
+            ><span class="form-note">管理功能需要单独登录管理身份。</span>
+          </div>
           <div id="account-content" hidden>
             <details class="settings-section" open>
               <summary>我的资料</summary>
@@ -725,6 +734,14 @@
             <section id="admin-system" class="admin-panel" hidden>
               <details class="settings-section">
                 <summary>管理身份恢复</summary>
+                <div id="mfa-status"></div>
+                <div class="form-actions">
+                  <button id="mfa-refresh" class="small-button">
+                    刷新验证器状态</button
+                  ><button id="mfa-start" class="small-button">
+                    登记新验证器 / 换手机
+                  </button>
+                </div>
                 <p class="form-note">
                   恢复码只能查看一次。丢失动态验证码时仍需邮箱、密码及未使用的恢复码登录。
                 </p>

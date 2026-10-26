@@ -24,6 +24,7 @@ import {
 } from "./ui.js";
 import { initAdmin, loadAdmin } from "./admin.js";
 import { initIdentity } from "./identity.js";
+import { initMfa } from "./mfa.js";
 const initial = new URLSearchParams(location.hash.split("?")[1] || "");
 const state = {
   page: "scores",
@@ -1331,6 +1332,7 @@ $("#content-dialog").addEventListener("close", () => {
 });
 initAdmin({ state, loadIdentities, auth, route, openMessage, loadPlans });
 initIdentity({ state, dialog, auth, loadAccount });
+initMfa({ state, dialog });
 events();
 renderDates();
 loadIdentities().then(() => {

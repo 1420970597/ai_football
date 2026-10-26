@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-26T11:51:35.331Z",
+  "date": "2026-10-26T12:13:05.843Z",
   "environment": "fresh source API + nginx + isolated temporary PostgreSQL; artificial seeded data; live orders disabled; no provider services",
   "results": [
     {
@@ -32,6 +32,10 @@
     },
     {
       "name": "真实人工恢复码重置、再次登录和管理员恢复码一次显示",
+      "status": "passed"
+    },
+    {
+      "name": "真实管理员换机、错误验证码保留旧因子、恢复码登录",
       "status": "passed"
     },
     {

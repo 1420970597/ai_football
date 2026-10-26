@@ -11,7 +11,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "REPORT.md"
 TARGET = ROOT / "REPORT.html"
-MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"
 
 
 def inline(text: str) -> str:
@@ -38,6 +37,7 @@ def render(source: str) -> str:
     body: list[str] = []
     paragraph: list[str] = []
     index = 0
+    diagram_index = 0
 
     def flush_paragraph() -> None:
         if paragraph:
@@ -56,7 +56,12 @@ def render(source: str) -> str:
                 index += 1
             text = "\n".join(code)
             if language == "mermaid":
-                body.append(f'<pre class="mermaid">{text}</pre>')
+                diagram_index += 1
+                svg = ROOT / "images" / f"flow-{diagram_index}.svg"
+                if not svg.is_file():
+                    raise FileNotFoundError("Compile the local Mermaid SVG before generating the report")
+                body.append(f'<div class="diagram-scroll"><img src="images/flow-{diagram_index}.svg" alt="系统流程图，可横向滚动阅读"></div>')
+                body.append(f'<details><summary>查看可审阅的 Mermaid 源码</summary><pre class="mermaid-source"><code>{html.escape(text)}</code></pre></details>')
             else:
                 body.append(f'<pre><code>{html.escape(text)}</code></pre>')
         elif line.startswith("|"):
@@ -110,11 +115,10 @@ main{{max-width:1120px;margin:auto;padding:32px 24px;background:#fff}}
 h1,h2,h3{{line-height:1.25;color:#15283a}}h1{{font-size:32px}}h2{{margin-top:36px;border-bottom:1px solid #dce2e6;padding-bottom:8px}}
 p,li{{max-width:84ch}}a{{color:#087b73}}img{{max-width:100%;height:auto;display:block;margin:20px auto}}
 .table-scroll{{overflow:auto}}table{{border-collapse:collapse;width:100%;min-width:760px}}th,td{{text-align:left;padding:10px;border:1px solid #d9e0e4;vertical-align:top}}th{{background:#edf3f2}}
+.diagram-scroll{{overflow:auto;max-width:100%;border:1px solid #dce2e6}}.diagram-scroll img{{max-width:none;width:auto;margin:8px 0}}.mermaid-source{{font-size:12px}}
 pre{{padding:14px;background:#f2f4f5;overflow:auto;border-left:3px solid #13877d;white-space:pre-wrap}}code{{font-family:ui-monospace,monospace}}blockquote{{border-left:3px solid #e0a24a;margin-left:0;padding-left:16px;color:#53616c}}
 @media(max-width:640px){{main{{padding:20px 14px}}h1{{font-size:26px}}}}
 </style><main>{content}</main>
-<script src="{MERMAID_CDN}" defer></script>
-<script>window.addEventListener('load',()=>{{if(window.mermaid){{mermaid.initialize({{startOnLoad:true,securityLevel:'strict'}});mermaid.run();}}}});</script>
 </html>'''
 
 

@@ -309,6 +309,70 @@ async function setup({
       mode.reauthRequired = false;
       return reply({ expires_at: "2026-10-26T12:00:00Z" });
     }
+    if (p === "/admin/mfa/status")
+      return reply({
+        configured: true,
+        configuration_state: "configured",
+        recovery_codes_remaining: 10,
+        pending: mode.mfaPending || null,
+      });
+    if (
+      mode.reauthRequired &&
+      p.startsWith("/admin/mfa/enrollment") &&
+      method !== "GET" &&
+      method !== "DELETE"
+    )
+      return reply(
+        {
+          detail: {
+            code: "reauthentication_required",
+            session_kind: "admin",
+            message: "敏感操作需要再次验证当前凭据",
+          },
+        },
+        403,
+      );
+    if (p === "/admin/mfa/enrollment") {
+      if (mode.mfaPending && !body.replace_existing)
+        return reply({ detail: "已有尚未确认的新验证器，原验证器仍有效" }, 409);
+      mode.mfaPending = {
+        enrollment_id: id,
+        expires_at: new Date(
+          Date.now() + (mode.expireMfa ? -1000 : 600000),
+        ).toISOString(),
+      };
+      return reply(
+        {
+          ...mode.mfaPending,
+          secret: "KRSXG5DSNFXGOIDB",
+          otpauth_uri:
+            "otpauth://totp/Test?secret=KRSXG5DSNFXGOIDB&issuer=Test",
+        },
+        201,
+      );
+    }
+    if (p.startsWith("/admin/mfa/enrollment/") && method === "DELETE") {
+      mode.mfaPending = null;
+      return reply({ cancelled: true, previous_factor_unchanged: true });
+    }
+    if (p.startsWith("/admin/mfa/enrollment/") && p.endsWith("/confirm")) {
+      if (mode.invalidMfa)
+        return reply(
+          { detail: "新验证器动态验证码无效，原验证器保持有效" },
+          401,
+        );
+      mode.mfaPending = null;
+      return reply({
+        configured: true,
+        already_confirmed: false,
+        recovery_codes: Array.from(
+          { length: 10 },
+          (_, i) => "FIXTURE-NEW-MFA-RECOVERY-" + i,
+        ),
+        other_sessions_revoked: true,
+        message: "新验证器已生效，其他管理会话和旧备用码已撤销。",
+      });
+    }
     if (
       mode.reauthRequired &&
       method !== "GET" &&
@@ -1353,6 +1417,142 @@ await test("手机长文、相册、回复及昵称变更保持完整阅读", as
   await page.screenshot({
     path: evidence + "/candidate-mobile-long-album-fixture.png",
   });
+  await context.close();
+});
+await test("管理员换机保留原因子、再次验证上下文与新备用码", async () => {
+  const { page, context, mode, log } = await setup({ dual: true });
+  await page.locator(".utility-bar [data-page=admin]").click();
+  await page.locator("[data-admin-tab=system]").click();
+  await page
+    .locator("#mfa-start")
+    .evaluate((element) => (element.closest("details").open = true));
+  await page.locator("#mfa-start").click();
+  await page.waitForSelector("#mfa-secret");
+  assert.equal(await page.locator("#mfa-qr svg").count(), 1);
+  assert.match(
+    await page.locator("#mfa-secret").innerText(),
+    /KRSXG5DSNFXGOIDB/,
+  );
+  assert.equal(
+    await page.evaluate(() =>
+      JSON.stringify(localStorage).includes("KRSXG5DSNFXGOIDB"),
+    ),
+    false,
+  );
+  mode.invalidMfa = true;
+  await page.locator("#mfa-enrollment-form [name=totp_code]").fill("111111");
+  await page.locator("#mfa-enrollment-form button").click();
+  await page.waitForFunction(() =>
+    document
+      .querySelector("#mfa-message")
+      .textContent.includes("原验证器保持有效"),
+  );
+  assert.equal(await page.locator("#mfa-secret").count(), 1);
+  mode.invalidMfa = false;
+  mode.reauthRequired = true;
+  await page.locator("#mfa-enrollment-form [name=totp_code]").fill("222222");
+  await page.locator("#mfa-enrollment-form button").click();
+  await page.waitForSelector("#reauth-dialog[open]");
+  await page
+    .locator("#reauth-form [name=password]")
+    .fill("fixture-old-admin-password");
+  await page.locator("#reauth-form [name=totp_code]").fill("123456");
+  await page.locator("#reauth-form button").click();
+  await page.waitForFunction(
+    () => !document.querySelector("#reauth-dialog").open,
+  );
+  assert.equal(await page.locator("#mfa-secret").count(), 1);
+  assert.equal(
+    log.filter((request) => request.path.endsWith("/confirm")).length,
+    2,
+  );
+  await page.locator("#mfa-enrollment-form [name=totp_code]").fill("333333");
+  await page.locator("#mfa-enrollment-form button").click();
+  await page.waitForSelector("[data-once-secret] pre");
+  assert.equal(
+    (await page.locator("[data-once-secret] pre").innerText()).split("\n")
+      .length,
+    10,
+  );
+  assert.equal(await page.locator("#mfa-secret").count(), 0);
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(
+    () => !document.querySelector("[data-once-secret]"),
+  );
+  const writes = log.filter(
+    (request) =>
+      request.path.startsWith("/admin/mfa/enrollment") &&
+      request.method !== "GET",
+  );
+  assert.ok(
+    writes.every(
+      (request) =>
+        request.headers["x-session-context"] === "admin" &&
+        request.headers["x-csrf-token"] === "admin-test-csrf",
+    ),
+  );
+  await context.close();
+});
+await test("管理员换机关闭清密钥、继续登记、明确替换、过期取消", async () => {
+  const { page, context, mode, log } = await setup({
+    dual: true,
+    mobile: true,
+  });
+  await page.locator(".mobile-bottom [data-page=account]").click();
+  await page.locator("#account-admin-entry").click();
+  await page.locator("[data-admin-tab=system]").click();
+  await page
+    .locator("#mfa-start")
+    .evaluate((element) => (element.closest("details").open = true));
+  await page.locator("#mfa-start").click();
+  await page.waitForSelector("#mfa-secret");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector("#mfa-secret"));
+  await page.locator("[data-mfa-continue]").click();
+  assert.equal(await page.locator("#mfa-secret").count(), 0);
+  assert.match(
+    await page.locator("#dialog-content").innerText(),
+    /密钥只在首次发起时返回/,
+  );
+  mode.expireMfa = true;
+  await page.locator("#dialog-content [data-mfa-replace]").click();
+  await page.locator("#confirm-yes").click();
+  await page.waitForFunction(() =>
+    document.querySelector("#mfa-expiry").textContent.includes("登记已过期"),
+  );
+  assert.equal(await page.locator("#mfa-secret").innerText(), "");
+  assert.equal(
+    await page.locator("#mfa-enrollment-form button").isDisabled(),
+    true,
+  );
+  assert.equal(
+    await page
+      .locator("#content-dialog")
+      .evaluate((element) => element.scrollWidth > element.clientWidth),
+    false,
+  );
+  mode.reauthRequired = true;
+  await page.locator("#dialog-content [data-mfa-cancel]").click();
+  await page.locator("#confirm-yes").click();
+  await page.waitForFunction(
+    () => !document.querySelector("#content-dialog").open,
+  );
+  assert.equal(
+    await page.locator("#reauth-dialog").evaluate((element) => element.open),
+    false,
+  );
+  assert.equal(
+    log.filter((request) => request.path === "/admin/mfa/enrollment").at(-1)
+      .body.replace_existing,
+    true,
+  );
+  assert.ok(
+    log.some(
+      (request) =>
+        request.path.startsWith("/admin/mfa/enrollment/") &&
+        request.method === "DELETE",
+    ),
+  );
   await context.close();
 });
 assert.deepEqual(caught, []);

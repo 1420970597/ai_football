@@ -11,3 +11,5 @@
 真实API隔离联调另运行 `sh tests/browser/integration-check.sh`。该脚本从当前源码重建API和Nginx镜像，建立任务专属内部网络和tmpfs PostgreSQL，迁移新结构并注入4场人工赛事、4条报价、2条消息和2条推荐。注册、管理员MFA、Cookie、CSRF、会员授予及SQL查询均通过真实API完成，没有HTTP mock。实盘总开关关闭，不启动采集、模型或订单执行器；域名和凭据全部是无效测试值。
 
 联调输出为 `integration-results.json`，服务日志只留在本地忽略文件；脚本trap删除自身容器、网络和临时数据库。媒体S3未配置时真实授权端点返回503，单独列出而不声称真实媒体已验证。浏览器结果中的“真实API”只指当前源码接口和临时数据库，不能解释成真实上游/生产验收。
+
+报告离线验收为 `report-check.mjs compile` → Docker内生成HTML → `report-check.mjs`。同一固定浏览器镜像额外安装锁定的Mermaid11.4.1，只用于构建本地流程SVG，不进入生产网页。无参数检查在network none下以本地HTTP加载报告，验证每张图片解码、流程图及可展开源码、1440/390布局与外部请求为零；结果保存到 `report-results.json`。

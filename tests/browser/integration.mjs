@@ -7,14 +7,14 @@ const origin = "http://web";
 const evidence = "/work/reports/jiebao-score-reference/images";
 const results = [];
 const errors = [];
-function otp() {
+function otp(secret = "JBSWY3DPEHPK3PXP", stepOffset = 0) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   let bits = "";
-  for (const char of "JBSWY3DPEHPK3PXP")
+  for (const char of secret)
     bits += alphabet.indexOf(char).toString(2).padStart(5, "0");
   const key = Buffer.from(bits.match(/.{8}/g).map((x) => parseInt(x, 2)));
   const counter = Buffer.alloc(8);
-  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000) + stepOffset));
   const digest = crypto.createHmac("sha1", key).update(counter).digest();
   const offset = digest.at(-1) & 15;
   return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(
@@ -370,6 +370,81 @@ await scenario(
     );
   },
 );
+await scenario("真实管理员换机、错误验证码保留旧因子、恢复码登录", async () => {
+  await page.locator("#mfa-start").click();
+  await page.waitForSelector("#mfa-secret");
+  const secret = await page.locator("#mfa-secret").innerText();
+  assert.ok(secret.length >= 16);
+  assert.notEqual(secret, "JBSWY3DPEHPK3PXP");
+  assert.equal(await page.locator("#mfa-qr svg").count(), 1);
+  const pending = await api("/admin/mfa/status", { admin: true });
+  assert.equal(pending.status, 200);
+  assert.ok(pending.data.pending.enrollment_id);
+  assert.equal("secret" in pending.data, false);
+  const validCodes = new Set([-1, 0, 1].map((offset) => otp(secret, offset)));
+  let bad = 0;
+  while (validCodes.has(String(bad).padStart(6, "0"))) bad++;
+  await page
+    .locator("#mfa-enrollment-form [name=totp_code]")
+    .fill(String(bad).padStart(6, "0"));
+  await page.locator("#mfa-enrollment-form button").click();
+  await page.waitForFunction(() =>
+    document
+      .querySelector("#mfa-message")
+      .textContent.includes("原验证器保持有效"),
+  );
+  assert.equal(await page.locator("#mfa-secret").innerText(), secret);
+  assert.ok((await api("/admin/mfa/status", { admin: true })).data.pending);
+  const confirmationCode = otp(secret);
+  await page
+    .locator("#mfa-enrollment-form [name=totp_code]")
+    .fill(confirmationCode);
+  await page.locator("#mfa-enrollment-form button").click();
+  await page.waitForSelector("[data-once-secret] pre");
+  const recoveryCodes = (
+    await page.locator("[data-once-secret] pre").innerText()
+  ).split("\n");
+  assert.equal(recoveryCodes.length, 10);
+  assert.equal(await page.locator("#mfa-secret").count(), 0);
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(
+    () => !document.querySelector("[data-once-secret]"),
+  );
+  const changed = await api("/admin/mfa/status", { admin: true });
+  assert.equal(changed.data.pending, null);
+  assert.equal(changed.data.recovery_codes_remaining, 10);
+  assert.equal((await api("/auth/me")).status, 200);
+  await page.locator("#admin-logout").click();
+  await page.waitForSelector("#admin-content[hidden]", { state: "attached" });
+  const replay = await api("/admin/login", {
+    admin: true,
+    method: "POST",
+    body: {
+      email: "admin@web-integration.invalid",
+      password: "test-only-admin-password-1234",
+      totp_code: confirmationCode,
+    },
+  });
+  assert.equal(replay.status, 401);
+  await page.locator("#admin-identity [data-login=admin]").click();
+  await page.locator("[data-use-admin-recovery]").click();
+  await page
+    .locator("#auth-form [name=email]")
+    .fill("admin@web-integration.invalid");
+  await page
+    .locator("#auth-form [name=password]")
+    .fill("test-only-admin-password-1234");
+  await page.locator("#auth-form [name=recovery_code]").fill(recoveryCodes[0]);
+  await page.locator("#auth-form button").click();
+  await page.waitForSelector("#admin-content:not([hidden])");
+  assert.equal((await api("/admin/me", { admin: true })).status, 200);
+  assert.equal((await api("/auth/me")).status, 200);
+  assert.equal(
+    (await api("/admin/mfa/status", { admin: true })).data
+      .recovery_codes_remaining,
+    9,
+  );
+});
 await scenario("真实管理员退出保留本人身份与手机版布局", async () => {
   await page.locator(".utility-bar [data-page=admin]").click();
   await page.waitForSelector("#admin-content:not([hidden])");

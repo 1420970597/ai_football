@@ -14,6 +14,7 @@ import {
   period,
   selection,
 } from "./ui.js";
+import { loadMfaStatus } from "./mfa.js";
 let app;
 let sources = [];
 let settings = {};
@@ -49,6 +50,7 @@ export async function loadAdmin() {
     loadSources(),
     loadAdminPlans(),
     loadDiagnostics(),
+    loadMfaStatus(),
   ]);
 }
 async function loadDiagnostics() {
