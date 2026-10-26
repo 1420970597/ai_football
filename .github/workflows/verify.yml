@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: verify-${{ github.ref }}
+  group: verify-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
