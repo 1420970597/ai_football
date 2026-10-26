@@ -1,0 +1,8 @@
+{
+  "api": "services/api/Dockerfile",
+  "collector": "services/collector/Dockerfile",
+  "executor": "services/executor/Dockerfile",
+  "mcp": "services/hermes-mcp/Dockerfile",
+  "web": "web/app/Dockerfile",
+  "storage-tunnel": "infra/tunnel/Dockerfile"
+}

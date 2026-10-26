@@ -31,16 +31,20 @@ docker exec -i "$test_database" psql -v ON_ERROR_STOP=1 -U postgres >/dev/null <
 CREATE ROLE renewal_protocol_test LOGIN PASSWORD 'isolated-renewal-test-only';
 CREATE DATABASE renewal_protocol_test OWNER renewal_protocol_test;
 CREATE ROLE account_state_test LOGIN CREATEDB;
+CREATE ROLE recovery_test LOGIN CREATEDB;
 SQL
 test_commit=$(git rev-parse HEAD)
+test_source_clean=false
+if [ -z "$(git status --porcelain --untracked-files=normal)" ]; then test_source_clean=true; fi
 docker run --rm --name "$test_runner" --user "$(id -u):$(id -g)" \
   --cpus=.75 --memory=512m --network "$test_network" \
-  -e PYTHONDONTWRITEBYTECODE=1 -e SOURCE_COMMIT="$test_commit" \
+  -e PYTHONDONTWRITEBYTECODE=1 -e SOURCE_COMMIT="$test_commit" -e SOURCE_IS_CLEAN="$test_source_clean" \
   -e TEST_DATABASE_ADMIN_URL=postgresql://postgres@ai-football-v2-pgverify:5432/postgres \
   -e IDENTITY_TEST_DATABASE_URL=postgresql://postgres@ai-football-v2-pgverify:5432/postgres \
   -e TELEGRAM_TEST_DATABASE_URL=postgresql://postgres@ai-football-v2-pgverify:5432/postgres \
   -e LEYU_RENEWAL_TEST_DSN=postgresql://renewal_protocol_test:isolated-renewal-test-only@ai-football-v2-pgtest/renewal_protocol_test \
   -e ACCOUNT_TEST_DATABASE_URL=postgresql://account_state_test@ai-football-v2-pgtest/postgres \
+  -e RECOVERY_TEST_ADMIN_URL=postgresql://recovery_test@ai-football-v2-pgtest/postgres \
   -v "$test_root:/source:ro" -v "$test_output:/evidence" \
   ai-football-verifier:v2.0.0-dev python /source/infra/test/frozen_suite.py
 printf 'Isolated test evidence: %s\n' "$test_output"

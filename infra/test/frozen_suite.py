@@ -18,6 +18,7 @@ def main() -> int:
     frozen = Path("/tmp/frozen")
     shutil.copytree(source, frozen, ignore=shutil.ignore_patterns(
         ".git", ".runtime", "build", ".gradle", "node_modules", "__pycache__", "*.pyc",
+        ".env", ".env.*", "*.jks", "*.keystore",
     ))
     hashes = {str(p.relative_to(frozen)): hashlib.sha256(p.read_bytes()).hexdigest()
               for p in sorted(frozen.rglob("*")) if p.is_file()}
@@ -26,7 +27,8 @@ def main() -> int:
     logging.disable(logging.CRITICAL)
     started = time.monotonic()
     result = unittest.TextTestRunner(verbosity=1).run(unittest.defaultTestLoader.discover("tests"))
-    report = {"commit": os.environ.get("SOURCE_COMMIT", "uncommitted"), "tests": result.testsRun,
+    report = {"source_parent_commit": os.environ.get("SOURCE_COMMIT", "unknown"),
+              "committed_source_verified": os.environ.get("SOURCE_IS_CLEAN") == "true", "tests": result.testsRun,
               "failures": len(result.failures), "errors": len(result.errors),
               "skipped": len(result.skipped), "seconds": round(time.monotonic() - started, 3),
               "source_sha256": hashes, "scope": "isolated fixtures; no live providers or money"}
