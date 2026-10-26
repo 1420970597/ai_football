@@ -32,6 +32,8 @@ MAX_MESSAGE_MEDIA_BYTES = 32 * 1024 * 1024
 MAX_MEDIA_COUNT = 10
 MAX_IMAGE_PIXELS = 40_000_000
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+MESSAGE_MEDIA_PREFIX = "telegram/messages"
+MESSAGE_MEDIA_RETENTION = "expert_message_evidence"
 
 
 class SourceAccessError(RuntimeError):
@@ -460,7 +462,10 @@ class TelegramCollector:
         if not body or not _valid_image(body, mime):
             raise ValueError("image_format_mismatch")
         digest = hashlib.sha256(body).hexdigest()
-        key = f"telegram/{chat}/{message.id}/{digest}"
+        # Keep message media in a dedicated namespace.  Avatar and future
+        # review-evidence objects must never share this prefix, so retention
+        # jobs can operate on each class without guessing from a key.
+        key = f"{MESSAGE_MEDIA_PREFIX}/{chat}/{message.id}/{digest}"
         bucket = os.environ.get("S3_BUCKET", "").strip()
         endpoint = os.environ.get("S3_ENDPOINT_URL", "").strip()
         access = os.environ.get("S3_ACCESS_KEY", "").strip()
@@ -475,11 +480,15 @@ class TelegramCollector:
                                   config=Config(connect_timeout=3, read_timeout=15, retries={"max_attempts": 2},
                                                 proxies={"https": os.environ["S3_HTTPS_PROXY"]} if os.environ.get("S3_HTTPS_PROXY") else None))
             try:
-                client.put_object(Bucket=bucket, Key=key, Body=body, ContentType=mime, Metadata={"sha256": digest})
+                client.put_object(
+                    Bucket=bucket, Key=key, Body=body, ContentType=mime,
+                    Metadata={"sha256": digest, "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION},
+                )
             finally:
                 client.close()
         await asyncio.to_thread(upload)
-        return {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size}
+        return {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size,
+                "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION}
 
     async def _cancel_auth(self):
         task, self.auth_task = self.auth_task, None

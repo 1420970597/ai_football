@@ -1,5 +1,6 @@
 import base64
 from datetime import datetime, timezone
+import hashlib
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -41,3 +42,17 @@ class HermesImagesTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(blobstore, 'read_image', AsyncMock(return_value=PNG)), patch.object(hermes_client, 'MAX_REVIEW_IMAGE_BYTES', len(PNG)):
             with self.assertRaisesRegex(RuntimeError, 'total bytes'):
                 await hermes_client._content_parts(self.message([{'object_key':str(i),'mime_type':'image/png'} for i in range(2)]), 'r', 'a')
+
+    async def test_remote_media_digest_and_byte_evidence_are_verified_before_model_input(self):
+        digest = hashlib.sha256(PNG).hexdigest()
+        media = [{'object_key': 'v2/image.png', 'mime_type': 'image/png', 'sha256': digest, 'bytes': len(PNG)}]
+        with patch.object(blobstore, 'read_image', AsyncMock(return_value=PNG)):
+            parts = await hermes_client._content_parts(self.message(media), 'r', 'a')
+        self.assertEqual('image_url', parts[1]['type'])
+
+        with patch.object(blobstore, 'read_image', AsyncMock(return_value=PNG)):
+            with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+                await hermes_client._content_parts(self.message([{**media[0], 'sha256': '0' * 64}]), 'r', 'a')
+        with patch.object(blobstore, 'read_image', AsyncMock(return_value=PNG)):
+            with self.assertRaisesRegex(RuntimeError, 'byte count mismatch'):
+                await hermes_client._content_parts(self.message([{**media[0], 'bytes': len(PNG) + 1}]), 'r', 'a')

@@ -390,8 +390,15 @@ async function listAdmins(append = false) {
     }
     const html = data.items
       .map(
-        (e) =>
-          `<div class="source-item"><span>${esc(e.nickname || e.username)}<br><span class="muted">${esc(e.sender_id)}${e.sender_identity_kind === "chat_sender" || String(e.sender_id).startsWith("-") ? " · 频道/群组发言身份，不代表具体匿名个人" : ""}</span></span><button data-author="${esc(e.sender_id)}" data-nickname="${esc(e.nickname || e.username)}">选用</button></div>`,
+        (e) => {
+          const username = e.username ? `@${e.username}` : "无用户名";
+          const role = e.admin_kind === "owner" ? "群主" : e.admin_kind === "administrator" ? "管理员" : "身份未确认";
+          const avatar = e.has_avatar ? "头像可用" : e.avatar_state === "absent" ? "无头像" : "头像未读取";
+          const anonymous = e.sender_identity_kind === "chat_sender" || String(e.sender_id).startsWith("-")
+            ? " · 频道/群组发言身份，不代表具体匿名个人"
+            : "";
+          return `<div class="source-item"><span><strong>${esc(e.nickname || e.username || e.sender_id)}</strong><br><span class="muted">${esc(username)} · ${esc(role)} · ${esc(avatar)}<br>${esc(e.sender_id)}${anonymous}</span></span><button data-author="${esc(e.sender_id)}" data-nickname="${esc(e.nickname || e.username || e.sender_id)}">选用</button></div>`;
+        },
       )
       .join("");
     if (append) $("#source-admins").insertAdjacentHTML("beforeend", html);

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
+import re
 import uuid
 from datetime import timezone
 
@@ -52,6 +55,19 @@ async def _content_parts(message: dict, review_id: str, attempt_id: str) -> list
         image = await blobstore.read_image(str(media["object_key"]))
         if mime != blobstore.image_mime(image):
             raise RuntimeError('remote image type conflicts with stored media evidence')
+        expected_digest = str(media.get("sha256", "")).strip().lower()
+        if expected_digest:
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+                raise RuntimeError('remote image checksum evidence is invalid')
+            if not hmac.compare_digest(hashlib.sha256(image).hexdigest(), expected_digest):
+                raise RuntimeError('remote image checksum mismatch')
+        if media.get("bytes") is not None:
+            try:
+                expected_bytes = int(media["bytes"])
+            except (TypeError, ValueError):
+                raise RuntimeError('remote image byte evidence is invalid') from None
+            if expected_bytes < 0 or expected_bytes != len(image):
+                raise RuntimeError('remote image byte count mismatch')
         total_bytes += len(image)
         if total_bytes > MAX_REVIEW_IMAGE_BYTES:
             raise RuntimeError('review image total bytes exceed limit')

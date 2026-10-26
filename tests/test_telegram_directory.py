@@ -154,6 +154,40 @@ class TelegramDirectoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.client.rpc_calls[0], GetFullChatRequest)
         self.assertTrue(result["anonymous_admins_may_be_unlisted"])
 
+    async def test_admin_directory_exposes_stable_identity_username_role_and_avatar_state(self):
+        chat_id = self.use_group(group(13))
+        self.client.users = [SimpleNamespace(id=7, first_name="同名", last_name="管理员",
+                                              username="named_admin", photo=SimpleNamespace(photo_id=1))]
+        self.client.roles = [ChatParticipantAdmin(7, 1, NOW)]
+        result = await self.collector.control("/admins", {"chat_id": chat_id})
+        self.assertEqual("ready", result["state"])
+        self.assertEqual({"7", "named_admin", "administrator"},
+                         {result["items"][0]["sender_id"], result["items"][0]["username"], result["items"][0]["admin_kind"]})
+        self.assertTrue(result["items"][0]["has_avatar"])
+        self.assertEqual("not_loaded", result["items"][0]["avatar_state"])
+
+    async def test_same_nickname_across_groups_keeps_distinct_stable_ids(self):
+        first_id = self.use_group(group(14, "第一群"))
+        self.client.users = [SimpleNamespace(id=7, first_name="完全同名", last_name="", username="first_author")]
+        self.client.roles = [ChatParticipantAdmin(7, 1, NOW)]
+        first = await self.collector.control("/admins", {"chat_id": first_id})
+        second_id = self.use_group(group(15, "第二群"))
+        self.client.users = [SimpleNamespace(id=8, first_name="完全同名", last_name="", username="second_author")]
+        self.client.roles = [ChatParticipantAdmin(8, 1, NOW)]
+        second = await self.collector.control("/admins", {"chat_id": second_id})
+        self.assertEqual(["7"], [item["sender_id"] for item in first["items"]])
+        self.assertEqual(["8"], [item["sender_id"] for item in second["items"]])
+
+    async def test_removed_admin_role_disappears_from_next_directory_snapshot(self):
+        chat_id = self.use_group(group(16))
+        self.client.users = [SimpleNamespace(id=7, first_name="即将移除", last_name="", username="removed")]
+        self.client.roles = [ChatParticipantAdmin(7, 1, NOW)]
+        self.assertEqual(["7"], [item["sender_id"] for item in (await self.collector.control("/admins", {"chat_id": chat_id}))["items"]])
+        self.client.roles = [ChatParticipant(7, 1, NOW)]
+        result = await self.collector.control("/admins", {"chat_id": chat_id})
+        self.assertEqual("ready", result["state"])
+        self.assertEqual([], result["items"])
+
     async def test_channel_admin_pages_reach_every_stable_user_id(self):
         chat_id = self.use_group(group(99, channel=True))
         self.client.users = [User(id=index, first_name="同名") for index in range(1, 124)]
