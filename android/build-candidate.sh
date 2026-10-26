@@ -8,6 +8,15 @@ output_dir="$android_dir/build/artifacts"
 cleanup() { docker rm -f "$build_container" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 mkdir -p "$output_dir"
+# The production APK starts with an explicit HTTPS pairing address.  Keep
+# fixtures and cleartext URLs out of the application source so a test endpoint
+# cannot silently become the default service in a release candidate.
+if rg -n --glob '*.java' --glob '*.kt' --glob '*.xml' \
+  'http://|localhost|127\.0\.0\.1|0\.0\.0\.0|[A-Za-z0-9.-]+\.invalid|[A-Za-z0-9.-]+\.test' \
+  "$android_dir/app/src/main" | grep -v 'xmlns:android='; then
+  echo 'Android application source contains a default or fixture service URL' >&2
+  exit 1
+fi
 docker build --target toolchain -f "$android_dir/Dockerfile" -t ai-football-android-toolchain:v2.0.0-dev "$project_dir"
 docker create --name "$build_container" --cpus=1 --memory=1536m \
   -e GRADLE_USER_HOME=/workspace/gradle-cache \

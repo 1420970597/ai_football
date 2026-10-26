@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from contextlib import asynccontextmanager
 
@@ -15,6 +16,28 @@ from .security import decrypt_secret
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("platform.api")
+
+
+_SAFE_FRAME = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_.]*|<[A-Za-z0-9_]+>):\d+$")
+
+
+def _safe_exception_frames(exc: BaseException, *, limit: int = 8) -> str:
+    """Return only code locations; never serialize exception text or locals.
+
+    Exception strings may contain a PostgreSQL DSN, an upstream token, or a
+    request body.  The global handler is deliberately limited to a bounded
+    list of traceback code locations so diagnostics remain useful without
+    copying those values into the log sink.
+    """
+    frames = []
+    traceback = exc.__traceback__
+    while traceback is not None:
+        code_name = traceback.tb_frame.f_code.co_name
+        candidate = f"{code_name}:{traceback.tb_lineno}"
+        if _SAFE_FRAME.fullmatch(candidate):
+            frames.append(candidate)
+        traceback = traceback.tb_next
+    return ",".join(frames[-limit:])
 
 
 @asynccontextmanager
@@ -56,12 +79,7 @@ async def request_context(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def unexpected_error(request: Request, exc: Exception):
-    frames = []
-    tb = exc.__traceback__
-    while tb is not None:
-        frames.append(f"{tb.tb_frame.f_code.co_name}:{tb.tb_lineno}")
-        tb = tb.tb_next
-    log.error("request failure request_id=%s category=%s frames=%s", getattr(request.state, "request_id", ""), type(exc).__name__, ",".join(frames[-8:]))
+    log.error("request failure request_id=%s category=%s frames=%s", getattr(request.state, "request_id", ""), type(exc).__name__, _safe_exception_frames(exc))
     return JSONResponse(
         status_code=500,
         content={"detail": "服务暂不可用", "request_id": getattr(request.state, "request_id", "")},

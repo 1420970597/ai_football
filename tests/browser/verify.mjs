@@ -958,6 +958,22 @@ await test("游客权益拒绝、会员未配置支付、注册校验", async ()
   await page.locator('#dialog-content [data-page="membership"]').click();
   await page.waitForSelector(".plan-card");
   assert.equal(await page.locator(".plan-card button").isDisabled(), true);
+  await page.keyboard.press("Escape");
+  await page.locator("#account-entry").click();
+  await page.locator("#auth-form [name=email]").fill("user@example.test");
+  await page.locator("#auth-form [name=password]").fill("fixture-password");
+  await page.locator("#auth-form button").click();
+  await page.waitForSelector("#account-content:not([hidden])");
+  await page.locator('.mobile-bottom [data-page="membership"]').click();
+  await page.waitForSelector("#membership-current");
+  assert.match(
+    await page.locator("#membership-current").innerText(),
+    /有效至 2026\/11\/26 19:00/,
+  );
+  assert.doesNotMatch(
+    await page.locator("#membership-current").innerText(),
+    /會員|登入后查看/,
+  );
   await page.screenshot({
     path: evidence + "/candidate-mobile-membership-fixture.png",
   });
