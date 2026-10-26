@@ -22,12 +22,12 @@ docker run -d --name "$test_database" --network "$test_network" \
   -e POSTGRES_HOST_AUTH_METHOD=trust \
   postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36 >/dev/null
 test_ready=0
-while ! docker exec "$test_database" pg_isready -U postgres >/dev/null 2>&1; do
+while ! docker exec "$test_database" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; do
   test_ready=$((test_ready + 1))
   if [ "$test_ready" -ge 30 ]; then exit 1; fi
   sleep 1
 done
-docker exec -i "$test_database" psql -v ON_ERROR_STOP=1 -U postgres >/dev/null <<'SQL'
+docker exec -i "$test_database" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres >/dev/null <<'SQL'
 CREATE ROLE renewal_protocol_test LOGIN PASSWORD 'isolated-renewal-test-only';
 CREATE DATABASE renewal_protocol_test OWNER renewal_protocol_test;
 CREATE ROLE account_state_test LOGIN CREATEDB;
