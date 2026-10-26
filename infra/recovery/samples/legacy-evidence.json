@@ -1,0 +1,74 @@
+[
+  {
+    "legacy_id": "synthetic-complete-1",
+    "origin_kind": "telegram_expert",
+    "chat_id": "-100000000001",
+    "author_id": "100001",
+    "platform_message_id": "1",
+    "raw_text": "隔离演练：主队全场胜",
+    "posted_at": "2026-10-20T12:00:00Z",
+    "recommended_at": "2026-10-20T12:00:02Z",
+    "fixture_id": "leyu:synthetic-1",
+    "market_id": "synthetic-market-1",
+    "period": "full_time",
+    "line": "0",
+    "selection": "home",
+    "kind": "winner",
+    "phase": "scheduled",
+    "system_quote": {
+      "source": "leyu",
+      "evidence_kind": "system_captured",
+      "fixture_id": "leyu:synthetic-1",
+      "market_id": "synthetic-market-1",
+      "period": "full_time",
+      "line": "0",
+      "selection": "home",
+      "price": "1.95",
+      "source_updated_at": "2026-10-20T12:00:01Z"
+    },
+    "official_result": {
+      "fixture_id": "leyu:synthetic-1",
+      "status": "confirmed",
+      "provider_reference": "synthetic-official-1",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_updated_at": "2026-10-20T14:00:00Z",
+      "home": 2,
+      "away": 1
+    },
+    "settlement": {
+      "outcome": "win",
+      "unit_net": "0.95",
+      "result_reference": "synthetic-official-1"
+    }
+  },
+  {
+    "legacy_id": "synthetic-recoverable-1",
+    "origin_kind": "telegram_expert",
+    "chat_id": "-100000000001",
+    "author_id": "100001",
+    "platform_message_id": "2",
+    "raw_text": "隔离演练：缺少报价，须重新核对原始证据",
+    "evidence_locator": "project-only-synthetic-reference"
+  },
+  {
+    "legacy_id": "synthetic-insufficient-1",
+    "origin_kind": "telegram_expert",
+    "chat_id": "-100000000001",
+    "platform_message_id": "3",
+    "raw_text": "隔离演练：缺少稳定作者标识"
+  },
+  {
+    "legacy_id": "synthetic-insufficient-2",
+    "origin_kind": "telegram_expert",
+    "chat_id": "-100000000001",
+    "author_id": "100001",
+    "platform_message_id": "4",
+    "raw_text": "隔离演练：只有专家原文倍率",
+    "system_quote": {"source": "tg_original", "price": "99"}
+  },
+  {
+    "legacy_id": "synthetic-excluded-1",
+    "origin_kind": "model",
+    "raw_text": "隔离演练：旧模型记录不迁入专家统计"
+  }
+]

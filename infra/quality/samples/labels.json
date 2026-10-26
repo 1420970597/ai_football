@@ -1,0 +1,166 @@
+{
+  "format": "football-review-labels-v1",
+  "dataset_id": "synthetic-expert-regression-v1",
+  "synthetic": true,
+  "label_schema_version": 1,
+  "annotation_version": "synthetic-annotation-v1",
+  "created_at": "2026-10-26T12:00:00Z",
+  "samples": [
+    {
+      "sample_id": "synthetic-dual",
+      "synthetic": true,
+      "modality": "mixed",
+      "source": {
+        "level": "synthetic",
+        "reference": "synthetic:synthetic-dual",
+        "content_sha256": "9bcdf63223d67a31962694109ec107e37e6147326ce0291ed07b951b1dce3f85",
+        "message_revision": 1,
+        "media_sha256": [
+          "cac35436fe91456db3a421fae1471b4ab0b09b2e936f23cf0a140fdb9b976f7c"
+        ]
+      },
+      "expected": {
+        "decision": "accept",
+        "recommendations": [
+          {
+            "intent_id": "intent-one",
+            "fixture_id": "synthetic-fixture-one",
+            "market_id": "synthetic-winner",
+            "market_kind": "winner",
+            "period": "full_time",
+            "line": "0",
+            "selection": "home",
+            "phase": "scheduled"
+          },
+          {
+            "intent_id": "intent-two",
+            "fixture_id": "synthetic-fixture-two",
+            "market_id": "synthetic-total",
+            "market_kind": "total",
+            "period": "full_time",
+            "line": "2.5",
+            "selection": "over",
+            "phase": "live"
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "synthetic-half",
+      "synthetic": true,
+      "modality": "text",
+      "source": {
+        "level": "synthetic",
+        "reference": "synthetic:synthetic-half",
+        "content_sha256": "437bc06317df1d23944c94e9948dd7827d1a6f0e0a018a4221fa5c6785906ebf",
+        "message_revision": 1,
+        "media_sha256": []
+      },
+      "expected": {
+        "decision": "accept",
+        "recommendations": [
+          {
+            "intent_id": "intent-half",
+            "fixture_id": "synthetic-fixture-three",
+            "market_id": "synthetic-handicap",
+            "market_kind": "handicap",
+            "period": "first_half",
+            "line": "-0.25",
+            "selection": "away",
+            "phase": "live"
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "synthetic-ambiguous",
+      "synthetic": true,
+      "modality": "text",
+      "source": {
+        "level": "synthetic",
+        "reference": "synthetic:synthetic-ambiguous",
+        "content_sha256": "823acd9ac35d61410f0b5603e90c01ff29fb0dc432d18d78f037022949690c2e",
+        "message_revision": 1,
+        "media_sha256": []
+      },
+      "expected": {
+        "decision": "reject",
+        "recommendations": [],
+        "rejection_reason": "synthetic_ambiguous_match"
+      }
+    },
+    {
+      "sample_id": "synthetic-unsupported-image",
+      "synthetic": true,
+      "modality": "image",
+      "source": {
+        "level": "synthetic",
+        "reference": "synthetic:synthetic-unsupported-image",
+        "content_sha256": "b81032d93d361b0ae5eb11d0361ec48619a8fde71b5fcdf70f4c1842ab48f17d",
+        "message_revision": 1,
+        "media_sha256": [
+          "ea12510f83a7785c49fc36ab1a582bc43a0c22b3c914a925eb6fb3102f565873"
+        ]
+      },
+      "expected": {
+        "decision": "reject",
+        "recommendations": [],
+        "rejection_reason": "synthetic_unsupported_image"
+      }
+    },
+    {
+      "sample_id": "synthetic-duplicate",
+      "synthetic": true,
+      "modality": "text",
+      "source": {
+        "level": "synthetic",
+        "reference": "synthetic:synthetic-duplicate",
+        "content_sha256": "8ca9fa1d28342f765460793088b1c54101c6aa6d6f8b747d82c28647fe7966d3",
+        "message_revision": 1,
+        "media_sha256": []
+      },
+      "expected": {
+        "decision": "accept",
+        "recommendations": [
+          {
+            "intent_id": "intent-duplicate",
+            "fixture_id": "synthetic-fixture-four",
+            "market_id": "synthetic-total",
+            "market_kind": "total",
+            "period": "full_time",
+            "line": "2.25",
+            "selection": "under",
+            "phase": "scheduled"
+          }
+        ]
+      }
+    },
+    {
+      "sample_id": "synthetic-missing-run",
+      "synthetic": true,
+      "modality": "text",
+      "source": {
+        "level": "synthetic",
+        "reference": "synthetic:synthetic-missing-run",
+        "content_sha256": "9150dca291c6049f76035b62210f8a953d56088231910ee39057ee9e41cc1ee0",
+        "message_revision": 1,
+        "media_sha256": []
+      },
+      "expected": {
+        "decision": "accept",
+        "recommendations": [
+          {
+            "intent_id": "intent-missing",
+            "fixture_id": "synthetic-fixture-five",
+            "market_id": "synthetic-winner",
+            "market_kind": "winner",
+            "period": "full_time",
+            "line": "0",
+            "selection": "away",
+            "phase": "scheduled"
+          }
+        ]
+      }
+    }
+  ]
+}
