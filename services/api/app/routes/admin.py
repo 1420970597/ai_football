@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from .. import database
@@ -69,7 +69,8 @@ async def status(request: Request):
     sources = await pool.fetchval("SELECT count(*) FROM v2_expert_sources WHERE enabled")
     return {
         "database": "healthy" if db_ok else "unavailable",
-        "hermes": "configured" if request.app.state.settings.hermes_api_key else "unconfigured",
+        "hermes": await request.app.state.hermes_probe.check(),
+        "hermes_provider": "unverified",
         "telegram_sources": sources,
         "review_queue": row["queued"],
         "actor": identity["email"],
@@ -309,11 +310,13 @@ async def grant_membership(body: GrantInput, request: Request):
 
 
 @router.get("/users")
-async def list_users(request: Request, limit: int = 50, after: uuid.UUID | None = None):
+async def list_users(request: Request, limit: int = 50, after: uuid.UUID | None = None,
+                     q: str = Query(default='', max_length=120)):
     await require_admin(request)
     rows = await database.current_pool().fetch(
         "SELECT id,email,display_name,role,disabled_at,created_at FROM v2_users "
-        "WHERE ($1::uuid IS NULL OR id>$1) ORDER BY id LIMIT $2", after, max(1, min(limit, 100)) + 1,
+        "WHERE ($1::uuid IS NULL OR id>$1) AND ($3='' OR email ILIKE '%'||$3||'%' OR display_name ILIKE '%'||$3||'%') "
+        "ORDER BY id LIMIT $2", after, max(1, min(limit, 100)) + 1, q.strip(),
     )
     page = rows[:max(1, min(limit, 100))]
     return {"items": [dict(row) for row in page], "next_cursor": str(page[-1]["id"]) if len(rows) > len(page) else None}

@@ -33,10 +33,14 @@ skills:
   external_dirs:
     - /workspace/skills
 
+tools:
+  tool_search:
+    enabled: "off"
+
 platform_toolsets:
   api_server:
-    - skills
-    - football
+    - expert-skills
+    - mcp-football
 
 mcp_servers:
   football:
@@ -44,6 +48,8 @@ mcp_servers:
     headers:
       Authorization: "Bearer ${EXPERT_MCP_TOKEN}"
     tools:
+      resources: false
+      prompts: false
       include:
         - search_matches
         - resolve_match

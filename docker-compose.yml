@@ -81,6 +81,8 @@ services:
       DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?Set the versioned data encryption key}
       EXPERT_MCP_TOKEN: ${EXPERT_MCP_TOKEN:?Set the project MCP service token}
       COLLECTOR_INTERNAL_TOKEN: ${COLLECTOR_INTERNAL_TOKEN:?Set the collector service token}
+      EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Set the independent execution service token}
+      LIVE_ORDERS_ENABLED: ${LIVE_ORDERS_ENABLED:-false}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       BOOTSTRAP_ADMIN_TOTP_SECRET: ${BOOTSTRAP_ADMIN_TOTP_SECRET:-}
@@ -111,7 +113,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m"]
-    cpus: ${API_CPUS:-0.45}
+    cpus: ${API_CPUS:-0.4}
     mem_limit: 768m
     logging: *logging
 
@@ -147,7 +149,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m"]
-    cpus: ${REVIEW_WORKER_CPUS:-0.3}
+    cpus: ${REVIEW_WORKER_CPUS:-0.25}
     mem_limit: 512m
     logging: *logging
 
@@ -192,8 +194,43 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=64m"]
-    cpus: ${COLLECTOR_CPUS:-0.35}
+    cpus: ${COLLECTOR_CPUS:-0.3}
     mem_limit: 512m
+    logging: *logging
+
+  executor:
+    image: ghcr.io/1420970597/ai-football-executor:${APP_VERSION:-2.0.0-dev}
+    build:
+      context: .
+      dockerfile: services/executor/Dockerfile
+    restart: unless-stopped
+    environment:
+      PLATFORM_EXECUTOR_API: http://api:8080/internal/executor
+      EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Set the independent execution service token}
+      EXECUTOR_LIVE_ORDERS_ENABLED: ${EXECUTOR_LIVE_ORDERS_ENABLED:-false}
+    volumes:
+      - type: bind
+        source: ${LEYU_SIGNING_FILE:-./.runtime/leyu-app-signing.json}
+        target: /run/secrets/leyu-app-signing.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${LEYU_DISCOVERY_FILE:-./.runtime/leyu-app-discovery.json}
+        target: /run/secrets/leyu-app-discovery.json
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [app-private, egress]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m"]
+    cpus: ${EXECUTOR_CPUS:-0.15}
+    mem_limit: 256m
     logging: *logging
 
   hermes-mcp:
@@ -221,7 +258,7 @@ services:
     logging: *logging
 
   hermes:
-    image: nousresearch/hermes-agent:v0.22.5
+    image: nousresearch/hermes-agent:v0.22.5@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d
     restart: unless-stopped
     environment:
       HERMES_HOME: /opt/data/.hermes
@@ -234,6 +271,7 @@ services:
       HERMES_PROVIDER_API_KEY: ${HERMES_PROVIDER_API_KEY:?Set the existing model gateway credential}
       MCP_SERVER_URL: http://hermes-mcp:8090/mcp
       EXPERT_MCP_TOKEN: ${EXPERT_MCP_TOKEN:?Set the project MCP service token}
+      HERMES_GATEWAY_NO_SUPERVISE: "1"
     volumes:
       - type: bind
         source: ./integrations/hermes
@@ -247,7 +285,7 @@ services:
     tmpfs:
       - /opt/data:rw,noexec,nosuid,nodev,size=256m,mode=0700,uid=10000,gid=10000
     working_dir: /workspace
-    command: ["gateway", "run"]
+    command: ["python", "/workspace/runner.py", "gateway", "run", "--no-supervise"]
     depends_on:
       hermes-mcp:
         condition: service_started

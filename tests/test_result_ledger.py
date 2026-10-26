@@ -4,6 +4,7 @@ import unittest
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import asyncpg
 from fastapi import FastAPI
@@ -63,6 +64,7 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         first = await self.submit(self.result())
         self.assertEqual(200, first.status_code, first.text)
         self.assertEqual('half_loss', await self.pool.fetchval('SELECT outcome FROM v2_expert_signals WHERE id=$1', signal))
+
         duplicate = await self.submit(self.result())
         self.assertTrue(duplicate.json()['items'][0]['duplicate'])
         corrected = await self.submit(self.result(home=3, source_updated_at=(self.now+timedelta(seconds=1)).isoformat()))
@@ -70,6 +72,19 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('win', await self.pool.fetchval('SELECT outcome FROM v2_expert_signals WHERE id=$1', signal))
         self.assertEqual(['half_loss','win'], [r['outcome'] for r in await self.pool.fetch('SELECT outcome FROM v2_signal_settlements ORDER BY result_version')])
         self.assertEqual(409, (await self.submit(self.result())).status_code)
+
+    async def test_message_detail_exposes_quote_id_from_evidence_without_requiring_current_quote(self):
+        signal = await self.signal()
+        quote_id = str(uuid.uuid4())
+        await self.pool.execute(
+            "INSERT INTO v2_quote_evidence(id,evidence_kind,reference_id,fixture_id,market_id,market_name,selection,price,source_updated_at,evidence) "
+            "VALUES($1,'expert_signal',$2,'fixture','total','大小','over',2,now(),$3)",
+            uuid.uuid4(), signal, {'quote_id': quote_id},
+        )
+        with patch.object(expert_content, 'require_history', AsyncMock()):
+            response = await self.client.get(f'/api/v1/public/messages/{self.message}')
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(quote_id, response.json()['signals'][0]['quote_id'])
 
     async def test_provisional_retraction_clears_profit_but_keeps_history(self):
         await self.signal()
@@ -127,3 +142,10 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(403, (await self.client.get(f'/api/v1/public/messages/{self.message}')).status_code)
         self.assertEqual(403, (await self.client.get(f'/api/v1/public/messages/{self.message}/media/0')).status_code)
         self.assertEqual(403, (await self.client.get(f'/api/v1/public/experts/{self.expert}/messages')).status_code)
+
+    async def test_exact_league_multiselect_does_not_match_similar_names(self):
+        await self.pool.execute("UPDATE v2_fixtures SET competition_id='league-1'")
+        selected = await self.client.get('/api/v1/public/matches', params=[('league_ids','league-1'),('league_ids','league-2')])
+        self.assertEqual(1, len(selected.json()['items']))
+        other = await self.client.get('/api/v1/public/matches', params={'league_ids':'league'})
+        self.assertEqual([], other.json()['items'])

@@ -57,6 +57,7 @@ async def matches(
     phase: str = Query(default="all", pattern="^(all|live|scheduled|finished|cancelled)$"),
     sport: str | None = Query(default=None, max_length=20),
     league: str | None = Query(default=None, max_length=100),
+    league_ids: list[str] | None = Query(default=None, max_length=100),
     q: str | None = Query(default=None, max_length=120),
     match_date: date | None = Query(default=None, alias="date"),
     tz: str = Query(default='Asia/Shanghai', max_length=80),
@@ -78,6 +79,10 @@ async def matches(
         clauses.append(f"lower(sport)={bind(sport.strip().lower())}")
     if league:
         clauses.append(f"competition_name ILIKE {bind('%' + league.strip() + '%')}")
+    if league_ids:
+        if any(not item or len(item) > 100 for item in league_ids):
+            raise HTTPException(422, '联赛标识无效')
+        clauses.append(f'competition_id=ANY({bind(league_ids)}::text[])')
     if q and q.strip():
         term = q.strip().lower()
         param = bind("%" + term + "%")

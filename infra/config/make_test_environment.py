@@ -20,6 +20,7 @@ if __name__ == "__main__":
         "DATA_ENCRYPTION_KEY": "fixture-encryption",
         "EXPERT_MCP_TOKEN": "fixture-mcp",
         "COLLECTOR_INTERNAL_TOKEN": "fixture-collector",
+        "EXECUTOR_INTERNAL_TOKEN": "fixture-executor",
         "HERMES_API_KEY": "fixture-hermes-internal",
         "HERMES_PROVIDER_BASE_URL": "https://model.example.invalid/v1",
         "HERMES_PROVIDER_API_KEY": "fixture-model-provider",

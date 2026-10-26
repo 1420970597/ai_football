@@ -118,7 +118,10 @@ async def message_detail(message_id: uuid.UUID, request: Request):
         'WHERE j.message_id=$1 ORDER BY j.created_at,t.sequence_no', message_id,
     )
     signals = await pool.fetch(
-        'SELECT s.*,f.competition_name,f.home_team,f.away_team,f.kickoff_at FROM v2_expert_signals s '
+        "SELECT s.*,f.competition_name,f.home_team,f.away_team,f.kickoff_at,"
+        "(SELECT ev.evidence->>'quote_id' FROM v2_quote_evidence ev WHERE ev.reference_id=s.id "
+        "AND ev.evidence_kind='expert_signal' ORDER BY ev.captured_at LIMIT 1) AS quote_id "
+        'FROM v2_expert_signals s '
         'JOIN v2_fixtures f ON f.id=s.fixture_id WHERE s.message_id=$1 ORDER BY s.created_at,s.id', message_id,
     )
     return {'message': media_links(dict(message)), 'analysis': [dict(row) for row in traces],

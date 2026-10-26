@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from . import auth, database
 from .config import load_settings
+from .health import HermesProbe
 from .routes import accounts, admin, expert_content, internal, public, renewal, results, reviews, telegram
 from .security import decrypt_secret
 
@@ -20,6 +21,7 @@ log = logging.getLogger("platform.api")
 async def lifespan(app: FastAPI):
     settings = load_settings()
     app.state.settings = settings
+    app.state.hermes_probe = HermesProbe(settings.hermes_api_url)
     app.state.decrypt_secret = lambda value: decrypt_secret(settings.encryption_key, value)
     pool = await database.open_pool(settings)
     try:
@@ -81,6 +83,7 @@ app.include_router(auth.router)
 app.include_router(public.router)
 app.include_router(admin.router)
 app.include_router(accounts.router)
+app.include_router(accounts.executor_router)
 app.include_router(internal.router)
 app.include_router(reviews.router)
 app.include_router(renewal.router)
