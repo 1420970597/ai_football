@@ -1,0 +1,889 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#403278" />
+    <meta name="color-scheme" content="light" />
+    <title>球讯比分 · 专家与赛事</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳至主要内容</a>
+    <div class="utility-bar">
+      <div class="site-width">
+        <span>球讯比分 · 赛事与专家记录</span>
+        <div>
+          <span id="header-clock"></span
+          ><button data-page="admin">管理入口</button
+          ><button data-page="membership">会员中心</button>
+        </div>
+      </div>
+    </div>
+    <header class="site-header">
+      <div class="site-width header-inner">
+        <a class="brand" href="#scores" aria-label="球讯首页"
+          ><span class="brand-symbol" aria-hidden="true">Q</span
+          ><span>球讯比分<small>QIUXUN SCORE</small></span></a
+        >
+        <nav class="main-nav" aria-label="主导航">
+          <button class="active" data-page="scores">足球比分</button
+          ><button data-page="scores" data-phase="scheduled">近日赛程</button
+          ><button data-page="scores" data-phase="finished">完场比分</button
+          ><button data-page="experts">专家推荐</button
+          ><button data-page="membership">会员服务</button>
+        </nav>
+        <button id="account-entry" class="header-login">登录 / 注册</button>
+      </div>
+    </header>
+    <main id="main" class="site-width main-layout">
+      <aside class="left-rail">
+        <h2>赛事中心</h2>
+        <button class="rail-active" data-page="scores">
+          足球比分 <span id="fixture-count">—</span></button
+        ><button data-page="scores" data-phase="live">滚球赛事</button
+        ><button data-page="scores" data-phase="scheduled">近日赛程</button
+        ><button data-page="scores" data-phase="finished">完场赛果</button>
+        <h2>专家服务</h2>
+        <button data-page="experts">专家排行榜</button
+        ><button data-page="messages">发言与审核原文</button
+        ><button data-page="membership">会员权益</button
+        ><button data-page="account">个人中心</button>
+        <div class="rail-note">
+          比赛、盘口：乐鱼<br />推荐意图：Telegram 专家<br />时间：北京时间
+          UTC+8
+        </div>
+      </aside>
+      <div class="content-column">
+        <section
+          id="view-scores"
+          class="view active"
+          aria-labelledby="score-title"
+        >
+          <div class="section-title">
+            <h1 id="score-title">足球即时比分</h1>
+            <span id="last-updated">等待更新</span
+            ><button
+              id="refresh-matches"
+              class="small-button"
+              aria-label="刷新赛事"
+            >
+              ↻ 刷新
+            </button>
+          </div>
+          <div class="sports-bar">
+            <button class="active" data-sport="football">足球</button
+            ><button data-sport="basketball">篮球</button
+            ><span>比分与盘口</span>
+          </div>
+          <div class="score-tabs" role="group" aria-label="比赛状态">
+            <button data-phase="all" class="active">全部</button
+            ><button data-phase="live">滚球</button
+            ><button data-phase="scheduled">未开赛</button
+            ><button data-phase="finished">已完场</button
+            ><button data-phase="cancelled">取消 / 延期</button>
+          </div>
+          <div class="date-strip">
+            <button id="date-prev" aria-label="前一日">‹</button>
+            <div id="date-buttons"></div>
+            <label class="date-select"
+              ><span class="sr-only">选择比赛日期</span
+              ><input id="date-picker" type="date" /></label
+            ><button id="date-next" aria-label="后一日">›</button>
+          </div>
+          <div class="filter-row">
+            <label
+              ><span class="sr-only">联赛筛选</span
+              ><button
+                id="league-filter"
+                type="button"
+                class="small-button"
+                aria-haspopup="dialog"
+              >
+                全部联赛 ▾
+              </button></label
+            ><label class="search-wrap"
+              ><span class="sr-only">搜索球队或联赛</span
+              ><input
+                id="match-search"
+                type="search"
+                placeholder="搜索球队 / 联赛"
+              /><span aria-hidden="true">⌕</span></label
+            ><button
+              id="favorites-filter"
+              class="small-button"
+              aria-pressed="false"
+            >
+              ☆ 关注
+            </button>
+          </div>
+          <div id="matches-notice" class="notice" role="status" hidden></div>
+          <div class="score-table">
+            <div class="score-table-head" aria-hidden="true">
+              <span>联赛</span><span>时间</span><span>状态</span
+              ><span>主队</span><span>比分</span><span>客队</span
+              ><span>当前盘口 / 赔率</span><span>详情</span>
+            </div>
+            <div id="matches-list" aria-live="polite"></div>
+            <div id="matches-state" class="empty-state"></div>
+            <button id="load-more" class="load-more" hidden>
+              继续加载赛事
+            </button>
+          </div>
+          <p class="data-footnote">
+            上游报价时间未知、过期或停盘时，均不视为可交易报价。关注仅保存在当前浏览器。
+          </p>
+        </section>
+        <section id="view-experts" class="view" aria-labelledby="experts-title">
+          <div class="section-title">
+            <h1 id="experts-title">专家推荐</h1>
+            <button id="refresh-experts" class="small-button">↻ 刷新</button>
+          </div>
+          <div class="section-tabs">
+            <button class="active" data-expert-tab="ranking">专家榜</button
+            ><button data-expert-tab="signals">最新推荐</button
+            ><button data-page="messages">发言与审核原文</button>
+          </div>
+          <div class="stat-help">
+            一单位收益使用推荐时系统赔率；准确率和收益不等同于实盘盈利。<button
+              id="stats-help"
+              class="text-link"
+            >
+              查看统计口径
+            </button>
+          </div>
+          <div id="experts-state" class="empty-state" hidden></div>
+          <div id="expert-ranking">
+            <div class="filter-row">
+              <button
+                id="followed-experts"
+                class="small-button"
+                aria-pressed="false"
+              >
+                只看关注</button
+              ><span class="muted"
+                >专家关注保存在当前浏览器；自动投注须在个人中心另行授权。</span
+              >
+            </div>
+            <div class="expert-table-head">
+              <span>专家 / Telegram 昵称</span><span>有效结算</span
+              ><span>准确率</span><span>1单位净收益</span>
+            </div>
+            <div id="experts-list"></div>
+            <div id="experts-follow-empty" class="empty-state" hidden>
+              还没有关注的专家。点击专家旁的星标添加。
+            </div>
+          </div>
+          <div id="expert-signals" hidden>
+            <div id="signals-list"></div>
+            <button id="signals-more" class="load-more" hidden>
+              继续加载推荐
+            </button>
+            <div id="signals-limited" class="membership-callout" hidden>
+              完整推荐历史需相应会员权益。<button data-page="membership">
+                查看会员
+              </button>
+            </div>
+          </div>
+        </section>
+        <section
+          id="view-messages"
+          class="view"
+          aria-labelledby="messages-title"
+        >
+          <div class="section-title">
+            <h1 id="messages-title">发言与审核原文</h1>
+            <button id="refresh-messages" class="small-button">↻ 刷新</button>
+          </div>
+          <div class="filter-row">
+            <label
+              >专家
+              <select id="message-expert">
+                <option value="">全部专家</option>
+              </select></label
+            ><span class="muted">含未解决与审核失败的消息</span>
+          </div>
+          <div id="messages-state" class="empty-state" hidden></div>
+          <div id="messages-list"></div>
+          <button id="messages-more" class="load-more" hidden>
+            继续加载发言
+          </button>
+        </section>
+        <section
+          id="view-membership"
+          class="view"
+          aria-labelledby="membership-title"
+        >
+          <div class="member-hero">
+            <span class="member-tag">球讯会员</span>
+            <h1 id="membership-title">让每一条推荐，都有据可查</h1>
+            <p>专家完整原文 · 系统盘口绑定 · 结算与审核轨迹</p>
+            <div id="membership-current">登录后查看我的权益</div>
+          </div>
+          <div class="section-title">
+            <h2>选择会员方案</h2>
+            <span>按实际套餐权益生效</span>
+          </div>
+          <div id="plans-list" class="plans-grid"></div>
+          <div class="section-title"><h2>权益说明</h2></div>
+          <div class="benefit-grid">
+            <article>
+              <span>▤</span>
+              <h3>完整专家记录</h3>
+              <p>文字、图片、模型输出与工具证据可回查。</p>
+            </article>
+            <article>
+              <span>◎</span>
+              <h3>精确赛事与盘口</h3>
+              <p>赛前与滚球分别绑定系统赛事及报价。</p>
+            </article>
+            <article>
+              <span>↗</span>
+              <h3>透明收益统计</h3>
+              <p>分清待结算、走盘、一单位收益与实盘收益。</p>
+            </article>
+          </div>
+          <p class="payment-note">
+            在线支付未配置，当前无法在线购买。已有会员权益按授权记录显示；开通与续期请联系管理员。
+          </p>
+        </section>
+        <section id="view-account" class="view" aria-labelledby="account-title">
+          <div class="section-title">
+            <h1 id="account-title">个人中心</h1>
+            <button id="user-logout" class="small-button" hidden>
+              退出用户登录
+            </button>
+          </div>
+          <div id="identity-panel"></div>
+          <div id="account-content" hidden>
+            <details class="settings-section" open>
+              <summary>我的资料</summary>
+              <form id="profile-form" class="compact-form">
+                <label
+                  >显示名称<input
+                    name="display_name"
+                    required
+                    maxlength="60" /></label
+                ><button class="primary-button">保存名称</button>
+              </form>
+            </details>
+            <details class="settings-section">
+              <summary>登录安全</summary>
+              <form id="password-form" class="compact-form">
+                <label
+                  >当前密码<input
+                    name="current_password"
+                    type="password"
+                    autocomplete="current-password"
+                    required /></label
+                ><label
+                  >新密码<input
+                    name="new_password"
+                    type="password"
+                    autocomplete="new-password"
+                    minlength="12"
+                    maxlength="128"
+                    required /></label
+                ><button class="primary-button">修改密码并撤销其他会话</button>
+              </form>
+            </details>
+            <details class="settings-section" open>
+              <summary>我的乐鱼账户 <span id="account-health"></span></summary>
+              <div id="account-verification" class="account-verification"></div>
+              <div class="form-actions">
+                <button id="refresh-account" type="button" class="small-button">
+                  刷新账户状态</button
+                ><button id="verify-account" type="button" class="small-button">
+                  排队无资金校验
+                </button>
+              </div>
+              <form id="leyu-form" class="compact-form">
+                <label
+                  >账户备注<input
+                    name="account_label"
+                    required
+                    maxlength="80" /></label
+                ><label
+                  >用户名<input
+                    name="username"
+                    autocomplete="username"
+                    required /></label
+                ><label
+                  >密码<input
+                    name="password"
+                    type="password"
+                    autocomplete="new-password"
+                    required
+                /></label>
+                <div class="form-actions">
+                  <button class="primary-button">加密保存账户</button
+                  ><button
+                    type="button"
+                    id="unbind-account"
+                    class="danger-outline"
+                  >
+                    解绑账户
+                  </button>
+                </div>
+                <p class="form-note">
+                  保存不等于验证成功。更换账户会撤销原自动投注许可。
+                </p>
+              </form>
+            </details>
+            <details class="settings-section" open>
+              <summary>自动投注与限额</summary>
+              <div id="betting-status"></div>
+              <form id="betting-form" class="compact-form">
+                <label class="check-label"
+                  ><input
+                    name="enabled"
+                    type="checkbox"
+                  />我本人启用自动投注</label
+                >
+                <fieldset>
+                  <legend>允许跟随的专家</legend>
+                  <div id="bet-experts" class="checkbox-grid"></div>
+                </fieldset>
+                <div class="form-grid">
+                  <label
+                    >每单本金<input
+                      name="stake_per_order"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      required /></label
+                  ><label
+                    >单笔上限<input
+                      name="max_per_order"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      required /></label
+                  ><label
+                    >每日限额<input
+                      name="daily_limit"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      required /></label
+                  ><label
+                    >开放敞口上限<input
+                      name="open_exposure_limit"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      required
+                  /></label>
+                </div>
+                <label class="check-label"
+                  ><input
+                    name="confirmed"
+                    type="checkbox"
+                  />我了解自动投注会使用本人账户资金，并确认以上专家与限额。</label
+                ><button class="primary-button">保存投注设置</button>
+              </form>
+              <button id="emergency-stop" class="danger-button">
+                紧急停止全部自动投注
+              </button>
+            </details>
+            <details class="settings-section">
+              <summary>我的订单</summary>
+              <div id="orders-list"></div>
+              <button id="refresh-orders" class="small-button">刷新订单</button
+              ><button id="orders-more" class="small-button" hidden>
+                加载更多订单
+              </button>
+            </details>
+            <details class="settings-section">
+              <summary>导出本人记录</summary>
+              <p class="form-note">
+                按页读取并下载本人资料、会员和订单，敏感字段不会导出。读取前可能要求再次验证身份。
+              </p>
+              <div class="form-actions">
+                <button class="small-button" data-export="profile">
+                  本人资料</button
+                ><button class="small-button" data-export="memberships">
+                  会员记录</button
+                ><button class="small-button" data-export="orders">
+                  本人订单
+                </button>
+              </div>
+            </details>
+            <details id="closure-section" class="settings-section">
+              <summary>注销本人账户</summary>
+              <p id="closure-status" class="form-note">
+                读取注销状态后才确认是否可注销。
+              </p>
+              <button id="closure-refresh" class="small-button">
+                刷新注销状态
+              </button>
+              <form id="closure-form" class="compact-form">
+                <label
+                  >本人密码<input
+                    name="password"
+                    type="password"
+                    autocomplete="current-password"
+                    required /></label
+                ><label
+                  >输入“注销我的球讯账户”<input
+                    name="confirmation_phrase"
+                    required
+                    pattern="注销我的球讯账户"
+                    autocomplete="off" /></label
+                ><button class="danger-button">停止投注并申请注销</button>
+              </form>
+              <button id="closure-cancel" class="small-button" hidden>
+                取消注销申请
+              </button>
+            </details>
+          </div>
+        </section>
+        <section id="view-admin" class="view" aria-labelledby="admin-title">
+          <div class="section-title">
+            <h1 id="admin-title">独立管理中心</h1>
+            <button id="admin-logout" class="small-button" hidden>
+              退出管理员
+            </button>
+          </div>
+          <div id="admin-identity"></div>
+          <div id="admin-content" hidden>
+            <div class="admin-tabs" aria-label="管理分区">
+              <button data-admin-tab="overview" class="active">运行状态</button
+              ><button data-admin-tab="telegram">Telegram</button
+              ><button data-admin-tab="leyu">乐鱼采集</button
+              ><button data-admin-tab="membership">会员管理</button
+              ><button data-admin-tab="orders">只读订单</button
+              ><button data-admin-tab="system">系统与审计</button>
+            </div>
+            <section id="admin-overview" class="admin-panel">
+              <div id="admin-status" class="status-grid"></div>
+              <details class="settings-section" open>
+                <summary>管理待办与数据状态</summary>
+                <div id="admin-diagnostics"></div>
+                <button id="refresh-diagnostics" class="small-button">
+                  刷新待办
+                </button>
+              </details>
+              <button id="refresh-admin" class="small-button">
+                刷新运行状态
+              </button>
+            </section>
+            <section id="admin-telegram" class="admin-panel" hidden>
+              <details class="settings-section" open>
+                <summary>Telegram 授权与连接</summary>
+                <div id="telegram-status"></div>
+                <div id="telegram-auth" class="telegram-auth"></div>
+                <div class="form-actions">
+                  <button id="tg-qr-start" class="primary-button">
+                    生成登录二维码</button
+                  ><button id="tg-refresh" class="small-button">检查状态</button
+                  ><button id="tg-cancel" class="small-button" hidden>
+                    取消本次授权</button
+                  ><button id="tg-disconnect" class="danger-outline">
+                    断开并撤销会话
+                  </button>
+                </div>
+                <form id="tg-password-form" class="compact-form" hidden>
+                  <label
+                    >Telegram 两步密码<input
+                      name="password"
+                      type="password"
+                      autocomplete="current-password"
+                      required /></label
+                  ><button class="primary-button">完成两步验证</button>
+                </form>
+              </details>
+              <details class="settings-section" open>
+                <summary>监控群组 / 频道与信任作者</summary>
+                <div class="source-layout">
+                  <div>
+                    <div class="form-actions">
+                      <button id="tg-dialogs" class="small-button">
+                        读取已加入群组
+                      </button>
+                    </div>
+                    <div id="tg-dialog-list"></div>
+                    <button id="tg-dialogs-more" class="small-button" hidden>
+                      更多群组
+                    </button>
+                    <form id="source-form" class="compact-form">
+                      <label
+                        >群组 / 频道 ID<input
+                          name="chat_id"
+                          required
+                          placeholder="例如 -100…" /></label
+                      ><label
+                        >显示名称<input name="display_name" required /></label
+                      ><label class="check-label"
+                        ><input
+                          name="allow_media"
+                          type="checkbox"
+                          checked
+                        />接收图片媒体</label
+                      ><button class="primary-button">添加监控来源</button>
+                    </form>
+                  </div>
+                  <div>
+                    <label
+                      >当前监控来源<select id="source-select">
+                        <option value="">选择来源</option>
+                      </select></label
+                    >
+                    <div id="source-state"></div>
+                    <div class="form-actions">
+                      <button id="source-toggle" class="small-button" disabled>
+                        停用来源</button
+                      ><button id="tg-admins" class="small-button" disabled>
+                        读取群管理员
+                      </button>
+                    </div>
+                    <div id="source-admins"></div>
+                    <button id="tg-admins-more" class="small-button" hidden>
+                      更多管理员
+                    </button>
+                    <form id="expert-source-form" class="compact-form">
+                      <h3>添加已核验作者</h3>
+                      <label
+                        >稳定作者 ID<input name="sender_id" required /></label
+                      ><label
+                        >Telegram 昵称<input name="nickname" required /></label
+                      ><button class="primary-button">加入信任作者</button>
+                    </form>
+                    <div id="trusted-experts"></div>
+                  </div>
+                </div>
+              </details>
+              <details class="settings-section">
+                <summary>Telegram 应用配置</summary>
+                <form id="telegram-settings" class="compact-form settings-form">
+                  <label
+                    >API ID<input
+                      name="telegram_api_id"
+                      inputmode="numeric" /></label
+                  ><label
+                    >API Hash<input
+                      name="telegram_api_hash"
+                      type="password"
+                      autocomplete="new-password"
+                      placeholder="留空保持原值" /></label
+                  ><label class="check-label"
+                    ><input
+                      name="telegram_source_enabled"
+                      type="checkbox"
+                    />启用 Telegram 接收</label
+                  ><button class="primary-button">保存应用配置</button>
+                </form>
+              </details>
+            </section>
+            <section id="admin-leyu" class="admin-panel" hidden>
+              <div class="notice">
+                配置使用版本校验。令牌留空保持原值；代理仅用于自动续期的登录请求。
+              </div>
+              <div id="leyu-version" class="muted"></div>
+              <form id="leyu-settings" class="compact-form settings-form">
+                <label
+                  >配置项搜索<input
+                    id="leyu-setting-search"
+                    type="search"
+                    placeholder="搜索域名、令牌、代理…"
+                /></label>
+                <details class="settings-section" open>
+                  <summary>数据采集与业务会话</summary>
+                  <label
+                    >业务地址<input name="leyu_api_base" type="url" /></label
+                  ><label
+                    >业务 requestId<input
+                      name="leyu_request_id"
+                      type="password"
+                      autocomplete="new-password"
+                      placeholder="留空保持原值" /></label
+                  ><label
+                    >业务 Cookie token<input
+                      name="leyu_api_token"
+                      type="password"
+                      autocomplete="new-password"
+                      placeholder="留空保持原值" /></label
+                  ><label>Origin<input name="leyu_origin" type="url" /></label>
+                </details>
+                <details class="settings-section">
+                  <summary>App 登录与自动续期</summary>
+                  <label
+                    >App 登录域名<input
+                      name="leyu_app_host"
+                      type="url" /></label
+                  ><label
+                    >登录账号<input
+                      name="leyu_app_login_name"
+                      autocomplete="off" /></label
+                  ><label
+                    >登录密码<input
+                      name="leyu_app_login_password"
+                      type="password"
+                      autocomplete="new-password"
+                      placeholder="留空保持原值" /></label
+                  ><label
+                    >动态域名来源<input
+                      name="leyu_domain_discovery_url"
+                      type="url" /></label
+                  ><label
+                    >登录代理 URL<input
+                      name="leyu_login_proxy_url"
+                      type="password"
+                      autocomplete="new-password"
+                      placeholder="留空保持原值" /></label
+                  ><label
+                    >短期代理提取地址<input
+                      name="leyu_login_proxy_extract_url"
+                      type="password"
+                      autocomplete="new-password"
+                      placeholder="留空保持原值"
+                  /></label>
+                </details>
+                <button class="primary-button">保存并热更新</button>
+              </form>
+            </section>
+            <section id="admin-membership" class="admin-panel" hidden>
+              <details class="settings-section" open>
+                <summary>会员授予</summary>
+                <form id="grant-form" class="compact-form">
+                  <label
+                    >用户邮箱<input name="email" type="email" required /></label
+                  ><label
+                    >套餐<select
+                      name="plan_code"
+                      id="grant-plan"
+                      required
+                    ></select></label
+                  ><label
+                    >有效天数<input
+                      name="days"
+                      type="number"
+                      min="1"
+                      max="3650"
+                      required /></label
+                  ><label
+                    >操作原因<textarea
+                      name="reason"
+                      minlength="3"
+                      maxlength="500"
+                      required
+                    ></textarea></label
+                  ><button class="primary-button">授予会员</button>
+                </form>
+              </details>
+              <details class="settings-section">
+                <summary>用户与授权记录</summary>
+                <form id="user-search-form" class="inline-form">
+                  <input
+                    name="q"
+                    type="search"
+                    aria-label="查找用户"
+                    placeholder="邮箱或昵称"
+                  /><button class="small-button">查找</button>
+                </form>
+                <div id="admin-users"></div>
+              </details>
+              <details class="settings-section">
+                <summary>套餐配置</summary>
+                <div id="admin-plans"></div>
+              </details>
+            </section>
+            <section id="admin-orders" class="admin-panel" hidden>
+              <p class="notice">
+                仅供审计与对账。实际净收益来自上游结算回执，与专家一单位收益分开；未知接单结果必须等待核对。
+              </p>
+              <form id="admin-orders-form" class="compact-form">
+                <div class="form-grid">
+                  <label
+                    >订单状态<select name="state">
+                      <option value="">全部状态</option>
+                      <option value="unknown">结果未知</option>
+                      <option value="pending">待执行</option>
+                      <option value="submitting">提交中</option>
+                      <option value="accepted">已接单</option>
+                      <option value="settled">已结算</option>
+                      <option value="rejected">已拒绝</option>
+                      <option value="cancelled">已取消</option>
+                    </select></label
+                  ><label
+                    >用户编号<input
+                      name="user_id"
+                      placeholder="留空查看全部授权对账记录"
+                      pattern="[0-9a-fA-F-]{36}"
+                  /></label>
+                </div>
+                <button class="primary-button">查询只读订单</button>
+              </form>
+              <div id="admin-orders-list"></div>
+              <button id="admin-orders-more" class="small-button" hidden>
+                继续加载订单
+              </button>
+            </section>
+            <section id="admin-system" class="admin-panel" hidden>
+              <details class="settings-section">
+                <summary>管理身份恢复</summary>
+                <p class="form-note">
+                  恢复码只能查看一次。丢失动态验证码时仍需邮箱、密码及未使用的恢复码登录。
+                </p>
+                <button id="generate-mfa-recovery" class="small-button">
+                  生成新一组一次性恢复码
+                </button>
+              </details>
+              <form id="system-settings" class="compact-form settings-form">
+                <h2>Hermes 与业务设置</h2>
+                <label
+                  >分析模型<input
+                    name="hermes_analysis_model"
+                    placeholder="由 Hermes 配置管理" /></label
+                ><label
+                  >报价有效秒数<input
+                    name="quote_max_age_seconds"
+                    type="number"
+                    min="1"
+                    max="3600" /></label
+                ><label class="check-label"
+                  ><input
+                    name="auto_betting_enabled"
+                    type="checkbox"
+                  />开放用户本人启用自动投注</label
+                ><button class="primary-button">保存业务设置</button>
+              </form>
+              <details class="settings-section">
+                <summary>管理审计</summary>
+                <button id="refresh-audit" class="small-button">
+                  刷新审计
+                </button>
+                <div id="audit-list"></div>
+              </details>
+            </section>
+          </div>
+        </section>
+      </div>
+      <aside class="right-rail">
+        <section class="side-panel">
+          <h2>专家榜 <button data-page="experts">更多 ›</button></h2>
+          <div id="top-experts"></div>
+        </section>
+        <section class="side-member">
+          <span>球讯会员</span>
+          <h2>原文、盘口、收益<br />一处完整回查</h2>
+          <button data-page="membership">查看会员权益 ›</button>
+        </section>
+        <section class="side-panel">
+          <h2>数据状态</h2>
+          <p id="service-state">正在连接赛事服务</p>
+          <p class="muted">采集新鲜度与服务连通分别展示。</p>
+        </section>
+      </aside>
+    </main>
+    <footer class="site-footer site-width">
+      球讯 · 比分与专家推荐记录　<span>所有时间均为北京时间 UTC+8</span
+      ><button data-page="admin">管理中心</button>
+    </footer>
+    <nav class="mobile-bottom" aria-label="手机主导航">
+      <button data-page="scores" class="active"><span>▣</span>比分</button
+      ><button data-page="scores" data-phase="scheduled">
+        <span>▦</span>赛程</button
+      ><button data-page="experts"><span>◎</span>专家</button
+      ><button data-page="membership"><span>♧</span>会员</button
+      ><button data-page="account"><span>♙</span>我的</button>
+    </nav>
+    <dialog id="auth-dialog">
+      <div class="dialog-header">
+        <h2 id="auth-title">用户登录</h2>
+        <button data-close-dialog aria-label="关闭登录">×</button>
+      </div>
+      <div class="section-tabs">
+        <button data-auth-tab="login" class="active">用户登录</button
+        ><button data-auth-tab="register">注册账号</button
+        ><button data-auth-tab="admin">管理员</button>
+      </div>
+      <form id="auth-form" class="compact-form">
+        <label
+          >邮箱<input
+            name="email"
+            type="email"
+            autocomplete="username"
+            required /></label
+        ><label id="display-name-field" hidden
+          >显示名称<input name="display_name" maxlength="60" /></label
+        ><label
+          >密码<input
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required /></label
+        ><label id="totp-field" hidden
+          >动态验证码<input
+            name="totp_code"
+            inputmode="numeric"
+            pattern="[0-9]{6}"
+            maxlength="6" /></label
+        ><label id="admin-recovery-field" hidden
+          >管理员一次性恢复码<input
+            name="recovery_code"
+            type="password"
+            autocomplete="off" /></label
+        ><button class="primary-button">登录</button>
+        <p id="auth-message" role="status"></p>
+      </form>
+      <div class="form-actions auth-assistance">
+        <button class="text-link" data-password-recovery>用户忘记密码</button
+        ><button
+          id="admin-recovery-toggle"
+          class="text-link"
+          data-use-admin-recovery
+          hidden
+        >
+          使用管理员恢复码
+        </button>
+      </div>
+    </dialog>
+    <dialog id="reauth-dialog">
+      <div class="dialog-header">
+        <h2 id="reauth-title">再次验证身份</h2>
+        <button data-close-dialog aria-label="关闭再次验证">×</button>
+      </div>
+      <form id="reauth-form" class="compact-form">
+        <p id="reauth-message" role="status"></p>
+        <label
+          >本人密码<input
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+        /></label>
+        <label id="reauth-totp" hidden
+          >动态验证码<input
+            name="totp_code"
+            inputmode="numeric"
+            pattern="[0-9]{6}"
+            maxlength="6"
+            autocomplete="one-time-code"
+        /></label>
+        <button type="submit" class="primary-button">验证身份</button>
+      </form>
+    </dialog>
+    <dialog id="content-dialog" class="content-dialog">
+      <div class="dialog-header">
+        <h2 id="dialog-title"></h2>
+        <button data-close-dialog aria-label="关闭详情">×</button>
+      </div>
+      <div id="dialog-content"></div>
+    </dialog>
+    <dialog id="confirm-dialog">
+      <div class="dialog-header"><h2>确认操作</h2></div>
+      <p id="confirm-message"></p>
+      <div class="form-actions">
+        <button id="confirm-no" class="small-button">取消</button
+        ><button id="confirm-yes" class="danger-button">确认</button>
+      </div>
+    </dialog>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script src="/assets/qrcode.js"></script>
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>

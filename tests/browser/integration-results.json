@@ -1,0 +1,53 @@
+{
+  "date": "2026-10-26T11:51:35.331Z",
+  "environment": "fresh source API + nginx + isolated temporary PostgreSQL; artificial seeded data; live orders disabled; no provider services",
+  "results": [
+    {
+      "name": "真实API比分投影、联赛多选和赛前赛果",
+      "status": "passed"
+    },
+    {
+      "name": "游客真实鉴权拒绝与用户注册会话",
+      "status": "passed"
+    },
+    {
+      "name": "真实管理员MFA与独立用户会话并存",
+      "status": "passed"
+    },
+    {
+      "name": "真实会员授予、搜索与幂等审计",
+      "status": "passed"
+    },
+    {
+      "name": "真实原文多买入、报价证据与未解决记录",
+      "status": "passed"
+    },
+    {
+      "name": "本人绑定只排队校验、未通过不启用、紧急停止",
+      "status": "passed"
+    },
+    {
+      "name": "真实管理待办、只读订单与本人敏感导出",
+      "status": "passed"
+    },
+    {
+      "name": "真实人工恢复码重置、再次登录和管理员恢复码一次显示",
+      "status": "passed"
+    },
+    {
+      "name": "真实管理员退出保留本人身份与手机版布局",
+      "status": "passed"
+    },
+    {
+      "name": "真实无未结算记录注销撤销本人会话",
+      "status": "passed"
+    }
+  ],
+  "browser_errors": [],
+  "failed_upstream_responses": [
+    {
+      "path": "/api/v1/public/messages/22222222-2222-4222-8222-222222222222/media/0",
+      "status": 503
+    }
+  ]
+}
