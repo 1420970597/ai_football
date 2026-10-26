@@ -2,7 +2,7 @@
 
 更新日期：2026-10-26。只记来源、类别与状态，不记录账号、口令、密钥、会话、代理地址或真实连接值。
 
-**当前范围：用户允许只读其他目录，但禁止在其他目录写入、移动或清理。以下路径只记录来源和字段形状，不回显值；项目内仍使用隔离假配置，未启动生产迁移。**
+**当前范围：用户允许读取其他目录，并明确授权操作 `/root/ai_football-v2-backups/`。外部目录仍未写入、移动或清理；已将经授权读取的运行配置、隧道引用、签名/发现引用和备份内 S3 CA 复制到项目内被忽略的 `.runtime/`，供当前 Docker 候选栈使用。秘密值不回显、不入 Git。**
 
 ## 本轮只读归档复核（2026-10-26）
 
@@ -41,11 +41,12 @@ docker run --rm --network none --cpus .5 --memory 256m --user "$(id -u):$(id -g)
 
 | 来源路径 | 发现内容 | 处理方式 |
 | --- | --- | --- |
-| `/root/.config/ai-football-v2/runtime.env` | 新平台白名单环境变量，包含数据库、S3、Hermes、会话和启动开关键名 | 只读形状核对；不复制、不加载到生产容器 |
-| `/root/.config/ai-football-v2/storage-connection.json` | 数据库隧道、S3端点、桶、区域、CA及代理字段 | 只读字段核对；不输出值、不写入项目 |
-| `/root/.config/ai-football-v2/leyu-collector.json`、`leyu-app-signing.json`、`leyu-app-discovery.json` | 乐鱼采集、签名、动态发现及短期代理字段 | 只读字段核对；未登录或刷新真实会话 |
+| `/root/.config/ai-football-v2/runtime.env` | 新平台白名单环境变量，包含数据库、S3、Hermes、会话和启动开关键名 | 只读读取并按服务白名单生成项目内 `.runtime/runtime.env`；不写回来源目录，当前仅用于开发候选 Compose |
+| `/root/.config/ai-football-v2/storage-connection.json` | 数据库隧道、S3端点、桶、区域、CA及代理字段 | 只读字段核对；当前运行值来自用户授权备份与隧道目录，秘密不输出、不写回来源 |
+| `/root/.config/ai-football-v2/leyu-collector.json`、`leyu-app-signing.json`、`leyu-app-discovery.json` | 乐鱼采集、签名、动态发现及短期代理字段 | 采集白名单字段加密导入项目台账，签名/发现文档以只读挂载引用；未启用真实投注 |
 | `/root/.config/ai-football-v2/telegram-collector.json`、`telegram-source-mappings.json`、`legacy-telegram-vault.json` | Telegram应用、来源映射和加密会话字段 | 只读字段形状；未发起Telegram连接 |
 | `/root/.config/ai-football-v2/legacy-ssh/`、`tunnel/` | 固定主机密钥、known_hosts及隧道模板 | 只读权限和文件形状；未建立外部隧道 |
+| `/root/ai_football-v2-backups/` | 用户授权备份；包含 S3 CA、旧项目配置和历史运行材料 | 已读取 S3 CA 与配置结构并恢复到项目 `.runtime/`；不删除、不移动、不覆盖备份，其余历史数据未导入 |
 | `/root/football-task41-backup/`、`/root/football-task42-backup/` | 历史台账、模型、订单、报告及数据库备份 | 只确认目录类型和文件清单；不把旧模型带入新系统，不删除历史备份 |
 
 | 类别 | 已核验事实 | 当前验证范围及剩余工作 |
@@ -54,8 +55,8 @@ docker run --rm --network none --cpus .5 --memory 256m --user "$(id -u):$(id -g)
 | SSH 部署入口 | 旧专用配置、密钥及已核验 known_hosts 完整，严格主机密钥连接曾成功 | 已停止探针，未采用自动接受新密钥；后续外部操作暂停 |
 | 远端拓扑 | 旧 storage API、模型、归档、Redis、PostgreSQL16及 RustFS 仍属旧存储栈 | 原 API/模型各配额1核、归档0.25核，未停止它们；未将采集移回本机 |
 | PostgreSQL | 16.15，库约185.7GB；原服务器 ssl=off；设置版本74 | SSH保护下只读事务 read_only=on，未改表、未新迁移、未删除；不能明文公网直连替代隧道 |
-| S3 兼容存储 | 找到旧端点、桶、私有访问键、path样式及原公共TLS证书 | 原 CA 校验 TLS1.3及授权列桶/位置/限定前缀查询通过；未做任何写删，恢复及写权限未验 |
-| 乐鱼 App | 找到当前远端生效登录、签名、设备、代理、动态发现和v74 token | 已整理采集专用配置及独立签名/发现文档；未真实登录或确认会话新鲜度 |
+| S3 兼容存储 | 找到旧端点、桶、私有访问键、path样式及原公共TLS证书 | 当前候选容器经隧道完成 `head/put/get/hash/delete` 探针，退出码0；只删除自身测试对象，旧数据未扫描或清理 |
+| 乐鱼 App | 找到当前远端生效登录、签名、设备、代理、动态发现和 token | 16 项采集白名单设置已加密写入当前台账；采集器重新加载后 WebSocket 有事件，但轮询受上游限流，真实会话新鲜度仍待确认 |
 | 乐鱼场馆 | 找到真实场馆缓存 request_id、host、origin、obtained_at、ttl及Cookie字段 | 无随机生成授权；尚未按新适配完整联调，不把找到的缓存标为仍有效 |
 | 登录专用代理 | 找到当前运行代理配置和旧实现引用 | 保留模板配置，未固定出口IP；请求范围由新登录客户端行为测试验证 |
 | Telegram 应用 | 版本74设置存在 API ID、Hash、已启用状态及3组来源 | 已整理独立配置，不要求用户重填；未与Telegram发起真实新连接 |
@@ -63,7 +64,7 @@ docker run --rm --network none --cpus .5 --memory 256m --user "$(id -u):$(id -g)
 | 专家映射 | 3组来源有 chat_id、sender_ids、title、enabled等配置 | 稳定编号及映射已保存供新平台导入；未迁移专家历史统计或伪造昵称 |
 | 模型网关 | 旧环境及远端设置均有模型地址、路由与访问键 | 新Hermes配置已有映射；真实文字、视觉及工具回路未由此盘点验收 |
 | 网页入口及证书 | 仅核验旧部署材料，未完成所有Web入口证书及代理归属 | 保留待核验，不覆盖其他项目配置 |
-| 新平台密钥 | 新数据的会话与加密配置先前已建立 | 不替代旧会话主密钥，未轮换或覆盖旧密钥 |
+| 新平台密钥 | 新数据的会话与加密配置先前已建立 | 不替代旧会话主密钥；项目运行时密钥仅在 `.runtime/`，未轮换或覆盖旧密钥 |
 | Android 签名及支付 | 未查完既有材料 | 不断言确实缺失，不伪造签名或付款；受当前目录范围限制 |
 
 ## 对原阻塞判断的修正
@@ -105,6 +106,8 @@ flowchart LR
 | 原Fernet解密与会话配置整理 | 退出码0，密文有效、原钥保留 | 未做 Telegram connect，避免旧会话跨IP冲突 |
 | PostgreSQL隧道只读查询 | 成功，read_only=on | 同次S3根扫描失败导致组合命令整体退出码1，不能将组合命令报为全通过 |
 | 原CA TLS握手及限定S3查询 | 单独探针退出码0，证书校验有效、授权前缀查询200 | 根目录查询失败保留记录，未写删 |
+| 项目候选栈运行时配置恢复 | `.runtime/` 运行环境、SSH 隧道引用、乐鱼签名/发现引用及备份 S3 CA 已生成；Compose config、容器启动和 Web healthz 退出码均为0 | 仅项目内运行时恢复；未向外部目录写入，真实 Telegram 与上游轮询仍受授权/限流状态约束 |
+| S3 精确对象探针 | 隧道内 `head_bucket`、限定前缀 `put/get/hash/delete` 退出码0 | 证书需由非 root API 读取，项目 CA 权限已修正为0644；未扫描高基数根目录 |
 | 隧道镜像候选构建 | 退出码0 | 尚非正式发布镜像 |
 | 收紧范围后停止本任务探针 | docker stop --time 5 ai-football-v2-tunnel-probe，退出码0 | 终止持续SSH，不读取挂载、不删外部文件、不动其他服务 |
 | 仓库内配置及CONNECT边界回归 | 最终11项全部通过，退出码0 | 假值、本地环回、秘密不回显、外部挂载拒绝、循环依赖及CONNECT正常/拒绝路径 |
@@ -113,4 +116,4 @@ flowchart LR
 
 ## 后续边界
 
-只继续仓库内实现和隔离测试。真实配置导入、旧服务接管、真实采集/Telegram授权、数据库升级、对象写入和正式部署均保持未完成状态；本轮只读盘点不改变外部文件，也不回滚外部保护材料。
+继续只在仓库内开发和验证；外部来源只读，备份目录不写入、不移动、不删除。当前开发候选已加载经授权的采集配置并完成 S3 精确对象探针，但真实 Telegram 授权、上游限流恢复、数据库历史升级和正式部署仍未完成；不得把候选容器健康冒充生产发布。

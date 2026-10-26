@@ -959,10 +959,17 @@ await test("游客权益拒绝、会员未配置支付、注册校验", async ()
   await page.waitForSelector(".plan-card");
   assert.equal(await page.locator(".plan-card button").isDisabled(), true);
   await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector("#content-dialog").open);
   await page.locator("#account-entry").click();
   await page.locator("#auth-form [name=email]").fill("user@example.test");
   await page.locator("#auth-form [name=password]").fill("fixture-password");
   await page.locator("#auth-form button").click();
+  await page.waitForFunction(() =>
+    document.querySelector("#account-entry").textContent.includes("普通测试"),
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector("#content-dialog").open);
+  await page.locator('.mobile-bottom [data-page="account"]').click();
   await page.waitForSelector("#account-content:not([hidden])");
   await page.locator('.mobile-bottom [data-page="membership"]').click();
   await page.waitForSelector("#membership-current");
@@ -977,7 +984,14 @@ await test("游客权益拒绝、会员未配置支付、注册校验", async ()
   await page.screenshot({
     path: evidence + "/candidate-mobile-membership-fixture.png",
   });
+  await page.locator('.mobile-bottom [data-page="account"]').click();
+  await page.waitForSelector("#account-content:not([hidden])");
+  await page.locator("#user-logout").click();
+  await page.waitForFunction(() =>
+    document.querySelector("#account-entry").textContent.includes("登录"),
+  );
   await page.locator("#account-entry").click();
+  await page.waitForSelector("#auth-dialog[open]");
   await page.locator('[data-auth-tab="register"]').click();
   assert.equal(
     await page.locator("#auth-form [name=password]").getAttribute("minlength"),
