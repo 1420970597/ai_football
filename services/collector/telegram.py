@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from typing import Any
 import uuid
@@ -15,8 +16,12 @@ from botocore.config import Config
 from telethon import TelegramClient, events, utils
 from telethon.errors import FloodWaitError, SessionPasswordNeededError, PasswordHashInvalidError
 from telethon.sessions import StringSession
-from telethon.tl.types import Channel, ChannelParticipantsAdmins
+from telethon.tl.types import (Channel, ChannelForbidden, ChannelParticipantsAdmins,
+                              ChannelParticipantAdmin, ChannelParticipantCreator, Chat, ChatForbidden,
+                              ChatParticipantAdmin, ChatParticipantCreator, ChatParticipantsForbidden,
+                              UserProfilePhotoEmpty)
 from telethon.tl.functions.channels import GetParticipantsRequest
+from telethon.tl.functions.messages import GetFullChatRequest
 
 from .telegram_backend import TelegramBackend
 from .telegram_control import ControlServer
@@ -30,7 +35,9 @@ ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 
 class SourceAccessError(RuntimeError):
-    pass
+    def __init__(self, reason, **details):
+        super().__init__(reason)
+        self.details = details
 
 
 def config_int(value) -> int | None:
@@ -144,16 +151,35 @@ class TelegramCollector:
             self.control_server.start()
 
     async def _entity(self, chat_id: str):
-        value = int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
+        chat_id = str(chat_id).strip()
+        if not (re.fullmatch(r"-[1-9][0-9]{0,18}", chat_id)
+                or re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", chat_id)):
+            raise SourceAccessError("invalid_source_identifier")
+        if chat_id.startswith("-") and int(chat_id) < -(2 ** 63):
+            raise SourceAccessError("invalid_source_identifier")
+        value = int(chat_id) if chat_id.startswith("-") else chat_id
         try:
-            return await self.client.get_entity(value)
+            entity = await self.client.get_entity(value)
         except ValueError:
             # StringSession 不持久化实体访问哈希：先从已加入对话解析，不能当成群组无管理员。
             async for dialog in self.client.iter_dialogs(limit=None):
                 entity = dialog.entity
                 if str(utils.get_peer_id(entity)) == chat_id or str(getattr(entity, "username", "")).casefold() == chat_id.lstrip("@").casefold():
-                    return entity
+                    return self._group_entity(entity)
             raise SourceAccessError("account_has_not_joined_or_entity_is_unavailable") from None
+        return self._group_entity(entity)
+
+    def _group_entity(self, entity):
+        if isinstance(entity, (ChannelForbidden, ChatForbidden)):
+            raise SourceAccessError("source_not_accessible")
+        if not isinstance(entity, (Channel, Chat)):
+            raise SourceAccessError("source_not_group_or_channel")
+        if getattr(entity, "left", False) or getattr(entity, "deactivated", False):
+            raise SourceAccessError("account_has_not_joined")
+        migrated = getattr(entity, "migrated_to", None)
+        if migrated:
+            raise SourceAccessError("source_migrated", resolved_chat_id=str(utils.get_peer_id(migrated)))
+        return entity
 
     async def sync_once(self) -> dict:
         if not self.backend:
@@ -527,57 +553,126 @@ class TelegramCollector:
             self.config["telegram_source_enabled"] = "false"
             return {"state": "disconnected"}
         if path in {"/dialogs", "/admins"}:
-            if not await self.connect():
-                return {"items": [], "state": "unauthorized"}
             try:
+                if not await self.connect():
+                    return {"items": [], "state": "unauthorized", "manual_id_allowed": False}
                 return await (self._dialogs(payload) if path == "/dialogs" else self._admins(payload))
             except FloodWaitError as exc:
                 return {"items": [], "state": "flood_wait", "retry_after": exc.seconds}
             except Exception as exc:
                 reason = {"ChatAdminRequiredError": "member_enumeration_restricted", "ChannelPrivateError": "source_not_accessible",
-                          "UserNotParticipantError": "account_has_not_joined", "ChannelInvalidError": "invalid_source_identifier"}.get(type(exc).__name__, type(exc).__name__)
+                          "UserNotParticipantError": "account_has_not_joined", "ChannelInvalidError": "invalid_source_identifier",
+                          "PeerIdInvalidError": "invalid_source_identifier", "UsernameInvalidError": "invalid_source_identifier",
+                          "UsernameNotOccupiedError": "invalid_source_identifier"}.get(type(exc).__name__, "upstream_unavailable")
                 if isinstance(exc, SourceAccessError):
                     reason = str(exc)
+                if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+                    reason = "network_unavailable"
                 return {"items": [], "state": "unavailable", "reason": reason,
-                        "manual_id_allowed": path == "/admins"}
+                        "manual_id_allowed": path == "/admins" and reason == "member_enumeration_restricted",
+                        **(exc.details if isinstance(exc, SourceAccessError) else {})}
         return {"state": "unsupported"}
 
     async def _dialogs(self, payload):
         offset = self._offset(payload.get("cursor"))
-        items, observed = [], 0
+        term = self._directory_term(payload)
+        matches = {}
         async for dialog in self.client.iter_dialogs(limit=None):
             if not (getattr(dialog, "is_group", False) or getattr(dialog, "is_channel", False)):
                 continue
-            if observed >= offset:
-                if len(items) == 50:
-                    return {"items": items, "next_cursor": str(offset + 50), "state": "ready"}
-                items.append({"chat_id": str(utils.get_peer_id(dialog.entity)), "title": dialog.name,
-                              "is_channel": bool(getattr(dialog, "is_channel", False))})
-            observed += 1
-        return {"items": items, "next_cursor": None, "state": "ready"}
+            try:
+                entity = self._group_entity(dialog.entity)
+            except SourceAccessError:
+                continue
+            chat_id = str(utils.get_peer_id(entity))
+            username = getattr(entity, "username", None)
+            if term and not self._directory_matches(term, dialog.name, chat_id, username, "@" + (username or "")):
+                continue
+            matches[chat_id] = {"chat_id": chat_id, "title": dialog.name, "username": username,
+                                "is_channel": bool(getattr(dialog, "is_channel", False)), "access_state": "joined"}
+        # Dialog order changes whenever a new message arrives. Peer-ID ordering
+        # keeps pagination stable across those recency changes.
+        items = sorted(matches.values(), key=lambda item: int(item["chat_id"]))
+        return {"items": items[offset:offset + 50], "next_cursor": str(offset + 50) if len(items) > offset + 50 else None,
+                "state": "ready", "q": str(payload.get("q", "")).strip(), "joined_only": True}
+
+    def _directory_term(self, payload):
+        term = str(payload.get("q", "")).strip().casefold()
+        if len(term) > 160 or any(ord(char) < 32 for char in term):
+            raise SourceAccessError("invalid_search_query")
+        return term
+
+    def _directory_matches(self, term, *values):
+        return any(term in str(value or "").casefold() for value in values)
 
     def _offset(self, cursor):
         if cursor is None or cursor == "":
             return 0
+        if not isinstance(cursor, str) or not re.fullmatch(r"[0-9]{1,7}", cursor):
+            raise SourceAccessError("invalid_pagination_cursor")
         value = int(cursor)
         if not 0 <= value <= 1_000_000:
-            raise ValueError("invalid pagination cursor")
+            raise SourceAccessError("invalid_pagination_cursor")
         return value
 
     async def _admins(self, payload):
         chat_id = str(payload.get("chat_id", ""))
         if not chat_id or len(chat_id) > 160:
-            raise ValueError("invalid Telegram chat")
+            raise SourceAccessError("invalid_source_identifier")
         offset = self._offset(payload.get("cursor"))
+        term = self._directory_term(payload)
         entity = await self._entity(chat_id)
         items = []
         if isinstance(entity, Channel):
-            page = await self.client(GetParticipantsRequest(channel=entity, filter=ChannelParticipantsAdmins(), offset=offset, limit=51, hash=0))
-            users = list(page.users)
+            if term:
+                admins, next_offset = {}, 0
+                while True:
+                    page, total = await self._channel_admin_page(entity, next_offset, 200)
+                    if page and all(user.id in admins for user, _ in page):
+                        raise SourceAccessError("directory_pagination_stalled")
+                    if not page and total is not None and next_offset < total:
+                        raise SourceAccessError("incomplete_admin_page")
+                    admins.update({user.id: (user, member) for user, member in page})
+                    next_offset += len(page)
+                    if not page or (total is not None and next_offset >= total) or (total is None and len(page) < 200):
+                        break
+                users = list(admins.values())
+            else:
+                users, _ = await self._channel_admin_page(entity, offset, 51)
         else:
-            # 普通小群无服务端 offset，最多二百成员，过滤后的管理员列表再分页。
-            users = [user async for user in self.client.iter_participants(entity, filter=ChannelParticipantsAdmins(), limit=None)][offset:offset + 51]
-        for user in users[:50]:
-            items.append({"sender_id": str(user.id), "nickname": _nickname(user, str(user.id)), "username": getattr(user, "username", None)})
+            # Telethon ignores ChannelParticipantsAdmins for a basic Chat.
+            # Inspect the actual role, rather than labelling every member admin.
+            page = await self.client(GetFullChatRequest(entity.id))
+            membership = page.full_chat.participants
+            if isinstance(membership, ChatParticipantsForbidden):
+                raise SourceAccessError("member_enumeration_restricted")
+            users_by_id = {user.id: user for user in page.users}
+            roles = [member for member in membership.participants if isinstance(member, (ChatParticipantAdmin, ChatParticipantCreator))]
+            if any(member.user_id not in users_by_id for member in roles):
+                raise SourceAccessError("incomplete_admin_page")
+            admins = [(users_by_id[member.user_id], member) for member in roles]
+            users = admins
+        if term:
+            users = [(user, member) for user, member in users if self._directory_matches(
+                term, user.id, _nickname(user, str(user.id)), getattr(user, "username", None), "@" + (getattr(user, "username", None) or ""))]
+        if term or isinstance(entity, Chat):
+            users = sorted(users, key=lambda entry: entry[0].id)[offset:offset + 51]
+        for user, member in users[:50]:
+            photo = getattr(user, "photo", None)
+            has_photo = bool(photo and not isinstance(photo, UserProfilePhotoEmpty))
+            items.append({"sender_id": str(user.id), "nickname": _nickname(user, str(user.id)), "username": getattr(user, "username", None),
+                          "admin_kind": "owner" if isinstance(member, (ChatParticipantCreator, ChannelParticipantCreator)) else "administrator",
+                          "has_avatar": has_photo, "avatar_state": "not_loaded" if has_photo else "absent"})
         return {"items": items, "next_cursor": str(offset + 50) if len(users)>50 else None, "state": "ready", "manual_id_allowed": True,
-                "anonymous_admins_may_be_unlisted": True}
+                "anonymous_admins_may_be_unlisted": True, "chat_id": str(utils.get_peer_id(entity)), "title": getattr(entity, "title", ""),
+                "q": str(payload.get("q", "")).strip()}
+
+    async def _channel_admin_page(self, entity, offset, limit):
+        page = await self.client(GetParticipantsRequest(channel=entity, filter=ChannelParticipantsAdmins(), offset=offset, limit=limit, hash=0))
+        participants = list(page.participants)
+        users_by_id = {user.id: user for user in page.users}
+        users = [(users_by_id[member.user_id], member) for member in participants
+                 if isinstance(member, (ChannelParticipantAdmin, ChannelParticipantCreator)) and member.user_id in users_by_id]
+        if len(users) != len(participants) or len({user.id for user, _ in users}) != len(users):
+            raise SourceAccessError("incomplete_admin_page")
+        return users, getattr(page, "count", None)

@@ -1,4 +1,5 @@
 import {
+  showDialog,
   $,
   $$,
   esc,
@@ -161,6 +162,8 @@ function route(
           ? x.dataset.phase === state.phase
           : page !== "scores" || genericScores),
     );
+    if (x.classList.contains("active")) x.setAttribute("aria-current", "page");
+    else x.removeAttribute("aria-current");
   });
   if (page === "scores") {
     renderDates();
@@ -197,15 +200,16 @@ function renderDates() {
             : date === shiftDay(today, 1)
               ? "明日"
               : date.slice(5).replace("-", "/");
-      return `<button data-date="${date}" class="${offset === 0 ? "active" : ""}">${label}<small>${date.slice(5).replace("-", "/")}</small></button>`;
+      return `<button data-date="${date}" aria-pressed="${offset === 0}" class="${offset === 0 ? "active" : ""}">${label}<small>${date.slice(5).replace("-", "/")}</small></button>`;
     })
     .join("");
-  $$(".score-tabs [data-phase]").forEach((b) =>
-    b.classList.toggle("active", b.dataset.phase === state.phase),
-  );
-  $$("[data-sport]").forEach((b) =>
-    b.classList.toggle("active", b.dataset.sport === state.sport),
-  );
+  for (const button of $$(".score-tabs [data-phase],[data-sport]")) {
+    const selected = button.dataset.phase
+      ? button.dataset.phase === state.phase
+      : button.dataset.sport === state.sport;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  }
   $("#score-title").textContent =
     state.sport === "basketball" ? "篮球即时比分" : "足球即时比分";
 }
@@ -851,6 +855,18 @@ async function loadAccount() {
       "open_exposure_limit",
     ])
       $("#betting-form").elements[name].value = b[name] ?? "";
+    const timezone = $("#betting-form").elements.daily_timezone;
+    const timezoneValue = b.daily_timezone || "Asia/Shanghai";
+    for (const option of [...timezone.options])
+      if (option.dataset.accountTimezone) option.remove();
+    if (
+      ![...timezone.options].some((option) => option.value === timezoneValue)
+    ) {
+      const option = new Option(timezoneValue, timezoneValue);
+      option.dataset.accountTimezone = "true";
+      timezone.add(option);
+    }
+    timezone.value = timezoneValue;
     $("#betting-form").elements.enabled.checked =
       !!b.auto_enabled && !b.emergency_stopped;
     $$("#bet-experts input").forEach(
@@ -872,7 +888,7 @@ async function loadAccount() {
 function configureBetControls() {
   const form = $("#betting-form"),
     enabled = form.elements.enabled.checked;
-  for (const input of $$("input", form)) {
+  for (const input of $$("input,select", form)) {
     if (input.name !== "enabled") input.disabled = !enabled;
     if (input.type === "number") input.required = enabled;
   }
@@ -902,12 +918,13 @@ async function loadOrders(append = false) {
 function auth(tab = "login") {
   const isAdmin = tab === "admin" || tab === "admin-recovery";
   state.authTab = tab;
-  $$("[data-auth-tab]").forEach((b) =>
+  $$("[data-auth-tab]").forEach((b) => {
     b.classList.toggle(
       "active",
       b.dataset.authTab === (isAdmin ? "admin" : tab),
-    ),
-  );
+    );
+    b.setAttribute("aria-pressed", String(b.classList.contains("active")));
+  });
   $("#auth-title").textContent = isAdmin
     ? "管理员独立登录"
     : tab === "register"
@@ -923,7 +940,7 @@ function auth(tab = "login") {
   $("#auth-form").elements.password.minLength = tab === "register" ? 12 : 1;
   $("#auth-form button").textContent = tab === "register" ? "注册" : "登录";
   $("#auth-message").textContent = "";
-  if (!$("#auth-dialog").open) $("#auth-dialog").showModal();
+  showDialog($("#auth-dialog"), $("#auth-form").elements.email);
 }
 function events() {
   document.addEventListener("click", (event) => {
@@ -931,8 +948,16 @@ function events() {
     if (!button) return;
     if (button.dataset.page) {
       event.preventDefault();
+      const pageChanged = state.page !== button.dataset.page;
       $$("dialog[open]").forEach((d) => d.close());
       route(button.dataset.page, { phase: button.dataset.phase });
+      if (pageChanged) {
+        const heading = $(".view.active h1");
+        if (heading) {
+          heading.tabIndex = -1;
+          heading.focus();
+        }
+      }
       return;
     }
     if (button.dataset.closeDialog !== undefined) {
@@ -1021,9 +1046,10 @@ function events() {
       return;
     }
     if (button.dataset.expertTab) {
-      $$("[data-expert-tab]").forEach((b) =>
-        b.classList.toggle("active", b === button),
-      );
+      $$("[data-expert-tab]").forEach((b) => {
+        b.classList.toggle("active", b === button);
+        b.setAttribute("aria-pressed", String(b === button));
+      });
       $("#expert-ranking").hidden = button.dataset.expertTab !== "ranking";
       $("#expert-signals").hidden = button.dataset.expertTab !== "signals";
     }
@@ -1231,6 +1257,7 @@ function events() {
         throw new Error("请先确认本人账户资金与投注风险");
       const body = {
         enabled,
+        ...(enabled ? { daily_timezone: fd.get("daily_timezone") } : {}),
         confirmation_phrase: enabled ? "I_UNDERSTAND" : "",
         allowed_experts: fd.getAll("expert"),
       };

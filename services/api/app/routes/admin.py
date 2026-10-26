@@ -5,10 +5,10 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import database
-from ..auth import audit, require_admin
+from ..auth import audit, require_admin, verify_sensitive_admin_session
 from ..security import encrypt_secret, decrypt_secret
 from ..membership import has_entitlement
 from .renewal import LEYU_CONFIG_KEYS, LEYU_SECRET_KEYS, revision_locked
@@ -27,10 +27,55 @@ class SourceInput(BaseModel):
     enabled: bool = True
     allow_media: bool = True
 
+    @field_validator("chat_id")
+    @classmethod
+    def stable_group_id(cls, value):
+        value = value.strip()
+        if not value.startswith("-") or not value[1:].isascii() or not value[1:].isdigit():
+            raise ValueError("监控来源须使用负数稳定群组编号，请先解析用户名后选择实际群组")
+        number = int(value)
+        if not -(2 ** 63) <= number < 0:
+            raise ValueError("群组编号超出支持范围")
+        return str(number)
+
+    @field_validator("display_name")
+    @classmethod
+    def meaningful_name(cls, value):
+        value = value.strip()
+        if not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError("显示名称不能为空或包含控制字符")
+        return value
+
 
 class SourceExpertInput(BaseModel):
     sender_id: str = Field(min_length=1, max_length=160)
     nickname: str = Field(min_length=1, max_length=120)
+    verification_note: str = Field(default="", max_length=500)
+
+    @field_validator("sender_id")
+    @classmethod
+    def stable_sender_id(cls, value):
+        value = value.strip()
+        digits = value[1:] if value.startswith("-") else value
+        if not digits.isascii() or not digits.isdigit() or not -(2 ** 63) <= int(value) < 2 ** 63 or int(value) == 0:
+            raise ValueError("作者须使用非零稳定数字编号，昵称和用户名不能作为身份键")
+        return str(int(value))
+
+    @field_validator("nickname", "verification_note")
+    @classmethod
+    def meaningful_text(cls, value, info):
+        value = value.strip()
+        if (info.field_name == "nickname" and not value) or any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError("昵称不能为空，核验说明和昵称不能包含控制字符")
+        return value
+
+
+def configured_sender_identity(sender_id):
+    value = str(sender_id)
+    kind = "chat_sender" if value.startswith("-") else "user_account" if value.isascii() and value.isdigit() else "unresolved"
+    # A posting peer may represent a channel or several anonymous admins. A
+    # configured mapping never claims to have identified the person behind it.
+    return {"sender_identity_kind": kind, "individual_author_resolved": False}
 
 
 class SettingsInput(BaseModel):
@@ -97,6 +142,7 @@ async def create_source(body: SourceInput, request: Request):
     source_id = uuid.uuid4()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
             try:
                 await conn.execute(
                     "INSERT INTO v2_expert_sources(id,platform_chat_id,display_name,enabled,allow_media) VALUES($1,$2,$3,$4,$5)",
@@ -116,6 +162,10 @@ async def update_source(source_id: uuid.UUID, body: SourceInput, request: Reques
     admin = await require_admin(request)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
+            existing = await conn.fetchval("SELECT platform_chat_id FROM v2_expert_sources WHERE id=$1 FOR UPDATE", source_id)
+            if existing is not None and existing != body.chat_id:
+                raise HTTPException(409, "来源群组编号不可替换，请新建来源以保留原群组证据与信任映射")
             row = await conn.execute(
                 "UPDATE v2_expert_sources SET platform_chat_id=$2,display_name=$3,enabled=$4,allow_media=$5,updated_at=now() WHERE id=$1",
                 source_id, body.chat_id.strip(), body.display_name.strip(), body.enabled, body.allow_media,
@@ -134,7 +184,8 @@ async def list_source_experts(source_id: uuid.UUID, request: Request):
         "FROM v2_source_experts se JOIN v2_experts e ON e.id=se.expert_id "
         "WHERE se.source_id=$1 ORDER BY e.display_nickname", source_id,
     )
-    return {"items": [dict(row) for row in rows]}
+    return {"items": [dict(row, source_id=source_id, trust_basis="configured_mapping", telegram_admin_verified=False,
+                            **configured_sender_identity(row["platform_sender_id"])) for row in rows]}
 
 
 @router.post("/sources/{source_id}/experts", status_code=201)
@@ -143,6 +194,7 @@ async def add_source_expert(source_id: uuid.UUID, body: SourceExpertInput, reque
     pool = database.current_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
             if not await conn.fetchval("SELECT 1 FROM v2_expert_sources WHERE id=$1", source_id):
                 raise HTTPException(status_code=404, detail="来源不存在")
             expert_id = await conn.fetchval(
@@ -154,8 +206,12 @@ async def add_source_expert(source_id: uuid.UUID, body: SourceExpertInput, reque
                 "INSERT INTO v2_source_experts(source_id,expert_id,enabled) VALUES($1,$2,TRUE) "
                 "ON CONFLICT(source_id,expert_id) DO UPDATE SET enabled=TRUE", source_id, expert_id,
             )
-            await audit(conn, admin["id"], "admin", "telegram_expert_trusted", "expert", str(expert_id))
-    return {"id": str(expert_id), "sender_id": body.sender_id, "nickname": body.nickname, "enabled": True}
+            await audit(conn, admin["id"], "admin", "telegram_expert_trusted", "expert", str(expert_id), details={
+                "source_id": str(source_id), "sender_id": body.sender_id, "trust_basis": "manual", "telegram_admin_verified": False,
+                "verification_note": body.verification_note, **configured_sender_identity(body.sender_id),
+            })
+    return {"id": str(expert_id), "source_id": str(source_id), "sender_id": body.sender_id, "nickname": body.nickname, "enabled": True,
+            "trust_basis": "manual", "telegram_admin_verified": False, **configured_sender_identity(body.sender_id)}
 
 
 @router.delete("/sources/{source_id}/experts/{expert_id}")
@@ -163,12 +219,13 @@ async def remove_source_expert(source_id: uuid.UUID, expert_id: uuid.UUID, reque
     admin = await require_admin(request)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
             result = await conn.execute(
                 "UPDATE v2_source_experts SET enabled=FALSE WHERE source_id=$1 AND expert_id=$2", source_id, expert_id,
             )
             if result.endswith(" 0"):
                 raise HTTPException(status_code=404, detail="来源管理员未配置")
-            await audit(conn, admin["id"], "admin", "telegram_expert_untrusted", "expert", str(expert_id))
+            await audit(conn, admin["id"], "admin", "telegram_expert_untrusted", "expert", str(expert_id), details={"source_id": str(source_id)})
     return {"disabled": True}
 
 

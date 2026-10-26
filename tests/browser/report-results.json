@@ -1,17 +1,17 @@
 {
-  "recorded_at": "2026-10-26T12:15:21.464Z",
+  "recorded_at": "2026-10-26T13:01:53.799Z",
   "environment": "Docker network none; local report server; no external requests",
   "results": [
     {
       "width": 1440,
-      "images_loaded": 22,
+      "images_loaded": 25,
       "diagram_loaded": true,
       "source_readable": true,
       "body_overflow": false
     },
     {
       "width": 390,
-      "images_loaded": 22,
+      "images_loaded": 25,
       "diagram_loaded": true,
       "source_readable": true,
       "body_overflow": false
@@ -19,7 +19,7 @@
     {
       "mode": "direct_file",
       "width": 390,
-      "images_loaded": 22,
+      "images_loaded": 25,
       "diagram_loaded": true,
       "source_readable": true
     }

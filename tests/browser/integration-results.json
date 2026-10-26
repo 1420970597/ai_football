@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-26T12:13:05.843Z",
+  "date": "2026-10-26T12:59:25.514Z",
   "environment": "fresh source API + nginx + isolated temporary PostgreSQL; artificial seeded data; live orders disabled; no provider services",
   "results": [
     {
@@ -23,7 +23,7 @@
       "status": "passed"
     },
     {
-      "name": "本人绑定只排队校验、未通过不启用、紧急停止",
+      "name": "本人绑定只排队、每日时区传输、未开放拒绝及紧急停止",
       "status": "passed"
     },
     {

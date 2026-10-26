@@ -6,7 +6,10 @@ import unittest
 from unittest.mock import patch
 
 import httpx
+from telethon import utils
 from telethon.errors import FloodWaitError, PasswordHashInvalidError, SessionPasswordNeededError
+from telethon.tl.types import Channel, Chat, ChatPhotoEmpty, ChatParticipantAdmin, ChatParticipants
+from telethon.tl.functions.messages import GetFullChatRequest
 
 from collector.telegram import TelegramCollector, MAX_MEDIA_BYTES, _valid_image
 
@@ -103,16 +106,24 @@ class Client:
         self.handlers.append((fn, event))
 
     async def get_entity(self, value):
-        return str(value)
+        return Chat(id=abs(int(value)), title="测试群", photo=ChatPhotoEmpty(), participants_count=105,
+                    date=datetime(2026, 10, 26, tzinfo=timezone.utc), version=1)
+
+    async def __call__(self, request):
+        if isinstance(request, GetFullChatRequest):
+            users = [SimpleNamespace(id=index, first_name=f"专家{index}", last_name="", username=None) for index in range(1, 106)]
+            admins = [ChatParticipantAdmin(user_id=user.id, inviter_id=1, date=datetime.now(timezone.utc)) for user in users]
+            return SimpleNamespace(full_chat=SimpleNamespace(participants=ChatParticipants(request.chat_id, admins, 1)), users=users)
+        raise AssertionError("unexpected fake RPC")
 
     async def iter_messages(self, entity, min_id, reverse, limit):
         self.query_limits.append(limit)
-        for message in sorted(self.messages.get(entity, []), key=lambda item: item.id):
+        for message in sorted(self.messages.get(str(utils.get_peer_id(entity)), []), key=lambda item: item.id):
             if message.id > min_id:
                 yield message
 
     async def get_messages(self, entity, ids):
-        return [item for item in self.messages.get(entity, []) if item.id in ids]
+        return [item for item in self.messages.get(str(utils.get_peer_id(entity)), []) if item.id in ids]
 
     async def iter_download(self, media, request_size):
         for chunk in self.download_chunks:
@@ -206,7 +217,7 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         original = self.client.iter_messages
 
         async def stream(entity, **kwargs):
-            if entity == "-1001":
+            if str(utils.get_peer_id(entity)) == "-1001":
                 raise FloodWaitError(None, capture=60)
             async for message in original(entity, **kwargs):
                 yield message
@@ -221,6 +232,21 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         await self.collector.sync_once()
         self.assertEqual(2, self.backend.positions["-1001"])
         self.assertEqual({}, self.backend.events)
+
+    async def test_trusted_channel_sender_keeps_channel_identity_instead_of_inventing_anonymous_person(self):
+        sender_id = -1001358434454
+        self.backend.source_items[0]["trusted_sender_ids"] = [str(sender_id)]
+        message = Message(1, sender=sender_id)
+
+        async def actual_sender():
+            return Channel(id=1358434454, title="频道发言身份", photo=ChatPhotoEmpty(), date=datetime.now(timezone.utc))
+
+        message.get_sender = actual_sender
+        self.client.messages["-1001"] = [message]
+        await self.collector.sync_once()
+        event = next(iter(self.backend.events.values()))
+        self.assertEqual(str(sender_id), event["sender_id"])
+        self.assertEqual("频道发言身份", event["sender_nickname"])
 
     async def test_failed_media_is_persisted_then_retry_recovers(self):
         message = Message(1, media=True)

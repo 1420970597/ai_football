@@ -44,7 +44,8 @@ jobs:
             esac
             reference="ghcr.io/1420970597/ai-football-$component:2.0.0-dev-$GITHUB_SHA"
             docker build -f "$recipe" --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-              --label org.opencontainers.image.version=2.0.0-dev -t "$reference" .
+              --label org.opencontainers.image.version=2.0.0-dev \
+              --label org.opencontainers.image.source=https://github.com/1420970597/ai_football -t "$reference" .
             docker push "$reference"
             docker pull "$reference"
             digest=$(docker image inspect "$reference" --format '{{index .RepoDigests 0}}')
@@ -59,13 +60,15 @@ jobs:
           docker run --rm --cpus=.5 --memory=256m --network none -v "$PWD:/work" -w /work \
             python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 \
             python infra/release/manifest.py --commit "$GITHUB_SHA" --images .runtime/release/images.json \
-              --artifacts android/build/artifacts --output .runtime/release/release-manifest.json
+              --artifacts android/build/artifacts --output .runtime/release/release-manifest.json \
+              --compose-output .runtime/release/compose-images.json
       - name: Create explicitly non-production GitHub prerelease
         run: |
           gh release create v2.0.0-dev --target "$GITHUB_SHA" --prerelease \
             --title 'v2.0.0-dev · 开发候选，尚未生产验收' \
             --notes-file docs/platform-v2/DEVELOPMENT_RELEASE.md \
             .runtime/release/release-manifest.json \
+            .runtime/release/compose-images.json \
             android/build/artifacts/ballnews-2.0.0-dev-debug.apk \
             android/build/artifacts/ballnews-2.0.0-dev-unsigned.apk \
             android/build/artifacts/package-verification.txt

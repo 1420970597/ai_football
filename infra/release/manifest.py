@@ -10,6 +10,35 @@ import re
 
 
 DEVELOPMENT_VERSION = "2.0.0-dev"
+COMPONENT_SERVICES = {
+    "api": ("api", "migrate", "review-worker"), "collector": ("collector",),
+    "executor": ("executor",), "mcp": ("hermes-mcp",), "web": ("web",),
+    "storage-tunnel": ("storage-tunnel",),
+}
+
+
+def compose_override(manifest: dict) -> dict:
+    """Pin runtime services to the exact candidate assets without carrying secrets."""
+    images = manifest.get("images", {})
+    if set(images) != set(COMPONENT_SERVICES):
+        raise ValueError("complete candidate images are required for Compose")
+    if manifest.get("version") != DEVELOPMENT_VERSION or manifest.get("channel") != "development" or manifest.get("production_ready") is not False:
+        raise ValueError("only an explicitly labelled development candidate is supported")
+    commit = manifest.get("source_commit", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("candidate source commit is missing")
+    services = {}
+    for component, names in COMPONENT_SERVICES.items():
+        reference = images[component]
+        if not isinstance(reference, str) or not re.fullmatch(r"ghcr\.io/[a-z0-9_./-]+@sha256:[0-9a-f]{64}", reference):
+            raise ValueError("Compose candidate requires immutable image digests")
+        for name in names:
+            services[name] = {"image": reference}
+    hermes = manifest.get("hermes", "")
+    if not isinstance(hermes, str) or not re.fullmatch(r"nousresearch/hermes-agent@sha256:[0-9a-f]{64}", hermes):
+        raise ValueError("Hermes image digest is missing")
+    services["hermes"] = {"image": hermes}
+    return {"x-release-source": commit, "x-development-only": True, "services": services}
 
 
 def make_manifest(root: Path, commit: str, images: dict, artifacts: Path) -> dict:
@@ -40,6 +69,7 @@ def make_manifest(root: Path, commit: str, images: dict, artifacts: Path) -> dic
                     'integrations/hermes/runner.py', 'integrations/hermes/skills/expert-review/SKILL.md']
     configuration = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in config_paths}
     return {"version": DEVELOPMENT_VERSION, "source_commit": commit, "channel": "development",
+            "compose_image_tag": f"{DEVELOPMENT_VERSION}-{commit}",
             "production_ready": False, "images": images, "assets": assets,
             "hermes_configuration_sha256": configuration,
             "hermes": "nousresearch/hermes-agent@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",
@@ -53,9 +83,12 @@ def main() -> None:
     parser.add_argument("--images", type=Path, required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--compose-output", type=Path)
     args = parser.parse_args()
     result = make_manifest(Path.cwd(), args.commit, json.loads(args.images.read_text()), args.artifacts)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+    if args.compose_output:
+        args.compose_output.write_text(json.dumps(compose_override(result), ensure_ascii=False, indent=2) + "\n")
 
 
 if __name__ == "__main__":

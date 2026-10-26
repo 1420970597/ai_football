@@ -6,9 +6,10 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 import httpx
 from pydantic import AwareDatetime, BaseModel, Field
@@ -355,13 +356,41 @@ async def telegram_disconnect(request: Request):
 
 
 @router.get("/api/v1/admin/telegram/dialogs")
-async def telegram_dialogs(request: Request, cursor: str | None = None):
-    return await control(request, "/dialogs", {"cursor": cursor})
+async def telegram_dialogs(request: Request, cursor: str | None = Query(default=None, max_length=7),
+                           q: str = Query(default="", max_length=160)):
+    if any(ord(char) < 32 for char in q):
+        raise HTTPException(422, "搜索内容不能包含控制字符")
+    return await directory_control(request, "/dialogs", {"cursor": directory_cursor(cursor), "q": q.strip()})
 
 
 @router.get("/api/v1/admin/telegram/admins")
-async def telegram_admins(request: Request, chat_id: str, cursor: str | None = None):
-    return await control(request, "/admins", {"chat_id": chat_id, "cursor": cursor})
+async def telegram_admins(request: Request, chat_id: str = Query(min_length=1, max_length=160),
+                          cursor: str | None = Query(default=None, max_length=7), q: str = Query(default="", max_length=160)):
+    chat_id = chat_id.strip()
+    if not (re.fullmatch(r"-[1-9][0-9]{0,18}", chat_id) or re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", chat_id)):
+        raise HTTPException(422, "请使用负数稳定群组编号或 @频道用户名，不能使用群名或个人账号编号")
+    if chat_id.startswith("-") and int(chat_id) < -(2 ** 63):
+        raise HTTPException(422, "群组编号超出支持范围")
+    if any(ord(char) < 32 for char in q):
+        raise HTTPException(422, "搜索内容不能包含控制字符")
+    return await directory_control(request, "/admins", {"chat_id": chat_id, "cursor": directory_cursor(cursor), "q": q.strip()})
+
+
+def directory_cursor(cursor):
+    if cursor is not None and (not re.fullmatch(r"[0-9]{1,7}", cursor) or int(cursor) > 1_000_000):
+        raise HTTPException(422, "无效的 Telegram 目录分页游标")
+    return cursor
+
+
+async def directory_control(request, path, payload):
+    result = await control(request, path, payload)
+    if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+        raise HTTPException(503, "Telegram 目录服务返回格式无效，请稍后重试")
+    # Existing web consumers accept 'available'. Keep the private collector's
+    # readiness vocabulary separate from this documented public API contract.
+    if result.get("state") == "ready":
+        result = dict(result, state="available")
+    return result
 
 
 @router.get("/api/v1/admin/telegram/messages")

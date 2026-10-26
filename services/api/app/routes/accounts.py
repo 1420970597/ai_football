@@ -41,6 +41,7 @@ class AutoBetInput(Input):
     max_per_order: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
     daily_limit: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
     open_exposure_limit: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
+    daily_timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=100)
 
 
 class AttemptInput(Input):
@@ -102,7 +103,7 @@ async def get_leyu_account(request: Request):
     user = await require_user(request)
     row = await database.current_pool().fetchrow("SELECT id,account_label,health_state,last_verified_at,updated_at,available_balance,balance_observed_at,config_revision,binding_revision,renewal_state "
                                                 "FROM v2_leyu_accounts WHERE user_id=$1 AND health_state<>'disabled'", user["id"])
-    policy = await database.current_pool().fetchrow("SELECT auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,emergency_stopped,revision "
+    policy = await database.current_pool().fetchrow("SELECT auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,daily_timezone,emergency_stopped,revision "
                                                    "FROM v2_user_bet_settings WHERE user_id=$1", user["id"])
     tasks = await database.current_pool().fetch("SELECT id,kind,state,last_error,updated_at FROM v2_account_jobs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 5", user["id"])
     return {"account": dict(row) if row else None, "betting": dict(policy) if policy else None, "tasks": [dict(item) for item in tasks],
@@ -197,6 +198,8 @@ async def configure_auto_betting(body: AutoBetInput, request: Request):
                 raise HTTPException(422, "需要明确本人许可并选择允许的专家")
             if min(body.stake_per_order, body.max_per_order, body.daily_limit, body.open_exposure_limit) <= 0 or body.stake_per_order > body.max_per_order or body.max_per_order > min(body.daily_limit, body.open_exposure_limit):
                 raise HTTPException(422, "投注限额关系无效")
+            if not await conn.fetchval("SELECT EXISTS(SELECT 1 FROM pg_timezone_names WHERE name=$1)", body.daily_timezone):
+                raise HTTPException(422, "日限额时区无效，请选择可识别的时区名称")
             if not account or account["health_state"] != "healthy" or not account["encrypted_session"]:
                 raise HTTPException(409, "本人乐鱼账户尚未通过无资金校验")
             if not orders.live_enabled(settings) or not await orders.global_enabled(conn, settings):
@@ -206,14 +209,14 @@ async def configure_auto_betting(body: AutoBetInput, request: Request):
             valid = await conn.fetchval("SELECT count(*) FROM v2_experts WHERE id=ANY($1::uuid[]) AND enabled", list(set(body.allowed_experts)))
             if valid != len(set(body.allowed_experts)):
                 raise HTTPException(422, "允许专家包含无效条目")
-            await conn.execute("INSERT INTO v2_user_bet_settings(user_id,auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,emergency_stopped,consent_account_id,consent_binding_revision) "
-                "VALUES($1,TRUE,$2,$3,$4,$5,$6,FALSE,$7,$8) ON CONFLICT(user_id) DO UPDATE SET auto_enabled=TRUE,allowed_experts=EXCLUDED.allowed_experts,"
+            await conn.execute("INSERT INTO v2_user_bet_settings(user_id,auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,emergency_stopped,consent_account_id,consent_binding_revision,daily_timezone) "
+                "VALUES($1,TRUE,$2,$3,$4,$5,$6,FALSE,$7,$8,$9) ON CONFLICT(user_id) DO UPDATE SET auto_enabled=TRUE,allowed_experts=EXCLUDED.allowed_experts,"
                 "stake_per_order=EXCLUDED.stake_per_order,max_per_order=EXCLUDED.max_per_order,daily_limit=EXCLUDED.daily_limit,open_exposure_limit=EXCLUDED.open_exposure_limit,"
-                "emergency_stopped=FALSE,consent_account_id=EXCLUDED.consent_account_id,consent_binding_revision=EXCLUDED.consent_binding_revision,revision=v2_user_bet_settings.revision+1,updated_at=now()",
-                user["id"], list(set(body.allowed_experts)), body.stake_per_order, body.max_per_order, body.daily_limit, body.open_exposure_limit, account["id"], account["binding_revision"])
+                "emergency_stopped=FALSE,consent_account_id=EXCLUDED.consent_account_id,consent_binding_revision=EXCLUDED.consent_binding_revision,daily_timezone=EXCLUDED.daily_timezone,revision=v2_user_bet_settings.revision+1,updated_at=now()",
+                user["id"], list(set(body.allowed_experts)), body.stake_per_order, body.max_per_order, body.daily_limit, body.open_exposure_limit, account["id"], account["binding_revision"], body.daily_timezone)
             await orders.cancel_unsent(conn, user["id"], "policy_changed")
-            await audit(conn, user["id"], "user", "auto_betting_authorized", "leyu_account", str(account["id"]), details={"binding_revision": account["binding_revision"]})
-    return {"enabled": True, "emergency_stopped": False, "state": "armed"}
+            await audit(conn, user["id"], "user", "auto_betting_authorized", "leyu_account", str(account["id"]), details={"binding_revision": account["binding_revision"], "daily_timezone": body.daily_timezone})
+    return {"enabled": True, "emergency_stopped": False, "state": "armed", "daily_timezone": body.daily_timezone}
 
 
 @router.post("/leyu/emergency-stop")

@@ -24,7 +24,13 @@ def main() -> int:
               for p in sorted(frozen.rglob("*")) if p.is_file()}
     os.chdir(frozen)
     sys.path[:0] = [str(frozen / "services/api"), str(frozen / "services"), str(frozen)]
-    logging.disable(logging.CRITICAL)
+    # Silence application handlers without disabling per-test log capture.
+    # Global disable() also suppresses unittest.assertLogs' own handler.
+    logging.disable(logging.NOTSET)
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.addHandler(logging.NullHandler())
+    root_logger.setLevel(logging.CRITICAL)
     started = time.monotonic()
     result = unittest.TextTestRunner(verbosity=1).run(unittest.defaultTestLoader.discover("tests"))
     report = {"source_parent_commit": os.environ.get("SOURCE_COMMIT", "unknown"),

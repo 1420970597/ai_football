@@ -111,15 +111,16 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                                 "VALUES($1,$2,$3,$4,'live','2','全场大小',2.5,'over',1.95,now(),0.9,'full_time','total',$5)",signal,message,expert,fixture,{'home_score':0,'away_score':0})
         return signal,expert,message,quote
 
-    async def enable(self,experts,daily='4',exposure='4'):
+    async def enable(self,experts,daily='4',exposure='4',tz='Asia/Shanghai'):
         self.settings.live_orders_enabled=True
         await self.pool.execute("INSERT INTO v2_admin_settings(setting_key,encrypted_value) VALUES('auto_betting_enabled',$1) ON CONFLICT(setting_key) DO UPDATE SET encrypted_value=EXCLUDED.encrypted_value",encrypt_secret(b'k'*32,'true'))
         plan=uuid.uuid4()
         await self.pool.execute("INSERT INTO v2_membership_plans(id,code,name,price,duration_days,enabled,entitlements) VALUES($1,$2,'VIP',10,30,TRUE,$3)",plan,str(plan),{'automatic_betting':True})
         await self.pool.execute("INSERT INTO v2_memberships(id,user_id,plan_id,status,starts_at,ends_at,grant_source) VALUES($1,$2,$3,'active',now()-interval '1 minute',now()+interval '1 day','test')",uuid.uuid4(),self.user['id'],plan)
         response=await self.api.put('/api/v1/accounts/leyu/auto-betting',json={'enabled':True,'confirmation_phrase':'I_UNDERSTAND','allowed_experts':[str(value) for value in experts],
-            'stake_per_order':'2','max_per_order':'2','daily_limit':daily,'open_exposure_limit':exposure})
+            'stake_per_order':'2','max_per_order':'2','daily_limit':daily,'open_exposure_limit':exposure,'daily_timezone':tz})
         self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual(tz,response.json()['daily_timezone'])
 
     async def reserve(self,signal):
         async with self.pool.acquire() as conn:
@@ -163,6 +164,7 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         visible=(await self.api.get('/api/v1/accounts/leyu')).json()
         self.assertNotIn('own-password',json.dumps(visible))
         self.assertFalse(visible['execution_capability']['live_enabled'])
+        self.assertEqual('Asia/Shanghai',visible['betting']['daily_timezone'])
 
     async def test_private_session_cas_and_renewal_mutex(self):
         account=await self.bind()
@@ -235,12 +237,62 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         await self.healthy()
         s1,e1,_,_=await self.signal()
         s2,e2,_,_=await self.signal()
-        await self.enable([e1,e2],daily='2',exposure='2')
+        await self.enable([e1,e2],daily='2',exposure='2',tz='UTC')
         duplicates=await asyncio.gather(*(self.reserve(s1) for _ in range(3)))
         self.assertEqual(1,len({row['id'] for row in duplicates}))
         with self.assertRaises(Exception):
             await self.reserve(s2)
         self.assertEqual(Decimal('2'),await self.pool.fetchval('SELECT sum(reserved_stake) FROM v2_bet_orders'))
+
+    async def test_daily_calendar_boundaries_respect_dst_and_reject_naive_time(self):
+        async with self.pool.acquire() as conn:
+            for instant,expected_hours in [('2026-03-29T12:00:00+00:00',23),('2026-10-25T12:00:00+00:00',25)]:
+                row=await orders.exposure_totals(conn,self.user['id'],'Europe/Berlin',datetime.fromisoformat(instant))
+                self.assertEqual(expected_hours,(row['day_ends_at']-row['day_starts_at']).total_seconds()/3600)
+                self.assertEqual((Decimal('0'),Decimal('0')),(row['daily'],row['exposure']))
+            with self.assertRaises(ValueError):
+                await orders.exposure_totals(conn,self.user['id'],'UTC',datetime(2026,10,26))
+
+    async def test_daily_timezone_counts_unknown_and_retains_older_open_exposure(self):
+        for created,state,reserved in [('2026-10-25T17:00:00+00:00','unknown','2'),
+                                       ('2026-10-26T00:00:00+00:00','accepted','2'),
+                                       ('2026-10-26T00:15:00+00:00','cancelled','0'),
+                                       ('2026-09-01T00:00:00+00:00','unknown','2')]:
+            signal,_,_,_=await self.signal()
+            await self.pool.execute('INSERT INTO v2_bet_orders(id,user_id,signal_id,idempotency_key,state,stake,price,reserved_stake,created_at) '
+                                    'VALUES($1,$2,$3,$4,$5,2,1.95,$6,$7)',uuid.uuid4(),self.user['id'],signal,str(signal),state,Decimal(reserved),datetime.fromisoformat(created))
+        moment=datetime.fromisoformat('2026-10-26T00:30:00+00:00')
+        async with self.pool.acquire() as conn:
+            shanghai=await orders.exposure_totals(conn,self.user['id'],'Asia/Shanghai',moment)
+            utc=await orders.exposure_totals(conn,self.user['id'],'UTC',moment)
+        self.assertEqual(Decimal('4'),shanghai['daily'])
+        self.assertEqual(Decimal('2'),utc['daily'])
+        self.assertEqual(Decimal('6'),shanghai['exposure'])
+        self.assertEqual(shanghai['exposure'],utc['exposure'])
+        self.assertEqual(datetime.fromisoformat('2026-10-25T16:00:00+00:00'),shanghai['day_starts_at'])
+
+    async def test_timezone_update_reauthorizes_and_invalid_value_preserves_current_policy(self):
+        await self.healthy()
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        order=await self.reserve(signal)
+        previous=await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1',self.user['id'])
+        body={'enabled':True,'confirmation_phrase':'I_UNDERSTAND','allowed_experts':[str(expert)],
+              'stake_per_order':'2','max_per_order':'2','daily_limit':'4','open_exposure_limit':'4','daily_timezone':'Not/AZone'}
+        result=await self.api.put('/api/v1/accounts/leyu/auto-betting',json=body)
+        self.assertEqual(422,result.status_code,result.text)
+        unchanged=await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1',self.user['id'])
+        self.assertEqual(previous,unchanged)
+        self.assertEqual('pending',await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1',order['id']))
+        body['daily_timezone']='Europe/Berlin'
+        result=await self.api.put('/api/v1/accounts/leyu/auto-betting',json=body)
+        self.assertEqual(200,result.status_code,result.text)
+        current=await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1',self.user['id'])
+        self.assertEqual(('Europe/Berlin',previous['revision']+1),(current['daily_timezone'],current['revision']))
+        self.assertEqual('cancelled',await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1',order['id']))
+        self.assertEqual('Europe/Berlin',(await self.api.get('/api/v1/accounts/leyu')).json()['betting']['daily_timezone'])
+        audit=await self.pool.fetchval("SELECT details FROM v2_audit_log WHERE action='auto_betting_authorized' ORDER BY created_at DESC LIMIT 1")
+        self.assertEqual('Europe/Berlin',audit['daily_timezone'])
 
     async def test_signal_source_revision_stale_and_membership_rechecked(self):
         await self.healthy()

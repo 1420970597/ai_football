@@ -200,39 +200,90 @@ await scenario("真实原文多买入、报价证据与未解决记录", async (
   assert.equal(await page.locator(".message-card").count(), 2);
   assert.match(await page.locator("#messages-list").innerText(), /未解决/);
 });
-await scenario("本人绑定只排队校验、未通过不启用、紧急停止", async () => {
-  await page.locator("#account-entry").click();
-  await page.waitForSelector("#account-content:not([hidden])");
-  await page.locator("#leyu-form [name=account_label]").fill("隔离人工账户");
-  await page
-    .locator("#leyu-form [name=username]")
-    .fill("no-real-provider-user");
-  await page
-    .locator("#leyu-form [name=password]")
-    .fill("no-real-provider-password");
-  await page
-    .locator("#leyu-form button[type=submit],#leyu-form .primary-button")
-    .click();
-  await page.waitForFunction(() =>
-    document.querySelector("#account-health").textContent.includes("未校验"),
-  );
-  assert.equal(
-    await page.locator("#leyu-form [name=password]").inputValue(),
-    "",
-  );
-  const account = await api("/accounts/leyu");
-  assert.equal(account.data.account.health_state, "unverified");
-  assert.ok(
-    account.data.tasks.some((t) => t.kind === "verify" && t.state === "queued"),
-  );
-  assert.equal(account.data.execution_capability.live_enabled, false);
-  await page.locator("#emergency-stop").click();
-  await page.waitForFunction(() =>
-    document.querySelector("#toast").textContent.includes("紧急停止"),
-  );
-  assert.equal((await api("/accounts/leyu")).data.betting.auto_enabled, false);
-  assert.equal((await api("/accounts/orders")).status, 200);
-});
+await scenario(
+  "本人绑定只排队、每日时区传输、未开放拒绝及紧急停止",
+  async () => {
+    await page.locator("#account-entry").click();
+    await page.waitForSelector("#account-content:not([hidden])");
+    await page.locator("#leyu-form [name=account_label]").fill("隔离人工账户");
+    await page
+      .locator("#leyu-form [name=username]")
+      .fill("no-real-provider-user");
+    await page
+      .locator("#leyu-form [name=password]")
+      .fill("no-real-provider-password");
+    await page
+      .locator("#leyu-form button[type=submit],#leyu-form .primary-button")
+      .click();
+    await page.waitForFunction(() =>
+      document.querySelector("#account-health").textContent.includes("未校验"),
+    );
+    assert.equal(
+      await page.locator("#leyu-form [name=password]").inputValue(),
+      "",
+    );
+    const account = await api("/accounts/leyu");
+    assert.equal(account.data.account.health_state, "unverified");
+    assert.ok(
+      account.data.tasks.some(
+        (t) => t.kind === "verify" && t.state === "queued",
+      ),
+    );
+    assert.equal(account.data.execution_capability.live_enabled, false);
+    assert.equal(account.data.betting.daily_timezone, "Asia/Shanghai");
+    const timezone = page.locator("#betting-form [name=daily_timezone]");
+    assert.equal(await timezone.inputValue(), "Asia/Shanghai");
+    await page.locator("#betting-form [name=enabled]").check();
+    await timezone.selectOption("Europe/Berlin");
+    for (const name of [
+      "stake_per_order",
+      "max_per_order",
+      "daily_limit",
+      "open_exposure_limit",
+    ])
+      await page.locator(`#betting-form [name=${name}]`).fill("1");
+    await page.locator("#betting-form [name=expert]").first().check();
+    await page.locator("#betting-form [name=confirmed]").check();
+    const responsePromise = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/accounts/leyu/auto-betting") &&
+        response.request().method() === "PUT",
+    );
+    await page.locator("#betting-form button.primary-button").click();
+    const denied = await responsePromise;
+    assert.equal(
+      denied.request().postDataJSON().daily_timezone,
+      "Europe/Berlin",
+    );
+    assert.equal(denied.status(), 409); // Binding is deliberately unverified; no provider is called.
+    assert.equal(
+      (await denied.json()).detail,
+      "本人乐鱼账户尚未通过无资金校验",
+    );
+    assert.equal(
+      (await api("/accounts/leyu")).data.betting.auto_enabled,
+      false,
+    );
+    assert.equal(
+      (await api("/accounts/leyu")).data.betting.daily_timezone,
+      "Asia/Shanghai",
+    );
+    await page.locator("#betting-form [name=enabled]").uncheck();
+    await page.locator("#betting-form button.primary-button").click();
+    await page.waitForFunction(() =>
+      document.querySelector("#toast").textContent.includes("自动投注已关闭"),
+    );
+    await page.locator("#emergency-stop").click();
+    await page.waitForFunction(() =>
+      document.querySelector("#toast").textContent.includes("紧急停止"),
+    );
+    assert.equal(
+      (await api("/accounts/leyu")).data.betting.auto_enabled,
+      false,
+    );
+    assert.equal((await api("/accounts/orders")).status, 200);
+  },
+);
 await scenario("真实管理待办、只读订单与本人敏感导出", async () => {
   await page.locator(".utility-bar [data-page=admin]").click();
   await page.locator("[data-admin-tab=overview]").click();

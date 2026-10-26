@@ -538,6 +538,7 @@ async function setup({
           stake_per_order: "1",
           max_per_order: "2",
           daily_limit: "10",
+          daily_timezone: "America/New_York",
           open_exposure_limit: "5",
           emergency_stopped: true,
         },
@@ -607,6 +608,37 @@ async function setup({
     if (p === "/admin/telegram/auth/cancel") {
       mode.tg = "cancelled";
       return reply({ state: mode.tg });
+    }
+    if (
+      mode.tgSearch &&
+      ["/admin/telegram/admins", "/admin/telegram/dialogs"].includes(p)
+    ) {
+      const admins = p.endsWith("admins");
+      const query = url.searchParams.get("q") || "";
+      const secondPage = url.searchParams.has("cursor");
+      if (query === "slow")
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      const empty = query === "不存在";
+      return reply({
+        state: "available",
+        items: empty
+          ? []
+          : admins
+            ? [
+                {
+                  sender_id: secondPage ? "67890" : "12345",
+                  nickname: secondPage ? "后页老师" : query || "林老师 TG",
+                  username: "expert_fixture",
+                },
+              ]
+            : [
+                {
+                  chat_id: secondPage ? "-1009876543" : "-1001234567",
+                  title: secondPage ? "后页专家群" : query || "测试专家群",
+                },
+              ],
+        next_cursor: !empty && !secondPage ? "fixture-page-two" : null,
+      });
     }
     if (p === "/admin/telegram/admins")
       return reply({
@@ -686,6 +718,17 @@ async function setup({
     initialError ? "#matches-state [data-retry]" : ".match-row",
   );
   return { context, page, log, mode };
+}
+if (process.argv.includes("--a11y")) {
+  try {
+    const { runAudit } = await import("./accessibility.mjs");
+    const passed = await runAudit({ setup, id, mid, caught, evidence });
+    if (!passed) process.exitCode = 1;
+  } finally {
+    await browser.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+  process.exit(process.exitCode || 0);
 }
 async function test(name, action) {
   try {
@@ -1553,6 +1596,59 @@ await test("管理员换机关闭清密钥、继续登记、明确替换、过�
         request.method === "DELETE",
     ),
   );
+  await context.close();
+});
+await test("Telegram目录及管理员搜索重置游标、空结果、清空与请求乱序", async () => {
+  const { page, context, mode, log } = await setup({
+    dual: true,
+    mobile: true,
+  });
+  mode.tgSearch = true;
+  await page.locator(".mobile-bottom [data-page=account]").click();
+  await page.locator("#account-admin-entry").click();
+  await page.locator("[data-admin-tab=telegram]").click();
+  await page.waitForFunction(
+    () => document.querySelector("#source-select").value,
+  );
+  for (const kind of ["dialog", "admin"]) {
+    const endpoint = kind === "dialog" ? "dialogs" : "admins";
+    const result = page.locator(
+      kind === "dialog" ? "#tg-dialog-list" : "#source-admins",
+    );
+    const input = page.locator(`#tg-${kind}-search`);
+    const form = page.locator(`#tg-${kind}-search-form`);
+    await input.fill("@fixture");
+    await form.locator("button").first().click();
+    await page.waitForTimeout(100);
+    await page
+      .locator(kind === "dialog" ? "#tg-dialogs-more" : "#tg-admins-more")
+      .click();
+    await page.waitForTimeout(100);
+    assert.match(await result.innerText(), /后页/);
+    await input.fill("不存在");
+    await input.press("Enter");
+    await page.waitForTimeout(100);
+    assert.match(await result.innerText(), /没有匹配/);
+    const last = log
+      .filter((item) => item.path === `/admin/telegram/${endpoint}`)
+      .at(-1);
+    const query = new URLSearchParams(last.query);
+    assert.equal(query.get("q"), "不存在");
+    assert.equal(query.has("cursor"), false);
+    await page.locator(`#tg-${kind}-search-clear`).click();
+    await page.waitForTimeout(100);
+    assert.equal(await input.inputValue(), "");
+    await input.fill("slow");
+    await input.press("Enter");
+    await input.fill("fast");
+    await input.press("Enter");
+    await page.waitForTimeout(450);
+    assert.match(await result.innerText(), /fast/);
+    assert.doesNotMatch(await result.innerText(), /slow/);
+  }
+  await page.screenshot({
+    path: evidence + "/candidate-mobile-tg-search-fixture.png",
+  });
   await context.close();
 });
 assert.deepEqual(caught, []);

@@ -111,11 +111,86 @@ export function stateBox(
     ? '<div class="skeleton-row"></div>'.repeat(5)
     : `<strong>${esc(title)}</strong><div>${esc(description)}</div>${retry ? '<button class="small-button" data-retry>重新加载</button>' : ""}`;
 }
+const modalStack = [];
+const modalOrigins = new WeakMap();
+const boundModals = new WeakSet();
+function visibleFocusables(modal) {
+  return $$(
+    "button,a[href],input,select,textarea,summary,[tabindex]",
+    modal,
+  ).filter(
+    (element) =>
+      !element.disabled &&
+      element.tabIndex >= 0 &&
+      element.getClientRects().length,
+  );
+}
+export function showDialog(modal, initialFocus) {
+  if (!boundModals.has(modal)) {
+    boundModals.add(modal);
+    modal.addEventListener("keydown", (event) => {
+      if (
+        event.key !== "Tab" ||
+        modalStack.filter((item) => item.open).at(-1) !== modal
+      )
+        return;
+      const items = visibleFocusables(modal),
+        current = document.activeElement;
+      const index = items.indexOf(current);
+      if (!items.length) {
+        event.preventDefault();
+        modal.focus();
+        return;
+      }
+      if (
+        index < 0 ||
+        (!event.shiftKey && index === items.length - 1) ||
+        (event.shiftKey && index === 0)
+      ) {
+        event.preventDefault();
+        (event.shiftKey ? items.at(-1) : items[0]).focus();
+      }
+    });
+    modal.addEventListener("close", () => {
+      const index = modalStack.indexOf(modal);
+      if (index >= 0) modalStack.splice(index, 1);
+      const origin = modalOrigins.get(modal);
+      queueMicrotask(() => {
+        const parent = modalStack.filter((item) => item.open).at(-1);
+        if (
+          origin?.isConnected &&
+          origin.getClientRects().length &&
+          !origin.disabled &&
+          (!parent || parent.contains(origin))
+        )
+          origin.focus({ preventScroll: true });
+        else if (parent)
+          (
+            parent.querySelector("[tabindex='-1']") ||
+            visibleFocusables(parent)[0]
+          )?.focus();
+        else {
+          const heading = $(".view.active h1");
+          if (heading) {
+            heading.tabIndex = -1;
+            heading.focus({ preventScroll: true });
+          }
+        }
+      });
+    });
+  }
+  if (!modal.open) {
+    modalOrigins.set(modal, document.activeElement);
+    modalStack.push(modal);
+    modal.showModal();
+  }
+  initialFocus?.focus();
+}
 export function dialog(title, html) {
   $("#dialog-title").textContent = title;
   $("#dialog-content").innerHTML = html;
   const modal = $("#content-dialog");
-  if (!modal.open) modal.showModal();
+  showDialog(modal, $("#dialog-title"));
 }
 export function confirmAction(message) {
   return new Promise((resolve) => {
@@ -128,7 +203,7 @@ export function confirmAction(message) {
     $("#confirm-yes").onclick = () => finish(true);
     $("#confirm-no").onclick = () => finish(false);
     modal.oncancel = () => resolve(false);
-    modal.showModal();
+    showDialog(modal, $("#confirm-no"));
   });
 }
 export async function submit(form, action) {
@@ -193,7 +268,7 @@ function requestReauthentication(context) {
     }
   };
   modal.onclose = () => form.reset();
-  modal.showModal();
+  showDialog(modal, form.elements.password);
 }
 export async function api(
   path,

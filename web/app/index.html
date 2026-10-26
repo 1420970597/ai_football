@@ -13,7 +13,7 @@
   </head>
   <body>
     <a class="skip-link" href="#main">跳至主要内容</a>
-    <div class="utility-bar">
+    <div class="utility-bar" role="region" aria-label="平台快捷入口">
       <div class="site-width">
         <span>球讯比分 · 赛事与专家记录</span>
         <div>
@@ -39,8 +39,8 @@
         <button id="account-entry" class="header-login">登录 / 注册</button>
       </div>
     </header>
-    <main id="main" class="site-width main-layout">
-      <aside class="left-rail">
+    <main id="main" class="site-width main-layout" tabindex="-1">
+      <aside class="left-rail" aria-label="赛事与专家服务导航">
         <h2>赛事中心</h2>
         <button class="rail-active" data-page="scores">
           足球比分 <span id="fixture-count">—</span></button
@@ -74,7 +74,7 @@
               ↻ 刷新
             </button>
           </div>
-          <div class="sports-bar">
+          <div class="sports-bar" role="group" aria-label="体育项目">
             <button class="active" data-sport="football">足球</button
             ><button data-sport="basketball">篮球</button
             ><span>比分与盘口</span>
@@ -142,9 +142,15 @@
             <h1 id="experts-title">专家推荐</h1>
             <button id="refresh-experts" class="small-button">↻ 刷新</button>
           </div>
-          <div class="section-tabs">
-            <button class="active" data-expert-tab="ranking">专家榜</button
-            ><button data-expert-tab="signals">最新推荐</button
+          <div class="section-tabs" role="group" aria-label="专家内容">
+            <button
+              class="active"
+              data-expert-tab="ranking"
+              aria-pressed="true"
+            >
+              专家榜</button
+            ><button data-expert-tab="signals" aria-pressed="false">
+              最新推荐</button
             ><button data-page="messages">发言与审核原文</button>
           </div>
           <div class="stat-help">
@@ -387,6 +393,23 @@
                       required
                   /></label>
                 </div>
+                <label
+                  >每日限额时区<select
+                    name="daily_timezone"
+                    aria-describedby="betting-timezone-note"
+                  >
+                    <option value="Asia/Shanghai">
+                      北京时间 · Asia/Shanghai
+                    </option>
+                    <option value="UTC">协调世界时 · UTC</option>
+                    <option value="Europe/Berlin">
+                      柏林时间 · Europe/Berlin
+                    </option>
+                  </select></label
+                >
+                <p id="betting-timezone-note" class="form-note">
+                  每日限额按所选时区的零点重新累计。修改时区会重新核验本人身份，并取消尚未发送的订单。
+                </p>
                 <label class="check-label"
                   ><input
                     name="confirmed"
@@ -459,13 +482,24 @@
           </div>
           <div id="admin-identity"></div>
           <div id="admin-content" hidden>
-            <div class="admin-tabs" aria-label="管理分区">
-              <button data-admin-tab="overview" class="active">运行状态</button
-              ><button data-admin-tab="telegram">Telegram</button
-              ><button data-admin-tab="leyu">乐鱼采集</button
-              ><button data-admin-tab="membership">会员管理</button
-              ><button data-admin-tab="orders">只读订单</button
-              ><button data-admin-tab="system">系统与审计</button>
+            <div class="admin-tabs" role="group" aria-label="管理分区">
+              <button
+                data-admin-tab="overview"
+                class="active"
+                aria-pressed="true"
+              >
+                运行状态</button
+              ><button data-admin-tab="telegram" aria-pressed="false">
+                Telegram</button
+              ><button data-admin-tab="leyu" aria-pressed="false">
+                乐鱼采集</button
+              ><button data-admin-tab="membership" aria-pressed="false">
+                会员管理</button
+              ><button data-admin-tab="orders" aria-pressed="false">
+                只读订单</button
+              ><button data-admin-tab="system" aria-pressed="false">
+                系统与审计
+              </button>
             </div>
             <section id="admin-overview" class="admin-panel">
               <div id="admin-status" class="status-grid"></div>
@@ -514,6 +548,28 @@
                         读取已加入群组
                       </button>
                     </div>
+                    <form
+                      id="tg-dialog-search-form"
+                      class="compact-form directory-search"
+                    >
+                      <label
+                        >搜索已加入群组 / 频道<input
+                          id="tg-dialog-search"
+                          type="search"
+                          maxlength="120"
+                          placeholder="名称、群组 ID 或 @用户名"
+                      /></label>
+                      <div class="form-actions">
+                        <button class="small-button">搜索群组</button
+                        ><button
+                          type="button"
+                          id="tg-dialog-search-clear"
+                          class="text-link"
+                        >
+                          清空
+                        </button>
+                      </div>
+                    </form>
                     <div id="tg-dialog-list"></div>
                     <button id="tg-dialogs-more" class="small-button" hidden>
                       更多群组
@@ -549,12 +605,38 @@
                         读取群管理员
                       </button>
                     </div>
+                    <form
+                      id="tg-admin-search-form"
+                      class="compact-form directory-search"
+                    >
+                      <label
+                        >搜索本群管理员<input
+                          id="tg-admin-search"
+                          type="search"
+                          maxlength="120"
+                          placeholder="昵称、作者 ID 或 @用户名"
+                      /></label>
+                      <div class="form-actions">
+                        <button class="small-button">搜索管理员</button
+                        ><button
+                          type="button"
+                          id="tg-admin-search-clear"
+                          class="text-link"
+                        >
+                          清空
+                        </button>
+                      </div>
+                    </form>
                     <div id="source-admins"></div>
                     <button id="tg-admins-more" class="small-button" hidden>
                       更多管理员
                     </button>
                     <form id="expert-source-form" class="compact-form">
                       <h3>添加已核验作者</h3>
+                      <p class="form-note">
+                        负数 ID
+                        表示频道或群组的发言身份，不能据此识别某一位匿名管理员。
+                      </p>
                       <label
                         >稳定作者 ID<input name="sender_id" required /></label
                       ><label
@@ -779,7 +861,7 @@
           </div>
         </section>
       </div>
-      <aside class="right-rail">
+      <aside class="right-rail" aria-label="赛事与专家服务说明">
         <section class="side-panel">
           <h2>专家榜 <button data-page="experts">更多 ›</button></h2>
           <div id="top-experts"></div>
@@ -808,12 +890,12 @@
       ><button data-page="membership"><span>♧</span>会员</button
       ><button data-page="account"><span>♙</span>我的</button>
     </nav>
-    <dialog id="auth-dialog">
+    <dialog id="auth-dialog" aria-labelledby="auth-title">
       <div class="dialog-header">
         <h2 id="auth-title">用户登录</h2>
         <button data-close-dialog aria-label="关闭登录">×</button>
       </div>
-      <div class="section-tabs">
+      <div class="section-tabs" role="group" aria-label="选择登录身份">
         <button data-auth-tab="login" class="active">用户登录</button
         ><button data-auth-tab="register">注册账号</button
         ><button data-auth-tab="admin">管理员</button>
@@ -859,7 +941,11 @@
         </button>
       </div>
     </dialog>
-    <dialog id="reauth-dialog">
+    <dialog
+      id="reauth-dialog"
+      aria-labelledby="reauth-title"
+      aria-describedby="reauth-message"
+    >
       <div class="dialog-header">
         <h2 id="reauth-title">再次验证身份</h2>
         <button data-close-dialog aria-label="关闭再次验证">×</button>
@@ -884,15 +970,23 @@
         <button type="submit" class="primary-button">验证身份</button>
       </form>
     </dialog>
-    <dialog id="content-dialog" class="content-dialog">
+    <dialog
+      id="content-dialog"
+      class="content-dialog"
+      aria-labelledby="dialog-title"
+    >
       <div class="dialog-header">
-        <h2 id="dialog-title"></h2>
+        <h2 id="dialog-title" tabindex="-1"></h2>
         <button data-close-dialog aria-label="关闭详情">×</button>
       </div>
       <div id="dialog-content"></div>
     </dialog>
-    <dialog id="confirm-dialog">
-      <div class="dialog-header"><h2>确认操作</h2></div>
+    <dialog
+      id="confirm-dialog"
+      aria-labelledby="confirm-title"
+      aria-describedby="confirm-message"
+    >
+      <div class="dialog-header"><h2 id="confirm-title">确认操作</h2></div>
       <p id="confirm-message"></p>
       <div class="form-actions">
         <button id="confirm-no" class="small-button">取消</button

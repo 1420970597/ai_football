@@ -23,6 +23,10 @@ let qrAttempt = null;
 let tgTimer = null;
 let dialogsCursor = null;
 let adminsCursor = null;
+let dialogsQuery = "",
+  adminsQuery = "";
+let dialogsSequence = 0,
+  adminsSequence = 0;
 let grantKey = newId();
 let adminPlans = [];
 let userCursor = null;
@@ -201,9 +205,15 @@ function selectedSource() {
   return sources.find((s) => s.id === $("#source-select").value);
 }
 async function selectSource() {
+  ++adminsSequence;
+  adminsQuery = "";
+  $("#tg-admin-search").value = "";
   const source = selectedSource();
   $("#source-toggle").disabled = !source;
   $("#tg-admins").disabled = !source;
+  $$("input,button", $("#tg-admin-search-form")).forEach(
+    (element) => (element.disabled = !source),
+  );
   $("#expert-source-form button").disabled = !source;
   $("#source-state").textContent = source
     ? `${source.platform_chat_id || source.chat_id} · ${source.enabled ? "监控中" : "已停用"} · ${source.allow_media ? "接收图片" : "仅文字"}`
@@ -289,6 +299,16 @@ function tgError(reason) {
         "账号无权枚举群成员，可手动添加已核验作者 ID。",
       source_not_accessible: "当前账号无法访问该来源。",
       account_has_not_joined: "账号尚未加入该群组或频道。",
+      account_has_not_joined_or_entity_is_unavailable:
+        "账号尚未加入该来源，或来源目前不可访问。",
+      source_not_group_or_channel: "该来源不是群组或频道。",
+      source_migrated: "该群组已迁移，请核对迁移后的群组编号再更新来源。",
+      invalid_pagination_cursor: "分页已失效，请重新搜索，不再继续旧游标。",
+      invalid_search_query: "搜索内容无效，请缩短关键词或核对编号。",
+      network_unavailable: "Telegram 网络暂不可用，请稍后重试。",
+      incomplete_admin_page:
+        "管理员分页未完整返回，请重试；本次结果不能视为完整名单。",
+      directory_pagination_stalled: "目录分页没有继续前进，请重新搜索。",
       invalid_source_identifier: "群组标识无效，请检查数字 ID。",
       unauthorized: "Telegram 尚未授权。",
       flood_wait: "Telegram 触发频率限制，请等待后重试。",
@@ -303,15 +323,25 @@ async function loadTelegram() {
   }
 }
 async function listDialogs(append = false) {
+  const query = $("#tg-dialog-search").value.trim();
+  if (append && query !== dialogsQuery) return listDialogs(false);
+  if (!append) {
+    dialogsCursor = null;
+    dialogsQuery = query;
+  }
+  const sequence = ++dialogsSequence;
+  const search = new URLSearchParams({ q: dialogsQuery });
+  if (append && dialogsCursor) search.set("cursor", dialogsCursor);
+  $("#tg-dialog-list").setAttribute("aria-busy", "true");
+  $("#tg-dialogs-more").hidden = true;
   try {
-    const data = await adminApi(
-      "/telegram/dialogs" +
-        (append && dialogsCursor
-          ? "?cursor=" + encodeURIComponent(dialogsCursor)
-          : ""),
-    );
-    if (data.state === "unavailable" || data.state === "unauthorized")
-      throw new Error(tgError(data.reason || data.state));
+    const data = await adminApi("/telegram/dialogs?" + search);
+    if (sequence !== dialogsSequence) return;
+    if (!["ok", "available", undefined].includes(data.state))
+      throw new Error(
+        tgError(data.reason || data.state) +
+          (data.retry_after ? ` ${data.retry_after} 秒后重试。` : ""),
+      );
     const html = data.items
       .map(
         (d) =>
@@ -321,24 +351,38 @@ async function listDialogs(append = false) {
     if (append) $("#tg-dialog-list").insertAdjacentHTML("beforeend", html);
     else
       $("#tg-dialog-list").innerHTML =
-        html || '<p class="muted">没有可访问的群组或频道</p>';
+        html ||
+        `<p class="muted" role="status">${dialogsQuery ? "没有匹配的群组或频道，可清空搜索或手工填写已核验 ID。" : "没有可访问的群组或频道"}</p>`;
     dialogsCursor = data.next_cursor;
     $("#tg-dialogs-more").hidden = !dialogsCursor;
   } catch (error) {
+    if (sequence !== dialogsSequence) return;
     $("#tg-dialog-list").textContent = error.message;
+  } finally {
+    if (sequence === dialogsSequence)
+      $("#tg-dialog-list").setAttribute("aria-busy", "false");
   }
 }
 async function listAdmins(append = false) {
   const source = selectedSource();
   if (!source) return;
+  const query = $("#tg-admin-search").value.trim();
+  if (append && query !== adminsQuery) return listAdmins(false);
+  if (!append) {
+    adminsCursor = null;
+    adminsQuery = query;
+  }
+  const sequence = ++adminsSequence;
+  const search = new URLSearchParams({
+    chat_id: source.platform_chat_id || source.chat_id,
+    q: adminsQuery,
+  });
+  if (append && adminsCursor) search.set("cursor", adminsCursor);
+  $("#source-admins").setAttribute("aria-busy", "true");
+  $("#tg-admins-more").hidden = true;
   try {
-    const data = await adminApi(
-      "/telegram/admins?chat_id=" +
-        encodeURIComponent(source.platform_chat_id || source.chat_id) +
-        (append && adminsCursor
-          ? "&cursor=" + encodeURIComponent(adminsCursor)
-          : ""),
-    );
+    const data = await adminApi("/telegram/admins?" + search);
+    if (sequence !== adminsSequence) return;
     if (!["ok", "available", undefined].includes(data.state)) {
       $("#source-admins").innerHTML =
         `<p class="notice">${esc(tgError(data.reason || data.state))}${data.retry_after ? " " + esc(data.retry_after) + " 秒后重试。" : ""}</p>`;
@@ -347,18 +391,22 @@ async function listAdmins(append = false) {
     const html = data.items
       .map(
         (e) =>
-          `<div class="source-item"><span>${esc(e.nickname || e.username)}<br><span class="muted">${esc(e.sender_id)}</span></span><button data-author="${esc(e.sender_id)}" data-nickname="${esc(e.nickname || e.username)}">选用</button></div>`,
+          `<div class="source-item"><span>${esc(e.nickname || e.username)}<br><span class="muted">${esc(e.sender_id)}${e.sender_identity_kind === "chat_sender" || String(e.sender_id).startsWith("-") ? " · 频道/群组发言身份，不代表具体匿名个人" : ""}</span></span><button data-author="${esc(e.sender_id)}" data-nickname="${esc(e.nickname || e.username)}">选用</button></div>`,
       )
       .join("");
     if (append) $("#source-admins").insertAdjacentHTML("beforeend", html);
     else
       $("#source-admins").innerHTML =
         html ||
-        '<p class="muted">未返回可枚举作者；匿名管理员可能不会列出。可手工添加已核验 ID。</p>';
+        `<p class="muted" role="status">${adminsQuery ? "没有匹配的管理员，可清空搜索或手工添加已核验作者 ID。" : "未返回可枚举作者；匿名管理员可能不会列出。可手工添加已核验 ID。"}</p>`;
     adminsCursor = data.next_cursor;
     $("#tg-admins-more").hidden = !adminsCursor;
   } catch (error) {
+    if (sequence !== adminsSequence) return;
     $("#source-admins").textContent = error.message;
+  } finally {
+    if (sequence === adminsSequence)
+      $("#source-admins").setAttribute("aria-busy", "false");
   }
 }
 async function loadAdminPlans() {
@@ -440,9 +488,10 @@ function bind() {
     if (!button) return;
     try {
       if (button.dataset.adminTab) {
-        $$("[data-admin-tab]").forEach((x) =>
-          x.classList.toggle("active", x === button),
-        );
+        $$("[data-admin-tab]").forEach((x) => {
+          x.classList.toggle("active", x === button);
+          x.setAttribute("aria-pressed", String(x === button));
+        });
         $$(".admin-panel").forEach(
           (x) => (x.hidden = x.id !== "admin-" + button.dataset.adminTab),
         );
@@ -620,6 +669,17 @@ function bind() {
   $("#tg-dialogs-more").onclick = () => listDialogs(true);
   $("#tg-admins").onclick = () => listAdmins();
   $("#tg-admins-more").onclick = () => listAdmins(true);
+  for (const kind of ["dialog", "admin"]) {
+    const load = kind === "dialog" ? listDialogs : listAdmins;
+    $("#tg-" + kind + "-search-form").onsubmit = (event) => {
+      event.preventDefault();
+      load();
+    };
+    $("#tg-" + kind + "-search-clear").onclick = () => {
+      $("#tg-" + kind + "-search").value = "";
+      load();
+    };
+  }
   $("#grant-form").onsubmit = (e) => {
     e.preventDefault();
     const form = e.currentTarget;

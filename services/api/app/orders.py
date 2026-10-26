@@ -88,6 +88,24 @@ async def account_policy(conn, user_id, settings):
     return account, policy
 
 
+async def exposure_totals(conn, user_id, daily_timezone: str, at: datetime | None = None):
+    """Sum the selected local calendar day and every still-reserved order."""
+    moment = at if at is not None else datetime.now(timezone.utc)
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        raise ValueError("daily limit reference time requires a timezone")
+    return await conn.fetchrow(
+        "WITH bounds AS (SELECT date_trunc('day',$3::timestamptz AT TIME ZONE $2::text) AS local_start) "
+        "SELECT COALESCE((SELECT sum(stake) FROM v2_bet_orders WHERE user_id=$1 "
+        "AND created_at>=b.local_start AT TIME ZONE $2::text "
+        "AND created_at<(b.local_start+interval '1 day') AT TIME ZONE $2::text "
+        "AND state NOT IN('rejected','cancelled')),0) AS daily,"
+        "COALESCE((SELECT sum(reserved_stake) FROM v2_bet_orders WHERE user_id=$1 AND reserved_stake>0),0) AS exposure,"
+        "b.local_start AT TIME ZONE $2::text AS day_starts_at,"
+        "(b.local_start+interval '1 day') AT TIME ZONE $2::text AS day_ends_at FROM bounds b",
+        user_id, daily_timezone, moment,
+    )
+
+
 async def reserve_signal(conn, user_id, signal_id, settings):
     account, policy = await account_policy(conn, user_id, settings)
     previous = await conn.fetchrow("SELECT * FROM v2_bet_orders WHERE user_id=$1 AND signal_id=$2 AND account_id IS NOT NULL", user_id, signal_id)
@@ -99,11 +117,7 @@ async def reserve_signal(conn, user_id, signal_id, settings):
     stake = policy["stake_per_order"]
     if stake <= 0 or stake > policy["max_per_order"]:
         raise HTTPException(409, "单笔限额不足")
-    sums = await conn.fetchrow(
-        "SELECT COALESCE(sum(stake) FILTER(WHERE created_at>=date_trunc('day',now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai' "
-        "AND state NOT IN('rejected','cancelled')),0) AS daily,COALESCE(sum(reserved_stake),0) AS exposure "
-        "FROM v2_bet_orders WHERE user_id=$1", user_id,
-    )
+    sums = await exposure_totals(conn, user_id, policy["daily_timezone"])
     if sums["daily"] + stake > policy["daily_limit"] or sums["exposure"] + stake > policy["open_exposure_limit"]:
         raise HTTPException(409, "当日或开放敞口限额不足")
     baseline = signal["score_baseline"] or {}

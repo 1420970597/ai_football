@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import os
 import random
+import time
 import uuid
 
 from . import database
 from .config import load_settings
 from .hermes_client import delete_session, review_message
 from .review_state import active_job, trace
+from fastapi import HTTPException
+import asyncpg
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("platform.review-worker")
@@ -18,37 +22,98 @@ MAX_ATTEMPTS = 5
 LEASE_SECONDS = 90
 HEARTBEAT_SECONDS = 20
 REVIEW_TIMEOUT = max(60, min(1800, int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "600"))))
+SCHEDULER_LOCK = 'platform-v2-review-fair-scheduler'
+MAX_PAIR_PROBES = 8
+EXHAUSTED_BATCH_SIZE = 100
+ELIGIBLE_MESSAGE = (
+    "m.deleted_at IS NULL AND m.media_state='ready' AND NOT EXISTS(SELECT 1 FROM v2_expert_messages newer "
+    "WHERE newer.source_id=m.source_id AND newer.platform_message_id=m.platform_message_id AND newer.revision>m.revision)"
+)
 
 
 class LeaseLost(RuntimeError):
     pass
 
 
+async def _scheduler_lock(conn):
+    await conn.execute("SELECT set_config('lock_timeout','2000',true),set_config('statement_timeout','3000',true)")
+    return await conn.fetchval('SELECT pg_try_advisory_xact_lock(hashtext($1))', SCHEDULER_LOCK)
+
+
+async def _advance_turn(conn, source_id, expert_id):
+    turn = await conn.fetchval(
+        'SELECT GREATEST(COALESCE((SELECT max(last_turn) FROM v2_review_source_schedule),0),'
+        'COALESCE((SELECT max(last_turn) FROM v2_review_expert_schedule),0))+1')
+    await conn.execute('UPDATE v2_review_source_schedule SET last_turn=$2 WHERE source_id=$1', source_id, turn)
+    await conn.execute('UPDATE v2_review_expert_schedule SET last_turn=$2 WHERE expert_id=$1', expert_id, turn)
+    return turn
+
+
 async def claim_job(pool):
+    try:
+        async with asyncio.timeout(5):
+            return await _claim_job(pool)
+    except (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError) as exc:
+        # Transient scheduling contention must not cancel this process's
+        # unrelated, still-valid model calls in run()'s shutdown path.
+        log.warning('review scheduling deferred category=%s', type(exc).__name__)
+        return None
+
+
+async def _claim_job(pool):
     async with pool.acquire() as conn:
         async with conn.transaction():
+            if not await _scheduler_lock(conn):
+                return None
             await conn.execute(
-                "UPDATE v2_analysis_jobs SET state='failed',lease_until=NULL,last_error='lease_exhausted',updated_at=now() "
-                "WHERE state='running' AND lease_until<now() AND attempts >= $1", MAX_ATTEMPTS,
+                "WITH exhausted AS(SELECT id FROM v2_analysis_jobs WHERE state='running' "
+                "AND (lease_until IS NULL OR lease_until<=statement_timestamp()) AND attempts >= $1 "
+                "ORDER BY lease_until NULLS FIRST,id LIMIT $2 FOR UPDATE SKIP LOCKED) "
+                "UPDATE v2_analysis_jobs j SET state='failed',lease_until=NULL,last_error='lease_exhausted',updated_at=now() "
+                "FROM exhausted WHERE j.id=exhausted.id", MAX_ATTEMPTS, EXHAUSTED_BATCH_SIZE,
             )
-            row = await conn.fetchrow(
-                "SELECT j.id,j.message_id,j.attempts FROM v2_analysis_jobs j "
-                "JOIN v2_expert_messages m ON m.id=j.message_id "
-                "JOIN v2_experts e ON e.id=m.expert_id JOIN v2_expert_sources s ON s.id=m.source_id "
-                "JOIN v2_source_experts se ON se.source_id=m.source_id AND se.expert_id=m.expert_id "
-                "WHERE ((j.state IN ('queued','retry') AND j.available_at<=now()) "
-                "OR (j.state='running' AND j.lease_until<now())) AND j.attempts<$1 "
-                "AND m.deleted_at IS NULL AND m.media_state='ready' AND e.enabled AND s.enabled AND se.enabled "
-                "AND NOT EXISTS(SELECT 1 FROM v2_expert_messages newer WHERE newer.source_id=m.source_id "
-                "AND newer.platform_message_id=m.platform_message_id AND newer.revision>m.revision) "
-                "ORDER BY j.available_at,j.created_at LIMIT 1 FOR UPDATE OF j SKIP LOCKED", MAX_ATTEMPTS,
-            )
+            # Only metadata is enumerated. Job probes are indexed per source /
+            # expert pair; no global queue sort/materialization is performed.
+            await conn.execute('INSERT INTO v2_review_source_schedule(source_id) SELECT id FROM v2_expert_sources ON CONFLICT DO NOTHING')
+            await conn.execute('INSERT INTO v2_review_expert_schedule(expert_id) SELECT id FROM v2_experts ON CONFLICT DO NOTHING')
+            row = pair = None
+            for probe in range(MAX_PAIR_PROBES):
+                pair = await conn.fetchrow(
+                    "SELECT ss.source_id,es.expert_id,es.concurrency_limit,"
+                    "(SELECT count(*) FROM v2_analysis_jobs running WHERE running.expert_id=es.expert_id "
+                    "AND running.state='running' AND running.lease_until>statement_timestamp()) AS active_leases "
+                    "FROM v2_review_source_schedule ss JOIN v2_expert_sources s ON s.id=ss.source_id "
+                    "JOIN v2_source_experts se ON se.source_id=s.id JOIN v2_experts e ON e.id=se.expert_id "
+                    "JOIN v2_review_expert_schedule es ON es.expert_id=e.id "
+                    "WHERE s.enabled AND e.enabled AND se.enabled AND (SELECT count(*) FROM v2_analysis_jobs running "
+                    "WHERE running.expert_id=es.expert_id AND running.state='running' AND running.lease_until>statement_timestamp())<es.concurrency_limit "
+                    "AND EXISTS(SELECT 1 FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
+                    "WHERE j.source_id=ss.source_id AND j.expert_id=es.expert_id AND j.attempts<$1 "
+                    "AND ((j.state IN('queued','retry') AND j.available_at<=statement_timestamp()) OR "
+                    "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))) AND " + ELIGIBLE_MESSAGE + ") "
+                    "ORDER BY ss.last_turn,es.last_turn,ss.source_id,es.expert_id LIMIT 1 FOR SHARE OF s,e,se FOR UPDATE OF ss,es", MAX_ATTEMPTS,
+                )
+                if not pair:
+                    return None
+                turn = await _advance_turn(conn, pair['source_id'], pair['expert_id'])
+                for expired in (True, False):
+                    condition = ("j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp())" if expired
+                                 else "j.state IN('queued','retry') AND j.available_at<=statement_timestamp()")
+                    order = 'j.lease_until NULLS FIRST,j.created_at,j.id' if expired else 'j.available_at,j.created_at,j.id'
+                    row = await conn.fetchrow(
+                        'SELECT j.id,j.message_id,j.attempts FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id '
+                        'WHERE j.source_id=$1 AND j.expert_id=$2 AND j.attempts<$3 AND ' + condition + ' AND ' + ELIGIBLE_MESSAGE +
+                        ' ORDER BY ' + order + ' LIMIT 1 FOR UPDATE OF j SKIP LOCKED', pair['source_id'], pair['expert_id'], MAX_ATTEMPTS)
+                    if row:
+                        break
+                if row:
+                    break
             if not row:
                 return None
             attempt = uuid.uuid4()
-            await conn.execute(
+            lease_until = await conn.fetchval(
                 "UPDATE v2_analysis_jobs SET state='running',attempt_id=$2,attempts=attempts+1,"
-                "lease_until=now()+($3::int*interval '1 second'),heartbeat_at=now(),last_error=NULL,updated_at=now() WHERE id=$1",
+                "lease_until=clock_timestamp()+($3::int*interval '1 second'),heartbeat_at=clock_timestamp(),last_error=NULL,updated_at=now() WHERE id=$1 RETURNING lease_until",
                 row["id"], attempt, LEASE_SECONDS,
             )
             await conn.execute("DELETE FROM v2_match_searches WHERE job_id=$1", row["id"])
@@ -60,8 +125,11 @@ async def claim_job(pool):
                 "FROM v2_expert_messages m JOIN v2_experts e ON e.id=m.expert_id "
                 "JOIN v2_expert_sources s ON s.id=m.source_id WHERE m.id=$1", row["message_id"],
             )
-            await trace(conn, row["id"], "attempt_claimed", {"attempt_id": str(attempt), "attempt": row["attempts"] + 1})
-            return {"id": row["id"], "attempt_id": attempt, "attempts": row["attempts"] + 1, "message": dict(message)}
+            await trace(conn, row["id"], "attempt_claimed", {"attempt_id": str(attempt), "attempt": row["attempts"] + 1,
+                'source_id': str(pair['source_id']), 'expert_id': str(pair['expert_id']), 'concurrency_limit': pair['concurrency_limit'],
+                'active_expert_leases_before': pair['active_leases'], 'scheduler_turn': turn, 'pair_probes': probe + 1})
+            return {"id": row["id"], "attempt_id": attempt, "attempts": row["attempts"] + 1, "message": dict(message),
+                    'source_id': pair['source_id'], 'expert_id': pair['expert_id'], 'lease_until': lease_until}
 
 
 async def _add_trace(pool, job: dict, kind: str, payload: dict) -> None:
@@ -71,16 +139,55 @@ async def _add_trace(pool, job: dict, kind: str, payload: dict) -> None:
             await trace(conn, job["id"], kind, {"attempt_id": str(job["attempt_id"]), **payload})
 
 
+async def _renew_lease(pool, job, *, budget=5.0):
+    try:
+        async with asyncio.timeout(budget):
+            return await _renew_lease_once(pool, job)
+    except TimeoutError:
+        return None  # a bounded pool / database delay does not prove lease loss
+
+
+async def _renew_lease_once(pool, job):
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                if not await _scheduler_lock(conn):
+                    return None  # contention is not lost ownership
+                try:
+                    await active_job(conn, job['id'], job['attempt_id'])
+                except HTTPException as exc:
+                    if exc.status_code == 409:
+                        return False
+                    raise
+                return await conn.fetchval(
+                    "UPDATE v2_analysis_jobs SET lease_until=clock_timestamp()+($3::int*interval '1 second'),"
+                    "heartbeat_at=clock_timestamp(),updated_at=now() WHERE id=$1 AND attempt_id=$2 AND state='running' "
+                    "AND lease_until>statement_timestamp() RETURNING lease_until", job['id'], job['attempt_id'], LEASE_SECONDS) or False
+    except (asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError):
+        return None
+
+
 async def keep_lease(pool, job: dict) -> None:
+    until = job.get('lease_until')
+    remaining = (until - datetime.now(timezone.utc)).total_seconds() if until else LEASE_SECONDS
+    deadline = time.monotonic() + max(0, remaining)
+    delay = HEARTBEAT_SECONDS
     while True:
-        await asyncio.sleep(HEARTBEAT_SECONDS)
-        result = await pool.execute(
-            "UPDATE v2_analysis_jobs SET lease_until=now()+($3::int*interval '1 second'),"
-            "heartbeat_at=now(),updated_at=now() WHERE id=$1 AND attempt_id=$2 AND state='running' AND lease_until>now()",
-            job["id"], job["attempt_id"], LEASE_SECONDS,
-        )
-        if result != "UPDATE 1":
-            raise LeaseLost("review lease no longer belongs to this worker")
+        await asyncio.sleep(min(delay, max(0, deadline - time.monotonic())))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise LeaseLost('review heartbeat could not renew before expiry')
+        result = await _renew_lease(pool, job, budget=min(5.0, remaining))
+        if result is False:
+            raise LeaseLost('review lease or source eligibility no longer belongs to this worker')
+        if result is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LeaseLost('review heartbeat could not renew before expiry')
+            delay = min(.2, remaining)
+        else:
+            deadline = time.monotonic() + max(0, (result - datetime.now(timezone.utc)).total_seconds())
+            delay = HEARTBEAT_SECONDS
 
 
 async def process_job(pool, settings, job: dict) -> None:

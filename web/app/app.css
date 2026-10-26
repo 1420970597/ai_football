@@ -2,10 +2,11 @@
   --purple: #403278;
   --purple-dark: #30235e;
   --orange: #ee742b;
-  --red: #d84b42;
-  --green: #1c8c58;
+  --orange-text: #b5470b;
+  --red: #bd382f;
+  --green: #14663f;
   --ink: #333;
-  --muted: #85858b;
+  --muted: #66616f;
   --line: #e4e3e9;
   --paper: #fff;
   --background: #f4f4f6;
@@ -40,6 +41,8 @@ textarea {
 button {
   cursor: pointer;
   color: inherit;
+  min-width: 24px;
+  min-height: 24px;
 }
 button:disabled {
   cursor: not-allowed;
@@ -55,7 +58,7 @@ a {
 }
 a:hover,
 .text-link:hover {
-  color: var(--orange);
+  color: var(--orange-text);
 }
 [hidden] {
   display: none !important;
@@ -81,7 +84,7 @@ h3 {
 }
 .utility-bar {
   font-size: 12px;
-  color: #888;
+  color: #666;
   background: #fafafa;
   border-bottom: 1px solid var(--line);
 }
@@ -185,11 +188,11 @@ h3 {
 }
 .left-rail button span {
   float: right;
-  color: #999;
+  color: #666;
 }
 .rail-note {
   font-size: 11px;
-  color: #999;
+  color: #666;
   padding: 16px 10px;
   line-height: 1.9;
 }
@@ -252,7 +255,7 @@ h3 {
 .sports-bar > span {
   margin-left: auto;
   font-size: 11px;
-  color: #999;
+  color: #666;
 }
 .score-tabs,
 .section-tabs {
@@ -269,7 +272,7 @@ h3 {
 }
 .score-tabs button.active,
 .section-tabs button.active {
-  color: var(--orange);
+  color: var(--orange-text);
   font-weight: bold;
   border-bottom: 2px solid var(--orange);
 }
@@ -298,7 +301,7 @@ h3 {
 }
 .date-strip #date-buttons button small {
   display: block;
-  color: #999;
+  color: #666;
   font-size: 10px;
 }
 .date-strip #date-buttons button.active {
@@ -347,7 +350,7 @@ h3 {
   position: absolute;
   right: 8px;
   top: 3px;
-  color: #888;
+  color: #666;
   font-size: 21px;
 }
 .score-table-head,
@@ -384,24 +387,24 @@ h3 {
   line-height: 1.35;
   font-size: 11px;
   word-break: break-word;
-  color: #777;
+  color: #626262;
 }
 .match-league .favorite {
   display: block;
   margin: auto;
   font-size: 17px;
-  color: #bdbbc8;
+  color: #6c657c;
   line-height: 18px;
 }
 .match-league .favorite[aria-pressed="true"] {
-  color: var(--orange);
+  color: var(--orange-text);
 }
 .match-time {
   font-size: 11px;
-  color: #888;
+  color: #666;
 }
 .match-phase {
-  color: #999;
+  color: #666;
   font-size: 11px;
 }
 .match-phase.live {
@@ -443,13 +446,13 @@ h3 {
 }
 .match-odds span {
   background: #f1f6f0;
-  color: #538053;
+  color: #38663d;
   padding: 1px 3px;
   border-radius: 2px;
 }
 .match-odds .stale {
   background: #f2f2f4;
-  color: #9b97a5;
+  color: #686172;
 }
 .detail-button {
   color: #7c6b9c;
@@ -459,7 +462,7 @@ h3 {
 .data-footnote {
   font-size: 11px;
   line-height: 1.8;
-  color: #999;
+  color: #666;
   padding: 12px;
 }
 .notice {
@@ -477,7 +480,7 @@ h3 {
 .empty-state {
   padding: 55px 16px;
   text-align: center;
-  color: #999;
+  color: #666;
   font-size: 13px;
 }
 .empty-state strong {
@@ -535,7 +538,7 @@ h3 {
 .side-panel h2 button {
   float: right;
   font-size: 11px;
-  color: #999;
+  color: #666;
 }
 .side-expert {
   display: flex;
@@ -546,12 +549,12 @@ h3 {
   cursor: pointer;
 }
 .rank-number {
-  color: #aaa;
+  color: #6b6474;
   font-size: 15px;
   width: 15px;
 }
 .side-expert:first-child .rank-number {
-  color: var(--orange);
+  color: var(--orange-text);
 }
 .side-expert .rank-detail {
   flex: 1;
@@ -565,7 +568,7 @@ h3 {
   white-space: nowrap;
 }
 .rank-detail small {
-  color: #999;
+  color: #666;
   font-size: 10px;
 }
 .positive {
@@ -602,13 +605,13 @@ h3 {
   line-height: 1.7;
 }
 .muted {
-  color: #999;
+  color: #666;
   font-size: 12px;
 }
 .stat-help {
   padding: 12px 15px;
   background: #fffaf2;
-  color: #9a7a49;
+  color: #79592b;
   font-size: 12px;
   line-height: 1.8;
 }
@@ -627,7 +630,7 @@ h3 {
 .expert-table-head {
   padding: 8px 12px;
   font-size: 11px;
-  color: #898292;
+  color: #6b6078;
   background: #f4f2f8;
 }
 .expert-row {
@@ -661,7 +664,7 @@ h3 {
 }
 .expert-name small {
   font-size: 10px;
-  color: #999;
+  color: #666;
 }
 .signal-card,
 .message-card {
@@ -673,7 +676,7 @@ h3 {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #999;
+  color: #666;
   font-size: 11px;
   margin-bottom: 8px;
   flex-wrap: wrap;
@@ -704,7 +707,7 @@ h3 {
   color: var(--purple);
 }
 .signal-evidence {
-  color: #999;
+  color: #666;
   font-size: 11px;
   overflow-wrap: anywhere;
   line-height: 1.8;
@@ -718,7 +721,7 @@ h3 {
   display: inline-block;
   font-size: 10px;
   background: #eeeaf6;
-  color: #7d6c9d;
+  color: #675584;
   border-radius: 2px;
   padding: 1px 5px;
 }
@@ -772,7 +775,7 @@ h3 {
 }
 .member-hero p {
   font-size: 12px;
-  color: #c9b9a2;
+  color: #d6c7b0;
 }
 .member-hero #membership-current {
   border-top: 1px solid #766774;
@@ -798,7 +801,7 @@ h3 {
   color: #735431;
 }
 .plan-price {
-  color: #a67632;
+  color: #865b20;
   font-size: 27px;
   font-weight: bold;
   margin: 12px 0 2px;
@@ -809,7 +812,7 @@ h3 {
 }
 .plan-card p {
   font-size: 11px;
-  color: #9e896b;
+  color: #6c583c;
 }
 .plan-card ul {
   padding-left: 16px;
@@ -845,14 +848,14 @@ h3 {
   margin: 8px;
 }
 .benefit-grid p {
-  color: #999;
+  color: #666;
   font-size: 11px;
 }
 .payment-note {
   padding: 16px;
   font-size: 12px;
   line-height: 1.8;
-  color: #9e8d6b;
+  color: #6c583c;
   background: #faf7f1;
 }
 .identity-card {
@@ -866,7 +869,7 @@ h3 {
 }
 .identity-card p {
   font-size: 12px;
-  color: #888;
+  color: #666;
   line-height: 1.9;
 }
 .identity-card button {
@@ -888,11 +891,11 @@ h3 {
 }
 .settings-section > summary::marker {
   font-size: 11px;
-  color: #9d94ad;
+  color: #6b6078;
 }
 .settings-section > summary span {
   font-size: 11px;
-  color: #999;
+  color: #666;
   font-weight: normal;
   margin-left: 8px;
 }
@@ -915,7 +918,7 @@ h3 {
 input,
 select,
 textarea {
-  border: 1px solid #dcd9e3;
+  border: 1px solid #8a8195;
   border-radius: 3px;
   background: white;
   color: #444;
@@ -931,7 +934,7 @@ textarea {
 .compact-form input:focus,
 .compact-form textarea:focus {
   border-color: #9080b3;
-  outline: 2px solid #e7e2f1;
+  outline: 2px solid #2d185c;
 }
 .compact-form > .primary-button {
   align-self: flex-start;
@@ -973,7 +976,7 @@ textarea {
   margin: 3px 0 0;
 }
 .form-note {
-  color: #999;
+  color: #666;
   font-size: 11px;
   line-height: 1.8;
 }
@@ -997,7 +1000,7 @@ fieldset {
   padding: 12px;
 }
 legend {
-  color: #82778d;
+  color: #6b6078;
   font-size: 12px;
 }
 .checkbox-grid {
@@ -1045,7 +1048,7 @@ legend {
 .status-card span {
   display: block;
   font-size: 11px;
-  color: #999;
+  color: #666;
 }
 .status-card strong {
   font-size: 17px;
@@ -1071,7 +1074,7 @@ legend {
   display: block;
   font-size: 12px;
   margin: 8px 0;
-  color: #888;
+  color: #666;
 }
 .source-layout .compact-form {
   padding: 12px 0;
@@ -1141,7 +1144,7 @@ legend {
 }
 .site-footer {
   padding: 24px 0 35px;
-  color: #999;
+  color: #666;
   font-size: 11px;
   text-align: center;
 }
@@ -1152,7 +1155,7 @@ legend {
 }
 .site-footer button {
   font-size: 11px;
-  color: #999;
+  color: #666;
 }
 .site-footer span {
   margin: 0 15px;
@@ -1170,6 +1173,10 @@ legend {
   white-space: nowrap;
 }
 .skip-link:focus {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
   display: block;
   padding: 10px;
   background: #fff;
@@ -1203,7 +1210,7 @@ dialog::backdrop {
 .dialog-header button {
   font-size: 27px;
   line-height: 22px;
-  color: #999;
+  color: #666;
 }
 .content-dialog {
   width: min(820px, calc(100% - 30px));
@@ -1241,7 +1248,7 @@ dialog::backdrop {
   color: var(--purple);
 }
 .detail-hero p {
-  color: #999;
+  color: #666;
   font-size: 12px;
 }
 .detail-section {
@@ -1259,7 +1266,7 @@ dialog::backdrop {
 }
 .market-table th {
   background: #f0edf6;
-  color: #857b92;
+  color: #64576f;
   font-weight: normal;
   text-align: left;
 }
@@ -1270,7 +1277,7 @@ dialog::backdrop {
 }
 .market-table small {
   font-size: 10px;
-  color: #999;
+  color: #666;
 }
 .raw-text {
   white-space: pre-wrap;
@@ -1332,11 +1339,11 @@ dialog::backdrop {
 .expert-follow {
   flex: 0 0 28px;
   height: 36px;
-  color: #999;
+  color: #666;
   font-size: 20px;
 }
 .expert-follow[aria-pressed="true"] {
-  color: var(--orange);
+  color: var(--orange-text);
 }
 #followed-experts[aria-pressed="true"] {
   color: var(--purple);
@@ -1349,7 +1356,7 @@ dialog::backdrop {
 }
 .metrics-grid small {
   display: block;
-  color: #999;
+  color: #666;
   font-size: 10px;
 }
 .metrics-grid strong {
@@ -1564,7 +1571,7 @@ dialog::backdrop {
   .match-row {
     grid-template-columns:
       43px 0 0 minmax(78px, 1fr) 49px minmax(78px, 1fr)
-      0 20px;
+      0 26px;
     min-height: 74px;
     padding: 16px 4px 12px;
     border-bottom: 1px solid #e5e1ed;
@@ -1573,7 +1580,7 @@ dialog::backdrop {
     font-size: 10px;
     padding: 0 2px;
     text-align: left;
-    color: #777;
+    color: #626262;
   }
   .match-league .favorite {
     margin: 5px 0 0;
@@ -1642,7 +1649,7 @@ dialog::backdrop {
   }
   .mobile-bottom button {
     flex: 1;
-    color: #777;
+    color: #626262;
     font-size: 10px;
     display: flex;
     flex-direction: column;
@@ -1865,8 +1872,11 @@ dialog::backdrop {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  * {
+  *,
+  *::before,
+  *::after {
     animation: none !important;
+    transition: none !important;
     scroll-behavior: auto !important;
   }
 }
@@ -1962,7 +1972,7 @@ dialog::backdrop {
     max-height: 22px;
   }
   .match-league .favorite {
-    height: 22px;
+    height: 24px;
     width: 28px;
     margin: 2px 0 0;
     line-height: 20px;
@@ -2011,6 +2021,63 @@ dialog::backdrop {
 .market-table td:nth-child(2) {
   font-variant-numeric: tabular-nums;
 }
+/* Keep focus visible across white panels, purple navigation and sticky bars. */
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid #2d185c;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px #fff;
+}
+#main:focus {
+  outline: none;
+}
+html {
+  scroll-padding-block: 72px;
+}
+dialog {
+  scroll-padding-block: 88px 16px;
+}
+:where(button, a, input, select, textarea, summary, [tabindex]) {
+  scroll-margin-block: 80px;
+}
+.compact-form :where(input:not([type="checkbox"]), select, textarea),
+.search-wrap input,
+.date-select input,
+.message-filters select {
+  border-color: #8a8195;
+}
+.compact-form input[type="checkbox"],
+.checkbox-grid input[type="checkbox"],
+.league-choices input[type="checkbox"] {
+  width: 24px !important;
+  height: 24px;
+  flex-shrink: 0;
+  accent-color: var(--purple);
+}
+.dialog-header button {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+}
+@media (max-width: 720px) {
+  .primary-button,
+  .danger-button,
+  .danger-outline,
+  .form-actions button,
+  #account-admin-entry,
+  .settings-section > summary {
+    min-height: 44px;
+  }
+  .dialog-header {
+    padding-block: 8px;
+  }
+  .detail-button {
+    width: 26px;
+    min-height: 40px;
+  }
+  html {
+    scroll-padding-bottom: calc(80px + env(safe-area-inset-bottom));
+  }
+}
 .league-choices {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2025,7 +2092,7 @@ dialog::backdrop {
   flex-shrink: 0;
 }
 .league-choices small {
-  color: #999;
+  color: #666;
 }
 .filter-row #league-filter {
   white-space: nowrap;
@@ -2055,16 +2122,16 @@ dialog::backdrop {
   background: #faf5ff;
 }
 .market-table .price-up {
-  color: #d84b42;
+  color: #bd382f;
   background: #fff5f3;
 }
 .market-table .price-down {
-  color: #1c8c58;
+  color: #14663f;
   background: #f1fbf5;
 }
 .plan-card .badge {
   margin-top: 7px;
-  color: #9a7339;
+  color: #765418;
   background: #f0e4ce;
 }
 .account-verification {

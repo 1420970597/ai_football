@@ -1,5 +1,5 @@
 {
-  "recorded_at": "2026-10-26T12:15:22.064560+00:00",
+  "recorded_at": "2026-10-26T13:01:54.469026+00:00",
   "stage": "isolated_validation_passed; not production or release",
   "web_source_commit": null,
   "source_note": "Frozen candidate web files are identified by exact hashes. A commit is supplied only after this source has been committed; null means a not-yet-committed candidate. Report/docs are a separate verification artifact.",
@@ -8,8 +8,8 @@
       "command": "sh tests/browser/check.sh",
       "exit_code": 0,
       "result": "tests/browser/results.json",
-      "passed": 24,
-      "sha256": "9ab00aecdd7fdd5fa2deb3d089ec05f6afaae05ff8849ddfb3f1d186dd2f3be0",
+      "passed": 25,
+      "sha256": "8f534f6ccca07001a318a650c1f4751c13ccf4fb79d547ad22c371e566d9a711",
       "limits": "isolated Docker / mock API / no real credentials or bets"
     },
     {
@@ -17,7 +17,7 @@
       "exit_code": 0,
       "result": "tests/browser/integration-results.json",
       "passed": 11,
-      "sha256": "dbd14e3f8a9965350179ddc7bdd50a60d53e70ca67a48d08952b4b7d1153f204",
+      "sha256": "c4a03fcd532e3f25aa45a58968c80fde90cf4cac56c6fd02d6ac0ced0a3ba6c8",
       "limits": "fresh source API + nginx + isolated temporary PostgreSQL; artificial seeded data; live orders disabled; no provider services"
     },
     {
@@ -25,84 +25,150 @@
       "exit_code": 0,
       "result": "tests/browser/report-results.json",
       "passed": 3,
-      "sha256": "0a4ce98e022368128ae69420cd4d15edddefa4e6b69045b339ce9e43fefc44d1",
+      "sha256": "9765c7e55e34a054c1b05a8b411674e56650b75387dcb169976547cb5e554cae",
       "limits": "Docker network none; local report server; no external requests"
+    },
+    {
+      "command": "sh tests/browser/accessibility-check.sh",
+      "exit_code": 0,
+      "result": "tests/browser/accessibility-results.json",
+      "passed": 29,
+      "sha256": "1952d27e5ae18cf5fe5120d77da17e5e1a98eea899db548c4640570e643018ec",
+      "limits": "Docker Chromium 141 / artificial API / no production services"
     }
   ],
   "web_source_sha256": {
     "web/app/Dockerfile": "8febd9aef658841bd896b6649c64aa60dba4a4911527f93a785a688ebc3c7dc6",
-    "web/app/admin.js": "5355f58b4088b5a4186a778cb4b5db2a43a7416efe31e39d139ac8eec47cd108",
-    "web/app/app.css": "7663bf5342d37117c2c2b917166fc01c16e609ff71df55b373a6b83c4677cfd4",
-    "web/app/app.js": "997fb7ae45fd865180e8ed809b4bf8afa34bfd53500e5c5af534a8527dbb96b4",
+    "web/app/admin.js": "e902a19fd53443e7ad1ab044f68a3f90b42862fb26b2c1d0b442d7f4036bffb2",
+    "web/app/app.css": "7302e3730783b60d6d6bc5e09d33dc9349e5a2d5349d3deb459a5ca155a05577",
+    "web/app/app.js": "66a4771765e3c0714e9db338b093dece9b5d0b907b53f38fb9be452b41ffd4fe",
     "web/app/identity.js": "1f373315756b27fc156760d8d5944aa296c3c1dc3b9ffff53d5d7265925fa581",
-    "web/app/index.html": "794df01fcfbfece7c54bcea82904cf6603b463236d85091f0bf9080bf4be387c",
+    "web/app/index.html": "2cf64d53c3e4a6a96fe1a41b620ccf8085ff98091045cf10d247e3624ceb5933",
     "web/app/mfa.js": "9fcd6657e830b56f6ce2215172c65e5e67ac3585c6ab93a76bd0a018fcc83090",
     "web/app/nginx.conf": "266a94eea9d70439043a0b569e490a7b1a590fb5fb8e16ccac747102cd551151",
     "web/app/qrcode.LICENSE": "82c8fe2a92f2bd3914ae5d0f23e28e26e18228adf6ace6e2467f8420dc729b45",
     "web/app/qrcode.js": "18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780",
-    "web/app/ui.js": "dc87c4385dc55145fdbe839f6cc3f64bf27f6c29b51115511d8f2b9b93cbcafb"
+    "web/app/ui.js": "bc2c0d14f37d578aa2f8d265955811e136dc4798f09162a0609bd2b0d1c8913e"
   },
-  "report_html_sha256": "30bf34dcd76d3f7b11a94630f4142ae8b239f5a91773bfbf661d13e3d43437a2",
+  "browser_test_source_sha256": {
+    "tests/browser/Dockerfile": "86dc929479f917aff896549a84ebcb2e0ae9112c301bd68628d8fa1bb7fa77a8",
+    "tests/browser/accessibility-check.sh": "609189bc43219507f4eec6a57ab35ae4f22f527b259526b946700fd84ff371d1",
+    "tests/browser/accessibility.mjs": "918d6e78d296d1b15bdd603925f2b45a20b3c3c38a3d1aac0171794f26c943f9",
+    "tests/browser/check.sh": "fbf5474501a4edfb1f4b21c4740b2cbae5c0cad603ab190a8eeba229ab619d97",
+    "tests/browser/compose.integration.yml": "55ecea515d6e83c2d1afebc14a708b18ecf55b0468e2e0055028cbfd85002b0e",
+    "tests/browser/integration-check.sh": "a90879e3b88d6d346ac8824e39fc0dc989f896096d7404aa8065c468c48b4408",
+    "tests/browser/integration.mjs": "ac5b5301ccdee1ee8c0341e4678765d01db3a95498a6a98db6009e3c9a47d1c3",
+    "tests/browser/package-lock.json": "c3914fd5db26ebb42e5ef530ebc9571f6b7e2ab6ccaeb19e138c8d36db434ac9",
+    "tests/browser/package.json": "984eb213a468a2728b49bfe61a932848ecc5bc24b8bc32f50dbd1f8ffaf34aa5",
+    "tests/browser/reference.mjs": "dbdfb9b113695645294884fcc118395593267e0091db85f285e602413fb053d8",
+    "tests/browser/report-check.mjs": "286f8d8df29ef33b0fdc16c68f7e0cafaf10f3ba055da4993c9c0100547a72b4",
+    "tests/browser/seed.py": "354918342af32ab9e706cdcfa600ad3afb173508715e7296b501bb1c90a08d64",
+    "tests/browser/snapshot.py": "53111393625a28baeb51df9bb4588eb9ab514e26336da0e624bb73ff531f3bc6",
+    "tests/browser/verify.mjs": "f0698bc224d1a6080f5afad68b9242d43ee782c3c499efddfc2a560d4aba9657"
+  },
+  "report_html_sha256": "ea73f52efe546479105b4c6640cd3f450d6c75fa8093ebfa54298f26f4738683",
   "screenshots_and_diagrams": [
     {
       "path": "reports/jiebao-score-reference/images/candidate-1280-admin-fixture.png",
-      "sha256": "f98d18086e4b55b632a8f915b3d76d7d5d88479f251ee3b00dabd13d8659cf9e",
+      "sha256": "f45a724a4b795597c4045cd6e5207a9de888d01681c05f63c91f726ffcdd6eff",
       "artificial_sample": true,
       "width": 1280,
       "height": 900
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-360-admin-fixture.png",
-      "sha256": "3740b2783d987eae9f9832d9ec2b633fbacbcf05c7ecbc117a4d700d3f931fec",
+      "sha256": "6236bfa9d78df34085836023816ad3149e68a37365138a2e3b75403e3fc1b6ca",
       "artificial_sample": true,
       "width": 360,
       "height": 900
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-768-admin-fixture.png",
-      "sha256": "b88659528a98dc9487e30ab55c7381e7bfcf300862081df5850c858ab9068a97",
+      "sha256": "d3ea71cfddfc46a533f108f94ecde828f2d69c399edb489ef47bd97e56c009d3",
       "artificial_sample": true,
       "width": 768,
       "height": 900
     },
     {
+      "path": "reports/jiebao-score-reference/images/candidate-a11y-1440-focus-fixture.png",
+      "sha256": "522b77a79cd283c814c894bd5c3974d88b3b531cf7d648dbfb5024397035ec22",
+      "artificial_sample": true,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-a11y-1440-login-fixture.png",
+      "sha256": "fb9cade92783ad4f0d57654b908b329010c888f85d195a9960b7095d4004486b",
+      "artificial_sample": true,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-a11y-1440-mfa-settings-fixture.png",
+      "sha256": "29700a21562d159dc8ecef29c559d762eab17469bda9b1780e57945450687313",
+      "artificial_sample": true,
+      "width": 1440,
+      "height": 960
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-a11y-390-focus-fixture.png",
+      "sha256": "f03ef826a1ad7e453ca80aa6b9bef8ebb55e873941f5fc68053b8f2e8989e2fe",
+      "artificial_sample": true,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-a11y-390-login-fixture.png",
+      "sha256": "6f85b4f355af5ac3229518a5d1e7c855f3998d95bf59bac316e929472c135000",
+      "artificial_sample": true,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-a11y-390-mfa-settings-fixture.png",
+      "sha256": "e68a2bdca5493022bfa03ec4b76f066eca2a6854d851c54c31879398f1bca831",
+      "artificial_sample": true,
+      "width": 390,
+      "height": 844
+    },
+    {
       "path": "reports/jiebao-score-reference/images/candidate-desktop-admin-telegram-fixture.png",
-      "sha256": "74ed7f6caf25e7e30bd1df8caaf178136c1fd6c2cb441eac2ed9935bccb39567",
+      "sha256": "960938df32052283e6b70720c7e89f3b1ec11406008e6e87967438a58d3f4f3a",
       "artificial_sample": true,
       "width": 1440,
       "height": 960
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-desktop-empty-fixture.png",
-      "sha256": "df43b467c640f9df5d846286d36f1571fb7b914240f2749b060b0828c4145b28",
+      "sha256": "976f2f0335480b83d19e97e34fdce43220389904f4b2fb766fc97b9d38d03e3b",
       "artificial_sample": true,
       "width": 1440,
       "height": 960
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-desktop-original-fixture.png",
-      "sha256": "4becc905c6fbea404231718f5f02c86ac72f65b1bc8f491cdacc54f90cdc39a2",
+      "sha256": "b11fae0b967b6b25d2e5b86c95547ac05ae3b899a32394bdad09ee09b74f9574",
       "artificial_sample": true,
       "width": 1440,
       "height": 960
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-desktop-scores-fixture.png",
-      "sha256": "7ec0a6ea582771fbdba09e2600908856d914c88dfaaa0358826452a1e3218247",
+      "sha256": "e9076181c9f8980d49282a842d79ab27340ac5f062acf17707718d5647e258c8",
       "artificial_sample": true,
       "width": 1440,
       "height": 960
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-desktop-stale-fixture.png",
-      "sha256": "cf75c740e1132a24071273b70b60df17a690d401348f07763f7dab6a43d0a9fd",
+      "sha256": "e1486c69918958eea1f7dccf02fa2d917e0bbd06bc77d198f6dd9bac9a6d9631",
       "artificial_sample": true,
       "width": 1440,
       "height": 960
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-mobile-detail-fixture.png",
-      "sha256": "5a7468d528393d23e5d1dcbb2ad2e84af2e9627585174240654aad5a34274253",
+      "sha256": "8bf1dcede4d93244924110ae1f4995e4cf540c9966df0cc7cc530e5ce4db798f",
       "artificial_sample": true,
       "width": 390,
       "height": 844
@@ -116,35 +182,42 @@
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-mobile-error-fixture.png",
-      "sha256": "ab751b8b85fd0762ac4547daca3febc8d31482e1d2a2beac7b0275da387cd00b",
+      "sha256": "14ec77d910a9804c501ca5b1931545ddd681f27baf84e57bc20cb44d4ccebc13",
       "artificial_sample": true,
       "width": 390,
       "height": 844
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-mobile-loading-fixture.png",
-      "sha256": "f40f1d2e229cfbb0861ad532444d1a2347696db62a71afdeb93aa0b45aa02d02",
+      "sha256": "18499409c2e93552645850761e6db234aa06ce31ab515bf0fd9c9751bc64e56b",
       "artificial_sample": true,
       "width": 390,
       "height": 844
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-mobile-long-album-fixture.png",
-      "sha256": "1604fc3167e68ab9a2d0a577832b79ea63436b3adbc3cfcedc68f914eed15465",
+      "sha256": "7252b2cd4282780be70823c115e1b8c629f9ed8801d54d452690921af299b830",
       "artificial_sample": true,
       "width": 390,
       "height": 844
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-mobile-membership-fixture.png",
-      "sha256": "7f8a5c62abaa8f772dea700d3a2725f84c836ba5328bd15913dbbf712fcd4d1a",
+      "sha256": "46bb410d76edb98242ed2db3fc9686fa289e825069e302b7ae39c277440af378",
       "artificial_sample": true,
       "width": 390,
       "height": 844
     },
     {
       "path": "reports/jiebao-score-reference/images/candidate-mobile-scores-fixture.png",
-      "sha256": "ba1b46784d7e3b6d444ba3c29a3b3385aee153b75e5bdc3539ce4ca871e5bc9b",
+      "sha256": "154d35df6bc8713365c19192d3d3aaef957ba355ef071fea0b599cda07afd371",
+      "artificial_sample": true,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "reports/jiebao-score-reference/images/candidate-mobile-tg-search-fixture.png",
+      "sha256": "07a8e43a78bee2e7da1dd60db1400aff8020210c62f79143fadfd6a21c00d869",
       "artificial_sample": true,
       "width": 390,
       "height": 844
@@ -177,14 +250,14 @@
     },
     {
       "path": "reports/jiebao-score-reference/images/integration-desktop-original-real-api-fixture.png",
-      "sha256": "02fbfac1d57c8a1c6303fe18366a8e7fafe92766ba24ab13db85c944ee7029a9",
+      "sha256": "23dd222297c0072dd7f761d559377f7ec7b42dabf0347c4e770cc3f7a546c28e",
       "artificial_sample": true,
       "width": 1440,
       "height": 960
     },
     {
       "path": "reports/jiebao-score-reference/images/integration-mobile-scores-real-api-fixture.png",
-      "sha256": "f1215521c61f1e41dc2050e341daef2e3be7a70f657298f24c9e4f6f44e9d986",
+      "sha256": "cef13c4931809ddb55ba7cd74244390cd2315cfa5ef9bf88d5461ee114136b89",
       "artificial_sample": true,
       "width": 390,
       "height": 844

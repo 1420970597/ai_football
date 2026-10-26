@@ -97,6 +97,10 @@
     {
       "name": "管理员换机关闭清密钥、继续登记、明确替换、过期取消",
       "status": "passed"
+    },
+    {
+      "name": "Telegram目录及管理员搜索重置游标、空结果、清空与请求乱序",
+      "status": "passed"
     }
   ],
   "browser_errors": []
