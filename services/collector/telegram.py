@@ -41,6 +41,13 @@ MESSAGE_MEDIA_RETENTION = "expert_message_evidence"
 DIRECTORY_REFRESH_SECONDS = 300
 SYNC_HISTORY_SLICE_SECONDS = 2
 SYNC_HISTORY_MAX_MESSAGES = 25
+SOURCE_HISTORY_SECONDS = 25
+RECONCILE_BATCH_SECONDS = 10
+RECONCILE_RPC_SECONDS = 3
+RECONCILE_EVENT_LIMIT = 10
+RECONCILE_ID_LIMIT = 100
+MEDIA_CLEANUP_SECONDS = 5
+SOURCE_LEASE_REFRESH_SECONDS = 3
 MEDIA_RETRY_BATCH_SECONDS = 30
 MEDIA_TRANSFER_SECONDS = 20
 MEDIA_COMMIT_SECONDS = 5
@@ -125,6 +132,7 @@ class TelegramCollector:
         self.retry_at: dict[str, float] = {}
         self.directory_retry_at: dict[str, float] = {}
         self.directory_trusted: dict[str, tuple] = {}
+        self.reconcile_pending: dict[str, list[dict]] = {}
         self.control_server = None
         self.auth_client = None
         self.auth_task = None
@@ -292,6 +300,7 @@ class TelegramCollector:
             self.account = None
             self.directory_retry_at.clear()
             self.directory_trusted.clear()
+            self.reconcile_pending.clear()
             self.invalid_session_fingerprint = None
             self._verified_identity = None
             self._rejected_identity_binding = None
@@ -355,6 +364,9 @@ class TelegramCollector:
             state = self.auth_state.get("state") if self.auth_state.get("state") in {"session_invalid", "failed"} else "unauthorized"
             return {"state": state, "sources": {}, **({'reason': self.auth_state['reason']} if self.auth_state.get('reason') else {})}
         self.sources = {str(item["chat_id"]): item for item in await self.backend.sources()}
+        # Disabled sources are no longer read. Their immutable events remain
+        # remote and will be scheduled again when the source is enabled.
+        self.reconcile_pending = {chat: rows for chat, rows in self.reconcile_pending.items() if chat in self.sources}
         result = {}
         # 群组之间独立，但控制并发和 Telegram flood；单群失败不阻止其他群。
         gate = asyncio.Semaphore(3)
@@ -362,9 +374,14 @@ class TelegramCollector:
         async def one(chat_id, source):
             async with gate:
                 try:
-                    result[chat_id] = await self._sync_source(chat_id, source)
+                    async with asyncio.timeout(SOURCE_HISTORY_SECONDS):
+                        result[chat_id] = await self._sync_source(chat_id, source)
                     if result[chat_id]["state"] != "backoff":
-                        await self._reconcile_known(chat_id, source)
+                        reconciliation = await self._reconcile_known(chat_id, source)
+                        result[chat_id]['reconciliation'] = reconciliation
+                        if reconciliation['state'] == 'deferred':
+                            result[chat_id]['history_state'] = result[chat_id]['state']
+                            result[chat_id]['state'] = 'reconciliation_deferred'
                 except FloodWaitError as exc:
                     self.retry_at[chat_id] = time.monotonic() + exc.seconds
                     result[chat_id] = {"state": "flood_wait", "retry_after": exc.seconds}
@@ -372,14 +389,38 @@ class TelegramCollector:
                     await self._invalidate_active_session()
                     result[chat_id] = {"state": "unavailable", "error": type(exc).__name__}
                     log.warning("Telegram session invalidated category=%s", type(exc).__name__)
+                except TimeoutError:
+                    result[chat_id] = {'state': 'unavailable', 'error': 'TimeoutError', 'reason': 'history_deadline',
+                                       'reconciliation_pending': len(self.reconcile_pending.get(chat_id, []))}
+                    log.warning('Telegram source deferred category=history_deadline')
                 except Exception as exc:
-                    result[chat_id] = {"state": "unavailable", "error": type(exc).__name__}
+                    result[chat_id] = {"state": "unavailable", "error": type(exc).__name__,
+                                       'reconciliation_pending': len(self.reconcile_pending.get(chat_id, []))}
                     log.warning("Telegram source unavailable category=%s", type(exc).__name__)
 
         await asyncio.gather(*(one(chat_id, source) for chat_id, source in self.sources.items()))
+        # The second source wave can run while the first has become idle.
+        # Refresh before the separate media budget so their 90-second remote
+        # leases do not expire during another source's transfer work.
+        async def keep_lease(chat_id):
+            if result[chat_id]['state'] in {'backoff', 'flood_wait'}:
+                return
+            try:
+                async with gate:
+                    async with asyncio.timeout(SOURCE_LEASE_REFRESH_SECONDS):
+                        async with self.locks.setdefault(chat_id, asyncio.Lock()):
+                            await self.backend.checkpoint(chat_id, self.owner)
+            except Exception as exc:
+                result[chat_id]['lease_state'] = 'deferred'
+                result[chat_id]['lease_error'] = type(exc).__name__
+                if result[chat_id]['state'] in {'caught_up', 'catching_up'}:
+                    result[chat_id]['history_state'] = result[chat_id]['state']
+                    result[chat_id]['state'] = 'lease_deferred'
+        await asyncio.gather(*(keep_lease(chat_id) for chat_id in result))
         await self.retry_pending()
         try:
-            cleanup = await self.cleanup_orphan_media()
+            async with asyncio.timeout(MEDIA_CLEANUP_SECONDS):
+                cleanup = await self.cleanup_orphan_media()
         except Exception as exc:
             cleanup = {"state": "deferred", "candidates": 0, "deleted": 0, "error": type(exc).__name__}
             log.warning("Telegram orphan media inventory unavailable category=%s", type(exc).__name__)
@@ -479,22 +520,44 @@ class TelegramCollector:
             return {"state": "catching_up" if catching_up else "caught_up", "last_message_id": last, "observed": count}
 
     async def _reconcile_known(self, chat_id: str, source: dict):
-        # 高水位只覆盖新消息；按远端调度轮转复核旧版本，补回断线期间的编辑和删除。
-        async with self.locks.setdefault(chat_id, asyncio.Lock()):
-            await self.backend.checkpoint(chat_id, self.owner)
-            observed = await self.backend.observed(chat_id, self.owner)
-        entity = await self._entity(chat_id)
-        for item in observed:
-            ids = item["content"]["member_message_ids"]
-            members = [entry for entry in await self.client.get_messages(entity, ids=ids) if entry]
-            async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                await self.backend.checkpoint(chat_id, self.owner)
-                missing = set(ids) - {entry.id for entry in members}
-                if missing:
-                    await self._delete(chat_id, sorted(missing))
-                else:
-                    await self._process_group(chat_id, source, sorted(members, key=lambda entry: entry.id))
-            await asyncio.sleep(0)
+        # observed advances the remote schedule before returning. Keep the
+        # complete claimed slice until every corresponding event is checked;
+        # a timeout never turns a failed RPC into evidence of deletion.
+        pending = self.reconcile_pending.setdefault(chat_id, [])
+        checked = 0
+        try:
+            async with asyncio.timeout(RECONCILE_BATCH_SECONDS):
+                async with self.locks.setdefault(chat_id, asyncio.Lock()):
+                    await self.backend.checkpoint(chat_id, self.owner)
+                    if not pending:
+                        pending.extend(await self.backend.observed(chat_id, self.owner, limit=RECONCILE_EVENT_LIMIT))
+                if not pending:
+                    return {'state': 'ready', 'checked': 0, 'pending': 0}
+                async with asyncio.timeout(RECONCILE_RPC_SECONDS):
+                    entity = await self._entity(chat_id)
+                identifiers = sorted({identifier for item in pending for identifier in item['content']['member_message_ids']})
+                by_id = {}
+                for offset in range(0, len(identifiers), RECONCILE_ID_LIMIT):
+                    async with asyncio.timeout(RECONCILE_RPC_SECONDS):
+                        members = await self.client.get_messages(entity, ids=identifiers[offset:offset+RECONCILE_ID_LIMIT])
+                    by_id.update({entry.id: entry for entry in members if entry})
+                while pending:
+                    ids = pending[0]['content']['member_message_ids']
+                    members = [by_id[identifier] for identifier in ids if identifier in by_id]
+                    async with self.locks.setdefault(chat_id, asyncio.Lock()):
+                        await self.backend.checkpoint(chat_id, self.owner)
+                        missing = set(ids) - set(by_id)
+                        if missing:
+                            await self._delete(chat_id, sorted(missing))
+                        else:
+                            await self._process_group(chat_id, source, sorted(members, key=lambda entry: entry.id))
+                        pending.pop(0)
+                        checked += 1
+                    await asyncio.sleep(0)
+        except TimeoutError:
+            log.warning('Telegram reconciliation deferred category=deadline pending=%s', len(pending))
+            return {'state': 'deferred', 'reason': 'deadline', 'checked': checked, 'pending': len(pending)}
+        return {'state': 'ready', 'checked': checked, 'pending': 0}
 
     async def _expand_album(self, message, entity):
         grouped_id = getattr(message, "grouped_id", None)

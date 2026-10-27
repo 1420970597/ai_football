@@ -60,6 +60,12 @@ async def seed():
                 quote=await conn.fetchrow("SELECT * FROM v2_current_quotes WHERE fixture_id=$1 AND selection='home'",f'web-integration-match-{index}')
                 await conn.execute("INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,period,market_kind,line,selection,recommendation_price,quote_time,confidence,score_baseline) VALUES($1,$2,$3,$4,$5,'market-hcap','亚洲让球','full_time','handicap',-0.25,'home',1.96,$6,0.9,$7)",signal,MESSAGE,EXPERT,quote['fixture_id'],'live' if index==0 else 'scheduled',now,{'home':1,'away':0})
                 await conn.execute("INSERT INTO v2_quote_evidence(id,fixture_id,market_id,market_name,period,line,selection,price,evidence_kind,reference_id,source_updated_at,evidence) VALUES($1,$2,'market-hcap','亚洲让球','full_time',-0.25,'home',1.96,'expert_signal',$3,$4,$5)",uuid.uuid4(),quote['fixture_id'],signal,now,{'quote_id':str(quote['id'])})
+            if os.environ.get('BROWSER_EXTENDED_FIXTURE') == 'true':
+                # Public synthetic configuration, isolated API only; no provider network exists.
+                for setting,value in {'auto_betting_enabled':'true', 'leyu_app_host':'https://synthetic.invalid',
+                                      'leyu_app_signing_config':'{"synthetic":true}'}.items():
+                    await conn.execute('INSERT INTO v2_admin_settings(setting_key,encrypted_value) VALUES($1,$2)',
+                                       setting,encrypt_secret(bytes.fromhex(os.environ['DATA_ENCRYPTION_KEY']),value))
         print('isolated seed complete: 4 fixtures / 4 quotes / 2 messages / 2 signals / 3 traces')
     finally:
         await conn.close()

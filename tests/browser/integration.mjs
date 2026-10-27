@@ -2,6 +2,11 @@ import { chromium } from "/opt/verification/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+
+if (process.env.BROWSER_EXTENDED_FIXTURE === "true") {
+  await import("../integration/browser_account_flows.mjs");
+  process.exit(0);
+}
 const expertId = "11111111-1111-4111-8111-111111111111";
 const origin = "http://web";
 const evidence = "/work/reports/jiebao-score-reference/images";
@@ -51,6 +56,9 @@ async function scenario(name, action) {
   } catch (error) {
     results.push({ name, status: "failed", error: error.message });
     console.log("FAIL " + name + " " + error.message);
+  } finally {
+    // Real nginx rate limits apply to the same headless client across role contexts.
+    await page.waitForTimeout(1200);
   }
 }
 async function api(path, { method = "GET", body, admin = false } = {}) {
@@ -66,7 +74,10 @@ async function api(path, { method = "GET", body, admin = false } = {}) {
       ...(csrf ? { "X-CSRF-Token": csrf } : {}),
     },
   });
-  return { status: response.status(), data: await response.json() };
+  const raw = await response.text();
+  if (!(response.headers()["content-type"] || "").includes("application/json"))
+    throw new Error("API returned non-JSON status=" + response.status() + " path=" + path);
+  return { status: response.status(), data: JSON.parse(raw) };
 }
 await scenario("真实API比分投影、联赛多选和赛前赛果", async () => {
   await page.goto(origin);

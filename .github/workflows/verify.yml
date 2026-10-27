@@ -49,6 +49,7 @@ jobs:
           path: |
             tests/browser/results.json
             tests/browser/integration-results.json
+            tests/browser/integration-account-results.json
             reports/jiebao-score-reference/images/candidate-*
             reports/jiebao-score-reference/images/integration-*
           retention-days: 14
