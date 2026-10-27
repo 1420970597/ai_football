@@ -236,11 +236,10 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"state": "invalid", "desired_version": 1, "applied_version": 1,
                           "validated_at": "2026-10-27T00:00:00+00:00", "source_state": "degraded",
                           "reason": "invalid_base_url"}, settings.json()["runtime"])
-        for key in ("leyu_login_proxy_authkey", "leyu_login_proxy_authpwd"):
-            item = settings.json()["items"][key]
-            self.assertFalse(item["configured"])
-            self.assertTrue(item["masked"])
-            self.assertIsNone(item["value"])
+        item = settings.json()["items"]["leyu_login_proxy_url"]
+        self.assertFalse(item["configured"])
+        self.assertTrue(item["masked"])
+        self.assertIsNone(item["value"])
         self.assertEqual(403, (await self.client.put("/api/v1/admin/settings", headers=self.csrf(), json={"values": {}})).status_code)
         self.assertEqual(200, (await self.client.put("/api/v1/admin/settings", headers=self.csrf(True), json={"values": {}})).status_code)
 
@@ -267,8 +266,7 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
             json={"expected_leyu_version": 1, "values": {
                 "leyu_api_base": "https://business.example.invalid",
                 "leyu_request_id": "private-session-for-test",
-                "leyu_login_proxy_authkey": "qg-authkey-secret-for-test",
-                "leyu_login_proxy_authpwd": "qg-authpwd-secret-for-test",
+                "leyu_login_proxy_url": "http://sample:password@geo.iproyal.com:12321",
             }},
         )
         self.assertEqual(200, response.status_code, response.text)
@@ -284,22 +282,19 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(details["runtime_acknowledged"])
         self.assertEqual("https://business.example.invalid", details["diff"]["leyu_api_base"]["after"]["value"])
         self.assertIsNone(details["diff"]["leyu_request_id"]["after"]["value"])
-        self.assertIsNone(details["diff"]["leyu_login_proxy_authkey"]["after"]["value"])
-        self.assertIsNone(details["diff"]["leyu_login_proxy_authpwd"]["after"]["value"])
-        for secret in ("private-session-for-test", "qg-authkey-secret-for-test", "qg-authpwd-secret-for-test"):
+        self.assertIsNone(details["diff"]["leyu_login_proxy_url"]["after"]["value"])
+        for secret in ("private-session-for-test", "sample:password"):
             self.assertNotIn(secret, str(details))
 
-        for key, secret in (("leyu_login_proxy_authkey", "qg-authkey-secret-for-test"),
-                            ("leyu_login_proxy_authpwd", "qg-authpwd-secret-for-test")):
-            stored = await self.pool.fetchval("SELECT encrypted_value FROM v2_admin_settings WHERE setting_key=$1", key)
-            self.assertNotEqual(secret, stored)
-            self.assertEqual(secret, decrypt_secret(bytes(range(32)), stored))
+        stored = await self.pool.fetchval("SELECT encrypted_value FROM v2_admin_settings WHERE setting_key=$1", "leyu_login_proxy_url")
+        self.assertNotIn("sample:password", stored)
+        self.assertEqual("http://sample:password@geo.iproyal.com:12321", decrypt_secret(bytes(range(32)), stored))
         settings = await self.client.get("/api/v1/admin/settings")
         self.assertEqual(200, settings.status_code, settings.text)
-        for key in ("leyu_login_proxy_authkey", "leyu_login_proxy_authpwd"):
-            self.assertTrue(settings.json()["items"][key]["masked"])
-            self.assertTrue(settings.json()["items"][key]["configured"])
-            self.assertIsNone(settings.json()["items"][key]["value"])
+        proxy_setting = settings.json()["items"]["leyu_login_proxy_url"]
+        self.assertTrue(proxy_setting["masked"])
+        self.assertTrue(proxy_setting["configured"])
+        self.assertIsNone(proxy_setting["value"])
 
         status = await self.client.get("/api/v1/admin/status")
         self.assertEqual(200, status.status_code, status.text)

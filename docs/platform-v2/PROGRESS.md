@@ -134,8 +134,8 @@ git diff --check
 - 运行时只读诊断确认：采集器可读取远端 LeYu 配置（HTTP 200，revision 3），最近续期请求在数据库侧以 `unknown` 结束，原因分类为 `proxy_login_connect_failure`，且 `login_submitted=true`。因此系统按安全规则拒绝新的续期领取，未再次发送登录请求。
 - 原采集器把所有续期 API 非 2xx 统一映射为 `renewal_api_rejected`，无法区分 unknown 状态冲突。现按 409、401/403、422、5xx 分类为状态冲突、鉴权失败、请求无效和服务端不可用；新增脱敏回归测试。
 - 状态映射隔离测试 9 项通过，退出码 0；改动文件 `py_compile`、`git diff --check` 退出码 0；采集镜像构建及容器替换退出码 0。运行时只读诊断现已显示 `renewal_state_conflict`，对应当前 unknown 续期记录。
-- 外部续期仍未恢复：该记录最近结果为代理登录连接失败，且设置尚无 QG Authkey/Authpwd。需先在管理页填入青果代理授权，再核对后解除 unknown 状态；在此之前不得再次发送登录请求。
-- 管理设置 API 对未保存字段统一返回 `configured=false` 和 `masked=true`，新青果凭据在首次配置时也显示为“未配置”；隔离身份 API 回归覆盖其状态及不回显要求。
+- 外部续期仍未恢复：该记录最近结果为代理登录连接失败，且旧版本错误读取了残留青果提取字段。后续只允许使用历史 IPRoyal 登录代理配置；在新实现部署并完成一次受控验证前，不重复发送登录请求。
+- 管理设置 API 不再暴露青果提取地址或 Authkey/Authpwd 字段；IPRoyal 登录代理 URL 继续按密文保存并以 `configured/masked` 形式回显，隔离身份 API 回归覆盖不回显要求。
 - 管理诊断回传采集器已加载的 LeYu 配置版本，页面展示“采集器配置版本”或“未回执”，不再把数据库持久化误称为运行时热生效。
 - 设置 API 把数据库期望版本与采集器回执版本比较，明确区分已应用、等待读取和采集器不可达；采集器在读取配置后即使上游失败也回报当前版本。隔离身份测试覆盖 applied 与 renewal 冲突原因并存的状态。
 
@@ -152,7 +152,7 @@ git diff --check
 
 - 活跃、临近开赛和远期赛程使用独立刷新预算；完整赛程仍每轮拉取，但盘口请求只发给到期场次。成功上传后才推进刷新水位，部分刷新不会关闭历史盘口；定向用例覆盖预算边界、缺失盘口容器、回填旧报价和上传过滤。
 - 实时队列在满载时计数并触发全量重同步，同一消息快照去重但保留独立比分/盘口更新；诊断只展示订阅请求数，不把本地发送当作上游确认或漏订阅率。
-- 续期代理提取校验接受青果 `key` URL 鉴权或完整 Authkey/Authpwd，仍拒绝半套账密和无鉴权 URL；契约白名单包含新增刷新预算环境变量。
+- 续期代理校验仅接受 IPRoyal 登录代理 URL 与可选密码模板；不再执行青果提取、Authkey/Authpwd 透传或 `proxy_ip` 依赖。
 - 定向 Docker 用例 129 项通过，19 项按环境跳过，退出码 0；Compose 边界检查、Python/JavaScript 语法和差异检查均退出码 0。
 
 ### E95 — 动态域名与代理连接状态诊断
@@ -161,6 +161,13 @@ git diff --check
 - 在不发送普通采集请求、不启用投注的前提下执行两轮有界续期重试：一轮返回代理 CONNECT HTTP `408`，另一轮及后续不同短效出口为 `proxy_login_connect_failure`；未收到 App 登录成功响应，token 未更新，盘口/比赛仍无新鲜数据。WebSocket 当前为 `websocket_http_403`，收到事件数为 0。
 - 代理诊断修复将 httpcore CONNECT 的数字状态码以脱敏 `last_error_code` 回传；PR #73 backend/browser/android 全部成功后已合入 `main`（合并提交 `f88defb`）。当前失败证据指向短效代理到乐鱼 App 的 CONNECT/网络路径，不能据此声称代理质量、账号密码或乐鱼账号任一方单独确定有错。
 - 青果公开说明要求短效代理首次提取前加入发起连接服务器公网 IP 白名单；若使用账密则需该业务 Authkey/Authpwd。项目代码同时支持 key URL 鉴权、完整账密和白名单模式，拒绝半套账密；本轮没有将代理用于普通采集，也未额外消耗探针请求。
+
+### E96 — IPRoyal 登录代理路径纠正
+
+- 复核历史配置和运行代码确认：v1 的有效登录代理是 IPRoyal，旧实现因 `leyu_login_proxy_extract_url` 优先级错误才实际尝试青果；此前不能把失败归因到 IPRoyal 代理本身。
+- 移除青果提取地址、Authkey/Authpwd、`proxy_ip` 和独立出口地址的配置透传；管理员设置和个人账户协议白名单只保留 IPRoyal 登录代理 URL 与密码模板。
+- IPRoyal 代理仅在 App 登录时建立一次 59 秒粘性会话；登录客户端先经同一代理访问 `https://ipv4.icanhazip.com/`，校验公网 IP 后将该 IP 写入签名头并提交一次登录。preInfo、场馆启动、余额、订单和 WebSocket 均不使用该代理。
+- IPRoyal 代理单元和签名登录轨迹回归 24 项通过；冻结 Docker 全量回归 468 项通过（0 失败/错误/跳过，退出码 0），API、Collector、Executor、Web 已重建替换。受控运行验证记录 `renewal_finished / success / login_submitted=true` 并写入新 App token；随后上游返回 `upstream_rate_limited (0401038)`，因此只证明 IPRoyal 登录链路已生效，不把限流状态标为实时赛事恢复。
 
 ## 配置复用与真实缺口
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import errno
 import hashlib
 import ipaddress
@@ -28,9 +27,9 @@ from .leyu_protocol import LeyuError
 
 MAX_APP_BYTES = 2 * 1024 * 1024
 MAX_DISCOVERY_BYTES = 256 * 1024
-MAX_PROXY_BYTES = 64 * 1024
 MAX_PROXY_LIFETIME = 60.0
 PROXY_MARGIN = 5.0
+PROXY_EGRESS_URL = "https://ipv4.icanhazip.com/"
 LOGIN_PATH = "/site/api/v1/user/login"
 PRE_INFO_PATH = "/site/api/v1/configuration/preInfo"
 LAUNCH_PATH = "/game/api/v1/venue/launch"
@@ -273,7 +272,7 @@ class ProxyLease:
 
 
 class LoginProxy:
-    """每次续期提取一个短期租约；不修改全局代理或普通采集客户端。"""
+    """建立仅用于一次 App 登录的代理租约；普通采集始终使用直连客户端。"""
 
     def __init__(self, config: Mapping[str, Any]):
         self.config = config
@@ -290,20 +289,6 @@ class LoginProxy:
 
     def validate_configuration(self) -> None:
         url = str(self.config.get("leyu_login_proxy_url") or "").strip()
-        extract = str(self.config.get("leyu_login_proxy_extract_url") or "").strip()
-        authkey = str(self.config.get("leyu_login_proxy_authkey") or "").strip()
-        authpwd = str(self.config.get("leyu_login_proxy_authpwd") or "").strip()
-        if bool(authkey) != bool(authpwd):
-            raise LeyuError("proxy_credentials_incomplete")
-        if len(authkey) > 256 or len(authpwd) > 1024 or any(ord(char) < 33 or ord(char) == 127 for char in authkey + authpwd):
-            raise LeyuError("invalid_proxy_credentials")
-        if extract:
-            parts = urlsplit(extract)
-            if parts.scheme != "https" or not parts.netloc or parts.username or parts.password:
-                raise LeyuError("invalid_proxy_extraction_url")
-            api_key = any(value.strip() for value in parse_qs(parts.query).get("key", []))
-            if not api_key and not authkey and not authpwd:
-                raise LeyuError("proxy_credentials_missing")
         if url:
             candidate = url if "://" in url else "http://" + url
             try:
@@ -317,44 +302,13 @@ class LoginProxy:
         template = str(self.config.get("leyu_login_proxy_password_template") or "")
         self._validate_password_template(template)
 
-    async def acquire(self, direct: httpx.AsyncClient) -> ProxyLease | None:
+    async def acquire(self) -> ProxyLease | None:
         self.validate_configuration()
         url = str(self.config.get("leyu_login_proxy_url") or "").strip()
-        extract = str(self.config.get("leyu_login_proxy_extract_url") or "").strip()
-        if not url and not extract:
+        if not url:
             return None
-        authkey = str(self.config.get("leyu_login_proxy_authkey") or "").strip()
-        authpwd = str(self.config.get("leyu_login_proxy_authpwd") or "").strip()
-        if bool(authkey) != bool(authpwd):
-            raise LeyuError("proxy_credentials_incomplete")
-        if (len(authkey) > 256 or len(authpwd) > 1024
-                or any(ord(char) < 33 or ord(char) == 127 for char in authkey + authpwd)):
-            raise LeyuError("invalid_proxy_credentials")
         started = time.monotonic()
         deadline = started + MAX_PROXY_LIFETIME - PROXY_MARGIN
-        egress = ""
-        if extract:
-            parts = urlsplit(extract)
-            if parts.scheme != "https" or not parts.netloc or parts.username or parts.password:
-                raise LeyuError("invalid_proxy_extraction_url")
-            raw = await bounded_request(direct, "GET", extract, limit=MAX_PROXY_BYTES,
-                                        failure_scope="proxy_extraction")
-            text = raw.decode("utf-8", "strict").strip()
-            if text.startswith("{"):
-                try:
-                    payload = json.loads(text)
-                    if payload.get("code") != "SUCCESS" or len(payload.get("data", [])) != 1:
-                        raise ValueError("not one lease")
-                    lease = payload["data"][0]
-                    url = str(lease["server"])
-                    egress = str(lease.get("proxy_ip") or "")
-                    if lease.get("deadline"):
-                        expires = datetime.strptime(lease["deadline"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone(timedelta(hours=8)))
-                        deadline = min(deadline, time.monotonic() + expires.timestamp() - time.time() - PROXY_MARGIN)
-                except (KeyError, TypeError, ValueError):
-                    raise LeyuError("invalid_proxy_lease") from None
-            else:
-                url = text
         if "://" not in url:
             url = "http://" + url
         try:
@@ -365,10 +319,6 @@ class LoginProxy:
             valid = False
         if not valid:
             raise LeyuError("invalid_login_proxy")
-        if extract and authkey and authpwd:
-            hostname = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
-            userinfo = f"{quote(authkey, safe='')}:{quote(authpwd, safe='')}"
-            url = urlunsplit((parts.scheme, f"{userinfo}@{hostname}:{parts.port}", "", "", ""))
         # Session-affinity providers require one short-lived identity for the login request.
         # The lease is discarded after this request; ordinary traffic stays direct.
         template = str(self.config.get("leyu_login_proxy_password_template") or "")
@@ -381,15 +331,22 @@ class LoginProxy:
             user = quote(unquote(parts.username or ""), safe="")
             hostname = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
             url = urlunsplit((parts.scheme, f"{user}:{quote(password, safe='')}@{hostname}:{parts.port}", "", "", ""))
-        lease = ProxyLease(url, deadline, egress)
-        if egress:
-            try:
-                if not ipaddress.ip_address(egress).is_global:
-                    raise ValueError("nonpublic")
-            except ValueError:
-                raise LeyuError("invalid_proxy_egress_ip") from None
+        lease = ProxyLease(url, deadline)
         lease.remaining()
         return lease
+
+    @staticmethod
+    async def resolve_egress_ip(client: httpx.AsyncClient) -> str:
+        raw = await bounded_request(client, "GET", PROXY_EGRESS_URL, limit=128,
+                                    failure_scope="proxy_egress")
+        try:
+            value = raw.decode("ascii").strip()
+            address = ipaddress.ip_address(value)
+            if not address.is_global:
+                raise ValueError("nonpublic")
+            return str(address)
+        except (UnicodeError, ValueError):
+            raise LeyuError("invalid_proxy_egress_ip") from None
 
 
 Claim = Callable[[str], Awaitable[str]]
@@ -471,19 +428,20 @@ class AppSessionRenewer:
         name, password = str(self.config.get("leyu_app_login_name") or ""), str(self.config.get("leyu_app_login_password") or "")
         if not name or not password or not self.config.get("leyu_app_uuid"):
             raise LeyuError("app_login_credentials_missing")
-        lease = await LoginProxy(self.config).acquire(direct)
+        lease = await LoginProxy(self.config).acquire()
         if lease:
-            if self.signer and not lease.egress_ip:
-                raise LeyuError("proxy_egress_ip_missing")
             transport = self.login_transport_factory(lease.url) if self.login_transport_factory else None
             proxy = None if transport else lease.url
             timeout = httpx.Timeout(min(20, lease.remaining()), connect=min(5, lease.remaining()))
             async with asyncio.timeout(lease.remaining()), httpx.AsyncClient(timeout=timeout, proxy=proxy, transport=transport, trust_env=False, follow_redirects=False) as login:
+                egress_ip = direct_ip
+                if self.signer:
+                    egress_ip = await LoginProxy.resolve_egress_ip(login)
                 remaining = lease.remaining()
                 if remaining <= 1:
                     raise LeyuError("login_proxy_expired")
                 login.timeout = httpx.Timeout(min(20, remaining), connect=min(5, remaining))
-                return await self._submit_login(login, host, lease.egress_ip or direct_ip, name, password,
+                return await self._submit_login(login, host, egress_ip, name, password,
                                                 failure_scope="proxy_login")
         return await self._submit_login(direct, host, direct_ip, name, password, failure_scope="app_login")
 
