@@ -97,6 +97,7 @@
 | E79 | 提交 e7f77f3 对应 GitHub Platform verification `40427860508` 的 backend、browser、android 三项作业全部 success；远端分支引用与本地一致，Compose 解析退出 0 | 远端 CI 仍只使用隔离 PostgreSQL、假配置、浏览器夹具和开发 Android 构建；不替代真实乐鱼/Telegram/Hermes、S3 生产数据和正式签名验收 |
 | E80 | 提交 fc2be0e 对应 GitHub Platform verification `40428788326` 的 backend、browser、android 三项作业全部 success，退出均为 0；backend 冻结测试、Compose 契约、浏览器 API/响应式场景和 Android 构建/Lint 均通过 | 仅为项目验证流水线；Node.js action deprecation 为 GitHub 注记，不影响本轮作业结果。真实上游授权、生产数据、正式签名和设备仍未验收 |
 | E81 | 提交 3a6e820 对应 GitHub Platform verification `40429560428` 的 backend、browser、android 三项作业全部 success，退出均为 0；远端分支仍与本地一致 | 本次仅更新进度文档；远端验证仍不覆盖真实乐鱼/Telegram/Hermes、生产 S3 数据、正式签名或真机 |
+| E82 | 提交 d2c55ff 对应 GitHub Platform verification `40430406945` 的 backend、browser、android 三项作业全部 success，退出均为 0；远端分支引用核对通过 | 该轮仍是隔离验证流水线；真实授权、生产数据、正式签名与设备验收保持未完成 |
 
 没有记录过的命令不补造退出码。原阶段证据和本轮新增结果分开标注。
 
