@@ -204,9 +204,7 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_actual_shared_renewal_mock_login_persists_user_session(self):
         await self.bind()
         for key,value in {
-            'leyu_login_proxy_extract_url':'https://proxy-feed.invalid/get',
-            'leyu_login_proxy_authkey':'qg-account-key',
-            'leyu_login_proxy_authpwd':'qg-account-password',
+            'leyu_login_proxy_url':'http://sample:password@geo.iproyal.com:12321',
         }.items():
             await self.pool.execute('INSERT INTO v2_admin_settings(setting_key,encrypted_value) VALUES($1,$2)',key,encrypt_secret(b'k'*32,value))
         work=(await self.worker_api.post('/internal/executor/claim')).json()
@@ -215,8 +213,8 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
 
         def app_http(request):
             calls.append(request)
-            if request.url.host=='proxy-feed.invalid':
-                return httpx.Response(200,json={'code':'SUCCESS','data':[{'server':'8.8.8.8:1234','proxy_ip':'9.9.9.9'}]})
+            if request.url.host=='ipv4.icanhazip.com':
+                return httpx.Response(200,text='9.9.9.9\n')
             if request.url.path.endswith('/preInfo'):
                 return httpx.Response(200,json={'status_code':6000,'data':{'ip':'1.1.1.1'}})
             if request.url.path.endswith('/login'):
@@ -245,8 +243,8 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('private-own-app-token',private['leyu_app_token'])
         self.assertEqual('own-business-session',private['leyu_request_id'])
         self.assertEqual(1,sum(request.url.path.endswith('/login') for request in calls))
-        self.assertEqual('qg-account-key',urlsplit(proxy_urls[0]).username)
-        self.assertEqual('qg-account-password',urlsplit(proxy_urls[0]).password)
+        self.assertEqual('geo.iproyal.com',urlsplit(proxy_urls[0]).hostname)
+        self.assertTrue('_session-' in urlsplit(proxy_urls[0]).password)
         self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
 
     async def test_reservation_concurrent_idempotent_limits(self):

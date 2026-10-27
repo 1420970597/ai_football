@@ -19,14 +19,13 @@ router = APIRouter()
 LEYU_SECRET_KEYS = frozenset({
     "leyu_request_id", "leyu_api_token", "leyu_business_cookie_token", "leyu_cookie",
     "leyu_app_token", "leyu_app_signature", "leyu_app_login_signature", "leyu_app_uuid",
-    "leyu_app_login_name", "leyu_app_login_password", "leyu_login_proxy_url", "leyu_login_proxy_extract_url",
-    "leyu_login_proxy_authkey", "leyu_login_proxy_authpwd",
+    "leyu_app_login_name", "leyu_app_login_password", "leyu_login_proxy_url",
     "leyu_h5_token", "leyu_h5_signature", "leyu_h5_uuid",
 })
 LEYU_CONFIG_KEYS = LEYU_SECRET_KEYS | frozenset({
     "leyu_api_base", "leyu_origin", "leyu_user_agent", "leyu_cuid", "leyu_check_id_base",
     "leyu_batch_size", "leyu_batch_concurrency", "leyu_batch_interval_seconds", "leyu_app_host",
-    "leyu_app_signing_config", "leyu_app_discovery_config", "leyu_login_proxy_egress_url",
+    "leyu_app_signing_config", "leyu_app_discovery_config",
     "leyu_login_proxy_password_template", "leyu_domain_discovery_url", "leyu_h5_site", "leyu_venue",
 })
 PERSIST_KEYS = frozenset({"leyu_request_id", "leyu_app_token", "leyu_api_base", "leyu_origin", "leyu_app_host"})

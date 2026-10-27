@@ -45,11 +45,7 @@ class SignerTests(unittest.TestCase):
 
 
 class ProxyTests(unittest.IsolatedAsyncioTestCase):
-    async def test_proxy_configuration_is_validated_before_extraction(self):
-        proxy = LoginProxy({"leyu_login_proxy_extract_url": "https://provider.invalid/get",
-                            "leyu_login_proxy_authkey": "only-one-half"})
-        with self.assertRaisesRegex(LeyuError, "proxy_credentials_incomplete"):
-            proxy.validate_configuration()
+    async def test_proxy_configuration_uses_iproyal_and_ignores_legacy_qg_fields(self):
         proxy = LoginProxy({"leyu_login_proxy_url": "proxy.invalid:not-a-port"})
         with self.assertRaisesRegex(LeyuError, "invalid_login_proxy"):
             proxy.validate_configuration()
@@ -59,50 +55,38 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 proxy.validate_configuration()
 
     async def test_direct_proxy_gets_short_fresh_sticky_session(self):
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(500))) as direct:
-            proxy = LoginProxy({"leyu_login_proxy_url": "http://sample:password@geo.iproyal.com:12321"})
-            one = await proxy.acquire(direct)
-            two = await proxy.acquire(direct)
+        proxy = LoginProxy({"leyu_login_proxy_url": "http://sample:password@geo.iproyal.com:12321"})
+        one = await proxy.acquire()
+        two = await proxy.acquire()
         self.assertNotEqual(one.url, two.url)
         self.assertIn("_session-", one.url)
         self.assertIn("_lifetime-59s_killswitch-1", one.url)
         self.assertLessEqual(one.remaining(), 55)
 
-    async def test_extraction_honors_expiration_and_supplied_ip(self):
-        payload = {"code": "SUCCESS", "data": [{"server": "8.8.8.8:1234", "proxy_ip": "1.1.1.1"}]}
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))) as direct:
-            lease = await LoginProxy({"leyu_login_proxy_extract_url": "https://provider.invalid/get?key=redacted",
-                                      "leyu_login_proxy_authkey": "qg-auth-key",
-                                      "leyu_login_proxy_authpwd": "qg-auth-password"}).acquire(direct)
-        self.assertEqual("1.1.1.1", lease.egress_ip)
-        self.assertEqual("http://qg-auth-key:qg-auth-password@8.8.8.8:1234", lease.url)
+    async def test_legacy_qg_configuration_is_never_contacted_or_used(self):
+        calls = []
+        transport = httpx.MockTransport(lambda request: calls.append(request.url.host) or httpx.Response(200))
+        async with httpx.AsyncClient(transport=transport) as direct:
+            lease = await LoginProxy({
+                "leyu_login_proxy_url": "http://sample:password@geo.iproyal.com:12321",
+                "leyu_login_proxy_extract_url": "https://provider.invalid/get?key=stale",
+                "leyu_login_proxy_authkey": "stale-key", "leyu_login_proxy_authpwd": "stale-password",
+            }).acquire()
+        self.assertEqual([], calls)
+        self.assertEqual("geo.iproyal.com", urlsplit(lease.url).hostname)
+
+    async def test_proxy_egress_must_be_a_public_ip(self):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, text="9.9.9.9\n"))) as proxy:
+            self.assertEqual("9.9.9.9", await LoginProxy.resolve_egress_ip(proxy))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, text="127.0.0.1\n"))) as proxy:
+            with self.assertRaisesRegex(LeyuError, "invalid_proxy_egress_ip"):
+                await LoginProxy.resolve_egress_ip(proxy)
+
+    async def test_proxy_lease_expiry_is_rejected(self):
         with self.assertRaises(LeyuError):
             ProxyLease("http://unused", time.monotonic() - 1).remaining()
-
-    async def test_extraction_fails_before_consuming_ip_when_proxy_auth_is_missing(self):
-        calls = []
-        transport = httpx.MockTransport(lambda request: calls.append(request.url.path) or httpx.Response(200))
-        async with httpx.AsyncClient(transport=transport) as direct:
-            with self.assertRaisesRegex(LeyuError, "proxy_credentials_missing"):
-                await LoginProxy({"leyu_login_proxy_extract_url": "https://provider.invalid/get"}).acquire(direct)
-        self.assertEqual([], calls)
-
-    async def test_extraction_api_key_is_a_complete_auth_method_without_proxy_credentials(self):
-        payload = {"code": "SUCCESS", "data": [{"server": "8.8.8.8:1234", "proxy_ip": "1.1.1.1"}]}
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))) as direct:
-            lease = await LoginProxy({
-                "leyu_login_proxy_extract_url": "https://provider.invalid/get?key=api-key-only&num=1",
-            }).acquire(direct)
-        self.assertEqual("http://8.8.8.8:1234", lease.url)
-        self.assertEqual("1.1.1.1", lease.egress_ip)
-
-    async def test_invalid_extraction_does_not_leak_provider_body(self):
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"code": "secret-value"}))) as direct:
-            with self.assertRaises(LeyuError) as raised:
-                await LoginProxy({"leyu_login_proxy_extract_url": "https://provider.invalid/get",
-                                  "leyu_login_proxy_authkey": "qg-auth-key",
-                                  "leyu_login_proxy_authpwd": "qg-auth-password"}).acquire(direct)
-        self.assertNotIn("secret-value", str(raised.exception))
 
 
 class RenewalTests(unittest.IsolatedAsyncioTestCase):
@@ -181,7 +165,7 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("new-token", self.updates[0]["leyu_app_token"])
         self.assertEqual("success", self.events[-1][1])
 
-    async def test_login_uses_v1_path_and_dynamic_proxy_egress_without_probe(self):
+    async def test_login_uses_iproyal_probe_and_same_proxy_for_signed_login(self):
         self.assertEqual("/site/api/v1/user/login", LOGIN_PATH)
         routes = {name: {"key": "k" * 16, "iv": "i" * 16} for name in ("", "/site/api", "/game/api")}
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,29 +174,29 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
             direct_calls = []
             def direct(request):
                 direct_calls.append(request.url.path)
-                if request.url.host == "provider.invalid":
-                    return httpx.Response(200, json={"code": "SUCCESS", "data": [
-                        {"server": "8.8.8.8:1234", "proxy_ip": "9.9.9.9"}]})
                 if request.url.path == PRE_INFO_PATH:
                     return httpx.Response(200, json={"status_code": 6000, "data": {"ip": "1.1.1.1"}})
                 if request.url.path == LAUNCH_PATH:
                     return httpx.Response(200, json=launch())
                 self.fail("unexpected direct App request")
             def proxy(request):
+                if request.url.host == "ipv4.icanhazip.com":
+                    return httpx.Response(200, text="9.9.9.9\n")
                 self.assertEqual(LOGIN_PATH, request.url.path)
                 bound = aes_cbc(base64.b64decode(request.headers["x-api-hack-xxxxx"]),
                                 b"k" * 16, b"i" * 16, decrypt=True)
                 self.assertEqual("9.9.9.9", json.loads(bound)["xx"])
                 return httpx.Response(200, json={"status_code": 6000, "data": {"token": "new-token"}})
             cfg = config(leyu_app_token="", leyu_app_signing_config=str(signing_path),
-                         leyu_login_proxy_extract_url="https://provider.invalid/get",
-                         leyu_login_proxy_authkey="qg-auth-key", leyu_login_proxy_authpwd="qg-auth-password")
+                         leyu_login_proxy_url="http://sample:password@geo.iproyal.com:12321",
+                         leyu_login_proxy_extract_url="https://provider.invalid/get?key=stale",
+                         leyu_login_proxy_authkey="stale-key", leyu_login_proxy_authpwd="stale-password")
             updates = await self.renewer(cfg, direct, proxy).renew()
         self.assertEqual("real-session", updates["leyu_request_id"])
-        self.assertEqual([PRE_INFO_PATH, "/get", LAUNCH_PATH], direct_calls)
-        self.assertEqual([LOGIN_PATH], self.proxy_paths)
-        self.assertEqual("qg-auth-key", urlsplit(self.proxy_urls[0]).username)
-        self.assertEqual("qg-auth-password", urlsplit(self.proxy_urls[0]).password)
+        self.assertEqual([PRE_INFO_PATH, LAUNCH_PATH], direct_calls)
+        self.assertEqual(["/", LOGIN_PATH], self.proxy_paths)
+        self.assertEqual("geo.iproyal.com", urlsplit(self.proxy_urls[0]).hostname)
+        self.assertEqual("sample", urlsplit(self.proxy_urls[0]).username)
 
     async def test_proxy_http_504_is_recorded_as_login_proxy_response(self):
         def direct(request):
