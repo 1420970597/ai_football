@@ -295,7 +295,7 @@ async def ingest_event(body: EventInput, request: Request):
             immutable_content = {key: value for key, value in content.items() if key != "sender_nickname"}
             if event and {key: value for key, value in event["content"].items() if key != "sender_nickname"} != immutable_content:
                 raise HTTPException(status_code=409, detail="same message version has conflicting content")
-            await conn.execute("UPDATE v2_experts SET display_nickname=$2,updated_at=now() WHERE id=$1", expert["id"], body.sender_nickname.strip())
+            await conn.execute("UPDATE v2_experts SET display_nickname=$2,updated_at=now() WHERE id=$1 AND display_nickname IS DISTINCT FROM $2", expert["id"], body.sender_nickname.strip())
             if event and event["media_state"] == "ready":
                 return {"persisted": True, "state": "ready", "message_id": str(event["message_id"])}
             if not event:
@@ -327,7 +327,6 @@ async def ingest_event(body: EventInput, request: Request):
                 await conn.execute("UPDATE v2_telegram_events SET media_objects=$2,media_state=$3,last_error=$4,updated_at=now() WHERE id=$1",
                                    event_id, body.media_objects, body.media_state, body.last_error)
                 await conn.execute("UPDATE v2_expert_messages SET media_objects=$2,media_state=$3 WHERE id=$1", message_id, body.media_objects, body.media_state)
-            await conn.execute("UPDATE v2_experts SET display_nickname=$2,updated_at=now() WHERE id=$1", expert["id"], body.sender_nickname.strip())
             job_id = None
             if body.media_state == "ready":
                 job_id = await conn.fetchval(

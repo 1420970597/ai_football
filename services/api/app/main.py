@@ -6,6 +6,7 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 
+import asyncpg
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -76,7 +77,7 @@ async def request_context(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
-    response.headers["Cache-Control"] = "no-store" if request.url.path.startswith("/api/") else "public, max-age=60"
+    response.headers["Cache-Control"] = "no-store" if response.status_code >= 400 or request.url.path.startswith(("/api/", "/internal/")) else "public, max-age=60"
     return response
 
 
@@ -87,6 +88,45 @@ async def unexpected_error(request: Request, exc: Exception):
         status_code=500,
         content={"detail": "服务暂不可用", "request_id": getattr(request.state, "request_id", "")},
     )
+
+
+async def database_temporarily_unavailable(request: Request, exc: Exception):
+    """Expose transient contention without replaying an unconfirmed write.
+
+    A timeout during COMMIT can leave the outcome unknown.  This response
+    describes service availability, not a rollback or permission to repeat a
+    non-idempotent operation.  Callers must reconcile such writes first.
+    """
+    request_id = getattr(request.state, "request_id", "")
+    log.warning("database temporarily unavailable request_id=%s category=%s frames=%s",
+                request_id, type(exc).__name__, _safe_exception_frames(exc))
+    content = {"detail": "数据库暂时繁忙，请稍后重试", "code": "database_temporarily_unavailable",
+               "request_id": request_id, "retryable": True, "automatic_retry": False}
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        content["operation_status"] = "unconfirmed"
+        content["detail"] = "数据库暂时繁忙，写入结果未确认；请先核对结果再重试"
+    return JSONResponse(status_code=503, content=content, headers={"Retry-After": "2", "Cache-Control": "no-store"})
+
+
+@app.exception_handler(TimeoutError)
+async def timeout_error(request: Request, exc: TimeoutError):
+    # asyncpg command/pool timeouts use the built-in TimeoutError.  Unrelated
+    # timeouts remain unexpected errors rather than being mislabeled as DB busy.
+    traceback = exc.__traceback__
+    while traceback is not None:
+        module = traceback.tb_frame.f_globals.get("__name__", "")
+        if isinstance(module, str) and (module == "asyncpg" or module.startswith("asyncpg.")):
+            return await database_temporarily_unavailable(request, exc)
+        traceback = traceback.tb_next
+    return await unexpected_error(request, exc)
+
+
+for transient_database_error in (
+    asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError, asyncpg.DeadlockDetectedError,
+    asyncpg.SerializationError, asyncpg.TooManyConnectionsError, asyncpg.CannotConnectNowError,
+    asyncpg.PostgresConnectionError,
+):
+    app.add_exception_handler(transient_database_error, database_temporarily_unavailable)
 
 
 @app.get("/healthz")
