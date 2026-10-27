@@ -1,6 +1,0 @@
-model,nonlinearity,market_prior,small_cohort,calibration,constraints,resource_assessment,interpretability,priority
-Logistic/GLM,manual interactions,fixed offset,strong regularization,independent calibration,shared binary / multinomial,low relative cost,high,first candidate
-GAM,smooth curves / limited interactions,GLM offset,low degrees of freedom,independent calibration,verify implementation support,low to medium relative cost,high,second candidate
-LightGBM,automatic interactions,init_score; consistent inference,restrict leaves / check match support,independent calibration,feature monotonicity; explicit cross-market constraints,CPU histogram; cap threads,medium,challenger
-XGBoost,automatic interactions,base_margin,restrict depth / regularization,independent calibration,feature monotonicity / interaction constraints,CPU hist; cap threads,medium,alternative challenger
-CatBoost,automatic / categorical,baseline; verify interface,regularize sparse categories,independent calibration,verify task-specific support,measure relative cost,medium,later categorical candidate

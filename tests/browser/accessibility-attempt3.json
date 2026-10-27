@@ -1,0 +1,3045 @@
+{
+  "generated_at": "2026-10-26T12:57:15.042Z",
+  "stage": "after-fixes",
+  "environment": "Docker Chromium 141 / artificial API / no production services",
+  "axe_version": "4.10.3",
+  "scans": [
+    {
+      "name": "1440-scores",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [
+        {
+          "target": [
+            ".search-wrap > span[aria-hidden=\"true\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(102, 102, 102)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.74,
+          "decorative": true
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-0\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-1\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-2\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-3\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-4\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-5\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-6\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-7\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-8\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-9\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-10\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-11\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-12\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-13\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-14\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-15\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".side-member > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(113, 83, 51)",
+          "backgrounds": [
+            "rgb(251, 243, 222)",
+            "rgb(236, 219, 192)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.18,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".side-member > h2"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(113, 83, 51)",
+          "backgrounds": [
+            "rgb(251, 243, 222)",
+            "rgb(236, 219, 192)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.18,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              ".search-wrap > span[aria-hidden=\"true\"]"
+            ],
+            [
+              "button[data-favorite=\"match-0\"]"
+            ],
+            [
+              "button[data-favorite=\"match-1\"]"
+            ],
+            [
+              "button[data-favorite=\"match-2\"]"
+            ],
+            [
+              "button[data-favorite=\"match-3\"]"
+            ],
+            [
+              "button[data-favorite=\"match-4\"]"
+            ],
+            [
+              "button[data-favorite=\"match-5\"]"
+            ],
+            [
+              "button[data-favorite=\"match-6\"]"
+            ],
+            [
+              "button[data-favorite=\"match-7\"]"
+            ],
+            [
+              "button[data-favorite=\"match-8\"]"
+            ],
+            [
+              "button[data-favorite=\"match-9\"]"
+            ],
+            [
+              "button[data-favorite=\"match-10\"]"
+            ],
+            [
+              "button[data-favorite=\"match-11\"]"
+            ],
+            [
+              "button[data-favorite=\"match-12\"]"
+            ],
+            [
+              "button[data-favorite=\"match-13\"]"
+            ],
+            [
+              "button[data-favorite=\"match-14\"]"
+            ],
+            [
+              "button[data-favorite=\"match-15\"]"
+            ],
+            [
+              ".side-member > span"
+            ],
+            [
+              ".side-member > h2"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 40,
+      "targets": {
+        "interactive_count": 115,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "1440-league-dialog",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 22,
+      "targets": {
+        "interactive_count": 5,
+        "undersized": []
+      }
+    },
+    {
+      "name": "1440-detail-dialog",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 27,
+      "targets": {
+        "interactive_count": 7,
+        "undersized": []
+      }
+    },
+    {
+      "name": "1440-experts",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [
+        {
+          "target": [
+            "button[aria-label=\"关注 林老师 TG，仅当前浏览器\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(102, 102, 102)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.74,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[aria-label=\"关注 阿杰聊球，仅当前浏览器\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(102, 102, 102)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.74,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".side-member > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(113, 83, 51)",
+          "backgrounds": [
+            "rgb(251, 243, 222)",
+            "rgb(236, 219, 192)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.18,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".side-member > h2"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(113, 83, 51)",
+          "backgrounds": [
+            "rgb(251, 243, 222)",
+            "rgb(236, 219, 192)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.18,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "button[aria-label=\"关注 林老师 TG，仅当前浏览器\"]"
+            ],
+            [
+              "button[aria-label=\"关注 阿杰聊球，仅当前浏览器\"]"
+            ],
+            [
+              ".side-member > span"
+            ],
+            [
+              ".side-member > h2"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 37,
+      "targets": {
+        "interactive_count": 33,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "1440-messages",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [
+        {
+          "target": [
+            ".side-member > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(113, 83, 51)",
+          "backgrounds": [
+            "rgb(251, 243, 222)",
+            "rgb(236, 219, 192)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.18,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".side-member > h2"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(113, 83, 51)",
+          "backgrounds": [
+            "rgb(251, 243, 222)",
+            "rgb(236, 219, 192)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.18,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              ".side-member > span"
+            ],
+            [
+              ".side-member > h2"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 40,
+      "targets": {
+        "interactive_count": 28,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "1440-original-dialog",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 23,
+      "targets": {
+        "interactive_count": 10,
+        "undersized": []
+      }
+    },
+    {
+      "name": "1440-membership",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [
+        {
+          "target": [
+            ".member-tag"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(237, 215, 174)",
+          "backgrounds": [
+            "rgb(48, 45, 69)",
+            "rgb(86, 74, 85)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.96,
+          "decorative": false
+        },
+        {
+          "target": [
+            "#membership-title"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(237, 215, 174)",
+          "backgrounds": [
+            "rgb(48, 45, 69)",
+            "rgb(86, 74, 85)"
+          ],
+          "threshold": 3,
+          "minimum_ratio": 5.96,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".member-hero > p"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(201, 185, 162)",
+          "backgrounds": [
+            "rgb(48, 45, 69)",
+            "rgb(86, 74, 85)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 4.37,
+          "decorative": false
+        },
+        {
+          "target": [
+            "#membership-current"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(237, 215, 174)",
+          "backgrounds": [
+            "rgb(48, 45, 69)",
+            "rgb(86, 74, 85)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.96,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".benefit-grid > article:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(177, 139, 80)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 3,
+          "minimum_ratio": 3.14,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".benefit-grid > article:nth-child(2) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(177, 139, 80)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 3,
+          "minimum_ratio": 3.14,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".side-member > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(113, 83, 51)",
+          "backgrounds": [
+            "rgb(251, 243, 222)",
+            "rgb(236, 219, 192)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.18,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".side-member > h2"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(113, 83, 51)",
+          "backgrounds": [
+            "rgb(251, 243, 222)",
+            "rgb(236, 219, 192)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.18,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              ".member-tag"
+            ],
+            [
+              "#membership-title"
+            ],
+            [
+              ".member-hero > p"
+            ],
+            [
+              "#membership-current"
+            ],
+            [
+              ".benefit-grid > article:nth-child(1) > span"
+            ],
+            [
+              ".benefit-grid > article:nth-child(2) > span"
+            ],
+            [
+              ".side-member > span"
+            ],
+            [
+              ".side-member > h2"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 39,
+      "targets": {
+        "interactive_count": 23,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "1440-account",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [
+        {
+          "target": [
+            ".side-member > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(113, 83, 51)",
+          "backgrounds": [
+            "rgb(251, 243, 222)",
+            "rgb(236, 219, 192)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.18,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".side-member > h2"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(113, 83, 51)",
+          "backgrounds": [
+            "rgb(251, 243, 222)",
+            "rgb(236, 219, 192)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.18,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              ".side-member > span"
+            ],
+            [
+              ".side-member > h2"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 44,
+      "targets": {
+        "interactive_count": 55,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "1440-admin",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 38,
+      "targets": {
+        "interactive_count": 29,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "1440-admin-telegram",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 43,
+      "targets": {
+        "interactive_count": 55,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "1440-admin-leyu",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 43,
+      "targets": {
+        "interactive_count": 40,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "1440-admin-membership",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [
+        {
+          "target": [
+            "textarea"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(68, 68, 68)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 9.74,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "textarea"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 43,
+      "targets": {
+        "interactive_count": 46,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "1440-admin-orders",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 42,
+      "targets": {
+        "interactive_count": 29,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "1440-admin-mfa-settings",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 42,
+      "targets": {
+        "interactive_count": 36,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "1440-mfa-enrollment-dialog",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 27,
+      "targets": {
+        "interactive_count": 5,
+        "undersized": []
+      }
+    },
+    {
+      "name": "1440-cancel-confirmation-dialog",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 18,
+      "targets": {
+        "interactive_count": 2,
+        "undersized": []
+      }
+    },
+    {
+      "name": "1440-nested-reauth-dialog",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [
+        {
+          "target": [
+            "#reauth-message"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(0, 0, 0)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 21,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "#reauth-message"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 26,
+      "targets": {
+        "interactive_count": 5,
+        "undersized": []
+      }
+    },
+    {
+      "name": "1440-mfa-success-dialog",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [
+        {
+          "target": [
+            "pre"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(0, 0, 0)",
+          "backgrounds": [
+            "rgb(250, 249, 252)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 20.02,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "pre"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 19,
+      "targets": {
+        "interactive_count": 1,
+        "undersized": []
+      }
+    },
+    {
+      "name": "1440-auth-dialog",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 25,
+      "targets": {
+        "interactive_count": 8,
+        "undersized": []
+      }
+    },
+    {
+      "name": "390-scores",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            ".search-wrap > span[aria-hidden=\"true\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(102, 102, 102)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.74,
+          "decorative": true
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-0\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-1\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-2\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-3\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-4\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-5\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-6\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-7\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-8\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-9\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-10\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-11\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-12\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-13\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-14\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.54,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-favorite=\"match-15\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(108, 101, 124)",
+          "backgrounds": [
+            "rgb(252, 252, 253)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.4,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".active[aria-current=\"page\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(64, 50, 120)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 3,
+          "minimum_ratio": 10.79,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"experts\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"membership\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"account\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              ".search-wrap > span[aria-hidden=\"true\"]"
+            ],
+            [
+              "button[data-favorite=\"match-0\"]"
+            ],
+            [
+              "button[data-favorite=\"match-1\"]"
+            ],
+            [
+              "button[data-favorite=\"match-2\"]"
+            ],
+            [
+              "button[data-favorite=\"match-3\"]"
+            ],
+            [
+              "button[data-favorite=\"match-4\"]"
+            ],
+            [
+              "button[data-favorite=\"match-5\"]"
+            ],
+            [
+              "button[data-favorite=\"match-6\"]"
+            ],
+            [
+              "button[data-favorite=\"match-7\"]"
+            ],
+            [
+              "button[data-favorite=\"match-8\"]"
+            ],
+            [
+              "button[data-favorite=\"match-9\"]"
+            ],
+            [
+              "button[data-favorite=\"match-10\"]"
+            ],
+            [
+              "button[data-favorite=\"match-11\"]"
+            ],
+            [
+              "button[data-favorite=\"match-12\"]"
+            ],
+            [
+              "button[data-favorite=\"match-13\"]"
+            ],
+            [
+              "button[data-favorite=\"match-14\"]"
+            ],
+            [
+              "button[data-favorite=\"match-15\"]"
+            ],
+            [
+              ".active[aria-current=\"page\"][data-page=\"scores\"] > span"
+            ],
+            [
+              "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+            ],
+            [
+              "button[data-page=\"experts\"] > span"
+            ],
+            [
+              "button[data-page=\"membership\"] > span"
+            ],
+            [
+              "button[data-page=\"account\"] > span"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 37,
+      "targets": {
+        "interactive_count": 106,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "390-league-dialog",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 22,
+      "targets": {
+        "interactive_count": 5,
+        "undersized": []
+      }
+    },
+    {
+      "name": "390-detail-dialog",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 27,
+      "targets": {
+        "interactive_count": 7,
+        "undersized": []
+      }
+    },
+    {
+      "name": "390-experts",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            "button[aria-label=\"关注 林老师 TG，仅当前浏览器\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(102, 102, 102)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.74,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[aria-label=\"关注 阿杰聊球，仅当前浏览器\"]"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(102, 102, 102)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.74,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"scores\"]:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".active[aria-current=\"page\"][data-page=\"experts\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(64, 50, 120)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 3,
+          "minimum_ratio": 10.79,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"membership\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"account\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "button[aria-label=\"关注 林老师 TG，仅当前浏览器\"]"
+            ],
+            [
+              "button[aria-label=\"关注 阿杰聊球，仅当前浏览器\"]"
+            ],
+            [
+              "button[data-page=\"scores\"]:nth-child(1) > span"
+            ],
+            [
+              "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+            ],
+            [
+              ".active[aria-current=\"page\"][data-page=\"experts\"] > span"
+            ],
+            [
+              "button[data-page=\"membership\"] > span"
+            ],
+            [
+              "button[data-page=\"account\"] > span"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 34,
+      "targets": {
+        "interactive_count": 18,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "390-messages",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            "button[data-page=\"scores\"]:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"experts\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"membership\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"account\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "button[data-page=\"scores\"]:nth-child(1) > span"
+            ],
+            [
+              "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+            ],
+            [
+              "button[data-page=\"experts\"] > span"
+            ],
+            [
+              "button[data-page=\"membership\"] > span"
+            ],
+            [
+              "button[data-page=\"account\"] > span"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 34,
+      "targets": {
+        "interactive_count": 13,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "390-original-dialog",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 23,
+      "targets": {
+        "interactive_count": 10,
+        "undersized": []
+      }
+    },
+    {
+      "name": "390-membership",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            ".member-tag"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(237, 215, 174)",
+          "backgrounds": [
+            "rgb(48, 45, 69)",
+            "rgb(86, 74, 85)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.96,
+          "decorative": false
+        },
+        {
+          "target": [
+            "#membership-title"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(237, 215, 174)",
+          "backgrounds": [
+            "rgb(48, 45, 69)",
+            "rgb(86, 74, 85)"
+          ],
+          "threshold": 3,
+          "minimum_ratio": 5.96,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".member-hero > p"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(201, 185, 162)",
+          "backgrounds": [
+            "rgb(48, 45, 69)",
+            "rgb(86, 74, 85)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 4.37,
+          "decorative": false
+        },
+        {
+          "target": [
+            "#membership-current"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(237, 215, 174)",
+          "backgrounds": [
+            "rgb(48, 45, 69)",
+            "rgb(86, 74, 85)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.96,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".benefit-grid > article:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(177, 139, 80)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 3,
+          "minimum_ratio": 3.14,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".benefit-grid > article:nth-child(2) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(177, 139, 80)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 3,
+          "minimum_ratio": 3.14,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"scores\"]:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"experts\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".active[aria-current=\"page\"][data-page=\"membership\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(64, 50, 120)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 3,
+          "minimum_ratio": 10.79,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"account\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              ".member-tag"
+            ],
+            [
+              "#membership-title"
+            ],
+            [
+              ".member-hero > p"
+            ],
+            [
+              "#membership-current"
+            ],
+            [
+              ".benefit-grid > article:nth-child(1) > span"
+            ],
+            [
+              ".benefit-grid > article:nth-child(2) > span"
+            ],
+            [
+              "button[data-page=\"scores\"]:nth-child(1) > span"
+            ],
+            [
+              "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+            ],
+            [
+              "button[data-page=\"experts\"] > span"
+            ],
+            [
+              ".active[aria-current=\"page\"][data-page=\"membership\"] > span"
+            ],
+            [
+              "button[data-page=\"account\"] > span"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 33,
+      "targets": {
+        "interactive_count": 8,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "390-account",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            "button[data-page=\"scores\"]:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"experts\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"membership\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[aria-current=\"page\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(64, 50, 120)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 3,
+          "minimum_ratio": 10.79,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "button[data-page=\"scores\"]:nth-child(1) > span"
+            ],
+            [
+              "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+            ],
+            [
+              "button[data-page=\"experts\"] > span"
+            ],
+            [
+              "button[data-page=\"membership\"] > span"
+            ],
+            [
+              "button[aria-current=\"page\"] > span"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 38,
+      "targets": {
+        "interactive_count": 40,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "390-admin",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            "button[data-page=\"scores\"]:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"experts\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"membership\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"account\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "button[data-page=\"scores\"]:nth-child(1) > span"
+            ],
+            [
+              "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+            ],
+            [
+              "button[data-page=\"experts\"] > span"
+            ],
+            [
+              "button[data-page=\"membership\"] > span"
+            ],
+            [
+              "button[data-page=\"account\"] > span"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 35,
+      "targets": {
+        "interactive_count": 18,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "390-admin-telegram",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            "button[data-page=\"scores\"]:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"experts\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"membership\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"account\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "button[data-page=\"scores\"]:nth-child(1) > span"
+            ],
+            [
+              "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+            ],
+            [
+              "button[data-page=\"experts\"] > span"
+            ],
+            [
+              "button[data-page=\"membership\"] > span"
+            ],
+            [
+              "button[data-page=\"account\"] > span"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 40,
+      "targets": {
+        "interactive_count": 44,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "390-admin-leyu",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            "button[data-page=\"scores\"]:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"experts\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"membership\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"account\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "button[data-page=\"scores\"]:nth-child(1) > span"
+            ],
+            [
+              "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+            ],
+            [
+              "button[data-page=\"experts\"] > span"
+            ],
+            [
+              "button[data-page=\"membership\"] > span"
+            ],
+            [
+              "button[data-page=\"account\"] > span"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 40,
+      "targets": {
+        "interactive_count": 29,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "390-admin-membership",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            "textarea"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(68, 68, 68)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 9.74,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"scores\"]:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"experts\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"membership\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"account\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "textarea"
+            ],
+            [
+              "button[data-page=\"scores\"]:nth-child(1) > span"
+            ],
+            [
+              "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+            ],
+            [
+              "button[data-page=\"experts\"] > span"
+            ],
+            [
+              "button[data-page=\"membership\"] > span"
+            ],
+            [
+              "button[data-page=\"account\"] > span"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 40,
+      "targets": {
+        "interactive_count": 35,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "390-admin-orders",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            "button[data-page=\"scores\"]:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"experts\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"membership\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"account\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "button[data-page=\"scores\"]:nth-child(1) > span"
+            ],
+            [
+              "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+            ],
+            [
+              "button[data-page=\"experts\"] > span"
+            ],
+            [
+              "button[data-page=\"membership\"] > span"
+            ],
+            [
+              "button[data-page=\"account\"] > span"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 39,
+      "targets": {
+        "interactive_count": 18,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "390-admin-mfa-settings",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            "button[data-page=\"scores\"]:nth-child(1) > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"experts\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"membership\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        },
+        {
+          "target": [
+            "button[data-page=\"account\"] > span"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(98, 98, 98)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 6.1,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "button[data-page=\"scores\"]:nth-child(1) > span"
+            ],
+            [
+              "button[data-phase=\"scheduled\"][data-page=\"scores\"] > span"
+            ],
+            [
+              "button[data-page=\"experts\"] > span"
+            ],
+            [
+              "button[data-page=\"membership\"] > span"
+            ],
+            [
+              "button[data-page=\"account\"] > span"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 39,
+      "targets": {
+        "interactive_count": 25,
+        "undersized": [
+          {
+            "selector": "a.skip-link",
+            "width": 1,
+            "height": 1,
+            "spacing_exception": true,
+            "collisions": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "390-mfa-enrollment-dialog",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            ".detail-section > .notice"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(137, 103, 47)",
+          "backgrounds": [
+            "rgb(255, 247, 232)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 4.88,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".form-note:nth-child(7)"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(102, 102, 102)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.74,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              ".detail-section > .notice"
+            ],
+            [
+              ".form-note:nth-child(7)"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 27,
+      "targets": {
+        "interactive_count": 5,
+        "undersized": []
+      }
+    },
+    {
+      "name": "390-cancel-confirmation-dialog",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            "#confirm-message"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(0, 0, 0)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 21,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "#confirm-message"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 18,
+      "targets": {
+        "interactive_count": 2,
+        "undersized": []
+      }
+    },
+    {
+      "name": "390-nested-reauth-dialog",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 26,
+      "targets": {
+        "interactive_count": 5,
+        "undersized": []
+      }
+    },
+    {
+      "name": "390-mfa-success-dialog",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [
+        {
+          "target": [
+            "pre"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(0, 0, 0)",
+          "backgrounds": [
+            "rgb(250, 249, 252)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 20.02,
+          "decorative": false
+        },
+        {
+          "target": [
+            ".detail-section > .form-note"
+          ],
+          "state": "css_colors_measured",
+          "foreground": "rgb(102, 102, 102)",
+          "backgrounds": [
+            "rgb(255, 255, 255)"
+          ],
+          "threshold": 4.5,
+          "minimum_ratio": 5.74,
+          "decorative": false
+        }
+      ],
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "targets": [
+            [
+              "pre"
+            ],
+            [
+              ".detail-section > .form-note"
+            ]
+          ]
+        }
+      ],
+      "passed_rule_count": 19,
+      "targets": {
+        "interactive_count": 1,
+        "undersized": []
+      }
+    },
+    {
+      "name": "390-auth-dialog",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "color_review": [],
+      "violations": [],
+      "incomplete": [],
+      "passed_rule_count": 25,
+      "targets": {
+        "interactive_count": 8,
+        "undersized": []
+      }
+    }
+  ],
+  "checks": [
+    {
+      "name": "1440 跳过导航可用且目标接受焦点",
+      "status": "passed"
+    },
+    {
+      "name": "1440 输入边界和双色焦点环对比度",
+      "status": "passed",
+      "detail": {
+        "input_border": 3.71,
+        "focus_outline_on_white": 15.03,
+        "white_ring_on_purple": 10.79
+      }
+    },
+    {
+      "name": "1440 比分键盘逐项焦点不被手机底栏遮挡",
+      "status": "passed"
+    },
+    {
+      "name": "1440 联赛弹窗键盘循环与关闭返回",
+      "status": "passed"
+    },
+    {
+      "name": "1440 实时列表移除原触发按钮后关闭详情返回页标题",
+      "status": "passed"
+    },
+    {
+      "name": "1440 换机长弹窗以标题聚焦并保持键盘约束",
+      "status": "passed"
+    },
+    {
+      "name": "1440 取消换机确认初始聚焦安全选项且Escape保留登记",
+      "status": "passed"
+    },
+    {
+      "name": "1440 叠加重验Tab约束与Escape保留原窗口",
+      "status": "passed"
+    },
+    {
+      "name": "1440 换机成功替换内容后重新聚焦标题并清理秘密",
+      "status": "passed"
+    },
+    {
+      "name": "1440 减少动画关闭过渡及装饰动画",
+      "status": "passed"
+    },
+    {
+      "name": "1440 本人每日时区读取、保留额外有效项与提交",
+      "status": "passed"
+    },
+    {
+      "name": "1440 登录弹窗有名称、初始焦点与关闭返回",
+      "status": "passed"
+    },
+    {
+      "name": "390 跳过导航可用且目标接受焦点",
+      "status": "passed"
+    },
+    {
+      "name": "390 输入边界和双色焦点环对比度",
+      "status": "passed",
+      "detail": {
+        "input_border": 3.71,
+        "focus_outline_on_white": 15.03,
+        "white_ring_on_purple": 10.79
+      }
+    },
+    {
+      "name": "390 比分键盘逐项焦点不被手机底栏遮挡",
+      "status": "passed"
+    },
+    {
+      "name": "390 联赛弹窗键盘循环与关闭返回",
+      "status": "passed"
+    },
+    {
+      "name": "390 实时列表移除原触发按钮后关闭详情返回页标题",
+      "status": "passed"
+    },
+    {
+      "name": "390 手机管理入口尺寸与键盘可用",
+      "status": "passed"
+    },
+    {
+      "name": "390 换机长弹窗以标题聚焦并保持键盘约束",
+      "status": "passed"
+    },
+    {
+      "name": "390 取消换机确认初始聚焦安全选项且Escape保留登记",
+      "status": "passed"
+    },
+    {
+      "name": "390 叠加重验Tab约束与Escape保留原窗口",
+      "status": "passed"
+    },
+    {
+      "name": "390 换机成功替换内容后重新聚焦标题并清理秘密",
+      "status": "passed"
+    },
+    {
+      "name": "390 减少动画关闭过渡及装饰动画",
+      "status": "passed"
+    },
+    {
+      "name": "390 本人每日时区读取、保留额外有效项与提交",
+      "status": "passed"
+    },
+    {
+      "name": "390 登录弹窗有名称、初始焦点与关闭返回",
+      "status": "passed"
+    },
+    {
+      "name": "页面无JavaScript运行错误",
+      "status": "passed"
+    },
+    {
+      "name": "所有固定场景自动规则无已确认违规",
+      "status": "passed"
+    },
+    {
+      "name": "所有固定场景24px目标或几何间距例外",
+      "status": "passed"
+    },
+    {
+      "name": "自动对比度未判定项的CSS颜色补测",
+      "status": "failed",
+      "error": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ [\n+   {\n+     backgrounds: [\n+       'rgb(48, 45, 69)',\n+       'rgb(86, 74, 85)'\n+     ],\n+     decorative: false,\n+     foreground: 'rgb(201, 185, 162)',\n+     minimum_ratio: 4.37,\n+     name: '1440-membership',\n+     state: 'css_colors_measured',\n+     target: [\n+       '.member-hero > p'\n+     ],\n+     threshold: 4.5\n+   },\n+   {\n+     backgrounds: [\n+       'rgb(48, 45, 69)',\n+       'rgb(86, 74, 85)'\n+     ],\n+     decorative: false,\n+     foreground: 'rgb(201, 185, 162)',\n+     minimum_ratio: 4.37,\n+     name: '390-membership',\n+     state: 'css_colors_measured',\n+     target: [\n+       '.member-hero > p'\n+     ],\n+     threshold: 4.5\n+   }\n+ ]\n- []\n"
+    }
+  ],
+  "browser_errors": [],
+  "limitations": [
+    "No screen reader, real touch device, voice control or operating-system high-contrast validation",
+    "Axe incomplete results require human review; passing rules do not prove WCAG conformance",
+    "24px geometry only evaluates current DOM/CSS at these viewports; exceptions require design review"
+  ]
+}

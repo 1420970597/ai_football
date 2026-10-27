@@ -1,0 +1,1941 @@
+{
+  "annotation_version": "synthetic-annotation-v1",
+  "dataset_id": "synthetic-expert-regression-v1",
+  "format": "football-review-evaluation-v1",
+  "groups": {
+    "modality": {
+      "image": {
+        "coverage": {
+          "assessed": 0,
+          "binding_missing": 0,
+          "bound": 1,
+          "completed": 0,
+          "execution_error": 1,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 1,
+          "samples": 1,
+          "status_missing": 0,
+          "unassessed": 1,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 0,
+          "correct_reject_with_reason": 0,
+          "expected_accept_messages": 0,
+          "expected_reject_messages": 1,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 1
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 0,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 0,
+          "expected_recommendations": 0,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 0,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 0
+        },
+        "multiple_recommendations": {
+          "all_exact": 0,
+          "assessed": 0,
+          "messages": 0,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      },
+      "mixed": {
+        "coverage": {
+          "assessed": 1,
+          "binding_missing": 0,
+          "bound": 1,
+          "completed": 1,
+          "execution_error": 0,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 1,
+          "samples": 1,
+          "status_missing": 0,
+          "unassessed": 0,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 0,
+          "correct_reject_with_reason": 0,
+          "expected_accept_messages": 1,
+          "expected_reject_messages": 0,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 0
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 2,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 1,
+          "expected_recommendations": 2,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 1,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 2
+        },
+        "multiple_recommendations": {
+          "all_exact": 1,
+          "assessed": 1,
+          "messages": 1,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      },
+      "text": {
+        "coverage": {
+          "assessed": 4,
+          "binding_missing": 0,
+          "bound": 4,
+          "completed": 4,
+          "execution_error": 0,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 4,
+          "samples": 4,
+          "status_missing": 0,
+          "unassessed": 0,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 1,
+          "correct_reject_with_reason": 1,
+          "expected_accept_messages": 3,
+          "expected_reject_messages": 1,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 0
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 3,
+            "correct_per_expected": "1.000000",
+            "expected": 3,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 3,
+            "correct_per_expected": "1.000000",
+            "expected": 3,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 3,
+            "correct_per_expected": "1.000000",
+            "expected": 3,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 3,
+            "correct_per_expected": "1.000000",
+            "expected": 3,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 3,
+            "correct_per_expected": "1.000000",
+            "expected": 3,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 3,
+            "correct_per_expected": "1.000000",
+            "expected": 3,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 3,
+            "correct_per_expected": "1.000000",
+            "expected": 3,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 3,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 3,
+          "expected_recommendations": 3,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 3,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 3
+        },
+        "multiple_recommendations": {
+          "all_exact": 0,
+          "assessed": 0,
+          "messages": 0,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      }
+    },
+    "phase": {
+      "live": {
+        "coverage": {
+          "assessed": 1,
+          "binding_missing": 0,
+          "bound": 1,
+          "completed": 1,
+          "execution_error": 0,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 1,
+          "samples": 1,
+          "status_missing": 0,
+          "unassessed": 0,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 0,
+          "correct_reject_with_reason": 0,
+          "expected_accept_messages": 1,
+          "expected_reject_messages": 0,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 0
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 1,
+            "correct_per_expected": "1.000000",
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 1,
+            "correct_per_expected": "1.000000",
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 1,
+            "correct_per_expected": "1.000000",
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 1,
+            "correct_per_expected": "1.000000",
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 1,
+            "correct_per_expected": "1.000000",
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 1,
+            "correct_per_expected": "1.000000",
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 1,
+            "correct_per_expected": "1.000000",
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 1,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 1,
+          "expected_recommendations": 1,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 1,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 1
+        },
+        "multiple_recommendations": {
+          "all_exact": 0,
+          "assessed": 0,
+          "messages": 0,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      },
+      "mixed": {
+        "coverage": {
+          "assessed": 1,
+          "binding_missing": 0,
+          "bound": 1,
+          "completed": 1,
+          "execution_error": 0,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 1,
+          "samples": 1,
+          "status_missing": 0,
+          "unassessed": 0,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 0,
+          "correct_reject_with_reason": 0,
+          "expected_accept_messages": 1,
+          "expected_reject_messages": 0,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 0
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 2,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 1,
+          "expected_recommendations": 2,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 1,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 2
+        },
+        "multiple_recommendations": {
+          "all_exact": 1,
+          "assessed": 1,
+          "messages": 1,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      },
+      "reject": {
+        "coverage": {
+          "assessed": 1,
+          "binding_missing": 0,
+          "bound": 2,
+          "completed": 1,
+          "execution_error": 1,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 2,
+          "samples": 2,
+          "status_missing": 0,
+          "unassessed": 1,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 1,
+          "correct_reject_with_reason": 1,
+          "expected_accept_messages": 0,
+          "expected_reject_messages": 2,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 1
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 0,
+            "correct_per_expected": null,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 0,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 0,
+          "expected_recommendations": 0,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 0,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 0
+        },
+        "multiple_recommendations": {
+          "all_exact": 0,
+          "assessed": 0,
+          "messages": 0,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      },
+      "scheduled": {
+        "coverage": {
+          "assessed": 2,
+          "binding_missing": 0,
+          "bound": 2,
+          "completed": 2,
+          "execution_error": 0,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 2,
+          "samples": 2,
+          "status_missing": 0,
+          "unassessed": 0,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 0,
+          "correct_reject_with_reason": 0,
+          "expected_accept_messages": 2,
+          "expected_reject_messages": 0,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 0
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 2,
+            "correct_per_expected": "1.000000",
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 2,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 2,
+          "expected_recommendations": 2,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 2,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 2
+        },
+        "multiple_recommendations": {
+          "all_exact": 0,
+          "assessed": 0,
+          "messages": 0,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      }
+    }
+  },
+  "interpretation": {
+    "alignment": "one_to_one_diagnostic_minimum_mismatch_equal_optima_are_ambiguous",
+    "dimensions": "correct_over_all_expected_including_missing_and_unassessed",
+    "extraction": "accepted_count_proxy_only_not_internal_extraction_accuracy",
+    "promotion": "no_automatic_winner_or_promotion"
+  },
+  "label_digest_sha256": "f4cbf8e20054d59b7714c46bd1ec2fd2f46137a1a6f54bad4c356a86faa1be81",
+  "metrics": {
+    "coverage": {
+      "assessed": 5,
+      "binding_missing": 0,
+      "bound": 6,
+      "completed": 5,
+      "execution_error": 1,
+      "input_mismatch": 0,
+      "missing": 0,
+      "reported": 6,
+      "samples": 6,
+      "status_missing": 0,
+      "unassessed": 1,
+      "unbound_accepted": 0
+    },
+    "decisions": {
+      "correct_reject_messages": 1,
+      "correct_reject_with_reason": 1,
+      "expected_accept_messages": 4,
+      "expected_reject_messages": 2,
+      "false_accept_messages": 0,
+      "false_reject_messages": 0,
+      "rejection_reason_missing": 0,
+      "unassessed_rejections": 1
+    },
+    "dimensions": {
+      "fixture_id": {
+        "ambiguous": 0,
+        "correct": 5,
+        "correct_per_expected": "1.000000",
+        "expected": 5,
+        "incorrect": 0,
+        "missing": 0,
+        "unassessed": 0
+      },
+      "line": {
+        "ambiguous": 0,
+        "correct": 5,
+        "correct_per_expected": "1.000000",
+        "expected": 5,
+        "incorrect": 0,
+        "missing": 0,
+        "unassessed": 0
+      },
+      "market_id": {
+        "ambiguous": 0,
+        "correct": 5,
+        "correct_per_expected": "1.000000",
+        "expected": 5,
+        "incorrect": 0,
+        "missing": 0,
+        "unassessed": 0
+      },
+      "market_kind": {
+        "ambiguous": 0,
+        "correct": 5,
+        "correct_per_expected": "1.000000",
+        "expected": 5,
+        "incorrect": 0,
+        "missing": 0,
+        "unassessed": 0
+      },
+      "period": {
+        "ambiguous": 0,
+        "correct": 5,
+        "correct_per_expected": "1.000000",
+        "expected": 5,
+        "incorrect": 0,
+        "missing": 0,
+        "unassessed": 0
+      },
+      "phase": {
+        "ambiguous": 0,
+        "correct": 5,
+        "correct_per_expected": "1.000000",
+        "expected": 5,
+        "incorrect": 0,
+        "missing": 0,
+        "unassessed": 0
+      },
+      "selection": {
+        "ambiguous": 0,
+        "correct": 5,
+        "correct_per_expected": "1.000000",
+        "expected": 5,
+        "incorrect": 0,
+        "missing": 0,
+        "unassessed": 0
+      }
+    },
+    "duplicates": {
+      "acknowledgements": 0,
+      "affected_messages": 0,
+      "outputs": 0
+    },
+    "exact_binding": {
+      "correct": 5,
+      "false_accepted": 0,
+      "missed": 0,
+      "unassessed_expected": 0
+    },
+    "extraction_count_proxy": {
+      "assessed_positive_messages": 4,
+      "expected_recommendations": 5,
+      "extra_by_count": 0,
+      "missing_by_count": 0,
+      "same_count_messages": 4,
+      "unassessed_expected": 0,
+      "unique_accepted_recommendations": 5
+    },
+    "multiple_recommendations": {
+      "all_exact": 1,
+      "assessed": 1,
+      "messages": 1,
+      "missing_by_count": 0,
+      "missing_exact": 0,
+      "none_exact": 0,
+      "partial_exact": 0,
+      "unassessed": 0,
+      "under_count_messages": 0
+    }
+  },
+  "orphan_predictions": [],
+  "profitability_assessed": false,
+  "provenance": {
+    "hermes_version": "0.22.5-synthetic",
+    "model_id": "synthetic:candidate-model",
+    "model_revision": "synthetic-candidate",
+    "produced_at": "2026-10-26T12:01:00Z",
+    "prompt_sha256": "914bc338b837d812697dded910ecd689e618fef81fe70882d7d8eacba41b5101",
+    "skill_version": "synthetic-skill-candidate",
+    "tool_contract_version": "synthetic-contract-v1"
+  },
+  "provenance_complete": true,
+  "provenance_missing": [],
+  "real_world_accuracy_available": false,
+  "run_id": "synthetic-candidate",
+  "samples": [
+    {
+      "accepted": [
+        {
+          "fixture_id": "synthetic-fixture-two",
+          "line": "2.5",
+          "market_id": "synthetic-total",
+          "market_kind": "total",
+          "period": "full_time",
+          "phase": "live",
+          "selection": "over"
+        },
+        {
+          "fixture_id": "synthetic-fixture-one",
+          "line": "0",
+          "market_id": "synthetic-winner",
+          "market_kind": "winner",
+          "period": "full_time",
+          "phase": "scheduled",
+          "selection": "home"
+        }
+      ],
+      "alignment": [
+        {
+          "actual": 1,
+          "ambiguous": false,
+          "exact": true,
+          "expected": 0
+        },
+        {
+          "actual": 0,
+          "ambiguous": false,
+          "exact": true,
+          "expected": 1
+        }
+      ],
+      "assessed": true,
+      "content_sha256": "9bcdf63223d67a31962694109ec107e37e6147326ce0291ed07b951b1dce3f85",
+      "expected": [
+        {
+          "fixture_id": "synthetic-fixture-one",
+          "intent_id": "intent-one",
+          "line": "0",
+          "market_id": "synthetic-winner",
+          "market_kind": "winner",
+          "period": "full_time",
+          "phase": "scheduled",
+          "selection": "home"
+        },
+        {
+          "fixture_id": "synthetic-fixture-two",
+          "intent_id": "intent-two",
+          "line": "2.5",
+          "market_id": "synthetic-total",
+          "market_kind": "total",
+          "period": "full_time",
+          "phase": "live",
+          "selection": "over"
+        }
+      ],
+      "flags": [],
+      "media_sha256": [
+        "cac35436fe91456db3a421fae1471b4ab0b09b2e936f23cf0a140fdb9b976f7c"
+      ],
+      "message_revision": 1,
+      "metrics": {
+        "coverage": {
+          "assessed": 1,
+          "binding_missing": 0,
+          "bound": 1,
+          "completed": 1,
+          "execution_error": 0,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 1,
+          "samples": 1,
+          "status_missing": 0,
+          "unassessed": 0,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 0,
+          "correct_reject_with_reason": 0,
+          "expected_accept_messages": 1,
+          "expected_reject_messages": 0,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 0
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 2,
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 2,
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 2,
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 2,
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 2,
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 2,
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 2,
+            "expected": 2,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 2,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 1,
+          "expected_recommendations": 2,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 1,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 2
+        },
+        "multiple_recommendations": {
+          "all_exact": 1,
+          "assessed": 1,
+          "messages": 1,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      },
+      "modality": "mixed",
+      "sample_id": "synthetic-dual",
+      "source_bound": true,
+      "source_level": "synthetic",
+      "source_reference": "synthetic:synthetic-dual",
+      "status": "completed"
+    },
+    {
+      "accepted": [
+        {
+          "fixture_id": "synthetic-fixture-three",
+          "line": "-0.25",
+          "market_id": "synthetic-handicap",
+          "market_kind": "handicap",
+          "period": "first_half",
+          "phase": "live",
+          "selection": "away"
+        }
+      ],
+      "alignment": [
+        {
+          "actual": 0,
+          "ambiguous": false,
+          "exact": true,
+          "expected": 0
+        }
+      ],
+      "assessed": true,
+      "content_sha256": "437bc06317df1d23944c94e9948dd7827d1a6f0e0a018a4221fa5c6785906ebf",
+      "expected": [
+        {
+          "fixture_id": "synthetic-fixture-three",
+          "intent_id": "intent-half",
+          "line": "-0.25",
+          "market_id": "synthetic-handicap",
+          "market_kind": "handicap",
+          "period": "first_half",
+          "phase": "live",
+          "selection": "away"
+        }
+      ],
+      "flags": [],
+      "media_sha256": [],
+      "message_revision": 1,
+      "metrics": {
+        "coverage": {
+          "assessed": 1,
+          "binding_missing": 0,
+          "bound": 1,
+          "completed": 1,
+          "execution_error": 0,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 1,
+          "samples": 1,
+          "status_missing": 0,
+          "unassessed": 0,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 0,
+          "correct_reject_with_reason": 0,
+          "expected_accept_messages": 1,
+          "expected_reject_messages": 0,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 0
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 1,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 1,
+          "expected_recommendations": 1,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 1,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 1
+        },
+        "multiple_recommendations": {
+          "all_exact": 0,
+          "assessed": 0,
+          "messages": 0,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      },
+      "modality": "text",
+      "sample_id": "synthetic-half",
+      "source_bound": true,
+      "source_level": "synthetic",
+      "source_reference": "synthetic:synthetic-half",
+      "status": "completed"
+    },
+    {
+      "accepted": [],
+      "alignment": [],
+      "assessed": true,
+      "content_sha256": "823acd9ac35d61410f0b5603e90c01ff29fb0dc432d18d78f037022949690c2e",
+      "expected": [],
+      "flags": [],
+      "media_sha256": [],
+      "message_revision": 1,
+      "metrics": {
+        "coverage": {
+          "assessed": 1,
+          "binding_missing": 0,
+          "bound": 1,
+          "completed": 1,
+          "execution_error": 0,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 1,
+          "samples": 1,
+          "status_missing": 0,
+          "unassessed": 0,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 1,
+          "correct_reject_with_reason": 1,
+          "expected_accept_messages": 0,
+          "expected_reject_messages": 1,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 0
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 0,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 0,
+          "expected_recommendations": 0,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 0,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 0
+        },
+        "multiple_recommendations": {
+          "all_exact": 0,
+          "assessed": 0,
+          "messages": 0,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      },
+      "modality": "text",
+      "sample_id": "synthetic-ambiguous",
+      "source_bound": true,
+      "source_level": "synthetic",
+      "source_reference": "synthetic:synthetic-ambiguous",
+      "status": "completed"
+    },
+    {
+      "accepted": [],
+      "alignment": [],
+      "assessed": false,
+      "content_sha256": "b81032d93d361b0ae5eb11d0361ec48619a8fde71b5fcdf70f4c1842ab48f17d",
+      "expected": [],
+      "flags": [
+        "execution_error"
+      ],
+      "media_sha256": [
+        "ea12510f83a7785c49fc36ab1a582bc43a0c22b3c914a925eb6fb3102f565873"
+      ],
+      "message_revision": 1,
+      "metrics": {
+        "coverage": {
+          "assessed": 0,
+          "binding_missing": 0,
+          "bound": 1,
+          "completed": 0,
+          "execution_error": 1,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 1,
+          "samples": 1,
+          "status_missing": 0,
+          "unassessed": 1,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 0,
+          "correct_reject_with_reason": 0,
+          "expected_accept_messages": 0,
+          "expected_reject_messages": 1,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 1
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 0,
+            "expected": 0,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 0,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 0,
+          "expected_recommendations": 0,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 0,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 0
+        },
+        "multiple_recommendations": {
+          "all_exact": 0,
+          "assessed": 0,
+          "messages": 0,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      },
+      "modality": "image",
+      "sample_id": "synthetic-unsupported-image",
+      "source_bound": true,
+      "source_level": "synthetic",
+      "source_reference": "synthetic:synthetic-unsupported-image",
+      "status": "error"
+    },
+    {
+      "accepted": [
+        {
+          "fixture_id": "synthetic-fixture-four",
+          "line": "2.25",
+          "market_id": "synthetic-total",
+          "market_kind": "total",
+          "period": "full_time",
+          "phase": "scheduled",
+          "selection": "under"
+        }
+      ],
+      "alignment": [
+        {
+          "actual": 0,
+          "ambiguous": false,
+          "exact": true,
+          "expected": 0
+        }
+      ],
+      "assessed": true,
+      "content_sha256": "8ca9fa1d28342f765460793088b1c54101c6aa6d6f8b747d82c28647fe7966d3",
+      "expected": [
+        {
+          "fixture_id": "synthetic-fixture-four",
+          "intent_id": "intent-duplicate",
+          "line": "2.25",
+          "market_id": "synthetic-total",
+          "market_kind": "total",
+          "period": "full_time",
+          "phase": "scheduled",
+          "selection": "under"
+        }
+      ],
+      "flags": [],
+      "media_sha256": [],
+      "message_revision": 1,
+      "metrics": {
+        "coverage": {
+          "assessed": 1,
+          "binding_missing": 0,
+          "bound": 1,
+          "completed": 1,
+          "execution_error": 0,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 1,
+          "samples": 1,
+          "status_missing": 0,
+          "unassessed": 0,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 0,
+          "correct_reject_with_reason": 0,
+          "expected_accept_messages": 1,
+          "expected_reject_messages": 0,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 0
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 1,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 1,
+          "expected_recommendations": 1,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 1,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 1
+        },
+        "multiple_recommendations": {
+          "all_exact": 0,
+          "assessed": 0,
+          "messages": 0,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      },
+      "modality": "text",
+      "sample_id": "synthetic-duplicate",
+      "source_bound": true,
+      "source_level": "synthetic",
+      "source_reference": "synthetic:synthetic-duplicate",
+      "status": "completed"
+    },
+    {
+      "accepted": [
+        {
+          "fixture_id": "synthetic-fixture-five",
+          "line": "0",
+          "market_id": "synthetic-winner",
+          "market_kind": "winner",
+          "period": "full_time",
+          "phase": "scheduled",
+          "selection": "away"
+        }
+      ],
+      "alignment": [
+        {
+          "actual": 0,
+          "ambiguous": false,
+          "exact": true,
+          "expected": 0
+        }
+      ],
+      "assessed": true,
+      "content_sha256": "9150dca291c6049f76035b62210f8a953d56088231910ee39057ee9e41cc1ee0",
+      "expected": [
+        {
+          "fixture_id": "synthetic-fixture-five",
+          "intent_id": "intent-missing",
+          "line": "0",
+          "market_id": "synthetic-winner",
+          "market_kind": "winner",
+          "period": "full_time",
+          "phase": "scheduled",
+          "selection": "away"
+        }
+      ],
+      "flags": [],
+      "media_sha256": [],
+      "message_revision": 1,
+      "metrics": {
+        "coverage": {
+          "assessed": 1,
+          "binding_missing": 0,
+          "bound": 1,
+          "completed": 1,
+          "execution_error": 0,
+          "input_mismatch": 0,
+          "missing": 0,
+          "reported": 1,
+          "samples": 1,
+          "status_missing": 0,
+          "unassessed": 0,
+          "unbound_accepted": 0
+        },
+        "decisions": {
+          "correct_reject_messages": 0,
+          "correct_reject_with_reason": 0,
+          "expected_accept_messages": 1,
+          "expected_reject_messages": 0,
+          "false_accept_messages": 0,
+          "false_reject_messages": 0,
+          "rejection_reason_missing": 0,
+          "unassessed_rejections": 0
+        },
+        "dimensions": {
+          "fixture_id": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "line": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_id": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "market_kind": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "period": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "phase": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          },
+          "selection": {
+            "ambiguous": 0,
+            "correct": 1,
+            "expected": 1,
+            "incorrect": 0,
+            "missing": 0,
+            "unassessed": 0
+          }
+        },
+        "duplicates": {
+          "acknowledgements": 0,
+          "affected_messages": 0,
+          "outputs": 0
+        },
+        "exact_binding": {
+          "correct": 1,
+          "false_accepted": 0,
+          "missed": 0,
+          "unassessed_expected": 0
+        },
+        "extraction_count_proxy": {
+          "assessed_positive_messages": 1,
+          "expected_recommendations": 1,
+          "extra_by_count": 0,
+          "missing_by_count": 0,
+          "same_count_messages": 1,
+          "unassessed_expected": 0,
+          "unique_accepted_recommendations": 1
+        },
+        "multiple_recommendations": {
+          "all_exact": 0,
+          "assessed": 0,
+          "messages": 0,
+          "missing_by_count": 0,
+          "missing_exact": 0,
+          "none_exact": 0,
+          "partial_exact": 0,
+          "unassessed": 0,
+          "under_count_messages": 0
+        }
+      },
+      "modality": "text",
+      "sample_id": "synthetic-missing-run",
+      "source_bound": true,
+      "source_level": "synthetic",
+      "source_reference": "synthetic:synthetic-missing-run",
+      "status": "completed"
+    }
+  ],
+  "synthetic_only": true
+}

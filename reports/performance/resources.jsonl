@@ -1,0 +1,2 @@
+{"BlockIO":"0B / 8.19kB","CPUPerc":"0.05%","Container":"ai-football-v2-perf-pg","ID":"2aa10737539b","MemPerc":"58.49%","MemUsage":"224.6MiB / 384MiB","Name":"ai-football-v2-perf-pg","NetIO":"548kB / 9.87MB","PIDs":"8"}
+{"BlockIO":"0B / 0B","CPUPerc":"0.12%","Container":"ai-football-v2-perf-api","ID":"370c61aa3412","MemPerc":"21.68%","MemUsage":"55.51MiB / 256MiB","Name":"ai-football-v2-perf-api","NetIO":"5.44MB / 10.7MB","PIDs":"5"}

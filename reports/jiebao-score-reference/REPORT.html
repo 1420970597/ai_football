@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>捷报比分网界面与系统能力调研</title>
+<style>
+body{margin:0;color:#202a35;background:#f5f7f8;font:16px/1.65 system-ui,"Microsoft YaHei",sans-serif}
+main{max-width:1120px;margin:auto;padding:32px 24px;background:#fff}
+h1,h2,h3{line-height:1.25;color:#15283a}h1{font-size:32px}h2{margin-top:36px;border-bottom:1px solid #dce2e6;padding-bottom:8px}
+p,li{max-width:84ch}a{color:#087b73}img{max-width:100%;height:auto;display:block;margin:20px auto}
+.table-scroll{overflow:auto}table{border-collapse:collapse;width:100%;min-width:760px}th,td{text-align:left;padding:10px;border:1px solid #d9e0e4;vertical-align:top}th{background:#edf3f2}
+.diagram-scroll{overflow:auto;max-width:100%;border:1px solid #dce2e6}.diagram-scroll img{max-width:none;width:auto;margin:8px 0}.mermaid-source{font-size:12px}
+pre{padding:14px;background:#f2f4f5;overflow:auto;border-left:3px solid #13877d;white-space:pre-wrap}code{font-family:ui-monospace,monospace}blockquote{border-left:3px solid #e0a24a;margin-left:0;padding-left:16px;color:#53616c}
+@media(max-width:640px){main{padding:20px 14px}h1{font-size:26px}}
+</style><main><h1>捷报比分网界面与系统能力调研</h1>
+<p>观察日期：2026-10-26 证据等级：A 为可直接复核的官方页面或发布文档；B 为本次浏览器/HTTP 观察；主观判断会单独标明。</p>
+<h2>结论</h2>
+<p>捷报比分网值得作为赛事信息密度、导航层级和专家内容组织的主要参考。桌面首页把足球/篮球/AI预测/竞彩/资料库/会员放在一级导航，并将前瞻文章、赛事数据和作者排行并列；手机版改用体育切换、即时/直播/赛程/资料/AI预测二级导航，以及比分/预测/前瞻/捷报猫/我的底部导航；会员页是独立的权益与套餐转化区；赛事页围绕单场对阵组织让球分析和指数内容。</p>
+<p>这意味着 v2.0 应学习其“比分发现 → 比赛详情 → 专家内容 → 会员权益 → 个人中心”的浏览路径，并统一赛前与滚球赛事的筛选方式。不能把捷报的推荐结论、作者文章、Logo、球队图片或未授权静态资源复制进新产品。本项目会匹配其信息层级和响应布局，使用原创品牌、文案与授权素材。</p>
+<h2>页面观察</h2>
+<div class="table-scroll"><table><thead><tr>
+<th>页面</th>
+<th>可观察结构</th>
+<th>对 v2.0 的落实</th>
+</tr></thead><tbody>
+<tr>
+<td>桌面首页</td>
+<td>顶部品牌与登录入口；足球、篮球、AI预测、计划单、预测、竞彩、资料库、会员等一级导航；前瞻文章、赛事区块、临场专区和作者排行并行</td>
+<td>宽屏使用赛事导航与内容栏并列；优先呈现赛程、比赛状态、推荐作者和最新专家内容</td>
+</tr>
+<tr>
+<td>移动首页</td>
+<td>顶部 App 下载提示；足球/篮球/体彩切换；即时、直播、赛程、资料、AI预测标签；底部比分、预测、前瞻、捷报猫、我的</td>
+<td>采用窄屏赛事单列、横向日期/联赛筛选和固定底部导航；保留赛前/滚球清晰状态</td>
+</tr>
+<tr>
+<td>单场详情</td>
+<td>标题含日期、市场类型和双方队名；页面资源包含 odds 与分析专属样式/脚本；正文围绕指数与赛前分析</td>
+<td>统一详情页头部、比分/比赛状态、市场和盘口 tabs；专家推荐必须绑定该系统赛事与盘口</td>
+</tr>
+<tr>
+<td>会员页</td>
+<td>独立页面；月/季/年等套餐入口、权益说明、用户/登录状态相关区块</td>
+<td>将会员作为独立 entitlement 模块，套餐和权益可由管理员配置；付款未接通前不得伪造成功</td>
+</tr>
+</tbody></table></div>
+<h2>视觉证据</h2>
+<p>以下截图由 Playwright 在观察日期获取，供布局研究；截图内容仍属于原站。实现时只引用其布局，不将原站图片作为新产品静态资源。</p>
+<p><img alt="捷报比分网桌面首页截图，2026-10-26" src="images/nowscore-desktop-2026-10-26.png"></p>
+<p><img alt="捷报比分网移动端截图，390×844，2026-10-26" src="images/nowscore-mobile-2026-10-26.png"></p>
+<p><img alt="捷报比分网 VIP 会员页截图，2026-10-26" src="images/nowscore-vip-2026-10-26.png"></p>
+<p>本次浏览器观察记录：首页标题为“足球比分_篮球分析_比分直播_足球比分直播 – 捷报比分网”；桌面页面包含前瞻/分析内容、联赛/赛事入口与作者排行。桌面截图首屏被计划单推广弹层覆盖，说明促销是可能出现的页面状态，但该弹层遮挡了主体内容，v2.0 不应照搬其遮挡式体验。移动版 390×844 实际截图显示了完整比赛行、会员横幅、登录权益条和比分/预测/前瞻/捷报猫/我的五项底栏。早先一次移动抓取出现“数据加载中”提示；另一时点成功加载，说明抓取结果具有时变性，不把单次超时写成常态。</p>
+<p>会员页截图实际显示 VIP 主视觉、月/季/年套餐卡、开通按钮和权益列表入口。价格会随运营变化，因此不复制价格；v2.0 套餐由管理员配置。</p>
+<h2>方案对比矩阵</h2>
+<p>表中“直接观察”是页面结构的可见事实；“主观评分”是本次实现参考价值判断，不是产品性能或覆盖率测量。成本/授权风险是项目侧评估，未做源站压测。</p>
+<div class="table-scroll"><table><thead><tr>
+<th>方案</th>
+<th>接入层级</th>
+<th>赛事信息密度</th>
+<th>专家/编辑内容</th>
+<th>移动导航</th>
+<th>会员体系</th>
+<th>本项目复刻成本</th>
+<th>版权/依赖风险</th>
+</tr></thead><tbody>
+<tr>
+<td>捷报比分网</td>
+<td>Web、移动 Web、Android 下载入口</td>
+<td>高；比分、赛程、分析、赔率入口并行</td>
+<td>高；前瞻、作者排行、预测内容</td>
+<td>高；底部五项导航和体育/栏目切换</td>
+<td>高；独立 VIP 套餐与权益页</td>
+<td>中高；页面与内容模块多</td>
+<td>中高；品牌、文章和媒体资产需授权</td>
+</tr>
+<tr>
+<td>500彩票网</td>
+<td>Web 与移动入口</td>
+<td>高；赛事比分与彩票相关页面并列</td>
+<td>中；以赛事、赛果和购彩分析内容为主</td>
+<td>中高；适配移动访问</td>
+<td>中；围绕购彩产品的会员/服务能力</td>
+<td>中；需重新映射产品和投注语义</td>
+<td>高；购彩业务、文案和素材属于独立产品</td>
+</tr>
+<tr>
+<td>Flashscore</td>
+<td>Web 与移动应用</td>
+<td>高；实时比分与赛事列表是核心</td>
+<td>低至中；赛事信息优先</td>
+<td>高；移动端以比分、关注赛事和导航为核心</td>
+<td>中；应用/内容增值能力需按市场验证</td>
+<td>中；列表密度高但会员内容不同</td>
+<td>中；品牌、球队图标和数据授权需核验</td>
+</tr>
+</tbody></table></div>
+<h2>流程映射</h2>
+<div class="diagram-scroll"><img src="images/flow-1.svg" alt="系统流程图，可横向滚动阅读"></div>
+<details><summary>查看可审阅的 Mermaid 源码</summary><pre class="mermaid-source"><code>flowchart LR
+    A[选择足球或篮球] --&gt; B[选择日期、联赛或关注项]
+    B --&gt; C[查看赛前与滚球比赛列表]
+    C --&gt; D[打开单场详情]
+    D --&gt; E[查看系统盘口、比分和新鲜度]
+    D --&gt; F[查看专家消息与明确推荐]
+    F --&gt; G[查看专家历史与一单位收益]
+    G --&gt; H[会员权益或个人中心]
+    H --&gt; I[用户本人绑定乐鱼账户]
+    I --&gt; J[显式启用并受限的自动投注]</code></pre></details>
+<h2>可复核来源</h2>
+<ul>
+<li><a href="https://www.nowscore.com/" rel="noopener noreferrer">捷报比分网首页</a>：桌面导航、首页内容栏目和登录入口。</li>
+<li><a href="https://m.nowscore.com/" rel="noopener noreferrer">捷报比分网移动版</a>：移动赛事与底部导航结构。</li>
+<li><a href="https://live.nowscore.com/analysis/2995379.html" rel="noopener noreferrer">捷报比分网赛事详情示例</a>：对阵标题、让球分析、赔率页面资源。</li>
+<li><a href="https://guess.nowscore.com/vip" rel="noopener noreferrer">捷报比分网 VIP 页面</a>：会员权益和套餐布局。页面套餐内容可能随运营变化，不把观察到的价格固化为 v2.0 配置。</li>
+<li><a href="https://www.500.com/" rel="noopener noreferrer">500彩票网</a>：赛事与彩票内容呈现对比。</li>
+<li><a href="https://www.flashscore.com/football/" rel="noopener noreferrer">Flashscore 足球</a>：比分优先和移动应用式赛事列表对比。</li>
+<li><a href="https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.5" rel="noopener noreferrer">Hermes Agent v0.22.5 Release</a>：本次选定的固定运行版本。</li>
+<li><a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server" rel="noopener noreferrer">Hermes API Server 文档</a>：Hermes 内置 Agent API；业务调用应送到该内部 Agent API，而不是向模型供应商另发请求。</li>
+<li><a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp" rel="noopener noreferrer">Hermes MCP 文档</a>：自定义工具服务器接入方法。</li>
+<li><a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/skills" rel="noopener noreferrer">Hermes Skills 文档</a>：技能发现与项目技能目录配置。</li>
+</ul>
+<h2>研究限制</h2>
+<p>浏览器和 HTTP 页面观察可复核；早期一次移动请求未载入比赛，后续390宽截图已经成功加载，二者分别保留记录。网页源站和会员套餐持续变化，截图与导航结论仅代表 2026-10-26 的观测。对比表中的实现成本、信息密度和授权风险均为主观工程判断。正式发布前需复核数据展示权、赛事图标授权、会员/支付规则及目标域名的访问行为。</p>
+<h2>2026-10-26 补充采样与实现对照</h2>
+<p>本轮 Docker 浏览器重新访问官方桌面比分、桌面首页和手机比分，退出码均为0。手机视口明确为390×844，桌面为1440×960。旧的“移动截图”实际宽1280，只保留为较宽视口证据，不能再作为390宽度验收图。新手机截图成功加载比赛列表；原文“移动数据区未成功加载”仅对应早期某次请求，不能代表最终观察。</p>
+<div class="table-scroll"><table><thead><tr>
+<th>位置</th>
+<th>官方可见结构与本次测量</th>
+<th>实现方式与主动差异</th>
+</tr></thead><tbody>
+<tr>
+<td>桌面赛事页</td>
+<td>紫色一级导航约50高，赛事主区约1030宽，比分表约32高行，白底隔行灰，状态与队名分列</td>
+<td>1180容器内主栏与专家栏并列，比赛行40高以容纳系统报价证据；独立品牌</td>
+</tr>
+<tr>
+<td>手机赛事页</td>
+<td>紫色体育栏约46高，二级栏目约38高，比赛行60至70高，联赛标签、双方、比分、赔率分层</td>
+<td>同样单列分层，增加日期筛选、取消状态、来源时间，比赛行74高</td>
+</tr>
+<tr>
+<td>手机底栏</td>
+<td>五项固定底栏，带图标及文字，约49高</td>
+<td>比分、赛程、专家、会员、我的，57高加安全区；删除旧AI与算法入口</td>
+</tr>
+<tr>
+<td>会员</td>
+<td>深色与金色主视觉，月季年套餐并列，权益列表</td>
+<td>套餐由后端实际配置，未接支付显示不可在线购买；不复制运营价格、收益宣称</td>
+</tr>
+<tr>
+<td>原文与管理</td>
+<td>原站信息布局作为参考，本项目功能来自TG及乐鱼业务契约</td>
+<td>增加审核原文、工具轨迹、报价编号、本人账户隔离、独立管理入口</td>
+</tr>
+</tbody></table></div>
+<p><img alt="官方桌面比分，1440×960" src="images/desktop-scores-verified-2026-10-26.png"></p>
+<p><img alt="官方手机比分，390×844" src="images/mobile-scores-verified-2026-10-26.png"></p>
+<p>以下为隔离固定样本的候选实现截图，所有球队、专家、收益和时间均为浏览器测试样本，不能作为生产数据或盈利证据：</p>
+<p><img alt="候选桌面比分，隔离样本" src="images/candidate-desktop-scores-fixture.png"></p>
+<p><img alt="候选手机比分，隔离样本" src="images/candidate-mobile-scores-fixture.png"></p>
+<p><img alt="候选专家完整原文与多买入，隔离样本" src="images/candidate-desktop-original-fixture.png"></p>
+<p><img alt="候选管理Telegram分区，隔离样本" src="images/candidate-desktop-admin-telegram-fixture.png"></p>
+<p><img alt="候选手机会员，隔离样本" src="images/candidate-mobile-membership-fixture.png"></p>
+<p><img alt="候选服务错误保留旧赛事，隔离样本" src="images/candidate-desktop-stale-fixture.png"></p>
+<p>原站资源依赖已经单独记录在资源清单中，授权未确认的品牌、文章、广告、球队图及样式均未打包进产品。生产页面的品牌、装饰和图标由代码构成；二维码库保留MIT版权声明。此次实现匹配已观察的信息层级和布局规则，不宣称所有页面像素完全一致。</p>
+<p><img alt="官方768宽平板比分" src="images/tablet-scores-verified-2026-10-26.png"></p>
+<p><img alt="官方单场详情" src="images/desktop-match-detail-verified-2026-10-26.png"></p>
+<p><img alt="官方手机会员" src="images/mobile-membership-verified-2026-10-26.png"></p>
+<p><img alt="候选手机详情，期间及盘口线分组，隔离样本" src="images/candidate-mobile-detail-fixture.png"></p>
+<p><img alt="候选手机加载，隔离样本" src="images/candidate-mobile-loading-fixture.png"></p>
+<p><img alt="候选首次读取失败，隔离样本" src="images/candidate-mobile-error-fixture.png"></p>
+<p><img alt="候选空赛事，隔离样本" src="images/candidate-desktop-empty-fixture.png"></p>
+<p>正式差异：原站存在AI预测、购彩内容、文章及广告，本平台只保留专家业务；原站昵称、头像、盈利宣传和付费价格均不进入生产样本。未观察到的原站错误重试行为不作推测，本平台按已验证的读取超时和旧内容保留要求自行实现。</p>
+<p>桌面复核已修正早期候选的联赛列过窄：原77宽及57文字限制改为120列宽/100文字宽，时间、状态、比分列相应收紧，完整title作为长名称补充。上方候选截图由最新隔离浏览器重生成；40高比赛行保留，与原站约32高的差异明确存在。浏览器验收另覆盖360、390、768、1280、1440宽，不用原站某个更宽视口冒充手机证据。</p>
+<p>界面验证分两类：HTTP Mock覆盖状态、故障和并发竞态；隔离真实API联调用当前构建、任务专属临时PostgreSQL及人工样本验证身份、会员、原文和账户排队。二者均不接真实账户和资金。远端生产新鲜度、模型、TG和S3授权图片仍需单独真实联调，不能从上述截图推导已上线或盈利。</p>
+<p><img alt="候选390宽长原文与双图相册，隔离样本" src="images/candidate-mobile-long-album-fixture.png"></p>
+<p><img alt="当前源码API读取的两条原文推荐，人工隔离数据库样本" src="images/integration-desktop-original-real-api-fixture.png"></p>
+<p><img alt="当前源码API的手机比分，人工隔离数据库样本" src="images/integration-mobile-scores-real-api-fixture.png"></p>
+<p>基础网页阶段HTTP Mock 22项及隔离真实API 10项均通过，退出0。新增真实链路涵盖本人资料导出、人工恢复码重置后登录、管理员一次性恢复码、只读运维和注销撤销会话。媒体S3未配置的503在结果中单列；以上图片来自样本浏览器，不是生产截图。随后独立阶段补管理员验证器换机与手机独立管理入口，最新完整Mock24项及真实API11项也均通过，退出0。新密钥和备用码未进入报告截图，仍只使用人工隔离管理员进行验证。</p>
+<h2>可访问性专项与当前网页版本</h2>
+<p>后续冻结网页完成1440与390视口的38个页面/弹窗状态检查，29项键盘、触控和对比度检查通过；业务Mock更新为25项，真实临时API11项，命令均退出0。新增TG群组与管理员搜索，并保留本人限额时区。失败基线保留；自动规则0错误之后，CSS渐变补测仍发现会员说明4.37:1不足，修复后为5.05:1。由此不能用工具0错误宣称完整无障碍合规。</p>
+<p>实际修复包括有名称的原生弹窗、长内容标题聚焦、叠加重验Tab约束、关闭返回与原触发按钮被刷新移除后的回退、跳过导航、手机管理入口和触控区、深色文字与字段边界、双色焦点环及减少动画。真人屏幕阅读器、真机触摸及操作系统高对比度尚未验证。专项原始结果及具体限制见仓库原型证据。</p>
+<p><img alt="手机比分输入焦点，人工隔离样本" src="images/candidate-a11y-390-focus-fixture.png"></p>
+<p><img alt="手机登录有名称弹窗及字段焦点，空白人工隔离表单" src="images/candidate-a11y-390-login-fixture.png"></p>
+<p><img alt="手机Telegram双目录搜索，人工隔离样本" src="images/candidate-mobile-tg-search-fixture.png"></p></main>
+</html>

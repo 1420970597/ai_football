@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Original geometric ball mark for this application; no third-party brand assets. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="48dp" android:height="48dp" android:viewportWidth="64" android:viewportHeight="64">
+  <path android:fillColor="#c92832" android:pathData="M0,0h64v64H0z" />
+  <path android:fillColor="#ffffff" android:pathData="M32,10a22,22 0,1 0,0 44a22,22 0,1 0,0 -44" />
+  <path android:fillColor="#c92832" android:pathData="M32,21L42,28L38,40L26,40L22,28zM12,32L20,29L24,41L19,47L14,41zM52,32L44,29L40,41L45,47L50,41zM23,13L27,19L18,26L12,24zM41,13L37,19L46,26L52,24zM27,49L37,49L39,53L25,53z" />
+</vector>

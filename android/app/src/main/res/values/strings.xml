@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">球讯</string>
+  <string name="client_settings">设置</string>
+  <string name="app_version">球讯 %1$s</string>
+  <string name="pairing_title">连接球讯服务</string>
+  <string name="service_address">服务地址</string>
+  <string name="pairing_help">输入管理员提供的 HTTPS 服务地址。验证成功后会展示域名和版本，请核对后连接。</string>
+  <string name="verify_service">验证并连接</string>
+  <string name="return_service">返回已配对服务</string>
+  <string name="verifying_service">正在验证安全连接与服务版本…</string>
+  <string name="confirm_service">确认连接服务</string>
+  <string name="confirm_service_description">服务：%1$s\n版本：%2$s\n\n请核对域名是否为管理员提供的地址。连接后，将清除应用中的原有登录状态。</string>
+  <string name="pair_service">连接</string>
+  <string name="cancel">取消</string>
+  <string name="pairing_reset">原配对信息已失效，请重新验证服务地址。</string>
+  <string name="pairing_save_failed">配对信息保存失败，请检查设备存储后重试。</string>
+  <string name="certificate_error">安全证书验证失败，请联系管理员检查服务域名和证书。</string>
+  <string name="probe_timeout">验证超时，请检查网络或稍后重试。</string>
+  <string name="probe_failed">服务验证失败，请检查地址或网络后重试。</string>
+  <string name="offline_message">暂时无法连接服务，请检查网络后重试。</string>
+  <string name="network_restored">网络已连接，请点击重试重新获取最新数据。</string>
+  <string name="retry">重试</string>
+  <string name="change_service">更换服务</string>
+  <string name="external_link">打开外部链接</string>
+  <string name="external_link_description">此链接将通过浏览器访问：\n%1$s</string>
+  <string name="open_browser">打开浏览器</string>
+  <string name="browser_unavailable">设备没有可打开此链接的浏览器。</string>
+  <string name="download_unavailable">客户端暂不支持文件下载，请在浏览器中使用服务。</string>
+  <string name="clear_login">清除本机登录</string>
+  <string name="clear_login_description">将清除此应用内的用户和管理员登录状态及页面缓存。再次访问需要重新登录。</string>
+  <string name="web_component_unavailable">设备的 Android System WebView 暂不可用，请先安装或更新系统网页组件，再重新打开球讯。</string>
+  <string name="close_app">关闭应用</string>
+  <string-array name="client_menu"><item>刷新页面</item><item>更换服务</item><item>清除本机登录</item></string-array>
+</resources>

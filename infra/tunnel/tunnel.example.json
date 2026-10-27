@@ -1,0 +1,12 @@
+{
+  "ssh_config": "/run/storage/ssh_config",
+  "ssh_host": "storage-vps",
+  "pg_remote_host": "127.0.0.1",
+  "pg_remote_port": 5432,
+  "pg_local_port": 15432,
+  "s3_remote_host": "127.0.0.1",
+  "s3_remote_port": 9000,
+  "s3_forward_port": 19000,
+  "s3_proxy_port": 18080,
+  "s3_authority": "storage.example.invalid:9000"
+}

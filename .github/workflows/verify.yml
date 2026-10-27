@@ -1,0 +1,66 @@
+name: Platform verification
+
+on:
+  pull_request:
+  push:
+    branches: [feat/TASK-70-platform-v2]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Validate workflow contracts
+        run: docker run --rm --cpus=.5 --memory=256m --network none -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+      - name: Isolated PostgreSQL and frozen Python tests
+        run: sh infra/test/run.sh
+      - name: Compose contract with explicit fake configuration
+        run: sh infra/check-runtime.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: backend-evidence
+          path: .runtime/test-evidence/
+          include-hidden-files: true
+          retention-days: 14
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Responsive behavior with explicit API fixtures
+        run: sh tests/browser/check.sh
+      - name: Browser with real API and temporary database
+        run: sh tests/browser/integration-check.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: browser-evidence
+          path: |
+            tests/browser/results.json
+            tests/browser/integration-results.json
+            reports/jiebao-score-reference/images/candidate-*
+            reports/jiebao-score-reference/images/integration-*
+          retention-days: 14
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Docker Android tests, lint and development APKs
+        run: bash android/build-candidate.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-development-artifacts
+          path: android/build/artifacts/
+          retention-days: 14

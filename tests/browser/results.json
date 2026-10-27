@@ -1,0 +1,107 @@
+{
+  "date": "2026-10-26",
+  "environment": "isolated Docker / mock API / no real credentials or bets",
+  "results": [
+    {
+      "name": "桌面比分密度、状态查询、日期与详情",
+      "status": "passed"
+    },
+    {
+      "name": "手机无横向溢出、关注与弹层",
+      "status": "passed"
+    },
+    {
+      "name": "完整原文、两条系统买入、工具证据与图片",
+      "status": "passed"
+    },
+    {
+      "name": "独立身份与CSRF、热配置版本、留空保密字段、授予幂等",
+      "status": "passed"
+    },
+    {
+      "name": "Telegram二维码、过期与成员枚举回退",
+      "status": "passed"
+    },
+    {
+      "name": "超时保留已读赛事，恢复刷新后清除错误",
+      "status": "passed"
+    },
+    {
+      "name": "游客权益拒绝、会员未配置支付、注册校验",
+      "status": "passed"
+    },
+    {
+      "name": "初始失败与无赛事状态、请求竞态不覆盖新筛选",
+      "status": "passed"
+    },
+    {
+      "name": "详情深链、前进后退、主附线筛选与保留筛选刷新",
+      "status": "passed"
+    },
+    {
+      "name": "受限原文登录后恢复原消息与统计分项",
+      "status": "passed"
+    },
+    {
+      "name": "初次错误、加载与离线五状态",
+      "status": "passed"
+    },
+    {
+      "name": "360、768、1280的核心页面不溢出",
+      "status": "passed"
+    },
+    {
+      "name": "联赛多选按系统编号过滤并可清空",
+      "status": "passed"
+    },
+    {
+      "name": "本人关闭不受空额度阻挡，启用必须完整许可",
+      "status": "passed"
+    },
+    {
+      "name": "推荐定位准确报价并标示价格变化",
+      "status": "passed"
+    },
+    {
+      "name": "敏感操作再次验证保留原输入并隔离身份",
+      "status": "passed"
+    },
+    {
+      "name": "多页赛事刷新保留加载深度与滚动并移除消失赛事",
+      "status": "passed"
+    },
+    {
+      "name": "专家关注独立于资金授权并在当前浏览器保留",
+      "status": "passed"
+    },
+    {
+      "name": "找回入口如实提示未配置邮件并完成恢复码提交",
+      "status": "passed"
+    },
+    {
+      "name": "本人导出与待对账注销取消不恢复投注许可",
+      "status": "passed"
+    },
+    {
+      "name": "管理员恢复码只显示一次与只读待办订单",
+      "status": "passed"
+    },
+    {
+      "name": "手机长文、相册、回复及昵称变更保持完整阅读",
+      "status": "passed"
+    },
+    {
+      "name": "管理员换机保留原因子、再次验证上下文与新备用码",
+      "status": "passed"
+    },
+    {
+      "name": "管理员换机关闭清密钥、继续登记、明确替换、过期取消",
+      "status": "passed"
+    },
+    {
+      "name": "Telegram目录及管理员搜索重置游标、空结果、清空与请求乱序",
+      "status": "passed"
+    }
+  ],
+  "browser_errors": []
+}

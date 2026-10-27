@@ -1,0 +1,327 @@
+name: ai-football-v2
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-database: &database
+  DATABASE_URL: ${DATABASE_URL:?Provide the verified database connection in the project runtime configuration}
+  DATABASE_TRANSPORT: ${DATABASE_TRANSPORT:-tls}
+  SSH_TUNNEL_HOST: storage-tunnel
+
+x-storage: &storage
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:?Provide the existing object storage endpoint}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Provide the existing object storage access key}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:?Provide the existing object storage secret}
+  S3_BUCKET: ${S3_BUCKET:?Provide the existing object storage bucket}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_USE_TLS: "true"
+  S3_HTTPS_PROXY: http://storage-tunnel:18080
+  AWS_CA_BUNDLE: /run/secrets/s3-ca.crt
+  S3_OBJECT_PREFIX: v2/
+
+configs:
+  leyu_app_signing_runtime:
+    file: ${LEYU_SIGNING_FILE:-./.runtime/leyu-app-signing.json}
+  leyu_app_discovery_runtime:
+    file: ${LEYU_DISCOVERY_FILE:-./.runtime/leyu-app-discovery.json}
+
+services:
+  storage-tunnel:
+    image: ghcr.io/1420970597/ai-football-storage-tunnel:${APP_VERSION:-2.0.0-dev}
+    build:
+      context: .
+      dockerfile: infra/tunnel/Dockerfile
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      STORAGE_TUNNEL_CONFIG: /run/storage/tunnel.json
+    volumes:
+      - type: bind
+        source: ${STORAGE_TUNNEL_DIRECTORY:-./.runtime/tunnel}
+        target: /run/storage
+        read_only: true
+        bind:
+          create_host_path: false
+    expose: ["15432", "18080"]
+    networks: [storage-private, egress]
+    cpus: ${TUNNEL_CPUS:-0.1}
+    mem_limit: 128m
+    logging: *logging
+
+  migrate:
+    image: ghcr.io/1420970597/ai-football-api:${APP_VERSION:-2.0.0-dev}
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    restart: "no"
+    command: ["python", "-m", "app.migrate"]
+    environment:
+      <<: *database
+      DATABASE_URL: ${DATABASE_MIGRATION_URL:-${DATABASE_URL}}
+    depends_on:
+      storage-tunnel:
+        condition: service_healthy
+    networks: [storage-private]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=16m"]
+    cpus: 0.25
+    mem_limit: 256m
+    logging: *logging
+
+  api:
+    image: ghcr.io/1420970597/ai-football-api:${APP_VERSION:-2.0.0-dev}
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: [*database, *storage]
+      APP_SESSION_SECRET: ${APP_SESSION_SECRET:?Set a new platform session secret}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?Set the versioned data encryption key}
+      EXPERT_MCP_TOKEN: ${EXPERT_MCP_TOKEN:?Set the project MCP service token}
+      COLLECTOR_INTERNAL_TOKEN: ${COLLECTOR_INTERNAL_TOKEN:?Set the collector service token}
+      EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Set the independent execution service token}
+      LIVE_ORDERS_ENABLED: ${LIVE_ORDERS_ENABLED:-false}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      BOOTSTRAP_ADMIN_TOTP_SECRET: ${BOOTSTRAP_ADMIN_TOTP_SECRET:-}
+      TELEGRAM_CONTROL_URL: http://collector:8092
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      QUOTE_MAX_AGE_SECONDS: ${QUOTE_MAX_AGE_SECONDS:-15}
+    volumes:
+      - type: bind
+        source: ${S3_CA_FILE:-./.runtime/s3-ca.crt}
+        target: /run/secrets/s3-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      storage-tunnel:
+        condition: service_healthy
+    expose: ["8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=2)"]
+      interval: 15s
+      timeout: 4s
+      retries: 5
+      start_period: 25s
+    networks: [app-private, storage-private]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m"]
+    cpus: ${API_CPUS:-0.4}
+    mem_limit: 768m
+    logging: *logging
+
+  review-worker:
+    image: ghcr.io/1420970597/ai-football-api:${APP_VERSION:-2.0.0-dev}
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: [*database, *storage]
+      HERMES_API_URL: http://hermes:8642/v1
+      HERMES_API_MODEL: hermes-agent
+      HERMES_API_KEY: ${HERMES_API_KEY:?Set the internal Hermes API token}
+      REVIEW_WORKER_CONCURRENCY: ${REVIEW_WORKER_CONCURRENCY:-2}
+    command: ["python", "-m", "app.worker"]
+    volumes:
+      - type: bind
+        source: ${S3_CA_FILE:-./.runtime/s3-ca.crt}
+        target: /run/secrets/s3-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      api:
+        condition: service_healthy
+      hermes:
+        condition: service_healthy
+      hermes-mcp:
+        condition: service_started
+    networks: [app-private, storage-private]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m"]
+    cpus: ${REVIEW_WORKER_CPUS:-0.25}
+    mem_limit: 512m
+    logging: *logging
+
+  collector:
+    image: ghcr.io/1420970597/ai-football-collector:${APP_VERSION:-2.0.0-dev}
+    build:
+      context: .
+      dockerfile: services/collector/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *storage
+      PLATFORM_API: http://api:8080/internal
+      COLLECTOR_INTERNAL_TOKEN: ${COLLECTOR_INTERNAL_TOKEN:?Set the collector service token}
+      COLLECTOR_INTERVAL_SECONDS: ${COLLECTOR_INTERVAL_SECONDS:-20}
+      LIVE_ODDS_REFRESH_SECONDS: ${LIVE_ODDS_REFRESH_SECONDS:-20}
+      PREGAME_NEAR_HOURS: ${PREGAME_NEAR_HOURS:-2}
+      PREGAME_NEAR_REFRESH_SECONDS: ${PREGAME_NEAR_REFRESH_SECONDS:-60}
+      PREGAME_FAR_REFRESH_SECONDS: ${PREGAME_FAR_REFRESH_SECONDS:-300}
+      TELEGRAM_CONTROL_HOST: 0.0.0.0
+      TELEGRAM_CONTROL_PORT: 8092
+    configs:
+      - source: leyu_app_signing_runtime
+        target: /run/secrets/leyu-app-signing.json
+      - source: leyu_app_discovery_runtime
+        target: /run/secrets/leyu-app-discovery.json
+    volumes:
+      - type: bind
+        source: ${S3_CA_FILE:-./.runtime/s3-ca.crt}
+        target: /run/secrets/s3-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      api:
+        condition: service_healthy
+    expose: ["8092"]
+    networks: [app-private, storage-private, egress]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=64m"]
+    cpus: ${COLLECTOR_CPUS:-0.3}
+    mem_limit: 512m
+    logging: *logging
+
+  executor:
+    image: ghcr.io/1420970597/ai-football-executor:${APP_VERSION:-2.0.0-dev}
+    build:
+      context: .
+      dockerfile: services/executor/Dockerfile
+    restart: unless-stopped
+    environment:
+      PLATFORM_EXECUTOR_API: http://api:8080/internal/executor
+      EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Set the independent execution service token}
+      EXECUTOR_LIVE_ORDERS_ENABLED: ${EXECUTOR_LIVE_ORDERS_ENABLED:-false}
+    configs:
+      - source: leyu_app_signing_runtime
+        target: /run/secrets/leyu-app-signing.json
+      - source: leyu_app_discovery_runtime
+        target: /run/secrets/leyu-app-discovery.json
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [app-private, egress]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m"]
+    cpus: ${EXECUTOR_CPUS:-0.15}
+    mem_limit: 256m
+    logging: *logging
+
+  hermes-mcp:
+    image: ghcr.io/1420970597/ai-football-mcp:${APP_VERSION:-2.0.0-dev}
+    build:
+      context: .
+      dockerfile: services/hermes-mcp/Dockerfile
+    restart: unless-stopped
+    environment:
+      PLATFORM_INTERNAL_API: http://api:8080/internal/mcp
+      EXPERT_MCP_TOKEN: ${EXPERT_MCP_TOKEN:?Set the project MCP service token}
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8090
+    depends_on:
+      api:
+        condition: service_healthy
+    expose: ["8090"]
+    networks: [app-private]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=16m"]
+    cpus: ${MCP_CPUS:-0.15}
+    mem_limit: 256m
+    logging: *logging
+
+  hermes:
+    image: nousresearch/hermes-agent:v0.22.5@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d
+    restart: unless-stopped
+    environment:
+      HERMES_HOME: /opt/data/.hermes
+      API_SERVER_ENABLED: "true"
+      API_SERVER_KEY: ${HERMES_API_KEY:?Set the internal Hermes API token}
+      API_SERVER_HOST: 0.0.0.0
+      API_SERVER_PORT: 8642
+      HERMES_MODEL: ${HERMES_MODEL:-cline-pass/deepseek-v4.1-flash}
+      HERMES_PROVIDER_BASE_URL: ${HERMES_PROVIDER_BASE_URL:?Set the existing model gateway endpoint}
+      HERMES_PROVIDER_API_KEY: ${HERMES_PROVIDER_API_KEY:?Set the existing model gateway credential}
+      MCP_SERVER_URL: http://hermes-mcp:8090/mcp
+      EXPERT_MCP_TOKEN: ${EXPERT_MCP_TOKEN:?Set the project MCP service token}
+      HERMES_GATEWAY_NO_SUPERVISE: "1"
+    volumes:
+      - type: bind
+        source: ./integrations/hermes
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ./integrations/hermes/config.yaml
+        target: /opt/data/.hermes/config.yaml
+        read_only: true
+    # 框架的短期状态只在受限内存中；审计由工作器写远端数据库。
+    tmpfs:
+      - /opt/data:rw,noexec,nosuid,nodev,size=256m,mode=0700,uid=10000,gid=10000
+    working_dir: /workspace
+    command: ["python", "/workspace/runner.py", "gateway", "run", "--no-supervise"]
+    depends_on:
+      hermes-mcp:
+        condition: service_started
+    expose: ["8642"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8642/health', timeout=2)"]
+      interval: 15s
+      timeout: 4s
+      retries: 8
+      start_period: 60s
+    networks: [app-private, egress]
+    security_opt: [no-new-privileges:true]
+    cpus: ${HERMES_CPUS:-0.55}
+    mem_limit: 2g
+    logging: *logging
+
+  web:
+    image: ghcr.io/1420970597/ai-football-web:${APP_VERSION:-2.0.0-dev}
+    build:
+      context: .
+      dockerfile: web/app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_BIND_ADDRESS:-0.0.0.0}:${WEB_PORT:-3003}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 4s
+      retries: 5
+    networks: [app-private, egress]
+    cpus: ${WEB_CPUS:-0.1}
+    mem_limit: 128m
+    logging: *logging
+
+networks:
+  app-private:
+    internal: true
+  storage-private:
+    internal: true
+  egress: {}

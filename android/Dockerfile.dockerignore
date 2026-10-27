@@ -1,0 +1,17 @@
+**
+!android/
+!android/build.gradle.kts
+!android/settings.gradle.kts
+!android/gradle.properties
+!android/gradle/
+!android/gradle/**
+!android/app/
+!android/app/build.gradle.kts
+!android/app/gradle.lockfile
+!android/app/proguard-rules.pro
+!android/app/src/
+!android/app/src/**
+!tests/
+!tests/android/
+!tests/android/**/
+!tests/android/**/*.java

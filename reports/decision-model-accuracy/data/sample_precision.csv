@@ -1,7 +1,0 @@
-independent_matches,assumed_win_rate,iid_normal_half_width,evidence
-100,0.6,0.09601999791710057,theoretical_IID_approximation
-500,0.6,0.042941448508405027,theoretical_IID_approximation
-1000,0.6,0.030364189434266147,theoretical_IID_approximation
-2500,0.6,0.019203999583420117,theoretical_IID_approximation
-5000,0.6,0.013579278331339999,theoretical_IID_approximation
-10000,0.6,0.009601999791710059,theoretical_IID_approximation
