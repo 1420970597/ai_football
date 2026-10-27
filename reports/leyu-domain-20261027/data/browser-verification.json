@@ -1,0 +1,29 @@
+{
+  "recorded_at": "2026-10-27T12:57:56.518Z",
+  "environment": "Docker network none; local report server; no external requests",
+  "results": [
+    {
+      "width": 1440,
+      "images_loaded": 1,
+      "diagram_loaded": true,
+      "source_readable": true,
+      "body_overflow": false
+    },
+    {
+      "width": 390,
+      "images_loaded": 1,
+      "diagram_loaded": true,
+      "source_readable": true,
+      "body_overflow": false
+    },
+    {
+      "mode": "direct_file",
+      "width": 390,
+      "images_loaded": 1,
+      "diagram_loaded": true,
+      "source_readable": true
+    }
+  ],
+  "external_requests": [],
+  "browser_errors": []
+}

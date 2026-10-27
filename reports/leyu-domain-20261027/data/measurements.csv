@@ -1,0 +1,9 @@
+measured_at_utc,operation,fixtures,odds_fixtures,batches,succeeded,seconds,interpretation
+2026-10-27T12:27:52Z,full_schedule,,,,,2.349,same_host_same_session_success
+2026-10-27T12:29:00Z,full_schedule,2069,,,,2.446,same_host_same_session_success
+2026-10-27T12:29:00Z,one_odds_batch,,12,1,1,0.444,read_only_probe
+2026-10-27T12:30:39Z,bounded_odds,2075,36,3,3,,concurrency_1_interval_1s
+2026-10-27T12:30:39Z,odds_batch_1,,12,1,1,0.357,read_only_probe
+2026-10-27T12:30:39Z,odds_batch_2,,12,1,1,0.346,read_only_probe
+2026-10-27T12:30:39Z,odds_batch_3,,12,1,1,0.342,read_only_probe
+2026-10-27T12:42:16Z,database_roundtrip,,,,,0.583,remote_RTT_single_measurement

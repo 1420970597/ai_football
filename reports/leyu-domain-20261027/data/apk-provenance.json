@@ -1,0 +1,36 @@
+[
+  {
+    "kind": "main",
+    "url": "https://download.xinbovalve.com/files/package/pt_lyall_202_211310_1016163731_0.apk",
+    "file": "leyu-2.0.2-main.apk",
+    "bytes": 198610342,
+    "sha256": "08f0d8c1e0eb0e2637740bc3d36981ab4479d3cc679c7f8c1e5226ac6c9c5253",
+    "md5": "6293c2d8dae4bb18d0c4d6b1ae96369e",
+    "expected_md5": "6293c2d8dae4bb18d0c4d6b1ae96369e",
+    "md5_matches": true,
+    "seconds": 18.68,
+    "headers": {
+      "content-type": "application/vnd.android.package-archive",
+      "content-length": "198610342",
+      "last-modified": "Fri, 16 Oct 2026 08:54:03 GMT",
+      "etag": "\"6293c2d8dae4bb18d0c4d6b1ae96369e\""
+    }
+  },
+  {
+    "kind": "fix",
+    "url": "https://download.xinbovalve.com/files/package/pt_lyall_202_211546_1020225357_0.apk",
+    "file": "leyu-2.0.2-fix.apk",
+    "bytes": 198614552,
+    "sha256": "298bc7d8844d1530e325d007807c61913d3b764dcc7260caceba919ba49e5462",
+    "md5": "42fcb069e1ab8774df4a5bafea55710d",
+    "expected_md5": "42fcb069e1ab8774df4a5bafea55710d",
+    "md5_matches": true,
+    "seconds": 24.32,
+    "headers": {
+      "content-type": "application/vnd.android.package-archive",
+      "content-length": "198614552",
+      "last-modified": "Wed, 21 Oct 2026 04:56:35 GMT",
+      "etag": "\"42fcb069e1ab8774df4a5bafea55710d\""
+    }
+  }
+]

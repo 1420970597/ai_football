@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -167,6 +167,8 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([50, 50, 21], [len(batch) for batch in self.posts])
         more = list(fixture_batches([{"id": str(n), "markets": [{}] * 100} for n in range(25)]))
         self.assertEqual([20, 5], [len(batch) for batch in more])
+        metadata = list(fixture_batches([{"id": str(n), "markets": []} for n in range(501)]))
+        self.assertEqual([250, 250, 1], [len(batch) for batch in metadata])
 
     async def test_upload_sends_only_due_odds_without_marking_partial_snapshot_complete(self):
         fixtures = [
@@ -180,10 +182,47 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], sent[1]["markets"])
         self.assertFalse(sent[1]["markets_complete"])
 
+    async def test_poll_and_push_uploads_do_not_hold_overlapping_ingestion_transactions(self):
+        active = peak = 0
+        async def handler(request):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(.01)
+            active -= 1
+            return httpx.Response(200, json={"accepted": 1})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as api:
+            self.service.api = api
+            await asyncio.gather(*(self.service.upload([{"id": "same", "markets": []}]) for _ in range(3)))
+        self.assertEqual(1, peak)
+
     async def test_unknown_push_schedules_http_without_awaiting_full_resync(self):
         await self.service.on_push([{"fixture_id": "leyu:unknown"}])
         self.assertTrue(self.service.resync.is_set())
         self.service.runtime.collect.assert_not_called()
+
+    async def test_partial_limit_uploads_schedule_and_only_marks_successful_odds(self):
+        stop = asyncio.Event()
+        self.service.runtime.last_report = {"fixtures": 2, "odds_requested_fixtures": 2,
+            "complete_market_fixtures": 1, "rate_limited": True,
+            "rate_limit_category": "upstream_rate_limited", "rate_limit_code": "0401038",
+            "failed_batches": [{"size": 1}]}
+        async def collect(**kwargs):
+            return [{"id": "leyu:ok", "source_match_id": "ok", "markets_complete": True, "markets": []},
+                    {"id": "leyu:limited", "source_match_id": "limited", "markets_complete": False, "markets": []}]
+        self.service.runtime.collect.side_effect = collect
+        waits = []
+        async def wait(stop_event, delay, wake=None):
+            waits.append((delay, wake))
+            if delay >= 60:
+                stop_event.set()
+        with patch("services.collector.worker.wait_for_work", side_effect=wait):
+            await self.service.leyu_loop(stop)
+        self.assertEqual(2, len(self.posts[-1]))
+        self.assertEqual({"ok"}, set(self.service._odds_refresh_at))
+        self.assertEqual("partial", self.service.status["leyu"]["state"])
+        self.assertEqual("0401038", self.service.status["leyu"]["last_error_code"])
+        self.assertEqual((60, None), waits[-1])
 
     async def test_stop_and_wake_cancel_waiters_without_leak(self):
         stop, wake = asyncio.Event(), asyncio.Event()
@@ -204,6 +243,27 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CollectionBudgetTests(unittest.TestCase):
+    def test_large_schedule_progresses_all_phases_without_twenty_fixture_search_limit(self):
+        service = CollectorService.__new__(CollectorService)
+        service.live_odds_refresh_seconds = 20
+        service.pregame_near_hours = 2
+        service.pregame_near_refresh_seconds = 60
+        service.pregame_far_refresh_seconds = 300
+        service.odds_fixture_budget = 24
+        service._odds_refresh_at = {}
+        wall = datetime(2026, 10, 27, 12, tzinfo=timezone.utc)
+        fixtures = [{"source_match_id": f"{group}-{i}", "phase": "live" if group == "live" else "scheduled",
+                     "kickoff_at": (wall + timedelta(hours=1 if group == "near" else 4)).isoformat()}
+                    for group in ("live", "near", "far") for i in range(30)]
+        seen = set()
+        for _ in range(4):
+            selected = service.odds_due_mids(fixtures, now=100, wall_now=wall)
+            self.assertLessEqual(len(selected), 24)
+            self.assertFalse(seen.intersection(selected))
+            service.mark_odds_refreshed(selected, now=100)
+            seen.update(selected)
+        self.assertEqual(90, len(seen))
+
     def test_odds_refresh_budgets_prioritize_live_and_near_kickoff_and_forget_removed_matches(self):
         service = CollectorService.__new__(CollectorService)
         service.live_odds_refresh_seconds = 20

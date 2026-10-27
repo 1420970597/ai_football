@@ -13,7 +13,7 @@ import httpx
 
 from app import database
 from app.database import apply_migrations
-from app.ingestion import ingest_fixture
+from app.ingestion import ingest_fixture, ingest_fixture_batch
 from app.routes import internal, reviews
 
 
@@ -217,6 +217,51 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("active", await self.pool.fetchval("SELECT status FROM v2_current_quotes LIMIT 1"))
         await self.fixture(markets=[], markets_complete=True)
         self.assertEqual("closed", await self.pool.fetchval("SELECT status FROM v2_current_quotes LIMIT 1"))
+
+    async def test_batched_quotes_keep_newer_price_and_exact_full_snapshot_keys(self):
+        await self.fixture()
+        old=(self.now-timedelta(minutes=1)).isoformat()
+        quote={"market_id":"total","market_name":"全场大小","kind":"total","period":"full_time",
+               "line":"2.5","selection":"over","price":"2.5","source_updated_at":old,
+               "received_at":self.now.isoformat()}
+        other={**quote,"selection":"under","source_updated_at":self.now.isoformat()}
+        await self.fixture(markets=[quote,other],markets_complete=True)
+        rows=await self.pool.fetch("SELECT selection,price,status FROM v2_current_quotes ORDER BY selection")
+        self.assertEqual(2,len(rows))
+        self.assertEqual(Decimal("1.95"),rows[0]["price"])
+        self.assertTrue(all(r["status"]=="active" for r in rows))
+        await self.fixture(markets=[quote],markets_complete=True)
+        self.assertEqual("active",await self.pool.fetchval("SELECT status FROM v2_current_quotes WHERE selection='over'"))
+        self.assertEqual("closed",await self.pool.fetchval("SELECT status FROM v2_current_quotes WHERE selection='under'"))
+
+    async def test_fixture_batch_skips_stale_snapshot_but_accepts_new_fixture(self):
+        await self.fixture()
+        old = self.now - timedelta(minutes=1)
+        common = dict(sport="football", competition_name="League", home_team="Home",
+                      away_team="Away", kickoff_at=self.now + timedelta(hours=1),
+                      phase="scheduled", received_at=self.now, source_updated_at=self.now)
+        stale = internal.FixtureInput.model_validate({**common, "id":"ignored-id", "source_id":"fixture-1",
+                    "source_updated_at":old, "home_score":99, "markets_complete":True, "markets":[]})
+        fresh = internal.FixtureInput.model_validate({**common, "id":"fixture-2", "source_id":"fixture-2",
+                    "home_aliases":[" HOME "," "], "markets":[]})
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                self.assertEqual(1, await ingest_fixture_batch(conn, [fresh, stale]))
+        self.assertEqual(2, await self.pool.fetchval("SELECT count(*) FROM v2_fixtures"))
+        self.assertIsNone(await self.pool.fetchval("SELECT home_score FROM v2_fixtures WHERE source_id='fixture-1'"))
+        self.assertEqual("active", await self.pool.fetchval("SELECT status FROM v2_current_quotes LIMIT 1"))
+        self.assertEqual(["home"], await self.pool.fetchval("SELECT home_aliases FROM v2_fixtures WHERE source_id='fixture-2'"))
+
+    async def test_duplicate_fixture_batch_rejected_before_any_writes(self):
+        body = internal.FixtureInput.model_validate(dict(id="duplicate", source_id="duplicate",
+            sport="football", competition_name="League", home_team="A", away_team="B",
+            kickoff_at=self.now, phase="scheduled", received_at=self.now, markets=[]))
+        from fastapi import HTTPException
+        async with self.pool.acquire() as conn:
+            with self.assertRaises(HTTPException) as rejected:
+                await ingest_fixture_batch(conn, [body, body])
+        self.assertEqual(422, rejected.exception.status_code)
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_fixtures"))
 
 
 if __name__ == "__main__":

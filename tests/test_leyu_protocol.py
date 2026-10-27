@@ -195,7 +195,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             active -= 1
             return httpx.Response(200, json={"code": "0", "data": {"data": [market_row(mid) for mid in mids]}})
 
-        client = LeyuClient("https://upstream.invalid", request_id="session", transport=httpx.MockTransport(handler), batch_interval=0)
+        client = LeyuClient("https://upstream.invalid", request_id="session", transport=httpx.MockTransport(handler), batch_interval=0, concurrency=2)
         fixtures = await client.fetch()
         self.assertEqual(45, len(fixtures))
         self.assertEqual([12, 12, 12, 9], sorted(batch_sizes, reverse=True))
@@ -267,6 +267,50 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         client = LeyuClient("https://upstream.invalid", request_id="session", transport=httpx.MockTransport(handler))
         with self.assertRaises(AuthExpired):
             await client.fetch()
+
+    async def test_odds_limit_preserves_schedule_and_stops_queued_requests(self):
+        odds_calls = 0
+        async def handler(request):
+            nonlocal odds_calls
+            if request.url.path == DEFAULT_FIXTURE_PATH:
+                return httpx.Response(200, json={"code": "0", "data": {"matchsList": [match(str(i)) for i in range(36)]}})
+            odds_calls += 1
+            if odds_calls == 2:
+                return httpx.Response(200, json={"code": "0401038", "msg": "secret response"})
+            mids = json.loads(request.content)["mids"].split(",")
+            return httpx.Response(200, json={"code": "0", "data": {"data": [market_row(mid) for mid in mids]}})
+        client = LeyuClient("https://upstream.invalid", request_id="session",
+                            transport=httpx.MockTransport(handler), batch_interval=0)
+        fixtures = await client.fetch()
+        self.assertEqual(36, len(fixtures))
+        self.assertEqual(2, odds_calls)
+        self.assertEqual(12, sum(bool(f["markets_complete"]) for f in fixtures))
+        self.assertTrue(client.last_report["rate_limited"])
+        self.assertEqual("0401038", client.last_report["rate_limit_code"])
+        self.assertNotIn("secret response", json.dumps(client.last_report))
+
+    async def test_schedule_limit_remains_failure(self):
+        client = LeyuClient("https://upstream.invalid", request_id="session",
+                            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"code": "0401038"})))
+        with self.assertRaises(RateLimited):
+            await client.fetch()
+
+    async def test_missing_odds_fallback_has_per_cycle_request_budget(self):
+        fallbacks = 0
+        async def handler(request):
+            nonlocal fallbacks
+            if request.url.path == DEFAULT_FIXTURE_PATH:
+                return httpx.Response(200, json={"code": "0", "data": {"matchsList": [match(str(i)) for i in range(30)]}})
+            if request.url.path == DEFAULT_MATCH_ODDS_PATH:
+                fallbacks += 1
+            return httpx.Response(200, json={"code": "0", "data": {"data": []}})
+        client = LeyuClient("https://upstream.invalid", request_id="session", batch_size=12,
+                            transport=httpx.MockTransport(handler), batch_interval=0)
+        fixtures = await client.fetch()
+        self.assertEqual(30, len(fixtures))
+        self.assertEqual(12, fallbacks)
+        self.assertTrue(all(not f["markets_complete"] for f in fixtures))
+        self.assertIn("single_match_fallback_budget_exhausted", str(client.last_report))
 
     async def test_http403_does_not_claim_token_expired(self):
         client = LeyuClient("https://upstream.invalid", request_id="session",

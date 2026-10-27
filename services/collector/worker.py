@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 import httpx
 
-from .leyu_protocol import LeyuError
+from .leyu_protocol import LeyuError, RateLimited
 from .leyu_realtime import LeyuRealtime
 from .leyu_runtime import LeyuRuntime
 from .telegram import TelegramCollector
@@ -23,6 +23,8 @@ LIVE_ODDS_REFRESH_SECONDS = max(10, min(120, int(os.environ.get("LIVE_ODDS_REFRE
 PREGAME_NEAR_HOURS = max(1, min(12, int(os.environ.get("PREGAME_NEAR_HOURS", "2"))))
 PREGAME_NEAR_REFRESH_SECONDS = max(30, min(600, int(os.environ.get("PREGAME_NEAR_REFRESH_SECONDS", "60"))))
 PREGAME_FAR_REFRESH_SECONDS = max(60, min(1800, int(os.environ.get("PREGAME_FAR_REFRESH_SECONDS", "300"))))
+ODDS_FIXTURE_BUDGET = max(12, min(300, int(os.environ.get("ODDS_FIXTURE_BUDGET", "96"))))
+RATE_LIMIT_COOLDOWN_SECONDS = 60
 
 
 def configure_logging() -> None:
@@ -61,7 +63,7 @@ async def wait_for_work(stop: asyncio.Event, delay: float, wake: asyncio.Event |
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def fixture_batches(fixtures: list[dict[str, Any]], max_items: int = 50, quote_budget: int = 2000):
+def fixture_batches(fixtures: list[dict[str, Any]], max_items: int = 250, quote_budget: int = 2000):
     batch, quotes = [], 0
     for fixture in fixtures:
         count = len(fixture.get("markets", []))
@@ -109,6 +111,7 @@ class CollectorService:
                  pregame_near_hours: float = PREGAME_NEAR_HOURS,
                  pregame_near_refresh_seconds: float = PREGAME_NEAR_REFRESH_SECONDS,
                  pregame_far_refresh_seconds: float = PREGAME_FAR_REFRESH_SECONDS,
+                 odds_fixture_budget: int = ODDS_FIXTURE_BUDGET,
                  base_config: Mapping[str, Any] | None = None, telegram_factory=TelegramCollector,
                  runtime_factory=LeyuRuntime, realtime_factory=LeyuRealtime):
         if not token:
@@ -122,6 +125,8 @@ class CollectorService:
         self.pregame_near_refresh_seconds = max(1, pregame_near_refresh_seconds)
         self.pregame_far_refresh_seconds = max(self.pregame_near_refresh_seconds, pregame_far_refresh_seconds)
         self._odds_refresh_at: dict[str, float] = {}
+        self.odds_fixture_budget = max(1, min(300, odds_fixture_budget))
+        self._upload_lock = asyncio.Lock()
         self.runtime = runtime_factory(api, self.api_url, base_config)
         self.telegram = telegram_factory({}, api=api, api_url=self.api_url + "/telegram")
         self.resync = asyncio.Event()
@@ -141,7 +146,7 @@ class CollectorService:
                       wall_now: datetime | None = None) -> list[str]:
         monotonic_now = time.monotonic() if now is None else now
         observed = wall_now or datetime.now(timezone.utc)
-        due = []
+        queues: dict[str, list[str]] = {"live": [], "near": [], "far": []}
         active = set()
         for fixture in fixtures:
             mid = str(fixture.get("source_match_id") or "")
@@ -153,6 +158,7 @@ class CollectorService:
             active.add(mid)
             if phase == "live":
                 budget = self.live_odds_refresh_seconds
+                group = "live"
             else:
                 try:
                     kickoff = datetime.fromisoformat(str(fixture["kickoff_at"]).replace("Z", "+00:00"))
@@ -163,10 +169,20 @@ class CollectorService:
                     continue
                 budget = (self.pregame_near_refresh_seconds if -1 <= hours <= self.pregame_near_hours
                           else self.pregame_far_refresh_seconds)
+                group = "near" if -1 <= hours <= self.pregame_near_hours else "far"
             if monotonic_now - self._odds_refresh_at.get(mid, float("-inf")) >= budget:
-                due.append(mid)
+                queues[group].append(mid)
         # This is a current schedule projection, not a historical lookup table.
         self._odds_refresh_at = {mid: stamp for mid, stamp in self._odds_refresh_at.items() if mid in active}
+        # 每轮限制请求量，但全量赛程不截断。各阶段轮转，远期赛事不会被滚球饿死。
+        for queue in queues.values():
+            queue.sort(key=lambda mid: self._odds_refresh_at.get(mid, float("-inf")), reverse=True)
+        due = []
+        limit = getattr(self, "odds_fixture_budget", ODDS_FIXTURE_BUDGET)
+        while len(due) < limit and any(queues.values()):
+            for group in ("live", "live", "near", "far"):
+                if queues[group] and len(due) < limit:
+                    due.append(queues[group].pop())
         return due
 
     def mark_odds_refreshed(self, mids: list[str], *, now: float | None = None) -> None:
@@ -187,7 +203,9 @@ class CollectorService:
             else:
                 outgoing.append(fixture)
         for batch in fixture_batches(outgoing):
-            response = await self.api.post(self.api_url + "/collector/fixtures", json={"items": batch})
+            # Poll 与 WS 更新相同记录；在事务边界串行，避免远端行锁互等。
+            async with self._upload_lock:
+                response = await self.api.post(self.api_url + "/collector/fixtures", json={"items": batch})
             response.raise_for_status()
             document = response.json()
             if not isinstance(document, dict) or not isinstance(document.get("accepted"), int):
@@ -214,6 +232,7 @@ class CollectorService:
                 return
             last_start = time.monotonic()
             self.resync.clear()
+            rate_limited = False
             try:
                 requested_mids: list[str] = []
                 def choose_odds(fixtures: list[dict[str, Any]]) -> list[str]:
@@ -221,15 +240,21 @@ class CollectorService:
                     return requested_mids
                 fixtures = await self.runtime.collect(odds_mids=choose_odds)
                 accepted = await self.upload(fixtures, odds_mids=requested_mids)
-                self.mark_odds_refreshed(requested_mids)
+                self.mark_odds_refreshed([str(f["source_match_id"]) for f in fixtures
+                                          if f.get("markets_complete") and f.get("source_match_id")])
                 report = self.runtime.last_report
+                rate_limited = bool(report.get("rate_limited"))
                 complete = report.get("complete_market_fixtures", 0)
                 freshness = quote_freshness(fixtures)
                 expected = report.get("odds_requested_fixtures", len(fixtures))
                 state = ("degraded" if self.runtime.config_validation_error else
                          "healthy" if complete == expected and (freshness["freshness"] in {"fresh", "unknown"}) else "partial")
                 self.status["leyu"].update(state=state, fixtures=len(fixtures), accepted=accepted,
-                                           complete_market_fixtures=complete, last_error="", last_error_code="",
+                                           complete_market_fixtures=complete,
+                                           last_error=report.get("rate_limit_category", ""),
+                                           last_error_code=report.get("rate_limit_code", ""),
+                                           failed_batches=len(report.get("failed_batches", [])),
+                                           rate_limited=rate_limited,
                                            last_success_at=datetime.now(timezone.utc).isoformat(), config_version=self.runtime.version,
                                            config_validated_at=self.runtime.config_validated_at,
                                            config_validation_error=self.runtime.config_validation_error,
@@ -238,6 +263,7 @@ class CollectorService:
                 failures = 0
             except Exception as exc:
                 failures += 1
+                rate_limited = isinstance(exc, RateLimited)
                 update = {"state": "unavailable", "last_error": category(exc),
                           "last_error_code": exc.code if isinstance(exc, LeyuError) else ""}
                 if self.runtime.version > 0:
@@ -248,8 +274,10 @@ class CollectorService:
                 self.status["leyu"].update(update)
                 log.warning("Leyu source unavailable category=%s", category(exc))
             delay = self.interval if failures == 0 else min(60, 2 ** min(failures, 6))
+            if rate_limited:
+                delay = max(delay, RATE_LIMIT_COOLDOWN_SECONDS)
             # 上游拒绝与网络失败按退避等待，WS补同步不能绕过失败退避。
-            await wait_for_work(stop, delay, self.resync if failures == 0 else None)
+            await wait_for_work(stop, delay, self.resync if failures == 0 and not rate_limited else None)
 
     async def telegram_loop(self, stop: asyncio.Event) -> None:
         failures = 0

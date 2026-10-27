@@ -1,0 +1,9 @@
+[
+  {
+    "index": 1,
+    "compiler": "mermaid",
+    "version": "11.4.1",
+    "source_sha256": "0ac235d8ff8b78b01d7f5901b6e96349058350d7143f02b61bdb972cde22bdba",
+    "svg_sha256": "69a65436a59f55a8ce3533ab40b5749edf4a53143457f0ccfc115cb1c8742c5a"
+  }
+]
