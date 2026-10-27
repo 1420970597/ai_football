@@ -671,7 +671,7 @@
             </section>
             <section id="admin-leyu" class="admin-panel" hidden>
               <div class="notice">
-                配置使用版本校验。令牌留空保持原值；代理仅用于自动续期的登录请求。
+                配置使用版本校验。令牌留空保持原值；登录代理仅用于续期，采集中转仅转发比赛和盘口。
               </div>
               <div id="leyu-version" class="muted"></div>
               <form id="leyu-settings" class="compact-form settings-form">
@@ -685,6 +685,9 @@
                   <summary>数据采集与业务会话</summary>
                   <label
                     >业务地址<input name="leyu_api_base" type="url" /></label
+                  ><label
+                    >比赛与盘口 HTTPS 中转<input name="leyu_collection_relay" type="url" data-save-empty
+                      placeholder="留空直连；填写 HTTPS 来源" /><small>中转会接收业务会话；不转发 App 登录、账户或订单。清空后恢复直连。</small></label
                   ><label
                     >业务 requestId<input
                       name="leyu_request_id"

@@ -80,6 +80,8 @@ class LeyuRuntime:
     @staticmethod
     def _validate_candidate(config: Mapping[str, Any]) -> None:
         LeyuClient.validate_collection_budget(config)
+        if str(config.get("leyu_collection_relay") or "").strip():
+            safe_base_url(str(config["leyu_collection_relay"]).strip())
 
         request_id = str(config.get("leyu_request_id") or "").strip()
         business_base = str(config.get("leyu_api_base") or "").strip()

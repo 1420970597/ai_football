@@ -123,6 +123,33 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(previous, runtime.config)
         self.assertEqual(6, runtime.version)
 
+    async def test_hot_relay_change_and_clear_keep_original_business_origin(self):
+        documents = [
+            {"version": 8, "items": {"leyu_api_base":"https://business.invalid", "leyu_request_id":"session",
+                                          "leyu_collection_relay":"https://relay.invalid"}},
+            {"version": 9, "items": {"leyu_api_base":"https://business.invalid", "leyu_request_id":"session",
+                                          "leyu_collection_relay":""}},
+        ]
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200,json=documents.pop(0)))) as api:
+            runtime = LeyuRuntime(api, "https://api.invalid/internal")
+            first = await runtime.load()
+            self.assertEqual("https://relay.invalid", first["leyu_collection_relay"])
+            second = await runtime.load()
+            self.assertEqual("", second["leyu_collection_relay"])
+            self.assertEqual("https://business.invalid", second["leyu_api_base"])
+            self.assertEqual(9, runtime.version)
+
+    async def test_invalid_hot_relay_keeps_last_valid_configuration(self):
+        previous = {"leyu_api_base":"https://working.invalid","leyu_request_id":"session"}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200,json={
+                "version":8,"items":{**previous,"leyu_collection_relay":"http://invalid.invalid"}}))) as api:
+            runtime = LeyuRuntime(api, "https://api.invalid/internal")
+            runtime.config, runtime.version = previous.copy(), 7
+            with self.assertRaises(LeyuError):
+                await runtime.load()
+            self.assertEqual(previous, runtime.config)
+            self.assertEqual(7, runtime.version)
+
     async def test_explicit_expiry_renews_once_then_retries_collection(self):
         failed = SimpleNamespace(fetch=AsyncMock(side_effect=AuthExpired("session_expired")))
         healthy = SimpleNamespace(fetch=AsyncMock(return_value=[]), last_report={"fixtures": 0})

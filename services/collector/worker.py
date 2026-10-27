@@ -250,6 +250,7 @@ class CollectorService:
                 state = ("degraded" if self.runtime.config_validation_error else
                          "healthy" if complete == expected and (freshness["freshness"] in {"fresh", "unknown"}) else "partial")
                 self.status["leyu"].update(state=state, fixtures=len(fixtures), accepted=accepted,
+                                           collection_transport=report.get("collection_transport", "direct"),
                                            complete_market_fixtures=complete,
                                            last_error=report.get("rate_limit_category", ""),
                                            last_error_code=report.get("rate_limit_code", ""),
