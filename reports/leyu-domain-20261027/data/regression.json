@@ -1,0 +1,13 @@
+{
+  "source_parent_commit": "308dc122c0922c827b097ec170ebb601fbe4778d",
+  "committed_source_verified": false,
+  "tests": 477,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "seconds": 183.975,
+  "scope": "isolated fixtures; no live providers or money",
+  "command": "sh infra/test/run.sh",
+  "exit_code": 0,
+  "source_hashes_note": "Full frozen hashes retained in ignored evidence; committed head is verified by GitHub CI."
+}
