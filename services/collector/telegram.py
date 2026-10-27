@@ -79,11 +79,12 @@ def _valid_image(body: bytes, mime: str) -> bool:
 
 class TelegramCollector:
     def __init__(self, config: dict[str, str], *, api=None, api_url: str | None = None,
-                 backend=None, client_factory=None, media_store=None):
+                 backend=None, client_factory=None, media_store=None, media_delete=None):
         self.config = dict(config)
         self.backend = backend or (TelegramBackend(api, api_url) if api is not None and api_url else None)
         self.client_factory = client_factory or _factory
         self.media_store = media_store
+        self.media_delete = media_delete
         self.client = None
         self.owner = str(uuid.uuid4())
         self.sources: dict[str, dict] = {}
@@ -230,7 +231,8 @@ class TelegramCollector:
         if str(self.config.get("telegram_source_enabled", "false")).lower() != "true":
             return {"state": "disabled", "sources": {}}
         if not await self.connect():
-            return {"state": "unauthorized", "sources": {}}
+            state = self.auth_state.get("state") if self.auth_state.get("state") in {"session_invalid", "failed"} else "unauthorized"
+            return {"state": state, "sources": {}}
         self.sources = {str(item["chat_id"]): item for item in await self.backend.sources()}
         result = {}
         # 群组之间独立，但控制并发和 Telegram flood；单群失败不阻止其他群。
@@ -251,7 +253,12 @@ class TelegramCollector:
 
         await asyncio.gather(*(one(chat_id, source) for chat_id, source in self.sources.items()))
         await self.retry_pending()
-        return {"state": "connected", "sources": result}
+        try:
+            cleanup = await self.cleanup_orphan_media()
+        except Exception as exc:
+            cleanup = {"state": "deferred", "candidates": 0, "deleted": 0, "error": type(exc).__name__}
+            log.warning("Telegram orphan media inventory unavailable category=%s", type(exc).__name__)
+        return {"state": "connected", "sources": result, "media_cleanup": cleanup}
 
     async def _sync_source(self, chat_id: str, source: dict) -> dict:
         if time.monotonic() < self.retry_at.get(chat_id, 0):
@@ -490,6 +497,50 @@ class TelegramCollector:
         return {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size,
                 "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION}
 
+    async def _delete_media_object(self, object_key: str) -> None:
+        """Delete one staged object only after the backend has classified it orphaned."""
+        if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
+            raise ValueError("invalid_remote_media_object")
+        if self.media_delete:
+            await self.media_delete(object_key)
+            return
+        bucket = os.environ.get("S3_BUCKET", "").strip()
+        endpoint = os.environ.get("S3_ENDPOINT_URL", "").strip()
+        access = os.environ.get("S3_ACCESS_KEY", "").strip()
+        secret = os.environ.get("S3_SECRET_KEY", "")
+        if not all((bucket, endpoint, access, secret)):
+            raise RuntimeError("remote_S3_not_configured")
+
+        def delete():
+            client = boto3.client("s3", endpoint_url=endpoint, region_name=os.environ.get("S3_REGION", "us-east-1"),
+                                  aws_access_key_id=access, aws_secret_access_key=secret,
+                                  use_ssl=os.environ.get("S3_USE_TLS", "true").lower() == "true",
+                                  config=Config(connect_timeout=3, read_timeout=15, retries={"max_attempts": 2},
+                                                proxies={"https": os.environ["S3_HTTPS_PROXY"]} if os.environ.get("S3_HTTPS_PROXY") else None))
+            try:
+                client.delete_object(Bucket=bucket, Key=object_key)
+            finally:
+                client.close()
+        await asyncio.to_thread(delete)
+
+    async def cleanup_orphan_media(self, *, older_than_hours: int = 24, limit: int = 100) -> dict:
+        """删除已失败媒体的孤儿对象，并只确认已删除的引用。"""
+        if not self.backend or not callable(getattr(self.backend, "media_orphans", None)):
+            return {"state": "unsupported", "candidates": 0, "deleted": 0}
+        candidates = await self.backend.media_orphans(self.owner, older_than_hours=older_than_hours, limit=limit)
+        deleted = []
+        for item in candidates:
+            key = str(item.get("object_key", ""))
+            try:
+                await self._delete_media_object(key)
+            except Exception as exc:
+                log.warning("Telegram orphan media cleanup deferred category=%s", type(exc).__name__)
+                continue
+            deleted.append(key)
+        if deleted:
+            await self.backend.acknowledge_media_orphans(self.owner, deleted)
+        return {"state": "ready", "candidates": len(candidates), "deleted": len(deleted)}
+
     async def _cancel_auth(self):
         task, self.auth_task = self.auth_task, None
         if task and task is not asyncio.current_task():
@@ -563,10 +614,17 @@ class TelegramCollector:
             await self._cancel_auth()
             self.auth_state["state"] = "expired"
         if path == "/status":
+            health = getattr(self, "source_health", None)
+            if health is not None and isinstance(health, dict):
+                # The worker intentionally shares its mutable status object
+                # with the collector. Never serialize that object directly:
+                # it would contain itself under telegram.source_health.
+                health = {key: (dict(value) if isinstance(value, dict) else value)
+                          for key, value in health.items() if key != "source_health"}
             return {"connected": bool(self.client and self.client.is_connected()),
                     "authorized": bool(self.client and await self.client.is_user_authorized()),
                     "auth": dict(self.auth_state), "account": self.account,
-                    "source_health": getattr(self, "source_health", None)}
+                    "source_health": health}
         if path == "/auth/qr":
             return await self._start_qr(bool(payload.get("replace_existing")))
         if path in {"/auth/password", "/auth/cancel"}:

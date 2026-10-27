@@ -116,6 +116,24 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("RuntimeError", self.service.status["telegram"]["last_error"])
         self.assertNotIn("secret-body", str(self.service.status))
 
+    async def test_source_permission_failure_is_visible_without_marking_all_sources_healthy(self):
+        stop = asyncio.Event()
+
+        async def sync():
+            stop.set()
+            return {"state": "connected", "sources": {
+                "-1001": {"state": "caught_up"},
+                "-1002": {"state": "unavailable", "error": "member_enumeration_restricted"},
+            }, "media_cleanup": {"state": "ready", "candidates": 1, "deleted": 0}}
+
+        self.service.telegram.sync_once.side_effect = sync
+        await asyncio.wait_for(self.service.run(stop), 1)
+        self.assertTrue(self.service.status["telegram"]["degraded"])
+        self.assertEqual("source_unavailable", self.service.status["telegram"]["last_error"])
+        self.assertEqual("member_enumeration_restricted", self.service.status["telegram"]["source_errors"]["-1002"])
+        self.assertEqual("caught_up", self.service.status["telegram"]["source_states"]["-1001"])
+        self.assertEqual(1, self.service.status["telegram"]["media_cleanup"]["candidates"])
+
     async def test_external_cancellation_closes_telegram_and_all_children(self):
         stop = asyncio.Event()
         ready = asyncio.Event()

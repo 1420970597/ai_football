@@ -36,3 +36,13 @@ class TelegramBackend:
 
     async def save_session(self, session: str, account: dict) -> dict:
         return await self._call("PUT", "/session", {"session": session, "account": account})
+
+    async def media_orphans(self, owner: str, *, older_than_hours: int = 24, limit: int = 100) -> list[dict]:
+        return (await self._call("POST", "/media/orphans", {
+            "owner": owner, "older_than_hours": older_than_hours, "limit": limit,
+        }))['items']
+
+    async def acknowledge_media_orphans(self, owner: str, object_keys: list[str]) -> dict:
+        return await self._call("POST", "/media/orphans/ack", {
+            "owner": owner, "object_keys": object_keys,
+        })

@@ -183,8 +183,19 @@ class CollectorService:
                 await self.telegram.apply_config(config)
                 async with asyncio.timeout(120):
                     report = await self.telegram.sync_once()
-                self.status["telegram"].update(state=report.get("state", "unknown"), last_error="",
-                                               last_success_at=datetime.now(timezone.utc).isoformat())
+                source_reports = report.get("sources", {}) if isinstance(report, dict) else {}
+                source_errors = {
+                    chat_id: item.get("error") or item.get("reason") or item.get("state")
+                    for chat_id, item in source_reports.items()
+                    if isinstance(item, dict) and item.get("state") not in {"caught_up", "catching_up", "backoff"}
+                }
+                state = report.get("state", "unknown") if isinstance(report, dict) else "unknown"
+                self.status["telegram"].update(
+                    state=state, last_error=("source_unavailable" if source_errors else ""),
+                    source_states={chat_id: item.get("state") for chat_id, item in source_reports.items() if isinstance(item, dict)},
+                    source_errors=source_errors, source_count=len(source_reports),
+                    degraded=bool(source_errors), media_cleanup=report.get("media_cleanup") if isinstance(report, dict) else None,
+                    last_success_at=datetime.now(timezone.utc).isoformat())
                 failures = 0
             except Exception as exc:
                 failures += 1

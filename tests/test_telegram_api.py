@@ -234,6 +234,46 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_admin_settings"))
         self.assertNotIn("test-memory-only-password", str(await self.pool.fetch("SELECT details FROM v2_audit_log")))
 
+    async def test_media_orphan_inventory_excludes_ready_references_and_ack_clears_only_failed_refs(self):
+        body = self.event(version="orphan", media=True)
+        body.update(media_state="failed", last_error="storage_timeout",
+                    media_objects=[{"object_key": "telegram/messages/-1001/11/" + "a" * 64,
+                                    "mime_type": "image/jpeg", "sha256": "a" * 64, "bytes": 100}])
+        inserted = await self.post(body)
+        self.assertEqual(200, inserted.status_code, inserted.text)
+        await self.pool.execute("UPDATE v2_telegram_events SET updated_at=now()-interval '48 hours' WHERE platform_message_id='11'")
+        candidates = await self.client.post("/internal/telegram/media/orphans", json={"owner": str(self.owner), "older_than_hours": 24})
+        self.assertEqual(200, candidates.status_code, candidates.text)
+        self.assertEqual([body["media_objects"][0]["object_key"]], [item["object_key"] for item in candidates.json()["items"]])
+
+        acknowledged = await self.client.post("/internal/telegram/media/orphans/ack", json={
+            "owner": str(self.owner), "object_keys": [body["media_objects"][0]["object_key"]],
+        })
+        self.assertEqual(200, acknowledged.status_code, acknowledged.text)
+        self.assertEqual([], await self.pool.fetchval("SELECT media_objects FROM v2_telegram_events WHERE platform_message_id='11'"))
+        self.assertEqual("storage_timeout", await self.pool.fetchval("SELECT last_error FROM v2_telegram_events WHERE platform_message_id='11'"))
+
+    async def test_media_orphan_inventory_never_returns_key_referenced_by_ready_message(self):
+        key = "telegram/messages/-1001/ready/" + "b" * 64
+        pending = self.event(version="pending-ready", media=True)
+        pending.update(platform_message_id="12", member_message_ids=[12], media_state="failed",
+                       media_objects=[{"object_key": key, "mime_type": "image/jpeg", "sha256": "b" * 64, "bytes": 100}])
+        self.assertEqual(200, (await self.post(pending)).status_code)
+        await self.pool.execute("UPDATE v2_telegram_events SET updated_at=now()-interval '48 hours' WHERE platform_message_id='12'")
+        ready = self.event(version="ready-ref", media=True)
+        ready.update(platform_message_id="13", member_message_ids=[13], media_state="ready",
+                     media_objects=[{"object_key": key, "mime_type": "image/jpeg", "sha256": "b" * 64, "bytes": 100}])
+        self.assertEqual(200, (await self.post(ready)).status_code)
+        result = await self.client.post("/internal/telegram/media/orphans", json={"owner": str(self.owner), "older_than_hours": 24})
+        self.assertEqual(200, result.status_code, result.text)
+        self.assertNotIn(key, [item["object_key"] for item in result.json()["items"]])
+
+    async def test_media_orphan_ack_requires_safe_object_keys(self):
+        response = await self.client.post("/internal/telegram/media/orphans/ack", json={
+            "owner": str(self.owner), "object_keys": ["../outside-bucket"],
+        })
+        self.assertEqual(422, response.status_code, response.text)
+
     async def test_admin_message_history_shows_failed_original(self):
         body = self.event(media=True)
         body.update(media_state="failed", last_error="TimeoutError")

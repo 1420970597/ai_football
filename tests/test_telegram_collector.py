@@ -42,6 +42,8 @@ class Backend:
         self.save_fails = False
         self.saved_sessions = []
         self.observed_items = []
+        self.orphan_items = []
+        self.orphan_acks = []
 
     async def sources(self):
         return self.source_items
@@ -76,6 +78,13 @@ class Backend:
 
     async def observed(self, chat_id, owner, limit=50):
         return self.observed_items
+
+    async def media_orphans(self, owner, *, older_than_hours=24, limit=100):
+        return self.orphan_items[:limit]
+
+    async def acknowledge_media_orphans(self, owner, object_keys):
+        self.orphan_acks.append((owner, list(object_keys)))
+        return {"acknowledged": len(object_keys)}
 
 
 class Client:
@@ -450,6 +459,33 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("authorized", status["auth"]["state"])
         finally:
             await restored.disconnect()
+
+    async def test_orphan_media_cleanup_deletes_and_acknowledges_only_successful_objects(self):
+        deleted = []
+        self.backend.orphan_items = [
+            {"object_key": "telegram/messages/-1001/1/" + "a" * 64},
+            {"object_key": "telegram/messages/-1001/2/" + "b" * 64},
+        ]
+
+        async def remove(key):
+            deleted.append(key)
+            if key.endswith("b" * 64):
+                raise ConnectionError("storage unavailable")
+
+        self.collector.media_delete = remove
+        result = await self.collector.cleanup_orphan_media(older_than_hours=24, limit=10)
+        self.assertEqual({"state": "ready", "candidates": 2, "deleted": 1}, result)
+        self.assertEqual([self.backend.orphan_items[0]["object_key"], self.backend.orphan_items[1]["object_key"]], deleted)
+        self.assertEqual([[self.backend.orphan_items[0]["object_key"]]], [item[1] for item in self.backend.orphan_acks])
+
+    async def test_status_snapshot_does_not_return_self_referential_worker_health(self):
+        health = {"telegram": {"state": "connected"}}
+        health["source_health"] = health
+        self.collector.source_health = health
+        status = await self.collector.control("/status", {})
+        encoded = json.dumps(status, ensure_ascii=False)
+        self.assertIn("connected", encoded)
+        self.assertNotIn("source_health", status["source_health"])
 
 
 if __name__ == "__main__":

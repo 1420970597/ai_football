@@ -79,6 +79,17 @@ class AttemptInput(BaseModel):
     attempt_id: uuid.UUID
 
 
+class MediaOrphansInput(BaseModel):
+    owner: uuid.UUID
+    older_than_hours: int = Field(default=24, ge=1, le=720)
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class MediaOrphansAckInput(BaseModel):
+    owner: uuid.UUID
+    object_keys: list[str] = Field(min_length=1, max_length=500)
+
+
 async def source_for(conn, chat_id: str):
     row = await conn.fetchrow("SELECT id,allow_media FROM v2_expert_sources WHERE platform_chat_id=$1 AND enabled", chat_id)
     if not row:
@@ -266,6 +277,62 @@ async def pending_events(request: Request, limit: int = 30):
         "ORDER BY e.updated_at,e.id LIMIT $1", max(1, min(limit, 100)),
     )
     return {"items": [dict(row) for row in rows]}
+
+
+def _valid_media_key(value: str) -> bool:
+    return bool(value and len(value) <= 1024 and not value.startswith("/") and ".." not in value.split("/"))
+
+
+@router.post("/internal/telegram/media/orphans")
+async def media_orphans(body: MediaOrphansInput, request: Request):
+    authorized(request)
+    async with database.current_pool().acquire() as conn:
+        rows = await conn.fetch(
+            "WITH candidates AS ("
+            "SELECT e.id,e.source_id,s.platform_chat_id AS chat_id,e.updated_at,obj->>'object_key' AS object_key "
+            "FROM v2_telegram_events e JOIN v2_expert_sources s ON s.id=e.source_id "
+            "JOIN v2_source_checkpoints cp ON cp.source_id=e.source_id "
+            "CROSS JOIN LATERAL jsonb_array_elements(e.media_objects) obj "
+            "WHERE e.is_current AND e.media_state IN ('pending','failed') "
+            "AND e.updated_at < now()-($2::int * interval '1 hour') "
+            "AND cp.collector_owner=$1 AND cp.lease_until>now() ),"
+            "ready_refs AS ("
+            "SELECT obj->>'object_key' AS object_key FROM v2_telegram_events e "
+            "CROSS JOIN LATERAL jsonb_array_elements(e.media_objects) obj "
+            "WHERE e.is_current AND e.media_state='ready' "
+            "UNION ALL SELECT obj->>'object_key' AS object_key FROM v2_expert_messages m "
+            "CROSS JOIN LATERAL jsonb_array_elements(m.media_objects) obj "
+            "WHERE m.media_state='ready' AND m.deleted_at IS NULL ) "
+            "SELECT DISTINCT ON (c.object_key) c.id,c.chat_id,c.object_key,c.updated_at "
+            "FROM candidates c LEFT JOIN ready_refs r ON r.object_key=c.object_key "
+            "WHERE c.object_key IS NOT NULL AND r.object_key IS NULL "
+            "ORDER BY c.object_key,c.updated_at LIMIT $3",
+            body.owner, body.older_than_hours, body.limit,
+        )
+    return {"items": [dict(row) for row in rows], "state": "ready"}
+
+
+@router.post("/internal/telegram/media/orphans/ack")
+async def acknowledge_media_orphans(body: MediaOrphansAckInput, request: Request):
+    authorized(request)
+    keys = [str(value).strip() for value in body.object_keys]
+    if any(not _valid_media_key(value) for value in keys):
+        raise HTTPException(status_code=422, detail="invalid remote media object reference")
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            result = await conn.execute(
+                "UPDATE v2_telegram_events e SET media_objects=COALESCE(("
+                "SELECT jsonb_agg(obj) FROM jsonb_array_elements(e.media_objects) obj "
+                "WHERE COALESCE(obj->>'object_key','') <> ALL($2::text[])), '[]'::jsonb),"
+                "last_error=COALESCE(e.last_error,'media_orphan_reclaimed'),updated_at=now() "
+                "FROM v2_source_checkpoints cp WHERE cp.source_id=e.source_id "
+                "AND cp.collector_owner=$1 AND cp.lease_until>now() AND e.is_current "
+                "AND e.media_state IN ('pending','failed') AND EXISTS ("
+                "SELECT 1 FROM jsonb_array_elements(e.media_objects) obj "
+                "WHERE obj->>'object_key'=ANY($2::text[]))",
+                body.owner, keys,
+            )
+    return {"acknowledged": int(result.rsplit(" ", 1)[-1]), "object_keys": len(keys)}
 
 
 @router.post("/internal/telegram/observed")
