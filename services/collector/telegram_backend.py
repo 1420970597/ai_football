@@ -18,6 +18,9 @@ class TelegramBackend:
     async def sources(self) -> list[dict[str, Any]]:
         return (await self._call("GET", "/sources"))["items"]
 
+    async def directory(self, body: dict) -> dict:
+        return await self._call("PUT", "/directory", body)
+
     async def checkpoint(self, chat_id: str, owner: str) -> dict:
         return await self._call("POST", "/checkpoints/claim", {"chat_id": chat_id, "owner": owner})
 

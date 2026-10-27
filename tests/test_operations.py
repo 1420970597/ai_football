@@ -46,6 +46,8 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
             "source_health": {
                 "leyu": {"state": "unavailable", "last_error": "websocket_http_403", "fixtures": 3, "config_version": 7},
                 "websocket": {"state": "backoff", "reconnects": 2, "queue_depth": 4,
+                              "subscription_expected": 100, "subscription_send_missing": 2,
+                              "subscription_miss_ratio": None, "queue_alert_state": "degraded",
                               "source_lag_ms_p95": 1250.5, "delivery_age_ms_p95": 2100,
                               "raw_payload": {"token": "must-not-leak"}},
                 "future": {"secret": "must-not-leak"},
@@ -61,6 +63,9 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(4, result["sources"]["websocket"]["queue_depth"])
         self.assertEqual(1250.5, result["sources"]["websocket"]["source_lag_ms_p95"])
         self.assertEqual(2100, result["sources"]["websocket"]["delivery_age_ms_p95"])
+        self.assertEqual(2, result['sources']['websocket']['subscription_send_missing'])
+        self.assertIsNone(result['sources']['websocket']['subscription_miss_ratio'])
+        self.assertEqual('degraded', result['sources']['websocket']['queue_alert_state'])
         self.assertNotIn("raw_payload", result["sources"]["websocket"])
         self.assertNotIn("account", json.dumps(result))
         self.assertNotIn("future", result["sources"])
@@ -123,6 +128,19 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([],response.json()['items'])
             self.assertTrue(response.json()['read_only'])
             self.assertEqual(405,(await self.http.post('/api/v1/admin/orders')).status_code)
+
+    async def test_provider_health_uses_recent_saved_result_without_claiming_accuracy(self):
+        source, expert, message, job = [uuid.uuid4() for _ in range(4)]
+        await self.pool.execute("INSERT INTO v2_expert_sources(id,platform_chat_id,display_name) VALUES($1,'isolated-model','模型健康样本')", source)
+        await self.pool.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,'8877','样本作者')", expert)
+        await self.pool.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) VALUES($1,$2,$3,'1','纯测试',now())", message,source,expert)
+        await self.pool.execute("INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key) VALUES($1,$2,'unresolved','isolated-model-health')",job,message)
+        await self.pool.execute("INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) VALUES($1,$2,1,'hermes_result',$3)",uuid.uuid4(),job,{'model':'hermes-agent','content':'private content must not be forwarded'})
+        with patch.object(operations,'require_admin',AsyncMock(return_value=self.actor)), patch.dict(os.environ,{},clear=True):
+            result=(await self.http.get('/api/v1/admin/diagnostics')).json()
+        self.assertEqual('recent_success',result['hermes']['provider'])
+        self.assertEqual('persisted_framework_result_not_accuracy',result['hermes']['basis'])
+        self.assertNotIn('private content',json.dumps(result))
 
     async def test_real_order_rows_exclude_secrets_and_cursor_is_bound_to_filters(self):
         user, account, source, expert, message = [uuid.uuid4() for _ in range(5)]

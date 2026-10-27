@@ -251,7 +251,7 @@ async def export_own_data(request: Request, section: str = Query(default="profil
                 if len(rows) > limit:
                     next_cursor = items[-1]["created_at"].isoformat() + "~" + str(items[-1]["id"])
             else:
-                rows = await conn.fetch("SELECT id,signal_id,account_id,state,stake,price,reserved_stake,provider_order_no,submitted_at,settled_net,settled_at,created_at,updated_at FROM v2_bet_orders WHERE user_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4", user["id"], stamp, identifier, limit + 1)
+                rows = await conn.fetch("SELECT id,signal_id,account_id,state,stake,price,reserved_stake,provider_order_no,submitted_at,settled_net,settled_at,created_at,updated_at,provider_price,provider_stake,provider_payout,provider_currency,provider_fees,provider_placed_at,receipt_observed_at,pnl_basis FROM v2_bet_orders WHERE user_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3::uuid)) ORDER BY created_at DESC,id DESC LIMIT $4", user["id"], stamp, identifier, limit + 1)
                 items = [dict(row) for row in rows[:limit]]
                 if len(rows) > limit:
                     next_cursor = items[-1]["created_at"].isoformat() + "~" + str(items[-1]["id"])

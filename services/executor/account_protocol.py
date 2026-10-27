@@ -140,9 +140,15 @@ def normalize_order(row: Mapping[str, Any], state: str) -> dict[str, Any]:
     basis = "provider_reported_net" if profit is not None else "unknown"
     if raw_profit is None and stake is not None and payout is not None:
         profit, basis = str(Decimal(payout) - Decimal(stake)), "gross_return_minus_stake"
+    currency = _first(merged, "currencyCode", "currency")
+    currency = currency if isinstance(currency, str) and re.fullmatch(r"[A-Z]{3}", currency) else None
+    price = _optional_number(_first(merged, "oddFinally", "oddsFinally"))
+    # These are the decimal execution-price fields used by the verified protocol.
+    # The unrelated `odds` integer uses ODDS_SCALE and is not a decimal price.
+    price = price if price is not None and Decimal(price) > 1 else None
     return {"order_no": str(identifier), "identifier_kind": "order" if parent_id else "detail",
             "state": state, "stake": stake, "payout": payout, "net_profit": profit, "pnl_basis": basis, "fees": None,
-            "price": _optional_number(_first(merged, "oddFinally", "oddsFinally", "odds", "odd")),
+            "price": price, "currency": currency,
             "placed_at": timestamp(_first(merged, "betTime", "createTime", "orderTime")),
             "settled_at": timestamp(_first(merged, "settleTime", "settled_at", "settleAt", "settlementTime")),
             "match_id": str(_first(merged, "matchId", "eventId", "mid") or "") or None,

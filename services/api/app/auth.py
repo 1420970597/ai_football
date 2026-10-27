@@ -278,7 +278,7 @@ async def register(body: RegisterInput, request: Request, response: Response):
     name = _display_name(body.display_name)
     if not EMAIL_RE.fullmatch(email):
         raise HTTPException(status_code=422, detail="邮箱格式无效")
-    await _limit(request, "register", maximum=5)
+    await _limit(request, "register", email, maximum=5)
     password = await _hash_job(request, hash_password, body.password)
     user = {"id": uuid.uuid4(), "email": email, "display_name": name, "role": "user"}
     async with database.current_pool().acquire() as conn:

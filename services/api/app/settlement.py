@@ -29,6 +29,10 @@ def _score(value) -> int | None:
 
 
 def _period_scores(period: str, result: dict) -> tuple[int, int] | None:
+    for key in ('home', 'away'):
+        full, half = _score(result.get(key)), _score(result.get('half_' + key))
+        if full is not None and half is not None and half > full:
+            return None
     if period == "first_half":
         home, away = _score(result.get("half_home")), _score(result.get("half_away"))
     elif period in {"full_time", "second_half"}:

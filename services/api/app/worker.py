@@ -11,7 +11,7 @@ import uuid
 import httpx
 from . import database
 from .config import load_settings
-from .hermes_client import delete_session, review_message
+from .hermes_client import delete_session, resolve_review_settings, review_message
 from .review_state import active_job, trace
 from fastapi import HTTPException
 import asyncpg
@@ -42,7 +42,7 @@ def failure_category(exc: BaseException) -> tuple[str, bool]:
         return "lease_lost", True
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)):
         return "timeout", True
-    if isinstance(exc, httpx.NetworkError):
+    if isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError)):
         return "network", True
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
@@ -52,7 +52,8 @@ def failure_category(exc: BaseException) -> tuple[str, bool]:
             return "provider_transient", True
         return "provider_rejected", False
     message = str(exc).lower()
-    if "unsupported telegram image" in message or "image type" in message or "image total bytes" in message:
+    if any(value in message for value in ('unsupported telegram image', 'image type', 'image total bytes',
+            'remote image', 'review image count', 'telegram image exceeds')):
         return "visual_input_invalid", False
     if "content_filter" in message or "did not finish" in message:
         return "model_rejected", False
@@ -221,10 +222,12 @@ async def process_job(pool, settings, job: dict) -> None:
     review_task = lease_task = None
     started = time.monotonic()
     try:
+        settings = await resolve_review_settings(settings)
         await _add_trace(pool, job, "hermes_request", {
             "message_id": str(job["message"]["id"]), "raw_text": job["message"]["raw_text"],
             "reply_text": job["message"].get("reply_text"), "media_objects": job["message"]["media_objects"],
             "model": settings.hermes_model, "worker_attempt": job["attempts"],
+            "configuration_version": getattr(settings, "configuration_version", None),
         })
         review_task = asyncio.create_task(asyncio.wait_for(
             review_message(settings, job["message"], job["id"], job["attempt_id"]), timeout=REVIEW_TIMEOUT,

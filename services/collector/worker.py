@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 import signal
@@ -11,6 +11,7 @@ from typing import Any, Mapping
 import httpx
 
 from .leyu_protocol import LeyuError, RateLimited
+from .leyu_health import ThresholdAlert
 from .leyu_realtime import LeyuRealtime
 from .leyu_runtime import LeyuRuntime
 from .telegram import TelegramCollector
@@ -25,6 +26,7 @@ PREGAME_NEAR_REFRESH_SECONDS = max(30, min(600, int(os.environ.get("PREGAME_NEAR
 PREGAME_FAR_REFRESH_SECONDS = max(60, min(1800, int(os.environ.get("PREGAME_FAR_REFRESH_SECONDS", "300"))))
 ODDS_FIXTURE_BUDGET = max(12, min(300, int(os.environ.get("ODDS_FIXTURE_BUDGET", "96"))))
 RATE_LIMIT_COOLDOWN_SECONDS = 60
+MAX_RATE_LIMIT_COOLDOWN_SECONDS = 900
 
 
 def configure_logging() -> None:
@@ -47,6 +49,38 @@ async def get_config(client: httpx.AsyncClient, api_url: str = API_URL) -> dict[
 
 def category(error: BaseException) -> str:
     return error.category if isinstance(error, LeyuError) else type(error).__name__
+
+
+def failure_group(error: BaseException, *, stage: str = "source") -> str:
+    """Stable, redacted failure family; ingestion refusal is not upstream refusal."""
+    if stage == "ingestion":
+        return "ingestion"
+    value = category(error)
+    if isinstance(error, RateLimited):
+        return "rate_limit"
+    if value in {"session_expired", "authorized_session_missing"}:
+        return "session"
+    if value in {"permission_denied", "http_access_denied"}:
+        return "permission"
+    if value == "upstream_domain_unresolved":
+        return "domain"
+    if value.startswith(("invalid_", "response_", "encoded_", "decoded_")):
+        return "configuration" if any(part in value for part in ("config", "base_url", "budget")) else "protocol"
+    if "timeout" in value.lower() or "transport" in value.lower() or isinstance(error, (httpx.TransportError, OSError)):
+        return "network"
+    if value.endswith("_missing") or value == "configuration_changed":
+        return "configuration"
+    return "source" if isinstance(error, LeyuError) else "internal"
+
+
+def collection_retry_delay(interval: float, failures: int, *, rate_limit_streak: int = 0,
+                           retry_after: int | None = None) -> float:
+    if rate_limit_streak:
+        # Consecutive limits lengthen the cooldown; a push cannot wake this wait.
+        requested = retry_after if type(retry_after) is int else 0
+        return min(MAX_RATE_LIMIT_COOLDOWN_SECONDS, max(interval, requested,
+                   RATE_LIMIT_COOLDOWN_SECONDS * 2 ** min(max(rate_limit_streak - 1, 0), 4)))
+    return interval if failures == 0 else min(60, 2 ** min(failures, 6))
 
 
 async def wait_for_work(stop: asyncio.Event, delay: float, wake: asyncio.Event | None = None) -> None:
@@ -127,11 +161,14 @@ class CollectorService:
         self._odds_refresh_at: dict[str, float] = {}
         self.odds_fixture_budget = max(1, min(300, odds_fixture_budget))
         self._upload_lock = asyncio.Lock()
+        self._poll_alert = ThresholdAlert(1, 0, raise_after=2, recover_after=3)
         self.runtime = runtime_factory(api, self.api_url, base_config)
         self.telegram = telegram_factory({}, api=api, api_url=self.api_url + "/telegram")
         self.resync = asyncio.Event()
         self.status: dict[str, Any] = {
-            "leyu": {"state": "starting", "last_error": "", "last_error_code": "", "official_result_confirmation": "unconfigured"},
+            "leyu": {"state": "starting", "last_error": "", "last_error_code": "", "official_result_confirmation": "unconfigured",
+                     "poll_attempts": 0, "poll_successes": 0, "poll_failures": 0,
+                     "resync_requests": 0, **self._poll_alert.fields("poll_alert")},
             "telegram": {"state": "starting", "last_error": ""},
         }
         self.telegram.source_health = self.status
@@ -191,6 +228,7 @@ class CollectorService:
             self._odds_refresh_at[mid] = stamp
 
     async def request_resync(self) -> None:
+        self.status["leyu"]["resync_requests"] += 1
         self.resync.set()
 
     async def upload(self, fixtures: list[dict[str, Any]], *, odds_mids: list[str] | None = None) -> int:
@@ -224,6 +262,7 @@ class CollectorService:
 
     async def leyu_loop(self, stop: asyncio.Event) -> None:
         failures = 0
+        rate_limit_streak = 0
         last_start = 0.0
         while not stop.is_set():
             # 未知推送会请求补同步，但不能制造无间隔全站拉取风暴。
@@ -231,52 +270,89 @@ class CollectorService:
             if stop.is_set():
                 return
             last_start = time.monotonic()
+            poll_at = datetime.now(timezone.utc)
+            self.status["leyu"]["poll_attempts"] += 1
             self.resync.clear()
             rate_limited = False
+            retry_after = None
+            stage = "source"
+            problem = False
             try:
                 requested_mids: list[str] = []
                 def choose_odds(fixtures: list[dict[str, Any]]) -> list[str]:
                     requested_mids[:] = self.odds_due_mids(fixtures)
                     return requested_mids
                 fixtures = await self.runtime.collect(odds_mids=choose_odds)
+                stage = "ingestion"
                 accepted = await self.upload(fixtures, odds_mids=requested_mids)
                 self.mark_odds_refreshed([str(f["source_match_id"]) for f in fixtures
                                           if f.get("markets_complete") and f.get("source_match_id")])
                 report = self.runtime.last_report
                 rate_limited = bool(report.get("rate_limited"))
+                retry_after = report.get("retry_after_seconds")
                 complete = report.get("complete_market_fixtures", 0)
                 freshness = quote_freshness(fixtures)
                 expected = report.get("odds_requested_fixtures", len(fixtures))
+                first_failure = next(iter(report.get("failed_batches", [])), {})
+                reported_error = (report.get("rate_limit_category") or first_failure.get("category")
+                                  or self.runtime.config_validation_error or "")
+                reported_code = report.get("rate_limit_code") or first_failure.get("code", "")
+                reported_group = ("rate_limit" if rate_limited else
+                                  failure_group(LeyuError(reported_error)) if reported_error else
+                                  "partial_snapshot" if complete != expected else "")
                 state = ("degraded" if self.runtime.config_validation_error else
-                         "healthy" if complete == expected and (freshness["freshness"] in {"fresh", "unknown"}) else "partial")
+                         "healthy" if not rate_limited and complete == expected and (freshness["freshness"] in {"fresh", "unknown"}) else "partial")
+                problem = rate_limited or state != "healthy"
                 self.status["leyu"].update(state=state, fixtures=len(fixtures), accepted=accepted,
                                            collection_transport=report.get("collection_transport", "direct"),
                                            complete_market_fixtures=complete,
-                                           last_error=report.get("rate_limit_category", ""),
-                                           last_error_code=report.get("rate_limit_code", ""),
+                                           last_error=reported_error, last_error_code=reported_code,
+                                           failure_group=reported_group or ("freshness" if problem else ""),
+                                           last_operation=report.get("rate_limit_operation") or first_failure.get("operation", ""),
+                                           last_http_status=report.get("rate_limit_http_status") or first_failure.get("http_status"),
                                            failed_batches=len(report.get("failed_batches", [])),
                                            rate_limited=rate_limited,
                                            last_success_at=datetime.now(timezone.utc).isoformat(), config_version=self.runtime.version,
                                            config_validated_at=self.runtime.config_validated_at,
                                            config_validation_error=self.runtime.config_validation_error,
                                            odds_requested_fixtures=expected, **freshness)
-                log.info("Leyu source state=%s fixtures=%d accepted=%d", state, len(fixtures), accepted)
+                self.status["leyu"]["poll_successes"] += 1
+                if not problem:
+                    self.status["leyu"]["last_complete_at"] = datetime.now(timezone.utc).isoformat()
                 failures = 0
             except Exception as exc:
                 failures += 1
+                problem = True
                 rate_limited = isinstance(exc, RateLimited)
+                retry_after = exc.retry_after_seconds if rate_limited else None
                 update = {"state": "unavailable", "last_error": category(exc),
-                          "last_error_code": exc.code if isinstance(exc, LeyuError) else ""}
+                          "last_error_code": exc.code if isinstance(exc, LeyuError) else "",
+                          "failure_group": failure_group(exc, stage=stage),
+                          "last_operation": exc.operation if isinstance(exc, LeyuError) else stage,
+                          "last_http_status": exc.http_status if isinstance(exc, LeyuError) else
+                                              exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None,
+                          "rate_limited": rate_limited}
                 if self.runtime.version > 0:
                     update["config_version"] = self.runtime.version
                 if self.runtime.config_validated_at:
                     update["config_validated_at"] = self.runtime.config_validated_at
                 update["config_validation_error"] = self.runtime.config_validation_error
                 self.status["leyu"].update(update)
-                log.warning("Leyu source unavailable category=%s", category(exc))
-            delay = self.interval if failures == 0 else min(60, 2 ** min(failures, 6))
-            if rate_limited:
-                delay = max(delay, RATE_LIMIT_COOLDOWN_SECONDS)
+                self.status["leyu"]["poll_failures"] += 1
+            rate_limit_streak = rate_limit_streak + 1 if rate_limited else 0
+            delay = collection_retry_delay(self.interval, failures, rate_limit_streak=rate_limit_streak, retry_after=retry_after)
+            self._poll_alert.observe(1 if problem else 0)
+            self.status["leyu"].update(last_poll_at=poll_at.isoformat(),
+                last_poll_elapsed_ms=round((time.monotonic() - last_start) * 1000, 1),
+                consecutive_failures=failures, rate_limit_streak=rate_limit_streak,
+                backoff_seconds=delay, retry_at=(datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(),
+                **self._poll_alert.fields("poll_alert"))
+            report = self.status["leyu"]
+            log.log(logging.WARNING if problem else logging.INFO,
+                    "Leyu poll state=%s category=%s code=%s operation=%s http_status=%s elapsed_ms=%s retry_seconds=%s config_version=%s last_success_at=%s",
+                    report["state"], report["last_error"], report["last_error_code"],
+                    report.get("last_operation", ""), report.get("last_http_status"),
+                    report["last_poll_elapsed_ms"], delay, report.get("config_version"), report.get("last_success_at"))
             # 上游拒绝与网络失败按退避等待，WS补同步不能绕过失败退避。
             await wait_for_work(stop, delay, self.resync if failures == 0 and not rate_limited else None)
 

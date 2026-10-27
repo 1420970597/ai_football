@@ -2,18 +2,20 @@ import asyncio
 import copy
 from datetime import datetime, timedelta, timezone
 import json
+from io import BytesIO
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import httpx
+from PIL import Image
 from telethon import utils
 from telethon.errors import (AuthKeyDuplicatedError, FloodWaitError,
                              PasswordHashInvalidError, SessionPasswordNeededError)
 from telethon.tl.types import Channel, Chat, ChatPhotoEmpty, ChatParticipantAdmin, ChatParticipants
 from telethon.tl.functions.messages import GetFullChatRequest
 
-from collector.telegram import TelegramCollector, MAX_MEDIA_BYTES, _valid_image
+from collector.telegram import TelegramCollector, MAX_MEDIA_BYTES, _valid_image, _image_dimensions
 
 
 CONFIG = {"telegram_api_id": "12345", "telegram_api_hash": "test-api-hash-only",
@@ -350,6 +352,18 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "image_format_mismatch"):
             await self.collector._store_media("-1001", Message(1, media=True))
         self.assertTrue(_valid_image(b"\x89PNG\r\n\x1a\nrest", "image/png"))
+
+    async def test_decoded_pixels_and_corrupt_image_never_reach_storage(self):
+        image = BytesIO()
+        Image.new('RGB', (48, 32), 'blue').save(image, format='PNG')
+        self.assertEqual({'width':48,'height':32,'frames':1}, _image_dimensions(image.getvalue(), 'image/png'))
+        with patch('collector.telegram.MAX_IMAGE_PIXELS', 100):
+            with self.assertRaisesRegex(ValueError, 'image_pixel_limit'):
+                _image_dimensions(image.getvalue(), 'image/png')
+        self.collector.client = self.client
+        self.client.download_chunks = [b'\x89PNG\r\n\x1a\nrest']
+        with self.assertRaises(ValueError):
+            await self.collector._store_media('-1001', Message(1, media=True, mime='image/png'))
 
     async def test_control_authentication_and_password_never_persisted(self):
         await self.collector.start_control_server(token="test-internal-token", host="127.0.0.1", port=0)

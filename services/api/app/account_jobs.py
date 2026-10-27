@@ -96,11 +96,19 @@ async def reconcile_receipts(conn, account, receipts: list[dict]):
         if not row:
             continue
         state = receipt.get("state")
-        if state == "settled":
-            await conn.execute("UPDATE v2_bet_orders SET state='settled',reserved_stake=0,settled_net=$2,settled_at=now(),result_payload=$3,updated_at=now() WHERE id=$1",
-                               row["id"], Decimal(receipt['net_profit']) if receipt.get('net_profit') is not None else None, receipt)
-        elif state == "unsettled":
-            await conn.execute("UPDATE v2_bet_orders SET state='accepted',result_payload=$2,updated_at=now() WHERE id=$1", row["id"], receipt)
-        else:
+        if state not in {"settled", "unsettled"}:
             continue
+        digest = hashlib.sha256(json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        await conn.execute("INSERT INTO v2_order_receipt_evidence(id,order_id,receipt_sha256,payload) VALUES($1,$2,$3,$4) "
+                           "ON CONFLICT(order_id,receipt_sha256) DO NOTHING",uuid.uuid4(),row['id'],digest,receipt)
+        numeric = lambda key: Decimal(receipt[key]) if receipt.get(key) is not None else None
+        timestamp = lambda key: datetime.fromisoformat(receipt[key].replace('Z', '+00:00')) if receipt.get(key) else None
+        await conn.execute(
+            "UPDATE v2_bet_orders SET state=$2,reserved_stake=CASE WHEN $2='settled' THEN 0 ELSE reserved_stake END,"
+            "settled_net=$3,settled_at=$4,result_payload=$5,provider_price=$6,provider_stake=$7,provider_payout=$8,"
+            "provider_currency=$9,provider_fees=$10,provider_placed_at=$11,pnl_basis=$12,receipt_observed_at=now(),updated_at=now() WHERE id=$1",
+            row["id"], "settled" if state == "settled" else "accepted",
+            numeric('net_profit') if state == "settled" else None, timestamp('settled_at') if state == "settled" else None,
+            receipt, numeric('price'), numeric('stake'), numeric('payout'), receipt.get('currency'), numeric('fees'),
+            timestamp('placed_at'), receipt.get('pnl_basis', 'unknown'))
         await audit(conn, None, "executor", "order_reconciled", "bet_order", str(row["id"]), details={"state": state})

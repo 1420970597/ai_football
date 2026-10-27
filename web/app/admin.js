@@ -71,8 +71,9 @@ async function loadDiagnostics() {
       value === null || value === undefined ? "暂无样本" : esc(value) + suffix;
     const leyuIssue = leyu.config_validation_error || leyu.last_error || "无错误分类";
     const leyuCode = leyu.last_error_code ? ` code=${esc(leyu.last_error_code)}` : "";
+    const recoveryStats = `轮询成功/失败 ${metric(leyu.poll_successes)}/${metric(leyu.poll_failures)} · 故障类别 ${esc(leyu.failure_group || '无')} · 操作 ${esc(leyu.last_operation || '尚未记录')} · 冷却 ${metric(leyu.backoff_seconds, '秒')} · 下次尝试 ${stamp(leyu.retry_at)} · 连续失败 ${metric(leyu.consecutive_failures)} · 本地待发送订阅 ${metric(websocket.subscription_send_missing)}/${metric(websocket.subscription_expected)} · 上游订阅确认 ${websocket.subscription_confirmation_state === 'unverified' ? '未提供确认协议，无法计算真实漏订阅率' : esc(websocket.subscription_confirmation_state || '尚未核验')} · 告警（轮询/订阅/队列/写入）${esc(leyu.poll_alert_state || '未知')}/${esc(websocket.subscription_alert_state || '未知')}/${esc(websocket.queue_alert_state || '未知')}/${esc(websocket.delivery_alert_state || '未知')}`;
     const liveStats = `乐鱼采集 ${esc(leyu.state || "未知")}（${esc(leyuIssue)}${leyuCode}） · 实时连接 ${esc(websocket.state || "未知")} · 重连 ${metric(websocket.reconnects)} · 订阅请求数 ${metric(websocket.subscription_requests_sent)} · 接收帧 ${metric(websocket.received)} · 入队/写入 ${metric(websocket.events_received)}/${metric(websocket.events_delivered)} · 丢弃 ${metric(websocket.dropped)} · 写入失败 ${metric(websocket.delivery_failures)} · 队列 ${metric(websocket.queue_depth)}（高水位 ${metric(websocket.queue_high_water)}） · 源->接收 P95 ${metric(websocket.source_lag_ms_p95, "ms")}（${metric(websocket.source_lag_samples)} 样本） · 排队 P95 ${metric(websocket.queue_wait_ms_p95, "ms")} · 源->落库 P95 ${metric(websocket.delivery_age_ms_p95, "ms")}（${metric(websocket.delivery_age_samples)} 样本） · 最近事件 ${stamp(websocket.last_event_at)}`;
-    $("#admin-diagnostics").innerHTML =
+    $("#admin-diagnostics").innerHTML = `<p class="form-note">${recoveryStats}</p>` +
       `<p class="form-note">检查于 ${stamp(data.checked_at)} · 数据库 ${esc(data.database)} · 结构 ${esc(data.schema === "verified" ? "已核验" : data.schema === "migration_required" ? "需要迁移" : "状态未知")}${leyuVersion}</p><p class="form-note">${liveStats}</p><div class="status-grid">${[
         ["待审核", data.review_queue],
         ["媒体待上传", data.pending_media],
@@ -86,7 +87,7 @@ async function loadDiagnostics() {
         )
         .join(
           "",
-        )}</div><p class="form-note">对象存储：${esc({ unconfigured: "未配置", configured_unverified: "已配置，尚未真实验证" }[data.storage] || "状态未知")}。Hermes框架：${data.hermes?.gateway === "reachable" ? "可达" : "暂不可达"}；模型提供方尚未验证。</p><p class="form-note">赛事源时间 ${stamp(data.freshness?.fixture_source_at)} · 报价源时间 ${stamp(data.freshness?.quote_source_at)} · 消息接收 ${stamp(data.freshness?.message_received_at)}</p><p class="form-note">计数最多检查5000条，显示“5000+”表示超过上限；来源时间仅为已保存证据，不能代替连续采集健康检查。结构状态不代表失败迁移日志已完整核验。</p>`;
+        )}</div><p class="form-note">对象存储：${esc({ healthy: "读写与校验成功", unavailable: "读写或校验失败", unconfigured: "未配置", configured_unverified: "已配置，尚未真实验证" }[data.storage] || "状态未知")}。Hermes框架：${data.hermes?.gateway === "reachable" ? "可达" : "暂不可达"}；${esc({recent_success:"近15分钟有框架审核返回，准确性仍需独立核验",historical_success:"仅有历史框架审核返回，当前提供方未验证"}[data.hermes?.provider] || "模型提供方尚未验证")}。</p><p class="form-note">赛事源时间 ${stamp(data.freshness?.fixture_source_at)} · 报价源时间 ${stamp(data.freshness?.quote_source_at)} · 消息接收 ${stamp(data.freshness?.message_received_at)}</p><p class="form-note">计数最多检查5000条，显示“5000+”表示超过上限；来源时间仅为已保存证据，不能代替连续采集健康检查。结构状态不代表失败迁移日志已完整核验。</p>`;
   } catch (error) {
     $("#admin-diagnostics").innerHTML =
       `<p class="notice error">${esc(error.message)}。待办尚未核验。</p>`;
@@ -108,7 +109,7 @@ async function loadAdminOrders(append = false) {
       orderRows
         .map(
           (order) =>
-            `<div class="admin-record"><strong>${esc({ pending: "待执行", submitting: "提交中", accepted: "已接单", rejected: "已拒绝", unknown: "结果未知，需核对", settled: "已结算", cancelled: "已取消" }[order.state] || order.state)}</strong> · ${esc(order.email || order.user_id)} · ${esc(order.account_label || "账户未标注")}<br>${esc(order.home_team || order.fixture_id)} vs ${esc(order.away_team || "")}<br>${esc(order.market_name)} · ${esc(period(order.period))} · ${esc(order.line ?? "")} · ${esc(selection(order.selection))}<br>本金 ${decimal(order.stake)} · 成交赔率 ${decimal(order.price)} · 实际净收益 ${order.settled_net === null || order.settled_net === undefined ? "待结算" : signed(order.settled_net)}<br><span class="muted">${stamp(order.created_at)} · ${esc(order.provider_order_no || "暂无上游回执")}<br>记录 ${esc(order.id)}</span></div>`,
+            `<div class="admin-record"><strong>${esc({ pending: "待执行", submitting: "提交中", accepted: "已接单", rejected: "已拒绝", unknown: "结果未知，需核对", settled: "已结算", cancelled: "已取消" }[order.state] || order.state)}</strong> · ${esc(order.email || order.user_id)} · ${esc(order.account_label || "账户未标注")}<br>${esc(order.home_team || order.fixture_id)} vs ${esc(order.away_team || "")}<br>${esc(order.market_name)} · ${esc(period(order.period))} · ${esc(order.line ?? "")} · ${esc(selection(order.selection))}<br>预留本金 ${decimal(order.stake)} · 预留赔率 ${decimal(order.price)}<br>官方成交本金 ${order.provider_stake == null ? "未知" : decimal(order.provider_stake)} · 成交赔率 ${order.provider_price == null ? "未知" : decimal(order.provider_price)} · 币种 ${esc(order.provider_currency || "未知")}<br>实际净收益 ${order.settled_net == null ? (order.state === "settled" ? "官方回执未提供" : "待结算") : signed(order.settled_net)} · 手续费 ${order.provider_fees == null ? "未知" : decimal(order.provider_fees)}<br><span class="muted">官方下单 ${order.provider_placed_at ? stamp(order.provider_placed_at) : "未知"} · 官方结算 ${order.settled_at ? stamp(order.settled_at) : "未知"}<br>${stamp(order.created_at)} · ${esc(order.provider_order_no || "暂无上游回执")}<br>记录 ${esc(order.id)}</span></div>`,
         )
         .join("") || '<p class="empty-state">当前条件下没有订单</p>';
     $("#admin-orders-more").hidden = !orderCursor;
@@ -200,8 +201,8 @@ async function saveSettings(form) {
   );
   await loadSettings();
 }
-async function loadSources() {
-  const previous = $("#source-select").value;
+async function loadSources(preferredId = null) {
+  const previous = preferredId || $("#source-select").value;
   try {
     const data = await adminApi("/sources");
     sources = data.items;
@@ -246,6 +247,7 @@ async function selectSource() {
   if (!source) return;
   try {
     const data = await adminApi("/sources/" + source.id + "/experts");
+    if (selectedSource()?.id !== source.id) return;
     $("#trusted-experts").innerHTML =
       "<h3>信任作者</h3>" +
       data.items
@@ -255,8 +257,10 @@ async function selectSource() {
         )
         .join("");
   } catch (error) {
+    if (selectedSource()?.id !== source.id) return;
     $("#trusted-experts").textContent = error.message;
   }
+  if (selectedSource()?.id === source.id) await listAdmins(false);
 }
 const tgNames = {
   idle: "未开始授权",
@@ -384,11 +388,11 @@ async function listDialogs(append = false) {
       $("#tg-dialog-list").setAttribute("aria-busy", "false");
   }
 }
-async function listAdmins(append = false) {
+async function listAdmins(append = false, scope = "admins") {
   const source = selectedSource();
   if (!source) return;
   const query = $("#tg-admin-search").value.trim();
-  if (append && query !== adminsQuery) return listAdmins(false);
+  if (append && query !== adminsQuery) return listAdmins(false, scope);
   if (!append) {
     adminsCursor = null;
     adminsQuery = query;
@@ -402,7 +406,7 @@ async function listAdmins(append = false) {
   $("#source-admins").setAttribute("aria-busy", "true");
   $("#tg-admins-more").hidden = true;
   try {
-    const data = await adminApi("/telegram/admins?" + search);
+    const data = await adminApi("/telegram/" + scope + "?" + search);
     if (sequence !== adminsSequence) return;
     if (!["ok", "available", undefined].includes(data.state)) {
       $("#source-admins").innerHTML =
@@ -413,7 +417,7 @@ async function listAdmins(append = false) {
       .map(
         (e) => {
           const username = e.username ? `@${e.username}` : "无用户名";
-          const role = e.admin_kind === "owner" ? "群主" : e.admin_kind === "administrator" ? "管理员" : "身份未确认";
+          const role = e.admin_kind === "owner" ? "群主" : e.admin_kind === "administrator" ? "管理员" : e.admin_kind === "member" ? "普通成员" : "身份未确认";
           const avatar = e.has_avatar ? "头像可用" : e.avatar_state === "absent" ? "无头像" : "头像未读取";
           const anonymous = e.sender_identity_kind === "chat_sender" || String(e.sender_id).startsWith("-")
             ? " · 频道/群组发言身份，不代表具体匿名个人"
@@ -426,7 +430,8 @@ async function listAdmins(append = false) {
     else
       $("#source-admins").innerHTML =
         html ||
-        `<p class="muted" role="status">${adminsQuery ? "没有匹配的管理员，可清空搜索或手工添加已核验作者 ID。" : "未返回可枚举作者；匿名管理员可能不会列出。可手工添加已核验 ID。"}</p>`;
+        `<p class="muted" role="status">${adminsQuery ? "没有匹配的作者，可清空搜索或手工添加已核验作者 ID。" : "未返回可枚举作者；匿名管理员可能不会列出。可手工添加已核验 ID。"}</p>`;
+    $("#tg-admins-more").dataset.scope = scope;
     adminsCursor = data.next_cursor;
     $("#tg-admins-more").hidden = !adminsCursor;
   } catch (error) {
@@ -585,7 +590,7 @@ function bind() {
     const form = e.currentTarget;
     submit(form, async () => {
       const fd = new FormData(form);
-      await adminApi("/sources", {
+      const created = await adminApi("/sources", {
         method: "POST",
         body: {
           chat_id: fd.get("chat_id"),
@@ -596,7 +601,7 @@ function bind() {
       });
       form.reset();
       toast("监控来源已添加");
-      loadSources();
+      await loadSources(created.id);
     });
   };
   $("#expert-source-form").onsubmit = (e) => {
@@ -696,9 +701,10 @@ function bind() {
   $("#tg-dialogs").onclick = () => listDialogs();
   $("#tg-dialogs-more").onclick = () => listDialogs(true);
   $("#tg-admins").onclick = () => listAdmins();
-  $("#tg-admins-more").onclick = () => listAdmins(true);
+  $("#tg-admins-more").onclick = () => listAdmins(true, $("#tg-admins-more").dataset.scope || "admins");
+  $("#tg-directory-scope").onchange = () => listAdmins(false, $("#tg-directory-scope").value);
   for (const kind of ["dialog", "admin"]) {
-    const load = kind === "dialog" ? listDialogs : listAdmins;
+    const load = kind === "dialog" ? listDialogs : () => listAdmins(false, $("#tg-directory-scope").value);
     $("#tg-" + kind + "-search-form").onsubmit = (event) => {
       event.preventDefault();
       load();

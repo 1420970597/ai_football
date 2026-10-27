@@ -34,9 +34,11 @@ MARKETS = {
 class LeyuError(RuntimeError):
     """只携带脱敏类别及短业务码，不包含响应、URL 或凭据。"""
 
-    def __init__(self, category: str, code: str = ""):
+    def __init__(self, category: str, code: str = "", *, operation: str = "", http_status: int | None = None):
         self.category = category
         self.code = code if re.fullmatch(r"[0-9]{1,12}", code) else ""
+        self.operation = operation if operation in {"fixture_snapshot", "odds_batch", "odds_single"} else ""
+        self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
         super().__init__(category + (f" code={self.code}" if self.code else ""))
 
 
@@ -45,7 +47,10 @@ class AuthExpired(LeyuError):
 
 
 class RateLimited(LeyuError):
-    pass
+    def __init__(self, category: str, code: str = "", *, retry_after_seconds: int | None = None, **kwargs):
+        super().__init__(category, code, **kwargs)
+        self.retry_after_seconds = (min(900, max(0, retry_after_seconds))
+                                    if type(retry_after_seconds) is int else None)
 
 
 def objects(value: Any) -> list[Mapping[str, Any]]:

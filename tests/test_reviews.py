@@ -148,6 +148,9 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         duplicate = await self.post("record_expert_signals", signals=[pick])
         self.assertTrue(duplicate.json()["accepted"][0]["duplicate"])
         self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_quote_evidence"))
+        traces = await self.pool.fetch("SELECT payload FROM v2_analysis_traces WHERE trace_kind LIKE 'mcp_%'")
+        self.assertTrue(traces)
+        self.assertTrue(all(row['payload']['elapsed_ms'] >= 0 for row in traces))
 
     async def test_same_market_for_two_fixtures_creates_two_signals(self):
         await self.fixture(1)

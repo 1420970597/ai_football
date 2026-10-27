@@ -30,3 +30,19 @@ Web 默认绑定 `0.0.0.0:3003`，可通过 `http://<主机地址>:3003` 访问�
 ## 开发与验证
 
 Python、数据库、浏览器和 Android 验证均在 Docker 中执行；不要在宿主机安装项目依赖。完整项目约束、任务拆分和验证台账见 [AGENTS.md](AGENTS.md)、[TODO.md](TODO.md) 与 [docs/platform-v2/PROGRESS.md](docs/platform-v2/PROGRESS.md)。
+
+```sh
+sh infra/test/run.sh
+sh tests/browser/check.sh
+sh tests/browser/integration-check.sh
+sh tests/browser/accessibility-check.sh
+sh infra/check-runtime.sh
+```
+
+Telegram 来源可以同时监控多个群组，自动同步管理员及已信任作者的最新昵称。目录搜索可切换“所有成员 / 仅管理员”；选择成员后才加入监控，不会自动信任所有群成员。群成员不可枚举时保留明确原因及手动编号入口。
+
+管理设置中的模型与报价有效期按运行配置生效：模型在下一次审核任务中经 Hermes 框架调用，报价阈值在后续请求中读取。消息图片保留类型、字节数、哈希与解码校验；错误不能变成空图片成功。订单中的预留本金/赔率和官方成交字段分别展示，缺少官方证据显示未知。
+
+Web 与 API 使用独立入口网络；默认 `EDGE_SUBNET=10.79.253.0/28`，Web 地址 `.2`、API 地址 `.3`。如与既有 Docker 网段冲突，须同时设置 `EDGE_SUBNET`、`EDGE_WEB_IP`、`EDGE_API_IP`。API 仅信任该 Web 地址，入口覆盖外部转发头；不得配置通配信任。签名及发现配置采用专用只读组，仅采集与执行器获得该组。
+
+当前为开发候选。正式签名、设备安装升级、官方赛果及生产验收条件未满足时，不发布稳定版本。最近一轮历史整改、真实测量、失败及剩余依赖分别记录于 [采集核验](docs/platform-v2/HISTORICAL_COLLECTOR_AUDIT.md)、[结算统计核验](docs/platform-v2/HISTORICAL_SETTLEMENT_AUDIT.md)、[身份配置核验](docs/platform-v2/HISTORICAL_IDENTITY_AUDIT.md)、[存储恢复核验](docs/platform-v2/HISTORICAL_STORAGE_AUDIT.md) 与 [Android 核验](docs/platform-v2/HISTORICAL_ANDROID_AUDIT.md)。

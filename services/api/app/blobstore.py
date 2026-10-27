@@ -2,12 +2,41 @@ from __future__ import annotations
 
 import asyncio
 import os
+from io import BytesIO
+import warnings
 
 import boto3
 from botocore.config import Config
+from PIL import Image
 
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_PIXELS = 40_000_000
+MAX_IMAGE_FRAMES = 100
+MAX_ANIMATION_PIXELS = 80_000_000
+
+
+def validate_image(data: bytes) -> dict:
+    mime = image_mime(data)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(BytesIO(data)) as image:
+                width, height = image.size
+                frames = getattr(image, 'n_frames', 1)
+                if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+                    raise RuntimeError('remote image pixel limit exceeded')
+                if frames > MAX_IMAGE_FRAMES or width * height * frames > MAX_ANIMATION_PIXELS:
+                    raise RuntimeError('remote image animation limit exceeded')
+                actual = Image.MIME.get(image.format)
+                if actual != mime:
+                    raise RuntimeError('remote image decoder type conflicts with signature')
+                image.verify()
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError('remote image decoding failed') from exc
+    return {'mime_type': mime, 'width': width, 'height': height, 'frames': frames}
 
 
 def image_mime(data: bytes) -> str:
@@ -57,5 +86,5 @@ def _read_object(key: str) -> bytes:
 
 async def read_image(key: str) -> bytes:
     data = await asyncio.to_thread(_read_object, key)
-    image_mime(data)
+    await asyncio.to_thread(validate_image, data)
     return data

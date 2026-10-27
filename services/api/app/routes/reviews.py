@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -14,6 +15,7 @@ from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from .. import database
 from ..review_state import active_job, authorize, fresh_quote, quote_context, trace
+from ..runtime_settings import runtime_quote_max_age
 
 router = APIRouter(prefix="/internal/mcp")
 
@@ -93,6 +95,7 @@ def _position(request: Request, body: SearchInput, search_key: str) -> int:
 
 @router.post("/search_matches")
 async def search_matches(body: SearchInput, request: Request):
+    started = time.perf_counter()
     authorize(request, request.app.state.settings.mcp_internal_token)
     scope = {"team": body.team_query.strip().casefold(), "phase": body.phase, "competition": (body.competition_query or "").strip().casefold(),
              "from": body.from_utc.astimezone(timezone.utc).isoformat() if body.from_utc else None,
@@ -140,12 +143,13 @@ async def search_matches(body: SearchInput, request: Request):
                 body.review_id, search_key, cursor, not has_more, total,
             )
             result = {"search_key": search_key, "items": [row["candidate_data"] for row in page], "next_cursor": cursor, "search_complete": not has_more, "total_candidates": total}
-            await trace(conn, body.review_id, "mcp_search_matches", {"attempt_id": str(body.attempt_id), "scope": scope, "search_key": search_key, "after": position, "returned": len(page), "total": total, "complete": not has_more})
+            await trace(conn, body.review_id, "mcp_search_matches", {"attempt_id": str(body.attempt_id), "scope": scope, "search_key": search_key, "after": position, "returned": len(page), "total": total, "complete": not has_more, 'elapsed_ms': round((time.perf_counter()-started)*1000,3)})
             return result
 
 
 @router.post("/resolve_match")
 async def resolve_match(body: ResolveInput, request: Request):
+    started = time.perf_counter()
     authorize(request, request.app.state.settings.mcp_internal_token)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
@@ -180,12 +184,13 @@ async def resolve_match(body: ResolveInput, request: Request):
                     body.review_id, body.attempt_id, fixture["fixture_id"], body.search_key, evidence,
                 )
                 result = {"resolved": True, "fixture": fixture["candidate_data"]}
-            await trace(conn, body.review_id, "mcp_resolve_match", jsonable_encoder(body.model_dump()) | {"result": result})
+            await trace(conn, body.review_id, "mcp_resolve_match", jsonable_encoder(body.model_dump()) | {"result": result, 'elapsed_ms': round((time.perf_counter()-started)*1000,3)})
             return result
 
 
 @router.post("/list_match_markets")
 async def list_match_markets(body: MarketInput, request: Request):
+    started = time.perf_counter()
     authorize(request, request.app.state.settings.mcp_internal_token)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
@@ -203,18 +208,21 @@ async def list_match_markets(body: MarketInput, request: Request):
                     "ON CONFLICT(job_id,attempt_id,quote_id) DO UPDATE SET source_updated_at=EXCLUDED.source_updated_at,price=EXCLUDED.price,quote_context=EXCLUDED.quote_context,created_at=now()",
                     [(body.review_id, body.attempt_id, q["id"], q["source_updated_at"], q["price"], quote_context(q, fixture)) for q in quotes],
                 )
-            result = {"fixture": dict(fixture), "markets": [dict(q) | {"quote_id": str(q["id"]), "fresh": fresh_quote(q, request.app.state.settings.quote_max_age_seconds)} for q in quotes]}
-            await trace(conn, body.review_id, "mcp_list_match_markets", {"attempt_id": str(body.attempt_id), "fixture_id": body.fixture_id, "quote_ids": [str(q["id"]) for q in quotes]})
+            max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
+            result = {"fixture": dict(fixture), "markets": [dict(q) | {"quote_id": str(q["id"]), "fresh": fresh_quote(q, max_quote_age)} for q in quotes]}
+            await trace(conn, body.review_id, "mcp_list_match_markets", {"attempt_id": str(body.attempt_id), "fixture_id": body.fixture_id, "quote_ids": [str(q["id"]) for q in quotes], 'elapsed_ms': round((time.perf_counter()-started)*1000,3)})
             return result
 
 
 @router.post("/record_expert_signals")
 async def record_expert_signals(body: RecordInput, request: Request):
+    started = time.perf_counter()
     authorize(request, request.app.state.settings.mcp_internal_token)
     accepted, rejected = [], []
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             job = await active_job(conn, body.review_id, body.attempt_id)
+            max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
             for index, pick in enumerate(body.signals):
                 quote = await conn.fetchrow(
                     "SELECT q.*,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context FROM v2_current_quotes q "
@@ -230,7 +238,7 @@ async def record_expert_signals(body: RecordInput, request: Request):
                     reason = 'quote_or_score_context_changed'
                 elif quote["phase"] not in {"scheduled", "live"}:
                     reason = "fixture_not_active"
-                elif not fresh_quote(quote, request.app.state.settings.quote_max_age_seconds):
+                elif not fresh_quote(quote, max_quote_age):
                     reason = "quote_inactive_unknown_or_stale"
                 if reason:
                     rejected.append({"index": index, "reason": reason})
@@ -251,5 +259,5 @@ async def record_expert_signals(body: RecordInput, request: Request):
                     new_id = await conn.fetchval("SELECT id FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND line=$5 AND selection=$6", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"])
                 accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]), "selection": quote["selection"], "price": str(quote["price"])})
             result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
-            await trace(conn, body.review_id, "mcp_record_expert_signals", {"attempt_id": str(body.attempt_id), **result})
+            await trace(conn, body.review_id, "mcp_record_expert_signals", {"attempt_id": str(body.attempt_id), **result, 'elapsed_ms': round((time.perf_counter()-started)*1000,3)})
             return result

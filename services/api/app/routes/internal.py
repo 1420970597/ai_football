@@ -11,6 +11,15 @@ from .. import database
 router = APIRouter(prefix="/internal")
 
 
+@router.get("/review/config")
+async def review_configuration(request: Request):
+    # Internal gateway token only; never return provider credentials or collector settings.
+    _authorized(request, getattr(request.app.state.settings, "hermes_api_key", ""))
+    from ..runtime_settings import runtime_configuration
+    result = await runtime_configuration(request.app.state.settings)
+    return {**result, "provider": getattr(request.app.state.settings, "hermes_provider", "custom:cline")}
+
+
 @router.get("/collector/config")
 async def collector_config(request: Request):
     _authorized(request, request.app.state.settings.collector_token)

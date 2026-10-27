@@ -12,6 +12,7 @@ import httpx
 
 from app import database
 from app.database import apply_migrations
+from app.expert_statistics import StatisticsScope,signal_scope,QUALITY_METRIC_SQL
 from app.routes import expert_content, public, results
 
 
@@ -47,9 +48,15 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         await self.admin.execute(f'DROP DATABASE "{self.dbname}" WITH (FORCE)')
         await self.admin.close()
 
-    async def signal(self, selection='over', line='2.25', phase='scheduled', period='full_time'):
+    async def signal(self, selection='over', line='2.25', phase='scheduled', period='full_time', *, evidence=True):
         signal = uuid.uuid4()
         await self.pool.execute("INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,market_kind,period,line,selection,recommendation_price,quote_time,confidence) VALUES($1,$2,$3,'fixture',$4,'total','大小','total',$5,$6,$7,2,now(),0.8)", signal, self.message, self.expert, phase, period, line, selection)
+        if evidence:
+            await self.pool.execute(
+                "INSERT INTO v2_quote_evidence(id,evidence_kind,reference_id,fixture_id,market_id,market_name,period,line,selection,price,source_updated_at,evidence,score_baseline) "
+                "SELECT $1,'expert_signal',id,fixture_id,market_id,market_name,period,line,selection,recommendation_price,quote_time,"
+                "jsonb_build_object('quote_id',$2::text,'score_basis',score_basis),score_baseline FROM v2_expert_signals WHERE id=$3",
+                uuid.uuid4(), str(uuid.uuid4()), signal)
         return signal
 
     def result(self, **extra):
@@ -74,7 +81,7 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(409, (await self.submit(self.result())).status_code)
 
     async def test_message_detail_exposes_quote_id_from_evidence_without_requiring_current_quote(self):
-        signal = await self.signal()
+        signal = await self.signal(evidence=False)
         quote_id = str(uuid.uuid4())
         await self.pool.execute(
             "INSERT INTO v2_quote_evidence(id,evidence_kind,reference_id,fixture_id,market_id,market_name,selection,price,source_updated_at,evidence) "
@@ -117,6 +124,142 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, response.status_code, response.text)
         self.assertEqual('live_market_score_rule_unknown', await self.pool.fetchval('SELECT settlement_reason FROM v2_expert_signals'))
 
+    async def test_missing_or_mismatched_immutable_price_never_creates_profit(self):
+        missing = await self.signal(evidence=False)
+        mismatch = await self.signal(line='3.5')
+        await self.pool.execute('UPDATE v2_quote_evidence SET price=3 WHERE reference_id=$1', mismatch)
+        response = await self.submit(self.result(home=4))
+        self.assertEqual(200, response.status_code, response.text)
+        rows = await self.pool.fetch('SELECT outcome,unit_net,settlement_reason FROM v2_expert_signals')
+        self.assertTrue(all(row['outcome']=='pending' and row['unit_net'] is None for row in rows))
+        self.assertTrue(all(row['settlement_reason']=='recommendation_quote_evidence_missing_or_mismatched' for row in rows))
+        summary = (await self.client.get('/api/v1/public/experts')).json()['items'][0]
+        self.assertEqual((2,0,2,2), tuple(summary[k] for k in ('total_signals','eligible_signals','excluded_signals','missing_quote_evidence')))
+        self.assertIsNone(summary['accuracy'])
+        self.assertEqual(0, summary['settled_signals'])
+
+    async def test_projection_rebuild_is_idempotent_and_preserves_settlement_time(self):
+        signal = await self.signal()
+        self.assertEqual(200, (await self.submit(self.result(home=3))).status_code)
+        original = await self.pool.fetchrow('SELECT outcome,unit_net,settled_at FROM v2_expert_signals WHERE id=$1', signal)
+        await self.pool.execute("UPDATE v2_expert_signals SET outcome='loss',unit_net=-99,effective_stake=1 WHERE id=$1", signal)
+        excluded = (await self.client.get('/api/v1/public/experts')).json()['items'][0]
+        self.assertEqual(1, excluded['invalid_settlement_evidence'])
+        self.assertEqual(0, excluded['unit_net'])
+        for _ in range(2):
+            response = await self.client.post('/internal/collector/results/rebuild',json={'fixture_ids':['fixture']},headers={'Authorization':'Bearer isolated-collector'})
+            self.assertEqual(200, response.status_code, response.text)
+        restored = await self.pool.fetchrow('SELECT outcome,unit_net,settled_at FROM v2_expert_signals WHERE id=$1', signal)
+        self.assertEqual(dict(original), dict(restored))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_signal_settlements'))
+
+    async def test_rebuild_rejects_immutable_calculation_conflict_and_missing_result(self):
+        headers = {'Authorization':'Bearer isolated-collector'}
+        url = '/internal/collector/results/rebuild'
+        self.assertEqual(401, (await self.client.post(url,json={'fixture_ids':['fixture']})).status_code)
+        self.assertEqual(409, (await self.client.post(url,json={'fixture_ids':['fixture']},headers=headers)).status_code)
+        self.assertEqual(422, (await self.client.post(url,json={'fixture_ids':['fixture','fixture']},headers=headers)).status_code)
+        await self.signal()
+        await self.submit(self.result(home=3))
+        await self.pool.execute("UPDATE v2_quote_evidence SET price=2.5")
+        response = await self.client.post(url,json={'fixture_ids':['fixture']},headers=headers)
+        self.assertEqual(409, response.status_code, response.text)
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_signal_settlements'))
+
+    async def test_rebuild_legacy_algorithm_preserves_first_calculation_timestamp(self):
+        await self.signal()
+        await self.submit(self.result(home=3))
+        historical = self.now-timedelta(days=3)
+        await self.pool.execute("UPDATE v2_signal_settlements SET algorithm_version='football-asian-1',created_at=$1", historical)
+        await self.pool.execute('UPDATE v2_expert_signals SET settled_at=$1', historical)
+        response = await self.client.post('/internal/collector/results/rebuild',json={'fixture_ids':['fixture']},headers={'Authorization':'Bearer isolated-collector'})
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual(historical,await self.pool.fetchval('SELECT settled_at FROM v2_expert_signals'))
+        self.assertEqual(2,await self.pool.fetchval('SELECT count(*) FROM v2_signal_settlements'))
+
+    async def test_settlement_time_window_filters_and_nickname_identity(self):
+        signal = await self.signal()
+        await self.pool.execute("UPDATE v2_expert_signals SET created_at=now()-interval '70 days' WHERE id=$1", signal)
+        await self.submit(self.result(home=3))
+        await self.pool.execute("UPDATE v2_experts SET display_nickname='最新昵称' WHERE id=$1", self.expert)
+        params = {'source_id':str(self.source),'phase':'scheduled','market_kind':'total','days':1}
+        listing = (await self.client.get('/api/v1/public/experts',params=params)).json()
+        detail = (await self.client.get(f'/api/v1/public/experts/{self.expert}',params=params)).json()
+        trend = (await self.client.get(f'/api/v1/public/experts/{self.expert}/trend',params=params)).json()
+        self.assertEqual('最新昵称', listing['items'][0]['display_nickname'])
+        self.assertEqual(1, listing['items'][0]['settled_signals'])
+        self.assertEqual(listing['items'][0], detail['expert'])
+        self.assertEqual([{'id':str(self.source),'display_name':'source'}],listing['source_options'])
+        self.assertEqual(detail['expert'], trend['summary'])
+        self.assertEqual(1, trend['items'][0]['cumulative_settled'])
+        for params in ({'phase':'live'}, {'market_kind':'winner'}, {'source_id':str(uuid.uuid4())}):
+            value = (await self.client.get('/api/v1/public/experts',params=params)).json()['items'][0]
+            self.assertEqual(0,value['total_signals'])
+        for params in ({'phase':'finished'},{'market_kind':'unknown'},{'source_id':'invalid'},
+                       {'from_utc':'2026-10-26T00:00:00'},
+                       {'from_utc':'2026-10-27T00:00:00Z','to_utc':'2026-10-26T00:00:00Z'}):
+            self.assertEqual(422,(await self.client.get('/api/v1/public/experts',params=params)).status_code)
+
+    async def test_same_nickname_cross_group_stays_distinct_and_source_options_hide_disabled(self):
+        await self.signal()
+        other_source, other_expert, other_message = [uuid.uuid4() for _ in range(3)]
+        await self.pool.execute("INSERT INTO v2_expert_sources(id,platform_chat_id,display_name) VALUES($1,'other-chat','其他来源')",other_source)
+        await self.pool.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,'other-author','真实昵称')",other_expert)
+        await self.pool.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) VALUES($1,$2,$3,'1','原文',now())",other_message,other_source,other_expert)
+        original = self.message,self.expert
+        self.message,self.expert = other_message,other_expert
+        try:
+            await self.signal(selection='under',line='3')
+        finally:
+            self.message,self.expert = original
+        await self.submit(self.result(home=3))
+        listing=(await self.client.get('/api/v1/public/experts')).json()
+        self.assertEqual(2,len(listing['items']))
+        self.assertEqual(2,len({item['id'] for item in listing['items']}))
+        selected=(await self.client.get('/api/v1/public/experts',params={'source_id':str(other_source)})).json()
+        self.assertEqual(1,sum(item['total_signals'] for item in selected['items']))
+        self.assertEqual(2,len(selected['source_options']))
+        await self.pool.execute('UPDATE v2_expert_sources SET enabled=false WHERE id=$1',other_source)
+        refreshed=(await self.client.get('/api/v1/public/experts')).json()
+        self.assertEqual([{'id':str(self.source),'display_name':'source'}],refreshed['source_options'])
+
+    async def test_materialized_quality_matches_original_through_stale_quotes_and_result_revisions(self):
+        valid=await self.signal()
+        await self.signal(selection='under',line='3',evidence=False)
+        # Recommendation evidence may be old: freshness applies at acceptance,
+        # not when computing historical returns after an official result.
+        await self.pool.execute("UPDATE v2_expert_signals SET quote_time=quote_time-interval '90 days' WHERE id=$1",valid)
+        await self.pool.execute("UPDATE v2_quote_evidence SET source_updated_at=source_updated_at-interval '90 days' WHERE reference_id=$1",valid)
+        async def compare():
+            scope=StatisticsScope(self.now-timedelta(days=1),self.now+timedelta(days=1))
+            prefix,args=signal_scope(scope,self.expert)
+            sql=prefix+'SELECT '+QUALITY_METRIC_SQL+' FROM scoped s'
+            current=dict(await self.pool.fetchrow(sql,*args))
+            original=dict(await self.pool.fetchrow(sql.replace('WITH checked AS MATERIALIZED (','WITH checked AS (',1),*args))
+            self.assertEqual(original,current)
+            return current
+        await self.submit(self.result(home=3))
+        current=await compare()
+        self.assertEqual((1,1,1),tuple(current[key] for key in ('eligible_signals','excluded_signals','win')))
+        await self.submit(self.result(status='provisional',source_updated_at=(self.now+timedelta(seconds=1)).isoformat()))
+        self.assertEqual(1,(await compare())['pending'])
+        await self.submit(self.result(home=0,source_updated_at=(self.now+timedelta(seconds=2)).isoformat()))
+        self.assertEqual(1,(await compare())['loss'])
+        await self.pool.execute("UPDATE v2_expert_signals SET result_version=1,outcome='win',unit_net=1 WHERE id=$1",valid)
+        self.assertEqual(1,(await compare())['invalid_settlement_evidence'])
+
+    async def test_result_timezone_is_canonical_and_void_closes_fixture(self):
+        await self.signal()
+        first = await self.submit(self.result())
+        same_in_another_zone = self.now.astimezone(timezone(timedelta(hours=8))).isoformat()
+        replay = await self.submit(self.result(source_updated_at=same_in_another_zone))
+        self.assertEqual(200, replay.status_code, replay.text)
+        self.assertTrue(replay.json()['items'][0]['duplicate'])
+        cancelled = await self.submit(self.result(status='void',source_updated_at=(self.now+timedelta(seconds=1)).isoformat(),home=None,away=None))
+        self.assertEqual(200,cancelled.status_code,cancelled.text)
+        self.assertEqual('cancelled',await self.pool.fetchval('SELECT phase FROM v2_fixtures'))
+        self.assertEqual('void',await self.pool.fetchval('SELECT outcome FROM v2_expert_signals'))
+
     async def test_statistics_split_effective_stake_and_average_return(self):
         await self.signal()
         await self.signal(selection='under', line='2')
@@ -137,6 +280,10 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(401, (await self.client.post('/internal/collector/results', json=payload)).status_code)
         self.assertEqual(422, (await self.submit(self.result(half_home=9, half_away=0))).status_code)
         self.assertEqual(422, (await self.submit(self.result(home=None))).status_code)
+        self.assertEqual(422, (await self.submit(self.result(home=True))).status_code)
+        self.assertEqual(422, (await self.submit(self.result(home='1'))).status_code)
+        self.assertEqual(422, (await self.submit(self.result(provider_reference=' '))).status_code)
+        self.assertEqual(422, (await self.submit(self.result(evidence={'source':' '}))).status_code)
         self.assertEqual(422, (await self.submit(self.result(source_updated_at=(self.now+timedelta(days=1)).isoformat()))).status_code)
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_fixture_results'))
 

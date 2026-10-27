@@ -456,6 +456,7 @@ async function setup({
       });
     if (p === "/public/experts")
       return reply({
+        source_options: [{id: '77777777-7777-4777-8777-777777777777', display_name: '测试专家来源'}],
         items: [
           expert,
           {
@@ -613,9 +614,10 @@ async function setup({
     }
     if (
       mode.tgSearch &&
-      ["/admin/telegram/admins", "/admin/telegram/dialogs"].includes(p)
+      ["/admin/telegram/admins", "/admin/telegram/dialogs", "/admin/telegram/members"].includes(p)
     ) {
-      const admins = p.endsWith("admins");
+      const members = p.endsWith("members");
+      const admins = p.endsWith("admins") || members;
       const query = url.searchParams.get("q") || "";
       const secondPage = url.searchParams.has("cursor");
       if (query === "slow")
@@ -631,6 +633,7 @@ async function setup({
                   sender_id: secondPage ? "67890" : "12345",
                   nickname: secondPage ? "后页老师" : query || "林老师 TG",
                   username: "expert_fixture",
+                  admin_kind: members ? "member" : "administrator",
                 },
               ]
             : [
@@ -820,6 +823,31 @@ await test("手机无横向溢出、关注与弹层", async () => {
   await page.screenshot({
     path: evidence + "/candidate-mobile-detail-fixture.png",
   });
+  await context.close();
+});
+await test("专家统计筛选与详情趋势使用同一结算窗口", async () => {
+  const { page, context, log } = await setup({ dual: true });
+  await page.locator('.main-nav [data-page=experts]').click();
+  await page.waitForSelector('#expert-stats-filter [name=source_id] option[value="77777777-7777-4777-8777-777777777777"]', {state:'attached'});
+  await page.locator('#expert-stats-filter [name=days]').selectOption('7');
+  await page.locator('#expert-stats-filter [name=phase]').selectOption('scheduled');
+  await page.locator('#expert-stats-filter [name=market_kind]').selectOption('handicap');
+  await page.locator('#expert-stats-filter [name=source_id]').selectOption('77777777-7777-4777-8777-777777777777');
+  await page.locator('#expert-stats-filter button').click();
+  await page.waitForFunction(() => document.querySelector('#experts-list')?.textContent.includes('近7天'));
+  await page.locator('#experts-list [data-expert]').first().click();
+  await page.waitForSelector('.yield-chart');
+  assert.match(await page.locator('#dialog-content').innerText(), /近7天/);
+  assert.match(await page.locator('#dialog-content').innerText(), /证据不足排除/);
+  const scoped = log.filter(r => r.path.startsWith('/public/experts') && !r.path.endsWith('/messages')).slice(-3);
+  assert.equal(scoped.length, 3);
+  for (const request of scoped) {
+    const query = new URLSearchParams(request.query);
+    assert.equal(query.get('days'), '7');
+    assert.equal(query.get('phase'), 'scheduled');
+    assert.equal(query.get('market_kind'), 'handicap');
+    assert.equal(query.get('source_id'), '77777777-7777-4777-8777-777777777777');
+  }
   await context.close();
 });
 await test("完整原文、两条系统买入、工具证据与图片", async () => {
@@ -1042,6 +1070,47 @@ await test("初始失败与无赛事状态、请求竞态不覆盖新筛选", as
     () => document.querySelectorAll(".match-row").length === 3,
   );
   assert.match(await page.locator(".score-tabs .active").innerText(), /滚球/);
+  await context.close();
+});
+await test("比赛状态切换等待和失败时不能保留其他状态的旧行", async () => {
+  const { page, context, mode } = await setup();
+  assert.ok(await page.locator('.match-row').count());
+  mode.slow = true;
+  await page.locator('.score-tabs [data-phase=finished]').click();
+  assert.equal(await page.locator('.match-row').count(), 0);
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 1);
+  assert.equal(await page.locator('.match-phase').innerText(), '完场');
+  mode.error = true;
+  await page.locator('.score-tabs [data-phase=live]').click();
+  assert.equal(await page.locator('.match-row').count(), 0);
+  await page.waitForFunction(() => document.querySelector('#matches-state').textContent.includes('读取超时'));
+  assert.equal(await page.locator('.match-row').count(), 0);
+  assert.match(page.url(), /phase=live/);
+  await context.close();
+});
+await test("普通成员搜索可选为监控作者且读取管理员仍调用原接口", async () => {
+  const { page, context, mode, log } = await setup({dual:true});
+  mode.tgSearch = true;
+  await page.locator('.utility-bar [data-page=admin]').click();
+  await page.waitForSelector('#admin-content:not([hidden])');
+  await page.locator('[data-admin-tab=telegram]').click();
+  await page.locator('#source-select').waitFor();
+  await page.locator('#source-select').selectOption(id);
+  await page.locator('#tg-admin-search').fill('普通老师');
+  await page.locator('#tg-admin-search-form button[type=submit],#tg-admin-search-form button:not([type])').first().click();
+  await page.waitForFunction(() => document.querySelector('#source-admins').textContent.includes('普通成员'));
+  assert.ok(log.some(r=>r.path==='/admin/telegram/members' && r.query.includes(encodeURIComponent('普通老师'))));
+  await page.locator('#source-admins [data-author]').first().click();
+  assert.equal(await page.locator('#expert-source-form [name=sender_id]').inputValue(), '12345');
+  assert.equal(await page.locator('#expert-source-form [name=nickname]').inputValue(), '普通老师');
+  await page.locator('#expert-source-form button').click();
+  await page.waitForTimeout(100);
+  const trusted = log.filter(r=>r.path.endsWith('/experts') && r.method==='POST').at(-1);
+  assert.equal(trusted.body.sender_id, '12345');
+  assert.equal(trusted.body.nickname, '普通老师');
+  await page.locator('#tg-admins').click();
+  await page.waitForFunction(() => document.querySelector('#source-admins').textContent.includes('管理员'));
+  assert.equal(log.filter(r=>r.path.startsWith('/admin/telegram/') && ['admins','members'].some(x=>r.path.endsWith(x))).at(-1).path, '/admin/telegram/admins');
   await context.close();
 });
 await test("详情深链、前进后退、主附线筛选与保留筛选刷新", async () => {
@@ -1448,6 +1517,10 @@ await test("管理员恢复码只显示一次与只读待办订单", async () =>
     /结果未知/,
   );
   assert.equal(await page.locator("#admin-orders-list button").count(), 0);
+  const orderText = await page.locator("#admin-orders-list").innerText();
+  assert.match(orderText, /预留赔率 1\.96/);
+  assert.match(orderText, /官方成交本金 未知 · 成交赔率 未知/);
+  assert.match(orderText, /官方结算 未知/);
   await page.locator("[data-admin-tab=system]").click();
   await page
     .locator("#generate-mfa-recovery")
@@ -1664,6 +1737,7 @@ await test("Telegram目录及管理员搜索重置游标、空结果、清空与
     () => document.querySelector("#source-select").value,
   );
   for (const kind of ["dialog", "admin"]) {
+    if (kind === "admin") await page.locator('#tg-directory-scope').selectOption('admins');
     const endpoint = kind === "dialog" ? "dialogs" : "admins";
     const result = page.locator(
       kind === "dialog" ? "#tg-dialog-list" : "#source-admins",
@@ -1703,6 +1777,34 @@ await test("Telegram目录及管理员搜索重置游标、空结果、清空与
     path: evidence + "/candidate-mobile-tg-search-fixture.png",
   });
   await context.close();
+});
+await test("手机多盘口与长队名保持分行且不遮挡比赛按钮", async () => {
+  const original = fixtures[0];
+  fixtures[0] = { ...original, home_team: "格鲁吉亚第比利斯迪纳摩青年队", away_team: "圣彼得堡泽尼特预备队",
+    markets: Array.from({ length: 4 }, (_, index) => ({ ...quote, quote_id: "mobile-" + index, line: "-10.25", price: "123.45" })) };
+  const { page, context } = await setup({ mobile: true });
+  try {
+    for (const width of [360, 390, 720]) {
+      await page.setViewportSize({ width, height: 844 });
+      const geometry = await page.locator('.match-row').first().evaluate(row => {
+        const box = element => element.getBoundingClientRect();
+        const odds = box(row.querySelector('.match-odds'));
+        const buttons = [...row.querySelectorAll('.team-button, .score-button')].map(box);
+        const bounds = box(row);
+        return { oddsTop: odds.top, oddsBottom: odds.bottom, buttonBottom: Math.max(...buttons.map(x => x.bottom)),
+          rowBottom: bounds.bottom, rowOverflow: row.scrollWidth > row.clientWidth, pageOverflow: document.documentElement.scrollWidth > innerWidth };
+      });
+      assert.ok(geometry.oddsTop >= geometry.buttonBottom, JSON.stringify({ width, geometry }));
+      assert.ok(geometry.oddsBottom <= geometry.rowBottom, JSON.stringify({ width, geometry }));
+      assert.equal(geometry.rowOverflow, false);
+      assert.equal(geometry.pageOverflow, false);
+    }
+    await page.locator('.team-home').first().click();
+    await page.waitForSelector('#content-dialog[open] .detail-hero');
+  } finally {
+    fixtures[0] = original;
+    await context.close();
+  }
 });
 assert.deepEqual(caught, []);
 await fs.writeFile(

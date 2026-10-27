@@ -49,6 +49,13 @@ class SettlementTests(unittest.TestCase):
         value = settle(self.signal(period="first_half"), self.result())
         self.assertEqual("pending", value.outcome)
         self.assertIsNone(value.unit_net)
+        inconsistent = settle(self.signal(period='first_half'), self.result(1, 0, half_home=2, half_away=0))
+        self.assertEqual('pending', inconsistent.outcome)
+
+    def test_postponed_or_abandoned_is_not_implicitly_void(self):
+        for state in ('cancelled','postponed','abandoned','half_time','extra_time'):
+            with self.subTest(state=state):
+                self.assertEqual('pending',settle(self.signal(),self.result(status=state)).outcome)
 
     def test_live_remaining_score_uses_snapshot_and_unknown_rules_stay_pending(self):
         signal = self.signal(kind="handicap", selection="home", line="0", phase="live")

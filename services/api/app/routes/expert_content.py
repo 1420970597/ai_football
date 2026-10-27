@@ -4,12 +4,12 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from .. import database
 from ..blobstore import image_mime, read_image
-from ..expert_statistics import DEFINITIONS, METRIC_SQL, metrics
+from ..expert_statistics import StatisticsScope, statistics_scope, summaries, trend
 from .public import _decode_cursor, _encode_cursor, _has_entitlement
 
 router = APIRouter(prefix='/api/v1/public')
@@ -36,34 +36,21 @@ async def leagues(match_date: date | None = Query(default=None, alias='date'),
 
 
 @router.get('/experts/{expert_id}')
-async def expert_detail(expert_id: uuid.UUID, days: int = Query(default=30, ge=1, le=3650)):
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
-    row = await database.current_pool().fetchrow(
-        'SELECT e.id,e.display_nickname,e.avatar_object_key,e.enabled,' + METRIC_SQL +
-        ' FROM v2_experts e LEFT JOIN v2_expert_signals s ON s.expert_id=e.id AND s.created_at >= $2 AND s.created_at < $3 '
-        'WHERE e.id=$1 AND e.enabled GROUP BY e.id', expert_id, start, end,
-    )
-    if not row:
+async def expert_detail(expert_id: uuid.UUID, scope: StatisticsScope = Depends(statistics_scope)):
+    rows = await summaries(database.current_pool(), scope.start, scope.end, scope=scope, expert_id=expert_id)
+    if not rows:
         raise HTTPException(404, '专家不存在')
-    return {'expert': metrics(dict(row)), 'from_utc': start, 'to_utc': end, 'definitions': DEFINITIONS}
+    return {'expert': rows[0], **scope.response()}
 
 
 @router.get('/experts/{expert_id}/trend')
-async def expert_trend(expert_id: uuid.UUID, days: int = Query(default=365, ge=1, le=3650)):
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
-    rows = await database.current_pool().fetch(
-        "WITH daily AS (SELECT date_trunc('day',settled_at AT TIME ZONE 'UTC') AS day,"
-        "SUM(unit_net) AS net,COUNT(*) AS settled,SUM(effective_stake) AS effective "
-        "FROM v2_expert_signals WHERE expert_id=$1 AND outcome<>'pending' AND settled_at >= $2 AND settled_at < $3 "
-        "GROUP BY 1) SELECT day,net,settled,effective,SUM(net) OVER(ORDER BY day) AS cumulative_unit_net,"
-        "SUM(net) OVER(ORDER BY day)/SUM(settled) OVER(ORDER BY day) AS average_unit_net,"
-        "SUM(net) OVER(ORDER BY day)/NULLIF(SUM(effective) OVER(ORDER BY day),0) AS unit_roi "
-        "FROM daily ORDER BY day", expert_id, start, end,
-    )
-    return {'items': [dict(row) for row in rows], 'from_utc': start, 'to_utc': end,
-            'timezone': 'UTC', 'definitions': DEFINITIONS, 'basis': 'latest_settlement_at_latest_result'}
+async def expert_trend(expert_id: uuid.UUID, scope: StatisticsScope = Depends(statistics_scope)):
+    pool = database.current_pool()
+    summary = await summaries(pool, scope.start, scope.end, scope=scope, expert_id=expert_id)
+    if not summary:
+        raise HTTPException(404, '专家不存在')
+    return {'items': await trend(pool, expert_id, scope), 'summary': summary[0], **scope.response(),
+            'timezone': 'UTC', 'basis': 'latest_settlement_at_latest_result'}
 
 
 async def require_history(request: Request):

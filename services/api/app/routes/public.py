@@ -4,13 +4,14 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from .. import database
 from ..pagination import decode_cursor, encode_cursor
 from ..auth import get_identity
 from ..membership import has_entitlement
-from ..expert_statistics import DEFINITIONS, metrics, summaries, METRIC_SQL
+from ..runtime_settings import runtime_quote_max_age
+from ..expert_statistics import StatisticsScope, source_options, statistics_scope, summaries
 from ..review_state import fresh_quote
 
 router = APIRouter(prefix="/api/v1/public")
@@ -111,8 +112,9 @@ async def matches(
         "WHERE position<=24 ORDER BY fixture_id,market_id,line,selection", fixture_ids,
     ) if fixture_ids else []
     by_fixture: dict[str, list[dict]] = {}
+    max_quote_age = await runtime_quote_max_age(request.app.state.settings)
     for quote in quote_rows:
-        by_fixture.setdefault(quote["fixture_id"], []).append(dict(quote) | {'fresh': fresh_quote(quote, request.app.state.settings.quote_max_age_seconds)})
+        by_fixture.setdefault(quote["fixture_id"], []).append(dict(quote) | {'fresh': fresh_quote(quote, max_quote_age)})
     output = []
     for row in items:
         item = dict(row)
@@ -143,7 +145,7 @@ async def match_detail(fixture_id: str, request: Request):
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
         "WHERE s.fixture_id=$1 ORDER BY s.created_at DESC LIMIT 100", fixture_id,
     )
-    stale_after = request.app.state.settings.quote_max_age_seconds
+    stale_after = await runtime_quote_max_age(request.app.state.settings)
     now = datetime.now(timezone.utc)
     markets = [dict(row) | {
         "fresh": fresh_quote(row, stale_after) and fixture['phase'] in {'scheduled','live'},
@@ -153,10 +155,10 @@ async def match_detail(fixture_id: str, request: Request):
 
 
 @router.get("/experts")
-async def experts(days: int = Query(default=30, ge=1, le=3650)):
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
-    return {'items': await summaries(database.current_pool(), start, end), 'from_utc': start, 'to_utc': end, 'definitions': DEFINITIONS}
+async def experts(scope: StatisticsScope = Depends(statistics_scope)):
+    pool = database.current_pool()
+    return {'items': await summaries(pool, scope.start, scope.end, scope=scope),
+            'source_options': await source_options(pool, scope), **scope.response()}
 
 
 @router.get("/signals")

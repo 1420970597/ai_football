@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import json
 import math
 import secrets
+import socket
 import time
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlsplit
@@ -22,6 +24,7 @@ DEFAULT_MATCH_ODDS_PATH = "/yewu11/v1/w/getMatchBaseInfoByOddsPB"
 DEFAULT_BATCH_SIZE = 12
 DEFAULT_CONCURRENCY = 1
 DEFAULT_BATCH_INTERVAL = 1.0
+MAX_RETRY_AFTER_SECONDS = 900
 DEFAULT_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36")
 
@@ -51,6 +54,36 @@ def _body(response: httpx.Response) -> Any:
         return decode_envelope(response.json())
     except (json.JSONDecodeError, UnicodeError):
         raise LeyuError("invalid_json_response") from None
+
+
+def retry_after_seconds(value: str | None, *, now: datetime | None = None) -> int | None:
+    """Read HTTP Retry-After without retaining its raw content or unbounded waits."""
+    if not value or len(value) > 128:
+        return None
+    try:
+        delay = float(value)
+        if not math.isfinite(delay) or delay < 0:
+            return None
+    except ValueError:
+        try:
+            stamp = parsedate_to_datetime(value)
+            if stamp.tzinfo is None:
+                return None
+            delay = max(0, (stamp - (now or datetime.now(timezone.utc))).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return min(MAX_RETRY_AFTER_SECONDS, math.ceil(delay))
+
+
+def _dns_failure(error: BaseException) -> bool:
+    for _ in range(8):
+        if isinstance(error, socket.gaierror):
+            return True
+        cause = error.__cause__ or error.__context__
+        if cause is None or cause is error:
+            return False
+        error = cause
+    return False
 
 
 class LeyuClient:
@@ -154,13 +187,18 @@ class LeyuClient:
 
     async def _request(self, client: httpx.AsyncClient, method: str, path: str, **kwargs) -> Any:
         # Never include URL/body/upstream text in raised diagnostics: some include account tokens.
+        operation = {DEFAULT_FIXTURE_PATH: "fixture_snapshot", DEFAULT_ODDS_PATH: "odds_batch",
+                     DEFAULT_MATCH_ODDS_PATH: "odds_single"}.get(path, "")
+        status = None
         try:
             async with client.stream(
                 method, self.collection_url(path), params={"t": int(time.time() * 1000)},
                 headers=self.headers(), **kwargs,
             ) as response:
+                status = response.status_code
                 if response.status_code == 429:
-                    raise RateLimited("http_rate_limited", "429")
+                    raise RateLimited("http_rate_limited", "429",
+                                      retry_after_seconds=retry_after_seconds(response.headers.get("Retry-After")))
                 if response.status_code in {401, 403}:
                     # HTTP 403 alone does not prove token expiration.
                     raise LeyuError("http_access_denied", str(response.status_code))
@@ -175,11 +213,21 @@ class LeyuClient:
                     payload = json.loads(body)
                 except (ValueError, UnicodeError):
                     raise LeyuError("invalid_json_response") from None
-                return decode_envelope(payload)
+                try:
+                    return decode_envelope(payload)
+                except RateLimited as exc:
+                    exc.retry_after_seconds = retry_after_seconds(response.headers.get("Retry-After"))
+                    raise
+        except LeyuError as exc:
+            exc.operation, exc.http_status = operation, status
+            raise
         except httpx.TimeoutException:
-            raise LeyuError("upstream_timeout") from None
+            raise LeyuError("upstream_timeout", operation=operation, http_status=status) from None
+        except httpx.ConnectError as exc:
+            raise LeyuError("upstream_domain_unresolved" if _dns_failure(exc) else "upstream_transport_error",
+                            operation=operation, http_status=status) from None
         except httpx.HTTPError:
-            raise LeyuError("upstream_transport_error") from None
+            raise LeyuError("upstream_transport_error", operation=operation, http_status=status) from None
 
     async def fetch(self, *, odds_mids: Iterable[str] | Callable[[list[dict[str, Any]]], Iterable[str]] | None = None) -> list[dict[str, Any]]:
         try:
@@ -296,7 +344,8 @@ class LeyuClient:
                                     raise
                                 except LeyuError as exc:
                                     failures.append({"size": 1, "fallback": True,
-                                                     "category": exc.category, "code": exc.code})
+                                                     "category": exc.category, "code": exc.code,
+                                                     "operation": exc.operation or "odds_single", "http_status": exc.http_status})
                                     fixture["markets_complete"] = False
                                     fixture["collection_error"] = exc.category
                                     continue
@@ -309,12 +358,14 @@ class LeyuClient:
                         raise
                     except RateLimited as exc:
                         limited = exc
-                        failures.append({"size": len(batch), "category": exc.category, "code": exc.code})
+                        failures.append({"size": len(batch), "category": exc.category, "code": exc.code,
+                                         "operation": exc.operation or "odds_batch", "http_status": exc.http_status})
                         for mid in batch:
                             if not by_id[mid]["markets_complete"]:
                                 by_id[mid]["collection_error"] = exc.category
                     except LeyuError as exc:
-                        failures.append({"size": len(batch), "category": exc.category, "code": exc.code})
+                        failures.append({"size": len(batch), "category": exc.category, "code": exc.code,
+                                         "operation": exc.operation or "odds_batch", "http_status": exc.http_status})
                         for mid in batch:
                             by_id[mid]["markets_complete"] = False
                             by_id[mid]["collection_error"] = exc.category
@@ -339,6 +390,9 @@ class LeyuClient:
                 "rate_limited": limited is not None,
                 "rate_limit_category": limited.category if limited is not None else "",
                 "rate_limit_code": limited.code if limited is not None else "",
+                "rate_limit_operation": limited.operation if limited is not None else "",
+                "rate_limit_http_status": limited.http_status if limited is not None else None,
+                "retry_after_seconds": limited.retry_after_seconds if limited is not None else None,
                 "failed_batches": failures,
                 "received_at": timestamp(datetime.now(timezone.utc)),
             }

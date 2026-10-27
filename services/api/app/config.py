@@ -51,6 +51,8 @@ class Settings:
     bootstrap_admin_totp_secret: str
     executor_token: str = ""
     live_orders_enabled: bool = False
+    hermes_provider: str = "custom:cline"
+    review_config_url: str = "http://api:8080/internal/review/config"
 
 
 def _secret_bytes(name: str, expected: int) -> bytes:
@@ -75,7 +77,7 @@ def load_settings(*, role: str = "api") -> Settings:
         session_secret=_secret_bytes("APP_SESSION_SECRET", 32) if role == "api" else b"",
         encryption_key=_secret_bytes("DATA_ENCRYPTION_KEY", 32) if role == "api" else b"",
         hermes_api_url=_clean(os.environ.get("HERMES_API_URL", "http://hermes:8642/v1")).rstrip("/"),
-        hermes_api_key=_required("HERMES_API_KEY") if role == "worker" else "",
+        hermes_api_key=_required("HERMES_API_KEY") if role == "worker" else _clean(os.environ.get("HERMES_API_KEY", "")),
         hermes_model=_clean(os.environ.get("HERMES_API_MODEL", "hermes-agent")),
         mcp_internal_token=_required("EXPERT_MCP_TOKEN") if role == "api" else "",
         collector_token=_required("COLLECTOR_INTERNAL_TOKEN") if role == "api" else "",
@@ -86,4 +88,6 @@ def load_settings(*, role: str = "api") -> Settings:
         bootstrap_admin_totp_secret=_clean(os.environ.get("BOOTSTRAP_ADMIN_TOTP_SECRET", "")).replace(" ", "").upper(),
         executor_token=_clean(os.environ.get("EXECUTOR_INTERNAL_TOKEN", "")) if role == "api" else "",
         live_orders_enabled=role == "api" and _clean(os.environ.get("LIVE_ORDERS_ENABLED", "false")).lower() == "true",
+        hermes_provider=_clean(os.environ.get("HERMES_API_PROVIDER", "custom:cline")),
+        review_config_url=_clean(os.environ.get("REVIEW_CONFIG_URL", "http://api:8080/internal/review/config")),
     )

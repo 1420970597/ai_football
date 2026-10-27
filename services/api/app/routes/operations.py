@@ -11,6 +11,7 @@ import httpx
 from .. import database
 from ..auth import require_admin
 from ..pagination import decode_cursor, encode_cursor
+from ..runtime_settings import runtime_quote_max_age
 
 
 router = APIRouter(prefix='/api/v1/admin')
@@ -67,6 +68,16 @@ async def collector_health(request: Request) -> dict:
                     "queue_wait_ms_p50", "queue_wait_ms_p95", "queue_wait_samples",
                     "delivery_age_ms_p50", "delivery_age_ms_p95", "delivery_age_samples",
                     "last_event_at", "last_delivery_at", "last_message_at",
+                    "poll_attempts", "poll_successes", "poll_failures", "resync_requests",
+                    "failure_group", "last_operation", "last_http_status", "last_poll_at", "last_poll_elapsed_ms",
+                    "last_complete_at", "consecutive_failures", "rate_limit_streak", "backoff_seconds", "retry_at",
+                    "subscription_expected", "subscription_send_missing", "subscription_send_missing_ratio",
+                    "subscription_confirmed_fixtures", "subscription_miss_ratio", "subscription_confirmation_state",
+                    "resync_signals", "resync_signal_failures", "event_drop_ratio",
+                    "poll_alert_state", "poll_alert_transitions", "poll_alert_recoveries", "poll_alert_changed_at", "poll_alert_recovered_at",
+                    "subscription_alert_state", "subscription_alert_transitions", "subscription_alert_recoveries",
+                    "queue_alert_state", "queue_alert_transitions", "queue_alert_recoveries",
+                    "delivery_alert_state", "delivery_alert_transitions", "delivery_alert_recoveries",
                 ) if field in value
             }
             source_health[key] = {
@@ -105,7 +116,7 @@ async def diagnostics(request: Request):
                     "(SELECT created_at FROM v2_expert_messages ORDER BY created_at DESC LIMIT 1) AS message_received_at,"
                     "(SELECT max(checked_at) FROM v2_source_checkpoints) AS telegram_checkpoint_at,"
                     "(SELECT max(last_message_id) FROM v2_source_checkpoints) AS telegram_high_water",
-                    request.app.state.settings.quote_max_age_seconds,
+                    await runtime_quote_max_age(request.app.state.settings, conn),
                 )
                 try:
                     await database.check_schema(conn)
@@ -122,9 +133,18 @@ async def diagnostics(request: Request):
         "configured_unverified" if all(os.environ.get(key) for key in ('S3_ENDPOINT_URL','S3_BUCKET','S3_ACCESS_KEY','S3_SECRET_KEY')) else "unconfigured"
     )
     mcp = await mcp_probe.check() if mcp_probe else "unverified"
+    model_evidence = await database.current_pool().fetchrow(
+        "SELECT created_at,payload->>'model' AS model FROM v2_analysis_traces "
+        "WHERE trace_kind='hermes_result' ORDER BY created_at DESC LIMIT 1")
+    provider = 'unverified'
+    if model_evidence:
+        age = (datetime.now(timezone.utc)-model_evidence['created_at']).total_seconds()
+        provider = 'recent_success' if 0 <= age <= 900 else 'historical_success'
     return {
         'checked_at': datetime.now(timezone.utc), 'database': 'reachable', 'schema': schema,
-        'hermes': {'gateway': gateway, 'provider': 'unverified'},
+        'hermes': {'gateway': gateway, 'provider': provider, **(
+            {'last_result_at': model_evidence['created_at'], 'model': model_evidence['model'],
+             'basis': 'persisted_framework_result_not_accuracy'} if model_evidence else {})},
         'collector': await collector_health(request),
         'storage': storage,
         'mcp': mcp,
@@ -149,6 +169,7 @@ async def admin_orders(request: Request, state: str | None = Query(default=None,
     rows = await database.current_pool().fetch(
         "SELECT o.id,o.user_id,u.email,u.display_name,a.account_label,o.signal_id,o.state,o.stake,o.price,o.reserved_stake,"
         "o.provider_order_no,o.submitted_at,o.settled_net,o.settled_at,o.created_at,o.updated_at,"
+        "o.provider_price,o.provider_stake,o.provider_payout,o.provider_currency,o.provider_fees,o.provider_placed_at,o.receipt_observed_at,o.pnl_basis,"
         "s.fixture_id,s.market_name,s.period,s.line,s.selection,f.home_team,f.away_team "
         "FROM v2_bet_orders o JOIN v2_users u ON u.id=o.user_id LEFT JOIN v2_leyu_accounts a ON a.id=o.account_id "
         "JOIN v2_expert_signals s ON s.id=o.signal_id JOIN v2_fixtures f ON f.id=s.fixture_id "

@@ -30,9 +30,19 @@ class ObjectStore(Protocol):
 
 
 def validate_isolated_dsn(value:str)->None:
-    parts=urlsplit(value)
-    if (parts.scheme not in {'postgres','postgresql'} or parts.hostname not in {'ai-football-v2-pgtest','recovery-postgres'}
-            or parts.username!='recovery_test' or not re.fullmatch(r'/recovery_[a-z0-9_]+_test',parts.path)):
+    try:
+        parts=urlsplit(value)
+        valid=(isinstance(value,str) and not any(ord(char)<32 or ord(char)==127 for char in value)
+            and parts.scheme in {'postgres','postgresql'}
+            and parts.hostname in {'ai-football-v2-pgtest','recovery-postgres'}
+            and parts.username=='recovery_test' and parts.port in {None,5432}
+            and not parts.query and not parts.fragment
+            and re.fullmatch(r'/recovery_[a-z0-9_]+_test',parts.path))
+    except (TypeError,ValueError):
+        valid=False
+    # asyncpg accepts host/user/database query overrides. A permitted URL host
+    # must never authorize a different connection target through those options.
+    if not valid:
         raise RecoveryError('only_explicit_isolated_recovery_database_allowed')
 
 

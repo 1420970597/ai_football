@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
+import hmac
 import json
 import re
 import uuid
@@ -70,7 +71,13 @@ class Receipt(Input):
     state: str = Field(pattern="^(settled|unsettled)$")
     net_profit: Decimal | None = Field(default=None, max_digits=16, decimal_places=5)
     pnl_basis: str = Field(default="unknown", pattern="^(unknown|provider_reported_net|gross_return_minus_stake)$")
-    fees: Decimal | None = None
+    fees: Decimal | None = Field(default=None, max_digits=16, decimal_places=5)
+    price: Decimal | None = Field(default=None, gt=1, max_digits=12, decimal_places=5)
+    stake: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=5)
+    payout: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=5)
+    currency: str | None = Field(default=None, pattern="^[A-Z]{3}$")
+    placed_at: AwareDatetime | None = None
+    settled_at: AwareDatetime | None = None
 
 
 class JobFinish(AttemptInput):
@@ -236,6 +243,7 @@ async def list_orders(request: Request, limit: int = 30, before: uuid.UUID | Non
     if not 1 <= limit <= 100:
         raise HTTPException(422, "订单页大小无效")
     rows = await database.current_pool().fetch("SELECT o.id,o.state,o.stake,o.price,o.created_at,o.updated_at,o.provider_order_no,o.reserved_stake,o.settled_net,o.settled_at,"
+        "o.provider_price,o.provider_stake,o.provider_payout,o.provider_currency,o.provider_fees,o.provider_placed_at,o.receipt_observed_at,o.pnl_basis,"
         "s.fixture_id,s.market_name,s.line,s.selection,e.display_nickname FROM v2_bet_orders o JOIN v2_expert_signals s ON s.id=o.signal_id "
         "JOIN v2_experts e ON e.id=s.expert_id WHERE o.user_id=$1 AND ($2::uuid IS NULL OR (o.created_at,o.id)<"
         "(SELECT created_at,id FROM v2_bet_orders WHERE id=$2 AND user_id=$1)) ORDER BY o.created_at DESC,o.id DESC LIMIT $3", user["id"], before, limit)
@@ -372,11 +380,14 @@ async def finish_account_renewal(job_id: uuid.UUID, body: RenewalFinish, request
 @executor_router.post('/jobs/{job_id}/finish')
 async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
     service_auth(request)
+    finish_sha256=hashlib.sha256(json.dumps(body.model_dump(mode='json'),sort_keys=True,separators=(',',':')).encode()).hexdigest()
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             prior=await conn.fetchrow('SELECT * FROM v2_account_jobs WHERE id=$1',job_id)
             expected='succeeded' if body.status=='success' else body.status
             if prior and prior['attempt_id']==body.attempt_id and prior['state']==expected:
+                if not hmac.compare_digest(str(prior['details'].get('finish_sha256','')),finish_sha256):
+                    raise HTTPException(409,'同一次任务回执内容冲突，保留首次记录')
                 return {'status':body.status,'idempotent':True}
             job,account=await jobs.active_job(conn,job_id,body.attempt_id)
             if body.status=='success':
@@ -392,7 +403,7 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
                 await conn.execute('UPDATE v2_bet_orders SET updated_at=now() WHERE id=ANY($1::uuid[]) AND user_id=$2',body.scanned_orders,account['user_id'])
             elif body.status in {'unknown','rejected'}:
                 await conn.execute("UPDATE v2_leyu_accounts SET health_state=$2,updated_at=now() WHERE id=$1",account['id'],'rejected' if body.status=='rejected' else 'renewal_required')
-            await conn.execute("UPDATE v2_account_jobs SET state=$2,last_error=$3,lease_until=NULL,details=$4,updated_at=now() WHERE id=$1",job_id,'succeeded' if body.status=='success' else body.status,body.category,{'receipts':len(body.receipts)})
+            await conn.execute("UPDATE v2_account_jobs SET state=$2,last_error=$3,lease_until=NULL,details=$4,updated_at=now() WHERE id=$1",job_id,'succeeded' if body.status=='success' else body.status,body.category,{'receipts':len(body.receipts),'finish_sha256':finish_sha256})
             await audit(conn,None,'executor','account_job_finished','leyu_account',str(account['id']),details={'kind':job['kind'],'status':body.status,'category':body.category})
     return {'status':body.status}
 

@@ -5,12 +5,28 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app import blobstore, hermes_client
+from io import BytesIO
+from PIL import Image
 
 
-PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7GQAAAAASUVORK5CYII=')
+def png_bytes():
+    output = BytesIO()
+    Image.new('RGB', (48, 32), 'red').save(output, format='PNG')
+    return output.getvalue()
+
+
+PNG = png_bytes()
 
 
 class HermesImagesTests(unittest.IsolatedAsyncioTestCase):
+    def test_decoded_image_pixels_and_corrupt_payload_are_rejected(self):
+        self.assertEqual(48, blobstore.validate_image(PNG)['width'])
+        with patch.object(blobstore, 'MAX_IMAGE_PIXELS', 100):
+            with self.assertRaisesRegex(RuntimeError, 'pixel limit'):
+                blobstore.validate_image(PNG)
+        with self.assertRaisesRegex(RuntimeError, 'decoding failed'):
+            blobstore.validate_image(b'\x89PNG\r\n\x1a\nrest')
+
     def message(self, media):
         return {'source_name':'测试群', 'display_nickname':'专家昵称', 'raw_text':'Alpha 对 Beta，大2.5；另买主队让0.25',
                 'posted_at':datetime.now(timezone.utc), 'reply_text':'赛前推荐', 'media_objects':media}

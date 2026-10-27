@@ -102,6 +102,78 @@ class RealtimeLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("1", sent[1]["cclose"])
         self.assertEqual(["2", "3"], [row["mid"] for row in sent[2]["list"]])
 
+    async def test_partial_send_reports_only_dispatch_coverage_not_upstream_confirmation(self):
+        socket = type("Socket", (), {"send": AsyncMock(side_effect=[None, OSError("private-token")])})()
+        service = LeyuRealtime(lambda: {}, lambda: [str(i) for i in range(450)], AsyncMock(), AsyncMock())
+        with self.assertRaises(OSError):
+            await service._subscriptions(socket, {})
+        self.assertEqual((450, 200, 250), (service.stats["subscription_expected"],
+                         service.stats["subscription_requests_sent"], service.stats["subscription_send_missing"]))
+        self.assertAlmostEqual(250 / 450, service.stats["subscription_send_missing_ratio"], places=6)
+        self.assertIsNone(service.stats["subscription_miss_ratio"])
+        self.assertIsNone(service.stats["subscription_confirmed_fixtures"])
+        self.assertEqual("unverified", service.stats["subscription_confirmation_state"])
+        self.assertNotIn("private-token", str(service.stats))
+        socket.send = AsyncMock()
+        await service._subscriptions(socket, {})
+        self.assertEqual((450, 0, 0), (service.stats["subscription_requests_sent"],
+                         service.stats["subscription_send_missing"], service.stats["subscription_send_missing_ratio"]))
+
+    async def test_subscription_threshold_has_one_failure_and_one_recovery_transition(self):
+        service = LeyuRealtime(lambda: {}, lambda: ["1"], AsyncMock(), AsyncMock())
+        socket = type("Socket", (), {"send": AsyncMock(side_effect=OSError("network"))})()
+        for _ in range(4):
+            with self.assertRaises(OSError):
+                await service._subscriptions(socket, {})
+        self.assertEqual(("active", 1), (service.stats["subscription_alert_state"],
+                         service.stats["subscription_alert_transitions"]))
+        socket.send = AsyncMock()
+        await service._subscriptions(socket, {})
+        self.assertEqual("recovering", service.stats["subscription_alert_state"])
+        await service._subscriptions(socket, {})
+        self.assertEqual(("clear", 2, 1), (service.stats["subscription_alert_state"],
+                         service.stats["subscription_alert_transitions"], service.stats["subscription_alert_recoveries"]))
+
+    async def test_websocket_429_retains_bounded_cooldown_and_safe_retry_diagnostics(self):
+        stop = asyncio.Event()
+        def connector(url, **kwargs):
+            stop.set()
+            raise InvalidStatus(Response(429, "Too Many Requests", Headers({"Retry-After": "999999"})))
+        service = LeyuRealtime(lambda: {"leyu_api_base": "https://business.invalid", "leyu_request_id": "authorized"},
+                               lambda: [], AsyncMock(), AsyncMock(), connector=connector)
+        await service.run(stop)
+        self.assertEqual(("rate_limit", "429", 900, 1),
+                         (service.stats["failure_group"], service.stats["last_error_code"],
+                          service.stats["backoff_seconds"], service.stats["rate_limit_streak"]))
+        self.assertTrue(service.stats["retry_at"])
+
+    async def test_rate_limit_and_permission_push_are_not_swallowed_as_malformed_message(self):
+        stop = asyncio.Event()
+        class Socket:
+            send = AsyncMock()
+            async def recv(self):
+                stop.set()
+                return json.dumps({"code": code, "msg": "private-response-token"})
+        class Connection:
+            async def __aenter__(self):
+                return Socket()
+            async def __aexit__(self, *args):
+                pass
+        for code, category, group in (("0401038", "upstream_rate_limited", "rate_limit"),
+                                      ("0401015", "permission_denied", "permission")):
+            with self.subTest(code=code):
+                stop = asyncio.Event()
+                service = LeyuRealtime(lambda: {"leyu_api_base": "https://business.invalid", "leyu_request_id": "authorized"},
+                                       lambda: ["1"], AsyncMock(), AsyncMock(), connector=lambda *args, **kwargs: Connection())
+                await service.run(stop)
+                self.assertEqual((category, code, group),
+                                 (service.stats["last_error"], service.stats["last_error_code"], service.stats["failure_group"]))
+                if group == "rate_limit":
+                    self.assertEqual(60, service.stats["backoff_seconds"])
+                self.assertEqual(0, service.stats["subscription_requests_sent"])
+                self.assertEqual(1, service.stats["subscription_send_missing"])
+                self.assertNotIn("private-response", str(service.stats))
+
     async def test_normal_socket_has_no_proxy_and_shutdown_closes(self):
         stop = asyncio.Event()
         sent = []

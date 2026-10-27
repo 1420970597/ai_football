@@ -543,6 +543,54 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(repeated.json()['idempotent'])
         stored=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',row['id'])
         self.assertEqual(('settled',Decimal('0'),Decimal('1.90')),(stored['state'],stored['reserved_stake'],stored['settled_net']))
+        self.assertIsNone(stored['settled_at'])
+        self.assertIsNone(stored['provider_price'])
+        self.assertIsNotNone(stored['receipt_observed_at'])
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_order_receipt_evidence WHERE order_id=$1',row['id']))
+
+    async def test_worker_preserves_official_receipt_without_replacing_reservation(self):
+        await self.healthy()
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        row=await self.reserve(signal)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no='EXACT' WHERE id=$1",row['id'])
+        await self.api.post('/api/v1/accounts/leyu/refresh')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        placed='2026-10-20T10:00:00+00:00'
+        settled='2026-10-20T12:00:00+00:00'
+        original=self.native
+        def official(request):
+            if request.url.path==ORDERS_PATH:
+                state=json.loads(request.content)['orderStatus']
+                return httpx.Response(200,json={'code':0,'data':{'total':1 if state==1 else 0,'records':[{
+                    'orderNo':'EXACT','betAmount':'1.75','backAmount':'3.50','profitAmount':'1.75',
+                    'oddFinally':'2.00','currencyCode':'CNY','betTime':placed,'settleTime':settled
+                }] if state==1 else []}})
+            return original(request)
+        executor=Executor(self.worker_api,'https://platform.invalid/internal/executor',
+            client_factory=lambda scope,session,**kw:AccountProtocolClient(scope,session,transport=httpx.MockTransport(official),**kw))
+        await executor.account_job(work)
+        stored=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',row['id'])
+        self.assertEqual('settled',stored['state'])
+        self.assertEqual((Decimal('2'),Decimal('1.95')),(stored['stake'],stored['price']))
+        self.assertEqual((Decimal('1.75'),Decimal('2.00'),Decimal('3.50'),'CNY'),
+            (stored['provider_stake'],stored['provider_price'],stored['provider_payout'],stored['provider_currency']))
+        self.assertEqual(datetime.fromisoformat(placed),stored['provider_placed_at'])
+        self.assertEqual(datetime.fromisoformat(settled),stored['settled_at'])
+        self.assertEqual('provider_reported_net',stored['pnl_basis'])
+        self.assertIsNone(stored['provider_fees'])
+        evidence=await self.pool.fetchrow('SELECT * FROM v2_order_receipt_evidence WHERE order_id=$1',row['id'])
+        self.assertEqual('2.00',evidence['payload']['price'])
+        self.assertEqual('CNY',evidence['payload']['currency'])
+        visible=(await self.api.get('/api/v1/accounts/orders')).json()['items'][0]
+        self.assertEqual(Decimal('2'),Decimal(str(visible['provider_price'])))
+        self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
+
+    async def test_receipt_rejects_invalid_official_fields(self):
+        from pydantic import ValidationError
+        for extra in ({'price':'NaN'},{'price':'1'},{'stake':'-1'},{'settled_at':'2026-10-20T10:00:00'},{'currency':'usd'}):
+            with self.subTest(extra=extra), self.assertRaises(ValidationError):
+                accounts.Receipt(order_no='O',state='settled',**extra)
 
     async def test_same_provider_account_cannot_be_bound_by_another_user(self):
         await self.bind()
@@ -552,6 +600,160 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         await self.recent_session()
         response=await self.api.put('/api/v1/accounts/leyu',json={'account_label':'另一绑定','username':'OWN-USER','password':'password'})
         self.assertEqual(409,response.status_code)
+
+    async def test_new_executor_reconciles_persisted_unknown_order_without_resubmitting(self):
+        await self.healthy()
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        row=await self.reserve(signal)
+        first=self.executor()
+        work=await first.rpc('POST','/claim?live_capable=true')
+        self.assertEqual('order',work['kind'])
+        await first.order_job(work)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='unknown',updated_at=now()-interval '1 minute' WHERE id=$1",row['id'])
+        self.assertEqual(1,sum(request.url.path==BET_PATH for request in self.native_requests))
+        original=self.native
+        def official(request):
+            if request.url.path==ORDERS_PATH:
+                self.native_requests.append(request)
+                state=json.loads(request.content)['orderStatus']
+                return httpx.Response(200,json={'code':0,'data':{'total':1 if state==1 else 0,'records':[
+                    {'orderNo':'PROVIDER-ORDER','betAmount':'2','backAmount':'3.9','profitAmount':'1.9','currencyCode':'CNY'}
+                ] if state==1 else []}})
+            return original(request)
+        restarted=self.executor()
+        self.assertIsNot(first,restarted)
+        restarted.client_factory=lambda scope,session,**kw:AccountProtocolClient(scope,session,transport=httpx.MockTransport(official),**kw)
+        response=await self.api.post('/api/v1/accounts/leyu/refresh')
+        self.assertEqual(202,response.status_code,response.text)
+        recovery=await restarted.rpc('POST','/claim?live_capable=true')
+        self.assertEqual('account',recovery['kind'])
+        self.assertEqual([str(row['id'])],[item['id'] for item in recovery['orders']])
+        await restarted.account_job(recovery)
+        stored=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',row['id'])
+        self.assertEqual(('settled',Decimal('0'),Decimal('1.9')),(stored['state'],stored['reserved_stake'],stored['settled_net']))
+        self.assertEqual('PROVIDER-ORDER',stored['provider_order_no'])
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_order_receipt_evidence WHERE order_id=$1',row['id']))
+        self.assertEqual(1,sum(request.url.path==BET_PATH for request in self.native_requests))
+        self.assertEqual('idle',(await restarted.rpc('POST','/claim?live_capable=true'))['kind'])
+
+    async def test_restart_expired_submission_without_number_never_requeues_or_resubmits(self):
+        await self.healthy()
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        row=await self.reserve(signal)
+        attempt=uuid.uuid4()
+        await self.pool.execute("UPDATE v2_bet_orders SET state='submitting',attempt_id=$2,lease_until=now()-interval '1 second' WHERE id=$1",row['id'],attempt)
+        restarted=self.executor()
+        for _ in range(3):
+            self.assertEqual('idle',(await restarted.rpc('POST','/claim?live_capable=true'))['kind'])
+            self.assertEqual(0,(await restarted.rpc('POST','/dispatch'))['reserved'])
+        stored=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',row['id'])
+        self.assertEqual(('unknown',Decimal('2'),attempt),(stored['state'],stored['reserved_stake'],stored['attempt_id']))
+        self.assertIsNone(stored['provider_order_no'])
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+        self.assertEqual([],self.native_requests)
+
+    async def test_receipt_replay_is_idempotent_but_conflicting_finish_cannot_replace_evidence(self):
+        await self.healthy()
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        row=await self.reserve(signal)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='unknown',provider_order_no='IMMUTABLE' WHERE id=$1",row['id'])
+        await self.api.post('/api/v1/accounts/leyu/refresh')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        body={'attempt_id':work['attempt_id'],'status':'success','balance':'100',
+              'observed_at':datetime.now(timezone.utc).isoformat(),'scanned_orders':[str(row['id'])],
+              'receipts':[{'order_no':'IMMUTABLE','state':'settled','net_profit':'1.75','pnl_basis':'provider_reported_net',
+                           'price':'2','stake':'1.75','payout':'3.5','currency':'CNY'}]}
+        url=f"/internal/executor/jobs/{work['job_id']}/finish"
+        finished=await self.worker_api.post(url,json=body)
+        self.assertEqual(200,finished.status_code,finished.text)
+        original=dict(await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',row['id']))
+        evidence=dict(await self.pool.fetchrow('SELECT * FROM v2_order_receipt_evidence WHERE order_id=$1',row['id']))
+        replay=await self.worker_api.post(url,json=body)
+        self.assertEqual(200,replay.status_code,replay.text)
+        self.assertTrue(replay.json()['idempotent'])
+        conflict={**body,'receipts':[{**body['receipts'][0],'net_profit':'-1.75','payout':'0'}]}
+        rejected=await self.worker_api.post(url,json=conflict)
+        self.assertEqual(409,rejected.status_code,rejected.text)
+        self.assertEqual(original,dict(await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',row['id'])))
+        self.assertEqual([evidence],[dict(item) for item in await self.pool.fetch('SELECT * FROM v2_order_receipt_evidence WHERE order_id=$1',row['id'])])
+
+    async def test_same_provider_order_number_is_isolated_by_owner_and_account_identity(self):
+        first_account=await self.healthy()
+        first_user=dict(self.user)
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        first_order=await self.reserve(signal)
+        other=uuid.uuid4()
+        await self.pool.execute("INSERT INTO v2_users(id,email,display_name,password_hash,role) VALUES($1,$2,'另一用户','hash','user')",other,f'{other}@test.invalid')
+        self.user['id']=other
+        await self.recent_session()
+        second_account=await self.bind('second-own-user')
+        session=encrypt_secret(b'k'*32,json.dumps({'leyu_api_base':'https://venue.invalid','leyu_request_id':'second-session'}))
+        await self.pool.execute("UPDATE v2_leyu_accounts SET encrypted_session=$2,health_state='healthy',last_verified_at=now(),available_balance=100,balance_observed_at=now() WHERE id=$1",second_account['id'],session)
+        await self.pool.execute("UPDATE v2_account_jobs SET state='succeeded' WHERE account_id=$1",second_account['id'])
+        other_signal,other_expert,_,_=await self.signal()
+        await self.enable([other_expert])
+        second_order=await self.reserve(other_signal)
+        self.assertNotEqual(first_account['provider_identity_hash'],second_account['provider_identity_hash'])
+        await self.pool.execute("UPDATE v2_bet_orders SET state='unknown',provider_order_no='SAME-NUMBER' WHERE id=ANY($1::uuid[])",[first_order['id'],second_order['id']])
+        self.user.update(first_user)
+        await self.api.post('/api/v1/accounts/leyu/refresh')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        self.assertEqual([str(first_order['id'])],[item['id'] for item in work['orders']])
+        body={'attempt_id':work['attempt_id'],'status':'success','balance':'100','observed_at':datetime.now(timezone.utc).isoformat(),
+              'receipts':[{'order_no':'SAME-NUMBER','state':'settled','net_profit':'1.9','pnl_basis':'provider_reported_net','currency':'CNY'}],
+              'scanned_orders':[str(second_order['id'])]}
+        url=f"/internal/executor/jobs/{work['job_id']}/finish"
+        self.assertEqual(422,(await self.worker_api.post(url,json=body)).status_code)
+        body['scanned_orders']=[str(first_order['id'])]
+        result=await self.worker_api.post(url,json=body)
+        self.assertEqual(200,result.status_code,result.text)
+        first_stored=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',first_order['id'])
+        second_stored=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',second_order['id'])
+        self.assertEqual(('settled',Decimal('1.9')),(first_stored['state'],first_stored['settled_net']))
+        self.assertEqual(('unknown',Decimal('2'),None),(second_stored['state'],second_stored['reserved_stake'],second_stored['settled_net']))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_order_receipt_evidence WHERE order_id=$1',second_order['id']))
+        visible=(await self.api.get('/api/v1/accounts/orders')).json()['items']
+        self.assertEqual([str(first_order['id'])],[item['id'] for item in visible])
+
+    async def test_missing_or_malformed_currency_never_invents_fees_or_missing_official_profit(self):
+        await self.healthy()
+        signals=[await self.signal(),await self.signal()]
+        await self.enable([item[1] for item in signals])
+        rows=[await self.reserve(item[0]) for item in signals]
+        for row,number in zip(rows,('NO-CURRENCY','BAD-CURRENCY')):
+            await self.pool.execute("UPDATE v2_bet_orders SET state='unknown',provider_order_no=$2 WHERE id=$1",row['id'],number)
+        original=self.native
+        def official(request):
+            if request.url.path==ORDERS_PATH:
+                state=json.loads(request.content)['orderStatus']
+                return httpx.Response(200,json={'code':0,'data':{'total':2 if state==1 else 0,'records':[
+                    {'orderNo':'NO-CURRENCY','profitAmount':'1.75','oddFinally':'2'},
+                    {'orderNo':'BAD-CURRENCY','currencyCode':'usd','oddFinally':'2'}
+                ] if state==1 else []}})
+            return original(request)
+        restarted=self.executor()
+        restarted.client_factory=lambda scope,session,**kw:AccountProtocolClient(scope,session,transport=httpx.MockTransport(official),**kw)
+        await self.api.post('/api/v1/accounts/leyu/refresh')
+        work=await restarted.rpc('POST','/claim')
+        self.assertEqual(2,len(work['orders']))
+        await restarted.account_job(work)
+        stored=await self.pool.fetch('SELECT * FROM v2_bet_orders ORDER BY provider_order_no')
+        by_number={item['provider_order_no']:item for item in stored}
+        for row in stored:
+            self.assertEqual('settled',row['state'])
+            self.assertIsNone(row['provider_currency'])
+            self.assertIsNone(row['provider_fees'])
+            self.assertIsNone(row['provider_stake'])
+            self.assertIsNone(row['provider_payout'])
+            self.assertEqual((Decimal('2'),Decimal('1.95')),(row['stake'],row['price']))
+        self.assertEqual((Decimal('1.75'),'provider_reported_net'),(by_number['NO-CURRENCY']['settled_net'],by_number['NO-CURRENCY']['pnl_basis']))
+        self.assertEqual((None,'unknown'),(by_number['BAD-CURRENCY']['settled_net'],by_number['BAD-CURRENCY']['pnl_basis']))
+        self.assertEqual(2,await self.pool.fetchval('SELECT count(*) FROM v2_order_receipt_evidence'))
+        self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
 
 
 if __name__=='__main__':

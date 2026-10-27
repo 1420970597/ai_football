@@ -11,6 +11,7 @@ from .auth import audit
 from .membership import has_entitlement
 from .review_state import fresh_quote
 from .security import decrypt_secret
+from .runtime_settings import runtime_quote_max_age
 
 
 def live_enabled(settings) -> bool:
@@ -111,7 +112,7 @@ async def reserve_signal(conn, user_id, signal_id, settings):
     previous = await conn.fetchrow("SELECT * FROM v2_bet_orders WHERE user_id=$1 AND signal_id=$2 AND account_id IS NOT NULL", user_id, signal_id)
     if previous:
         return previous
-    signal = await eligible_signal(conn, signal_id, settings.quote_max_age_seconds)
+    signal = await eligible_signal(conn, signal_id, await runtime_quote_max_age(settings, conn))
     if signal["expert_id"] not in policy["allowed_experts"]:
         raise HTTPException(403, "本人未允许此专家自动投注")
     stake = policy["stake_per_order"]
@@ -157,7 +158,7 @@ async def recheck_order(conn, order, settings):
     if (account["id"] != order["account_id"] or account["binding_revision"] != order["binding_revision"]
             or account["config_revision"] != order["config_revision"] or policy["revision"] != order["policy_revision"]):
         raise HTTPException(409, "账户、会话或本人限额版本已变化")
-    signal = await eligible_signal(conn, order["signal_id"], settings.quote_max_age_seconds)
+    signal = await eligible_signal(conn, order["signal_id"], await runtime_quote_max_age(settings, conn))
     if signal["expert_id"] not in policy["allowed_experts"] or order["stake"] > policy["max_per_order"]:
         raise HTTPException(409, "推荐或单笔许可已失效")
     current = order["quote_snapshot"]

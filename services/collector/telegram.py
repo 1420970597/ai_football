@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
+from io import BytesIO
+import warnings
 import os
 import re
 import time
@@ -17,11 +19,12 @@ from telethon import TelegramClient, events, utils
 from telethon.errors import (AuthKeyDuplicatedError, FloodWaitError,
                              SessionPasswordNeededError, PasswordHashInvalidError)
 from telethon.sessions import StringSession
-from telethon.tl.types import (Channel, ChannelForbidden, ChannelParticipantsAdmins,
+from PIL import Image
+from telethon.tl.types import (Channel, ChannelForbidden, ChannelParticipantsAdmins, ChannelParticipantsSearch,
                               ChannelParticipantAdmin, ChannelParticipantCreator, Chat, ChatForbidden,
                               ChatParticipantAdmin, ChatParticipantCreator, ChatParticipantsForbidden,
                               UserProfilePhotoEmpty)
-from telethon.tl.functions.channels import GetParticipantsRequest
+from telethon.tl.functions.channels import GetParticipantsRequest, GetParticipantRequest
 from telethon.tl.functions.messages import GetFullChatRequest
 
 from .telegram_backend import TelegramBackend
@@ -29,12 +32,13 @@ from .telegram_control import ControlServer
 
 log = logging.getLogger("platform.telegram")
 MAX_MEDIA_BYTES = 8 * 1024 * 1024
-MAX_MESSAGE_MEDIA_BYTES = 32 * 1024 * 1024
+MAX_MESSAGE_MEDIA_BYTES = 24 * 1024 * 1024
 MAX_MEDIA_COUNT = 10
 MAX_IMAGE_PIXELS = 40_000_000
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 MESSAGE_MEDIA_PREFIX = "telegram/messages"
 MESSAGE_MEDIA_RETENTION = "expert_message_evidence"
+DIRECTORY_REFRESH_SECONDS = 300
 
 
 class SourceAccessError(RuntimeError):
@@ -78,6 +82,27 @@ def _valid_image(body: bytes, mime: str) -> bool:
     return mime == "image/webp" and body.startswith(b"RIFF") and body[8:12] == b"WEBP"
 
 
+def _image_dimensions(body: bytes, mime: str) -> dict:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(BytesIO(body)) as image:
+                width, height = image.size
+                frames = getattr(image, 'n_frames', 1)
+                if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+                    raise ValueError('image_pixel_limit')
+                if frames > 100 or width * height * frames > 80_000_000:
+                    raise ValueError('image_animation_limit')
+                if Image.MIME.get(image.format) != mime:
+                    raise ValueError('image_format_mismatch')
+                image.verify()
+        return {'width': width, 'height': height, 'frames': frames}
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError('image_decode_failed') from exc
+
+
 class TelegramCollector:
     def __init__(self, config: dict[str, str], *, api=None, api_url: str | None = None,
                  backend=None, client_factory=None, media_store=None, media_delete=None):
@@ -92,6 +117,8 @@ class TelegramCollector:
         self.locks: dict[str, asyncio.Lock] = {}
         self.session_state_lock = asyncio.Lock()
         self.retry_at: dict[str, float] = {}
+        self.directory_retry_at: dict[str, float] = {}
+        self.directory_trusted: dict[str, tuple] = {}
         self.control_server = None
         self.auth_client = None
         self.auth_task = None
@@ -190,6 +217,8 @@ class TelegramCollector:
             self.client = None
         if changed:
             self.account = None
+            self.directory_retry_at.clear()
+            self.directory_trusted.clear()
             self.invalid_session_fingerprint = None
             self.auth_state = {"state": "idle" if str(config.get("telegram_session", "")).strip() else "disconnected"}
         self.config = dict(config)
@@ -280,12 +309,75 @@ class TelegramCollector:
             log.warning("Telegram orphan media inventory unavailable category=%s", type(exc).__name__)
         return {"state": "connected", "sources": result, "media_cleanup": cleanup}
 
+    async def _refresh_directory(self, chat_id: str, source: dict):
+        if not callable(getattr(self.backend, 'directory', None)):
+            return
+        trusted = tuple(sorted(str(value) for value in source.get('trusted_sender_ids', [])))
+        now = time.monotonic()
+        if now < self.directory_retry_at.get(chat_id, 0) and trusted == self.directory_trusted.get(chat_id):
+            return
+        self.directory_trusted[chat_id] = trusted
+        self.directory_retry_at[chat_id] = now + DIRECTORY_REFRESH_SECONDS
+        observed_at = datetime.now(timezone.utc).isoformat()
+        admins, profiles, cursor, seen = [], {}, None, set()
+        result = {'state': 'unavailable', 'reason': 'directory_unavailable'}
+        try:
+            async with asyncio.timeout(20):
+                while True:
+                    page = await self.control('/admins', {'chat_id': chat_id, 'cursor': cursor})
+                    result = page
+                    if page.get('state') != 'ready':
+                        break
+                    admins.extend(page['items'])
+                    for item in page['items']:
+                        profiles[str(item['sender_id'])] = {'sender_id': str(item['sender_id']), 'nickname': item['nickname']}
+                    cursor = page.get('next_cursor')
+                    if not cursor:
+                        break
+                    if cursor in seen or len(admins) > 2000:
+                        raise SourceAccessError('directory_pagination_stalled')
+                    seen.add(cursor)
+                for sender_id in trusted:
+                    if result.get('state') == 'flood_wait':
+                        break
+                    if sender_id in profiles:
+                        continue
+                    try:
+                        entity = await self.client.get_entity(int(sender_id))
+                        if str(utils.get_peer_id(entity)) == sender_id and not getattr(entity, 'deleted', False):
+                            profiles[sender_id] = {'sender_id': sender_id, 'nickname': _nickname(entity, sender_id)}
+                    except FloodWaitError:
+                        raise
+                    except AuthKeyDuplicatedError:
+                        raise
+                    except Exception:
+                        continue
+        except AuthKeyDuplicatedError:
+            await self._invalidate_active_session()
+            raise
+        except FloodWaitError as exc:
+            result = {'state': 'flood_wait', 'reason': 'flood_wait', 'retry_after': exc.seconds}
+        except Exception as exc:
+            result = {'state': 'unavailable', 'reason': str(exc) if isinstance(exc, SourceAccessError) else type(exc).__name__}
+        retry = max(DIRECTORY_REFRESH_SECONDS, int(result.get('retry_after') or 0))
+        self.directory_retry_at[chat_id] = time.monotonic() + retry
+        try:
+            await self.backend.directory({'chat_id': chat_id, 'owner': self.owner, 'observed_at': observed_at,
+                'state': result['state'] if result.get('state') in {'ready', 'flood_wait'} else 'unavailable',
+                'reason': result.get('reason'), 'retry_after': result.get('retry_after'),
+                'admins': admins if result.get('state') == 'ready' else [],
+                'profiles': [item for key, item in profiles.items() if key in trusted]})
+        except Exception as exc:
+            self.directory_retry_at[chat_id] = time.monotonic() + 30
+            log.warning('Telegram directory persistence deferred category=%s', type(exc).__name__)
+
     async def _sync_source(self, chat_id: str, source: dict) -> dict:
         if time.monotonic() < self.retry_at.get(chat_id, 0):
             return {"state": "backoff"}
         lock = self.locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
             checkpoint = await self.backend.checkpoint(chat_id, self.owner)
+            await self._refresh_directory(chat_id, source)
             original = int(checkpoint["last_message_id"])
             last, count = original, 0
             entity = await self._entity(chat_id)
@@ -492,6 +584,7 @@ class TelegramCollector:
         body = b"".join(chunks)
         if not body or not _valid_image(body, mime):
             raise ValueError("image_format_mismatch")
+        dimensions = await asyncio.to_thread(_image_dimensions, body, mime)
         digest = hashlib.sha256(body).hexdigest()
         # Keep message media in a dedicated namespace.  Avatar and future
         # review-evidence objects must never share this prefix, so retention
@@ -519,6 +612,7 @@ class TelegramCollector:
                 client.close()
         await asyncio.to_thread(upload)
         return {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size,
+                **dimensions,
                 "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION}
 
     async def _delete_media_object(self, object_key: str) -> None:
@@ -688,11 +782,11 @@ class TelegramCollector:
             self.invalid_session_fingerprint = None
             self.auth_state = {"state": "disconnected"}
             return {"state": "disconnected"}
-        if path in {"/dialogs", "/admins"}:
+        if path in {"/dialogs", "/admins", "/members"}:
             try:
                 if not await self.connect():
                     return {"items": [], "state": "unauthorized", "manual_id_allowed": False}
-                return await (self._dialogs(payload) if path == "/dialogs" else self._admins(payload))
+                return await ({'/dialogs': self._dialogs, '/admins': self._admins, '/members': self._members}[path](payload))
             except FloodWaitError as exc:
                 return {"items": [], "state": "flood_wait", "retry_after": exc.seconds}
             except Exception as exc:
@@ -709,7 +803,7 @@ class TelegramCollector:
                 if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
                     reason = "network_unavailable"
                 return {"items": [], "state": "unavailable", "reason": reason,
-                        "manual_id_allowed": path == "/admins" and reason == "member_enumeration_restricted",
+                        "manual_id_allowed": path in {"/admins", "/members"} and reason == "member_enumeration_restricted",
                         **(exc.details if isinstance(exc, SourceAccessError) else {})}
         return {"state": "unsupported"}
 
@@ -806,6 +900,58 @@ class TelegramCollector:
         return {"items": items, "next_cursor": str(offset + 50) if len(users)>50 else None, "state": "ready", "manual_id_allowed": True,
                 "anonymous_admins_may_be_unlisted": True, "chat_id": str(utils.get_peer_id(entity)), "title": getattr(entity, "title", ""),
                 "q": str(payload.get("q", "")).strip()}
+
+    async def _members(self, payload):
+        entity = await self._entity(str(payload.get('chat_id', '')))
+        offset, term = self._offset(payload.get('cursor')), self._directory_term(payload)
+        users = []
+        if isinstance(entity, Chat):
+            page = await self.client(GetFullChatRequest(entity.id))
+            if isinstance(page.full_chat.participants, ChatParticipantsForbidden):
+                raise SourceAccessError('member_enumeration_restricted')
+            by_id = {user.id: user for user in page.users}
+            for member in page.full_chat.participants.participants:
+                user = by_id.get(member.user_id)
+                if user is None:
+                    raise SourceAccessError('incomplete_member_page')
+                if not term or self._directory_matches(term, user.id, _nickname(user, str(user.id)), getattr(user, 'username', None), '@'+(getattr(user, 'username', None) or '')):
+                    users.append((user, member))
+            users = sorted(users, key=lambda pair: pair[0].id)[offset:offset+51]
+        elif (term.isascii() and term.isdigit()) or term.startswith('@'):
+            if not offset:
+                try:
+                    user = await self.client.get_entity(int(term) if term.isdigit() else term)
+                    page = await self.client(GetParticipantRequest(entity, user))
+                    if type(page.participant).__name__ not in {'ChannelParticipantLeft', 'ChannelParticipantBanned'}:
+                        users = [(user, page.participant)]
+                except ValueError:
+                    raise SourceAccessError('member_identity_unavailable') from None
+        else:
+            raw_offset, seen = offset, set()
+            while len(users)<51:
+                page = await self.client(GetParticipantsRequest(entity, ChannelParticipantsSearch(term), raw_offset, min(200, 51-len(users)), 0))
+                members, by_id = list(page.participants), {user.id:user for user in page.users}
+                if not members:
+                    break
+                for member in members:
+                    if member.user_id in seen or member.user_id not in by_id:
+                        raise SourceAccessError('incomplete_member_page')
+                    seen.add(member.user_id)
+                    users.append((by_id[member.user_id], member))
+                raw_offset += len(members)
+                if raw_offset>=getattr(page, 'count', raw_offset+1):
+                    break
+        items=[]
+        for user, member in users[:50]:
+            if getattr(user, 'deleted', False):
+                continue
+            role = 'owner' if isinstance(member, (ChatParticipantCreator, ChannelParticipantCreator)) else 'administrator' if isinstance(member, (ChatParticipantAdmin, ChannelParticipantAdmin)) else 'member'
+            items.append({'sender_id':str(user.id), 'nickname':_nickname(user,str(user.id)),
+                'username':getattr(user,'username',None), 'admin_kind':role, 'is_admin':role!='member',
+                'has_avatar':bool(getattr(user,'photo',None)), 'avatar_state':'not_loaded' if getattr(user,'photo',None) else 'absent'})
+        return {'state':'ready', 'items':items, 'next_cursor':str(offset+50) if len(users)>50 else None,
+                'chat_id':str(utils.get_peer_id(entity)), 'q':str(payload.get('q','')).strip(),
+                'member_scope':'all_visible_members', 'manual_id_allowed':True}
 
     async def _channel_admin_page(self, entity, offset, limit):
         page = await self.client(GetParticipantsRequest(channel=entity, filter=ChannelParticipantsAdmins(), offset=offset, limit=limit, hash=0))

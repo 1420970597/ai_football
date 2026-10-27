@@ -322,6 +322,13 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OrderNormalizationTests(unittest.TestCase):
+    def test_official_decimal_price_and_currency_remain_evidence_based(self):
+        row = normalize_order({'orderNo':'O','oddFinally':'1.975','odds':'197500','currencyCode':'CNY'}, 'settled')
+        self.assertEqual(('1.975','CNY'), (row['price'],row['currency']))
+        for payload in ({'odds':'197500'}, {'oddFinally':'1'}, {'oddFinally':'NaN'}):
+            self.assertIsNone(normalize_order({'orderNo':'O',**payload},'settled')['price'])
+        self.assertIsNone(normalize_order({'orderNo':'O','currency':'untrusted'},'settled')['currency'])
+
     def test_invalid_and_unknown_profit_never_become_zero(self):
         for row in ({"orderNo": "O", "winAmount": "3", "betAmount": "2"}, {"orderNo": "O", "profitAmount": "NaN", "betAmount": "2", "backAmount": "4"}):
             self.assertIsNone(normalize_order(row, "settled")["net_profit"])

@@ -90,6 +90,76 @@ class MediaOrphansAckInput(BaseModel):
     object_keys: list[str] = Field(min_length=1, max_length=500)
 
 
+class ProfileInput(BaseModel):
+    sender_id: str = Field(pattern=r'^-?[1-9][0-9]{0,18}$')
+    nickname: str = Field(min_length=1, max_length=120)
+
+
+class DirectoryInput(ClaimInput):
+    observed_at: AwareDatetime
+    state: str = Field(pattern='^(ready|unavailable|flood_wait)$')
+    reason: str | None = Field(default=None, max_length=100)
+    retry_after: int | None = Field(default=None, ge=0, le=864000)
+    admins: list[dict] = Field(default_factory=list, max_length=2000)
+    profiles: list[ProfileInput] = Field(default_factory=list, max_length=2000)
+
+
+@router.put('/internal/telegram/directory')
+async def sync_directory(body: DirectoryInput, request: Request):
+    authorized(request)
+    now = datetime.now(timezone.utc)
+    if abs((now - body.observed_at).total_seconds()) > 120:
+        raise HTTPException(422, '目录同步时间超出允许窗口')
+    safe_admins = []
+    seen = set()
+    for item in body.admins:
+        try:
+            profile = ProfileInput.model_validate(item)
+        except ValueError:
+            raise HTTPException(422, '管理员身份或昵称无效') from None
+        if profile.sender_id in seen or not profile.nickname.strip() or any(ord(c)<32 for c in profile.nickname):
+            raise HTTPException(422, '管理员目录不完整或包含重复身份')
+        seen.add(profile.sender_id)
+        if item.get('admin_kind') not in {'owner', 'administrator'}:
+            raise HTTPException(422, '管理员角色无效')
+        safe_admins.append({'sender_id': profile.sender_id, 'nickname': profile.nickname.strip(),
+            'username': str(item.get('username') or '')[:80], 'admin_kind': item['admin_kind'],
+            'has_avatar': bool(item.get('has_avatar')), 'avatar_state': 'not_loaded' if item.get('has_avatar') else 'absent'})
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            source = await source_for(conn, body.chat_id)
+            await check_lease(conn, source['id'], body.owner)
+            current = await conn.fetchval('SELECT last_attempt_at FROM v2_telegram_directories WHERE source_id=$1 FOR UPDATE', source['id'])
+            if current and current >= body.observed_at:
+                return {'persisted': False, 'state': 'stale'}
+            await conn.execute(
+                "INSERT INTO v2_telegram_directories(source_id,state,reason,retry_after,admins,last_attempt_at,last_success_at) "
+                "VALUES($1,$2::text,$3,$4,$5,$6::timestamptz,CASE WHEN $2::text='ready' THEN $6::timestamptz ELSE NULL END) "
+                "ON CONFLICT(source_id) DO UPDATE SET state=EXCLUDED.state,reason=EXCLUDED.reason,retry_after=EXCLUDED.retry_after,"
+                "admins=CASE WHEN EXCLUDED.state='ready' THEN EXCLUDED.admins ELSE v2_telegram_directories.admins END,"
+                "last_attempt_at=EXCLUDED.last_attempt_at,last_success_at=COALESCE(EXCLUDED.last_success_at,v2_telegram_directories.last_success_at)",
+                source['id'], body.state, body.reason, body.retry_after, safe_admins, body.observed_at)
+            updated = 0
+            for profile in body.profiles:
+                nickname = profile.nickname.strip()
+                if not nickname or any(ord(c)<32 for c in nickname):
+                    raise HTTPException(422, '专家昵称无效')
+                expert = await conn.fetchrow(
+                    'SELECT e.id,e.display_nickname FROM v2_experts e JOIN v2_source_experts se ON se.expert_id=e.id '
+                    'WHERE se.source_id=$1 AND se.enabled AND e.enabled AND e.platform_sender_id=$2 FOR UPDATE OF e',
+                    source['id'], profile.sender_id)
+                if not expert:
+                    continue
+                for name in {expert['display_nickname'], nickname}:
+                    await conn.execute(
+                        'INSERT INTO v2_expert_nickname_history(expert_id,nickname,first_seen_at,last_seen_at) VALUES($1,$2,$3,$3) '
+                        'ON CONFLICT(expert_id,nickname) DO UPDATE SET last_seen_at=EXCLUDED.last_seen_at', expert['id'], name, body.observed_at)
+                if nickname != expert['display_nickname']:
+                    await conn.execute('UPDATE v2_experts SET display_nickname=$2,updated_at=now() WHERE id=$1', expert['id'], nickname)
+                    updated += 1
+            return {'persisted': True, 'state': body.state, 'admins': len(safe_admins), 'nicknames_updated': updated}
+
+
 async def source_for(conn, chat_id: str):
     row = await conn.fetchrow("SELECT id,allow_media FROM v2_expert_sources WHERE platform_chat_id=$1 AND enabled", chat_id)
     if not row:
@@ -383,7 +453,7 @@ async def control(request: Request, path: str, payload: dict | None = None):
             result = response.json()
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=503, detail="Telegram 控制服务暂不可用，请稍后重试") from None
-    if path not in {"/status", "/dialogs", "/admins"}:
+    if path not in {"/status", "/dialogs", "/admins", "/members"}:
         async with database.current_pool().acquire() as conn:
             await audit(conn, admin["id"], "admin", "telegram_control_" + path.rsplit("/", 1)[-1], "telegram_account",
                         str((payload or {}).get("attempt_id", "")), getattr(request.state, "request_id", ""))
@@ -447,6 +517,19 @@ def directory_cursor(cursor):
     if cursor is not None and (not re.fullmatch(r"[0-9]{1,7}", cursor) or int(cursor) > 1_000_000):
         raise HTTPException(422, "无效的 Telegram 目录分页游标")
     return cursor
+
+
+@router.get('/api/v1/admin/telegram/members')
+async def telegram_members(request: Request, chat_id: str = Query(min_length=1, max_length=160),
+                           cursor: str | None = Query(default=None, max_length=7), q: str = Query(default='', max_length=160)):
+    chat_id = chat_id.strip()
+    if not (re.fullmatch(r'-[1-9][0-9]{0,18}', chat_id) or re.fullmatch(r'@[A-Za-z][A-Za-z0-9_]{4,31}', chat_id)):
+        raise HTTPException(422, '请使用负数稳定群组编号或 @频道用户名')
+    if chat_id.startswith('-') and int(chat_id) < -(2**63):
+        raise HTTPException(422, '群组编号超出支持范围')
+    if any(ord(char)<32 for char in q):
+        raise HTTPException(422, '搜索内容不能包含控制字符')
+    return await directory_control(request, '/members', {'chat_id':chat_id, 'cursor':directory_cursor(cursor), 'q':q.strip()})
 
 
 async def directory_control(request, path, payload):

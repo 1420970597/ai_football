@@ -88,6 +88,7 @@ services:
       EXPERT_MCP_TOKEN: ${EXPERT_MCP_TOKEN:?Set the project MCP service token}
       COLLECTOR_INTERNAL_TOKEN: ${COLLECTOR_INTERNAL_TOKEN:?Set the collector service token}
       EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Set the independent execution service token}
+      HERMES_API_KEY: ${HERMES_API_KEY:?Set the internal Hermes API token}
       LIVE_ORDERS_ENABLED: ${LIVE_ORDERS_ENABLED:-false}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
@@ -95,6 +96,7 @@ services:
       TELEGRAM_CONTROL_URL: http://collector:8092
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       QUOTE_MAX_AGE_SECONDS: ${QUOTE_MAX_AGE_SECONDS:-15}
+      FORWARDED_ALLOW_IPS: ${EDGE_WEB_IP:-10.79.253.2}
     volumes:
       - type: bind
         source: ${S3_CA_FILE:-./.runtime/s3-ca.crt}
@@ -114,7 +116,11 @@ services:
       timeout: 4s
       retries: 5
       start_period: 25s
-    networks: [app-private, storage-private]
+    networks:
+      app-private: {}
+      storage-private: {}
+      edge-private:
+        ipv4_address: ${EDGE_API_IP:-10.79.253.3}
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -165,6 +171,7 @@ services:
       context: .
       dockerfile: services/collector/Dockerfile
     restart: unless-stopped
+    group_add: ["10005"]
     environment:
       <<: *storage
       PLATFORM_API: http://api:8080/internal
@@ -203,6 +210,7 @@ services:
 
   executor:
     image: ghcr.io/1420970597/ai-football-executor:${APP_VERSION:-2.0.0-dev}
+    group_add: ["10005"]
     build:
       context: .
       dockerfile: services/executor/Dockerfile
@@ -314,12 +322,20 @@ services:
       interval: 15s
       timeout: 4s
       retries: 5
-    networks: [app-private, egress]
+    networks:
+      edge-private:
+        ipv4_address: ${EDGE_WEB_IP:-10.79.253.2}
+      egress: {}
     cpus: ${WEB_CPUS:-0.1}
     mem_limit: 128m
     logging: *logging
 
 networks:
+  edge-private:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${EDGE_SUBNET:-10.79.253.0/28}
   app-private:
     internal: true
   storage-private:

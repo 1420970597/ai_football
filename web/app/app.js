@@ -42,6 +42,8 @@ const state = {
   matches: [],
   cursor: null,
   experts: [],
+  expertFilters: { days: 30, phase: 'all', market_kind: 'all', source_id: '' },
+  expertSequence: 0,
   signals: [],
   signalCursor: null,
   messages: [],
@@ -54,6 +56,8 @@ const state = {
   followedExpertsOnly: false,
   matchAbort: null,
   matchSequence: 0,
+  matchQueryKey: null,
+  leagueSequence: 0,
   retryTimer: null,
   plans: [],
   mediaUrls: [],
@@ -255,6 +259,16 @@ function renderMatches() {
     });
 }
 async function loadMatches(append = false) {
+  const queryKey = JSON.stringify([state.date, state.phase, state.sport, [...state.leagueIds].sort(), state.q]);
+  if (queryKey !== state.matchQueryKey) {
+    state.matchAbort?.abort();
+    ++state.matchSequence;
+    state.matchQueryKey = queryKey;
+    state.matches = [];
+    state.cursor = null;
+    append = false;
+    renderMatches();
+  }
   if (!navigator.onLine) {
     $("#matches-notice").hidden = false;
     $("#matches-notice").textContent = "当前网络已断开，保留上次赛事。";
@@ -327,7 +341,7 @@ async function loadMatches(append = false) {
         `${stale} 场比赛报价过期或时间未知，保留显示供查询；详情会标明报价状态。`;
     }
   } catch (error) {
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted || sequence !== state.matchSequence) return;
     $("#service-state").textContent = "赛事服务暂未响应";
     if (state.matches.length) {
       $("#matches-notice").hidden = false;
@@ -338,7 +352,7 @@ async function loadMatches(append = false) {
     if (state.page === "scores")
       state.retryTimer = setTimeout(() => loadMatches(), 30000);
   } finally {
-    button.disabled = false;
+    if (sequence === state.matchSequence) button.disabled = false;
   }
 }
 function leagueLabel() {
@@ -347,6 +361,7 @@ function leagueLabel() {
     : "全部联赛 ▾";
 }
 async function loadLeagues() {
+  const sequence = ++state.leagueSequence;
   try {
     const data = await api(
       "/public/leagues?" +
@@ -357,9 +372,11 @@ async function loadLeagues() {
           tz: "Asia/Shanghai",
         }),
     );
+    if (sequence !== state.leagueSequence) return;
     state.leagueOptions = data.items;
     leagueLabel();
   } catch (error) {
+    if (sequence !== state.leagueSequence) return;
     $("#league-filter").title = error.message;
   }
 }
@@ -378,7 +395,7 @@ function renderExperts() {
   $("#experts-list").innerHTML = experts
     .map(
       (e, i) =>
-        `<article class="expert-row" data-expert-row="${esc(e.id)}"><div class="expert-identity"><button class="expert-name" data-expert="${esc(e.id)}"><span class="avatar">${esc((e.display_nickname || "?").slice(0, 1))}</span><span><strong>${esc(e.display_nickname)}</strong><small>${i + 1} 位 · 近30天 ${esc(e.total_signals ?? 0)} 条</small></span></button><button class="expert-follow" data-follow-expert="${esc(e.id)}" aria-label="关注 ${esc(e.display_nickname)}，仅当前浏览器" aria-pressed="${followedExperts.has(e.id)}" title="关注仅保存于当前浏览器，不启用自动投注">${followedExperts.has(e.id) ? "★" : "☆"}</button></div><span>${esc(e.settled_signals ?? 0)}</span><span>${percent(e.accuracy)}</span><span class="${color(e.unit_net)}">${e.settled_signals ? signed(e.unit_net) : "样本不足"}</span></article>`,
+        `<article class="expert-row" data-expert-row="${esc(e.id)}"><div class="expert-identity"><button class="expert-name" data-expert="${esc(e.id)}"><span class="avatar">${esc((e.display_nickname || "?").slice(0, 1))}</span><span><strong>${esc(e.display_nickname)}</strong><small>${i + 1} 位 · 近${state.expertFilters.days}天 ${esc(e.total_signals ?? 0)} 条 · 证据不足排除 ${esc(e.excluded_signals ?? 0)}</small></span></button><button class="expert-follow" data-follow-expert="${esc(e.id)}" aria-label="关注 ${esc(e.display_nickname)}，仅当前浏览器" aria-pressed="${followedExperts.has(e.id)}" title="关注仅保存于当前浏览器，不启用自动投注">${followedExperts.has(e.id) ? "★" : "☆"}</button></div><span>${esc(e.settled_signals ?? 0)}</span><span>${percent(e.accuracy)}</span><span class="${color(e.unit_net)}">${e.settled_signals ? signed(e.unit_net) : "样本不足"}</span></article>`,
     )
     .join("");
   applyExpertFollowing();
@@ -418,9 +435,16 @@ function applyExpertFollowing() {
     state.experts.some((expert) => followedExperts.has(expert.id));
 }
 async function loadExperts() {
+  const sequence = ++state.expertSequence;
   if (!state.experts.length) stateBox($("#experts-state"), { loading: true });
   try {
-    const data = await api("/public/experts?days=30");
+    const data = await api("/public/experts?" + params(state.expertFilters));
+    if (sequence !== state.expertSequence) return;
+    if (data.source_options) {
+      const select = $('#expert-stats-filter [name=source_id]');
+      select.innerHTML = '<option value="">全部来源</option>' + data.source_options.map(s => `<option value="${esc(s.id)}">${esc(s.display_name)}</option>`).join('');
+      select.value = state.expertFilters.source_id;
+    }
     state.experts = data.items;
     renderExperts();
     $("#experts-state").hidden = !!data.items.length;
@@ -431,6 +455,7 @@ async function loadExperts() {
       });
     await loadSignals();
   } catch (error) {
+    if (sequence !== state.expertSequence) return;
     if (!state.experts.length) displayError($("#experts-state"), error);
     else toast(error.message + "，保留上次专家记录");
   }
@@ -636,14 +661,16 @@ async function openExpert(id) {
   const sequence = state.dialogSequence;
   try {
     const [data, trend] = await Promise.all([
-      api("/public/experts/" + encodeURIComponent(id) + "?days=30"),
-      api("/public/experts/" + encodeURIComponent(id) + "/trend?days=365"),
+      api("/public/experts/" + encodeURIComponent(id) + "?" + params(state.expertFilters)),
+      api("/public/experts/" + encodeURIComponent(id) + "/trend?" + params(state.expertFilters)),
     ]);
     if (sequence !== state.dialogSequence) return;
     const e = data.expert;
+    const detailWindow = `近${state.expertFilters.days}天 · ${stamp(data.from_utc)} 至 ${stamp(data.to_utc)}`;
+    const qualityNote = `证据不足排除 ${esc(e.excluded_signals ?? 0)} 条（缺报价 ${esc(e.missing_quote_evidence ?? 0)}，结算证据无效 ${esc(e.invalid_settlement_evidence ?? 0)}）。`;
     $("#dialog-title").textContent = e.display_nickname;
     $("#dialog-content").innerHTML =
-      `<section class="detail-section"><div class="expert-name"><span class="avatar">${esc(e.display_nickname.slice(0, 1))}</span><h2>${esc(e.display_nickname)}</h2></div><p class="muted">近30天 · ${stamp(data.from_utc)} 至 ${stamp(data.to_utc)}</p><div class="metrics-grid"><div><small>已结算推荐</small><strong>${esc(e.settled_signals)}</strong></div><div><small>加权准确率</small><strong>${percent(e.accuracy)}</strong></div><div><small>1单位净收益</small><strong>${e.settled_signals ? signed(e.unit_net) : "样本不足"}</strong></div><div><small>有效本金 ROI</small><strong>${percent(e.unit_roi)}</strong></div></div><p class="muted">全赢 ${e.win ?? 0} · 半赢 ${e.half_win ?? 0} · 全输 ${e.loss ?? 0} · 半输 ${e.half_loss ?? 0} · 走盘 ${e.push ?? 0} · 作废 ${e.void ?? 0} · 待结算 ${e.pending ?? 0}</p><p class="form-note">平均每条净收益 ${e.settled_signals ? signed(e.average_unit_net) : "样本不足"}；准确率按赢/输有效份额加权，走盘与作废排除。统计基于最新赛果结算证据。</p></section><section class="detail-section"><h3>累计一单位净收益走势</h3>${chart(trend.items)}<p class="form-note">近365天，UTC日结算；无结算日不补收益。</p></section><section class="detail-section"><button class="primary-button" data-expert-messages="${esc(id)}">查看该专家全部发言与审核原文</button></section>`;
+      `<section class="detail-section"><div class="expert-name"><span class="avatar">${esc(e.display_nickname.slice(0, 1))}</span><h2>${esc(e.display_nickname)}</h2></div><p class="muted">${detailWindow}</p><div class="metrics-grid"><div><small>已结算推荐</small><strong>${esc(e.settled_signals)}</strong></div><div><small>加权准确率</small><strong>${percent(e.accuracy)}</strong></div><div><small>1单位净收益</small><strong>${e.settled_signals ? signed(e.unit_net) : "样本不足"}</strong></div><div><small>有效本金 ROI</small><strong>${percent(e.unit_roi)}</strong></div></div><p class="muted">全赢 ${e.win ?? 0} · 半赢 ${e.half_win ?? 0} · 全输 ${e.loss ?? 0} · 半输 ${e.half_loss ?? 0} · 走盘 ${e.push ?? 0} · 作废 ${e.void ?? 0} · 待结算 ${e.pending ?? 0}</p><p class="form-note">平均每条净收益 ${e.settled_signals ? signed(e.average_unit_net) : "样本不足"}；准确率按赢/输有效份额加权，走盘与作废排除。统计基于不可变系统报价及最新赛果结算证据。${qualityNote}</p></section><section class="detail-section"><h3>累计一单位净收益走势</h3>${chart(trend.items)}<p class="form-note">与所选统计窗口一致，按UTC结算日累计；无结算日不补收益。</p></section><section class="detail-section"><button class="primary-button" data-expert-messages="${esc(id)}">查看该专家全部发言与审核原文</button></section>`;
   } catch (error) {
     if (sequence !== state.dialogSequence) return;
     $("#dialog-content").innerHTML =
@@ -907,7 +934,7 @@ async function loadOrders(append = false) {
       state.orders
         .map(
           (order) =>
-            `<div class="admin-record"><strong>${esc({ pending: "待执行", submitting: "提交中", accepted: "已接单", rejected: "已拒绝", unknown: "接单结果未知，等待核对", settled: "已结算", cancelled: "已取消" }[order.state] || order.state)}</strong> · ${esc(order.home_team || order.fixture_id || "")}<br>${esc(order.display_nickname || "")} · ${esc(order.market_name || "")} ${esc(lineLabel(order))} ${esc(selection(order.selection))}<br>实际本金 ${decimal(order.stake)} · 成交赔率 ${decimal(order.price)} · 实际净收益 ${order.settled_net === null || order.settled_net === undefined ? "待结算" : signed(order.settled_net)}<br><span class="muted">${stamp(order.created_at)} · 订单 ${esc(order.provider_order_no || "未取得上游订单号")}<br>平台记录 ${esc(order.id)}</span></div>`,
+            `<div class="admin-record"><strong>${esc({ pending: "待执行", submitting: "提交中", accepted: "已接单", rejected: "已拒绝", unknown: "接单结果未知，等待核对", settled: "已结算", cancelled: "已取消" }[order.state] || order.state)}</strong> · ${esc(order.home_team || order.fixture_id || "")}<br>${esc(order.display_nickname || "")} · ${esc(order.market_name || "")} ${esc(lineLabel(order))} ${esc(selection(order.selection))}<br>预留本金 ${decimal(order.stake)} · 预留赔率 ${decimal(order.price)}<br>官方成交本金 ${order.provider_stake == null ? "未知" : decimal(order.provider_stake)} · 成交赔率 ${order.provider_price == null ? "未知" : decimal(order.provider_price)} · 币种 ${esc(order.provider_currency || "未知")}<br>实际净收益 ${order.settled_net == null ? (order.state === "settled" ? "官方回执未提供" : "待结算") : signed(order.settled_net)} · 手续费 ${order.provider_fees == null ? "未知" : decimal(order.provider_fees)}<br><span class="muted">官方下单 ${order.provider_placed_at ? stamp(order.provider_placed_at) : "未知"} · 官方结算 ${order.settled_at ? stamp(order.settled_at) : "未知"}<br>${stamp(order.created_at)} · 订单 ${esc(order.provider_order_no || "未取得上游订单号")}<br>平台记录 ${esc(order.id)}</span></div>`,
         )
         .join("") || '<div class="empty-state">暂无真实订单</div>';
   } catch (error) {
@@ -1061,6 +1088,14 @@ function events() {
       else loadExperts();
     }
   });
+  $('#expert-stats-filter').onsubmit = (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    state.expertFilters = {days: Number(form.get('days')), phase: form.get('phase'), market_kind: form.get('market_kind'), source_id: form.get('source_id')};
+    state.experts = [];
+    renderExperts();
+    loadExperts();
+  };
   $("#account-entry").onclick = () => (state.user ? route("account") : auth());
   $("#date-prev").onclick = () => setDate(shiftDay(state.date, -1));
   $("#date-next").onclick = () => setDate(shiftDay(state.date, 1));

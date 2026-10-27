@@ -665,6 +665,24 @@ h3 {
 .expert-name small {
   font-size: 10px;
   color: #666;
+  display: block;
+  overflow-wrap: anywhere;
+}
+.expert-name > span:last-child {
+  min-width: 0;
+}
+#expert-stats-filter {
+  flex-wrap: wrap;
+}
+#expert-stats-filter label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+#expert-stats-filter select {
+  max-width: 160px;
 }
 .signal-card,
 .message-card {
@@ -1572,8 +1590,9 @@ dialog::backdrop {
     grid-template-columns:
       43px 0 0 minmax(78px, 1fr) 49px minmax(78px, 1fr)
       0 26px;
-    min-height: 74px;
-    padding: 16px 4px 12px;
+    min-height: 78px;
+    padding: 16px 4px 4px;
+    row-gap: 2px;
     border-bottom: 1px solid #e5e1ed;
   }
   .match-league {
@@ -1614,18 +1633,25 @@ dialog::backdrop {
     letter-spacing: 1px;
   }
   .match-odds {
-    position: absolute;
-    bottom: 4px;
-    left: 55px;
-    right: 25px;
+    position: static;
+    grid-column: 4 / 8;
+    grid-row: 2;
     display: flex;
-    gap: 14px;
+    align-items: center;
+    gap: 4px 8px;
+    min-width: 0;
     padding: 0;
     font-size: 9px;
     line-height: 12px;
   }
   .match-odds span {
     padding: 0 2px;
+    white-space: nowrap;
+  }
+  .match-odds .detail-button {
+    width: auto;
+    min-height: 24px;
+    padding: 3px 2px;
   }
   .detail-button {
     font-size: 10px;
@@ -1984,18 +2010,23 @@ dialog::backdrop {
 @media (max-width: 720px) {
   .match-league {
     grid-column: 1;
+    grid-row: 1 / 3;
   }
   .team-home {
     grid-column: 4;
+    grid-row: 1;
   }
   .score-button {
     grid-column: 5;
+    grid-row: 1;
   }
   .team-away {
     grid-column: 6;
+    grid-row: 1;
   }
   .match-row > .detail-button {
     grid-column: 8;
+    grid-row: 1 / 3;
   }
 }
 .market-group h4 {

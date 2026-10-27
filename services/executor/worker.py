@@ -101,7 +101,9 @@ class Executor:
                         scanned.append(order['id'])
                         if lookup["found"] and not lookup.get("ambiguous"):
                             item = lookup["receipt"]
-                            receipts.append({key: item.get(key) for key in ("order_no", "state", "net_profit", "pnl_basis", "fees")})
+                            receipts.append({key: item.get(key) for key in (
+                                "order_no", "state", "net_profit", "pnl_basis", "fees",
+                                "price", "stake", "payout", "currency", "placed_at", "settled_at")})
                     if work.get('orders'):
                         balance = await client.balance()
                 result.update(status="success", balance=balance["available"], observed_at=balance["observed_at"], receipts=receipts,scanned_orders=scanned)

@@ -15,6 +15,7 @@ from ..security import encrypt_secret, decrypt_secret
 from ..membership import has_entitlement
 from .operations import collector_health
 from .renewal import LEYU_CONFIG_KEYS, LEYU_SECRET_KEYS, revision_locked
+from ..runtime_settings import RUNTIME_KEYS, validate_runtime_value
 
 router = APIRouter(prefix="/api/v1/admin")
 SECRET_SETTINGS = set(LEYU_SECRET_KEYS) | {"telegram_api_hash", "telegram_session", "leyu_login_password", "leyu_app_signing_config", "leyu_app_discovery_config", "leyu_login_proxy_password_template"}
@@ -242,6 +243,19 @@ async def list_source_experts(source_id: uuid.UUID, request: Request):
                             **configured_sender_identity(row["platform_sender_id"])) for row in rows]}
 
 
+@router.get('/sources/{source_id}/directory')
+async def source_directory(source_id: uuid.UUID, request: Request):
+    await require_admin(request)
+    pool = database.current_pool()
+    if not await pool.fetchval('SELECT 1 FROM v2_expert_sources WHERE id=$1', source_id):
+        raise HTTPException(404, '来源不存在')
+    row = await pool.fetchrow('SELECT state,reason,retry_after,admins,last_attempt_at,last_success_at FROM v2_telegram_directories WHERE source_id=$1', source_id)
+    if not row:
+        return {'state': 'pending', 'items': [], 'automatic': True}
+    return {key: value for key, value in dict(row).items() if key!='admins'} | {
+        'items': row['admins'], 'automatic': True, 'trust_automatically_granted': False}
+
+
 @router.post("/sources/{source_id}/experts", status_code=201)
 async def add_source_expert(source_id: uuid.UUID, body: SourceExpertInput, request: Request):
     admin = await require_admin(request)
@@ -298,7 +312,8 @@ async def get_settings(request: Request):
         try:
             value = decrypt_secret(settings.encryption_key, row["encrypted_value"])
         except Exception:
-            output[key] = {"configured": False, "masked": True}
+            output[key] = {"configured": True, "masked": True, "value": None,
+                           "state": "unreadable", "reason": "configuration_key_or_ciphertext_invalid"}
             continue
         output[key] = {
             "configured": True,
@@ -337,6 +352,11 @@ async def update_settings(body: SettingsInput, request: Request):
     unknown = set(body.values) - ALLOWED_SETTINGS
     if unknown:
         raise HTTPException(status_code=422, detail="包含不允许的配置键")
+    for key in set(body.values) & RUNTIME_KEYS:
+        try:
+            body.values[key] = validate_runtime_value(key, body.values[key])
+        except ValueError as exc:
+            raise HTTPException(422, detail=str(exc)) from None
     relay = str(body.values.get("leyu_collection_relay", "")).strip()
     if relay:
         try:
@@ -353,6 +373,7 @@ async def update_settings(body: SettingsInput, request: Request):
     pool = database.current_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
             leyu_keys = set(body.values) & LEYU_CONFIG_KEYS
             version = None
             if leyu_keys:
@@ -401,7 +422,8 @@ async def update_settings(body: SettingsInput, request: Request):
                 "application_state": "persisted_unverified" if leyu_keys & set(changed) else "persisted",
                 "runtime_acknowledged": False,
             }
-            await audit(conn, admin["id"], "admin", "settings_updated", "admin_settings", "", details=details)
+            await audit(conn, admin["id"], "admin", "settings_updated", "admin_settings", "",
+                        getattr(request.state, "request_id", ""), details=details)
     application = {
         "state": "persisted_unverified" if leyu_keys & set(changed) else "persisted",
         "requested_revision": version,
@@ -430,6 +452,11 @@ async def upsert_plan(code: str, body: PlanInput, request: Request):
     plan_id = uuid.uuid4()
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"membership-plan:{code}")
+            previous = await conn.fetchrow(
+                "SELECT name,price,currency,duration_days,entitlements,enabled FROM v2_membership_plans WHERE code=$1 FOR UPDATE", code,
+            )
             plan_id = await conn.fetchval(
                 "INSERT INTO v2_membership_plans(id,code,name,price,currency,duration_days,entitlements,enabled) "
                 "VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,"
@@ -438,7 +465,12 @@ async def upsert_plan(code: str, body: PlanInput, request: Request):
                 plan_id, body.code, body.name, body.price, body.currency, body.duration_days,
                 body.entitlements, body.enabled,
             )
-            await audit(conn, admin["id"], "admin", "membership_plan_updated", "membership_plan", body.code)
+            after = body.model_dump(mode="json", exclude={"code"})
+            before = dict(previous) if previous else None
+            if before is not None:
+                before["price"] = str(before["price"])
+            await audit(conn, admin["id"], "admin", "membership_plan_updated", "membership_plan", body.code,
+                        getattr(request.state, "request_id", ""), {"before": before, "after": after})
     return {"id": str(plan_id), "code": body.code, "enabled": body.enabled}
 
 
@@ -448,6 +480,7 @@ async def grant_membership(body: GrantInput, request: Request):
     pool = database.current_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
             reason = body.reason.strip()
             if len(reason) < 3:
                 raise HTTPException(status_code=422, detail="开通原因至少三个非空字符")
@@ -524,6 +557,7 @@ async def revoke_membership(membership_id: uuid.UUID, body: RevokeInput, request
         raise HTTPException(status_code=422, detail="撤销原因至少三个非空字符")
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
             row = await conn.fetchrow("SELECT user_id,status FROM v2_memberships WHERE id=$1 FOR UPDATE", membership_id)
             if not row:
                 raise HTTPException(status_code=404, detail="会员授予不存在")

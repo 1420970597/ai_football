@@ -162,6 +162,13 @@
             </button>
           </div>
           <div id="experts-state" class="empty-state" hidden></div>
+          <form id="expert-stats-filter" class="filter-row" aria-label="专家统计筛选">
+            <label>统计窗口<select name="days"><option value="7">近7天</option><option value="30" selected>近30天</option><option value="90">近90天</option><option value="365">近365天</option></select></label>
+            <label>推荐阶段<select name="phase"><option value="all">全部阶段</option><option value="scheduled">赛前</option><option value="live">滚球</option></select></label>
+            <label>玩法<select name="market_kind"><option value="all">全部玩法</option><option value="winner">独赢</option><option value="handicap">让球</option><option value="total">大小</option></select></label>
+            <label>推荐来源<select name="source_id"><option value="">全部来源</option></select></label>
+            <button class="small-button" type="submit">应用统计筛选</button>
+          </form>
           <div id="expert-ranking">
             <div class="filter-row">
               <button
@@ -610,14 +617,15 @@
                       class="compact-form directory-search"
                     >
                       <label
-                        >搜索本群管理员<input
+                        >搜索群内作者<input
                           id="tg-admin-search"
                           type="search"
                           maxlength="120"
                           placeholder="昵称、作者 ID 或 @用户名"
                       /></label>
+                      <label>搜索范围<select id="tg-directory-scope"><option value="members">所有成员（含普通成员）</option><option value="admins">仅管理员</option></select></label>
                       <div class="form-actions">
-                        <button class="small-button">搜索管理员</button
+                        <button class="small-button">搜索成员</button
                         ><button
                           type="button"
                           id="tg-admin-search-clear"
@@ -629,7 +637,7 @@
                     </form>
                     <div id="source-admins"></div>
                     <button id="tg-admins-more" class="small-button" hidden>
-                      更多管理员
+                      加载更多作者
                     </button>
                     <form id="expert-source-form" class="compact-form">
                       <h3>添加已核验作者</h3>
