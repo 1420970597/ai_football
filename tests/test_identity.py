@@ -17,7 +17,7 @@ import asyncpg
 from fastapi import FastAPI
 import httpx
 
-from app import auth, database
+from app import auth, database, identity_lifecycle
 from app.membership import resolve_memberships
 from app.routes import accounts, admin, public
 from app.security import decrypt_secret, encrypt_secret, hash_password, token_hash, totp_valid, verify_password
@@ -98,7 +98,7 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.app.state.settings = SimpleNamespace(cookie_secure=False, encryption_key=bytes(range(32)), hermes_api_key="test")
         self.app.state.hermes_probe = SimpleNamespace(check=AsyncMock(return_value="unverified"))
         self.app.state.decrypt_secret = lambda value: decrypt_secret(bytes(range(32)), value)
-        for router in (auth.router, admin.router, accounts.router, public.router):
+        for router in (auth.router, admin.router, accounts.router, public.router, identity_lifecycle.router):
             self.app.include_router(router)
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://testserver")
         self.admin_id = uuid.uuid4()
@@ -184,6 +184,38 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(401, replay.status_code)
         self.assertEqual(200, (await self.client.post("/api/v1/auth/logout", headers=self.csrf())).status_code)
         self.assertEqual(200, (await self.client.get("/api/v1/admin/me")).status_code)
+
+    async def test_admin_identifier_login_and_reauthentication_without_totp(self):
+        password = PASSWORD
+        await self.pool.execute(
+            "UPDATE v2_users SET email=$2,password_hash=$3,totp_secret_ciphertext=NULL,totp_last_step=NULL WHERE id=$1",
+            self.admin_id, "f1420970597", hash_password(password),
+        )
+        response = await self.client.post(
+            "/api/v1/admin/login", json={"email": "f1420970597", "password": password},
+        )
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual("f1420970597", response.json()["user"]["email"])
+        self.assertEqual(200, (await self.client.get("/api/v1/admin/me")).status_code)
+        reauth = await self.client.post(
+            "/api/v1/admin/reauthenticate", headers=self.csrf(admin_session=True),
+            json={"password": password},
+        )
+        self.assertEqual(200, reauth.status_code, reauth.text)
+
+    async def test_bootstrap_creates_admin_identifier_without_totp(self):
+        await self.pool.execute("DELETE FROM v2_users WHERE id=$1", self.admin_id)
+        settings = SimpleNamespace(
+            bootstrap_admin_email="f1420970597", bootstrap_admin_password=PASSWORD,
+            bootstrap_admin_totp_secret="", encryption_key=bytes(range(32)),
+        )
+        await auth.bootstrap_admin(self.pool, settings)
+        row = await self.pool.fetchrow(
+            "SELECT email,password_hash,totp_secret_ciphertext FROM v2_users WHERE role='admin'",
+        )
+        self.assertEqual("f1420970597", row["email"])
+        self.assertTrue(verify_password(PASSWORD, row["password_hash"]))
+        self.assertIsNone(row["totp_secret_ciphertext"])
 
     async def test_registration_login_and_admin_csrf_boundaries(self):
         await self.register()

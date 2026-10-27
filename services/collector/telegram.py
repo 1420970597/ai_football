@@ -14,7 +14,8 @@ import uuid
 import boto3
 from botocore.config import Config
 from telethon import TelegramClient, events, utils
-from telethon.errors import FloodWaitError, SessionPasswordNeededError, PasswordHashInvalidError
+from telethon.errors import (AuthKeyDuplicatedError, FloodWaitError,
+                             SessionPasswordNeededError, PasswordHashInvalidError)
 from telethon.sessions import StringSession
 from telethon.tl.types import (Channel, ChannelForbidden, ChannelParticipantsAdmins,
                               ChannelParticipantAdmin, ChannelParticipantCreator, Chat, ChatForbidden,
@@ -89,6 +90,7 @@ class TelegramCollector:
         self.owner = str(uuid.uuid4())
         self.sources: dict[str, dict] = {}
         self.locks: dict[str, asyncio.Lock] = {}
+        self.session_state_lock = asyncio.Lock()
         self.retry_at: dict[str, float] = {}
         self.control_server = None
         self.auth_client = None
@@ -120,6 +122,13 @@ class TelegramCollector:
         self.invalid_session_fingerprint = fingerprint
         self.auth_state = {"state": "session_invalid"}
 
+    async def _invalidate_active_session(self):
+        async with self.session_state_lock:
+            client = self.client
+            if client is not None:
+                session = str(self.config.get("telegram_session", "")).strip()
+                await self._mark_session_invalid(client, self._session_fingerprint(session))
+
     def _new_client(self, session: str):
         api_id = config_int(self.config.get("telegram_api_id", ""))
         api_hash = str(self.config.get("telegram_api_hash", "")).strip()
@@ -129,15 +138,19 @@ class TelegramCollector:
 
     async def connect(self) -> bool:
         if self.client:
-            if not self.client.is_connected():
-                await self.client.connect()
-            if not await self.client.is_user_authorized():
-                session = str(self.config.get("telegram_session", "")).strip()
-                await self._mark_session_invalid(self.client, self._session_fingerprint(session))
-                return False
-            self.account = self._saved_account(self.config)
-            self.auth_state = {"state": "authorized", "account": self.account} if self.account else {"state": "authorized"}
-            return True
+            try:
+                if not self.client.is_connected():
+                    await self.client.connect()
+                if not await self.client.is_user_authorized():
+                    session = str(self.config.get("telegram_session", "")).strip()
+                    await self._mark_session_invalid(self.client, self._session_fingerprint(session))
+                    return False
+                self.account = self._saved_account(self.config)
+                self.auth_state = {"state": "authorized", "account": self.account} if self.account else {"state": "authorized"}
+                return True
+            except AuthKeyDuplicatedError:
+                await self._invalidate_active_session()
+                raise
         session = str(self.config.get("telegram_session", "")).strip()
         if not session:
             return False
@@ -150,6 +163,9 @@ class TelegramCollector:
             if not await candidate.is_user_authorized():
                 await self._mark_session_invalid(candidate, fingerprint)
                 return False
+        except AuthKeyDuplicatedError:
+            await self._mark_session_invalid(candidate, fingerprint)
+            raise
         except BaseException:
             await candidate.disconnect()
             raise
@@ -247,6 +263,10 @@ class TelegramCollector:
                 except FloodWaitError as exc:
                     self.retry_at[chat_id] = time.monotonic() + exc.seconds
                     result[chat_id] = {"state": "flood_wait", "retry_after": exc.seconds}
+                except AuthKeyDuplicatedError as exc:
+                    await self._invalidate_active_session()
+                    result[chat_id] = {"state": "unavailable", "error": type(exc).__name__}
+                    log.warning("Telegram session invalidated category=%s", type(exc).__name__)
                 except Exception as exc:
                     result[chat_id] = {"state": "unavailable", "error": type(exc).__name__}
                     log.warning("Telegram source unavailable category=%s", type(exc).__name__)
@@ -431,6 +451,8 @@ class TelegramCollector:
                     entity = await self._entity(chat_id)
                     await self._process_message(chat_id, source, members[0], entity)
         except Exception as exc:
+            if isinstance(exc, AuthKeyDuplicatedError):
+                await self._invalidate_active_session()
             # 不移动高水位，周期补拉负责重新投递失败的新消息。
             log.warning("Telegram live event deferred category=%s", type(exc).__name__)
 
@@ -451,6 +473,8 @@ class TelegramCollector:
                 await self.backend.checkpoint(chat_id, self.owner)
                 await self._delete(chat_id, [int(value) for value in event.deleted_ids])
         except Exception as exc:
+            if isinstance(exc, AuthKeyDuplicatedError):
+                await self._invalidate_active_session()
             log.warning("Telegram deletion unavailable category=%s", type(exc).__name__)
 
     async def _store_media(self, chat: str, message) -> dict:
@@ -672,6 +696,10 @@ class TelegramCollector:
             except FloodWaitError as exc:
                 return {"items": [], "state": "flood_wait", "retry_after": exc.seconds}
             except Exception as exc:
+                if isinstance(exc, AuthKeyDuplicatedError):
+                    await self._invalidate_active_session()
+                    return {"items": [], "state": "unauthorized", "reason": "session_invalid",
+                            "manual_id_allowed": False}
                 reason = {"ChatAdminRequiredError": "member_enumeration_restricted", "ChannelPrivateError": "source_not_accessible",
                           "UserNotParticipantError": "account_has_not_joined", "ChannelInvalidError": "invalid_source_identifier",
                           "PeerIdInvalidError": "invalid_source_identifier", "UsernameInvalidError": "invalid_source_identifier",

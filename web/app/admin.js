@@ -46,7 +46,7 @@ export async function loadAdmin() {
   $("#admin-logout").hidden = !admin;
   $("#admin-identity").innerHTML = admin
     ? `<div class="identity-card"><h2>${esc(admin.user.display_name)} · 管理员</h2><p>${esc(admin.user.email)} · 管理会话独立于普通用户会话</p></div>`
-    : '<div class="identity-card"><h2>管理员独立入口</h2><p>使用管理员账号、密码与动态验证码登录。用户会话不会获得管理权限。</p><button class="primary-button" data-login="admin">管理员登录</button></div>';
+    : '<div class="identity-card"><h2>管理员独立入口</h2><p>使用管理员账号和密码登录；已启用二次验证时还需输入动态验证码。用户会话不会获得管理权限。</p><button class="primary-button" data-login="admin">管理员登录</button></div>';
   if (!admin) return;
   await Promise.allSettled([
     loadStatus(),
@@ -244,6 +244,7 @@ const tgNames = {
   waiting_password: "需要两步密码",
   authorized_pending_save: "授权成功，等待远端安全保存",
   authorized: "授权已保存",
+  session_invalid: "旧会话已被 Telegram 废弃，请重新扫码授权",
   expired: "二维码已过期，请重新生成",
   failed: "授权失败",
   cancelled: "已取消授权",

@@ -26,6 +26,8 @@ def configure_logging() -> None:
     # HTTP客户端INFO会记录完整URL，提取代理地址的查询串可能含密码或key。
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    # TypeNotFound 的诊断会把未解析的 MTProto 字节（可能包含消息正文）写入日志。
+    logging.getLogger("telethon.network.mtprotosender").setLevel(logging.WARNING)
 
 
 async def get_config(client: httpx.AsyncClient, api_url: str = API_URL) -> dict[str, str]:

@@ -235,7 +235,7 @@ function requestReauthentication(context) {
   $("#reauth-title").textContent =
     context === "admin" ? "再次验证管理身份" : "再次验证本人身份";
   $("#reauth-totp").hidden = context !== "admin";
-  form.elements.totp_code.required = context === "admin";
+  form.elements.totp_code.required = false;
   $("#reauth-message").textContent =
     "当前操作需要近期身份验证。已填写内容会保留；验证成功后请再次提交原操作。";
   form.onsubmit = async (event) => {
@@ -250,7 +250,7 @@ function requestReauthentication(context) {
           context,
           body: {
             password: form.elements.password.value,
-            ...(context === "admin"
+            ...(context === "admin" && form.elements.totp_code.value
               ? { totp_code: form.elements.totp_code.value }
               : {}),
           },

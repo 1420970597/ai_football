@@ -901,8 +901,8 @@
         ><button data-auth-tab="admin">管理员</button>
       </div>
       <form id="auth-form" class="compact-form">
-        <label
-          >邮箱<input
+        <label id="auth-identity-label"
+          ><span>邮箱</span><input
             name="email"
             type="email"
             autocomplete="username"
@@ -916,7 +916,7 @@
             autocomplete="current-password"
             required /></label
         ><label id="totp-field" hidden
-          >动态验证码<input
+          >动态验证码（如已启用）<input
             name="totp_code"
             inputmode="numeric"
             pattern="[0-9]{6}"
@@ -960,7 +960,7 @@
             required
         /></label>
         <label id="reauth-totp" hidden
-          >动态验证码<input
+          >动态验证码（如已启用）<input
             name="totp_code"
             inputmode="numeric"
             pattern="[0-9]{6}"

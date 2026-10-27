@@ -16,6 +16,7 @@ from .security import encrypt_secret, hash_password, new_token, token_hash, totp
 
 router = APIRouter(prefix="/api/v1")
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+ADMIN_IDENTIFIER_RE = re.compile(r"^(?:[^\s@]+@[^\s@]+\.[^\s@]+|[A-Za-z0-9_.-]{3,254})$")
 USER_COOKIE = "v2_session"
 ADMIN_COOKIE = "v2_admin_session"
 CSRF_COOKIE = "v2_csrf"
@@ -36,7 +37,8 @@ class LoginInput(BaseModel):
 
 
 class AdminLoginInput(LoginInput):
-    totp_code: str = Field(pattern=r"^[0-9]{6}$")
+    password: str = Field(min_length=6, max_length=128)
+    totp_code: str | None = Field(default=None, pattern=r"^[0-9]{6}$")
 
 
 class ProfileInput(BaseModel):
@@ -102,12 +104,15 @@ def _display_name(value: str) -> str:
 
 
 async def bootstrap_admin(pool, settings) -> None:
-    if not all((settings.bootstrap_admin_email, settings.bootstrap_admin_password, settings.bootstrap_admin_totp_secret)):
+    if not settings.bootstrap_admin_email or not settings.bootstrap_admin_password:
         return
-    if not EMAIL_RE.fullmatch(settings.bootstrap_admin_email) or len(settings.bootstrap_admin_password) < 12:
+    if not ADMIN_IDENTIFIER_RE.fullmatch(settings.bootstrap_admin_email) or len(settings.bootstrap_admin_password) < 6:
         raise RuntimeError("bootstrap administrator configuration is invalid")
     password_hash = await asyncio.to_thread(hash_password, settings.bootstrap_admin_password)
-    totp_ciphertext = encrypt_secret(settings.encryption_key, settings.bootstrap_admin_totp_secret)
+    totp_ciphertext = (
+        encrypt_secret(settings.encryption_key, settings.bootstrap_admin_totp_secret)
+        if settings.bootstrap_admin_totp_secret else None
+    )
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext('v2-bootstrap-admin'))")
@@ -322,6 +327,8 @@ async def login(body: LoginInput, request: Request, response: Response):
 @router.post("/admin/login")
 async def admin_login(body: AdminLoginInput, request: Request, response: Response):
     email = body.email.strip().lower()
+    if not ADMIN_IDENTIFIER_RE.fullmatch(email):
+        raise HTTPException(status_code=422, detail="管理员账号格式无效")
     await _limit(request, "admin_login", email, maximum=5)
     row = await database.current_pool().fetchrow(
         "SELECT id,email,display_name,role,password_hash,totp_secret_ciphertext,disabled_at "
@@ -330,24 +337,32 @@ async def admin_login(body: AdminLoginInput, request: Request, response: Respons
     password_ok = await _hash_job(request, verify_password, body.password, row["password_hash"] if row else DUMMY_HASH)
     if not row or row["disabled_at"] is not None or not password_ok:
         raise HTTPException(status_code=401, detail="管理员凭据无效")
-    try:
-        secret = request.app.state.decrypt_secret(row["totp_secret_ciphertext"])
-    except Exception:
-        raise HTTPException(status_code=503, detail="管理员二次验证未配置") from None
-    step = totp_step(secret, body.totp_code)
-    if step is None:
-        raise HTTPException(status_code=401, detail="动态验证码无效")
+    step = None
+    if row["totp_secret_ciphertext"]:
+        try:
+            secret = request.app.state.decrypt_secret(row["totp_secret_ciphertext"])
+        except Exception:
+            raise HTTPException(status_code=503, detail="管理员二次验证配置无法读取") from None
+        step = totp_step(secret, body.totp_code)
+        if step is None:
+            raise HTTPException(status_code=401, detail="动态验证码无效")
     user = {key: row[key] for key in ("id", "email", "display_name", "role")}
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            accepted = await conn.fetchval(
-                "UPDATE v2_users SET totp_last_step=$2 WHERE id=$1 "
-                "AND (totp_last_step IS NULL OR totp_last_step<$2) AND disabled_at IS NULL AND password_hash=$3 "
-                "AND totp_secret_ciphertext=$4 RETURNING id",
-                row["id"], step, row["password_hash"], row["totp_secret_ciphertext"],
+            current = await conn.fetchrow(
+                "SELECT password_hash,disabled_at,totp_secret_ciphertext,totp_last_step "
+                "FROM v2_users WHERE id=$1 FOR UPDATE", row["id"],
             )
-            if not accepted:
-                raise HTTPException(status_code=401, detail="动态验证码无效或已使用")
+            if (
+                not current or current["disabled_at"] is not None
+                or not hmac.compare_digest(current["password_hash"], row["password_hash"])
+                or (current["totp_secret_ciphertext"] or "") != (row["totp_secret_ciphertext"] or "")
+            ):
+                raise HTTPException(status_code=401, detail="管理员凭据或验证器已变更")
+            if step is not None:
+                if current["totp_last_step"] is not None and current["totp_last_step"] >= step:
+                    raise HTTPException(status_code=401, detail="动态验证码无效或已使用")
+                await conn.execute("UPDATE v2_users SET totp_last_step=$2 WHERE id=$1", row["id"], step)
             session = await _create_session(request, response, user, "admin", conn)
     return {"user": user, **session}
 

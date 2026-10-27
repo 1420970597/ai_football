@@ -933,11 +933,13 @@ function auth(tab = "login") {
   $("#display-name-field").hidden = tab !== "register";
   $("#display-name-field input").required = tab === "register";
   $("#totp-field").hidden = tab !== "admin";
-  $("#totp-field input").required = tab === "admin";
+  $("#totp-field input").required = false;
   $("#admin-recovery-field").hidden = tab !== "admin-recovery";
   $("#admin-recovery-field input").required = tab === "admin-recovery";
   $("#admin-recovery-toggle").hidden = !isAdmin;
-  $("#auth-form").elements.password.minLength = tab === "register" ? 12 : 1;
+  $("#auth-identity-label span").textContent = tab === "admin" || tab === "admin-recovery" ? "管理员账号" : "邮箱";
+  $("#auth-form").elements.email.type = tab === "admin" || tab === "admin-recovery" ? "text" : "email";
+  $("#auth-form").elements.password.minLength = tab === "register" ? 12 : tab === "admin" ? 6 : 1;
   $("#auth-form button").textContent = tab === "register" ? "注册" : "登录";
   $("#auth-message").textContent = "";
   showDialog($("#auth-dialog"), $("#auth-form").elements.email);
@@ -1139,7 +1141,7 @@ function events() {
       const fields = Object.fromEntries(new FormData(form));
       const body = { email: fields.email, password: fields.password };
       if (state.authTab === "register") body.display_name = fields.display_name;
-      if (state.authTab === "admin") body.totp_code = fields.totp_code;
+      if (state.authTab === "admin" && fields.totp_code) body.totp_code = fields.totp_code;
       if (state.authTab === "admin-recovery")
         body.recovery_code = fields.recovery_code;
       try {

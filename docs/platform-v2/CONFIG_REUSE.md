@@ -59,9 +59,9 @@ docker run --rm --network none --cpus .5 --memory 256m --user "$(id -u):$(id -g)
 | 乐鱼 App | 找到当前远端生效登录、签名、设备、代理、动态发现和 token | 16 项采集白名单设置已加密写入当前台账；采集器重新加载后 WebSocket 有事件，但轮询受上游限流，真实会话新鲜度仍待确认 |
 | 乐鱼场馆 | 找到真实场馆缓存 request_id、host、origin、obtained_at、ttl及Cookie字段 | 无随机生成授权；尚未按新适配完整联调，不把找到的缓存标为仍有效 |
 | 登录专用代理 | 找到当前运行代理配置和旧实现引用 | 保留模板配置，未固定出口IP；请求范围由新登录客户端行为测试验证 |
-| Telegram 应用 | 版本74设置存在 API ID、Hash、已启用状态及3组来源 | 已整理独立配置，不要求用户重填；未与Telegram发起真实新连接 |
-| Telegram 会话 | 找到原 Fernet 密钥及加密会话，原钥成功解密且保留 | 仅验证密文完整与非空；旧服务可能仍使用此会话，未在另一IP并行连接 |
-| 专家映射 | 3组来源有 chat_id、sender_ids、title、enabled等配置 | 稳定编号及映射已保存供新平台导入；未迁移专家历史统计或伪造昵称 |
+| Telegram 应用 | v1 PostgreSQL `runtime_settings` 的 API ID/Hash 和受保护配置中的启用标志已复用并加密写入 v2；状态设置已核对 | 不需要重新填写应用凭据；v2 容器曾确认会话授权，但后续 Telegram 返回重复授权错误 |
+| Telegram 会话 | v1 受保护配置中的 StringSession 与 v1 `telegram-private/user.session.enc` 解密后的会话相同，已按 v2 数据密钥加密迁入 | 该授权密钥已由 Telegram 以 `AUTH_KEY_DUPLICATED` 废弃；需要用现有 API 凭据重新扫码生成会话，不能继续重试旧密钥 |
+| 专家映射 | v1 的 3 个来源及 7 个稳定作者身份映射已事务化写入 v2，3 个来源均启用 | 昵称由已授权会话首次读取时同步；未迁移专家历史统计或伪造昵称 |
 | 模型网关 | 旧环境及远端设置均有模型地址、路由与访问键 | 新Hermes配置已有映射；真实文字、视觉及工具回路未由此盘点验收 |
 | 网页入口及证书 | 仅核验旧部署材料，未完成所有Web入口证书及代理归属 | 保留待核验，不覆盖其他项目配置 |
 | 新平台密钥 | 新数据的会话与加密配置先前已建立 | 不替代旧会话主密钥；项目运行时密钥仅在 `.runtime/`，未轮换或覆盖旧密钥 |
@@ -69,7 +69,7 @@ docker run --rm --network none --cpus .5 --memory 256m --user "$(id -u):$(id -g)
 
 ## 对原阻塞判断的修正
 
-新环境没有 Telegram/S3 键值不代表旧配置不存在：Telegram 应用与来源在远端设置表，Fernet 密钥和会话在远端受保护数据目录；对象存储配置由旧 API 的配置引用指向独立文档。有效来源已经定位，不应要求用户重新提供全部信息。
+新环境没有 Telegram/S3 键值不代表旧配置不存在：Telegram 应用与来源在 v1 PostgreSQL 设置表，受保护 collector 配置提供可解析 StringSession 和来源映射；本轮已将应用凭据、会话、3 个来源及 7 个稳定作者映射加密/事务化写入 v2。另一个 legacy Fernet vault 副本与同目录 key 不匹配，没有用作迁移源。Telegram 已确认该会话授权密钥重复并废弃，因此登录会话需重新建立；应用凭据和来源无需重填。
 
 旧数据库未启用原生 TLS；目标方案为**固定主机密钥的容器 SSH 隧道**，不能为了连通关闭公网直连的 TLS 要求。S3 保留原 HTTPS 端点和 CA，在受限 CONNECT 代理中贯穿端到端 TLS 校验，不使用 verify=False。
 
@@ -103,7 +103,7 @@ flowchart LR
 | --- | --- | --- |
 | 受限 Docker 从归档恢复五份样本并逐件比对 | 退出码0，五件哈希一致 | 范围收紧前；不再访问归档 |
 | SSH只读容器、设置和配置盘点 | 退出码0；设置v74及来源结构确认 | 未迁移远端结构或写业务数据 |
-| 原Fernet解密与会话配置整理 | 退出码0，密文有效、原钥保留 | 未做 Telegram connect，避免旧会话跨IP冲突 |
+| Telegram 会话格式检查（禁网容器） | 外部受保护 collector 配置中的 StringSession 经 Telethon 解析，规范化往返一致；无网络连接 | 只证明结构可解析，不证明授权仍有效；legacy Fernet vault 解密失败，未复制其内容 |
 | PostgreSQL隧道只读查询 | 成功，read_only=on | 同次S3根扫描失败导致组合命令整体退出码1，不能将组合命令报为全通过 |
 | 原CA TLS握手及限定S3查询 | 单独探针退出码0，证书校验有效、授权前缀查询200 | 根目录查询失败保留记录，未写删 |
 | 项目候选栈运行时配置恢复 | `.runtime/` 运行环境、SSH 隧道引用、乐鱼签名/发现引用及备份 S3 CA 已生成；Compose config、容器启动和 Web healthz 退出码均为0 | 仅项目内运行时恢复；未向外部目录写入，真实 Telegram 与上游轮询仍受授权/限流状态约束 |
@@ -113,6 +113,12 @@ flowchart LR
 | 仓库内配置及CONNECT边界回归 | 最终11项全部通过，退出码0 | 假值、本地环回、秘密不回显、外部挂载拒绝、循环依赖及CONNECT正常/拒绝路径 |
 | Compose首次特殊字符检查 | 退出码1，发现单引号dotenv不应双写反斜杠，已修复 | 失败历史保留，不静默忽略 |
 | 仓库内最终假配置解析与禁网值探针 | sh infra/check-runtime.sh 退出码0 | 仅配置解析、权限分配和字符传递；未启动生产服务 |
+
+## 2026-10-27 Telegram 配置复用与会话冲突
+
+用户要求直接复用 v1 Telegram 配置。本轮通过严格校验主机密钥的 SSH 隧道只读查询 v1 `runtime_settings`，并只读检查 v1 受保护 collector 配置、来源映射和加密会话文件；秘密值、真实群组编号及昵称均未进入命令输出、报告或 Git。API ID/Hash、启用标志、原 StringSession、3 个来源及 7 个作者身份映射均已写入 v2 加密设置/远端业务表，检查到的会话哈希匹配，但报告不记录哈希值。
+
+v1 API 内置的 Telegram 专家服务在只读运行设置中显示 `enabled=true`、3 个来源、当前 `disconnected`。v2 单个 collector 曾显示会话已授权，随后读取来源时返回 `TypeNotFoundError`，再由服务端返回 `AuthKeyDuplicatedError`；Telegram 官方错误说明明确该错误会使授权密钥失效并要求重新登录生成新密钥（[Telegram API errors](https://core.telegram.org/api/errors)）。因此不能把复制后的旧 StringSession 声称为可用：应用 ID/Hash 与来源配置已复用，登录密钥需通过设置页现有扫码流程刷新。已在 v2 识别重复密钥为会话失效并停止同一密钥的循环重试；v1 配置目录与备份保持只读。
 
 ## 后续边界
 

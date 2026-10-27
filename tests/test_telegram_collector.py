@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 import httpx
 from telethon import utils
-from telethon.errors import FloodWaitError, PasswordHashInvalidError, SessionPasswordNeededError
+from telethon.errors import (AuthKeyDuplicatedError, FloodWaitError,
+                             PasswordHashInvalidError, SessionPasswordNeededError)
 from telethon.tl.types import Channel, Chat, ChatPhotoEmpty, ChatParticipantAdmin, ChatParticipants
 from telethon.tl.functions.messages import GetFullChatRequest
 
@@ -91,6 +92,8 @@ class Client:
     def __init__(self, messages=None):
         self.messages = messages or {"-1001": []}
         self.connected, self.authorized = False, True
+        self.authorization_error = None
+        self.request_error = None
         self.connect_count, self.disconnect_count = 0, 0
         self.handlers = []
         self.query_limits = []
@@ -110,12 +113,16 @@ class Client:
         return self.connected
 
     async def is_user_authorized(self):
+        if self.authorization_error:
+            raise self.authorization_error
         return self.authorized
 
     def add_event_handler(self, fn, event):
         self.handlers.append((fn, event))
 
     async def get_entity(self, value):
+        if self.request_error:
+            raise self.request_error
         return Chat(id=abs(int(value)), title="测试群", photo=ChatPhotoEmpty(), participants_count=105,
                     date=datetime(2026, 10, 26, tzinfo=timezone.utc), version=1)
 
@@ -429,6 +436,30 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.collector.connect())
         self.assertEqual("5678", self.collector.account["id"])
         self.assertEqual("authorized", self.collector.auth_state["state"])
+
+    async def test_duplicated_auth_key_invalidates_session_and_stops_retries(self):
+        self.collector.config["telegram_account"] = json.dumps({"id": "1234", "display_name": "旧账号"})
+        self.client.authorization_error = AuthKeyDuplicatedError(None)
+        with self.assertRaises(AuthKeyDuplicatedError):
+            await self.collector.connect()
+        self.assertEqual("session_invalid", self.collector.auth_state["state"])
+        self.assertIsNone(self.collector.account)
+        self.assertFalse(self.client.is_connected())
+        self.assertFalse(await self.collector.connect())
+        self.assertEqual(1, self.client.connect_count)
+        self.assertEqual(1, len(self.created))
+
+    async def test_duplicated_auth_key_during_source_fetch_invalidates_connected_session(self):
+        self.assertTrue(await self.collector.connect())
+        self.client.request_error = AuthKeyDuplicatedError(None)
+        result = await self.collector.sync_once()
+        self.assertEqual("AuthKeyDuplicatedError", result["sources"]["-1001"]["error"])
+        self.assertEqual("session_invalid", self.collector.auth_state["state"])
+        self.assertIsNone(self.collector.client)
+        self.assertEqual(1, self.client.disconnect_count)
+        self.assertFalse(await self.collector.connect())
+        self.assertEqual(1, self.client.connect_count)
+        self.assertEqual(1, len(self.created))
 
     async def test_connected_session_revocation_drops_client_and_account(self):
         self.collector.config["telegram_account"] = json.dumps({"id": "1234", "display_name": "旧账号"})

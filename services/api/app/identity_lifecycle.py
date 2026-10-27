@@ -23,7 +23,8 @@ class Reauthenticate(Input):
 
 
 class AdminReauthenticate(Reauthenticate):
-    totp_code: str = Field(pattern=r"^[0-9]{6}$")
+    password: str = Field(min_length=6, max_length=128)
+    totp_code: str | None = Field(default=None, pattern=r"^[0-9]{6}$")
 
 
 class IssueRecovery(Input):
@@ -55,13 +56,18 @@ async def password_matches(request, identity, password):
     return row["password_hash"]
 
 
-async def finish_reauthentication(request, identity, expected_password, *, step=None, expected_secret=None):
+async def finish_reauthentication(
+    request, identity, expected_password, *, step=None, expected_secret=None,
+    verify_totp_configuration: bool = False,
+):
     now = datetime.now(timezone.utc)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             user = await conn.fetchrow("SELECT password_hash,disabled_at,totp_last_step,totp_secret_ciphertext FROM v2_users WHERE id=$1 FOR UPDATE", identity["id"])
             if not user or user["disabled_at"] is not None or not hmac.compare_digest(user["password_hash"], expected_password):
                 raise HTTPException(401, "凭据已经变更，请重新登录")
+            if verify_totp_configuration and (user["totp_secret_ciphertext"] or "") != (expected_secret or ""):
+                raise HTTPException(401, "管理员验证器已经变更，请重新验证")
             if step is not None:
                 if expected_secret is None or not hmac.compare_digest(user["totp_secret_ciphertext"] or "", expected_secret):
                     raise HTTPException(401, "验证器已经变更，请使用当前验证器重新验证")
@@ -89,14 +95,19 @@ async def admin_reauthenticate(body: AdminReauthenticate, request: Request):
     await auth._limit(request, "admin_reauthenticate", str(admin["id"]), maximum=5)
     password = await password_matches(request, admin, body.password)
     encrypted = await database.current_pool().fetchval("SELECT totp_secret_ciphertext FROM v2_users WHERE id=$1", admin["id"])
-    try:
-        secret = request.app.state.decrypt_secret(encrypted)
-    except Exception:
-        raise HTTPException(503, "管理员二次验证不可用") from None
-    step = totp_step(secret, body.totp_code)
-    if step is None:
-        raise HTTPException(401, "动态验证码无效")
-    return await finish_reauthentication(request, admin, password, step=step, expected_secret=encrypted)
+    step = None
+    if encrypted:
+        try:
+            secret = request.app.state.decrypt_secret(encrypted)
+        except Exception:
+            raise HTTPException(503, "管理员二次验证配置无法读取") from None
+        step = totp_step(secret, body.totp_code)
+        if step is None:
+            raise HTTPException(401, "动态验证码无效")
+    return await finish_reauthentication(
+        request, admin, password, step=step, expected_secret=encrypted,
+        verify_totp_configuration=True,
+    )
 
 
 @router.get("/auth/recovery/status")
