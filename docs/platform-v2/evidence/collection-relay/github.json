@@ -1,0 +1,36 @@
+{
+  "source_parent_commit": "fcefaf34d887ffd11e493824cf82e261e1e27a98",
+  "committed_source_verified": true,
+  "tests": 483,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "seconds": 108.015,
+  "scope": "isolated fixtures; no live providers or money",
+  "run_id": 40515361238,
+  "pr": 77,
+  "ci_jobs": {
+    "backend": "success",
+    "browser": "success",
+    "android": "success"
+  },
+  "command": "gh pr checks 77",
+  "exit_code": 0,
+  "merge_commit": "5fc8cd3a9ac32e708b45476c3be5814a222d3aa8",
+  "merged_at_utc": "2026-10-27T13:53:10Z",
+  "source_parent_note": "GitHub PR synthetic merge checkout",
+  "implementation_and_test_hashes_match": {
+    "services/collector/leyu.py": true,
+    "services/collector/leyu_runtime.py": true,
+    "services/collector/worker.py": true,
+    "services/api/app/routes/admin.py": true,
+    "services/api/app/routes/renewal.py": true,
+    "services/api/app/routes/operations.py": true,
+    "web/app/admin.js": true,
+    "web/app/index.html": true,
+    "tests/test_leyu_protocol.py": true,
+    "tests/test_leyu_runtime.py": true,
+    "tests/test_identity.py": true,
+    "tests/browser/verify.mjs": true
+  }
+}

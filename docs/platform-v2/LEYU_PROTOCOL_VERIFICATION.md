@@ -131,3 +131,7 @@ flowchart LR
 - Docker 浏览器 26 场景、Compose 契约、22 模块 AST、JavaScript 语法及 Git 差异检查通过，退出码 0。脱敏快照见 evidence/collection-relay/；本机冻结结果不冒称已提交内容的远端 CI。
 
 回滚：管理员采集设置清空中转并保存，确认新版本已应用。业务域名和会话无需改写。中转失败显示原因并退避，不自动切换出口继续请求。
+
+### 远端提交验证
+
+PR #77 已于 13:53:10 UTC 合入 main，合并提交 5fc8cd3a9ac32e708b45476c3be5814a222d3aa8。运行 40515361238 的 backend、browser、android 三项全部成功；远端冻结后端回归 483 项 / 108.015 秒，零失败、错误及跳过。命令 gh pr checks 77、git pull --ff-only origin main 和 git ls-remote origin refs/heads/main 均退出码 0。部署后桌面与手机真实只读页面均加载比赛，无脚本异常或整页横向溢出。脱敏 CI 摘要见 evidence/collection-relay/github.json。

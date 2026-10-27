@@ -243,3 +243,11 @@ git diff --check
 - 13:46:08 UTC 中转采集：2,091 场赛程、96/96 完整盘口、零失败批次或最新错误。WS 直连订阅 2,089 场，当前队列/丢弃为零；启动窗口累计 8 次投递重试失败后恢复，如实保留。公开 API 为 122 场滚球足球、2,594 条摘要盘口、HTTP200、2.028 秒，源时间门禁保留。
 - Docker 定向 65 项 / 1.344 秒通过；冻结全量 sh infra/test/run.sh：483 项 / 183.501 秒（外围 185.380 秒），零失败/错误/跳过，证据 .runtime/test-evidence/2235563。浏览器 sh tests/browser/check.sh 26 场景、sh infra/check-runtime.sh、22 模块 AST、node --check 及 git diff --check 均退出码 0。
 - API、Collector、Web 已重建替换。下一步提交 PR、远端干净检出 CI、合入 main 并核对引用。脱敏快照与边界说明入乐鱼协议验收文档，未将独立的旧报价、Telegram 或官方赛果验收标为健康。
+
+### E98 主线合入与连续采集验收
+
+- PR #77 在 13:53:10 UTC 合入 main，合并提交 5fc8cd3a9ac32e708b45476c3be5814a222d3aa8；远端运行 40515361238 的 backend、browser、android 均 success，gh pr checks 77 退出码 0。git pull --ff-only 与 git ls-remote 核对同一主线提交，退出码 0。
+- 远端干净检出后端回归 483 项 / 108.015 秒，零失败、错误、跳过，committed_source_verified=true；原始证据下载到项目运行目录，脱敏 CI 摘要见 evidence/collection-relay/github.json。
+- 13:52:06 UTC 连续运行仍为 https_relay、配置版本 7：2,086 场赛程，96/96 完整盘口，失败批次 0、未限流、最新错误为空；WS 直连 2,068 场，队列和丢弃为 0，启动时的 8 次投递重试失败仍保留。数据源状态 partial，既有报价新鲜度及官方赛果缺口未伪装成通过。
+- 部署后的真实网页只读烟测：桌面 1440、手机 390 均加载 50+ 场，无 JavaScript 异常或整页横向溢出，命令 Docker 内 live-smoke 退出码 0。此结果不代替全部局部视觉验收。网页仍监听 0.0.0.0:3003；API、Web 健康。
+- 辅助读证据时宿主机 jq 不存在，初次非 root Docker 读取受保护运行目录被拒绝；改用只读挂载的 Docker 标准库后成功。失败仅属取证工具调用，不改写为已通过，也未改目录权限。
