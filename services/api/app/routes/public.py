@@ -5,6 +5,8 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 
 from .. import database
 from ..pagination import decode_cursor, encode_cursor
@@ -13,6 +15,7 @@ from ..membership import has_entitlement
 from ..runtime_settings import runtime_quote_max_age
 from ..expert_statistics import StatisticsScope, source_options, statistics_scope, summaries
 from ..review_state import fresh_quote
+from .. import message_read
 
 router = APIRouter(prefix="/api/v1/public")
 
@@ -200,30 +203,26 @@ async def signals(request: Request, cursor: str | None = None, page_size: int = 
 
 @router.get("/signals/{signal_id}")
 async def signal_detail(signal_id: str, request: Request):
-    if not await _has_entitlement(request, "expert_full_history"):
-        raise HTTPException(status_code=403, detail="完整专家记录需要会员权益")
+    actor = await message_read.reader(request)
     try:
         parsed = uuid.UUID(signal_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail="记录不存在") from None
+        raise message_read.private_error(404, "记录不存在") from None
     row = await database.current_pool().fetchrow(
         "SELECT s.*,e.display_nickname,m.raw_text,m.media_objects,m.posted_at,m.source_id,j.id AS job_id,j.state AS job_state "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
-        "JOIN v2_expert_messages m ON m.id=s.message_id LEFT JOIN v2_analysis_jobs j ON j.message_id=m.id "
+        "JOIN v2_expert_messages m ON m.id=s.message_id LEFT JOIN LATERAL(SELECT id,state FROM v2_analysis_jobs "
+        "WHERE message_id=m.id ORDER BY created_at DESC,id DESC LIMIT 1) j ON TRUE "
         "WHERE s.id=$1", parsed,
     )
     if not row:
-        raise HTTPException(status_code=404, detail="记录不存在")
+        raise message_read.private_error(404, "记录不存在")
     item = dict(row)
-    if item.get("job_id"):
-        traces = await database.current_pool().fetch(
-            "SELECT trace_kind,payload,created_at FROM v2_analysis_traces WHERE job_id=$1 ORDER BY sequence_no",
-            item["job_id"],
-        )
-        item["analysis_trace"] = [dict(trace) for trace in traces]
-    else:
-        item["analysis_trace"] = []
-    return item
+    item['media_objects'] = message_read.message_projection({'id': item['message_id'], 'media_objects': item.get('media_objects')})['media_objects']
+    page = await message_read.trace_page(database.current_pool(), request, actor, item['message_id'])
+    item.update(analysis_trace=page['items'], analysis_next_cursor=page['next_cursor'],
+                analysis_has_more=page['has_more'], system_summary=await message_read.latest_summary(database.current_pool(), item['message_id']))
+    return JSONResponse(jsonable_encoder(item), headers=message_read.HEADERS)
 
 
 @router.get("/membership/plans")

@@ -13,6 +13,7 @@ from . import database
 from .config import load_settings
 from .hermes_client import delete_session, resolve_review_settings, review_message
 from .review_state import active_job, trace
+from .review_summary import record_summary
 from .review_policy import REALTIME_WINDOW_SECONDS
 from fastapi import HTTPException
 import asyncpg
@@ -278,8 +279,8 @@ async def process_job(pool, settings, job: dict) -> None:
             "model_elapsed_ms": round((time.monotonic() - started) * 1000, 3)})
         async with pool.acquire() as conn:
             async with conn.transaction():
-                await active_job(conn, job["id"], job["attempt_id"])
-                count = await conn.fetchval("SELECT count(*) FROM v2_expert_signals WHERE message_id=$1", job["message"]["id"])
+                current = await active_job(conn, job["id"], job["attempt_id"])
+                count = await record_summary(conn, current, job["attempt_id"], job.get('review_mode', 'real_time'))
                 await conn.execute(
                     "UPDATE v2_analysis_jobs SET state=$3,lease_until=NULL,last_error=NULL,updated_at=now() "
                     "WHERE id=$1 AND attempt_id=$2 AND state='running'",

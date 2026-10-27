@@ -709,8 +709,69 @@ async function openSignal(id) {
       `<div class="empty-state">${esc(error.message)}${error.status === 403 ? '<br><button data-page="membership" class="small-button">查看会员权益</button>' : ""}</div>`;
   }
 }
-function traceMarkup(traces) {
-  return `<section class="detail-section"><h3>Hermes 模型输入、原始输出与工具轨迹</h3>${traces.length ? traces.map((t) => `<details class="trace-block" ${/output|final|result/.test(t.trace_kind) ? "open" : ""}><summary>${esc(t.trace_kind || analysisState(t.state))} · ${stamp(t.created_at)}${t.last_error ? " · " + esc(t.last_error) : ""}</summary><pre>${jsonTrace(t.payload ?? t.last_error ?? "暂无轨迹内容")}</pre></details>`).join("") : '<p class="muted">尚无审核轨迹。消息仍保留供排查。</p>'}</section>`;
+function traceBlocks(traces) {
+  return traces.filter((t) => t.trace_kind !== "system_review_result").map((t) => `<details class="trace-block" ${/output|final|result/.test(t.trace_kind) ? "open" : ""}><summary>${esc(t.trace_kind || analysisState(t.state))} · ${stamp(t.created_at)}${t.last_error ? " · " + esc(t.last_error) : ""}</summary><pre>${jsonTrace(t.payload ?? t.last_error ?? "暂无轨迹内容")}</pre>${t.tool_response_url ? `<button type="button" class="small-button" data-tool-response="${esc(t.tool_response_url)}">读取完整工具返回</button><div class="tool-response-content"></div>` : ""}</details>`).join("");
+}
+function traceMarkup(traces = [], systemSummary = null) {
+  const latest = systemSummary || traces.filter((t) => t.trace_kind === "system_review_result" && typeof t.payload?.content === "string").at(-1);
+  const receipt = latest ? `<section class="detail-section system-review-result"><h3>系统确认的审核结果</h3><pre class="raw-text">${esc(latest.payload.content)}</pre><p class="form-note">此处只汇总系统已接受记录及工具拒绝原因；模型原始输出保留在下方。</p></section>` : "";
+  return receipt + `<section class="detail-section"><h3>Hermes 模型输入、原始输出与工具轨迹</h3><p class="form-note">原文按审核顺序分页保留；图片请查看授权原图，工具分片通过对应记录读取完整返回。</p><div id="message-traces">${traces.length ? traceBlocks(traces) : '<p class="muted">尚无审核轨迹。消息仍保留供排查。</p>'}</div><button type="button" class="small-button" id="message-traces-more" hidden>继续读取模型原文与轨迹</button><p id="message-traces-status" class="form-note" role="status"></p></section>`;
+}
+function bindMessageEvidence(data, id, context, sequence) {
+  const content = $("#dialog-content");
+  const root = (context === "admin" ? "/admin/telegram/messages/" : "/public/messages/") + encodeURIComponent(id);
+  let traceCursor = data.analysis_next_cursor || null;
+  let signalCursor = data.signals_next_cursor || null;
+  let signalCount = (data.signals || []).length;
+  const traceMore = $("#message-traces-more");
+  const signalMore = $("#message-signals-more");
+  traceMore.hidden = !traceCursor;
+  signalMore.hidden = !signalCursor;
+  $("#message-traces-status").textContent = traceCursor ? "还有审核记录，请继续读取；尚未加载的内容没有被省略或删除。" : "当前已保存的审核轨迹已全部加载。";
+  traceMore.onclick = async () => {
+    traceMore.disabled = true;
+    try {
+      const page = await api(root + "/traces?cursor=" + encodeURIComponent(traceCursor), { context });
+      if (sequence !== state.dialogSequence) return;
+      $("#message-traces").insertAdjacentHTML("beforeend", traceBlocks(page.items || []));
+      traceCursor = page.next_cursor || null;
+      traceMore.hidden = !traceCursor;
+      $("#message-traces-status").textContent = traceCursor ? "还有审核记录，可继续读取。" : "当前已保存的审核轨迹已全部加载。";
+    } catch (error) {
+      if (sequence === state.dialogSequence) $("#message-traces-status").textContent = error.message + "；原文保留，可重试或重新打开。";
+    } finally { traceMore.disabled = false; }
+  };
+  signalMore.onclick = async () => {
+    signalMore.disabled = true;
+    try {
+      const page = await api(root + "/signals?cursor=" + encodeURIComponent(signalCursor), { context });
+      if (sequence !== state.dialogSequence) return;
+      $("#message-signals").insertAdjacentHTML("beforeend", (page.items || []).map((s) => signalCard(s, context)).join(""));
+      signalCount += (page.items || []).length;
+      signalCursor = page.next_cursor || null;
+      signalMore.hidden = !signalCursor;
+      $("#message-signals-status").textContent = `已加载 ${signalCount} 条系统盘口绑定。${signalCursor ? "还有推荐，请继续读取。" : "当前推荐已全部加载。"}`;
+    } catch (error) {
+      if (sequence === state.dialogSequence) $("#message-signals-status").textContent = error.message + "；已加载推荐保留。";
+    } finally { signalMore.disabled = false; }
+  };
+  content.onclick = async (event) => {
+    if (sequence !== state.dialogSequence) return;
+    const button = event.target.closest("[data-tool-response]");
+    if (!button || button.disabled) return;
+    const url = button.dataset.toolResponse;
+    if (!url?.startsWith("/api/v1" + root + "/tools/")) return;
+    button.disabled = true;
+    const target = button.nextElementSibling;
+    try {
+      const response = await api(url.slice(7), { context });
+      if (sequence !== state.dialogSequence) return;
+      target.innerHTML = `<p class="form-note">完整返回已校验 · ${esc(response.snapshot_sha256)}</p><pre>${jsonTrace(response.result)}</pre>`;
+      button.textContent = "完整工具返回已加载";
+    } catch (error) {
+      if (sequence === state.dialogSequence) { target.textContent = error.message; button.disabled = false; }
+    }
+  };
 }
 async function openMessage(id, context = "user") {
   state.messageContext = context;
@@ -731,13 +792,15 @@ async function openMessage(id, context = "user") {
     $("#dialog-title").textContent =
       (m.display_nickname || "专家") + " · 完整消息";
     $("#dialog-content").innerHTML =
-      `<section class="detail-section"><div class="message-meta"><strong>${esc(m.display_nickname)}</strong><span>${stamp(m.posted_at)}</span><span>消息版本 ${esc(m.revision ?? 1)}</span><span>${context === "admin" ? "管理员读取" : "用户权益读取"}</span>${m.deleted_at ? '<span class="badge">原消息已删除</span>' : ""}</div><h3>Telegram 消息原文</h3><pre class="raw-text">${esc(m.raw_text || "（仅图片消息）")}</pre>${m.reply_context ? `<details class="trace-block"><summary>回复上下文</summary><pre>${jsonTrace(m.reply_context)}</pre></details>` : ""}<div class="media-gallery" id="message-media"></div>${m.media_state === "pending" ? '<p class="notice">图片仍待上传；审核可能尚未完成。</p>' : ""}</section><section class="detail-section"><h3>对应系统比赛、盘口与推荐买入</h3><p class="form-note">已接受 ${data.signals.length} 条系统盘口绑定。其他未解决意图及原因保留在下方审核结果中，不能作为有效推荐。</p>${data.signals.map((s) => signalCard(s, context)).join("") || '<p class="muted">尚未形成已接受的盘口绑定；这条消息不会计入收益或自动投注。</p>'}</section>${traceMarkup(data.analysis)}`;
+      `<section class="detail-section"><div class="message-meta"><strong>${esc(m.display_nickname)}</strong><span>${stamp(m.posted_at)}</span><span>消息版本 ${esc(m.revision ?? 1)}</span><span>${context === "admin" ? "管理员读取" : "用户权益读取"}</span>${m.deleted_at ? '<span class="badge">原消息已删除</span>' : ""}</div><h3>Telegram 消息原文</h3><pre class="raw-text">${esc(m.raw_text || "（仅图片消息）")}</pre>${m.reply_context ? `<details class="trace-block"><summary>回复上下文</summary><pre>${jsonTrace(m.reply_context)}</pre></details>` : ""}<div class="media-gallery" id="message-media"></div>${m.media_state === "pending" ? '<p class="notice">图片仍待上传；审核可能尚未完成。</p>' : ""}</section><section class="detail-section"><h3>对应系统比赛、盘口与推荐买入</h3><p class="form-note" id="message-signals-status">已加载 ${data.signals.length} 条系统盘口绑定。${data.signals_next_cursor ? "还有推荐，请继续读取。" : "当前推荐已全部加载。"}其他未解决意图及原因保留在下方审核结果中，不能作为有效推荐。</p><div id="message-signals">${data.signals.map((s) => signalCard(s, context)).join("") || '<p class="muted">尚未形成已接受的盘口绑定；这条消息不会计入收益或自动投注。</p>'}</div><button type="button" class="small-button" id="message-signals-more" hidden>继续读取推荐买入</button></section>${traceMarkup(data.analysis, data.system_summary)}`;
+    bindMessageEvidence(data, id, context, sequence);
     for (const [index, media] of (m.media_objects || []).entries()) {
       const gallery = $("#message-media");
       const url =
         media.url ||
-        `/api/v1/public/messages/${encodeURIComponent(id)}/media/${index}`;
-      if (!url.startsWith("/api/v1/public/messages/")) continue;
+        `/api/v1/${context === "admin" ? "admin/telegram" : "public"}/messages/${encodeURIComponent(id)}/media/${index}`;
+      const allowedRoot = `/api/v1/${context === "admin" ? "admin/telegram" : "public"}/messages/${encodeURIComponent(id)}/media/`;
+      if (!url.startsWith(allowedRoot) && !(context === "admin" && url.startsWith(`/api/v1/public/messages/${encodeURIComponent(id)}/media/`))) continue;
       const status = document.createElement("span");
       status.className = "muted";
       status.textContent = "图片加载中…";

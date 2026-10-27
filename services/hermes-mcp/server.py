@@ -53,11 +53,11 @@ async def _post(path: str, payload: dict) -> dict:
 async def search_matches(review_id: str, attempt_id: str, team_query: str,
                          phase: str = "all", competition_query: str | None = None,
                          from_utc: str | None = None, to_utc: str | None = None,
-                         cursor: str | None = None, page_size: int = 50) -> dict:
-    """搜索赛前及滚球完整候选快照，连续使用 next_cursor 直到为空；单页不是全量边界。"""
+                         cursor: str | None = None, page_size: int = 50, sport: str | None = None) -> dict:
+    """搜索赛前及滚球完整候选；可按系统项目如football/basketball筛选。连续使用next_cursor直到为空，修改项目须新搜索。"""
     return await _post("search_matches", {
         "review_id": review_id, "attempt_id": attempt_id, "team_query": team_query,
-        "phase": phase, "competition_query": competition_query,
+        "phase": phase, "competition_query": competition_query, "sport": sport,
         "from_utc": from_utc, "to_utc": to_utc, "cursor": cursor, "page_size": page_size,
     })
 

@@ -342,12 +342,24 @@ class RefreshControllerTests(unittest.IsolatedAsyncioTestCase):
         self.runtime.refresh_match.assert_awaited_once()
 
     async def test_invalid_or_unconfirmed_receipt_never_claims_written(self):
-        for receipt in (0,True,2):
+        for receipt in (True,2,-1,None):
             self.now[0]+=2
             self.upload.return_value=receipt
             result=await self.controller.refresh(self.body)
             self.assertIs(False,result["accepted"])
             self.assertEqual("invalid_ingestion_receipt",result["reason"])
+
+    async def test_committed_unchanged_parent_receipt_requires_independent_quote_reread(self):
+        self.upload.return_value = 0
+        result = await self.controller.refresh(self.body)
+        self.assertIs(False, result['accepted'])
+        self.assertIs(False, result['written'])
+        self.assertEqual(0, result['written_fixtures'])
+        self.assertIs(True, result['snapshot_committed'])
+        self.assertIs(False, result['quote_writes_verified'])
+        self.assertEqual('parent_unchanged_recheck_quotes', result['reason'])
+        self.assertEqual(0, self.controller.cooldown_remaining())
+        self.upload.assert_awaited_once()
 
     async def test_untrusted_body_and_diagnostics_never_return_secrets(self):
         with self.assertRaises(ValueError): await self.controller.refresh({**self.body,"url":"private"})

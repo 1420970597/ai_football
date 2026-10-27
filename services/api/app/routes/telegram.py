@@ -11,12 +11,14 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 import httpx
 from pydantic import AwareDatetime, BaseModel, Field
 
 from .. import database
 from ..auth import audit, require_admin
 from ..security import encrypt_secret
+from .. import message_read
 
 
 router = APIRouter()
@@ -586,21 +588,52 @@ async def telegram_messages(request: Request, expert_id: uuid.UUID | None = None
 
 @router.get("/api/v1/admin/telegram/messages/{message_id}")
 async def telegram_message_detail(message_id: uuid.UUID, request: Request):
-    await require_admin(request)
+    actor = await message_read.reader(request, admin=True)
     pool = database.current_pool()
     message = await pool.fetchrow(
         "SELECT m.*,e.display_nickname,t.last_error,t.content AS source_evidence FROM v2_expert_messages m "
-        "JOIN v2_experts e ON e.id=m.expert_id LEFT JOIN v2_telegram_events t ON t.message_id=m.id WHERE m.id=$1", message_id,
+        "JOIN v2_experts e ON e.id=m.expert_id LEFT JOIN LATERAL(SELECT last_error,content FROM v2_telegram_events "
+        "WHERE message_id=m.id ORDER BY received_at DESC,id DESC LIMIT 1) t ON TRUE WHERE m.id=$1", message_id,
     )
     if not message:
-        raise HTTPException(status_code=404, detail="消息原文不存在")
-    traces = await pool.fetch(
-        "SELECT j.id AS review_id,j.state,j.last_error,t.sequence_no,t.trace_kind,t.payload,t.created_at "
-        "FROM v2_analysis_jobs j LEFT JOIN v2_analysis_traces t ON t.job_id=j.id "
-        "WHERE j.message_id=$1 ORDER BY j.created_at,t.sequence_no", message_id,
-    )
-    signals = await pool.fetch(
-        "SELECT s.*,f.home_team,f.away_team,f.competition_name,f.kickoff_at FROM v2_expert_signals s "
-        "JOIN v2_fixtures f ON f.id=s.fixture_id WHERE s.message_id=$1 ORDER BY s.created_at,s.id", message_id,
-    )
-    return {"message": dict(message), "analysis": [dict(row) for row in traces], "signals": [dict(row) for row in signals]}
+        raise message_read.private_error(404, "消息原文不存在")
+    return JSONResponse(jsonable_encoder(await message_read.detail(pool, request, actor, message, context='admin')),
+                        headers=message_read.HEADERS)
+
+
+@router.get('/api/v1/admin/telegram/messages/{message_id}/traces')
+async def telegram_message_traces(message_id: uuid.UUID, request: Request,
+                                  limit: int = Query(default=30, ge=1, le=100),
+                                  cursor: str | None = Query(default=None, max_length=1000)):
+    actor = await message_read.reader(request, admin=True)
+    pool = database.current_pool()
+    if not await pool.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_messages WHERE id=$1)', message_id):
+        raise message_read.private_error(404, '消息原文不存在')
+    return JSONResponse(jsonable_encoder(await message_read.trace_page(pool, request, actor, message_id,
+                        context='admin', limit=limit, cursor=cursor)), headers=message_read.HEADERS)
+
+
+@router.get('/api/v1/admin/telegram/messages/{message_id}/signals')
+async def telegram_message_signals(message_id: uuid.UUID, request: Request,
+                                   limit: int = Query(default=30, ge=1, le=100),
+                                   cursor: str | None = Query(default=None, max_length=1000)):
+    actor = await message_read.reader(request, admin=True)
+    pool = database.current_pool()
+    if not await pool.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_messages WHERE id=$1)', message_id):
+        raise message_read.private_error(404, '消息原文不存在')
+    return JSONResponse(jsonable_encoder(await message_read.signal_page(pool, request, actor, message_id,
+                        context='admin', limit=limit, cursor=cursor)), headers=message_read.HEADERS)
+
+
+@router.get('/api/v1/admin/telegram/messages/{message_id}/tools/{trace_id}')
+async def telegram_message_tool_response(message_id: uuid.UUID, trace_id: uuid.UUID, request: Request):
+    await message_read.reader(request, admin=True)
+    return JSONResponse(jsonable_encoder(await message_read.tool_response(database.current_pool(), message_id, trace_id)),
+                        headers=message_read.HEADERS)
+
+
+@router.get('/api/v1/admin/telegram/messages/{message_id}/media/{index}')
+async def telegram_message_media(message_id: uuid.UUID, index: int, request: Request):
+    await message_read.reader(request, admin=True)
+    from .expert_content import read_message_media
+    return await read_message_media(message_id, index)

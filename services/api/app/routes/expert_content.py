@@ -6,10 +6,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 
 from .. import database
 from ..blobstore import image_mime, read_image
 from ..expert_statistics import StatisticsScope, statistics_scope, summaries, trend
+from .. import message_read
 from .public import _decode_cursor, _encode_cursor, _has_entitlement
 
 router = APIRouter(prefix='/api/v1/public')
@@ -54,16 +57,11 @@ async def expert_trend(expert_id: uuid.UUID, scope: StatisticsScope = Depends(st
 
 
 async def require_history(request: Request):
-    if not await _has_entitlement(request, 'expert_full_history'):
-        raise HTTPException(403, '完整专家记录需要会员权益')
+    return await message_read.reader(request)
 
 
 def media_links(message: dict):
-    message['media_objects'] = [
-        {k: v for k, v in media.items() if k not in {'object_key', 'bucket'}} |
-        {'url': f"/api/v1/public/messages/{message['id']}/media/{index}"}
-        for index, media in enumerate(message.get('media_objects') or [])
-    ]
+    message['media_objects'] = message_read.message_projection(message)['media_objects']
     return message
 
 
@@ -92,44 +90,66 @@ async def expert_messages(expert_id: uuid.UUID, request: Request, cursor: str | 
 
 @router.get('/messages/{message_id}')
 async def message_detail(message_id: uuid.UUID, request: Request):
-    await require_history(request)
+    actor = await require_history(request)
     pool = database.current_pool()
     message = await pool.fetchrow(
         'SELECT m.*,e.display_nickname,s.display_name AS source_name FROM v2_expert_messages m '
         'JOIN v2_experts e ON e.id=m.expert_id JOIN v2_expert_sources s ON s.id=m.source_id WHERE m.id=$1', message_id,
     )
     if not message:
-        raise HTTPException(404, '消息原文不存在')
-    traces = await pool.fetch(
-        'SELECT j.id AS review_id,j.state,j.last_error,t.sequence_no,t.trace_kind,t.payload,t.created_at '
-        'FROM v2_analysis_jobs j LEFT JOIN v2_analysis_traces t ON t.job_id=j.id '
-        'WHERE j.message_id=$1 ORDER BY j.created_at,t.sequence_no', message_id,
-    )
-    signals = await pool.fetch(
-        "SELECT s.*,f.competition_name,f.home_team,f.away_team,f.kickoff_at,"
-        "(SELECT ev.evidence->>'quote_id' FROM v2_quote_evidence ev WHERE ev.reference_id=s.id "
-        "AND ev.evidence_kind='expert_signal' ORDER BY ev.captured_at LIMIT 1) AS quote_id "
-        'FROM v2_expert_signals s '
-        'JOIN v2_fixtures f ON f.id=s.fixture_id WHERE s.message_id=$1 ORDER BY s.created_at,s.id', message_id,
-    )
-    return {'message': media_links(dict(message)), 'analysis': [dict(row) for row in traces],
-            'signals': [dict(row) for row in signals]}
+        raise message_read.private_error(404, '消息原文不存在')
+    return JSONResponse(jsonable_encoder(await message_read.detail(pool, request, actor, message)), headers=message_read.HEADERS)
+
+
+@router.get('/messages/{message_id}/traces')
+async def message_traces(message_id: uuid.UUID, request: Request,
+                         limit: int = Query(default=30, ge=1, le=100),
+                         cursor: str | None = Query(default=None, max_length=1000)):
+    actor = await require_history(request)
+    pool = database.current_pool()
+    if not await pool.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_messages WHERE id=$1)', message_id):
+        raise message_read.private_error(404, '消息原文不存在')
+    return JSONResponse(jsonable_encoder(await message_read.trace_page(pool, request, actor, message_id, limit=limit, cursor=cursor)),
+                        headers=message_read.HEADERS)
+
+
+@router.get('/messages/{message_id}/signals')
+async def message_signals(message_id: uuid.UUID, request: Request,
+                          limit: int = Query(default=30, ge=1, le=100),
+                          cursor: str | None = Query(default=None, max_length=1000)):
+    actor = await require_history(request)
+    pool = database.current_pool()
+    if not await pool.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_messages WHERE id=$1)', message_id):
+        raise message_read.private_error(404, '消息原文不存在')
+    return JSONResponse(jsonable_encoder(await message_read.signal_page(pool, request, actor, message_id, limit=limit, cursor=cursor)),
+                        headers=message_read.HEADERS)
+
+
+@router.get('/messages/{message_id}/tools/{trace_id}')
+async def message_tool_response(message_id: uuid.UUID, trace_id: uuid.UUID, request: Request):
+    await require_history(request)
+    return JSONResponse(jsonable_encoder(await message_read.tool_response(database.current_pool(), message_id, trace_id)),
+                        headers=message_read.HEADERS)
 
 
 @router.get('/messages/{message_id}/media/{index}')
 async def message_media(message_id: uuid.UUID, index: int, request: Request):
     await require_history(request)
+    return await read_message_media(message_id, index)
+
+
+async def read_message_media(message_id: uuid.UUID, index: int):
     objects = await database.current_pool().fetchval('SELECT media_objects FROM v2_expert_messages WHERE id=$1', message_id)
     if not objects or index < 0 or index >= len(objects):
-        raise HTTPException(404, '消息图片不存在')
+        raise message_read.private_error(404, '消息图片不存在')
     media = objects[index]
     mime = media.get('mime_type')
     if mime not in {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}:
-        raise HTTPException(415, '图片格式不可展示')
+        raise message_read.private_error(415, '图片格式不可展示')
     try:
         content = await read_image(media['object_key'])
         if image_mime(content) != mime:
             raise ValueError('media type mismatch')
     except Exception:
-        raise HTTPException(503, '远端图片暂不可读') from None
+        raise message_read.private_error(503, '远端图片暂不可读') from None
     return Response(content, media_type=mime, headers={'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline'})

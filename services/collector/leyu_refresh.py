@@ -121,9 +121,16 @@ class LeyuRefreshController:
                     raise LeyuError("fixture_identity_mismatch")
                 stage = "ingestion"
                 accepted = await self.upload([fixture])
-                if type(accepted) is not int or accepted != 1:
+                if type(accepted) is not int or accepted not in {0, 1}:
                     raise LeyuError("invalid_ingestion_receipt")
-                return self._result(identity, mid, "written", accepted=1)
+                if accepted == 0:
+                    # Parent and quote clocks are independent. A committed batch
+                    # may update quotes while rejecting its stale parent; do not
+                    # invent a quote row count from the parent receipt.
+                    return {**self._result(identity, mid, "parent_unchanged_recheck_quotes"),
+                            "snapshot_committed": True, "quote_writes_verified": False}
+                return {**self._result(identity, mid, "written", accepted=1),
+                        "snapshot_committed": True, "quote_writes_verified": False}
         except RateLimited as exc:
             self.defer_requests(max(60, exc.retry_after_seconds or 0))
             return self._result(identity, mid, "upstream_rate_limited", retry=self.cooldown_remaining())

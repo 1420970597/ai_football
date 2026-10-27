@@ -251,7 +251,8 @@ class CollectorService:
                                                headers={"Content-Type": "application/json"})
             response.raise_for_status()
             document = response.json()
-            if not isinstance(document, dict) or not isinstance(document.get("accepted"), int):
+            if (not isinstance(document, dict) or type(document.get("accepted")) is not int
+                    or not 0 <= document['accepted'] <= len(batch)):
                 raise LeyuError("invalid_ingestion_receipt")
             accepted += document["accepted"]
         # Set only after the last await; the caller then reads this exact upload

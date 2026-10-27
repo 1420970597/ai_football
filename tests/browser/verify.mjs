@@ -162,6 +162,11 @@ const record = {
       payload: { summary: "已匹配两场比赛和两个盘口，接受2条推荐。" },
       created_at: "2026-10-26T11:11:02Z",
     },
+    {
+      trace_kind: "system_review_result",
+      payload: { language: "zh-CN", accepted_count: 2, content: '系统已接受 2 条推荐。利物浦 对 曼城；亚洲让球，主队 -0.25；系统赔率 1.96。<img src=x onerror="window.__xss=2">' },
+      created_at: "2026-10-26T11:11:03Z",
+    },
   ],
 };
 const results = [];
@@ -506,6 +511,14 @@ async function setup({
       });
     if (p === "/public/signals")
       return reply({ items: [signal], next_cursor: null, limited: !mode.user });
+    if (mode.pagedEvidence && p === `/public/messages/${mid}/traces`)
+      return reply({ items: [{ trace_kind: "model_output", payload: { content: "后页模型原文完整结尾" + "原文".repeat(4000) }, created_at: "2026-10-26T11:11:05Z" }], next_cursor: null });
+    if (mode.pagedEvidence && p === `/public/messages/${mid}/signals`)
+      return reply({ items: [{ ...signal, id: "55555555-5555-4555-8555-555555555555", quote_id: "q-system-page-three" }], next_cursor: null });
+    if (mode.pagedEvidence && p === `/public/messages/${mid}/tools/complete-fixture`)
+      return reply({ complete: true, snapshot_sha256: "fixture-sha256-verified", result: { items: [{ home_team: "完整工具候选", away_team: "工具结果末项" }], next_cursor: null } });
+    if (mode.pagedEvidence && p === `/public/messages/${mid}`)
+      return reply({ ...record, analysis: [{ trace_kind: "mcp_search_matches", payload: { count: 100, response_snapshot: { chunk_count: 4 } }, tool_response_url: `/api/v1/public/messages/${mid}/tools/complete-fixture` }], analysis_next_cursor: "fixture-trace-next", signals_next_cursor: "fixture-signals-next", system_summary: record.analysis.at(-1) });
     if (
       mode.longMessage &&
       p.startsWith("/public/messages/") &&
@@ -660,7 +673,7 @@ async function setup({
       });
     if (p === "/admin/telegram/messages")
       return reply({ items: [message], next_cursor: null });
-    if (p.startsWith("/admin/telegram/messages/")) return reply(record);
+    if (p.startsWith("/admin/telegram/messages/")) return reply({ ...record, message: { ...message, media_objects: [{ url: `/api/v1/admin/telegram/messages/${mid}/media/0` }] } });
     if (p === "/admin/users")
       return reply({
         items: [
@@ -865,6 +878,8 @@ await test("完整原文、两条系统买入、工具证据与图片", async ()
   assert.equal(await page.locator("#dialog-content .signal-card").count(), 2);
   assert.match(await page.locator("#dialog-content").innerText(), /q-system-2/);
   assert.match(await page.locator("#dialog-content").innerText(), /已匹配两场/);
+  assert.match(await page.locator(".system-review-result").innerText(), /系统已接受 2 条推荐/);
+  assert.equal(await page.locator(".system-review-result img").count(), 0);
   assert.equal(await page.evaluate(() => window.__xss), undefined);
   assert.equal(await page.locator(".raw-text img").count(), 0);
   await page.screenshot({
@@ -877,6 +892,40 @@ await test("完整原文、两条系统买入、工具证据与图片", async ()
   assert.match(await page.locator("#messages-list").innerText(), /未解决/);
   assert.equal(await page.locator("#messages-more").isVisible(), true);
   await page.locator("#messages-more").click();
+  await context.close();
+});
+await test("原文增量加载、最新系统回执及完整工具返回", async () => {
+  const { page, context, mode, log } = await setup({ dual: true, mobile: true });
+  mode.pagedEvidence = true;
+  await page.locator('.mobile-bottom [data-page=experts]').click();
+  await page.locator('[data-expert-tab=signals]').click();
+  await page.locator('#signals-list [data-message]').first().click();
+  await page.waitForSelector('.system-review-result');
+  assert.match(await page.locator('.system-review-result').innerText(), /系统已接受 2 条推荐/);
+  assert.equal(log.some((request) => request.path.endsWith('/tools/complete-fixture')), false);
+  assert.equal(await page.locator('#message-traces-more').isVisible(), true);
+  assert.equal(await page.locator('#message-signals-more').isVisible(), true);
+  await page.locator('#message-traces-more').click();
+  await page.waitForFunction(() => document.querySelector('#message-traces-status')?.textContent.includes('已全部加载'));
+  assert.match(await page.locator('#message-traces').innerText(), /后页模型原文完整结尾/);
+  assert.ok((await page.locator('#message-traces').innerText()).length > 8000);
+  await page.locator('#message-signals-more').click();
+  await page.waitForFunction(() => document.querySelector('#message-signals-status')?.textContent.includes('已加载 3 条'));
+  assert.equal(await page.locator('#message-signals .signal-card').count(), 3);
+  await page.locator('[data-tool-response]').evaluate((button) => { button.closest('details').open = true; });
+  await page.locator('[data-tool-response]').click();
+  await page.waitForFunction(() => document.querySelector('.tool-response-content')?.textContent.includes('工具结果末项'));
+  assert.match(await page.locator('.tool-response-content').innerText(), /fixture-sha256-verified/);
+  for (const request of log.filter((request) => /[/]messages[/].*[/](traces|signals|tools)[/?]?/.test(request.path)))
+    assert.equal(request.headers['x-session-context'], 'user');
+  assert.equal(await page.locator('.system-review-result').count(), 1);
+  await page.screenshot({ path: evidence + '/candidate-mobile-evidence-pagination-fixture.png' });
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !location.hash.includes('message='));
+  await page.goto(`http://127.0.0.1:8080/#messages?message=${mid}&asadmin=1`);
+  await page.waitForSelector('#message-media img');
+  assert.match(await page.locator('#dialog-content').innerText(), /管理员读取/);
+  assert.equal(log.findLast((request) => request.path === `/admin/telegram/messages/${mid}/media/0`).headers['x-session-context'], 'admin');
   await context.close();
 });
 await test("采集中转热配置可保存与清空，保留原业务域名", async () => {

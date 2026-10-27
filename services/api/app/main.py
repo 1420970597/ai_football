@@ -77,7 +77,15 @@ async def request_context(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
-    response.headers["Cache-Control"] = "no-store" if response.status_code >= 400 or request.url.path.startswith(("/api/", "/internal/")) else "public, max-age=60"
+    existing_cache = {part.strip().lower() for part in response.headers.get("Cache-Control", "").split(",")}
+    if request.url.path.startswith("/api/") or "private" in existing_cache:
+        # Message evidence and authenticated errors must remain private; a
+        # generic middleware default must not erase the route's stronger rule.
+        response.headers["Cache-Control"] = "private, no-store"
+    elif response.status_code >= 400 or request.url.path.startswith("/internal/") or "no-store" in existing_cache:
+        response.headers["Cache-Control"] = "no-store"
+    elif not response.headers.get("Cache-Control"):
+        response.headers["Cache-Control"] = "public, max-age=60"
     return response
 
 
