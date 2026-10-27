@@ -222,3 +222,10 @@ git diff --check
 - 最终部署实现（包含 250 场元数据批次）的 Docker 冻结回归：sh infra/test/run.sh，477 项 / 182.094 秒，零失败、错误、跳过，退出码 0；证据目录 .runtime/test-evidence/2146095/，完整冻结源哈希保留。
 - sh infra/check-runtime.sh、Docker 内 8 文件 AST 语法检查、python tasks/check_planning.py 和 git diff --check 全部退出码 0。规划结构共 46 个工作包、332 动作、206 个有证据勾选项，不声称未勾选节点已经完成。
 - Docker 浏览器离线报告检查桌面 1440、手机 390 和 file 直接打开三场景通过，退出码 0；无外部网络请求、图片解码正常、正文无横向溢出。下一动作：创建 PR，运行远端干净检出 CI，全绿后合入并校验 main。
+
+### E97 GitHub 主线与真实页面验收
+
+- PR #76 的运行 40508233916：backend、browser、android 三项 success，检查命令 gh pr checks 76 退出码 0。13:05:17 UTC 合入 main，合并提交 1fd96ce85b0fa419e5158c8c78dd56ba5f4852f6；git pull --ff-only 与 git ls-remote 核对本地/远端一致，退出码 0。
+- 远端干净检出回归原始证据已下载项目内，摘要与范围入报告。当前 API 入库模块及 Collector 两模块 SHA-256 与提交工作树一致；不以镜像标签相同代替源码核对。
+- 真实公开只读页面 1440/390 双端加载 50+ 场、无 JS 异常、无整页横向溢出，命令 Docker 内 live-smoke 退出码 0。实际手机截图发现盘口与长队名局部重叠，另列后续布局验收，不能把烟测冒称视觉全通过。
+- 13:02:27 UTC 公开接口返回 79 场滚球足球，6 场带符合默认 15 秒门禁的报价；之后实时状态继续 partial，不降低门禁。Issue #72 已发布本轮恢复、验证及剩余依赖，保留 TG、官方赛果和正式签名等未完成项。

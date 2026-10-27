@@ -1,0 +1,22 @@
+{
+  "recorded_at": "2026-10-27T13:03:35.339Z",
+  "scope": "deployed public read-only pages",
+  "results": [
+    {
+      "width": 1440,
+      "rows": 50,
+      "count": "50+",
+      "overflow": false,
+      "notice": "26 场比赛报价过期或时间未知，保留显示供查询；详情会标明报价状态。",
+      "page_errors": []
+    },
+    {
+      "width": 390,
+      "rows": 50,
+      "count": "50+",
+      "overflow": false,
+      "notice": "26 场比赛报价过期或时间未知，保留显示供查询；详情会标明报价状态。",
+      "page_errors": []
+    }
+  ]
+}

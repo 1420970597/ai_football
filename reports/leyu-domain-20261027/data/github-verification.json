@@ -1,0 +1,18 @@
+{
+  "source_parent_commit": "3e7bc4eeb1b8146177b5047194c79596758d5e65",
+  "committed_source_verified": true,
+  "tests": 477,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "seconds": 141.621,
+  "scope": "isolated fixtures; no live providers or money",
+  "run_id": 40508233916,
+  "pull_request": 76,
+  "merged_main": "1fd96ce85b0fa419e5158c8c78dd56ba5f4852f6",
+  "jobs": {
+    "backend": "success",
+    "browser": "success",
+    "android": "success"
+  }
+}
