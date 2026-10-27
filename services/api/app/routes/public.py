@@ -82,8 +82,8 @@ async def matches(
         param = bind("%" + term + "%")
         alias_param = bind(term)
         clauses.append(f"(lower(home_team) LIKE {param} OR lower(away_team) LIKE {param} "
-                       f"OR lower(competition_name) LIKE {param} OR {alias_param}=ANY(home_aliases) "
-                       f"OR {alias_param}=ANY(away_aliases))")
+                       f"OR lower(competition_name) LIKE {param} OR EXISTS (SELECT 1 FROM "
+                       f"unnest(home_aliases || away_aliases) alias WHERE lower(btrim(alias))={alias_param}))")
     if match_date:
         try:
             zone = ZoneInfo(tz)
@@ -129,6 +129,37 @@ async def matches(
     return {"items": output, "next_cursor": next_cursor, "page_size": page_size, "server_time": datetime.now(timezone.utc)}
 
 
+async def _match_markets(fixture_id: str, request: Request, phase: str, *, cursor=None, page_size=500):
+    scope = {'kind': 'match_markets', 'fixture_id': fixture_id}
+    decoded = _decode_cursor(cursor, request, scope)
+    after = None
+    if decoded:
+        try:
+            after = uuid.UUID(decoded[1])
+        except ValueError:
+            raise HTTPException(400, '盘口分页游标无效') from None
+    rows = await database.current_pool().fetch(
+        "SELECT id AS quote_id,market_id,market_name,period,market_kind,line,selection,price,status,is_main,score_basis,source_updated_at,received_at "
+        "FROM v2_current_quotes WHERE fixture_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT $3",
+        fixture_id, after, page_size + 1,
+    )
+    items = rows[:page_size]
+    stale_after = await runtime_quote_max_age(request.app.state.settings)
+    next_cursor = _encode_cursor(datetime(1970, 1, 1, tzinfo=timezone.utc), str(items[-1]['quote_id']),
+                                 request, scope) if len(rows) > page_size else None
+    return {'markets': [dict(row) | {'fresh': fresh_quote(row, stale_after) and phase in {'scheduled', 'live'}}
+                        for row in items], 'next_market_cursor': next_cursor, 'market_page_size': page_size}
+
+
+@router.get("/matches/{fixture_id}/markets")
+async def match_markets(fixture_id: str, request: Request, cursor: str | None = None,
+                        page_size: int = Query(default=500, ge=1, le=500)):
+    phase = await database.current_pool().fetchval('SELECT phase FROM v2_fixtures WHERE id=$1', fixture_id)
+    if phase is None:
+        raise HTTPException(404, '比赛不存在')
+    return await _match_markets(fixture_id, request, phase, cursor=cursor, page_size=page_size)
+
+
 @router.get("/matches/{fixture_id}")
 async def match_detail(fixture_id: str, request: Request):
     fixture = await database.current_pool().fetchrow(
@@ -138,22 +169,15 @@ async def match_detail(fixture_id: str, request: Request):
     )
     if not fixture:
         raise HTTPException(status_code=404, detail="比赛不存在")
-    quote_rows = await database.current_pool().fetch(
-        "SELECT id AS quote_id,market_id,market_name,period,market_kind,line,selection,price,status,is_main,score_basis,source_updated_at,received_at "
-        "FROM v2_current_quotes WHERE fixture_id=$1 ORDER BY market_id,line,selection LIMIT 500", fixture_id,
-    )
+    market_page = await _match_markets(fixture_id, request, fixture['phase'])
     signal_rows = await database.current_pool().fetch(
         "SELECT s.id,s.expert_id,e.display_nickname,s.phase,s.market_id,s.market_name,s.line,s.selection,"
         "s.recommendation_price,s.quote_time,s.outcome,s.unit_net,s.created_at "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
         "WHERE s.fixture_id=$1 ORDER BY s.created_at DESC LIMIT 100", fixture_id,
     )
-    stale_after = await runtime_quote_max_age(request.app.state.settings)
     now = datetime.now(timezone.utc)
-    markets = [dict(row) | {
-        "fresh": fresh_quote(row, stale_after) and fixture['phase'] in {'scheduled','live'},
-    } for row in quote_rows]
-    return {"fixture": dict(fixture), "markets": markets, "expert_signals": [dict(row) for row in signal_rows],
+    return {"fixture": dict(fixture), **market_page, "expert_signals": [dict(row) for row in signal_rows],
             "server_time": now}
 
 

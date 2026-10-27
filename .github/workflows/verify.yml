@@ -3,7 +3,7 @@ name: Platform verification
 on:
   pull_request:
   push:
-    branches: [feat/TASK-70-platform-v2]
+    branches: [main, feat/TASK-70-platform-v2]
   workflow_dispatch:
   workflow_call:
 
@@ -44,6 +44,8 @@ jobs:
         run: sh tests/browser/model-configuration-check.sh
       - name: Frozen fixture screenshot regression
         run: sh tests/browser/visual-check.sh
+      - name: Complete market pagination and late response isolation
+        run: sh tests/browser/match-markets-check.sh
       - name: Browser with real API and temporary database
         run: sh tests/browser/integration-check.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -57,6 +59,8 @@ jobs:
             .runtime/model-configuration-ui-*/results.json
             .runtime/visual-ui-*/visual-results.json
             .runtime/visual-ui-*/*.png
+            .runtime/match-markets-ui-*/results.json
+            .runtime/match-markets-ui-*/*.png
             reports/jiebao-score-reference/images/candidate-*
             reports/jiebao-score-reference/images/integration-*
           include-hidden-files: true

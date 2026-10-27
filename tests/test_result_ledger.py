@@ -310,3 +310,40 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(selected.json()['items']))
         other = await self.client.get('/api/v1/public/matches', params={'league_ids':'league'})
         self.assertEqual([], other.json()['items'])
+
+    async def test_public_legacy_aliases_ignore_case_and_surrounding_space(self):
+        await self.pool.execute("UPDATE v2_fixtures SET home_aliases=ARRAY['  OldALIAS  ']")
+        response = await self.client.get('/api/v1/public/matches', params={'q':'oldalias'})
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(['fixture'], [item['id'] for item in response.json()['items']])
+
+    async def test_match_market_pages_reach_1201_without_duplicates_and_reject_cross_scope(self):
+        await self.pool.execute("INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,line,selection,price,source_updated_at,status) "
+                                "SELECT md5('page-market-'||n)::uuid,'fixture','total-'||n,'大小',2.5,'over',2,now(),'active' FROM generate_series(1,1201) n")
+        first = await self.client.get('/api/v1/public/matches/fixture')
+        self.assertEqual(200, first.status_code, first.text)
+        body = first.json()
+        self.assertEqual(500, len(body['markets']))
+        cursor = body['next_market_cursor']
+        self.assertTrue(cursor)
+        seen = [item['quote_id'] for item in body['markets']]
+        expected = sorted(seen)
+        self.assertEqual(expected, seen)
+        await self.pool.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) "
+                                "VALUES('other','other','football','League','Gamma','Delta',now(),'scheduled')")
+        self.assertEqual(400, (await self.client.get('/api/v1/public/matches/other/markets', params={'cursor':cursor})).status_code)
+        self.assertEqual(400, (await self.client.get('/api/v1/public/matches/fixture/markets', params={'cursor':'AAAA'+cursor[4:]})).status_code)
+        while cursor:
+            response = await self.client.get('/api/v1/public/matches/fixture/markets', params={'cursor':cursor})
+            self.assertEqual(200, response.status_code, response.text)
+            page = response.json()
+            self.assertLessEqual(len(page['markets']), 500)
+            seen.extend(item['quote_id'] for item in page['markets'])
+            cursor = page['next_market_cursor']
+        self.assertEqual(1201, len(seen))
+        self.assertEqual(sorted(set(seen)), seen)
+        self.assertEqual(422, (await self.client.get('/api/v1/public/matches/fixture/markets', params={'page_size':501})).status_code)
+        self.assertEqual(404, (await self.client.get('/api/v1/public/matches/missing/markets')).status_code)
+        await self.pool.execute("UPDATE v2_fixtures SET phase='finished' WHERE id='fixture'")
+        terminal = await self.client.get('/api/v1/public/matches/fixture/markets', params={'page_size':2})
+        self.assertFalse(any(item['fresh'] for item in terminal.json()['markets']))

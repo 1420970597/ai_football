@@ -604,6 +604,15 @@ async function openMatch(id, { refresh = false, quoteId = null } = {}) {
   const sequence = ++state.dialogSequence;
   try {
     const data = await api("/public/matches/" + encodeURIComponent(id));
+    const wanted = refresh && same ? (state.matchMarketCount || 0) : 0;
+    while (data.next_market_cursor &&
+      (data.markets.length < wanted || (quoteId && !data.markets.some((q) => q.quote_id === quoteId)))) {
+      if (state.activeMatch !== id || sequence !== state.dialogSequence) return;
+      const next = await api("/public/matches/" + encodeURIComponent(id) + "/markets?" +
+        params({ cursor: data.next_market_cursor }));
+      data.markets.push(...next.markets);
+      data.next_market_cursor = next.next_market_cursor;
+    }
     const f = data.fixture;
     if (state.activeMatch !== id || sequence !== state.dialogSequence) return;
     const previous = state.quotePrices || new Map();
@@ -617,6 +626,45 @@ async function openMatch(id, { refresh = false, quoteId = null } = {}) {
     $("#dialog-content").innerHTML =
       `<section class="detail-hero"><p>${esc(f.competition_name)} · ${stamp(f.kickoff_at)}</p><div class="detail-teams"><h3>${esc(f.home_team)}</h3><strong>${f.home_score === null || f.home_score === undefined ? "VS" : esc(f.home_score) + " : " + esc(f.away_score)}</strong><h3>${esc(f.away_team)}</h3></div><p>${esc(phases[f.phase] || f.match_state)} ${f.phase === "live" && f.clock_minute !== null ? esc(f.clock_minute ?? "") + "′" : ""} · 上游更新 ${stamp(f.source_updated_at)}</p><button class="small-button" id="refresh-detail">刷新本场数据</button></section><section class="detail-section"><h3>系统当前盘口</h3>${data.markets.length ? marketMarkup(data.markets, state.matchFilters) : '<div class="empty-state">暂无有效赔率。上游尚未提供盘口或当前已停盘。</div>'}</section><section class="detail-section"><h3>本场专家推荐</h3>${data.expert_signals.map((s) => signalCard({ ...s, home_team: f.home_team, away_team: f.away_team, competition_name: f.competition_name, fixture_id: f.id })).join("") || '<p class="muted">暂无已绑定本场的专家推荐</p>'}</section><p class="data-footnote">当前未提供阵容、直播事件及球队历史资料，不生成推测信息。</p>`;
     $("#refresh-detail").onclick = () => openMatch(id, { refresh: true });
+    const marketSection = $("#dialog-content .detail-section");
+    const renderMarkets = () => {
+      state.matchMarketCount = data.markets.length;
+      state.quotePrices = new Map(data.markets.map((q) => [q.quote_id, q.price]));
+      marketSection.innerHTML = '<h3>系统当前盘口</h3>' + (data.markets.length
+        ? marketMarkup(data.markets, state.matchFilters)
+        : '<div class="empty-state">暂无有效赔率。上游尚未提供盘口或当前已停盘。</div>') +
+        (data.next_market_cursor ? '<button class="small-button" id="match-markets-more">继续加载盘口</button>' : '');
+      if (data.markets.length) {
+        $("#market-period").onchange = filterMarkets;
+        $("#market-scope").onchange = filterMarkets;
+        filterMarkets();
+      }
+      const button = $("#match-markets-more");
+      if (button) button.onclick = async () => {
+        if (button.disabled) return;
+        button.disabled = true;
+        clearTimeout(state.detailTimer);
+        try {
+          const next = await api("/public/matches/" + encodeURIComponent(id) + "/markets?" +
+            params({ cursor: data.next_market_cursor }));
+          if (state.activeMatch !== id || sequence !== state.dialogSequence) return;
+          const known = new Set(data.markets.map((q) => q.quote_id));
+          data.markets.push(...next.markets.filter((q) => !known.has(q.quote_id)));
+          data.next_market_cursor = next.next_market_cursor;
+          renderMarkets();
+        } catch (error) {
+          if (sequence === state.dialogSequence) toast(error.message + '，保留已加载盘口，可重试');
+        } finally {
+          if (state.activeMatch === id && sequence === state.dialogSequence) {
+            button.disabled = false;
+            state.detailTimer = setTimeout(() => {
+              if (!document.hidden) openMatch(id, { refresh: true });
+            }, 20000);
+          }
+        }
+      };
+    };
+    renderMarkets();
     if (data.markets.length) {
       $("#market-period").onchange = filterMarkets;
       $("#market-scope").onchange = filterMarkets;
