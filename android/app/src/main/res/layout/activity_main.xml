@@ -28,6 +28,8 @@
             android:accessibilityLiveRegion="polite" />
         <Button android:id="@+id/verify_service" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:minHeight="48dp" android:layout_marginTop="24dp" android:text="@string/verify_service" />
+        <Button android:id="@+id/scan_service" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:minHeight="48dp" android:text="@string/scan_service" />
         <Button android:id="@+id/return_service" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:minHeight="48dp" android:text="@string/return_service" android:visibility="gone" />
       </LinearLayout>

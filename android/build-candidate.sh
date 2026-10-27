@@ -41,6 +41,7 @@ docker cp "$build_container:/workspace/frozen/android/app/build/outputs/apk/debu
 docker cp "$build_container:/workspace/frozen/android/app/build/outputs/apk/release/app-release-unsigned.apk" "$output_dir/ballnews-2.0.0-dev-unsigned.apk"
 docker cp "$build_container:/workspace/frozen/source-sha256.txt" "$output_dir/source-sha256.txt"
 docker cp "$build_container:/workspace/frozen/android/app/build/reports/lint-results-debug.xml" "$output_dir/lint-results-debug.xml"
+rm -rf "$output_dir/unit-results"
 docker cp "$build_container:/workspace/frozen/android/app/build/test-results/testDebugUnitTest" "$output_dir/unit-results"
 git -C "$project_dir" rev-parse HEAD > "$output_dir/source-parent-commit.txt"
 git -C "$project_dir" status --porcelain -- android tests/android > "$output_dir/source-worktree-status.txt"

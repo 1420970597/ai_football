@@ -19,7 +19,8 @@ from collector.telegram import TelegramCollector, MAX_MEDIA_BYTES, _valid_image,
 
 
 CONFIG = {"telegram_api_id": "12345", "telegram_api_hash": "test-api-hash-only",
-          "telegram_session": "test-session-only", "telegram_source_enabled": "true"}
+          "telegram_session": "test-session-only", "telegram_source_enabled": "true",
+          "telegram_account": json.dumps({"id": "1234", "display_name": "测试账号"})}
 
 
 class Message:
@@ -101,6 +102,7 @@ class Client:
         self.query_limits = []
         self.session = object()
         self.qr = None
+        self.account_id = 1234
         self.download_chunks = [b"\xff\xd8\xfftest-jpeg"]
 
     async def connect(self):
@@ -152,7 +154,7 @@ class Client:
         return self.qr
 
     async def get_me(self):
-        return SimpleNamespace(id=1234, first_name="测试", last_name="账号", username="test-account")
+        return SimpleNamespace(id=self.account_id, first_name="测试", last_name="账号", username="test-account")
 
     async def sign_in(self, password):
         if password != "test-correct-password":
@@ -501,6 +503,7 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(self.created))
 
         self.client.authorized = True
+        self.client.account_id = 5678
         await self.collector.apply_config(CONFIG | {"telegram_session": "replacement-session-only",
                                                     "telegram_account": json.dumps({"id": "5678", "display_name": "新账号"})})
         self.assertTrue(await self.collector.connect())

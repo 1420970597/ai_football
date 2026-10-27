@@ -44,6 +44,7 @@ SYNC_HISTORY_MAX_MESSAGES = 25
 MEDIA_RETRY_BATCH_SECONDS = 30
 MEDIA_TRANSFER_SECONDS = 20
 MEDIA_COMMIT_SECONDS = 5
+SESSION_IDENTITY_SECONDS = 5
 
 
 class SourceAccessError(RuntimeError):
@@ -131,6 +132,17 @@ class TelegramCollector:
         self.auth_deadline = 0.0
         self.account = None
         self.invalid_session_fingerprint = None
+        self._verified_identity = None
+        self._rejected_identity_binding = None
+
+    @staticmethod
+    def _account_id(value):
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            return None
+        text = str(value)
+        if not re.fullmatch(r'[1-9][0-9]{0,18}', text) or int(text) > 2 ** 63 - 1:
+            return None
+        return text
 
     @staticmethod
     def _saved_account(config):
@@ -138,9 +150,35 @@ class TelegramCollector:
             account = json.loads(str(config.get("telegram_account", "")))
         except (TypeError, ValueError):
             return None
-        if not isinstance(account, dict) or not account.get("id"):
+        if not isinstance(account, dict) or TelegramCollector._account_id(account.get("id")) is None:
             return None
-        return {key: account.get(key) for key in ("id", "display_name", "username")}
+        return {key: account.get(key) for key in ("display_name", "username")} | {"id": str(account["id"])}
+
+    @staticmethod
+    def _expected_account_problem(config):
+        raw = config.get('telegram_account')
+        if raw is None or raw == '':
+            return 'session_identity_expected_missing'
+        try:
+            account = json.loads(str(raw))
+        except (TypeError, ValueError):
+            return 'session_identity_expected_invalid'
+        if isinstance(account, dict) and account.get('id') in (None, ''):
+            return 'session_identity_expected_missing'
+        return 'session_identity_expected_invalid'
+
+    async def _reject_identity(self, client, reason):
+        self._verified_identity = None
+        self.account = None
+        if self.client is client:
+            self.client = None
+        self.auth_state = {'state': 'failed', 'reason': reason}
+        if client is not None:
+            try:
+                async with asyncio.timeout(SESSION_IDENTITY_SECONDS):
+                    await client.disconnect()
+            except Exception:
+                log.warning('Telegram identity cleanup deferred')
 
     @staticmethod
     def _session_fingerprint(session):
@@ -151,6 +189,7 @@ class TelegramCollector:
         if self.client is client:
             self.client = None
         self.account = None
+        self._verified_identity = None
         self.invalid_session_fingerprint = fingerprint
         self.auth_state = {"state": "session_invalid"}
 
@@ -169,43 +208,66 @@ class TelegramCollector:
         return self.client_factory(session, api_id, api_hash)
 
     async def connect(self) -> bool:
-        if self.client:
-            try:
-                if not self.client.is_connected():
-                    await self.client.connect()
-                if not await self.client.is_user_authorized():
-                    session = str(self.config.get("telegram_session", "")).strip()
-                    await self._mark_session_invalid(self.client, self._session_fingerprint(session))
-                    return False
-                self.account = self._saved_account(self.config)
-                self.auth_state = {"state": "authorized", "account": self.account} if self.account else {"state": "authorized"}
-                return True
-            except AuthKeyDuplicatedError:
-                await self._invalidate_active_session()
-                raise
+        async with self.session_state_lock:
+            return await self._connect()
+
+    async def _connect(self) -> bool:
         session = str(self.config.get("telegram_session", "")).strip()
         if not session:
             return False
+        expected = self._saved_account(self.config)
+        if expected is None:
+            await self._reject_identity(self.client, self._expected_account_problem(self.config))
+            return False
         fingerprint = self._session_fingerprint(session)
+        binding = self._session_fingerprint(session + '\0' + expected['id'])
+        if self._rejected_identity_binding == binding:
+            return False
         if self.invalid_session_fingerprint == fingerprint:
             return False
-        candidate = self._new_client(session)
+        candidate = self.client or self._new_client(session)
+        adopting = self.client is None
         try:
-            await candidate.connect()
+            if not candidate.is_connected():
+                self._verified_identity = None
+                await candidate.connect()
             if not await candidate.is_user_authorized():
                 await self._mark_session_invalid(candidate, fingerprint)
                 return False
+            if self._verified_identity != (candidate, binding):
+                try:
+                    async with asyncio.timeout(SESSION_IDENTITY_SECONDS):
+                        actual = await candidate.get_me()
+                except TimeoutError:
+                    await self._reject_identity(candidate, 'session_identity_timeout')
+                    return False
+                except AuthKeyDuplicatedError:
+                    raise
+                except Exception:
+                    await self._reject_identity(candidate, 'session_identity_unavailable')
+                    return False
+                actual_id = self._account_id(getattr(actual, 'id', None))
+                if actual_id is None:
+                    await self._reject_identity(candidate, 'session_identity_unverifiable')
+                    return False
+                if actual_id != expected['id']:
+                    self._rejected_identity_binding = binding
+                    await self._reject_identity(candidate, 'session_identity_mismatch')
+                    return False
+                self._verified_identity = (candidate, binding)
         except AuthKeyDuplicatedError:
             await self._mark_session_invalid(candidate, fingerprint)
             raise
         except BaseException:
+            self._verified_identity = None
             await candidate.disconnect()
             raise
         self.client = candidate
-        self.account = self._saved_account(self.config)
-        self.auth_state = {"state": "authorized", "account": self.account} if self.account else {"state": "authorized"}
+        self.account = expected
+        self.auth_state = {"state": "authorized", "account": self.account}
         self.invalid_session_fingerprint = None
-        self._handlers(candidate)
+        if adopting:
+            self._handlers(candidate)
         return True
 
     def _handlers(self, client):
@@ -215,8 +277,14 @@ class TelegramCollector:
         client.add_event_handler(self._on_delete, events.MessageDeleted())
 
     async def apply_config(self, config: dict[str, str]):
+        async with self.session_state_lock:
+            await self._apply_config(config)
+
+    async def _apply_config(self, config: dict[str, str]):
         identity = ("telegram_api_id", "telegram_api_hash", "telegram_session")
         changed = any(str(self.config.get(key, "")) != str(config.get(key, "")) for key in identity)
+        previous, current = self._saved_account(self.config), self._saved_account(config)
+        changed = changed or (previous or {}).get('id') != (current or {}).get('id')
         if changed and self.client:
             await self.client.disconnect()
             self.client = None
@@ -225,6 +293,8 @@ class TelegramCollector:
             self.directory_retry_at.clear()
             self.directory_trusted.clear()
             self.invalid_session_fingerprint = None
+            self._verified_identity = None
+            self._rejected_identity_binding = None
             self.auth_state = {"state": "idle" if str(config.get("telegram_session", "")).strip() else "disconnected"}
         self.config = dict(config)
 
@@ -233,6 +303,7 @@ class TelegramCollector:
         if self.client:
             await self.client.disconnect()
             self.client = None
+        self._verified_identity = None
         if self.control_server:
             await self.control_server.close()
             self.control_server = None
@@ -282,7 +353,7 @@ class TelegramCollector:
             return {"state": "disabled", "sources": {}}
         if not await self.connect():
             state = self.auth_state.get("state") if self.auth_state.get("state") in {"session_invalid", "failed"} else "unauthorized"
-            return {"state": state, "sources": {}}
+            return {"state": state, "sources": {}, **({'reason': self.auth_state['reason']} if self.auth_state.get('reason') else {})}
         self.sources = {str(item["chat_id"]): item for item in await self.backend.sources()}
         result = {}
         # 群组之间独立，但控制并发和 Telegram flood；单群失败不阻止其他群。
@@ -790,6 +861,8 @@ class TelegramCollector:
         self.config["telegram_source_enabled"] = "true"
         self.account = info
         self.invalid_session_fingerprint = None
+        self._rejected_identity_binding = None
+        self._verified_identity = (self.client, self._session_fingerprint(session + '\0' + info['id']))
         self._handlers(self.client)
         self.auth_state = {"state": "authorized", "attempt_id": self.auth_state.get("attempt_id"), "account": info}
 
@@ -846,12 +919,15 @@ class TelegramCollector:
             self.config["telegram_account"] = ""
             self.account = None
             self.invalid_session_fingerprint = None
+            self._verified_identity = None
+            self._rejected_identity_binding = None
             self.auth_state = {"state": "disconnected"}
             return {"state": "disconnected"}
         if path in {"/dialogs", "/admins", "/members"}:
             try:
                 if not await self.connect():
-                    return {"items": [], "state": "unauthorized", "manual_id_allowed": False}
+                    return {"items": [], "state": "unauthorized", "manual_id_allowed": False,
+                            **({'reason': self.auth_state['reason']} if self.auth_state.get('reason') else {})}
                 return await ({'/dialogs': self._dialogs, '/admins': self._admins, '/members': self._members}[path](payload))
             except FloodWaitError as exc:
                 return {"items": [], "state": "flood_wait", "retry_after": exc.seconds}
