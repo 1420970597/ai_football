@@ -93,6 +93,7 @@
 | E75 | 提交 e844dfc 修复移动端会员验收的异步导航竞态；浏览器 29 场景全部通过，Docker 冻结回归 426 项通过/204 项隔离跳过，规划检查、Compose 解析、Python 编译、只读归档审计和 S3 精确对象探针均退出 0；GitHub Platform verification 40363635100 全部成功 | 远程 issue #72 已记录上游 `upstream_rate_limited`、Telegram 真实授权、正式设备和配置夹具剩余缺口；真实投注保持关闭 |
 | E76 | 提交 299108c、3ca1ef2、9f511d3、2e5b93e 后，冻结工作区 Docker 回归 437 项，181.797 秒，零失败、错误和跳过，退出 0；Compose 配置解析、差异检查和规划检查均退出 0。采集器重建后连续运行超过 10 分钟，控制状态可读，WebSocket 403 进入 `backoff`，不再触发容器重启；管理员诊断增加采集器、Telegram、乐鱼和 WebSocket 分项状态，媒体孤儿仅在删除成功后确认 | 上游当前仍返回 `renewal_api_rejected`，WebSocket 仍为 `websocket_http_403`，Telegram 尚未真实授权；这轮证明故障隔离、退避和状态诚实性，不证明真实数据源已恢复。自动投注继续关闭，真实 S3、Telegram、乐鱼和 Hermes 仍待授权联调 |
 | E77 | 提交 3fa4a59、586719a 后冻结 Docker 回归 440 项，177.850 秒，零失败、错误和跳过，退出 0；S3 临时对象写入/读取/哈希/删除实容器探针返回 `healthy`，MCP 流式 HTTP 探针返回 `reachable`，API 重建后 Compose API 与 review-worker 均 healthy；规划检查和差异检查退出 0，P41-01 已勾选 | S3 探针只使用并删除自身 `health/` 对象，未触碰业务对象；MCP 探针只建立并关闭响应流。乐鱼上游拒绝、Telegram 未授权、Hermes 真实模型语义和正式设备仍未验收 |
+| E78 | 提交 4ed560b 后冻结 Docker 回归重跑 440 项，182.506 秒，零失败、错误和跳过，退出 0；管理诊断新增 Telegram 检查点时间与最大消息高水位，规划检查和差异检查退出 0，P41-02 已勾选 | 首次同轮回归曾因临时数据库 teardown 的 `pg_signal_backend` 权限竞态退出 1，未被计为通过；重跑在相同代码上全绿。该证据不代表真实 Telegram 已授权或消息高水位已推进 |
 
 没有记录过的命令不补造退出码。原阶段证据和本轮新增结果分开标注。
 
