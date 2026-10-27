@@ -96,6 +96,7 @@
 | E78 | 提交 4ed560b 后冻结 Docker 回归重跑 440 项，182.506 秒，零失败、错误和跳过，退出 0；管理诊断新增 Telegram 检查点时间与最大消息高水位，规划检查和差异检查退出 0，P41-02 已勾选 | 首次同轮回归曾因临时数据库 teardown 的 `pg_signal_backend` 权限竞态退出 1，未被计为通过；重跑在相同代码上全绿。该证据不代表真实 Telegram 已授权或消息高水位已推进 |
 | E79 | 提交 e7f77f3 对应 GitHub Platform verification `40427860508` 的 backend、browser、android 三项作业全部 success；远端分支引用与本地一致，Compose 解析退出 0 | 远端 CI 仍只使用隔离 PostgreSQL、假配置、浏览器夹具和开发 Android 构建；不替代真实乐鱼/Telegram/Hermes、S3 生产数据和正式签名验收 |
 | E80 | 提交 fc2be0e 对应 GitHub Platform verification `40428788326` 的 backend、browser、android 三项作业全部 success，退出均为 0；backend 冻结测试、Compose 契约、浏览器 API/响应式场景和 Android 构建/Lint 均通过 | 仅为项目验证流水线；Node.js action deprecation 为 GitHub 注记，不影响本轮作业结果。真实上游授权、生产数据、正式签名和设备仍未验收 |
+| E81 | 提交 3a6e820 对应 GitHub Platform verification `40429560428` 的 backend、browser、android 三项作业全部 success，退出均为 0；远端分支仍与本地一致 | 本次仅更新进度文档；远端验证仍不覆盖真实乐鱼/Telegram/Hermes、生产 S3 数据、正式签名或真机 |
 
 没有记录过的命令不补造退出码。原阶段证据和本轮新增结果分开标注。
 
