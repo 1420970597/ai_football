@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import uuid
 from contextlib import asynccontextmanager
@@ -10,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from . import admin_mfa, auth, database, identity_lifecycle
 from .config import load_settings
-from .health import HermesProbe
+from .health import HermesProbe, MCPProbe, StorageProbe
 from .routes import accounts, admin, admin_reviews, expert_content, internal, operations, public, renewal, results, reviews, telegram
 from .security import decrypt_secret
 
@@ -45,6 +46,8 @@ async def lifespan(app: FastAPI):
     settings = load_settings()
     app.state.settings = settings
     app.state.hermes_probe = HermesProbe(settings.hermes_api_url)
+    app.state.storage_probe = StorageProbe()
+    app.state.mcp_probe = MCPProbe(os.environ.get("MCP_HEALTH_URL", "http://hermes-mcp:8090/mcp"), settings.mcp_internal_token)
     app.state.decrypt_secret = lambda value: decrypt_secret(settings.encryption_key, value)
     pool = await database.open_pool(settings)
     try:

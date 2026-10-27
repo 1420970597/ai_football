@@ -106,12 +106,18 @@ async def diagnostics(request: Request):
             gateway = await request.app.state.hermes_probe.check()
     except TimeoutError:
         raise HTTPException(503, '运维查询暂时超时，请稍后重试') from None
-    configured = all(os.environ.get(key) for key in ('S3_ENDPOINT_URL','S3_BUCKET','S3_ACCESS_KEY','S3_SECRET_KEY'))
+    storage_probe = getattr(request.app.state, "storage_probe", None)
+    mcp_probe = getattr(request.app.state, "mcp_probe", None)
+    storage = await storage_probe.check() if storage_probe else (
+        "configured_unverified" if all(os.environ.get(key) for key in ('S3_ENDPOINT_URL','S3_BUCKET','S3_ACCESS_KEY','S3_SECRET_KEY')) else "unconfigured"
+    )
+    mcp = await mcp_probe.check() if mcp_probe else "unverified"
     return {
         'checked_at': datetime.now(timezone.utc), 'database': 'reachable', 'schema': schema,
         'hermes': {'gateway': gateway, 'provider': 'unverified'},
         'collector': await collector_health(request),
-        'storage': 'configured_unverified' if configured else 'unconfigured',
+        'storage': storage,
+        'mcp': mcp,
         'review_queue': count_state(row['queue_count']) | {'oldest_at': row['queue_oldest']},
         'pending_media': count_state(row['media_count']) | {'oldest_at': row['media_oldest']},
         'unknown_orders': count_state(row['unknown_count']) | {'oldest_at': row['unknown_oldest']},
