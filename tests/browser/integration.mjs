@@ -13,6 +13,7 @@ const evidence = "/work/reports/jiebao-score-reference/images";
 const results = [];
 const errors = [];
 const roleAccessMatrix = [];
+const leagueDirectoryEvidence = [];
 function otp(secret = "JBSWY3DPEHPK3PXP", stepOffset = 0) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   let bits = "";
@@ -80,11 +81,34 @@ async function api(path, { method = "GET", body, admin = false } = {}) {
   return { status: response.status(), data: JSON.parse(raw) };
 }
 await scenario("真实API比分投影、联赛多选和赛前赛果", async () => {
+  const holdDirectory = async () => {
+    let release, ready, completed;
+    const fetched = new Promise(resolve => { ready = resolve; });
+    const delivered = new Promise(resolve => { completed = resolve; });
+    await page.route("**/api/v1/public/leagues?**", async route => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await new Promise(resolve => { release = resolve; ready({status:response.status(),items:body.items}); });
+      await route.fulfill({ response });
+      completed();
+    }, { times: 1 });
+    return { fetched, delivered, release: () => release() };
+  };
+  // Hold the real successful response: clicking before catalog delivery must show loading.
+  const initialDirectory = await holdDirectory();
   await page.goto(origin);
   await page.waitForSelector(".match-row");
   assert.equal(await page.locator(".match-row").count(), 4);
+  const initialCatalog = await initialDirectory.fetched;
+  assert.equal(initialCatalog.status,200);
+  assert.deepEqual(initialCatalog.items.map(item=>item.competition_id).sort(),['league-0','league-1']);
   await page.locator("#league-filter").click();
+  assert.match(await page.locator('#dialog-content [role=status]').textContent(),/正在读取当前联赛目录/);
+  assert.equal(await page.locator('[data-league-id]').count(),0);
+  initialDirectory.release();await initialDirectory.delivered;
   await page.locator('[data-league-id="league-0"]').check();
+  assert.equal(await page.locator('[data-league-id]').count(),2);
+  leagueDirectoryEvidence.push({check:'early_click_waits_for_real_catalog',http_status:200,league_ids:['league-0','league-1'],status:'passed'});
   await page.locator("[data-apply-leagues]").click();
   await page.waitForFunction(
     () => document.querySelectorAll(".match-row").length === 2,
@@ -106,6 +130,45 @@ await scenario("真实API比分投影、联赛多选和赛前赛果", async () =
       document.querySelector(".match-phase.finished"),
   );
   assert.match(await page.locator(".match-row").innerText(), /完场/);
+
+  // A closed directory must not overwrite the different match dialog opened afterwards.
+  const delayedDirectory = await holdDirectory();
+  await page.locator('.score-tabs [data-phase=all]').click();
+  await page.waitForFunction(()=>document.querySelectorAll('.match-row').length===4);
+  assert.equal((await delayedDirectory.fetched).status,200);
+  await page.locator('#league-filter').click();
+  assert.match(await page.locator('#dialog-content [role=status]').textContent(),/正在读取当前联赛目录/);
+  await page.locator('#content-dialog [data-close-dialog]').click();
+  await page.waitForFunction(()=>!document.querySelector('#content-dialog').open);
+  await page.locator('.match-row[data-fixture="web-integration-match-0"] [data-match]').first().click();
+  await page.waitForFunction(()=>document.querySelector('#dialog-title').textContent==='测试主队甲 vs 测试客队甲');
+  const matchTitle=await page.locator('#dialog-title').textContent();
+  delayedDirectory.release();await delayedDirectory.delivered;await page.waitForLoadState('networkidle');
+  assert.equal(await page.locator('#dialog-title').textContent(),matchTitle);
+  assert.equal(await page.locator('#dialog-content .league-choices').count(),0);
+  assert.equal(await page.locator('#dialog-content tr[data-quote]').count(),2);
+  leagueDirectoryEvidence.push({check:'closed_directory_late_response_cannot_replace_match',http_status:200,status:'passed'});
+  await page.locator('#content-dialog [data-close-dialog]').click();
+  await page.waitForFunction(()=>!document.querySelector('#content-dialog').open&&!location.hash.includes('match='));
+
+  // Inject a transport failure only, then retry against the actual API and current phase.
+  await page.route('**/api/v1/public/leagues?**',route=>route.abort('failed'),{times:1});
+  await page.locator('.score-tabs [data-phase=scheduled]').click();
+  await page.waitForFunction(()=>document.querySelectorAll('.match-row').length===1);
+  await page.locator('#league-filter').click();
+  await page.locator('#retry-league-directory').waitFor();
+  assert.equal(await page.locator('[data-league-id]').count(),0);
+  const retryResponse=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/v1/public/leagues');
+  await page.locator('#retry-league-directory').click();
+  assert.equal((await retryResponse).status(),200);
+  await page.locator('[data-league-id="league-1"]').waitFor();
+  assert.equal(await page.locator('[data-league-id]').count(),1);
+  leagueDirectoryEvidence.push({check:'transport_failure_explicit_retry_current_phase',fault:'synthetic_transport_failure',retry_http_status:200,league_ids:['league-1'],status:'passed'});
+  await page.screenshot({path:evidence+'/integration-league-directory-retry-real-api.png'});
+  await page.locator('#content-dialog [data-close-dialog]').click();
+  await page.waitForFunction(()=>!document.querySelector('#content-dialog').open);
+  await page.locator('.score-tabs [data-phase=all]').click();
+  await page.waitForFunction(()=>document.querySelectorAll('.match-row').length===4);
 });
 await scenario("游客真实鉴权拒绝与用户注册会话", async () => {
   assert.equal(
@@ -724,6 +787,7 @@ await fs.writeFile(
       browser_errors: errors,
       failed_upstream_responses: failedResponses,
       role_access_matrix: roleAccessMatrix,
+      league_directory_evidence: leagueDirectoryEvidence,
     },
     null,
     2,

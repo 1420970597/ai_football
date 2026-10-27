@@ -38,6 +38,8 @@ const state = {
   sport: "football",
   leagueIds: initial.getAll("league_ids").slice(0, 100),
   leagueOptions: [],
+  leagueRequest: null,
+  leagueError: null,
   q: "",
   matches: [],
   cursor: null,
@@ -360,9 +362,12 @@ function leagueLabel() {
     ? "联赛 (" + state.leagueIds.length + ") ▾"
     : "全部联赛 ▾";
 }
-async function loadLeagues() {
+function loadLeagues() {
   const sequence = ++state.leagueSequence;
-  try {
+  state.leagueError = null;
+  state.leagueOptions = [];
+  state.leagueRequest = (async () => {
+   try {
     const data = await api(
       "/public/leagues?" +
         params({
@@ -377,10 +382,24 @@ async function loadLeagues() {
     leagueLabel();
   } catch (error) {
     if (sequence !== state.leagueSequence) return;
+    state.leagueError = error.message;
     $("#league-filter").title = error.message;
   }
+  })();
+  return state.leagueRequest;
 }
-function chooseLeagues() {
+async function chooseLeagues() {
+  dialog('选择联赛', '<div class="empty-state" role="status">正在读取当前联赛目录…</div>');
+  const sequence = state.dialogSequence;
+  const leagueSequence = state.leagueSequence;
+  await (state.leagueRequest || loadLeagues());
+  if (sequence !== state.dialogSequence || !$("#content-dialog").open || leagueSequence !== state.leagueSequence) return;
+  if (state.leagueError) {
+    $("#dialog-content").innerHTML = '<div class="empty-state">' + esc(state.leagueError) +
+      '<br><button class="small-button" id="retry-league-directory">重新读取联赛</button></div>';
+    $("#retry-league-directory").onclick = () => { loadLeagues(); chooseLeagues(); };
+    return;
+  }
   dialog(
     "选择联赛",
     `<section class="detail-section"><p class="form-note">当前日期与状态下的完整联赛目录，可多选（最多100项）。</p><div class="league-choices">${state.leagueOptions.map((l) => `<label class="check-label"><input type="checkbox" data-league-id="${esc(l.competition_id)}" ${state.leagueIds.includes(l.competition_id) ? "checked" : ""} ${l.competition_id === null ? "disabled" : ""}><span>${esc(l.competition_name)} <small>(${esc(l.match_count)})</small></span></label>`).join("") || '<p class="muted">暂无可用联赛，请切换日期。</p>'}</div><div class="form-actions"><button class="small-button" data-clear-leagues>清除筛选</button><button class="primary-button" data-apply-leagues>应用筛选</button></div></section>`,
