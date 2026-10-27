@@ -137,7 +137,12 @@ async def bounded_request(client: httpx.AsyncClient, method: str, url: str, *, l
                 if len(body) > limit:
                     raise LeyuError("app_response_too_large")
             return bytes(body)
-    except httpx.ProxyError:
+    except httpx.ProxyError as exc:
+        # httpcore exposes a CONNECT response as e.g. "407 Proxy ...". Keep
+        # only the numeric status; never persist the provider's reason text.
+        match = re.search(r"\b([1-5][0-9]{2})\b", str(exc))
+        if match:
+            raise LeyuError(f"{failure_scope}_proxy_http_rejected", match.group(1)) from None
         raise LeyuError(f"{failure_scope}_proxy_failure") from None
     except httpx.ConnectTimeout:
         raise LeyuError(f"{failure_scope}_connect_timeout") from None
