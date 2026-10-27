@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hmac
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
@@ -336,6 +337,19 @@ async def update_settings(body: SettingsInput, request: Request):
     unknown = set(body.values) - ALLOWED_SETTINGS
     if unknown:
         raise HTTPException(status_code=422, detail="包含不允许的配置键")
+    relay = str(body.values.get("leyu_collection_relay", "")).strip()
+    if relay:
+        try:
+            parts = urlsplit(relay)
+            port = parts.port
+        except ValueError:
+            raise HTTPException(status_code=422, detail="采集中转地址无效") from None
+        if (parts.scheme != "https" or not parts.hostname or parts.username or parts.password
+                or parts.path not in {"", "/"} or parts.query or parts.fragment
+                or (port is not None and not 1 <= port <= 65535)
+                or "\\" in relay
+                or any(ord(c) <= 32 or ord(c) == 127 for c in relay)):
+            raise HTTPException(status_code=422, detail="采集中转必须为无路径、无凭据的 HTTPS 来源")
     pool = database.current_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():

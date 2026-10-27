@@ -185,7 +185,8 @@ async function saveSettings(form) {
   for (const input of $$("input[name]", form)) {
     if (input.type === "checkbox")
       values[input.name] = input.checked ? "true" : "false";
-    else if (input.value.trim()) values[input.name] = input.value.trim();
+    else if (input.value.trim() || input.hasAttribute("data-save-empty"))
+      values[input.name] = input.value.trim();
   }
   if (!Object.keys(values).length) throw new Error("没有需要保存的配置");
   const result = await adminApi("/settings", {

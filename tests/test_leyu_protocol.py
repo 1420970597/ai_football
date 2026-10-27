@@ -175,6 +175,61 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         client = LeyuClient.from_config({"leyu_api_base": "https://upstream.invalid", "leyu_request_id": "session", "leyu_api_token": "private-app-token"})
         self.assertNotIn("private-app-token", str(client.headers()))
 
+    async def test_collection_relay_routes_get_post_and_fallback_preserving_contract(self):
+        seen = []
+        def handle(request):
+            seen.append(request)
+            self.assertEqual("relay.invalid", request.url.host)
+            self.assertEqual("session", request.headers["requestId"])
+            self.assertEqual("https://ui.invalid", request.headers["origin"])
+            self.assertEqual("no-store", request.headers["cache-control"])
+            self.assertNotIn("private-app-token", str(request.headers))
+            self.assertIn("t", request.url.params)
+            path = request.url.path.removeprefix("/upstream.invalid")
+            if path == DEFAULT_FIXTURE_PATH:
+                self.assertEqual("GET", request.method)
+                return httpx.Response(200, json={"code":"0", "data":{"matchsList":[match()]}})
+            self.assertEqual("POST", request.method)
+            if path == DEFAULT_ODDS_PATH:
+                self.assertEqual("m1", json.loads(request.content)["mids"])
+                return httpx.Response(200, json={"code":"0", "data":{"data":[]}})
+            self.assertEqual(DEFAULT_MATCH_ODDS_PATH, path)
+            self.assertEqual("m1", json.loads(request.content)["mid"])
+            return httpx.Response(200, json={"code":"0", "data":[market_row()]})
+        client = LeyuClient.from_config({"leyu_api_base":"https://upstream.invalid",
+            "leyu_request_id":"session", "leyu_origin":"https://ui.invalid",
+            "leyu_collection_relay":"https://relay.invalid/", "leyu_api_token":"private-app-token"},
+            transport=httpx.MockTransport(handle))
+        fixtures = await client.fetch()
+        self.assertEqual(3, len(seen))
+        self.assertTrue(fixtures[0]["markets_complete"])
+        self.assertEqual("https_relay", client.last_report["collection_transport"])
+        self.assertEqual("https://upstream.invalid", client.base_url)
+        with self.assertRaisesRegex(LeyuError, "unsupported_collection_path"):
+            client.collection_url("/site/api/v1/user/login")
+
+    def test_invalid_relay_fails_before_requests_and_empty_relay_is_direct(self):
+        for relay in ("http://relay.invalid", "https://u:p@relay.invalid",
+                      "https://relay.invalid/path", "https://relay.invalid/?key=x",
+                      "https://relay.invalid/#fragment", "https://[broken",
+                      "https://relay.invalid:wrong", "https://relay.invalid:0"):
+            with self.subTest(relay=relay), self.assertRaises(LeyuError):
+                LeyuClient("https://upstream.invalid", request_id="session", collection_relay=relay)
+        client = LeyuClient("https://upstream.invalid", request_id="session")
+        self.assertEqual("https://upstream.invalid" + DEFAULT_FIXTURE_PATH, client.collection_url(DEFAULT_FIXTURE_PATH))
+
+    async def test_relay_denial_or_redirect_never_retries_directly(self):
+        for status in (302, 403, 429):
+            requests = []
+            def handle(request):
+                requests.append(request)
+                return httpx.Response(status, headers={"location":"https://untrusted.invalid"})
+            client = LeyuClient("https://upstream.invalid", request_id="session",
+                                collection_relay="https://relay.invalid", transport=httpx.MockTransport(handle))
+            with self.subTest(status=status), self.assertRaises(LeyuError):
+                await client.fetch()
+            self.assertEqual(["relay.invalid"], [r.url.host for r in requests])
+
     async def test_full_schedule_batches_beyond_twenty_with_bounded_concurrency(self):
         active = peak = 0
         batch_sizes = []

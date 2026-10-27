@@ -555,6 +555,7 @@ async function setup({
       return reply({
         items: {
           leyu_api_base: { configured: true, value: "https://example.test" },
+          leyu_collection_relay: { configured: !!mode.relay, value: mode.relay || "" },
           leyu_request_id: { configured: true, masked: true },
           telegram_api_id: { value: "10001" },
           telegram_api_hash: { configured: true, masked: true },
@@ -562,6 +563,7 @@ async function setup({
         leyu_version: mode.version,
       });
     if (p === "/admin/settings") {
+      if ("leyu_collection_relay" in body.values) mode.relay = body.values.leyu_collection_relay;
       mode.version++;
       return reply({
         updated: Object.keys(body.values),
@@ -841,6 +843,27 @@ await test("完整原文、两条系统买入、工具证据与图片", async ()
   assert.match(await page.locator("#messages-list").innerText(), /未解决/);
   assert.equal(await page.locator("#messages-more").isVisible(), true);
   await page.locator("#messages-more").click();
+  await context.close();
+});
+await test("采集中转热配置可保存与清空，保留原业务域名", async () => {
+  const { page, context, log } = await setup({ dual: true });
+  await page.locator('.utility-bar [data-page="admin"]').click();
+  await page.waitForSelector("#admin-content:not([hidden])");
+  await page.locator('[data-admin-tab="leyu"]').click();
+  const input = page.locator('#leyu-settings [name=leyu_collection_relay]');
+  await input.fill("https://relay.example.test");
+  await page.locator("#leyu-settings button").click();
+  await page.waitForFunction(() => document.querySelector("#leyu-version").textContent.includes("版本 8"));
+  let saved = log.filter(r => r.path === "/admin/settings" && r.method === "PUT");
+  assert.equal(saved[0].body.values.leyu_collection_relay, "https://relay.example.test");
+  assert.equal(saved[0].body.values.leyu_api_base, "https://example.test");
+  assert.equal(await input.inputValue(), "https://relay.example.test");
+  await input.fill("");
+  await page.locator("#leyu-settings button").click();
+  await page.waitForFunction(() => document.querySelector("#leyu-version").textContent.includes("版本 9"));
+  saved = log.filter(r => r.path === "/admin/settings" && r.method === "PUT");
+  assert.equal(saved[1].body.values.leyu_collection_relay, "");
+  assert.equal(saved[1].body.expected_leyu_version, 8);
   await context.close();
 });
 await test("独立身份与CSRF、热配置版本、留空保密字段、授予幂等", async () => {

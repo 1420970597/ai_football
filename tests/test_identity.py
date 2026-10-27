@@ -259,6 +259,24 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("httponly", csrf_cookie.lower())
 
 
+    async def test_collection_relay_setting_validates_and_can_be_cleared(self):
+        await self.admin_login()
+        url = "/api/v1/admin/settings"
+        for invalid in ("http://relay.invalid", "https://u:p@relay.invalid",
+                        "https://relay.invalid/path", "https://relay.invalid/?key=x",
+                        "https://relay.invalid:wrong", "https://[broken"):
+            response = await self.client.put(url,headers=self.csrf(True),json={
+                "expected_leyu_version":1,"values":{"leyu_collection_relay":invalid}})
+            self.assertEqual(422,response.status_code,response.text)
+        self.assertEqual(1,await self.pool.fetchval("SELECT revision FROM v2_configuration_revisions WHERE namespace='leyu'"))
+        for revision,value in ((1,"https://relay.invalid/"),(2,"")):
+            response=await self.client.put(url,headers=self.csrf(True),json={
+                "expected_leyu_version":revision,"values":{"leyu_collection_relay":value}})
+            self.assertEqual(200,response.status_code,response.text)
+            self.assertEqual(revision+1,response.json()["leyu_version"])
+            cipher=await self.pool.fetchval("SELECT encrypted_value FROM v2_admin_settings WHERE setting_key='leyu_collection_relay'")
+            self.assertEqual(value,decrypt_secret(bytes(range(32)),cipher))
+
     async def test_admin_settings_audit_diff_and_hot_update_state_are_truthful(self):
         await self.admin_login()
         response = await self.client.put(

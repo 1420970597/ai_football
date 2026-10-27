@@ -1,0 +1,13 @@
+{
+  "source_parent_commit": "4a5564599fcc598cf07b70b51506ad81aed1ddad",
+  "committed_source_verified": false,
+  "tests": 483,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "seconds": 185.38,
+  "scope": "isolated fixtures; no live providers or money",
+  "command": "sh infra/test/run.sh",
+  "exit_code": 0,
+  "unittest_seconds": 183.501
+}

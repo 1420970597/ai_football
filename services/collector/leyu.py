@@ -27,9 +27,16 @@ DEFAULT_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537
 
 
 def safe_base_url(value: str, *, allow_http: bool = False) -> str:
-    parts = urlsplit(value.strip())
+    text = value.strip()
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        raise LeyuError("invalid_base_url") from None
     schemes = {"https", "http"} if allow_http else {"https"}
-    if (parts.scheme not in schemes or not parts.netloc or parts.username or parts.password
+    if (parts.scheme not in schemes or not parts.hostname or parts.username or parts.password
+            or any(ord(c) <= 32 or ord(c) == 127 for c in text) or "\\" in text
+            or (port is not None and not 1 <= port <= 65535)
             or parts.query or parts.fragment or parts.path not in ("", "/")):
         raise LeyuError("invalid_base_url")
     return f"{parts.scheme}://{parts.netloc}".rstrip("/")
@@ -47,16 +54,18 @@ def _body(response: httpx.Response) -> Any:
 
 
 class LeyuClient:
-    """授权业务会话客户端。代理只属于登录适配器，本客户端禁止继承环境代理。"""
+    """授权采集客户端；显式 HTTPS 中转与登录代理独立，禁止继承环境代理。"""
 
     def __init__(
         self, base_url: str, token: str = "", request_id: str = "", *,
         origin: str = "", cookie: str = "", user_agent: str = DEFAULT_USER_AGENT,
         cuid: str = "", check_id_base: str = "", batch_size: int = DEFAULT_BATCH_SIZE,
         concurrency: int = DEFAULT_CONCURRENCY, batch_interval: float = DEFAULT_BATCH_INTERVAL,
+        collection_relay: str = "",
         transport: httpx.AsyncBaseTransport | None = None, allow_http: bool = False,
     ):
         self.base_url = safe_base_url(base_url, allow_http=allow_http)
+        self.collection_relay = safe_base_url(collection_relay) if collection_relay else ""
         self.origin = safe_base_url(origin, allow_http=allow_http) if origin else self.base_url
         # requestId 是授权会话，不能用随机追踪标识回退。
         self.request_id = request_id.strip()
@@ -97,8 +106,10 @@ class LeyuClient:
         if not request_id:
             raise LeyuError("authorized_session_missing")
         origin = safe_base_url(text("leyu_origin")) if text("leyu_origin") else base_url
+        relay = safe_base_url(text("leyu_collection_relay")) if text("leyu_collection_relay") else ""
         return {
             "base_url": base_url, "request_id": request_id, "origin": origin,
+            "collection_relay": relay,
             "token": text("leyu_business_cookie_token"), "cookie": text("leyu_cookie"),
             "user_agent": text("leyu_user_agent", DEFAULT_USER_AGENT), "cuid": text("leyu_cuid"),
             "check_id_base": text("leyu_check_id_base"), **budget,
@@ -112,8 +123,16 @@ class LeyuClient:
             values["base_url"], values["token"], values["request_id"], origin=values["origin"],
             cookie=values["cookie"], user_agent=values["user_agent"], cuid=values["cuid"],
             check_id_base=values["check_id_base"], batch_size=values["batch_size"],
-            concurrency=values["concurrency"], batch_interval=values["batch_interval"], **kwargs,
+            concurrency=values["concurrency"], batch_interval=values["batch_interval"],
+            collection_relay=values["collection_relay"], **kwargs,
         )
+
+    def collection_url(self, path: str) -> str:
+        if path not in {DEFAULT_FIXTURE_PATH, DEFAULT_ODDS_PATH, DEFAULT_MATCH_ODDS_PATH}:
+            raise LeyuError("unsupported_collection_path")
+        if self.collection_relay:
+            return self.collection_relay + "/" + urlsplit(self.base_url).netloc + path
+        return self.base_url + path
 
     def headers(self) -> dict[str, str]:
         headers = {
@@ -129,13 +148,15 @@ class LeyuClient:
             cookie = (cookie + "; " if cookie else "") + "X-API-TOKEN=" + self.token
         if cookie:
             headers["cookie"] = cookie
+        if self.collection_relay:
+            headers.update({"cache-control": "no-store", "pragma": "no-cache"})
         return headers
 
     async def _request(self, client: httpx.AsyncClient, method: str, path: str, **kwargs) -> Any:
         # Never include URL/body/upstream text in raised diagnostics: some include account tokens.
         try:
             async with client.stream(
-                method, self.base_url + path, params={"t": int(time.time() * 1000)},
+                method, self.collection_url(path), params={"t": int(time.time() * 1000)},
                 headers=self.headers(), **kwargs,
             ) as response:
                 if response.status_code == 429:
@@ -143,7 +164,7 @@ class LeyuClient:
                 if response.status_code in {401, 403}:
                     # HTTP 403 alone does not prove token expiration.
                     raise LeyuError("http_access_denied", str(response.status_code))
-                if response.status_code >= 400:
+                if response.status_code >= 300:
                     raise LeyuError("http_upstream_error", str(response.status_code))
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
@@ -309,6 +330,7 @@ class LeyuClient:
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise
             self.last_report = {
+                "collection_transport": "https_relay" if self.collection_relay else "direct",
                 "fixtures": len(fixtures),
                 "odds_requested_fixtures": len(selected_mids),
                 "complete_market_fixtures": sum(bool(f.get("markets_complete")) for f in fixtures),
