@@ -122,6 +122,38 @@ def _setting_diff(key: str, before: str | None, after: str | None) -> dict:
 class SettingsInput(BaseModel):
     values: dict[str, str | int | bool] = Field(max_length=30)
     expected_leyu_version: int | None = Field(default=None, ge=1)
+    expected_model_revision: int | None = Field(default=None, ge=1)
+
+
+class ModelCandidateInput(BaseModel):
+    model: str = Field(max_length=200)
+    provider: str | None = Field(default=None, max_length=200)
+    provenance: dict[str, str]
+    expected_revision: int = Field(ge=1)
+
+
+class ModelEvidenceInput(BaseModel):
+    expected_revision: int = Field(ge=1)
+    report_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    report: dict
+
+
+class ModelReviewDecision(BaseModel):
+    sample_id: str = Field(min_length=1, max_length=200)
+    decision: str = Field(pattern='^(accept|reject)$')
+    note: str = Field(min_length=3, max_length=500)
+
+
+class ModelReviewInput(BaseModel):
+    expected_revision: int = Field(ge=1)
+    report_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    candidate_fingerprint: str = Field(pattern=r'^[0-9a-f]{64}$')
+    reason: str = Field(min_length=3, max_length=500)
+    decisions: list[ModelReviewDecision] = Field(max_length=1000)
+
+
+class ModelActivationInput(BaseModel):
+    expected_revision: int = Field(ge=1)
 
 
 class PlanInput(BaseModel):
@@ -309,6 +341,8 @@ async def get_settings(request: Request):
     }
     for row in rows:
         key = row["setting_key"]
+        if key not in ALLOWED_SETTINGS:
+            continue
         try:
             value = decrypt_secret(settings.encryption_key, row["encrypted_value"])
         except Exception:
@@ -331,10 +365,15 @@ async def get_settings(request: Request):
         "pending" if collector.get("state") == "reachable" else
         "unavailable"
     )
+    from ..model_configuration import read_state, public_state
+    model_state = await read_state(database.current_pool(), settings)
+    output['hermes_analysis_model'] = {**output['hermes_analysis_model'], 'value': model_state['active']['model'] or '',
+        'state': 'active', 'pending_candidates': sum(item['status'] != 'activated' for item in model_state['candidates'])}
     return {
         "items": output,
         "allowed_keys": sorted(ALLOWED_SETTINGS),
         "leyu_version": version,
+        'model_configuration': public_state(model_state),
         "runtime": {
             "state": runtime_state,
             "desired_version": version,
@@ -371,8 +410,12 @@ async def update_settings(body: SettingsInput, request: Request):
                 or any(ord(c) <= 32 or ord(c) == 127 for c in relay)):
             raise HTTPException(status_code=422, detail="采集中转必须为无路径、无凭据的 HTTPS 来源")
     pool = database.current_pool()
+    model_candidate = None
     async with pool.acquire() as conn:
         async with conn.transaction():
+            if 'hermes_analysis_model' in body.values:
+                from ..model_configuration import lock
+                await lock(conn)
             await verify_sensitive_admin_session(conn, admin)
             leyu_keys = set(body.values) & LEYU_CONFIG_KEYS
             version = None
@@ -384,6 +427,13 @@ async def update_settings(body: SettingsInput, request: Request):
             before_values: dict[str, str | None] = {}
             for key, value in body.values.items():
                 text = str(value).strip()
+                if key == 'hermes_analysis_model':
+                    from ..model_configuration import stage
+                    if body.expected_model_revision is None:
+                        raise HTTPException(409, '模型候选需要当前配置版本，请刷新设置')
+                    model_candidate, _ = await stage(conn, request.app.state.settings, admin, text,
+                        expected_revision=body.expected_model_revision, request_id=getattr(request.state, 'request_id', ''))
+                    continue
                 if not text and key in SECRET_SETTINGS:
                     continue
                 if len(text) > 4096:
@@ -425,13 +475,56 @@ async def update_settings(body: SettingsInput, request: Request):
             await audit(conn, admin["id"], "admin", "settings_updated", "admin_settings", "",
                         getattr(request.state, "request_id", ""), details=details)
     application = {
-        "state": "persisted_unverified" if leyu_keys & set(changed) else "persisted",
+        "state": "model_candidate_pending" if model_candidate else "persisted_unverified" if leyu_keys & set(changed) else "persisted",
         "requested_revision": version,
         "runtime_acknowledged": False,
-        "reason": "配置已写入数据库，等待采集服务回执" if leyu_keys & set(changed) else "配置已写入数据库",
+        "reason": "新模型仅保存为待验证候选，当前模型继续生效；需比较证据、人工复核与显式激活" if model_candidate else "配置已写入数据库，等待采集服务回执" if leyu_keys & set(changed) else "配置已写入数据库",
     }
     return {"updated": sorted(changed), "secrets_masked": sorted(SECRET_SETTINGS & set(body.values)),
-            "leyu_version": version, "application": application}
+            "leyu_version": version, "application": application, 'model_candidate': model_candidate}
+
+
+@router.get('/model-configuration')
+async def model_configuration_status(request: Request):
+    await require_admin(request)
+    from ..model_configuration import public_state, read_state
+    return public_state(await read_state(database.current_pool(), request.app.state.settings))
+
+
+@router.post('/model-configuration/candidates', status_code=201)
+async def create_model_candidate(body: ModelCandidateInput, request: Request):
+    identity = await require_admin(request)
+    from ..model_configuration import public_state, stage
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            candidate, state = await stage(conn, request.app.state.settings, identity, body.model,
+                provider=body.provider, provenance=body.provenance, expected_revision=body.expected_revision,
+                request_id=getattr(request.state, 'request_id', ''))
+    return {'candidate': candidate, 'configuration': public_state(state)}
+
+
+async def _model_candidate_operation(request, candidate_id, body, operation):
+    identity = await require_admin(request)
+    from ..model_configuration import mutate
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            return await mutate(conn, request.app.state.settings, identity, candidate_id, body.expected_revision,
+                operation, body.model_dump(mode='json'), getattr(request.state, 'request_id', ''))
+
+
+@router.post('/model-configuration/candidates/{candidate_id}/evidence')
+async def attach_model_evidence(candidate_id: uuid.UUID, body: ModelEvidenceInput, request: Request):
+    return await _model_candidate_operation(request, candidate_id, body, 'evidence')
+
+
+@router.post('/model-configuration/candidates/{candidate_id}/review')
+async def review_model_candidate(candidate_id: uuid.UUID, body: ModelReviewInput, request: Request):
+    return await _model_candidate_operation(request, candidate_id, body, 'review')
+
+
+@router.post('/model-configuration/candidates/{candidate_id}/activate')
+async def activate_model_candidate(candidate_id: uuid.UUID, body: ModelActivationInput, request: Request):
+    return await _model_candidate_operation(request, candidate_id, body, 'activate')
 
 
 @router.get("/membership/plans")

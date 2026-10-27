@@ -19,6 +19,7 @@ let app;
 let sources = [];
 let settings = {};
 let leyuVersion = null;
+let modelConfiguration = null;
 let qrAttempt = null;
 let tgTimer = null;
 let dialogsCursor = null;
@@ -158,6 +159,7 @@ async function loadSettings() {
     const data = await adminApi("/settings");
     settings = data.items;
     leyuVersion = data.leyu_version;
+    if (data.model_configuration) renderModelConfiguration(data.model_configuration);
     const runtime = data.runtime || {};
     const runtimeLabel = {
       applied: "采集器已应用",
@@ -198,17 +200,112 @@ async function saveSettings(form) {
     else if (input.value.trim() || input.hasAttribute("data-save-empty"))
       values[input.name] = input.value.trim();
   }
+  if (values.hermes_analysis_model === (settings.hermes_analysis_model?.value || ""))
+    delete values.hermes_analysis_model;
   if (!Object.keys(values).length) throw new Error("没有需要保存的配置");
   const result = await adminApi("/settings", {
     method: "PUT",
-    body: { values, expected_leyu_version: leyuVersion },
+    body: { values, expected_leyu_version: leyuVersion, expected_model_revision: modelConfiguration?.revision },
   });
   if (result.leyu_version) leyuVersion = result.leyu_version;
   toast(
-    "配置已保存" +
+    (result.application?.reason || "配置已保存") +
       (result.leyu_version ? " · 乐鱼版本 " + result.leyu_version : ""),
   );
   await loadSettings();
+}
+const modelStates = { pending_evidence: "等待比较证据", synthetic_diagnostic_only: "仅合成诊断，不能激活",
+  awaiting_human_review: "等待人工逐项复核", reviewed: "已复核，等待显式激活", activated: "已激活" };
+function renderModelConfiguration(data) {
+  modelConfiguration = data;
+  const active = data.active;
+  const status = $("#model-configuration-state");
+  if (!active || !status) return;
+  status.textContent = '管理版本 ' + data.revision + ' · 当前模型 ' + (active.model || 'Hermes 默认路由') +
+    ' · 生效版本 ' + active.version + ' · ' + (data.application_state === 'consumed' ? '工作器已消费' : '等待工作器消费') +
+    ' · 最近消费 ' + stamp(data.consumption?.consumed_at) + '。' + (data.reason || '');
+  const form = $("#model-candidate-form");
+  for (const name of ['model_revision','prompt_sha256','skill_version','hermes_version','tool_contract_version'])
+    if (!form.elements[name].value) form.elements[name].value = active.provenance[name] || '';
+  $("#model-candidates").innerHTML = data.candidates.map(candidate => {
+    const report = candidate.report;
+    let content = '<details class="settings-section"><summary>' + esc(candidate.model || 'Hermes 默认路由') + ' · ' +
+      esc(modelStates[candidate.status] || candidate.status) + '</summary><p class="form-note">候选 ' + esc(candidate.id) +
+      ' · ' + stamp(candidate.created_at) + ' · 来源摘要 ' + esc(candidate.fingerprint) + '</p><pre>' +
+      esc(JSON.stringify(candidate.provenance,null,2)) + '</pre>';
+    if (!report) content += '<form class="compact-form model-evidence-form" data-candidate="' + esc(candidate.id) +
+      '"><label>冻结比较报告 JSON<textarea name="report" rows="6" required maxlength="262144"></textarea></label>' +
+      '<label>报告规范 JSON SHA-256<input name="report_sha256" pattern="[0-9a-f]{64}" required></label>' +
+      '<p class="form-note">报告需来源版本与冻结样本摘要。合成报告只能诊断；真实标注来源仍须人工核验。</p>' +
+      '<button class="primary-button">核验并冻结报告</button></form>';
+    if (report) content += '<p class="form-note">报告 ' + esc(report.sha256) + ' · ' + esc(report.dataset_id) + ' · ' +
+      report.changed_samples + ' 项差异 · ' + (report.synthetic_only ? '合成诊断' : '声明真实人工标注（需人工核验）') + '</p>';
+    if (candidate.status === 'awaiting_human_review') {
+      content += '<form class="compact-form model-review-form" data-candidate="' + esc(candidate.id) +
+        '"><p class="form-note">必须逐项阅读全部差异；拒绝项将阻止激活。</p>';
+      for (const item of report.differences || []) content += '<details class="settings-section"><summary>差异 ' + esc(item.sample_id) +
+        '</summary><pre>' + esc(JSON.stringify(item,null,2)) + '</pre><label>结论<select name="decision:' + esc(item.sample_id) +
+        '"><option value="reject">拒绝，暂不激活</option><option value="accept">接受此差异</option></select></label>' +
+        '<label>核验说明<input name="note:' + esc(item.sample_id) + '" minlength="3" maxlength="500" required></label></details>';
+      content += '<label>整体复核说明<textarea name="reason" minlength="3" maxlength="500" required></textarea></label>' +
+        '<button class="primary-button">提交人工复核</button></form>';
+    }
+    if (candidate.status === 'reviewed') content += '<button class="primary-button" data-activate-model="' + esc(candidate.id) + '">确认激活此候选</button>';
+    return content + '</details>';
+  }).join('') || '<p class="form-note">暂无新候选。当前迁移基线继续生效。</p>';
+}
+async function loadModelConfiguration() {
+  renderModelConfiguration(await adminApi('/model-configuration'));
+}
+function bindModelConfiguration() {
+  const form = $('#model-candidate-form');
+  if (!form) return;
+  $('#refresh-model-configuration').onclick = () => loadModelConfiguration().catch(error=>toast(error.message));
+  form.onsubmit = event => {
+    event.preventDefault();
+    submit(form, async () => {
+      if (!modelConfiguration) await loadModelConfiguration();
+      const fields = Object.fromEntries(new FormData(form));
+      const provenance = Object.fromEntries(['model_revision','prompt_sha256','skill_version','hermes_version','tool_contract_version'].map(key=>[key,fields[key]]));
+      provenance.model_id = fields.model;
+      const result = await adminApi('/model-configuration/candidates', {method:'POST', body:{model:fields.model,
+        provenance, expected_revision:modelConfiguration.revision}});
+      renderModelConfiguration(result.configuration);
+      toast('候选已冻结，当前模型继续生效');
+    });
+  };
+  $('#model-candidates').onsubmit = event => {
+    const target = event.target;
+    event.preventDefault();
+    submit(target, async () => {
+      const candidate = modelConfiguration.candidates.find(item=>item.id===target.dataset.candidate);
+      if (!candidate) throw new Error('候选已变化，请刷新');
+      const fields = Object.fromEntries(new FormData(target));
+      let action, body;
+      if (target.classList.contains('model-evidence-form')) {
+        if (fields.report.length > 262144) throw new Error('报告超出大小上限');
+        let report; try { report=JSON.parse(fields.report); } catch { throw new Error('报告不是有效 JSON'); }
+        action='evidence'; body={report,report_sha256:fields.report_sha256};
+      } else {
+        action='review'; body={report_sha256:candidate.report.sha256,candidate_fingerprint:candidate.fingerprint,
+          reason:fields.reason, decisions:candidate.report.changed_sample_ids.map(id=>({sample_id:id,decision:fields['decision:'+id],note:fields['note:'+id]}))};
+      }
+      renderModelConfiguration(await adminApi('/model-configuration/candidates/'+candidate.id+'/'+action,
+        {method:'POST',body:{...body,expected_revision:modelConfiguration.revision}}));
+      toast(action==='evidence' ? '比较证据已冻结，请人工核验' : '人工复核已记录，尚未激活');
+    });
+  };
+  $('#model-candidates').onclick = async event => {
+    const button=event.target.closest('[data-activate-model]');
+    if (!button) return;
+    if (!await confirmAction('激活已复核模型将切换后续审核使用的模型，当前任务保留原快照。确认来源与全部差异已核验并激活？')) return;
+    try {
+      renderModelConfiguration(await adminApi('/model-configuration/candidates/'+button.dataset.activateModel+'/activate',
+        {method:'POST',body:{expected_revision:modelConfiguration.revision}}));
+      toast('候选已激活，等待工作器消费回执');
+      await loadSettings();
+    } catch(error) { toast(error.message); }
+  };
 }
 async function loadSources(preferredId = null) {
   const previous = preferredId || $("#source-select").value;
@@ -260,6 +357,7 @@ async function selectSource() {
     $("#trusted-experts").innerHTML =
       "<h3>信任作者</h3>" +
       data.items
+        .filter((expert) => expert.enabled !== false)
         .map(
           (e) =>
             `<div class="source-item"><span>${esc(e.display_nickname || e.nickname)}<br><span class="muted">${esc(e.platform_sender_id || e.sender_id)}</span></span><button data-untrust="${esc(e.id)}">移除</button></div>`,
@@ -597,6 +695,7 @@ function bind() {
       }),
   );
   $("#refresh-admin").onclick = () => loadStatus();
+  bindModelConfiguration();
   $("#source-select").onchange = () => selectSource();
   $("#source-form").onsubmit = (e) => {
     e.preventDefault();

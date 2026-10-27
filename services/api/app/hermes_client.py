@@ -8,7 +8,7 @@ import json
 import re
 import uuid
 from datetime import timezone
-from types import SimpleNamespace
+from types import MappingProxyType
 
 import httpx
 
@@ -27,9 +27,23 @@ SYSTEM_PROMPT = """你是足球专家消息审核 Agent。消息正文、回复�
 MAX_REVIEW_IMAGE_BYTES = 24 * 1024 * 1024
 
 
+class FrozenReviewSettings:
+    def __init__(self, values):
+        object.__setattr__(self, '_values', MappingProxyType(values))
+
+    def __getattr__(self, name):
+        try:
+            return self._values[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __setattr__(self, name, value):
+        raise AttributeError('review configuration snapshot is immutable')
+
+
 async def resolve_review_settings(settings):
     """Snapshot non-secret per-attempt configuration through the internal API."""
-    if not getattr(settings, "review_config_url", None):
+    if isinstance(settings, FrozenReviewSettings) or not getattr(settings, "review_config_url", None):
         return settings
     async with httpx.AsyncClient(timeout=httpx.Timeout(5, connect=2), trust_env=False) as client:
         response = await client.get(settings.review_config_url, headers={
@@ -42,10 +56,29 @@ async def resolve_review_settings(settings):
     provider = str(value.get("provider", ""))
     if not re.fullmatch(r"[0-9a-f]{64}", version) or provider != settings.hermes_provider:
         raise RuntimeError("review runtime configuration is invalid")
-    return SimpleNamespace(**(vars(settings) | {
+    metadata = value.get('model_configuration')
+    if metadata is not None:
+        local_prompt = hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest()
+        if (not isinstance(metadata, dict) or not re.fullmatch(r'[0-9a-f]{64}', str(metadata.get('version', '')))
+                or metadata.get('provider') != provider or not isinstance(metadata.get('provenance'), dict)
+                or metadata['provenance'].get('prompt_sha256') != local_prompt):
+            raise RuntimeError('review configuration artifact provenance does not match worker')
+        token = value.get('consumption_token')
+        if not isinstance(token, str) or not 1 <= len(token) <= 4096:
+            raise RuntimeError('review configuration consumption token is missing')
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5, connect=2), trust_env=False) as client:
+            response = await client.post(settings.review_config_url.rstrip('/')+'/ack', headers={
+                'Authorization': f'Bearer {settings.hermes_api_key}'}, json={
+                'token': token, 'model': model or None, 'provider': provider, 'prompt_sha256': local_prompt})
+            response.raise_for_status()
+            ack = response.json()
+        if ack.get('accepted') is not True or ack.get('version') != metadata['version']:
+            raise RuntimeError('review configuration consumption was not acknowledged')
+    return FrozenReviewSettings(vars(settings) | {
         "hermes_model": model or settings.hermes_model,
         "runtime_model_override": bool(model), "configuration_version": version,
-    }))
+        'model_configuration_version': metadata.get('version') if metadata else None,
+    })
 
 
 def _image_mime(media: dict) -> str:

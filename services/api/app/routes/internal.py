@@ -44,7 +44,25 @@ async def review_configuration(request: Request):
     _authorized(request, getattr(request.app.state.settings, "hermes_api_key", ""))
     from ..runtime_settings import runtime_configuration
     result = await runtime_configuration(request.app.state.settings)
-    return {**result, "provider": getattr(request.app.state.settings, "hermes_provider", "custom:cline")}
+    from ..model_configuration import receipt_token
+    return {**result, "provider": result['model_configuration']['provider'],
+        'consumption_token': receipt_token(request.app.state.settings, result)}
+
+
+class ReviewConfigurationAck(BaseModel):
+    token: str = Field(min_length=1, max_length=4096)
+    model: str | None = Field(default=None, max_length=200)
+    provider: str = Field(min_length=1, max_length=200)
+    prompt_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+@router.post('/review/config/ack')
+async def acknowledge_review_configuration(body: ReviewConfigurationAck, request: Request):
+    _authorized(request, getattr(request.app.state.settings, 'hermes_api_key', ''))
+    from ..model_configuration import acknowledge
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            return await acknowledge(conn, request.app.state.settings, body.token, body.model, body.provider, body.prompt_sha256)
 
 
 @router.get("/collector/config")

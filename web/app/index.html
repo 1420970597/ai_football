@@ -839,9 +839,9 @@
               <form id="system-settings" class="compact-form settings-form">
                 <h2>Hermes 与业务设置</h2>
                 <label
-                  >分析模型<input
+                  >候选分析模型<input
                     name="hermes_analysis_model"
-                    placeholder="由 Hermes 配置管理" /></label
+                    placeholder="修改后进入候选审核，不会立即生效" /><small>当前模型继续运行。新模型需冻结比较证据、人工复核及显式激活。</small></label
                 ><label
                   >报价有效秒数<input
                     name="quote_max_age_seconds"
@@ -855,6 +855,23 @@
                   />开放用户本人启用自动投注</label
                 ><button class="primary-button">保存业务设置</button>
               </form>
+              <details class="settings-section" id="model-configuration-section">
+                <summary>模型候选、质量证据与激活</summary>
+                <p id="model-configuration-state" class="form-note" aria-live="polite">等待读取模型配置</p>
+                <button id="refresh-model-configuration" class="small-button">刷新模型版本</button>
+                <form id="model-candidate-form" class="compact-form">
+                  <h3>冻结模型 / 提示 / 技能候选</h3>
+                  <label>模型标识<input name="model" maxlength="200" required /></label>
+                  <label>模型修订版本<input name="model_revision" maxlength="200" required /></label>
+                  <label>提示 SHA-256<input name="prompt_sha256" pattern="[0-9a-f]{64}" required /></label>
+                  <label>技能版本<input name="skill_version" maxlength="200" required /></label>
+                  <label>Hermes 版本<input name="hermes_version" maxlength="200" required /></label>
+                  <label>工具契约版本<input name="tool_contract_version" maxlength="200" required /></label>
+                  <p class="form-note">新提示或技能必须先有可核验部署证明；仅声明版本不会生效。当前配置标为迁移基线，不表示已通过新金标。</p>
+                  <button class="primary-button">保存冻结候选</button>
+                </form>
+                <div id="model-candidates" class="record-list" aria-live="polite"></div>
+              </details>
               <details class="settings-section">
                 <summary>管理审计</summary>
                 <button id="refresh-audit" class="small-button">
