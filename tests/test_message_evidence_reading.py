@@ -162,7 +162,7 @@ class MessageEvidenceReadingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200,response.status_code,response.text)
         self.assertTrue(response.json()['message']['media_objects'][0]['url'].startswith(path+'/media/'))
         with patch('app.routes.expert_content.read_image',return_value=support.IMAGE):
-            image=await self.client.get(path+'/media/0')
+            image=await self.client.get(response.json()['message']['media_objects'][0]['url'])
         self.assertEqual(200,image.status_code,image.text)
         self.assertEqual(support.IMAGE,image.content)
         self.assertEqual('private, no-store',image.headers['cache-control'])

@@ -393,6 +393,23 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(422, rejected.exception.status_code)
         self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_fixtures"))
 
+    async def test_legacy_mixed_case_and_padded_aliases_search_and_resolve_consistently(self):
+        fixture_id = await self.fixture()
+        await self.pool.execute("UPDATE v2_fixtures SET home_aliases=ARRAY['  LEGACY HOME  '],away_aliases=ARRAY[' Legacy Away '] WHERE id=$1", fixture_id)
+        key, rows = await self.search_all('legacy home')
+        self.assertEqual([fixture_id], [row['id'] for row in rows])
+        resolved = await self.post('resolve_match', search_key=key, team_a=' Legacy Home ', team_b='LEGACY AWAY')
+        self.assertEqual(200, resolved.status_code, resolved.text)
+        self.assertTrue(resolved.json()['resolved'])
+
+    async def test_alias_search_preserves_reserve_team_and_women_identity(self):
+        first = await self.fixture(1, home_team='Club Women', away_team='Other Women', home_aliases=['俱乐部女足'])
+        await self.fixture(2, home_team='Club U21', away_team='Other U21', home_aliases=['俱乐部青年队'])
+        key, rows = await self.search_all('俱乐部女足')
+        self.assertEqual([first], [row['id'] for row in rows])
+        wrong = await self.post('resolve_match', search_key=key, team_a='Club U21', team_b='Other U21')
+        self.assertFalse(wrong.json()['resolved'])
+
 
 if __name__ == "__main__":
     unittest.main()

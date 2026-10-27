@@ -209,7 +209,7 @@ async def signal_detail(signal_id: str, request: Request):
     except ValueError:
         raise message_read.private_error(404, "记录不存在") from None
     row = await database.current_pool().fetchrow(
-        "SELECT s.*,e.display_nickname,m.raw_text,m.media_objects,m.posted_at,m.source_id,j.id AS job_id,j.state AS job_state "
+        "SELECT s.*,e.display_nickname,m.raw_text,m.media_objects,m.revision AS message_revision,m.posted_at,m.source_id,j.id AS job_id,j.state AS job_state "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
         "JOIN v2_expert_messages m ON m.id=s.message_id LEFT JOIN LATERAL(SELECT id,state FROM v2_analysis_jobs "
         "WHERE message_id=m.id ORDER BY created_at DESC,id DESC LIMIT 1) j ON TRUE "
@@ -218,7 +218,8 @@ async def signal_detail(signal_id: str, request: Request):
     if not row:
         raise message_read.private_error(404, "记录不存在")
     item = dict(row)
-    item['media_objects'] = message_read.message_projection({'id': item['message_id'], 'media_objects': item.get('media_objects')})['media_objects']
+    item['media_objects'] = message_read.message_projection({'id': item['message_id'], 'revision': item['message_revision'],
+        'media_objects': item.get('media_objects')}, request=request, actor=actor)['media_objects']
     page = await message_read.trace_page(database.current_pool(), request, actor, item['message_id'])
     item.update(analysis_trace=page['items'], analysis_next_cursor=page['next_cursor'],
                 analysis_has_more=page['has_more'], system_summary=await message_read.latest_summary(database.current_pool(), item['message_id']))

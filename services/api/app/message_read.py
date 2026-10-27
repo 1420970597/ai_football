@@ -11,6 +11,7 @@ from .auth import get_identity, require_admin
 from .membership import has_entitlement
 from .pagination import decode_cursor, encode_cursor
 from .review_tool_evidence import MAX_CHUNKS, replay_snapshot, snapshot_result
+from . import media_grants
 
 HEADERS = {'Cache-Control': 'private, no-store'}
 CURSOR_SECONDS = 900
@@ -32,15 +33,24 @@ async def reader(request, *, admin=False):
         raise
 
 
-def message_projection(row, *, admin=False):
+def message_projection(row, *, admin=False, request=None, actor=None):
     allowed = ('id', 'raw_text', 'posted_at', 'edited_at', 'revision', 'deleted_at', 'media_state',
                'reply_context', 'display_nickname', 'source_name', 'created_at', 'last_error', 'source_evidence')
     result = {key: trace_payload(row[key]) for key in allowed if key in row}
     root = '/api/v1/admin/telegram/messages/' if admin else '/api/v1/public/messages/'
-    result['media_objects'] = [
-        {key: media[key] for key in ('mime_type', 'bytes', 'sha256', 'width', 'height') if key in media}
-        | {'url': root + str(row['id']) + '/media/' + str(index)}
-        for index, media in enumerate(row.get('media_objects') or []) if isinstance(media, dict)]
+    result['media_objects'] = []
+    for index, media in enumerate(row.get('media_objects') or []):
+        if not isinstance(media, dict):
+            continue
+        item = {key: media[key] for key in ('mime_type', 'bytes', 'sha256', 'width', 'height') if key in media}
+        url = root + str(row['id']) + '/media/' + str(index)
+        if request is not None and actor is not None:
+            grant = media_grants.issue(request.app.state.settings.session_secret, actor, row, index, media,
+                                       'admin' if admin else 'user')
+            url += '?grant=' + grant
+            item['expires_in_seconds'] = media_grants.MEDIA_GRANT_SECONDS
+        item['url'] = url
+        result['media_objects'].append(item)
     return result
 
 
@@ -151,7 +161,7 @@ async def detail(pool, request, actor, message, *, context='user'):
         if pending:
             traces['items'] = [{**dict(pending), 'trace_kind': 'review_state',
                                 'payload': {'note': '审核尚未保存轨迹，原文继续保留'}}]
-    return {'message': message_projection(dict(message), admin=context=='admin'), 'analysis': traces['items'],
+    return {'message': message_projection(dict(message), admin=context=='admin', request=request, actor=actor), 'analysis': traces['items'],
             'analysis_next_cursor': traces['next_cursor'], 'analysis_has_more': traces['has_more'],
             'system_summary': await latest_summary(pool, message['id']),
             'signals': signals['items'], 'signals_next_cursor': signals['next_cursor'],

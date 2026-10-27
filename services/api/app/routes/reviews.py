@@ -127,7 +127,8 @@ async def search_matches(body: SearchInput, request: Request):
                     "INSERT INTO v2_match_search_candidates(job_id,search_key,fixture_id,position,candidate_data) "
                     "SELECT $1,$2,f.id,row_number() OVER(ORDER BY f.kickoff_at,f.id)," + _CANDIDATE_JSON + " FROM v2_fixtures f "
                     "WHERE f.phase IN ('live','scheduled') AND ($3='all' OR f.phase=$3) "
-                    "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 OR $5=ANY(f.home_aliases) OR $5=ANY(f.away_aliases)) "
+                    "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 OR EXISTS ("
+                    "SELECT 1 FROM unnest(f.home_aliases || f.away_aliases) alias WHERE lower(btrim(alias))=$5)) "
                     "AND ($6='' OR lower(f.competition_name) LIKE '%'||$6||'%') "
                     "AND ($7::timestamptz IS NULL OR f.kickoff_at >= $7) AND ($8::timestamptz IS NULL OR f.kickoff_at <= $8) "
                     "AND ($9::text IS NULL OR f.sport=$9)",
@@ -174,8 +175,8 @@ async def resolve_match(body: ResolveInput, request: Request):
                 raise HTTPException(status_code=422, detail="two distinct team identities are required")
             for row in rows:
                 fixture = row["candidate_data"]
-                home = {str(v).casefold() for v in [fixture["home_team"], *fixture.get("home_aliases", [])]}
-                away = {str(v).casefold() for v in [fixture["away_team"], *fixture.get("away_aliases", [])]}
+                home = {str(v).strip().casefold() for v in [fixture["home_team"], *fixture.get("home_aliases", [])]}
+                away = {str(v).strip().casefold() for v in [fixture["away_team"], *fixture.get("away_aliases", [])]}
                 if not ((a in home and b in away) or (b in home and a in away)):
                     continue
                 if body.competition and body.competition.strip().casefold() != fixture["competition_name"].casefold():

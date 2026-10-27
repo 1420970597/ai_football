@@ -601,7 +601,9 @@ for (const role of [
       }
       assert.equal((await request("/public/experts/" + expertId + "/messages")).status, role.key === "valid" ? 200 : 403);
       assert.equal((await request("/public/messages/66666666-6666-4666-8666-666666666666")).status, role.key === "valid" ? 200 : 403);
-      assert.equal((await request("/public/messages/22222222-2222-4222-8222-222222222222/media/0")).status, role.key === "valid" ? 503 : 403);
+      const mediaDetail = role.key === "valid" ? await request("/public/messages/22222222-2222-4222-8222-222222222222") : null;
+      const mediaPath = mediaDetail ? mediaDetail.data.message.media_objects[0].url.replace('/api/v1', '') : "/public/messages/22222222-2222-4222-8222-222222222222/media/0";
+      assert.equal((await request(mediaPath)).status, role.key === "valid" ? 503 : 403);
       observed.pages.push(role.key === "valid" ? "会员原文可读；未配置媒体如实503" : "原文、深链和媒体一致拒绝");
       await rolePage.locator(".left-rail [data-page=account]").click();
       if (isUser) {

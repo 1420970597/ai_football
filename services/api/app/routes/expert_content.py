@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
+import hmac
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -13,6 +15,7 @@ from .. import database
 from ..blobstore import image_mime, read_image
 from ..expert_statistics import StatisticsScope, statistics_scope, summaries, trend
 from .. import message_read
+from .. import media_grants
 from .public import _decode_cursor, _encode_cursor, _has_entitlement
 
 router = APIRouter(prefix='/api/v1/public')
@@ -60,15 +63,15 @@ async def require_history(request: Request):
     return await message_read.reader(request)
 
 
-def media_links(message: dict):
-    message['media_objects'] = message_read.message_projection(message)['media_objects']
+def media_links(message: dict, request, actor):
+    message['media_objects'] = message_read.message_projection(message, request=request, actor=actor)['media_objects']
     return message
 
 
 @router.get('/experts/{expert_id}/messages')
 async def expert_messages(expert_id: uuid.UUID, request: Request, cursor: str | None = Query(default=None, max_length=1000),
                           limit: int = Query(default=30, ge=1, le=100)):
-    await require_history(request)
+    actor = await require_history(request)
     cursor_scope = {'kind': 'expert_messages', 'expert_id': str(expert_id)}
     decoded = _decode_cursor(cursor, request, cursor_scope)
     try:
@@ -84,7 +87,7 @@ async def expert_messages(expert_id: uuid.UUID, request: Request, cursor: str | 
         "ORDER BY m.posted_at DESC,m.id DESC LIMIT $4", expert_id, decoded[0] if decoded else None, cursor_id, limit+1,
     )
     page = rows[:limit]
-    return {'items': [media_links(dict(row)) for row in page],
+    return {'items': [media_links(dict(row), request, actor) for row in page],
             'next_cursor': _encode_cursor(page[-1]['posted_at'], str(page[-1]['id']), request, cursor_scope) if len(rows)>limit and page else None}
 
 
@@ -134,15 +137,20 @@ async def message_tool_response(message_id: uuid.UUID, trace_id: uuid.UUID, requ
 
 @router.get('/messages/{message_id}/media/{index}')
 async def message_media(message_id: uuid.UUID, index: int, request: Request):
-    await require_history(request)
-    return await read_message_media(message_id, index)
+    actor = await require_history(request)
+    return await read_message_media(message_id, index, request=request, actor=actor)
 
 
-async def read_message_media(message_id: uuid.UUID, index: int):
-    objects = await database.current_pool().fetchval('SELECT media_objects FROM v2_expert_messages WHERE id=$1', message_id)
+async def read_message_media(message_id: uuid.UUID, index: int, *, request: Request, actor, context='user'):
+    row = await database.current_pool().fetchrow('SELECT id,revision,media_objects FROM v2_expert_messages WHERE id=$1', message_id)
+    objects = row['media_objects'] if row else None
     if not objects or index < 0 or index >= len(objects):
         raise message_read.private_error(404, '消息图片不存在')
     media = objects[index]
+    if not isinstance(media, dict):
+        raise message_read.private_error(415, '图片存储证据无效')
+    media_grants.verify(request.app.state.settings.session_secret, actor, dict(row), index, media, context,
+                        request.query_params.get('grant'))
     mime = media.get('mime_type')
     if mime not in {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}:
         raise message_read.private_error(415, '图片格式不可展示')
@@ -150,6 +158,10 @@ async def read_message_media(message_id: uuid.UUID, index: int):
         content = await read_image(media['object_key'])
         if image_mime(content) != mime:
             raise ValueError('media type mismatch')
+        if media.get('sha256') and not hmac.compare_digest(hashlib.sha256(content).hexdigest(), str(media['sha256'])):
+            raise ValueError('media digest mismatch')
+        if media.get('bytes') is not None and len(content) != media['bytes']:
+            raise ValueError('media length mismatch')
     except Exception:
         raise message_read.private_error(503, '远端图片暂不可读') from None
     return Response(content, media_type=mime, headers={'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline'})
