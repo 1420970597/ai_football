@@ -13,6 +13,60 @@ from app import database
 from app.routes import operations
 
 
+class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
+    class _Response:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        response = None
+
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            return self.response
+
+    async def test_probe_returns_bounded_source_state_and_never_account_details(self):
+        payload = {
+            "connected": True,
+            "authorized": True,
+            "auth": {"state": "authorized", "account": {"id": "private"}},
+            "source_health": {
+                "leyu": {"state": "unavailable", "last_error": "websocket_http_403", "fixtures": 3},
+                "websocket": {"state": "backoff", "reconnects": 2},
+                "future": {"secret": "must-not-leak"},
+            },
+        }
+        self._Client.response = self._Response(200, payload)
+        request = type("Request", (), {"app": type("App", (), {"state": type("State", (), {"settings": type("Settings", (), {"collector_token": "token"})()})()})()})()
+        with patch.object(operations.httpx, "AsyncClient", self._Client):
+            result = await operations.collector_health(request)
+        self.assertEqual("reachable", result["state"])
+        self.assertEqual("websocket_http_403", result["sources"]["leyu"]["last_error"])
+        self.assertNotIn("account", json.dumps(result))
+        self.assertNotIn("future", result["sources"])
+
+    async def test_probe_classifies_missing_token_and_http_rejection(self):
+        request = type("Request", (), {"app": type("App", (), {"state": type("State", (), {"settings": type("Settings", (), {"collector_token": ""})()})()})()})()
+        self.assertEqual({"state": "unconfigured", "reason": "collector_token_missing"}, await operations.collector_health(request))
+        request.app.state.settings.collector_token = "token"
+        self._Client.response = self._Response(403, {})
+        with patch.object(operations.httpx, "AsyncClient", self._Client):
+            self.assertEqual({"state": "rejected", "reason": "http_403"}, await operations.collector_health(request))
+
+
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'), 'requires task-owned temporary database')
 class OperationsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

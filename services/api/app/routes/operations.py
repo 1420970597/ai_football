@@ -6,6 +6,7 @@ import os
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request
+import httpx
 
 from .. import database
 from ..auth import require_admin
@@ -18,6 +19,60 @@ COUNT_CAP = 5000
 
 def count_state(value):
     return {'count': min(value or 0, COUNT_CAP), 'capped': bool(value and value > COUNT_CAP)}
+
+
+async def collector_health(request: Request) -> dict:
+    """Probe the collector control endpoint without exposing credentials.
+
+    A configured URL is not evidence that the collector is alive. The probe is
+    deliberately bounded and returns stable categories so the admin page can
+    distinguish an unavailable service from a rejected internal token.
+    """
+    base_url = os.environ.get("TELEGRAM_CONTROL_URL", "http://collector:8092").rstrip("/")
+    token = getattr(request.app.state.settings, "collector_token", "")
+    if not token:
+        return {"state": "unconfigured", "reason": "collector_token_missing"}
+    try:
+        timeout = httpx.Timeout(3, connect=1)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False) as client:
+            response = await client.post(base_url + "/status", json={}, headers={"Authorization": "Bearer " + token})
+        if response.status_code != 200:
+            return {"state": "rejected", "reason": f"http_{response.status_code}"}
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return {"state": "unavailable", "reason": "invalid_response"}
+    except httpx.TimeoutException:
+        return {"state": "unavailable", "reason": "timeout"}
+    except (httpx.HTTPError, ValueError):
+        return {"state": "unavailable", "reason": "connection_error"}
+
+    auth = payload.get("auth") if isinstance(payload.get("auth"), dict) else {}
+    health = payload.get("source_health") if isinstance(payload.get("source_health"), dict) else {}
+    # Only forward bounded operational fields; auth account details and any
+    # future collector payload are intentionally excluded from diagnostics.
+    source_health = {}
+    for key in ("leyu", "telegram", "websocket"):
+        value = health.get(key)
+        if isinstance(value, dict):
+            selected = {
+                field: value[field] for field in (
+                    "state", "last_error", "last_success_at", "last_push_at",
+                    "fixtures", "accepted", "source_count", "degraded",
+                    "reconnects", "last_error", "last_message_at",
+                ) if field in value
+            }
+            source_health[key] = {
+                field: item[:160] if isinstance(item, str) else item
+                for field, item in selected.items()
+                if isinstance(item, (str, int, float, bool)) or item is None
+            }
+    return {
+        "state": "reachable",
+        "connected": bool(payload.get("connected")),
+        "authorized": bool(payload.get("authorized")),
+        "auth_state": str(auth.get("state", "unknown"))[:40],
+        "sources": source_health,
+    }
 
 
 @router.get('/diagnostics')
@@ -55,6 +110,7 @@ async def diagnostics(request: Request):
     return {
         'checked_at': datetime.now(timezone.utc), 'database': 'reachable', 'schema': schema,
         'hermes': {'gateway': gateway, 'provider': 'unverified'},
+        'collector': await collector_health(request),
         'storage': 'configured_unverified' if configured else 'unconfigured',
         'review_queue': count_state(row['queue_count']) | {'oldest_at': row['queue_oldest']},
         'pending_media': count_state(row['media_count']) | {'oldest_at': row['media_oldest']},
