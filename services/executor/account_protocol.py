@@ -75,7 +75,7 @@ class NativeSelection:
     chpid: str
     kind: str
     period: str
-    line: Decimal
+    line: Decimal | None
     price: Decimal
     phase: str
     score_benchmark: str = ""
@@ -90,7 +90,12 @@ class NativeSelection:
         allowed = {"winner": {"1", "2", "X"}, "handicap": {"1", "2"}, "total": {"Over", "Under"}}
         if self.selection_code not in allowed[self.kind]:
             raise LeyuError("native_selection_direction_mismatch")
-        line, price = number(self.line), number(self.price, minimum=Decimal("1.00001"))
+        line = None if self.kind == 'winner' and self.line is None else number(self.line)
+        if self.kind == 'winner':
+            if line not in (None, Decimal('0')):
+                raise LeyuError('invalid_native_winner_line')
+            line = None
+        price = number(self.price, minimum=Decimal("1.00001"))
         if price * ODDS_SCALE != (price * ODDS_SCALE).to_integral_value():
             raise LeyuError("unsupported_native_price_precision")
         object.__setattr__(self, "line", line)
@@ -347,7 +352,11 @@ class AccountProtocolClient:
         option = options[0]
         price = number(option.get("oddsValue")) / ODDS_SCALE
         raw_line = market.get("marketValue")
-        line = Decimal("0") if selection.kind == "winner" and raw_line in (None, "") else parse_line(raw_line)
+        line = parse_line(raw_line)
+        if selection.kind == 'winner' and (raw_line in (None, '') or line == Decimal('0')):
+            line = None
+        elif line is None:
+            raise LeyuError("selected_native_quote_changed")
         if price != selection.price or line != selection.line:
             raise LeyuError("selected_native_quote_changed")
         matching_limits = [row for row in _rows(limits) if str(row.get("playOptionsId")) == selection.selection_id]

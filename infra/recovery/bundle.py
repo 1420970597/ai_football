@@ -71,6 +71,15 @@ async def empty_target(conn,names):
             count=await conn.fetchval("SELECT count(*) FROM v2_membership_plans WHERE id<>'5dcb2545-dcce-4d22-b226-7ccf16157c01'::uuid OR code<>'free'")
         if name=='v2_configuration_revisions' and count:
             count=await conn.fetchval("SELECT count(*) FROM v2_configuration_revisions WHERE namespace<>'leyu' OR revision<>1")
+        if name=='v2_review_lane_schedule' and count:
+            # Only migration 017's untouched singleton is initialization data.
+            # A used/reset budget remains business state even when its counter
+            # is zero: updated_at must still be the creating migration's exact
+            # transaction timestamp.  Missing provenance fails closed.
+            count=await conn.fetchval("SELECT count(*) FROM v2_review_lane_schedule seed "
+                "WHERE seed.singleton IS DISTINCT FROM TRUE OR seed.realtime_claims_since_replay<>0 "
+                "OR seed.updated_at IS DISTINCT FROM (SELECT applied_at FROM v2_schema_migrations "
+                "WHERE version='017_review_freshness_lanes.sql')")
         if count:
             raise RecoveryError('restore_target_contains_business_data')
 
@@ -131,7 +140,10 @@ async def audit_inventory(conn):
         'order_stakes':"SELECT COALESCE(sum(stake),0)::text FROM v2_bet_orders",
         'reserved_stakes':"SELECT COALESCE(sum(reserved_stake),0)::text FROM v2_bet_orders",
         'actual_settled_net':"SELECT COALESCE(sum(settled_net),0)::text FROM v2_bet_orders WHERE state='settled'",
-        'signals_without_quote_evidence':"SELECT count(*) FROM v2_expert_signals s WHERE NOT EXISTS(SELECT 1 FROM v2_quote_evidence e WHERE e.evidence_kind='expert_signal' AND e.reference_id=s.id AND e.fixture_id=s.fixture_id AND e.market_id=s.market_id AND e.period=s.period AND e.line=s.line AND e.selection=s.selection AND e.price=s.recommendation_price)",
+        'signals_without_quote_evidence':"SELECT count(*) FROM v2_expert_signals s WHERE NOT EXISTS(SELECT 1 FROM v2_quote_evidence e WHERE e.evidence_kind='expert_signal' AND e.reference_id=s.id AND e.fixture_id=s.fixture_id AND e.market_id=s.market_id AND e.period=s.period "
+            "AND ((e.line=s.line) OR (s.market_kind='winner' AND COALESCE(e.line,0)=0 AND COALESCE(s.line,0)=0 "
+            "AND (e.line IS NOT NULL OR e.evidence->>'market_kind'='winner'))) "
+            "AND e.selection=s.selection AND e.price=s.recommendation_price)",
         'settled_signals_without_ledger':"SELECT count(*) FROM v2_expert_signals s WHERE s.outcome<>'pending' AND NOT EXISTS(SELECT 1 FROM v2_signal_settlements x WHERE x.signal_id=s.id AND x.result_version=s.result_version AND x.outcome=s.outcome AND x.unit_net IS NOT DISTINCT FROM s.unit_net)",
         'audit_entries':"SELECT count(*) FROM v2_audit_log",
         'users':"SELECT count(*) FROM v2_users",
@@ -285,7 +297,7 @@ async def restore_bundle(conn,stream,key:bytes,objects:ObjectStore):
                 raise RecoveryError('restored_media_hash_mismatch')
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext('isolated-platform-recovery'))")
-            # 只允许空结构或新迁移产生的固定免费套餐/迁移版本行；绝不覆盖已有业务行。
+            # 只允许空结构或经明确核验的迁移初始化行；绝不覆盖已有业务行。
             await empty_target(conn,names)
             await conn.execute('TRUNCATE '+','.join(identifier(name) for name in names))
             for name in names:

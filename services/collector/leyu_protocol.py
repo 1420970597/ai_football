@@ -281,8 +281,12 @@ def parse_quotes(payload: Any, fixture_id: str, updated_at: datetime | None = No
                     name = str(definition.get("hpn") or block.get("hpn") or default_name)
                     for line in objects(block.get("hl", [])):
                         raw_line = line.get("hv", line.get("line"))
-                        numeric_line = Decimal("0") if kind == "winner" and raw_line in (None, "") else parse_line(raw_line)
-                        if numeric_line is None:
+                        numeric_line = parse_line(raw_line)
+                        if kind == "winner":
+                            if raw_line not in (None, "") and numeric_line != Decimal("0"):
+                                continue
+                            numeric_line = None
+                        elif numeric_line is None:
                             continue
                         for option in objects(line.get("ol", [])):
                             selection_raw = str(option.get("ot") or "")
@@ -301,7 +305,7 @@ def parse_quotes(payload: Any, fixture_id: str, updated_at: datetime | None = No
                                 status = "suspended"
                             item = {
                                 "market_id": market_id, "market_name": name, "market_kind": kind, "kind": kind,
-                                "period": period, "line": str(numeric_line), "selection": selection,
+                                "period": period, "line": str(numeric_line) if numeric_line is not None else None, "selection": selection,
                                 # 只有明确赛前才可用整期比分；滚球基线需规则证据后单独标定。
                                 "score_basis": "full_period" if str(row.get("ms", "")) in {"0", "scheduled"} else "unknown",
                                 "price": str(price) if price is not None else None,

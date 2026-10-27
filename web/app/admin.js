@@ -72,8 +72,17 @@ async function loadDiagnostics() {
     const leyuIssue = leyu.config_validation_error || leyu.last_error || "无错误分类";
     const leyuCode = leyu.last_error_code ? ` code=${esc(leyu.last_error_code)}` : "";
     const recoveryStats = `轮询成功/失败 ${metric(leyu.poll_successes)}/${metric(leyu.poll_failures)} · 故障类别 ${esc(leyu.failure_group || '无')} · 操作 ${esc(leyu.last_operation || '尚未记录')} · 冷却 ${metric(leyu.backoff_seconds, '秒')} · 下次尝试 ${stamp(leyu.retry_at)} · 连续失败 ${metric(leyu.consecutive_failures)} · 本地待发送订阅 ${metric(websocket.subscription_send_missing)}/${metric(websocket.subscription_expected)} · 上游订阅确认 ${websocket.subscription_confirmation_state === 'unverified' ? '未提供确认协议，无法计算真实漏订阅率' : esc(websocket.subscription_confirmation_state || '尚未核验')} · 告警（轮询/订阅/队列/写入）${esc(leyu.poll_alert_state || '未知')}/${esc(websocket.subscription_alert_state || '未知')}/${esc(websocket.queue_alert_state || '未知')}/${esc(websocket.delivery_alert_state || '未知')}`;
-    const liveStats = `乐鱼采集 ${esc(leyu.state || "未知")}（${esc(leyuIssue)}${leyuCode}） · 实时连接 ${esc(websocket.state || "未知")} · 重连 ${metric(websocket.reconnects)} · 订阅请求数 ${metric(websocket.subscription_requests_sent)} · 接收帧 ${metric(websocket.received)} · 入队/写入 ${metric(websocket.events_received)}/${metric(websocket.events_delivered)} · 丢弃 ${metric(websocket.dropped)} · 写入失败 ${metric(websocket.delivery_failures)} · 队列 ${metric(websocket.queue_depth)}（高水位 ${metric(websocket.queue_high_water)}） · 源->接收 P95 ${metric(websocket.source_lag_ms_p95, "ms")}（${metric(websocket.source_lag_samples)} 样本） · 排队 P95 ${metric(websocket.queue_wait_ms_p95, "ms")} · 源->落库 P95 ${metric(websocket.delivery_age_ms_p95, "ms")}（${metric(websocket.delivery_age_samples)} 样本） · 最近事件 ${stamp(websocket.last_event_at)}`;
-    $("#admin-diagnostics").innerHTML = `<p class="form-note">${recoveryStats}</p>` +
+    const liveStats = `乐鱼采集 ${esc(leyu.state || "未知")}（${esc(leyuIssue)}${leyuCode}） · 实时连接 ${esc(websocket.state || "未知")} · 重连 ${metric(websocket.reconnects)} · 订阅请求数 ${metric(websocket.subscription_requests_sent)} · 接收帧 ${metric(websocket.received)} · 入队/投递 ${metric(websocket.events_received)}/${metric(websocket.events_delivered)} · 丢弃 ${metric(websocket.dropped)} · 投递失败 ${metric(websocket.delivery_failures)} · 队列 ${metric(websocket.queue_depth)}（高水位 ${metric(websocket.queue_high_water)}） · 事件源->接收 P95 ${metric(websocket.source_lag_ms_p95, "ms")}（${metric(websocket.source_lag_samples)} 样本） · 排队 P95 ${metric(websocket.queue_wait_ms_p95, "ms")} · 事件源->投递 P95 ${metric(websocket.delivery_age_ms_p95, "ms")}（${metric(websocket.delivery_age_samples)} 样本） · 最近事件 ${stamp(websocket.last_event_at)}`;
+    const quoteLatency = `盘口源->接收 P95 ${metric(websocket.quote_source_lag_ms_p95, 'ms')}（${metric(websocket.quote_source_lag_samples)} 样本） · 盘口源->成功投递 P95 ${metric(websocket.quote_delivery_age_ms_p95, 'ms')}（${metric(websocket.quote_delivery_age_samples)} 样本） · 接收窗口 ${metric(websocket.quote_source_lag_window_size)} · 未知/无效/未来/过旧 ${metric(websocket.quote_source_lag_unknown_count)}/${metric(websocket.quote_source_lag_invalid_count)}/${metric(websocket.quote_source_lag_future_count)}/${metric(websocket.quote_source_lag_too_old_count)}；各窗口最多256条；投递成功不等于每条报价通过入库新鲜度或版本校验。`;
+    const snapshotStats = `单场最大盘口 ${metric(leyu.max_observed_fixture_quotes)} · 隔离赛事 ${metric(leyu.quarantined_fixtures)} · 推送隔离 ${metric(leyu.last_push_quarantined_fixtures)} · 最近投递错误 ${esc(websocket.last_delivery_error_category || "无当前错误")}`;
+    const taskStates = { action_required: '需处理', clear: '本次未发现异常', unverified: '未核验' };
+    const taskTargets = { telegram: 'telegram', leyu: 'leyu', orders: 'orders', system: 'system' };
+    const taskCards = Array.isArray(data.tasks) ? data.tasks.slice(0, 16).map(task => {
+      const target = taskTargets[task.target];
+      const count = task.count ? ` · ${counter(task.count)}` : '';
+      return `<div class="admin-record"><strong>${esc(task.label)}${esc(count)}</strong> · ${esc(taskStates[task.state] || taskStates.unverified)}<p>${esc(task.detail)}</p>${target ? `<button class="small-button" data-admin-task-target="${target}">前往${esc({telegram:'Telegram',leyu:'乐鱼采集',orders:'订单核对',system:'系统运维'}[target])}</button>` : ''}</div>`;
+    }).join('') : '<p class="form-note">逐项待办尚未核验，请刷新诊断。</p>';
+    $("#admin-diagnostics").innerHTML = `<div id="admin-action-tasks" class="record-list">${taskCards}</div><p class="form-note">${snapshotStats}</p><p class="form-note">${recoveryStats}</p><p class="form-note" id="quote-latency-metrics">${quoteLatency}</p>` +
       `<p class="form-note">检查于 ${stamp(data.checked_at)} · 数据库 ${esc(data.database)} · 结构 ${esc(data.schema === "verified" ? "已核验" : data.schema === "migration_required" ? "需要迁移" : "状态未知")}${leyuVersion}</p><p class="form-note">${liveStats}</p><div class="status-grid">${[
         ["待审核", data.review_queue],
         ["媒体待上传", data.pending_media],
@@ -520,6 +529,10 @@ function bind() {
     const button = event.target.closest("button");
     if (!button) return;
     try {
+      if (['telegram','leyu','orders','system'].includes(button.dataset.adminTaskTarget)) {
+        $(`.admin-tabs [data-admin-tab="${button.dataset.adminTaskTarget}"]`)?.click();
+        return;
+      }
       if (button.dataset.adminTab) {
         $$("[data-admin-tab]").forEach((x) => {
           x.classList.toggle("active", x === button);

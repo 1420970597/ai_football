@@ -48,6 +48,20 @@ class HermesImagesTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError):
                 await hermes_client._content_parts(self.message(media), 'review', 'attempt')
 
+    async def test_historical_mode_and_original_posted_time_are_explicit_model_context(self):
+        message = self.message([]) | {'review_mode': 'historical_replay',
+                                     'posted_at': datetime(2021, 2, 3, tzinfo=timezone.utc)}
+        parts = await hermes_client._content_parts(message, 'review', 'attempt')
+        self.assertIn('historical_replay', parts[0]['text'])
+        self.assertIn('2021-02-03T00:00:00+00:00', parts[0]['text'])
+        self.assertIn('禁止把旧推荐绑定当前比赛报价', parts[0]['text'])
+
+    async def test_image_failure_remains_fatal_for_historical_mode(self):
+        media = [{'object_key':'v2/missing.png','mime_type':'image/png'}]
+        with patch.object(blobstore, 'read_image', AsyncMock(side_effect=RuntimeError('object unavailable'))):
+            with self.assertRaises(RuntimeError):
+                await hermes_client._content_parts(self.message(media) | {'review_mode': 'historical_replay'}, 'review', 'attempt')
+
     async def test_mime_conflict_html_and_total_budget_are_rejected(self):
         media = [{'object_key':'v2/image','mime_type':'image/jpeg'}]
         with patch.object(blobstore, 'read_image', AsyncMock(return_value=PNG)):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
 import hmac
 import json
@@ -11,9 +12,11 @@ from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
+import httpx
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from .. import database
+from ..review_policy import REALTIME_WINDOW_SECONDS
 from ..review_state import active_job, authorize, fresh_quote, quote_context, trace
 from ..runtime_settings import runtime_quote_max_age
 
@@ -188,10 +191,56 @@ async def resolve_match(body: ResolveInput, request: Request):
             return result
 
 
+async def _refresh_bound_market(body: MarketInput, request: Request) -> dict:
+    """Verify ownership first; hold no database connection across source I/O."""
+    settings = request.app.state.settings
+    url = getattr(settings, 'market_refresh_url', '')
+    if not url:
+        return {'attempted': False, 'reason': 'refresh_unconfigured'}
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            job = await active_job(conn, body.review_id, body.attempt_id)
+            age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
+            if job['review_mode'] != 'real_time' or not 0 <= age <= REALTIME_WINDOW_SECONDS:
+                return {'attempted': False, 'reason': 'historical_review_not_current'}
+            bound = await conn.fetchval(
+                'SELECT EXISTS(SELECT 1 FROM v2_review_fixture_bindings WHERE job_id=$1 AND attempt_id=$2 AND fixture_id=$3)',
+                body.review_id, body.attempt_id, body.fixture_id)
+            if not bound:
+                raise HTTPException(409, detail='fixture must be uniquely resolved first')
+            fixture = await conn.fetchrow(
+                "SELECT source_id AS source_match_id FROM v2_fixtures WHERE id=$1 AND phase IN ('scheduled','live')", body.fixture_id)
+            if not fixture:
+                raise HTTPException(409, detail='fixture is no longer active')
+            quotes = await conn.fetch('SELECT * FROM v2_current_quotes WHERE fixture_id=$1', body.fixture_id)
+            max_age = await runtime_quote_max_age(settings, conn)
+            if quotes and all(fresh_quote(quote, max_age) for quote in quotes):
+                return {'attempted': False, 'reason': 'quotes_already_fresh'}
+            source_match_id = fixture['source_match_id']
+    try:
+        async with asyncio.timeout(9):
+            async with httpx.AsyncClient(timeout=httpx.Timeout(8.5, connect=2), trust_env=False, follow_redirects=False) as client:
+                response = await client.post(url, headers={'Authorization': 'Bearer ' + settings.collector_token},
+                    json={'fixture_id': body.fixture_id, 'source_match_id': source_match_id})
+                response.raise_for_status()
+                value = response.json()
+        if not isinstance(value, dict) or type(value.get('accepted')) is not bool:
+            return {'attempted': True, 'accepted': False, 'reason': 'refresh_invalid_response'}
+        reason = str(value.get('reason', ''))
+        if not reason or not all(char.isascii() and (char.isalnum() or char == '_') for char in reason) or len(reason) > 80:
+            reason = 'refresh_completed' if value['accepted'] else 'refresh_unavailable'
+        return {'attempted': True, 'accepted': value['accepted'], 'reason': reason}
+    except (httpx.HTTPError, ValueError, TimeoutError):
+        # A refresh is optional evidence gathering, never a reason to mark old
+        # prices fresh or replay an unknown upstream operation automatically.
+        return {'attempted': True, 'accepted': False, 'reason': 'refresh_unavailable'}
+
+
 @router.post("/list_match_markets")
 async def list_match_markets(body: MarketInput, request: Request):
     started = time.perf_counter()
     authorize(request, request.app.state.settings.mcp_internal_token)
+    refresh = await _refresh_bound_market(body, request)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             await active_job(conn, body.review_id, body.attempt_id)
@@ -209,8 +258,10 @@ async def list_match_markets(body: MarketInput, request: Request):
                     [(body.review_id, body.attempt_id, q["id"], q["source_updated_at"], q["price"], quote_context(q, fixture)) for q in quotes],
                 )
             max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
-            result = {"fixture": dict(fixture), "markets": [dict(q) | {"quote_id": str(q["id"]), "fresh": fresh_quote(q, max_quote_age)} for q in quotes]}
-            await trace(conn, body.review_id, "mcp_list_match_markets", {"attempt_id": str(body.attempt_id), "fixture_id": body.fixture_id, "quote_ids": [str(q["id"]) for q in quotes], 'elapsed_ms': round((time.perf_counter()-started)*1000,3)})
+            result = {"fixture": dict(fixture), "markets": [dict(q) | {"quote_id": str(q["id"]), "fresh": fresh_quote(q, max_quote_age)} for q in quotes],
+                      "refresh": refresh}
+            await trace(conn, body.review_id, "mcp_list_match_markets", {"attempt_id": str(body.attempt_id), "fixture_id": body.fixture_id, "quote_ids": [str(q["id"]) for q in quotes],
+                "refresh": refresh, 'elapsed_ms': round((time.perf_counter()-started)*1000,3)})
             return result
 
 
@@ -222,6 +273,19 @@ async def record_expert_signals(body: RecordInput, request: Request):
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             job = await active_job(conn, body.review_id, body.attempt_id)
+            message_age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
+            current_message = 0 <= message_age <= REALTIME_WINDOW_SECONDS
+            if job['review_mode'] == 'historical_replay' or not current_message:
+                reason = ('message_timestamp_in_future' if message_age < 0
+                          else 'historical_review_not_current')
+                result = {"expert": job["display_nickname"], "accepted": [],
+                          "rejected": [{"index": index, "reason": reason}
+                                       for index, _ in enumerate(body.signals)]}
+                await trace(conn, body.review_id, "mcp_record_expert_signals", {
+                    "attempt_id": str(body.attempt_id), "review_mode": job['review_mode'], **result,
+                    'message_age_seconds': round(message_age, 3),
+                    'elapsed_ms': round((time.perf_counter()-started)*1000,3)})
+                return result
             max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
             for index, pick in enumerate(body.signals):
                 quote = await conn.fetchrow(
@@ -247,17 +311,17 @@ async def record_expert_signals(body: RecordInput, request: Request):
                 new_id = uuid.uuid4()
                 result = await conn.fetchrow(
                     "INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,period,market_kind,line,selection,recommendation_price,quote_time,confidence,evidence_text,score_baseline,score_basis) "
-                    "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(message_id,fixture_id,market_id,period,line,selection) DO NOTHING RETURNING id",
+                    "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(message_id,fixture_id,market_id,period,(COALESCE(line,0)),selection) DO NOTHING RETURNING id",
                     new_id, job["message_id"], job["expert_id"], quote["fixture_id"], quote["phase"], quote["market_id"], quote["market_name"], quote["period"], quote["market_kind"], quote["line"], quote["selection"], quote["price"], quote["source_updated_at"], pick.confidence, pick.evidence_text, baseline, quote["score_basis"],
                 )
                 if result:
                     await conn.execute(
                         "INSERT INTO v2_quote_evidence(id,fixture_id,market_id,market_name,period,line,selection,price,evidence_kind,reference_id,source_updated_at,evidence,score_baseline) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'expert_signal',$9,$10,$11,$12)",
-                        uuid.uuid4(), quote["fixture_id"], quote["market_id"], quote["market_name"], quote["period"], quote["line"], quote["selection"], quote["price"], new_id, quote["source_updated_at"], {"job_id": str(body.review_id), "attempt_id": str(body.attempt_id), "quote_id": str(pick.quote_id), "score_basis": quote["score_basis"]}, baseline,
+                        uuid.uuid4(), quote["fixture_id"], quote["market_id"], quote["market_name"], quote["period"], quote["line"], quote["selection"], quote["price"], new_id, quote["source_updated_at"], {"job_id": str(body.review_id), "attempt_id": str(body.attempt_id), "quote_id": str(pick.quote_id), "score_basis": quote["score_basis"], "market_kind": quote["market_kind"]}, baseline,
                     )
                 else:
-                    new_id = await conn.fetchval("SELECT id FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND line=$5 AND selection=$6", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"])
-                accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]), "selection": quote["selection"], "price": str(quote["price"])})
+                    new_id = await conn.fetchval("SELECT id FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND selection=$6 AND market_kind=$7 AND (line IS NOT DISTINCT FROM $5::numeric OR market_kind='winner' AND COALESCE(line,0)=0 AND COALESCE($5::numeric,0)=0)", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"], quote["market_kind"])
+                accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(quote["price"])})
             result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
             await trace(conn, body.review_id, "mcp_record_expert_signals", {"attempt_id": str(body.attempt_id), **result, 'elapsed_ms': round((time.perf_counter()-started)*1000,3)})
             return result

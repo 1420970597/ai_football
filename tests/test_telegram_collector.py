@@ -203,14 +203,26 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_more_than_twenty_messages_and_connection_reuse(self):
         self.client.messages["-1001"] = [Message(index) for index in range(1, 106)]
-        result = await self.collector.sync_once()
-        self.assertEqual(105, result["sources"]["-1001"]["observed"])
+        with patch('collector.telegram.SYNC_HISTORY_SLICE_SECONDS', 3600):
+            pages = [(await self.collector.sync_once())["sources"]["-1001"] for _ in range(5)]
+        self.assertEqual(105, sum(page["observed"] for page in pages))
+        self.assertEqual("caught_up", pages[-1]["state"])
         self.assertEqual(105, len(self.backend.events))
         self.assertEqual(105, self.backend.positions["-1001"])
-        self.assertEqual([None], self.client.query_limits)
+        self.assertEqual([None] * 5, self.client.query_limits)
         await self.collector.sync_once()
         self.assertEqual(1, self.client.connect_count)
         self.assertEqual(1, len(self.created))
+
+    async def test_more_than_one_thousand_history_messages_resume_without_truncation(self):
+        self.client.messages['-1001'] = [Message(index) for index in range(1, 1006)]
+        with patch('collector.telegram.SYNC_HISTORY_SLICE_SECONDS', 3600):
+            pages = [(await self.collector.sync_once())['sources']['-1001'] for _ in range(41)]
+        self.assertEqual(1005, sum(item['observed'] for item in pages))
+        self.assertEqual('caught_up', pages[-1]['state'])
+        self.assertEqual(1005, self.backend.positions['-1001'])
+        self.assertEqual(1005, len(self.backend.events))
+        self.assertEqual(1, self.client.connect_count)
 
     async def test_persistence_failure_does_not_advance_or_mark_seen(self):
         self.client.messages["-1001"] = [Message(1)]
@@ -221,6 +233,48 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         await self.collector.sync_once()
         self.assertEqual(1, self.backend.positions["-1001"])
         self.assertEqual(1, len(self.backend.events))
+
+    async def test_history_slices_resume_persisted_high_water_without_losing_messages(self):
+        self.client.messages['-1001'] = [Message(index) for index in range(1, 9)]
+        with patch('collector.telegram.SYNC_HISTORY_MAX_MESSAGES', 3):
+            states = [(await self.collector.sync_once())['sources']['-1001'] for _ in range(3)]
+        self.assertEqual(['catching_up', 'catching_up', 'caught_up'], [item['state'] for item in states])
+        self.assertEqual([3, 6, 8], [item['last_message_id'] for item in states])
+        self.assertEqual(8, len(self.backend.events))
+        self.assertEqual(8, self.backend.positions['-1001'])
+
+    async def test_live_message_gets_group_lock_between_durable_history_slices(self):
+        self.collector.client = self.client
+        self.collector.sources = {'-1001': self.backend.source_items[0]}
+        self.client.messages['-1001'] = [Message(index) for index in range(1, 8)]
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = self.collector._process_message
+        async def process(chat_id, source, message, entity=None):
+            if message.id == 1:
+                entered.set(); await release.wait()
+            return await original(chat_id, source, message, entity)
+        self.collector._process_message = process
+        with patch('collector.telegram.SYNC_HISTORY_MAX_MESSAGES', 2):
+            history = asyncio.create_task(self.collector._sync_source('-1001', self.backend.source_items[0]))
+            await entered.wait()
+            live = asyncio.create_task(self.collector._live_messages('-1001', [Message(99)]))
+            await asyncio.sleep(0); release.set()
+            self.assertEqual('catching_up', (await history)['state'])
+            await asyncio.wait_for(live, 1)
+        self.assertEqual(['1', '2', '99'], [item['platform_message_id'] for item in self.backend.calls])
+        self.assertEqual(2, self.backend.positions['-1001'])
+        await self.collector._sync_source('-1001', self.backend.source_items[0])
+        self.assertEqual(7, self.backend.positions['-1001'])
+        self.assertEqual(8, len(self.backend.events))
+
+    async def test_history_time_slice_yields_only_after_a_durable_message(self):
+        self.client.messages['-1001'] = [Message(1), Message(2)]
+        with patch('collector.telegram.SYNC_HISTORY_SLICE_SECONDS', 0):
+            result = await self.collector.sync_once()
+        self.assertEqual('catching_up', result['sources']['-1001']['state'])
+        self.assertEqual(1, self.backend.positions['-1001'])
+        await self.collector.sync_once()
+        self.assertEqual(2, self.backend.positions['-1001'])
 
     async def test_one_source_failure_does_not_block_other_source(self):
         self.backend.source_items.append({"chat_id": "-1002", "trusted_sender_ids": ["7"], "allow_media": True})
@@ -283,6 +337,8 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.backend.positions["-1001"])
         self.assertEqual("failed", next(iter(self.backend.events.values()))["media_state"])
         self.assertEqual("阿森纳 全场大2.5", next(iter(self.backend.events.values()))["raw_text"])
+        await self.collector.sync_once()
+        self.assertEqual("failed", next(iter(self.backend.events.values()))["media_state"])
         await self.collector.sync_once()
         self.assertEqual("ready", next(iter(self.backend.events.values()))["media_state"])
         self.assertEqual(1, len(self.backend.events))

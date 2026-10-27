@@ -84,8 +84,8 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         signal = await self.signal(evidence=False)
         quote_id = str(uuid.uuid4())
         await self.pool.execute(
-            "INSERT INTO v2_quote_evidence(id,evidence_kind,reference_id,fixture_id,market_id,market_name,selection,price,source_updated_at,evidence) "
-            "VALUES($1,'expert_signal',$2,'fixture','total','大小','over',2,now(),$3)",
+            "INSERT INTO v2_quote_evidence(id,evidence_kind,reference_id,fixture_id,market_id,market_name,line,selection,price,source_updated_at,evidence) "
+            "VALUES($1,'expert_signal',$2,'fixture','total','大小',2.25,'over',2,now(),$3)",
             uuid.uuid4(), signal, {'quote_id': quote_id},
         )
         with patch.object(expert_content, 'require_history', AsyncMock()):
@@ -289,7 +289,7 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_time_quotes_and_chinese_calendar(self):
         await self.pool.execute("UPDATE v2_fixtures SET phase='finished',kickoff_at='2026-10-25T16:30:00Z'")
-        await self.pool.execute("INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,selection,price,source_updated_at,status) VALUES($1,'fixture','total','大小','over',2,NULL,'active')", uuid.uuid4())
+        await self.pool.execute("INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,line,selection,price,source_updated_at,status) VALUES($1,'fixture','total','大小',2.5,'over',2,NULL,'active')", uuid.uuid4())
         response = await self.client.get('/api/v1/public/matches', params={'date':'2026-10-26','phase':'finished','tz':'Asia/Shanghai'})
         self.assertEqual(200, response.status_code, response.text)
         self.assertEqual(1, len(response.json()['items']))

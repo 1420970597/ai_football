@@ -46,9 +46,13 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
             "source_health": {
                 "leyu": {"state": "unavailable", "last_error": "websocket_http_403", "fixtures": 3, "config_version": 7},
                 "websocket": {"state": "backoff", "reconnects": 2, "queue_depth": 4,
+                              "last_delivery_error_category": "fixture_quote_budget_exceeded",
                               "subscription_expected": 100, "subscription_send_missing": 2,
                               "subscription_miss_ratio": None, "queue_alert_state": "degraded",
                               "source_lag_ms_p95": 1250.5, "delivery_age_ms_p95": 2100,
+                              "quote_source_lag_ms_p95": 5100.5, "quote_source_lag_unknown_count": 3,
+                              "quote_source_lag_too_old_count": 2, "quote_source_lag_window_size": 20,
+                              "quote_delivery_age_ms_p95": 6200, "quote_delivery_age_samples": 15,
                               "raw_payload": {"token": "must-not-leak"}},
                 "future": {"secret": "must-not-leak"},
             },
@@ -61,8 +65,15 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("websocket_http_403", result["sources"]["leyu"]["last_error"])
         self.assertEqual(7, result["sources"]["leyu"]["config_version"])
         self.assertEqual(4, result["sources"]["websocket"]["queue_depth"])
+        self.assertEqual('fixture_quote_budget_exceeded', result['sources']['websocket']['last_delivery_error_category'])
         self.assertEqual(1250.5, result["sources"]["websocket"]["source_lag_ms_p95"])
         self.assertEqual(2100, result["sources"]["websocket"]["delivery_age_ms_p95"])
+        self.assertEqual(5100.5, result['sources']['websocket']['quote_source_lag_ms_p95'])
+        self.assertEqual(3, result['sources']['websocket']['quote_source_lag_unknown_count'])
+        self.assertEqual(2, result['sources']['websocket']['quote_source_lag_too_old_count'])
+        self.assertEqual(20, result['sources']['websocket']['quote_source_lag_window_size'])
+        self.assertEqual(6200, result['sources']['websocket']['quote_delivery_age_ms_p95'])
+        self.assertEqual(15, result['sources']['websocket']['quote_delivery_age_samples'])
         self.assertEqual(2, result['sources']['websocket']['subscription_send_missing'])
         self.assertIsNone(result['sources']['websocket']['subscription_miss_ratio'])
         self.assertEqual('degraded', result['sources']['websocket']['queue_alert_state'])
@@ -119,6 +130,9 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result['freshness']['telegram_checkpoint_at'])
         self.assertIsNone(result['freshness']['telegram_high_water'])
         self.assertEqual(0,result['unknown_orders']['count'])
+        tasks = {item['key']: item for item in result['tasks']}
+        self.assertEqual('clear', tasks['unknown_orders']['state'])
+        self.assertEqual('unverified', tasks['migration_failures']['state'])
 
     async def test_anonymous_is_rejected_and_order_access_is_read_only(self):
         self.assertEqual(401,(await self.http.get('/api/v1/admin/orders')).status_code)

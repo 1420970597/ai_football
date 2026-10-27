@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import json
@@ -236,6 +237,58 @@ class LeyuClient:
         except TimeoutError:
             raise LeyuError("collection_deadline_exceeded") from None
 
+    @staticmethod
+    def validate_match_id(value: str) -> str:
+        if (not isinstance(value, str) or not 1 <= len(value) <= 96 or not value.isascii()
+                or not all(char.isalnum() or char in "_-" for char in value)):
+            raise LeyuError("invalid_source_match_id")
+        return value
+
+    @staticmethod
+    def _apply_market_row(fixture: dict[str, Any], row: Mapping[str, Any], captured: datetime) -> None:
+        parsed = parse_fixtures([row], received_at=captured)
+        if parsed:
+            detail = parsed[0]
+            # The schedule owns competition identity; detail supplies state/score.
+            for key in ("phase", "match_state", "home_score", "away_score", "half_home_score",
+                        "half_away_score", "clock_minute", "clock_raw", "source_updated_at",
+                        "source_time_quality", "received_at"):
+                fixture[key] = detail[key]
+        fixture["markets"] = parse_quotes(row, fixture["id"], captured)
+        fixture["markets_complete"] = isinstance(row.get("hpsData"), (list, Mapping))
+        if not fixture["markets_complete"]:
+            fixture["collection_error"] = "market_container_missing"
+        else:
+            fixture.pop("collection_error", None)
+
+    async def fetch_match(self, source_match_id: str, *, fixture: Mapping[str, Any]) -> dict[str, Any]:
+        """One existing, bound match detail request; never fetch the station or renew login."""
+        mid = self.validate_match_id(source_match_id)
+        if str(fixture.get("source_match_id") or "") != mid or not fixture.get("id"):
+            raise LeyuError("fixture_identity_mismatch")
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(6, connect=3, pool=1),
+            limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+            transport=self.transport, trust_env=False, follow_redirects=False,
+        ) as client:
+            details = await self._request(client, "POST", DEFAULT_MATCH_ODDS_PATH, json={
+                "cuid": self.cuid, "cos": 0, "orpt": 0, "euid": "3020101",
+                "mid": mid, "mcid": 0, "newUser": 0,
+            })
+        rows = details.get("data") if isinstance(details, Mapping) and "data" in details else details
+        if isinstance(rows, Mapping):
+            rows = [rows]
+        if not isinstance(rows, list):
+            raise LeyuError("invalid_single_match_odds_rows")
+        matches = [row for row in rows if isinstance(row, Mapping) and str(row.get("mid")) == mid]
+        if len(matches) != 1:
+            raise LeyuError("fixture_detail_missing" if not matches else "ambiguous_fixture_detail")
+        result = deepcopy(dict(fixture))
+        self._apply_market_row(result, matches[0], datetime.now(timezone.utc))
+        if not result["markets_complete"]:
+            raise LeyuError("market_container_missing")
+        return result
+
     async def _fetch(self, *, odds_mids: Iterable[str] | Callable[[list[dict[str, Any]]], Iterable[str]] | None = None) -> list[dict[str, Any]]:
         """完整赛程 + 有预算批次补盘；失败批次不会被当作完整空盘口快照。"""
         limits = httpx.Limits(max_connections=self.concurrency + 1, max_keepalive_connections=self.concurrency + 1)
@@ -278,18 +331,7 @@ class LeyuClient:
                     next_request = time.monotonic() + self.batch_interval
 
             def apply_market_row(fixture: dict[str, Any], row: Mapping[str, Any], captured: datetime) -> None:
-                parsed = parse_fixtures([row], received_at=captured)
-                if parsed:
-                    # Detail may fill state and score; it cannot replace schedule competition identity.
-                    detail = parsed[0]
-                    for key in ("phase", "match_state", "home_score", "away_score", "half_home_score",
-                                "half_away_score", "clock_minute", "clock_raw", "source_updated_at",
-                                "source_time_quality", "received_at"):
-                        fixture[key] = detail[key]
-                fixture["markets"] = parse_quotes(row, fixture["id"], captured)
-                fixture["markets_complete"] = isinstance(row.get("hpsData"), (list, Mapping))
-                if not fixture["markets_complete"]:
-                    fixture["collection_error"] = "market_container_missing"
+                self._apply_market_row(fixture, row, captured)
 
             async def fetch_single_match(mid: str) -> Mapping[str, Any] | None:
                 nonlocal single_match_fallbacks, fallback_attempts

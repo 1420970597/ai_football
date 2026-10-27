@@ -26,6 +26,18 @@ def _number(value):
         return None
 
 
+def _line(document:dict,kind:str):
+    # Missing is not an explicit no-line value. Only a proven winner market
+    # accepts explicit NULL and legacy numeric zero as the same identity.
+    if 'line' not in document:
+        return None
+    raw=document['line']
+    number=_number(raw)
+    if kind=='winner':
+        return Decimal('0') if raw is None or number==0 else None
+    return number if kind in {'handicap','total'} else None
+
+
 def classify(record:dict)->dict:
     result={'legacy_id':str(record.get('legacy_id') or ''),'classification':'insufficient_evidence','eligible_for_statistics':False,
             'reasons':[],'preserved':{},'source_evidence_sha256':hashlib.sha256(json.dumps(record,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()}
@@ -46,7 +58,9 @@ def classify(record:dict)->dict:
     if not posted or not recommended or recommended<posted:
         reasons.append('message_or_recommendation_time_unproven')
     market_fields=('fixture_id','market_id','period','selection','kind','phase')
-    if any(not record.get(field) for field in market_fields) or _number(record.get('line')) is None:
+    kind=record.get('kind')
+    line=_line(record,kind)
+    if any(not record.get(field) for field in market_fields) or line is None:
         reasons.append('exact_system_market_binding_missing')
     if (record.get('period') not in {'full_time','first_half','second_half'} or record.get('selection') not in {'home','away','draw','over','under'}
             or record.get('kind') not in {'winner','handicap','total'} or record.get('phase') not in {'scheduled','live'}):
@@ -56,8 +70,12 @@ def classify(record:dict)->dict:
     price=_number(quote.get('price'))
     if quote.get('source')!='leyu' or quote.get('evidence_kind')!='system_captured' or not price or price<=1:
         reasons.append('system_price_evidence_missing')
+    # Older exported quotes inherit their exact bound record's kind; an
+    # explicitly contradictory kind is never repaired or ignored.
+    quote_kind=quote.get('kind',quote.get('market_kind',kind))
+    quote_line=_line(quote,quote_kind)
     if (any(quote.get(field)!=record.get(field) for field in ('fixture_id','market_id','period','selection'))
-            or _number(quote.get('line')) is None or _number(quote.get('line'))!=_number(record.get('line'))):
+            or quote_kind!=kind or quote_line is None or quote_line!=line):
         reasons.append('system_price_belongs_to_different_market')
     if not recommended or not quote_time or not 0<=(recommended-quote_time).total_seconds()<=60:
         reasons.append('recommendation_quote_time_unproven')
@@ -106,7 +124,7 @@ def plan(records:list[dict])->dict:
 
 
 def identity(item,record):
-    line=_number(record.get('line'))
+    line=_line(record,record.get('kind'))
     normalized_line=str(line.normalize()) if line is not None else ''
     return tuple(item['preserved'].get(field) for field in ('chat_id','platform_message_id'))+tuple(
         str(record.get(field)) for field in ('fixture_id','market_id','period'))+(normalized_line,str(record.get('selection')))

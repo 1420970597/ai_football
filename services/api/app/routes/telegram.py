@@ -292,6 +292,11 @@ async def ingest_event(body: EventInput, request: Request):
             if not event and current and current["source_version_at"] > body.source_version_at:
                 return {"persisted": True, "state": "ignored_stale"}
             content = jsonable_encoder(body.model_dump(exclude={"owner", "media_objects", "media_state", "last_error"}))
+            media_objects = body.media_objects
+            if event and body.media_state in {'pending', 'failed'} and not media_objects:
+                # History staging/retry must not erase candidates registered
+                # before an S3 timeout; orphan inventory relies on these keys.
+                media_objects = event['media_objects']
             immutable_content = {key: value for key, value in content.items() if key != "sender_nickname"}
             if event and {key: value for key, value in event["content"].items() if key != "sender_nickname"} != immutable_content:
                 raise HTTPException(status_code=409, detail="same message version has conflicting content")
@@ -325,8 +330,8 @@ async def ingest_event(body: EventInput, request: Request):
             else:
                 message_id, event_id = event["message_id"], event["id"]
                 await conn.execute("UPDATE v2_telegram_events SET media_objects=$2,media_state=$3,last_error=$4,updated_at=now() WHERE id=$1",
-                                   event_id, body.media_objects, body.media_state, body.last_error)
-                await conn.execute("UPDATE v2_expert_messages SET media_objects=$2,media_state=$3 WHERE id=$1", message_id, body.media_objects, body.media_state)
+                                   event_id, media_objects, body.media_state, body.last_error)
+                await conn.execute("UPDATE v2_expert_messages SET media_objects=$2,media_state=$3 WHERE id=$1", message_id, media_objects, body.media_state)
             job_id = None
             if body.media_state == "ready":
                 job_id = await conn.fetchval(
@@ -334,14 +339,16 @@ async def ingest_event(body: EventInput, request: Request):
                     "ON CONFLICT(idempotency_key) DO UPDATE SET updated_at=v2_analysis_jobs.updated_at RETURNING id",
                     uuid.uuid4(), message_id, hashlib.sha256(f"telegram:{source['id']}:{body.platform_message_id}:{body.version_key}".encode()).hexdigest(),
                 )
-    return {"persisted": True, "state": body.media_state, "message_id": str(message_id), "review_id": str(job_id) if job_id else None}
+    return {"persisted": True, "state": body.media_state, "message_id": str(message_id),
+            "review_id": str(job_id) if job_id else None,
+            "media_objects": media_objects if body.media_state in {'pending', 'failed'} else []}
 
 
 @router.get("/internal/telegram/pending")
 async def pending_events(request: Request, limit: int = 30):
     authorized(request)
     rows = await database.current_pool().fetch(
-        "SELECT e.platform_message_id,e.content,e.last_error,s.platform_chat_id AS chat_id FROM v2_telegram_events e "
+        "SELECT e.platform_message_id,e.content,e.media_objects,e.last_error,s.platform_chat_id AS chat_id FROM v2_telegram_events e "
         "JOIN v2_expert_sources s ON s.id=e.source_id WHERE e.is_current AND s.enabled AND e.media_state IN ('pending','failed') "
         "ORDER BY e.updated_at,e.id LIMIT $1", max(1, min(limit, 100)),
     )
@@ -362,7 +369,7 @@ async def media_orphans(body: MediaOrphansInput, request: Request):
             "FROM v2_telegram_events e JOIN v2_expert_sources s ON s.id=e.source_id "
             "JOIN v2_source_checkpoints cp ON cp.source_id=e.source_id "
             "CROSS JOIN LATERAL jsonb_array_elements(e.media_objects) obj "
-            "WHERE e.is_current AND e.media_state IN ('pending','failed') "
+            "WHERE e.media_state IN ('pending','failed') "
             "AND e.updated_at < now()-($2::int * interval '1 hour') "
             "AND cp.collector_owner=$1 AND cp.lease_until>now() ),"
             "ready_refs AS ("
@@ -395,7 +402,7 @@ async def acknowledge_media_orphans(body: MediaOrphansAckInput, request: Request
                 "WHERE COALESCE(obj->>'object_key','') <> ALL($2::text[])), '[]'::jsonb),"
                 "last_error=COALESCE(e.last_error,'media_orphan_reclaimed'),updated_at=now() "
                 "FROM v2_source_checkpoints cp WHERE cp.source_id=e.source_id "
-                "AND cp.collector_owner=$1 AND cp.lease_until>now() AND e.is_current "
+                "AND cp.collector_owner=$1 AND cp.lease_until>now() "
                 "AND e.media_state IN ('pending','failed') AND EXISTS ("
                 "SELECT 1 FROM jsonb_array_elements(e.media_objects) obj "
                 "WHERE obj->>'object_key'=ANY($2::text[]))",

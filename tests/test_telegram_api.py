@@ -70,6 +70,21 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.client.cookies.set(auth.ADMIN_CSRF_COOKIE, "test-admin-csrf")
         self.client.headers["X-CSRF-Token"] = "test-admin-csrf"
 
+    async def test_pending_restage_and_retry_keep_registered_media_candidate(self):
+        body = self.event(media=True)
+        candidate = {'object_key': 'telegram/test/candidate', 'mime_type': 'image/jpeg',
+                     'sha256': 'a' * 64, 'bytes': 100}
+        response = await self.post(body | {'media_state': 'failed', 'media_objects': [candidate]})
+        self.assertEqual(200, response.status_code, response.text)
+        restage = await self.post(body)
+        self.assertEqual(200, restage.status_code, restage.text)
+        self.assertEqual([candidate], restage.json()['media_objects'])
+        pending = await self.client.get('/internal/telegram/pending')
+        self.assertEqual([candidate], pending.json()['items'][0]['media_objects'])
+        self.assertEqual([candidate], await self.pool.fetchval(
+            "SELECT media_objects FROM v2_expert_messages WHERE platform_message_id='11'"))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
+
     async def test_pending_failed_ready_is_durable_and_job_once(self):
         body = self.event(media=True)
         pending = await self.post(body)
@@ -252,6 +267,22 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, acknowledged.status_code, acknowledged.text)
         self.assertEqual([], await self.pool.fetchval("SELECT media_objects FROM v2_telegram_events WHERE platform_message_id='11'"))
         self.assertEqual("storage_timeout", await self.pool.fetchval("SELECT last_error FROM v2_telegram_events WHERE platform_message_id='11'"))
+
+    async def test_superseded_failed_media_candidate_remains_reclaimable(self):
+        body = self.event(version='superseded-orphan', media=True)
+        candidate = {'object_key': 'telegram/test/old-candidate', 'mime_type': 'image/jpeg',
+                     'sha256': 'c' * 64, 'bytes': 100}
+        self.assertEqual(200, (await self.post(body | {'media_state': 'failed', 'media_objects': [candidate]})).status_code)
+        await self.pool.execute(
+            "UPDATE v2_telegram_events SET is_current=false,updated_at=now()-interval '48 hours'")
+        result = await self.client.post('/internal/telegram/media/orphans',
+            json={'owner': str(self.owner), 'older_than_hours': 24})
+        self.assertEqual(200, result.status_code, result.text)
+        self.assertEqual([candidate['object_key']], [row['object_key'] for row in result.json()['items']])
+        ack = await self.client.post('/internal/telegram/media/orphans/ack',
+            json={'owner': str(self.owner), 'object_keys': [candidate['object_key']]})
+        self.assertEqual(200, ack.status_code, ack.text)
+        self.assertEqual([], await self.pool.fetchval('SELECT media_objects FROM v2_telegram_events'))
 
     async def test_media_orphan_inventory_never_returns_key_referenced_by_ready_message(self):
         key = "telegram/messages/-1001/ready/" + "b" * 64

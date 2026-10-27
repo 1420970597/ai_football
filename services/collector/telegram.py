@@ -39,6 +39,11 @@ ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 MESSAGE_MEDIA_PREFIX = "telegram/messages"
 MESSAGE_MEDIA_RETENTION = "expert_message_evidence"
 DIRECTORY_REFRESH_SECONDS = 300
+SYNC_HISTORY_SLICE_SECONDS = 2
+SYNC_HISTORY_MAX_MESSAGES = 25
+MEDIA_RETRY_BATCH_SECONDS = 30
+MEDIA_TRANSFER_SECONDS = 20
+MEDIA_COMMIT_SECONDS = 5
 
 
 class SourceAccessError(RuntimeError):
@@ -380,6 +385,8 @@ class TelegramCollector:
             await self._refresh_directory(chat_id, source)
             original = int(checkpoint["last_message_id"])
             last, count = original, 0
+            started = time.monotonic()
+            catching_up = False
             entity = await self._entity(chat_id)
             async for message in self.client.iter_messages(entity, min_id=original, reverse=True, limit=None):
                 if not message or int(message.id) <= last:
@@ -390,25 +397,33 @@ class TelegramCollector:
                 if count % 25 == 0:
                     await self.backend.advance(chat_id, self.owner, last, original)
                     original = last
-                if count >= 1000:
+                # Release this group's FIFO lock between durable slices so
+                # live events do not wait behind years of initial history.
+                # The next pass resumes from the persisted high-water mark.
+                if count >= SYNC_HISTORY_MAX_MESSAGES or time.monotonic() - started >= SYNC_HISTORY_SLICE_SECONDS:
+                    catching_up = True
                     break
             if last != original:
                 await self.backend.advance(chat_id, self.owner, last, original)
-            return {"state": "caught_up" if count < 1000 else "catching_up", "last_message_id": last, "observed": count}
+            return {"state": "catching_up" if catching_up else "caught_up", "last_message_id": last, "observed": count}
 
     async def _reconcile_known(self, chat_id: str, source: dict):
         # 高水位只覆盖新消息；按远端调度轮转复核旧版本，补回断线期间的编辑和删除。
         async with self.locks.setdefault(chat_id, asyncio.Lock()):
             await self.backend.checkpoint(chat_id, self.owner)
-            entity = await self._entity(chat_id)
-            for item in await self.backend.observed(chat_id, self.owner):
-                ids = item["content"]["member_message_ids"]
-                members = [entry for entry in await self.client.get_messages(entity, ids=ids) if entry]
+            observed = await self.backend.observed(chat_id, self.owner)
+        entity = await self._entity(chat_id)
+        for item in observed:
+            ids = item["content"]["member_message_ids"]
+            members = [entry for entry in await self.client.get_messages(entity, ids=ids) if entry]
+            async with self.locks.setdefault(chat_id, asyncio.Lock()):
+                await self.backend.checkpoint(chat_id, self.owner)
                 missing = set(ids) - {entry.id for entry in members}
                 if missing:
                     await self._delete(chat_id, sorted(missing))
                 else:
                     await self._process_group(chat_id, source, sorted(members, key=lambda entry: entry.id))
+            await asyncio.sleep(0)
 
     async def _expand_album(self, message, entity):
         grouped_id = getattr(message, "grouped_id", None)
@@ -427,10 +442,15 @@ class TelegramCollector:
         return await self._process_group(chat_id, source, members)
 
     async def _process_group(self, chat_id: str, source: dict, members: list):
+        result, _ = await self._stage_group(chat_id, source, members)
+        return result
+
+    async def _stage_group(self, chat_id: str, source: dict, members: list):
+        """Persist the complete immutable version before any media transfer."""
         message = members[0]
         sender_id = str(getattr(message, "sender_id", "") or "")
         if sender_id not in {str(value) for value in source.get("trusted_sender_ids", [])}:
-            return {"state": "ignored_author"}
+            return {"state": "ignored_author"}, None
         sender = await message.get_sender()
         manifests = []
         raw_text = "\n\n".join(item.message for item in members if getattr(item, "message", None))
@@ -454,7 +474,7 @@ class TelegramCollector:
                                   "bytes": int(getattr(file, "size", 0) or 0),
                                   "width": int(getattr(file, "width", 0) or 0), "height": int(getattr(file, "height", 0) or 0)})
         if not raw_text.strip() and not manifests:
-            return {"state": "ignored_empty"}
+            return {"state": "ignored_empty"}, None
         version_at = max(_utc(getattr(item, "edit_date", None) or item.date) for item in members)
         grouped_id = getattr(message, "grouped_id", None)
         payload = {
@@ -478,45 +498,87 @@ class TelegramCollector:
         payload["media_state"] = ("pending" if supported else "unsupported") if manifests else "ready"
         first = await self.backend.event(payload)
         if first.get("state") in {"ready", "superseded", "ignored_stale", "deleted"} or not manifests or not supported:
-            return first
+            return first, None
+        payload["media_objects"] = list(first.get("media_objects") or [])
+        return first, payload
+
+    async def _complete_pending_media(self, chat_id: str, payload: dict, members: list):
+        # Transfers never own the group's event/checkpoint lock. The backend
+        # rejects obsolete versions and validates the lease again at commit.
         objects = []
+        staged = list(payload.get("media_objects") or [])
+
+        async def stage_object(record):
+            if not any(value.get("object_key") == record["object_key"] for value in staged):
+                staged.append(record)
+            result = await self._commit_media_payload(chat_id, payload | {"media_state": "pending", "media_objects": list(staged)})
+            if result.get("state") not in {"pending", "failed"}:
+                raise SourceAccessError("media_version_no_longer_pending")
+
         try:
-            used = 0
-            for item in members:
-                if getattr(item, "media", None):
-                    stored = await self._store_media(chat_id, item)
-                    used += int(stored["bytes"])
-                    if used > MAX_MESSAGE_MEDIA_BYTES:
-                        raise ValueError("message_media_size_limit")
-                    objects.append(stored)
+            async with asyncio.timeout(MEDIA_TRANSFER_SECONDS):
+                used = 0
+                for item in members:
+                    if getattr(item, "media", None):
+                        stored = await self._store_media(chat_id, item, stage_object=stage_object)
+                        used += int(stored["bytes"])
+                        objects.append(stored)
+                        if used > MAX_MESSAGE_MEDIA_BYTES:
+                            raise ValueError("message_media_size_limit")
+        except (FloodWaitError, AuthKeyDuplicatedError):
+            raise
         except Exception as exc:
-            payload.update(media_state="failed", last_error=type(exc).__name__, media_objects=[])
-            await self.backend.event(payload)
-            return {"persisted": True, "state": "failed"}
-        payload.update(media_state="ready", media_objects=objects)
-        return await self.backend.event(payload)
+            # Completed objects stay indexed for retry/orphan retention. A
+            # cancelled S3 thread may finish remotely, but cannot commit ready.
+            candidates = {value["object_key"]: value for value in [*staged, *objects]}
+            payload = payload | {"media_state": "failed", "last_error": type(exc).__name__, "media_objects": list(candidates.values())}
+        else:
+            payload = payload | {"media_state": "ready", "media_objects": objects}
+        return await self._commit_media_payload(chat_id, payload)
+
+    async def _commit_media_payload(self, chat_id: str, payload: dict):
+        async with asyncio.timeout(MEDIA_COMMIT_SECONDS):
+            async with self.locks.setdefault(chat_id, asyncio.Lock()):
+                await self.backend.checkpoint(chat_id, self.owner)
+                return await self.backend.event(payload)
 
     async def retry_pending(self):
         if not self.client or not self.backend:
             return
+        try:
+            async with asyncio.timeout(MEDIA_RETRY_BATCH_SECONDS):
+                await self._retry_pending_batch()
+        except TimeoutError:
+            # The persisted pending/failed version is retried next pass.
+            log.warning("Telegram media retry deferred category=batch_deadline")
+
+    async def _retry_pending_batch(self):
         for item in await self.backend.pending():
             chat_id = str(item["chat_id"])
             source = self.sources.get(chat_id)
-            if source is None:
+            if source is None or time.monotonic() < self.retry_at.get(chat_id, 0):
                 continue
             try:
                 async with self.locks.setdefault(chat_id, asyncio.Lock()):
                     await self.backend.checkpoint(chat_id, self.owner)
-                    entity = await self._entity(chat_id)
-                    identifiers = item["content"]["member_message_ids"]
-                    members = [entry for entry in await self.client.get_messages(entity, ids=identifiers) if entry]
+                entity = await self._entity(chat_id)
+                identifiers = item["content"]["member_message_ids"]
+                members = [entry for entry in await self.client.get_messages(entity, ids=identifiers) if entry]
+                async with self.locks.setdefault(chat_id, asyncio.Lock()):
+                    await self.backend.checkpoint(chat_id, self.owner)
                     missing = set(identifiers) - {entry.id for entry in members}
                     if missing:
                         await self._delete(chat_id, sorted(missing))
+                        payload = None
                     else:
-                        await self._process_group(chat_id, source, sorted(members, key=lambda entry: entry.id))
+                        _, payload = await self._stage_group(chat_id, source, sorted(members, key=lambda entry: entry.id))
+                if payload is not None:
+                    await self._complete_pending_media(chat_id, payload, members)
             except FloodWaitError as exc:
                 self.retry_at[chat_id] = time.monotonic() + exc.seconds
+            except AuthKeyDuplicatedError:
+                await self._invalidate_active_session()
+                raise
             except Exception as exc:
                 log.warning("Telegram media retry deferred category=%s", type(exc).__name__)
 
@@ -569,7 +631,7 @@ class TelegramCollector:
                 await self._invalidate_active_session()
             log.warning("Telegram deletion unavailable category=%s", type(exc).__name__)
 
-    async def _store_media(self, chat: str, message) -> dict:
+    async def _store_media(self, chat: str, message, *, stage_object=None) -> dict:
         if self.media_store:
             return await self.media_store(chat, message)
         mime = getattr(getattr(message, "file", None), "mime_type", None) or "image/jpeg"
@@ -596,6 +658,12 @@ class TelegramCollector:
         secret = os.environ.get("S3_SECRET_KEY", "")
         if not all((bucket, endpoint, access, secret)):
             raise RuntimeError("remote_S3_not_configured")
+        record = {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size,
+                  **dimensions, "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION}
+        if stage_object is not None:
+            # Register the deterministic private object before starting a
+            # cancellable thread, so late S3 completion remains reclaimable.
+            await stage_object(record)
 
         def upload():
             client = boto3.client("s3", endpoint_url=endpoint, region_name=os.environ.get("S3_REGION", "us-east-1"),
@@ -611,9 +679,7 @@ class TelegramCollector:
             finally:
                 client.close()
         await asyncio.to_thread(upload)
-        return {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size,
-                **dimensions,
-                "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION}
+        return record
 
     async def _delete_media_object(self, object_key: str) -> None:
         """Delete one staged object only after the backend has classified it orphaned."""

@@ -10,6 +10,7 @@ import httpx
 from services.collector.leyu import LeyuClient, DEFAULT_FIXTURE_PATH, DEFAULT_ODDS_PATH, retry_after_seconds
 from services.collector.leyu_health import ThresholdAlert
 from services.collector.leyu_protocol import AuthExpired, LeyuError, RateLimited
+from services.collector.leyu_refresh import LeyuRequestBudget
 from services.collector.worker import CollectorService, collection_retry_delay, failure_group
 from tests.test_collector_lifecycle import FakeRuntime, FakeRealtime, FakeTelegram
 
@@ -108,6 +109,16 @@ class HttpCooldownTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient() as api:
             service = CollectorService(api, "http://api.invalid/internal", "test-only", interval=20,
                 telegram_factory=FakeTelegram, runtime_factory=FakeRuntime, realtime_factory=FakeRealtime)
+            # This scenario assumes the normal config loop has acknowledged the
+            # default quote policy; it tests source cooldown, not missing config.
+            service.quote_max_age_seconds = 15
+            service.quote_policy_available = True
+            # A no-op wait cannot satisfy a real monotonic cooldown. Advance one
+            # shared fake clock instead, retaining the production cooldown gate.
+            clock = [0.0]
+            budget = LeyuRequestBudget(clock=lambda: clock[0])
+            service.runtime.request_budget = budget
+            service.leyu_refresh.budget = budget
             stop = asyncio.Event()
             rounds = []
             async def collect(**kwargs):
@@ -128,6 +139,7 @@ class HttpCooldownTests(unittest.IsolatedAsyncioTestCase):
                     rounds.append((delay, wake, dict(service.status["leyu"])))
                     if len(rounds) == 5:
                         stop_event.set()
+                clock[0] += max(0, delay)
             with patch("services.collector.worker.wait_for_work", side_effect=wait):
                 await service.leyu_loop(stop)
             self.assertEqual([(60, None), (120, None)], [(delay, wake) for delay, wake, _ in rounds[:2]])

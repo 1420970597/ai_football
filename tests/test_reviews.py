@@ -4,6 +4,7 @@ from decimal import Decimal
 import json
 import os
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 import uuid
 
@@ -93,6 +94,90 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, result.status_code, result.text)
         return result.json()["markets"][0]
 
+    async def test_bound_stale_market_refresh_rechecks_source_timestamp_and_preserves_gate(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes'")
+        settings = self.client._transport.app.state.settings
+        settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        calls = []
+        factory = httpx.AsyncClient
+        async def handler(request):
+            calls.append(json.loads(request.content))
+            self.assertEqual(self.pool.get_size(), self.pool.get_idle_size())
+            self.assertEqual('Bearer isolated-collector', request.headers['authorization'])
+            return httpx.Response(200, json={'accepted': True, 'reason': 'refresh_completed'})
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+            response = await self.post('list_match_markets', fixture_id=fixture_id)
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual([{'fixture_id': fixture_id, 'source_match_id': fixture_id}], calls)
+        self.assertTrue(response.json()['refresh']['accepted'])
+        self.assertTrue(all(not row['fresh'] for row in response.json()['markets']))
+        quote = response.json()['markets'][0]
+        record = await self.post('record_expert_signals', signals=[{'fixture_id': fixture_id,
+            'quote_id': quote['quote_id'], 'evidence_text': '大2.5'}])
+        self.assertEqual('quote_inactive_unknown_or_stale', record.json()['rejected'][0]['reason'])
+
+    async def test_bound_refresh_can_make_current_scheduled_quote_usable(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes'")
+        self.client._transport.app.state.settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        factory = httpx.AsyncClient
+        async def handler(request):
+            await self.pool.execute('UPDATE v2_current_quotes SET source_updated_at=now()')
+            return httpx.Response(200, json={'accepted': True, 'reason': 'written'})
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+            response = await self.post('list_match_markets', fixture_id=fixture_id)
+        self.assertEqual(200, response.status_code, response.text)
+        quote = response.json()['markets'][0]
+        self.assertTrue(quote['fresh'])
+        result = await self.post('record_expert_signals', signals=[{'fixture_id': fixture_id,
+            'quote_id': quote['quote_id'], 'evidence_text': '赛前 大2.5'}])
+        self.assertEqual(1, len(result.json()['accepted']))
+
+    async def test_lease_is_rechecked_after_refresh_and_timeout_does_not_make_price_fresh(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes'")
+        self.client._transport.app.state.settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        factory = httpx.AsyncClient
+        async def handler(request):
+            raise httpx.ReadTimeout('isolated timeout', request=request)
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+            response = await self.post('list_match_markets', fixture_id=fixture_id)
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual('refresh_unavailable', response.json()['refresh']['reason'])
+        self.assertTrue(all(not item['fresh'] for item in response.json()['markets']))
+        async def expire(request):
+            await self.pool.execute("UPDATE v2_analysis_jobs SET lease_until=now()-interval '1 second'")
+            return httpx.Response(200, json={'accepted': True, 'reason': 'written'})
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(expire), **kw)):
+            expired = await self.post('list_match_markets', fixture_id=fixture_id)
+        self.assertEqual(409, expired.status_code, expired.text)
+
+    async def test_unbound_or_historical_review_cannot_trigger_source_refresh(self):
+        fixture_id = await self.fixture()
+        self.client._transport.app.state.settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        factory = httpx.AsyncClient
+        requests = []
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json={'accepted': True})
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+            unbound = await self.post('list_match_markets', fixture_id=fixture_id)
+            self.assertEqual(409, unbound.status_code)
+            key, _ = await self.search_all()
+            await self.resolve(key)
+            await self.pool.execute("UPDATE v2_analysis_jobs SET review_mode='historical_replay'")
+            historical = await self.post('list_match_markets', fixture_id=fixture_id)
+        self.assertEqual(200, historical.status_code, historical.text)
+        self.assertEqual('historical_review_not_current', historical.json()['refresh']['reason'])
+        self.assertEqual([], requests)
+
     async def test_search_reaches_105th_fixture_and_snapshot_is_stable(self):
         for index in range(105):
             await self.fixture(index)
@@ -163,6 +248,48 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
             picks.append({"fixture_id": f"fixture-{index}", "quote_id": quote["quote_id"], "evidence_text": f"Alpha{index} Beta{index} 大2.5"})
         result = await self.post("record_expert_signals", signals=picks)
         self.assertEqual(2, len(result.json()["accepted"]))
+
+    async def test_historical_replay_cannot_bind_old_recommendation_to_current_price(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        quote = await self.read_market(fixture_id)
+        await self.pool.execute("UPDATE v2_analysis_jobs SET review_mode='historical_replay' WHERE id=$1", self.job)
+        response = await self.post('record_expert_signals', signals=[{
+            'fixture_id':fixture_id, 'quote_id':quote['quote_id'], 'evidence_text':'历史推荐'}])
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual([],response.json()['accepted'])
+        self.assertEqual('historical_review_not_current',response.json()['rejected'][0]['reason'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_quote_evidence'))
+        trace = await self.pool.fetchval("SELECT payload FROM v2_analysis_traces WHERE trace_kind='mcp_record_expert_signals'")
+        self.assertEqual('historical_replay',trace['review_mode'])
+
+    async def _reset_job_posted_at(self, posted_at):
+        await self.pool.execute('DELETE FROM v2_analysis_jobs WHERE id=$1', self.job)
+        await self.pool.execute('UPDATE v2_expert_messages SET posted_at=$2 WHERE id=$1', self.message, posted_at)
+        await self.pool.execute(
+            "INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key,attempt_id,lease_until) "
+            "VALUES($1,$2,'running',$3,$4,now()+interval '5 minute')",
+            self.job, self.message, str(self.job), self.attempt)
+
+    async def test_realtime_mode_cannot_bypass_original_posting_age(self):
+        await self._reset_job_posted_at(self.now - timedelta(days=2))
+        response = await self.post('record_expert_signals', signals=[{
+            'fixture_id': 'fixture-1', 'quote_id': str(uuid.uuid4()), 'evidence_text': '旧消息'}])
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual([], response.json()['accepted'])
+        self.assertEqual('historical_review_not_current', response.json()['rejected'][0]['reason'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_future_posting_date_cannot_create_current_recommendation(self):
+        await self._reset_job_posted_at(self.now + timedelta(hours=1))
+        response = await self.post('record_expert_signals', signals=[{
+            'fixture_id': 'fixture-1', 'quote_id': str(uuid.uuid4()), 'evidence_text': '未来消息'}])
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual([], response.json()['accepted'])
+        self.assertEqual('message_timestamp_in_future', response.json()['rejected'][0]['reason'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_quote_evidence'))
 
     async def test_cursor_tamper_scope_change_and_page_replay_rejected(self):
         await self.fixture(1)

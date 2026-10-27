@@ -680,11 +680,17 @@ async function setup({
         schema: "verified",
         hermes: { gateway: "reachable", provider: "unverified" },
         storage: "unconfigured",
+        collector: {sources: {websocket: {quote_source_lag_ms_p95: 5100.5, quote_source_lag_samples: 18, quote_source_lag_window_size: 25, quote_source_lag_unknown_count: 3, quote_source_lag_invalid_count: 1, quote_source_lag_future_count: 1, quote_source_lag_too_old_count: 2, quote_delivery_age_ms_p95: 6200, quote_delivery_age_samples: 15}}},
         review_queue: { count: 5000, capped: true },
         pending_media: { count: 2, capped: false },
         unknown_orders: { count: 1, capped: false },
         unresolved_reviews: { count: 3, capped: false },
         stale_quotes: { count: 4, capped: false },
+        tasks: [
+          {key:'telegram_session',label:'Telegram 授权',state:'action_required',target:'telegram',detail:'请检查授权状态并按页面提示恢复'},
+          {key:'unknown_orders',label:'未知订单',state:'action_required',target:'orders',detail:'核对官方订单回执；结果未知时禁止重复提交',count:{count:1,capped:false}},
+          {key:'migration_failures',label:'失败迁移记录',state:'unverified',target:'system',detail:'需核对部署迁移日志'},
+        ],
         freshness: {},
       });
     if (p === "/admin/orders")
@@ -1510,7 +1516,14 @@ await test("管理员恢复码只显示一次与只读待办订单", async () =>
     await page.locator("#admin-diagnostics").innerText(),
     /模型提供方尚未验证/,
   );
-  await page.locator("[data-admin-tab=orders]").click();
+  assert.match(await page.locator('#admin-action-tasks').innerText(), /失败迁移记录 · 未核验/);
+  assert.match(await page.locator('#quote-latency-metrics').innerText(), /盘口源->接收 P95 5100.5ms/);
+  assert.match(await page.locator('#quote-latency-metrics').innerText(), /未知\/无效\/未来\/过旧 3\/1\/1\/2/);
+  assert.match(await page.locator('#quote-latency-metrics').innerText(), /投递成功不等于每条报价通过/);
+  await page.locator('#admin-action-tasks [data-admin-task-target=telegram]').click();
+  assert.equal(await page.locator('#admin-telegram').isVisible(), true);
+  await page.locator('.admin-tabs [data-admin-tab=overview]').click();
+  await page.locator('#admin-action-tasks [data-admin-task-target=orders]').click();
   await page.waitForSelector("#admin-orders-list .admin-record");
   assert.match(
     await page.locator("#admin-orders-list").innerText(),

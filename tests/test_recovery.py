@@ -215,6 +215,35 @@ class RecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase):
         print('RECOVERY_EVIDENCE '+json.dumps({'tables':report['table_count'],'backup_seconds':manifest['elapsed_seconds'],'restore_seconds':report['restore_elapsed_seconds'],
             'inventory_before':report['inventory_before'],'inventory_after':report['inventory_after'],'difference':report['differences'],'media_objects':report['media_objects']},sort_keys=True))
 
+    async def test_pristine_seed_target_restores_nondefault_replay_budget_exactly(self):
+        await self.source.execute("UPDATE v2_review_lane_schedule SET realtime_claims_since_replay=6,updated_at=clock_timestamp() WHERE singleton")
+        expected=dict(await self.source.fetchrow('SELECT * FROM v2_review_lane_schedule'))
+        target_seed=await self.target.fetchrow("SELECT seed.*,migration.applied_at FROM v2_review_lane_schedule seed "
+            "JOIN v2_schema_migrations migration ON migration.version='017_review_freshness_lanes.sql'")
+        self.assertEqual(0,target_seed['realtime_claims_since_replay'])
+        self.assertEqual(target_seed['applied_at'],target_seed['updated_at'])
+        stream,_=await self.bundle()
+        report=await restore_bundle(self.target,stream,self.backup_key,MemoryObjects())
+        self.assertEqual({},report['differences'])
+        self.assertEqual(expected,dict(await self.target.fetchrow('SELECT * FROM v2_review_lane_schedule')))
+        self.assertEqual(1,await self.target.fetchval('SELECT count(*) FROM v2_review_lane_schedule'))
+
+    async def test_used_or_reset_seed_target_is_business_data_and_never_overwritten(self):
+        stream,_=await self.bundle()
+        for counter in (3,0):
+            with self.subTest(counter=counter):
+                await self.target.execute("UPDATE v2_review_lane_schedule SET realtime_claims_since_replay=$1,"
+                    "updated_at=(SELECT applied_at+interval '1 second' FROM v2_schema_migrations "
+                    "WHERE version='017_review_freshness_lanes.sql') WHERE singleton",counter)
+                before=dict(await self.target.fetchrow('SELECT * FROM v2_review_lane_schedule'))
+                objects=MemoryObjects()
+                stream.seek(0)
+                with self.assertRaisesRegex(RecoveryError,'restore_target_contains_business_data'):
+                    await restore_bundle(self.target,stream,self.backup_key,objects)
+                self.assertEqual(before,dict(await self.target.fetchrow('SELECT * FROM v2_review_lane_schedule')))
+                self.assertEqual({},objects.items)
+                self.assertEqual(0,await self.target.fetchval('SELECT count(*) FROM v2_users'))
+
     async def test_backup_is_encrypted_wrong_key_and_corrupt_chunk_rejected(self):
         stream,manifest=await self.bundle()
         raw=stream.getvalue()

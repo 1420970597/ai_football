@@ -41,8 +41,14 @@ sh infra/check-runtime.sh
 
 Telegram 来源可以同时监控多个群组，自动同步管理员及已信任作者的最新昵称。目录搜索可切换“所有成员 / 仅管理员”；选择成员后才加入监控，不会自动信任所有群成员。群成员不可枚举时保留明确原因及手动编号入口。
 
+历史消息与实时推荐分开审核：默认原始发布时间24小时内为实时，其余为历史档案，不会用当前报价给旧推荐补收益。`REVIEW_REALTIME_WINDOW_SECONDS`、`REVIEW_REALTIME_CLAIMS_PER_REPLAY`和`REVIEW_HISTORICAL_CONCURRENCY`控制时间窗、公平预算与历史并发；配置须同时作用于API与审核工作器。历史补拉持续分片推进，图片先保存待上传记录，再在群锁外传输，避免阻塞新消息。
+
+Hermes仅能对已经唯一匹配的当前比赛请求有界精确盘口刷新，刷新与周期采集共用限流退避。上游仍返回旧时间、停盘、变线或任务失效时仍拒绝录入，刷新接口成功不等于报价有效。增量迁移后需刷新并校验独立数据库运行角色的精确表权限，再启动对应服务。
+
 管理设置中的模型与报价有效期按运行配置生效：模型在下一次审核任务中经 Hermes 框架调用，报价阈值在后续请求中读取。消息图片保留类型、字节数、哈希与解码校验；错误不能变成空图片成功。订单中的预留本金/赔率和官方成交字段分别展示，缺少官方证据显示未知。
 
 Web 与 API 使用独立入口网络；默认 `EDGE_SUBNET=10.79.253.0/28`，Web 地址 `.2`、API 地址 `.3`。如与既有 Docker 网段冲突，须同时设置 `EDGE_SUBNET`、`EDGE_WEB_IP`、`EDGE_API_IP`。API 仅信任该 Web 地址，入口覆盖外部转发头；不得配置通配信任。签名及发现配置采用专用只读组，仅采集与执行器获得该组。
 
 当前为开发候选。正式签名、设备安装升级、官方赛果及生产验收条件未满足时，不发布稳定版本。最近一轮历史整改、真实测量、失败及剩余依赖分别记录于 [采集核验](docs/platform-v2/HISTORICAL_COLLECTOR_AUDIT.md)、[结算统计核验](docs/platform-v2/HISTORICAL_SETTLEMENT_AUDIT.md)、[身份配置核验](docs/platform-v2/HISTORICAL_IDENTITY_AUDIT.md)、[存储恢复核验](docs/platform-v2/HISTORICAL_STORAGE_AUDIT.md) 与 [Android 核验](docs/platform-v2/HISTORICAL_ANDROID_AUDIT.md)。
+
+运行、升级、回退、授权续期、密钥轮换与停止真实执行见[运维交接](docs/platform-v2/OPERATIONS_HANDOFF.md)。管理员运行状态页提供会话、媒体、审核、报价、未知订单和迁移的逐项入口；没有失败迁移日志证据时显示未核验。

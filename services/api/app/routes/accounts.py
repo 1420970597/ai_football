@@ -14,7 +14,7 @@ import asyncpg
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-from .. import account_jobs as jobs, database, orders
+from .. import account_jobs as jobs, database, orders, order_evidence
 from ..auth import _limit, audit, require_recent, require_user, verify_sensitive_session
 from ..membership import has_entitlement
 from ..review_state import authorize
@@ -424,7 +424,7 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
             order=await locked_order(conn,order_id)
             if order['state']!='pending' or order['attempt_id']!=body.attempt_id or not order['lease_until'] or order['lease_until']<=datetime.now(timezone.utc):
                 raise HTTPException(409,'订单准备租约失效')
-            account=await orders.recheck_order(conn,order,request.app.state.settings)
+            account,signal=await orders.recheck_order(conn,order,request.app.state.settings,include_signal=True)
             prefix=f"{account['user_id']}:{account['id']}:{account['config_revision']}:"
             if hashlib.sha256((prefix+body.payload_json).encode()).hexdigest()!=body.prepared_digest:
                 raise HTTPException(422,'订单准备摘要不匹配')
@@ -439,7 +439,7 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                     and payload['currencyCode']=='CNY' and str(payload['deviceType'])=='3' and payload['openMiltSingle']==0
                     and str(series[0]['seriesType'])=='1' and series[0]['seriesSum']==1 and series[0]['fullBet']==0
                     and detail['marketTypeFinally']=='EU' and detail['matchType']==2 and str(detail['sportId'])=='1'
-                    and orders.prepared_line(detail['marketValue'],snapshot['kind'])==Decimal(snapshot['line'])
+                    and orders.prepared_line_matches(detail['marketValue'],snapshot['line'],snapshot['kind'])
                     and detail['scoreBenchmark']==snapshot['score_benchmark']
                     and payload['deviceImei']==credentials['device_uuid'] and Decimal(detail['betAmount'])==order['stake']
                     and Decimal(detail['oddFinally'])==order['price'] and Decimal(detail['odds'])==order['price']*100000
@@ -448,7 +448,9 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                 valid=False
             if not valid:
                 raise HTTPException(422,'订单准备内容超出已预留推荐许可')
+            await order_evidence.append_stage(conn,order,signal,body.attempt_id,body.prepared_digest,'preflight_validated')
             await conn.execute("UPDATE v2_bet_orders SET state='submitting',prepared_digest=$2,submitted_at=now(),lease_until=now()+interval '30 seconds',updated_at=now() WHERE id=$1",order_id,body.prepared_digest)
+            await order_evidence.append_stage(conn,order,signal,body.attempt_id,body.prepared_digest,'submission_authorized')
             await audit(conn,None,'executor','order_send_authorized','bet_order',str(order_id))
     return {'scope':jobs.scope(account),'execution_id':str(order_id),'prepared_digest':body.prepared_digest}
 

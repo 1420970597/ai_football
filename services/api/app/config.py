@@ -53,6 +53,7 @@ class Settings:
     live_orders_enabled: bool = False
     hermes_provider: str = "custom:cline"
     review_config_url: str = "http://api:8080/internal/review/config"
+    market_refresh_url: str = ""
 
 
 def _secret_bytes(name: str, expected: int) -> bytes:
@@ -90,4 +91,5 @@ def load_settings(*, role: str = "api") -> Settings:
         live_orders_enabled=role == "api" and _clean(os.environ.get("LIVE_ORDERS_ENABLED", "false")).lower() == "true",
         hermes_provider=_clean(os.environ.get("HERMES_API_PROVIDER", "custom:cline")),
         review_config_url=_clean(os.environ.get("REVIEW_CONFIG_URL", "http://api:8080/internal/review/config")),
+        market_refresh_url=_clean(os.environ.get("TELEGRAM_CONTROL_URL", "http://collector:8092")).rstrip("/") + "/leyu/refresh",
     )

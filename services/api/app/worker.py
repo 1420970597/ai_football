@@ -13,6 +13,7 @@ from . import database
 from .config import load_settings
 from .hermes_client import delete_session, resolve_review_settings, review_message
 from .review_state import active_job, trace
+from .review_policy import REALTIME_WINDOW_SECONDS
 from fastapi import HTTPException
 import asyncpg
 
@@ -26,6 +27,10 @@ REVIEW_TIMEOUT = max(60, min(1800, int(os.environ.get("REVIEW_TIMEOUT_SECONDS", 
 SCHEDULER_LOCK = 'platform-v2-review-fair-scheduler'
 MAX_PAIR_PROBES = 8
 EXHAUSTED_BATCH_SIZE = 100
+# Posting age controls audit scheduling, not whether a match is prematch/live.
+# Historical replay preserves the original text and may not create live signals.
+REALTIME_CLAIMS_PER_REPLAY = max(1, min(1000, int(os.environ.get('REVIEW_REALTIME_CLAIMS_PER_REPLAY', '8'))))
+HISTORICAL_CONCURRENCY = max(0, min(8, int(os.environ.get('REVIEW_HISTORICAL_CONCURRENCY', '1'))))
 ELIGIBLE_MESSAGE = (
     "m.deleted_at IS NULL AND m.media_state='ready' AND NOT EXISTS(SELECT 1 FROM v2_expert_messages newer "
     "WHERE newer.source_id=m.source_id AND newer.platform_message_id=m.platform_message_id AND newer.revision>m.revision)"
@@ -76,6 +81,48 @@ async def _advance_turn(conn, source_id, expert_id):
     return turn
 
 
+def _lane_condition(mode):
+    bound = "statement_timestamp()-($2::int*interval '1 second')"
+    if mode == 'real_time':
+        return 'j.message_posted_at>=' + bound + ' AND j.message_posted_at<=statement_timestamp()'
+    return 'j.message_posted_at<' + bound
+
+
+async def _claim_from_lane(conn, mode):
+    lane = _lane_condition(mode)
+    for probe in range(MAX_PAIR_PROBES):
+        pair = await conn.fetchrow(
+            "SELECT ss.source_id,es.expert_id,es.concurrency_limit,"
+            "(SELECT count(*) FROM v2_analysis_jobs running WHERE running.expert_id=es.expert_id "
+            "AND running.state='running' AND running.lease_until>statement_timestamp()) AS active_leases "
+            "FROM v2_review_source_schedule ss JOIN v2_expert_sources s ON s.id=ss.source_id "
+            "JOIN v2_source_experts se ON se.source_id=s.id JOIN v2_experts e ON e.id=se.expert_id "
+            "JOIN v2_review_expert_schedule es ON es.expert_id=e.id "
+            "WHERE s.enabled AND e.enabled AND se.enabled AND (SELECT count(*) FROM v2_analysis_jobs running "
+            "WHERE running.expert_id=es.expert_id AND running.state='running' AND running.lease_until>statement_timestamp())<es.concurrency_limit "
+            "AND EXISTS(SELECT 1 FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
+            "WHERE j.source_id=ss.source_id AND j.expert_id=es.expert_id AND j.attempts<$1 AND " + lane +
+            " AND ((j.state IN('queued','retry') AND j.available_at<=statement_timestamp()) OR "
+            "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))) AND " + ELIGIBLE_MESSAGE + ") "
+            "ORDER BY ss.last_turn,es.last_turn,ss.source_id,es.expert_id LIMIT 1 FOR SHARE OF s,e,se FOR UPDATE OF ss,es",
+            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS)
+        if not pair:
+            return None
+        turn = await _advance_turn(conn, pair['source_id'], pair['expert_id'])
+        for expired in (True, False):
+            condition = ("j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp())" if expired
+                         else "j.state IN('queued','retry') AND j.available_at<=statement_timestamp()")
+            order = 'j.lease_until NULLS FIRST,j.created_at,j.id' if expired else 'j.message_posted_at DESC,j.available_at,j.created_at,j.id'
+            row = await conn.fetchrow(
+                'SELECT j.id,j.message_id,j.attempts FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id '
+                'WHERE j.source_id=$3 AND j.expert_id=$4 AND j.attempts<$1 AND ' + lane + ' AND ' + condition + ' AND ' + ELIGIBLE_MESSAGE +
+                ' ORDER BY ' + order + ' LIMIT 1 FOR UPDATE OF j SKIP LOCKED',
+                MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, pair['source_id'], pair['expert_id'])
+            if row:
+                return row, pair, turn, probe + 1
+    return None
+
+
 async def claim_job(pool):
     try:
         async with asyncio.timeout(5):
@@ -103,46 +150,31 @@ async def _claim_job(pool):
             # expert pair; no global queue sort/materialization is performed.
             await conn.execute('INSERT INTO v2_review_source_schedule(source_id) SELECT id FROM v2_expert_sources ON CONFLICT DO NOTHING')
             await conn.execute('INSERT INTO v2_review_expert_schedule(expert_id) SELECT id FROM v2_experts ON CONFLICT DO NOTHING')
-            row = pair = None
-            for probe in range(MAX_PAIR_PROBES):
-                pair = await conn.fetchrow(
-                    "SELECT ss.source_id,es.expert_id,es.concurrency_limit,"
-                    "(SELECT count(*) FROM v2_analysis_jobs running WHERE running.expert_id=es.expert_id "
-                    "AND running.state='running' AND running.lease_until>statement_timestamp()) AS active_leases "
-                    "FROM v2_review_source_schedule ss JOIN v2_expert_sources s ON s.id=ss.source_id "
-                    "JOIN v2_source_experts se ON se.source_id=s.id JOIN v2_experts e ON e.id=se.expert_id "
-                    "JOIN v2_review_expert_schedule es ON es.expert_id=e.id "
-                    "WHERE s.enabled AND e.enabled AND se.enabled AND (SELECT count(*) FROM v2_analysis_jobs running "
-                    "WHERE running.expert_id=es.expert_id AND running.state='running' AND running.lease_until>statement_timestamp())<es.concurrency_limit "
-                    "AND EXISTS(SELECT 1 FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
-                    "WHERE j.source_id=ss.source_id AND j.expert_id=es.expert_id AND j.attempts<$1 "
-                    "AND ((j.state IN('queued','retry') AND j.available_at<=statement_timestamp()) OR "
-                    "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))) AND " + ELIGIBLE_MESSAGE + ") "
-                    "ORDER BY ss.last_turn,es.last_turn,ss.source_id,es.expert_id LIMIT 1 FOR SHARE OF s,e,se FOR UPDATE OF ss,es", MAX_ATTEMPTS,
-                )
-                if not pair:
-                    return None
-                turn = await _advance_turn(conn, pair['source_id'], pair['expert_id'])
-                for expired in (True, False):
-                    condition = ("j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp())" if expired
-                                 else "j.state IN('queued','retry') AND j.available_at<=statement_timestamp()")
-                    order = 'j.lease_until NULLS FIRST,j.created_at,j.id' if expired else 'j.available_at,j.created_at,j.id'
-                    row = await conn.fetchrow(
-                        'SELECT j.id,j.message_id,j.attempts FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id '
-                        'WHERE j.source_id=$1 AND j.expert_id=$2 AND j.attempts<$3 AND ' + condition + ' AND ' + ELIGIBLE_MESSAGE +
-                        ' ORDER BY ' + order + ' LIMIT 1 FOR UPDATE OF j SKIP LOCKED', pair['source_id'], pair['expert_id'], MAX_ATTEMPTS)
-                    if row:
-                        break
-                if row:
+            realtime_claims = await conn.fetchval('SELECT realtime_claims_since_replay FROM v2_review_lane_schedule WHERE singleton FOR UPDATE')
+            historical_active = await conn.fetchval(
+                "SELECT count(*) FROM v2_analysis_jobs WHERE state='running' AND review_mode='historical_replay' "
+                "AND lease_until>statement_timestamp()")
+            replay_allowed = HISTORICAL_CONCURRENCY > historical_active
+            modes = ['real_time']
+            if replay_allowed:
+                modes = (['historical_replay','real_time'] if realtime_claims >= REALTIME_CLAIMS_PER_REPLAY
+                         else ['real_time','historical_replay'])
+            claimed = None
+            for mode in modes:
+                claimed = await _claim_from_lane(conn, mode)
+                if claimed:
                     break
-            if not row:
+            if not claimed:
                 return None
+            row, pair, turn, probes = claimed
             attempt = uuid.uuid4()
             lease_until = await conn.fetchval(
-                "UPDATE v2_analysis_jobs SET state='running',attempt_id=$2,attempts=attempts+1,"
+                "UPDATE v2_analysis_jobs SET state='running',attempt_id=$2,attempts=attempts+1,review_mode=$4,"
                 "lease_until=clock_timestamp()+($3::int*interval '1 second'),heartbeat_at=clock_timestamp(),last_error=NULL,updated_at=now() WHERE id=$1 RETURNING lease_until",
-                row["id"], attempt, LEASE_SECONDS,
+                row["id"], attempt, LEASE_SECONDS, mode,
             )
+            await conn.execute('UPDATE v2_review_lane_schedule SET realtime_claims_since_replay=$1,updated_at=now() WHERE singleton',
+                               0 if mode == 'historical_replay' else min(realtime_claims + 1, REALTIME_CLAIMS_PER_REPLAY))
             await conn.execute("DELETE FROM v2_match_searches WHERE job_id=$1", row["id"])
             message = await conn.fetchrow(
                 "SELECT m.id,m.raw_text,m.media_objects,m.posted_at,m.revision,m.reply_context,m.created_at,e.display_nickname,"
@@ -154,10 +186,12 @@ async def _claim_job(pool):
             )
             await trace(conn, row["id"], "attempt_claimed", {"attempt_id": str(attempt), "attempt": row["attempts"] + 1,
                 'source_id': str(pair['source_id']), 'expert_id': str(pair['expert_id']), 'concurrency_limit': pair['concurrency_limit'],
-                'active_expert_leases_before': pair['active_leases'], 'scheduler_turn': turn, 'pair_probes': probe + 1,
+                'active_expert_leases_before': pair['active_leases'], 'scheduler_turn': turn, 'pair_probes': probes,
+                'review_mode': mode, 'realtime_window_seconds': REALTIME_WINDOW_SECONDS,
+                'message_age_seconds': max(0, round((datetime.now(timezone.utc)-message['posted_at']).total_seconds(),3)),
                 'queue_wait_ms': max(0, round((datetime.now(timezone.utc) - message['created_at']).total_seconds() * 1000, 3))})
             return {"id": row["id"], "attempt_id": attempt, "attempts": row["attempts"] + 1, "message": dict(message),
-                    'source_id': pair['source_id'], 'expert_id': pair['expert_id'], 'lease_until': lease_until}
+                    'source_id': pair['source_id'], 'expert_id': pair['expert_id'], 'lease_until': lease_until, 'review_mode': mode}
 
 
 async def _add_trace(pool, job: dict, kind: str, payload: dict) -> None:
@@ -227,10 +261,12 @@ async def process_job(pool, settings, job: dict) -> None:
             "message_id": str(job["message"]["id"]), "raw_text": job["message"]["raw_text"],
             "reply_text": job["message"].get("reply_text"), "media_objects": job["message"]["media_objects"],
             "model": settings.hermes_model, "worker_attempt": job["attempts"],
+            "review_mode": job.get('review_mode','real_time'),
             "configuration_version": getattr(settings, "configuration_version", None),
         })
         review_task = asyncio.create_task(asyncio.wait_for(
-            review_message(settings, job["message"], job["id"], job["attempt_id"]), timeout=REVIEW_TIMEOUT,
+            review_message(settings, job["message"] | {'review_mode': job.get('review_mode','real_time')},
+                           job["id"], job["attempt_id"]), timeout=REVIEW_TIMEOUT,
         ))
         lease_task = asyncio.create_task(keep_lease(pool, job))
         done, _ = await asyncio.wait({review_task, lease_task}, return_when=asyncio.FIRST_COMPLETED)

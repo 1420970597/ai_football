@@ -7,6 +7,7 @@ const origin = "http://web";
 const evidence = "/work/reports/jiebao-score-reference/images";
 const results = [];
 const errors = [];
+const roleAccessMatrix = [];
 function otp(secret = "JBSWY3DPEHPK3PXP", stepOffset = 0) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   let bits = "";
@@ -496,6 +497,159 @@ await scenario("真实管理员换机、错误验证码保留旧因子、恢复�
     9,
   );
 });
+// Separate real browser contexts keep every role's cookies and personal data apart.
+for (const role of [
+  { key: "guest", name: "游客" },
+  { key: "ordinary", name: "普通用户" },
+  { key: "expired", name: "真实到期会员" },
+  { key: "valid", name: "有效会员" },
+  { key: "admin", name: "独立管理员" },
+]) {
+  await scenario("五身份页面及接口矩阵：" + role.name, async () => {
+    const isolated = await browser.newContext({ viewport: { width: 1440, height: 960 } });
+    const rolePage = await isolated.newPage();
+    rolePage.on("pageerror", (error) => errors.push(role.key + ": " + error.message));
+    const observed = { role: role.key, pages: [], http: [] };
+    roleAccessMatrix.push(observed);
+    async function request(path, { admin = false, method = "GET", body } = {}) {
+      const cookies = await isolated.cookies();
+      const csrf = cookies.find((cookie) => cookie.name === (admin ? "v2_admin_csrf" : "v2_csrf"))?.value;
+      const response = await rolePage.request.fetch(origin + "/api/v1" + path, {
+        method, data: body,
+        headers: { "X-Session-Context": admin ? "admin" : "user", ...(csrf ? { "X-CSRF-Token": csrf } : {}) },
+      });
+      observed.http.push({ path, context: admin ? "admin" : "user", method, status: response.status() });
+      return { status: response.status(), data: await response.json() };
+    }
+    async function openPublicPages() {
+      await rolePage.locator(".main-nav [data-page=scores]:not([data-phase])").click();
+      await rolePage.waitForSelector(".match-row");
+      assert.equal((await request("/public/matches")).status, 200);
+      await rolePage.locator('.match-row[data-fixture="web-integration-match-0"] .score-button').click();
+      await rolePage.waitForFunction(() => document.querySelector("#dialog-content").textContent.includes("测试主队甲"));
+      assert.equal((await request("/public/matches/web-integration-match-0")).status, 200);
+      await rolePage.keyboard.press("Escape");
+      for (const [phase, label] of [["scheduled", "未开赛"], ["finished", "完场"]]) {
+        await rolePage.locator(`.main-nav [data-phase=${phase}]`).click();
+        await rolePage.waitForFunction((label) => document.querySelectorAll(".match-row").length === 1 && document.querySelector(".match-row").textContent.includes(label), label);
+      }
+      observed.pages.push("比分、赛程、赛果及比赛详情可读");
+      await rolePage.locator(".main-nav [data-page=experts]").click();
+      await rolePage.waitForSelector("[data-expert-row]");
+      assert.equal((await request("/public/experts")).status, 200);
+      observed.pages.push("专家公开摘要可读");
+    }
+    try {
+      if (role.key === "admin") {
+        await isolated.addCookies((await context.cookies()).filter((cookie) => cookie.name.startsWith("v2_admin")));
+      }
+      await rolePage.goto(origin);
+      await rolePage.waitForSelector(".match-row");
+      const isUser = ["ordinary", "expired", "valid"].includes(role.key);
+      if (isUser) {
+        await rolePage.locator("#account-entry").click();
+        await rolePage.locator("#auth-form [name=email]").fill(role.key + "@role-matrix.invalid");
+        await rolePage.locator("#auth-form [name=password]").fill("test-only-role-matrix-password-1234");
+        await rolePage.locator("#auth-form button").click();
+        await rolePage.waitForSelector("#account-content:not([hidden])");
+        const identity = await request("/auth/me");
+        assert.equal(identity.status, 200);
+        assert.equal(identity.data.user.role, "user");
+        assert.equal(identity.data.membership.code, role.key === "valid" ? "webvip" : "free");
+        assert.equal(identity.data.membership.entitlements.expert_full_history === true, role.key === "valid");
+      }
+      await openPublicPages();
+      await rolePage.locator(".main-nav [data-page=membership]").click();
+      await rolePage.waitForSelector(".plan-card");
+      assert.equal((await request("/public/membership/plans")).status, 200);
+      await rolePage.waitForFunction(() => !document.querySelector("#membership-current").textContent.includes("读取"));
+      const memberText = await rolePage.locator("#membership-current").innerText();
+      assert.match(memberText, role.key === "valid" ? /隔离专家会员.*有效至/ : isUser ? /游客与免费用户/ : /登录后查看我的权益/);
+      observed.pages.push("会员页展示实际有效权益");
+      if (role.key === "expired") {
+        const history = await request("/auth/export?section=memberships");
+        assert.equal(history.status, 200);
+        const expired = history.data.items.find((grant) => grant.code === "webvip");
+        assert.equal(expired.status, "active");
+        assert.ok(Date.parse(expired.ends_at) < Date.now());
+        assert.ok(Date.parse(expired.starts_at) < Date.parse(expired.ends_at));
+        observed.expiry_evidence = "active grant ended before browser clock; effective membership free";
+      }
+      // A direct/deep link must enforce the same gate as the visible history page.
+      await rolePage.locator(".left-rail [data-page=messages]").click();
+      await rolePage.locator("#message-expert").selectOption(expertId);
+      if (role.key === "valid") {
+        await rolePage.waitForSelector("#messages-list .message-card");
+        await rolePage.locator('#messages-list [data-message="66666666-6666-4666-8666-666666666666"]').click();
+        await rolePage.waitForFunction(() => document.querySelector("#dialog-content").textContent.includes("明晚比赛尚未明确方向"));
+        assert.match(await rolePage.locator("#dialog-content").innerText(), /用户权益读取/);
+        await rolePage.keyboard.press("Escape");
+      } else {
+        await rolePage.waitForFunction(() => document.querySelector("#messages-state").textContent.includes("需要完整记录权益"));
+        assert.equal(await rolePage.locator("#messages-list .message-card").count(), 0);
+      }
+      assert.equal((await request("/public/experts/" + expertId + "/messages")).status, role.key === "valid" ? 200 : 403);
+      assert.equal((await request("/public/messages/66666666-6666-4666-8666-666666666666")).status, role.key === "valid" ? 200 : 403);
+      assert.equal((await request("/public/messages/22222222-2222-4222-8222-222222222222/media/0")).status, role.key === "valid" ? 503 : 403);
+      observed.pages.push(role.key === "valid" ? "会员原文可读；未配置媒体如实503" : "原文、深链和媒体一致拒绝");
+      await rolePage.locator(".left-rail [data-page=account]").click();
+      if (isUser) {
+        await rolePage.waitForFunction((key) => document.querySelector("#account-verification").textContent.includes("隔离绑定-" + key), role.key);
+        assert.equal(await rolePage.locator("#account-content").isVisible(), true);
+        assert.equal(await rolePage.locator("#leyu-form [name=account_label]").inputValue(), "隔离绑定-" + role.key);
+        const otherSuffix = role.key === "valid" ? "1" : "3";
+        const account = await request("/accounts/leyu?user_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa" + otherSuffix + "&account_id=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb" + otherSuffix);
+        assert.equal(account.status, 200);
+        assert.equal(account.data.account.account_label, "隔离绑定-" + role.key);
+        assert.equal("encrypted_credentials" in account.data.account, false);
+        const exported = await request("/auth/export?section=profile&user_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa" + otherSuffix);
+        assert.equal(exported.status, 200);
+        assert.equal(exported.data.items.length, 1);
+        assert.equal(exported.data.items[0].profile.email, role.key + "@role-matrix.invalid");
+        assert.equal(exported.data.items[0].leyu_account.account_label, "隔离绑定-" + role.key);
+        const forgedWrite = await request("/accounts/leyu", { method: "PUT", body: { user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa" + otherSuffix, account_label: "forged-target", username: "not-a-real-account", password: "not-a-provider-password" } });
+        assert.equal(forgedWrite.status, 422);
+        assert.equal((await request("/accounts/leyu")).data.account.account_label, "隔离绑定-" + role.key);
+        assert.equal((await request("/accounts/orders")).status, 200);
+        observed.pages.push("个人中心仅本人绑定；他人标识不能切换归属或写入");
+      } else {
+        await rolePage.waitForFunction(() => document.querySelector("#identity-panel").textContent.includes("登录后管理会员权益"));
+        assert.equal(await rolePage.locator("#account-content").isVisible(), false);
+        for (const path of ["/auth/me", "/accounts/leyu", "/accounts/orders", "/auth/export?section=profile"]) {
+          assert.equal((await request(path)).status, 401);
+        }
+        observed.pages.push("用户账户及订单入口要求独立用户身份");
+      }
+      await rolePage.locator(".utility-bar [data-page=admin]").click();
+      if (role.key === "admin") {
+        await rolePage.waitForSelector("#admin-content:not([hidden])");
+        assert.match(await rolePage.locator("#admin-identity").innerText(), /管理员.*独立于普通用户会话/s);
+        assert.equal((await request("/admin/me", { admin: true })).status, 200);
+        assert.equal((await request("/admin/users", { admin: true })).status, 200);
+        assert.equal((await request("/admin/settings", { admin: true })).status, 200);
+        assert.equal((await request("/admin/telegram/messages/66666666-6666-4666-8666-666666666666", { admin: true })).status, 200);
+        await rolePage.locator("[data-admin-tab=telegram]").click();
+        await rolePage.locator("#admin-telegram").getByRole("button", { name: "查看全部专家消息与审核", exact: true }).click();
+        await rolePage.waitForSelector("#messages-list .message-card");
+        await rolePage.locator('#messages-list [data-message="66666666-6666-4666-8666-666666666666"]').click();
+        await rolePage.waitForFunction(() => document.querySelector("#dialog-content").textContent.includes("管理员读取"));
+        assert.match(await rolePage.locator("#dialog-content").innerText(), /明晚比赛尚未明确方向/);
+        observed.pages.push("管理员独立管理及审核原文可读，未继承用户账户权限");
+      } else {
+        await rolePage.waitForSelector("#admin-identity [data-login=admin]");
+        assert.equal(await rolePage.locator("#admin-content").isVisible(), false);
+        assert.match(await rolePage.locator("#admin-identity").innerText(), /用户会话不会获得管理权限/);
+        for (const path of ["/admin/me", "/admin/users", "/admin/settings", "/admin/orders"]) {
+          assert.equal((await request(path, { admin: true })).status, 401);
+        }
+        observed.pages.push("管理入口登录门禁与全部管理接口一致拒绝");
+      }
+      observed.status = "passed";
+    } finally {
+      await isolated.close();
+    }
+  });
+}
 await scenario("真实管理员退出保留本人身份与手机版布局", async () => {
   await page.locator(".utility-bar [data-page=admin]").click();
   await page.waitForSelector("#admin-content:not([hidden])");
@@ -556,6 +710,7 @@ await fs.writeFile(
       results,
       browser_errors: errors,
       failed_upstream_responses: failedResponses,
+      role_access_matrix: roleAccessMatrix,
     },
     null,
     2,

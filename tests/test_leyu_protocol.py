@@ -152,7 +152,7 @@ class QuoteTests(unittest.TestCase):
         self.assertEqual([], parse_quotes(row, "leyu:m1"))
         row = {"hps": [{"chpid": "17", "hl": {"ol": [{"ot": "X", "ov": 320000}]}}]}
         quote = parse_quotes(row, "leyu:m1")[0]
-        self.assertEqual(("first_half", "draw", "0"), (quote["period"], quote["selection"], quote["line"]))
+        self.assertEqual(("first_half", "draw", None), (quote["period"], quote["selection"], quote["line"]))
 
 
 class ClientTests(unittest.IsolatedAsyncioTestCase):

@@ -43,7 +43,9 @@ QUALITY_METRIC_SQL = (
 )
 QUOTE_VALID_SQL = (
     "EXISTS(SELECT 1 FROM v2_quote_evidence q WHERE q.evidence_kind='expert_signal' AND q.reference_id=s.id "
-    "AND q.fixture_id=s.fixture_id AND q.market_id=s.market_id AND q.period=s.period AND q.line=s.line "
+    "AND q.fixture_id=s.fixture_id AND q.market_id=s.market_id AND q.period=s.period "
+    "AND ((q.line=s.line) OR (s.market_kind='winner' AND COALESCE(q.line,0)=0 AND COALESCE(s.line,0)=0 "
+    "AND (q.line IS NOT NULL OR q.evidence->>'market_kind'='winner'))) "
     "AND q.selection=s.selection AND q.price=s.recommendation_price AND q.source_updated_at=s.quote_time "
     "AND q.score_baseline IS NOT DISTINCT FROM s.score_baseline "
     "AND q.evidence->>'score_basis'=s.score_basis)"

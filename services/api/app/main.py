@@ -121,6 +121,28 @@ async def timeout_error(request: Request, exc: TimeoutError):
     return await unexpected_error(request, exc)
 
 
+@app.exception_handler(asyncpg.InterfaceError)
+async def database_interface_error(request: Request, exc: asyncpg.InterfaceError):
+    # A disconnect during a transaction can be masked by InterfaceError when
+    # __aexit__ discovers its connection is already closed.  Classify only an
+    # explicit typed connection failure in the bounded chain, never messages
+    # such as "connection closed" or arbitrary driver programming errors.
+    pending, seen = [exc], set()
+    for _ in range(8):
+        if not pending:
+            break
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, (asyncpg.PostgresConnectionError, asyncpg.CannotConnectNowError)):
+            return await database_temporarily_unavailable(request, exc)
+        for linked in (current.__context__, current.__cause__):
+            if linked is not None and id(linked) not in seen:
+                pending.append(linked)
+    return await unexpected_error(request, exc)
+
+
 for transient_database_error in (
     asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError, asyncpg.DeadlockDetectedError,
     asyncpg.SerializationError, asyncpg.TooManyConnectionsError, asyncpg.CannotConnectNowError,

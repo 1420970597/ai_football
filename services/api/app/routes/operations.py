@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 import httpx
 
 from .. import database
+from ..admin_tasks import diagnostic_tasks
 from ..auth import require_admin
 from ..pagination import decode_cursor, encode_cursor
 from ..runtime_settings import runtime_quote_max_age
@@ -61,12 +62,24 @@ async def collector_health(request: Request) -> dict:
                     "fixtures", "accepted", "last_push_accepted", "source_count", "degraded", "config_version",
                     "config_validated_at",
                     "config_validation_error", "collection_transport",
+                    "quote_max_age_seconds",
+                    "poll_in_progress", "current_poll_started_at", "current_poll_completed_at",
                     "reconnects", "received", "events_received", "events_delivered", "batches_delivered",
                     "subscribed_fixtures", "subscription_requests_sent",
                     "dropped", "delivery_failures", "queue_depth", "queue_high_water",
+                    "last_delivery_error_category", "quarantined_fixtures",
+                    "last_push_quarantined_fixtures", "max_observed_fixture_quotes",
                     "source_lag_ms_p50", "source_lag_ms_p95", "source_lag_samples",
                     "queue_wait_ms_p50", "queue_wait_ms_p95", "queue_wait_samples",
                     "delivery_age_ms_p50", "delivery_age_ms_p95", "delivery_age_samples",
+                    "quote_source_lag_ms_p50", "quote_source_lag_ms_p95", "quote_source_lag_samples",
+                    "quote_source_lag_window_size", "quote_source_lag_known_count",
+                    "quote_source_lag_unknown_count", "quote_source_lag_invalid_count",
+                    "quote_source_lag_future_count", "quote_source_lag_too_old_count",
+                    "quote_delivery_age_ms_p50", "quote_delivery_age_ms_p95", "quote_delivery_age_samples",
+                    "quote_delivery_age_window_size", "quote_delivery_age_known_count",
+                    "quote_delivery_age_unknown_count", "quote_delivery_age_invalid_count",
+                    "quote_delivery_age_future_count", "quote_delivery_age_too_old_count",
                     "last_event_at", "last_delivery_at", "last_message_at",
                     "poll_attempts", "poll_successes", "poll_failures", "resync_requests",
                     "failure_group", "last_operation", "last_http_status", "last_poll_at", "last_poll_elapsed_ms",
@@ -140,7 +153,7 @@ async def diagnostics(request: Request):
     if model_evidence:
         age = (datetime.now(timezone.utc)-model_evidence['created_at']).total_seconds()
         provider = 'recent_success' if 0 <= age <= 900 else 'historical_success'
-    return {
+    result = {
         'checked_at': datetime.now(timezone.utc), 'database': 'reachable', 'schema': schema,
         'hermes': {'gateway': gateway, 'provider': provider, **(
             {'last_result_at': model_evidence['created_at'], 'model': model_evidence['model'],
@@ -156,6 +169,8 @@ async def diagnostics(request: Request):
         'postgres_counters': dict(stats) if stats else {},
         'limits': 'Counts are bounded; source timestamps are passive evidence, not live upstream probes. Failed migration transactions leave no success record.',
     }
+    result['tasks'] = diagnostic_tasks(result)
+    return result
 
 
 @router.get('/orders')

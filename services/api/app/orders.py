@@ -53,7 +53,9 @@ async def eligible_signal(conn, signal_id, max_age: int):
         "JOIN v2_experts e ON e.id=s.expert_id JOIN v2_expert_sources src ON src.id=m.source_id "
         "JOIN v2_source_experts se ON se.source_id=src.id AND se.expert_id=e.id JOIN v2_fixtures f ON f.id=s.fixture_id "
         "JOIN v2_current_quotes q ON q.fixture_id=s.fixture_id AND q.market_id=s.market_id AND q.period=s.period "
-        "AND q.line=s.line AND q.selection=s.selection WHERE s.id=$1", signal_id,
+        "AND q.market_kind=s.market_kind AND (q.line IS NOT DISTINCT FROM s.line OR "
+        "s.market_kind='winner' AND COALESCE(q.line,0)=0 AND COALESCE(s.line,0)=0) "
+        "AND q.selection=s.selection WHERE s.id=$1", signal_id,
     )
     if not row:
         raise HTTPException(409, "推荐及原生盘口不可用")
@@ -129,7 +131,7 @@ async def reserve_signal(conn, user_id, signal_id, settings):
                 "play_id": signal["play_id"], "selection_id": signal["selection_id"],
                 "selection_code": {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}.get(signal["selection"]),
                 "sport_id": "1", "chpid": signal["market_id"], "kind": signal["current_kind"], "period": signal["period"],
-                "line": str(signal["line"]), "price": str(signal["current_price"]), "phase": "live", "score_benchmark": score}
+                "line": str(signal["line"]) if signal["line"] is not None else None, "price": str(signal["current_price"]), "phase": "live", "score_benchmark": score}
     identity = uuid.uuid4()
     row = await conn.fetchrow(
         "INSERT INTO v2_bet_orders(id,user_id,signal_id,idempotency_key,state,stake,price,account_id,binding_revision,config_revision,"
@@ -153,7 +155,7 @@ async def protect_inflight_binding(conn,user_id):
                        "WHERE user_id=$1 AND state='submitting' AND (lease_until IS NULL OR lease_until<=now())",user_id)
 
 
-async def recheck_order(conn, order, settings):
+async def recheck_order(conn, order, settings, *, include_signal=False):
     account, policy = await account_policy(conn, order["user_id"], settings)
     if (account["id"] != order["account_id"] or account["binding_revision"] != order["binding_revision"]
             or account["config_revision"] != order["config_revision"] or policy["revision"] != order["policy_revision"]):
@@ -164,7 +166,7 @@ async def recheck_order(conn, order, settings):
     current = order["quote_snapshot"]
     if any(str(signal[key]) != str(current[key]) for key in ("play_id", "market_instance_id", "selection_id")):
         raise HTTPException(409, "原生盘口标识已经变化")
-    return account
+    return (account, signal) if include_signal else account
 
 
 def prepared_line(value, kind):
@@ -180,3 +182,14 @@ def prepared_line(value, kind):
         return sum(values)/len(values) if all(value.is_finite() for value in values) else None
     except Exception:
         return None
+
+
+def prepared_line_matches(raw, expected, kind):
+    """No-line winner is compatible with legacy zero, never a missing Asian line."""
+    if isinstance(raw, bool) or isinstance(expected, bool):
+        return False
+    actual = prepared_line(raw, kind)
+    wanted = prepared_line(expected, kind)
+    if kind == 'winner':
+        return expected != '' and actual == Decimal('0') and wanted == Decimal('0')
+    return actual is not None and wanted is not None and actual == wanted

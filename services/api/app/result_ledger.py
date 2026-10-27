@@ -26,7 +26,7 @@ async def project_settlements(conn, fixture, version, facts):
     settled = 0
     for row in rows:
         inputs = {'sport': fixture['sport'], 'kind': row['market_kind'], 'period': row['period'],
-                  'phase': row['phase'], 'price': str(row['recommendation_price']), 'line': str(row['line']),
+                  'phase': row['phase'], 'price': str(row['recommendation_price']), 'line': str(row['line']) if row['line'] is not None else None,
                   'selection': row['selection'], 'score_basis': row['score_basis'], 'score_baseline': row['score_baseline']}
         value = settle(inputs, facts) if row['quote_valid'] else pending('recommendation_quote_evidence_missing_or_mismatched')
         calculation = {'signal': inputs, 'result': facts}

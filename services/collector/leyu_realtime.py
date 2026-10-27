@@ -7,6 +7,7 @@ from collections import OrderedDict, deque
 from datetime import datetime, timedelta, timezone
 import inspect
 import json
+import logging
 import random
 from socket import gaierror
 import time
@@ -28,6 +29,7 @@ MAX_PUSH_BYTES = 1024 * 1024
 PUSH_COMMANDS = frozenset({"C2", "C21", "C101", "C102", "C1021", "C103", "C104", "C105", "C106", "C109", "C110", "C118", "C1301", "C303", "C302"})
 ODDS_COMMANDS = frozenset({"C105", "C2", "C21"})
 LATENCY_WINDOW_SIZE = 256
+log = logging.getLogger("platform.collector.websocket")
 
 
 def _latency_ms(value: str | None, reference: datetime) -> float | None:
@@ -48,6 +50,39 @@ def _percentile(values: deque[float], quantile: float) -> float | None:
         return None
     ordered = sorted(values)
     return round(ordered[min(len(ordered) - 1, int((len(ordered) - 1) * quantile))], 1)
+
+
+def _quote_latency_observation(value: Any, reference: Any) -> tuple[str, float | None]:
+    """Classify actual quote timestamps without turning old evidence into unknown."""
+    if value is None or value == "":
+        return "unknown", None
+    try:
+        source = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        observed = reference if isinstance(reference, datetime) else datetime.fromisoformat(str(reference).replace("Z", "+00:00"))
+        if source.tzinfo is None or observed.tzinfo is None:
+            return "invalid", None
+        lag = (observed.astimezone(timezone.utc) - source.astimezone(timezone.utc)).total_seconds() * 1000
+    except (TypeError, ValueError, OverflowError):
+        return "invalid", None
+    if lag < 0:
+        return "future", None
+    if lag > 7 * 24 * 60 * 60 * 1000:
+        return "too_old", None
+    return "known", lag
+
+
+def _quote_latency_fields(window: deque[tuple[str, float | None]], prefix: str) -> dict[str, Any]:
+    values = deque(value for category, value in window if category == "known" and value is not None)
+    counts = {category: sum(item[0] == category for item in window)
+              for category in ("known", "unknown", "invalid", "future", "too_old")}
+    return {prefix + "_ms_p50": _percentile(values, .5),
+            prefix + "_ms_p95": _percentile(values, .95),
+            prefix + "_samples": len(values), prefix + "_window_size": len(window),
+            # Known source timestamps include >7-day-old facts, which are
+            # separately counted and excluded from the bounded lag percentiles.
+            prefix + "_known_count": counts["known"] + counts["future"] + counts["too_old"],
+            **{prefix + "_" + key + "_count": counts[key]
+               for key in ("unknown", "invalid", "future", "too_old")}}
 
 
 def subscription_frames(mids: Iterable[str], *, batch_size: int = SUBSCRIPTION_BATCH_SIZE) -> list[dict[str, Any]]:
@@ -150,6 +185,8 @@ class LeyuRealtime:
         self._source_lags: deque[float] = deque(maxlen=LATENCY_WINDOW_SIZE)
         self._queue_waits: deque[float] = deque(maxlen=LATENCY_WINDOW_SIZE)
         self._delivery_ages: deque[float] = deque(maxlen=LATENCY_WINDOW_SIZE)
+        self._quote_source_lags: deque[tuple[str, float | None]] = deque(maxlen=LATENCY_WINDOW_SIZE)
+        self._quote_delivery_ages: deque[tuple[str, float | None]] = deque(maxlen=LATENCY_WINDOW_SIZE)
         self._subscription_alert = ThresholdAlert(.05, 0, raise_after=2, recover_after=2)
         self._queue_alert = ThresholdAlert(.8, .25)
         self._delivery_alert = ThresholdAlert(1, 0)
@@ -169,6 +206,8 @@ class LeyuRealtime:
             "delivery_age_ms_p50": None, "delivery_age_ms_p95": None,
             "delivery_age_samples": 0,
             "last_event_at": None, "last_delivery_at": None, "last_error": "",
+            **_quote_latency_fields(self._quote_source_lags, "quote_source_lag"),
+            **_quote_latency_fields(self._quote_delivery_ages, "quote_delivery_age"),
         }
         self._update_alert_fields()
         self._gap = False
@@ -215,6 +254,18 @@ class LeyuRealtime:
                 source_lag_ms_p95=_percentile(self._source_lags, 0.95),
                 source_lag_samples=len(self._source_lags),
             )
+        self._record_quote_latency(event, self._quote_source_lags, "quote_source_lag")
+
+    def _record_quote_latency(self, event: Mapping[str, Any], window: deque[tuple[str, float | None]],
+                              prefix: str, delivered_at: datetime | None = None) -> None:
+        for quote in event.get("markets", []):
+            if not isinstance(quote, Mapping):
+                continue
+            # A per-quote receive timestamp is preferable to the enclosing
+            # frame timestamp. Neither is ever substituted for source ctsp.
+            reference = delivered_at if delivered_at is not None else quote.get("received_at") or event.get("received_at")
+            window.append(_quote_latency_observation(quote.get("source_updated_at"), reference))
+        self.stats.update(_quote_latency_fields(window, prefix))
 
     def _record_queue_wait(self, event: Mapping[str, Any]) -> None:
         try:
@@ -282,10 +333,16 @@ class LeyuRealtime:
                     self._delivery_alert.observe(0)
                     self._update_alert_fields()
                     return True
-                except Exception:
+                except Exception as exc:
                     # 写入失败时保留当前批次重试，不能使消费者静默退出且网络线程仍报健康。
                     self.stats["last_error"] = "push_delivery_failure"
                     self.stats["delivery_failures"] = self.stats.get("delivery_failures", 0) + 1
+                    # Stable categories only: no response text, URLs or payloads.
+                    category = exc.category if isinstance(exc, LeyuError) else type(exc).__name__
+                    if not isinstance(category, str) or not category.isascii() or not category.replace("_", "").isalnum() or len(category) > 80:
+                        category = "delivery_exception"
+                    self.stats["last_delivery_error_category"] = category
+                    log.warning("Leyu push delivery failed category=%s", category)
                     self._delivery_alert.observe(1)
                     self._update_alert_fields()
                     failures += 1
@@ -330,6 +387,7 @@ class LeyuRealtime:
                 delivered_at = datetime.now(timezone.utc)
                 self.stats["last_delivery_at"] = delivered_at.isoformat()
                 for item in batch:
+                    self._record_quote_latency(item, self._quote_delivery_ages, "quote_delivery_age", delivered_at)
                     age = _latency_ms(item.get("source_updated_at"), delivered_at)
                     if age is not None:
                         self._delivery_ages.append(age)
