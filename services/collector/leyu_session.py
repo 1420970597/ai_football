@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import secrets
 import socket
+import string
 import time
 from typing import Any, Awaitable, Callable, Mapping
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit, urlunsplit
@@ -272,15 +273,53 @@ class LoginProxy:
     def __init__(self, config: Mapping[str, Any]):
         self.config = config
 
+    @staticmethod
+    def _validate_password_template(template: str) -> None:
+        try:
+            fields = [field for _, field, spec, conversion in string.Formatter().parse(template)
+                      if field is not None and (field not in {"password", "session"} or spec or conversion)]
+        except ValueError:
+            raise LeyuError("invalid_proxy_password_template") from None
+        if fields:
+            raise LeyuError("invalid_proxy_password_template")
+
+    def validate_configuration(self) -> None:
+        url = str(self.config.get("leyu_login_proxy_url") or "").strip()
+        extract = str(self.config.get("leyu_login_proxy_extract_url") or "").strip()
+        authkey = str(self.config.get("leyu_login_proxy_authkey") or "").strip()
+        authpwd = str(self.config.get("leyu_login_proxy_authpwd") or "").strip()
+        if bool(authkey) != bool(authpwd):
+            raise LeyuError("proxy_credentials_incomplete")
+        if len(authkey) > 256 or len(authpwd) > 1024 or any(ord(char) < 33 or ord(char) == 127 for char in authkey + authpwd):
+            raise LeyuError("invalid_proxy_credentials")
+        if extract:
+            parts = urlsplit(extract)
+            if parts.scheme != "https" or not parts.netloc or parts.username or parts.password:
+                raise LeyuError("invalid_proxy_extraction_url")
+            api_key = any(value.strip() for value in parse_qs(parts.query).get("key", []))
+            if not api_key and not authkey and not authpwd:
+                raise LeyuError("proxy_credentials_missing")
+        if url:
+            candidate = url if "://" in url else "http://" + url
+            try:
+                parts = urlsplit(candidate)
+                valid = (parts.scheme in {"http", "https"} and parts.hostname and parts.port
+                         and parts.path in {"", "/"} and not parts.query and not parts.fragment)
+            except ValueError:
+                valid = False
+            if not valid:
+                raise LeyuError("invalid_login_proxy")
+        template = str(self.config.get("leyu_login_proxy_password_template") or "")
+        self._validate_password_template(template)
+
     async def acquire(self, direct: httpx.AsyncClient) -> ProxyLease | None:
+        self.validate_configuration()
         url = str(self.config.get("leyu_login_proxy_url") or "").strip()
         extract = str(self.config.get("leyu_login_proxy_extract_url") or "").strip()
         if not url and not extract:
             return None
         authkey = str(self.config.get("leyu_login_proxy_authkey") or "").strip()
         authpwd = str(self.config.get("leyu_login_proxy_authpwd") or "").strip()
-        if extract and not authkey and not authpwd:
-            raise LeyuError("proxy_credentials_missing")
         if bool(authkey) != bool(authpwd):
             raise LeyuError("proxy_credentials_incomplete")
         if (len(authkey) > 256 or len(authpwd) > 1024
@@ -332,8 +371,7 @@ class LoginProxy:
             # 提供方FAQ秒单位上限59；本地租约再预留5秒，不延长为长期出口。
             template = "{password}_session-{session}_lifetime-59s_killswitch-1"
         if template:
-            if any(field not in {"password", "session"} for field in re.findall(r"\{([^{}]+)\}", template)):
-                raise LeyuError("invalid_proxy_password_template")
+            self._validate_password_template(template)
             password = template.format(password=unquote(parts.password or ""), session=secrets.token_hex(4))
             user = quote(unquote(parts.username or ""), safe="")
             hostname = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname

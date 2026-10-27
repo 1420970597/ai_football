@@ -45,7 +45,9 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
             "auth": {"state": "authorized", "account": {"id": "private"}},
             "source_health": {
                 "leyu": {"state": "unavailable", "last_error": "websocket_http_403", "fixtures": 3, "config_version": 7},
-                "websocket": {"state": "backoff", "reconnects": 2},
+                "websocket": {"state": "backoff", "reconnects": 2, "queue_depth": 4,
+                              "source_lag_ms_p95": 1250.5, "delivery_age_ms_p95": 2100,
+                              "raw_payload": {"token": "must-not-leak"}},
                 "future": {"secret": "must-not-leak"},
             },
         }
@@ -56,6 +58,10 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("reachable", result["state"])
         self.assertEqual("websocket_http_403", result["sources"]["leyu"]["last_error"])
         self.assertEqual(7, result["sources"]["leyu"]["config_version"])
+        self.assertEqual(4, result["sources"]["websocket"]["queue_depth"])
+        self.assertEqual(1250.5, result["sources"]["websocket"]["source_lag_ms_p95"])
+        self.assertEqual(2100, result["sources"]["websocket"]["delivery_age_ms_p95"])
+        self.assertNotIn("raw_payload", result["sources"]["websocket"])
         self.assertNotIn("account", json.dumps(result))
         self.assertNotIn("future", result["sources"])
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from datetime import datetime, timezone
 import inspect
 import json
@@ -25,6 +25,27 @@ SUBSCRIPTION_BATCH_SIZE = 200
 MAX_PUSH_BYTES = 1024 * 1024
 PUSH_COMMANDS = frozenset({"C2", "C21", "C101", "C102", "C1021", "C103", "C104", "C105", "C106", "C109", "C110", "C118", "C1301", "C303", "C302"})
 ODDS_COMMANDS = frozenset({"C105", "C2", "C21"})
+LATENCY_WINDOW_SIZE = 256
+
+
+def _latency_ms(value: str | None, reference: datetime) -> float | None:
+    if not value:
+        return None
+    try:
+        source = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if source.tzinfo is None:
+        return None
+    lag = (reference - source.astimezone(timezone.utc)).total_seconds() * 1000
+    return lag if 0 <= lag <= 7 * 24 * 60 * 60 * 1000 else None
+
+
+def _percentile(values: deque[float], quantile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return round(ordered[min(len(ordered) - 1, int((len(ordered) - 1) * quantile))], 1)
 
 
 def subscription_frames(mids: Iterable[str], *, batch_size: int = SUBSCRIPTION_BATCH_SIZE) -> list[dict[str, Any]]:
@@ -124,8 +145,67 @@ class LeyuRealtime:
         self.on_resync = on_resync
         self.connector = connector
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max(1, min(queue_size, 256)))
-        self.stats: dict[str, Any] = {"state": "stopped", "reconnects": 0, "received": 0, "dropped": 0, "last_error": ""}
+        self._source_lags: deque[float] = deque(maxlen=LATENCY_WINDOW_SIZE)
+        self._queue_waits: deque[float] = deque(maxlen=LATENCY_WINDOW_SIZE)
+        self._delivery_ages: deque[float] = deque(maxlen=LATENCY_WINDOW_SIZE)
+        self.stats: dict[str, Any] = {
+            "state": "stopped", "reconnects": 0, "received": 0, "events_received": 0,
+            "events_delivered": 0, "batches_delivered": 0, "dropped": 0,
+            "delivery_failures": 0, "queue_depth": 0, "queue_high_water": 0,
+            "subscription_requests_sent": 0,
+            "source_lag_ms_p50": None, "source_lag_ms_p95": None,
+            "source_lag_samples": 0, "queue_wait_ms_p50": None,
+            "queue_wait_ms_p95": None, "queue_wait_samples": 0,
+            "delivery_age_ms_p50": None, "delivery_age_ms_p95": None,
+            "delivery_age_samples": 0,
+            "last_event_at": None, "last_delivery_at": None, "last_error": "",
+        }
         self._gap = False
+
+    def _record_event(self, event: Mapping[str, Any]) -> None:
+        received_at = event.get("received_at")
+        self.stats["last_event_at"] = received_at
+        try:
+            received = datetime.fromisoformat(str(received_at).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            received = None
+        lag = _latency_ms(event.get("source_updated_at"), received) if received and received.tzinfo else None
+        if lag is not None:
+            self._source_lags.append(lag)
+            self.stats.update(
+                source_lag_ms_p50=_percentile(self._source_lags, 0.5),
+                source_lag_ms_p95=_percentile(self._source_lags, 0.95),
+                source_lag_samples=len(self._source_lags),
+            )
+
+    def _record_queue_wait(self, event: Mapping[str, Any]) -> None:
+        try:
+            received = datetime.fromisoformat(str(event.get("received_at")).replace("Z", "+00:00"))
+            if received.tzinfo is None:
+                return
+            wait_ms = max(0.0, (datetime.now(timezone.utc) - received.astimezone(timezone.utc)).total_seconds() * 1000)
+        except (TypeError, ValueError):
+            return
+        self._queue_waits.append(wait_ms)
+        self.stats.update(
+            queue_wait_ms_p50=_percentile(self._queue_waits, 0.5),
+            queue_wait_ms_p95=_percentile(self._queue_waits, 0.95),
+            queue_wait_samples=len(self._queue_waits),
+        )
+
+    def _enqueue_event(self, event: dict[str, Any]) -> bool:
+        self._record_event(event)
+        try:
+            self.queue.put_nowait(event)
+        except asyncio.QueueFull:
+            self.stats["dropped"] += 1
+            self.stats["queue_depth"] = self.queue.qsize()
+            self._gap = True
+            return False
+        self.stats["events_received"] += 1
+        self.stats["queue_depth"] = self.queue.qsize()
+        self.stats["queue_high_water"] = max(self.stats["queue_high_water"], self.queue.qsize())
+        return True
 
     async def _subscriptions(self, socket, previous: dict[str, dict]) -> dict[str, dict]:
         mids = await _value(self.mids_provider())
@@ -139,7 +219,9 @@ class LeyuRealtime:
         for key, frame in current.items():
             if previous.get(key) != frame:
                 await socket.send(json.dumps(frame, separators=(",", ":")))
-        self.stats["subscribed_fixtures"] = sum(len(frame["list"]) for frame in frames)
+        requested = sum(len(frame["list"]) for frame in frames)
+        self.stats["subscription_requests_sent"] = requested
+        self.stats["subscribed_fixtures"] = requested
         return current
 
     async def _consume(self, stop: asyncio.Event) -> None:
@@ -171,11 +253,15 @@ class LeyuRealtime:
                 event = await asyncio.wait_for(self.queue.get(), timeout=0.25)
             except asyncio.TimeoutError:
                 continue
+            self._record_queue_wait(event)
             combined: OrderedDict[tuple, dict[str, Any]] = OrderedDict()
             items = [event]
             while not self.queue.empty() and len(items) < 100:
                 items.append(self.queue.get_nowait())
+            self.stats["queue_depth"] = self.queue.qsize()
             for item in items:
+                if item is not event:
+                    self._record_queue_wait(item)
                 raw = item.get("payload", {})
                 # hls2 为多选项快照；不同结构不可仅按比赛覆盖而丢独立盘口变动。
                 identity = json.dumps(raw, sort_keys=True, separators=(",", ":"))
@@ -185,11 +271,26 @@ class LeyuRealtime:
                 if any(item.get("requires_resync") for item in combined.values()):
                     if not await deliver(self.on_resync):
                         return
-                if not await deliver(self.on_batch, list(combined.values())):
+                batch = list(combined.values())
+                if not await deliver(self.on_batch, batch):
                     return
+                self.stats["events_delivered"] += len(batch)
+                self.stats["batches_delivered"] += 1
+                delivered_at = datetime.now(timezone.utc)
+                self.stats["last_delivery_at"] = delivered_at.isoformat()
+                for item in batch:
+                    age = _latency_ms(item.get("source_updated_at"), delivered_at)
+                    if age is not None:
+                        self._delivery_ages.append(age)
+                self.stats.update(
+                    delivery_age_ms_p50=_percentile(self._delivery_ages, 0.5),
+                    delivery_age_ms_p95=_percentile(self._delivery_ages, 0.95),
+                    delivery_age_samples=len(self._delivery_ages),
+                )
             finally:
                 for _ in items:
                     self.queue.task_done()
+                self.stats["queue_depth"] = self.queue.qsize()
 
     async def run(self, stop: asyncio.Event) -> None:
         failures = 0
@@ -246,11 +347,7 @@ class LeyuRealtime:
                                 self._gap = True
                                 continue
                             for event in events:
-                                try:
-                                    self.queue.put_nowait(event)
-                                except asyncio.QueueFull:
-                                    self.stats["dropped"] += 1
-                                    self._gap = True
+                                self._enqueue_event(event)
                 except (LeyuError, OSError, ConnectionClosed, InvalidStatus, TimeoutError) as exc:
                     if isinstance(exc, LeyuError):
                         category = exc.category

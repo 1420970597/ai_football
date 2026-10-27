@@ -45,6 +45,19 @@ class SignerTests(unittest.TestCase):
 
 
 class ProxyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_proxy_configuration_is_validated_before_extraction(self):
+        proxy = LoginProxy({"leyu_login_proxy_extract_url": "https://provider.invalid/get",
+                            "leyu_login_proxy_authkey": "only-one-half"})
+        with self.assertRaisesRegex(LeyuError, "proxy_credentials_incomplete"):
+            proxy.validate_configuration()
+        proxy = LoginProxy({"leyu_login_proxy_url": "proxy.invalid:not-a-port"})
+        with self.assertRaisesRegex(LeyuError, "invalid_login_proxy"):
+            proxy.validate_configuration()
+        for template in ("{password", "{password!r}", "{unknown}"):
+            proxy = LoginProxy({"leyu_login_proxy_password_template": template})
+            with self.assertRaisesRegex(LeyuError, "invalid_proxy_password_template"):
+                proxy.validate_configuration()
+
     async def test_direct_proxy_gets_short_fresh_sticky_session(self):
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(500))) as direct:
             proxy = LoginProxy({"leyu_login_proxy_url": "http://sample:password@geo.iproyal.com:12321"})
@@ -73,6 +86,15 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(LeyuError, "proxy_credentials_missing"):
                 await LoginProxy({"leyu_login_proxy_extract_url": "https://provider.invalid/get"}).acquire(direct)
         self.assertEqual([], calls)
+
+    async def test_extraction_api_key_is_a_complete_auth_method_without_proxy_credentials(self):
+        payload = {"code": "SUCCESS", "data": [{"server": "8.8.8.8:1234", "proxy_ip": "1.1.1.1"}]}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))) as direct:
+            lease = await LoginProxy({
+                "leyu_login_proxy_extract_url": "https://provider.invalid/get?key=api-key-only&num=1",
+            }).acquire(direct)
+        self.assertEqual("http://8.8.8.8:1234", lease.url)
+        self.assertEqual("1.1.1.1", lease.egress_ip)
 
     async def test_invalid_extraction_does_not_leak_provider_body(self):
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"code": "secret-value"}))) as direct:

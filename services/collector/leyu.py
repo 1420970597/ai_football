@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import json
+import math
 import secrets
 import time
-from typing import Any, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlsplit
 
 import httpx
@@ -73,7 +74,7 @@ class LeyuClient:
         self.last_report: dict[str, Any] = {}
 
     @classmethod
-    def from_config(cls, config: Mapping[str, Any], **kwargs) -> "LeyuClient":
+    def validate_collection_budget(cls, config: Mapping[str, Any]) -> dict[str, Any]:
         def text(name: str, default: str = "") -> str:
             return str(config.get(name) or default).strip()
         try:
@@ -82,13 +83,36 @@ class LeyuClient:
             interval = float(text("leyu_batch_interval_seconds", str(DEFAULT_BATCH_INTERVAL)))
         except ValueError:
             raise LeyuError("invalid_collection_budget") from None
+        if not (1 <= batch_size <= 50 and 1 <= concurrency <= 4 and math.isfinite(interval) and 0 <= interval <= 5):
+            raise LeyuError("invalid_collection_budget")
+        return {"batch_size": batch_size, "concurrency": concurrency, "batch_interval": interval}
+
+    @classmethod
+    def validate_config(cls, config: Mapping[str, Any]) -> dict[str, Any]:
+        def text(name: str, default: str = "") -> str:
+            return str(config.get(name) or default).strip()
+        budget = cls.validate_collection_budget(config)
+        base_url = safe_base_url(text("leyu_api_base"))
+        request_id = text("leyu_request_id")
+        if not request_id:
+            raise LeyuError("authorized_session_missing")
+        origin = safe_base_url(text("leyu_origin")) if text("leyu_origin") else base_url
+        return {
+            "base_url": base_url, "request_id": request_id, "origin": origin,
+            "token": text("leyu_business_cookie_token"), "cookie": text("leyu_cookie"),
+            "user_agent": text("leyu_user_agent", DEFAULT_USER_AGENT), "cuid": text("leyu_cuid"),
+            "check_id_base": text("leyu_check_id_base"), **budget,
+        }
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any], **kwargs) -> "LeyuClient":
+        values = cls.validate_config(config)
         return cls(
             # App token 只用于 App 续期；业务 Cookie 必须有独立明确配置。
-            text("leyu_api_base"), text("leyu_business_cookie_token"), text("leyu_request_id"),
-            origin=text("leyu_origin"), cookie=text("leyu_cookie"),
-            user_agent=text("leyu_user_agent", DEFAULT_USER_AGENT), cuid=text("leyu_cuid"),
-            check_id_base=text("leyu_check_id_base"), batch_size=batch_size,
-            concurrency=concurrency, batch_interval=interval, **kwargs,
+            values["base_url"], values["token"], values["request_id"], origin=values["origin"],
+            cookie=values["cookie"], user_agent=values["user_agent"], cuid=values["cuid"],
+            check_id_base=values["check_id_base"], batch_size=values["batch_size"],
+            concurrency=values["concurrency"], batch_interval=values["batch_interval"], **kwargs,
         )
 
     def headers(self) -> dict[str, str]:
@@ -136,14 +160,14 @@ class LeyuClient:
         except httpx.HTTPError:
             raise LeyuError("upstream_transport_error") from None
 
-    async def fetch(self) -> list[dict[str, Any]]:
+    async def fetch(self, *, odds_mids: Iterable[str] | Callable[[list[dict[str, Any]]], Iterable[str]] | None = None) -> list[dict[str, Any]]:
         try:
             async with asyncio.timeout(120):
-                return await self._fetch()
+                return await self._fetch(odds_mids=odds_mids)
         except TimeoutError:
             raise LeyuError("collection_deadline_exceeded") from None
 
-    async def _fetch(self) -> list[dict[str, Any]]:
+    async def _fetch(self, *, odds_mids: Iterable[str] | Callable[[list[dict[str, Any]]], Iterable[str]] | None = None) -> list[dict[str, Any]]:
         """完整赛程 + 有预算批次补盘；失败批次不会被当作完整空盘口快照。"""
         limits = httpx.Limits(max_connections=self.concurrency + 1, max_keepalive_connections=self.concurrency + 1)
         timeout = httpx.Timeout(20, connect=5, pool=5)
@@ -160,7 +184,13 @@ class LeyuClient:
                 if raw_rows:
                     raise LeyuError("no_valid_fixtures")
             by_id = {fixture["source_match_id"]: fixture for fixture in fixtures}
+            for fixture in fixtures:
+                fixture["markets"] = []
+                fixture["markets_complete"] = False
             mids = list(by_id)
+            requested = odds_mids(fixtures) if callable(odds_mids) else odds_mids
+            selected = set(mids) if requested is None else {str(mid) for mid in requested} & set(by_id)
+            selected_mids = [mid for mid in mids if mid in selected]
             failures: list[dict[str, Any]] = []
             semaphore = asyncio.Semaphore(self.concurrency)
             rate_limit = asyncio.Lock()
@@ -247,8 +277,8 @@ class LeyuClient:
                             by_id[mid]["markets_complete"] = False
                             by_id[mid]["collection_error"] = exc.category
 
-            tasks = [asyncio.create_task(fetch_batch(mids[start:start + self.batch_size]))
-                     for start in range(0, len(mids), self.batch_size)]
+            tasks = [asyncio.create_task(fetch_batch(selected_mids[start:start + self.batch_size]))
+                     for start in range(0, len(selected_mids), self.batch_size)]
             try:
                 if tasks:
                     await asyncio.gather(*tasks)
@@ -259,6 +289,7 @@ class LeyuClient:
                 raise
             self.last_report = {
                 "fixtures": len(fixtures),
+                "odds_requested_fixtures": len(selected_mids),
                 "complete_market_fixtures": sum(bool(f.get("markets_complete")) for f in fixtures),
                 "single_match_fallbacks": single_match_fallbacks,
                 "failed_batches": failures,

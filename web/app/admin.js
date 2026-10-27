@@ -63,11 +63,16 @@ async function loadDiagnostics() {
     const counter = (value) =>
       value ? String(value.count) + (value.capped ? "+" : "") : "未核验";
     const leyu = data.collector?.sources?.leyu || {};
+    const websocket = data.collector?.sources?.websocket || {};
     const leyuVersion = leyu.config_version
       ? ` · 乐鱼采集器配置版本 ${esc(leyu.config_version)}`
       : " · 乐鱼采集器配置版本未回执";
+    const metric = (value, suffix = "") =>
+      value === null || value === undefined ? "暂无样本" : esc(value) + suffix;
+    const leyuIssue = leyu.config_validation_error || leyu.last_error || "无错误分类";
+    const liveStats = `乐鱼采集 ${esc(leyu.state || "未知")}（${esc(leyuIssue)}） · 实时连接 ${esc(websocket.state || "未知")} · 重连 ${metric(websocket.reconnects)} · 订阅请求数 ${metric(websocket.subscription_requests_sent)} · 接收帧 ${metric(websocket.received)} · 入队/写入 ${metric(websocket.events_received)}/${metric(websocket.events_delivered)} · 丢弃 ${metric(websocket.dropped)} · 写入失败 ${metric(websocket.delivery_failures)} · 队列 ${metric(websocket.queue_depth)}（高水位 ${metric(websocket.queue_high_water)}） · 源->接收 P95 ${metric(websocket.source_lag_ms_p95, "ms")}（${metric(websocket.source_lag_samples)} 样本） · 排队 P95 ${metric(websocket.queue_wait_ms_p95, "ms")} · 源->落库 P95 ${metric(websocket.delivery_age_ms_p95, "ms")}（${metric(websocket.delivery_age_samples)} 样本） · 最近事件 ${stamp(websocket.last_event_at)}`;
     $("#admin-diagnostics").innerHTML =
-      `<p class="form-note">检查于 ${stamp(data.checked_at)} · 数据库 ${esc(data.database)} · 结构 ${esc(data.schema === "verified" ? "已核验" : data.schema === "migration_required" ? "需要迁移" : "状态未知")}${leyuVersion}</p><div class="status-grid">${[
+      `<p class="form-note">检查于 ${stamp(data.checked_at)} · 数据库 ${esc(data.database)} · 结构 ${esc(data.schema === "verified" ? "已核验" : data.schema === "migration_required" ? "需要迁移" : "状态未知")}${leyuVersion}</p><p class="form-note">${liveStats}</p><div class="status-grid">${[
         ["待审核", data.review_queue],
         ["媒体待上传", data.pending_media],
         ["未解决/失败", data.unresolved_reviews],
@@ -145,13 +150,14 @@ async function loadSettings() {
     const runtime = data.runtime || {};
     const runtimeLabel = {
       applied: "采集器已应用",
+      invalid: "新配置校验失败，仍用上版采集",
       pending: "等待采集器读取",
       unavailable: "采集器不可达",
     }[runtime.state] || "采集器状态未知";
     const appliedVersion = runtime.applied_version ?? "无回执";
-    const reason = runtime.reason ? " · " + runtime.reason : "";
+    const reason = runtime.reason ? " · " + esc(runtime.reason) : "";
     $("#leyu-version").textContent =
-      `配置版本 ${leyuVersion ?? "未建立"} · ${runtimeLabel} ${appliedVersion}${reason}`;
+      `配置版本 ${leyuVersion ?? "未建立"} · ${runtimeLabel} ${appliedVersion} · 最近校验 ${stamp(runtime.validated_at)}${reason}`;
     for (const form of $$(".settings-form"))
       for (const input of $$("input[name]", form)) {
         const item = settings[input.name];

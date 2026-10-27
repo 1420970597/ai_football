@@ -94,8 +94,10 @@ class RealtimeLoopTests(unittest.IsolatedAsyncioTestCase):
         socket = type("Socket", (), {"send": AsyncMock()})()
         service = LeyuRealtime(lambda: {}, lambda: values, AsyncMock(), AsyncMock())
         previous = await service._subscriptions(socket, {})
+        self.assertEqual(2, service.stats["subscription_requests_sent"])
         values[:] = ["2", "3"]
         await service._subscriptions(socket, previous)
+        self.assertEqual(2, service.stats["subscription_requests_sent"])
         sent = [json.loads(args.args[0]) for args in socket.send.await_args_list]
         self.assertEqual("1", sent[1]["cclose"])
         self.assertEqual(["2", "3"], [row["mid"] for row in sent[2]["list"]])
@@ -168,6 +170,82 @@ class RealtimeLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, service.stats["delivery_failures"])
         self.assertNotIn("private-response", str(service.stats))
         self.assertEqual(0, service.queue._unfinished_tasks)
+
+    async def test_latency_queue_and_delivery_metrics_use_bounded_scalar_samples(self):
+        now = datetime.now(timezone.utc)
+        source_time = int((now.timestamp() - 2) * 1000)
+        event = push_events({"cmd": "C105", "cd": snapshot(time=str(source_time))}, received_at=now)[0]
+        stop = asyncio.Event()
+        delivered = []
+
+        async def on_batch(events):
+            delivered.extend(events)
+            stop.set()
+
+        service = LeyuRealtime(lambda: {}, lambda: [], on_batch, AsyncMock())
+        service._record_event(event)
+        service.queue.put_nowait(event)
+        service.stats["queue_depth"] = service.queue.qsize()
+        service.stats["queue_high_water"] = service.queue.qsize()
+        await service._consume(stop)
+        self.assertEqual(1, len(delivered))
+        self.assertEqual(1, service.stats["source_lag_samples"])
+        self.assertGreaterEqual(service.stats["source_lag_ms_p50"], 1500)
+        self.assertEqual(1, service.stats["queue_wait_samples"])
+        self.assertEqual(1, service.stats["events_delivered"])
+        self.assertEqual(1, service.stats["batches_delivered"])
+        self.assertEqual(1, service.stats["delivery_age_samples"])
+        self.assertGreaterEqual(service.stats["delivery_age_ms_p95"], 1500)
+        self.assertEqual(1, service.stats["queue_high_water"])
+        self.assertEqual(0, service.stats["queue_depth"])
+        self.assertTrue(service.stats["last_event_at"])
+        self.assertTrue(service.stats["last_delivery_at"])
+
+    async def test_queue_overflow_counts_drop_and_forces_resync_before_delivery(self):
+        first = {"fixture_id": "leyu:1", "command": "C103", "payload": {"mid": "1", "msc": "S1|1:0"}}
+        second = {"fixture_id": "leyu:1", "command": "C103", "payload": {"mid": "1", "msc": "S1|2:0"}}
+        service = LeyuRealtime(lambda: {}, lambda: [], AsyncMock(), AsyncMock(), queue_size=1)
+        self.assertTrue(service._enqueue_event(first))
+        self.assertFalse(service._enqueue_event(second))
+        self.assertEqual(1, service.stats["dropped"])
+        self.assertEqual(1, service.stats["queue_high_water"])
+        self.assertEqual(1, service.stats["queue_depth"])
+        self.assertTrue(service._gap)
+        delivered = []
+        async def resync():
+            delivered.append("resync")
+        async def on_batch(batch):
+            delivered.extend(batch)
+            stop.set()
+        stop = asyncio.Event()
+        service.on_resync = resync
+        service.on_batch = on_batch
+        await service._consume(stop)
+        self.assertEqual("resync", delivered[0])
+        self.assertEqual([first], delivered[1:])
+        self.assertEqual(0, service.stats["queue_depth"])
+
+    async def test_identical_events_are_deduplicated_without_collapsing_distinct_updates(self):
+        first = {"fixture_id": "leyu:1", "command": "C103", "payload": {"mid": "1", "msc": "S1|1:0"}}
+        second = {"fixture_id": "leyu:1", "command": "C103", "payload": {"mid": "1", "msc": "S1|2:0"}}
+        delivered = []
+        stop = asyncio.Event()
+        async def on_batch(batch):
+            delivered.extend(batch)
+            stop.set()
+        service = LeyuRealtime(lambda: {}, lambda: [], on_batch, AsyncMock())
+        for event in (first, first.copy(), second):
+            service._enqueue_event(event)
+        await service._consume(stop)
+        self.assertEqual([first, second], delivered)
+
+    def test_unknown_or_future_source_time_does_not_pollute_latency_sample(self):
+        service = LeyuRealtime(lambda: {}, lambda: [], AsyncMock(), AsyncMock())
+        service._record_event({"received_at": datetime.now(timezone.utc).isoformat(), "source_updated_at": None})
+        service._record_event({"received_at": datetime.now(timezone.utc).isoformat(),
+                               "source_updated_at": "2999-01-01T00:00:00+00:00"})
+        self.assertEqual(0, service.stats["source_lag_samples"])
+        self.assertIsNone(service.stats["source_lag_ms_p95"])
 
 
 if __name__ == "__main__":

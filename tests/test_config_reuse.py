@@ -113,6 +113,16 @@ class ComposeBoundaryTests(unittest.TestCase):
     def test_valid_minimal_service_boundary(self):
         self.assertEqual([], validate_compose(self.fixture(), Path.cwd()))
 
+    def test_collector_refresh_budgets_are_the_only_added_runtime_controls(self):
+        expected = {
+            "LIVE_ODDS_REFRESH_SECONDS", "PREGAME_NEAR_HOURS",
+            "PREGAME_NEAR_REFRESH_SECONDS", "PREGAME_FAR_REFRESH_SECONDS",
+        }
+        self.assertTrue(expected.issubset(PERMITTED["collector"]))
+        document = self.fixture()
+        document["services"]["collector"]["environment"]["UNREVIEWED_SETTING"] = "fixture"
+        self.assertTrue(any("非白名单配置键" in message for message in validate_compose(document, Path.cwd())))
+
     def test_provider_key_does_not_leak_into_api_or_collector(self):
         document = self.fixture()
         document["services"]["api"]["environment"]["HERMES_PROVIDER_API_KEY"] = "fixture-only"

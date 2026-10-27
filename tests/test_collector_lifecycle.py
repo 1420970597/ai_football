@@ -24,6 +24,8 @@ class FakeRuntime:
     def __init__(self, *args):
         self.config = {}
         self.version = 1
+        self.config_validated_at = None
+        self.config_validation_error = ""
         self.fixtures = {}
         self.last_report = {"complete_market_fixtures": 0}
         self.collect = AsyncMock(return_value=[])
@@ -85,7 +87,7 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         stop = asyncio.Event()
         failed = asyncio.Event()
 
-        async def collect():
+        async def collect(**kwargs):
             failed.set()
             raise LeyuError("upstream_timeout")
 
@@ -93,6 +95,8 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         async def sync():
             await failed.wait()
+            while self.service.status["leyu"]["last_error"] != "upstream_timeout":
+                await asyncio.sleep(0)
             stop.set()
             return {"state": "disabled"}
 
@@ -105,7 +109,7 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         stop = asyncio.Event()
         self.service.telegram.sync_once.side_effect = RuntimeError("secret-body")
 
-        async def collect():
+        async def collect(**kwargs):
             await asyncio.sleep(0)
             stop.set()
             return [{"id": "leyu:1", "markets": []}]
@@ -164,6 +168,18 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         more = list(fixture_batches([{"id": str(n), "markets": [{}] * 100} for n in range(25)]))
         self.assertEqual([20, 5], [len(batch) for batch in more])
 
+    async def test_upload_sends_only_due_odds_without_marking_partial_snapshot_complete(self):
+        fixtures = [
+            {"id": "leyu:live", "source_match_id": "live", "markets_complete": True, "markets": [{"price": "2.1"}]},
+            {"id": "leyu:far", "source_match_id": "far", "markets_complete": True, "markets": [{"price": "1.9"}]},
+        ]
+        await self.service.upload(fixtures, odds_mids=["live"])
+        sent = self.posts[-1]
+        self.assertEqual([{"price": "2.1"}], sent[0]["markets"])
+        self.assertTrue(sent[0]["markets_complete"])
+        self.assertEqual([], sent[1]["markets"])
+        self.assertFalse(sent[1]["markets_complete"])
+
     async def test_unknown_push_schedules_http_without_awaiting_full_resync(self):
         await self.service.on_push([{"fixture_id": "leyu:unknown"}])
         self.assertTrue(self.service.resync.is_set())
@@ -188,6 +204,31 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CollectionBudgetTests(unittest.TestCase):
+    def test_odds_refresh_budgets_prioritize_live_and_near_kickoff_and_forget_removed_matches(self):
+        service = CollectorService.__new__(CollectorService)
+        service.live_odds_refresh_seconds = 20
+        service.pregame_near_hours = 2
+        service.pregame_near_refresh_seconds = 60
+        service.pregame_far_refresh_seconds = 300
+        service._odds_refresh_at = {}
+        wall = datetime(2026, 10, 27, 12, tzinfo=timezone.utc)
+        fixtures = [
+            {"source_match_id": "live", "phase": "live", "kickoff_at": wall.isoformat()},
+            {"source_match_id": "near", "phase": "scheduled", "kickoff_at": (wall + timedelta(hours=1)).isoformat()},
+            {"source_match_id": "far", "phase": "scheduled", "kickoff_at": (wall + timedelta(hours=4)).isoformat()},
+            {"source_match_id": "finished", "phase": "finished", "kickoff_at": wall.isoformat()},
+        ]
+        self.assertEqual(["live", "near", "far"], service.odds_due_mids(fixtures, now=100, wall_now=wall))
+        service.mark_odds_refreshed(["live", "near", "far"], now=100)
+        self.assertEqual([], service.odds_due_mids(fixtures, now=119, wall_now=wall))
+        self.assertEqual(["live"], service.odds_due_mids(fixtures, now=120, wall_now=wall))
+        service.mark_odds_refreshed(["live"], now=120)
+        self.assertEqual(["live", "near"], service.odds_due_mids(fixtures, now=160, wall_now=wall))
+        service.mark_odds_refreshed(["live", "near"], now=160)
+        self.assertEqual(["live", "near", "far"], service.odds_due_mids(fixtures, now=400, wall_now=wall))
+        service.odds_due_mids([row for row in fixtures if row["source_match_id"] != "far"], now=401, wall_now=wall)
+        self.assertNotIn("far", service._odds_refresh_at)
+
     def test_oversized_market_snapshot_never_silently_truncated(self):
         with self.assertRaises(LeyuError):
             list(fixture_batches([{"id": "1", "markets": [{}] * 501}]))

@@ -48,6 +48,81 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             config = await runtime.load()
         self.assertEqual({"leyu_user_agent": "configured-agent"}, config)
 
+    async def test_invalid_candidate_keeps_previous_config_revision_and_validation_time(self):
+        previous = {"leyu_api_base": "https://working.invalid", "leyu_request_id": "working-session"}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "version": 8, "items": {"leyu_api_base": "file:///etc/passwd", "leyu_request_id": "replacement"},
+        }))) as api:
+            runtime = LeyuRuntime(api, "https://api.invalid/internal")
+            runtime.config = previous.copy()
+            runtime.version = 6
+            runtime.config_validated_at = "2026-10-20T00:00:00+00:00"
+            with self.assertRaises(LeyuError) as raised:
+                await runtime.load()
+        self.assertEqual("invalid_base_url", raised.exception.category)
+        self.assertEqual(previous, runtime.config)
+        self.assertEqual(6, runtime.version)
+        self.assertEqual("2026-10-20T00:00:00+00:00", runtime.config_validated_at)
+        self.assertEqual("invalid_base_url", runtime.config_validation_error)
+
+    async def test_collect_uses_last_valid_session_when_hot_configuration_is_invalid(self):
+        previous = {"leyu_api_base": "https://working.invalid", "leyu_request_id": "working-session"}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "version": 8, "items": {"leyu_api_base": "file:///etc/passwd", "leyu_request_id": "replacement"},
+        }))) as api:
+            runtime = LeyuRuntime(api, "https://api.invalid/internal")
+            runtime.config = previous.copy()
+            runtime.version = 6
+            client = SimpleNamespace(fetch=AsyncMock(return_value=[]), last_report={"fixtures": 0})
+            with patch("services.collector.leyu_runtime.LeyuClient.from_config", return_value=client):
+                self.assertEqual([], await runtime.collect())
+        client.fetch.assert_awaited_once()
+        self.assertEqual(previous, runtime.config)
+        self.assertEqual(6, runtime.version)
+        self.assertEqual("invalid_base_url", runtime.config_validation_error)
+        self.assertEqual(6, runtime.last_report["config_version"])
+
+    async def test_partial_odds_refresh_retains_last_projection_without_claiming_completeness(self):
+        previous_quote = {"market_id": "4", "period": "full_time", "line": "-0.75", "selection": "home",
+                          "price": "2.11", "source_updated_at": "2026-10-27T12:00:00+00:00"}
+        self.runtime.fixtures = {"leyu:m1": {"id": "leyu:m1", "source_match_id": "m1", "phase": "scheduled",
+            "markets": [previous_quote], "markets_complete": True}}
+        updated = {"id": "leyu:m1", "source_id": "leyu:m1", "source_match_id": "m1", "phase": "scheduled",
+                   "markets": [], "markets_complete": False}
+        client = SimpleNamespace(fetch=AsyncMock(return_value=[updated]), last_report={"odds_requested_fixtures": 0})
+        with patch("services.collector.leyu_runtime.LeyuClient.from_config", return_value=client):
+            result = await self.runtime.collect(odds_mids=[])
+        client.fetch.assert_awaited_once_with(odds_mids=[])
+        self.assertEqual([previous_quote], result[0]["markets"])
+        self.assertFalse(result[0]["markets_complete"])
+        self.assertEqual([previous_quote], self.runtime.fixtures["leyu:m1"]["markets"])
+
+    async def test_invalid_collection_budget_is_rejected_before_revision_acknowledgement(self):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "version": 8, "items": {"leyu_batch_interval_seconds": "nan"},
+        }))) as api:
+            runtime = LeyuRuntime(api, "https://api.invalid/internal")
+            with self.assertRaises(LeyuError) as raised:
+                await runtime.load()
+        self.assertEqual("invalid_collection_budget", raised.exception.category)
+        self.assertEqual(0, runtime.version)
+        self.assertEqual("invalid_collection_budget", runtime.config_validation_error)
+
+    async def test_invalid_proxy_settings_do_not_replace_last_valid_session(self):
+        previous = {"leyu_api_base": "https://working.invalid", "leyu_request_id": "working-session"}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "version": 8, "items": {"leyu_api_base": "https://replacement.invalid", "leyu_request_id": "replacement",
+                                    "leyu_login_proxy_url": "proxy.invalid:not-a-port"},
+        }))) as api:
+            runtime = LeyuRuntime(api, "https://api.invalid/internal")
+            runtime.config = previous.copy()
+            runtime.version = 6
+            with self.assertRaises(LeyuError) as raised:
+                await runtime.load()
+        self.assertEqual("invalid_login_proxy", raised.exception.category)
+        self.assertEqual(previous, runtime.config)
+        self.assertEqual(6, runtime.version)
+
     async def test_explicit_expiry_renews_once_then_retries_collection(self):
         failed = SimpleNamespace(fetch=AsyncMock(side_effect=AuthExpired("session_expired")))
         healthy = SimpleNamespace(fetch=AsyncMock(return_value=[]), last_report={"fixtures": 0})
@@ -64,7 +139,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(7, self.runtime.last_report["config_version"])
 
     async def test_app_identity_can_bootstrap_before_business_base_exists(self):
-        document = {"version": 1, "items": {"leyu_app_host": "https://app.invalid", "leyu_app_uuid": "authorized-device"}}
+        document = {"version": 1, "items": {"leyu_app_host": "https://app.invalid", "leyu_app_uuid": "authorized-device",
+                                                   "leyu_app_login_name": "authorized-account",
+                                                   "leyu_app_login_password": "isolated-test-password"}}
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=document))) as api:
             runtime = LeyuRuntime(api, "https://api.invalid/internal")
             healthy = SimpleNamespace(fetch=AsyncMock(return_value=[]), last_report={"fixtures": 0})

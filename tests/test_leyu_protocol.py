@@ -204,6 +204,26 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(len(f["markets"]) == 2 for f in fixtures))
         json.dumps(fixtures)
 
+    async def test_selected_odds_refresh_keeps_full_schedule_and_marks_other_quotes_incomplete(self):
+        requested = []
+        async def handler(request):
+            if request.url.path == DEFAULT_FIXTURE_PATH:
+                return httpx.Response(200, json={"code": "0", "data": {"matchsList": [
+                    match("live", ms=1), match("soon", ms=0), match("far", ms=0),
+                ]}})
+            body = json.loads(request.content)
+            requested.extend(body["mids"].split(","))
+            return httpx.Response(200, json={"code": "0", "data": {"data": [market_row(mid) for mid in body["mids"].split(",")]}})
+        client = LeyuClient("https://upstream.invalid", request_id="session", transport=httpx.MockTransport(handler), batch_interval=0)
+        fixtures = await client.fetch(odds_mids=lambda rows: [row["source_match_id"] for row in rows if row["source_match_id"] == "live"])
+        self.assertEqual(["live"], requested)
+        self.assertEqual(3, len(fixtures))
+        self.assertEqual(2, len(fixtures[0]["markets"]))
+        self.assertTrue(fixtures[0]["markets_complete"])
+        self.assertEqual(([], False), (fixtures[1]["markets"], fixtures[1]["markets_complete"]))
+        self.assertEqual(1, client.last_report["odds_requested_fixtures"])
+        self.assertEqual(1, client.last_report["complete_market_fixtures"])
+
     async def test_missing_batch_detail_uses_v1_single_match_odds_endpoint(self):
         async def handler(request):
             if request.url.path == DEFAULT_FIXTURE_PATH:

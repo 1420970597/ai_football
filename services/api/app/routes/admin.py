@@ -310,6 +310,7 @@ async def get_settings(request: Request):
     leyu_health = collector.get("sources", {}).get("leyu", {}) if collector.get("state") == "reachable" else {}
     applied_version = leyu_health.get("config_version")
     runtime_state = (
+        "invalid" if leyu_health.get("config_validation_error") else
         "applied" if applied_version == version else
         "pending" if collector.get("state") == "reachable" else
         "unavailable"
@@ -322,8 +323,9 @@ async def get_settings(request: Request):
             "state": runtime_state,
             "desired_version": version,
             "applied_version": applied_version,
+            "validated_at": leyu_health.get("config_validated_at"),
             "source_state": leyu_health.get("state"),
-            "reason": leyu_health.get("last_error") or collector.get("reason"),
+            "reason": leyu_health.get("last_error") or leyu_health.get("config_validation_error") or collector.get("reason"),
         },
     }
 

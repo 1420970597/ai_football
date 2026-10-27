@@ -57,8 +57,16 @@ async def collector_health(request: Request) -> dict:
             selected = {
                 field: value[field] for field in (
                     "state", "last_error", "last_success_at", "last_push_at",
-                            "fixtures", "accepted", "source_count", "degraded", "config_version",
-                    "reconnects", "last_error", "last_message_at",
+                    "fixtures", "accepted", "last_push_accepted", "source_count", "degraded", "config_version",
+                    "config_validated_at",
+                    "config_validation_error",
+                    "reconnects", "received", "events_received", "events_delivered", "batches_delivered",
+                    "subscribed_fixtures", "subscription_requests_sent",
+                    "dropped", "delivery_failures", "queue_depth", "queue_high_water",
+                    "source_lag_ms_p50", "source_lag_ms_p95", "source_lag_samples",
+                    "queue_wait_ms_p50", "queue_wait_ms_p95", "queue_wait_samples",
+                    "delivery_age_ms_p50", "delivery_age_ms_p95", "delivery_age_samples",
+                    "last_event_at", "last_delivery_at", "last_message_at",
                 ) if field in value
             }
             source_health[key] = {

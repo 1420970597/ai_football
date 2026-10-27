@@ -227,7 +227,15 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
             settings = await self.client.get("/api/v1/admin/settings")
         self.assertEqual(200, settings.status_code, settings.text)
         self.assertEqual({"state": "applied", "desired_version": 1, "applied_version": 1,
-                          "source_state": "unavailable", "reason": "renewal_state_conflict"}, settings.json()["runtime"])
+                          "validated_at": None, "source_state": "unavailable", "reason": "renewal_state_conflict"}, settings.json()["runtime"])
+        with patch("app.routes.admin.collector_health", new=AsyncMock(return_value={
+            "state": "reachable", "sources": {"leyu": {"state": "degraded", "config_version": 1,
+                "config_validated_at": "2026-10-27T00:00:00+00:00", "config_validation_error": "invalid_base_url"}},
+        })):
+            settings = await self.client.get("/api/v1/admin/settings")
+        self.assertEqual({"state": "invalid", "desired_version": 1, "applied_version": 1,
+                          "validated_at": "2026-10-27T00:00:00+00:00", "source_state": "degraded",
+                          "reason": "invalid_base_url"}, settings.json()["runtime"])
         for key in ("leyu_login_proxy_authkey", "leyu_login_proxy_authpwd"):
             item = settings.json()["items"][key]
             self.assertFalse(item["configured"])

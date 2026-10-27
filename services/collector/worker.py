@@ -19,6 +19,10 @@ log = logging.getLogger("platform.collector")
 API_URL = os.environ.get("PLATFORM_API", "http://api:8080/internal").rstrip("/")
 TOKEN = os.environ.get("COLLECTOR_INTERNAL_TOKEN", "")
 INTERVAL = max(10, min(300, int(os.environ.get("COLLECTOR_INTERVAL_SECONDS", "20"))))
+LIVE_ODDS_REFRESH_SECONDS = max(10, min(120, int(os.environ.get("LIVE_ODDS_REFRESH_SECONDS", "20"))))
+PREGAME_NEAR_HOURS = max(1, min(12, int(os.environ.get("PREGAME_NEAR_HOURS", "2"))))
+PREGAME_NEAR_REFRESH_SECONDS = max(30, min(600, int(os.environ.get("PREGAME_NEAR_REFRESH_SECONDS", "60"))))
+PREGAME_FAR_REFRESH_SECONDS = max(60, min(1800, int(os.environ.get("PREGAME_FAR_REFRESH_SECONDS", "300"))))
 
 
 def configure_logging() -> None:
@@ -101,6 +105,10 @@ class CollectorService:
     """单个长期工作器；TG、HTTP与WS独立恢复，远端API承担全部持久化。"""
 
     def __init__(self, api: httpx.AsyncClient, api_url: str, token: str, *, interval: float = INTERVAL,
+                 live_odds_refresh_seconds: float = LIVE_ODDS_REFRESH_SECONDS,
+                 pregame_near_hours: float = PREGAME_NEAR_HOURS,
+                 pregame_near_refresh_seconds: float = PREGAME_NEAR_REFRESH_SECONDS,
+                 pregame_far_refresh_seconds: float = PREGAME_FAR_REFRESH_SECONDS,
                  base_config: Mapping[str, Any] | None = None, telegram_factory=TelegramCollector,
                  runtime_factory=LeyuRuntime, realtime_factory=LeyuRealtime):
         if not token:
@@ -109,6 +117,11 @@ class CollectorService:
         self.api_url = api_url.rstrip("/")
         self.token = token
         self.interval = max(1, interval)
+        self.live_odds_refresh_seconds = max(1, live_odds_refresh_seconds)
+        self.pregame_near_hours = max(0, pregame_near_hours)
+        self.pregame_near_refresh_seconds = max(1, pregame_near_refresh_seconds)
+        self.pregame_far_refresh_seconds = max(self.pregame_near_refresh_seconds, pregame_far_refresh_seconds)
+        self._odds_refresh_at: dict[str, float] = {}
         self.runtime = runtime_factory(api, self.api_url, base_config)
         self.telegram = telegram_factory({}, api=api, api_url=self.api_url + "/telegram")
         self.resync = asyncio.Event()
@@ -124,12 +137,56 @@ class CollectorService:
         return [fixture["source_match_id"] for fixture in self.runtime.fixtures.values()
                 if fixture.get("phase") in {"scheduled", "live"} and fixture.get("source_match_id")]
 
+    def odds_due_mids(self, fixtures: list[dict[str, Any]], *, now: float | None = None,
+                      wall_now: datetime | None = None) -> list[str]:
+        monotonic_now = time.monotonic() if now is None else now
+        observed = wall_now or datetime.now(timezone.utc)
+        due = []
+        active = set()
+        for fixture in fixtures:
+            mid = str(fixture.get("source_match_id") or "")
+            if not mid:
+                continue
+            phase = fixture.get("phase")
+            if phase not in {"scheduled", "live"}:
+                continue
+            active.add(mid)
+            if phase == "live":
+                budget = self.live_odds_refresh_seconds
+            else:
+                try:
+                    kickoff = datetime.fromisoformat(str(fixture["kickoff_at"]).replace("Z", "+00:00"))
+                    if kickoff.tzinfo is None:
+                        continue
+                    hours = (kickoff.astimezone(timezone.utc) - observed).total_seconds() / 3600
+                except (KeyError, TypeError, ValueError):
+                    continue
+                budget = (self.pregame_near_refresh_seconds if -1 <= hours <= self.pregame_near_hours
+                          else self.pregame_far_refresh_seconds)
+            if monotonic_now - self._odds_refresh_at.get(mid, float("-inf")) >= budget:
+                due.append(mid)
+        # This is a current schedule projection, not a historical lookup table.
+        self._odds_refresh_at = {mid: stamp for mid, stamp in self._odds_refresh_at.items() if mid in active}
+        return due
+
+    def mark_odds_refreshed(self, mids: list[str], *, now: float | None = None) -> None:
+        stamp = time.monotonic() if now is None else now
+        for mid in mids:
+            self._odds_refresh_at[mid] = stamp
+
     async def request_resync(self) -> None:
         self.resync.set()
 
-    async def upload(self, fixtures: list[dict[str, Any]]) -> int:
+    async def upload(self, fixtures: list[dict[str, Any]], *, odds_mids: list[str] | None = None) -> int:
         accepted = 0
-        for batch in fixture_batches(fixtures):
+        selected = set(odds_mids) if odds_mids is not None else None
+        outgoing = []
+        for fixture in fixtures:
+            if selected is not None and fixture.get("source_match_id") not in selected:
+                outgoing.append({**fixture, "markets": [], "markets_complete": False})
+            else:
+                outgoing.append(fixture)
+        for batch in fixture_batches(outgoing):
             response = await self.api.post(self.api_url + "/collector/fixtures", json={"items": batch})
             response.raise_for_status()
             document = response.json()
@@ -158,15 +215,25 @@ class CollectorService:
             last_start = time.monotonic()
             self.resync.clear()
             try:
-                fixtures = await self.runtime.collect()
-                accepted = await self.upload(fixtures)
+                requested_mids: list[str] = []
+                def choose_odds(fixtures: list[dict[str, Any]]) -> list[str]:
+                    requested_mids[:] = self.odds_due_mids(fixtures)
+                    return requested_mids
+                fixtures = await self.runtime.collect(odds_mids=choose_odds)
+                accepted = await self.upload(fixtures, odds_mids=requested_mids)
+                self.mark_odds_refreshed(requested_mids)
                 report = self.runtime.last_report
                 complete = report.get("complete_market_fixtures", 0)
                 freshness = quote_freshness(fixtures)
-                state = "healthy" if complete == len(fixtures) and freshness["freshness"] == "fresh" else "partial"
+                expected = report.get("odds_requested_fixtures", len(fixtures))
+                state = ("degraded" if self.runtime.config_validation_error else
+                         "healthy" if complete == expected and (freshness["freshness"] in {"fresh", "unknown"}) else "partial")
                 self.status["leyu"].update(state=state, fixtures=len(fixtures), accepted=accepted,
                                            complete_market_fixtures=complete, last_error="",
-                                           last_success_at=datetime.now(timezone.utc).isoformat(), config_version=self.runtime.version, **freshness)
+                                           last_success_at=datetime.now(timezone.utc).isoformat(), config_version=self.runtime.version,
+                                           config_validated_at=self.runtime.config_validated_at,
+                                           config_validation_error=self.runtime.config_validation_error,
+                                           odds_requested_fixtures=expected, **freshness)
                 log.info("Leyu source state=%s fixtures=%d accepted=%d", state, len(fixtures), accepted)
                 failures = 0
             except Exception as exc:
@@ -174,6 +241,9 @@ class CollectorService:
                 update = {"state": "unavailable", "last_error": category(exc)}
                 if self.runtime.version > 0:
                     update["config_version"] = self.runtime.version
+                if self.runtime.config_validated_at:
+                    update["config_validated_at"] = self.runtime.config_validated_at
+                update["config_validation_error"] = self.runtime.config_validation_error
                 self.status["leyu"].update(update)
                 log.warning("Leyu source unavailable category=%s", category(exc))
             delay = self.interval if failures == 0 else min(60, 2 ** min(failures, 6))

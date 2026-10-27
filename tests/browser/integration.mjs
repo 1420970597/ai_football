@@ -537,6 +537,15 @@ await scenario("真实无未结算记录注销撤销本人会话", async () => {
   );
   assert.equal((await api("/auth/me")).status, 401);
 });
+await scenario("真实Web入口拒绝内部路由并限制API请求大小", async () => {
+  assert.equal((await page.request.get(origin + "/internal/collector/config")).status(), 404);
+  assert.equal((await page.request.get(origin + "/mcp/tools")).status(), 404);
+  const oversized = await page.request.post(origin + "/api/v1/auth/register", {
+    headers: { "Content-Type": "application/json" },
+    data: "x".repeat(1024 * 1024 + 1),
+  });
+  assert.equal(oversized.status(), 413);
+});
 await fs.writeFile(
   "/work/tests/browser/integration-results.json",
   JSON.stringify(
