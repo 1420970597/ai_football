@@ -18,6 +18,7 @@ const server=http.createServer(async(req,res)=>{
 });
 await new Promise(resolve=>server.listen(8080,'127.0.0.1',resolve));
 const browser=await chromium.launch({headless:true,args:['--disable-dev-shm-usage']});
+const results=[];
 try {
   for(const width of [1440,390]) {
     const context=await browser.newContext({viewport:{width,height:960}});
@@ -104,6 +105,13 @@ try {
     assert.equal(await page.evaluate(()=>window.fixtureXss),undefined);
     assert.deepEqual(errors,[]);
     console.log('PASS isolated model governance UI width='+width+' candidate/evidence/review/cancel/activate + disabled trust isolation');
+    results.push({width,status:'passed',checks:['candidate','evidence','all_differences_review','cancel_without_activation',
+      'explicit_single_activation','text_escaping','disabled_trust_isolation','no_page_errors']});
     await context.close();
   }
-} finally {await browser.close();await new Promise(resolve=>server.close(resolve));}
+} finally {
+  await browser.close();await new Promise(resolve=>server.close(resolve));
+  if(process.env.MODEL_UI_RESULTS) await fs.writeFile(process.env.MODEL_UI_RESULTS,JSON.stringify({
+    scope:'model_configuration_ui',real_browser:true,synthetic_data:true,production_evidence:false,
+    browser_version:browser.version(),status:results.length===2?'passed':'failed',results},null,2)+'\n');
+}

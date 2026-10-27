@@ -1,0 +1,156 @@
+{
+  "format": "football-visual-baseline-v1",
+  "fixture_sha256": "d19b7fbdad0dbfe641f94a1221b1b69e8d09e9491f0be402e509f445157678fb",
+  "browser_version": "141.0.7390.37",
+  "locale": "zh-CN",
+  "timezone": "Asia/Shanghai",
+  "instant": "2026-10-26T11:11:00Z",
+  "device_scale_factor": 1,
+  "channel_threshold": 16,
+  "max_changed_ratio": 0.002,
+  "synthetic_data": true,
+  "production_evidence": false,
+  "source_site_parity": false,
+  "screens": [
+    {
+      "name": "scores",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "file": "scores-1440.png",
+      "sha256": "a6d981a4dbc98c849c6fba7fa0610ee08f285ae94bf1021d5ed810d4876b059d",
+      "status": "baseline_written"
+    },
+    {
+      "name": "schedule",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "file": "schedule-1440.png",
+      "sha256": "3b0158db95c3c3edaff2dfc32df6e53fb94dcabf0c024fc315d999260aa094b4",
+      "status": "baseline_written"
+    },
+    {
+      "name": "experts",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "file": "experts-1440.png",
+      "sha256": "8d7a937a742cc0d560db7175ba27b01805bf3128d1dde5cb17d20f0d05ef90db",
+      "status": "baseline_written"
+    },
+    {
+      "name": "membership",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "file": "membership-1440.png",
+      "sha256": "cceb94eb7973ff840943f585d98e785e35832082b941dbf2702ae10bbd9d45a2",
+      "status": "baseline_written"
+    },
+    {
+      "name": "account-guest",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "file": "account-guest-1440.png",
+      "sha256": "458ab9c18afc5c6a823b7e1f88eb4552e837a159b32923c861798d9088eb52fe",
+      "status": "baseline_written"
+    },
+    {
+      "name": "admin-guest",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "file": "admin-guest-1440.png",
+      "sha256": "4098493f8e26f11574c9c9cf6a0a4a6074c5114230476414fefceb20efec5dc9",
+      "status": "baseline_written"
+    },
+    {
+      "name": "match-detail",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "file": "match-detail-1440.png",
+      "sha256": "d9e6750d98f1f05a18290338784a69721c271947e18dcca206c5c21dbe14361e",
+      "status": "baseline_written"
+    },
+    {
+      "name": "scores",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "file": "scores-390.png",
+      "sha256": "0de6f6bbbabf8f41660eedbd040fe6b239331789d83f99164ee505380c598fc3",
+      "status": "baseline_written"
+    },
+    {
+      "name": "schedule",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "file": "schedule-390.png",
+      "sha256": "f3b4c08277db0e0105b3b6f03174f378bee00340b701a606e1336b1e24a1d47a",
+      "status": "baseline_written"
+    },
+    {
+      "name": "experts",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "file": "experts-390.png",
+      "sha256": "3b2acbb1d39acb386e69638e742ec69f40c4809160b3a1adc9c333980eec2279",
+      "status": "baseline_written"
+    },
+    {
+      "name": "membership",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "file": "membership-390.png",
+      "sha256": "46bb410d76edb98242ed2db3fc9686fa289e825069e302b7ae39c277440af378",
+      "status": "baseline_written"
+    },
+    {
+      "name": "account-guest",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "file": "account-guest-390.png",
+      "sha256": "e42e872c22683146a9b5d0f50d987f730f7cf6e66be3c42f2993cbf605457d28",
+      "status": "baseline_written"
+    },
+    {
+      "name": "admin-guest",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "file": "admin-guest-390.png",
+      "sha256": "69a10528ce496ecb7752aa3ce2cccf6db1ef30530cc14be039f9c3cb721357ef",
+      "status": "baseline_written"
+    },
+    {
+      "name": "match-detail",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "file": "match-detail-390.png",
+      "sha256": "b46cac07aa0b7e6cb755a86053bd06fd3075111ca34f21741d72dce464275028",
+      "status": "baseline_written"
+    }
+  ]
+}

@@ -40,6 +40,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Responsive behavior with explicit API fixtures
         run: sh tests/browser/check.sh
+      - name: Frozen model candidate approval and trust mapping interface
+        run: sh tests/browser/model-configuration-check.sh
+      - name: Frozen fixture screenshot regression
+        run: sh tests/browser/visual-check.sh
       - name: Browser with real API and temporary database
         run: sh tests/browser/integration-check.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -50,8 +54,12 @@ jobs:
             tests/browser/results.json
             tests/browser/integration-results.json
             tests/browser/integration-account-results.json
+            .runtime/model-configuration-ui-*/results.json
+            .runtime/visual-ui-*/visual-results.json
+            .runtime/visual-ui-*/*.png
             reports/jiebao-score-reference/images/candidate-*
             reports/jiebao-score-reference/images/integration-*
+          include-hidden-files: true
           retention-days: 14
   android:
     runs-on: ubuntu-24.04
