@@ -87,6 +87,18 @@ class IndependentQuoteIngestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('live',await self.pool.fetchval('SELECT phase FROM v2_fixtures'))
         self.assertEqual(Decimal('2.10'),await self.pool.fetchval('SELECT price FROM v2_current_quotes'))
 
+    async def test_repeated_terminal_snapshot_does_not_rewrite_already_closed_quote(self):
+        initial = self.snapshot(-20, -30)
+        self.assertEqual(200, (await self.post(initial)).status_code)
+        terminal = self.snapshot(-10, -30)
+        terminal.update(phase='finished', markets=[], markets_complete=False)
+        self.assertEqual(200, (await self.post(terminal)).status_code)
+        before = await self.pool.fetchrow('SELECT id,status,xmin::text version,ctid::text location,received_at,source_updated_at FROM v2_current_quotes')
+        self.assertEqual('closed', before['status'])
+        self.assertEqual(200, (await self.post(terminal)).status_code)
+        after = await self.pool.fetchrow('SELECT id,status,xmin::text version,ctid::text location,received_at,source_updated_at FROM v2_current_quotes')
+        self.assertEqual(before, after)
+
     async def test_concurrent_confirmed_result_lock_prevents_inflight_quote_reopening(self):
         self.assertEqual(200,(await self.post(self.snapshot(-20,-30))).status_code)
         blocker=await self.pool.acquire()

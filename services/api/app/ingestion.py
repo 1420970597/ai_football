@@ -100,7 +100,9 @@ async def ingest_fixture_batch(conn, items) -> int:
             closures,
         )
     if finished:
-        await conn.execute("UPDATE v2_current_quotes SET status='closed' WHERE fixture_id=ANY($1::text[])", finished)
+        # Terminal fixtures remain in periodic snapshots. Avoid generating a new
+        # PostgreSQL tuple/WAL record for every already-closed historical quote.
+        await conn.execute("UPDATE v2_current_quotes SET status='closed' WHERE fixture_id=ANY($1::text[]) AND status<>'closed'", finished)
     return len(accepted)
 
 
