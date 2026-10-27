@@ -5,6 +5,7 @@ import json
 from io import BytesIO
 from types import SimpleNamespace
 import unittest
+import uuid
 from unittest.mock import patch
 
 import httpx
@@ -81,7 +82,15 @@ class Backend:
         return {"persisted": True}
 
     async def observed(self, chat_id, owner, limit=50):
-        return self.observed_items
+        return [self.claimed_observation(item) for item in self.observed_items[:limit]]
+
+    def claimed_observation(self, item):
+        return {**item, 'id': str(uuid.uuid4()), 'version_key': item['content'].get('version_key', '0'*64),
+                'claim_id': str(uuid.uuid4()),
+                'claim_lease_until': (datetime.now(timezone.utc)+timedelta(seconds=30)).isoformat()}
+
+    async def acknowledge_observed(self, chat_id, owner, reconciliation):
+        return {'acknowledged': True, 'duplicate': False}
 
     async def media_orphans(self, owner, *, older_than_hours=24, limit=100):
         return self.orphan_items[:limit]

@@ -179,9 +179,18 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("UPDATE v2_telegram_events SET next_check_at=now()-interval '1 minute'")
         observed = []
         for _ in range(3):
-            page = await self.client.post("/internal/telegram/observed", json={"chat_id": "-1001", "owner": str(self.owner), "limit": 10})
+            page = await self.client.post("/internal/telegram/observed", json={"chat_id": "-1001", "owner": str(self.owner), "limit": 10,
+                                                                                "reconciliation_protocol": "claim-ack-v1"})
             self.assertEqual(200, page.status_code, page.text)
             observed.extend(item["id"] for item in page.json()["items"])
+            for item in page.json()['items']:
+                reference = {'event_id': item['id'], 'version_key': item['version_key'], 'claim_id': item['claim_id']}
+                checked = {**item['content'], 'owner': str(self.owner), 'media_state': 'ready',
+                           'media_objects': [], 'reconciliation': reference}
+                self.assertEqual(200, (await self.post(checked)).status_code)
+                ack = await self.client.post('/internal/telegram/observed/ack',
+                    json={'chat_id': '-1001', 'owner': str(self.owner), 'reconciliation': reference})
+                self.assertEqual(200, ack.status_code, ack.text)
         self.assertEqual(23, len(set(observed)))
 
     async def test_album_member_deletion_does_not_recommend_incomplete_album(self):

@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import re
+from typing import Literal
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -19,6 +20,7 @@ from .. import database
 from ..auth import audit, require_admin
 from ..security import encrypt_secret
 from .. import message_read
+from .. import telegram_reconciliation
 
 
 router = APIRouter()
@@ -42,7 +44,18 @@ class AdvanceInput(ClaimInput):
 
 
 class ObserveInput(ClaimInput):
+    reconciliation_protocol: Literal['claim-ack-v1']
     limit: int = Field(default=50, ge=1, le=100)
+
+
+class ReconciliationReference(BaseModel):
+    event_id: uuid.UUID
+    version_key: str = Field(pattern="^[a-f0-9]{64}$")
+    claim_id: uuid.UUID
+
+
+class ReconciliationAckInput(ClaimInput):
+    reconciliation: ReconciliationReference
 
 
 class EventInput(ClaimInput):
@@ -61,6 +74,7 @@ class EventInput(ClaimInput):
     media_manifest: list[dict] = Field(default_factory=list, max_length=10)
     media_objects: list[dict] = Field(default_factory=list, max_length=10)
     last_error: str | None = Field(default=None, max_length=100)
+    reconciliation: ReconciliationReference | None = None
 
 
 class SessionInput(BaseModel):
@@ -254,6 +268,16 @@ async def ingest_event(body: EventInput, request: Request):
         async with conn.transaction():
             source = await source_for(conn, body.chat_id)
             await check_lease(conn, source["id"], body.owner)
+            if body.reconciliation is not None:
+                payload = jsonable_encoder(body.model_dump(exclude={'owner', 'reconciliation'}))
+                duplicate = await telegram_reconciliation.apply_claim(
+                    conn, source['id'], body.owner, body.reconciliation,
+                    platform_message_id=body.platform_message_id, member_message_ids=body.member_message_ids,
+                    event_kind=body.event_kind,
+                    payload_sha256=hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+                )
+                if duplicate:
+                    return {"persisted": True, "state": "reconciled", "duplicate": True}
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"telegram:{source['id']}:{body.platform_message_id}")
             if body.event_kind == "delete":
                 affected = await conn.fetch(
@@ -293,7 +317,7 @@ async def ingest_event(body: EventInput, request: Request):
                 return {"persisted": True, "state": "superseded", "message_id": str(event["message_id"])}
             if not event and current and current["source_version_at"] > body.source_version_at:
                 return {"persisted": True, "state": "ignored_stale"}
-            content = jsonable_encoder(body.model_dump(exclude={"owner", "media_objects", "media_state", "last_error"}))
+            content = jsonable_encoder(body.model_dump(exclude={"owner", "media_objects", "media_state", "last_error", "reconciliation"}))
             media_objects = body.media_objects
             if event and body.media_state in {'pending', 'failed'} and not media_objects:
                 # History staging/retry must not erase candidates registered
@@ -420,17 +444,18 @@ async def observed_events(body: ObserveInput, request: Request):
         async with conn.transaction():
             source = await source_for(conn, body.chat_id)
             await check_lease(conn, source["id"], body.owner)
-            rows = await conn.fetch(
-                "SELECT id,platform_message_id,content FROM v2_telegram_events WHERE source_id=$1 AND is_current "
-                "AND next_check_at<=now() ORDER BY next_check_at,id LIMIT $2 FOR UPDATE SKIP LOCKED", source["id"], body.limit,
-            )
-            if rows:
-                await conn.execute(
-                    "UPDATE v2_telegram_events SET next_check_at=CASE WHEN source_version_at>now()-interval '2 days' "
-                    "THEN now()+interval '5 minutes' ELSE now()+interval '6 hours' END WHERE id=ANY($1::uuid[])",
-                    [row["id"] for row in rows],
-                )
-    return {"items": [dict(row) for row in rows]}
+            rows = await telegram_reconciliation.claim_events(conn, source['id'], body.owner, body.limit)
+    return {"items": rows, "claim_lease_seconds": telegram_reconciliation.RECONCILIATION_LEASE_SECONDS}
+
+
+@router.post("/internal/telegram/observed/ack")
+async def acknowledge_observed_event(body: ReconciliationAckInput, request: Request):
+    authorized(request)
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            source = await source_for(conn, body.chat_id)
+            await check_lease(conn, source['id'], body.owner)
+            return await telegram_reconciliation.acknowledge_claim(conn, source['id'], body.owner, body.reconciliation)
 
 
 @router.put("/internal/telegram/session")
@@ -634,6 +659,6 @@ async def telegram_message_tool_response(message_id: uuid.UUID, trace_id: uuid.U
 
 @router.get('/api/v1/admin/telegram/messages/{message_id}/media/{index}')
 async def telegram_message_media(message_id: uuid.UUID, index: int, request: Request):
-    await message_read.reader(request, admin=True)
+    actor = await message_read.reader(request, admin=True)
     from .expert_content import read_message_media
-    return await read_message_media(message_id, index)
+    return await read_message_media(message_id, index, request=request, actor=actor, context='admin')

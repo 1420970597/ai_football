@@ -14,6 +14,7 @@ from typing import Any
 import uuid
 
 import boto3
+import httpx
 from botocore.config import Config
 from telethon import TelegramClient, events, utils
 from telethon.errors import (AuthKeyDuplicatedError, FloodWaitError,
@@ -520,10 +521,12 @@ class TelegramCollector:
             return {"state": "catching_up" if catching_up else "caught_up", "last_message_id": last, "observed": count}
 
     async def _reconcile_known(self, chat_id: str, source: dict):
-        # observed advances the remote schedule before returning. Keep the
-        # complete claimed slice until every corresponding event is checked;
-        # a timeout never turns a failed RPC into evidence of deletion.
+        # Claims survive process loss remotely. Never acknowledge an event
+        # until its checked version/deletion was durably committed.
         pending = self.reconcile_pending.setdefault(chat_id, [])
+        now = datetime.now(timezone.utc)
+        pending[:] = [item for item in pending if not item.get('claim_lease_until')
+                      or _utc(datetime.fromisoformat(item['claim_lease_until'])) > now]
         checked = 0
         try:
             async with asyncio.timeout(RECONCILE_BATCH_SECONDS):
@@ -533,24 +536,48 @@ class TelegramCollector:
                         pending.extend(await self.backend.observed(chat_id, self.owner, limit=RECONCILE_EVENT_LIMIT))
                 if not pending:
                     return {'state': 'ready', 'checked': 0, 'pending': 0}
-                async with asyncio.timeout(RECONCILE_RPC_SECONDS):
-                    entity = await self._entity(chat_id)
-                identifiers = sorted({identifier for item in pending for identifier in item['content']['member_message_ids']})
+                identifiers = sorted({identifier for item in pending if not item.get('_reconcile_applied')
+                                      and not item.get('_reconcile_submission', {}).get('payload')
+                                      for identifier in item['content']['member_message_ids']})
                 by_id = {}
+                if identifiers:
+                    async with asyncio.timeout(RECONCILE_RPC_SECONDS):
+                        entity = await self._entity(chat_id)
                 for offset in range(0, len(identifiers), RECONCILE_ID_LIMIT):
                     async with asyncio.timeout(RECONCILE_RPC_SECONDS):
                         members = await self.client.get_messages(entity, ids=identifiers[offset:offset+RECONCILE_ID_LIMIT])
                     by_id.update({entry.id: entry for entry in members if entry})
                 while pending:
-                    ids = pending[0]['content']['member_message_ids']
+                    item = pending[0]
+                    reference = {'event_id': item['id'], 'version_key': item['version_key'], 'claim_id': item['claim_id']}
+                    ids = item['content']['member_message_ids']
                     members = [by_id[identifier] for identifier in ids if identifier in by_id]
                     async with self.locks.setdefault(chat_id, asyncio.Lock()):
                         await self.backend.checkpoint(chat_id, self.owner)
-                        missing = set(ids) - set(by_id)
-                        if missing:
-                            await self._delete(chat_id, sorted(missing))
-                        else:
-                            await self._process_group(chat_id, source, sorted(members, key=lambda entry: entry.id))
+                        try:
+                            if not item.get('_reconcile_applied'):
+                                missing = set(ids) - set(by_id)
+                                submission = item.setdefault('_reconcile_submission', {})
+                                if submission.get('payload'):
+                                    result = await self.backend.event(submission['payload'])
+                                elif missing:
+                                    result = await self._delete(chat_id, sorted(missing), reconciliation=reference,
+                                                                submission=submission)
+                                else:
+                                    result, _ = await self._stage_group(
+                                        chat_id, source, sorted(members, key=lambda entry: entry.id),
+                                        reconciliation=reference, submission=submission)
+                                if not result.get('persisted'):
+                                    return {'state': 'deferred', 'reason': 'event_not_committed',
+                                            'checked': checked, 'pending': len(pending)}
+                                item['_reconcile_applied'] = True
+                            await self.backend.acknowledge_observed(chat_id, self.owner, reference)
+                        except httpx.HTTPStatusError as exc:
+                            if exc.response.status_code != 409:
+                                raise
+                            pending.pop(0)
+                            return {'state': 'deferred', 'reason': 'claim_changed',
+                                    'checked': checked, 'pending': len(pending)}
                         pending.pop(0)
                         checked += 1
                     await asyncio.sleep(0)
@@ -579,7 +606,8 @@ class TelegramCollector:
         result, _ = await self._stage_group(chat_id, source, members)
         return result
 
-    async def _stage_group(self, chat_id: str, source: dict, members: list):
+    async def _stage_group(self, chat_id: str, source: dict, members: list, *, reconciliation: dict | None = None,
+                           submission: dict | None = None):
         """Persist the complete immutable version before any media transfer."""
         message = members[0]
         sender_id = str(getattr(message, "sender_id", "") or "")
@@ -630,8 +658,12 @@ class TelegramCollector:
                              and item["width"] * item["height"] <= MAX_IMAGE_PIXELS for item in manifests)
                      and sum(item["bytes"] for item in manifests) <= MAX_MESSAGE_MEDIA_BYTES)
         payload["media_state"] = ("pending" if supported else "unsupported") if manifests else "ready"
+        if reconciliation is not None:
+            payload['reconciliation'] = reconciliation
+        if submission is not None:
+            submission['payload'] = payload
         first = await self.backend.event(payload)
-        if first.get("state") in {"ready", "superseded", "ignored_stale", "deleted"} or not manifests or not supported:
+        if first.get("state") in {"ready", "reconciled", "superseded", "ignored_stale", "deleted"} or not manifests or not supported:
             return first, None
         payload["media_objects"] = list(first.get("media_objects") or [])
         return first, payload
@@ -744,13 +776,19 @@ class TelegramCollector:
             # 不移动高水位，周期补拉负责重新投递失败的新消息。
             log.warning("Telegram live event deferred category=%s", type(exc).__name__)
 
-    async def _delete(self, chat_id: str, identifiers: list[int]):
+    async def _delete(self, chat_id: str, identifiers: list[int], *, reconciliation: dict | None = None,
+                      submission: dict | None = None):
         now = datetime.now(timezone.utc).isoformat()
         key = hashlib.sha256(json.dumps(sorted(identifiers)).encode()).hexdigest()
-        return await self.backend.event({"chat_id": chat_id, "owner": self.owner,
+        payload = {"chat_id": chat_id, "owner": self.owner,
             "platform_message_id": "delete:" + key, "member_message_ids": identifiers, "version_key": key,
             "event_kind": "delete", "source_version_at": now, "posted_at": now,
-            "media_state": "ready", "raw_text": "", "media_manifest": [], "media_objects": []})
+            "media_state": "ready", "raw_text": "", "media_manifest": [], "media_objects": []}
+        if reconciliation is not None:
+            payload['reconciliation'] = reconciliation
+        if submission is not None:
+            submission['payload'] = payload
+        return await self.backend.event(payload)
 
     async def _on_delete(self, event):
         chat_id = str(getattr(event, "chat_id", "") or "")

@@ -26,7 +26,7 @@ class ScheduledBackend(Backend):
         rows=self.scheduled.setdefault(chat_id,[])
         batch=rows[:limit]
         del rows[:limit]
-        return batch
+        return [self.claimed_observation(item) for item in batch]
 
 
 class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):

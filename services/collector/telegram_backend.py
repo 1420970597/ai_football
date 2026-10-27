@@ -35,7 +35,12 @@ class TelegramBackend:
         return (await self._call("GET", f"/pending?limit={limit}"))["items"]
 
     async def observed(self, chat_id: str, owner: str, limit: int = 50) -> list[dict]:
-        return (await self._call("POST", "/observed", {"chat_id": chat_id, "owner": owner, "limit": limit}))["items"]
+        return (await self._call("POST", "/observed", {"chat_id": chat_id, "owner": owner, "limit": limit,
+                                                      "reconciliation_protocol": "claim-ack-v1"}))["items"]
+
+    async def acknowledge_observed(self, chat_id: str, owner: str, reconciliation: dict) -> dict:
+        return await self._call("POST", "/observed/ack", {"chat_id": chat_id, "owner": owner,
+                                                          "reconciliation": reconciliation})
 
     async def save_session(self, session: str, account: dict) -> dict:
         return await self._call("PUT", "/session", {"session": session, "account": account})
