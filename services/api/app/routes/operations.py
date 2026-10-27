@@ -94,7 +94,9 @@ async def diagnostics(request: Request):
                     "(SELECT count(*) FROM unresolved) AS unresolved_count,(SELECT count(*) FROM stale) AS stale_count,"
                     "(SELECT source_updated_at FROM v2_fixtures WHERE phase IN('live','scheduled') ORDER BY source_updated_at DESC NULLS LAST LIMIT 1) AS fixture_source_at,"
                     "(SELECT source_updated_at FROM v2_current_quotes WHERE status='active' ORDER BY source_updated_at DESC NULLS LAST LIMIT 1) AS quote_source_at,"
-                    "(SELECT created_at FROM v2_expert_messages ORDER BY created_at DESC LIMIT 1) AS message_received_at",
+                    "(SELECT created_at FROM v2_expert_messages ORDER BY created_at DESC LIMIT 1) AS message_received_at,"
+                    "(SELECT max(checked_at) FROM v2_source_checkpoints) AS telegram_checkpoint_at,"
+                    "(SELECT max(last_message_id) FROM v2_source_checkpoints) AS telegram_high_water",
                     request.app.state.settings.quote_max_age_seconds,
                 )
                 try:
@@ -122,7 +124,7 @@ async def diagnostics(request: Request):
         'pending_media': count_state(row['media_count']) | {'oldest_at': row['media_oldest']},
         'unknown_orders': count_state(row['unknown_count']) | {'oldest_at': row['unknown_oldest']},
         'unresolved_reviews': count_state(row['unresolved_count']), 'stale_quotes': count_state(row['stale_count']),
-        'freshness': {key: row[key] for key in ('fixture_source_at','quote_source_at','message_received_at')},
+        'freshness': {key: row[key] for key in ('fixture_source_at','quote_source_at','message_received_at', 'telegram_checkpoint_at', 'telegram_high_water')},
         'postgres_counters': dict(stats) if stats else {},
         'limits': 'Counts are bounded; source timestamps are passive evidence, not live upstream probes. Failed migration transactions leave no success record.',
     }

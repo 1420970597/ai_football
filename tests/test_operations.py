@@ -104,6 +104,8 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('unconfigured',result['storage'])
         self.assertEqual({'gateway':'unavailable','provider':'unverified'},result['hermes'])
         self.assertIsNone(result['freshness']['quote_source_at'])
+        self.assertIsNone(result['freshness']['telegram_checkpoint_at'])
+        self.assertIsNone(result['freshness']['telegram_high_water'])
         self.assertEqual(0,result['unknown_orders']['count'])
 
     async def test_anonymous_is_rejected_and_order_access_is_read_only(self):
