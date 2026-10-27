@@ -62,8 +62,12 @@ async function loadDiagnostics() {
     const data = await adminApi("/diagnostics");
     const counter = (value) =>
       value ? String(value.count) + (value.capped ? "+" : "") : "未核验";
+    const leyu = data.collector?.sources?.leyu || {};
+    const leyuVersion = leyu.config_version
+      ? ` · 乐鱼采集器配置版本 ${esc(leyu.config_version)}`
+      : " · 乐鱼采集器配置版本未回执";
     $("#admin-diagnostics").innerHTML =
-      `<p class="form-note">检查于 ${stamp(data.checked_at)} · 数据库 ${esc(data.database)} · 结构 ${esc(data.schema === "verified" ? "已核验" : data.schema === "migration_required" ? "需要迁移" : "状态未知")}</p><div class="status-grid">${[
+      `<p class="form-note">检查于 ${stamp(data.checked_at)} · 数据库 ${esc(data.database)} · 结构 ${esc(data.schema === "verified" ? "已核验" : data.schema === "migration_required" ? "需要迁移" : "状态未知")}${leyuVersion}</p><div class="status-grid">${[
         ["待审核", data.review_queue],
         ["媒体待上传", data.pending_media],
         ["未解决/失败", data.unresolved_reviews],
@@ -138,8 +142,16 @@ async function loadSettings() {
     const data = await adminApi("/settings");
     settings = data.items;
     leyuVersion = data.leyu_version;
+    const runtime = data.runtime || {};
+    const runtimeLabel = {
+      applied: "采集器已应用",
+      pending: "等待采集器读取",
+      unavailable: "采集器不可达",
+    }[runtime.state] || "采集器状态未知";
+    const appliedVersion = runtime.applied_version ?? "无回执";
+    const reason = runtime.reason ? " · " + runtime.reason : "";
     $("#leyu-version").textContent =
-      "已读取乐鱼配置版本 " + (leyuVersion ?? "未建立");
+      `配置版本 ${leyuVersion ?? "未建立"} · ${runtimeLabel} ${appliedVersion}${reason}`;
     for (const form of $$(".settings-form"))
       for (const input of $$("input[name]", form)) {
         const item = settings[input.name];

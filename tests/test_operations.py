@@ -44,7 +44,7 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
             "authorized": True,
             "auth": {"state": "authorized", "account": {"id": "private"}},
             "source_health": {
-                "leyu": {"state": "unavailable", "last_error": "websocket_http_403", "fixtures": 3},
+                "leyu": {"state": "unavailable", "last_error": "websocket_http_403", "fixtures": 3, "config_version": 7},
                 "websocket": {"state": "backoff", "reconnects": 2},
                 "future": {"secret": "must-not-leak"},
             },
@@ -55,6 +55,7 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
             result = await operations.collector_health(request)
         self.assertEqual("reachable", result["state"])
         self.assertEqual("websocket_http_403", result["sources"]["leyu"]["last_error"])
+        self.assertEqual(7, result["sources"]["leyu"]["config_version"])
         self.assertNotIn("account", json.dumps(result))
         self.assertNotIn("future", result["sources"])
 

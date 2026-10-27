@@ -11,7 +11,7 @@ import time
 from types import SimpleNamespace
 import unittest
 import uuid
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import asyncpg
 from fastapi import FastAPI
@@ -221,8 +221,13 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.register()
         self.assertEqual(401, (await self.client.get("/api/v1/admin/status")).status_code)
         await self.admin_login()
-        settings = await self.client.get("/api/v1/admin/settings")
+        with patch("app.routes.admin.collector_health", new=AsyncMock(return_value={
+            "state": "reachable", "sources": {"leyu": {"state": "unavailable", "last_error": "renewal_state_conflict", "config_version": 1}},
+        })):
+            settings = await self.client.get("/api/v1/admin/settings")
         self.assertEqual(200, settings.status_code, settings.text)
+        self.assertEqual({"state": "applied", "desired_version": 1, "applied_version": 1,
+                          "source_state": "unavailable", "reason": "renewal_state_conflict"}, settings.json()["runtime"])
         for key in ("leyu_login_proxy_authkey", "leyu_login_proxy_authpwd"):
             item = settings.json()["items"][key]
             self.assertFalse(item["configured"])

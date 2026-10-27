@@ -171,7 +171,10 @@ class CollectorService:
                 failures = 0
             except Exception as exc:
                 failures += 1
-                self.status["leyu"].update(state="unavailable", last_error=category(exc))
+                update = {"state": "unavailable", "last_error": category(exc)}
+                if self.runtime.version > 0:
+                    update["config_version"] = self.runtime.version
+                self.status["leyu"].update(update)
                 log.warning("Leyu source unavailable category=%s", category(exc))
             delay = self.interval if failures == 0 else min(60, 2 ** min(failures, 6))
             # 上游拒绝与网络失败按退避等待，WS补同步不能绕过失败退避。

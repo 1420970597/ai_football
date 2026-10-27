@@ -12,6 +12,7 @@ from .. import database
 from ..auth import audit, require_admin, verify_sensitive_admin_session
 from ..security import encrypt_secret, decrypt_secret
 from ..membership import has_entitlement
+from .operations import collector_health
 from .renewal import LEYU_CONFIG_KEYS, LEYU_SECRET_KEYS, revision_locked
 
 router = APIRouter(prefix="/api/v1/admin")
@@ -305,7 +306,26 @@ async def get_settings(request: Request):
             "updated_at": row["updated_at"],
         }
     version = await database.current_pool().fetchval("SELECT revision FROM v2_configuration_revisions WHERE namespace='leyu'")
-    return {"items": output, "allowed_keys": sorted(ALLOWED_SETTINGS), "leyu_version": version}
+    collector = await collector_health(request)
+    leyu_health = collector.get("sources", {}).get("leyu", {}) if collector.get("state") == "reachable" else {}
+    applied_version = leyu_health.get("config_version")
+    runtime_state = (
+        "applied" if applied_version == version else
+        "pending" if collector.get("state") == "reachable" else
+        "unavailable"
+    )
+    return {
+        "items": output,
+        "allowed_keys": sorted(ALLOWED_SETTINGS),
+        "leyu_version": version,
+        "runtime": {
+            "state": runtime_state,
+            "desired_version": version,
+            "applied_version": applied_version,
+            "source_state": leyu_health.get("state"),
+            "reason": leyu_health.get("last_error") or collector.get("reason"),
+        },
+    }
 
 
 @router.put("/settings")

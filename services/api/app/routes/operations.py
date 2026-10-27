@@ -57,7 +57,7 @@ async def collector_health(request: Request) -> dict:
             selected = {
                 field: value[field] for field in (
                     "state", "last_error", "last_success_at", "last_push_at",
-                    "fixtures", "accepted", "source_count", "degraded",
+                            "fixtures", "accepted", "source_count", "degraded", "config_version",
                     "reconnects", "last_error", "last_message_at",
                 ) if field in value
             }
