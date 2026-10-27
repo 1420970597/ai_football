@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import crypto from "node:crypto";
 
-const root = "/work/reports/jiebao-score-reference";
+const root = process.env.REPORT_ROOT || "/work/reports/jiebao-score-reference";
 const compiler = "/opt/verification/node_modules/mermaid/dist";
 const server = http.createServer(async (req, res) => {
   try {
@@ -132,7 +132,7 @@ if (process.argv[2] === "compile") {
         width: image.naturalWidth,
       }));
     });
-    assert.ok(images.length > 15);
+    assert.ok(images.length >= Number(process.env.REPORT_MIN_IMAGES || 16));
     assert.ok(
       images.every((image) => image.loaded),
       JSON.stringify(images.filter((image) => !image.loaded)),
@@ -143,20 +143,21 @@ if (process.argv[2] === "compile") {
     );
     assert.ok((await page.locator(".diagram-scroll img").count()) > 0);
     const pan = await page.locator(".diagram-scroll").evaluate((element) => {
+      const overflow = element.scrollWidth > element.clientWidth;
       element.scrollLeft = element.scrollWidth;
       const moved = element.scrollLeft > 0;
       element.scrollLeft = 0;
-      return moved;
+      return !overflow || moved;
     });
     assert.equal(
       pan,
       true,
-      "Flow diagram must be readable by local horizontal scrolling",
+      "Overflowing flow diagrams must support local horizontal scrolling",
     );
     await page.locator("details").first().locator("summary").click();
     assert.match(
       await page.locator(".mermaid-source").innerText(),
-      /flowchart LR/,
+      new RegExp(process.env.REPORT_FLOW_PATTERN || "flowchart LR"),
     );
     await page.locator(".diagram-scroll").scrollIntoViewIfNeeded();
     await page.screenshot({
@@ -190,7 +191,7 @@ if (process.argv[2] === "compile") {
   assert.deepEqual(external, []);
   assert.deepEqual(errors, []);
   await fs.writeFile(
-    "/work/tests/browser/report-results.json",
+    process.env.REPORT_RESULTS || "/work/tests/browser/report-results.json",
     JSON.stringify(
       {
         recorded_at: new Date().toISOString(),

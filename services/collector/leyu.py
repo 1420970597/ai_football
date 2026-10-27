@@ -20,8 +20,8 @@ DEFAULT_FIXTURE_PATH = "/yewu11/v2/m/getOriginalDataPB"
 DEFAULT_ODDS_PATH = "/yewu11/v1/w/structureMatchBaseInfoByMidsPB"
 DEFAULT_MATCH_ODDS_PATH = "/yewu11/v1/w/getMatchBaseInfoByOddsPB"
 DEFAULT_BATCH_SIZE = 12
-DEFAULT_CONCURRENCY = 2
-DEFAULT_BATCH_INTERVAL = 0.2
+DEFAULT_CONCURRENCY = 1
+DEFAULT_BATCH_INTERVAL = 1.0
 DEFAULT_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36")
 
@@ -196,6 +196,9 @@ class LeyuClient:
             rate_limit = asyncio.Lock()
             next_request = 0.0
             single_match_fallbacks = 0
+            limited: RateLimited | None = None
+            fallback_budget = self.batch_size
+            fallback_attempts = 0
 
             async def pace_request() -> None:
                 nonlocal next_request
@@ -220,10 +223,17 @@ class LeyuClient:
                     fixture["collection_error"] = "market_container_missing"
 
             async def fetch_single_match(mid: str) -> Mapping[str, Any] | None:
-                nonlocal single_match_fallbacks
+                nonlocal single_match_fallbacks, fallback_attempts
+                if limited is not None:
+                    raise limited
+                if fallback_attempts >= fallback_budget:
+                    raise LeyuError("single_match_fallback_budget_exhausted")
+                fallback_attempts += 1
                 body = {"cuid": self.cuid, "cos": 0, "orpt": 0, "euid": "3020101",
                         "mid": mid, "mcid": 0, "newUser": 0}
                 await pace_request()
+                if limited is not None:
+                    raise limited
                 details = await self._request(client, "POST", DEFAULT_MATCH_ODDS_PATH, json=body)
                 single_match_fallbacks += 1
                 rows = details.get("data") if isinstance(details, Mapping) and "data" in details else details
@@ -234,9 +244,14 @@ class LeyuClient:
                 return next((row for row in rows if isinstance(row, Mapping) and str(row.get("mid")) == mid), None)
 
             async def fetch_batch(batch: list[str]) -> None:
+                nonlocal limited
                 async with semaphore:
                     try:
+                        if limited is not None:
+                            raise limited
                         await pace_request()
+                        if limited is not None:
+                            raise limited
                         body = {
                             "mids": ",".join(batch), "cuid": self.cuid,
                             "cos": 0, "orpt": 0, "euid": "3020101",
@@ -269,8 +284,14 @@ class LeyuClient:
                                 fixture["collection_error"] = "fixture_detail_missing"
                                 continue
                             apply_market_row(fixture, row, captured)
-                    except (AuthExpired, RateLimited):
+                    except AuthExpired:
                         raise
+                    except RateLimited as exc:
+                        limited = exc
+                        failures.append({"size": len(batch), "category": exc.category, "code": exc.code})
+                        for mid in batch:
+                            if not by_id[mid]["markets_complete"]:
+                                by_id[mid]["collection_error"] = exc.category
                     except LeyuError as exc:
                         failures.append({"size": len(batch), "category": exc.category, "code": exc.code})
                         for mid in batch:
@@ -292,6 +313,10 @@ class LeyuClient:
                 "odds_requested_fixtures": len(selected_mids),
                 "complete_market_fixtures": sum(bool(f.get("markets_complete")) for f in fixtures),
                 "single_match_fallbacks": single_match_fallbacks,
+                "single_match_fallback_attempts": fallback_attempts,
+                "rate_limited": limited is not None,
+                "rate_limit_category": limited.category if limited is not None else "",
+                "rate_limit_code": limited.code if limited is not None else "",
                 "failed_batches": failures,
                 "received_at": timestamp(datetime.now(timezone.utc)),
             }

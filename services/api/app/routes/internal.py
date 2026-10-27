@@ -91,11 +91,10 @@ class FixtureBatch(BaseModel):
 @router.post("/collector/fixtures")
 async def ingest_fixtures(body: FixtureBatch, request: Request):
     _authorized(request, request.app.state.settings.collector_token)
-    from ..ingestion import ingest_fixture
+    from ..ingestion import ingest_fixture_batch
 
     accepted = 0
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            for item in body.items:
-                accepted += int(await ingest_fixture(conn, item))
+            accepted = await ingest_fixture_batch(conn, body.items)
     return {"accepted": accepted, "ignored_stale": len(body.items) - accepted}
