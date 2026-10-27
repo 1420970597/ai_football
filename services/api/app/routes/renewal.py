@@ -20,6 +20,7 @@ LEYU_SECRET_KEYS = frozenset({
     "leyu_request_id", "leyu_api_token", "leyu_business_cookie_token", "leyu_cookie",
     "leyu_app_token", "leyu_app_signature", "leyu_app_login_signature", "leyu_app_uuid",
     "leyu_app_login_name", "leyu_app_login_password", "leyu_login_proxy_url", "leyu_login_proxy_extract_url",
+    "leyu_login_proxy_authkey", "leyu_login_proxy_authpwd",
     "leyu_h5_token", "leyu_h5_signature", "leyu_h5_uuid",
 })
 LEYU_CONFIG_KEYS = LEYU_SECRET_KEYS | frozenset({

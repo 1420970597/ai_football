@@ -13,7 +13,8 @@ from .auth import audit
 from .security import decrypt_secret, encrypt_secret
 
 PROTOCOL_KEYS = frozenset({"leyu_app_host", "leyu_app_signing_config", "leyu_app_discovery_config", "leyu_venue",
-                           "leyu_login_proxy_url", "leyu_login_proxy_extract_url", "leyu_login_proxy_egress_url", "leyu_login_proxy_password_template"})
+                           "leyu_login_proxy_url", "leyu_login_proxy_extract_url", "leyu_login_proxy_authkey",
+                           "leyu_login_proxy_authpwd", "leyu_login_proxy_egress_url", "leyu_login_proxy_password_template"})
 SESSION_KEYS = frozenset({"leyu_app_host", "leyu_api_base", "leyu_origin", "leyu_request_id", "leyu_app_token"})
 
 

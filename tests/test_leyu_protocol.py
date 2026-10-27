@@ -8,7 +8,8 @@ import unittest
 
 import httpx
 
-from services.collector.leyu import LeyuClient, DEFAULT_FIXTURE_PATH, DEFAULT_ODDS_PATH
+from services.collector.leyu import (LeyuClient, DEFAULT_FIXTURE_PATH, DEFAULT_ODDS_PATH,
+                                     DEFAULT_MATCH_ODDS_PATH)
 from services.collector.leyu_protocol import (
     AuthExpired, LeyuError, RateLimited, decode_envelope, decode_payload, parse_fixtures,
     parse_line, parse_quotes, score, timestamp,
@@ -165,6 +166,10 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("real-session", client.headers()["requestId"])
         self.assertEqual("https://ui.invalid", client.headers()["origin"])
         self.assertEqual("route=abc; X-API-TOKEN=token", client.headers()["cookie"])
+        self.assertEqual("cross-site", client.headers()["sec-fetch-site"])
+        self.assertEqual("cors", client.headers()["sec-fetch-mode"])
+        self.assertEqual("empty", client.headers()["sec-fetch-dest"])
+        self.assertIn("Chrome/153.0.0.0", client.headers()["user-agent"])
 
     def test_app_token_not_forwarded_to_business_gateway(self):
         client = LeyuClient.from_config({"leyu_api_base": "https://upstream.invalid", "leyu_request_id": "session", "leyu_api_token": "private-app-token"})
@@ -198,6 +203,24 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(45, client.last_report["complete_market_fixtures"])
         self.assertTrue(all(len(f["markets"]) == 2 for f in fixtures))
         json.dumps(fixtures)
+
+    async def test_missing_batch_detail_uses_v1_single_match_odds_endpoint(self):
+        async def handler(request):
+            if request.url.path == DEFAULT_FIXTURE_PATH:
+                return httpx.Response(200, json={"code": "0", "data": {"matchsList": [match("only")]}})
+            if request.url.path == DEFAULT_ODDS_PATH:
+                return httpx.Response(200, json={"code": "0", "data": {"data": []}})
+            self.assertEqual(DEFAULT_MATCH_ODDS_PATH, request.url.path)
+            body = json.loads(request.content)
+            self.assertEqual({"cuid", "cos", "orpt", "euid", "mid", "mcid", "newUser"}, set(body))
+            self.assertEqual("only", body["mid"])
+            return httpx.Response(200, json={"code": "0", "data": {"data": [market_row("only")]}})
+        client = LeyuClient("https://upstream.invalid", request_id="session",
+                            transport=httpx.MockTransport(handler), batch_interval=0)
+        fixtures = await client.fetch()
+        self.assertTrue(fixtures[0]["markets_complete"])
+        self.assertEqual(2, len(fixtures[0]["markets"]))
+        self.assertEqual(1, client.last_report["single_match_fallbacks"])
 
     async def test_batch_failure_is_partial_not_empty_complete_snapshot(self):
         async def handler(request):

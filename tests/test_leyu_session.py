@@ -1,4 +1,5 @@
 import base64
+import errno
 import json
 from pathlib import Path
 import tempfile
@@ -57,16 +58,28 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
     async def test_extraction_honors_expiration_and_supplied_ip(self):
         payload = {"code": "SUCCESS", "data": [{"server": "8.8.8.8:1234", "proxy_ip": "1.1.1.1"}]}
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))) as direct:
-            lease = await LoginProxy({"leyu_login_proxy_extract_url": "https://provider.invalid/get?key=redacted"}).acquire(direct)
+            lease = await LoginProxy({"leyu_login_proxy_extract_url": "https://provider.invalid/get?key=redacted",
+                                      "leyu_login_proxy_authkey": "qg-auth-key",
+                                      "leyu_login_proxy_authpwd": "qg-auth-password"}).acquire(direct)
         self.assertEqual("1.1.1.1", lease.egress_ip)
-        self.assertEqual("http://8.8.8.8:1234", lease.url)
+        self.assertEqual("http://qg-auth-key:qg-auth-password@8.8.8.8:1234", lease.url)
         with self.assertRaises(LeyuError):
             ProxyLease("http://unused", time.monotonic() - 1).remaining()
+
+    async def test_extraction_fails_before_consuming_ip_when_proxy_auth_is_missing(self):
+        calls = []
+        transport = httpx.MockTransport(lambda request: calls.append(request.url.path) or httpx.Response(200))
+        async with httpx.AsyncClient(transport=transport) as direct:
+            with self.assertRaisesRegex(LeyuError, "proxy_credentials_missing"):
+                await LoginProxy({"leyu_login_proxy_extract_url": "https://provider.invalid/get"}).acquire(direct)
+        self.assertEqual([], calls)
 
     async def test_invalid_extraction_does_not_leak_provider_body(self):
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"code": "secret-value"}))) as direct:
             with self.assertRaises(LeyuError) as raised:
-                await LoginProxy({"leyu_login_proxy_extract_url": "https://provider.invalid/get"}).acquire(direct)
+                await LoginProxy({"leyu_login_proxy_extract_url": "https://provider.invalid/get",
+                                  "leyu_login_proxy_authkey": "qg-auth-key",
+                                  "leyu_login_proxy_authpwd": "qg-auth-password"}).acquire(direct)
         self.assertNotIn("secret-value", str(raised.exception))
 
 
@@ -76,6 +89,7 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
         self.updates = []
         self.direct_paths = []
         self.proxy_paths = []
+        self.proxy_urls = []
 
     async def claim(self, account_hash):
         self.events.append(("claim", account_hash))
@@ -92,7 +106,8 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
             self.direct_paths.append(request.url.path)
             return handler(request)
         def proxy(url):
-            self.assertIn("proxy.invalid", url)
+            self.proxy_urls.append(url)
+            self.assertTrue(url.startswith(("http://", "https://")))
             def response(request):
                 self.proxy_paths.append(request.url.path)
                 return proxy_handler(request)
@@ -129,9 +144,10 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("new-token", request.headers["x-api-token"])
             return httpx.Response(200, json=launch())
         def proxy(request):
-            if request.method == "GET":
-                return httpx.Response(200, text="8.8.8.8\n")
             self.assertEqual(LOGIN_PATH, request.url.path)
+            self.assertEqual("application/json; charset=utf-8", request.headers["content-type"])
+            self.assertEqual("gzip", request.headers["accept-encoding"])
+            self.assertEqual(request.content, json.dumps(json.loads(request.content), separators=(",", ":")).encode())
             body = json.loads(request.content)
             self.assertEqual(32, len(body["password"]))
             self.assertNotIn("sample-password", str(body))
@@ -139,9 +155,91 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
         cfg = config(leyu_login_proxy_url="http://sample:password@proxy.invalid:1234")
         await self.renewer(cfg, direct, proxy).renew()
         self.assertEqual([PRE_INFO_PATH, LAUNCH_PATH, LAUNCH_PATH], self.direct_paths)
-        self.assertEqual(["/", LOGIN_PATH], self.proxy_paths)
+        self.assertEqual([LOGIN_PATH], self.proxy_paths)
         self.assertEqual("new-token", self.updates[0]["leyu_app_token"])
         self.assertEqual("success", self.events[-1][1])
+
+    async def test_login_uses_v1_path_and_dynamic_proxy_egress_without_probe(self):
+        self.assertEqual("/site/api/v1/user/login", LOGIN_PATH)
+        routes = {name: {"key": "k" * 16, "iv": "i" * 16} for name in ("", "/site/api", "/game/api")}
+        with tempfile.TemporaryDirectory() as tmp:
+            signing_path = Path(tmp) / "signing.json"
+            signing_path.write_text(json.dumps({"routes": routes}), encoding="utf-8")
+            direct_calls = []
+            def direct(request):
+                direct_calls.append(request.url.path)
+                if request.url.host == "provider.invalid":
+                    return httpx.Response(200, json={"code": "SUCCESS", "data": [
+                        {"server": "8.8.8.8:1234", "proxy_ip": "9.9.9.9"}]})
+                if request.url.path == PRE_INFO_PATH:
+                    return httpx.Response(200, json={"status_code": 6000, "data": {"ip": "1.1.1.1"}})
+                if request.url.path == LAUNCH_PATH:
+                    return httpx.Response(200, json=launch())
+                self.fail("unexpected direct App request")
+            def proxy(request):
+                self.assertEqual(LOGIN_PATH, request.url.path)
+                bound = aes_cbc(base64.b64decode(request.headers["x-api-hack-xxxxx"]),
+                                b"k" * 16, b"i" * 16, decrypt=True)
+                self.assertEqual("9.9.9.9", json.loads(bound)["xx"])
+                return httpx.Response(200, json={"status_code": 6000, "data": {"token": "new-token"}})
+            cfg = config(leyu_app_token="", leyu_app_signing_config=str(signing_path),
+                         leyu_login_proxy_extract_url="https://provider.invalid/get",
+                         leyu_login_proxy_authkey="qg-auth-key", leyu_login_proxy_authpwd="qg-auth-password")
+            updates = await self.renewer(cfg, direct, proxy).renew()
+        self.assertEqual("real-session", updates["leyu_request_id"])
+        self.assertEqual([PRE_INFO_PATH, "/get", LAUNCH_PATH], direct_calls)
+        self.assertEqual([LOGIN_PATH], self.proxy_paths)
+        self.assertEqual("qg-auth-key", urlsplit(self.proxy_urls[0]).username)
+        self.assertEqual("qg-auth-password", urlsplit(self.proxy_urls[0]).password)
+
+    async def test_proxy_http_504_is_recorded_as_login_proxy_response(self):
+        def direct(request):
+            if request.url.path == PRE_INFO_PATH:
+                return httpx.Response(200, json={"status_code": 6000, "data": {"ip": "1.1.1.1"}})
+            return httpx.Response(200, json={"status_code": 6001})
+        def proxy(request):
+            return httpx.Response(504, text="private gateway response")
+        with self.assertRaises(LeyuError) as raised:
+            await self.renewer(config(leyu_login_proxy_url="http://sample:password@proxy.invalid:1234"),
+                               direct, proxy).renew()
+        self.assertEqual("proxy_login_http_rejected", raised.exception.category)
+        self.assertEqual("504", raised.exception.code)
+        self.assertNotIn("private gateway response", str(raised.exception))
+        self.assertEqual("unknown", self.events[-1][1])
+        self.assertEqual("proxy_login_http_rejected", self.events[-1][2]["category"])
+
+    async def test_proxy_connect_and_read_failures_are_separated_without_exception_text(self):
+        def direct(request):
+            if request.url.path == PRE_INFO_PATH:
+                return httpx.Response(200, json={"status_code": 6000, "data": {"ip": "1.1.1.1"}})
+            return httpx.Response(200, json={"status_code": 6001})
+
+        for error_type, expected in ((httpx.ConnectError, "proxy_login_connect_failure"),
+                                     (httpx.ReadTimeout, "proxy_login_read_timeout")):
+            self.events.clear()
+            def proxy(request, error_type=error_type):
+                raise error_type("secret-proxy-and-target-details", request=request)
+            with self.assertRaises(LeyuError) as raised:
+                await self.renewer(config(leyu_login_proxy_url="http://sample:password@proxy.invalid:1234"),
+                                   direct, proxy).renew()
+            self.assertEqual(expected, raised.exception.category)
+            self.assertNotIn("secret-proxy-and-target-details", str(raised.exception))
+            self.assertEqual(expected, self.events[-1][2]["category"])
+
+    async def test_proxy_connection_refusal_is_classified_without_os_error_text(self):
+        def direct(request):
+            if request.url.path == PRE_INFO_PATH:
+                return httpx.Response(200, json={"status_code": 6000, "data": {"ip": "1.1.1.1"}})
+            return httpx.Response(200, json={"status_code": 6001})
+        def proxy(request):
+            error = httpx.ConnectError("sensitive endpoint details", request=request)
+            raise error from ConnectionRefusedError(errno.ECONNREFUSED, "secret proxy host")
+        with self.assertRaises(LeyuError) as raised:
+            await self.renewer(config(leyu_login_proxy_url="http://sample:password@proxy.invalid:1234"),
+                               direct, proxy).renew()
+        self.assertEqual("proxy_login_connection_refused", raised.exception.category)
+        self.assertNotIn("secret proxy host", str(raised.exception))
+        self.assertEqual("proxy_login_connection_refused", self.events[-1][2]["category"])
 
     async def test_6031_is_rejected_once_not_automatically_replayed(self):
         def direct(request):
@@ -217,6 +315,29 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(["https://new.invalid"], await resolver.candidates(direct))
             self.assertEqual(["https://new.invalid"], await resolver.candidates(direct))
         self.assertEqual(1, calls)
+
+    async def test_feed_follows_only_configured_https_redirect_hosts(self):
+        payload = json.dumps({"domain_group": [{"domain": "https://new.invalid"}]}).encode()
+        encrypted = base64.b64encode(aes_cbc(payload, b"k" * 16, b"i" * 16))
+        seen = []
+        def response(request):
+            seen.append(request.url.host)
+            if request.url.host == "feed.invalid":
+                return httpx.Response(302, headers={"location": "https://cdn.invalid/config"})
+            return httpx.Response(200, content=encrypted)
+        resolver = DomainResolver({"feeds": ["https://feed.invalid/config"], "redirect_hosts": ["cdn.invalid"],
+                                   "key": "k" * 16, "iv": "i" * 16}, verify_public=False)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(response), follow_redirects=False) as direct:
+            self.assertEqual(["https://new.invalid"], await resolver.candidates(direct))
+        self.assertEqual(["feed.invalid", "cdn.invalid"], seen)
+
+    async def test_feed_rejects_unconfigured_redirect_host(self):
+        def response(request):
+            return httpx.Response(302, headers={"location": "https://untrusted.invalid/config"})
+        resolver = DomainResolver({"feeds": ["https://feed.invalid/config"], "seed_hosts": []}, verify_public=False)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(response), follow_redirects=False) as direct:
+            with self.assertRaisesRegex(LeyuError, "domain_discovery_unavailable"):
+                await resolver.candidates(direct)
 
     async def test_invalid_discovery_no_credentials_forwarded(self):
         def response(request):

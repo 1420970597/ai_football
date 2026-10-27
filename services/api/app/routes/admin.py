@@ -286,7 +286,11 @@ async def get_settings(request: Request):
     await require_admin(request)
     rows = await database.current_pool().fetch("SELECT setting_key,encrypted_value,updated_at FROM v2_admin_settings")
     settings = request.app.state.settings
-    output = {}
+    output = {
+        key: {"configured": False, "masked": key in SECRET_SETTINGS,
+              "value": None if key in SECRET_SETTINGS else ""}
+        for key in ALLOWED_SETTINGS
+    }
     for row in rows:
         key = row["setting_key"]
         try:

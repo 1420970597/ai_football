@@ -32,7 +32,18 @@ class LeyuRuntime:
         try:
             response = await self.api.request(method, self.api_url + "/collector/renewal" + path, **kwargs)
             if response.status_code >= 300:
-                raise LeyuError("renewal_api_rejected", str(response.status_code))
+                status = response.status_code
+                if status == 409:
+                    category = "renewal_state_conflict"
+                elif status in {401, 403}:
+                    category = "renewal_api_unauthorized"
+                elif status == 422:
+                    category = "renewal_request_invalid"
+                elif status >= 500:
+                    category = "renewal_api_unavailable"
+                else:
+                    category = "renewal_api_rejected"
+                raise LeyuError(category, str(status))
             value = response.json()
             if not isinstance(value, dict):
                 raise LeyuError("invalid_renewal_api_response")

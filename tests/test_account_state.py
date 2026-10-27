@@ -203,11 +203,20 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_actual_shared_renewal_mock_login_persists_user_session(self):
         await self.bind()
+        for key,value in {
+            'leyu_login_proxy_extract_url':'https://proxy-feed.invalid/get',
+            'leyu_login_proxy_authkey':'qg-account-key',
+            'leyu_login_proxy_authpwd':'qg-account-password',
+        }.items():
+            await self.pool.execute('INSERT INTO v2_admin_settings(setting_key,encrypted_value) VALUES($1,$2)',key,encrypt_secret(b'k'*32,value))
         work=(await self.worker_api.post('/internal/executor/claim')).json()
         calls=[]
+        proxy_urls=[]
 
         def app_http(request):
             calls.append(request)
+            if request.url.host=='proxy-feed.invalid':
+                return httpx.Response(200,json={'code':'SUCCESS','data':[{'server':'8.8.8.8:1234','proxy_ip':'9.9.9.9'}]})
             if request.url.path.endswith('/preInfo'):
                 return httpx.Response(200,json={'status_code':6000,'data':{'ip':'1.1.1.1'}})
             if request.url.path.endswith('/login'):
@@ -221,7 +230,12 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200,json={'status_code':6000,'data':{'url':'https://venue.invalid/index?token=own-business-session','h5Url':'https://ui.invalid'}})
 
         executor=self.executor()
-        executor.session_factory=lambda scope,config,hooks:AccountSessionManager(scope,config,hooks,direct_transport=httpx.MockTransport(app_http),verify_public_hosts=False)
+        def login_transport(proxy_url):
+            proxy_urls.append(proxy_url)
+            return httpx.MockTransport(app_http)
+        executor.session_factory=lambda scope,config,hooks:AccountSessionManager(
+            scope,config,hooks,direct_transport=httpx.MockTransport(app_http),
+            login_transport_factory=login_transport,verify_public_hosts=False)
         document={'routes':{name:{'key':'k'*16,'iv':'i'*16} for name in ('','/site/api','/game/api')}}
         with patch('services.collector.leyu_session.private_document',return_value=document):
             await executor.account_job(work)
@@ -231,6 +245,8 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('private-own-app-token',private['leyu_app_token'])
         self.assertEqual('own-business-session',private['leyu_request_id'])
         self.assertEqual(1,sum(request.url.path.endswith('/login') for request in calls))
+        self.assertEqual('qg-account-key',urlsplit(proxy_urls[0]).username)
+        self.assertEqual('qg-account-password',urlsplit(proxy_urls[0]).password)
         self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
 
     async def test_reservation_concurrent_idempotent_limits(self):

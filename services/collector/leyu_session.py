@@ -6,6 +6,7 @@ import asyncio
 import base64
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import errno
 import hashlib
 import ipaddress
 import json
@@ -15,7 +16,7 @@ import secrets
 import socket
 import time
 from typing import Any, Awaitable, Callable, Mapping
-from urllib.parse import parse_qs, quote, unquote, urlsplit, urlunsplit
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit, urlunsplit
 
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -29,11 +30,32 @@ MAX_DISCOVERY_BYTES = 256 * 1024
 MAX_PROXY_BYTES = 64 * 1024
 MAX_PROXY_LIFETIME = 60.0
 PROXY_MARGIN = 5.0
-LOGIN_PATH = "/site/api/v1/member/login"
+LOGIN_PATH = "/site/api/v1/user/login"
 PRE_INFO_PATH = "/site/api/v1/configuration/preInfo"
 LAUNCH_PATH = "/game/api/v1/venue/launch"
 APP_VERSION = "2.0.1"
 SITE_ID = "2001"
+
+
+def _connect_failure_category(scope: str, exc: BaseException) -> str:
+    cause = exc.__cause__
+    for _ in range(4):
+        if cause is None:
+            break
+        if isinstance(cause, socket.gaierror):
+            return f"{scope}_dns_failure"
+        code = getattr(cause, "errno", None)
+        kind = {
+            errno.ECONNREFUSED: "connection_refused",
+            errno.ENETUNREACH: "network_unreachable",
+            errno.EHOSTUNREACH: "host_unreachable",
+            errno.ETIMEDOUT: "connect_timeout",
+            errno.ECONNRESET: "connection_reset",
+        }.get(code)
+        if kind:
+            return f"{scope}_{kind}"
+        cause = cause.__cause__
+    return f"{scope}_connect_failure"
 
 
 def private_document(path: str) -> dict[str, Any]:
@@ -102,25 +124,39 @@ async def public_dns(url: str) -> None:
         raise LeyuError("untrusted_discovery_host") from None
 
 
-async def bounded_request(client: httpx.AsyncClient, method: str, url: str, *, limit: int = MAX_APP_BYTES, **kwargs) -> bytes:
+async def bounded_request(client: httpx.AsyncClient, method: str, url: str, *, limit: int = MAX_APP_BYTES,
+                          failure_scope: str = "app", **kwargs) -> bytes:
     try:
         async with client.stream(method, url, **kwargs) as response:
             if response.status_code >= 300:
-                raise LeyuError("app_http_rejected", str(response.status_code))
+                raise LeyuError(f"{failure_scope}_http_rejected", str(response.status_code))
             body = bytearray()
             async for chunk in response.aiter_bytes():
                 body.extend(chunk)
                 if len(body) > limit:
                     raise LeyuError("app_response_too_large")
             return bytes(body)
+    except httpx.ProxyError:
+        raise LeyuError(f"{failure_scope}_proxy_failure") from None
+    except httpx.ConnectTimeout:
+        raise LeyuError(f"{failure_scope}_connect_timeout") from None
+    except httpx.ReadTimeout:
+        raise LeyuError(f"{failure_scope}_read_timeout") from None
     except httpx.TimeoutException:
-        raise LeyuError("app_timeout") from None
+        raise LeyuError(f"{failure_scope}_timeout") from None
+    except httpx.ConnectError as exc:
+        raise LeyuError(_connect_failure_category(failure_scope, exc)) from None
+    except httpx.ReadError:
+        raise LeyuError(f"{failure_scope}_read_failure") from None
     except httpx.HTTPError:
-        raise LeyuError("app_transport_failure") from None
+        raise LeyuError(f"{failure_scope}_transport_failure") from None
 
 
-async def app_post(client: httpx.AsyncClient, host: str, path: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
-    raw = await bounded_request(client, "POST", host + path, headers=headers, json=body)
+async def app_post(client: httpx.AsyncClient, host: str, path: str, headers: dict[str, str],
+                   body: dict[str, Any], *, failure_scope: str = "app") -> dict[str, Any]:
+    encoded = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    raw = await bounded_request(client, "POST", host + path, headers=headers, content=encoded,
+                                failure_scope=failure_scope)
     try:
         data = json.loads(raw)
         status = data.get("status_code")
@@ -135,9 +171,49 @@ class DomainResolver:
     def __init__(self, document: Mapping[str, Any], *, verify_public: bool = True):
         self.document = dict(document)
         self.verify_public = verify_public
+        redirect_hosts = self.document.get("redirect_hosts", [])
+        if not isinstance(redirect_hosts, list) or len(redirect_hosts) > 16:
+            raise LeyuError("invalid_domain_redirects")
+        self.redirect_hosts = {str(host).strip().lower() for host in redirect_hosts if str(host).strip()}
         self._candidates: list[str] = []
         self._next_refresh = 0.0
         self._lock = asyncio.Lock()
+
+    async def _fetch_feed(self, client: httpx.AsyncClient, feed: str) -> bytes:
+        parts = urlsplit(feed)
+        if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+            raise LeyuError("invalid_discovery_feed")
+        allowed_hosts = self.redirect_hosts | {parts.hostname.lower()}
+        current = feed
+        for redirect_count in range(5):
+            current_parts = urlsplit(current)
+            if (current_parts.scheme != "https" or not current_parts.hostname
+                    or current_parts.username or current_parts.password
+                    or current_parts.hostname.lower() not in allowed_hosts):
+                raise LeyuError("untrusted_discovery_redirect")
+            if self.verify_public:
+                await public_dns(current)
+            try:
+                async with client.stream("GET", current) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        location = response.headers.get("location", "")
+                        if not location or redirect_count == 4:
+                            raise LeyuError("invalid_discovery_redirect")
+                        current = urljoin(current, location)
+                        continue
+                    if response.status_code >= 300:
+                        raise LeyuError("app_http_rejected", str(response.status_code))
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        body.extend(chunk)
+                        if len(body) > MAX_DISCOVERY_BYTES:
+                            raise LeyuError("app_response_too_large")
+                    return bytes(body)
+            except httpx.TimeoutException:
+                raise LeyuError("app_timeout") from None
+            except httpx.HTTPError:
+                raise LeyuError("app_transport_failure") from None
+        raise LeyuError("invalid_discovery_redirect")
 
     async def candidates(self, client: httpx.AsyncClient) -> list[str]:
         async with self._lock:
@@ -152,9 +228,7 @@ class DomainResolver:
                     parts = urlsplit(str(feed))
                     if parts.scheme != "https" or not parts.netloc or parts.username or parts.password:
                         raise LeyuError("invalid_discovery_feed")
-                    if self.verify_public:
-                        await public_dns(str(feed))
-                    raw = await bounded_request(client, "GET", str(feed), limit=MAX_DISCOVERY_BYTES)
+                    raw = await self._fetch_feed(client, str(feed))
                     key, iv = self.document.get("key"), self.document.get("iv")
                     if key and iv:
                         raw = aes_cbc(base64.b64decode(b"".join(raw.split()), validate=True), str(key).encode(), str(iv).encode(), decrypt=True)
@@ -203,6 +277,15 @@ class LoginProxy:
         extract = str(self.config.get("leyu_login_proxy_extract_url") or "").strip()
         if not url and not extract:
             return None
+        authkey = str(self.config.get("leyu_login_proxy_authkey") or "").strip()
+        authpwd = str(self.config.get("leyu_login_proxy_authpwd") or "").strip()
+        if extract and not authkey and not authpwd:
+            raise LeyuError("proxy_credentials_missing")
+        if bool(authkey) != bool(authpwd):
+            raise LeyuError("proxy_credentials_incomplete")
+        if (len(authkey) > 256 or len(authpwd) > 1024
+                or any(ord(char) < 33 or ord(char) == 127 for char in authkey + authpwd)):
+            raise LeyuError("invalid_proxy_credentials")
         started = time.monotonic()
         deadline = started + MAX_PROXY_LIFETIME - PROXY_MARGIN
         egress = ""
@@ -210,7 +293,8 @@ class LoginProxy:
             parts = urlsplit(extract)
             if parts.scheme != "https" or not parts.netloc or parts.username or parts.password:
                 raise LeyuError("invalid_proxy_extraction_url")
-            raw = await bounded_request(direct, "GET", extract, limit=MAX_PROXY_BYTES)
+            raw = await bounded_request(direct, "GET", extract, limit=MAX_PROXY_BYTES,
+                                        failure_scope="proxy_extraction")
             text = raw.decode("utf-8", "strict").strip()
             if text.startswith("{"):
                 try:
@@ -237,8 +321,12 @@ class LoginProxy:
             valid = False
         if not valid:
             raise LeyuError("invalid_login_proxy")
-        # 对当前配置提供方采用其短期会话口令，保证出口探测和登录共享一次动态出口。
-        # session 是随机租约标识，并非固定出口 IP；旧配置可显式关闭/覆盖模板。
+        if extract and authkey and authpwd:
+            hostname = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+            userinfo = f"{quote(authkey, safe='')}:{quote(authpwd, safe='')}"
+            url = urlunsplit((parts.scheme, f"{userinfo}@{hostname}:{parts.port}", "", "", ""))
+        # Session-affinity providers require one short-lived identity for the login request.
+        # The lease is discarded after this request; ordinary traffic stays direct.
         template = str(self.config.get("leyu_login_proxy_password_template") or "")
         if not template and (parts.hostname == "iproyal.com" or parts.hostname.endswith(".iproyal.com")) and "_session-" not in unquote(parts.password or ""):
             # 提供方FAQ秒单位上限59；本地租约再预留5秒，不延长为长期出口。
@@ -289,8 +377,8 @@ class AppSessionRenewer:
         headers = {"x-api-client": "android" if prefix == "/site/api" else "sport_android",
                    "x-api-version": APP_VERSION, "x-api-site": SITE_ID, "x-api-language": "CHS",
                    "x-api-uuid": str(self.config.get("leyu_app_uuid") or ""),
-                   "x-api-token": token, "x-api-currency": "CNY", "content-type": "application/json;charset=utf-8",
-                   "user-agent": "okhttp/4.12.0"}
+                   "x-api-token": token, "x-api-currency": "CNY", "content-type": "application/json; charset=utf-8",
+                   "user-agent": "okhttp/4.12.0", "accept-encoding": "gzip"}
         if self.signer:
             headers.update(self.signer.headers(prefix, ip))
         else:
@@ -318,7 +406,11 @@ class AppSessionRenewer:
         try:
             return host, await self._prepare(client, host)
         except LeyuError as exc:
-            if exc.category not in {"app_http_rejected", "app_transport_failure", "app_timeout"}:
+            if exc.category not in {
+                "app_http_rejected", "app_transport_failure", "app_timeout",
+                "app_connect_timeout", "app_read_timeout", "app_connect_failure",
+                "app_read_failure", "app_proxy_failure",
+            }:
                 raise
             candidates = await self.resolver.candidates(client)
             for candidate in candidates[:4]:
@@ -338,37 +430,28 @@ class AppSessionRenewer:
             raise LeyuError("app_login_credentials_missing")
         lease = await LoginProxy(self.config).acquire(direct)
         if lease:
+            if self.signer and not lease.egress_ip:
+                raise LeyuError("proxy_egress_ip_missing")
             transport = self.login_transport_factory(lease.url) if self.login_transport_factory else None
             proxy = None if transport else lease.url
             timeout = httpx.Timeout(min(20, lease.remaining()), connect=min(5, lease.remaining()))
             async with asyncio.timeout(lease.remaining()), httpx.AsyncClient(timeout=timeout, proxy=proxy, transport=transport, trust_env=False, follow_redirects=False) as login:
-                if not lease.egress_ip:
-                    # 只在登录事务中为同一短期出口验证一次 IP，不代理 preInfo/场馆/采集。
-                    check_url = str(self.config.get("leyu_login_proxy_egress_url") or "https://ipv4.icanhazip.com/")
-                    if urlsplit(check_url).scheme != "https":
-                        raise LeyuError("invalid_proxy_egress_check_url")
-                    raw = await bounded_request(login, "GET", check_url, limit=128)
-                    try:
-                        ip = ipaddress.ip_address(raw.decode("ascii").strip())
-                        if not ip.is_global:
-                            raise ValueError("nonpublic")
-                        lease.egress_ip = str(ip)
-                    except (ValueError, UnicodeError):
-                        raise LeyuError("invalid_proxy_egress_ip") from None
                 remaining = lease.remaining()
                 if remaining <= 1:
                     raise LeyuError("login_proxy_expired")
                 login.timeout = httpx.Timeout(min(20, remaining), connect=min(5, remaining))
-                return await self._submit_login(login, host, lease.egress_ip, name, password)
-        return await self._submit_login(direct, host, direct_ip, name, password)
+                return await self._submit_login(login, host, lease.egress_ip or direct_ip, name, password,
+                                                failure_scope="proxy_login")
+        return await self._submit_login(direct, host, direct_ip, name, password, failure_scope="app_login")
 
-    async def _submit_login(self, client: httpx.AsyncClient, host: str, ip: str, name: str, password: str) -> str:
+    async def _submit_login(self, client: httpx.AsyncClient, host: str, ip: str, name: str, password: str,
+                            *, failure_scope: str) -> str:
         body = {"uuid": self.config["leyu_app_uuid"], "name": name,
                 "password": hashlib.new("md5", password.encode()).hexdigest(),
                 "Flag": 1, "Version": APP_VERSION, "Kaptchcate": 99}
         headers = self._headers("/site/api", ip)
         self._login_submitted = True
-        payload = await app_post(client, host, LOGIN_PATH, headers, body)
+        payload = await app_post(client, host, LOGIN_PATH, headers, body, failure_scope=failure_scope)
         if str(payload.get("status_code")) != "6000":
             raise LeyuError("app_login_rejected", str(payload.get("status_code")))
         data = payload.get("data")

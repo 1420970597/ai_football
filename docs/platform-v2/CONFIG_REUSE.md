@@ -58,7 +58,7 @@ docker run --rm --network none --cpus .5 --memory 256m --user "$(id -u):$(id -g)
 | S3 兼容存储 | 找到旧端点、桶、私有访问键、path样式及原公共TLS证书 | 当前候选容器经隧道完成 `head/put/get/hash/delete` 探针，退出码0；只删除自身测试对象，旧数据未扫描或清理 |
 | 乐鱼 App | 找到当前远端生效登录、签名、设备、代理、动态发现和 token | 16 项采集白名单设置已加密写入当前台账；采集器重新加载后 WebSocket 有事件，但轮询受上游限流，真实会话新鲜度仍待确认 |
 | 乐鱼场馆 | 找到真实场馆缓存 request_id、host、origin、obtained_at、ttl及Cookie字段 | 无随机生成授权；尚未按新适配完整联调，不把找到的缓存标为仍有效 |
-| 登录专用代理 | 找到当前运行代理配置和旧实现引用 | 保留模板配置，未固定出口IP；请求范围由新登录客户端行为测试验证 |
+| 登录专用代理 | v1 保存的是 IPRoyal 账密；它与青果的短期提取出口属于不同产品，不能混用。青果[按量提取文档](https://www.qg.net/doc/1851.html)说明 `server` 是代理地址、`proxy_ip` 是真实出口；其[全球 HTTP 使用说明](https://www.qg.net/doc/2264.html)要求代理授权使用白名单或独立账密。当前未找到青果 Authkey/Authpwd | 新增独立加密配置键供管理员热修改；短期提取配置在账密缺失时拒绝继续，避免误把提取 API key 当代理账密 |
 | Telegram 应用 | v1 PostgreSQL `runtime_settings` 的 API ID/Hash 和受保护配置中的启用标志已复用并加密写入 v2；状态设置已核对 | 不需要重新填写应用凭据；v2 容器曾确认会话授权，但后续 Telegram 返回重复授权错误 |
 | Telegram 会话 | v1 受保护配置中的 StringSession 与 v1 `telegram-private/user.session.enc` 解密后的会话相同，已按 v2 数据密钥加密迁入 | 该授权密钥已由 Telegram 以 `AUTH_KEY_DUPLICATED` 废弃；需要用现有 API 凭据重新扫码生成会话，不能继续重试旧密钥 |
 | 专家映射 | v1 的 3 个来源及 7 个稳定作者身份映射已事务化写入 v2，3 个来源均启用 | 昵称由已授权会话首次读取时同步；未迁移专家历史统计或伪造昵称 |

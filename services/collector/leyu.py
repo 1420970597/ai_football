@@ -17,9 +17,12 @@ from .leyu_protocol import (
 
 DEFAULT_FIXTURE_PATH = "/yewu11/v2/m/getOriginalDataPB"
 DEFAULT_ODDS_PATH = "/yewu11/v1/w/structureMatchBaseInfoByMidsPB"
+DEFAULT_MATCH_ODDS_PATH = "/yewu11/v1/w/getMatchBaseInfoByOddsPB"
 DEFAULT_BATCH_SIZE = 12
 DEFAULT_CONCURRENCY = 2
 DEFAULT_BATCH_INTERVAL = 0.2
+DEFAULT_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36")
 
 
 def safe_base_url(value: str, *, allow_http: bool = False) -> str:
@@ -47,7 +50,7 @@ class LeyuClient:
 
     def __init__(
         self, base_url: str, token: str = "", request_id: str = "", *,
-        origin: str = "", cookie: str = "", user_agent: str = "Mozilla/5.0",
+        origin: str = "", cookie: str = "", user_agent: str = DEFAULT_USER_AGENT,
         cuid: str = "", check_id_base: str = "", batch_size: int = DEFAULT_BATCH_SIZE,
         concurrency: int = DEFAULT_CONCURRENCY, batch_interval: float = DEFAULT_BATCH_INTERVAL,
         transport: httpx.AsyncBaseTransport | None = None, allow_http: bool = False,
@@ -83,7 +86,7 @@ class LeyuClient:
             # App token 只用于 App 续期；业务 Cookie 必须有独立明确配置。
             text("leyu_api_base"), text("leyu_business_cookie_token"), text("leyu_request_id"),
             origin=text("leyu_origin"), cookie=text("leyu_cookie"),
-            user_agent=text("leyu_user_agent", "Mozilla/5.0"), cuid=text("leyu_cuid"),
+            user_agent=text("leyu_user_agent", DEFAULT_USER_AGENT), cuid=text("leyu_cuid"),
             check_id_base=text("leyu_check_id_base"), batch_size=batch_size,
             concurrency=concurrency, batch_interval=interval, **kwargs,
         )
@@ -95,6 +98,7 @@ class LeyuClient:
             "requestId": self.request_id,
             "checkId": f"pc-{self.check_id_base}-{self.cuid}-{int(time.time() * 1000)}",
             "origin": self.origin, "referer": self.origin + "/", "user-agent": self.user_agent,
+            "sec-fetch-site": "cross-site", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty",
         }
         cookie = self.cookie
         if self.token and "x-api-token=" not in cookie.lower():
@@ -161,16 +165,48 @@ class LeyuClient:
             semaphore = asyncio.Semaphore(self.concurrency)
             rate_limit = asyncio.Lock()
             next_request = 0.0
+            single_match_fallbacks = 0
+
+            async def pace_request() -> None:
+                nonlocal next_request
+                async with rate_limit:
+                    wait = next_request - time.monotonic()
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                    next_request = time.monotonic() + self.batch_interval
+
+            def apply_market_row(fixture: dict[str, Any], row: Mapping[str, Any], captured: datetime) -> None:
+                parsed = parse_fixtures([row], received_at=captured)
+                if parsed:
+                    # Detail may fill state and score; it cannot replace schedule competition identity.
+                    detail = parsed[0]
+                    for key in ("phase", "match_state", "home_score", "away_score", "half_home_score",
+                                "half_away_score", "clock_minute", "clock_raw", "source_updated_at",
+                                "source_time_quality", "received_at"):
+                        fixture[key] = detail[key]
+                fixture["markets"] = parse_quotes(row, fixture["id"], captured)
+                fixture["markets_complete"] = isinstance(row.get("hpsData"), (list, Mapping))
+                if not fixture["markets_complete"]:
+                    fixture["collection_error"] = "market_container_missing"
+
+            async def fetch_single_match(mid: str) -> Mapping[str, Any] | None:
+                nonlocal single_match_fallbacks
+                body = {"cuid": self.cuid, "cos": 0, "orpt": 0, "euid": "3020101",
+                        "mid": mid, "mcid": 0, "newUser": 0}
+                await pace_request()
+                details = await self._request(client, "POST", DEFAULT_MATCH_ODDS_PATH, json=body)
+                single_match_fallbacks += 1
+                rows = details.get("data") if isinstance(details, Mapping) and "data" in details else details
+                if isinstance(rows, Mapping):
+                    rows = [rows]
+                if not isinstance(rows, list):
+                    raise LeyuError("invalid_single_match_odds_rows")
+                return next((row for row in rows if isinstance(row, Mapping) and str(row.get("mid")) == mid), None)
 
             async def fetch_batch(batch: list[str]) -> None:
-                nonlocal next_request
                 async with semaphore:
-                    async with rate_limit:
-                        wait = next_request - time.monotonic()
-                        if wait > 0:
-                            await asyncio.sleep(wait)
-                        next_request = time.monotonic() + self.batch_interval
                     try:
+                        await pace_request()
                         body = {
                             "mids": ",".join(batch), "cuid": self.cuid,
                             "cos": 0, "orpt": 0, "euid": "3020101",
@@ -188,21 +224,21 @@ class LeyuClient:
                             fixture = by_id[mid]
                             row = detail_by_id.get(mid)
                             if row is None:
+                                try:
+                                    row = await fetch_single_match(mid)
+                                except (AuthExpired, RateLimited):
+                                    raise
+                                except LeyuError as exc:
+                                    failures.append({"size": 1, "fallback": True,
+                                                     "category": exc.category, "code": exc.code})
+                                    fixture["markets_complete"] = False
+                                    fixture["collection_error"] = exc.category
+                                    continue
+                            if row is None:
                                 fixture["markets_complete"] = False
                                 fixture["collection_error"] = "fixture_detail_missing"
                                 continue
-                            parsed = parse_fixtures([row], received_at=captured)
-                            if parsed:
-                                # 详情可补比分/阶段，但不能把详情缺联赛或项目覆盖赛程映射。
-                                detail = parsed[0]
-                                for key in ("phase", "match_state", "home_score", "away_score", "half_home_score",
-                                            "half_away_score", "clock_minute", "clock_raw", "source_updated_at",
-                                            "source_time_quality", "received_at"):
-                                    fixture[key] = detail[key]
-                            fixture["markets"] = parse_quotes(row, fixture["id"], captured)
-                            fixture["markets_complete"] = isinstance(row.get("hpsData"), (list, Mapping))
-                            if not fixture["markets_complete"]:
-                                fixture["collection_error"] = "market_container_missing"
+                            apply_market_row(fixture, row, captured)
                     except (AuthExpired, RateLimited):
                         raise
                     except LeyuError as exc:
@@ -224,6 +260,7 @@ class LeyuClient:
             self.last_report = {
                 "fixtures": len(fixtures),
                 "complete_market_fixtures": sum(bool(f.get("markets_complete")) for f in fixtures),
+                "single_match_fallbacks": single_match_fallbacks,
                 "failed_batches": failures,
                 "received_at": timestamp(datetime.now(timezone.utc)),
             }

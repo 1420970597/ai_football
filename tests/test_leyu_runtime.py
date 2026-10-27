@@ -96,6 +96,23 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await runtime.load()
             self.assertNotIn("private-secret", str(raised.exception))
             self.assertNotIn("api.invalid", str(raised.exception))
+            self.assertEqual("renewal_api_unauthorized", raised.exception.category)
+
+    async def test_renewal_rpc_statuses_have_actionable_categories(self):
+        expected = {
+            409: "renewal_state_conflict",
+            422: "renewal_request_invalid",
+            503: "renewal_api_unavailable",
+        }
+        for status, category in expected.items():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request, status=status: httpx.Response(status, text="private-response")
+            )) as api:
+                runtime = LeyuRuntime(api, "https://api.invalid/internal")
+                with self.assertRaises(LeyuError) as raised:
+                    await runtime.load()
+                self.assertEqual(category, raised.exception.category)
+                self.assertNotIn("private-response", str(raised.exception))
 
     def test_incremental_quotes_preserve_suspension_and_reject_old_unknown_time(self):
         quote = {"market_id": "4", "period": "full_time", "line": "-.5", "selection": "home", "price": "2.0",
