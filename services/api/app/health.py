@@ -112,10 +112,12 @@ class MCPProbe:
                 return self.value
             try:
                 async with httpx.AsyncClient(timeout=1.5, trust_env=False, follow_redirects=False) as client:
-                    response = await client.get(self.url, headers={"Authorization": "Bearer " + self.token})
-                # The streamable MCP endpoint may require POST; a protocol
-                # response or method rejection both prove the service exists.
-                self.value = "reachable" if response.status_code in {200, 405} else "unavailable"
+                    async with client.stream("GET", self.url, headers={
+                        "Authorization": "Bearer " + self.token,
+                        "Accept": "text/event-stream",
+                    }) as response:
+                        # Do not consume the potentially unbounded SSE body.
+                        self.value = "reachable" if response.status_code in {200, 405} else "unavailable"
             except httpx.HTTPError:
                 self.value = "unavailable"
             self.expires = time.monotonic() + self.ttl

@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 
@@ -44,9 +44,11 @@ class StorageAndMCPHealthTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mcp_probe_accepts_protocol_method_rejection_as_reachable(self):
         client = AsyncMock()
-        client.get.return_value = httpx.Response(405)
+        stream = AsyncMock()
+        stream.__aenter__.return_value = httpx.Response(405)
+        client.stream = Mock(return_value=stream)
         probe = MCPProbe("http://hermes-mcp:8090/mcp", "token")
         with patch("app.health.httpx.AsyncClient") as factory:
             factory.return_value.__aenter__.return_value = client
             self.assertEqual("reachable", await probe.check())
-        client.get.assert_awaited_once()
+        client.stream.assert_called_once()
