@@ -126,7 +126,7 @@ class CollectorService:
         self.telegram = telegram_factory({}, api=api, api_url=self.api_url + "/telegram")
         self.resync = asyncio.Event()
         self.status: dict[str, Any] = {
-            "leyu": {"state": "starting", "last_error": "", "official_result_confirmation": "unconfigured"},
+            "leyu": {"state": "starting", "last_error": "", "last_error_code": "", "official_result_confirmation": "unconfigured"},
             "telegram": {"state": "starting", "last_error": ""},
         }
         self.telegram.source_health = self.status
@@ -229,7 +229,7 @@ class CollectorService:
                 state = ("degraded" if self.runtime.config_validation_error else
                          "healthy" if complete == expected and (freshness["freshness"] in {"fresh", "unknown"}) else "partial")
                 self.status["leyu"].update(state=state, fixtures=len(fixtures), accepted=accepted,
-                                           complete_market_fixtures=complete, last_error="",
+                                           complete_market_fixtures=complete, last_error="", last_error_code="",
                                            last_success_at=datetime.now(timezone.utc).isoformat(), config_version=self.runtime.version,
                                            config_validated_at=self.runtime.config_validated_at,
                                            config_validation_error=self.runtime.config_validation_error,
@@ -238,7 +238,8 @@ class CollectorService:
                 failures = 0
             except Exception as exc:
                 failures += 1
-                update = {"state": "unavailable", "last_error": category(exc)}
+                update = {"state": "unavailable", "last_error": category(exc),
+                          "last_error_code": exc.code if isinstance(exc, LeyuError) else ""}
                 if self.runtime.version > 0:
                     update["config_version"] = self.runtime.version
                 if self.runtime.config_validated_at:

@@ -263,6 +263,21 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secret proxy host", str(raised.exception))
         self.assertEqual("proxy_login_connection_refused", self.events[-1][2]["category"])
 
+    async def test_proxy_connect_http_status_is_retained_without_reason_text(self):
+        def direct(request):
+            if request.url.path == PRE_INFO_PATH:
+                return httpx.Response(200, json={"status_code": 6000, "data": {"ip": "1.1.1.1"}})
+            return httpx.Response(200, json={"status_code": 6001})
+
+        def proxy(request):
+            raise httpx.ProxyError("407 Proxy Authentication Required: private credentials", request=request)
+
+        with self.assertRaises(LeyuError) as raised:
+            await self.renewer(config(leyu_login_proxy_url="http://sample:password@proxy.invalid:1234"), direct, proxy).renew()
+        self.assertEqual(("proxy_login_proxy_http_rejected", "407"), (raised.exception.category, raised.exception.code))
+        self.assertNotIn("private credentials", str(raised.exception))
+        self.assertEqual("proxy_login_proxy_http_rejected", self.events[-1][2]["category"])
+
     async def test_6031_is_rejected_once_not_automatically_replayed(self):
         def direct(request):
             if request.url.path == PRE_INFO_PATH:
