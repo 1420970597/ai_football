@@ -35,6 +35,7 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://testserver",
                                         headers={"Authorization": "Bearer test-collector-token"})
         self.source_id, self.expert_id, self.admin_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        self.event_time = datetime.now(timezone.utc)
         await self.pool.execute("INSERT INTO v2_expert_sources(id,platform_chat_id,display_name) VALUES($1,'-1001','测试来源')", self.source_id)
         await self.pool.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,'7','测试专家')", self.expert_id)
         await self.pool.execute("INSERT INTO v2_source_experts(source_id,expert_id) VALUES($1,$2)", self.source_id, self.expert_id)
@@ -48,12 +49,12 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         await self.control.execute(f'DROP DATABASE "{self.name}"')
         await self.control.close()
 
-    def event(self, *, version="v1", text="赛前阿森纳大2.5", media=False, kind="message", minutes=0):
-        when = datetime(2026, 10, 26, tzinfo=timezone.utc) + timedelta(minutes=minutes)
+    def event(self, *, version="v1", text="赛前阿森纳大2.5", media=False, kind="message", minutes=0, days_ago=0):
+        when = self.event_time + timedelta(minutes=minutes)
         return {"chat_id": "-1001", "owner": str(self.owner), "platform_message_id": "11", "member_message_ids": [11],
                 "version_key": hashlib.sha256(version.encode()).hexdigest(), "event_kind": kind,
                 "sender_id": "7", "sender_nickname": "测试专家", "source_version_at": when.isoformat(),
-                "posted_at": datetime(2026, 10, 26, tzinfo=timezone.utc).isoformat(), "raw_text": text,
+                "posted_at": (self.event_time - timedelta(days=days_ago)).isoformat(), "raw_text": text,
                 "media_state": "pending" if media else "ready",
                 "media_manifest": [{"message_id": 11, "mime_type": "image/jpeg", "bytes": 100}] if media else [],
                 "media_objects": []}
@@ -103,8 +104,39 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, ready.status_code, ready.text)
         self.assertEqual(ready.json()["message_id"], repeated.json()["message_id"])
         self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_jobs"))
+        self.assertEqual('queued', await self.pool.fetchval("SELECT state FROM v2_analysis_jobs"))
         self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_expert_messages"))
         self.assertEqual([], (await self.client.get("/internal/telegram/pending")).json()["items"])
+
+    async def test_historical_ready_message_is_preserved_without_automatic_model_job(self):
+        body = self.event(days_ago=3, media=True)
+        body.update(media_state='ready', media_objects=[{
+            'object_key':'telegram/test/history-image', 'mime_type':'image/jpeg',
+            'sha256':'a'*64, 'bytes':100,
+        }])
+        response = await self.post(body)
+        self.assertEqual(200, response.status_code, response.text)
+        message_id = uuid.UUID(response.json()['message_id'])
+        job_id = uuid.UUID(response.json()['review_id'])
+        job = await self.pool.fetchrow("SELECT state,review_mode,last_error FROM v2_analysis_jobs WHERE id=$1", job_id)
+        self.assertEqual(('unresolved','historical_replay','historical_backlog_auto_suppressed_by_operator'),
+                         tuple(job.values()))
+        self.assertEqual(body['raw_text'], await self.pool.fetchval('SELECT raw_text FROM v2_expert_messages WHERE id=$1', message_id))
+        self.assertEqual(body['media_objects'], await self.pool.fetchval('SELECT media_objects FROM v2_expert_messages WHERE id=$1', message_id))
+        audit = await self.pool.fetchrow("SELECT trace_kind,payload FROM v2_analysis_traces WHERE job_id=$1", job_id)
+        self.assertEqual('telegram_auto_review_suppressed', audit['trace_kind'])
+        self.assertEqual('historical_backlog_auto_suppressed_by_operator', audit['payload']['reason'])
+        repeated = await self.post(body)
+        self.assertEqual(response.json()['message_id'], repeated.json()['message_id'])
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
+
+    async def test_future_timestamp_is_preserved_but_never_claimed_as_live(self):
+        body = self.event(minutes=30)
+        body['posted_at'] = (self.event_time + timedelta(minutes=30)).isoformat()
+        response = await self.post(body)
+        self.assertEqual(200, response.status_code, response.text)
+        job = await self.pool.fetchrow("SELECT state,review_mode,last_error FROM v2_analysis_jobs")
+        self.assertEqual(('unresolved','real_time','message_timestamp_in_future'), tuple(job.values()))
 
     async def test_edit_withdraws_previous_job_and_keeps_original(self):
         first = await self.post(self.event())

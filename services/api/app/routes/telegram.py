@@ -21,6 +21,7 @@ from ..auth import audit, require_admin
 from ..security import encrypt_secret
 from .. import message_read
 from .. import telegram_reconciliation
+from ..review_policy import REALTIME_WINDOW_SECONDS
 
 
 router = APIRouter()
@@ -360,11 +361,32 @@ async def ingest_event(body: EventInput, request: Request):
                 await conn.execute("UPDATE v2_expert_messages SET media_objects=$2,media_state=$3 WHERE id=$1", message_id, media_objects, body.media_state)
             job_id = None
             if body.media_state == "ready":
+                age = (datetime.now(timezone.utc) - body.posted_at.astimezone(timezone.utc)).total_seconds()
+                auto_review = 0 <= age <= REALTIME_WINDOW_SECONDS
+                review_mode = 'real_time' if auto_review or age < 0 else 'historical_replay'
+                initial_state = 'queued' if auto_review else 'unresolved'
+                suppression = None if auto_review else (
+                    'historical_backlog_auto_suppressed_by_operator' if age > REALTIME_WINDOW_SECONDS
+                    else 'message_timestamp_in_future')
+                idempotency_key = hashlib.sha256(
+                    f"telegram:{source['id']}:{body.platform_message_id}:{body.version_key}".encode()).hexdigest()
                 job_id = await conn.fetchval(
-                    "INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key) VALUES($1,$2,'queued',$3) "
-                    "ON CONFLICT(idempotency_key) DO UPDATE SET updated_at=v2_analysis_jobs.updated_at RETURNING id",
-                    uuid.uuid4(), message_id, hashlib.sha256(f"telegram:{source['id']}:{body.platform_message_id}:{body.version_key}".encode()).hexdigest(),
+                    "INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key,review_mode,last_error) "
+                    "VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(idempotency_key) DO NOTHING RETURNING id",
+                    uuid.uuid4(), message_id, initial_state, idempotency_key, review_mode, suppression,
                 )
+                if job_id and suppression:
+                    await conn.execute(
+                        "INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) "
+                        "VALUES($1,$2,1,'telegram_auto_review_suppressed',$3)",
+                        uuid.uuid4(), job_id, {'reason': suppression, 'review_mode': review_mode,
+                            'posted_at': body.posted_at.astimezone(timezone.utc).isoformat(),
+                            'realtime_window_seconds': REALTIME_WINDOW_SECONDS,
+                            'source_message_preserved': True, 'media_preserved': True},
+                    )
+                if not job_id:
+                    job_id = await conn.fetchval(
+                        "SELECT id FROM v2_analysis_jobs WHERE idempotency_key=$1", idempotency_key)
     return {"persisted": True, "state": body.media_state, "message_id": str(message_id),
             "review_id": str(job_id) if job_id else None,
             "media_objects": media_objects if body.media_state in {'pending', 'failed'} else []}
