@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from datetime import datetime, timezone
 import hashlib
@@ -41,6 +42,26 @@ class HermesImagesTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('专家昵称', parts[0]['text'])
         self.assertEqual(PNG, base64.b64decode(parts[1]['image_url']['url'].split(',',1)[1]))
         self.assertEqual('high', parts[1]['image_url']['detail'])
+
+    async def test_album_images_prepare_concurrently_with_a_bounded_reader_pool(self):
+        active = peak = 0
+
+        async def read_image(_key):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            try:
+                await asyncio.sleep(.01)
+                return PNG
+            finally:
+                active -= 1
+
+        media = [{'object_key':f'v2/tg/image{i}.png','mime_type':'image/png'} for i in range(4)]
+        with patch.object(blobstore, 'read_image', side_effect=read_image):
+            parts = await hermes_client._content_parts(self.message(media), 'review', 'attempt')
+        self.assertEqual(2, peak)
+        self.assertEqual(5, len(parts))
+        self.assertEqual(['image_url'] * 4, [part['type'] for part in parts[1:]])
 
     async def test_missing_image_fails_whole_review_instead_of_dropping_image(self):
         media = [{'object_key':'v2/missing.png','mime_type':'image/png'}]

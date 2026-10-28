@@ -6,7 +6,7 @@ from io import BytesIO
 from types import SimpleNamespace
 import unittest
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from PIL import Image
@@ -42,6 +42,7 @@ class Backend:
         self.positions = {}
         self.events = {}
         self.calls = []
+        self.checkpoints = []
         self.source_items = [{"chat_id": "-1001", "trusted_sender_ids": ["7"], "allow_media": True}]
         self.fail_chat = None
         self.save_fails = False
@@ -54,6 +55,7 @@ class Backend:
         return self.source_items
 
     async def checkpoint(self, chat_id, owner):
+        self.checkpoints.append((chat_id, owner))
         return {"last_message_id": self.positions.get(chat_id, 0)}
 
     async def advance(self, chat_id, owner, last_message_id, previous):
@@ -277,6 +279,101 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         await self.collector._sync_source('-1001', self.backend.source_items[0])
         self.assertEqual(7, self.backend.positions['-1001'])
         self.assertEqual(8, len(self.backend.events))
+
+    async def test_live_image_starts_media_transfer_after_staging_without_holding_chat_lock(self):
+        self.collector.client = self.client
+        self.collector.sources = {'-1001': self.backend.source_items[0]}
+        entered, release, completed = asyncio.Event(), asyncio.Event(), []
+
+        async def complete(chat_id, payload, members):
+            self.assertFalse(self.collector.locks[chat_id].locked())
+            self.assertEqual('pending', payload['media_state'])
+            entered.set()
+            await release.wait()
+            ready = payload | {'media_state': 'ready', 'media_objects': [{
+                'object_key': 'telegram/test/live-image', 'mime_type': 'image/jpeg',
+                'sha256': 'a' * 64, 'bytes': 100,
+            }]}
+            completed.append((chat_id, len(members)))
+            return await self.backend.event(ready)
+
+        self.collector._complete_pending_media = complete
+        await asyncio.wait_for(self.collector._live_messages('-1001', [Message(99, media=True)]), .5)
+        await asyncio.wait_for(entered.wait(), .5)
+        self.assertEqual(['pending'], [item['media_state'] for item in self.backend.calls])
+        release.set()
+        await asyncio.gather(*tuple(self.collector.live_media_tasks.values()))
+        self.assertEqual([('-1001', 1)], completed)
+        states = [item['media_state'] for item in self.backend.calls]
+        self.assertEqual(['pending', 'ready'], states)
+
+    async def test_live_single_message_uses_cached_author_without_entity_rpc(self):
+        self.collector.sources = {'-1001': self.backend.source_items[0]}
+        message = Message(100)
+        message.sender = SimpleNamespace(id=7, first_name='专家', last_name='甲', username='cached-expert')
+        message.get_sender = AsyncMock(side_effect=AssertionError('cached author should avoid Telegram RPC'))
+        self.collector._entity = AsyncMock(side_effect=AssertionError('single message does not need group entity'))
+
+        await self.collector._live_messages('-1001', [message], entity=object())
+
+        message.get_sender.assert_not_awaited()
+        self.collector._entity.assert_not_awaited()
+        self.assertEqual('专家 甲', self.backend.calls[0]['sender_nickname'])
+
+    async def test_sender_and_reply_lookups_run_concurrently(self):
+        self.collector.sources = {'-1001': self.backend.source_items[0]}
+        sender_entered, reply_entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        message = Message(105)
+        message.reply_to_msg_id = 44
+
+        async def get_sender():
+            sender_entered.set()
+            await release.wait()
+            return SimpleNamespace(id=7, first_name='专家', last_name='甲', username=None)
+
+        async def get_reply():
+            reply_entered.set()
+            await release.wait()
+            return SimpleNamespace(id=44, sender_id=8, message='原始上下文', media=None)
+
+        message.get_sender = get_sender
+        message.get_reply_message = get_reply
+        live = asyncio.create_task(self.collector._live_messages('-1001', [message]))
+        try:
+            await asyncio.wait_for(asyncio.gather(sender_entered.wait(), reply_entered.wait()), .5)
+        finally:
+            release.set()
+        await asyncio.wait_for(live, .5)
+        self.assertEqual('原始上下文', self.backend.calls[0]['reply_context']['text'])
+
+    async def test_live_messages_reuse_recent_checkpoint_verification(self):
+        self.collector.sources = {'-1001': self.backend.source_items[0]}
+
+        await self.collector._live_messages('-1001', [Message(101)])
+        await self.collector._live_messages('-1001', [Message(102)])
+        self.assertEqual(1, len(self.backend.checkpoints))
+
+        self.collector.checkpoint_verified_at['-1001'] -= 31
+        await self.collector._live_messages('-1001', [Message(103)])
+        self.assertEqual(2, len(self.backend.checkpoints))
+        self.assertEqual(3, len(self.backend.calls))
+
+    async def test_slow_directory_refresh_does_not_hold_live_message_lock(self):
+        self.collector.client = self.client
+        self.collector.sources = {'-1001': self.backend.source_items[0]}
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_directory(*_args):
+            entered.set()
+            await release.wait()
+
+        self.collector._refresh_directory = slow_directory
+        history = asyncio.create_task(self.collector._sync_source('-1001', self.backend.source_items[0]))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        await asyncio.wait_for(self.collector._live_messages('-1001', [Message(99)]), timeout=.5)
+        self.assertIn(('-1001', '99'), [(item['chat_id'], item['platform_message_id']) for item in self.backend.calls])
+        release.set()
+        await history
 
     async def test_history_time_slice_yields_only_after_a_durable_message(self):
         self.client.messages['-1001'] = [Message(1), Message(2)]

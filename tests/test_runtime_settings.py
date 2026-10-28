@@ -55,13 +55,18 @@ class RuntimeSettingsTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('api_key',body)
             return httpx.Response(200,json={'model':body['model'],'choices':[{'finish_reason':'stop',
                 'message':{'content':'已完成工具核验'}}]})
-        factory=httpx.AsyncClient
-        with patch.object(hermes_client.httpx,'AsyncClient',side_effect=lambda **kw:factory(transport=httpx.MockTransport(handler),**kw)):
-            snapshot=await hermes_client.resolve_review_settings(settings)
-            self.assertEqual(version,snapshot.configuration_version)
-            with patch.object(hermes_client,'_content_parts',AsyncMock(return_value=[{'type':'text','text':'sample'}])):
-                await hermes_client.review_message(snapshot,{},uuid.uuid4(),uuid.uuid4())
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            with patch.object(hermes_client.httpx, 'AsyncClient', side_effect=AssertionError('worker client should be reused')):
+                snapshot=await hermes_client.resolve_review_settings(settings, client=client)
+                self.assertEqual(version,snapshot.configuration_version)
+                with patch.object(hermes_client,'_content_parts',AsyncMock(return_value=[{'type':'text','text':'sample'}])):
+                    _, summary = await hermes_client.review_message(snapshot,{},uuid.uuid4(),uuid.uuid4(),client=client)
+        finally:
+            await client.aclose()
         self.assertEqual(['api','hermes'],[r.url.host for r in requests])
+        self.assertGreaterEqual(summary['input_prepare_elapsed_ms'], 0)
+        self.assertGreaterEqual(summary['provider_elapsed_ms'], 0)
         self.assertEqual('hermes-agent',settings.hermes_model)
 
     async def test_internal_config_failure_never_falls_back_to_stale_model(self):

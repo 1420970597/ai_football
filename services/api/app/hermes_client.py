@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import re
+import time
 import uuid
 from datetime import timezone
 from types import MappingProxyType
@@ -41,16 +42,19 @@ class FrozenReviewSettings:
         raise AttributeError('review configuration snapshot is immutable')
 
 
-async def resolve_review_settings(settings):
+async def resolve_review_settings(settings, *, client=None):
     """Snapshot non-secret per-attempt configuration through the internal API."""
     if isinstance(settings, FrozenReviewSettings) or not getattr(settings, "review_config_url", None):
         return settings
-    async with httpx.AsyncClient(timeout=httpx.Timeout(5, connect=2), trust_env=False) as client:
-        response = await client.get(settings.review_config_url, headers={
-            "Authorization": f"Bearer {settings.hermes_api_key}",
-        })
-        response.raise_for_status()
-        value = response.json()
+    headers = {"Authorization": f"Bearer {settings.hermes_api_key}"}
+    if client is None:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5, connect=2), trust_env=False) as owned_client:
+            response = await owned_client.get(settings.review_config_url, headers=headers)
+    else:
+        response = await client.get(settings.review_config_url, headers=headers,
+                                    timeout=httpx.Timeout(5, connect=2))
+    response.raise_for_status()
+    value = response.json()
     model = validate_runtime_value("hermes_analysis_model", value.get("model") or "")
     version = str(value.get("configuration_version", ""))
     provider = str(value.get("provider", ""))
@@ -66,12 +70,16 @@ async def resolve_review_settings(settings):
         token = value.get('consumption_token')
         if not isinstance(token, str) or not 1 <= len(token) <= 4096:
             raise RuntimeError('review configuration consumption token is missing')
-        async with httpx.AsyncClient(timeout=httpx.Timeout(5, connect=2), trust_env=False) as client:
-            response = await client.post(settings.review_config_url.rstrip('/')+'/ack', headers={
-                'Authorization': f'Bearer {settings.hermes_api_key}'}, json={
-                'token': token, 'model': model or None, 'provider': provider, 'prompt_sha256': local_prompt})
-            response.raise_for_status()
-            ack = response.json()
+        if client is None:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5, connect=2), trust_env=False) as owned_client:
+                response = await owned_client.post(settings.review_config_url.rstrip('/')+'/ack', headers=headers,
+                    json={'token': token, 'model': model or None, 'provider': provider, 'prompt_sha256': local_prompt})
+        else:
+            response = await client.post(settings.review_config_url.rstrip('/')+'/ack', headers=headers,
+                json={'token': token, 'model': model or None, 'provider': provider, 'prompt_sha256': local_prompt},
+                timeout=httpx.Timeout(5, connect=2))
+        response.raise_for_status()
+        ack = response.json()
         if ack.get('accepted') is not True or ack.get('version') != metadata['version']:
             raise RuntimeError('review configuration consumption was not acknowledged')
     return FrozenReviewSettings(vars(settings) | {
@@ -109,10 +117,15 @@ async def _content_parts(message: dict, review_id: str, attempt_id: str) -> list
     total_bytes = 0
     if len(message['media_objects']) > 10:
         raise RuntimeError('review image count exceeds limit')
-    for media in message["media_objects"]:
+
+    image_slots = asyncio.Semaphore(2)
+    byte_lock = asyncio.Lock()
+
+    async def prepare_image(media):
+        nonlocal total_bytes
         mime = _image_mime(media)
-        image = await blobstore.read_image(str(media["object_key"]))
-        await asyncio.to_thread(blobstore.validate_image, image)
+        async with image_slots:
+            image = await blobstore.read_image(str(media["object_key"]))
         if mime != blobstore.image_mime(image):
             raise RuntimeError('remote image type conflicts with stored media evidence')
         expected_digest = str(media.get("sha256", "")).strip().lower()
@@ -128,16 +141,30 @@ async def _content_parts(message: dict, review_id: str, attempt_id: str) -> list
                 raise RuntimeError('remote image byte evidence is invalid') from None
             if expected_bytes < 0 or expected_bytes != len(image):
                 raise RuntimeError('remote image byte count mismatch')
-        total_bytes += len(image)
-        if total_bytes > MAX_REVIEW_IMAGE_BYTES:
-            raise RuntimeError('review image total bytes exceed limit')
+        async with byte_lock:
+            if total_bytes + len(image) > MAX_REVIEW_IMAGE_BYTES:
+                raise RuntimeError('review image total bytes exceed limit')
+            total_bytes += len(image)
         data_url = f"data:{mime};base64,{base64.b64encode(image).decode('ascii')}"
-        parts.append({"type": "image_url", "image_url": {"url": data_url, "detail": "high"}})
+        return {"type": "image_url", "image_url": {"url": data_url, "detail": "high"}}
+
+    tasks = [asyncio.create_task(prepare_image(media)) for media in message["media_objects"]]
+    try:
+        parts.extend(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     return parts
 
 
-async def review_message(settings: Settings, message: dict, review_id: uuid.UUID, attempt_id: uuid.UUID) -> tuple[str, dict]:
+async def review_message(settings: Settings, message: dict, review_id: uuid.UUID, attempt_id: uuid.UUID,
+                         *, client: httpx.AsyncClient | None = None) -> tuple[str, dict]:
+    preparation_started = time.monotonic()
     parts = await _content_parts(message, str(review_id), str(attempt_id))
+    preparation_elapsed_ms = round((time.monotonic() - preparation_started) * 1000, 3)
     headers = {
         "Authorization": f"Bearer {settings.hermes_api_key}",
         "Idempotency-Key": str(attempt_id),
@@ -156,31 +183,44 @@ async def review_message(settings: Settings, message: dict, review_id: uuid.UUID
         # The pinned Hermes gateway ignores bare model overrides by default.
         # Explicit provider uses its authenticated catalog; no upstream key leaves Hermes.
         request_body["provider"] = settings.hermes_provider
-    async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=3.0), trust_env=False) as client:
-        response = await client.post(f"{settings.hermes_api_url}/chat/completions", json=request_body, headers=headers)
-        response.raise_for_status()
-        payload = response.json()
-        choices = payload.get("choices") or []
-        if not choices or not isinstance(choices[0].get("message"), dict):
-            raise RuntimeError("Hermes returned no assistant message")
-        if choices[0].get("finish_reason") in {"length", "content_filter"}:
-            raise RuntimeError("Hermes review did not finish within its execution budget")
-        content = choices[0]["message"].get("content", "")
-        if isinstance(content, list):
-            content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
-        if not isinstance(content, str):
-            raise RuntimeError("Hermes returned an unsupported result shape")
-        summary = {"model": payload.get("model"), "finish_reason": choices[0].get("finish_reason"),
-                   "usage": payload.get("usage"), "content": content[:20000],
-                   "image_count": len(parts)-1,
-                   "image_bytes": sum(len(base64.b64decode(p['image_url']['url'].split(',',1)[1])) for p in parts[1:])}
-        return content[:20000], summary
+    provider_started = time.monotonic()
+    if client is None:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=3.0), trust_env=False) as owned_client:
+            response = await owned_client.post(f"{settings.hermes_api_url}/chat/completions", json=request_body, headers=headers)
+    else:
+        response = await client.post(f"{settings.hermes_api_url}/chat/completions", json=request_body, headers=headers,
+                                     timeout=httpx.Timeout(600.0, connect=3.0))
+    response.raise_for_status()
+    payload = response.json()
+    provider_elapsed_ms = round((time.monotonic() - provider_started) * 1000, 3)
+    choices = payload.get("choices") or []
+    if not choices or not isinstance(choices[0].get("message"), dict):
+        raise RuntimeError("Hermes returned no assistant message")
+    if choices[0].get("finish_reason") in {"length", "content_filter"}:
+        raise RuntimeError("Hermes review did not finish within its execution budget")
+    content = choices[0]["message"].get("content", "")
+    if isinstance(content, list):
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    if not isinstance(content, str):
+        raise RuntimeError("Hermes returned an unsupported result shape")
+    summary = {"model": payload.get("model"), "finish_reason": choices[0].get("finish_reason"),
+               "usage": payload.get("usage"), "content": content[:20000],
+               "image_count": len(parts)-1,
+               "image_bytes": sum(int(media.get('bytes') or 0) for media in message.get('media_objects', ())),
+               "input_prepare_elapsed_ms": preparation_elapsed_ms,
+               "provider_elapsed_ms": provider_elapsed_ms}
+    return content[:20000], summary
 
 
-async def delete_session(settings: Settings, review_id: uuid.UUID, attempt_id: uuid.UUID) -> None:
+async def delete_session(settings: Settings, review_id: uuid.UUID, attempt_id: uuid.UUID,
+                         *, client: httpx.AsyncClient | None = None) -> None:
     session_id = f"expert-review-{review_id}-{attempt_id}"
     headers = {"Authorization": f"Bearer {settings.hermes_api_key}"}
-    async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=2.0), trust_env=False) as client:
-        response = await client.delete(f"{settings.hermes_api_url.rsplit('/v1', 1)[0]}/api/sessions/{session_id}", headers=headers)
-        if response.status_code not in {200, 204, 404}:
-            response.raise_for_status()
+    url = f"{settings.hermes_api_url.rsplit('/v1', 1)[0]}/api/sessions/{session_id}"
+    if client is None:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=2.0), trust_env=False) as owned_client:
+            response = await owned_client.delete(url, headers=headers)
+    else:
+        response = await client.delete(url, headers=headers, timeout=httpx.Timeout(8.0, connect=2.0))
+    if response.status_code not in {200, 204, 404}:
+        response.raise_for_status()

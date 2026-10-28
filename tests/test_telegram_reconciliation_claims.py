@@ -382,7 +382,8 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
             await conn.execute("INSERT INTO v2_telegram_events(id,source_id,platform_message_id,version_key,source_version_at,event_kind,content,media_state,next_check_at) "
                                "VALUES($1,$2,'99',$3,now(),'message','{}','ready',now()-interval '1 hour')",event,source,hashlib.sha256(b'migration').hexdigest())
             before = dict(await conn.fetchrow('SELECT * FROM v2_telegram_events'))
-            self.assertEqual(['019_telegram_reconciliation_claims.sql'],await database.apply_migrations(conn))
+            self.assertEqual(['019_telegram_reconciliation_claims.sql','020_review_job_notifications.sql'],
+                             await database.apply_migrations(conn))
             after = dict(await conn.fetchrow('SELECT * FROM v2_telegram_events'))
             self.assertEqual(before,{key:after[key] for key in before})
             self.assertTrue(all(after[key] is None for key in set(after)-set(before)))

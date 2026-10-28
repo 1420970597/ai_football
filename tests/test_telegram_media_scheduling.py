@@ -115,6 +115,28 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             await asyncio.wait_for(retry, 1)
 
+    async def test_live_transfer_and_periodic_retry_share_version_deduplication(self):
+        message = Message(1, media=True)
+        await self.stage(message)
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def upload(chat, item):
+            calls.append(item.id)
+            entered.set()
+            await release.wait()
+            return stored(item.id)
+
+        self.collector.media_store = upload
+        await asyncio.wait_for(self.collector._live_messages('-1001', [message]), .5)
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(self.collector.retry_pending(), .5)
+        self.assertEqual([1], calls)
+        self.assertEqual('pending', next(iter(self.backend.events.values()))['media_state'])
+        release.set()
+        await asyncio.gather(*tuple(self.collector.live_media_tasks.values()))
+        self.assertEqual('ready', next(iter(self.backend.events.values()))['media_state'])
+
     async def test_reconciliation_persists_pending_edit_without_downloading(self):
         first = Message(1, text='old')
         await self.stage(first)
@@ -200,14 +222,22 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
             return stored(message.id)
         self.collector.media_store = upload
         retry = asyncio.create_task(self.collector.retry_pending())
+        live_tasks = ()
         try:
             await asyncio.wait_for(entered.wait(), 1)
             edited = Message(1, text='new', media=True, edited=old.date + timedelta(minutes=1))
-            await self.collector._live_messages('-1001', [edited])
+            await asyncio.wait_for(self.collector._live_messages('-1001', [edited]), .5)
+            live_tasks = tuple(self.collector.live_media_tasks.values())
         finally:
-            release.set(); await asyncio.wait_for(retry, 1)
+            release.set()
+            await asyncio.wait_for(retry, 1)
+            if live_tasks:
+                await asyncio.wait_for(asyncio.gather(*live_tasks), 1)
         self.assertEqual(2, len(self.backend.events))
-        self.assertEqual({'pending'}, {v['media_state'] for v in self.backend.events.values()})
+        self.assertEqual({'pending', 'ready'}, {v['media_state'] for v in self.backend.events.values()})
+        self.assertEqual({'old': 'pending', 'new': 'ready'}, {
+            value['raw_text']: value['media_state'] for value in self.backend.events.values()
+        })
 
     async def test_partial_album_failure_keeps_remote_object_reference(self):
         await self.stage(Message(10, media=True, grouped=5), Message(11, media=True, grouped=5))

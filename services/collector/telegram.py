@@ -41,6 +41,9 @@ MESSAGE_MEDIA_PREFIX = "telegram/messages"
 MESSAGE_MEDIA_RETENTION = "expert_message_evidence"
 DIRECTORY_REFRESH_SECONDS = 300
 SYNC_HISTORY_SLICE_SECONDS = 2
+LIVE_CHECKPOINT_CACHE_SECONDS = 30
+LIVE_MEDIA_MAX_TASKS = 32
+LIVE_MEDIA_CONCURRENCY = 2
 SYNC_HISTORY_MAX_MESSAGES = 25
 SOURCE_HISTORY_SECONDS = 25
 RECONCILE_BATCH_SECONDS = 10
@@ -129,8 +132,12 @@ class TelegramCollector:
         self.owner = str(uuid.uuid4())
         self.sources: dict[str, dict] = {}
         self.locks: dict[str, asyncio.Lock] = {}
+        self.live_media_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self.media_transfers: set[tuple[str, str]] = set()
+        self.media_slots = asyncio.Semaphore(LIVE_MEDIA_CONCURRENCY)
         self.session_state_lock = asyncio.Lock()
         self.retry_at: dict[str, float] = {}
+        self.checkpoint_verified_at: dict[str, float] = {}
         self.directory_retry_at: dict[str, float] = {}
         self.directory_trusted: dict[str, tuple] = {}
         self.reconcile_pending: dict[str, list[dict]] = {}
@@ -295,6 +302,7 @@ class TelegramCollector:
         previous, current = self._saved_account(self.config), self._saved_account(config)
         changed = changed or (previous or {}).get('id') != (current or {}).get('id')
         if changed and self.client:
+            await self._cancel_live_media_tasks()
             await self.client.disconnect()
             self.client = None
         if changed:
@@ -310,6 +318,7 @@ class TelegramCollector:
 
     async def disconnect(self):
         await self._cancel_auth()
+        await self._cancel_live_media_tasks()
         if self.client:
             await self.client.disconnect()
             self.client = None
@@ -341,6 +350,65 @@ class TelegramCollector:
                     return self._group_entity(entity)
             raise SourceAccessError("account_has_not_joined_or_entity_is_unavailable") from None
         return self._group_entity(entity)
+
+    async def _checkpoint(self, chat_id: str):
+        result = await self.backend.checkpoint(chat_id, self.owner)
+        self.checkpoint_verified_at[chat_id] = time.monotonic()
+        return result
+
+    async def _ensure_live_checkpoint(self, chat_id: str):
+        verified_at = self.checkpoint_verified_at.get(chat_id, 0)
+        if time.monotonic() - verified_at >= LIVE_CHECKPOINT_CACHE_SECONDS:
+            return await self._checkpoint(chat_id)
+        return None
+
+    async def _cancel_live_media_tasks(self):
+        tasks = list(self.live_media_tasks.values())
+        self.live_media_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _schedule_live_media(self, chat_id: str, payload: dict, members: list):
+        key = (chat_id, str(payload['version_key']))
+        existing = self.live_media_tasks.get(key)
+        if existing and not existing.done():
+            return False
+        if len(self.live_media_tasks) >= LIVE_MEDIA_MAX_TASKS:
+            return False
+        task = asyncio.create_task(self._finish_live_media(chat_id, payload, members))
+        self.live_media_tasks[key] = task
+
+        def finished(done):
+            if self.live_media_tasks.get(key) is done:
+                self.live_media_tasks.pop(key, None)
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                log.warning('Telegram live media deferred category=%s', type(exc).__name__)
+
+        task.add_done_callback(finished)
+        return True
+
+    async def _finish_live_media(self, chat_id: str, payload: dict, members: list):
+        started = time.monotonic()
+        state = 'deferred'
+        try:
+            result = await self._complete_pending_media(chat_id, payload, members)
+            state = result.get('state', 'unknown') if isinstance(result, dict) else 'unknown'
+        except FloodWaitError as exc:
+            self.retry_at[chat_id] = time.monotonic() + exc.seconds
+        except AuthKeyDuplicatedError:
+            await self._invalidate_active_session()
+        except Exception as exc:
+            log.warning('Telegram live media deferred category=%s', type(exc).__name__)
+        finally:
+            log.info('Telegram live media finished state=%s elapsed_ms=%.1f images=%s',
+                     state, (time.monotonic() - started) * 1000,
+                     sum(1 for item in members if getattr(item, 'media', None)))
 
     def _group_entity(self, entity):
         if isinstance(entity, (ChannelForbidden, ChatForbidden)):
@@ -410,7 +478,7 @@ class TelegramCollector:
                 async with gate:
                     async with asyncio.timeout(SOURCE_LEASE_REFRESH_SECONDS):
                         async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                            await self.backend.checkpoint(chat_id, self.owner)
+                            await self._checkpoint(chat_id)
             except Exception as exc:
                 result[chat_id]['lease_state'] = 'deferred'
                 result[chat_id]['lease_error'] = type(exc).__name__
@@ -492,10 +560,12 @@ class TelegramCollector:
     async def _sync_source(self, chat_id: str, source: dict) -> dict:
         if time.monotonic() < self.retry_at.get(chat_id, 0):
             return {"state": "backoff"}
+        # Directory enumeration can involve several Telegram RPCs; keep it out
+        # of the per-chat lock used by new message callbacks.
+        await self._refresh_directory(chat_id, source)
         lock = self.locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
-            checkpoint = await self.backend.checkpoint(chat_id, self.owner)
-            await self._refresh_directory(chat_id, source)
+            checkpoint = await self._checkpoint(chat_id)
             original = int(checkpoint["last_message_id"])
             last, count = original, 0
             started = time.monotonic()
@@ -531,7 +601,7 @@ class TelegramCollector:
         try:
             async with asyncio.timeout(RECONCILE_BATCH_SECONDS):
                 async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                    await self.backend.checkpoint(chat_id, self.owner)
+                    await self._checkpoint(chat_id)
                     if not pending:
                         pending.extend(await self.backend.observed(chat_id, self.owner, limit=RECONCILE_EVENT_LIMIT))
                 if not pending:
@@ -553,7 +623,7 @@ class TelegramCollector:
                     ids = item['content']['member_message_ids']
                     members = [by_id[identifier] for identifier in ids if identifier in by_id]
                     async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                        await self.backend.checkpoint(chat_id, self.owner)
+                        await self._checkpoint(chat_id)
                         try:
                             if not item.get('_reconcile_applied'):
                                 missing = set(ids) - set(by_id)
@@ -613,22 +683,34 @@ class TelegramCollector:
         sender_id = str(getattr(message, "sender_id", "") or "")
         if sender_id not in {str(value) for value in source.get("trusted_sender_ids", [])}:
             return {"state": "ignored_author"}, None
-        sender = await message.get_sender()
+        sender = getattr(message, "sender", None)
         manifests = []
         raw_text = "\n\n".join(item.message for item in members if getattr(item, "message", None))
         reply = next((item.reply_to_msg_id for item in members if getattr(item, "reply_to_msg_id", None)), None)
         reply_context = {}
+        sender_task = asyncio.create_task(message.get_sender()) if sender is None else None
+        reply_task = None
         if reply:
             try:
-                replied = await message.get_reply_message()
-                if replied:
-                    reply_context = {"message_id": str(replied.id), "sender_id": str(getattr(replied, "sender_id", "") or ""),
-                                     "text": (getattr(replied, "message", "") or "")[:20000],
-                                     "has_media": bool(getattr(replied, "media", None))}
-                else:
-                    reply_context = {"unavailable": True}
+                reply_task = asyncio.create_task(message.get_reply_message())
             except Exception:
                 reply_context = {"unavailable": True}
+        lookup_tasks = [task for task in (sender_task, reply_task) if task is not None]
+        lookup_results = await asyncio.gather(*lookup_tasks, return_exceptions=True)
+        lookup_values = dict(zip((task for task in (sender_task, reply_task) if task is not None), lookup_results))
+        if sender_task is not None:
+            sender_result = lookup_values[sender_task]
+            if isinstance(sender_result, BaseException):
+                raise sender_result
+            sender = sender_result
+        if reply_task is not None:
+            replied = lookup_values[reply_task]
+            if isinstance(replied, BaseException) or replied is None:
+                reply_context = {"unavailable": True}
+            else:
+                reply_context = {"message_id": str(replied.id), "sender_id": str(getattr(replied, "sender_id", "") or ""),
+                                 "text": (getattr(replied, "message", "") or "")[:20000],
+                                 "has_media": bool(getattr(replied, "media", None))}
         for item in members:
             if getattr(item, "media", None):
                 file = getattr(item, "file", None)
@@ -669,6 +751,17 @@ class TelegramCollector:
         return first, payload
 
     async def _complete_pending_media(self, chat_id: str, payload: dict, members: list):
+        key = (chat_id, str(payload['version_key']))
+        if key in self.media_transfers:
+            return {"state": "pending", "duplicate_transfer": True}
+        self.media_transfers.add(key)
+        try:
+            async with self.media_slots:
+                return await self._transfer_pending_media(chat_id, payload, members)
+        finally:
+            self.media_transfers.discard(key)
+
+    async def _transfer_pending_media(self, chat_id: str, payload: dict, members: list):
         # Transfers never own the group's event/checkpoint lock. The backend
         # rejects obsolete versions and validates the lease again at commit.
         objects = []
@@ -705,7 +798,7 @@ class TelegramCollector:
     async def _commit_media_payload(self, chat_id: str, payload: dict):
         async with asyncio.timeout(MEDIA_COMMIT_SECONDS):
             async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                await self.backend.checkpoint(chat_id, self.owner)
+                await self._checkpoint(chat_id)
                 return await self.backend.event(payload)
 
     async def retry_pending(self):
@@ -726,12 +819,12 @@ class TelegramCollector:
                 continue
             try:
                 async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                    await self.backend.checkpoint(chat_id, self.owner)
+                    await self._checkpoint(chat_id)
                 entity = await self._entity(chat_id)
                 identifiers = item["content"]["member_message_ids"]
                 members = [entry for entry in await self.client.get_messages(entity, ids=identifiers) if entry]
                 async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                    await self.backend.checkpoint(chat_id, self.owner)
+                    await self._checkpoint(chat_id)
                     missing = set(identifiers) - {entry.id for entry in members}
                     if missing:
                         await self._delete(chat_id, sorted(missing))
@@ -753,23 +846,44 @@ class TelegramCollector:
             # 新相册由 Album 回调完整聚合；编辑相册仍需读取全组。
             if isinstance(event, events.NewMessage.Event) and not getattr(event.message, "edit_date", None):
                 return
-        await self._live_messages(str(event.chat_id), [event.message])
+        await self._live_messages(str(event.chat_id), [event.message], entity=getattr(event, 'chat', None))
 
     async def _on_album(self, event):
-        await self._live_messages(str(event.chat_id), list(event.messages), full_album=True)
+        await self._live_messages(str(event.chat_id), list(event.messages), full_album=True,
+                                  entity=getattr(event, 'chat', None))
 
-    async def _live_messages(self, chat_id, members, full_album=False):
+    async def _live_messages(self, chat_id, members, full_album=False, entity=None):
         source = self.sources.get(chat_id)
         if not source:
             return
+        payload = None
+        group = sorted(members, key=lambda item: item.id) if full_album else members
+        started = time.monotonic()
+        lock_started = started
         try:
             async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                await self.backend.checkpoint(chat_id, self.owner)
-                if full_album:
-                    await self._process_group(chat_id, source, sorted(members, key=lambda item: item.id))
-                else:
+                await self._ensure_live_checkpoint(chat_id)
+            lock_wait_ms = (time.monotonic() - lock_started) * 1000
+            lookup_started = time.monotonic()
+            if not full_album and getattr(members[0], "grouped_id", None):
+                if entity is None:
                     entity = await self._entity(chat_id)
-                    await self._process_message(chat_id, source, members[0], entity)
+                if entity is not None:
+                    group = await self._expand_album(members[0], entity)
+            lookup_ms = (time.monotonic() - lookup_started) * 1000
+            persist_started = time.monotonic()
+            _, payload = await self._stage_group(chat_id, source, group)
+            persist_ms = (time.monotonic() - persist_started) * 1000
+            media_ms = 0.0
+            if payload is not None:
+                media_started = time.monotonic()
+                self._schedule_live_media(chat_id, payload, group)
+                media_ms = (time.monotonic() - media_started) * 1000
+            log.info('Telegram live event persisted lock_wait_ms=%.1f lookup_ms=%.1f persist_ms=%.1f '
+                     'media_ms=%.1f total_ms=%.1f members=%s images=%s',
+                     lock_wait_ms, lookup_ms, persist_ms, media_ms,
+                     (time.monotonic() - started) * 1000, len(group),
+                     sum(1 for item in group if getattr(item, 'media', None)))
         except Exception as exc:
             if isinstance(exc, AuthKeyDuplicatedError):
                 await self._invalidate_active_session()
@@ -796,7 +910,7 @@ class TelegramCollector:
             return
         try:
             async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                await self.backend.checkpoint(chat_id, self.owner)
+                await self._checkpoint(chat_id)
                 await self._delete(chat_id, [int(value) for value in event.deleted_ids])
         except Exception as exc:
             if isinstance(exc, AuthKeyDuplicatedError):

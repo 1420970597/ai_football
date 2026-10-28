@@ -532,3 +532,22 @@ git diff --check
 - 页大小优化冻结回归：`sh infra/test/run.sh` 退出0，956项、0失败、0错误、0跳过，用时398.240秒；证据 `.runtime/test-evidence/791078/backend-tests.json`，提交源码 `e97d65f`，`committed_source_verified=true`。
 - 最终运行验收：默认分页候选`2.0.0-dev.hermes.20261028.3`的API、Hermes MCP及review-worker均本地构建运行，OCI revision `5b02911`；Hermes使用既有固定镜像v0.22.5。全量冻结Docker套件956项退出0，API health/ready 200，Hermes health 200，MCP真实`tools/list`仅见四个白名单工具且`search_matches.page_size.default=100`。Hermes重启前后真实旧模型只读completion均返回正常并带usage；不执行业务MCP调用。worker环境历史并发0、实时并发2；数据库当前活动任务0、历史活动任务0；4/4 Telegram来源租约有效且最近5分钟刷新；Telegram控制状态connected及authorized，3个启用来源健康状态已返回。候选分页版本上线后的短观测窗有9条Telegram对账事件但均未形成新实时消息；之前队列恢复窗口的4条实时审核均终态unresolved而非虚构推荐，模型耗时p50 10.97秒、p95 16.00秒、平均输入11814 token、输出391 token；完整处理队列等待p50 32.25秒、p95 50.92秒，4项样本显示同一专家并发受限下的串行等待，未提高共享模型并发。样本只有4条且早于分页100版本，不能作为分页优化实测结论。
 - 最终状态：历史自动回流已在入口抑制，历史worker lane关闭，任务原文、媒体及既有审计均保留；模型默认候选页由50提升到100并维持完整游标遍历，105候选隔离样例搜索往返由3降至2。423条历史任务按旧平均模型使用量估算约避免512万输入token、22.4万输出token和80模型分钟，为投影不是实测值。当前活动队列清空，模型及Telegram服务真实链路健康，任务分支已同步；实时Telegram事件到达时继续以真实模型结果监测100条分页带来的token、回合和耗时。真实语义质量、相同专家串行队列延迟及新分页配置的线上节省尚需更大真实样本，不据小样本宣称完成这些指标。
+
+## E108 端到端审核低延迟（目标3秒，2026-10-28）
+
+- 目标：将Telegram实时消息进入模型并形成系统结论的端到端时间压到3秒以内；这属于性能目标，外部模型调用存在非确定时延，未经真实样本不得宣称达到或承诺硬性SLA。
+- 责任目录：`services/collector/`处理Telegram事件、群组锁及媒体阶段；`services/api/`审核队列和worker唤醒；增量迁移在`services/api/migrations/`；行为验收位于`tests/`；运行证据追加本记录。
+- 前置证据：真实数据库最近2小时27条可关联实时审核，事件入库至模型结果p50 64.9秒、p95 844.5秒、最大2142秒；单次模型链路约9至17秒。同一专家全局并发上限为1。当前服务已有asyncio/httpx/Telethon异步I/O，网络等待不适合再包线程；图像解码、图片存储已使用受限线程池。
+- 设计决策：由Telethon推送处理实时新消息；数据库事务提交后用无内容PostgreSQL NOTIFY唤醒空闲worker，监听断开时保留1秒有界轮询；持久化pending后立即续传媒体；不在同群锁里做目录枚举、群实体解析、消息/回复读取及媒体上传；每次消息写入仍由API验证租约，短本地缓存只减少额外检查点往返。模型调用、完整候选搜索、图片理解、盘口证据和安全校验均不截断、不绕过。
+- 缺口与实现：旧路径的实时图片要等最多10秒周期重试；目录刷新与实时消息互斥；空闲worker每秒探队列；单条消息重复查询群实体、作者和检查点；相册图片串行从对象存储读取且重复解码。已加队列提交通知及退避重连、实时媒体立即上传、移出阻塞RPC、缓存作者与短期租约核验、最多两路图片准备并发和分阶段脱敏耗时。遥测分别记录采集回调、事件入库到领取、图片准备、模型提供方响应、模型结果和审核结论。历史lane仍关闭，专家和模型并发不扩。
+- 验收场景：插入只发无敏感内容通知且提交后可领取；数据库断连监听失败时轮询仍工作；相册及图片先持久pending再立即传输且上传不占群锁；目录刷新慢时新事件仍在有限窗口内持久化；源版本、信任作者、回复、图片哈希及Hermes安全限制均通过原全套回归。故障不丢原文、不确认未完成媒体、不把模型自由文字当系统结论。
+- 隔离定向验证：`python -m unittest test_review_worker test_telegram_collector test_telegram_reconciliation_claims.ReconciliationClaimsTests.test_migration_preserves_existing_event_and_reapplication_is_noop test_runtime_settings test_hermes_images -v` 在Docker中76项通过，退出0；覆盖通知只在事务提交后发出且无payload、实时图片入队和上传、慢目录锁、租约缓存过期刷新、缓存作者/群对象、最多两路并发图片准备、图片完整性及当前模型配置。
+- 修复记录：首轮通知领取用例被夹具预置running任务占满作者额度；随后将夹具任务终结。迁移合同先只期望019，已改为验证019/020顺序和重放。Collector租约批量替换曾引入缩进错误，隔离导入发现并修复。结论延迟断言又发现领取阶段分段值没有随任务对象传给结论，已补上并通过原组合重跑。
+- 隔离实现状态：代码已写；collector、worker、Hermes图片区段定向隔离验证通过；当前冻结完整套件待执行。历史自动审核仍关闭。运行基线模型约9至17秒，3秒整体目标现阶段未达到且不可能由worker线程/调度单独保证；真实运行候选上线后需按新遥测继续采样。样本少于100条时同时报告样本数和分位数，不扩模型并发来掩盖等待。
+- 冻结全量测试首次回归：`sh infra/test/run.sh` 退出1，962项中1项失败、0错误、0跳过；失败为`test_new_live_edit_supersedes_old_inflight_media_version`。新编辑的实时媒体上传仍同步等待在Telegram事件回调中，测试里上传释放信号要等回调返回才会发送，最终超时并把新版本标成failed。原失败证据已保留在对应`.runtime/test-evidence/`目录，需修复后重跑。
+- 修复后隔离回归：实时pending版本按群组和版本键调度为最多32个后台任务、全局媒体并发2；周期补偿和实时任务共用版本去重集合；配置切换和断开会取消未完成任务，超限时pending留给持久重试。`test_telegram_collector test_telegram_media_scheduling`在Docker中48项通过、退出0，覆盖回调不等待上传、同版本重试去重和新编辑优先；故障仍可恢复且旧消息/媒体对象不丢失。
+- 新作者/回复并发优化首轮测试：Docker定向90项中1项失败，`test_album_has_all_images_caption_reply_and_one_version`的夹具消息没有`get_reply_message`方法；旧实现会将此类异常记为reply unavailable，新任务创建路径没有保留该兼容行为。已修复并在原命令重跑，90项全部通过、退出0。
+- 定向冻结验证：最终`python -m unittest test_review_worker test_telegram_collector test_telegram_media_scheduling test_telegram_reconciliation_claims.ReconciliationClaimsTests.test_migration_preserves_existing_event_and_reapplication_is_noop test_runtime_settings test_hermes_images -v`在Docker中90项通过，退出0。包括最终结论和数据库时钟计时、复用Hermes HTTP客户端以及相册兼容性修复。
+- 图片字节遥测调整后的第一次原命令重跑：90项中1项错误，测试替身省略`media_objects`字段导致KeyError；正式消息字段存在，已将无媒体情况按0字节处理，原命令重新冻结验证。
+- 第二阶段低延迟优化已写，完整冻结套件待验证：Telegram作者与回复读取并发；worker复用有明确连接数上限的异步HTTP连接池访问配置、Hermes和会话清理；图片读取最多2路并发；每个worker进程配置最多8个连接。结论耗时并入同一条系统结果写入，使用数据库时钟记录事件创建至结论，减少一次独立追踪写入。实际模型约9至17秒且共享专家限流为1，3秒硬目标仍未达到，不能以本地线程掩盖上游推理或跳过完整工具证据。
+- 全量冻结Docker套件：`sh infra/test/run.sh`退出0，964项通过、0失败、0错误、0跳过，用时392.132秒；证据`.runtime/test-evidence/1045991/backend-tests.json`，冻结源文件哈希已记录，运行基于HEAD `87a9b81`及其工作树内容，`committed_source_verified=false`。隔离恢复演练45张表和1个媒体对象，前后业务盘点差异为空。下一阶段将把这批代码单独提交，再对提交版本执行一次完整套件以生成可复核的已提交源码证据。
