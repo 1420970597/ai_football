@@ -37,7 +37,7 @@ class SearchInput(AttemptInput):
     from_utc: AwareDatetime | None = None
     to_utc: AwareDatetime | None = None
     cursor: str | None = Field(default=None, max_length=1000)
-    page_size: int = Field(default=50, ge=1, le=100)
+    page_size: int = Field(default=100, ge=1, le=100)
 
     @field_validator('sport', mode='before')
     @classmethod

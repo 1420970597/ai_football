@@ -48,6 +48,8 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'search_matches','resolve_match','list_match_markets','record_expert_signals'}, {t['name'] for t in tools})
         for tool in tools:
             self.assertIn('attempt_id', tool['inputSchema']['required'])
+        search = next(tool for tool in tools if tool['name'] == 'search_matches')
+        self.assertEqual(100, search['inputSchema']['properties']['page_size']['default'])
 
     async def test_tool_call_reaches_business_api_and_preserves_context(self):
         captured = []

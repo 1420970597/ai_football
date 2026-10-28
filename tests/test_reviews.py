@@ -196,6 +196,20 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(resolved["resolved"])
         self.assertEqual("fixture-104", resolved["fixture"]["id"])
 
+    async def test_default_search_page_returns_100_and_cursor_completes_remaining_candidates(self):
+        for index in range(105):
+            await self.fixture(index)
+        first = await self.post("search_matches", team_query="Alpha")
+        self.assertEqual(200, first.status_code, first.text)
+        result = first.json()
+        self.assertEqual(100, len(result["items"]))
+        self.assertTrue(result["next_cursor"])
+        second = await self.post("search_matches", team_query="Alpha", cursor=result["next_cursor"])
+        self.assertEqual(200, second.status_code, second.text)
+        self.assertEqual(5, len(second.json()["items"]))
+        self.assertIsNone(second.json()["next_cursor"])
+        self.assertTrue(second.json()["search_complete"])
+
     async def test_resolution_before_full_pagination_is_rejected(self):
         await self.fixture(1)
         await self.fixture(2)
