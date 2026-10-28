@@ -20,7 +20,7 @@ const server = http.createServer(async (req, res) => {
         ? "text/javascript"
         : target.endsWith(".css")
           ? "text/css"
-          : "text/html",
+          : target.endsWith(".png") ? "image/png" : "text/html",
     });
     res.end(body);
   } catch {
@@ -768,6 +768,14 @@ async function test(name, action) {
 await test("桌面比分密度、状态查询、日期与详情", async () => {
   const { page, context, log } = await setup();
   assert.equal(await page.locator(".match-row").count(), 16);
+  await page.waitForFunction(() => [...document.querySelectorAll('.match-vs-icon')].length > 0 &&
+    [...document.querySelectorAll('.match-vs-icon')].every(image => image.complete && image.naturalWidth > 0));
+  assert.equal(await page.locator('.match-row:has(.match-phase.scheduled) .match-vs-icon').count(), 12);
+  assert.equal(await page.locator('.match-row:has(.match-phase.live) .match-vs-icon').count(), 0);
+  const noticeAsset = await page.request.get('http://127.0.0.1:8080/assets/cc-reference/home_announcement_icon.png');
+  assert.equal(noticeAsset.status(), 200);
+  assert.equal(noticeAsset.headers()['content-type'], 'image/png');
+  assert.deepEqual([...(await noticeAsset.body()).subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   assert.ok(
     (await page
       .locator(".match-row")

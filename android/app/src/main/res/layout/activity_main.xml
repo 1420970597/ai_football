@@ -2,11 +2,11 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/client_root"
     android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp"
-      android:gravity="center_vertical" android:paddingStart="16dp" android:paddingEnd="8dp" android:background="#ffffff">
+      android:gravity="center_vertical" android:paddingStart="16dp" android:paddingEnd="8dp" android:background="#0868c5">
     <TextView android:id="@+id/service_label" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-        android:text="@string/app_name" android:textColor="#29313d" android:textSize="14sp" android:maxLines="2" android:ellipsize="end" />
+        android:text="@string/app_name" android:textColor="#ffffff" android:textSize="14sp" android:maxLines="2" android:ellipsize="end" />
     <Button android:id="@+id/client_menu" android:layout_width="wrap_content" android:layout_height="wrap_content" android:minHeight="48dp"
-        android:text="@string/client_settings" android:contentDescription="@string/client_settings" />
+        android:text="@string/client_settings" android:textColor="#ffffff" android:backgroundTint="#07539c" android:contentDescription="@string/client_settings" />
   </LinearLayout>
   <ProgressBar android:id="@+id/load_progress" style="?android:attr/progressBarStyleHorizontal"
       android:layout_width="match_parent" android:layout_height="3dp" android:indeterminate="true" android:visibility="gone" />

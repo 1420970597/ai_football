@@ -24,8 +24,10 @@ class DeviceRun:
     def __init__(self, args, *, command=subprocess.run):
         self.args = args
         origin = urlsplit(args.origin)
-        if origin.scheme != 'https' or not origin.hostname or origin.username or origin.password or origin.path not in {'', '/'} or origin.query or origin.fragment:
-            raise ValueError('device fixture requires an explicit HTTPS origin without credentials')
+        if origin.scheme not in {'http', 'https'} or not origin.hostname or origin.username or origin.password or origin.path not in {'', '/'} or origin.query or origin.fragment:
+            raise ValueError('device fixture requires an explicit HTTP/HTTPS origin without credentials')
+        if args.phase == 'untrusted_tls' and origin.scheme != 'https':
+            raise ValueError('untrusted_tls phase requires an HTTPS fixture')
         self.artifact = verify_device_artifact(args.root, args.manifest, args.apk, args.package_output)
         self.previous = None
         previous_paths = (args.previous_manifest, args.previous_apk, args.previous_package_output)
@@ -122,8 +124,8 @@ class DeviceRun:
             self.adb('shell', 'am', 'start', '-W', '-n',
                      self.artifact.package_name + '/com.aifootball.platform.MainActivity')
             self.wait_text('连接球讯服务'); self.screenshot('01-first-launch')
-            self.input_service('http://unsafe.invalid'); self.click('验证并连接')
-            self.wait_text('请使用有效'); self.screenshot('02-http-blocked')
+            self.input_service('ftp://unsafe.invalid'); self.click('验证并连接')
+            self.wait_text('请使用有效'); self.screenshot('02-unsafe-scheme-blocked')
         elif phase == 'untrusted_tls':
             self.input_service(self.args.origin); self.click('验证并连接')
             self.wait_text('安全证书验证失败'); self.screenshot('03-untrusted-certificate')

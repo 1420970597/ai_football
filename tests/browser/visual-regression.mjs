@@ -19,7 +19,7 @@ const server=http.createServer(async(req,res)=>{
     const url=new URL(req.url,'http://localhost'),target=path.resolve(root,url.pathname.startsWith('/assets/')?url.pathname.slice(8):'index.html');
     if(!target.startsWith(root+'/'))throw Error('invalid local path');
     const raw=await fs.readFile(target);
-    res.writeHead(200,{'Content-Type':target.endsWith('.js')?'text/javascript':target.endsWith('.css')?'text/css':'text/html'}).end(raw);
+    res.writeHead(200,{'Content-Type':target.endsWith('.js')?'text/javascript':target.endsWith('.css')?'text/css':target.endsWith('.png')?'image/png':'text/html'}).end(raw);
   }catch{res.writeHead(404).end();}
 });
 await fs.mkdir(output,{recursive:true});

@@ -92,6 +92,23 @@ class DeviceContractTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(files[1].read_bytes()).hexdigest(), record['artifact']['apk_sha256'])
             self.assertIn(['exec-out', 'cat', '/data/app/fixture/pkg/base.apk'], fake.calls)
 
+    def test_explicit_http_fixture_is_allowed_for_pairing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); files = self.artifact(root)
+            args = self.args(root, files, 'pair'); args.origin = 'http://fixture.example:3003'
+            record = NoUiRun(args, command=FakeAdb(files[1])).run()
+            self.assertEqual('passed', record['status'])
+            self.assertFalse(record['real_environment'])
+
+    def test_certificate_rejection_phase_still_requires_tls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); files = self.artifact(root)
+            args = self.args(root, files, 'untrusted_tls'); args.origin = 'http://fixture.example'
+            fake = FakeAdb(files[1])
+            with self.assertRaisesRegex(ValueError, 'HTTPS fixture'):
+                NoUiRun(args, command=fake)
+            self.assertEqual([], fake.calls)
+
     def test_failed_adb_is_recorded_without_raw_stderr_or_overwriting_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);files=self.artifact(root);fake=FakeAdb(files[1]);fake.fail=True

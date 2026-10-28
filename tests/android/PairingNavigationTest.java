@@ -6,6 +6,7 @@ import static org.junit.Assert.*;
 public final class PairingNavigationTest {
     @Test public void qrAddressIsCanonicalCandidateOnly() {
         assertEquals("https://scores.example:9443", ScanPolicy.candidate("HTTPS://Scores.Example:9443/", "QR_CODE"));
+        assertEquals("http://scores.example:3003", ScanPolicy.candidate("HTTP://Scores.Example:3003/", "QR_CODE"));
     }
     @Test public void rejectMissingWrongFormatAndOversizedScan() {
         assertThrows(IllegalArgumentException.class, () -> ScanPolicy.candidate(null, "QR_CODE"));
@@ -14,7 +15,7 @@ public final class PairingNavigationTest {
         assertThrows(IllegalArgumentException.class, () -> ScanPolicy.candidate("a".repeat(ScanPolicy.MAX_RESULT_CHARS + 1), "QR_CODE"));
     }
     @Test public void qrCannotBypassExistingPairingPolicy() {
-        String[] rejected = {"javascript:alert(1)", "http://scores.example", "https://u:p@scores.example",
+        String[] rejected = {"javascript:alert(1)", "ftp://scores.example", "https://u:p@scores.example",
                 "https://scores.example/login", "https://scores.example?token=secret", "https://scores.example#section",
                 "https://scores.example\\@evil.example", "intent://scores.example"};
         for (String value : rejected) assertThrows(value, IllegalArgumentException.class,

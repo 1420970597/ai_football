@@ -1,15 +1,16 @@
 :root {
-  --purple: #403278;
-  --purple-dark: #30235e;
-  --orange: #ee742b;
-  --orange-text: #b5470b;
+  /* CC reference palette, with darker blue for readable small text. */
+  --purple: #0868c5;
+  --purple-dark: #07539c;
+  --orange: #ef7d26;
+  --orange-text: #aa4809;
   --red: #bd382f;
   --green: #14663f;
-  --ink: #333;
-  --muted: #66616f;
-  --line: #e4e3e9;
+  --ink: #283443;
+  --muted: #5c6978;
+  --line: #e0e7ee;
   --paper: #fff;
-  --background: #f4f4f6;
+  --background: #f3f6f9;
   --gold: #ad7b32;
   font:
     14px/1.5 Arial,
@@ -79,7 +80,7 @@ h3 {
   font-size: 14px;
 }
 .site-width {
-  max-width: 1180px;
+  max-width: 1240px;
   margin: auto;
 }
 .utility-bar {
@@ -102,6 +103,9 @@ h3 {
   margin-right: 12px;
 }
 .site-header {
+  position: sticky;
+  top: 0;
+  z-index: 15;
   background: var(--purple);
   color: #fff;
 }
@@ -139,26 +143,28 @@ h3 {
 }
 .main-nav button {
   padding: 0 18px;
-  color: #ddd;
+  color: #fff;
+  border-bottom: 3px solid transparent;
 }
 .main-nav button.active,
 .main-nav button:hover {
-  background: #51428c;
+  background: var(--purple-dark);
+  border-bottom-color: #fff;
   color: #fff;
 }
 .header-login {
   font-size: 13px;
   background: rgba(255, 255, 255, 0.1);
-  border: 1px solid #8175aa;
+  border: 1px solid #b5d6f7;
   border-radius: 3px;
   padding: 7px 12px;
   white-space: nowrap;
 }
 .main-layout {
   display: grid;
-  grid-template-columns: 135px minmax(0, 1fr) 210px;
-  gap: 14px;
-  margin-top: 16px;
+  grid-template-columns: 135px minmax(0, 1fr) 220px;
+  gap: 12px;
+  margin-top: 14px;
   align-items: start;
 }
 .left-rail {
@@ -169,7 +175,7 @@ h3 {
 .left-rail h2 {
   padding: 10px 12px;
   font-size: 13px;
-  background: #f3f2f7;
+  background: #f0f6fc;
   border-bottom: 1px solid var(--line);
 }
 .left-rail button {
@@ -182,7 +188,7 @@ h3 {
 .left-rail button:hover,
 .left-rail button.rail-active {
   color: var(--purple);
-  background: #efedf7;
+  background: #eaf4ff;
   border-left: 3px solid var(--purple);
   padding-left: 9px;
 }
@@ -233,12 +239,12 @@ h3 {
   font-size: 12px;
 }
 .small-button:hover {
-  border-color: #9d94bc;
+  border-color: #90b8dd;
   color: var(--purple);
 }
 .sports-bar {
   display: flex;
-  background: #faf9fc;
+  background: #f5f9fd;
   border-bottom: 1px solid var(--line);
   padding: 0 12px;
   align-items: center;
@@ -272,9 +278,9 @@ h3 {
 }
 .score-tabs button.active,
 .section-tabs button.active {
-  color: var(--orange-text);
+  color: var(--purple);
   font-weight: bold;
-  border-bottom: 2px solid var(--orange);
+  border-bottom: 2px solid var(--purple);
 }
 .date-strip {
   display: flex;
@@ -309,7 +315,7 @@ h3 {
   color: #fff;
 }
 .date-strip #date-buttons button.active small {
-  color: #e0dcea;
+  color: #e5f1ff;
 }
 .date-select input {
   width: 115px;
@@ -363,11 +369,11 @@ h3 {
   text-align: center;
 }
 .score-table-head {
-  background: #efedf5;
-  color: #6b6483;
+  background: #edf5fc;
+  color: #52677c;
   font-size: 11px;
   min-height: 30px;
-  border-bottom: 1px solid #d8d3e6;
+  border-bottom: 1px solid #d7e6f5;
 }
 .match-row {
   position: relative;
@@ -380,7 +386,7 @@ h3 {
   background: #fcfcfd;
 }
 .match-row:hover {
-  background: #fbf7ef;
+  background: #f0f7ff;
 }
 .match-league {
   padding: 0 4px;
@@ -433,6 +439,13 @@ h3 {
   white-space: nowrap;
   padding: 6px 0;
 }
+.match-vs-icon {
+  display: block;
+  width: 24px;
+  height: 18px;
+  object-fit: contain;
+  margin: 0 auto;
+}
 .live + .team-home + .score-button {
   color: var(--red);
 }
@@ -455,7 +468,7 @@ h3 {
   color: #686172;
 }
 .detail-button {
-  color: #7c6b9c;
+  color: #1463a4;
   font-size: 11px;
   padding: 6px 2px;
 }
@@ -471,6 +484,15 @@ h3 {
   border-bottom: 1px solid #f3dfb5;
   padding: 10px 12px;
   font-size: 12px;
+}
+.notice::before {
+  content: "";
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  vertical-align: -3px;
+  background: url("/assets/cc-reference/home_announcement_icon.png") center / contain no-repeat;
 }
 .notice.error {
   background: #fff1ef;
@@ -579,10 +601,10 @@ h3 {
 }
 .side-member {
   padding: 18px 14px;
-  color: #715333;
-  border: 1px solid #e6d3b0;
+  color: #154c7f;
+  border: 1px solid #c7def2;
   margin-bottom: 12px;
-  background: linear-gradient(135deg, #fbf3de, #ecdbc0);
+  background: linear-gradient(135deg, #f0f8ff, #dceeff);
 }
 .side-member > span {
   font-size: 12px;
@@ -594,7 +616,7 @@ h3 {
   line-height: 1.7;
 }
 .side-member button {
-  background: #77583b;
+  background: var(--purple);
   color: white;
   border-radius: 3px;
   padding: 7px 12px;
@@ -1532,7 +1554,7 @@ dialog::backdrop {
   .sports-bar {
     padding: 0 12px;
     background: var(--purple);
-    color: #bdb3d8;
+    color: #d9edff;
     justify-content: center;
     border: 0;
     height: 38px;
@@ -1911,7 +1933,7 @@ dialog::backdrop {
     height: 56px;
   }
   .main-layout[data-page="scores"] {
-    grid-template-columns: minmax(0, 1fr) 210px;
+    grid-template-columns: minmax(0, 1fr) 220px;
   }
   .main-layout[data-page="scores"] > .left-rail {
     display: none;
@@ -2031,8 +2053,8 @@ dialog::backdrop {
 }
 .market-group h4 {
   font-weight: normal;
-  color: #75658e;
-  background: #f8f6fb;
+  color: #52677c;
+  background: #f1f7fc;
   padding: 9px;
   margin: 12px 0 0;
   font-size: 12px;

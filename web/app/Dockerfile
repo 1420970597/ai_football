@@ -9,4 +9,5 @@ COPY web/app/identity.js /usr/share/nginx/html/assets/identity.js
 COPY web/app/mfa.js /usr/share/nginx/html/assets/mfa.js
 COPY web/app/qrcode.js /usr/share/nginx/html/assets/qrcode.js
 COPY web/app/qrcode.LICENSE /usr/share/nginx/html/assets/qrcode.LICENSE
+COPY web/app/cc-reference /usr/share/nginx/html/assets/cc-reference
 EXPOSE 80

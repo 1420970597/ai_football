@@ -8,8 +8,8 @@ output_dir="$android_dir/build/artifacts"
 cleanup() { docker rm -f "$build_container" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 mkdir -p "$output_dir"
-# The production APK starts with an explicit HTTPS pairing address.  Keep
-# fixtures and cleartext URLs out of the application source so a test endpoint
+# The APK starts with an explicitly entered HTTP/HTTPS pairing address. Keep
+# fixtures and hardcoded cleartext URLs out of application source so a test endpoint
 # cannot silently become the default service in a release candidate.
 if rg -n --glob '*.java' --glob '*.kt' --glob '*.xml' \
   'http://|localhost|127\.0\.0\.1|0\.0\.0\.0|[A-Za-z0-9.-]+\.invalid|[A-Za-z0-9.-]+\.test' \
