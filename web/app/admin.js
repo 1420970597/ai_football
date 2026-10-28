@@ -30,6 +30,8 @@ let dialogsSequence = 0,
   adminsSequence = 0;
 let grantKey = newId();
 let adminPlans = [];
+let adminSequence = 0;
+let adminPlansSequence = 0;
 let userCursor = null;
 let userRows = [];
 let orderRows = [];
@@ -41,7 +43,9 @@ export function initAdmin(context) {
   bind();
 }
 export async function loadAdmin() {
+  const sequence = ++adminSequence;
   await app.loadIdentities();
+  if (sequence !== adminSequence) return;
   const admin = app.state.admin;
   $("#admin-content").hidden = !admin;
   $("#admin-logout").hidden = !admin;
@@ -550,8 +554,16 @@ async function listAdmins(append = false, scope = "admins") {
   }
 }
 async function loadAdminPlans() {
+  const sequence = ++adminPlansSequence;
+  const container = $("#admin-plans");
+  const selectedPlan = $("#grant-plan").value;
+  container.setAttribute("aria-busy", "true");
+  $$("input,button", container).forEach((input) => (input.disabled = true));
+  $("#grant-plan").disabled = true;
+  $("#grant-form button").disabled = true;
   try {
     const data = await adminApi("/membership/plans");
+    if (sequence !== adminPlansSequence) return;
     adminPlans = data.items;
     $("#grant-plan").innerHTML = data.items
       .filter((p) => p.enabled !== false)
@@ -560,6 +572,8 @@ async function loadAdminPlans() {
           `<option value="${esc(p.code)}">${esc(p.name)} (${esc(p.code)})</option>`,
       )
       .join("");
+    if (data.items.some((p) => p.code === selectedPlan && p.enabled !== false))
+      $("#grant-plan").value = selectedPlan;
     $("#admin-plans").innerHTML = data.items
       .map(
         (p) =>
@@ -567,7 +581,15 @@ async function loadAdminPlans() {
       )
       .join("");
   } catch (error) {
-    $("#admin-plans").textContent = error.message;
+    if (sequence !== adminPlansSequence) return;
+    container.textContent = error.message;
+  } finally {
+    if (sequence === adminPlansSequence) {
+      container.setAttribute("aria-busy", "false");
+      $$("input,button", container).forEach((input) => (input.disabled = false));
+      $("#grant-plan").disabled = false;
+      $("#grant-form button").disabled = false;
+    }
   }
 }
 async function listUsers(append = false) {
@@ -880,7 +902,7 @@ function bind() {
         body,
       });
       toast("套餐已保存");
-      loadAdminPlans();
+      await loadAdminPlans();
     });
   });
   $("#leyu-setting-search").oninput = (e) => {

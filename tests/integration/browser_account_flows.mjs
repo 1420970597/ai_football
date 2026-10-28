@@ -47,6 +47,41 @@ async function refreshAccount() {
   const wait = page.waitForResponse(response => response.url().endsWith("/accounts/leyu") && response.request().method()==="GET");
   await page.locator("#refresh-account").click(); await wait;
 }
+async function holdNextGet(path) {
+  let release, started, handled, held = false;
+  const ready = new Promise(resolve => { started = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const finished = new Promise(resolve => { handled = resolve; });
+  const pattern = origin + "/api/v1" + path;
+  const handler = async route => {
+    if (route.request().method() !== "GET" || held) return route.continue();
+    held = true;
+    try {
+      const snapshot = await route.fetch();
+      started();
+      await gate;
+      await route.fulfill({response:snapshot,headers:{...snapshot.headers(),"x-test-delayed-snapshot":path}});
+    } finally { handled(); }
+  };
+  await page.route(pattern, handler);
+  return {
+    waitUntilHeld: () => Promise.race([
+      ready,
+      page.waitForTimeout(15000).then(() => { throw new Error("delayed GET did not start: " + path); }),
+    ]),
+    async releaseAndWait() {
+      const response = page.waitForResponse(response => response.headers()["x-test-delayed-snapshot"] === path);
+      release();
+      await (await response).finished();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    },
+    async cleanup() {
+      release();
+      if (held) await finished;
+      await page.unroute(pattern, handler);
+    },
+  };
+}
 async function pollAccount(check) {
   for(let i=0;i<40;i++) { const value = await api("/accounts/leyu"); if(check(value.data)) return value.data; await page.waitForTimeout(250); }
   throw new Error("synthetic account did not reach expected state");
@@ -112,9 +147,23 @@ try {
   });
   await scenario("管理员套餐自动投注权益及本人会员授予点击",async()=>{
     await page.locator("[data-admin-tab=membership]").click();
-    const plan=page.locator('.plan-form[data-code="webvip"]'); await expanded(plan);
-    await plan.locator('[name=automatic_betting]').check();
+    const plan=page.locator('.plan-form[data-code="webvip"]');
+    const delayed = await holdNextGet("/admin/membership/plans");
+    try {
+      await page.locator(".utility-bar [data-page=admin]").click();
+      await delayed.waitUntilHeld();
+      assert.equal(await page.locator("#admin-plans").getAttribute("aria-busy"),"true");
+      assert.equal(await plan.locator('[name=automatic_betting]').isDisabled(),true);
+      await responseAfter('/admin/membership/plans',"GET",()=>page.locator(".utility-bar [data-page=admin]").click());
+      await expanded(plan);
+      await plan.locator('[name=automatic_betting]').check();
+      await delayed.releaseAndWait();
+      assert.equal(await plan.locator('[name=automatic_betting]').isChecked(),true);
+    } finally { await delayed.cleanup(); }
     const saved=await responseAfter('/membership/plans/webvip',"PUT",()=>plan.locator("button").click()); assert.equal(saved.status,200);
+    assert.equal(saved.request.entitlements.automatic_betting,true);
+    const plans = await api("/admin/membership/plans",{admin:true});
+    assert.equal(plans.data.items.find(item=>item.code==="webvip").entitlements.automatic_betting,true);
     await page.locator("#grant-form [name=email]").fill(email);
     await page.locator("#grant-form [name=plan_code]").selectOption("webvip");
     await page.locator("#grant-form [name=days]").fill("7");
@@ -182,7 +231,23 @@ try {
     const revoked=page.waitForResponse(response=>response.url().includes('/membership/grants/')&&response.url().endsWith('/revoke'));
     await paid.click(); assert.equal((await revoked).status(),200);
     assert.equal((await api("/auth/me")).data.membership.entitlements.automatic_betting===true,false);
-    await page.locator("#account-entry").click(); await page.waitForSelector("#account-content:not([hidden])"); await refreshAccount();
+    const delayed = await holdNextGet("/accounts/leyu");
+    try {
+      await page.locator("#account-entry").click();
+      await page.waitForSelector("#account-content:not([hidden])");
+      await delayed.waitUntilHeld();
+      assert.equal(await page.locator("#betting-form").getAttribute("aria-busy"),"true");
+      assert.equal(await page.locator("#betting-form [name=enabled]").isDisabled(),true);
+      assert.equal(await page.locator("#emergency-stop").isDisabled(),false);
+      await responseAfter('/accounts/leyu',"GET",()=>page.locator("#refresh-account").click());
+      await page.locator("#betting-form [name=enabled]").check();
+      await page.locator("#betting-form [name=daily_limit]").fill("10");
+      await delayed.releaseAndWait();
+      assert.equal(await page.locator("#betting-form [name=enabled]").isChecked(),true);
+      assert.equal(await page.locator("#betting-form [name=daily_limit]").inputValue(),"10");
+    } finally {
+      await delayed.cleanup();
+    }
     assert.equal((await configure()).status,403);
     assert.equal((await responseAfter('/leyu/emergency-stop',"POST",()=>page.locator("#emergency-stop").click())).status,200);
   });

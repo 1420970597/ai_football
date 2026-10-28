@@ -64,6 +64,7 @@ const state = {
   plans: [],
   mediaUrls: [],
   accountBound: false,
+  accountSequence: 0,
   orders: [],
   orderCursor: null,
   dialogSequence: 0,
@@ -959,35 +960,40 @@ async function loadIdentities() {
   $("#admin-logout").hidden = !state.admin;
 }
 async function loadAccount() {
+  const sequence = ++state.accountSequence;
   $$("input,button", $("#leyu-form")).forEach(
     (input) => (input.disabled = true),
   );
   $("#leyu-form").setAttribute("aria-busy", "true");
-  await loadIdentities();
-  const user = state.user;
-  $("#account-content").hidden = !user;
-  $("#user-logout").hidden = !user;
-  if (!user) {
-    $("#identity-panel").innerHTML =
-      '<div class="identity-card"><h2>欢迎来到球讯</h2><p>登录后管理会员权益、绑定本人乐鱼账户及查看订单。</p><button class="primary-button" data-login="login">用户登录 / 注册</button></div>';
-    return;
-  }
-  const m = user.membership;
-  $("#identity-panel").innerHTML =
-    `<div class="identity-card"><h2>${esc(user.user.display_name)}</h2><p>${esc(user.user.email)} · 普通用户</p><p>${m ? esc(m.name) + " · " + (m.ends_at ? "有效至 " + stamp(m.ends_at) : "长期有效") : "暂无有效会员权益"}</p><p>${
-      Object.entries(m?.entitlements || {})
-        .filter(([, v]) => v)
-        .map(([k]) => esc(entitlementName(k)))
-        .join(" / ") || "可浏览公开赛事与受限专家摘要"
-    }</p></div>`;
-  if (user.closure_requested_at)
-    $("#identity-panel").insertAdjacentHTML(
-      "beforeend",
-      `<p class="notice">注销申请提交于 ${stamp(user.closure_requested_at)}，当前仅保留对账与停止投注等操作。核对完成后请在注销分区再次确认；取消注销不会恢复自动投注。</p>`,
-    );
-  $("#profile-form").elements.display_name.value = user.user.display_name;
+  $("#betting-form").setAttribute("aria-busy", "true");
+  configureBetControls();
   try {
+    await loadIdentities();
+    if (sequence !== state.accountSequence) return;
+    const user = state.user;
+    $("#account-content").hidden = !user;
+    $("#user-logout").hidden = !user;
+    if (!user) {
+      $("#identity-panel").innerHTML =
+        '<div class="identity-card"><h2>欢迎来到球讯</h2><p>登录后管理会员权益、绑定本人乐鱼账户及查看订单。</p><button class="primary-button" data-login="login">用户登录 / 注册</button></div>';
+      return;
+    }
+    const m = user.membership;
+    $("#identity-panel").innerHTML =
+      `<div class="identity-card"><h2>${esc(user.user.display_name)}</h2><p>${esc(user.user.email)} · 普通用户</p><p>${m ? esc(m.name) + " · " + (m.ends_at ? "有效至 " + stamp(m.ends_at) : "长期有效") : "暂无有效会员权益"}</p><p>${
+        Object.entries(m?.entitlements || {})
+          .filter(([, v]) => v)
+          .map(([k]) => esc(entitlementName(k)))
+          .join(" / ") || "可浏览公开赛事与受限专家摘要"
+      }</p></div>`;
+    if (user.closure_requested_at)
+      $("#identity-panel").insertAdjacentHTML(
+        "beforeend",
+        `<p class="notice">注销申请提交于 ${stamp(user.closure_requested_at)}，当前仅保留对账与停止投注等操作。核对完成后请在注销分区再次确认；取消注销不会恢复自动投注。</p>`,
+      );
+    $("#profile-form").elements.display_name.value = user.user.display_name;
     const data = await api("/accounts/leyu");
+    if (sequence !== state.accountSequence) return;
     $("#account-health").textContent = data.account
       ? { healthy: "已通过校验", unverified: "未校验", expired: "授权已失效" }[
           data.account.health_state
@@ -1035,25 +1041,32 @@ async function loadAccount() {
       (x) => (x.checked = (b.allowed_experts || []).includes(x.value)),
     );
   } catch (error) {
+    if (sequence !== state.accountSequence) return;
     $("#account-health").textContent = "暂不可读";
     $("#betting-status").textContent =
       error.message + "；账户状态未被替换为未绑定。";
   } finally {
-    $$("input,button", $("#leyu-form")).forEach(
-      (input) => (input.disabled = false),
-    );
-    $("#leyu-form").setAttribute("aria-busy", "false");
+    if (sequence === state.accountSequence) {
+      $$("input,button", $("#leyu-form")).forEach(
+        (input) => (input.disabled = false),
+      );
+      $("#leyu-form").setAttribute("aria-busy", "false");
+      $("#betting-form").setAttribute("aria-busy", "false");
+      configureBetControls();
+    }
   }
-  configureBetControls();
+  if (sequence !== state.accountSequence) return;
   loadOrders();
 }
 function configureBetControls() {
   const form = $("#betting-form"),
-    enabled = form.elements.enabled.checked;
+    enabled = form.elements.enabled.checked,
+    loading = form.getAttribute("aria-busy") === "true";
   for (const input of $$("input,select", form)) {
-    if (input.name !== "enabled") input.disabled = !enabled;
+    input.disabled = loading || (input.name !== "enabled" && !enabled);
     if (input.type === "number") input.required = enabled;
   }
+  $("button", form).disabled = loading;
   form.elements.confirmed.required = enabled;
 }
 async function loadOrders(append = false) {
