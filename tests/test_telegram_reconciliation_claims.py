@@ -243,7 +243,9 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         await self.seed()
         backend = TelegramBackend(self.client,'http://testserver/internal/telegram')
         client = collector_support.Client({'-1001':[collector_support.Message(11)]})
-        client.messages['-1001'][0].edit_date = datetime(2026,10,26,0,1,tzinfo=timezone.utc)
+        client.messages['-1001'][0].edit_date = (
+            await self.pool.fetchval('SELECT source_version_at FROM v2_telegram_events')
+        ) + timedelta(minutes=1)
         collector = TelegramCollector(collector_support.CONFIG,backend=backend,client_factory=lambda *_:client)
         collector.owner = str(self.owner)
         collector.client = client
@@ -270,7 +272,8 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(1,result['checked'])
             self.assertEqual(2,len(calls))
             self.assertEqual(2,await self.pool.fetchval('SELECT count(*) FROM v2_expert_messages'))
-            self.assertEqual(1,await self.pool.fetchval("SELECT count(*) FROM v2_analysis_jobs WHERE state='queued'"))
+            self.assertEqual(1,await self.pool.fetchval(
+                "SELECT count(*) FROM v2_analysis_jobs WHERE state='unresolved' AND review_mode='historical_replay'"))
         finally:
             await collector.disconnect()
 
