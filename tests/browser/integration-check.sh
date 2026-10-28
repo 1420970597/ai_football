@@ -40,12 +40,10 @@ find "$task_snapshot/services" "$task_snapshot/web" "$task_snapshot/tests/integr
 compose build --memory 768m seed web
 compose up -d --wait --wait-timeout 90 web
 compose run --rm --no-deps browser
-cp "$task_snapshot/tests/browser/integration-results.json" "$task_root/tests/browser/integration-results.json"
-find "$task_snapshot/reports/jiebao-score-reference/images" -maxdepth 1 -type f -name 'integration-*.png' -exec cp {} "$task_root/reports/jiebao-score-reference/images/" \;
+cp "$task_snapshot/tests/browser/integration-results.json" "$task_evidence/integration-results.json"
 compose logs --no-color api seed > "$task_evidence/service-baseline.log" 2>&1
 compose down --volumes --remove-orphans >/dev/null
 task_extended=true
 compose up -d --wait --wait-timeout 90 web account-fixture
 compose run --rm --no-deps browser
-cp "$task_snapshot/tests/browser/integration-account-results.json" "$task_root/tests/browser/integration-account-results.json"
-cp "$task_snapshot/reports/jiebao-score-reference/images/integration-account-synthetic-success.png" "$task_root/reports/jiebao-score-reference/images/"
+cp "$task_snapshot/tests/browser/integration-account-results.json" "$task_evidence/integration-account-results.json"

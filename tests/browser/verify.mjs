@@ -4,7 +4,8 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 const base = "/work/web/app";
-const evidence = "/work/reports/jiebao-score-reference/images";
+const evidence = process.env.BROWSER_EVIDENCE_DIR || "/work/reports/jiebao-score-reference/images";
+await fs.mkdir(evidence, { recursive: true });
 const server = http.createServer(async (req, res) => {
   try {
     const pathname = new URL(req.url, "http://localhost").pathname;
@@ -1237,6 +1238,12 @@ await test("初次错误、加载与离线五状态", async () => {
       .querySelector("#matches-notice")
       .textContent.includes("网络已断开"),
   );
+  await first.page.locator('.score-tabs [data-phase="live"]').click();
+  assert.equal(await first.page.locator(".match-row").count(), 0);
+  assert.match(
+    await first.page.locator("#matches-notice").innerText(),
+    /筛选已更新.*恢复连接后重新读取赛事/,
+  );
   await first.context.close();
   const loading = await setup({ mobile: true, captureLoading: true });
   await loading.context.close();
@@ -1870,10 +1877,10 @@ await test("手机多盘口与长队名保持分行且不遮挡比赛按钮", as
 });
 assert.deepEqual(caught, []);
 await fs.writeFile(
-  "/work/tests/browser/results.json",
+  process.env.BROWSER_RESULTS || "/work/tests/browser/results.json",
   JSON.stringify(
     {
-      date: "2026-10-26",
+      date: new Date().toISOString(),
       environment: "isolated Docker / mock API / no real credentials or bets",
       results,
       browser_errors: caught,

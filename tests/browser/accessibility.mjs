@@ -596,7 +596,7 @@ export async function runAudit({ setup, id, caught, evidence }) {
     ],
   };
   await fs.writeFile(
-    `/work/tests/browser/accessibility-${baseline ? "baseline" : "results"}.json`,
+    process.env.BROWSER_ACCESSIBILITY_RESULTS || `/work/tests/browser/accessibility-${baseline ? "baseline" : "results"}.json`,
     JSON.stringify(result, null, 2),
   );
   return baseline || checks.every((item) => item.status === "passed");

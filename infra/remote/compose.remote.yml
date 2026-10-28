@@ -66,7 +66,7 @@ services:
     depends_on: [api-bridge]
     ports: ['127.0.0.1:18092:8092']
     networks: [workers, egress]
-    tmpfs: [/tmp:rw,noexec,nosuid,nodev,size=64m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=64m"]
     cpus: ${REMOTE_COLLECTOR_CPUS:-.3}
     mem_limit: 512m
     pids_limit: 128
@@ -83,7 +83,7 @@ services:
       - {type: bind, source: ./.runtime/leyu-app-discovery.json, target: /run/secrets/leyu-app-discovery.json, read_only: true, bind: {create_host_path: false}}
     depends_on: [api-bridge]
     networks: [workers, egress]
-    tmpfs: [/tmp:rw,noexec,nosuid,nodev,size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m"]
     cpus: ${REMOTE_EXECUTOR_CPUS:-.15}
     mem_limit: 256m
     pids_limit: 128

@@ -6,7 +6,7 @@ ROOT=$(pwd)
 TASK="af-hermes-framework-$$"
 EVIDENCE="$ROOT/.runtime/$TASK"
 SNAPSHOT="$EVIDENCE/snapshot"
-VERIFIER="sha256:d42d2ec203d3b9d31df31bb36b05e346c426ebc701bbf39392b1b824776a9dbd"
+VERIFIER="ai-football-verifier:$TASK"
 HERMES_IMAGE="nousresearch/hermes-agent:v0.22.5@sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d"
 PG_IMAGE="postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36"
 NETWORK="$TASK-net"
@@ -16,8 +16,10 @@ MCP="$TASK-mcp"
 PROVIDER="$TASK-provider"
 HERMES="$TASK-hermes"
 DSN='postgresql://postgres@ai-football-v2-pgverify:5432/v2_integration_test'
-mkdir -p "$SNAPSHOT/services" "$SNAPSHOT/tests/integration" "$SNAPSHOT/integrations"
+mkdir -p "$SNAPSHOT/services/collector" "$SNAPSHOT/tests/integration" "$SNAPSHOT/integrations" "$SNAPSHOT/infra/test"
 cp -a services/api services/hermes-mcp "$SNAPSHOT/services/"
+cp services/collector/requirements.txt "$SNAPSHOT/services/collector/"
+cp infra/test/Dockerfile "$SNAPSHOT/infra/test/"
 cp -a integrations/hermes "$SNAPSHOT/integrations/"
 cp tests/integration/hermes_roundtrip.py tests/integration/hermes_provider_fixture.py "$SNAPSHOT/tests/integration/"
 cp tests/test_hermes_fixture_contract.py "$SNAPSHOT/tests/"
@@ -30,6 +32,7 @@ cleanup() {
     docker rm -f "$name" >/dev/null 2>&1 || true
   done
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
+  docker image rm "$VERIFIER" >/dev/null 2>&1 || true
   printf 'acceptance_exit=%s evidence=%s\n' "$code" "$EVIDENCE"
   exit "$code"
 }
@@ -38,6 +41,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 printf 'frozen_snapshot=%s\n' "$EVIDENCE"
 find "$SNAPSHOT" -type f ! -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum > "$EVIDENCE/source.sha256"
+docker build --memory 512m --cpu-period 100000 --cpu-quota 50000 \
+  -f "$SNAPSHOT/infra/test/Dockerfile" -t "$VERIFIER" "$SNAPSHOT" > "$EVIDENCE/verifier-build.log" 2>&1
 docker image inspect "$VERIFIER" "$HERMES_IMAGE" "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$EVIDENCE/images.txt"
 verify() {
   docker run --rm --network "$NETWORK" --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m --pids-limit=128 -e PYTHONDONTWRITEBYTECODE=1 -v "$SNAPSHOT:/workspace:ro" -w /workspace -e PYTHONPATH=/workspace/services/api:/workspace "$@"

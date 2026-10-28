@@ -273,7 +273,7 @@ async function loadMatches(append = false) {
   }
   if (!navigator.onLine) {
     $("#matches-notice").hidden = false;
-    $("#matches-notice").textContent = "当前网络已断开，保留上次赛事。";
+    $("#matches-notice").textContent = "筛选已更新；网络断开，恢复连接后重新读取赛事。";
     return;
   }
   clearTimeout(state.retryTimer);

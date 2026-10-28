@@ -12,9 +12,12 @@ def validate(local, remote):
     for role in ('collector','executor'):
         assert local_services[role]['profiles']==['legacy-local-workers'], 'local_worker_not_profiled'
     link=local_services['remote-link']
+    assert link['tmpfs']==['/tmp:rw,noexec,nosuid,nodev,size=16m'], 'link_tmpfs_options_split'
     assert link['healthcheck']['test']==['CMD','python','/deployment/ssh_link.py','--health'], 'inherited_wrong_health'
     assert link['networks'].keys()=={'app-private','egress'}, 'local_link_networks'
     assert services['executor']['environment']['EXECUTOR_LIVE_ORDERS_ENABLED']=='false', 'remote_live_orders'
+    for role,size in (('collector','64m'),('executor','32m')):
+        assert services[role]['tmpfs']==['/tmp:rw,noexec,nosuid,nodev,size='+size], 'worker_tmpfs_options_split'
     assert services['collector']['environment']['PLATFORM_API']=='http://api-bridge:8081/internal', 'collector_bridge'
     assert services['executor']['environment']['PLATFORM_EXECUTOR_API']=='http://api-bridge:8081/internal/executor', 'executor_bridge'
     assert services['collector']['environment']['S3_ENDPOINT_URL'].startswith('https://'), 'objects_tls_required'

@@ -27,3 +27,4 @@ docker run --rm --network none --cpus .25 --memory 128m --pids-limit 32 \
   -e PYTHONDONTWRITEBYTECODE=1 -v "$task_root:/w:ro" -w /w \
   python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 \
   python -m infra.remote.validate_compose "$task_output/local-compose.json" "$task_output/remote-compose.json"
+sh infra/remote/check-create.sh
