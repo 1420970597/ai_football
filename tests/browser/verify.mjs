@@ -519,7 +519,7 @@ async function setup({
     if (mode.pagedEvidence && p === `/public/messages/${mid}/tools/complete-fixture`)
       return reply({ complete: true, snapshot_sha256: "fixture-sha256-verified", result: { items: [{ home_team: "完整工具候选", away_team: "工具结果末项" }], next_cursor: null } });
     if (mode.pagedEvidence && p === `/public/messages/${mid}`)
-      return reply({ ...record, analysis: [{ trace_kind: "mcp_search_matches", payload: { count: 100, response_snapshot: { chunk_count: 4 } }, tool_response_url: `/api/v1/public/messages/${mid}/tools/complete-fixture` }], analysis_next_cursor: "fixture-trace-next", signals_next_cursor: "fixture-signals-next", system_summary: record.analysis.at(-1) });
+      return reply({ ...record, analysis: [{ trace_kind: "mcp_search_matches", payload: { count: 100, response_snapshot: { chunk_count: 4 } }, tool_response_url: `/api/v1/public/messages/${mid}/tools/complete-fixture` }], analysis_next_cursor: "fixture-trace-next", signals_next_cursor: "fixture-signals-next", system_summary: record.analysis.at(-1), latest_model_result: { payload: { content: "最新模型分析：截图提到全场大 2.5 <script>unsafe()</script>" } } });
     if (
       mode.longMessage &&
       p.startsWith("/public/messages/") &&
@@ -911,6 +911,8 @@ await test("原文增量加载、最新系统回执及完整工具返回", async
   await page.locator('#signals-list [data-message]').first().click();
   await page.waitForSelector('.system-review-result');
   assert.match(await page.locator('.system-review-result').innerText(), /系统已接受 2 条推荐/);
+  assert.match(await page.locator('.model-review-result').innerText(), /最新模型分析：截图提到全场大 2.5/);
+  assert.equal(await page.locator('.model-review-result script').count(), 0);
   assert.equal(log.some((request) => request.path.endsWith('/tools/complete-fixture')), false);
   assert.equal(await page.locator('#message-traces-more').isVisible(), true);
   assert.equal(await page.locator('#message-signals-more').isVisible(), true);

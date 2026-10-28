@@ -136,6 +136,21 @@ async def latest_summary(pool, message_id):
     return trace_projection(row, message_id) if row else None
 
 
+async def latest_model_result(pool, message_id):
+    """Show the latest attempt's output without paging through tool chunks.
+
+    Do not substitute an older job or attempt when the current review is still
+    running or failed: that would make stale analysis look current.
+    """
+    row = await pool.fetchrow(
+        "SELECT t.id,j.id AS review_id,j.state,j.last_error,t.sequence_no,t.trace_kind,t.payload,t.created_at "
+        "FROM (SELECT id,state,last_error,attempt_id FROM v2_analysis_jobs WHERE message_id=$1 "
+        "ORDER BY created_at DESC,id DESC LIMIT 1) j JOIN v2_analysis_traces t ON t.job_id=j.id "
+        "WHERE t.trace_kind='hermes_result' AND t.payload->>'attempt_id'=j.attempt_id::text "
+        "ORDER BY t.sequence_no DESC,t.id DESC LIMIT 1", message_id)
+    return trace_projection(row, message_id) if row else None
+
+
 async def signal_page(pool, request, actor, message_id, *, context='user', limit=30, cursor=None):
     decoded = _decode(request, actor, message_id, context, 'signals', limit, cursor)
     rows = await pool.fetch(
@@ -164,6 +179,7 @@ async def detail(pool, request, actor, message, *, context='user'):
     return {'message': message_projection(dict(message), admin=context=='admin', request=request, actor=actor), 'analysis': traces['items'],
             'analysis_next_cursor': traces['next_cursor'], 'analysis_has_more': traces['has_more'],
             'system_summary': await latest_summary(pool, message['id']),
+            'latest_model_result': await latest_model_result(pool, message['id']),
             'signals': signals['items'], 'signals_next_cursor': signals['next_cursor'],
             'signals_has_more': signals['has_more'], 'page_size': 30}
 

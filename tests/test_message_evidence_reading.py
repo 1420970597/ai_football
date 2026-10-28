@@ -74,6 +74,30 @@ class MessageEvidenceReadingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(69, len(set(seen)))
         self.assertIn('模型原文'*10000, full)
 
+    async def test_latest_model_result_is_visible_without_paging_and_never_uses_an_old_attempt(self):
+        await self.prepare()
+        await self.pool.execute('DELETE FROM v2_analysis_traces')
+        attempt = uuid.uuid4()
+        await self.pool.execute("UPDATE v2_analysis_jobs SET state='unresolved',attempt_id=$2 WHERE id=$1", self.job, attempt)
+        for number in range(1, 35):
+            await self.append_trace(self.job, number, 'tool_response_chunk', {'call_id':'example', 'chunk_index':number})
+        await self.append_trace(self.job, 35, 'hermes_result', {
+            'attempt_id':str(attempt), 'content':'历史截图分析：全场大 2.5；需要核对原始盘口。',
+            'headers':{'Authorization':'Bearer not-for-display'}})
+        result = (await self.client.get(await self.path())).json()
+        self.assertEqual(30, len(result['analysis']))
+        self.assertIn('历史截图分析', result['latest_model_result']['payload']['content'])
+        self.assertNotIn('not-for-display', str(result['latest_model_result']))
+        newer = uuid.uuid4()
+        await self.pool.execute("INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key,created_at) VALUES($1,$2,'queued',$3,now()+interval '1 second')", newer, self.message, str(newer))
+        self.assertIsNone((await self.client.get(await self.path())).json()['latest_model_result'])
+        new_attempt = uuid.uuid4()
+        await self.pool.execute("UPDATE v2_analysis_jobs SET state='running',attempt_id=$2 WHERE id=$1", newer, new_attempt)
+        await self.append_trace(newer, 1, 'hermes_result', {'attempt_id':str(uuid.uuid4()), 'content':'过期尝试'})
+        self.assertIsNone((await self.client.get(await self.path())).json()['latest_model_result'])
+        await self.append_trace(newer, 2, 'hermes_result', {'attempt_id':str(new_attempt), 'content':'本次有效结果'})
+        self.assertEqual('本次有效结果', (await self.client.get(await self.path())).json()['latest_model_result']['payload']['content'])
+
     async def test_cursor_rejects_cross_message_identity_session_context_expiry_and_changed_limit(self):
         await self.prepare()
         for number in range(2, 34):

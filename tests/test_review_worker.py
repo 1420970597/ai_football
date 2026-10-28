@@ -64,6 +64,24 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(claimed["attempt_id"], retry["attempt_id"])
         self.assertEqual(2, retry["attempts"])
 
+    async def test_claim_allows_slow_remote_roundtrips_but_still_has_a_deadline(self):
+        await self.make_queued()
+        real_claim = worker._claim_job
+        async def slow_claim(pool):
+            await asyncio.sleep(.06)
+            return await real_claim(pool)
+        with patch.object(worker, 'CLAIM_TIMEOUT_SECONDS', .5), patch.object(worker, '_claim_job', slow_claim):
+            self.assertEqual(self.job, (await worker.claim_job(self.pool))['id'])
+        cancelled = asyncio.Event()
+        async def stalled(_pool):
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+        with patch.object(worker, 'CLAIM_TIMEOUT_SECONDS', .02), patch.object(worker, '_claim_job', stalled):
+            self.assertIsNone(await worker.claim_job(self.pool))
+        self.assertTrue(cancelled.is_set())
+
     async def test_final_attempt_crash_enters_dead_letter(self):
         await self.pool.execute("UPDATE v2_analysis_jobs SET state='running',attempts=5,lease_until=now()-interval '1 second'")
         self.assertIsNone(await worker.claim_job(self.pool))

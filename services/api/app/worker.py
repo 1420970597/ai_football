@@ -25,6 +25,11 @@ MAX_ATTEMPTS = 5
 LEASE_SECONDS = 90
 HEARTBEAT_SECONDS = 20
 REVIEW_TIMEOUT = max(60, min(1800, int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "600"))))
+# The scheduler performs multiple remote PostgreSQL round trips in a single
+# transaction. Five seconds repeatedly cancelled otherwise healthy claims on
+# the measured remote link. Keep an overall deadline as well as the per-query
+# lock/statement timeouts below so a stalled database still cannot hang a worker.
+CLAIM_TIMEOUT_SECONDS = 30
 SCHEDULER_LOCK = 'platform-v2-review-fair-scheduler'
 MAX_PAIR_PROBES = 8
 EXHAUSTED_BATCH_SIZE = 100
@@ -126,7 +131,7 @@ async def _claim_from_lane(conn, mode):
 
 async def claim_job(pool):
     try:
-        async with asyncio.timeout(5):
+        async with asyncio.timeout(CLAIM_TIMEOUT_SECONDS):
             return await _claim_job(pool)
     except (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError) as exc:
         # Transient scheduling contention must not cancel this process's
