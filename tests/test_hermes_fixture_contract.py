@@ -18,7 +18,9 @@ class FixtureContractTests(unittest.TestCase):
         self.tools = [{'type': 'function', 'function': {'name': name, 'parameters': {'properties': {'name': {}}}}}
                       for name in ('skill_view', 'skills_list', 'mcp__football__search_matches',
                                    'mcp__football__resolve_match', 'mcp__football__list_match_markets',
-                                   'mcp__football__record_expert_signals')]
+                                   'mcp__football__record_expert_signals', 'mcp__football_parallel__search_matches',
+                                   'mcp__football_parallel__resolve_match', 'mcp__football_parallel__list_match_markets',
+                                   'mcp__football_parallel__record_expert_signals')]
 
     def body(self, scenario='normal', result=None, tool='skill_view'):
         messages = [{'role': 'user', 'content': f'review_id: {self.job}\nattempt_id: {self.attempt}\nfixture_scenario: {scenario}'}]
@@ -67,6 +69,28 @@ class FixtureContractTests(unittest.TestCase):
         args = json.loads(value['tool_calls'][0]['function']['arguments'])
         self.assertEqual(args['team_a'], 'Alpha259')
         self.assertEqual(args['team_b'], 'Beta259')
+
+    def test_parallel_scenario_emits_two_independent_resolutions(self):
+        body = self.body('parallel', json.dumps({'search_key': 'a'*64, 'next_cursor': None}),
+                         'mcp__football__search_matches')
+        value, reason = fixture.answer(body)
+        self.assertEqual(reason, 'tool_calls')
+        calls = value['tool_calls']
+        self.assertEqual(2, len(calls))
+        names = [call['function']['name'] for call in calls]
+        self.assertEqual(['mcp__football__resolve_match', 'mcp__football_parallel__resolve_match'], names)
+        arguments = [json.loads(call['function']['arguments']) for call in calls]
+        self.assertEqual(['Alpha258', 'Alpha259'], [item['team_a'] for item in arguments])
+        self.assertEqual({'a'*64}, {item['search_key'] for item in arguments})
+
+    def test_parallel_scenario_finishes_pagination_before_resolution(self):
+        body = self.body('parallel', json.dumps({'search_key': 'a'*64, 'next_cursor': 'page-2'}),
+                         'mcp__football__search_matches')
+        value, reason = fixture.answer(body)
+        self.assertEqual('tool_calls', reason)
+        self.assertEqual(1, len(value['tool_calls']))
+        self.assertTrue(value['tool_calls'][0]['function']['name'].endswith('search_matches'))
+        self.assertEqual('page-2', json.loads(value['tool_calls'][0]['function']['arguments'])['cursor'])
 
     def test_length_does_not_emit_tool_call(self):
         value, reason = fixture.answer(self.body('length'))

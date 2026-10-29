@@ -77,17 +77,27 @@ def _observe(state, body, tools):
     state['canary_exposed'] |= CANARY in json.dumps(body.get('messages', []), ensure_ascii=False)
 
 
+def _calls(state, tools, calls):
+    tool_calls = []
+    for index, call in enumerate(calls):
+        suffix, args, unknown = call[:3]
+        server = calls[index][3] if len(calls[index]) > 3 else None
+        name = suffix if unknown else next((name for name in tools if name.endswith(suffix)
+                                            and (server is None or name.startswith('mcp__' + server + '__'))), None)
+        if not name:
+            return {'role': 'assistant', 'content': '隔离测试缺少受限工具：' + suffix}, 'stop'
+        state['called'].append(name)
+        call_id = f'fixture-call-{evidence["requests"]}-{index}'
+        state['requested_calls'][call_id] = name
+        tool_calls.append({
+            'id': call_id, 'type': 'function',
+            'function': {'name': name, 'arguments': json.dumps(args, ensure_ascii=False)},
+        })
+    return {'role': 'assistant', 'content': None, 'tool_calls': tool_calls}, 'tool_calls'
+
+
 def _call(state, tools, suffix, args, *, unknown=False):
-    name = suffix if unknown else next((name for name in tools if name.endswith(suffix)), None)
-    if not name:
-        return {'role': 'assistant', 'content': '隔离测试缺少受限工具：' + suffix}, 'stop'
-    state['called'].append(name)
-    call_id = 'fixture-call-' + str(evidence['requests'])
-    state['requested_calls'][call_id] = name
-    return {'role': 'assistant', 'content': None, 'tool_calls': [{
-        'id': call_id, 'type': 'function',
-        'function': {'name': name, 'arguments': json.dumps(args, ensure_ascii=False)},
-    }]}, 'tool_calls'
+    return _calls(state, tools, [(suffix, args, unknown)])
 
 
 def _answer(body):
@@ -143,6 +153,15 @@ def _answer(body):
         if mode == 'adversarial' and state['pagination_attack'] == 0:
             state['pagination_attack'] = 1
             return _call(state, tools, 'resolve_match', {**resolve, 'search_key': state['last_search']['key']})
+        if mode == 'parallel' and not state.get('parallel_resolutions_requested') and not state['last_search']['cursor']:
+            state['parallel_resolutions_requested'] = True
+            auxiliary = {**context, 'team_a': f'Alpha{TARGET - 1}', 'team_b': f'Beta{TARGET - 1}',
+                         'competition': '隔离联赛-' + review.group(1), 'search_key': state['last_search']['key']}
+            target = {**resolve, 'search_key': state['last_search']['key']}
+            return _calls(state, tools, [
+                ('resolve_match', auxiliary, False, 'football'),
+                ('resolve_match', target, False, 'football_parallel'),
+            ])
     if mode == 'adversarial' and state['pagination_attack'] == 1 and name.endswith('resolve_match'):
         state['pagination_attack'] = 2
         return _call(state, tools, 'search_matches', {**search, 'cursor': 'forged-skipped-page'})

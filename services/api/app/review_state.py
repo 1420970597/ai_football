@@ -27,7 +27,10 @@ async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID):
         "FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
         "JOIN v2_experts e ON e.id=m.expert_id JOIN v2_expert_sources s ON s.id=m.source_id "
         "LEFT JOIN v2_source_experts se ON se.source_id=m.source_id AND se.expert_id=m.expert_id "
-        "WHERE j.id=$1 FOR UPDATE OF j", review_id,
+        # Tool calls for one agent attempt are independently authenticated. A
+        # shared lock keeps cancellation/completion from overtaking them while
+        # allowing safe MCP calls in the same model batch to overlap.
+        "WHERE j.id=$1 FOR SHARE OF j", review_id,
     )
     if not job or job["state"] != "running" or job["attempt_id"] != attempt_id or not job["lease_until"] or job["lease_until"] <= datetime.now(timezone.utc):
         raise HTTPException(status_code=409, detail="review attempt is no longer active")
@@ -43,7 +46,7 @@ async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID):
 
 
 async def trace(conn, review_id: uuid.UUID, kind: str, payload: dict) -> None:
-    # 调用者已经锁定当前任务，序号在同一事务内分配。
+    await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || $1::text,0))", str(review_id))
     sequence = await conn.fetchval("SELECT COALESCE(MAX(sequence_no),0)+1 FROM v2_analysis_traces WHERE job_id=$1", review_id)
     await conn.execute(
         "INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) VALUES($1,$2,$3,$4,$5)",

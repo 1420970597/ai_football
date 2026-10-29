@@ -18,9 +18,11 @@ from app.review_tool_evidence import replay_snapshot
 COUNT = 260
 TARGET = COUNT - 1
 IMAGE = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7GQAAAAASUVORK5CYII='
-TOOLS = {'skill_view', 'skills_list', 'mcp__football__search_matches',
-         'mcp__football__resolve_match', 'mcp__football__list_match_markets',
-         'mcp__football__record_expert_signals'}
+TOOLS = {'skill_view', 'skills_list'} | {
+    f'mcp__{server}__{tool}'
+    for server in ('football', 'football_parallel')
+    for tool in ('search_matches', 'resolve_match', 'list_match_markets', 'record_expert_signals')
+}
 HERMES = 'http://ai-football-v2-hermes-integration:8642'
 PROVIDER = 'http://provider-fixture:8999'
 HEADERS = {'Authorization': 'Bearer isolated-framework-key'}
@@ -86,6 +88,33 @@ async def no_bypass(http):
 async def run_case(conn, http, scenario):
     data = await seed(conn, scenario)
     job, attempt, message = data['job'], data['attempt'], data['message']
+    if scenario == 'parallel':
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS v2_integration_parallel_probe (
+                probe_id bigserial PRIMARY KEY,
+                job_id uuid NOT NULL,
+                fixture_id text NOT NULL,
+                started_at timestamptz NOT NULL,
+                finished_at timestamptz
+            )
+        """)
+        await conn.execute("""
+            CREATE OR REPLACE FUNCTION v2_integration_parallel_probe_insert() RETURNS trigger
+            LANGUAGE plpgsql AS $$
+            DECLARE probe bigint;
+            BEGIN
+                INSERT INTO v2_integration_parallel_probe(job_id,fixture_id,started_at)
+                VALUES(NEW.job_id,NEW.fixture_id::text,clock_timestamp()) RETURNING probe_id INTO probe;
+                PERFORM pg_sleep(0.5);
+                UPDATE v2_integration_parallel_probe SET finished_at=clock_timestamp() WHERE probe_id=probe;
+                RETURN NEW;
+            END $$
+        """)
+        await conn.execute("""
+            CREATE TRIGGER v2_integration_parallel_probe_trigger
+            BEFORE INSERT ON v2_review_fixture_bindings
+            FOR EACH ROW EXECUTE FUNCTION v2_integration_parallel_probe_insert()
+        """)
     session = f'expert-review-{job}-{attempt}'
     if scenario in {'length', 'budget'}:
         settings = SimpleNamespace(hermes_api_key='isolated-framework-key', hermes_api_url=HERMES + '/v1', hermes_model='hermes-agent')
@@ -110,7 +139,7 @@ async def run_case(conn, http, scenario):
         assert finish == 'stop', {'finish_reason': finish, 'hermes': payload.get('hermes')}
     evidence = (await http.get(PROVIDER + '/evidence')).json()['reviews'][str(job)]
     assert evidence['models'] == ['cline-pass/deepseek-v4.1-flash']
-    assert set(evidence['tools']) == TOOLS, 'only six audited tools may reach provider'
+    assert set(evidence['tools']) == TOOLS, f"unexpected advertised tool names: {sorted(evidence['tools'])}"
     assert not evidence['canary_exposed'], 'disabled secret-reading tool must not execute'
     signals = await conn.fetch('SELECT fixture_id,market_kind,period,line,selection,recommendation_price FROM v2_expert_signals WHERE message_id=$1', message)
     search = await conn.fetchrow('SELECT page_count,total_candidates,complete FROM v2_match_searches WHERE job_id=$1', job)
@@ -132,7 +161,8 @@ async def run_case(conn, http, scenario):
         assert candidate['position'] == COUNT and candidate['candidate_data']['phase'] == 'scheduled'
         assert datetime.fromisoformat(candidate['candidate_data']['kickoff_at']).date() > data['posted_at'].date()
         successes = [row for row in traces if row['payload'].get('status') == 'succeeded']
-        assert len(successes) == 16, '13 search + resolve + markets + record must be evidenced'
+        expected_successes = 17 if scenario == 'parallel' else 16
+        assert len(successes) == expected_successes, 'search, resolve, markets and records must all be evidenced'
         replayed_items = 0
         for row in successes:
             manifest = row['payload']['response_snapshot']
@@ -141,6 +171,24 @@ async def run_case(conn, http, scenario):
             if row['trace_kind'] == 'mcp_search_matches':
                 replayed_items += len(replayed['items'])
         assert replayed_items == COUNT, 'persisted complete response snapshots must replay every candidate'
+        if scenario == 'parallel':
+            resolutions = [row for row in successes if row['trace_kind'] == 'mcp_resolve_match']
+            assert len(resolutions) == 2, 'parallel fixture must uniquely resolve both independent matches'
+            observed = await conn.fetch("""
+                SELECT fixture_id,started_at,finished_at FROM v2_integration_parallel_probe
+                WHERE job_id=$1 ORDER BY probe_id
+            """, job)
+            assert len(observed) == 2 and all(row['finished_at'] for row in observed), observed
+            overlap = await conn.fetchval("""
+                SELECT EXISTS(
+                    SELECT 1 FROM v2_integration_parallel_probe a
+                    JOIN v2_integration_parallel_probe b ON a.probe_id < b.probe_id
+                    WHERE a.job_id=$1 AND b.job_id=$1
+                      AND a.started_at < b.finished_at AND b.started_at < a.finished_at
+                )
+            """, job)
+            assert overlap, 'Hermes must execute the two independent MCP calls concurrently'
+            await conn.execute('DROP TRIGGER v2_integration_parallel_probe_trigger ON v2_review_fixture_bindings')
         if scenario == 'adversarial':
             assert evidence['attack_step'] == 3 and evidence['pagination_attack'] == 3
             failures = {(row['trace_kind'], row['payload'].get('http_status')) for row in traces if row['payload'].get('status') == 'failed'}
@@ -169,7 +217,7 @@ async def run():
         async with httpx.AsyncClient(timeout=240, trust_env=False) as http:
             await no_bypass(http)
             for scenario in os.environ.get('INTEGRATION_SCENARIOS', 'normal,adversarial,length').split(','):
-                if scenario not in {'normal', 'adversarial', 'length', 'budget'}:
+                if scenario not in {'normal', 'adversarial', 'length', 'budget', 'parallel'}:
                     raise RuntimeError('unknown isolated scenario')
                 await run_case(conn, http, scenario)
     finally:

@@ -1,5 +1,6 @@
 """Real isolated PostgreSQL/API evidence; no providers, accounts or wagers."""
 from datetime import timedelta
+import asyncio
 import base64
 import hashlib
 import json
@@ -88,6 +89,7 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
     fixture = fixtures.ReviewTests.fixture
     search_all = fixtures.ReviewTests.search_all
     resolve = fixtures.ReviewTests.resolve
+    read_market = fixtures.ReviewTests.read_market
 
     async def replay(self, kind, *, offset=0):
         records = await self.pool.fetch(
@@ -121,7 +123,108 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(fixture_id, match.json()['fixture']['id'])
         unknown = await self.post('search_matches', team_query='Club', sport='source_31')
         self.assertEqual(['fixture-5'], [row['id'] for row in unknown.json()['items']])
+
+    async def test_independent_searches_run_concurrently_with_unique_ordered_evidence(self):
+        await self.fixture(1)
+        await self.fixture(2, home_team='Gamma2', away_team='Delta2')
+        reached=0
+        barrier=asyncio.Event()
+        original=reviews.active_tool_job
+        async def synchronized(conn,review_id,attempt_id):
+            nonlocal reached
+            result=await original(conn,review_id,attempt_id)
+            reached+=1
+            if reached<=2:
+                if reached==2:barrier.set()
+                await asyncio.wait_for(barrier.wait(),timeout=.75)
+            return result
+        with patch.object(reviews,'active_tool_job',side_effect=synchronized):
+            results=await asyncio.gather(
+                self.post('search_matches',team_query='Alpha',sport='football'),
+                self.post('search_matches',team_query='Gamma',sport='football'))
+        self.assertEqual([200,200],[response.status_code for response in results])
+        self.assertEqual([['fixture-1'],['fixture-2']],[ [row['id'] for row in response.json()['items']] for response in results])
+        traces=await self.pool.fetch("SELECT sequence_no,payload FROM v2_analysis_traces WHERE trace_kind='mcp_search_matches' ORDER BY sequence_no")
+        self.assertEqual(2,len(traces))
+        self.assertEqual(2,len({row['payload']['call_id'] for row in traces}))
+        self.assertEqual(2,len({row['sequence_no'] for row in traces}))
+        all_sequences=await self.pool.fetch('SELECT sequence_no FROM v2_analysis_traces WHERE job_id=$1 ORDER BY sequence_no',self.job)
+        self.assertEqual(list(range(1,len(all_sequences)+1)),[row['sequence_no'] for row in all_sequences])
+        for response in results:
+            call_id=(await self.pool.fetchval("SELECT payload->>'call_id' FROM v2_analysis_traces WHERE trace_kind='mcp_search_matches' AND payload->>'search_key'=$1",response.json()['search_key']))
+            payload=await self.pool.fetch("SELECT payload FROM v2_analysis_traces WHERE trace_kind='tool_response_chunk' AND payload->>'call_id'=$1 ORDER BY sequence_no",call_id)
+            manifest=next(row['payload']['response_snapshot'] for row in traces if row['payload']['call_id']==call_id)
+            from app.review_tool_evidence import replay_snapshot
+            self.assertEqual(response.json(),replay_snapshot(manifest,[row['payload'] for row in payload]))
+
+    async def test_same_cursor_requests_serialize_and_stale_parallel_page_is_rejected(self):
+        await self.fixture(1)
+        await self.fixture(2)
+        first=(await self.post('search_matches',team_query='Alpha',sport='football',page_size=1)).json()
+        responses=await asyncio.gather(*(
+            self.post('search_matches',team_query='Alpha',sport='football',page_size=1,cursor=first['next_cursor'])
+            for _ in range(2)))
+        self.assertEqual([200,409],sorted(response.status_code for response in responses))
+        page=next(response.json() for response in responses if response.status_code==200)
+        self.assertEqual(['fixture-2'],[item['id'] for item in page['items']])
+        self.assertTrue(page['search_complete'])
+        self.assertEqual(3,await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE trace_kind='mcp_search_matches'"))
+
+    async def test_independent_market_reads_run_concurrently_without_trace_collision(self):
+        await self.fixture(1)
+        await self.fixture(2)
+        key,_=await self.search_all()
+        self.assertTrue((await self.resolve(key,1))['resolved'])
+        self.assertTrue((await self.resolve(key,2))['resolved'])
+        responses=await asyncio.gather(self.post('list_match_markets',fixture_id='fixture-1'),
+                                       self.post('list_match_markets',fixture_id='fixture-2'))
+        self.assertEqual([200,200],[response.status_code for response in responses])
+        rows=await self.pool.fetch("SELECT sequence_no,payload->>'fixture_id' fixture_id FROM v2_analysis_traces WHERE trace_kind='mcp_list_match_markets' ORDER BY sequence_no")
+        self.assertEqual(['fixture-1','fixture-2'],[row['fixture_id'] for row in rows])
+        sequences=await self.pool.fetch('SELECT sequence_no FROM v2_analysis_traces WHERE job_id=$1 ORDER BY sequence_no',self.job)
+        self.assertEqual(list(range(1,len(sequences)+1)),[row['sequence_no'] for row in sequences])
         self.assertEqual(422, (await self.post('search_matches', team_query='Club', sport='football?token=x')).status_code)
+
+    async def test_independent_fresh_fixture_records_run_concurrently_with_exact_evidence(self):
+        await self.fixture(1)
+        await self.fixture(2)
+        key,_=await self.search_all()
+        self.assertTrue((await self.resolve(key,1))['resolved'])
+        self.assertTrue((await self.resolve(key,2))['resolved'])
+        market1,market2=await asyncio.gather(self.read_market('fixture-1'),self.read_market('fixture-2'))
+        reached=0
+        barrier=asyncio.Event()
+        original=reviews.active_tool_job
+        async def synchronized(conn,review_id,attempt_id):
+            nonlocal reached
+            result=await original(conn,review_id,attempt_id)
+            reached+=1
+            if reached<=2:
+                if reached==2:barrier.set()
+                await asyncio.wait_for(barrier.wait(),timeout=.75)
+            return result
+        picks=[{'fixture_id':'fixture-1','quote_id':market1['quote_id'],'evidence_text':'Alpha1 over 2.5'},
+               {'fixture_id':'fixture-2','quote_id':market2['quote_id'],'evidence_text':'Alpha2 over 2.5'}]
+        with patch.object(reviews,'active_tool_job',side_effect=synchronized):
+            responses=await asyncio.gather(*(self.post('record_expert_signals',signals=[pick]) for pick in picks))
+        self.assertEqual([200,200],[response.status_code for response in responses])
+        self.assertTrue(all(len(response.json()['accepted'])==1 for response in responses))
+        signals=await self.pool.fetch('SELECT fixture_id FROM v2_expert_signals')
+        self.assertEqual({'fixture-1','fixture-2'},{row['fixture_id'] for row in signals})
+        records=await self.pool.fetch("SELECT sequence_no,payload FROM v2_analysis_traces "
+                                      "WHERE trace_kind='mcp_record_expert_signals' ORDER BY sequence_no")
+        self.assertEqual({'fixture-1','fixture-2'},
+            {row['payload']['accepted'][0]['fixture_id'] for row in records})
+        all_sequences=await self.pool.fetch('SELECT sequence_no FROM v2_analysis_traces WHERE job_id=$1 ORDER BY sequence_no',self.job)
+        self.assertEqual(list(range(1,len(all_sequences)+1)),[row['sequence_no'] for row in all_sequences])
+        for response,fixture_id in zip(responses,('fixture-1','fixture-2')):
+            call_id=next(row['payload']['call_id'] for row in records
+                         if row['payload']['accepted'][0]['fixture_id']==fixture_id)
+            rows=await self.pool.fetch("SELECT payload FROM v2_analysis_traces WHERE trace_kind='tool_response_chunk' "
+                                       "AND payload->>'call_id'=$1 ORDER BY sequence_no",call_id)
+            manifest=next(row['payload']['response_snapshot'] for row in records
+                          if row['payload']['call_id']==call_id)
+            self.assertEqual(response.json(),replay_snapshot(manifest,[row['payload'] for row in rows]))
 
     async def test_signed_cursor_is_bound_to_sport_and_failed_scope_does_not_advance(self):
         await self.fixture(1)

@@ -211,6 +211,7 @@ async def tool_success(conn, body, result, summary):
     context = await _context(conn, body, job)
     manifest['call_id'] = current.call_id
     manifest['references'] = _references(current.kind, wire)
+    await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || $1::text,0))", str(body.review_id))
     sequence = await conn.fetchval('SELECT COALESCE(MAX(sequence_no),0)+1 FROM v2_analysis_traces WHERE job_id=$1', body.review_id)
     records = [(uuid.uuid4(), body.review_id, sequence + index, 'tool_response_chunk', {
         'call_id': current.call_id, 'attempt_id': str(body.attempt_id), 'tool': current.kind,
