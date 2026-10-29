@@ -48,6 +48,9 @@ class SingleMatchClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["markets_complete"])
         self.assertEqual("2.11", result["markets"][0]["price"])
         self.assertNotEqual(result["markets"][0]["received_at"], result["markets"][0]["source_updated_at"])
+        self.assertEqual('no-store', request.headers['cache-control'])
+        self.assertEqual(result['markets'], result['_current_observation']['quotes'])
+        self.assertEqual(DEFAULT_MATCH_ODDS_PATH, result['_current_observation']['path'])
         self.assertNotIn("markets", original)
 
     async def test_unknown_source_time_stays_unknown(self):
@@ -116,16 +119,16 @@ class RuntimeMatchTests(unittest.IsolatedAsyncioTestCase):
         client.fetch_match.assert_awaited_once()
 
     async def test_busy_poll_wait_is_bounded_before_config_or_provider(self):
-        await self.runtime._collection_lock.acquire()
+        await self.runtime._refresh_lock.acquire()
         try:
             with self.assertRaises(LeyuError) as raised:
                 await self.runtime.refresh_match("m1",lock_timeout_seconds=.01)
             self.assertEqual("refresh_busy",raised.exception.category)
             self.runtime.load.assert_not_called()
         finally:
-            self.runtime._collection_lock.release()
+            self.runtime._refresh_lock.release()
 
-    async def test_waiting_refresh_precedes_next_poll_without_cancelling_current_poll(self):
+    async def test_priority_refresh_finishes_while_station_poll_is_still_waiting(self):
         first_started,release_first=asyncio.Event(),asyncio.Event()
         order=[]
         async def collect(**kwargs):
@@ -144,36 +147,37 @@ class RuntimeMatchTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
             following=asyncio.create_task(self.runtime.collect())
             await asyncio.sleep(0)
-            self.assertFalse(precise.done())
+            await asyncio.wait_for(asyncio.shield(precise), .5)
+            self.assertFalse(current.done())
             self.assertFalse(current.cancelled())
             release_first.set()
             await asyncio.gather(current,precise,following)
         self.assertEqual(["poll","refresh","poll"],order)
 
     async def test_rate_limit_set_by_current_poll_blocks_queued_refresh(self):
-        await self.runtime._collection_lock.acquire()
+        await self.runtime._refresh_lock.acquire()
         waiting=asyncio.create_task(self.runtime.refresh_match("m1"))
         await asyncio.sleep(0)
         self.runtime.request_budget.defer_requests(60)
-        self.runtime._collection_lock.release()
+        self.runtime._refresh_lock.release()
         with self.assertRaises(RateLimited): await waiting
         self.runtime.load.assert_not_called()
 
     async def test_controller_deadline_while_waiting_returns_busy_without_cooldown_or_background(self):
         upload=AsyncMock(return_value=1)
         controller=LeyuRefreshController(self.runtime,upload,deadline_seconds=.01)
-        await self.runtime._collection_lock.acquire()
+        await self.runtime._refresh_lock.acquire()
         try:
             result=await controller.refresh({"fixture_id":"leyu:m1","source_match_id":"m1"})
             self.assertEqual("refresh_busy",result["reason"])
             self.assertIs(False,result["accepted"])
-            self.assertTrue(self.runtime._collection_lock.locked())
+            self.assertTrue(self.runtime._refresh_lock.locked())
             self.assertEqual(0,controller.cooldown_remaining())
             self.assertEqual({},controller._inflight)
             self.runtime.load.assert_not_called()
             upload.assert_not_called()
         finally:
-            self.runtime._collection_lock.release()
+            self.runtime._refresh_lock.release()
             await controller.close()
 
     async def test_auth_expired_refresh_does_not_renew_or_retry(self):
@@ -184,6 +188,30 @@ class RuntimeMatchTests(unittest.IsolatedAsyncioTestCase):
                 await self.runtime.refresh_match("m1")
             renewal.assert_not_called()
         client.fetch_match.assert_awaited_once()
+
+    async def test_config_revision_change_during_priority_request_discards_response(self):
+        async def fetch(mid, **kwargs):
+            self.runtime.version += 1
+            return fixture()
+        before = deepcopy(self.runtime.fixtures)
+        with patch('services.collector.leyu_runtime.LeyuClient.from_config', return_value=SimpleNamespace(fetch_match=fetch)):
+            with self.assertRaises(LeyuError) as raised:
+                await self.runtime.refresh_match('m1')
+        self.assertEqual('refresh_configuration_changed', raised.exception.category)
+        self.assertEqual(before, self.runtime.fixtures)
+        self.assertFalse(self.runtime._refresh_lock.locked())
+
+    async def test_observation_does_not_inherit_merged_newer_ws_prices(self):
+        old = {'market_id':'4','period':'full_time','line':'0','selection':'home','price':'2.00',
+               'source_updated_at':'2026-10-27T10:00:00+00:00'}
+        newer = {**old, 'price':'2.20','source_updated_at':'2026-10-27T10:00:05+00:00'}
+        self.runtime.fixtures['leyu:m1']['markets'] = [newer]
+        response = {**fixture(), 'markets':[old], '_current_observation':{'quotes':[old]}}
+        with patch('services.collector.leyu_runtime.LeyuClient.from_config', return_value=SimpleNamespace(fetch_match=AsyncMock(return_value=response))):
+            result = await self.runtime.refresh_match('m1')
+        self.assertEqual('2.20', result['markets'][0]['price'])
+        self.assertEqual('2.00', result['_current_observation']['quotes'][0]['price'])
+        self.assertNotIn('_current_observation', self.runtime.fixtures['leyu:m1'])
 
     async def test_shared_cooldown_blocks_poll_and_refresh_before_load(self):
         self.runtime.request_budget.defer_requests(30)
@@ -360,6 +388,18 @@ class RefreshControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('parent_unchanged_recheck_quotes', result['reason'])
         self.assertEqual(0, self.controller.cooldown_remaining())
         self.upload.assert_awaited_once()
+
+    async def test_observation_returned_only_after_commit_and_never_in_ingestion_payload(self):
+        witness = {'path':DEFAULT_MATCH_ODDS_PATH,'quotes':[]}
+        self.runtime.refresh_match.return_value = {**fixture(), '_current_observation':witness}
+        result = await self.controller.refresh(self.body)
+        self.assertEqual(witness, result['current_observation'])
+        self.assertNotIn('_current_observation', self.upload.await_args.args[0][0])
+        self.now[0] += 2
+        self.runtime.refresh_match.return_value = {**fixture(), '_current_observation':witness}
+        self.upload.side_effect = RuntimeError('isolated failure')
+        result = await self.controller.refresh(self.body)
+        self.assertNotIn('current_observation', result)
 
     async def test_untrusted_body_and_diagnostics_never_return_secrets(self):
         with self.assertRaises(ValueError): await self.controller.refresh({**self.body,"url":"private"})

@@ -119,6 +119,7 @@ class LeyuRefreshController:
                 fixture = await self.runtime.refresh_match(mid)
                 if fixture.get("id") != identity or str(fixture.get("source_match_id") or "") != mid:
                     raise LeyuError("fixture_identity_mismatch")
+                observation = fixture.pop("_current_observation", None)
                 stage = "ingestion"
                 accepted = await self.upload([fixture])
                 if type(accepted) is not int or accepted not in {0, 1}:
@@ -128,9 +129,11 @@ class LeyuRefreshController:
                     # may update quotes while rejecting its stale parent; do not
                     # invent a quote row count from the parent receipt.
                     return {**self._result(identity, mid, "parent_unchanged_recheck_quotes"),
-                            "snapshot_committed": True, "quote_writes_verified": False}
+                            "snapshot_committed": True, "quote_writes_verified": False,
+                            "current_observation": observation}
                 return {**self._result(identity, mid, "written", accepted=1),
-                        "snapshot_committed": True, "quote_writes_verified": False}
+                        "snapshot_committed": True, "quote_writes_verified": False,
+                        "current_observation": observation}
         except RateLimited as exc:
             self.defer_requests(max(60, exc.retry_after_seconds or 0))
             return self._result(identity, mid, "upstream_rate_limited", retry=self.cooldown_remaining())

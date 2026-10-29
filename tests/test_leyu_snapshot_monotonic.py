@@ -55,6 +55,26 @@ class SnapshotMonotonicTests(unittest.IsolatedAsyncioTestCase):
                             'price':'2.22','status':'suspended','status_evidence':False})
         self.assertEqual('active',pushed[0]['markets'][0]['status'])
 
+    async def test_priority_read_during_station_poll_preserves_new_quote_and_fixture_context(self):
+        old = self.quote(status='active')
+        await self.collect([old])
+        newer = self.quote('2026-10-27T12:00:10+00:00', line='-0.75',price='2.20',status='active')
+        async def fetch(**kwargs):
+            async def detail(mid, **kw):
+                return {**self.fixture([newer]), 'phase':'live','home_score':1,
+                        'received_at':'2026-10-27T12:00:11+00:00'}
+            with patch('services.collector.leyu_runtime.LeyuClient.from_config',
+                       return_value=SimpleNamespace(fetch_match=detail)):
+                await self.runtime.refresh_match('one')
+            return [{**self.fixture([old]),'phase':'scheduled','home_score':0,
+                     'received_at':'2026-10-27T12:00:01+00:00'}]
+        with patch('services.collector.leyu_runtime.LeyuClient.from_config',
+                   return_value=SimpleNamespace(fetch=fetch,last_report={})):
+            result = (await self.runtime.collect())[0]
+        self.assertEqual(('live',1),(result['phase'],result['home_score']))
+        self.assertFalse(result['markets_complete'])
+        self.assertIn(newer,result['markets'])
+
     async def test_unknown_or_malformed_http_never_erases_known_quote_or_invents_source_time(self):
         known=self.quote(status='active');await self.collect([known])
         for time in (None,'invalid','2026-10-27T12:00:30'):

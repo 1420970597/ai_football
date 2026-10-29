@@ -34,7 +34,7 @@ FIXTURE_FIELDS = frozenset({
 QUOTE_FIELDS = frozenset({
     'id', 'fixture_id', 'market_id', 'market_name', 'period', 'market_kind', 'line', 'selection', 'price',
     'source_updated_at', 'received_at', 'source_time_quality', 'status', 'play_id', 'market_instance_id',
-    'selection_id', 'is_main', 'score_basis', 'quote_id', 'fresh',
+    'selection_id', 'is_main', 'score_basis', 'quote_id', 'fresh', 'confirmed_current', 'can_record',
 })
 ACCEPTED_FIELDS = frozenset({'index', 'signal_id', 'duplicate', 'fixture_id', 'market_name', 'period', 'line', 'selection', 'price'})
 REJECTED_FIELDS = frozenset({'index', 'reason'})

@@ -18,7 +18,7 @@ if not API_TOKEN:
     raise RuntimeError("EXPERT_MCP_TOKEN is required")
 
 client = httpx.AsyncClient(
-    timeout=httpx.Timeout(15.0, connect=2.0), trust_env=False,
+    timeout=httpx.Timeout(20.0, connect=2.0), trust_env=False,
     limits=httpx.Limits(max_connections=32, max_keepalive_connections=8),
     headers={"Authorization": f"Bearer {API_TOKEN}"},
 )
@@ -34,7 +34,8 @@ class ExpertPick(BaseModel):
 
 async def _post(path: str, payload: dict) -> dict:
     try:
-        response = await client.post(f"{API_URL}/{path}", json=payload)
+        response = await client.post(f"{API_URL}/{path}", json=payload,
+            timeout=httpx.Timeout(45 if path == 'record_expert_signals' else 20, connect=2))
         response.raise_for_status()
         return response.json()
     except httpx.TimeoutException:
@@ -76,13 +77,13 @@ async def resolve_match(review_id: str, attempt_id: str, search_key: str,
 
 @mcp.tool()
 async def list_match_markets(review_id: str, attempt_id: str, fixture_id: str) -> dict:
-    """读取已唯一消歧比赛的全部系统盘口，返回精确 quote_id、期间、盘口线、状态和新鲜度。"""
+    """读取已唯一消歧比赛的全部系统盘口；can_record表示源时间有效或精确当前盘口复核有效。"""
     return await _post("list_match_markets", {"review_id": review_id, "attempt_id": attempt_id, "fixture_id": fixture_id})
 
 
 @mcp.tool()
 async def record_expert_signals(review_id: str, attempt_id: str, signals: list[ExpertPick]) -> dict:
-    """逐项保存已实际读取且未变价的系统 quote_id；原文倍率不作为价格，检查接受及拒绝结果。"""
+    """立即提交当前比赛已读的确切quote_id；必要时系统重新复核原盘，未变价才记录，检查accepted/rejected。"""
     return await _post("record_expert_signals", {"review_id": review_id, "attempt_id": attempt_id, "signals": [pick.model_dump() for pick in signals]})
 
 

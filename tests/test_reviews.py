@@ -178,6 +178,70 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('historical_review_not_current', historical.json()['refresh']['reason'])
         self.assertEqual([], requests)
 
+    async def test_current_detail_confirmation_records_unchanged_quote_without_rewriting_source_time(self):
+        from app.quote_observation import DETAIL_PATH
+        fixture_id = await self.fixture(markets=[{'market_id':'4','market_name':'全场让球','kind':'handicap',
+            'period':'full_time','line':'-0.5','selection':'home','price':'1.95','status':'active',
+            'source_updated_at':(self.now-timedelta(hours=1)).isoformat(),'received_at':self.now.isoformat(),
+            'play_id':'4','market_instance_id':'native-market','selection_id':'native-option'}])
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        settings = self.client._transport.app.state.settings
+        settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        settings.quote_max_age_seconds = 15
+        factory = httpx.AsyncClient
+        observations = []
+        async def handler(request):
+            q = dict(await self.pool.fetchrow('SELECT * FROM v2_current_quotes WHERE fixture_id=$1', fixture_id))
+            f = dict(await self.pool.fetchrow('SELECT * FROM v2_fixtures WHERE id=$1', fixture_id))
+            from app.quote_observation import CONTEXT_FIELDS
+            now = datetime.now(timezone.utc).isoformat()
+            observation = {'path':DETAIL_PATH,'started_at':now,'completed_at':now,'fixture_id':fixture_id,
+                'source_match_id':fixture_id,'context':{k:f[k] for k in CONTEXT_FIELDS},
+                'quotes':[json.loads(json.dumps(q, default=str))]}
+            observations.append(observation)
+            return httpx.Response(200,json={'accepted':False,'reason':'parent_unchanged_recheck_quotes',
+                'snapshot_committed':True,'current_observation':observation})
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+            quote = await self.read_market(fixture_id)
+            self.assertFalse(quote['fresh'])
+            self.assertTrue(quote['confirmed_current'])
+            self.assertTrue(quote['can_record'])
+            recorded = await self.post('record_expert_signals', signals=[{'fixture_id':fixture_id,
+                'quote_id':quote['quote_id'],'evidence_text':'Alpha1 -0.5'}])
+        self.assertEqual(1, len(recorded.json()['accepted']), recorded.text)
+        self.assertEqual(1, len(observations), 'recent exact observation should not duplicate provider I/O')
+        signal = await self.pool.fetchrow('SELECT * FROM v2_expert_signals')
+        self.assertEqual(self.now-timedelta(hours=1), signal['quote_time'])
+        evidence = await self.pool.fetchval('SELECT evidence FROM v2_quote_evidence')
+        self.assertEqual(DETAIL_PATH, evidence['current_confirmation']['path'])
+        # An observation is not an execution permit or a fabricated new ctsp.
+        from app.review_state import fresh_quote
+        stored = await self.pool.fetchrow('SELECT * FROM v2_current_quotes')
+        self.assertFalse(fresh_quote(stored,15))
+
+    async def test_record_rechecks_expired_observation_and_rejects_changed_price(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        quote = await self.read_market(fixture_id)
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes'")
+        settings = self.client._transport.app.state.settings
+        settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        factory = httpx.AsyncClient
+        calls=[]
+        async def handler(request):
+            calls.append(request)
+            self.assertEqual(self.pool.get_size(),self.pool.get_idle_size())
+            await self.pool.execute('UPDATE v2_current_quotes SET price=2.01,source_updated_at=now()')
+            return httpx.Response(200,json={'accepted':True,'reason':'written'})
+        with patch.object(reviews.httpx,'AsyncClient',side_effect=lambda **kw:factory(transport=httpx.MockTransport(handler),**kw)):
+            result = await self.post('record_expert_signals',signals=[{'fixture_id':fixture_id,
+                'quote_id':quote['quote_id'],'evidence_text':'大2.5'}])
+        self.assertEqual(1,len(calls))
+        self.assertEqual('quote_not_read_or_changed',result.json()['rejected'][0]['reason'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
     async def test_search_reaches_105th_fixture_and_snapshot_is_stable(self):
         for index in range(105):
             await self.fixture(index)

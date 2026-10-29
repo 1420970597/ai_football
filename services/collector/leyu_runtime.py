@@ -32,6 +32,7 @@ class LeyuRuntime:
         self.last_report: dict[str, Any] = {}
         self.fixtures: dict[str, dict[str, Any]] = {}
         self._collection_lock = asyncio.Lock()
+        self._refresh_lock = asyncio.Lock()
         self.request_budget = LeyuRequestBudget()
         self._push_revision = 0
         self._market_push_revisions: dict[tuple[str, tuple], int] = {}
@@ -165,12 +166,12 @@ class LeyuRuntime:
             return result
 
     async def refresh_match(self, source_match_id: str, *, lock_timeout_seconds: float = 8) -> dict[str, Any]:
-        """Wait in the existing FIFO lock, bounded by the control request deadline."""
+        """One bounded priority lane, independent of the long station poll."""
         mid = LeyuClient.validate_match_id(source_match_id)
         self.last_refresh_report = {"stage": "lock_wait", "state": "waiting"}
         try:
             async with asyncio.timeout(min(8, max(.001, lock_timeout_seconds))):
-                await self._collection_lock.acquire()
+                await self._refresh_lock.acquire()
         except TimeoutError:
             self.last_refresh_report["state"] = "timed_out"
             raise LeyuError("refresh_busy") from None
@@ -195,19 +196,34 @@ class LeyuRuntime:
                     raise
             # No AuthExpired handler here: only the normal poll may claim renewal.
             client = LeyuClient.from_config(self.config)
+            config_version = self.version
             self.request_budget.claim_precise_start(mid)
             fixture = await client.fetch_match(mid, fixture=deepcopy(previous))
+            if self.version != config_version:
+                raise LeyuError("refresh_configuration_changed")
+            observation = fixture.pop("_current_observation", None)
             self._merge_fixture(fixture, self.fixtures.get(previous["id"]), push_revision_at_start)
             self.fixtures[fixture["id"]] = deepcopy(fixture)
-            return fixture
+            # A concurrent station snapshot must not delete priority-read quotes.
+            for quote in fixture.get("markets", []):
+                self._push_revision += 1
+                self._market_push_revisions[(fixture["id"], self._market_key(quote))] = self._push_revision
+            return {**fixture, "_current_observation": observation}
         finally:
             self.last_refresh_report["state"] = "finished"
-            self._collection_lock.release()
+            self._refresh_lock.release()
 
     def _merge_fixture(self, fixture: dict[str, Any], previous: dict[str, Any] | None,
                        push_revision_at_start: int) -> None:
         if not previous:
             return
+        incoming_time = self._source_time(fixture.get("source_updated_at") or fixture.get("received_at"))
+        previous_time = self._source_time(previous.get("source_updated_at") or previous.get("received_at"))
+        if previous_time and (not incoming_time or incoming_time < previous_time):
+            for key in ("phase", "match_state", "home_score", "away_score", "half_home_score",
+                        "half_away_score", "clock_minute", "source_updated_at", "source_time_quality", "received_at"):
+                if key in previous:
+                    fixture[key] = previous[key]
         complete = bool(fixture.get("markets_complete"))
         prior_markets = {self._market_key(quote): quote for quote in previous.get("markets", [])}
         markets = {} if complete else dict(prior_markets)

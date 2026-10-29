@@ -176,14 +176,13 @@ class LeyuClient:
             "checkId": f"pc-{self.check_id_base}-{self.cuid}-{int(time.time() * 1000)}",
             "origin": self.origin, "referer": self.origin + "/", "user-agent": self.user_agent,
             "sec-fetch-site": "cross-site", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty",
+            "cache-control": "no-store", "pragma": "no-cache",
         }
         cookie = self.cookie
         if self.token and "x-api-token=" not in cookie.lower():
             cookie = (cookie + "; " if cookie else "") + "X-API-TOKEN=" + self.token
         if cookie:
             headers["cookie"] = cookie
-        if self.collection_relay:
-            headers.update({"cache-control": "no-store", "pragma": "no-cache"})
         return headers
 
     async def _request(self, client: httpx.AsyncClient, method: str, path: str, **kwargs) -> Any:
@@ -266,6 +265,7 @@ class LeyuClient:
         mid = self.validate_match_id(source_match_id)
         if str(fixture.get("source_match_id") or "") != mid or not fixture.get("id"):
             raise LeyuError("fixture_identity_mismatch")
+        started = datetime.now(timezone.utc)
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(6, connect=3, pool=1),
             limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
@@ -284,9 +284,20 @@ class LeyuClient:
         if len(matches) != 1:
             raise LeyuError("fixture_detail_missing" if not matches else "ambiguous_fixture_detail")
         result = deepcopy(dict(fixture))
-        self._apply_market_row(result, matches[0], datetime.now(timezone.utc))
+        completed = datetime.now(timezone.utc)
+        self._apply_market_row(result, matches[0], completed)
         if not result["markets_complete"]:
             raise LeyuError("market_container_missing")
+        # This is an observation of this exact authoritative detail response,
+        # not a new source/change timestamp. Never attach it to merged WS data.
+        result["_current_observation"] = {
+            "path": DEFAULT_MATCH_ODDS_PATH, "started_at": started.isoformat(),
+            "completed_at": completed.isoformat(), "fixture_id": result["id"],
+            "source_match_id": mid,
+            "context": {key: result.get(key) for key in (
+                "phase", "home_score", "away_score", "half_home_score", "half_away_score")},
+            "quotes": deepcopy(result["markets"]),
+        } if parse_fixtures([matches[0]], received_at=completed) else None
         return result
 
     async def _fetch(self, *, odds_mids: Iterable[str] | Callable[[list[dict[str, Any]]], Iterable[str]] | None = None) -> list[dict[str, Any]]:

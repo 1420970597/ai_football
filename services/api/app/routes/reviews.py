@@ -19,6 +19,7 @@ from ..review_policy import REALTIME_WINDOW_SECONDS
 from ..review_state import authorize, fresh_quote, quote_context
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, FIXTURE_FIELDS, MAX_MARKETS
 from ..runtime_settings import runtime_quote_max_age
+from ..quote_observation import confirmation_for
 
 router = APIRouter(prefix="/internal/mcp")
 _CANDIDATE_JSON = 'jsonb_build_object(' + ','.join("'" + field + "',f." + field for field in sorted(FIXTURE_FIELDS)) + ')'
@@ -198,7 +199,7 @@ async def resolve_match(body: ResolveInput, request: Request):
             return await tool_success(conn, body, result, {'result': {'resolved': result['resolved'], 'candidate_count': result.get('candidate_count')}})
 
 
-async def _refresh_bound_market(body: MarketInput, request: Request) -> dict:
+async def _refresh_bound_market(body: MarketInput, request: Request, *, force: bool = False) -> dict:
     """Verify ownership first; hold no database connection across source I/O."""
     settings = request.app.state.settings
     url = getattr(settings, 'market_refresh_url', '')
@@ -223,7 +224,7 @@ async def _refresh_bound_market(body: MarketInput, request: Request) -> dict:
             if len(quotes) > MAX_MARKETS:
                 raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
             max_age = await runtime_quote_max_age(settings, conn)
-            if quotes and all(fresh_quote(quote, max_age) for quote in quotes):
+            if not force and quotes and all(fresh_quote(quote, max_age) for quote in quotes):
                 return {'attempted': False, 'reason': 'quotes_already_fresh'}
             source_match_id = fixture['source_match_id']
     try:
@@ -238,7 +239,8 @@ async def _refresh_bound_market(body: MarketInput, request: Request) -> dict:
         reason = str(value.get('reason', ''))
         if not reason or not all(char.isascii() and (char.isalnum() or char == '_') for char in reason) or len(reason) > 80:
             reason = 'refresh_completed' if value['accepted'] else 'refresh_unavailable'
-        return {'attempted': True, 'accepted': value['accepted'], 'reason': reason}
+        return {'attempted': True, 'accepted': value['accepted'], 'reason': reason,
+                '_observation': value.get('current_observation') if value.get('snapshot_committed') is True else None}
     except (httpx.HTTPError, ValueError, TimeoutError):
         # A refresh is optional evidence gathering, never a reason to mark old
         # prices fresh or replay an unknown upstream operation automatically.
@@ -262,15 +264,19 @@ async def list_match_markets(body: MarketInput, request: Request):
             quotes = await conn.fetch("SELECT * FROM v2_current_quotes WHERE fixture_id=$1 ORDER BY period,market_id,line,selection LIMIT $2", body.fixture_id, MAX_MARKETS + 1)
             if len(quotes) > MAX_MARKETS:
                 raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
+            max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
+            confirmations = {q['id']: confirmation_for(refresh.get('_observation'), q, fixture, max_quote_age) for q in quotes}
             if quotes:
                 await conn.executemany(
                     "INSERT INTO v2_review_market_reads(job_id,attempt_id,quote_id,source_updated_at,price,quote_context) VALUES($1,$2,$3,$4,$5,$6) "
                     "ON CONFLICT(job_id,attempt_id,quote_id) DO UPDATE SET source_updated_at=EXCLUDED.source_updated_at,price=EXCLUDED.price,quote_context=EXCLUDED.quote_context,created_at=now()",
-                    [(body.review_id, body.attempt_id, q["id"], q["source_updated_at"], q["price"], quote_context(q, fixture)) for q in quotes],
+                    [(body.review_id, body.attempt_id, q["id"], q["source_updated_at"], q["price"],
+                      quote_context(q, fixture) | ({'current_confirmation': confirmations[q['id']]} if confirmations[q['id']] else {})) for q in quotes],
                 )
-            max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
-            result = {"fixture": dict(fixture), "markets": [dict(q) | {"quote_id": str(q["id"]), "fresh": fresh_quote(q, max_quote_age)} for q in quotes],
-                      "refresh": refresh}
+            refresh.pop('_observation', None)
+            result = {"fixture": dict(fixture), "markets": [dict(q) | {"quote_id": str(q["id"]), "fresh": fresh_quote(q, max_quote_age),
+                      'confirmed_current': bool(confirmations[q['id']]),
+                      'can_record': fresh_quote(q, max_quote_age) or bool(confirmations[q['id']])} for q in quotes], "refresh": refresh}
             return await tool_success(conn, body, result, {"fixture_id": body.fixture_id, "quote_ids": [str(q["id"]) for q in quotes], "refresh": refresh})
 
 
@@ -279,6 +285,30 @@ async def list_match_markets(body: MarketInput, request: Request):
 async def record_expert_signals(body: RecordInput, request: Request):
     authorize(request, request.app.state.settings.mcp_internal_token)
     accepted, rejected = [], []
+    observations = {}
+    # A long model turn must not turn a previously valid read into a permanent
+    # rejection. Recheck only the selected, already-read and bound fixtures.
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            job = await active_tool_job(conn, body.review_id, body.attempt_id)
+            if job['review_mode'] == 'real_time' and 0 <= (datetime.now(timezone.utc)-job['posted_at']).total_seconds() <= REALTIME_WINDOW_SECONDS:
+                rows = await conn.fetch(
+                    'SELECT q.*,f.id AS fixture_identity,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context '
+                    'FROM v2_current_quotes q JOIN v2_fixtures f ON f.id=q.fixture_id '
+                    'JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 '
+                    'WHERE q.id=ANY($3::uuid[])', body.review_id, body.attempt_id, [p.quote_id for p in body.signals])
+                max_age = await runtime_quote_max_age(request.app.state.settings, conn)
+                stale_fixtures = {q['fixture_id'] for q in rows if q['phase'] in {'scheduled', 'live'} and q['status'] == 'active' and not fresh_quote(q, max_age) and not confirmation_for(
+                    q['read_context'].get('current_confirmation'), q, dict(q) | {'id': q['fixture_identity']}, max_age)}
+            else:
+                stale_fixtures = set()
+    # Shared collector budget still coalesces and limits provider calls. Do not
+    # hold the database transaction during I/O or extend a terminated lease.
+    for fixture_id in sorted(stale_fixtures):
+        if len(observations) >= 4:
+            break
+        refreshed = await _refresh_bound_market(MarketInput(review_id=body.review_id, attempt_id=body.attempt_id, fixture_id=fixture_id), request, force=True)
+        observations[fixture_id] = refreshed.get('_observation')
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             job = await active_tool_job(conn, body.review_id, body.attempt_id)
@@ -295,20 +325,27 @@ async def record_expert_signals(body: RecordInput, request: Request):
             max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
             for index, pick in enumerate(body.signals):
                 quote = await conn.fetchrow(
-                    "SELECT q.*,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context FROM v2_current_quotes q "
+                    "SELECT q.*,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context,r.source_updated_at AS read_source_time FROM v2_current_quotes q "
                     "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
                     "JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 "
-                    "WHERE q.id=$3 AND q.fixture_id=$4 AND q.price IS NOT DISTINCT FROM r.price AND q.source_updated_at IS NOT DISTINCT FROM r.source_updated_at FOR SHARE OF q,f",
+                    "WHERE q.id=$3 AND q.fixture_id=$4 AND q.price IS NOT DISTINCT FROM r.price FOR SHARE OF q,f",
                     body.review_id, body.attempt_id, pick.quote_id, pick.fixture_id,
                 )
                 reason = None
+                confirmation = None
+                if quote:
+                    fixture = dict(quote) | {'id': quote['fixture_id']}
+                    confirmation = confirmation_for(observations.get(pick.fixture_id), quote, fixture, max_quote_age)
+                    confirmation = confirmation or confirmation_for(quote['read_context'].get('current_confirmation'), quote, fixture, max_quote_age)
                 if not quote:
                     reason = "quote_not_read_or_changed"
-                elif quote['read_context'] != quote_context(quote, quote):
+                elif quote['source_updated_at'] != quote['read_source_time'] and not confirmation:
+                    reason = 'quote_not_read_or_changed'
+                elif {k: v for k, v in quote['read_context'].items() if k != 'current_confirmation'} != quote_context(quote, quote):
                     reason = 'quote_or_score_context_changed'
                 elif quote["phase"] not in {"scheduled", "live"}:
                     reason = "fixture_not_active"
-                elif not fresh_quote(quote, max_quote_age):
+                elif not fresh_quote(quote, max_quote_age) and not confirmation:
                     reason = "quote_inactive_unknown_or_stale"
                 if reason:
                     rejected.append({"index": index, "reason": reason})
@@ -323,7 +360,7 @@ async def record_expert_signals(body: RecordInput, request: Request):
                 if result:
                     await conn.execute(
                         "INSERT INTO v2_quote_evidence(id,fixture_id,market_id,market_name,period,line,selection,price,evidence_kind,reference_id,source_updated_at,evidence,score_baseline) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'expert_signal',$9,$10,$11,$12)",
-                        uuid.uuid4(), quote["fixture_id"], quote["market_id"], quote["market_name"], quote["period"], quote["line"], quote["selection"], quote["price"], new_id, quote["source_updated_at"], {"job_id": str(body.review_id), "attempt_id": str(body.attempt_id), "quote_id": str(pick.quote_id), "score_basis": quote["score_basis"], "market_kind": quote["market_kind"]}, baseline,
+                        uuid.uuid4(), quote["fixture_id"], quote["market_id"], quote["market_name"], quote["period"], quote["line"], quote["selection"], quote["price"], new_id, quote["source_updated_at"], {"job_id": str(body.review_id), "attempt_id": str(body.attempt_id), "quote_id": str(pick.quote_id), "score_basis": quote["score_basis"], "market_kind": quote["market_kind"], 'current_confirmation': confirmation}, baseline,
                     )
                 else:
                     new_id = await conn.fetchval("SELECT id FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND selection=$6 AND market_kind=$7 AND (line IS NOT DISTINCT FROM $5::numeric OR market_kind='winner' AND COALESCE(line,0)=0 AND COALESCE($5::numeric,0)=0)", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"], quote["market_kind"])
