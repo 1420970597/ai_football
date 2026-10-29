@@ -50,6 +50,11 @@ async def ingest_fixture_batch(conn, items) -> int:
         "WHERE coalesce(EXCLUDED.source_updated_at,EXCLUDED.received_at)>=coalesce(v2_fixtures.source_updated_at,v2_fixtures.received_at) "
         "AND NOT(v2_fixtures.phase IN('finished','cancelled') AND EXCLUDED.phase IN('scheduled','live')) "
         "AND NOT(v2_fixtures.phase='live' AND EXCLUDED.phase='scheduled') "
+        # Final result evidence owns scores after settlement; a later schedule
+        # snapshot may omit them or carry a different period's aggregate.
+        "AND NOT EXISTS(SELECT 1 FROM v2_fixture_results r WHERE r.fixture_id=v2_fixtures.id "
+        "AND r.version=(SELECT max(latest.version) FROM v2_fixture_results latest WHERE latest.fixture_id=v2_fixtures.id) "
+        "AND r.status IN('confirmed','void')) "
         "RETURNING id,source_id", payload,
     )
     accepted_sources = {record['source_id'] for record in accepted}

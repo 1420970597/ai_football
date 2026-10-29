@@ -22,6 +22,7 @@ from .leyu_protocol import (
 DEFAULT_FIXTURE_PATH = "/yewu11/v2/m/getOriginalDataPB"
 DEFAULT_ODDS_PATH = "/yewu11/v1/w/structureMatchBaseInfoByMidsPB"
 DEFAULT_MATCH_ODDS_PATH = "/yewu11/v1/w/getMatchBaseInfoByOddsPB"
+DEFAULT_RESULT_DETAIL_PATH = "/yewu11/v1/m/matchDetail/getMatchDetailPB"
 DEFAULT_BATCH_SIZE = 12
 DEFAULT_CONCURRENCY = 1
 DEFAULT_BATCH_INTERVAL = 1.0
@@ -162,7 +163,7 @@ class LeyuClient:
         )
 
     def collection_url(self, path: str) -> str:
-        if path not in {DEFAULT_FIXTURE_PATH, DEFAULT_ODDS_PATH, DEFAULT_MATCH_ODDS_PATH}:
+        if path not in {DEFAULT_FIXTURE_PATH, DEFAULT_ODDS_PATH, DEFAULT_MATCH_ODDS_PATH, DEFAULT_RESULT_DETAIL_PATH}:
             raise LeyuError("unsupported_collection_path")
         if self.collection_relay:
             return self.collection_relay + "/" + urlsplit(self.base_url).netloc + path
@@ -191,8 +192,9 @@ class LeyuClient:
                      DEFAULT_MATCH_ODDS_PATH: "odds_single"}.get(path, "")
         status = None
         try:
+            params = {"t": int(time.time() * 1000), **kwargs.pop('params', {})}
             async with client.stream(
-                method, self.collection_url(path), params={"t": int(time.time() * 1000)},
+                method, self.collection_url(path), params=params,
                 headers=self.headers(), **kwargs,
             ) as response:
                 status = response.status_code

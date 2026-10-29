@@ -178,6 +178,14 @@ class RemoteTransportTests(unittest.TestCase):
         self.assertEqual(200,self.request('POST','/internal/executor/claim?live_capable=false',token='executor'))
         for query in ('live_capable=true','live_capable=false&live_capable=true','live_capable=0','arbitrary=false'):
             self.assertEqual(403,self.request('POST','/internal/executor/claim?'+query,token='executor'))
+    def test_result_worker_routes_pass_real_bridge_and_stay_collector_scoped(self):
+        for action in ('claim','observations','finish'):
+            path='/internal/collector/results/'+action
+            self.assertEqual(200,self.request('POST',path,body=b'{}'))
+            self.assertEqual(403,self.request('POST',path,token='executor'))
+            self.assertEqual(403,self.request('GET',path))
+        self.assertEqual(403,self.request('POST','/internal/collector/results/rebuild'))
+        self.assertEqual(403,self.request('POST','/internal/collector/results/observations?mid=123'))
     def test_oversized_body_and_transfer_encoding_rejected_before_upstream(self):
         self.assertEqual(413,self.request('POST','/internal/collector/fixtures',headers={'Content-Length':str(MAX_BODY+1)}))
         self.assertEqual(400,self.request('POST','/internal/collector/fixtures',headers={'Transfer-Encoding':'chunked'}))

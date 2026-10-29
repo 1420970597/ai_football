@@ -14,6 +14,7 @@ from .leyu_protocol import LeyuError, RateLimited
 from .leyu_health import ThresholdAlert
 from .leyu_realtime import LeyuRealtime
 from .leyu_runtime import LeyuRuntime
+from .leyu_results import ResultCollector
 from .leyu_refresh import LeyuRefreshController
 from .quote_snapshot import encode_snapshot, prepare_fixture_batches
 from .telegram import TelegramCollector
@@ -165,13 +166,15 @@ class CollectorService:
         self.telegram.leyu_refresh = self.leyu_refresh.refresh
         self.resync = asyncio.Event()
         self.status: dict[str, Any] = {
-            "leyu": {"state": "starting", "last_error": "", "last_error_code": "", "official_result_confirmation": "unconfigured",
+            "leyu": {"state": "starting", "last_error": "", "last_error_code": "",
                      "poll_attempts": 0, "poll_successes": 0, "poll_failures": 0,
                      "poll_in_progress": False, "current_poll_started_at": None, "current_poll_completed_at": None,
                      "resync_requests": 0, **self._poll_alert.fields("poll_alert")},
             "telegram": {"state": "starting", "last_error": ""},
         }
         self.telegram.source_health = self.status
+        self.status['results'] = {'state':'starting'}
+        self.results = ResultCollector(api,self.api_url,self.runtime,self.status['results'])
         self.realtime = realtime_factory(lambda: self.runtime.config, self.subscription_mids, self.on_push, self.request_resync)
         self.status["websocket"] = self.realtime.stats
 
@@ -437,6 +440,7 @@ class CollectorService:
             await self.telegram.start_control_server(token=self.token, host=os.environ.get("TELEGRAM_CONTROL_HOST", "0.0.0.0"),
                                                      port=int(os.environ.get("TELEGRAM_CONTROL_PORT", "8092")))
             tasks = [asyncio.create_task(self.leyu_loop(stop), name="leyu-poll"),
+                     asyncio.create_task(self.results.run(stop), name="leyu-results"),
                      asyncio.create_task(self.telegram_loop(stop), name="telegram-sync"),
                      asyncio.create_task(self.realtime.run(stop), name="leyu-realtime")]
             stopper = asyncio.create_task(stop.wait(), name="collector-stop")

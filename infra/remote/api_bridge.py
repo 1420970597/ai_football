@@ -16,6 +16,7 @@ UUID = r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}'
 COLLECTOR_ROUTES = {
     'GET': (r'/internal/collector/(config|renewal/config)', r'/internal/telegram/(sources|pending)'),
     'POST': (r'/internal/collector/(fixtures|results|renewal/claim)', rf'/internal/collector/renewal/{UUID}/finish',
+             r'/internal/collector/results/(claim|observations|finish)',
              r'/internal/telegram/(checkpoints/claim|events|observed|observed/ack|media/orphans|media/orphans/ack)'),
     'PUT': (r'/internal/collector/renewal/config', r'/internal/telegram/(directory|checkpoints|session)'),
 }

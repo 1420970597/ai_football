@@ -14,10 +14,13 @@ ALGORITHM_VERSION = 'football-asian-2-evidence'
 
 
 def result_facts(row):
-    return {'status': row['status'], 'home': row['home_score'], 'away': row['away_score'],
+    facts = {'status': row['status'], 'home': row['home_score'], 'away': row['away_score'],
             'half_home': row['half_home_score'], 'half_away': row['half_away_score'],
-            'provider_reference': row['provider_reference'], 'source_updated_at': row['source_updated_at'].isoformat(),
+            'provider_reference': row['provider_reference'], 'source_updated_at': row['source_updated_at'].isoformat() if row['source_updated_at'] else None,
             'evidence': row['evidence']}
+    if row['source_updated_at'] is None:
+        facts.update(observed_at=row['observed_at'].isoformat(), source_time_quality='unknown')
+    return facts
 
 
 async def project_settlements(conn, fixture, version, facts):
@@ -67,7 +70,10 @@ async def rebuild_settlements(conn, fixture_id):
 
 
 async def ingest_result(conn, item) -> dict:
-    if item.source_updated_at > datetime.now(timezone.utc) + timedelta(seconds=5):
+    observed_at = getattr(item, 'observed_at', None)
+    source_time = item.source_updated_at
+    clock = source_time or observed_at
+    if clock is None or clock > datetime.now(timezone.utc) + timedelta(seconds=5):
         raise HTTPException(422, '赛果源时间晚于当前时间')
     fixture = await conn.fetchrow('SELECT id,sport FROM v2_fixtures WHERE id=$1 FOR UPDATE', item.fixture_id)
     if not fixture:
@@ -75,18 +81,26 @@ async def ingest_result(conn, item) -> dict:
     previous = await conn.fetchrow('SELECT * FROM v2_fixture_results WHERE fixture_id=$1 ORDER BY version DESC LIMIT 1', item.fixture_id)
     facts = {'status': item.status, 'home': item.home, 'away': item.away, 'half_home': item.half_home,
              'half_away': item.half_away, 'provider_reference': item.provider_reference,
-             'source_updated_at': item.source_updated_at.astimezone(timezone.utc).isoformat(), 'evidence': item.evidence}
-    digest = hashlib.sha256(json.dumps(facts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+             'source_updated_at': source_time.astimezone(timezone.utc).isoformat() if source_time else None, 'evidence': item.evidence}
+    # Observation receipts and full-response hashes change at each poll; only a
+    # changed result creates another result version. Keep the original receipt.
+    digest_facts = facts if source_time else {k:v for k,v in facts.items() if k != 'evidence'}
+    digest = hashlib.sha256(json.dumps(digest_facts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    if not source_time:
+        facts.update(observed_at=observed_at.astimezone(timezone.utc).isoformat(), source_time_quality='unknown')
     if previous and previous['content_hash'] == digest:
-        return {'version': previous['version'], 'duplicate': True, 'settled': 0}
-    if previous and item.source_updated_at <= previous['source_updated_at']:
+        return {'version': previous['version'], 'duplicate': True,
+                **await project_settlements(conn, fixture, previous['version'], result_facts(previous))}
+    if previous and not source_time and previous['source_updated_at']:
+        raise HTTPException(409, '未知源修订时钟的详情不能覆盖已有源修订证据')
+    if previous and clock <= (previous['source_updated_at'] or previous['observed_at']):
         raise HTTPException(409, '旧赛果或同时间冲突赛果不能覆盖当前版本')
     version = previous['version'] + 1 if previous else 1
     await conn.execute(
         'INSERT INTO v2_fixture_results(fixture_id,version,provider_reference,content_hash,status,home_score,away_score,'
-        'half_home_score,half_away_score,source_updated_at,evidence) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+        'half_home_score,half_away_score,source_updated_at,evidence,observed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
         item.fixture_id, version, item.provider_reference, digest, item.status, item.home, item.away,
-        item.half_home, item.half_away, item.source_updated_at, item.evidence)
+        item.half_home, item.half_away, source_time, item.evidence, observed_at)
     if item.status == 'confirmed':
         await conn.execute("UPDATE v2_fixtures SET phase='finished',match_state='finished',home_score=$2,away_score=$3,half_home_score=$4,half_away_score=$5 WHERE id=$1",
                            item.fixture_id, item.home, item.away, item.half_home, item.half_away)

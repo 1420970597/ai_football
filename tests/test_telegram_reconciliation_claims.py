@@ -383,7 +383,7 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
                                "VALUES($1,$2,'99',$3,now(),'message','{}','ready',now()-interval '1 hour')",event,source,hashlib.sha256(b'migration').hexdigest())
             before = dict(await conn.fetchrow('SELECT * FROM v2_telegram_events'))
             self.assertEqual(['019_telegram_reconciliation_claims.sql','020_review_job_notifications.sql',
-                              '021_review_search_all_phases.sql'],
+                              '021_review_search_all_phases.sql','022_result_observations.sql'],
                              await database.apply_migrations(conn))
             after = dict(await conn.fetchrow('SELECT * FROM v2_telegram_events'))
             self.assertEqual(before,{key:after[key] for key in before})

@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from . import admin_mfa, auth, database, identity_lifecycle
 from .config import load_settings
 from .health import HermesProbe, MCPProbe, StorageProbe
-from .routes import accounts, admin, admin_reviews, expert_content, internal, operations, public, renewal, results, reviews, telegram
+from .routes import accounts, admin, admin_reviews, expert_content, internal, operations, public, renewal, result_checks, results, reviews, telegram
 from .security import decrypt_secret
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -183,5 +183,6 @@ app.include_router(internal.router)
 app.include_router(reviews.router)
 app.include_router(renewal.router)
 app.include_router(results.router)
+app.include_router(result_checks.router)
 app.include_router(telegram.router)
 app.include_router(expert_content.router)

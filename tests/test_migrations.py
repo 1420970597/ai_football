@@ -58,7 +58,7 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         await self.conn.execute("INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key) VALUES($1,$2,'queued',$3)", job, message, str(job))
         await self.conn.execute("INSERT INTO v2_match_searches(job_id,search_key,team_query,phase) VALUES($1,'original','Team','all')", job)
         before = dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job))
-        self.assertEqual(['021_review_search_all_phases.sql'], await apply_migrations(self.conn))
+        self.assertEqual(['021_review_search_all_phases.sql','022_result_observations.sql'], await apply_migrations(self.conn))
         self.assertEqual(before, dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job)))
         for phase in ('finished', 'cancelled'):
             await self.conn.execute('INSERT INTO v2_match_searches(job_id,search_key,team_query,phase) VALUES($1,$2,$3,$2)', job, phase, 'Team')
@@ -74,6 +74,26 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
             await apply_migrations(self.conn)
         with self.assertRaises(MigrationRequired):
             await check_schema(self.conn)
+
+    async def test_observation_upgrade_preserves_existing_result_clock_and_requires_a_clock(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for path in MIGRATIONS.glob('*.sql'):
+                if path.name < '022':
+                    Path(folder,path.name).write_bytes(path.read_bytes())
+            await apply_migrations(self.conn,Path(folder))
+        await self.conn.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) "
+                                "VALUES('original','leyu:123','football','League','A','B',now(),'finished')")
+        await self.conn.execute("INSERT INTO v2_fixture_results(fixture_id,version,provider_reference,content_hash,status,home_score,away_score,source_updated_at,evidence) "
+                                "VALUES('original',1,'known','original','confirmed',2,0,now(),'{}')")
+        before=dict(await self.conn.fetchrow('SELECT * FROM v2_fixture_results'))
+        self.assertEqual(['022_result_observations.sql'],await apply_migrations(self.conn))
+        after=dict(await self.conn.fetchrow('SELECT * FROM v2_fixture_results'))
+        self.assertEqual(before,{k:after[k] for k in before})
+        self.assertIsNone(after['observed_at'])
+        with self.assertRaises(asyncpg.CheckViolationError):
+            await self.conn.execute('UPDATE v2_fixture_results SET source_updated_at=NULL')
+        self.assertEqual([],await apply_migrations(self.conn))
+        await check_schema(self.conn)
 
     async def test_failed_batch_rolls_back_and_can_retry(self):
         with tempfile.TemporaryDirectory() as folder:
