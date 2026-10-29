@@ -567,3 +567,12 @@ git diff --check
 - 部署边界：实际运行的远端Telegram collector仍为此前同源镜像，`.4` collector只构建在本机；只读GHCR检查返回该候选manifest unknown。为遵守远端镜像同源摘要清单，未用旧executor/tunnel镜像冒充新源码或绕过校验，远端采集端优化尚未部署。需要发布同一源码commit的远端collector/executor/tunnel不可变候选镜像并完成既有部署门禁后，才可验证新的Telegram接收与媒体路径。API/worker部署不等于整个采集到模型链路已完成。
 - 本轮实际命令/退出码：Docker隔离迁移器重复运行0；`docker exec ... psql`结构/数据计数探针0；`sha256sum -c .runtime/perf-backup-20261028/pre-020-public.sha256` 0；候选Compose `config --quiet` 0；空闲worker `stop` 0；Compose迁移0；Compose更新API/worker 0；Docker内健康探针与只读遥测探针0。下一步为准备经批准的同源远端开发镜像集、完成collector滚动更新，并等待真实实时消息积累新版本端到端样本；当前业务服务可用，不能承诺3秒硬上限。
 - 隔离恢复资源清理：`docker rm -f ai-football-v2-v2restore`、`docker volume rm ai-football-v2-v2restore-data`、`docker network rm ai-football-v2-v2restore-net`均退出0；完整生产备份保留，本机API、worker、远端link未停止。
+
+## E109 专家推荐始终为零的业务链排查（2026-10-29）
+
+- 当前目标/阶段：恢复真实专家消息到可核验推荐的业务链，先定位零推荐的具体原因；研究中。责任范围采集会话续期、Hermes赛事匹配、审核结果与页面展示。前置依赖为有效乐鱼授权、实时赛事盘口、TG信任消息和真实模型；不生成测试推荐填充生产。
+- 初始命令/证据：`git status --short`退出0、工作树干净，分支`fix/TASK-78-hermes-telegram-sync`、HEAD `2be61b8`。Docker内只读探针退出0，实际`v2_expert_signals=0`，488条实时审核未解决；不是前端计数丢失。最新TG入库04:08 UTC，赛事最近成功更新却停在10月28日12:49 UTC。远端控制HTTP200、TG已授权，乐鱼状态`unavailable/renewal_state_conflict/409`、连续失败842次；WebSocket 403。
+- 现有证据与缺口：明确推荐的图文已被Hermes识别，但真实目标赛事不在已加载候选中；普通聊天被正确保留未解决。首先查持久续期状态为何阻塞及对应原始失败，区分真实上游拒绝、未知登录结果和可安全恢复的本地状态错误；不得绕过锁、盲目重复登录或把旧价格标新。
+- 验收/失败处理：以导致故障的状态合同复现并修复；Docker测试覆盖正常、冲突、过期/未知、重复与恢复，保持授权和未知状态保护。真实只读核验采集恢复、赛事盘口更新及有效TG推荐工具闭环；没有匹配或当前报价时如实记录原因。下一步读取续期尝试类别、配置版本及时间，不输出凭据。
+- 设计与实现阶段（2026-10-29）：远端最后一次续期为`proxy_login_connect_failure`，旧实现却记录`login_submitted=true/unknown`，此后所有采集恢复均被409永久阻断。Docker内检查实际部署的httpcore连接/代理源码退出0，确认TCP/TLS连接失败与代理CONNECT拒绝发生在应用登录请求发送前；读取/写入/响应超时仍可能已提交。采集适配层以专用异常保留“未发送”证据，仅这些明确失败改为`failed`并走原冷却，不按字符串放宽未知状态，也不直接覆写持久记录。已增加直连/代理、连接池、超时、拒绝及取消反例；代码已写，待冻结验证。恢复旧锁必须依据本次已核验证据走现有管理员审计接口，并在新版本部署后执行。
+- 定向验证：Docker限额`.5 CPU/384MiB`、只读源码及无网络运行`python -m unittest tests.test_leyu_session -v`退出0，26项通过（含8组发送前失败和6组可能已发送的失败/取消反例）；连接失败走冷却、响应504/读写失败/取消仍为未知、6031仍为拒绝且不重放。证据`.runtime/expert-zero-20261029/session-tests.log`。下一阶段提交可审查修复并执行完整冻结回归，再发布同源远端镜像集和审计恢复旧状态。
