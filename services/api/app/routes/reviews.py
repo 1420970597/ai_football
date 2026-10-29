@@ -323,12 +323,21 @@ async def record_expert_signals(body: RecordInput, request: Request):
                 return await tool_success(conn, body, result, {"review_mode": job['review_mode'], **result,
                     'message_age_seconds': round(message_age, 3)})
             max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
+            # Projection/result ingestion locks fixtures before updating quotes.
+            # Lock every selected bound fixture in that same global order before
+            # touching a quote; a joined q,f lock can acquire q first and deadlock.
+            await conn.fetch(
+                'SELECT f.id FROM v2_fixtures f JOIN v2_review_fixture_bindings b ON b.fixture_id=f.id '
+                'WHERE b.job_id=$1 AND b.attempt_id=$2 AND f.id=ANY($3::text[]) '
+                'ORDER BY f.source_id FOR SHARE OF f',
+                body.review_id, body.attempt_id, sorted({pick.fixture_id for pick in body.signals}),
+            )
             for index, pick in enumerate(body.signals):
                 quote = await conn.fetchrow(
                     "SELECT q.*,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context,r.source_updated_at AS read_source_time FROM v2_current_quotes q "
                     "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
                     "JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 "
-                    "WHERE q.id=$3 AND q.fixture_id=$4 AND q.price IS NOT DISTINCT FROM r.price FOR SHARE OF q,f",
+                    "WHERE q.id=$3 AND q.fixture_id=$4 AND q.price IS NOT DISTINCT FROM r.price FOR SHARE OF q",
                     body.review_id, body.attempt_id, pick.quote_id, pick.fixture_id,
                 )
                 reason = None

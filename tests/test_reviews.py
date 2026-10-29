@@ -94,6 +94,44 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, result.status_code, result.text)
         return result.json()["markets"][0]
 
+    async def test_record_waits_for_fixture_before_locking_quote_during_ingestion(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        quote = await self.read_market(fixture_id)
+        pick = {'fixture_id': fixture_id, 'quote_id': quote['quote_id'], 'evidence_text': 'Alpha over'}
+        task = None
+        async with self.pool.acquire() as collector:
+            transaction = collector.transaction()
+            await transaction.start()
+            try:
+                await collector.execute('SELECT id FROM v2_fixtures WHERE id=$1 FOR UPDATE', fixture_id)
+                collector_pid = await collector.fetchval('SELECT pg_backend_pid()')
+                task = asyncio.create_task(self.post('record_expert_signals', signals=[pick]))
+                async with asyncio.timeout(5):
+                    while not await self.pool.fetchval(
+                        'SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))', collector_pid):
+                        await asyncio.sleep(.01)
+                # Projection owns the fixture first. It must be able to update
+                # its quote while the reviewer waits, without a lock cycle.
+                await collector.execute("SET LOCAL lock_timeout='300ms'")
+                await collector.execute('UPDATE v2_current_quotes SET price=2.05 WHERE id=$1', uuid.UUID(quote['quote_id']))
+                await transaction.commit()
+            except BaseException:
+                await transaction.rollback()
+                raise
+            finally:
+                if task is not None:
+                    response = await asyncio.wait_for(task, 5)
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual([], response.json()['accepted'])
+        self.assertEqual('quote_not_read_or_changed', response.json()['rejected'][0]['reason'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        await self.read_market(fixture_id)
+        retry = await self.post('record_expert_signals', signals=[pick])
+        self.assertEqual(1, len(retry.json()['accepted']))
+        self.assertEqual('2.05000', retry.json()['accepted'][0]['price'])
+
     async def test_bound_stale_market_refresh_rechecks_source_timestamp_and_preserves_gate(self):
         fixture_id = await self.fixture()
         key, _ = await self.search_all()
