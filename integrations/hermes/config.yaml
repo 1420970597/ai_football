@@ -37,6 +37,13 @@ tools:
   tool_search:
     enabled: "off"
 
+# A complete 60-quote response is ~48–60K characters before the MCP JSON
+# envelope. The default 50K spill threshold hides it behind a file that this
+# deliberately restricted agent cannot read. Keep the existing finite 100K
+# per-result / 200K per-turn framework limits; do not grant filesystem tools.
+tool_budget:
+  mcp_result_size_chars: 100000
+
 platform_toolsets:
   api_server:
     - expert-skills
