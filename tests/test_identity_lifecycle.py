@@ -1,6 +1,8 @@
 """Temporary PostgreSQL only: recovery, step-up, export and safe anonymization behavior."""
 import asyncio
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+from http.cookies import SimpleCookie
 import unittest
 import uuid
 
@@ -273,12 +275,45 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(str(other),response.text)
         self.assertNotIn("accounting-evidence",response.text)
 
-    async def test_admin_idle_expiry_and_absolute_session_window(self):
-        await self.admin_login()
+    async def test_admin_cookie_and_server_session_last_180_days(self):
+        response = await self.admin_login()
+        self.assert_session_cookies(response, (auth.ADMIN_COOKIE, auth.ADMIN_CSRF_COOKIE))
         session=await self.pool.fetchrow("SELECT expires_at,created_at FROM v2_sessions WHERE user_id=$1",self.admin_id)
-        self.assertLessEqual((session["expires_at"]-session["created_at"]).total_seconds(),3601)
+        self.assertAlmostEqual((session["expires_at"]-session["created_at"]).total_seconds(),180*86400,delta=2)
         await self.pool.execute("UPDATE v2_sessions SET last_seen_at=now()-interval '16 minutes' WHERE user_id=$1",self.admin_id)
-        self.assertEqual(401,(await self.client.get("/api/v1/admin/me")).status_code)
+        self.assertEqual(200,(await self.client.get("/api/v1/admin/me")).status_code)
+
+    def assert_session_cookies(self, response, names):
+        cookies = SimpleCookie()
+        for value in response.headers.get_list("set-cookie"):
+            cookies.load(value)
+        deadline = datetime.fromisoformat(response.json()["expires_at"])
+        for name in names:
+            cookie = cookies[name]
+            self.assertEqual("15552000", cookie["max-age"])
+            self.assertAlmostEqual(parsedate_to_datetime(cookie["expires"]).timestamp(),deadline.timestamp(),delta=1)
+            self.assertEqual("strict", cookie["samesite"])
+        self.assertTrue(cookies[names[0]]["httponly"])
+
+    async def test_user_login_refresh_expiry_and_revocation_with_long_cookie(self):
+        user = await self.register()
+        uid = uuid.UUID(user["user"]["id"])
+        response = await self.client.post("/api/v1/auth/login",json={"email":"user@example.invalid","password":legacy.PASSWORD})
+        self.assertEqual(200,response.status_code,response.text)
+        self.assert_session_cookies(response,(auth.USER_COOKIE,auth.CSRF_COOKIE))
+        old_token = self.client.cookies[auth.USER_COOKIE]
+        await self.pool.execute("UPDATE v2_sessions SET created_at=now()-interval '179 days',last_seen_at=now()-interval '30 days',expires_at=now()+interval '1 day',reauthenticated_at=now()-interval '30 days' WHERE user_id=$1",uid)
+        self.assertEqual(200,(await self.client.get("/api/v1/auth/me")).status_code)
+        refreshed = await self.client.post("/api/v1/auth/refresh",headers=self.csrf())
+        self.assertEqual(200,refreshed.status_code,refreshed.text)
+        self.assert_session_cookies(refreshed,(auth.USER_COOKIE,auth.CSRF_COOKIE))
+        self.assertNotEqual(old_token,self.client.cookies[auth.USER_COOKIE])
+        denied = await self.client.get("/api/v1/auth/me",headers={"Authorization":"Bearer "+old_token})
+        self.assertEqual(401,denied.status_code)
+        self.assertEqual(403,(await self.client.get("/api/v1/auth/export")).status_code)
+        await self.pool.execute("UPDATE v2_sessions SET expires_at=now()-interval '1 second' WHERE user_id=$1",uid)
+        self.assertEqual(401,(await self.client.get("/api/v1/auth/me")).status_code)
+        self.assertEqual(401,(await self.client.post("/api/v1/auth/refresh",headers=self.csrf())).status_code)
 
     async def test_audit_failure_rolls_back_recovery_and_anonymization(self):
         user=await self.register(); await self.admin_login()
@@ -309,9 +344,15 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.pool.fetchval("SELECT auto_enabled FROM v2_user_bet_settings WHERE user_id=$1",uid))
         self.assertEqual("unknown",await self.pool.fetchval("SELECT state FROM v2_bet_orders WHERE id=$1",unknown))
 
-    async def test_legacy_long_admin_session_still_has_absolute_one_hour_limit(self):
+    async def test_long_admin_session_sensitive_recheck_and_expiration(self):
+        user = await self.register()
         await self.admin_login()
-        await self.pool.execute("UPDATE v2_sessions SET created_at=now()-interval '2 hours',expires_at=now()+interval '4 hours',last_seen_at=now() WHERE user_id=$1",self.admin_id)
+        await self.pool.execute("UPDATE v2_sessions SET created_at=now()-interval '179 days',expires_at=now()+interval '1 day',last_seen_at=now()-interval '1 day' WHERE user_id=$1",self.admin_id)
+        self.assertEqual(200,(await self.client.get("/api/v1/admin/me")).status_code)
+        self.assertEqual(201,(await self.issue(user["user"]["id"])).status_code)
+        await self.expire_stepup("admin")
+        self.assertEqual(403,(await self.issue(user["user"]["id"])).status_code)
+        await self.pool.execute("UPDATE v2_sessions SET expires_at=now()-interval '1 second' WHERE user_id=$1",self.admin_id)
         self.assertEqual(401,(await self.client.get("/api/v1/admin/me")).status_code)
 
     async def test_revoked_session_cannot_bind_after_waiting_for_user_lock(self):

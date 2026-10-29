@@ -22,6 +22,7 @@ ADMIN_COOKIE = "v2_admin_session"
 CSRF_COOKIE = "v2_csrf"
 ADMIN_CSRF_COOKIE = "v2_admin_csrf"
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+SESSION_LIFETIME = timedelta(days=180)
 DUMMY_HASH = "scrypt$16384$8$1$" + "00" * 16 + "$" + "00" * 32
 
 
@@ -133,19 +134,20 @@ async def _create_session(request: Request, response: Response, user, session_ki
                           verified_now: bool = True, reauthenticated_at: datetime | None = None) -> dict:
     settings = request.app.state.settings
     token, csrf = new_token(), new_token()
-    expires_at = datetime.now(timezone.utc) + (timedelta(hours=1) if session_kind == "admin" else timedelta(days=14))
+    now = datetime.now(timezone.utc)
+    expires_at = now + SESSION_LIFETIME
     await conn.execute(
         "INSERT INTO v2_sessions(token_hash,csrf_hash,user_id,session_kind,expires_at,reauthenticated_at) VALUES($1,$2,$3,$4,$5,$6)",
         token_hash(token), token_hash(csrf), user["id"], session_kind, expires_at,
-        datetime.now(timezone.utc) if verified_now else reauthenticated_at,
+        now if verified_now else reauthenticated_at,
     )
     session_cookie = ADMIN_COOKIE if session_kind == "admin" else USER_COOKIE
     csrf_cookie = ADMIN_CSRF_COOKIE if session_kind == "admin" else CSRF_COOKIE
-    age = max(1, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
+    age = int(SESSION_LIFETIME.total_seconds())
     response.set_cookie(session_cookie, token, httponly=True, secure=settings.cookie_secure,
-                        samesite="strict", path="/", max_age=age)
+                        samesite="strict", path="/", max_age=age, expires=expires_at)
     response.set_cookie(csrf_cookie, csrf, httponly=False, secure=settings.cookie_secure,
-                        samesite="strict", path="/", max_age=age)
+                        samesite="strict", path="/", max_age=age, expires=expires_at)
     await audit(conn, user["id"], user["role"], f"{session_kind}_session_created", "session",
                 token_hash(token), _request_id(request))
     # 长期会话令牌只能由 HttpOnly Cookie 接收，不出现在 JSON 或审计明文中。
@@ -173,8 +175,7 @@ async def get_identity(request: Request, required: bool = False, session_kind: s
     row = await database.current_pool().fetchrow(
         "SELECT u.id,u.email,u.display_name,u.role,u.disabled_at,u.closure_requested_at,s.session_kind,s.csrf_hash,s.expires_at,s.reauthenticated_at "
         "FROM v2_sessions s JOIN v2_users u ON u.id=s.user_id "
-        "WHERE s.token_hash=$1 AND s.expires_at>now() AND (s.session_kind<>'admin' OR "
-        "(s.last_seen_at>now()-interval '15 minutes' AND s.created_at>now()-interval '1 hour'))",
+        "WHERE s.token_hash=$1 AND s.expires_at>now()",
         token_hash(token),
     )
     if not row or row["disabled_at"] is not None:
@@ -241,8 +242,7 @@ async def verify_sensitive_admin_session(conn, identity: dict, *, require_fresh:
         raise HTTPException(401, "管理身份已失效")
     current = await conn.fetchrow(
         "SELECT reauthenticated_at FROM v2_sessions WHERE token_hash=$1 AND user_id=$2 "
-        "AND session_kind='admin' AND expires_at>now() AND created_at>now()-interval '1 hour' "
-        "AND last_seen_at>now()-interval '15 minutes' FOR UPDATE", identity["_token_hash"], identity["id"],
+        "AND session_kind='admin' AND expires_at>now() FOR UPDATE", identity["_token_hash"], identity["id"],
     )
     if not current:
         raise HTTPException(401, "管理会话已撤销或已过期")
