@@ -31,6 +31,7 @@ FIXTURE_FIELDS = frozenset({
     'home_score', 'away_score', 'clock_minute', 'source_updated_at', 'received_at', 'source_time_quality',
     'half_home_score', 'half_away_score',
 })
+SEARCH_FIXTURE_FIELDS = FIXTURE_FIELDS | {'realtime_eligible', 'eligibility_reason'}
 QUOTE_FIELDS = frozenset({
     'id', 'fixture_id', 'market_id', 'market_name', 'period', 'market_kind', 'line', 'selection', 'price',
     'source_updated_at', 'received_at', 'source_time_quality', 'status', 'play_id', 'market_instance_id',
@@ -55,11 +56,11 @@ def snapshot_result(kind, result):
         if len(result['items']) > 100:
             _budget_error()
         value = _project(result, {'search_key', 'next_cursor', 'search_complete', 'total_candidates'})
-        value['items'] = [_project(item, FIXTURE_FIELDS) for item in result['items']]
+        value['items'] = [_project(item, SEARCH_FIXTURE_FIELDS) for item in result['items']]
     elif kind == 'mcp_resolve_match':
         value = _project(result, {'resolved', 'reason', 'candidate_count'})
         if 'fixture' in result:
-            value['fixture'] = _project(result['fixture'], FIXTURE_FIELDS)
+            value['fixture'] = _project(result['fixture'], SEARCH_FIXTURE_FIELDS)
     elif kind == 'mcp_list_match_markets':
         if len(result['markets']) > MAX_MARKETS:
             _budget_error()

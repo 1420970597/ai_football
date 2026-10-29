@@ -10,9 +10,9 @@ description: 审核 Telegram 赛前及滚球专家图文消息，完整搜索并
 首先检查审核模式：historical_replay 只做历史档案分析，说明原文意图及缺失历史证据，停止当前盘口检索和推荐录入。下列当前赛事核验流程仅适用于有效实时消息，赛前推荐同样适用，不要求已经开赛。
 
 1. 保留当前 review_id 和 attempt_id。分别抽取每项意图的双方球队、联赛、时间范围、赛前或滚球线索、期间、玩法、盘口线及方向；一条消息可含多场和多项。
-2. 使用 search_matches 同时考虑赛前和滚球；按 next_cursor 连续翻页直到为空。单页数量及出现一个看似正确候选，都不能证明完整检索。
-3. 使用返回的 search_key 调用 resolve_match，传双方名字或已知别名，必要时传联赛及时间范围。服务确认 resolved 才进入下一步；多候选不能以模型置信度放行。
-4. 对已唯一确认比赛调用 list_match_markets，读取全部期间和主附盘，核对原文意图与系统盘口。选取确切 quote_id；can_record为真才可提交。fresh为源报价变动时间新鲜度，confirmed_current为系统对当前原盘的精确复核；两者均无效、未知源时间、停盘和不支持玩法不可记录。
+2. 使用 search_matches，phase=all，检索赛前、滚球、完场和取消比赛以识别原文；按 next_cursor 连续翻页直到为空。单页数量及出现一个看似正确候选，都不能证明完整检索。完场或取消不表示比赛不存在。
+3. 使用返回的 search_key 调用 resolve_match，传双方名字或已知别名，必要时传联赛及时间范围。服务确认 resolved 才算识别；no_matching_fixture表示没有匹配，ambiguous_fixture表示存在多场合理候选，不能以模型置信度放行。realtime_eligible=false时，保留该比赛和eligibility_reason，说明已识别但已完场或取消，不读取实时盘口、不录入推荐，继续处理其他项目。
+4. 仅对已唯一确认且realtime_eligible=true的比赛调用 list_match_markets，读取全部期间和主附盘，核对原文意图与系统盘口。选取确切 quote_id；can_record为真才可提交。fresh为源报价变动时间新鲜度，confirmed_current为系统对当前原盘的精确复核；两者均无效、未知源时间、停盘和不支持玩法不可记录。
 5. 每场读取后立即调用 record_expert_signals 提交该场，不先积累多场盘口再提交。传当前任务及尝试标识，以及每项的 fixture_id、quote_id、原文证据和可选置信度。系统按需复核原盘并决定价格，专家原文倍率不进入收益；当前复核不替代交易预检。
 6. 阅读工具 accepted 与 rejected，各项独立处理。价格变化后必须重新读盘，任务失效停止，不猜编号或绕过拒绝。缺球队或线值时保留未解决。
 7. 最终用简体中文呈现专家昵称、系统双方、阶段、期间、玩法、盘口线及方向，只复述工具实际接受结果。不要宣称未记录推荐成功或未结算盈利。

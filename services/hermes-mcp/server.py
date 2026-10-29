@@ -55,7 +55,7 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str,
                          phase: str = "all", competition_query: str | None = None,
                          from_utc: str | None = None, to_utc: str | None = None,
                          cursor: str | None = None, page_size: int = 100, sport: str | None = None) -> dict:
-    """每页最多返回100个赛前及滚球候选；连续使用next_cursor直到为空，可按系统项目筛选。"""
+    """phase=all检索赛前、滚球、完场及取消候选，供原文赛事识别；每页最多100场，连续使用next_cursor直到为空。仅realtime_eligible=true的唯一比赛可读取实时盘口并录入推荐。"""
     return await _post("search_matches", {
         "review_id": review_id, "attempt_id": attempt_id, "team_query": team_query,
         "phase": phase, "competition_query": competition_query, "sport": sport,

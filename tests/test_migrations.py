@@ -7,7 +7,7 @@ import uuid
 
 import asyncpg
 
-from app.database import MigrationRequired, apply_migrations, check_schema
+from app.database import MIGRATIONS, MigrationRequired, apply_migrations, check_schema
 
 
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_ADMIN_URL"), "requires isolated database admin URL")
@@ -43,6 +43,29 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(first or second), count)
         finally:
             await other.close()
+
+    async def test_all_phase_search_upgrade_preserves_existing_searches_and_is_repeatable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            prior = Path(folder)
+            for path in MIGRATIONS.glob('*.sql'):
+                if path.name < '021':
+                    (prior / path.name).write_bytes(path.read_bytes())
+            await apply_migrations(self.conn, prior)
+        source, expert, message, job = [uuid.uuid4() for _ in range(4)]
+        await self.conn.execute("INSERT INTO v2_expert_sources(id,platform_chat_id,display_name) VALUES($1,'chat','Source')", source)
+        await self.conn.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,'author','Expert')", expert)
+        await self.conn.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) VALUES($1,$2,$3,'1','Original',now())", message, source, expert)
+        await self.conn.execute("INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key) VALUES($1,$2,'queued',$3)", job, message, str(job))
+        await self.conn.execute("INSERT INTO v2_match_searches(job_id,search_key,team_query,phase) VALUES($1,'original','Team','all')", job)
+        before = dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job))
+        self.assertEqual(['021_review_search_all_phases.sql'], await apply_migrations(self.conn))
+        self.assertEqual(before, dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job)))
+        for phase in ('finished', 'cancelled'):
+            await self.conn.execute('INSERT INTO v2_match_searches(job_id,search_key,team_query,phase) VALUES($1,$2,$3,$2)', job, phase, 'Team')
+        with self.assertRaises(asyncpg.CheckViolationError):
+            await self.conn.execute("INSERT INTO v2_match_searches(job_id,search_key,team_query,phase) VALUES($1,'invalid','Team','unknown')", job)
+        self.assertEqual([], await apply_migrations(self.conn))
+        await check_schema(self.conn)
 
     async def test_changed_migration_and_unknown_version_rejected(self):
         await apply_migrations(self.conn)

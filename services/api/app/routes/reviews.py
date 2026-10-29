@@ -22,7 +22,11 @@ from ..runtime_settings import runtime_quote_max_age
 from ..quote_observation import confirmation_for
 
 router = APIRouter(prefix="/internal/mcp")
-_CANDIDATE_JSON = 'jsonb_build_object(' + ','.join("'" + field + "',f." + field for field in sorted(FIXTURE_FIELDS)) + ')'
+_CANDIDATE_JSON = (
+    'jsonb_build_object(' + ','.join("'" + field + "',f." + field for field in sorted(FIXTURE_FIELDS))
+    + ", 'realtime_eligible', f.phase IN ('scheduled','live'), "
+    + "'eligibility_reason', CASE WHEN f.phase IN ('scheduled','live') THEN NULL ELSE f.phase END)"
+)
 
 
 class AttemptInput(BaseModel):
@@ -32,7 +36,7 @@ class AttemptInput(BaseModel):
 
 class SearchInput(AttemptInput):
     team_query: str = Field(min_length=2, max_length=120)
-    phase: str = Field(default="all", pattern="^(all|live|scheduled)$")
+    phase: str = Field(default="all", pattern="^(all|live|scheduled|finished|cancelled)$")
     competition_query: str | None = Field(default=None, max_length=120)
     sport: str | None = Field(default=None, min_length=1, max_length=20, pattern=r'^[a-z][a-z0-9_]{0,19}$')
     from_utc: AwareDatetime | None = None
@@ -127,7 +131,7 @@ async def search_matches(body: SearchInput, request: Request):
                 await conn.execute(
                     "INSERT INTO v2_match_search_candidates(job_id,search_key,fixture_id,position,candidate_data) "
                     "SELECT $1,$2,f.id,row_number() OVER(ORDER BY f.kickoff_at,f.id)," + _CANDIDATE_JSON + " FROM v2_fixtures f "
-                    "WHERE f.phase IN ('live','scheduled') AND ($3='all' OR f.phase=$3) "
+                    "WHERE f.phase IN ('live','scheduled','finished','cancelled') AND ($3='all' OR f.phase=$3) "
                     "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 OR EXISTS ("
                     "SELECT 1 FROM unnest(f.home_aliases || f.away_aliases) alias WHERE lower(btrim(alias))=$5)) "
                     "AND ($6='' OR lower(f.competition_name) LIKE '%'||$6||'%') "
@@ -187,7 +191,7 @@ async def resolve_match(body: ResolveInput, request: Request):
                     continue
                 matches.append(row)
             if len(matches) != 1:
-                result = {"resolved": False, "reason": "no_unique_fixture", "candidate_count": len(matches)}
+                result = {"resolved": False, "reason": "no_matching_fixture" if not matches else "ambiguous_fixture", "candidate_count": len(matches)}
             else:
                 fixture = matches[0]
                 evidence = jsonable_encoder(body.model_dump(exclude={"review_id", "attempt_id"}))
@@ -195,7 +199,10 @@ async def resolve_match(body: ResolveInput, request: Request):
                     "INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
                     body.review_id, body.attempt_id, fixture["fixture_id"], body.search_key, evidence,
                 )
-                result = {"resolved": True, "fixture": fixture["candidate_data"]}
+                current_phase = await conn.fetchval('SELECT phase FROM v2_fixtures WHERE id=$1', fixture['fixture_id'])
+                result = {"resolved": True, "fixture": {**fixture["candidate_data"], 'phase': current_phase,
+                    'realtime_eligible': current_phase in {'scheduled', 'live'},
+                    'eligibility_reason': None if current_phase in {'scheduled', 'live'} else current_phase}}
             return await tool_success(conn, body, result, {'result': {'resolved': result['resolved'], 'candidate_count': result.get('candidate_count')}})
 
 

@@ -138,7 +138,7 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(2, len(failures))
         self.assertTrue(all(row['payload']['elapsed_ms'] >= 0 for row in failures))
 
-    async def test_cross_day_scheduled_live_and_every_page_replays_exact_response(self):
+    async def test_cross_day_all_states_and_every_page_replays_exact_response(self):
         midnight = self.now.replace(hour=0, minute=0, second=0, microsecond=0)
         await self.fixture(1, phase='live', kickoff_at=(midnight - timedelta(minutes=30)).isoformat())
         await self.fixture(2, phase='scheduled', kickoff_at=(midnight + timedelta(minutes=30)).isoformat())
@@ -148,15 +148,20 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
         first = (await self.post('search_matches', **args)).json()
         await self.pool.execute("UPDATE v2_fixtures SET home_team='Changed later' WHERE id='fixture-1'")
         second = (await self.post('search_matches', **args, cursor=first['next_cursor'])).json()
-        self.assertEqual(['fixture-1', 'fixture-2'], [first['items'][0]['id'], second['items'][0]['id']])
-        self.assertEqual({'live', 'scheduled'}, {first['items'][0]['phase'], second['items'][0]['phase']})
-        for index, expected in enumerate([first, second]):
+        third = (await self.post('search_matches', **args, cursor=second['next_cursor'])).json()
+        pages = [first, second, third]
+        self.assertEqual(['fixture-3', 'fixture-1', 'fixture-2'], [page['items'][0]['id'] for page in pages])
+        self.assertEqual({'finished', 'live', 'scheduled'}, {page['items'][0]['phase'] for page in pages})
+        self.assertEqual('Alpha1', second['items'][0]['home_team'])
+        self.assertTrue(third['search_complete'])
+        self.assertIsNone(third['next_cursor'])
+        for index, expected in enumerate(pages):
             payload, replayed = await self.replay('mcp_search_matches', offset=index)
             self.assertEqual(expected, replayed)
             self.assertEqual('football', payload['scope']['sport'])
             self.assertEqual(1, payload['message_revision'])
             self.assertEqual(str(self.message), payload['message_id'])
-        self.assertEqual(2, second['total_candidates'])
+        self.assertEqual(3, third['total_candidates'])
 
     async def test_market_snapshot_is_exact_multi_chunk_and_immutable_after_price_change(self):
         await self.fixture()

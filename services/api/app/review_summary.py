@@ -29,7 +29,7 @@ def _value(value):
     return str(value)
 
 
-def make_summary(rows, *, accepted_total: int, rejected, review_mode: str) -> dict:
+def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, identified=(), identified_total=None) -> dict:
     """Model prose and Telegram prices do not participate in the system receipt."""
     items = [{key: _value(row.get(key)) for key in (
         'signal_id', 'fixture_id', 'home_team', 'away_team', 'competition_name',
@@ -37,6 +37,10 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str) -> di
         'selection', 'recommendation_price', 'quote_time',
     )} for row in rows[:SUMMARY_ITEM_LIMIT]]
     omitted = max(0, accepted_total - len(items))
+    identified_items = [{key: _value(row.get(key)) for key in (
+        'fixture_id', 'home_team', 'away_team', 'competition_name', 'kickoff_at', 'phase',
+    )} for row in identified[:SUMMARY_ITEM_LIMIT]]
+    identified_omitted = max(0, (len(identified) if identified_total is None else identified_total) - len(identified_items))
     reasons = Counter()
     for entry in rejected:
         code = entry.get('reason') if isinstance(entry, dict) else None
@@ -54,12 +58,21 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str) -> di
                      f"系统赔率 {item['recommendation_price']}。")
     if omitted:
         lines.append(f'另有 {omitted} 条已接受记录，请查看对应系统推荐明细；本摘要仅展示前 {SUMMARY_ITEM_LIMIT} 条。')
+    for item in identified_items:
+        phase = PHASES.get(item['phase'], '阶段未知')
+        reason = ('当前尚无工具接受的盘口推荐' if item['phase'] in {'scheduled', 'live'}
+                  else '当前阶段不允许读取实时盘口或录入推荐')
+        lines.append(f"已唯一识别但未进入实时推荐：{item['home_team']} 对 {item['away_team']}；"
+                     f"{item['competition_name']}；{phase}；{reason}。")
+    if identified_omitted:
+        lines.append(f'另有 {identified_omitted} 场已识别但未录入推荐的比赛；本摘要仅展示前 {SUMMARY_ITEM_LIMIT} 场。')
     for code, count in sorted(reasons.items()):
         lines.append(f"未解决：{REASONS.get(code, '工具未确认，保留原始轨迹核验')}（{count} 项工具拒绝记录，可能含重复尝试）。")
-    if not items and not reasons:
+    if not items and not reasons and not identified_items:
         lines.append('本次工具尚无已确认的盘口录入；模型原始说明仅供核查。')
     return {'schema_version': 1, 'language': 'zh-CN', 'basis': 'committed_system_signals',
             'review_mode': review_mode, 'accepted_count': accepted_total, 'items': items,
+            'identified_without_signal': identified_items, 'identified_omitted_count': identified_omitted,
             'omitted_count': omitted, 'tool_rejection_counts': dict(reasons), 'content': chr(10).join(lines)}
 
 
@@ -76,6 +89,13 @@ async def record_summary(conn, job, attempt_id, review_mode: str) -> int:
         "AND trace_kind='mcp_record_expert_signals' AND payload->>'attempt_id'=$2 ORDER BY sequence_no",
         job['id'], str(attempt_id))
     rejected = [item for record in records for item in (record['rejected'] or [])]
-    receipt = make_summary([dict(row) for row in rows], accepted_total=total, rejected=rejected, review_mode=review_mode)
+    identified = await conn.fetch(
+        'SELECT b.fixture_id,f.home_team,f.away_team,f.competition_name,f.kickoff_at,f.phase,count(*) OVER() AS total '
+        'FROM v2_review_fixture_bindings b JOIN v2_fixtures f ON f.id=b.fixture_id '
+        'WHERE b.job_id=$1 AND b.attempt_id=$2 AND NOT EXISTS('
+        'SELECT 1 FROM v2_expert_signals s WHERE s.message_id=$3 AND s.fixture_id=b.fixture_id) '
+        'ORDER BY f.kickoff_at,b.fixture_id LIMIT $4', job['id'], attempt_id, job['message_id'], SUMMARY_ITEM_LIMIT)
+    receipt = make_summary([dict(row) for row in rows], accepted_total=total, rejected=rejected, review_mode=review_mode,
+                           identified=[dict(row) for row in identified], identified_total=identified[0]['total'] if identified else 0)
     await trace(conn, job['id'], 'system_review_result', {'attempt_id': str(attempt_id), **receipt})
     return total

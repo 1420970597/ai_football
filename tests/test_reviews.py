@@ -72,11 +72,11 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                 await ingest_fixture(conn, body)
         return fixture_id
 
-    async def search_all(self, team="Alpha", page_size=20):
+    async def search_all(self, team="Alpha", page_size=20, phase="all"):
         pages = []
         cursor = None
         while True:
-            response = await self.post("search_matches", team_query=team, cursor=cursor, page_size=page_size)
+            response = await self.post("search_matches", team_query=team, cursor=cursor, page_size=page_size, phase=phase)
             self.assertEqual(200, response.status_code, response.text)
             result = response.json()
             pages.extend(result["items"])
@@ -93,6 +93,60 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         result = await self.post("list_match_markets", fixture_id=fixture_id)
         self.assertEqual(200, result.status_code, result.text)
         return result.json()["markets"][0]
+
+    async def test_all_states_are_identifiable_but_inactive_matches_cannot_read_or_record(self):
+        for index, phase in enumerate(('scheduled', 'live', 'finished', 'cancelled'), 1):
+            await self.fixture(index, phase=phase)
+        key, candidates = await self.search_all(page_size=1)
+        self.assertEqual({'scheduled', 'live', 'finished', 'cancelled'}, {item['phase'] for item in candidates})
+        for index, phase in enumerate(('scheduled', 'live', 'finished', 'cancelled'), 1):
+            resolved = await self.resolve(key, index)
+            self.assertTrue(resolved['resolved'])
+            self.assertEqual(phase, resolved['fixture']['phase'])
+            self.assertEqual(index < 3, resolved['fixture']['realtime_eligible'])
+            if index < 3:
+                continue
+            self.assertEqual(phase, resolved['fixture']['eligibility_reason'])
+            markets = await self.post('list_match_markets', fixture_id=f'fixture-{index}')
+            self.assertEqual(409, markets.status_code)
+            self.assertEqual('fixture is no longer active', markets.json()['detail'])
+            quote_id = await self.pool.fetchval('SELECT id FROM v2_current_quotes WHERE fixture_id=$1', f'fixture-{index}')
+            recorded = await self.post('record_expert_signals', signals=[{
+                'fixture_id': f'fixture-{index}', 'quote_id': str(quote_id), 'evidence_text': '完场取消不得录入'}])
+            self.assertEqual([], recorded.json()['accepted'])
+            self.assertEqual('quote_not_read_or_changed', recorded.json()['rejected'][0]['reason'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_each_explicit_phase_filters_candidates(self):
+        for index, phase in enumerate(('scheduled', 'live', 'finished', 'cancelled'), 1):
+            await self.fixture(index, phase=phase)
+        for phase in ('scheduled', 'live', 'finished', 'cancelled'):
+            _, candidates = await self.search_all(phase=phase)
+            self.assertEqual([phase], [item['phase'] for item in candidates])
+
+    async def test_resolution_reports_current_phase_when_fixture_finishes_after_search(self):
+        fixture = await self.fixture()
+        key, _ = await self.search_all()
+        await self.pool.execute("UPDATE v2_fixtures SET phase='finished' WHERE id=$1", fixture)
+        result = await self.resolve(key)
+        self.assertTrue(result['resolved'])
+        self.assertEqual('finished', result['fixture']['phase'])
+        self.assertFalse(result['fixture']['realtime_eligible'])
+        response = await self.post('list_match_markets', fixture_id=fixture)
+        self.assertEqual(409, response.status_code)
+
+    async def test_no_matching_and_ambiguous_fixture_have_distinct_reasons(self):
+        await self.fixture(1)
+        await self.fixture(2, home_team='Alpha1', away_team='Beta1', phase='finished')
+        key, _ = await self.search_all()
+        ambiguous = await self.resolve(key)
+        self.assertFalse(ambiguous['resolved'])
+        self.assertEqual('ambiguous_fixture', ambiguous['reason'])
+        self.assertEqual(2, ambiguous['candidate_count'])
+        missing = await self.resolve(key, 3)
+        self.assertEqual('no_matching_fixture', missing['reason'])
+        self.assertEqual(0, missing['candidate_count'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
 
     async def test_record_waits_for_fixture_before_locking_quote_during_ingestion(self):
         fixture_id = await self.fixture()

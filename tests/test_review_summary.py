@@ -56,6 +56,22 @@ class ReviewSummaryTests(unittest.TestCase):
         self.assertIn('历史回放', result['content'])
         self.assertIn('另有 1 条', result['content'])
 
+    def test_identified_inactive_fixtures_are_distinct_from_accepted_signals(self):
+        identified = [self.signal(fixture_id='f2', phase='finished'), self.signal(fixture_id='f3', phase='cancelled')]
+        result = make_summary([self.signal()], accepted_total=1, rejected=[], review_mode='real_time', identified=identified)
+        self.assertEqual(1, result['accepted_count'])
+        self.assertEqual(2, len(result['identified_without_signal']))
+        for text in ('已唯一识别', '已完场', '取消或延期', '不允许读取实时盘口或录入推荐'):
+            self.assertIn(text, result['content'])
+        self.assertNotIn('系统赔率', str(result['identified_without_signal']))
+
+    def test_identified_display_limit_reports_omitted_fixtures(self):
+        result = make_summary([], accepted_total=0, rejected=[], review_mode='real_time',
+                              identified=[self.signal() for _ in range(100)], identified_total=125)
+        self.assertEqual(100, len(result['identified_without_signal']))
+        self.assertEqual(25, result['identified_omitted_count'])
+        self.assertIn('另有 25 场', result['content'])
+
 
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'), 'requires isolated database')
 class ReviewSummaryDatabaseTests(unittest.IsolatedAsyncioTestCase):
@@ -107,6 +123,28 @@ class ReviewSummaryDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'fixture-1', 'fixture-2'}, {item['fixture_id'] for item in result['items']})
         self.assertEqual({Decimal('1.95')}, {Decimal(item['recommendation_price']) for item in result['items']})
         self.assertNotIn('999', result['content'])
+        self.assertEqual([], result['identified_without_signal'])
+
+    async def test_inactive_bindings_appear_in_receipt_without_creating_signals(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        self.attempt = job['attempt_id']
+        async def model(*args, **kwargs):
+            for index, phase in enumerate(('finished', 'cancelled'), 1):
+                await self.fixture(index, phase=phase)
+                key, _ = await self.search_all(team=f'Alpha{index}')
+                self.assertTrue((await self.resolve(key, index))['resolved'])
+            return 'accepted 99', {'content': 'accepted 99'}
+        with patch.object(worker, 'review_message', side_effect=model), patch.object(worker, 'delete_session', AsyncMock()):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model='synthetic'), job)
+        result = await self.result()
+        self.assertEqual('unresolved', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual(0, result['accepted_count'])
+        self.assertEqual({'fixture-1', 'fixture-2'}, {item['fixture_id'] for item in result['identified_without_signal']})
+        self.assertIn('已完场', result['content'])
+        self.assertIn('取消或延期', result['content'])
+        self.assertNotIn('99', result['content'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
 
     async def test_stale_quote_rejection_is_chinese_and_current_attempt_scoped(self):
         await self.make_queued()
