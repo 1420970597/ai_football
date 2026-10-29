@@ -180,6 +180,26 @@ class ModelConfigurationTests(unittest.IsolatedAsyncioTestCase):
             json={'token': value['consumption_token'], 'model': 'wrong/model', 'provider': value['provider'], 'prompt_sha256': models.prompt_digest()})
         self.assertEqual(409, bad.status_code)
 
+    async def test_deployed_persisted_legacy_baseline_remains_consumable(self):
+        # This is the artifact fingerprint already acknowledged by the deployed
+        # worker, rather than a baseline generated from the code under test.
+        fingerprint = '222388e0dde4957ff096435cdf283f676e1c01e8003c9f536599f76f30a84173'
+        state = models.legacy_state(self.app.state.settings, 'cline-pass/deepseek-v4.1-flash')
+        state['active']['provenance']['prompt_sha256'] = fingerprint
+        state['active']['version'] = models.digest({k: v for k, v in state['active'].items() if k != 'version'})
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await models.save_state(conn, self.app.state.settings, state, self.admin_id)
+        factory = httpx.AsyncClient
+        with patch.object(hermes_client.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.ASGITransport(app=self.app), **kw)):
+            snapshot = await hermes_client.resolve_review_settings(self.app.state.settings)
+        self.assertEqual('cline-pass/deepseek-v4.1-flash', snapshot.hermes_model)
+        consumed = await models.read_state(self.pool, self.app.state.settings)
+        self.assertEqual(state['active'], consumed['active'])
+        self.assertEqual(state['revision'], consumed['revision'])
+        self.assertEqual(fingerprint, consumed['active']['provenance']['prompt_sha256'])
+        self.assertEqual(state['active']['version'], snapshot.model_configuration_version)
+
     async def test_model_governance_cipher_failure_does_not_disable_quote_ttl(self):
         await self.create()
         await self.pool.execute('UPDATE v2_admin_settings SET encrypted_value=$1 WHERE setting_key=$2', 'invalid', models.STATE_KEY)
