@@ -296,12 +296,6 @@
               <summary>登录安全</summary>
               <form id="password-form" class="compact-form">
                 <label
-                  >当前密码<input
-                    name="current_password"
-                    type="password"
-                    autocomplete="current-password"
-                    required /></label
-                ><label
                   >新密码<input
                     name="new_password"
                     type="password"
@@ -439,7 +433,7 @@
             <details class="settings-section">
               <summary>导出本人记录</summary>
               <p class="form-note">
-                按页读取并下载本人资料、会员和订单，敏感字段不会导出。读取前可能要求再次验证身份。
+                按页读取并下载本人资料、会员和订单，敏感字段不会导出。
               </p>
               <div class="form-actions">
                 <button class="small-button" data-export="profile">
@@ -461,12 +455,6 @@
               </button>
               <form id="closure-form" class="compact-form">
                 <label
-                  >本人密码<input
-                    name="password"
-                    type="password"
-                    autocomplete="current-password"
-                    required /></label
-                ><label
                   >输入“注销我的球讯账户”<input
                     name="confirmation_phrase"
                     required
@@ -819,23 +807,6 @@
               </button>
             </section>
             <section id="admin-system" class="admin-panel" hidden>
-              <details class="settings-section">
-                <summary>管理身份恢复</summary>
-                <div id="mfa-status"></div>
-                <div class="form-actions">
-                  <button id="mfa-refresh" class="small-button">
-                    刷新验证器状态</button
-                  ><button id="mfa-start" class="small-button">
-                    登记新验证器 / 换手机
-                  </button>
-                </div>
-                <p class="form-note">
-                  恢复码只能查看一次。丢失动态验证码时仍需邮箱、密码及未使用的恢复码登录。
-                </p>
-                <button id="generate-mfa-recovery" class="small-button">
-                  生成新一组一次性恢复码
-                </button>
-              </details>
               <form id="system-settings" class="compact-form settings-form">
                 <h2>Hermes 与业务设置</h2>
                 <label
@@ -937,60 +908,12 @@
             type="password"
             autocomplete="current-password"
             required /></label
-        ><label id="totp-field" hidden
-          >动态验证码（如已启用）<input
-            name="totp_code"
-            inputmode="numeric"
-            pattern="[0-9]{6}"
-            maxlength="6" /></label
-        ><label id="admin-recovery-field" hidden
-          >管理员一次性恢复码<input
-            name="recovery_code"
-            type="password"
-            autocomplete="off" /></label
         ><button class="primary-button">登录</button>
         <p id="auth-message" role="status"></p>
       </form>
       <div class="form-actions auth-assistance">
         <button class="text-link" data-password-recovery>用户忘记密码</button
-        ><button
-          id="admin-recovery-toggle"
-          class="text-link"
-          data-use-admin-recovery
-          hidden
-        >
-          使用管理员恢复码
-        </button>
       </div>
-    </dialog>
-    <dialog
-      id="reauth-dialog"
-      aria-labelledby="reauth-title"
-      aria-describedby="reauth-message"
-    >
-      <div class="dialog-header">
-        <h2 id="reauth-title">再次验证身份</h2>
-        <button data-close-dialog aria-label="关闭再次验证">×</button>
-      </div>
-      <form id="reauth-form" class="compact-form">
-        <p id="reauth-message" role="status"></p>
-        <label
-          >本人密码<input
-            name="password"
-            type="password"
-            autocomplete="current-password"
-            required
-        /></label>
-        <label id="reauth-totp" hidden
-          >动态验证码（如已启用）<input
-            name="totp_code"
-            inputmode="numeric"
-            pattern="[0-9]{6}"
-            maxlength="6"
-            autocomplete="one-time-code"
-        /></label>
-        <button type="submit" class="primary-button">验证身份</button>
-      </form>
     </dialog>
     <dialog
       id="content-dialog"

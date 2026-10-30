@@ -1,7 +1,6 @@
 // Real UI + API + temporary PG. Synthetic account worker only, no provider or sends.
 import { chromium } from "/opt/verification/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 const origin = "http://web";
 const email = "extended@web-integration.invalid";
@@ -16,14 +15,6 @@ page.on("response", response => {
   const path = new URL(response.url()).pathname;
   if (path.startsWith("/api/")) httpEvidence.push({ method: response.request().method(), path, status: response.status() });
 });
-function otp() {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  const bits = [..."JBSWY3DPEHPK3PXP"].map(char => alphabet.indexOf(char).toString(2).padStart(5, "0")).join("");
-  const key = Buffer.from(bits.match(/.{8}/g).map(value => parseInt(value, 2)));
-  const counter = Buffer.alloc(8); counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
-  const digest = crypto.createHmac("sha1", key).update(counter).digest(), offset = digest.at(-1) & 15;
-  return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(6, "0");
-}
 async function api(path, {method="GET", body, admin=false}={}) {
   const cookies = await context.cookies(), csrf = cookies.find(cookie => cookie.name === (admin ? "v2_admin_csrf" : "v2_csrf"))?.value;
   const r = await page.request.fetch(origin + "/api/v1" + path, {method, data:body,
@@ -111,7 +102,7 @@ try {
     await page.locator("#admin-identity [data-login=admin]").click();
     await page.locator("#auth-form [name=email]").fill("admin@web-integration.invalid");
     await page.locator("#auth-form [name=password]").fill("test-only-admin-password-1234");
-    await page.locator("#auth-form [name=totp_code]").fill(otp());
+    assert.equal(await page.locator("#auth-form [name=totp_code]").count(),0);
     await page.locator("#auth-form button").click(); await page.waitForSelector("#admin-content:not([hidden])");
     assert.equal((await api("/auth/me")).data.user.role,"user");
     assert.equal((await api("/admin/me",{admin:true})).data.user.role,"admin");
@@ -195,15 +186,10 @@ try {
     assert.equal((await configure({enabled:false})).status,200);
     value=await api("/accounts/leyu"); assert.equal(value.data.betting.auto_enabled,false);
   });
-  await scenario("过期近期身份通过真实重验弹窗恢复许可与紧急停止",async()=>{
+  await scenario("过期历史重验时间不阻断本人配置与紧急停止",async()=>{
     const aged=await page.request.post('http://account-fixture:8998/age-user-session'); assert.equal(aged.status(),200);
-    assert.equal((await configure()).status,403);
-    await page.waitForSelector("#reauth-dialog[open]");
-    assert.equal(await page.locator("#betting-form [name=stake_per_order]").inputValue(),"2");
-    await page.locator("#reauth-form [name=password]").fill(password);
-    await page.locator("#reauth-form button[type=submit]").click();
-    await page.waitForSelector("#reauth-dialog:not([open])",{state:"attached"});
     assert.equal((await configure()).status,200);
+    assert.equal(await page.locator("#reauth-dialog").count(),0);
     const stopped=await responseAfter('/leyu/emergency-stop',"POST",()=>page.locator("#emergency-stop").click()); assert.equal(stopped.status,200);
     const value=await api("/accounts/leyu"); assert.equal(value.data.betting.auto_enabled,false); assert.equal(value.data.betting.emergency_stopped,true);
   });

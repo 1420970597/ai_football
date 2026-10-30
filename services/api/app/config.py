@@ -48,7 +48,6 @@ class Settings:
     cookie_secure: bool
     bootstrap_admin_email: str
     bootstrap_admin_password: str
-    bootstrap_admin_totp_secret: str
     executor_token: str = ""
     live_orders_enabled: bool = False
     hermes_provider: str = "custom:cline"
@@ -86,7 +85,6 @@ def load_settings(*, role: str = "api") -> Settings:
         cookie_secure=_clean(os.environ.get("COOKIE_SECURE", "true")).lower() == "true",
         bootstrap_admin_email=_clean(os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "")).lower(),
         bootstrap_admin_password=_clean(os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "")),
-        bootstrap_admin_totp_secret=_clean(os.environ.get("BOOTSTRAP_ADMIN_TOTP_SECRET", "")).replace(" ", "").upper(),
         executor_token=_clean(os.environ.get("EXECUTOR_INTERNAL_TOKEN", "")) if role == "api" else "",
         live_orders_enabled=role == "api" and _clean(os.environ.get("LIVE_ORDERS_ENABLED", "false")).lower() == "true",
         hermes_provider=_clean(os.environ.get("HERMES_API_PROVIDER", "custom:cline")),

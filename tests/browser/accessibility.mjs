@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import assert from "node:assert/strict";
 
 // Shares only the existing isolated API fixtures. Never records page HTML,
-// input values, MFA seeds, QR content, passwords or recovery codes.
+// input values, QR content, passwords or recovery codes.
 export async function runAudit({ setup, id, caught, evidence }) {
   const baseline = process.argv.includes("--baseline");
   const axeSource = await fs.readFile(
@@ -377,97 +377,17 @@ export async function runAudit({ setup, id, caught, evidence }) {
       await scan(page, label + "-admin-" + tab);
     }
     await page.locator("[data-admin-tab=system]").click();
-    await page
-      .locator("#mfa-start")
-      .evaluate((el) => (el.closest("details").open = true));
-    await scan(page, label + "-admin-mfa-settings");
-    await page.locator("#mfa-start").focus();
-    await page.screenshot({
-      path: evidence + `/candidate-a11y-${label}-mfa-settings-fixture.png`,
-    });
-    await page.locator("#mfa-start").click();
-    await page.waitForSelector("#mfa-secret");
-    await scan(page, label + "-mfa-enrollment-dialog");
-    await check(label + " 换机长弹窗以标题聚焦并保持键盘约束", async () => {
+    await scan(page, label + "-admin-system");
+    await check(label + " 系统设置不提供二次验证入口", async () => {
       assert.equal(
-        await page.evaluate(() => document.activeElement.id),
-        "dialog-title",
-      );
-      await focusLoop(page, "#content-dialog");
-    });
-    await page.locator("#dialog-content [data-mfa-cancel]").click();
-    await scan(page, label + "-cancel-confirmation-dialog");
-    await check(
-      label + " 取消换机确认初始聚焦安全选项且Escape保留登记",
-      async () => {
-        assert.equal(
-          await page
-            .getByRole("dialog", { name: "确认操作", exact: true })
-            .count(),
-          1,
-        );
-        assert.equal(
-          await page.evaluate(() => document.activeElement.id),
-          "confirm-no",
-        );
-        await focusLoop(page, "#confirm-dialog");
-        await page.keyboard.press("Escape");
-        await page.waitForFunction(
-          () => !document.querySelector("#confirm-dialog").open,
-        );
-        assert.equal(await page.locator("#mfa-secret").count(), 1);
-      },
-    );
-    mode.reauthRequired = true;
-    await page.locator("#mfa-enrollment-form [name=totp_code]").fill("222222");
-    await page.locator("#mfa-enrollment-form button").click();
-    await page.waitForSelector("#reauth-dialog[open]");
-    await scan(page, label + "-nested-reauth-dialog");
-    await check(label + " 叠加重验Tab约束与Escape保留原窗口", async () => {
-      await focusLoop(page, "#reauth-dialog");
-      await page.keyboard.press("Escape");
-      await page.waitForFunction(
-        () => !document.querySelector("#reauth-dialog").open,
-      );
-      await page.waitForFunction(
-        () => document.activeElement.closest("dialog")?.id === "content-dialog",
-        null,
-        { timeout: 1000 },
+        await page.locator("#mfa-start, #generate-mfa-recovery, #reauth-dialog").count(),
+        0,
       );
       assert.equal(
-        await page.locator("#content-dialog").evaluate((el) => el.open),
-        true,
-      );
-      assert.equal(await page.locator("#mfa-secret").count(), 1);
-      assert.equal(
-        await page.evaluate(() => document.activeElement.closest("dialog")?.id),
-        "content-dialog",
+        log.some((request) => request.path.startsWith("/admin/mfa/") || request.path.endsWith("/reauthenticate")),
+        false,
       );
     });
-    if (await page.locator("#reauth-dialog").isVisible())
-      await page.keyboard.press("Escape");
-    mode.reauthRequired = false;
-    await page.locator("#mfa-enrollment-form [name=totp_code]").fill("333333");
-    await page.locator("#mfa-enrollment-form button").click();
-    await page.waitForSelector("[data-once-secret] pre");
-    await scan(page, label + "-mfa-success-dialog");
-    await check(
-      label + " 换机成功替换内容后重新聚焦标题并清理秘密",
-      async () => {
-        assert.equal(
-          await page.evaluate(() => document.activeElement.id),
-          "dialog-title",
-        );
-        await page.keyboard.press("Escape");
-        assert.equal(await page.locator("[data-once-secret]").count(), 0);
-        assert.equal(
-          await page.evaluate(() => document.activeElement.id),
-          "mfa-start",
-        );
-      },
-    );
-    if (await page.locator("#content-dialog").isVisible())
-      await page.keyboard.press("Escape");
     await check(label + " 减少动画关闭过渡及装饰动画", async () => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       const active = await page.evaluate(() =>

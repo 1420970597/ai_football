@@ -258,8 +258,7 @@ async function setup({
     if (
       p === "/auth/login" ||
       p === "/auth/register" ||
-      p === "/admin/login" ||
-      p === "/admin/recovery-login"
+      p === "/admin/login"
     ) {
       if (p.startsWith("/admin/")) mode.admin = true;
       else mode.user = true;
@@ -273,7 +272,7 @@ async function setup({
         message: "邮件恢复未配置，请联系管理员人工核验后获取恢复码。",
       });
     if (p === "/auth/recovery/complete")
-      return reply({ reset: true, reauthentication_required: true });
+      return reply({ reset: true, auto_betting: false });
     if (p === "/auth/export")
       return reply({
         schema_version: 1,
@@ -307,94 +306,6 @@ async function setup({
           message: "人工核验恢复码，只显示一次",
         },
         201,
-      );
-    if (p === "/admin/mfa/recovery-codes")
-      return reply({
-        codes: ["FIXTURE-MFA-RECOVERY-1", "FIXTURE-MFA-RECOVERY-2"],
-        message: "只显示一次",
-      });
-    if (p.endsWith("/reauthenticate")) {
-      mode.reauthRequired = false;
-      return reply({ expires_at: "2026-10-26T12:00:00Z" });
-    }
-    if (p === "/admin/mfa/status")
-      return reply({
-        configured: true,
-        configuration_state: "configured",
-        recovery_codes_remaining: 10,
-        pending: mode.mfaPending || null,
-      });
-    if (
-      mode.reauthRequired &&
-      p.startsWith("/admin/mfa/enrollment") &&
-      method !== "GET" &&
-      method !== "DELETE"
-    )
-      return reply(
-        {
-          detail: {
-            code: "reauthentication_required",
-            session_kind: "admin",
-            message: "敏感操作需要再次验证当前凭据",
-          },
-        },
-        403,
-      );
-    if (p === "/admin/mfa/enrollment") {
-      if (mode.mfaPending && !body.replace_existing)
-        return reply({ detail: "已有尚未确认的新验证器，原验证器仍有效" }, 409);
-      mode.mfaPending = {
-        enrollment_id: id,
-        expires_at: new Date(
-          Date.now() + (mode.expireMfa ? -1000 : 600000),
-        ).toISOString(),
-      };
-      return reply(
-        {
-          ...mode.mfaPending,
-          secret: "KRSXG5DSNFXGOIDB",
-          otpauth_uri:
-            "otpauth://totp/Test?secret=KRSXG5DSNFXGOIDB&issuer=Test",
-        },
-        201,
-      );
-    }
-    if (p.startsWith("/admin/mfa/enrollment/") && method === "DELETE") {
-      mode.mfaPending = null;
-      return reply({ cancelled: true, previous_factor_unchanged: true });
-    }
-    if (p.startsWith("/admin/mfa/enrollment/") && p.endsWith("/confirm")) {
-      if (mode.invalidMfa)
-        return reply(
-          { detail: "新验证器动态验证码无效，原验证器保持有效" },
-          401,
-        );
-      mode.mfaPending = null;
-      return reply({
-        configured: true,
-        already_confirmed: false,
-        recovery_codes: Array.from(
-          { length: 10 },
-          (_, i) => "FIXTURE-NEW-MFA-RECOVERY-" + i,
-        ),
-        other_sessions_revoked: true,
-        message: "新验证器已生效，其他管理会话和旧备用码已撤销。",
-      });
-    }
-    if (
-      mode.reauthRequired &&
-      method !== "GET" &&
-      (p === "/admin/settings" || p === "/accounts/leyu")
-    )
-      return reply(
-        {
-          detail: {
-            code: "reauthentication_required",
-            session_kind: p.startsWith("/admin") ? "admin" : "user",
-            message: "此操作需要再次验证身份",
-          },
-        },
-        403,
       );
     if (p === "/auth/logout") {
       mode.user = false;
@@ -1122,7 +1033,7 @@ await test("游客权益拒绝、会员未配置支付、注册校验", async ()
     "12",
   );
   await page.locator('[data-auth-tab="admin"]').click();
-  assert.equal(await page.locator("#totp-field").isVisible(), true);
+  assert.equal(await page.locator("#totp-field").count(), 0);
   await context.close();
 });
 await test("初始失败与无赛事状态、请求竞态不覆盖新筛选", async () => {
@@ -1376,65 +1287,29 @@ await test("推荐定位准确报价并标示价格变化", async () => {
   );
   await context.close();
 });
-await test("敏感操作再次验证保留原输入并隔离身份", async () => {
-  const { page, context, mode, log } = await setup({ dual: true });
-  await page.locator(".utility-bar [data-page=admin]").click();
-  await page.locator("[data-admin-tab=leyu]").click();
-  await page
-    .locator("#leyu-settings [name=leyu_request_id]")
-    .fill("keep-input-after-reauth");
-  mode.reauthRequired = true;
-  await page.locator("#leyu-settings button").click();
-  await page.waitForSelector("#reauth-dialog[open]");
-  assert.equal(await page.locator("#reauth-totp").isVisible(), true);
-  assert.equal(
-    await page.locator("#leyu-settings [name=leyu_request_id]").inputValue(),
-    "keep-input-after-reauth",
-  );
-  await page.locator("#reauth-form [name=password]").fill("test-only-password");
-  await page.locator("#reauth-form [name=totp_code]").fill("123456");
-  await page.locator("#reauth-form button[type=submit]").click();
-  await page.waitForFunction(
-    () => !document.querySelector("#reauth-dialog").open,
-  );
-  const verification = log.find((r) => r.path === "/admin/reauthenticate");
-  assert.equal(verification.headers["x-session-context"], "admin");
-  assert.equal(verification.headers["x-csrf-token"], "admin-test-csrf");
-  assert.equal(
-    log.filter((r) => r.path === "/admin/settings" && r.method !== "GET")
-      .length,
-    1,
-  );
-  await page.locator("#leyu-settings button").click();
-  await page.waitForTimeout(100);
-  assert.equal(
-    log.filter((r) => r.path === "/admin/settings" && r.method !== "GET")
-      .length,
-    2,
-  );
+await test("本人乐鱼绑定与管理员登录不触发二次验证", async () => {
+  const { page, context, log } = await setup({ dual: true });
+  assert.equal(await page.locator("#reauth-dialog, #totp-field, #admin-recovery-field").count(), 0);
   await page.locator("#account-entry").click();
-  await page.waitForFunction(
-    () => !document.querySelector("#leyu-form input").disabled,
-  );
-  await page.locator("#leyu-form [name=account_label]").fill("本人备注待提交");
-  await page.locator("#leyu-form [name=username]").fill("user-only-name");
-  await page.locator("#leyu-form [name=password]").fill("user-only-password");
-  mode.reauthRequired = true;
+  await page.waitForFunction(() => !document.querySelector("#leyu-form input").disabled);
+  await page.locator("#leyu-form [name=account_label]").fill("本人校验样本");
+  await page.locator("#leyu-form [name=username]").fill("fixture-user");
+  await page.locator("#leyu-form [name=password]").fill("fixture-password");
   await page.locator("#leyu-form button.primary-button").click();
-  await page.waitForSelector("#reauth-dialog[open]");
-  assert.equal(await page.locator("#reauth-totp").isVisible(), false);
-  assert.equal(
-    await page.locator("#leyu-form [name=account_label]").inputValue(),
-    "本人备注待提交",
-  );
-  await page.locator("#reauth-form [name=password]").fill("user-password-test");
-  await page.locator("#reauth-form button[type=submit]").click();
-  await page.waitForFunction(
-    () => !document.querySelector("#reauth-dialog").open,
-  );
-  const userVerification = log.find((r) => r.path === "/auth/reauthenticate");
-  assert.equal(userVerification.headers["x-session-context"], "user");
-  assert.equal(userVerification.headers["x-csrf-token"], "user-test-csrf");
+  await page.waitForTimeout(100);
+  assert.equal(log.some((request) => request.path === "/accounts/leyu" && request.method === "PUT"), true);
+  assert.equal(log.some((request) => request.path.endsWith("/reauthenticate")), false);
+  assert.equal(log.some((request) => request.path.startsWith("/admin/mfa/")), false);
+  await page.locator(".utility-bar [data-page=admin]").click();
+  assert.equal(await page.locator("#mfa-start, #generate-mfa-recovery").count(), 0);
+  await page.locator("#admin-logout").click();
+  await page.locator("#admin-identity [data-login=admin]").click();
+  await page.locator("#auth-form [name=email]").fill("admin@example.test");
+  await page.locator("#auth-form [name=password]").fill("test-only-admin-password");
+  await page.locator("#auth-form button").click();
+  await page.waitForSelector("#admin-content:not([hidden])");
+  const login = log.findLast((request) => request.path === "/admin/login");
+  assert.deepEqual(Object.keys(login.body).sort(), ["email", "password"]);
   await context.close();
 });
 await test("多页赛事刷新保留加载深度与滚动并移除消失赛事", async () => {
@@ -1546,7 +1421,6 @@ await test("本人导出与待对账注销取消不恢复投注许可", async ()
   await page.waitForFunction(() =>
     document.querySelector("#closure-status").textContent.includes("尚未申请"),
   );
-  await page.locator("#closure-form [name=password]").fill("test-password");
   await page
     .locator("#closure-form [name=confirmation_phrase]")
     .fill("注销我的球讯账户");
@@ -1558,9 +1432,6 @@ await test("本人导出与待对账注销取消不恢复投注许可", async ()
     /再次核对/,
   );
   await page.locator("#closure-cancel").click();
-  await page
-    .locator("#cancel-closure-form [name=password]")
-    .fill("test-password");
   await page.locator("#cancel-closure-form button").click();
   await page.waitForFunction(
     () => !document.querySelector("#content-dialog").open,
@@ -1607,21 +1478,6 @@ await test("管理员恢复码只显示一次与只读待办订单", async () =>
   assert.match(orderText, /预留赔率 1\.96/);
   assert.match(orderText, /官方成交本金 未知 · 成交赔率 未知/);
   assert.match(orderText, /官方结算 未知/);
-  await page.locator("[data-admin-tab=system]").click();
-  await page
-    .locator("#generate-mfa-recovery")
-    .evaluate((el) => (el.closest("details").open = true));
-  await page.locator("#generate-mfa-recovery").click();
-  await page.locator("#confirm-yes").click();
-  await page.waitForSelector("[data-once-secret]");
-  assert.match(
-    await page.locator("[data-once-secret]").innerText(),
-    /FIXTURE-MFA/,
-  );
-  await page.keyboard.press("Escape");
-  await page.waitForFunction(
-    () => !document.querySelector("[data-once-secret]"),
-  );
   await page.locator("[data-admin-tab=membership]").click();
   await page
     .locator("#user-search-form")
@@ -1674,140 +1530,13 @@ await test("手机长文、相册、回复及昵称变更保持完整阅读", as
   });
   await context.close();
 });
-await test("管理员换机保留原因子、再次验证上下文与新备用码", async () => {
-  const { page, context, mode, log } = await setup({ dual: true });
-  await page.locator(".utility-bar [data-page=admin]").click();
-  await page.locator("[data-admin-tab=system]").click();
-  await page
-    .locator("#mfa-start")
-    .evaluate((element) => (element.closest("details").open = true));
-  await page.locator("#mfa-start").click();
-  await page.waitForSelector("#mfa-secret");
-  assert.equal(await page.locator("#mfa-qr svg").count(), 1);
-  assert.match(
-    await page.locator("#mfa-secret").innerText(),
-    /KRSXG5DSNFXGOIDB/,
-  );
-  assert.equal(
-    await page.evaluate(() =>
-      JSON.stringify(localStorage).includes("KRSXG5DSNFXGOIDB"),
-    ),
-    false,
-  );
-  mode.invalidMfa = true;
-  await page.locator("#mfa-enrollment-form [name=totp_code]").fill("111111");
-  await page.locator("#mfa-enrollment-form button").click();
-  await page.waitForFunction(() =>
-    document
-      .querySelector("#mfa-message")
-      .textContent.includes("原验证器保持有效"),
-  );
-  assert.equal(await page.locator("#mfa-secret").count(), 1);
-  mode.invalidMfa = false;
-  mode.reauthRequired = true;
-  await page.locator("#mfa-enrollment-form [name=totp_code]").fill("222222");
-  await page.locator("#mfa-enrollment-form button").click();
-  await page.waitForSelector("#reauth-dialog[open]");
-  await page
-    .locator("#reauth-form [name=password]")
-    .fill("fixture-old-admin-password");
-  await page.locator("#reauth-form [name=totp_code]").fill("123456");
-  await page.locator("#reauth-form button").click();
-  await page.waitForFunction(
-    () => !document.querySelector("#reauth-dialog").open,
-  );
-  assert.equal(await page.locator("#mfa-secret").count(), 1);
-  assert.equal(
-    log.filter((request) => request.path.endsWith("/confirm")).length,
-    2,
-  );
-  await page.locator("#mfa-enrollment-form [name=totp_code]").fill("333333");
-  await page.locator("#mfa-enrollment-form button").click();
-  await page.waitForSelector("[data-once-secret] pre");
-  assert.equal(
-    (await page.locator("[data-once-secret] pre").innerText()).split("\n")
-      .length,
-    10,
-  );
-  assert.equal(await page.locator("#mfa-secret").count(), 0);
-  await page.keyboard.press("Escape");
-  await page.waitForFunction(
-    () => !document.querySelector("[data-once-secret]"),
-  );
-  const writes = log.filter(
-    (request) =>
-      request.path.startsWith("/admin/mfa/enrollment") &&
-      request.method !== "GET",
-  );
-  assert.ok(
-    writes.every(
-      (request) =>
-        request.headers["x-session-context"] === "admin" &&
-        request.headers["x-csrf-token"] === "admin-test-csrf",
-    ),
-  );
-  await context.close();
-});
-await test("管理员换机关闭清密钥、继续登记、明确替换、过期取消", async () => {
-  const { page, context, mode, log } = await setup({
-    dual: true,
-    mobile: true,
-  });
+await test("手机管理员系统设置无二次验证入口", async () => {
+  const { page, context, log } = await setup({ dual: true, mobile: true });
   await page.locator(".mobile-bottom [data-page=account]").click();
   await page.locator("#account-admin-entry").click();
   await page.locator("[data-admin-tab=system]").click();
-  await page
-    .locator("#mfa-start")
-    .evaluate((element) => (element.closest("details").open = true));
-  await page.locator("#mfa-start").click();
-  await page.waitForSelector("#mfa-secret");
-  await page.keyboard.press("Escape");
-  await page.waitForFunction(() => !document.querySelector("#mfa-secret"));
-  await page.locator("[data-mfa-continue]").click();
-  assert.equal(await page.locator("#mfa-secret").count(), 0);
-  assert.match(
-    await page.locator("#dialog-content").innerText(),
-    /密钥只在首次发起时返回/,
-  );
-  mode.expireMfa = true;
-  await page.locator("#dialog-content [data-mfa-replace]").click();
-  await page.locator("#confirm-yes").click();
-  await page.waitForFunction(() =>
-    document.querySelector("#mfa-expiry").textContent.includes("登记已过期"),
-  );
-  assert.equal(await page.locator("#mfa-secret").innerText(), "");
-  assert.equal(
-    await page.locator("#mfa-enrollment-form button").isDisabled(),
-    true,
-  );
-  assert.equal(
-    await page
-      .locator("#content-dialog")
-      .evaluate((element) => element.scrollWidth > element.clientWidth),
-    false,
-  );
-  mode.reauthRequired = true;
-  await page.locator("#dialog-content [data-mfa-cancel]").click();
-  await page.locator("#confirm-yes").click();
-  await page.waitForFunction(
-    () => !document.querySelector("#content-dialog").open,
-  );
-  assert.equal(
-    await page.locator("#reauth-dialog").evaluate((element) => element.open),
-    false,
-  );
-  assert.equal(
-    log.filter((request) => request.path === "/admin/mfa/enrollment").at(-1)
-      .body.replace_existing,
-    true,
-  );
-  assert.ok(
-    log.some(
-      (request) =>
-        request.path.startsWith("/admin/mfa/enrollment/") &&
-        request.method === "DELETE",
-    ),
-  );
+  assert.equal(await page.locator("#mfa-start, #generate-mfa-recovery, #reauth-dialog").count(), 0);
+  assert.equal(log.some((request) => request.path.startsWith("/admin/mfa/") || request.path.endsWith("/reauthenticate")), false);
   await context.close();
 });
 await test("Telegram目录及管理员搜索重置游标、空结果、清空与请求乱序", async () => {

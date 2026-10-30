@@ -14,7 +14,6 @@ import {
   period,
   selection,
 } from "./ui.js";
-import { loadMfaStatus } from "./mfa.js";
 let app;
 let sources = [];
 let settings = {};
@@ -51,7 +50,7 @@ export async function loadAdmin() {
   $("#admin-logout").hidden = !admin;
   $("#admin-identity").innerHTML = admin
     ? `<div class="identity-card"><h2>${esc(admin.user.display_name)} · 管理员</h2><p>${esc(admin.user.email)} · 管理会话独立于普通用户会话</p></div>`
-    : '<div class="identity-card"><h2>管理员独立入口</h2><p>使用管理员账号和密码登录；已启用二次验证时还需输入动态验证码。用户会话不会获得管理权限。</p><button class="primary-button" data-login="admin">管理员登录</button></div>';
+    : '<div class="identity-card"><h2>管理员独立入口</h2><p>使用管理员账号和密码登录。用户会话不会获得管理权限。</p><button class="primary-button" data-login="admin">管理员登录</button></div>';
   if (!admin) return;
   await Promise.allSettled([
     loadStatus(),
@@ -59,7 +58,6 @@ export async function loadAdmin() {
     loadSources(),
     loadAdminPlans(),
     loadDiagnostics(),
-    loadMfaStatus(),
   ]);
 }
 async function loadDiagnostics() {

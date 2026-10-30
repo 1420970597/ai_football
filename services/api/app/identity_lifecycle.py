@@ -1,30 +1,20 @@
-"""近期凭据校验、人工辅助恢复及本人数据生命周期；不提供伪造发送渠道。"""
+"""人工辅助密码恢复及本人数据生命周期；不提供伪造发送渠道。"""
 from __future__ import annotations
 
-import hmac
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import auth, database, orders
-from .security import hash_password, new_token, token_hash, totp_step, verify_password
+from .security import hash_password, new_token, token_hash
 
 router = APIRouter(prefix="/api/v1")
 
 
 class Input(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class Reauthenticate(Input):
-    password: str = Field(min_length=1, max_length=128)
-
-
-class AdminReauthenticate(Reauthenticate):
-    password: str = Field(min_length=6, max_length=128)
-    totp_code: str | None = Field(default=None, pattern=r"^[0-9]{6}$")
 
 
 class IssueRecovery(Input):
@@ -38,76 +28,8 @@ class CompleteRecovery(Input):
     new_password: str = Field(min_length=12, max_length=128)
 
 
-class RecoveryLogin(Input):
-    email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=1, max_length=128)
-    recovery_code: str = Field(min_length=20, max_length=160)
-
-
-class Closure(Reauthenticate):
+class Closure(Input):
     confirmation_phrase: str = Field(max_length=60)
-
-
-async def password_matches(request, identity, password):
-    row = await database.current_pool().fetchrow("SELECT password_hash,disabled_at FROM v2_users WHERE id=$1", identity["id"])
-    ok = await auth._hash_job(request, verify_password, password, row["password_hash"] if row else auth.DUMMY_HASH)
-    if not row or row["disabled_at"] is not None or not ok:
-        raise HTTPException(401, "当前凭据无效")
-    return row["password_hash"]
-
-
-async def finish_reauthentication(
-    request, identity, expected_password, *, step=None, expected_secret=None,
-    verify_totp_configuration: bool = False,
-):
-    now = datetime.now(timezone.utc)
-    async with database.current_pool().acquire() as conn:
-        async with conn.transaction():
-            user = await conn.fetchrow("SELECT password_hash,disabled_at,totp_last_step,totp_secret_ciphertext FROM v2_users WHERE id=$1 FOR UPDATE", identity["id"])
-            if not user or user["disabled_at"] is not None or not hmac.compare_digest(user["password_hash"], expected_password):
-                raise HTTPException(401, "凭据已经变更，请重新登录")
-            if verify_totp_configuration and (user["totp_secret_ciphertext"] or "") != (expected_secret or ""):
-                raise HTTPException(401, "管理员验证器已经变更，请重新验证")
-            if step is not None:
-                if expected_secret is None or not hmac.compare_digest(user["totp_secret_ciphertext"] or "", expected_secret):
-                    raise HTTPException(401, "验证器已经变更，请使用当前验证器重新验证")
-                if user["totp_last_step"] is not None and user["totp_last_step"] >= step:
-                    raise HTTPException(401, "动态验证码无效或已使用")
-                await conn.execute("UPDATE v2_users SET totp_last_step=$2 WHERE id=$1", identity["id"], step)
-            changed = await conn.fetchval("UPDATE v2_sessions SET reauthenticated_at=$2 WHERE token_hash=$1 AND expires_at>now() RETURNING token_hash", identity["_token_hash"], now)
-            if not changed:
-                raise HTTPException(401, "会话已撤销，请重新登录")
-            await auth.audit(conn, identity["id"], identity["role"], "session_reauthenticated", "session", identity["_token_hash"], auth._request_id(request))
-    return {"verified": True, "session_kind": identity["session_kind"], "expires_at": now + timedelta(minutes=5)}
-
-
-@router.post("/auth/reauthenticate")
-async def reauthenticate(body: Reauthenticate, request: Request):
-    user = await auth.require_user(request)
-    await auth._limit(request, "reauthenticate", str(user["id"]), maximum=5)
-    password = await password_matches(request, user, body.password)
-    return await finish_reauthentication(request, user, password)
-
-
-@router.post("/admin/reauthenticate")
-async def admin_reauthenticate(body: AdminReauthenticate, request: Request):
-    admin = await auth.get_identity(request, required=True, session_kind="admin")
-    await auth._limit(request, "admin_reauthenticate", str(admin["id"]), maximum=5)
-    password = await password_matches(request, admin, body.password)
-    encrypted = await database.current_pool().fetchval("SELECT totp_secret_ciphertext FROM v2_users WHERE id=$1", admin["id"])
-    step = None
-    if encrypted:
-        try:
-            secret = request.app.state.decrypt_secret(encrypted)
-        except Exception:
-            raise HTTPException(503, "管理员二次验证配置无法读取") from None
-        step = totp_step(secret, body.totp_code)
-        if step is None:
-            raise HTTPException(401, "动态验证码无效")
-    return await finish_reauthentication(
-        request, admin, password, step=step, expected_secret=encrypted,
-        verify_totp_configuration=True,
-    )
 
 
 @router.get("/auth/recovery/status")
@@ -176,43 +98,7 @@ async def complete_recovery(body: CompleteRecovery, request: Request, response: 
             await auth.audit(conn, row["user_id"], "user", "password_recovered", "user", str(row["user_id"]), auth._request_id(request), {"recovery_id": str(row["id"])})
     for name in (auth.USER_COOKIE, auth.CSRF_COOKIE):
         response.delete_cookie(name, path="/", secure=request.app.state.settings.cookie_secure, samesite="strict")
-    return {"reset": True, "reauthentication_required": True, "auto_betting": False}
-
-
-@router.post("/admin/mfa/recovery-codes")
-async def create_admin_recovery_codes(request: Request):
-    admin = await auth.require_admin(request)
-    await auth._limit(request, "admin_recovery_generate", str(admin["id"]), maximum=3)
-    codes = [new_token() for _ in range(10)]
-    async with database.current_pool().acquire() as conn:
-        async with conn.transaction():
-            await auth.verify_sensitive_admin_session(conn, admin)
-            await conn.execute("UPDATE v2_admin_recovery_codes SET revoked_at=now() WHERE user_id=$1 AND consumed_at IS NULL AND revoked_at IS NULL", admin["id"])
-            await conn.executemany("INSERT INTO v2_admin_recovery_codes(id,user_id,code_hash) VALUES($1,$2,$3)", [(uuid.uuid4(), admin["id"], token_hash(code)) for code in codes])
-            await auth.audit(conn, admin["id"], "admin", "admin_recovery_codes_rotated", "user", str(admin["id"]), auth._request_id(request), {"count": len(codes)})
-    return {"codes": codes, "message": "只显示一次，请离线保管。每个代码仅可使用一次，旧代码已经撤销。"}
-
-
-@router.post("/admin/recovery-login")
-async def admin_recovery_login(body: RecoveryLogin, request: Request, response: Response):
-    email = body.email.strip().lower()
-    await auth._limit(request, "admin_recovery_login", email, maximum=5)
-    row = await database.current_pool().fetchrow("SELECT id,email,display_name,role,password_hash,disabled_at FROM v2_users WHERE email=$1 AND role='admin'", email)
-    ok = await auth._hash_job(request, verify_password, body.password, row["password_hash"] if row else auth.DUMMY_HASH)
-    if not row or row["disabled_at"] is not None or not ok:
-        raise HTTPException(401, "管理员凭据无效")
-    async with database.current_pool().acquire() as conn:
-        async with conn.transaction():
-            current = await conn.fetchrow("SELECT password_hash,disabled_at FROM v2_users WHERE id=$1 FOR UPDATE", row["id"])
-            if current["disabled_at"] is not None or not hmac.compare_digest(current["password_hash"], row["password_hash"]):
-                raise HTTPException(401, "管理员凭据无效")
-            accepted = await conn.fetchval("UPDATE v2_admin_recovery_codes SET consumed_at=now() WHERE user_id=$1 AND code_hash=$2 AND consumed_at IS NULL AND revoked_at IS NULL RETURNING id", row["id"], token_hash(body.recovery_code))
-            if not accepted:
-                raise HTTPException(401, "管理员恢复码无效或已使用")
-            await conn.execute("DELETE FROM v2_sessions WHERE user_id=$1 AND session_kind='admin'", row["id"])
-            session = await auth._create_session(request, response, row, "admin", conn)
-            await auth.audit(conn, row["id"], "admin", "admin_recovery_login", "user", str(row["id"]), auth._request_id(request), {"recovery_code_id": str(accepted)})
-    return {"user": {name: row[name] for name in ("id", "email", "display_name", "role")}, **session}
+    return {"reset": True, "auto_betting": False}
 
 
 def export_cursor(section, value):
@@ -231,7 +117,7 @@ def export_cursor(section, value):
 @router.get("/auth/export")
 async def export_own_data(request: Request, section: str = Query(default="profile", pattern="^(profile|memberships|orders)$"),
                           cursor: str | None = Query(default=None, max_length=140), limit: int = Query(default=100, ge=1, le=200)):
-    user = await auth.require_recent_user(request)
+    user = await auth.require_user(request)
     await auth._limit(request, "data_export", str(user["id"]), maximum=100)
     stamp, identifier = export_cursor(section, cursor)
     pool = database.current_pool()
@@ -275,12 +161,12 @@ async def close_own_account(body: Closure, request: Request, response: Response)
     await auth._limit(request, "account_closure", str(user["id"]), maximum=5)
     if body.confirmation_phrase != "注销我的球讯账户":
         raise HTTPException(422, "请明确确认注销本人平台账户")
-    expected = await password_matches(request, user, body.password)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            current = await conn.fetchrow("SELECT password_hash,disabled_at FROM v2_users WHERE id=$1 FOR UPDATE", user["id"])
-            if not current or current["disabled_at"] is not None or not hmac.compare_digest(current["password_hash"], expected):
-                raise HTTPException(401, "当前凭据已经变更")
+            current = await conn.fetchrow("SELECT id,disabled_at FROM v2_users WHERE id=$1 FOR UPDATE", user["id"])
+            session = await conn.fetchrow("SELECT token_hash FROM v2_sessions WHERE token_hash=$1 AND user_id=$2 AND session_kind='user' AND expires_at>now() FOR UPDATE", user["_token_hash"], user["id"])
+            if not current or current["disabled_at"] is not None or not session:
+                raise HTTPException(401, "会话已经撤销或身份已失效")
             # Match the executor's account -> policy -> order lock order before disabling or erasing credentials.
             await conn.fetchrow("SELECT id FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE", user["id"])
             await conn.execute("INSERT INTO v2_user_bet_settings(user_id,auto_enabled,emergency_stopped) VALUES($1,FALSE,TRUE) ON CONFLICT(user_id) DO UPDATE SET auto_enabled=FALSE,emergency_stopped=TRUE,revision=v2_user_bet_settings.revision+1,consent_account_id=NULL,consent_binding_revision=NULL,updated_at=now()", user["id"])
@@ -307,14 +193,13 @@ async def close_own_account(body: Closure, request: Request, response: Response)
 
 
 @router.post("/auth/closure/cancel")
-async def cancel_closure(body: Reauthenticate, request: Request):
+async def cancel_closure(request: Request):
     user = await auth.require_user(request)
     await auth._limit(request, "cancel_closure", str(user["id"]), maximum=5)
-    expected = await password_matches(request, user, body.password)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            changed = await conn.fetchval("UPDATE v2_users SET closure_requested_at=NULL,updated_at=now() WHERE id=$1 AND password_hash=$2 AND disabled_at IS NULL RETURNING id", user["id"], expected)
+            changed = await conn.fetchval("UPDATE v2_users SET closure_requested_at=NULL,updated_at=now() WHERE id=$1 AND disabled_at IS NULL RETURNING id", user["id"])
             if not changed:
-                raise HTTPException(401, "当前凭据已经变更")
+                raise HTTPException(401, "会话身份已失效")
             await auth.audit(conn, user["id"], "user", "account_closure_cancelled", "user", str(user["id"]), auth._request_id(request), {"auto_betting_remains_disabled": True})
     return {"state": "not_requested", "auto_betting": False}

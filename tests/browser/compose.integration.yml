@@ -13,7 +13,6 @@ x-api-environment: &api-environment
   QUOTE_MAX_AGE_SECONDS: 3600
   BOOTSTRAP_ADMIN_EMAIL: admin@web-integration.invalid
   BOOTSTRAP_ADMIN_PASSWORD: test-only-admin-password-1234
-  BOOTSTRAP_ADMIN_TOTP_SECRET: JBSWY3DPEHPK3PXP
 services:
   pg:
     image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36

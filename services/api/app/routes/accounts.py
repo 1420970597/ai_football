@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from .. import account_jobs as jobs, database, orders, order_evidence
-from ..auth import _limit, audit, require_recent, require_user, verify_sensitive_session
+from ..auth import _limit, audit, require_user, verify_sensitive_session
 from ..membership import has_entitlement
 from ..review_state import authorize
 from ..security import encrypt_secret
@@ -120,7 +120,6 @@ async def get_leyu_account(request: Request):
 @router.put("/leyu")
 async def bind_leyu_account(body: LeyuBindingInput, request: Request):
     user = await require_user(request)
-    require_recent(user)
     await _limit(request,'account_bind',str(user['id']),maximum=6)
     username, label = body.username.strip(), body.account_label.strip()
     if not username or not label or any(char in username for char in "\r\n"):
@@ -189,8 +188,6 @@ async def verify_account(request: Request):
 @router.put("/leyu/auto-betting")
 async def configure_auto_betting(body: AutoBetInput, request: Request):
     user = await require_user(request)
-    if body.enabled:
-        require_recent(user)
     settings = request.app.state.settings
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():

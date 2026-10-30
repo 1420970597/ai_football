@@ -1,6 +1,5 @@
 import { chromium } from "/opt/verification/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 
 if (process.env.BROWSER_EXTENDED_FIXTURE === "true") {
@@ -14,21 +13,6 @@ const results = [];
 const errors = [];
 const roleAccessMatrix = [];
 const leagueDirectoryEvidence = [];
-function otp(secret = "JBSWY3DPEHPK3PXP", stepOffset = 0) {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  let bits = "";
-  for (const char of secret)
-    bits += alphabet.indexOf(char).toString(2).padStart(5, "0");
-  const key = Buffer.from(bits.match(/.{8}/g).map((x) => parseInt(x, 2)));
-  const counter = Buffer.alloc(8);
-  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000) + stepOffset));
-  const digest = crypto.createHmac("sha1", key).update(counter).digest();
-  const offset = digest.at(-1) & 15;
-  return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(
-    6,
-    "0",
-  );
-}
 const browser = await chromium.launch({
   headless: true,
   args: ["--disable-dev-shm-usage"],
@@ -192,7 +176,7 @@ await scenario("游客真实鉴权拒绝与用户注册会话", async () => {
   assert.equal(me.data.membership.code, "free");
   assert.equal((await api("/admin/users", { admin: true })).status, 401);
 });
-await scenario("真实管理员MFA与独立用户会话并存", async () => {
+await scenario("真实管理员仅凭主密码登录且会话保持隔离", async () => {
   await page.locator(".utility-bar [data-page=admin]").click();
   await page.locator("#admin-identity [data-login=admin]").click();
   await page
@@ -201,7 +185,7 @@ await scenario("真实管理员MFA与独立用户会话并存", async () => {
   await page
     .locator("#auth-form [name=password]")
     .fill("test-only-admin-password-1234");
-  await page.locator("#auth-form [name=totp_code]").fill(otp());
+  assert.equal(await page.locator("#auth-form [name=totp_code]").count(), 0);
   await page.locator("#auth-form button").click();
   await page.waitForSelector("#admin-content:not([hidden])");
   assert.equal((await api("/auth/me")).data.user.role, "user");
@@ -209,6 +193,8 @@ await scenario("真实管理员MFA与独立用户会话并存", async () => {
     (await api("/admin/me", { admin: true })).data.user.role,
     "admin",
   );
+  assert.equal((await api("/admin/mfa/status", { admin: true })).status, 404);
+  assert.equal((await api("/admin/reauthenticate", { admin: true, method: "POST", body: {} })).status, 404);
   const noCsrf = await page.request.put(origin + "/api/v1/admin/settings", {
     data: { values: { hermes_analysis_model: "test" } },
     headers: { "X-Session-Context": "admin" },
@@ -477,100 +463,8 @@ await scenario(
       (await api("/accounts/leyu")).data.betting.auto_enabled,
       false,
     );
-    await page.locator(".utility-bar [data-page=admin]").click();
-    await page.locator("[data-admin-tab=system]").click();
-    await page
-      .locator("#generate-mfa-recovery")
-      .evaluate((el) => (el.closest("details").open = true));
-    await page.locator("#generate-mfa-recovery").click();
-    await page.locator("#confirm-yes").click();
-    await page.waitForSelector("[data-once-secret] pre");
-    assert.equal(
-      (await page.locator("[data-once-secret] pre").innerText()).split("\n")
-        .length,
-      10,
-    );
-    await page.keyboard.press("Escape");
-    await page.waitForFunction(
-      () => !document.querySelector("[data-once-secret]"),
-    );
   },
 );
-await scenario("真实管理员换机、错误验证码保留旧因子、恢复码登录", async () => {
-  await page.locator("#mfa-start").click();
-  await page.waitForSelector("#mfa-secret");
-  const secret = await page.locator("#mfa-secret").innerText();
-  assert.ok(secret.length >= 16);
-  assert.notEqual(secret, "JBSWY3DPEHPK3PXP");
-  assert.equal(await page.locator("#mfa-qr svg").count(), 1);
-  const pending = await api("/admin/mfa/status", { admin: true });
-  assert.equal(pending.status, 200);
-  assert.ok(pending.data.pending.enrollment_id);
-  assert.equal("secret" in pending.data, false);
-  const validCodes = new Set([-1, 0, 1].map((offset) => otp(secret, offset)));
-  let bad = 0;
-  while (validCodes.has(String(bad).padStart(6, "0"))) bad++;
-  await page
-    .locator("#mfa-enrollment-form [name=totp_code]")
-    .fill(String(bad).padStart(6, "0"));
-  await page.locator("#mfa-enrollment-form button").click();
-  await page.waitForFunction(() =>
-    document
-      .querySelector("#mfa-message")
-      .textContent.includes("原验证器保持有效"),
-  );
-  assert.equal(await page.locator("#mfa-secret").innerText(), secret);
-  assert.ok((await api("/admin/mfa/status", { admin: true })).data.pending);
-  const confirmationCode = otp(secret);
-  await page
-    .locator("#mfa-enrollment-form [name=totp_code]")
-    .fill(confirmationCode);
-  await page.locator("#mfa-enrollment-form button").click();
-  await page.waitForSelector("[data-once-secret] pre");
-  const recoveryCodes = (
-    await page.locator("[data-once-secret] pre").innerText()
-  ).split("\n");
-  assert.equal(recoveryCodes.length, 10);
-  assert.equal(await page.locator("#mfa-secret").count(), 0);
-  await page.keyboard.press("Escape");
-  await page.waitForFunction(
-    () => !document.querySelector("[data-once-secret]"),
-  );
-  const changed = await api("/admin/mfa/status", { admin: true });
-  assert.equal(changed.data.pending, null);
-  assert.equal(changed.data.recovery_codes_remaining, 10);
-  assert.equal((await api("/auth/me")).status, 200);
-  await page.locator("#admin-logout").click();
-  await page.waitForSelector("#admin-content[hidden]", { state: "attached" });
-  const replay = await api("/admin/login", {
-    admin: true,
-    method: "POST",
-    body: {
-      email: "admin@web-integration.invalid",
-      password: "test-only-admin-password-1234",
-      totp_code: confirmationCode,
-    },
-  });
-  assert.equal(replay.status, 401);
-  await page.locator("#admin-identity [data-login=admin]").click();
-  await page.locator("[data-use-admin-recovery]").click();
-  await page
-    .locator("#auth-form [name=email]")
-    .fill("admin@web-integration.invalid");
-  await page
-    .locator("#auth-form [name=password]")
-    .fill("test-only-admin-password-1234");
-  await page.locator("#auth-form [name=recovery_code]").fill(recoveryCodes[0]);
-  await page.locator("#auth-form button").click();
-  await page.waitForSelector("#admin-content:not([hidden])");
-  assert.equal((await api("/admin/me", { admin: true })).status, 200);
-  assert.equal((await api("/auth/me")).status, 200);
-  assert.equal(
-    (await api("/admin/mfa/status", { admin: true })).data
-      .recovery_codes_remaining,
-    9,
-  );
-});
 // Separate real browser contexts keep every role's cookies and personal data apart.
 for (const role of [
   { key: "guest", name: "游客" },
@@ -755,9 +649,6 @@ await scenario("真实无未结算记录注销撤销本人会话", async () => {
         .querySelector("#closure-status")
         .textContent.includes("读取注销状态后"),
   );
-  await page
-    .locator("#closure-form [name=password]")
-    .fill("updated-test-user-password-1234");
   await page
     .locator("#closure-form [name=confirmation_phrase]")
     .fill("注销我的球讯账户");

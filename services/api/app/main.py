@@ -10,7 +10,7 @@ import asyncpg
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from . import admin_mfa, auth, database, identity_lifecycle
+from . import auth, database, identity_lifecycle
 from .config import load_settings
 from .health import HermesProbe, MCPProbe, StorageProbe
 from .routes import accounts, admin, admin_reviews, expert_content, internal, operations, public, renewal, result_checks, results, reviews, telegram
@@ -172,7 +172,6 @@ async def readyz():
 
 app.include_router(auth.router)
 app.include_router(identity_lifecycle.router)
-app.include_router(admin_mfa.router)
 app.include_router(public.router)
 app.include_router(admin.router)
 app.include_router(operations.router)

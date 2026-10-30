@@ -25,7 +25,6 @@ import {
 } from "./ui.js";
 import { initAdmin, loadAdmin } from "./admin.js";
 import { initIdentity } from "./identity.js";
-import { initMfa } from "./mfa.js";
 const initial = new URLSearchParams(location.hash.split("?")[1] || "");
 const state = {
   page: "scores",
@@ -1097,7 +1096,7 @@ async function loadOrders(append = false) {
   }
 }
 function auth(tab = "login") {
-  const isAdmin = tab === "admin" || tab === "admin-recovery";
+  const isAdmin = tab === "admin";
   state.authTab = tab;
   $$("[data-auth-tab]").forEach((b) => {
     b.classList.toggle(
@@ -1113,13 +1112,8 @@ function auth(tab = "login") {
       : "用户登录";
   $("#display-name-field").hidden = tab !== "register";
   $("#display-name-field input").required = tab === "register";
-  $("#totp-field").hidden = tab !== "admin";
-  $("#totp-field input").required = false;
-  $("#admin-recovery-field").hidden = tab !== "admin-recovery";
-  $("#admin-recovery-field input").required = tab === "admin-recovery";
-  $("#admin-recovery-toggle").hidden = !isAdmin;
-  $("#auth-identity-label span").textContent = tab === "admin" || tab === "admin-recovery" ? "管理员账号" : "邮箱";
-  $("#auth-form").elements.email.type = tab === "admin" || tab === "admin-recovery" ? "text" : "email";
+  $("#auth-identity-label span").textContent = isAdmin ? "管理员账号" : "邮箱";
+  $("#auth-form").elements.email.type = isAdmin ? "text" : "email";
   $("#auth-form").elements.password.minLength = tab === "register" ? 12 : tab === "admin" ? 6 : 1;
   $("#auth-form button").textContent = tab === "register" ? "注册" : "登录";
   $("#auth-message").textContent = "";
@@ -1330,18 +1324,13 @@ function events() {
       const fields = Object.fromEntries(new FormData(form));
       const body = { email: fields.email, password: fields.password };
       if (state.authTab === "register") body.display_name = fields.display_name;
-      if (state.authTab === "admin" && fields.totp_code) body.totp_code = fields.totp_code;
-      if (state.authTab === "admin-recovery")
-        body.recovery_code = fields.recovery_code;
       try {
         await api(
-          state.authTab === "admin-recovery"
-            ? "/admin/recovery-login"
-            : state.authTab === "admin"
-              ? "/admin/login"
-              : state.authTab === "register"
-                ? "/auth/register"
-                : "/auth/login",
+          state.authTab === "admin"
+            ? "/admin/login"
+            : state.authTab === "register"
+              ? "/auth/register"
+              : "/auth/login",
           {
             method: "POST",
             body,
@@ -1362,8 +1351,6 @@ function events() {
       } catch (error) {
         $("#auth-message").textContent = error.message;
         form.elements.password.value = "";
-        form.elements.totp_code.value = "";
-        form.elements.recovery_code.value = "";
       }
     });
   };
@@ -1550,7 +1537,6 @@ $("#content-dialog").addEventListener("close", () => {
 });
 initAdmin({ state, loadIdentities, auth, route, openMessage, loadPlans });
 initIdentity({ state, dialog, auth, loadAccount });
-initMfa({ state, dialog });
 events();
 renderDates();
 loadIdentities().then(() => {

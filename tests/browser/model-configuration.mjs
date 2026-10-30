@@ -56,7 +56,6 @@ try {
         {id:'disabled-author',nickname:'已移除作者',sender_id:'disabled-1',enabled:false}]};
       else if(name==='/status') value={database:'healthy',hermes:'unconfigured',telegram_sources:0,review_queue:0};
       else if(name==='/diagnostics') value={database:'healthy',schema:'verified',tasks:[],storage:'unconfigured'};
-      else if(name==='/mfa/status') value={configuration_state:'missing',pending:null,recovery_codes_remaining:0};
       await route.fulfill({json:value});
     });
     await page.goto('http://127.0.0.1:8080');
