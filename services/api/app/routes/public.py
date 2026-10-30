@@ -171,9 +171,11 @@ async def match_detail(fixture_id: str, request: Request):
         raise HTTPException(status_code=404, detail="比赛不存在")
     market_page = await _match_markets(fixture_id, request, fixture['phase'])
     signal_rows = await database.current_pool().fetch(
-        "SELECT s.id,s.expert_id,e.display_nickname,s.phase,s.market_id,s.market_name,s.line,s.selection,"
+        "SELECT s.id,s.expert_id,e.display_nickname,s.phase,f.phase AS fixture_phase,f.match_state,"
+        "s.market_id,s.market_name,s.line,s.selection,"
         "s.recommendation_price,s.quote_time,s.outcome,s.unit_net,s.created_at "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
+        "JOIN v2_fixtures f ON f.id=s.fixture_id "
         "WHERE s.fixture_id=$1 ORDER BY s.created_at DESC LIMIT 100", fixture_id,
     )
     now = datetime.now(timezone.utc)
@@ -207,7 +209,7 @@ async def signals(request: Request, cursor: str | None = None, page_size: int = 
     args.append(page_size + 1)
     rows = await database.current_pool().fetch(
         "SELECT s.id,s.message_id,s.expert_id,e.display_nickname,s.fixture_id,f.sport,f.competition_name,f.home_team,f.away_team,"
-        "f.kickoff_at,s.phase,s.market_id,s.market_name,s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time,"
+        "f.kickoff_at,f.phase AS fixture_phase,f.match_state,s.phase,s.market_id,s.market_name,s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time,"
         "s.score_baseline,s.score_basis,s.withdrawn_at,s.withdrawal_reason,s.settlement_reason,s.effective_stake,"
         "(SELECT ev.evidence->>'quote_id' FROM v2_quote_evidence ev WHERE ev.reference_id=s.id AND ev.evidence_kind='expert_signal' ORDER BY ev.captured_at LIMIT 1) AS quote_id,"
         "s.confidence,s.outcome,s.unit_net,s.created_at,m.raw_text "
@@ -233,8 +235,9 @@ async def signal_detail(signal_id: str, request: Request):
     except ValueError:
         raise message_read.private_error(404, "记录不存在") from None
     row = await database.current_pool().fetchrow(
-        "SELECT s.*,e.display_nickname,m.raw_text,m.media_objects,m.revision AS message_revision,m.posted_at,m.source_id,j.id AS job_id,j.state AS job_state "
+        "SELECT s.*,f.phase AS fixture_phase,f.match_state,e.display_nickname,m.raw_text,m.media_objects,m.revision AS message_revision,m.posted_at,m.source_id,j.id AS job_id,j.state AS job_state "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
+        "JOIN v2_fixtures f ON f.id=s.fixture_id "
         "JOIN v2_expert_messages m ON m.id=s.message_id LEFT JOIN LATERAL(SELECT id,state FROM v2_analysis_jobs "
         "WHERE message_id=m.id ORDER BY created_at DESC,id DESC LIMIT 1) j ON TRUE "
         "WHERE s.id=$1", parsed,

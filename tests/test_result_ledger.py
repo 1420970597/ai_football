@@ -80,6 +80,36 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(['half_loss','win'], [r['outcome'] for r in await self.pool.fetch('SELECT outcome FROM v2_signal_settlements ORDER BY result_version')])
         self.assertEqual(409, (await self.submit(self.result())).status_code)
 
+    async def test_settled_signal_exposes_current_fixture_phase_separately(self):
+        signal = await self.signal(phase='scheduled')
+        response = await self.submit(self.result(home=3))
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual('win', await self.pool.fetchval('SELECT outcome FROM v2_expert_signals WHERE id=$1', signal))
+        self.assertEqual(('finished', 'finished'), tuple(await self.pool.fetchrow(
+            'SELECT phase,match_state FROM v2_fixtures WHERE id=$1', 'fixture')))
+
+        listing = await self.client.get('/api/v1/public/signals')
+        self.assertEqual(200, listing.status_code, listing.text)
+        listed = next(item for item in listing.json()['items'] if item['id'] == str(signal))
+        self.assertEqual('finished', listed['fixture_phase'])
+        self.assertEqual('finished', listed['match_state'])
+        self.assertEqual('scheduled', listed['phase'])
+        self.assertEqual('win', listed['outcome'])
+
+        match = await self.client.get('/api/v1/public/matches/fixture')
+        self.assertEqual(200, match.status_code, match.text)
+        matched = next(item for item in match.json()['expert_signals'] if item['id'] == str(signal))
+        self.assertEqual(('finished', 'scheduled', 'win'),
+                         (matched['fixture_phase'], matched['phase'], matched['outcome']))
+
+        actor = {'id': str(self.expert), 'role': 'admin'}
+        with patch.object(expert_content, 'require_history', AsyncMock(return_value=actor)):
+            message = await self.client.get(f'/api/v1/public/messages/{self.message}/signals')
+        self.assertEqual(200, message.status_code, message.text)
+        messaged = next(item for item in message.json()['items'] if item['id'] == str(signal))
+        self.assertEqual(('finished', 'scheduled', 'win'),
+                         (messaged['fixture_phase'], messaged['phase'], messaged['outcome']))
+
     async def test_message_detail_exposes_quote_id_from_evidence_without_requiring_current_quote(self):
         signal = await self.signal(evidence=False)
         quote_id = str(uuid.uuid4())

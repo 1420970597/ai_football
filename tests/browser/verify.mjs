@@ -93,6 +93,8 @@ const signal = {
   competition_name: "英格兰超级联赛",
   kickoff_at: "2026-10-26T11:00:00Z",
   phase: "live",
+  fixture_phase: "finished",
+  match_state: "finished",
   market_name: "亚洲让球",
   period: "full_time",
   line: "-0.25",
@@ -101,8 +103,8 @@ const signal = {
   quote_id: "q-system-1",
   quote_time: "2026-10-26T11:10:00Z",
   created_at: "2026-10-26T11:11:00Z",
-  outcome: "pending",
-  unit_net: null,
+  outcome: "win",
+  unit_net: 0.96,
 };
 const message = {
   id: mid,
@@ -882,6 +884,11 @@ await test("完整原文、两条系统买入、工具证据与图片", async ()
   const { page, context } = await setup({ dual: true });
   await page.locator('.main-nav [data-page="experts"]').click();
   await page.locator('[data-expert-tab="signals"]').click();
+  await page.waitForSelector("#signals-list .signal-card");
+  const settledSignal = await page.locator("#signals-list .signal-card").first().innerText();
+  assert.match(settledSignal, /比赛：完场/);
+  assert.match(settledSignal, /推荐：滚球/);
+  assert.match(settledSignal, /全赢/);
   await page.locator("#signals-list [data-message]").click();
   await page.waitForSelector(".media-gallery img");
   assert.equal(await page.locator("#dialog-content .signal-card").count(), 2);

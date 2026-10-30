@@ -154,7 +154,7 @@ async def latest_model_result(pool, message_id):
 async def signal_page(pool, request, actor, message_id, *, context='user', limit=30, cursor=None):
     decoded = _decode(request, actor, message_id, context, 'signals', limit, cursor)
     rows = await pool.fetch(
-        "SELECT s.*,f.competition_name,f.home_team,f.away_team,f.kickoff_at,"
+        "SELECT s.*,f.competition_name,f.home_team,f.away_team,f.kickoff_at,f.phase AS fixture_phase,f.match_state,"
         "(SELECT ev.evidence->>'quote_id' FROM v2_quote_evidence ev WHERE ev.reference_id=s.id "
         "AND ev.evidence_kind='expert_signal' ORDER BY ev.captured_at LIMIT 1) AS quote_id "
         "FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id WHERE s.message_id=$1 "

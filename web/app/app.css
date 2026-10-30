@@ -769,6 +769,18 @@ h3 {
   background: #fff0ed;
   color: var(--red);
 }
+.badge.finished {
+  background: #e9f5ee;
+  color: var(--green);
+}
+.badge.cancelled {
+  background: #fff0ed;
+  color: var(--red);
+}
+.badge.recommendation-phase {
+  background: #eef3f8;
+  color: #3c5c78;
+}
 .badge.win,
 .badge.half_win {
   background: #fce8e6;

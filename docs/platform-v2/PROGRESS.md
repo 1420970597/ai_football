@@ -681,3 +681,12 @@ git diff --check
 - 部署后浏览器验收（17:18 UTC）：`sh tests/browser/integration-check.sh`退出0，基于本提交冻结副本和临时PostgreSQL完成第一轮17组真实API浏览器场景、第二轮8组账户与管理点击场景；均无浏览器JS错误，合成执行器交易调用0。证据`.runtime/web-integration-4119797/integration-results.json`及`integration-account-results.json`。隔离测试未启动Telegram或对象存储，因此Telegram管理员枚举与受保护媒体端点返回503；这是隔离依赖缺失，不能作其真实上游联调通过证据。此前E112的Docker Chromium真实运行页1440/390点击仍是既有线上交互证据；本次仅改API/worker和Hermes配置，没有改Web源代码。
 - 启动诊断边界：Hermes健康且固定框架验收实际读取项目只读审核技能；启动前config-migrate日志仍提示动态注册的`expert-skills`未在静态配置校验注册表中，并因配置采用只读bind mount而不能写入迁移结果。MCP别名连接、框架工具白名单和技能读取均另有通过证据，该日志不能据此解释为MCP未加载；配置迁移提示仍待独立处理。镜像运行时缺少`rg`导致一次只读环境名探针退出127；另一次Python临时查询语句语法错误退出1，均未连接数据库或改变服务状态。改用Docker内Python只读查询成功，队列复核退出0。
 - 收尾状态与剩余证据：性能研究与可安全实施的优化已完成并部署到本机开发候选；全量Docker测试1014项、Hermes并发框架验收、部署后浏览器回归均通过，源代码/进度提交均已推送。暂不调高worker并发或突破Telegram/媒体、乐鱼盘口刷新节流。当前真实审核队列为空，切换后可用实时样本不足100条，故还不能量化线上并行收益、模型新增输入token成本或重新估算P95；下一阶段需在至少100条自然到达的实时尝试上按同口径复测。Hermes网关当前P95为18.38秒，完整端到端3秒目标仍不可承诺；要继续压低需有更快且实测视觉能力的模型/提供方或明确分阶段状态语义，不能靠跳过工具核验实现。
+
+## E115 已结算专家推荐的当前比赛状态显示（2026-10-30）
+
+- 目标/责任：修正已结算决策卡仍显示推荐发布阶段而非比赛当前状态；范围为公开专家决策列表、比赛详情、消息推荐分页/详情 API 和共用推荐卡片。保留 `s.phase` 作为推荐时阶段，不改结算账本、投注阶段或赛果事实。
+- 根因证据：旧 `signalCard` 将 `v2_expert_signals.phase` 映射成“滚球/未开赛”状态标签；该值是推荐发生时阶段，不随赛果变化。公开决策及消息推荐接口也只返回该阶段，未提供关联 `v2_fixtures.phase`。Docker只读生产查询显示10条带最新确认赛果的决策都已有 `fixture.phase='finished'`，因此本次呈现异常不是当前数据库的结算状态遗漏。早期探针将 `v2_fixture_results.fixture_id` 与 `v2_fixtures` 用 `USING(fixture_id)` 连接而退出1；按真实主键 `f.id=r.fixture_id` 修正后查询成功。另一个探针的SQL字符串错误退出1，未产生写入。
+- 实现：决策列表、比赛详情推荐、消息推荐分页及决策详情均增加独立 `fixture_phase`/`match_state` 字段。卡片分别展示“比赛：完场”和“推荐：滚球/未开赛”，结算状态与单位收益仍使用 `outcome`/`unit_net`。
+- 定向行为验收：新增PostgreSQL/API测试先提交确认赛果并真实结算一条赛前推荐，再检查公开列表、比赛详情和消息分页都同时返回 `fixture_phase=finished`、`phase=scheduled`、`outcome=win`。首轮测试误将推荐阶段设为滚球；系统按既有未知滚球计分规则正确保持pending，断言错误，修正为有效赛前推荐后原测试退出0。
+- 冻结验证：`sh tests/browser/check.sh` 退出0，31/31浏览器行为检查通过、0浏览器错误；新增真实浏览器点击断言同时检查“比赛：完场 / 推荐：滚球 / 全赢”。`sh tests/browser/integration-check.sh` 退出0，临时PostgreSQL及真实API浏览器回归17+8组全部通过，模拟交易调用0，证据`.runtime/web-integration-788026`。`sh infra/test/run.sh` 退出0，1015项、0失败/错误/跳过，运行417.549秒（机器记录419.656秒，含加载），恢复46表与1媒体对象前后差异为空，证据`.runtime/test-evidence/795710`。`git diff --check`退出0。
+- 当前状态/后续：实现及隔离验收通过，尚待本地开发候选构建部署与现有已结算决策真实浏览器只读点击验收；不写入或重算生产推荐/赛果。
