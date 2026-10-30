@@ -1,12 +1,12 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-30 05:14 UTC。当前阶段：本人乐鱼账号绑定门禁已修复，平台二次验证入口和流程已移除；Docker 后端、浏览器 Mock、桌面/手机可访问性及真实 API 浏览器回归均通过；实现已推送，正在准备 E116 候选部署，系统仍为开发候选。
+更新时间：2026-10-30 05:23 UTC。当前阶段：本人乐鱼账号绑定门禁已修复，平台二次验证入口和流程已移除；Docker 后端、浏览器 Mock、真实 API 回归及部署后桌面/手机真实点击均通过；E116 已部署到本机 Docker 开发候选并健康运行，系统仍非正式生产发布。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
 ## 当前范围与状态
 
-### E116 — 本人乐鱼账号校验门禁与二次身份验证移除（2026-10-30，隔离验证通过/运行部署待执行）
+### E116 — 本人乐鱼账号校验门禁与二次身份验证移除（2026-10-30，开发候选运行验证通过）
 
 - 目标：让已登录用户可以配置、重绑并排队校验本人乐鱼账号；按用户要求移除全站 MFA、管理员备用码登录及会话内二次身份验证。常规密码登录、角色分离、会话有效期、CSRF、对象归属、限流与审计继续执行。
 - 责任目录：`services/api/`、`web/app/`、`tests/`、`docs/`。前置依赖：现有乐鱼 App 登录签名/发现配置及本人账户异步校验任务；不触发真实下注。
@@ -27,7 +27,11 @@
 - 当前部署基线：API/Web 均为 `e115-07e11a7`，端口3003；Docker 容器标签记录的 Compose 文件链、运行配置 `.runtime/runtime.env` 与 `.runtime/remote/local.env` 已确认。当前 `/healthz`、`/readyz` 均200。默认基础 Compose 指向 GHCR 基线，与本地候选栈不同；曾发生缺必需 `REMOTE_TUNNEL_IMAGE` 的无写入渲染失败（退出1）。复用精确文件链与 env 的 `docker compose ... config --quiet` 通过（退出0），镜像覆盖解析仍是当前 e115 基线。后续部署沿用该完整文件链及同一 env 文件。
 - 最终差异审计：`git diff --check` 退出0；活跃 API/Web/Compose 配置中 TOTP/MFA/再验证代码检索无匹配（rg退出1）；变更敏感模式扫描0匹配（退出0）。保留已部署 Telegram QR 依赖 `qrcode.js`；Telegram 官方登录的二步密码与平台身份 MFA 分离。
 - 实现提交：`d1961418853b3d6ebed7c428acaa1e96b22a0607`，`git commit`、`git push origin fix/TASK-78-hermes-telegram-sync` 与 `git ls-remote origin refs/heads/fix/TASK-78-hermes-telegram-sync` 均退出0，远端引用与本地提交一致。
-- 下一步：以该提交构建新 E116 API/Web 候选镜像，仅更新 API/Web；核验 health/readiness、页面和退役路由，再提交推送部署证据。
+- 进度提交：`5206063fd1ce20297e5fac00f9f07b7a4b57e136` 已提交并推送，远端分支引用与本地一致；本段运行证据随后单独提交。
+- 候选镜像：按现有项目 Compose 文件链构建 API `ai-football-api:2.0.0-dev-e116-5206063`（ID `sha256:6efcbb515fc850d362019bd720905a20aa988bbd3024c492f41bb3f258959e00`）和 Web `ai-football-web:2.0.0-dev-e116-5206063`（ID `sha256:5441fa997d7e82b05ac87d167092a12e646fd5dea2f56683b87c367b7ccd9b0b`）；Docker 构建及 `up -d --no-deps --wait --wait-timeout 120 api web` 均退出0。只重建 API/Web，既有数据库、采集、执行器、Hermes、MCP、隧道与远端数据未改。此前 E114 候选镜像 ID 与 storage-tunnel 容器 ID 复核未变。
+- 部署后服务核验：API/Web 均显示 healthy；API `/healthz`、`/readyz` 均200。退役路由 `/api/v1/admin/mfa/status`、`/api/v1/admin/reauthenticate`、`/api/v1/auth/reauthenticate` 均404。使用匿名浏览器访问会话状态端点返回401符合未登录行为。
+- 部署后真实浏览器：在连接项目内部网络的 Docker Playwright/Chromium 中打开 `http://web`，实际载入50场赛事；桌面视口点击“管理入口”进入独立管理页，点击“管理员登录”并切换“用户登录”，两种表单均只有账号/邮箱与主密码，没有验证码、MFA或重新验证步骤。桌面截图 `.runtime/e116-account-auth-20261030/.playwright-cli/page-2026-10-30T05-22-51-949Z.png`；页面快照及控制台记录位于同目录。容器切换至390×844后确认 `innerWidth=390`、文档与body宽度均390，无横向溢出。控制台记录仅有匿名 `/auth/me` 与 `/admin/me` 的预期401；没有凭据输入或真实登录。Playwright 会话关闭成功；普通 `docker rm` 首次因浏览器容器仍运行退出1，随后对本次专用容器执行 `docker rm -f ai-football-e116-playwright` 退出0，临时容器已清理。
+- 当前完成状态：E116 的隔离测试、真实 API 流程和本机开发候选部署后真实浏览器验证均通过。旧注册账号文件不是乐鱼账号列表，因此未将其凭据发送到乐鱼；真实乐鱼登录未执行，也没有真实投注。未声称远端生产发布或正式版本。
 
 - 机械模板清单作废。节点数量由功能决定，研究、设计、实现及失败验收分别编写，不以数量代表质量。
 - 根目录中文约束补齐目录职责、配置和密钥复用、Docker、权限、协议、工具、结算、订单、证据、Git 及发布要求。
