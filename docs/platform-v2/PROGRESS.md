@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-30 05:13 UTC。当前阶段：本人乐鱼账号绑定门禁已修复，平台二次验证入口和流程已移除；Docker 后端、浏览器 Mock、桌面/手机可访问性及真实 API 浏览器回归均通过，正在准备 E116 候选部署，系统仍为开发候选。
+更新时间：2026-10-30 05:14 UTC。当前阶段：本人乐鱼账号绑定门禁已修复，平台二次验证入口和流程已移除；Docker 后端、浏览器 Mock、桌面/手机可访问性及真实 API 浏览器回归均通过；实现已推送，正在准备 E116 候选部署，系统仍为开发候选。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
@@ -26,7 +26,8 @@
 - 修复后真实 API 浏览器：`sh tests/browser/integration-check.sh` 退出0；第一轮真实 API+临时PG基础与五身份/角色矩阵全部通过，第二轮全部本人账户、管理员会员授权、账户健康核验、过期历史重验时间下配置成功、紧急停止与合成成交单回执场景通过。证据 `.runtime/web-integration-1219524/`；账户 HTTP 由明确标注 `synthetic_no_provider` 的替身处理，未访问乐鱼或发送订单。
 - 当前部署基线：API/Web 均为 `e115-07e11a7`，端口3003；Docker 容器标签记录的 Compose 文件链、运行配置 `.runtime/runtime.env` 与 `.runtime/remote/local.env` 已确认。当前 `/healthz`、`/readyz` 均200。默认基础 Compose 指向 GHCR 基线，与本地候选栈不同；曾发生缺必需 `REMOTE_TUNNEL_IMAGE` 的无写入渲染失败（退出1）。复用精确文件链与 env 的 `docker compose ... config --quiet` 通过（退出0），镜像覆盖解析仍是当前 e115 基线。后续部署沿用该完整文件链及同一 env 文件。
 - 最终差异审计：`git diff --check` 退出0；活跃 API/Web/Compose 配置中 TOTP/MFA/再验证代码检索无匹配（rg退出1）；变更敏感模式扫描0匹配（退出0）。保留已部署 Telegram QR 依赖 `qrcode.js`；Telegram 官方登录的二步密码与平台身份 MFA 分离。
-- 下一步：提交并推送已冻结实现与历史文档标注，取得提交短号后构建 E116 API/Web 候选镜像；仅更新 API/Web，核验 health/readiness、页面和退役路由。
+- 实现提交：`d1961418853b3d6ebed7c428acaa1e96b22a0607`，`git commit`、`git push origin fix/TASK-78-hermes-telegram-sync` 与 `git ls-remote origin refs/heads/fix/TASK-78-hermes-telegram-sync` 均退出0，远端引用与本地提交一致。
+- 下一步：以该提交构建新 E116 API/Web 候选镜像，仅更新 API/Web；核验 health/readiness、页面和退役路由，再提交推送部署证据。
 
 - 机械模板清单作废。节点数量由功能决定，研究、设计、实现及失败验收分别编写，不以数量代表质量。
 - 根目录中文约束补齐目录职责、配置和密钥复用、Docker、权限、协议、工具、结算、订单、证据、Git 及发布要求。
