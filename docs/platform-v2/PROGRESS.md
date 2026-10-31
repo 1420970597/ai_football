@@ -6,6 +6,10 @@
 
 本轮阶段更新：2026-10-31 20:16 UTC。只读租约探针确认6个source lease均已自然到期（active=0），退出0。对20:11–20:16新增数据按`posted_at`复核：近期入库但历史发布时间的媒体状态为pending=21、ready=39、unsupported=5；54条最近建立的unresolved任务及其`telegram_auto_review_suppressed`轨迹均标记`historical_backlog_auto_suppressed_by_operator`，发布时间均早于24小时窗口，属于历史回放抑制，并非实时消息漏审。近30分钟可信当前事件查询为0条`posted_at`落在近30分钟，尚无真实新专家推荐意图可验；旧collector没有继续运行。E133待启动，启动后检查来源健康、历史ACK推进、原文和模型审核回执，再判定新观察窗起点。
 
+本轮最新阶段更新：2026-10-31 20:29 UTC。E133已于20:17:50在远端启动，revision、镜像ID与冻结源码一致；API健康/就绪200，bridge/executor未重启。8分钟运行日志出现event_commit超时7次、acknowledgement超时2次、claim超时2次；15分钟只观察到3次applied/2次ACK，近时due约627、历史due约12,694，ACK总量仅从已有存量缓慢增加。来源状态4/6检查点近2分钟刷新、6/6无last_error、3群目录ready、3群为member_enumeration_restricted；没有近30分钟真实新发言。确认提交阶段不含媒体上传（仅持久化媒体清单），真正时间预算错配为collector整批10秒截止短于HTTP API 25秒读取截止且无法等候事务响应。E134修订将批次deadline限定为24秒，仍低于30秒claim租约和25秒API读取截止；Docker新增三条各等待4秒的事件提交回归。首次定向测试因PYTHONPATH指向包目录退出1，修正为`/workspace/services`后重跑11项、12.249秒退出0。首次只读聚合脚本对单行记录错误使用`dict(fetchrow)`退出1，修正为`dict(row)`后退出0；不涉及数据写入。E134全套验证与重新部署前，E133仍在运行但没有有效观察窗。
+
+本轮阶段更新：2026-10-31 20:30 UTC。E134代码提交`7e426146bec21da4ca067f35eaa5c1f4a92c3dd6`已推送，冻结树`.runtime/e134-verification`干净且固定于该SHA；`sh infra/test/run.sh`已在Docker中启动，退出结果待记录，期间不修改冻结源码。
+
 本轮更新：2026-10-31 18:10 UTC。E129 API候选由冻结提交`2b5fcf2`的detached验证树构建，BuildKit镜像固定digest、容器CPU quota=50000/100000、memory=memory-swap=402653184 bytes。`ai-football-api:2.0.0-dev-e129-2b5fcf2`构建退出0，Image ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`，revision与源码SHA核验通过；临时builder已删除。队列门禁复核为queued=1/running=2、年龄小于26秒，尚未部署，继续等待归零。
 
 本轮更新：2026-10-31 18:04 UTC。E129冻结全套第二次运行通过：提交`2b5fcf2`、1021项、失败/错误/跳过0、426.866秒退出0，证据`.runtime/test-evidence/1263040`，冻结源码报告`committed_source_verified=true`。E128实际观察到17:58 UTC，严格只读审查25条当前受信消息；20条有完整Hermes/system receipt，5条无job由3条媒体pending/failed和2条unsupported构成。两条failed事件写回错误均为TimeoutError（含1条86字符正文+图片、1条图片），1条旧pending未完成；窗口不通过。E129 API候选尚未部署。
@@ -18,7 +22,7 @@
 
 ## 当前范围与状态
 
-### E133 — Telegram实时对账小批次与超时阶段诊断（2026-10-31 20:11 UTC，冻结全套通过，候选已导入，准备切换）
+### E133 — Telegram实时对账小批次与超时阶段诊断（2026-10-31 20:29 UTC，已部署但批次截止仍不满足运行负载）
 
 - 目标/责任：使近期和历史Telegram专家事件能在10秒对账预算、30秒claim租约内完成逐条核查与ACK；责任目录`services/collector/telegram.py`及采集器回归测试。依赖E132 API近时/历史优先claim已部署，但10条批次实测无法完成。
 - 当前证据：E132 API启动于19:46:02；生产只读曾观察单轮领取近时24/历史6，随后近时26及历史41条unacknowledged due事件，之前30个claim全部到期且没有ACK。collector反复记录`deadline pending=10`。Telegram账号授权连接为true，来源仍4/6 deferred。
@@ -30,6 +34,16 @@
 - 定向复验通过（19:54 UTC）：具名隔离Docker命令`python -m unittest test_telegram_source_scheduling test_telegram_media_scheduling test_telegram_reconciliation_claims -v`51项、0失败/错误/跳过、16.771秒、退出0；覆盖小批次完整轮转、阶段脱敏日志、租约/事件/媒体恢复。
 - 冻结全套验证通过（20:06 UTC）：干净detached worktree `.runtime/e133-verification`固定于已推送提交`2d2ae4fd2a3ee012bd2cc108c38dd0e18c13746e`，运行`sh infra/test/run.sh`退出0；1023项、失败/错误/跳过均0，终端421.049秒、机器报告423.227秒，`committed_source_verified=true`。证据`.runtime/e133-verification/.runtime/test-evidence/1506746`复制到`.runtime/test-evidence/1506746`后`diff -qr`退出0；使用受限Docker内现有API镜像解析报告退出0。首次报告解析引用不存在的Python镜像摘要退出125，随后使用本地API候选镜像重跑成功；首次BuildKit资源检查误用了容器名退出1，随后通过`docker buildx inspect ai-football-e131 --bootstrap`确认固定BuildKit摘要和CPU/内存限制。下一步从该冻结源码构建E133 collector候选、核验OCI revision与镜像摘要并导入远端。
 - 候选构建和部署门禁（20:11 UTC）：BuildKit限额构建退出0；镜像ID=`sha256:fd267b2ece1e4509df60d4c45be53c91f28afc5f1419f0db23d41d6923e6022f`，tag=`ai-football-collector:2.0.0-dev-e133-2d2ae4f`，revision=`2d2ae4fd2a3ee012bd2cc108c38dd0e18c13746e`，版本标签=`2.0.0-dev-e133`；在限额、断网容器内导入`collector.telegram`退出0。使用`.runtime/e123-20261031/load-image.sh`从Docker镜像流经受限SSH导入远端退出0，远端镜像ID/revision一致；远端Compose配置退出0。审核队列只读SQL为0；过去30分钟68条受信作者当前事件均有关联消息但reconcile ACK为0，对应57条分析任务处于unresolved，属于旧collector运行期基线，必须在E133生效后复核而不能计作正常。错误端口探针和worktree helper路径搜索失败及修正已记录于总进度。当前旧collector仍运行且租约尚在有效期，切换动作待执行。
+- E133部署与运行检查（20:17–20:29 UTC）：先停collector并自然等待6个source lease归零；保持API/E132及bridge/executor不变。远端Compose `up -d --no-deps --no-build --pull never --wait --wait-timeout 90 collector`退出0，候选image ID/revision核对通过，容器running；另一次inspect模板假定存在`.State.Health`字段，因collector无Docker healthcheck退出1，改为读取`State.Status`后核实。运行期检查不是通过：8分钟内event_commit deadline 7次、acknowledgement 2次、claim 2次；DB按15分钟窗口3个applied/2个ACK，当前due约13,565，近24小时受信事件627、历史12,694。4/6来源检查点近2分钟刷新，数据库6/6无last_error；目录3/6 ready、3/6 member_enumeration_restricted。API健康/就绪200但日志出现锁/超时类别。用户问题还没有真实新帖子、图片或赛事推荐样本；不能启动验收窗口。
+
+### E134 — Telegram对账截止对齐API超时与claim租约（2026-10-31 20:30 UTC，定向隔离通过，全套冻结验证进行中）
+
+- 目标/责任目录：修复E133部署后claim处理中提交/ACK阶段持续超过10秒总预算的情况；责任目录`services/collector/telegram.py`与`tests/test_telegram_source_scheduling.py`。依赖E132 30秒claim lease、collector HTTP client 25秒读取上限和E133三条小批次。
+- 当前证据与缺口：E133运行8分钟日志有7次event_commit、2次acknowledgement、2次claim deadline；15分钟3条applied仅2条ACK，实时due 627条、历史due约12,694条。`_reconcile_known`的10秒总截止覆盖初始checkpoint/claim、Telegram entity/messages RPC及每条event+ack；`TelegramBackend`客户端读取可等待25秒，API claim有效30秒。临时误判怀疑媒体上传已排除：`_stage_group`只提交媒体manifest，上传在独立重试队列。
+- 设计决策：保留每批最多3条及E132近期/历史公平配额；将批次截止设24秒，在30秒事件lease内预留至少6秒、且早于25秒单请求HTTP读取上限。任何续修不得把批次上限扩至claim lease之后；若24秒仍发生timeout，按stage定位单请求延迟或PostgreSQL锁竞争，不以重置事件或手动ACK掩盖。
+- 实现动作：将`RECONCILE_BATCH_SECONDS`从10调整至24；新增三个事件连续各耗时4秒的提交回归，验证完整处理与ACK发生在受限batch截止以内，而旧10秒策略会在第三项之前超时；保留3秒单次Telegram RPC、3条claim及现有媒体重试边界。
+- 验收场景及失败处理：在断网/限额Docker内通过定向回归；冻结相同提交运行全套测试并确认源码快照clean；构建标有源码SHA的collector候选，先读队列和source leases，再只替换远端collector。运行期验证多个来源均fresh或明确记录权限限制、event applied后ACK最终一致、超时数量归零/在合理样本内可解释；持续有未ACK或claim重复到期即停止验收，按stage和DB等待证据继续修复。没有当前可信作者的真实新消息时观察窗不计时；有效窗口必须覆盖至少1条实时消息，并具备完整原文/图片输入、Hermes工具轨迹和server receipt；有赛事推荐时继续验证唯一比赛/盘口及赔率只按系统值记录。
+- 定向验证：`docker run --rm --network none --cpus=.35 --memory=384m -v /root/ai_football:/workspace:ro -w /workspace -e PYTHONPATH=/workspace/services:/workspace/tests --entrypoint python ai-football-collector:2.0.0-dev-e133-2d2ae4f -m unittest test_telegram_source_scheduling -v`11项、12.249秒、退出0；包含3条各4秒提交回归。首次同命令PYTHONPATH错误（指向`services/collector`而非包父目录）退出1，修正后原测试模块重跑通过。干净冻结树`.runtime/e134-verification`运行`sh infra/test/run.sh`已启动，源码提交`7e426146bec21da4ca067f35eaa5c1f4a92c3dd6`与远端分支核对一致，冻结期间不修改源码；验证session 97144，结果待定。E133线上实例需等E134候选准备后按租约门禁切换。
 
 ### E132 — Telegram近时专家消息对账优先级与历史队列公平推进（2026-10-31 19:54 UTC，冻结全套通过，API已部署，真实窗口未通过健康门禁）
 
