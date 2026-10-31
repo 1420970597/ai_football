@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮最新进度：2026-10-31 22:26 UTC。E135仍degraded、无当前30分钟内可信专家发言；E136原子event+ACK代码提交`c8ddf82`，测试修订提交`a37e6e8`。`.runtime/e136b-verification`冻结树上的同组Docker定向回归运行105项、104通过、1失败、退出1：唯一失败是丢响应场景测试用无条件SELECT读到了新编辑版本的空ACK，不是数据库原子ACK未提交；已将断言限定到被领取事件ID，待创建新冻结提交重跑。没有构建或部署E136候选，远端仍运行E135。
+本轮最新进度：2026-10-31 22:28 UTC。E135仍degraded、暂无30分钟内可信新发言；E136原子event+ACK实现已推送。新冻结提交`641e22e`上的Docker定向Telegram回归105项、55.924秒、0失败/错误、退出0；全量冻结套件待运行，候选未构建/部署，远端仍运行E135。
 
 本轮阶段更新：2026-10-31 21:55 UTC。E135候选已部署于远端，collector于21:51:27启动并报告healthy；image ID=`sha256:418456e54cdb58830548f47544a21e6b3568efbdf7a279fb3b4380c73fefda4c`、revision=`765dc42412ce098071ad5f7b09986949c7af3ab0`，与候选一致；API health/ready均200，bridge/executor容器ID/image/StartedAt不变。Telegram控制状态HTTP200且connected/authorized，但状态degraded：1个来源caught_up、2个reconciliation_deferred、2个catching_up、1个unavailable（TimeoutError）；6/6租约有效、5/6检查点近2分钟刷新。collector日志21:52–21:55有3次ACK deadline、1次event_commit deadline及1次history deadline，实时消息持久化群锁等待最高约6.2秒。近10分钟可信事件均为旧发布时间回补（2022–2025），无可验收的新发言；媒体有pending/unsupported项，不能计作已审。E135运行验收未通过，当前继续定位ACK/event链路等待并核实媒体重试，不启动30分钟窗口。
 
@@ -87,6 +87,7 @@
 - 首轮定向回归失败（22:17 UTC）：命令在具名临时PostgreSQL和冻结worktree `.runtime/e136-verification`中运行`test_telegram_api`、`test_telegram_reconciliation_claims`、`test_telegram_source_scheduling`、`test_telegram_collector`，105项、退出1（100通过、4错误、1失败）；原子ACK成功、ACK失败事务回滚及多数时序测试通过。失败均来自需同步的测试假设：reconciliation不再创建群锁对象、事件响应丢失时collector尚未设置本地applied标志，以及移除续租后checkpoint调用次数减少。测试容器/临时PG/网络已退出清理；修正断言后须从新冻结提交重跑。
 - 回归断言修正（22:18 UTC）：只修改测试及进度记录，产品源码保持提交`c8ddf82`不变。丢事件响应测试现在核对数据库已ACK与客户端保留相同提交payload；调度测试断言领取路径不再创建群锁对象，并在初始checkpoint一次后验证最终续租失败可见。`git diff --check`退出0。需在新提交的新冻结树重跑原定向命令；未通过前不构建或部署E136候选。
 - 首次修订后的复跑与断言定位（22:26 UTC）：新冻结树`.runtime/e136b-verification`提交`a37e6e8`上，在具名临时PostgreSQL中重跑`test_telegram_api`、`test_telegram_reconciliation_claims`、`test_telegram_source_scheduling`、`test_telegram_collector`，105项、104通过、1失败、55.421秒、退出1。唯一失败测试为`test_collector_lost_atomic_event_response_replays_then_skips_separate_ack`；场景创建编辑版本后，事件表有原claim版本及新版本，断言无WHERE条件地读取一行ACK，可能选中新版本的NULL。API仍以claim event_id在同一事务写入ACK，后续恰有一条ACK的断言已有覆盖。测试已改为按被领取事件UUID检查原子ACK；修复仅限测试及进度记录，产品代码未改，未构建或部署。
+- 定向复验通过（22:28 UTC）：在干净冻结树`.runtime/e136c-verification`提交`641e22e`的Docker具名临时PostgreSQL中运行`python -m unittest -q tests.test_telegram_api tests.test_telegram_reconciliation_claims tests.test_telegram_source_scheduling tests.test_telegram_collector`，105项、0失败/错误、55.924秒、退出0；覆盖事务ACK/回滚/幂等、丢响应精确重放与collector调度回归。容器和临时网络由退出trap清理。下一步在冻结源码上运行`sh infra/test/run.sh`全套测试，之后再构建候选。
 - 验收与失败处理：具名临时PostgreSQL证明`reconcile_applied_at`和`reconcile_acknowledged_at`同事务前进、失败同时不前进；重复相同payload只创建一个消息/审核任务并允许ACK幂等；丢事件响应后重放不重复Telegram读取/事件创建；所有验证仅Docker内执行。冻结测试通过并由同源候选部署后，再看至少10分钟运行日志无ACK/event deadline，6群source lease持续健康、实时消息锁等待受控且API就绪；若任一门槛失败，观察窗不启动并按数据库/HTTP/Telegram stage继续诊断，不直接改线上claim或回写旧消息。
 
 ### E132 — Telegram近时专家消息对账优先级与历史队列公平推进（2026-10-31 19:54 UTC，冻结全套通过，API已部署，真实窗口未通过健康门禁）
