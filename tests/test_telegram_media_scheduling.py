@@ -326,6 +326,17 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
             await self.collector._commit_media_payload('-1001', payload | {'media_state':'ready','media_objects':[stored(1)]})
         self.assertEqual('pending', next(iter(self.backend.events.values()))['media_state'])
 
+    async def test_media_commit_uses_atomic_event_lease_without_second_claim(self):
+        message = Message(1, media=True)
+        await self.stage(message)
+        _, payload = await self.collector._stage_group('-1001', self.source, [message])
+        async def redundant_claim(*_):
+            raise AssertionError('media commit must rely on the event lease check')
+        self.collector._checkpoint = redundant_claim
+        self.collector.checkpoint_verified_at.clear()
+        result = await self.collector._commit_media_payload('-1001',payload | {'media_state':'ready','media_objects':[stored(1)]})
+        self.assertEqual('ready', result['state'])
+
     async def test_s3_candidate_registered_before_thread_and_late_timeout_not_ready(self):
         message = Message(1, media=True, mime='image/png')
         await self.stage(message)

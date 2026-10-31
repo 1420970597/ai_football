@@ -56,7 +56,7 @@ SOURCE_LEASE_REFRESH_SECONDS = 3
 MEDIA_RETRY_BATCH_SECONDS = 30
 MEDIA_RETRY_CONCURRENCY = 2
 MEDIA_TRANSFER_SECONDS = 20
-MEDIA_COMMIT_SECONDS = 5
+MEDIA_COMMIT_SECONDS = 9
 SESSION_IDENTITY_SECONDS = 5
 
 
@@ -864,10 +864,9 @@ class TelegramCollector:
 
     async def _commit_media_payload(self, chat_id: str, payload: dict):
         async with asyncio.timeout(MEDIA_COMMIT_SECONDS):
-            async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                await self._ensure_live_checkpoint(chat_id)
-            # Event persistence can wait on the remote API/database. Keep it
-            # outside the group lock so a media retry cannot starve live text.
+            # The event endpoint atomically validates and renews this owner's
+            # lease. A second claim RPC adds latency without stronger evidence.
+            # Never hold the group lock while waiting on the remote transaction.
             return await self.backend.event(payload)
 
     async def retry_pending(self):
