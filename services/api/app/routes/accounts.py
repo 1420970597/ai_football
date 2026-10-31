@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
+import hmac
 import json
 import re
 import uuid
@@ -13,8 +14,8 @@ import asyncpg
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-from .. import account_jobs as jobs, database, orders
-from ..auth import _limit, audit, require_recent, require_user, verify_sensitive_session
+from .. import account_jobs as jobs, database, orders, order_evidence
+from ..auth import _limit, audit, require_user, verify_sensitive_session
 from ..membership import has_entitlement
 from ..review_state import authorize
 from ..security import encrypt_secret
@@ -70,7 +71,13 @@ class Receipt(Input):
     state: str = Field(pattern="^(settled|unsettled)$")
     net_profit: Decimal | None = Field(default=None, max_digits=16, decimal_places=5)
     pnl_basis: str = Field(default="unknown", pattern="^(unknown|provider_reported_net|gross_return_minus_stake)$")
-    fees: Decimal | None = None
+    fees: Decimal | None = Field(default=None, max_digits=16, decimal_places=5)
+    price: Decimal | None = Field(default=None, gt=1, max_digits=12, decimal_places=5)
+    stake: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=5)
+    payout: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=5)
+    currency: str | None = Field(default=None, pattern="^[A-Z]{3}$")
+    placed_at: AwareDatetime | None = None
+    settled_at: AwareDatetime | None = None
 
 
 class JobFinish(AttemptInput):
@@ -101,19 +108,22 @@ def service_auth(request):
 @router.get("/leyu")
 async def get_leyu_account(request: Request):
     user = await require_user(request)
-    row = await database.current_pool().fetchrow("SELECT id,account_label,health_state,last_verified_at,updated_at,available_balance,balance_observed_at,config_revision,binding_revision,renewal_state "
-                                                "FROM v2_leyu_accounts WHERE user_id=$1 AND health_state<>'disabled'", user["id"])
+    pool = database.current_pool()
+    row = await pool.fetchrow("SELECT id,account_label,health_state,last_verified_at,updated_at,available_balance,balance_observed_at,config_revision,binding_revision,renewal_state "
+                              "FROM v2_leyu_accounts WHERE user_id=$1 AND health_state<>'disabled'", user["id"])
     policy = await database.current_pool().fetchrow("SELECT auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,daily_timezone,emergency_stopped,revision "
                                                    "FROM v2_user_bet_settings WHERE user_id=$1", user["id"])
     tasks = await database.current_pool().fetch("SELECT id,kind,state,last_error,updated_at FROM v2_account_jobs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 5", user["id"])
-    return {"account": dict(row) if row else None, "betting": dict(policy) if policy else None, "tasks": [dict(item) for item in tasks],
+    account = dict(row) if row else None
+    if row:
+        account['reverification_available'] = await jobs.reverification_available(pool, row)
+    return {"account": account, "betting": dict(policy) if policy else None, "tasks": [dict(item) for item in tasks],
             "execution_capability": {"protocol_adapter": True, "live_enabled": orders.live_enabled(request.app.state.settings), "prematch": "unsupported"}}
 
 
 @router.put("/leyu")
 async def bind_leyu_account(body: LeyuBindingInput, request: Request):
     user = await require_user(request)
-    require_recent(user)
     await _limit(request,'account_bind',str(user['id']),maximum=6)
     username, label = body.username.strip(), body.account_label.strip()
     if not username or not label or any(char in username for char in "\r\n"):
@@ -173,8 +183,18 @@ async def verify_account(request: Request):
             account = await conn.fetchrow("SELECT * FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE", user["id"])
             if not account or account["health_state"] == "disabled":
                 raise HTTPException(404, "尚未绑定本人账户")
-            if account["renewal_state"] in {"unknown", "rejected"}:
-                raise HTTPException(409, "上次登录未知或被拒绝，核对后需重新绑定以授权")
+            recover_rejected = account['health_state'] == 'rejected' or account['renewal_state'] in {'unknown', 'rejected'}
+            if recover_rejected:
+                if account['renewal_state'] == 'unknown' or not await jobs.reverification_available(conn, account):
+                    raise HTTPException(409, "账户登录状态未知或被拒绝；只有更新登录协议配置后才能重新校验")
+                await disable_policy(conn, user['id'], 'protocol_configuration_reverification')
+                await conn.execute(
+                    "UPDATE v2_leyu_accounts SET health_state='unverified',encrypted_session=NULL,last_verified_at=NULL,"
+                    "available_balance=NULL,balance_observed_at=NULL,renewal_state='ready',renewal_attempt=NULL,"
+                    "renewal_lease_until=NULL,renewal_retry_after=NULL,updated_at=now() WHERE id=$1", account['id'])
+                await audit(conn, user['id'], 'user', 'leyu_protocol_reverification_queued', 'leyu_account',
+                            str(account['id']), details={'protocol_configuration_updated': True,
+                                                         'binding_revision': account['binding_revision']})
             task = await jobs.enqueue(conn, account, "refresh" if account["health_state"] == "healthy" else "verify")
     return {"task_id": str(task["id"]), "state": task["state"]}
 
@@ -182,8 +202,6 @@ async def verify_account(request: Request):
 @router.put("/leyu/auto-betting")
 async def configure_auto_betting(body: AutoBetInput, request: Request):
     user = await require_user(request)
-    if body.enabled:
-        require_recent(user)
     settings = request.app.state.settings
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
@@ -236,6 +254,7 @@ async def list_orders(request: Request, limit: int = 30, before: uuid.UUID | Non
     if not 1 <= limit <= 100:
         raise HTTPException(422, "订单页大小无效")
     rows = await database.current_pool().fetch("SELECT o.id,o.state,o.stake,o.price,o.created_at,o.updated_at,o.provider_order_no,o.reserved_stake,o.settled_net,o.settled_at,"
+        "o.provider_price,o.provider_stake,o.provider_payout,o.provider_currency,o.provider_fees,o.provider_placed_at,o.receipt_observed_at,o.pnl_basis,"
         "s.fixture_id,s.market_name,s.line,s.selection,e.display_nickname FROM v2_bet_orders o JOIN v2_expert_signals s ON s.id=o.signal_id "
         "JOIN v2_experts e ON e.id=s.expert_id WHERE o.user_id=$1 AND ($2::uuid IS NULL OR (o.created_at,o.id)<"
         "(SELECT created_at,id FROM v2_bet_orders WHERE id=$2 AND user_id=$1)) ORDER BY o.created_at DESC,o.id DESC LIMIT $3", user["id"], before, limit)
@@ -372,11 +391,14 @@ async def finish_account_renewal(job_id: uuid.UUID, body: RenewalFinish, request
 @executor_router.post('/jobs/{job_id}/finish')
 async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
     service_auth(request)
+    finish_sha256=hashlib.sha256(json.dumps(body.model_dump(mode='json'),sort_keys=True,separators=(',',':')).encode()).hexdigest()
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             prior=await conn.fetchrow('SELECT * FROM v2_account_jobs WHERE id=$1',job_id)
             expected='succeeded' if body.status=='success' else body.status
             if prior and prior['attempt_id']==body.attempt_id and prior['state']==expected:
+                if not hmac.compare_digest(str(prior['details'].get('finish_sha256','')),finish_sha256):
+                    raise HTTPException(409,'同一次任务回执内容冲突，保留首次记录')
                 return {'status':body.status,'idempotent':True}
             job,account=await jobs.active_job(conn,job_id,body.attempt_id)
             if body.status=='success':
@@ -387,12 +409,16 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
                 planned=job['details'].get('orders',{})
                 if any(str(identity) not in planned for identity in body.scanned_orders) or any(receipt.order_no not in planned.values() for receipt in body.receipts):
                     raise HTTPException(422,'查单回执超出此本人任务的订单范围')
-                await conn.execute("UPDATE v2_leyu_accounts SET health_state='healthy',last_verified_at=now(),available_balance=$2,balance_observed_at=$3,updated_at=now() WHERE id=$1",account['id'],body.balance,body.observed_at)
+                await conn.execute("UPDATE v2_leyu_accounts SET health_state='healthy',renewal_state='ready',renewal_attempt=NULL,"
+                                   "renewal_lease_until=NULL,renewal_retry_after=NULL,last_verified_at=now(),available_balance=$2,"
+                                   "balance_observed_at=$3,updated_at=now() WHERE id=$1",account['id'],body.balance,body.observed_at)
                 await jobs.reconcile_receipts(conn,account,[receipt.model_dump(mode='json') for receipt in body.receipts])
                 await conn.execute('UPDATE v2_bet_orders SET updated_at=now() WHERE id=ANY($1::uuid[]) AND user_id=$2',body.scanned_orders,account['user_id'])
             elif body.status in {'unknown','rejected'}:
-                await conn.execute("UPDATE v2_leyu_accounts SET health_state=$2,updated_at=now() WHERE id=$1",account['id'],'rejected' if body.status=='rejected' else 'renewal_required')
-            await conn.execute("UPDATE v2_account_jobs SET state=$2,last_error=$3,lease_until=NULL,details=$4,updated_at=now() WHERE id=$1",job_id,'succeeded' if body.status=='success' else body.status,body.category,{'receipts':len(body.receipts)})
+                await conn.execute("UPDATE v2_leyu_accounts SET health_state=$2,renewal_state=$3,renewal_attempt=NULL,"
+                                   "renewal_lease_until=NULL,updated_at=now() WHERE id=$1",account['id'],
+                                   'rejected' if body.status=='rejected' else 'renewal_required',body.status)
+            await conn.execute("UPDATE v2_account_jobs SET state=$2,last_error=$3,lease_until=NULL,details=$4,updated_at=now() WHERE id=$1",job_id,'succeeded' if body.status=='success' else body.status,body.category,{'receipts':len(body.receipts),'finish_sha256':finish_sha256})
             await audit(conn,None,'executor','account_job_finished','leyu_account',str(account['id']),details={'kind':job['kind'],'status':body.status,'category':body.category})
     return {'status':body.status}
 
@@ -413,7 +439,7 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
             order=await locked_order(conn,order_id)
             if order['state']!='pending' or order['attempt_id']!=body.attempt_id or not order['lease_until'] or order['lease_until']<=datetime.now(timezone.utc):
                 raise HTTPException(409,'订单准备租约失效')
-            account=await orders.recheck_order(conn,order,request.app.state.settings)
+            account,signal=await orders.recheck_order(conn,order,request.app.state.settings,include_signal=True)
             prefix=f"{account['user_id']}:{account['id']}:{account['config_revision']}:"
             if hashlib.sha256((prefix+body.payload_json).encode()).hexdigest()!=body.prepared_digest:
                 raise HTTPException(422,'订单准备摘要不匹配')
@@ -428,7 +454,7 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                     and payload['currencyCode']=='CNY' and str(payload['deviceType'])=='3' and payload['openMiltSingle']==0
                     and str(series[0]['seriesType'])=='1' and series[0]['seriesSum']==1 and series[0]['fullBet']==0
                     and detail['marketTypeFinally']=='EU' and detail['matchType']==2 and str(detail['sportId'])=='1'
-                    and orders.prepared_line(detail['marketValue'],snapshot['kind'])==Decimal(snapshot['line'])
+                    and orders.prepared_line_matches(detail['marketValue'],snapshot['line'],snapshot['kind'])
                     and detail['scoreBenchmark']==snapshot['score_benchmark']
                     and payload['deviceImei']==credentials['device_uuid'] and Decimal(detail['betAmount'])==order['stake']
                     and Decimal(detail['oddFinally'])==order['price'] and Decimal(detail['odds'])==order['price']*100000
@@ -437,7 +463,9 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                 valid=False
             if not valid:
                 raise HTTPException(422,'订单准备内容超出已预留推荐许可')
+            await order_evidence.append_stage(conn,order,signal,body.attempt_id,body.prepared_digest,'preflight_validated')
             await conn.execute("UPDATE v2_bet_orders SET state='submitting',prepared_digest=$2,submitted_at=now(),lease_until=now()+interval '30 seconds',updated_at=now() WHERE id=$1",order_id,body.prepared_digest)
+            await order_evidence.append_stage(conn,order,signal,body.attempt_id,body.prepared_digest,'submission_authorized')
             await audit(conn,None,'executor','order_send_authorized','bet_order',str(order_id))
     return {'scope':jobs.scope(account),'execution_id':str(order_id),'prepared_digest':body.prepared_digest}
 

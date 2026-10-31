@@ -1,11 +1,13 @@
 import copy
 import base64
+import asyncio
 from datetime import datetime,timezone
 from decimal import Decimal
 import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import unittest
 from urllib.parse import urlsplit,urlunsplit
@@ -21,6 +23,27 @@ from services.api.app.database import apply_migrations,check_schema
 from services.api.app.security import decrypt_secret,encrypt_secret,token_hash
 
 DSN=os.environ.get('RECOVERY_TEST_ADMIN_URL','')
+
+
+async def drop_owned_test_database(admin,name):
+    if not re.fullmatch(r'recovery_[a-f0-9]{32}_(source|target)_test',name):
+        raise RuntimeError('only_owned_recovery_test_cleanup_allowed')
+    owned=await admin.fetchval('SELECT datdba=(SELECT oid FROM pg_roles WHERE rolname=current_user) FROM pg_database WHERE datname=$1',name)
+    if owned is not True:
+        raise RuntimeError('only_owned_recovery_test_cleanup_allowed')
+    # All case-owned connections are closed first. FORCE additionally signals
+    # other-role/background sessions and can fail for a legitimate CREATEDB
+    # role. Stop new connections and allow closing backends to leave naturally;
+    # never grant pg_signal_backend or kill another role to clean a test.
+    await admin.execute('ALTER DATABASE "'+name+'" ALLOW_CONNECTIONS false')
+    for attempt in range(20):
+        try:
+            await admin.execute('DROP DATABASE "'+name+'"')
+            return
+        except asyncpg.ObjectInUseError:
+            if attempt==19:
+                raise
+            await asyncio.sleep(.25)
 
 
 class MemoryObjects:
@@ -130,11 +153,13 @@ class RecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.populate()
 
     async def asyncTearDown(self):
-        for conn in self.connections:
-            await conn.close()
-        for name in self.names:
-            await self.admin.execute('DROP DATABASE '+name+' WITH (FORCE)')
-        await self.admin.close()
+        try:
+            for conn in self.connections:
+                await conn.close()
+            for name in self.names:
+                await drop_owned_test_database(self.admin,name)
+        finally:
+            await self.admin.close()
 
     async def populate(self):
         conn=self.source
@@ -189,6 +214,35 @@ class RecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(report['restore_elapsed_seconds'],0)
         print('RECOVERY_EVIDENCE '+json.dumps({'tables':report['table_count'],'backup_seconds':manifest['elapsed_seconds'],'restore_seconds':report['restore_elapsed_seconds'],
             'inventory_before':report['inventory_before'],'inventory_after':report['inventory_after'],'difference':report['differences'],'media_objects':report['media_objects']},sort_keys=True))
+
+    async def test_pristine_seed_target_restores_nondefault_replay_budget_exactly(self):
+        await self.source.execute("UPDATE v2_review_lane_schedule SET realtime_claims_since_replay=6,updated_at=clock_timestamp() WHERE singleton")
+        expected=dict(await self.source.fetchrow('SELECT * FROM v2_review_lane_schedule'))
+        target_seed=await self.target.fetchrow("SELECT seed.*,migration.applied_at FROM v2_review_lane_schedule seed "
+            "JOIN v2_schema_migrations migration ON migration.version='017_review_freshness_lanes.sql'")
+        self.assertEqual(0,target_seed['realtime_claims_since_replay'])
+        self.assertEqual(target_seed['applied_at'],target_seed['updated_at'])
+        stream,_=await self.bundle()
+        report=await restore_bundle(self.target,stream,self.backup_key,MemoryObjects())
+        self.assertEqual({},report['differences'])
+        self.assertEqual(expected,dict(await self.target.fetchrow('SELECT * FROM v2_review_lane_schedule')))
+        self.assertEqual(1,await self.target.fetchval('SELECT count(*) FROM v2_review_lane_schedule'))
+
+    async def test_used_or_reset_seed_target_is_business_data_and_never_overwritten(self):
+        stream,_=await self.bundle()
+        for counter in (3,0):
+            with self.subTest(counter=counter):
+                await self.target.execute("UPDATE v2_review_lane_schedule SET realtime_claims_since_replay=$1,"
+                    "updated_at=(SELECT applied_at+interval '1 second' FROM v2_schema_migrations "
+                    "WHERE version='017_review_freshness_lanes.sql') WHERE singleton",counter)
+                before=dict(await self.target.fetchrow('SELECT * FROM v2_review_lane_schedule'))
+                objects=MemoryObjects()
+                stream.seek(0)
+                with self.assertRaisesRegex(RecoveryError,'restore_target_contains_business_data'):
+                    await restore_bundle(self.target,stream,self.backup_key,objects)
+                self.assertEqual(before,dict(await self.target.fetchrow('SELECT * FROM v2_review_lane_schedule')))
+                self.assertEqual({},objects.items)
+                self.assertEqual(0,await self.target.fetchval('SELECT count(*) FROM v2_users'))
 
     async def test_backup_is_encrypted_wrong_key_and_corrupt_chunk_rejected(self):
         stream,manifest=await self.bundle()

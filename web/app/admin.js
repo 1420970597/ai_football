@@ -14,11 +14,11 @@ import {
   period,
   selection,
 } from "./ui.js";
-import { loadMfaStatus } from "./mfa.js";
 let app;
 let sources = [];
 let settings = {};
 let leyuVersion = null;
+let modelConfiguration = null;
 let qrAttempt = null;
 let tgTimer = null;
 let dialogsCursor = null;
@@ -29,6 +29,8 @@ let dialogsSequence = 0,
   adminsSequence = 0;
 let grantKey = newId();
 let adminPlans = [];
+let adminSequence = 0;
+let adminPlansSequence = 0;
 let userCursor = null;
 let userRows = [];
 let orderRows = [];
@@ -40,13 +42,15 @@ export function initAdmin(context) {
   bind();
 }
 export async function loadAdmin() {
+  const sequence = ++adminSequence;
   await app.loadIdentities();
+  if (sequence !== adminSequence) return;
   const admin = app.state.admin;
   $("#admin-content").hidden = !admin;
   $("#admin-logout").hidden = !admin;
   $("#admin-identity").innerHTML = admin
     ? `<div class="identity-card"><h2>${esc(admin.user.display_name)} · 管理员</h2><p>${esc(admin.user.email)} · 管理会话独立于普通用户会话</p></div>`
-    : '<div class="identity-card"><h2>管理员独立入口</h2><p>使用管理员账号和密码登录；已启用二次验证时还需输入动态验证码。用户会话不会获得管理权限。</p><button class="primary-button" data-login="admin">管理员登录</button></div>';
+    : '<div class="identity-card"><h2>管理员独立入口</h2><p>使用管理员账号和密码登录。用户会话不会获得管理权限。</p><button class="primary-button" data-login="admin">管理员登录</button></div>';
   if (!admin) return;
   await Promise.allSettled([
     loadStatus(),
@@ -54,7 +58,6 @@ export async function loadAdmin() {
     loadSources(),
     loadAdminPlans(),
     loadDiagnostics(),
-    loadMfaStatus(),
   ]);
 }
 async function loadDiagnostics() {
@@ -71,8 +74,18 @@ async function loadDiagnostics() {
       value === null || value === undefined ? "暂无样本" : esc(value) + suffix;
     const leyuIssue = leyu.config_validation_error || leyu.last_error || "无错误分类";
     const leyuCode = leyu.last_error_code ? ` code=${esc(leyu.last_error_code)}` : "";
-    const liveStats = `乐鱼采集 ${esc(leyu.state || "未知")}（${esc(leyuIssue)}${leyuCode}） · 实时连接 ${esc(websocket.state || "未知")} · 重连 ${metric(websocket.reconnects)} · 订阅请求数 ${metric(websocket.subscription_requests_sent)} · 接收帧 ${metric(websocket.received)} · 入队/写入 ${metric(websocket.events_received)}/${metric(websocket.events_delivered)} · 丢弃 ${metric(websocket.dropped)} · 写入失败 ${metric(websocket.delivery_failures)} · 队列 ${metric(websocket.queue_depth)}（高水位 ${metric(websocket.queue_high_water)}） · 源->接收 P95 ${metric(websocket.source_lag_ms_p95, "ms")}（${metric(websocket.source_lag_samples)} 样本） · 排队 P95 ${metric(websocket.queue_wait_ms_p95, "ms")} · 源->落库 P95 ${metric(websocket.delivery_age_ms_p95, "ms")}（${metric(websocket.delivery_age_samples)} 样本） · 最近事件 ${stamp(websocket.last_event_at)}`;
-    $("#admin-diagnostics").innerHTML =
+    const recoveryStats = `轮询成功/失败 ${metric(leyu.poll_successes)}/${metric(leyu.poll_failures)} · 故障类别 ${esc(leyu.failure_group || '无')} · 操作 ${esc(leyu.last_operation || '尚未记录')} · 冷却 ${metric(leyu.backoff_seconds, '秒')} · 下次尝试 ${stamp(leyu.retry_at)} · 连续失败 ${metric(leyu.consecutive_failures)} · 本地待发送订阅 ${metric(websocket.subscription_send_missing)}/${metric(websocket.subscription_expected)} · 上游订阅确认 ${websocket.subscription_confirmation_state === 'unverified' ? '未提供确认协议，无法计算真实漏订阅率' : esc(websocket.subscription_confirmation_state || '尚未核验')} · 告警（轮询/订阅/队列/写入）${esc(leyu.poll_alert_state || '未知')}/${esc(websocket.subscription_alert_state || '未知')}/${esc(websocket.queue_alert_state || '未知')}/${esc(websocket.delivery_alert_state || '未知')}`;
+    const liveStats = `乐鱼采集 ${esc(leyu.state || "未知")}（${esc(leyuIssue)}${leyuCode}） · 实时连接 ${esc(websocket.state || "未知")} · 重连 ${metric(websocket.reconnects)} · 订阅请求数 ${metric(websocket.subscription_requests_sent)} · 接收帧 ${metric(websocket.received)} · 入队/投递 ${metric(websocket.events_received)}/${metric(websocket.events_delivered)} · 丢弃 ${metric(websocket.dropped)} · 投递失败 ${metric(websocket.delivery_failures)} · 队列 ${metric(websocket.queue_depth)}（高水位 ${metric(websocket.queue_high_water)}） · 事件源->接收 P95 ${metric(websocket.source_lag_ms_p95, "ms")}（${metric(websocket.source_lag_samples)} 样本） · 排队 P95 ${metric(websocket.queue_wait_ms_p95, "ms")} · 事件源->投递 P95 ${metric(websocket.delivery_age_ms_p95, "ms")}（${metric(websocket.delivery_age_samples)} 样本） · 最近事件 ${stamp(websocket.last_event_at)}`;
+    const quoteLatency = `盘口源->接收 P95 ${metric(websocket.quote_source_lag_ms_p95, 'ms')}（${metric(websocket.quote_source_lag_samples)} 样本） · 盘口源->成功投递 P95 ${metric(websocket.quote_delivery_age_ms_p95, 'ms')}（${metric(websocket.quote_delivery_age_samples)} 样本） · 接收窗口 ${metric(websocket.quote_source_lag_window_size)} · 未知/无效/未来/过旧 ${metric(websocket.quote_source_lag_unknown_count)}/${metric(websocket.quote_source_lag_invalid_count)}/${metric(websocket.quote_source_lag_future_count)}/${metric(websocket.quote_source_lag_too_old_count)}；各窗口最多256条；投递成功不等于每条报价通过入库新鲜度或版本校验。`;
+    const snapshotStats = `单场最大盘口 ${metric(leyu.max_observed_fixture_quotes)} · 隔离赛事 ${metric(leyu.quarantined_fixtures)} · 推送隔离 ${metric(leyu.last_push_quarantined_fixtures)} · 最近投递错误 ${esc(websocket.last_delivery_error_category || "无当前错误")}`;
+    const taskStates = { action_required: '需处理', clear: '本次未发现异常', unverified: '未核验' };
+    const taskTargets = { telegram: 'telegram', leyu: 'leyu', orders: 'orders', system: 'system' };
+    const taskCards = Array.isArray(data.tasks) ? data.tasks.slice(0, 16).map(task => {
+      const target = taskTargets[task.target];
+      const count = task.count ? ` · ${counter(task.count)}` : '';
+      return `<div class="admin-record"><strong>${esc(task.label)}${esc(count)}</strong> · ${esc(taskStates[task.state] || taskStates.unverified)}<p>${esc(task.detail)}</p>${target ? `<button class="small-button" data-admin-task-target="${target}">前往${esc({telegram:'Telegram',leyu:'乐鱼采集',orders:'订单核对',system:'系统运维'}[target])}</button>` : ''}</div>`;
+    }).join('') : '<p class="form-note">逐项待办尚未核验，请刷新诊断。</p>';
+    $("#admin-diagnostics").innerHTML = `<div id="admin-action-tasks" class="record-list">${taskCards}</div><p class="form-note">${snapshotStats}</p><p class="form-note">${recoveryStats}</p><p class="form-note" id="quote-latency-metrics">${quoteLatency}</p>` +
       `<p class="form-note">检查于 ${stamp(data.checked_at)} · 数据库 ${esc(data.database)} · 结构 ${esc(data.schema === "verified" ? "已核验" : data.schema === "migration_required" ? "需要迁移" : "状态未知")}${leyuVersion}</p><p class="form-note">${liveStats}</p><div class="status-grid">${[
         ["待审核", data.review_queue],
         ["媒体待上传", data.pending_media],
@@ -86,7 +99,7 @@ async function loadDiagnostics() {
         )
         .join(
           "",
-        )}</div><p class="form-note">对象存储：${esc({ unconfigured: "未配置", configured_unverified: "已配置，尚未真实验证" }[data.storage] || "状态未知")}。Hermes框架：${data.hermes?.gateway === "reachable" ? "可达" : "暂不可达"}；模型提供方尚未验证。</p><p class="form-note">赛事源时间 ${stamp(data.freshness?.fixture_source_at)} · 报价源时间 ${stamp(data.freshness?.quote_source_at)} · 消息接收 ${stamp(data.freshness?.message_received_at)}</p><p class="form-note">计数最多检查5000条，显示“5000+”表示超过上限；来源时间仅为已保存证据，不能代替连续采集健康检查。结构状态不代表失败迁移日志已完整核验。</p>`;
+        )}</div><p class="form-note">对象存储：${esc({ healthy: "读写与校验成功", unavailable: "读写或校验失败", unconfigured: "未配置", configured_unverified: "已配置，尚未真实验证" }[data.storage] || "状态未知")}。Hermes框架：${data.hermes?.gateway === "reachable" ? "可达" : "暂不可达"}；${esc({recent_success:"近15分钟有框架审核返回，准确性仍需独立核验",historical_success:"仅有历史框架审核返回，当前提供方未验证"}[data.hermes?.provider] || "模型提供方尚未验证")}。</p><p class="form-note">赛事源时间 ${stamp(data.freshness?.fixture_source_at)} · 报价源时间 ${stamp(data.freshness?.quote_source_at)} · 消息接收 ${stamp(data.freshness?.message_received_at)}</p><p class="form-note">计数最多检查5000条，显示“5000+”表示超过上限；来源时间仅为已保存证据，不能代替连续采集健康检查。结构状态不代表失败迁移日志已完整核验。</p>`;
   } catch (error) {
     $("#admin-diagnostics").innerHTML =
       `<p class="notice error">${esc(error.message)}。待办尚未核验。</p>`;
@@ -108,7 +121,7 @@ async function loadAdminOrders(append = false) {
       orderRows
         .map(
           (order) =>
-            `<div class="admin-record"><strong>${esc({ pending: "待执行", submitting: "提交中", accepted: "已接单", rejected: "已拒绝", unknown: "结果未知，需核对", settled: "已结算", cancelled: "已取消" }[order.state] || order.state)}</strong> · ${esc(order.email || order.user_id)} · ${esc(order.account_label || "账户未标注")}<br>${esc(order.home_team || order.fixture_id)} vs ${esc(order.away_team || "")}<br>${esc(order.market_name)} · ${esc(period(order.period))} · ${esc(order.line ?? "")} · ${esc(selection(order.selection))}<br>本金 ${decimal(order.stake)} · 成交赔率 ${decimal(order.price)} · 实际净收益 ${order.settled_net === null || order.settled_net === undefined ? "待结算" : signed(order.settled_net)}<br><span class="muted">${stamp(order.created_at)} · ${esc(order.provider_order_no || "暂无上游回执")}<br>记录 ${esc(order.id)}</span></div>`,
+            `<div class="admin-record"><strong>${esc({ pending: "待执行", submitting: "提交中", accepted: "已接单", rejected: "已拒绝", unknown: "结果未知，需核对", settled: "已结算", cancelled: "已取消" }[order.state] || order.state)}</strong> · ${esc(order.email || order.user_id)} · ${esc(order.account_label || "账户未标注")}<br>${esc(order.home_team || order.fixture_id)} vs ${esc(order.away_team || "")}<br>${esc(order.market_name)} · ${esc(period(order.period))} · ${esc(order.line ?? "")} · ${esc(selection(order.selection))}<br>预留本金 ${decimal(order.stake)} · 预留赔率 ${decimal(order.price)}<br>官方成交本金 ${order.provider_stake == null ? "未知" : decimal(order.provider_stake)} · 成交赔率 ${order.provider_price == null ? "未知" : decimal(order.provider_price)} · 币种 ${esc(order.provider_currency || "未知")}<br>实际净收益 ${order.settled_net == null ? (order.state === "settled" ? "官方回执未提供" : "待结算") : signed(order.settled_net)} · 手续费 ${order.provider_fees == null ? "未知" : decimal(order.provider_fees)}<br><span class="muted">官方下单 ${order.provider_placed_at ? stamp(order.provider_placed_at) : "未知"} · 官方结算 ${order.settled_at ? stamp(order.settled_at) : "未知"}<br>${stamp(order.created_at)} · ${esc(order.provider_order_no || "暂无上游回执")}<br>记录 ${esc(order.id)}</span></div>`,
         )
         .join("") || '<p class="empty-state">当前条件下没有订单</p>';
     $("#admin-orders-more").hidden = !orderCursor;
@@ -148,6 +161,7 @@ async function loadSettings() {
     const data = await adminApi("/settings");
     settings = data.items;
     leyuVersion = data.leyu_version;
+    if (data.model_configuration) renderModelConfiguration(data.model_configuration);
     const runtime = data.runtime || {};
     const runtimeLabel = {
       applied: "采集器已应用",
@@ -188,20 +202,115 @@ async function saveSettings(form) {
     else if (input.value.trim() || input.hasAttribute("data-save-empty"))
       values[input.name] = input.value.trim();
   }
+  if (values.hermes_analysis_model === (settings.hermes_analysis_model?.value || ""))
+    delete values.hermes_analysis_model;
   if (!Object.keys(values).length) throw new Error("没有需要保存的配置");
   const result = await adminApi("/settings", {
     method: "PUT",
-    body: { values, expected_leyu_version: leyuVersion },
+    body: { values, expected_leyu_version: leyuVersion, expected_model_revision: modelConfiguration?.revision },
   });
   if (result.leyu_version) leyuVersion = result.leyu_version;
   toast(
-    "配置已保存" +
+    (result.application?.reason || "配置已保存") +
       (result.leyu_version ? " · 乐鱼版本 " + result.leyu_version : ""),
   );
   await loadSettings();
 }
-async function loadSources() {
-  const previous = $("#source-select").value;
+const modelStates = { pending_evidence: "等待比较证据", synthetic_diagnostic_only: "仅合成诊断，不能激活",
+  awaiting_human_review: "等待人工逐项复核", reviewed: "已复核，等待显式激活", activated: "已激活" };
+function renderModelConfiguration(data) {
+  modelConfiguration = data;
+  const active = data.active;
+  const status = $("#model-configuration-state");
+  if (!active || !status) return;
+  status.textContent = '管理版本 ' + data.revision + ' · 当前模型 ' + (active.model || 'Hermes 默认路由') +
+    ' · 生效版本 ' + active.version + ' · ' + (data.application_state === 'consumed' ? '工作器已消费' : '等待工作器消费') +
+    ' · 最近消费 ' + stamp(data.consumption?.consumed_at) + '。' + (data.reason || '');
+  const form = $("#model-candidate-form");
+  for (const name of ['model_revision','prompt_sha256','skill_version','hermes_version','tool_contract_version'])
+    if (!form.elements[name].value) form.elements[name].value = active.provenance[name] || '';
+  $("#model-candidates").innerHTML = data.candidates.map(candidate => {
+    const report = candidate.report;
+    let content = '<details class="settings-section"><summary>' + esc(candidate.model || 'Hermes 默认路由') + ' · ' +
+      esc(modelStates[candidate.status] || candidate.status) + '</summary><p class="form-note">候选 ' + esc(candidate.id) +
+      ' · ' + stamp(candidate.created_at) + ' · 来源摘要 ' + esc(candidate.fingerprint) + '</p><pre>' +
+      esc(JSON.stringify(candidate.provenance,null,2)) + '</pre>';
+    if (!report) content += '<form class="compact-form model-evidence-form" data-candidate="' + esc(candidate.id) +
+      '"><label>冻结比较报告 JSON<textarea name="report" rows="6" required maxlength="262144"></textarea></label>' +
+      '<label>报告规范 JSON SHA-256<input name="report_sha256" pattern="[0-9a-f]{64}" required></label>' +
+      '<p class="form-note">报告需来源版本与冻结样本摘要。合成报告只能诊断；真实标注来源仍须人工核验。</p>' +
+      '<button class="primary-button">核验并冻结报告</button></form>';
+    if (report) content += '<p class="form-note">报告 ' + esc(report.sha256) + ' · ' + esc(report.dataset_id) + ' · ' +
+      report.changed_samples + ' 项差异 · ' + (report.synthetic_only ? '合成诊断' : '声明真实人工标注（需人工核验）') + '</p>';
+    if (candidate.status === 'awaiting_human_review') {
+      content += '<form class="compact-form model-review-form" data-candidate="' + esc(candidate.id) +
+        '"><p class="form-note">必须逐项阅读全部差异；拒绝项将阻止激活。</p>';
+      for (const item of report.differences || []) content += '<details class="settings-section"><summary>差异 ' + esc(item.sample_id) +
+        '</summary><pre>' + esc(JSON.stringify(item,null,2)) + '</pre><label>结论<select name="decision:' + esc(item.sample_id) +
+        '"><option value="reject">拒绝，暂不激活</option><option value="accept">接受此差异</option></select></label>' +
+        '<label>核验说明<input name="note:' + esc(item.sample_id) + '" minlength="3" maxlength="500" required></label></details>';
+      content += '<label>整体复核说明<textarea name="reason" minlength="3" maxlength="500" required></textarea></label>' +
+        '<button class="primary-button">提交人工复核</button></form>';
+    }
+    if (candidate.status === 'reviewed') content += '<button class="primary-button" data-activate-model="' + esc(candidate.id) + '">确认激活此候选</button>';
+    return content + '</details>';
+  }).join('') || '<p class="form-note">暂无新候选。当前迁移基线继续生效。</p>';
+}
+async function loadModelConfiguration() {
+  renderModelConfiguration(await adminApi('/model-configuration'));
+}
+function bindModelConfiguration() {
+  const form = $('#model-candidate-form');
+  if (!form) return;
+  $('#refresh-model-configuration').onclick = () => loadModelConfiguration().catch(error=>toast(error.message));
+  form.onsubmit = event => {
+    event.preventDefault();
+    submit(form, async () => {
+      if (!modelConfiguration) await loadModelConfiguration();
+      const fields = Object.fromEntries(new FormData(form));
+      const provenance = Object.fromEntries(['model_revision','prompt_sha256','skill_version','hermes_version','tool_contract_version'].map(key=>[key,fields[key]]));
+      provenance.model_id = fields.model;
+      const result = await adminApi('/model-configuration/candidates', {method:'POST', body:{model:fields.model,
+        provenance, expected_revision:modelConfiguration.revision}});
+      renderModelConfiguration(result.configuration);
+      toast('候选已冻结，当前模型继续生效');
+    });
+  };
+  $('#model-candidates').onsubmit = event => {
+    const target = event.target;
+    event.preventDefault();
+    submit(target, async () => {
+      const candidate = modelConfiguration.candidates.find(item=>item.id===target.dataset.candidate);
+      if (!candidate) throw new Error('候选已变化，请刷新');
+      const fields = Object.fromEntries(new FormData(target));
+      let action, body;
+      if (target.classList.contains('model-evidence-form')) {
+        if (fields.report.length > 262144) throw new Error('报告超出大小上限');
+        let report; try { report=JSON.parse(fields.report); } catch { throw new Error('报告不是有效 JSON'); }
+        action='evidence'; body={report,report_sha256:fields.report_sha256};
+      } else {
+        action='review'; body={report_sha256:candidate.report.sha256,candidate_fingerprint:candidate.fingerprint,
+          reason:fields.reason, decisions:candidate.report.changed_sample_ids.map(id=>({sample_id:id,decision:fields['decision:'+id],note:fields['note:'+id]}))};
+      }
+      renderModelConfiguration(await adminApi('/model-configuration/candidates/'+candidate.id+'/'+action,
+        {method:'POST',body:{...body,expected_revision:modelConfiguration.revision}}));
+      toast(action==='evidence' ? '比较证据已冻结，请人工核验' : '人工复核已记录，尚未激活');
+    });
+  };
+  $('#model-candidates').onclick = async event => {
+    const button=event.target.closest('[data-activate-model]');
+    if (!button) return;
+    if (!await confirmAction('激活已复核模型将切换后续审核使用的模型，当前任务保留原快照。确认来源与全部差异已核验并激活？')) return;
+    try {
+      renderModelConfiguration(await adminApi('/model-configuration/candidates/'+button.dataset.activateModel+'/activate',
+        {method:'POST',body:{expected_revision:modelConfiguration.revision}}));
+      toast('候选已激活，等待工作器消费回执');
+      await loadSettings();
+    } catch(error) { toast(error.message); }
+  };
+}
+async function loadSources(preferredId = null) {
+  const previous = preferredId || $("#source-select").value;
   try {
     const data = await adminApi("/sources");
     sources = data.items;
@@ -246,17 +355,21 @@ async function selectSource() {
   if (!source) return;
   try {
     const data = await adminApi("/sources/" + source.id + "/experts");
+    if (selectedSource()?.id !== source.id) return;
     $("#trusted-experts").innerHTML =
       "<h3>信任作者</h3>" +
       data.items
+        .filter((expert) => expert.enabled !== false)
         .map(
           (e) =>
             `<div class="source-item"><span>${esc(e.display_nickname || e.nickname)}<br><span class="muted">${esc(e.platform_sender_id || e.sender_id)}</span></span><button data-untrust="${esc(e.id)}">移除</button></div>`,
         )
         .join("");
   } catch (error) {
+    if (selectedSource()?.id !== source.id) return;
     $("#trusted-experts").textContent = error.message;
   }
+  if (selectedSource()?.id === source.id) await listAdmins(false);
 }
 const tgNames = {
   idle: "未开始授权",
@@ -384,11 +497,11 @@ async function listDialogs(append = false) {
       $("#tg-dialog-list").setAttribute("aria-busy", "false");
   }
 }
-async function listAdmins(append = false) {
+async function listAdmins(append = false, scope = "admins") {
   const source = selectedSource();
   if (!source) return;
   const query = $("#tg-admin-search").value.trim();
-  if (append && query !== adminsQuery) return listAdmins(false);
+  if (append && query !== adminsQuery) return listAdmins(false, scope);
   if (!append) {
     adminsCursor = null;
     adminsQuery = query;
@@ -402,7 +515,7 @@ async function listAdmins(append = false) {
   $("#source-admins").setAttribute("aria-busy", "true");
   $("#tg-admins-more").hidden = true;
   try {
-    const data = await adminApi("/telegram/admins?" + search);
+    const data = await adminApi("/telegram/" + scope + "?" + search);
     if (sequence !== adminsSequence) return;
     if (!["ok", "available", undefined].includes(data.state)) {
       $("#source-admins").innerHTML =
@@ -413,7 +526,7 @@ async function listAdmins(append = false) {
       .map(
         (e) => {
           const username = e.username ? `@${e.username}` : "无用户名";
-          const role = e.admin_kind === "owner" ? "群主" : e.admin_kind === "administrator" ? "管理员" : "身份未确认";
+          const role = e.admin_kind === "owner" ? "群主" : e.admin_kind === "administrator" ? "管理员" : e.admin_kind === "member" ? "普通成员" : "身份未确认";
           const avatar = e.has_avatar ? "头像可用" : e.avatar_state === "absent" ? "无头像" : "头像未读取";
           const anonymous = e.sender_identity_kind === "chat_sender" || String(e.sender_id).startsWith("-")
             ? " · 频道/群组发言身份，不代表具体匿名个人"
@@ -426,7 +539,8 @@ async function listAdmins(append = false) {
     else
       $("#source-admins").innerHTML =
         html ||
-        `<p class="muted" role="status">${adminsQuery ? "没有匹配的管理员，可清空搜索或手工添加已核验作者 ID。" : "未返回可枚举作者；匿名管理员可能不会列出。可手工添加已核验 ID。"}</p>`;
+        `<p class="muted" role="status">${adminsQuery ? "没有匹配的作者，可清空搜索或手工添加已核验作者 ID。" : "未返回可枚举作者；匿名管理员可能不会列出。可手工添加已核验 ID。"}</p>`;
+    $("#tg-admins-more").dataset.scope = scope;
     adminsCursor = data.next_cursor;
     $("#tg-admins-more").hidden = !adminsCursor;
   } catch (error) {
@@ -438,8 +552,16 @@ async function listAdmins(append = false) {
   }
 }
 async function loadAdminPlans() {
+  const sequence = ++adminPlansSequence;
+  const container = $("#admin-plans");
+  const selectedPlan = $("#grant-plan").value;
+  container.setAttribute("aria-busy", "true");
+  $$("input,button", container).forEach((input) => (input.disabled = true));
+  $("#grant-plan").disabled = true;
+  $("#grant-form button").disabled = true;
   try {
     const data = await adminApi("/membership/plans");
+    if (sequence !== adminPlansSequence) return;
     adminPlans = data.items;
     $("#grant-plan").innerHTML = data.items
       .filter((p) => p.enabled !== false)
@@ -448,6 +570,8 @@ async function loadAdminPlans() {
           `<option value="${esc(p.code)}">${esc(p.name)} (${esc(p.code)})</option>`,
       )
       .join("");
+    if (data.items.some((p) => p.code === selectedPlan && p.enabled !== false))
+      $("#grant-plan").value = selectedPlan;
     $("#admin-plans").innerHTML = data.items
       .map(
         (p) =>
@@ -455,7 +579,15 @@ async function loadAdminPlans() {
       )
       .join("");
   } catch (error) {
-    $("#admin-plans").textContent = error.message;
+    if (sequence !== adminPlansSequence) return;
+    container.textContent = error.message;
+  } finally {
+    if (sequence === adminPlansSequence) {
+      container.setAttribute("aria-busy", "false");
+      $$("input,button", container).forEach((input) => (input.disabled = false));
+      $("#grant-plan").disabled = false;
+      $("#grant-form button").disabled = false;
+    }
   }
 }
 async function listUsers(append = false) {
@@ -515,6 +647,10 @@ function bind() {
     const button = event.target.closest("button");
     if (!button) return;
     try {
+      if (['telegram','leyu','orders','system'].includes(button.dataset.adminTaskTarget)) {
+        $(`.admin-tabs [data-admin-tab="${button.dataset.adminTaskTarget}"]`)?.click();
+        return;
+      }
       if (button.dataset.adminTab) {
         $$("[data-admin-tab]").forEach((x) => {
           x.classList.toggle("active", x === button);
@@ -579,13 +715,14 @@ function bind() {
       }),
   );
   $("#refresh-admin").onclick = () => loadStatus();
+  bindModelConfiguration();
   $("#source-select").onchange = () => selectSource();
   $("#source-form").onsubmit = (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     submit(form, async () => {
       const fd = new FormData(form);
-      await adminApi("/sources", {
+      const created = await adminApi("/sources", {
         method: "POST",
         body: {
           chat_id: fd.get("chat_id"),
@@ -596,7 +733,7 @@ function bind() {
       });
       form.reset();
       toast("监控来源已添加");
-      loadSources();
+      await loadSources(created.id);
     });
   };
   $("#expert-source-form").onsubmit = (e) => {
@@ -696,9 +833,10 @@ function bind() {
   $("#tg-dialogs").onclick = () => listDialogs();
   $("#tg-dialogs-more").onclick = () => listDialogs(true);
   $("#tg-admins").onclick = () => listAdmins();
-  $("#tg-admins-more").onclick = () => listAdmins(true);
+  $("#tg-admins-more").onclick = () => listAdmins(true, $("#tg-admins-more").dataset.scope || "admins");
+  $("#tg-directory-scope").onchange = () => listAdmins(false, $("#tg-directory-scope").value);
   for (const kind of ["dialog", "admin"]) {
-    const load = kind === "dialog" ? listDialogs : listAdmins;
+    const load = kind === "dialog" ? listDialogs : () => listAdmins(false, $("#tg-directory-scope").value);
     $("#tg-" + kind + "-search-form").onsubmit = (event) => {
       event.preventDefault();
       load();
@@ -762,7 +900,7 @@ function bind() {
         body,
       });
       toast("套餐已保存");
-      loadAdminPlans();
+      await loadAdminPlans();
     });
   });
   $("#leyu-setting-search").oninput = (e) => {

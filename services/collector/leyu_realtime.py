@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import inspect
 import json
+import logging
 import random
+from socket import gaierror
 import time
 from typing import Any, Awaitable, Callable, Iterable, Mapping
 from urllib.parse import urlencode, urlsplit
@@ -15,8 +17,9 @@ from urllib.parse import urlencode, urlsplit
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
-from .leyu import LeyuClient
-from .leyu_protocol import AUTH_CODES, SUCCESS_CODES, AuthExpired, LeyuError, decode_envelope, decode_payload, objects, parse_quotes, phase_for, score, timestamp
+from .leyu import LeyuClient, retry_after_seconds
+from .leyu_health import ThresholdAlert
+from .leyu_protocol import AUTH_CODES, SUCCESS_CODES, AuthExpired, LeyuError, RateLimited, decode_envelope, decode_payload, objects, parse_quotes, phase_for, score, timestamp
 
 HEARTBEAT_SECONDS = 5.0
 HEARTBEAT_DEADLINE_SECONDS = 12.0
@@ -26,6 +29,7 @@ MAX_PUSH_BYTES = 1024 * 1024
 PUSH_COMMANDS = frozenset({"C2", "C21", "C101", "C102", "C1021", "C103", "C104", "C105", "C106", "C109", "C110", "C118", "C1301", "C303", "C302"})
 ODDS_COMMANDS = frozenset({"C105", "C2", "C21"})
 LATENCY_WINDOW_SIZE = 256
+log = logging.getLogger("platform.collector.websocket")
 
 
 def _latency_ms(value: str | None, reference: datetime) -> float | None:
@@ -46,6 +50,39 @@ def _percentile(values: deque[float], quantile: float) -> float | None:
         return None
     ordered = sorted(values)
     return round(ordered[min(len(ordered) - 1, int((len(ordered) - 1) * quantile))], 1)
+
+
+def _quote_latency_observation(value: Any, reference: Any) -> tuple[str, float | None]:
+    """Classify actual quote timestamps without turning old evidence into unknown."""
+    if value is None or value == "":
+        return "unknown", None
+    try:
+        source = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        observed = reference if isinstance(reference, datetime) else datetime.fromisoformat(str(reference).replace("Z", "+00:00"))
+        if source.tzinfo is None or observed.tzinfo is None:
+            return "invalid", None
+        lag = (observed.astimezone(timezone.utc) - source.astimezone(timezone.utc)).total_seconds() * 1000
+    except (TypeError, ValueError, OverflowError):
+        return "invalid", None
+    if lag < 0:
+        return "future", None
+    if lag > 7 * 24 * 60 * 60 * 1000:
+        return "too_old", None
+    return "known", lag
+
+
+def _quote_latency_fields(window: deque[tuple[str, float | None]], prefix: str) -> dict[str, Any]:
+    values = deque(value for category, value in window if category == "known" and value is not None)
+    counts = {category: sum(item[0] == category for item in window)
+              for category in ("known", "unknown", "invalid", "future", "too_old")}
+    return {prefix + "_ms_p50": _percentile(values, .5),
+            prefix + "_ms_p95": _percentile(values, .95),
+            prefix + "_samples": len(values), prefix + "_window_size": len(window),
+            # Known source timestamps include >7-day-old facts, which are
+            # separately counted and excluded from the bounded lag percentiles.
+            prefix + "_known_count": counts["known"] + counts["future"] + counts["too_old"],
+            **{prefix + "_" + key + "_count": counts[key]
+               for key in ("unknown", "invalid", "future", "too_old")}}
 
 
 def subscription_frames(mids: Iterable[str], *, batch_size: int = SUBSCRIPTION_BATCH_SIZE) -> list[dict[str, Any]]:
@@ -148,19 +185,59 @@ class LeyuRealtime:
         self._source_lags: deque[float] = deque(maxlen=LATENCY_WINDOW_SIZE)
         self._queue_waits: deque[float] = deque(maxlen=LATENCY_WINDOW_SIZE)
         self._delivery_ages: deque[float] = deque(maxlen=LATENCY_WINDOW_SIZE)
+        self._quote_source_lags: deque[tuple[str, float | None]] = deque(maxlen=LATENCY_WINDOW_SIZE)
+        self._quote_delivery_ages: deque[tuple[str, float | None]] = deque(maxlen=LATENCY_WINDOW_SIZE)
+        self._subscription_alert = ThresholdAlert(.05, 0, raise_after=2, recover_after=2)
+        self._queue_alert = ThresholdAlert(.8, .25)
+        self._delivery_alert = ThresholdAlert(1, 0)
         self.stats: dict[str, Any] = {
             "state": "stopped", "reconnects": 0, "received": 0, "events_received": 0,
             "events_delivered": 0, "batches_delivered": 0, "dropped": 0,
             "delivery_failures": 0, "queue_depth": 0, "queue_high_water": 0,
             "subscription_requests_sent": 0,
+            "subscription_expected": 0, "subscription_send_missing": 0,
+            "subscription_send_missing_ratio": None,
+            "subscription_confirmed_fixtures": None, "subscription_miss_ratio": None,
+            "subscription_confirmation_state": "unverified",
+            "resync_signals": 0, "resync_signal_failures": 0, "event_drop_ratio": 0,
             "source_lag_ms_p50": None, "source_lag_ms_p95": None,
             "source_lag_samples": 0, "queue_wait_ms_p50": None,
             "queue_wait_ms_p95": None, "queue_wait_samples": 0,
             "delivery_age_ms_p50": None, "delivery_age_ms_p95": None,
             "delivery_age_samples": 0,
             "last_event_at": None, "last_delivery_at": None, "last_error": "",
+            **_quote_latency_fields(self._quote_source_lags, "quote_source_lag"),
+            **_quote_latency_fields(self._quote_delivery_ages, "quote_delivery_age"),
         }
+        self._update_alert_fields()
         self._gap = False
+
+    def _update_alert_fields(self) -> None:
+        self.stats.update(**self._subscription_alert.fields("subscription_alert"),
+                          **self._queue_alert.fields("queue_alert"),
+                          **self._delivery_alert.fields("delivery_alert"))
+
+    def _record_queue_health(self) -> None:
+        self._queue_alert.observe(self.queue.qsize() / self.queue.maxsize)
+        total = self.stats["events_received"] + self.stats["dropped"]
+        self.stats["event_drop_ratio"] = round(self.stats["dropped"] / total, 6) if total else 0
+        self._update_alert_fields()
+
+    def _subscription_coverage(self, current: Mapping[str, dict], applied: Mapping[str, dict]) -> None:
+        expected = sum(len(frame["list"]) for frame in current.values())
+        sent = sum(len(frame["list"]) for key, frame in current.items() if applied.get(key) == frame)
+        self.stats.update(subscription_expected=expected, subscription_requests_sent=sent,
+                          subscribed_fixtures=sent, subscription_send_missing=expected - sent,
+                          subscription_send_missing_ratio=round((expected - sent) / expected, 6) if expected else 0)
+        # A successful socket send proves only local dispatch, never upstream acceptance.
+
+    async def _signal_resync(self) -> None:
+        self.stats["resync_signals"] += 1
+        try:
+            await self.on_resync()
+        except Exception:
+            self.stats["resync_signal_failures"] += 1
+            raise
 
     def _record_event(self, event: Mapping[str, Any]) -> None:
         received_at = event.get("received_at")
@@ -177,6 +254,18 @@ class LeyuRealtime:
                 source_lag_ms_p95=_percentile(self._source_lags, 0.95),
                 source_lag_samples=len(self._source_lags),
             )
+        self._record_quote_latency(event, self._quote_source_lags, "quote_source_lag")
+
+    def _record_quote_latency(self, event: Mapping[str, Any], window: deque[tuple[str, float | None]],
+                              prefix: str, delivered_at: datetime | None = None) -> None:
+        for quote in event.get("markets", []):
+            if not isinstance(quote, Mapping):
+                continue
+            # A per-quote receive timestamp is preferable to the enclosing
+            # frame timestamp. Neither is ever substituted for source ctsp.
+            reference = delivered_at if delivered_at is not None else quote.get("received_at") or event.get("received_at")
+            window.append(_quote_latency_observation(quote.get("source_updated_at"), reference))
+        self.stats.update(_quote_latency_fields(window, prefix))
 
     def _record_queue_wait(self, event: Mapping[str, Any]) -> None:
         try:
@@ -201,10 +290,12 @@ class LeyuRealtime:
             self.stats["dropped"] += 1
             self.stats["queue_depth"] = self.queue.qsize()
             self._gap = True
+            self._record_queue_health()
             return False
         self.stats["events_received"] += 1
         self.stats["queue_depth"] = self.queue.qsize()
         self.stats["queue_high_water"] = max(self.stats["queue_high_water"], self.queue.qsize())
+        self._record_queue_health()
         return True
 
     async def _subscriptions(self, socket, previous: dict[str, dict]) -> dict[str, dict]:
@@ -213,15 +304,22 @@ class LeyuRealtime:
             raise LeyuError("subscription_source_unavailable")
         frames = subscription_frames(mids)
         current = {frame["key"]: frame for frame in frames}
-        for key, frame in previous.items():
-            if key not in current or current[key] != frame:
-                await socket.send(json.dumps({**frame, "cclose": "1"}, separators=(",", ":")))
-        for key, frame in current.items():
-            if previous.get(key) != frame:
-                await socket.send(json.dumps(frame, separators=(",", ":")))
-        requested = sum(len(frame["list"]) for frame in frames)
-        self.stats["subscription_requests_sent"] = requested
-        self.stats["subscribed_fixtures"] = requested
+        applied = dict(previous)
+        self._subscription_coverage(current, applied)
+        try:
+            for key, frame in previous.items():
+                if key not in current or current[key] != frame:
+                    await socket.send(json.dumps({**frame, "cclose": "1"}, separators=(",", ":")))
+                    applied.pop(key, None)
+                    self._subscription_coverage(current, applied)
+            for key, frame in current.items():
+                if applied.get(key) != frame:
+                    await socket.send(json.dumps(frame, separators=(",", ":")))
+                    applied[key] = frame
+                    self._subscription_coverage(current, applied)
+        finally:
+            self._subscription_alert.observe(self.stats["subscription_send_missing_ratio"])
+            self._update_alert_fields()
         return current
 
     async def _consume(self, stop: asyncio.Event) -> None:
@@ -232,11 +330,21 @@ class LeyuRealtime:
                     await asyncio.wait_for(callback(*args), timeout=30)
                     if self.stats["last_error"] == "push_delivery_failure":
                         self.stats["last_error"] = ""
+                    self._delivery_alert.observe(0)
+                    self._update_alert_fields()
                     return True
-                except Exception:
+                except Exception as exc:
                     # 写入失败时保留当前批次重试，不能使消费者静默退出且网络线程仍报健康。
                     self.stats["last_error"] = "push_delivery_failure"
                     self.stats["delivery_failures"] = self.stats.get("delivery_failures", 0) + 1
+                    # Stable categories only: no response text, URLs or payloads.
+                    category = exc.category if isinstance(exc, LeyuError) else type(exc).__name__
+                    if not isinstance(category, str) or not category.isascii() or not category.replace("_", "").isalnum() or len(category) > 80:
+                        category = "delivery_exception"
+                    self.stats["last_delivery_error_category"] = category
+                    log.warning("Leyu push delivery failed category=%s", category)
+                    self._delivery_alert.observe(1)
+                    self._update_alert_fields()
                     failures += 1
                     try:
                         await asyncio.wait_for(stop.wait(), timeout=min(5, 0.1 * 2 ** min(failures, 6)))
@@ -247,7 +355,7 @@ class LeyuRealtime:
         while not stop.is_set() or not self.queue.empty():
             if self._gap:
                 self._gap = False
-                if not await deliver(self.on_resync):
+                if not await deliver(self._signal_resync):
                     return
             try:
                 event = await asyncio.wait_for(self.queue.get(), timeout=0.25)
@@ -269,7 +377,7 @@ class LeyuRealtime:
                 combined[key] = item
             try:
                 if any(item.get("requires_resync") for item in combined.values()):
-                    if not await deliver(self.on_resync):
+                    if not await deliver(self._signal_resync):
                         return
                 batch = list(combined.values())
                 if not await deliver(self.on_batch, batch):
@@ -279,6 +387,7 @@ class LeyuRealtime:
                 delivered_at = datetime.now(timezone.utc)
                 self.stats["last_delivery_at"] = delivered_at.isoformat()
                 for item in batch:
+                    self._record_quote_latency(item, self._quote_delivery_ages, "quote_delivery_age", delivered_at)
                     age = _latency_ms(item.get("source_updated_at"), delivered_at)
                     if age is not None:
                         self._delivery_ages.append(age)
@@ -291,9 +400,11 @@ class LeyuRealtime:
                 for _ in items:
                     self.queue.task_done()
                 self.stats["queue_depth"] = self.queue.qsize()
+                self._record_queue_health()
 
     async def run(self, stop: asyncio.Event) -> None:
         failures = 0
+        rate_limit_streak = 0
         consumer = asyncio.create_task(self._consume(stop))
         try:
             while not stop.is_set():
@@ -307,13 +418,14 @@ class LeyuRealtime:
                                               user_agent_header=client.user_agent, proxy=None, open_timeout=5,
                                               ping_interval=5, ping_timeout=8, close_timeout=3,
                                               max_size=MAX_PUSH_BYTES, max_queue=4) as socket:
-                        await self.on_resync()
+                        await self._signal_resync()
                         previous = await self._subscriptions(socket, {})
                         now = time.monotonic()
                         last_received = now
                         heartbeat_at = now
                         subscriptions_at = now + SUBSCRIPTION_REFRESH_SECONDS
-                        self.stats.update(state="connected", last_error="")
+                        self.stats.update(state="connected", last_error="", last_error_code="", failure_group="",
+                                          backoff_seconds=0, retry_at=None)
                         failures = 0
                         while not stop.is_set():
                             if consumer.done():
@@ -341,28 +453,53 @@ class LeyuRealtime:
                                 message = json.loads(raw)
                                 events = push_events(message)
                             except (ValueError, UnicodeError, LeyuError) as exc:
-                                if isinstance(exc, AuthExpired):
+                                if isinstance(exc, (AuthExpired, RateLimited)) or (isinstance(exc, LeyuError) and exc.code):
                                     raise
                                 self.stats["last_error"] = "invalid_push_message"
                                 self._gap = True
                                 continue
+                            rate_limit_streak = 0
+                            self.stats["rate_limit_streak"] = 0
                             for event in events:
                                 self._enqueue_event(event)
                 except (LeyuError, OSError, ConnectionClosed, InvalidStatus, TimeoutError) as exc:
+                    retry_after = None
+                    limited = isinstance(exc, RateLimited)
+                    code = exc.code if isinstance(exc, LeyuError) else ""
                     if isinstance(exc, LeyuError):
                         category = exc.category
+                        retry_after = exc.retry_after_seconds if limited else None
                     elif isinstance(exc, InvalidStatus):
                         # HTTP handshake refusals (notably 403) are an upstream
                         # condition. Keep the collector alive and reconnect with
                         # backoff; never expose response headers/body in status.
                         status = getattr(getattr(exc, "response", None), "status_code", None)
                         category = f"websocket_http_{status}" if isinstance(status, int) else "websocket_handshake_rejected"
+                        code = str(status) if isinstance(status, int) else ""
+                        limited = status == 429
+                        if limited:
+                            retry_after = retry_after_seconds(exc.response.headers.get("Retry-After"))
                     else:
                         category = type(exc).__name__
-                    self.stats.update(state="backoff", last_error=category)
+                    group = ("rate_limit" if limited else "session" if isinstance(exc, AuthExpired) else
+                             "domain" if isinstance(exc, gaierror) else
+                             "permission" if category in {"websocket_http_403", "permission_denied"} else
+                             "configuration" if category in {"configuration_changed", "invalid_base_url", "authorized_session_missing"} else
+                             "protocol" if isinstance(exc, LeyuError) and category.startswith("invalid_") else
+                             "source" if isinstance(exc, LeyuError) and exc.code else "network")
+                    self.stats.update(state="backoff", last_error=category, last_error_code=code, failure_group=group,
+                                      subscription_requests_sent=0, subscribed_fixtures=0,
+                                      subscription_send_missing=self.stats["subscription_expected"],
+                                      subscription_send_missing_ratio=1 if self.stats["subscription_expected"] else None)
                     self.stats["reconnects"] += 1
                     failures += 1
                     wait = min(60, 2 ** min(failures, 5)) + random.random()
+                    rate_limit_streak = rate_limit_streak + 1 if limited else 0
+                    if limited:
+                        wait = min(900, max(60 * 2 ** min(rate_limit_streak - 1, 4), retry_after or 0))
+                    self.stats.update(backoff_seconds=round(wait, 3),
+                                      retry_at=(datetime.now(timezone.utc) + timedelta(seconds=wait)).isoformat(),
+                                      rate_limit_streak=rate_limit_streak)
                     try:
                         await asyncio.wait_for(stop.wait(), timeout=wait)
                     except asyncio.TimeoutError:

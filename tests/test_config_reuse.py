@@ -107,8 +107,12 @@ class ComposeBoundaryTests(unittest.TestCase):
         services = {name: {"environment": {}, "cpus": 0.1, "mem_limit": 128000000, "logging": {"options": {"max-size": "1m"}}} for name in PERMITTED}
         services["api"]["depends_on"] = {"migrate": {"condition": "service_completed_successfully"}}
         services["api"]["environment"]["TELEGRAM_CONTROL_URL"] = "http://collector:8092"
+        services["api"]["environment"]["FORWARDED_ALLOW_IPS"] = "172.30.253.2"
+        services["api"]["networks"] = {"edge-private": {"ipv4_address": "172.30.253.3"}, "app-private": {}, "storage-private": {}}
+        services["web"]["networks"] = {"edge-private": {"ipv4_address": "172.30.253.2"}, "egress": {}}
         services["hermes"]["environment"]["HERMES_PROVIDER_API_KEY"] = "fixture-only"
-        return {"services": services, "networks": {"app-private": {"internal": True}, "storage-private": {"internal": True}}}
+        return {"services": services, "networks": {"app-private": {"internal": True}, "storage-private": {"internal": True},
+            "edge-private": {"internal": True, "ipam": {"config": [{"subnet": "172.30.253.0/28"}]}}}}
 
     def test_valid_minimal_service_boundary(self):
         self.assertEqual([], validate_compose(self.fixture(), Path.cwd()))

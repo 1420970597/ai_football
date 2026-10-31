@@ -12,6 +12,7 @@ import asyncpg
 
 from .bundle import RecoveryError,create_bundle,restore_bundle,validate_isolated_dsn
 from .legacy_quality import plan
+from .operations import cleanup_gate,recovery_plan
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -28,6 +29,10 @@ class IsolatedObjectDirectory:
         self.path=project_path(path)
 
     def key_path(self,key):
+        if (not isinstance(key,str) or not key or key.startswith('/') or chr(92) in key
+                or any(part in {'','.', '..'} for part in key.split('/'))
+                or any(ord(char)<32 or ord(char)==127 for char in key)):
+            raise RecoveryError('invalid_object_reference')
         result=(self.path/key).resolve()
         if not result.is_relative_to(self.path):
             raise RecoveryError('invalid_object_reference')
@@ -51,11 +56,15 @@ class IsolatedObjectDirectory:
 
 
 async def run(args):
-    if args.mode=='classify':
+    if args.mode in {'classify','plan','cleanup-check'}:
         path=project_path(args.input)
         if path.stat().st_size>16*1024*1024:
             raise RecoveryError('classification_sample_budget_exceeded')
         records=json.loads(path.read_text())
+        if args.mode!='classify':
+            if not isinstance(records,dict):
+                raise RecoveryError('invalid_recovery_plan_document')
+            return recovery_plan(records) if args.mode=='plan' else cleanup_gate(records)
         if not isinstance(records,list) or len(records)>10000 or any(not isinstance(item,dict) for item in records):
             raise RecoveryError('classification_sample_budget_exceeded')
         result=plan(records)
@@ -103,7 +112,7 @@ async def run(args):
 
 def main():
     parser=argparse.ArgumentParser(description='仅显式隔离恢复与旧专家证据分类，不删除生产数据')
-    parser.add_argument('mode',choices=('backup','restore','classify'))
+    parser.add_argument('mode',choices=('backup','restore','classify','plan','cleanup-check'))
     parser.add_argument('--dsn-env',default='RECOVERY_TEST_DATABASE_URL')
     parser.add_argument('--backup-key-env',default='RECOVERY_BACKUP_KEY')
     parser.add_argument('--data-key-reference',default='')

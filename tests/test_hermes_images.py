@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from datetime import datetime, timezone
 import hashlib
@@ -5,12 +6,28 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app import blobstore, hermes_client
+from io import BytesIO
+from PIL import Image
 
 
-PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7GQAAAAASUVORK5CYII=')
+def png_bytes():
+    output = BytesIO()
+    Image.new('RGB', (48, 32), 'red').save(output, format='PNG')
+    return output.getvalue()
+
+
+PNG = png_bytes()
 
 
 class HermesImagesTests(unittest.IsolatedAsyncioTestCase):
+    def test_decoded_image_pixels_and_corrupt_payload_are_rejected(self):
+        self.assertEqual(48, blobstore.validate_image(PNG)['width'])
+        with patch.object(blobstore, 'MAX_IMAGE_PIXELS', 100):
+            with self.assertRaisesRegex(RuntimeError, 'pixel limit'):
+                blobstore.validate_image(PNG)
+        with self.assertRaisesRegex(RuntimeError, 'decoding failed'):
+            blobstore.validate_image(b'\x89PNG\r\n\x1a\nrest')
+
     def message(self, media):
         return {'source_name':'测试群', 'display_nickname':'专家昵称', 'raw_text':'Alpha 对 Beta，大2.5；另买主队让0.25',
                 'posted_at':datetime.now(timezone.utc), 'reply_text':'赛前推荐', 'media_objects':media}
@@ -26,11 +43,45 @@ class HermesImagesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(PNG, base64.b64decode(parts[1]['image_url']['url'].split(',',1)[1]))
         self.assertEqual('high', parts[1]['image_url']['detail'])
 
+    async def test_album_images_prepare_concurrently_with_a_bounded_reader_pool(self):
+        active = peak = 0
+
+        async def read_image(_key):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            try:
+                await asyncio.sleep(.01)
+                return PNG
+            finally:
+                active -= 1
+
+        media = [{'object_key':f'v2/tg/image{i}.png','mime_type':'image/png'} for i in range(4)]
+        with patch.object(blobstore, 'read_image', side_effect=read_image):
+            parts = await hermes_client._content_parts(self.message(media), 'review', 'attempt')
+        self.assertEqual(2, peak)
+        self.assertEqual(5, len(parts))
+        self.assertEqual(['image_url'] * 4, [part['type'] for part in parts[1:]])
+
     async def test_missing_image_fails_whole_review_instead_of_dropping_image(self):
         media = [{'object_key':'v2/missing.png','mime_type':'image/png'}]
         with patch.object(blobstore, 'read_image', AsyncMock(side_effect=RuntimeError('object unavailable'))):
             with self.assertRaises(RuntimeError):
                 await hermes_client._content_parts(self.message(media), 'review', 'attempt')
+
+    async def test_historical_mode_and_original_posted_time_are_explicit_model_context(self):
+        message = self.message([]) | {'review_mode': 'historical_replay',
+                                     'posted_at': datetime(2021, 2, 3, tzinfo=timezone.utc)}
+        parts = await hermes_client._content_parts(message, 'review', 'attempt')
+        self.assertIn('historical_replay', parts[0]['text'])
+        self.assertIn('2021-02-03T00:00:00+00:00', parts[0]['text'])
+        self.assertIn('禁止把旧推荐绑定当前比赛报价', parts[0]['text'])
+
+    async def test_image_failure_remains_fatal_for_historical_mode(self):
+        media = [{'object_key':'v2/missing.png','mime_type':'image/png'}]
+        with patch.object(blobstore, 'read_image', AsyncMock(side_effect=RuntimeError('object unavailable'))):
+            with self.assertRaises(RuntimeError):
+                await hermes_client._content_parts(self.message(media) | {'review_mode': 'historical_replay'}, 'review', 'attempt')
 
     async def test_mime_conflict_html_and_total_budget_are_rejected(self):
         media = [{'object_key':'v2/image','mime_type':'image/jpeg'}]

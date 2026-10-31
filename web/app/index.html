@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width,initial-scale=1,viewport-fit=cover"
     />
-    <meta name="theme-color" content="#403278" />
+    <meta name="theme-color" content="#0868c5" />
     <meta name="color-scheme" content="light" />
     <title>球讯比分 · 专家与赛事</title>
     <link rel="stylesheet" href="/assets/app.css" />
@@ -162,6 +162,13 @@
             </button>
           </div>
           <div id="experts-state" class="empty-state" hidden></div>
+          <form id="expert-stats-filter" class="filter-row" aria-label="专家统计筛选">
+            <label>统计窗口<select name="days"><option value="7">近7天</option><option value="30" selected>近30天</option><option value="90">近90天</option><option value="365">近365天</option></select></label>
+            <label>推荐阶段<select name="phase"><option value="all">全部阶段</option><option value="scheduled">赛前</option><option value="live">滚球</option></select></label>
+            <label>玩法<select name="market_kind"><option value="all">全部玩法</option><option value="winner">独赢</option><option value="handicap">让球</option><option value="total">大小</option></select></label>
+            <label>推荐来源<select name="source_id"><option value="">全部来源</option></select></label>
+            <button class="small-button" type="submit">应用统计筛选</button>
+          </form>
           <div id="expert-ranking">
             <div class="filter-row">
               <button
@@ -289,12 +296,6 @@
               <summary>登录安全</summary>
               <form id="password-form" class="compact-form">
                 <label
-                  >当前密码<input
-                    name="current_password"
-                    type="password"
-                    autocomplete="current-password"
-                    required /></label
-                ><label
                   >新密码<input
                     name="new_password"
                     type="password"
@@ -432,7 +433,7 @@
             <details class="settings-section">
               <summary>导出本人记录</summary>
               <p class="form-note">
-                按页读取并下载本人资料、会员和订单，敏感字段不会导出。读取前可能要求再次验证身份。
+                按页读取并下载本人资料、会员和订单，敏感字段不会导出。
               </p>
               <div class="form-actions">
                 <button class="small-button" data-export="profile">
@@ -454,12 +455,6 @@
               </button>
               <form id="closure-form" class="compact-form">
                 <label
-                  >本人密码<input
-                    name="password"
-                    type="password"
-                    autocomplete="current-password"
-                    required /></label
-                ><label
                   >输入“注销我的球讯账户”<input
                     name="confirmation_phrase"
                     required
@@ -610,14 +605,15 @@
                       class="compact-form directory-search"
                     >
                       <label
-                        >搜索本群管理员<input
+                        >搜索群内作者<input
                           id="tg-admin-search"
                           type="search"
                           maxlength="120"
                           placeholder="昵称、作者 ID 或 @用户名"
                       /></label>
+                      <label>搜索范围<select id="tg-directory-scope"><option value="members">所有成员（含普通成员）</option><option value="admins">仅管理员</option></select></label>
                       <div class="form-actions">
-                        <button class="small-button">搜索管理员</button
+                        <button class="small-button">搜索成员</button
                         ><button
                           type="button"
                           id="tg-admin-search-clear"
@@ -629,7 +625,7 @@
                     </form>
                     <div id="source-admins"></div>
                     <button id="tg-admins-more" class="small-button" hidden>
-                      更多管理员
+                      加载更多作者
                     </button>
                     <form id="expert-source-form" class="compact-form">
                       <h3>添加已核验作者</h3>
@@ -811,29 +807,12 @@
               </button>
             </section>
             <section id="admin-system" class="admin-panel" hidden>
-              <details class="settings-section">
-                <summary>管理身份恢复</summary>
-                <div id="mfa-status"></div>
-                <div class="form-actions">
-                  <button id="mfa-refresh" class="small-button">
-                    刷新验证器状态</button
-                  ><button id="mfa-start" class="small-button">
-                    登记新验证器 / 换手机
-                  </button>
-                </div>
-                <p class="form-note">
-                  恢复码只能查看一次。丢失动态验证码时仍需邮箱、密码及未使用的恢复码登录。
-                </p>
-                <button id="generate-mfa-recovery" class="small-button">
-                  生成新一组一次性恢复码
-                </button>
-              </details>
               <form id="system-settings" class="compact-form settings-form">
                 <h2>Hermes 与业务设置</h2>
                 <label
-                  >分析模型<input
+                  >候选分析模型<input
                     name="hermes_analysis_model"
-                    placeholder="由 Hermes 配置管理" /></label
+                    placeholder="修改后进入候选审核，不会立即生效" /><small>当前模型继续运行。新模型需冻结比较证据、人工复核及显式激活。</small></label
                 ><label
                   >报价有效秒数<input
                     name="quote_max_age_seconds"
@@ -847,6 +826,23 @@
                   />开放用户本人启用自动投注</label
                 ><button class="primary-button">保存业务设置</button>
               </form>
+              <details class="settings-section" id="model-configuration-section">
+                <summary>模型候选、质量证据与激活</summary>
+                <p id="model-configuration-state" class="form-note" aria-live="polite">等待读取模型配置</p>
+                <button id="refresh-model-configuration" class="small-button">刷新模型版本</button>
+                <form id="model-candidate-form" class="compact-form">
+                  <h3>冻结模型 / 提示 / 技能候选</h3>
+                  <label>模型标识<input name="model" maxlength="200" required /></label>
+                  <label>模型修订版本<input name="model_revision" maxlength="200" required /></label>
+                  <label>提示 SHA-256<input name="prompt_sha256" pattern="[0-9a-f]{64}" required /></label>
+                  <label>技能版本<input name="skill_version" maxlength="200" required /></label>
+                  <label>Hermes 版本<input name="hermes_version" maxlength="200" required /></label>
+                  <label>工具契约版本<input name="tool_contract_version" maxlength="200" required /></label>
+                  <p class="form-note">新提示或技能必须先有可核验部署证明；仅声明版本不会生效。当前配置标为迁移基线，不表示已通过新金标。</p>
+                  <button class="primary-button">保存冻结候选</button>
+                </form>
+                <div id="model-candidates" class="record-list" aria-live="polite"></div>
+              </details>
               <details class="settings-section">
                 <summary>管理审计</summary>
                 <button id="refresh-audit" class="small-button">
@@ -912,60 +908,12 @@
             type="password"
             autocomplete="current-password"
             required /></label
-        ><label id="totp-field" hidden
-          >动态验证码（如已启用）<input
-            name="totp_code"
-            inputmode="numeric"
-            pattern="[0-9]{6}"
-            maxlength="6" /></label
-        ><label id="admin-recovery-field" hidden
-          >管理员一次性恢复码<input
-            name="recovery_code"
-            type="password"
-            autocomplete="off" /></label
         ><button class="primary-button">登录</button>
         <p id="auth-message" role="status"></p>
       </form>
       <div class="form-actions auth-assistance">
         <button class="text-link" data-password-recovery>用户忘记密码</button
-        ><button
-          id="admin-recovery-toggle"
-          class="text-link"
-          data-use-admin-recovery
-          hidden
-        >
-          使用管理员恢复码
-        </button>
       </div>
-    </dialog>
-    <dialog
-      id="reauth-dialog"
-      aria-labelledby="reauth-title"
-      aria-describedby="reauth-message"
-    >
-      <div class="dialog-header">
-        <h2 id="reauth-title">再次验证身份</h2>
-        <button data-close-dialog aria-label="关闭再次验证">×</button>
-      </div>
-      <form id="reauth-form" class="compact-form">
-        <p id="reauth-message" role="status"></p>
-        <label
-          >本人密码<input
-            name="password"
-            type="password"
-            autocomplete="current-password"
-            required
-        /></label>
-        <label id="reauth-totp" hidden
-          >动态验证码（如已启用）<input
-            name="totp_code"
-            inputmode="numeric"
-            pattern="[0-9]{6}"
-            maxlength="6"
-            autocomplete="one-time-code"
-        /></label>
-        <button type="submit" class="primary-button">验证身份</button>
-      </form>
     </dialog>
     <dialog
       id="content-dialog"

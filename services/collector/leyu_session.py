@@ -37,6 +37,10 @@ APP_VERSION = "2.0.1"
 SITE_ID = "2001"
 
 
+class _RequestNotSent(LeyuError):
+    """Transport failed before sending the application request (no redirects/retries)."""
+
+
 def _connect_failure_category(scope: str, exc: BaseException) -> str:
     cause = exc.__cause__
     for _ in range(4):
@@ -141,16 +145,18 @@ async def bounded_request(client: httpx.AsyncClient, method: str, url: str, *, l
         # only the numeric status; never persist the provider's reason text.
         match = re.search(r"\b([1-5][0-9]{2})\b", str(exc))
         if match:
-            raise LeyuError(f"{failure_scope}_proxy_http_rejected", match.group(1)) from None
-        raise LeyuError(f"{failure_scope}_proxy_failure") from None
+            raise _RequestNotSent(f"{failure_scope}_proxy_http_rejected", match.group(1)) from None
+        raise _RequestNotSent(f"{failure_scope}_proxy_failure") from None
     except httpx.ConnectTimeout:
-        raise LeyuError(f"{failure_scope}_connect_timeout") from None
+        raise _RequestNotSent(f"{failure_scope}_connect_timeout") from None
+    except httpx.PoolTimeout:
+        raise _RequestNotSent(f"{failure_scope}_pool_timeout") from None
     except httpx.ReadTimeout:
         raise LeyuError(f"{failure_scope}_read_timeout") from None
     except httpx.TimeoutException:
         raise LeyuError(f"{failure_scope}_timeout") from None
     except httpx.ConnectError as exc:
-        raise LeyuError(_connect_failure_category(failure_scope, exc)) from None
+        raise _RequestNotSent(_connect_failure_category(failure_scope, exc)) from None
     except httpx.ReadError:
         raise LeyuError(f"{failure_scope}_read_failure") from None
     except httpx.HTTPError:
@@ -452,7 +458,13 @@ class AppSessionRenewer:
                 "Flag": 1, "Version": APP_VERSION, "Kaptchcate": 99}
         headers = self._headers("/site/api", ip)
         self._login_submitted = True
-        payload = await app_post(client, host, LOGIN_PATH, headers, body, failure_scope=failure_scope)
+        try:
+            payload = await app_post(client, host, LOGIN_PATH, headers, body, failure_scope=failure_scope)
+        except _RequestNotSent:
+            # TCP/TLS, CONNECT or pool acquisition failed before the login was
+            # sent. Keep read/write/response failures and cancellations unknown.
+            self._login_submitted = False
+            raise
         if str(payload.get("status_code")) != "6000":
             raise LeyuError("app_login_rejected", str(payload.get("status_code")))
         data = payload.get("data")

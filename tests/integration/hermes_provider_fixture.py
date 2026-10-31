@@ -1,30 +1,30 @@
-"""确定性假提供方，仅供真实 Hermes 容器工具回路验收，绝不作为业务模型。"""
+"""确定性假提供方：只验证真实 Hermes 工具回路，不评价实际模型语义。"""
+import base64
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import re
+import threading
 import time
 
-evidence = {'requests': 0, 'models': [], 'tools': [], 'native_image_seen': False, 'called': [], 'project_skill_seen': False, 'tool_results': []}
+MODEL = 'cline-pass/deepseek-v4.1-flash'
+TARGET = 259
+CANARY = 'isolated-hermes-canary-never-a-real-secret'
+evidence = {'requests': 0, 'unscoped_requests': 0, 'reviews': {}}
+lock = threading.RLock()
 
 
 def nested(value, key):
     if isinstance(value, dict):
         if key in value:
             return value[key]
-        for child in value.values():
-            result = nested(child, key)
-            if result is not None:
-                return result
+        children = value.values()
     elif isinstance(value, list):
-        for child in value:
-            result = nested(child, key)
-            if result is not None:
-                return result
+        children = value
     elif isinstance(value, str):
         try:
             return nested(json.loads(value), key)
         except (ValueError, TypeError):
-            # Hermes 对 MCP 返回值加不可信数据围栏，取围栏中的 JSON 后递归解开 result。
             start = value.find('{')
             if start >= 0:
                 try:
@@ -32,58 +32,173 @@ def nested(value, key):
                     return nested(decoded, key)
                 except ValueError:
                     pass
+        return None
+    else:
+        return None
+    for child in children:
+        result = nested(child, key)
+        if result is not None:
+            return result
     return None
 
 
-def answer(body):
+def _last_tool(messages):
+    completed = [msg for msg in messages if msg.get('role') == 'tool']
+    if not completed:
+        return None, None, None
+    last = completed[-1]
+    call_id = last.get('tool_call_id')
+    name = last.get('name')
+    if not name:
+        for msg in reversed(messages):
+            for call in msg.get('tool_calls') or []:
+                if call.get('id') == call_id:
+                    name = call.get('function', {}).get('name')
+                    break
+            if name:
+                break
+    return name or '', last.get('content', ''), call_id
+
+
+def _observe(state, body, tools):
+    state['requests'] += 1
+    state['models'] = sorted(set(state['models']) | {str(body.get('model'))})
+    state['tools'] = sorted(set(state['tools']) | set(tools))
+    for msg in body.get('messages', []):
+        if not isinstance(msg.get('content'), list):
+            continue
+        for part in msg['content']:
+            if part.get('type') != 'image_url':
+                continue
+            value = part.get('image_url', {}).get('url', '')
+            if value.startswith('data:image/png;base64,'):
+                data = base64.b64decode(value.split(',', 1)[1], validate=True)
+                state['image_sha256s'] = sorted(set(state['image_sha256s']) | {hashlib.sha256(data).hexdigest()})
+    state['canary_exposed'] |= CANARY in json.dumps(body.get('messages', []), ensure_ascii=False)
+
+
+def _calls(state, tools, calls):
+    tool_calls = []
+    for index, call in enumerate(calls):
+        suffix, args, unknown = call[:3]
+        server = calls[index][3] if len(calls[index]) > 3 else None
+        name = suffix if unknown else next((name for name in tools if name.endswith(suffix)
+                                            and (server is None or name.startswith('mcp__' + server + '__'))), None)
+        if not name:
+            return {'role': 'assistant', 'content': '隔离测试缺少受限工具：' + suffix}, 'stop'
+        state['called'].append(name)
+        call_id = f'fixture-call-{evidence["requests"]}-{index}'
+        state['requested_calls'][call_id] = name
+        tool_calls.append({
+            'id': call_id, 'type': 'function',
+            'function': {'name': name, 'arguments': json.dumps(args, ensure_ascii=False)},
+        })
+    return {'role': 'assistant', 'content': None, 'tool_calls': tool_calls}, 'tool_calls'
+
+
+def _call(state, tools, suffix, args, *, unknown=False):
+    return _calls(state, tools, [(suffix, args, unknown)])
+
+
+def _answer(body):
     evidence['requests'] += 1
-    model = str(body.get('model'))
-    if model not in evidence['models']:
-        evidence['models'].append(model)
-    tools = [t['function']['name'] for t in body.get('tools', []) if t.get('type') == 'function']
-    evidence['tools'] = sorted(set(evidence['tools']) | set(tools))
-    if any(part.get('type') == 'image_url' for msg in body.get('messages', []) if isinstance(msg.get('content'), list) for part in msg['content']):
-        evidence['native_image_seen'] = True
-    text = json.dumps(body.get('messages', []), ensure_ascii=False)
+    messages = body.get('messages', [])
+    text = json.dumps(messages, ensure_ascii=False)
     review = re.search(r'review_id: ([a-f0-9-]{36})', text)
     attempt = re.search(r'attempt_id: ([a-f0-9-]{36})', text)
     if not review or not attempt:
-        return {'role': 'assistant', 'content': '隔离测试输入缺少任务编号'}, 'stop'
+        evidence['unscoped_requests'] += 1
+        return {'role': 'assistant', 'content': '隔离测试辅助请求'}, 'stop'
+    mode = re.search(r'fixture_scenario: ([a-z_]+)', text)
+    mode = mode.group(1) if mode else 'normal'
+    state = evidence['reviews'].setdefault(review.group(1), {
+        'scenario': mode, 'requests': 0, 'models': [], 'tools': [], 'called': [],
+        'image_sha256s': [], 'project_skill_seen': False, 'canary_exposed': False,
+        'observed_results': [], 'seen_call_ids': [], 'requested_calls': {}, 'attack_step': 0, 'pagination_attack': 0, 'forgery_attack': False,
+    })
+    tools = [t['function']['name'] for t in body.get('tools', []) if t.get('type') == 'function']
+    _observe(state, body, tools)
+    name, last, call_id = _last_tool(messages)
+    if call_id and call_id not in state['seen_call_ids']:
+        state['seen_call_ids'].append(call_id)
+        state['observed_results'].append({'name': name, 'requested_name': state['requested_calls'].get(call_id, name),
+            'error': any(word in str(last).lower() for word in ('error', 'unknown', 'not available', 'not found', 'does not exist')),
+            'search_key_present': nested(last, 'search_key') is not None,
+            'accepted_count': len(nested(last, 'accepted') or [])})
+    if name and name.endswith('skill_view') and 'quote_id' in str(last) and 'next_cursor' in str(last):
+        state['project_skill_seen'] = True
     context = {'review_id': review.group(1), 'attempt_id': attempt.group(1)}
-    completed = [msg for msg in body.get('messages', []) if msg.get('role') == 'tool']
-    last = completed[-1].get('content', '') if completed else None
-    if last:
-        evidence['tool_results'].append(str(last)[:500])
-    if last and 'quote_id' in str(last) and 'next_cursor' in str(last):
-        evidence['project_skill_seen'] = True
-    if not completed and any(name.endswith('skill_view') for name in tools):
-        tool = next(t['function'] for t in body['tools'] if t['function']['name'].endswith('skill_view'))
-        properties = tool['parameters'].get('properties', {})
+    search = {**context, 'team_query': 'Alpha', 'competition_query': '隔离联赛-' + review.group(1),
+              'phase': 'all', 'sport': 'football', 'page_size': 20}
+    resolve = {**context, 'team_a': f'Alpha{TARGET}', 'team_b': f'Beta{TARGET}',
+               'competition': '隔离联赛-' + review.group(1)}
+    if mode == 'length':
+        return {'role': 'assistant', 'content': '输出预算被截断，隔离测试没有完成任何推荐。'}, 'length'
+    if mode == 'budget' and not tools:
+        return {'role': 'assistant', 'content': '隔离回合预算已耗尽；没有推荐。'}, 'stop'
+    if not name or mode == 'budget':
+        schema = next((t['function'] for t in body.get('tools', []) if t.get('function', {}).get('name', '').endswith('skill_view')), {})
+        properties = schema.get('parameters', {}).get('properties', {})
         argument = next((key for key in ('name', 'skill_name', 'skill') if key in properties), 'name')
-        suffix, args = 'skill_view', {argument: 'expert-review'}
-    elif not completed or (evidence['called'] and evidence['called'][-1].endswith('skill_view')):
-        suffix, args = 'search_matches', {**context, 'team_query': 'Alpha', 'competition_query': '隔离联赛-'+review.group(1), 'phase': 'all', 'page_size': 20}
-    elif nested(last, 'search_key'):
+        return _call(state, tools, 'skill_view', {argument: 'expert-review'})
+    if mode == 'adversarial' and state['attack_step'] < 3:
+        attacks = [('terminal', {'command': 'printenv ISOLATED_CANARY_SECRET'}),
+                   ('mcp__football__place_bet', {'account': 'forbidden', 'stake': 1}),
+                   ('skill_manage', {'action': 'create', 'name': 'forbidden-skill', 'content': 'forbidden'})]
+        attack, args = attacks[state['attack_step']]
+        state['attack_step'] += 1
+        return _call(state, tools, attack, args, unknown=True)
+    if name.endswith('search_matches') and nested(last, 'search_key'):
+        state['last_search'] = {'key': nested(last, 'search_key'), 'cursor': nested(last, 'next_cursor')}
+        if mode == 'adversarial' and state['pagination_attack'] == 0:
+            state['pagination_attack'] = 1
+            return _call(state, tools, 'resolve_match', {**resolve, 'search_key': state['last_search']['key']})
+        if mode == 'parallel' and not state.get('parallel_resolutions_requested') and not state['last_search']['cursor']:
+            state['parallel_resolutions_requested'] = True
+            auxiliary = {**context, 'team_a': f'Alpha{TARGET - 1}', 'team_b': f'Beta{TARGET - 1}',
+                         'competition': '隔离联赛-' + review.group(1), 'search_key': state['last_search']['key']}
+            target = {**resolve, 'search_key': state['last_search']['key']}
+            return _calls(state, tools, [
+                ('resolve_match', auxiliary, False, 'football'),
+                ('resolve_match', target, False, 'football_parallel'),
+            ])
+    if mode == 'adversarial' and state['pagination_attack'] == 1 and name.endswith('resolve_match'):
+        state['pagination_attack'] = 2
+        return _call(state, tools, 'search_matches', {**search, 'cursor': 'forged-skipped-page'})
+    if mode == 'adversarial' and state['pagination_attack'] == 2 and name.endswith('search_matches') and not nested(last, 'search_key'):
+        state['pagination_attack'] = 3
+        return _call(state, tools, 'search_matches', {**search, 'cursor': state['last_search']['cursor']})
+    if name.endswith('skill_view') or name in {'terminal', 'mcp__football__place_bet', 'skill_manage'}:
+        return _call(state, tools, 'search_matches', search)
+    if nested(last, 'search_key'):
         cursor = nested(last, 'next_cursor')
         if cursor:
-            suffix, args = 'search_matches', {**context, 'team_query': 'Alpha', 'competition_query': '隔离联赛-'+review.group(1), 'phase': 'all', 'page_size': 20, 'cursor': cursor}
-        else:
-            suffix, args = 'resolve_match', {**context, 'search_key': nested(last, 'search_key'), 'team_a': 'Alpha104', 'team_b': 'Beta104', 'competition':'隔离联赛-'+review.group(1)}
-    elif nested(last, 'resolved'):
-        fixture = nested(last, 'fixture')
-        suffix, args = 'list_match_markets', {**context, 'fixture_id': fixture['id']}
-    elif nested(last, 'markets'):
+            return _call(state, tools, 'search_matches', {**search, 'cursor': cursor})
+        return _call(state, tools, 'resolve_match', {**resolve, 'search_key': nested(last, 'search_key')})
+    if nested(last, 'resolved'):
+        if mode == 'adversarial' and not state['forgery_attack']:
+            state['forgery_attack'] = True
+            state['resolved_fixture'] = nested(last, 'fixture')['id']
+            return _call(state, tools, 'list_match_markets', {**context, 'fixture_id': 'forged-unbound-fixture'})
+        return _call(state, tools, 'list_match_markets', {**context, 'fixture_id': nested(last, 'fixture')['id']})
+    if mode == 'adversarial' and state['forgery_attack'] and name.endswith('list_match_markets') and not nested(last, 'markets'):
+        if state.get('forgery_retried'):
+            return {'role': 'assistant', 'content': '合法盘口也无法读取，保持未解决。'}, 'stop'
+        state['forgery_retried'] = True
+        return _call(state, tools, 'list_match_markets', {**context, 'fixture_id': state['resolved_fixture']})
+    if nested(last, 'markets'):
         quote = nested(last, 'markets')[0]
-        suffix, args = 'record_expert_signals', {**context, 'signals': [{'fixture_id': quote['fixture_id'], 'quote_id': quote['quote_id'], 'evidence_text': '隔离推荐大2.5', 'confidence': 0.8}]}
-    elif nested(last, 'accepted'):
-        return {'role': 'assistant', 'content': '已按系统工具记录 Alpha104 对 Beta104，全场大2.5。此为隔离测试。'}, 'stop'
-    else:
-        return {'role': 'assistant', 'content': '工具未返回可核验结果，保持未解决。'}, 'stop'
-    name = next((name for name in tools if name.endswith(suffix)), None)
-    if not name:
-        return {'role': 'assistant', 'content': '隔离测试缺少受限工具：' + suffix}, 'stop'
-    evidence['called'].append(name)
-    return {'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'fixture-call-' + str(evidence['requests']), 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}]}, 'tool_calls'
+        return _call(state, tools, 'record_expert_signals', {**context, 'signals': [{
+            'fixture_id': quote['fixture_id'], 'quote_id': quote['quote_id'],
+            'evidence_text': '隔离推荐大2.5，价格仅取系统工具', 'confidence': 0.8}]})
+    if nested(last, 'accepted'):
+        return {'role': 'assistant', 'content': f'已按系统工具记录 Alpha{TARGET} 对 Beta{TARGET}，赛前全场大2.5；此为隔离验收。'}, 'stop'
+    return {'role': 'assistant', 'content': '工具未返回可核验结果，保持未解决。'}, 'stop'
+
+
+def answer(body):
+    with lock:
+        return _answer(body)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -91,8 +206,9 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        payload = {'data': [{'id': 'cline-pass/deepseek-v4.1-flash', 'object': 'model'}]} if self.path.endswith('/models') else evidence
-        content = json.dumps(payload, ensure_ascii=False).encode()
+        with lock:
+            payload = {'data': [{'id': MODEL, 'object': 'model'}]} if self.path.endswith('/models') else evidence
+            content = json.dumps(payload, ensure_ascii=False).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(content)))
@@ -103,14 +219,19 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in {'/v1/chat/completions', '/chat/completions'}:
             self.send_error(404)
             return
-        length = int(self.headers.get('Content-Length', 0))
-        if length > 32 * 1024 * 1024:
-            self.send_error(413)
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            if not 1 <= length <= 32 * 1024 * 1024:
+                self.send_error(413)
+                return
+            body = json.loads(self.rfile.read(length))
+            message, reason = answer(body)
+        except (ValueError, TypeError):
+            self.send_error(400)
             return
-        body = json.loads(self.rfile.read(length))
-        message, reason = answer(body)
         base = {'id': 'isolated-fixture', 'object': 'chat.completion', 'created': int(time.time()), 'model': body.get('model'),
-                'choices': [{'index': 0, 'message': message, 'finish_reason': reason}], 'usage': {'prompt_tokens': 100, 'completion_tokens': 40, 'total_tokens': 140}}
+                'choices': [{'index': 0, 'message': message, 'finish_reason': reason}],
+                'usage': {'prompt_tokens': 100, 'completion_tokens': 40, 'total_tokens': 140}}
         if body.get('stream'):
             delta = dict(message)
             if 'tool_calls' in delta:

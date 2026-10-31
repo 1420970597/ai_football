@@ -9,4 +9,4 @@ COPY services/api/app /app/app
 COPY services/api/migrations /app/migrations
 USER 10001:10001
 EXPOSE 8080
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2", "--proxy-headers", "--no-access-log"]

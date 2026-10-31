@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import tempfile
@@ -7,7 +8,7 @@ import uuid
 
 import asyncpg
 
-from app.database import MigrationRequired, apply_migrations, check_schema
+from app.database import MIGRATIONS, MigrationRequired, apply_migrations, check_schema
 
 
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_ADMIN_URL"), "requires isolated database admin URL")
@@ -44,6 +45,30 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await other.close()
 
+    async def test_all_phase_search_upgrade_preserves_existing_searches_and_is_repeatable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            prior = Path(folder)
+            for path in MIGRATIONS.glob('*.sql'):
+                if path.name < '021':
+                    (prior / path.name).write_bytes(path.read_bytes())
+            await apply_migrations(self.conn, prior)
+        source, expert, message, job = [uuid.uuid4() for _ in range(4)]
+        await self.conn.execute("INSERT INTO v2_expert_sources(id,platform_chat_id,display_name) VALUES($1,'chat','Source')", source)
+        await self.conn.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,'author','Expert')", expert)
+        await self.conn.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) VALUES($1,$2,$3,'1','Original',now())", message, source, expert)
+        await self.conn.execute("INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key) VALUES($1,$2,'queued',$3)", job, message, str(job))
+        await self.conn.execute("INSERT INTO v2_match_searches(job_id,search_key,team_query,phase) VALUES($1,'original','Team','all')", job)
+        before = dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job))
+        self.assertEqual(['021_review_search_all_phases.sql','022_result_observations.sql',
+                          '023_telegram_author_backfill.sql'], await apply_migrations(self.conn))
+        self.assertEqual(before, dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job)))
+        for phase in ('finished', 'cancelled'):
+            await self.conn.execute('INSERT INTO v2_match_searches(job_id,search_key,team_query,phase) VALUES($1,$2,$3,$2)', job, phase, 'Team')
+        with self.assertRaises(asyncpg.CheckViolationError):
+            await self.conn.execute("INSERT INTO v2_match_searches(job_id,search_key,team_query,phase) VALUES($1,'invalid','Team','unknown')", job)
+        self.assertEqual([], await apply_migrations(self.conn))
+        await check_schema(self.conn)
+
     async def test_changed_migration_and_unknown_version_rejected(self):
         await apply_migrations(self.conn)
         await self.conn.execute("UPDATE v2_schema_migrations SET checksum='tampered'")
@@ -51,6 +76,47 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
             await apply_migrations(self.conn)
         with self.assertRaises(MigrationRequired):
             await check_schema(self.conn)
+
+    async def test_observation_upgrade_preserves_existing_result_clock_and_requires_a_clock(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for path in MIGRATIONS.glob('*.sql'):
+                if path.name < '022':
+                    Path(folder,path.name).write_bytes(path.read_bytes())
+            await apply_migrations(self.conn,Path(folder))
+        await self.conn.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) "
+                                "VALUES('original','leyu:123','football','League','A','B',now(),'finished')")
+        await self.conn.execute("INSERT INTO v2_fixture_results(fixture_id,version,provider_reference,content_hash,status,home_score,away_score,source_updated_at,evidence) "
+                                "VALUES('original',1,'known','original','confirmed',2,0,now(),'{}')")
+        before=dict(await self.conn.fetchrow('SELECT * FROM v2_fixture_results'))
+        self.assertEqual(['022_result_observations.sql','023_telegram_author_backfill.sql'],await apply_migrations(self.conn))
+        after=dict(await self.conn.fetchrow('SELECT * FROM v2_fixture_results'))
+        self.assertEqual(before,{k:after[k] for k in before})
+        self.assertIsNone(after['observed_at'])
+        with self.assertRaises(asyncpg.CheckViolationError):
+            await self.conn.execute('UPDATE v2_fixture_results SET source_updated_at=NULL')
+        self.assertEqual([],await apply_migrations(self.conn))
+        await check_schema(self.conn)
+
+    async def test_author_backfill_upgrade_preserves_group_checkpoint_and_seeds_trusted_users(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for path in MIGRATIONS.glob('*.sql'):
+                if path.name < '023':
+                    Path(folder,path.name).write_bytes(path.read_bytes())
+            await apply_migrations(self.conn,Path(folder))
+        source,expert,channel_expert=[uuid.uuid4() for _ in range(3)]
+        await self.conn.execute("INSERT INTO v2_expert_sources(id,platform_chat_id,display_name) VALUES($1,'-1001','Source')",source)
+        await self.conn.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,'123','Expert'),($2,'-100123','Channel')",expert,channel_expert)
+        await self.conn.execute('INSERT INTO v2_source_experts(source_id,expert_id) VALUES($1,$2),($1,$3)',source,expert,channel_expert)
+        await self.conn.execute('INSERT INTO v2_source_checkpoints(source_id,last_message_id) VALUES($1,72)',source)
+        self.assertEqual(['023_telegram_author_backfill.sql'],await apply_migrations(self.conn))
+        rows=await self.conn.fetch('SELECT expert_id,backfill_cursor,backfill_until_id,backfill_since,backfill_completed_at FROM v2_source_experts WHERE source_id=$1 ORDER BY expert_id',source)
+        trusted=next(row for row in rows if row['expert_id']==expert)
+        channel=next(row for row in rows if row['expert_id']==channel_expert)
+        self.assertEqual((73,72,None),(trusted['backfill_cursor'],trusted['backfill_until_id'],trusted['backfill_completed_at']))
+        self.assertGreaterEqual(trusted['backfill_since'],datetime.now(timezone.utc)-timedelta(days=7,seconds=10))
+        self.assertEqual((0,0,True),(channel['backfill_cursor'],channel['backfill_until_id'],channel['backfill_completed_at'] is not None))
+        self.assertEqual(72,await self.conn.fetchval('SELECT last_message_id FROM v2_source_checkpoints WHERE source_id=$1',source))
+        self.assertEqual([],await apply_migrations(self.conn))
 
     async def test_failed_batch_rolls_back_and_can_retry(self):
         with tempfile.TemporaryDirectory() as folder:

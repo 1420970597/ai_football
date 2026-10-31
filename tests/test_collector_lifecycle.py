@@ -290,8 +290,13 @@ class CollectionBudgetTests(unittest.TestCase):
         self.assertNotIn("far", service._odds_refresh_at)
 
     def test_oversized_market_snapshot_never_silently_truncated(self):
-        with self.assertRaises(LeyuError):
-            list(fixture_batches([{"id": "1", "markets": [{}] * 501}]))
+        batches = list(fixture_batches([{"id": "1", "markets": [{}] * 501, "markets_complete": True}]))
+        self.assertEqual(1, len(batches))
+        fixture = batches[0][0]
+        self.assertNotIn("markets", fixture)
+        self.assertEqual([500, 1], [len(chunk) for chunk in fixture["market_chunks"]])
+        self.assertEqual(501, fixture["market_quote_count"])
+        self.assertTrue(fixture["markets_complete"])
 
     def test_stale_and_missing_source_times_not_marked_fresh(self):
         now = datetime(2026, 10, 26, tzinfo=timezone.utc)

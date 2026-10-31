@@ -11,6 +11,7 @@ PROVENANCE_FIELDS = ('model_id', 'model_revision', 'prompt_sha256', 'skill_versi
                      'tool_contract_version', 'produced_at')
 MAX_SAMPLES = 1000
 MAX_ITEMS = 32
+NO_LINE = 'not_applicable'  # Internal semantic value; explicit winner NULL differs from a missing key.
 HASH = re.compile(r'^[a-f0-9]{64}$')
 IDENTIFIER = re.compile(r'^[A-Za-z0-9_.:-]{1,160}$')
 
@@ -41,6 +42,9 @@ def normalize_item(item, *, expected=False):
     result, missing, invalid = {}, [], []
     for field in FIELDS:
         value = item.get(field)
+        if field == 'line' and item.get('market_kind') == 'winner' and 'line' in item and value is None:
+            result[field] = NO_LINE
+            continue
         if value is None or value == '':
             result[field] = None
             missing.append(field)
@@ -53,6 +57,10 @@ def normalize_item(item, *, expected=False):
                 if not number.is_finite() or abs(number) > 1000000:
                     raise InvalidOperation
                 result[field] = format((number if number else Decimal(0)).normalize(), 'f')
+                if item.get('market_kind') == 'winner':
+                    if number != 0:
+                        raise InvalidOperation
+                    result[field] = NO_LINE
             except (InvalidOperation, ValueError):
                 result[field] = None
                 invalid.append(field)

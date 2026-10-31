@@ -7,16 +7,21 @@ import hmac
 import json
 import os
 import re
+from typing import Literal
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 import httpx
 from pydantic import AwareDatetime, BaseModel, Field
 
 from .. import database
 from ..auth import audit, require_admin
 from ..security import encrypt_secret
+from .. import message_read
+from .. import telegram_reconciliation
+from ..review_policy import REALTIME_WINDOW_SECONDS
 
 
 router = APIRouter()
@@ -39,8 +44,26 @@ class AdvanceInput(ClaimInput):
     previous_message_id: int = Field(ge=0)
 
 
+class AuthorBackfillInput(ClaimInput):
+    sender_id: str = Field(pattern=r'^[1-9][0-9]{0,18}$')
+    previous_cursor: int = Field(ge=0)
+    cursor: int = Field(ge=0)
+    complete: bool = False
+
+
 class ObserveInput(ClaimInput):
+    reconciliation_protocol: Literal['claim-ack-v1']
     limit: int = Field(default=50, ge=1, le=100)
+
+
+class ReconciliationReference(BaseModel):
+    event_id: uuid.UUID
+    version_key: str = Field(pattern="^[a-f0-9]{64}$")
+    claim_id: uuid.UUID
+
+
+class ReconciliationAckInput(ClaimInput):
+    reconciliation: ReconciliationReference
 
 
 class EventInput(ClaimInput):
@@ -59,6 +82,7 @@ class EventInput(ClaimInput):
     media_manifest: list[dict] = Field(default_factory=list, max_length=10)
     media_objects: list[dict] = Field(default_factory=list, max_length=10)
     last_error: str | None = Field(default=None, max_length=100)
+    reconciliation: ReconciliationReference | None = None
 
 
 class SessionInput(BaseModel):
@@ -90,6 +114,75 @@ class MediaOrphansAckInput(BaseModel):
     object_keys: list[str] = Field(min_length=1, max_length=500)
 
 
+class ProfileInput(BaseModel):
+    sender_id: str = Field(pattern=r'^-?[1-9][0-9]{0,18}$')
+    nickname: str = Field(min_length=1, max_length=120)
+
+
+class DirectoryInput(ClaimInput):
+    observed_at: AwareDatetime
+    state: str = Field(pattern='^(ready|unavailable|flood_wait)$')
+    reason: str | None = Field(default=None, max_length=100)
+    retry_after: int | None = Field(default=None, ge=0, le=864000)
+    admins: list[dict] = Field(default_factory=list, max_length=2000)
+    profiles: list[ProfileInput] = Field(default_factory=list, max_length=2000)
+
+
+@router.put('/internal/telegram/directory')
+async def sync_directory(body: DirectoryInput, request: Request):
+    authorized(request)
+    now = datetime.now(timezone.utc)
+    if abs((now - body.observed_at).total_seconds()) > 120:
+        raise HTTPException(422, '目录同步时间超出允许窗口')
+    safe_admins = []
+    seen = set()
+    for item in body.admins:
+        try:
+            profile = ProfileInput.model_validate(item)
+        except ValueError:
+            raise HTTPException(422, '管理员身份或昵称无效') from None
+        if profile.sender_id in seen or not profile.nickname.strip() or any(ord(c)<32 for c in profile.nickname):
+            raise HTTPException(422, '管理员目录不完整或包含重复身份')
+        seen.add(profile.sender_id)
+        if item.get('admin_kind') not in {'owner', 'administrator'}:
+            raise HTTPException(422, '管理员角色无效')
+        safe_admins.append({'sender_id': profile.sender_id, 'nickname': profile.nickname.strip(),
+            'username': str(item.get('username') or '')[:80], 'admin_kind': item['admin_kind'],
+            'has_avatar': bool(item.get('has_avatar')), 'avatar_state': 'not_loaded' if item.get('has_avatar') else 'absent'})
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            source = await source_with_lease(conn, body.chat_id, body.owner)
+            current = await conn.fetchval('SELECT last_attempt_at FROM v2_telegram_directories WHERE source_id=$1 FOR UPDATE', source['id'])
+            if current and current >= body.observed_at:
+                return {'persisted': False, 'state': 'stale'}
+            await conn.execute(
+                "INSERT INTO v2_telegram_directories(source_id,state,reason,retry_after,admins,last_attempt_at,last_success_at) "
+                "VALUES($1,$2::text,$3,$4,$5,$6::timestamptz,CASE WHEN $2::text='ready' THEN $6::timestamptz ELSE NULL END) "
+                "ON CONFLICT(source_id) DO UPDATE SET state=EXCLUDED.state,reason=EXCLUDED.reason,retry_after=EXCLUDED.retry_after,"
+                "admins=CASE WHEN EXCLUDED.state='ready' THEN EXCLUDED.admins ELSE v2_telegram_directories.admins END,"
+                "last_attempt_at=EXCLUDED.last_attempt_at,last_success_at=COALESCE(EXCLUDED.last_success_at,v2_telegram_directories.last_success_at)",
+                source['id'], body.state, body.reason, body.retry_after, safe_admins, body.observed_at)
+            updated = 0
+            for profile in body.profiles:
+                nickname = profile.nickname.strip()
+                if not nickname or any(ord(c)<32 for c in nickname):
+                    raise HTTPException(422, '专家昵称无效')
+                expert = await conn.fetchrow(
+                    'SELECT e.id,e.display_nickname FROM v2_experts e JOIN v2_source_experts se ON se.expert_id=e.id '
+                    'WHERE se.source_id=$1 AND se.enabled AND e.enabled AND e.platform_sender_id=$2 FOR UPDATE OF e',
+                    source['id'], profile.sender_id)
+                if not expert:
+                    continue
+                for name in {expert['display_nickname'], nickname}:
+                    await conn.execute(
+                        'INSERT INTO v2_expert_nickname_history(expert_id,nickname,first_seen_at,last_seen_at) VALUES($1,$2,$3,$3) '
+                        'ON CONFLICT(expert_id,nickname) DO UPDATE SET last_seen_at=EXCLUDED.last_seen_at', expert['id'], name, body.observed_at)
+                if nickname != expert['display_nickname']:
+                    await conn.execute('UPDATE v2_experts SET display_nickname=$2,updated_at=now() WHERE id=$1', expert['id'], nickname)
+                    updated += 1
+            return {'persisted': True, 'state': body.state, 'admins': len(safe_admins), 'nicknames_updated': updated}
+
+
 async def source_for(conn, chat_id: str):
     row = await conn.fetchrow("SELECT id,allow_media FROM v2_expert_sources WHERE platform_chat_id=$1 AND enabled", chat_id)
     if not row:
@@ -97,12 +190,17 @@ async def source_for(conn, chat_id: str):
     return row
 
 
-async def check_lease(conn, source_id, owner):
-    row = await conn.fetchrow("SELECT * FROM v2_source_checkpoints WHERE source_id=$1 FOR UPDATE", source_id)
-    if not row or row["collector_owner"] != owner or not row["lease_until"] or row["lease_until"] <= datetime.now(timezone.utc):
-        raise HTTPException(status_code=409, detail="Telegram source lease is not active")
-    await conn.execute("UPDATE v2_source_checkpoints SET lease_until=now()+interval '90 seconds' WHERE source_id=$1", source_id)
-    return row
+async def source_with_lease(conn, chat_id: str, owner):
+    row = await conn.fetchrow(
+        "UPDATE v2_source_checkpoints cp SET lease_until=now()+interval '90 seconds' "
+        "FROM v2_expert_sources s WHERE cp.source_id=s.id AND s.platform_chat_id=$1 AND s.enabled "
+        "AND cp.collector_owner=$2 AND cp.lease_until>now() RETURNING s.id,s.allow_media",
+        chat_id, owner,
+    )
+    if row:
+        return row
+    await source_for(conn, chat_id)
+    raise HTTPException(status_code=409, detail="Telegram source lease is not active")
 
 
 @router.get("/internal/telegram/sources")
@@ -110,11 +208,22 @@ async def collector_sources(request: Request):
     authorized(request)
     rows = await database.current_pool().fetch(
         "SELECT s.id,s.platform_chat_id AS chat_id,s.display_name,s.allow_media,"
-        "COALESCE(array_agg(e.platform_sender_id) FILTER (WHERE se.enabled AND e.enabled),'{}') AS trusted_sender_ids "
+        "COALESCE(array_agg(e.platform_sender_id) FILTER (WHERE se.enabled AND e.enabled),'{}') AS trusted_sender_ids,"
+        "COALESCE(jsonb_agg(jsonb_build_object('sender_id',e.platform_sender_id,'cursor',se.backfill_cursor,"
+        "'until_id',se.backfill_until_id,'since',se.backfill_since) ORDER BY se.added_at,e.id) "
+        "FILTER (WHERE se.enabled AND e.enabled AND se.backfill_completed_at IS NULL "
+        "AND se.backfill_since IS NOT NULL AND se.backfill_cursor>0 "
+        "AND e.platform_sender_id ~ '^[1-9][0-9]{0,18}$'),'[]'::jsonb) AS author_backfills "
         "FROM v2_expert_sources s LEFT JOIN v2_source_experts se ON se.source_id=s.id "
         "LEFT JOIN v2_experts e ON e.id=se.expert_id WHERE s.enabled GROUP BY s.id ORDER BY s.id"
     )
-    return {"items": [dict(row) for row in rows]}
+    items = []
+    for row in rows:
+        item = dict(row)
+        if isinstance(item['author_backfills'], str):
+            item['author_backfills'] = json.loads(item['author_backfills'])
+        items.append(item)
+    return {"items": items}
 
 
 @router.post("/internal/telegram/checkpoints/claim")
@@ -122,14 +231,16 @@ async def claim_checkpoint(body: ClaimInput, request: Request):
     authorized(request)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            source = await source_for(conn, body.chat_id)
             row = await conn.fetchrow(
-                "INSERT INTO v2_source_checkpoints(source_id,collector_owner,lease_until) VALUES($1,$2,now()+interval '90 seconds') "
+                "INSERT INTO v2_source_checkpoints(source_id,collector_owner,lease_until) "
+                "SELECT s.id,$2,now()+interval '90 seconds' FROM v2_expert_sources s "
+                "WHERE s.platform_chat_id=$1 AND s.enabled "
                 "ON CONFLICT(source_id) DO UPDATE SET collector_owner=$2,lease_until=now()+interval '90 seconds' "
                 "WHERE v2_source_checkpoints.collector_owner=$2 OR v2_source_checkpoints.lease_until IS NULL "
-                "OR v2_source_checkpoints.lease_until<=now() RETURNING last_message_id,lease_until", source["id"], body.owner,
+                "OR v2_source_checkpoints.lease_until<=now() RETURNING last_message_id,lease_until", body.chat_id, body.owner,
             )
             if not row:
+                await source_for(conn, body.chat_id)
                 raise HTTPException(status_code=409, detail="Telegram source is owned by another collector")
     return dict(row)
 
@@ -141,15 +252,51 @@ async def advance_checkpoint(body: AdvanceInput, request: Request):
         raise HTTPException(status_code=422, detail="checkpoint cannot move backwards")
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            source = await source_for(conn, body.chat_id)
-            row = await check_lease(conn, source["id"], body.owner)
-            if row["last_message_id"] != body.previous_message_id:
-                raise HTTPException(status_code=409, detail="checkpoint has changed")
-            await conn.execute(
-                "UPDATE v2_source_checkpoints SET last_message_id=$2,checked_at=now(),last_error=NULL,"
-                "lease_until=now()+interval '90 seconds' WHERE source_id=$1", source["id"], body.last_message_id,
+            row = await conn.fetchrow(
+                "UPDATE v2_source_checkpoints cp SET last_message_id=$3,checked_at=now(),last_error=NULL,"
+                "lease_until=now()+interval '90 seconds' FROM v2_expert_sources s "
+                "WHERE cp.source_id=s.id AND s.platform_chat_id=$1 AND s.enabled "
+                "AND cp.collector_owner=$2 AND cp.lease_until>now() AND cp.last_message_id=$4 "
+                "RETURNING cp.last_message_id",
+                body.chat_id, body.owner, body.last_message_id, body.previous_message_id,
             )
-    return {"last_message_id": body.last_message_id}
+            if not row:
+                source = await source_for(conn, body.chat_id)
+                current = await conn.fetchrow(
+                    "SELECT collector_owner,lease_until FROM v2_source_checkpoints WHERE source_id=$1",
+                    source["id"],
+                )
+                if (not current or current["collector_owner"] != body.owner or not current["lease_until"]
+                        or current["lease_until"] <= datetime.now(timezone.utc)):
+                    raise HTTPException(status_code=409, detail="Telegram source lease is not active")
+                raise HTTPException(status_code=409, detail="checkpoint has changed")
+    return {"last_message_id": row["last_message_id"]}
+
+
+@router.put('/internal/telegram/author-backfill')
+async def advance_author_backfill(body: AuthorBackfillInput, request: Request):
+    authorized(request)
+    if body.cursor > body.previous_cursor or (body.cursor == body.previous_cursor and not body.complete):
+        raise HTTPException(422, 'author backfill cursor must move backwards')
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            source = await source_with_lease(conn, body.chat_id, body.owner)
+            mapping = await conn.fetchrow(
+                "SELECT se.backfill_cursor,se.backfill_until_id FROM v2_source_experts se "
+                "JOIN v2_experts e ON e.id=se.expert_id WHERE se.source_id=$1 AND e.platform_sender_id=$2 "
+                "AND se.enabled AND e.enabled FOR UPDATE OF se,e", source['id'], body.sender_id)
+            if not mapping:
+                raise HTTPException(409, 'trusted author mapping is no longer active')
+            if mapping['backfill_cursor'] != body.previous_cursor:
+                raise HTTPException(409, 'author backfill cursor has changed')
+            if body.cursor > mapping['backfill_until_id'] + 1:
+                raise HTTPException(422, 'author backfill cursor exceeds its fixed upper bound')
+            await conn.execute(
+                "UPDATE v2_source_experts se SET backfill_cursor=$3,"
+                "backfill_completed_at=CASE WHEN $4 THEN COALESCE(backfill_completed_at,now()) ELSE NULL END "
+                "FROM v2_experts e WHERE se.source_id=$1 AND se.expert_id=e.id AND e.platform_sender_id=$2",
+                source['id'], body.sender_id, body.cursor, body.complete)
+    return {'cursor': body.cursor, 'complete': body.complete}
 
 
 async def withdraw(conn, source_id, platform_ids: list[int], reason: str):
@@ -180,8 +327,17 @@ async def ingest_event(body: EventInput, request: Request):
     pool = database.current_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            source = await source_for(conn, body.chat_id)
-            await check_lease(conn, source["id"], body.owner)
+            source = await source_with_lease(conn, body.chat_id, body.owner)
+            if body.reconciliation is not None:
+                payload = jsonable_encoder(body.model_dump(exclude={'owner', 'reconciliation'}))
+                duplicate = await telegram_reconciliation.apply_claim(
+                    conn, source['id'], body.owner, body.reconciliation,
+                    platform_message_id=body.platform_message_id, member_message_ids=body.member_message_ids,
+                    event_kind=body.event_kind,
+                    payload_sha256=hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+                )
+                if duplicate:
+                    return {"persisted": True, "state": "reconciled", "duplicate": True}
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"telegram:{source['id']}:{body.platform_message_id}")
             if body.event_kind == "delete":
                 affected = await conn.fetch(
@@ -221,11 +377,16 @@ async def ingest_event(body: EventInput, request: Request):
                 return {"persisted": True, "state": "superseded", "message_id": str(event["message_id"])}
             if not event and current and current["source_version_at"] > body.source_version_at:
                 return {"persisted": True, "state": "ignored_stale"}
-            content = jsonable_encoder(body.model_dump(exclude={"owner", "media_objects", "media_state", "last_error"}))
+            content = jsonable_encoder(body.model_dump(exclude={"owner", "media_objects", "media_state", "last_error", "reconciliation"}))
+            media_objects = body.media_objects
+            if event and body.media_state in {'pending', 'failed'} and not media_objects:
+                # History staging/retry must not erase candidates registered
+                # before an S3 timeout; orphan inventory relies on these keys.
+                media_objects = event['media_objects']
             immutable_content = {key: value for key, value in content.items() if key != "sender_nickname"}
             if event and {key: value for key, value in event["content"].items() if key != "sender_nickname"} != immutable_content:
                 raise HTTPException(status_code=409, detail="same message version has conflicting content")
-            await conn.execute("UPDATE v2_experts SET display_nickname=$2,updated_at=now() WHERE id=$1", expert["id"], body.sender_nickname.strip())
+            await conn.execute("UPDATE v2_experts SET display_nickname=$2,updated_at=now() WHERE id=$1 AND display_nickname IS DISTINCT FROM $2", expert["id"], body.sender_nickname.strip())
             if event and event["media_state"] == "ready":
                 return {"persisted": True, "state": "ready", "message_id": str(event["message_id"])}
             if not event:
@@ -255,26 +416,52 @@ async def ingest_event(body: EventInput, request: Request):
             else:
                 message_id, event_id = event["message_id"], event["id"]
                 await conn.execute("UPDATE v2_telegram_events SET media_objects=$2,media_state=$3,last_error=$4,updated_at=now() WHERE id=$1",
-                                   event_id, body.media_objects, body.media_state, body.last_error)
-                await conn.execute("UPDATE v2_expert_messages SET media_objects=$2,media_state=$3 WHERE id=$1", message_id, body.media_objects, body.media_state)
-            await conn.execute("UPDATE v2_experts SET display_nickname=$2,updated_at=now() WHERE id=$1", expert["id"], body.sender_nickname.strip())
+                                   event_id, media_objects, body.media_state, body.last_error)
+                await conn.execute("UPDATE v2_expert_messages SET media_objects=$2,media_state=$3 WHERE id=$1", message_id, media_objects, body.media_state)
             job_id = None
             if body.media_state == "ready":
+                age = (datetime.now(timezone.utc) - body.posted_at.astimezone(timezone.utc)).total_seconds()
+                auto_review = 0 <= age <= REALTIME_WINDOW_SECONDS
+                review_mode = 'real_time' if auto_review or age < 0 else 'historical_replay'
+                initial_state = 'queued' if auto_review else 'unresolved'
+                suppression = None if auto_review else (
+                    'historical_backlog_auto_suppressed_by_operator' if age > REALTIME_WINDOW_SECONDS
+                    else 'message_timestamp_in_future')
+                idempotency_key = hashlib.sha256(
+                    f"telegram:{source['id']}:{body.platform_message_id}:{body.version_key}".encode()).hexdigest()
                 job_id = await conn.fetchval(
-                    "INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key) VALUES($1,$2,'queued',$3) "
-                    "ON CONFLICT(idempotency_key) DO UPDATE SET updated_at=v2_analysis_jobs.updated_at RETURNING id",
-                    uuid.uuid4(), message_id, hashlib.sha256(f"telegram:{source['id']}:{body.platform_message_id}:{body.version_key}".encode()).hexdigest(),
+                    "INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key,review_mode,last_error) "
+                    "VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(idempotency_key) DO NOTHING RETURNING id",
+                    uuid.uuid4(), message_id, initial_state, idempotency_key, review_mode, suppression,
                 )
-    return {"persisted": True, "state": body.media_state, "message_id": str(message_id), "review_id": str(job_id) if job_id else None}
+                if job_id and suppression:
+                    await conn.execute(
+                        "INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) "
+                        "VALUES($1,$2,1,'telegram_auto_review_suppressed',$3)",
+                        uuid.uuid4(), job_id, {'reason': suppression, 'review_mode': review_mode,
+                            'posted_at': body.posted_at.astimezone(timezone.utc).isoformat(),
+                            'realtime_window_seconds': REALTIME_WINDOW_SECONDS,
+                            'source_message_preserved': True, 'media_preserved': True},
+                    )
+                if not job_id:
+                    job_id = await conn.fetchval(
+                        "SELECT id FROM v2_analysis_jobs WHERE idempotency_key=$1", idempotency_key)
+    return {"persisted": True, "state": body.media_state, "message_id": str(message_id),
+            "review_id": str(job_id) if job_id else None,
+            "media_objects": media_objects if body.media_state in {'pending', 'failed'} else []}
 
 
 @router.get("/internal/telegram/pending")
 async def pending_events(request: Request, limit: int = 30):
     authorized(request)
     rows = await database.current_pool().fetch(
-        "SELECT e.platform_message_id,e.content,e.last_error,s.platform_chat_id AS chat_id FROM v2_telegram_events e "
+        "SELECT e.platform_message_id,e.content,e.media_objects,e.last_error,s.platform_chat_id AS chat_id FROM v2_telegram_events e "
         "JOIN v2_expert_sources s ON s.id=e.source_id WHERE e.is_current AND s.enabled AND e.media_state IN ('pending','failed') "
-        "ORDER BY e.updated_at,e.id LIMIT $1", max(1, min(limit, 100)),
+        "ORDER BY CASE WHEN (e.content->>'posted_at')::timestamptz >= now()-($2::int*interval '1 second') "
+        "THEN 0 ELSE 1 END,CASE WHEN e.media_state='failed' THEN 1 ELSE 0 END,"
+        "CASE WHEN e.media_state='pending' AND (e.content->>'posted_at')::timestamptz >= now()-($2::int*interval '1 second') "
+        "THEN (e.content->>'posted_at')::timestamptz END DESC,e.updated_at,e.id LIMIT $1",
+        max(1, min(limit, 100)), REALTIME_WINDOW_SECONDS,
     )
     return {"items": [dict(row) for row in rows]}
 
@@ -293,7 +480,7 @@ async def media_orphans(body: MediaOrphansInput, request: Request):
             "FROM v2_telegram_events e JOIN v2_expert_sources s ON s.id=e.source_id "
             "JOIN v2_source_checkpoints cp ON cp.source_id=e.source_id "
             "CROSS JOIN LATERAL jsonb_array_elements(e.media_objects) obj "
-            "WHERE e.is_current AND e.media_state IN ('pending','failed') "
+            "WHERE e.media_state IN ('pending','failed') "
             "AND e.updated_at < now()-($2::int * interval '1 hour') "
             "AND cp.collector_owner=$1 AND cp.lease_until>now() ),"
             "ready_refs AS ("
@@ -326,7 +513,7 @@ async def acknowledge_media_orphans(body: MediaOrphansAckInput, request: Request
                 "WHERE COALESCE(obj->>'object_key','') <> ALL($2::text[])), '[]'::jsonb),"
                 "last_error=COALESCE(e.last_error,'media_orphan_reclaimed'),updated_at=now() "
                 "FROM v2_source_checkpoints cp WHERE cp.source_id=e.source_id "
-                "AND cp.collector_owner=$1 AND cp.lease_until>now() AND e.is_current "
+                "AND cp.collector_owner=$1 AND cp.lease_until>now() "
                 "AND e.media_state IN ('pending','failed') AND EXISTS ("
                 "SELECT 1 FROM jsonb_array_elements(e.media_objects) obj "
                 "WHERE obj->>'object_key'=ANY($2::text[]))",
@@ -340,19 +527,18 @@ async def observed_events(body: ObserveInput, request: Request):
     authorized(request)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            source = await source_for(conn, body.chat_id)
-            await check_lease(conn, source["id"], body.owner)
-            rows = await conn.fetch(
-                "SELECT id,platform_message_id,content FROM v2_telegram_events WHERE source_id=$1 AND is_current "
-                "AND next_check_at<=now() ORDER BY next_check_at,id LIMIT $2 FOR UPDATE SKIP LOCKED", source["id"], body.limit,
-            )
-            if rows:
-                await conn.execute(
-                    "UPDATE v2_telegram_events SET next_check_at=CASE WHEN source_version_at>now()-interval '2 days' "
-                    "THEN now()+interval '5 minutes' ELSE now()+interval '6 hours' END WHERE id=ANY($1::uuid[])",
-                    [row["id"] for row in rows],
-                )
-    return {"items": [dict(row) for row in rows]}
+            source = await source_with_lease(conn, body.chat_id, body.owner)
+            rows = await telegram_reconciliation.claim_events(conn, source['id'], body.owner, body.limit)
+    return {"items": rows, "claim_lease_seconds": telegram_reconciliation.RECONCILIATION_LEASE_SECONDS}
+
+
+@router.post("/internal/telegram/observed/ack")
+async def acknowledge_observed_event(body: ReconciliationAckInput, request: Request):
+    authorized(request)
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            source = await source_with_lease(conn, body.chat_id, body.owner)
+            return await telegram_reconciliation.acknowledge_claim(conn, source['id'], body.owner, body.reconciliation)
 
 
 @router.put("/internal/telegram/session")
@@ -383,7 +569,7 @@ async def control(request: Request, path: str, payload: dict | None = None):
             result = response.json()
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=503, detail="Telegram 控制服务暂不可用，请稍后重试") from None
-    if path not in {"/status", "/dialogs", "/admins"}:
+    if path not in {"/status", "/dialogs", "/admins", "/members"}:
         async with database.current_pool().acquire() as conn:
             await audit(conn, admin["id"], "admin", "telegram_control_" + path.rsplit("/", 1)[-1], "telegram_account",
                         str((payload or {}).get("attempt_id", "")), getattr(request.state, "request_id", ""))
@@ -449,6 +635,19 @@ def directory_cursor(cursor):
     return cursor
 
 
+@router.get('/api/v1/admin/telegram/members')
+async def telegram_members(request: Request, chat_id: str = Query(min_length=1, max_length=160),
+                           cursor: str | None = Query(default=None, max_length=7), q: str = Query(default='', max_length=160)):
+    chat_id = chat_id.strip()
+    if not (re.fullmatch(r'-[1-9][0-9]{0,18}', chat_id) or re.fullmatch(r'@[A-Za-z][A-Za-z0-9_]{4,31}', chat_id)):
+        raise HTTPException(422, '请使用负数稳定群组编号或 @频道用户名')
+    if chat_id.startswith('-') and int(chat_id) < -(2**63):
+        raise HTTPException(422, '群组编号超出支持范围')
+    if any(ord(char)<32 for char in q):
+        raise HTTPException(422, '搜索内容不能包含控制字符')
+    return await directory_control(request, '/members', {'chat_id':chat_id, 'cursor':directory_cursor(cursor), 'q':q.strip()})
+
+
 async def directory_control(request, path, payload):
     result = await control(request, path, payload)
     if not isinstance(result, dict) or not isinstance(result.get("items"), list):
@@ -497,21 +696,52 @@ async def telegram_messages(request: Request, expert_id: uuid.UUID | None = None
 
 @router.get("/api/v1/admin/telegram/messages/{message_id}")
 async def telegram_message_detail(message_id: uuid.UUID, request: Request):
-    await require_admin(request)
+    actor = await message_read.reader(request, admin=True)
     pool = database.current_pool()
     message = await pool.fetchrow(
         "SELECT m.*,e.display_nickname,t.last_error,t.content AS source_evidence FROM v2_expert_messages m "
-        "JOIN v2_experts e ON e.id=m.expert_id LEFT JOIN v2_telegram_events t ON t.message_id=m.id WHERE m.id=$1", message_id,
+        "JOIN v2_experts e ON e.id=m.expert_id LEFT JOIN LATERAL(SELECT last_error,content FROM v2_telegram_events "
+        "WHERE message_id=m.id ORDER BY received_at DESC,id DESC LIMIT 1) t ON TRUE WHERE m.id=$1", message_id,
     )
     if not message:
-        raise HTTPException(status_code=404, detail="消息原文不存在")
-    traces = await pool.fetch(
-        "SELECT j.id AS review_id,j.state,j.last_error,t.sequence_no,t.trace_kind,t.payload,t.created_at "
-        "FROM v2_analysis_jobs j LEFT JOIN v2_analysis_traces t ON t.job_id=j.id "
-        "WHERE j.message_id=$1 ORDER BY j.created_at,t.sequence_no", message_id,
-    )
-    signals = await pool.fetch(
-        "SELECT s.*,f.home_team,f.away_team,f.competition_name,f.kickoff_at FROM v2_expert_signals s "
-        "JOIN v2_fixtures f ON f.id=s.fixture_id WHERE s.message_id=$1 ORDER BY s.created_at,s.id", message_id,
-    )
-    return {"message": dict(message), "analysis": [dict(row) for row in traces], "signals": [dict(row) for row in signals]}
+        raise message_read.private_error(404, "消息原文不存在")
+    return JSONResponse(jsonable_encoder(await message_read.detail(pool, request, actor, message, context='admin')),
+                        headers=message_read.HEADERS)
+
+
+@router.get('/api/v1/admin/telegram/messages/{message_id}/traces')
+async def telegram_message_traces(message_id: uuid.UUID, request: Request,
+                                  limit: int = Query(default=30, ge=1, le=100),
+                                  cursor: str | None = Query(default=None, max_length=1000)):
+    actor = await message_read.reader(request, admin=True)
+    pool = database.current_pool()
+    if not await pool.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_messages WHERE id=$1)', message_id):
+        raise message_read.private_error(404, '消息原文不存在')
+    return JSONResponse(jsonable_encoder(await message_read.trace_page(pool, request, actor, message_id,
+                        context='admin', limit=limit, cursor=cursor)), headers=message_read.HEADERS)
+
+
+@router.get('/api/v1/admin/telegram/messages/{message_id}/signals')
+async def telegram_message_signals(message_id: uuid.UUID, request: Request,
+                                   limit: int = Query(default=30, ge=1, le=100),
+                                   cursor: str | None = Query(default=None, max_length=1000)):
+    actor = await message_read.reader(request, admin=True)
+    pool = database.current_pool()
+    if not await pool.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_messages WHERE id=$1)', message_id):
+        raise message_read.private_error(404, '消息原文不存在')
+    return JSONResponse(jsonable_encoder(await message_read.signal_page(pool, request, actor, message_id,
+                        context='admin', limit=limit, cursor=cursor)), headers=message_read.HEADERS)
+
+
+@router.get('/api/v1/admin/telegram/messages/{message_id}/tools/{trace_id}')
+async def telegram_message_tool_response(message_id: uuid.UUID, trace_id: uuid.UUID, request: Request):
+    await message_read.reader(request, admin=True)
+    return JSONResponse(jsonable_encoder(await message_read.tool_response(database.current_pool(), message_id, trace_id)),
+                        headers=message_read.HEADERS)
+
+
+@router.get('/api/v1/admin/telegram/messages/{message_id}/media/{index}')
+async def telegram_message_media(message_id: uuid.UUID, index: int, request: Request):
+    actor = await message_read.reader(request, admin=True)
+    from .expert_content import read_message_media
+    return await read_message_media(message_id, index, request=request, actor=actor, context='admin')

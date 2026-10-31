@@ -4,14 +4,18 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 
 from .. import database
 from ..pagination import decode_cursor, encode_cursor
 from ..auth import get_identity
 from ..membership import has_entitlement
-from ..expert_statistics import DEFINITIONS, metrics, summaries, METRIC_SQL
+from ..runtime_settings import runtime_quote_max_age
+from ..expert_statistics import StatisticsScope, source_options, statistics_scope, summaries
 from ..review_state import fresh_quote
+from .. import message_read
 
 router = APIRouter(prefix="/api/v1/public")
 
@@ -78,8 +82,8 @@ async def matches(
         param = bind("%" + term + "%")
         alias_param = bind(term)
         clauses.append(f"(lower(home_team) LIKE {param} OR lower(away_team) LIKE {param} "
-                       f"OR lower(competition_name) LIKE {param} OR {alias_param}=ANY(home_aliases) "
-                       f"OR {alias_param}=ANY(away_aliases))")
+                       f"OR lower(competition_name) LIKE {param} OR EXISTS (SELECT 1 FROM "
+                       f"unnest(home_aliases || away_aliases) alias WHERE lower(btrim(alias))={alias_param}))")
     if match_date:
         try:
             zone = ZoneInfo(tz)
@@ -111,8 +115,9 @@ async def matches(
         "WHERE position<=24 ORDER BY fixture_id,market_id,line,selection", fixture_ids,
     ) if fixture_ids else []
     by_fixture: dict[str, list[dict]] = {}
+    max_quote_age = await runtime_quote_max_age(request.app.state.settings)
     for quote in quote_rows:
-        by_fixture.setdefault(quote["fixture_id"], []).append(dict(quote) | {'fresh': fresh_quote(quote, request.app.state.settings.quote_max_age_seconds)})
+        by_fixture.setdefault(quote["fixture_id"], []).append(dict(quote) | {'fresh': fresh_quote(quote, max_quote_age)})
     output = []
     for row in items:
         item = dict(row)
@@ -124,6 +129,37 @@ async def matches(
     return {"items": output, "next_cursor": next_cursor, "page_size": page_size, "server_time": datetime.now(timezone.utc)}
 
 
+async def _match_markets(fixture_id: str, request: Request, phase: str, *, cursor=None, page_size=500):
+    scope = {'kind': 'match_markets', 'fixture_id': fixture_id}
+    decoded = _decode_cursor(cursor, request, scope)
+    after = None
+    if decoded:
+        try:
+            after = uuid.UUID(decoded[1])
+        except ValueError:
+            raise HTTPException(400, '盘口分页游标无效') from None
+    rows = await database.current_pool().fetch(
+        "SELECT id AS quote_id,market_id,market_name,period,market_kind,line,selection,price,status,is_main,score_basis,source_updated_at,received_at "
+        "FROM v2_current_quotes WHERE fixture_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT $3",
+        fixture_id, after, page_size + 1,
+    )
+    items = rows[:page_size]
+    stale_after = await runtime_quote_max_age(request.app.state.settings)
+    next_cursor = _encode_cursor(datetime(1970, 1, 1, tzinfo=timezone.utc), str(items[-1]['quote_id']),
+                                 request, scope) if len(rows) > page_size else None
+    return {'markets': [dict(row) | {'fresh': fresh_quote(row, stale_after) and phase in {'scheduled', 'live'}}
+                        for row in items], 'next_market_cursor': next_cursor, 'market_page_size': page_size}
+
+
+@router.get("/matches/{fixture_id}/markets")
+async def match_markets(fixture_id: str, request: Request, cursor: str | None = None,
+                        page_size: int = Query(default=500, ge=1, le=500)):
+    phase = await database.current_pool().fetchval('SELECT phase FROM v2_fixtures WHERE id=$1', fixture_id)
+    if phase is None:
+        raise HTTPException(404, '比赛不存在')
+    return await _match_markets(fixture_id, request, phase, cursor=cursor, page_size=page_size)
+
+
 @router.get("/matches/{fixture_id}")
 async def match_detail(fixture_id: str, request: Request):
     fixture = await database.current_pool().fetchrow(
@@ -133,30 +169,25 @@ async def match_detail(fixture_id: str, request: Request):
     )
     if not fixture:
         raise HTTPException(status_code=404, detail="比赛不存在")
-    quote_rows = await database.current_pool().fetch(
-        "SELECT id AS quote_id,market_id,market_name,period,market_kind,line,selection,price,status,is_main,score_basis,source_updated_at,received_at "
-        "FROM v2_current_quotes WHERE fixture_id=$1 ORDER BY market_id,line,selection LIMIT 500", fixture_id,
-    )
+    market_page = await _match_markets(fixture_id, request, fixture['phase'])
     signal_rows = await database.current_pool().fetch(
-        "SELECT s.id,s.expert_id,e.display_nickname,s.phase,s.market_id,s.market_name,s.line,s.selection,"
+        "SELECT s.id,s.expert_id,e.display_nickname,s.phase,f.phase AS fixture_phase,f.match_state,"
+        "s.market_id,s.market_name,s.line,s.selection,"
         "s.recommendation_price,s.quote_time,s.outcome,s.unit_net,s.created_at "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
+        "JOIN v2_fixtures f ON f.id=s.fixture_id "
         "WHERE s.fixture_id=$1 ORDER BY s.created_at DESC LIMIT 100", fixture_id,
     )
-    stale_after = request.app.state.settings.quote_max_age_seconds
     now = datetime.now(timezone.utc)
-    markets = [dict(row) | {
-        "fresh": fresh_quote(row, stale_after) and fixture['phase'] in {'scheduled','live'},
-    } for row in quote_rows]
-    return {"fixture": dict(fixture), "markets": markets, "expert_signals": [dict(row) for row in signal_rows],
+    return {"fixture": dict(fixture), **market_page, "expert_signals": [dict(row) for row in signal_rows],
             "server_time": now}
 
 
 @router.get("/experts")
-async def experts(days: int = Query(default=30, ge=1, le=3650)):
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
-    return {'items': await summaries(database.current_pool(), start, end), 'from_utc': start, 'to_utc': end, 'definitions': DEFINITIONS}
+async def experts(scope: StatisticsScope = Depends(statistics_scope)):
+    pool = database.current_pool()
+    return {'items': await summaries(pool, scope.start, scope.end, scope=scope),
+            'source_options': await source_options(pool, scope), **scope.response()}
 
 
 @router.get("/signals")
@@ -178,7 +209,7 @@ async def signals(request: Request, cursor: str | None = None, page_size: int = 
     args.append(page_size + 1)
     rows = await database.current_pool().fetch(
         "SELECT s.id,s.message_id,s.expert_id,e.display_nickname,s.fixture_id,f.sport,f.competition_name,f.home_team,f.away_team,"
-        "f.kickoff_at,s.phase,s.market_id,s.market_name,s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time,"
+        "f.kickoff_at,f.phase AS fixture_phase,f.match_state,s.phase,s.market_id,s.market_name,s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time,"
         "s.score_baseline,s.score_basis,s.withdrawn_at,s.withdrawal_reason,s.settlement_reason,s.effective_stake,"
         "(SELECT ev.evidence->>'quote_id' FROM v2_quote_evidence ev WHERE ev.reference_id=s.id AND ev.evidence_kind='expert_signal' ORDER BY ev.captured_at LIMIT 1) AS quote_id,"
         "s.confidence,s.outcome,s.unit_net,s.created_at,m.raw_text "
@@ -198,30 +229,28 @@ async def signals(request: Request, cursor: str | None = None, page_size: int = 
 
 @router.get("/signals/{signal_id}")
 async def signal_detail(signal_id: str, request: Request):
-    if not await _has_entitlement(request, "expert_full_history"):
-        raise HTTPException(status_code=403, detail="完整专家记录需要会员权益")
+    actor = await message_read.reader(request)
     try:
         parsed = uuid.UUID(signal_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail="记录不存在") from None
+        raise message_read.private_error(404, "记录不存在") from None
     row = await database.current_pool().fetchrow(
-        "SELECT s.*,e.display_nickname,m.raw_text,m.media_objects,m.posted_at,m.source_id,j.id AS job_id,j.state AS job_state "
+        "SELECT s.*,f.phase AS fixture_phase,f.match_state,e.display_nickname,m.raw_text,m.media_objects,m.revision AS message_revision,m.posted_at,m.source_id,j.id AS job_id,j.state AS job_state "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
-        "JOIN v2_expert_messages m ON m.id=s.message_id LEFT JOIN v2_analysis_jobs j ON j.message_id=m.id "
+        "JOIN v2_fixtures f ON f.id=s.fixture_id "
+        "JOIN v2_expert_messages m ON m.id=s.message_id LEFT JOIN LATERAL(SELECT id,state FROM v2_analysis_jobs "
+        "WHERE message_id=m.id ORDER BY created_at DESC,id DESC LIMIT 1) j ON TRUE "
         "WHERE s.id=$1", parsed,
     )
     if not row:
-        raise HTTPException(status_code=404, detail="记录不存在")
+        raise message_read.private_error(404, "记录不存在")
     item = dict(row)
-    if item.get("job_id"):
-        traces = await database.current_pool().fetch(
-            "SELECT trace_kind,payload,created_at FROM v2_analysis_traces WHERE job_id=$1 ORDER BY sequence_no",
-            item["job_id"],
-        )
-        item["analysis_trace"] = [dict(trace) for trace in traces]
-    else:
-        item["analysis_trace"] = []
-    return item
+    item['media_objects'] = message_read.message_projection({'id': item['message_id'], 'revision': item['message_revision'],
+        'media_objects': item.get('media_objects')}, request=request, actor=actor)['media_objects']
+    page = await message_read.trace_page(database.current_pool(), request, actor, item['message_id'])
+    item.update(analysis_trace=page['items'], analysis_next_cursor=page['next_cursor'],
+                analysis_has_more=page['has_more'], system_summary=await message_read.latest_summary(database.current_pool(), item['message_id']))
+    return JSONResponse(jsonable_encoder(item), headers=message_read.HEADERS)
 
 
 @router.get("/membership/plans")

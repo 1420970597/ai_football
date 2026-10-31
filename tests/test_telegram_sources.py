@@ -1,5 +1,6 @@
 """Real temporary PostgreSQL contracts for Telegram directories and manual source trust."""
 import json
+from datetime import datetime, timezone, timedelta
 import unittest
 from unittest.mock import patch
 import uuid
@@ -40,6 +41,73 @@ class TelegramSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"cursor": "50", "q": "观察"}, received[0]["body"])
         self.assertEqual("Bearer test-collector-token", received[0]["authorization"])
         self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_audit_log"))
+
+    async def test_all_member_search_is_separate_and_does_not_require_admin_role_for_returned_author(self):
+        received=[]
+        with self.fake_control({'state':'ready','items':[{'sender_id':'88','nickname':'普通专家','admin_kind':'member'}],'next_cursor':'50'},received):
+            response=await self.client.get('/api/v1/admin/telegram/members',params={'chat_id':'-1001','q':' 普通 ','cursor':'50'})
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual('available',response.json()['state'])
+        self.assertEqual('member',response.json()['items'][0]['admin_kind'])
+        self.assertEqual('/members',received[0]['path'])
+        self.assertEqual({'chat_id':'-1001','q':'普通','cursor':'50'},received[0]['body'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_audit_log'))
+        await self.pool.execute("UPDATE v2_source_checkpoints SET last_message_id=150 WHERE source_id=$1",self.source_id)
+        added=await self.client.post(f'/api/v1/admin/sources/{self.source_id}/experts',json={'sender_id':'88','nickname':'普通专家'})
+        self.assertEqual(201,added.status_code,added.text)
+        mapping=await self.pool.fetchrow('SELECT backfill_cursor,backfill_until_id,backfill_completed_at FROM v2_source_experts WHERE source_id=$1 AND expert_id=$2',self.source_id,uuid.UUID(added.json()['id']))
+        self.assertEqual((151,150,None),(mapping['backfill_cursor'],mapping['backfill_until_id'],mapping['backfill_completed_at']))
+        self.client.cookies.clear()
+        self.client.headers['Authorization']='Bearer test-collector-token'
+        event=legacy.TelegramApiTests.event(self,version='ordinary-member')
+        event.update(sender_id='88',sender_nickname='普通专家')
+        accepted=await self.client.post('/internal/telegram/events',json=event)
+        self.assertEqual(200,accepted.status_code,accepted.text)
+        self.assertTrue(accepted.json()['persisted'])
+        event.update(sender_id='89',platform_message_id='12',member_message_ids=[12])
+        self.assertEqual(403,(await self.client.post('/internal/telegram/events',json=event)).status_code)
+        self.client.cookies.clear()
+        self.client.headers.pop('Authorization',None)
+        with self.fake_control({'state':'ready','items':[]},received):
+            self.assertEqual(401,(await self.client.get('/api/v1/admin/telegram/members',params={'chat_id':'-1001'})).status_code)
+
+    async def test_auto_directory_changes_only_existing_trusted_nicknames_and_keeps_alias_history(self):
+        admin_cookies=dict(self.client.cookies)
+        self.client.cookies.clear()
+        self.client.headers['Authorization']='Bearer test-collector-token'
+        observed=datetime.now(timezone.utc)
+        body={'chat_id':'-1001','owner':str(self.owner),'observed_at':observed.isoformat(),'state':'ready',
+              'admins':[{'sender_id':'7','nickname':'现用昵称','admin_kind':'administrator'},{'sender_id':'99','nickname':'未选择的管理员','admin_kind':'owner'}],
+              'profiles':[{'sender_id':'7','nickname':'现用昵称'},{'sender_id':'99','nickname':'不能自动信任'}]}
+        response=await self.client.put('/internal/telegram/directory',json=body)
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual(1,response.json()['nicknames_updated'])
+        self.assertEqual('现用昵称',await self.pool.fetchval('SELECT display_nickname FROM v2_experts WHERE id=$1',self.expert_id))
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_experts'))
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_source_experts'))
+        aliases=await self.pool.fetch('SELECT nickname FROM v2_expert_nickname_history WHERE expert_id=$1',self.expert_id)
+        self.assertEqual({'测试专家','现用昵称'},{row['nickname'] for row in aliases})
+        body.update(state='unavailable',reason='member_enumeration_restricted',admins=[],profiles=[],observed_at=(observed+timedelta(seconds=1)).isoformat())
+        self.assertEqual(200,(await self.client.put('/internal/telegram/directory',json=body)).status_code)
+        self.assertEqual(2,await self.pool.fetchval('SELECT jsonb_array_length(admins) FROM v2_telegram_directories'))
+        body.update(state='ready',observed_at=observed.isoformat())
+        self.assertEqual('stale',(await self.client.put('/internal/telegram/directory',json=body)).json()['state'])
+        self.client.headers.pop('Authorization',None)
+        self.client.cookies.update(admin_cookies)
+        result=await self.client.get(f'/api/v1/admin/sources/{self.source_id}/directory')
+        self.assertEqual('unavailable',result.json()['state'])
+        self.assertEqual(2,len(result.json()['items']))
+        self.assertFalse(result.json()['trust_automatically_granted'])
+
+    async def test_directory_requires_current_lease_and_invalid_profile_rolls_back(self):
+        self.client.cookies.clear()
+        self.client.headers['Authorization']='Bearer test-collector-token'
+        body={'chat_id':'-1001','owner':str(uuid.uuid4()),'observed_at':datetime.now(timezone.utc).isoformat(),'state':'ready','admins':[],'profiles':[]}
+        self.assertEqual(409,(await self.client.put('/internal/telegram/directory',json=body)).status_code)
+        body['owner']=str(self.owner)
+        body['profiles']=[{'sender_id':'7','nickname':'无效'+chr(10)+'昵称'}]
+        self.assertEqual(422,(await self.client.put('/internal/telegram/directory',json=body)).status_code)
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_telegram_directories'))
 
     async def test_admin_pagination_and_failure_categories_remain_visible(self):
         received = []

@@ -1,0 +1,671 @@
+{
+  "date": "2026-10-27T20:10:19.777Z",
+  "environment": "real browser/API/PG, synthetic account worker only, no provider or order-send calls",
+  "results": [
+    {
+      "name": "真实UI注册普通用户与独立管理员登录",
+      "status": "passed"
+    },
+    {
+      "name": "管理员来源新增信任作者停用启用与撤销点击",
+      "status": "passed"
+    },
+    {
+      "name": "管理员套餐自动投注权益及本人会员授予点击",
+      "status": "passed"
+    },
+    {
+      "name": "本人绑定替身账户与异步真实内部任务达到健康",
+      "status": "passed"
+    },
+    {
+      "name": "本人限额错误拒绝并保存专家限额与正常启停",
+      "status": "passed"
+    },
+    {
+      "name": "过期近期身份通过真实重验弹窗恢复许可与紧急停止",
+      "status": "passed"
+    },
+    {
+      "name": "本人合成成交单刷新核对官方形状回执与订单展示",
+      "status": "passed"
+    },
+    {
+      "name": "管理员撤销会员立即阻断启用且本人停止仍可用",
+      "status": "passed"
+    }
+  ],
+  "http": [
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 401
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 401
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/experts",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/leagues",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/matches",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/signals",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/register",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 401
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 401
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/experts",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/signals",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 401
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/login",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/experts",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/membership/plans",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/public/signals",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/settings",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/mfa/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources/55555555-5555-4555-8555-555555555555/experts",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/diagnostics",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/telegram/status",
+      "status": 503
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/sources",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources/ff4ca97b-20a9-4421-b862-23d69ce3ae0c/experts",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources/ff4ca97b-20a9-4421-b862-23d69ce3ae0c/experts",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/sources/ff4ca97b-20a9-4421-b862-23d69ce3ae0c/experts",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources/ff4ca97b-20a9-4421-b862-23d69ce3ae0c/experts",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/admin/sources/ff4ca97b-20a9-4421-b862-23d69ce3ae0c",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources/ff4ca97b-20a9-4421-b862-23d69ce3ae0c/experts",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/admin/sources/ff4ca97b-20a9-4421-b862-23d69ce3ae0c",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources/ff4ca97b-20a9-4421-b862-23d69ce3ae0c/experts",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/admin/sources/ff4ca97b-20a9-4421-b862-23d69ce3ae0c/experts/5824c178-14a9-4e84-8fbd-24f81f986b50",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources/ff4ca97b-20a9-4421-b862-23d69ce3ae0c/experts",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/admin/membership/plans/webvip",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/membership/plans",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/membership/grants",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/accounts/leyu/auto-betting",
+      "status": 422
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/accounts/leyu/auto-betting",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/accounts/leyu/auto-betting",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/accounts/leyu/auto-betting",
+      "status": 403
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/reauthenticate",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/accounts/leyu/auto-betting",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/accounts/leyu/emergency-stop",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/accounts/leyu/verify",
+      "status": 202
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/membership/plans",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/mfa/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/settings",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/sources/ff4ca97b-20a9-4421-b862-23d69ce3ae0c/experts",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/diagnostics",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/telegram/admins",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/users",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/users/31812073-8a9b-4881-9246-15a791b1dcf2/memberships",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/membership/grants/90107e00-89ff-48d2-9b00-0a6e47fb56e1/revoke",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/users",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/accounts/leyu/auto-betting",
+      "status": 403
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/accounts/leyu/emergency-stop",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/leyu",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/accounts/orders",
+      "status": 200
+    }
+  ],
+  "browser_errors": []
+}

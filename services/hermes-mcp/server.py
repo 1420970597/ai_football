@@ -18,7 +18,7 @@ if not API_TOKEN:
     raise RuntimeError("EXPERT_MCP_TOKEN is required")
 
 client = httpx.AsyncClient(
-    timeout=httpx.Timeout(15.0, connect=2.0), trust_env=False,
+    timeout=httpx.Timeout(20.0, connect=2.0), trust_env=False,
     limits=httpx.Limits(max_connections=32, max_keepalive_connections=8),
     headers={"Authorization": f"Bearer {API_TOKEN}"},
 )
@@ -34,7 +34,8 @@ class ExpertPick(BaseModel):
 
 async def _post(path: str, payload: dict) -> dict:
     try:
-        response = await client.post(f"{API_URL}/{path}", json=payload)
+        response = await client.post(f"{API_URL}/{path}", json=payload,
+            timeout=httpx.Timeout(45 if path == 'record_expert_signals' else 20, connect=2))
         response.raise_for_status()
         return response.json()
     except httpx.TimeoutException:
@@ -53,11 +54,11 @@ async def _post(path: str, payload: dict) -> dict:
 async def search_matches(review_id: str, attempt_id: str, team_query: str,
                          phase: str = "all", competition_query: str | None = None,
                          from_utc: str | None = None, to_utc: str | None = None,
-                         cursor: str | None = None, page_size: int = 50) -> dict:
-    """搜索赛前及滚球完整候选快照，连续使用 next_cursor 直到为空；单页不是全量边界。"""
+                         cursor: str | None = None, page_size: int = 100, sport: str | None = None) -> dict:
+    """phase=all检索赛前、滚球、完场及取消候选；支持常见足球简称与重音/标点变体。每页最多100场，连续使用next_cursor直到为空。仅realtime_eligible=true的唯一比赛可读取实时盘口并录入推荐。"""
     return await _post("search_matches", {
         "review_id": review_id, "attempt_id": attempt_id, "team_query": team_query,
-        "phase": phase, "competition_query": competition_query,
+        "phase": phase, "competition_query": competition_query, "sport": sport,
         "from_utc": from_utc, "to_utc": to_utc, "cursor": cursor, "page_size": page_size,
     })
 
@@ -66,7 +67,7 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str,
 async def resolve_match(review_id: str, attempt_id: str, search_key: str,
                         team_a: str, team_b: str, competition: str | None = None,
                         from_utc: str | None = None, to_utc: str | None = None) -> dict:
-    """全候选翻页结束后，用双方系统队名或已知别名、联赛和时间唯一消歧；多候选返回未解决。"""
+    """全候选翻页结束后，用双方系统队名或常见别名、联赛和时间唯一消歧；支持常见缩写、标点/重音差异和清晰队名前缀，多候选返回未解决。优先使用候选中的标准队名。"""
     return await _post("resolve_match", {
         "review_id": review_id, "attempt_id": attempt_id, "search_key": search_key,
         "team_a": team_a, "team_b": team_b, "competition": competition,
@@ -76,13 +77,13 @@ async def resolve_match(review_id: str, attempt_id: str, search_key: str,
 
 @mcp.tool()
 async def list_match_markets(review_id: str, attempt_id: str, fixture_id: str) -> dict:
-    """读取已唯一消歧比赛的全部系统盘口，返回精确 quote_id、期间、盘口线、状态和新鲜度。"""
+    """读取已唯一消歧比赛的全部系统盘口；can_record表示源时间有效或精确当前盘口复核有效。"""
     return await _post("list_match_markets", {"review_id": review_id, "attempt_id": attempt_id, "fixture_id": fixture_id})
 
 
 @mcp.tool()
 async def record_expert_signals(review_id: str, attempt_id: str, signals: list[ExpertPick]) -> dict:
-    """逐项保存已实际读取且未变价的系统 quote_id；原文倍率不作为价格，检查接受及拒绝结果。"""
+    """立即提交当前比赛已读的确切quote_id；必要时系统重新复核原盘，未变价才记录，检查accepted/rejected。"""
     return await _post("record_expert_signals", {"review_id": review_id, "attempt_id": attempt_id, "signals": [pick.model_dump() for pick in signals]})
 
 

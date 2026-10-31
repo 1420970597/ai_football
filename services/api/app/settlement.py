@@ -29,6 +29,10 @@ def _score(value) -> int | None:
 
 
 def _period_scores(period: str, result: dict) -> tuple[int, int] | None:
+    for key in ('home', 'away'):
+        full, half = _score(result.get(key)), _score(result.get('half_' + key))
+        if full is not None and half is not None and half > full:
+            return None
     if period == "first_half":
         home, away = _score(result.get("half_home")), _score(result.get("half_away"))
     elif period in {"full_time", "second_half"}:
@@ -52,8 +56,14 @@ def settle(signal: dict, result: dict) -> Settlement:
         return pending("result_not_confirmed")
     try:
         price = Decimal(str(signal["price"]))
-        line = Decimal(str(signal.get("line", "0")))
-        if not price.is_finite() or price <= ONE or not line.is_finite():
+        kind = signal.get('kind')
+        raw_line = signal.get('line')
+        if isinstance(raw_line, bool):
+            return pending("invalid_price_or_line")
+        line = None if kind == 'winner' and raw_line is None else Decimal(str(raw_line))
+        if (not price.is_finite() or price <= ONE or
+                kind == 'winner' and line not in (None, ZERO) or
+                kind != 'winner' and (line is None or not line.is_finite())):
             return pending("invalid_price_or_line")
     except (KeyError, InvalidOperation, ValueError):
         return pending("invalid_price_or_line")

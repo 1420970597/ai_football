@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import json
 import math
 import secrets
+import socket
 import time
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlsplit
@@ -19,9 +22,11 @@ from .leyu_protocol import (
 DEFAULT_FIXTURE_PATH = "/yewu11/v2/m/getOriginalDataPB"
 DEFAULT_ODDS_PATH = "/yewu11/v1/w/structureMatchBaseInfoByMidsPB"
 DEFAULT_MATCH_ODDS_PATH = "/yewu11/v1/w/getMatchBaseInfoByOddsPB"
+DEFAULT_RESULT_DETAIL_PATH = "/yewu11/v1/m/matchDetail/getMatchDetailPB"
 DEFAULT_BATCH_SIZE = 12
 DEFAULT_CONCURRENCY = 1
 DEFAULT_BATCH_INTERVAL = 1.0
+MAX_RETRY_AFTER_SECONDS = 900
 DEFAULT_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36")
 
@@ -51,6 +56,36 @@ def _body(response: httpx.Response) -> Any:
         return decode_envelope(response.json())
     except (json.JSONDecodeError, UnicodeError):
         raise LeyuError("invalid_json_response") from None
+
+
+def retry_after_seconds(value: str | None, *, now: datetime | None = None) -> int | None:
+    """Read HTTP Retry-After without retaining its raw content or unbounded waits."""
+    if not value or len(value) > 128:
+        return None
+    try:
+        delay = float(value)
+        if not math.isfinite(delay) or delay < 0:
+            return None
+    except ValueError:
+        try:
+            stamp = parsedate_to_datetime(value)
+            if stamp.tzinfo is None:
+                return None
+            delay = max(0, (stamp - (now or datetime.now(timezone.utc))).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return min(MAX_RETRY_AFTER_SECONDS, math.ceil(delay))
+
+
+def _dns_failure(error: BaseException) -> bool:
+    for _ in range(8):
+        if isinstance(error, socket.gaierror):
+            return True
+        cause = error.__cause__ or error.__context__
+        if cause is None or cause is error:
+            return False
+        error = cause
+    return False
 
 
 class LeyuClient:
@@ -128,7 +163,7 @@ class LeyuClient:
         )
 
     def collection_url(self, path: str) -> str:
-        if path not in {DEFAULT_FIXTURE_PATH, DEFAULT_ODDS_PATH, DEFAULT_MATCH_ODDS_PATH}:
+        if path not in {DEFAULT_FIXTURE_PATH, DEFAULT_ODDS_PATH, DEFAULT_MATCH_ODDS_PATH, DEFAULT_RESULT_DETAIL_PATH}:
             raise LeyuError("unsupported_collection_path")
         if self.collection_relay:
             return self.collection_relay + "/" + urlsplit(self.base_url).netloc + path
@@ -142,25 +177,30 @@ class LeyuClient:
             "checkId": f"pc-{self.check_id_base}-{self.cuid}-{int(time.time() * 1000)}",
             "origin": self.origin, "referer": self.origin + "/", "user-agent": self.user_agent,
             "sec-fetch-site": "cross-site", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty",
+            "cache-control": "no-store", "pragma": "no-cache",
         }
         cookie = self.cookie
         if self.token and "x-api-token=" not in cookie.lower():
             cookie = (cookie + "; " if cookie else "") + "X-API-TOKEN=" + self.token
         if cookie:
             headers["cookie"] = cookie
-        if self.collection_relay:
-            headers.update({"cache-control": "no-store", "pragma": "no-cache"})
         return headers
 
     async def _request(self, client: httpx.AsyncClient, method: str, path: str, **kwargs) -> Any:
         # Never include URL/body/upstream text in raised diagnostics: some include account tokens.
+        operation = {DEFAULT_FIXTURE_PATH: "fixture_snapshot", DEFAULT_ODDS_PATH: "odds_batch",
+                     DEFAULT_MATCH_ODDS_PATH: "odds_single"}.get(path, "")
+        status = None
         try:
+            params = {"t": int(time.time() * 1000), **kwargs.pop('params', {})}
             async with client.stream(
-                method, self.collection_url(path), params={"t": int(time.time() * 1000)},
+                method, self.collection_url(path), params=params,
                 headers=self.headers(), **kwargs,
             ) as response:
+                status = response.status_code
                 if response.status_code == 429:
-                    raise RateLimited("http_rate_limited", "429")
+                    raise RateLimited("http_rate_limited", "429",
+                                      retry_after_seconds=retry_after_seconds(response.headers.get("Retry-After")))
                 if response.status_code in {401, 403}:
                     # HTTP 403 alone does not prove token expiration.
                     raise LeyuError("http_access_denied", str(response.status_code))
@@ -175,11 +215,21 @@ class LeyuClient:
                     payload = json.loads(body)
                 except (ValueError, UnicodeError):
                     raise LeyuError("invalid_json_response") from None
-                return decode_envelope(payload)
+                try:
+                    return decode_envelope(payload)
+                except RateLimited as exc:
+                    exc.retry_after_seconds = retry_after_seconds(response.headers.get("Retry-After"))
+                    raise
+        except LeyuError as exc:
+            exc.operation, exc.http_status = operation, status
+            raise
         except httpx.TimeoutException:
-            raise LeyuError("upstream_timeout") from None
+            raise LeyuError("upstream_timeout", operation=operation, http_status=status) from None
+        except httpx.ConnectError as exc:
+            raise LeyuError("upstream_domain_unresolved" if _dns_failure(exc) else "upstream_transport_error",
+                            operation=operation, http_status=status) from None
         except httpx.HTTPError:
-            raise LeyuError("upstream_transport_error") from None
+            raise LeyuError("upstream_transport_error", operation=operation, http_status=status) from None
 
     async def fetch(self, *, odds_mids: Iterable[str] | Callable[[list[dict[str, Any]]], Iterable[str]] | None = None) -> list[dict[str, Any]]:
         try:
@@ -187,6 +237,70 @@ class LeyuClient:
                 return await self._fetch(odds_mids=odds_mids)
         except TimeoutError:
             raise LeyuError("collection_deadline_exceeded") from None
+
+    @staticmethod
+    def validate_match_id(value: str) -> str:
+        if (not isinstance(value, str) or not 1 <= len(value) <= 96 or not value.isascii()
+                or not all(char.isalnum() or char in "_-" for char in value)):
+            raise LeyuError("invalid_source_match_id")
+        return value
+
+    @staticmethod
+    def _apply_market_row(fixture: dict[str, Any], row: Mapping[str, Any], captured: datetime) -> None:
+        parsed = parse_fixtures([row], received_at=captured)
+        if parsed:
+            detail = parsed[0]
+            # The schedule owns competition identity; detail supplies state/score.
+            for key in ("phase", "match_state", "home_score", "away_score", "half_home_score",
+                        "half_away_score", "clock_minute", "clock_raw", "source_updated_at",
+                        "source_time_quality", "received_at"):
+                fixture[key] = detail[key]
+        fixture["markets"] = parse_quotes(row, fixture["id"], captured)
+        fixture["markets_complete"] = isinstance(row.get("hpsData"), (list, Mapping))
+        if not fixture["markets_complete"]:
+            fixture["collection_error"] = "market_container_missing"
+        else:
+            fixture.pop("collection_error", None)
+
+    async def fetch_match(self, source_match_id: str, *, fixture: Mapping[str, Any]) -> dict[str, Any]:
+        """One existing, bound match detail request; never fetch the station or renew login."""
+        mid = self.validate_match_id(source_match_id)
+        if str(fixture.get("source_match_id") or "") != mid or not fixture.get("id"):
+            raise LeyuError("fixture_identity_mismatch")
+        started = datetime.now(timezone.utc)
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(6, connect=3, pool=1),
+            limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+            transport=self.transport, trust_env=False, follow_redirects=False,
+        ) as client:
+            details = await self._request(client, "POST", DEFAULT_MATCH_ODDS_PATH, json={
+                "cuid": self.cuid, "cos": 0, "orpt": 0, "euid": "3020101",
+                "mid": mid, "mcid": 0, "newUser": 0,
+            })
+        rows = details.get("data") if isinstance(details, Mapping) and "data" in details else details
+        if isinstance(rows, Mapping):
+            rows = [rows]
+        if not isinstance(rows, list):
+            raise LeyuError("invalid_single_match_odds_rows")
+        matches = [row for row in rows if isinstance(row, Mapping) and str(row.get("mid")) == mid]
+        if len(matches) != 1:
+            raise LeyuError("fixture_detail_missing" if not matches else "ambiguous_fixture_detail")
+        result = deepcopy(dict(fixture))
+        completed = datetime.now(timezone.utc)
+        self._apply_market_row(result, matches[0], completed)
+        if not result["markets_complete"]:
+            raise LeyuError("market_container_missing")
+        # This is an observation of this exact authoritative detail response,
+        # not a new source/change timestamp. Never attach it to merged WS data.
+        result["_current_observation"] = {
+            "path": DEFAULT_MATCH_ODDS_PATH, "started_at": started.isoformat(),
+            "completed_at": completed.isoformat(), "fixture_id": result["id"],
+            "source_match_id": mid,
+            "context": {key: result.get(key) for key in (
+                "phase", "home_score", "away_score", "half_home_score", "half_away_score")},
+            "quotes": deepcopy(result["markets"]),
+        } if parse_fixtures([matches[0]], received_at=completed) else None
+        return result
 
     async def _fetch(self, *, odds_mids: Iterable[str] | Callable[[list[dict[str, Any]]], Iterable[str]] | None = None) -> list[dict[str, Any]]:
         """完整赛程 + 有预算批次补盘；失败批次不会被当作完整空盘口快照。"""
@@ -230,18 +344,7 @@ class LeyuClient:
                     next_request = time.monotonic() + self.batch_interval
 
             def apply_market_row(fixture: dict[str, Any], row: Mapping[str, Any], captured: datetime) -> None:
-                parsed = parse_fixtures([row], received_at=captured)
-                if parsed:
-                    # Detail may fill state and score; it cannot replace schedule competition identity.
-                    detail = parsed[0]
-                    for key in ("phase", "match_state", "home_score", "away_score", "half_home_score",
-                                "half_away_score", "clock_minute", "clock_raw", "source_updated_at",
-                                "source_time_quality", "received_at"):
-                        fixture[key] = detail[key]
-                fixture["markets"] = parse_quotes(row, fixture["id"], captured)
-                fixture["markets_complete"] = isinstance(row.get("hpsData"), (list, Mapping))
-                if not fixture["markets_complete"]:
-                    fixture["collection_error"] = "market_container_missing"
+                self._apply_market_row(fixture, row, captured)
 
             async def fetch_single_match(mid: str) -> Mapping[str, Any] | None:
                 nonlocal single_match_fallbacks, fallback_attempts
@@ -296,7 +399,8 @@ class LeyuClient:
                                     raise
                                 except LeyuError as exc:
                                     failures.append({"size": 1, "fallback": True,
-                                                     "category": exc.category, "code": exc.code})
+                                                     "category": exc.category, "code": exc.code,
+                                                     "operation": exc.operation or "odds_single", "http_status": exc.http_status})
                                     fixture["markets_complete"] = False
                                     fixture["collection_error"] = exc.category
                                     continue
@@ -309,12 +413,14 @@ class LeyuClient:
                         raise
                     except RateLimited as exc:
                         limited = exc
-                        failures.append({"size": len(batch), "category": exc.category, "code": exc.code})
+                        failures.append({"size": len(batch), "category": exc.category, "code": exc.code,
+                                         "operation": exc.operation or "odds_batch", "http_status": exc.http_status})
                         for mid in batch:
                             if not by_id[mid]["markets_complete"]:
                                 by_id[mid]["collection_error"] = exc.category
                     except LeyuError as exc:
-                        failures.append({"size": len(batch), "category": exc.category, "code": exc.code})
+                        failures.append({"size": len(batch), "category": exc.category, "code": exc.code,
+                                         "operation": exc.operation or "odds_batch", "http_status": exc.http_status})
                         for mid in batch:
                             by_id[mid]["markets_complete"] = False
                             by_id[mid]["collection_error"] = exc.category
@@ -339,6 +445,9 @@ class LeyuClient:
                 "rate_limited": limited is not None,
                 "rate_limit_category": limited.category if limited is not None else "",
                 "rate_limit_code": limited.code if limited is not None else "",
+                "rate_limit_operation": limited.operation if limited is not None else "",
+                "rate_limit_http_status": limited.http_status if limited is not None else None,
+                "retry_after_seconds": limited.retry_after_seconds if limited is not None else None,
                 "failed_batches": failures,
                 "received_at": timestamp(datetime.now(timezone.utc)),
             }

@@ -5,8 +5,16 @@
   <string name="app_version">球讯 %1$s</string>
   <string name="pairing_title">连接球讯服务</string>
   <string name="service_address">服务地址</string>
-  <string name="pairing_help">输入管理员提供的 HTTPS 服务地址。验证成功后会展示域名和版本，请核对后连接。</string>
+  <string name="pairing_help">输入管理员提供的 HTTP 或 HTTPS 服务地址。HTTP 不需要证书，HTTPS 使用系统证书验证。验证成功后请核对服务地址和版本再连接。</string>
   <string name="verify_service">验证并连接</string>
+  <string name="scan_service">扫描服务地址二维码</string>
+  <string name="scan_help">将打开已安装的 ZXing 兼容扫码器。扫码结果需验证域名和服务版本后确认连接；也可直接手动输入地址。</string>
+  <string name="scan_start">打开扫码器</string>
+  <string name="scan_unavailable">未找到受支持的扫码器。请安装 ZXing Barcode Scanner 或 Barcode Scanner+，或在此手动输入服务地址。</string>
+  <string name="scan_cancelled">已取消扫码，可重新扫描或手动输入服务地址。</string>
+  <string name="scan_candidate">二维码地址已填入。请点击“验证并连接”，核对域名和版本后确认。</string>
+  <string name="scan_invalid">二维码不是有效的 HTTP 或 HTTPS 服务地址，请重新扫描或手动输入。</string>
+  <string name="back_check_timeout">页面暂未响应，请稍后再返回。</string>
   <string name="return_service">返回已配对服务</string>
   <string name="verifying_service">正在验证安全连接与服务版本…</string>
   <string name="confirm_service">确认连接服务</string>

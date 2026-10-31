@@ -40,14 +40,14 @@ class ControlServer:
                     if length < 0 or length > 16384 or self.headers.get("Transfer-Encoding"):
                         self.send_error(413)
                         return
-                    if self.path not in {"/status", "/auth/qr", "/auth/password", "/auth/cancel", "/dialogs", "/admins", "/disconnect"}:
+                    if self.path not in {"/status", "/auth/qr", "/auth/password", "/auth/cancel", "/dialogs", "/admins", "/members", "/disconnect", "/leyu/refresh"}:
                         self.send_error(404)
                         return
                     raw = self.rfile.read(length)
                     body = json.loads(raw or b"{}")
                     if not isinstance(body, dict):
                         raise ValueError("invalid body")
-                    future = asyncio.run_coroutine_threadsafe(outer.collector.control(self.path, body), outer.loop)
+                    future = asyncio.run_coroutine_threadsafe(outer.dispatch(self.path, body), outer.loop)
                     result = future.result(timeout=25)
                     encoded = json.dumps(result, ensure_ascii=False).encode()
                     self.send_response(200)
@@ -68,6 +68,14 @@ class ControlServer:
         self.server = ThreadingHTTPServer((host, port), Handler)
         self.server.daemon_threads = True
         self.thread = threading.Thread(target=self.server.serve_forever, name="telegram-control", daemon=True)
+
+    async def dispatch(self, path, body):
+        if path == "/leyu/refresh":
+            callback = getattr(self.collector, "leyu_refresh", None)
+            if callback is None:
+                return {"accepted": False, "written": False, "written_fixtures": 0, "reason": "refresh_unavailable"}
+            return await callback(body)
+        return await self.collector.control(path, body)
 
     def start(self):
         self.thread.start()

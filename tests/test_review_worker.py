@@ -64,6 +64,59 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(claimed["attempt_id"], retry["attempt_id"])
         self.assertEqual(2, retry["attempts"])
 
+    async def test_queue_notifications_are_commit_scoped_and_contain_no_payload(self):
+        listener = await asyncpg.connect(self.admin_url.rsplit('/', 1)[0] + '/' + self.dbname)
+        notified, payloads = asyncio.Event(), []
+        await listener.add_listener(worker.JOB_READY_CHANNEL,
+                                    lambda _conn, _pid, _channel, payload: (payloads.append(payload), notified.set()))
+        try:
+            await self.complete({'id': self.job})
+            async with self.pool.acquire() as conn:
+                with self.assertRaisesRegex(RuntimeError, 'rollback fixture'):
+                    async with conn.transaction():
+                        message_id, job_id = uuid.uuid4(), uuid.uuid4()
+                        await conn.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) "
+                                           "VALUES($1,$2,$3,$4,'SYNTHETIC rollback test',now())",
+                                           message_id, self.source, self.expert, str(message_id))
+                        await conn.execute("INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key,available_at) "
+                                           "VALUES($1,$2,'queued',$3,now())", job_id, message_id, str(job_id))
+                        raise RuntimeError('rollback fixture')
+                with self.assertRaises(TimeoutError):
+                    await asyncio.wait_for(notified.wait(), timeout=.05)
+
+                message_id, job_id = uuid.uuid4(), uuid.uuid4()
+                async with conn.transaction():
+                    await conn.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) "
+                                       "VALUES($1,$2,$3,$4,'SYNTHETIC commit test',now())",
+                                       message_id, self.source, self.expert, str(message_id))
+                    await conn.execute("INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key,available_at) "
+                                       "VALUES($1,$2,'queued',$3,now())", job_id, message_id, str(job_id))
+                    with self.assertRaises(TimeoutError):
+                        await asyncio.wait_for(notified.wait(), timeout=.05)
+            await asyncio.wait_for(notified.wait(), timeout=1)
+            self.assertEqual([''], payloads)
+            self.assertEqual(job_id, (await worker.claim_job(self.pool))['id'])
+        finally:
+            await listener.close()
+
+    async def test_claim_allows_slow_remote_roundtrips_but_still_has_a_deadline(self):
+        await self.make_queued()
+        real_claim = worker._claim_job
+        async def slow_claim(pool):
+            await asyncio.sleep(.06)
+            return await real_claim(pool)
+        with patch.object(worker, 'CLAIM_TIMEOUT_SECONDS', .5), patch.object(worker, '_claim_job', slow_claim):
+            self.assertEqual(self.job, (await worker.claim_job(self.pool))['id'])
+        cancelled = asyncio.Event()
+        async def stalled(_pool):
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+        with patch.object(worker, 'CLAIM_TIMEOUT_SECONDS', .02), patch.object(worker, '_claim_job', stalled):
+            self.assertIsNone(await worker.claim_job(self.pool))
+        self.assertTrue(cancelled.is_set())
+
     async def test_final_attempt_crash_enters_dead_letter(self):
         await self.pool.execute("UPDATE v2_analysis_jobs SET state='running',attempts=5,lease_until=now()-interval '1 second'")
         self.assertIsNone(await worker.claim_job(self.pool))
@@ -85,6 +138,12 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(worker, "review_message", AsyncMock(return_value=("已记录盈利推荐", {"content": "已记录盈利推荐"}))), patch.object(worker, "delete_session", AsyncMock()):
             await worker.process_job(self.pool, SimpleNamespace(hermes_model="hermes-agent"), job)
         self.assertEqual("unresolved", await self.pool.fetchval("SELECT state FROM v2_analysis_jobs WHERE id=$1", self.job))
+        conclusion = await self.pool.fetchrow(
+            "SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result'", self.job)
+        self.assertEqual("unresolved", conclusion["payload"]["outcome"])
+        self.assertEqual(0, conclusion["payload"]["signal_count"])
+        self.assertGreaterEqual(conclusion["payload"]["event_to_conclusion_ms"],
+                                conclusion["payload"]["claim_to_conclusion_ms"])
 
     async def test_stale_worker_failure_cannot_overwrite_new_attempt(self):
         await self.make_queued()

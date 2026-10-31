@@ -86,6 +86,29 @@ class ReleaseManifestTests(unittest.TestCase):
             self.assertNotIn('DO_NOT_COPY',json.dumps(document))
             self.assertIs(True,document['x-development-only'])
 
+    def test_every_apk_block_has_exact_network_permissions_without_duplicates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts, images = self.fixture(root)
+            package = artifacts / 'package-verification.txt'
+            original = package.read_text()
+            mutations = [
+                original + "\nuses-permission: name='android.permission.CAMERA'",
+                original.replace("uses-permission: name='android.permission.INTERNET'\n", ''),
+                original + "\nuses-permission: name='android.permission.INTERNET'",
+                original + "\nuses-permission-sdk-23: name='android.permission.CAMERA'",
+                original + "\nuses-permission: malformed",
+                original + "\npackage: name='com.aifootball.platform.dev' versionCode='20000' versionName='2.0.0-dev+debug'\n"
+                    + "uses-permission: name='android.permission.INTERNET'",
+            ]
+            for output in mutations:
+                with self.subTest(output=output[-100:]):
+                    package.write_text(output)
+                    with self.assertRaises(ValueError):
+                        make_manifest(root, 'a'*40, images, artifacts)
+            package.write_text(original + '\n' + original)
+            self.assertFalse(make_manifest(root, 'a'*40, images, artifacts)['production_ready'])
+
     def test_compose_override_rejects_partial_mutable_or_mislabelled_candidates(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)

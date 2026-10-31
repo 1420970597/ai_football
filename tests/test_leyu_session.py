@@ -1,4 +1,5 @@
 import base64
+import asyncio
 import errno
 import json
 from pathlib import Path
@@ -220,8 +221,8 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, json={"status_code": 6000, "data": {"ip": "1.1.1.1"}})
             return httpx.Response(200, json={"status_code": 6001})
 
-        for error_type, expected in ((httpx.ConnectError, "proxy_login_connect_failure"),
-                                     (httpx.ReadTimeout, "proxy_login_read_timeout")):
+        for error_type, expected, status in ((httpx.ConnectError, "proxy_login_connect_failure", "failed"),
+                                             (httpx.ReadTimeout, "proxy_login_read_timeout", "unknown")):
             self.events.clear()
             def proxy(request, error_type=error_type):
                 raise error_type("secret-proxy-and-target-details", request=request)
@@ -231,6 +232,8 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(expected, raised.exception.category)
             self.assertNotIn("secret-proxy-and-target-details", str(raised.exception))
             self.assertEqual(expected, self.events[-1][2]["category"])
+            self.assertEqual(status, self.events[-1][1])
+            self.assertEqual(status == "unknown", self.events[-1][2]["login_submitted"])
 
     async def test_proxy_connection_refusal_is_classified_without_os_error_text(self):
         def direct(request):
@@ -246,6 +249,8 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("proxy_login_connection_refused", raised.exception.category)
         self.assertNotIn("secret proxy host", str(raised.exception))
         self.assertEqual("proxy_login_connection_refused", self.events[-1][2]["category"])
+        self.assertEqual("failed", self.events[-1][1])
+        self.assertFalse(self.events[-1][2]["login_submitted"])
 
     async def test_proxy_connect_http_status_is_retained_without_reason_text(self):
         def direct(request):
@@ -261,6 +266,57 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(("proxy_login_proxy_http_rejected", "407"), (raised.exception.category, raised.exception.code))
         self.assertNotIn("private credentials", str(raised.exception))
         self.assertEqual("proxy_login_proxy_http_rejected", self.events[-1][2]["category"])
+        self.assertEqual("failed", self.events[-1][1])
+        self.assertFalse(self.events[-1][2]["login_submitted"])
+
+    async def test_pre_send_failures_release_direct_and_proxy_renewal_for_cooldown(self):
+        for use_proxy in (False, True):
+            for error_type in (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.ProxyError):
+                with self.subTest(proxy=use_proxy, error=error_type.__name__):
+                    self.events.clear()
+                    self.updates.clear()
+                    self.direct_paths.clear()
+                    self.proxy_paths.clear()
+
+                    def fail(request):
+                        raise error_type("private network details", request=request)
+
+                    def direct(request):
+                        if request.url.path == PRE_INFO_PATH:
+                            return httpx.Response(200, json={"status_code": 6000, "data": {"ip": "1.1.1.1"}})
+                        if request.url.path == LOGIN_PATH:
+                            return fail(request)
+                        return httpx.Response(200, json={"status_code": 6001})
+
+                    cfg = config(leyu_login_proxy_url="http://sample:password@proxy.invalid:1234" if use_proxy else "")
+                    with self.assertRaises(LeyuError):
+                        await self.renewer(cfg, direct, fail if use_proxy else None).renew()
+                    self.assertEqual("failed", self.events[-1][1])
+                    self.assertFalse(self.events[-1][2]["login_submitted"])
+                    self.assertEqual([], self.updates)
+                    self.assertEqual(1, (self.direct_paths + self.proxy_paths).count(LOGIN_PATH))
+
+    async def test_ambiguous_login_failures_remain_unknown_without_replay(self):
+        for error_type in (httpx.ReadError, httpx.ReadTimeout, httpx.WriteError, httpx.WriteTimeout,
+                           httpx.RemoteProtocolError, asyncio.CancelledError):
+            with self.subTest(error=error_type.__name__):
+                self.events.clear()
+                self.proxy_paths.clear()
+
+                def direct(request):
+                    if request.url.path == PRE_INFO_PATH:
+                        return httpx.Response(200, json={"status_code": 6000, "data": {"ip": "1.1.1.1"}})
+                    return httpx.Response(200, json={"status_code": 6001})
+
+                def proxy(request):
+                    raise error_type("private transport details")
+
+                with self.assertRaises((LeyuError, asyncio.CancelledError)):
+                    await self.renewer(config(leyu_login_proxy_url="http://sample:password@proxy.invalid:1234"),
+                                       direct, proxy).renew()
+                self.assertEqual("unknown", self.events[-1][1])
+                self.assertTrue(self.events[-1][2]["login_submitted"])
+                self.assertEqual([LOGIN_PATH], self.proxy_paths)
 
     async def test_6031_is_rejected_once_not_automatically_replayed(self):
         def direct(request):

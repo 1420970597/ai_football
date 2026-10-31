@@ -21,13 +21,16 @@ def authorize(request: Request, token: str) -> None:
 
 async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID):
     job = await conn.fetchrow(
-        "SELECT j.id,j.message_id,j.state,j.attempt_id,j.lease_until,m.raw_text,m.media_objects,m.revision,"
+        "SELECT j.id,j.message_id,j.state,j.attempt_id,j.lease_until,j.review_mode,m.posted_at,m.raw_text,m.media_objects,m.revision,"
         "m.deleted_at,m.media_state,e.id AS expert_id,e.display_nickname,e.enabled AS expert_enabled,"
         "s.enabled AS source_enabled,se.enabled AS trusted "
         "FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
         "JOIN v2_experts e ON e.id=m.expert_id JOIN v2_expert_sources s ON s.id=m.source_id "
         "LEFT JOIN v2_source_experts se ON se.source_id=m.source_id AND se.expert_id=m.expert_id "
-        "WHERE j.id=$1 FOR UPDATE OF j", review_id,
+        # Tool calls for one agent attempt are independently authenticated. A
+        # shared lock keeps cancellation/completion from overtaking them while
+        # allowing safe MCP calls in the same model batch to overlap.
+        "WHERE j.id=$1 FOR SHARE OF j", review_id,
     )
     if not job or job["state"] != "running" or job["attempt_id"] != attempt_id or not job["lease_until"] or job["lease_until"] <= datetime.now(timezone.utc):
         raise HTTPException(status_code=409, detail="review attempt is no longer active")
@@ -42,13 +45,34 @@ async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID):
     return job
 
 
-async def trace(conn, review_id: uuid.UUID, kind: str, payload: dict) -> None:
-    # 调用者已经锁定当前任务，序号在同一事务内分配。
-    sequence = await conn.fetchval("SELECT COALESCE(MAX(sequence_no),0)+1 FROM v2_analysis_traces WHERE job_id=$1", review_id)
+async def append_traces(conn, review_id: uuid.UUID, records: list[tuple[str, dict]]) -> None:
+    if not records:
+        return
+    encoded = [
+        {"id": str(uuid.uuid4()), "trace_kind": kind, "payload": payload}
+        for kind, payload in records
+    ]
     await conn.execute(
-        "INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) VALUES($1,$2,$3,$4,$5)",
-        uuid.uuid4(), review_id, sequence, kind, payload,
+        "SELECT pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || $1::text,0))",
+        str(review_id),
     )
+    await conn.execute(
+        "WITH sequence_base AS MATERIALIZED ("
+        "SELECT COALESCE(MAX(t.sequence_no),0) AS last_sequence "
+        "FROM v2_analysis_traces t WHERE t.job_id=$1),"
+        "items AS ("
+        "SELECT (entry.value->>'id')::uuid AS id,entry.value->>'trace_kind' AS trace_kind,"
+        "entry.value->'payload' AS payload,entry.ordinality "
+        "FROM jsonb_array_elements($2::jsonb) WITH ORDINALITY AS entry(value,ordinality)) "
+        "INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) "
+        "SELECT items.id,$1,(sequence_base.last_sequence+items.ordinality)::integer,items.trace_kind,items.payload "
+        "FROM items CROSS JOIN sequence_base",
+        review_id, encoded,
+    )
+
+
+async def trace(conn, review_id: uuid.UUID, kind: str, payload: dict) -> None:
+    await append_traces(conn, review_id, [(kind, payload)])
 
 
 def fresh_quote(row, max_age: int, now: datetime | None = None) -> bool:

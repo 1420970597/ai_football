@@ -226,50 +226,6 @@ export class ApiError extends Error {
     this.detail = detail;
   }
 }
-function requestReauthentication(context) {
-  const modal = $("#reauth-dialog");
-  if (!modal || modal.open) return;
-  const form = $("#reauth-form");
-  form.reset();
-  form.dataset.context = context;
-  $("#reauth-title").textContent =
-    context === "admin" ? "再次验证管理身份" : "再次验证本人身份";
-  $("#reauth-totp").hidden = context !== "admin";
-  form.elements.totp_code.required = false;
-  $("#reauth-message").textContent =
-    "当前操作需要近期身份验证。已填写内容会保留；验证成功后请再次提交原操作。";
-  form.onsubmit = async (event) => {
-    event.preventDefault();
-    const button = $("button[type=submit]", form);
-    button.disabled = true;
-    try {
-      await api(
-        context === "admin" ? "/admin/reauthenticate" : "/auth/reauthenticate",
-        {
-          method: "POST",
-          context,
-          body: {
-            password: form.elements.password.value,
-            ...(context === "admin" && form.elements.totp_code.value
-              ? { totp_code: form.elements.totp_code.value }
-              : {}),
-          },
-        },
-      );
-      form.reset();
-      modal.close();
-      toast("身份验证成功，请再次提交刚才的操作。原表单内容已保留。");
-    } catch (error) {
-      $("#reauth-message").textContent = error.message;
-      form.elements.password.value = "";
-      form.elements.totp_code.value = "";
-    } finally {
-      button.disabled = false;
-    }
-  };
-  modal.onclose = () => form.reset();
-  showDialog(modal, form.elements.password);
-}
 export async function api(
   path,
   { method = "GET", body, context = "user", signal, timeout = 15000 } = {},
@@ -317,14 +273,6 @@ export async function api(
             : response.status === 422
               ? "输入内容不符合要求，请检查表单"
               : `请求失败（${response.status}）`;
-      if (
-        response.status === 403 &&
-        data.detail?.code === "reauthentication_required" &&
-        !path.endsWith("/reauthenticate")
-      )
-        requestReauthentication(
-          data.detail.session_kind === "admin" ? "admin" : context,
-        );
       throw new ApiError(
         detail,
         response.status,

@@ -1,0 +1,92 @@
+# Use --project-directory /root/ai_football on the VPS; no outside project mounts.
+name: ai-football-v2-remote
+x-limits: &limits
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging: {driver: json-file, options: {max-size: 10m, max-file: '3'}}
+services:
+  socket-guard:
+    <<: *limits
+    image: ${REMOTE_COLLECTOR_IMAGE:?Pin same-source collector image by digest}
+    user: '0:0'
+    entrypoint: [python, /deployment/socket_guard.py]
+    volumes:
+      - {type: bind, source: ./infra/remote/socket_guard.py, target: /deployment/socket_guard.py, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./.runtime/remote, target: /run/remote, bind: {create_host_path: false}}
+    # Read the host Unix socket table before removing a refused stale entry.
+    # This service opens no TCP listener and receives no credentials.
+    network_mode: host
+    cpus: .05
+    mem_limit: 48m
+    pids_limit: 16
+  api-bridge:
+    <<: *limits
+    image: ${REMOTE_COLLECTOR_IMAGE:?Pin same-source collector image by digest}
+    user: '10006:10005'
+    entrypoint: [python, /deployment/api_bridge.py]
+    environment:
+      COLLECTOR_INTERNAL_TOKEN: ${COLLECTOR_INTERNAL_TOKEN:?Reuse collector token}
+      EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Reuse executor token}
+    volumes:
+      - {type: bind, source: ./infra/remote/api_bridge.py, target: /deployment/api_bridge.py, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./.runtime/remote, target: /run/remote, read_only: true, bind: {create_host_path: false}}
+    networks: [workers]
+    cpus: .1
+    mem_limit: 96m
+    pids_limit: 64
+  collector:
+    <<: *limits
+    image: ${REMOTE_COLLECTOR_IMAGE:?Pin same-source collector image by digest}
+    group_add: ['10005']
+    environment:
+      PLATFORM_API: http://api-bridge:8081/internal
+      COLLECTOR_INTERNAL_TOKEN: ${COLLECTOR_INTERNAL_TOKEN:?Reuse collector token}
+      COLLECTOR_INTERVAL_SECONDS: ${COLLECTOR_INTERVAL_SECONDS:-20}
+      ODDS_FIXTURE_BUDGET: ${ODDS_FIXTURE_BUDGET:-96}
+      LIVE_ODDS_REFRESH_SECONDS: ${LIVE_ODDS_REFRESH_SECONDS:-20}
+      PREGAME_NEAR_HOURS: ${PREGAME_NEAR_HOURS:-2}
+      PREGAME_NEAR_REFRESH_SECONDS: ${PREGAME_NEAR_REFRESH_SECONDS:-60}
+      PREGAME_FAR_REFRESH_SECONDS: ${PREGAME_FAR_REFRESH_SECONDS:-300}
+      TELEGRAM_CONTROL_HOST: 0.0.0.0
+      TELEGRAM_CONTROL_PORT: '8092'
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:?Reuse verified HTTPS endpoint}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Reuse existing S3 key}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?Reuse existing S3 secret}
+      S3_BUCKET: ${S3_BUCKET:?Reuse existing bucket}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_USE_TLS: 'true'
+      AWS_CA_BUNDLE: /run/secrets/s3-ca.crt
+      S3_OBJECT_PREFIX: v2/
+    volumes:
+      - {type: bind, source: ./.runtime/leyu-app-signing.json, target: /run/secrets/leyu-app-signing.json, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./.runtime/leyu-app-discovery.json, target: /run/secrets/leyu-app-discovery.json, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./.runtime/s3-ca.crt, target: /run/secrets/s3-ca.crt, read_only: true, bind: {create_host_path: false}}
+    depends_on: [api-bridge]
+    ports: ['127.0.0.1:18092:8092']
+    networks: [workers, egress]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=64m"]
+    cpus: ${REMOTE_COLLECTOR_CPUS:-.3}
+    mem_limit: 512m
+    pids_limit: 128
+  executor:
+    <<: *limits
+    image: ${REMOTE_EXECUTOR_IMAGE:?Pin same-source executor image by digest}
+    group_add: ['10005']
+    environment:
+      PLATFORM_EXECUTOR_API: http://api-bridge:8081/internal/executor
+      EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Reuse executor token}
+      EXECUTOR_LIVE_ORDERS_ENABLED: 'false'
+    volumes:
+      - {type: bind, source: ./.runtime/leyu-app-signing.json, target: /run/secrets/leyu-app-signing.json, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./.runtime/leyu-app-discovery.json, target: /run/secrets/leyu-app-discovery.json, read_only: true, bind: {create_host_path: false}}
+    depends_on: [api-bridge]
+    networks: [workers, egress]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=32m"]
+    cpus: ${REMOTE_EXECUTOR_CPUS:-.15}
+    mem_limit: 256m
+    pids_limit: 128
+networks:
+  workers: {internal: true}
+  egress: {}
