@@ -52,7 +52,8 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         async def fetch(entity,ids):
             calls.append(list(ids));return await original(entity,ids)
         self.client.get_messages=fetch
-        report=await self.collector._reconcile_known('-1001',self.source)
+        with patch('collector.telegram.RECONCILE_EVENT_LIMIT',10):
+            report=await self.collector._reconcile_known('-1001',self.source)
         self.assertEqual({'state':'ready','checked':10,'pending':0},report)
         self.assertEqual([list(range(1,12))],calls)
         self.assertEqual([('-1001',10)],self.backend.observation_calls)
@@ -66,9 +67,11 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         async def blocked(*_,**__): await asyncio.Future()
         self.client.get_messages=blocked
         with patch('collector.telegram.RECONCILE_RPC_SECONDS',.02):
-            report=await asyncio.wait_for(self.collector._reconcile_known('-1001',self.source),.4)
+            with self.assertLogs('platform.telegram',level='WARNING') as logs:
+                report=await asyncio.wait_for(self.collector._reconcile_known('-1001',self.source),.4)
         self.assertEqual('deferred',report['state'])
         self.assertEqual(1,report['pending'])
+        self.assertIn('stage=telegram_messages',logs.output[0])
         self.assertEqual([],self.backend.calls)
         self.assertFalse(self.collector.locks['-1001'].locked())
         self.client.get_messages=original
@@ -189,10 +192,10 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.client.messages['-1001']=[Message(i) for i in range(1,24)]
         self.queue('-1001',[[i] for i in range(1,24)])
         sizes=[]
-        for _ in range(3):
+        for _ in range(8):
             report=await self.collector._reconcile_known('-1001',self.source)
             sizes.append(report['checked'])
-        self.assertEqual([10,10,3],sizes)
+        self.assertEqual([3,3,3,3,3,3,3,2],sizes)
         self.assertEqual(23,len(self.backend.events))
         self.assertEqual([],self.backend.scheduled['-1001'])
 

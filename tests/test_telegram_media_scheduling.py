@@ -349,12 +349,12 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
         entered, release = threading.Event(), threading.Event()
         class S3:
             def put_object(inner, **kwargs):
-                entered.set(); release.wait(.5)
+                entered.set(); release.wait(1.0)
             def close(inner):
                 pass
         env = {'S3_BUCKET':'test-private','S3_ENDPOINT_URL':'https://invalid.example',
                'S3_ACCESS_KEY':'test-only','S3_SECRET_KEY':'test-only'}
-        with patch.dict(os.environ, env), patch('collector.telegram.boto3.client', return_value=S3()), patch('collector.telegram.MEDIA_TRANSFER_SECONDS', .04):
+        with patch.dict(os.environ, env), patch('collector.telegram.boto3.client', return_value=S3()), patch('collector.telegram.MEDIA_TRANSFER_SECONDS', .2):
             try:
                 await asyncio.wait_for(self.collector.retry_pending(), .5)
                 self.assertTrue(entered.is_set())

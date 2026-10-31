@@ -49,7 +49,7 @@ AUTHOR_BACKFILL_PAGE_SIZE = 10
 SOURCE_HISTORY_SECONDS = 25
 RECONCILE_BATCH_SECONDS = 10
 RECONCILE_RPC_SECONDS = 3
-RECONCILE_EVENT_LIMIT = 10
+RECONCILE_EVENT_LIMIT = 3
 RECONCILE_ID_LIMIT = 100
 MEDIA_CLEANUP_SECONDS = 5
 SOURCE_LEASE_REFRESH_SECONDS = 3
@@ -651,11 +651,13 @@ class TelegramCollector:
         pending[:] = [item for item in pending if not item.get('claim_lease_until')
                       or _utc(datetime.fromisoformat(item['claim_lease_until'])) > now]
         checked = 0
+        stage = 'lease_refresh'
         try:
             async with asyncio.timeout(RECONCILE_BATCH_SECONDS):
                 async with self.locks.setdefault(chat_id, asyncio.Lock()):
                     await self._checkpoint(chat_id)
                     if not pending:
+                        stage = 'claim'
                         pending.extend(await self.backend.observed(chat_id, self.owner, limit=RECONCILE_EVENT_LIMIT))
                 if not pending:
                     return {'state': 'ready', 'checked': 0, 'pending': 0}
@@ -665,9 +667,11 @@ class TelegramCollector:
                 by_id = {}
                 if identifiers:
                     async with asyncio.timeout(RECONCILE_RPC_SECONDS):
+                        stage = 'telegram_entity'
                         entity = await self._entity(chat_id)
                 for offset in range(0, len(identifiers), RECONCILE_ID_LIMIT):
                     async with asyncio.timeout(RECONCILE_RPC_SECONDS):
+                        stage = 'telegram_messages'
                         members = await self.client.get_messages(entity, ids=identifiers[offset:offset+RECONCILE_ID_LIMIT])
                     by_id.update({entry.id: entry for entry in members if entry})
                 while pending:
@@ -676,17 +680,21 @@ class TelegramCollector:
                     ids = item['content']['member_message_ids']
                     members = [by_id[identifier] for identifier in ids if identifier in by_id]
                     async with self.locks.setdefault(chat_id, asyncio.Lock()):
+                        stage = 'lease_refresh'
                         await self._checkpoint(chat_id)
                     try:
                         if not item.get('_reconcile_applied'):
                             missing = set(ids) - set(by_id)
                             submission = item.setdefault('_reconcile_submission', {})
                             if submission.get('payload'):
+                                stage = 'event_commit'
                                 result = await self.backend.event(submission['payload'])
                             elif missing:
+                                stage = 'event_commit'
                                 result = await self._delete(chat_id, sorted(missing), reconciliation=reference,
                                                             submission=submission)
                             else:
+                                stage = 'event_commit'
                                 result, _ = await self._stage_group(
                                     chat_id, source, sorted(members, key=lambda entry: entry.id),
                                     reconciliation=reference, submission=submission)
@@ -694,6 +702,7 @@ class TelegramCollector:
                                 return {'state': 'deferred', 'reason': 'event_not_committed',
                                         'checked': checked, 'pending': len(pending)}
                             item['_reconcile_applied'] = True
+                        stage = 'acknowledgement'
                         await self.backend.acknowledge_observed(chat_id, self.owner, reference)
                     except httpx.HTTPStatusError as exc:
                         if exc.response.status_code != 409:
@@ -705,7 +714,8 @@ class TelegramCollector:
                     checked += 1
                     await asyncio.sleep(0)
         except TimeoutError:
-            log.warning('Telegram reconciliation deferred category=deadline pending=%s', len(pending))
+            log.warning('Telegram reconciliation deferred category=deadline stage=%s pending=%s',
+                        stage, len(pending))
             return {'state': 'deferred', 'reason': 'deadline', 'checked': checked, 'pending': len(pending)}
         return {'state': 'ready', 'checked': checked, 'pending': 0}
 
