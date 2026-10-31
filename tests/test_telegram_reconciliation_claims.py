@@ -427,7 +427,8 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('_reconcile_applied', claimed)
             self.assertTrue(claimed['_reconcile_submission']['payload'])
             self.assertIsNotNone(await self.pool.fetchval(
-                'SELECT reconcile_acknowledged_at FROM v2_telegram_events'))
+                'SELECT reconcile_acknowledged_at FROM v2_telegram_events WHERE id=$1',
+                uuid.UUID(claimed['id'])))
             async def forbidden(*args, **kwargs):
                 self.fail('ack retry must not require another Telegram request')
             client.get_entity = forbidden
