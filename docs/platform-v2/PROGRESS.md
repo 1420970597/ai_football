@@ -1,20 +1,20 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-31 14:56 UTC。当前目标：每30分钟检查一次新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察，直到至少一个有真实专家发言的30分钟窗口全部审核正确。E121观察窗完整运行1839.187秒后失败：Telegram degraded、12条当前/编辑消息未审核、35个任务unresolved、accepted signals 0。E122近期媒体优先级已提交推送、定向及完整后端测试通过、候选API镜像已构建核验；当前queued=2/running=1，等待任务自然排空后生效。
+更新时间：2026-10-31 15:08 UTC。当前目标：每30分钟检查一次新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察，直到至少一个有真实专家发言的30分钟窗口全部审核正确。E122 API与review-worker已在15:04 UTC前后依次生效，revision=`f41f3d3`；新观察窗从15:07:44 UTC开始。首次媒体探针确认30/30批次优先包含近24小时消息，但Telegram仍degraded，批次含14个TimeoutError和2个其他错误；需观察图片是否传输成功并进入Hermes审核。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
 ## 当前范围与状态
 
-### E122 — Telegram近期图片消息被旧媒体积压饿死（2026-10-31，隔离验证中）
+### E122 — Telegram近期图片消息被旧媒体积压饿死（2026-10-31，部署后观察中）
 
 - 目标：让实时窗口内等待上传/重试的图片发言进入媒体重试批次，避免历史积压占满全部名额；保持历史数据完整及历史消息不自动触发模型审核。
 - 责任目录：`services/api/`、`tests/`。前置依赖：当前已部署Telegram采集器通过API拉取待重试消息；排序字段以采集到的原始`posted_at`为准。
 - 证据/缺口：14:34:47 UTC容器内只读查询显示3290条`pending/failed`媒体事件、其中4条近24小时；`/internal/telegram/pending?limit=30`原来只取`updated_at`最早批次，0条近期消息入批。未完整媒体不得送Hermes，因此这解释了近期推荐消息未被模型看见，但仍须观察部署后是否完成上传、生成审核任务与真实绑定。旧观察器14:14:47–14:45:26 UTC运行1839.187秒，终点健康端点均200但Telegram仍degraded，当前/编辑未审核12条、unresolved 35、accepted signals 0；有4条赛事绑定但无记录信号。摘要显示两条较长且命中推荐词的消息仍为pending/failed；已送模型的消息多数原文1–7字符且无推荐特征，不能据此判为赛事命中失败。
 - 设计决策：SQL先按原始发布时间是否落在`REALTIME_WINDOW_SECONDS`内分桶，实时消息在前；每个桶仍按`updated_at,id`排序。超过实时窗口的积压仍在分页批次中FIFO轮转，不删除、不自动审核。
 - 实现动作/验收：API待媒体端点已按原始发布时间分桶，实时窗口在前、两桶各自仍按`updated_at,id`顺序。Docker隔离回归构造31条历史媒体消息和1条近期推荐消息，验证单批30项中近期消息优先、历史项仍FIFO。完整冻结后端套件通过后，构建限额候选、复核队列门禁，部署API及review-worker并重启观察窗。
-- 失败处理/当前状态：若近期消息进入批次但在采集器30秒批次截止内仍反复超时，继续检查单消息传输/回写截止与分组调度；不能把旧消息标为已处理，也不向不完整媒体创建模型任务。门禁14:55:46及14:56:25 UTC均为queued=2/retry=0/running=1，等待自然完成后复查。真实修复生效、图片进模及比赛绑定验收仍未完成。
-- 已执行命令/退出码：只读调查`.runtime/e121-media-queue.py`、`.runtime/e121-window-diagnostics.py`、`.runtime/e121-intent-summary.py`（Docker内）均退出0；截至14:34:47 UTC队列摘要为3290总待重试、4条近期。Docker具名隔离网络和临时PostgreSQL定向测试退出0（1项，1.963秒）；冻结完整`sh infra/test/run.sh`退出0，1011项、0失败/错误/跳过、427.110秒，证据`.runtime/test-evidence/876762/backend-tests.json`，快照源父提交`f31b078`、`committed_source_verified=false`；快照中的`telegram.py`与`test_telegram_api.py`SHA分别为`6b1a6ddc…`和`9b81e12b…`，与冻结工作树匹配。`jq`因宿主机未安装退出127，首次Docker JSON解析镜像引用摘要格式无效退出125，改用既有验证器镜像解析退出0。代码提交并推送`f41f3d3`，远端引用核对一致；`git show --check`、Compose `config --images`退出0。限额Docker API镜像构建退出0，Image ID=`sha256:ceb00bd2f495a792676e9639c55deb831954ca95dc181ae580978086794126da`，revision=`f41f3d332d402e6c3247d94c3dfbb75df359df0c`；镜像内路由SHA=`6b1a6ddc…`。部署门禁仍退出2（queued=2/running=1）。
+- 失败处理/当前状态：若近期消息进入批次但在采集器30秒批次截止内仍反复超时，继续检查单消息传输/回写截止与分组调度；不能把旧消息标为已处理，也不向不完整媒体创建模型任务。先在15:00:42 UTC API部署前门禁全0并停止旧worker；API随后产生1个queued任务，以E121 worker自然排空，再于15:04:18 UTC停旧worker后复核queued/retry/running全0，启动E122 worker。15:05:48 UTC API真实待媒体端点200、批次30项且近实时30项；15:08:05 UTC队列总3313、近实时入批30、其中14 TimeoutError/2 other，ready近实时媒体仍少。新30分钟观察窗尚未通过。
+- 已执行命令/退出码：只读调查`.runtime/e121-media-queue.py`、`.runtime/e121-window-diagnostics.py`、`.runtime/e121-intent-summary.py`（Docker内）均退出0；截至14:34:47 UTC队列摘要为3290总待重试、4条近期。Docker具名隔离网络和临时PostgreSQL定向测试退出0（1项，1.963秒）；冻结完整`sh infra/test/run.sh`退出0，1011项、0失败/错误/跳过、427.110秒，证据`.runtime/test-evidence/876762/backend-tests.json`，快照源父提交`f31b078`、`committed_source_verified=false`；快照中的`telegram.py`与`test_telegram_api.py`SHA分别为`6b1a6ddc…`和`9b81e12b…`，与冻结工作树匹配。`jq`因宿主机未安装退出127，首次Docker JSON解析镜像引用摘要格式无效退出125，改用既有验证器镜像解析退出0。代码提交并推送`f41f3d3`及进度提交`88ddcc1`，远端引用核对一致；`git show --check`、Compose `config --images`退出0。限额Docker API镜像构建退出0，Image ID=`sha256:ceb00bd2f495a792676e9639c55deb831954ca95dc181ae580978086794126da`，revision=`f41f3d332d402e6c3247d94c3dfbb75df359df0c`；镜像内路由SHA=`6b1a6ddc…`。API与review-worker现为该镜像且healthy/running；API `/healthz`、`/readyz`均200；collector和Hermes未重启。只读观察器`.runtime/e120-watch.py`与`.runtime/e122-20261031/media-watch.py`分别从15:07:44及15:08:04 UTC在API Docker容器启动，完整窗口终点应在15:37 UTC后。
 
 ### E117 — Telegram 发言补扫、原文图片预览与既有乐鱼配置复核（2026-10-31，最终回归重跑中）
 
