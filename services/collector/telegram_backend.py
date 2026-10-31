@@ -1,8 +1,23 @@
 """Telegram 采集与远端业务持久层的有限接口。"""
 
 from typing import Any
+import logging
 
 import httpx
+
+
+log = logging.getLogger('platform.telegram')
+_REJECTION_REASONS = {
+    'Telegram source lease is not active': 'lease_inactive',
+    'Telegram source is owned by another collector': 'lease_owned_elsewhere',
+    'checkpoint has changed': 'checkpoint_changed',
+    'same message version has conflicting content': 'version_content_conflict',
+    'sender is not trusted for this source': 'untrusted_author',
+    'all message media must be uploaded before review': 'media_incomplete',
+    'trusted author mapping is no longer active': 'author_mapping_inactive',
+    'author backfill cursor has changed': 'author_cursor_changed',
+    'Telegram source is not enabled': 'source_disabled',
+}
 
 
 class TelegramBackend:
@@ -12,6 +27,14 @@ class TelegramBackend:
 
     async def _call(self, method: str, path: str, body: dict | None = None):
         response = await self.client.request(method, self.api_url + path, json=body)
+        if not response.is_success:
+            try:
+                detail = response.json().get('detail')
+            except (ValueError, AttributeError):
+                detail = None
+            reason = _REJECTION_REASONS.get(detail, 'unclassified') if isinstance(detail, str) else 'unclassified'
+            log.warning('Telegram backend rejected method=%s operation=%s status=%s reason=%s',
+                        method, path.split('?', 1)[0], response.status_code, reason)
         response.raise_for_status()
         return response.json()
 

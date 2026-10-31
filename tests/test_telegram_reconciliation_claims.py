@@ -19,6 +19,37 @@ import test_telegram_collector as collector_support
 
 
 class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejection_logs_only_stable_reason_and_preserves_original_response(self):
+        requests = []
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(409, json={'detail': 'same message version has conflicting content'})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            with self.assertLogs('platform.telegram', level='WARNING') as logs:
+                with self.assertRaises(httpx.HTTPStatusError) as raised:
+                    await backend.event({'raw_text': 'private-message-only', 'owner': 'private-owner-only'})
+        self.assertEqual(409, raised.exception.response.status_code)
+        self.assertEqual(1, len(requests))
+        self.assertIn('operation=/events status=409 reason=version_content_conflict', logs.output[0])
+        self.assertNotIn('private-', logs.output[0])
+        self.assertNotIn('conflicting content', logs.output[0])
+
+    async def test_unrecognized_validation_payload_is_not_logged_or_retried(self):
+        for payload in ({'detail': 'private-response-only'}, {'detail': [{'input': 'private-input-only'}]}, ['private-list-only']):
+            requests = []
+            def handler(request):
+                requests.append(request)
+                return httpx.Response(422, json=payload)
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+                with self.assertLogs('platform.telegram', level='WARNING') as logs:
+                    with self.assertRaises(httpx.HTTPStatusError):
+                        await backend.observed('-1001', 'private-owner-only')
+            self.assertEqual(1, len(requests))
+            self.assertIn('reason=unclassified', logs.output[0])
+            self.assertNotIn('private-', logs.output[0])
+
     async def test_collector_explicitly_sends_exact_claim_ack_protocol_and_preserves_items(self):
         requests = []
         expected = [{'id': 'test-event-only', 'claim_id': 'test-claim-only'}]
