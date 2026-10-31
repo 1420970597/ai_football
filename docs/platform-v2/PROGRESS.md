@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮更新：2026-10-31 18:33 UTC。E129 API仍为运行版本，观察窗从`2026-10-31T18:16:53.404896Z`开始；尚未通过。窗口中API再现审核`tool_success`的`LockNotAvailableError`，并有Telegram checkpoint/fixture超时与锁超时；Telegram已授权/连接但6个来源持续3个reconciliation_deferred、2个unavailable。实时消息严格审计到26条：25条媒体ready消息均有审核任务，24条已有完整Hermes与系统回执；1条媒体超时失败且未进入审核，另1条空消息标记unsupported并正确未建审核任务。已初步定位审核轨迹写入的多SQL往返锁竞争，E130进行批量原子追加修复；媒体失败与来源退化尚不算解决。
+本轮更新：2026-10-31 18:42 UTC。E130代码在隔离PostgreSQL中通过审核工具模块18项测试，冻结全套待运行。E129观察窗`2026-10-31T18:16:53.404896Z`未通过且将在部署E130后重启：18:40严格审计43条当前消息，其中1条新图片消息`failed`、3条图片消息仍`pending`且无审核任务；远端采集日志记录媒体重试多次`batch_deadline`/`TimeoutError`、消息事件提交最长约82秒。Telegram6个来源仍有`reconciliation_deferred`/`unavailable`，最新状态带3次来源超时；API自18:32以来又有4条数据库超时/锁等待。普通文本消息持续收到Hermes/system回执，但没有当前真实推荐样本验证比赛与盘口命中。
 
 本轮更新：2026-10-31 18:10 UTC。E129 API候选由冻结提交`2b5fcf2`的detached验证树构建，BuildKit镜像固定digest、容器CPU quota=50000/100000、memory=memory-swap=402653184 bytes。`ai-football-api:2.0.0-dev-e129-2b5fcf2`构建退出0，Image ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`，revision与源码SHA核验通过；临时builder已删除。队列门禁复核为queued=1/running=2、年龄小于26秒，尚未部署，继续等待归零。
 
@@ -14,7 +14,7 @@
 
 ## 当前范围与状态
 
-### E130 — 单语句原子追加Hermes审核证据（2026-10-31 18:33 UTC，代码实施中）
+### E130 — 单语句原子追加Hermes审核证据（2026-10-31 18:33 UTC，审核工具模块隔离通过，全套待验）
 
 - 目标/责任：减少远端数据库高RTT下审核工具回执写入的锁持有和顺序SQL次数，避免并发比赛搜索或盘口读取丢失证据/返回锁超时；责任目录`services/api/app/`与`tests/test_review_tool_evidence.py`。前置依赖E129 API已部署，真实窗口仍在运行。
 - 当前证据：E129日志在18:19:30记录`reviews.search_matches -> tool_success -> execute`的`LockNotAvailableError`；E129窗口期间再次记录审核/Telegram/fixture数据库锁等待与超时，涉及多种业务路径。单条远端SQL RTT先前实测245–491ms。`tool_success`现有路径依次取得事务锁、查最大序号、写入快照块，再调用`trace`重复取锁/查序号/插摘要；并发工具调用会序列化且存在额外往返。
@@ -22,6 +22,7 @@
 - 验收场景：PostgreSQL隔离集成测试并发追加多批trace，无重复/缺口序号且payload均可对照；并发MCP搜索/盘口响应原样重放；多块响应清单及摘要最终记录在块之后。Docker定向测试后冻结全套，限额构建、核对队列并仅替换API；部署后从新DB时钟重开30分钟真实观察。
 - 首次定向失败（18:37 UTC）：具名隔离PostgreSQL中运行新增并发追加测试，1项错误，`jsonb_array_elements`收到标量。根因为异步PG池的JSONB codec会把Python字符串再次JSON编码；修正为直接传结构化数组，原测试待原样重跑。没有访问或写入远端业务数据。
 - 模块回归发现遗漏（18:39 UTC）：`python -m unittest tests.test_review_tool_evidence`在Docker中18项运行，2失败/2错误。新增成功写路径不再引用`trace`，但失败审计装饰器仍需其旧导入，造成预期拒绝的审计写入报`NameError`，连带两项拒绝轨迹断言失败；补回该导入，重跑同一模块确认。
+- 模块复验通过（18:41 UTC）：具名Docker PostgreSQL隔离库中运行`python -m unittest tests.test_review_tool_evidence`，18项、0失败/错误/跳过、13.354秒、退出0；包含新增12并发批次序号连续性、同窗独立搜索及快照重放。首次单项并发测试在结构化JSONB修正后也独立通过（1项、0.928秒、退出0）。最终通过源码提交`e843849`，尚未跑冻结全套、构建候选或部署。
 - 同窗未解决项：有1条新可信图片消息媒体写入超时并留在`failed`/无审核任务，仍要核验重试恢复；6群状态持续退化。当前窗口无错配推荐证据，但缺真实带推荐文字/盘口的样本，不能仅凭闲聊消息判断命中功能正确。
 - 探针失败记录：一次诊断SQL误用不存在的`v2_analysis_jobs.revision`退出1；修正字段后一次将时间戳作为字符串绑定退出1；一次严格审计忘记设置`WINDOW_STARTED_AT`退出1；一次旧脚本路径误读退出2。均为只读探针，无数据更改；后续按正确schema、UTC datetime和环境变量完成重跑。另一次初步媒体行查询在打印字段后使用字符串时间退出1，修正为`datetime.fromisoformat`后返回只含哈希/状态的结果。
 
