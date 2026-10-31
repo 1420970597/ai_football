@@ -789,3 +789,8 @@ git diff --check
 - 全套首轮结果（11:15 UTC）：`sh infra/test/run.sh`业务测试本身1006项全部`OK`、耗时416.954秒，但证据收尾因`infra/test/frozen_suite.py`使用`ensure_ascii=False`写入包含代理字符的测试报告而退出1；该退出码未被掩盖，问题已定位为报告编码而非业务失败。修复为JSON ASCII转义后必须重跑原命令，只有重跑退出0才记录隔离验证通过。
 - 全套隔离验证通过（11:24 UTC）：修复证据编码后重跑`sh infra/test/run.sh`退出0，1006项、0失败、0错误、0跳过，用时412.903秒；证据目录`.runtime/test-evidence/436801`。恢复演练前后46张表、推荐/订单/媒体盘点差异为空；新增频道身份、锁竞争、媒体回补、目录并发及原文倍率3.80/系统赔率1.95仍按系统价入账的回归均包含在套件内。业务源码测试在冻结副本执行，未连接真实Telegram、乐鱼、Hermes或资金账户。
 - 下一步：运行完整Docker隔离套件（需临时PostgreSQL）以覆盖系统倍率记账行为及所有API回归；修复失败后重跑原检查。之后记录冻结源码提交、推送及新采集版本真实运行观测证据。
+
+- 候选构建与远端切换（11:28–11:34 UTC）：提交`d2b5ce2`已推送并核对远端引用。Docker限额构建API、Telegram collector、Hermes MCP均退出0，三镜像OCI revision均为`d2b5ce2`，collector内容摘要为`sha256:1e9c758ade3aaf26e11cdb61f2e4037d4aba040434e485a01f3b8c003c6d79c7`。GHCR推送退出1，原因是registry返回`unauthenticated`；未把失败写成发布成功。随后使用现有受限SSH链路将collector镜像导入远端，远端本地内容ID与候选摘要一致，备份远端`.runtime/remote-workers.env`后仅替换`REMOTE_COLLECTOR_IMAGE`，compose配置退出0。
+- 真实远端切换（11:31 UTC）：远端collector按停机45秒排空后重新启动，旧实例确认`exited`，新实例运行且镜像为候选摘要、revision=`d2b5ce2`；executor未重启，仍为原摘要、运行中且`EXECUTOR_LIVE_ORDERS_ENABLED=false`。依赖的api-bridge由compose按既有配置重建并运行；未执行迁移、未修改信任作者映射、未写入订单。
+- 切换后90秒监控（11:36–11:38 UTC）：Docker内只读状态连续3次返回HTTP 200、Telegram`connected=true`/`authorized=true`；多个已信任来源每个3分钟窗口持续产生1–2条事件和专家消息，检查点从`3290→3291`、`4778→4779`、`180034→180040`等继续前进，未配置可信作者的来源仍为0条消息，符合权限设计。实时日志锁等待由旧版本约8–10秒降至0–3.2秒，未再出现10秒级等待；历史校对/媒体重试仍有`reconciliation_deferred`、`TimeoutError`、`HTTPStatusError`，均保留待处理状态并继续重试，未阻塞文本事件入库。采集窗口内不执行实盘或订单写入。
+- 当前状态：源码修复、Docker全套1006项测试、远端collector切换及真实只读监控均通过；GHCR不可用导致三类候选镜像尚未形成远端registry发布资产，API/MCP仍运行既有候选版本。后续依赖为恢复registry认证后补推同一摘要并按发布清单核验，或继续保留当前SSH导入的collector运行；不能将本次开发候选称为全平台正式发布。
