@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hmac
-import json
 import uuid
 
 from fastapi import HTTPException, Request
@@ -49,10 +48,10 @@ async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID):
 async def append_traces(conn, review_id: uuid.UUID, records: list[tuple[str, dict]]) -> None:
     if not records:
         return
-    encoded = json.dumps([
+    encoded = [
         {"id": str(uuid.uuid4()), "trace_kind": kind, "payload": payload}
         for kind, payload in records
-    ], ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    ]
     await conn.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || $1::text,0))",
         str(review_id),
