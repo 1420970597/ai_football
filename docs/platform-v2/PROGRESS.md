@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮更新：2026-10-31 19:06 UTC。E131提交`757c9220e6eae05d16132504f2f6bf570ca9372c`已推送，冻结Docker全套`sh infra/test/run.sh`退出0：1022项、失败/错误/跳过均0，427.512秒；`.runtime/e131-verification/.runtime/test-evidence/1386209/backend-tests.json`确认`committed_source_verified=true`，证据已复制到`.runtime/test-evidence/1386209`且`diff -qr`退出0。远端仍是E129 API和E128 collector，本轮尚未部署/新窗口未开始。E129真实观察窗于`2026-10-31T18:47:57.194282Z`结束、实际1863.789秒，不通过：截至18:47窗口统计57条实时帖子、85个job、50份系统回执、15条当前/编辑消息无job；媒体观察窗实际1855.248秒，1条failed、6条pending、12条未审核媒体消息。6群仍有`reconciliation_deferred`/`unavailable`。严格只读队列排序确认：当前窗口图片位于待处理批次第17、22、24–27名，历史待处理约3335项；30项入队、并发2、整批30秒截止造成尾部任务在开始前被取消。E131改变实时优先排序并将每次取数限制到并发容量。当前仍缺带真实推荐意图的样本验证比赛/盘口命中。
+本轮更新：2026-10-31 19:15 UTC。E131提交`757c9220e6eae05d16132504f2f6bf570ca9372c`已推送，冻结Docker全套`sh infra/test/run.sh`退出0：1022项、失败/错误/跳过均0，427.512秒；`.runtime/e131-verification/.runtime/test-evidence/1386209/backend-tests.json`确认`committed_source_verified=true`，证据已复制到`.runtime/test-evidence/1386209`且`diff -qr`退出0。API及review-worker已切到同一E131镜像`sha256:677ca4ae77c535f80e6c377a925b9bf3825bf78f65974161ac0ed01748f04525`，Compose `up --no-deps --no-build --pull never --wait`退出0，API `/healthz`/`/readyz`均200；部署前活动审核任务0，重启后复核时queued=1/running=2并继续处理。E131 collector镜像`sha256:f6211c766f3e7d5e911fe4ec486a9dc6747d2d7c5bde65e3ea95f59c696bb6d1`已经SSH导入远端且revision核验通过；远端Compose配置校验退出0。远端旧collector已停止，等待6个租约于`2026-10-31T19:16:24.770566Z`后全数过期；bridge/executor ID、镜像和启动时刻保持未变，观察窗尚未开始。一次在本机读取远端专用`.runtime/remote-workers.env`的Compose配置退出1；确认该文件仅在VPS，并在远端执行Compose配置渲染后退出0。E129真实观察窗于`2026-10-31T18:47:57.194282Z`结束、实际1863.789秒，不通过：截至18:47窗口统计57条实时帖子、85个job、50份系统回执、15条当前/编辑消息无job；媒体观察窗实际1855.248秒，1条failed、6条pending、12条未审核媒体消息。6群仍有`reconciliation_deferred`/`unavailable`。严格只读队列排序确认：当前窗口图片位于待处理批次第17、22、24–27名，历史待处理约3335项；30项入队、并发2、整批30秒截止造成尾部任务在开始前被取消。E131改变实时优先排序并将每次取数限制到并发容量。当前仍缺带真实推荐意图的样本验证比赛/盘口命中。
 
 本轮更新：2026-10-31 18:10 UTC。E129 API候选由冻结提交`2b5fcf2`的detached验证树构建，BuildKit镜像固定digest、容器CPU quota=50000/100000、memory=memory-swap=402653184 bytes。`ai-football-api:2.0.0-dev-e129-2b5fcf2`构建退出0，Image ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`，revision与源码SHA核验通过；临时builder已删除。队列门禁复核为queued=1/running=2、年龄小于26秒，尚未部署，继续等待归零。
 
@@ -14,7 +14,7 @@
 
 ## 当前范围与状态
 
-### E131 — Telegram当前媒体审核队列优先级与有界批次（2026-10-31 19:06 UTC，冻结全套验证通过，候选部署待验）
+### E131 — Telegram当前媒体审核队列优先级与有界批次（2026-10-31 19:15 UTC，冻结全套通过，API/worker已生效，collector租约交接中）
 
 - 目标/责任：确保当前受信专家的图文消息不被大型历史媒体重试队列饿死，并避免媒体消息在原图齐全前漏审；责任目录`services/api/app/routes/telegram.py`、`services/collector/telegram.py`及相应API/采集测试。前置依赖E130审核轨迹优化已通过隔离和冻结验证；代码提交已推送，远端尚未部署。
 - 当前证据：E129窗口内实时媒体候选6条在内部pending排序位置17、22、24、25、26、27，历史pending总量约3335。API每次最多返回30条；采集器为30条全部创建task，但只有2个retry并发槽，`MEDIA_RETRY_BATCH_SECONDS=30`会取消尾部等待任务。远端日志持续出现`batch_deadline`与媒体`TimeoutError`，数据库中6条当前媒体仍pending/failed且未生成job。`REALTIME_WINDOW_SECONDS`默认86400秒，使最近24小时内的大量历史媒体同处优先桶，当前帖子仅按旧`updated_at`排队。
@@ -23,7 +23,9 @@
 - 失败处理：任何审核回执不完整、媒体原图缺失、旧lease提交、队列重复卡在同一失败项或来源重启后游标回退都使验收失败。按对象更新时间/lease和错误类别定位，保留待重试状态，不发送不完整图文给Hermes，不扩大超时来隐藏排队。
 - 记录问题：历史队列诊断首次误用不存在的`v2_telegram_sources`退出1，修正为`v2_expert_sources`后队列位置查询退出0；宿主机无`rg`，在远端容器改用`grep`后成功读取脱敏媒体日志；本机无`jq`退出127，改用Docker内Python解析测试JSON。均为只读诊断，不改线上数据。
 - 实现/定向验收（18:57 UTC）：API待处理媒体按24小时实时桶、pending优先、当前pending按发布时间降序、失败与历史按更新时间轮转；collector每轮只取两个与并发槽位相同的待办。新增契约覆盖最新pending优先、失败在pending之后、历史FIFO及第二批处理第三个媒体项。Docker具名隔离PostgreSQL中运行`python -m unittest tests.test_telegram_api tests.test_telegram_media_scheduling tests.test_telegram_collector`，83项、0失败/错误/跳过、22.962秒、退出0。首次同一命令缺`/source/tests`的`PYTHONPATH`而导入错误退出1；设置正确容器搜索路径后原样重跑通过。
-- 冻结全套验收（19:06 UTC）：在干净detached worktree `.runtime/e131-verification`对已推送提交`757c9220e6eae05d16132504f2f6bf570ca9372c`运行`sh infra/test/run.sh`退出0；1022项、失败/错误/跳过0，unittest用时427.512秒。机器证据`.runtime/e131-verification/.runtime/test-evidence/1386209/backend-tests.json`报告`committed_source_verified=true`，复制至`.runtime/test-evidence/1386209`后`diff -qr`退出0。当前API/collector运行版本仍为E129/E128，尚未构建候选或部署。
+- 冻结全套验收（19:06 UTC）：在干净detached worktree `.runtime/e131-verification`对已推送提交`757c9220e6eae05d16132504f2f6bf570ca9372c`运行`sh infra/test/run.sh`退出0；1022项、失败/错误/跳过0，unittest用时427.512秒。机器证据`.runtime/e131-verification/.runtime/test-evidence/1386209/backend-tests.json`报告`committed_source_verified=true`，复制至`.runtime/test-evidence/1386209`后`diff -qr`退出0。
+- E131候选构建与API切换（19:12 UTC）：BuildKit固定镜像`moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea`，CPU quota/period=`50000/100000`、memory/memory-swap均402653184 bytes；API和collector均从冻结worktree构建退出0，revision均为`757c9220e6eae05d16132504f2f6bf570ca9372c`。本地API候选ID `sha256:677ca4ae77c535f80e6c377a925b9bf3825bf78f65974161ac0ed01748f04525`；collector候选ID `sha256:f6211c766f3e7d5e911fe4ec486a9dc6747d2d7c5bde65e3ea95f59c696bb6d1`。远端SSH导入collector退出0、ID与revision相同。分析队列部署前queued/running/retry=0；API和review-worker同镜像Compose切换退出0，`/healthz`与`/readyz`均200，后续复核queued=1/running=2、collector升级前为0，当前review任务不被中断。
+- collector租约交接（19:15 UTC）：远端Compose配置使用VPS上的运行环境文件渲染退出0；停止的仅`ai-football-v2-remote-collector-1`，bridge与executor仍运行，ID、镜像和StartedAt前后相同。停止后只读DB租约复核仍有6个active，最晚到期时间`2026-10-31T19:16:24.770566Z`，所以尚未启动候选collector或计入新观察窗。一次本机读取VPS专用运行环境文件的Compose配置错误退出1，改为经SSH在VPS上执行并通过；无配置或业务数据变更。
 
 ### E130 — 单语句原子追加Hermes审核证据（2026-10-31 18:33 UTC，冻结全套隔离验证通过，待联合部署）
 
