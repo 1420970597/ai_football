@@ -6,6 +6,13 @@
 
 ## 当前范围与状态
 
+### E124 — 媒体候选重复登记和回写截止（2026-10-31 15:51 UTC，代码已写）
+
+- 目标/责任：减少每次媒体重试的数据库往返，使真实图片能够在截止内完成；责任目录`services/collector/`和媒体调度测试，前置依赖E123已部署。
+- 证据/缺口：使用已存在原图原键、同内容SHA256及元数据进行一次幂等S3上传返回200、5478毫秒；没有新增测试对象或推荐。对既有pending事件完全相同状态的API幂等回写返回200但3903毫秒；现有5秒提交截止还包含一次额外checkpoint网络往返，且已有候选每轮重复登记。30条事件经Pydantic规范化与持久内容比较字段差异0。
+- 设计/动作：完全相同的候选证据已持久登记时不重复POST；同键证据不一致立即拒绝。媒体提交复用既有10秒内checkpoint缓存，超过缓存才续租；最终事件API仍每次检查实时租约、消息版本及删除，不放宽服务端校验。新增下载/上传阶段耗时日志，仅字节数和毫秒、不含原文/ID/对象键。
+- 验收：新增已登记候选重试仅一次最终ready提交，以及checkpoint缓存仍被服务端失效租约拒绝；随后全套冻结、构建部署并重新起算30分钟。E123当前5分钟仍无新图片，不能据此宣称图片恢复；原观察器继续保留证据至修复生效。
+
 ### E123 — Telegram媒体重试并行化与S3发送兼容（2026-10-31 15:32 UTC，最终隔离验证中）
 
 - 目标/责任：使近期图片重试不再被批次首个慢请求独占30秒截止；责任目录为`services/collector/`和采集器测试。前置依赖是E122待媒体排序已部署。
@@ -16,6 +23,7 @@
 - 新证据/设计修订：远端S3只读首探针认证成功但列表超时（退出1）；按collector实际环境复测HEAD/list均200（8–490毫秒），抽样候选HEAD 404，v2图片对象仅5个、最新14:25 UTC。旧项目归档只读显示S3v4及path寻址；当前SDK发送前拦截证明默认put_object自动采用aws-chunked、CRC32 trailer、STREAMING-UNSIGNED-PAYLOAD-TRAILER且无Content-Length。为现有网关改为path/S3v4、payload_signing_enabled=true、request_checksum_calculation=when_required；仍保留TLS/原CA、完整SHA256签名与本地内容哈希，不向桶写入测试假对象。
 - 验证：并发修复第一次冻结全套1012项、419.032秒、退出0，证据`.runtime/test-evidence/954013`。随后新增上传兼容修复，旧全套不能代表最终源码；真实SDK发送前回归验证固定Content-Length、无Transfer-Encoding/Content-Encoding/trailer、SHA256为完整图片摘要，结合媒体调度15项0.516秒退出0。第一次单测命令误用类名TelegramTests退出1，改为CollectorTests后通过。最终冻结全套须重新执行；尚未部署，真实上传恢复仍未验收。
 - 最终冻结验证/候选（15:40 UTC）：提交a47b9459110f7bd8b124125fc094d273d79666f0已推送且远端引用一致。`sh infra/test/run.sh`退出0，1013项、426.782秒、失败/错误/跳过0；证据`.runtime/test-evidence/976326`报告429.136秒，父提交a47b945；测试快照telegram.py摘要a5450640…与源码、候选容器逐字一致。限额Docker构建退出0，Image ID=`sha256:960a4cd712d55d7c4bf335849d29940be0082595c20e895fcdf9eae71a89a502`，OCI revision=a47b945；受保护SSH导入退出0，未发布registry正式资产。仅collector部署覆盖使用该内容ID，bridge/executor保持原实例。停止旧collector退出0；15:40:30 UTC六个租约尚有效、最晚15:41:57 UTC，待自然过期后启动唯一新实例。
+- 远端生效（15:43 UTC）：15:42:45 UTC只读门禁六来源active=0，远端Compose仅collector `up --no-deps --no-build --pull never`退出0；运行Image ID/revision与候选一致，bridge/executor容器ID、镜像及StartedAt前后cmp相同。新观察器从15:43:25.565 UTC开始，须运行到16:13:25 UTC以后；首样本控制HTTP200但Telegram尚未完成授权连接初始化，不作为恢复通过。S3只读探针HEAD/list200，当前5张v2图片，等待实际采集上传。进度提交f391e5b已推送且远端引用一致。
 
 ### E122 — Telegram近期图片消息被旧媒体积压饿死（2026-10-31，部署后观察中）
 

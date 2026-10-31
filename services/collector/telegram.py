@@ -831,8 +831,12 @@ class TelegramCollector:
         staged = list(payload.get("media_objects") or [])
 
         async def stage_object(record):
-            if not any(value.get("object_key") == record["object_key"] for value in staged):
-                staged.append(record)
+            existing = next((value for value in staged if value.get('object_key') == record['object_key']), None)
+            if existing == record:
+                return  # Already durably registered by this version's prior attempt.
+            if existing is not None:
+                raise ValueError('media_candidate_evidence_changed')
+            staged.append(record)
             result = await self._commit_media_payload(chat_id, payload | {"media_state": "pending", "media_objects": list(staged)})
             if result.get("state") not in {"pending", "failed"}:
                 raise SourceAccessError("media_version_no_longer_pending")
@@ -861,7 +865,7 @@ class TelegramCollector:
     async def _commit_media_payload(self, chat_id: str, payload: dict):
         async with asyncio.timeout(MEDIA_COMMIT_SECONDS):
             async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                await self._checkpoint(chat_id)
+                await self._ensure_live_checkpoint(chat_id)
             # Event persistence can wait on the remote API/database. Keep it
             # outside the group lock so a media retry cannot starve live text.
             return await self.backend.event(payload)
@@ -1001,6 +1005,7 @@ class TelegramCollector:
         mime = getattr(getattr(message, "file", None), "mime_type", None) or "image/jpeg"
         if mime not in ALLOWED_IMAGE_TYPES:
             raise ValueError("unsupported_media")
+        download_started = time.monotonic()
         chunks, size = [], 0
         async for chunk in self.client.iter_download(message.media, request_size=256 * 1024):
             size += len(chunk)
@@ -1024,6 +1029,8 @@ class TelegramCollector:
             raise RuntimeError("remote_S3_not_configured")
         record = {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size,
                   **dimensions, "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION}
+        log.info('Telegram media downloaded elapsed_ms=%.1f bytes=%s',
+                 (time.monotonic() - download_started) * 1000, size)
         if stage_object is not None:
             # Register the deterministic private object before starting a
             # cancellable thread, so late S3 completion remains reclaimable.
@@ -1047,7 +1054,10 @@ class TelegramCollector:
                 )
             finally:
                 client.close()
+        upload_started = time.monotonic()
         await asyncio.to_thread(upload)
+        log.info('Telegram media uploaded elapsed_ms=%.1f bytes=%s',
+                 (time.monotonic() - upload_started) * 1000, size)
         return record
 
     async def _delete_media_object(self, object_key: str) -> None:

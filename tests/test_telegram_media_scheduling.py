@@ -297,6 +297,35 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({1}, self.backend.tombstones)
         self.assertEqual('pending', next(iter(self.backend.events.values()))['media_state'])
 
+    async def test_registered_candidate_retry_avoids_duplicate_commit(self):
+        message = Message(1, media=True)
+        await self.stage(message)
+        _, payload = await self.collector._stage_group('-1001', self.source, [message])
+        record = stored(1)
+        payload['media_objects'] = [record]
+        committed = []
+        original_commit = self.collector._commit_media_payload
+        async def commit(chat, value):
+            committed.append(value['media_state'])
+            return await original_commit(chat, value)
+        async def upload(chat, item, *, stage_object):
+            await stage_object(record)
+            return record
+        self.collector._commit_media_payload = commit
+        self.collector._store_media = upload
+        await self.collector._transfer_pending_media('-1001', payload, [message])
+        self.assertEqual(['ready'], committed)
+        self.assertEqual('ready', next(iter(self.backend.events.values()))['media_state'])
+
+    async def test_cached_checkpoint_still_requires_backend_lease_at_media_commit(self):
+        message = Message(1, media=True)
+        await self.stage(message)
+        _, payload = await self.collector._stage_group('-1001', self.source, [message])
+        self.backend.lease_valid = False
+        with self.assertRaisesRegex(PermissionError, 'lease no longer owned'):
+            await self.collector._commit_media_payload('-1001', payload | {'media_state':'ready','media_objects':[stored(1)]})
+        self.assertEqual('pending', next(iter(self.backend.events.values()))['media_state'])
+
     async def test_s3_candidate_registered_before_thread_and_late_timeout_not_ready(self):
         message = Message(1, media=True, mime='image/png')
         await self.stage(message)
