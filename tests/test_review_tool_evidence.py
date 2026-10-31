@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from app.review_tool_evidence import (
     CHUNK_BYTES, MAX_SNAPSHOT_BYTES, encode_snapshot, replay_snapshot, snapshot_result,
 )
+from app.review_state import append_traces
 from app.routes import reviews
 from app import review_tool_evidence
 from tests import test_reviews as fixtures
@@ -156,6 +157,25 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
             manifest=next(row['payload']['response_snapshot'] for row in traces if row['payload']['call_id']==call_id)
             from app.review_tool_evidence import replay_snapshot
             self.assertEqual(response.json(),replay_snapshot(manifest,[row['payload'] for row in payload]))
+
+    async def test_concurrent_trace_batches_append_contiguous_sequences(self):
+        before = await self.pool.fetchval(
+            'SELECT COALESCE(MAX(sequence_no),0) FROM v2_analysis_traces WHERE job_id=$1', self.job)
+
+        async def append_batch(batch):
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    await append_traces(conn, self.job, [
+                        ('trace_batch_test', {'batch': batch, 'part': part}) for part in range(2)
+                    ])
+
+        await asyncio.gather(*(append_batch(batch) for batch in range(12)))
+        rows = await self.pool.fetch(
+            "SELECT sequence_no,payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='trace_batch_test' ORDER BY sequence_no",
+            self.job)
+        self.assertEqual(list(range(before + 1, before + 25)), [row['sequence_no'] for row in rows])
+        self.assertEqual({(batch, part) for batch in range(12) for part in range(2)},
+                         {(row['payload']['batch'], row['payload']['part']) for row in rows})
 
     async def test_same_cursor_requests_serialize_and_stale_parallel_page_is_rejected(self):
         await self.fixture(1)

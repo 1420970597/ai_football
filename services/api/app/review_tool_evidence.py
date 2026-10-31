@@ -19,7 +19,7 @@ from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 
 from . import database
-from .review_state import active_job, authorize, trace
+from .review_state import active_job, append_traces, authorize
 
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
 CHUNK_BYTES = 23 * 1024  # Base64 plus the fixed metadata remains below 32 KiB.
@@ -211,16 +211,14 @@ async def tool_success(conn, body, result, summary):
     context = await _context(conn, body, job)
     manifest['call_id'] = current.call_id
     manifest['references'] = _references(current.kind, wire)
-    await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || $1::text,0))", str(body.review_id))
-    sequence = await conn.fetchval('SELECT COALESCE(MAX(sequence_no),0)+1 FROM v2_analysis_traces WHERE job_id=$1', body.review_id)
-    records = [(uuid.uuid4(), body.review_id, sequence + index, 'tool_response_chunk', {
+    records = [('tool_response_chunk', {
         'call_id': current.call_id, 'attempt_id': str(body.attempt_id), 'tool': current.kind,
         'chunk_index': index, 'snapshot_sha256': manifest['sha256'], 'data_base64': chunk,
     }) for index, chunk in enumerate(chunks)]
-    await conn.executemany('INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) VALUES($1,$2,$3,$4,$5)', records)
-    await trace(conn, body.review_id, current.kind, {**summary, **context, 'call_id': current.call_id,
+    records.append((current.kind, {**summary, **context, 'call_id': current.call_id,
         'status': 'succeeded', 'parameters': _parameters(body), 'response_snapshot': manifest,
-        'elapsed_ms': round((time.perf_counter() - current.started) * 1000, 3)})
+        'elapsed_ms': round((time.perf_counter() - current.started) * 1000, 3)}))
+    await append_traces(conn, body.review_id, records)
     return wire
 
 

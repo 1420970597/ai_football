@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮更新：2026-10-31 18:17 UTC。E129 API已部署；运行容器ID=`a994e19a9b75283fb23faf7979e646b0d0f4d8edb1d1612429e3d511f13b8dc9`、镜像ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`、revision=`2b5fcf2`，`/healthz`和`/readyz`均200。review-worker、Hermes/MCP、remote-link、远端collector/bridge/executor的容器ID、镜像及StartedAt切换前后相同。新30分钟只读窗口于`2026-10-31T18:16:53.404896Z`起算；首样本Telegram已授权/连接，但来源6群仍有3个reconciliation_deferred、2个unavailable，需观察修复是否生效。
+本轮更新：2026-10-31 18:33 UTC。E129 API仍为运行版本，观察窗从`2026-10-31T18:16:53.404896Z`开始；尚未通过。窗口中API再现审核`tool_success`的`LockNotAvailableError`，并有Telegram checkpoint/fixture超时与锁超时；Telegram已授权/连接但6个来源持续3个reconciliation_deferred、2个unavailable。实时消息严格审计到26条：25条媒体ready消息均有审核任务，24条已有完整Hermes与系统回执；1条媒体超时失败且未进入审核，另1条空消息标记unsupported并正确未建审核任务。已初步定位审核轨迹写入的多SQL往返锁竞争，E130进行批量原子追加修复；媒体失败与来源退化尚不算解决。
 
 本轮更新：2026-10-31 18:10 UTC。E129 API候选由冻结提交`2b5fcf2`的detached验证树构建，BuildKit镜像固定digest、容器CPU quota=50000/100000、memory=memory-swap=402653184 bytes。`ai-football-api:2.0.0-dev-e129-2b5fcf2`构建退出0，Image ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`，revision与源码SHA核验通过；临时builder已删除。队列门禁复核为queued=1/running=2、年龄小于26秒，尚未部署，继续等待归零。
 
@@ -13,6 +13,15 @@
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
 ## 当前范围与状态
+
+### E130 — 单语句原子追加Hermes审核证据（2026-10-31 18:33 UTC，代码实施中）
+
+- 目标/责任：减少远端数据库高RTT下审核工具回执写入的锁持有和顺序SQL次数，避免并发比赛搜索或盘口读取丢失证据/返回锁超时；责任目录`services/api/app/`与`tests/test_review_tool_evidence.py`。前置依赖E129 API已部署，真实窗口仍在运行。
+- 当前证据：E129日志在18:19:30记录`reviews.search_matches -> tool_success -> execute`的`LockNotAvailableError`；E129窗口期间再次记录审核/Telegram/fixture数据库锁等待与超时，涉及多种业务路径。单条远端SQL RTT先前实测245–491ms。`tool_success`现有路径依次取得事务锁、查最大序号、写入快照块，再调用`trace`重复取锁/查序号/插摘要；并发工具调用会序列化且存在额外往返。
+- 设计决策：先以独立语句取得事务级advisory lock，再以新语句CTE读取序号基线并通过`jsonb_array_elements(... WITH ORDINALITY)`一次插入所有快照块和最后摘要。锁与插入分成两条命令，确保等待锁后读取新的READ COMMITTED语句快照；避免同一语句在等待前取快照而并发分配相同序号。普通`trace`同样走该追加函数。保留每审核任务唯一递增序号、同一调用的`call_id`/摘要校验与快照不可变约束；不改锁超时、不降低并发、不放松比赛/盘口审计。
+- 验收场景：PostgreSQL隔离集成测试并发追加多批trace，无重复/缺口序号且payload均可对照；并发MCP搜索/盘口响应原样重放；多块响应清单及摘要最终记录在块之后。Docker定向测试后冻结全套，限额构建、核对队列并仅替换API；部署后从新DB时钟重开30分钟真实观察。
+- 同窗未解决项：有1条新可信图片消息媒体写入超时并留在`failed`/无审核任务，仍要核验重试恢复；6群状态持续退化。当前窗口无错配推荐证据，但缺真实带推荐文字/盘口的样本，不能仅凭闲聊消息判断命中功能正确。
+- 探针失败记录：一次诊断SQL误用不存在的`v2_analysis_jobs.revision`退出1；修正字段后一次将时间戳作为字符串绑定退出1；一次严格审计忘记设置`WINDOW_STARTED_AT`退出1；一次旧脚本路径误读退出2。均为只读探针，无数据更改；后续按正确schema、UTC datetime和环境变量完成重跑。另一次初步媒体行查询在打印字段后使用字符串时间退出1，修正为`datetime.fromisoformat`后返回只含哈希/状态的结果。
 
 ### E129 — 压缩Telegram租约热路径的数据库往返（2026-10-31 18:17 UTC，已部署，真实观察中）
 

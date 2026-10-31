@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hmac
+import json
 import uuid
 
 from fastapi import HTTPException, Request
@@ -45,13 +46,34 @@ async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID):
     return job
 
 
-async def trace(conn, review_id: uuid.UUID, kind: str, payload: dict) -> None:
-    await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || $1::text,0))", str(review_id))
-    sequence = await conn.fetchval("SELECT COALESCE(MAX(sequence_no),0)+1 FROM v2_analysis_traces WHERE job_id=$1", review_id)
+async def append_traces(conn, review_id: uuid.UUID, records: list[tuple[str, dict]]) -> None:
+    if not records:
+        return
+    encoded = json.dumps([
+        {"id": str(uuid.uuid4()), "trace_kind": kind, "payload": payload}
+        for kind, payload in records
+    ], ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     await conn.execute(
-        "INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) VALUES($1,$2,$3,$4,$5)",
-        uuid.uuid4(), review_id, sequence, kind, payload,
+        "SELECT pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || $1::text,0))",
+        str(review_id),
     )
+    await conn.execute(
+        "WITH sequence_base AS MATERIALIZED ("
+        "SELECT COALESCE(MAX(t.sequence_no),0) AS last_sequence "
+        "FROM v2_analysis_traces t WHERE t.job_id=$1),"
+        "items AS ("
+        "SELECT (entry.value->>'id')::uuid AS id,entry.value->>'trace_kind' AS trace_kind,"
+        "entry.value->'payload' AS payload,entry.ordinality "
+        "FROM jsonb_array_elements($2::jsonb) WITH ORDINALITY AS entry(value,ordinality)) "
+        "INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) "
+        "SELECT items.id,$1,(sequence_base.last_sequence+items.ordinality)::integer,items.trace_kind,items.payload "
+        "FROM items CROSS JOIN sequence_base",
+        review_id, encoded,
+    )
+
+
+async def trace(conn, review_id: uuid.UUID, kind: str, payload: dict) -> None:
+    await append_traces(conn, review_id, [(kind, payload)])
 
 
 def fresh_quote(row, max_age: int, now: datetime | None = None) -> bool:
