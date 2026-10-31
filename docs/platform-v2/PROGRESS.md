@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-31 06:33 UTC。当前目标：修复 Telegram 监控与群聊差异、专家原文图片预览和已有乐鱼账户在全局登录配置更新后的无资金复核入口，并观察远端 Telegram 采集至少10分钟。当前阶段为候选 `.2` 全部验证通过、开发 APK/镜像资产发布中；数据库迁移、镜像切换与部署后10分钟真实采集观察尚未开始。
+更新时间：2026-10-31 06:46 UTC。当前目标：修复 Telegram 监控与群聊差异、专家原文图片预览和已有乐鱼账户在全局登录配置更新后的无资金复核入口，并观察远端 Telegram 采集至少10分钟。候选 `.2` 验证与开发发布完成，候选镜像已核验并预拉；当前在停机前最后核对租约/订单，数据库迁移、worker切换与部署后10分钟真实采集观察尚未开始。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
@@ -34,6 +34,8 @@
 - 观察器失败及修复记录（06:30 UTC）：首次运行`.runtime/e117-20261031/observe.py`因查询023字段但数据库仍为022而以`UndefinedColumnError`退出1；随后控制端5秒读取超时退出1。观察器已改为先探测列、缺失时报告补扫指标unknown，并把只读状态请求截止提高到15秒；06:29:46 UTC重跑退出0，控制状态响应正常。运行中仅新增了每来源哈希/状态和白名单错误类别输出，未触碰业务表。一次错误的运行手册路径检索也失败，正确文件为`docs/platform-v2/REMOTE_WORKER_DEPLOYMENT.md`。
 - 冻结候选验证及阶段进度（06:33 UTC）：候选 `.2` 的policy、backend全量、browser、android作业全部success，完整Docker套件由tag触发的验证通过；发布作业`124466153517`仍在`Build clean-source development APKs`，尚未创建Release/镜像清单。进度台账提交`c5fe41b220d0226382a0f96a5ddc0dfa23fbcb27`已推送并由`git ls-remote`核对；不可变候选tag仍指向`65e62133ef98e48e81dace961a4c15568ebe9713`。
 - 部署前租约及消息基线（06:33 UTC）：06:29–06:32只读快照退出0，6个来源租约均活动、检查点最新推进至06:30:48 UTC；Telegram connected/authorized，但仍degraded，状态为3个reconciliation_deferred、2个TimeoutError/unavailable、1个catching_up。该窗口数据库收到4条消息、0条带图；账户任务无queued/running/unknown，订单无pending/submitting/unknown。数据库仍022、补扫字段不可用。远端切换前需处理仍活动租约；不能把本基线计为部署后10分钟验收。
+- 候选发布及部署资产核验（06:46 UTC）：发布作业`124466153517`完成，Android debug/unsigned APK构建、六个源码镜像推送、provenance校验及不可变预发行创建全部success。候选下载资产JSON解析通过，release manifest SHA-256为`81b5f34b0591ab002caf37657e4c3990f7ee5ca0edaa77f93b6c03445cf8df85`，Compose清单SHA-256为`62a02269aa3a63545820269cb84a156aef37a677bc9789103eea4acf079ad234`，policy SHA-256为`0c57524691297c6c0ad1eeac485598d12364588a5e1e3843da6a38f979941a46`。Docker内使用结构化manifest验证源码/tag、development与production_ready=false、Compose映射完全相等，Compose `config --quiet`退出0。候选API/Web/Collector/Executor/storage-tunnel镜像均实际存在且OCI revision及RepoDigest匹配tag `65e62133ef98e48e81dace961a4c15568ebe9713`；API/Web首次Compose拉取因继承`pull_policy=never`显示Skipped，改为按清单直接`docker pull`后均成功。远端按同摘要预拉Collector/Executor并验证revision，exit 0；远端候选env侧车目录0700/文件0600，真实Compose配置渲染退出0，仍未启动/替换服务。
+- 远端源码与回退证据（06:46 UTC）：远端部署树不含`.git`元数据；旧桥文件SHA-256 `c0152e775a345c0aba043728119860e160f0c811d6bb518f269d599f6d9f33be`已只读保存至本地忽略目录并设0600，备份hash与远端一致。候选tag中的`infra/remote/api_bridge.py`与本地冻结文件SHA同为`1f0bbbbfca667edeeb8bd670c21091335b7b4d314c1fe04b27f21b4bf29e2800`。受保护远端旧env保留0600且8个所需键存在；旧worker仍运行，live-orders=false。探测期间Docker镜像检查的一条错误引号命令退出2，修正后各项成功；尝试对远端部署树运行Git状态因无`.git`退出128，改用文件hash备份方式，无远端文件被改动。首次远端Compose检查在10秒只返回hash，完整重试退出0。
 - 阶段实际命令与后续：全量Docker `sh infra/test/run.sh`及真实API浏览器`sh tests/browser/integration-check.sh`此前各自退出0（1000项/25场景）；schema/data备份导出、摘要核验、`pg_restore --list`及隔离恢复均退出0；数据库`plan`与`verify`均退出0。期间首次包导入、权限参数、SQL别名等只读探针失败和已修正隔离恢复失败如实保留；没有生产库写入。最新S3前缀实现尚未验证，必须先运行最终完整Docker回归、`git diff --check`与规划检查，再提交推送和候选部署。线上Telegram目前degraded（4个来源reconciliation延迟、2个追赶），切换前后都需记录；数据库迁移仅在候选API/collector均已验证且回退镜像就绪后执行，任何远端观察缺项则停止切换。
 
 ### E116 — 本人乐鱼账号校验门禁与二次身份验证移除（2026-10-30，开发候选运行验证通过）
