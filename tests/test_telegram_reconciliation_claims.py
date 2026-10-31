@@ -423,7 +423,11 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         try:
             with self.assertRaises(httpx.ReadTimeout):
                 await collector._reconcile_known('-1001',source)
-            self.assertTrue(collector.reconcile_pending['-1001'][0]['_reconcile_applied'])
+            claimed = collector.reconcile_pending['-1001'][0]
+            self.assertNotIn('_reconcile_applied', claimed)
+            self.assertTrue(claimed['_reconcile_submission']['payload'])
+            self.assertIsNotNone(await self.pool.fetchval(
+                'SELECT reconcile_acknowledged_at FROM v2_telegram_events'))
             async def forbidden(*args, **kwargs):
                 self.fail('ack retry must not require another Telegram request')
             client.get_entity = forbidden

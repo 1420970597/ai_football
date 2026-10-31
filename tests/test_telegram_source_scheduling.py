@@ -49,7 +49,7 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
     def queue(self,chat,groups):
         self.backend.scheduled[chat]=[{'content':{'member_message_ids':group}} for group in groups]
 
-    async def test_batch_fetch_deduplicates_album_ids_with_one_initial_lease_renewal(self):
+    async def test_batch_fetch_deduplicates_album_ids_without_redundant_checkpoint(self):
         self.client.messages['-1001']=[Message(i) for i in range(1,14)]
         self.queue('-1001',[[1,2],[2,3],*[ [i] for i in range(4,12)]])
         calls=[]
@@ -64,7 +64,7 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([('-1001',10)],self.backend.observation_calls)
         self.assertEqual([],self.backend.claims)
         self.assertEqual(10,len(self.backend.ack_calls))
-        self.assertFalse(self.collector.locks['-1001'].locked())
+        self.assertNotIn('-1001',self.collector.locks)
 
     async def test_slow_rpc_is_deferred_and_original_claim_retries_before_new_observation(self):
         self.client.messages['-1001']=[Message(1)]
@@ -79,7 +79,7 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1,report['pending'])
         self.assertIn('stage=telegram_messages',logs.output[0])
         self.assertEqual([],self.backend.calls)
-        self.assertFalse(self.collector.locks['-1001'].locked())
+        self.assertNotIn('-1001',self.collector.locks)
         self.client.get_messages=original
         recovered=await self.collector._reconcile_known('-1001',self.source)
         self.assertEqual(1,recovered['checked'])
@@ -99,7 +99,7 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):await task
         self.assertEqual(1,len(self.collector.reconcile_pending['-1001']))
-        self.assertFalse(self.collector.locks['-1001'].locked())
+        self.assertNotIn('-1001',self.collector.locks)
         self.client.get_messages=original
         await self.collector._reconcile_known('-1001',self.source)
         self.assertEqual(1,len(self.backend.events))
@@ -171,7 +171,7 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.backend.source_items.append(self.source|{'chat_id':'-1002'})
         original=self.backend.checkpoint
         async def claim(chat,owner):
-            if chat=='-1001' and self.backend.claims.count(chat)>=2:raise ConnectionError('isolated lease unavailable')
+            if chat=='-1001' and self.backend.claims.count(chat)>=1:raise ConnectionError('isolated lease unavailable')
             return await original(chat,owner)
         self.backend.checkpoint=claim
         result=await self.collector.sync_once()
