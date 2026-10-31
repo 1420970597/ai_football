@@ -54,6 +54,7 @@ RECONCILE_ID_LIMIT = 100
 MEDIA_CLEANUP_SECONDS = 5
 SOURCE_LEASE_REFRESH_SECONDS = 3
 MEDIA_RETRY_BATCH_SECONDS = 30
+MEDIA_RETRY_CONCURRENCY = 2
 MEDIA_TRANSFER_SECONDS = 20
 MEDIA_COMMIT_SECONDS = 5
 SESSION_IDENTITY_SECONDS = 5
@@ -136,6 +137,7 @@ class TelegramCollector:
         self.live_media_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self.media_transfers: set[tuple[str, str]] = set()
         self.media_slots = asyncio.Semaphore(LIVE_MEDIA_CONCURRENCY)
+        self.retry_slots = asyncio.Semaphore(MEDIA_RETRY_CONCURRENCY)
         self.session_state_lock = asyncio.Lock()
         self.retry_at: dict[str, float] = {}
         self.checkpoint_verified_at: dict[str, float] = {}
@@ -875,11 +877,24 @@ class TelegramCollector:
             log.warning("Telegram media retry deferred category=batch_deadline")
 
     async def _retry_pending_batch(self):
-        for item in await self.backend.pending():
+        tasks = [asyncio.create_task(self._retry_pending_item(item))
+                 for item in await self.backend.pending()]
+        if not tasks:
+            return
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _retry_pending_item(self, item):
+        async with self.retry_slots:
             chat_id = str(item["chat_id"])
             source = self.sources.get(chat_id)
             if source is None or time.monotonic() < self.retry_at.get(chat_id, 0):
-                continue
+                return
             try:
                 async with self.locks.setdefault(chat_id, asyncio.Lock()):
                     await self._checkpoint(chat_id)
@@ -1018,7 +1033,12 @@ class TelegramCollector:
             client = boto3.client("s3", endpoint_url=endpoint, region_name=os.environ.get("S3_REGION", "us-east-1"),
                                   aws_access_key_id=access, aws_secret_access_key=secret,
                                   use_ssl=os.environ.get("S3_USE_TLS", "true").lower() == "true",
-                                  config=Config(connect_timeout=3, read_timeout=15, retries={"max_attempts": 2},
+                                  # The existing S3 gateway accepts fixed-length
+                                  # SigV4 payloads, not optional CRC trailer streams.
+                                  config=Config(signature_version="s3v4",
+                                                s3={"addressing_style": "path", "payload_signing_enabled": True},
+                                                request_checksum_calculation="when_required",
+                                                connect_timeout=3, read_timeout=15, retries={"max_attempts": 2},
                                                 proxies={"https": os.environ["S3_HTTPS_PROXY"]} if os.environ.get("S3_HTTPS_PROXY") else None))
             try:
                 client.put_object(

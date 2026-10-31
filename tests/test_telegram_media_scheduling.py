@@ -182,6 +182,30 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('pending', next(iter(self.backend.events.values()))['media_state'])
         self.assertFalse(self.collector.locks['-1001'].locked())
 
+    async def test_pending_media_retries_run_with_bounded_concurrency(self):
+        await self.stage(Message(1, media=True), Message(2, media=True), Message(3, media=True))
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def upload(chat, message):
+            calls.append(message.id)
+            if len(calls) == 2:
+                entered.set()
+            await release.wait()
+            return stored(message.id)
+
+        self.collector.media_store = upload
+        retry = asyncio.create_task(self.collector.retry_pending())
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            self.assertEqual([1, 2], calls)
+            self.assertFalse(retry.done())
+        finally:
+            release.set()
+            await asyncio.wait_for(retry, 1)
+        self.assertEqual([1, 2, 3], calls)
+        self.assertEqual({'ready'}, {value['media_state'] for value in self.backend.events.values()})
+
     async def test_lease_loss_after_transfer_cannot_commit_ready(self):
         await self.stage(Message(1, media=True))
         async def upload(chat, message):

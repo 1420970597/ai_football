@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import hashlib
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -10,6 +11,7 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import boto3
 from PIL import Image
 from telethon import utils
 from telethon.errors import (AuthKeyDuplicatedError, FloodWaitError,
@@ -642,6 +644,40 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         expected_prefix = 'v2/telegram/messages/-1001/3/'
         self.assertTrue(record['object_key'].startswith(expected_prefix))
         self.assertEqual(record['object_key'], uploads[0]['Key'])
+
+    async def test_s3_upload_uses_fixed_length_signed_payload_without_optional_trailer(self):
+        image = BytesIO()
+        Image.new('RGB', (8, 8), 'blue').save(image, format='PNG')
+        body = image.getvalue()
+        self.collector.client = self.client
+        self.client.download_chunks = [body]
+        requests = []
+        factory = boto3.client
+
+        class RequestCaptured(Exception):
+            pass
+
+        def create(*args, **kwargs):
+            client = factory(*args, **kwargs)
+            def capture(request, **_):
+                requests.append(request)
+                raise RequestCaptured()
+            client.meta.events.register('before-send.s3.PutObject', capture)
+            return client
+
+        env = {'S3_BUCKET':'test-private','S3_ENDPOINT_URL':'https://invalid.example',
+               'S3_ACCESS_KEY':'test-only','S3_SECRET_KEY':'test-only'}
+        with patch.dict(os.environ, env), patch('collector.telegram.boto3.client', side_effect=create):
+            with self.assertRaises(RequestCaptured):
+                await self.collector._store_media('-1001', Message(3, media=True, mime='image/png'))
+        self.assertEqual(1, len(requests))
+        request = requests[0]
+        self.assertEqual(len(body), int(request.headers['Content-Length']))
+        self.assertNotIn('Transfer-Encoding', request.headers)
+        self.assertNotIn('Content-Encoding', request.headers)
+        self.assertNotIn('X-Amz-Trailer', request.headers)
+        self.assertEqual(hashlib.sha256(body).hexdigest().encode(), request.headers['X-Amz-Content-SHA256'])
+        self.assertIn('/test-private/v2/telegram/messages/', request.url)
 
     async def test_control_authentication_and_password_never_persisted(self):
         await self.collector.start_control_server(token="test-internal-token", host="127.0.0.1", port=0)
