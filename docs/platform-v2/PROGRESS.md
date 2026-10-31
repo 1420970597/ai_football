@@ -4,6 +4,8 @@
 
 本轮阶段更新：2026-10-31 20:14 UTC。部署前再次确认生产审核队列queued/running/retry=0后，只停止远端`ai-football-v2-remote-collector-1`，命令退出0，停止时间20:14:19 UTC；bridge/executor仍运行，容器ID、镜像和StartedAt与切换前一致。采集器停止后只读数据库仍有6个有效source lease，最晚到期20:15:46 UTC（20:14:32探针），故E133尚未启动，等租约自然归零后再启动；没有手动改租约、数据或检查点。
 
+本轮阶段更新：2026-10-31 20:16 UTC。只读租约探针确认6个source lease均已自然到期（active=0），退出0。对20:11–20:16新增数据按`posted_at`复核：近期入库但历史发布时间的媒体状态为pending=21、ready=39、unsupported=5；54条最近建立的unresolved任务及其`telegram_auto_review_suppressed`轨迹均标记`historical_backlog_auto_suppressed_by_operator`，发布时间均早于24小时窗口，属于历史回放抑制，并非实时消息漏审。近30分钟可信当前事件查询为0条`posted_at`落在近30分钟，尚无真实新专家推荐意图可验；旧collector没有继续运行。E133待启动，启动后检查来源健康、历史ACK推进、原文和模型审核回执，再判定新观察窗起点。
+
 本轮更新：2026-10-31 18:10 UTC。E129 API候选由冻结提交`2b5fcf2`的detached验证树构建，BuildKit镜像固定digest、容器CPU quota=50000/100000、memory=memory-swap=402653184 bytes。`ai-football-api:2.0.0-dev-e129-2b5fcf2`构建退出0，Image ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`，revision与源码SHA核验通过；临时builder已删除。队列门禁复核为queued=1/running=2、年龄小于26秒，尚未部署，继续等待归零。
 
 本轮更新：2026-10-31 18:04 UTC。E129冻结全套第二次运行通过：提交`2b5fcf2`、1021项、失败/错误/跳过0、426.866秒退出0，证据`.runtime/test-evidence/1263040`，冻结源码报告`committed_source_verified=true`。E128实际观察到17:58 UTC，严格只读审查25条当前受信消息；20条有完整Hermes/system receipt，5条无job由3条媒体pending/failed和2条unsupported构成。两条failed事件写回错误均为TimeoutError（含1条86字符正文+图片、1条图片），1条旧pending未完成；窗口不通过。E129 API候选尚未部署。
