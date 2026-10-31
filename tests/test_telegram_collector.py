@@ -302,7 +302,7 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(8, len(self.backend.events))
         self.assertEqual(8, self.backend.positions['-1001'])
 
-    async def test_live_message_gets_group_lock_between_durable_history_slices(self):
+    async def test_live_message_does_not_wait_for_history_persistence(self):
         self.collector.client = self.client
         self.collector.sources = {'-1001': self.backend.source_items[0]}
         self.client.messages['-1001'] = [Message(index) for index in range(1, 8)]
@@ -320,7 +320,7 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0); release.set()
             self.assertEqual('catching_up', (await history)['state'])
             await asyncio.wait_for(live, 1)
-        self.assertEqual(['1', '2', '99'], [item['platform_message_id'] for item in self.backend.calls])
+        self.assertEqual({'1', '2', '99'}, {item['platform_message_id'] for item in self.backend.calls})
         self.assertEqual(2, self.backend.positions['-1001'])
         await self.collector._sync_source('-1001', self.backend.source_items[0])
         self.assertEqual(7, self.backend.positions['-1001'])
@@ -365,6 +365,28 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         message.get_sender.assert_not_awaited()
         self.collector._entity.assert_not_awaited()
         self.assertEqual('专家 甲', self.backend.calls[0]['sender_nickname'])
+
+    async def test_trusted_broadcast_channel_post_without_sender_id_uses_channel_identity(self):
+        self.collector.sources = {'-1001': {'chat_id': '-1001', 'display_name': '可信频道',
+                                            'trusted_sender_ids': ['-1001'], 'allow_media': True}}
+        message = Message(101, sender=None)
+        message.post = True
+        message.get_sender = AsyncMock(side_effect=AssertionError('channel post has no individual sender'))
+
+        await self.collector._live_messages('-1001', [message])
+
+        self.assertEqual(1, len(self.backend.calls))
+        self.assertEqual('-1001', self.backend.calls[0]['sender_id'])
+        self.assertEqual('可信频道', self.backend.calls[0]['sender_nickname'])
+
+    async def test_missing_sender_id_in_regular_group_is_not_trusted_by_channel_fallback(self):
+        self.collector.sources = {'-1001': {'chat_id': '-1001', 'trusted_sender_ids': ['-1001'], 'allow_media': True}}
+        message = Message(102, sender=None)
+        message.post = False
+
+        await self.collector._live_messages('-1001', [message])
+
+        self.assertEqual([], self.backend.calls)
 
     async def test_sender_and_reply_lookups_run_concurrently(self):
         self.collector.sources = {'-1001': self.backend.source_items[0]}
@@ -420,6 +442,29 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(('-1001', '99'), [(item['chat_id'], item['platform_message_id']) for item in self.backend.calls])
         release.set()
         await history
+
+    async def test_slow_history_event_persistence_does_not_hold_live_message_lock(self):
+        self.collector.client = self.client
+        self.collector.sources = {'-1001': self.backend.source_items[0]}
+        self.client.messages['-1001'] = [Message(1)]
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = self.backend.event
+
+        async def slow_history_event(body):
+            if body['platform_message_id'] == '1':
+                entered.set()
+                await release.wait()
+            return await original(body)
+
+        self.backend.event = slow_history_event
+        history = asyncio.create_task(self.collector._sync_source('-1001', self.backend.source_items[0]))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            await asyncio.wait_for(self.collector._live_messages('-1001', [Message(99)]), timeout=.5)
+            self.assertIn(('-1001', '99'), [(item['chat_id'], item['platform_message_id']) for item in self.backend.calls])
+        finally:
+            release.set()
+        await asyncio.wait_for(history, timeout=1)
 
     async def test_history_time_slice_yields_only_after_a_durable_message(self):
         self.client.messages['-1001'] = [Message(1), Message(2)]

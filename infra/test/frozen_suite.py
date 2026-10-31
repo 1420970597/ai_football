@@ -40,7 +40,10 @@ def main() -> int:
               "source_sha256": hashes, "scope": "isolated fixtures; no live providers or money"}
     output = Path("/evidence")
     output.mkdir(exist_ok=True)
-    (output / "backend-tests.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    # Test fixtures may intentionally contain malformed UTF-16 text. Escape
+    # non-ASCII in the evidence envelope so reporting cannot turn a successful
+    # suite into a false non-zero exit during UTF-8 encoding.
+    (output / "backend-tests.json").write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n")
     return int(not result.wasSuccessful() or bool(result.skipped))
 
 

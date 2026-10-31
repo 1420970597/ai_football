@@ -407,6 +407,24 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(traces)
         self.assertTrue(all(row['payload']['elapsed_ms'] >= 0 for row in traces))
 
+    async def test_expert_odds_text_does_not_gate_market_match_or_override_system_price(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        quote = await self.read_market(fixture_id)
+
+        result = await self.post('record_expert_signals', signals=[{
+            'fixture_id': fixture_id,
+            'quote_id': quote['quote_id'],
+            'evidence_text': 'Alpha1 vs Beta1 全场大2.5，原文倍率 3.80',
+        }])
+
+        self.assertEqual(200, result.status_code, result.text)
+        self.assertEqual(1, len(result.json()['accepted']))
+        self.assertEqual('1.95000', result.json()['accepted'][0]['price'])
+        stored = await self.pool.fetchrow('SELECT recommendation_price FROM v2_expert_signals WHERE message_id=$1', self.message)
+        self.assertEqual(Decimal('1.95000'), stored['recommendation_price'])
+
     async def test_same_market_for_two_fixtures_creates_two_signals(self):
         await self.fixture(1)
         await self.fixture(2, phase="live", home_score=1, away_score=0)

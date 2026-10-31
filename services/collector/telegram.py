@@ -569,29 +569,31 @@ class TelegramCollector:
         lock = self.locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
             checkpoint = await self._checkpoint(chat_id)
-            original = int(checkpoint["last_message_id"])
-            last, count = original, 0
-            started = time.monotonic()
-            catching_up = False
-            entity = await self._entity(chat_id)
-            async for message in self.client.iter_messages(entity, min_id=original, reverse=True, limit=None):
-                if not message or int(message.id) <= last:
-                    continue
-                # 先持久原文/待媒体状态，确认后才推进高水位；不使用内存 seen 集合。
-                await self._process_message(chat_id, source, message, entity)
-                last, count = int(message.id), count + 1
-                if count % 25 == 0:
+        original = int(checkpoint["last_message_id"])
+        last, count = original, 0
+        started = time.monotonic()
+        catching_up = False
+        entity = await self._entity(chat_id)
+        async for message in self.client.iter_messages(entity, min_id=original, reverse=True, limit=None):
+            if not message or int(message.id) <= last:
+                continue
+            # 先持久原文/待媒体状态，确认后才推进高水位；不使用内存 seen 集合。
+            await self._process_message(chat_id, source, message, entity)
+            last, count = int(message.id), count + 1
+            if count % 25 == 0:
+                async with lock:
                     await self.backend.advance(chat_id, self.owner, last, original)
-                    original = last
-                # Release this group's FIFO lock between durable slices so
-                # live events do not wait behind years of initial history.
-                # The next pass resumes from the persisted high-water mark.
-                if count >= SYNC_HISTORY_MAX_MESSAGES or time.monotonic() - started >= SYNC_HISTORY_SLICE_SECONDS:
-                    catching_up = True
-                    break
-            if last != original:
+                original = last
+            # Release this group's FIFO lock between durable slices so
+            # live events do not wait behind years of initial history.
+            # The next pass resumes from the persisted high-water mark.
+            if count >= SYNC_HISTORY_MAX_MESSAGES or time.monotonic() - started >= SYNC_HISTORY_SLICE_SECONDS:
+                catching_up = True
+                break
+        if last != original:
+            async with lock:
                 await self.backend.advance(chat_id, self.owner, last, original)
-            return {"state": "catching_up" if catching_up else "caught_up", "last_message_id": last, "observed": count}
+        return {"state": "catching_up" if catching_up else "caught_up", "last_message_id": last, "observed": count}
 
     async def _sync_author_backfill(self, chat_id: str, source: dict) -> dict:
         tasks = source.get('author_backfills') or []
@@ -608,31 +610,32 @@ class TelegramCollector:
         lock = self.locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
             await self._checkpoint(chat_id)
-            entity = await self._entity(chat_id)
-            messages = []
-            async for message in self.client.iter_messages(
-                entity, from_user=int(sender_id), max_id=previous,
-                limit=AUTHOR_BACKFILL_PAGE_SIZE + 1,
-            ):
-                if int(message.id) <= until_id:
-                    messages.append(message)
-                if len(messages) >= AUTHOR_BACKFILL_PAGE_SIZE + 1:
-                    break
-            page = messages[:AUTHOR_BACKFILL_PAGE_SIZE]
-            complete = len(messages) <= AUTHOR_BACKFILL_PAGE_SIZE
-            last_cursor = previous
-            processed = 0
-            for message in page:
-                if _utc(message.date) < since:
-                    complete = True
-                    break
-                result = await self._process_message(chat_id, source, message, entity)
-                if result.get('state') == 'ignored_empty':
-                    pass
-                elif result.get('persisted') is not True:
-                    raise RuntimeError('author backfill event was not durably committed')
-                last_cursor = int(message.id)
-                processed += 1
+        entity = await self._entity(chat_id)
+        messages = []
+        async for message in self.client.iter_messages(
+            entity, from_user=int(sender_id), max_id=previous,
+            limit=AUTHOR_BACKFILL_PAGE_SIZE + 1,
+        ):
+            if int(message.id) <= until_id:
+                messages.append(message)
+            if len(messages) >= AUTHOR_BACKFILL_PAGE_SIZE + 1:
+                break
+        page = messages[:AUTHOR_BACKFILL_PAGE_SIZE]
+        complete = len(messages) <= AUTHOR_BACKFILL_PAGE_SIZE
+        last_cursor = previous
+        processed = 0
+        for message in page:
+            if _utc(message.date) < since:
+                complete = True
+                break
+            result = await self._process_message(chat_id, source, message, entity)
+            if result.get('state') == 'ignored_empty':
+                pass
+            elif result.get('persisted') is not True:
+                raise RuntimeError('author backfill event was not durably committed')
+            last_cursor = int(message.id)
+            processed += 1
+        async with lock:
             await self.backend.advance_author_backfill(
                 chat_id, self.owner, sender_id, last_cursor, previous, complete)
         return {'state': 'complete' if complete else 'catching_up', 'sender_id': sender_id, 'processed': processed,
@@ -672,32 +675,32 @@ class TelegramCollector:
                     members = [by_id[identifier] for identifier in ids if identifier in by_id]
                     async with self.locks.setdefault(chat_id, asyncio.Lock()):
                         await self._checkpoint(chat_id)
-                        try:
-                            if not item.get('_reconcile_applied'):
-                                missing = set(ids) - set(by_id)
-                                submission = item.setdefault('_reconcile_submission', {})
-                                if submission.get('payload'):
-                                    result = await self.backend.event(submission['payload'])
-                                elif missing:
-                                    result = await self._delete(chat_id, sorted(missing), reconciliation=reference,
-                                                                submission=submission)
-                                else:
-                                    result, _ = await self._stage_group(
-                                        chat_id, source, sorted(members, key=lambda entry: entry.id),
-                                        reconciliation=reference, submission=submission)
-                                if not result.get('persisted'):
-                                    return {'state': 'deferred', 'reason': 'event_not_committed',
-                                            'checked': checked, 'pending': len(pending)}
-                                item['_reconcile_applied'] = True
-                            await self.backend.acknowledge_observed(chat_id, self.owner, reference)
-                        except httpx.HTTPStatusError as exc:
-                            if exc.response.status_code != 409:
-                                raise
-                            pending.pop(0)
-                            return {'state': 'deferred', 'reason': 'claim_changed',
-                                    'checked': checked, 'pending': len(pending)}
+                    try:
+                        if not item.get('_reconcile_applied'):
+                            missing = set(ids) - set(by_id)
+                            submission = item.setdefault('_reconcile_submission', {})
+                            if submission.get('payload'):
+                                result = await self.backend.event(submission['payload'])
+                            elif missing:
+                                result = await self._delete(chat_id, sorted(missing), reconciliation=reference,
+                                                            submission=submission)
+                            else:
+                                result, _ = await self._stage_group(
+                                    chat_id, source, sorted(members, key=lambda entry: entry.id),
+                                    reconciliation=reference, submission=submission)
+                            if not result.get('persisted'):
+                                return {'state': 'deferred', 'reason': 'event_not_committed',
+                                        'checked': checked, 'pending': len(pending)}
+                            item['_reconcile_applied'] = True
+                        await self.backend.acknowledge_observed(chat_id, self.owner, reference)
+                    except httpx.HTTPStatusError as exc:
+                        if exc.response.status_code != 409:
+                            raise
                         pending.pop(0)
-                        checked += 1
+                        return {'state': 'deferred', 'reason': 'claim_changed',
+                                'checked': checked, 'pending': len(pending)}
+                    pending.pop(0)
+                    checked += 1
                     await asyncio.sleep(0)
         except TimeoutError:
             log.warning('Telegram reconciliation deferred category=deadline pending=%s', len(pending))
@@ -729,14 +732,22 @@ class TelegramCollector:
         """Persist the complete immutable version before any media transfer."""
         message = members[0]
         sender_id = str(getattr(message, "sender_id", "") or "")
-        if sender_id not in {str(value) for value in source.get("trusted_sender_ids", [])}:
+        trusted_sender_ids = {str(value) for value in source.get("trusted_sender_ids", [])}
+        channel_post_identity = (not sender_id and bool(getattr(message, "post", False))
+                                 and chat_id in trusted_sender_ids)
+        if channel_post_identity:
+            # Broadcast channel posts can have no from_id/sender_id. A channel
+            # may be explicitly trusted as the author; do not apply this
+            # fallback to ordinary group messages or anonymous admins.
+            sender_id = chat_id
+        if sender_id not in trusted_sender_ids:
             return {"state": "ignored_author"}, None
         sender = getattr(message, "sender", None)
         manifests = []
         raw_text = "\n\n".join(item.message for item in members if getattr(item, "message", None))
         reply = next((item.reply_to_msg_id for item in members if getattr(item, "reply_to_msg_id", None)), None)
         reply_context = {}
-        sender_task = asyncio.create_task(message.get_sender()) if sender is None else None
+        sender_task = asyncio.create_task(message.get_sender()) if sender is None and not channel_post_identity else None
         reply_task = None
         if reply:
             try:
@@ -773,7 +784,9 @@ class TelegramCollector:
             "chat_id": chat_id, "owner": self.owner,
             "platform_message_id": f"album:{grouped_id}" if grouped_id else str(message.id),
             "member_message_ids": [int(item.id) for item in members],
-            "sender_id": sender_id, "sender_nickname": _nickname(sender, sender_id),
+            "sender_id": sender_id, "sender_nickname": (
+                str(source.get("display_name") or sender_id)[:120]
+                if channel_post_identity else _nickname(sender, sender_id)),
             "event_kind": "edit" if any(getattr(item, "edit_date", None) for item in members) else "message",
             "source_version_at": version_at.isoformat(), "posted_at": _utc(message.date).isoformat(),
             "raw_text": raw_text, "reply_to_platform_message_id": str(reply) if reply else None,
@@ -847,7 +860,9 @@ class TelegramCollector:
         async with asyncio.timeout(MEDIA_COMMIT_SECONDS):
             async with self.locks.setdefault(chat_id, asyncio.Lock()):
                 await self._checkpoint(chat_id)
-                return await self.backend.event(payload)
+            # Event persistence can wait on the remote API/database. Keep it
+            # outside the group lock so a media retry cannot starve live text.
+            return await self.backend.event(payload)
 
     async def retry_pending(self):
         if not self.client or not self.backend:
@@ -874,11 +889,11 @@ class TelegramCollector:
                 async with self.locks.setdefault(chat_id, asyncio.Lock()):
                     await self._checkpoint(chat_id)
                     missing = set(identifiers) - {entry.id for entry in members}
-                    if missing:
-                        await self._delete(chat_id, sorted(missing))
-                        payload = None
-                    else:
-                        _, payload = await self._stage_group(chat_id, source, sorted(members, key=lambda entry: entry.id))
+                if missing:
+                    await self._delete(chat_id, sorted(missing))
+                    payload = None
+                else:
+                    _, payload = await self._stage_group(chat_id, source, sorted(members, key=lambda entry: entry.id))
                 if payload is not None:
                     await self._complete_pending_media(chat_id, payload, members)
             except FloodWaitError as exc:
@@ -959,7 +974,7 @@ class TelegramCollector:
         try:
             async with self.locks.setdefault(chat_id, asyncio.Lock()):
                 await self._checkpoint(chat_id)
-                await self._delete(chat_id, [int(value) for value in event.deleted_ids])
+            await self._delete(chat_id, [int(value) for value in event.deleted_ids])
         except Exception as exc:
             if isinstance(exc, AuthKeyDuplicatedError):
                 await self._invalidate_active_session()
