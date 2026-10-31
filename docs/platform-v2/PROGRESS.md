@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮更新：2026-10-31 19:36 UTC。E131提交`757c9220e6eae05d16132504f2f6bf570ca9372c`已推送，冻结Docker全套`sh infra/test/run.sh`退出0：1022项、失败/错误/跳过均0，427.512秒；`.runtime/e131-verification/.runtime/test-evidence/1386209/backend-tests.json`确认`committed_source_verified=true`，证据已复制到`.runtime/test-evidence/1386209`且`diff -qr`退出0。API、review-worker与远端collector均已切到E131镜像；API `/healthz`/`/readyz`为200，collector为healthy，bridge/executor未重启。部署后19:20:51来源状态检查显示Telegram authorized/connected，但6群中4群`reconciliation_deferred`，2群`caught_up`；因此没有开始有效30分钟观察窗。只读DB探针发现当前待对账事件中历史12,563条、近24小时受信作者事件约627条仍due，collector日志在10秒reconciliation批次内多次deadline，近期作者发言被历史队列挤压。E132优先领取修复提交`9efc5f247de6c38834b9f69355c0facaea16ad32`已推送，Docker定向47项通过；冻结全套目前在干净detached worktree `.runtime/e132-verification`运行，尚无结果。首次误从含用户未跟踪报告的主工作区启动`sh infra/test/run.sh`，在复制源码时人工中断，退出130；未触碰报告内容。全套在E132干净冻结树中重启，保证`committed_source_verified`可核验。后续限额API构建、部署和新的真实观察窗待做。旧E129观察窗仍不通过：截至18:47统计57条实时帖子、85个job、50份system回执、15条当前/编辑消息无job；媒体观察窗1条failed、6条pending、12条未审核媒体消息，6群存在`reconciliation_deferred`/`unavailable`。当前仍缺带真实推荐意图的样本验证比赛/盘口命中。
+本轮更新：2026-10-31 19:42 UTC。E131提交`757c9220e6eae05d16132504f2f6bf570ca9372c`已推送，冻结Docker全套`sh infra/test/run.sh`退出0：1022项、失败/错误/跳过均0，427.512秒；`.runtime/e131-verification/.runtime/test-evidence/1386209/backend-tests.json`确认`committed_source_verified=true`，证据已复制到`.runtime/test-evidence/1386209`且`diff -qr`退出0。API、review-worker与远端collector均已切到E131镜像；API `/healthz`/`/readyz`为200，collector为healthy，bridge/executor未重启。部署后19:20:51来源状态检查显示Telegram authorized/connected，但6群中4群`reconciliation_deferred`，2群`caught_up`；因此没有开始有效30分钟观察窗。只读DB探针发现当前待对账事件中历史12,563条、近24小时受信作者事件约627条仍due，collector日志在10秒reconciliation批次内多次deadline，近期作者发言被历史队列挤压。E132优先领取修复提交`9efc5f247de6c38834b9f69355c0facaea16ad32`已推送，Docker定向47项和冻结全套均通过；`.runtime/e132-verification/.runtime/test-evidence/1461353/backend-tests.json`确认提交正确、`committed_source_verified=true`，1023项、失败/错误/跳过均0、报告424.828秒，证据复制至`.runtime/test-evidence/1461353`并`diff -qr`一致。首次误从含用户未跟踪报告的主工作区启动`sh infra/test/run.sh`，复制源码过程中断退出130；未触碰报告。完整全套随后在干净冻结树重跑成功。API候选构建/部署及新的真实观察窗待做。旧E129观察窗仍不通过：截至18:47统计57条实时帖子、85个job、50份system回执、15条当前/编辑消息无job；媒体观察窗1条failed、6条pending、12条未审核媒体消息，6群存在`reconciliation_deferred`/`unavailable`。当前仍缺带真实推荐意图的样本验证比赛/盘口命中。
 
 本轮更新：2026-10-31 18:10 UTC。E129 API候选由冻结提交`2b5fcf2`的detached验证树构建，BuildKit镜像固定digest、容器CPU quota=50000/100000、memory=memory-swap=402653184 bytes。`ai-football-api:2.0.0-dev-e129-2b5fcf2`构建退出0，Image ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`，revision与源码SHA核验通过；临时builder已删除。队列门禁复核为queued=1/running=2、年龄小于26秒，尚未部署，继续等待归零。
 
@@ -14,7 +14,7 @@
 
 ## 当前范围与状态
 
-### E132 — Telegram近时专家消息对账优先级与历史队列公平推进（2026-10-31 19:33 UTC，代码已写，定向隔离通过）
+### E132 — Telegram近时专家消息对账优先级与历史队列公平推进（2026-10-31 19:42 UTC，冻结全套隔离通过，候选部署待验）
 
 - 目标/责任：避免长期历史消息核对队列拖住当前专家消息的完整性检查，确保近期消息更快进入审核，同时让历史队列持续前进；责任目录`services/api/app/telegram_reconciliation.py`及`tests/test_telegram_reconciliation_claims.py`。依赖E131 API/collector已生效，但E131部署后的第一轮来源健康门禁未通过。
 - 当前证据：E131 collector健康且Telegram账号authorized/connected；19:20:51 UTC来源状态2/6 caught_up、4/6 reconciliation_deferred。只读数据库显示约12,563条历史事件和627条近24小时受信作者事件处于due；远端日志存在10秒批处理超时（deadline pending=10及pending=0）。现有claim按`next_check_at,id`，历史积压在前，近期事件持续等待；即使源历史抓取状态显示caught_up，也不能当作所有事件已核验。
@@ -24,7 +24,7 @@
 - 失败处理：若分区补足造成重复ID、claim少于可用due数量、历史数不下降、近期消息没有在窗口内领取或未授权事件被领取，回滚该冻结候选并按SQL行锁/分页状态修正；不手工确认或重置真实事件、不忽略deferred源、不虚报匹配成功。
 - 定向验收首次失败（19:27 UTC）：Docker具名临时PostgreSQL运行`python -m unittest test_telegram_reconciliation_claims test_telegram_api -v`，47项中2项失败。其一是近期配额不足后未从另一分区补齐，并发契约收到8而非10；其二测试误用API直接写未授权sender，被现有权限正确拒绝403。随后改为对分区空额补齐，并让测试在隔离库模拟既有消息先于授权映射、再完成映射的迁移情形。第二次试跑在补配额查询重复选择当前事务已锁事件，产生6项失败/11项错误（47项），修正补查显式排除本事务已选ID后重新执行。
 - 定向复验通过（19:32 UTC）：同一Docker限制下运行`python -m unittest test_telegram_reconciliation_claims test_telegram_api -v`，47项、0失败/错误/跳过、36.399秒、退出0；覆盖近期优先/历史FIFO、并发无重叠、空配额补足、授权后恢复claim和既有回放/租约协议。
-- 冻结全套启动（19:36 UTC）：干净detached worktree `.runtime/e132-verification`固定于提交`9efc5f247de6c38834b9f69355c0facaea16ad32`，`sh infra/test/run.sh`正在运行；运行期间不修改该冻结树。
+- 冻结全套通过（19:42 UTC）：干净detached worktree `.runtime/e132-verification`固定于提交`9efc5f247de6c38834b9f69355c0facaea16ad32`运行`sh infra/test/run.sh`退出0，1023项、失败/错误/跳过均0；unittest终端计时422.723秒，机器报告424.828秒。报告的`committed_source_verified=true`；复制到`.runtime/test-evidence/1461353`后`diff -qr`退出0，Docker内Python解析确认提交和计数。接下来构建API候选，生产尚未切换E132。
 - 探针失败：只读队列查询首次按不存在的`v2_telegram_events.created_at`分组退出1，按schema提示改用`updated_at`后退出0；另一次VPS脱敏日志管道使用未安装的`python`命令退出127，改用`grep`分类后退出0。均未写生产数据。
 
 ### E131 — Telegram当前媒体审核队列优先级与有界批次（2026-10-31 19:33 UTC，冻结全套通过，API/collector已生效，部署健康门禁失败）
