@@ -86,7 +86,7 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
             "SELECT media_objects FROM v2_expert_messages WHERE platform_message_id='11'"))
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
 
-    async def test_pending_batch_prioritizes_recent_media_then_rotates_history_fifo(self):
+    async def test_pending_batch_prioritizes_current_pending_then_failed_and_history_fifo(self):
         historical_ids = []
         for index in range(31):
             platform_id = str(1000 + index)
@@ -102,6 +102,21 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
                 platform_id, self.event_time - timedelta(minutes=31 - index),
             )
 
+        failed_recent = self.event(version="failed-recent", media=True)
+        failed_recent.update(platform_message_id="failed-recent", member_message_ids=[2001],
+                             posted_at=(self.event_time - timedelta(minutes=5)).isoformat(),
+                             media_state="failed", last_error="TimeoutError")
+        failed_recent['media_manifest'][0]['message_id'] = 2001
+        response = await self.post(failed_recent)
+        self.assertEqual(200, response.status_code, response.text)
+
+        older_recent = self.event(version="older-recent", media=True)
+        older_recent.update(platform_message_id="older-recent", member_message_ids=[2002],
+                            posted_at=(self.event_time - timedelta(minutes=10)).isoformat())
+        older_recent['media_manifest'][0]['message_id'] = 2002
+        response = await self.post(older_recent)
+        self.assertEqual(200, response.status_code, response.text)
+
         recent = self.event(version="recent-recommendation", media=True)
         recent.update(platform_message_id="recent-recommendation", member_message_ids=[2000])
         recent['media_manifest'][0]['message_id'] = 2000
@@ -111,7 +126,9 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         batch = (await self.client.get('/internal/telegram/pending?limit=30')).json()['items']
         self.assertEqual(30, len(batch))
         self.assertEqual("recent-recommendation", batch[0]['platform_message_id'])
-        self.assertEqual(historical_ids[:29], [item['platform_message_id'] for item in batch[1:]])
+        self.assertEqual("older-recent", batch[1]['platform_message_id'])
+        self.assertEqual("failed-recent", batch[2]['platform_message_id'])
+        self.assertEqual(historical_ids[:27], [item['platform_message_id'] for item in batch[3:]])
 
     async def test_pending_failed_ready_is_durable_and_job_once(self):
         body = self.event(media=True)

@@ -203,6 +203,10 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
         finally:
             release.set()
             await asyncio.wait_for(retry, 1)
+        self.assertEqual([1, 2], calls)
+        self.assertEqual(['ready', 'ready', 'pending'],
+                         [value['media_state'] for value in self.backend.events.values()])
+        await self.collector.retry_pending()
         self.assertEqual([1, 2, 3], calls)
         self.assertEqual({'ready'}, {value['media_state'] for value in self.backend.events.values()})
 

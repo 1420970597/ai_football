@@ -87,8 +87,10 @@ class Backend:
         self.events[key] = copy.deepcopy(body)
         return {"persisted": True, "state": body["media_state"]}
 
-    async def pending(self):
-        return [{"chat_id": value["chat_id"], "content": value} for value in self.events.values() if value["media_state"] in {"pending", "failed"}]
+    async def pending(self, limit=30):
+        items = [{"chat_id": value["chat_id"], "content": value}
+                 for value in self.events.values() if value["media_state"] in {"pending", "failed"}]
+        return items[:limit]
 
     async def save_session(self, session, account):
         if self.save_fails:

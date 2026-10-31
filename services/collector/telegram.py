@@ -880,8 +880,8 @@ class TelegramCollector:
             log.warning("Telegram media retry deferred category=batch_deadline")
 
     async def _retry_pending_batch(self):
-        tasks = [asyncio.create_task(self._retry_pending_item(item))
-                 for item in await self.backend.pending()]
+        items = await self.backend.pending(limit=MEDIA_RETRY_CONCURRENCY)
+        tasks = [asyncio.create_task(self._retry_pending_item(item)) for item in items]
         if not tasks:
             return
         try:
