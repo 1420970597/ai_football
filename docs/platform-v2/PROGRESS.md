@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-31 13:24 UTC。当前目标：每30分钟检查一次新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察，直到至少一个有真实专家发言的30分钟窗口全部审核正确。提示指纹错配修复已通过1006项完整Docker回归；正在提交、构建及准备部署，观察窗口尚未重启。
+更新时间：2026-10-31 13:35 UTC。当前目标：每30分钟检查一次新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察，直到至少一个有真实专家发言的30分钟窗口全部审核正确。提示指纹修复已通过测试并部署；7条符合条件的实时失败消息已通过管理员重试流程重新排队，等待审核队列清空后启动完整观察窗。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
@@ -814,4 +814,6 @@ git diff --check
 - 已确认根因：worker当前提示摘要`daa966…`与受控配置存储的批准提示摘要`222388…`不一致；后者与已批准提交`f6cc392`中的提示逐字计算一致。`resolve_review_settings`在生成`hermes_request`前抛`review configuration artifact provenance does not match worker`，因此近期消息根本未进入Hermes或赛事检索。该版本不一致由`d2b5ce2`改动系统提示但没有对应已核验配置制品造成。
 - 修复动作：源码系统提示已恢复为`f6cc392`批准内容；不修改数据库治理配置。当前部署的Hermes专家技能保留语义别名与翻译匹配、专家倍率不得比较、完整分页和严格唯一赛事约束。下一步在Docker冻结套件验证受控基线可消费，再构建并部署同源API/review-worker候选；利用管理审核重试入口处理仅在提示配置不匹配期间失败且仍为最新的实时消息，不重放历史积压。部署后必须以真实回执和新自然消息重新起算30分钟窗。
 - 首窗命令及退出码：`docker exec -i ai-football-v2-api-1 python -u - < .runtime/e120-watch.py`于手动中止时结束，最后输出elapsed=360秒（API health/ready均200）；`.runtime/e120-diagnose.py`首次JSONB解码不完整退出1，修正后只读诊断退出0；`.runtime/e120-config-check.py`受控配置核对退出0，明确prompt_matches=false；从`f6cc392`提取的批准提示摘要与远端配置摘要均为`222388e0…`。一条执行在本机的远端容器检查退出1，原因是远端容器并不存在于本机Docker daemon；改走受限SSH检查退出0，确认远端collector、bridge、executor运行。未显示消息正文、昵称或凭据。
-- 修复代码及隔离验证：`services/api/app/hermes_client.py`恢复`f6cc392`已批准的系统提示文本，Docker内重算SHA-256=`222388e0dde4957ff096435cdf283f676e1c01e8003c9f536599f76f30a84173`；生产受控配置摘要一致。`sh infra/test/run.sh`退出0，1006项、0失败/错误/跳过，412.138秒，证据目录`.runtime/test-evidence/691034`；冻结期间未改测试源码。下一步提交修复，再限额构建同源API候选，空闲门禁后只切API/review-worker并核验消费回执。
+- 修复代码及隔离验证：`services/api/app/hermes_client.py`恢复`f6cc392`已批准的系统提示文本，Docker内重算SHA-256=`222388e0dde4957ff096435cdf283f676e1c01e8003c9f536599f76f30a84173`；生产受控配置摘要一致。`sh infra/test/run.sh`退出0，1006项、0失败/错误/跳过，412.138秒，证据目录`.runtime/test-evidence/691034`；冻结期间未改测试源码。
+- 部署与消费（13:27 UTC）：提交`59e19fd`已推送；Docker限额API镜像`ai-football-api:2.0.0-dev-e120-59e19fd`构建退出0，Image ID=`sha256:b84ade286fbac8866c744d1c12ad991a6e8111aaa53df58acbcaa19dd3490916`，容器内提示摘要核验与批准值一致。`sh .runtime/e117-20261031/compose.sh config --quiet`退出0；部署前只读门禁queued/retry/running全为0。`sh .runtime/e117-20261031/compose.sh up -d --wait --wait-timeout 120 --no-deps --no-build api review-worker`退出0；API/review-worker均运行于revision=`59e19fd`，API healthy。未执行数据库迁移、未重启Hermes/MCP/远端collector。通过已部署worker的`resolve_review_settings`正规消费路径，配置读取及ACK均成功，使用SHA-256=`222388e0…`；该ACK作为配置消费审计写入既有模型治理台账。
+- 修复后实时消息恢复（13:34 UTC）：识别7条当前时间窗口、受信且启用、media ready、零已接受信号、无Hermes请求、失败分类为RuntimeError/internal的失败任务；复用配置中的管理员账号，经Docker API内正式管理员登录与`/api/v1/admin/reviews/{id}/retry`接口提交7项审核重试，HTTP201均入queued，ID仅在本地证据显示SHA-256短码。容器任务脚本未输出账号、密码、Cookie、原文或昵称。13:34:56 UTC只读门禁为queued=5、running=1、retry=0，故队列尚未全部完成，30分钟观察窗暂不开始；此前成功消费与远端状态请求退出0。Telegram远端status HTTP200且connected/authorized=true、last_success_at=13:34:48 UTC，但`degraded=true`，来源统计为1 catching_up、2 reconciliation_deferred、3 unavailable；该采集限制仍待持续检查。
