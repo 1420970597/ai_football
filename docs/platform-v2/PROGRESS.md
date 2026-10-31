@@ -23,6 +23,7 @@
 - 设计/实现：每个群先在独立短临界区claim/续租，再释放群锁执行管理员目录查询与同步；保持慢目录请求不阻塞实时消息。增强安全拒绝分类：HTTP503空响应记为有边界的桥接/API不可用，不记录响应体或请求数据。
 - 验收/失败处理：更新慢目录并行测试，明确证明directory调用前已完成来源checkpoint claim且实时消息不等待目录；Docker定向及冻结全套回归，通过后构建/导入/单collector部署并重新起算30分钟。仍有503时只读核验桥接/连接池，不绕过租约，不盲重试有歧义请求。
 - 定向证据/失败记录（16:42 UTC）：Docker禁网6项通过，含“先claim后directory但慢目录不持群锁”和HTTP503空响应安全分类测试。首条定向命令误用测试类名`TelegramCollectorTests`，命令exit1、测试进程启动前因类名不存在；按仓库实际类名`CollectorTests`立即修正并重跑全目标成功。E126窗口严格当前消息3条：2条仅图片/不支持媒体（media_state=unsupported、没有送审任务），1条ready相册、2张图片进入Hermes，终态unresolved并有完整搜索/模型/系统回执；本窗口尚不足30分钟且来源健康仍degraded，不判通过。
+- 冻结全套（16:51 UTC）：提交c8fe497完整源码未再更改，`sh infra/test/run.sh`退出0，1019项420.897秒、失败/错误/跳过0，报告`.runtime/test-evidence/1118640`。只读API日志佐证既有503主要是`asyncpg.LockNotAvailableError`及语句`TimeoutError`；pg_stat_activity抽查13连接idle ClientRead、当前无持续阻塞。下一步构建/导入collector候选，待自然租约交接后单独部署。
 
 ### E125 — 媒体事件原子租约提交与合理截止（2026-10-31 16:04 UTC，代码已写）
 
