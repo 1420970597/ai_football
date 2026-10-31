@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-31 06:21 UTC。当前目标：修复 Telegram 监控与群聊差异、专家原文图片预览和已有乐鱼账户在全局登录配置更新后的无资金复核入口，并观察远端 Telegram 采集至少10分钟。当前阶段为实现完成、回归与只读迁移门禁通过；修正 Telegram 新媒体的 S3 前缀后正在重跑冻结回归，数据库迁移、候选发布与worker切换仍未执行。
+更新时间：2026-10-31 06:30 UTC。当前目标：修复 Telegram 监控与群聊差异、专家原文图片预览和已有乐鱼账户在全局登录配置更新后的无资金复核入口，并观察远端 Telegram 采集至少10分钟。当前阶段为不可变开发候选 `.2` 的后端验证中；浏览器与 Android 验证通过。数据库迁移、镜像切换与部署后10分钟真实采集观察尚未开始。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
@@ -29,6 +29,9 @@
 - 最终链路检查与冻结（06:11 UTC）：发现远端桥未放行新增`PUT author-backfill`，主动停止当轮全套测试（退出137，未作通过证据），补精确collector白名单、executor/错误方法/多余查询拒绝与真实backend调用契约。新增媒体测试首次缺`os`导入退出1，补全导入后Docker禁网专项73项、8.440秒、退出0；规划检查46包/337动作/266有证据项退出0。只读SSH核验远端collector/executor/bridge均为51e20ee同源摘要镜像、每类唯一；私有env0600、socket目录2750及socket0660、执行器实盘false。当前实现准备分阶段提交推送，后续完整回归必须以该新冻结源码重跑。
 - 实现提交及最终后端回归（06:21 UTC）：`fe8f5df0c60a13e38bfb58a1c8107fdaf18170f8`提交并推送任务分支，`git ls-remote`一致；新增差异常见敏感模式匹配0、暂存差异检查退出0。该干净提交执行`sh infra/test/run.sh`退出0，1002项、407.417秒、无失败/错误/跳过，证据`.runtime/test-evidence/3964796`。`v2.0.0-dev.20261031.1`指向相同完整SHA，候选流水线41175711866在截图门禁失败，未发布镜像或Release。本地`sh tests/browser/visual-check.sh`复现退出1，14屏仅admin-guest的390/1440两屏失败；逐屏查图确认差异来自E116按用户要求删除MFA说明，旧截图未更新。仅复制已审两屏并更新其manifest SHA，阈值不变；正在重跑截图检查，应用源码未变化。原标签保持不可变，不删除或移动。
 - 截图/规划冻结检查（06:22 UTC）：`sh tests/browser/visual-check.sh`现退出0，14屏通过；Docker `python tasks/check_planning.py`退出0（46工作包、337动作、266个有证据完成项）；`git diff --check`退出0。变化仅两张已审基线图片及manifest，尚未提交。下一步提交并推送基线修订，创建新的日期序号候选标签，等待全量后端/浏览器/Android验证通过后才取镜像清单。
+- 基线提交及候选验证（06:26 UTC）：截图基线修订提交并推送为 `65e62133ef98e48e81dace961a4c15568ebe9713`，分支与 `origin/fix/TASK-78-hermes-telegram-sync` 同步；不可变标签 `v2.0.0-dev.20261031.2` 指向该完整提交。候选工作流 `41176346833` 的 policy 已 success，backend、browser、android仍为in_progress；Android独立边界工作流 `41176308068`此前success。第一版状态查询命令因镜像摘要引用拼写错误而未启动容器，使用仓库固定镜像摘要重试后成功取得GitHub作业状态。尚未下载候选资产、未更新远端worker、未迁移生产数据库。
+- 候选作业及部署前采集基线（06:30 UTC）：候选 `41176346833` 的 policy、browser、android均success，backend仍运行，镜像未发布。通过现有远端SSH容器只读检查，collector/executor/api-bridge均运行旧修订`51e20ee8e256b94bf8947c4e1be5a86c52f90b03`，executor实盘开关false，socket目录/权限符合02750与0660。数据库尚处022，且没有作者补扫列。06:27–06:29 UTC只读Telegram快照显示会话connected/authorized，6/6来源租约有效，检查点持续推进；控制状态为2个catching_up、2个reconciliation_deferred、2个unavailable（错误均为TimeoutError），状态degraded=true；约1分钟窗口入库3条新消息、未见新图片。此为部署前基线，不满足10分钟验收。
+- 观察器失败及修复记录（06:30 UTC）：首次运行`.runtime/e117-20261031/observe.py`因查询023字段但数据库仍为022而以`UndefinedColumnError`退出1；随后控制端5秒读取超时退出1。观察器已改为先探测列、缺失时报告补扫指标unknown，并把只读状态请求截止提高到15秒；06:29:46 UTC重跑退出0，控制状态响应正常。运行中仅新增了每来源哈希/状态和白名单错误类别输出，未触碰业务表。一次错误的运行手册路径检索也失败，正确文件为`docs/platform-v2/REMOTE_WORKER_DEPLOYMENT.md`。
 - 阶段实际命令与后续：全量Docker `sh infra/test/run.sh`及真实API浏览器`sh tests/browser/integration-check.sh`此前各自退出0（1000项/25场景）；schema/data备份导出、摘要核验、`pg_restore --list`及隔离恢复均退出0；数据库`plan`与`verify`均退出0。期间首次包导入、权限参数、SQL别名等只读探针失败和已修正隔离恢复失败如实保留；没有生产库写入。最新S3前缀实现尚未验证，必须先运行最终完整Docker回归、`git diff --check`与规划检查，再提交推送和候选部署。线上Telegram目前degraded（4个来源reconciliation延迟、2个追赶），切换前后都需记录；数据库迁移仅在候选API/collector均已验证且回退镜像就绪后执行，任何远端观察缺项则停止切换。
 
 ### E116 — 本人乐鱼账号校验门禁与二次身份验证移除（2026-10-30，开发候选运行验证通过）
