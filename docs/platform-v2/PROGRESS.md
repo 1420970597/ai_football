@@ -1,19 +1,22 @@
 # 第二代平台实时进度与验证台账
 
+本轮更新：2026-10-31 17:55 UTC。E129代码提交`8dcb342`后首次冻结全套`sh infra/test/run.sh`运行1021项退出1，唯一错误是`test_fault_recovery_matrix.TelegramDatabaseRecoveryTests.test_real_connection_loss_rolls_back_then_replay_persists_exactly_once`仍mock已移除的`check_lease`。故障注入已改到新的`source_with_lease`事务连接，改动待定向及冻结重验，远端候选未部署。
+
 更新时间：2026-10-31 17:44 UTC。当前目标：每30分钟检查新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察。E122–E127观察窗口未通过；E128已部署并通过单群串行/跨群并行的1021项Docker全套，但真实窗口仍有来源degraded和数据库语句超时，尚不能判通过。第8分钟严格审查到的12条当前发言均为短文本闲聊，无媒体或比赛/盘口意图；Hermes完整回执为unresolved，语义上正确，但没有真实推荐可验证命中。实测数据库SELECT往返约245ms、来源查询约491ms，E129 API往返压缩修改已写、测试待跑；远端仍运行E128。媒体历史队列约3337项，Leyu及赛果上游状态仍有退化。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
 ## 当前范围与状态
 
-### E129 — 压缩Telegram租约热路径的数据库往返（2026-10-31 17:43 UTC，代码已写，测试待跑）
+### E129 — 压缩Telegram租约热路径的数据库往返（2026-10-31 17:55 UTC，冻结测试修复中）
 
 - 目标/责任：在远端数据库高RTT下减少同群消息、目录与游标操作的顺序查询耗时，恢复来源同步和实时入库稳定性；责任目录`services/api/app/routes/telegram.py`及现有Telegram API集成测试。依赖E128已部署并暴露剩余超时。
 - 当前证据/根因：E128后最初有一次checkpoint行锁冲突，之后最近日志未再出现持续`LockNotAvailableError`；但`source_for`、`advance_checkpoint`、其他result/fixture接口仍在5秒`command_timeout`内偶发`TimeoutError`。只读数据库探针测得5次`SELECT 1`为245–491ms、来源查找约491ms；同一成功lease/checkpoint路径原先至少顺序执行3–4条SQL。最近`pg_stat_activity`快照10个idle、2个idle-in-transaction、无活动阻塞，故更像多轮远端往返叠加的尾延迟，而非持续锁占用；当前证据不足以断言所有超时均由此造成。
 - 设计决策：将活跃来源与owner/lease检查、lease延长合并为单条`UPDATE ... FROM ... RETURNING`；将claim改为由启用来源驱动的`INSERT ... SELECT ... ON CONFLICT`；checkpoint成功advance合并为有owner、lease、旧游标条件的单条原子更新。只在失败路径额外查询原因，保留来源禁用403、lease失效409、游标冲突409、倒退422；不增大超时、不减少群监控并发、不放宽lease fencing。
 - 实现动作：目录、事件、作者回补及reconciliation接口改用原子`source_with_lease`；claim单语句；advance单语句成功，失败时再核验lease与source状态。既有隔离API用例验证租约、source、compare-and-swap和reconciliation行为；完整测试、限额API候选、部署及真实窗口待验。
 - 验收/失败处理：先运行Telegram API/目录/对账的Docker隔离集成场景，再运行冻结全套。候选部署前确认review任务队列为空，API更新期间保留远端collector并等待新API就绪；部署后重新起算30分钟，查看DB错误、六群健康、作者/管理员同步、新消息媒体与审核回执。若`TimeoutError`仍持续而查询RTT下降，继续检查数据库服务端CPU/IO、pool acquire与桥接耗时，不通过放宽截止掩盖。
-- 初始实现检查（17:43 UTC）：`git diff --check`退出0。代码仍在工作树，尚未提交、冻结、测试或部署。
+- 初始实现检查（17:43 UTC）：`git diff --check`退出0。API代码提交`8dcb342`。
+- 冻结首次运行失败（17:54 UTC）：`sh infra/test/run.sh`在`8dcb342`冻结worktree退出1，运行1021项；唯一错误是故障注入测试引用已删除的`check_lease`属性，API行为SQL无失败断言。现改为在`source_with_lease`事务内连接注入中断，回归待重跑。
 
 ### E128 — Telegram同一来源checkpoint写入串行化（2026-10-31 17:00 UTC，隔离验证通过，真实观察中）
 

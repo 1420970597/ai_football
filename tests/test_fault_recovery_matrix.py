@@ -90,10 +90,10 @@ class TelegramDatabaseRecoveryTests(unittest.IsolatedAsyncioTestCase):
         before = dict(await self.pool.fetchrow(
             'SELECT * FROM v2_source_checkpoints WHERE source_id=$1', self.source))
         entered, backend = asyncio.Event(), {}
-        original = telegram.check_lease
+        original = telegram.source_with_lease
         calls = []
-        async def interrupted_lease(conn, source_id, owner):
-            result = await original(conn, source_id, owner)
+        async def interrupted_lease(conn, chat_id, owner):
+            result = await original(conn, chat_id, owner)
             calls.append(1)
             if len(calls) == 1:
                 backend['pid'] = await conn.fetchval('SELECT pg_backend_pid()')
@@ -101,7 +101,7 @@ class TelegramDatabaseRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 await conn.execute('SELECT pg_sleep(10)')
             return result
         body = self.event()
-        with patch.object(telegram, 'check_lease', interrupted_lease):
+        with patch.object(telegram, 'source_with_lease', interrupted_lease):
             pending = asyncio.create_task(self.client.post('/internal/telegram/events', json=body))
             await asyncio.wait_for(entered.wait(), 2)
             try:
