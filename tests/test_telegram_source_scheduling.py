@@ -199,6 +199,19 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(23,len(self.backend.events))
         self.assertEqual([],self.backend.scheduled['-1001'])
 
+    async def test_slow_event_commits_finish_before_reconciliation_deadline(self):
+        self.client.messages['-1001']=[Message(i) for i in range(1,4)]
+        self.queue('-1001',[[1],[2],[3]])
+        original=self.backend.event
+        async def slow_event(body):
+            await asyncio.sleep(4)
+            return await original(body)
+        self.backend.event=slow_event
+        report=await asyncio.wait_for(self.collector._reconcile_known('-1001',self.source),16)
+        self.assertEqual({'state':'ready','checked':3,'pending':0},report)
+        self.assertEqual(3,len(self.backend.events))
+        self.assertEqual(3,len(self.backend.calls))
+
     async def test_flood_wait_retains_claim_then_success_after_backoff(self):
         self.client.messages['-1001']=[Message(1)]
         self.queue('-1001',[[1]])
