@@ -73,6 +73,14 @@
 - 后续诊断方向：核对对账claim租期、原子提交及ACK请求预算和API bridge/数据库实际耗时；验证实时消息锁是否被checkpoint调用排队；按消息版本核对Hermes request/result及system receipt。已出现的旧消息不自动重试、不改checkpoint或人工ACK；只有明确属于当前实时窗口且可安全通过官方管理入口重试的失败任务才考虑重放。
 - 剩余依赖与失败处理：E135远端切换及运行期验收尚未完成。切换后3个来源的`member_enumeration_restricted`仍是Telegram权限限制，必须区别于消息接收健康；真实新发布时间专家发言、图文审核输入及system receipt尚待观察。新消息缺少job、media未ready或system receipt、发生source/API/collector超时或event-ACK不一致时，观察窗不通过，先修复并重新验证；没有真实新发言时不记为通过。
 
+### E136 — Telegram对账事件提交与ACK合并（2026-10-31 21:56 UTC，研究完成，设计已记录）
+
+- 目标/责任目录：消除E135后仍出现的ACK/event deadline和实时发言群锁等待；责任目录`services/api/app/routes/telegram.py`、`services/collector/telegram.py`与对应Telegram契约测试。前置为E135候选已部署但运行验收未通过，API及数据库保持可用。
+- 当前证据与缺口：E135日志21:52–21:55记录3次`acknowledgement` deadline、1次`event_commit` deadline、1次`history_deadline`；同一API来源客户端对`/events`、`/observed`和`/observed/ack`串行，`_reconcile_known`还在checkpoint及claim两次API调用期间持有群锁；实时事件日志测得该锁等待最高6184ms。原子事件路由已在一个事务中写入reconciliation应用标记与专家消息/审核任务，之后collector再发独立ACK请求；当前没有一条真实新发布时间专家发言可验，近期入库均为旧发布时间回补。
+- 设计决策：reconciliation事件必须在同一事务内完成claim版本/owner/lease校验、内容和审核任务持久化以及ACK游标更新；任何写入/校验失败则整笔回滚，重试同一payload保持幂等。响应显式返回`reconciliation_acknowledged`，collector收到该证据后不再发额外ACK；尚未支持该字段的兼容响应仍走现有ACK端点。移除author backfill和reconciliation前已被同批初始checkpoint或受保护API路由覆盖的续租；保留lease fencing、独立checkpoint推进、实时锁以及最终兜底续租。
+- 实现动作：扩展`/internal/telegram/events`在成功/重复/删除路径内原子ACK；更新collector按响应跳过冗余ACK，并释放reconciliation入口的群锁与checkpoint；补充重放、冲突、claim过期、事务回滚、旧API回退和实时消息不被后台claim锁阻塞的测试。
+- 验收与失败处理：具名临时PostgreSQL证明`reconcile_applied_at`和`reconcile_acknowledged_at`同事务前进、失败同时不前进；重复相同payload只创建一个消息/审核任务并允许ACK幂等；丢事件响应后重放不重复Telegram读取/事件创建；所有验证仅Docker内执行。冻结测试通过并由同源候选部署后，再看至少10分钟运行日志无ACK/event deadline，6群source lease持续健康、实时消息锁等待受控且API就绪；若任一门槛失败，观察窗不启动并按数据库/HTTP/Telegram stage继续诊断，不直接改线上claim或回写旧消息。
+
 ### E132 — Telegram近时专家消息对账优先级与历史队列公平推进（2026-10-31 19:54 UTC，冻结全套通过，API已部署，真实窗口未通过健康门禁）
 
 - 目标/责任：避免长期历史消息核对队列拖住当前专家消息的完整性检查，确保近期消息更快进入审核，同时让历史队列持续前进；责任目录`services/api/app/telegram_reconciliation.py`及`tests/test_telegram_reconciliation_claims.py`。依赖E131 API/collector已生效，但E131部署后的第一轮来源健康门禁未通过。
