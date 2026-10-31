@@ -9,7 +9,7 @@
 ### E128 — Telegram同一来源checkpoint写入串行化（2026-10-31 17:00 UTC，代码已写）
 
 - 目标/责任：消除同群实时事件、媒体提交、目录同步、检查点和对账并发更新checkpoint租约导致的API 503；责任目录`services/collector/telegram_backend.py`及Telegram transport测试。依赖E127已部署并提供可复现的现场错误。
-- 当前证据/根因：E127真实运行约2分钟后，远端`POST /events`、`POST /checkpoints/claim`出现HTTP503。Docker API日志定位到`check_lease`与`claim_checkpoint`获取`v2_source_checkpoints`行锁时`asyncpg.LockNotAvailableError`；另有较早`finish_check`读租约的数据库超时。Telegram控制状态含6来源、2个TimeoutError与2个reconciliation_deferred，`degraded=true`。严格窗口审计尚无新消息，不能认定审核正常。
+- 当前证据/根因：E127真实运行约2分钟后，远端`POST /events`、`POST /checkpoints/claim`出现HTTP503。Docker API日志定位到`check_lease`与`claim_checkpoint`获取`v2_source_checkpoints`行锁时`asyncpg.LockNotAvailableError`。另有较早`finish_check`结果核验租约查询超时，属于独立接口，不将其误归为Telegram checkpoint 503根因。Telegram控制状态含6来源、2个TimeoutError与2个reconciliation_deferred，`degraded=true`。严格窗口审计尚无新消息，不能认定审核正常。
 - 设计决策：在collector backend中按`chat_id`对所有访问/续期来源租约的API变更请求建立异步锁；同一群事件与checkpoint变更串行，不同群仍可并行。API租约和消息版本验证继续作为最终边界；不重试歧义写入、不放宽超时或租约。HTTP503根据后端稳定`code`记录为受限原因，不记录detail或请求数据。
 - 实现动作：更新`TelegramBackend._call`覆盖directory、claim/advance checkpoint、author backfill、events及observed/ack；增加并发行为测试，阻塞同一来源checkpoint请求时证明同来源事件尚未发出而另一来源事件已完成；增加503 code脱敏分类测试。
 - 验收/失败处理：定向行为测试通过后提交并冻结完整Docker套件；构建限额collector候选，远端只替换collector并复核bridge/executor不变。部署后重开30分钟窗，检查source_health恢复、同源锁503消失、新消息自动入库并完成Hermes审核、管理员与信任昵称同步、审核回执闭合。若503仍出现，读取受限API错误帧并检查其他非collector调用方/数据库池等待；不得隐藏503或直接认定正常。
