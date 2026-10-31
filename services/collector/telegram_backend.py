@@ -28,6 +28,13 @@ class TelegramBackend:
         return await self._call("PUT", "/checkpoints", {"chat_id": chat_id, "owner": owner,
                                                        "last_message_id": last_message_id, "previous_message_id": previous})
 
+    async def advance_author_backfill(self, chat_id: str, owner: str, sender_id: str,
+                                      cursor: int, previous: int, complete: bool) -> dict:
+        return await self._call("PUT", "/author-backfill", {
+            "chat_id": chat_id, "owner": owner, "sender_id": sender_id,
+            "cursor": cursor, "previous_cursor": previous, "complete": complete,
+        })
+
     async def event(self, body: dict) -> dict:
         return await self._call("POST", "/events", body)
 

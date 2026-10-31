@@ -171,6 +171,26 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("UPDATE v2_source_checkpoints SET lease_until=now()-interval '1 second'")
         self.assertEqual(409, (await self.post(self.event())).status_code)
 
+    async def test_author_backfill_is_leased_monotonic_and_independent_of_group_checkpoint(self):
+        await self.pool.execute(
+            "UPDATE v2_source_experts SET backfill_since=now()-interval '7 days',backfill_cursor=36,"
+            "backfill_until_id=35,backfill_completed_at=NULL WHERE source_id=$1 AND expert_id=$2",
+            self.source_id, self.expert_id)
+        sources = await self.client.get('/internal/telegram/sources')
+        self.assertEqual(200, sources.status_code, sources.text)
+        task = sources.json()['items'][0]['author_backfills'][0]
+        self.assertEqual({'sender_id': '7', 'cursor': 36, 'until_id': 35},
+                         {key: task[key] for key in ('sender_id', 'cursor', 'until_id')})
+        body = {'chat_id': '-1001', 'owner': str(self.owner), 'sender_id': '7',
+                'previous_cursor': 36, 'cursor': 30, 'complete': False}
+        self.assertEqual(200, (await self.client.put('/internal/telegram/author-backfill', json=body)).status_code)
+        self.assertEqual(409, (await self.client.put('/internal/telegram/author-backfill', json=body)).status_code)
+        invalid = body | {'previous_cursor': 30, 'cursor': 31}
+        self.assertEqual(422, (await self.client.put('/internal/telegram/author-backfill', json=invalid)).status_code)
+        self.assertEqual(0, await self.pool.fetchval('SELECT last_message_id FROM v2_source_checkpoints WHERE source_id=$1', self.source_id))
+        self.assertEqual(30, await self.pool.fetchval(
+            'SELECT backfill_cursor FROM v2_source_experts WHERE source_id=$1 AND expert_id=$2', self.source_id, self.expert_id))
+
     async def test_untrusted_sender_and_service_token_rejected(self):
         body = self.event()
         body["sender_id"] = "8"

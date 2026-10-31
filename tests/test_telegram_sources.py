@@ -52,8 +52,11 @@ class TelegramSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('/members',received[0]['path'])
         self.assertEqual({'chat_id':'-1001','q':'普通','cursor':'50'},received[0]['body'])
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_audit_log'))
+        await self.pool.execute("UPDATE v2_source_checkpoints SET last_message_id=150 WHERE source_id=$1",self.source_id)
         added=await self.client.post(f'/api/v1/admin/sources/{self.source_id}/experts',json={'sender_id':'88','nickname':'普通专家'})
         self.assertEqual(201,added.status_code,added.text)
+        mapping=await self.pool.fetchrow('SELECT backfill_cursor,backfill_until_id,backfill_completed_at FROM v2_source_experts WHERE source_id=$1 AND expert_id=$2',self.source_id,uuid.UUID(added.json()['id']))
+        self.assertEqual((151,150,None),(mapping['backfill_cursor'],mapping['backfill_until_id'],mapping['backfill_completed_at']))
         self.client.cookies.clear()
         self.client.headers['Authorization']='Bearer test-collector-token'
         event=legacy.TelegramApiTests.event(self,version='ordinary-member')

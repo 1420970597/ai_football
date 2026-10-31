@@ -62,6 +62,9 @@ const state = {
   retryTimer: null,
   plans: [],
   mediaUrls: [],
+  messagePreviewUrls: [],
+  messagePreviewObserver: null,
+  messagePreviewSequence: 0,
   accountBound: false,
   accountSequence: 0,
   orders: [],
@@ -509,6 +512,7 @@ async function loadMessages(append = false) {
   const expertId = $("#message-expert").value;
   const target = $("#messages-state");
   if (!expertId && state.messageContext !== "admin") {
+    clearMessagePreviews();
     stateBox(target, {
       title: "选择一位专家",
       description:
@@ -539,9 +543,10 @@ async function loadMessages(append = false) {
     $("#messages-list").innerHTML = state.messages
       .map(
         (m) =>
-          `<article class="message-card"><div class="message-meta"><strong>${esc(m.display_nickname)}</strong><span>${stamp(m.posted_at)}</span><span class="badge">${esc(analysisState(m.analysis_state || m.state))}</span>${m.deleted_at ? '<span class="badge">原消息已删除</span>' : ""}${m.edited_at ? "<span>已编辑 · 版本 " + esc(m.revision) + "</span>" : ""}</div><div class="message-preview">${esc(m.raw_text || "仅图片消息")}</div><div class="muted">${(m.media_objects || []).length} 张图片 ${m.media_state === "pending" ? "· 媒体待上传" : ""}</div><button class="text-link" data-message="${esc(m.id)}" data-context="${state.messageContext}">阅读原文、模型输出与对应买入</button></article>`,
+          `<article class="message-card"><div class="message-meta"><strong>${esc(m.display_nickname)}</strong><span>${stamp(m.posted_at)}</span><span class="badge">${esc(analysisState(m.analysis_state || m.state))}</span>${m.deleted_at ? '<span class="badge">原消息已删除</span>' : ""}${m.edited_at ? "<span>已编辑 · 版本 " + esc(m.revision) + "</span>" : ""}</div><div class="message-preview">${esc(m.raw_text || "仅图片消息")}</div>${(m.media_objects || []).length ? `<div class="muted">${m.media_objects.length} 张图片 ${m.media_state === "pending" ? "· 媒体待上传" : ""}</div><div class="message-media-preview" data-preview-message="${esc(m.id)}" data-context="${state.messageContext}"></div>` : ""}<button class="text-link" data-message="${esc(m.id)}" data-context="${state.messageContext}">阅读原文、模型输出与对应买入</button></article>`,
       )
       .join("");
+    loadMessagePreviews(state.messages, state.messageContext);
     $("#messages-more").hidden = !data.next_cursor;
     if (!state.messages.length)
       stateBox(target, {
@@ -550,6 +555,71 @@ async function loadMessages(append = false) {
       });
   } catch (error) {
     displayError(target, error);
+  }
+}
+function clearMessagePreviews() {
+  state.messagePreviewSequence++;
+  state.messagePreviewObserver?.disconnect();
+  state.messagePreviewObserver = null;
+  state.messagePreviewUrls.forEach(URL.revokeObjectURL);
+  state.messagePreviewUrls = [];
+}
+function loadMessagePreviews(messages, context) {
+  clearMessagePreviews();
+  const sequence = state.messagePreviewSequence;
+  const containers = $$('[data-preview-message]');
+  let budget = 12;
+  const load = async (container) => {
+    const message = messages.find((item) => item.id === container.dataset.previewMessage);
+    const media = message?.media_objects?.[0];
+    if (!message || !media || budget <= 0) return;
+    budget--;
+    const root = `/api/v1/${context === 'admin' ? 'admin/telegram' : 'public'}/messages/${encodeURIComponent(message.id)}/media/`;
+    const publicRoot = `/api/v1/public/messages/${encodeURIComponent(message.id)}/media/`;
+    const url = media.url || `${root}0`;
+    if (!url.startsWith(root) && !(context === 'admin' && url.startsWith(publicRoot))) return;
+    try {
+      const response = await fetch(url, {
+        credentials: 'same-origin',
+        headers: { 'X-Session-Context': context },
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!response.ok) throw new Error('media unavailable');
+      const type = response.headers.get('Content-Type')?.split(';')[0] || '';
+      if (!/^image\/(png|jpeg|webp|gif)$/.test(type)) throw new Error('unsupported media');
+      const blob = await response.blob();
+      if (blob.size > 6 * 1024 * 1024) throw new Error('media too large');
+      if (sequence !== state.messagePreviewSequence) return;
+      const objectUrl = URL.createObjectURL(blob);
+      state.messagePreviewUrls.push(objectUrl);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'message-thumbnail';
+      button.dataset.message = message.id;
+      button.dataset.context = context;
+      button.title = '查看原消息与完整图片';
+      const image = document.createElement('img');
+      image.src = objectUrl;
+      image.alt = 'Telegram 原文图片预览';
+      button.append(image);
+      container.replaceChildren(button);
+    } catch {
+      if (sequence === state.messagePreviewSequence)
+        container.textContent = '图片暂不可预览';
+    }
+  };
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        observer.unobserve(entry.target);
+        void load(entry.target);
+      }
+    }, { rootMargin: '160px 0px' });
+    state.messagePreviewObserver = observer;
+    containers.forEach((container) => state.messagePreviewObserver.observe(container));
+  } else {
+    containers.slice(0, 12).forEach((container) => void load(container));
   }
 }
 function analysisState(value) {
@@ -1010,7 +1080,12 @@ async function loadAccount() {
     $("#account-verification").innerHTML = data.account
       ? `<p>${esc(data.account.account_label)} · 最近校验 ${stamp(data.account.last_verified_at)}</p><p>可用余额 ${data.account.available_balance === null || data.account.available_balance === undefined ? "尚未核验" : decimal(data.account.available_balance)} · 余额时间 ${stamp(data.account.balance_observed_at)}</p>${(data.tasks || []).map((task) => `<p class="form-note">${esc({ verify: "账户校验", refresh: "账户刷新" }[task.kind] || task.kind)} · ${esc({ queued: "已排队", running: "校验中", succeeded: "校验成功", failed: "校验失败", unknown: "结果未知", rejected: "授权被拒绝" }[task.state] || task.state)}${task.last_error ? " · " + esc(task.last_error) : ""}</p>`).join("")}`
       : '<p class="muted">尚未绑定本人乐鱼账户。</p>';
-    $("#verify-account").disabled = !data.account;
+    $("#verify-account").disabled = !data.account ||
+      (['rejected', 'unknown'].includes(data.account.renewal_state) && !data.account.reverification_available) ||
+      (data.account.health_state === 'rejected' && !data.account.reverification_available);
+    $("#verify-account").textContent = data.account?.reverification_available
+      ? '重新校验本人账户'
+      : '排队无资金校验';
     const b = data.betting || {};
     $("#betting-status").textContent =
       b.auto_enabled && !b.emergency_stopped

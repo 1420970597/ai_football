@@ -711,6 +711,28 @@ h3 {
   border-bottom: 1px solid var(--line);
   padding: 15px;
 }
+.message-media-preview {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 10px;
+  min-height: 0;
+}
+.message-thumbnail {
+  display: block;
+  width: 160px;
+  height: 112px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #f3f4f2;
+  cursor: pointer;
+}
+.message-thumbnail img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .signal-meta,
 .message-meta {
   display: flex;

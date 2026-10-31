@@ -302,9 +302,15 @@ async def add_source_expert(source_id: uuid.UUID, body: SourceExpertInput, reque
                 "ON CONFLICT(platform_sender_id) DO UPDATE SET display_nickname=EXCLUDED.display_nickname,updated_at=now() "
                 "RETURNING id", uuid.uuid4(), body.sender_id.strip(), body.nickname.strip(),
             )
+            checkpoint = await conn.fetchval(
+                "SELECT last_message_id FROM v2_source_checkpoints WHERE source_id=$1", source_id)
+            upper_id = int(checkpoint or 0)
             await conn.execute(
-                "INSERT INTO v2_source_experts(source_id,expert_id,enabled) VALUES($1,$2,TRUE) "
-                "ON CONFLICT(source_id,expert_id) DO UPDATE SET enabled=TRUE", source_id, expert_id,
+                "INSERT INTO v2_source_experts(source_id,expert_id,enabled,backfill_since,backfill_cursor,backfill_until_id,backfill_completed_at) "
+                "VALUES($1,$2,TRUE,now()-interval '7 days',$3::bigint,$4::bigint,CASE WHEN $4::bigint=0 THEN now() ELSE NULL END) "
+                "ON CONFLICT(source_id,expert_id) DO UPDATE SET enabled=TRUE,backfill_since=now()-interval '7 days',"
+                "backfill_cursor=EXCLUDED.backfill_cursor,backfill_until_id=EXCLUDED.backfill_until_id,"
+                "backfill_completed_at=EXCLUDED.backfill_completed_at", source_id, expert_id, upper_id + 1, upper_id,
             )
             await audit(conn, admin["id"], "admin", "telegram_expert_trusted", "expert", str(expert_id), details={
                 "source_id": str(source_id), "sender_id": body.sender_id, "trust_basis": "manual", "telegram_admin_verified": False,

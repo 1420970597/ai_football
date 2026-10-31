@@ -44,6 +44,13 @@ class AdvanceInput(ClaimInput):
     previous_message_id: int = Field(ge=0)
 
 
+class AuthorBackfillInput(ClaimInput):
+    sender_id: str = Field(pattern=r'^[1-9][0-9]{0,18}$')
+    previous_cursor: int = Field(ge=0)
+    cursor: int = Field(ge=0)
+    complete: bool = False
+
+
 class ObserveInput(ClaimInput):
     reconciliation_protocol: Literal['claim-ack-v1']
     limit: int = Field(default=50, ge=1, le=100)
@@ -197,11 +204,22 @@ async def collector_sources(request: Request):
     authorized(request)
     rows = await database.current_pool().fetch(
         "SELECT s.id,s.platform_chat_id AS chat_id,s.display_name,s.allow_media,"
-        "COALESCE(array_agg(e.platform_sender_id) FILTER (WHERE se.enabled AND e.enabled),'{}') AS trusted_sender_ids "
+        "COALESCE(array_agg(e.platform_sender_id) FILTER (WHERE se.enabled AND e.enabled),'{}') AS trusted_sender_ids,"
+        "COALESCE(jsonb_agg(jsonb_build_object('sender_id',e.platform_sender_id,'cursor',se.backfill_cursor,"
+        "'until_id',se.backfill_until_id,'since',se.backfill_since) ORDER BY se.added_at,e.id) "
+        "FILTER (WHERE se.enabled AND e.enabled AND se.backfill_completed_at IS NULL "
+        "AND se.backfill_since IS NOT NULL AND se.backfill_cursor>0 "
+        "AND e.platform_sender_id ~ '^[1-9][0-9]{0,18}$'),'[]'::jsonb) AS author_backfills "
         "FROM v2_expert_sources s LEFT JOIN v2_source_experts se ON se.source_id=s.id "
         "LEFT JOIN v2_experts e ON e.id=se.expert_id WHERE s.enabled GROUP BY s.id ORDER BY s.id"
     )
-    return {"items": [dict(row) for row in rows]}
+    items = []
+    for row in rows:
+        item = dict(row)
+        if isinstance(item['author_backfills'], str):
+            item['author_backfills'] = json.loads(item['author_backfills'])
+        items.append(item)
+    return {"items": items}
 
 
 @router.post("/internal/telegram/checkpoints/claim")
@@ -237,6 +255,33 @@ async def advance_checkpoint(body: AdvanceInput, request: Request):
                 "lease_until=now()+interval '90 seconds' WHERE source_id=$1", source["id"], body.last_message_id,
             )
     return {"last_message_id": body.last_message_id}
+
+
+@router.put('/internal/telegram/author-backfill')
+async def advance_author_backfill(body: AuthorBackfillInput, request: Request):
+    authorized(request)
+    if body.cursor > body.previous_cursor or (body.cursor == body.previous_cursor and not body.complete):
+        raise HTTPException(422, 'author backfill cursor must move backwards')
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            source = await source_for(conn, body.chat_id)
+            await check_lease(conn, source['id'], body.owner)
+            mapping = await conn.fetchrow(
+                "SELECT se.backfill_cursor,se.backfill_until_id FROM v2_source_experts se "
+                "JOIN v2_experts e ON e.id=se.expert_id WHERE se.source_id=$1 AND e.platform_sender_id=$2 "
+                "AND se.enabled AND e.enabled FOR UPDATE OF se,e", source['id'], body.sender_id)
+            if not mapping:
+                raise HTTPException(409, 'trusted author mapping is no longer active')
+            if mapping['backfill_cursor'] != body.previous_cursor:
+                raise HTTPException(409, 'author backfill cursor has changed')
+            if body.cursor > mapping['backfill_until_id'] + 1:
+                raise HTTPException(422, 'author backfill cursor exceeds its fixed upper bound')
+            await conn.execute(
+                "UPDATE v2_source_experts se SET backfill_cursor=$3,"
+                "backfill_completed_at=CASE WHEN $4 THEN COALESCE(backfill_completed_at,now()) ELSE NULL END "
+                "FROM v2_experts e WHERE se.source_id=$1 AND se.expert_id=e.id AND e.platform_sender_id=$2",
+                source['id'], body.sender_id, body.cursor, body.complete)
+    return {'cursor': body.cursor, 'complete': body.complete}
 
 
 async def withdraw(conn, source_id, platform_ids: list[int], reason: str):

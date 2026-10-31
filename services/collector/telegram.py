@@ -37,7 +37,7 @@ MAX_MESSAGE_MEDIA_BYTES = 24 * 1024 * 1024
 MAX_MEDIA_COUNT = 10
 MAX_IMAGE_PIXELS = 40_000_000
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-MESSAGE_MEDIA_PREFIX = "telegram/messages"
+MESSAGE_MEDIA_PREFIX = "v2/telegram/messages"
 MESSAGE_MEDIA_RETENTION = "expert_message_evidence"
 DIRECTORY_REFRESH_SECONDS = 300
 SYNC_HISTORY_SLICE_SECONDS = 2
@@ -45,6 +45,7 @@ LIVE_CHECKPOINT_CACHE_SECONDS = 30
 LIVE_MEDIA_MAX_TASKS = 32
 LIVE_MEDIA_CONCURRENCY = 2
 SYNC_HISTORY_MAX_MESSAGES = 25
+AUTHOR_BACKFILL_PAGE_SIZE = 10
 SOURCE_HISTORY_SECONDS = 25
 RECONCILE_BATCH_SECONDS = 10
 RECONCILE_RPC_SECONDS = 3
@@ -446,6 +447,8 @@ class TelegramCollector:
                     async with asyncio.timeout(SOURCE_HISTORY_SECONDS):
                         result[chat_id] = await self._sync_source(chat_id, source)
                     if result[chat_id]["state"] != "backoff":
+                        async with asyncio.timeout(SOURCE_HISTORY_SECONDS):
+                            result[chat_id]['author_backfill'] = await self._sync_author_backfill(chat_id, source)
                         reconciliation = await self._reconcile_known(chat_id, source)
                         result[chat_id]['reconciliation'] = reconciliation
                         if reconciliation['state'] == 'deferred':
@@ -589,6 +592,51 @@ class TelegramCollector:
             if last != original:
                 await self.backend.advance(chat_id, self.owner, last, original)
             return {"state": "catching_up" if catching_up else "caught_up", "last_message_id": last, "observed": count}
+
+    async def _sync_author_backfill(self, chat_id: str, source: dict) -> dict:
+        tasks = source.get('author_backfills') or []
+        if not tasks:
+            return {'state': 'idle', 'processed': 0}
+        task = tasks[0]
+        sender_id = str(task['sender_id'])
+        previous = int(task['cursor'])
+        until_id = int(task['until_id'])
+        since = _utc(datetime.fromisoformat(str(task['since']).replace('Z', '+00:00')))
+        if until_id <= 0:
+            await self.backend.advance_author_backfill(chat_id, self.owner, sender_id, previous, previous, True)
+            return {'state': 'complete', 'sender_id': sender_id, 'processed': 0}
+        lock = self.locks.setdefault(chat_id, asyncio.Lock())
+        async with lock:
+            await self._checkpoint(chat_id)
+            entity = await self._entity(chat_id)
+            messages = []
+            async for message in self.client.iter_messages(
+                entity, from_user=int(sender_id), max_id=previous,
+                limit=AUTHOR_BACKFILL_PAGE_SIZE + 1,
+            ):
+                if int(message.id) <= until_id:
+                    messages.append(message)
+                if len(messages) >= AUTHOR_BACKFILL_PAGE_SIZE + 1:
+                    break
+            page = messages[:AUTHOR_BACKFILL_PAGE_SIZE]
+            complete = len(messages) <= AUTHOR_BACKFILL_PAGE_SIZE
+            last_cursor = previous
+            processed = 0
+            for message in page:
+                if _utc(message.date) < since:
+                    complete = True
+                    break
+                result = await self._process_message(chat_id, source, message, entity)
+                if result.get('state') == 'ignored_empty':
+                    pass
+                elif result.get('persisted') is not True:
+                    raise RuntimeError('author backfill event was not durably committed')
+                last_cursor = int(message.id)
+                processed += 1
+            await self.backend.advance_author_backfill(
+                chat_id, self.owner, sender_id, last_cursor, previous, complete)
+        return {'state': 'complete' if complete else 'catching_up', 'sender_id': sender_id, 'processed': processed,
+                'cursor': last_cursor, 'until_id': until_id}
 
     async def _reconcile_known(self, chat_id: str, source: dict):
         # Claims survive process loss remotely. Never acknowledge an event

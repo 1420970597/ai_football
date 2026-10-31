@@ -108,12 +108,16 @@ def service_auth(request):
 @router.get("/leyu")
 async def get_leyu_account(request: Request):
     user = await require_user(request)
-    row = await database.current_pool().fetchrow("SELECT id,account_label,health_state,last_verified_at,updated_at,available_balance,balance_observed_at,config_revision,binding_revision,renewal_state "
-                                                "FROM v2_leyu_accounts WHERE user_id=$1 AND health_state<>'disabled'", user["id"])
+    pool = database.current_pool()
+    row = await pool.fetchrow("SELECT id,account_label,health_state,last_verified_at,updated_at,available_balance,balance_observed_at,config_revision,binding_revision,renewal_state "
+                              "FROM v2_leyu_accounts WHERE user_id=$1 AND health_state<>'disabled'", user["id"])
     policy = await database.current_pool().fetchrow("SELECT auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,daily_timezone,emergency_stopped,revision "
                                                    "FROM v2_user_bet_settings WHERE user_id=$1", user["id"])
     tasks = await database.current_pool().fetch("SELECT id,kind,state,last_error,updated_at FROM v2_account_jobs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 5", user["id"])
-    return {"account": dict(row) if row else None, "betting": dict(policy) if policy else None, "tasks": [dict(item) for item in tasks],
+    account = dict(row) if row else None
+    if row:
+        account['reverification_available'] = await jobs.reverification_available(pool, row)
+    return {"account": account, "betting": dict(policy) if policy else None, "tasks": [dict(item) for item in tasks],
             "execution_capability": {"protocol_adapter": True, "live_enabled": orders.live_enabled(request.app.state.settings), "prematch": "unsupported"}}
 
 
@@ -179,8 +183,18 @@ async def verify_account(request: Request):
             account = await conn.fetchrow("SELECT * FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE", user["id"])
             if not account or account["health_state"] == "disabled":
                 raise HTTPException(404, "尚未绑定本人账户")
-            if account["renewal_state"] in {"unknown", "rejected"}:
-                raise HTTPException(409, "上次登录未知或被拒绝，核对后需重新绑定以授权")
+            recover_rejected = account['health_state'] == 'rejected' or account['renewal_state'] in {'unknown', 'rejected'}
+            if recover_rejected:
+                if account['renewal_state'] == 'unknown' or not await jobs.reverification_available(conn, account):
+                    raise HTTPException(409, "账户登录状态未知或被拒绝；只有更新登录协议配置后才能重新校验")
+                await disable_policy(conn, user['id'], 'protocol_configuration_reverification')
+                await conn.execute(
+                    "UPDATE v2_leyu_accounts SET health_state='unverified',encrypted_session=NULL,last_verified_at=NULL,"
+                    "available_balance=NULL,balance_observed_at=NULL,renewal_state='ready',renewal_attempt=NULL,"
+                    "renewal_lease_until=NULL,renewal_retry_after=NULL,updated_at=now() WHERE id=$1", account['id'])
+                await audit(conn, user['id'], 'user', 'leyu_protocol_reverification_queued', 'leyu_account',
+                            str(account['id']), details={'protocol_configuration_updated': True,
+                                                         'binding_revision': account['binding_revision']})
             task = await jobs.enqueue(conn, account, "refresh" if account["health_state"] == "healthy" else "verify")
     return {"task_id": str(task["id"]), "state": task["state"]}
 
@@ -395,11 +409,15 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
                 planned=job['details'].get('orders',{})
                 if any(str(identity) not in planned for identity in body.scanned_orders) or any(receipt.order_no not in planned.values() for receipt in body.receipts):
                     raise HTTPException(422,'查单回执超出此本人任务的订单范围')
-                await conn.execute("UPDATE v2_leyu_accounts SET health_state='healthy',last_verified_at=now(),available_balance=$2,balance_observed_at=$3,updated_at=now() WHERE id=$1",account['id'],body.balance,body.observed_at)
+                await conn.execute("UPDATE v2_leyu_accounts SET health_state='healthy',renewal_state='ready',renewal_attempt=NULL,"
+                                   "renewal_lease_until=NULL,renewal_retry_after=NULL,last_verified_at=now(),available_balance=$2,"
+                                   "balance_observed_at=$3,updated_at=now() WHERE id=$1",account['id'],body.balance,body.observed_at)
                 await jobs.reconcile_receipts(conn,account,[receipt.model_dump(mode='json') for receipt in body.receipts])
                 await conn.execute('UPDATE v2_bet_orders SET updated_at=now() WHERE id=ANY($1::uuid[]) AND user_id=$2',body.scanned_orders,account['user_id'])
             elif body.status in {'unknown','rejected'}:
-                await conn.execute("UPDATE v2_leyu_accounts SET health_state=$2,updated_at=now() WHERE id=$1",account['id'],'rejected' if body.status=='rejected' else 'renewal_required')
+                await conn.execute("UPDATE v2_leyu_accounts SET health_state=$2,renewal_state=$3,renewal_attempt=NULL,"
+                                   "renewal_lease_until=NULL,updated_at=now() WHERE id=$1",account['id'],
+                                   'rejected' if body.status=='rejected' else 'renewal_required',body.status)
             await conn.execute("UPDATE v2_account_jobs SET state=$2,last_error=$3,lease_until=NULL,details=$4,updated_at=now() WHERE id=$1",job_id,'succeeded' if body.status=='success' else body.status,body.category,{'receipts':len(body.receipts),'finish_sha256':finish_sha256})
             await audit(conn,None,'executor','account_job_finished','leyu_account',str(account['id']),details={'kind':job['kind'],'status':body.status,'category':body.category})
     return {'status':body.status}

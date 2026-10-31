@@ -816,6 +816,11 @@ await test("完整原文、两条系统买入、工具证据与图片", async ()
   await page.locator('.section-tabs [data-page="messages"]').click();
   await page.locator("#message-expert").selectOption(id);
   await page.waitForSelector(".message-card");
+  await page.waitForSelector(".message-thumbnail img");
+  assert.equal(await page.locator(".message-thumbnail img").evaluate((image) => image.naturalWidth > 0), true);
+  await page.locator(".message-thumbnail").first().click();
+  await page.waitForSelector(".media-gallery img");
+  await page.keyboard.press("Escape");
   assert.match(await page.locator("#messages-list").innerText(), /未解决/);
   assert.equal(await page.locator("#messages-more").isVisible(), true);
   await page.locator("#messages-more").click();

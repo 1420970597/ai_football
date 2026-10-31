@@ -18,7 +18,7 @@ COLLECTOR_ROUTES = {
     'POST': (r'/internal/collector/(fixtures|results|renewal/claim)', rf'/internal/collector/renewal/{UUID}/finish',
              r'/internal/collector/results/(claim|observations|finish)',
              r'/internal/telegram/(checkpoints/claim|events|observed|observed/ack|media/orphans|media/orphans/ack)'),
-    'PUT': (r'/internal/collector/renewal/config', r'/internal/telegram/(directory|checkpoints|session)'),
+    'PUT': (r'/internal/collector/renewal/config', r'/internal/telegram/(directory|checkpoints|session|author-backfill)'),
 }
 EXECUTOR_ROUTES = {
     'POST': (r'/internal/executor/(claim|dispatch)', rf'/internal/executor/jobs/{UUID}/(finish|renewal/claim|renewal/finish)',

@@ -293,7 +293,7 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
                 event = next(iter(self.backend.events.values()))
                 self.assertEqual('failed', event['media_state'])
                 self.assertEqual(1, len(event['media_objects']))
-                self.assertTrue(event['media_objects'][0]['object_key'].startswith('telegram/messages/-1001/1/'))
+                self.assertTrue(event['media_objects'][0]['object_key'].startswith('v2/telegram/messages/-1001/1/'))
             finally:
                 release.set()
         await asyncio.sleep(.02)

@@ -2,6 +2,7 @@ import asyncio
 import copy
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from io import BytesIO
 from types import SimpleNamespace
 import unittest
@@ -43,6 +44,7 @@ class Backend:
         self.events = {}
         self.calls = []
         self.checkpoints = []
+        self.backfill_updates = []
         self.source_items = [{"chat_id": "-1001", "trusted_sender_ids": ["7"], "allow_media": True}]
         self.fail_chat = None
         self.save_fails = False
@@ -62,6 +64,15 @@ class Backend:
         if self.positions.get(chat_id, 0) != previous:
             raise RuntimeError("checkpoint mismatch")
         self.positions[chat_id] = last_message_id
+
+    async def advance_author_backfill(self, chat_id, owner, sender_id, cursor, previous, complete):
+        self.backfill_updates.append((chat_id, sender_id, previous, cursor, complete))
+        task = next(item for item in self.source_items[0]['author_backfills'] if item['sender_id'] == sender_id)
+        if task['cursor'] != previous:
+            raise RuntimeError('author backfill cursor mismatch')
+        task['cursor'] = cursor
+        if complete:
+            self.source_items[0]['author_backfills'].remove(task)
 
     async def event(self, body):
         if body["chat_id"] == self.fail_chat:
@@ -148,9 +159,17 @@ class Client:
             return SimpleNamespace(full_chat=SimpleNamespace(participants=ChatParticipants(request.chat_id, admins, 1)), users=users)
         raise AssertionError("unexpected fake RPC")
 
-    async def iter_messages(self, entity, min_id, reverse, limit):
+    async def iter_messages(self, entity, min_id=0, reverse=False, limit=None, **filters):
         self.query_limits.append(limit)
-        for message in sorted(self.messages.get(str(utils.get_peer_id(entity)), []), key=lambda item: item.id):
+        messages = self.messages.get(str(utils.get_peer_id(entity)), [])
+        if 'from_user' in filters:
+            messages = [item for item in messages if item.sender_id == filters['from_user']]
+        if 'max_id' in filters:
+            messages = [item for item in messages if item.id < filters['max_id']]
+        if min_id:
+            messages = [item for item in messages if item.id > min_id]
+        messages = sorted(messages, key=lambda item: item.id, reverse=not reverse)
+        for message in messages[:limit] if limit is not None else messages:
             if message.id > min_id:
                 yield message
 
@@ -226,6 +245,33 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         await self.collector.sync_once()
         self.assertEqual(1, self.client.connect_count)
         self.assertEqual(1, len(self.created))
+
+    async def test_trusted_author_backfill_is_durable_and_does_not_rewind_group_checkpoint(self):
+        self.backend.positions['-1001'] = 4
+        self.backend.source_items[0]['author_backfills'] = [{
+            'sender_id': '7', 'cursor': 4, 'until_id': 3,
+            'since': '2026-10-25T00:00:00+00:00',
+        }]
+        self.client.messages['-1001'] = [Message(index) for index in range(1, 4)]
+        result = await self.collector.sync_once()
+        self.assertEqual('caught_up', result['sources']['-1001']['state'])
+        self.assertEqual('complete', result['sources']['-1001']['author_backfill']['state'])
+        self.assertEqual(4, self.backend.positions['-1001'])
+        self.assertEqual(3, len(self.backend.events))
+        self.assertEqual([('-1001', '7', 4, 1, True)], self.backend.backfill_updates)
+
+    async def test_author_backfill_does_not_advance_when_event_persistence_fails(self):
+        self.backend.positions['-1001'] = 4
+        self.backend.fail_chat = '-1001'
+        self.backend.source_items[0]['author_backfills'] = [{
+            'sender_id': '7', 'cursor': 4, 'until_id': 3,
+            'since': '2026-10-25T00:00:00+00:00',
+        }]
+        self.client.messages['-1001'] = [Message(3)]
+        result = await self.collector.sync_once()
+        self.assertEqual('unavailable', result['sources']['-1001']['state'])
+        self.assertEqual([], self.backend.backfill_updates)
+        self.assertEqual(4, self.backend.source_items[0]['author_backfills'][0]['cursor'])
 
     async def test_more_than_one_thousand_history_messages_resume_without_truncation(self):
         self.client.messages['-1001'] = [Message(index) for index in range(1, 1006)]
@@ -528,6 +574,29 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.client.download_chunks = [b'\x89PNG\r\n\x1a\nrest']
         with self.assertRaises(ValueError):
             await self.collector._store_media('-1001', Message(1, media=True, mime='image/png'))
+
+    async def test_new_message_media_uses_v2_storage_prefix(self):
+        image = BytesIO()
+        Image.new('RGB', (8, 8), 'blue').save(image, format='PNG')
+        self.collector.client = self.client
+        self.client.download_chunks = [image.getvalue()]
+        uploads = []
+
+        class S3:
+            def put_object(inner, **kwargs):
+                uploads.append(kwargs)
+
+            def close(inner):
+                pass
+
+        env = {'S3_BUCKET':'test-private','S3_ENDPOINT_URL':'https://invalid.example',
+               'S3_ACCESS_KEY':'test-only','S3_SECRET_KEY':'test-only'}
+        with patch.dict(os.environ, env), patch('collector.telegram.boto3.client', return_value=S3()):
+            record = await self.collector._store_media('-1001', Message(3, media=True, mime='image/png'))
+
+        expected_prefix = 'v2/telegram/messages/-1001/3/'
+        self.assertTrue(record['object_key'].startswith(expected_prefix))
+        self.assertEqual(record['object_key'], uploads[0]['Key'])
 
     async def test_control_authentication_and_password_never_persisted(self):
         await self.collector.start_control_server(token="test-internal-token", host="127.0.0.1", port=0)

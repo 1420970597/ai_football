@@ -186,6 +186,12 @@ class RemoteTransportTests(unittest.TestCase):
             self.assertEqual(403,self.request('GET',path))
         self.assertEqual(403,self.request('POST','/internal/collector/results/rebuild'))
         self.assertEqual(403,self.request('POST','/internal/collector/results/observations?mid=123'))
+    def test_author_backfill_route_is_put_and_collector_only(self):
+        path='/internal/telegram/author-backfill'
+        self.assertEqual(200,self.request('PUT',path,body=b'{}'))
+        self.assertEqual(403,self.request('PUT',path,token='executor'))
+        self.assertEqual(403,self.request('POST',path))
+        self.assertEqual(403,self.request('PUT',path+'?arbitrary=true'))
     def test_oversized_body_and_transfer_encoding_rejected_before_upstream(self):
         self.assertEqual(413,self.request('POST','/internal/collector/fixtures',headers={'Content-Length':str(MAX_BODY+1)}))
         self.assertEqual(400,self.request('POST','/internal/collector/fixtures',headers={'Transfer-Encoding':'chunked'}))
@@ -230,6 +236,7 @@ class RealWorkerContractTests(unittest.IsolatedAsyncioTestCase):
             backend=TelegramBackend(client,root+'/telegram')
             await backend.sources();await backend.directory({});await backend.checkpoint('1','owner')
             await backend.advance('1','owner',2,1);await backend.event({});await backend.pending()
+            await backend.advance_author_backfill('1','owner','7',1,2,False)
             await backend.observed('1','owner');await backend.acknowledge_observed('1','owner',{})
             await backend.save_session('synthetic',{});await backend.media_orphans('owner')
             await backend.acknowledge_media_orphans('owner',[])

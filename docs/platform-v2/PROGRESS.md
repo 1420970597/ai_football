@@ -1,10 +1,33 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-30 05:23 UTC。当前阶段：本人乐鱼账号绑定门禁已修复，平台二次验证入口和流程已移除；Docker 后端、浏览器 Mock、真实 API 回归及部署后桌面/手机真实点击均通过；E116 已部署到本机 Docker 开发候选并健康运行，系统仍非正式生产发布。
+更新时间：2026-10-31 06:11 UTC。当前目标：修复 Telegram 监控与群聊差异、专家原文图片预览和已有乐鱼账户在全局登录配置更新后的无资金复核入口，并观察远端 Telegram 采集至少10分钟。当前阶段为实现完成、回归与只读迁移门禁通过；修正 Telegram 新媒体的 S3 前缀后正在重跑冻结回归，数据库迁移、候选发布与worker切换仍未执行。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
 ## 当前范围与状态
+
+### E117 — Telegram 发言补扫、原文图片预览与既有乐鱼配置复核（2026-10-31，最终回归重跑中）
+
+- 目标：在不回退群组检查点、不重复模型审核/交易的前提下找回已监控作者近期漏采原文；在发言列表直接预览授权图片；全局乐鱼协议配置更新后，允许用户为被明确拒绝的旧账户发起一次受控无资金复核；部署后观察真实 Telegram 接收至少10分钟。
+- 责任目录：`services/api/`、`services/collector/`、`web/app/`、`services/api/migrations/`、`tests/`。前置依赖：现存远端 Telegram worker、授权群组会话、S3只读图片链路、项目现有账户专属执行器。资金下单保持关闭。
+- 运行只读证据（Docker）：API/Web为`e116-5206063`且healthy；Telegram控制端HTTP200、connected/authorized=true、6个来源。当前来源状态含2个`catching_up`、4个`reconciliation_deferred`，状态`degraded=true`；不等于消息轮询停止。数据库6个群组租约均有效；近一小时三组分别入库24、26、74条消息。另三组当前目录状态是`member_enumeration_restricted`，其中至少一组近小时仍有26条消息，故成员枚举失败与消息采集是不同状态。检查点约在04:55–04:59 UTC，最近成功控制同步05:01:55 UTC，采集时未打印原文、群名或凭据。
+- Telegram根因证据：冻结代码`_stage_group`在写事件前将`sender_id`不在`trusted_sender_ids`中的作者直接返回`ignored_author`；主群组检查点随后仍前进。新增普通成员或专家信任映射不会安排从已经越过的群组水位按作者补读，导致用户看到消息但系统永不保存。4个来源的当前reconciliation有界延迟，仍需实时监测是否恢复；首次按`created_at`筛选的表结构探针语句在Docker执行超时退出1，保留失败记录，已改用checkpoint及事件表可用字段完成主要只读核验。
+- 图片预览根因：`/public/experts/{id}/messages`和管理员消息列表已返回有短时授权grant的`media_objects[].url`，详情窗通过带`X-Session-Context`的Blob读取并呈图；列表卡片只渲染文字和图片张数，没有缩略图控件。
+- 既有乐鱼账号根因：受限查询只读到一个当前非disabled账户，状态`health_state=rejected`、`renewal_state=rejected`，最近验证任务`verify/rejected/app_login_rejected`创建于2026-10-30 04:25:47 UTC、更新于04:26:13 UTC；其后乐鱼`leyu_app_host`于19:41:47 UTC及`leyu_app_token`于19:41:42 UTC修改，至本次检查没有新账户任务。用户校验路由对`renewal_state in (unknown,rejected)`一律409拒绝；旧账户私有会话中的`leyu_app_host`也会覆盖当前全局主机配置。全局`leyu_app_token`不作为个人账户令牌复用，保持个人账户与采集账号隔离。
+- 设计决策：为当前启用的作者关系存储单调、持久的最近7日补扫游标和固定群组水位上界；先持久每条消息，再推进作者游标，补扫只读Telegram且复用事件去重/媒体重试；旧消息沿用实时窗口门禁，只有真实新近消息可自动审核，不降低群组检查点。来源轮询遇到成员目录限制仍继续读消息。图片预览复用短时grant、同源Blob和当前user/admin上下文，限每次展示12张、单图6MiB、允许的图片MIME。乐鱼只对最新任务为明确`app_login_rejected`且登录协议配置在拒绝后更新的账户开放用户主动复核；`unknown`和未更新配置的拒绝继续阻断，不把全局采集令牌注入个人账户，复核会清空旧私有会话并关闭自动投注。
+- 实现与验收动作：新增向后兼容增量迁移以及author-backfill内网API/采集消费；点击信任作者触发该作者的7日受限补扫，支持进程重启后继续；发言卡预览授权原图缩略图并可进入完整原文；校验接口在协议版本确实更新后将原凭据排队无资金复核、保留速率限制/审计并清除不适用的旧rejected会话状态。验收包括并发/重启/分页重复、检查点单调、未信任作者不触发LLM、图片上下文越权拒绝及手机/桌面、更新前拒绝/未知拒绝拒绝复核、更新后允许一次并保持auto-betting关闭。
+- 真实监测验收：部署同源API/collector后记录开始结束UTC、每来源检查点和消息/媒体计数、任务失败类别、Telegram会话状态；10分钟内检查点应持续刷新，出现新Telegram消息时其作者消息及媒体需在检查点前持久。若窗口内没有新聊天消息，只能证明采集活跃和检查点前进，不能声称验证了新消息内容一致性；保留该局限。
+- 阶段命令记录：工作树/分支核验`git status --short --branch && git log -4 --oneline --decorate`退出0，工作树干净、分支`fix/TASK-78-hermes-telegram-sync`、HEAD `3773f53`。实际API库只读SQL查询退出0；Telegram控制状态查询退出0。两次只读SQL探针分别因shell引号构造退出2、一个较重分组查询超过远端5秒查询限额退出1；未执行写操作。下一步为编写增量迁移和行为测试，先在临时Docker PostgreSQL验证迁移，再执行定向回归。
+- 实现及首次浏览器验证（2026-10-31 05:22 UTC）：新增023只增量迁移、租约保护的倒序作者游标API及受信作者加入时的7日补扫任务；采集器每来源每轮限10条，事件提交后才CAS推进，主检查点不回退。消息卡以当前角色grant请求授权缩略图，懒加载、限额并能点开完整原文；个人账户主机从当前受保护协议模板读取，旧拒绝账户只有配置更新时间晚于明确登录拒绝时才由本人排队校验，未知结果仍拒绝、自动投注许可关闭。Docker Playwright `sh tests/browser/check.sh`退出0，31项通过；新增列表缩略图加载及点击详情断言通过，证据`.runtime/browser-ui-3838338/results.json`。`git diff --check`退出0。尚未完成数据库/业务隔离回归，尚未部署。
+- 首轮完整回归失败及修复（05:30 UTC）：`sh infra/test/run.sh`退出1，999项，3 failures/5 errors，报告`.runtime/test-evidence/3841712/backend-tests.json`。全部错误为作者信任写入中BIGINT `$4`与整数常量推断歧义；修复参数显式BIGINT转换。3项迁移断言未包含023，已更新并增加迁移水位/频道身份/重复应用专项测试。其他失败未见独立业务根因。
+- 针对性隔离回归通过（05:33 UTC）：具名Docker PG网络`ai-football-v2-e117-target-net`和容器`ai-football-v2-e117-target-pg`中运行`test_telegram_collector test_telegram_api test_telegram_sources test_telegram_reconciliation_claims test_migrations test_account_state`，133项、88.264秒、退出0；数据库及网络随命令清理。覆盖失败后游标不前进、作者API租约/CAS、普通成员信任后水位任务、023保留检查点、账户配置更新时间门禁、旧会话清除、本人触发和未知状态阻断。该定向运行后源码未改动。
+- 全量与浏览器回归通过（2026-10-31 05:45 UTC）：冻结源码`sh infra/test/run.sh`退出0，1000项、411.571秒、失败/错误/跳过均为0，证据`.runtime/test-evidence/3869743`；`sh tests/browser/integration-check.sh`退出0，覆盖API及桌面/手机25个场景，合成订单写入调用为0，证据`.runtime/web-integration-3887593`。运行中未修改源码。此前`sh tests/browser/check.sh`31项及定向Docker回归133项亦通过。此时持久库迁移和服务部署仍未执行。
+- 发布/远端部署门禁复核（05:46 UTC）：候选工作流会创建不可变开发预发行并推送六个镜像；候选策略文档要求准确源码tag和全量验证。远端worker runbook要求备份后增量迁移、同源摘要镜像、私有链路/S3检查、零本地及远端worker和租约交接；manifest观察缺项时必须停止。`infra/db/README.md`要求受控Docker内核对现有迁移身份和TLS，备份及pg_restore目录核验后才迁移。尚未创建tag、提交、推送、发布镜像、写远端业务配置或迁移数据库。
+- 迁移前备份与恢复验证（05:56 UTC）：通过现有 Compose `migrate` 容器安全提取受保护迁移连接，再在 Docker PostgreSQL 16 固定摘要镜像中导出全`public` schema结构和全部`public.v2_*`数据；未停服务、未写业务库。备份保存在忽略目录`.runtime/e117-20261031/`，文件0600，SHA-256校验通过；`pg_restore --list`分别有338及61行有效清单。无网络临时 PostgreSQL 磁盘卷完整恢复退出0；恢复库为022、6个来源检查点、10条专家映射、11,898条专家消息。同期线上只读快照为022/6/10/11,910，12条消息差异符合持续采集期间的新写入。恢复中先出现512MiB tmpfs空间不足、仅v2表schema遗漏触发函数、默认public schema冲突三次隔离失败；均保留原备份，改用完整public结构和临时Docker卷后成功。专用恢复容器/卷已移除，远端数据库未改。
+- 数据库权限与传输只读核验（06:03 UTC）：固定Docker API镜像内运行运行角色`plan`和`verify`均退出0，迁移角色未改、46张v2表无`PUBLIC`/旧表越权、运行角色非owner且持久DDL关闭；运行API数据库只读查询证明PostgreSQL 16、非超级用户、无schema CREATE、无v2表所有权。协议为`DATABASE_TRANSPORT=ssh`且目标为既有`storage-tunnel`，隧道容器healthy，因此PostgreSQL会话`pg_stat_ssl=false`是SSH隧道传输，不按TLS传输误判。只读S3探针通过HTTPS/CA桶认证及`v2/`单对象上限列表，返回当前无对象；写和删均未调用。Telegram控制状态HTTP200、connected/authorized、6个来源；4个reconciliation延迟、2个追赶，6个持久来源租约当前有效；状态仍degraded，需切换后继续观测，不将其记为健康。
+- 现有原图与新上传前缀核验（06:07 UTC）：数据库有2,266条专家消息引用媒体；只读S3 `v2/`列表返回空，但从一条现有数据库引用进行HTTPS/CA `HEAD`成功，证明既有原图仍在旧`telegram/messages/`命名空间。collector原常量会把后续补采继续写到该旧命名空间，与远端限定`v2/`前缀冲突。将新上传键改为`v2/telegram/messages/`，旧引用仍按数据库授权读取，不移动或删除历史对象；新增mock上传路径断言，禁止触碰真实桶。
+- 最终链路检查与冻结（06:11 UTC）：发现远端桥未放行新增`PUT author-backfill`，主动停止当轮全套测试（退出137，未作通过证据），补精确collector白名单、executor/错误方法/多余查询拒绝与真实backend调用契约。新增媒体测试首次缺`os`导入退出1，补全导入后Docker禁网专项73项、8.440秒、退出0；规划检查46包/337动作/266有证据项退出0。只读SSH核验远端collector/executor/bridge均为51e20ee同源摘要镜像、每类唯一；私有env0600、socket目录2750及socket0660、执行器实盘false。当前实现准备分阶段提交推送，后续完整回归必须以该新冻结源码重跑。
+- 阶段实际命令与后续：全量Docker `sh infra/test/run.sh`及真实API浏览器`sh tests/browser/integration-check.sh`此前各自退出0（1000项/25场景）；schema/data备份导出、摘要核验、`pg_restore --list`及隔离恢复均退出0；数据库`plan`与`verify`均退出0。期间首次包导入、权限参数、SQL别名等只读探针失败和已修正隔离恢复失败如实保留；没有生产库写入。最新S3前缀实现尚未验证，必须先运行最终完整Docker回归、`git diff --check`与规划检查，再提交推送和候选部署。线上Telegram目前degraded（4个来源reconciliation延迟、2个追赶），切换前后都需记录；数据库迁移仅在候选API/collector均已验证且回退镜像就绪后执行，任何远端观察缺项则停止切换。
 
 ### E116 — 本人乐鱼账号校验门禁与二次身份验证移除（2026-10-30，开发候选运行验证通过）
 

@@ -15,6 +15,7 @@ from .security import decrypt_secret, encrypt_secret
 PROTOCOL_KEYS = frozenset({"leyu_app_host", "leyu_app_signing_config", "leyu_app_discovery_config", "leyu_venue",
                            "leyu_login_proxy_url", "leyu_login_proxy_password_template"})
 SESSION_KEYS = frozenset({"leyu_app_host", "leyu_api_base", "leyu_origin", "leyu_request_id", "leyu_app_token"})
+LOGIN_PROTOCOL_KEYS = PROTOCOL_KEYS
 
 
 def identity_hash(key: bytes, username: str) -> str:
@@ -46,9 +47,25 @@ async def private_config(conn, account, settings) -> dict:
         raise HTTPException(503, "用户账户登录协议模板尚未配置")
     if account["encrypted_session"]:
         document = decode_document(settings.encryption_key, account["encrypted_session"])
-        config.update({key: value for key, value in document.items() if key in SESSION_KEYS})
+        config.update({key: value for key, value in document.items()
+                       if key in SESSION_KEYS and key != "leyu_app_host"})
     config.update(leyu_app_login_name=credentials["username"], leyu_app_login_password=credentials["password"], leyu_app_uuid=credentials["device_uuid"])
     return config
+
+
+async def reverification_available(conn, account) -> bool:
+    job = await conn.fetchrow(
+        "SELECT kind,state,last_error,updated_at FROM v2_account_jobs WHERE account_id=$1 "
+        "ORDER BY created_at DESC,id DESC LIMIT 1", account["id"])
+    if not job or (job['kind'], job['state'], job['last_error']) != ('verify', 'rejected', 'app_login_rejected'):
+        return False
+    settings = await conn.fetch("SELECT setting_key,updated_at FROM v2_admin_settings WHERE setting_key=ANY($1::text[])",
+                                list(LOGIN_PROTOCOL_KEYS))
+    latest_change = max((row['updated_at'] for row in settings), default=None)
+    configured = await conn.fetchval(
+        "SELECT count(*)=2 FROM v2_admin_settings WHERE setting_key=ANY($1::text[])",
+        ['leyu_app_host', 'leyu_app_signing_config'])
+    return bool(configured and latest_change and latest_change > job['updated_at'])
 
 
 def scope(account) -> dict:

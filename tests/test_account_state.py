@@ -166,6 +166,42 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(visible['execution_capability']['live_enabled'])
         self.assertEqual('Asia/Shanghai',visible['betting']['daily_timezone'])
 
+    async def test_rejected_account_uses_updated_login_template_for_user_triggered_no_funds_retry(self):
+        account=await self.bind()
+        stale=encrypt_secret(b'k'*32,json.dumps({'leyu_app_host':'https://old-app.invalid',
+            'leyu_app_token':'account-private-old-token','leyu_request_id':'old-session'}))
+        await self.pool.execute("UPDATE v2_leyu_accounts SET encrypted_session=$2,health_state='rejected',renewal_state='rejected' WHERE id=$1",account['id'],stale)
+        await self.pool.execute("UPDATE v2_admin_settings SET updated_at=now()-interval '1 hour' WHERE setting_key=ANY($1::text[])",
+                                ['leyu_app_host','leyu_app_signing_config'])
+        await self.pool.execute("UPDATE v2_account_jobs SET state='rejected',last_error='app_login_rejected',updated_at=now()-interval '10 minutes' WHERE account_id=$1",account['id'])
+        visible=(await self.api.get('/api/v1/accounts/leyu')).json()
+        self.assertFalse(visible['account']['reverification_available'])
+        self.assertEqual(409,(await self.api.post('/api/v1/accounts/leyu/verify')).status_code)
+
+        for key,value in {'leyu_app_host':'https://new-app.invalid',
+                          'leyu_app_signing_config':'/run/secrets/new-signing.json'}.items():
+            encrypted=encrypt_secret(b'k'*32,value)
+            await self.pool.execute("UPDATE v2_admin_settings SET encrypted_value=$2,updated_at=now() WHERE setting_key=$1",key,encrypted)
+        visible=(await self.api.get('/api/v1/accounts/leyu')).json()
+        self.assertTrue(visible['account']['reverification_available'])
+        queued=await self.api.post('/api/v1/accounts/leyu/verify')
+        self.assertEqual(202,queued.status_code,queued.text)
+        recovered=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',account['id'])
+        self.assertEqual(('unverified','ready',None),(recovered['health_state'],recovered['renewal_state'],recovered['encrypted_session']))
+        policy=await self.pool.fetchrow('SELECT auto_enabled,emergency_stopped FROM v2_user_bet_settings WHERE user_id=$1',self.user['id'])
+        self.assertEqual((False,True),(policy['auto_enabled'],policy['emergency_stopped']))
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        self.assertEqual('https://new-app.invalid',work['config']['leyu_app_host'])
+        self.assertNotIn('leyu_app_token',work['config'])
+
+    async def test_unknown_account_remains_blocked_even_after_protocol_config_update(self):
+        account=await self.bind()
+        await self.pool.execute("UPDATE v2_leyu_accounts SET health_state='renewal_required',renewal_state='unknown' WHERE id=$1",account['id'])
+        await self.pool.execute("UPDATE v2_account_jobs SET state='unknown',last_error='network_timeout',updated_at=now()-interval '1 day' WHERE account_id=$1",account['id'])
+        await self.pool.execute("UPDATE v2_admin_settings SET updated_at=now() WHERE setting_key=ANY($1::text[])",
+                                ['leyu_app_host','leyu_app_signing_config'])
+        self.assertEqual(409,(await self.api.post('/api/v1/accounts/leyu/verify')).status_code)
+
     async def test_private_session_cas_and_renewal_mutex(self):
         account=await self.bind()
         work=(await self.worker_api.post('/internal/executor/claim')).json()
