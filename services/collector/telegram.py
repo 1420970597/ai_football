@@ -680,9 +680,6 @@ class TelegramCollector:
                     reference = {'event_id': item['id'], 'version_key': item['version_key'], 'claim_id': item['claim_id']}
                     ids = item['content']['member_message_ids']
                     members = [by_id[identifier] for identifier in ids if identifier in by_id]
-                    async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                        stage = 'lease_refresh'
-                        await self._checkpoint(chat_id)
                     try:
                         if not item.get('_reconcile_applied'):
                             missing = set(ids) - set(by_id)

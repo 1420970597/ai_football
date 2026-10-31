@@ -44,7 +44,7 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
     def queue(self,chat,groups):
         self.backend.scheduled[chat]=[{'content':{'member_message_ids':group}} for group in groups]
 
-    async def test_batch_fetch_deduplicates_album_ids_and_renews_before_each_commit(self):
+    async def test_batch_fetch_deduplicates_album_ids_with_one_initial_lease_renewal(self):
         self.client.messages['-1001']=[Message(i) for i in range(1,14)]
         self.queue('-1001',[[1,2],[2,3],*[ [i] for i in range(4,12)]])
         calls=[]
@@ -57,7 +57,7 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'state':'ready','checked':10,'pending':0},report)
         self.assertEqual([list(range(1,12))],calls)
         self.assertEqual([('-1001',10)],self.backend.observation_calls)
-        self.assertEqual(11,len(self.backend.claims))
+        self.assertEqual(1,len(self.backend.claims))
         self.assertFalse(self.collector.locks['-1001'].locked())
 
     async def test_slow_rpc_is_deferred_and_original_claim_retries_before_new_observation(self):
@@ -211,6 +211,25 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'state':'ready','checked':3,'pending':0},report)
         self.assertEqual(3,len(self.backend.events))
         self.assertEqual(3,len(self.backend.calls))
+
+    async def test_three_slow_commits_fit_budget_without_per_event_lease_round_trips(self):
+        self.client.messages['-1001']=[Message(i) for i in range(1,4)]
+        self.queue('-1001',[[1],[2],[3]])
+        checkpoint=self.backend.checkpoint
+        event=self.backend.event
+        async def slow_checkpoint(*args):
+            await asyncio.sleep(.15)
+            return await checkpoint(*args)
+        async def slow_event(body):
+            await asyncio.sleep(.15)
+            return await event(body)
+        self.backend.checkpoint=slow_checkpoint
+        self.backend.event=slow_event
+        with patch('collector.telegram.RECONCILE_BATCH_SECONDS',.8):
+            report=await asyncio.wait_for(self.collector._reconcile_known('-1001',self.source),1.5)
+        self.assertEqual({'state':'ready','checked':3,'pending':0},report)
+        self.assertEqual(1,len(self.backend.claims))
+        self.assertEqual(3,len(self.backend.events))
 
     async def test_flood_wait_retains_claim_then_success_after_backoff(self):
         self.client.messages['-1001']=[Message(1)]
