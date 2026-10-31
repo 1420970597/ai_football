@@ -1,10 +1,19 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-31 16:58 UTC。当前目标：每30分钟检查新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察。E122完整窗口未通过，E123–E126观察窗口因连续修复切换或来源退化不能作为通过证据。E127代码已通过1019项Docker冻结回归并于16:57:40.567 UTC部署到远端collector；镜像摘要与revision=c8fe497匹配，bridge/executor未变。新的专家与媒体观察须持续至17:27:40 UTC之后；尚未通过。已知剩余风险包括同源API checkpoint行锁/超时和大量历史媒体待处理。
+更新时间：2026-10-31 17:01 UTC。当前目标：每30分钟检查新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察。E122完整窗口未通过，E123–E127观察窗口因连续修复切换或来源退化不能作为通过证据。E127于16:57:40 UTC部署，但两分钟内已复现同源checkpoint行锁导致的/events和/checkpoints/claim 503，故该观察窗不通过且没有新消息可证明审核正确。E128采集器按来源序列化写入并行边界分类代码已完成，7项Docker定向测试通过；完整冻结回归和部署待进行。远端仍运行E127；媒体历史队列约3340项。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
 ## 当前范围与状态
+
+### E128 — Telegram同一来源checkpoint写入串行化（2026-10-31 17:00 UTC，代码已写）
+
+- 目标/责任：消除同群实时事件、媒体提交、目录同步、检查点和对账并发更新checkpoint租约导致的API 503；责任目录`services/collector/telegram_backend.py`及Telegram transport测试。依赖E127已部署并提供可复现的现场错误。
+- 当前证据/根因：E127真实运行约2分钟后，远端`POST /events`、`POST /checkpoints/claim`出现HTTP503。Docker API日志定位到`check_lease`与`claim_checkpoint`获取`v2_source_checkpoints`行锁时`asyncpg.LockNotAvailableError`；另有较早`finish_check`读租约的数据库超时。Telegram控制状态含6来源、2个TimeoutError与2个reconciliation_deferred，`degraded=true`。严格窗口审计尚无新消息，不能认定审核正常。
+- 设计决策：在collector backend中按`chat_id`对所有访问/续期来源租约的API变更请求建立异步锁；同一群事件与checkpoint变更串行，不同群仍可并行。API租约和消息版本验证继续作为最终边界；不重试歧义写入、不放宽超时或租约。HTTP503根据后端稳定`code`记录为受限原因，不记录detail或请求数据。
+- 实现动作：更新`TelegramBackend._call`覆盖directory、claim/advance checkpoint、author backfill、events及observed/ack；增加并发行为测试，阻塞同一来源checkpoint请求时证明同来源事件尚未发出而另一来源事件已完成；增加503 code脱敏分类测试。
+- 验收/失败处理：定向行为测试通过后提交并冻结完整Docker套件；构建限额collector候选，远端只替换collector并复核bridge/executor不变。部署后重开30分钟窗，检查source_health恢复、同源锁503消失、新消息自动入库并完成Hermes审核、管理员与信任昵称同步、审核回执闭合。若503仍出现，读取受限API错误帧并检查其他非collector调用方/数据库池等待；不得隐藏503或直接认定正常。
+- 定向证据（17:01 UTC）：CPU/内存限制Docker运行`ReconciliationTransportTests`共7项，0.018秒退出0；并发测试覆盖同群checkpoint+event串行及跨群并行；503 code只记录固定原因、不泄露detail。`git diff --check`退出0。冻结完整套件、构建、部署与真实运行验收待完成。
 
 ### E126 — 明确选中截图的意图与来源接口拒绝定位（2026-10-31 16:22 UTC，研究中）
 

@@ -1,7 +1,8 @@
 """Telegram 采集与远端业务持久层的有限接口。"""
 
-from typing import Any
+import asyncio
 import logging
+from typing import Any
 
 import httpx
 
@@ -18,22 +19,44 @@ _REJECTION_REASONS = {
     'author backfill cursor has changed': 'author_cursor_changed',
     'Telegram source is not enabled': 'source_disabled',
 }
+_REJECTION_CODES = {
+    'database_temporarily_unavailable': 'database_temporarily_unavailable',
+}
+_SOURCE_SERIALIZED_PATHS = frozenset({
+    '/directory',
+    '/checkpoints/claim',
+    '/checkpoints',
+    '/author-backfill',
+    '/events',
+    '/observed',
+    '/observed/ack',
+})
 
 
 class TelegramBackend:
     def __init__(self, client: httpx.AsyncClient, api_url: str):
         self.client = client
         self.api_url = api_url.rstrip("/")
+        self._source_locks: dict[str, asyncio.Lock] = {}
 
     async def _call(self, method: str, path: str, body: dict | None = None):
-        response = await self.client.request(method, self.api_url + path, json=body)
+        source_id = str(body.get('chat_id')) if body and body.get('chat_id') is not None else None
+        if source_id and path.split('?', 1)[0] in _SOURCE_SERIALIZED_PATHS:
+            lock = self._source_locks.setdefault(source_id, asyncio.Lock())
+            async with lock:
+                response = await self.client.request(method, self.api_url + path, json=body)
+        else:
+            response = await self.client.request(method, self.api_url + path, json=body)
         if not response.is_success:
             try:
-                detail = response.json().get('detail')
+                payload = response.json()
+                code = payload.get('code')
+                detail = payload.get('detail')
             except (ValueError, AttributeError):
-                detail = None
-            reason = (_REJECTION_REASONS.get(detail, 'unclassified') if isinstance(detail, str)
-                      else 'service_unavailable' if response.status_code == 503 else 'unclassified')
+                code, detail = None, None
+            reason = (_REJECTION_CODES.get(code) if isinstance(code, str) else None)
+            reason = reason or (_REJECTION_REASONS.get(detail, 'unclassified') if isinstance(detail, str)
+                                else 'service_unavailable' if response.status_code == 503 else 'unclassified')
             log.warning('Telegram backend rejected method=%s operation=%s status=%s reason=%s',
                         method, path.split('?', 1)[0], response.status_code, reason)
         response.raise_for_status()

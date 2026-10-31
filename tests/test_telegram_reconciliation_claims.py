@@ -61,6 +61,51 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('operation=/checkpoints/claim status=503 reason=service_unavailable', logs.output[0])
         self.assertNotIn('private-', logs.output[0])
 
+    async def test_database_rejection_code_has_bounded_reason(self):
+        def handler(request):
+            return httpx.Response(503, json={
+                'detail': '内部数据库错误不得写入日志',
+                'code': 'database_temporarily_unavailable',
+            })
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            with self.assertLogs('platform.telegram', level='WARNING') as logs:
+                with self.assertRaises(httpx.HTTPStatusError):
+                    await backend.checkpoint('-1001', 'private-owner-only')
+        self.assertIn('reason=database_temporarily_unavailable', logs.output[0])
+        self.assertNotIn('内部数据库错误', logs.output[0])
+
+    async def test_checkpoint_and_event_serialize_within_source_but_not_across_sources(self):
+        first_started = asyncio.Event()
+        second_source_completed = asyncio.Event()
+        release_first = asyncio.Event()
+        same_source_paths = []
+
+        async def handler(request):
+            body = json.loads(request.content)
+            chat_id = body['chat_id']
+            if chat_id == '-1001':
+                same_source_paths.append(request.url.path)
+                if len(same_source_paths) == 1:
+                    first_started.set()
+                    await release_first.wait()
+            else:
+                second_source_completed.set()
+            return httpx.Response(200, json={'persisted': True})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            first = asyncio.create_task(backend.checkpoint('-1001', 'test-owner'))
+            await asyncio.wait_for(first_started.wait(), timeout=1)
+            same_source = asyncio.create_task(backend.event({'chat_id': '-1001', 'owner': 'test-owner'}))
+            other_source = asyncio.create_task(backend.event({'chat_id': '-1002', 'owner': 'test-owner'}))
+            await asyncio.wait_for(second_source_completed.wait(), timeout=1)
+            await other_source
+            self.assertEqual(['/internal/telegram/checkpoints/claim'], same_source_paths)
+            release_first.set()
+            await asyncio.gather(first, same_source)
+        self.assertEqual(['/internal/telegram/checkpoints/claim', '/internal/telegram/events'], same_source_paths)
+
     async def test_collector_explicitly_sends_exact_claim_ack_protocol_and_preserves_items(self):
         requests = []
         expected = [{'id': 'test-event-only', 'claim_id': 'test-claim-only'}]
