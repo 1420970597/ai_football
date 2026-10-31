@@ -1,10 +1,19 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-31 17:28 UTC。当前目标：每30分钟检查新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察。E122完整窗口未通过，E123–E127观察窗口因连续修复切换或来源退化不能作为通过证据。E127于16:57:40 UTC部署，第7分钟仍复现同源checkpoint行锁503，且来源degraded；唯一当前图文样本有Hermes终态但unresolved，故窗口失败。E128按来源串行化代码已提交，Docker定向7项和完整1021项冻结回归均通过，候选已于17:26:30 UTC生效。新专家与媒体观察从17:27:09 UTC起，完整窗口终点不早于17:57:09 UTC；目前未通过。媒体历史队列约3336项。远端乐鱼及赛果服务首轮状态为503/unavailable，作为独立上游依赖继续跟踪。
+更新时间：2026-10-31 17:44 UTC。当前目标：每30分钟检查新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察。E122–E127观察窗口未通过；E128已部署并通过单群串行/跨群并行的1021项Docker全套，但真实窗口仍有来源degraded和数据库语句超时，尚不能判通过。第8分钟严格审查到的12条当前发言均为短文本闲聊，无媒体或比赛/盘口意图；Hermes完整回执为unresolved，语义上正确，但没有真实推荐可验证命中。实测数据库SELECT往返约245ms、来源查询约491ms，E129 API往返压缩修改已写、测试待跑；远端仍运行E128。媒体历史队列约3337项，Leyu及赛果上游状态仍有退化。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
 ## 当前范围与状态
+
+### E129 — 压缩Telegram租约热路径的数据库往返（2026-10-31 17:43 UTC，代码已写，测试待跑）
+
+- 目标/责任：在远端数据库高RTT下减少同群消息、目录与游标操作的顺序查询耗时，恢复来源同步和实时入库稳定性；责任目录`services/api/app/routes/telegram.py`及现有Telegram API集成测试。依赖E128已部署并暴露剩余超时。
+- 当前证据/根因：E128后最初有一次checkpoint行锁冲突，之后最近日志未再出现持续`LockNotAvailableError`；但`source_for`、`advance_checkpoint`、其他result/fixture接口仍在5秒`command_timeout`内偶发`TimeoutError`。只读数据库探针测得5次`SELECT 1`为245–491ms、来源查找约491ms；同一成功lease/checkpoint路径原先至少顺序执行3–4条SQL。最近`pg_stat_activity`快照10个idle、2个idle-in-transaction、无活动阻塞，故更像多轮远端往返叠加的尾延迟，而非持续锁占用；当前证据不足以断言所有超时均由此造成。
+- 设计决策：将活跃来源与owner/lease检查、lease延长合并为单条`UPDATE ... FROM ... RETURNING`；将claim改为由启用来源驱动的`INSERT ... SELECT ... ON CONFLICT`；checkpoint成功advance合并为有owner、lease、旧游标条件的单条原子更新。只在失败路径额外查询原因，保留来源禁用403、lease失效409、游标冲突409、倒退422；不增大超时、不减少群监控并发、不放宽lease fencing。
+- 实现动作：目录、事件、作者回补及reconciliation接口改用原子`source_with_lease`；claim单语句；advance单语句成功，失败时再核验lease与source状态。既有隔离API用例验证租约、source、compare-and-swap和reconciliation行为；完整测试、限额API候选、部署及真实窗口待验。
+- 验收/失败处理：先运行Telegram API/目录/对账的Docker隔离集成场景，再运行冻结全套。候选部署前确认review任务队列为空，API更新期间保留远端collector并等待新API就绪；部署后重新起算30分钟，查看DB错误、六群健康、作者/管理员同步、新消息媒体与审核回执。若`TimeoutError`仍持续而查询RTT下降，继续检查数据库服务端CPU/IO、pool acquire与桥接耗时，不通过放宽截止掩盖。
+- 初始实现检查（17:43 UTC）：`git diff --check`退出0。代码仍在工作树，尚未提交、冻结、测试或部署。
 
 ### E128 — Telegram同一来源checkpoint写入串行化（2026-10-31 17:00 UTC，隔离验证通过，真实观察中）
 
@@ -17,6 +26,8 @@
 - 冻结全套（17:16 UTC）：在不含用户未提交reports目录的detached worktree内运行`sh infra/test/run.sh`退出0，1021项、失败/错误/跳过0，控制台420.779秒；报告`.runtime/test-evidence/1165929/backend-tests.json`标记`committed_source_verified=true`、`source_parent_commit=488ecf5`及`seconds=422.919`。报告已复制至主工作树同路径并`diff -qr`退出0。测试期间被测源码冻结。
 - 候选与导入（17:23 UTC）：专用BuildKit容器核验`cpu_quota=50000/cpu_period=100000`、memory和memory-swap各402653184 bytes；候选构建退出0，临时builder构建后移除。初次`docker build --cpus`不受本机CLI支持、退出125且未开始构建；改用带容器资源限制的docker-container BuildKit。候选`ai-football-collector:2.0.0-dev-e128-488ecf5` Image ID=`sha256:768f7403f6c086e3a7b771722bae28f214f18de1c2870f6e84299c35ac28a1db`，OCI revision=`488ecf585906969a1720e1748712913db0ed122d`；构建上下文`telegram_backend.py` SHA256=`b42a1035…`与冻结报告一致。镜像内语法检查首次因只读`/app/__pycache__`失败，改写入`PYTHONPYCACHEPREFIX=/tmp/pycache`后退出0；`docker image save`摘要=`f62b1bdbe85df0c3e00df61db0218a3f07caa75afb43556547ff0e051aae42f2`，经受限SSH导入远端退出0。候选部署脚本已按镜像摘要/revision核对；尚未切换。
 - 远端生效/新观察（17:27 UTC）：E127停止后17:26:30.109 UTC租约门禁6/6 inactive；E128单独替换collector退出0，运行镜像摘要和revision均匹配冻结候选，bridge/executor ID、镜像、启动时间前后比较一致。专家/媒体观察器起点分别为17:27:09.680808与17:27:09.559907 UTC，窗口需持续到17:57:09 UTC之后。首轮`/healthz`和`/readyz`均200，Telegram connected/authorized=true、状态starting且尚无来源样本；媒体历史pending=3336，近30条事件有8个TimeoutError。另一次远端状态查询显示Leyu renewal 503、results unavailable；不归因于Telegram修复，但会阻止真实盘口绑定/结算完整验收，需核实是否恢复。
+- 观察更新（17:36 UTC）：E128实时采样到13条当前发言、21个期间新增审核任务；严格窗口查询截至17:35:42得到12条当前发言，均为短文本（2–9字）、无媒体，逐条只读检查确认没有比赛/盘口推荐意图；已完成的Hermes任务均有request/result/system receipt且标记unresolved，无工具拒绝或错误匹配，符合闲聊输入语义。窗口中的4个failed任务不在当前这12条发言内；随后两个最新任务仍queued/running。读到另1条新消息晚于该严格查询，随后人工只读确认同样无推荐意图。当前观察仍不能验证真实推荐命中；控制状态六群中有reconciliation_deferred/TimeoutError。
+- 数据库退化及E129关联（17:43 UTC）：E128最近7分钟API日志没有新的`LockNotAvailableError`，但发生过`advance_checkpoint/source_for`、fixture写入、readyz和赛果核验数据库TimeoutError；远端媒体对象上传本身约0.2–0.4秒，历史retry批次仍到30秒deadline。只读PG状态10连接idle、2个idle-in-transaction、无blocking PID。容器内只读RTT测量`SELECT 1`稳定245ms、来源查询491ms，支持下一阶段减少Telegram API SQL roundtrip；不代表DB其他查询及平台其他服务已健康。E128观察在E129部署前不作为完整30分钟通过证据。
 
 ### E126 — 明确选中截图的意图与来源接口拒绝定位（2026-10-31 16:22 UTC，研究中）
 

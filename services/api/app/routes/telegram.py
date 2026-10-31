@@ -151,8 +151,7 @@ async def sync_directory(body: DirectoryInput, request: Request):
             'has_avatar': bool(item.get('has_avatar')), 'avatar_state': 'not_loaded' if item.get('has_avatar') else 'absent'})
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            source = await source_for(conn, body.chat_id)
-            await check_lease(conn, source['id'], body.owner)
+            source = await source_with_lease(conn, body.chat_id, body.owner)
             current = await conn.fetchval('SELECT last_attempt_at FROM v2_telegram_directories WHERE source_id=$1 FOR UPDATE', source['id'])
             if current and current >= body.observed_at:
                 return {'persisted': False, 'state': 'stale'}
@@ -191,12 +190,17 @@ async def source_for(conn, chat_id: str):
     return row
 
 
-async def check_lease(conn, source_id, owner):
-    row = await conn.fetchrow("SELECT * FROM v2_source_checkpoints WHERE source_id=$1 FOR UPDATE", source_id)
-    if not row or row["collector_owner"] != owner or not row["lease_until"] or row["lease_until"] <= datetime.now(timezone.utc):
-        raise HTTPException(status_code=409, detail="Telegram source lease is not active")
-    await conn.execute("UPDATE v2_source_checkpoints SET lease_until=now()+interval '90 seconds' WHERE source_id=$1", source_id)
-    return row
+async def source_with_lease(conn, chat_id: str, owner):
+    row = await conn.fetchrow(
+        "UPDATE v2_source_checkpoints cp SET lease_until=now()+interval '90 seconds' "
+        "FROM v2_expert_sources s WHERE cp.source_id=s.id AND s.platform_chat_id=$1 AND s.enabled "
+        "AND cp.collector_owner=$2 AND cp.lease_until>now() RETURNING s.id,s.allow_media",
+        chat_id, owner,
+    )
+    if row:
+        return row
+    await source_for(conn, chat_id)
+    raise HTTPException(status_code=409, detail="Telegram source lease is not active")
 
 
 @router.get("/internal/telegram/sources")
@@ -227,14 +231,16 @@ async def claim_checkpoint(body: ClaimInput, request: Request):
     authorized(request)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            source = await source_for(conn, body.chat_id)
             row = await conn.fetchrow(
-                "INSERT INTO v2_source_checkpoints(source_id,collector_owner,lease_until) VALUES($1,$2,now()+interval '90 seconds') "
+                "INSERT INTO v2_source_checkpoints(source_id,collector_owner,lease_until) "
+                "SELECT s.id,$2,now()+interval '90 seconds' FROM v2_expert_sources s "
+                "WHERE s.platform_chat_id=$1 AND s.enabled "
                 "ON CONFLICT(source_id) DO UPDATE SET collector_owner=$2,lease_until=now()+interval '90 seconds' "
                 "WHERE v2_source_checkpoints.collector_owner=$2 OR v2_source_checkpoints.lease_until IS NULL "
-                "OR v2_source_checkpoints.lease_until<=now() RETURNING last_message_id,lease_until", source["id"], body.owner,
+                "OR v2_source_checkpoints.lease_until<=now() RETURNING last_message_id,lease_until", body.chat_id, body.owner,
             )
             if not row:
+                await source_for(conn, body.chat_id)
                 raise HTTPException(status_code=409, detail="Telegram source is owned by another collector")
     return dict(row)
 
@@ -246,15 +252,25 @@ async def advance_checkpoint(body: AdvanceInput, request: Request):
         raise HTTPException(status_code=422, detail="checkpoint cannot move backwards")
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            source = await source_for(conn, body.chat_id)
-            row = await check_lease(conn, source["id"], body.owner)
-            if row["last_message_id"] != body.previous_message_id:
-                raise HTTPException(status_code=409, detail="checkpoint has changed")
-            await conn.execute(
-                "UPDATE v2_source_checkpoints SET last_message_id=$2,checked_at=now(),last_error=NULL,"
-                "lease_until=now()+interval '90 seconds' WHERE source_id=$1", source["id"], body.last_message_id,
+            row = await conn.fetchrow(
+                "UPDATE v2_source_checkpoints cp SET last_message_id=$3,checked_at=now(),last_error=NULL,"
+                "lease_until=now()+interval '90 seconds' FROM v2_expert_sources s "
+                "WHERE cp.source_id=s.id AND s.platform_chat_id=$1 AND s.enabled "
+                "AND cp.collector_owner=$2 AND cp.lease_until>now() AND cp.last_message_id=$4 "
+                "RETURNING cp.last_message_id",
+                body.chat_id, body.owner, body.last_message_id, body.previous_message_id,
             )
-    return {"last_message_id": body.last_message_id}
+            if not row:
+                source = await source_for(conn, body.chat_id)
+                current = await conn.fetchrow(
+                    "SELECT collector_owner,lease_until FROM v2_source_checkpoints WHERE source_id=$1",
+                    source["id"],
+                )
+                if (not current or current["collector_owner"] != body.owner or not current["lease_until"]
+                        or current["lease_until"] <= datetime.now(timezone.utc)):
+                    raise HTTPException(status_code=409, detail="Telegram source lease is not active")
+                raise HTTPException(status_code=409, detail="checkpoint has changed")
+    return {"last_message_id": row["last_message_id"]}
 
 
 @router.put('/internal/telegram/author-backfill')
@@ -264,8 +280,7 @@ async def advance_author_backfill(body: AuthorBackfillInput, request: Request):
         raise HTTPException(422, 'author backfill cursor must move backwards')
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            source = await source_for(conn, body.chat_id)
-            await check_lease(conn, source['id'], body.owner)
+            source = await source_with_lease(conn, body.chat_id, body.owner)
             mapping = await conn.fetchrow(
                 "SELECT se.backfill_cursor,se.backfill_until_id FROM v2_source_experts se "
                 "JOIN v2_experts e ON e.id=se.expert_id WHERE se.source_id=$1 AND e.platform_sender_id=$2 "
@@ -312,8 +327,7 @@ async def ingest_event(body: EventInput, request: Request):
     pool = database.current_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            source = await source_for(conn, body.chat_id)
-            await check_lease(conn, source["id"], body.owner)
+            source = await source_with_lease(conn, body.chat_id, body.owner)
             if body.reconciliation is not None:
                 payload = jsonable_encoder(body.model_dump(exclude={'owner', 'reconciliation'}))
                 duplicate = await telegram_reconciliation.apply_claim(
@@ -511,8 +525,7 @@ async def observed_events(body: ObserveInput, request: Request):
     authorized(request)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            source = await source_for(conn, body.chat_id)
-            await check_lease(conn, source["id"], body.owner)
+            source = await source_with_lease(conn, body.chat_id, body.owner)
             rows = await telegram_reconciliation.claim_events(conn, source['id'], body.owner, body.limit)
     return {"items": rows, "claim_lease_seconds": telegram_reconciliation.RECONCILIATION_LEASE_SECONDS}
 
@@ -522,8 +535,7 @@ async def acknowledge_observed_event(body: ReconciliationAckInput, request: Requ
     authorized(request)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            source = await source_for(conn, body.chat_id)
-            await check_lease(conn, source['id'], body.owner)
+            source = await source_with_lease(conn, body.chat_id, body.owner)
             return await telegram_reconciliation.acknowledge_claim(conn, source['id'], body.owner, body.reconciliation)
 
 
