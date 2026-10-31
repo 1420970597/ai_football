@@ -1,15 +1,16 @@
 # 第二代平台实时进度与验证台账
 
-本轮最新进度：2026-10-31 23:28 UTC。E137实现提交`100c2de`已推送，台账提交`9f1bff8`也与远端一致；定向Docker测试106项通过。将从该干净提交建立冻结树运行完整套件；E136线上ACK一致，但source deadline/DB超时仍使运行门禁失败，30分钟专家发言窗口尚未开始。
+本轮最新进度：2026-10-31 23:42 UTC。E137提交`100c2de`及进度提交已推送；定向Docker测试106项、冻结全套1,029项均通过，冻结报告确认源提交`7e8bf7d`、失败/错误/跳过均0，恢复盘点46表及1个媒体对象前后差异为空。候选API/collector构建待执行。E136仍在线且运行门禁未通过，专家30分钟观察窗尚未开始。
 
-### E137 — 降低Telegram来源租约写竞争及同群请求排队（设计已记录，代码已写，定向Docker验证通过，冻结全套待运行）
+### E137 — 降低Telegram来源租约写竞争及同群请求排队（设计已记录，冻结Docker验证通过，候选构建待运行）
 
 - 目标/责任目录：修复E136运行期仍出现的事件提交截止和API数据库超时；责任目录为`services/api/app/routes/telegram.py`、`services/collector/telegram_backend.py`及对应Telegram契约测试。前置依赖E136候选已部署，ACK事务原子性验证已通过。
 - 当前证据与缺口：近10分钟收到23条事件，有46次应用与46次ACK、应用未确认0，说明原子确认路径正常；collector同一时段仍报告`event_commit`、`history`、媒体deadline，API间歇性超时位于`source_with_lease`。数据库快照为6/6租约有效、5/6检查点近2分钟刷新、无锁等待。现实现每次事件/领取/ACK都`UPDATE`同一checkpoint租约行，同时collector客户端以source级锁串行这些请求。
 - 设计决策：请求事务以`FOR SHARE OF cp`校验租约持有者和未过期状态，阻止校验期间租约被其他owner接管，但不在每个业务请求上写租约；续租只由既有`/checkpoints/claim`、checkpoint推进和collector周期checkpoint执行。移除`/events`、`/observed`、`/observed/ack`的客户端source级串行，保留目录、checkpoint及author cursor操作的排序锁。事件幂等键、reconciliation claim行锁、事务ACK和source lease有效性不变。
 - 实现/验收：加入API真实PostgreSQL契约，持有source row共享锁期间仍可提交消息且租约时间戳不变；加入collector传输并发场景，事件及对账领取可在checkpoint请求未完成时完成，而checkpoint推进保持等待顺序。原子ACK、故障重放、checkpoint接管及全部API路由继续回归。
 - 定向验证与命令：首次Docker目标运行`python -m unittest -q tests.test_telegram_api tests.test_telegram_reconciliation_claims tests.test_telegram_source_scheduling tests.test_telegram_collector`退出1，原因是命令的`PYTHONPATH`漏掉`services/api`，API和对账测试模块导入失败；采集模块已有59项运行，不能计验收。修正为`PYTHONPATH=/source/services/api:/source/services:/source:/source/tests`后，在具名临时PostgreSQL与0.5 CPU/512MiB verifier Docker中重跑同一命令，106项、0失败/错误、57.509秒、退出0。临时网络/数据库随命令trap清理。`git diff --check`退出0；真实Telegram和资金调用均未发生。
-- 阶段提交：实现与定向证据提交`100c2de`（`fix(telegram): reduce source lease write contention`）已推送到`origin/fix/TASK-78-hermes-telegram-sync`，push退出0，远端ref更新与本地提交一致。冻结全套尚未运行。
+- 阶段提交：实现与定向证据提交`100c2de`（`fix(telegram): reduce source lease write contention`）已推送到`origin/fix/TASK-78-hermes-telegram-sync`，push退出0，远端ref更新与本地提交一致。
+- 冻结全套与恢复验收：干净worktree`.runtime/e137-verification`固定在提交`7e8bf7d72e2430b04f135f984c26568cc0462404`，`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`退出0，1,029项、失败/错误/跳过均0，终端434.010秒；Docker内解析机器报告退出0，显示436.278秒、`committed_source_verified=true`且`source_parent_commit`精确匹配。报告`.runtime/e137-verification/.runtime/test-evidence/1906699/backend-tests.json`。恢复验收46张表、1个媒体对象，业务盘点前后差异`{}`；隔离测试不调用真实Telegram、模型或资金。冻结worktree测试后clean。下一步同SHA构建API与collector候选镜像并核对revision，再进行受控部署。
 - 失败处理：共享锁校验失败仍返回租约失效409；旧owner已过期不能提交。定向并发或API契约任一失败即停止候选构建，修正后重跑原Docker测试；运行门禁仍观察到event/ACK deadline或DB超时则继续按新日志和数据库等待证据诊断，不启动30分钟窗。
 
 本轮阶段更新：2026-10-31 21:55 UTC。E135候选已部署于远端，collector于21:51:27启动并报告healthy；image ID=`sha256:418456e54cdb58830548f47544a21e6b3568efbdf7a279fb3b4380c73fefda4c`、revision=`765dc42412ce098071ad5f7b09986949c7af3ab0`，与候选一致；API health/ready均200，bridge/executor容器ID/image/StartedAt不变。Telegram控制状态HTTP200且connected/authorized，但状态degraded：1个来源caught_up、2个reconciliation_deferred、2个catching_up、1个unavailable（TimeoutError）；6/6租约有效、5/6检查点近2分钟刷新。collector日志21:52–21:55有3次ACK deadline、1次event_commit deadline及1次history deadline，实时消息持久化群锁等待最高约6.2秒。近10分钟可信事件均为旧发布时间回补（2022–2025），无可验收的新发言；媒体有pending/unsupported项，不能计作已审。E135运行验收未通过，当前继续定位ACK/event链路等待并核实媒体重试，不启动30分钟窗口。
