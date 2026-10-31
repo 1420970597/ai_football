@@ -20,6 +20,7 @@ from ..review_state import authorize, fresh_quote, quote_context
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, FIXTURE_FIELDS, MAX_MARKETS
 from ..runtime_settings import runtime_quote_max_age
 from ..quote_observation import confirmation_for
+from ..team_matching import normalize_team_name, team_name_matches, team_search_variants
 
 router = APIRouter(prefix="/internal/mcp")
 _CANDIDATE_JSON = (
@@ -116,6 +117,12 @@ async def search_matches(body: SearchInput, request: Request):
              "from": body.from_utc.astimezone(timezone.utc).isoformat() if body.from_utc else None,
              "to": body.to_utc.astimezone(timezone.utc).isoformat() if body.to_utc else None}
     search_key = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+    team_variants = team_search_variants(body.team_query)
+    team_patterns = ["%" + value + "%" for value in team_variants]
+    raw_team_pattern = "%" + body.team_query.strip().casefold() + "%"
+    raw_team_alias = body.team_query.strip().casefold()
+    name_fold_source = "áàâäãåéèêëíìîïóòôöõúùûüýÿçñ"
+    name_fold_target = "aaaaaaeeeeiiiiooooouuuuyycn"
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
@@ -132,12 +139,17 @@ async def search_matches(body: SearchInput, request: Request):
                     "INSERT INTO v2_match_search_candidates(job_id,search_key,fixture_id,position,candidate_data) "
                     "SELECT $1,$2,f.id,row_number() OVER(ORDER BY f.kickoff_at,f.id)," + _CANDIDATE_JSON + " FROM v2_fixtures f "
                     "WHERE f.phase IN ('live','scheduled','finished','cancelled') AND ($3='all' OR f.phase=$3) "
-                    "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 OR EXISTS ("
-                    "SELECT 1 FROM unnest(f.home_aliases || f.away_aliases) alias WHERE lower(btrim(alias))=$5)) "
-                    "AND ($6='' OR lower(f.competition_name) LIKE '%'||$6||'%') "
-                    "AND ($7::timestamptz IS NULL OR f.kickoff_at >= $7) AND ($8::timestamptz IS NULL OR f.kickoff_at <= $8) "
-                    "AND ($9::text IS NULL OR f.sport=$9)",
-                    body.review_id, search_key, body.phase, "%" + scope["team"] + "%", scope["team"], scope["competition"], body.from_utc, body.to_utc, body.sport,
+                    "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 "
+                    "OR regexp_replace(translate(lower(f.home_team),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]) "
+                    "OR regexp_replace(translate(lower(f.away_team),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]) "
+                    "OR EXISTS (SELECT 1 FROM unnest(f.home_aliases || f.away_aliases) alias WHERE "
+                    "lower(btrim(alias))=$8 OR regexp_replace(translate(lower(btrim(alias)),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]))) "
+                    "AND ($9='' OR lower(f.competition_name) LIKE '%'||$9||'%') "
+                    "AND ($10::timestamptz IS NULL OR f.kickoff_at >= $10) AND ($11::timestamptz IS NULL OR f.kickoff_at <= $11) "
+                    "AND ($12::text IS NULL OR f.sport=$12)",
+                    body.review_id, search_key, body.phase, raw_team_pattern, team_patterns,
+                    name_fold_source, name_fold_target, raw_team_alias, scope["competition"],
+                    body.from_utc, body.to_utc, body.sport,
                 )
                 search = await conn.fetchrow("SELECT * FROM v2_match_searches WHERE job_id=$1 AND search_key=$2", body.review_id, search_key)
             if search["attempt_id"] != body.attempt_id:
@@ -175,16 +187,17 @@ async def resolve_match(body: ResolveInput, request: Request):
                 raise HTTPException(status_code=409, detail="all candidate pages must be read first")
             rows = await conn.fetch("SELECT fixture_id,candidate_data FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2", body.review_id, body.search_key)
             matches = []
-            a, b = body.team_a.strip().casefold(), body.team_b.strip().casefold()
-            if a == b:
+            if normalize_team_name(body.team_a) == normalize_team_name(body.team_b):
                 raise HTTPException(status_code=422, detail="two distinct team identities are required")
             for row in rows:
                 fixture = row["candidate_data"]
-                home = {str(v).strip().casefold() for v in [fixture["home_team"], *fixture.get("home_aliases", [])]}
-                away = {str(v).strip().casefold() for v in [fixture["away_team"], *fixture.get("away_aliases", [])]}
-                if not ((a in home and b in away) or (b in home and a in away)):
+                home_match = team_name_matches(body.team_a, fixture["home_team"], fixture.get("home_aliases", []))
+                away_match = team_name_matches(body.team_a, fixture["away_team"], fixture.get("away_aliases", []))
+                home_other = team_name_matches(body.team_b, fixture["home_team"], fixture.get("home_aliases", []))
+                away_other = team_name_matches(body.team_b, fixture["away_team"], fixture.get("away_aliases", []))
+                if not ((home_match and away_other) or (away_match and home_other)):
                     continue
-                if body.competition and body.competition.strip().casefold() != fixture["competition_name"].casefold():
+                if body.competition and normalize_team_name(body.competition) != normalize_team_name(fixture["competition_name"]):
                     continue
                 kickoff = datetime.fromisoformat(fixture["kickoff_at"])
                 if body.from_utc and kickoff < body.from_utc or body.to_utc and kickoff > body.to_utc:

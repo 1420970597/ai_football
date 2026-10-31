@@ -598,6 +598,48 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         wrong = await self.post('resolve_match', search_key=key, team_a='Club U21', team_b='Other U21')
         self.assertFalse(wrong.json()['resolved'])
 
+    async def test_common_abbreviations_and_clear_prefixes_resolve_to_standard_fixture(self):
+        fixture_id = await self.fixture(1, home_team='Manchester United', away_team='Tottenham Hotspur')
+        key, rows = await self.search_all('Man Utd')
+        self.assertEqual([fixture_id], [row['id'] for row in rows])
+
+        response = await self.post('resolve_match', search_key=key,
+                                   team_a='Man Utd', team_b='Tottenham')
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertTrue(response.json()['resolved'])
+        self.assertEqual(fixture_id, response.json()['fixture']['id'])
+
+    async def test_search_and_resolution_fold_accents_and_punctuation(self):
+        fixture_id = await self.fixture(1, home_team='München 1860', away_team='Racing Club de Avellaneda')
+        key, rows = await self.search_all('Munchen-1860')
+        self.assertEqual([fixture_id], [row['id'] for row in rows])
+
+        response = await self.post('resolve_match', search_key=key,
+                                   team_a='Munchen 1860', team_b='Racing Club de Avellaneda')
+        self.assertTrue(response.json()['resolved'])
+
+    async def test_generic_single_word_prefix_does_not_bind_to_a_club(self):
+        await self.fixture(1, home_team='Manchester United', away_team='Tottenham Hotspur')
+        key, rows = await self.search_all('United')
+        self.assertEqual(1, len(rows))
+
+        response = await self.post('resolve_match', search_key=key,
+                                   team_a='United', team_b='Tottenham')
+        self.assertFalse(response.json()['resolved'])
+        self.assertEqual('no_matching_fixture', response.json()['reason'])
+
+    async def test_flexible_team_prefix_keeps_same_pair_ambiguous(self):
+        await self.fixture(1, home_team='Bayern Munich', away_team='Borussia Dortmund')
+        await self.fixture(2, home_team='Bayern Leverkusen', away_team='Borussia Dortmund', phase='finished')
+        key, rows = await self.search_all('Bayern')
+        self.assertEqual(2, len(rows))
+
+        response = await self.post('resolve_match', search_key=key,
+                                   team_a='Bayern', team_b='Borussia Dortmund')
+        self.assertFalse(response.json()['resolved'])
+        self.assertEqual('ambiguous_fixture', response.json()['reason'])
+        self.assertEqual(2, response.json()['candidate_count'])
+
 
 if __name__ == "__main__":
     unittest.main()
