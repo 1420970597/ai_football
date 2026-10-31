@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮更新：2026-10-31 18:57 UTC。E130审核证据修复已推送，冻结全套Docker测试1022项通过；E131修复代码已写，定向测试83项通过，全套冻结待跑。E129真实观察窗于`2026-10-31T18:47:57.194282Z`结束、实际1863.789秒，不通过：截至18:47窗口统计57条实时帖子、85个job、50份系统回执、15条当前/编辑消息无job；媒体观察窗实际1855.248秒，1条failed、6条pending、12条未审核媒体消息。6群仍有`reconciliation_deferred`/`unavailable`。严格只读队列排序确认：当前窗口图片位于待处理批次第17、22、24–27名，历史待处理约3335项；30项入队、并发2、整批30秒截止造成尾部任务在开始前被取消。E131改变实时优先排序并将每次取数限制到并发容量。当前仍缺带真实推荐意图的样本验证比赛/盘口命中。
+本轮更新：2026-10-31 19:06 UTC。E131提交`757c9220e6eae05d16132504f2f6bf570ca9372c`已推送，冻结Docker全套`sh infra/test/run.sh`退出0：1022项、失败/错误/跳过均0，427.512秒；`.runtime/e131-verification/.runtime/test-evidence/1386209/backend-tests.json`确认`committed_source_verified=true`，证据已复制到`.runtime/test-evidence/1386209`且`diff -qr`退出0。远端仍是E129 API和E128 collector，本轮尚未部署/新窗口未开始。E129真实观察窗于`2026-10-31T18:47:57.194282Z`结束、实际1863.789秒，不通过：截至18:47窗口统计57条实时帖子、85个job、50份系统回执、15条当前/编辑消息无job；媒体观察窗实际1855.248秒，1条failed、6条pending、12条未审核媒体消息。6群仍有`reconciliation_deferred`/`unavailable`。严格只读队列排序确认：当前窗口图片位于待处理批次第17、22、24–27名，历史待处理约3335项；30项入队、并发2、整批30秒截止造成尾部任务在开始前被取消。E131改变实时优先排序并将每次取数限制到并发容量。当前仍缺带真实推荐意图的样本验证比赛/盘口命中。
 
 本轮更新：2026-10-31 18:10 UTC。E129 API候选由冻结提交`2b5fcf2`的detached验证树构建，BuildKit镜像固定digest、容器CPU quota=50000/100000、memory=memory-swap=402653184 bytes。`ai-football-api:2.0.0-dev-e129-2b5fcf2`构建退出0，Image ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`，revision与源码SHA核验通过；临时builder已删除。队列门禁复核为queued=1/running=2、年龄小于26秒，尚未部署，继续等待归零。
 
@@ -14,15 +14,16 @@
 
 ## 当前范围与状态
 
-### E131 — Telegram当前媒体审核队列优先级与有界批次（2026-10-31 18:54 UTC，定向隔离通过，全套冻结待验）
+### E131 — Telegram当前媒体审核队列优先级与有界批次（2026-10-31 19:06 UTC，冻结全套验证通过，候选部署待验）
 
-- 目标/责任：确保当前受信专家的图文消息不被大型历史媒体重试队列饿死，并避免媒体消息在原图齐全前漏审；责任目录`services/api/app/routes/telegram.py`、`services/collector/telegram.py`及相应API/采集测试。前置依赖E130审核轨迹优化通过隔离和冻结验证，代码尚未部署。
+- 目标/责任：确保当前受信专家的图文消息不被大型历史媒体重试队列饿死，并避免媒体消息在原图齐全前漏审；责任目录`services/api/app/routes/telegram.py`、`services/collector/telegram.py`及相应API/采集测试。前置依赖E130审核轨迹优化已通过隔离和冻结验证；代码提交已推送，远端尚未部署。
 - 当前证据：E129窗口内实时媒体候选6条在内部pending排序位置17、22、24、25、26、27，历史pending总量约3335。API每次最多返回30条；采集器为30条全部创建task，但只有2个retry并发槽，`MEDIA_RETRY_BATCH_SECONDS=30`会取消尾部等待任务。远端日志持续出现`batch_deadline`与媒体`TimeoutError`，数据库中6条当前媒体仍pending/failed且未生成job。`REALTIME_WINDOW_SECONDS`默认86400秒，使最近24小时内的大量历史媒体同处优先桶，当前帖子仅按旧`updated_at`排队。
 - 设计决策：API先分实时/历史桶；实时待处理项按`posted_at DESC`优先，失败项在待处理项后以`updated_at ASC`轮转；历史项继续按`updated_at ASC`轮转。采集器每次只请求与`MEDIA_RETRY_CONCURRENCY`一致的数量，不预先创建超过deadline能够开始的任务。保留现有图片验证、20秒单媒体传输、30秒批次截止、lease fencing和媒体完整后才审核的要求，不把文本不完整发送模型，也不清理历史媒体。
-- 验收场景：API契约测试同时包含最新pending、较早pending、failed及31条历史媒体，确认最新实时优先、失败轮转、历史FIFO；采集器调度测试确认仅并发容量内任务会启动，并在下一批继续未处理项；原媒体失败恢复、单群序列、跨群并发、租约过期及图文审核测试保持通过。随后从冻结提交跑Docker全套、构建API与collector候选；部署前等待所有来源租约归零，按顺序部署API与远端collector，只让新30分钟窗口从二者就绪后开始。
+- 验收场景：API契约测试同时包含最新pending、较早pending、failed及31条历史媒体，确认最新实时优先、失败轮转、历史FIFO；采集器调度测试确认仅并发容量内任务会启动，并在下一批继续未处理项；原媒体失败恢复、单群序列、跨群并发、租约过期及图文审核测试保持通过。Docker冻结全套已通过；接着构建API与collector候选，部署前等待所有来源租约归零，按顺序部署API与远端collector，只让新30分钟窗口从二者就绪后开始。
 - 失败处理：任何审核回执不完整、媒体原图缺失、旧lease提交、队列重复卡在同一失败项或来源重启后游标回退都使验收失败。按对象更新时间/lease和错误类别定位，保留待重试状态，不发送不完整图文给Hermes，不扩大超时来隐藏排队。
 - 记录问题：历史队列诊断首次误用不存在的`v2_telegram_sources`退出1，修正为`v2_expert_sources`后队列位置查询退出0；宿主机无`rg`，在远端容器改用`grep`后成功读取脱敏媒体日志；本机无`jq`退出127，改用Docker内Python解析测试JSON。均为只读诊断，不改线上数据。
-- 实现/定向验收（18:57 UTC）：API待处理媒体按24小时实时桶、pending优先、当前pending按发布时间降序、失败与历史按更新时间轮转；collector每轮只取两个与并发槽位相同的待办。新增契约覆盖最新pending优先、失败在pending之后、历史FIFO及第二批处理第三个媒体项。Docker具名隔离PostgreSQL中运行`python -m unittest tests.test_telegram_api tests.test_telegram_media_scheduling tests.test_telegram_collector`，83项、0失败/错误/跳过、22.962秒、退出0。首次同一命令缺`/source/tests`的`PYTHONPATH`而导入错误退出1；设置正确容器搜索路径后原样重跑通过。临时DB/网络待清理；代码尚未提交/部署。
+- 实现/定向验收（18:57 UTC）：API待处理媒体按24小时实时桶、pending优先、当前pending按发布时间降序、失败与历史按更新时间轮转；collector每轮只取两个与并发槽位相同的待办。新增契约覆盖最新pending优先、失败在pending之后、历史FIFO及第二批处理第三个媒体项。Docker具名隔离PostgreSQL中运行`python -m unittest tests.test_telegram_api tests.test_telegram_media_scheduling tests.test_telegram_collector`，83项、0失败/错误/跳过、22.962秒、退出0。首次同一命令缺`/source/tests`的`PYTHONPATH`而导入错误退出1；设置正确容器搜索路径后原样重跑通过。
+- 冻结全套验收（19:06 UTC）：在干净detached worktree `.runtime/e131-verification`对已推送提交`757c9220e6eae05d16132504f2f6bf570ca9372c`运行`sh infra/test/run.sh`退出0；1022项、失败/错误/跳过0，unittest用时427.512秒。机器证据`.runtime/e131-verification/.runtime/test-evidence/1386209/backend-tests.json`报告`committed_source_verified=true`，复制至`.runtime/test-evidence/1386209`后`diff -qr`退出0。当前API/collector运行版本仍为E129/E128，尚未构建候选或部署。
 
 ### E130 — 单语句原子追加Hermes审核证据（2026-10-31 18:33 UTC，冻结全套隔离验证通过，待联合部署）
 
