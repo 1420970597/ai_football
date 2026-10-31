@@ -27,9 +27,6 @@ _SOURCE_SERIALIZED_PATHS = frozenset({
     '/checkpoints/claim',
     '/checkpoints',
     '/author-backfill',
-    '/events',
-    '/observed',
-    '/observed/ack',
 })
 
 

@@ -215,6 +215,23 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("UPDATE v2_source_checkpoints SET lease_until=now()-interval '1 second'")
         self.assertEqual(409, (await self.post(self.event())).status_code)
 
+    async def test_event_validates_active_lease_with_shared_read_without_renewing_it(self):
+        async with self.pool.acquire() as blocker:
+            async with blocker.transaction():
+                lease_before = await blocker.fetchval(
+                    "SELECT lease_until FROM v2_source_checkpoints WHERE source_id=$1", self.source_id)
+                await blocker.fetchrow(
+                    "SELECT source_id FROM v2_source_checkpoints WHERE source_id=$1 FOR SHARE", self.source_id)
+                response = await self.post(self.event())
+                self.assertEqual(200, response.status_code, response.text)
+                lease_during = await blocker.fetchval(
+                    "SELECT lease_until FROM v2_source_checkpoints WHERE source_id=$1", self.source_id)
+                self.assertEqual(lease_before, lease_during)
+
+        lease_after = await self.pool.fetchval(
+            "SELECT lease_until FROM v2_source_checkpoints WHERE source_id=$1", self.source_id)
+        self.assertEqual(lease_before, lease_after)
+
     async def test_author_backfill_is_leased_monotonic_and_independent_of_group_checkpoint(self):
         await self.pool.execute(
             "UPDATE v2_source_experts SET backfill_since=now()-interval '7 days',backfill_cursor=36,"

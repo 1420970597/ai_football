@@ -75,36 +75,40 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('reason=database_temporarily_unavailable', logs.output[0])
         self.assertNotIn('内部数据库错误', logs.output[0])
 
-    async def test_checkpoint_and_event_serialize_within_source_but_not_across_sources(self):
-        first_started = asyncio.Event()
-        second_source_completed = asyncio.Event()
-        release_first = asyncio.Event()
-        same_source_paths = []
+    async def test_event_and_observed_overlap_checkpoint_while_checkpoint_writes_stay_ordered(self):
+        checkpoint_started = asyncio.Event()
+        event_and_observed_started = asyncio.Event()
+        release_checkpoint = asyncio.Event()
+        requests = []
 
         async def handler(request):
-            body = json.loads(request.content)
-            chat_id = body['chat_id']
-            if chat_id == '-1001':
-                same_source_paths.append(request.url.path)
-                if len(same_source_paths) == 1:
-                    first_started.set()
-                    await release_first.wait()
-            else:
-                second_source_completed.set()
+            path = request.url.path
+            requests.append(path)
+            if path == '/internal/telegram/checkpoints/claim':
+                checkpoint_started.set()
+                await release_checkpoint.wait()
+            elif path in {'/internal/telegram/events', '/internal/telegram/observed'}:
+                if {'/internal/telegram/events', '/internal/telegram/observed'} <= set(requests):
+                    event_and_observed_started.set()
+            if path == '/internal/telegram/observed':
+                return httpx.Response(200, json={'items': []})
+            if path == '/internal/telegram/checkpoints':
+                return httpx.Response(200, json={'last_message_id': 1})
             return httpx.Response(200, json={'persisted': True})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
-            first = asyncio.create_task(backend.checkpoint('-1001', 'test-owner'))
-            await asyncio.wait_for(first_started.wait(), timeout=1)
-            same_source = asyncio.create_task(backend.event({'chat_id': '-1001', 'owner': 'test-owner'}))
-            other_source = asyncio.create_task(backend.event({'chat_id': '-1002', 'owner': 'test-owner'}))
-            await asyncio.wait_for(second_source_completed.wait(), timeout=1)
-            await other_source
-            self.assertEqual(['/internal/telegram/checkpoints/claim'], same_source_paths)
-            release_first.set()
-            await asyncio.gather(first, same_source)
-        self.assertEqual(['/internal/telegram/checkpoints/claim', '/internal/telegram/events'], same_source_paths)
+            checkpoint = asyncio.create_task(backend.checkpoint('-1001', 'test-owner'))
+            await asyncio.wait_for(checkpoint_started.wait(), timeout=1)
+            event = asyncio.create_task(backend.event({'chat_id': '-1001', 'owner': 'test-owner'}))
+            observed = asyncio.create_task(backend.observed('-1001', 'test-owner'))
+            advance = asyncio.create_task(backend.advance('-1001', 'test-owner', 1, 0))
+            await asyncio.wait_for(event_and_observed_started.wait(), timeout=1)
+            self.assertNotIn('/internal/telegram/checkpoints', requests)
+            release_checkpoint.set()
+            await asyncio.gather(checkpoint, event, observed, advance)
+        self.assertEqual(1, requests.count('/internal/telegram/checkpoints/claim'))
+        self.assertEqual(1, requests.count('/internal/telegram/checkpoints'))
 
     async def test_collector_explicitly_sends_exact_claim_ack_protocol_and_preserves_items(self):
         requests = []

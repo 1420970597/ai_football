@@ -192,9 +192,10 @@ async def source_for(conn, chat_id: str):
 
 async def source_with_lease(conn, chat_id: str, owner):
     row = await conn.fetchrow(
-        "UPDATE v2_source_checkpoints cp SET lease_until=now()+interval '90 seconds' "
-        "FROM v2_expert_sources s WHERE cp.source_id=s.id AND s.platform_chat_id=$1 AND s.enabled "
-        "AND cp.collector_owner=$2 AND cp.lease_until>now() RETURNING s.id,s.allow_media",
+        "SELECT s.id,s.allow_media FROM v2_source_checkpoints cp "
+        "JOIN v2_expert_sources s ON cp.source_id=s.id "
+        "WHERE s.platform_chat_id=$1 AND s.enabled AND cp.collector_owner=$2 AND cp.lease_until>now() "
+        "FOR SHARE OF cp",
         chat_id, owner,
     )
     if row:
