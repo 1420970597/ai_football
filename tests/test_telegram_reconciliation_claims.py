@@ -151,9 +151,9 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("UPDATE v2_telegram_events SET next_check_at=now()-interval '1 minute' WHERE platform_message_id=$1", str(number))
         return body
 
-    async def observe(self, **kwargs):
+    async def observe(self, *, limit=10, **kwargs):
         result = await self.client.post('/internal/telegram/observed', json={
-            'chat_id': '-1001', 'owner': str(self.owner), 'limit': 10,
+            'chat_id': '-1001', 'owner': str(self.owner), 'limit': limit,
             'reconciliation_protocol': 'claim-ack-v1', **kwargs})
         self.assertEqual(200, result.status_code, result.text)
         return result.json()['items']
@@ -314,6 +314,46 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(23,len(first_ids | second_ids | {item['id'] for item in rest}))
         self.assertEqual([],await self.observe())
         self.assertEqual(23,await self.pool.fetchval('SELECT count(*) FROM v2_telegram_events WHERE next_check_at<=now()'))
+
+    async def test_recent_trusted_events_precede_fifo_history_and_untrusted_can_become_eligible(self):
+        now = datetime.now(timezone.utc)
+        fixtures = (
+            (11, '7', timedelta(days=3), timedelta(minutes=2)),
+            (12, '7', timedelta(days=4), timedelta(minutes=1)),
+            (13, '7', timedelta(minutes=10), timedelta(minutes=2)),
+            (14, '7', timedelta(minutes=1), timedelta(minutes=1)),
+            (15, '7', timedelta(minutes=2), timedelta(minutes=2)),
+        )
+        for number, sender_id, age, due_age in fixtures:
+            body = self.event(version=f'priority-{number}')
+            body.update(platform_message_id=str(number), member_message_ids=[number])
+            self.assertEqual(200, (await self.post(body)).status_code)
+            await self.pool.execute(
+                'UPDATE v2_telegram_events SET source_version_at=$2,next_check_at=$3 WHERE platform_message_id=$1',
+                str(number), now - age, now - due_age,
+            )
+            if number == 15:
+                await self.pool.execute(
+                    "UPDATE v2_telegram_events SET content=jsonb_set(content,'{sender_id}','\"99\"'::jsonb) "
+                    "WHERE platform_message_id='15'"
+                )
+
+        first = await self.observe(limit=3)
+        self.assertEqual(['14', '13', '11'], [item['platform_message_id'] for item in first])
+        second = await self.observe()
+        self.assertEqual(['12'], [item['platform_message_id'] for item in second])
+        self.assertIsNone(await self.pool.fetchval(
+            "SELECT reconcile_claim_id FROM v2_telegram_events WHERE platform_message_id='15'"))
+
+        late_expert = uuid.uuid4()
+        await self.pool.execute(
+            "INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,'99','后续授权专家')",
+            late_expert,
+        )
+        await self.pool.execute('INSERT INTO v2_source_experts(source_id,expert_id) VALUES($1,$2)',
+                                self.source_id, late_expert)
+        third = await self.observe()
+        self.assertEqual(['15'], [item['platform_message_id'] for item in third])
 
     async def test_recent_five_minutes_and_historical_six_hours_start_at_ack(self):
         now = datetime.now(timezone.utc)

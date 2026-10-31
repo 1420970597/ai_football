@@ -4,18 +4,68 @@ import uuid
 
 from fastapi import HTTPException
 
+from .review_policy import REALTIME_WINDOW_SECONDS
+
 
 RECONCILIATION_LEASE_SECONDS = 30
 
 
 async def claim_events(conn, source_id, owner, limit):
-    rows = await conn.fetch(
-        "SELECT id,platform_message_id,version_key,content FROM v2_telegram_events "
-        "WHERE source_id=$1 AND is_current AND next_check_at<=now() "
-        "AND (reconcile_lease_until IS NULL OR reconcile_lease_until<=now() "
-        "OR reconcile_acknowledged_at IS NOT NULL) "
-        "ORDER BY next_check_at,id LIMIT $2 FOR UPDATE SKIP LOCKED", source_id, limit,
+    recent_limit = min(limit, max(1, limit * 4 // 5))
+    trusted_author = (
+        "EXISTS (SELECT 1 FROM v2_source_experts se "
+        "JOIN v2_experts expert ON expert.id=se.expert_id AND expert.enabled "
+        "WHERE se.source_id=e.source_id AND se.enabled "
+        "AND expert.platform_sender_id=e.content->>'sender_id')"
     )
+    available = (
+        "e.is_current AND e.next_check_at<=now() "
+        "AND (e.reconcile_lease_until IS NULL OR e.reconcile_lease_until<=now() "
+        "OR e.reconcile_acknowledged_at IS NOT NULL) "
+        f"AND {trusted_author} "
+    )
+    recent = await conn.fetch(
+        "SELECT e.id,e.platform_message_id,e.version_key,e.content FROM v2_telegram_events e "
+        f"WHERE e.source_id=$1 AND {available} "
+        "AND e.source_version_at>=now()-$3*interval '1 second' "
+        "ORDER BY e.source_version_at DESC,e.next_check_at,e.id "
+        "LIMIT $2 FOR UPDATE OF e SKIP LOCKED",
+        source_id, recent_limit, REALTIME_WINDOW_SECONDS,
+    )
+    historical_limit = limit - len(recent)
+    historical = []
+    if historical_limit:
+        historical = await conn.fetch(
+            "SELECT e.id,e.platform_message_id,e.version_key,e.content FROM v2_telegram_events e "
+            f"WHERE e.source_id=$1 AND {available} "
+            "AND e.source_version_at<now()-$3*interval '1 second' "
+            "ORDER BY e.next_check_at,e.id "
+            "LIMIT $2 FOR UPDATE OF e SKIP LOCKED",
+            source_id, historical_limit, REALTIME_WINDOW_SECONDS,
+        )
+    remainder = limit - len(recent) - len(historical)
+    if remainder:
+        claimed_ids = [row['id'] for row in [*recent, *historical]]
+        recent.extend(await conn.fetch(
+            "SELECT e.id,e.platform_message_id,e.version_key,e.content FROM v2_telegram_events e "
+            f"WHERE e.source_id=$1 AND {available} "
+            "AND e.source_version_at>=now()-$3*interval '1 second' AND NOT(e.id=ANY($4::uuid[])) "
+            "ORDER BY e.source_version_at DESC,e.next_check_at,e.id "
+            "LIMIT $2 FOR UPDATE OF e SKIP LOCKED",
+            source_id, remainder, REALTIME_WINDOW_SECONDS, claimed_ids,
+        ))
+    remainder = limit - len(recent) - len(historical)
+    if remainder:
+        claimed_ids = [row['id'] for row in [*recent, *historical]]
+        historical.extend(await conn.fetch(
+            "SELECT e.id,e.platform_message_id,e.version_key,e.content FROM v2_telegram_events e "
+            f"WHERE e.source_id=$1 AND {available} "
+            "AND e.source_version_at<now()-$3*interval '1 second' AND NOT(e.id=ANY($4::uuid[])) "
+            "ORDER BY e.next_check_at,e.id "
+            "LIMIT $2 FOR UPDATE OF e SKIP LOCKED",
+            source_id, remainder, REALTIME_WINDOW_SECONDS, claimed_ids,
+        ))
+    rows = [*recent, *historical]
     items = []
     for row in rows:
         claim_id = uuid.uuid4()
