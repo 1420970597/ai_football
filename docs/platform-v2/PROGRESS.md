@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-31 16:36 UTC。当前目标：每30分钟检查新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察。E122完整窗口未通过，E123–E125窗口因连续修复切换而不能作为单版本通过证据。E125全套1016项通过；E126修改已通过1018项完整冻结回归及相同原图真实模型验证，远端collector已切换revision=26db97e，bridge/executor未变。新的完整专家与媒体观察从16:36:08.495 UTC开始，终点不早于17:06:08 UTC；尚未通过。
+更新时间：2026-10-31 16:58 UTC。当前目标：每30分钟检查新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察。E122完整窗口未通过，E123–E126观察窗口因连续修复切换或来源退化不能作为通过证据。E127代码已通过1019项Docker冻结回归并于16:57:40.567 UTC部署到远端collector；镜像摘要与revision=c8fe497匹配，bridge/executor未变。新的专家与媒体观察须持续至17:27:40 UTC之后；尚未通过。已知剩余风险包括同源API checkpoint行锁/超时和大量历史媒体待处理。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
@@ -23,7 +23,9 @@
 - 设计/实现：每个群先在独立短临界区claim/续租，再释放群锁执行管理员目录查询与同步；保持慢目录请求不阻塞实时消息。增强安全拒绝分类：HTTP503空响应记为有边界的桥接/API不可用，不记录响应体或请求数据。
 - 验收/失败处理：更新慢目录并行测试，明确证明directory调用前已完成来源checkpoint claim且实时消息不等待目录；Docker定向及冻结全套回归，通过后构建/导入/单collector部署并重新起算30分钟。仍有503时只读核验桥接/连接池，不绕过租约，不盲重试有歧义请求。
 - 定向证据/失败记录（16:42 UTC）：Docker禁网6项通过，含“先claim后directory但慢目录不持群锁”和HTTP503空响应安全分类测试。首条定向命令误用测试类名`TelegramCollectorTests`，命令exit1、测试进程启动前因类名不存在；按仓库实际类名`CollectorTests`立即修正并重跑全目标成功。E126窗口严格当前消息3条：2条仅图片/不支持媒体（media_state=unsupported、没有送审任务），1条ready相册、2张图片进入Hermes，终态unresolved并有完整搜索/模型/系统回执；本窗口尚不足30分钟且来源健康仍degraded，不判通过。
-- 冻结全套（16:51 UTC）：提交c8fe497完整源码未再更改，`sh infra/test/run.sh`退出0，1019项420.897秒、失败/错误/跳过0，报告`.runtime/test-evidence/1118640`。只读API日志佐证既有503主要是`asyncpg.LockNotAvailableError`及语句`TimeoutError`；pg_stat_activity抽查13连接idle ClientRead、当前无持续阻塞。下一步构建/导入collector候选，待自然租约交接后单独部署。
+- 冻结全套（16:51 UTC）：提交c8fe497完整源码未再更改，`sh infra/test/run.sh`退出0，1019项420.897秒、失败/错误/跳过0，报告`.runtime/test-evidence/1118640`。只读API日志佐证既有503主要是`asyncpg.LockNotAvailableError`及语句`TimeoutError`；pg_stat_activity抽查13连接idle ClientRead、当前无持续阻塞。
+- E127候选（16:52 UTC）：CPU配额50%、384MiB内存构建退出0，Image ID=`sha256:b3131f6a523e6797ae2f2345a8f5fe3e0db136165b9af62948a2c6c6066d4245`，OCI revision=c8fe497；采集器telegram.py源码摘要fa9aceac…与冻结构建上下文一致。待远端导入及自然租约交接后单独部署。
+- 远端生效/观察（16:57 UTC）：E126采集器停止后租约门禁读数为6条全部inactive；未强制清除租约。E127单独重建collector退出0，运行镜像ID与revision=`c8fe49763decf135b51ce99b3a78bcc9067336e7`一致，bridge/executor容器ID、镜像及启动时间前后cmp相同。专家与媒体观察器分别从16:57:40.567201和16:57:40.567049 UTC起运行，完整窗口终点不早于17:27:40 UTC。初始Telegram已授权连接，API健康/就绪200；来源状态仍在starting，媒体pending共3339且近30条仍有11条TimeoutError，均待本窗持续验证。E126末次样本为来源degraded、3条对账延期；该窗口被版本切换终止，不通过。
 
 ### E125 — 媒体事件原子租约提交与合理截止（2026-10-31 16:04 UTC，代码已写）
 
