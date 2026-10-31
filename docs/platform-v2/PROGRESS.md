@@ -1,19 +1,21 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-31 17:01 UTC。当前目标：每30分钟检查新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察。E122完整窗口未通过，E123–E127观察窗口因连续修复切换或来源退化不能作为通过证据。E127于16:57:40 UTC部署，但两分钟内已复现同源checkpoint行锁导致的/events和/checkpoints/claim 503，故该观察窗不通过且没有新消息可证明审核正确。E128采集器按来源序列化写入并行边界分类代码已完成，7项Docker定向测试通过；完整冻结回归和部署待进行。远端仍运行E127；媒体历史队列约3340项。
+更新时间：2026-10-31 17:23 UTC。当前目标：每30分钟检查新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察。E122完整窗口未通过，E123–E127观察窗口因连续修复切换或来源退化不能作为通过证据。E127于16:57:40 UTC部署，第7分钟仍复现同源checkpoint行锁503，且来源degraded；唯一当前图文样本有Hermes终态但unresolved，故窗口失败。E128按来源串行化代码已提交，Docker定向7项和完整1021项冻结回归均通过。限额候选镜像已导入远端，当前仍运行E127，正等待租约安全交接；E128观察尚未开始。媒体历史队列约3340项。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
 ## 当前范围与状态
 
-### E128 — Telegram同一来源checkpoint写入串行化（2026-10-31 17:00 UTC，代码已写）
+### E128 — Telegram同一来源checkpoint写入串行化（2026-10-31 17:00 UTC，隔离验证通过，候选待部署）
 
 - 目标/责任：消除同群实时事件、媒体提交、目录同步、检查点和对账并发更新checkpoint租约导致的API 503；责任目录`services/collector/telegram_backend.py`及Telegram transport测试。依赖E127已部署并提供可复现的现场错误。
 - 当前证据/根因：E127真实运行约2分钟后，远端`POST /events`、`POST /checkpoints/claim`出现HTTP503。Docker API日志定位到`check_lease`与`claim_checkpoint`获取`v2_source_checkpoints`行锁时`asyncpg.LockNotAvailableError`。另有较早`finish_check`结果核验租约查询超时，属于独立接口，不将其误归为Telegram checkpoint 503根因。Telegram控制状态含6来源、2个TimeoutError与2个reconciliation_deferred，`degraded=true`。严格窗口审计尚无新消息，不能认定审核正常。
 - 设计决策：在collector backend中按`chat_id`对所有访问/续期来源租约的API变更请求建立异步锁；同一群事件与checkpoint变更串行，不同群仍可并行。API租约和消息版本验证继续作为最终边界；不重试歧义写入、不放宽超时或租约。HTTP503根据后端稳定`code`记录为受限原因，不记录detail或请求数据。
 - 实现动作：更新`TelegramBackend._call`覆盖directory、claim/advance checkpoint、author backfill、events及observed/ack；增加并发行为测试，阻塞同一来源checkpoint请求时证明同来源事件尚未发出而另一来源事件已完成；增加503 code脱敏分类测试。
 - 验收/失败处理：定向行为测试通过后提交并冻结完整Docker套件；构建限额collector候选，远端只替换collector并复核bridge/executor不变。部署后重开30分钟窗，检查source_health恢复、同源锁503消失、新消息自动入库并完成Hermes审核、管理员与信任昵称同步、审核回执闭合。若503仍出现，读取受限API错误帧并检查其他非collector调用方/数据库池等待；不得隐藏503或直接认定正常。
-- 定向证据（17:01 UTC）：CPU/内存限制Docker运行`ReconciliationTransportTests`共7项，0.018秒退出0；并发测试覆盖同群checkpoint+event串行及跨群并行；503 code只记录固定原因、不泄露detail。`git diff --check`退出0。冻结完整套件、构建、部署与真实运行验收待完成。
+- 定向证据（17:01 UTC）：CPU/内存限制Docker运行`ReconciliationTransportTests`共7项，0.018秒退出0；并发测试覆盖同群checkpoint+event串行及跨群并行；503 code只记录固定原因、不泄露detail。`git diff --check`退出0。
+- 冻结全套（17:16 UTC）：在不含用户未提交reports目录的detached worktree内运行`sh infra/test/run.sh`退出0，1021项、失败/错误/跳过0，控制台420.779秒；报告`.runtime/test-evidence/1165929/backend-tests.json`标记`committed_source_verified=true`、`source_parent_commit=488ecf5`及`seconds=422.919`。报告已复制至主工作树同路径并`diff -qr`退出0。测试期间被测源码冻结。
+- 候选与导入（17:23 UTC）：专用BuildKit容器核验`cpu_quota=50000/cpu_period=100000`、memory和memory-swap各402653184 bytes；候选构建退出0，临时builder构建后移除。初次`docker build --cpus`不受本机CLI支持、退出125且未开始构建；改用带容器资源限制的docker-container BuildKit。候选`ai-football-collector:2.0.0-dev-e128-488ecf5` Image ID=`sha256:768f7403f6c086e3a7b771722bae28f214f18de1c2870f6e84299c35ac28a1db`，OCI revision=`488ecf585906969a1720e1748712913db0ed122d`；构建上下文`telegram_backend.py` SHA256=`b42a1035…`与冻结报告一致。镜像内语法检查首次因只读`/app/__pycache__`失败，改写入`PYTHONPYCACHEPREFIX=/tmp/pycache`后退出0；`docker image save`摘要=`f62b1bdbe85df0c3e00df61db0218a3f07caa75afb43556547ff0e051aae42f2`，经受限SSH导入远端退出0。候选部署脚本已按镜像摘要/revision核对；尚未切换。
 
 ### E126 — 明确选中截图的意图与来源接口拒绝定位（2026-10-31 16:22 UTC，研究中）
 
@@ -35,6 +37,7 @@
 - 冻结全套（16:51 UTC）：提交c8fe497完整源码未再更改，`sh infra/test/run.sh`退出0，1019项420.897秒、失败/错误/跳过0，报告`.runtime/test-evidence/1118640`。只读API日志佐证既有503主要是`asyncpg.LockNotAvailableError`及语句`TimeoutError`；pg_stat_activity抽查13连接idle ClientRead、当前无持续阻塞。
 - E127候选（16:52 UTC）：CPU配额50%、384MiB内存构建退出0，Image ID=`sha256:b3131f6a523e6797ae2f2345a8f5fe3e0db136165b9af62948a2c6c6066d4245`，OCI revision=c8fe497；采集器telegram.py源码摘要fa9aceac…与冻结构建上下文一致。待远端导入及自然租约交接后单独部署。
 - 远端生效/观察（16:57 UTC）：E126采集器停止后租约门禁读数为6条全部inactive；未强制清除租约。E127单独重建collector退出0，运行镜像ID与revision=`c8fe49763decf135b51ce99b3a78bcc9067336e7`一致，bridge/executor容器ID、镜像及启动时间前后cmp相同。专家与媒体观察器分别从16:57:40.567201和16:57:40.567049 UTC起运行，完整窗口终点不早于17:27:40 UTC。初始Telegram已授权连接，API健康/就绪200；来源状态仍在starting，媒体pending共3339且近30条仍有11条TimeoutError，均待本窗持续验证。E126末次样本为来源degraded、3条对账延期；该窗口被版本切换终止，不通过。
+- 观察终态（17:06 UTC）：E127观察实际只运行约7分12秒，于行锁503复现后终止，不满足30分钟。API日志再现`ingest_event/check_lease`与`claim_checkpoint`上的`LockNotAvailableError`；来源仍degraded，另有4条对账延期。严格窗口只发现1条当前图文消息，Hermes image_count=1并留下完整请求、结果和system receipt，最终unresolved且无信号；短文本/图片意图需结合真实输入人工核验，不能把该样本称作正确推荐。媒体历史队列约3340条，历史回补中仍有批次截止；不作为当前新消息审核通过证据。
 
 ### E125 — 媒体事件原子租约提交与合理截止（2026-10-31 16:04 UTC，代码已写）
 
