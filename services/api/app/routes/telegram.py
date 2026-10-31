@@ -443,7 +443,9 @@ async def pending_events(request: Request, limit: int = 30):
     rows = await database.current_pool().fetch(
         "SELECT e.platform_message_id,e.content,e.media_objects,e.last_error,s.platform_chat_id AS chat_id FROM v2_telegram_events e "
         "JOIN v2_expert_sources s ON s.id=e.source_id WHERE e.is_current AND s.enabled AND e.media_state IN ('pending','failed') "
-        "ORDER BY e.updated_at,e.id LIMIT $1", max(1, min(limit, 100)),
+        "ORDER BY CASE WHEN (e.content->>'posted_at')::timestamptz >= now()-($2::int*interval '1 second') "
+        "THEN 0 ELSE 1 END,e.updated_at,e.id LIMIT $1",
+        max(1, min(limit, 100)), REALTIME_WINDOW_SECONDS,
     )
     return {"items": [dict(row) for row in rows]}
 

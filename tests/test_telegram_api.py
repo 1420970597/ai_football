@@ -86,6 +86,33 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
             "SELECT media_objects FROM v2_expert_messages WHERE platform_message_id='11'"))
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
 
+    async def test_pending_batch_prioritizes_recent_media_then_rotates_history_fifo(self):
+        historical_ids = []
+        for index in range(31):
+            platform_id = str(1000 + index)
+            member_id = 1000 + index
+            body = self.event(version=f"historical-{index}", days_ago=3, media=True)
+            body.update(platform_message_id=platform_id, member_message_ids=[member_id])
+            body['media_manifest'][0]['message_id'] = member_id
+            response = await self.post(body)
+            self.assertEqual(200, response.status_code, response.text)
+            historical_ids.append(platform_id)
+            await self.pool.execute(
+                "UPDATE v2_telegram_events SET updated_at=$2 WHERE platform_message_id=$1",
+                platform_id, self.event_time - timedelta(minutes=31 - index),
+            )
+
+        recent = self.event(version="recent-recommendation", media=True)
+        recent.update(platform_message_id="recent-recommendation", member_message_ids=[2000])
+        recent['media_manifest'][0]['message_id'] = 2000
+        response = await self.post(recent)
+        self.assertEqual(200, response.status_code, response.text)
+
+        batch = (await self.client.get('/internal/telegram/pending?limit=30')).json()['items']
+        self.assertEqual(30, len(batch))
+        self.assertEqual("recent-recommendation", batch[0]['platform_message_id'])
+        self.assertEqual(historical_ids[:29], [item['platform_message_id'] for item in batch[1:]])
+
     async def test_pending_failed_ready_is_durable_and_job_once(self):
         body = self.event(media=True)
         pending = await self.post(body)
