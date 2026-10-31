@@ -1,5 +1,7 @@
 # 第二代平台实时进度与验证台账
 
+本轮更新：2026-10-31 18:17 UTC。E129 API已部署；运行容器ID=`a994e19a9b75283fb23faf7979e646b0d0f4d8edb1d1612429e3d511f13b8dc9`、镜像ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`、revision=`2b5fcf2`，`/healthz`和`/readyz`均200。review-worker、Hermes/MCP、remote-link、远端collector/bridge/executor的容器ID、镜像及StartedAt切换前后相同。新30分钟只读窗口于`2026-10-31T18:16:53.404896Z`起算；首样本Telegram已授权/连接，但来源6群仍有3个reconciliation_deferred、2个unavailable，需观察修复是否生效。
+
 本轮更新：2026-10-31 18:10 UTC。E129 API候选由冻结提交`2b5fcf2`的detached验证树构建，BuildKit镜像固定digest、容器CPU quota=50000/100000、memory=memory-swap=402653184 bytes。`ai-football-api:2.0.0-dev-e129-2b5fcf2`构建退出0，Image ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`，revision与源码SHA核验通过；临时builder已删除。队列门禁复核为queued=1/running=2、年龄小于26秒，尚未部署，继续等待归零。
 
 本轮更新：2026-10-31 18:04 UTC。E129冻结全套第二次运行通过：提交`2b5fcf2`、1021项、失败/错误/跳过0、426.866秒退出0，证据`.runtime/test-evidence/1263040`，冻结源码报告`committed_source_verified=true`。E128实际观察到17:58 UTC，严格只读审查25条当前受信消息；20条有完整Hermes/system receipt，5条无job由3条媒体pending/failed和2条unsupported构成。两条failed事件写回错误均为TimeoutError（含1条86字符正文+图片、1条图片），1条旧pending未完成；窗口不通过。E129 API候选尚未部署。
@@ -12,7 +14,7 @@
 
 ## 当前范围与状态
 
-### E129 — 压缩Telegram租约热路径的数据库往返（2026-10-31 18:10 UTC，冻结验证通过，候选已构建、部署门禁等待）
+### E129 — 压缩Telegram租约热路径的数据库往返（2026-10-31 18:17 UTC，已部署，真实观察中）
 
 - 目标/责任：在远端数据库高RTT下减少同群消息、目录与游标操作的顺序查询耗时，恢复来源同步和实时入库稳定性；责任目录`services/api/app/routes/telegram.py`及现有Telegram API集成测试。依赖E128已部署并暴露剩余超时。
 - 当前证据/根因：E128后最初有一次checkpoint行锁冲突，之后最近日志未再出现持续`LockNotAvailableError`；但`source_for`、`advance_checkpoint`、其他result/fixture接口仍在5秒`command_timeout`内偶发`TimeoutError`。只读数据库探针测得5次`SELECT 1`为245–491ms、来源查找约491ms；同一成功lease/checkpoint路径原先至少顺序执行3–4条SQL。最近`pg_stat_activity`快照10个idle、2个idle-in-transaction、无活动阻塞，故更像多轮远端往返叠加的尾延迟，而非持续锁占用；当前证据不足以断言所有超时均由此造成。
@@ -23,6 +25,7 @@
 - 冻结首次运行失败（17:54 UTC）：`sh infra/test/run.sh`在`8dcb342`冻结worktree退出1，运行1021项；唯一错误是故障注入测试引用已删除的`check_lease`属性，API行为SQL无失败断言。现改为在`source_with_lease`事务内连接注入中断，回归待重跑。
 - 冻结复验通过（18:04 UTC）：在干净detached worktree以提交`2b5fcf2`运行`sh infra/test/run.sh`退出0，1021项、失败/错误/跳过0、426.866秒；`backend-tests.json`确认`committed_source_verified=true`及源码父提交`2b5fcf2ac08ec9a10ff618288c4cf7a4e065a070`。证据`.runtime/e129b-verification/.runtime/test-evidence/1263040`复制到主任务证据目录，`diff -qr`退出0。此次修正仅更新故障注入位置，不改变API业务实现；API候选仍待构建、部署。
 - 候选构建（18:09 UTC）：由冻结worktree构建`ai-football-api:2.0.0-dev-e129-2b5fcf2`退出0，BuildKit采用本机已缓存并固定digest的镜像，实际容器限额CPU 0.5、内存/swap各402653184 bytes；Image ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`，revision=`2b5fcf2ac08ec9a10ff618288c4cf7a4e065a070`。容器内py_compile退出0，API路由SHA256=`6cac7244…`与冻结源码一致，镜像内仅验证代码、不访问服务。BuildKit临时builder已移除。部署前队列首次为running=2，复查为queued=1/running=2、最大年龄25.7/23.8秒，均为活动新任务，按门禁暂不重启API。
+- 实际部署（18:15 UTC）：首次Compose切换因临时覆盖文件引用不存在的`e129-101a347`镜像标签退出1；检查确认原API仍running/healthy且未被替换。修正覆盖至已验证`e129-2b5fcf2`，Compose配置退出0，部署前队列再次确认为空；随后仅API `up -d --no-deps --no-build --pull never --wait`退出0。新容器ID=`a994e19a9b75283fb23faf7979e646b0d0f4d8edb1d1612429e3d511f13b8dc9`，镜像ID/revision与候选一致，`/healthz`和`/readyz`均200。review-worker/Hermes-MCP/remote-link及远端collector/bridge/executor的ID、镜像和启动时间未改变。专家/媒体只读观察器从DB时钟`18:16:53.404896+00:00`开始1800秒；首样本仍有3个reconciliation_deferred和2个unavailable来源，部署尚未证明来源健康。
 
 ### E128 — Telegram同一来源checkpoint写入串行化（2026-10-31 17:00 UTC，隔离验证通过，真实观察中）
 
