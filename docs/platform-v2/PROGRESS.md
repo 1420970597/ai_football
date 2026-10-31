@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-31 06:11 UTC。当前目标：修复 Telegram 监控与群聊差异、专家原文图片预览和已有乐鱼账户在全局登录配置更新后的无资金复核入口，并观察远端 Telegram 采集至少10分钟。当前阶段为实现完成、回归与只读迁移门禁通过；修正 Telegram 新媒体的 S3 前缀后正在重跑冻结回归，数据库迁移、候选发布与worker切换仍未执行。
+更新时间：2026-10-31 06:21 UTC。当前目标：修复 Telegram 监控与群聊差异、专家原文图片预览和已有乐鱼账户在全局登录配置更新后的无资金复核入口，并观察远端 Telegram 采集至少10分钟。当前阶段为实现完成、回归与只读迁移门禁通过；修正 Telegram 新媒体的 S3 前缀后正在重跑冻结回归，数据库迁移、候选发布与worker切换仍未执行。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
@@ -27,6 +27,8 @@
 - 数据库权限与传输只读核验（06:03 UTC）：固定Docker API镜像内运行运行角色`plan`和`verify`均退出0，迁移角色未改、46张v2表无`PUBLIC`/旧表越权、运行角色非owner且持久DDL关闭；运行API数据库只读查询证明PostgreSQL 16、非超级用户、无schema CREATE、无v2表所有权。协议为`DATABASE_TRANSPORT=ssh`且目标为既有`storage-tunnel`，隧道容器healthy，因此PostgreSQL会话`pg_stat_ssl=false`是SSH隧道传输，不按TLS传输误判。只读S3探针通过HTTPS/CA桶认证及`v2/`单对象上限列表，返回当前无对象；写和删均未调用。Telegram控制状态HTTP200、connected/authorized、6个来源；4个reconciliation延迟、2个追赶，6个持久来源租约当前有效；状态仍degraded，需切换后继续观测，不将其记为健康。
 - 现有原图与新上传前缀核验（06:07 UTC）：数据库有2,266条专家消息引用媒体；只读S3 `v2/`列表返回空，但从一条现有数据库引用进行HTTPS/CA `HEAD`成功，证明既有原图仍在旧`telegram/messages/`命名空间。collector原常量会把后续补采继续写到该旧命名空间，与远端限定`v2/`前缀冲突。将新上传键改为`v2/telegram/messages/`，旧引用仍按数据库授权读取，不移动或删除历史对象；新增mock上传路径断言，禁止触碰真实桶。
 - 最终链路检查与冻结（06:11 UTC）：发现远端桥未放行新增`PUT author-backfill`，主动停止当轮全套测试（退出137，未作通过证据），补精确collector白名单、executor/错误方法/多余查询拒绝与真实backend调用契约。新增媒体测试首次缺`os`导入退出1，补全导入后Docker禁网专项73项、8.440秒、退出0；规划检查46包/337动作/266有证据项退出0。只读SSH核验远端collector/executor/bridge均为51e20ee同源摘要镜像、每类唯一；私有env0600、socket目录2750及socket0660、执行器实盘false。当前实现准备分阶段提交推送，后续完整回归必须以该新冻结源码重跑。
+- 实现提交及最终后端回归（06:21 UTC）：`fe8f5df0c60a13e38bfb58a1c8107fdaf18170f8`提交并推送任务分支，`git ls-remote`一致；新增差异常见敏感模式匹配0、暂存差异检查退出0。该干净提交执行`sh infra/test/run.sh`退出0，1002项、407.417秒、无失败/错误/跳过，证据`.runtime/test-evidence/3964796`。`v2.0.0-dev.20261031.1`指向相同完整SHA，候选流水线41175711866在截图门禁失败，未发布镜像或Release。本地`sh tests/browser/visual-check.sh`复现退出1，14屏仅admin-guest的390/1440两屏失败；逐屏查图确认差异来自E116按用户要求删除MFA说明，旧截图未更新。仅复制已审两屏并更新其manifest SHA，阈值不变；正在重跑截图检查，应用源码未变化。原标签保持不可变，不删除或移动。
+- 截图/规划冻结检查（06:22 UTC）：`sh tests/browser/visual-check.sh`现退出0，14屏通过；Docker `python tasks/check_planning.py`退出0（46工作包、337动作、266个有证据完成项）；`git diff --check`退出0。变化仅两张已审基线图片及manifest，尚未提交。下一步提交并推送基线修订，创建新的日期序号候选标签，等待全量后端/浏览器/Android验证通过后才取镜像清单。
 - 阶段实际命令与后续：全量Docker `sh infra/test/run.sh`及真实API浏览器`sh tests/browser/integration-check.sh`此前各自退出0（1000项/25场景）；schema/data备份导出、摘要核验、`pg_restore --list`及隔离恢复均退出0；数据库`plan`与`verify`均退出0。期间首次包导入、权限参数、SQL别名等只读探针失败和已修正隔离恢复失败如实保留；没有生产库写入。最新S3前缀实现尚未验证，必须先运行最终完整Docker回归、`git diff --check`与规划检查，再提交推送和候选部署。线上Telegram目前degraded（4个来源reconciliation延迟、2个追赶），切换前后都需记录；数据库迁移仅在候选API/collector均已验证且回退镜像就绪后执行，任何远端观察缺项则停止切换。
 
 ### E116 — 本人乐鱼账号校验门禁与二次身份验证移除（2026-10-30，开发候选运行验证通过）
