@@ -19,7 +19,7 @@ from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 
 from . import database
-from .review_state import active_job, append_traces, authorize
+from .review_state import active_job, append_traces, authorize, trace
 
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
 CHUNK_BYTES = 23 * 1024  # Base64 plus the fixed metadata remains below 32 KiB.
