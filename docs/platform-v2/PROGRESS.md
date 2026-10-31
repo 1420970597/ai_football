@@ -16,6 +16,14 @@
 - 冻结全套验证（16:32 UTC）：`sh infra/test/run.sh`退出0，1018项417.856秒、失败/错误/跳过0，报告`.runtime/test-evidence/1079207`；测试期间未修改产品源文件。构建同提交E126 collector，限额CPU/内存后镜像Image ID=`sha256:d918296ee1dfa29d351ce6ba47c3954787e2d964356ace09b61c13925f1fd6db`，OCI revision=26db97e；在SSH远端Docker导入成功，待collector租约交接后部署。窗口临时诊断显示source历史/对账持续deferred，但pending媒体返回中错误原因呈TimeoutError/HTTPStatusError，E126加入脱敏拒绝分类便于准确定位；不对旧消息批量改状态。
 - 远端生效/新窗口（16:36 UTC）：16:35:16只读租约门禁6条均到期；Compose只替换collector并等待启动退出0，运行Image ID/revision与候选一致，bridge/executor ID、image、StartedAt前后cmp相同。新观察器从16:36:08.495 UTC起连续采样。初始Telegram控制请求短暂ReadTimeout/连接初始化中；媒体pending 3348、近24小时30条中20 TimeoutError、ready本窗0，仅为起点不构成功能通过。接下来核对来源返回原因及本窗原文/图像任务终态。
 
+### E127 — Telegram来源启动时租约先于管理员目录同步（2026-10-31 16:39 UTC，代码已写）
+
+- 目标/责任：新collector启动后先取得远端来源租约，再自动同步管理员/专家目录和历史；责任为`services/collector/telegram.py`及collector回归测试。前置证据来自E126的脱敏远端拒绝日志。
+- 当前证据/根因：16:35:55–16:36:20 UTC，新collector首轮多个`PUT /directory`均HTTP409 `lease_inactive`。`_sync_source`当前顺序是`_refresh_directory`后才POST checkpoint claim；directory API本身要求租约有效，故每个新进程启动会先被拒绝，至少延迟一次五分钟目录刷新。日志还记录过HTTP503空响应，可能为限流/桥接不可用，尚未确定。
+- 设计/实现：每个群先在独立短临界区claim/续租，再释放群锁执行管理员目录查询与同步；保持慢目录请求不阻塞实时消息。增强安全拒绝分类：HTTP503空响应记为有边界的桥接/API不可用，不记录响应体或请求数据。
+- 验收/失败处理：更新慢目录并行测试，明确证明directory调用前已完成来源checkpoint claim且实时消息不等待目录；Docker定向及冻结全套回归，通过后构建/导入/单collector部署并重新起算30分钟。仍有503时只读核验桥接/连接池，不绕过租约，不盲重试有歧义请求。
+- 定向证据/失败记录（16:42 UTC）：Docker禁网6项通过，含“先claim后directory但慢目录不持群锁”和HTTP503空响应安全分类测试。首条定向命令误用测试类名`TelegramCollectorTests`，命令exit1、测试进程启动前因类名不存在；按仓库实际类名`CollectorTests`立即修正并重跑全目标成功。E126窗口严格当前消息3条：2条仅图片/不支持媒体（media_state=unsupported、没有送审任务），1条ready相册、2张图片进入Hermes，终态unresolved并有完整搜索/模型/系统回执；本窗口尚不足30分钟且来源健康仍degraded，不判通过。
+
 ### E125 — 媒体事件原子租约提交与合理截止（2026-10-31 16:04 UTC，代码已写）
 
 - 目标/责任：消除媒体登记与最终回写在5秒提交截止上重复失败；责任为采集器媒体提交及行为测试，依赖E124阶段日志。

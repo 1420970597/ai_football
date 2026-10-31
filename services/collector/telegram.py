@@ -565,12 +565,12 @@ class TelegramCollector:
     async def _sync_source(self, chat_id: str, source: dict) -> dict:
         if time.monotonic() < self.retry_at.get(chat_id, 0):
             return {"state": "backoff"}
-        # Directory enumeration can involve several Telegram RPCs; keep it out
-        # of the per-chat lock used by new message callbacks.
-        await self._refresh_directory(chat_id, source)
+        # Claim the new process's lease before directory writes, but keep the
+        # potentially slow Telegram enumeration outside the live-message lock.
         lock = self.locks.setdefault(chat_id, asyncio.Lock())
         async with lock:
             checkpoint = await self._checkpoint(chat_id)
+        await self._refresh_directory(chat_id, source)
         original = int(checkpoint["last_message_id"])
         last, count = original, 0
         started = time.monotonic()

@@ -50,6 +50,17 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('reason=unclassified', logs.output[0])
             self.assertNotIn('private-', logs.output[0])
 
+    async def test_empty_bridge_unavailable_response_has_bounded_reason(self):
+        def handler(request):
+            return httpx.Response(503, json={})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            with self.assertLogs('platform.telegram', level='WARNING') as logs:
+                with self.assertRaises(httpx.HTTPStatusError):
+                    await backend.checkpoint('-1001', 'private-owner-only')
+        self.assertIn('operation=/checkpoints/claim status=503 reason=service_unavailable', logs.output[0])
+        self.assertNotIn('private-', logs.output[0])
+
     async def test_collector_explicitly_sends_exact_claim_ack_protocol_and_preserves_items(self):
         requests = []
         expected = [{'id': 'test-event-only', 'claim_id': 'test-claim-only'}]

@@ -32,7 +32,8 @@ class TelegramBackend:
                 detail = response.json().get('detail')
             except (ValueError, AttributeError):
                 detail = None
-            reason = _REJECTION_REASONS.get(detail, 'unclassified') if isinstance(detail, str) else 'unclassified'
+            reason = (_REJECTION_REASONS.get(detail, 'unclassified') if isinstance(detail, str)
+                      else 'service_unavailable' if response.status_code == 503 else 'unclassified')
             log.warning('Telegram backend rejected method=%s operation=%s status=%s reason=%s',
                         method, path.split('?', 1)[0], response.status_code, reason)
         response.raise_for_status()

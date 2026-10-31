@@ -434,6 +434,7 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         entered, release = asyncio.Event(), asyncio.Event()
 
         async def slow_directory(*_args):
+            self.assertEqual([('-1001', self.collector.owner)], self.backend.checkpoints)
             entered.set()
             await release.wait()
 
