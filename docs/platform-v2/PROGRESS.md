@@ -14,6 +14,8 @@
 
 本轮阶段更新：2026-10-31 20:41 UTC。E134 BuildKit构建退出0，镜像`ai-football-collector:2.0.0-dev-e134-7e42614` ID=`sha256:e3300d6d6185342754b5e750f02df9dead2511c66016a11d874ce8da3163e41b`，revision=`7e426146bec21da4ca067f35eaa5c1f4a92c3dd6`，版本标签`2.0.0-dev-e134`；限额断网容器导入`collector.telegram`成功。经SSH导入远端退出0，远端ID/revision一致，Compose配置退出0。部署前审核queued/retry/running=0，source lease仍6个active（最晚20:43:05 UTC）；API health/ready均200，bridge/executor容器、镜像、启动时间未变。下一步停止E133并等这6个租约自然到期后切换。
 
+本轮阶段更新：2026-10-31 20:44 UTC。远端E133 collector于20:43:02 UTC停止，命令退出0；停止后6个source lease仍active，最晚到期20:44:16.448 UTC，故等待后复核；20:44:26 UTC租约查询退出0且active=0。review queued/retry/running仍0，API healthz/readyz均200；bridge/executor未变化。E134 collector现在满足安全启动门禁。
+
 本轮更新：2026-10-31 18:10 UTC。E129 API候选由冻结提交`2b5fcf2`的detached验证树构建，BuildKit镜像固定digest、容器CPU quota=50000/100000、memory=memory-swap=402653184 bytes。`ai-football-api:2.0.0-dev-e129-2b5fcf2`构建退出0，Image ID=`sha256:d68d4fdbd2e9105ce66a2d7994803511bdd0fd6dade92123773efbb6d73d9fa8`，revision与源码SHA核验通过；临时builder已删除。队列门禁复核为queued=1/running=2、年龄小于26秒，尚未部署，继续等待归零。
 
 本轮更新：2026-10-31 18:04 UTC。E129冻结全套第二次运行通过：提交`2b5fcf2`、1021项、失败/错误/跳过0、426.866秒退出0，证据`.runtime/test-evidence/1263040`，冻结源码报告`committed_source_verified=true`。E128实际观察到17:58 UTC，严格只读审查25条当前受信消息；20条有完整Hermes/system receipt，5条无job由3条媒体pending/failed和2条unsupported构成。两条failed事件写回错误均为TimeoutError（含1条86字符正文+图片、1条图片），1条旧pending未完成；窗口不通过。E129 API候选尚未部署。
@@ -50,6 +52,7 @@
 - 定向验证：`docker run --rm --network none --cpus=.35 --memory=384m -v /root/ai_football:/workspace:ro -w /workspace -e PYTHONPATH=/workspace/services:/workspace/tests --entrypoint python ai-football-collector:2.0.0-dev-e133-2d2ae4f -m unittest test_telegram_source_scheduling -v`11项、12.249秒、退出0；包含3条各4秒提交回归。首次同命令PYTHONPATH错误（指向`services/collector`而非包父目录）退出1，修正后原测试模块重跑通过。
 - 冻结全套验证通过（20:39 UTC）：干净detached worktree `.runtime/e134-verification`固定于已推送提交`7e426146bec21da4ca067f35eaa5c1f4a92c3dd6`，运行`sh infra/test/run.sh`退出0，1024项、失败/错误/跳过均0；终端431.986秒，机器报告434.194秒，`committed_source_verified=true`。证据`.runtime/e134-verification/.runtime/test-evidence/1570886`复制到`.runtime/test-evidence/1570886`后`diff -qr`退出0；受限Docker内现有API镜像解析JSON退出0，确认源SHA及计数；冻结worktree干净。BuildKit固定镜像摘要及CPU quota/period=`50000/100000`、memory/swap=`402653184`已复核。下一步从此冻结树构建候选，核对image revision和摘要，之后再进行有序collector替换。
 - E134候选构建和切换预检（20:41 UTC）：冻结树构建退出0，镜像ID=`sha256:e3300d6d6185342754b5e750f02df9dead2511c66016a11d874ce8da3163e41b`，tag=`ai-football-collector:2.0.0-dev-e134-7e42614`，revision匹配，版本`2.0.0-dev-e134`；断网Docker模块导入退出0。`.runtime/e123-20261031/load-image.sh`经SSH导入远端退出0，远端ID/revision一致；Compose配置退出0。API health/ready=200，review队列为0，6个source lease尚active（最晚20:43:05 UTC）；bridge/executor状态与先前基线一致。当前E133仍在运行，下一步停旧collector后等lease自然归零再启动E134。
+- E134切换准备（20:44 UTC）：E133于20:43:02停止；停止后租约最新 expiry 延至20:44:16.448，20:44:26复核active=0；活动review job仍0，API healthz/readyz=200，bridge/executor未变。切换命令只启动collector服务，候选已在远端并验证revision/digest。
 
 ### E132 — Telegram近时专家消息对账优先级与历史队列公平推进（2026-10-31 19:54 UTC，冻结全套通过，API已部署，真实窗口未通过健康门禁）
 
