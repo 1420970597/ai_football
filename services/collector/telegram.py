@@ -611,8 +611,6 @@ class TelegramCollector:
             await self.backend.advance_author_backfill(chat_id, self.owner, sender_id, previous, previous, True)
             return {'state': 'complete', 'sender_id': sender_id, 'processed': 0}
         lock = self.locks.setdefault(chat_id, asyncio.Lock())
-        async with lock:
-            await self._checkpoint(chat_id)
         entity = await self._entity(chat_id)
         messages = []
         async for message in self.client.iter_messages(
@@ -655,11 +653,9 @@ class TelegramCollector:
         stage = 'lease_refresh'
         try:
             async with asyncio.timeout(RECONCILE_BATCH_SECONDS):
-                async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                    await self._checkpoint(chat_id)
-                    if not pending:
-                        stage = 'claim'
-                        pending.extend(await self.backend.observed(chat_id, self.owner, limit=RECONCILE_EVENT_LIMIT))
+                if not pending:
+                    stage = 'claim'
+                    pending.extend(await self.backend.observed(chat_id, self.owner, limit=RECONCILE_EVENT_LIMIT))
                 if not pending:
                     return {'state': 'ready', 'checked': 0, 'pending': 0}
                 identifiers = sorted({identifier for item in pending if not item.get('_reconcile_applied')
@@ -680,6 +676,7 @@ class TelegramCollector:
                     reference = {'event_id': item['id'], 'version_key': item['version_key'], 'claim_id': item['claim_id']}
                     ids = item['content']['member_message_ids']
                     members = [by_id[identifier] for identifier in ids if identifier in by_id]
+                    result = {}
                     try:
                         if not item.get('_reconcile_applied'):
                             missing = set(ids) - set(by_id)
@@ -700,8 +697,12 @@ class TelegramCollector:
                                 return {'state': 'deferred', 'reason': 'event_not_committed',
                                         'checked': checked, 'pending': len(pending)}
                             item['_reconcile_applied'] = True
-                        stage = 'acknowledgement'
-                        await self.backend.acknowledge_observed(chat_id, self.owner, reference)
+                        if result.get('reconciliation_acknowledged') is True:
+                            item['_reconcile_acknowledged'] = True
+                        if not item.get('_reconcile_acknowledged'):
+                            stage = 'acknowledgement'
+                            await self.backend.acknowledge_observed(chat_id, self.owner, reference)
+                            item['_reconcile_acknowledged'] = True
                     except httpx.HTTPStatusError as exc:
                         if exc.response.status_code != 409:
                             raise

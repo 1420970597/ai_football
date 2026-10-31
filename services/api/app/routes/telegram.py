@@ -328,6 +328,14 @@ async def ingest_event(body: EventInput, request: Request):
     async with pool.acquire() as conn:
         async with conn.transaction():
             source = await source_with_lease(conn, body.chat_id, body.owner)
+            async def acknowledge_reconciliation():
+                if body.reconciliation is None:
+                    return {}
+                result = await telegram_reconciliation.acknowledge_claim(
+                    conn, source['id'], body.owner, body.reconciliation)
+                return {'reconciliation_acknowledged': result['acknowledged'],
+                        'reconciliation_ack_duplicate': result['duplicate']}
+
             if body.reconciliation is not None:
                 payload = jsonable_encoder(body.model_dump(exclude={'owner', 'reconciliation'}))
                 duplicate = await telegram_reconciliation.apply_claim(
@@ -337,7 +345,8 @@ async def ingest_event(body: EventInput, request: Request):
                     payload_sha256=hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                 )
                 if duplicate:
-                    return {"persisted": True, "state": "reconciled", "duplicate": True}
+                    ack = await acknowledge_reconciliation()
+                    return {"persisted": True, "state": "reconciled", "duplicate": True, **ack}
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"telegram:{source['id']}:{body.platform_message_id}")
             if body.event_kind == "delete":
                 affected = await conn.fetch(
@@ -353,10 +362,12 @@ async def ingest_event(body: EventInput, request: Request):
                 await conn.execute("UPDATE v2_telegram_events SET is_current=FALSE WHERE source_id=$1 AND id IN "
                                    "(SELECT event_id FROM v2_telegram_event_members WHERE platform_message_id=ANY($2::bigint[]))",
                                    source["id"], body.member_message_ids)
-                return {"persisted": True, "state": "deleted"}
+                ack = await acknowledge_reconciliation()
+                return {"persisted": True, "state": "deleted", **ack}
             if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM v2_telegram_tombstones WHERE source_id=$1 AND platform_message_id=ANY($2::bigint[]))",
                                    source["id"], body.member_message_ids):
-                return {"persisted": True, "state": "deleted"}
+                ack = await acknowledge_reconciliation()
+                return {"persisted": True, "state": "deleted", **ack}
             expert = await conn.fetchrow(
                 "SELECT e.id FROM v2_experts e JOIN v2_source_experts se ON se.expert_id=e.id "
                 "WHERE e.platform_sender_id=$1 AND e.enabled AND se.source_id=$2 AND se.enabled", body.sender_id, source["id"],
@@ -374,9 +385,11 @@ async def ingest_event(body: EventInput, request: Request):
             event = await conn.fetchrow("SELECT * FROM v2_telegram_events WHERE source_id=$1 AND platform_message_id=$2 AND version_key=$3",
                                         source["id"], body.platform_message_id, body.version_key)
             if event and not event["is_current"]:
-                return {"persisted": True, "state": "superseded", "message_id": str(event["message_id"])}
+                ack = await acknowledge_reconciliation()
+                return {"persisted": True, "state": "superseded", "message_id": str(event["message_id"]), **ack}
             if not event and current and current["source_version_at"] > body.source_version_at:
-                return {"persisted": True, "state": "ignored_stale"}
+                ack = await acknowledge_reconciliation()
+                return {"persisted": True, "state": "ignored_stale", **ack}
             content = jsonable_encoder(body.model_dump(exclude={"owner", "media_objects", "media_state", "last_error", "reconciliation"}))
             media_objects = body.media_objects
             if event and body.media_state in {'pending', 'failed'} and not media_objects:
@@ -388,7 +401,8 @@ async def ingest_event(body: EventInput, request: Request):
                 raise HTTPException(status_code=409, detail="same message version has conflicting content")
             await conn.execute("UPDATE v2_experts SET display_nickname=$2,updated_at=now() WHERE id=$1 AND display_nickname IS DISTINCT FROM $2", expert["id"], body.sender_nickname.strip())
             if event and event["media_state"] == "ready":
-                return {"persisted": True, "state": "ready", "message_id": str(event["message_id"])}
+                ack = await acknowledge_reconciliation()
+                return {"persisted": True, "state": "ready", "message_id": str(event["message_id"]), **ack}
             if not event:
                 if current:
                     await withdraw(conn, source["id"], body.member_message_ids, "source_edited")
@@ -446,9 +460,10 @@ async def ingest_event(body: EventInput, request: Request):
                 if not job_id:
                     job_id = await conn.fetchval(
                         "SELECT id FROM v2_analysis_jobs WHERE idempotency_key=$1", idempotency_key)
+            ack = await acknowledge_reconciliation()
     return {"persisted": True, "state": body.media_state, "message_id": str(message_id),
             "review_id": str(job_id) if job_id else None,
-            "media_objects": media_objects if body.media_state in {'pending', 'failed'} else []}
+            "media_objects": media_objects if body.media_state in {'pending', 'failed'} else [], **ack}
 
 
 @router.get("/internal/telegram/pending")

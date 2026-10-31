@@ -16,6 +16,7 @@ class ScheduledBackend(Backend):
         self.scheduled = {}
         self.observation_calls = []
         self.claims = []
+        self.ack_calls = []
 
     async def checkpoint(self, chat_id, owner):
         self.claims.append(chat_id)
@@ -27,6 +28,10 @@ class ScheduledBackend(Backend):
         batch=rows[:limit]
         del rows[:limit]
         return [self.claimed_observation(item) for item in batch]
+
+    async def acknowledge_observed(self, chat_id, owner, reconciliation):
+        self.ack_calls.append((chat_id,reconciliation))
+        return await super().acknowledge_observed(chat_id,owner,reconciliation)
 
 
 class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
@@ -57,7 +62,8 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'state':'ready','checked':10,'pending':0},report)
         self.assertEqual([list(range(1,12))],calls)
         self.assertEqual([('-1001',10)],self.backend.observation_calls)
-        self.assertEqual(1,len(self.backend.claims))
+        self.assertEqual([],self.backend.claims)
+        self.assertEqual(10,len(self.backend.ack_calls))
         self.assertFalse(self.collector.locks['-1001'].locked())
 
     async def test_slow_rpc_is_deferred_and_original_claim_retries_before_new_observation(self):
@@ -212,7 +218,7 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(3,len(self.backend.events))
         self.assertEqual(3,len(self.backend.calls))
 
-    async def test_three_slow_commits_fit_budget_without_per_event_lease_round_trips(self):
+    async def test_three_slow_commits_fit_budget_without_checkpoint_per_event(self):
         self.client.messages['-1001']=[Message(i) for i in range(1,4)]
         self.queue('-1001',[[1],[2],[3]])
         checkpoint=self.backend.checkpoint
@@ -228,8 +234,36 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         with patch('collector.telegram.RECONCILE_BATCH_SECONDS',.8):
             report=await asyncio.wait_for(self.collector._reconcile_known('-1001',self.source),1.5)
         self.assertEqual({'state':'ready','checked':3,'pending':0},report)
-        self.assertEqual(1,len(self.backend.claims))
+        self.assertEqual([],self.backend.claims)
         self.assertEqual(3,len(self.backend.events))
+        self.assertEqual(3,len(self.backend.ack_calls))
+
+    async def test_atomic_event_response_skips_compatibility_ack_call(self):
+        self.client.messages['-1001']=[Message(1)]
+        self.queue('-1001',[[1]])
+        original=self.backend.event
+        async def atomic_event(body):
+            return (await original(body)) | {'reconciliation_acknowledged':True}
+        self.backend.event=atomic_event
+        report=await self.collector._reconcile_known('-1001',self.source)
+        self.assertEqual({'state':'ready','checked':1,'pending':0},report)
+        self.assertEqual(1,len(self.backend.events))
+        self.assertEqual([],self.backend.ack_calls)
+
+    async def test_live_message_can_persist_while_reconciliation_claim_waits(self):
+        entered,release=asyncio.Event(),asyncio.Event()
+        async def blocked_claim(*_args,**_kwargs):
+            entered.set()
+            await release.wait()
+            return []
+        self.backend.observed=blocked_claim
+        self.collector.checkpoint_verified_at['-1001']=asyncio.get_running_loop().time()
+        task=asyncio.create_task(self.collector._reconcile_known('-1001',self.source))
+        await asyncio.wait_for(entered.wait(),.5)
+        await asyncio.wait_for(self.collector._live_messages('-1001',[Message(99)]),.5)
+        self.assertIn(('-1001','99'),[(item['chat_id'],item['platform_message_id']) for item in self.backend.calls])
+        release.set()
+        await asyncio.wait_for(task,.5)
 
     async def test_flood_wait_retains_claim_then_success_after_backoff(self):
         self.client.messages['-1001']=[Message(1)]

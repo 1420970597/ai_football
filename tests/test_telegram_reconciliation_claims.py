@@ -203,7 +203,7 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, (await self.checked(body, item)).status_code)
         self.assertEqual(200, (await self.ack(item)).status_code)
 
-    async def test_claim_keeps_due_time_until_committed_check_and_idempotent_ack(self):
+    async def test_event_request_commits_and_acknowledges_claim_atomically(self):
         body = await self.seed()
         due = await self.pool.fetchval('SELECT next_check_at FROM v2_telegram_events')
         item, = await self.observe()
@@ -212,10 +212,12 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(409, (await self.ack(item)).status_code)
         applied = await self.checked(body, item)
         self.assertEqual(200, applied.status_code, applied.text)
-        self.assertEqual(due, await self.pool.fetchval('SELECT next_check_at FROM v2_telegram_events'))
-        self.assertEqual({'acknowledged': True, 'duplicate': False}, (await self.ack(item)).json())
+        self.assertTrue(applied.json()['reconciliation_acknowledged'])
+        self.assertFalse(applied.json()['reconciliation_ack_duplicate'])
         after = await self.pool.fetchrow('SELECT next_check_at,reconcile_acknowledged_at FROM v2_telegram_events')
         self.assertGreater(after['next_check_at'], datetime.now(timezone.utc))
+        self.assertIsNotNone(await self.pool.fetchval('SELECT reconcile_applied_at FROM v2_telegram_events'))
+        self.assertEqual({'acknowledged': True, 'duplicate': True}, (await self.ack(item)).json())
         self.assertEqual({'acknowledged': True, 'duplicate': True}, (await self.ack(item)).json())
         self.assertEqual(after, await self.pool.fetchrow('SELECT next_check_at,reconcile_acknowledged_at FROM v2_telegram_events'))
 
@@ -283,6 +285,7 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         edit = self.event(version='v2', text='改为小2.5', kind='edit', minutes=1)
         result = await self.checked(edit, item)
         self.assertEqual(200, result.status_code, result.text)
+        self.assertTrue(result.json()['reconciliation_acknowledged'])
         next_due = await self.pool.fetchval('SELECT next_check_at FROM v2_telegram_events WHERE is_current')
         self.assertEqual(200, (await self.ack(item)).status_code)
         self.assertEqual(next_due, await self.pool.fetchval('SELECT next_check_at FROM v2_telegram_events WHERE is_current'))
@@ -291,6 +294,33 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('reconciled', (await self.checked(edit, item)).json()['state'])
         self.assertEqual(409, (await self.checked(edit | {'raw_text': '冲突回包不可覆盖'}, item)).status_code)
         self.assertEqual(2, await self.pool.fetchval('SELECT count(*) FROM v2_expert_messages'))
+
+    async def test_ack_failure_rolls_back_reconciliation_event_and_review_job(self):
+        await self.seed()
+        item, = await self.observe()
+        await self.pool.execute("""
+            CREATE FUNCTION reject_reconciliation_ack() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+              IF NEW.reconcile_acknowledged_at IS NOT NULL AND OLD.reconcile_acknowledged_at IS NULL THEN
+                RAISE EXCEPTION 'forced acknowledgement failure';
+              END IF;
+              RETURN NEW;
+            END $$;
+        """)
+        await self.pool.execute("""
+            CREATE TRIGGER reject_reconciliation_ack BEFORE UPDATE ON v2_telegram_events
+            FOR EACH ROW EXECUTE FUNCTION reject_reconciliation_ack()
+        """)
+        edit = self.event(version='v2', text='修改应回滚', kind='edit', minutes=1)
+        with self.assertRaises(Exception):
+            await self.checked(edit, item)
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_expert_messages'))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_telegram_events'))
+        current = await self.pool.fetchrow('SELECT is_current,reconcile_applied_at,reconcile_acknowledged_at FROM v2_telegram_events')
+        self.assertTrue(current['is_current'])
+        self.assertIsNone(current['reconcile_applied_at'])
+        self.assertIsNone(current['reconcile_acknowledged_at'])
+        self.assertEqual('赛前阿森纳大2.5', await self.pool.fetchval('SELECT raw_text FROM v2_expert_messages'))
 
     async def test_failed_transaction_rolls_back_application_marker(self):
         body = await self.seed()
@@ -366,7 +396,7 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
             remaining = await self.pool.fetchval('SELECT EXTRACT(EPOCH FROM next_check_at-now()) FROM v2_telegram_events WHERE id=$1',uuid.UUID(item['id']))
             self.assertLess(abs(float(remaining)-seconds),3)
 
-    async def test_collector_lost_ack_response_retries_ack_without_second_edit(self):
+    async def test_collector_lost_atomic_event_response_replays_then_skips_separate_ack(self):
         await self.seed()
         backend = TelegramBackend(self.client,'http://testserver/internal/telegram')
         client = collector_support.Client({'-1001':[collector_support.Message(11)]})
@@ -378,15 +408,18 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         collector.client = client
         source = {'chat_id':'-1001','trusted_sender_ids':['7'],'allow_media':True}
         collector.sources = {'-1001':source}
-        original = backend.acknowledge_observed
+        original = backend.event
         calls = []
-        async def lose_ack(*args):
-            result = await original(*args)
-            calls.append(1)
+        async def lose_event_response(body):
+            result = await original(body)
+            calls.append(body)
             if len(calls)==1:
-                raise httpx.ReadTimeout('test-only lost ack response')
+                raise httpx.ReadTimeout('test-only lost event response')
             return result
-        backend.acknowledge_observed = lose_ack
+        backend.event = lose_event_response
+        async def forbidden_ack(*args, **kwargs):
+            self.fail('atomic event response already confirms the ACK')
+        backend.acknowledge_observed = forbidden_ack
         try:
             with self.assertRaises(httpx.ReadTimeout):
                 await collector._reconcile_known('-1001',source)
@@ -397,10 +430,11 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
             client.get_messages = forbidden
             result = await collector._reconcile_known('-1001',source)
             self.assertEqual(1,result['checked'])
-            self.assertEqual(2,len(calls))
+            self.assertEqual(calls[0],calls[1])
             self.assertEqual(2,await self.pool.fetchval('SELECT count(*) FROM v2_expert_messages'))
             self.assertEqual(1,await self.pool.fetchval(
                 "SELECT count(*) FROM v2_analysis_jobs WHERE state='unresolved' AND review_mode='historical_replay'"))
+            self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_telegram_events WHERE reconcile_acknowledged_at IS NOT NULL'))
         finally:
             await collector.disconnect()
 
