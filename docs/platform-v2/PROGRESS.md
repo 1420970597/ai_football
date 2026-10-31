@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮最新进度：2026-10-31 23:26 UTC。E137租约共享读取与同群事件/对账并行修改已完成定向验证，106项、失败/错误均0、57.509秒；冻结全套待运行。E136线上ACK一致，但source deadline/DB超时仍使运行门禁失败，30分钟专家发言窗口尚未开始。
+本轮最新进度：2026-10-31 23:27 UTC。E137实现提交`100c2de`已推送到任务分支，定向Docker测试106项通过；正在建立该提交的干净冻结树运行完整套件。E136线上ACK一致，但source deadline/DB超时仍使运行门禁失败，30分钟专家发言窗口尚未开始。
 
 ### E137 — 降低Telegram来源租约写竞争及同群请求排队（设计已记录，代码已写，定向Docker验证通过，冻结全套待运行）
 
@@ -9,6 +9,7 @@
 - 设计决策：请求事务以`FOR SHARE OF cp`校验租约持有者和未过期状态，阻止校验期间租约被其他owner接管，但不在每个业务请求上写租约；续租只由既有`/checkpoints/claim`、checkpoint推进和collector周期checkpoint执行。移除`/events`、`/observed`、`/observed/ack`的客户端source级串行，保留目录、checkpoint及author cursor操作的排序锁。事件幂等键、reconciliation claim行锁、事务ACK和source lease有效性不变。
 - 实现/验收：加入API真实PostgreSQL契约，持有source row共享锁期间仍可提交消息且租约时间戳不变；加入collector传输并发场景，事件及对账领取可在checkpoint请求未完成时完成，而checkpoint推进保持等待顺序。原子ACK、故障重放、checkpoint接管及全部API路由继续回归。
 - 定向验证与命令：首次Docker目标运行`python -m unittest -q tests.test_telegram_api tests.test_telegram_reconciliation_claims tests.test_telegram_source_scheduling tests.test_telegram_collector`退出1，原因是命令的`PYTHONPATH`漏掉`services/api`，API和对账测试模块导入失败；采集模块已有59项运行，不能计验收。修正为`PYTHONPATH=/source/services/api:/source/services:/source:/source/tests`后，在具名临时PostgreSQL与0.5 CPU/512MiB verifier Docker中重跑同一命令，106项、0失败/错误、57.509秒、退出0。临时网络/数据库随命令trap清理。`git diff --check`退出0；真实Telegram和资金调用均未发生。
+- 阶段提交：实现与定向证据提交`100c2de`（`fix(telegram): reduce source lease write contention`）已推送到`origin/fix/TASK-78-hermes-telegram-sync`，push退出0，远端ref更新与本地提交一致。冻结全套尚未运行。
 - 失败处理：共享锁校验失败仍返回租约失效409；旧owner已过期不能提交。定向并发或API契约任一失败即停止候选构建，修正后重跑原Docker测试；运行门禁仍观察到event/ACK deadline或DB超时则继续按新日志和数据库等待证据诊断，不启动30分钟窗。
 
 本轮阶段更新：2026-10-31 21:55 UTC。E135候选已部署于远端，collector于21:51:27启动并报告healthy；image ID=`sha256:418456e54cdb58830548f47544a21e6b3568efbdf7a279fb3b4380c73fefda4c`、revision=`765dc42412ce098071ad5f7b09986949c7af3ab0`，与候选一致；API health/ready均200，bridge/executor容器ID/image/StartedAt不变。Telegram控制状态HTTP200且connected/authorized，但状态degraded：1个来源caught_up、2个reconciliation_deferred、2个catching_up、1个unavailable（TimeoutError）；6/6租约有效、5/6检查点近2分钟刷新。collector日志21:52–21:55有3次ACK deadline、1次event_commit deadline及1次history deadline，实时消息持久化群锁等待最高约6.2秒。近10分钟可信事件均为旧发布时间回补（2022–2025），无可验收的新发言；媒体有pending/unsupported项，不能计作已审。E135运行验收未通过，当前继续定位ACK/event链路等待并核实媒体重试，不启动30分钟窗口。
