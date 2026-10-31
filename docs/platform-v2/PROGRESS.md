@@ -1,12 +1,12 @@
 # 第二代平台实时进度与验证台账
 
-更新时间：2026-10-31 17:23 UTC。当前目标：每30分钟检查新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察。E122完整窗口未通过，E123–E127观察窗口因连续修复切换或来源退化不能作为通过证据。E127于16:57:40 UTC部署，第7分钟仍复现同源checkpoint行锁503，且来源degraded；唯一当前图文样本有Hermes终态但unresolved，故窗口失败。E128按来源串行化代码已提交，Docker定向7项和完整1021项冻结回归均通过。限额候选镜像已导入远端，当前仍运行E127，正等待租约安全交接；E128观察尚未开始。媒体历史队列约3340项。
+更新时间：2026-10-31 17:28 UTC。当前目标：每30分钟检查新增专家发言及审核证据；发现错误后修复、Docker验证、部署并重新开始观察。E122完整窗口未通过，E123–E127观察窗口因连续修复切换或来源退化不能作为通过证据。E127于16:57:40 UTC部署，第7分钟仍复现同源checkpoint行锁503，且来源degraded；唯一当前图文样本有Hermes终态但unresolved，故窗口失败。E128按来源串行化代码已提交，Docker定向7项和完整1021项冻结回归均通过，候选已于17:26:30 UTC生效。新专家与媒体观察从17:27:09 UTC起，完整窗口终点不早于17:57:09 UTC；目前未通过。媒体历史队列约3336项。远端乐鱼及赛果服务首轮状态为503/unavailable，作为独立上游依赖继续跟踪。
 
 最新目录边界：本项目及用户指定备份目录可写，其他目录只读查找既有实现/有效配置；不修改无关项目或服务。旧备份未删除，经授权复用的运行配置、隧道引用、签名/发现引用和 S3 CA 仅存于项目内受保护且被忽略的 `.runtime/`，秘密不回显、不入 Git。项目容器部署及真实只读联调已经授权，真实资金交易未获授权。
 
 ## 当前范围与状态
 
-### E128 — Telegram同一来源checkpoint写入串行化（2026-10-31 17:00 UTC，隔离验证通过，候选待部署）
+### E128 — Telegram同一来源checkpoint写入串行化（2026-10-31 17:00 UTC，隔离验证通过，真实观察中）
 
 - 目标/责任：消除同群实时事件、媒体提交、目录同步、检查点和对账并发更新checkpoint租约导致的API 503；责任目录`services/collector/telegram_backend.py`及Telegram transport测试。依赖E127已部署并提供可复现的现场错误。
 - 当前证据/根因：E127真实运行约2分钟后，远端`POST /events`、`POST /checkpoints/claim`出现HTTP503。Docker API日志定位到`check_lease`与`claim_checkpoint`获取`v2_source_checkpoints`行锁时`asyncpg.LockNotAvailableError`。另有较早`finish_check`结果核验租约查询超时，属于独立接口，不将其误归为Telegram checkpoint 503根因。Telegram控制状态含6来源、2个TimeoutError与2个reconciliation_deferred，`degraded=true`。严格窗口审计尚无新消息，不能认定审核正常。
@@ -16,6 +16,7 @@
 - 定向证据（17:01 UTC）：CPU/内存限制Docker运行`ReconciliationTransportTests`共7项，0.018秒退出0；并发测试覆盖同群checkpoint+event串行及跨群并行；503 code只记录固定原因、不泄露detail。`git diff --check`退出0。
 - 冻结全套（17:16 UTC）：在不含用户未提交reports目录的detached worktree内运行`sh infra/test/run.sh`退出0，1021项、失败/错误/跳过0，控制台420.779秒；报告`.runtime/test-evidence/1165929/backend-tests.json`标记`committed_source_verified=true`、`source_parent_commit=488ecf5`及`seconds=422.919`。报告已复制至主工作树同路径并`diff -qr`退出0。测试期间被测源码冻结。
 - 候选与导入（17:23 UTC）：专用BuildKit容器核验`cpu_quota=50000/cpu_period=100000`、memory和memory-swap各402653184 bytes；候选构建退出0，临时builder构建后移除。初次`docker build --cpus`不受本机CLI支持、退出125且未开始构建；改用带容器资源限制的docker-container BuildKit。候选`ai-football-collector:2.0.0-dev-e128-488ecf5` Image ID=`sha256:768f7403f6c086e3a7b771722bae28f214f18de1c2870f6e84299c35ac28a1db`，OCI revision=`488ecf585906969a1720e1748712913db0ed122d`；构建上下文`telegram_backend.py` SHA256=`b42a1035…`与冻结报告一致。镜像内语法检查首次因只读`/app/__pycache__`失败，改写入`PYTHONPYCACHEPREFIX=/tmp/pycache`后退出0；`docker image save`摘要=`f62b1bdbe85df0c3e00df61db0218a3f07caa75afb43556547ff0e051aae42f2`，经受限SSH导入远端退出0。候选部署脚本已按镜像摘要/revision核对；尚未切换。
+- 远端生效/新观察（17:27 UTC）：E127停止后17:26:30.109 UTC租约门禁6/6 inactive；E128单独替换collector退出0，运行镜像摘要和revision均匹配冻结候选，bridge/executor ID、镜像、启动时间前后比较一致。专家/媒体观察器起点分别为17:27:09.680808与17:27:09.559907 UTC，窗口需持续到17:57:09 UTC之后。首轮`/healthz`和`/readyz`均200，Telegram connected/authorized=true、状态starting且尚无来源样本；媒体历史pending=3336，近30条事件有8个TimeoutError。另一次远端状态查询显示Leyu renewal 503、results unavailable；不归因于Telegram修复，但会阻止真实盘口绑定/结算完整验收，需核实是否恢复。
 
 ### E126 — 明确选中截图的意图与来源接口拒绝定位（2026-10-31 16:22 UTC，研究中）
 
