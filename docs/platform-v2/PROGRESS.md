@@ -62,7 +62,8 @@
 - 当前证据与缺口：E134运行API端到端只读请求p50约0.98–1.53秒、单次最高5.05秒；collector近30分钟有57条阶段deadline/timeout，涉及event commit、ack和lease refresh。代码显示每批开始先调用一次`_checkpoint`领取/刷新90秒来源租约；每条待核对事件前又调用`_checkpoint`，但事件提交及ACK API内部的`source_with_lease`已验证相同租约并续至90秒。24秒批次在约束上远小于90秒租约，故逐条checkpoint调用是可删除的额外远端往返。真实数据库没有阻塞锁；pending SQL执行18ms，不把它误判为根因。
 - 设计决策：保留批次开始时的`_checkpoint`、事件提交和ACK API的服务端租约所有权/有效期校验；只移除批次循环中每条事件前的冗余checkpoint调用，不放宽30秒event claim、不改事件/ACK事务和lease fencing。失败或租约变化仍由API 409拒绝，未提交事件保留待重试。
 - 实现动作与定向验收：`services/collector/telegram.py`已移除每条待核对消息前重复的checkpoint请求，批次入口checkpoint与事件/ACK API服务端租约校验保留。回归将原“每条提交前都续租”断言改为“每批只续租一次”；新增三条消息、每次checkpoint及提交各延迟150ms、批次预算800ms的场景，验证一个入口续租加三次提交完成，而旧逐条续租路径会超时。Docker命令`docker run --rm --network none --cpus=.35 --memory=384m -v /root/ai_football:/workspace:ro -w /workspace -e PYTHONPATH=/workspace/services:/workspace/tests --entrypoint python ai-football-collector:2.0.0-dev-e134-7e42614 -m unittest test_telegram_source_scheduling -v`共12项、12.838秒、退出0；`git diff --check`退出0。下一步将同一提交冻结并跑全套Docker测试；构建候选并校验源码SHA。部署前review queued/running/retry归零、停远端collector并等6个source lease自然到期，再只替换collector；API与bridge/executor不动。部署后先看stage超时、ACK一致性、6个启用来源检查点、媒体状态和真实新消息；仍有API timeout则转查延迟SQL/连接池/外部网络，不再归因于重复checkpoint。
-- 剩余依赖与失败处理：当前没有本轮E134后的真实新发布时间专家消息，稳定候选生效并完成队列/来源门禁后才开始30分钟窗口。目录3个来源的Telegram成员枚举权限限制须如实保留；若新消息缺少job、media未ready或系统receipt，观察窗失败并按采集阶段继续修复。全套Docker测试、候选构建/部署和30分钟真实发言验收均未完成。
+- 冻结全套验证已启动（21:27 UTC）：worktree `.runtime/e135-verification`固定于提交`765dc42412ce098071ad5f7b09986949c7af3ab0`，`sh infra/test/run.sh`在Docker中运行；构建步骤已通过，测试汇总待产生。运行期间不改冻结树源码。
+- 剩余依赖与失败处理：当前没有本轮E134后的真实新发布时间专家消息，稳定候选生效并完成队列/来源门禁后才开始30分钟窗口。目录3个来源的Telegram成员枚举权限限制须如实保留；若新消息缺少job、media未ready或system receipt，观察窗失败并按采集阶段继续修复。全套结果、候选构建/部署和30分钟真实发言验收均未完成。
 
 ### E132 — Telegram近时专家消息对账优先级与历史队列公平推进（2026-10-31 19:54 UTC，冻结全套通过，API已部署，真实窗口未通过健康门禁）
 
