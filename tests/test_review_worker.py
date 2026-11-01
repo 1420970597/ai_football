@@ -54,6 +54,209 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def make_queued(self, attempts=0):
         await self.pool.execute("UPDATE v2_analysis_jobs SET state='queued',attempts=$2,attempt_id=NULL,lease_until=NULL WHERE id=$1", self.job, attempts)
 
+    async def seed_market_receipt(self, job, fixture, reason='refresh_timeout', *, attempt=None):
+        attempt = attempt or job['attempt_id']
+        await self.pool.execute(
+            "INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) "
+            "VALUES($1,$2,$3,'synthetic-recovery','{}') ON CONFLICT DO NOTHING",
+            job['id'], attempt, fixture)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await worker.trace(conn, job['id'], 'mcp_list_match_markets', {
+                    'attempt_id': str(attempt), 'fixture_id': fixture, 'status': 'succeeded',
+                    'refresh': {'attempted': True, 'accepted': reason == 'written', 'reason': reason}})
+
+    async def finish_without_pick(self, job):
+        with patch.object(worker, 'review_message', AsyncMock(return_value=('未录入', {'content': '未录入'}))), \
+                patch.object(worker, 'delete_session', AsyncMock()):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model='synthetic'), job)
+
+    async def test_transient_market_failure_retries_once_then_records_recovered_quote(self):
+        fixture = await support.ReviewTests.fixture(self)
+        await self.make_queued()
+        first = await worker.claim_job(self.pool)
+        await self.seed_market_receipt(first, fixture)
+        await self.finish_without_pick(first)
+        row = await self.pool.fetchrow('SELECT *,available_at>now()+interval \'15 seconds\' AS delayed FROM v2_analysis_jobs WHERE id=$1', self.job)
+        self.assertEqual('retry', row['state'])
+        self.assertEqual('temporary_market_refresh_failure', row['last_error'])
+        self.assertTrue(row['delayed'])
+        self.assertIsNone(await worker.claim_job(self.pool))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        await self.pool.execute("UPDATE v2_analysis_jobs SET available_at=now()-interval '1 second' WHERE id=$1", self.job)
+        second = await worker.claim_job(self.pool)
+        self.assertNotEqual(first['attempt_id'], second['attempt_id'])
+        self.assertEqual(2, second['attempts'])
+        await self.seed_market_receipt(second, fixture, 'written')
+
+        async def recovered(*_args, **_kwargs):
+            body = {'review_id': str(second['id']), 'attempt_id': str(second['attempt_id']), 'fixture_id': fixture}
+            market = await self.client.post('/internal/mcp/list_match_markets', json=body)
+            self.assertEqual(200, market.status_code)
+            quote = market.json()['markets'][0]
+            self.assertTrue(quote['can_record'])
+            response = await self.client.post('/internal/mcp/record_expert_signals', json={
+                'review_id': body['review_id'], 'attempt_id': body['attempt_id'],
+                'signals': [{'fixture_id': fixture, 'quote_id': quote['quote_id'],
+                             'confidence': '.9', 'evidence_text': 'Synthetic recovery intent'}]})
+            self.assertEqual(200, response.status_code)
+            self.assertEqual(1, len(response.json()['accepted']))
+            return '已接受', {'content': '已接受'}
+
+        with patch.object(worker, 'review_message', recovered), patch.object(worker, 'delete_session', AsyncMock()):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model='synthetic'), second)
+        self.assertEqual('succeeded', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        for kind, expected in [('hermes_result', 2), ('system_review_result', 2), ('market_recovery_scheduled', 1)]:
+            self.assertEqual(expected, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind=$2', self.job, kind))
+
+    async def test_market_recovery_uses_latest_read_and_only_current_attempt(self):
+        fixture = await support.ReviewTests.fixture(self)
+        for mode in ('later_success', 'old_attempt'):
+            with self.subTest(mode=mode):
+                await self.make_queued()
+                job = await worker.claim_job(self.pool)
+                await self.seed_market_receipt(job, fixture, attempt=uuid.uuid4() if mode == 'old_attempt' else None)
+                if mode == 'later_success':
+                    await self.seed_market_receipt(job, fixture, 'written')
+                await self.finish_without_pick(job)
+                self.assertEqual('unresolved', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+
+    async def test_market_recovery_does_not_retry_permanent_or_unconfigured_refresh(self):
+        fixture = await support.ReviewTests.fixture(self)
+        for reason in ('fixture_not_open', 'fixture_not_loaded', 'refresh_unconfigured', 'refresh_invalid_response', 'upstream_rate_limited'):
+            with self.subTest(reason=reason):
+                await self.make_queued()
+                job = await worker.claim_job(self.pool)
+                await self.seed_market_receipt(job, fixture, reason)
+                await self.finish_without_pick(job)
+                self.assertEqual('unresolved', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+
+    async def test_market_recovery_stops_at_second_attempt_and_closed_fixture(self):
+        fixture = await support.ReviewTests.fixture(self)
+        for mode in ('attempt_limit', 'finished', 'cancelled', 'historical'):
+            with self.subTest(mode=mode):
+                await self.pool.execute("UPDATE v2_fixtures SET phase='scheduled' WHERE id=$1", fixture)
+                await self.make_queued(attempts=1 if mode == 'attempt_limit' else 0)
+                job = await worker.claim_job(self.pool)
+                if mode == 'historical':
+                    await self.pool.execute("UPDATE v2_analysis_jobs SET review_mode='historical_replay' WHERE id=$1", self.job)
+                    job['review_mode'] = 'historical_replay'
+                elif mode in ('finished', 'cancelled'):
+                    await self.pool.execute('UPDATE v2_fixtures SET phase=$2 WHERE id=$1', fixture, mode)
+                await self.seed_market_receipt(job, fixture)
+                await self.finish_without_pick(job)
+                self.assertEqual('unresolved', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+
+    async def test_second_transient_failure_preserves_both_receipts_and_stops(self):
+        fixture = await support.ReviewTests.fixture(self)
+        await self.make_queued()
+        for turn in (1, 2):
+            await self.pool.execute("UPDATE v2_analysis_jobs SET available_at=now()-interval '1 second' WHERE id=$1", self.job)
+            job = await worker.claim_job(self.pool)
+            await self.seed_market_receipt(job, fixture, 'refresh_busy')
+            await self.finish_without_pick(job)
+            self.assertEqual('retry' if turn == 1 else 'unresolved', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertIsNone(await worker.claim_job(self.pool))
+        self.assertEqual(2, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result'", self.job))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_explicit_selected_quote_stale_refusal_retries_without_price_bypass(self):
+        fixture = await support.ReviewTests.fixture(self)
+        quote = await self.pool.fetchval('SELECT id FROM v2_current_quotes WHERE fixture_id=$1', fixture)
+        for reason in ('quote_not_read_or_changed', 'quote_or_score_context_changed', 'quote_inactive_unknown_or_stale'):
+            with self.subTest(reason=reason):
+                await self.make_queued()
+                job = await worker.claim_job(self.pool)
+                await self.seed_market_receipt(job, fixture, 'written')
+                async with self.pool.acquire() as conn:
+                    async with conn.transaction():
+                        await worker.trace(conn, job['id'], 'mcp_record_expert_signals', {
+                            'attempt_id': str(job['attempt_id']), 'status': 'succeeded',
+                            'parameters': {'signals': [{'fixture_id': fixture, 'quote_id': str(quote)}]},
+                            'accepted': [], 'rejected': [{'index': 0, 'reason': reason}]})
+                await self.finish_without_pick(job)
+                self.assertEqual('retry' if reason == 'quote_inactive_unknown_or_stale' else 'unresolved',
+                                 await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_existing_signal_is_preserved_despite_later_temporary_read_failure(self):
+        fixture = await support.ReviewTests.fixture(self)
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        await self.seed_market_receipt(job, fixture, 'written')
+        body = {'review_id': str(job['id']), 'attempt_id': str(job['attempt_id']), 'fixture_id': fixture}
+        market = await self.client.post('/internal/mcp/list_match_markets', json=body)
+        self.assertEqual(200, market.status_code)
+        quote = market.json()['markets'][0]
+        response = await self.client.post('/internal/mcp/record_expert_signals', json={
+            'review_id': body['review_id'], 'attempt_id': body['attempt_id'],
+            'signals': [{'fixture_id': fixture, 'quote_id': quote['quote_id'], 'evidence_text': 'Synthetic accepted quote'}]})
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(1, len(response.json()['accepted']))
+        before = await self.pool.fetchrow('SELECT * FROM v2_expert_signals')
+        await self.seed_market_receipt(job, fixture, 'refresh_timeout')
+        await self.finish_without_pick(job)
+        self.assertEqual('succeeded', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual(dict(before), dict(await self.pool.fetchrow('SELECT * FROM v2_expert_signals')))
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE trace_kind='market_recovery_scheduled'"))
+
+    async def test_partial_multi_match_recovery_preserves_already_accepted_signal(self):
+        first_fixture = await support.ReviewTests.fixture(self)
+        second_fixture = await support.ReviewTests.fixture(self, index=2)
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        await self.seed_market_receipt(job, first_fixture, 'written')
+        context = {'review_id': str(job['id']), 'attempt_id': str(job['attempt_id'])}
+        market = await self.client.post('/internal/mcp/list_match_markets', json={**context, 'fixture_id': first_fixture})
+        self.assertEqual(200, market.status_code)
+        response = await self.client.post('/internal/mcp/record_expert_signals', json={**context, 'signals': [{
+            'fixture_id': first_fixture, 'quote_id': market.json()['markets'][0]['quote_id'],
+            'evidence_text': 'Synthetic first accepted leg'}]})
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(1, len(response.json()['accepted']))
+        before = dict(await self.pool.fetchrow('SELECT * FROM v2_expert_signals'))
+        await self.seed_market_receipt(job, first_fixture, 'refresh_timeout')
+        await self.seed_market_receipt(job, second_fixture, 'refresh_timeout')
+        await self.finish_without_pick(job)
+        self.assertEqual('retry', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        recovery = await self.pool.fetchval("SELECT payload FROM v2_analysis_traces WHERE trace_kind='market_recovery_scheduled'")
+        self.assertEqual([{'fixture_id': second_fixture, 'reason': 'refresh_timeout'}], recovery['fixtures'])
+        self.assertEqual(before, dict(await self.pool.fetchrow('SELECT * FROM v2_expert_signals')))
+        receipt = await self.pool.fetchval("SELECT payload FROM v2_analysis_traces WHERE trace_kind='system_review_result'")
+        self.assertEqual('retry', receipt['outcome'])
+        self.assertEqual(1, receipt['accepted_count'])
+
+    async def test_partial_same_match_different_lines_recovers_only_unaccepted_option(self):
+        markets = [{'market_id': 'total', 'market_name': '全场大小', 'kind': 'total', 'period': 'full_time',
+                    'line': line, 'selection': 'over', 'price': '1.95',
+                    'source_updated_at': self.now.isoformat(), 'received_at': self.now.isoformat()}
+                   for line in ('2.5', '2.75')]
+        fixture = await support.ReviewTests.fixture(self, markets=markets)
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        await self.seed_market_receipt(job, fixture, 'written')
+        context = {'review_id': str(job['id']), 'attempt_id': str(job['attempt_id'])}
+        market = await self.client.post('/internal/mcp/list_match_markets', json={**context, 'fixture_id': fixture})
+        self.assertEqual(200, market.status_code)
+        quotes = market.json()['markets']
+        self.assertEqual(2, len(quotes))
+        accepted = await self.client.post('/internal/mcp/record_expert_signals', json={**context, 'signals': [{
+            'fixture_id': fixture, 'quote_id': quotes[0]['quote_id'], 'evidence_text': 'Synthetic first line'}]})
+        self.assertEqual(200, accepted.status_code)
+        self.assertEqual(1, len(accepted.json()['accepted']))
+        before = dict(await self.pool.fetchrow('SELECT * FROM v2_expert_signals'))
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await worker.trace(conn, job['id'], 'mcp_record_expert_signals', {
+                    'attempt_id': str(job['attempt_id']), 'status': 'succeeded',
+                    'parameters': {'signals': [{'fixture_id': fixture, 'quote_id': q['quote_id']} for q in quotes]},
+                    'accepted': [], 'rejected': [{'index': i, 'reason': 'quote_inactive_unknown_or_stale'} for i in (0, 1)]})
+        await self.finish_without_pick(job)
+        self.assertEqual('retry', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual(before, dict(await self.pool.fetchrow('SELECT * FROM v2_expert_signals')))
+        self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE trace_kind='market_recovery_scheduled'"))
+
     async def test_claim_preserves_current_and_legacy_reply_snapshot_text(self):
         for context, expected in [({'text': '珀斯光荣 阿德莱德 全场大0.75'}, '珀斯光荣 阿德莱德 全场大0.75'),
                                   ({'raw_text': '旧格式全场大2.5'}, '旧格式全场大2.5'),

@@ -14,6 +14,7 @@ from .config import load_settings
 from .hermes_client import delete_session, resolve_review_settings, review_message
 from .review_state import active_job, trace
 from .review_summary import record_summary
+from .review_recovery import market_recovery
 from .review_policy import REALTIME_WINDOW_SECONDS
 from fastapi import HTTPException
 import asyncpg
@@ -315,11 +316,16 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
             async with conn.transaction():
                 current = await active_job(conn, job["id"], job["attempt_id"])
                 count = await record_summary(conn, current, job["attempt_id"], job.get('review_mode', 'real_time'))
-                final_state = "succeeded" if count else "unresolved"
+                recovery = await market_recovery(conn, current, job['attempt_id'], job['attempts'])
+                final_state = 'retry' if recovery else "succeeded" if count else "unresolved"
+                if recovery:
+                    await trace(conn, job['id'], 'market_recovery_scheduled',
+                                {'attempt_id': str(job['attempt_id']), **recovery})
                 conclusion_elapsed_ms = max(0, (time.monotonic() - job.get('_claimed_monotonic', started)) * 1000)
                 concluded = await conn.fetchrow(
                     "WITH completed_job AS ("
-                    " UPDATE v2_analysis_jobs j SET state=$3,lease_until=NULL,last_error=NULL,updated_at=now()"
+                    " UPDATE v2_analysis_jobs j SET state=$3,lease_until=NULL,last_error=$6,"
+                    " available_at=CASE WHEN $3='retry' THEN now()+($7::int*interval '1 second') ELSE j.available_at END,updated_at=now()"
                     " FROM v2_expert_messages m WHERE j.id=$1 AND j.attempt_id=$2 AND j.state='running'"
                     " AND m.id=j.message_id RETURNING j.id,"
                     " GREATEST(0,round((extract(epoch FROM (clock_timestamp()-m.created_at))*1000)::numeric,3)) AS event_elapsed"
@@ -332,6 +338,7 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
                     ") SELECT (SELECT count(*) FROM completed_job) AS job_count,"
                     "(SELECT count(*) FROM completed_trace) AS trace_count",
                     job["id"], job["attempt_id"], final_state, count, round(conclusion_elapsed_ms, 3),
+                    recovery['reason'] if recovery else None, recovery['delay_seconds'] if recovery else 0,
                 )
                 if concluded["job_count"] != 1 or concluded["trace_count"] != 1:
                     raise RuntimeError("review conclusion state or receipt could not be committed")
