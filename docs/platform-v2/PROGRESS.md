@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮最新进度：2026-11-01 00:12 UTC。E138来源级事务advisory fencing提交`97a9092`已推送，定向Docker 107项与冻结全套1,030项通过；机器报告确认源SHA `3b58817`、失败/错误/跳过0，恢复盘点46表及1媒体对象前后无差异。API候选构建待执行。E137运行门禁未通过，专家观察窗未开始。
+本轮最新进度：2026-11-01 00:14 UTC。E138定向107项及冻结Docker全套1,030项均通过；同SHA API候选已构建并通过revision/模块导入核验。部署前队列queued/running/retry均0，6源lease有效且4个检查点近2分钟fresh；正在校验并准备只切换API。E137运行门禁未通过，观察窗未开始。
 
 ### E137 — 降低Telegram来源租约写竞争及同群请求排队（冻结Docker验证通过并生效，运行验收失败，后续E138修复中）
 
@@ -17,7 +17,7 @@
 - E137运行门禁失败（23:50–00:02 UTC）：API候选healthy、healthz/readyz=200，collector镜像revision匹配；但新collector启动后的日志仍有`event_commit` deadline、`history_deadline`及`/events` 503 database timeout。Telegram状态HTTP200、connected/authorized，6源中1 caught_up、3 catching_up、2 reconciliation_deferred，degraded=true；最后一次snapshot source leases=6/6 active、5/6 checkpoint近2分钟fresh、6/6无last_error。近10分钟18条event接收、38次应用和ACK、未确认0；队列queued/running/retry=0。API另见`source_with_lease`/`ingest_fixtures`/`claim_work` TimeoutError。30秒PG采样202次，无Lock wait/blocked，最大active=3；30次只读`SELECT 1` p50/p95/max=171.0/286.8/490.9ms。故E137降低了已确认与collector客户端的串行，但按共享行锁读取租约仍与checkpoint行更新有潜在冲突，且运行证据不支持开始30分钟窗口。
 - 失败处理：共享锁校验失败仍返回租约失效409；旧owner已过期不能提交。定向并发或API契约任一失败即停止候选构建，修正后重跑原Docker测试；运行门禁仍观察到event/ACK deadline或DB超时则继续按新日志和数据库等待证据诊断，不启动30分钟窗。
 
-### E138 — 用来源级事务advisory锁分离消息提交与租约续期（冻结Docker验证通过，API候选待构建）
+### E138 — 用来源级事务advisory锁分离消息提交与租约续期（冻结Docker验证通过，候选已构建，部署待执行）
 
 - 目标/责任目录：继续消除E137行级共享租约锁与定期checkpoint更新之间的耦合；责任目录`services/api/app/routes/telegram.py`与Telegram API PostgreSQL测试。前置是E137定向及冻结全套通过且已生效，但真实运行门禁未过。
 - 当前证据：E137运行近5分钟19次对账应用均有ACK、未确认0，但collector曾报event_commit deadline及Telegram周期TimeoutError；API也记录`claim_checkpoint`、赛程`ingest_fixtures`超时。30秒PG采样202次、lock wait与blocked sample均0、最大active=3；30次只读`SELECT 1` p50/p95/max=171.0/286.8/490.9ms。E137 `FOR SHARE OF cp`会令同群事件共享读锁与租约续期/接管的checkpoint行UPDATE互斥，虽未在短采样捕捉到等待，仍去除该不必要的共享行锁。
@@ -26,6 +26,7 @@
 - 定向验证（00:00 UTC）：在具名临时Docker PostgreSQL及0.5 CPU/512MiB verifier中运行`python -m unittest -q tests.test_telegram_api tests.test_telegram_reconciliation_claims tests.test_telegram_source_scheduling tests.test_telegram_collector`，107项、失败/错误均0、57.528秒、退出0。覆盖来源级advisory共享/独占锁、接管等待后拒绝、租约时间戳不变、现有ACK/回放和采集调度。`git diff --check`退出0；真实Telegram/模型/资金未调用。
 - 实现提交：`97a9092`（`fix(telegram): coordinate source lease fencing`）已推送至任务分支，push退出0，远端引用核对通过；全量Docker冻结验证尚待运行。
 - 冻结全套与恢复验收：干净worktree`.runtime/e138-verification`固定在提交`3b58817e9426e87fa0dfc6f43f205f9d6707236e`，`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`退出0，1,030项、失败/错误/跳过均0，终端437.671秒；Docker内解析机器报告退出0，显示439.983秒、`committed_source_verified=true`且`source_parent_commit`精确匹配。报告`.runtime/e138-verification/.runtime/test-evidence/1976566/backend-tests.json`。恢复验收46张表、1个媒体对象，业务盘点前后差异`{}`；隔离测试不调用真实Telegram、模型或资金。worktree测试后clean。下一步仅构建E138 API候选并核对revision/导入，再按队列门禁部署。
+- API候选构建（00:13 UTC）：从冻结worktree构建`docker buildx build --builder ai-football-e131 --platform linux/amd64 --load --pull --provenance=false --sbom=false ...`退出0；tag=`ai-football-api:2.0.0-dev-e138-3b58817`，image ID=`sha256:e4fa954b2a0a1b59e4f9d511b0473d8fe1985578fa6d4eff46fd77147d255ae9`、OCI revision=`3b58817e9426e87fa0dfc6f43f205f9d6707236e`、version=`2.0.0-dev-e138`；限额Docker内`app.routes.telegram`导入退出0。API Compose覆盖文件已准备，配置与镜像渲染待复核。部署门禁快照queued/running/retry=0/0/0，source lease=6/6 active、4/6 checked_at<2m；API E137健康，E137 collector持续运行。
 - 失败处理：测试任何共享/独占锁或现有续期语义失败则不构建；候选部署仍要求队列空闲、旧collector停后所有租约自然到期。生效后若API timeout与event_commit deadline仍出现，继续检查远端数据库调用耗时及业务查询路径，不将其归因于Telegram无消息，亦不启动30分钟窗。
 
 本轮阶段更新：2026-10-31 21:55 UTC。E135候选已部署于远端，collector于21:51:27启动并报告healthy；image ID=`sha256:418456e54cdb58830548f47544a21e6b3568efbdf7a279fb3b4380c73fefda4c`、revision=`765dc42412ce098071ad5f7b09986949c7af3ab0`，与候选一致；API health/ready均200，bridge/executor容器ID/image/StartedAt不变。Telegram控制状态HTTP200且connected/authorized，但状态degraded：1个来源caught_up、2个reconciliation_deferred、2个catching_up、1个unavailable（TimeoutError）；6/6租约有效、5/6检查点近2分钟刷新。collector日志21:52–21:55有3次ACK deadline、1次event_commit deadline及1次history deadline，实时消息持久化群锁等待最高约6.2秒。近10分钟可信事件均为旧发布时间回补（2022–2025），无可验收的新发言；媒体有pending/unsupported项，不能计作已审。E135运行验收未通过，当前继续定位ACK/event链路等待并核实媒体重试，不启动30分钟窗口。
