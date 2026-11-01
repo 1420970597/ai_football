@@ -723,7 +723,7 @@ async def directory_control(request, path, payload):
 
 @router.get("/api/v1/admin/telegram/messages")
 async def telegram_messages(request: Request, expert_id: uuid.UUID | None = None, cursor: str | None = None, limit: int = 30):
-    await require_admin(request)
+    actor = await message_read.reader(request, admin=True)
     before, before_id = None, None
     if cursor:
         try:
@@ -753,7 +753,10 @@ async def telegram_messages(request: Request, expert_id: uuid.UUID | None = None
         payload = json.dumps([str(expert_id) if expert_id else "all", page[-1]["posted_at"].isoformat(), str(page[-1]["id"])]).encode()
         signature = hmac.new(request.app.state.settings.encryption_key, payload, hashlib.sha256).digest()
         next_cursor = base64.urlsafe_b64encode(payload + signature).decode().rstrip("=")
-    return {"items": [dict(row) for row in page], "next_cursor": next_cursor}
+    items = [dict(row) | {'media_objects': message_read.message_projection(
+        dict(row), admin=True, request=request, actor=actor)['media_objects']} for row in page]
+    return JSONResponse(jsonable_encoder({"items": items, "next_cursor": next_cursor}),
+                        headers=message_read.HEADERS)
 
 
 @router.get("/api/v1/admin/telegram/messages/{message_id}")
