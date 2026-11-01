@@ -19,3 +19,7 @@
 冻结与隔离对照（19:59 UTC）：源码02cbf9b83a2337cefd5dea29d494c50f049bdd39已推送，干净独立worktree完整1151项预期测试运行中。真实临时PG固定每次SQL模拟30ms，6次领取旧90调用2941.939ms、新60调用1896.158ms，任务顺序/全部返回消息字段/attempt与租约对应/搜索清空/6次唯一领取回执一致，benchmark.sh退出0。模拟结果不作线上比例承诺。候选镜像sha256:81795d89199fef7a7b3a2a16488b5bbb62aa5d37b2bfa578bdb0daf0a206b07f，OCI同源码，构建、无网络模块断言、Compose配置核验退出0，未部署。独立空闲门禁及完整新窗口脚本已准备，必须等全套实际通过才能执行。
 
 完整冻结回归（20:05 UTC）：1151项490.008秒、失败/错误/跳过0、退出0，committed_source_verified=true、源码02cbf9b，46表备份恢复difference为空。证据.runtime/e174-work/.runtime/test-evidence/396595/backend-tests.json及.runtime/e174-live/full-suite.log。准备独立门禁安全交接，完整30分钟尚未开始，不能称线上提速通过。
+
+真实生效（20:09 UTC）：独立门禁20:05:41.441191暂停领取、20:05:44.856890空闲持锁，部署与模块/健康/繁简真实查询核验退出0，门禁was_held=true释放。API容器3185f5c4…/20:07:02.70733085、工作器b149a280…/20:07:22.402254474，均镜像81795d89…/源码02cbf9b。程序化对比容器ID、镜像和启动时间，仅API/worker改变；Hermes/MCP/web/executor不变，无远端部署、无模型/资源/并发/账户与信任配置变化。
+
+新完整窗口20:08:09.020299–20:38:09.020299，watch session13505；必须等实际watch_ended且31样本/至少1800秒后才运行官方四来源逐帖核对，交接另从19:45:52.719331覆盖。浏览器全套点击与原图session54194在运行，尚未完成。证据.runtime/e174-live/{handoff.jsonl,deployment.log,deployed-identities.txt,container-change-verification.txt,window.json}。首样本健康就绪200、TG授权连接正常，无新消息；不把首样本当完整验收。
