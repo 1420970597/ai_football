@@ -10,7 +10,9 @@ from fastapi import HTTPException, Request
 def quote_context(quote, fixture) -> dict:
     return {key: quote[key] for key in ('market_kind', 'period', 'score_basis', 'play_id', 'market_instance_id', 'selection_id')} | {
         key: fixture[key] for key in ('phase', 'home_score', 'away_score', 'half_home_score', 'half_away_score')
-    }
+    } | {'fixture_id': quote['fixture_id'], 'market_id': quote['market_id'],
+         'line': str(quote['line']) if quote['line'] is not None else None,
+         'selection': quote['selection']}
 
 
 def authorize(request: Request, token: str) -> None:

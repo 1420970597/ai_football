@@ -353,11 +353,14 @@ async def record_expert_signals(body: RecordInput, request: Request):
                 body.review_id, body.attempt_id, sorted({pick.fixture_id for pick in body.signals}),
             )
             for index, pick in enumerate(body.signals):
+                # A recommendation binds the read market intent, not a price
+                # promise. Under these locks retain identical semantics and
+                # score context, then validate and snapshot the current quote.
                 quote = await conn.fetchrow(
-                    "SELECT q.*,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context,r.source_updated_at AS read_source_time FROM v2_current_quotes q "
+                    "SELECT q.*,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context,r.source_updated_at AS read_source_time,r.price AS read_price FROM v2_current_quotes q "
                     "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
                     "JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 "
-                    "WHERE q.id=$3 AND q.fixture_id=$4 AND q.price IS NOT DISTINCT FROM r.price FOR SHARE OF q",
+                    "WHERE q.id=$3 AND q.fixture_id=$4 FOR SHARE OF q",
                     body.review_id, body.attempt_id, pick.quote_id, pick.fixture_id,
                 )
                 reason = None
@@ -368,8 +371,6 @@ async def record_expert_signals(body: RecordInput, request: Request):
                     confirmation = confirmation or confirmation_for(quote['read_context'].get('current_confirmation'), quote, fixture, max_quote_age)
                 if not quote:
                     reason = "quote_not_read_or_changed"
-                elif quote['source_updated_at'] != quote['read_source_time'] and not confirmation:
-                    reason = 'quote_not_read_or_changed'
                 elif {k: v for k, v in quote['read_context'].items() if k != 'current_confirmation'} != quote_context(quote, quote):
                     reason = 'quote_or_score_context_changed'
                 elif quote["phase"] not in {"scheduled", "live"}:
@@ -381,6 +382,7 @@ async def record_expert_signals(body: RecordInput, request: Request):
                     continue
                 baseline = {"home": quote["home_score"], "away": quote["away_score"], "half_home": quote["half_home_score"], "half_away": quote["half_away_score"]}
                 new_id = uuid.uuid4()
+                recorded_price = quote['price']
                 result = await conn.fetchrow(
                     "INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,period,market_kind,line,selection,recommendation_price,quote_time,confidence,evidence_text,score_baseline,score_basis) "
                     "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(message_id,fixture_id,market_id,period,(COALESCE(line,0)),selection) DO NOTHING RETURNING id",
@@ -389,10 +391,13 @@ async def record_expert_signals(body: RecordInput, request: Request):
                 if result:
                     await conn.execute(
                         "INSERT INTO v2_quote_evidence(id,fixture_id,market_id,market_name,period,line,selection,price,evidence_kind,reference_id,source_updated_at,evidence,score_baseline) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'expert_signal',$9,$10,$11,$12)",
-                        uuid.uuid4(), quote["fixture_id"], quote["market_id"], quote["market_name"], quote["period"], quote["line"], quote["selection"], quote["price"], new_id, quote["source_updated_at"], {"job_id": str(body.review_id), "attempt_id": str(body.attempt_id), "quote_id": str(pick.quote_id), "score_basis": quote["score_basis"], "market_kind": quote["market_kind"], 'current_confirmation': confirmation}, baseline,
+                        uuid.uuid4(), quote["fixture_id"], quote["market_id"], quote["market_name"], quote["period"], quote["line"], quote["selection"], quote["price"], new_id, quote["source_updated_at"], {"job_id": str(body.review_id), "attempt_id": str(body.attempt_id), "quote_id": str(pick.quote_id), "score_basis": quote["score_basis"], "market_kind": quote["market_kind"], 'current_confirmation': confirmation,
+                        'reviewed_price': str(quote['read_price']) if quote['read_price'] is not None else None,
+                        'reviewed_source_updated_at': quote['read_source_time'].isoformat() if quote['read_source_time'] else None}, baseline,
                     )
                 else:
-                    new_id = await conn.fetchval("SELECT id FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND selection=$6 AND market_kind=$7 AND (line IS NOT DISTINCT FROM $5::numeric OR market_kind='winner' AND COALESCE(line,0)=0 AND COALESCE($5::numeric,0)=0)", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"], quote["market_kind"])
-                accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(quote["price"])})
+                    existing = await conn.fetchrow("SELECT id,recommendation_price FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND selection=$6 AND market_kind=$7 AND (line IS NOT DISTINCT FROM $5::numeric OR market_kind='winner' AND COALESCE(line,0)=0 AND COALESCE($5::numeric,0)=0)", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"], quote["market_kind"])
+                    new_id, recorded_price = existing['id'], existing['recommendation_price']
+                accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(recorded_price)})
             result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
             return await tool_success(conn, body, result, result)

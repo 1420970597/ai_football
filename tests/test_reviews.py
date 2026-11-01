@@ -178,9 +178,9 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                 if task is not None:
                     response = await asyncio.wait_for(task, 5)
         self.assertEqual(200, response.status_code, response.text)
-        self.assertEqual([], response.json()['accepted'])
-        self.assertEqual('quote_not_read_or_changed', response.json()['rejected'][0]['reason'])
-        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        self.assertEqual([], response.json()['rejected'])
+        self.assertEqual('2.05000', response.json()['accepted'][0]['price'])
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
         await self.read_market(fixture_id)
         retry = await self.post('record_expert_signals', signals=[pick])
         self.assertEqual(1, len(retry.json()['accepted']))
@@ -312,7 +312,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         stored = await self.pool.fetchrow('SELECT * FROM v2_current_quotes')
         self.assertFalse(fresh_quote(stored,15))
 
-    async def test_record_rechecks_expired_observation_and_rejects_changed_price(self):
+    async def test_record_rechecks_expired_observation_and_records_current_price(self):
         fixture_id = await self.fixture()
         key, _ = await self.search_all()
         await self.resolve(key)
@@ -331,8 +331,11 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
             result = await self.post('record_expert_signals',signals=[{'fixture_id':fixture_id,
                 'quote_id':quote['quote_id'],'evidence_text':'大2.5'}])
         self.assertEqual(1,len(calls))
-        self.assertEqual('quote_not_read_or_changed',result.json()['rejected'][0]['reason'])
-        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        self.assertEqual([],result.json()['rejected'])
+        self.assertEqual('2.01000',result.json()['accepted'][0]['price'])
+        stored=await self.pool.fetchrow('SELECT price,evidence FROM v2_quote_evidence')
+        self.assertEqual(Decimal('2.01'),stored['price'])
+        self.assertEqual(Decimal('1.95'),Decimal(stored['evidence']['reviewed_price']))
 
     async def test_search_reaches_105th_fixture_and_snapshot_is_stable(self):
         for index in range(105):
@@ -385,7 +388,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         result = await self.post("resolve_match", search_key=key, team_a="Club A", team_b="Club B", to_utc=(self.now + timedelta(hours=1, minutes=30)).isoformat())
         self.assertTrue(result.json()["resolved"])
 
-    async def test_signal_requires_market_read_and_unchanged_quote(self):
+    async def test_signal_requires_market_read_and_uses_current_system_price(self):
         fixture_id = await self.fixture()
         key, _ = await self.search_all()
         await self.resolve(key)
@@ -396,7 +399,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         await self.read_market(fixture_id)
         await self.pool.execute("UPDATE v2_current_quotes SET price=2.05 WHERE id=$1", quote_id)
         result = await self.post("record_expert_signals", signals=[pick])
-        self.assertFalse(result.json()["accepted"])
+        self.assertEqual([],result.json()['rejected'])
+        self.assertEqual('2.05000',result.json()['accepted'][0]['price'])
         await self.read_market(fixture_id)
         result = await self.post("record_expert_signals", signals=[pick])
         self.assertEqual(Decimal('2.05'), Decimal(result.json()["accepted"][0]["price"]))
@@ -406,6 +410,62 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         traces = await self.pool.fetch("SELECT payload FROM v2_analysis_traces WHERE trace_kind LIKE 'mcp_%'")
         self.assertTrue(traces)
         self.assertTrue(all(row['payload']['elapsed_ms'] >= 0 for row in traces))
+
+    async def test_price_and_source_time_refresh_keep_intent_and_preserve_first_snapshot(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        quote = await self.read_market(fixture_id)
+        original = await self.pool.fetchrow('SELECT * FROM v2_current_quotes')
+        await self.pool.execute('UPDATE v2_current_quotes SET price=2.08,source_updated_at=now()')
+        pick = {'fixture_id':fixture_id, 'quote_id':quote['quote_id'], 'evidence_text':'Alpha 大2.5 @9.99'}
+        result = await self.post('record_expert_signals', signals=[pick])
+        self.assertEqual([], result.json()['rejected'])
+        self.assertEqual('2.08000', result.json()['accepted'][0]['price'])
+        evidence = await self.pool.fetchrow('SELECT price,source_updated_at,evidence FROM v2_quote_evidence')
+        self.assertEqual(Decimal('2.08'), evidence['price'])
+        self.assertEqual(Decimal('1.95'), Decimal(evidence['evidence']['reviewed_price']))
+        self.assertEqual(original['source_updated_at'].isoformat(), evidence['evidence']['reviewed_source_updated_at'])
+        await self.pool.execute('UPDATE v2_current_quotes SET price=2.20,source_updated_at=now()')
+        duplicate = await self.post('record_expert_signals', signals=[pick])
+        self.assertTrue(duplicate.json()['accepted'][0]['duplicate'])
+        self.assertEqual('2.08000',duplicate.json()['accepted'][0]['price'])
+        self.assertEqual(Decimal('2.08'), await self.pool.fetchval('SELECT recommendation_price FROM v2_expert_signals'))
+        self.assertEqual(evidence, await self.pool.fetchrow('SELECT price,source_updated_at,evidence FROM v2_quote_evidence'))
+
+    async def test_current_quote_repricing_cannot_change_read_market_identity(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        quote = await self.read_market(fixture_id)
+        original = await self.pool.fetchrow('SELECT * FROM v2_current_quotes')
+        changes = {'line':Decimal('2.75'), 'selection':'under', 'period':'first_half',
+                   'market_id':'different-market', 'play_id':'different-play',
+                   'market_instance_id':'different-instance', 'selection_id':'different-selection',
+                   'score_basis':'remaining_period'}
+        for field, value in changes.items():
+            with self.subTest(field=field):
+                # Field names come only from this fixed test allowlist.
+                await self.pool.execute(f'UPDATE v2_current_quotes SET {field}=$1,price=2.08,source_updated_at=now()',value)
+                result = await self.post('record_expert_signals', signals=[{'fixture_id':fixture_id,
+                    'quote_id':quote['quote_id'], 'evidence_text':'Alpha 大2.5'}])
+                self.assertEqual([],result.json()['accepted'])
+                self.assertEqual('quote_or_score_context_changed',result.json()['rejected'][0]['reason'])
+                await self.pool.execute(f'UPDATE v2_current_quotes SET {field}=$1',original[field])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_price_change_does_not_allow_stale_or_suspended_current_quote(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        quote = await self.read_market(fixture_id)
+        for source_time,status in [(None,'active'),(self.now-timedelta(minutes=5),'active'),(self.now,'suspended')]:
+            await self.pool.execute('UPDATE v2_current_quotes SET price=2.08,source_updated_at=$1,status=$2',source_time,status)
+            result = await self.post('record_expert_signals', signals=[{'fixture_id':fixture_id,
+                'quote_id':quote['quote_id'], 'evidence_text':'Alpha 大2.5'}])
+            self.assertEqual([],result.json()['accepted'])
+            self.assertEqual('quote_inactive_unknown_or_stale',result.json()['rejected'][0]['reason'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_quote_evidence'))
 
     async def test_expert_odds_text_does_not_gate_market_match_or_override_system_price(self):
         fixture_id = await self.fixture()
