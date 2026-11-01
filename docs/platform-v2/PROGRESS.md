@@ -1,5 +1,7 @@
 # 第二代平台实时进度与验证台账
 
+E152冻结通过及真实生效（2026-11-01 10:08 UTC）：独立a0b52549865b57d835d088986d444bc253a37fb7全套1070项、447.359秒、退出0，失败/错误/跳过0；报告449.777秒、committed_source_verified=true、源码一致，恢复46表差异{}。报告.runtime/e152-20261101-verification/.runtime/test-evidence/3288044/backend-tests.json；bridge源码SHA256=150d274aaede10f3e6709ff57da227eecd3142c21c06c404e501be8421a7f329，测试=9e5eb4a2d66b428454f1d0f21f1f0a94af05a84f4a50f88264ad4eaa99990033。远端先核旧哈希、备份.runtime/e152-20261101/api_bridge.before.py、原位写入固定挂载文件、容器内验证哈希及compile，再仅docker restart -t10 api-bridge退出0；原bridge ID与镜像保持，StartedAt=10:08:16.652760 UTC，collector和executor的ID/镜像/启动时间未变。本修复为显式bind脚本更新，不声称bridge旧镜像本身包含新源码。新1800秒只读watch已从该生效时间启动，证据.runtime/e152-live/watch.jsonl；E151旧观察因已发现403不能作为通过窗口。下一步核旧两条媒体正常恢复、403消失及完整新30分钟逐编号审核对照；未改变已存消息、归档游标、信号或交易许可。
+
 E152实现冻结（2026-11-01 10:01 UTC）：固定POST回执路径及实际backend契约调用已修复；Docker命令`python -m unittest test_remote_deployment -q`运行22项、7.973秒、退出0，含真实TCP/Unix转发、原样正文、错误身份与方法/查询/编码路径变体拒绝。源码a0b52549865b57d835d088986d444bc253a37fb7已提交推送并以远端ref确认；独立干净worktree.runtime/e152-20261101-verification运行`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`，日志.runtime/e152-live/full-suite.log，未结束前不标通过。规划检查46包/346动作/265有证据完成项、diff退出0；原E151窗口继续采样但已因真实403判不能验收，新规则尚未生效。10:00:49只读回复输入探针新运行样本0，不把隔离回复测试冒充真实模型输入成功。Python/HTTPX/PostgreSQL官方文档合并访问再次502，未根据失败访问补写外部结论。
 
 ### E152 — 补齐近期回执查询的远端转发契约（2026-11-01 09:58 UTC，研究与设计）
