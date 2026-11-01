@@ -740,6 +740,29 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         await self.complete(second)
         self.assertIsNotNone(await worker.claim_job(self.pool))
 
+    async def test_expert_concurrency_floor_uses_existing_worker_capacity(self):
+        await self.make_queued()
+        await self.queued(count=3)
+        with patch.object(worker, 'EXPERT_CONCURRENCY_FLOOR', 2):
+            first = await worker.claim_job(self.pool)
+            second = await worker.claim_job(self.pool)
+            third = await worker.claim_job(self.pool)
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertIsNone(third)
+        self.assertEqual(2, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_jobs WHERE expert_id=$1 AND state='running' "
+            "AND lease_until>clock_timestamp()", self.expert))
+
+    async def test_expert_concurrency_floor_defaults_to_existing_database_limit(self):
+        await self.make_queued()
+        await self.queued(count=2)
+        with patch.object(worker, 'EXPERT_CONCURRENCY_FLOOR', 1):
+            first = await worker.claim_job(self.pool)
+            second = await worker.claim_job(self.pool)
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+
     async def test_expired_attempt_is_reclaimed_before_new_job_and_cannot_be_revived(self):
         await self.make_queued()
         old = await worker.claim_job(self.pool)

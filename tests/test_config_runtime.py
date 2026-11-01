@@ -73,6 +73,13 @@ class RuntimePreparationTests(unittest.TestCase):
 
 
 class ComposeResourceGateTests(unittest.TestCase):
+    def test_review_worker_concurrency_floor_is_an_allowed_integer_setting(self):
+        document = test_config_reuse.ComposeBoundaryTests().fixture()
+        document["services"]["review-worker"]["environment"]["REVIEW_EXPERT_CONCURRENCY_FLOOR"] = "2"
+        self.assertEqual([], validate(document, Path.cwd()))
+        document["services"]["review-worker"]["environment"]["UNSCOPED_SETTING"] = "value"
+        self.assertTrue(any("非白名单配置键" in error for error in validate(document, Path.cwd())))
+
     def test_api_can_authenticate_internal_hermes_config_but_never_get_provider_key(self):
         document=test_config_reuse.ComposeBoundaryTests().fixture()
         document["services"]["api"]["environment"]["HERMES_API_KEY"]="fixture-internal-only"

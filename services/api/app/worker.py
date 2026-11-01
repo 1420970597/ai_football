@@ -22,6 +22,7 @@ import asyncpg
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("platform.review-worker")
 CONCURRENCY = max(1, min(8, int(os.environ.get("REVIEW_WORKER_CONCURRENCY", "2"))))
+EXPERT_CONCURRENCY_FLOOR = max(1, min(CONCURRENCY, int(os.environ.get("REVIEW_EXPERT_CONCURRENCY_FLOOR", "1"))))
 MAX_ATTEMPTS = 5
 LEASE_SECONDS = 90
 HEARTBEAT_SECONDS = 20
@@ -116,13 +117,13 @@ async def _claim_from_lane(conn, mode):
             "JOIN v2_source_experts se ON se.source_id=s.id JOIN v2_experts e ON e.id=se.expert_id "
             "JOIN v2_review_expert_schedule es ON es.expert_id=e.id "
             "WHERE s.enabled AND e.enabled AND se.enabled AND (SELECT count(*) FROM v2_analysis_jobs running "
-            "WHERE running.expert_id=es.expert_id AND running.state='running' AND running.lease_until>statement_timestamp())<es.concurrency_limit "
+            "WHERE running.expert_id=es.expert_id AND running.state='running' AND running.lease_until>statement_timestamp())<GREATEST(es.concurrency_limit,$3) "
             "AND EXISTS(SELECT 1 FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
             "WHERE j.source_id=ss.source_id AND j.expert_id=es.expert_id AND j.attempts<$1 AND " + lane +
             " AND ((j.state IN('queued','retry') AND j.available_at<=statement_timestamp()) OR "
             "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))) AND " + ELIGIBLE_MESSAGE + ") "
             "ORDER BY ss.last_turn,es.last_turn,ss.source_id,es.expert_id LIMIT 1 FOR SHARE OF s,e,se FOR UPDATE OF ss,es",
-            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS)
+            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, EXPERT_CONCURRENCY_FLOOR)
         if not pair:
             return None
         turn = await _advance_turn(conn, pair['source_id'], pair['expert_id'])
