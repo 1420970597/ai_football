@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮最新进度：2026-11-01 01:19 UTC。E140冻结Docker全套1,032项通过，0失败/错误/跳过，源码commit精确匹配`52a6af3`，恢复盘点无差异；API候选构建及部署前队列门禁待进行。E139 API仍有效，collector/LeYu健康观察门禁未通过，30分钟窗口未开始。模型样本的匹配结果正确但当前LeYu赛事/盘口证据不足，因此没有已接受推荐。
+本轮最新进度：2026-11-01 01:25 UTC。E140冻结Docker全套1,032项通过，候选API镜像已按`52a6af3`构建并核验；部署前门禁无queued/running/retry任务，切换准备就绪。当前6/6 Telegram来源租约有效、6/6十分钟内刷新，但5/6仍catching_up；LeYu partial且只有3条15秒内有效盘口，API最近5分钟仍有4次数据库超时。E140生效后先核验写入负载和服务健康，专家30分钟窗口尚未开始。模型样本的比赛绑定正确；不能用不新鲜或已关闭盘口生成推荐。
 
 ### E137 — 降低Telegram来源租约写竞争及同群请求排队（冻结Docker验证通过并生效，运行验收失败，后续E138修复中）
 
@@ -45,7 +45,7 @@
 - 只读探针纠错：远端日志脚本误在collector容器内调用不存在的Docker CLI退出1，改在remote host执行退出0；PostgreSQL探针误用不存在的`jsonb_object_length`函数退出1，改用`jsonb_object_keys`退出0；消息探针误引用不存在的`reply_text`列退出1，按schema改用`reply_context`退出0；一次`docker exec`未附`-i`导致here-doc脚本未执行且无输出，不视为验证，之后附`-i`重跑退出0；EXPLAIN JSON首次按字典读取字符串而退出1，解析JSON字符串后查询退出0。以上均只读，不改变数据库或运行配置。
 - 失败处理：若并发测试显示过期owner可在takeover后继续写、同owner续租被锁住或活跃异owner获准，停止候选，修复锁排序并重跑定向/冻结全套；部署仍须队列空且collector lease自然handoff，不启动健康观察窗直到来源和审核回执通过。
 
-### E140 — 将盘口批量写入改为集合式upsert以减少数据库超时（定向和冻结Docker验证通过，候选构建待执行）
+### E140 — 将盘口批量写入改为集合式upsert以减少数据库超时（定向和冻结Docker验证通过，候选已构建，待部署）
 
 - 目标/责任目录：降低大型LeYu赔率快照写入时API `statement_timeout`，避免持续写压使Telegram对账请求收到503；责任目录`services/api/app/ingestion.py`及其赛事/报价隔离集成测试。依赖E139 API已生效且有运行超时证据。
 - 当前证据：E139后远端collector日志仍报告LeYu批量入库503；API异常日志包含`ingest_fixture_batch`在`asyncpg.executemany`内的5秒`TimeoutError`，同一时段`/observed`领取也出现一次数据库暂不可用。数据库当前无锁等待；只读EXPLAIN ANALYZE显示对账查询约6–10ms，优先排除大批量逐quote upsert的执行负载。
@@ -55,7 +55,8 @@
 - 提交`a09f902`（`perf(ingestion): bulk upsert fixture quotes`）已推送到任务分支，push退出0；下一步在干净worktree冻结运行Docker全套。之前定向运行的临时容器/网络仅为本任务创建，测试结束后按名称清理。
 - 冻结验证准备（01:09 UTC）：`.runtime/e140-verification`为detached worktree，固定`52a6af3fdd73d05376558fd1a623194409594d11`、`git status --short --branch`仅显示干净detached HEAD、退出0；接下来从此冻结树执行`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`，期间不修改被测源码。
 - 冻结全套与恢复验收（01:19 UTC）：在`.runtime/e140-verification`运行`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`退出0；1,032项、0失败/错误/跳过，终端440.647秒，Docker内解析机器报告退出0、报告442.778秒，`committed_source_verified=true`及`source_parent_commit=52a6af3fdd73d05376558fd1a623194409594d11`。报告`.runtime/e140-verification/.runtime/test-evidence/2105517/backend-tests.json`；恢复46张表与1个媒体对象，业务盘点差异`{}`。报告记录`services/api/app/ingestion.py` SHA-256=`46e639cf7e2dec9e80ae0f32f9d1eb688082f836a3c7ffd6f1eb35ff7b2dbd49`及新增测试SHA-256=`505119bf333c4a0d356882fff8af4afc58e326378eb8a32599291c27da91abd6`；冻结worktree测试后仍clean。隔离套件未连接Telegram、LeYu、Hermes或真实资金。临时PG和内部网络由测试脚本按具名资源自动清理。
-- 下一步从此冻结worktree以受限BuildKit构建API同源候选、核对OCI revision/容器模块导入和Compose配置；在审核队列全空后部署API，再验证批量入库是否不再造成对账503/语句超时。
+- 候选构建及部署门禁（01:22 UTC）：从干净冻结worktree `.runtime/e140-verification` 按提交`52a6af3fdd73d05376558fd1a623194409594d11`使用固定BuildKit构建API镜像，命令`docker buildx build --builder ai-football-e131 --platform linux/amd64 --load --pull --provenance=false --sbom=false --label org.opencontainers.image.revision=52a6af3fdd73d05376558fd1a623194409594d11 --label org.opencontainers.image.version=2.0.0-dev-e140 -t ai-football-api:2.0.0-dev-e140-52a6af3 -f services/api/Dockerfile .`退出0；镜像ID=`sha256:de8ef2d51d756b96ed7f281e3a15760144cba694b030e63551082e171c9f12b5`，OCI revision/version与冻结源码一致。容器内`app.ingestion`导入及`.runtime/e140-local-api-image.yml` Compose配置退出0。一次`docker image inspect --format`模板格式错误退出64，修正格式后inspect退出0；首次容器健康探针误用镜像未安装的`wget`退出127，改用镜像自带Python/httpx查询`/healthz`、`/readyz`均200。部署前只读数据库门禁于01:25:41 UTC退出0：queued/running/retry均0；6/6 source lease有效且10分钟内fresh、5/6 checkpoint近2分钟更新；Telegram HTTP 200、connected/authorized=true、degraded=false，来源5 catching_up/1 caught_up；LeYu状态partial、quote阈值15秒、最近一次成功01:24:31、poll 94次/76成功/17失败、当时poll进行中，数据库有66,365条active quotes但仅3条源时间在当前15秒窗内。API最近5分钟仍有4次`TimeoutError`。因此当前满足API切换门禁，但不满足专家正常性观察门禁；E140部署后仅评估数据库超时、采集503及Telegram/LeYu健康是否改善。
+- 下一步仅更新API容器并核对image/revision、health/ready、schema、审核活动队列及部署后错误；不重启review-worker、Hermes、MCP或collector，不运行迁移。只有来源健康、租约/检查点新鲜、LeYu实时数据与API/collector错误稳定通过门禁后，才启动30分钟专家审核观察窗口。
 - 失败处理：若集合写入与现有quote/FK/check约束不符，先定位类型/冲突差异；若隔离回归通过但生产仍超时，按单条批次耗时与Postgres等待统计继续分析，不提高超时阈值掩盖负载。
 
 本轮阶段更新：2026-10-31 21:55 UTC。E135候选已部署于远端，collector于21:51:27启动并报告healthy；image ID=`sha256:418456e54cdb58830548f47544a21e6b3568efbdf7a279fb3b4380c73fefda4c`、revision=`765dc42412ce098071ad5f7b09986949c7af3ab0`，与候选一致；API health/ready均200，bridge/executor容器ID/image/StartedAt不变。Telegram控制状态HTTP200且connected/authorized，但状态degraded：1个来源caught_up、2个reconciliation_deferred、2个catching_up、1个unavailable（TimeoutError）；6/6租约有效、5/6检查点近2分钟刷新。collector日志21:52–21:55有3次ACK deadline、1次event_commit deadline及1次history deadline，实时消息持久化群锁等待最高约6.2秒。近10分钟可信事件均为旧发布时间回补（2022–2025），无可验收的新发言；媒体有pending/unsupported项，不能计作已审。E135运行验收未通过，当前继续定位ACK/event链路等待并核实媒体重试，不启动30分钟窗口。
