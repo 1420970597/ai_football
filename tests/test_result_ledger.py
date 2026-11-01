@@ -181,6 +181,11 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(('loss', -1, rows[1]['created_at'], 'unknown'), tuple(projected))
         summary = (await self.client.get('/api/v1/public/experts')).json()['items'][0]
         self.assertEqual((1, -1, 0), tuple(summary[key] for key in ('settled_signals', 'unit_net', 'invalid_settlement_evidence')))
+        match = await self.client.get('/api/v1/public/matches/fixture')
+        self.assertEqual(200, match.status_code, match.text)
+        projected_match = next(s for s in match.json()['expert_signals'] if s['id'] == str(signal))
+        self.assertEqual(('first_half', 'total', baseline, 'finished', 'live', 'loss', -1),
+                         tuple(projected_match[key] for key in ('period', 'market_kind', 'score_baseline', 'fixture_phase', 'phase', 'outcome', 'unit_net')))
 
     async def test_missing_or_mismatched_immutable_price_never_creates_profit(self):
         missing = await self.signal(evidence=False)
