@@ -1,5 +1,13 @@
 # 第二代平台实时进度与验证台账
 
+E156受控生效与真实复测（2026-11-01 10:57 UTC）：collector正常停止退出0；10:53:59门禁队列全0，10:55:17租约active=0自然到期。Compose stop worker及up API/worker日志均完成Healthy；收尾Docker inspect误读无Health字段使组合探针退出1，随后独立状态核对退出0，不能将此探针错误说成部署失败或隐去。API ID=d2e5df969bc8d61cae6e4028d1f238f8596dfd9bd066141f8d8a2bae133fe2b0，StartedAt10:54:45.631151718；worker ID=8a9b19b8f170b8e2e38294a2872c958e05d604c8112579ecaf70e60b691d82a9，StartedAt10:55:05.307081322，均镜像248ebf54…；远端第一次镜像固定命令因rg不存在退出127且未修改配置，改用grep并受保护备份原env后只更新collector镜像引用、Compose静默核验及up --no-deps collector均退出0。新collector ID=09011165eadf59349b28762df6d56501ea6311bf7c44863c29e2f2c039ad3559，镜像fdd0de1f…，StartedAt10:55:31.888961427，本机Compose入口已追加最终候选层且config --quiet退出0。未改Hermes/MCP/web/bridge/executor或执行迁移/数据库重置。
+
+10:55:31起新完整1800秒观察正在运行（.runtime/e156-live/watch.jsonl），健康/就绪200、TG已授权连接；10:57租约6/6有效。真实图片点击脚本退出0，1440/390均缩略图naturalWidth>0、点击打开授权原图、无页面错误（output/playwright/media-clicks.json），先前403失败证据保留。10:56:39原四条漏采对账missing=0：08:43 JPEG已ready且模型unresolved，08:45 WebM明确unsupported、无不当审核任务；其余两条已ready/unresolved。现已通过真实管理员UI登录及正式CSRF接口对10:23原始明确推荐提交一次审核重试，HTTP201、新任务d31e1810-e4e5-4adb-9c7c-40e3fbc3d32e，未改原消息/原审核、未生成测试信号或订单；目前running，尚不能宣称已录入。真实完整双端点击与30分钟观察仍未结束。
+
+
+E156最终冻结与发布准备（2026-11-01 10:53 UTC）：a7038159e6849c6d6e2573628d785f99d2db674f已推送并以远端分支引用核对。独立干净worktree执行BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh退出0，1081项444.579秒、失败/错误/跳过0；机器报告446.776秒、committed_source_verified=true，恢复46表差异{}，报告.runtime/e156-20261101-verification/.runtime/test-evidence/3404223/backend-tests.json。限额API/collector构建依次退出0，镜像248ebf54cb31815dbe4d3d4ecba996b0bb6ca7c9ab050d123ecf912e5040fae5 / fdd0de1f1438203a1950a40a5a32226c6a3fed5454e3dcb4419a4c1c33477028，OCI revision同冻结SHA。首次API导入探针模块路径错误退出1，改为app.routes.telegram及app.worker后分别退出0；review_tool_evidence摘要bcc84a6fa55f70f0e63064d6e43830c65bea7dac2c6b085cc6950ceabb65ed33。collector远端加载、镜像revision核对、本地及远端Compose静默校验均退出0。10:52:28只读门禁queued/running/retry全0，开始受控停止collector，后续重新核验队列、API/worker更新及租约自然交接；本记录时点尚不算发布验收通过。
+
+
 E156定向与真实重放（2026-11-01 10:45 UTC）：首次定向56项91.055秒退出1，旧比分变化回归仍读取重复id字段；改为既有正式quote_id契约后，完整重跑56项89.973秒、0失败/错误/跳过、退出0（.runtime/e156-live/target-final.log），未降低比分变化拒绝断言。固定运行Hermes的_render_call_tool_result对实际130/142条全盘口重放，渲染字符118756/129709→75136/82053，每项小于100000，两项合计157189小于200000；全部quote_id及15项交易语义保留，旧快照回放不变（.runtime/e156-live/hermes-rendered-size.json）。E155冻结全套1079项445.196秒退出0，最终含E156合并源码仍需独立冻结全套及同源镜像验证后生效。
 
 E152完整观察对账（2026-11-01 10:44 UTC）：10:08:16.652760至10:39:17.695073共1861.042秒；官方客户端只读固定窗逐编号对照退出0，当前窗口missing=0，但旧08:43/08:45媒体缺口尚未恢复，且窗内5项审核尚queued/running，故整体未通过。该窗已有2项真实接受信号，不能继续笼统声称所有专家推荐为0；已完成5项模型耗时5791.43–218335.114ms，3秒未达。真实媒体预览403已定位、候选修复尚未线上复测；后续受控生效后重新起算完整30分钟，不把旧窗改写为通过。
