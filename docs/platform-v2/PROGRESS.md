@@ -1,5 +1,13 @@
 # 第二代平台实时进度与验证台账
 
+E151最终冻结通过（2026-11-01 09:50 UTC）：8da65344bb1e78a99c9a0a0b69f4beaebaa6270f独立worktree全套1069项、443.693秒、退出0，失败/错误/跳过均0；报告445.910秒、committed_source_verified=true且SHA一致，恢复46表差异{}。报告.runtime/e151-20261101-verification/.runtime/test-evidence/3246118/backend-tests.json。容器模块哈希与冻结报告五处全部一致：worker=2e5d56cfef5a32a0d63a7a015df913a02f57bc8c3fba2a3c85c8abb44f3d053d，API telegram=22b11324b8d8833c0bd24cbd408e200b4c5ba97573ec23c60374b96872a44a01，collector telegram=b8b0d7117247f7b121b43cface5eb798a953420e1006b31fe90c099f3eca6c55，backend=ddf121b70ee00a2421c33ee141bc051b52d9b53e153b318234ff761e31c0679c，quote_snapshot=ba76acf23b893be0690ea467944f7f0d7f5ee8a91616e192f9c8401ac71ad013。两端Compose config --quiet退出0，候选未生效；09:50:13只读当前queued/retry=0、running=1，等待自然完成后受控交接，不改任务状态或已接受信号。
+
+
+E148完整窗口结论（2026-11-01 09:47 UTC）：watch退出0，实际09:11:46.315395–09:43:06.431453、1880.116秒。固定起止的官方客户端只读对照4个受信来源全部翻到窗口边界，共8条成员发言；09:45:50远端事件成员逐编号对照缺失0，8条对应6个最新ready原文版本（相册合并），6项审核均Hermes结果/系统回执齐全，缺任务/结果/回执/未完成0，3条含图共5张；2次唯一绑定live、0新信号。需区分旧版本failed（编辑撤销）与当前版本成功审核，不把watch中汇总1failed误报为当前审核漏单。模型5,139.556–69,496.099ms、均值26,454.757ms，原始发言至结果均值244,781.639ms；3秒未达。最初两条08:30漏存已正常补采并审核；两条08:43/08:45媒体仍缺，来源仍degraded，整体验收失败，E150继续修补，不能仅凭本窗口新消息0漏宣称专家完全正常。旧watch默认connected/authorized=false在控制ReadTimeout时代表未知而非确定掉线；新观察脚本改为null，避免误报。
+
+E150冻结通过（09:42 UTC）：冻结1fd77ade20efc7169126c109103749a719cc6ea4全套1066项、438.924秒、退出0、0失败/错误/跳过；机器报告441.233秒，committed_source_verified=true、SHA一致，46表恢复差异{}，路径.runtime/e150-20261101-verification/.runtime/test-evidence/3224886/backend-tests.json。E151最终源码8da65344bb1e78a99c9a0a0b69f4beaebaa6270f独立worktree开始全套；受限API/collector候选均构建/模块导入退出0，镜像d14ffc80fa993d1ee61deb7f83d4528cfbcc543774dfa84a3f09b79da4b27c21及44e72599e78474dad306d2ec18930a6f862ff576de5d74a444c75b4840734545，revision精确匹配；collector远端加载、核验摘要及Compose静默配置均退出0，尚未生效。待最终全套通过后，在队列/来源租约交接中统一更新API、worker、collector；Hermes/MCP/网页和交易执行器保持原容器。现有08:53信号仍live，原盘当前比分与确认赛果缺失，outcome=pending、unit_net=NULL；没有凭空填比分或结算盈利。
+
+
 E151实现与定向验证（2026-11-01 09:40 UTC）：worker本地同源最新版回复优先保持，无本地记录时读取reply_context.text，再兼容旧raw_text。新增3项行为测试含6种快照/来源场景及真实process_job到Hermes调用参数和追加hermes_request轨迹，推荐数仍0，不凭自由文字放行。Docker具名临时PostgreSQL定向6项、5.441秒、0失败/错误/跳过、退出0（.runtime/e150-live/e151-target-final.log）。此前5项4.573秒退出0，新增端到端输入断言后重新运行全部6项。E150中间冻结全套仍正常运行，未修改其被测worktree，不中断或伪称通过；下一步等待其结束，再在新独立冻结worktree验证最终含E149/E150/E151版本，避免两个全套同时争用共享资源。官方Python文档检索再次502，无外部结论引用，现有CPU和输入结论均由Docker源码/实际读请求与测量支持。
 
 
