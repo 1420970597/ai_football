@@ -50,6 +50,7 @@ SOURCE_HISTORY_SECONDS = 25
 RECONCILE_BATCH_SECONDS = 24
 RECONCILE_RPC_SECONDS = 3
 RECONCILE_EVENT_LIMIT = 3
+RECONCILE_COMMIT_CONCURRENCY = 2
 RECONCILE_ID_LIMIT = 100
 MEDIA_CLEANUP_SECONDS = 5
 SOURCE_LEASE_REFRESH_SECONDS = 3
@@ -661,52 +662,66 @@ class TelegramCollector:
                         stage = 'telegram_messages'
                         members = await self.client.get_messages(entity, ids=identifiers[offset:offset+RECONCILE_ID_LIMIT])
                     by_id.update({entry.id: entry for entry in members if entry})
+                async def commit(item):
+                    nonlocal checked
+                    reason = await self._commit_reconciliation_item(chat_id, source, item, by_id)
+                    if reason != 'event_not_committed':
+                        pending.remove(item)
+                    if reason is None:
+                        checked += 1
+                    return reason
+
                 while pending:
-                    item = pending[0]
-                    reference = {'event_id': item['id'], 'version_key': item['version_key'], 'claim_id': item['claim_id']}
-                    ids = item['content']['member_message_ids']
-                    members = [by_id[identifier] for identifier in ids if identifier in by_id]
-                    result = {}
+                    stage = 'event_commit'
+                    tasks = [asyncio.create_task(commit(item))
+                             for item in pending[:RECONCILE_COMMIT_CONCURRENCY]]
                     try:
-                        if not item.get('_reconcile_applied'):
-                            missing = set(ids) - set(by_id)
-                            submission = item.setdefault('_reconcile_submission', {})
-                            if submission.get('payload'):
-                                stage = 'event_commit'
-                                result = await self.backend.event(submission['payload'])
-                            elif missing:
-                                stage = 'event_commit'
-                                result = await self._delete(chat_id, sorted(missing), reconciliation=reference,
-                                                            submission=submission)
-                            else:
-                                stage = 'event_commit'
-                                result, _ = await self._stage_group(
-                                    chat_id, source, sorted(members, key=lambda entry: entry.id),
-                                    reconciliation=reference, submission=submission)
-                            if not result.get('persisted'):
-                                return {'state': 'deferred', 'reason': 'event_not_committed',
-                                        'checked': checked, 'pending': len(pending)}
-                            item['_reconcile_applied'] = True
-                        if result.get('reconciliation_acknowledged') is True:
-                            item['_reconcile_acknowledged'] = True
-                        if not item.get('_reconcile_acknowledged'):
-                            stage = 'acknowledgement'
-                            await self.backend.acknowledge_observed(chat_id, self.owner, reference)
-                            item['_reconcile_acknowledged'] = True
-                    except httpx.HTTPStatusError as exc:
-                        if exc.response.status_code != 409:
-                            raise
-                        pending.pop(0)
-                        return {'state': 'deferred', 'reason': 'claim_changed',
+                        reasons = await asyncio.gather(*tasks)
+                    finally:
+                        for task in tasks:
+                            if not task.done():
+                                task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                    reason = next((value for value in reasons if value is not None), None)
+                    if reason:
+                        return {'state': 'deferred', 'reason': reason,
                                 'checked': checked, 'pending': len(pending)}
-                    pending.pop(0)
-                    checked += 1
-                    await asyncio.sleep(0)
         except TimeoutError:
             log.warning('Telegram reconciliation deferred category=deadline stage=%s pending=%s',
                         stage, len(pending))
             return {'state': 'deferred', 'reason': 'deadline', 'checked': checked, 'pending': len(pending)}
         return {'state': 'ready', 'checked': checked, 'pending': 0}
+
+    async def _commit_reconciliation_item(self, chat_id: str, source: dict, item: dict, by_id: dict):
+        reference = {'event_id': item['id'], 'version_key': item['version_key'], 'claim_id': item['claim_id']}
+        result = {}
+        try:
+            if not item.get('_reconcile_applied'):
+                ids = item['content']['member_message_ids']
+                submission = item.setdefault('_reconcile_submission', {})
+                missing = set(ids) - set(by_id)
+                if submission.get('payload'):
+                    result = await self.backend.event(submission['payload'])
+                elif missing:
+                    result = await self._delete(chat_id, sorted(missing), reconciliation=reference,
+                                                submission=submission)
+                else:
+                    result, _ = await self._stage_group(
+                        chat_id, source, sorted((by_id[identifier] for identifier in ids), key=lambda entry: entry.id),
+                        reconciliation=reference, submission=submission)
+                if not result.get('persisted'):
+                    return 'event_not_committed'
+                item['_reconcile_applied'] = True
+            if result.get('reconciliation_acknowledged') is True:
+                item['_reconcile_acknowledged'] = True
+            if not item.get('_reconcile_acknowledged'):
+                await self.backend.acknowledge_observed(chat_id, self.owner, reference)
+                item['_reconcile_acknowledged'] = True
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 409:
+                raise
+            return 'claim_changed'
+        return None
 
     async def _expand_album(self, message, entity):
         grouped_id = getattr(message, "grouped_id", None)

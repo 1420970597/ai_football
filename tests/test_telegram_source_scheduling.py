@@ -218,6 +218,100 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(3,len(self.backend.events))
         self.assertEqual(3,len(self.backend.calls))
 
+    async def test_independent_commits_overlap_with_two_request_limit(self):
+        self.client.messages['-1001']=[Message(i) for i in range(1,4)]
+        self.queue('-1001',[[1],[2],[3]])
+        entered=asyncio.Event()
+        release=asyncio.Event()
+        original=self.backend.event
+        active=peak=0
+        started=[]
+        async def blocked(body):
+            nonlocal active,peak
+            active+=1
+            peak=max(peak,active)
+            started.append(body['platform_message_id'])
+            if len(started)==2:entered.set()
+            try:
+                await release.wait()
+                return await original(body)
+            finally:active-=1
+        self.backend.event=blocked
+        task=asyncio.create_task(self.collector._reconcile_known('-1001',self.source))
+        try:
+            await asyncio.wait_for(entered.wait(),1)
+            self.assertEqual(2,len(started))
+            release.set()
+            report=await asyncio.wait_for(task,1)
+        finally:
+            task.cancel()
+            await asyncio.gather(task,return_exceptions=True)
+        self.assertEqual({'state':'ready','checked':3,'pending':0},report)
+        self.assertEqual(2,peak)
+        self.assertEqual(0,active)
+        self.assertEqual(3,len(self.backend.ack_calls))
+
+    async def test_failed_neighbor_does_not_replay_acknowledged_item(self):
+        self.client.messages['-1001']=[Message(i) for i in range(1,4)]
+        self.queue('-1001',[[1],[2],[3]])
+        acknowledged=asyncio.Event()
+        event=self.backend.event
+        ack=self.backend.acknowledge_observed
+        async def acknowledge(*args):
+            result=await ack(*args)
+            acknowledged.set()
+            return result
+        async def fail_second(body):
+            if body['platform_message_id']=='2':
+                await acknowledged.wait()
+                raise ConnectionError('isolated transient failure')
+            return await event(body)
+        self.backend.event=fail_second
+        self.backend.acknowledge_observed=acknowledge
+        with self.assertRaises(ConnectionError):
+            await asyncio.wait_for(self.collector._reconcile_known('-1001',self.source),1)
+        self.assertEqual([[2],[3]],[r['content']['member_message_ids'] for r in self.collector.reconcile_pending['-1001']])
+        self.backend.event=event
+        recovered=await self.collector._reconcile_known('-1001',self.source)
+        self.assertEqual(2,recovered['checked'])
+        self.assertEqual(3,len(self.backend.calls))
+        self.assertEqual(3,len(self.backend.ack_calls))
+        self.assertEqual(1,len(self.backend.observation_calls))
+
+    async def test_cancelled_parallel_commit_keeps_unknown_payload_and_awaits_tasks(self):
+        self.client.messages['-1001']=[Message(i) for i in range(1,4)]
+        self.queue('-1001',[[1],[2],[3]])
+        acknowledged=asyncio.Event()
+        stopped=asyncio.Event()
+        event=self.backend.event
+        ack=self.backend.acknowledge_observed
+        async def acknowledge(*args):
+            result=await ack(*args)
+            acknowledged.set()
+            return result
+        async def unknown_first(body):
+            result=await event(body)
+            if body['platform_message_id']=='1':
+                try:await asyncio.Future()
+                finally:stopped.set()
+            return result
+        self.backend.event=unknown_first
+        self.backend.acknowledge_observed=acknowledge
+        task=asyncio.create_task(self.collector._reconcile_known('-1001',self.source))
+        await asyncio.wait_for(acknowledged.wait(),1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):await task
+        self.assertTrue(stopped.is_set())
+        pending=self.collector.reconcile_pending['-1001']
+        self.assertEqual([[1],[3]],[r['content']['member_message_ids'] for r in pending])
+        self.assertEqual('1',pending[0]['_reconcile_submission']['payload']['platform_message_id'])
+        self.backend.event=event
+        recovered=await self.collector._reconcile_known('-1001',self.source)
+        self.assertEqual(2,recovered['checked'])
+        self.assertEqual(3,len(self.backend.events))
+        self.assertEqual(3,len(self.backend.ack_calls))
+        self.assertEqual(1,len(self.backend.observation_calls))
+
     async def test_three_slow_commits_fit_budget_without_checkpoint_per_event(self):
         self.client.messages['-1001']=[Message(i) for i in range(1,4)]
         self.queue('-1001',[[1],[2],[3]])

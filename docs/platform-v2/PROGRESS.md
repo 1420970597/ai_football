@@ -1,12 +1,13 @@
 # 第二代平台实时进度与验证台账
 
-### E146 — 同群复核消息的有界异步提交（设计已记录，隔离实现待进行）
+### E146 — 同群复核消息的有界异步提交（代码已写，定向Docker验证通过，冻结全套及部署待验）
 - 目标/责任目录：降低同群历史复核消息串行提交造成的24秒整批deadline；责任目录`services/collector/`、`tests/`、`docs/`。前置依赖是E145消息键锁已部署、远端单collector实例和同源3条claim上限不变。
 - 当前证据/缺口：E145窗口前12分钟有12次`event_commit` deadline；现实现按3条claim逐项await事件提交，一条慢请求占用后续消息预算。API有独立数据库命令超时，但资源采样低，不能用增大超时掩盖。E145观察窗仍进行，不在窗口中切换代码。
 - 设计决策：每群复核提交最多2路，既有同时3群上限不变，HTTP连接总上限8不变；同消息仍经E145消息锁串行。每个item独立保存submission、applied、acknowledged状态，只有durable ACK成功后才从pending移除；409失效claim可移除但报告延期。外部取消或任一非预期错误时取消并await所有本批子任务，禁止留下后台写操作。实体/消息获取必须全批成功后才能产生删除事实。
 - 实现动作：拆出单claim提交与确认步骤，批内以最多2个asyncio任务处理，不创建线程访问Telegram会话；增加慢提交重叠、并发上限、成功项不因相邻失败重放、取消保留未知提交原始payload、恢复最终只确认一次的行为测试。保留24秒总预算、30秒远端claim lease、来源授权和事件幂等规则。
 - 验收场景：新增定向Docker回归与现有Telegram调度/数据库claim契约通过，冻结Docker全套通过；E145完整观察后若来源仍degraded则只切换collector，核对bridge/executor未动，再从新生效时间等待30分钟；当前ready消息结果/回执完整，错误录入0，event_commit deadline和复核积压趋势据实报告。
 - 失败处理：并行出现claim丢失、孤立任务、越权、取消后继续写或现有幂等测试失败时恢复该验收未完成并修复重跑；若并发放大503则停止切换并定位请求/数据库争用，不能提高连接池或超时来掩盖。来源或上游门禁未过时继续问题定位，不标完整正常。
+- 隔离验证（2026-11-01 08:09 UTC）：已拆出单项claim提交/确认函数，批内最多2个异步任务；每个任务独立从pending移除已ACK或失效项，遇到错误/超时/取消时cancel并await本批全部任务。新增并发上限、邻项失败时成功项不重放、未知结果取消后保留原payload并恢复的3项行为测试。命令`docker run --rm --cpus=.5 --memory=512m --network none -v "$PWD:/source:ro" -w /source -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/source/services/api:/source/services:/source/tests:/source ai-football-verifier:v2.0.0-dev python -m unittest test_telegram_source_scheduling -v`退出0，17项、8.550秒；规划结构检查46工作包/340动作退出0，`git diff --check`退出0。线上E145容器未改变，观察窗继续；下一步提交并冻结E146执行Docker全套，不把定向通过等同于运行健康。
 
 阶段研究（2026-11-01 08:05 UTC）：E145观察窗进行中，最新2条ready图文消息均有Hermes结果与系统回执，0缺任务/缺结果/缺回执；一条为非足球赛马单，一条为已完场足球赛果回顾，后者唯一识别比赛但无新增推荐意图，两者未录入符合原文证据。一个尝试在模型发送前TimeoutError，重试后完成；窗口当前未完成项0。新采集器日志截至约08:03有12次复核`event_commit` deadline、1次媒体批次deadline、4次Telegram backend HTTPStatusError，无整体sync timeout。PG于07:57:56的锁超时语句是审核heartbeat的job lease UPDATE，不是Telegram消息advisory锁；API未再见同消息锁冲突。60组并行只读测量：healthz中位3.65ms/p95 28.6/max69，readyz中位471.95ms/p95 593.6/max1828.8，DB `SELECT 1`中位225.05ms/p95 280.3/max515.6，均0失败。远端PostgreSQL CPU约0.64%，本机API约1.27%，当前没有整体CPU饱和证据。下一步保持窗口至完整30分钟，研究把同源3条复核的串行事件提交改为最多2路异步处理；保留原claim、原子ACK、失败/取消恢复和24秒预算，不修改正在验收的部署快照。该方向需先验证并发不会漏ACK、越权或留下后台写任务；尚未实施。
 
