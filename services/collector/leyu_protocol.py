@@ -186,7 +186,8 @@ def phase_for(raw: Mapping[str, Any]) -> str:
         return "cancelled"
     if status in {"1", "live"}:
         return "live"
-    if status in {"0", "scheduled"}:
+    # Existing authorized protocol: 110 means about to start, not cancelled.
+    if status in {"0", "110", "scheduled"}:
         return "scheduled"
     # 未核验的上游状态不映射为可交易阶段。
     return "cancelled"
@@ -307,7 +308,7 @@ def parse_quotes(payload: Any, fixture_id: str, updated_at: datetime | None = No
                                 "market_id": market_id, "market_name": name, "market_kind": kind, "kind": kind,
                                 "period": period, "line": str(numeric_line) if numeric_line is not None else None, "selection": selection,
                                 # 只有明确赛前才可用整期比分；滚球基线需规则证据后单独标定。
-                                "score_basis": "full_period" if str(row.get("ms", "")) in {"0", "scheduled"} else "unknown",
+                                "score_basis": "full_period" if phase_for(row) == "scheduled" else "unknown",
                                 "price": str(price) if price is not None else None,
                                 "source_updated_at": source_time, "received_at": received,
                                 "source_time_quality": "known" if source_time else "unknown", "status": status,

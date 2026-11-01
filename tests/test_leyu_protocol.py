@@ -85,6 +85,26 @@ class FixtureTests(unittest.TestCase):
         self.assertIsNone(timestamp(datetime(2026, 1, 1)))
         self.assertIsNotNone(timestamp("1790784000000"))
 
+    def test_imminent_status_110_is_scheduled_without_invented_score(self):
+        for status in (110, "110"):
+            with self.subTest(status=status):
+                row = parse_fixtures([match(ms=status, mmp="0", msc=["S801|1.11:1.43", "S802|1.62:1.44"])])[0]
+                self.assertEqual("scheduled", row["phase"])
+                self.assertIsNone(row["clock_minute"])
+                self.assertIsNone(row["home_score"])
+                self.assertIsNone(row["away_score"])
+                self.assertIsNone(row["source_updated_at"])
+        self.assertEqual("finished", parse_fixtures([match(ms=110, mmp="999")])[0]["phase"])
+        self.assertEqual("cancelled", parse_fixtures([match(ms=111, mmp="0")])[0]["phase"])
+
+    def test_imminent_quotes_have_prematch_score_basis_but_finished_do_not(self):
+        for status in (110, "110"):
+            quotes = parse_quotes(market_row(ms=status, mmp="0"), "leyu:m1")
+            self.assertTrue(quotes)
+            self.assertTrue(all(q["score_basis"] == "full_period" for q in quotes))
+        quotes = parse_quotes(market_row(ms=110, mmp="999"), "leyu:m1")
+        self.assertTrue(all(q["score_basis"] == "unknown" for q in quotes))
+
     def test_score_uses_exact_period_key_and_absence(self):
         self.assertEqual((None, None), score("S10|4:3"))
         self.assertEqual((3, 1), score("S1|3:1"))
