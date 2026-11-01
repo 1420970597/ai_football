@@ -5,17 +5,48 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock
 import uuid
 
 import asyncpg
 import httpx
 
 from app import database
+from app.telegram_reconciliation import _lease_events
 from collector.telegram import TelegramCollector
 from collector.telegram_backend import TelegramBackend
 import test_telegram_api as support
 import test_telegram_collector as collector_support
+
+
+class ReconciliationBatchLeaseUnitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_batch_lease_uses_one_database_roundtrip_and_preserves_selected_order(self):
+        selected = [{'id': uuid.uuid4(), 'platform_message_id': str(i)} for i in range(3)]
+
+        async def shuffled_database_return(query, event_ids, claim_ids, *_):
+            return [
+                {'id': event_id, 'reconcile_claim_id': claim_id,
+                 'reconcile_lease_until': datetime.now(timezone.utc) + timedelta(seconds=30)}
+                for event_id, claim_id in reversed(list(zip(event_ids, claim_ids)))
+            ]
+
+        conn = SimpleNamespace(fetch=AsyncMock(side_effect=shuffled_database_return))
+
+        result = await _lease_events(conn, selected, 'collector-owner')
+
+        conn.fetch.assert_awaited_once()
+        query = conn.fetch.await_args.args[0]
+        self.assertIn('UPDATE v2_telegram_events', query)
+        self.assertIn('unnest', query)
+        self.assertEqual([row['id'] for row in selected], [row['id'] for row in result])
+        self.assertEqual(3, len({row['claim_id'] for row in result}))
+
+    async def test_empty_batch_does_not_open_a_database_roundtrip(self):
+        conn = SimpleNamespace(fetch=AsyncMock())
+        self.assertEqual([], await _lease_events(conn, [], 'collector-owner'))
+        conn.fetch.assert_not_awaited()
 
 
 class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
@@ -435,6 +466,55 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(200,(await self.ack(item)).status_code)
             remaining = await self.pool.fetchval('SELECT EXTRACT(EPOCH FROM next_check_at-now()) FROM v2_telegram_events WHERE id=$1',uuid.UUID(item['id']))
             self.assertLess(abs(float(remaining)-seconds),3)
+
+    async def test_batch_lease_rows_keep_selected_order_and_distinct_persisted_claims(self):
+        for number in (11, 12, 13):
+            await self.seed(number, version=f'batch-{number}')
+
+        items = await self.observe(limit=3)
+        selected = await self.pool.fetch(
+            "SELECT id,platform_message_id FROM v2_telegram_events "
+            "WHERE reconcile_claim_id IS NOT NULL ORDER BY source_version_at DESC,next_check_at,id"
+        )
+        leases = await self.pool.fetch(
+            'SELECT id,reconcile_claim_id,reconcile_owner,reconcile_lease_until FROM v2_telegram_events '
+            'WHERE reconcile_claim_id IS NOT NULL'
+        )
+        by_id = {row['id']: row for row in leases}
+        self.assertEqual([row['id'] for row in selected], [uuid.UUID(item['id']) for item in items])
+        self.assertEqual(3, len({item['claim_id'] for item in items}))
+        for item in items:
+            lease = by_id[uuid.UUID(item['id'])]
+            self.assertEqual(uuid.UUID(item['claim_id']), lease['reconcile_claim_id'])
+            self.assertEqual(self.owner, lease['reconcile_owner'])
+            self.assertEqual(datetime.fromisoformat(item['claim_lease_until']), lease['reconcile_lease_until'])
+
+    async def test_batch_lease_failure_rolls_back_every_claim(self):
+        for number in (11, 12, 13):
+            await self.seed(number, version=f'rollback-{number}')
+        await self.pool.execute("""
+            CREATE FUNCTION reject_reconciliation_lease() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+              IF NEW.reconcile_claim_id IS DISTINCT FROM OLD.reconcile_claim_id THEN
+                RAISE EXCEPTION 'forced batch lease failure';
+              END IF;
+              RETURN NEW;
+            END $$;
+        """)
+        await self.pool.execute("""
+            CREATE TRIGGER reject_reconciliation_lease BEFORE UPDATE ON v2_telegram_events
+            FOR EACH ROW EXECUTE FUNCTION reject_reconciliation_lease()
+        """)
+
+        with self.assertRaises(Exception):
+            await self.observe(limit=3)
+
+        rows = await self.pool.fetch(
+            'SELECT reconcile_claim_id,reconcile_lease_until,next_check_at FROM v2_telegram_events'
+        )
+        self.assertEqual(3, len(rows))
+        self.assertTrue(all(row['reconcile_claim_id'] is None and row['reconcile_lease_until'] is None
+                            and row['next_check_at'] < datetime.now(timezone.utc) for row in rows))
 
     async def test_collector_lost_atomic_event_response_replays_then_skips_separate_ack(self):
         await self.seed()

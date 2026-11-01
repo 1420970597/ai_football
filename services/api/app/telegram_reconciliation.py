@@ -10,6 +10,27 @@ from .review_policy import REALTIME_WINDOW_SECONDS
 RECONCILIATION_LEASE_SECONDS = 30
 
 
+async def _lease_events(conn, rows, owner):
+    if not rows:
+        return []
+    claims = {row['id']: uuid.uuid4() for row in rows}
+    leased = await conn.fetch(
+        "UPDATE v2_telegram_events e SET reconcile_claim_id=claims.claim_id,reconcile_owner=$3,"
+        "reconcile_lease_until=now()+$4*interval '1 second',reconcile_applied_at=NULL,"
+        "reconcile_applied_sha256=NULL,reconcile_acknowledged_at=NULL "
+        "FROM unnest($1::uuid[],$2::uuid[]) AS claims(id,claim_id) WHERE e.id=claims.id "
+        "RETURNING e.id,e.reconcile_claim_id,e.reconcile_lease_until",
+        list(claims), list(claims.values()), owner, RECONCILIATION_LEASE_SECONDS,
+    )
+    leases = {row['id']: row for row in leased}
+    if len(leased) != len(rows) or set(leases) != set(claims) or any(
+        leases[event_id]['reconcile_claim_id'] != claim_id for event_id, claim_id in claims.items()
+    ):
+        raise RuntimeError('Telegram reconciliation batch lease is incomplete')
+    return [dict(row) | {'claim_id': claims[row['id']],
+                        'claim_lease_until': leases[row['id']]['reconcile_lease_until']} for row in rows]
+
+
 async def claim_events(conn, source_id, owner, limit):
     recent_limit = min(limit, max(1, limit * 4 // 5))
     trusted_author = (
@@ -65,18 +86,7 @@ async def claim_events(conn, source_id, owner, limit):
             "LIMIT $2 FOR UPDATE OF e SKIP LOCKED",
             source_id, remainder, REALTIME_WINDOW_SECONDS, claimed_ids,
         ))
-    rows = [*recent, *historical]
-    items = []
-    for row in rows:
-        claim_id = uuid.uuid4()
-        lease_until = await conn.fetchval(
-            "UPDATE v2_telegram_events SET reconcile_claim_id=$2,reconcile_owner=$3,"
-            "reconcile_lease_until=now()+$4*interval '1 second',reconcile_applied_at=NULL,reconcile_applied_sha256=NULL,"
-            "reconcile_acknowledged_at=NULL WHERE id=$1 RETURNING reconcile_lease_until",
-            row['id'], claim_id, owner, RECONCILIATION_LEASE_SECONDS,
-        )
-        items.append(dict(row) | {'claim_id': claim_id, 'claim_lease_until': lease_until})
-    return items
+    return await _lease_events(conn, [*recent, *historical], owner)
 
 
 async def _locked_claim(conn, source_id, owner, event_id, version_key, claim_id):
