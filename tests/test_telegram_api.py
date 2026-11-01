@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -221,7 +222,7 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
                 lease_before = await blocker.fetchval(
                     "SELECT lease_until FROM v2_source_checkpoints WHERE source_id=$1", self.source_id)
                 await blocker.fetchrow(
-                    "SELECT source_id FROM v2_source_checkpoints WHERE source_id=$1 FOR SHARE", self.source_id)
+                    "SELECT pg_advisory_xact_lock_shared(hashtext('telegram-source:' || $1))", '-1001')
                 response = await self.post(self.event())
                 self.assertEqual(200, response.status_code, response.text)
                 lease_during = await blocker.fetchval(
@@ -231,6 +232,23 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         lease_after = await self.pool.fetchval(
             "SELECT lease_until FROM v2_source_checkpoints WHERE source_id=$1", self.source_id)
         self.assertEqual(lease_before, lease_after)
+
+    async def test_checkpoint_takeover_waits_for_active_source_transaction(self):
+        new_owner = uuid.uuid4()
+        async with self.pool.acquire() as holder:
+            async with holder.transaction():
+                source = await telegram.source_with_lease(holder, '-1001', self.owner)
+                self.assertEqual(self.source_id, source['id'])
+                takeover = asyncio.create_task(self.client.post(
+                    '/internal/telegram/checkpoints/claim',
+                    json={'chat_id': '-1001', 'owner': str(new_owner)}))
+                await asyncio.sleep(0.05)
+                self.assertFalse(takeover.done())
+        response = await asyncio.wait_for(takeover, timeout=3)
+        self.assertEqual(409, response.status_code, response.text)
+        owner = await self.pool.fetchval(
+            'SELECT collector_owner FROM v2_source_checkpoints WHERE source_id=$1', self.source_id)
+        self.assertEqual(self.owner, owner)
 
     async def test_author_backfill_is_leased_monotonic_and_independent_of_group_checkpoint(self):
         await self.pool.execute(
