@@ -83,7 +83,7 @@ async def list_match_markets(review_id: str, attempt_id: str, fixture_id: str) -
 
 @mcp.tool()
 async def record_expert_signals(review_id: str, attempt_id: str, signals: list[ExpertPick]) -> dict:
-    """立即提交当前比赛已读的确切quote_id；必要时系统重新复核原盘，未变价才记录，检查accepted/rejected。"""
+    """立即提交当前比赛已读的确切quote_id；系统核验同一盘口及比分上下文，按当前有效系统赔率记录。价格刷新不改变推荐意图；检查accepted/rejected及返回的实际保存价格。"""
     return await _post("record_expert_signals", {"review_id": review_id, "attempt_id": attempt_id, "signals": [pick.model_dump() for pick in signals]})
 
 
