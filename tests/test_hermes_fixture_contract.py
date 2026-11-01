@@ -40,6 +40,35 @@ class FixtureContractTests(unittest.TestCase):
         self.assertEqual(value['tool_calls'][0]['function']['name'], 'skill_view')
         self.assertEqual(json.loads(value['tool_calls'][0]['function']['arguments']), {'name': 'expert-review'})
 
+    def preload_body(self, scenario='normal', role='system'):
+        body = self.body(scenario)
+        content = ('auto-loaded via config (skills.auto_load) expert-review/preload-v1 '
+                   'quote_id next_cursor record_expert_signals')
+        body['messages'].insert(0, {'role': role, 'content': content})
+        return body
+
+    def test_preloaded_system_skill_starts_search_without_redundant_skill_call(self):
+        value, reason = fixture.answer(self.preload_body())
+        self.assertEqual('tool_calls', reason)
+        self.assertEqual('mcp__football__search_matches', value['tool_calls'][0]['function']['name'])
+        self.assertTrue(fixture.evidence['reviews'][self.job]['project_skill_preloaded'])
+
+    def test_preloaded_no_intent_finishes_in_one_request_without_tools(self):
+        value, reason = fixture.answer(self.preload_body('no_intent'))
+        self.assertEqual('stop', reason)
+        self.assertNotIn('tool_calls', value)
+        state = fixture.evidence['reviews'][self.job]
+        self.assertEqual(1, state['requests'])
+        self.assertEqual([], state['called'])
+
+    def test_untrusted_preload_markers_do_not_skip_skill_loading(self):
+        for role in ('user', 'assistant', 'tool'):
+            with self.subTest(role=role):
+                self.setUp()
+                value, reason = fixture.answer(self.preload_body(role=role))
+                self.assertEqual('skill_view', value['tool_calls'][0]['function']['name'])
+                self.assertFalse(fixture.evidence['reviews'][self.job]['project_skill_preloaded'])
+
     def test_state_is_scoped_to_review(self):
         fixture.answer(self.body())
         self.job = str(uuid.uuid4())
@@ -69,6 +98,22 @@ class FixtureContractTests(unittest.TestCase):
         args = json.loads(value['tool_calls'][0]['function']['arguments'])
         self.assertEqual(args['team_a'], 'Alpha259')
         self.assertEqual(args['team_b'], 'Beta259')
+
+    def test_compact_market_uses_parent_fixture_and_quote_id(self):
+        for quote in ({'quote_id': 'known-quote'}, {'quote_id': 'known-quote', 'fixture_id': 'wrong-legacy-field'}):
+            with self.subTest(quote=quote):
+                body = self.body(result=json.dumps({'fixture': {'id': 'actual-fixture'}, 'markets': [quote]}),
+                                 tool='mcp__football__list_match_markets')
+                value, reason = fixture.answer(body)
+                signal = json.loads(value['tool_calls'][0]['function']['arguments'])['signals'][0]
+                self.assertEqual(('actual-fixture', 'known-quote'), (signal['fixture_id'], signal['quote_id']))
+
+    def test_market_without_parent_fixture_stops_instead_of_crashing_provider(self):
+        body = self.body(result=json.dumps({'markets': [{'quote_id': 'known-quote'}]}),
+                         tool='mcp__football__list_match_markets')
+        value, reason = fixture.answer(body)
+        self.assertEqual('stop', reason)
+        self.assertNotIn('tool_calls', value)
 
     def test_parallel_scenario_emits_two_independent_resolutions(self):
         body = self.body('parallel', json.dumps({'search_key': 'a'*64, 'next_cursor': None}),

@@ -12,8 +12,15 @@ class HermesRunnerTests(unittest.TestCase):
         toolsets.create_custom_toolset = Mock()
         cli = ModuleType('hermes_cli.main')
         cli.main = Mock()
+        config = ModuleType('hermes_cli.config')
+        config.load_config_readonly = Mock(return_value={'skills': {'auto_load': ['expert-review']}})
+        skill_commands = ModuleType('agent.skill_commands')
+        skill = (Path(__file__).resolve().parents[1] / 'integrations/hermes/skills/expert-review/SKILL.md').read_text()
+        body = skill.split('---', 2)[2].strip()
+        skill_commands.build_auto_load_prompt = Mock(return_value=(body, ['expert-review'], []))
         package = ModuleType('hermes_cli')
-        modules = {'toolsets': toolsets, 'hermes_cli': package, 'hermes_cli.main': cli}
+        modules = {'toolsets': toolsets, 'hermes_cli': package, 'hermes_cli.main': cli,
+                   'hermes_cli.config': config, 'agent.skill_commands': skill_commands}
         spec = importlib.util.spec_from_file_location('project_hermes_runner', Path(__file__).resolve().parents[1] / 'integrations/hermes/runner.py')
         runner = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, modules):
@@ -34,3 +41,22 @@ class HermesRunnerTests(unittest.TestCase):
                 runner.main()
         toolsets.create_custom_toolset.assert_not_called()
         cli.main.assert_not_called()
+
+    def test_unconfigured_or_extra_preloaded_skill_blocks_gateway(self):
+        for value in (None, [], ['other'], ['expert-review', 'other']):
+            with self.subTest(auto_load=value):
+                runner, toolsets, cli, modules = self.runner()
+                modules['hermes_cli.config'].load_config_readonly.return_value = {'skills': {'auto_load': value}}
+                with patch.dict(sys.modules, modules), self.assertRaisesRegex(RuntimeError, 'preload exactly'):
+                    runner.main()
+                cli.main.assert_not_called()
+
+    def test_missing_disabled_or_partial_preload_blocks_gateway(self):
+        for result in (('', [], ['expert-review']), ('partial skill', ['expert-review'], []),
+                       ('unexpected skill', ['other'], [])):
+            with self.subTest(result=result):
+                runner, toolsets, cli, modules = self.runner()
+                modules['agent.skill_commands'].build_auto_load_prompt.return_value = result
+                with patch.dict(sys.modules, modules), self.assertRaisesRegex(RuntimeError, 'incomplete or disabled'):
+                    runner.main()
+                cli.main.assert_not_called()

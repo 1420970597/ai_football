@@ -83,7 +83,7 @@ start_hermes "$SNAPSHOT/integrations/hermes/config.yaml"
 wait_services
 hashes > "$EVIDENCE/framework-before.json"
 readonly_skill
-cases normal,adversarial,length,parallel
+cases normal,adversarial,length,parallel,no_intent
 printf 'restart_task_owned_framework\n'
 docker restart "$HERMES" >/dev/null
 wait_services

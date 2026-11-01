@@ -60,6 +60,13 @@ def _last_tool(messages):
     return name or '', last.get('content', ''), call_id
 
 
+def _preloaded_project_skill(messages):
+    markers = ('auto-loaded via config (skills.auto_load)', 'expert-review/preload-v1',
+               'quote_id', 'next_cursor', 'record_expert_signals')
+    return any(msg.get('role') == 'system' and isinstance(msg.get('content'), str)
+               and all(marker in msg['content'] for marker in markers) for msg in messages)
+
+
 def _observe(state, body, tools):
     state['requests'] += 1
     state['models'] = sorted(set(state['models']) | {str(body.get('model'))})
@@ -113,11 +120,13 @@ def _answer(body):
     mode = mode.group(1) if mode else 'normal'
     state = evidence['reviews'].setdefault(review.group(1), {
         'scenario': mode, 'requests': 0, 'models': [], 'tools': [], 'called': [],
-        'image_sha256s': [], 'project_skill_seen': False, 'canary_exposed': False,
+        'image_sha256s': [], 'project_skill_seen': False, 'project_skill_preloaded': False, 'canary_exposed': False,
         'observed_results': [], 'seen_call_ids': [], 'requested_calls': {}, 'attack_step': 0, 'pagination_attack': 0, 'forgery_attack': False,
     })
     tools = [t['function']['name'] for t in body.get('tools', []) if t.get('type') == 'function']
     _observe(state, body, tools)
+    state['project_skill_preloaded'] |= _preloaded_project_skill(messages)
+    state['project_skill_seen'] |= state['project_skill_preloaded']
     name, last, call_id = _last_tool(messages)
     if call_id and call_id not in state['seen_call_ids']:
         state['seen_call_ids'].append(call_id)
@@ -132,11 +141,13 @@ def _answer(body):
               'phase': 'all', 'sport': 'football', 'page_size': 20}
     resolve = {**context, 'team_a': f'Alpha{TARGET}', 'team_b': f'Beta{TARGET}',
                'competition': '隔离联赛-' + review.group(1)}
+    if mode == 'no_intent' and state['project_skill_seen']:
+        return {'role': 'assistant', 'content': '未录入推荐：原文为问候，不含比赛或盘口意图。'}, 'stop'
     if mode == 'length':
         return {'role': 'assistant', 'content': '输出预算被截断，隔离测试没有完成任何推荐。'}, 'length'
     if mode == 'budget' and not tools:
         return {'role': 'assistant', 'content': '隔离回合预算已耗尽；没有推荐。'}, 'stop'
-    if not name or mode == 'budget':
+    if (not name and not state['project_skill_preloaded']) or mode == 'budget':
         schema = next((t['function'] for t in body.get('tools', []) if t.get('function', {}).get('name', '').endswith('skill_view')), {})
         properties = schema.get('parameters', {}).get('properties', {})
         argument = next((key for key in ('name', 'skill_name', 'skill') if key in properties), 'name')
@@ -148,6 +159,8 @@ def _answer(body):
         attack, args = attacks[state['attack_step']]
         state['attack_step'] += 1
         return _call(state, tools, attack, args, unknown=True)
+    if not name and state['project_skill_preloaded']:
+        return _call(state, tools, 'search_matches', search)
     if name.endswith('search_matches') and nested(last, 'search_key'):
         state['last_search'] = {'key': nested(last, 'search_key'), 'cursor': nested(last, 'next_cursor')}
         if mode == 'adversarial' and state['pagination_attack'] == 0:
@@ -188,8 +201,11 @@ def _answer(body):
         return _call(state, tools, 'list_match_markets', {**context, 'fixture_id': state['resolved_fixture']})
     if nested(last, 'markets'):
         quote = nested(last, 'markets')[0]
+        fixture = nested(last, 'fixture')
+        if not isinstance(fixture, dict) or not fixture.get('id') or not quote.get('quote_id'):
+            return {'role': 'assistant', 'content': '隔离工具缺少比赛或报价标识，保持未解决。'}, 'stop'
         return _call(state, tools, 'record_expert_signals', {**context, 'signals': [{
-            'fixture_id': quote['fixture_id'], 'quote_id': quote['quote_id'],
+            'fixture_id': fixture['id'], 'quote_id': quote['quote_id'],
             'evidence_text': '隔离推荐大2.5，价格仅取系统工具', 'confidence': 0.8}]})
     if nested(last, 'accepted'):
         return {'role': 'assistant', 'content': f'已按系统工具记录 Alpha{TARGET} 对 Beta{TARGET}，赛前全场大2.5；此为隔离验收。'}, 'stop'

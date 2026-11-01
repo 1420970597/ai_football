@@ -30,8 +30,16 @@ agent:
     - debugging
 
 skills:
+  auto_load:
+    - expert-review
   external_dirs:
     - /workspace/skills
+
+# Review jobs already have stable IDs; generating chat titles adds an unrelated
+# provider request for every independent review session.
+auxiliary:
+  title_generation:
+    enabled: false
 
 tools:
   tool_search:
