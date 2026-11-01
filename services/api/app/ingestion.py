@@ -83,16 +83,29 @@ async def ingest_fixture_batch(conn, items) -> int:
         if record['phase'] in {"finished", "cancelled"}:
             finished.append(fixture_id)
     if quote_rows:
-        await conn.executemany(
+        quote_payload = [{
+            'id': str(row[0]), 'fixture_id': row[1], 'market_id': row[2], 'market_name': row[3],
+            'period': row[4], 'market_kind': row[5], 'line': str(row[6]) if row[6] is not None else None,
+            'selection': row[7], 'price': str(row[8]),
+            'source_updated_at': row[9].isoformat() if row[9] is not None else None,
+            'received_at': row[10].isoformat(), 'source_time_quality': row[11], 'status': row[12],
+            'play_id': row[13], 'market_instance_id': row[14], 'selection_id': row[15],
+            'is_main': row[16], 'score_basis': row[17],
+        } for row in quote_rows]
+        await conn.execute(
             "INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,period,market_kind,line,selection,price,source_updated_at,"
             "received_at,source_time_quality,status,play_id,market_instance_id,selection_id,is_main,score_basis) "
-            "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) "
+            "SELECT id,fixture_id,market_id,market_name,period,market_kind,line,selection,price,source_updated_at,"
+            "received_at,source_time_quality,status,play_id,market_instance_id,selection_id,is_main,score_basis "
+            "FROM jsonb_to_recordset($1::jsonb) AS q(id uuid,fixture_id text,market_id text,market_name text,period text,"
+            "market_kind text,line numeric,selection text,price numeric,source_updated_at timestamptz,received_at timestamptz,"
+            "source_time_quality text,status text,play_id text,market_instance_id text,selection_id text,is_main boolean,score_basis text) "
             "ON CONFLICT(fixture_id,market_id,period,(COALESCE(line,0)),selection) DO UPDATE SET market_name=EXCLUDED.market_name,market_kind=EXCLUDED.market_kind,line=EXCLUDED.line,"
             "price=EXCLUDED.price,source_updated_at=EXCLUDED.source_updated_at,received_at=EXCLUDED.received_at,"
             "source_time_quality=EXCLUDED.source_time_quality,status=EXCLUDED.status,play_id=EXCLUDED.play_id,"
             "market_instance_id=EXCLUDED.market_instance_id,selection_id=EXCLUDED.selection_id,is_main=EXCLUDED.is_main,score_basis=EXCLUDED.score_basis "
             "WHERE coalesce(EXCLUDED.source_updated_at,EXCLUDED.received_at)>=coalesce(v2_current_quotes.source_updated_at,v2_current_quotes.received_at)",
-            quote_rows,
+            quote_payload,
         )
     if closures:
         await conn.executemany(

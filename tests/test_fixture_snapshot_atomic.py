@@ -113,6 +113,20 @@ class SnapshotAtomicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200,response.status_code,response.text)
         self.assertEqual(2000,await self.pool.fetchval("SELECT count(*) FROM v2_current_quotes WHERE status='active'"))
 
+    async def test_bulk_quote_upsert_preserves_nullable_line_and_source_fields(self):
+        payload=fixture(markets=[quote(
+            0,market_id='winner',market_name='全场独赢',kind='winner',line=None,price='2.375',
+            source_updated_at=None,source_time_quality='unknown',status='suspended',play_id='play-1',
+            market_instance_id='instance-1',selection_id='option-1',is_main=True,score_basis='unknown',
+        )])
+        response=await self.post(payload)
+        self.assertEqual(200,response.status_code,response.text)
+        row=await self.pool.fetchrow(
+            'SELECT fixture_id,market_kind,line,price,source_updated_at,source_time_quality,status,'
+            'play_id,market_instance_id,selection_id,is_main,score_basis FROM v2_current_quotes')
+        self.assertEqual(('f','winner',None,Decimal('2.375'),None,'unknown','suspended',
+                          'play-1','instance-1','option-1',True,'unknown'),tuple(row.values()))
+
     async def test_body_stream_deadline_precedes_validation_or_database_access(self):
         timeout=asyncio.timeout
         async def slow_body():
