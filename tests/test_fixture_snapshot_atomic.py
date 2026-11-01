@@ -127,6 +127,14 @@ class SnapshotAtomicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(('f','winner',None,Decimal('2.375'),None,'unknown','suspended',
                           'play-1','instance-1','option-1',True,'unknown'),tuple(row.values()))
 
+    async def test_bulk_quote_upsert_preserves_null_price_for_suspended_market(self):
+        payload=fixture(markets=[quote(0,price=None,source_updated_at=None,
+                                       source_time_quality='unknown',status='suspended')])
+        response=await self.post(payload)
+        self.assertEqual(200,response.status_code,response.text)
+        row=await self.pool.fetchrow('SELECT price,status FROM v2_current_quotes')
+        self.assertEqual((None,'suspended'),tuple(row.values()))
+
     async def test_body_stream_deadline_precedes_validation_or_database_access(self):
         timeout=asyncio.timeout
         async def slow_body():

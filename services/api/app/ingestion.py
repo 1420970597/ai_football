@@ -86,7 +86,7 @@ async def ingest_fixture_batch(conn, items) -> int:
         quote_payload = [{
             'id': str(row[0]), 'fixture_id': row[1], 'market_id': row[2], 'market_name': row[3],
             'period': row[4], 'market_kind': row[5], 'line': str(row[6]) if row[6] is not None else None,
-            'selection': row[7], 'price': str(row[8]),
+            'selection': row[7], 'price': str(row[8]) if row[8] is not None else None,
             'source_updated_at': row[9].isoformat() if row[9] is not None else None,
             'received_at': row[10].isoformat(), 'source_time_quality': row[11], 'status': row[12],
             'play_id': row[13], 'market_instance_id': row[14], 'selection_id': row[15],

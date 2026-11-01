@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮最新进度：2026-11-01 01:34 UTC。E140 API候选已生效（revision `52a6af3`），但运行验收失败：生产采集上传触发盘口JSON数值转换异常，隔离测试已复现，E141修复中。API health/ready为200、当前审核队列空；部署后API未再见数据库超时，但采集端仍有HTTP 500、Telegram event_commit deadline，Telegram degraded、乐鱼不可用。专家30分钟窗口尚未开始，需先修复并重新部署，再确认采集与数据新鲜度稳定。
+本轮最新进度：2026-11-01 01:37 UTC。E140 API候选已生效（revision `52a6af3`），运行验收因停盘NULL赔率序列化为`"None"`失败；E141已保留JSON null修复，19项Docker定向回归通过，冻结全套待执行。API health/ready为200、审核活动队列为空；修复候选尚未部署，Telegram/乐鱼健康门禁未通过。专家30分钟窗口未开始。
 
 ### E137 — 降低Telegram来源租约写竞争及同群请求排队（冻结Docker验证通过并生效，运行验收失败，后续E138修复中）
 
@@ -59,13 +59,14 @@
 - E140生效及运行回归（01:27–01:34 UTC）：API容器只更新一次，容器ID=`9c5d6048fc6510be343d76ef826fb21c2e866900871ca477e4e8e9dfb32576e`、镜像ID=`sha256:de8ef2d51d756b96ed7f281e3a15760144cba694b030e63551082e171c9f12b5`、revision=`52a6af3fdd73d05376558fd1a623194409594d11`，healthy；`/healthz`、`/readyz`均200，schema仍`023_telegram_author_backfill.sql`，审核queued/running/retry=0。review-worker仍E131，collector仍revision=`7e8bf7d`，未重启Hermes/MCP/采集器或运行迁移。部署后API容器日志未见数据库超时，但远端collector 10分钟日志累计13 HTTPStatusError、2 database_temporarily_unavailable、5 deadline、4 event_commit及10条503；01:29:02 UTC出现Telegram reconciliation event_commit deadline，LeYu ingest HTTP 500单次约37秒。01:30:19只读状态为Telegram connected/authorized但degraded、3 catching_up/1 caught_up/2 reconciliation_deferred，LeYu unavailable、轮询失败累计19次，最后成功01:28:31；过去5分钟8条消息均无当前发布时间、4条有ready媒体，4个job为unresolved，可信当前发言无漏建job。生产API受限日志9次`InvalidTextRepresentationError`的安全调用帧均落在`ingest_fixture_batch`盘口集合写入（line 95），未记录异常正文或请求体。首次3秒综合状态探针超时退出1，改用15秒只读控制面截止后返回200；一次SSH日志摘要here-doc误放结束标记退出127，修正后只输出脱敏状态/异常分类退出0。E140降低API超时的趋势尚需更长时间确认，但已发现功能回归，不能通过运行门禁。
 - 失败处理：若集合写入与现有quote/FK/check约束不符，先定位类型/冲突差异；若隔离回归通过但生产仍超时，按单条批次耗时与Postgres等待统计继续分析，不提高超时阈值掩盖负载。
 
-### E141 — 保留无有效倍率盘口的NULL价格并修复批量写入（研究与隔离复现通过，代码修复中）
+### E141 — 保留无有效倍率盘口的NULL价格并修复批量写入（代码已写，定向Docker验证通过，冻结全套待执行）
 
 - 目标/责任目录：修复E140集合式盘口upsert对乐鱼停盘/赔率缺失quote的JSON序列化回归；责任目录`services/api/app/ingestion.py`及`tests/test_fixture_snapshot_atomic.py`。前置证据是E140已经生效且生产API安全堆栈定位到盘口写入SQL。
 - 根因：`FixtureQuote.price`允许NULL，采集适配器会将价格无效或缺失的盘口设为`price=None,status='suspended'`；旧逐项asyncpg绑定保留SQL NULL。E140组装`quote_payload`时无条件执行`str(row[8])`，把Python `None`写成JSON字符串`"None"`，`jsonb_to_recordset(... price numeric ...)`随即抛`InvalidTextRepresentationError`。此问题与赔率阈值无关，不得改为填充倍率或让停盘盘口可记录。
 - 设计与验收动作：序列化层仅在价格非空时转换十进制文本，否则输出JSON `null`；保留原`status='suspended'`和`source_time_quality`。新增真实隔离PostgreSQL测试证明NULL价格及停盘状态正确落库，并保持已有价格/可下注门禁不变；先通过原反例，再跑E140定向与完整冻结套件，之后才构建/部署API候选。
 - 失败反例（01:33 UTC）：在限额Docker verifier和具名PostgreSQL`ai-football-v2-pgverify`运行`python -m unittest -q test_fixture_snapshot_atomic.SnapshotAtomicTests.test_bulk_quote_upsert_preserves_null_price_for_suspended_market`，1项失败、退出1，HTTP 500；失败测试已加入本工作树。此结果复现生产SQL错误，不连接生产写路径，测试数据库由测试fixture临时创建/删除。
-- 当前下一步：修复序列化并重跑同一反例；同时验证正常十进制报价、NULL winner line、未知源时间、事务回滚、15秒门槛和Telegram claim/ACK合同。未创建线上推荐、未写生产业务表；修复未生效前持续只读监控当前消息是否建任务。
+- 修复及定向Docker验证（01:37 UTC）：`services/api/app/ingestion.py`只在price非空时序列化十进制文本，NULL保留JSON null；新增`test_bulk_quote_upsert_preserves_null_price_for_suspended_market`覆盖NULL价格及`status='suspended'`。同一Docker反例重跑1项、退出0；随后`python -m unittest -q test_fixture_snapshot_atomic test_independent_quote_ingestion`在限额verifier/具名隔离PostgreSQL运行19项、16.785秒、0失败/错误、退出0，覆盖新增回归、批量写入、价格身份/时间、原子回滚及独立报价接入。测试期未改源码，测试库由fixture临时创建并删除。`git diff --check`待代码冻结提交前复核。
+- 当前下一步：复核差异后提交修复与回归，在干净冻结worktree运行Docker全套；若通过再构建同源API候选，审核队列空闲门禁部署后验证采集端500及Telegram事件提交错误是否消失。未创建线上推荐、未写生产业务表；修复未生效前持续只读监控。
 
 本轮阶段更新：2026-10-31 21:55 UTC。E135候选已部署于远端，collector于21:51:27启动并报告healthy；image ID=`sha256:418456e54cdb58830548f47544a21e6b3568efbdf7a279fb3b4380c73fefda4c`、revision=`765dc42412ce098071ad5f7b09986949c7af3ab0`，与候选一致；API health/ready均200，bridge/executor容器ID/image/StartedAt不变。Telegram控制状态HTTP200且connected/authorized，但状态degraded：1个来源caught_up、2个reconciliation_deferred、2个catching_up、1个unavailable（TimeoutError）；6/6租约有效、5/6检查点近2分钟刷新。collector日志21:52–21:55有3次ACK deadline、1次event_commit deadline及1次history deadline，实时消息持久化群锁等待最高约6.2秒。近10分钟可信事件均为旧发布时间回补（2022–2025），无可验收的新发言；媒体有pending/unsupported项，不能计作已审。E135运行验收未通过，当前继续定位ACK/event链路等待并核实媒体重试，不启动30分钟窗口。
 
