@@ -113,6 +113,49 @@ class SnapshotAtomicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200,response.status_code,response.text)
         self.assertEqual(2000,await self.pool.fetchval("SELECT count(*) FROM v2_current_quotes WHERE status='active'"))
 
+    async def test_new_live_snapshot_corrects_unconfirmed_cancelled_projection_and_quotes(self):
+        older=(datetime.now(timezone.utc)-timedelta(minutes=1)).isoformat()
+        initial=fixture(phase='cancelled',match_state='0',source_updated_at=None,received_at=older,
+                        markets=[quote(source_updated_at=older,received_at=older)])
+        self.assertEqual(200,(await self.post(initial)).status_code)
+        self.assertEqual('closed',await self.pool.fetchval('SELECT status FROM v2_current_quotes'))
+        newer=fixture(phase='live',match_state='6',source_updated_at=None,home_score=0,away_score=0,
+                      markets=[quote()])
+        response=await self.post(newer)
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual(1,response.json()['accepted'])
+        self.assertEqual('live',await self.pool.fetchval('SELECT phase FROM v2_fixtures'))
+        self.assertEqual('active',await self.pool.fetchval('SELECT status FROM v2_current_quotes'))
+
+    async def test_old_live_snapshot_cannot_correct_newer_cancelled_projection(self):
+        now=datetime.now(timezone.utc)
+        self.assertEqual(200,(await self.post(fixture(phase='cancelled',markets=[quote()]))).status_code)
+        older=(now-timedelta(minutes=1)).isoformat()
+        response=await self.post(fixture(phase='live',source_updated_at=older,received_at=older,
+                                        markets=[quote(source_updated_at=older,received_at=older)]))
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual(0,response.json()['accepted'])
+        self.assertEqual('cancelled',await self.pool.fetchval('SELECT phase FROM v2_fixtures'))
+        self.assertEqual('closed',await self.pool.fetchval('SELECT status FROM v2_current_quotes'))
+
+    async def test_confirmed_and_void_results_cannot_be_reopened_by_newer_live_snapshot(self):
+        for status,phase in (('confirmed','finished'),('void','cancelled')):
+            with self.subTest(status=status):
+                identity='f-'+status
+                older=(datetime.now(timezone.utc)-timedelta(minutes=1)).isoformat()
+                initial=fixture(id=identity,source_id=identity,phase=phase,source_updated_at=older,
+                                received_at=older,markets=[quote(source_updated_at=older,received_at=older)])
+                self.assertEqual(200,(await self.post(initial)).status_code)
+                await self.pool.execute(
+                    "INSERT INTO v2_fixture_results(fixture_id,version,provider_reference,content_hash,status,home_score,away_score,source_updated_at,evidence) "
+                    "VALUES($1,1,$2,'isolated-hash',$3,$4,$5,now(),'{}')",identity,'isolated-'+status,status,
+                    2 if status=='confirmed' else None,1 if status=='confirmed' else None)
+                response=await self.post(fixture(id=identity,source_id=identity,phase='live',markets=[quote()]))
+                self.assertEqual(200,response.status_code,response.text)
+                self.assertEqual(0,response.json()['accepted'])
+                self.assertEqual(phase,await self.pool.fetchval('SELECT phase FROM v2_fixtures WHERE id=$1',identity))
+                self.assertEqual('closed',await self.pool.fetchval('SELECT status FROM v2_current_quotes WHERE fixture_id=$1',identity))
+
     async def test_bulk_quote_upsert_preserves_nullable_line_and_source_fields(self):
         payload=fixture(markets=[quote(
             0,market_id='winner',market_name='全场独赢',kind='winner',line=None,price='2.375',

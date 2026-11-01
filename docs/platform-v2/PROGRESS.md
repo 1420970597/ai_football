@@ -1,12 +1,15 @@
 # 第二代平台实时进度与验证台账
 
-### E147 — 修复错误取消投影阻断真实滚球推荐（研究完成，设计已记录，待实现）
+### E147 — 修复错误取消投影阻断真实滚球推荐（代码已写，定向Docker验证通过，冻结全套待验）
 - 目标/责任目录：使没有确认赛果的错误取消投影可以由较新乐鱼事实纠正；责任目录`services/api/`、`tests/`、`docs/`。前置依赖为E145真实消息图片证据、Hermes唯一赛事绑定、当前乐鱼只读协议核验；不依赖E146上线。
 - 当前证据：08:12前后逐条核对Hermes结果发现珀斯光荣对阿德莱德联、墨尔本胜利女足对纽卡斯尔女足、町田对大阪钢巴、大同对阳信台北竞技均已唯一识别并提取盘口，却因数据库phase=cancelled被挡。四场DB均没有`v2_fixture_results`取消/作废/确认记录，match_state='0'、source_updated_at=NULL。08:14前后经现有collector容器读取授权配置，只做四次既有单场详情请求（请求间隔2秒、未登录/续期/写库），四场上游都返回ms=1、mmp=6或7，明确为滚球，含实时计时和比分。所有请求退出0，秘密未输出。
 - 根因/设计决策：赛事upsert存在无条件`cancelled -> scheduled/live`拦截，即使新快照时间较新也不能修正；未知状态历史归一为cancelled使问题永久化。先撤销未确认cancelled的单向封锁，保留finished不回退、live不退回scheduled、时间单调和最新confirmed/void赛果保护。未知状态归一的完整设计仍需单独核验，不能把截图当作真实赛果或修改已结算账。
 - 实现动作：缩小upsert的终态不可逆条件到finished；增加较新实时快照恢复错误取消并重开对应有效盘口、较旧快照不能恢复、confirmed/void取消不能恢复的隔离数据库行为测试。运行数据通过正常采集新事实修正，不直接批量UPDATE旧赛事，不重写历史推荐或收益。
 - 验收场景：定向和冻结Docker回归通过；仅更新API，真实新快照把上述仍进行赛事恢复live，确认比分/盘口来源一致，Hermes后续新推荐可读取盘口；已确认终态和旧时间事件仍被拒绝。E145观察满30分钟后使修复生效，并以全部本阶段修改生效时间重新计30分钟。
 - 失败处理：若较旧数据能覆盖新状态、confirmed/void被重开、结算证据变化则不部署并修复重跑；上游已完场时按真实事实验收，不把错过的半场盘口套入当前盘口，不重放过期专家信号。
+- 定向验证（08:18 UTC）：已修改赛事upsert终态条件，只保留finished的单向保护，confirmed/void最新赛果检查和时间单调条件保持执行。Docker具名临时PostgreSQL/内部网络中，`test_new_live_snapshot_corrects_unconfirmed_cancelled_projection_and_quotes`、`test_old_live_snapshot_cannot_correct_newer_cancelled_projection`、`test_confirmed_and_void_results_cannot_be_reopened_by_newer_live_snapshot`三项通过，2.564秒，退出0；临时容器和网络已清理。实现未部署，下一步提交冻结全套；新任务编号改为P18-09，避免与已有P18-08重复。
+
+E146冻结阶段（08:18 UTC）：冻结提交`b87c19901ac120ef4a6c1a1772a29efb1e3bff87`执行`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`退出0，1,040项、失败/错误/跳过0，终端434.120秒、报告436.364秒；报告`.runtime/e146-20261101-verification/.runtime/test-evidence/3016587/backend-tests.json`确认提交与干净源码一致。新API修复E147将与E146以同一后续冻结提交构建候选，完成E145窗口后按门禁顺序生效。
 
 ### E146 — 同群复核消息的有界异步提交（代码已写，定向Docker验证通过，冻结全套及部署待验）
 - 目标/责任目录：降低同群历史复核消息串行提交造成的24秒整批deadline；责任目录`services/collector/`、`tests/`、`docs/`。前置依赖是E145消息键锁已部署、远端单collector实例和同源3条claim上限不变。

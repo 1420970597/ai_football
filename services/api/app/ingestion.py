@@ -48,7 +48,10 @@ async def ingest_fixture_batch(conn, items) -> int:
         "clock_minute=EXCLUDED.clock_minute,source_updated_at=EXCLUDED.source_updated_at,received_at=EXCLUDED.received_at,"
         "source_time_quality=EXCLUDED.source_time_quality,half_home_score=EXCLUDED.half_home_score,half_away_score=EXCLUDED.half_away_score "
         "WHERE coalesce(EXCLUDED.source_updated_at,EXCLUDED.received_at)>=coalesce(v2_fixtures.source_updated_at,v2_fixtures.received_at) "
-        "AND NOT(v2_fixtures.phase IN('finished','cancelled') AND EXCLUDED.phase IN('scheduled','live')) "
+        # An unconfirmed cancellation is a current projection, not a final
+        # result. A newer authoritative snapshot may correct/reinstate it.
+        # Confirmed/void results remain protected by the result check below.
+        "AND NOT(v2_fixtures.phase='finished' AND EXCLUDED.phase IN('scheduled','live')) "
         "AND NOT(v2_fixtures.phase='live' AND EXCLUDED.phase='scheduled') "
         # Final result evidence owns scores after settlement; a later schedule
         # snapshot may omit them or carry a different period's aggregate.
