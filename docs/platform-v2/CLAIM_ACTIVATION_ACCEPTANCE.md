@@ -1,6 +1,6 @@
 # E174：缩短审核领取事务的远端往返
 
-状态：设计已记录，尚未实现或部署（2026-11-01 19:57 UTC）。
+状态：代码已写、定向70项通过，尚未部署（2026-11-01 19:57 UTC）。
 
 - 目标：继续减少E173真实scheduler 2352–8507ms中的串行往返，保持当前业务策略；不把此项等同解决所有数据库超时或达到端到端3秒。
 - 责任目录：services/api审核工作器、tests真实临时PG调度回归、docs阶段证据。
@@ -13,3 +13,5 @@
 - 失败处理：原行为断言失败先修复再重跑，不能放宽匹配或跳过检查；冻结测试时不改源。线上仍503则按实际栈与等待证据继续定位，不靠增加数据库超时掩盖问题。
 
 只读定位命令为Docker内database-waits.py、Docker stats及PG容器/proc/pressure/io，均退出0；原始证据.runtime/e173-live/{database-waits.json,database-rtt.json,database-errors-late.log}。资源单点值未另存完整快照，不能称长期资源基线。
+
+定向验证：Docker临时PG运行test_review_freshness_scheduler与test_review_worker，70项139.790秒、退出0；新增四项覆盖锁定过期任务跳过、空租约排序、lane触发异常时激活/搜索清理整体回滚、设置及advisory lock事务作用域。原公平/恢复/历史边界及结论幂等回归保持通过。实现比E173常规领取减少5次SQL往返，尚未用线上测量证明收益；旧新真实临时PG固定30ms模拟对照单独运行中。准备提交冻结完整回归，线上仍1296f87不变。

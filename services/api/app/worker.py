@@ -76,8 +76,10 @@ def failure_category(exc: BaseException) -> tuple[str, bool]:
 
 
 async def _scheduler_lock(conn):
-    await conn.execute("SELECT set_config('lock_timeout','2000',true),set_config('statement_timeout','3000',true)")
-    return await conn.fetchval('SELECT pg_try_advisory_xact_lock(hashtext($1))', SCHEDULER_LOCK)
+    row = await conn.fetchrow(
+        "SELECT set_config('lock_timeout','2000',true),set_config('statement_timeout','3000',true),"
+        'pg_try_advisory_xact_lock(hashtext($1)) AS locked', SCHEDULER_LOCK)
+    return row['locked']
 
 
 async def _advance_turn(conn, source_id, expert_id):
@@ -124,18 +126,47 @@ async def _claim_from_lane(conn, mode):
         if not pair:
             return None
         turn = await _advance_turn(conn, pair['source_id'], pair['expert_id'])
-        for expired in (True, False):
-            condition = ("j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp())" if expired
-                         else "j.state IN('queued','retry') AND j.available_at<=statement_timestamp()")
-            order = 'j.lease_until NULLS FIRST,j.created_at,j.id' if expired else 'j.message_posted_at DESC,j.available_at,j.created_at,j.id'
-            row = await conn.fetchrow(
-                'SELECT j.id,j.message_id,j.attempts FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id '
-                'WHERE j.source_id=$3 AND j.expert_id=$4 AND j.attempts<$1 AND ' + lane + ' AND ' + condition + ' AND ' + ELIGIBLE_MESSAGE +
-                ' ORDER BY ' + order + ' LIMIT 1 FOR UPDATE OF j SKIP LOCKED',
-                MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, pair['source_id'], pair['expert_id'])
-            if row:
-                return row, pair, turn, probe + 1
+        row = await conn.fetchrow(
+            'SELECT j.id,j.message_id,j.attempts FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id '
+            'WHERE j.source_id=$3 AND j.expert_id=$4 AND j.attempts<$1 AND ' + lane +
+            " AND ((j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))"
+            " OR (j.state IN('queued','retry') AND j.available_at<=statement_timestamp())) AND " + ELIGIBLE_MESSAGE +
+            " ORDER BY (j.state='running') DESC,"
+            "CASE WHEN j.state='running' THEN j.lease_until END NULLS FIRST,"
+            "CASE WHEN j.state='running' THEN j.created_at END,"
+            "CASE WHEN j.state<>'running' THEN j.message_posted_at END DESC,"
+            "CASE WHEN j.state<>'running' THEN j.available_at END,j.created_at,j.id "
+            'LIMIT 1 FOR UPDATE OF j SKIP LOCKED',
+            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, pair['source_id'], pair['expert_id'])
+        if row:
+            return row, pair, turn, probe + 1
     return None
+
+
+async def _activate_claim(conn, job_id, attempt, mode, realtime_claims):
+    """Activate an already locked job and return its message in one round trip."""
+    row = await conn.fetchrow(
+        "WITH claimed AS (UPDATE v2_analysis_jobs SET state='running',attempt_id=$2,attempts=attempts+1,review_mode=$4,"
+        "lease_until=clock_timestamp()+($3::int*interval '1 second'),heartbeat_at=clock_timestamp(),last_error=NULL,updated_at=now() "
+        "WHERE id=$1 RETURNING id,message_id,lease_until), advanced_lane AS ("
+        'UPDATE v2_review_lane_schedule SET realtime_claims_since_replay=$5,updated_at=now() '
+        'WHERE singleton AND EXISTS(SELECT 1 FROM claimed) RETURNING singleton), cleared_searches AS ('
+        'DELETE FROM v2_match_searches WHERE job_id IN(SELECT id FROM claimed) RETURNING job_id) '
+        'SELECT m.id,m.raw_text,m.media_objects,m.posted_at,m.revision,m.reply_context,m.created_at,'
+        'm.created_at AS event_persisted_at,'
+        "GREATEST(0,round((extract(epoch FROM(clock_timestamp()-m.created_at))*1000)::numeric,3))::double precision AS event_to_claim_ms,"
+        'e.display_nickname,s.display_name AS source_name,c.lease_until AS claimed_lease_until,'
+        'COALESCE((SELECT r.raw_text FROM v2_expert_messages r WHERE r.source_id=m.source_id '
+        'AND r.platform_message_id=m.reply_to_platform_message_id ORDER BY r.revision DESC LIMIT 1),'
+        "m.reply_context->>'text',m.reply_context->>'raw_text') AS reply_text "
+        'FROM claimed c JOIN v2_expert_messages m ON m.id=c.message_id '
+        'JOIN v2_experts e ON e.id=m.expert_id JOIN v2_expert_sources s ON s.id=m.source_id',
+        job_id, attempt, LEASE_SECONDS, mode,
+        0 if mode == 'historical_replay' else min(realtime_claims + 1, REALTIME_CLAIMS_PER_REPLAY))
+    if row is None:
+        raise RuntimeError('claimed review job or message disappeared during activation')
+    message = dict(row)
+    return message.pop('claimed_lease_until'), message
 
 
 async def claim_job(pool):
@@ -193,26 +224,7 @@ async def _claim_job(pool):
                 return None
             row, pair, turn, probes = claimed
             attempt = uuid.uuid4()
-            lease_until = await conn.fetchval(
-                "UPDATE v2_analysis_jobs SET state='running',attempt_id=$2,attempts=attempts+1,review_mode=$4,"
-                "lease_until=clock_timestamp()+($3::int*interval '1 second'),heartbeat_at=clock_timestamp(),last_error=NULL,updated_at=now() WHERE id=$1 RETURNING lease_until",
-                row["id"], attempt, LEASE_SECONDS, mode,
-            )
-            await conn.execute('UPDATE v2_review_lane_schedule SET realtime_claims_since_replay=$1,updated_at=now() WHERE singleton',
-                               0 if mode == 'historical_replay' else min(realtime_claims + 1, REALTIME_CLAIMS_PER_REPLAY))
-            await conn.execute("DELETE FROM v2_match_searches WHERE job_id=$1", row["id"])
-            message = await conn.fetchrow(
-                "SELECT m.id,m.raw_text,m.media_objects,m.posted_at,m.revision,m.reply_context,m.created_at,"
-                "m.created_at AS event_persisted_at,"
-                "GREATEST(0,round((extract(epoch FROM(clock_timestamp()-m.created_at))*1000)::numeric,3))::double precision AS event_to_claim_ms,"
-                "e.display_nickname,"
-                "s.display_name AS source_name,"
-                "COALESCE((SELECT r.raw_text FROM v2_expert_messages r WHERE r.source_id=m.source_id "
-                "AND r.platform_message_id=m.reply_to_platform_message_id ORDER BY r.revision DESC LIMIT 1),"
-                "m.reply_context->>'text',m.reply_context->>'raw_text') AS reply_text "
-                "FROM v2_expert_messages m JOIN v2_experts e ON e.id=m.expert_id "
-                "JOIN v2_expert_sources s ON s.id=m.source_id WHERE m.id=$1", row["message_id"],
-            )
+            lease_until, message = await _activate_claim(conn, row['id'], attempt, mode, realtime_claims)
             event_to_claim_ms = message['event_to_claim_ms']
             await trace(conn, row["id"], "attempt_claimed", {"attempt_id": str(attempt), "attempt": row["attempts"] + 1,
                 'source_id': str(pair['source_id']), 'expert_id': str(pair['expert_id']), 'concurrency_limit': pair['concurrency_limit'],

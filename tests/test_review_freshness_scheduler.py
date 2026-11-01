@@ -153,6 +153,69 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('historical_replay',trace['review_mode'])
         self.assertGreater(trace['message_age_seconds'],90000)
 
+    async def test_locked_expired_job_is_skipped_without_blocking_ready_job(self):
+        pair = await self.pair()
+        expired = (await self.queued(pair, age=60, state='running', attempts=1))[0]
+        queued = (await self.queued(pair, age=1))[0]
+        async with self.pool.acquire() as locker:
+            async with locker.transaction():
+                await locker.fetchrow('SELECT id FROM v2_analysis_jobs WHERE id=$1 FOR UPDATE', expired)
+                job = await asyncio.wait_for(worker.claim_job(self.pool), timeout=3)
+                self.assertEqual(queued, job['id'])
+                self.assertEqual(1, await locker.fetchval('SELECT attempts FROM v2_analysis_jobs WHERE id=$1', expired))
+
+    async def test_null_expired_lease_precedes_older_expired_lease_and_queued(self):
+        pair = await self.pair()
+        expired = (await self.queued(pair, age=60, state='running', attempts=1))[0]
+        missing_lease = (await self.queued(pair, age=1, state='running', attempts=2))[0]
+        await self.pool.execute('UPDATE v2_analysis_jobs SET lease_until=NULL WHERE id=$1', missing_lease)
+        await self.queued(pair, age=0)
+        job = await worker.claim_job(self.pool)
+        self.assertEqual(missing_lease, job['id'])
+        self.assertEqual(3, job['attempts'])
+        await self.complete(job)
+        self.assertEqual(expired, (await worker.claim_job(self.pool))['id'])
+
+    async def test_activation_failure_rolls_back_lease_lane_and_search_cleanup(self):
+        pair = await self.pair()
+        job_id = (await self.queued(pair, age=1))[0]
+        await self.pool.execute("INSERT INTO v2_match_searches(job_id,search_key,team_query,phase) VALUES($1,'prior','Synthetic','all')", job_id)
+        before = dict(await self.pool.fetchrow('SELECT state,attempt_id,attempts,lease_until FROM v2_analysis_jobs WHERE id=$1', job_id))
+        await self.pool.execute("CREATE FUNCTION reject_lane() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'isolated lane failure'; END $$")
+        await self.pool.execute('CREATE TRIGGER reject_lane BEFORE UPDATE ON v2_review_lane_schedule FOR EACH ROW EXECUTE FUNCTION reject_lane()')
+        async with self.pool.acquire() as conn:
+            with self.assertRaises(asyncpg.RaiseError):
+                await worker._activate_claim(conn, job_id, uuid.uuid4(), 'real_time', 0)
+        self.assertEqual(before, dict(await self.pool.fetchrow('SELECT state,attempt_id,attempts,lease_until FROM v2_analysis_jobs WHERE id=$1', job_id)))
+        self.assertEqual(0, await self.pool.fetchval('SELECT realtime_claims_since_replay FROM v2_review_lane_schedule'))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_match_searches WHERE job_id=$1', job_id))
+        await self.pool.execute('DROP TRIGGER reject_lane ON v2_review_lane_schedule')
+        attempt = uuid.uuid4()
+        async with self.pool.acquire() as conn:
+            lease, message = await worker._activate_claim(conn, job_id, attempt, 'real_time', 0)
+        actual = await self.pool.fetchrow('SELECT state,attempt_id,attempts,lease_until,message_id FROM v2_analysis_jobs WHERE id=$1', job_id)
+        self.assertEqual(('running', attempt, 1, lease), tuple(actual)[:4])
+        self.assertEqual(actual['message_id'], message['id'])
+        self.assertEqual('Synthetic expert', message['display_nickname'])
+        self.assertEqual('Synthetic source', message['source_name'])
+        self.assertNotIn('claimed_lease_until', message)
+        self.assertEqual(1, await self.pool.fetchval('SELECT realtime_claims_since_replay FROM v2_review_lane_schedule'))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_match_searches WHERE job_id=$1', job_id))
+
+    async def test_scheduler_settings_and_advisory_lock_remain_transaction_scoped(self):
+        async with self.pool.acquire() as conn:
+            before = await conn.fetchrow("SELECT current_setting('lock_timeout'),current_setting('statement_timeout')")
+            async with conn.transaction():
+                self.assertTrue(await worker._scheduler_lock(conn))
+                self.assertEqual(('2s', '3s'), tuple(await conn.fetchrow("SELECT current_setting('lock_timeout'),current_setting('statement_timeout')")))
+                async with self.pool.acquire() as other:
+                    async with other.transaction():
+                        self.assertFalse(await worker._scheduler_lock(other))
+            self.assertEqual(tuple(before), tuple(await conn.fetchrow("SELECT current_setting('lock_timeout'),current_setting('statement_timeout')")))
+            async with self.pool.acquire() as other:
+                async with other.transaction():
+                    self.assertTrue(await worker._scheduler_lock(other))
+
     async def test_authors_rotate_inside_each_lane_and_shared_expert_budget_remains_one(self):
         pair = await self.pair()
         other = await self.pair(source=pair[0])
