@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import os
+from pathlib import Path
 from urllib.parse import urlsplit
 from datetime import timedelta
 from types import SimpleNamespace
@@ -14,11 +15,70 @@ import asyncpg
 import test_reviews as support
 from app import worker
 from app.database import apply_migrations, migration_files
-from infra.remote.review_handoff import try_hold_idle_scheduler
+from infra.remote.review_handoff import try_hold_idle_scheduler, pause_new_claims
+from infra.remote import review_handoff
 
 
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_ADMIN_URL"), "requires isolated database")
 class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_handoff_hold_timeout_releases_lane_and_scheduler_and_closes_connection(self):
+        await self.make_queued()
+        release = Path('/tmp/e166-absent-'+uuid.uuid4().hex)
+        settings = SimpleNamespace(database_url=self.admin_url.rsplit('/', 1)[0]+'/'+self.dbname)
+        with patch.object(review_handoff, 'load_settings', return_value=settings):
+            with self.assertRaises(TimeoutError):
+                await review_handoff.run(release, .2, .05, pause_claims=True)
+        self.assertEqual(0, await self.pool.fetchval(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() "
+            "AND application_name='review-idle-deployment-gate'"))
+        self.assertIsNotNone(await worker.claim_job(self.pool))
+
+    async def test_handoff_wait_timeout_releases_claim_pause_without_losing_lease(self):
+        source, expert = await self.add_expert()
+        ready = (await self.queued(source=source, expert=expert))[0]
+        settings = SimpleNamespace(database_url=self.admin_url.rsplit('/', 1)[0]+'/'+self.dbname)
+        with patch.object(review_handoff, 'load_settings', return_value=settings):
+            with self.assertRaises(TimeoutError):
+                await review_handoff.run(Path('/tmp/e166-absent-'+uuid.uuid4().hex), .05, .05, pause_claims=True)
+        self.assertTrue(await worker._renew_lease(self.pool, {'id': self.job, 'attempt_id': self.attempt}))
+        self.assertEqual(ready, (await worker.claim_job(self.pool))['id'])
+
+    async def test_claim_pause_blocks_new_work_while_real_heartbeat_keeps_renewing(self):
+        source, expert = await self.add_expert()
+        ready = (await self.queued(source=source, expert=expert))[0]
+        lease_until = await self.pool.fetchval(
+            "UPDATE v2_analysis_jobs SET lease_until=clock_timestamp()+interval '10 seconds',heartbeat_at=clock_timestamp() "
+            "WHERE id=$1 RETURNING lease_until", self.job)
+        before = await self.pool.fetchval('SELECT heartbeat_at FROM v2_analysis_jobs WHERE id=$1', self.job)
+        async with self.pool.acquire() as gate, gate.transaction():
+            await pause_new_claims(gate)
+            with patch.object(worker, 'HEARTBEAT_SECONDS', .1), patch.object(worker, 'LEASE_SECONDS', 20):
+                heartbeat = asyncio.create_task(worker.keep_lease(self.pool, {
+                    'id': self.job, 'attempt_id': self.attempt, 'lease_until': lease_until}))
+                try:
+                    for _ in range(2):
+                        self.assertIsNone(await worker.claim_job(self.pool))
+                    await asyncio.sleep(.3)
+                    self.assertFalse(heartbeat.done(), 'handoff must preserve the active heartbeat')
+                    row = await self.pool.fetchrow('SELECT heartbeat_at,lease_until FROM v2_analysis_jobs WHERE id=$1', self.job)
+                    self.assertGreater(row['heartbeat_at'], before)
+                    self.assertGreater(row['lease_until'], lease_until)
+                    self.assertEqual('queued', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', ready))
+                finally:
+                    heartbeat.cancel()
+                    await asyncio.gather(heartbeat, return_exceptions=True)
+        self.assertEqual(ready, (await worker.claim_job(self.pool))['id'])
+
+    async def test_claim_pause_missing_lane_fails_without_retaining_locks(self):
+        await self.pool.execute('DELETE FROM v2_review_lane_schedule')
+        async with self.pool.acquire() as gate:
+            with self.assertRaises(RuntimeError):
+                await pause_new_claims(gate)
+            with self.assertRaises(RuntimeError):
+                async with gate.transaction():
+                    await pause_new_claims(gate)
+            self.assertFalse(gate.is_in_transaction())
+
     async def test_handoff_does_not_hold_scheduler_while_active_lease_needs_renewal(self):
         await self.pool.execute("UPDATE v2_analysis_jobs SET lease_until=now()+interval '15 seconds' WHERE id=$1", self.job)
         async with self.pool.acquire() as gate:
