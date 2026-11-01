@@ -17,3 +17,5 @@
 定向验证：Docker临时PG运行test_review_freshness_scheduler与test_review_worker，70项139.790秒、退出0；新增四项覆盖锁定过期任务跳过、空租约排序、lane触发异常时激活/搜索清理整体回滚、设置及advisory lock事务作用域。原公平/恢复/历史边界及结论幂等回归保持通过。实现比E173常规领取减少5次SQL往返，尚未用线上测量证明收益；旧新真实临时PG固定30ms模拟对照单独运行中。准备提交冻结完整回归，线上仍1296f87不变。
 
 冻结与隔离对照（19:59 UTC）：源码02cbf9b83a2337cefd5dea29d494c50f049bdd39已推送，干净独立worktree完整1151项预期测试运行中。真实临时PG固定每次SQL模拟30ms，6次领取旧90调用2941.939ms、新60调用1896.158ms，任务顺序/全部返回消息字段/attempt与租约对应/搜索清空/6次唯一领取回执一致，benchmark.sh退出0。模拟结果不作线上比例承诺。候选镜像sha256:81795d89199fef7a7b3a2a16488b5bbb62aa5d37b2bfa578bdb0daf0a206b07f，OCI同源码，构建、无网络模块断言、Compose配置核验退出0，未部署。独立空闲门禁及完整新窗口脚本已准备，必须等全套实际通过才能执行。
+
+完整冻结回归（20:05 UTC）：1151项490.008秒、失败/错误/跳过0、退出0，committed_source_verified=true、源码02cbf9b，46表备份恢复difference为空。证据.runtime/e174-work/.runtime/test-evidence/396595/backend-tests.json及.runtime/e174-live/full-suite.log。准备独立门禁安全交接，完整30分钟尚未开始，不能称线上提速通过。
