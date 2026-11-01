@@ -1,3 +1,5 @@
+E169独立冻结全套通过（2026-11-01 17:35 UTC）：冻结70bad5372a94a5bcee889a2fb92ba078e22565ea，1137项477.024秒、失败/错误/跳过0、退出0；机器479.276秒，committed_source_verified=true，46表恢复对照一致。证据.runtime/e169-work/.runtime/test-evidence/80355/backend-tests.json。该候选未部署；发现盘口输出溢出后最终联合E170版本须再次冻结全套。
+E170代码已写、真实PG定向运行中（2026-11-01 17:35 UTC）：支持盘口完整保留；显式unsupported按玩法编号/名称/期间汇总并声明178省略的覆盖计数，新汇总回放不改变旧快照。fresh_quote对显式unsupported保持不可用，即使时间新鲜且status=active也不能录入。后台既有读盘price/context及源quote_ids保留；实际响应快照记录模型收到的支持盘和汇总，不声称另存全部不支持报价的完整价格快照。当前尚未最终全套或部署。
 ### E170 — 减少不支持玩法造成的模型盘口输出溢出（2026-11-01 17:31 UTC）
 - 目标/责任/证据/设计/验收/失败处理记录docs/platform-v2/MARKET_OUTPUT_COVERAGE_ACCEPTANCE.md；当前真实238条中178unsupported、60受支持，五次读盘均238；两次刷新written仍被大结果阻断，不只源不可用。
 - 仅对显式unsupported做带覆盖计数的分组汇总，全部受支持选项保持完整；实际响应快照及旧回放保留，后台已有读盘price/context和quote_ids不删。报价新鲜判断同样拒绝unsupported，不增加玩法支持或猜协议。当前设计已记录、未实现；E169独立冻结测试不改，最终联合E170完成全套后再统一切API/worker，避免新版本切换打断完整观察。
