@@ -297,6 +297,12 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
             await lease_task
             raise LeaseLost("heartbeat ended")
         _, summary = await review_task
+        # Both the heartbeat and the conclusion transaction lock this job row.
+        # Stop renewal first so concurrent FOR SHARE -> UPDATE lock upgrades
+        # cannot deadlock while the final receipt is being committed.
+        lease_task.cancel()
+        await asyncio.gather(lease_task, return_exceptions=True)
+        lease_task = None
         claim_elapsed_ms = max(0, (time.monotonic() - job.get('_claimed_monotonic', started)) * 1000)
         event_to_claim_ms = job['message'].get('event_to_claim_ms')
         await _add_trace(pool, job, "hermes_result", {**summary,

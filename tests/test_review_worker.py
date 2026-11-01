@@ -145,6 +145,36 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(conclusion["payload"]["event_to_conclusion_ms"],
                                 conclusion["payload"]["claim_to_conclusion_ms"])
 
+    async def test_heartbeat_finishes_before_model_result_and_conclusion_writes(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        heartbeat_stopped = asyncio.Event()
+        original_add_trace = worker._add_trace
+
+        async def heartbeat(*_args):
+            try:
+                await asyncio.Future()
+            finally:
+                heartbeat_stopped.set()
+
+        async def add_trace(pool, active, kind, payload):
+            if kind == 'hermes_result':
+                self.assertTrue(heartbeat_stopped.is_set())
+            return await original_add_trace(pool, active, kind, payload)
+
+        with patch.object(worker, 'keep_lease', heartbeat), \
+                patch.object(worker, '_add_trace', add_trace), \
+                patch.object(worker, 'review_message', AsyncMock(return_value=('no pick', {'content': 'no pick'}))), \
+                patch.object(worker, 'delete_session', AsyncMock()):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model='synthetic'), job)
+
+        self.assertTrue(heartbeat_stopped.is_set())
+        self.assertEqual('unresolved', await self.pool.fetchval(
+            'SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual(1, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result'",
+            self.job))
+
     async def test_stale_worker_failure_cannot_overwrite_new_attempt(self):
         await self.make_queued()
         job = await worker.claim_job(self.pool)
