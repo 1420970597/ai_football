@@ -1,5 +1,8 @@
 # 第二代平台实时进度与验证台账
 
+本轮阶段更新：2026-11-01 03:19 UTC。当前目标仍是每30分钟核验真实新增专家发言的入库、原文/图片、Hermes工具轨迹和系统回执，发现问题立即修复并重新生效。E142冻结Docker全套1,035项通过；远端候选于03:12:09 UTC启动，Compose `up -d --wait --no-deps --pull never collector`退出0，容器`295ce506241ee1f9e1acff6e124782d4bac5cd755158a26f9373daf7f9632965`使用镜像`sha256:de56bbb6358e888b1bca5acdef88c2932bb3ed4781004b04b85665fd4c2d16f8`、revision=`d6f5e59df9227e8d7fb95cac17d5dc1a32f8a93e`。API bridge与executor ID、镜像和启动时间保持不变。运行期Telegram状态为connected/authorized，6/6来源lease有效，最近checkpoint 6/6刷新；collector近5分钟无ERROR/Traceback，旧`lock_wait_ms`字段为0次，实时事件持久化7次；但仍有1次checkpoint claim数据库超时、3次reconciliation延期，Leyu投影为partial。候选启动后接收13条消息，全部`posted_at`早于本次部署，8个任务均为`historical_replay/unresolved`并有自动抑制轨迹；近30分钟真实发布时间消息=0，不能据此验收模型匹配。数据库只读探针在03:16取得`/collector/config`和`/telegram/sources`均200，分别耗时约2.0s/1.1s；Telegram控制状态6源曾为4 catching_up、1 caught_up、1 unavailable，之后为4 catching_up、1 caught_up、1 reconciliation_deferred，最后错误计数清零但catch-up未完成。近5分钟API数据库超时仍1次，稳定观察门禁未通过，30分钟专家验收窗暂未开始。
+- 诊断命令及纠正：数据库/远端SSH均在Docker容器内只读探测。初次探针错误使用旧表`hermes_review_jobs`（表不存在），切换至`v2_analysis_jobs`；API容器缺`psycopg`，使用项目依赖`asyncpg`；首次消息窗口SQL向timestamptz绑定字符串后修为UTC datetime；Telegram事件表无`created_at`列，改按`received_at`聚合；对本机未暴露的API 8080执行health探针不作为服务故障，改用Telegram控制端点和数据库/collector运行状态验证。以上失败探针未写入业务数据。
+
 本轮最新进度：2026-11-01 02:56 UTC。E141 API仍为revision `0f778eb`且健康；NULL赔率错误未复发。E142代码冻结全套已通过，候选镜像已构建并导入远端，尚未切换。部署门禁最新快照为1 queued/1 running、6/6来源租约有效、最早lease expiry=`02:57:02.691388 UTC`；此前状态快照显示最近5分钟API有1次数据库超时，collector有1次503、3次history deadline、4次event_commit延迟。Telegram `/status`曾有一次10秒读取超时。当前等审核任务自然结束，再停collector并等待全部source lease自然到期；30分钟观察窗未开始。
 
 ### E142 — 移除Telegram live事件冗余checkpoint预检（定向Docker验证通过，冻结全套待执行）
