@@ -1,5 +1,11 @@
 # 第二代平台实时进度与验证台账
 
+E148运行开始（2026-11-01 09:13 UTC）：旧collector于09:10:03.790974停止，09:11:28只读确认6源active lease=0（最后到期09:11:08.999035），未强制改库。仅collector Compose up退出0，新容器060fd5a3e5b23765d57c6cf02fdb6f79a0819707eddb669c348964717558b1ac，镜像sha256:ad9d20e5cbb31a39f4c9c73e69eb46c3aed7beccd7d40d441a1bb108066dcc1e、StartedAt=2026-11-01T09:11:46.315395057Z，healthy。bridge与executor原ID/镜像/StartedAt保持不变；未改API/worker/Hermes/MCP/web。只读1800秒watch已从该StartedAt计时，证据.runtime/e148-live/watch.jsonl；初样healthz/readyz200、Telegram connected/authorized=true，无当前新消息样本。下一步核验4条缺失恢复，观察至少至09:41:46 UTC后再逐项对账；不能提前宣布通过。
+
+
+E148生效准备（2026-11-01 09:10 UTC）：E147观察窗口已完整结束，08:29:49.613771–09:01:00.086236、1870.472秒，整体未通过。官方客户端固定终点只读对照四个受信来源，09:09:30远端事件成员复核确认4条缺失（原2条08:30及另外08:43:20/08:45:24），不能以数据库已有消息审核闭环冒充无漏采。候选c541247冻结1051项通过，远端镜像已核验。持续新流量使队列清零无法稳定满足，调整仅collector交接：不变更API/worker/Hermes/MCP，不取消或清空审核任务、不强制数据库租约；停止collector后等待来源租约自然到期再启新版本。短暂盘口刷新不可用依旧失败关闭，运行审核自然重试；不声称切换零影响。此门禁为本轮部署选择调整，不改变任务/报价有效性约束。下一步记录实际新StartedAt，从此重新观察1800秒，并核验4条旧漏存由正常补采持久化。
+
+
 E148冻结与候选（2026-11-01 08:59 UTC）：冻结提交`c5412476d9551afe584d0deaf0f567fde68effe4`的独立worktree运行`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`退出0，1,051项、失败/错误/跳过0，终端439.414秒、报告441.643秒，committed_source_verified=true且SHA精确一致；报告`.runtime/e148-20261101-verification/.runtime/test-evidence/3111809/backend-tests.json`，恢复46表业务差异`{}`。受限BuildKit构建collector候选ID=`sha256:ad9d20e5cbb31a39f4c9c73e69eb46c3aed7beccd7d40d441a1bb108066dcc1e`，revision精确匹配c541247，Docker模块导入/源码校验退出0，telegram SHA256=`ae7df0d1eccc91deed1092fa3f37d0b08ef56b18421fec5e00b19f40d70fb9c1`。首次构建时标签误填完整SHA，发布核验前已发现，改从冻结Git读取revision并重建；错误标签镜像未传送或运行。候选尚未生效，待E147窗口满30分钟和队列/租约门禁。
 
 E147运行问题复核（08:58 UTC）：08:53:01已真实接受1条专家信号（上半场大0.75，系统赔率1.76），证明错误取消状态解除后可完成唯一比赛/盘口绑定与原盘确认。其他新消息多为闲聊或表情，无推荐证据保持未解决符合原文；另一条首尔FC对仁川联全场大0.75已正确识别，但原盘刷新失败而未录入，不能归因队名匹配。出现quote_inactive_unknown_or_stale和quote_not_read_or_changed拒绝，后续同任务重新读取后成功的证据已保留；不以专家截图倍率作匹配。当前模型总耗时最高380,806ms，3秒目标仍未达。240次独立只读SELECT1全部成功，中位236.16ms/p95 279.95/max491.85；远端300秒psql采样1199次，42个阻塞样本（39 jobs事务锁、3 advisory），最长活动查询1953ms，最长事务10405ms；还有大量ClientRead，不能把它们笼统当慢SQL。psql由容器内timeout300自然结束，预期退出124，不把它记为测试通过。一次正常单场刷新诊断（只请求采集器真实数据，无订单）12秒ReadTimeout，尚不能区分控制转发排队与实际刷新阶段，未放宽截止或新鲜度门禁。证据`.runtime/e147-live/pg-waits.txt`、`db-probe.jsonl`及远端模型工具轨迹。下一步在完整观察结束后先使已验证的漏采修复生效，再继续定位盘口刷新尾延迟。
