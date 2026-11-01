@@ -1,5 +1,7 @@
 # 第二代平台实时进度与验证台账
 
+E154冻结与E155候选（2026-11-01 10:32 UTC）：E154冻结43df8bcb0e0dda2564f305333beed43c29a4685f全套1074项、447.757秒、退出0，失败/错误/跳过0、恢复46表差异{}，报告.runtime/e154-20261101-verification/.runtime/test-evidence/3349778/backend-tests.json。E155最终冻结3f8661fc84b240ae83cb1e63bb701f74bf7b9826独立worktree已启动全套，日志.runtime/e155-live/full-suite.log，尚未结束。受限BuildKit依次构建API/collector并加载成功，最终命令退出0；两镜像ID分别643e1cff2fcd618535042ec52b8ba427a5600503408766ddb3ffd5cc9f9fba19、8b3b5ce894218ca5a4d2b3947517dff15795af233c5010baf98f267a474bf91b，OCI revision精确一致。Docker无网络模块导入退出0；API telegram SHA256=6151b94fa1a93109c263e4f64b9cde10d377396ac7be5e27c84cf07a22f041f9，worker仍2e5d56cfef5a32a0d63a7a015df913a02f57bc8c3fba2a3c85c8abb44f3d053d；collector telegram=6892af1231d5388b415bd8bf1d3d04d7d22c848e70c6b91319310bfbce36fb2e。collector远端docker load退出0，本机Compose静默配置退出0。候选尚未生效，待最终全套及E152完整观察对账后受控交接；10:30旧两媒体仍缺，不能标恢复。
+
 E155代码与定向验证（2026-11-01 10:28 UTC）：已实现120秒/256项、客户端绑定的群实体缓存，成功结果才入缓存，失败/身份切换/断开不复用；缓存命中仍执行群状态检查，新增切换发生在查询途中时拒绝返回旧实体。Docker只读挂载命令`python -m unittest test_telegram_entity_cache test_telegram_directory test_telegram_session_identity test_telegram_recent_recovery test_telegram_receipts.ReceiptRecoveryTests -q`运行63项、0.564秒、失败/错误/跳过0、退出0，证据.runtime/e155-live/target.log。没有提高Telegram并发或绕过限流；新增请求类型及等待秒数日志，近期3小时初始化仍受原8秒和100条页预算。E154冻结全套尚在独立worktree继续，未修改其被测源码；最终仍需E155合并冻结全套后统一部署、真实媒体复测与完整30分钟对照。
 
 ### E155 — 复用已核验群实体，减少重复Telegram解析请求（2026-11-01 10:27 UTC，研究与设计）
