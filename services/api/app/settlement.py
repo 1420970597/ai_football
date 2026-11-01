@@ -71,6 +71,7 @@ def settle(signal: dict, result: dict) -> Settlement:
     if scores is None:
         return pending("period_score_missing_or_inconsistent")
     basis = signal.get("score_basis", "unknown")
+    zero_equivalent = False
     if signal.get("phase") == "scheduled" and basis == "unknown":
         basis = "full_period"
     if basis == "remaining_period":
@@ -81,14 +82,20 @@ def settle(signal: dict, result: dict) -> Settlement:
         if min(scores) < 0:
             return pending("baseline_exceeds_official_result")
     elif basis != "full_period":
-        return pending("live_market_score_rule_unknown")
+        # Explicit zero in this period makes full and remaining scores equal.
+        # Keep the original unknown rule; missing period scores are not zero.
+        baseline = _period_scores(signal.get("period", "full_time"), signal.get("score_baseline") or {})
+        if signal.get("phase") != "live" or basis != "unknown" or baseline != (0, 0):
+            return pending("live_market_score_rule_unknown")
+        zero_equivalent = True
+    reason_suffix = ":zero_baseline_score_equivalent" if zero_equivalent else ""
     home, away = map(Decimal, scores)
     kind, selection = signal.get("kind"), signal.get("selection")
     if kind == "winner":
         if selection not in {"home", "away", "draw"}:
             return pending("unsupported_selection")
         won = (home > away and selection == "home") or (away > home and selection == "away") or (home == away and selection == "draw")
-        return Settlement("win" if won else "loss", price - ONE if won else -ONE, ONE, "three_way_winner")
+        return Settlement("win" if won else "loss", price - ONE if won else -ONE, ONE, "three_way_winner" + reason_suffix)
     if kind not in {"handicap", "total"}:
         return pending("unsupported_market")
     if (line * 4) != (line * 4).to_integral_value():
@@ -117,4 +124,5 @@ def settle(signal: dict, result: dict) -> Settlement:
         outcome = "half_win" if net > 0 else "half_loss"
     else:
         outcome = "win" if net > 0 else "loss"
-    return Settlement(outcome, net, active, "asian_split" if len(lines) == 2 else "asian_line")
+    reason = "asian_split" if len(lines) == 2 else "asian_line"
+    return Settlement(outcome, net, active, reason + reason_suffix)

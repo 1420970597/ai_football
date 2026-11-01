@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from .expert_statistics import QUOTE_VALID_SQL
 from .settlement import pending, settle
 
-ALGORITHM_VERSION = 'football-asian-2-evidence'
+ALGORITHM_VERSION = 'football-asian-3-zero-baseline'
 
 
 def result_facts(row):

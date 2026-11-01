@@ -1,3 +1,4 @@
+E171定向隔离通过（2026-11-01 18:19 UTC）：结算纯函数只增加明确所选期间0:0等价分支，原规则不改、reason标识并升级football-asian-3-zero-baseline；全/半/下半场各受支持盘口对两种显式规则一致，缺失/非零/非法及不支持输入仍pending。临时PG验证旧pending回执不变、新loss/-1、两次重建幂等及统计正确，target.sh退出0，细节见.runtime/e171-live/target.log。实际重建路由为受保护collector接口而非管理员审计接口，验收设计已纠正；线上E170不变。准备冻结源码完整测试。
 ### E171 — 零基线等价证明修复已确认赛果挂起（2026-11-01 18:14 UTC）
 - 工作包目标/责任/前置/证据/设计/动作/验收/失败处理记录docs/platform-v2/ZERO_BASELINE_SETTLEMENT_ACCEPTANCE.md。真实1d75a32d…半场大0.75、明确0:0基线、confirmed半场0:0，尚pending仅因规则unknown；两种既有比分口径在零基线数学等价，应结算loss/-1而非盈利。
 - 只放行明确所选期间基线0:0的live unknown，缺/非零/非法基线保持pending；保留原score_basis并版本化reason和算法台账。当前设计已记录、代码未写。E170线上镜像不变，17:47:51–18:17:51正式观察继续，完成后按原计划官方对账；E171最终验证通过后独立安全生效并重新观察完整30分钟。
