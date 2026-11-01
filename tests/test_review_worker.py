@@ -520,6 +520,108 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
             "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result'",
             self.job))
 
+    async def test_conclusion_rollback_retries_without_repeating_model_or_receipt(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        original = worker.record_summary
+        calls = 0
+
+        async def interrupted(*args):
+            nonlocal calls
+            calls += 1
+            result = await original(*args)
+            if calls == 1:
+                raise TimeoutError('transaction must roll back its receipt')
+            return result
+
+        model = AsyncMock(return_value=('no pick', {'content': 'no pick'}))
+        with patch.object(worker, 'record_summary', interrupted), \
+                patch.object(worker, 'review_message', model), \
+                patch.object(worker, 'delete_session', AsyncMock()):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model='synthetic'), job)
+        model.assert_awaited_once()
+        self.assertEqual(2, calls)
+        self.assertEqual('unresolved', await self.pool.fetchval(
+            'SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual(1, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result'", self.job))
+        self.assertEqual(1, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='hermes_result'", self.job))
+
+    async def test_committed_conclusion_with_lost_acknowledgement_is_not_written_twice(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        original = worker._complete_review_once
+        complete = AsyncMock()
+
+        async def lost_ack(*args):
+            await complete()
+            await original(*args)
+            raise asyncpg.ConnectionDoesNotExistError('commit acknowledgement lost')
+
+        model = AsyncMock(return_value=('no pick', {'content': 'no pick'}))
+        with patch.object(worker, '_complete_review_once', lost_ack), \
+                patch.object(worker, 'review_message', model), \
+                patch.object(worker, 'delete_session', AsyncMock()):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model='synthetic'), job)
+        model.assert_awaited_once()
+        complete.assert_awaited_once()
+        self.assertEqual('unresolved', await self.pool.fetchval(
+            'SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual(1, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result'", self.job))
+        self.assertEqual(0, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_failure'", self.job))
+
+    async def test_conclusion_recovery_is_bounded_and_keeps_original_failure_policy(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        conclude = AsyncMock(side_effect=TimeoutError())
+        model = AsyncMock(return_value=('no pick', {'content': 'no pick'}))
+        with patch.object(worker, '_complete_review_once', conclude), \
+                patch.object(worker, 'review_message', model), \
+                patch.object(worker, 'delete_session', AsyncMock()):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model='synthetic'), job)
+        self.assertEqual(2, conclude.await_count)
+        model.assert_awaited_once()
+        self.assertEqual('retry', await self.pool.fetchval(
+            'SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        failure = await self.pool.fetchval(
+            "SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_failure'", self.job)
+        self.assertEqual('conclusion_persistence', failure['failure_stage'])
+        self.assertEqual(0, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result'", self.job))
+
+    async def test_conclusion_recovery_rechecks_source_eligibility_before_retry(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        original = worker._complete_review_once
+        calls = 0
+
+        async def source_disabled(*args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                await self.pool.execute('UPDATE v2_expert_sources SET enabled=false')
+                raise TimeoutError()
+            return await original(*args)
+
+        with patch.object(worker, '_complete_review_once', source_disabled):
+            with self.assertRaises(worker.HTTPException) as failed:
+                await worker._complete_review(self.pool, job, worker.time.monotonic())
+        self.assertEqual(409, failed.exception.status_code)
+        self.assertEqual(2, calls)
+        self.assertEqual(0, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE trace_kind='system_review_result'"))
+
+    async def test_conclusion_receipt_verification_rejects_old_attempt(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        await worker._complete_review_once(self.pool, job, worker.time.monotonic())
+        self.assertTrue(await worker._conclusion_committed(self.pool, job))
+        await self.pool.execute('UPDATE v2_analysis_jobs SET attempt_id=$1 WHERE id=$2', uuid.uuid4(), self.job)
+        self.assertFalse(await worker._conclusion_committed(self.pool, job))
+
     async def test_stale_worker_failure_cannot_overwrite_new_attempt(self):
         await self.make_queued()
         job = await worker.claim_job(self.pool)

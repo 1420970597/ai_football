@@ -271,14 +271,77 @@ async def keep_lease(pool, job: dict) -> None:
             delay = HEARTBEAT_SECONDS
 
 
+async def _complete_review_once(pool, job: dict, started: float) -> None:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            current = await active_job(conn, job["id"], job["attempt_id"])
+            count = await record_summary(conn, current, job["attempt_id"], job.get('review_mode', 'real_time'))
+            recovery = await market_recovery(conn, current, job['attempt_id'], job['attempts'])
+            final_state = 'retry' if recovery else "succeeded" if count else "unresolved"
+            if recovery:
+                await trace(conn, job['id'], 'market_recovery_scheduled',
+                            {'attempt_id': str(job['attempt_id']), **recovery})
+            conclusion_elapsed_ms = max(0, (time.monotonic() - job.get('_claimed_monotonic', started)) * 1000)
+            concluded = await conn.fetchrow(
+                "WITH completed_job AS ("
+                " UPDATE v2_analysis_jobs j SET state=$3,lease_until=NULL,last_error=$6,"
+                " available_at=CASE WHEN $3='retry' THEN now()+($7::int*interval '1 second') ELSE j.available_at END,updated_at=now()"
+                " FROM v2_expert_messages m WHERE j.id=$1 AND j.attempt_id=$2 AND j.state='running'"
+                " AND m.id=j.message_id RETURNING j.id,"
+                " GREATEST(0,round((extract(epoch FROM (clock_timestamp()-m.created_at))*1000)::numeric,3)) AS event_elapsed"
+                "), completed_trace AS ("
+                " UPDATE v2_analysis_traces t SET payload=t.payload || jsonb_build_object("
+                "  'outcome',$3::text,'signal_count',$4::int,'claim_to_conclusion_ms',$5::numeric,"
+                "  'event_to_conclusion_ms',c.event_elapsed)"
+                " FROM completed_job c WHERE t.job_id=c.id AND t.trace_kind='system_review_result'"
+                " AND t.payload->>'attempt_id'=$2::text RETURNING t.id"
+                ") SELECT (SELECT count(*) FROM completed_job) AS job_count,"
+                "(SELECT count(*) FROM completed_trace) AS trace_count",
+                job["id"], job["attempt_id"], final_state, count, round(conclusion_elapsed_ms, 3),
+                recovery['reason'] if recovery else None, recovery['delay_seconds'] if recovery else 0,
+            )
+            if concluded["job_count"] != 1 or concluded["trace_count"] != 1:
+                raise RuntimeError("review conclusion state or receipt could not be committed")
+
+
+async def _conclusion_committed(pool, job: dict) -> bool:
+    # A disconnected COMMIT acknowledgement is not evidence of rollback.
+    # The receipt and terminal state must belong to this exact attempt.
+    return bool(await pool.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM v2_analysis_jobs j "
+        "JOIN v2_analysis_traces t ON t.job_id=j.id "
+        "WHERE j.id=$1 AND j.attempt_id=$2 AND j.state IN ('succeeded','unresolved','retry') "
+        "AND t.trace_kind='system_review_result' AND t.payload->>'attempt_id'=$2::text "
+        "AND t.payload->>'outcome'=j.state)", job['id'], job['attempt_id']))
+
+
+async def _complete_review(pool, job: dict, started: float) -> None:
+    transient = (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError,
+                 asyncpg.DeadlockDetectedError, asyncpg.SerializationError,
+                 asyncpg.PostgresConnectionError)
+    async with asyncio.timeout(15):
+        for attempt in range(2):
+            try:
+                await _complete_review_once(pool, job, started)
+                return
+            except transient:
+                if await _conclusion_committed(pool, job):
+                    return
+                if attempt == 1:
+                    raise
+                await asyncio.sleep(.1)
+
+
 async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncClient | None = None) -> None:
     review_task = lease_task = None
     started = time.monotonic()
+    failure_stage = "configuration"
     try:
         if model_client is None:
             settings = await resolve_review_settings(settings)
         else:
             settings = await resolve_review_settings(settings, client=model_client)
+        failure_stage = "model_request_persistence"
         await _add_trace(pool, job, "hermes_request", {
             "message_id": str(job["message"]["id"]), "raw_text": job["message"]["raw_text"],
             "reply_text": job["message"].get("reply_text"), "media_objects": job["message"]["media_objects"],
@@ -292,6 +355,7 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
                                          client=model_client)
         else:
             review_call = review_message(settings, review_message_content, job["id"], job["attempt_id"])
+        failure_stage = "model_review"
         review_task = asyncio.create_task(asyncio.wait_for(review_call, timeout=REVIEW_TIMEOUT))
         lease_task = asyncio.create_task(keep_lease(pool, job))
         done, _ = await asyncio.wait({review_task, lease_task}, return_when=asyncio.FIRST_COMPLETED)
@@ -307,41 +371,14 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
         lease_task = None
         claim_elapsed_ms = max(0, (time.monotonic() - job.get('_claimed_monotonic', started)) * 1000)
         event_to_claim_ms = job['message'].get('event_to_claim_ms')
+        failure_stage = "model_result_persistence"
         await _add_trace(pool, job, "hermes_result", {**summary,
             "model_elapsed_ms": round((time.monotonic() - started) * 1000, 3),
             "claim_to_result_ms": round(claim_elapsed_ms, 3),
             "event_to_result_ms": round(event_to_claim_ms + claim_elapsed_ms, 3)
             if event_to_claim_ms is not None else None})
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                current = await active_job(conn, job["id"], job["attempt_id"])
-                count = await record_summary(conn, current, job["attempt_id"], job.get('review_mode', 'real_time'))
-                recovery = await market_recovery(conn, current, job['attempt_id'], job['attempts'])
-                final_state = 'retry' if recovery else "succeeded" if count else "unresolved"
-                if recovery:
-                    await trace(conn, job['id'], 'market_recovery_scheduled',
-                                {'attempt_id': str(job['attempt_id']), **recovery})
-                conclusion_elapsed_ms = max(0, (time.monotonic() - job.get('_claimed_monotonic', started)) * 1000)
-                concluded = await conn.fetchrow(
-                    "WITH completed_job AS ("
-                    " UPDATE v2_analysis_jobs j SET state=$3,lease_until=NULL,last_error=$6,"
-                    " available_at=CASE WHEN $3='retry' THEN now()+($7::int*interval '1 second') ELSE j.available_at END,updated_at=now()"
-                    " FROM v2_expert_messages m WHERE j.id=$1 AND j.attempt_id=$2 AND j.state='running'"
-                    " AND m.id=j.message_id RETURNING j.id,"
-                    " GREATEST(0,round((extract(epoch FROM (clock_timestamp()-m.created_at))*1000)::numeric,3)) AS event_elapsed"
-                    "), completed_trace AS ("
-                    " UPDATE v2_analysis_traces t SET payload=t.payload || jsonb_build_object("
-                    "  'outcome',$3::text,'signal_count',$4::int,'claim_to_conclusion_ms',$5::numeric,"
-                    "  'event_to_conclusion_ms',c.event_elapsed)"
-                    " FROM completed_job c WHERE t.job_id=c.id AND t.trace_kind='system_review_result'"
-                    " AND t.payload->>'attempt_id'=$2::text RETURNING t.id"
-                    ") SELECT (SELECT count(*) FROM completed_job) AS job_count,"
-                    "(SELECT count(*) FROM completed_trace) AS trace_count",
-                    job["id"], job["attempt_id"], final_state, count, round(conclusion_elapsed_ms, 3),
-                    recovery['reason'] if recovery else None, recovery['delay_seconds'] if recovery else 0,
-                )
-                if concluded["job_count"] != 1 or concluded["trace_count"] != 1:
-                    raise RuntimeError("review conclusion state or receipt could not be committed")
+        failure_stage = "conclusion_persistence"
+        await _complete_review(pool, job, started)
     except asyncio.CancelledError:
         # 退出后保留租约，其他工作器待到期接管，不覆盖已接受推荐。
         raise
@@ -354,7 +391,7 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
         try:
             await _add_trace(pool, job, "review_failure", {
                 "failure_category": failure, "retryable": retryable, "exception_type": category,
-                "attempt": job["attempts"], "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+                "failure_stage": failure_stage, "attempt": job["attempts"], "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
             })
         except Exception:
             # A lost lease or unavailable database must not mask the original
