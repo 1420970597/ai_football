@@ -88,6 +88,14 @@ def _utc(value):
     return value.astimezone(timezone.utc)
 
 
+def _message_revision_evidence(message):
+    return (message.id, str(message.date), str(getattr(message, 'edit_date', None)),
+            getattr(message, 'message', ''), getattr(message, 'reply_to_msg_id', None),
+            getattr(getattr(getattr(message, 'media', None), 'photo', None), 'id', None),
+            getattr(getattr(getattr(message, 'media', None), 'document', None), 'id', None),
+            getattr(getattr(message, 'media', None), 'id', None))
+
+
 def _factory(session: str, api_id: int, api_hash: str):
     # StringSession 只使用内存，不创建本地 SQLite。
     return TelegramClient(StringSession(session), api_id, api_hash, connection_retries=3,
@@ -637,6 +645,9 @@ class TelegramCollector:
         # complete sweep; restart safely covers the last two hours again.
         cutoff = state.setdefault('cutoff', datetime.now(timezone.utc) - timedelta(seconds=RECENT_HISTORY_LOOKBACK_SECONDS))
         scanned, persisted = 0, 0
+        # This cache lives for this bounded scan only. Keep independent version
+        # fingerprints: Telethon message objects themselves may be mutable.
+        albums = {}
 
         async def page(entity, cursor, continuation=False):
             nonlocal scanned, persisted
@@ -653,12 +664,17 @@ class TelegramCollector:
                 if not sender_id and getattr(message, 'post', False):
                     sender_id = chat_id
                 if sender_id in {str(value) for value in source['trusted_sender_ids']}:
-                    group = await self._expand_album(message, entity) if getattr(message, 'grouped_id', None) else [message]
-                    evidence = [(m.id, str(m.date), str(getattr(m, 'edit_date', None)), getattr(m, 'message', ''),
-                                 getattr(m, 'reply_to_msg_id', None),
-                                 getattr(getattr(getattr(m, 'media', None), 'photo', None), 'id', None),
-                                 getattr(getattr(getattr(m, 'media', None), 'document', None), 'id', None),
-                                 getattr(getattr(m, 'media', None), 'id', None)) for m in group]
+                    grouped_id = getattr(message, 'grouped_id', None)
+                    if grouped_id:
+                        cached = albums.get(grouped_id)
+                        if cached is None or cached[1].get(message.id) != _message_revision_evidence(message):
+                            group = await self._expand_album(message, entity)
+                            albums[grouped_id] = (group, {m.id: _message_revision_evidence(m) for m in group})
+                        else:
+                            group = cached[0]
+                    else:
+                        group = [message]
+                    evidence = [_message_revision_evidence(m) for m in group]
                     key = hashlib.sha256(json.dumps([source.get('allow_media', True), evidence],
                                                     sort_keys=True).encode()).hexdigest()
                     if key not in receipts:

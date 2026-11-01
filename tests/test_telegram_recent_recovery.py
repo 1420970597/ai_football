@@ -103,6 +103,76 @@ class RecentRecoveryTests(unittest.IsolatedAsyncioTestCase):
         await self.collector._recover_recent('-1001', self.source)
         self.assertEqual(4, len(self.backend.events))
 
+    async def test_ten_member_album_expands_once_per_scan_and_checks_again_next_scan(self):
+        self.client.messages['-1001'] = [self.recent(i,grouped=22,media=True) for i in range(100,110)]
+        self.collector._schedule_live_media = Mock()
+        original = self.client.get_messages
+        self.client.get_messages = AsyncMock(side_effect=original)
+        result = await self.collector._recover_recent('-1001',self.source)
+        self.assertEqual(1,self.client.get_messages.await_count)
+        self.assertEqual(1,result['persisted'])
+        self.assertEqual(list(range(100,110)),self.backend.calls[0]['member_message_ids'])
+        self.assertEqual(10,len(self.backend.calls[0]['media_manifest']))
+        await self.collector._recover_recent('-1001',self.source)
+        self.assertEqual(2,self.client.get_messages.await_count)
+        self.assertEqual(1,len(self.backend.calls))
+
+    async def test_album_edit_during_scan_forces_another_complete_read(self):
+        self.client.messages['-1001'] = [self.recent(i,grouped=22,media=True) for i in [100,101]]
+        self.collector._schedule_live_media = Mock()
+        original_event = self.backend.event
+        original_get = self.client.get_messages
+        self.client.get_messages = AsyncMock(side_effect=original_get)
+        async def edit_after_commit(body):
+            result = await original_event(body)
+            if len(self.backend.calls)==1:
+                self.client.messages['-1001'][0].message = '修改后的完整推荐 大3.5'
+            return result
+        self.backend.event = edit_after_commit
+        result = await self.collector._recover_recent('-1001',self.source)
+        self.assertEqual(2,self.client.get_messages.await_count)
+        self.assertEqual(2,result['persisted'])
+        self.assertEqual(2,len(self.backend.events))
+        self.assertIn('大3.5',self.backend.calls[-1]['raw_text'])
+        self.assertEqual([100,101],self.backend.calls[-1]['member_message_ids'])
+
+    async def test_new_album_member_during_scan_is_not_hidden(self):
+        first,second,added = [self.recent(i,grouped=22,media=True) for i in [100,101,102]]
+        self.client.messages['-1001'] = [first,second]
+        self.collector._schedule_live_media = Mock()
+        original_get = self.client.get_messages
+        self.client.get_messages = AsyncMock(side_effect=original_get)
+        async def evolving_page(*args,**kwargs):
+            yield second
+            yield added
+        self.client.iter_messages = evolving_page
+        original_event = self.backend.event
+        async def add_after_commit(body):
+            result = await original_event(body)
+            if len(self.backend.calls)==1:
+                self.client.messages['-1001'].append(added)
+            return result
+        self.backend.event = add_after_commit
+        result = await self.collector._recover_recent('-1001',self.source)
+        self.assertEqual(2,self.client.get_messages.await_count)
+        self.assertEqual(2,result['persisted'])
+        self.assertEqual([100,101,102],self.backend.calls[-1]['member_message_ids'])
+
+    async def test_failed_album_read_is_retried_on_next_scan(self):
+        self.client.messages['-1001'] = [self.recent(100,grouped=22,media=True)]
+        self.collector._schedule_live_media = Mock()
+        original_get = self.client.get_messages
+        self.client.get_messages = AsyncMock(side_effect=ConnectionError('temporary'))
+        with self.assertLogs('platform.telegram',level='WARNING'):
+            result = await self.collector._recover_recent('-1001',self.source)
+        self.assertEqual('deferred',result['state'])
+        self.assertFalse(self.collector.recent_recovery['-1001']['receipts'])
+        self.assertEqual([],self.backend.calls)
+        self.client.get_messages = AsyncMock(side_effect=original_get)
+        result = await self.collector._recover_recent('-1001',self.source)
+        self.assertEqual(1,result['persisted'])
+        self.assertEqual(1,self.client.get_messages.await_count)
+
     async def test_recent_failure_is_visible_in_source_health(self):
         self.collector._recover_recent = AsyncMock(return_value={'state': 'deferred', 'reason': 'TimeoutError'})
         result = await self.collector._sync_source('-1001', self.source)
