@@ -25,3 +25,9 @@
 第三至第六次框架检查均在no_intent单次请求断言退出1（normal/adversarial/length/parallel已通过），未放宽断言。额外诊断仅在隔离替身记录合成输入请求形状，证实第二次请求system为“You name chat sessions”、工具0，第一请求才是含完整预载技能的审核；因此根因为固定框架默认自动生成会话标题，不是审核调用工具或预载失败。固定源码agent/title_generator.py核验auxiliary.title_generation.enabled默认true，专用配置明确false；保留审核会话稳定编号，禁用无业务用途的标题请求，不改底层模型、白名单或审核结束检查。临时请求正文诊断已移除，framework-sixth-failure.log与冻结快照保留；第七次全框架验证运行中。新增每报价父fixture契约后定向28项0.131秒退出0。
 
 第七次固定框架全回路通过（2026-11-01 20:55 UTC）：session21259退出0；normal17请求、adversarial23、parallel17，均10工具/预载true/图字节1/接受1、13页260候选完整；no_intent恰1请求/工具调用0/接受0；length与budget由客户端按预算拒绝（budget6请求、四次只读技能），重启后配置技能哈希一致。框架快照af-hermes-framework-515563及.runtime/e175-live/framework.log保留。启动核验4项0.008秒退出0。准备冻结完整回归及真实模型隔离联调，尚未部署，不称实际延迟达标。
+
+冻结完整回归与真实模型（2026-11-01 21:02 UTC）：源码29bdf0816f7f30a875b539cfdd70ba69e56e475e干净快照1158项487.301秒、0失败/错误/跳过、退出0；机器记录489.673秒、committed_source_verified=true、46表恢复difference为空，证据.runtime/e175-candidate/.runtime/test-evidence/522434/backend-tests.json。真实旧视觉模型在专属临时PG/API/MCP/Hermes完成text/image/multiple/none/stale五场景，分别接受1/1/2/0/0条，比赛/线值/方向和实际工具证据全部通过，session31948退出0、af-hermes-real-e175-526042保留。仅三项提供方配置以600权限文件复用，未写生产数据、未下注；不证明自然新消息三秒达标。上段20:55手工时间早于实际时钟，冻结提交实际已于20:54前生成，此处以运行产物和数据库UTC时钟为准。
+
+真实生效（21:05 UTC）：源码已推送任务分支并核对远端29bdf081…；独立门禁21:02:41.389561暂停领取、21:02:42.616559空闲持锁，门禁内快进主目录及重建Hermes/API/worker，deploy.sh退出0、gate_released was_held=true。API7ac1c631…于21:03:14.964267794启动、worker68f3d7b8…于21:03:36.668500968，镜像a437a6cd…；Hermese8d8fcfd…仍固定v0.22.5/9c556157…镜像。运行中预载、标题禁用、native视觉、白名单均断言通过，配置/上下文/技能SHA与真实隔离联调完全相同。MCP/web/executor和远端不变，未改模型/并发/账户配置。
+
+新完整窗口21:05:14.049301–21:35:14.049301，交接从20:38:09.020299另行官方全扫。观察器改为Docker内后台进程写任务专属exit文件，短命令读取证据，避免外层长会话143原因不明；首次docker cp因只读rootfs失败，改用docker exec写/tmp；首次脚本文件执行因sys.path不含/app，ModuleNotFoundError退出1并保留watch-first-failure.log/exit，修正为stdin运行后首样本正常。未关闭只读设置或掩盖失败。新窗口首样本health/ready200、TG授权连接正常但degraded，当前0新帖。双端浏览器点击运行中，完整窗口和官方对账尚未完成。

@@ -27,3 +27,7 @@
 双端浏览器（20:13 UTC）：首轮因未复制旧结算对照输入settlement-before.json而ENOENT退出1，已保留browser-first-failure.log；补齐原证据后同一browser.sh重跑退出0，无应用代码变化。1440/390五比分标签首次200/DOM一致、最新预览5条、180天Cookie、当前专家昵称、原文/模型/系统回执、原有两条结算及实际零基线loss/-1到比赛详情均通过，脚本错误0。两宽度原图缩略图点击打开且授权加载各1张通过；实际查看双端零基线原文截图，图片、昵称、上半场、系统1.76及净收益-1可见。证据.runtime/e174-live/{browser-clicks.log,browser-media.log,output/playwright/live-clicks.json,output/playwright/media-clicks.json}。完整观察继续，不把点击通过称为当前新推荐匹配通过。
 
 计时说明：E173/E174的provider_elapsed_ms是完整Hermes审核HTTP请求，覆盖框架技能及工具过程；不能将此值等同单次底层模型时间。当前目标仍未证明达成，后续框架原生技能预载研究见PERFORMANCE_RESEARCH.md，未纳入本冻结版本。
+
+完整观察复核（2026-11-01 20:49 UTC）：窗口实际1842.178秒、31样本；health/ready各31次200，Telegram连接及授权31次正常，其中11次degraded、最近成功最大间隔117.824秒。官方四来源完整扫描新窗6帖、交接10帖均missing=0/no_current=0；新窗4条ready消息全部模型结果和系统回执齐全，2条明确unsupported附件。final-audit.sh退出0；但长期观察外层会话13505退出143，虽然watch_ended完整且容器未重启/OOM、错误文件为空，仍无法证明143的原因，不将该命令标为正常退出验收。后续观察改用容器内独立退出码文件，保留本次异常。
+
+真实图片已独立查看，湖人/猛龙全场大224.5正确绑定leyu:5808035；重放不可变工具快照确认请求的全场大小market38共14条标记unsupported_market_kind，另2条同编号未知名称也不支持；当前仅返回2条已关闭的上半场让球，故未录入，不能称比赛未命中或所有盘口已支持。3次重复盘口读取中2次refresh_timeout、1次written，框架请求75.773秒；其他3条框架请求4.759–5.944秒，四条均未达三秒目标。证据.runtime/e174-live/{current-binding-proof.json,current-vision-verification.json,audit-window-final.json,watch-summary.json,comparison-summary.jsonl,model-timing-counters-final.json}及output/playwright/current-vision-original.png。专家功能全部正常的验收仍不通过。
