@@ -281,11 +281,13 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
         await self.fixture(1)
         await self.fixture(2)
         first = (await self.post('search_matches', team_query='Alpha', sport='football', page_size=1)).json()
-        for sport in ('basketball', None):
+        for sport in ('basketball', 'tennis'):
             rejected = await self.post('search_matches', team_query='Alpha', sport=sport, page_size=1, cursor=first['next_cursor'])
             self.assertEqual(409, rejected.status_code)
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_match_searches'))
-        second = await self.post('search_matches', team_query='Alpha', sport='football', page_size=1, cursor=first['next_cursor'])
+        # Omitted/null sport continues the authenticated football snapshot;
+        # it must not become an unfiltered search.
+        second = await self.post('search_matches', team_query='Alpha', sport=None, page_size=1, cursor=first['next_cursor'])
         self.assertEqual(200, second.status_code, second.text)
         self.assertTrue(second.json()['search_complete'])
         failures = await self.pool.fetch("SELECT payload FROM v2_analysis_traces WHERE payload->>'status'='failed'")

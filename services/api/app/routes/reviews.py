@@ -20,6 +20,7 @@ from ..runtime_settings import runtime_quote_max_age
 from ..quote_observation import confirmation_for
 from ..team_matching import normalize_team_name, team_name_matches, team_search_variants
 from ..review_cursors import encode_cursor, decode_cursor
+from ..review_search_scope import continuation_scope, scope_key
 
 router = APIRouter(prefix="/internal/mcp")
 _CANDIDATE_JSON = (
@@ -106,7 +107,7 @@ async def search_matches(body: SearchInput, request: Request):
     scope = {"team": body.team_query.strip().casefold(), "phase": body.phase, "competition": (body.competition_query or "").strip().casefold(), "sport": body.sport,
              "from": body.from_utc.astimezone(timezone.utc).isoformat() if body.from_utc else None,
              "to": body.to_utc.astimezone(timezone.utc).isoformat() if body.to_utc else None}
-    search_key = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+    search_key = scope_key(scope)
     team_variants = team_search_variants(body.team_query)
     team_patterns = ["%" + value + "%" for value in team_variants]
     raw_team_pattern = "%" + body.team_query.strip().casefold() + "%"
@@ -116,7 +117,27 @@ async def search_matches(body: SearchInput, request: Request):
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
-            search = await conn.fetchrow("SELECT * FROM v2_match_searches WHERE job_id=$1 AND search_key=$2 FOR UPDATE", body.review_id, search_key)
+            search = None
+            if body.cursor:
+                # Lock the actual continuation first; never acquire two query
+                # locks in opposite orders when a caller changes its filters.
+                search = await conn.fetchrow(
+                    "SELECT * FROM v2_match_searches WHERE job_id=$1 AND attempt_id=$2 "
+                    "AND expected_cursor=$3 FOR UPDATE", body.review_id, body.attempt_id, body.cursor)
+                if search and search['search_key'] != search_key:
+                    recorded = await conn.fetchval(
+                        "SELECT payload->'scope' FROM v2_analysis_traces WHERE job_id=$1 "
+                        "AND trace_kind='mcp_search_matches' AND payload->>'status'='succeeded' "
+                        "AND payload->>'attempt_id'=$2 AND payload->>'search_key'=$3 "
+                        "AND payload ? 'scope' ORDER BY sequence_no DESC LIMIT 1",
+                        body.review_id, str(body.attempt_id), search['search_key'])
+                    try:
+                        scope = continuation_scope(scope, recorded, search['search_key'])
+                    except ValueError as exc:
+                        raise HTTPException(409, detail=str(exc)) from None
+                    search_key = search['search_key']
+            if search is None:
+                search = await conn.fetchrow("SELECT * FROM v2_match_searches WHERE job_id=$1 AND search_key=$2 FOR UPDATE", body.review_id, search_key)
             if not search:
                 if body.cursor:
                     raise HTTPException(status_code=409, detail="search has not started")

@@ -399,6 +399,54 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'fixture-0', 'fixture-1', 'fixture-2'}, set(items))
         self.assertEqual(3, len(items))
 
+    async def test_continuation_inherits_omitted_filters_without_widening_snapshot(self):
+        for index in range(1, 4):
+            await self.fixture(index)
+        await self.fixture(4, sport='basketball')
+        await self.fixture(5, competition_name='Other')
+        await self.fixture(6, kickoff_at=(self.now + timedelta(days=9)).isoformat())
+        first = await self.post('search_matches', team_query='Alpha', page_size=1,
+                                sport='football', competition_query='League',
+                                from_utc=self.now.isoformat(), to_utc=(self.now + timedelta(days=1)).isoformat())
+        self.assertEqual(200, first.status_code, first.text)
+        result = first.json()
+        self.assertEqual(3, result['total_candidates'])
+        cursor = result['next_cursor']
+        for extra in ({'sport': 'basketball'}, {'competition_query': 'Other'},
+                      {'to_utc': (self.now + timedelta(days=10)).isoformat()},
+                      {'from_utc': (self.now - timedelta(days=1)).isoformat()},
+                      {'team_query': 'Beta'}, {'phase': 'scheduled'}):
+            conflict = await self.post('search_matches', **{'team_query': 'Alpha', 'cursor': cursor, **extra})
+            self.assertEqual(409, conflict.status_code, conflict.text)
+        second = await self.post('search_matches', team_query='Alpha', page_size=1, cursor=cursor)
+        self.assertEqual(200, second.status_code, second.text)
+        self.assertEqual(result['search_key'], second.json()['search_key'])
+        replay = await self.post('search_matches', team_query='Alpha', page_size=1, cursor=cursor)
+        self.assertNotEqual(200, replay.status_code)
+        third = await self.post('search_matches', team_query='Alpha', page_size=1, cursor=second.json()['next_cursor'])
+        self.assertEqual(200, third.status_code, third.text)
+        self.assertTrue(third.json()['search_complete'])
+        ids = [item['id'] for response in (first, second, third) for item in response.json()['items']]
+        self.assertEqual(['fixture-1', 'fixture-2', 'fixture-3'], ids)
+        evidence = await self.pool.fetchval(
+            "SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='mcp_search_matches' "
+            "AND payload->>'status'='succeeded' ORDER BY sequence_no DESC LIMIT 1", self.job)
+        self.assertEqual('football', evidence['scope']['sport'])
+        self.assertIsNotNone(evidence['scope']['from'])
+        self.assertIsNone(evidence['parameters']['from_utc'])
+
+    async def test_omitted_filters_fail_closed_without_authenticated_original_scope(self):
+        await self.fixture(1)
+        await self.fixture(2)
+        first = await self.post('search_matches', team_query='Alpha', page_size=1, sport='football')
+        self.assertEqual(200, first.status_code, first.text)
+        # Simulate incomplete restored evidence only in this temporary database.
+        await self.pool.execute("UPDATE v2_analysis_traces SET payload=payload-'scope' WHERE job_id=$1", self.job)
+        response = await self.post('search_matches', team_query='Alpha', cursor=first.json()['next_cursor'])
+        self.assertEqual(409, response.status_code)
+        exact = await self.post('search_matches', team_query='Alpha', sport='football', cursor=first.json()['next_cursor'])
+        self.assertEqual(200, exact.status_code, exact.text)
+
     async def test_resolution_before_full_pagination_is_rejected(self):
         await self.fixture(1)
         await self.fixture(2)
