@@ -97,6 +97,40 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, result.status_code, result.text)
         return result.json()["markets"][0]
 
+    async def test_chinese_script_folding_search_and_resolve_both_directions(self):
+        for index, home, away, competition, query, opponent, league in (
+            (1, '莫斯科火车头', '莫斯科斯巴达', '俄罗斯超级联赛', '莫斯科火車頭', '莫斯科斯巴達', '俄羅斯超級聯賽'),
+            (2, '莫斯科火車頭', '莫斯科斯巴達', '俄羅斯超級聯賽', '莫斯科火车头', '莫斯科斯巴达', '俄罗斯超级联赛'),
+        ):
+            await self.pool.execute('DELETE FROM v2_review_fixture_bindings')
+            await self.fixture(index, home_team=home, away_team=away, competition_name=competition)
+            start = self.now + timedelta(hours=index, minutes=-1)
+            end = self.now + timedelta(hours=index, minutes=1)
+            response = await self.post('search_matches', team_query=query, competition_query=league,
+                                       sport='football', from_utc=start.isoformat(), to_utc=end.isoformat())
+            self.assertEqual(200, response.status_code, response.text)
+            result = response.json()
+            self.assertEqual([f'fixture-{index}'], [item['id'] for item in result['items']])
+            resolved = await self.post('resolve_match', search_key=result['search_key'], team_a=query,
+                                       team_b=opponent, competition=league, from_utc=start.isoformat(), to_utc=end.isoformat())
+            self.assertEqual(200, resolved.status_code, resolved.text)
+            self.assertTrue(resolved.json()['resolved'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_chinese_script_folding_does_not_merge_women_or_ambiguous_fixtures(self):
+        await self.fixture(1, home_team='莫斯科火车头', away_team='莫斯科斯巴达')
+        await self.fixture(2, home_team='莫斯科火车头(女)', away_team='莫斯科斯巴达(女)')
+        key, candidates = await self.search_all(team='莫斯科火車頭')
+        self.assertEqual(2, len(candidates))
+        result = await self.post('resolve_match', search_key=key, team_a='莫斯科火車頭', team_b='莫斯科斯巴達')
+        self.assertTrue(result.json()['resolved'])
+        self.assertEqual('fixture-1', result.json()['fixture']['id'])
+        await self.fixture(3, home_team='莫斯科火車頭', away_team='莫斯科斯巴達')
+        key, _ = await self.search_all(team='莫斯科火车头')
+        result = await self.post('resolve_match', search_key=key, team_a='莫斯科火車頭', team_b='莫斯科斯巴達')
+        self.assertEqual('ambiguous_fixture', result.json()['reason'])
+        self.assertEqual(2, result.json()['candidate_count'])
+
     async def test_all_states_are_identifiable_but_inactive_matches_cannot_read_or_record(self):
         for index, phase in enumerate(('scheduled', 'live', 'finished', 'cancelled'), 1):
             await self.fixture(index, phase=phase)

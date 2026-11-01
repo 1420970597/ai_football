@@ -19,6 +19,7 @@ from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success,
 from ..runtime_settings import runtime_quote_max_age
 from ..quote_observation import confirmation_for
 from ..team_matching import normalize_team_name, team_name_matches, team_search_variants
+from ..chinese_names import sql_chinese_fold
 from ..review_cursors import encode_cursor, decode_cursor
 from ..review_search_scope import continuation_scope, scope_key
 
@@ -114,6 +115,9 @@ async def search_matches(body: SearchInput, request: Request):
     raw_team_alias = body.team_query.strip().casefold()
     name_fold_source = "áàâäãåéèêëíìîïóòôöõúùûüýÿçñ"
     name_fold_target = "aaaaaaeeeeiiiiooooouuuuyycn"
+    chinese_source, chinese_target = sql_chinese_fold(body.team_query + ' ' + scope['competition'])
+    name_fold_source += chinese_source
+    name_fold_target += chinese_target
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
@@ -155,11 +159,12 @@ async def search_matches(body: SearchInput, request: Request):
                     "OR regexp_replace(translate(lower(f.away_team),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]) "
                     "OR EXISTS (SELECT 1 FROM unnest(f.home_aliases || f.away_aliases) alias WHERE "
                     "lower(btrim(alias))=$8 OR regexp_replace(translate(lower(btrim(alias)),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]))) "
-                    "AND ($9='' OR lower(f.competition_name) LIKE '%'||$9||'%') "
+                    "AND ($9='' OR regexp_replace(translate(lower(f.competition_name),$6,$7),"
+                    "'[^[:alnum:]]+',' ','g') LIKE '%'||$9||'%') "
                     "AND ($10::timestamptz IS NULL OR f.kickoff_at >= $10) AND ($11::timestamptz IS NULL OR f.kickoff_at <= $11) "
                     "AND ($12::text IS NULL OR f.sport=$12)",
                     body.review_id, search_key, body.phase, raw_team_pattern, team_patterns,
-                    name_fold_source, name_fold_target, raw_team_alias, scope["competition"],
+                    name_fold_source, name_fold_target, raw_team_alias, normalize_team_name(scope["competition"]),
                     body.from_utc, body.to_utc, body.sport,
                 )
                 search = await conn.fetchrow("SELECT * FROM v2_match_searches WHERE job_id=$1 AND search_key=$2", body.review_id, search_key)

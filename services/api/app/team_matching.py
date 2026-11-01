@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unicodedata
 
+from .chinese_names import fold_chinese
+
 
 _TOKEN_ALIASES = {
     "ath": "athletic",
@@ -23,7 +25,7 @@ _GENERIC_PREFIXES = {"athletic", "city", "club", "inter", "real", "sporting", "u
 
 
 def normalize_team_name(value: str) -> str:
-    folded = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", value).casefold())
+    folded = unicodedata.normalize("NFKD", fold_chinese(unicodedata.normalize("NFKC", value).casefold()))
     chars = []
     for char in folded:
         if unicodedata.category(char).startswith("M"):
@@ -74,6 +76,10 @@ def _name_forms(value: str) -> set[str]:
 
 
 def _prefix_match(query: str, candidate: str) -> bool:
+    # Latin abbreviation matching must not treat a Chinese club name as a
+    # prefix of its women's/youth/reserve team identity.
+    if any('\u3400' <= char <= '\u9fff' for char in query + candidate):
+        return False
     query_tokens = query.split()
     candidate_tokens = candidate.split()
     if not query_tokens or len(query_tokens) > len(candidate_tokens):
