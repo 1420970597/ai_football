@@ -1,6 +1,7 @@
 """Telegram 采集与远端业务持久层的有限接口。"""
 
 import asyncio
+from contextlib import asynccontextmanager
 import logging
 from typing import Any
 
@@ -35,10 +36,31 @@ class TelegramBackend:
         self.client = client
         self.api_url = api_url.rstrip("/")
         self._source_locks: dict[str, asyncio.Lock] = {}
+        self._event_locks: dict[tuple[str, str], tuple[asyncio.Lock, int]] = {}
+
+    @asynccontextmanager
+    async def _event_lock(self, key: tuple[str, str]):
+        entry = self._event_locks.get(key)
+        lock, users = entry if entry is not None else (asyncio.Lock(), 0)
+        self._event_locks[key] = (lock, users + 1)
+        try:
+            async with lock:
+                yield
+        finally:
+            current_lock, current_users = self._event_locks[key]
+            if current_users == 1:
+                self._event_locks.pop(key)
+            else:
+                self._event_locks[key] = (current_lock, current_users - 1)
 
     async def _call(self, method: str, path: str, body: dict | None = None):
         source_id = str(body.get('chat_id')) if body and body.get('chat_id') is not None else None
-        if source_id and path.split('?', 1)[0] in _SOURCE_SERIALIZED_PATHS:
+        operation = path.split('?', 1)[0]
+        message_id = str(body.get('platform_message_id')) if body and body.get('platform_message_id') is not None else None
+        if method == 'POST' and operation == '/events' and source_id and message_id:
+            async with self._event_lock((source_id, message_id)):
+                response = await self.client.request(method, self.api_url + path, json=body)
+        elif source_id and operation in _SOURCE_SERIALIZED_PATHS:
             lock = self._source_locks.setdefault(source_id, asyncio.Lock())
             async with lock:
                 response = await self.client.request(method, self.api_url + path, json=body)

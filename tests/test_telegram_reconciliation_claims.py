@@ -110,6 +110,42 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, requests.count('/internal/telegram/checkpoints/claim'))
         self.assertEqual(1, requests.count('/internal/telegram/checkpoints'))
 
+    async def test_same_message_event_writes_serialize_without_blocking_other_messages(self):
+        first_started = asyncio.Event()
+        second_started = asyncio.Event()
+        other_started = asyncio.Event()
+        release_first = asyncio.Event()
+        requests = []
+
+        async def handler(request):
+            body = json.loads(request.content)
+            message_id = body['platform_message_id']
+            requests.append(message_id)
+            if message_id == 'same' and requests.count('same') == 1:
+                first_started.set()
+                await release_first.wait()
+            elif message_id == 'same':
+                second_started.set()
+            else:
+                other_started.set()
+            return httpx.Response(200, json={'persisted': True})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            first = asyncio.create_task(backend.event({'chat_id': '-1001', 'platform_message_id': 'same'}))
+            await asyncio.wait_for(first_started.wait(), timeout=1)
+            duplicate = asyncio.create_task(backend.event({'chat_id': '-1001', 'platform_message_id': 'same'}))
+            other = asyncio.create_task(backend.event({'chat_id': '-1001', 'platform_message_id': 'other'}))
+            await asyncio.wait_for(other_started.wait(), timeout=1)
+            await asyncio.sleep(0)
+            self.assertFalse(second_started.is_set())
+            release_first.set()
+            await asyncio.gather(first, duplicate, other)
+
+        self.assertTrue(second_started.is_set())
+        self.assertEqual(['same', 'other', 'same'], requests)
+        self.assertEqual({}, backend._event_locks)
+
     async def test_collector_explicitly_sends_exact_claim_ack_protocol_and_preserves_items(self):
         requests = []
         expected = [{'id': 'test-event-only', 'claim_id': 'test-claim-only'}]
