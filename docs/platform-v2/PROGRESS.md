@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮最新进度：2026-11-01 00:59 UTC。E139 API已生效，容器revision、健康/就绪、schema和审核队列核验通过；运行门禁仍失败，30分钟窗口未开始。审计了可信实时消息：模型正确拒绝无推荐意图内容；可识别推荐样本已唯一匹配比赛，但乐鱼当前投影为cancelled且盘口关闭/源价时间过期，故系统正确拒绝入账。采集健康未稳定，最近API曾有批量盘口入库statement timeout并导致对账请求503。E140定位并优化高负载报价批量写入后重验。
+本轮最新进度：2026-11-01 01:02 UTC。E139 API已生效，容器revision、健康/就绪、schema和审核队列核验通过；运行门禁仍失败，30分钟窗口未开始。审计了可信实时消息：模型正确拒绝无推荐意图内容；可识别推荐样本已唯一匹配比赛，但乐鱼当前投影为cancelled且盘口关闭/源价时间过期，故系统正确拒绝入账。E140报价集合式upsert代码已写，目标Docker回归待执行；E139后采集端仍有数据库语句超时，健康观察未开始。
 
 ### E137 — 降低Telegram来源租约写竞争及同群请求排队（冻结Docker验证通过并生效，运行验收失败，后续E138修复中）
 
@@ -44,6 +44,14 @@
 - E139运行验收失败及E140根因证据（00:59 UTC）：远端collector仍为E137，Telegram已连接/授权但来源状态波动；00:50快照有3 catching_up、1 caught_up、1 lease_deferred、1 reconciliation_deferred。LeYu最近62次poll中50成功、11失败，状态partial/freshness stale，fresh_active_quotes=0；active quote最新源时间年龄约39秒，而当前受控阈值15秒，数据库没有15/30秒内的源价。API最近15分钟9次`TimeoutError`，包括`ingest_fixture_batch`报价`executemany`、`telegram_reconciliation.claim_events`、结果领取、配置读取及媒体孤儿查询；当前pg_locks没有等待锁，pg_stat_activity没有长查询。只读`EXPLAIN ANALYZE`对账查询最近/历史分支分别约6.1/9.8ms，事件表约14,361行，故对账SQL自身索引不是主要瓶颈；批量报价upsert在生产表规模/负载下是主导超时风险。最近2分钟远端collector日志无503/deadline，但此前5分钟有一次`POST /observed`因`database_temporarily_unavailable`返回503、一次LeYu ingestion 503，不能开始健康窗。下一步E140将按集合式单语句执行报价upsert，保持报价源时效/比赛阶段限制，运行回归后再部署及观测。
 - 只读探针纠错：远端日志脚本误在collector容器内调用不存在的Docker CLI退出1，改在remote host执行退出0；PostgreSQL探针误用不存在的`jsonb_object_length`函数退出1，改用`jsonb_object_keys`退出0；消息探针误引用不存在的`reply_text`列退出1，按schema改用`reply_context`退出0；一次`docker exec`未附`-i`导致here-doc脚本未执行且无输出，不视为验证，之后附`-i`重跑退出0；EXPLAIN JSON首次按字典读取字符串而退出1，解析JSON字符串后查询退出0。以上均只读，不改变数据库或运行配置。
 - 失败处理：若并发测试显示过期owner可在takeover后继续写、同owner续租被锁住或活跃异owner获准，停止候选，修复锁排序并重跑定向/冻结全套；部署仍须队列空且collector lease自然handoff，不启动健康观察窗直到来源和审核回执通过。
+
+### E140 — 将盘口批量写入改为集合式upsert以减少数据库超时（代码已写，Docker验证待开始）
+
+- 目标/责任目录：降低大型LeYu赔率快照写入时API `statement_timeout`，避免持续写压使Telegram对账请求收到503；责任目录`services/api/app/ingestion.py`及其赛事/报价隔离集成测试。依赖E139 API已生效且有运行超时证据。
+- 当前证据：E139后远端collector日志仍报告LeYu批量入库503；API异常日志包含`ingest_fixture_batch`在`asyncpg.executemany`内的5秒`TimeoutError`，同一时段`/observed`领取也出现一次数据库暂不可用。数据库当前无锁等待；只读EXPLAIN ANALYZE显示对账查询约6–10ms，优先排除大批量逐quote upsert的执行负载。
+- 设计决策：生产负载未有E140生效后的持续测量；不能延长5秒语句期限或降低quote新鲜度门槛。保持交易唯一键、源时间单调比较、报价行ID稳定、终态盘口关闭及事务原子性，将最多2,000行`executemany`改为一个`jsonb_to_recordset` upsert以减少每行执行开销。
+- 实现与验收：报价行映射UUID、Decimal及UTC时间为JSON可解析文本，再由数据库按现有类型集合写入；Docker回归覆盖2,000报价在5秒DB statement timeout内写入、重放不换ID、旧quote不能覆盖新quote、fixture/quote时钟独立、终态fixture不重开及注入失败事务回滚，并复跑Telegram reconciliation claim/ACK测试。通过后冻结全套，比较真实API超时、collector ingest和Telegram状态，再决定部署E140。
+- 失败处理：若集合写入与现有quote/FK/check约束不符，先定位类型/冲突差异；若隔离回归通过但生产仍超时，按单条批次耗时与Postgres等待统计继续分析，不提高超时阈值掩盖负载。
 
 本轮阶段更新：2026-10-31 21:55 UTC。E135候选已部署于远端，collector于21:51:27启动并报告healthy；image ID=`sha256:418456e54cdb58830548f47544a21e6b3568efbdf7a279fb3b4380c73fefda4c`、revision=`765dc42412ce098071ad5f7b09986949c7af3ab0`，与候选一致；API health/ready均200，bridge/executor容器ID/image/StartedAt不变。Telegram控制状态HTTP200且connected/authorized，但状态degraded：1个来源caught_up、2个reconciliation_deferred、2个catching_up、1个unavailable（TimeoutError）；6/6租约有效、5/6检查点近2分钟刷新。collector日志21:52–21:55有3次ACK deadline、1次event_commit deadline及1次history deadline，实时消息持久化群锁等待最高约6.2秒。近10分钟可信事件均为旧发布时间回补（2022–2025），无可验收的新发言；媒体有pending/unsupported项，不能计作已审。E135运行验收未通过，当前继续定位ACK/event链路等待并核实媒体重试，不启动30分钟窗口。
 
