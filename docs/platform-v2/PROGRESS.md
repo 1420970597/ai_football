@@ -1,4 +1,10 @@
 # 第二代平台实时进度与验证台账
+E160双端真实浏览器及重审跟踪（2026-11-01 12:59 UTC）：1440/390两端完整点击重跑退出0，五种比赛状态每类50场DOM/API编号一致；管理员UI登录、180天Strict/HttpOnly Cookie、原文/模型/系统回执、两条历史真实结算及已完场不新建信号通过。原图缩略图与完整图片加载，两端均退出0、页面错误0。证据.runtime/e160-live/output/playwright/{live-clicks,media-clicks}.json。第一次完整点击遇到真实public matches 503而失败，保留live-clicks-initial-db-timeout.json/png；验证脚本增加明确错误/重试检查后重跑成功，但该次没有实际触发重试。独立浏览器上下文仅拦截一次读请求返回503，实测两端清空上一分类、显示重试、点击后真实API 200且50场一致（phase-recovery.json）；这是浏览器局部故障注入，不是生产持续健康证据。
+
+真实原文“大2.75 2.5”通过正式管理员UI+CSRF重审接口201创建任务10fe7d18-c325-4b78-8002-a349a035ef81，未改原文或旧证据。12:51:58完成unresolved、尝试1：同一比赛leyu:5701749唯一绑定，正式盘口刷新written，原文两条指定线已closed，现有活跃线不同；不录入替代线，也不对永久关闭盘口触发临时故障恢复。模型provider耗时59847.965ms、系统结论71536.127ms，3秒未达。recovery-1255.json无自动恢复追踪，真实暂态恢复场景尚无样本，不能勾选P41-13真实验收。
+
+观察仍在12:42–13:12 UTC完整窗口内；Telegram保持连接授权，但12:51–12:56有/events、/checkpoints、/checkpoints/claim、/observed后端503，API同期记录asyncpg执行TimeoutError（含readyz SELECT），来源有HTTPStatusError，不能判整窗健康。已启动各180秒级只读数据库网络与等待采样，之后对照官方四来源逐编号确认是否最终恢复。原有隔离1097项通过不替代本次真实失败；不扩大超时、不放松盘口新鲜度、不伪造推荐或结算。
+
 
 E160已生效及最终观察开始（2026-11-01 12:42 UTC）：原审核12:39:59自然排空，12:40:43只读门禁active=0、同项目调度持锁=1（handoff-gate.json）；仅停止并重建review-worker，Compose日志Stopped/Recreated/Started、整体退出0。新容器c1ad916c6bef6f4d77296c911fc35a77386ca3fd7e3a006fd7fd16b265a91fa0，StartedAt 2026-11-01T12:41:04.630651014Z，镜像f9f313f74b0af880773eaccef41542be81d36c5b95200d250542242c16f2a83b、revision92e5037；模块断言新恢复次数2、退出0。12:41:11数据库就绪、12:41:13通知监听连通，释放标记及咨询锁释放均完成，持锁脚本退出0。采集器、API、MCP、Hermes、web、bridge、executor均未重建；没有停采缺口、数据库迁移、旧记录改写或订单。受保护Compose入口仅追加e160 worker覆盖层，旧入口已在.runtime/e160-live/compose-before.sh备份。
 
