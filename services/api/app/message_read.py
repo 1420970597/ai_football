@@ -154,10 +154,11 @@ async def latest_model_result(pool, message_id):
 async def signal_page(pool, request, actor, message_id, *, context='user', limit=30, cursor=None):
     decoded = _decode(request, actor, message_id, context, 'signals', limit, cursor)
     rows = await pool.fetch(
-        "SELECT s.*,f.competition_name,f.home_team,f.away_team,f.kickoff_at,f.phase AS fixture_phase,f.match_state,"
+        "SELECT s.*,e.display_nickname,f.competition_name,f.home_team,f.away_team,f.kickoff_at,f.phase AS fixture_phase,f.match_state,"
         "(SELECT ev.evidence->>'quote_id' FROM v2_quote_evidence ev WHERE ev.reference_id=s.id "
         "AND ev.evidence_kind='expert_signal' ORDER BY ev.captured_at LIMIT 1) AS quote_id "
-        "FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id WHERE s.message_id=$1 "
+        "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
+        "JOIN v2_fixtures f ON f.id=s.fixture_id WHERE s.message_id=$1 "
         "AND ($2::timestamptz IS NULL OR (s.created_at,s.id)>($2,$3)) ORDER BY s.created_at,s.id LIMIT $4",
         message_id, decoded[0] if decoded else None, decoded[1] if decoded else None, limit+1)
     page = rows[:limit]

@@ -1,6 +1,6 @@
 # E172：原文推荐卡片的当前专家昵称
 
-设计已记录，未实现（2026-11-01 18:42 UTC）。
+代码已写、定向隔离验证通过、未部署（2026-11-01 18:45 UTC）。
 
 - 目标/责任：services/api原文证据读取投影与真实PG测试，使已同步的专家当前昵称在原文推荐卡片可见，web无需平行昵称缓存。
 - 依赖/证据：E171真实双端浏览器均通过，原文d2d32eba…标题显示当前专家昵称，而signalCard因shared signal_page只SELECT s.*和fixture字段、无display_nickname而显示“专家昵称未记录”。两张zero-baseline-settlement截图已实际查看；昵称不是确实缺失，而是响应投影遗漏。

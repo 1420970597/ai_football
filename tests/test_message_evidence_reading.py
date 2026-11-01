@@ -40,6 +40,31 @@ class MessageEvidenceReadingTests(unittest.IsolatedAsyncioTestCase):
     async def path(self):
         return '/api/v1/public/messages/' + str(self.message)
 
+    async def test_current_signal_nickname_follows_stable_author_for_member_and_admin(self):
+        await self.prepare()
+        await self.pool.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) VALUES('nickname-fixture','nickname-fixture','football','测试联赛','甲','乙',now(),'live')")
+        signal = uuid.uuid4()
+        await self.pool.execute("INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,market_kind,line,selection,recommendation_price,quote_time,confidence) VALUES($1,$2,$3,'nickname-fixture','live','total','大小','total',.75,'over',1.76,now(),.8)", signal, self.message, self.expert)
+        endpoints = [(await self.path(), False), ((await self.path())+'/signals', False),
+                     ('/api/v1/admin/telegram/messages/'+str(self.message), True),
+                     ('/api/v1/admin/telegram/messages/'+str(self.message)+'/signals', True)]
+        for nickname in ('专家原昵称', '专家同步后昵称'):
+            await self.pool.execute('UPDATE v2_experts SET display_nickname=$2 WHERE id=$1', self.expert, nickname)
+            # Another stable author with the same display name must never join.
+            await self.pool.execute('INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,$2,$3)',
+                                    uuid.uuid4(), 'other-'+uuid.uuid4().hex, nickname)
+            for path, admin in endpoints:
+                with self.subTest(nickname=nickname, path=path):
+                    headers = {'Authorization':'Bearer isolated-admin-one', 'X-Session-Context':'admin'} if admin else {}
+                    response = await self.client.get(path, headers=headers)
+                    self.assertEqual(200, response.status_code, response.text)
+                    body = response.json()
+                    rows = body['items'] if path.endswith('/signals') else body['signals']
+                    self.assertEqual(1, len(rows))
+                    self.assertEqual((str(signal), str(self.expert), nickname),
+                                     tuple(rows[0][key] for key in ('id', 'expert_id', 'display_nickname')))
+                    self.assertEqual('private, no-store', response.headers['cache-control'])
+
     async def test_multi_job_attempt_order_pages_latest_summary_and_full_text_never_truncated(self):
         await self.prepare()
         await self.pool.execute('DELETE FROM v2_analysis_traces')
