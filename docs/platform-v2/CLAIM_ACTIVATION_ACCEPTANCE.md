@@ -23,3 +23,7 @@
 真实生效（20:09 UTC）：独立门禁20:05:41.441191暂停领取、20:05:44.856890空闲持锁，部署与模块/健康/繁简真实查询核验退出0，门禁was_held=true释放。API容器3185f5c4…/20:07:02.70733085、工作器b149a280…/20:07:22.402254474，均镜像81795d89…/源码02cbf9b。程序化对比容器ID、镜像和启动时间，仅API/worker改变；Hermes/MCP/web/executor不变，无远端部署、无模型/资源/并发/账户与信任配置变化。
 
 新完整窗口20:08:09.020299–20:38:09.020299，watch session13505；必须等实际watch_ended且31样本/至少1800秒后才运行官方四来源逐帖核对，交接另从19:45:52.719331覆盖。浏览器全套点击与原图session54194在运行，尚未完成。证据.runtime/e174-live/{handoff.jsonl,deployment.log,deployed-identities.txt,container-change-verification.txt,window.json}。首样本健康就绪200、TG授权连接正常，无新消息；不把首样本当完整验收。
+
+双端浏览器（20:13 UTC）：首轮因未复制旧结算对照输入settlement-before.json而ENOENT退出1，已保留browser-first-failure.log；补齐原证据后同一browser.sh重跑退出0，无应用代码变化。1440/390五比分标签首次200/DOM一致、最新预览5条、180天Cookie、当前专家昵称、原文/模型/系统回执、原有两条结算及实际零基线loss/-1到比赛详情均通过，脚本错误0。两宽度原图缩略图点击打开且授权加载各1张通过；实际查看双端零基线原文截图，图片、昵称、上半场、系统1.76及净收益-1可见。证据.runtime/e174-live/{browser-clicks.log,browser-media.log,output/playwright/live-clicks.json,output/playwright/media-clicks.json}。完整观察继续，不把点击通过称为当前新推荐匹配通过。
+
+计时说明：E173/E174的provider_elapsed_ms是完整Hermes审核HTTP请求，覆盖框架技能及工具过程；不能将此值等同单次底层模型时间。当前目标仍未证明达成，后续框架原生技能预载研究见PERFORMANCE_RESEARCH.md，未纳入本冻结版本。
