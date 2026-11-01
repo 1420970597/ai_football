@@ -1,5 +1,7 @@
 # 第二代平台实时进度与验证台账
 
+E152实现冻结（2026-11-01 10:01 UTC）：固定POST回执路径及实际backend契约调用已修复；Docker命令`python -m unittest test_remote_deployment -q`运行22项、7.973秒、退出0，含真实TCP/Unix转发、原样正文、错误身份与方法/查询/编码路径变体拒绝。源码a0b52549865b57d835d088986d444bc253a37fb7已提交推送并以远端ref确认；独立干净worktree.runtime/e152-20261101-verification运行`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`，日志.runtime/e152-live/full-suite.log，未结束前不标通过。规划检查46包/346动作/265有证据完成项、diff退出0；原E151窗口继续采样但已因真实403判不能验收，新规则尚未生效。10:00:49只读回复输入探针新运行样本0，不把隔离回复测试冒充真实模型输入成功。Python/HTTPX/PostgreSQL官方文档合并访问再次502，未根据失败访问补写外部结论。
+
 ### E152 — 补齐近期回执查询的远端转发契约（2026-11-01 09:58 UTC，研究与设计）
 - 目标/责任目录：让E150来源隔离的只读回执查询真正经过远端部署边界，解除近期扫描403停滞；责任目录infra/remote/、tests/、docs/。依赖已运行的E151 API/collector，不改变令牌、来源租约与API权限。
 - 当前证据：远端collector从09:54:02起重复记录POST /events/receipts 403；实际api_bridge.py的POST白名单仅有events，没有events/receipts。现有真实worker路径契约测试没有调用新增backend.event_receipts，隔离API测试未覆盖远端转发，导致1069项通过仍遗漏部署契约。
