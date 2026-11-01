@@ -240,13 +240,22 @@ async def claim_checkpoint(body: ClaimInput, request: Request):
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
-                "WITH source_lock AS MATERIALIZED ("
-                "SELECT pg_advisory_xact_lock(hashtext('telegram-source:' || $1)) AS acquired),"
-                "sources AS MATERIALIZED ("
-                "SELECT s.id FROM v2_expert_sources s CROSS JOIN source_lock "
-                "WHERE s.platform_chat_id=$1 AND s.enabled) "
+                "WITH source AS MATERIALIZED ("
+                "SELECT id,platform_chat_id FROM v2_expert_sources WHERE platform_chat_id=$1 AND enabled),"
+                "current AS MATERIALIZED ("
+                "SELECT cp.source_id,cp.collector_owner,cp.lease_until FROM v2_source_checkpoints cp "
+                "JOIN source ON source.id=cp.source_id),"
+                "lock_candidate AS MATERIALIZED ("
+                "SELECT source.platform_chat_id FROM source LEFT JOIN current ON current.source_id=source.id "
+                "WHERE current.source_id IS NULL OR (current.collector_owner<>$2 "
+                "AND (current.lease_until IS NULL OR current.lease_until<=now()))),"
+                "source_lock AS MATERIALIZED ("
+                "SELECT pg_advisory_xact_lock(hashtext('telegram-source:' || platform_chat_id)) "
+                "FROM lock_candidate),"
+                "claim_sources AS MATERIALIZED ("
+                "SELECT source.id FROM source CROSS JOIN (SELECT count(*) FROM source_lock) lock_guard) "
                 "INSERT INTO v2_source_checkpoints(source_id,collector_owner,lease_until) "
-                "SELECT s.id,$2,now()+interval '90 seconds' FROM sources s "
+                "SELECT claim_sources.id,$2,now()+interval '90 seconds' FROM claim_sources "
                 "ON CONFLICT(source_id) DO UPDATE SET collector_owner=$2,lease_until=now()+interval '90 seconds' "
                 "WHERE v2_source_checkpoints.collector_owner=$2 OR v2_source_checkpoints.lease_until IS NULL "
                 "OR v2_source_checkpoints.lease_until<=now() RETURNING last_message_id,lease_until", body.chat_id, body.owner,
@@ -265,10 +274,8 @@ async def advance_checkpoint(body: AdvanceInput, request: Request):
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
-                "WITH source_lock AS MATERIALIZED ("
-                "SELECT pg_advisory_xact_lock(hashtext('telegram-source:' || $1)) AS acquired) "
                 "UPDATE v2_source_checkpoints cp SET last_message_id=$3,checked_at=now(),last_error=NULL,"
-                "lease_until=now()+interval '90 seconds' FROM v2_expert_sources s,source_lock "
+                "lease_until=now()+interval '90 seconds' FROM v2_expert_sources s "
                 "WHERE cp.source_id=s.id AND s.platform_chat_id=$1 AND s.enabled "
                 "AND cp.collector_owner=$2 AND cp.lease_until>now() AND cp.last_message_id=$4 "
                 "RETURNING cp.last_message_id",

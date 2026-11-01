@@ -233,22 +233,42 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
             "SELECT lease_until FROM v2_source_checkpoints WHERE source_id=$1", self.source_id)
         self.assertEqual(lease_before, lease_after)
 
-    async def test_checkpoint_takeover_waits_for_active_source_transaction(self):
+    async def test_same_owner_renewal_and_checkpoint_advance_do_not_wait_for_source_lock(self):
+        async with self.pool.acquire() as holder:
+            async with holder.transaction():
+                await telegram.source_with_lease(holder, '-1001', self.owner)
+                renewed = await asyncio.wait_for(self.client.post(
+                    '/internal/telegram/checkpoints/claim',
+                    json={'chat_id': '-1001', 'owner': str(self.owner)}), timeout=1)
+                self.assertEqual(200, renewed.status_code, renewed.text)
+                advanced = await asyncio.wait_for(self.client.put(
+                    '/internal/telegram/checkpoints', json={
+                        'chat_id': '-1001', 'owner': str(self.owner),
+                        'last_message_id': 1, 'previous_message_id': 0}), timeout=1)
+                self.assertEqual(200, advanced.status_code, advanced.text)
+        self.assertEqual(1, await self.pool.fetchval(
+            'SELECT last_message_id FROM v2_source_checkpoints WHERE source_id=$1', self.source_id))
+
+    async def test_expired_checkpoint_takeover_waits_for_active_source_transaction(self):
         new_owner = uuid.uuid4()
+        await self.pool.execute(
+            "UPDATE v2_source_checkpoints SET lease_until=now()+interval '250 milliseconds' WHERE source_id=$1",
+            self.source_id)
         async with self.pool.acquire() as holder:
             async with holder.transaction():
                 source = await telegram.source_with_lease(holder, '-1001', self.owner)
                 self.assertEqual(self.source_id, source['id'])
+                await asyncio.sleep(0.3)
                 takeover = asyncio.create_task(self.client.post(
                     '/internal/telegram/checkpoints/claim',
                     json={'chat_id': '-1001', 'owner': str(new_owner)}))
                 await asyncio.sleep(0.05)
                 self.assertFalse(takeover.done())
         response = await asyncio.wait_for(takeover, timeout=3)
-        self.assertEqual(409, response.status_code, response.text)
+        self.assertEqual(200, response.status_code, response.text)
         owner = await self.pool.fetchval(
             'SELECT collector_owner FROM v2_source_checkpoints WHERE source_id=$1', self.source_id)
-        self.assertEqual(self.owner, owner)
+        self.assertEqual(new_owner, owner)
 
     async def test_author_backfill_is_leased_monotonic_and_independent_of_group_checkpoint(self):
         await self.pool.execute(

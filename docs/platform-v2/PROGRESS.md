@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮最新进度：2026-11-01 00:14 UTC。E138定向107项及冻结Docker全套1,030项均通过；同SHA API候选已构建并通过revision/模块导入核验。部署前队列queued/running/retry均0，6源lease有效且4个检查点近2分钟fresh；正在校验并准备只切换API。E137运行门禁未通过，观察窗未开始。
+本轮最新进度：2026-11-01 00:24 UTC。E138 API的运行门禁因同owner例行claim争抢来源独占advisory锁失败。E139已改为仅新owner接管过期lease时使用排他锁；同owner续租和checkpoint推进可与消息事务并行。定向Docker PostgreSQL回归108项、0失败/错误、58.294秒通过；冻结全套待运行。专家观察窗未开始。
 
 ### E137 — 降低Telegram来源租约写竞争及同群请求排队（冻结Docker验证通过并生效，运行验收失败，后续E138修复中）
 
@@ -17,7 +17,7 @@
 - E137运行门禁失败（23:50–00:02 UTC）：API候选healthy、healthz/readyz=200，collector镜像revision匹配；但新collector启动后的日志仍有`event_commit` deadline、`history_deadline`及`/events` 503 database timeout。Telegram状态HTTP200、connected/authorized，6源中1 caught_up、3 catching_up、2 reconciliation_deferred，degraded=true；最后一次snapshot source leases=6/6 active、5/6 checkpoint近2分钟fresh、6/6无last_error。近10分钟18条event接收、38次应用和ACK、未确认0；队列queued/running/retry=0。API另见`source_with_lease`/`ingest_fixtures`/`claim_work` TimeoutError。30秒PG采样202次，无Lock wait/blocked，最大active=3；30次只读`SELECT 1` p50/p95/max=171.0/286.8/490.9ms。故E137降低了已确认与collector客户端的串行，但按共享行锁读取租约仍与checkpoint行更新有潜在冲突，且运行证据不支持开始30分钟窗口。
 - 失败处理：共享锁校验失败仍返回租约失效409；旧owner已过期不能提交。定向并发或API契约任一失败即停止候选构建，修正后重跑原Docker测试；运行门禁仍观察到event/ACK deadline或DB超时则继续按新日志和数据库等待证据诊断，不启动30分钟窗。
 
-### E138 — 用来源级事务advisory锁分离消息提交与租约续期（冻结Docker验证通过，候选已构建，部署待执行）
+### E138 — 用来源级事务advisory锁分离消息提交与租约续期（冻结Docker验证通过并生效，运行门禁失败，E139修复中）
 
 - 目标/责任目录：继续消除E137行级共享租约锁与定期checkpoint更新之间的耦合；责任目录`services/api/app/routes/telegram.py`与Telegram API PostgreSQL测试。前置是E137定向及冻结全套通过且已生效，但真实运行门禁未过。
 - 当前证据：E137运行近5分钟19次对账应用均有ACK、未确认0，但collector曾报event_commit deadline及Telegram周期TimeoutError；API也记录`claim_checkpoint`、赛程`ingest_fixtures`超时。30秒PG采样202次、lock wait与blocked sample均0、最大active=3；30次只读`SELECT 1` p50/p95/max=171.0/286.8/490.9ms。E137 `FOR SHARE OF cp`会令同群事件共享读锁与租约续期/接管的checkpoint行UPDATE互斥，虽未在短采样捕捉到等待，仍去除该不必要的共享行锁。
@@ -25,9 +25,19 @@
 - 实现与验收：API使用物化CTE保证共享来源锁在校验checkpoint前取得；checkpoint claim/advance使用事务独占锁保护lease与owner更替。新增真实PostgreSQL测试证明业务请求不延长租约、持有业务来源锁时另一个owner的checkpoint claim等待后按活跃租约拒绝；全套现有消息、编辑/删除、checkpoint CAS、reconciliation原子ACK继续通过。
 - 定向验证（00:00 UTC）：在具名临时Docker PostgreSQL及0.5 CPU/512MiB verifier中运行`python -m unittest -q tests.test_telegram_api tests.test_telegram_reconciliation_claims tests.test_telegram_source_scheduling tests.test_telegram_collector`，107项、失败/错误均0、57.528秒、退出0。覆盖来源级advisory共享/独占锁、接管等待后拒绝、租约时间戳不变、现有ACK/回放和采集调度。`git diff --check`退出0；真实Telegram/模型/资金未调用。
 - 实现提交：`97a9092`（`fix(telegram): coordinate source lease fencing`）已推送至任务分支，push退出0，远端引用核对通过；全量Docker冻结验证尚待运行。
-- 冻结全套与恢复验收：干净worktree`.runtime/e138-verification`固定在提交`3b58817e9426e87fa0dfc6f43f205f9d6707236e`，`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`退出0，1,030项、失败/错误/跳过均0，终端437.671秒；Docker内解析机器报告退出0，显示439.983秒、`committed_source_verified=true`且`source_parent_commit`精确匹配。报告`.runtime/e138-verification/.runtime/test-evidence/1976566/backend-tests.json`。恢复验收46张表、1个媒体对象，业务盘点前后差异`{}`；隔离测试不调用真实Telegram、模型或资金。worktree测试后clean。下一步仅构建E138 API候选并核对revision/导入，再按队列门禁部署。
+- 冻结全套与恢复验收：干净worktree`.runtime/e138-verification`固定在提交`3b58817e9426e87fa0dfc6f43f205f9d6707236e`，`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`退出0，1,030项、失败/错误/跳过均0，终端437.671秒；Docker内解析机器报告退出0，显示439.983秒、`committed_source_verified=true`且`source_parent_commit`精确匹配。报告`.runtime/e138-verification/.runtime/test-evidence/1976566/backend-tests.json`。恢复验收46张表、1个媒体对象，业务盘点前后差异`{}`；隔离测试不调用真实Telegram、模型或资金。worktree测试后clean。候选已部署，实际运行故障及后续修复见下文。
 - API候选构建（00:13 UTC）：从冻结worktree构建`docker buildx build --builder ai-football-e131 --platform linux/amd64 --load --pull --provenance=false --sbom=false ...`退出0；tag=`ai-football-api:2.0.0-dev-e138-3b58817`，image ID=`sha256:e4fa954b2a0a1b59e4f9d511b0473d8fe1985578fa6d4eff46fd77147d255ae9`、OCI revision=`3b58817e9426e87fa0dfc6f43f205f9d6707236e`、version=`2.0.0-dev-e138`；限额Docker内`app.routes.telegram`导入退出0。API Compose覆盖文件已准备，配置与镜像渲染待复核。部署门禁快照queued/running/retry=0/0/0，source lease=6/6 active、4/6 checked_at<2m；API E137健康，E137 collector持续运行。
-- 失败处理：测试任何共享/独占锁或现有续期语义失败则不构建；候选部署仍要求队列空闲、旧collector停后所有租约自然到期。生效后若API timeout与event_commit deadline仍出现，继续检查远端数据库调用耗时及业务查询路径，不将其归因于Telegram无消息，亦不启动30分钟窗。
+- E138生效及运行门禁失败（00:16–00:18 UTC）：部署前审核queued/running/retry=0/0/0；命令`sh .runtime/e117-20261031/compose.sh -f .runtime/e138-local-api-image.yml up -d --wait --wait-timeout 120 --no-deps --no-build --pull never api`退出0。API容器`83b02261addf1e38c40ec4692c3fb890d6d2a0858ed3afe193a2bc51169f98ad`、image=`sha256:e4fa954b…`、revision=`3b58817`、healthy；`/healthz`/`/readyz`均200，schema仍023；worker、collector、Hermes/MCP、bridge/executor未重启。重建间API短暂停机造成 collector 多服务503及Telegram状态unavailable，恢复后collector有一次`/checkpoints/claim` 503 `database_temporarily_unavailable`，API日志根因`LockNotAvailableError`于`claim_checkpoint`；采集器 routine claim/keep_lease 每循环多次请求独占来源锁，与共享业务事务竞争。近10分钟19条事件皆历史发布时间，14条媒体ready并有审核job、状态unresolved且无Hermes request，属于自动抑制历史回补，0真实新发言样本；message ACK应用/ACK一致且未确认0。此运行未达门禁，E138不能开始观察窗。
+- 失败处理：共享advisory租约锁路径在定向测试通过且已部署后仍因例行续租排他等待造成503，保留失败证据并以E139分离同owner heartbeat与expired-owner takeover；若E139仍有API timeout/event_commit deadline，继续诊断，不能开始30分钟窗。
+
+### E139 — 避免例行租约续期争抢消息事务共享锁（代码已写，定向Docker验证通过，冻结全套待运行）
+
+- 目标/责任目录：在保留E138 lease takeover fencing的前提下，让同一个collector owner的日常checkpoint claim/推进不等待同源消息事务；责任目录`services/api/app/routes/telegram.py`与`tests/test_telegram_api.py`。前置依赖E138 API已生效，但部署后observed claim显示同owner routine renew导致`LockNotAvailableError`。
+- 当前证据：collector每轮开始及处理完来源后会调用checkpoint claim；E138让每次claim和advance都请求exclusive advisory lock，业务事务持shared锁时日常续租等待，2秒PG lock_timeout返回503。业务ACK一致，问题在lease heartbeat冲突而非消息/claim幂等。
+- 设计决策：同owner checkpoint续租按现有UPSERT owner条件更新，不拿advisory exclusive；checkpoint高水位CAS推进只更新本owner、未过期lease，不拿exclusive。仅当checkpoint行不存在或当前是另一owner且lease已过期时，claim执行来源级exclusive advisory lock，等待已开始的旧owner共享事务结束，再依赖`ON CONFLICT ... WHERE owner matches OR lease expired`对最新行状态原子重判；活跃他owner仍快速409。
+- 实现与验收：将claim锁条件移入物化CTE，仅候选takeover时取排他锁；移除advance的排他锁。新增Docker PostgreSQL契约：持有共享业务锁时同owner claim及advance能在1秒内成功；lease短期有效后到期时，新owner takeover必须等待活动共享事务结束，随后成功接管；保留lease未过期的跨owner 409、CAS、事务event/ACK及不更新租约业务路径。
+- 定向Docker验证（00:23 UTC）：在具名临时PostgreSQL及0.5 CPU/512MiB verifier运行`python -m unittest -q tests.test_telegram_api tests.test_telegram_reconciliation_claims tests.test_telegram_source_scheduling tests.test_telegram_collector`，108项、0失败/错误、58.294秒、退出0。覆盖共享业务事务期间同owner续租与checkpoint advance即时成功、lease自然到期后新owner takeover等待旧事务完成再成功、旧owner和活跃异owner权限边界、ACK与重放。真实Telegram/模型/资金未调用，`git diff --check`退出0。
+- 失败处理：若并发测试显示过期owner可在takeover后继续写、同owner续租被锁住或活跃异owner获准，停止候选，修复锁排序并重跑定向/冻结全套；部署仍须队列空且collector lease自然handoff，不启动健康观察窗直到来源和审核回执通过。
 
 本轮阶段更新：2026-10-31 21:55 UTC。E135候选已部署于远端，collector于21:51:27启动并报告healthy；image ID=`sha256:418456e54cdb58830548f47544a21e6b3568efbdf7a279fb3b4380c73fefda4c`、revision=`765dc42412ce098071ad5f7b09986949c7af3ab0`，与候选一致；API health/ready均200，bridge/executor容器ID/image/StartedAt不变。Telegram控制状态HTTP200且connected/authorized，但状态degraded：1个来源caught_up、2个reconciliation_deferred、2个catching_up、1个unavailable（TimeoutError）；6/6租约有效、5/6检查点近2分钟刷新。collector日志21:52–21:55有3次ACK deadline、1次event_commit deadline及1次history deadline，实时消息持久化群锁等待最高约6.2秒。近10分钟可信事件均为旧发布时间回补（2022–2025），无可验收的新发言；媒体有pending/unsupported项，不能计作已审。E135运行验收未通过，当前继续定位ACK/event链路等待并核实媒体重试，不启动30分钟窗口。
 
