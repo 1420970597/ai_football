@@ -15,3 +15,9 @@
 阶段测量（19:38 UTC）：首条自然新帖的scheduler_claim_elapsed_ms=4321.014，provider=4844.482ms，模型调用整体8293.822ms；3秒未达，不把隔离模拟比例套用线上。独立只读八次简单SQL探针，首次连接1220.906ms、首查询620.909ms、后续查询123.493–288.898ms，而该简单语句服务器计时0.004–0.006ms；只能确认这组客户端路径存在开销，不推断全部业务SQL耗时。探针无写入、无配置变更、退出0。
 
 本窗真实新图片已在授权浏览器加载原图并独立查看，确为消除游戏截图，模型结构化输入image_count=1、信号0，未误造比赛推荐。current-vision浏览器退出0，证据.runtime/e173-live/{database-rtt.json,model-timing-counters-mid.json,current-vision.log,output/playwright/current-vision-verification.json,output/playwright/current-vision-original.png}。19:35一次TG状态接口ReadTimeout、下一样本恢复授权连接正常；保留失败，最终官方逐帖核对后再判断是否漏采。
+
+完整观察和官方对账（19:50 UTC）：watch实际1853.801秒、31样本、退出0，业务窗口19:15:52.719331–19:45:52.719331。final-audit.sh退出0，四个信任来源完整扫描15帖（0/15/0/0），missing/no_current均0；交接19:08:26.634472至本窗开始另20帖（19 ready/unresolved、1 unsupported附件），同样缺口0。当前15条最新版本均有任务、模型结果与系统回执，无未完成或失败；逐条复核为闲聊、推广及1张游戏截图，推荐意图样本0，不能宣告赛事/盘口匹配全通过。旧版本b597e804…在编辑后source_edited停止、attempt空、attempts0、信号0，新版本已正常审核；原监测failed=1保留，不误算成当前审核故障。
+
+31次健康及就绪均200；TG授权连接30次，另1次状态读取超时；18样本来源降级、最后成功最大年龄84.151秒。采集日志及API脱敏异常栈确认多个事件、检查点、配置等请求503/TimeoutError，并有一次LockNotAvailableError，不是TG授权失效。尚未定位其最终资源/查询原因，不以重试恢复等同已修复数据库超时。15次provider最短4384.045、最长6417.139、均5104.420ms；发帖至模型结果均49882.711ms，3秒未达。scheduler实际2352.308–8506.985ms，不能以隔离模拟声称线上百分比提速。refresh-final为空，只描述本窗追踪无刷新调用。
+
+证据.runtime/e173-live/{watch-summary.json,official-window-counts.jsonl,comparison-summary.jsonl,audit-window-final.json,window-models-final.json,window-exceptions-final.json,model-timing-counters-final.json,database-errors-late.log}。第一次在final-audit仍运行时读取未生成的三个输出，cat退出1；随后审计实际退出0再读取成功，不将提前读取失败当审计失败。源码及运行配置仍冻结，后续只针对已观察到的数据库/调度耗时继续定位，不能勾选全部正常。
