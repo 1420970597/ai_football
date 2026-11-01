@@ -92,3 +92,15 @@ Hermes v0.22.5 的调度器会按 `supports_parallel_tool_calls` 并发安排同
 
 - 项目测量：`.runtime/expert-zero-20261029/e114/performance-sample.json`；Docker 只读查询运行数据库最近 24 小时追踪。同窗口的早期探索另见`.runtime/expert-zero-20261029/e112/latency-baseline.json`、`latency-tools.json`。浏览器证据为`output/playwright/e112-20261029/live-clicks.json`。
 - Hermes 官方 MCP 配置说明：[MCP servers](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/mcp.md)。并行执行行为：[Agent loop](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/agent-loop.md)。部署镜像固定为 Hermes Agent v0.22.5，运行配置挂载源 `integrations/hermes/config.yaml`。
+
+## 2026-11-01 E165—E170：已实现与新增测量
+
+- 乐鱼配置由事务四次往返改为单语句MVCC快照，版本/密文一致且不缓存秘密。交替各20次只读查询中位数983.301→244.289ms，约减少75.2%；仅配置读取，不是端到端模型时间。
+- 单进程MCP盘口操作共享有界异步准入，等待8秒/最多8个调用，搜索消歧继续并行；不扩大采集器上游并发。实际仍有refresh_timeout/unavailable，不能把HTTP成功叫刷新成功。
+- 最终结论事务在15秒内最多两次恢复，先查同attempt系统回执确认是否已提交，避免短暂结论故障重跑整条模型。持续失败仍进入原重试策略，模型结果本身持久化失败不在此恢复范围。
+- 固定OpenCC单字符唯一映射统一Python与SQL繁简名称；SQL只携带查询相关等价字，不复制完整字表到每行处理。真实俄超回归与线上只读匹配通过，未凭空补地域译名。
+- 真实工具快照238报价中178unsupported改为明确汇总，所有60支持选项保留，缩进JSON118492→40972字符（约-65.4%），避免100K框架溢出；支持盘仍超90000则明确413，旧快照回放不变。不代表已支持单队进球玩法。
+
+联合冻结c1bde70全套1141项481.316秒通过；同一镜像API/worker17:46/17:47生效，双端浏览器/原图通过；17:47:51–18:17:51完整观察仍进行。此前E167四次模型结果provider4.178–252.892秒，3秒未达。当前业务实时窗口实际86400秒，观察统计按原文发布时间，不能把旧原文的新审核记录当新消息。
+
+间歇source/readyz查询超时仍存在。45秒API CPU采样平均单核约3.2%、最高秒28.4%、15/441周期限流，不能据此断言CPU满负荷；不盲目提高配额/超时。SSH传输容器瞬时CPU低，累计流量不是当前吞吐。数据库网络、远端I/O与租约时序仍须继续分段量测；不删历史、不关闭正确性检查来提高数字。
