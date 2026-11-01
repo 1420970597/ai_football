@@ -193,7 +193,8 @@ async def _claim_job(pool):
                 "e.display_nickname,"
                 "s.display_name AS source_name,"
                 "COALESCE((SELECT r.raw_text FROM v2_expert_messages r WHERE r.source_id=m.source_id "
-                "AND r.platform_message_id=m.reply_to_platform_message_id ORDER BY r.revision DESC LIMIT 1),m.reply_context->>'raw_text') AS reply_text "
+                "AND r.platform_message_id=m.reply_to_platform_message_id ORDER BY r.revision DESC LIMIT 1),"
+                "m.reply_context->>'text',m.reply_context->>'raw_text') AS reply_text "
                 "FROM v2_expert_messages m JOIN v2_experts e ON e.id=m.expert_id "
                 "JOIN v2_expert_sources s ON s.id=m.source_id WHERE m.id=$1", row["message_id"],
             )

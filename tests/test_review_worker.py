@@ -54,6 +54,48 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def make_queued(self, attempts=0):
         await self.pool.execute("UPDATE v2_analysis_jobs SET state='queued',attempts=$2,attempt_id=NULL,lease_until=NULL WHERE id=$1", self.job, attempts)
 
+    async def test_claim_preserves_current_and_legacy_reply_snapshot_text(self):
+        for context, expected in [({'text': '珀斯光荣 阿德莱德 全场大0.75'}, '珀斯光荣 阿德莱德 全场大0.75'),
+                                  ({'raw_text': '旧格式全场大2.5'}, '旧格式全场大2.5'),
+                                  ({'text': '当前快照', 'raw_text': '旧快照'}, '当前快照'), ({}, None)]:
+            with self.subTest(context=context):
+                await self.pool.execute('UPDATE v2_expert_messages SET reply_context=$2,reply_to_platform_message_id=$3 WHERE id=$1',
+                                        self.message, context, 'not-in-local-archive')
+                await self.make_queued()
+                job = await worker.claim_job(self.pool)
+                self.assertIsNotNone(job)
+                self.assertEqual(expected, job['message']['reply_text'])
+
+    async def test_local_latest_reply_precedes_snapshot_and_other_source_is_isolated(self):
+        for revision in (1, 2):
+            await self.pool.execute(
+                'INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at,revision) '
+                'VALUES($1,$2,$3,$4,$5,now(),$6)', uuid.uuid4(), self.source, self.expert, 'local-reply',
+                f'本地版本{revision}', revision)
+        other_source, other_expert = await self.add_expert()
+        await self.pool.execute(
+            'INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) '
+            'VALUES($1,$2,$3,$4,$5,now())', uuid.uuid4(), other_source, other_expert, 'cross-source-only', '不可引用其他群')
+        for reply_id, expected in [('local-reply', '本地版本2'), ('cross-source-only', '当前群回复快照')]:
+            await self.pool.execute('UPDATE v2_expert_messages SET reply_to_platform_message_id=$2,reply_context=$3 WHERE id=$1',
+                                    self.message, reply_id, {'text': '当前群回复快照'})
+            await self.make_queued()
+            self.assertEqual(expected, (await worker.claim_job(self.pool))['message']['reply_text'])
+
+    async def test_recovered_reply_reaches_hermes_and_immutable_request_trace(self):
+        reply = '原始回复：Alpha Beta 全场大2.5'
+        await self.pool.execute('UPDATE v2_expert_messages SET reply_context=$2,reply_to_platform_message_id=$3 WHERE id=$1',
+                                self.message, {'text': reply}, 'remote-only-reply')
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        model = AsyncMock(return_value=('未录入', {'content': '未录入'}))
+        with patch.object(worker, 'review_message', model), patch.object(worker, 'delete_session', AsyncMock()):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model='synthetic'), job)
+        self.assertEqual(reply, model.call_args.args[1]['reply_text'])
+        payload = await self.pool.fetchval("SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='hermes_request'", self.job)
+        self.assertEqual(reply, payload['reply_text'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
     async def test_only_one_worker_claims_and_attempt_changes_after_expiry(self):
         await self.make_queued()
         first, second = await asyncio.gather(worker.claim_job(self.pool), worker.claim_job(self.pool))
