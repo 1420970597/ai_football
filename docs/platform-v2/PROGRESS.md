@@ -1,6 +1,6 @@
 # 第二代平台实时进度与验证台账
 
-本轮最新进度：2026-11-01 02:36 UTC。E141 API仍为revision `0f778eb`且健康；NULL赔率错误未复发。E141后仍有间歇性数据库超时：采样日志中`claim_checkpoint`两次、`expire_leases`一次；远端collector对应出现checkpoint 503和同群live事件本地锁等待最高约8.1秒。只读PG采样为1 active、0 lock wait、2 idle-in-transaction、最长事务0.53秒；远端Postgres CPU约4.8%、内存604.5MiB/5.787GiB、主机load 1.22，15次`SELECT 1` p50/p95/max为245.66/287.42/293.19ms，尚无容量/锁等待证据。10分钟内6条ready受信消息均有审核任务、状态unresolved；另7条媒体pending尚未入队（4条2–5分钟、2条超过5分钟、1条不足2分钟，当前皆未提交媒体对象），另3条不支持的音视频未入队；6个来源仅5个租约有效、2个检查点近2分钟更新。当前不满足稳定观察门禁，30分钟观察窗未开始。
+本轮最新进度：2026-11-01 02:38 UTC。E141 API仍为revision `0f778eb`且健康；NULL赔率错误未复发。E141后仍有间歇性数据库超时：采样日志中`claim_checkpoint`两次、`expire_leases`一次；远端collector对应出现checkpoint 503和同群live事件本地锁等待最高约8.1秒。只读PG采样为1 active、0 lock wait、2 idle-in-transaction、最长事务0.53秒；远端Postgres CPU约4.8%、内存604.5MiB/5.787GiB、主机load 1.22，15次`SELECT 1` p50/p95/max为245.66/287.42/293.19ms，尚无容量/锁等待证据。10分钟内6条ready受信消息均有审核任务、状态unresolved；另7条媒体pending尚未入队（4条2–5分钟、2条超过5分钟、1条不足2分钟，当前皆未提交媒体对象），另3条不支持的音视频未入队；6个来源仅5个租约有效、2个检查点近2分钟更新。当前不满足稳定观察门禁，30分钟观察窗未开始。
 
 ### E142 — 移除Telegram live事件冗余checkpoint预检（定向Docker验证通过，冻结全套待执行）
 
@@ -9,8 +9,8 @@
 - 设计决策：live消息及相册展开后直接提交事件，由API事件事务原子验证来源lease；若租约失效，事件写入被拒绝且高水位不前移，周期同步可重新提交。保留历史同步和lease refresh的checkpoint claim，不更改消息幂等、授权作者、图文媒体提交和事件确认约束。
 - 实现动作：移除live handler的checkpoint缓存/预检及其群锁等待；增加慢checkpoint锁不阻塞live事件、live事件不预检及过期owner事件仍拒绝提交的测试。验收场景为同群实时事件可绕过慢checkpoint继续走fenced事件写入，而失效lease不能创建消息或审核任务。
 - 定向Docker验证（02:36 UTC）：`docker run --rm --name ai-football-e142-target-verifier --network none --cpus=.5 --memory=512m --user ... -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/source/services:/source/tests:/source -v "$PWD:/source:ro" -w /source ai-football-verifier:v2.0.0-dev python -m unittest -q tests.test_telegram_collector tests.test_telegram_media_scheduling tests.test_telegram_source_scheduling`退出0，76项、0失败/错误、15.379秒；覆盖live消息绕过慢checkpoint锁、过期owner仍被事件写入拒绝、消息/媒体调度和来源同步。`git diff --check`退出0。两次初始Docker失败原因见下一条记录并已修正。
-- 阶段提交：`4f392cd`（`perf(telegram): avoid live checkpoint preflight`），已本地提交，尚未推送；冻结全套及部署待后续验收。
-- 当前状态/失败处理：代码和测试已写，定向Docker验证通过；提交`4f392cd`已创建，尚未推送、冻结全套或部署。首次受限Docker运行退出1：一项旧测试直接索引实时handler不再创建的群锁并触发`KeyError`；另一个测试模块因容器`PYTHONPATH`未包含`/source/tests`导入失败。第二次运行退出1：62项仅一项错误，另一媒体测试仍访问已移除的`checkpoint_verified_at`字段。修正过期测试状态引用并在通过命令加入`/source/tests`。若冻结套件显示live事件能够绕过API lease fencing或历史checkpoint错过消息，停止候选并修正后重跑原Docker检查；只有冻结全套通过、候选revision核验、queued/running/retry为空及collector lease自然交接后才部署。部署后重新积累稳定健康，再开启30分钟专家发言观察；不回放历史任务、不写生产推荐或订单。
+- 阶段提交与推送：`4f392cd`（`perf(telegram): avoid live checkpoint preflight`）和进度证据`2b51da4`已推送。`git push origin HEAD:refs/heads/fix/TASK-78-hermes-telegram-sync`退出0；`git ls-remote --heads`与本地HEAD均为`2b51da4eabe99e941b805a9f1159fdcbe8f84d21`。冻结全套及部署待后续验收。
+- 当前状态/失败处理：代码和测试已写，定向Docker验证通过；实现提交`4f392cd`及验证记录`2b51da4`已推送，冻结全套或部署尚未通过。首次受限Docker运行退出1：一项旧测试直接索引实时handler不再创建的群锁并触发`KeyError`；另一个测试模块因容器`PYTHONPATH`未包含`/source/tests`导入失败。第二次运行退出1：62项仅一项错误，另一媒体测试仍访问已移除的`checkpoint_verified_at`字段。修正过期测试状态引用并在通过命令加入`/source/tests`。若冻结套件显示live事件能够绕过API lease fencing或历史checkpoint错过消息，停止候选并修正后重跑原Docker检查；只有冻结全套通过、候选revision核验、queued/running/retry为空及collector lease自然交接后才部署。部署后重新积累稳定健康，再开启30分钟专家发言观察；不回放历史任务、不写生产推荐或订单。
 - 只读诊断命令：容器内PG统计与15次往返采样退出0；远端`pg_stat_activity`/`pg_stat_database`退出0；`docker stats`退出0；collector日志只读取得8.1秒同群锁等待与checkpoint/event 503。`pg_stat_statements`未安装，不能按归一化语句归因；一次查询未限定PG分组键退出1、一次远端`psql`使用不存在角色`postgres`退出2，后改用容器配置用户完成只读查询。远端rg不存在的两次统计命令退出127，改在宿主端读取或用Python后完成；一次待处理媒体探针引用不存在的`last_error`列退出1，改用事件表关联统计退出0。以上均未写生产业务数据。
 
 ### E137 — 降低Telegram来源租约写竞争及同群请求排队（冻结Docker验证通过并生效，运行验收失败，后续E138修复中）
