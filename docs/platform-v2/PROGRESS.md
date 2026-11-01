@@ -1,5 +1,9 @@
 # 第二代平台实时进度与验证台账
 
+冻结验证（2026-11-01 08:27 UTC）：E147冻结提交`31a78a961212c8a89281d47b2eb49662e9d713c7`在独立worktree运行`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`退出0，1,043项、失败/错误/跳过均0，终端430.450秒、机器报告432.728秒；`committed_source_verified=true`且source_parent_commit精确匹配。报告`.runtime/e147-20261101-verification/.runtime/test-evidence/3041202/backend-tests.json`；恢复演练46表及媒体盘点差异`{}`。Docker解析报告退出0，关键源码SHA256：ingestion=`9f9190c9f310132137e88ee1ad3dbfc8d8f51e611d2afbb9b0962cc2b7cfeb45`，telegram=`96b2bbdada096ab901e324a3bc946598c0afdfee782fe4c2b4f8e7fce1054df1`，backend=`b21d5a752defe9f9f80fe7d2b6428cad662f2ea33b41eb1918bc62813b4f5277`。规划结构检查46包/341动作/266有证据完成项、diff检查均退出0。当前按同一冻结SHA顺序构建API和collector候选，尚未部署，之后核验镜像摘要、队列门禁与源租约自然交接。
+
+阶段验收（2026-11-01 08:25 UTC）：E145观察器已退出0，实际窗口`07:51:01.811768–08:22:03.580182 UTC`，持续1861.768秒。以该窗口posted_at筛选并取消息最新版本的后续只读复核：31条，其中ready 28、unsupported 3；28条ready均有任务、Hermes结果与系统回执，缺任务/缺结果/缺回执/未完成或失败均0，16条含图片、18张图。结果均为unresolved，0新信号；8次绑定中7次cancelled、1次finished，故整体业务验收**失败**，不能把回执完整等同推荐正确。模型耗时均值20,196ms、范围4,060–72,117ms，发言到结果均值115,608ms，不满足3秒目标。窗口终点仍6源degraded（3 catching_up、1 caught_up、2 reconciliation_deferred），E146尚未部署。证据`.runtime/e145-live/watch.jsonl`、`audit-window-final.json`（审计时读取结果状态，非终点事务快照）。独立600次healthz探针0失败，中位2.69ms、p99 49.56ms、最大86.01ms；存活快不代表数据库与模型快。08:25切换前只读门禁queued/running/retry均0、6个源租约有效，四场目标仍错误cancelled。下一步等待E147冻结全套结束，构建同SHA的API及collector，受控生效后重新观察30分钟；不直接改生产赛事或重放已过期盘口。
+
 ### E147 — 修复错误取消投影阻断真实滚球推荐（代码已写，定向Docker验证通过，冻结全套待验）
 - 目标/责任目录：使没有确认赛果的错误取消投影可以由较新乐鱼事实纠正；责任目录`services/api/`、`tests/`、`docs/`。前置依赖为E145真实消息图片证据、Hermes唯一赛事绑定、当前乐鱼只读协议核验；不依赖E146上线。
 - 当前证据：08:12前后逐条核对Hermes结果发现珀斯光荣对阿德莱德联、墨尔本胜利女足对纽卡斯尔女足、町田对大阪钢巴、大同对阳信台北竞技均已唯一识别并提取盘口，却因数据库phase=cancelled被挡。四场DB均没有`v2_fixture_results`取消/作废/确认记录，match_state='0'、source_updated_at=NULL。08:14前后经现有collector容器读取授权配置，只做四次既有单场详情请求（请求间隔2秒、未登录/续期/写库），四场上游都返回ms=1、mmp=6或7，明确为滚球，含实时计时和比分。所有请求退出0，秘密未输出。
