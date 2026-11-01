@@ -1,5 +1,14 @@
 # 第二代平台实时进度与验证台账
 
+### E152 — 补齐近期回执查询的远端转发契约（2026-11-01 09:58 UTC，研究与设计）
+- 目标/责任目录：让E150来源隔离的只读回执查询真正经过远端部署边界，解除近期扫描403停滞；责任目录infra/remote/、tests/、docs/。依赖已运行的E151 API/collector，不改变令牌、来源租约与API权限。
+- 当前证据：远端collector从09:54:02起重复记录POST /events/receipts 403；实际api_bridge.py的POST白名单仅有events，没有events/receipts。现有真实worker路径契约测试没有调用新增backend.event_receipts，隔离API测试未覆盖远端转发，导致1069项通过仍遗漏部署契约。
+- 设计决策/实现动作：只增加完整固定路径/internal/telegram/events/receipts的POST collector授权；GET/PUT、executor、任意查询、路径变体继续拒绝。增加真实TCP到Unix socket转发测试，并让现有实际backend方法契约覆盖event_receipts，避免新增路径仅在Mock API内通过。源码冻结后Docker定向及完整验证；绑定脚本只同步本项目远端路径，核对哈希后仅重启api-bridge，不更改collector任务、归档游标或交易执行器。
+- 验收场景：正确POST一次原样转发，其余身份/方法/查询/路径在上游调用前拒绝；真实补采不再出现该路径403，两条旧媒体获得正常持久状态；E151现窗口保持完整记录，修复生效后重新完整观察30分钟并官方只读逐编号对账。桌面1440与手机390各五分类当前真实点击均200，DOM与API各50场一致、专家详情打开、0失败，证据.runtime/e151-live/output/playwright/，不扩大为登录账户功能验收。
+- 失败处理：误放其他路径或身份时不发布；真实旧缺口仍未恢复则继续定位，不能因403消失标整体验收；保留已运行失败窗口与所有原文和信号，不手工补写消息。
+
+E151真实生效与重新观察（2026-11-01 09:58 UTC）：最终冻结8da65344bb1e78a99c9a0a0b69f4beaebaa6270f已按顺序更新API、审核工作器及远端collector，Compose退出0。API/worker使用d14ffc80fa993d1ee61deb7f83d4528cfbcc543774dfa84a3f09b79da4b27c21，分别09:52:52.978949/09:53:12.155185启动；collector使用44e72599e78474dad306d2ec18930a6f862ff576de5d74a444c75b4840734545，容器40241b96aaef297638c6aabfc7d0efc60aeff9dd84502512b62d62f7ae37f003于09:53:43.418412 UTC启动。09:53:14只读确认队列与旧来源active lease均0，未强制改库；远端bridge/executor身份和启动时间未变。1800秒只读观察以collector实际StartedAt为下界，实际脚本09:56开始采样，需至少运行至其自身完整1800秒结束；证据.runtime/e151-live/watch.jsonl。09:56初样healthz/readyz200、Telegram connected/authorized=true，但4来源recent_deferred，旧两条媒体仍0记录，不能标恢复成功。活动工作为定位近期补采停滞及真实浏览器复测，最终需固定起止官方只读对账，不把历史原文新落库误记为本窗口新发言；3秒仍未验收。
+
 E151最终冻结通过（2026-11-01 09:50 UTC）：8da65344bb1e78a99c9a0a0b69f4beaebaa6270f独立worktree全套1069项、443.693秒、退出0，失败/错误/跳过均0；报告445.910秒、committed_source_verified=true且SHA一致，恢复46表差异{}。报告.runtime/e151-20261101-verification/.runtime/test-evidence/3246118/backend-tests.json。容器模块哈希与冻结报告五处全部一致：worker=2e5d56cfef5a32a0d63a7a015df913a02f57bc8c3fba2a3c85c8abb44f3d053d，API telegram=22b11324b8d8833c0bd24cbd408e200b4c5ba97573ec23c60374b96872a44a01，collector telegram=b8b0d7117247f7b121b43cface5eb798a953420e1006b31fe90c099f3eca6c55，backend=ddf121b70ee00a2421c33ee141bc051b52d9b53e153b318234ff761e31c0679c，quote_snapshot=ba76acf23b893be0690ea467944f7f0d7f5ee8a91616e192f9c8401ac71ad013。两端Compose config --quiet退出0，候选未生效；09:50:13只读当前queued/retry=0、running=1，等待自然完成后受控交接，不改任务状态或已接受信号。
 
 

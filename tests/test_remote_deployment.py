@@ -192,6 +192,21 @@ class RemoteTransportTests(unittest.TestCase):
         self.assertEqual(403,self.request('PUT',path,token='executor'))
         self.assertEqual(403,self.request('POST',path))
         self.assertEqual(403,self.request('PUT',path+'?arbitrary=true'))
+    def test_event_receipts_forward_exact_post_body_and_remain_collector_only(self):
+        path='/internal/telegram/events/receipts'
+        body=json.dumps({'chat_id':'-1001','owner':'owner','member_message_ids':[11,12]}).encode()
+        self.assertEqual(200,self.request('POST',path,body=body))
+        self.assertEqual([('POST',path,body)],self.upstream.calls)
+        for method,target,token in (
+            ('POST',path,'executor'),('POST',path,'wrong'),
+            ('GET',path,'collector'),('PUT',path,'collector'),
+            ('POST',path+'?limit=100','collector'),
+            ('POST',path+'/','collector'),('POST',path+'/extra','collector'),
+            ('POST',path.replace('receipts','%72eceipts'),'collector'),
+        ):
+            with self.subTest(method=method,target=target,token=token):
+                self.assertEqual(403,self.request(method,target,body=body,token=token))
+        self.assertEqual([('POST',path,body)],self.upstream.calls)
     def test_oversized_body_and_transfer_encoding_rejected_before_upstream(self):
         self.assertEqual(413,self.request('POST','/internal/collector/fixtures',headers={'Content-Length':str(MAX_BODY+1)}))
         self.assertEqual(400,self.request('POST','/internal/collector/fixtures',headers={'Transfer-Encoding':'chunked'}))
@@ -222,6 +237,8 @@ class RealWorkerContractTests(unittest.IsolatedAsyncioTestCase):
             role='executor' if '/executor/' in path else 'collector'
             self.assertTrue(permitted(request.method,path,'Bearer '+TOKENS[role],TOKENS), (request.method,path))
             calls.append((request.method,path))
+            if path == '/internal/telegram/events/receipts':
+                return httpx.Response(200,json={'items':[]})
             return httpx.Response(200,json={'items':{},'accepted':0,'attempt_id':'11111111-1111-1111-1111-111111111111','version':8})
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
             root='http://api-bridge:8081/internal'
@@ -236,6 +253,7 @@ class RealWorkerContractTests(unittest.IsolatedAsyncioTestCase):
             backend=TelegramBackend(client,root+'/telegram')
             await backend.sources();await backend.directory({});await backend.checkpoint('1','owner')
             await backend.advance('1','owner',2,1);await backend.event({});await backend.pending()
+            await backend.event_receipts('1','owner',[1,2])
             await backend.advance_author_backfill('1','owner','7',1,2,False)
             await backend.observed('1','owner');await backend.acknowledge_observed('1','owner',{})
             await backend.save_session('synthetic',{});await backend.media_orphans('owner')
