@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import base64
 import asyncio
 import hashlib
-import hmac
 import json
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +19,7 @@ from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success,
 from ..runtime_settings import runtime_quote_max_age
 from ..quote_observation import confirmation_for
 from ..team_matching import normalize_team_name, team_name_matches, team_search_variants
+from ..review_cursors import encode_cursor, decode_cursor
 
 router = APIRouter(prefix="/internal/mcp")
 _CANDIDATE_JSON = (
@@ -88,23 +87,14 @@ def _key(request: Request) -> bytes:
 
 
 def _cursor(request: Request, review_id, attempt_id, search_key: str, position: int) -> str:
-    body = json.dumps([str(review_id), str(attempt_id), search_key, position], separators=(",", ":")).encode()
-    signature = hmac.new(_key(request), body, hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(body + signature).decode().rstrip("=")
+    return encode_cursor(_key(request), review_id, attempt_id, search_key, position)
 
 
 def _position(request: Request, body: SearchInput, search_key: str) -> int:
     if body.cursor is None:
         return 0
     try:
-        raw = base64.b64decode(body.cursor + "=" * (-len(body.cursor) % 4), altchars=b"-_", validate=True)
-        encoded, signature = raw[:-32], raw[-32:]
-        if not hmac.compare_digest(signature, hmac.new(_key(request), encoded, hashlib.sha256).digest()):
-            raise ValueError
-        review_id, attempt_id, key, position = json.loads(encoded)
-        if (review_id, attempt_id, key) != (str(body.review_id), str(body.attempt_id), search_key) or not isinstance(position, int) or position < 1:
-            raise ValueError
-        return position
+        return decode_cursor(_key(request), body.review_id, body.attempt_id, search_key, body.cursor)
     except (ValueError, TypeError, UnicodeError):
         raise HTTPException(status_code=400, detail="invalid or cross-query cursor") from None
 

@@ -1,4 +1,7 @@
 import asyncio
+import base64
+import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
@@ -368,6 +371,33 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(5, len(second.json()["items"]))
         self.assertIsNone(second.json()["next_cursor"])
         self.assertTrue(second.json()["search_complete"])
+
+    async def test_inflight_legacy_search_continues_with_short_cursor_without_skipping_or_replay(self):
+        for index in range(3):
+            await self.fixture(index)
+
+        def legacy(key, review_id, attempt_id, search_key, position):
+            payload = json.dumps([str(review_id), str(attempt_id), search_key, position], separators=(',', ':')).encode()
+            return base64.urlsafe_b64encode(payload + hmac.new(key, payload, hashlib.sha256).digest()).decode().rstrip('=')
+
+        with patch('app.routes.reviews.encode_cursor', side_effect=legacy):
+            first = await self.post('search_matches', team_query='Alpha', page_size=1)
+        self.assertEqual(200, first.status_code, first.text)
+        old = first.json()['next_cursor']
+        self.assertGreater(len(old), 200)
+        second = await self.post('search_matches', team_query='Alpha', page_size=1, cursor=old)
+        self.assertEqual(200, second.status_code, second.text)
+        short = second.json()['next_cursor']
+        self.assertEqual(57, len(short))
+        replay = await self.post('search_matches', team_query='Alpha', page_size=1, cursor=old)
+        self.assertEqual(409, replay.status_code)
+        third = await self.post('search_matches', team_query='Alpha', page_size=1, cursor=short)
+        self.assertEqual(200, third.status_code, third.text)
+        self.assertTrue(third.json()['search_complete'])
+        self.assertIsNone(third.json()['next_cursor'])
+        items = [item['id'] for response in (first, second, third) for item in response.json()['items']]
+        self.assertEqual({'fixture-0', 'fixture-1', 'fixture-2'}, set(items))
+        self.assertEqual(3, len(items))
 
     async def test_resolution_before_full_pagination_is_rejected(self):
         await self.fixture(1)
