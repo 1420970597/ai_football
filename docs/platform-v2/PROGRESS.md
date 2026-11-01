@@ -1,4 +1,10 @@
 # 第二代平台实时进度与验证台账
+E162安全生效（2026-11-01 13:54 UTC）：E161观察器13:20–13:51:09.767271实际1869.767秒、退出0，官方精确13:20–13:50窗口21条（0/21/0/0），启动段13:16:29–13:20另5条（0/3/2/0），两份对账missing/no_current均0、四来源扫描完整。末审计21记录为9ready/12unsupported，5unresolved/3queued/1running，缺任务/模型结果/回执均0（已完成范围）、尚4项未完成；已有2项真实接受信号。不能以无漏采替代所有审核完成；后续继续核对最终结果。该窗模型已完成5项provider 4359.241–5663.529ms，平均5044.9974ms；发布时间至模型结果均252816.6526ms，3秒未达，部分模型尚运行，统计非完整最终延迟。
+
+13:50:10.905425在未重建worker内取得同键调度咨询锁，仅暂停新领取；13:51:22.105240在途自然排空。13:51:55只读门禁active=0、handoff_locks=1，退出0。API单独Compose up --no-deps --no-build --wait退出0，新容器603218d5b743f6555c3616890e7e8a82abe9d688d071923e88d0efaccc0b98e8，StartedAt 2026-11-01T13:52:01.590067977Z，镜像d7587558c5b3b0e14a5a8606f26be69add9a6b463c5085bf0363b61481f1d792；13:52:14两个API工作进程schema验证就绪，healthy、部署模块断言退出0。随后在worker内创建释放标记，持锁脚本claims_resumed退出0。仅API替换，采集器、worker、MCP、Hermes、web及远端其他服务未重建；无迁移、原文/旧结算改写或订单。Compose追加e162 API覆盖层，旧入口备份.runtime/e162-live/compose-before.sh。
+
+新1440/390真实点击复测正在进行；下一个精确1800秒窗口计划14:00–14:30 UTC，尚未开始。官方对账将另外覆盖13:50:10.905425–14:00领取暂停及API切换段。API启动期间仍出现一次Telegram ingest_event LockNotAvailableError，不能宣称503根因已根除。当前已修复110误取消并有6个真实状态样本；短游标全部隔离通过并上线，真实模型分页样本仍待观察，P41-14保持未完成。
+
 E162冻结全套通过（2026-11-01 13:43 UTC）：b905b28350d4dd0eb15f6542b2cbe5ceacec1358独立干净worktree全套1106项464.745秒、失败/错误/跳过0、退出0；机器467.042秒、committed_source_verified=true，46表恢复清点一致，证据.runtime/e162-work/.runtime/test-evidence/3792237/backend-tests.json。限额API候选sha256:d7587558c5b3b0e14a5a8606f26be69add9a6b463c5085bf0363b61481f1d792、OCI revision同冻结SHA，构建退出0。代码提交已推送核对；一次将worktree路径误当Git引用的ff命令退出1、未变更主分支，改用提交号ff成功，未覆盖工作树。仅候选准备，线上API仍E159，worker E160、collector E161。
 
 补充对照：旧API实际保存的两个expected_cursor用同一只读验证密钥检查均签名有效（cursor-control.json）；损坏游标HMAC无效不是诊断用错配置。E161真实授权上游13:35:37抓到6个110状态，远端已部署解析全部scheduled；随后DB4scheduled/2按更新事实live，均非cancelled（imminent-source.json、imminent-db.json）。这证明110映射已真实生效，但不代表该窗专家全部成功或3秒达标；E161精确窗口13:20–13:50仍须结束后官方对账。
