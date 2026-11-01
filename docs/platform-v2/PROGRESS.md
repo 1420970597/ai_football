@@ -1,5 +1,15 @@
 # 第二代平台实时进度与验证台账
 
+### E146 — 同群复核消息的有界异步提交（设计已记录，隔离实现待进行）
+- 目标/责任目录：降低同群历史复核消息串行提交造成的24秒整批deadline；责任目录`services/collector/`、`tests/`、`docs/`。前置依赖是E145消息键锁已部署、远端单collector实例和同源3条claim上限不变。
+- 当前证据/缺口：E145窗口前12分钟有12次`event_commit` deadline；现实现按3条claim逐项await事件提交，一条慢请求占用后续消息预算。API有独立数据库命令超时，但资源采样低，不能用增大超时掩盖。E145观察窗仍进行，不在窗口中切换代码。
+- 设计决策：每群复核提交最多2路，既有同时3群上限不变，HTTP连接总上限8不变；同消息仍经E145消息锁串行。每个item独立保存submission、applied、acknowledged状态，只有durable ACK成功后才从pending移除；409失效claim可移除但报告延期。外部取消或任一非预期错误时取消并await所有本批子任务，禁止留下后台写操作。实体/消息获取必须全批成功后才能产生删除事实。
+- 实现动作：拆出单claim提交与确认步骤，批内以最多2个asyncio任务处理，不创建线程访问Telegram会话；增加慢提交重叠、并发上限、成功项不因相邻失败重放、取消保留未知提交原始payload、恢复最终只确认一次的行为测试。保留24秒总预算、30秒远端claim lease、来源授权和事件幂等规则。
+- 验收场景：新增定向Docker回归与现有Telegram调度/数据库claim契约通过，冻结Docker全套通过；E145完整观察后若来源仍degraded则只切换collector，核对bridge/executor未动，再从新生效时间等待30分钟；当前ready消息结果/回执完整，错误录入0，event_commit deadline和复核积压趋势据实报告。
+- 失败处理：并行出现claim丢失、孤立任务、越权、取消后继续写或现有幂等测试失败时恢复该验收未完成并修复重跑；若并发放大503则停止切换并定位请求/数据库争用，不能提高连接池或超时来掩盖。来源或上游门禁未过时继续问题定位，不标完整正常。
+
+阶段研究（2026-11-01 08:05 UTC）：E145观察窗进行中，最新2条ready图文消息均有Hermes结果与系统回执，0缺任务/缺结果/缺回执；一条为非足球赛马单，一条为已完场足球赛果回顾，后者唯一识别比赛但无新增推荐意图，两者未录入符合原文证据。一个尝试在模型发送前TimeoutError，重试后完成；窗口当前未完成项0。新采集器日志截至约08:03有12次复核`event_commit` deadline、1次媒体批次deadline、4次Telegram backend HTTPStatusError，无整体sync timeout。PG于07:57:56的锁超时语句是审核heartbeat的job lease UPDATE，不是Telegram消息advisory锁；API未再见同消息锁冲突。60组并行只读测量：healthz中位3.65ms/p95 28.6/max69，readyz中位471.95ms/p95 593.6/max1828.8，DB `SELECT 1`中位225.05ms/p95 280.3/max515.6，均0失败。远端PostgreSQL CPU约0.64%，本机API约1.27%，当前没有整体CPU饱和证据。下一步保持窗口至完整30分钟，研究把同源3条复核的串行事件提交改为最多2路异步处理；保留原claim、原子ACK、失败/取消恢复和24秒预算，不修改正在验收的部署快照。该方向需先验证并发不会漏ACK、越权或留下后台写任务；尚未实施。
+
 阶段更新（2026-11-01 07:55 UTC）：E145于07:51:01.811768 UTC实际生效，collector容器`f8742e547eb5611cdd2eb5bffb077c8fdce08c9b98f1f9cfb134223e483951ea`运行候选image ID/revision，Compose仅`up -d --wait --wait-timeout 120 --no-deps --no-build --pull never collector`退出0。启动前只读查询active来源租约0；bridge和executor的ID、image、StartedAt均与切换前一致。1800秒只读观察器以该启动时间为窗口起点，日志`.runtime/e145-live/watch.jsonl`；前三分钟无本窗口专家新发言。Telegram随后connected/authorized=true，来源3 catching_up、1 caught_up、2 reconciliation_deferred，仍degraded；API healthz/readyz均200。启动期API配置读取、续期配置、赛程写入和执行器分派各有命令超时，故整体健康未通过。当前赛前/滚球68,386条active报价抽样没有15秒内新鲜报价；不能仅由模型未录入推出识别错误。接下来保持完整30分钟窗口，逐条审核新发言及媒体，并对API存活/就绪/数据库读延迟做并行只读对照，不放宽超时或价格新鲜度门禁。
 
 阶段更新（2026-11-01 07:49 UTC）：E145冻结全套`sh infra/test/run.sh`退出0，1,037项、失败/错误/跳过0；终端444.931秒，报告447.232秒，报告`.runtime/e145-20261101-verification/.runtime/test-evidence/2696557/backend-tests.json`确认`committed_source_verified=true`和提交`bc006f857644c7a44200dfa91bf6442b3f17cc3e`。collector backend源码SHA=`b21d5a752defe9f9f80fe7d2b6428cad662f2ea33b41eb1918bc62813b4f5277`，镜像内模块导入通过且哈希相同。BuildKit使用既有限额0.5 CPU/384 MiB，构建`ai-football-collector:2.0.0-dev-e145-bc006f8`退出0，image ID=`sha256:d7797ad162c8bc067f93b23069765f8792ce91eaa2b21e4789a4c101c3e4eeff`，revision与冻结提交相同；SSH Docker流导入远端退出0，远端镜像及Compose配置核验通过。部署前审核队列为空，07:48:56 UTC仅停止旧collector，等待来源租约自然到期；07:49:03仍6个active，最晚到期07:50:18.699521 UTC，候选尚未启动。初次冻结路径检查使用相对根目录导致退出1；报告初次读取因宿主无jq退出127，改Docker内JSON解析退出0；远端inspect首次引用不存在Health字段退出1，移除可选字段后退出0；均未写业务数据。下一步租约排空后仅启动collector，核验未重启bridge/executor，再开始30分钟窗口。
