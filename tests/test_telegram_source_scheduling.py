@@ -376,5 +376,55 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1,len(self.backend.observation_calls))
         self.assertEqual(1,len(self.backend.events))
 
+    async def test_long_flood_backoff_renews_database_lease_for_live_events(self):
+        database_clock=[0.0]
+        lease_until=[0.0]
+        claim=self.backend.checkpoint
+        event=self.backend.event
+        async def renew(chat,owner):
+            result=await claim(chat,owner)
+            lease_until[0]=database_clock[0]+90
+            return result
+        async def leased_event(body):
+            if database_clock[0]>=lease_until[0]:
+                raise RuntimeError('lease_inactive')
+            return await event(body)
+        self.backend.checkpoint=renew
+        self.backend.event=leased_event
+        self.client.messages['-1001']=[Message(1)]
+        self.queue('-1001',[[1]])
+        reads=[]
+        async def flood(*_,**__):
+            reads.append(True)
+            raise FloodWaitError(None,capture=180)
+        self.client.get_messages=flood
+        first=await self.collector.sync_once()
+        self.assertEqual('flood_wait',first['sources']['-1001']['state'])
+        calls=len(self.backend.claims)
+        database_clock[0]=120
+        second=await self.collector.sync_once()
+        self.assertEqual('backoff',second['sources']['-1001']['state'])
+        self.assertEqual(calls+1,len(self.backend.claims))
+        self.assertEqual([True],reads,'official history RPC must remain paused')
+        await self.collector._live_messages('-1001',[Message(99,text='退避期间实时原文')])
+        self.assertTrue(any(row['platform_message_id']=='99' for row in self.backend.calls))
+        self.assertEqual(1,self.backend.positions['-1001'],'lease renewal must not advance history')
+        self.assertEqual(1,len(self.collector.reconcile_pending['-1001']))
+
+    async def test_backoff_lease_failure_is_reported_without_telegram_retry(self):
+        import time
+        self.collector.retry_at['-1001']=time.monotonic()+180
+        async def unavailable(*_,**__):
+            raise ConnectionError('isolated database unavailable')
+        self.backend.checkpoint=unavailable
+        result=await self.collector.sync_once()
+        row=result['sources']['-1001']
+        self.assertEqual('lease_deferred',row['state'])
+        self.assertEqual('backoff',row['history_state'])
+        self.assertEqual('deferred',row['lease_state'])
+        self.assertEqual('ConnectionError',row['lease_error'])
+        self.assertEqual([],self.client.query_limits)
+        self.assertEqual([],self.backend.calls)
+
 
 if __name__=='__main__':unittest.main()

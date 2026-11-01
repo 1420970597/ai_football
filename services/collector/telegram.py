@@ -477,8 +477,8 @@ class TelegramCollector:
         # Refresh before the separate media budget so their 90-second remote
         # leases do not expire during another source's transfer work.
         async def keep_lease(chat_id):
-            if result[chat_id]['state'] in {'backoff', 'flood_wait'}:
-                return
+            # Telegram's history backoff does not suspend live updates. Renew
+            # the database lease even while Telegram RPCs must remain paused.
             try:
                 async with gate:
                     async with asyncio.timeout(SOURCE_LEASE_REFRESH_SECONDS):
@@ -487,7 +487,7 @@ class TelegramCollector:
             except Exception as exc:
                 result[chat_id]['lease_state'] = 'deferred'
                 result[chat_id]['lease_error'] = type(exc).__name__
-                if result[chat_id]['state'] in {'caught_up', 'catching_up'}:
+                if result[chat_id]['state'] in {'caught_up', 'catching_up', 'backoff', 'flood_wait'}:
                     result[chat_id]['history_state'] = result[chat_id]['state']
                     result[chat_id]['state'] = 'lease_deferred'
         await asyncio.gather(*(keep_lease(chat_id) for chat_id in result))

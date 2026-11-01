@@ -1,5 +1,12 @@
 # 第二代平台实时进度与验证台账
 
+### E153 — Telegram限流退避期间继续维护持久化租约（2026-11-01 10:14 UTC，研究与设计）
+- 目标/责任目录：官方历史读取限流时继续接受已授权实时推送，避免等待超过90秒后数据库lease_inactive引入新的漏存；责任目录services/collector/、tests/、docs/。依赖E152转发规则已生效，保持官方FloodWait等待、不增加Telegram请求或改变群组信任。
+- 当前证据：E152转发后近期查询不再403，多个来源返回flood_wait；sync_once末尾keep_lease对backoff/flood_wait直接return，_sync_source同样在领取前返回backoff，持续退避期间没有正常来源续期。10:12:39只读当前6租约仍有效，因此这是已确认代码路径缺陷，不能把当前样本写成已经全部过期。现有FloodWait测试仅30秒，不覆盖90秒租约边界。
+- 设计决策/实现动作：删除末尾续期对两种退避状态的跳过；续期只调用现有认证API领取数据库租约，不调用Telegram，不推进检查点。保留群锁、有界续期、所有权校验及退避状态；续期失败必须显示lease_deferred而不伪装健康。新增180秒FloodWait、模拟数据库时钟跨越90秒、下一轮续期后正常实时推送的行为回归，并覆盖续期失败可见。
+- 验收场景：退避中无额外历史/媒体RPC，数据库租约得到正常延长、真实推送可持久；错误所有权/续期异常不抹去退避证据。冻结定向及全套通过后受控仅更新collector，不重置任务或归档数据；重新完整30分钟对账，保留本轮限流记录。
+- 失败处理：出现绕过FloodWait、推进归档游标、伪造所有权或静默续期失败则不发布；真实旧媒体仍缺仍继续查因。E152真实浏览器登录双端完整脚本退出0，五分类、原文/模型回执、两条历史真实结算及180天Cookie通过，证据.runtime/e152-live/output/playwright/live-clicks.json；不以这些老结算证明新信号已经结算。
+
 E152冻结通过及真实生效（2026-11-01 10:08 UTC）：独立a0b52549865b57d835d088986d444bc253a37fb7全套1070项、447.359秒、退出0，失败/错误/跳过0；报告449.777秒、committed_source_verified=true、源码一致，恢复46表差异{}。报告.runtime/e152-20261101-verification/.runtime/test-evidence/3288044/backend-tests.json；bridge源码SHA256=150d274aaede10f3e6709ff57da227eecd3142c21c06c404e501be8421a7f329，测试=9e5eb4a2d66b428454f1d0f21f1f0a94af05a84f4a50f88264ad4eaa99990033。远端先核旧哈希、备份.runtime/e152-20261101/api_bridge.before.py、原位写入固定挂载文件、容器内验证哈希及compile，再仅docker restart -t10 api-bridge退出0；原bridge ID与镜像保持，StartedAt=10:08:16.652760 UTC，collector和executor的ID/镜像/启动时间未变。本修复为显式bind脚本更新，不声称bridge旧镜像本身包含新源码。新1800秒只读watch已从该生效时间启动，证据.runtime/e152-live/watch.jsonl；E151旧观察因已发现403不能作为通过窗口。下一步核旧两条媒体正常恢复、403消失及完整新30分钟逐编号审核对照；未改变已存消息、归档游标、信号或交易许可。
 
 E152实现冻结（2026-11-01 10:01 UTC）：固定POST回执路径及实际backend契约调用已修复；Docker命令`python -m unittest test_remote_deployment -q`运行22项、7.973秒、退出0，含真实TCP/Unix转发、原样正文、错误身份与方法/查询/编码路径变体拒绝。源码a0b52549865b57d835d088986d444bc253a37fb7已提交推送并以远端ref确认；独立干净worktree.runtime/e152-20261101-verification运行`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`，日志.runtime/e152-live/full-suite.log，未结束前不标通过。规划检查46包/346动作/265有证据完成项、diff退出0；原E151窗口继续采样但已因真实403判不能验收，新规则尚未生效。10:00:49只读回复输入探针新运行样本0，不把隔离回复测试冒充真实模型输入成功。Python/HTTPX/PostgreSQL官方文档合并访问再次502，未根据失败访问补写外部结论。
