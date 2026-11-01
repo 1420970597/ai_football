@@ -1,4 +1,8 @@
 # 第二代平台实时进度与验证台账
+E162冻结全套通过（2026-11-01 13:43 UTC）：b905b28350d4dd0eb15f6542b2cbe5ceacec1358独立干净worktree全套1106项464.745秒、失败/错误/跳过0、退出0；机器467.042秒、committed_source_verified=true，46表恢复清点一致，证据.runtime/e162-work/.runtime/test-evidence/3792237/backend-tests.json。限额API候选sha256:d7587558c5b3b0e14a5a8606f26be69add9a6b463c5085bf0363b61481f1d792、OCI revision同冻结SHA，构建退出0。代码提交已推送核对；一次将worktree路径误当Git引用的ff命令退出1、未变更主分支，改用提交号ff成功，未覆盖工作树。仅候选准备，线上API仍E159，worker E160、collector E161。
+
+补充对照：旧API实际保存的两个expected_cursor用同一只读验证密钥检查均签名有效（cursor-control.json）；损坏游标HMAC无效不是诊断用错配置。E161真实授权上游13:35:37抓到6个110状态，远端已部署解析全部scheduled；随后DB4scheduled/2按更新事实live，均非cancelled（imminent-source.json、imminent-db.json）。这证明110映射已真实生效，但不代表该窗专家全部成功或3秒达标；E161精确窗口13:20–13:50仍须结束后官方对账。
+
 E162代码及定向验证完成（2026-11-01 13:34 UTC）：独立worktree实现c2短游标，8字节位置及完整32字节HMAC，57字符；原246字符样本缩短约77%，只代表编码长度，不代表延迟改善。签名绑定版本、任务、尝试和查询摘要，仍精确校验expected_cursor，不添加任何跳页/无签名捷径。保持旧格式解码兼容并拒绝非规范编码及非正/超范围位置。首轮65项97.369秒退出0；补充真实临时PG旧页→新页升级、不重不漏及旧页重放409后，28项29.984秒退出0，失败/错误/跳过0。六项新单元加一项真实PG升级行为；运行时未修改被测代码。接下来冻结全套，线上仍E161原API，13:20–13:50观察继续。
 
 E161额外定位：赫塔费原帖13:25:11产生真正新的Telegram edit时间，旧审核source_edited终止；对照事件仅source_version_at/version_key变化，原文、回复及图片一致，新revision3已自动入审核且running，未丢版本。不会为延续旧任务去改编辑时间或取消校验。HTTP/DB并发只读180样本均0错误/非200：healthz中位3.616/max66.175ms，readyz中位444.482/max2102.636ms，独立SELECT1中位192.2125/max927.244ms；在该约6分钟段未观测到持续API事件循环卡死，不能据此把其他时段503归咎CPU或宣称已解决。
