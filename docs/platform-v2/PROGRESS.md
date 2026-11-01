@@ -1,5 +1,9 @@
 # 第二代平台实时进度与验证台账
 
+E160已生效及最终观察开始（2026-11-01 12:42 UTC）：原审核12:39:59自然排空，12:40:43只读门禁active=0、同项目调度持锁=1（handoff-gate.json）；仅停止并重建review-worker，Compose日志Stopped/Recreated/Started、整体退出0。新容器c1ad916c6bef6f4d77296c911fc35a77386ca3fd7e3a006fd7fd16b265a91fa0，StartedAt 2026-11-01T12:41:04.630651014Z，镜像f9f313f74b0af880773eaccef41542be81d36c5b95200d250542242c16f2a83b、revision92e5037；模块断言新恢复次数2、退出0。12:41:11数据库就绪、12:41:13通知监听连通，释放标记及咨询锁释放均完成，持锁脚本退出0。采集器、API、MCP、Hermes、web、bridge、executor均未重建；没有停采缺口、数据库迁移、旧记录改写或订单。受保护Compose入口仅追加e160 worker覆盖层，旧入口已在.runtime/e160-live/compose-before.sh备份。
+
+新完整精确1800秒窗口12:42:00–13:12:00 UTC已启动（.runtime/e160-live/watch.jsonl），完成后须官方四来源逐编号及模型/回执对照；真实1440/390点击脚本同步重新执行，尚未结束。主要待验：自动恢复实际触发、后续有效报价录入及最终未解决原因；无真实新增对应场景时如实记录样本不足，不用强制录入或恢复次数配置充当成功。已证明3秒未达、未知滚球结算口径及回复图片输入缺口继续保持未完成。
+
 E160完整冻结通过与无停采交接（2026-11-01 12:40 UTC）：92e50373eb819c68d3ed69a74421100e97d92689已推送并核对远端。独立干净worktree执行BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh退出0：1097项459.706秒、失败/错误/跳过0；机器报告461.937秒、committed_source_verified=true、46表恢复差异{}，证据.runtime/e160-20261101-verification/.runtime/test-evidence/3644151/backend-tests.json。首次创建worktree前误设尚不存在的cwd，进程未启动；随后顺序创建再运行成功，未把启动错误当测试失败或通过。限额镜像构建及无网络worker导入退出0，镜像sha256:f9f313f74b0af880773eaccef41542be81d36c5b95200d250542242c16f2a83b、OCI revision同冻结SHA；API路由、collector、MCP、Hermes与web相对E159源码diff --quiet退出0。候选Compose静默核验退出0，只覆盖review-worker镜像。
 
 为避免重现10分钟TG停采，交接使用现有公平调度同键的有界会话咨询锁，仅暂停新审核领取，采集及在途心跳继续；不修改任务状态、来源租约或原始台账。第一次锁忙安全退出1、未取得锁、未部署；增加最多30秒等待后12:38:57.237230成功持锁，尚有1项在途审核自然处理。持锁上限600秒，释放/断连即恢复调度；必须核验当前持锁且有效running=0才停旧worker并启动新镜像，随后释放锁。运行报价最大年龄只读核验为15秒，保持原值；不会为验收放宽。部署尚未结束，之后从释放时刻重计完整30分钟并官方逐编号对照。
