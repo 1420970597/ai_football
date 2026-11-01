@@ -1,5 +1,13 @@
 # 第二代平台实时进度与验证台账
 
+### E159 — 最终候选统一生效与新完整观察（2026-11-01 11:48 UTC）
+- 当前目标：在新报价复核、完整盘口压缩和近期相册复用统一生效后，完成真实双端点击及精确1800秒官方消息对账；不能以健康端点或单元测试替代专家链路验收。
+- 源码与验证：de1f1174c7795a471f954d7a51fb0b684aaed01c已推送并核对远端引用。E159只改MCP描述及Hermes项目/技能说明；与1088项全部通过的E158相比，API、collector、tests、infra/test源码diff --quiet退出0。E159独立定向18项1.697秒、失败/错误/跳过0、退出0（.runtime/e159-live/target.log），不声称在E159重跑全部1088项。受控系统提示、四工具白名单、提供方与模型配置未改。
+- 交接：11:31停止collector后等待旧审核自然排空，11:38:28队列及有效来源租约均0；随后停止worker，工作树快进、新API/MCP就绪、Hermes重建并健康、新worker启动，最后远端collector启动于11:41:16.261559005Z。没有取消旧审核、迁移/重置数据库、修改旧台账或真实下单；11:31–11:41维护缺口列入最终消息对账。Docker/Compose部署分别退出0，原受保护配置备份并只替换collector镜像引用。Hermes被Compose重新创建，不能记为同一容器仅重启；其固定镜像和配置未变。
+- 最终镜像：API/worker sha256:fe41666861f2687d3840918744c6a1725029b587d057366b058d13c9c8d8dffa；MCP sha256:cb193415fcf8f33f74aa1765af2515dbf98e93fdc43876f779b5135f6d17f151；collector sha256:be086ffa0748b3cae77bc08ae6d699e18066e0de729bb8e71d0fb6ce6b596efe，OCI revision均de1f117。身份及部署证据.runtime/e159-live/local-identities.txt、remote-deploy.log；web、bridge、executor未改。
+- 真实验证：完整点击与原图脚本均退出0；1440/390两端5种比赛状态各50场DOM/API集合一致，管理员UI登录、180天Strict/HttpOnly Cookie、原文/模型/系统回执、既有两条真实结算展示及已完场不新建信号通过；原图缩略图与完整图片实际加载成功、页面错误0。证据.runtime/e159-live/output/playwright/live-clicks.json及media-clicks.json。认证MCP tools/list精确四工具、新报价说明加载及API存活/就绪/Hermes健康均200，断言退出0（mcp-contract.json）。历史结算样本不等于所有待结算口径已解决。
+- 活动与依赖：11:41:16.261559–12:11:16.261559 UTC完整观察正在执行（watch.jsonl），实际结束需约12:12；之后用官方授权客户端只读逐编号对照四受信来源，并审查完成审核的模型结果、系统回执和新增信号。已出现一次events 503及近期扫描TimeoutError，不能判整窗通过；继续只读DB等待采样定位。3秒指标尚未达，滚球结算口径未知及回复图片完整输入仍是已知缺口，不编造成功证据。
+
 E158最终冻结及E156完整复核（2026-11-01 11:29 UTC）：最终合并0c2bee9183e2bb5781f46478e7a7e8ebf6d939cd独立干净worktree全套1088项443.058秒、失败/错误/跳过0、退出0，恢复46表差异{}，证据.runtime/e158-20261101-verification/.runtime/test-evidence/3486054/backend-tests.json；E157中间全套1084项446.845秒亦退出0，证据.runtime/e157-20261101-verification/.runtime/test-evidence/3466297。API/collector镜像1a4914e1af70d54046aa2139605a6543809acc1bf4bf769bacf5c87852e25a97 /445ddf133516f88c7d9367a7b496c772c1472cd8ad71d870c8cf751f2d1ba31a均同冻结revision，模块导入/摘要核验、本机Compose、远端加载及候选静默配置均退出0。尚未生效。
 
 E156观察实际1854.710秒，10:55:31.888961–11:26:26.598833；官方逐编号对账使用其中精确1800秒窗10:55:31.888961–11:25:31.888961，4来源均完整读完，0/45/4/2条，共51条、missing=0，命令退出0（.runtime/e156-live/tg-window-actual.json、tg-window-db-comparison.json）。相册合并及最新修订后50条，33ready/17unsupported；25项完成均有模型结果及系统回执，2succeeded、23unresolved、8queued/running，缺审核任务/结果/回执均0。2项真实接受信号；模型3981.6–502354.181ms、均值88883.109ms，发布时间至模型结果均值527600.062ms，3秒严重未达。watch中的failed=1经只读核对是source_edited旧版本、attempts=0，不是当前版本模型失败。期间有GetMessages限流、数据库503及一次readyz ReadTimeout，故不是整体验收通过。旧四条missing=0、JPEG准确视觉抽取但恢复时已完场，WebM明确unsupported；不强制回绑历史盘口。
