@@ -112,3 +112,5 @@ Hermes v0.22.5 的调度器会按 `supports_parallel_tool_calls` 并发安排同
 当前SYSTEM_PROMPT要求先调用expert-review技能，用户内容封套也要求使用技能；自然无意图消息的最终回复往往反复解释无球队、无盘口以及未调用哪些工具。这是可继续研究的框架轮次与输出成本，不能只优化SQL。实际镜像源码agent/skill_commands.py:resolve_auto_load_skills/build_auto_load_prompt和agent/system_prompt.py:_auto_load_parts支持skills.auto_load：在Agent生命周期首次构建时装载固定技能并保持前缀稳定，只有技能工具集存在且不跳过上下文时启用。该能力是源码核验，尚未启用、未测延迟，不能声称已减少一次调用。若后续实现，需证明固定技能原文实际进入框架上下文、配置版本/哈希随尝试可追溯、缺失或禁用时失败可见，且原MCP白名单/连续分页/精确录入/视觉和注入防护不变；须用固定框架真实隔离测试对比轮次、输入输出tokens和耗时，再真实观察，不靠删除审核证据提速。
 
 E174仅合并领取SQL往返，完整1151项通过、20:07安全生效，20:08:09–20:38:09完整观察进行中。新研究不在该冻结版本内，不因发现新方向中断当前验收。
+
+20:18实际固定框架函数探针：Docker内build_auto_load_prompt仅在本次函数参数传入skills.auto_load=[expert-review]，返回loaded唯一该技能/missing空、提示2756字符，包含倍率不比较/连续游标/录入规则；未改运行配置、未调用模型。证据.runtime/e174-live/preload-function-probe.json；只证明加载函数可用，未证明API完整上下文或性能收益。E173十五个真实审核的session累计usage：prompt最小15087、最大17328、均15270.733tokens；completion269–513、均401.933tokens。这些均为完整session合计，不能除以未经记录的轮数声称单轮大小，证据.runtime/e173-live/{model-usage.json,model-usage-summary.json}。
