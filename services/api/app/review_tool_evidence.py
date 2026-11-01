@@ -37,6 +37,13 @@ QUOTE_FIELDS = frozenset({
     'source_updated_at', 'received_at', 'source_time_quality', 'status', 'play_id', 'market_instance_id',
     'selection_id', 'is_main', 'score_basis', 'quote_id', 'fresh', 'confirmed_current', 'can_record',
 })
+# Native lookup identifiers and receipt metadata remain in the database/read
+# evidence; the model identifies each complete option by quote_id. Keep the
+# legacy allowlist above for exact replay of already-saved tool responses.
+MODEL_QUOTE_FIELDS = QUOTE_FIELDS - {
+    'id', 'fixture_id', 'play_id', 'market_instance_id', 'selection_id',
+    'received_at', 'source_time_quality',
+}
 ACCEPTED_FIELDS = frozenset({'index', 'signal_id', 'duplicate', 'fixture_id', 'market_name', 'period', 'line', 'selection', 'price'})
 REJECTED_FIELDS = frozenset({'index', 'reason'})
 log = logging.getLogger(__name__)
@@ -50,7 +57,7 @@ def _project(value, fields):
     return {key: value[key] for key in fields if key in value}
 
 
-def snapshot_result(kind, result):
+def snapshot_result(kind, result, *, compact_markets=False):
     """Only these declared tool fields can reach either the model or evidence."""
     if kind == 'mcp_search_matches':
         if len(result['items']) > 100:
@@ -65,7 +72,8 @@ def snapshot_result(kind, result):
         if len(result['markets']) > MAX_MARKETS:
             _budget_error()
         value = {'fixture': _project(result['fixture'], FIXTURE_FIELDS),
-                 'markets': [_project(item, QUOTE_FIELDS) for item in result['markets']],
+                 'markets': [_project(item, MODEL_QUOTE_FIELDS if compact_markets else QUOTE_FIELDS)
+                             for item in result['markets']],
                  'refresh': _project(result['refresh'], {'attempted', 'accepted', 'reason'})}
     elif kind == 'mcp_record_expert_signals':
         if len(result['accepted']) + len(result['rejected']) > 32:
@@ -205,7 +213,7 @@ async def tool_success(conn, body, result, summary):
     current = _current.get()
     if current is None:
         raise RuntimeError('review tool evidence context is missing')
-    wire = snapshot_result(current.kind, result)
+    wire = snapshot_result(current.kind, result, compact_markets=True)
     manifest, chunks = encode_snapshot(wire)
     job = await active_tool_job(conn, body.review_id, body.attempt_id)
     context = await _context(conn, body, job)

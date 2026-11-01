@@ -522,7 +522,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         await self.resolve(key)
         quote = await self.read_market(fixture_id)
         await self.pool.execute("UPDATE v2_fixtures SET phase='live',home_score=1,away_score=0 WHERE id=$1", fixture_id)
-        response = await self.post('record_expert_signals', signals=[{'fixture_id':fixture_id, 'quote_id':quote['id'], 'evidence_text':'Alpha over'}])
+        response = await self.post('record_expert_signals', signals=[{'fixture_id':fixture_id, 'quote_id':quote['quote_id'], 'evidence_text':'Alpha over'}])
         self.assertEqual(200, response.status_code, response.text)
         self.assertEqual('quote_or_score_context_changed', response.json()['rejected'][0]['reason'])
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))

@@ -24,6 +24,37 @@ from tests import test_mcp_transport as mcp_fixtures
 
 
 class ToolSnapshotUnitTests(unittest.TestCase):
+    def test_compact_market_keeps_every_option_and_trading_semantics(self):
+        quote={'id':'native-id','fixture_id':'fixture','quote_id':'model-id',
+               'play_id':'protocol-play','market_instance_id':'protocol-instance','selection_id':'protocol-option',
+               'received_at':'receipt','source_time_quality':'observed',
+               'market_id':'totals','market_name':'上半场大小附加盘','period':'first_half','market_kind':'totals',
+               'line':'0.750','selection':'over','price':'1.76000','status':'active','is_main':False,
+               'score_basis':'remaining','source_updated_at':'2026-11-01T10:00:00Z',
+               'fresh':False,'confirmed_current':True,'can_record':True}
+        source={'fixture':{'id':'fixture'},'markets':[quote,quote|{'quote_id':'second','selection':'under'}],
+                'refresh':{'attempted':True,'accepted':True,'reason':'refresh_completed'}}
+        compact=snapshot_result('mcp_list_match_markets',source,compact_markets=True)
+        self.assertEqual(['model-id','second'],[row['quote_id'] for row in compact['markets']])
+        for original,projected in zip(source['markets'],compact['markets']):
+            self.assertEqual({key:original[key] for key in review_tool_evidence.MODEL_QUOTE_FIELDS},projected)
+        self.assertLess(len(json.dumps(compact)),len(json.dumps(source)))
+        self.assertIn('play_id',source['markets'][0],'input evidence must remain untouched')
+        legacy=snapshot_result('mcp_list_match_markets',source)
+        self.assertEqual(source,legacy,'legacy response replay keeps every declared field')
+
+    def test_legacy_market_snapshot_replay_does_not_apply_new_compaction(self):
+        original={'fixture':{'id':'fixture'},'markets':[{'id':'old-id','quote_id':'old-id','fixture_id':'fixture',
+                  'play_id':'old-play','market_instance_id':'old-instance','selection_id':'old-option',
+                  'received_at':'original-receipt','source_time_quality':'original-quality'}],
+                  'refresh':{'attempted':False}}
+        manifest,blocks=encode_snapshot(original)
+        manifest['call_id']='original-call'
+        chunks=[{'call_id':'original-call','snapshot_sha256':manifest['sha256'],
+                 'chunk_index':i,'data_base64':block} for i,block in enumerate(blocks)]
+        replayed=snapshot_result('mcp_list_match_markets',replay_snapshot(manifest,chunks))
+        self.assertEqual(original,replayed)
+
     def test_snapshot_replay_requires_all_exact_chunks_and_hash(self):
         value = {'items': [{'home_team': '长球队名' * 3000}], 'complete': True}
         manifest, blocks = encode_snapshot(value)
@@ -304,6 +335,7 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, response.status_code, response.text)
         data = response.json()
         self.assertEqual(61, len(data['markets']))
+        self.assertTrue(all(set(item)==review_tool_evidence.MODEL_QUOTE_FIELDS for item in data['markets']))
         self.assertNotIn('private_headers', data['markets'][0])
         payload, replayed = await self.replay('mcp_list_match_markets')
         self.assertEqual(data, replayed)
