@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -51,6 +52,10 @@ RECONCILE_BATCH_SECONDS = 24
 RECONCILE_RPC_SECONDS = 3
 RECONCILE_EVENT_LIMIT = 3
 RECONCILE_COMMIT_CONCURRENCY = 2
+RECENT_HISTORY_SECONDS = 8
+RECENT_HISTORY_LOOKBACK_SECONDS = 3600
+RECENT_HISTORY_PAGE_SIZE = 100
+RECENT_HISTORY_RECEIPTS = 2048
 RECONCILE_ID_LIMIT = 100
 MEDIA_CLEANUP_SECONDS = 5
 SOURCE_LEASE_REFRESH_SECONDS = 3
@@ -144,6 +149,7 @@ class TelegramCollector:
         self.directory_retry_at: dict[str, float] = {}
         self.directory_trusted: dict[str, tuple] = {}
         self.reconcile_pending: dict[str, list[dict]] = {}
+        self.recent_recovery: dict[str, dict] = {}
         self.control_server = None
         self.auth_client = None
         self.auth_task = None
@@ -313,6 +319,7 @@ class TelegramCollector:
             self.directory_retry_at.clear()
             self.directory_trusted.clear()
             self.reconcile_pending.clear()
+            self.recent_recovery.clear()
             self.invalid_session_fingerprint = None
             self._verified_identity = None
             self._rejected_identity_binding = None
@@ -431,6 +438,7 @@ class TelegramCollector:
         # Disabled sources are no longer read. Their immutable events remain
         # remote and will be scheduled again when the source is enabled.
         self.reconcile_pending = {chat: rows for chat, rows in self.reconcile_pending.items() if chat in self.sources}
+        self.recent_recovery = {chat: state for chat, state in self.recent_recovery.items() if chat in self.sources}
         result = {}
         # 群组之间独立，但控制并发和 Telegram flood；单群失败不阻止其他群。
         gate = asyncio.Semaphore(3)
@@ -563,6 +571,7 @@ class TelegramCollector:
         async with lock:
             checkpoint = await self._checkpoint(chat_id)
         await self._refresh_directory(chat_id, source)
+        recent = await self._recover_recent(chat_id, source)
         original = int(checkpoint["last_message_id"])
         last, count = original, 0
         started = time.monotonic()
@@ -587,7 +596,80 @@ class TelegramCollector:
         if last != original:
             async with lock:
                 await self.backend.advance(chat_id, self.owner, last, original)
-        return {"state": "catching_up" if catching_up else "caught_up", "last_message_id": last, "observed": count}
+        state = ('recent_deferred' if recent['state'] == 'deferred'
+                 else 'catching_up' if catching_up or recent['state'] == 'catching_up' else 'caught_up')
+        return {"state": state, "last_message_id": last, "observed": count, 'recent_history': recent}
+
+    async def _recover_recent(self, chat_id: str, source: dict) -> dict:
+        """Prioritize recent gaps without advancing the archival checkpoint.
+
+        Receipt cache entries follow durable event commits only. Losing this
+        bounded cache on restart causes safe replays, never skipped messages.
+        Each pass checks the head before continuing older pages, so old work
+        cannot hide newly arrived messages.
+        """
+        if not source.get('trusted_sender_ids'):
+            return {'state': 'caught_up', 'scanned': 0, 'persisted': 0}
+        state = self.recent_recovery.setdefault(chat_id, {'cursor': None, 'receipts': OrderedDict()})
+        receipts = state['receipts']
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=RECENT_HISTORY_LOOKBACK_SECONDS)
+        scanned, persisted = 0, 0
+
+        async def page(entity, cursor, continuation=False):
+            nonlocal scanned, persisted
+            options = {'max_id': cursor} if cursor is not None else {}
+            members = [m async for m in self.client.iter_messages(entity, limit=RECENT_HISTORY_PAGE_SIZE, **options)]
+            last = cursor
+            for message in members:
+                if _utc(message.date) < cutoff:
+                    return last, True
+                scanned += 1
+                sender_id = str(getattr(message, 'sender_id', '') or '')
+                if not sender_id and getattr(message, 'post', False):
+                    sender_id = chat_id
+                if sender_id in {str(value) for value in source['trusted_sender_ids']}:
+                    group = await self._expand_album(message, entity) if getattr(message, 'grouped_id', None) else [message]
+                    evidence = [(m.id, str(m.date), str(getattr(m, 'edit_date', None)), getattr(m, 'message', ''),
+                                 getattr(m, 'reply_to_msg_id', None),
+                                 getattr(getattr(getattr(m, 'media', None), 'photo', None), 'id', None),
+                                 getattr(getattr(getattr(m, 'media', None), 'document', None), 'id', None),
+                                 getattr(getattr(m, 'media', None), 'id', None)) for m in group]
+                    key = hashlib.sha256(json.dumps([source.get('allow_media', True), evidence],
+                                                    sort_keys=True).encode()).hexdigest()
+                    if key not in receipts:
+                        result, payload = await self._stage_group(chat_id, source, group)
+                        if result.get('persisted') is not True and result.get('state') != 'ignored_empty':
+                            raise RuntimeError('recent Telegram event was not durably committed')
+                        if result.get('persisted') is True:
+                            receipts[key] = True
+                            while len(receipts) > RECENT_HISTORY_RECEIPTS:
+                                receipts.popitem(last=False)
+                            persisted += 1
+                        if payload is not None:
+                            self._schedule_live_media(chat_id, payload, group)
+                last = int(message.id)
+                if continuation:
+                    state['cursor'] = last
+            return last, len(members) < RECENT_HISTORY_PAGE_SIZE
+
+        try:
+            async with asyncio.timeout(RECENT_HISTORY_SECONDS):
+                entity = await self._entity(chat_id)
+                head_cursor, complete = await page(entity, None)
+                if not complete:
+                    cursor = min(state['cursor'], head_cursor) if state['cursor'] is not None else head_cursor
+                    state['cursor'] = cursor
+                    _, complete = await page(entity, cursor, continuation=True)
+                if complete:
+                    state['cursor'] = None
+                return {'state': 'caught_up' if complete else 'catching_up', 'scanned': scanned, 'persisted': persisted}
+        except AuthKeyDuplicatedError:
+            raise
+        except FloodWaitError:
+            raise
+        except Exception as exc:
+            log.warning('Telegram recent history deferred category=%s', type(exc).__name__)
+            return {'state': 'deferred', 'scanned': scanned, 'persisted': persisted, 'reason': type(exc).__name__}
 
     async def _sync_author_backfill(self, chat_id: str, source: dict) -> dict:
         tasks = source.get('author_backfills') or []
