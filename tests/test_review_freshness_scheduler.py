@@ -64,6 +64,23 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def complete(self,job):
         await self.pool.execute("UPDATE v2_analysis_jobs SET state='unresolved',lease_until=NULL WHERE id=$1",job['id'])
 
+    async def test_turn_progress_is_global_and_atomic_when_expert_update_fails(self):
+        source, expert = await self.pair()
+        await self.pool.execute('INSERT INTO v2_review_source_schedule(source_id,last_turn) VALUES($1,11)', source)
+        await self.pool.execute('INSERT INTO v2_review_expert_schedule(expert_id,last_turn) VALUES($1,13)', expert)
+        await self.pool.execute("CREATE FUNCTION reject_turn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'isolated turn failure'; END $$")
+        await self.pool.execute('CREATE TRIGGER reject_turn BEFORE UPDATE ON v2_review_expert_schedule FOR EACH ROW EXECUTE FUNCTION reject_turn()')
+        async with self.pool.acquire() as conn:
+            with self.assertRaises(asyncpg.RaiseError):
+                await worker._advance_turn(conn, source, expert)
+        self.assertEqual(11, await self.pool.fetchval('SELECT last_turn FROM v2_review_source_schedule WHERE source_id=$1', source))
+        self.assertEqual(13, await self.pool.fetchval('SELECT last_turn FROM v2_review_expert_schedule WHERE expert_id=$1', expert))
+        await self.pool.execute('DROP TRIGGER reject_turn ON v2_review_expert_schedule')
+        async with self.pool.acquire() as conn:
+            self.assertEqual(14, await worker._advance_turn(conn, source, expert))
+            self.assertEqual(15, await worker._advance_turn(conn, source, expert))
+        self.assertEqual((15, 15), tuple(await self.pool.fetchrow('SELECT s.last_turn,e.last_turn FROM v2_review_source_schedule s CROSS JOIN v2_review_expert_schedule e')))
+
     async def test_old_backlog_does_not_precede_current_messages_and_sources_stay_fair(self):
         pairs = [await self.pair() for _ in range(3)]
         for pair in pairs:
@@ -75,6 +92,7 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
             for _ in range(6):
                 job = await worker.claim_job(self.pool)
                 self.assertEqual('real_time',job['review_mode'])
+                self.assertGreaterEqual(job['_scheduler_claim_elapsed_ms'], 0)
                 seen.append(job['source_id'])
                 self.assertGreaterEqual(job['message']['posted_at'],self.now-timedelta(hours=24))
                 await self.complete(job)

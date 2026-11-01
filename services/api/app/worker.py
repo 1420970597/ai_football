@@ -82,10 +82,17 @@ async def _scheduler_lock(conn):
 
 async def _advance_turn(conn, source_id, expert_id):
     turn = await conn.fetchval(
-        'SELECT GREATEST(COALESCE((SELECT max(last_turn) FROM v2_review_source_schedule),0),'
-        'COALESCE((SELECT max(last_turn) FROM v2_review_expert_schedule),0))+1')
-    await conn.execute('UPDATE v2_review_source_schedule SET last_turn=$2 WHERE source_id=$1', source_id, turn)
-    await conn.execute('UPDATE v2_review_expert_schedule SET last_turn=$2 WHERE expert_id=$1', expert_id, turn)
+        'WITH next_turn AS MATERIALIZED ('
+        ' SELECT GREATEST(COALESCE((SELECT max(last_turn) FROM v2_review_source_schedule),0),'
+        ' COALESCE((SELECT max(last_turn) FROM v2_review_expert_schedule),0))+1 AS turn'
+        '), advanced_source AS ('
+        ' UPDATE v2_review_source_schedule s SET last_turn=n.turn FROM next_turn n'
+        ' WHERE s.source_id=$1 RETURNING s.source_id'
+        ') UPDATE v2_review_expert_schedule e SET last_turn=n.turn FROM next_turn n'
+        ' WHERE e.expert_id=$2 AND EXISTS(SELECT 1 FROM advanced_source) RETURNING e.last_turn',
+        source_id, expert_id)
+    if turn is None:
+        raise RuntimeError('review scheduling pair disappeared while advancing turn')
     return turn
 
 
@@ -132,11 +139,13 @@ async def _claim_from_lane(conn, mode):
 
 
 async def claim_job(pool):
+    started = time.monotonic()
     try:
         async with asyncio.timeout(CLAIM_TIMEOUT_SECONDS):
             job = await _claim_job(pool)
             if job:
                 job['_claimed_monotonic'] = time.monotonic()
+                job['_scheduler_claim_elapsed_ms'] = round((job['_claimed_monotonic'] - started) * 1000, 3)
             return job
     except (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError) as exc:
         # Transient scheduling contention must not cancel this process's
@@ -159,13 +168,18 @@ async def _claim_job(pool):
             )
             # Only metadata is enumerated. Job probes are indexed per source /
             # expert pair; no global queue sort/materialization is performed.
-            await conn.execute('INSERT INTO v2_review_source_schedule(source_id) SELECT id FROM v2_expert_sources ON CONFLICT DO NOTHING')
-            await conn.execute('INSERT INTO v2_review_expert_schedule(expert_id) SELECT id FROM v2_experts ON CONFLICT DO NOTHING')
+            await conn.execute(
+                'WITH initialized_sources AS ('
+                ' INSERT INTO v2_review_source_schedule(source_id) SELECT id FROM v2_expert_sources'
+                ' ON CONFLICT DO NOTHING RETURNING source_id'
+                ') INSERT INTO v2_review_expert_schedule(expert_id) SELECT id FROM v2_experts ON CONFLICT DO NOTHING')
             realtime_claims = await conn.fetchval('SELECT realtime_claims_since_replay FROM v2_review_lane_schedule WHERE singleton FOR UPDATE')
-            historical_active = await conn.fetchval(
-                "SELECT count(*) FROM v2_analysis_jobs WHERE state='running' AND review_mode='historical_replay' "
-                "AND lease_until>statement_timestamp()")
-            replay_allowed = HISTORICAL_CONCURRENCY > historical_active
+            replay_allowed = False
+            if HISTORICAL_CONCURRENCY > 0:
+                historical_active = await conn.fetchval(
+                    "SELECT count(*) FROM v2_analysis_jobs WHERE state='running' AND review_mode='historical_replay' "
+                    "AND lease_until>statement_timestamp()")
+                replay_allowed = HISTORICAL_CONCURRENCY > historical_active
             modes = ['real_time']
             if replay_allowed:
                 modes = (['historical_replay','real_time'] if realtime_claims >= REALTIME_CLAIMS_PER_REPLAY
@@ -373,6 +387,7 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
         event_to_claim_ms = job['message'].get('event_to_claim_ms')
         failure_stage = "model_result_persistence"
         await _add_trace(pool, job, "hermes_result", {**summary,
+            "scheduler_claim_elapsed_ms": job.get('_scheduler_claim_elapsed_ms'),
             "model_elapsed_ms": round((time.monotonic() - started) * 1000, 3),
             "claim_to_result_ms": round(claim_elapsed_ms, 3),
             "event_to_result_ms": round(event_to_claim_ms + claim_elapsed_ms, 3)
