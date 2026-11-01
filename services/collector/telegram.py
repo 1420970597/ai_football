@@ -53,7 +53,7 @@ RECONCILE_RPC_SECONDS = 3
 RECONCILE_EVENT_LIMIT = 3
 RECONCILE_COMMIT_CONCURRENCY = 2
 RECENT_HISTORY_SECONDS = 8
-RECENT_HISTORY_LOOKBACK_SECONDS = 3600
+RECENT_HISTORY_LOOKBACK_SECONDS = 7200
 RECENT_HISTORY_PAGE_SIZE = 100
 RECENT_HISTORY_RECEIPTS = 2048
 RECONCILE_ID_LIMIT = 100
@@ -612,13 +612,18 @@ class TelegramCollector:
             return {'state': 'caught_up', 'scanned': 0, 'persisted': 0}
         state = self.recent_recovery.setdefault(chat_id, {'cursor': None, 'receipts': OrderedDict()})
         receipts = state['receipts']
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=RECENT_HISTORY_LOOKBACK_SECONDS)
+        # A slow/retried sweep must not age its oldest unresolved gap out of
+        # the window before reaching it. Move the boundary only after a
+        # complete sweep; restart safely covers the last two hours again.
+        cutoff = state.setdefault('cutoff', datetime.now(timezone.utc) - timedelta(seconds=RECENT_HISTORY_LOOKBACK_SECONDS))
         scanned, persisted = 0, 0
 
         async def page(entity, cursor, continuation=False):
             nonlocal scanned, persisted
             options = {'max_id': cursor} if cursor is not None else {}
             members = [m async for m in self.client.iter_messages(entity, limit=RECENT_HISTORY_PAGE_SIZE, **options)]
+            lookup = getattr(self.backend, 'event_receipts', None)
+            known = None
             last = cursor
             for message in members:
                 if _utc(message.date) < cutoff:
@@ -637,7 +642,10 @@ class TelegramCollector:
                     key = hashlib.sha256(json.dumps([source.get('allow_media', True), evidence],
                                                     sort_keys=True).encode()).hexdigest()
                     if key not in receipts:
-                        result, payload = await self._stage_group(chat_id, source, group)
+                        if known is None:
+                            known = (await lookup(chat_id, self.owner, [int(m.id) for m in members])
+                                     if callable(lookup) else {})
+                        result, payload = await self._stage_group(chat_id, source, group, known_receipts=known)
                         if result.get('persisted') is not True and result.get('state') != 'ignored_empty':
                             raise RuntimeError('recent Telegram event was not durably committed')
                         if result.get('persisted') is True:
@@ -662,6 +670,7 @@ class TelegramCollector:
                     _, complete = await page(entity, cursor, continuation=True)
                 if complete:
                     state['cursor'] = None
+                    state.pop('cutoff', None)
                 return {'state': 'caught_up' if complete else 'catching_up', 'scanned': scanned, 'persisted': persisted}
         except AuthKeyDuplicatedError:
             raise
@@ -826,7 +835,7 @@ class TelegramCollector:
         return result
 
     async def _stage_group(self, chat_id: str, source: dict, members: list, *, reconciliation: dict | None = None,
-                           submission: dict | None = None):
+                           submission: dict | None = None, known_receipts: dict | None = None):
         """Persist the complete immutable version before any media transfer."""
         message = members[0]
         sender_id = str(getattr(message, "sender_id", "") or "")
@@ -899,6 +908,13 @@ class TelegramCollector:
                              and item["width"] * item["height"] <= MAX_IMAGE_PIXELS for item in manifests)
                      and sum(item["bytes"] for item in manifests) <= MAX_MESSAGE_MEDIA_BYTES)
         payload["media_state"] = ("pending" if supported else "unsupported") if manifests else "ready"
+        receipt = (known_receipts or {}).get(payload['version_key'])
+        if (reconciliation is None and receipt
+                and receipt.get('sender_nickname') == payload['sender_nickname']
+                and (receipt.get('media_state') == 'ready' and payload['media_state'] in {'ready', 'pending'}
+                     or receipt.get('media_state') == payload['media_state'] == 'unsupported')):
+            return {'persisted': True, 'state': receipt['media_state'],
+                    'message_id': receipt.get('message_id'), 'durable_receipt_reused': True}, None
         if reconciliation is not None:
             payload['reconciliation'] = reconciliation
         if submission is not None:

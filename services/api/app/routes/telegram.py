@@ -7,7 +7,7 @@ import hmac
 import json
 import os
 import re
-from typing import Literal
+from typing import Annotated, Literal
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -54,6 +54,10 @@ class AuthorBackfillInput(ClaimInput):
 class ObserveInput(ClaimInput):
     reconciliation_protocol: Literal['claim-ack-v1']
     limit: int = Field(default=50, ge=1, le=100)
+
+
+class EventReceiptsInput(ClaimInput):
+    member_message_ids: list[Annotated[int, Field(strict=True, gt=0)]] = Field(min_length=1, max_length=100)
 
 
 class ReconciliationReference(BaseModel):
@@ -333,6 +337,28 @@ async def withdraw(conn, source_id, platform_ids: list[int], reason: str):
                            "WHERE message_id=ANY($1::uuid[]) AND state IN ('queued','retry','running')", message_ids, reason)
         await conn.execute("UPDATE v2_expert_signals SET withdrawn_at=COALESCE(withdrawn_at,now()),withdrawal_reason=COALESCE(withdrawal_reason,$2) "
                            "WHERE message_id=ANY($1::uuid[])", message_ids, reason)
+
+
+@router.post('/internal/telegram/events/receipts')
+async def event_receipts(body: EventReceiptsInput, request: Request):
+    """Bounded durable confirmations, never an ID-only deduplication claim."""
+    authorized(request)
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction(readonly=True):
+            source = await source_with_lease(conn, body.chat_id, body.owner)
+            rows = await conn.fetch(
+                "SELECT e.version_key,e.media_state,e.message_id,e.content->>'sender_nickname' AS sender_nickname "
+                "FROM v2_telegram_events e JOIN v2_expert_messages m ON m.id=e.message_id "
+                "JOIN v2_experts x ON x.id=m.expert_id AND x.enabled "
+                "JOIN v2_source_experts se ON se.expert_id=x.id AND se.source_id=e.source_id AND se.enabled "
+                "WHERE e.source_id=$1 AND e.is_current AND m.deleted_at IS NULL "
+                "AND EXISTS(SELECT 1 FROM v2_telegram_event_members em WHERE em.event_id=e.id "
+                "AND em.platform_message_id=ANY($2::bigint[])) ORDER BY e.id LIMIT 101",
+                source['id'], body.member_message_ids,
+            )
+            if len(rows) > 100:
+                raise HTTPException(413, 'Telegram receipt budget exceeded; no partial response returned')
+    return {'items': [dict(row) for row in rows]}
 
 
 @router.post("/internal/telegram/events")

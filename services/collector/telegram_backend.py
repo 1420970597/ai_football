@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -103,6 +104,20 @@ class TelegramBackend:
 
     async def event(self, body: dict) -> dict:
         return await self._call("POST", "/events", body)
+
+    async def event_receipts(self, chat_id: str, owner: str, member_message_ids: list[int]) -> dict[str, dict]:
+        response = await self._call('POST', '/events/receipts', {
+            'chat_id': chat_id, 'owner': owner, 'member_message_ids': member_message_ids})
+        items = response.get('items')
+        if not isinstance(items, list) or len(items) > len(member_message_ids):
+            raise ValueError('invalid Telegram receipt response')
+        if any(not isinstance(item, dict)
+               or not re.fullmatch(r'[a-f0-9]{64}', str(item.get('version_key', '')))
+               or not isinstance(item.get('sender_nickname'), str) or not item['sender_nickname'].strip()
+               or not isinstance(item.get('message_id'), str) or not item['message_id']
+               or item.get('media_state') not in {'ready', 'pending', 'failed', 'unsupported'} for item in items):
+            raise ValueError('invalid Telegram receipt response')
+        return {item['version_key']: item for item in items}
 
     async def pending(self, limit: int = 30) -> list[dict]:
         return (await self._call("GET", f"/pending?limit={limit}"))["items"]
