@@ -25,6 +25,7 @@ MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
 CHUNK_BYTES = 23 * 1024  # Base64 plus the fixed metadata remains below 32 KiB.
 MAX_CHUNKS = (MAX_SNAPSHOT_BYTES + CHUNK_BYTES - 1) // CHUNK_BYTES
 MAX_MARKETS = 2000
+MODEL_MARKET_CHAR_BUDGET = 90000  # Leave room under Hermes' 100K MCP envelope limit.
 FIXTURE_FIELDS = frozenset({
     'id', 'source_id', 'sport', 'competition_id', 'competition_name', 'home_team_id', 'home_team',
     'home_aliases', 'away_team_id', 'away_team', 'away_aliases', 'kickoff_at', 'phase', 'match_state',
@@ -57,6 +58,16 @@ def _project(value, fields):
     return {key: value[key] for key in fields if key in value}
 
 
+def _unsupported_markets(quotes):
+    groups = {}
+    for quote in quotes:
+        key = tuple(str(quote.get(field) or '') for field in ('market_id', 'market_name', 'period'))
+        groups[key] = groups.get(key, 0) + 1
+    return [dict(zip(('market_id', 'market_name', 'period'), key)) |
+            {'quote_count': count, 'reason': 'unsupported_market_kind'}
+            for key, count in sorted(groups.items())]
+
+
 def snapshot_result(kind, result, *, compact_markets=False):
     """Only these declared tool fields can reach either the model or evidence."""
     if kind == 'mcp_search_matches':
@@ -71,10 +82,21 @@ def snapshot_result(kind, result, *, compact_markets=False):
     elif kind == 'mcp_list_match_markets':
         if len(result['markets']) > MAX_MARKETS:
             _budget_error()
+        quotes = result['markets']
+        omitted = [q for q in quotes if q.get('market_kind') == 'unsupported'] if compact_markets else []
+        if omitted:
+            quotes = [q for q in quotes if q.get('market_kind') != 'unsupported']
         value = {'fixture': _project(result['fixture'], FIXTURE_FIELDS),
                  'markets': [_project(item, MODEL_QUOTE_FIELDS if compact_markets else QUOTE_FIELDS)
-                             for item in result['markets']],
+                             for item in quotes],
                  'refresh': _project(result['refresh'], {'attempted', 'accepted', 'reason'})}
+        # Replay retains the exact declared coverage; it must not reinterpret
+        # old snapshots or silently remove any supported/closed option.
+        value.update(_project(result, {'market_coverage', 'unsupported_markets'}))
+        if omitted:
+            value['market_coverage'] = {'total_quotes': len(result['markets']), 'returned_quotes': len(quotes),
+                                        'omitted_unsupported_quotes': len(omitted)}
+            value['unsupported_markets'] = _unsupported_markets(omitted)
     elif kind == 'mcp_record_expert_signals':
         if len(result['accepted']) + len(result['rejected']) > 32:
             _budget_error()
@@ -85,6 +107,9 @@ def snapshot_result(kind, result, *, compact_markets=False):
         raise ValueError('unknown review tool')
     encoded = jsonable_encoder(value, custom_encoder={Decimal: str})
     _validate_value(encoded)
+    if kind == 'mcp_list_match_markets' and compact_markets:
+        if len(json.dumps(encoded, ensure_ascii=False, indent=2)) > MODEL_MARKET_CHAR_BUDGET:
+            raise HTTPException(413, detail='supported market output exceeds model inline budget; no partial response returned')
     return encoded
 
 

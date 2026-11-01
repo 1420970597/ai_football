@@ -24,6 +24,51 @@ from tests import test_mcp_transport as mcp_fixtures
 
 
 class ToolSnapshotUnitTests(unittest.TestCase):
+    def test_large_market_inventory_keeps_all_supported_quotes_with_explicit_coverage(self):
+        quote = {'quote_id': str(uuid.uuid4()), 'market_id': 'total', 'market_name': '全场大小附加盘口' * 5,
+                 'period': 'full_time', 'market_kind': 'total', 'line': '2.500', 'selection': 'over',
+                 'price': '1.95000', 'status': 'active', 'is_main': False, 'score_basis': 'remaining',
+                 'source_updated_at': '2026-11-01T17:15:40+00:00', 'fresh': True,
+                 'confirmed_current': True, 'can_record': True}
+        supported = [quote | {'quote_id': str(uuid.uuid4()), 'line': str(index / 4)} for index in range(60)]
+        unsupported = [quote | {'quote_id': str(uuid.uuid4()), 'market_id': str(1000 + index % 64),
+                       'market_kind': 'unsupported', 'status': 'closed', 'can_record': False}
+                       for index in range(178)]
+        source = {'fixture': {'id': 'fixture'}, 'markets': supported + unsupported, 'refresh': {'attempted': False}}
+        before = json.dumps(source, ensure_ascii=False, indent=2)
+        wire = snapshot_result('mcp_list_match_markets', source, compact_markets=True)
+        after = json.dumps(wire, ensure_ascii=False, indent=2)
+        self.assertGreater(len(before), 100000)
+        self.assertLess(len(after), 100000)
+        self.assertLess(len(after), len(before) * .6)
+        self.assertEqual(supported, wire['markets'])
+        self.assertEqual({'total_quotes': 238, 'returned_quotes': 60, 'omitted_unsupported_quotes': 178}, wire['market_coverage'])
+        self.assertEqual(178, sum(group['quote_count'] for group in wire['unsupported_markets']))
+        self.assertEqual(64, len(wire['unsupported_markets']))
+        self.assertEqual(238, len(source['markets']))
+        self.assertEqual(source, snapshot_result('mcp_list_match_markets', source))
+        self.assertEqual(wire, snapshot_result('mcp_list_match_markets', wire))
+
+    def test_only_unsupported_options_return_explicit_unavailable_summary(self):
+        source = {'fixture': {'id': 'fixture'}, 'markets': [
+            {'quote_id': 'unknown-option', 'market_id': '11', 'market_name': '11',
+             'period': 'source_11', 'market_kind': 'unsupported'}], 'refresh': {}}
+        wire = snapshot_result('mcp_list_match_markets', source, compact_markets=True)
+        self.assertEqual([], wire['markets'])
+        self.assertEqual(1, wire['market_coverage']['omitted_unsupported_quotes'])
+        self.assertEqual('unsupported_market_kind', wire['unsupported_markets'][0]['reason'])
+        self.assertEqual(source, snapshot_result('mcp_list_match_markets', source))
+
+    def test_supported_only_output_over_inline_budget_is_explicitly_rejected(self):
+        source = {'fixture': {'id': 'fixture'}, 'markets': [
+            {'quote_id': str(index), 'market_name': '受支持盘口' * 100, 'market_kind': 'total'}
+            for index in range(200)], 'refresh': {}}
+        with self.assertRaises(HTTPException) as rejected:
+            snapshot_result('mcp_list_match_markets', source, compact_markets=True)
+        self.assertEqual(413, rejected.exception.status_code)
+        self.assertIn('no partial response', rejected.exception.detail)
+        self.assertEqual(200, len(snapshot_result('mcp_list_match_markets', source)['markets']))
+
     def test_compact_market_keeps_every_option_and_trading_semantics(self):
         quote={'id':'native-id','fixture_id':'fixture','quote_id':'model-id',
                'play_id':'protocol-play','market_instance_id':'protocol-instance','selection_id':'protocol-option',
@@ -132,6 +177,32 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
         rows = await self.pool.fetch("SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='tool_response_chunk' "
                                      "AND payload->>'call_id'=$2 ORDER BY sequence_no", self.job, payload['call_id'])
         return payload, replay_snapshot(manifest, [row['payload'] for row in rows])
+
+    async def test_unsupported_coverage_replays_and_fresh_unsupported_quote_cannot_be_recorded(self):
+        await self.fixture()
+        unsupported_id = uuid.uuid4()
+        await self.pool.execute(
+            "INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,line,selection,price,"
+            "source_updated_at,market_kind,period,status) VALUES($1,'fixture-1','11','11',1,'over',1.95,"
+            "now(),'unsupported','source_11','active')", unsupported_id)
+        key, _ = await self.search_all()
+        self.assertTrue((await self.resolve(key))['resolved'])
+        response = await self.post('list_match_markets', fixture_id='fixture-1')
+        self.assertEqual(200, response.status_code, response.text)
+        wire = response.json()
+        self.assertEqual(1, len(wire['markets']))
+        self.assertEqual(1, wire['market_coverage']['omitted_unsupported_quotes'])
+        receipt, replayed = await self.replay('mcp_list_match_markets')
+        self.assertEqual(wire, replayed)
+        self.assertEqual([wire['markets'][0]['quote_id']], receipt['response_snapshot']['references']['quote_ids'])
+        self.assertEqual(2, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+        rejected = await self.post('record_expert_signals', signals=[{'fixture_id': 'fixture-1',
+            'quote_id': str(unsupported_id), 'evidence_text': 'unsupported cannot become tradable by freshness'}])
+        self.assertEqual(200, rejected.status_code, rejected.text)
+        self.assertEqual([], rejected.json()['accepted'])
+        self.assertEqual('quote_inactive_unknown_or_stale', rejected.json()['rejected'][0]['reason'])
+        await self.pool.execute("UPDATE v2_current_quotes SET market_name='changed after snapshot'")
+        self.assertEqual(wire, (await self.replay('mcp_list_match_markets'))[1])
 
     async def test_sport_scope_separates_identical_teams_and_keeps_youth_women(self):
         for index, sport, home, away in [

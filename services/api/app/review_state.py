@@ -79,7 +79,7 @@ async def trace(conn, review_id: uuid.UUID, kind: str, payload: dict) -> None:
 
 def fresh_quote(row, max_age: int, now: datetime | None = None) -> bool:
     stamp = row["source_updated_at"]
-    if stamp is None or row["price"] is None or row["status"] != "active":
+    if stamp is None or row["price"] is None or row["status"] != "active" or row.get('market_kind') == 'unsupported':
         return False
     age = ((now or datetime.now(timezone.utc)) - stamp).total_seconds()
     return 0 <= age <= max_age
