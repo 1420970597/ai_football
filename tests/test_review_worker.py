@@ -14,10 +14,50 @@ import asyncpg
 import test_reviews as support
 from app import worker
 from app.database import apply_migrations, migration_files
+from infra.remote.review_handoff import try_hold_idle_scheduler
 
 
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_ADMIN_URL"), "requires isolated database")
 class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_handoff_does_not_hold_scheduler_while_active_lease_needs_renewal(self):
+        await self.pool.execute("UPDATE v2_analysis_jobs SET lease_until=now()+interval '15 seconds' WHERE id=$1", self.job)
+        async with self.pool.acquire() as gate:
+            self.assertFalse(await try_hold_idle_scheduler(gate))
+            renewed = await worker._renew_lease(self.pool, {'id': self.job, 'attempt_id': self.attempt})
+            self.assertGreater(renewed, self.now + timedelta(seconds=30))
+
+    async def test_idle_handoff_blocks_claims_until_released(self):
+        await self.make_queued()
+        async with self.pool.acquire() as gate:
+            self.assertTrue(await try_hold_idle_scheduler(gate))
+            try:
+                self.assertIsNone(await worker.claim_job(self.pool))
+            finally:
+                await gate.fetchval('SELECT pg_advisory_unlock(hashtext($1))', worker.SCHEDULER_LOCK)
+        self.assertIsNotNone(await worker.claim_job(self.pool))
+
+    async def test_handoff_inspection_failure_releases_its_session_lock(self):
+        async with self.pool.acquire() as gate, self.pool.acquire() as other:
+            class BrokenInspection:
+                async def fetchval(self, query, *args):
+                    if 'count(*)' in query:
+                        raise TimeoutError('isolated inspection failure')
+                    return await gate.fetchval(query, *args)
+            with self.assertRaises(TimeoutError):
+                await try_hold_idle_scheduler(BrokenInspection())
+            acquired = await other.fetchval('SELECT pg_try_advisory_lock(hashtext($1))', worker.SCHEDULER_LOCK)
+            self.assertTrue(acquired)
+            await other.fetchval('SELECT pg_advisory_unlock(hashtext($1))', worker.SCHEDULER_LOCK)
+
+    async def test_handoff_does_not_release_another_sessions_lock(self):
+        async with self.pool.acquire() as gate, self.pool.acquire() as owner:
+            await owner.fetchval('SELECT pg_advisory_lock(hashtext($1))', worker.SCHEDULER_LOCK)
+            try:
+                self.assertFalse(await try_hold_idle_scheduler(gate))
+                self.assertFalse(await gate.fetchval('SELECT pg_try_advisory_lock(hashtext($1))', worker.SCHEDULER_LOCK))
+            finally:
+                await owner.fetchval('SELECT pg_advisory_unlock(hashtext($1))', worker.SCHEDULER_LOCK)
+
     async def asyncSetUp(self):
         parts = urlsplit(os.environ['TEST_DATABASE_ADMIN_URL'])
         if parts.hostname not in {'ai-football-v2-pgtest', 'ai-football-v2-pgverify'} or parts.path != '/postgres':
