@@ -96,3 +96,98 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_host_is_rejected_even_with_service_token(self):
         result = await self.client.post('/mcp', headers={'Host':'untrusted.invalid'}, json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
         self.assertEqual(421, result.status_code)
+
+    async def test_market_operations_share_admission_while_search_remains_parallel(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        paths, active, peak = [], 0, 0
+        async def upstream(request):
+            nonlocal active, peak
+            path = request.url.path.rsplit('/', 1)[-1]
+            paths.append(path)
+            if path in {'list_match_markets', 'record_expert_signals'}:
+                active += 1
+                peak = max(peak, active)
+                try:
+                    if path == 'list_match_markets':
+                        entered.set()
+                        await release.wait()
+                finally:
+                    active -= 1
+            return httpx.Response(200, json={'ok': True})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        first = asyncio.create_task(self.rpc('tools/call', {'name': 'list_match_markets', 'arguments': {
+            'review_id': 'job', 'attempt_id': 'attempt', 'fixture_id': 'fixture'}}))
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(self.rpc('tools/call', {'name': 'record_expert_signals', 'arguments': {
+            'review_id': 'job', 'attempt_id': 'attempt', 'signals': [
+                {'fixture_id': 'fixture', 'quote_id': 'quote', 'evidence_text': '全场大2.5'}]}}))
+        try:
+            for path in ('search_matches', 'resolve_match'):
+                self.assertEqual({'ok': True}, await asyncio.wait_for(self.server._post(path, {}), 1))
+            self.assertNotIn('record_expert_signals', paths)
+        finally:
+            release.set()
+            results = await asyncio.gather(first, second)
+        for result in results:
+            self.assertEqual(200, result.status_code)
+            self.assertFalse(result.json()['result'].get('isError', False))
+        self.assertEqual(1, peak)
+        self.assertIn('record_expert_signals', paths)
+
+    async def test_cancelled_market_request_releases_admission(self):
+        entered = asyncio.Event()
+        async def upstream(request):
+            if request.url.path.endswith('/list_match_markets'):
+                entered.set()
+                await asyncio.Event().wait()
+            return httpx.Response(200, json={'accepted': []})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        first = asyncio.create_task(self.server._post('list_match_markets', {}))
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(self.server._post('record_expert_signals', {}))
+        first.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await first
+        self.assertEqual({'accepted': []}, await asyncio.wait_for(second, 1))
+        self.assertEqual(0, self.server.pending_market_calls)
+
+    async def test_market_wait_timeout_and_capacity_do_not_send_requests(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        paths = []
+        async def upstream(request):
+            paths.append(request.url.path)
+            entered.set()
+            await release.wait()
+            return httpx.Response(200, json={'ok': True})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        self.server.MARKET_WAIT_SECONDS = .03
+        self.server.MAX_PENDING_MARKET_CALLS = 2
+        first = asyncio.create_task(self.server._post('list_match_markets', {}))
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(self.server._post('record_expert_signals', {}))
+        await asyncio.sleep(0)
+        try:
+            with self.assertRaisesRegex(self.server.ToolError, '队列繁忙'):
+                await self.server._post('list_match_markets', {})
+            with self.assertRaisesRegex(self.server.ToolError, '等待超时'):
+                await second
+            self.assertEqual(1, len(paths))
+        finally:
+            release.set()
+            await first
+        self.assertEqual({'ok': True}, await self.server._post('record_expert_signals', {}))
+        self.assertEqual(0, self.server.pending_market_calls)
+
+    async def test_failed_market_http_releases_admission(self):
+        statuses = iter([503, 200])
+        def upstream(request):
+            return httpx.Response(next(statuses), json={'detail': '暂不可用'})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        with self.assertRaises(self.server.ToolError):
+            await self.server._post('list_match_markets', {})
+        self.assertEqual({'detail': '暂不可用'}, await self.server._post('record_expert_signals', {}))
+        self.assertEqual(0, self.server.pending_market_calls)

@@ -23,6 +23,13 @@ client = httpx.AsyncClient(
     headers={"Authorization": f"Bearer {API_TOKEN}"},
 )
 mcp = MCPServer("football-expert-platform")
+# Both advertised MCP aliases reach this single process. The collector admits
+# one precise refresh at a time; queue market operations here without blocking
+# independent fixture searches or changing the collector's upstream budget.
+MARKET_WAIT_SECONDS = 8
+MAX_PENDING_MARKET_CALLS = 8
+market_gate = asyncio.Lock()
+pending_market_calls = 0
 
 
 class ExpertPick(BaseModel):
@@ -33,6 +40,28 @@ class ExpertPick(BaseModel):
 
 
 async def _post(path: str, payload: dict) -> dict:
+    global pending_market_calls
+    if path not in {'list_match_markets', 'record_expert_signals'}:
+        return await _request(path, payload)
+    if pending_market_calls >= MAX_PENDING_MARKET_CALLS:
+        raise ToolError("盘口复核队列繁忙；保留当前消息为待核验")
+    pending_market_calls += 1
+    acquired = False
+    try:
+        try:
+            async with asyncio.timeout(MARKET_WAIT_SECONDS):
+                await market_gate.acquire()
+                acquired = True
+        except TimeoutError:
+            raise ToolError("盘口复核队列等待超时；保留当前消息为待核验") from None
+        return await _request(path, payload)
+    finally:
+        if acquired:
+            market_gate.release()
+        pending_market_calls -= 1
+
+
+async def _request(path: str, payload: dict) -> dict:
     try:
         response = await client.post(f"{API_URL}/{path}", json=payload,
             timeout=httpx.Timeout(45 if path == 'record_expert_signals' else 20, connect=2))
