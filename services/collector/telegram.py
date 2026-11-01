@@ -53,7 +53,9 @@ RECONCILE_RPC_SECONDS = 3
 RECONCILE_EVENT_LIMIT = 3
 RECONCILE_COMMIT_CONCURRENCY = 2
 RECENT_HISTORY_SECONDS = 8
-RECENT_HISTORY_LOOKBACK_SECONDS = 7200
+RECENT_HISTORY_LOOKBACK_SECONDS = 10800
+ENTITY_CACHE_SECONDS = 120
+ENTITY_CACHE_SIZE = 256
 RECENT_HISTORY_PAGE_SIZE = 100
 RECENT_HISTORY_RECEIPTS = 2048
 RECONCILE_ID_LIMIT = 100
@@ -150,6 +152,7 @@ class TelegramCollector:
         self.directory_trusted: dict[str, tuple] = {}
         self.reconcile_pending: dict[str, list[dict]] = {}
         self.recent_recovery: dict[str, dict] = {}
+        self.entity_cache: OrderedDict[str, tuple] = OrderedDict()
         self.control_server = None
         self.auth_client = None
         self.auth_task = None
@@ -320,6 +323,7 @@ class TelegramCollector:
             self.directory_trusted.clear()
             self.reconcile_pending.clear()
             self.recent_recovery.clear()
+            self.entity_cache.clear()
             self.invalid_session_fingerprint = None
             self._verified_identity = None
             self._rejected_identity_binding = None
@@ -327,6 +331,7 @@ class TelegramCollector:
         self.config = dict(config)
 
     async def disconnect(self):
+        self.entity_cache.clear()
         await self._cancel_auth()
         await self._cancel_live_media_tasks()
         if self.client:
@@ -349,17 +354,30 @@ class TelegramCollector:
             raise SourceAccessError("invalid_source_identifier")
         if chat_id.startswith("-") and int(chat_id) < -(2 ** 63):
             raise SourceAccessError("invalid_source_identifier")
+        client = self.client
+        cached = self.entity_cache.get(chat_id)
+        if cached and cached[0] is client and time.monotonic() < cached[1]:
+            self.entity_cache.move_to_end(chat_id)
+            return self._group_entity(cached[2])
         value = int(chat_id) if chat_id.startswith("-") else chat_id
         try:
-            entity = await self.client.get_entity(value)
+            entity = await client.get_entity(value)
         except ValueError:
             # StringSession 不持久化实体访问哈希：先从已加入对话解析，不能当成群组无管理员。
-            async for dialog in self.client.iter_dialogs(limit=None):
+            async for dialog in client.iter_dialogs(limit=None):
                 entity = dialog.entity
                 if str(utils.get_peer_id(entity)) == chat_id or str(getattr(entity, "username", "")).casefold() == chat_id.lstrip("@").casefold():
-                    return self._group_entity(entity)
-            raise SourceAccessError("account_has_not_joined_or_entity_is_unavailable") from None
-        return self._group_entity(entity)
+                    break
+            else:
+                raise SourceAccessError("account_has_not_joined_or_entity_is_unavailable") from None
+        entity = self._group_entity(entity)
+        if client is not self.client:
+            raise SourceAccessError('session_changed_during_entity_lookup')
+        self.entity_cache[chat_id] = (client, time.monotonic() + ENTITY_CACHE_SECONDS, entity)
+        self.entity_cache.move_to_end(chat_id)
+        while len(self.entity_cache) > ENTITY_CACHE_SIZE:
+            self.entity_cache.popitem(last=False)
+        return entity
 
     async def _checkpoint(self, chat_id: str):
         return await self.backend.checkpoint(chat_id, self.owner)
@@ -459,6 +477,8 @@ class TelegramCollector:
                 except FloodWaitError as exc:
                     self.retry_at[chat_id] = time.monotonic() + exc.seconds
                     result[chat_id] = {"state": "flood_wait", "retry_after": exc.seconds}
+                    log.warning('Telegram source backoff request=%s retry_seconds=%s',
+                                type(getattr(exc, 'request', None)).__name__, exc.seconds)
                 except AuthKeyDuplicatedError as exc:
                     await self._invalidate_active_session()
                     result[chat_id] = {"state": "unavailable", "error": type(exc).__name__}
