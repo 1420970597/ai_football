@@ -257,7 +257,6 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
             return []
         self.backend.observed=blocked_claim
-        self.collector.checkpoint_verified_at['-1001']=asyncio.get_running_loop().time()
         task=asyncio.create_task(self.collector._reconcile_known('-1001',self.source))
         await asyncio.wait_for(entered.wait(),.5)
         await asyncio.wait_for(self.collector._live_messages('-1001',[Message(99)]),.5)

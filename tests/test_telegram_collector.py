@@ -336,7 +336,8 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         entered, release, completed = asyncio.Event(), asyncio.Event(), []
 
         async def complete(chat_id, payload, members):
-            self.assertFalse(self.collector.locks[chat_id].locked())
+            lock = self.collector.locks.get(chat_id)
+            self.assertFalse(lock and lock.locked())
             self.assertEqual('pending', payload['media_state'])
             entered.set()
             await release.wait()
@@ -418,17 +419,40 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(live, .5)
         self.assertEqual('原始上下文', self.backend.calls[0]['reply_context']['text'])
 
-    async def test_live_messages_reuse_recent_checkpoint_verification(self):
+    async def test_live_messages_do_not_preflight_checkpoint_claim(self):
         self.collector.sources = {'-1001': self.backend.source_items[0]}
 
         await self.collector._live_messages('-1001', [Message(101)])
         await self.collector._live_messages('-1001', [Message(102)])
-        self.assertEqual(1, len(self.backend.checkpoints))
-
-        self.collector.checkpoint_verified_at['-1001'] -= 31
         await self.collector._live_messages('-1001', [Message(103)])
-        self.assertEqual(2, len(self.backend.checkpoints))
+        self.assertEqual([], self.backend.checkpoints)
         self.assertEqual(3, len(self.backend.calls))
+
+    async def test_live_message_does_not_wait_for_slow_checkpoint_refresh(self):
+        self.collector.sources = {'-1001': self.backend.source_items[0]}
+        lock = self.collector.locks.setdefault('-1001', asyncio.Lock())
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_checkpoint(chat_id, owner):
+            entered.set()
+            await release.wait()
+            return {'last_message_id': 0}
+
+        self.backend.checkpoint = slow_checkpoint
+
+        async def refresh():
+            async with lock:
+                await self.collector._checkpoint('-1001')
+
+        refresh_task = asyncio.create_task(refresh())
+        try:
+            await asyncio.wait_for(entered.wait(), .5)
+            await asyncio.wait_for(self.collector._live_messages('-1001', [Message(104)]), .5)
+        finally:
+            release.set()
+            await refresh_task
+
+        self.assertEqual(['104'], [item['platform_message_id'] for item in self.backend.calls])
 
     async def test_slow_directory_refresh_does_not_hold_live_message_lock(self):
         self.collector.client = self.client

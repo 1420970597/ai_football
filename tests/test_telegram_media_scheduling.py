@@ -221,6 +221,13 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.backend.positions['-1001'])
         self.assertFalse(any(v['media_state'] == 'ready' for v in self.backend.calls))
 
+    async def test_live_event_commit_rejects_expired_owner_without_checkpoint_preflight(self):
+        self.backend.lease_valid = False
+        await self.collector._live_messages('-1001', [Message(99)])
+        self.assertEqual([], self.backend.checkpoints)
+        self.assertEqual([], self.backend.calls)
+        self.assertEqual({}, self.backend.events)
+
     async def test_failed_initial_pending_persistence_never_advances_history(self):
         self.backend.fail_chat = '-1001'
         self.client.messages['-1001'] = [Message(1, media=True)]
@@ -337,7 +344,6 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
         async def redundant_claim(*_):
             raise AssertionError('media commit must rely on the event lease check')
         self.collector._checkpoint = redundant_claim
-        self.collector.checkpoint_verified_at.clear()
         result = await self.collector._commit_media_payload('-1001',payload | {'media_state':'ready','media_objects':[stored(1)]})
         self.assertEqual('ready', result['state'])
 

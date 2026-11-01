@@ -41,7 +41,6 @@ MESSAGE_MEDIA_PREFIX = "v2/telegram/messages"
 MESSAGE_MEDIA_RETENTION = "expert_message_evidence"
 DIRECTORY_REFRESH_SECONDS = 300
 SYNC_HISTORY_SLICE_SECONDS = 2
-LIVE_CHECKPOINT_CACHE_SECONDS = 30
 LIVE_MEDIA_MAX_TASKS = 32
 LIVE_MEDIA_CONCURRENCY = 2
 SYNC_HISTORY_MAX_MESSAGES = 25
@@ -141,7 +140,6 @@ class TelegramCollector:
         self.retry_slots = asyncio.Semaphore(MEDIA_RETRY_CONCURRENCY)
         self.session_state_lock = asyncio.Lock()
         self.retry_at: dict[str, float] = {}
-        self.checkpoint_verified_at: dict[str, float] = {}
         self.directory_retry_at: dict[str, float] = {}
         self.directory_trusted: dict[str, tuple] = {}
         self.reconcile_pending: dict[str, list[dict]] = {}
@@ -356,15 +354,7 @@ class TelegramCollector:
         return self._group_entity(entity)
 
     async def _checkpoint(self, chat_id: str):
-        result = await self.backend.checkpoint(chat_id, self.owner)
-        self.checkpoint_verified_at[chat_id] = time.monotonic()
-        return result
-
-    async def _ensure_live_checkpoint(self, chat_id: str):
-        verified_at = self.checkpoint_verified_at.get(chat_id, 0)
-        if time.monotonic() - verified_at >= LIVE_CHECKPOINT_CACHE_SECONDS:
-            return await self._checkpoint(chat_id)
-        return None
+        return await self.backend.checkpoint(chat_id, self.owner)
 
     async def _cancel_live_media_tasks(self):
         tasks = list(self.live_media_tasks.values())
@@ -949,11 +939,7 @@ class TelegramCollector:
         payload = None
         group = sorted(members, key=lambda item: item.id) if full_album else members
         started = time.monotonic()
-        lock_started = started
         try:
-            async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                await self._ensure_live_checkpoint(chat_id)
-            lock_wait_ms = (time.monotonic() - lock_started) * 1000
             lookup_started = time.monotonic()
             if not full_album and getattr(members[0], "grouped_id", None):
                 if entity is None:
@@ -962,6 +948,7 @@ class TelegramCollector:
                     group = await self._expand_album(members[0], entity)
             lookup_ms = (time.monotonic() - lookup_started) * 1000
             persist_started = time.monotonic()
+            # The event transaction validates this owner and lease; a separate checkpoint RPC only serializes live callbacks.
             _, payload = await self._stage_group(chat_id, source, group)
             persist_ms = (time.monotonic() - persist_started) * 1000
             media_ms = 0.0
@@ -969,9 +956,9 @@ class TelegramCollector:
                 media_started = time.monotonic()
                 self._schedule_live_media(chat_id, payload, group)
                 media_ms = (time.monotonic() - media_started) * 1000
-            log.info('Telegram live event persisted lock_wait_ms=%.1f lookup_ms=%.1f persist_ms=%.1f '
+            log.info('Telegram live event persisted lookup_ms=%.1f persist_ms=%.1f '
                      'media_ms=%.1f total_ms=%.1f members=%s images=%s',
-                     lock_wait_ms, lookup_ms, persist_ms, media_ms,
+                     lookup_ms, persist_ms, media_ms,
                      (time.monotonic() - started) * 1000, len(group),
                      sum(1 for item in group if getattr(item, 'media', None)))
         except Exception as exc:
