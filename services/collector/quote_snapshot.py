@@ -10,6 +10,7 @@ from .leyu_protocol import LeyuError
 MAX_FIXTURE_QUOTES = 2000
 MAX_MARKET_CHUNK = 500
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
+EMPTY_SNAPSHOT_BYTES = len(b'{"items":[]}')
 
 
 def snapshot_quote_count(fixture: dict[str, Any]) -> int:
@@ -43,6 +44,7 @@ def encode_snapshot(items: list[dict[str, Any]]) -> bytes:
 def prepare_fixture_batches(fixtures: list[dict[str, Any]], *, max_items: int = 250,
                             quote_budget: int = MAX_FIXTURE_QUOTES) -> tuple[list[list[dict[str, Any]]], dict[str, Any]]:
     batches, batch, quotes = [], [], 0
+    batch_bytes = EMPTY_SNAPSHOT_BYTES
     quarantined = []
     max_observed = 0
     for fixture in fixtures:
@@ -52,20 +54,23 @@ def prepare_fixture_batches(fixtures: list[dict[str, Any]], *, max_items: int = 
             envelope = fixture_envelope(fixture)
             if count > quote_budget:
                 raise LeyuError("fixture_quote_budget_exceeded")
-            encode_snapshot([envelope])
+            # Validate once. The compact JSON shell and inter-item commas
+            # have fixed byte lengths, including for escaped/Unicode strings.
+            # Re-encoding every growing prefix blocks the shared event loop.
+            item_bytes = len(encode_snapshot([envelope])) - EMPTY_SNAPSHOT_BYTES
         except (LeyuError, ValueError) as exc:
             quarantined.append({"fixture_id": str(fixture.get("id") or ""),
                                 "fixture_hash": hashlib.sha256(str(fixture.get("id") or "").encode()).hexdigest()[:10],
                                 "quote_count": count,
                                 "reason": exc.category if isinstance(exc, LeyuError) else "invalid_fixture_encoding"})
             continue
-        if batch and (len(batch) >= max_items or quotes + count > quote_budget):
-            batches.append(batch);batch=[];quotes=0
-        if batch:
-            try:
-                encode_snapshot([*batch, envelope])
-            except LeyuError:
-                batches.append(batch);batch=[];quotes=0
+        if batch and (len(batch) >= max_items or quotes + count > quote_budget
+                      or batch_bytes + 1 + item_bytes > MAX_SNAPSHOT_BYTES):
+            batches.append(batch)
+            batch = []
+            quotes = 0
+            batch_bytes = EMPTY_SNAPSHOT_BYTES
+        batch_bytes += item_bytes + bool(batch)
         batch.append(envelope);quotes += count
     if batch:
         batches.append(batch)

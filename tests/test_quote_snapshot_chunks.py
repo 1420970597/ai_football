@@ -3,7 +3,7 @@ import asyncio
 from copy import deepcopy
 import json
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -28,6 +28,35 @@ def fixture(count,identity="leyu:one",complete=True):
 
 
 class QuoteChunkWireTests(unittest.TestCase):
+    def test_exact_utf8_batch_boundary_and_one_byte_less_preserve_items(self):
+        rows = [{**fixture(0, str(i)), 'text': '中🙂"\\\n' * (i + 1)} for i in range(3)]
+        exact = len(encode_snapshot(rows[:2]))
+        for budget, lengths in ((exact, [2, 1]), (exact - 1, [1, 1, 1])):
+            with self.subTest(budget=budget), patch('services.collector.quote_snapshot.MAX_SNAPSHOT_BYTES', budget):
+                batches, report = prepare_fixture_batches(rows)
+                self.assertEqual(lengths, [len(batch) for batch in batches])
+                self.assertEqual(rows, [row for batch in batches for row in batch])
+                self.assertEqual(0, report['quarantined_fixtures'])
+                self.assertTrue(all(len(encode_snapshot(batch)) <= budget for batch in batches))
+
+    def test_linear_preparation_preserves_order_and_item_limit_without_prefix_encoding(self):
+        rows = [fixture(0, f'fixture:{i}') for i in range(1001)]
+        with patch('services.collector.quote_snapshot.encode_snapshot', wraps=encode_snapshot) as encoded:
+            batches, report = prepare_fixture_batches(rows)
+        self.assertEqual([250, 250, 250, 250, 1], [len(batch) for batch in batches])
+        self.assertEqual(rows, [row for batch in batches for row in batch])
+        self.assertEqual(0, report['quarantined_fixtures'])
+        # A complexity regression must not restore quadratic prefix work;
+        # count encoded fixtures, without relying on noisy wall-clock limits.
+        self.assertEqual(len(rows), sum(len(call.args[0]) for call in encoded.call_args_list))
+
+    def test_nonfinite_item_is_quarantined_and_does_not_poison_following_batch(self):
+        rows = [fixture(1, 'first'), {**fixture(1, 'invalid'), 'value': float('nan')}, fixture(1, 'last')]
+        batches, report = prepare_fixture_batches(rows)
+        self.assertEqual(['first', 'last'], [row['id'] for batch in batches for row in batch])
+        self.assertEqual('invalid_fixture_encoding', report['quarantined'][0]['reason'])
+        self.assertEqual(2, len(json.loads(encode_snapshot(batches[0]))['items']))
+
     def test_real_api_contract_accepts_all_collector_chunks_and_rejects_missing_last_chunk(self):
         from app.routes.internal import FixtureBatch
         from pydantic import ValidationError
