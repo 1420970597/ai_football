@@ -1,4 +1,6 @@
 services:
   review-worker:
+    deploy:
+      replicas: 1
     environment:
       REVIEW_WORKER_CONCURRENCY: "1"
