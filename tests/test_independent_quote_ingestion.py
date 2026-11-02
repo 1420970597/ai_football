@@ -1,5 +1,6 @@
 """Independent quote timestamps cannot be swallowed by stale fixture metadata."""
 import asyncio
+import copy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import os
@@ -98,6 +99,71 @@ class IndependentQuoteIngestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, (await self.post(terminal)).status_code)
         after = await self.pool.fetchrow('SELECT id,status,xmin::text version,ctid::text location,received_at,source_updated_at FROM v2_current_quotes')
         self.assertEqual(before, after)
+
+    async def test_same_source_version_skips_projection_rewrites_and_still_closes_missing_quotes(self):
+        initial = self.snapshot(-10, -30)
+        initial['markets'].append(snapshot_fixture.quote(
+            1, source_updated_at=initial['markets'][0]['source_updated_at'], received_at=initial['received_at']))
+        self.assertEqual({'accepted': 1, 'ignored_stale': 0}, (await self.post(initial)).json())
+        fixture_before = await self.pool.fetchrow(
+            'SELECT xmin::text version,ctid::text location,received_at,source_updated_at FROM v2_fixtures')
+        quote_before = await self.pool.fetchrow(
+            "SELECT xmin::text version,ctid::text location,received_at,source_updated_at FROM v2_current_quotes WHERE market_id='m0'")
+
+        repeat = copy.deepcopy(initial)
+        repeat_received = datetime.now(timezone.utc) + timedelta(seconds=1)
+        repeat['received_at'] = repeat_received.isoformat()
+        repeat['markets'] = [repeat['markets'][0]]
+        repeat['markets'][0]['received_at'] = repeat_received.isoformat()
+        response = await self.post(repeat)
+
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual({'accepted': 1, 'ignored_stale': 0}, response.json())
+        self.assertEqual(fixture_before, await self.pool.fetchrow(
+            'SELECT xmin::text version,ctid::text location,received_at,source_updated_at FROM v2_fixtures'))
+        self.assertEqual(quote_before, await self.pool.fetchrow(
+            "SELECT xmin::text version,ctid::text location,received_at,source_updated_at FROM v2_current_quotes WHERE market_id='m0'"))
+        closed = await self.pool.fetchrow("SELECT status,received_at FROM v2_current_quotes WHERE market_id='m1'")
+        self.assertEqual('closed', closed['status'])
+        self.assertEqual(repeat_received, closed['received_at'])
+
+        advanced = copy.deepcopy(repeat)
+        advanced_at = datetime.now(timezone.utc) + timedelta(seconds=2)
+        advanced['source_updated_at'] = advanced_at.isoformat()
+        advanced['received_at'] = advanced_at.isoformat()
+        advanced['markets'][0]['source_updated_at'] = advanced_at.isoformat()
+        advanced['markets'][0]['received_at'] = advanced_at.isoformat()
+        response = await self.post(advanced)
+        self.assertEqual({'accepted': 1, 'ignored_stale': 0}, response.json())
+        self.assertEqual(advanced_at, await self.pool.fetchval('SELECT source_updated_at FROM v2_fixtures'))
+        self.assertEqual(advanced_at, await self.pool.fetchval(
+            "SELECT source_updated_at FROM v2_current_quotes WHERE market_id='m0'"))
+
+        changed = copy.deepcopy(advanced)
+        changed['home_score'] = 1
+        changed['markets'][0]['price'] = '2.05'
+        changed['received_at'] = (advanced_at + timedelta(seconds=1)).isoformat()
+        changed['markets'][0]['received_at'] = changed['received_at']
+        response = await self.post(changed)
+        self.assertEqual({'accepted': 1, 'ignored_stale': 0}, response.json())
+        self.assertEqual(1, await self.pool.fetchval('SELECT home_score FROM v2_fixtures'))
+        self.assertEqual(Decimal('2.05'), await self.pool.fetchval(
+            "SELECT price FROM v2_current_quotes WHERE market_id='m0'"))
+
+    async def test_unknown_source_version_keeps_receipt_order_without_faking_source_time(self):
+        first = self.snapshot(-10, -30)
+        first['source_updated_at'] = None
+        first['markets'][0]['source_updated_at'] = None
+        self.assertEqual(200, (await self.post(first)).status_code)
+        repeat = copy.deepcopy(first)
+        received = datetime.now(timezone.utc) + timedelta(seconds=1)
+        repeat['received_at'] = received.isoformat()
+        repeat['markets'][0]['received_at'] = received.isoformat()
+        self.assertEqual({'accepted': 1, 'ignored_stale': 0}, (await self.post(repeat)).json())
+        self.assertEqual(received, await self.pool.fetchval('SELECT received_at FROM v2_fixtures'))
+        self.assertEqual(received, await self.pool.fetchval('SELECT received_at FROM v2_current_quotes'))
+        self.assertIsNone(await self.pool.fetchval('SELECT source_updated_at FROM v2_fixtures'))
+        self.assertIsNone(await self.pool.fetchval('SELECT source_updated_at FROM v2_current_quotes'))
 
     async def test_concurrent_confirmed_result_lock_prevents_inflight_quote_reopening(self):
         self.assertEqual(200,(await self.post(self.snapshot(-20,-30))).status_code)

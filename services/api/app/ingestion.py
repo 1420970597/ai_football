@@ -28,7 +28,7 @@ async def ingest_fixture_batch(conn, items) -> int:
         for field in ("home_aliases", "away_aliases"):
             value[field] = [v.strip().casefold() for v in value[field] if v.strip()]
         payload.append(value)
-    accepted = await conn.fetch(
+    await conn.execute(
         "INSERT INTO v2_fixtures(id,source_id,sport,competition_id,competition_name,home_team_id,home_team,home_aliases,"
         "away_team_id,away_team,away_aliases,kickoff_at,phase,match_state,home_score,away_score,clock_minute,"
         "source_updated_at,received_at,source_time_quality,half_home_score,half_away_score) "
@@ -58,16 +58,36 @@ async def ingest_fixture_batch(conn, items) -> int:
         "AND NOT EXISTS(SELECT 1 FROM v2_fixture_results r WHERE r.fixture_id=v2_fixtures.id "
         "AND r.version=(SELECT max(latest.version) FROM v2_fixture_results latest WHERE latest.fixture_id=v2_fixtures.id) "
         "AND r.status IN('confirmed','void')) "
-        "RETURNING id,source_id", payload,
+        "AND (ROW(v2_fixtures.sport,v2_fixtures.competition_id,v2_fixtures.competition_name,"
+        "v2_fixtures.home_team_id,v2_fixtures.home_team,v2_fixtures.home_aliases,v2_fixtures.away_team_id,"
+        "v2_fixtures.away_team,v2_fixtures.away_aliases,v2_fixtures.kickoff_at,v2_fixtures.phase,"
+        "v2_fixtures.match_state,v2_fixtures.home_score,v2_fixtures.away_score,v2_fixtures.clock_minute,"
+        "v2_fixtures.source_updated_at,v2_fixtures.source_time_quality,v2_fixtures.half_home_score,"
+        "v2_fixtures.half_away_score) IS DISTINCT FROM ROW(EXCLUDED.sport,EXCLUDED.competition_id,"
+        "EXCLUDED.competition_name,EXCLUDED.home_team_id,EXCLUDED.home_team,EXCLUDED.home_aliases,"
+        "EXCLUDED.away_team_id,EXCLUDED.away_team,EXCLUDED.away_aliases,EXCLUDED.kickoff_at,EXCLUDED.phase,"
+        "EXCLUDED.match_state,EXCLUDED.home_score,EXCLUDED.away_score,EXCLUDED.clock_minute,"
+        "EXCLUDED.source_updated_at,EXCLUDED.source_time_quality,EXCLUDED.half_home_score,EXCLUDED.half_away_score) "
+        "OR EXCLUDED.source_updated_at IS NULL AND v2_fixtures.received_at IS DISTINCT FROM EXCLUDED.received_at)",
+        payload,
     )
-    accepted_sources = {record['source_id'] for record in accepted}
     # A fixture timestamp and its individual ctsp quote timestamps are independent.
     # Lock the stable stored identity/state for every submitted source, including
     # stale parent snapshots; result ingestion uses the same fixture row lock.
     stored = await conn.fetch(
-        "SELECT id,source_id,phase FROM v2_fixtures WHERE source_id=ANY($1::text[]) ORDER BY source_id FOR UPDATE",
-        list(fixtures),
+        "WITH incoming AS MATERIALIZED (SELECT source_id,phase,source_updated_at,received_at "
+        "FROM jsonb_to_recordset($1::jsonb) AS i(source_id text,phase text,source_updated_at timestamptz,received_at timestamptz)) "
+        "SELECT f.id,f.source_id,f.phase, "
+        "(coalesce(i.source_updated_at,i.received_at)>=coalesce(f.source_updated_at,f.received_at) "
+        "AND NOT(f.phase='finished' AND i.phase IN('scheduled','live')) "
+        "AND NOT(f.phase='live' AND i.phase='scheduled') "
+        "AND NOT EXISTS(SELECT 1 FROM v2_fixture_results r WHERE r.fixture_id=f.id "
+        "AND r.version=(SELECT max(latest.version) FROM v2_fixture_results latest WHERE latest.fixture_id=f.id) "
+        "AND r.status IN('confirmed','void'))) AS accepted "
+        "FROM v2_fixtures f JOIN incoming i USING(source_id) ORDER BY f.source_id FOR UPDATE OF f",
+        payload,
     )
+    accepted_sources = {record['source_id'] for record in stored if record['accepted']}
     quote_rows, closures, finished = [], [], []
     for record in stored:
         item = fixtures[record["source_id"]]
@@ -107,7 +127,15 @@ async def ingest_fixture_batch(conn, items) -> int:
             "price=EXCLUDED.price,source_updated_at=EXCLUDED.source_updated_at,received_at=EXCLUDED.received_at,"
             "source_time_quality=EXCLUDED.source_time_quality,status=EXCLUDED.status,play_id=EXCLUDED.play_id,"
             "market_instance_id=EXCLUDED.market_instance_id,selection_id=EXCLUDED.selection_id,is_main=EXCLUDED.is_main,score_basis=EXCLUDED.score_basis "
-            "WHERE coalesce(EXCLUDED.source_updated_at,EXCLUDED.received_at)>=coalesce(v2_current_quotes.source_updated_at,v2_current_quotes.received_at)",
+            "WHERE coalesce(EXCLUDED.source_updated_at,EXCLUDED.received_at)>=coalesce(v2_current_quotes.source_updated_at,v2_current_quotes.received_at) "
+            "AND (ROW(v2_current_quotes.market_name,v2_current_quotes.market_kind,v2_current_quotes.line,"
+            "v2_current_quotes.price,v2_current_quotes.source_updated_at,v2_current_quotes.source_time_quality,"
+            "v2_current_quotes.status,v2_current_quotes.play_id,v2_current_quotes.market_instance_id,"
+            "v2_current_quotes.selection_id,v2_current_quotes.is_main,v2_current_quotes.score_basis) "
+            "IS DISTINCT FROM ROW(EXCLUDED.market_name,EXCLUDED.market_kind,EXCLUDED.line,EXCLUDED.price,"
+            "EXCLUDED.source_updated_at,EXCLUDED.source_time_quality,EXCLUDED.status,EXCLUDED.play_id,"
+            "EXCLUDED.market_instance_id,EXCLUDED.selection_id,EXCLUDED.is_main,EXCLUDED.score_basis) "
+            "OR EXCLUDED.source_updated_at IS NULL AND v2_current_quotes.received_at IS DISTINCT FROM EXCLUDED.received_at)",
             quote_payload,
         )
     if closures:
@@ -124,7 +152,7 @@ async def ingest_fixture_batch(conn, items) -> int:
         # Terminal fixtures remain in periodic snapshots. Avoid generating a new
         # PostgreSQL tuple/WAL record for every already-closed historical quote.
         await conn.execute("UPDATE v2_current_quotes SET status='closed' WHERE fixture_id=ANY($1::text[]) AND status<>'closed'", finished)
-    return len(accepted)
+    return len(accepted_sources)
 
 
 async def ingest_fixture(conn, item) -> bool:
