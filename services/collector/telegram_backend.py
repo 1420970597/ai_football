@@ -47,6 +47,12 @@ def _idempotent_retry_delay(response: httpx.Response) -> float:
     return min(delay, _IDEMPOTENT_RETRY_AFTER_MAX_SECONDS)
 
 
+def _checkpoint_outcome_ambiguous(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 503
+
+
 class TelegramBackend:
     def __init__(self, client: httpx.AsyncClient, api_url: str):
         self.client = client
@@ -118,8 +124,45 @@ class TelegramBackend:
         return await self._call("POST", "/checkpoints/claim", {"chat_id": chat_id, "owner": owner})
 
     async def advance(self, chat_id: str, owner: str, last_message_id: int, previous: int) -> dict:
-        return await self._call("PUT", "/checkpoints", {"chat_id": chat_id, "owner": owner,
-                                                       "last_message_id": last_message_id, "previous_message_id": previous})
+        body = {"chat_id": chat_id, "owner": owner, "last_message_id": last_message_id,
+                "previous_message_id": previous}
+
+        async def confirm(cause: BaseException) -> dict | None:
+            checkpoint = await self.checkpoint(chat_id, owner)
+            current = checkpoint.get('last_message_id')
+            if type(current) is not int or current < 0:
+                raise RuntimeError('invalid Telegram checkpoint confirmation') from cause
+            if current >= last_message_id:
+                log.info('Telegram checkpoint advance confirmed after ambiguous response')
+                return {'last_message_id': current}
+            if current != previous:
+                raise RuntimeError('Telegram checkpoint changed during ambiguous advance') from cause
+            return None
+
+        try:
+            return await self._call("PUT", "/checkpoints", body)
+        except (httpx.TimeoutException, httpx.HTTPStatusError) as first_error:
+            if not _checkpoint_outcome_ambiguous(first_error):
+                raise
+            confirmed = await confirm(first_error)
+            if confirmed is not None:
+                return confirmed
+            delay = (_idempotent_retry_delay(first_error.response)
+                     if isinstance(first_error, httpx.HTTPStatusError) else _IDEMPOTENT_RETRY_AFTER_FALLBACK_SECONDS)
+            log.warning('Telegram checkpoint advance retry status=%s attempt=1 retry_after_s=%.3f',
+                        first_error.response.status_code if isinstance(first_error, httpx.HTTPStatusError) else 'timeout',
+                        delay)
+            await asyncio.sleep(delay)
+
+        try:
+            return await self._call("PUT", "/checkpoints", body)
+        except (httpx.TimeoutException, httpx.HTTPStatusError) as second_error:
+            if not _checkpoint_outcome_ambiguous(second_error):
+                raise
+            confirmed = await confirm(second_error)
+            if confirmed is not None:
+                return confirmed
+            raise
 
     async def advance_author_backfill(self, chat_id: str, owner: str, sender_id: str,
                                       cursor: int, previous: int, complete: bool) -> dict:

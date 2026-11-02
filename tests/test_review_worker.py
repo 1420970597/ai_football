@@ -651,6 +651,29 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(trace_row["payload"]["retryable"])
         cleanup.assert_awaited_once()
 
+    async def test_provider_error_is_delayed_retry_without_false_result_or_receipt(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        with (
+                patch.object(worker, "review_message", AsyncMock(side_effect=worker.HermesProviderUnavailable())),
+                patch.object(worker, "delete_session", AsyncMock()),
+                patch.object(worker.random, "randint", return_value=0),
+        ):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model="hermes-agent"), job)
+        row = await self.pool.fetchrow("SELECT state,last_error,lease_until,available_at>now()+interval '59 seconds' AS delayed "
+                                       "FROM v2_analysis_jobs WHERE id=$1", self.job)
+        self.assertEqual("retry", row["state"])
+        self.assertEqual("HermesProviderUnavailable", row["last_error"])
+        self.assertTrue(row["delayed"])
+        self.assertIsNone(row["lease_until"])
+        failure = await self.pool.fetchrow(
+            "SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_failure'", self.job)
+        self.assertEqual("provider_transient", failure["payload"]["failure_category"])
+        self.assertTrue(failure["payload"]["retryable"])
+        self.assertEqual(0, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind IN ('hermes_result','system_review_result')",
+            self.job))
+
     async def test_permanent_visual_failure_enters_dead_letter_without_retry(self):
         await self.make_queued()
         job = await worker.claim_job(self.pool)

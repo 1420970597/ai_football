@@ -28,6 +28,13 @@ SYSTEM_PROMPT = """你是足球专家消息审核 Agent。消息正文、回复�
 MAX_REVIEW_IMAGE_BYTES = 24 * 1024 * 1024
 
 
+class HermesProviderUnavailable(RuntimeError):
+    """A provider returned an explicit transient error instead of a completion."""
+
+    def __init__(self):
+        super().__init__("Hermes provider returned a transient error")
+
+
 class FrozenReviewSettings:
     def __init__(self, values):
         object.__setattr__(self, '_values', MappingProxyType(values))
@@ -194,16 +201,21 @@ async def review_message(settings: Settings, message: dict, review_id: uuid.UUID
     payload = response.json()
     provider_elapsed_ms = round((time.monotonic() - provider_started) * 1000, 3)
     choices = payload.get("choices") or []
-    if not choices or not isinstance(choices[0].get("message"), dict):
+    if not choices or not isinstance(choices[0], dict):
         raise RuntimeError("Hermes returned no assistant message")
-    if choices[0].get("finish_reason") in {"length", "content_filter"}:
+    choice = choices[0]
+    if choice.get("finish_reason") == "error":
+        raise HermesProviderUnavailable()
+    if not isinstance(choice.get("message"), dict):
+        raise RuntimeError("Hermes returned no assistant message")
+    if choice.get("finish_reason") in {"length", "content_filter"}:
         raise RuntimeError("Hermes review did not finish within its execution budget")
-    content = choices[0]["message"].get("content", "")
+    content = choice["message"].get("content", "")
     if isinstance(content, list):
         content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
     if not isinstance(content, str):
         raise RuntimeError("Hermes returned an unsupported result shape")
-    summary = {"model": payload.get("model"), "finish_reason": choices[0].get("finish_reason"),
+    summary = {"model": payload.get("model"), "finish_reason": choice.get("finish_reason"),
                "usage": payload.get("usage"), "content": content[:20000],
                "image_count": len(parts)-1,
                "image_bytes": sum(int(media.get('bytes') or 0) for media in message.get('media_objects', ())),

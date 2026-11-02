@@ -50,6 +50,183 @@ class ReconciliationBatchLeaseUnitTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_checkpoint_503_confirms_previous_then_retries_same_cas_once(self):
+        requests = []
+        delays = []
+        checkpoint = 12
+
+        def handler(request):
+            nonlocal checkpoint
+            requests.append(request)
+            if request.url.path.endswith('/checkpoints/claim'):
+                return httpx.Response(200, json={'last_message_id': checkpoint, 'lease_until': 'future'})
+            if len([item for item in requests if item.url.path.endswith('/checkpoints')]) == 1:
+                return httpx.Response(503, json={}, headers={'Retry-After': '1'})
+            checkpoint = 13
+            return httpx.Response(200, json={'last_message_id': checkpoint})
+
+        async def record_sleep(delay):
+            delays.append(delay)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            with patch('collector.telegram_backend.asyncio.sleep', new=record_sleep):
+                with self.assertLogs('platform.telegram', level='WARNING') as logs:
+                    result = await backend.advance('-1001', 'private-owner-only', 13, 12)
+
+        puts = [request for request in requests if request.method == 'PUT']
+        self.assertEqual({'last_message_id': 13}, result)
+        self.assertEqual(2, len(puts))
+        self.assertEqual(puts[0].content, puts[1].content)
+        self.assertEqual([1.0], delays)
+        self.assertNotIn('private-owner-only', '\n'.join(logs.output))
+
+    async def test_checkpoint_503_after_commit_is_confirmed_without_retry(self):
+        requests = []
+        checkpoint = 12
+
+        def handler(request):
+            nonlocal checkpoint
+            requests.append(request)
+            if request.method == 'PUT':
+                checkpoint = 13
+                return httpx.Response(503, json={})
+            return httpx.Response(200, json={'last_message_id': checkpoint, 'lease_until': 'future'})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            with self.assertLogs('platform.telegram', level='WARNING'):
+                result = await backend.advance('-1001', 'same-owner', 13, 12)
+
+        self.assertEqual({'last_message_id': 13}, result)
+        self.assertEqual(['PUT', 'POST'], [request.method for request in requests])
+
+    async def test_checkpoint_timeout_after_commit_is_confirmed_without_retry(self):
+        requests = []
+        checkpoint = 12
+
+        def handler(request):
+            nonlocal checkpoint
+            requests.append(request)
+            if request.method == 'PUT':
+                checkpoint = 13
+                raise httpx.ReadTimeout('private transport detail', request=request)
+            return httpx.Response(200, json={'last_message_id': checkpoint, 'lease_until': 'future'})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            with patch('collector.telegram_backend.asyncio.sleep', new=AsyncMock()) as pause:
+                result = await backend.advance('-1001', 'same-owner', 13, 12)
+
+        self.assertEqual({'last_message_id': 13}, result)
+        self.assertEqual(['PUT', 'POST'], [request.method for request in requests])
+        pause.assert_not_awaited()
+
+    async def test_second_ambiguous_cas_is_confirmed_after_commit(self):
+        requests = []
+        delays = []
+        checkpoint = 12
+        put_count = 0
+
+        def handler(request):
+            nonlocal checkpoint, put_count
+            requests.append(request)
+            if request.method == 'PUT':
+                put_count += 1
+                if put_count == 2:
+                    checkpoint = 13
+                return httpx.Response(503, json={})
+            return httpx.Response(200, json={'last_message_id': checkpoint, 'lease_until': 'future'})
+
+        async def record_sleep(delay):
+            delays.append(delay)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            with patch('collector.telegram_backend.asyncio.sleep', new=record_sleep):
+                with self.assertLogs('platform.telegram', level='WARNING'):
+                    result = await backend.advance('-1001', 'same-owner', 13, 12)
+
+        self.assertEqual({'last_message_id': 13}, result)
+        self.assertEqual(2, put_count)
+        self.assertEqual(2, sum(request.url.path.endswith('/checkpoints/claim') for request in requests))
+        self.assertEqual([0.5], delays)
+
+    async def test_second_ambiguous_cas_without_commit_stops_after_one_retry(self):
+        requests = []
+        delays = []
+
+        def handler(request):
+            requests.append(request)
+            if request.method == 'PUT':
+                return httpx.Response(503, json={})
+            return httpx.Response(200, json={'last_message_id': 12, 'lease_until': 'future'})
+
+        async def record_sleep(delay):
+            delays.append(delay)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            with patch('collector.telegram_backend.asyncio.sleep', new=record_sleep):
+                with self.assertLogs('platform.telegram', level='WARNING'):
+                    with self.assertRaises(httpx.HTTPStatusError) as raised:
+                        await backend.advance('-1001', 'same-owner', 13, 12)
+
+        self.assertEqual(503, raised.exception.response.status_code)
+        self.assertEqual(2, sum(request.method == 'PUT' for request in requests))
+        self.assertEqual(2, sum(request.url.path.endswith('/checkpoints/claim') for request in requests))
+        self.assertEqual([0.5], delays)
+
+    async def test_checkpoint_owner_confirmation_failure_stops_without_retry(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            if request.method == 'PUT':
+                return httpx.Response(503, json={})
+            return httpx.Response(409, json={'detail': 'Telegram source is owned by another collector'})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            with self.assertLogs('platform.telegram', level='WARNING'):
+                with self.assertRaises(httpx.HTTPStatusError) as raised:
+                    await backend.advance('-1001', 'old-owner', 13, 12)
+
+        self.assertEqual(409, raised.exception.response.status_code)
+        self.assertEqual(['PUT', 'POST'], [request.method for request in requests])
+
+    async def test_checkpoint_unexpected_high_water_stops_without_retry(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            if request.method == 'PUT':
+                return httpx.Response(503, json={})
+            return httpx.Response(200, json={'last_message_id': 11, 'lease_until': 'future'})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            with self.assertLogs('platform.telegram', level='WARNING'):
+                with self.assertRaisesRegex(RuntimeError, 'checkpoint changed'):
+                    await backend.advance('-1001', 'same-owner', 13, 10)
+
+        self.assertEqual(['PUT', 'POST'], [request.method for request in requests])
+
+    async def test_checkpoint_conflict_is_not_claimed_or_retried(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(409, json={'detail': 'checkpoint has changed'})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
+            with self.assertLogs('platform.telegram', level='WARNING'):
+                with self.assertRaises(httpx.HTTPStatusError):
+                    await backend.advance('-1001', 'same-owner', 13, 12)
+
+        self.assertEqual(['PUT'], [request.method for request in requests])
+
     async def test_rejection_logs_only_stable_reason_and_preserves_original_response(self):
         requests = []
         def handler(request):

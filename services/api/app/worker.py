@@ -11,7 +11,7 @@ import uuid
 import httpx
 from . import database
 from .config import load_settings
-from .hermes_client import delete_session, resolve_review_settings, review_message
+from .hermes_client import HermesProviderUnavailable, delete_session, resolve_review_settings, review_message
 from .review_state import active_job, trace
 from .review_summary import record_summary
 from .review_recovery import market_recovery
@@ -54,6 +54,8 @@ def failure_category(exc: BaseException) -> tuple[str, bool]:
     """Return a bounded, non-sensitive failure class and retry policy."""
     if isinstance(exc, LeaseLost):
         return "lease_lost", True
+    if isinstance(exc, HermesProviderUnavailable):
+        return "provider_transient", True
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)):
         return "timeout", True
     if isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError)):
@@ -74,6 +76,12 @@ def failure_category(exc: BaseException) -> tuple[str, bool]:
     if "no assistant message" in message or "unsupported result shape" in message:
         return "model_invalid_response", True
     return "internal", True
+
+
+def retry_delay_seconds(failure: str, attempts: int) -> int:
+    attempt = max(1, attempts)
+    initial = 60 if failure == "provider_transient" else 5
+    return min(300, initial * 2 ** (attempt - 1)) + random.randint(0, 3)
 
 
 async def _scheduler_lock(conn):
@@ -415,7 +423,7 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
         failure, retryable = failure_category(exc)
         log.warning("review failed review_id=%s attempt_id=%s category=%s", job["id"], job["attempt_id"], category)
         exhausted = job["attempts"] >= MAX_ATTEMPTS or not retryable
-        delay = 0 if exhausted else min(300, 5 * 2 ** (job["attempts"] - 1)) + random.randint(0, 3)
+        delay = 0 if exhausted else retry_delay_seconds(failure, job["attempts"])
         try:
             await _add_trace(pool, job, "review_failure", {
                 "failure_category": failure, "retryable": retryable, "exception_type": category,
