@@ -1,6 +1,6 @@
 # Hermes Transient Retry Durability
 
-Status: design recorded; implementation and validation pending.
+Status: implementation written; 63 focused worker/classification tests pass in Docker with task-owned PostgreSQL; scheduler/admin and full API regression checks pending.
 
 | Field | Evidence and decision |
 | --- | --- |
