@@ -137,7 +137,7 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(['reconciliation_deferred']*3,[result['sources'][chat]['state'] for chat in chats[:3]])
         self.assertEqual(4,len(self.backend.events))
         self.assertTrue(all(not lock.locked() for lock in self.collector.locks.values()))
-        self.assertEqual(set(chats),set(self.backend.claims[-4:]))
+        self.assertTrue(all(self.backend.claims.count(chat)==2 for chat in chats))
 
     async def test_history_deadline_releases_slot_and_restart_replays_persisted_event_idempotently(self):
         self.client.messages['-1001']=[Message(1)]
@@ -180,6 +180,30 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1,self.backend.positions['-1001'])
         self.assertEqual('caught_up',result['sources']['-1002']['state'])
         self.assertEqual(2,self.backend.positions['-1002'])
+
+    async def test_completed_source_refreshes_before_next_source_wave(self):
+        chats=['-1001','-1002','-1003','-1004']
+        self.backend.source_items=[self.source|{'chat_id':chat,'trusted_sender_ids':[]} for chat in chats]
+        slow_source_entered=asyncio.Event()
+        release_slow_source=asyncio.Event()
+
+        async def sync_source(chat_id, source):
+            await self.collector._checkpoint(chat_id)
+            if chat_id=='-1004':
+                slow_source_entered.set()
+                await release_slow_source.wait()
+            return {'state':'caught_up','last_message_id':0,'observed':0}
+
+        self.collector._sync_source=sync_source
+        task=asyncio.create_task(self.collector.sync_once())
+        try:
+            await asyncio.wait_for(slow_source_entered.wait(),.5)
+            self.assertTrue(any(self.backend.claims.count(chat)>=2 for chat in chats[:3]))
+        finally:
+            release_slow_source.set()
+        result=await asyncio.wait_for(task,.8)
+        self.assertTrue(all(self.backend.claims.count(chat)==2 for chat in chats))
+        self.assertEqual(set(chats),set(result['sources']))
 
     async def test_persistence_failure_does_not_pop_claim_and_retry_keeps_full_original(self):
         self.client.messages['-1001']=[Message(1,text='原始完整推荐')]

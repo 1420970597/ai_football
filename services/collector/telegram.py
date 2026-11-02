@@ -469,6 +469,18 @@ class TelegramCollector:
         # 群组之间独立，但控制并发和 Telegram flood；单群失败不阻止其他群。
         gate = asyncio.Semaphore(3)
 
+        async def keep_lease(chat_id):
+            try:
+                async with asyncio.timeout(SOURCE_LEASE_REFRESH_SECONDS):
+                    async with self.locks.setdefault(chat_id, asyncio.Lock()):
+                        await self._checkpoint(chat_id)
+            except Exception as exc:
+                result[chat_id]['lease_state'] = 'deferred'
+                result[chat_id]['lease_error'] = type(exc).__name__
+                if result[chat_id]['state'] in {'caught_up', 'catching_up', 'backoff', 'flood_wait'}:
+                    result[chat_id]['history_state'] = result[chat_id]['state']
+                    result[chat_id]['state'] = 'lease_deferred'
+
         async def one(chat_id, source):
             async with gate:
                 try:
@@ -499,26 +511,11 @@ class TelegramCollector:
                     result[chat_id] = {"state": "unavailable", "error": type(exc).__name__,
                                        'reconciliation_pending': len(self.reconcile_pending.get(chat_id, []))}
                     log.warning("Telegram source unavailable category=%s", type(exc).__name__)
+                # Refresh before releasing this slot so the next source wave
+                # cannot consume another group's 90-second lease.
+                await keep_lease(chat_id)
 
         await asyncio.gather(*(one(chat_id, source) for chat_id, source in self.sources.items()))
-        # The second source wave can run while the first has become idle.
-        # Refresh before the separate media budget so their 90-second remote
-        # leases do not expire during another source's transfer work.
-        async def keep_lease(chat_id):
-            # Telegram's history backoff does not suspend live updates. Renew
-            # the database lease even while Telegram RPCs must remain paused.
-            try:
-                async with gate:
-                    async with asyncio.timeout(SOURCE_LEASE_REFRESH_SECONDS):
-                        async with self.locks.setdefault(chat_id, asyncio.Lock()):
-                            await self._checkpoint(chat_id)
-            except Exception as exc:
-                result[chat_id]['lease_state'] = 'deferred'
-                result[chat_id]['lease_error'] = type(exc).__name__
-                if result[chat_id]['state'] in {'caught_up', 'catching_up', 'backoff', 'flood_wait'}:
-                    result[chat_id]['history_state'] = result[chat_id]['state']
-                    result[chat_id]['state'] = 'lease_deferred'
-        await asyncio.gather(*(keep_lease(chat_id) for chat_id in result))
         await self.retry_pending()
         try:
             async with asyncio.timeout(MEDIA_CLEANUP_SECONDS):
