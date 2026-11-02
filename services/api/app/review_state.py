@@ -21,14 +21,26 @@ def authorize(request: Request, token: str) -> None:
         raise HTTPException(status_code=401, detail="service authentication failed")
 
 
-async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID):
+async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID, *, lock_trace_sequence: bool = False):
+    trace_lock_column = (
+        ",pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || j.id::text,0)) AS trace_lock"
+        if lock_trace_sequence else ""
+    )
     job = await conn.fetchrow(
         "SELECT j.id,j.message_id,j.state,j.attempt_id,j.lease_until,j.review_mode,m.posted_at,m.raw_text,m.media_objects,m.revision,"
         "m.deleted_at,m.media_state,e.id AS expert_id,e.display_nickname,e.enabled AS expert_enabled,"
-        "s.enabled AS source_enabled,se.enabled AS trusted "
+        "s.enabled AS source_enabled,se.enabled AS trusted,"
+        "request.sequence_no AS hermes_request_sequence,request.configuration_version,request.model,"
+        "EXISTS(SELECT 1 FROM v2_expert_messages newer WHERE newer.source_id=m.source_id "
+        "AND newer.platform_message_id=m.platform_message_id AND newer.revision>m.revision) AS has_newer_revision"
+        + trace_lock_column + " "
         "FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
         "JOIN v2_experts e ON e.id=m.expert_id JOIN v2_expert_sources s ON s.id=m.source_id "
         "LEFT JOIN v2_source_experts se ON se.source_id=m.source_id AND se.expert_id=m.expert_id "
+        "LEFT JOIN LATERAL (SELECT t.sequence_no,t.payload->>'configuration_version' AS configuration_version,"
+        "t.payload->>'model' AS model FROM v2_analysis_traces t WHERE t.job_id=j.id "
+        "AND t.trace_kind='hermes_request' AND t.payload->>'attempt_id'=j.attempt_id::text "
+        "ORDER BY t.sequence_no DESC LIMIT 1) request ON TRUE "
         # Tool calls for one agent attempt are independently authenticated. A
         # shared lock keeps cancellation/completion from overtaking them while
         # allowing safe MCP calls in the same model batch to overlap.
@@ -38,26 +50,23 @@ async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID):
         raise HTTPException(status_code=409, detail="review attempt is no longer active")
     if job["deleted_at"] or job["media_state"] != "ready" or not all((job["expert_enabled"], job["source_enabled"], job["trusted"])):
         raise HTTPException(status_code=409, detail="message or source is not eligible")
-    latest = await conn.fetchval(
-        "SELECT max(revision) FROM v2_expert_messages WHERE source_id=(SELECT source_id FROM v2_expert_messages WHERE id=$1) "
-        "AND platform_message_id=(SELECT platform_message_id FROM v2_expert_messages WHERE id=$1)", job["message_id"],
-    )
-    if latest != job["revision"]:
+    if job["has_newer_revision"]:
         raise HTTPException(status_code=409, detail="message has a newer revision")
     return job
 
 
-async def append_traces(conn, review_id: uuid.UUID, records: list[tuple[str, dict]]) -> None:
+async def append_traces(conn, review_id: uuid.UUID, records: list[tuple[str, dict]], *, trace_lock_held: bool = False) -> None:
     if not records:
         return
     encoded = [
         {"id": str(uuid.uuid4()), "trace_kind": kind, "payload": payload}
         for kind, payload in records
     ]
-    await conn.execute(
-        "SELECT pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || $1::text,0))",
-        str(review_id),
-    )
+    if not trace_lock_held:
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || $1::text,0))",
+            str(review_id),
+        )
     await conn.execute(
         "WITH sequence_base AS MATERIALIZED ("
         "SELECT COALESCE(MAX(t.sequence_no),0) AS last_sequence "

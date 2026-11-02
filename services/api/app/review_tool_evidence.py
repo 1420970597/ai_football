@@ -197,8 +197,11 @@ class ToolCall:
 _current: ContextVar[ToolCall | None] = ContextVar('review_tool_call', default=None)
 
 
-async def active_tool_job(conn, review_id, attempt_id):
-    job = await active_job(conn, review_id, attempt_id)
+async def active_tool_job(conn, review_id, attempt_id, *, lock_trace_sequence=False):
+    if lock_trace_sequence:
+        job = await active_job(conn, review_id, attempt_id, lock_trace_sequence=True)
+    else:
+        job = await active_job(conn, review_id, attempt_id)
     current = _current.get()
     if current is not None:
         current.validated, current.job = True, job
@@ -223,15 +226,10 @@ def _parameters(body):
     return safe(value)
 
 
-async def _context(conn, body, job):
-    source = await conn.fetchrow(
-        "SELECT sequence_no,payload->>'configuration_version' AS configuration_version,payload->>'model' AS model "
-        "FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='hermes_request' "
-        "AND payload->>'attempt_id'=$2 ORDER BY sequence_no DESC LIMIT 1", body.review_id, str(body.attempt_id))
+def _context(body, job):
     return {'attempt_id': str(body.attempt_id), 'message_id': str(job['message_id']),
-            'message_revision': job['revision'], 'hermes_request_sequence': source['sequence_no'] if source else None,
-            'configuration_version': source['configuration_version'] if source else None,
-            'model': source['model'] if source else None}
+            'message_revision': job['revision'], 'hermes_request_sequence': job['hermes_request_sequence'],
+            'configuration_version': job['configuration_version'], 'model': job['model']}
 
 
 async def tool_success(conn, body, result, summary):
@@ -240,8 +238,8 @@ async def tool_success(conn, body, result, summary):
         raise RuntimeError('review tool evidence context is missing')
     wire = snapshot_result(current.kind, result, compact_markets=True)
     manifest, chunks = encode_snapshot(wire)
-    job = await active_tool_job(conn, body.review_id, body.attempt_id)
-    context = await _context(conn, body, job)
+    job = await active_tool_job(conn, body.review_id, body.attempt_id, lock_trace_sequence=True)
+    context = _context(body, job)
     manifest['call_id'] = current.call_id
     manifest['references'] = _references(current.kind, wire)
     records = [('tool_response_chunk', {
@@ -251,7 +249,7 @@ async def tool_success(conn, body, result, summary):
     records.append((current.kind, {**summary, **context, 'call_id': current.call_id,
         'status': 'succeeded', 'parameters': _parameters(body), 'response_snapshot': manifest,
         'elapsed_ms': round((time.perf_counter() - current.started) * 1000, 3)}))
-    await append_traces(conn, body.review_id, records)
+    await append_traces(conn, body.review_id, records, trace_lock_held=True)
     return wire
 
 
@@ -273,7 +271,7 @@ def tool_evidence(kind):
                             async with database.current_pool().acquire(timeout=1) as conn:
                                 async with conn.transaction():
                                     job = await active_job(conn, body.review_id, body.attempt_id)
-                                    context = await _context(conn, body, job)
+                                    context = _context(body, job)
                                     await trace(conn, body.review_id, kind, {**context,
                                         'call_id': current.call_id, 'status': 'failed', 'parameters': _parameters(body),
                                         'failure_category': ('evidence_budget_exceeded' if original.status_code == 413 else 'tool_contract_rejected'),

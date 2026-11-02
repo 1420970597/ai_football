@@ -23,6 +23,45 @@ from tests import test_reviews as fixtures
 from tests import test_mcp_transport as mcp_fixtures
 
 
+class _CountingConnection:
+    def __init__(self, connection, pool):
+        self._connection = connection
+        self._pool = pool
+
+    def __getattr__(self, name):
+        value = getattr(self._connection, name)
+        if name not in {'execute', 'fetch', 'fetchrow', 'fetchval'}:
+            return value
+
+        async def counted(*args, **kwargs):
+            self._pool.commands += 1
+            return await value(*args, **kwargs)
+
+        return counted
+
+
+class _CountingAcquire:
+    def __init__(self, acquire, pool):
+        self._acquire = acquire
+        self._pool = pool
+
+    async def __aenter__(self):
+        connection = await self._acquire.__aenter__()
+        return _CountingConnection(connection, self._pool)
+
+    async def __aexit__(self, *args):
+        return await self._acquire.__aexit__(*args)
+
+
+class _CountingPool:
+    def __init__(self, pool):
+        self._pool = pool
+        self.commands = 0
+
+    def acquire(self):
+        return _CountingAcquire(self._pool.acquire(), self)
+
+
 class ToolSnapshotUnitTests(unittest.TestCase):
     def test_large_market_inventory_keeps_all_supported_quotes_with_explicit_coverage(self):
         quote = {'quote_id': str(uuid.uuid4()), 'market_id': 'total', 'market_name': '全场大小附加盘口' * 5,
@@ -382,6 +421,7 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('Alpha1', second['items'][0]['home_team'])
         self.assertTrue(third['search_complete'])
         self.assertIsNone(third['next_cursor'])
+        self.assertEqual([3, 3, 3], [page['total_candidates'] for page in (first, second, third)])
         for index, expected in enumerate(pages):
             payload, replayed = await self.replay('mcp_search_matches', offset=index)
             self.assertEqual(expected, replayed)
@@ -389,6 +429,25 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(1, payload['message_revision'])
             self.assertEqual(str(self.message), payload['message_id'])
         self.assertEqual(3, third['total_candidates'])
+
+    async def test_search_uses_bounded_database_round_trips_for_first_and_next_page(self):
+        await self.fixture(1)
+        await self.fixture(2)
+        counted_pool = _CountingPool(self.pool)
+        with patch('app.routes.reviews.database.current_pool', return_value=counted_pool):
+            first = await self.post('search_matches', team_query='Alpha', sport='football', page_size=1)
+        self.assertEqual(200, first.status_code, first.text)
+        self.assertEqual(8, counted_pool.commands)
+        first_result = first.json()
+        self.assertEqual(2, first_result['total_candidates'])
+
+        counted_pool.commands = 0
+        with patch('app.routes.reviews.database.current_pool', return_value=counted_pool):
+            second = await self.post('search_matches', team_query='Alpha', sport='football', page_size=1,
+                                     cursor=first_result['next_cursor'])
+        self.assertEqual(200, second.status_code, second.text)
+        self.assertEqual(6, counted_pool.commands)
+        self.assertEqual(2, second.json()['total_candidates'])
 
     async def test_market_snapshot_is_exact_multi_chunk_and_immutable_after_price_change(self):
         await self.fixture()
@@ -398,8 +457,8 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
         stored = await self.pool.fetchval('SELECT candidate_data FROM v2_match_search_candidates LIMIT 1')
         self.assertNotIn('private_token', stored)
         await self.resolve(key)
-        await self.pool.execute("INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) "
-            "SELECT $1,$2,max(sequence_no)+1,'hermes_request',$3 FROM v2_analysis_traces WHERE job_id=$2", uuid.uuid4(), self.job,
+        request_sequence = await self.pool.fetchval("INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) "
+            "SELECT $1,$2,max(sequence_no)+1,'hermes_request',$3 FROM v2_analysis_traces WHERE job_id=$2 RETURNING sequence_no", uuid.uuid4(), self.job,
             {'attempt_id': str(self.attempt), 'model': 'test-route/model', 'configuration_version': 'a'*64})
         for index in range(60):
             await self.pool.execute("INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,line,selection,price,source_updated_at,market_kind,period) "
@@ -408,6 +467,10 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, response.status_code, response.text)
         data = response.json()
         self.assertEqual(61, len(data['markets']))
+        audit = await self.pool.fetchval("SELECT payload FROM v2_analysis_traces WHERE trace_kind='mcp_list_match_markets' AND payload->>'status'='succeeded'")
+        self.assertEqual(request_sequence, audit['hermes_request_sequence'])
+        self.assertEqual('a'*64, audit['configuration_version'])
+        self.assertEqual('test-route/model', audit['model'])
         self.assertTrue(all(set(item)==review_tool_evidence.MODEL_QUOTE_FIELDS for item in data['markets']))
         self.assertNotIn('private_headers', data['markets'][0])
         payload, replayed = await self.replay('mcp_list_match_markets')
@@ -467,11 +530,11 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
         before = await self.pool.fetchval('SELECT count(*) FROM v2_analysis_traces')
         original_active = review_tool_evidence.active_job
         calls = 0
-        async def expire_after_initial_check(*args):
+        async def expire_after_initial_check(*args, **kwargs):
             nonlocal calls
             calls += 1
             if calls == 1:
-                return await original_active(*args)
+                return await original_active(*args, **kwargs)
             raise HTTPException(409, 'explicit expired audit attempt')
         with patch('app.review_tool_evidence.active_job', side_effect=expire_after_initial_check):
             response = await self.post('list_match_markets', fixture_id='not-bound')

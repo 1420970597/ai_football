@@ -122,6 +122,7 @@ async def search_matches(body: SearchInput, request: Request):
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
             search = None
+            candidate_total = None
             if body.cursor:
                 # Lock the actual continuation first; never acquire two query
                 # locks in opposite orders when a caller changes its filters.
@@ -145,13 +146,13 @@ async def search_matches(body: SearchInput, request: Request):
             if not search:
                 if body.cursor:
                     raise HTTPException(status_code=409, detail="search has not started")
-                await conn.execute(
+                search = await conn.fetchrow(
                     "INSERT INTO v2_match_searches(job_id,search_key,team_query,phase,competition_query,from_utc,to_utc,attempt_id) "
-                    "VALUES($1,$2,$3,$4,$5,$6,$7,$8)", body.review_id, search_key, scope["team"], body.phase, scope["competition"], body.from_utc, body.to_utc, body.attempt_id,
+                    "VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *", body.review_id, search_key, scope["team"], body.phase, scope["competition"], body.from_utc, body.to_utc, body.attempt_id,
                 )
                 # 一次 INSERT SELECT 形成完整候选快照，之后按不可变序号遍历，避免更新和新增造成漏场。
-                await conn.execute(
-                    "INSERT INTO v2_match_search_candidates(job_id,search_key,fixture_id,position,candidate_data) "
+                candidate_total = await conn.fetchval(
+                    "WITH inserted AS (INSERT INTO v2_match_search_candidates(job_id,search_key,fixture_id,position,candidate_data) "
                     "SELECT $1,$2,f.id,row_number() OVER(ORDER BY f.kickoff_at,f.id)," + _CANDIDATE_JSON + " FROM v2_fixtures f "
                     "WHERE f.phase IN ('live','scheduled','finished','cancelled') AND ($3='all' OR f.phase=$3) "
                     "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 "
@@ -162,12 +163,11 @@ async def search_matches(body: SearchInput, request: Request):
                     "AND ($9='' OR regexp_replace(translate(lower(f.competition_name),$6,$7),"
                     "'[^[:alnum:]]+',' ','g') LIKE '%'||$9||'%') "
                     "AND ($10::timestamptz IS NULL OR f.kickoff_at >= $10) AND ($11::timestamptz IS NULL OR f.kickoff_at <= $11) "
-                    "AND ($12::text IS NULL OR f.sport=$12)",
+                    "AND ($12::text IS NULL OR f.sport=$12) RETURNING 1) SELECT count(*) FROM inserted",
                     body.review_id, search_key, body.phase, raw_team_pattern, team_patterns,
                     name_fold_source, name_fold_target, raw_team_alias, normalize_team_name(scope["competition"]),
                     body.from_utc, body.to_utc, body.sport,
                 )
-                search = await conn.fetchrow("SELECT * FROM v2_match_searches WHERE job_id=$1 AND search_key=$2", body.review_id, search_key)
             if search["attempt_id"] != body.attempt_id:
                 raise HTTPException(status_code=409, detail="search belongs to an earlier attempt")
             if body.cursor != search["expected_cursor"] and not (body.cursor is None and search["page_count"] == 0):
@@ -182,7 +182,7 @@ async def search_matches(body: SearchInput, request: Request):
             has_more = len(rows) > body.page_size
             page = rows[:body.page_size]
             cursor = _cursor(request, body.review_id, body.attempt_id, search_key, page[-1]["position"]) if has_more else None
-            total = await conn.fetchval("SELECT count(*) FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2", body.review_id, search_key)
+            total = candidate_total if candidate_total is not None else search["total_candidates"]
             await conn.execute(
                 "UPDATE v2_match_searches SET expected_cursor=$3,complete=$4,page_count=page_count+1,total_candidates=$5,updated_at=now() WHERE job_id=$1 AND search_key=$2",
                 body.review_id, search_key, cursor, not has_more, total,
