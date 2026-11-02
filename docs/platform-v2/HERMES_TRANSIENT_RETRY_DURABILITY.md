@@ -1,6 +1,6 @@
 # Hermes Transient Retry Durability
 
-Status: implementation and Docker isolation verification passed; runtime worker deployment and a new 1800-second observation remain pending.
+Status: implementation and Docker isolation verification passed; the candidate worker image is built and import-verified. Runtime worker deployment and a new 1800-second observation remain pending.
 
 | Field | Evidence and decision |
 | --- | --- |
