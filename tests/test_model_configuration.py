@@ -171,6 +171,16 @@ class ModelConfigurationTests(unittest.IsolatedAsyncioTestCase):
             snapshot.hermes_model = 'changed'
         with patch.object(hermes_client.httpx, 'AsyncClient', side_effect=AssertionError('same snapshot must not reread')):
             self.assertIs(snapshot, await hermes_client.resolve_review_settings(snapshot))
+        active_state_updated_at = await self.pool.fetchval(
+            'SELECT updated_at FROM v2_admin_settings WHERE setting_key=$1', models.STATE_KEY)
+        factory = httpx.AsyncClient
+        with patch.object(hermes_client.httpx, 'AsyncClient',
+                          side_effect=lambda **kw: factory(transport=httpx.ASGITransport(app=self.app), **kw)):
+            repeated = await hermes_client.resolve_review_settings(self.app.state.settings)
+        self.assertEqual('candidate/model-v2', repeated.hermes_model)
+        self.assertEqual(active_state_updated_at, await self.pool.fetchval(
+            'SELECT updated_at FROM v2_admin_settings WHERE setting_key=$1', models.STATE_KEY))
+        self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_audit_log WHERE action='model_configuration_consumed'"))
         config = await self.client.get('/internal/review/config', headers={'Authorization': 'Bearer isolated-internal-model-worker'})
         self.assertEqual(200, config.status_code)
         value = config.json()
@@ -246,11 +256,15 @@ class ModelConfigurationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(response.json()['current'], False)
         self.assertEqual('awaiting_consumer', (await self.status())['application_state'])
         self.assertEqual('cline-pass/deepseek-v4.1-flash', old['model'])
+        state_updated_at = await self.pool.fetchval(
+            'SELECT updated_at FROM v2_admin_settings WHERE setting_key=$1', models.STATE_KEY)
         response = await self.client.post('/internal/review/config/ack', headers=headers,
             json={'token': old['consumption_token'], 'model': old['model'], 'provider': old['provider'],
                 'prompt_sha256': old['model_configuration']['provenance']['prompt_sha256']})
         self.assertEqual(200, response.status_code)
         self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_audit_log WHERE action='model_configuration_consumed'"))
+        self.assertEqual(state_updated_at, await self.pool.fetchval(
+            'SELECT updated_at FROM v2_admin_settings WHERE setting_key=$1', models.STATE_KEY))
 
     async def test_frozen_report_difference_drift_is_rejected(self):
         candidate = await self.create()

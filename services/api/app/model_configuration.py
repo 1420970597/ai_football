@@ -142,12 +142,18 @@ async def acknowledge(conn, settings, token, model, provider, prompt_sha256):
         raise HTTPException(409, '配置消费版本无有效激活记录')
     receipt = {**claim, 'consumed_at': datetime.now(timezone.utc).isoformat(), 'consumer': 'review_worker'}
     consumed = state.setdefault('consumed_versions', [])
+    changed = False
     if receipt['version'] not in consumed:
         await audit(conn, None, 'system', 'model_configuration_consumed', 'model_configuration', receipt['version'], details=receipt)
         consumed.append(receipt['version'])
+        changed = True
     if claim['version'] == state['active']['version']:
-        state['last_consumption'] = receipt
-    await save_state(conn, settings, state)
+        previous = state.get('last_consumption')
+        if not isinstance(previous, dict) or previous.get('version') != claim['version']:
+            state['last_consumption'] = receipt
+            changed = True
+    if changed:
+        await save_state(conn, settings, state)
     return {'accepted': True, 'version': claim['version'], 'active_version': state['active']['version'],
         'current': claim['version'] == state['active']['version']}
 
