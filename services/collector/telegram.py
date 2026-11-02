@@ -52,6 +52,8 @@ RECONCILE_BATCH_SECONDS = 24
 RECONCILE_RPC_SECONDS = 5
 RECONCILE_EVENT_LIMIT = 3
 RECONCILE_COMMIT_CONCURRENCY = 2
+# Bound historical event writes across the three concurrently serviced sources.
+RECONCILE_GLOBAL_COMMIT_CONCURRENCY = 3
 RECENT_HISTORY_SECONDS = 8
 RECENT_HISTORY_LOOKBACK_SECONDS = 10800
 ENTITY_CACHE_SECONDS = 120
@@ -159,6 +161,7 @@ class TelegramCollector:
         self.directory_retry_at: dict[str, float] = {}
         self.directory_trusted: dict[str, tuple] = {}
         self.reconcile_pending: dict[str, list[dict]] = {}
+        self.reconcile_commit_slots = asyncio.Semaphore(RECONCILE_GLOBAL_COMMIT_CONCURRENCY)
         self.recent_recovery: dict[str, dict] = {}
         self.entity_cache: OrderedDict[str, tuple] = OrderedDict()
         self.control_server = None
@@ -788,7 +791,8 @@ class TelegramCollector:
                     by_id.update({entry.id: entry for entry in members if entry})
                 async def commit(item):
                     nonlocal checked
-                    reason = await self._commit_reconciliation_item(chat_id, source, item, by_id)
+                    async with self.reconcile_commit_slots:
+                        reason = await self._commit_reconciliation_item(chat_id, source, item, by_id)
                     if reason != 'event_not_committed':
                         pending.remove(item)
                     if reason is None:

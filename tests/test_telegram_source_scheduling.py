@@ -288,6 +288,70 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0,active)
         self.assertEqual(3,len(self.backend.ack_calls))
 
+    async def test_four_sources_share_three_reconciliation_commit_slots(self):
+        chats=['-1001','-1002','-1003','-1004']
+        sources=[self.source|{'chat_id':chat} for chat in chats]
+        self.backend.source_items=sources
+        self.client.messages={chat:[Message(i) for i in range(1,4)] for chat in chats}
+        for chat in chats:self.queue(chat,[[1],[2],[3]])
+        original=self.backend.event
+        active=peak=0
+        async def delayed_event(body):
+            nonlocal active,peak
+            active+=1
+            peak=max(peak,active)
+            try:
+                await asyncio.sleep(.02)
+                return await original(body)
+            finally:active-=1
+        self.backend.event=delayed_event
+        reports=await asyncio.wait_for(
+            asyncio.gather(*(self.collector._reconcile_known(chat,source)
+                             for chat,source in zip(chats,sources))),2)
+        self.assertEqual([{'state':'ready','checked':3,'pending':0}]*4,reports)
+        self.assertEqual(3,peak)
+        self.assertEqual(12,len(self.backend.events))
+        self.assertEqual(12,len(self.backend.ack_calls))
+
+    async def test_live_message_persists_while_reconciliation_slots_are_full(self):
+        chats=['-1001','-1002','-1003']
+        sources=[self.source|{'chat_id':chat} for chat in chats]
+        self.backend.source_items=sources+[self.source|{'chat_id':'-1004'}]
+        self.collector.sources={source['chat_id']:source for source in self.backend.source_items}
+        self.client.messages={chat:[Message(1)] for chat in chats}
+        for chat in chats:self.queue(chat,[[1]])
+        original=self.backend.event
+        recon_active=0
+        recon_started=asyncio.Event()
+        release=asyncio.Event()
+        async def delayed_event(body):
+            nonlocal recon_active
+            if body['platform_message_id']=='99':
+                return await original(body)
+            recon_active+=1
+            if recon_active==3:recon_started.set()
+            try:
+                await release.wait()
+                return await original(body)
+            finally:recon_active-=1
+        self.backend.event=delayed_event
+        # Start each source as a task so all three historical writes occupy the shared slots.
+        task=asyncio.create_task(self._reconcile_sources(chats,sources))
+        try:
+            await asyncio.wait_for(recon_started.wait(),1)
+            await asyncio.wait_for(self.collector._live_messages('-1004',[Message(99)]),.5)
+            self.assertTrue(any(row['chat_id']=='-1004' and row['platform_message_id']=='99'
+                                for row in self.backend.calls))
+        finally:
+            release.set()
+        reports=await asyncio.wait_for(task,1)
+        self.assertTrue(all(report['state']=='ready' for report in reports))
+        self.assertEqual(0,recon_active)
+
+    async def _reconcile_sources(self,chats,sources):
+        return await asyncio.gather(*(self.collector._reconcile_known(chat,source)
+                                      for chat,source in zip(chats,sources)))
+
     async def test_failed_neighbor_does_not_replay_acknowledged_item(self):
         self.client.messages['-1001']=[Message(i) for i in range(1,4)]
         self.queue('-1001',[[1],[2],[3]])
