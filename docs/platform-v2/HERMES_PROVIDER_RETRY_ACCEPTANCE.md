@@ -1,0 +1,15 @@
+# Hermes Provider Retry Acceptance
+
+Status: research recorded; implementation not started.
+
+| Field | Evidence and decision |
+| --- | --- |
+| Goal | Bound a provider outage to one model attempt per durable review attempt so the review worker can persist a retryable failure and release its lease promptly. |
+| Responsibility | `integrations/hermes/` and Docker-only integration acceptance under `tests/integration/`. |
+| Dependencies | Pinned Hermes `v0.22.5` image, existing configured visual model route, Hermes provider fixture, E189 worker's durable `provider_transient` retry classification. |
+| Current evidence | E189 first 1800-second observation had 17 `provider_transient` attempts, zero successful Hermes results and zero MCP traces; sampled failures took about 304 seconds. Running Hermes config resolves to `api_max_retries=3` and `auto_recovery_cycles=5`; its fixed recovery ladder is 15/30/60/60/60 seconds. The second observation was stopped after about 266 seconds when this framework setting became a testable cause; its messages were historical replay, not live expert posts. |
+| Gap | The provider route remains externally overloaded. A fast framework failure must still surface as a retryable HTTP error or `finish_reason=error`; it must never be accepted as model analysis. No current real-time Telegram post or successful production-provider response was observed in these windows. |
+| Decision | Set one API attempt and disable Hermes' in-turn automatic recovery. Keep retry ownership in the durable review job, preserving attempt-specific traces, 60-to-300-second backoff, and lease release. Do not change the model, endpoint, provider key, image support, or MCP policy. |
+| Actions | Add the two bounded settings to the fixed project config. Extend the isolated provider fixture to return a controlled 503 for one review and expose only its attempt count. Extend integration acceptance to verify one provider request, a bounded completion time, no MCP/recommendation writes, and an HTTP/provider-error or `finish_reason=error` result. Run the integration in Docker with a temporary PostgreSQL database. |
+| Acceptance scenes | Normal visual multi-page match review still completes and records exactly one fixture signal; controlled provider 503 completes within 15 seconds, makes exactly one provider request, invokes no MCP tools and writes no signal; the application client or worker classifies the failure as retryable without a success receipt. Existing adversarial, length, parallel-tool and readonly-skill scenarios remain passing. |
+| Failure handling | If the isolated 503 is retried internally, returns an apparently successful stop response, or generates any MCP/signal/terminal success evidence, reject the config change and inspect the fixed framework's retry path. Do not deploy until the failure outcome is unambiguously transient. After deployment, restart the complete 1800-second observation window; any Telegram degradation, missing current-message job/receipt, error-as-success, or continued provider outage keeps the feature unaccepted. |
