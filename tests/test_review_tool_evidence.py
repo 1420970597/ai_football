@@ -80,8 +80,11 @@ class ToolSnapshotUnitTests(unittest.TestCase):
         self.assertGreater(len(before), 100000)
         self.assertLess(len(after), 100000)
         self.assertLess(len(after), len(before) * .6)
-        self.assertEqual(supported, wire['markets'])
-        self.assertEqual({'total_quotes': 238, 'returned_quotes': 60, 'omitted_unsupported_quotes': 178}, wire['market_coverage'])
+        compact_supported = [{key: item[key] for key in review_tool_evidence.MODEL_QUOTE_FIELDS}
+                             for item in supported]
+        self.assertEqual(compact_supported, wire['markets'])
+        self.assertEqual({'total_quotes': 238, 'matched_quotes': 238, 'returned_quotes': 60,
+                          'omitted_unsupported_quotes': 178}, wire['market_coverage'])
         self.assertEqual(178, sum(group['quote_count'] for group in wire['unsupported_markets']))
         self.assertEqual(64, len(wire['unsupported_markets']))
         self.assertEqual(238, len(source['markets']))
@@ -97,6 +100,19 @@ class ToolSnapshotUnitTests(unittest.TestCase):
         self.assertEqual(1, wire['market_coverage']['omitted_unsupported_quotes'])
         self.assertEqual('unsupported_market_kind', wire['unsupported_markets'][0]['reason'])
         self.assertEqual(source, snapshot_result('mcp_list_match_markets', source))
+
+    def test_market_filter_coverage_survives_unsupported_option_compaction(self):
+        source = {'fixture': {'id': 'fixture'}, 'markets': [
+            {'quote_id': 'unsupported', 'market_id': 'unknown', 'market_name': '未知',
+             'period': 'full_time', 'market_kind': 'unsupported', 'status': 'closed'},
+        ], 'market_filter': {'market_kind': 'unsupported'},
+            'market_coverage': {'total_quotes': 238, 'matched_quotes': 1,
+                                'returned_quotes': 1, 'complete_for_filter': True},
+            'refresh': {}}
+        wire = snapshot_result('mcp_list_match_markets', source, compact_markets=True)
+        self.assertEqual({'market_kind': 'unsupported'}, wire['market_filter'])
+        self.assertEqual({'total_quotes': 238, 'matched_quotes': 1, 'returned_quotes': 0,
+                          'complete_for_filter': True, 'omitted_unsupported_quotes': 1}, wire['market_coverage'])
 
     def test_supported_only_output_over_inline_budget_is_explicitly_rejected(self):
         source = {'fixture': {'id': 'fixture'}, 'markets': [
@@ -122,6 +138,8 @@ class ToolSnapshotUnitTests(unittest.TestCase):
         self.assertEqual(['model-id','second'],[row['quote_id'] for row in compact['markets']])
         for original,projected in zip(source['markets'],compact['markets']):
             self.assertEqual({key:original[key] for key in review_tool_evidence.MODEL_QUOTE_FIELDS},projected)
+        self.assertNotIn('price', compact['markets'][0])
+        self.assertNotIn('source_updated_at', compact['markets'][0])
         self.assertLess(len(json.dumps(compact)),len(json.dumps(source)))
         self.assertIn('play_id',source['markets'][0],'input evidence must remain untouched')
         legacy=snapshot_result('mcp_list_match_markets',source)

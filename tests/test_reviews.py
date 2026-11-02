@@ -154,6 +154,61 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual('quote_not_read_or_changed', recorded.json()['rejected'][0]['reason'])
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
 
+    async def test_structured_market_filter_is_complete_and_only_authorizes_returned_quotes(self):
+        fixture_id = await self.fixture(markets=[
+            {"market_id": "total", "market_name": "全场大小", "kind": "total", "period": "full_time",
+             "line": "2.5", "selection": "over", "price": "1.95", "source_updated_at": self.now.isoformat(),
+             "received_at": self.now.isoformat()},
+            {"market_id": "total", "market_name": "全场大小", "kind": "total", "period": "full_time",
+             "line": "2.5", "selection": "under", "price": "1.91", "source_updated_at": self.now.isoformat(),
+             "received_at": self.now.isoformat()},
+            {"market_id": "total", "market_name": "上半场大小", "kind": "total", "period": "first_half",
+             "line": "1.0", "selection": "over", "price": "1.88", "source_updated_at": self.now.isoformat(),
+             "received_at": self.now.isoformat()},
+            {"market_id": "handicap", "market_name": "全场亚洲让球", "kind": "handicap", "period": "full_time",
+             "line": "0.75", "selection": "home", "price": "1.86", "source_updated_at": self.now.isoformat(),
+             "received_at": self.now.isoformat()},
+        ])
+        key, _ = await self.search_all()
+        self.assertTrue((await self.resolve(key))["resolved"])
+
+        response = await self.post("list_match_markets", fixture_id=fixture_id, market_kind="total",
+                                   period="full_time", line="2.50", selection="over",
+                                   market_query="  全场大小  ")
+        self.assertEqual(200, response.status_code, response.text)
+        result = response.json()
+        self.assertEqual(4, result["market_coverage"]["total_quotes"])
+        self.assertEqual(1, result["market_coverage"]["matched_quotes"])
+        self.assertEqual(1, result["market_coverage"]["returned_quotes"])
+        self.assertTrue(result["market_coverage"]["complete_for_filter"])
+        self.assertEqual("全场大小", result["market_filter"]["market_query"])
+        self.assertEqual("over", result["markets"][0]["selection"])
+        self.assertNotIn("price", result["markets"][0])
+
+        unread_quote = await self.pool.fetchval(
+            "SELECT id FROM v2_current_quotes WHERE fixture_id=$1 AND selection='under'", fixture_id)
+        recorded = await self.post("record_expert_signals", signals=[{
+            "fixture_id": fixture_id, "quote_id": str(unread_quote), "evidence_text": "全场小2.5"}])
+        self.assertEqual(["quote_not_read_or_changed"], [row["reason"] for row in recorded.json()["rejected"]])
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_expert_signals"))
+
+    async def test_unfiltered_market_read_keeps_full_fallback_inventory(self):
+        fixture_id = await self.fixture(markets=[
+            {"market_id": "total", "market_name": "全场大小", "kind": "total", "period": "full_time",
+             "line": line, "selection": selection, "price": "1.95", "source_updated_at": self.now.isoformat(),
+             "received_at": self.now.isoformat()}
+            for line, selection in (("2.5", "over"), ("2.5", "under"), ("3.5", "over"))
+        ])
+        key, _ = await self.search_all()
+        self.assertTrue((await self.resolve(key))["resolved"])
+        response = await self.post("list_match_markets", fixture_id=fixture_id)
+        self.assertEqual(200, response.status_code, response.text)
+        result = response.json()
+        self.assertEqual(3, result["market_coverage"]["total_quotes"])
+        self.assertEqual(3, result["market_coverage"]["matched_quotes"])
+        self.assertEqual(3, result["market_coverage"]["returned_quotes"])
+        self.assertEqual(3, len(result["markets"]))
+
     async def test_each_explicit_phase_filters_candidates(self):
         for index, phase in enumerate(('scheduled', 'live', 'finished', 'cancelled'), 1):
             await self.fixture(index, phase=phase)

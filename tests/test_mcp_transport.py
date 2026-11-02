@@ -67,6 +67,31 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('attempt', captured[0][1]['attempt_id'])
         self.assertEqual('Bearer isolated-mcp-transport', captured[0][2])
 
+    async def test_market_intent_filters_are_optional_and_forwarded(self):
+        tools_response = await self.rpc('tools/list')
+        tool = next(item for item in tools_response.json()['result']['tools']
+                    if item['name'] == 'list_match_markets')
+        properties = tool['inputSchema']['properties']
+        self.assertTrue({'market_kind', 'period', 'line', 'selection', 'market_query'} <= set(properties))
+        self.assertFalse({'market_kind', 'period', 'line', 'selection', 'market_query'} &
+                         set(tool['inputSchema'].get('required', [])))
+
+        captured = []
+        def upstream(request):
+            import json
+            captured.append(json.loads(request.content))
+            return httpx.Response(200, json={'fixture': {'id': 'fixture'}, 'markets': []})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        response = await self.rpc('tools/call', {'name': 'list_match_markets', 'arguments': {
+            'review_id': 'job', 'attempt_id': 'attempt', 'fixture_id': 'fixture',
+            'market_kind': 'total', 'period': 'full_time', 'line': '2.75',
+            'selection': 'over', 'market_query': '全场大小'}})
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual({'review_id': 'job', 'attempt_id': 'attempt', 'fixture_id': 'fixture',
+                          'market_kind': 'total', 'period': 'full_time', 'line': '2.75',
+                          'selection': 'over', 'market_query': '全场大小'}, captured[0])
+
     async def test_transport_failure_is_sanitized_tool_error(self):
         def timeout(request):
             raise httpx.ReadTimeout('secret-upstream-url?token=must-not-leak', request=request)

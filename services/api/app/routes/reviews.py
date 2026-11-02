@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -71,6 +72,19 @@ class ResolveInput(AttemptInput):
 
 class MarketInput(AttemptInput):
     fixture_id: str = Field(min_length=1, max_length=160)
+    market_kind: str | None = Field(default=None, max_length=32, pattern=r'^[a-z][a-z0-9_]{0,31}$')
+    period: str | None = Field(default=None, max_length=32, pattern=r'^[a-z][a-z0-9_]{0,31}$')
+    line: Decimal | None = Field(default=None, max_digits=8, decimal_places=3)
+    selection: str | None = Field(default=None, max_length=32, pattern=r'^[a-z][a-z0-9_]{0,31}$')
+    market_query: str | None = Field(default=None, max_length=120)
+
+    @field_validator('market_query', mode='before')
+    @classmethod
+    def normalize_market_query(cls, value):
+        if not isinstance(value, str):
+            return value
+        normalized = ' '.join(unicodedata.normalize('NFKC', value).casefold().split())
+        return normalized or None
 
 
 class PickInput(BaseModel):
@@ -82,6 +96,25 @@ class PickInput(BaseModel):
 
 class RecordInput(AttemptInput):
     signals: list[PickInput] = Field(min_length=1, max_length=32)
+
+
+def _market_matches(quote, filters):
+    for field in ('market_kind', 'period', 'selection'):
+        expected = filters[field]
+        if expected is not None and quote.get(field) != expected:
+            return False
+    line = filters['line']
+    if line is not None:
+        actual = quote.get('line')
+        if actual is None or Decimal(str(actual)) != line:
+            return False
+    query = filters['market_query']
+    if query is not None:
+        name = unicodedata.normalize('NFKC', str(quote.get('market_name') or '')).casefold()
+        kind = str(quote.get('market_kind') or '').casefold()
+        if query not in f'{name} {kind}':
+            return False
+    return True
 
 
 def _key(request: Request) -> bytes:
@@ -297,9 +330,12 @@ async def list_match_markets(body: MarketInput, request: Request):
             fixture = await conn.fetchrow("SELECT * FROM v2_fixtures WHERE id=$1 AND phase IN ('scheduled','live')", body.fixture_id)
             if not fixture:
                 raise HTTPException(status_code=409, detail="fixture is no longer active")
-            quotes = await conn.fetch("SELECT * FROM v2_current_quotes WHERE fixture_id=$1 ORDER BY period,market_id,line,selection LIMIT $2", body.fixture_id, MAX_MARKETS + 1)
-            if len(quotes) > MAX_MARKETS:
+            all_quotes = await conn.fetch("SELECT * FROM v2_current_quotes WHERE fixture_id=$1 ORDER BY period,market_id,line,selection LIMIT $2", body.fixture_id, MAX_MARKETS + 1)
+            if len(all_quotes) > MAX_MARKETS:
                 raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
+            filters = {'market_kind': body.market_kind, 'period': body.period, 'line': body.line,
+                       'selection': body.selection, 'market_query': body.market_query}
+            quotes = [quote for quote in all_quotes if _market_matches(quote, filters)]
             max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
             confirmations = {q['id']: confirmation_for(refresh.get('_observation'), q, fixture, max_quote_age) for q in quotes}
             if quotes:
@@ -310,10 +346,17 @@ async def list_match_markets(body: MarketInput, request: Request):
                       quote_context(q, fixture) | ({'current_confirmation': confirmations[q['id']]} if confirmations[q['id']] else {})) for q in quotes],
                 )
             refresh.pop('_observation', None)
+            market_filter = {key: str(value) if key == 'line' and value is not None else value
+                             for key, value in filters.items() if value is not None}
+            market_coverage = {'total_quotes': len(all_quotes), 'matched_quotes': len(quotes),
+                               'returned_quotes': len(quotes), 'complete_for_filter': True}
             result = {"fixture": dict(fixture), "markets": [dict(q) | {"quote_id": str(q["id"]), "fresh": fresh_quote(q, max_quote_age),
                       'confirmed_current': bool(confirmations[q['id']]),
-                      'can_record': fresh_quote(q, max_quote_age) or bool(confirmations[q['id']])} for q in quotes], "refresh": refresh}
-            return await tool_success(conn, body, result, {"fixture_id": body.fixture_id, "quote_ids": [str(q["id"]) for q in quotes], "refresh": refresh})
+                      'can_record': fresh_quote(q, max_quote_age) or bool(confirmations[q['id']])} for q in quotes],
+                      "refresh": refresh, "market_filter": market_filter, "market_coverage": market_coverage}
+            return await tool_success(conn, body, result, {"fixture_id": body.fixture_id,
+                "quote_ids": [str(q["id"]) for q in quotes], "refresh": refresh,
+                "market_filter": market_filter, "market_coverage": market_coverage})
 
 
 @router.post("/record_expert_signals")

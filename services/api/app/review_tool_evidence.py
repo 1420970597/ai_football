@@ -42,8 +42,8 @@ QUOTE_FIELDS = frozenset({
 # evidence; the model identifies each complete option by quote_id. Keep the
 # legacy allowlist above for exact replay of already-saved tool responses.
 MODEL_QUOTE_FIELDS = QUOTE_FIELDS - {
-    'id', 'fixture_id', 'play_id', 'market_instance_id', 'selection_id',
-    'received_at', 'source_time_quality',
+    'id', 'fixture_id', 'market_id', 'play_id', 'market_instance_id', 'selection_id',
+    'price', 'source_updated_at', 'received_at', 'source_time_quality', 'is_main',
 }
 ACCEPTED_FIELDS = frozenset({'index', 'signal_id', 'duplicate', 'fixture_id', 'market_name', 'period', 'line', 'selection', 'price'})
 REJECTED_FIELDS = frozenset({'index', 'reason'})
@@ -92,10 +92,14 @@ def snapshot_result(kind, result, *, compact_markets=False):
                  'refresh': _project(result['refresh'], {'attempted', 'accepted', 'reason'})}
         # Replay retains the exact declared coverage; it must not reinterpret
         # old snapshots or silently remove any supported/closed option.
-        value.update(_project(result, {'market_coverage', 'unsupported_markets'}))
+        value.update(_project(result, {'market_coverage', 'market_filter', 'unsupported_markets'}))
         if omitted:
-            value['market_coverage'] = {'total_quotes': len(result['markets']), 'returned_quotes': len(quotes),
-                                        'omitted_unsupported_quotes': len(omitted)}
+            coverage = dict(value.get('market_coverage') or {})
+            if not coverage:
+                coverage['total_quotes'] = len(result['markets'])
+                coverage['matched_quotes'] = len(result['markets'])
+            coverage.update({'returned_quotes': len(quotes), 'omitted_unsupported_quotes': len(omitted)})
+            value['market_coverage'] = coverage
             value['unsupported_markets'] = _unsupported_markets(omitted)
     elif kind == 'mcp_record_expert_signals':
         if len(result['accepted']) + len(result['rejected']) > 32:

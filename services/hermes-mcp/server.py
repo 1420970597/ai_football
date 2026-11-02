@@ -105,9 +105,16 @@ async def resolve_match(review_id: str, attempt_id: str, search_key: str,
 
 
 @mcp.tool()
-async def list_match_markets(review_id: str, attempt_id: str, fixture_id: str) -> dict:
-    """读取已唯一消歧比赛的全部系统盘口；can_record表示源时间有效或精确当前盘口复核有效。"""
-    return await _post("list_match_markets", {"review_id": review_id, "attempt_id": attempt_id, "fixture_id": fixture_id})
+async def list_match_markets(review_id: str, attempt_id: str, fixture_id: str,
+                             market_kind: str | None = None, period: str | None = None,
+                             line: str | None = None, selection: str | None = None,
+                             market_query: str | None = None) -> dict:
+    """读取已绑定比赛的盘口。按已识别意图提供可选类别、期间、线值、方向或名称筛选；零结果时放宽筛选重试。省略筛选会返回完整盘口。系统赔率不参与意图匹配；can_record表示服务端盘口校验通过。"""
+    return await _post("list_match_markets", {
+        "review_id": review_id, "attempt_id": attempt_id, "fixture_id": fixture_id,
+        "market_kind": market_kind, "period": period, "line": line,
+        "selection": selection, "market_query": market_query,
+    })
 
 
 @mcp.tool()
