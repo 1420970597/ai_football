@@ -42,6 +42,10 @@ def configure_logging() -> None:
     logging.getLogger("telethon.network.mtprotosender").setLevel(logging.WARNING)
 
 
+def source_error_detail(item: Mapping[str, Any]) -> str:
+    return item.get("error") or item.get("reason") or item.get("lease_error") or item.get("state", "unknown")
+
+
 async def get_config(client: httpx.AsyncClient, api_url: str = API_URL) -> dict[str, str]:
     response = await client.get(f"{api_url}/collector/config")
     response.raise_for_status()
@@ -411,7 +415,7 @@ class CollectorService:
                     report = await self.telegram.sync_once()
                 source_reports = report.get("sources", {}) if isinstance(report, dict) else {}
                 source_errors = {
-                    chat_id: item.get("error") or item.get("reason") or item.get("state")
+                    chat_id: source_error_detail(item)
                     for chat_id, item in source_reports.items()
                     if isinstance(item, dict) and item.get("state") not in {"caught_up", "catching_up", "backoff"}
                 }

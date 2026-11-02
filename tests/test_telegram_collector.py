@@ -237,6 +237,29 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.collector.disconnect()
 
+    async def test_live_event_delivery_status_counts_staged_and_unmapped_events(self):
+        self.collector.sources = {"-1001": self.backend.source_items[0]}
+        await self.collector._on_message(SimpleNamespace(
+            chat_id=-1001, chat=None, message=Message(101)))
+        await self.collector._live_messages("-1002", [Message(102)])
+
+        delivery = self.collector.live_event_delivery
+        self.assertEqual((2, 1, 0, 1), (delivery["received"], delivery["staged"],
+                                         delivery["deferred"], delivery["unmapped_source"]))
+        status = await self.collector.control("/status", {})
+        self.assertEqual(delivery, status["live_event_delivery"])
+        self.assertNotIn("-1001", str(status["live_event_delivery"]))
+
+    async def test_live_event_delivery_status_records_bounded_failure_category(self):
+        self.collector.sources = {"-1001": self.backend.source_items[0]}
+        self.backend.fail_chat = "-1001"
+
+        await self.collector._live_messages("-1001", [Message(103)])
+
+        delivery = self.collector.live_event_delivery
+        self.assertEqual((1, 0, 1), (delivery["received"], delivery["staged"], delivery["deferred"]))
+        self.assertEqual("ConnectionError", delivery["last_deferred_category"])
+
     async def test_more_than_twenty_messages_and_connection_reuse(self):
         self.client.messages["-1001"] = [Message(index) for index in range(1, 106)]
         with patch('collector.telegram.SYNC_HISTORY_SLICE_SECONDS', 3600):

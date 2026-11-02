@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from services.collector.leyu_protocol import LeyuError
-from services.collector.worker import CollectorService, fixture_batches, get_config, quote_freshness, wait_for_work
+from services.collector.worker import (CollectorService, fixture_batches, get_config, quote_freshness,
+                                       source_error_detail, wait_for_work)
 
 
 class FakeTelegram:
@@ -62,6 +63,10 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.api.aclose()
+
+    async def test_telegram_source_health_prefers_lease_failure_category(self):
+        self.assertEqual("TimeoutError", source_error_detail({"state": "lease_deferred", "lease_error": "TimeoutError"}))
+        self.assertEqual("unavailable", source_error_detail({"state": "unavailable"}))
 
     async def test_persistent_clients_control_server_and_clean_shutdown(self):
         stop = asyncio.Event()

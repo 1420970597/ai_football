@@ -152,6 +152,11 @@ class TelegramCollector:
         self.owner = str(uuid.uuid4())
         self.sources: dict[str, dict] = {}
         self.locks: dict[str, asyncio.Lock] = {}
+        self.live_event_delivery = {
+            "received": 0, "staged": 0, "deferred": 0, "unmapped_source": 0,
+            "last_received_at": None, "last_staged_at": None,
+            "last_deferred_at": None, "last_deferred_category": None,
+        }
         self.live_media_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self.media_transfers: set[tuple[str, str]] = set()
         self.media_slots = asyncio.Semaphore(LIVE_MEDIA_CONCURRENCY)
@@ -1083,8 +1088,12 @@ class TelegramCollector:
                                   entity=getattr(event, 'chat', None))
 
     async def _live_messages(self, chat_id, members, full_album=False, entity=None):
+        delivery = self.live_event_delivery
+        delivery["received"] += 1
+        delivery["last_received_at"] = datetime.now(timezone.utc).isoformat()
         source = self.sources.get(chat_id)
         if not source:
+            delivery["unmapped_source"] += 1
             return
         payload = None
         group = sorted(members, key=lambda item: item.id) if full_album else members
@@ -1101,6 +1110,8 @@ class TelegramCollector:
             # The event transaction validates this owner and lease; a separate checkpoint RPC only serializes live callbacks.
             _, payload = await self._stage_group(chat_id, source, group)
             persist_ms = (time.monotonic() - persist_started) * 1000
+            delivery["staged"] += 1
+            delivery["last_staged_at"] = datetime.now(timezone.utc).isoformat()
             media_ms = 0.0
             if payload is not None:
                 media_started = time.monotonic()
@@ -1112,6 +1123,9 @@ class TelegramCollector:
                      (time.monotonic() - started) * 1000, len(group),
                      sum(1 for item in group if getattr(item, 'media', None)))
         except Exception as exc:
+            delivery["deferred"] += 1
+            delivery["last_deferred_at"] = datetime.now(timezone.utc).isoformat()
+            delivery["last_deferred_category"] = type(exc).__name__
             if isinstance(exc, AuthKeyDuplicatedError):
                 await self._invalidate_active_session()
             # 不移动高水位，周期补拉负责重新投递失败的新消息。
@@ -1334,6 +1348,7 @@ class TelegramCollector:
             return {"connected": bool(self.client and self.client.is_connected()),
                     "authorized": bool(self.client and await self.client.is_user_authorized()),
                     "auth": dict(self.auth_state), "account": self.account,
+                    "live_event_delivery": dict(self.live_event_delivery),
                     "source_health": health}
         if path == "/auth/qr":
             return await self._start_qr(bool(payload.get("replace_existing")))
