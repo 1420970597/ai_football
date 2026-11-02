@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 import uuid
 
 import asyncpg
@@ -83,7 +83,7 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_empty_bridge_unavailable_response_has_bounded_reason(self):
         def handler(request):
-            return httpx.Response(503, json={})
+            return httpx.Response(503, json={}, headers={'Retry-After': '0'})
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             backend = TelegramBackend(client, 'http://isolated.invalid/internal/telegram')
             with self.assertLogs('platform.telegram', level='WARNING') as logs:
@@ -94,22 +94,62 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_idempotent_event_retries_database_503_once_with_identical_body(self):
         requests=[]
+        delays=[]
         def handler(request):
             requests.append((request.url.path,request.content))
             if len(requests)==1:
-                return httpx.Response(503,json={'code':'database_temporarily_unavailable'})
+                return httpx.Response(503,json={'code':'database_temporarily_unavailable'},headers={'Retry-After':'2'})
             return httpx.Response(200,json={'persisted':True,'state':'ready','message_id':'durable-id'})
+        async def record_sleep(delay):
+            delays.append(delay)
         body={'chat_id':'-1001','owner':'private-owner-only','platform_message_id':'991',
               'version_key':'a'*64,'raw_text':'private-message-only'}
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             backend=TelegramBackend(client,'http://isolated.invalid/internal/telegram')
-            with self.assertLogs('platform.telegram',level='WARNING') as logs:
-                result=await backend.event(body)
+            with patch('collector.telegram_backend.asyncio.sleep',new=record_sleep):
+                with self.assertLogs('platform.telegram',level='WARNING') as logs:
+                    result=await backend.event(body)
         self.assertEqual({'persisted':True,'state':'ready','message_id':'durable-id'},result)
         self.assertEqual(2,len(requests))
         self.assertEqual(requests[0],requests[1])
-        self.assertIn('operation=/events status=503 attempt=1',logs.output[0])
+        self.assertEqual([2.0],delays)
+        self.assertIn('operation=/events status=503 attempt=1 retry_after_s=2.000',logs.output[0])
         self.assertNotIn('private-', '\n'.join(logs.output))
+
+    async def test_idempotent_retry_after_is_bounded_and_invalid_values_fall_back(self):
+        for header, expected in ((None,0.5),('invalid',0.5),('-1',0.5),('nan',0.5),('999',2.0)):
+            with self.subTest(retry_after=header):
+                requests=[];delays=[]
+                def handler(request):
+                    requests.append(request.content)
+                    if len(requests)==1:
+                        headers={} if header is None else {'Retry-After':header}
+                        return httpx.Response(503,json={'code':'database_temporarily_unavailable'},headers=headers)
+                    return httpx.Response(200,json={'persisted':True,'state':'ready','message_id':'durable-id'})
+                async def record_sleep(delay):delays.append(delay)
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    backend=TelegramBackend(client,'http://isolated.invalid/internal/telegram')
+                    with patch('collector.telegram_backend.asyncio.sleep',new=record_sleep):
+                        await backend.event({'chat_id':'-1001','platform_message_id':'991','version_key':'a'*64})
+                self.assertEqual([expected],delays)
+                self.assertEqual(2,len(requests))
+                self.assertEqual(requests[0],requests[1])
+
+    async def test_idempotent_retry_stops_after_second_database_503(self):
+        requests=[];delays=[]
+        def handler(request):
+            requests.append(request.content)
+            return httpx.Response(503,json={'code':'database_temporarily_unavailable'},headers={'Retry-After':'1'})
+        async def record_sleep(delay):delays.append(delay)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend=TelegramBackend(client,'http://isolated.invalid/internal/telegram')
+            with patch('collector.telegram_backend.asyncio.sleep',new=record_sleep):
+                with self.assertRaises(httpx.HTTPStatusError) as raised:
+                    await backend.event({'chat_id':'-1001','platform_message_id':'991','version_key':'a'*64})
+        self.assertEqual(503,raised.exception.response.status_code)
+        self.assertEqual(2,len(requests))
+        self.assertEqual([1.0],delays)
+        self.assertEqual(requests[0],requests[1])
 
     async def test_idempotent_claim_retries_once_but_observed_post_does_not(self):
         for operation,call in (
@@ -118,27 +158,33 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(operation=operation):
                 requests=[]
+                delays=[]
                 def handler(request):
                     requests.append(request)
                     if len(requests)==1:
-                        return httpx.Response(503,json={'code':'database_temporarily_unavailable'})
+                        headers={'Retry-After':'999'} if operation=='/checkpoints/claim' else {}
+                        return httpx.Response(503,json={'code':'database_temporarily_unavailable'},headers=headers)
                     if operation=='/checkpoints/claim':
                         return httpx.Response(200,json={'last_message_id':12,'lease_until':'future'})
                     return httpx.Response(503,json={'code':'database_temporarily_unavailable'})
+                async def record_sleep(delay):delays.append(delay)
                 async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
                     backend=TelegramBackend(client,'http://isolated.invalid/internal/telegram')
                     if operation=='/checkpoints/claim':
-                        with self.assertLogs('platform.telegram',level='WARNING') as logs:
-                            result=await call(backend)
+                        with patch('collector.telegram_backend.asyncio.sleep',new=record_sleep):
+                            with self.assertLogs('platform.telegram',level='WARNING') as logs:
+                                result=await call(backend)
                         self.assertEqual(12,result['last_message_id'])
                         self.assertEqual(2,len(requests))
                         self.assertEqual(requests[0].content,requests[1].content)
-                        self.assertIn('attempt=1',logs.output[0])
+                        self.assertEqual([2.0],delays)
+                        self.assertIn('attempt=1 retry_after_s=2.000',logs.output[0])
                     else:
                         with self.assertLogs('platform.telegram',level='WARNING'):
                             with self.assertRaises(httpx.HTTPStatusError):
                                 await call(backend)
                         self.assertEqual(1,len(requests))
+                        self.assertEqual([],delays)
 
     async def test_database_rejection_code_has_bounded_reason(self):
         def handler(request):

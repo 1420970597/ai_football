@@ -3,6 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 import logging
+import math
 import re
 from typing import Any
 
@@ -31,6 +32,19 @@ _SOURCE_SERIALIZED_PATHS = frozenset({
     '/author-backfill',
 })
 _IDEMPOTENT_RETRY_PATHS = frozenset({'/events', '/checkpoints/claim'})
+_IDEMPOTENT_RETRY_AFTER_FALLBACK_SECONDS = 0.5
+_IDEMPOTENT_RETRY_AFTER_MAX_SECONDS = 2.0
+
+
+def _idempotent_retry_delay(response: httpx.Response) -> float:
+    value = response.headers.get('Retry-After')
+    try:
+        delay = float(value)
+    except (TypeError, ValueError):
+        return _IDEMPOTENT_RETRY_AFTER_FALLBACK_SECONDS
+    if not math.isfinite(delay) or delay < 0:
+        return _IDEMPOTENT_RETRY_AFTER_FALLBACK_SECONDS
+    return min(delay, _IDEMPOTENT_RETRY_AFTER_MAX_SECONDS)
 
 
 class TelegramBackend:
@@ -63,8 +77,10 @@ class TelegramBackend:
         async def request():
             response = await self.client.request(method, self.api_url + path, json=body)
             if method == 'POST' and operation in _IDEMPOTENT_RETRY_PATHS and response.status_code == 503:
-                log.warning('Telegram backend retry method=POST operation=%s status=503 attempt=1', operation)
-                await asyncio.sleep(0.1)
+                delay = _idempotent_retry_delay(response)
+                log.warning('Telegram backend retry method=POST operation=%s status=503 attempt=1 retry_after_s=%.3f',
+                            operation, delay)
+                await asyncio.sleep(delay)
                 response = await self.client.request(method, self.api_url + path, json=body)
             return response
 
