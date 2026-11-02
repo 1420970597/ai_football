@@ -146,13 +146,15 @@ class FakeAPI(BaseHTTPRequestHandler):
         body=self.rfile.read(int(self.headers.get('Content-Length','0')))
         self.server.calls.append((self.command,self.path,body))
         result=b'{"accepted":true}'
-        self.send_response(200);self.send_header('Content-Length',str(len(result)));self.end_headers();self.wfile.write(result)
+        self.send_response(getattr(self.server,'response_status',200))
+        for name,value in getattr(self.server,'response_headers',{}).items():self.send_header(name,value)
+        self.send_header('Content-Length',str(len(result)));self.end_headers();self.wfile.write(result)
 
 
 class RemoteTransportTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.path=str(Path(self.temp.name)/'api.sock')
-        self.upstream=UnixServer(self.path,FakeAPI);self.upstream.calls=[]
+        self.upstream=UnixServer(self.path,FakeAPI);self.upstream.calls=[];self.upstream.response_status=200;self.upstream.response_headers={}
         self.upthread=threading.Thread(target=self.upstream.serve_forever,daemon=True);self.upthread.start()
         self.bridge=Bridge(('127.0.0.1',0),TOKENS,self.path)
         self.thread=threading.Thread(target=self.bridge.serve_forever,daemon=True);self.thread.start()
@@ -163,6 +165,10 @@ class RemoteTransportTests(unittest.TestCase):
         conn=http.client.HTTPConnection('127.0.0.1',self.bridge.server_port,timeout=2)
         conn.request(method,path,body=body,headers={'Authorization':'Bearer '+TOKENS.get(token,token),**(headers or {})})
         result=conn.getresponse();result.read();status=result.status;conn.close();return status
+    def response(self,method,path,body=b'',token='collector',headers=None):
+        conn=http.client.HTTPConnection('127.0.0.1',self.bridge.server_port,timeout=2)
+        conn.request(method,path,body=body,headers={'Authorization':'Bearer '+TOKENS.get(token,token),**(headers or {})})
+        result=conn.getresponse();result.read();snapshot=(result.status,result.headers);conn.close();return snapshot
     def test_single_http_atomic_snapshot_through_unix_no_split(self):
         body=b'{' + b' '* (1024*1024+7) + b'}'
         self.assertEqual(200,self.request('POST','/internal/collector/fixtures',body))
@@ -223,6 +229,24 @@ class RemoteTransportTests(unittest.TestCase):
         conn.request('GET','/internal/collector/config',headers={'Authorization':'Bearer '+TOKENS['collector'],'Cookie':'MUST-NOT-FORWARD'})
         response=conn.getresponse();response.read()
         self.assertEqual('no-store',response.getheader('Cache-Control'));conn.close()
+    def test_retry_after_is_forwarded_as_a_bounded_format_header_only(self):
+        self.upstream.response_status=503
+        self.upstream.response_headers={'Retry-After':'2','Set-Cookie':'MUST-NOT-FORWARD',
+                                        'X-Upstream-Private':'MUST-NOT-FORWARD'}
+        status,headers=self.response('POST','/internal/telegram/events',body=b'{}')
+        self.assertEqual(503,status)
+        self.assertEqual('2',headers.get('Retry-After'))
+        self.assertEqual('no-store',headers.get('Cache-Control'))
+        self.assertIsNone(headers.get('Set-Cookie'))
+        self.assertIsNone(headers.get('X-Upstream-Private'))
+
+    def test_invalid_retry_after_is_not_forwarded(self):
+        for value in ('not-a-delay','1e999','1'*17,'1'*33):
+            with self.subTest(value=value):
+                self.upstream.response_status=503
+                self.upstream.response_headers={'Retry-After':value}
+                _,headers=self.response('POST','/internal/telegram/events',body=b'{}')
+                self.assertIsNone(headers.get('Retry-After'))
 
 
 class RealWorkerContractTests(unittest.IsolatedAsyncioTestCase):

@@ -70,11 +70,14 @@ class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
         self.connection.settimeout(10)
-    def reply(self, status, body=b'{}'):
+    def reply(self, status, body=b'{}', retry_after=None):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
+        if (isinstance(retry_after, str) and len(retry_after) <= 32
+                and re.fullmatch(r'[0-9]{1,16}(?:\.[0-9]{1,3})?', retry_after)):
+            self.send_header('Retry-After', retry_after)
         self.end_headers()
         self.wfile.write(body)
     def do_GET(self):
@@ -107,7 +110,7 @@ class Handler(BaseHTTPRequestHandler):
             data = response.read(MAX_BODY + 1)
             if len(data) > MAX_BODY:
                 return self.reply(502)
-            self.reply(response.status, data)
+            self.reply(response.status, data, retry_after=response.getheader('Retry-After'))
         except (OSError, TimeoutError, http.client.HTTPException):
             self.reply(503)
         finally:
