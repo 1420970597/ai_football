@@ -1,0 +1,4 @@
+services:
+  review-worker:
+    environment:
+      REVIEW_WORKER_CONCURRENCY: "1"
