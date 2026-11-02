@@ -88,6 +88,17 @@ def retry_delay_seconds(failure: str, attempts: int) -> int:
     return min(300, initial * 2 ** (attempt - 1)) + random.randint(0, 3)
 
 
+def _persistent_retry_condition(job_alias: str, categories_parameter: str) -> str:
+    return (
+        f"{job_alias}.state IN('retry','failed') AND {job_alias}.review_mode='real_time' AND "
+        "EXISTS(SELECT 1 FROM v2_analysis_traces t "
+        f"WHERE t.job_id={job_alias}.id AND t.trace_kind='review_failure' "
+        f"AND t.payload->>'attempt_id'={job_alias}.attempt_id::text "
+        "AND t.payload->>'retryable'='true' "
+        f"AND t.payload->>'failure_category'=ANY({categories_parameter}::text[]))"
+    )
+
+
 async def _scheduler_lock(conn):
     row = await conn.fetchrow(
         "SELECT set_config('lock_timeout','2000',true),set_config('statement_timeout','3000',true),"
@@ -120,6 +131,7 @@ def _lane_condition(mode):
 
 async def _claim_from_lane(conn, mode):
     lane = _lane_condition(mode)
+    persistent_pair_retry = _persistent_retry_condition('j', '$4')
     for probe in range(MAX_PAIR_PROBES):
         pair = await conn.fetchrow(
             "SELECT ss.source_id,es.expert_id,es.concurrency_limit,"
@@ -132,11 +144,8 @@ async def _claim_from_lane(conn, mode):
             "WHERE running.expert_id=es.expert_id AND running.state='running' AND running.lease_until>statement_timestamp())<GREATEST(es.concurrency_limit,$3) "
             "AND EXISTS(SELECT 1 FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
             "WHERE j.source_id=ss.source_id AND j.expert_id=es.expert_id AND "
-            "(j.attempts<$1 OR (j.state='retry' AND EXISTS(SELECT 1 FROM v2_analysis_traces t "
-            "WHERE t.job_id=j.id AND t.trace_kind='review_failure' "
-            "AND t.payload->>'attempt_id'=j.attempt_id::text AND t.payload->>'retryable'='true' "
-            "AND t.payload->>'failure_category'=ANY($4::text[])))) AND " + lane +
-            " AND ((j.state IN('queued','retry') AND j.available_at<=statement_timestamp()) OR "
+            "((j.state IN('queued','retry','running') AND j.attempts<$1) OR (" + persistent_pair_retry + ")) AND " + lane +
+            " AND ((j.state IN('queued','retry','failed') AND j.available_at<=statement_timestamp()) OR "
             "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))) AND " + ELIGIBLE_MESSAGE + ") "
             "ORDER BY ss.last_turn,es.last_turn,ss.source_id,es.expert_id LIMIT 1 FOR SHARE OF s,e,se FOR UPDATE OF ss,es",
             MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, EXPERT_CONCURRENCY_FLOOR,
@@ -144,15 +153,13 @@ async def _claim_from_lane(conn, mode):
         if not pair:
             return None
         turn = await _advance_turn(conn, pair['source_id'], pair['expert_id'])
+        persistent_row_retry = _persistent_retry_condition('j', '$5')
         row = await conn.fetchrow(
             'SELECT j.id,j.message_id,j.attempts FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id '
             'WHERE j.source_id=$3 AND j.expert_id=$4 AND '
-            "(j.attempts<$1 OR (j.state='retry' AND EXISTS(SELECT 1 FROM v2_analysis_traces t "
-            "WHERE t.job_id=j.id AND t.trace_kind='review_failure' "
-            "AND t.payload->>'attempt_id'=j.attempt_id::text AND t.payload->>'retryable'='true' "
-            "AND t.payload->>'failure_category'=ANY($5::text[])))) AND " + lane +
+            "((j.state IN('queued','retry','running') AND j.attempts<$1) OR (" + persistent_row_retry + ")) AND " + lane +
             " AND ((j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))"
-            " OR (j.state IN('queued','retry') AND j.available_at<=statement_timestamp())) AND " + ELIGIBLE_MESSAGE +
+            " OR (j.state IN('queued','retry','failed') AND j.available_at<=statement_timestamp())) AND " + ELIGIBLE_MESSAGE +
             " ORDER BY (j.state='running') DESC,"
             "CASE WHEN j.state='running' THEN j.lease_until END NULLS FIRST,"
             "CASE WHEN j.state='running' THEN j.created_at END,"
@@ -216,10 +223,8 @@ async def _claim_job(pool):
             await conn.execute(
                 "WITH exhausted AS(SELECT j.id,j.state FROM v2_analysis_jobs j WHERE "
                 "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()) AND j.attempts >= $1) "
-                "OR (j.state='retry' AND j.attempts >= $1 AND NOT EXISTS(SELECT 1 FROM v2_analysis_traces t "
-                "WHERE t.job_id=j.id AND t.trace_kind='review_failure' "
-                "AND t.payload->>'attempt_id'=j.attempt_id::text AND t.payload->>'retryable'='true' "
-                "AND t.payload->>'failure_category'=ANY($3::text[]))) "
+                "OR (j.state='retry' AND j.attempts >= $1 AND NOT (" +
+                _persistent_retry_condition('j', '$3') + ")) "
                 "ORDER BY j.lease_until NULLS FIRST,j.id LIMIT $2 FOR UPDATE SKIP LOCKED) "
                 "UPDATE v2_analysis_jobs j SET state='failed',lease_until=NULL,last_error=CASE "
                 "WHEN exhausted.state='running' THEN 'lease_exhausted' ELSE 'retry_limit_without_transient_trace' END,updated_at=now() "

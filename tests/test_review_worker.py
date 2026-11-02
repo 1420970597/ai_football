@@ -710,6 +710,38 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         row = await self.pool.fetchrow('SELECT state,last_error FROM v2_analysis_jobs WHERE id=$1', self.job)
         self.assertEqual(('failed', 'retry_limit_without_transient_trace'), (row['state'], row['last_error']))
 
+    async def test_terminal_provider_failure_with_matching_attempt_trace_can_recover(self):
+        await self.make_queued(attempts=worker.MAX_ATTEMPTS)
+        attempt_id = uuid.uuid4()
+        await self.pool.execute(
+            "UPDATE v2_analysis_jobs SET state='failed',attempt_id=$2,review_mode='real_time',"
+            "last_error='HermesProviderUnavailable',available_at=now()-interval '1 second' WHERE id=$1",
+            self.job, attempt_id)
+        async with self.pool.acquire() as conn:
+            await worker.trace(conn, self.job, 'review_failure', {
+                'attempt_id': str(attempt_id), 'failure_category': 'provider_transient',
+                'retryable': True, 'failure_stage': 'model_review',
+            })
+        recovered = await worker.claim_job(self.pool)
+        self.assertEqual(self.job, recovered['id'])
+        self.assertEqual(worker.MAX_ATTEMPTS + 1, recovered['attempts'])
+
+    async def test_terminal_historical_provider_failure_stays_closed(self):
+        await self.make_queued(attempts=worker.MAX_ATTEMPTS)
+        attempt_id = uuid.uuid4()
+        await self.pool.execute(
+            "UPDATE v2_analysis_jobs SET state='retry',attempt_id=$2,review_mode='historical_replay',"
+            "last_error='HermesProviderUnavailable',available_at=now()-interval '1 second' WHERE id=$1",
+            self.job, attempt_id)
+        async with self.pool.acquire() as conn:
+            await worker.trace(conn, self.job, 'review_failure', {
+                'attempt_id': str(attempt_id), 'failure_category': 'provider_transient',
+                'retryable': True, 'failure_stage': 'model_review',
+            })
+        self.assertIsNone(await worker.claim_job(self.pool))
+        row = await self.pool.fetchrow('SELECT state,last_error FROM v2_analysis_jobs WHERE id=$1', self.job)
+        self.assertEqual(('failed', 'retry_limit_without_transient_trace'), (row['state'], row['last_error']))
+
     async def test_permanent_visual_failure_enters_dead_letter_without_retry(self):
         await self.make_queued()
         job = await worker.claim_job(self.pool)
@@ -721,6 +753,7 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         failure = await self.pool.fetchrow("SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_failure'", self.job)
         self.assertEqual("visual_input_invalid", failure["payload"]["failure_category"])
         self.assertFalse(failure["payload"]["retryable"])
+        self.assertIsNone(await worker.claim_job(self.pool))
 
     async def test_heartbeat_stops_when_attempt_is_replaced(self):
         await self.make_queued()
