@@ -674,6 +674,42 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
             "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind IN ('hermes_result','system_review_result')",
             self.job))
 
+    async def test_provider_transient_remains_claimable_after_attempt_limit(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        await self.pool.execute('UPDATE v2_analysis_jobs SET attempts=$2 WHERE id=$1', self.job, worker.MAX_ATTEMPTS)
+        job['attempts'] = worker.MAX_ATTEMPTS
+        with (
+                patch.object(worker, "review_message", AsyncMock(side_effect=worker.HermesProviderUnavailable())),
+                patch.object(worker, "delete_session", AsyncMock()),
+                patch.object(worker.random, "randint", return_value=0),
+        ):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model="hermes-agent"), job)
+        row = await self.pool.fetchrow(
+            "SELECT state,last_error,attempts,available_at>now()+interval '899 seconds' AS delayed "
+            "FROM v2_analysis_jobs WHERE id=$1", self.job)
+        self.assertEqual(('retry', 'HermesProviderUnavailable', worker.MAX_ATTEMPTS, True),
+                         (row['state'], row['last_error'], row['attempts'], row['delayed']))
+        failure = await self.pool.fetchrow(
+            "SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_failure'", self.job)
+        self.assertEqual(str(job['attempt_id']), failure['payload']['attempt_id'])
+        self.assertEqual('provider_transient', failure['payload']['failure_category'])
+        self.assertEqual(0, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 "
+            "AND trace_kind IN ('hermes_result','system_review_result')", self.job))
+        await self.pool.execute("UPDATE v2_analysis_jobs SET available_at=now()-interval '1 second' WHERE id=$1", self.job)
+        next_attempt = await worker.claim_job(self.pool)
+        self.assertEqual(worker.MAX_ATTEMPTS + 1, next_attempt['attempts'])
+
+    async def test_attempt_limit_cannot_be_bypassed_without_matching_transient_trace(self):
+        await self.make_queued(attempts=worker.MAX_ATTEMPTS)
+        await self.pool.execute(
+            "UPDATE v2_analysis_jobs SET state='retry',attempt_id=$2,last_error='HermesProviderUnavailable' WHERE id=$1",
+            self.job, uuid.uuid4())
+        self.assertIsNone(await worker.claim_job(self.pool))
+        row = await self.pool.fetchrow('SELECT state,last_error FROM v2_analysis_jobs WHERE id=$1', self.job)
+        self.assertEqual(('failed', 'retry_limit_without_transient_trace'), (row['state'], row['last_error']))
+
     async def test_permanent_visual_failure_enters_dead_letter_without_retry(self):
         await self.make_queued()
         job = await worker.claim_job(self.pool)

@@ -24,6 +24,7 @@ log = logging.getLogger("platform.review-worker")
 CONCURRENCY = max(1, min(8, int(os.environ.get("REVIEW_WORKER_CONCURRENCY", "2"))))
 EXPERT_CONCURRENCY_FLOOR = max(1, min(CONCURRENCY, int(os.environ.get("REVIEW_EXPERT_CONCURRENCY_FLOOR", "1"))))
 MAX_ATTEMPTS = 5
+PERSISTENT_RETRY_FAILURES = frozenset({'provider_transient', 'timeout', 'network'})
 LEASE_SECONDS = 90
 HEARTBEAT_SECONDS = 20
 REVIEW_TIMEOUT = max(60, min(1800, int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "600"))))
@@ -80,6 +81,9 @@ def failure_category(exc: BaseException) -> tuple[str, bool]:
 
 def retry_delay_seconds(failure: str, attempts: int) -> int:
     attempt = max(1, attempts)
+    if failure in PERSISTENT_RETRY_FAILURES:
+        delay = min(900, 60 * 2 ** min(attempt - 1, 4))
+        return delay + random.randint(0, min(60, max(1, delay // 10)))
     initial = 60 if failure == "provider_transient" else 5
     return min(300, initial * 2 ** (attempt - 1)) + random.randint(0, 3)
 
@@ -127,17 +131,26 @@ async def _claim_from_lane(conn, mode):
             "WHERE s.enabled AND e.enabled AND se.enabled AND (SELECT count(*) FROM v2_analysis_jobs running "
             "WHERE running.expert_id=es.expert_id AND running.state='running' AND running.lease_until>statement_timestamp())<GREATEST(es.concurrency_limit,$3) "
             "AND EXISTS(SELECT 1 FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
-            "WHERE j.source_id=ss.source_id AND j.expert_id=es.expert_id AND j.attempts<$1 AND " + lane +
+            "WHERE j.source_id=ss.source_id AND j.expert_id=es.expert_id AND "
+            "(j.attempts<$1 OR (j.state='retry' AND EXISTS(SELECT 1 FROM v2_analysis_traces t "
+            "WHERE t.job_id=j.id AND t.trace_kind='review_failure' "
+            "AND t.payload->>'attempt_id'=j.attempt_id::text AND t.payload->>'retryable'='true' "
+            "AND t.payload->>'failure_category'=ANY($4::text[])))) AND " + lane +
             " AND ((j.state IN('queued','retry') AND j.available_at<=statement_timestamp()) OR "
             "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))) AND " + ELIGIBLE_MESSAGE + ") "
             "ORDER BY ss.last_turn,es.last_turn,ss.source_id,es.expert_id LIMIT 1 FOR SHARE OF s,e,se FOR UPDATE OF ss,es",
-            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, EXPERT_CONCURRENCY_FLOOR)
+            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, EXPERT_CONCURRENCY_FLOOR,
+            sorted(PERSISTENT_RETRY_FAILURES))
         if not pair:
             return None
         turn = await _advance_turn(conn, pair['source_id'], pair['expert_id'])
         row = await conn.fetchrow(
             'SELECT j.id,j.message_id,j.attempts FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id '
-            'WHERE j.source_id=$3 AND j.expert_id=$4 AND j.attempts<$1 AND ' + lane +
+            'WHERE j.source_id=$3 AND j.expert_id=$4 AND '
+            "(j.attempts<$1 OR (j.state='retry' AND EXISTS(SELECT 1 FROM v2_analysis_traces t "
+            "WHERE t.job_id=j.id AND t.trace_kind='review_failure' "
+            "AND t.payload->>'attempt_id'=j.attempt_id::text AND t.payload->>'retryable'='true' "
+            "AND t.payload->>'failure_category'=ANY($5::text[])))) AND " + lane +
             " AND ((j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))"
             " OR (j.state IN('queued','retry') AND j.available_at<=statement_timestamp())) AND " + ELIGIBLE_MESSAGE +
             " ORDER BY (j.state='running') DESC,"
@@ -146,7 +159,8 @@ async def _claim_from_lane(conn, mode):
             "CASE WHEN j.state<>'running' THEN j.message_posted_at END DESC,"
             "CASE WHEN j.state<>'running' THEN j.available_at END,j.created_at,j.id "
             'LIMIT 1 FOR UPDATE OF j SKIP LOCKED',
-            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, pair['source_id'], pair['expert_id'])
+            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, pair['source_id'], pair['expert_id'],
+            sorted(PERSISTENT_RETRY_FAILURES))
         if row:
             return row, pair, turn, probe + 1
     return None
@@ -200,11 +214,17 @@ async def _claim_job(pool):
             if not await _scheduler_lock(conn):
                 return None
             await conn.execute(
-                "WITH exhausted AS(SELECT id FROM v2_analysis_jobs WHERE state='running' "
-                "AND (lease_until IS NULL OR lease_until<=statement_timestamp()) AND attempts >= $1 "
-                "ORDER BY lease_until NULLS FIRST,id LIMIT $2 FOR UPDATE SKIP LOCKED) "
-                "UPDATE v2_analysis_jobs j SET state='failed',lease_until=NULL,last_error='lease_exhausted',updated_at=now() "
+                "WITH exhausted AS(SELECT j.id,j.state FROM v2_analysis_jobs j WHERE "
+                "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()) AND j.attempts >= $1) "
+                "OR (j.state='retry' AND j.attempts >= $1 AND NOT EXISTS(SELECT 1 FROM v2_analysis_traces t "
+                "WHERE t.job_id=j.id AND t.trace_kind='review_failure' "
+                "AND t.payload->>'attempt_id'=j.attempt_id::text AND t.payload->>'retryable'='true' "
+                "AND t.payload->>'failure_category'=ANY($3::text[]))) "
+                "ORDER BY j.lease_until NULLS FIRST,j.id LIMIT $2 FOR UPDATE SKIP LOCKED) "
+                "UPDATE v2_analysis_jobs j SET state='failed',lease_until=NULL,last_error=CASE "
+                "WHEN exhausted.state='running' THEN 'lease_exhausted' ELSE 'retry_limit_without_transient_trace' END,updated_at=now() "
                 "FROM exhausted WHERE j.id=exhausted.id", MAX_ATTEMPTS, EXHAUSTED_BATCH_SIZE,
+                sorted(PERSISTENT_RETRY_FAILURES),
             )
             # Only metadata is enumerated. Job probes are indexed per source /
             # expert pair; no global queue sort/materialization is performed.
@@ -422,17 +442,20 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
         category = type(exc).__name__
         failure, retryable = failure_category(exc)
         log.warning("review failed review_id=%s attempt_id=%s category=%s", job["id"], job["attempt_id"], category)
-        exhausted = job["attempts"] >= MAX_ATTEMPTS or not retryable
-        delay = 0 if exhausted else retry_delay_seconds(failure, job["attempts"])
+        failure_trace_saved = False
         try:
             await _add_trace(pool, job, "review_failure", {
                 "failure_category": failure, "retryable": retryable, "exception_type": category,
                 "failure_stage": failure_stage, "attempt": job["attempts"], "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
             })
+            failure_trace_saved = True
         except Exception:
             # A lost lease or unavailable database must not mask the original
             # bounded failure classification or prevent cleanup.
             pass
+        persistent_retry = failure_trace_saved and failure in PERSISTENT_RETRY_FAILURES
+        exhausted = not retryable or (job["attempts"] >= MAX_ATTEMPTS and not persistent_retry)
+        delay = 0 if exhausted else retry_delay_seconds(failure, job["attempts"])
         await pool.execute(
             "UPDATE v2_analysis_jobs SET state=$3,available_at=now()+($4::int*interval '1 second'),"
             "lease_until=NULL,last_error=$5,updated_at=now() WHERE id=$1 AND attempt_id=$2 AND state='running'",
