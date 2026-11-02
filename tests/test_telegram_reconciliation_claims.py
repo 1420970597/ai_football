@@ -89,8 +89,56 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
             with self.assertLogs('platform.telegram', level='WARNING') as logs:
                 with self.assertRaises(httpx.HTTPStatusError):
                     await backend.checkpoint('-1001', 'private-owner-only')
-        self.assertIn('operation=/checkpoints/claim status=503 reason=service_unavailable', logs.output[0])
+        self.assertTrue(any('operation=/checkpoints/claim status=503 reason=service_unavailable' in line for line in logs.output))
         self.assertNotIn('private-', logs.output[0])
+
+    async def test_idempotent_event_retries_database_503_once_with_identical_body(self):
+        requests=[]
+        def handler(request):
+            requests.append((request.url.path,request.content))
+            if len(requests)==1:
+                return httpx.Response(503,json={'code':'database_temporarily_unavailable'})
+            return httpx.Response(200,json={'persisted':True,'state':'ready','message_id':'durable-id'})
+        body={'chat_id':'-1001','owner':'private-owner-only','platform_message_id':'991',
+              'version_key':'a'*64,'raw_text':'private-message-only'}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend=TelegramBackend(client,'http://isolated.invalid/internal/telegram')
+            with self.assertLogs('platform.telegram',level='WARNING') as logs:
+                result=await backend.event(body)
+        self.assertEqual({'persisted':True,'state':'ready','message_id':'durable-id'},result)
+        self.assertEqual(2,len(requests))
+        self.assertEqual(requests[0],requests[1])
+        self.assertIn('operation=/events status=503 attempt=1',logs.output[0])
+        self.assertNotIn('private-', '\n'.join(logs.output))
+
+    async def test_idempotent_claim_retries_once_but_observed_post_does_not(self):
+        for operation,call in (
+            ('/checkpoints/claim',lambda backend:backend.checkpoint('-1001','same-owner')),
+            ('/observed',lambda backend:backend.observed('-1001','same-owner')),
+        ):
+            with self.subTest(operation=operation):
+                requests=[]
+                def handler(request):
+                    requests.append(request)
+                    if len(requests)==1:
+                        return httpx.Response(503,json={'code':'database_temporarily_unavailable'})
+                    if operation=='/checkpoints/claim':
+                        return httpx.Response(200,json={'last_message_id':12,'lease_until':'future'})
+                    return httpx.Response(503,json={'code':'database_temporarily_unavailable'})
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    backend=TelegramBackend(client,'http://isolated.invalid/internal/telegram')
+                    if operation=='/checkpoints/claim':
+                        with self.assertLogs('platform.telegram',level='WARNING') as logs:
+                            result=await call(backend)
+                        self.assertEqual(12,result['last_message_id'])
+                        self.assertEqual(2,len(requests))
+                        self.assertEqual(requests[0].content,requests[1].content)
+                        self.assertIn('attempt=1',logs.output[0])
+                    else:
+                        with self.assertLogs('platform.telegram',level='WARNING'):
+                            with self.assertRaises(httpx.HTTPStatusError):
+                                await call(backend)
+                        self.assertEqual(1,len(requests))
 
     async def test_database_rejection_code_has_bounded_reason(self):
         def handler(request):
@@ -103,7 +151,7 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
             with self.assertLogs('platform.telegram', level='WARNING') as logs:
                 with self.assertRaises(httpx.HTTPStatusError):
                     await backend.checkpoint('-1001', 'private-owner-only')
-        self.assertIn('reason=database_temporarily_unavailable', logs.output[0])
+        self.assertTrue(any('reason=database_temporarily_unavailable' in line for line in logs.output))
         self.assertNotIn('内部数据库错误', logs.output[0])
 
     async def test_event_and_observed_overlap_checkpoint_while_checkpoint_writes_stay_ordered(self):

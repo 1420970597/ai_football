@@ -30,6 +30,7 @@ _SOURCE_SERIALIZED_PATHS = frozenset({
     '/checkpoints',
     '/author-backfill',
 })
+_IDEMPOTENT_RETRY_PATHS = frozenset({'/events', '/checkpoints/claim'})
 
 
 class TelegramBackend:
@@ -58,15 +59,24 @@ class TelegramBackend:
         source_id = str(body.get('chat_id')) if body and body.get('chat_id') is not None else None
         operation = path.split('?', 1)[0]
         message_id = str(body.get('platform_message_id')) if body and body.get('platform_message_id') is not None else None
+
+        async def request():
+            response = await self.client.request(method, self.api_url + path, json=body)
+            if method == 'POST' and operation in _IDEMPOTENT_RETRY_PATHS and response.status_code == 503:
+                log.warning('Telegram backend retry method=POST operation=%s status=503 attempt=1', operation)
+                await asyncio.sleep(0.1)
+                response = await self.client.request(method, self.api_url + path, json=body)
+            return response
+
         if method == 'POST' and operation == '/events' and source_id and message_id:
             async with self._event_lock((source_id, message_id)):
-                response = await self.client.request(method, self.api_url + path, json=body)
+                response = await request()
         elif source_id and operation in _SOURCE_SERIALIZED_PATHS:
             lock = self._source_locks.setdefault(source_id, asyncio.Lock())
             async with lock:
-                response = await self.client.request(method, self.api_url + path, json=body)
+                response = await request()
         else:
-            response = await self.client.request(method, self.api_url + path, json=body)
+            response = await request()
         if not response.is_success:
             try:
                 payload = response.json()
