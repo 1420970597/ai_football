@@ -1,6 +1,6 @@
 # Hermes Transient Retry Durability
 
-Status: implementation and Docker isolation verification passed; 65 focused worker/classification tests and 1202 full API tests pass. E190a deployment and a fresh 1800-second observation remain pending.
+Status: implementation and Docker isolation verification passed; 65 focused worker/classification tests and 1202 full API tests pass. Both review-worker replicas run E190a; a fresh 1800-second observation is in progress.
 
 | Field | Evidence and decision |
 | --- | --- |
