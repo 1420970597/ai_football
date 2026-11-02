@@ -57,6 +57,15 @@ class RecentRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(range(1, 14)), {int(item['platform_message_id']) for item in self.backend.calls})
         self.assertEqual(13, len(self.backend.events))
 
+    async def test_large_recent_backfill_is_bounded_per_sync_cycle(self):
+        self.client.messages['-1001'] = [self.recent(i) for i in range(1, 121)]
+        result = await self.collector._recover_recent('-1001', self.source)
+        self.assertEqual('catching_up', result['state'])
+        self.assertEqual(50, result['scanned'])
+        self.assertEqual(50, result['persisted'])
+        self.assertEqual([25, 25], self.client.query_limits)
+        self.assertEqual(50, len(self.backend.calls))
+
     async def test_cancelled_unknown_commit_is_not_cached_and_retries(self):
         self.client.messages['-1001'] = [self.recent(100)]
         entered = asyncio.Event()

@@ -117,6 +117,34 @@ def _market_matches(quote, filters):
     return True
 
 
+def _market_filter_sql(fixture_id: str, filters: dict):
+    clauses = ['q.fixture_id=$1']
+    values = [fixture_id]
+    for field in ('market_kind', 'period', 'selection'):
+        value = filters[field]
+        if value is not None:
+            values.append(value)
+            clauses.append(f'q.{field}=${len(values)}')
+    if filters['line'] is not None:
+        values.append(filters['line'])
+        clauses.append(f'q.line=${len(values)}::numeric')
+    return ' AND '.join(clauses), values
+
+
+async def _read_market_quotes(conn, fixture_id: str, filters: dict):
+    where, values = _market_filter_sql(fixture_id, filters)
+    values.append(MAX_MARKETS + 1)
+    rows = await conn.fetch(
+        'SELECT inventory.total_quotes,q.* '
+        'FROM (SELECT count(*)::integer AS total_quotes FROM v2_current_quotes WHERE fixture_id=$1) inventory '
+        'LEFT JOIN LATERAL (SELECT q.* FROM v2_current_quotes q WHERE ' + where +
+        ' ORDER BY q.period,q.market_id,q.line,q.selection LIMIT $' + str(len(values)) + ') q ON TRUE',
+        *values,
+    )
+    quotes = [row for row in rows if row['id'] is not None]
+    return rows[0]['total_quotes'], quotes
+
+
 def _key(request: Request) -> bytes:
     return request.app.state.settings.mcp_internal_token.encode()
 
@@ -289,12 +317,19 @@ async def _refresh_bound_market(body: MarketInput, request: Request, *, force: b
                 "SELECT source_id AS source_match_id FROM v2_fixtures WHERE id=$1 AND phase IN ('scheduled','live')", body.fixture_id)
             if not fixture:
                 raise HTTPException(409, detail='fixture is no longer active')
-            quotes = await conn.fetch('SELECT * FROM v2_current_quotes WHERE fixture_id=$1 LIMIT $2', body.fixture_id, MAX_MARKETS + 1)
-            if len(quotes) > MAX_MARKETS:
-                raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
-            max_age = await runtime_quote_max_age(settings, conn)
-            if not force and quotes and all(fresh_quote(quote, max_age) for quote in quotes):
-                return {'attempted': False, 'reason': 'quotes_already_fresh'}
+            filters = {'market_kind': body.market_kind, 'period': body.period, 'line': body.line,
+                       'selection': body.selection, 'market_query': body.market_query}
+            if not force:
+                total_quotes, candidates = await _read_market_quotes(conn, body.fixture_id, filters)
+                if len(candidates) > MAX_MARKETS:
+                    raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
+                quotes = [quote for quote in candidates if _market_matches(quote, filters)]
+                if quotes:
+                    max_age = await runtime_quote_max_age(settings, conn)
+                    if all(fresh_quote(quote, max_age) for quote in quotes):
+                        return {'attempted': False, 'reason': 'quotes_already_fresh'}
+                elif total_quotes and any(value is not None for value in filters.values()):
+                    return {'attempted': False, 'reason': 'no_quotes_for_filter'}
             source_match_id = fixture['source_match_id']
     try:
         async with asyncio.timeout(9):
@@ -330,12 +365,12 @@ async def list_match_markets(body: MarketInput, request: Request):
             fixture = await conn.fetchrow("SELECT * FROM v2_fixtures WHERE id=$1 AND phase IN ('scheduled','live')", body.fixture_id)
             if not fixture:
                 raise HTTPException(status_code=409, detail="fixture is no longer active")
-            all_quotes = await conn.fetch("SELECT * FROM v2_current_quotes WHERE fixture_id=$1 ORDER BY period,market_id,line,selection LIMIT $2", body.fixture_id, MAX_MARKETS + 1)
-            if len(all_quotes) > MAX_MARKETS:
-                raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
             filters = {'market_kind': body.market_kind, 'period': body.period, 'line': body.line,
                        'selection': body.selection, 'market_query': body.market_query}
-            quotes = [quote for quote in all_quotes if _market_matches(quote, filters)]
+            total_quotes, candidates = await _read_market_quotes(conn, body.fixture_id, filters)
+            if len(candidates) > MAX_MARKETS:
+                raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
+            quotes = [quote for quote in candidates if _market_matches(quote, filters)]
             max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
             confirmations = {q['id']: confirmation_for(refresh.get('_observation'), q, fixture, max_quote_age) for q in quotes}
             if quotes:
@@ -348,7 +383,7 @@ async def list_match_markets(body: MarketInput, request: Request):
             refresh.pop('_observation', None)
             market_filter = {key: str(value) if key == 'line' and value is not None else value
                              for key, value in filters.items() if value is not None}
-            market_coverage = {'total_quotes': len(all_quotes), 'matched_quotes': len(quotes),
+            market_coverage = {'total_quotes': total_quotes, 'matched_quotes': len(quotes),
                                'returned_quotes': len(quotes), 'complete_for_filter': True}
             result = {"fixture": dict(fixture), "markets": [dict(q) | {"quote_id": str(q["id"]), "fresh": fresh_quote(q, max_quote_age),
                       'confirmed_current': bool(confirmations[q['id']]),

@@ -278,6 +278,91 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(retry.json()['accepted']))
         self.assertEqual('2.05000', retry.json()['accepted'][0]['price'])
 
+    async def test_filtered_market_does_not_refresh_for_unrelated_stale_quotes(self):
+        fixture_id = await self.fixture(markets=[
+            {"market_id": "total", "market_name": "全场大小", "kind": "total", "period": "full_time",
+             "line": "2.5", "selection": "over", "price": "1.95", "source_updated_at": self.now.isoformat(),
+             "received_at": self.now.isoformat()},
+            {"market_id": "handicap", "market_name": "全场让球", "kind": "handicap", "period": "full_time",
+             "line": "-0.5", "selection": "home", "price": "1.86", "source_updated_at": self.now.isoformat(),
+             "received_at": self.now.isoformat()},
+        ])
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes' WHERE fixture_id=$1 AND market_kind='handicap'", fixture_id)
+        settings = self.client._transport.app.state.settings
+        settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        calls = []
+        factory = httpx.AsyncClient
+        async def handler(request):
+            calls.append(json.loads(request.content))
+            return httpx.Response(200, json={'accepted': True, 'reason': 'refresh_completed'})
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+            response = await self.post('list_match_markets', fixture_id=fixture_id,
+                                       market_kind='total', period='full_time', selection='over')
+        self.assertEqual(200, response.status_code, response.text)
+        result = response.json()
+        self.assertEqual([], calls)
+        self.assertEqual('quotes_already_fresh', result['refresh']['reason'])
+        self.assertEqual(2, result['market_coverage']['total_quotes'])
+        self.assertEqual(1, result['market_coverage']['returned_quotes'])
+        self.assertTrue(result['markets'][0]['fresh'])
+
+    async def test_filtered_market_zero_result_skips_unrelated_refresh_for_fallback(self):
+        fixture_id = await self.fixture(markets=[
+            {"market_id": "handicap", "market_name": "全场让球", "kind": "handicap", "period": "full_time",
+             "line": "-0.5", "selection": "home", "price": "1.86", "source_updated_at": self.now.isoformat(),
+             "received_at": self.now.isoformat()},
+        ])
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes' WHERE fixture_id=$1", fixture_id)
+        settings = self.client._transport.app.state.settings
+        settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        calls = []
+        factory = httpx.AsyncClient
+        async def handler(request):
+            calls.append(request)
+            return httpx.Response(200, json={'accepted': True, 'reason': 'refresh_completed'})
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+            response = await self.post('list_match_markets', fixture_id=fixture_id,
+                                       market_kind='winner', period='full_time', selection='home')
+        self.assertEqual(200, response.status_code, response.text)
+        result = response.json()
+        self.assertEqual([], calls)
+        self.assertEqual('no_quotes_for_filter', result['refresh']['reason'])
+        self.assertEqual(1, result['market_coverage']['total_quotes'])
+        self.assertEqual(0, result['market_coverage']['returned_quotes'])
+        self.assertEqual([], result['markets'])
+
+    async def test_filtered_market_refreshes_when_matching_quote_is_stale(self):
+        fixture_id = await self.fixture(markets=[
+            {"market_id": "total", "market_name": "全场大小", "kind": "total", "period": "full_time",
+             "line": "2.5", "selection": "over", "price": "1.95", "source_updated_at": self.now.isoformat(),
+             "received_at": self.now.isoformat()},
+            {"market_id": "handicap", "market_name": "全场让球", "kind": "handicap", "period": "full_time",
+             "line": "-0.5", "selection": "home", "price": "1.86", "source_updated_at": self.now.isoformat(),
+             "received_at": self.now.isoformat()},
+        ])
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes' WHERE fixture_id=$1 AND market_kind='total'", fixture_id)
+        settings = self.client._transport.app.state.settings
+        settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        calls = []
+        factory = httpx.AsyncClient
+        async def handler(request):
+            calls.append(json.loads(request.content))
+            return httpx.Response(200, json={'accepted': True, 'reason': 'refresh_completed'})
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+            response = await self.post('list_match_markets', fixture_id=fixture_id,
+                                       market_kind='total', period='full_time', selection='over')
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual([{'fixture_id': fixture_id, 'source_match_id': fixture_id}], calls)
+        self.assertTrue(response.json()['refresh']['accepted'])
+        self.assertEqual(1, response.json()['market_coverage']['returned_quotes'])
+        self.assertFalse(response.json()['markets'][0]['fresh'])
+
     async def test_bound_stale_market_refresh_rechecks_source_timestamp_and_preserves_gate(self):
         fixture_id = await self.fixture()
         key, _ = await self.search_all()

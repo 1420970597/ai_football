@@ -245,9 +245,9 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("caught_up", pages[-1]["state"])
         self.assertEqual(105, len(self.backend.events))
         self.assertEqual(105, self.backend.positions["-1001"])
-        # Archival reads remain unbounded overall; recent recovery adds a
-        # separate bounded head page without replacing their cursor.
-        self.assertEqual([100, None] * 5, self.client.query_limits)
+        # Recent recovery uses a bounded head page; archival reads retain the
+        # unbounded cursor scan and advance independently.
+        self.assertEqual([25, None] * 5, self.client.query_limits)
         await self.collector.sync_once()
         self.assertEqual(1, self.client.connect_count)
         self.assertEqual(1, len(self.created))

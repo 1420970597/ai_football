@@ -38,10 +38,13 @@ class ReceiptRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('caught_up', result['state'])
         self.assertEqual(41, len(self.backend.calls))
         self.assertEqual('1', self.backend.calls[-1]['platform_message_id'])
-        self.backend.event_receipts.assert_awaited_once()
-        self.assertEqual(41, len(self.backend.event_receipts.call_args.args[2]))
+        self.assertEqual(2, self.backend.event_receipts.await_count)
+        self.assertEqual(
+            [25, 16],
+            [len(call.args[2]) for call in self.backend.event_receipts.call_args_list],
+        )
         await self.collector._recover_recent('-1001', self.source)
-        self.backend.event_receipts.assert_awaited_once()
+        self.assertEqual(2, self.backend.event_receipts.await_count)
 
     async def test_same_second_edit_and_nickname_change_still_reach_backend(self):
         message = self.recent(100)
