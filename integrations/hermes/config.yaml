@@ -11,6 +11,9 @@ providers:
 
 agent:
   max_turns: 128
+  # Durable review jobs own transient retries and retain per-attempt evidence.
+  api_max_retries: 1
+  auto_recovery_cycles: 0
   image_input_mode: native
   disabled_toolsets:
     - web

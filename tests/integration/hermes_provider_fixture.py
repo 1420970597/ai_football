@@ -10,7 +10,8 @@ import time
 MODEL = 'cline-pass/deepseek-v4.1-flash'
 TARGET = 259
 CANARY = 'isolated-hermes-canary-never-a-real-secret'
-evidence = {'requests': 0, 'unscoped_requests': 0, 'reviews': {}}
+evidence = {'requests': 0, 'unscoped_requests': 0, 'reviews': {}, 'provider_failures': {},
+            'provider_failure_times': {}}
 lock = threading.RLock()
 
 
@@ -241,6 +242,24 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(413)
                 return
             body = json.loads(self.rfile.read(length))
+            serialized = json.dumps(body.get('messages', []), ensure_ascii=False)
+            if 'fixture_scenario: provider_503' in serialized:
+                review = re.search(r'review_id: ([a-f0-9-]{36})', serialized)
+                if not review:
+                    self.send_error(422)
+                    return
+                with lock:
+                    key = review.group(1)
+                    evidence['provider_failures'][key] = evidence['provider_failures'].get(key, 0) + 1
+                    evidence['provider_failure_times'].setdefault(key, []).append(time.monotonic())
+                content = json.dumps({'error': {'type': 'server_error', 'message': 'isolated transient failure'}}).encode()
+                self.send_response(503)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Retry-After', '0')
+                self.send_header('Content-Length', str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
             message, reason = answer(body)
         except (ValueError, TypeError):
             self.send_error(400)

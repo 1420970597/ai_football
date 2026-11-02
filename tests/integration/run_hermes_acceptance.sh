@@ -67,6 +67,9 @@ start_hermes() {
   local config=$1
   docker run -d --name "$HERMES" --network "$NETWORK" --network-alias ai-football-v2-hermes-integration --cpus=.5 --memory=768m --pids-limit=256 --label "ai-football.test=$TASK" --read-only --cap-drop=ALL --security-opt=no-new-privileges --init --user 10000:10000 --entrypoint /opt/hermes/.venv/bin/python --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m --tmpfs /opt/data/.hermes:rw,noexec,nosuid,nodev,size=128m,mode=0700,uid=10000,gid=10000 -v "$SNAPSHOT/integrations/hermes:/workspace:ro" -v "$config:/opt/data/.hermes/config.yaml:ro" -w /workspace -e PYTHONDONTWRITEBYTECODE=1 -e HERMES_HOME=/opt/data/.hermes -e API_SERVER_ENABLED=true -e API_SERVER_HOST=0.0.0.0 -e API_SERVER_PORT=8642 -e API_SERVER_KEY=isolated-framework-key -e HERMES_MODEL=cline-pass/deepseek-v4.1-flash -e HERMES_PROVIDER_BASE_URL=http://provider-fixture:8999/v1 -e HERMES_PROVIDER_API_KEY=isolated-provider-key -e EXPERT_MCP_TOKEN=isolated-tools -e HERMES_GATEWAY_NO_SUPERVISE=1 -e ISOLATED_CANARY_SECRET=isolated-hermes-canary-never-a-real-secret "$HERMES_IMAGE" /workspace/runner.py gateway run --no-supervise >/dev/null
 }
+assert_retry_policy() {
+  docker exec "$HERMES" python -c 'from hermes_cli.config import load_config_readonly; agent=load_config_readonly().get("agent",{}); assert agent.get("api_max_retries")==1 and agent.get("auto_recovery_cycles")==0; print("provider_retry_policy=single_attempt_durable_worker_retry")'
+}
 wait_services() {
   verify --cpus=.125 --memory=128m "$VERIFIER" python -c 'import httpx,time; endpoints=[("http://api:8080/readyz",{}),("http://provider-fixture:8999/evidence",{}),("http://hermes-mcp:8090/mcp",{}),("http://ai-football-v2-hermes-integration:8642/v1/models",{"Authorization":"Bearer isolated-framework-key"})]; exec("for url,headers in endpoints:\n for attempt in range(180):\n  try:\n   r=httpx.get(url,headers=headers,timeout=2,trust_env=False)\n   if r.status_code in (200,401): break\n  except httpx.HTTPError: pass\n  time.sleep(.5)\n else: raise RuntimeError(\"isolated service not ready: \"+url)\nprint(\"isolated_services_ready\")")'
 }
@@ -81,9 +84,10 @@ cases() {
 }
 start_hermes "$SNAPSHOT/integrations/hermes/config.yaml"
 wait_services
+assert_retry_policy
 hashes > "$EVIDENCE/framework-before.json"
 readonly_skill
-cases normal,adversarial,length,parallel,no_intent
+cases normal,adversarial,length,parallel,no_intent,provider_503
 printf 'restart_task_owned_framework\n'
 docker restart "$HERMES" >/dev/null
 wait_services
@@ -96,5 +100,6 @@ docker logs "$HERMES" > "$EVIDENCE/framework-main.log" 2>&1
 docker rm -f "$HERMES" >/dev/null
 start_hermes "$EVIDENCE/budget-config.yaml"
 wait_services
+assert_retry_policy
 cases budget
 printf 'all_framework_acceptance_scenarios_passed\n'

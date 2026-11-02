@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import asyncpg
 import httpx
 
-from app.hermes_client import SYSTEM_PROMPT, review_message
+from app.hermes_client import HermesProviderUnavailable, SYSTEM_PROMPT, review_message
 from app.review_tool_evidence import replay_snapshot
 
 COUNT = 260
@@ -90,6 +90,40 @@ async def no_bypass(http):
 async def run_case(conn, http, scenario):
     data = await seed(conn, scenario)
     job, attempt, message = data['job'], data['attempt'], data['message']
+    session = f'expert-review-{job}-{attempt}'
+    if scenario == 'provider_503':
+        settings = SimpleNamespace(hermes_api_key='isolated-framework-key', hermes_api_url=HERMES + '/v1',
+                                   hermes_model='hermes-agent')
+        source = {'source_name': '隔离群', 'display_nickname': '隔离专家', 'posted_at': data['posted_at'],
+                  'raw_text': data['raw_text'], 'media_objects': []}
+        started = asyncio.get_running_loop().time()
+        failure = None
+        try:
+            async with asyncio.timeout(15):
+                await review_message(settings, source, job, attempt)
+        except (HermesProviderUnavailable, httpx.HTTPStatusError) as exc:
+            failure = exc
+        elapsed = asyncio.get_running_loop().time() - started
+        assert failure is not None, 'provider 503 must not become a successful or unresolved model result'
+        if isinstance(failure, httpx.HTTPStatusError):
+            assert failure.response.status_code >= 500, failure.response.status_code
+        else:
+            assert isinstance(failure, HermesProviderUnavailable)
+        evidence = (await http.get(PROVIDER + '/evidence')).json()
+        request_count = evidence['provider_failures'].get(str(job), 0)
+        assert 1 <= request_count <= 2, evidence['provider_failures']
+        assert elapsed < 15, elapsed
+        assert not await conn.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_signals WHERE message_id=$1)', message)
+        assert not await conn.fetchval('SELECT EXISTS(SELECT 1 FROM v2_review_fixture_bindings WHERE job_id=$1)', job)
+        assert not await conn.fetchval('SELECT EXISTS(SELECT 1 FROM v2_analysis_traces WHERE job_id=$1)', job)
+        cleanup = await http.delete(HERMES + '/api/sessions/' + session, headers=HEADERS)
+        assert cleanup.status_code in {200, 204, 404}, cleanup.status_code
+        timestamps = evidence['provider_failure_times'][str(job)]
+        gap_ms = round((timestamps[-1] - timestamps[0]) * 1000, 1) if len(timestamps) > 1 else 0
+        print(json.dumps({'scenario': scenario, 'provider_requests': request_count, 'inter_request_gap_ms': gap_ms,
+            'elapsed_ms': round(elapsed * 1000, 1), 'failure_type': type(failure).__name__,
+            'accepted_signals': 0, 'mcp_traces': 0}, ensure_ascii=False), flush=True)
+        return
     if scenario == 'parallel':
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS v2_integration_parallel_probe (
@@ -117,7 +151,6 @@ async def run_case(conn, http, scenario):
             BEFORE INSERT ON v2_review_fixture_bindings
             FOR EACH ROW EXECUTE FUNCTION v2_integration_parallel_probe_insert()
         """)
-    session = f'expert-review-{job}-{attempt}'
     if scenario in {'length', 'budget'}:
         settings = SimpleNamespace(hermes_api_key='isolated-framework-key', hermes_api_url=HERMES + '/v1', hermes_model='hermes-agent')
         source = {'source_name': '隔离群', 'display_nickname': '隔离专家', 'posted_at': data['posted_at'],
@@ -229,7 +262,7 @@ async def run():
         async with httpx.AsyncClient(timeout=240, trust_env=False) as http:
             await no_bypass(http)
             for scenario in os.environ.get('INTEGRATION_SCENARIOS', 'normal,adversarial,length').split(','):
-                if scenario not in {'normal', 'adversarial', 'length', 'budget', 'parallel', 'no_intent'}:
+                if scenario not in {'normal', 'adversarial', 'length', 'budget', 'parallel', 'no_intent', 'provider_503'}:
                     raise RuntimeError('unknown isolated scenario')
                 await run_case(conn, http, scenario)
     finally:
