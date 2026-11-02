@@ -86,6 +86,19 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1,len(self.backend.observation_calls))
         self.assertEqual(1,len(self.backend.events))
 
+    async def test_reconciliation_message_read_can_exceed_three_seconds(self):
+        self.client.messages['-1001']=[Message(1)]
+        self.queue('-1001',[[1]])
+        original=self.client.get_messages
+        async def delayed(entity,ids):
+            await asyncio.sleep(3.2)
+            return await original(entity,ids)
+        self.client.get_messages=delayed
+        report=await asyncio.wait_for(self.collector._reconcile_known('-1001',self.source),6)
+        self.assertEqual({'state':'ready','checked':1,'pending':0},report)
+        self.assertEqual(1,len(self.backend.events))
+        self.assertEqual(1,len(self.backend.ack_calls))
+
     async def test_cancelled_reconciliation_keeps_unchecked_claim_and_reenters_once(self):
         self.client.messages['-1001']=[Message(1)]
         self.queue('-1001',[[1]])
