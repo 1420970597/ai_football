@@ -8,6 +8,7 @@ import hmac
 import json
 import os
 import re
+import time
 from typing import Annotated, Literal
 import uuid
 
@@ -26,6 +27,12 @@ from ..review_policy import REALTIME_WINDOW_SECONDS
 
 
 router = APIRouter()
+
+
+def record_event_phase(request: Request, name: str, started: float) -> None:
+    phases = getattr(request.state, "telegram_event_phases", {})
+    phases[name] = round((time.perf_counter() - started) * 1000, 1)
+    request.state.telegram_event_phases = phases
 
 
 def authorized(request: Request):
@@ -725,14 +732,27 @@ async def ingest_event(body: EventInput, request: Request):
         if not all(item.get(key) for key in ("object_key", "mime_type", "sha256")) or ".." in item["object_key"].split("/"):
             raise HTTPException(status_code=422, detail="invalid remote media evidence")
     pool = database.current_pool()
+    pool_wait_started = time.perf_counter()
     async with pool.acquire() as conn:
+        if body.reconciliation is None and body.event_kind != "delete":
+            request.state.telegram_event_phases = {
+                "pool_wait_ms": round((time.perf_counter() - pool_wait_started) * 1000, 1),
+            }
         async with conn.transaction():
             if body.reconciliation is None and body.event_kind != "delete":
-                source = await source_and_message_lock(conn, body.chat_id, body.platform_message_id)
+                lock_started = time.perf_counter()
+                try:
+                    source = await source_and_message_lock(conn, body.chat_id, body.platform_message_id)
+                finally:
+                    record_event_phase(request, "source_message_lock_ms", lock_started)
                 if not source:
                     await source_for(conn, body.chat_id)
                     raise HTTPException(status_code=403, detail="Telegram source is not enabled")
-                result = await persist_fast_event(conn, source["id"], body)
+                persist_started = time.perf_counter()
+                try:
+                    result = await persist_fast_event(conn, source["id"], body)
+                finally:
+                    record_event_phase(request, "event_sql_ms", persist_started)
                 outcome = result["outcome"]
                 if outcome == "source_disabled":
                     raise HTTPException(status_code=403, detail="Telegram source is not enabled")

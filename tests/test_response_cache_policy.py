@@ -3,7 +3,7 @@ import unittest
 import asyncio
 from unittest.mock import patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx
 
@@ -58,6 +58,32 @@ class ResponseCachePolicyTests(unittest.IsolatedAsyncioTestCase):
         fields = info.call_args.args[1:]
         rendered = message % fields
         self.assertIn('operation=events status=200 category=none elapsed_ms=', rendered)
+        self.assertNotIn('private-chat-id', rendered)
+        self.assertNotIn('private recommendation', rendered)
+
+    async def test_telegram_event_phase_log_contains_only_numeric_timings(self):
+        app = FastAPI()
+        app.middleware('http')(request_context)
+
+        @app.post('/internal/telegram/events')
+        async def event(request: Request):
+            request.state.telegram_event_phases = {
+                'pool_wait_ms': 2.5,
+                'source_message_lock_ms': 4.0,
+                'event_sql_ms': 7.5,
+            }
+            return JSONResponse({'ok': True})
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            with patch('app.main.log.info') as info:
+                response = await client.post('/internal/telegram/events', json={
+                    'chat_id': 'private-chat-id', 'raw_text': 'private recommendation'})
+        self.assertEqual(200, response.status_code)
+        rendered = '\n'.join(call.args[0] % call.args[1:] for call in info.call_args_list)
+        self.assertIn('pool_wait_ms=2.5', rendered)
+        self.assertIn('source_message_lock_ms=4.0', rendered)
+        self.assertIn('event_sql_ms=7.5', rendered)
+        self.assertIn('remaining_ms=', rendered)
         self.assertNotIn('private-chat-id', rendered)
         self.assertNotIn('private recommendation', rendered)
 

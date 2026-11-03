@@ -102,8 +102,18 @@ async def request_context(request: Request, call_next):
         raise
     finally:
         if operation is not None:
-            log.info("Telegram API request method=%s operation=%s status=%s category=%s elapsed_ms=%.1f",
-                     request.method, operation, status, category, (time.perf_counter() - started) * 1000)
+            phases = getattr(request.state, "telegram_event_phases", {})
+            phase_values = {key: float(value) for key, value in phases.items()
+                            if isinstance(key, str) and key.endswith("_ms")
+                            and isinstance(value, (int, float))}
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            if phase_values:
+                phase_values["remaining_ms"] = round(max(0.0, elapsed_ms - sum(phase_values.values())), 1)
+                phase_summary = ",".join(f"{key}={value:.1f}" for key, value in sorted(phase_values.items()))
+            else:
+                phase_summary = "none"
+            log.info("Telegram API request method=%s operation=%s status=%s category=%s elapsed_ms=%.1f phases=%s",
+                     request.method, operation, status, category, elapsed_ms, phase_summary or "none")
 
 
 @app.exception_handler(Exception)

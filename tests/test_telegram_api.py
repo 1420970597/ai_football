@@ -13,6 +13,7 @@ from fastapi import FastAPI
 import httpx
 
 from app import auth, database
+from app.main import request_context
 from app.routes import internal, telegram
 from app.security import decrypt_secret, token_hash
 
@@ -29,6 +30,7 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         url = TEST_URL.rsplit("/", 1)[0] + "/" + self.name
         self.pool = await database.open_pool(SimpleNamespace(database_url=url), migrate=True)
         self.app = FastAPI()
+        self.app.middleware("http")(request_context)
         self.app.state.settings = SimpleNamespace(collector_token="test-collector-token", encryption_key=bytes(range(32)))
         self.app.state.decrypt_secret = lambda value: decrypt_secret(bytes(range(32)), value)
         self.app.include_router(internal.router)
@@ -62,6 +64,20 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def post(self, body):
         return await self.client.post("/internal/telegram/events", json=body)
+
+    async def test_event_phase_log_splits_pool_lock_and_persistence_without_private_fields(self):
+        body = self.event()
+        with self.assertLogs("platform.api", level="INFO") as captured:
+            response = await self.post(body)
+        self.assertEqual(200, response.status_code, response.text)
+        output = "\n".join(captured.output)
+        self.assertIn("operation=events status=200", output)
+        self.assertIn("pool_wait_ms=", output)
+        self.assertIn("source_message_lock_ms=", output)
+        self.assertIn("event_sql_ms=", output)
+        self.assertIn("remaining_ms=", output)
+        for private_value in (body["chat_id"], body["owner"], body["raw_text"], body["sender_nickname"]):
+            self.assertNotIn(private_value, output)
 
     async def admin_client(self):
         await self.pool.execute("INSERT INTO v2_users(id,email,display_name,password_hash,role) VALUES($1,'test-admin@example.invalid','管理员','unused','admin')", self.admin_id)
