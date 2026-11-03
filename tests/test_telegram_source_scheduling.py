@@ -187,12 +187,30 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
             if chat=='-1001' and self.backend.claims.count(chat)>=1:raise ConnectionError('isolated lease unavailable')
             return await original(chat,owner)
         self.backend.checkpoint=claim
-        result=await self.collector.sync_once()
+        with self.assertLogs('platform.telegram',level='WARNING') as logs:
+            result=await self.collector.sync_once()
         self.assertEqual('lease_deferred',result['sources']['-1001']['state'])
         self.assertEqual('deferred',result['sources']['-1001']['lease_state'])
+        self.assertTrue(any('source lease refresh deferred category=ConnectionError elapsed_ms=' in line
+                            for line in logs.output))
+        self.assertNotIn('-1001',' '.join(logs.output))
         self.assertEqual(1,self.backend.positions['-1001'])
         self.assertEqual('caught_up',result['sources']['-1002']['state'])
         self.assertEqual(2,self.backend.positions['-1002'])
+
+    async def test_lease_refresh_tolerates_slow_api_tail_and_logs_duration(self):
+        original=self.backend.checkpoint
+        async def delayed_refresh(chat,owner):
+            if self.backend.claims.count(chat)>=1:
+                await asyncio.sleep(3.2)
+            return await original(chat,owner)
+        self.backend.checkpoint=delayed_refresh
+        with self.assertLogs('platform.telegram',level='WARNING') as logs:
+            result=await asyncio.wait_for(self.collector.sync_once(),4.5)
+        self.assertEqual('caught_up',result['sources']['-1001']['state'])
+        self.assertNotIn('lease_state',result['sources']['-1001'])
+        self.assertTrue(any('source lease refresh slow elapsed_ms=' in line for line in logs.output))
+        self.assertNotIn('-1001',' '.join(logs.output))
 
     async def test_completed_source_refreshes_before_next_source_wave(self):
         chats=['-1001','-1002','-1003','-1004']

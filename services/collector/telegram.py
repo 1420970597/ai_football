@@ -62,7 +62,9 @@ RECENT_HISTORY_PAGE_SIZE = 25
 RECENT_HISTORY_RECEIPTS = 2048
 RECONCILE_ID_LIMIT = 100
 MEDIA_CLEANUP_SECONDS = 5
-SOURCE_LEASE_REFRESH_SECONDS = 3
+# Allow bounded API/database tail latency while staying well below the 90s lease.
+SOURCE_LEASE_REFRESH_SECONDS = 10
+SOURCE_LEASE_REFRESH_SLOW_SECONDS = 1
 MEDIA_RETRY_BATCH_SECONDS = 30
 MEDIA_RETRY_CONCURRENCY = 2
 MEDIA_TRANSFER_SECONDS = 20
@@ -478,6 +480,7 @@ class TelegramCollector:
         gate = asyncio.Semaphore(3)
 
         async def keep_lease(chat_id):
+            started = time.monotonic()
             try:
                 async with asyncio.timeout(SOURCE_LEASE_REFRESH_SECONDS):
                     async with self.locks.setdefault(chat_id, asyncio.Lock()):
@@ -485,9 +488,15 @@ class TelegramCollector:
             except Exception as exc:
                 result[chat_id]['lease_state'] = 'deferred'
                 result[chat_id]['lease_error'] = type(exc).__name__
+                log.warning('Telegram source lease refresh deferred category=%s elapsed_ms=%.1f',
+                            type(exc).__name__, (time.monotonic() - started) * 1000)
                 if result[chat_id]['state'] in {'caught_up', 'catching_up', 'backoff', 'flood_wait'}:
                     result[chat_id]['history_state'] = result[chat_id]['state']
                     result[chat_id]['state'] = 'lease_deferred'
+            else:
+                elapsed = time.monotonic() - started
+                if elapsed >= SOURCE_LEASE_REFRESH_SLOW_SECONDS:
+                    log.warning('Telegram source lease refresh slow elapsed_ms=%.1f', elapsed * 1000)
 
         async def one(chat_id, source):
             async with gate:
