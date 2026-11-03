@@ -973,8 +973,7 @@ class TelegramCollector:
             return {"state": "pending", "duplicate_transfer": True}
         self.media_transfers.add(key)
         try:
-            async with self.media_slots:
-                return await self._transfer_pending_media(chat_id, payload, members)
+            return await self._transfer_pending_media(chat_id, payload, members)
         finally:
             self.media_transfers.discard(key)
 
@@ -983,28 +982,47 @@ class TelegramCollector:
         # rejects obsolete versions and validates the lease again at commit.
         objects = []
         staged = list(payload.get("media_objects") or [])
+        staged_lock = asyncio.Lock()
 
         async def stage_object(record):
-            existing = next((value for value in staged if value.get('object_key') == record['object_key']), None)
-            if existing == record:
-                return  # Already durably registered by this version's prior attempt.
-            if existing is not None:
-                raise ValueError('media_candidate_evidence_changed')
-            staged.append(record)
-            result = await self._commit_media_payload(chat_id, payload | {"media_state": "pending", "media_objects": list(staged)})
-            if result.get("state") not in {"pending", "failed"}:
-                raise SourceAccessError("media_version_no_longer_pending")
+            async with staged_lock:
+                existing = next((value for value in staged if value.get('object_key') == record['object_key']), None)
+                if existing == record:
+                    return  # Already durably registered by this version's prior attempt.
+                if existing is not None:
+                    raise ValueError('media_candidate_evidence_changed')
+                staged_bytes = sum(int(value.get('bytes') or 0) for value in staged)
+                if staged_bytes + int(record.get('bytes') or 0) > MAX_MESSAGE_MEDIA_BYTES:
+                    raise ValueError('message_media_size_limit')
+                staged.append(record)
+                result = await self._commit_media_payload(
+                    chat_id, payload | {"media_state": "pending", "media_objects": list(staged)})
+                if result.get("state") not in {"pending", "failed"}:
+                    raise SourceAccessError("media_version_no_longer_pending")
+
+        async def store_image(item):
+            # Share the existing global slot budget across individual images,
+            # so multi-image messages can progress concurrently without
+            # increasing total Telegram or object-store pressure.
+            async with self.media_slots:
+                return await self._store_media(chat_id, item, stage_object=stage_object)
 
         try:
             async with asyncio.timeout(MEDIA_TRANSFER_SECONDS):
-                used = 0
-                for item in members:
-                    if getattr(item, "media", None):
-                        stored = await self._store_media(chat_id, item, stage_object=stage_object)
-                        used += int(stored["bytes"])
-                        objects.append(stored)
-                        if used > MAX_MESSAGE_MEDIA_BYTES:
-                            raise ValueError("message_media_size_limit")
+                tasks = [asyncio.create_task(store_image(item)) for item in members
+                         if getattr(item, "media", None)]
+                try:
+                    objects.extend(await asyncio.gather(*tasks))
+                except BaseException:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    objects.extend(task.result() for task in tasks
+                                   if not task.cancelled() and task.exception() is None)
+                    raise
+                if sum(int(item.get('bytes') or 0) for item in objects) > MAX_MESSAGE_MEDIA_BYTES:
+                    raise ValueError("message_media_size_limit")
         except (FloodWaitError, AuthKeyDuplicatedError):
             raise
         except Exception as exc:
