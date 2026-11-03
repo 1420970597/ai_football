@@ -96,40 +96,50 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
         await self.collector.retry_pending()
         self.assertEqual([10, 11], calls)
 
-    async def test_album_images_transfer_concurrently_with_shared_global_limit(self):
-        messages = [Message(10, media=True, grouped=5), Message(11, media=True, grouped=5)]
+    async def test_ten_image_album_registers_once_before_bounded_concurrent_upload(self):
+        messages = [Message(10 + index, media=True, grouped=5) for index in range(10)]
         _, payload = await self.collector._stage_group('-1001', self.source, messages)
-        both_started, release = asyncio.Event(), asyncio.Event()
-        active = maximum_active = 0
-        started = []
+        active_prepares = maximum_prepares = 0
+        active_uploads = maximum_uploads = 0
+        upload_observations = []
+        committed_states = []
+        original_commit = self.collector._commit_media_payload
 
-        async def upload(chat, message, *, stage_object):
-            nonlocal active, maximum_active
+        async def prepare(chat, message):
+            nonlocal active_prepares, maximum_prepares
+            active_prepares += 1
+            maximum_prepares = max(maximum_prepares, active_prepares)
+            await asyncio.sleep(.005)
+            active_prepares -= 1
             record = stored(message.id)
-            await stage_object(record)
-            started.append(message.id)
-            active += 1
-            maximum_active = max(maximum_active, active)
-            if active == 2:
-                both_started.set()
-            try:
-                await release.wait()
-                return record
-            finally:
-                active -= 1
+            return {"record": record, "body": b"image", "mime_type": "image/jpeg"}
 
-        self.collector._store_media = upload
-        transfer = asyncio.create_task(self.collector._transfer_pending_media('-1001', payload, messages))
-        try:
-            await asyncio.wait_for(both_started.wait(), .5)
-            self.assertEqual({10, 11}, set(started))
-            self.assertEqual(2, maximum_active)
-        finally:
-            release.set()
-            await asyncio.wait_for(transfer, 1)
+        async def upload(candidate):
+            nonlocal active_uploads, maximum_uploads
+            event = next(iter(self.backend.events.values()))
+            upload_observations.append((event['media_state'], len(event['media_objects'])))
+            active_uploads += 1
+            maximum_uploads = max(maximum_uploads, active_uploads)
+            await asyncio.sleep(.005)
+            active_uploads -= 1
+            return candidate["record"]
+
+        async def commit(chat, value):
+            committed_states.append(value['media_state'])
+            return await original_commit(chat, value)
+
+        self.collector._prepare_media_candidate = prepare
+        self.collector._upload_media_candidate = upload
+        self.collector._commit_media_payload = commit
+        await asyncio.wait_for(self.collector._transfer_pending_media('-1001', payload, messages), 2)
+        self.assertEqual(2, maximum_prepares)
+        self.assertEqual(2, maximum_uploads)
+        self.assertTrue(upload_observations)
+        self.assertEqual({('pending', 10)}, set(upload_observations))
+        self.assertEqual(['pending', 'ready'], committed_states)
         event = next(iter(self.backend.events.values()))
         self.assertEqual('ready', event['media_state'])
-        self.assertEqual(['10', '11'], [item['object_key'].rsplit('/', 1)[-1] for item in event['media_objects']])
+        self.assertEqual(10, len(event['media_objects']))
 
     async def test_album_total_byte_limit_rejects_excess_candidate_before_upload(self):
         messages = [Message(20 + index, media=True, grouped=9) for index in range(4)]
@@ -137,19 +147,21 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
         uploads = []
         per_image = 7 * 1024 * 1024
 
-        async def upload(chat, message, *, stage_object):
-            record = stored(message.id) | {'bytes': per_image}
-            await stage_object(record)
-            uploads.append(message.id)
-            await asyncio.sleep(.01)
-            return record
+        async def prepare(chat, message):
+            return {"record": stored(message.id) | {'bytes': per_image}, "body": b"image",
+                    "mime_type": "image/jpeg"}
 
-        self.collector._store_media = upload
+        async def upload(candidate):
+            uploads.append(candidate['record']['object_key'])
+            return candidate['record']
+
+        self.collector._prepare_media_candidate = prepare
+        self.collector._upload_media_candidate = upload
         await self.collector._transfer_pending_media('-1001', payload, messages)
         event = next(iter(self.backend.events.values()))
         self.assertEqual('failed', event['media_state'])
         self.assertLessEqual(sum(item['bytes'] for item in event['media_objects']), MAX_MESSAGE_MEDIA_BYTES)
-        self.assertEqual(3, len(uploads))
+        self.assertEqual([], uploads)
 
     async def test_blocked_media_transfer_does_not_hold_live_group_lock(self):
         await self.stage(Message(1, media=True))
@@ -374,11 +386,13 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
         async def commit(chat, value):
             committed.append(value['media_state'])
             return await original_commit(chat, value)
-        async def upload(chat, item, *, stage_object):
-            await stage_object(record)
-            return record
+        async def prepare(chat, item):
+            return {"record": record, "body": b"image", "mime_type": "image/jpeg"}
+        async def upload(candidate):
+            return candidate['record']
         self.collector._commit_media_payload = commit
-        self.collector._store_media = upload
+        self.collector._prepare_media_candidate = prepare
+        self.collector._upload_media_candidate = upload
         await self.collector._transfer_pending_media('-1001', payload, [message])
         self.assertEqual(['ready'], committed)
         self.assertEqual('ready', next(iter(self.backend.events.values()))['media_state'])

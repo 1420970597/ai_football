@@ -1016,47 +1016,73 @@ class TelegramCollector:
         # rejects obsolete versions and validates the lease again at commit.
         objects = []
         staged = list(payload.get("media_objects") or [])
-        staged_lock = asyncio.Lock()
+        image_members = [item for item in members if getattr(item, "media", None)]
+        custom_store = self.media_store is not None
 
-        async def stage_object(record):
-            async with staged_lock:
-                existing = next((value for value in staged if value.get('object_key') == record['object_key']), None)
-                if existing == record:
-                    return  # Already durably registered by this version's prior attempt.
-                if existing is not None:
-                    raise ValueError('media_candidate_evidence_changed')
-                staged_bytes = sum(int(value.get('bytes') or 0) for value in staged)
-                if staged_bytes + int(record.get('bytes') or 0) > MAX_MESSAGE_MEDIA_BYTES:
-                    raise ValueError('message_media_size_limit')
-                staged.append(record)
-                result = await self._commit_media_payload(
-                    chat_id, payload | {"media_state": "pending", "media_objects": list(staged)})
-                if result.get("state") not in {"pending", "failed"}:
-                    raise SourceAccessError("media_version_no_longer_pending")
-
-        async def store_image(item):
-            # Share the existing global slot budget across individual images,
-            # so multi-image messages can progress concurrently without
-            # increasing total Telegram or object-store pressure.
-            async with self.media_slots:
-                return await self._store_media(chat_id, item, stage_object=stage_object)
+        async def cancel_and_collect(tasks):
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            return [value for value in results if not isinstance(value, BaseException)]
 
         try:
             async with asyncio.timeout(MEDIA_TRANSFER_SECONDS):
-                tasks = [asyncio.create_task(store_image(item)) for item in members
-                         if getattr(item, "media", None)]
-                try:
-                    objects.extend(await asyncio.gather(*tasks))
-                except BaseException:
-                    for task in tasks:
-                        if not task.done():
-                            task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    objects.extend(task.result() for task in tasks
-                                   if not task.cancelled() and task.exception() is None)
-                    raise
-                if sum(int(item.get('bytes') or 0) for item in objects) > MAX_MESSAGE_MEDIA_BYTES:
-                    raise ValueError("message_media_size_limit")
+                if custom_store:
+                    async def store_image(item):
+                        async with self.media_slots:
+                            return await self.media_store(chat_id, item)
+
+                    tasks = [asyncio.create_task(store_image(item)) for item in image_members]
+                    try:
+                        objects.extend(await asyncio.gather(*tasks))
+                    except BaseException:
+                        objects.extend(await cancel_and_collect(tasks))
+                        raise
+                    if sum(int(item.get('bytes') or 0) for item in objects) > MAX_MESSAGE_MEDIA_BYTES:
+                        raise ValueError("message_media_size_limit")
+                else:
+                    async def prepare_image(item):
+                        async with self.media_slots:
+                            return await self._prepare_media_candidate(chat_id, item)
+
+                    tasks = [asyncio.create_task(prepare_image(item)) for item in image_members]
+                    try:
+                        prepared = await asyncio.gather(*tasks)
+                    except BaseException:
+                        await cancel_and_collect(tasks)
+                        raise
+
+                    records = {value.get("object_key"): value for value in staged}
+                    for candidate in prepared:
+                        record = candidate["record"]
+                        previous = records.get(record["object_key"])
+                        if previous is not None and previous != record:
+                            raise ValueError("media_candidate_evidence_changed")
+                        records[record["object_key"]] = record
+                    candidate_records = list(records.values())
+                    if sum(int(item.get("bytes") or 0) for item in candidate_records) > MAX_MESSAGE_MEDIA_BYTES:
+                        raise ValueError("message_media_size_limit")
+                    staged = candidate_records
+
+                    previous_keys = {value.get("object_key") for value in payload.get("media_objects") or []}
+                    changed = any(value.get("object_key") not in previous_keys for value in staged)
+                    if changed:
+                        result = await self._commit_media_payload(
+                            chat_id, payload | {"media_state": "pending", "media_objects": staged})
+                        if result.get("state") not in {"pending", "failed"}:
+                            raise SourceAccessError("media_version_no_longer_pending")
+
+                    async def upload_image(candidate):
+                        async with self.media_slots:
+                            return await self._upload_media_candidate(candidate)
+
+                    tasks = [asyncio.create_task(upload_image(value)) for value in prepared]
+                    try:
+                        objects.extend(await asyncio.gather(*tasks))
+                    except BaseException:
+                        objects.extend(await cancel_and_collect(tasks))
+                        raise
         except (FloodWaitError, AuthKeyDuplicatedError):
             raise
         except Exception as exc:
@@ -1220,13 +1246,11 @@ class TelegramCollector:
                 await self._invalidate_active_session()
             log.warning("Telegram deletion unavailable category=%s", type(exc).__name__)
 
-    async def _store_media(self, chat: str, message, *, stage_object=None) -> dict:
-        if self.media_store:
-            return await self.media_store(chat, message)
+    async def _prepare_media_candidate(self, chat: str, message) -> dict:
         mime = getattr(getattr(message, "file", None), "mime_type", None) or "image/jpeg"
         if mime not in ALLOWED_IMAGE_TYPES:
             raise ValueError("unsupported_media")
-        timings = {'download_ms': None, 'validation_ms': None, 'registration_ms': None, 'upload_ms': None}
+        timings = {'download_ms': None, 'validation_ms': None}
         size = 0
         phase = 'download'
         category = 'none'
@@ -1260,38 +1284,8 @@ class TelegramCollector:
                 raise RuntimeError("remote_S3_not_configured")
             record = {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size,
                       **dimensions, "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION}
-            if stage_object is not None:
-                phase = 'registration'
-                phase_started = time.monotonic()
-                # Register the deterministic private object before starting a
-                # cancellable thread, so late S3 completion remains reclaimable.
-                await stage_object(record)
-                timings['registration_ms'] = (time.monotonic() - phase_started) * 1000
-
-            def upload():
-                client = boto3.client("s3", endpoint_url=endpoint, region_name=os.environ.get("S3_REGION", "us-east-1"),
-                                      aws_access_key_id=access, aws_secret_access_key=secret,
-                                      use_ssl=os.environ.get("S3_USE_TLS", "true").lower() == "true",
-                                      # The existing S3 gateway accepts fixed-length
-                                      # SigV4 payloads, not optional CRC trailer streams.
-                                      config=Config(signature_version="s3v4",
-                                                    s3={"addressing_style": "path", "payload_signing_enabled": True},
-                                                    request_checksum_calculation="when_required",
-                                                    connect_timeout=3, read_timeout=15, retries={"max_attempts": 2},
-                                                    proxies={"https": os.environ["S3_HTTPS_PROXY"]} if os.environ.get("S3_HTTPS_PROXY") else None))
-                try:
-                    client.put_object(
-                        Bucket=bucket, Key=key, Body=body, ContentType=mime,
-                        Metadata={"sha256": digest, "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION},
-                    )
-                finally:
-                    client.close()
-
-            phase = 'upload'
-            phase_started = time.monotonic()
-            await asyncio.to_thread(upload)
-            timings['upload_ms'] = (time.monotonic() - phase_started) * 1000
-            return record
+            return {"record": record, "body": body, "mime_type": mime,
+                    "bucket": bucket, "endpoint": endpoint, "access": access, "secret": secret}
         except BaseException as exc:
             category = type(exc).__name__
             raise
@@ -1299,7 +1293,54 @@ class TelegramCollector:
             log.info('Telegram media phases phase=%s category=%s bytes=%s download_ms=%s validation_ms=%s registration_ms=%s upload_ms=%s',
                      phase, category, size,
                      *(f'{timings[name]:.1f}' if timings[name] is not None else 'na'
-                       for name in ('download_ms', 'validation_ms', 'registration_ms', 'upload_ms')))
+                       for name in ('download_ms', 'validation_ms')),
+                     'na', 'na')
+
+    async def _upload_media_candidate(self, candidate: dict) -> dict:
+        record = candidate["record"]
+        body = candidate["body"]
+        mime = candidate["mime_type"]
+        category = 'none'
+        upload_ms = None
+        try:
+            def upload():
+                client = boto3.client(
+                    "s3", endpoint_url=candidate["endpoint"], region_name=os.environ.get("S3_REGION", "us-east-1"),
+                    aws_access_key_id=candidate["access"], aws_secret_access_key=candidate["secret"],
+                    use_ssl=os.environ.get("S3_USE_TLS", "true").lower() == "true",
+                    config=Config(signature_version="s3v4",
+                                  s3={"addressing_style": "path", "payload_signing_enabled": True},
+                                  request_checksum_calculation="when_required",
+                                  connect_timeout=3, read_timeout=15, retries={"max_attempts": 2},
+                                  proxies={"https": os.environ["S3_HTTPS_PROXY"]}
+                                  if os.environ.get("S3_HTTPS_PROXY") else None))
+                try:
+                    client.put_object(
+                        Bucket=candidate["bucket"], Key=record["object_key"], Body=body, ContentType=mime,
+                        Metadata={"sha256": record["sha256"], "purpose": "expert-message",
+                                  "retention": MESSAGE_MEDIA_RETENTION},
+                    )
+                finally:
+                    client.close()
+
+            started = time.monotonic()
+            await asyncio.to_thread(upload)
+            upload_ms = (time.monotonic() - started) * 1000
+            return record
+        except BaseException as exc:
+            category = type(exc).__name__
+            raise
+        finally:
+            log.info('Telegram media phases phase=upload category=%s bytes=%s download_ms=na validation_ms=na registration_ms=na upload_ms=%s',
+                     category, record.get("bytes", 0), f'{upload_ms:.1f}' if upload_ms is not None else 'na')
+
+    async def _store_media(self, chat: str, message, *, stage_object=None) -> dict:
+        if self.media_store:
+            return await self.media_store(chat, message)
+        candidate = await self._prepare_media_candidate(chat, message)
+        if stage_object is not None:
+            await stage_object(candidate["record"])
+        return await self._upload_media_candidate(candidate)
 
     async def _delete_media_object(self, object_key: str) -> None:
         """Delete one staged object only after the backend has classified it orphaned."""

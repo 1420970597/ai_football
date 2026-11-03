@@ -229,6 +229,94 @@ async def source_with_lease(conn, chat_id: str, owner, claim_request_id: uuid.UU
     raise HTTPException(status_code=409, detail="Telegram source lease is not active")
 
 
+async def event_ingest_snapshot(conn, body: EventInput, source_id):
+    """Read the event state after the caller has acquired the message lock."""
+    row = await conn.fetchrow(
+        "WITH tombstoned AS MATERIALIZED ("
+        " SELECT EXISTS(SELECT 1 FROM v2_telegram_tombstones t "
+        " WHERE t.source_id=$1 AND t.platform_message_id=ANY($4::bigint[])) AS value),"
+        "expert AS MATERIALIZED ("
+        " SELECT e.id FROM v2_experts e JOIN v2_source_experts se ON se.expert_id=e.id "
+        " WHERE e.platform_sender_id=$3 AND e.enabled AND se.source_id=$1 AND se.enabled),"
+        "current_event AS MATERIALIZED ("
+        " SELECT e.id,e.source_version_at FROM v2_telegram_events e "
+        " WHERE e.source_id=$1 AND e.platform_message_id=$2 AND e.is_current),"
+        "version_event AS MATERIALIZED ("
+        " SELECT e.id,e.is_current,e.message_id,e.media_state,e.media_objects,e.content "
+        " FROM v2_telegram_events e "
+        " WHERE e.source_id=$1 AND e.platform_message_id=$2 AND e.version_key=$5),"
+        "revision AS MATERIALIZED ("
+        " SELECT COALESCE(MAX(m.revision),0)+1 AS value FROM v2_expert_messages m "
+        " WHERE m.source_id=$1 AND m.platform_message_id=$2) "
+        "SELECT (SELECT id FROM expert) AS expert_id,COALESCE((SELECT value FROM tombstoned),FALSE) AS tombstoned,"
+        "(SELECT id FROM current_event) AS current_id,"
+        "(SELECT source_version_at FROM current_event) AS current_source_version_at,"
+        "(SELECT id FROM version_event) AS event_id,(SELECT is_current FROM version_event) AS event_is_current,"
+        "(SELECT message_id FROM version_event) AS event_message_id,"
+        "(SELECT media_state FROM version_event) AS event_media_state,"
+        "(SELECT media_objects FROM version_event) AS event_media_objects,"
+        "(SELECT content FROM version_event) AS event_content,(SELECT value FROM revision) AS next_revision",
+        source_id, body.platform_message_id, body.sender_id, body.member_message_ids, body.version_key,
+    )
+    event = None
+    if row["event_id"] is not None:
+        event = {
+            "id": row["event_id"], "is_current": row["event_is_current"],
+            "message_id": row["event_message_id"], "media_state": row["event_media_state"],
+            "media_objects": row["event_media_objects"], "content": row["event_content"],
+        }
+    return {
+        "expert": {"id": row["expert_id"]} if row["expert_id"] is not None else None,
+        "tombstoned": row["tombstoned"],
+        "current": ({"id": row["current_id"], "source_version_at": row["current_source_version_at"]}
+                    if row["current_id"] is not None else None),
+        "event": event, "next_revision": row["next_revision"],
+    }
+
+
+async def insert_event_message_and_members(conn, *, message_id, event_id, source_id, expert_id,
+                                           revision: int, body: EventInput, content: dict):
+    row = await conn.fetchrow(
+        "WITH inserted_message AS ("
+        " INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,reply_to_platform_message_id,raw_text,"
+        " media_objects,posted_at,revision,content_hash,media_state,edited_at,reply_context) "
+        " VALUES($1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id),"
+        "inserted_event AS ("
+        " INSERT INTO v2_telegram_events(id,source_id,platform_message_id,version_key,source_version_at,event_kind,content,"
+        " media_objects,media_state,message_id,last_error) "
+        " SELECT $2,$3,$5,$11,$15,$16,$17,$8,$12,inserted_message.id,$18 FROM inserted_message "
+        " RETURNING id),"
+        "inserted_members AS ("
+        " INSERT INTO v2_telegram_event_members(event_id,platform_message_id) "
+        " SELECT inserted_event.id,members.member_id FROM inserted_event "
+        " CROSS JOIN unnest($19::bigint[]) AS members(member_id) "
+        " ON CONFLICT DO NOTHING RETURNING event_id) "
+        "SELECT (SELECT id FROM inserted_message) AS message_id,(SELECT id FROM inserted_event) AS event_id,"
+        "(SELECT count(*) FROM inserted_members) AS member_count",
+        message_id, event_id, source_id, expert_id, body.platform_message_id,
+        body.reply_to_platform_message_id, body.raw_text, body.media_objects, body.posted_at,
+        revision, body.version_key, body.media_state,
+        body.source_version_at if body.event_kind == "edit" else None, body.reply_context,
+        body.source_version_at, body.event_kind, content, body.last_error, body.member_message_ids,
+    )
+    return row
+
+
+async def update_event_media_state(conn, *, event_id, message_id, media_objects, state, last_error):
+    row = await conn.fetchrow(
+        "WITH updated_event AS ("
+        " UPDATE v2_telegram_events SET media_objects=$3,media_state=$4,last_error=$5,updated_at=now() "
+        " WHERE id=$1 RETURNING id),"
+        "updated_message AS ("
+        " UPDATE v2_expert_messages m SET media_objects=$3,media_state=$4 "
+        " FROM updated_event e WHERE m.id=$2 AND e.id=$1 RETURNING m.id) "
+        "SELECT id FROM updated_message",
+        event_id, message_id, media_objects, state, last_error,
+    )
+    if not row:
+        raise RuntimeError("Telegram event media state update was incomplete")
+
+
 @router.get("/internal/telegram/sources")
 async def collector_sources(request: Request):
     authorized(request)
@@ -388,6 +476,7 @@ async def ingest_event(body: EventInput, request: Request):
     pool = database.current_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            fast_path = body.reconciliation is None and body.event_kind != "delete"
             source = await source_with_lease(conn, body.chat_id, body.owner)
             async def acknowledge_reconciliation():
                 if body.reconciliation is None:
@@ -408,7 +497,14 @@ async def ingest_event(body: EventInput, request: Request):
                 if duplicate:
                     ack = await acknowledge_reconciliation()
                     return {"persisted": True, "state": "reconciled", "duplicate": True, **ack}
-            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"telegram:{source['id']}:{body.platform_message_id}")
+            if fast_path:
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))",
+                                   f"telegram:{source['id']}:{body.platform_message_id}")
+                snapshot = await event_ingest_snapshot(conn, body, source["id"])
+            else:
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))",
+                                   f"telegram:{source['id']}:{body.platform_message_id}")
+                snapshot = None
             if body.event_kind == "delete":
                 affected = await conn.fetch(
                     "SELECT DISTINCT all_members.platform_message_id FROM v2_telegram_events e "
@@ -425,26 +521,32 @@ async def ingest_event(body: EventInput, request: Request):
                                    source["id"], body.member_message_ids)
                 ack = await acknowledge_reconciliation()
                 return {"persisted": True, "state": "deleted", **ack}
-            if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM v2_telegram_tombstones WHERE source_id=$1 AND platform_message_id=ANY($2::bigint[]))",
-                                   source["id"], body.member_message_ids):
+            deleted = (snapshot["tombstoned"] if snapshot is not None else await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM v2_telegram_tombstones WHERE source_id=$1 AND platform_message_id=ANY($2::bigint[]))",
+                source["id"], body.member_message_ids))
+            if deleted:
                 ack = await acknowledge_reconciliation()
                 return {"persisted": True, "state": "deleted", **ack}
-            expert = await conn.fetchrow(
+            expert = (snapshot["expert"] if snapshot is not None else await conn.fetchrow(
                 "SELECT e.id FROM v2_experts e JOIN v2_source_experts se ON se.expert_id=e.id "
                 "WHERE e.platform_sender_id=$1 AND e.enabled AND se.source_id=$2 AND se.enabled", body.sender_id, source["id"],
-            )
+            ))
             if not expert:
                 raise HTTPException(status_code=403, detail="sender is not trusted for this source")
             if not body.sender_nickname.strip() or (not body.raw_text.strip() and not body.media_manifest):
                 raise HTTPException(status_code=422, detail="message content and author are required")
             if body.media_manifest and not source["allow_media"] and body.media_state != "unsupported":
                 raise HTTPException(status_code=403, detail="source media is disabled")
-            current = await conn.fetchrow(
-                "SELECT * FROM v2_telegram_events WHERE source_id=$1 AND platform_message_id=$2 AND is_current FOR UPDATE",
-                source["id"], body.platform_message_id,
-            )
-            event = await conn.fetchrow("SELECT * FROM v2_telegram_events WHERE source_id=$1 AND platform_message_id=$2 AND version_key=$3",
-                                        source["id"], body.platform_message_id, body.version_key)
+            if snapshot is not None:
+                current, event = snapshot["current"], snapshot["event"]
+            else:
+                current = await conn.fetchrow(
+                    "SELECT * FROM v2_telegram_events WHERE source_id=$1 AND platform_message_id=$2 AND is_current FOR UPDATE",
+                    source["id"], body.platform_message_id,
+                )
+                event = await conn.fetchrow(
+                    "SELECT * FROM v2_telegram_events WHERE source_id=$1 AND platform_message_id=$2 AND version_key=$3",
+                    source["id"], body.platform_message_id, body.version_key)
             if event and not event["is_current"]:
                 ack = await acknowledge_reconciliation()
                 return {"persisted": True, "state": "superseded", "message_id": str(event["message_id"]), **ack}
@@ -468,31 +570,19 @@ async def ingest_event(body: EventInput, request: Request):
                 if current:
                     await withdraw(conn, source["id"], body.member_message_ids, "source_edited")
                     await conn.execute("UPDATE v2_telegram_events SET is_current=FALSE WHERE id=$1", current["id"])
-                revision = await conn.fetchval(
+                revision = (snapshot["next_revision"] if snapshot is not None else await conn.fetchval(
                     "SELECT COALESCE(MAX(revision),0)+1 FROM v2_expert_messages WHERE source_id=$1 AND platform_message_id=$2",
                     source["id"], body.platform_message_id,
-                )
+                ))
                 message_id, event_id = uuid.uuid4(), uuid.uuid4()
-                await conn.execute(
-                    "INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,reply_to_platform_message_id,raw_text,"
-                    "media_objects,posted_at,revision,content_hash,media_state,edited_at,reply_context) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-                    message_id, source["id"], expert["id"], body.platform_message_id, body.reply_to_platform_message_id,
-                    body.raw_text, body.media_objects, body.posted_at, revision, body.version_key, body.media_state,
-                    body.source_version_at if body.event_kind == "edit" else None, body.reply_context,
-                )
-                await conn.execute(
-                    "INSERT INTO v2_telegram_events(id,source_id,platform_message_id,version_key,source_version_at,event_kind,content,"
-                    "media_objects,media_state,message_id,last_error) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-                    event_id, source["id"], body.platform_message_id, body.version_key, body.source_version_at, body.event_kind,
-                    content, body.media_objects, body.media_state, message_id, body.last_error,
-                )
-                await conn.executemany("INSERT INTO v2_telegram_event_members(event_id,platform_message_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
-                                       [(event_id, item) for item in body.member_message_ids])
+                await insert_event_message_and_members(
+                    conn, message_id=message_id, event_id=event_id, source_id=source["id"],
+                    expert_id=expert["id"], revision=revision, body=body, content=content)
             else:
                 message_id, event_id = event["message_id"], event["id"]
-                await conn.execute("UPDATE v2_telegram_events SET media_objects=$2,media_state=$3,last_error=$4,updated_at=now() WHERE id=$1",
-                                   event_id, media_objects, body.media_state, body.last_error)
-                await conn.execute("UPDATE v2_expert_messages SET media_objects=$2,media_state=$3 WHERE id=$1", message_id, media_objects, body.media_state)
+                await update_event_media_state(
+                    conn, event_id=event_id, message_id=message_id, media_objects=media_objects,
+                    state=body.media_state, last_error=body.last_error)
             job_id = None
             if body.media_state == "ready":
                 age = (datetime.now(timezone.utc) - body.posted_at.astimezone(timezone.utc)).total_seconds()
