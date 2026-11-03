@@ -4,6 +4,7 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 import json
 import os
+import re
 from io import BytesIO
 from types import SimpleNamespace
 import unittest
@@ -258,7 +259,11 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         line = next(value for value in captured.output if 'Telegram live event persisted' in value)
         self.assertRegex(line, r'source_age_ms=[0-9.]+')
         self.assertNotIn('-1001', line)
-        self.assertNotIn('101', line)
+        fields = re.findall(r'([a-z_]+)=([^\s]+)', line)
+        self.assertEqual({'source_age_ms', 'lookup_ms', 'persist_ms', 'media_ms', 'total_ms', 'members', 'images'},
+                         {name for name, _ in fields})
+        metrics = re.sub(r'(?:source_age_ms|lookup_ms|persist_ms|media_ms|total_ms|members|images)=[0-9.]+', '', line)
+        self.assertNotIn('101', metrics)
 
     async def test_live_event_delivery_status_records_bounded_failure_category(self):
         self.collector.sources = {"-1001": self.backend.source_items[0]}
