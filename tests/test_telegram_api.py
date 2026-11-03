@@ -233,6 +233,25 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
             "SELECT lease_until FROM v2_source_checkpoints WHERE source_id=$1", self.source_id)
         self.assertEqual(lease_before, lease_after)
 
+    async def test_event_rechecks_lease_after_waiting_for_message_lock(self):
+        async with self.pool.acquire() as blocker:
+            async with blocker.transaction():
+                await blocker.fetchval(
+                    "SELECT pg_advisory_xact_lock(hashtext('telegram:' || $1::text || ':11'))",
+                    str(self.source_id))
+                pending = asyncio.create_task(self.post(self.event()))
+                await asyncio.sleep(0.05)
+                self.assertFalse(pending.done(), "event should be waiting on the message lock")
+                await blocker.execute(
+                    "UPDATE v2_source_checkpoints SET lease_until=statement_timestamp()-interval '1 second' "
+                    "WHERE source_id=$1", self.source_id)
+
+        response = await asyncio.wait_for(pending, timeout=3)
+        self.assertEqual(409, response.status_code, response.text)
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_expert_messages"))
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_telegram_events"))
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_jobs"))
+
     async def test_same_owner_renewal_and_checkpoint_advance_do_not_wait_for_source_lock(self):
         async with self.pool.acquire() as holder:
             async with holder.transaction():
