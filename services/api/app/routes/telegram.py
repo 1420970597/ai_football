@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import base64
 import hashlib
@@ -33,6 +34,15 @@ def record_event_phase(request: Request, name: str, started: float) -> None:
     phases = getattr(request.state, "telegram_event_phases", {})
     phases[name] = round((time.perf_counter() - started) * 1000, 1)
     request.state.telegram_event_phases = phases
+
+
+@asynccontextmanager
+async def event_phase_scope(request: Request, name: str):
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        record_event_phase(request, name, started)
 
 
 def authorized(request: Request):
@@ -731,14 +741,18 @@ async def ingest_event(body: EventInput, request: Request):
     for item in body.media_objects:
         if not all(item.get(key) for key in ("object_key", "mime_type", "sha256")) or ".." in item["object_key"].split("/"):
             raise HTTPException(status_code=422, detail="invalid remote media evidence")
+    if body.reconciliation is not None:
+        event_path = "reconciliation_delete" if body.event_kind == "delete" else "reconciliation"
+    else:
+        event_path = "delete" if body.event_kind == "delete" else "live"
+    request.state.telegram_event_path = event_path
+    request.state.telegram_event_phases = {}
+    request.state.telegram_event_accounted_phases = ("pool_wait_ms", "transaction_ms")
     pool = database.current_pool()
     pool_wait_started = time.perf_counter()
     async with pool.acquire() as conn:
-        if body.reconciliation is None and body.event_kind != "delete":
-            request.state.telegram_event_phases = {
-                "pool_wait_ms": round((time.perf_counter() - pool_wait_started) * 1000, 1),
-            }
-        async with conn.transaction():
+        record_event_phase(request, "pool_wait_ms", pool_wait_started)
+        async with event_phase_scope(request, "transaction_ms"), conn.transaction():
             if body.reconciliation is None and body.event_kind != "delete":
                 lock_started = time.perf_counter()
                 try:

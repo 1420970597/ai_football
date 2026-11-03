@@ -75,6 +75,8 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("pool_wait_ms=", output)
         self.assertIn("source_message_lock_ms=", output)
         self.assertIn("event_sql_ms=", output)
+        self.assertIn("transaction_ms=", output)
+        self.assertIn("event_path=live", output)
         self.assertIn("remaining_ms=", output)
         for private_value in (body["chat_id"], body["owner"], body["raw_text"], body["sender_nickname"]):
             self.assertNotIn(private_value, output)
@@ -215,7 +217,14 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         original = await self.post(self.event())
         deleted = self.event(version="deleted", text="", kind="delete", minutes=2)
         deleted["platform_message_id"] = "delete:test"
-        self.assertEqual("deleted", (await self.post(deleted)).json()["state"])
+        with self.assertLogs("platform.api", level="INFO") as captured:
+            deleted_response = await self.post(deleted)
+        self.assertEqual("deleted", deleted_response.json()["state"])
+        output = "\n".join(captured.output)
+        self.assertIn("event_path=delete", output)
+        self.assertRegex(output, r"transaction_ms=[0-9]+\.[0-9]+")
+        for private_value in (deleted["chat_id"], deleted["owner"], deleted["sender_nickname"]):
+            self.assertNotIn(private_value, output)
         replay = await self.post(self.event(version="late-edit", text="迟到编辑", kind="edit", minutes=3))
         self.assertEqual("deleted", replay.json()["state"])
         self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_expert_messages"))
