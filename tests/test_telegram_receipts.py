@@ -1,4 +1,5 @@
 """A durable version receipt may save a write, never hide an edit or pending media."""
+import asyncio
 import json
 import os
 import unittest
@@ -86,6 +87,28 @@ class ReceiptRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.backend.calls)
         self.enable_receipts()
         await self.collector._recover_recent('-1001', self.source)
+        self.assertEqual(1, len(self.backend.calls))
+
+    async def test_slow_album_and_receipt_calls_fit_recent_recovery_budget(self):
+        message = self.recent(100, grouped=22, media=True)
+        self.client.messages['-1001'] = [message]
+        self.collector._schedule_live_media = Mock()
+
+        async def slow_expand(message, entity):
+            await asyncio.sleep(4.2)
+            return [message]
+
+        async def slow_receipts(chat, owner, ids):
+            await asyncio.sleep(4.2)
+            return {}
+
+        self.collector._expand_album = slow_expand
+        self.backend.event_receipts = AsyncMock(side_effect=slow_receipts)
+        result = await self.collector._recover_recent('-1001', self.source)
+
+        self.assertEqual('caught_up', result['state'])
+        self.assertEqual(1, result['persisted'])
+        self.assertEqual(1, self.backend.event_receipts.await_count)
         self.assertEqual(1, len(self.backend.calls))
 
     async def test_same_message_id_in_another_group_is_not_a_receipt(self):

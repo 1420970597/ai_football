@@ -54,7 +54,9 @@ RECONCILE_EVENT_LIMIT = 3
 RECONCILE_COMMIT_CONCURRENCY = 2
 # Bound historical event writes across the three concurrently serviced sources.
 RECONCILE_GLOBAL_COMMIT_CONCURRENCY = 3
-RECENT_HISTORY_SECONDS = 8
+# Recent recovery includes a remote receipt lookup and optional album fetch.
+# Keep it below the per-source history slice while allowing their measured tail latency.
+RECENT_HISTORY_SECONDS = 15
 RECENT_HISTORY_LOOKBACK_SECONDS = 10800
 ENTITY_CACHE_SECONDS = 120
 ENTITY_CACHE_SIZE = 256
