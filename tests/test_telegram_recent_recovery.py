@@ -182,6 +182,27 @@ class RecentRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1,result['persisted'])
         self.assertEqual(1,self.client.get_messages.await_count)
 
+    async def test_recent_history_deadline_logs_bounded_phase_without_source_identity(self):
+        self.collector._entity = AsyncMock(return_value=object())
+
+        async def slow_page(*args, **kwargs):
+            await asyncio.sleep(.05)
+            if False:
+                yield None
+
+        self.client.iter_messages = slow_page
+        with patch('collector.telegram.RECENT_HISTORY_SECONDS', .01):
+            with self.assertLogs('platform.telegram', level='WARNING') as captured:
+                result = await self.collector._recover_recent('-1001', self.source)
+
+        self.assertEqual('deferred', result['state'])
+        line = captured.output[0]
+        self.assertIn('category=TimeoutError stage=telegram_page', line)
+        self.assertIn('"pages":1', line)
+        self.assertIn('scanned=0 persisted=0', line)
+        self.assertNotIn('-1001', line)
+        self.assertNotIn('推荐', line)
+
     async def test_recent_failure_is_visible_in_source_health(self):
         self.collector._recover_recent = AsyncMock(return_value={'state': 'deferred', 'reason': 'TimeoutError'})
         result = await self.collector._sync_source('-1001', self.source)

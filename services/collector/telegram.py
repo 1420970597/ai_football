@@ -650,14 +650,35 @@ class TelegramCollector:
         # complete sweep; restart safely covers the last two hours again.
         cutoff = state.setdefault('cutoff', datetime.now(timezone.utc) - timedelta(seconds=RECENT_HISTORY_LOOKBACK_SECONDS))
         scanned, persisted = 0, 0
+        started = time.monotonic()
+        phase = 'setup'
+        phase_elapsed = {}
+        phase_counts = {'pages': 0, 'album_expansions': 0, 'receipt_lookups': 0, 'stage_group_calls': 0}
         # This cache lives for this bounded scan only. Keep independent version
         # fingerprints: Telethon message objects themselves may be mutable.
         albums = {}
 
+        async def timed(name, awaitable):
+            nonlocal phase
+            phase = name
+            phase_started = time.monotonic()
+            try:
+                return await awaitable
+            finally:
+                phase_elapsed[name] = phase_elapsed.get(name, 0.0) + (time.monotonic() - phase_started) * 1000
+
+        def timing_fields():
+            elapsed = {name: round(value, 1) for name, value in sorted(phase_elapsed.items())}
+            return json.dumps({'phase_ms': elapsed, **phase_counts}, sort_keys=True, separators=(',', ':'))
+
         async def page(entity, cursor, continuation=False):
             nonlocal scanned, persisted
             options = {'max_id': cursor} if cursor is not None else {}
-            members = [m async for m in self.client.iter_messages(entity, limit=RECENT_HISTORY_PAGE_SIZE, **options)]
+            async def read_page():
+                return [m async for m in self.client.iter_messages(entity, limit=RECENT_HISTORY_PAGE_SIZE, **options)]
+
+            phase_counts['pages'] += 1
+            members = await timed('telegram_page', read_page())
             lookup = getattr(self.backend, 'event_receipts', None)
             known = None
             last = cursor
@@ -673,7 +694,8 @@ class TelegramCollector:
                     if grouped_id:
                         cached = albums.get(grouped_id)
                         if cached is None or cached[1].get(message.id) != _message_revision_evidence(message):
-                            group = await self._expand_album(message, entity)
+                            phase_counts['album_expansions'] += 1
+                            group = await timed('album_expand', self._expand_album(message, entity))
                             albums[grouped_id] = (group, {m.id: _message_revision_evidence(m) for m in group})
                         else:
                             group = cached[0]
@@ -684,9 +706,15 @@ class TelegramCollector:
                                                     sort_keys=True).encode()).hexdigest()
                     if key not in receipts:
                         if known is None:
-                            known = (await lookup(chat_id, self.owner, [int(m.id) for m in members])
-                                     if callable(lookup) else {})
-                        result, payload = await self._stage_group(chat_id, source, group, known_receipts=known)
+                            if callable(lookup):
+                                phase_counts['receipt_lookups'] += 1
+                                known = await timed('receipt_lookup', lookup(
+                                    chat_id, self.owner, [int(m.id) for m in members]))
+                            else:
+                                known = {}
+                        phase_counts['stage_group_calls'] += 1
+                        result, payload = await timed('stage_group', self._stage_group(
+                            chat_id, source, group, known_receipts=known))
                         if result.get('persisted') is not True and result.get('state') != 'ignored_empty':
                             raise RuntimeError('recent Telegram event was not durably committed')
                         if result.get('persisted') is True:
@@ -703,7 +731,7 @@ class TelegramCollector:
 
         try:
             async with asyncio.timeout(RECENT_HISTORY_SECONDS):
-                entity = await self._entity(chat_id)
+                entity = await timed('telegram_entity', self._entity(chat_id))
                 head_cursor, complete = await page(entity, None)
                 if not complete:
                     cursor = min(state['cursor'], head_cursor) if state['cursor'] is not None else head_cursor
@@ -712,13 +740,19 @@ class TelegramCollector:
                 if complete:
                     state['cursor'] = None
                     state.pop('cutoff', None)
-                return {'state': 'caught_up' if complete else 'catching_up', 'scanned': scanned, 'persisted': persisted}
+                result = {'state': 'caught_up' if complete else 'catching_up',
+                          'scanned': scanned, 'persisted': persisted}
+                log.info('Telegram recent history complete state=%s elapsed_ms=%.1f scanned=%s persisted=%s timings=%s',
+                         result['state'], (time.monotonic() - started) * 1000, scanned, persisted, timing_fields())
+                return result
         except AuthKeyDuplicatedError:
             raise
         except FloodWaitError:
             raise
         except Exception as exc:
-            log.warning('Telegram recent history deferred category=%s', type(exc).__name__)
+            log.warning('Telegram recent history deferred category=%s stage=%s elapsed_ms=%.1f '
+                        'scanned=%s persisted=%s timings=%s', type(exc).__name__, phase,
+                        (time.monotonic() - started) * 1000, scanned, persisted, timing_fields())
             return {'state': 'deferred', 'scanned': scanned, 'persisted': persisted, 'reason': type(exc).__name__}
 
     async def _sync_author_backfill(self, chat_id: str, source: dict) -> dict:
