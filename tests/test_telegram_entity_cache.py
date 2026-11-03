@@ -38,6 +38,13 @@ class EntityCacheTests(unittest.IsolatedAsyncioTestCase):
                 await self.collector._entity(chat)
         self.assertEqual(['-1003','-1004'],list(self.collector.entity_cache))
 
+    async def test_entity_cache_survives_reconciliation_passes_but_expires_after_ten_minutes(self):
+        with patch('collector.telegram.time.monotonic',side_effect=[0.0,121.0,601.0,601.0]):
+            first=await self.collector._entity('-1001')
+            self.assertIs(first,await self.collector._entity('-1001'))
+            self.assertIsNot(first,await self.collector._entity('-1001'))
+        self.assertEqual(2,self.client.get_entity.await_count)
+
     async def test_replacement_and_configuration_change_never_reuse_previous_client(self):
         first=await self.collector._entity('-1001')
         replacement=Client()

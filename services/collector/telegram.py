@@ -58,7 +58,8 @@ RECONCILE_GLOBAL_COMMIT_CONCURRENCY = 3
 # Keep it below the per-source history slice while allowing their measured tail latency.
 RECENT_HISTORY_SECONDS = 15
 RECENT_HISTORY_LOOKBACK_SECONDS = 10800
-ENTITY_CACHE_SECONDS = 120
+# Keep group entities for several history passes; configuration/session changes clear this cache.
+ENTITY_CACHE_SECONDS = 600
 ENTITY_CACHE_SIZE = 256
 RECENT_HISTORY_PAGE_SIZE = 25
 RECENT_HISTORY_RECEIPTS = 2048
