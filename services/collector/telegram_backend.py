@@ -6,6 +6,7 @@ import logging
 import math
 import re
 from typing import Any
+import uuid
 
 import httpx
 
@@ -31,9 +32,10 @@ _SOURCE_SERIALIZED_PATHS = frozenset({
     '/checkpoints',
     '/author-backfill',
 })
-_IDEMPOTENT_RETRY_PATHS = frozenset({'/events', '/checkpoints/claim'})
+_IDEMPOTENT_RETRY_PATHS = frozenset({'/events', '/checkpoints/claim', '/observed'})
 _IDEMPOTENT_RETRY_AFTER_FALLBACK_SECONDS = 0.5
 _IDEMPOTENT_RETRY_AFTER_MAX_SECONDS = 2.0
+_OBSERVED_REQUEST_TIMEOUT = httpx.Timeout(8, connect=3)
 
 
 def _idempotent_retry_delay(response: httpx.Response) -> float:
@@ -81,13 +83,27 @@ class TelegramBackend:
         message_id = str(body.get('platform_message_id')) if body and body.get('platform_message_id') is not None else None
 
         async def request():
-            response = await self.client.request(method, self.api_url + path, json=body)
-            if method == 'POST' and operation in _IDEMPOTENT_RETRY_PATHS and response.status_code == 503:
-                delay = _idempotent_retry_delay(response)
-                log.warning('Telegram backend retry method=POST operation=%s status=503 attempt=1 retry_after_s=%.3f',
-                            operation, delay)
+            timeout = _OBSERVED_REQUEST_TIMEOUT if operation == '/observed' else None
+            kwargs = {'json': body}
+            if timeout is not None:
+                kwargs['timeout'] = timeout
+            for attempt in range(2):
+                try:
+                    response = await self.client.request(method, self.api_url + path, **kwargs)
+                except httpx.TimeoutException:
+                    if method != 'POST' or operation != '/observed' or attempt:
+                        raise
+                    delay = _IDEMPOTENT_RETRY_AFTER_FALLBACK_SECONDS
+                    log.warning('Telegram backend retry method=POST operation=%s category=timeout attempt=1 retry_after_s=%.3f',
+                                operation, delay)
+                else:
+                    if not (method == 'POST' and operation in _IDEMPOTENT_RETRY_PATHS
+                            and response.status_code == 503 and attempt == 0):
+                        return response
+                    delay = _idempotent_retry_delay(response)
+                    log.warning('Telegram backend retry method=POST operation=%s status=503 attempt=1 retry_after_s=%.3f',
+                                operation, delay)
                 await asyncio.sleep(delay)
-                response = await self.client.request(method, self.api_url + path, json=body)
             return response
 
         if method == 'POST' and operation == '/events' and source_id and message_id:
@@ -193,7 +209,8 @@ class TelegramBackend:
 
     async def observed(self, chat_id: str, owner: str, limit: int = 50) -> list[dict]:
         return (await self._call("POST", "/observed", {"chat_id": chat_id, "owner": owner, "limit": limit,
-                                                      "reconciliation_protocol": "claim-ack-v1"}))["items"]
+                                                      "reconciliation_protocol": "claim-ack-v1",
+                                                      "claim_request_id": str(uuid.uuid4())}))["items"]
 
     async def acknowledge_observed(self, chat_id: str, owner: str, reconciliation: dict) -> dict:
         return await self._call("POST", "/observed/ack", {"chat_id": chat_id, "owner": owner,

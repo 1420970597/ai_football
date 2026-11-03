@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import base64
 import hashlib
@@ -54,6 +55,7 @@ class AuthorBackfillInput(ClaimInput):
 class ObserveInput(ClaimInput):
     reconciliation_protocol: Literal['claim-ack-v1']
     limit: int = Field(default=50, ge=1, le=100)
+    claim_request_id: uuid.UUID = Field(default_factory=uuid.uuid4)
 
 
 class EventReceiptsInput(ClaimInput):
@@ -194,20 +196,32 @@ async def source_for(conn, chat_id: str):
     return row
 
 
-async def source_with_lease(conn, chat_id: str, owner):
+async def source_with_lease(conn, chat_id: str, owner, claim_request_id: uuid.UUID | None = None):
+    request_lock_cte = ""
+    request_lock_join = ""
+    args = (chat_id, owner)
+    if claim_request_id is not None:
+        request_lock_cte = (
+            ",request_lock AS MATERIALIZED ("
+            "SELECT pg_advisory_xact_lock(hashtextextended('telegram-observed:' || platform_chat_id || ':' || "
+            "$2::uuid::text || ':' || $3::uuid::text,0)) AS acquired FROM source)"
+        )
+        request_lock_join = " CROSS JOIN request_lock"
+        args = (chat_id, owner, claim_request_id)
     row = await conn.fetchrow(
         "WITH source AS MATERIALIZED ("
         "SELECT id,allow_media,platform_chat_id FROM v2_expert_sources "
         "WHERE platform_chat_id=$1 AND enabled),"
         "source_lock AS MATERIALIZED ("
         "SELECT pg_advisory_xact_lock_shared(hashtext('telegram-source:' || platform_chat_id)) AS acquired "
-        "FROM source),"
+        "FROM source)"
+        f"{request_lock_cte},"
         "locked_source AS MATERIALIZED ("
-        "SELECT source.id,source.allow_media FROM source CROSS JOIN source_lock) "
+        f"SELECT source.id,source.allow_media FROM source CROSS JOIN source_lock{request_lock_join}) "
         "SELECT locked_source.id,locked_source.allow_media FROM locked_source "
         "JOIN v2_source_checkpoints cp ON cp.source_id=locked_source.id "
         "WHERE cp.collector_owner=$2 AND cp.lease_until>now()",
-        chat_id, owner,
+        *args,
     )
     if row:
         return row
@@ -589,8 +603,9 @@ async def observed_events(body: ObserveInput, request: Request):
     authorized(request)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            source = await source_with_lease(conn, body.chat_id, body.owner)
-            rows = await telegram_reconciliation.claim_events(conn, source['id'], body.owner, body.limit)
+            source = await source_with_lease(conn, body.chat_id, body.owner, body.claim_request_id)
+            rows = await telegram_reconciliation.claim_events(
+                conn, source['id'], body.owner, body.limit, body.claim_request_id)
     return {"items": rows, "claim_lease_seconds": telegram_reconciliation.RECONCILIATION_LEASE_SECONDS}
 
 

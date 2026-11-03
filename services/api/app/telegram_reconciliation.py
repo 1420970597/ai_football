@@ -10,28 +10,37 @@ from .review_policy import REALTIME_WINDOW_SECONDS
 RECONCILIATION_LEASE_SECONDS = 30
 
 
-async def _lease_events(conn, rows, owner):
+def _claim_response(row, claim_id, lease_until):
+    result = dict(row)
+    result.pop('reconcile_claim_id', None)
+    result.pop('reconcile_lease_until', None)
+    result['claim_id'] = claim_id
+    result['claim_lease_until'] = lease_until
+    return result
+
+
+async def _lease_events(conn, rows, owner, request_id):
     if not rows:
         return []
     claims = {row['id']: uuid.uuid4() for row in rows}
     leased = await conn.fetch(
         "UPDATE v2_telegram_events e SET reconcile_claim_id=claims.claim_id,reconcile_owner=$3,"
-        "reconcile_lease_until=now()+$4*interval '1 second',reconcile_applied_at=NULL,"
+        "reconcile_request_id=$4,reconcile_lease_until=now()+$5*interval '1 second',reconcile_applied_at=NULL,"
         "reconcile_applied_sha256=NULL,reconcile_acknowledged_at=NULL "
         "FROM unnest($1::uuid[],$2::uuid[]) AS claims(id,claim_id) WHERE e.id=claims.id "
         "RETURNING e.id,e.reconcile_claim_id,e.reconcile_lease_until",
-        list(claims), list(claims.values()), owner, RECONCILIATION_LEASE_SECONDS,
+        list(claims), list(claims.values()), owner, request_id, RECONCILIATION_LEASE_SECONDS,
     )
     leases = {row['id']: row for row in leased}
     if len(leased) != len(rows) or set(leases) != set(claims) or any(
         leases[event_id]['reconcile_claim_id'] != claim_id for event_id, claim_id in claims.items()
     ):
         raise RuntimeError('Telegram reconciliation batch lease is incomplete')
-    return [dict(row) | {'claim_id': claims[row['id']],
-                        'claim_lease_until': leases[row['id']]['reconcile_lease_until']} for row in rows]
+    return [_claim_response(row, claims[row['id']], leases[row['id']]['reconcile_lease_until'])
+            for row in rows]
 
 
-async def claim_events(conn, source_id, owner, limit):
+async def claim_events(conn, source_id, owner, limit, request_id):
     recent_limit = min(limit, max(1, limit * 4 // 5))
     trusted_author = (
         "EXISTS (SELECT 1 FROM v2_source_experts se "
@@ -45,6 +54,19 @@ async def claim_events(conn, source_id, owner, limit):
         "OR e.reconcile_acknowledged_at IS NOT NULL) "
         f"AND {trusted_author} "
     )
+    replay = await conn.fetch(
+        "SELECT e.id,e.platform_message_id,e.version_key,e.content,e.reconcile_claim_id,e.reconcile_lease_until "
+        "FROM v2_telegram_events e WHERE e.source_id=$1 AND e.reconcile_owner=$2 "
+        "AND e.reconcile_request_id=$3 AND e.is_current AND e.reconcile_claim_id IS NOT NULL "
+        "AND e.reconcile_lease_until>now() AND e.reconcile_acknowledged_at IS NULL "
+        f"AND {trusted_author} "
+        "ORDER BY CASE WHEN e.source_version_at>=now()-$4*interval '1 second' THEN 0 ELSE 1 END,"
+        "e.source_version_at DESC,e.next_check_at,e.id LIMIT $5",
+        source_id, owner, request_id, REALTIME_WINDOW_SECONDS, limit,
+    )
+    if replay:
+        return [_claim_response(row, row['reconcile_claim_id'], row['reconcile_lease_until'])
+                for row in replay]
     recent = await conn.fetch(
         "SELECT e.id,e.platform_message_id,e.version_key,e.content FROM v2_telegram_events e "
         f"WHERE e.source_id=$1 AND {available} "
@@ -86,7 +108,7 @@ async def claim_events(conn, source_id, owner, limit):
             "LIMIT $2 FOR UPDATE OF e SKIP LOCKED",
             source_id, remainder, REALTIME_WINDOW_SECONDS, claimed_ids,
         ))
-    return await _lease_events(conn, [*recent, *historical], owner)
+    return await _lease_events(conn, [*recent, *historical], owner, request_id)
 
 
 async def _locked_claim(conn, source_id, owner, event_id, version_key, claim_id):
@@ -125,6 +147,7 @@ async def acknowledge_claim(conn, source_id, owner, claim):
         raise HTTPException(409, 'Telegram reconciliation has not been committed under an active claim')
     await conn.execute(
         "UPDATE v2_telegram_events SET reconcile_acknowledged_at=now(),"
+        "reconcile_request_id=NULL,"
         "next_check_at=CASE WHEN is_current THEN CASE WHEN source_version_at>now()-interval '2 days' "
         "THEN now()+interval '5 minutes' ELSE now()+interval '6 hours' END ELSE next_check_at END WHERE id=$1",
         row['id'],

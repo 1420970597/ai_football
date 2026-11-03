@@ -34,18 +34,20 @@ class ReconciliationBatchLeaseUnitTests(unittest.IsolatedAsyncioTestCase):
 
         conn = SimpleNamespace(fetch=AsyncMock(side_effect=shuffled_database_return))
 
-        result = await _lease_events(conn, selected, 'collector-owner')
+        request_id = uuid.uuid4()
+        result = await _lease_events(conn, selected, 'collector-owner', request_id)
 
         conn.fetch.assert_awaited_once()
         query = conn.fetch.await_args.args[0]
         self.assertIn('UPDATE v2_telegram_events', query)
+        self.assertIn('reconcile_request_id=$4', query)
         self.assertIn('unnest', query)
         self.assertEqual([row['id'] for row in selected], [row['id'] for row in result])
         self.assertEqual(3, len({row['claim_id'] for row in result}))
 
     async def test_empty_batch_does_not_open_a_database_roundtrip(self):
         conn = SimpleNamespace(fetch=AsyncMock())
-        self.assertEqual([], await _lease_events(conn, [], 'collector-owner'))
+        self.assertEqual([], await _lease_events(conn, [], 'collector-owner', uuid.uuid4()))
         conn.fetch.assert_not_awaited()
 
 
@@ -328,10 +330,10 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([1.0],delays)
         self.assertEqual(requests[0],requests[1])
 
-    async def test_idempotent_claim_retries_once_but_observed_post_does_not(self):
-        for operation,call in (
-            ('/checkpoints/claim',lambda backend:backend.checkpoint('-1001','same-owner')),
-            ('/observed',lambda backend:backend.observed('-1001','same-owner')),
+    async def test_idempotent_claim_retries_once_with_same_request_body(self):
+        for operation,call,delay in (
+            ('/checkpoints/claim',lambda backend:backend.checkpoint('-1001','same-owner'),2.0),
+            ('/observed',lambda backend:backend.observed('-1001','same-owner'),0.25),
         ):
             with self.subTest(operation=operation):
                 requests=[]
@@ -339,29 +341,46 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
                 def handler(request):
                     requests.append(request)
                     if len(requests)==1:
-                        headers={'Retry-After':'999'} if operation=='/checkpoints/claim' else {}
-                        return httpx.Response(503,json={'code':'database_temporarily_unavailable'},headers=headers)
+                        return httpx.Response(503,json={'code':'database_temporarily_unavailable'},
+                                              headers={'Retry-After':str(delay)})
                     if operation=='/checkpoints/claim':
                         return httpx.Response(200,json={'last_message_id':12,'lease_until':'future'})
-                    return httpx.Response(503,json={'code':'database_temporarily_unavailable'})
-                async def record_sleep(delay):delays.append(delay)
+                    return httpx.Response(200,json={'items':[],'claim_lease_seconds':30})
+                async def record_sleep(seconds):delays.append(seconds)
                 async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
                     backend=TelegramBackend(client,'http://isolated.invalid/internal/telegram')
-                    if operation=='/checkpoints/claim':
-                        with patch('collector.telegram_backend.asyncio.sleep',new=record_sleep):
-                            with self.assertLogs('platform.telegram',level='WARNING') as logs:
-                                result=await call(backend)
-                        self.assertEqual(12,result['last_message_id'])
-                        self.assertEqual(2,len(requests))
-                        self.assertEqual(requests[0].content,requests[1].content)
-                        self.assertEqual([2.0],delays)
-                        self.assertIn('attempt=1 retry_after_s=2.000',logs.output[0])
-                    else:
-                        with self.assertLogs('platform.telegram',level='WARNING'):
-                            with self.assertRaises(httpx.HTTPStatusError):
-                                await call(backend)
-                        self.assertEqual(1,len(requests))
-                        self.assertEqual([],delays)
+                    with patch('collector.telegram_backend.asyncio.sleep',new=record_sleep):
+                        with self.assertLogs('platform.telegram',level='WARNING') as logs:
+                            result=await call(backend)
+                self.assertEqual(2,len(requests))
+                self.assertEqual(requests[0].content,requests[1].content)
+                self.assertEqual([delay],delays)
+                self.assertIn('attempt=1 retry_after_s=',logs.output[0])
+                if operation=='/checkpoints/claim':
+                    self.assertEqual(12,result['last_message_id'])
+                else:
+                    payload=json.loads(requests[0].content)
+                    self.assertEqual([],result)
+                    self.assertEqual(str(uuid.UUID(payload['claim_request_id'])),payload['claim_request_id'])
+
+    async def test_observed_timeout_retries_same_request_once(self):
+        requests=[]
+        delays=[]
+        def handler(request):
+            requests.append(request)
+            if len(requests)==1:
+                raise httpx.ReadTimeout('transport detail',request=request)
+            return httpx.Response(200,json={'items':[],'claim_lease_seconds':30})
+        async def record_sleep(seconds):delays.append(seconds)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            backend=TelegramBackend(client,'http://isolated.invalid/internal/telegram')
+            with patch('collector.telegram_backend.asyncio.sleep',new=record_sleep):
+                with self.assertLogs('platform.telegram',level='WARNING') as logs:
+                    self.assertEqual([],await backend.observed('-1001','same-owner'))
+        self.assertEqual(2,len(requests))
+        self.assertEqual(requests[0].content,requests[1].content)
+        self.assertEqual([0.5],delays)
+        self.assertIn('category=timeout attempt=1',logs.output[0])
 
     async def test_database_rejection_code_has_bounded_reason(self):
         def handler(request):
@@ -461,8 +480,11 @@ class ReconciliationTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(requests))
         self.assertEqual('POST', requests[0].method)
         self.assertEqual('/internal/telegram/observed', requests[0].url.path)
+        payload=json.loads(requests[0].content)
         self.assertEqual({'chat_id': '-1001', 'owner': 'test-owner-only', 'limit': 10,
-                          'reconciliation_protocol': 'claim-ack-v1'}, json.loads(requests[0].content))
+                          'reconciliation_protocol': 'claim-ack-v1',
+                          'claim_request_id': payload['claim_request_id']}, payload)
+        self.assertEqual(str(uuid.UUID(payload['claim_request_id'])),payload['claim_request_id'])
 
     async def test_protocol_rejection_is_not_retried_or_downgraded(self):
         requests = []
@@ -562,6 +584,44 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'acknowledged': True, 'duplicate': True}, (await self.ack(item)).json())
         self.assertEqual({'acknowledged': True, 'duplicate': True}, (await self.ack(item)).json())
         self.assertEqual(after, await self.pool.fetchrow('SELECT next_check_at,reconcile_acknowledged_at FROM v2_telegram_events'))
+
+    async def test_same_observation_request_replays_active_claim_without_extending_lease(self):
+        await self.seed()
+        request_id=uuid.uuid4()
+        first,=await self.observe(claim_request_id=str(request_id))
+        before=await self.pool.fetchrow(
+            'SELECT reconcile_claim_id,reconcile_request_id,reconcile_lease_until FROM v2_telegram_events')
+        replay,=await self.observe(claim_request_id=str(request_id))
+        after=await self.pool.fetchrow(
+            'SELECT reconcile_claim_id,reconcile_request_id,reconcile_lease_until FROM v2_telegram_events')
+        self.assertEqual(first['claim_id'],replay['claim_id'])
+        self.assertEqual(first['claim_lease_until'],replay['claim_lease_until'])
+        self.assertEqual(before,after)
+        self.assertEqual(request_id,before['reconcile_request_id'])
+        self.assertEqual([],await self.observe(claim_request_id=str(uuid.uuid4())))
+
+    async def test_concurrent_duplicate_observation_request_returns_one_claim(self):
+        await self.seed()
+        request_id=str(uuid.uuid4())
+        first,second=await asyncio.gather(
+            self.observe(claim_request_id=request_id),
+            self.observe(claim_request_id=request_id),
+        )
+        self.assertEqual(1,len(first))
+        self.assertEqual(first,second)
+        persisted=await self.pool.fetchrow(
+            'SELECT reconcile_claim_id,reconcile_request_id FROM v2_telegram_events')
+        self.assertEqual(uuid.UUID(first[0]['claim_id']),persisted['reconcile_claim_id'])
+        self.assertEqual(uuid.UUID(request_id),persisted['reconcile_request_id'])
+
+    async def test_acknowledged_claim_is_not_replayed_by_old_request(self):
+        body=await self.seed()
+        request_id=uuid.uuid4()
+        item,=await self.observe(claim_request_id=str(request_id))
+        self.assertEqual(200,(await self.checked(body,item)).status_code)
+        self.assertEqual(200,(await self.ack(item)).status_code)
+        self.assertIsNone(await self.pool.fetchval('SELECT reconcile_request_id FROM v2_telegram_events'))
+        self.assertEqual([],await self.observe(claim_request_id=str(request_id)))
 
     async def test_lost_claim_response_reclaims_after_short_lease_not_six_hours(self):
         body = await self.seed()
@@ -941,7 +1001,7 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
             before = dict(await conn.fetchrow('SELECT * FROM v2_telegram_events'))
             self.assertEqual(['019_telegram_reconciliation_claims.sql','020_review_job_notifications.sql',
                               '021_review_search_all_phases.sql','022_result_observations.sql',
-                              '023_telegram_author_backfill.sql'],
+                              '023_telegram_author_backfill.sql','024_telegram_observation_request_id.sql'],
                              await database.apply_migrations(conn))
             after = dict(await conn.fetchrow('SELECT * FROM v2_telegram_events'))
             self.assertEqual(before,{key:after[key] for key in before})
