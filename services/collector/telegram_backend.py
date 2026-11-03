@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import logging
 import math
 import re
+import time
 from typing import Any
 import uuid
 
@@ -81,6 +82,9 @@ class TelegramBackend:
         source_id = str(body.get('chat_id')) if body and body.get('chat_id') is not None else None
         operation = path.split('?', 1)[0]
         message_id = str(body.get('platform_message_id')) if body and body.get('platform_message_id') is not None else None
+        started = time.monotonic()
+        response_status = 'no_response'
+        failure_category = 'none'
 
         async def request():
             timeout = _OBSERVED_REQUEST_TIMEOUT if operation == '/observed' else None
@@ -106,29 +110,39 @@ class TelegramBackend:
                 await asyncio.sleep(delay)
             return response
 
-        if method == 'POST' and operation == '/events' and source_id and message_id:
-            async with self._event_lock((source_id, message_id)):
+        try:
+            if method == 'POST' and operation == '/events' and source_id and message_id:
+                async with self._event_lock((source_id, message_id)):
+                    response = await request()
+            elif source_id and operation in _SOURCE_SERIALIZED_PATHS:
+                lock = self._source_locks.setdefault(source_id, asyncio.Lock())
+                async with lock:
+                    response = await request()
+            else:
                 response = await request()
-        elif source_id and operation in _SOURCE_SERIALIZED_PATHS:
-            lock = self._source_locks.setdefault(source_id, asyncio.Lock())
-            async with lock:
-                response = await request()
-        else:
-            response = await request()
-        if not response.is_success:
-            try:
-                payload = response.json()
-                code = payload.get('code')
-                detail = payload.get('detail')
-            except (ValueError, AttributeError):
-                code, detail = None, None
-            reason = (_REJECTION_CODES.get(code) if isinstance(code, str) else None)
-            reason = reason or (_REJECTION_REASONS.get(detail, 'unclassified') if isinstance(detail, str)
-                                else 'service_unavailable' if response.status_code == 503 else 'unclassified')
-            log.warning('Telegram backend rejected method=%s operation=%s status=%s reason=%s',
-                        method, path.split('?', 1)[0], response.status_code, reason)
-        response.raise_for_status()
-        return response.json()
+            response_status = str(response.status_code)
+            if not response.is_success:
+                try:
+                    payload = response.json()
+                    code = payload.get('code')
+                    detail = payload.get('detail')
+                except (ValueError, AttributeError):
+                    code, detail = None, None
+                reason = (_REJECTION_CODES.get(code) if isinstance(code, str) else None)
+                reason = reason or (_REJECTION_REASONS.get(detail, 'unclassified') if isinstance(detail, str)
+                                    else 'service_unavailable' if response.status_code == 503 else 'unclassified')
+                log.warning('Telegram backend rejected method=%s operation=%s status=%s reason=%s',
+                            method, operation, response.status_code, reason)
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            failure_category = type(exc).__name__
+            raise
+        finally:
+            if operation in {'/events', '/events/receipts'}:
+                log.info('Telegram backend request method=%s operation=%s status=%s category=%s elapsed_ms=%.1f',
+                         method, operation.lstrip('/'), response_status, failure_category,
+                         (time.monotonic() - started) * 1000)
 
     async def sources(self) -> list[dict[str, Any]]:
         return (await self._call("GET", "/sources"))["items"]

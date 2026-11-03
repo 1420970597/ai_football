@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -73,20 +74,36 @@ async def request_context(request: Request, call_next):
     supplied = request.headers.get("x-request-id", "")
     request_id = supplied if len(supplied) <= 64 and supplied and all(c.isalnum() or c in "-_." for c in supplied) else str(uuid.uuid4())
     request.state.request_id = request_id
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "same-origin"
-    existing_cache = {part.strip().lower() for part in response.headers.get("Cache-Control", "").split(",")}
-    if request.url.path.startswith("/api/") or "private" in existing_cache:
-        # Message evidence and authenticated errors must remain private; a
-        # generic middleware default must not erase the route's stronger rule.
-        response.headers["Cache-Control"] = "private, no-store"
-    elif response.status_code >= 400 or request.url.path.startswith("/internal/") or "no-store" in existing_cache:
-        response.headers["Cache-Control"] = "no-store"
-    elif not response.headers.get("Cache-Control"):
-        response.headers["Cache-Control"] = "public, max-age=60"
-    return response
+    operation = {
+        "/internal/telegram/events": "events",
+        "/internal/telegram/events/receipts": "receipts",
+    }.get(request.url.path)
+    started = time.perf_counter()
+    status = "no_response"
+    category = "none"
+    try:
+        response = await call_next(request)
+        status = str(response.status_code)
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "same-origin"
+        existing_cache = {part.strip().lower() for part in response.headers.get("Cache-Control", "").split(",")}
+        if request.url.path.startswith("/api/") or "private" in existing_cache:
+            # Message evidence and authenticated errors must remain private; a
+            # generic middleware default must not erase the route's stronger rule.
+            response.headers["Cache-Control"] = "private, no-store"
+        elif response.status_code >= 400 or request.url.path.startswith("/internal/") or "no-store" in existing_cache:
+            response.headers["Cache-Control"] = "no-store"
+        elif not response.headers.get("Cache-Control"):
+            response.headers["Cache-Control"] = "public, max-age=60"
+        return response
+    except Exception as exc:
+        category = type(exc).__name__
+        raise
+    finally:
+        if operation is not None:
+            log.info("Telegram API request method=%s operation=%s status=%s category=%s elapsed_ms=%.1f",
+                     request.method, operation, status, category, (time.perf_counter() - started) * 1000)
 
 
 @app.exception_handler(Exception)

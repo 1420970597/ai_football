@@ -1001,7 +1001,8 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
             before = dict(await conn.fetchrow('SELECT * FROM v2_telegram_events'))
             self.assertEqual(['019_telegram_reconciliation_claims.sql','020_review_job_notifications.sql',
                               '021_review_search_all_phases.sql','022_result_observations.sql',
-                              '023_telegram_author_backfill.sql','024_telegram_observation_request_id.sql'],
+                              '023_telegram_author_backfill.sql','024_telegram_observation_request_id.sql',
+                              '025_telegram_event_members_lookup.sql'],
                              await database.apply_migrations(conn))
             after = dict(await conn.fetchrow('SELECT * FROM v2_telegram_events'))
             self.assertEqual(before,{key:after[key] for key in before})

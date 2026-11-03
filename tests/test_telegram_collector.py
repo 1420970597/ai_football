@@ -690,12 +690,28 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
 
         env = {'S3_BUCKET':'test-private','S3_ENDPOINT_URL':'https://invalid.example',
                'S3_ACCESS_KEY':'test-only','S3_SECRET_KEY':'test-only'}
+        staged = []
+
+        async def register(record):
+            staged.append(record)
+
         with patch.dict(os.environ, env), patch('collector.telegram.boto3.client', return_value=S3()):
-            record = await self.collector._store_media('-1001', Message(3, media=True, mime='image/png'))
+            with self.assertLogs('platform.telegram', level='INFO') as captured:
+                record = await self.collector._store_media(
+                    '-1001', Message(3, media=True, mime='image/png'), stage_object=register)
 
         expected_prefix = 'v2/telegram/messages/-1001/3/'
         self.assertTrue(record['object_key'].startswith(expected_prefix))
+        self.assertEqual([record], staged)
         self.assertEqual(record['object_key'], uploads[0]['Key'])
+        output = '\n'.join(captured.output)
+        self.assertIn('phase=upload category=none bytes=', output)
+        self.assertIn('download_ms=', output)
+        self.assertIn('validation_ms=', output)
+        self.assertIn('registration_ms=', output)
+        self.assertIn('upload_ms=', output)
+        for private_value in ('-1001', '3/', record['object_key'], record['sha256']):
+            self.assertNotIn(private_value, output)
 
     async def test_s3_upload_uses_fixed_length_signed_payload_without_optional_trailer(self):
         image = BytesIO()

@@ -138,6 +138,19 @@ class ReceiptBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('a'*64, result)
         self.assertEqual(('/internal/telegram/events/receipts', {'chat_id': '-1001', 'owner': 'owner', 'member_message_ids': [1, 2]}, 'Bearer isolated-receipts'), seen[0])
 
+    async def test_event_request_timing_does_not_log_identity_or_content(self):
+        body = {'chat_id': 'private-chat-id', 'platform_message_id': 'private-message-id',
+                'raw_text': 'private expert recommendation'}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json={'state': 'ready'}))) as client:
+            backend = TelegramBackend(client, 'http://test.invalid/internal/telegram')
+            with self.assertLogs('platform.telegram', level='INFO') as captured:
+                await backend.event(body)
+        output = '\n'.join(captured.output)
+        self.assertIn('operation=events status=200 category=none elapsed_ms=', output)
+        for private_value in ('private-chat-id', 'private-message-id', 'private expert recommendation'):
+            self.assertNotIn(private_value, output)
+
     async def test_malformed_receipts_are_not_accepted_as_durable(self):
         for payload in ({}, {'items': [{}]}, {'items': [{'version_key': 'a', 'media_state': 'made-up'}]}, {'items': [None, None]}):
             with self.subTest(payload=payload):
@@ -176,6 +189,15 @@ class ReceiptAPITests(unittest.IsolatedAsyncioTestCase):
         pending['platform_message_id'], pending['member_message_ids'] = '13', [13]
         self.assertEqual(200, (await self.post(pending)).status_code)
         self.assertEqual('pending', (await self.receipts([13])).json()['items'][0]['media_state'])
+
+    async def test_receipt_reverse_lookup_index_is_available_to_query_planner(self):
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute('SET LOCAL enable_seqscan=off')
+                plan = await conn.fetchval(
+                    'EXPLAIN (FORMAT JSON) SELECT event_id FROM v2_telegram_event_members '
+                    'WHERE platform_message_id=ANY($1::bigint[])', [11])
+        self.assertIn('v2_telegram_event_members_by_message_idx', str(plan))
 
     async def test_authentication_lease_and_enabled_author_are_required(self):
         self.assertEqual(200, (await self.post(self.event())).status_code)

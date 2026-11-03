@@ -32,6 +32,9 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         versions = await apply_migrations(self.conn)
         self.assertTrue(versions)
         await check_schema(self.conn)
+        index_definition = await self.conn.fetchval(
+            "SELECT indexdef FROM pg_indexes WHERE indexname='v2_telegram_event_members_by_message_idx'")
+        self.assertIn('(platform_message_id, event_id)', index_definition)
         self.assertEqual([], await apply_migrations(self.conn))
 
     async def test_concurrent_cold_start_is_serialized(self):
@@ -60,7 +63,8 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         await self.conn.execute("INSERT INTO v2_match_searches(job_id,search_key,team_query,phase) VALUES($1,'original','Team','all')", job)
         before = dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job))
         self.assertEqual(['021_review_search_all_phases.sql','022_result_observations.sql',
-                          '023_telegram_author_backfill.sql','024_telegram_observation_request_id.sql'],
+                          '023_telegram_author_backfill.sql','024_telegram_observation_request_id.sql',
+                          '025_telegram_event_members_lookup.sql'],
                          await apply_migrations(self.conn))
         self.assertEqual(before, dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job)))
         for phase in ('finished', 'cancelled'):
@@ -90,7 +94,8 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
                                 "VALUES('original',1,'known','original','confirmed',2,0,now(),'{}')")
         before=dict(await self.conn.fetchrow('SELECT * FROM v2_fixture_results'))
         self.assertEqual(['022_result_observations.sql','023_telegram_author_backfill.sql',
-                          '024_telegram_observation_request_id.sql'],await apply_migrations(self.conn))
+                          '024_telegram_observation_request_id.sql','025_telegram_event_members_lookup.sql'],
+                         await apply_migrations(self.conn))
         after=dict(await self.conn.fetchrow('SELECT * FROM v2_fixture_results'))
         self.assertEqual(before,{k:after[k] for k in before})
         self.assertIsNone(after['observed_at'])
@@ -110,7 +115,8 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         await self.conn.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,'123','Expert'),($2,'-100123','Channel')",expert,channel_expert)
         await self.conn.execute('INSERT INTO v2_source_experts(source_id,expert_id) VALUES($1,$2),($1,$3)',source,expert,channel_expert)
         await self.conn.execute('INSERT INTO v2_source_checkpoints(source_id,last_message_id) VALUES($1,72)',source)
-        self.assertEqual(['023_telegram_author_backfill.sql','024_telegram_observation_request_id.sql'],
+        self.assertEqual(['023_telegram_author_backfill.sql','024_telegram_observation_request_id.sql',
+                          '025_telegram_event_members_lookup.sql'],
                          await apply_migrations(self.conn))
         rows=await self.conn.fetch('SELECT expert_id,backfill_cursor,backfill_until_id,backfill_since,backfill_completed_at FROM v2_source_experts WHERE source_id=$1 ORDER BY expert_id',source)
         trusted=next(row for row in rows if row['expert_id']==expert)

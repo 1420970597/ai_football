@@ -1,5 +1,7 @@
 """Real middleware preserves private evidence without caching API errors."""
 import unittest
+import asyncio
+from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -37,6 +39,27 @@ class ResponseCachePolicyTests(unittest.IsolatedAsyncioTestCase):
     async def test_internal_responses_keep_no_store(self):
         response = await self.response('/internal/review/config', policy='public, max-age=3600')
         self.assertEqual('no-store', response.headers['cache-control'])
+
+    async def test_telegram_request_timing_logs_only_fixed_operation_metadata(self):
+        app = FastAPI()
+        app.middleware('http')(request_context)
+
+        @app.post('/internal/telegram/events')
+        async def event():
+            await asyncio.sleep(0.001)
+            return JSONResponse({'ok': True})
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            with patch('app.main.log.info') as info:
+                response = await client.post('/internal/telegram/events', json={
+                    'chat_id': 'private-chat-id', 'raw_text': 'private recommendation'})
+        self.assertEqual(200, response.status_code)
+        message = info.call_args.args[0]
+        fields = info.call_args.args[1:]
+        rendered = message % fields
+        self.assertIn('operation=events status=200 category=none elapsed_ms=', rendered)
+        self.assertNotIn('private-chat-id', rendered)
+        self.assertNotIn('private recommendation', rendered)
 
     async def test_public_health_default_and_explicit_no_store_are_preserved(self):
         default = await self.response('/healthz')

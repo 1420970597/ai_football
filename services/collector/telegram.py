@@ -1069,11 +1069,21 @@ class TelegramCollector:
         return await self._commit_media_payload(chat_id, payload)
 
     async def _commit_media_payload(self, chat_id: str, payload: dict):
-        async with asyncio.timeout(MEDIA_COMMIT_SECONDS):
-            # The event endpoint atomically validates and renews this owner's
-            # lease. A second claim RPC adds latency without stronger evidence.
-            # Never hold the group lock while waiting on the remote transaction.
-            return await self.backend.event(payload)
+        started = time.monotonic()
+        category = 'none'
+        try:
+            async with asyncio.timeout(MEDIA_COMMIT_SECONDS):
+                # The event endpoint atomically validates and renews this owner's
+                # lease. A second claim RPC adds latency without stronger evidence.
+                # Never hold the group lock while waiting on the remote transaction.
+                return await self.backend.event(payload)
+        except Exception as exc:
+            category = type(exc).__name__
+            raise
+        finally:
+            log.info('Telegram media event commit state=%s images=%s objects=%s category=%s elapsed_ms=%.1f',
+                     payload.get('media_state', 'unknown'), len(payload.get('media_manifest') or []),
+                     len(payload.get('media_objects') or []), category, (time.monotonic() - started) * 1000)
 
     async def retry_pending(self):
         if not self.client or not self.backend:
@@ -1216,60 +1226,80 @@ class TelegramCollector:
         mime = getattr(getattr(message, "file", None), "mime_type", None) or "image/jpeg"
         if mime not in ALLOWED_IMAGE_TYPES:
             raise ValueError("unsupported_media")
-        download_started = time.monotonic()
-        chunks, size = [], 0
-        async for chunk in self.client.iter_download(message.media, request_size=256 * 1024):
-            size += len(chunk)
-            if size > MAX_MEDIA_BYTES:
-                raise ValueError("media_size_limit")
-            chunks.append(bytes(chunk))
-        body = b"".join(chunks)
-        if not body or not _valid_image(body, mime):
-            raise ValueError("image_format_mismatch")
-        dimensions = await asyncio.to_thread(_image_dimensions, body, mime)
-        digest = hashlib.sha256(body).hexdigest()
-        # Keep message media in a dedicated namespace.  Avatar and future
-        # review-evidence objects must never share this prefix, so retention
-        # jobs can operate on each class without guessing from a key.
-        key = f"{MESSAGE_MEDIA_PREFIX}/{chat}/{message.id}/{digest}"
-        bucket = os.environ.get("S3_BUCKET", "").strip()
-        endpoint = os.environ.get("S3_ENDPOINT_URL", "").strip()
-        access = os.environ.get("S3_ACCESS_KEY", "").strip()
-        secret = os.environ.get("S3_SECRET_KEY", "")
-        if not all((bucket, endpoint, access, secret)):
-            raise RuntimeError("remote_S3_not_configured")
-        record = {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size,
-                  **dimensions, "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION}
-        log.info('Telegram media downloaded elapsed_ms=%.1f bytes=%s',
-                 (time.monotonic() - download_started) * 1000, size)
-        if stage_object is not None:
-            # Register the deterministic private object before starting a
-            # cancellable thread, so late S3 completion remains reclaimable.
-            await stage_object(record)
+        timings = {'download_ms': None, 'validation_ms': None, 'registration_ms': None, 'upload_ms': None}
+        size = 0
+        phase = 'download'
+        category = 'none'
+        try:
+            phase_started = time.monotonic()
+            chunks = []
+            async for chunk in self.client.iter_download(message.media, request_size=256 * 1024):
+                size += len(chunk)
+                if size > MAX_MEDIA_BYTES:
+                    raise ValueError("media_size_limit")
+                chunks.append(bytes(chunk))
+            body = b"".join(chunks)
+            timings['download_ms'] = (time.monotonic() - phase_started) * 1000
 
-        def upload():
-            client = boto3.client("s3", endpoint_url=endpoint, region_name=os.environ.get("S3_REGION", "us-east-1"),
-                                  aws_access_key_id=access, aws_secret_access_key=secret,
-                                  use_ssl=os.environ.get("S3_USE_TLS", "true").lower() == "true",
-                                  # The existing S3 gateway accepts fixed-length
-                                  # SigV4 payloads, not optional CRC trailer streams.
-                                  config=Config(signature_version="s3v4",
-                                                s3={"addressing_style": "path", "payload_signing_enabled": True},
-                                                request_checksum_calculation="when_required",
-                                                connect_timeout=3, read_timeout=15, retries={"max_attempts": 2},
-                                                proxies={"https": os.environ["S3_HTTPS_PROXY"]} if os.environ.get("S3_HTTPS_PROXY") else None))
-            try:
-                client.put_object(
-                    Bucket=bucket, Key=key, Body=body, ContentType=mime,
-                    Metadata={"sha256": digest, "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION},
-                )
-            finally:
-                client.close()
-        upload_started = time.monotonic()
-        await asyncio.to_thread(upload)
-        log.info('Telegram media uploaded elapsed_ms=%.1f bytes=%s',
-                 (time.monotonic() - upload_started) * 1000, size)
-        return record
+            phase = 'validation'
+            phase_started = time.monotonic()
+            if not body or not _valid_image(body, mime):
+                raise ValueError("image_format_mismatch")
+            dimensions = await asyncio.to_thread(_image_dimensions, body, mime)
+            digest = hashlib.sha256(body).hexdigest()
+            timings['validation_ms'] = (time.monotonic() - phase_started) * 1000
+
+            # Keep message media in a dedicated namespace. Avatar and future
+            # review-evidence objects must never share this prefix.
+            key = f"{MESSAGE_MEDIA_PREFIX}/{chat}/{message.id}/{digest}"
+            bucket = os.environ.get("S3_BUCKET", "").strip()
+            endpoint = os.environ.get("S3_ENDPOINT_URL", "").strip()
+            access = os.environ.get("S3_ACCESS_KEY", "").strip()
+            secret = os.environ.get("S3_SECRET_KEY", "")
+            if not all((bucket, endpoint, access, secret)):
+                raise RuntimeError("remote_S3_not_configured")
+            record = {"object_key": key, "mime_type": mime, "sha256": digest, "bytes": size,
+                      **dimensions, "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION}
+            if stage_object is not None:
+                phase = 'registration'
+                phase_started = time.monotonic()
+                # Register the deterministic private object before starting a
+                # cancellable thread, so late S3 completion remains reclaimable.
+                await stage_object(record)
+                timings['registration_ms'] = (time.monotonic() - phase_started) * 1000
+
+            def upload():
+                client = boto3.client("s3", endpoint_url=endpoint, region_name=os.environ.get("S3_REGION", "us-east-1"),
+                                      aws_access_key_id=access, aws_secret_access_key=secret,
+                                      use_ssl=os.environ.get("S3_USE_TLS", "true").lower() == "true",
+                                      # The existing S3 gateway accepts fixed-length
+                                      # SigV4 payloads, not optional CRC trailer streams.
+                                      config=Config(signature_version="s3v4",
+                                                    s3={"addressing_style": "path", "payload_signing_enabled": True},
+                                                    request_checksum_calculation="when_required",
+                                                    connect_timeout=3, read_timeout=15, retries={"max_attempts": 2},
+                                                    proxies={"https": os.environ["S3_HTTPS_PROXY"]} if os.environ.get("S3_HTTPS_PROXY") else None))
+                try:
+                    client.put_object(
+                        Bucket=bucket, Key=key, Body=body, ContentType=mime,
+                        Metadata={"sha256": digest, "purpose": "expert-message", "retention": MESSAGE_MEDIA_RETENTION},
+                    )
+                finally:
+                    client.close()
+
+            phase = 'upload'
+            phase_started = time.monotonic()
+            await asyncio.to_thread(upload)
+            timings['upload_ms'] = (time.monotonic() - phase_started) * 1000
+            return record
+        except BaseException as exc:
+            category = type(exc).__name__
+            raise
+        finally:
+            log.info('Telegram media phases phase=%s category=%s bytes=%s download_ms=%s validation_ms=%s registration_ms=%s upload_ms=%s',
+                     phase, category, size,
+                     *(f'{timings[name]:.1f}' if timings[name] is not None else 'na'
+                       for name in ('download_ms', 'validation_ms', 'registration_ms', 'upload_ms')))
 
     async def _delete_media_object(self, object_key: str) -> None:
         """Delete one staged object only after the backend has classified it orphaned."""
