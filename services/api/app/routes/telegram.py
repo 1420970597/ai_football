@@ -320,6 +320,149 @@ def review_job_metadata(source_id, body: EventInput):
     }
 
 
+async def persist_fast_event(conn, source_id, body: EventInput):
+    """Take a fresh post-lock snapshot and apply the live event atomically."""
+    content = jsonable_encoder(body.model_dump(
+        exclude={"owner", "media_objects", "media_state", "last_error", "reconciliation"}))
+    body_payload = jsonable_encoder(body.model_dump(exclude={"reconciliation"}))
+    content_payload = content
+    job = review_job_metadata(source_id, body) if body.media_state == "ready" else None
+    job_payload = jsonable_encoder(job) if job else None
+    row = await conn.fetchrow(
+        "WITH input AS MATERIALIZED ("
+        " SELECT $1::uuid AS source_id,$2::jsonb AS body,$3::jsonb AS content,$4::jsonb AS job,"
+        " $5::uuid AS message_id,$6::uuid AS event_id),"
+        "source_state AS MATERIALIZED ("
+        " SELECT s.enabled,s.allow_media,(cp.collector_owner=(i.body->>'owner')::uuid "
+        " AND cp.lease_until>statement_timestamp()) AS lease_active "
+        " FROM input i JOIN v2_expert_sources s ON s.id=i.source_id "
+        " LEFT JOIN v2_source_checkpoints cp ON cp.source_id=s.id),"
+        "tombstoned AS MATERIALIZED ("
+        " SELECT EXISTS(SELECT 1 FROM v2_telegram_tombstones t CROSS JOIN input i "
+        " WHERE t.source_id=i.source_id AND t.platform_message_id=ANY("
+        " ARRAY(SELECT jsonb_array_elements_text(i.body->'member_message_ids')::bigint))) AS value),"
+        "expert AS MATERIALIZED ("
+        " SELECT e.id FROM input i JOIN v2_experts e ON e.platform_sender_id=i.body->>'sender_id' AND e.enabled "
+        " JOIN v2_source_experts se ON se.expert_id=e.id AND se.source_id=i.source_id AND se.enabled),"
+        "current_event AS MATERIALIZED ("
+        " SELECT e.id,e.source_version_at FROM input i JOIN v2_telegram_events e ON e.source_id=i.source_id "
+        " AND e.platform_message_id=i.body->>'platform_message_id' AND e.is_current),"
+        "version_event AS MATERIALIZED ("
+        " SELECT e.id,e.is_current,e.message_id,e.media_state,e.media_objects,e.content "
+        " FROM input i JOIN v2_telegram_events e ON e.source_id=i.source_id "
+        " AND e.platform_message_id=i.body->>'platform_message_id' AND e.version_key=i.body->>'version_key'),"
+        "revision AS MATERIALIZED ("
+        " SELECT COALESCE(MAX(m.revision),0)+1 AS value FROM input i JOIN v2_expert_messages m "
+        " ON m.source_id=i.source_id AND m.platform_message_id=i.body->>'platform_message_id'),"
+        "decision AS MATERIALIZED ("
+        " SELECT i.source_id,i.body,i.content,i.job,ss.allow_media,x.id AS expert_id,"
+        " COALESCE(ss.enabled,FALSE) AS source_enabled,COALESCE(ss.lease_active,FALSE) AS lease_active,"
+        " COALESCE(t.value,FALSE) AS tombstoned,c.id AS current_id,c.source_version_at AS current_version_at,"
+        " v.id AS version_id,v.is_current AS version_is_current,v.message_id AS version_message_id,"
+        " v.media_state AS version_media_state,v.media_objects AS version_media_objects,v.content AS version_content,"
+        " r.value AS next_revision,CASE "
+        " WHEN NOT COALESCE(ss.enabled,FALSE) THEN 'source_disabled' "
+        " WHEN NOT COALESCE(ss.lease_active,FALSE) THEN 'lease_inactive' "
+        " WHEN COALESCE(t.value,FALSE) THEN 'deleted' "
+        " WHEN x.id IS NULL THEN 'untrusted' "
+        " WHEN NULLIF(btrim(i.body->>'sender_nickname'),'') IS NULL OR "
+        " (NULLIF(btrim(i.body->>'raw_text'),'') IS NULL AND "
+        " COALESCE(jsonb_array_length(i.body->'media_manifest'),0)=0) THEN 'invalid_content' "
+        " WHEN COALESCE(jsonb_array_length(i.body->'media_manifest'),0)>0 "
+        " AND NOT COALESCE(ss.allow_media,FALSE) AND i.body->>'media_state'<>'unsupported' THEN 'media_disabled' "
+        " WHEN v.id IS NOT NULL AND NOT v.is_current THEN 'superseded' "
+        " WHEN v.id IS NOT NULL AND (v.content-'sender_nickname') IS DISTINCT FROM "
+        " (i.content-'sender_nickname') THEN 'version_conflict' "
+        " WHEN v.id IS NULL AND c.source_version_at>(i.body->>'source_version_at')::timestamptz THEN 'ignored_stale' "
+        " WHEN v.id IS NOT NULL AND v.media_state='ready' THEN 'ready' ELSE 'accepted' END AS outcome "
+        " FROM input i LEFT JOIN source_state ss ON TRUE LEFT JOIN tombstoned t ON TRUE "
+        " LEFT JOIN expert x ON TRUE LEFT JOIN current_event c ON TRUE LEFT JOIN version_event v ON TRUE "
+        " CROSS JOIN revision r),"
+        "nickname_update AS ("
+        " UPDATE v2_experts e SET display_nickname=btrim(d.body->>'sender_nickname'),updated_at=now() "
+        " FROM decision d WHERE e.id=d.expert_id AND d.outcome IN ('accepted','ready') "
+        " AND e.display_nickname IS DISTINCT FROM btrim(d.body->>'sender_nickname') RETURNING e.id),"
+        "previous_messages AS MATERIALIZED ("
+        " SELECT DISTINCT e.message_id FROM decision d JOIN v2_telegram_events e ON e.source_id=d.source_id "
+        " JOIN v2_telegram_event_members member ON member.event_id=e.id "
+        " WHERE d.outcome='accepted' AND d.version_id IS NULL AND d.current_id IS NOT NULL "
+        " AND e.message_id IS NOT NULL AND member.platform_message_id=ANY("
+        " ARRAY(SELECT jsonb_array_elements_text(d.body->'member_message_ids')::bigint))),"
+        "withdrawn_messages AS ("
+        " UPDATE v2_expert_messages m SET deleted_at=COALESCE(m.deleted_at,now()) "
+        " WHERE m.id IN (SELECT message_id FROM previous_messages) RETURNING m.id),"
+        "withdrawn_jobs AS ("
+        " UPDATE v2_analysis_jobs j SET state='failed',last_error='source_edited',lease_until=NULL,"
+        " attempt_id=NULL,updated_at=now() WHERE j.message_id IN (SELECT message_id FROM previous_messages) "
+        " AND j.state IN ('queued','retry','running') RETURNING j.id),"
+        "withdrawn_signals AS ("
+        " UPDATE v2_expert_signals s SET withdrawn_at=COALESCE(s.withdrawn_at,now()),"
+        " withdrawal_reason=COALESCE(s.withdrawal_reason,'source_edited') "
+        " WHERE s.message_id IN (SELECT message_id FROM previous_messages) RETURNING s.id),"
+        "superseded_event AS ("
+        " UPDATE v2_telegram_events e SET is_current=FALSE FROM decision d "
+        " WHERE e.id=d.current_id AND d.outcome='accepted' AND d.version_id IS NULL "
+        " AND d.current_id IS NOT NULL RETURNING e.id),"
+        "event_gate AS MATERIALIZED ("
+        " SELECT d.* FROM decision d WHERE d.outcome='accepted' AND "
+        " (d.version_id IS NOT NULL OR d.current_id IS NULL OR EXISTS(SELECT 1 FROM superseded_event))),"
+        "inserted_message AS ("
+        " INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,reply_to_platform_message_id,raw_text,"
+        " media_objects,posted_at,revision,content_hash,media_state,edited_at,reply_context) "
+        " SELECT i.message_id,i.source_id,d.expert_id,d.body->>'platform_message_id',"
+        " NULLIF(d.body->>'reply_to_platform_message_id',''),d.body->>'raw_text',d.body->'media_objects',"
+        " (d.body->>'posted_at')::timestamptz,d.next_revision,d.body->>'version_key',d.body->>'media_state',"
+        " CASE WHEN d.body->>'event_kind'='edit' THEN (d.body->>'source_version_at')::timestamptz END,"
+        " d.body->'reply_context' FROM event_gate d JOIN input i ON i.source_id=d.source_id "
+        " WHERE d.version_id IS NULL RETURNING id),"
+        "inserted_event AS ("
+        " INSERT INTO v2_telegram_events(id,source_id,platform_message_id,version_key,source_version_at,event_kind,content,"
+        " media_objects,media_state,message_id,last_error) "
+        " SELECT i.event_id,d.source_id,d.body->>'platform_message_id',d.body->>'version_key',"
+        " (d.body->>'source_version_at')::timestamptz,d.body->>'event_kind',d.content,d.body->'media_objects',"
+        " d.body->>'media_state',m.id,NULLIF(d.body->>'last_error','') FROM event_gate d "
+        " JOIN input i ON i.source_id=d.source_id JOIN inserted_message m ON TRUE RETURNING id),"
+        "inserted_members AS ("
+        " INSERT INTO v2_telegram_event_members(event_id,platform_message_id) "
+        " SELECT e.id,member.member_id::bigint FROM inserted_event e CROSS JOIN decision d "
+        " CROSS JOIN LATERAL jsonb_array_elements_text(d.body->'member_message_ids') AS member(member_id) "
+        " ON CONFLICT DO NOTHING RETURNING event_id),"
+        "updated_event AS ("
+        " UPDATE v2_telegram_events e SET media_objects=CASE "
+        " WHEN d.body->>'media_state' IN ('pending','failed') AND d.body->'media_objects'='[]'::jsonb "
+        " THEN d.version_media_objects ELSE d.body->'media_objects' END,"
+        " media_state=d.body->>'media_state',last_error=NULLIF(d.body->>'last_error',''),updated_at=now() "
+        " FROM decision d WHERE e.id=d.version_id AND d.outcome='accepted' AND d.version_id IS NOT NULL "
+        " RETURNING e.id,e.message_id,e.media_objects),"
+        "updated_message AS ("
+        " UPDATE v2_expert_messages m SET media_objects=e.media_objects,media_state=d.body->>'media_state' "
+        " FROM updated_event e CROSS JOIN decision d WHERE m.id=e.message_id RETURNING m.id),"
+        "message_target AS MATERIALIZED ("
+        " SELECT id FROM inserted_message UNION ALL SELECT id FROM updated_message),"
+        "inserted_job AS ("
+        " INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key,review_mode,last_error) "
+        " SELECT (i.job->>'job_id')::uuid,target.id,i.job->>'initial_state',i.job->>'idempotency_key',"
+        " i.job->>'review_mode',i.job->>'suppression' FROM message_target target CROSS JOIN input i "
+        " WHERE i.job IS NOT NULL AND i.job<>'null'::jsonb "
+        " ON CONFLICT(idempotency_key) DO NOTHING RETURNING id),"
+        "resolved_job AS ("
+        " SELECT id FROM inserted_job UNION ALL SELECT j.id FROM input i JOIN v2_analysis_jobs j "
+        " ON j.idempotency_key=i.job->>'idempotency_key' WHERE i.job IS NOT NULL AND i.job<>'null'::jsonb "
+        " AND NOT EXISTS(SELECT 1 FROM inserted_job) LIMIT 1),"
+        "suppression_trace AS ("
+        " INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) "
+        " SELECT (i.job->>'trace_id')::uuid,j.id,1,'telegram_auto_review_suppressed',i.job->'trace_payload' "
+        " FROM inserted_job j CROSS JOIN input i WHERE i.job->>'suppression' IS NOT NULL RETURNING id) "
+        "SELECT d.outcome,COALESCE((SELECT id FROM inserted_message),(SELECT message_id FROM updated_event),"
+        " d.version_message_id) AS message_id,(SELECT id FROM resolved_job) AS job_id,"
+        "CASE WHEN d.version_id IS NOT NULL AND d.body->>'media_state' IN ('pending','failed') "
+        " AND d.body->'media_objects'='[]'::jsonb THEN d.version_media_objects ELSE d.body->'media_objects' END AS media_objects "
+        "FROM decision d",
+        source_id, body_payload, content_payload, job_payload, uuid.uuid4(), uuid.uuid4(),
+    )
+    return dict(row)
+
+
 async def insert_event_message_and_members(conn, *, message_id, event_id, source_id, expert_id,
                                            revision: int, body: EventInput, content: dict,
                                            nickname: str, previous_event_id, job_metadata):
@@ -584,14 +727,42 @@ async def ingest_event(body: EventInput, request: Request):
     pool = database.current_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            fast_path = body.reconciliation is None and body.event_kind != "delete"
-            if fast_path:
+            if body.reconciliation is None and body.event_kind != "delete":
                 source = await source_and_message_lock(conn, body.chat_id, body.platform_message_id)
                 if not source:
                     await source_for(conn, body.chat_id)
                     raise HTTPException(status_code=403, detail="Telegram source is not enabled")
-            else:
-                source = await source_with_lease(conn, body.chat_id, body.owner)
+                result = await persist_fast_event(conn, source["id"], body)
+                outcome = result["outcome"]
+                if outcome == "source_disabled":
+                    raise HTTPException(status_code=403, detail="Telegram source is not enabled")
+                if outcome == "lease_inactive":
+                    raise HTTPException(status_code=409, detail="Telegram source lease is not active")
+                if outcome == "deleted":
+                    return {"persisted": True, "state": "deleted"}
+                if outcome == "untrusted":
+                    raise HTTPException(status_code=403, detail="sender is not trusted for this source")
+                if outcome == "invalid_content":
+                    raise HTTPException(status_code=422, detail="message content and author are required")
+                if outcome == "media_disabled":
+                    raise HTTPException(status_code=403, detail="source media is disabled")
+                if outcome == "superseded":
+                    return {"persisted": True, "state": "superseded", "message_id": str(result["message_id"])}
+                if outcome == "ignored_stale":
+                    return {"persisted": True, "state": "ignored_stale"}
+                if outcome == "version_conflict":
+                    raise HTTPException(status_code=409, detail="same message version has conflicting content")
+                if outcome == "ready":
+                    return {"persisted": True, "state": "ready", "message_id": str(result["message_id"])}
+                if outcome != "accepted" or not result["message_id"]:
+                    raise RuntimeError("Telegram event persistence returned no valid outcome")
+                return {"persisted": True, "state": body.media_state,
+                        "message_id": str(result["message_id"]),
+                        "review_id": str(result["job_id"]) if result["job_id"] else None,
+                        "media_objects": result["media_objects"]
+                        if body.media_state in {"pending", "failed"} else []}
+
+            source = await source_with_lease(conn, body.chat_id, body.owner)
             async def acknowledge_reconciliation():
                 if body.reconciliation is None:
                     return {}
@@ -611,16 +782,9 @@ async def ingest_event(body: EventInput, request: Request):
                 if duplicate:
                     ack = await acknowledge_reconciliation()
                     return {"persisted": True, "state": "reconciled", "duplicate": True, **ack}
-            if fast_path:
-                snapshot = await event_ingest_snapshot(conn, body, source["id"], body.owner)
-                if not snapshot["source_enabled"]:
-                    raise HTTPException(status_code=403, detail="Telegram source is not enabled")
-                if not snapshot["lease_active"]:
-                    raise HTTPException(status_code=409, detail="Telegram source lease is not active")
-            else:
-                await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))",
-                                   f"telegram:{source['id']}:{body.platform_message_id}")
-                snapshot = None
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))",
+                               f"telegram:{source['id']}:{body.platform_message_id}")
+            snapshot = None
             if body.event_kind == "delete":
                 affected = await conn.fetch(
                     "SELECT DISTINCT all_members.platform_message_id FROM v2_telegram_events e "
