@@ -15,7 +15,7 @@ from .hermes_client import HermesProviderUnavailable, delete_session, resolve_re
 from .review_state import active_job, trace
 from .review_summary import record_summary
 from .review_recovery import market_recovery
-from .review_policy import REALTIME_WINDOW_SECONDS
+from .review_policy import FRESH_PRIORITY_WINDOW_SECONDS, REALTIME_WINDOW_SECONDS
 from fastapi import HTTPException
 import asyncpg
 
@@ -122,16 +122,21 @@ async def _advance_turn(conn, source_id, expert_id):
     return turn
 
 
-def _lane_condition(mode):
-    bound = "statement_timestamp()-($2::int*interval '1 second')"
+def _lane_condition(mode, realtime_parameter='$2', fresh_parameter='$3'):
+    realtime_bound = f"statement_timestamp()-({realtime_parameter}::int*interval '1 second')"
+    fresh_bound = f"statement_timestamp()-({fresh_parameter}::int*interval '1 second')"
+    valid_window_order = f'{fresh_parameter}::int <= {realtime_parameter}::int'
+    if mode == 'fresh_real_time':
+        return ('j.message_posted_at>=' + fresh_bound + ' AND j.message_posted_at<=statement_timestamp() AND '
+                + valid_window_order)
     if mode == 'real_time':
-        return 'j.message_posted_at>=' + bound + ' AND j.message_posted_at<=statement_timestamp()'
-    return 'j.message_posted_at<' + bound
+        return 'j.message_posted_at>=' + realtime_bound + ' AND j.message_posted_at<' + fresh_bound
+    return 'j.message_posted_at<' + realtime_bound + ' AND ' + valid_window_order
 
 
 async def _claim_from_lane(conn, mode):
     lane = _lane_condition(mode)
-    persistent_pair_retry = _persistent_retry_condition('j', '$4')
+    persistent_pair_retry = _persistent_retry_condition('j', '$5')
     for probe in range(MAX_PAIR_PROBES):
         pair = await conn.fetchrow(
             "SELECT ss.source_id,es.expert_id,es.concurrency_limit,"
@@ -141,22 +146,22 @@ async def _claim_from_lane(conn, mode):
             "JOIN v2_source_experts se ON se.source_id=s.id JOIN v2_experts e ON e.id=se.expert_id "
             "JOIN v2_review_expert_schedule es ON es.expert_id=e.id "
             "WHERE s.enabled AND e.enabled AND se.enabled AND (SELECT count(*) FROM v2_analysis_jobs running "
-            "WHERE running.expert_id=es.expert_id AND running.state='running' AND running.lease_until>statement_timestamp())<GREATEST(es.concurrency_limit,$3) "
+            "WHERE running.expert_id=es.expert_id AND running.state='running' AND running.lease_until>statement_timestamp())<GREATEST(es.concurrency_limit,$4) "
             "AND EXISTS(SELECT 1 FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
             "WHERE j.source_id=ss.source_id AND j.expert_id=es.expert_id AND "
             "((j.state IN('queued','retry','running') AND j.attempts<$1) OR (" + persistent_pair_retry + ")) AND " + lane +
             " AND ((j.state IN('queued','retry','failed') AND j.available_at<=statement_timestamp()) OR "
             "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))) AND " + ELIGIBLE_MESSAGE + ") "
             "ORDER BY ss.last_turn,es.last_turn,ss.source_id,es.expert_id LIMIT 1 FOR SHARE OF s,e,se FOR UPDATE OF ss,es",
-            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, EXPERT_CONCURRENCY_FLOOR,
+            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, FRESH_PRIORITY_WINDOW_SECONDS, EXPERT_CONCURRENCY_FLOOR,
             sorted(PERSISTENT_RETRY_FAILURES))
         if not pair:
             return None
         turn = await _advance_turn(conn, pair['source_id'], pair['expert_id'])
-        persistent_row_retry = _persistent_retry_condition('j', '$5')
+        persistent_row_retry = _persistent_retry_condition('j', '$6')
         row = await conn.fetchrow(
             'SELECT j.id,j.message_id,j.attempts FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id '
-            'WHERE j.source_id=$3 AND j.expert_id=$4 AND '
+            'WHERE j.source_id=$4 AND j.expert_id=$5 AND '
             "((j.state IN('queued','retry','running') AND j.attempts<$1) OR (" + persistent_row_retry + ")) AND " + lane +
             " AND ((j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))"
             " OR (j.state IN('queued','retry','failed') AND j.available_at<=statement_timestamp())) AND " + ELIGIBLE_MESSAGE +
@@ -166,7 +171,8 @@ async def _claim_from_lane(conn, mode):
             "CASE WHEN j.state<>'running' THEN j.message_posted_at END DESC,"
             "CASE WHEN j.state<>'running' THEN j.available_at END,j.created_at,j.id "
             'LIMIT 1 FOR UPDATE OF j SKIP LOCKED',
-            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, pair['source_id'], pair['expert_id'],
+            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, FRESH_PRIORITY_WINDOW_SECONDS,
+            pair['source_id'], pair['expert_id'],
             sorted(PERSISTENT_RETRY_FAILURES))
         if row:
             return row, pair, turn, probe + 1
@@ -245,32 +251,40 @@ async def _claim_job(pool):
                     "SELECT count(*) FROM v2_analysis_jobs WHERE state='running' AND review_mode='historical_replay' "
                     "AND lease_until>statement_timestamp()")
                 replay_allowed = HISTORICAL_CONCURRENCY > historical_active
-            modes = ['real_time']
+            realtime_modes = ['fresh_real_time', 'real_time']
             if replay_allowed:
-                modes = (['historical_replay','real_time'] if realtime_claims >= REALTIME_CLAIMS_PER_REPLAY
-                         else ['real_time','historical_replay'])
+                modes = (['historical_replay', *realtime_modes] if realtime_claims >= REALTIME_CLAIMS_PER_REPLAY
+                         else [*realtime_modes, 'historical_replay'])
+            else:
+                modes = realtime_modes
             claimed = None
-            for mode in modes:
-                claimed = await _claim_from_lane(conn, mode)
+            scheduler_lane = None
+            for lane in modes:
+                claimed = await _claim_from_lane(conn, lane)
                 if claimed:
+                    scheduler_lane = lane
                     break
             if not claimed:
                 return None
             row, pair, turn, probes = claimed
+            mode = 'historical_replay' if scheduler_lane == 'historical_replay' else 'real_time'
             attempt = uuid.uuid4()
             lease_until, message = await _activate_claim(conn, row['id'], attempt, mode, realtime_claims)
             event_to_claim_ms = message['event_to_claim_ms']
             await trace(conn, row["id"], "attempt_claimed", {"attempt_id": str(attempt), "attempt": row["attempts"] + 1,
                 'source_id': str(pair['source_id']), 'expert_id': str(pair['expert_id']), 'concurrency_limit': pair['concurrency_limit'],
                 'active_expert_leases_before': pair['active_leases'], 'scheduler_turn': turn, 'pair_probes': probes,
-                'review_mode': mode, 'realtime_window_seconds': REALTIME_WINDOW_SECONDS,
+                'review_mode': mode, 'scheduler_lane': scheduler_lane,
+                'fresh_priority_window_seconds': FRESH_PRIORITY_WINDOW_SECONDS,
+                'realtime_window_seconds': REALTIME_WINDOW_SECONDS,
                 'message_age_seconds': max(0, round((datetime.now(timezone.utc)-message['posted_at']).total_seconds(),3)),
                 'queue_wait_ms': max(0, round((datetime.now(timezone.utc) - message['created_at']).total_seconds() * 1000, 3)),
                 'event_persisted_at': message['event_persisted_at'].isoformat()
                     if message['event_persisted_at'] else None,
                 'event_to_claim_ms': event_to_claim_ms})
             return {"id": row["id"], "attempt_id": attempt, "attempts": row["attempts"] + 1, "message": dict(message),
-                    'source_id': pair['source_id'], 'expert_id': pair['expert_id'], 'lease_until': lease_until, 'review_mode': mode}
+                    'source_id': pair['source_id'], 'expert_id': pair['expert_id'], 'lease_until': lease_until,
+                    'review_mode': mode, 'scheduler_lane': scheduler_lane}
 
 
 async def _add_trace(pool, job: dict, kind: str, payload: dict) -> None:

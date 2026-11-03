@@ -1197,6 +1197,8 @@ class TelegramCollector:
         payload = None
         group = sorted(members, key=lambda item: item.id) if full_album else members
         started = time.monotonic()
+        source_version_at = max(_utc(getattr(item, 'edit_date', None) or item.date) for item in group)
+        source_age_ms = max(0.0, (datetime.now(timezone.utc) - source_version_at).total_seconds() * 1000)
         try:
             lookup_started = time.monotonic()
             if not full_album and getattr(members[0], "grouped_id", None):
@@ -1216,9 +1218,9 @@ class TelegramCollector:
                 media_started = time.monotonic()
                 self._schedule_live_media(chat_id, payload, group)
                 media_ms = (time.monotonic() - media_started) * 1000
-            log.info('Telegram live event persisted lookup_ms=%.1f persist_ms=%.1f '
+            log.info('Telegram live event persisted source_age_ms=%.1f lookup_ms=%.1f persist_ms=%.1f '
                      'media_ms=%.1f total_ms=%.1f members=%s images=%s',
-                     lookup_ms, persist_ms, media_ms,
+                     source_age_ms, lookup_ms, persist_ms, media_ms,
                      (time.monotonic() - started) * 1000, len(group),
                      sum(1 for item in group if getattr(item, 'media', None)))
         except Exception as exc:

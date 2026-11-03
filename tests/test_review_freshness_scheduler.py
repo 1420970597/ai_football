@@ -101,6 +101,21 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(original,[dict(row) for row in await self.pool.fetch('SELECT id,raw_text,posted_at FROM v2_expert_messages ORDER BY id')])
         self.assertEqual(105,await self.pool.fetchval("SELECT count(*) FROM v2_analysis_jobs WHERE state='queued' AND message_posted_at<now()-interval '24 hours'"))
 
+    async def test_fresh_posts_precede_older_realtime_posts_across_source_pairs(self):
+        older_pair, fresh_pair = await self.pair(), await self.pair()
+        old_job = (await self.queued(older_pair, age=worker.FRESH_PRIORITY_WINDOW_SECONDS + 60))[0]
+        fresh_job = (await self.queued(fresh_pair, age=1))[0]
+        await self.pool.execute('UPDATE v2_review_source_schedule SET last_turn=0 WHERE source_id=$1', older_pair[0])
+        await self.pool.execute('UPDATE v2_review_source_schedule SET last_turn=100 WHERE source_id=$1', fresh_pair[0])
+
+        job = await worker.claim_job(self.pool)
+
+        self.assertEqual(fresh_job, job['id'])
+        self.assertEqual('fresh_real_time', job['scheduler_lane'])
+        self.assertEqual('real_time', job['review_mode'])
+        await self.complete(job)
+        self.assertEqual(old_job, (await worker.claim_job(self.pool))['id'])
+
     async def test_eight_to_one_budget_survives_new_pool_and_history_concurrency_is_global(self):
         realtime,historical = await self.pair(),await self.pair()
         await self.queued(realtime,age=60,count=12)
@@ -291,16 +306,21 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(6,await self.pool.fetchval("SELECT count(*) FROM v2_analysis_jobs WHERE state='queued'"))
 
     async def test_exact_freshness_boundary_is_realtime_and_future_time_is_neither_lane(self):
-        realtime = worker._lane_condition('real_time')
-        historical = worker._lane_condition('historical_replay')
+        fresh = worker._lane_condition('fresh_real_time', '$1', '$2')
+        realtime = worker._lane_condition('real_time', '$1', '$2')
+        historical = worker._lane_condition('historical_replay', '$1', '$2')
         rows = await self.pool.fetch(
-            "SELECT $1::int AS attempts,label,("+realtime+") AS realtime,("+historical+") AS historical "
-            "FROM (VALUES ('boundary',statement_timestamp()-($2::int*interval '1 second')),"
-            "('old',statement_timestamp()-($2::int*interval '1 second')-interval '1 microsecond'),"
+            "SELECT label,("+fresh+") AS fresh,("+realtime+") AS realtime,("+historical+") AS historical "
+            "FROM (VALUES ('realtime_boundary',statement_timestamp()-($1::int*interval '1 second')),"
+            "('historical',statement_timestamp()-($1::int*interval '1 second')-interval '1 microsecond'),"
+            "('fresh_boundary',statement_timestamp()-($2::int*interval '1 second')),"
+            "('older_fresh',statement_timestamp()-($2::int*interval '1 second')-interval '1 microsecond'),"
             "('now',statement_timestamp()),('future',statement_timestamp()+interval '1 microsecond')) j(label,message_posted_at)",
-            worker.MAX_ATTEMPTS,worker.REALTIME_WINDOW_SECONDS)
-        result = {row['label']:(row['realtime'],row['historical']) for row in rows}
-        self.assertEqual({'boundary':(True,False),'old':(False,True),'now':(True,False),'future':(False,False)},result)
+            worker.REALTIME_WINDOW_SECONDS,worker.FRESH_PRIORITY_WINDOW_SECONDS)
+        result = {row['label']:(row['fresh'],row['realtime'],row['historical']) for row in rows}
+        self.assertEqual({'realtime_boundary':(False,True,False),'historical':(False,False,True),
+            'fresh_boundary':(True,False,False),'older_fresh':(False,True,False),
+            'now':(True,False,False),'future':(False,False,False)},result)
 
     async def test_migration_preserves_preexisting_attempts_and_backfills_true_posting_time(self):
         name = 'test_review_freshness_legacy_'+uuid.uuid4().hex

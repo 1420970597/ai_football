@@ -250,6 +250,16 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(delivery, status["live_event_delivery"])
         self.assertNotIn("-1001", str(status["live_event_delivery"]))
 
+    async def test_live_event_log_reports_source_age_without_message_identifiers(self):
+        self.collector.sources = {"-1001": self.backend.source_items[0]}
+        with self.assertLogs('platform.telegram', level='INFO') as captured:
+            await self.collector._live_messages('-1001', [Message(101)])
+
+        line = next(value for value in captured.output if 'Telegram live event persisted' in value)
+        self.assertRegex(line, r'source_age_ms=[0-9.]+')
+        self.assertNotIn('-1001', line)
+        self.assertNotIn('101', line)
+
     async def test_live_event_delivery_status_records_bounded_failure_category(self):
         self.collector.sources = {"-1001": self.backend.source_items[0]}
         self.backend.fail_chat = "-1001"
