@@ -3,4 +3,4 @@ services:
     deploy:
       replicas: 1
     environment:
-      REVIEW_WORKER_CONCURRENCY: "1"
+      REVIEW_WORKER_CONCURRENCY: ${REVIEW_WORKER_CONCURRENCY:-1}
