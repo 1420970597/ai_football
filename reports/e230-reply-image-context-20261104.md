@@ -6,6 +6,8 @@
 
 命令与发布准备：冻结工作树运行bash tests/integration/run_hermes_acceptance.sh，acceptance_exit=0；同源services/api/Dockerfile经受限ai-football-e131 builder构建exit0，镜像ai-football-api:2.0.0-dev-e230-f409a05。仅API/worker发布覆盖配置检查exit0，必须等待E229完整16:46:39以后终审、完整回归通过并持有自然idle门禁才可更新。当前正式窗口不改实现或参数。
 
+16:36完整后端通过：冻结f409a05a4517e283280b8421e2fcf73e40b3e991，bash infra/test/run.sh exit0，1273项573.219秒/0失败错误跳过，恢复差异{}；机器报告包含套件包装总时长575.615秒，SHA20610166172cdf2812ca2da260ba7ddbcc4211948b284fae197997502a450047，路径.runtime/e230-candidate/.runtime/test-evidence/346213/backend-tests.json。API镜像sha256:ab8dcf515e1583ac10f7c7bed5aea88e3681276dc87fb71caa5f67beb4f4af55、完整源码revision相符。已结束的独立E230定向PG容器及网络清理exit0；完整套件自身清理，不触及其他服务。状态为隔离验证通过，真实新引用视觉语义尚未验收，未部署。
+
 目标：让可信专家新消息引用同群已采集原文时，把原图作为有来源标识的不可信视觉上下文交给Hermes，减少把简称误当另一球队；不能将被引用旧推荐自动当作本条新意图。责任目录services/api、tests、reports、docs/platform-v2；依赖远端已有私有媒体/稳定source及message关联、当前版本/删除检查。
 
 证据：E227自然9f6af4c1图片成功识别哈尔迪亚+1，但随后282eb80f“追對家”虽引用它，仅保存reply_context.text/has_media；worker只查reply_text，hermes_client只准备当前media_objects。因此模型看不到旧图并按Hull搜索0候选。该回复缺明确新盘口，即使补图也不能允许猜盘口/倍率或跳过绑定。原始回执不可改写成成功。
