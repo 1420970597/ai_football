@@ -18,3 +18,5 @@
 
 15:54修正冻结dea4e75真实框架完整验收exit0：af-hermes-framework-259260。原失败场景重跑通过，取消HTTP后DELETE409实证、stop并等canonical终态后cleanup370.4ms、另一会话正常完成、0推荐；normal/adversarial/length/parallel/no_intent/provider503、框架重启前后上下文/技能哈希不变及低轮次budget全部通过，预载技能和260候选连续13页、越权/注入拒绝保持。客户端7项8.235秒exit0。冻结完整Docker后端套件仍在跑，不提前部署。
 *** 证据限制：提供方为确定性隔离替身，证明固定框架生命周期与权限契约，不评价真实模型理解或3秒性能。生产长尾需下一冻结窗实际验证。
+
+16:03完整后端通过：冻结dea4e75完整1265项564.747秒exit0，无失败错误跳过，恢复差异{}，报告SHA9bfabcbfb0aae02ff128b7c768ce79e6f4fe480acba08bada0693dcc118bba7b。尚未部署；等待E229受限同源隧道验证后，与E226/E228一次idle切换，避免重复中断，E227正式窗口先完成终审。
