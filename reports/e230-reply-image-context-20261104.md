@@ -8,6 +8,10 @@
 
 16:36完整后端通过：冻结f409a05a4517e283280b8421e2fcf73e40b3e991，bash infra/test/run.sh exit0，1273项573.219秒/0失败错误跳过，恢复差异{}；机器报告包含套件包装总时长575.615秒，SHA20610166172cdf2812ca2da260ba7ddbcc4211948b284fae197997502a450047，路径.runtime/e230-candidate/.runtime/test-evidence/346213/backend-tests.json。API镜像sha256:ab8dcf515e1583ac10f7c7bed5aea88e3681276dc87fb71caa5f67beb4f4af55、完整源码revision相符。已结束的独立E230定向PG容器及网络清理exit0；完整套件自身清理，不触及其他服务。状态为隔离验证通过，真实新引用视觉语义尚未验收，未部署。
 
+16:51已安全生效：E229完整终审及原台账before保留后，16:49:25.460255暂停新claim、16:49:28.937444自然idle持有门禁，仅API/worker替换为上述同源镜像，deploy exit0/API ready200/worker running/门禁正常释放。Hermes/MCP/web/tunnel/remote-link容器及资源未变；正式15场rebuild与38信号80台账before/after核验、双端真实浏览器正在进行。已启动新独立1800秒窗口，真实引用视觉语义仍须自然样本，不称专家全部恢复。
+
+16:54发布后验证：15场正常rebuild HTTP200，Docker核验38不可变信号与原价/38结果/80台账及时间全一致exit0；Chromium1440/390各2原图详情exit0，图片解码、同attempt回执、正文/API一致、无JS错误或横溢。新窗精确16:50:29.255802起1800秒，17:20:30后完整终审；不因前段连接正常或回归通过提前结束。
+
 目标：让可信专家新消息引用同群已采集原文时，把原图作为有来源标识的不可信视觉上下文交给Hermes，减少把简称误当另一球队；不能将被引用旧推荐自动当作本条新意图。责任目录services/api、tests、reports、docs/platform-v2；依赖远端已有私有媒体/稳定source及message关联、当前版本/删除检查。
 
 证据：E227自然9f6af4c1图片成功识别哈尔迪亚+1，但随后282eb80f“追對家”虽引用它，仅保存reply_context.text/has_media；worker只查reply_text，hermes_client只准备当前media_objects。因此模型看不到旧图并按Hull搜索0候选。该回复缺明确新盘口，即使补图也不能允许猜盘口/倍率或跳过绑定。原始回执不可改写成成功。
