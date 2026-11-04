@@ -23,3 +23,7 @@
 第二轮37次189秒操作类别采样未遇阻塞，不能据此撤销首轮3个真实等待。新窗另一条真实多场推荐10个有UTC范围查询共108候选（原文时间为范围基准），最终仍出现timeout，日期范围不是完整延迟解决方案；状态继续跟踪。线上原图/同attempt回执1440/390共4点击场景复测exit0。一次脱敏intent读取因0600被非root测试镜像拒绝，保持原权限、改任务容器user0只读成功；一次统计内联语法错误已改为独立脚本重跑，不作为业务验证通过。Hermes源码只读查验时系统python缺yaml，未安装或修改全局依赖/生产reasoning参数，未将该诊断当成功。
 
 完整回归（14:07 UTC）：同冻结41f37e75dfd0924bdfe846fe7fc4dc680b8aee67独立worktree运行infra/test/run.sh，1249项549.958秒、0失败/错误/跳过、exit0，机器报告SHAca287ca96b927e9bebb565bf12594949189b479be5c654e9eb5c92bec07905e4，隔离备份恢复业务差异空；套件中gate日志仅临时测试DB。API镜像ai-football-api:2.0.0-dev-e220-41f37e7 buildx --load exit0，revision记录候选短SHA41f37e7对应上述完整SHA，不与根分支cherry-pick混淆。E219完整窗证据已保存，准备仅API/worker idle切换，MCP/web/Hermes上下文与资源不变；改正上阶段健康检查假定，worker检查Running、API实际ready，不再把缺少Health字段视作有健康检查。配置解析exit0，部署尚待gate。
+
+14:16实际生效：14:06:57.328暂停claims，等待原审核正常结束到14:12:55.500取得idle，仅API/worker切换为候选镜像sha256:7b7d83860823ade92a83c5439222a336a2fa72835901a09092c4a54105af392a，命令exit0/API healthy+真实ready200、worker Running且0重启，trap正常gate_released。MCP/web/Hermes及上下文/资源保持E219版本。正常受认证正式重算接口200再次处理原15场；只读核验38推荐/报价哈希、38结果、80台账版本与created_at全部相同，退出0（首命令漏Docker -i未执行脚本且无输出，不算通过，补-i重跑保存机器JSON才计证据）。这是持锁开销优化，不新增收益或算法版本。
+
+新完整监控14:14:00.737690开始，计划14:44:01以后终审；首样本health/ready200、TG connected/authorized为true且六租约有效，但state=unavailable，与布尔状态冲突，必须在终审单列，不能仅凭旧watch的布尔healthy字段认定全正常。等待完整消息、接口失败及锁等待证据，暂不声称线上锁超时已消失或三秒达标。任务独立PG/验证网络在测试完成后按归属清理，不动其他项目。
