@@ -1,4 +1,6 @@
 import unittest
+import asyncio
+import hashlib
 import json
 import uuid
 from types import SimpleNamespace
@@ -10,6 +12,98 @@ from app import hermes_client
 
 
 class HermesClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_session_cleanup_stops_only_owned_active_attempts(self):
+        review, attempt = uuid.uuid4(), uuid.uuid4()
+        session = f'expert-review-{review}-{attempt}'
+        settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1', hermes_api_key='isolated-key')
+        calls = []
+        deletes = 0
+
+        async def handler(request):
+            nonlocal deletes
+            calls.append((request.method, request.url.path))
+            self.assertEqual('Bearer isolated-key', request.headers['Authorization'])
+            if request.method == 'DELETE':
+                deletes += 1
+                return (httpx.Response(409, json={'error': {'code': 'session_active_turn'}})
+                        if deletes < 3 else httpx.Response(204))
+            if request.method == 'POST':
+                self.assertTrue(request.url.path.endswith(str(attempt)+'/stop'))
+                return httpx.Response(200, json={'status': 'stopping'})
+            if request.url.path.endswith('-continuation-1'):
+                return httpx.Response(200, json={'session_id': session, 'status': 'completed'})
+            if request.url.path.endswith('-continuation-2'):
+                return httpx.Response(404)
+            return httpx.Response(200, json={'session_id': session, 'status': 'running'})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await hermes_client.delete_session(settings, review, attempt, client=client)
+        posts = [path for method, path in calls if method == 'POST']
+        scope = hashlib.sha256(b'default\0isolated-key').hexdigest()
+        self.assertEqual(['/v1/runs/chat:'+scope+':'+str(attempt)+'/stop'], posts)
+        self.assertEqual(3, deletes)
+
+    async def test_session_cleanup_does_not_control_other_sessions_or_unknown_states(self):
+        for state, same_session in [('running', False), ('unknown', True)]:
+            with self.subTest(state=state, same_session=same_session):
+                review, attempt = uuid.uuid4(), uuid.uuid4()
+                session = f'expert-review-{review}-{attempt}'
+                calls = []
+                async def handler(request):
+                    calls.append(request.method)
+                    if request.method == 'DELETE':
+                        return httpx.Response(409, json={'error': {'code': 'session_active_turn'}})
+                    return httpx.Response(200, json={'session_id': session if same_session else 'another-session',
+                                                    'status': state})
+                settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1', hermes_api_key='isolated-key')
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    with self.assertRaises(RuntimeError):
+                        await hermes_client.delete_session(settings, review, attempt, client=client)
+                self.assertEqual(['DELETE', 'GET'], calls)
+
+    async def test_session_cleanup_normal_and_unrelated_conflicts_do_not_stop_runs(self):
+        for status in [200, 204, 404, 403, 409]:
+            with self.subTest(status=status):
+                calls = []
+                async def handler(request):
+                    calls.append(request.method)
+                    return httpx.Response(status, json={'error': {'code': 'unrelated_conflict'}})
+                settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1', hermes_api_key='isolated-key')
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    if status in {403, 409}:
+                        with self.assertRaises(httpx.HTTPStatusError):
+                            await hermes_client.delete_session(settings, uuid.uuid4(), uuid.uuid4(), client=client)
+                    else:
+                        await hermes_client.delete_session(settings, uuid.uuid4(), uuid.uuid4(), client=client)
+                self.assertEqual(['DELETE'], calls)
+
+    async def test_session_cleanup_rejects_run_control_permission_failure(self):
+        calls = []
+        async def handler(request):
+            calls.append(request.method)
+            return (httpx.Response(409, json={'error': {'code': 'session_active_turn'}})
+                    if request.method == 'DELETE' else httpx.Response(403))
+        settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1', hermes_api_key='isolated-key')
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with self.assertRaises(httpx.HTTPStatusError):
+                await hermes_client.delete_session(settings, uuid.uuid4(), uuid.uuid4(), client=client)
+        self.assertEqual(['DELETE', 'GET'], calls)
+
+    async def test_session_cleanup_bounds_a_stalled_run_control(self):
+        cancelled = asyncio.Event()
+        async def handler(request):
+            if request.method == 'DELETE':
+                return httpx.Response(409, json={'error': {'code': 'session_active_turn'}})
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1', hermes_api_key='isolated-key')
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with self.assertRaises(TimeoutError):
+                await hermes_client.delete_session(settings, uuid.uuid4(), uuid.uuid4(), client=client)
+        self.assertTrue(cancelled.is_set())
+
     async def test_continuation_preserves_session_but_has_distinct_idempotency_without_images(self):
         captured = []
         async def handler(request):

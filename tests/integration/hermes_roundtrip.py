@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import asyncpg
 import httpx
 
-from app.hermes_client import HermesProviderUnavailable, SYSTEM_PROMPT, review_message
+from app.hermes_client import HermesProviderUnavailable, SYSTEM_PROMPT, delete_session, review_message
 from app.review_tool_evidence import replay_snapshot
 
 COUNT = 260
@@ -254,6 +254,51 @@ async def run_case(conn, http, scenario):
     assert cleanup.status_code in {200, 204, 404}, cleanup.status_code
 
 
+async def timeout_cleanup_case(conn, http):
+    data = [await seed(conn, scenario) for scenario in ('timeout_cleanup', 'timeout_peer')]
+    settings = SimpleNamespace(hermes_api_url=HERMES+'/v1', hermes_api_key='isolated-framework-key',
+                               hermes_model='hermes-agent')
+    tasks = []
+    for row in data:
+        source = {'source_name': '隔离群', 'display_nickname': '隔离专家', 'posted_at': row['posted_at'],
+                  'raw_text': row['raw_text'], 'media_objects': []}
+        tasks.append(asyncio.create_task(review_message(settings, source, row['job'], row['attempt'])))
+    try:
+        async with asyncio.timeout(20):
+            while True:
+                observed = (await http.get(PROVIDER+'/evidence')).json().get('blocked_turns', {})
+                if all(str(row['job']) in observed for row in data):
+                    break
+                await asyncio.sleep(.1)
+        tasks[0].cancel()
+        result = await asyncio.gather(tasks[0], return_exceptions=True)
+        assert isinstance(result[0], asyncio.CancelledError)
+        row = data[0]
+        session = f"expert-review-{row['job']}-{row['attempt']}"
+        deletion = await http.delete(HERMES+'/api/sessions/'+session, headers=HEADERS)
+        assert deletion.status_code == 409, 'cancelled HTTP observer must leave an active canonical turn'
+        assert deletion.json()['error']['code'] == 'session_active_turn'
+        started = asyncio.get_running_loop().time()
+        await delete_session(settings, row['job'], row['attempt'], client=http)
+        elapsed = asyncio.get_running_loop().time()-started
+        assert elapsed < 8, elapsed
+        content, summary = await tasks[1]
+        assert content == '隔离调用完成' and summary['finish_reason'] == 'stop', 'peer turn must remain unaffected'
+        assert not await conn.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_signals WHERE message_id=ANY($1::uuid[]))',
+                                      [row['message'] for row in data])
+        row = data[1]
+        await delete_session(settings, row['job'], row['attempt'], client=http)
+        print(json.dumps({'scenario': 'timeout_cleanup', 'provider_is_fixture': True,
+                          'http_cancel_leaves_active_session': True, 'owned_cleanup_verified': True,
+                          'other_turn_completed': True, 'cleanup_ms': round(elapsed*1000, 1),
+                          'accepted_signals': 0}), flush=True)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def run():
     conn = await asyncpg.connect(checked_dsn())
     try:
@@ -262,6 +307,9 @@ async def run():
         async with httpx.AsyncClient(timeout=240, trust_env=False) as http:
             await no_bypass(http)
             for scenario in os.environ.get('INTEGRATION_SCENARIOS', 'normal,adversarial,length').split(','):
+                if scenario == 'timeout_cleanup':
+                    await timeout_cleanup_case(conn, http)
+                    continue
                 if scenario not in {'normal', 'adversarial', 'length', 'budget', 'parallel', 'no_intent', 'provider_503'}:
                     raise RuntimeError('unknown isolated scenario')
                 await run_case(conn, http, scenario)

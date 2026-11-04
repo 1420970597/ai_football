@@ -10,6 +10,7 @@ import time
 import uuid
 from datetime import timezone
 from types import MappingProxyType
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -238,13 +239,57 @@ async def review_message(settings: Settings, message: dict, review_id: uuid.UUID
 
 async def delete_session(settings: Settings, review_id: uuid.UUID, attempt_id: uuid.UUID,
                          *, client: httpx.AsyncClient | None = None) -> None:
+    if client is None:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=2.0), trust_env=False) as owned_client:
+            return await delete_session(settings, review_id, attempt_id, client=owned_client)
     session_id = f"expert-review-{review_id}-{attempt_id}"
     headers = {"Authorization": f"Bearer {settings.hermes_api_key}"}
     url = f"{settings.hermes_api_url.rsplit('/v1', 1)[0]}/api/sessions/{session_id}"
-    if client is None:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=2.0), trust_env=False) as owned_client:
-            response = await owned_client.delete(url, headers=headers)
-    else:
+    # A canonical Hermes admission survives HTTP cancellation. Deleting an
+    # active session alone leaves that expired attempt consuming model work.
+    async with asyncio.timeout(8.0):
         response = await client.delete(url, headers=headers, timeout=httpx.Timeout(8.0, connect=2.0))
-    if response.status_code not in {200, 204, 404}:
+        if response.status_code in {200, 204, 404}:
+            return
+        if response.status_code != 409 or response.json().get('error', {}).get('code') != 'session_active_turn':
+            response.raise_for_status()
+        await _stop_review_runs(settings, session_id, attempt_id, client=client, headers=headers)
+        while True:
+            await asyncio.sleep(.1)
+            response = await client.delete(url, headers=headers, timeout=httpx.Timeout(8.0, connect=2.0))
+            if response.status_code in {200, 204, 404}:
+                return
+            if response.status_code != 409 or response.json().get('error', {}).get('code') != 'session_active_turn':
+                response.raise_for_status()
+
+
+async def _stop_review_runs(settings, session_id, attempt_id, *, client, headers):
+    # Fixed Hermes v0.22.5 Chat Completions admission identity. Derive only our
+    # authenticated profile namespace and known attempt keys; never list runs.
+    path = urlsplit(settings.hermes_api_url).path
+    if path == '/v1':
+        profile = 'default'
+    else:
+        match = re.fullmatch(r'/p/([^/]+)/v1', path)
+        if not match:
+            raise RuntimeError('unsupported Hermes cleanup profile path')
+        profile = unquote(match[1])
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+', profile):
+            raise RuntimeError('invalid Hermes cleanup profile')
+    scope = hashlib.sha256((profile+'\0'+settings.hermes_api_key).encode()).hexdigest()
+    for continuation in range(3):
+        key = str(attempt_id) + (f'-continuation-{continuation}' if continuation else '')
+        run_url = settings.hermes_api_url+'/runs/chat:'+scope+':'+key
+        response = await client.get(run_url, headers=headers, timeout=httpx.Timeout(5.0, connect=2.0))
+        if response.status_code == 404:
+            continue
+        response.raise_for_status()
+        run = response.json()
+        if run.get('session_id') != session_id:
+            raise RuntimeError('Hermes cleanup run belongs to a different session')
+        if run.get('status') in {'completed', 'failed', 'cancelled', 'expired'}:
+            continue
+        if run.get('status') not in {'queued', 'running', 'waiting_for_approval', 'stopping'}:
+            raise RuntimeError('Hermes cleanup run state is unresolved')
+        response = await client.post(run_url+'/stop', headers=headers, timeout=httpx.Timeout(5.0, connect=2.0))
         response.raise_for_status()

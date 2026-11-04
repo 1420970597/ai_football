@@ -260,7 +260,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(content)
                 return
-            message, reason = answer(body)
+            if any('fixture_scenario: '+name in serialized for name in ('timeout_cleanup', 'timeout_peer')):
+                review = re.search(r'review_id: ([a-f0-9-]{36})', serialized)
+                if not review:
+                    self.send_error(422)
+                    return
+                with lock:
+                    evidence.setdefault('blocked_turns', {})[review.group(1)] = True
+                time.sleep(5)
+                message, reason = {'role': 'assistant', 'content': '隔离调用完成'}, 'stop'
+            else:
+                message, reason = answer(body)
         except (ValueError, TypeError):
             self.send_error(400)
             return
