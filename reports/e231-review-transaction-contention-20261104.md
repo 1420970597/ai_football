@@ -25,3 +25,7 @@
 本机无DB健康17:41:54.567855–17:51:54.469185共600样本1200请求全200，P50/P95 3.479/5.402ms、max90.115ms，exit0；两个持久连接未保证覆盖两个worker，仍不能排除其他worker停顿。只保存计时/状态，未读取秘密。汇总docker run --rm --network none --cpus0.1 --memory64m现有API镜像执行e231-probe-summary.py，exit0，证据e231-probe-summary-final.json；原错误时间/脱敏帧在e231-error-moments-mid.json。正式E232窗仍到17:55:06以后才终审。
 
 17:59追加远端预算调查设计：本机TCP/健康尚未归因，使用现有已核验SSH配置、固定旧台账容器名ai-football-postgres，仅docker exec读取该数据库容器自身cgroup cpu.stat/cpu.max/memory.events和CPU/IO/memory pressure，61次/10秒。远端代码全部在该Docker容器中执行，不改预算/服务/目录、不读账号/环境/连接地址/SQL。SSH输出仅固定指标，10秒采样对齐后续错误；若SSH或指标缺失保留失败，不枚举其他容器或提权绕过。不把远端累计限流直接当因果，先确认是否存在及请求时间相关性。
+
+18:15远端采样结束：18:00:27–18:10:28，61样本/SSH与远端探针exit0/stderr空，cpu.max max/CPU配额限流0、memory.events各项增量0。完整CPU/IO/内存pressure累计停顿1.404/18.894/2.553秒，IO avg10最高9.85%，但两个真实DB Timeout对应桶IO仅130/177毫秒，不能单凭累计IO直接解释5秒超时。容器内pressure不能代表全部远端主机或网络。Docker隔离汇总exit0，e231-remote-budget-summary.json。
+
+后续设计：提高pg_stat_activity脱敏采样至600秒/每秒一次、单独只读连接、单查询5秒预算，既有65活动上限，增加UTC以精确对齐错误。relation_names使用明确POSIX空白类（仅诊断脚本，不改业务）；曾怀疑旧双反斜杠错误，复核它是Python正常转义，不能把此项说成旧诊断bug。原5秒采样可能遗漏2秒锁等待。保存固定operation、v2_表名、等待类型、时长、pid和阻塞链，不输出SQL/参数/账号/地址。每秒一次是有界临时诊断，不调整池/资源/查询截止，也不将新探针负载伪装自然流量。生产E234窗口与E235冻结测试继续。
