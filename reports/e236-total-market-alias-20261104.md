@@ -13,3 +13,7 @@
 18:39定向通过：93项142.409秒exit0/0失败错误跳过，原权限/停盘/报价时效/取消/并发/完整证据/分页测试保持；别名仅返回同全场/2.75/over的total选项，不读半场或让球，unknown_over_under仍0且不多授权。下一步提交冻结全后端；该更改不动框架/MCP接口/模型提示，固定框架已在父版本E235通过，按必要性不额外重复提供方替身全流程。真实生产仍E235，当前窗结束与全套通过前不切换。
 
 18:43冻结与镜像准备：6bb76e50104f55e8f163d0085ab9cbc7dc6e23b7干净worktree完整Docker后端运行中，源码不改；API候选sha256:9da2bdb1f5046e54eeb5a10fab5369ce5d89150323b292bb637a1084f929275d完整revision一致、受限builder构建exit0、API/worker-only配置check exit0。原定向PG/网络已清理，生产E235不变；即使本窗无新消息也不能宣称自然链路已通过。
+
+18:52完整隔离验证通过：冻结6bb76e50104f55e8f163d0085ab9cbc7dc6e23b7运行1279项573.379秒、包装575.783秒，exit0/0失败错误跳过、恢复差异{}、committed_source_verified=true；产物.runtime/e236-candidate/.runtime/test-evidence/699581/backend-tests.json。候选应用镜像与此源码一致。框架验收明确继承父E235 af-hermes-framework-614796的完整exit0证据，不伪造E236框架运行；实际发布门检查保留父版passed引用。当前仍待E235完整窗口结束，未部署。外部新文档提交cf93e2b不涉及候选源码，保留不覆盖。
+
+后端产物SHA256：96aac21638a7d2c8ab0c9b0aa7f3b1f9796a9eb3397fd7abeda7b15a2ec19196。冻结全套进程96429实际退出0，不能以日志OK替代进程退出状态。

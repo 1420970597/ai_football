@@ -43,3 +43,9 @@
 18:39只读基线完成：热点统计exit0/stderr空，current_quotes活行约273.7万/死行34150、最近autovacuum18:18:43，analysis_traces死行189、sessions死行6；未见足以归因高IO的当前死行膨胀，未执行维护。telegram_events死行5842/活行34332保留观察，不随意清理原档案。活动聚合此刻仅本项目3个idle-in-transaction、其他客户端2idle，不能据一次样本排除其他服务/主机IO。第二轮61次只读PG预算采样开始，继续对齐E235新窗错误，代码/预算不变。
 
 18:42 E235中段完整日志：199消息请求全200，但另外6个Timeout和1个LockNotAvailableError仍在；其中18:30:13 search_matches:201初始化INSERT搜索记录锁等待，不把消息接口全200写成全服务正常。尚无该失败事务阻塞链，不能猜为重复首请求或删除唯一约束。追加同600秒/每秒只读活动采样，新增搜索初始化/搜索行锁/快照分类以捕获实际链路，原SQL/参数不输出，仍限定本项目application_name。E236候选只改大小别名，与此事务问题分开，未宣称其可修复锁或宿主IO。
+
+18:55第二轮完整关联：远端PG预算18:38:25–18:48:26共61样本exit0，CPU无配额限流/内存事件0，IO full累计4.424秒、avg10最高4.12%，此范围API无错误；不能凭压力下降宣布整体修复。每秒活动18:42:52–18:52:50共601样本600.2秒exit0、0截断、1454活动/无blockers，DataFileRead3样本，最大query4.915秒/事务5.723秒。
+
+新真实错误18:49:05 finish_check/require_lease和18:52:36 ingest_fixture_batch均Timeout。固定关系及时间关联分别看到v2_result_checks、v2_fixtures对应连接连续约5秒idle in transaction/ClientRead，无锁阻塞；与先前登录DataFileRead不同，不能全部归因服务器磁盘。此次按时间/关系关联尚无请求到PG pid的直接映射，不称已完全证明传输根因。保存dense-error-align-02和原始日志，下一步现有API/隧道各181次每秒只读TCP与CPU计数，对齐窗口尾端实际错误，不输出socket地址或报文内容、不修改资源/预算；若无新错误不将探针成功当复现修复。
+
+探针首准备尝试向隧道/tmp写脚本遇只读文件系统exit2，保留此失败；没有改挂载或权限。改用docker exec -i python -从标准输入传入脚本，两侧不需写容器文件，实际18:54:57开始各181样本/1秒；不改业务服务。前段文档18:55为记录分钟四舍五入，实际命令时间以JSON样本UTC为准。
