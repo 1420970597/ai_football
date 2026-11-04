@@ -23,3 +23,9 @@ remote-link DNS+API健康21次100秒exit0，全200，DNS未复现十秒等待；
 20:09直接反向SSH健康探针完成exit0/stderr空：从远端bridge容器直接UnixHTTPConnection请求同反向socket的/healthz，31样本177.520秒，30个200，另1个20:07:20.735发起时request仅0.275ms，等待headers10001.981ms后TimeoutError。P50/P95 533.636/995.819ms。不经过桥HTTP服务、不访问数据库，仍复现10秒等待；足以证明桥路由/来源SQL不是这次等待的必要条件，但没有独立SSH对照，不能立刻断言共享TCP队头阻塞或某个SSH内部原因。对应20:07:19.470–31.494十三个TCP样本0重传/0TCPTimeout，CPU实际93.296ms、累计节流716.873ms，不足单独解释10秒。远端第二组GET来源03 21次301.335秒exit0，另1次20:04:51.857发起10006.333ms/503；两组42次共3次桥10秒失败。
 
 远端候选仅stage，源码SHA7838a1ebbfe631a1a65ef61a4d1b9c5fb8a953c7436bf4fb68312e8b8ff134a7，生产源码仍b68b9121，未改路由/重启。冻结完整02继续，E238固定窗20:17:17以后终审再安排单桥生效；原源码备份、其他三个远端服务身份/启动时间及运行bind SHA均需核对。
+
+20:17完整02已通过：冻结134a9f4完整1285项586.715秒exit0/0失败错误跳过、恢复difference={}，证据927371/backend-tests.json外层589.143秒，committed_source_verified=true，SHA9f37b878e56a0a718d03f19493a303454fcc073eb86a7a1a7beb0283c67215fa。E238完整54样本1802.8秒退出0但TG稳定性失败，正在同截点终审。下一阶段仅桥日志生效，不更改超时、路由、SSH或资源；不是根因已修复。
+
+20:23已生效：远端bridge同ID0d82d2d9于20:18:49.713659重启，运行bind源码SHA7838a1eb，旧源码备份SHA b68b9121正确，.1CPU96MiB预算不变。本机7容器ID/启动/预算前后diff空exit0；远端collector/ executor/socket-guard启动仍分别Nov3/Oct31/Oct31，未重启。apply脚本末尾对docker restart输出严格断言失败exit1，原stderr保留；不把它说成整脚本通过。随后两次独立只读postflight exit0核验实际运行源码/启动/原备份和其余服务，故未盲目再次重启。原before稳定快照未落盘，不能冒称其余远端三个ID有独立前后同文件比较。
+
+新完整监控20:20:12.921497开始，到20:50:13后终审，API仍E238/bridge134a9f4，不把源码混合描述成整体同镜像版本。首段152条慢/失败记录已有fixtures与dispatch两次TimeoutError/upstream_headers约10.646/10.001秒；请求正文/发送/响应体未解释全部等待。观察继续，尚不称根因修复或稳定通过。
