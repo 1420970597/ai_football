@@ -27,3 +27,11 @@
 14:16实际生效：14:06:57.328暂停claims，等待原审核正常结束到14:12:55.500取得idle，仅API/worker切换为候选镜像sha256:7b7d83860823ade92a83c5439222a336a2fa72835901a09092c4a54105af392a，命令exit0/API healthy+真实ready200、worker Running且0重启，trap正常gate_released。MCP/web/Hermes及上下文/资源保持E219版本。正常受认证正式重算接口200再次处理原15场；只读核验38推荐/报价哈希、38结果、80台账版本与created_at全部相同，退出0（首命令漏Docker -i未执行脚本且无输出，不算通过，补-i重跑保存机器JSON才计证据）。这是持锁开销优化，不新增收益或算法版本。
 
 新完整监控14:14:00.737690开始，计划14:44:01以后终审；首样本health/ready200、TG connected/authorized为true且六租约有效，但state=unavailable，与布尔状态冲突，必须在终审单列，不能仅凭旧watch的布尔healthy字段认定全正常。等待完整消息、接口失败及锁等待证据，暂不声称线上锁超时已消失或三秒达标。任务独立PG/验证网络在测试完成后按归属清理，不动其他项目。
+
+## 14:14–14:44 完整真实冻结窗口终审
+
+2026-11-04 14:14:00.737690–14:44:03.495827 UTC，1802.9秒/55样本，监控exit0，原始JSONL SHA0e768f91a5261a01e38cdbd44b3aab90b2ae7cc59576aade75c2da5e3f7a8665。health/ready全部200、6群租约始终有效单owner、无sample_error；首样本state=unavailable但connected/authorized=true，旧监控末行telegram_all_healthy=true未检查state，终审新增独立异常表，不据布尔值判健康。只读精确截点10自然帖/8eligible，1succeeded/6unresolved/1queued，7当前回执、0漏job、无截断；另2帖unsupported未进入模型，不混为已审核。自然图片大3.75实际接受1条，模型176146.744ms、事件至结论220101.886ms，3秒失败。
+
+完整时间有界API日志统计exit0：live164×200、reconciliation322×200+1×503、delete22×200、unclassified8×200；全路由3个LockNotAvailableError、13个TimeoutError，不能归入全部采集接口或因采样200忽略。12当期事件版本接收入库P9510050.4ms、仅3个≤3秒，这不是模型端到端。窗口稳定性与延迟验收失败，已恢复未通过状态；不以7个回执称全部专家完成。原始明细/日志脱敏阶段统计与只读逐帖审计保存在任务运行证据目录。
+
+下一阶段E222固定候选已通过1251完整测试，14:45:10暂停新claim等待自然idle，仅API/worker部署；E223补采锁序已独立PG复现死锁，单例修复通过、30API用例46.547秒exit0，完整冻结套件进行中，不混入E222。模型固定deepseek-v4.1-flash，不改推理参数，不捏造未知滚球计分规则。
