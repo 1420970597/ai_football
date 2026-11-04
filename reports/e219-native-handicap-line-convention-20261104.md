@@ -1,6 +1,6 @@
 # E219 原生让球方向口径核验
 
-更新时间：2026-11-04 13:16 UTC。状态：完整隔离验证通过，候选镜像已构建，未改线上数据/规则。
+更新时间：2026-11-04 13:35 UTC。状态：已部署，真实结算修正及双端浏览器通过，新完整观察中。
 
 目标：统一原生盘口、模型所见选项、页面与专家结算的线值含义，防止客队方向翻转。责任目录services/collector、services/api、web/app、tests、docs/platform-v2、reports。依赖旧协议实际字段及不可变推荐/报价证据，当前E216完整窗口保持冻结。
 
@@ -27,3 +27,9 @@ Docker真实Chromium隔离UI：候选web使用独立internal网络，浏览器�
 历史影响只读审计37条非零原生客队让球推荐（未截断），其中31条有正式赛果，离线候选重算4条结果变化：5704916半输→半赢、5701751半赢→全赢、5808249两条全输→走盘。此时均未落库，不属于实盘收益。计划通过已有受认证内部正式重算接口处理15场真实赛果，新增算法版本、保留旧台账；部署前后核验每条不可变推荐及报价证据哈希，不能SQL覆写结果。首次新增只读审计误查信号表quote_id/evidence字段而UndefinedColumnError退出1，按实际schema分开查询v2_quote_evidence后重跑。
 
 部署准备按每个现有服务自身Compose标签还原配置链，追加镜像覆盖，四服务`config --quiet`退出0。E217完整窗截止13:23:40前不切换；之后先保存全窗证据，再取得无活动审核的scheduler gate切换，健康检查仅作为发布前置，真实结算/原图/模型回执及下一完整窗另行验收。模型继续deepseek-v4.1-flash，不改秘密、权限、交易许可或原生选项身份。
+
+真实部署：gate13:24:45.916暂停领取，13:31:04.111当前活动审核全部退出后取得idle。原8场消息在E216旧上下文第三attempt最终succeeded，实际3signal/8binding，先前2timeout保留；不计作新检索策略的效果。上下文联合改动实际提交1b2adcd，API/worker/MCP/web用上述同SHA镜像顺序无依赖重建，Hermes仅重启固定原镜像；存储/远端连接/collector不重建。发布脚本错误假定worker/MCP存在Docker Health字段，35次轮询不能通过，deploy命令退出1，trap正常触发gate_released，未无限暂停或中途终止活动审核。随后针对实际服务补验证：API healthz/readyz均200；带现有受保护token的MCP JSON-RPC initialize返回200/protocol2025-03-26；worker/MCP Running=true、Restarting=false、RestartCount0；Hermes healthy且运行读取模型deepseek-v4.1-flash和两份selection_line指引断言通过。该发布检查失败保留，未据之回滚实际已运行服务或误报整条deploy退出0。
+
+正式重算及不可变核对：正常授权`POST /internal/collector/results/rebuild`返回200，15场真实赛果使用football-asian-4-native-line-basis新增结算版本。前后只读审计38条推荐与引用报价证据哈希完全相同、42条旧台账逐项完整保留；31条可与离线重算对照且结果一致，4条实际修正为half_win/win/push/push（两个原loss已正确走盘），验证退出0。待结算且score_basis未知的记录仍待结算，不为清零强行获利；这些专家一单位统计变更不属于真实账户利润。
+
+线上真实Chromium（无mock）：1440/390两端各点击五状态并检查API200、每条返回fixture.phase与筛选一致、aria-pressed正确；跳转真实leyu:5808249完场详情，各20个非零原生客队盘口/信号检查selection_line=-line且页面一致，共40检查，无JS错误或弹窗横溢，退出0；手机截图另实际视觉复核。页面明确完场及盘口关闭，不把历史价格当实时有效报价。运行证据e219-live-clicks.json及双端PNG。新1800秒只读监控于13:34:25.583206启动，首样本health/ready200、TG连接授权正常、六租约有效单owner；正式窗口到14:04:26以后，不以部署检查或已结算样本代表整个专家系统完成。
