@@ -787,6 +787,52 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         third = await self.observe()
         self.assertEqual(['15'], [item['platform_message_id'] for item in third])
 
+    async def test_recent_only_batch_fills_unused_history_capacity_without_duplicates(self):
+        now = datetime.now(timezone.utc)
+        for number in range(11, 15):
+            await self.seed(number)
+            await self.pool.execute(
+                'UPDATE v2_telegram_events SET source_version_at=$2 WHERE platform_message_id=$1',
+                str(number), now - timedelta(minutes=15-number),
+            )
+        first = await self.observe(limit=3)
+        self.assertEqual(['14', '13', '12'], [item['platform_message_id'] for item in first])
+        self.assertEqual(3, len({item['claim_id'] for item in first}))
+        second = await self.observe(limit=3)
+        self.assertEqual(['11'], [item['platform_message_id'] for item in second])
+        self.assertEqual([], await self.observe(limit=3))
+
+    async def test_history_only_batch_fills_unused_recent_capacity_in_fifo_order(self):
+        now = datetime.now(timezone.utc)
+        for number in range(11, 15):
+            await self.seed(number)
+            await self.pool.execute(
+                'UPDATE v2_telegram_events SET source_version_at=$2,next_check_at=$3 '
+                'WHERE platform_message_id=$1', str(number), now-timedelta(days=3),
+                now-timedelta(minutes=number),
+            )
+        first = await self.observe(limit=3)
+        self.assertEqual(['14', '13', '12'], [item['platform_message_id'] for item in first])
+        second = await self.observe(limit=3)
+        self.assertEqual(['11'], [item['platform_message_id'] for item in second])
+
+    async def test_locked_newest_recent_event_does_not_block_mixed_batch_or_disappear(self):
+        now = datetime.now(timezone.utc)
+        for number, age in ((11, 1), (12, 2), (13, 3), (14, 180)):
+            await self.seed(number)
+            await self.pool.execute(
+                'UPDATE v2_telegram_events SET source_version_at=$2 WHERE platform_message_id=$1',
+                str(number), now-timedelta(minutes=age),
+            )
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.fetchval(
+                    "SELECT id FROM v2_telegram_events WHERE platform_message_id='11' FOR UPDATE")
+                first = await self.observe(limit=3)
+                self.assertEqual(['12', '13', '14'], [item['platform_message_id'] for item in first])
+        second = await self.observe(limit=3)
+        self.assertEqual(['11'], [item['platform_message_id'] for item in second])
+
     async def test_recent_five_minutes_and_historical_six_hours_start_at_ack(self):
         now = datetime.now(timezone.utc)
         for number, age, seconds in ((11,timedelta(hours=1),300),(12,timedelta(days=10),21600)):

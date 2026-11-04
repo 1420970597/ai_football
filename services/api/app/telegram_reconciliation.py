@@ -67,48 +67,40 @@ async def claim_events(conn, source_id, owner, limit, request_id):
     if replay:
         return [_claim_response(row, row['reconcile_claim_id'], row['reconcile_lease_until'])
                 for row in replay]
-    recent = await conn.fetch(
-        "SELECT e.id,e.platform_message_id,e.version_key,e.content FROM v2_telegram_events e "
+    # One statement gives all buckets the same snapshot. Late arrivals remain
+    # due for the next claim; filling a batch must not chase concurrent writes.
+    rows = await conn.fetch(
+        "WITH recent AS MATERIALIZED ("
+        "SELECT e.id,e.platform_message_id,e.version_key,e.content,e.source_version_at,e.next_check_at "
+        "FROM v2_telegram_events e "
         f"WHERE e.source_id=$1 AND {available} "
-        "AND e.source_version_at>=now()-$3*interval '1 second' "
+        "AND e.source_version_at>=now()-$4*interval '1 second' "
         "ORDER BY e.source_version_at DESC,e.next_check_at,e.id "
-        "LIMIT $2 FOR UPDATE OF e SKIP LOCKED",
-        source_id, recent_limit, REALTIME_WINDOW_SECONDS,
+        "LIMIT $2 FOR UPDATE OF e SKIP LOCKED),"
+        "historical AS MATERIALIZED ("
+        "SELECT e.id,e.platform_message_id,e.version_key,e.content,e.source_version_at,e.next_check_at "
+        "FROM v2_telegram_events e "
+        f"WHERE e.source_id=$1 AND {available} "
+        "AND e.source_version_at<now()-$4*interval '1 second' "
+        "ORDER BY e.next_check_at,e.id "
+        "LIMIT ($3-(SELECT count(*) FROM recent)) FOR UPDATE OF e SKIP LOCKED),"
+        "extra_recent AS MATERIALIZED ("
+        "SELECT e.id,e.platform_message_id,e.version_key,e.content,e.source_version_at,e.next_check_at "
+        "FROM v2_telegram_events e "
+        f"WHERE e.source_id=$1 AND {available} "
+        "AND e.source_version_at>=now()-$4*interval '1 second' "
+        "AND NOT EXISTS(SELECT 1 FROM recent selected WHERE selected.id=e.id) "
+        "ORDER BY e.source_version_at DESC,e.next_check_at,e.id "
+        "LIMIT ($3-(SELECT count(*) FROM recent)-(SELECT count(*) FROM historical)) "
+        "FOR UPDATE OF e SKIP LOCKED) "
+        "SELECT id,platform_message_id,version_key,content FROM ("
+        "SELECT recent.*,0 AS bucket FROM recent UNION ALL "
+        "SELECT extra_recent.*,0 AS bucket FROM extra_recent UNION ALL "
+        "SELECT historical.*,1 AS bucket FROM historical) candidates "
+        "ORDER BY bucket,CASE WHEN bucket=0 THEN source_version_at END DESC,next_check_at,id",
+        source_id, recent_limit, limit, REALTIME_WINDOW_SECONDS,
     )
-    historical_limit = limit - len(recent)
-    historical = []
-    if historical_limit:
-        historical = await conn.fetch(
-            "SELECT e.id,e.platform_message_id,e.version_key,e.content FROM v2_telegram_events e "
-            f"WHERE e.source_id=$1 AND {available} "
-            "AND e.source_version_at<now()-$3*interval '1 second' "
-            "ORDER BY e.next_check_at,e.id "
-            "LIMIT $2 FOR UPDATE OF e SKIP LOCKED",
-            source_id, historical_limit, REALTIME_WINDOW_SECONDS,
-        )
-    remainder = limit - len(recent) - len(historical)
-    if remainder:
-        claimed_ids = [row['id'] for row in [*recent, *historical]]
-        recent.extend(await conn.fetch(
-            "SELECT e.id,e.platform_message_id,e.version_key,e.content FROM v2_telegram_events e "
-            f"WHERE e.source_id=$1 AND {available} "
-            "AND e.source_version_at>=now()-$3*interval '1 second' AND NOT(e.id=ANY($4::uuid[])) "
-            "ORDER BY e.source_version_at DESC,e.next_check_at,e.id "
-            "LIMIT $2 FOR UPDATE OF e SKIP LOCKED",
-            source_id, remainder, REALTIME_WINDOW_SECONDS, claimed_ids,
-        ))
-    remainder = limit - len(recent) - len(historical)
-    if remainder:
-        claimed_ids = [row['id'] for row in [*recent, *historical]]
-        historical.extend(await conn.fetch(
-            "SELECT e.id,e.platform_message_id,e.version_key,e.content FROM v2_telegram_events e "
-            f"WHERE e.source_id=$1 AND {available} "
-            "AND e.source_version_at<now()-$3*interval '1 second' AND NOT(e.id=ANY($4::uuid[])) "
-            "ORDER BY e.next_check_at,e.id "
-            "LIMIT $2 FOR UPDATE OF e SKIP LOCKED",
-            source_id, remainder, REALTIME_WINDOW_SECONDS, claimed_ids,
-        ))
-    return await _lease_events(conn, [*recent, *historical], owner, request_id)
+    return await _lease_events(conn, rows, owner, request_id)
 
 
 async def _locked_claim(conn, source_id, owner, event_id, version_key, claim_id):
