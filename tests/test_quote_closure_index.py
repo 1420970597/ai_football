@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import asyncpg
 
 from app.database import MIGRATIONS, apply_migrations, check_schema
 from tests import test_migrations
@@ -13,6 +14,31 @@ from tests import test_migrations
 class QuoteClosureIndexTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = test_migrations.MigrationTests.asyncSetUp
     asyncTearDown = test_migrations.MigrationTests.asyncTearDown
+
+    async def prior_schema(self):
+        with tempfile.TemporaryDirectory() as folder:
+            prior = Path(folder)
+            for path in MIGRATIONS.glob('*.sql'):
+                if path.name < '026':
+                    (prior / path.name).write_bytes(path.read_bytes())
+            await apply_migrations(self.conn, prior)
+
+    async def test_matching_concurrent_prebuild_is_accepted_without_rebuilding(self):
+        await self.prior_schema()
+        await self.conn.execute("CREATE INDEX CONCURRENTLY v2_quotes_nonclosed_fixture_idx ON v2_current_quotes(fixture_id) WHERE status <> 'closed'")
+        before = await self.conn.fetchrow("SELECT oid,relfilenode FROM pg_class WHERE oid='v2_quotes_nonclosed_fixture_idx'::regclass")
+        self.assertEqual(['026_quote_nonclosed_lookup.sql'], await apply_migrations(self.conn))
+        self.assertEqual(before, await self.conn.fetchrow("SELECT oid,relfilenode FROM pg_class WHERE oid='v2_quotes_nonclosed_fixture_idx'::regclass"))
+        await check_schema(self.conn)
+
+    async def test_wrong_prebuilt_index_is_rejected_and_migration_not_recorded(self):
+        await self.prior_schema()
+        await self.conn.execute("CREATE INDEX v2_quotes_nonclosed_fixture_idx ON v2_current_quotes(fixture_id) WHERE status = 'active'")
+        before = await self.conn.fetchval("SELECT pg_get_indexdef('v2_quotes_nonclosed_fixture_idx'::regclass)")
+        with self.assertRaisesRegex(asyncpg.RaiseError, 'definition or validity mismatch'):
+            await apply_migrations(self.conn)
+        self.assertEqual(before, await self.conn.fetchval("SELECT pg_get_indexdef('v2_quotes_nonclosed_fixture_idx'::regclass)"))
+        self.assertFalse(await self.conn.fetchval("SELECT EXISTS(SELECT 1 FROM v2_schema_migrations WHERE version='026_quote_nonclosed_lookup.sql')"))
 
     async def test_upgrade_preserves_rows_and_indexes_active_and_suspended_only(self):
         with tempfile.TemporaryDirectory() as folder:
