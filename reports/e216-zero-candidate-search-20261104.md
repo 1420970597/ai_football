@@ -13,3 +13,13 @@
 验收：真实重审先原名再短片段、返回目标候选且完整分页；如能确认双方、联赛、时间，则仅绑定对应比赛并按当时盘口状态决定是否可录入，不回填过期盘口；不符或歧义必须保持未解决。真实浏览器核对原图、当前模型及系统回执，记录请求耗时和工具轮次。修复后自然新帖逐条有任务、当前attempt模型和回执。失败保留原轨迹，不能为了通过检查强制同名或替换盘口线。
 
 候选冻结验证：独立detached提交 `5cecb3e84ae6cb2f8716c606ff16e18e5bc90287`，仅更新两份Hermes上下文/指引，运行绑定尚未修改。冻结后Docker命令 `python -m unittest tests.test_hermes_runner tests.test_hermes_fixture_contract tests.test_mcp_transport tests.test_review_search_scope` 33项、3.291秒、退出0，证据 `.runtime/e209-live/e216-frozen-targeted.log`。这证明固定技能加载和工具/范围边界未被破坏，不证明模型实际采用新检索策略；真实俄杯重审和新窗口仍待生效后验证。
+
+## 生效与真实样本（12:30 UTC）
+
+运行上下文提交 dd874fa 与冻结候选5cecb3e内容一致，33项隔离验证退出0；在E215完整窗口后通过idle gate切换，仅重启Hermes原容器，健康及实际模型deepseek-v4.1-flash/上下文校验通过，gate/deploy退出0。实际新窗口起点12:20:18.171183 UTC，尚未结束。
+
+真实管理员重审job cbbd648d-1563-4b78-8cc4-06614cf5c45f，原消息5c8bac78-4037-42f4-8c5e-6eca9de3cf8a（11:17:54，正文半大0.5及图片）。首次attempt5e0cda0b已完整搜索原名零结果，再列宁格6候选、哈巴罗5候选，实际工具唯一绑定leyu:5797631。模型读取图片并抽取上半场大0.5；当前上半场已结束、对应报价closed，不生成可投注信号。首次模型205635.548ms、claim-to-conclusion210275.773ms；refresh_unavailable工具回执触发已有一次market_recovery，不能把closed误当唯一重试原因。第二次attempt7fdfeeda刷新written，模型62006.552ms、claim-to-conclusion65876.517ms，最终unresolved，completion_verified=true、同attempt系统receipt存在、工具绑定同比赛、0accepted。不得把此历史补审当成原发布时间成功，更不能回填已关闭价格。
+
+真实Docker Playwright ai-football-browser:v2.0.0-dev命令运行e214-clicks.mjs及e216-browser-samples.json退出0：俄罗斯杯原图/模型/当前系统回执，以及既有已接受原图推荐，各在1440和390视口通过，共4项；页面无JS错误、无弹层横溢，模型文本与API一致、模型/receipt的attempt一致，俄罗斯杯identified_without_signal=1。截图/机器记录在.runtime/e209-live/e216-output/playwright，运行日志e216-browser.log。不把页面可见等同于已生成推荐。
+
+独立E217候选仅改Compose默认CPU，完整当前配置链Docker Compose解析，默认0.25/显式TUNNEL_CPUS=.17两项断言退出0；配置秘密未输出，运行资源尚未改变。实际项目两份env均无TUNNEL_CPUS条目（rg退出1表示无匹配，不是配置失败）。下一步继续E216完整1800秒、自然帖逐条审核与API分项，再决定线上资源调整。
