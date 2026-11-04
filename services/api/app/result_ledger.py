@@ -27,7 +27,7 @@ def result_facts(row):
 async def project_settlements(conn, fixture, version, facts):
     rows = await conn.fetch('SELECT s.*,' + QUOTE_VALID_SQL +
                             ' AS quote_valid FROM v2_expert_signals s WHERE fixture_id=$1 ORDER BY id FOR UPDATE', fixture['id'])
-    settled = 0
+    projections = []
     for row in rows:
         inputs = {'sport': fixture['sport'], 'kind': row['market_kind'], 'period': row['period'],
                   'phase': row['phase'], 'price': str(row['recommendation_price']), 'line': str(row['line']) if row['line'] is not None else None,
@@ -35,29 +35,51 @@ async def project_settlements(conn, fixture, version, facts):
                   'line_basis': line_basis(row, fixture['id'])}
         value = settle(inputs, facts) if row['quote_valid'] else pending('recommendation_quote_evidence_missing_or_mismatched')
         calculation = {'signal': inputs, 'result': facts}
-        await conn.execute(
-            'INSERT INTO v2_signal_settlements(signal_id,fixture_id,result_version,algorithm_version,outcome,unit_net,effective_stake,reason,calculation,created_at) '
-            'VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE((SELECT min(old.created_at) FROM v2_signal_settlements old '
-            'WHERE old.signal_id=$1 AND old.result_version=$3 AND old.outcome=$5 '
-            'AND old.unit_net IS NOT DISTINCT FROM $6 AND old.effective_stake=$7 AND old.reason=$8),now())) '
-            'ON CONFLICT(signal_id,result_version,algorithm_version) DO NOTHING',
-            row['id'], fixture['id'], version, ALGORITHM_VERSION, value.outcome, value.unit_net,
-            value.effective_stake, value.reason, calculation)
-        recorded = await conn.fetchrow(
-            'SELECT * FROM v2_signal_settlements WHERE signal_id=$1 AND result_version=$2 AND algorithm_version=$3',
-            row['id'], version, ALGORITHM_VERSION)
+        projections.append((row['id'], value, calculation))
+    if projections:
+        await _store_settlement_batch(conn, fixture['id'], version, projections)
+    return {'settled': sum(value.outcome != 'pending' for _, value, _ in projections), 'signals': len(rows)}
+
+
+async def _store_settlement_batch(conn, fixture_id, version, projections):
+    """Keep the caller's fixture/signal locks while bounding remote round trips."""
+    proposed = [{'signal_id': str(signal_id), 'outcome': value.outcome,
+                 'unit_net': str(value.unit_net) if value.unit_net is not None else None,
+                 'effective_stake': str(value.effective_stake), 'reason': value.reason, 'calculation': calculation}
+                for signal_id, value, calculation in projections]
+    await conn.execute(
+        'WITH proposed AS (SELECT * FROM jsonb_to_recordset($4::jsonb) AS p('
+        'signal_id uuid,outcome text,unit_net numeric,effective_stake numeric,reason text,calculation jsonb)) '
+        'INSERT INTO v2_signal_settlements(signal_id,fixture_id,result_version,algorithm_version,outcome,unit_net,effective_stake,reason,calculation,created_at) '
+        'SELECT p.signal_id,$1,$2,$3,p.outcome,p.unit_net,p.effective_stake,p.reason,p.calculation,'
+        'COALESCE((SELECT min(old.created_at) FROM v2_signal_settlements old '
+        'WHERE old.signal_id=p.signal_id AND old.result_version=$2 AND old.outcome=p.outcome '
+        'AND old.unit_net IS NOT DISTINCT FROM p.unit_net AND old.effective_stake=p.effective_stake '
+        'AND old.reason=p.reason),now()) FROM proposed p ORDER BY p.signal_id '
+        'ON CONFLICT(signal_id,result_version,algorithm_version) DO NOTHING',
+        fixture_id, version, ALGORITHM_VERSION, proposed)
+    recorded = await conn.fetch(
+        'SELECT * FROM v2_signal_settlements WHERE signal_id=ANY($1::uuid[]) '
+        'AND result_version=$2 AND algorithm_version=$3 ORDER BY signal_id',
+        [signal_id for signal_id, _, _ in projections], version, ALGORITHM_VERSION)
+    by_signal = {row['signal_id']: row for row in recorded}
+    for signal_id, value, calculation in projections:
+        row = by_signal.get(signal_id)
         expected = (value.outcome, value.unit_net, value.effective_stake, value.reason, calculation)
-        actual = tuple(recorded[key] for key in ('outcome','unit_net','effective_stake','reason','calculation'))
+        actual = tuple(row[key] for key in ('outcome', 'unit_net', 'effective_stake', 'reason', 'calculation')) if row else None
         if actual != expected:
             raise HTTPException(409, '不可变结算证据与重算不一致，必须保留原记录并核对算法版本')
-        # Replaying the same result must not move its return to a new day.
-        await conn.execute(
-            "UPDATE v2_expert_signals SET outcome=$2,unit_net=$3,effective_stake=$4,settlement_reason=$5,result_version=$6,"
-            "settled_at=CASE WHEN $2='pending' THEN NULL ELSE $7::timestamptz END WHERE id=$1",
-            row['id'], value.outcome, value.unit_net, value.effective_stake, value.reason, version,
-            recorded['created_at'])
-        settled += value.outcome != 'pending'
-    return {'settled': settled, 'signals': len(rows)}
+    # Validate the entire immutable batch before changing any signal projection.
+    # Replaying the same result must not move its return to a new day.
+    updated = [{'signal_id': str(row['signal_id']), 'outcome': row['outcome'],
+                'unit_net': str(row['unit_net']) if row['unit_net'] is not None else None,
+                'effective_stake': str(row['effective_stake']), 'reason': row['reason'],
+                'created_at': row['created_at'].isoformat()} for row in recorded]
+    await conn.execute(
+        "UPDATE v2_expert_signals s SET outcome=p.outcome,unit_net=p.unit_net,effective_stake=p.effective_stake,"
+        "settlement_reason=p.reason,result_version=$2,settled_at=CASE WHEN p.outcome='pending' THEN NULL ELSE p.created_at END "
+        "FROM jsonb_to_recordset($1::jsonb) AS p(signal_id uuid,outcome text,unit_net numeric,"
+        "effective_stake numeric,reason text,created_at timestamptz) WHERE s.id=p.signal_id", updated, version)
 
 
 async def rebuild_settlements(conn, fixture_id):

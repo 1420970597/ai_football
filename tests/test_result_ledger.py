@@ -1,8 +1,10 @@
+import asyncio
 import json
 import os
 import unittest
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -67,6 +69,60 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
 
     async def submit(self, body):
         return await self.client.post('/internal/collector/results', json={'items':[body]}, headers={'Authorization':'Bearer isolated-collector'})
+
+    async def test_large_settlement_preserves_concurrent_fixture_binding_lock_budget(self):
+        signals = [await self.signal(line=str(Decimal('2') + Decimal(index) / 4)) for index in range(8)]
+        self.assertEqual(200, (await self.submit(self.result(home=5, away=1))).status_code)
+        job, attempt = uuid.uuid4(), uuid.uuid4()
+        await self.pool.execute(
+            "INSERT INTO v2_analysis_jobs(id,message_id,source_id,expert_id,state,attempt_id,lease_until,idempotency_key) "
+            "VALUES($1,$2,$3,$4,'running',$5,now()+interval '90 seconds',$6)",
+            job, self.message, self.source, self.expert, attempt, str(job))
+        latest = await self.pool.fetchrow("SELECT * FROM v2_fixture_results WHERE fixture_id='fixture'")
+        facts = result_ledger.result_facts(latest)
+        locked = asyncio.Event()
+
+        class RemoteConnection:
+            # A conservative WAN delay at the connection boundary reproduces
+            # the measured 255ms remote round trip without production access.
+            def __init__(self, connection):
+                self.connection = connection
+
+            def __getattr__(self, name):
+                method = getattr(self.connection, name)
+                if name not in {'execute', 'fetch', 'fetchrow', 'fetchval'}:
+                    return method
+
+                async def delayed(*args, **kwargs):
+                    await asyncio.sleep(.15)
+                    return await method(*args, **kwargs)
+                return delayed
+
+        async def project():
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    fixture = await conn.fetchrow("SELECT id,sport FROM v2_fixtures WHERE id='fixture' FOR UPDATE")
+                    locked.set()
+                    return await result_ledger.project_settlements(RemoteConnection(conn), fixture, latest['version'], facts)
+
+        writer = asyncio.create_task(project())
+        await asyncio.wait_for(locked.wait(), 3)
+        binding_error = None
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("SET lock_timeout='1500ms'")
+                await conn.execute(
+                    "INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) "
+                    "VALUES($1,$2,'fixture','isolated-binding','{}')", job, attempt)
+        except asyncpg.LockNotAvailableError as exc:
+            binding_error = type(exc).__name__
+        finally:
+            projected = await writer
+        self.assertIsNone(binding_error, 'settlement held the fixture beyond the existing binding lock budget')
+        self.assertEqual({'settled': 8, 'signals': 8}, projected)
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings WHERE job_id=$1', job))
+        self.assertEqual(8, await self.pool.fetchval('SELECT count(*) FROM v2_signal_settlements'))
+        self.assertEqual(['win'] * 8, [r['outcome'] for r in await self.pool.fetch('SELECT outcome FROM v2_expert_signals WHERE id=ANY($1::uuid[])', signals)])
 
     async def test_native_away_home_view_line_rebuild_keeps_raw_snapshot_and_prior_ledger(self):
         signal = await self.signal(selection='away', line='1')
