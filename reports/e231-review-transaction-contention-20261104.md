@@ -19,3 +19,7 @@
 17:39被动传输调查设计：正式E232窗口固定时，在当前API与storage-tunnel各采集61次/10秒间隔的/proc/net/snmp、netstat及本容器cpu.stat。只保存自带名称的TCP重传/超时/丢包恢复/CPU限流计数和UTC，不读取连接地址、SQL、消息或凭据，不发网络探针、不改连接/SSH/资源。对齐同时间日志错误以判断是否同窗发生网络恢复或CPU停顿；相关性不是自动因果，缺少证据不改路由/出口或超时。
 
 17:42区分事件循环/DB等待：确认实际API uvicorn两worker、healthz为直接返回常量的async路由，不访问DB。追加600秒、每秒两条本容器localhost持久连接的healthz只读计时，2秒截止/总2req/s，不增加worker/资源、不打远端DB或重启，原无access log设置不改。连接不保证分别覆盖两个worker，不能外推所有进程；若本机无DB路径也慢，再与CPU/TCP和SQL错误对齐，未见证据不盲目线程化全部代码。
+
+17:54被动与本机计时完成：API/隧道各61次17:39:55–17:49:56，两个Docker exec进程exit0/stderr空；API重传/网络超时增量均0，隧道重传9（fast8/probe1）、网络超时增量0。两容器CPU累计限流19.045/27.008秒，但5个真实DB Timeout对应10秒桶均无TCP重传，且17:42:27那一桶API/隧道都0限流；因此这几项不是这5个超时的充分解释。仅10秒桶及累计数，未排除更早请求阶段或远端主机问题，不称根因已找到。
+
+本机无DB健康17:41:54.567855–17:51:54.469185共600样本1200请求全200，P50/P95 3.479/5.402ms、max90.115ms，exit0；两个持久连接未保证覆盖两个worker，仍不能排除其他worker停顿。只保存计时/状态，未读取秘密。汇总docker run --rm --network none --cpus0.1 --memory64m现有API镜像执行e231-probe-summary.py，exit0，证据e231-probe-summary-final.json；原错误时间/脱敏帧在e231-error-moments-mid.json。正式E232窗仍到17:55:06以后才终审。
