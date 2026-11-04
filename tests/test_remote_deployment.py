@@ -169,6 +169,20 @@ class RemoteTransportTests(unittest.TestCase):
         conn=http.client.HTTPConnection('127.0.0.1',self.bridge.server_port,timeout=2)
         conn.request(method,path,body=body,headers={'Authorization':'Bearer '+TOKENS.get(token,token),**(headers or {})})
         result=conn.getresponse();result.read();snapshot=(result.status,result.headers);conn.close();return snapshot
+    def logged_request(self,*args,**kwargs):
+        from infra.remote.api_bridge import log as bridge_log
+        recorded=threading.Event()
+        original=bridge_log.info
+        def emit(*values,**options):
+            try:return original(*values,**options)
+            finally:recorded.set()
+        # HTTP response delivery precedes the server's finally block. Keep
+        # capture and any caller's threshold patch alive until logging ends.
+        with patch.object(bridge_log,'info',side_effect=emit):
+            with self.assertLogs('platform.remote_bridge',level='INFO') as captured:
+                status=self.request(*args,**kwargs)
+                self.assertTrue(recorded.wait(2),'bridge request did not finish logging')
+        return status,'\n'.join(captured.output)
     def test_single_http_atomic_snapshot_through_unix_no_split(self):
         body=b'{' + b' '* (1024*1024+7) + b'}'
         self.assertEqual(200,self.request('POST','/internal/collector/fixtures',body))
@@ -219,9 +233,8 @@ class RemoteTransportTests(unittest.TestCase):
         self.assertEqual([],self.upstream.calls)
     def test_broken_tunnel_returns503_without_retry_and_recovers_next_explicit_request(self):
         original=self.bridge.socket_path;self.bridge.socket_path=original+'.absent'
-        with self.assertLogs('platform.remote_bridge',level='INFO') as captured:
-            self.assertEqual(503,self.request('GET','/internal/collector/config'))
-        evidence='\n'.join(captured.output)
+        status,evidence=self.logged_request('GET','/internal/collector/config')
+        self.assertEqual(503,status)
         self.assertIn('status=503 category=FileNotFoundError phase=upstream_request',evidence)
         self.assertNotIn(self.bridge.socket_path,evidence)
         self.assertEqual([],self.upstream.calls)
@@ -233,9 +246,8 @@ class RemoteTransportTests(unittest.TestCase):
         identity='11111111-1111-1111-1111-111111111111'
         body=b'{"private":"DO-NOT-LOG-THIS-BODY"}'
         with patch('infra.remote.api_bridge.SLOW_REQUEST_MS',0):
-            with self.assertLogs('platform.remote_bridge',level='INFO') as captured:
-                self.assertEqual(200,self.request('POST','/internal/executor/jobs/'+identity+'/finish',body,token='executor'))
-        evidence='\n'.join(captured.output)
+            status,evidence=self.logged_request('POST','/internal/executor/jobs/'+identity+'/finish',body,token='executor')
+        self.assertEqual(200,status)
         self.assertIn('route=/internal/executor/jobs/:id/finish status=200',evidence)
         for private in (identity,body.decode(),TOKENS['executor'],'Authorization','Bearer'):
             self.assertNotIn(private,evidence)
@@ -247,9 +259,8 @@ class RemoteTransportTests(unittest.TestCase):
         for _ in range(16):
             self.assertTrue(self.bridge.slots.acquire(blocking=False))
         try:
-            with self.assertLogs('platform.remote_bridge',level='INFO') as captured:
-                self.assertEqual(503,self.request('POST','/internal/executor/claim?live_capable=false',token='executor'))
-            evidence='\n'.join(captured.output)
+            status,evidence=self.logged_request('POST','/internal/executor/claim?live_capable=false',token='executor')
+            self.assertEqual(503,status)
             self.assertIn('route=/internal/executor/claim status=503 category=capacity phase=admission',evidence)
             self.assertNotIn('live_capable',evidence)
             self.assertEqual([],self.upstream.calls)
