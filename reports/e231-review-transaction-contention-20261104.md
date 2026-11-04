@@ -29,3 +29,9 @@
 18:15远端采样结束：18:00:27–18:10:28，61样本/SSH与远端探针exit0/stderr空，cpu.max max/CPU配额限流0、memory.events各项增量0。完整CPU/IO/内存pressure累计停顿1.404/18.894/2.553秒，IO avg10最高9.85%，但两个真实DB Timeout对应桶IO仅130/177毫秒，不能单凭累计IO直接解释5秒超时。容器内pressure不能代表全部远端主机或网络。Docker隔离汇总exit0，e231-remote-budget-summary.json。
 
 后续设计：提高pg_stat_activity脱敏采样至600秒/每秒一次、单独只读连接、单查询5秒预算，既有65活动上限，增加UTC以精确对齐错误。relation_names使用明确POSIX空白类（仅诊断脚本，不改业务）；曾怀疑旧双反斜杠错误，复核它是Python正常转义，不能把此项说成旧诊断bug。原5秒采样可能遗漏2秒锁等待。保存固定operation、v2_表名、等待类型、时长、pid和阻塞链，不输出SQL/参数/账号/地址。每秒一次是有界临时诊断，不调整池/资源/查询截止，也不将新探针负载伪装自然流量。生产E234窗口与E235冻结测试继续。
+
+18:23抓到真实失败对应服务端IO：自然结果浏览器登录18:20:23.639213返回503/exit1，API帧admin_login→_create_session:132→execute，SQL是现有INSERT v2_sessions。高频采样同一pid3391432在18:20:18.762729至22.794455连续5样本DataFileRead，query_seconds0.858→4.857、无blockers；随后该连接消失，时间吻合5秒截止。至少此次超时确实包含服务端磁盘读取长等待，不能再说全是客户端准备或本机事件循环，不能外推全部19个错误同因。附近其他连接同时DataFileRead/WALWrite，原始字段仅关系名/时间无参数。
+
+下一步只读检查该PG容器自身memory.current/max/high/swap和宿主可见MemAvailable/Swap、数据卷剩余空间及当前数据库共享缓存/IO计时设置、v2_sessions实际表/索引大小。全部在Docker内、固定对象、有限一轮、不读账户/会话内容，不改缓存配置或重启共享数据库。先区分缓存缺页、磁盘满和宿主内存压力，再决定可在项目边界内验证的修复。此次浏览器失败不盖为通过，后续恢复必须原场景重跑。
+
+18:25只读环境结果：两探针exit0/stderr空。PG容器memory.current约1.42GiB/max与high无限制/swap约7MiB；宿主MemAvailable3883972KiB、盘使用23%，排除该时刻明显内存不足/盘满。宿主/proc/pressure/io full avg10=67.71%/avg60=52.88%/avg300=61.27%，远高于前一探针容器自身IO压力；两者范围不同，不能混称。数据库shared_buffers128MiB、effective_cache_size4GiB（规划估计非实际缓存）、work_mem4MiB、同步提交on、IO计时off。v2_sessions表40960字节/索引57344字节；current_quotes表约610MiB/索引约616MiB。pg_stat_database读块/临时文件为累计，9.22TB历史临时字节与21死锁不能归因本窗口。共享PG还承载旧数据，不按本项目需求擅自重启/修改全局配置或清理数据；继续定位项目当前查询及IO来源，只读结果不能直接承诺解决宿主存储延迟。
