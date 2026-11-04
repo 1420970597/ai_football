@@ -8,12 +8,14 @@ import os
 from types import SimpleNamespace
 import uuid
 from urllib.parse import urlsplit
+from unittest.mock import AsyncMock, patch
 
 import asyncpg
 import httpx
 
 from app.hermes_client import HermesProviderUnavailable, SYSTEM_PROMPT, delete_session, review_message
 from app.review_tool_evidence import replay_snapshot
+from app import blobstore
 
 COUNT = 260
 TARGET = COUNT - 1
@@ -162,6 +164,21 @@ async def run_case(conn, http, scenario):
         else:
             raise AssertionError('production client must reject truncated framework output')
         finish = 'length-rejected-by-client'
+    elif scenario == 'reply_image':
+        settings = SimpleNamespace(hermes_api_key='isolated-framework-key', hermes_api_url=HERMES+'/v1', hermes_model='hermes-agent')
+        source = {'source_name': '隔离群', 'display_nickname': '隔离专家', 'posted_at': data['posted_at'],
+                  'raw_text': data['raw_text'], 'media_objects': [], 'reply_text': '引用原文的推荐图片',
+                  'reply_archive': {'id': str(uuid.uuid4()), 'revision': 1, 'media_state': 'ready',
+                      'posted_at': data['posted_at'].isoformat(), 'media_objects': [{
+                          'object_key': 'v2/tg/isolated-reference.png', 'mime_type': 'image/png',
+                          'bytes': len(base64.b64decode(IMAGE)),
+                          'sha256': hashlib.sha256(base64.b64decode(IMAGE)).hexdigest()}]}}
+        with patch.object(blobstore, 'read_image', AsyncMock(return_value=base64.b64decode(IMAGE))) as read:
+            _, summary = await review_message(settings, source, job, attempt, client=http)
+        read.assert_awaited_once_with('v2/tg/isolated-reference.png')
+        assert summary['image_count'] == 1 and summary['image_bytes'] == len(base64.b64decode(IMAGE))
+        finish = summary['finish_reason']
+        assert finish == 'stop'
     else:
         body = {'model': 'hermes-agent', 'stream': False, 'messages': [
             {'role': 'system', 'content': SYSTEM_PROMPT}, {'role': 'user', 'content': [
@@ -310,7 +327,7 @@ async def run():
                 if scenario == 'timeout_cleanup':
                     await timeout_cleanup_case(conn, http)
                     continue
-                if scenario not in {'normal', 'adversarial', 'length', 'budget', 'parallel', 'no_intent', 'provider_503'}:
+                if scenario not in {'normal', 'adversarial', 'length', 'budget', 'parallel', 'no_intent', 'provider_503', 'reply_image'}:
                     raise RuntimeError('unknown isolated scenario')
                 await run_case(conn, http, scenario)
     finally:

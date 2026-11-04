@@ -11,7 +11,7 @@ import uuid
 import httpx
 from . import database
 from .config import load_settings
-from .hermes_client import HermesProviderUnavailable, delete_session, resolve_review_settings, review_message
+from .hermes_client import HermesProviderUnavailable, ReplyMediaPending, delete_session, resolve_review_settings, review_message
 from .review_state import active_job, trace
 from .review_summary import record_summary
 from .review_recovery import market_recovery
@@ -25,7 +25,7 @@ log = logging.getLogger("platform.review-worker")
 CONCURRENCY = max(1, min(8, int(os.environ.get("REVIEW_WORKER_CONCURRENCY", "2"))))
 EXPERT_CONCURRENCY_FLOOR = max(1, min(CONCURRENCY, int(os.environ.get("REVIEW_EXPERT_CONCURRENCY_FLOOR", "1"))))
 MAX_ATTEMPTS = 5
-PERSISTENT_RETRY_FAILURES = frozenset({'provider_transient', 'timeout', 'network'})
+PERSISTENT_RETRY_FAILURES = frozenset({'provider_transient', 'timeout', 'network', 'reply_media_pending'})
 LEASE_SECONDS = 90
 HEARTBEAT_SECONDS = 20
 REVIEW_TIMEOUT = max(60, min(1800, int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "600"))))
@@ -58,6 +58,8 @@ class ReviewEvidenceUnavailable(TimeoutError):
 
 def failure_category(exc: BaseException) -> tuple[str, bool]:
     """Return a bounded, non-sensitive failure class and retry policy."""
+    if isinstance(exc, ReplyMediaPending):
+        return 'reply_media_pending', True
     if isinstance(exc, LeaseLost):
         return "lease_lost", True
     if isinstance(exc, HermesProviderUnavailable):
@@ -197,11 +199,20 @@ async def _activate_claim(conn, job_id, attempt, mode, realtime_claims):
         'm.created_at AS event_persisted_at,'
         "GREATEST(0,round((extract(epoch FROM(clock_timestamp()-m.created_at))*1000)::numeric,3))::double precision AS event_to_claim_ms,"
         'e.display_nickname,s.display_name AS source_name,c.lease_until AS claimed_lease_until,'
-        'COALESCE((SELECT r.raw_text FROM v2_expert_messages r WHERE r.source_id=m.source_id '
-        'AND r.platform_message_id=m.reply_to_platform_message_id ORDER BY r.revision DESC LIMIT 1),'
-        "m.reply_context->>'text',m.reply_context->>'raw_text') AS reply_text "
+        "COALESCE(CASE WHEN r.deleted_at IS NULL THEN r.raw_text END,"
+        "m.reply_context->>'text',m.reply_context->>'raw_text') AS reply_text,"
+        "CASE WHEN r.id IS NULL THEN NULL ELSE jsonb_build_object('id',r.id,'revision',r.revision,"
+        "'posted_at',r.posted_at,'expert_id',r.expert_id,'media_state',r.media_state,"
+        "'deleted',r.deleted_at IS NOT NULL,'media_objects',CASE WHEN r.deleted_at IS NULL "
+        "THEN r.media_objects ELSE '[]'::jsonb END) END AS reply_archive "
         'FROM claimed c JOIN v2_expert_messages m ON m.id=c.message_id '
-        'JOIN v2_experts e ON e.id=m.expert_id JOIN v2_expert_sources s ON s.id=m.source_id',
+        'JOIN v2_experts e ON e.id=m.expert_id JOIN v2_expert_sources s ON s.id=m.source_id '
+        'LEFT JOIN LATERAL(SELECT r.* FROM v2_expert_messages r WHERE r.source_id=m.source_id AND ('
+        'r.platform_message_id=m.reply_to_platform_message_id OR r.id IN('
+        'SELECT ev.message_id FROM v2_telegram_events ev JOIN v2_telegram_event_members em ON em.event_id=ev.id '
+        "WHERE ev.source_id=m.source_id AND em.platform_message_id=CASE WHEN m.reply_to_platform_message_id ~ '^[0-9]{1,18}$' "
+        'THEN m.reply_to_platform_message_id::bigint ELSE NULL END)) '
+        'ORDER BY r.revision DESC,r.created_at DESC,r.id DESC LIMIT 1) r ON true',
         job_id, attempt, LEASE_SECONDS, mode,
         0 if mode == 'historical_replay' else min(realtime_claims + 1, REALTIME_CLAIMS_PER_REPLAY))
     if row is None:
@@ -471,6 +482,7 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
         await _add_trace(pool, job, "hermes_request", {
             "message_id": str(job["message"]["id"]), "raw_text": job["message"]["raw_text"],
             "reply_text": job["message"].get("reply_text"), "media_objects": job["message"]["media_objects"],
+            'reply_archive': job['message'].get('reply_archive'),
             "model": settings.hermes_model, "worker_attempt": job["attempts"],
             "review_mode": job.get('review_mode','real_time'),
             "configuration_version": getattr(settings, "configuration_version", None),

@@ -31,6 +31,17 @@ async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID, *, lock_
         "m.deleted_at,m.media_state,e.id AS expert_id,e.display_nickname,e.enabled AS expert_enabled,"
         "s.enabled AS source_enabled,se.enabled AS trusted,"
         "request.sequence_no AS hermes_request_sequence,request.configuration_version,request.model,"
+        "CASE WHEN request.reply_archive->>'media_state'='ready' "
+        "AND COALESCE((request.reply_archive->>'deleted')::boolean,false)=false "
+        "AND jsonb_array_length(request.reply_archive->'media_objects')>0 THEN NOT EXISTS("
+        "SELECT 1 FROM v2_expert_messages referenced WHERE referenced.id=(request.reply_archive->>'id')::uuid "
+        "AND referenced.source_id=m.source_id AND referenced.deleted_at IS NULL AND referenced.media_state='ready' "
+        "AND referenced.media_objects=request.reply_archive->'media_objects' "
+        "AND referenced.revision::text=request.reply_archive->>'revision' "
+        "AND NOT EXISTS(SELECT 1 FROM v2_expert_messages newer_reference "
+        "WHERE newer_reference.source_id=referenced.source_id "
+        "AND newer_reference.platform_message_id=referenced.platform_message_id "
+        "AND newer_reference.revision>referenced.revision)) ELSE false END AS reply_media_changed,"
         "EXISTS(SELECT 1 FROM v2_expert_messages newer WHERE newer.source_id=m.source_id "
         "AND newer.platform_message_id=m.platform_message_id AND newer.revision>m.revision) AS has_newer_revision"
         + trace_lock_column + " "
@@ -38,7 +49,7 @@ async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID, *, lock_
         "JOIN v2_experts e ON e.id=m.expert_id JOIN v2_expert_sources s ON s.id=m.source_id "
         "LEFT JOIN v2_source_experts se ON se.source_id=m.source_id AND se.expert_id=m.expert_id "
         "LEFT JOIN LATERAL (SELECT t.sequence_no,t.payload->>'configuration_version' AS configuration_version,"
-        "t.payload->>'model' AS model FROM v2_analysis_traces t WHERE t.job_id=j.id "
+        "t.payload->>'model' AS model,t.payload->'reply_archive' AS reply_archive FROM v2_analysis_traces t WHERE t.job_id=j.id "
         "AND t.trace_kind='hermes_request' AND t.payload->>'attempt_id'=j.attempt_id::text "
         "ORDER BY t.sequence_no DESC LIMIT 1) request ON TRUE "
         # Tool calls for one agent attempt are independently authenticated. A
@@ -52,6 +63,8 @@ async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID, *, lock_
         raise HTTPException(status_code=409, detail="message or source is not eligible")
     if job["has_newer_revision"]:
         raise HTTPException(status_code=409, detail="message has a newer revision")
+    if job['reply_media_changed']:
+        raise HTTPException(status_code=409, detail='referenced image message changed after review started')
     return job
 
 

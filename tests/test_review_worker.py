@@ -369,6 +369,67 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(job)
                 self.assertEqual(expected, job['message']['reply_text'])
 
+    async def test_claim_recovers_same_source_reply_image_and_album_member_without_deleted_fallback(self):
+        parent = uuid.uuid4()
+        image = {'object_key': 'v2/tg/reference.png', 'mime_type': 'image/png', 'bytes': 123, 'sha256': 'a'*64}
+        await self.pool.execute(
+            "INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at,media_objects,media_state) "
+            "VALUES($1,$2,$3,'album:trusted-reply','图中哈尔迪亚',now(),$4,'ready')",
+            parent, self.source, self.expert, [image])
+        event = uuid.uuid4()
+        await self.pool.execute(
+            "INSERT INTO v2_telegram_events(id,source_id,platform_message_id,version_key,source_version_at,event_kind,content,media_state,message_id) "
+            "VALUES($1,$2,'album:trusted-reply','reference-key',now(),'message','{}','ready',$3)", event, self.source, parent)
+        await self.pool.execute('INSERT INTO v2_telegram_event_members(event_id,platform_message_id) VALUES($1,20318)', event)
+        for reference in ('album:trusted-reply', '20318'):
+            await self.pool.execute('UPDATE v2_expert_messages SET reply_to_platform_message_id=$2 WHERE id=$1', self.message, reference)
+            await self.make_queued()
+            job = await worker.claim_job(self.pool)
+            self.assertEqual('图中哈尔迪亚', job['message']['reply_text'])
+            self.assertEqual(str(parent), job['message']['reply_archive']['id'])
+            self.assertEqual([image], job['message']['reply_archive']['media_objects'])
+        await self.pool.execute('UPDATE v2_expert_messages SET deleted_at=now() WHERE id=$1', parent)
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        self.assertTrue(job['message']['reply_archive']['deleted'])
+        self.assertEqual([], job['message']['reply_archive']['media_objects'])
+        other_source, other_expert = await self.add_expert()
+        await self.pool.execute("UPDATE v2_expert_messages SET source_id=$2,expert_id=$3,deleted_at=NULL WHERE id=$1",
+                                parent, other_source, other_expert)
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        self.assertIsNone(job['message']['reply_archive'], 'source isolation must apply to album member lookup')
+
+    async def test_reference_image_edit_or_deletion_invalidates_attempt_tool_access(self):
+        from app.review_state import active_job
+        from fastapi import HTTPException
+        parent = uuid.uuid4()
+        image = {'object_key': 'v2/tg/reference.png', 'mime_type': 'image/png'}
+        await self.pool.execute(
+            "INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at,media_objects,media_state) "
+            "VALUES($1,$2,$3,'reference-image','原图',now(),$4,'ready')", parent, self.source, self.expert, [image])
+        await self.pool.execute('UPDATE v2_expert_messages SET reply_to_platform_message_id=$2 WHERE id=$1',
+                                self.message, 'reference-image')
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        await worker._add_trace(self.pool, job, 'hermes_request', {'reply_archive': job['message']['reply_archive']})
+        async with self.pool.acquire() as conn:
+            self.assertIsNotNone(await active_job(conn, job['id'], job['attempt_id']))
+        for operation in ('delete', 'new_revision'):
+            with self.subTest(operation=operation):
+                if operation == 'delete':
+                    await self.pool.execute('UPDATE v2_expert_messages SET deleted_at=now() WHERE id=$1', parent)
+                else:
+                    await self.pool.execute('UPDATE v2_expert_messages SET deleted_at=NULL WHERE id=$1', parent)
+                    await self.pool.execute(
+                        "INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at,revision) "
+                        "VALUES($1,$2,$3,'reference-image','修订',now(),2)", uuid.uuid4(), self.source, self.expert)
+                async with self.pool.acquire() as conn:
+                    with self.assertRaises(HTTPException) as raised:
+                        await active_job(conn, job['id'], job['attempt_id'])
+                    self.assertEqual(409, raised.exception.status_code)
+                    self.assertIn('referenced image', raised.exception.detail)
+
     async def test_local_latest_reply_precedes_snapshot_and_other_source_is_isolated(self):
         for revision in (1, 2):
             await self.pool.execute(

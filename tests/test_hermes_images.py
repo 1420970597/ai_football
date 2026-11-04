@@ -20,6 +20,47 @@ PNG = png_bytes()
 
 
 class HermesImagesTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reply_images_are_native_separated_context_with_shared_limits(self):
+        current = {'object_key': 'current.png', 'mime_type': 'image/png'}
+        reply = {'object_key': 'reply.png', 'mime_type': 'image/png',
+                 'sha256': hashlib.sha256(PNG).hexdigest(), 'bytes': len(PNG)}
+        message = self.message([current])
+        message['reply_archive'] = {'id': 'archived-reply', 'media_state': 'ready', 'media_objects': [reply]}
+        with patch.object(blobstore, 'read_image', AsyncMock(return_value=PNG)) as read:
+            parts = await hermes_client._content_parts(message, 'review', 'attempt')
+        self.assertEqual(['current.png', 'reply.png'], [call.args[0] for call in read.await_args_list])
+        self.assertEqual(['text', 'text', 'image_url', 'text', 'image_url'], [part['type'] for part in parts])
+        self.assertIn('被引用原文', parts[3]['text'])
+        self.assertIn('不能据此猜新盘口', parts[0]['text'])
+        message['media_objects'] = [current]*10
+        with patch.object(blobstore, 'read_image', AsyncMock(return_value=PNG)) as read:
+            with self.assertRaisesRegex(RuntimeError, 'image count'):
+                await hermes_client._content_parts(message, 'review', 'attempt')
+            read.assert_not_awaited()
+        message['media_objects'] = [current]
+        with patch.object(blobstore, 'read_image', AsyncMock(return_value=PNG)), \
+             patch.object(hermes_client, 'MAX_REVIEW_IMAGE_BYTES', len(PNG)):
+            with self.assertRaisesRegex(RuntimeError, 'total bytes'):
+                await hermes_client._content_parts(message, 'review', 'attempt')
+
+    async def test_incomplete_reply_is_retryable_and_deleted_or_unsupported_images_are_not_read(self):
+        from app.worker import failure_category
+        for state in ('pending', 'failed'):
+            message = self.message([])
+            message['reply_archive'] = {'media_state': state, 'media_objects': []}
+            with patch.object(blobstore, 'read_image', AsyncMock()) as read:
+                with self.assertRaises(hermes_client.ReplyMediaPending) as raised:
+                    await hermes_client._content_parts(message, 'review', 'attempt')
+                self.assertEqual(('reply_media_pending', True), failure_category(raised.exception))
+                read.assert_not_awaited()
+        for reply in ({'media_state': 'ready', 'deleted': True}, {'media_state': 'unsupported'}):
+            message = self.message([])
+            message['reply_archive'] = reply | {'media_objects': [{'object_key': 'must-not-read.png'}]}
+            with patch.object(blobstore, 'read_image', AsyncMock()) as read:
+                parts = await hermes_client._content_parts(message, 'review', 'attempt')
+                self.assertEqual(['text'], [part['type'] for part in parts])
+                read.assert_not_awaited()
+
     def test_decoded_image_pixels_and_corrupt_payload_are_rejected(self):
         self.assertEqual(48, blobstore.validate_image(PNG)['width'])
         with patch.object(blobstore, 'MAX_IMAGE_PIXELS', 100):
