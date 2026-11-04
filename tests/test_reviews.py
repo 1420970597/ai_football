@@ -586,6 +586,92 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         stored = await self.pool.fetchrow('SELECT * FROM v2_current_quotes')
         self.assertFalse(fresh_quote(stored,15))
 
+    async def test_near_expiry_confirmation_refreshes_before_final_write(self):
+        await self._near_expiry_confirmation(refresh_available=True)
+
+    async def test_near_expiry_confirmation_cannot_record_after_failed_refresh(self):
+        await self._near_expiry_confirmation(refresh_available=False)
+
+    async def test_near_expiry_source_price_refreshes_before_final_write(self):
+        await self._near_expiry_confirmation(refresh_available=True, source_recent=True)
+
+    async def _near_expiry_confirmation(self, *, refresh_available, source_recent=False):
+        from app.quote_observation import CONTEXT_FIELDS, DETAIL_PATH, confirmation_for
+        from app.review_state import fresh_quote
+        base = datetime.now(timezone.utc)
+        source_time = base if source_recent else self.now-timedelta(hours=1)
+        fixture_id = await self.fixture(markets=[{'market_id': '4', 'market_name': '全场让球',
+            'kind': 'handicap', 'period': 'full_time', 'line': '-0.5', 'selection': 'home',
+            'price': '1.95', 'status': 'active',
+            'source_updated_at': source_time.isoformat(),
+            'received_at': self.now.isoformat(), 'play_id': '4',
+            'market_instance_id': 'native-market', 'selection_id': 'native-option'}])
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        settings = self.client._transport.app.state.settings
+        settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        settings.quote_max_age_seconds = 15
+        clock = [base]
+        observations = []
+        record_age_reads = []
+        recording = [False]
+        factory = httpx.AsyncClient
+
+        async def handler(request):
+            self.assertEqual(self.pool.get_size(), self.pool.get_idle_size())
+            if recording[0] and not refresh_available:
+                observations.append(None)
+                return httpx.Response(503, json={'detail': 'isolated refresh unavailable'})
+            q = dict(await self.pool.fetchrow('SELECT * FROM v2_current_quotes WHERE fixture_id=$1', fixture_id))
+            f = dict(await self.pool.fetchrow('SELECT * FROM v2_fixtures WHERE id=$1', fixture_id))
+            observation = {'path': DETAIL_PATH, 'started_at': clock[0].isoformat(),
+                'completed_at': clock[0].isoformat(), 'fixture_id': fixture_id,
+                'source_match_id': fixture_id, 'context': {k: f[k] for k in CONTEXT_FIELDS},
+                'quotes': [json.loads(json.dumps(q, default=str))]}
+            observations.append(observation)
+            return httpx.Response(200, json={'accepted': False,
+                'reason': 'parent_unchanged_recheck_quotes', 'snapshot_committed': True,
+                'current_observation': observation})
+
+        async def age_budget(settings, connection=None):
+            if recording[0]:
+                record_age_reads.append(True)
+                # No wall-clock sleeps: real SQL separates the two validations.
+                # The original witness has 3s left before the final 4s of work.
+                clock[0] = base+timedelta(seconds=12 if len(record_age_reads) == 1 else 16)
+            return 15
+
+        def confirm(observation, quote, fixture, max_age):
+            return confirmation_for(observation, quote, fixture, max_age, now=clock[0])
+
+        def fresh(quote, max_age):
+            return fresh_quote(quote, max_age, now=clock[0])
+
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)), \
+                patch.object(reviews, 'runtime_quote_max_age', side_effect=age_budget), \
+                patch.object(reviews, 'confirmation_for', side_effect=confirm), \
+                patch.object(reviews, 'fresh_quote', side_effect=fresh):
+            quote = await self.read_market(fixture_id)
+            self.assertTrue(quote['can_record'])
+            recording[0] = True
+            result = await self.post('record_expert_signals', signals=[{'fixture_id': fixture_id,
+                'quote_id': quote['quote_id'], 'evidence_text': 'Alpha1 -0.5'}])
+        self.assertEqual(1 if source_recent else 2, len(observations),
+                         'near-expiry witness needs a new precise read')
+        if not refresh_available:
+            self.assertEqual([], result.json()['accepted'], result.text)
+            self.assertEqual('quote_inactive_unknown_or_stale', result.json()['rejected'][0]['reason'])
+            self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+            self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_quote_evidence'))
+            return
+        self.assertEqual([], result.json()['rejected'], result.text)
+        self.assertEqual(1, len(result.json()['accepted']), result.text)
+        stored = await self.pool.fetchrow('SELECT * FROM v2_expert_signals')
+        self.assertEqual(source_time, stored['quote_time'])
+        evidence = await self.pool.fetchval('SELECT evidence FROM v2_quote_evidence')
+        self.assertEqual((base+timedelta(seconds=12)).isoformat(),
+                         evidence['current_confirmation']['started_at'])
+
     async def test_record_rechecks_expired_observation_and_records_current_price(self):
         fixture_id = await self.fixture()
         key, _ = await self.search_all()

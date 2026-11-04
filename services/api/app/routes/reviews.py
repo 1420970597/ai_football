@@ -27,6 +27,10 @@ from ..review_search_scope import continuation_scope, scope_key
 
 router = APIRouter(prefix="/internal/mcp")
 
+# Reserve one database command budget before reusing a precise observation.
+# The final write still validates its actual age against the unchanged policy.
+QUOTE_CONFIRMATION_WRITE_HEADROOM_SECONDS = 5
+
 
 class AttemptInput(BaseModel):
     review_id: uuid.UUID
@@ -387,8 +391,9 @@ async def record_expert_signals(body: RecordInput, request: Request):
                     'JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 '
                     'WHERE q.id=ANY($3::uuid[])', body.review_id, body.attempt_id, [p.quote_id for p in body.signals])
                 max_age = await runtime_quote_max_age(request.app.state.settings, conn)
-                stale_fixtures = {q['fixture_id'] for q in rows if q['phase'] in {'scheduled', 'live'} and q['status'] == 'active' and not fresh_quote(q, max_age) and not confirmation_for(
-                    q['read_context'].get('current_confirmation'), q, dict(q) | {'id': q['fixture_identity']}, max_age)}
+                reusable_age = max(0, max_age-QUOTE_CONFIRMATION_WRITE_HEADROOM_SECONDS)
+                stale_fixtures = {q['fixture_id'] for q in rows if q['phase'] in {'scheduled', 'live'} and q['status'] == 'active' and not fresh_quote(q, reusable_age) and not confirmation_for(
+                    q['read_context'].get('current_confirmation'), q, dict(q) | {'id': q['fixture_identity']}, reusable_age)}
             else:
                 stale_fixtures = set()
     # Shared collector budget still coalesces and limits provider calls. Do not
