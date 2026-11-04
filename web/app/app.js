@@ -67,6 +67,9 @@ const state = {
   messagePreviewSequence: 0,
   accountBound: false,
   accountSequence: 0,
+  accountPollTimer: null,
+  accountPollGeneration: 0,
+  accountPollStartedAt: 0,
   orders: [],
   orderCursor: null,
   dialogSequence: 0,
@@ -183,6 +186,7 @@ function route(
   if (page === "membership") loadPlans();
   if (page === "messages") loadMessages();
   if (page === "account") loadAccount();
+  else stopAccountPolling();
   if (page === "admin") loadAdmin();
   document.title =
     {
@@ -1034,7 +1038,60 @@ async function loadIdentities() {
   $("#user-logout").hidden = !state.user;
   $("#admin-logout").hidden = !state.admin;
 }
+function stopAccountPolling() {
+  clearTimeout(state.accountPollTimer);
+  state.accountPollGeneration++;
+  state.accountPollStartedAt = Date.now();
+}
+function renderAccountVerification(data) {
+  const tasks = data.tasks || [];
+  const current = tasks.find((task) => task.current_binding !== false);
+  const active = current && ["queued", "running"].includes(current.state);
+  const taskLabels = { queued: "已排队", running: "校验中", succeeded: "校验成功", failed: "校验失败", unknown: "结果未知", rejected: "授权被拒绝" };
+  const healthLabels = { healthy: "已通过校验", unverified: "未校验", expired: "授权已失效", rejected: "授权被拒绝", renewal_required: "需要重新授权" };
+  $("#account-health").textContent = data.account
+    ? (current?.recovery_action === "provider_identity_verification" ? "需要乐鱼身份验证" : current && current.state !== "succeeded" ? taskLabels[current.state] : healthLabels[data.account.health_state]) || "账户状态待核对"
+    : "未绑定";
+  const taskLine = (task) => `<p class="form-note">${esc({ verify: "账户校验", refresh: "账户刷新" }[task.kind] || task.kind)} · ${esc(taskLabels[task.state] || task.state)} · ${stamp(task.updated_at)}${task.current_binding === false ? " · 重新绑定前" : ""}${task.message ? `<br>${esc(task.message)}` : task.last_error ? `<br>${esc(task.last_error)}${task.provider_code ? " · " + esc(task.provider_code) : ""}` : ""}</p>`;
+  const history = tasks.filter((task) => task !== current);
+  const account = data.account;
+  $("#account-verification").innerHTML = account
+    ? `<p>${esc(account.account_label)} · 最近成功校验 ${account.last_verified_at ? stamp(account.last_verified_at) : "从未成功"}</p><p>可用余额 ${account.available_balance == null ? "尚未核验" : decimal(account.available_balance)} · 余额时间 ${account.balance_observed_at ? stamp(account.balance_observed_at) : "尚未取得"}</p>${current ? taskLine(current) : ""}${history.length ? `<details><summary>历史校验记录（${history.length}）</summary>${history.map(taskLine).join("")}</details>` : ""}`
+    : '<p class="muted">尚未绑定本人乐鱼账户。</p>';
+  const cooling = account?.renewal_retry_after && new Date(account.renewal_retry_after).getTime() > Date.now();
+  const authorizationForm = $('#leyu-device-authorization');
+  authorizationForm.hidden = !account || current?.recovery_action !== 'provider_identity_verification' || !!active || account.renewal_state === 'unknown';
+  authorizationForm.querySelector('button').disabled = !!cooling;
+  $("#verify-account").disabled = !account || !!active || !!cooling ||
+    (["rejected", "unknown"].includes(account.renewal_state) && !account.reverification_available) ||
+    (account.health_state === "rejected" && !account.reverification_available);
+  $("#verify-account").textContent = active ? "正在校验，请稍候" : cooling ? "登录冷却中" : account?.reverification_available ? "重新校验本人账户" : "排队无资金校验";
+  state.accountBound = !!account;
+  return !!active || !!cooling;
+}
+function scheduleAccountPolling(needed, generation, failures = 0) {
+  if (!needed || generation !== state.accountPollGeneration || state.page !== "account" || document.hidden) return;
+  if (Date.now() - state.accountPollStartedAt > 360000) {
+    $("#account-health").textContent = "校验尚未完成，请刷新账户";
+    return;
+  }
+  state.accountPollTimer = setTimeout(async () => {
+    try {
+      const data = await api("/accounts/leyu");
+      if (generation !== state.accountPollGeneration || state.page !== "account") return;
+      scheduleAccountPolling(renderAccountVerification(data), generation);
+    } catch (error) {
+      if (generation !== state.accountPollGeneration || state.page !== "account") return;
+      $("#account-health").textContent = "状态更新失败";
+      $$(".account-poll-error").forEach((element) => element.remove());
+      $("#account-verification").insertAdjacentHTML("beforeend", `<p class="form-note account-poll-error">${esc(error.message)}；${failures < 2 ? "稍后重试状态查询" : "请点击刷新账户重试"}。</p>`);
+      scheduleAccountPolling(failures < 2, generation, failures + 1);
+    }
+  }, failures ? 5000 : 2000);
+}
 async function loadAccount() {
+  stopAccountPolling();
+  const pollGeneration = state.accountPollGeneration;
   const sequence = ++state.accountSequence;
   $$("input,button", $("#leyu-form")).forEach(
     (input) => (input.disabled = true),
@@ -1069,23 +1126,9 @@ async function loadAccount() {
     $("#profile-form").elements.display_name.value = user.user.display_name;
     const data = await api("/accounts/leyu");
     if (sequence !== state.accountSequence) return;
-    $("#account-health").textContent = data.account
-      ? { healthy: "已通过校验", unverified: "未校验", expired: "授权已失效" }[
-          data.account.health_state
-        ] || data.account.health_state
-      : "未绑定";
+    scheduleAccountPolling(renderAccountVerification(data), pollGeneration);
     $("#leyu-form").elements.account_label.value =
       data.account?.account_label || "";
-    state.accountBound = !!data.account;
-    $("#account-verification").innerHTML = data.account
-      ? `<p>${esc(data.account.account_label)} · 最近校验 ${stamp(data.account.last_verified_at)}</p><p>可用余额 ${data.account.available_balance === null || data.account.available_balance === undefined ? "尚未核验" : decimal(data.account.available_balance)} · 余额时间 ${stamp(data.account.balance_observed_at)}</p>${(data.tasks || []).map((task) => `<p class="form-note">${esc({ verify: "账户校验", refresh: "账户刷新" }[task.kind] || task.kind)} · ${esc({ queued: "已排队", running: "校验中", succeeded: "校验成功", failed: "校验失败", unknown: "结果未知", rejected: "授权被拒绝" }[task.state] || task.state)}${task.last_error ? " · " + esc(task.last_error) : ""}</p>`).join("")}`
-      : '<p class="muted">尚未绑定本人乐鱼账户。</p>';
-    $("#verify-account").disabled = !data.account ||
-      (['rejected', 'unknown'].includes(data.account.renewal_state) && !data.account.reverification_available) ||
-      (data.account.health_state === 'rejected' && !data.account.reverification_available);
-    $("#verify-account").textContent = data.account?.reverification_available
-      ? '重新校验本人账户'
-      : '排队无资金校验';
     const b = data.betting || {};
     $("#betting-status").textContent =
       b.auto_enabled && !b.emergency_stopped
@@ -1387,6 +1430,22 @@ function events() {
       toast(error.message);
     }
   };
+  $('#leyu-device-authorization').onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const security_code = form.elements.security_code.value;
+    form.elements.security_code.value = '';
+    form.querySelector('button').disabled = true;
+    try {
+      await api('/accounts/leyu/device-authorization', { method: 'POST', body: { security_code } });
+      toast('授权安全码已提交，本次仅校验账户');
+      await loadAccount();
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      form.querySelector('button').disabled = false;
+    }
+  };
   $("#stats-help").onclick = () =>
     dialog(
       "专家统计口径",
@@ -1623,3 +1682,10 @@ $("#header-clock").textContent = dayKey() + " 北京时间";
 setInterval(() => {
   if (!document.hidden && state.page === "scores") loadMatches();
 }, 30000);
+document.addEventListener("visibilitychange", () => {
+  stopAccountPolling();
+  if (!document.hidden && state.page === "account" && state.user) {
+    const generation = state.accountPollGeneration;
+    scheduleAccountPolling(true, generation);
+  }
+});

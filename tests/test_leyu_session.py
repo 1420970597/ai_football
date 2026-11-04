@@ -141,6 +141,27 @@ class RenewalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("success", self.events[-1][1])
         self.assertFalse(self.events[-1][2]["login_submitted"])
 
+    async def test_authorized_device_code_uses_native_authCode_once_without_persistence(self):
+        bodies = []
+        def direct(request):
+            if request.url.path == PRE_INFO_PATH:
+                return httpx.Response(200, json={'status_code':6000,'data':{'ip':'1.1.1.1'}})
+            if request.url.path == LOGIN_PATH:
+                bodies.append(json.loads(request.content))
+                return httpx.Response(200, json={'status_code':6026})
+            raise AssertionError('rejected authorization must not launch')
+        renewer = self.renewer(config(leyu_app_token='',leyu_app_authorization_code='CODE1234'), direct)
+        with self.assertRaises(LeyuError):
+            await renewer.renew()
+        self.assertEqual(1, len(bodies))
+        self.assertEqual('CODE1234', bodies[0]['authCode'])
+        self.assertFalse(bodies[0]['isEmail'])
+        self.assertNotIn('sendCodeNum', bodies[0])
+        self.assertNotIn('eCode', bodies[0])
+        self.assertNotIn('leyu_app_authorization_code', renewer.config)
+        self.assertEqual([], self.updates)
+        self.assertNotIn('CODE1234', json.dumps(self.events))
+
     async def test_expired_app_token_only_login_uses_proxy_then_launch_direct(self):
         def direct(request):
             if request.url.path == PRE_INFO_PATH:

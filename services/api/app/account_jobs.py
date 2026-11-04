@@ -5,6 +5,7 @@ from decimal import Decimal
 import hashlib
 import hmac
 import json
+import re
 import uuid
 
 from fastapi import HTTPException
@@ -16,6 +17,32 @@ PROTOCOL_KEYS = frozenset({"leyu_app_host", "leyu_app_signing_config", "leyu_app
                            "leyu_login_proxy_url", "leyu_login_proxy_password_template"})
 SESSION_KEYS = frozenset({"leyu_app_host", "leyu_api_base", "leyu_origin", "leyu_request_id", "leyu_app_token"})
 LOGIN_PROTOCOL_KEYS = PROTOCOL_KEYS
+
+
+def public_task(row, binding_revision):
+    """Only bounded diagnostic fields may leave the private executor task."""
+    item = dict(row)
+    details = item.pop('details', {}) or {}
+    code = str(details.get('provider_code') or '')
+    code = code if re.fullmatch(r'[0-9]{1,12}', code) else ''
+    item['provider_code'] = code
+    item['current_binding'] = item['binding_revision'] == binding_revision
+    category = item.get('last_error') or ''
+    item['recovery_action'] = None
+    if (category == 'app_login_rejected' and code == '6026') or (details.get('device_authorization') and item['state'] in {'failed', 'rejected'}):
+        item['message'] = '乐鱼新设备身份验证' + (f'（{code}）' if code else '') + '未完成；请在常用设备的乐鱼 App 获取授权安全码，在下方提交。安全码过期或错误时请获取新码，不要重新绑定。'
+        item['recovery_action'] = 'provider_identity_verification'
+    elif category == 'app_login_rejected':
+        item['message'] = '乐鱼拒绝本次账户登录' + (f'（业务码 {code}）' if code else '') + '；请先核对官方 App 登录结果，不要反复提交相同凭据。'
+    elif category.endswith('_proxy_http_rejected'):
+        item['message'] = '登录代理拒绝连接' + (f'（HTTP {code}）' if code else '') + '；账户登录请求未发出，请检查登录代理配置和服务状态。'
+    elif item['state'] == 'unknown' or category == 'executor_lease_expired':
+        item['message'] = '本次校验结果无法确认；为避免重复登录已停止重试，请先核对官方账户状态。'
+    elif item['state'] == 'failed':
+        item['message'] = '本次账户校验未成功；请按错误类别检查连接或配置后重新校验。'
+    else:
+        item['message'] = ''
+    return item
 
 
 def identity_hash(key: bytes, username: str) -> str:

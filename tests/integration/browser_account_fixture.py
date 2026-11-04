@@ -23,17 +23,25 @@ EMAIL = 'extended@web-integration.invalid'
 evidence = {'kind': 'synthetic_no_provider', 'verified_jobs': 0, 'refresh_jobs': 0,
             'receipts': 0, 'transaction_calls': 0, 'failures': []}
 stop = threading.Event()
+next_failure = None
 
 
 async def control(action):
+    global next_failure
     conn = await asyncpg.connect(DSN)
     try:
         user = await conn.fetchrow('SELECT id FROM v2_users WHERE email=$1', EMAIL)
         if not user:
             raise ValueError('isolated user does not exist')
+        if action in {'fail-next-proxy', 'reject-next-device'}:
+            next_failure = action
+            return {'synthetic': True, 'next_failure': action}
         if action == 'age-user-session':
             await conn.execute("UPDATE v2_sessions SET reauthenticated_at=now()-interval '10 minutes' WHERE user_id=$1 AND session_kind='user'", user['id'])
             return {'aged': True}
+        if action == 'clear-login-cooldown':
+            await conn.execute('UPDATE v2_leyu_accounts SET renewal_retry_after=NULL WHERE user_id=$1', user['id'])
+            return {'synthetic': True, 'cooldown_cleared': True}
         if action != 'seed-receipts':
             raise ValueError('unknown synthetic action')
         account = await conn.fetchrow("SELECT * FROM v2_leyu_accounts WHERE user_id=$1 AND health_state='healthy'", user['id'])
@@ -49,6 +57,7 @@ async def control(action):
 
 
 def worker():
+    global next_failure
     with httpx.Client(timeout=5, trust_env=False, headers=HEADERS) as http:
         while not stop.wait(.3):
             try:
@@ -61,12 +70,27 @@ def worker():
                     continue
                 job, attempt = task['job_id'], task['attempt_id']
                 scope, config = task['scope'], task['config']
+                failure, next_failure = next_failure, None
                 if not config.get('leyu_request_id'):
                     identity = hashlib.sha256(('2001:' + config['leyu_app_login_name'].casefold()).encode()).hexdigest()
                     renewal = http.post(API + f'/jobs/{job}/renewal/claim', json={
                         'attempt_id': attempt, 'expected_revision': scope['revision'], 'identity_hash': identity})
                     renewal.raise_for_status()
                     renewal_id = renewal.json()['attempt_id']
+                    if failure:
+                        time.sleep(3)
+                        rejected = failure == 'reject-next-device'
+                        category = 'app_login_rejected' if rejected else 'proxy_login_proxy_http_rejected'
+                        code = '6026' if rejected else '410'
+                        status = 'rejected' if rejected else 'failed'
+                        finished = http.post(API + f'/jobs/{job}/renewal/finish', json={
+                            'attempt_id': attempt, 'renewal_attempt': renewal_id, 'status': status,
+                            'metadata': {'category': category, 'code': code, 'login_submitted': rejected}})
+                        finished.raise_for_status()
+                        result = http.post(API + f'/jobs/{job}/finish', json={
+                            'attempt_id': attempt, 'status': status, 'category': category, 'provider_code': code})
+                        result.raise_for_status()
+                        continue
                     persisted = http.put(API + f'/jobs/{job}/session', json={
                         'attempt_id': attempt, 'expected_revision': scope['revision'], 'renewal_attempt': renewal_id,
                         'updates': {'leyu_request_id': 'synthetic-private-request', 'leyu_api_base': 'https://synthetic.invalid'}})
@@ -117,7 +141,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         action = self.path.strip('/')
-        if action not in {'seed-receipts', 'age-user-session'}:
+        if action not in {'seed-receipts', 'age-user-session', 'fail-next-proxy', 'reject-next-device', 'clear-login-cooldown'}:
             return self.reply(404, {})
         try:
             self.reply(200, asyncio.run(control(action)))

@@ -77,6 +77,7 @@ class Executor:
     async def account_job(self, work):
         root = f"/jobs/{work['job_id']}"
         result = {"attempt_id": work["attempt_id"], "status": "failed", "category": ""}
+        manager = None
         try:
             async with asyncio.timeout(270):
                 manager = self.manager(work)
@@ -111,7 +112,8 @@ class Executor:
             raise
         except Exception as exc:
             category = exc.category if isinstance(exc, LeyuError) else type(exc).__name__
-            result.update(category=category, status="rejected" if category == "app_login_rejected" else "failed")
+            status = 'rejected' if category == 'app_login_rejected' else 'unknown' if getattr(manager, 'last_renewal_status', None) == 'unknown' else 'failed'
+            result.update(category=category, provider_code=exc.code if isinstance(exc, LeyuError) else '', status=status)
         await self.finish(root + "/finish", result)
 
     async def order_job(self, work):

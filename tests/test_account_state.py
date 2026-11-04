@@ -202,6 +202,151 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                                 ['leyu_app_host','leyu_app_signing_config'])
         self.assertEqual(409,(await self.api.post('/api/v1/accounts/leyu/verify')).status_code)
 
+    async def test_proxy_failure_retains_code_after_final_receipt_without_exposing_private_details(self):
+        await self.bind()
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        prefix=f"/internal/executor/jobs/{work['job_id']}"
+        claim=await self.worker_api.post(prefix+'/renewal/claim',json={
+            'attempt_id':work['attempt_id'],'expected_revision':1,'identity_hash':hashlib.sha256(b'2001:own-user').hexdigest()})
+        self.assertEqual(200,claim.status_code,claim.text)
+        renewal=await self.worker_api.post(prefix+'/renewal/finish',json={
+            'attempt_id':work['attempt_id'],'renewal_attempt':claim.json()['attempt_id'],'status':'failed',
+            'metadata':{'category':'proxy_login_proxy_http_rejected','code':'410','login_submitted':False}})
+        self.assertEqual(200,renewal.status_code,renewal.text)
+        # Compatible with an older executor that sends no provider_code in the final receipt.
+        body={'attempt_id':work['attempt_id'],'status':'failed','category':'proxy_login_proxy_http_rejected'}
+        final=await self.worker_api.post(prefix+'/finish',json=body)
+        self.assertEqual(200,final.status_code,final.text)
+        self.assertEqual(200,(await self.worker_api.post(prefix+'/finish',json=body)).status_code)
+        visible=(await self.api.get('/api/v1/accounts/leyu')).json()
+        task=visible['tasks'][0]
+        self.assertEqual('410',task['provider_code'])
+        self.assertTrue(task['current_binding'])
+        self.assertIn('账户登录请求未发出',task['message'])
+        self.assertIn('created_at',task)
+        for private in ('details','renewal_attempt','finish_sha256','own-password','own-user'):
+            self.assertNotIn(private,json.dumps(visible))
+        self.assertEqual(409,(await self.api.post('/api/v1/accounts/leyu/verify')).status_code)
+
+    async def test_login_cooldown_prevents_user_queue_and_background_refresh_until_expiry(self):
+        account=await self.healthy()
+        await self.pool.execute("UPDATE v2_leyu_accounts SET last_verified_at=now()-interval '5 minutes',renewal_retry_after=now()+interval '60 seconds' WHERE id=$1",account['id'])
+        self.assertEqual(409,(await self.api.post('/api/v1/accounts/leyu/verify')).status_code)
+        result=await self.worker_api.post('/internal/executor/dispatch')
+        self.assertEqual(200,result.status_code,result.text)
+        self.assertEqual(0,await self.pool.fetchval("SELECT count(*) FROM v2_account_jobs WHERE account_id=$1 AND state='queued'",account['id']))
+        await self.pool.execute("UPDATE v2_leyu_accounts SET renewal_retry_after=now()-interval '1 second' WHERE id=$1",account['id'])
+        await self.worker_api.post('/internal/executor/dispatch')
+        self.assertEqual(1,await self.pool.fetchval("SELECT count(*) FROM v2_account_jobs WHERE account_id=$1 AND state='queued'",account['id']))
+
+    async def test_rebinding_marks_previous_task_history_and_keeps_new_task_current(self):
+        account=await self.bind()
+        await self.pool.execute("UPDATE v2_account_jobs SET state='rejected',last_error='app_login_rejected',details=$2 WHERE account_id=$1",account['id'],{'provider_code':'6026','private':'must-not-be-public'})
+        await self.bind()
+        visible=(await self.api.get('/api/v1/accounts/leyu')).json()
+        self.assertTrue(visible['tasks'][0]['current_binding'])
+        self.assertEqual('queued',visible['tasks'][0]['state'])
+        self.assertFalse(visible['tasks'][1]['current_binding'])
+        self.assertEqual('6026',visible['tasks'][1]['provider_code'])
+        self.assertEqual('provider_identity_verification',visible['tasks'][1]['recovery_action'])
+        self.assertIn('新设备身份验证',visible['tasks'][1]['message'])
+        self.assertNotIn('must-not-be-public',json.dumps(visible))
+
+    async def test_same_provider_identity_keeps_device_when_rebinding_or_changing_password(self):
+        before=await self.bind()
+        previous=account_jobs.decode_document(b'k'*32,before['encrypted_credentials'])
+        response=await self.api.put('/api/v1/accounts/leyu',json={
+            'account_label':'新名称','username':'OWN-USER','password':'updated-password'})
+        self.assertEqual(200,response.status_code,response.text)
+        after=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',before['id'])
+        current=account_jobs.decode_document(b'k'*32,after['encrypted_credentials'])
+        self.assertEqual(previous['device_uuid'],current['device_uuid'])
+        self.assertEqual('updated-password',current['password'])
+        self.assertGreater(after['binding_revision'],before['binding_revision'])
+        self.assertIsNone(after['encrypted_session'])
+        other=await self.api.put('/api/v1/accounts/leyu',json={
+            'account_label':'另一账户','username':'other-provider-user','password':'other-password'})
+        self.assertEqual(200,other.status_code,other.text)
+        changed=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',before['id'])
+        self.assertNotEqual(previous['device_uuid'],account_jobs.decode_document(b'k'*32,changed['encrypted_credentials'])['device_uuid'])
+
+    async def device_challenge(self):
+        account = await self.bind()
+        await self.pool.execute("UPDATE v2_leyu_accounts SET health_state='rejected',renewal_state='rejected' WHERE id=$1", account['id'])
+        await self.pool.execute("UPDATE v2_account_jobs SET state='rejected',last_error='app_login_rejected',details=$2 WHERE account_id=$1", account['id'], {'provider_code': '6026'})
+        return account
+
+    async def test_device_authorization_is_encrypted_one_use_and_not_public(self):
+        account = await self.device_challenge()
+        response = await self.api.post('/api/v1/accounts/leyu/device-authorization', json={'security_code': 'CODE1234'})
+        self.assertEqual(202, response.status_code, response.text)
+        task = await self.pool.fetchrow("SELECT * FROM v2_account_jobs WHERE account_id=$1 AND state='queued'", account['id'])
+        self.assertNotIn('CODE1234', json.dumps(task['details']))
+        self.assertEqual('CODE1234', decrypt_secret(b'k'*32, task['details']['encrypted_authorization_code']))
+        self.assertNotIn('encrypted_authorization', (await self.api.get('/api/v1/accounts/leyu')).text)
+        self.assertEqual(409, (await self.api.post('/api/v1/accounts/leyu/device-authorization', json={'security_code':'NEXT1234'})).status_code)
+        work = (await self.worker_api.post('/internal/executor/claim')).json()
+        self.assertEqual('CODE1234', work['config']['leyu_app_authorization_code'])
+        stored = await self.pool.fetchval('SELECT details FROM v2_account_jobs WHERE id=$1', task['id'])
+        self.assertNotIn('encrypted_authorization_code', stored)
+        self.assertTrue(stored['device_authorization'])
+        self.assertEqual('idle', (await self.worker_api.post('/internal/executor/claim')).json()['kind'])
+        current = await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1', account['id'])
+        self.assertEqual(account['binding_revision'], current['binding_revision'])
+        self.assertEqual(account['encrypted_credentials'], current['encrypted_credentials'])
+
+    async def test_device_authorization_expiry_removes_code_and_allows_fresh_code(self):
+        account = await self.device_challenge()
+        self.assertEqual(202, (await self.api.post('/api/v1/accounts/leyu/device-authorization', json={'security_code':'CODE1234'})).status_code)
+        await self.pool.execute("UPDATE v2_account_jobs SET details=details||$2::jsonb WHERE account_id=$1 AND state='queued'", account['id'], {'authorization_expires_at': (datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()})
+        self.assertEqual('idle', (await self.worker_api.post('/internal/executor/claim')).json()['kind'])
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_account_jobs WHERE account_id=$1 AND details ? 'encrypted_authorization_code'", account['id']))
+        self.assertEqual(202, (await self.api.post('/api/v1/accounts/leyu/device-authorization', json={'security_code':'NEXT1234'})).status_code)
+
+    async def test_device_authorization_requires_own_challenge_active_session_and_known_state(self):
+        account = await self.device_challenge()
+        original = self.user['id']
+        self.user['id'] = uuid.uuid4()
+        self.assertEqual(404, (await self.api.post('/api/v1/accounts/leyu/device-authorization', json={'security_code':'CODE1234'})).status_code)
+        self.user['id'] = original
+        await self.pool.execute("UPDATE v2_leyu_accounts SET renewal_state='unknown' WHERE id=$1", account['id'])
+        self.assertEqual(409, (await self.api.post('/api/v1/accounts/leyu/device-authorization', json={'security_code':'CODE1234'})).status_code)
+        await self.pool.execute("UPDATE v2_leyu_accounts SET renewal_state='rejected',renewal_retry_after=now()+interval '60 seconds' WHERE id=$1", account['id'])
+        self.assertEqual(409, (await self.api.post('/api/v1/accounts/leyu/device-authorization', json={'security_code':'CODE1234'})).status_code)
+        await self.pool.execute("UPDATE v2_leyu_accounts SET renewal_retry_after=NULL WHERE id=$1", account['id'])
+        await self.pool.execute('DELETE FROM v2_sessions WHERE user_id=$1', original)
+        response = await self.api.post('/api/v1/accounts/leyu/device-authorization', json={'security_code':'CODE1234'})
+        self.assertEqual(401, response.status_code, response.text)
+
+    async def test_ambiguous_real_login_transport_stays_unknown_and_is_not_requeued(self):
+        await self.bind()
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        work['config']['leyu_login_proxy_url']='http://sample:password@proxy.invalid:1234'
+        login_calls=[]
+        def app_http(request):
+            if request.url.host=='ipv4.icanhazip.com':
+                return httpx.Response(200,text='9.9.9.9\n')
+            if request.url.path.endswith('/preInfo'):
+                return httpx.Response(200,json={'status_code':6000,'data':{'ip':'1.1.1.1'}})
+            self.assertTrue(request.url.path.endswith('/login'))
+            login_calls.append(request)
+            raise httpx.ReadTimeout('private-provider-body-and-credentials',request=request)
+        executor=self.executor()
+        executor.session_factory=lambda scope,config,hooks:AccountSessionManager(
+            scope,config,hooks,direct_transport=httpx.MockTransport(app_http),
+            login_transport_factory=lambda proxy:httpx.MockTransport(app_http),verify_public_hosts=False)
+        document={'routes':{name:{'key':'k'*16,'iv':'i'*16} for name in ('','/site/api','/game/api')}}
+        with patch('services.collector.leyu_session.private_document',return_value=document):
+            await executor.account_job(work)
+        visible=(await self.api.get('/api/v1/accounts/leyu')).json()
+        self.assertEqual('unknown',visible['tasks'][0]['state'])
+        self.assertEqual('unknown',visible['account']['renewal_state'])
+        self.assertIn('停止重试',visible['tasks'][0]['message'])
+        self.assertNotIn('private-provider',json.dumps(visible))
+        await self.worker_api.post('/internal/executor/dispatch')
+        self.assertEqual('idle',(await self.worker_api.post('/internal/executor/claim')).json()['kind'])
+        self.assertEqual(1,len(login_calls))
+
     async def test_private_session_cas_and_renewal_mutex(self):
         account=await self.bind()
         work=(await self.worker_api.post('/internal/executor/claim')).json()
@@ -226,6 +371,15 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(repeated.json()['idempotent'])
         body['expected_revision']=2
         self.assertEqual(409,(await self.worker_api.post(prefix+'/renewal/claim',json=body)).status_code)
+        # An older worker's generic failed receipt must not erase the already
+        # persisted unknown login outcome; replay remains idempotent.
+        old_receipt={'attempt_id':work['attempt_id'],'status':'failed','category':'proxy_login_read_timeout'}
+        result=await self.worker_api.post(prefix+'/finish',json=old_receipt)
+        self.assertEqual(200,result.status_code,result.text)
+        self.assertEqual('unknown',result.json()['status'])
+        replay=await self.worker_api.post(prefix+'/finish',json=old_receipt)
+        self.assertEqual(200,replay.status_code,replay.text)
+        self.assertTrue(replay.json()['idempotent'])
 
     async def test_account_worker_balance_without_funds_marks_verified(self):
         await self.healthy()

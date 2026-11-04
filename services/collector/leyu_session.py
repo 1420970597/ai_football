@@ -456,6 +456,10 @@ class AppSessionRenewer:
         body = {"uuid": self.config["leyu_app_uuid"], "name": name,
                 "password": hashlib.new("md5", password.encode()).hexdigest(),
                 "Flag": 1, "Version": APP_VERSION, "Kaptchcate": 99}
+        authorization_code = self.config.pop('leyu_app_authorization_code', None)
+        if authorization_code:
+            body['authCode'] = authorization_code
+            body['isEmail'] = False
         headers = self._headers("/site/api", ip)
         self._login_submitted = True
         try:

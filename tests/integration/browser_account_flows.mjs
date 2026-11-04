@@ -172,9 +172,52 @@ try {
     assert.equal(Number(account.account.available_balance),123.45);
     assert.equal(account.execution_capability.live_enabled,true);
     assert.ok(account.tasks.some(task=>task.kind==="verify"&&task.state==="succeeded"));
-    await refreshAccount(); await page.waitForFunction(()=>document.querySelector("#account-health").textContent.includes("已通过校验"));
+    await page.waitForFunction(()=>document.querySelector("#account-health").textContent.includes("已通过校验"));
     assert.equal(await page.locator("#leyu-form [name=username]").inputValue(),"");
     assert.equal(await page.locator("#leyu-form [name=password]").inputValue(),"");
+  });
+  await scenario("双端代理失败与新设备验证自动呈现且保留编辑内容",async()=>{
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({width,height:960});
+      for (const action of ['fail-next-proxy','reject-next-device']) {
+        assert.equal((await page.request.post('http://account-fixture:8998/'+action)).status(),200);
+        await page.locator('#leyu-form [name=account_label]').fill('本人合成账户');
+        await page.locator('#leyu-form [name=username]').fill('synthetic-owner-only');
+        await page.locator('#leyu-form [name=password]').fill('synthetic-no-real-login');
+        assert.equal((await responseAfter('/accounts/leyu','PUT',()=>page.locator('#leyu-form button.primary-button').click())).status,200);
+        await page.waitForFunction(()=>document.querySelector('#account-health').textContent.includes('校验中'));
+        await page.locator('#leyu-form [name=account_label]').fill('正在编辑的账户名称');
+        await page.locator('#betting-form [name=enabled]').check();
+        await page.locator('#betting-form [name=stake_per_order]').fill('7.00');
+        const title=action==='reject-next-device'?'需要乐鱼身份验证':'校验失败';
+        await page.waitForFunction(title=>document.querySelector('#account-health').textContent.includes(title),title);
+        assert.ok((await page.locator('#account-verification').innerText()).includes(action==='reject-next-device'?'6026':'410'));
+        assert.equal(await page.locator('#leyu-form [name=account_label]').inputValue(),'正在编辑的账户名称');
+        assert.equal(await page.locator('#betting-form [name=stake_per_order]').inputValue(),'7.00');
+        assert.equal(await page.locator('#verify-account').isDisabled(),true);
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+        if (action === 'reject-next-device') {
+          await page.locator('#leyu-device-authorization:not([hidden]) [name=security_code]').fill('TEST1234');
+          await page.waitForTimeout(2200);
+          assert.equal(await page.locator('#leyu-device-authorization [name=security_code]').inputValue(), 'TEST1234');
+          assert.equal((await page.request.post('http://account-fixture:8998/clear-login-cooldown')).status(), 200);
+          await page.locator('#refresh-account').click();
+          await page.waitForFunction(()=>!document.querySelector('#leyu-device-authorization button').disabled);
+          const authorized = await responseAfter('/accounts/leyu/device-authorization','POST',()=>page.locator('#leyu-device-authorization button').click());
+          assert.equal(authorized.status,202);
+          await page.waitForFunction(()=>document.querySelector('#account-health').textContent.includes('已通过校验'));
+          assert.equal(await page.locator('#leyu-device-authorization [name=security_code]').inputValue(), '');
+          assert.equal(await page.locator('#leyu-device-authorization').isHidden(), true);
+        }
+      }
+    }
+    // Explicit user rebind to the synthetic provider restores the fixture for later order/permission tests.
+    await page.locator('#leyu-form [name=account_label]').fill('本人合成账户');
+    await page.locator('#leyu-form [name=username]').fill('synthetic-owner-only');
+    await page.locator('#leyu-form [name=password]').fill('synthetic-no-real-login');
+    assert.equal((await responseAfter('/accounts/leyu','PUT',()=>page.locator('#leyu-form button.primary-button').click())).status,200);
+    await page.waitForFunction(()=>document.querySelector('#account-health').textContent.includes('已通过校验'));
+    await page.setViewportSize({width:1440,height:960});
   });
   await scenario("本人限额错误拒绝并保存专家限额与正常启停",async()=>{
     assert.equal((await configure({stake:"4",single:"3"})).status,422);

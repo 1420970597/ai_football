@@ -277,7 +277,7 @@ await scenario(
       .locator("#leyu-form button[type=submit],#leyu-form .primary-button")
       .click();
     await page.waitForFunction(() =>
-      document.querySelector("#account-health").textContent.includes("未校验"),
+      document.querySelector("#account-health").textContent.includes("已排队"),
     );
     assert.equal(
       await page.locator("#leyu-form [name=password]").inputValue(),
