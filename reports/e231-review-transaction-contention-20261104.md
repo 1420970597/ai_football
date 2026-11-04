@@ -37,3 +37,7 @@
 18:25只读环境结果：两探针exit0/stderr空。PG容器memory.current约1.42GiB/max与high无限制/swap约7MiB；宿主MemAvailable3883972KiB、盘使用23%，排除该时刻明显内存不足/盘满。宿主/proc/pressure/io full avg10=67.71%/avg60=52.88%/avg300=61.27%，远高于前一探针容器自身IO压力；两者范围不同，不能混称。数据库shared_buffers128MiB、effective_cache_size4GiB（规划估计非实际缓存）、work_mem4MiB、同步提交on、IO计时off。v2_sessions表40960字节/索引57344字节；current_quotes表约610MiB/索引约616MiB。pg_stat_database读块/临时文件为累计，9.22TB历史临时字节与21死锁不能归因本窗口。共享PG还承载旧数据，不按本项目需求擅自重启/修改全局配置或清理数据；继续定位项目当前查询及IO来源，只读结果不能直接承诺解决宿主存储延迟。
 
 18:33高频采样完整结束：601样本600.2秒exit0/stderr空，无截断，1691活动中1553ClientRead、92DataFileRead、5WALSync、3WALWrite、3BufferIO、4实际锁阻塞。3条review_lease_renewal等待0.649/0.902/1.902秒，阻塞者分别正在读取消息或fixture绑定的事务；另一次trace advisory等待的阻塞者DataFileRead。最大查询6.878秒/事务8.727秒。说明IO与长事务会传导到租约等待，不能全归因单一锁。E235仅减少可证实冗余往返，未改锁语义；后续在新窗继续采样并针对确切阶段复现，不用删除锁或延长命令来掩盖。
+
+18:37下一轮只读范围：对本项目四个热点表读取pg_stat_user_tables/stio与索引大小、autovacuum最近时间/活死行估计，以及活动按本项目/其他客户端/维护三类聚合（不输出其他应用名称、SQL、账号或地址）。检查当前共享PG是否被本项目大扫描或死元组放大IO；统计累计值先留基线，不能凭一轮数据决定VACUUM/重建索引/清历史。正式窗口中不执行维护写入或修改其他服务。
+
+18:39只读基线完成：热点统计exit0/stderr空，current_quotes活行约273.7万/死行34150、最近autovacuum18:18:43，analysis_traces死行189、sessions死行6；未见足以归因高IO的当前死行膨胀，未执行维护。telegram_events死行5842/活行34332保留观察，不随意清理原档案。活动聚合此刻仅本项目3个idle-in-transaction、其他客户端2idle，不能据一次样本排除其他服务/主机IO。第二轮61次只读PG预算采样开始，继续对齐E235新窗错误，代码/预算不变。

@@ -78,6 +78,11 @@ class MarketInput(AttemptInput):
     selection: str | None = Field(default=None, max_length=32, pattern=r'^[a-z][a-z0-9_]{0,31}$')
     market_query: str | None = Field(default=None, max_length=120)
 
+    @field_validator('market_kind', mode='before')
+    @classmethod
+    def normalize_total_alias(cls, value):
+        return 'total' if value == 'over_under' else value
+
     @field_validator('market_query', mode='before')
     @classmethod
     def normalize_market_query(cls, value):
