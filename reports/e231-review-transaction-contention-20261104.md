@@ -35,3 +35,5 @@
 下一步只读检查该PG容器自身memory.current/max/high/swap和宿主可见MemAvailable/Swap、数据卷剩余空间及当前数据库共享缓存/IO计时设置、v2_sessions实际表/索引大小。全部在Docker内、固定对象、有限一轮、不读账户/会话内容，不改缓存配置或重启共享数据库。先区分缓存缺页、磁盘满和宿主内存压力，再决定可在项目边界内验证的修复。此次浏览器失败不盖为通过，后续恢复必须原场景重跑。
 
 18:25只读环境结果：两探针exit0/stderr空。PG容器memory.current约1.42GiB/max与high无限制/swap约7MiB；宿主MemAvailable3883972KiB、盘使用23%，排除该时刻明显内存不足/盘满。宿主/proc/pressure/io full avg10=67.71%/avg60=52.88%/avg300=61.27%，远高于前一探针容器自身IO压力；两者范围不同，不能混称。数据库shared_buffers128MiB、effective_cache_size4GiB（规划估计非实际缓存）、work_mem4MiB、同步提交on、IO计时off。v2_sessions表40960字节/索引57344字节；current_quotes表约610MiB/索引约616MiB。pg_stat_database读块/临时文件为累计，9.22TB历史临时字节与21死锁不能归因本窗口。共享PG还承载旧数据，不按本项目需求擅自重启/修改全局配置或清理数据；继续定位项目当前查询及IO来源，只读结果不能直接承诺解决宿主存储延迟。
+
+18:33高频采样完整结束：601样本600.2秒exit0/stderr空，无截断，1691活动中1553ClientRead、92DataFileRead、5WALSync、3WALWrite、3BufferIO、4实际锁阻塞。3条review_lease_renewal等待0.649/0.902/1.902秒，阻塞者分别正在读取消息或fixture绑定的事务；另一次trace advisory等待的阻塞者DataFileRead。最大查询6.878秒/事务8.727秒。说明IO与长事务会传导到租约等待，不能全归因单一锁。E235仅减少可证实冗余往返，未改锁语义；后续在新窗继续采样并针对确切阶段复现，不用删除锁或延长命令来掩盖。

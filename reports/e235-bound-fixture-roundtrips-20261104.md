@@ -19,3 +19,7 @@
 18:13候选框架及镜像：冻结fb86eec69a52c111b66fd2822332b4342919ddb9，固定官方v0.22.5框架af-hermes-framework-614796全部exit0，原正常/引用图/攻击/并行/取消本人清理/另一会话完成/503/重启哈希/预算等场景通过，260候选13页连续搜索保留。提供方为明确替身，不证明真实模型耗时。API候选26736a5a29c7e8e514551875b40807ab6a7c9a4e2e025440051a0f024343dac1，revision完整一致；首构建标签仅短SHA，02重建修正完整标签，两个构建exit0，均未发布。API/worker-only Compose配置check exit0；本项目受限builder ai-football-e131。完整后端仍冻结运行，定向PG/网络已清理，生产未更新。
 
 18:20完整后端通过：同冻结fb86eec，bash infra/test/run.sh exit0，1278项568.865秒/0失败错误跳过，恢复前后差异{}；机器报告包装571.186秒、committed_source_verified=true，SHA256 5561b813d2c3526bb5a2897d88a40d3cfc394b4f49b56ac50cd4bbf34a50c98e，.runtime/e235-candidate/.runtime/test-evidence/613192/backend-tests.json。全后端、定向、固定框架与同源候选已通过，生产未提前改动；待E234完整窗口18:27:15以后先终审，再自然idle更新API/worker，保留其他服务/配置/资源。
+
+18:31安全生效与浏览器恢复：E234完整窗失败证据已导出，18:28:13.755633暂停claim/18:28:14.615840自然idle，仅API/worker同源26736a5a/fb86eec切换exit0/ready200/worker运行/gate正常释放，其他五服务ID/开始时间/预算不变；live_orders_enabled=false断言通过。新正式1800秒18:29:31.612968开始，18:59:32以后终审，独立退出码落盘。先前E234自然结果浏览器登录503失败保留；新版本原场景正常登录一次并内存复用会话，1440/390各两自然结果全passed/exit0，同attempt回执与模型文字/API一致、原图解码/无JS错误横溢，产物e235-output/natural-clicks。15场正常官方重算200/exit0，原台账before/after严格核验仍进行，不提前称一致或整体稳定。
+
+18:33原台账核验完成：Docker verify-idempotent-ledgers.py /evidence/e235-ledger，exit0/38原信号及不可变报价证据、38结果、80台账版本与created_at完全一致，actual_account_profit_claim=false。该核验只比较原15场范围，不宣称窗口内全部新推荐已结算或真实盈利。正式新窗继续，仍需自然图文持续稳定性及真实工具耗时证据。
