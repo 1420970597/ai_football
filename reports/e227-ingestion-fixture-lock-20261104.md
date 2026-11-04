@@ -11,3 +11,5 @@
 15:17负向已复现及候选冻结：原实现真实PG用例1项2.342秒/1failure/exit1，binding为LockNotAvailableError，第二写者100ms仍受阻。独立aee11ed仅一处锁与说明、一个完整行为用例，quote写入前屏障不替代真实SQL，finally保证事务释放。冻结后赛事审核/独立报价入库/结果台账/结算定向进行中，线上仍E222。E225完整Docker仍同66f91a6运行，两候选隔离，未在测试中修改源码。
 
 15:19失败与重跑：首定向92项119.018秒exit1/1error，为test_independent_quote_ingestion导入test_fixture_snapshot_atomic时未包含tests目录；非业务断言通过，整个阶段保持未通过。新增并发用例单独1项3.277秒exit0，800ms引用通过/100ms写者阻挡/最终2.10报价正确。冻结源码未改，加入显式PYTHONPATH的原定向完整重跑中，不跳过故障模块、不扩大timeout。
+
+15:28定向重跑100项129.205秒exit0；包含原故障模块，无跳过。冻结aee11ed完整Docker套件仍运行，未部署。E225独立66f91a6完整1257项548.600秒exit0，报告SHA73b23bb9d4c0e0389ca0d50d481ee58996d4db6bb51a6e21d9fcc984454305ea，仍不替代合并候选全套验收。
