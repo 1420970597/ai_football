@@ -421,17 +421,23 @@ async def record_expert_signals(body: RecordInput, request: Request):
                 'ORDER BY f.source_id FOR SHARE OF f',
                 body.review_id, body.attempt_id, sorted({pick.fixture_id for pick in body.signals}),
             )
-            for index, pick in enumerate(body.signals):
-                # A recommendation binds the read market intent, not a price
-                # promise. Under these locks retain identical semantics and
-                # score context, then validate and snapshot the current quote.
-                quote = await conn.fetchrow(
+            # Read only requested (fixture, quote) pairs, once in stable order.
+            # Keep fixture-before-quote locking while avoiding N remote reads
+            # under the fixture locks. Each intent is still validated below.
+            quotes = await conn.fetch(
                     "SELECT q.*,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context,r.source_updated_at AS read_source_time,r.price AS read_price FROM v2_current_quotes q "
                     "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
                     "JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 "
-                    "WHERE q.id=$3 AND q.fixture_id=$4 FOR SHARE OF q",
-                    body.review_id, body.attempt_id, pick.quote_id, pick.fixture_id,
-                )
+                    "JOIN (SELECT DISTINCT fixture_id,quote_id FROM unnest($3::text[],$4::uuid[]) AS pairs(fixture_id,quote_id)) wanted "
+                    "ON wanted.fixture_id=q.fixture_id AND wanted.quote_id=q.id "
+                    "ORDER BY q.fixture_id,q.id FOR SHARE OF q",
+                    body.review_id, body.attempt_id,
+                    [pick.fixture_id for pick in body.signals], [pick.quote_id for pick in body.signals],
+            )
+            by_quote = {(quote['fixture_id'], quote['id']): quote for quote in quotes}
+            for index, pick in enumerate(body.signals):
+                # Bind intent and score context, then snapshot current price.
+                quote = by_quote.get((pick.fixture_id, pick.quote_id))
                 reason = None
                 confirmation = None
                 if quote:

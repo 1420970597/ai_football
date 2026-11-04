@@ -846,6 +846,96 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         result = await self.post("record_expert_signals", signals=picks)
         self.assertEqual(2, len(result.json()["accepted"]))
 
+    async def test_multi_pick_quote_reads_release_fixture_before_writer_budget(self):
+        markets = [{'market_id': 'total', 'market_name': '全场大小', 'kind': 'total',
+                    'period': 'full_time', 'line': str(Decimal('2.5')+Decimal(i)/4),
+                    'selection': 'over', 'price': '1.95',
+                    'source_updated_at': self.now.isoformat(), 'received_at': self.now.isoformat()}
+                   for i in range(8)]
+        fixture_id = await self.fixture(markets=markets)
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        await self.read_market(fixture_id)
+        ids = await self.pool.fetch('SELECT id FROM v2_current_quotes ORDER BY line')
+        picks = [{'fixture_id': fixture_id, 'quote_id': str(row['id']),
+                  'evidence_text': 'Alpha1 Beta1 大球'} for row in ids]
+        locked = asyncio.Event()
+        real_pool = self.pool
+
+        class RemoteConnection:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def __getattr__(self, name):
+                return getattr(self.conn, name)
+
+            async def fetch(self, query, *args):
+                if 'FOR SHARE OF q' in query:
+                    await asyncio.sleep(.15)
+                result = await self.conn.fetch(query, *args)
+                if query.startswith('SELECT f.id') and 'FOR SHARE OF f' in query:
+                    locked.set()
+                return result
+
+            async def fetchrow(self, query, *args):
+                if 'FOR SHARE OF q' in query:
+                    await asyncio.sleep(.15)
+                return await self.conn.fetchrow(query, *args)
+
+        class RemoteAcquire:
+            async def __aenter__(self):
+                self.acquisition = real_pool.acquire()
+                return RemoteConnection(await self.acquisition.__aenter__())
+
+            async def __aexit__(self, *args):
+                return await self.acquisition.__aexit__(*args)
+
+        class RemotePool:
+            def acquire(self):
+                return RemoteAcquire()
+
+        update_error = None
+        with patch.object(database, 'current_pool', return_value=RemotePool()):
+            recording = asyncio.create_task(self.post('record_expert_signals', signals=picks))
+            try:
+                await asyncio.wait_for(locked.wait(), timeout=3)
+                async with real_pool.acquire() as conn:
+                    await conn.execute("SET lock_timeout='800ms'")
+                    try:
+                        await conn.execute('UPDATE v2_fixtures SET received_at=received_at WHERE id=$1', fixture_id)
+                    except asyncpg.LockNotAvailableError as exc:
+                        update_error = type(exc).__name__
+            finally:
+                response = await recording
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(8, len(response.json()['accepted']))
+        self.assertEqual([], response.json()['rejected'])
+        self.assertIsNone(update_error, 'quote round trips must not exhaust the collector lock budget')
+        self.assertEqual(8, await real_pool.fetchval('SELECT count(*) FROM v2_quote_evidence'))
+
+    async def test_batch_quote_pairs_preserve_cross_fixture_rejections_and_duplicates(self):
+        for index in (1, 2, 3):
+            await self.fixture(index)
+        key, _ = await self.search_all()
+        quotes = {}
+        for index in (1, 2):
+            await self.resolve(key, index)
+            quotes[index] = (await self.read_market(f'fixture-{index}'))['quote_id']
+        quotes[3] = str(await self.pool.fetchval(
+            "SELECT id FROM v2_current_quotes WHERE fixture_id='fixture-3'"))
+        pairs = [(1, 1), (1, 2), (2, 1), (2, 2), (1, 1), (3, 3)]
+        response = await self.post('record_expert_signals', signals=[{
+            'fixture_id': f'fixture-{fixture}', 'quote_id': quotes[quote],
+            'evidence_text': 'Alpha Beta 大球 @9.99'} for fixture, quote in pairs])
+        self.assertEqual(200, response.status_code, response.text)
+        result = response.json()
+        self.assertEqual([0, 3, 4], [pick['index'] for pick in result['accepted']])
+        self.assertEqual([False, False, True], [pick['duplicate'] for pick in result['accepted']])
+        self.assertEqual([1, 2, 5], [pick['index'] for pick in result['rejected']])
+        self.assertTrue(all(pick['reason']=='quote_not_read_or_changed' for pick in result['rejected']))
+        self.assertEqual(2, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        self.assertEqual(2, await self.pool.fetchval('SELECT count(*) FROM v2_quote_evidence'))
+
     async def test_historical_replay_cannot_bind_old_recommendation_to_current_price(self):
         fixture_id = await self.fixture()
         key, _ = await self.search_all()
