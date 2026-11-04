@@ -17,3 +17,5 @@
 18:52完整隔离验证通过：冻结6bb76e50104f55e8f163d0085ab9cbc7dc6e23b7运行1279项573.379秒、包装575.783秒，exit0/0失败错误跳过、恢复差异{}、committed_source_verified=true；产物.runtime/e236-candidate/.runtime/test-evidence/699581/backend-tests.json。候选应用镜像与此源码一致。框架验收明确继承父E235 af-hermes-framework-614796的完整exit0证据，不伪造E236框架运行；实际发布门检查保留父版passed引用。当前仍待E235完整窗口结束，未部署。外部新文档提交cf93e2b不涉及候选源码，保留不覆盖。
 
 后端产物SHA256：96aac21638a7d2c8ab0c9b0aa7f3b1f9796a9eb3397fd7abeda7b15a2ec19196。冻结全套进程96429实际退出0，不能以日志OK替代进程退出状态。
+
+19:05真实联调：19:00:43.297243暂停领取、19:00:44.503453自然idle，API/worker-only更新exit0、ready200、worker运行、gate正常释放exit0，镜像9da2bdb1/完整6bb76e5一致，其他5容器ID/开始时间/预算不变，live_orders_enabled=false。新1800秒19:02:22.127241 UTC开始，19:32:23后终审，正式配置代码冻结。15场正常rebuild200/exit0，原38推荐报价/38结果/80台账版本和时间均不变exit0。原真实图文两结果在Chromium1440/390各两详情4项passed/exit0，正常登录一次/内存复用会话、原图解码、模型与系统同attempt且API文字一致、无JS错误或横向溢出。仅证明这两个已完成结果当前展示和回归，不能当新自然预测或持续稳定/3秒验收。继续监控。

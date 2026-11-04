@@ -49,3 +49,7 @@
 新真实错误18:49:05 finish_check/require_lease和18:52:36 ingest_fixture_batch均Timeout。固定关系及时间关联分别看到v2_result_checks、v2_fixtures对应连接连续约5秒idle in transaction/ClientRead，无锁阻塞；与先前登录DataFileRead不同，不能全部归因服务器磁盘。此次按时间/关系关联尚无请求到PG pid的直接映射，不称已完全证明传输根因。保存dense-error-align-02和原始日志，下一步现有API/隧道各181次每秒只读TCP与CPU计数，对齐窗口尾端实际错误，不输出socket地址或报文内容、不修改资源/预算；若无新错误不将探针成功当复现修复。
 
 探针首准备尝试向隧道/tmp写脚本遇只读文件系统exit2，保留此失败；没有改挂载或权限。改用docker exec -i python -从标准输入传入脚本，两侧不需写容器文件，实际18:54:57开始各181样本/1秒；不改业务服务。前段文档18:55为记录分钟四舍五入，实际命令时间以JSON样本UTC为准。
+
+19:07实际SQL准备调查设计：原30轮checkpoint冷/热查询未覆盖当前赛事大批量SQL；此轮仅在独立默认只读连接上prepare现有ingest_fixture_batch与require_lease的原SQL，绝不execute这两个业务语句/不绑定业务参数。通过inspect+AST只取唯一conn.execute/fetchrow静态常量，运行在Docker，JSON codec与生产一致，原5秒连接/命令预算，最多600秒121轮242prepare。第二只读连接每秒只看该诊断pid的状态/等待/时间，不输出SQL、凭据或数据；这是显式诊断负载，不当自然流量。用实际复杂SQL而非重复简单查询检查准备阶段长尾，失败保留类别，不改生产池/超时。E236新窗口冻结继续。
+
+该准备探针首轮19:05实际exit1，SQL提取假设整个批处理仅一个conn.execute不成立，AssertionError/0prepare，不是业务失败。限定原首个INSERT INTO v2_fixtures或原SELECT v2_result_checks精确前缀、仍唯一静态常量后02重跑；旧stderr保留。上一条19:07为预写记录偏差，实际设计/首命令19:05 UTC，以原样本时间为准。
