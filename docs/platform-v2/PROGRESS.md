@@ -2180,3 +2180,5 @@ E227重放/浏览器通过与E226全套开始（2026-11-04 15:37 UTC）：正常
 E228进入设计（2026-11-04 15:44 UTC）：实际固定框架session_authority通过asyncio.shield持久审核，旧api_server.active_runs计数不覆盖该路径，此前零计数不能证明无残留；独立active_agents2也不能直接认定一个孤儿。3个过往timeout attempt通过认证run投影精确定位/session匹配且读取时completed，未停止生产任务。设计仅session删除明确409active时，认证GET自有attempt/continuation精确run并校验session后stop，再DELETE，保留总清理截止/终态/404/权限失败；不改SSE/幂等/模型/框架源码。客户端契约和真实固定框架隔离取消验收后再冻结回归。E227本窗约9分钟六租约有效，已见第二次TG unavailable，需终审分接口和last_error，不提前称恢复。不结束会话。
 
 E226完整通过/E228候选准备（2026-11-04 15:49 UTC）：冻结c1ad5a6完整1260项551.585秒exit0/0失败错误跳过/恢复差异{}，报告SHA3c9704d9d7b5c878a70b36683be7b8c9be0b23e45ae76f3fefa8c9dcc73c5314，未部署。本窗E227继续冻结到16:05:32以后。E228客户端仅409active时精确停止已知本人attempt并保留8秒总截止，7项8.227秒exit0；旧实现单项负向HTTP409错误。新增固定v0.22.5隔离阻塞/HTTP取消/删除409/本人cleanup/另一会话完成用例，待冻结框架验收和全套，未操作生产stop。不结束会话。
+
+E228框架失败并定位（2026-11-04 15:51 UTC）：首隔离真实固定框架exit1，HTTP取消后409与stop已实证，立即DELETE却500(session_busy)；官方源码要求canonical admission终态，stop ACK不等于完成。未部署该失败版本，不吞500或加截止。修为同8秒总预算内先认证轮询自有run到终态再删除，保留原失败日志。重新冻结、原场景与框架全回路重跑；E227实际窗口继续，已有3eligible/2receipt/1在途无漏job但TG全局异常和模型timeout仍存在。不结束会话。

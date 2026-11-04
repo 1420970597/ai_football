@@ -13,3 +13,5 @@
 设计已记录：保留非流式与现有幂等、600秒整体预算。仅DELETE session返回明确409 session_active_turn时，在原总清理截止内用固定框架default profile+API key散列派生attempt及两次continuation的原run_id，GET认证投影，只有session完全等于本job/attempt且queued/running等活动状态才POST该run/stop，终态/404不停止；再DELETE验证。身份不符、403、未知409/状态必须失败可见，不猜编号、不停止其他任务、不修改已接受推荐。框架官方session_authority stop具备queued取消和generation匹配中断，优于盲改SSE。带profile URL须按框架已核验profile作用域，否则拒绝派生。先客户端合约/越权/预算及真实固定框架隔离阻塞调用→取消→清理→精确run终态/其他会话存活；再冻结定向全套。不得手动调用生产stop来替代隔离验收。
 
 15:49客户端实现及定向：非流式请求不改，仅409 active按认证scope/已知3个幂等key查询和校验session后停止；8秒整体清理截止，禁止跨session或unknown状态控制。客户端7项8.227秒exit0，包括正常/无关冲突/403/终态404/其他session/未知状态/阻塞取消上限。旧实现单例负向返回HTTP409错误，保留e228-negative.log。新增固定框架隔离场景：两个独立会话各阻塞提供方5秒，取消一个HTTP observer后先证明DELETE409，再调用新cleanup，验证另一个会话正常完成且没有推荐写入。尚未跑框架，不计真实联调通过；无生产stop操作。
+
+15:51真实框架首轮失败：af-hermes-framework-252940 exit1。已实际触发HTTP取消后DELETE409，POST stop接受并打印Interrupted，但随即DELETE500；框架栈hermes_state_mutation_retirement.retire_terminal_receipts抛RuntimeStoreError(session_busy)。根因是停止确认早于canonical admission终态，guard先释放仍不允许删除，并非模型或生产异常。对应验收保持失败，不重试吞掉500。修正候选为先停止全部已验证active run，再在同8秒整体截止内认证轮询精确run到终态，然后DELETE；无终态/权限/身份不符仍失败可见。框架原失败产物保留，重新冻结后重跑原场景及全框架验收。

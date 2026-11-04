@@ -18,9 +18,10 @@ class HermesClientTests(unittest.IsolatedAsyncioTestCase):
         settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1', hermes_api_key='isolated-key')
         calls = []
         deletes = 0
+        stopped = False
 
         async def handler(request):
-            nonlocal deletes
+            nonlocal deletes, stopped
             calls.append((request.method, request.url.path))
             self.assertEqual('Bearer isolated-key', request.headers['Authorization'])
             if request.method == 'DELETE':
@@ -29,12 +30,13 @@ class HermesClientTests(unittest.IsolatedAsyncioTestCase):
                         if deletes < 3 else httpx.Response(204))
             if request.method == 'POST':
                 self.assertTrue(request.url.path.endswith(str(attempt)+'/stop'))
+                stopped = True
                 return httpx.Response(200, json={'status': 'stopping'})
             if request.url.path.endswith('-continuation-1'):
                 return httpx.Response(200, json={'session_id': session, 'status': 'completed'})
             if request.url.path.endswith('-continuation-2'):
                 return httpx.Response(404)
-            return httpx.Response(200, json={'session_id': session, 'status': 'running'})
+            return httpx.Response(200, json={'session_id': session, 'status': 'cancelled' if stopped else 'running'})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             await hermes_client.delete_session(settings, review, attempt, client=client)

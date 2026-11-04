@@ -277,6 +277,7 @@ async def _stop_review_runs(settings, session_id, attempt_id, *, client, headers
         if not re.fullmatch(r'[A-Za-z0-9_.-]+', profile):
             raise RuntimeError('invalid Hermes cleanup profile')
     scope = hashlib.sha256((profile+'\0'+settings.hermes_api_key).encode()).hexdigest()
+    pending = []
     for continuation in range(3):
         key = str(attempt_id) + (f'-continuation-{continuation}' if continuation else '')
         run_url = settings.hermes_api_url+'/runs/chat:'+scope+':'+key
@@ -293,3 +294,22 @@ async def _stop_review_runs(settings, session_id, attempt_id, *, client, headers
             raise RuntimeError('Hermes cleanup run state is unresolved')
         response = await client.post(run_url+'/stop', headers=headers, timeout=httpx.Timeout(5.0, connect=2.0))
         response.raise_for_status()
+        pending.append(run_url)
+    # Stop acknowledgement precedes canonical settlement. Deleting in that
+    # gap raises session_busy in the pinned framework, even after guards drop.
+    while pending:
+        remaining = []
+        for run_url in pending:
+            response = await client.get(run_url, headers=headers, timeout=httpx.Timeout(5.0, connect=2.0))
+            response.raise_for_status()
+            run = response.json()
+            if run.get('session_id') != session_id:
+                raise RuntimeError('Hermes cleanup run belongs to a different session')
+            if run.get('status') in {'completed', 'failed', 'cancelled', 'expired'}:
+                continue
+            if run.get('status') not in {'queued', 'running', 'waiting_for_approval', 'stopping'}:
+                raise RuntimeError('Hermes cleanup run state is unresolved')
+            remaining.append(run_url)
+        pending = remaining
+        if pending:
+            await asyncio.sleep(.1)
