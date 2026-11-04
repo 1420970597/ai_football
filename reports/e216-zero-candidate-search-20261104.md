@@ -1,6 +1,6 @@
 # E216 零候选检索的有界恢复
 
-更新时间：2026-11-04 11:56 UTC。状态：设计已记录，未部署。
+更新时间：2026-11-04 12:58 UTC。状态：已生效，真实检索和浏览器通过，整窗稳定性未通过。
 
 目标：缩短原名与平台音译不一致时的无效检索，避免实际存在的比赛被描述为不存在。责任目录 integrations/hermes、tests、docs/platform-v2、reports。前置为当前 Hermes 深度模型、MCP 完整候选检索和独立冻结验证；不增加工具权限。
 
@@ -23,3 +23,9 @@
 真实Docker Playwright ai-football-browser:v2.0.0-dev命令运行e214-clicks.mjs及e216-browser-samples.json退出0：俄罗斯杯原图/模型/当前系统回执，以及既有已接受原图推荐，各在1440和390视口通过，共4项；页面无JS错误、无弹层横溢，模型文本与API一致、模型/receipt的attempt一致，俄罗斯杯identified_without_signal=1。截图/机器记录在.runtime/e209-live/e216-output/playwright，运行日志e216-browser.log。不把页面可见等同于已生成推荐。
 
 独立E217候选仅改Compose默认CPU，完整当前配置链Docker Compose解析，默认0.25/显式TUNNEL_CPUS=.17两项断言退出0；配置秘密未输出，运行资源尚未改变。实际项目两份env均无TUNNEL_CPUS条目（rg退出1表示无匹配，不是配置失败）。下一步继续E216完整1800秒、自然帖逐条审核与API分项，再决定线上资源调整。
+
+## 完整观察终审
+
+12:20:18.171183–12:50:21.110178 UTC完整1802.9秒/55样本，独立Pythonexit0、SHA0f1f7c46e74cbb24ada0e012d3c0ce6d9a658ea87dd753079640ab82d09ce2b6。health/ready全200，六租约全有效单owner；来源样本17–18 reconciliation_deferred、28–29 ConnectTimeout，整窗telegram_all_healthy=false。末采样27eligible/11receipt/16在途；稍后精确同时间范围键集终审31自然帖/27当前eligible，全有job、12receipt、15未完成（12queued/2running/1retry），说明采样与稍后审计有状态推进，不能把后者假写成窗口结束瞬间。2次多场审核timeout，三秒未达标。俄罗斯杯召回样本修复通过，整体稳定性及吞吐验收失败，继续E217资源观察与E218/E219独立修复。
+
+该窗API：live238200+2503、reconciliation333200+4503、delete37200；live P952290.4/max5487.4ms，reconciliation P956017.1/max8696.7ms、delete P955377.7/max6045.6ms。截点日志聚合命令set -o pipefail保留失败码，实际exit0；未把503计为成功延迟样本。源事件40版本P9513432.7ms、16≤3秒，不是模型结论时延。诊断文件e216-{audit-final,summary-final,api-metrics}.json与原始jsonl/stderr/exit均保存。
