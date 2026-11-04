@@ -11,3 +11,5 @@ E240 的 31 轮交错健康探测中，原连接 P50/P95/max 为 522/1425/6619ms
 隔离验证命令：Docker 受限 runner，运行 `python -m unittest tests.test_remote_deployment tests.test_remote_link_lifecycle`；独立临时 PostgreSQL，runner .5CPU/512MiB、PG .25CPU/256MiB。首次 30 项 11.770 秒 exit1，发现 Path.open 不支持 opener，保留 e243-target-01.log；改为内建 open 后重跑 31 项 13.590 秒 exit0。包含真实子进程任一退出、部分启动失败、SIGTERM 回收、私有原子状态、无效及死亡第二 PID 拒绝、原 HTTP/Unix 传输契约。两次临时容器和网络清理。
 
 下一步：冻结提交后完整 Docker 后端套件。当前生产 E241 观察到 21:23:46 以后方可终审；期间不修改已挂载生产脚本。后续若部署，只切换本项目 remote-link，核验原项目 socket、权限、预算及其他容器，开启另一完整 30 分钟实测；故障按记录恢复旧脚本及配置。稳定性、3 秒目标、网关上游权限拒绝均未验收通过。
+
+2026-11-04 21:41 UTC更新：冻结8ebbd87完整1291项632.752秒exit0、零失败错误跳过，恢复difference={}，证据1110970/backend-tests.json SHA46385fd6b0d7d62ce7b430d504b24963befdf59e67907fe16bfe891e9683890d。代码原样cherry-pick为3fe44df；原监督进程在此前保持单连接，21:40:10.134488362 UTC仅项目remote-link重建启用split_connections。部署脚本exit0，健康且两个独立SSH子进程存活；其余六个本机服务ID、启动时间、资源逐项不变。旧配置已受保护备份，回退只还原本项配置并重建本服务。切换前相同31次健康探测全200，P50/P95/max487/600/681ms；切换后对照仍在执行，尚不称长尾或数据库故障解决。

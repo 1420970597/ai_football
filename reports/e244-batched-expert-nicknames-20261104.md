@@ -11,3 +11,5 @@
 Docker定向01：17项27.622秒exit0，真实临时数据库验证身份、别名、单SQL调用及原目录业务；补充事务后续失败与跨群/停用映射后冻结02：19项31.167秒exit0，零失败错误跳过。命令为受限 runner `python -m unittest tests.test_telegram_profile_batch tests.test_telegram_sources`，显式 TELEGRAM_TEST_DATABASE_URL 指向任务临时PG，runner .5CPU512MiB/PG .25CPU256MiB，退出清理。未对生产写测试数据。
 
 下一步提交冻结后完整后端测试，保留同期账户修复及E243独立传输候选。只有同源码完整套件通过、当前监控窗口完成、服务更新和新30分钟同口径目录耗时对比都具证据，才能称线上性能通过；失败沿原配置及代码回退，不能移除租约/权限/昵称历史或缩减监控范围换取速度。
+
+2026-11-04 21:41 UTC更新：冻结052595274264a7efe5d8a33b42a40101431500f3完整1305项592.912秒exit0、零失败错误跳过，恢复difference={}；独立证据1172176/backend-tests.json SHA6a9bcb66f09b4dab6653ec070c062cc863595c59236e8751bec1ca5785ecbc1e，同源镜像c16bccdeb0f829f38c7b1c9b729f27e398856c2f485845e0f1d5f6e50fff456b构建与Compose检查exit0。当前分支a1bd62c原样移入，保留168252e账户修复；尚未切换生产API/worker。框架/MCP未变，明确继承E235既有验证，不虚称新模型框架验收。

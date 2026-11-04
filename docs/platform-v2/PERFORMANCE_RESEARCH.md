@@ -128,3 +128,5 @@ Hermes v0.22.5 的调度器会按 `supports_parallel_tool_calls` 并发安排同
 E174仅合并领取SQL往返，完整1151项通过、20:07安全生效，20:08:09–20:38:09完整观察进行中。新研究不在该冻结版本内，不因发现新方向中断当前验收。
 
 20:18实际固定框架函数探针：Docker内build_auto_load_prompt仅在本次函数参数传入skills.auto_load=[expert-review]，返回loaded唯一该技能/missing空、提示2756字符，包含倍率不比较/连续游标/录入规则；未改运行配置、未调用模型。证据.runtime/e174-live/preload-function-probe.json；只证明加载函数可用，未证明API完整上下文或性能收益。E173十五个真实审核的session累计usage：prompt最小15087、最大17328、均15270.733tokens；completion269–513、均401.933tokens。这些均为完整session合计，不能除以未经记录的轮数声称单轮大小，证据.runtime/e173-live/{model-usage.json,model-usage-summary.json}。
+
+2026-11-04 21:41 UTC因果更正：E245同HTTPX请求只改User-Agent为Python-urllib/3.12就从200变502，已排除简单归因max_tokens或全网关授权失效。实际安装SDK默认请求标识两次200约2.6–2.8秒；不修改网关规则或伪装请求标识。E241完整窗口13条真实模型审核成功，但全链路20–148秒、API五次数据库超时，三秒及持续稳定验收均未通过。详细受控证据见E245报告；后续研究以真实框架路径及按阶段时延为准。
