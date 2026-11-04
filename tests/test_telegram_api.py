@@ -277,6 +277,47 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_telegram_events"))
         self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_jobs"))
 
+    async def test_reconciliation_rechecks_lease_after_waiting_for_message_lock(self):
+        self.assertEqual(200, (await self.post(self.event())).status_code)
+        await self.pool.execute("UPDATE v2_telegram_events SET next_check_at=now()-interval '1 minute'")
+        page = await self.client.post('/internal/telegram/observed', json={
+            'chat_id': '-1001', 'owner': str(self.owner), 'limit': 1,
+            'reconciliation_protocol': 'claim-ack-v1'})
+        self.assertEqual(200, page.status_code, page.text)
+        item = page.json()['items'][0]
+        body = self.event(version='reconciled-edit', kind='edit', minutes=1)
+        body['reconciliation'] = {key: item[source] for key, source in (
+            ('event_id', 'id'), ('version_key', 'version_key'), ('claim_id', 'claim_id'))}
+        applied = asyncio.Event()
+        original = telegram.telegram_reconciliation.apply_claim
+
+        async def tracked_apply(*args, **kwargs):
+            result = await original(*args, **kwargs)
+            applied.set()
+            return result
+
+        with patch.object(telegram.telegram_reconciliation, 'apply_claim', new=tracked_apply):
+            async with self.pool.acquire() as blocker:
+                async with blocker.transaction():
+                    await blocker.fetchval(
+                        "SELECT pg_advisory_xact_lock(hashtext('telegram:' || $1::text || ':11'))",
+                        str(self.source_id))
+                    pending = asyncio.create_task(self.post(body))
+                    await asyncio.wait_for(applied.wait(), timeout=3)
+                    self.assertFalse(pending.done())
+                    await blocker.execute(
+                        "UPDATE v2_source_checkpoints SET lease_until=statement_timestamp()-interval '1 second' "
+                        "WHERE source_id=$1", self.source_id)
+            response = await asyncio.wait_for(pending, timeout=3)
+        self.assertEqual(409, response.status_code, response.text)
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_expert_messages'))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_telegram_events'))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
+        row = await self.pool.fetchrow(
+            'SELECT reconcile_applied_at,reconcile_acknowledged_at FROM v2_telegram_events')
+        self.assertIsNone(row['reconcile_applied_at'])
+        self.assertIsNone(row['reconcile_acknowledged_at'])
+
     async def test_same_owner_renewal_and_checkpoint_advance_do_not_wait_for_source_lock(self):
         async with self.pool.acquire() as holder:
             async with holder.transaction():

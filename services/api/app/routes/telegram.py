@@ -819,6 +819,16 @@ async def ingest_event(body: EventInput, request: Request):
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))",
                                f"telegram:{source['id']}:{body.platform_message_id}")
             snapshot = None
+            if body.event_kind != "delete":
+                # A new statement after the advisory-lock wait is essential:
+                # the lease or message version may have changed while waiting.
+                # Read the reconciliation state in one remote round trip.
+                async with event_phase_scope(request, "event_snapshot_ms"):
+                    snapshot = await event_ingest_snapshot(conn, body, source['id'], body.owner)
+                if not snapshot['source_enabled']:
+                    raise HTTPException(status_code=403, detail="Telegram source is not enabled")
+                if not snapshot['lease_active']:
+                    raise HTTPException(status_code=409, detail="Telegram source lease is not active")
             if body.event_kind == "delete":
                 affected = await conn.fetch(
                     "SELECT DISTINCT all_members.platform_message_id FROM v2_telegram_events e "
