@@ -9,3 +9,5 @@
 验收：真实临时PG ingest_fixture_batch更新时，在后续盘口写入前通过连接代理barrier暂停，另一连接在800ms原预算内插入该已存在比赛的review fixture binding；旧FOR UPDATE负向应锁错，候选通过，同时第二个FOR NO KEY UPDATE写者100ms仍必须锁错。再继续原事实与盘口提交，核验数据完整。冻结后定向及完整套件；当前窗口先保存终审，再等待候选全套通过后idle一次更新API/worker/MCP到包含E223/E225/E227的同一源，避免接连重启，不混入E226研究。失败不加timeout或绕过外键，保留旧证据。真实改善仍须下一完整30分钟证明。
 
 15:17负向已复现及候选冻结：原实现真实PG用例1项2.342秒/1failure/exit1，binding为LockNotAvailableError，第二写者100ms仍受阻。独立aee11ed仅一处锁与说明、一个完整行为用例，quote写入前屏障不替代真实SQL，finally保证事务释放。冻结后赛事审核/独立报价入库/结果台账/结算定向进行中，线上仍E222。E225完整Docker仍同66f91a6运行，两候选隔离，未在测试中修改源码。
+
+15:19失败与重跑：首定向92项119.018秒exit1/1error，为test_independent_quote_ingestion导入test_fixture_snapshot_atomic时未包含tests目录；非业务断言通过，整个阶段保持未通过。新增并发用例单独1项3.277秒exit0，800ms引用通过/100ms写者阻挡/最终2.10报价正确。冻结源码未改，加入显式PYTHONPATH的原定向完整重跑中，不跳过故障模块、不扩大timeout。
