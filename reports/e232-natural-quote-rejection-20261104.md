@@ -19,3 +19,5 @@
 定向02未通过：64项85.890秒有1导入错误，PYTHONPATH遗漏/source导致tests包无法导入，不计通过；已修正为/source:/source/services/api:/source/tests，完整原定向03重跑中。源码在每次运行期间不改；当前未部署，E230正式窗口继续到17:20:30后终审。
 
 17:02定向03通过：90项113.715秒exit0/0失败错误跳过，覆盖reviews、quote_observation、review_tool_evidence；临近过期原报价/确认、刷新失败无信号无证据、年轻确认不重复上游调用、原source时间保持、现价更新、停盘/未知时间/错误盘口/跨fixture/历史/越权/完整分页等原契约通过。候选仅准备刷新策略与3项行为测试，不改最终录入校验。下一步冻结同源完整后端与固定框架，待E230窗终审后再安全部署；自然图文未成功的旧回执保持原样。
+
+17:07冻结框架通过：bef4a4320ba65e0248a36d8f5c27a8b1de36e3d9固定官方v0.22.5完整框架exit0（af-hermes-framework-441638），取消清理239.0ms且其他会话完成/0信号；reply_image/normal各260候选13页及工具接受通过，攻击/长度/并行/无意图/503/重启哈希/预算全通过。提供方与对象读取为显式隔离替身，不证明真实模型3秒。同源API镜像sha256:736c2dff058370ec7dcd4bd10800ef0ebc0ee90c57c1ba98d8af71d8ccaaabfc/revision一致，受限builder构建exit0；API/worker-only覆盖配置check exit0，正式窗口结束和完整后台通过前不部署。独立E232定向PG及网络已清理，不动其他数据。
