@@ -2182,3 +2182,5 @@ E228进入设计（2026-11-04 15:44 UTC）：实际固定框架session_authority
 E226完整通过/E228候选准备（2026-11-04 15:49 UTC）：冻结c1ad5a6完整1260项551.585秒exit0/0失败错误跳过/恢复差异{}，报告SHA3c9704d9d7b5c878a70b36683be7b8c9be0b23e45ae76f3fefa8c9dcc73c5314，未部署。本窗E227继续冻结到16:05:32以后。E228客户端仅409active时精确停止已知本人attempt并保留8秒总截止，7项8.227秒exit0；旧实现单项负向HTTP409错误。新增固定v0.22.5隔离阻塞/HTTP取消/删除409/本人cleanup/另一会话完成用例，待冻结框架验收和全套，未操作生产stop。不结束会话。
 
 E228框架失败并定位（2026-11-04 15:51 UTC）：首隔离真实固定框架exit1，HTTP取消后409与stop已实证，立即DELETE却500(session_busy)；官方源码要求canonical admission终态，stop ACK不等于完成。未部署该失败版本，不吞500或加截止。修为同8秒总预算内先认证轮询自有run到终态再删除，保留原失败日志。重新冻结、原场景与框架全回路重跑；E227实际窗口继续，已有3eligible/2receipt/1在途无漏job但TG全局异常和模型timeout仍存在。不结束会话。
+
+E228固定框架清理已通过/E229研究（2026-11-04 15:53 UTC）：修正dea4e75客户端7项8.235秒exit0；真实固定框架隔离原取消场景已通过，HTTP取消后409实证、新cleanup370.4ms完成、另一会话正常完成/0推荐，完整框架余下restart/budget仍运行。normal/adversarial/length/parallel/no_intent/provider503回路均已输出成功，未提前称总套通过。同冻结完整Docker后台套件开始，源码不再修改。E229记录12个中段跨接口超时包括简单ready/config，研究PG/S3共享SSH传输，只读受限对照，不修改原隧道、不改TLS或资源/生产路由。不结束会话。
