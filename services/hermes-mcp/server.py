@@ -84,7 +84,7 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str,
                          phase: str = "all", competition_query: str | None = None,
                          from_utc: str | None = None, to_utc: str | None = None,
                          cursor: str | None = None, page_size: int = 100, sport: str | None = None) -> dict:
-    """phase=all检索赛前、滚球、完场及取消候选；支持常见足球简称与重音/标点变体。每页最多100场，连续使用next_cursor直到为空。仅realtime_eligible=true的唯一比赛可读取实时盘口并录入推荐。"""
+    """phase=all检索全部比赛阶段，每页最多100场，连续翻页至next_cursor为空。严格队名零候选且日期范围≤7天时，可用原中文片段召回；retrieval_basis=source_fragment_candidate只表示候选，仍须独立核对双方/梯队/时间，不能当同名或别名证明。仅唯一且realtime_eligible=true可读实时盘。"""
     return await _post("search_matches", {
         "review_id": review_id, "attempt_id": attempt_id, "team_query": team_query,
         "phase": phase, "competition_query": competition_query, "sport": sport,

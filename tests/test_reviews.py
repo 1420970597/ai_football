@@ -97,6 +97,47 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, result.status_code, result.text)
         return result.json()["markets"][0]
 
+    async def test_source_fragment_candidates_preserve_scope_pagination_and_identity(self):
+        home, away = '阿根廷农业U20', '塔勒雷斯雷梅迪奥斯U20'
+        await self.fixture(1, home_team=home, away_team=away)
+        await self.fixture(2, home_team=home, away_team=away, sport='basketball')
+        await self.fixture(3, home_team=home, away_team=away,
+                           kickoff_at=(self.now-timedelta(days=8)).isoformat())
+        await self.fixture(4, home_team='阿根廷农业女足', away_team='另一女足')
+        scope = dict(team_query='卡洛斯卡萨雷斯农业', sport='football', page_size=1,
+                     from_utc=(self.now-timedelta(hours=12)).isoformat(),
+                     to_utc=(self.now+timedelta(hours=72)).isoformat())
+        response = await self.post('search_matches', **scope)
+        self.assertEqual(200, response.status_code, response.text)
+        first = response.json()
+        self.assertEqual(2, first['total_candidates'])
+        self.assertEqual('source_fragment_candidate', first['items'][0]['retrieval_basis'])
+        blocked = await self.post('resolve_match', search_key=first['search_key'], team_a=home, team_b=away)
+        self.assertEqual(409, blocked.status_code)
+        second = await self.post('search_matches', **scope, cursor=first['next_cursor'])
+        self.assertEqual(200, second.status_code, second.text)
+        self.assertIsNone(second.json()['next_cursor'])
+        items = first['items'] + second.json()['items']
+        self.assertEqual({'fixture-1', 'fixture-4'}, {r['id'] for r in items})
+        self.assertTrue(all(r['retrieval_basis']=='source_fragment_candidate' for r in items))
+        missing = await self.post('resolve_match', search_key=first['search_key'],
+                                  team_a=scope['team_query'], team_b=away)
+        self.assertFalse(missing.json()['resolved'], 'retrieval fragments must not become identity aliases')
+        resolved = await self.post('resolve_match', search_key=first['search_key'], team_a=home, team_b=away)
+        self.assertTrue(resolved.json()['resolved'])
+        self.assertEqual('fixture-1', resolved.json()['fixture']['id'])
+
+    async def test_strict_chinese_search_does_not_mix_fragment_candidates(self):
+        query = '卡洛斯卡萨雷斯农业'
+        await self.fixture(1, home_team=query+'U20')
+        await self.fixture(2, home_team='阿根廷农业U20')
+        response = await self.post('search_matches', team_query=query, sport='football',
+                                   from_utc=self.now.isoformat(),
+                                   to_utc=(self.now+timedelta(days=3)).isoformat())
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(['fixture-1'], [r['id'] for r in response.json()['items']])
+        self.assertNotIn('retrieval_basis', response.json()['items'][0])
+
     async def test_chinese_script_folding_search_and_resolve_both_directions(self):
         for index, home, away, competition, query, opponent, league in (
             (1, '莫斯科火车头', '莫斯科斯巴达', '俄罗斯超级联赛', '莫斯科火車頭', '莫斯科斯巴達', '俄羅斯超級聯賽'),

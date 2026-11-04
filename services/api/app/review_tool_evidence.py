@@ -33,7 +33,7 @@ FIXTURE_FIELDS = frozenset({
     'home_score', 'away_score', 'clock_minute', 'source_updated_at', 'received_at', 'source_time_quality',
     'half_home_score', 'half_away_score',
 })
-SEARCH_FIXTURE_FIELDS = FIXTURE_FIELDS | {'realtime_eligible', 'eligibility_reason'}
+SEARCH_FIXTURE_FIELDS = FIXTURE_FIELDS | {'realtime_eligible', 'eligibility_reason', 'retrieval_basis'}
 QUOTE_FIELDS = frozenset({
     'id', 'fixture_id', 'market_id', 'market_name', 'period', 'market_kind', 'line', 'selection', 'price',
     'source_updated_at', 'received_at', 'source_time_quality', 'status', 'play_id', 'market_instance_id',

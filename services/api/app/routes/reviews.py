@@ -17,20 +17,15 @@ from .. import database
 from ..review_policy import REALTIME_WINDOW_SECONDS
 from ..handicap_lines import line_terms
 from ..review_state import authorize, fresh_quote, quote_context
-from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, FIXTURE_FIELDS, MAX_MARKETS
+from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, MAX_MARKETS
 from ..runtime_settings import runtime_quote_max_age
 from ..quote_observation import confirmation_for
-from ..team_matching import normalize_team_name, team_name_matches, team_search_variants
-from ..chinese_names import sql_chinese_fold
+from ..team_matching import normalize_team_name, team_name_matches
+from ..review_candidates import snapshot_candidates
 from ..review_cursors import encode_cursor, decode_cursor
 from ..review_search_scope import continuation_scope, scope_key
 
 router = APIRouter(prefix="/internal/mcp")
-_CANDIDATE_JSON = (
-    'jsonb_build_object(' + ','.join("'" + field + "',f." + field for field in sorted(FIXTURE_FIELDS))
-    + ", 'realtime_eligible', f.phase IN ('scheduled','live'), "
-    + "'eligibility_reason', CASE WHEN f.phase IN ('scheduled','live') THEN NULL ELSE f.phase END)"
-)
 
 
 class AttemptInput(BaseModel):
@@ -171,15 +166,6 @@ async def search_matches(body: SearchInput, request: Request):
              "from": body.from_utc.astimezone(timezone.utc).isoformat() if body.from_utc else None,
              "to": body.to_utc.astimezone(timezone.utc).isoformat() if body.to_utc else None}
     search_key = scope_key(scope)
-    team_variants = team_search_variants(body.team_query)
-    team_patterns = ["%" + value + "%" for value in team_variants]
-    raw_team_pattern = "%" + body.team_query.strip().casefold() + "%"
-    raw_team_alias = body.team_query.strip().casefold()
-    name_fold_source = "áàâäãåéèêëíìîïóòôöõúùûüýÿçñ"
-    name_fold_target = "aaaaaaeeeeiiiiooooouuuuyycn"
-    chinese_source, chinese_target = sql_chinese_fold(body.team_query + ' ' + scope['competition'])
-    name_fold_source += chinese_source
-    name_fold_target += chinese_target
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
@@ -213,22 +199,10 @@ async def search_matches(body: SearchInput, request: Request):
                     "VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *", body.review_id, search_key, scope["team"], body.phase, scope["competition"], body.from_utc, body.to_utc, body.attempt_id,
                 )
                 # 一次 INSERT SELECT 形成完整候选快照，之后按不可变序号遍历，避免更新和新增造成漏场。
-                candidate_total = await conn.fetchval(
-                    "WITH inserted AS (INSERT INTO v2_match_search_candidates(job_id,search_key,fixture_id,position,candidate_data) "
-                    "SELECT $1,$2,f.id,row_number() OVER(ORDER BY f.kickoff_at,f.id)," + _CANDIDATE_JSON + " FROM v2_fixtures f "
-                    "WHERE f.phase IN ('live','scheduled','finished','cancelled') AND ($3='all' OR f.phase=$3) "
-                    "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 "
-                    "OR regexp_replace(translate(lower(f.home_team),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]) "
-                    "OR regexp_replace(translate(lower(f.away_team),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]) "
-                    "OR EXISTS (SELECT 1 FROM unnest(f.home_aliases || f.away_aliases) alias WHERE "
-                    "lower(btrim(alias))=$8 OR regexp_replace(translate(lower(btrim(alias)),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]))) "
-                    "AND ($9='' OR regexp_replace(translate(lower(f.competition_name),$6,$7),"
-                    "'[^[:alnum:]]+',' ','g') LIKE '%'||$9||'%') "
-                    "AND ($10::timestamptz IS NULL OR f.kickoff_at >= $10) AND ($11::timestamptz IS NULL OR f.kickoff_at <= $11) "
-                    "AND ($12::text IS NULL OR f.sport=$12) RETURNING 1) SELECT count(*) FROM inserted",
-                    body.review_id, search_key, body.phase, raw_team_pattern, team_patterns,
-                    name_fold_source, name_fold_target, raw_team_alias, normalize_team_name(scope["competition"]),
-                    body.from_utc, body.to_utc, body.sport,
+                candidate_total = await snapshot_candidates(
+                    conn, review_id=body.review_id, search_key=search_key, phase=body.phase,
+                    team_query=body.team_query, competition=scope['competition'], sport=body.sport,
+                    from_utc=body.from_utc, to_utc=body.to_utc,
                 )
             if search["attempt_id"] != body.attempt_id:
                 raise HTTPException(status_code=409, detail="search belongs to an earlier attempt")
