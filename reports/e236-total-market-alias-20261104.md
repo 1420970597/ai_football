@@ -1,6 +1,6 @@
 # E236 大小球过滤别名
 
-更新时间：2026-11-04 18:35 UTC。状态：设计已记录，尚未实现。
+更新时间：2026-11-04 19:05 UTC。状态：真实联调通过；持续自然监控验收中。
 
 目标：消除真实模型将大小球写作over_under导致的首轮空查询，减少额外工具/推理回合；责任目录services/api/app/routes、tests、reports、docs/platform-v2。前置E234真实558ea5ff工具证据、当前E235正式监控冻结。实际首次market_kind=over_under/selection=over返回0，耗4.794秒；后续model改market_query大小再规范total才找到确切盘口。
 
