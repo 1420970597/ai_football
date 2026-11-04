@@ -29,6 +29,7 @@ services:
     environment:
       COLLECTOR_INTERNAL_TOKEN: ${COLLECTOR_INTERNAL_TOKEN:?Reuse collector token}
       EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Reuse executor token}
+      EXECUTOR_LIVE_ORDERS_ENABLED: ${EXECUTOR_LIVE_ORDERS_ENABLED:-false}
     volumes:
       - {type: bind, source: ./infra/remote/api_bridge.py, target: /deployment/api_bridge.py, read_only: true, bind: {create_host_path: false}}
       - {type: bind, source: ./.runtime/remote, target: /run/remote, read_only: true, bind: {create_host_path: false}}
@@ -77,7 +78,7 @@ services:
     environment:
       PLATFORM_EXECUTOR_API: http://api-bridge:8081/internal/executor
       EXECUTOR_INTERNAL_TOKEN: ${EXECUTOR_INTERNAL_TOKEN:?Reuse executor token}
-      EXECUTOR_LIVE_ORDERS_ENABLED: 'false'
+      EXECUTOR_LIVE_ORDERS_ENABLED: ${EXECUTOR_LIVE_ORDERS_ENABLED:-false}
     volumes:
       - {type: bind, source: ./.runtime/leyu-app-signing.json, target: /run/secrets/leyu-app-signing.json, read_only: true, bind: {create_host_path: false}}
       - {type: bind, source: ./.runtime/leyu-app-discovery.json, target: /run/secrets/leyu-app-discovery.json, read_only: true, bind: {create_host_path: false}}

@@ -9,3 +9,7 @@
 | 本人开启与停止回归 | tests、web/app | 未开始 | 当前账户校验和会员均通过，个人限额尚未填写、专家选择0；前端具备本人确认和限额表单 | Docker隔离测试真实API开启/关闭、错误限额、会员撤销、身份隔离及资金未知保护；双端浏览器点击保存启用/停止，替身协议不访问真实资金接口；线上只做开关、健康及账户许可未被代开的核验 |
 
 研究开始：git status/log退出0，当前仅保留未跟踪reports/feijipan-share-20261031/。`docker exec -i ai-football-v2-api-1 python - < .runtime/auto-betting-fix-20261104/diagnose.py`只读事务exit0，证据before.json不输出身份或秘密。源目录检索曾误用不存在tests/test_remote_bridge.py导致rg退出2，随后按rg --files定位真实测试。现有API拒绝保护按设计工作，根因是部署未开放，不通过删除业务门禁或伪造账户健康解决。下一步复核桥参数契约、提交规划、实现显式部署覆盖和测试，再冻结验收。
+
+22:01 UTC设计与代码阶段：用户确认实际提示与线上API拒绝一致。远端只读清单exit0确认executor候选168252e仍live=false。新增真实HTTP桥回归先运行单项exit1（明确开关true仍403），原失败保留before-test.log。实现桥服务显式布尔开关，默认false；仅true时允许严格live_capable=true且保持executor令牌范围；远端Compose环境默认false可配置，新增本机API与远端桥/执行器配套opt-in覆盖文件，不改默认安全策略。运行tests.test_remote_deployment冻结模块回归中，未改生产配置；后续须检查现存账户/资金任务0和个人许可关闭后按序发布。
+
+22:03 UTC针对性桥验证通过：`docker run ... --network none --cpus=.3 --memory=192m ... python -m unittest tests.test_remote_deployment -v` 27项11.967秒exit0。覆盖默认拒绝、显式开关允许、executor令牌、collector越权、畸形query和非布尔值拒绝、真实Unix桥传输、超时不重试、日志脱敏及恢复。新增双端本人表单保存启用/关闭回归。完整部署操作说明记录默认关闭与显式覆盖、按序切换和资金未知恢复，接下来提交冻结全套后端及浏览器；生产尚未改变。

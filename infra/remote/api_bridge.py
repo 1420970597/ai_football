@@ -30,16 +30,17 @@ EXECUTOR_ROUTES = {
 }
 
 
-def permitted(method: str, target: str, authorization: str, tokens: dict[str, str]) -> bool:
+def permitted(method: str, target: str, authorization: str, tokens: dict[str, str], *, live_orders_enabled=False) -> bool:
     parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc or parsed.fragment or '%' in target or '..' in target:
         return False
     allowed_query = (method == 'GET' and parsed.path == '/internal/telegram/pending'
                      and re.fullmatch(r'limit=([1-9]|[1-9][0-9]|100)', parsed.query))
-    # The remote deployment is deliberately non-trading. The actual executor
-    # sends this parameter even when its local live-orders switch is false.
+    # Default deployment remains non-trading. An explicit bridge gate permits
+    # only the executor's exact live claim query; role checks still apply.
     allowed_query = allowed_query or (method == 'POST' and parsed.path == '/internal/executor/claim'
-                                      and parsed.query == 'live_capable=false')
+                                      and (parsed.query == 'live_capable=false' or
+                                           live_orders_enabled is True and parsed.query == 'live_capable=true'))
     if parsed.query and not allowed_query:
         return False
     for role, routes in (('collector', COLLECTOR_ROUTES), ('executor', EXECUTOR_ROUTES)):
@@ -61,8 +62,9 @@ class UnixHTTPConnection(http.client.HTTPConnection):
 
 class Bridge(ThreadingHTTPServer):
     daemon_threads = True
-    def __init__(self, address, tokens, socket_path=SOCKET):
+    def __init__(self, address, tokens, socket_path=SOCKET, *, live_orders_enabled=False):
         self.tokens, self.socket_path = tokens, socket_path
+        self.live_orders_enabled = live_orders_enabled is True
         self.slots = threading.BoundedSemaphore(16)
         super().__init__(address, Handler)
 
@@ -91,7 +93,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         self.forward()
     def forward(self):
-        if not permitted(self.command, self.path, self.headers.get('Authorization', ''), self.server.tokens):
+        if not permitted(self.command, self.path, self.headers.get('Authorization', ''), self.server.tokens,
+                         live_orders_enabled=self.server.live_orders_enabled):
             return self.reply(403)
         if not self.server.slots.acquire(blocking=False):
             log.info('Remote bridge request method=%s route=%s status=503 category=capacity phase=admission',
@@ -156,4 +159,5 @@ if __name__ == '__main__':
               (('collector', 'COLLECTOR_INTERNAL_TOKEN'), ('executor', 'EXECUTOR_INTERNAL_TOKEN'))}
     if not all(tokens.values()) or tokens['collector'] == tokens['executor']:
         raise SystemExit('remote_bridge_credentials_invalid')
-    Bridge(('0.0.0.0', 8081), tokens).serve_forever()
+    Bridge(('0.0.0.0', 8081), tokens,
+           live_orders_enabled=os.environ.get('EXECUTOR_LIVE_ORDERS_ENABLED', 'false').casefold() == 'true').serve_forever()

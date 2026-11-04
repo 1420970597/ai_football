@@ -228,6 +228,14 @@ try {
     assert.equal(Number(value.data.betting.stake_per_order),2);
     assert.equal((await configure({enabled:false})).status,200);
     value=await api("/accounts/leyu"); assert.equal(value.data.betting.auto_enabled,false);
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({width,height:960});
+      assert.equal((await configure()).status,200);
+      assert.equal((await api('/accounts/leyu')).data.betting.auto_enabled,true);
+      assert.equal((await configure({enabled:false})).status,200);
+      assert.equal((await api('/accounts/leyu')).data.betting.auto_enabled,false);
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    }
   });
   await scenario("过期历史重验时间不阻断本人配置与紧急停止",async()=>{
     const aged=await page.request.post('http://account-fixture:8998/age-user-session'); assert.equal(aged.status(),200);

@@ -161,6 +161,18 @@ class RemoteTransportTests(unittest.TestCase):
     def tearDown(self):
         self.bridge.shutdown();self.bridge.server_close();self.thread.join(2)
         self.upstream.shutdown();self.upstream.server_close();self.upthread.join(2);self.temp.cleanup()
+    def test_explicit_live_gate_allows_only_authenticated_executor_claim(self):
+        path = '/internal/executor/claim?live_capable=true'
+        self.assertEqual(403, self.request('POST', path, token='executor'))
+        self.assertEqual([], self.upstream.calls)
+        self.bridge.live_orders_enabled = True
+        self.assertEqual(200, self.request('POST', path, token='executor'))
+        self.assertEqual(403, self.request('POST', path, token='collector'))
+        for query in ('live_capable=1', 'live_capable=True', 'live_capable=true&extra=1', 'live_capable=true&live_capable=false'):
+            self.assertEqual(403, self.request('POST', '/internal/executor/claim?'+query, token='executor'))
+        self.assertEqual(403, self.request('GET', path, token='executor'))
+        self.bridge.live_orders_enabled = 'true'
+        self.assertEqual(403, self.request('POST', path, token='executor'))
     def request(self,method,path,body=b'',token='collector',headers=None):
         conn=http.client.HTTPConnection('127.0.0.1',self.bridge.server_port,timeout=2)
         conn.request(method,path,body=body,headers={'Authorization':'Bearer '+TOKENS.get(token,token),**(headers or {})})
