@@ -219,11 +219,44 @@ class RemoteTransportTests(unittest.TestCase):
         self.assertEqual([],self.upstream.calls)
     def test_broken_tunnel_returns503_without_retry_and_recovers_next_explicit_request(self):
         original=self.bridge.socket_path;self.bridge.socket_path=original+'.absent'
-        self.assertEqual(503,self.request('GET','/internal/collector/config'))
+        with self.assertLogs('platform.remote_bridge',level='INFO') as captured:
+            self.assertEqual(503,self.request('GET','/internal/collector/config'))
+        evidence='\n'.join(captured.output)
+        self.assertIn('status=503 category=FileNotFoundError phase=upstream_request',evidence)
+        self.assertNotIn(self.bridge.socket_path,evidence)
         self.assertEqual([],self.upstream.calls)
         self.bridge.socket_path=original
         self.assertEqual(200,self.request('GET','/internal/collector/config'))
         self.assertEqual(1,len(self.upstream.calls))
+
+    def test_slow_bridge_evidence_excludes_credentials_body_query_and_identifiers(self):
+        identity='11111111-1111-1111-1111-111111111111'
+        body=b'{"private":"DO-NOT-LOG-THIS-BODY"}'
+        with patch('infra.remote.api_bridge.SLOW_REQUEST_MS',0):
+            with self.assertLogs('platform.remote_bridge',level='INFO') as captured:
+                self.assertEqual(200,self.request('POST','/internal/executor/jobs/'+identity+'/finish',body,token='executor'))
+        evidence='\n'.join(captured.output)
+        self.assertIn('route=/internal/executor/jobs/:id/finish status=200',evidence)
+        for private in (identity,body.decode(),TOKENS['executor'],'Authorization','Bearer'):
+            self.assertNotIn(private,evidence)
+        for field in ('elapsed_ms=','body_ms=','request_ms=','headers_ms=','read_ms='):
+            self.assertIn(field,evidence)
+        self.assertEqual(1,len(self.upstream.calls))
+
+    def test_bridge_capacity_rejection_is_distinct_from_upstream_failure(self):
+        for _ in range(16):
+            self.assertTrue(self.bridge.slots.acquire(blocking=False))
+        try:
+            with self.assertLogs('platform.remote_bridge',level='INFO') as captured:
+                self.assertEqual(503,self.request('POST','/internal/executor/claim?live_capable=false',token='executor'))
+            evidence='\n'.join(captured.output)
+            self.assertIn('route=/internal/executor/claim status=503 category=capacity phase=admission',evidence)
+            self.assertNotIn('live_capable',evidence)
+            self.assertEqual([],self.upstream.calls)
+        finally:
+            for _ in range(16):
+                self.bridge.slots.release()
+        self.assertEqual(200,self.request('GET','/internal/collector/config'))
     def test_response_does_not_cache_or_forward_cookie_headers(self):
         conn=http.client.HTTPConnection('127.0.0.1',self.bridge.server_port,timeout=2)
         conn.request('GET','/internal/collector/config',headers={'Authorization':'Bearer '+TOKENS['collector'],'Cookie':'MUST-NOT-FORWARD'})

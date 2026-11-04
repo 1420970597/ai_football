@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hmac
 import http.client
+import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import re
@@ -12,6 +13,8 @@ from urllib.parse import urlsplit
 
 SOCKET = '/run/remote/api.sock'
 MAX_BODY = 4 * 1024 * 1024
+SLOW_REQUEST_MS = 1000
+log = logging.getLogger('platform.remote_bridge')
 UUID = r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}'
 COLLECTOR_ROUTES = {
     'GET': (r'/internal/collector/(config|renewal/config)', r'/internal/telegram/(sources|pending)'),
@@ -71,6 +74,7 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(10)
     def reply(self, status, body=b'{}', retry_after=None):
+        self.response_status = status
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -90,36 +94,64 @@ class Handler(BaseHTTPRequestHandler):
         if not permitted(self.command, self.path, self.headers.get('Authorization', ''), self.server.tokens):
             return self.reply(403)
         if not self.server.slots.acquire(blocking=False):
+            log.info('Remote bridge request method=%s route=%s status=503 category=capacity phase=admission',
+                     self.command, re.sub(UUID, ':id', urlsplit(self.path).path))
             return self.reply(503)
         upstream = None
+        started = time.monotonic()
+        phase = 'body'
+        timings = {}
+        failure = 'none'
         try:
             if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) > 1:
                 return self.reply(400)
             raw = self.headers.get('Content-Length', '0')
             if not raw.isdecimal() or int(raw) > MAX_BODY:
                 return self.reply(413)
-            started = time.monotonic()
             body = self.rfile.read(int(raw))
+            timings['body_ms'] = (time.monotonic() - started) * 1000
             if len(body) != int(raw) or time.monotonic() - started > 10:
                 return self.reply(408)
             upstream = UnixHTTPConnection(self.server.socket_path, timeout=max(.1, 10-(time.monotonic()-started)))
+            phase = 'upstream_request'
+            phase_started = time.monotonic()
             upstream.request(self.command, self.path, body=body, headers={
                 'Authorization': self.headers.get('Authorization', ''), 'Content-Type': 'application/json',
                 'Content-Length': str(len(body))})
+            timings['request_ms'] = (time.monotonic() - phase_started) * 1000
+            phase = 'upstream_headers'
+            phase_started = time.monotonic()
             response = upstream.getresponse()
+            timings['headers_ms'] = (time.monotonic() - phase_started) * 1000
+            phase = 'upstream_body'
+            phase_started = time.monotonic()
             data = response.read(MAX_BODY + 1)
+            timings['read_ms'] = (time.monotonic() - phase_started) * 1000
             if len(data) > MAX_BODY:
                 return self.reply(502)
+            phase = 'downstream_reply'
             self.reply(response.status, data, retry_after=response.getheader('Retry-After'))
-        except (OSError, TimeoutError, http.client.HTTPException):
+        except (OSError, TimeoutError, http.client.HTTPException) as exc:
+            failure = type(exc).__name__
             self.reply(503)
         finally:
             if upstream:
                 upstream.close()
             self.server.slots.release()
+            elapsed_ms = (time.monotonic() - started) * 1000
+            status = getattr(self, 'response_status', 0)
+            if elapsed_ms >= SLOW_REQUEST_MS or status >= 500 or failure != 'none':
+                # Only authorized allowlisted paths reach here; never log the
+                # query, dynamic identifiers, headers, payload or exception text.
+                route = re.sub(UUID, ':id', urlsplit(self.path).path)
+                log.info('Remote bridge request method=%s route=%s status=%s category=%s phase=%s '
+                         'elapsed_ms=%.1f body_ms=%.1f request_ms=%.1f headers_ms=%.1f read_ms=%.1f',
+                         self.command, route, status, failure, phase, elapsed_ms,
+                         *(timings.get(key, -1.0) for key in ('body_ms', 'request_ms', 'headers_ms', 'read_ms')))
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
     tokens = {role: os.environ.get(key, '') for role, key in
               (('collector', 'COLLECTOR_INTERNAL_TOKEN'), ('executor', 'EXECUTOR_INTERNAL_TOKEN'))}
     if not all(tokens.values()) or tokens['collector'] == tokens['executor']:
