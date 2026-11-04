@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 import httpx
 
 from app import database, main
+from app.database_diagnostics import exception_backend_pids
 from app.routes import telegram
 
 
@@ -86,6 +87,20 @@ ADMIN_URL = os.environ.get('TEST_DATABASE_ADMIN_URL','')
 
 @unittest.skipUnless(ADMIN_URL,'requires explicit task-owned temporary PostgreSQL')
 class DatabaseFailurePostgresTests(unittest.IsolatedAsyncioTestCase):
+    async def test_backend_pid_metadata_failure_does_not_replace_original_error(self):
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute('SELECT pg_sleep(0.2)', timeout=0.05)
+            except TimeoutError as exc:
+                expected = str(conn.get_server_pid())
+                self.assertEqual(expected, exception_backend_pids(exc))
+                with patch.object(asyncpg.Connection, 'get_server_pid', side_effect=RuntimeError('private-value')):
+                    self.assertEqual('none', exception_backend_pids(exc))
+                self.assertEqual(expected, exception_backend_pids(exc))
+            else:
+                self.fail('real PostgreSQL command must time out')
+        self.assertEqual(1, await self.pool.fetchval('SELECT 1'))
+
     async def asyncSetUp(self):
         parts = urlsplit(ADMIN_URL)
         if parts.hostname not in {'pgtest','ai-football-v2-pgverify'} or parts.username != 'postgres' or parts.path != '/postgres':
@@ -194,14 +209,20 @@ class DatabaseFailurePostgresTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_asyncpg_command_timeout_is_503_and_never_replays_query(self):
         calls = []
+        backend_pids = []
         @self.app.post('/internal/test/command-timeout')
         async def slow_command():
             calls.append(1)
             async with self.pool.acquire() as conn:
+                backend_pids.append(conn.get_server_pid())
                 await conn.execute('SELECT pg_sleep(0.2)',timeout=0.05)
-        response = await self.client.post('/internal/test/command-timeout')
+        with patch('app.main.log.warning') as logged:
+            response = await self.client.post('/internal/test/command-timeout')
         self.assertEqual(503,response.status_code,response.text)
         self.assertEqual('unconfirmed',response.json()['operation_status'])
         self.assertFalse(response.json()['automatic_retry'])
         self.assertEqual([1],calls)
+        self.assertEqual(1, len(backend_pids))
+        self.assertEqual(str(backend_pids[0]), logged.call_args.args[-1])
+        self.assertNotIn('backend_pids', response.text)
         self.assertEqual(1,await self.pool.fetchval('SELECT 1'))

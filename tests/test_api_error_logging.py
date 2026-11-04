@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from app.main import _safe_exception_frames, unexpected_error
+from app.database_diagnostics import exception_backend_pids
 from starlette.requests import Request
 
 
@@ -17,6 +18,23 @@ def request_with_id(value: str) -> Request:
 
 
 class ApiErrorLoggingTests(unittest.TestCase):
+    def test_backend_pid_diagnostics_do_not_invoke_lookalike_or_serialize_locals(self):
+        class Lookalike:
+            calls = 0
+            def get_server_pid(self):
+                self.calls += 1
+                raise AssertionError('private-dsn-must-not-be-read')
+            def fail(self):
+                password = 'private-password'
+                raise TimeoutError(password)
+        lookalike = Lookalike()
+        try:
+            lookalike.fail()
+        except TimeoutError as exc:
+            self.assertEqual('none', exception_backend_pids(exc))
+        self.assertEqual(0, lookalike.calls)
+        self.assertEqual('none', exception_backend_pids(TimeoutError('private-value')))
+
     def test_traceback_formatter_contains_only_bounded_code_locations(self):
         try:
             raise RuntimeError("postgresql://user:secret@example.invalid/db?sslmode=require")
