@@ -57,3 +57,5 @@
 19:18实际复杂SQL准备02完成exit0/stderr空：121次fixture SQL/121次赛果租约SQL全成功，fixture P50/P95/max423.061/502.427/523.134ms，lease482.336/525.051/603.183ms，未复现5秒准备长尾。public conn.prepare是显式不使用应用自动语句缓存的解析探针，未绑定参数/执行业务SQL，其时间可能含前个临时statement关闭开销，不能当生产缓存命中耗时或证明所有准备调用正常。第二observer最后一条可能位于finished之后，正式结束应筛event=finished而非盲取末行；0业务写入，不据本探针调大超时或部署缓存改动。
 
 19:21新异常阶段：E236窗口sample31 Telegram state unavailable/3来源unavailable/2lease_deferred，数据库6租约仍有效；19:14:54 checkpoint、19:17:43 observed/source_with_lease、19:18:59 executor expire_leases均Timeout。即时CPU API1.06%/隧道0.23%/worker0.13%，这仅瞬时值不能排除请求期间节流；不扩大资源或改超时。实际复杂prepare独立探针成功不能排除原池连接/事务路径。追加03轮600秒/每秒pg_stat_activity固定分类只读，0参数/原文/凭据，捕获实际新异常等待链；生产E236窗口仍冻结。
+
+19:35第三轮高频采样完整：19:20:23–19:30:21，601样本600.3秒exit0/stderr空、0截断，1300活动/1270ClientRead/3DataFileRead/3WALSync/1WALWrite。8阻塞样本含7advisory/1transactionid：19:21:50–51来源锁被正在读取telegram_events/source_experts/experts的事务阻塞，紧邻19:21:52两请求Timeout；另审核租约被trace事务阻塞。最大query6.020秒/事务6.488秒。只能按时间关系关联，未拿请求到pid直接映射。E237减少领取往返也缩短来源共享锁持有时间的可能性有依据，但未部署/未证明消除所有长尾，不删除锁或加时。
