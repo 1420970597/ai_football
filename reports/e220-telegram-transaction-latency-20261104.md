@@ -21,3 +21,5 @@
 13:58候选与定向证据：新负向用例前两轮因测试建job遗漏idempotency_key、UUID/text同参数类型推断分别error/exit1，修复测试建模后第三轮在旧结算上真实LockNotAvailableError，5.219秒/1failure/exit1，不把建模error算成业务复现。独立候选41f37e7（根任务分支cherry-pick为a448c17）批量insert-ledger、整批read/validate、批量update-signal，含初始行锁读取共4次往返；保持同一算法、计算内容、Decimal、created_at及409冲突，未改迁移/数据库超时。冻结后`test_result_ledger test_settlement`共37项35.222秒exit0，原并发绑定预算用例通过，候选未部署。完整隔离套件同冻结41f37e7正在运行，源码不再修改。
 
 第二轮37次189秒操作类别采样未遇阻塞，不能据此撤销首轮3个真实等待。新窗另一条真实多场推荐10个有UTC范围查询共108候选（原文时间为范围基准），最终仍出现timeout，日期范围不是完整延迟解决方案；状态继续跟踪。线上原图/同attempt回执1440/390共4点击场景复测exit0。一次脱敏intent读取因0600被非root测试镜像拒绝，保持原权限、改任务容器user0只读成功；一次统计内联语法错误已改为独立脚本重跑，不作为业务验证通过。Hermes源码只读查验时系统python缺yaml，未安装或修改全局依赖/生产reasoning参数，未将该诊断当成功。
+
+完整回归（14:07 UTC）：同冻结41f37e75dfd0924bdfe846fe7fc4dc680b8aee67独立worktree运行infra/test/run.sh，1249项549.958秒、0失败/错误/跳过、exit0，机器报告SHAca287ca96b927e9bebb565bf12594949189b479be5c654e9eb5c92bec07905e4，隔离备份恢复业务差异空；套件中gate日志仅临时测试DB。API镜像ai-football-api:2.0.0-dev-e220-41f37e7 buildx --load exit0，revision记录候选短SHA41f37e7对应上述完整SHA，不与根分支cherry-pick混淆。E219完整窗证据已保存，准备仅API/worker idle切换，MCP/web/Hermes上下文与资源不变；改正上阶段健康检查假定，worker检查Running、API实际ready，不再把缺少Health字段视作有健康检查。配置解析exit0，部署尚待gate。
