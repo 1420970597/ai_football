@@ -53,3 +53,5 @@
 19:07实际SQL准备调查设计：原30轮checkpoint冷/热查询未覆盖当前赛事大批量SQL；此轮仅在独立默认只读连接上prepare现有ingest_fixture_batch与require_lease的原SQL，绝不execute这两个业务语句/不绑定业务参数。通过inspect+AST只取唯一conn.execute/fetchrow静态常量，运行在Docker，JSON codec与生产一致，原5秒连接/命令预算，最多600秒121轮242prepare。第二只读连接每秒只看该诊断pid的状态/等待/时间，不输出SQL、凭据或数据；这是显式诊断负载，不当自然流量。用实际复杂SQL而非重复简单查询检查准备阶段长尾，失败保留类别，不改生产池/超时。E236新窗口冻结继续。
 
 该准备探针首轮19:05实际exit1，SQL提取假设整个批处理仅一个conn.execute不成立，AssertionError/0prepare，不是业务失败。限定原首个INSERT INTO v2_fixtures或原SELECT v2_result_checks精确前缀、仍唯一静态常量后02重跑；旧stderr保留。上一条19:07为预写记录偏差，实际设计/首命令19:05 UTC，以原样本时间为准。
+
+19:18实际复杂SQL准备02完成exit0/stderr空：121次fixture SQL/121次赛果租约SQL全成功，fixture P50/P95/max423.061/502.427/523.134ms，lease482.336/525.051/603.183ms，未复现5秒准备长尾。public conn.prepare是显式不使用应用自动语句缓存的解析探针，未绑定参数/执行业务SQL，其时间可能含前个临时statement关闭开销，不能当生产缓存命中耗时或证明所有准备调用正常。第二observer最后一条可能位于finished之后，正式结束应筛event=finished而非盲取末行；0业务写入，不据本探针调大超时或部署缓存改动。
