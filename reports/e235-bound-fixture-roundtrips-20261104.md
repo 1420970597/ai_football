@@ -17,3 +17,5 @@
 18:07定向与真实只读对照通过：临时PG、现有固定verifier镜像、只读源挂载，unittest tests.test_reviews tests.test_quote_observation tests.test_review_tool_evidence共92项140.417秒exit0/无失败错误跳过，期间被测代码未修改。e235-targeted-01.log保留正常预期失败审计告警，不当作运行失败。远端30组交错对照exit0/stderr空，两者60次全部成功且稳定比赛身份一致；旧两查询P50/P95 474.703/526.289ms，新单查询241.093/284.269ms，P50减少233.610ms，约49.2%。仅单连接预热读取、不含事务/刷新/模型，不外推完整工具收益。下一步提交冻结同源全后端与固定框架；当前生产尚未更新，正式窗继续至18:27:15以后。
 
 18:13候选框架及镜像：冻结fb86eec69a52c111b66fd2822332b4342919ddb9，固定官方v0.22.5框架af-hermes-framework-614796全部exit0，原正常/引用图/攻击/并行/取消本人清理/另一会话完成/503/重启哈希/预算等场景通过，260候选13页连续搜索保留。提供方为明确替身，不证明真实模型耗时。API候选26736a5a29c7e8e514551875b40807ab6a7c9a4e2e025440051a0f024343dac1，revision完整一致；首构建标签仅短SHA，02重建修正完整标签，两个构建exit0，均未发布。API/worker-only Compose配置check exit0；本项目受限builder ai-football-e131。完整后端仍冻结运行，定向PG/网络已清理，生产未更新。
+
+18:20完整后端通过：同冻结fb86eec，bash infra/test/run.sh exit0，1278项568.865秒/0失败错误跳过，恢复前后差异{}；机器报告包装571.186秒、committed_source_verified=true，SHA256 5561b813d2c3526bb5a2897d88a40d3cfc394b4f49b56ac50cd4bbf34a50c98e，.runtime/e235-candidate/.runtime/test-evidence/613192/backend-tests.json。全后端、定向、固定框架与同源候选已通过，生产未提前改动；待E234完整窗口18:27:15以后先终审，再自然idle更新API/worker，保留其他服务/配置/资源。
