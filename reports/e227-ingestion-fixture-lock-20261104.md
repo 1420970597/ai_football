@@ -15,3 +15,5 @@
 15:28定向重跑100项129.205秒exit0；包含原故障模块，无跳过。冻结aee11ed完整Docker套件仍运行，未部署。E225独立66f91a6完整1257项548.600秒exit0，报告SHA73b23bb9d4c0e0389ca0d50d481ee58996d4db6bb51a6e21d9fcc984454305ea，仍不替代合并候选全套验收。
 
 15:32冻结完整验证通过：aee11ed0b8645d75f547457df5ef50bf46817ee1完整1258项548.469秒exit0，无失败错误跳过，恢复差异{}；机器报告SHA c9567877808afe534ab9570428062d41a85503a5ecc05450ddb56df89486c0cd。首次在候选工作目录使用根目录相对路径读取SHA/创建通过标识失败，两条操作纠正为根目录后完成，不影响已结束的测试或镜像源。API构建exit0、镜像4f3b43713bf9595b798b8a0c2e4db8ebe5e6e7bf73c5d069d41a04d6e186e5ce；MCP同源构建exit0，完整revision已核对，Compose配置检查exit0。开始只暂停新领取的idle handoff，等待真实审核自然结束，尚未切线上。不把隔离通过当作联调通过。
+
+15:36真实切换：15:32:17暂停新领取、15:33:53.547534自然idle，API/worker/MCP逐一同源切换，deploy exit0，API ready200、MCP受保护initialize200，gate正常release。Hermes/web/存储隧道/remote-link未重启。首次docker cp写入只读rootfs失败，导致第01监控脚本缺失exit2；未计为有效观察，改由容器stdin写入可写/tmp，正式第02窗口15:35:31.271930 UTC开始，完整截止16:05:32以后。首样本connected/authorized true但state unavailable，保留为健康失败，不据此伪称全面恢复。正式15场重算HTTP200，台账before/after核对与双端浏览器进行中；E226优化仅根分支候选，未部署。
