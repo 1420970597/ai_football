@@ -25,3 +25,5 @@
 17:14完整后端通过：同冻结bef4a43，bash infra/test/run.sh exit0，1276项571.293秒/0失败错误跳过，恢复差异{}；机器报告总包装573.765秒、SHAef97d43c55cf2f9782c58e48cb6c7de1178f8aee3425b50be023f4ffa73f96b0，.runtime/e232-candidate/.runtime/test-evidence/441639/backend-tests.json，committed_source_verified=true。候选全检查通过，当前生产仍E230，等待17:20:30之后完整终审再idle部署API/worker，不提前改变观察窗口。
 
 17:18真实重审验收准备：只读检查实际live_orders_enabled=false；fe833486原job9e432ce8及282eb80f原job249c894a均unresolved、当前版本/来源/信任/媒体合规且retry_problem=null。E232安全生效后，使用现有管理员登录/CSRF/审核重试接口各创建一个正常重试任务，固定独立幂等键、原因与原任务关联；保留原回执，不写假消息或伪造推荐，不通过SQL改状态。两条原文分别验证报价时效和引用图（后者缺明确新盘口应允许未解决，不强行接受）。重试与自然新消息样本分开，正常生产匹配/价格/权限校验及审计全部保留；下单全局关闭，不执行真实交易。
+
+17:25安全生效：E230完整窗口已保留，17:22:41.904017暂停claim/17:22:45.122957自然idle，API/worker同源bef4a43镜像736c2dff更新exit0、API ready200/worker running、门禁正常release；其他5服务ID/资源不变。两个compose旧worker orphan实际exited，仅只读确认未停止/删除；存储网络仅当前API/worker/tunnel，无重复旧运输。实盘开关再次断言false，新正式1800秒精确17:25:05.286219开始，17:55:06以后终审；正常15场rebuild/原台账与双端浏览器正在验证，之后才执行两条实际旧消息正常幂等重审。
