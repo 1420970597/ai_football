@@ -2,6 +2,10 @@
 
 更新时间：2026-11-04 16:09 UTC。状态：研究中，未改实现。
 
+阶段更新：2026-11-04 16:33 UTC，f409a05代码已写、定向隔离验证通过；固定v0.22.5框架完整验收exit0（af-hermes-framework-346214）。reply_image使用生产review_message/native结构化视觉路径，提供方收到1张引用图、17次请求、260候选连续13页完整搜索、1条工具接受记录；timeout_cleanup及其他攻击/分页/并行/503/重启/预算场景全部通过。对象读取和模型提供方是明确隔离替身，不能证明线上真实语义或3秒延迟。完整后端回归仍在运行，未部署。
+
+命令与发布准备：冻结工作树运行bash tests/integration/run_hermes_acceptance.sh，acceptance_exit=0；同源services/api/Dockerfile经受限ai-football-e131 builder构建exit0，镜像ai-football-api:2.0.0-dev-e230-f409a05。仅API/worker发布覆盖配置检查exit0，必须等待E229完整16:46:39以后终审、完整回归通过并持有自然idle门禁才可更新。当前正式窗口不改实现或参数。
+
 目标：让可信专家新消息引用同群已采集原文时，把原图作为有来源标识的不可信视觉上下文交给Hermes，减少把简称误当另一球队；不能将被引用旧推荐自动当作本条新意图。责任目录services/api、tests、reports、docs/platform-v2；依赖远端已有私有媒体/稳定source及message关联、当前版本/删除检查。
 
 证据：E227自然9f6af4c1图片成功识别哈尔迪亚+1，但随后282eb80f“追對家”虽引用它，仅保存reply_context.text/has_media；worker只查reply_text，hermes_client只准备当前media_objects。因此模型看不到旧图并按Hull搜索0候选。该回复缺明确新盘口，即使补图也不能允许猜盘口/倍率或跳过绑定。原始回执不可改写成成功。
