@@ -11,3 +11,5 @@
 实现动作：独立候选工作树更新中文上下文和专家审核指引；现运行绑定文件在 E215 完整窗口结束前不改。冻结后运行现有 Hermes runner/fixture/传输边界验证，确认固定技能加载、工具白名单和完整候选约束仍生效；自然空闲 gate 后切换上下文及重启 Hermes，正常管理员重审上述真实消息，不写假消息或真实订单，随后重新开始完整三十分钟观察。
 
 验收：真实重审先原名再短片段、返回目标候选且完整分页；如能确认双方、联赛、时间，则仅绑定对应比赛并按当时盘口状态决定是否可录入，不回填过期盘口；不符或歧义必须保持未解决。真实浏览器核对原图、当前模型及系统回执，记录请求耗时和工具轮次。修复后自然新帖逐条有任务、当前attempt模型和回执。失败保留原轨迹，不能为了通过检查强制同名或替换盘口线。
+
+候选冻结验证：独立detached提交 `5cecb3e84ae6cb2f8716c606ff16e18e5bc90287`，仅更新两份Hermes上下文/指引，运行绑定尚未修改。冻结后Docker命令 `python -m unittest tests.test_hermes_runner tests.test_hermes_fixture_contract tests.test_mcp_transport tests.test_review_search_scope` 33项、3.291秒、退出0，证据 `.runtime/e209-live/e216-frozen-targeted.log`。这证明固定技能加载和工具/范围边界未被破坏，不证明模型实际采用新检索策略；真实俄杯重审和新窗口仍待生效后验证。
