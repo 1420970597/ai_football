@@ -21,3 +21,5 @@
 17:02定向03通过：90项113.715秒exit0/0失败错误跳过，覆盖reviews、quote_observation、review_tool_evidence；临近过期原报价/确认、刷新失败无信号无证据、年轻确认不重复上游调用、原source时间保持、现价更新、停盘/未知时间/错误盘口/跨fixture/历史/越权/完整分页等原契约通过。候选仅准备刷新策略与3项行为测试，不改最终录入校验。下一步冻结同源完整后端与固定框架，待E230窗终审后再安全部署；自然图文未成功的旧回执保持原样。
 
 17:07冻结框架通过：bef4a4320ba65e0248a36d8f5c27a8b1de36e3d9固定官方v0.22.5完整框架exit0（af-hermes-framework-441638），取消清理239.0ms且其他会话完成/0信号；reply_image/normal各260候选13页及工具接受通过，攻击/长度/并行/无意图/503/重启哈希/预算全通过。提供方与对象读取为显式隔离替身，不证明真实模型3秒。同源API镜像sha256:736c2dff058370ec7dcd4bd10800ef0ebc0ee90c57c1ba98d8af71d8ccaaabfc/revision一致，受限builder构建exit0；API/worker-only覆盖配置check exit0，正式窗口结束和完整后台通过前不部署。独立E232定向PG及网络已清理，不动其他数据。
+
+17:14完整后端通过：同冻结bef4a43，bash infra/test/run.sh exit0，1276项571.293秒/0失败错误跳过，恢复差异{}；机器报告总包装573.765秒、SHAef97d43c55cf2f9782c58e48cb6c7de1178f8aee3425b50be023f4ffa73f96b0，.runtime/e232-candidate/.runtime/test-evidence/441639/backend-tests.json，committed_source_verified=true。候选全检查通过，当前生产仍E230，等待17:20:30之后完整终审再idle部署API/worker，不提前改变观察窗口。
