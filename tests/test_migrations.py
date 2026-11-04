@@ -64,7 +64,7 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         before = dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job))
         self.assertEqual(['021_review_search_all_phases.sql','022_result_observations.sql',
                           '023_telegram_author_backfill.sql','024_telegram_observation_request_id.sql',
-                          '025_telegram_event_members_lookup.sql'],
+                          '025_telegram_event_members_lookup.sql','026_quote_nonclosed_lookup.sql'],
                          await apply_migrations(self.conn))
         self.assertEqual(before, dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job)))
         for phase in ('finished', 'cancelled'):
