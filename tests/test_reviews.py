@@ -97,6 +97,41 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, result.status_code, result.text)
         return result.json()["markets"][0]
 
+    async def test_bound_fixture_read_preserves_native_fixture_fields(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        body = reviews.MarketInput(**self.context(fixture_id=fixture_id))
+        async with self.pool.acquire() as conn:
+            expected = dict(await conn.fetchrow('SELECT * FROM v2_fixtures WHERE id=$1', fixture_id))
+            actual = await reviews._bound_active_fixture(conn, body)
+        self.assertEqual(expected, actual)
+        self.assertIsInstance(actual['kickoff_at'], datetime)
+
+    async def test_invalid_fixture_binding_never_refreshes_source_and_keeps_error_priority(self):
+        fixture_id = await self.fixture()
+        self.client._transport.app.state.settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        factory = httpx.AsyncClient
+        calls = []
+
+        async def handler(request):
+            calls.append(request.url.path)
+            return httpx.Response(200, json={'accepted': True, 'reason': 'refresh_completed'})
+
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+            for candidate in (fixture_id, 'missing-fixture'):
+                response = await self.post('list_match_markets', fixture_id=candidate)
+                self.assertEqual(409, response.status_code)
+                self.assertEqual('fixture must be uniquely resolved first', response.json()['detail'])
+            key, _ = await self.search_all()
+            await self.resolve(key)
+            await self.pool.execute('UPDATE v2_review_fixture_bindings SET attempt_id=$2 WHERE job_id=$1', self.job, uuid.uuid4())
+            response = await self.post('list_match_markets', fixture_id=fixture_id)
+            self.assertEqual(409, response.status_code)
+            self.assertEqual('fixture must be uniquely resolved first', response.json()['detail'])
+        self.assertEqual([], calls)
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+
     async def test_fixture_ingestion_allows_audit_reference_but_serializes_writers(self):
         fixture_id = await self.fixture()
         body = internal.FixtureInput.model_validate({

@@ -23,3 +23,5 @@
 17:54被动与本机计时完成：API/隧道各61次17:39:55–17:49:56，两个Docker exec进程exit0/stderr空；API重传/网络超时增量均0，隧道重传9（fast8/probe1）、网络超时增量0。两容器CPU累计限流19.045/27.008秒，但5个真实DB Timeout对应10秒桶均无TCP重传，且17:42:27那一桶API/隧道都0限流；因此这几项不是这5个超时的充分解释。仅10秒桶及累计数，未排除更早请求阶段或远端主机问题，不称根因已找到。
 
 本机无DB健康17:41:54.567855–17:51:54.469185共600样本1200请求全200，P50/P95 3.479/5.402ms、max90.115ms，exit0；两个持久连接未保证覆盖两个worker，仍不能排除其他worker停顿。只保存计时/状态，未读取秘密。汇总docker run --rm --network none --cpus0.1 --memory64m现有API镜像执行e231-probe-summary.py，exit0，证据e231-probe-summary-final.json；原错误时间/脱敏帧在e231-error-moments-mid.json。正式E232窗仍到17:55:06以后才终审。
+
+17:59追加远端预算调查设计：本机TCP/健康尚未归因，使用现有已核验SSH配置、固定旧台账容器名ai-football-postgres，仅docker exec读取该数据库容器自身cgroup cpu.stat/cpu.max/memory.events和CPU/IO/memory pressure，61次/10秒。远端代码全部在该Docker容器中执行，不改预算/服务/目录、不读账号/环境/连接地址/SQL。SSH输出仅固定指标，10秒采样对齐后续错误；若SSH或指标缺失保留失败，不枚举其他容器或提权绕过。不把远端累计限流直接当因果，先确认是否存在及请求时间相关性。

@@ -275,6 +275,22 @@ async def resolve_match(body: ResolveInput, request: Request):
             return await tool_success(conn, body, result, {'result': {'resolved': result['resolved'], 'candidate_count': result.get('candidate_count')}})
 
 
+async def _bound_active_fixture(conn, body: MarketInput) -> dict:
+    row = await conn.fetchrow(
+        "SELECT f.*,EXISTS(SELECT 1 FROM v2_review_fixture_bindings b "
+        "WHERE b.job_id=$1 AND b.attempt_id=$2 AND b.fixture_id=$3) AS review_fixture_bound "
+        "FROM (VALUES(1)) AS anchor(value) LEFT JOIN v2_fixtures f "
+        "ON f.id=$3 AND f.phase IN ('scheduled','live')",
+        body.review_id, body.attempt_id, body.fixture_id,
+    )
+    fixture = dict(row)
+    if not fixture.pop('review_fixture_bound'):
+        raise HTTPException(409, detail='fixture must be uniquely resolved first')
+    if fixture['id'] is None:
+        raise HTTPException(409, detail='fixture is no longer active')
+    return fixture
+
+
 async def _refresh_bound_market(body: MarketInput, request: Request, *, force: bool = False) -> dict:
     """Verify ownership first; hold no database connection across source I/O."""
     settings = request.app.state.settings
@@ -287,15 +303,7 @@ async def _refresh_bound_market(body: MarketInput, request: Request, *, force: b
             age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
             if job['review_mode'] != 'real_time' or not 0 <= age <= REALTIME_WINDOW_SECONDS:
                 return {'attempted': False, 'reason': 'historical_review_not_current'}
-            bound = await conn.fetchval(
-                'SELECT EXISTS(SELECT 1 FROM v2_review_fixture_bindings WHERE job_id=$1 AND attempt_id=$2 AND fixture_id=$3)',
-                body.review_id, body.attempt_id, body.fixture_id)
-            if not bound:
-                raise HTTPException(409, detail='fixture must be uniquely resolved first')
-            fixture = await conn.fetchrow(
-                "SELECT source_id AS source_match_id FROM v2_fixtures WHERE id=$1 AND phase IN ('scheduled','live')", body.fixture_id)
-            if not fixture:
-                raise HTTPException(409, detail='fixture is no longer active')
+            fixture = await _bound_active_fixture(conn, body)
             filters = {'market_kind': body.market_kind, 'period': body.period, 'line': body.line,
                        'selection': body.selection, 'market_query': body.market_query}
             if not force:
@@ -309,7 +317,7 @@ async def _refresh_bound_market(body: MarketInput, request: Request, *, force: b
                         return {'attempted': False, 'reason': 'quotes_already_fresh'}
                 elif total_quotes and any(value is not None for value in filters.values()):
                     return {'attempted': False, 'reason': 'no_quotes_for_filter'}
-            source_match_id = fixture['source_match_id']
+            source_match_id = fixture['source_id']
     try:
         async with asyncio.timeout(9):
             async with httpx.AsyncClient(timeout=httpx.Timeout(8.5, connect=2), trust_env=False, follow_redirects=False) as client:
@@ -338,12 +346,7 @@ async def list_match_markets(body: MarketInput, request: Request):
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
-            bound = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM v2_review_fixture_bindings WHERE job_id=$1 AND attempt_id=$2 AND fixture_id=$3)", body.review_id, body.attempt_id, body.fixture_id)
-            if not bound:
-                raise HTTPException(status_code=409, detail="fixture must be uniquely resolved first")
-            fixture = await conn.fetchrow("SELECT * FROM v2_fixtures WHERE id=$1 AND phase IN ('scheduled','live')", body.fixture_id)
-            if not fixture:
-                raise HTTPException(status_code=409, detail="fixture is no longer active")
+            fixture = await _bound_active_fixture(conn, body)
             filters = {'market_kind': body.market_kind, 'period': body.period, 'line': body.line,
                        'selection': body.selection, 'market_query': body.market_query}
             total_quotes, candidates = await _read_market_quotes(conn, body.fixture_id, filters)
