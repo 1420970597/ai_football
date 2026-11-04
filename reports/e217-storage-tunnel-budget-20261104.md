@@ -21,3 +21,5 @@
 完整窗口结论：12:53:39.504117起1802.9秒，55样本，Python退出0，JSONL SHA195e299472cf2ca7da6e8826ee413cb74699b988bbbe1b4d54514b7b6f1bf253。health/ready全200、Telegram connected/authorized且无degraded、六租约全部有效且单owner；这是基础健康通过，不能代替模型吞吐。终样本50自然新帖，42ready/8unsupported，42eligible中26当前回执/16在途、0缺job。精确截止13:23:42.400只读审计50帖未截断，42eligible为23unresolved/3succeeded/14queued/2running，无current_failure_category，但尚有16未完成，不满足用户完全正常标准。事件53版本平均4066.0/P959786.5ms、29≤3秒，是源事件采集指标，不是模型端到端，三秒未通过。
 
 资源全窗前后计数：有效period10362/throttled1043（10.0656%），usage_usec+33571535、throttled_usec+76556019；与先前短基线24.46%时间和自然流量均不同，不能宣称因果或端到端达标。实时callback+2228/staged144/deferred0/unmapped2083不是帖子数。窗口中保留E216运行镜像/上下文不变，API/worker未重建。完整证据已复制出容器后启动E219 idle gate：13:24:45.916暂停领取、等待活动审核退出，不在审核中途重启。下一阶段联合部署E218检索范围与E219结算/展示修复，重新起完整30分钟验收。
+
+13:29日志级复核：尽管55次状态采样正常，完整时间范围API实际live234次200+1次503、reconciliation324次200+2次503、delete25次200。live P952763.1/max5458.3ms，reconciliation P955657.7/max7620.5ms，delete P955105.6/max5927.7ms；snapshot P951022.6ms。因此只能称“采样基础健康通过”，整条采集服务稳定性仍失败，不能把短暂503隐藏或据此认定隧道优化已解决问题。pipefail保留日志管道原退出码，分析exit0。源事件原有重试继续核对，无漏job不能等同于无短暂传输错误。
