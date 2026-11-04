@@ -17,3 +17,5 @@
 16:03代码与定向通过：实现两个独立SSH监督进程，保留combined命令兼容，显式ControlMaster=no/ControlPath=none，原PG/S3白名单/主机校验/端点不变；任一失败关闭真实代理监听并收割两个子进程，部分启动失败也清理已启动进程。初15项2.026秒exit0；补充真实Python子进程模拟SSH存活并发送监督器SIGTERM（不访问上游），最终16项3.022秒exit0，实际两个子进程退出/代理端口关闭。冻结后完整Docker回归及同源临时真实隧道验证，尚未动原容器。临时对照仍保持项目归属，之后按任务清理。
 
 16:10同源真实分离隧道验收：固定264770fd76227937a12dc2f45a5d339da09bb873构建exit0，镜像d9b932d91464022faef29d6e2aec09f5e3f3c2cdfb529a4404fb351fec6f2552/full revision核对。临时新镜像实际两条独立SSH（docker top首命令缺PID列失败，补pid,comm核实），原配置只读、0.1核96MiB。15:05记录应为16:05:12左右至16:08:23的61对纯SELECT1全部成功：对照P50/P95 179.212/264.536ms，分离候选131.115/146.391ms/max262.129ms。该轮与早先新连接对照不混用。故障试验仅向任务临时容器两条SSH中的一个发SIGTERM，监督器检测断开、关闭代理并退出1，符合预期，不影响原服务；任务容器已删除，原存储隧道仍原ID/资源。临时E225 PG及网络已按归属清理。完整冻结后端仍运行，未部署。
+
+16:13切换门禁决策：原gate持有调度advisory锁的数据库连接也经过现有隧道，直接替换会使门禁失效。因此先启动受限的任务临时已验证分离隧道；仅gate容器通过extra_hosts把原storage-tunnel主机名解析到临时端点，原DSN/端口/TLS身份不变，生产服务仍原路由。Compose run当前版本没有--add-host，已在发布前help核实，改为仅该gate的Compose DNS覆盖，并单独config --quiet验证。自然idle后先停止已空闲worker，再替换本项目storage-tunnel，ready后更新API/worker；每阶段检查gate仍held/无失败，门禁释放后才移除临时运输。临时多0.1核96MiB，不常驻；正式隧道仍0.25核128MiB，Hermes/MCP/web/remote-link/远端采集不重启。旧镜像和配置保留可回退，原持久数据不删除。当前完整回归未结束，尚未启动idle gate或切生产。
