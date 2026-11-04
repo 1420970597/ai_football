@@ -49,7 +49,7 @@ services:
           create_host_path: false
     expose: ["15432", "18080"]
     networks: [storage-private, egress]
-    cpus: ${TUNNEL_CPUS:-0.1}
+    cpus: ${TUNNEL_CPUS:-0.25}
     mem_limit: 128m
     logging: *logging
 
