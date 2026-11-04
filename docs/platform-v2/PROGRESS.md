@@ -2148,3 +2148,5 @@ E222定向通过及真实青年赛恢复（2026-11-04 14:26 UTC）：新2barrier
 E222完整隔离通过及镜像准备（2026-11-04 14:38 UTC）：冻结2f90c0e完整Docker1251项548.539秒exit0/0失败错误跳过，机器报告总执行550.946秒/SHA9215c8584d858aef2f9b4b415694fd34ec62f05d751c5fd13c2faf5de14c66d1，恢复差异{}。同源API buildx exit0，镜像ID1ec26bb61cc0180aea99beb5dccc3da2e52daba12a09e3aa94dc0f49537f267d/revision完整核对。当前仅隔离验证通过，生产仍E220；等待14:44:01完整窗结束才idle切API/worker。E220样本39见7eligible/6receipt/1在途无漏job，六租约有效，但日志已见reconciliation503和审核锁超时，稳定性未通过。下一步保存完整原始证据与精确回执，部署、原15场重放及双端真实浏览器，再完整1800秒。
 
 E223锁序研究记录（2026-11-04 14:40 UTC）：新报告记录实时message→event与补采apply_claim event→message的相反锁序，属于源码可核实风险，尚未负向复现或确定本次503归因。候选先统一source→message→event，再保留原claim/租约/摘要/事务确认校验；计划真实PG并发barrier及pg_locks等待证据，原预算负向后再定向/全套。当前仅研究，未改生产或E222候选。现有补采lease测试原断言事件先锁需改为明确观察message等待后过期，业务409/回滚必须保持。先完成14:44:01窗口及E222部署，不混入未验证改动。
+
+E223死锁实际复现（2026-11-04 14:43 UTC）：第一duplicate-ready样本未写事件，1项exit0不能当复现；更换pending图片完成与有效claim补采编辑真实并发，pg_locks确认message等待后释放，原实现2.483秒exit1实际DeadlockDetectedError，修改仅message锁移至apply_claim前后同场景1.710秒exit0。独立候选e66d244冻结，既有租约用例继续核验message等待后过期409及applied/ack回滚，全Telegram API定向进行中；生产E220/即将部署E222镜像不变。本阶段仅代码已写和单用例通过，待定向/全套/下一窗联调，不冒称已解决全部超时。
