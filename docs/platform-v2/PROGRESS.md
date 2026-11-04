@@ -2184,3 +2184,5 @@ E226完整通过/E228候选准备（2026-11-04 15:49 UTC）：冻结c1ad5a6完�
 E228框架失败并定位（2026-11-04 15:51 UTC）：首隔离真实固定框架exit1，HTTP取消后409与stop已实证，立即DELETE却500(session_busy)；官方源码要求canonical admission终态，stop ACK不等于完成。未部署该失败版本，不吞500或加截止。修为同8秒总预算内先认证轮询自有run到终态再删除，保留原失败日志。重新冻结、原场景与框架全回路重跑；E227实际窗口继续，已有3eligible/2receipt/1在途无漏job但TG全局异常和模型timeout仍存在。不结束会话。
 
 E228固定框架清理已通过/E229研究（2026-11-04 15:53 UTC）：修正dea4e75客户端7项8.235秒exit0；真实固定框架隔离原取消场景已通过，HTTP取消后409实证、新cleanup370.4ms完成、另一会话正常完成/0推荐，完整框架余下restart/budget仍运行。normal/adversarial/length/parallel/no_intent/provider503回路均已输出成功，未提前称总套通过。同冻结完整Docker后台套件开始，源码不再修改。E229记录12个中段跨接口超时包括简单ready/config，研究PG/S3共享SSH传输，只读受限对照，不修改原隧道、不改TLS或资源/生产路由。不结束会话。
+
+E228框架完整通过/E229成对探针（2026-11-04 15:54 UTC）：dea4e75固定框架全部场景exit0（af-hermes-framework-259260），原失败cleanup370.4ms、另一会话完成/0推荐；260候选13页、攻击拒绝、并行、预载技能、503、重启哈希不变、budget原验收保持。该提供方为替身，不声称真实模型3秒。冻结全后端仍运行，未部署。E229临时独立SSH0.1核96MiB，无宿主端口、只读原配置，首样本SSH未就绪ConnectionRefusedError；health healthy后第02轮61对SELECT1开始，原TLS/5秒截止不变，原隧道无改动。不结束会话。

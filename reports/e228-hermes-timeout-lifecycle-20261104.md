@@ -15,3 +15,6 @@
 15:49客户端实现及定向：非流式请求不改，仅409 active按认证scope/已知3个幂等key查询和校验session后停止；8秒整体清理截止，禁止跨session或unknown状态控制。客户端7项8.227秒exit0，包括正常/无关冲突/403/终态404/其他session/未知状态/阻塞取消上限。旧实现单例负向返回HTTP409错误，保留e228-negative.log。新增固定框架隔离场景：两个独立会话各阻塞提供方5秒，取消一个HTTP observer后先证明DELETE409，再调用新cleanup，验证另一个会话正常完成且没有推荐写入。尚未跑框架，不计真实联调通过；无生产stop操作。
 
 15:51真实框架首轮失败：af-hermes-framework-252940 exit1。已实际触发HTTP取消后DELETE409，POST stop接受并打印Interrupted，但随即DELETE500；框架栈hermes_state_mutation_retirement.retire_terminal_receipts抛RuntimeStoreError(session_busy)。根因是停止确认早于canonical admission终态，guard先释放仍不允许删除，并非模型或生产异常。对应验收保持失败，不重试吞掉500。修正候选为先停止全部已验证active run，再在同8秒整体截止内认证轮询精确run到终态，然后DELETE；无终态/权限/身份不符仍失败可见。框架原失败产物保留，重新冻结后重跑原场景及全框架验收。
+
+15:54修正冻结dea4e75真实框架完整验收exit0：af-hermes-framework-259260。原失败场景重跑通过，取消HTTP后DELETE409实证、stop并等canonical终态后cleanup370.4ms、另一会话正常完成、0推荐；normal/adversarial/length/parallel/no_intent/provider503、框架重启前后上下文/技能哈希不变及低轮次budget全部通过，预载技能和260候选连续13页、越权/注入拒绝保持。客户端7项8.235秒exit0。冻结完整Docker后端套件仍在跑，不提前部署。
+*** 证据限制：提供方为确定性隔离替身，证明固定框架生命周期与权限契约，不评价真实模型理解或3秒性能。生产长尾需下一冻结窗实际验证。
