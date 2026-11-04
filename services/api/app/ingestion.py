@@ -73,7 +73,9 @@ async def ingest_fixture_batch(conn, items) -> int:
     )
     # A fixture timestamp and its individual ctsp quote timestamps are independent.
     # Lock the stable stored identity/state for every submitted source, including
-    # stale parent snapshots; result ingestion uses the same fixture row lock.
+    # stale parent snapshots; result ingestion uses the same non-key row lock.
+    # Neither path changes id/source_id. Keep writers serialized while allowing
+    # review candidates/bindings to take the foreign key's KEY SHARE lock.
     stored = await conn.fetch(
         "WITH incoming AS MATERIALIZED (SELECT source_id,phase,source_updated_at,received_at "
         "FROM jsonb_to_recordset($1::jsonb) AS i(source_id text,phase text,source_updated_at timestamptz,received_at timestamptz)) "
@@ -84,7 +86,7 @@ async def ingest_fixture_batch(conn, items) -> int:
         "AND NOT EXISTS(SELECT 1 FROM v2_fixture_results r WHERE r.fixture_id=f.id "
         "AND r.version=(SELECT max(latest.version) FROM v2_fixture_results latest WHERE latest.fixture_id=f.id) "
         "AND r.status IN('confirmed','void'))) AS accepted "
-        "FROM v2_fixtures f JOIN incoming i USING(source_id) ORDER BY f.source_id FOR UPDATE OF f",
+        "FROM v2_fixtures f JOIN incoming i USING(source_id) ORDER BY f.source_id FOR NO KEY UPDATE OF f",
         payload,
     )
     accepted_sources = {record['source_id'] for record in stored if record['accepted']}

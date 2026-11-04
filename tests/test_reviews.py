@@ -97,6 +97,62 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, result.status_code, result.text)
         return result.json()["markets"][0]
 
+    async def test_fixture_ingestion_allows_audit_reference_but_serializes_writers(self):
+        fixture_id = await self.fixture()
+        body = internal.FixtureInput.model_validate({
+            'id': fixture_id, 'source_id': fixture_id, 'sport': 'football',
+            'competition_name': 'League', 'home_team': 'Alpha1', 'away_team': 'Beta1',
+            'kickoff_at': (self.now+timedelta(hours=1)).isoformat(), 'phase': 'scheduled',
+            'source_updated_at': (self.now+timedelta(seconds=1)).isoformat(),
+            'received_at': (self.now+timedelta(seconds=1)).isoformat(),
+            'markets': [{'market_id': 'total', 'market_name': '全场大小', 'kind': 'total',
+                         'period': 'full_time', 'line': '2.5', 'selection': 'over',
+                         'price': '2.10', 'source_updated_at': (self.now+timedelta(seconds=1)).isoformat(),
+                         'received_at': (self.now+timedelta(seconds=1)).isoformat()}]})
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        class PausedConnection:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def __getattr__(self, name):
+                return getattr(self.conn, name)
+
+            async def execute(self, query, *args):
+                if query.startswith('INSERT INTO v2_current_quotes'):
+                    entered.set()
+                    await asyncio.wait_for(release.wait(), timeout=5)
+                return await self.conn.execute(query, *args)
+
+        async def update():
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    return await ingest_fixture_batch(PausedConnection(conn), [body])
+
+        writer = asyncio.create_task(update())
+        binding_error = None
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=3)
+            async with self.pool.acquire() as conn:
+                await conn.execute("SET lock_timeout='800ms'")
+                try:
+                    await conn.execute(
+                        "INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) "
+                        "VALUES($1,$2,$3,'isolated-reference','{}')", self.job, self.attempt, fixture_id)
+                except asyncpg.LockNotAvailableError as exc:
+                    binding_error = type(exc).__name__
+                await conn.execute("SET lock_timeout='100ms'")
+                with self.assertRaises(asyncpg.LockNotAvailableError):
+                    await conn.fetchrow('SELECT id FROM v2_fixtures WHERE id=$1 FOR NO KEY UPDATE', fixture_id)
+        finally:
+            release.set()
+            written = await writer
+        self.assertIsNone(binding_error, 'non-key fixture updates must allow audit references')
+        self.assertEqual(1, written)
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+        self.assertEqual(Decimal('2.10'), await self.pool.fetchval(
+            'SELECT price FROM v2_current_quotes WHERE fixture_id=$1', fixture_id))
+
     async def test_source_fragment_candidates_preserve_scope_pagination_and_identity(self):
         home, away = '阿根廷农业U20', '塔勒雷斯雷梅迪奥斯U20'
         await self.fixture(1, home_team=home, away_team=away)
