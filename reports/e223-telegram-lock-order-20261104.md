@@ -11,3 +11,5 @@
 下一步：E220窗口终审与E222上线按原计划执行；在独立候选实现可重现负向，不在当前冻结镜像中混入本改动。
 
 14:43负向及首修验证：首duplicate-ready样本两请求200/1项1.701秒exit0，因实时幂等路径不写事件，未触发环等，不能记作复现。改用既有pending图片同版本完成上传并发有效claim补采编辑，观察pg_locks确认advisory未授予后释放实时屏障；原实现2.483秒/1error/exit1，实际DeadlockDetectedError（message advisory与transaction锁互等），已复现。只调整锁顺序后同真实场景两请求200/1项1.710秒exit0，最终两版本、单current及最新正文正确。独立冻结e66d244还将既有租约等待用例改为pg_locks证明确实在等message后过期，保持409/claim标记回滚断言；完整Telegram API定向进行中。未宣称线上503归因、未部署。
+
+14:56隔离验证通过：冻结e66d24444613bf54e2c0a8b67d5ae583f76f21c0，完整Docker1252项545.885秒exit0、0失败错误跳过，恢复差异{}，机器报告SHA1a32d21bbc42dd28eeb1289b30f79bbbc2da2156c27d2891b677cda634cb3869。命令BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh，独立候选目录。根分支6d17cc4已推送。候选API镜像同源buildx exit0，第一次短revision标签后补完整标签缓存重建exit0，最终sha256:e47bf1a8f40a189ccd4b45ad7b07f215314fb718ed11421ca228de0fa31eb088/完整revision相符。未改Hermes、MCP、web或数据库结构。E222当前完整冻结窗到15:20:17以后才终审；本候选保持隔离验证通过，不提前上线，不称已消除真实所有503或模型长尾。任务独立定向PG及网络已删除，未清其他服务卷。
