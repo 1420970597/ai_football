@@ -17,6 +17,7 @@ from .review_summary import record_summary
 from .review_recovery import market_recovery
 from .review_completion import completion_issues, continuation_prompt, mentioned_fixtures
 from .review_policy import FRESH_PRIORITY_WINDOW_SECONDS, REALTIME_WINDOW_SECONDS
+from .review_scheduler_setup import persistent_retry_condition as _persistent_retry_condition, prepare_claim_schedule
 from fastapi import HTTPException
 import asyncpg
 
@@ -93,17 +94,6 @@ def retry_delay_seconds(failure: str, attempts: int) -> int:
         return delay + random.randint(0, min(60, max(1, delay // 10)))
     initial = 60 if failure == "provider_transient" else 5
     return min(300, initial * 2 ** (attempt - 1)) + random.randint(0, 3)
-
-
-def _persistent_retry_condition(job_alias: str, categories_parameter: str) -> str:
-    return (
-        f"{job_alias}.state IN('retry','failed') AND {job_alias}.review_mode='real_time' AND "
-        "EXISTS(SELECT 1 FROM v2_analysis_traces t "
-        f"WHERE t.job_id={job_alias}.id AND t.trace_kind='review_failure' "
-        f"AND t.payload->>'attempt_id'={job_alias}.attempt_id::text "
-        "AND t.payload->>'retryable'='true' "
-        f"AND t.payload->>'failure_category'=ANY({categories_parameter}::text[]))"
-    )
 
 
 async def _scheduler_lock(conn):
@@ -242,25 +232,8 @@ async def _claim_job(pool):
         async with conn.transaction():
             if not await _scheduler_lock(conn):
                 return None
-            await conn.execute(
-                "WITH exhausted AS(SELECT j.id,j.state FROM v2_analysis_jobs j WHERE "
-                "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()) AND j.attempts >= $1) "
-                "OR (j.state='retry' AND j.attempts >= $1 AND NOT (" +
-                _persistent_retry_condition('j', '$3') + ")) "
-                "ORDER BY j.lease_until NULLS FIRST,j.id LIMIT $2 FOR UPDATE SKIP LOCKED) "
-                "UPDATE v2_analysis_jobs j SET state='failed',lease_until=NULL,last_error=CASE "
-                "WHEN exhausted.state='running' THEN 'lease_exhausted' ELSE 'retry_limit_without_transient_trace' END,updated_at=now() "
-                "FROM exhausted WHERE j.id=exhausted.id", MAX_ATTEMPTS, EXHAUSTED_BATCH_SIZE,
-                sorted(PERSISTENT_RETRY_FAILURES),
-            )
-            # Only metadata is enumerated. Job probes are indexed per source /
-            # expert pair; no global queue sort/materialization is performed.
-            await conn.execute(
-                'WITH initialized_sources AS ('
-                ' INSERT INTO v2_review_source_schedule(source_id) SELECT id FROM v2_expert_sources'
-                ' ON CONFLICT DO NOTHING RETURNING source_id'
-                ') INSERT INTO v2_review_expert_schedule(expert_id) SELECT id FROM v2_experts ON CONFLICT DO NOTHING')
-            realtime_claims = await conn.fetchval('SELECT realtime_claims_since_replay FROM v2_review_lane_schedule WHERE singleton FOR UPDATE')
+            realtime_claims = await prepare_claim_schedule(
+                conn, MAX_ATTEMPTS, EXHAUSTED_BATCH_SIZE, PERSISTENT_RETRY_FAILURES)
             replay_allowed = False
             if HISTORICAL_CONCURRENCY > 0:
                 historical_active = await conn.fetchval(

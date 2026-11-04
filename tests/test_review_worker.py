@@ -21,6 +21,58 @@ from infra.remote import review_handoff
 
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_ADMIN_URL"), "requires isolated database")
 class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_claim_setup_one_round_trip_initializes_new_pairs_without_resetting_turns(self):
+        await self.pool.execute('INSERT INTO v2_review_source_schedule(source_id,last_turn) VALUES($1,17)', self.source)
+        await self.pool.execute('INSERT INTO v2_review_expert_schedule(expert_id,last_turn,concurrency_limit) VALUES($1,19,3)', self.expert)
+        source, expert = await self.add_expert()
+        async with self.pool.acquire() as conn, conn.transaction():
+            self.assertTrue(await worker._scheduler_lock(conn))
+            calls = []
+            class CountedConnection:
+                async def fetchval(inner, query, *args):
+                    calls.append(query)
+                    return await conn.fetchval(query, *args)
+            self.assertEqual(0, await worker.prepare_claim_schedule(
+                CountedConnection(), worker.MAX_ATTEMPTS, worker.EXHAUSTED_BATCH_SIZE,
+                worker.PERSISTENT_RETRY_FAILURES))
+            self.assertEqual(1, len(calls), 'housekeeping must fit one remote round trip')
+            self.assertEqual(0, await conn.fetchval('SELECT last_turn FROM v2_review_source_schedule WHERE source_id=$1', source))
+            self.assertEqual(0, await conn.fetchval('SELECT last_turn FROM v2_review_expert_schedule WHERE expert_id=$1', expert))
+            self.assertEqual(17, await conn.fetchval('SELECT last_turn FROM v2_review_source_schedule WHERE source_id=$1', self.source))
+            row = await conn.fetchrow('SELECT last_turn,concurrency_limit FROM v2_review_expert_schedule WHERE expert_id=$1', self.expert)
+            self.assertEqual((19, 3), tuple(row))
+
+    async def test_claim_setup_rolls_back_expiry_and_metadata_together(self):
+        await self.pool.execute("UPDATE v2_analysis_jobs SET attempts=$2,lease_until=now()-interval '1 second' WHERE id=$1", self.job, worker.MAX_ATTEMPTS)
+        before = await self.pool.fetchrow('SELECT state,lease_until,last_error FROM v2_analysis_jobs WHERE id=$1', self.job)
+        class AbortSetup(Exception):
+            pass
+        async with self.pool.acquire() as conn:
+            with self.assertRaises(AbortSetup):
+                async with conn.transaction():
+                    self.assertTrue(await worker._scheduler_lock(conn))
+                    await worker.prepare_claim_schedule(conn, worker.MAX_ATTEMPTS, worker.EXHAUSTED_BATCH_SIZE, worker.PERSISTENT_RETRY_FAILURES)
+                    self.assertEqual('failed', await conn.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+                    raise AbortSetup()
+        self.assertEqual(before, await self.pool.fetchrow('SELECT state,lease_until,last_error FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_review_source_schedule'))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_review_expert_schedule'))
+
+    async def test_claim_setup_expiry_batch_is_bounded_and_followup_sees_new_metadata(self):
+        await self.pool.execute("UPDATE v2_analysis_jobs SET attempts=$2,lease_until=now()-interval '1 second' WHERE id=$1", self.job, worker.MAX_ATTEMPTS)
+        other = (await self.queued())[0]
+        await self.pool.execute("UPDATE v2_analysis_jobs SET state='retry',attempts=$2 WHERE id=$1", other, worker.MAX_ATTEMPTS)
+        source, expert = await self.add_expert()
+        ready = (await self.queued(source=source, expert=expert))[0]
+        async with self.pool.acquire() as conn, conn.transaction():
+            self.assertTrue(await worker._scheduler_lock(conn))
+            await worker.prepare_claim_schedule(conn, worker.MAX_ATTEMPTS, 1, worker.PERSISTENT_RETRY_FAILURES)
+            self.assertEqual(1, await conn.fetchval("SELECT count(*) FROM v2_analysis_jobs WHERE state='failed'"))
+        claimed = await worker.claim_job(self.pool)
+        self.assertEqual(ready, claimed['id'])
+        self.assertEqual('lease_exhausted', await self.pool.fetchval('SELECT last_error FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual('retry_limit_without_transient_trace', await self.pool.fetchval('SELECT last_error FROM v2_analysis_jobs WHERE id=$1', other))
+
     async def test_handoff_hold_timeout_releases_lane_and_scheduler_and_closes_connection(self):
         await self.make_queued()
         release = Path('/tmp/e166-absent-'+uuid.uuid4().hex)
