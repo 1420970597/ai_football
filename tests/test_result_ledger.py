@@ -70,6 +70,58 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
     async def submit(self, body):
         return await self.client.post('/internal/collector/results', json={'items':[body]}, headers={'Authorization':'Bearer isolated-collector'})
 
+    async def assert_settlement_lock_allows_reference_but_blocks_writers(self, mode):
+        await self.signal()
+        self.assertEqual(200, (await self.submit(self.result())).status_code)
+        job, attempt = uuid.uuid4(), uuid.uuid4()
+        await self.pool.execute(
+            "INSERT INTO v2_analysis_jobs(id,message_id,source_id,expert_id,state,attempt_id,lease_until,idempotency_key) "
+            "VALUES($1,$2,$3,$4,'running',$5,now()+interval '90 seconds',$6)",
+            job, self.message, self.source, self.expert, attempt, str(job))
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = result_ledger.project_settlements
+
+        async def paused(*args):
+            entered.set()
+            await asyncio.wait_for(release.wait(), 5)
+            return await original(*args)
+
+        async def settle():
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    if mode == 'rebuild':
+                        return await result_ledger.rebuild_settlements(conn, 'fixture')
+                    item = results.ResultInput(**self.result(home=3, source_updated_at=(self.now+timedelta(seconds=1)).isoformat()))
+                    return await result_ledger.ingest_result(conn, item)
+
+        with patch.object(result_ledger, 'project_settlements', side_effect=paused):
+            writer = asyncio.create_task(settle())
+            await asyncio.wait_for(entered.wait(), 3)
+            binding_error = None
+            try:
+                async with self.pool.acquire() as conn:
+                    await conn.execute("SET lock_timeout='800ms'")
+                    try:
+                        await conn.execute(
+                            "INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) "
+                            "VALUES($1,$2,'fixture','isolated-reference','{}')", job, attempt)
+                    except asyncpg.LockNotAvailableError as exc:
+                        binding_error = type(exc).__name__
+                    await conn.execute("SET lock_timeout='100ms'")
+                    with self.assertRaises(asyncpg.LockNotAvailableError):
+                        await conn.fetchrow("SELECT id FROM v2_fixtures WHERE id='fixture' FOR NO KEY UPDATE")
+            finally:
+                release.set()
+                await writer
+        self.assertIsNone(binding_error, 'a settlement that never changes fixture keys must allow audit references')
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings WHERE job_id=$1', job))
+
+    async def test_rebuild_fixture_lock_allows_audit_reference_and_serializes_writers(self):
+        await self.assert_settlement_lock_allows_reference_but_blocks_writers('rebuild')
+
+    async def test_result_ingestion_lock_allows_audit_reference_and_serializes_writers(self):
+        await self.assert_settlement_lock_allows_reference_but_blocks_writers('ingest')
+
     async def test_large_settlement_preserves_concurrent_fixture_binding_lock_budget(self):
         signals = [await self.signal(line=str(Decimal('2') + Decimal(index) / 4)) for index in range(8)]
         self.assertEqual(200, (await self.submit(self.result(home=5, away=1))).status_code)

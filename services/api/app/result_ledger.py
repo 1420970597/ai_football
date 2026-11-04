@@ -83,7 +83,9 @@ async def _store_settlement_batch(conn, fixture_id, version, projections):
 
 
 async def rebuild_settlements(conn, fixture_id):
-    fixture = await conn.fetchrow('SELECT id,sport FROM v2_fixtures WHERE id=$1 FOR UPDATE', fixture_id)
+    # Serialize result writers without blocking audit/candidate foreign keys.
+    # Settlement never changes the fixture primary or unique source key.
+    fixture = await conn.fetchrow('SELECT id,sport FROM v2_fixtures WHERE id=$1 FOR NO KEY UPDATE', fixture_id)
     if not fixture:
         raise HTTPException(404, '赛果对应比赛不存在')
     latest = await conn.fetchrow('SELECT * FROM v2_fixture_results WHERE fixture_id=$1 ORDER BY version DESC LIMIT 1', fixture_id)
@@ -99,7 +101,7 @@ async def ingest_result(conn, item) -> dict:
     clock = source_time or observed_at
     if clock is None or clock > datetime.now(timezone.utc) + timedelta(seconds=5):
         raise HTTPException(422, '赛果源时间晚于当前时间')
-    fixture = await conn.fetchrow('SELECT id,sport FROM v2_fixtures WHERE id=$1 FOR UPDATE', item.fixture_id)
+    fixture = await conn.fetchrow('SELECT id,sport FROM v2_fixtures WHERE id=$1 FOR NO KEY UPDATE', item.fixture_id)
     if not fixture:
         raise HTTPException(404, '赛果对应比赛不存在')
     previous = await conn.fetchrow('SELECT * FROM v2_fixture_results WHERE fixture_id=$1 ORDER BY version DESC LIMIT 1', item.fixture_id)
