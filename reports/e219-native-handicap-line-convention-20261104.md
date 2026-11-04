@@ -1,6 +1,6 @@
 # E219 原生让球方向口径核验
 
-更新时间：2026-11-04 12:39 UTC。状态：研究中，未改线上数据/规则。
+更新时间：2026-11-04 13:16 UTC。状态：完整隔离验证通过，候选镜像已构建，未改线上数据/规则。
 
 目标：统一原生盘口、模型所见选项、页面与专家结算的线值含义，防止客队方向翻转。责任目录services/collector、services/api、web/app、tests、docs/platform-v2、reports。依赖旧协议实际字段及不可变推荐/报价证据，当前E216完整窗口保持冻结。
 
@@ -19,3 +19,11 @@
 定向隔离通过（12:55 UTC）：冻结candidate31328e1，原80项使用任务独立PG和只读源码重跑退出0，62.477秒，无失败/错误/跳过；涵盖新原生客队让1净胜1走盘、原推荐/报价line不变、旧win台账保留且新push台账独立、公开接口selection_line=-1，以及工具快照完整性、过期报价和同attempt回执。前两轮3error/4error分别是快照测试新增元数据期望/PYTHONPATH和显式数据库测试地址遗漏；第三轮仍4error实际是worker保护只允许ai-football-v2-pgverify/pgtest主机名，添加任务独立网络内alias并改测试DSN后才通过，未放宽保护或访问生产。源码冻结期间未编辑被测文件。
 
 将已验证API/MCP/web/tests复制到任务分支准备独立全套提交，当前Docker运行镜像不变。两份Hermes运行绑定上下文暂不复制，避免窗口中热变；E219口径说明及E218日期搜索将在各自冻结33项验证后，于完整窗口结束的idle部署一并应用。后续API/MCP/web镜像与冻结代码SHA对应，Hermes上下文另记实际提交、差异和配置版本，不把旧运行上下文称已更新。
+
+完整冻结验证：源码b0d684ef4a29f38560a5f3dd58aed9beefa55b8c，独立干净worktree运行`BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`，1248项/540.918秒，失败/错误/跳过均0，退出0。机器报告SHA13940fafeb3cf7cd79ba02aa929eceb359c512de92dc5fdc79dc8301813a7b5a；隔离备份恢复业务差异为空。API/MCP/web按同一源码及revision标签顺序buildx --load，全部退出0，对应image摘要50b50efd0b225b0cb96305a4d9f3b4fcddfa4d63aff91fe7c33a56a0b24a0798、9bcc09982f1181061f95a93440e73c42e310d6873943fdf7ebfafca4374e51cd、7df2016db8ed14fa76d0325a0ca0f34df827efb990d6d98077e7ab4405c3aefd。
+
+Docker真实Chromium隔离UI：候选web使用独立internal网络，浏览器拦截API并提供已核验协议样本，不连生产、不写测试假数据到生产。1440/390两宽度均实际点击全部/滚球/未开赛/已完场/取消延期并核验请求phase与aria-pressed，再点比赛详情核验主队+1/客队-1；无JS错误或横向溢出，2场景/10次筛选点击退出0，截图与JSON保存在任务运行证据。首轮因测试路由未解码URL中赛事冒号，详情mock未命中而超时退出1；纠正隔离路由decodeURIComponent后重跑原场景通过，不改产品代码或放宽断言。此为候选UI验证，生产真实点击待部署。
+
+历史影响只读审计37条非零原生客队让球推荐（未截断），其中31条有正式赛果，离线候选重算4条结果变化：5704916半输→半赢、5701751半赢→全赢、5808249两条全输→走盘。此时均未落库，不属于实盘收益。计划通过已有受认证内部正式重算接口处理15场真实赛果，新增算法版本、保留旧台账；部署前后核验每条不可变推荐及报价证据哈希，不能SQL覆写结果。首次新增只读审计误查信号表quote_id/evidence字段而UndefinedColumnError退出1，按实际schema分开查询v2_quote_evidence后重跑。
+
+部署准备按每个现有服务自身Compose标签还原配置链，追加镜像覆盖，四服务`config --quiet`退出0。E217完整窗截止13:23:40前不切换；之后先保存全窗证据，再取得无活动审核的scheduler gate切换，健康检查仅作为发布前置，真实结算/原图/模型回执及下一完整窗另行验收。模型继续deepseek-v4.1-flash，不改秘密、权限、交易许可或原生选项身份。
