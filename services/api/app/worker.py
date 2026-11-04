@@ -15,6 +15,7 @@ from .hermes_client import HermesProviderUnavailable, delete_session, resolve_re
 from .review_state import active_job, trace
 from .review_summary import record_summary
 from .review_recovery import market_recovery
+from .review_completion import completion_issues, continuation_prompt, mentioned_fixtures
 from .review_policy import FRESH_PRIORITY_WINDOW_SECONDS, REALTIME_WINDOW_SECONDS
 from fastapi import HTTPException
 import asyncpg
@@ -406,6 +407,39 @@ async def _complete_review(pool, job: dict, started: float) -> None:
                 await asyncio.sleep(.1)
 
 
+async def _review_until_verified(pool, settings, job: dict, *, model_client=None):
+    """All turns share the caller's overall deadline, heartbeat and frozen config."""
+    mentioned = set()
+    issues = {}
+    totals = {}
+    usage_totals = {}
+    message = job['message'] | {'review_mode': job.get('review_mode', 'real_time')}
+    for turn in range(3):
+        kwargs = {'client': model_client} if model_client is not None else {}
+        if turn:
+            kwargs.update(continuation=continuation_prompt(issues), continuation_round=turn)
+        content, summary = await review_message(settings, message, job['id'], job['attempt_id'], **kwargs)
+        for key in ('image_count', 'image_bytes', 'input_prepare_elapsed_ms', 'provider_elapsed_ms'):
+            if isinstance(summary.get(key), (int, float)):
+                totals[key] = totals.get(key, 0) + summary[key]
+        for key, value in (summary.get('usage') or {}).items():
+            if isinstance(value, (int, float)):
+                usage_totals[key] = usage_totals.get(key, 0) + value
+        mentioned.update(mentioned_fixtures(content))
+        async with pool.acquire() as conn, conn.transaction():
+            await active_job(conn, job['id'], job['attempt_id'])
+            issues = await completion_issues(conn, job['id'], job['attempt_id'], mentioned)
+        summary = {**summary, 'completion_verified': not issues, 'completion_rounds': turn + 1,
+                   'completion_issues': issues}
+        if not issues or turn == 2:
+            summary.update(totals)
+            if usage_totals:
+                summary['usage'] = usage_totals
+            return content, summary
+        await _add_trace(pool, job, 'hermes_partial_result', summary)
+    raise RuntimeError('review continuation budget exhausted')
+
+
 async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncClient | None = None) -> None:
     review_task = lease_task = None
     started = time.monotonic()
@@ -423,12 +457,7 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
             "review_mode": job.get('review_mode','real_time'),
             "configuration_version": getattr(settings, "configuration_version", None),
         })
-        review_message_content = job["message"] | {'review_mode': job.get('review_mode','real_time')}
-        if model_client is not None:
-            review_call = review_message(settings, review_message_content, job["id"], job["attempt_id"],
-                                         client=model_client)
-        else:
-            review_call = review_message(settings, review_message_content, job["id"], job["attempt_id"])
+        review_call = _review_until_verified(pool, settings, job, model_client=model_client)
         failure_stage = "model_review"
         review_task = asyncio.create_task(asyncio.wait_for(review_call, timeout=REVIEW_TIMEOUT))
         lease_task = asyncio.create_task(keep_lease(pool, job))

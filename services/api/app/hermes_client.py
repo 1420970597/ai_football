@@ -168,13 +168,17 @@ async def _content_parts(message: dict, review_id: str, attempt_id: str) -> list
 
 
 async def review_message(settings: Settings, message: dict, review_id: uuid.UUID, attempt_id: uuid.UUID,
-                         *, client: httpx.AsyncClient | None = None) -> tuple[str, dict]:
+                         *, client: httpx.AsyncClient | None = None, continuation: str | None = None,
+                         continuation_round: int = 0) -> tuple[str, dict]:
     preparation_started = time.monotonic()
-    parts = await _content_parts(message, str(review_id), str(attempt_id))
+    if (continuation is None) != (continuation_round == 0) or not 0 <= continuation_round <= 2:
+        raise ValueError('invalid review continuation round')
+    parts = ([{'type': 'text', 'text': continuation}] if continuation is not None
+             else await _content_parts(message, str(review_id), str(attempt_id)))
     preparation_elapsed_ms = round((time.monotonic() - preparation_started) * 1000, 3)
     headers = {
         "Authorization": f"Bearer {settings.hermes_api_key}",
-        "Idempotency-Key": str(attempt_id),
+        "Idempotency-Key": str(attempt_id) + (f'-continuation-{continuation_round}' if continuation_round else ''),
         "X-Hermes-Session-Id": f"expert-review-{review_id}-{attempt_id}",
         "Accept": "application/json",
     }
@@ -218,7 +222,8 @@ async def review_message(settings: Settings, message: dict, review_id: uuid.UUID
     summary = {"model": payload.get("model"), "finish_reason": choice.get("finish_reason"),
                "usage": payload.get("usage"), "content": content[:20000],
                "image_count": len(parts)-1,
-               "image_bytes": sum(int(media.get('bytes') or 0) for media in message.get('media_objects', ())),
+               "image_bytes": (0 if continuation_round else sum(int(media.get('bytes') or 0) for media in message.get('media_objects', ()))),
+               "continuation_round": continuation_round,
                "input_prepare_elapsed_ms": preparation_elapsed_ms,
                "provider_elapsed_ms": provider_elapsed_ms}
     return content[:20000], summary

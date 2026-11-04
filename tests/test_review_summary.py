@@ -12,6 +12,15 @@ import test_review_worker as worker_support
 
 
 class ReviewSummaryTests(unittest.TestCase):
+    def test_unfinished_audit_is_visible_without_invalidating_accepted_evidence(self):
+        issues = {'unfinished_search_count': 1, 'unbound_mention_count': 9}
+        result = make_summary([self.signal()], accepted_total=1, rejected=[], review_mode='real_time', incomplete=issues)
+        self.assertFalse(result['completion_verified'])
+        self.assertEqual(1, result['accepted_count'])
+        self.assertIn('1 个检索', result['content'])
+        self.assertIn('9 个模型提及', result['content'])
+        self.assertIn('不能认定全部匹配', result['content'])
+
     def signal(self, **updates):
         return {'signal_id': 's1', 'fixture_id': 'f1', 'home_team': '甲队', 'away_team': '乙队',
                 'competition_name': '测试联赛', 'phase': 'scheduled', 'market_name': '全场大小',

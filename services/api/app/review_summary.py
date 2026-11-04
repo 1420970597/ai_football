@@ -5,6 +5,7 @@ from collections import Counter
 from datetime import datetime
 
 from .review_state import trace
+from .review_completion import completion_issues, mentioned_fixtures
 
 SUMMARY_ITEM_LIMIT = 100
 PHASES = {'scheduled': '未开赛', 'live': '滚球', 'finished': '已完场', 'cancelled': '取消或延期'}
@@ -29,7 +30,8 @@ def _value(value):
     return str(value)
 
 
-def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, identified=(), identified_total=None) -> dict:
+def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, identified=(), identified_total=None,
+                 incomplete=None) -> dict:
     """Model prose and Telegram prices do not participate in the system receipt."""
     items = [{key: _value(row.get(key)) for key in (
         'signal_id', 'fixture_id', 'home_team', 'away_team', 'competition_name',
@@ -70,9 +72,14 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
         lines.append(f"未解决：{REASONS.get(code, '工具未确认，保留原始轨迹核验')}（{count} 项工具拒绝记录，可能含重复尝试）。")
     if not items and not reasons and not identified_items:
         lines.append('本次工具尚无已确认的盘口录入；模型原始说明仅供核查。')
+    if incomplete:
+        lines.append(f"审核核验未完成：{incomplete['unfinished_search_count']} 个检索尚未读取全部分页，"
+                     f"{incomplete['unbound_mention_count']} 个模型提及的比赛编号没有当前工具绑定；"
+                     '已达到本次续审上限，不能认定全部匹配。仅已接受记录有效，其余保留未解决。')
     return {'schema_version': 1, 'language': 'zh-CN', 'basis': 'committed_system_signals',
             'review_mode': review_mode, 'accepted_count': accepted_total, 'items': items,
             'identified_without_signal': identified_items, 'identified_omitted_count': identified_omitted,
+            'completion_verified': not incomplete, 'completion_issues': incomplete or {},
             'omitted_count': omitted, 'tool_rejection_counts': dict(reasons), 'content': chr(10).join(lines)}
 
 
@@ -95,7 +102,14 @@ async def record_summary(conn, job, attempt_id, review_mode: str) -> int:
         'WHERE b.job_id=$1 AND b.attempt_id=$2 AND NOT EXISTS('
         'SELECT 1 FROM v2_expert_signals s WHERE s.message_id=$3 AND s.fixture_id=b.fixture_id) '
         'ORDER BY f.kickoff_at,b.fixture_id LIMIT $4', job['id'], attempt_id, job['message_id'], SUMMARY_ITEM_LIMIT)
+    model_turns = await conn.fetch(
+        "SELECT payload->>'content' AS content FROM v2_analysis_traces WHERE job_id=$1 "
+        "AND payload->>'attempt_id'=$2 AND trace_kind IN ('hermes_result','hermes_partial_result')",
+        job['id'], str(attempt_id))
+    mentioned = set().union(*(mentioned_fixtures(row['content'] or '') for row in model_turns))
+    incomplete = await completion_issues(conn, job['id'], attempt_id, mentioned)
     receipt = make_summary([dict(row) for row in rows], accepted_total=total, rejected=rejected, review_mode=review_mode,
-                           identified=[dict(row) for row in identified], identified_total=identified[0]['total'] if identified else 0)
+                           identified=[dict(row) for row in identified], identified_total=identified[0]['total'] if identified else 0,
+                           incomplete=incomplete)
     await trace(conn, job['id'], 'system_review_result', {'attempt_id': str(attempt_id), **receipt})
     return total
