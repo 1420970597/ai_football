@@ -13,3 +13,5 @@
 14:26隔离证据：2个新barrier用例在原实现均实际LockNotAvailableError，4.592秒/2failure/exit1，分别重算与新赛果；第二写入锁断言仍通过，确证不是去掉全部锁。独立候选2f90c0e仅两处锁模式和注释、测试，根分支cherry-pick e58f031；冻结后39项结果台账/结算37.667秒exit0，原800ms引用通过、第二写入100ms仍被阻挡、旧版本/时间/不可变冲突/原native方向回归保持。完整Docker套件同冻结2f90c0e进行中，14:44:01当前窗口结束前不生效。
 
 线上批量后采样新证据：第15/22样本看见review_lease_renewal等待事务锁，阻塞方为审核trace验证/其他语句；这不是fixture锁归因证据，不能将本候选称解决全部实际超时。保持active_job共享锁阻止取消/完成越过工具操作，不以加并发或移除任务锁掩盖。事件API当时91请求全200、模型search candidate INSERT两次锁超时分别记录。
+
+14:38隔离验证通过：同冻结2f90c0e973e0d720445699a08fe1419f63094847完整Docker套件1251项/548.539秒，exit0，失败/错误/跳过均0；机器报告总执行550.946秒，报告SHA9215c8584d858aef2f9b4b415694fd34ec62f05d751c5fd13c2faf5de14c66d1，恢复差异{}。命令BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh，在独立候选目录执行。随后同冻结源限额buildx API构建exit0，镜像ai-football-api:2.0.0-dev-e222-2f90c0e，digest sha256:1ec26bb61cc0180aea99beb5dccc3da2e52daba12a09e3aa94dc0f49537f267d，完整revision标签一致。线上尚未修改；当前E220日志已出现补采503及审核锁超时，不能称该窗口稳定。下一步完整窗口保存后idle仅切API/worker，再正式15场重放核对原台账及时间不变、真实浏览器、下一完整30分钟。未知滚球计分规则继续保留未解决，不猜结算。
