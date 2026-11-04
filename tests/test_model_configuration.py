@@ -19,6 +19,24 @@ import test_identity as support
 
 @unittest.skipUnless(support.TEST_URL, 'requires isolated database')
 class ModelConfigurationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lost_acknowledgement_recovers_without_double_consumption_audit(self):
+        transport = httpx.ASGITransport(app=self.app)
+        ack_calls = 0
+        async def handler(request):
+            nonlocal ack_calls
+            response = await transport.handle_async_request(request)
+            await response.aread()
+            if request.url.path.endswith('/ack'):
+                ack_calls += 1
+                if ack_calls == 1:
+                    raise httpx.ReadTimeout('isolated lost committed acknowledgement', request=request)
+            return response
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            snapshot = await hermes_client.resolve_review_settings(self.app.state.settings, client=client)
+        self.assertEqual(2, ack_calls)
+        self.assertTrue(snapshot.model_configuration_version)
+        self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_audit_log WHERE action='model_configuration_consumed'"))
+
     asyncTearDown = support.IdentityIntegrationTests.asyncTearDown
     admin_login = support.IdentityIntegrationTests.admin_login
     csrf = support.IdentityIntegrationTests.csrf

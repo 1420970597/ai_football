@@ -49,18 +49,31 @@ class FrozenReviewSettings:
         raise AttributeError('review configuration snapshot is immutable')
 
 
+async def _configuration_request(method, url, *, client=None, **kwargs):
+    """Only configuration reads and idempotent consumption acknowledgements retry."""
+    if client is None:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5, connect=2), trust_env=False) as owned:
+            return await _configuration_request(method, url, client=owned, **kwargs)
+    for attempt in range(2):
+        try:
+            response = await getattr(client, method)(url, timeout=httpx.Timeout(5, connect=2), **kwargs)
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as exc:
+            if attempt or exc.response.status_code not in {500, 502, 503, 504}:
+                raise
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError):
+            if attempt:
+                raise
+        await asyncio.sleep(.1)
+
+
 async def resolve_review_settings(settings, *, client=None):
     """Snapshot non-secret per-attempt configuration through the internal API."""
     if isinstance(settings, FrozenReviewSettings) or not getattr(settings, "review_config_url", None):
         return settings
     headers = {"Authorization": f"Bearer {settings.hermes_api_key}"}
-    if client is None:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(5, connect=2), trust_env=False) as owned_client:
-            response = await owned_client.get(settings.review_config_url, headers=headers)
-    else:
-        response = await client.get(settings.review_config_url, headers=headers,
-                                    timeout=httpx.Timeout(5, connect=2))
-    response.raise_for_status()
+    response = await _configuration_request('get', settings.review_config_url, client=client, headers=headers)
     value = response.json()
     model = validate_runtime_value("hermes_analysis_model", value.get("model") or "")
     version = str(value.get("configuration_version", ""))
@@ -77,15 +90,9 @@ async def resolve_review_settings(settings, *, client=None):
         token = value.get('consumption_token')
         if not isinstance(token, str) or not 1 <= len(token) <= 4096:
             raise RuntimeError('review configuration consumption token is missing')
-        if client is None:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(5, connect=2), trust_env=False) as owned_client:
-                response = await owned_client.post(settings.review_config_url.rstrip('/')+'/ack', headers=headers,
-                    json={'token': token, 'model': model or None, 'provider': provider, 'prompt_sha256': local_prompt})
-        else:
-            response = await client.post(settings.review_config_url.rstrip('/')+'/ack', headers=headers,
-                json={'token': token, 'model': model or None, 'provider': provider, 'prompt_sha256': local_prompt},
-                timeout=httpx.Timeout(5, connect=2))
-        response.raise_for_status()
+        response = await _configuration_request('post', settings.review_config_url.rstrip('/')+'/ack',
+            client=client, headers=headers,
+            json={'token': token, 'model': model or None, 'provider': provider, 'prompt_sha256': local_prompt})
         ack = response.json()
         if ack.get('accepted') is not True or ack.get('version') != metadata['version']:
             raise RuntimeError('review configuration consumption was not acknowledged')

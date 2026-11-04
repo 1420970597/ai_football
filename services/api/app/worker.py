@@ -52,6 +52,10 @@ class LeaseLost(RuntimeError):
     pass
 
 
+class ReviewEvidenceUnavailable(TimeoutError):
+    """A returned model result could not be checked against current tool evidence."""
+
+
 def failure_category(exc: BaseException) -> tuple[str, bool]:
     """Return a bounded, non-sensitive failure class and retry policy."""
     if isinstance(exc, LeaseLost):
@@ -407,12 +411,27 @@ async def _complete_review(pool, job: dict, started: float) -> None:
                 await asyncio.sleep(.1)
 
 
+async def _read_completion_issues(pool, job, mentioned):
+    transient = (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError,
+                 asyncpg.DeadlockDetectedError, asyncpg.SerializationError, asyncpg.PostgresConnectionError)
+    for retry in range(2):
+        try:
+            async with pool.acquire() as conn, conn.transaction():
+                await active_job(conn, job['id'], job['attempt_id'])
+                return await completion_issues(conn, job['id'], job['attempt_id'], mentioned), retry
+        except transient as exc:
+            if retry:
+                raise ReviewEvidenceUnavailable('current review evidence temporarily unavailable') from exc
+            await asyncio.sleep(.1)
+
+
 async def _review_until_verified(pool, settings, job: dict, *, model_client=None):
     """All turns share the caller's overall deadline, heartbeat and frozen config."""
     mentioned = set()
     issues = {}
     totals = {}
     usage_totals = {}
+    check_retries = 0
     message = job['message'] | {'review_mode': job.get('review_mode', 'real_time')}
     for turn in range(3):
         kwargs = {'client': model_client} if model_client is not None else {}
@@ -426,11 +445,10 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
             if isinstance(value, (int, float)):
                 usage_totals[key] = usage_totals.get(key, 0) + value
         mentioned.update(mentioned_fixtures(content))
-        async with pool.acquire() as conn, conn.transaction():
-            await active_job(conn, job['id'], job['attempt_id'])
-            issues = await completion_issues(conn, job['id'], job['attempt_id'], mentioned)
+        issues, retries = await _read_completion_issues(pool, job, mentioned)
+        check_retries += retries
         summary = {**summary, 'completion_verified': not issues, 'completion_rounds': turn + 1,
-                   'completion_issues': issues}
+                   'completion_issues': issues, 'completion_check_retries': check_retries}
         if not issues or turn == 2:
             summary.update(totals)
             if usage_totals:
@@ -487,6 +505,8 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
         # 退出后保留租约，其他工作器待到期接管，不覆盖已接受推荐。
         raise
     except Exception as exc:
+        if isinstance(exc, ReviewEvidenceUnavailable):
+            failure_stage = 'completion_evidence'
         category = type(exc).__name__
         failure, retryable = failure_category(exc)
         log.warning("review failed review_id=%s attempt_id=%s category=%s", job["id"], job["attempt_id"], category)

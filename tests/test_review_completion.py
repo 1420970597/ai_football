@@ -19,6 +19,34 @@ class ReviewCompletionTests(unittest.IsolatedAsyncioTestCase):
     context = support.ReviewTests.context
     post = support.ReviewTests.post
 
+    async def test_transient_evidence_timeout_rechecks_without_repeating_model(self):
+        original = worker.completion_issues
+        calls = 0
+        async def delayed(*args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise TimeoutError('isolated transient read')
+            return await original(*args)
+        job = {'id': self.job, 'attempt_id': self.attempt, 'message': {}}
+        with patch.object(worker, 'review_message', AsyncMock(return_value=('聊天', {'content': '聊天'}))) as model, \
+                patch.object(worker, 'completion_issues', side_effect=delayed):
+            _, summary = await worker._review_until_verified(self.pool, SimpleNamespace(), job)
+        self.assertEqual(1, model.await_count)
+        self.assertEqual(2, calls)
+        self.assertEqual(1, summary['completion_check_retries'])
+        self.assertTrue(summary['completion_verified'])
+
+    async def test_persistent_evidence_timeout_is_bounded_and_classified(self):
+        job = {'id': self.job, 'attempt_id': self.attempt, 'message': {}}
+        with patch.object(worker, 'review_message', AsyncMock(return_value=('聊天', {'content': '聊天'}))) as model, \
+                patch.object(worker, 'completion_issues', AsyncMock(side_effect=TimeoutError)) as check:
+            with self.assertRaises(worker.ReviewEvidenceUnavailable):
+                await worker._review_until_verified(self.pool, SimpleNamespace(), job)
+        self.assertEqual(1, model.await_count)
+        self.assertEqual(2, check.await_count)
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE trace_kind='hermes_result'"))
+
     async def prepare_search(self):
         for index in (1, 2):
             await support.ReviewTests.fixture(self, index=index, id=f'leyu:{index}', phase='finished')
