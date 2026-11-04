@@ -11,3 +11,5 @@
 18:36旧版失败/候选进入验证：真实临时PG单项旧实现1.815秒exit1，期望1项实际0，原失败日志e236-negative.log保留；新增MarketInput单个精确别名validator，仅over_under→total，其他值原样，不改工具/schema或模型提示。原模块reviews/quote_observation/tool_evidence全定向Docker重跑中，代码运行期间冻结，当前未部署。正式E235监控到18:59:32以后不变。
 
 18:39定向通过：93项142.409秒exit0/0失败错误跳过，原权限/停盘/报价时效/取消/并发/完整证据/分页测试保持；别名仅返回同全场/2.75/over的total选项，不读半场或让球，unknown_over_under仍0且不多授权。下一步提交冻结全后端；该更改不动框架/MCP接口/模型提示，固定框架已在父版本E235通过，按必要性不额外重复提供方替身全流程。真实生产仍E235，当前窗结束与全套通过前不切换。
+
+18:43冻结与镜像准备：6bb76e50104f55e8f163d0085ab9cbc7dc6e23b7干净worktree完整Docker后端运行中，源码不改；API候选sha256:9da2bdb1f5046e54eeb5a10fab5369ce5d89150323b292bb637a1084f929275d完整revision一致、受限builder构建exit0、API/worker-only配置check exit0。原定向PG/网络已清理，生产E235不变；即使本窗无新消息也不能宣称自然链路已通过。
