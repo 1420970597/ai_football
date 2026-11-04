@@ -273,7 +273,7 @@ services:
       API_SERVER_KEY: ${HERMES_API_KEY:?Set the internal Hermes API token}
       API_SERVER_HOST: 0.0.0.0
       API_SERVER_PORT: 8642
-      HERMES_MODEL: ${HERMES_MODEL:-cline-pass/deepseek-v4.1-flash}
+      HERMES_MODEL: ${HERMES_MODEL:-deepseek-v4.1-flash}
       HERMES_PROVIDER_BASE_URL: ${HERMES_PROVIDER_BASE_URL:?Set the existing model gateway endpoint}
       HERMES_PROVIDER_API_KEY: ${HERMES_PROVIDER_API_KEY:?Set the existing model gateway credential}
       MCP_SERVER_URL: http://hermes-mcp:8090/mcp
