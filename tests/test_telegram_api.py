@@ -277,6 +277,56 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_telegram_events"))
         self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_jobs"))
 
+    async def test_live_and_reconciliation_use_consistent_message_event_lock_order(self):
+        self.assertEqual(200, (await self.post(self.event(media=True))).status_code)
+        await self.pool.execute("UPDATE v2_telegram_events SET next_check_at=now()-interval '1 minute'")
+        page = await self.client.post('/internal/telegram/observed', json={
+            'chat_id': '-1001', 'owner': str(self.owner), 'limit': 1,
+            'reconciliation_protocol': 'claim-ack-v1'})
+        self.assertEqual(200, page.status_code, page.text)
+        item = page.json()['items'][0]
+        body = self.event(version='reconciled-edit', text='改为小2.5', kind='edit', minutes=1)
+        body['reconciliation'] = {key: item[source] for key, source in (
+            ('event_id', 'id'), ('version_key', 'version_key'), ('claim_id', 'claim_id'))}
+        live_locked, release_live = asyncio.Event(), asyncio.Event()
+        original = telegram.persist_fast_event
+
+        async def paused_persist(*args, **kwargs):
+            live_locked.set()
+            await release_live.wait()
+            return await original(*args, **kwargs)
+
+        tasks = []
+        with patch.object(telegram, 'persist_fast_event', new=paused_persist):
+            try:
+                live_body = self.event(media=True) | {
+                    'media_state': 'ready', 'media_objects': [{
+                        'object_key': 'telegram/test/lock-order', 'mime_type': 'image/jpeg',
+                        'sha256': 'a' * 64, 'bytes': 100}]}
+                live = asyncio.create_task(self.post(live_body))
+                tasks.append(live)
+                await asyncio.wait_for(live_locked.wait(), timeout=3)
+                reconciliation = asyncio.create_task(self.post(body))
+                tasks.append(reconciliation)
+                async with self.pool.acquire() as observer:
+                    async with asyncio.timeout(3):
+                        while not await observer.fetchval(
+                            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' "
+                            "AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))"
+                        ):
+                            await asyncio.sleep(0.01)
+                release_live.set()
+                responses = await asyncio.wait_for(asyncio.gather(*tasks), timeout=4)
+                self.assertEqual([200, 200], [r.status_code for r in responses],
+                                 [r.text for r in responses])
+            finally:
+                release_live.set()
+                await asyncio.gather(*tasks, return_exceptions=True)
+        self.assertEqual(2, await self.pool.fetchval('SELECT count(*) FROM v2_expert_messages'))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_telegram_events WHERE is_current'))
+        self.assertEqual('改为小2.5', await self.pool.fetchval(
+            'SELECT raw_text FROM v2_expert_messages WHERE deleted_at IS NULL'))
+
     async def test_reconciliation_rechecks_lease_after_waiting_for_message_lock(self):
         self.assertEqual(200, (await self.post(self.event())).status_code)
         await self.pool.execute("UPDATE v2_telegram_events SET next_check_at=now()-interval '1 minute'")
@@ -288,27 +338,24 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         body = self.event(version='reconciled-edit', kind='edit', minutes=1)
         body['reconciliation'] = {key: item[source] for key, source in (
             ('event_id', 'id'), ('version_key', 'version_key'), ('claim_id', 'claim_id'))}
-        applied = asyncio.Event()
-        original = telegram.telegram_reconciliation.apply_claim
-
-        async def tracked_apply(*args, **kwargs):
-            result = await original(*args, **kwargs)
-            applied.set()
-            return result
-
-        with patch.object(telegram.telegram_reconciliation, 'apply_claim', new=tracked_apply):
-            async with self.pool.acquire() as blocker:
-                async with blocker.transaction():
-                    await blocker.fetchval(
-                        "SELECT pg_advisory_xact_lock(hashtext('telegram:' || $1::text || ':11'))",
-                        str(self.source_id))
-                    pending = asyncio.create_task(self.post(body))
-                    await asyncio.wait_for(applied.wait(), timeout=3)
-                    self.assertFalse(pending.done())
-                    await blocker.execute(
-                        "UPDATE v2_source_checkpoints SET lease_until=statement_timestamp()-interval '1 second' "
-                        "WHERE source_id=$1", self.source_id)
-            response = await asyncio.wait_for(pending, timeout=3)
+        async with self.pool.acquire() as blocker:
+            async with blocker.transaction():
+                await blocker.fetchval(
+                    "SELECT pg_advisory_xact_lock(hashtext('telegram:' || $1::text || ':11'))",
+                    str(self.source_id))
+                pending = asyncio.create_task(self.post(body))
+                async with self.pool.acquire() as observer:
+                    async with asyncio.timeout(3):
+                        while not await observer.fetchval(
+                            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' "
+                            "AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))"
+                        ):
+                            await asyncio.sleep(0.01)
+                self.assertFalse(pending.done())
+                await blocker.execute(
+                    "UPDATE v2_source_checkpoints SET lease_until=statement_timestamp()-interval '1 second' "
+                    "WHERE source_id=$1", self.source_id)
+        response = await asyncio.wait_for(pending, timeout=3)
         self.assertEqual(409, response.status_code, response.text)
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_expert_messages'))
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_telegram_events'))

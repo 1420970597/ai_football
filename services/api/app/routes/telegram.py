@@ -805,6 +805,11 @@ async def ingest_event(body: EventInput, request: Request):
                 return {'reconciliation_acknowledged': result['acknowledged'],
                         'reconciliation_ack_duplicate': result['duplicate']}
 
+            # Match the live path's source -> message -> event lock order.
+            # apply_claim locks its event row; taking it before the message
+            # lock can deadlock a concurrent pending-media completion.
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))",
+                               f"telegram:{source['id']}:{body.platform_message_id}")
             if body.reconciliation is not None:
                 payload = jsonable_encoder(body.model_dump(exclude={'owner', 'reconciliation'}))
                 duplicate = await telegram_reconciliation.apply_claim(
@@ -816,8 +821,6 @@ async def ingest_event(body: EventInput, request: Request):
                 if duplicate:
                     ack = await acknowledge_reconciliation()
                     return {"persisted": True, "state": "reconciled", "duplicate": True, **ack}
-            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))",
-                               f"telegram:{source['id']}:{body.platform_message_id}")
             snapshot = None
             if body.event_kind != "delete":
                 # A new statement after the advisory-lock wait is essential:
