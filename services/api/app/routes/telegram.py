@@ -24,6 +24,7 @@ from ..auth import audit, require_admin
 from ..security import encrypt_secret
 from .. import message_read
 from .. import telegram_reconciliation
+from ..telegram_profiles import profile_updates, sync_trusted_profiles
 from ..review_policy import REALTIME_WINDOW_SECONDS
 
 
@@ -157,6 +158,10 @@ async def sync_directory(body: DirectoryInput, request: Request):
     now = datetime.now(timezone.utc)
     if abs((now - body.observed_at).total_seconds()) > 120:
         raise HTTPException(422, '目录同步时间超出允许窗口')
+    try:
+        profiles = profile_updates(body.profiles)
+    except ValueError:
+        raise HTTPException(422, '专家昵称无效或同一作者存在冲突昵称') from None
     safe_admins = []
     seen = set()
     for item in body.admins:
@@ -185,24 +190,7 @@ async def sync_directory(body: DirectoryInput, request: Request):
                 "admins=CASE WHEN EXCLUDED.state='ready' THEN EXCLUDED.admins ELSE v2_telegram_directories.admins END,"
                 "last_attempt_at=EXCLUDED.last_attempt_at,last_success_at=COALESCE(EXCLUDED.last_success_at,v2_telegram_directories.last_success_at)",
                 source['id'], body.state, body.reason, body.retry_after, safe_admins, body.observed_at)
-            updated = 0
-            for profile in body.profiles:
-                nickname = profile.nickname.strip()
-                if not nickname or any(ord(c)<32 for c in nickname):
-                    raise HTTPException(422, '专家昵称无效')
-                expert = await conn.fetchrow(
-                    'SELECT e.id,e.display_nickname FROM v2_experts e JOIN v2_source_experts se ON se.expert_id=e.id '
-                    'WHERE se.source_id=$1 AND se.enabled AND e.enabled AND e.platform_sender_id=$2 FOR UPDATE OF e',
-                    source['id'], profile.sender_id)
-                if not expert:
-                    continue
-                for name in {expert['display_nickname'], nickname}:
-                    await conn.execute(
-                        'INSERT INTO v2_expert_nickname_history(expert_id,nickname,first_seen_at,last_seen_at) VALUES($1,$2,$3,$3) '
-                        'ON CONFLICT(expert_id,nickname) DO UPDATE SET last_seen_at=EXCLUDED.last_seen_at', expert['id'], name, body.observed_at)
-                if nickname != expert['display_nickname']:
-                    await conn.execute('UPDATE v2_experts SET display_nickname=$2,updated_at=now() WHERE id=$1', expert['id'], nickname)
-                    updated += 1
+            updated = await sync_trusted_profiles(conn, source['id'], profiles, body.observed_at)
             return {'persisted': True, 'state': body.state, 'admins': len(safe_admins), 'nicknames_updated': updated}
 
 
