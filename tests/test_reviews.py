@@ -159,6 +159,34 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], unknown.json()['markets'])
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
 
+    async def test_full_match_filter_alias_preserves_native_line_and_away_direction(self):
+        fixture_id = 'leyu:5635232'
+        await self.fixture(id=fixture_id, source_id=fixture_id, markets=[
+            {'market_id': market, 'market_name': market, 'kind': 'handicap', 'period': period,
+             'line': '0.5', 'selection': selection, 'price': '1.95',
+             'source_updated_at': self.now.isoformat(), 'received_at': self.now.isoformat()}
+            for market, period, selection in (
+                ('4', 'full_time', 'away'),
+                ('4', 'full_time', 'home'),
+                ('19', 'first_half', 'away'))])
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        response = await self.post('list_match_markets', fixture_id=fixture_id,
+                                   market_kind='handicap', period='full_match', line='0.5', selection='away')
+        self.assertEqual(200, response.status_code, response.text)
+        result = response.json()
+        self.assertEqual(1, len(result['markets']))
+        self.assertEqual('full_time', result['market_filter']['period'])
+        self.assertEqual(('handicap', 'full_time', 'away'),
+                         tuple(result['markets'][0][field] for field in ('market_kind', 'period', 'selection')))
+        self.assertEqual(Decimal('0.5'), Decimal(result['markets'][0]['line']))
+        self.assertEqual(Decimal('-0.5'), Decimal(result['markets'][0]['selection_line']))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+        unknown = await self.post('list_match_markets', fixture_id=fixture_id, period='unknown_full_match')
+        self.assertEqual(200, unknown.status_code)
+        self.assertEqual([], unknown.json()['markets'])
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+
     async def test_fixture_ingestion_allows_audit_reference_but_serializes_writers(self):
         fixture_id = await self.fixture()
         body = internal.FixtureInput.model_validate({

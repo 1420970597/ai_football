@@ -83,6 +83,11 @@ class MarketInput(AttemptInput):
     def normalize_total_alias(cls, value):
         return 'total' if value == 'over_under' else value
 
+    @field_validator('period', mode='before')
+    @classmethod
+    def normalize_full_period_alias(cls, value):
+        return 'full_time' if value == 'full_match' else value
+
     @field_validator('market_query', mode='before')
     @classmethod
     def normalize_market_query(cls, value):
