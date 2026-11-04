@@ -12,6 +12,7 @@ from .membership import has_entitlement
 from .pagination import decode_cursor, encode_cursor
 from .review_tool_evidence import MAX_CHUNKS, replay_snapshot, snapshot_result
 from . import media_grants
+from .handicap_lines import line_projection
 
 HEADERS = {'Cache-Control': 'private, no-store'}
 CURSOR_SECONDS = 900
@@ -165,7 +166,7 @@ async def signal_page(pool, request, actor, message_id, *, context='user', limit
     issued = decoded[2] if decoded else int(time.time())
     next_cursor = _encode(request, actor, message_id, context, 'signals', limit, page[-1]['created_at'],
         str(page[-1]['id']), issued) if len(rows)>limit and page else None
-    return {'items': [dict(row) for row in page], 'next_cursor': next_cursor, 'page_size': limit, 'has_more': bool(next_cursor)}
+    return {'items': [line_projection(row) for row in page], 'next_cursor': next_cursor, 'page_size': limit, 'has_more': bool(next_cursor)}
 
 
 async def detail(pool, request, actor, message, *, context='user'):

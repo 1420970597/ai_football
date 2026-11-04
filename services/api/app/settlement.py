@@ -91,6 +91,15 @@ def settle(signal: dict, result: dict) -> Settlement:
     reason_suffix = ":zero_baseline_score_equivalent" if zero_equivalent else ""
     home, away = map(Decimal, scores)
     kind, selection = signal.get("kind"), signal.get("selection")
+    line_basis = signal.get('line_basis', 'selection')
+    if line_basis not in {'selection', 'provider_home'}:
+        return pending('line_basis_unknown')
+    if line_basis == 'provider_home':
+        if kind != 'handicap' or selection not in {'home', 'away'}:
+            return pending('line_basis_not_applicable')
+        if selection == 'away':
+            line = -line
+        reason_suffix += ':provider_home_line'
     if kind == "winner":
         if selection not in {"home", "away", "draw"}:
             return pending("unsupported_selection")

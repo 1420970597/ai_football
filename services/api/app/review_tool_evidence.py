@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 
 from . import database
+from .handicap_lines import line_terms
 from .review_state import active_job, append_traces, authorize, trace
 
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
@@ -37,6 +38,7 @@ QUOTE_FIELDS = frozenset({
     'id', 'fixture_id', 'market_id', 'market_name', 'period', 'market_kind', 'line', 'selection', 'price',
     'source_updated_at', 'received_at', 'source_time_quality', 'status', 'play_id', 'market_instance_id',
     'selection_id', 'is_main', 'score_basis', 'quote_id', 'fresh', 'confirmed_current', 'can_record',
+    'line_basis', 'selection_line',
 })
 # Native lookup identifiers and receipt metadata remain in the database/read
 # evidence; the model identifies each complete option by quote_id. Keep the
@@ -45,7 +47,7 @@ MODEL_QUOTE_FIELDS = QUOTE_FIELDS - {
     'id', 'fixture_id', 'market_id', 'play_id', 'market_instance_id', 'selection_id',
     'price', 'source_updated_at', 'received_at', 'source_time_quality', 'is_main',
 }
-ACCEPTED_FIELDS = frozenset({'index', 'signal_id', 'duplicate', 'fixture_id', 'market_name', 'period', 'line', 'selection', 'price'})
+ACCEPTED_FIELDS = frozenset({'index', 'signal_id', 'duplicate', 'fixture_id', 'market_name', 'period', 'line', 'selection', 'price', 'line_basis', 'selection_line'})
 REJECTED_FIELDS = frozenset({'index', 'reason'})
 log = logging.getLogger(__name__)
 
@@ -87,7 +89,7 @@ def snapshot_result(kind, result, *, compact_markets=False):
         if omitted:
             quotes = [q for q in quotes if q.get('market_kind') != 'unsupported']
         value = {'fixture': _project(result['fixture'], FIXTURE_FIELDS),
-                 'markets': [_project(item, MODEL_QUOTE_FIELDS if compact_markets else QUOTE_FIELDS)
+                 'markets': [(_project(item, MODEL_QUOTE_FIELDS) | line_terms(item, result['fixture']['id'])) if compact_markets else _project(item, QUOTE_FIELDS)
                              for item in quotes],
                  'refresh': _project(result['refresh'], {'attempted', 'accepted', 'reason'})}
         # Replay retains the exact declared coverage; it must not reinterpret

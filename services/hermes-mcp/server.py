@@ -109,7 +109,7 @@ async def list_match_markets(review_id: str, attempt_id: str, fixture_id: str,
                              market_kind: str | None = None, period: str | None = None,
                              line: str | None = None, selection: str | None = None,
                              market_query: str | None = None) -> dict:
-    """读取已绑定比赛的盘口。按已识别意图提供可选类别、期间、线值、方向或名称筛选；零结果时放宽筛选重试。省略筛选会返回完整盘口。系统赔率不参与意图匹配；can_record表示服务端盘口校验通过。"""
+    """读取已绑定比赛的盘口。按类别、期间、方向或名称筛选，按selection_line匹配所选方让受让；line_basis=provider_home时line为原生主队线、客队selection_line符号相反，line筛选须用原生线，未确认口径先读玩法期间方向整组。零结果放宽筛选，省略筛选返回完整盘口。赔率不参与意图匹配；can_record表示服务端校验通过。"""
     return await _post("list_match_markets", {
         "review_id": review_id, "attempt_id": attempt_id, "fixture_id": fixture_id,
         "market_kind": market_kind, "period": period, "line": line,

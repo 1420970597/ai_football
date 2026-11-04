@@ -80,7 +80,8 @@ class ToolSnapshotUnitTests(unittest.TestCase):
         self.assertGreater(len(before), 100000)
         self.assertLess(len(after), 100000)
         self.assertLess(len(after), len(before) * .6)
-        compact_supported = [{key: item[key] for key in review_tool_evidence.MODEL_QUOTE_FIELDS}
+        compact_supported = [{key: item[key] for key in review_tool_evidence.MODEL_QUOTE_FIELDS if key in item}
+                             | {'line_basis':'selection', 'selection_line':item['line']}
                              for item in supported]
         self.assertEqual(compact_supported, wire['markets'])
         self.assertEqual({'total_quotes': 238, 'matched_quotes': 238, 'returned_quotes': 60,
@@ -137,7 +138,8 @@ class ToolSnapshotUnitTests(unittest.TestCase):
         compact=snapshot_result('mcp_list_match_markets',source,compact_markets=True)
         self.assertEqual(['model-id','second'],[row['quote_id'] for row in compact['markets']])
         for original,projected in zip(source['markets'],compact['markets']):
-            self.assertEqual({key:original[key] for key in review_tool_evidence.MODEL_QUOTE_FIELDS},projected)
+            self.assertEqual({key:original[key] for key in review_tool_evidence.MODEL_QUOTE_FIELDS if key in original}
+                             | {'line_basis':'selection', 'selection_line':original['line']},projected)
         self.assertNotIn('price', compact['markets'][0])
         self.assertNotIn('source_updated_at', compact['markets'][0])
         self.assertLess(len(json.dumps(compact)),len(json.dumps(source)))

@@ -13,6 +13,7 @@ from ..admin_tasks import diagnostic_tasks
 from ..auth import require_admin
 from ..pagination import decode_cursor, encode_cursor
 from ..runtime_settings import runtime_quote_max_age
+from ..handicap_lines import line_projection
 
 
 router = APIRouter(prefix='/api/v1/admin')
@@ -185,14 +186,14 @@ async def admin_orders(request: Request, state: str | None = Query(default=None,
         "SELECT o.id,o.user_id,u.email,u.display_name,a.account_label,o.signal_id,o.state,o.stake,o.price,o.reserved_stake,"
         "o.provider_order_no,o.submitted_at,o.settled_net,o.settled_at,o.created_at,o.updated_at,"
         "o.provider_price,o.provider_stake,o.provider_payout,o.provider_currency,o.provider_fees,o.provider_placed_at,o.receipt_observed_at,o.pnl_basis,"
-        "s.fixture_id,s.market_name,s.period,s.line,s.selection,f.home_team,f.away_team "
+        "s.fixture_id,s.market_id,s.market_kind,s.market_name,s.period,s.line,s.selection,f.home_team,f.away_team "
         "FROM v2_bet_orders o JOIN v2_users u ON u.id=o.user_id LEFT JOIN v2_leyu_accounts a ON a.id=o.account_id "
         "JOIN v2_expert_signals s ON s.id=o.signal_id JOIN v2_fixtures f ON f.id=s.fixture_id "
         "WHERE ($1::text IS NULL OR o.state=$1) AND ($2::uuid IS NULL OR o.user_id=$2) "
         "AND ($3::timestamptz IS NULL OR (o.created_at,o.id)<($3,$4::uuid)) ORDER BY o.created_at DESC,o.id DESC LIMIT $5",
         state, user_id, boundary[0] if boundary else None, uuid.UUID(boundary[1]) if boundary else None, limit+1,
     )
-    items = [dict(row) for row in rows[:limit]]
+    items = [line_projection(row) for row in rows[:limit]]
     next_cursor = encode_cursor(key, scope, items[-1]['created_at'], str(items[-1]['id'])) if len(rows)>limit and items else None
     return {'items':items, 'next_cursor':next_cursor, 'read_only':True,
             'profit_basis':'provider-confirmed actual settlement; separate from expert unit return'}

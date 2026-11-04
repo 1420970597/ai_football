@@ -68,6 +68,32 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
     async def submit(self, body):
         return await self.client.post('/internal/collector/results', json={'items':[body]}, headers={'Authorization':'Bearer isolated-collector'})
 
+    async def test_native_away_home_view_line_rebuild_keeps_raw_snapshot_and_prior_ledger(self):
+        signal = await self.signal(selection='away', line='1')
+        await self.pool.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) VALUES('leyu:360','leyu:360','football','League','Alpha','Beta',$1,'scheduled')", self.now)
+        await self.pool.execute("UPDATE v2_expert_signals SET fixture_id='leyu:360',market_id='4',market_kind='handicap' WHERE id=$1", signal)
+        await self.pool.execute("UPDATE v2_quote_evidence SET fixture_id='leyu:360',market_id='4' WHERE reference_id=$1", signal)
+        with patch.object(result_ledger, 'ALGORITHM_VERSION', 'football-asian-3-zero-baseline'), \
+             patch.object(result_ledger, 'line_basis', return_value='selection'):
+            response = await self.submit(self.result(fixture_id='leyu:360', home=1, away=2))
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual('win', await self.pool.fetchval('SELECT outcome FROM v2_expert_signals WHERE id=$1', signal))
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await result_ledger.rebuild_settlements(conn, 'leyu:360')
+        row = await self.pool.fetchrow('SELECT outcome,unit_net,line FROM v2_expert_signals WHERE id=$1', signal)
+        self.assertEqual(('push', 0, 1), tuple(row.values()))
+        ledgers = await self.pool.fetch('SELECT outcome,calculation FROM v2_signal_settlements WHERE signal_id=$1 ORDER BY algorithm_version', signal)
+        self.assertEqual(['win','push'], [r['outcome'] for r in ledgers])
+        self.assertEqual('provider_home', ledgers[1]['calculation']['signal']['line_basis'])
+        self.assertEqual('1.000', ledgers[1]['calculation']['signal']['line'])
+        self.assertEqual(1, await self.pool.fetchval('SELECT line FROM v2_quote_evidence WHERE reference_id=$1', signal))
+        public_response = await self.client.get('/api/v1/public/signals')
+        self.assertEqual(200, public_response.status_code)
+        item = public_response.json()['items'][0]
+        self.assertEqual('provider_home', item['line_basis'])
+        self.assertEqual(-1, float(item['selection_line']))
+
     async def test_versioned_correction_preserves_previous_calculation(self):
         signal = await self.signal()
         first = await self.submit(self.result())

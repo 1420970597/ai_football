@@ -19,6 +19,7 @@ from ..auth import _limit, audit, require_user, verify_sensitive_session
 from ..membership import has_entitlement
 from ..review_state import authorize
 from ..security import encrypt_secret
+from ..handicap_lines import line_projection
 
 router = APIRouter(prefix="/api/v1/accounts")
 executor_router = APIRouter(prefix="/internal/executor")
@@ -255,10 +256,10 @@ async def list_orders(request: Request, limit: int = 30, before: uuid.UUID | Non
         raise HTTPException(422, "订单页大小无效")
     rows = await database.current_pool().fetch("SELECT o.id,o.state,o.stake,o.price,o.created_at,o.updated_at,o.provider_order_no,o.reserved_stake,o.settled_net,o.settled_at,"
         "o.provider_price,o.provider_stake,o.provider_payout,o.provider_currency,o.provider_fees,o.provider_placed_at,o.receipt_observed_at,o.pnl_basis,"
-        "s.fixture_id,s.market_name,s.line,s.selection,e.display_nickname FROM v2_bet_orders o JOIN v2_expert_signals s ON s.id=o.signal_id "
+        "s.fixture_id,s.market_id,s.market_kind,s.market_name,s.period,s.line,s.selection,e.display_nickname FROM v2_bet_orders o JOIN v2_expert_signals s ON s.id=o.signal_id "
         "JOIN v2_experts e ON e.id=s.expert_id WHERE o.user_id=$1 AND ($2::uuid IS NULL OR (o.created_at,o.id)<"
         "(SELECT created_at,id FROM v2_bet_orders WHERE id=$2 AND user_id=$1)) ORDER BY o.created_at DESC,o.id DESC LIMIT $3", user["id"], before, limit)
-    return {"items": [dict(row) for row in rows], "next_cursor": str(rows[-1]["id"]) if len(rows) == limit else None}
+    return {"items": [line_projection(row) for row in rows], "next_cursor": str(rows[-1]["id"]) if len(rows) == limit else None}
 
 
 @executor_router.post("/claim")

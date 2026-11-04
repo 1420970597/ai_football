@@ -15,6 +15,7 @@ from ..membership import has_entitlement
 from ..runtime_settings import runtime_quote_max_age
 from ..expert_statistics import StatisticsScope, source_options, statistics_scope, summaries
 from ..review_state import fresh_quote
+from ..handicap_lines import line_projection
 from .. import message_read
 
 router = APIRouter(prefix="/api/v1/public")
@@ -117,7 +118,7 @@ async def matches(
     by_fixture: dict[str, list[dict]] = {}
     max_quote_age = await runtime_quote_max_age(request.app.state.settings)
     for quote in quote_rows:
-        by_fixture.setdefault(quote["fixture_id"], []).append(dict(quote) | {'fresh': fresh_quote(quote, max_quote_age)})
+        by_fixture.setdefault(quote["fixture_id"], []).append(line_projection(quote) | {'fresh': fresh_quote(quote, max_quote_age)})
     output = []
     for row in items:
         item = dict(row)
@@ -147,7 +148,7 @@ async def _match_markets(fixture_id: str, request: Request, phase: str, *, curso
     stale_after = await runtime_quote_max_age(request.app.state.settings)
     next_cursor = _encode_cursor(datetime(1970, 1, 1, tzinfo=timezone.utc), str(items[-1]['quote_id']),
                                  request, scope) if len(rows) > page_size else None
-    return {'markets': [dict(row) | {'fresh': fresh_quote(row, stale_after) and phase in {'scheduled', 'live'}}
+    return {'markets': [line_projection(row, fixture_id) | {'fresh': fresh_quote(row, stale_after) and phase in {'scheduled', 'live'}}
                         for row in items], 'next_market_cursor': next_cursor, 'market_page_size': page_size}
 
 
@@ -179,7 +180,7 @@ async def match_detail(fixture_id: str, request: Request):
         "WHERE s.fixture_id=$1 ORDER BY s.created_at DESC LIMIT 100", fixture_id,
     )
     now = datetime.now(timezone.utc)
-    return {"fixture": dict(fixture), **market_page, "expert_signals": [dict(row) for row in signal_rows],
+    return {"fixture": dict(fixture), **market_page, "expert_signals": [line_projection(row, fixture_id) for row in signal_rows],
             "server_time": now}
 
 
@@ -218,7 +219,7 @@ async def signals(request: Request, cursor: str | None = None, page_size: int = 
         f"WHERE TRUE {cursor_clause} ORDER BY s.created_at DESC,s.id DESC LIMIT ${len(args)}", *args,
     )
     has_more = len(rows) > page_size
-    items = [dict(row) for row in rows[:page_size]]
+    items = [line_projection(row) for row in rows[:page_size]]
     if not full_history:
         for item in items:
             item.pop("raw_text", None)
@@ -244,7 +245,7 @@ async def signal_detail(signal_id: str, request: Request):
     )
     if not row:
         raise message_read.private_error(404, "记录不存在")
-    item = dict(row)
+    item = line_projection(row)
     item['media_objects'] = message_read.message_projection({'id': item['message_id'], 'revision': item['message_revision'],
         'media_objects': item.get('media_objects')}, request=request, actor=actor)['media_objects']
     page = await message_read.trace_page(database.current_pool(), request, actor, item['message_id'])

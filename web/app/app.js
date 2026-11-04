@@ -229,7 +229,7 @@ function setDate(date) {
   route("scores", { replace: true });
 }
 function quoteLabel(q) {
-  return `${q.market_name || q.market_kind || "盘口"} ${period(q.period)} ${q.line ?? ""} ${selection(q.selection)} ${decimal(q.price)}`;
+  return `${q.market_name || q.market_kind || "盘口"} ${period(q.period)} ${lineLabel(q)} ${selection(q.selection)} ${decimal(q.price)}`;
 }
 function renderMatches() {
   const items = currentMatches();
@@ -251,7 +251,7 @@ function renderMatches() {
           ? '<img class="match-vs-icon" src="/assets/cc-reference/home_match_vs_icon.png" alt="VS" width="24" height="18">'
           : "－")
         : esc(m.home_score) + " : " + esc(m.away_score ?? "－");
-      return `<article class="match-row" data-fixture="${esc(m.id)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${score}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${quotes.length ? quotes.map((q) => `<span class="${q.fresh === false || !m.quote_fresh ? "stale" : ""}" title="${esc(quoteLabel(q))}">${esc(selection(q.selection))} ${esc(q.line ?? "")} ${decimal(q.price)}</span>`).join("") : '<span class="stale">暂无有效赔率</span>'}${all.length > quotes.length ? '<button class="detail-button" data-match="' + esc(m.id) + '">更多盘口 ›</button>' : ""}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button></article>`;
+      return `<article class="match-row" data-fixture="${esc(m.id)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${score}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${quotes.length ? quotes.map((q) => `<span class="${q.fresh === false || !m.quote_fresh ? "stale" : ""}" title="${esc(quoteLabel(q))}">${esc(selection(q.selection))} ${esc(lineLabel(q))} ${decimal(q.price)}</span>`).join("") : '<span class="stale">暂无有效赔率</span>'}${all.length > quotes.length ? '<button class="detail-button" data-match="' + esc(m.id) + '">更多盘口 ›</button>' : ""}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button></article>`;
     })
     .join("");
   $("#fixture-count").textContent =
@@ -640,7 +640,7 @@ function analysisState(value) {
   );
 }
 function lineLabel(q) {
-  const value = q.line;
+  const value = q.selection_line ?? q.line;
   if (value === null || value === undefined) return "";
   return (q.market_kind === "handicap" || /让球/.test(q.market_name || "")) &&
     Number(value) > 0

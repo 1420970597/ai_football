@@ -15,6 +15,7 @@ from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_val
 
 from .. import database
 from ..review_policy import REALTIME_WINDOW_SECONDS
+from ..handicap_lines import line_terms
 from ..review_state import authorize, fresh_quote, quote_context
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, FIXTURE_FIELDS, MAX_MARKETS
 from ..runtime_settings import runtime_quote_max_age
@@ -486,12 +487,13 @@ async def record_expert_signals(body: RecordInput, request: Request):
                     await conn.execute(
                         "INSERT INTO v2_quote_evidence(id,fixture_id,market_id,market_name,period,line,selection,price,evidence_kind,reference_id,source_updated_at,evidence,score_baseline) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'expert_signal',$9,$10,$11,$12)",
                         uuid.uuid4(), quote["fixture_id"], quote["market_id"], quote["market_name"], quote["period"], quote["line"], quote["selection"], quote["price"], new_id, quote["source_updated_at"], {"job_id": str(body.review_id), "attempt_id": str(body.attempt_id), "quote_id": str(pick.quote_id), "score_basis": quote["score_basis"], "market_kind": quote["market_kind"], 'current_confirmation': confirmation,
+                        **line_terms(quote),
                         'reviewed_price': str(quote['read_price']) if quote['read_price'] is not None else None,
                         'reviewed_source_updated_at': quote['read_source_time'].isoformat() if quote['read_source_time'] else None}, baseline,
                     )
                 else:
                     existing = await conn.fetchrow("SELECT id,recommendation_price FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND selection=$6 AND market_kind=$7 AND (line IS NOT DISTINCT FROM $5::numeric OR market_kind='winner' AND COALESCE(line,0)=0 AND COALESCE($5::numeric,0)=0)", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"], quote["market_kind"])
                     new_id, recorded_price = existing['id'], existing['recommendation_price']
-                accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(recorded_price)})
+                accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(recorded_price), **line_terms(quote)})
             result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
             return await tool_success(conn, body, result, result)

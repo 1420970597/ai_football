@@ -9,8 +9,9 @@ from fastapi import HTTPException
 
 from .expert_statistics import QUOTE_VALID_SQL
 from .settlement import pending, settle
+from .handicap_lines import line_basis
 
-ALGORITHM_VERSION = 'football-asian-3-zero-baseline'
+ALGORITHM_VERSION = 'football-asian-4-native-line-basis'
 
 
 def result_facts(row):
@@ -30,7 +31,8 @@ async def project_settlements(conn, fixture, version, facts):
     for row in rows:
         inputs = {'sport': fixture['sport'], 'kind': row['market_kind'], 'period': row['period'],
                   'phase': row['phase'], 'price': str(row['recommendation_price']), 'line': str(row['line']) if row['line'] is not None else None,
-                  'selection': row['selection'], 'score_basis': row['score_basis'], 'score_baseline': row['score_baseline']}
+                  'selection': row['selection'], 'score_basis': row['score_basis'], 'score_baseline': row['score_baseline'],
+                  'line_basis': line_basis(row, fixture['id'])}
         value = settle(inputs, facts) if row['quote_valid'] else pending('recommendation_quote_evidence_missing_or_mismatched')
         calculation = {'signal': inputs, 'result': facts}
         await conn.execute(

@@ -5,6 +5,7 @@ from collections import Counter
 from datetime import datetime
 
 from .review_state import trace
+from .handicap_lines import line_terms
 from .review_completion import completion_issues, mentioned_fixtures
 
 SUMMARY_ITEM_LIMIT = 100
@@ -38,6 +39,8 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
         'kickoff_at', 'phase', 'market_name', 'market_kind', 'period', 'line',
         'selection', 'recommendation_price', 'quote_time',
     )} for row in rows[:SUMMARY_ITEM_LIMIT]]
+    for item, row in zip(items, rows):
+        item.update({key: _value(value) for key, value in line_terms(row).items()})
     omitted = max(0, accepted_total - len(items))
     identified_items = [{key: _value(row.get(key)) for key in (
         'fixture_id', 'home_team', 'away_team', 'competition_name', 'kickoff_at', 'phase',
@@ -51,7 +54,7 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
     if review_mode == 'historical_replay':
         lines.append('审核模式：历史回放；当前盘口不能替代历史推荐报价。')
     for number, item in enumerate(items, 1):
-        line = '不适用' if item['market_kind'] == 'winner' and item['line'] is None else item['line'] or '未知'
+        line = '不适用' if item['market_kind'] == 'winner' and item['selection_line'] is None else item['selection_line'] or '未知'
         selection = SELECTIONS.get(item['selection'], '系统选项：' + str(item['selection']))
         phase = PHASES.get(item['phase'], '阶段未知')
         period = PERIODS.get(item['period'], '系统期间：' + str(item['period']))
@@ -88,7 +91,7 @@ async def record_summary(conn, job, attempt_id, review_mode: str) -> int:
     total = await conn.fetchval('SELECT count(*) FROM v2_expert_signals WHERE message_id=$1', job['message_id'])
     rows = await conn.fetch(
         'SELECT s.id AS signal_id,s.fixture_id,f.home_team,f.away_team,f.competition_name,f.kickoff_at,'
-        's.phase,s.market_name,s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time '
+        's.phase,s.market_id,s.market_name,s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time '
         'FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id WHERE s.message_id=$1 '
         'ORDER BY s.created_at,s.id LIMIT $2', job['message_id'], SUMMARY_ITEM_LIMIT)
     records = await conn.fetch(
