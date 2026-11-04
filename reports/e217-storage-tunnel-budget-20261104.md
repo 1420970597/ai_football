@@ -1,6 +1,6 @@
 # E217 存储隧道突发 CPU 预算
 
-更新时间：2026-11-04 12:25 UTC。状态：设计已记录，未生效。
+更新时间：2026-11-04 13:25 UTC。状态：已在线生效，完整30分钟基础健康通过，审核吞吐未通过。
 
 目标：减少数据库与对象存储共用 SSH 隧道的 CPU 限流长尾，不中断持久连接。责任目录 docker-compose.yml、docs/platform-v2、reports；无数据库结构或业务规则变更。依赖 E216 完整冻结窗口结束、Docker 在线资源更新及原容器身份检查。
 
@@ -17,3 +17,7 @@
 2026-11-04 12:51 UTC，在E216完整1802.9秒退出0后cherry-pick为b66166f，Docker update --cpus .25 ai-football-v2-storage-tunnel-1退出0。Docker身份比对exit0：ID和StartedAt完全不变（仍2026-10-31T07:28:23.043875975Z），NanoCpus100000000→250000000、内存134217728不变。只读前后smoke均exit0：before DB四次389.1/249.5/130.6/253.0ms、S3原图6556字节/783.7ms；after510.0/255.2/257.1/128.6ms、同图同hash/909.9ms，两次ready200。不声称这组短样本证明延迟改善。
 
 首次docker cp到只读rootfs被拒exit1，未更改容器配置；改为docker exec在现有/tmp写任务脚本。第一次脚本因/tmp入口缺PYTHONPATH报ModuleNotFoundError，exit1/169字节stderr、0样本，未计完整观察。显式PYTHONPATH=/app后第二窗12:53:39.504117 UTC启动，首样本health/ready200、六租约有效、无来源错误；完整1800秒结论待13:23:40之后。现运行API/worker/MCP/web及Hermes上下文保持E216版本，E218及E219仅候选，窗内不切换。
+
+完整窗口结论：12:53:39.504117起1802.9秒，55样本，Python退出0，JSONL SHA195e299472cf2ca7da6e8826ee413cb74699b988bbbe1b4d54514b7b6f1bf253。health/ready全200、Telegram connected/authorized且无degraded、六租约全部有效且单owner；这是基础健康通过，不能代替模型吞吐。终样本50自然新帖，42ready/8unsupported，42eligible中26当前回执/16在途、0缺job。精确截止13:23:42.400只读审计50帖未截断，42eligible为23unresolved/3succeeded/14queued/2running，无current_failure_category，但尚有16未完成，不满足用户完全正常标准。事件53版本平均4066.0/P959786.5ms、29≤3秒，是源事件采集指标，不是模型端到端，三秒未通过。
+
+资源全窗前后计数：有效period10362/throttled1043（10.0656%），usage_usec+33571535、throttled_usec+76556019；与先前短基线24.46%时间和自然流量均不同，不能宣称因果或端到端达标。实时callback+2228/staged144/deferred0/unmapped2083不是帖子数。窗口中保留E216运行镜像/上下文不变，API/worker未重建。完整证据已复制出容器后启动E219 idle gate：13:24:45.916暂停领取、等待活动审核退出，不在审核中途重启。下一阶段联合部署E218检索范围与E219结算/展示修复，重新起完整30分钟验收。
