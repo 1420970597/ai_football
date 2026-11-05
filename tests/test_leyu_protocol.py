@@ -112,6 +112,73 @@ class FixtureTests(unittest.TestCase):
 
 
 class QuoteTests(unittest.TestCase):
+    def basketball_row(self, market_id="38", **changes):
+        total = market_id == "38"
+        return market_row(csid="2", ms=0, mmp="0",
+            hpsPns=[{"chpid": market_id, "hpn": "全场大小" if total else "全场让分"}],
+            hpsData=[{"hps": [{"chpid": market_id, "hpid": market_id, "ctsp": "1790785712143",
+                "hl": {"hid": "basket-main", "hv": "179.5" if total else "-6.5", "hs": 0, "ol": [
+                    {"oid": "basket-first", "ot": "Over" if total else "1", "os": 1, "ov": 195000},
+                    {"oid": "basket-second", "ot": "Under" if total else "2", "os": 1, "ov": 185000},
+                ]}}]}], **changes)
+
+    def test_basketball_full_game_native_markets_preserve_exact_binding(self):
+        for market_id, kind, line, selections in (
+                ("38", "total", "179.5", ["over", "under"]),
+                ("39", "handicap", "-6.5", ["home", "away"])):
+            with self.subTest(market_id=market_id):
+                quotes = parse_quotes(self.basketball_row(market_id), "leyu:m1")
+                self.assertEqual(selections, [q["selection"] for q in quotes])
+                self.assertEqual(["1.95", "1.85"], [q["price"] for q in quotes])
+                for quote in quotes:
+                    self.assertEqual((market_id, market_id, kind, "full_time", line, "basket-main"),
+                        (quote["market_id"], quote["play_id"], quote["market_kind"], quote["period"],
+                         quote["line"], quote["market_instance_id"]))
+                    self.assertEqual("active", quote["status"])
+                    self.assertEqual("full_period", quote["score_basis"])
+
+    def test_basketball_ids_never_apply_to_other_or_missing_sports(self):
+        for sport in ("1", "5", "999", "", None):
+            for market_id in ("38", "39"):
+                with self.subTest(sport=sport, market_id=market_id):
+                    row = self.basketball_row(market_id)
+                    row["csid"] = sport
+                    quotes = parse_quotes(row, "leyu:m1")
+                    self.assertEqual(2, len(quotes))
+                    self.assertTrue(all(q["market_kind"] == "unsupported" and q["status"] == "suspended"
+                                        and q["period"] == "source_" + market_id for q in quotes))
+
+    def test_basketball_mapping_does_not_change_native_status_or_unknown_source_time(self):
+        for market_id in ("38", "39"):
+            for status, expected in ((1, "suspended"), (2, "closed"), (3, "closed")):
+                row = self.basketball_row(market_id)
+                block = row["hpsData"][0]["hps"][0]
+                block["hl"]["hs"] = status
+                block.pop("ctsp")
+                quotes = parse_quotes(row, "leyu:m1")
+                self.assertTrue(all(q["status"] == expected and q["source_updated_at"] is None
+                                    and q["source_time_quality"] == "unknown" for q in quotes))
+
+    def test_basketball_added_lines_remain_distinct_and_live_score_basis_unknown(self):
+        row = self.basketball_row()
+        row["ms"] = 1
+        row["mmp"] = "6"
+        row["hpsData"][0]["hpsAdd"] = [{"chpid": "38", "hpid": "38",
+            "hl": {"hv": "178.5", "hid": "basket-additional", "hs": 0, "ol": [
+                {"oid": "added-over", "ot": "Over", "os": 1, "ov": 200000}]}}]
+        quotes = parse_quotes(row, "leyu:m1")
+        self.assertEqual(3, len(quotes))
+        self.assertEqual({"179.5", "178.5"}, {q["line"] for q in quotes})
+        self.assertEqual([True, True, False], [q["is_main"] for q in quotes])
+        self.assertTrue(all(q["score_basis"] == "unknown" for q in quotes))
+        self.assertEqual("basket-additional", quotes[2]["market_instance_id"])
+
+    def test_unverified_basketball_market_stays_unsupported(self):
+        quotes = parse_quotes(self.basketball_row("198"), "leyu:m1")
+        self.assertEqual(2, len(quotes))
+        self.assertTrue(all(q["market_kind"] == "unsupported" and q["status"] == "suspended"
+                            and q["period"] == "source_198" for q in quotes))
+
     def test_split_lines_decimal_and_sign_inheritance(self):
         for raw, expected in [("0/0.5", ".25"), ("-0.5/-1", "-.75"), ("-0.5/1", "-.75"), ("-1/1.5", "-1.25")]:
             self.assertEqual(Decimal(expected), parse_line(raw))

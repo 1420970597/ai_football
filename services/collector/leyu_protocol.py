@@ -29,6 +29,15 @@ MARKETS = {
     "2": ("total", "full_time", "全场大小"),
     "18": ("total", "first_half", "上半场大小"),
 }
+# Source ids are sport scoped. These basketball full-game ids and native
+# selection codes were verified from an authorized current detail response.
+# Do not recognize them for football, an unknown sport, or a missing csid.
+SPORT_MARKETS = {
+    "2": {
+        "38": ("total", "full_time", "全场大小"),
+        "39": ("handicap", "full_time", "全场让分"),
+    },
+}
 
 
 class LeyuError(RuntimeError):
@@ -269,6 +278,7 @@ def parse_quotes(payload: Any, fixture_id: str, updated_at: datetime | None = No
     received = timestamp(updated_at or datetime.now(timezone.utc))
     result: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in _market_rows(payload, fixture_id):
+        sport_markets = SPORT_MARKETS.get(str(row.get("csid") or ""), {})
         definitions = {str(item.get("chpid")): item for item in objects(row.get("hpsPns", []))}
         containers = objects(row.get("hpsData", [])) or [row]
         for container in containers:
@@ -278,7 +288,8 @@ def parse_quotes(payload: Any, fixture_id: str, updated_at: datetime | None = No
                     if not market_id:
                         continue
                     definition = definitions.get(market_id, {})
-                    kind, period, default_name = MARKETS.get(market_id, ("unsupported", f"source_{market_id}", market_id))
+                    kind, period, default_name = sport_markets.get(
+                        market_id, MARKETS.get(market_id, ("unsupported", f"source_{market_id}", market_id)))
                     name = str(definition.get("hpn") or block.get("hpn") or default_name)
                     for line in objects(block.get("hl", [])):
                         raw_line = line.get("hv", line.get("line"))
