@@ -15,3 +15,5 @@
 远端实际 collector 启动 2026-11-03 17:08:05，镜像 c8f38b36，0.3CPU/512MiB，无源码热挂载；全部 Python 模块与当前主分支仅 leyu_session 不同，其 SHA 精确等于 168252e 的父提交。差异为已授权且已提交的四行可选设备授权码消费，不涉及当前会话恢复；候选新镜像包含该已有变更，发布核验必须明确两模块差异，不作为仅一模块上线报告。远端源码没有发现额外未解释修改。
 
 候选首次构建错误手填了提交标签，未部署，保留 first-e288-collector-build-wrong-label.log；随后改为从 git rev-parse HEAD 获取完整提交号重新构建，actual exit 0，后续只允许标签和逐文件源码均精确核对的新镜像。构建成功不是完整验证或真实恢复验收。
+
+06:04 UTC：完整 1347 项 619.965 秒（报告622.468秒）actual exit 0，失败/错误/跳过均0、committed_source_verified=true；证据 SHA 3103d25e8200bc35c4e26ca68f784776046c214357f4fded79a36526d877c46e，原始 backend-tests.json 位于候选 .runtime/test-evidence/2466779。修复已接入当前任务分支 1d164df。修正后的 collector 镜像 d673df8bba70e8e79d4685f522a59b03b3a188380721c9650e3aac5aabaf593e，实际标签精确为候选完整提交号，15 个 Python/依赖文件逐字节与冻结候选相同，核验 actual exit 0。准备镜像归档与远端预加载；E287 尚未截止，生产未切换。
