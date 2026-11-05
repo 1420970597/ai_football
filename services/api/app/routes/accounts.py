@@ -490,6 +490,13 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
                 await conn.execute("UPDATE v2_leyu_accounts SET health_state=$2,renewal_state=$3,renewal_attempt=NULL,"
                                    "renewal_lease_until=NULL,updated_at=now() WHERE id=$1",account['id'],
                                    'rejected' if effective_status=='rejected' else 'renewal_required',effective_status)
+            elif effective_status == 'failed' and job['kind'] in {'refresh', 'reconcile'}:
+                # A failed read does not prove the session expired. Keep the
+                # account's identity and state, but do not create another read
+                # job on every dispatch tick while last_verified_at is old.
+                await conn.execute(
+                    "UPDATE v2_leyu_accounts SET renewal_retry_after=GREATEST(renewal_retry_after,"
+                    "now()+interval '60 seconds'),updated_at=now() WHERE id=$1", account['id'])
             details = {'receipts':len(body.receipts),'finish_sha256':finish_sha256}
             if body.provider_code:
                 details['provider_code'] = body.provider_code

@@ -97,6 +97,83 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("UPDATE v2_account_jobs SET state='succeeded' WHERE account_id=$1",account['id'])
         return await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',account['id'])
 
+    async def test_failed_background_refresh_waits_before_dispatch_then_recovers(self):
+        account=await self.healthy()
+        await self.pool.execute("UPDATE v2_leyu_accounts SET last_verified_at=now()-interval '5 minutes' WHERE id=$1",account['id'])
+        self.assertEqual(200,(await self.worker_api.post('/internal/executor/dispatch')).status_code)
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        self.assertEqual('account',work['kind'])
+        prefix=f"/internal/executor/jobs/{work['job_id']}"
+        body={'attempt_id':work['attempt_id'],'status':'failed','category':'account_http_rejected','provider_code':'403'}
+        response=await self.worker_api.post(prefix+'/finish',json=body)
+        self.assertEqual(200,response.status_code,response.text)
+        failed=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',account['id'])
+        self.assertGreater((failed['renewal_retry_after']-datetime.now(timezone.utc)).total_seconds(),50)
+        for key in ('user_id','provider_identity_hash','binding_revision','config_revision','encrypted_session','health_state','renewal_state'):
+            self.assertEqual(account[key],failed[key],key)
+        self.assertEqual(200,(await self.worker_api.post('/internal/executor/dispatch')).status_code)
+        self.assertEqual('idle',(await self.worker_api.post('/internal/executor/claim')).json()['kind'])
+        repeated=await self.worker_api.post(prefix+'/finish',json=body)
+        self.assertTrue(repeated.json()['idempotent'])
+        self.assertEqual(failed['renewal_retry_after'],await self.pool.fetchval(
+            'SELECT renewal_retry_after FROM v2_leyu_accounts WHERE id=$1',account['id']))
+        self.assertEqual(409,(await self.worker_api.post(prefix+'/finish',json=body|{'category':'changed'})).status_code)
+        await self.pool.execute("UPDATE v2_leyu_accounts SET renewal_retry_after=now()-interval '1 second' WHERE id=$1",account['id'])
+        await self.worker_api.post('/internal/executor/dispatch')
+        recovered=(await self.worker_api.post('/internal/executor/claim')).json()
+        self.assertEqual('account',recovered['kind'])
+        self.assertNotEqual(work['job_id'],recovered['job_id'])
+        result=await self.worker_api.post(f"/internal/executor/jobs/{recovered['job_id']}/finish",json={
+            'attempt_id':recovered['attempt_id'],'status':'success','balance':'98.50',
+            'observed_at':datetime.now(timezone.utc).isoformat()})
+        self.assertEqual(200,result.status_code,result.text)
+        self.assertIsNone(await self.pool.fetchval('SELECT renewal_retry_after FROM v2_leyu_accounts WHERE id=$1',account['id']))
+        await self.worker_api.post('/internal/executor/dispatch')
+        self.assertEqual('idle',(await self.worker_api.post('/internal/executor/claim')).json()['kind'])
+
+    async def test_failed_refresh_preserves_longer_cooldown_and_other_accounts(self):
+        account=await self.healthy()
+        other_user,other_account=uuid.uuid4(),uuid.uuid4()
+        await self.pool.execute("INSERT INTO v2_users(id,email,display_name,password_hash,role) VALUES($1,$2,'隔离用户','hash','user')",other_user,f'{other_user}@test.invalid')
+        await self.pool.execute("INSERT INTO v2_leyu_accounts(id,user_id,encrypted_credentials,account_label,health_state) VALUES($1,$2,'isolated','其他本人账户','unverified')",other_account,other_user)
+        before_other=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',other_account)
+        await self.pool.execute("UPDATE v2_leyu_accounts SET last_verified_at=now()-interval '5 minutes' WHERE id=$1",account['id'])
+        await self.worker_api.post('/internal/executor/dispatch')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        longer=await self.pool.fetchval("UPDATE v2_leyu_accounts SET renewal_retry_after=now()+interval '10 minutes' WHERE id=$1 RETURNING renewal_retry_after",account['id'])
+        result=await self.worker_api.post(f"/internal/executor/jobs/{work['job_id']}/finish",json={
+            'attempt_id':work['attempt_id'],'status':'failed','category':'account_api_unavailable'})
+        self.assertEqual(200,result.status_code,result.text)
+        self.assertEqual(longer,await self.pool.fetchval('SELECT renewal_retry_after FROM v2_leyu_accounts WHERE id=$1',account['id']))
+        self.assertEqual(before_other,await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',other_account))
+
+    async def test_failed_reconcile_also_waits_without_renewing_session(self):
+        account=await self.healthy()
+        async with self.pool.acquire() as conn:
+            await account_jobs.enqueue(conn,account,'reconcile')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        result=await self.worker_api.post(f"/internal/executor/jobs/{work['job_id']}/finish",json={
+            'attempt_id':work['attempt_id'],'status':'failed','category':'account_api_unavailable'})
+        self.assertEqual(200,result.status_code,result.text)
+        failed=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',account['id'])
+        self.assertGreater(failed['renewal_retry_after'],datetime.now(timezone.utc))
+        self.assertEqual(account['encrypted_session'],failed['encrypted_session'])
+        self.assertEqual(('healthy','ready'),(failed['health_state'],failed['renewal_state']))
+
+    async def test_failed_verify_and_unknown_do_not_become_background_retry(self):
+        for status in ('failed','unknown'):
+            with self.subTest(status=status):
+                await self.bind()
+                work=(await self.worker_api.post('/internal/executor/claim')).json()
+                result=await self.worker_api.post(f"/internal/executor/jobs/{work['job_id']}/finish",json={
+                    'attempt_id':work['attempt_id'],'status':status,'category':'account_api_unavailable'})
+                self.assertEqual(200,result.status_code,result.text)
+                account=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE user_id=$1',self.user['id'])
+                self.assertIsNone(account['renewal_retry_after'])
+                self.assertEqual('unverified' if status=='failed' else 'renewal_required',account['health_state'])
+                await self.worker_api.post('/internal/executor/dispatch')
+                self.assertEqual('idle',(await self.worker_api.post('/internal/executor/claim')).json()['kind'])
+
     async def signal(self):
         source,expert,message,signal,quote=[uuid.uuid4() for _ in range(5)]
         fixture='leyu:'+uuid.uuid4().hex
