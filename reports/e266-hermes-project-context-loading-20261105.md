@@ -1,6 +1,6 @@
 # E266：修复 Hermes 网关项目上下文加载
 
-更新于2026-11-05 02:06 UTC。状态：完整冻结隔离验证通过，等待原观察终审后真实发布联调。
+更新于2026-11-05 02:15 UTC。状态：首次真实发布检查失败并自动恢复，已定位检查误报，第二次自然交接进行中。
 
 目标：让真实 API 网关加载项目约束，并在启动时阻止工作目录悄然偏离。责任目录为 integrations/hermes、tests、reports。前置依赖为固定 Hermes v0.22.5 镜像及完整预载技能；不改模型、工具权限、消息内容或业务校验。
 
@@ -15,3 +15,5 @@
 候选99d3bee：显式terminal.cwd、启动profile目录与完整上下文验证及7项测试。针对性命令 `docker run ... ai-football-verifier:v2.0.0-dev python -m unittest tests.test_hermes_runner -v` 实际exit0；原技能失败路径继续覆盖。固定Hermes摘要9c556157在network=none、独立临时HERMES_HOME、只读候选workspace中实际调用build_profile_terminal_scope及两个启动验证，输出目录/workspace与project_context_complete/mandatory_skill_complete均true，实际exit0。不是手工传目录绕过profile。完整回归使用 `.runtime/e209-live/e266-full-suite.sh`，冻结运行中不修改候选。
 
 完整冻结结果：1331项613.641秒，报告总616.206秒，实际exit0、0failure/error/skip、committed_source_verified=true，源码99d3bee2e74b5a46dc25b5c3699864eb896d6b96。证据 `.runtime/e266-candidate/.runtime/test-evidence/1983133/backend-tests.json` SHA7288ba3c889f99b53218089f2902a80c6774953c5e477833ccb44c8a8e23c02a。发布只切Hermes，现有API及worker镜像继续保留，预检查合并配置exit0；发布脚本备份旧配置和runner、校验gate与其他六容器，异常恢复原两文件并重建原服务后释放gate。仍需真实新会话确认上下文加载，不能用该隔离结果替代实际模型验证。
+
+首次发布actual exit1：02:09:58.278693暂停、02:10:51.204265自然idle持锁，新服务就绪且live_profile_context_and_skill_verified=true，但直接对Config.Env数组JSON哈希误把顺序变化当配置变化。脚本自动恢复旧config/runner并重建，gate正常释放actual exit0；因此当前未保留修复，不能报告生效。恢复容器be609e79于02:11:58.665687138启动、健康、restart0。用既存E257前置快照的排序环境摘要c3d71295…与恢复容器比较完全相同，镜像和预算也同；其余六容器ID/时间/镜像/预算cmp实际exit0。没有环境值变更或密钥输出。改用排序后的环境摘要、保留首次脚本及失败日志，第二次预检查exit0，重新等待自然idle；不重跑或修改已冻结业务代码。
