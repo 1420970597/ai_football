@@ -15,3 +15,9 @@
 ## 定向通过进入冻结（2026-11-05 10:15 UTC）
 
 第二轮89项65.347秒actual1/2失败2错误，均新夹具Alpha/Beta并非真实Alpha1/Beta1；原匹配不将数字身份忽略是正确行为，未改业务匹配规则。修正实际身份后6b73d1d候选89项65.314秒actual0，8新增API场景及MCP可选字段/原四工具、原API和Hermes上下文启动检查通过。新增完整当前响应与分片重放相等、跨页resolution引用完整；终态比赛可绑定身份但不可读实时盘口。首失败各自保留，不能把当前通过覆盖历史问题。完整冻结套件启动，期间不改候选；尚未接入主工作树技能挂载、尚未发布。生产E305持续自然联调。
+
+## 冻结完整套件与发布门（2026-11-05 10:26 UTC）
+
+候选6b73d1d完整1401项662.756秒（冻结包装665.212秒），actual0，0失败/错误/跳过，committed_source_verified=true；原始backend-tests SHA256 `d83b98f1c12049f1d2b2d6d0be932d4f45d4c02da8543efec926c41f6706fc4a`，路径`.runtime/e308-candidate/.runtime/test-evidence/3018294/backend-tests.json`。API镜像`d2f73abc49621edd8b64ff60a55fa8408ac8a3ea0aff785bc53c8dce6bb1d955`与91文件/requirements逐项一致；MCP镜像`4dcc01894d42e725539f01ea846d405925d12a549130951c8d7a047e45e7e649`源码/requirements一致，actual0。发布前check实际0。
+
+E307完整1802.6秒六群健康、API健康全200，窗口末51应审中49完成、2进行中，待自然完成再切。准备按API→MCP→Hermes更新schema，Hermes固定框架镜像不变，workspace与配置改为冻结候选只读挂载；主工作树技能仍未热改。独立工具仍四个，两会话别名保持。回滚明确指向当前E305 API、实际E227 MCP和原Hermes工作区，不复跑旧消息。只有真实新消息使用短路径并核对原图/盘口后才可宣称真实联调。
