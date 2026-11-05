@@ -41,6 +41,24 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertEqual(['skills_list', 'skill_view'], toolsets.create_custom_toolset.call_args.kwargs['tools'])
         cli.main.assert_called_once_with()
 
+    def test_preloaded_context_uses_actual_sport_instead_of_tool_server_name(self):
+        runner, _, _, modules = self.runner()
+        root = Path(runner.__file__).parent
+        with patch.dict(sys.modules, modules):
+            runner.verify_project_context(root)
+            runner.verify_preloaded_skill(root)
+        context = modules['agent.prompt_builder'].build_context_files_prompt.return_value
+        skill = modules['agent.skill_commands'].build_auto_load_prompt.return_value[0]
+        for text in (context, skill):
+            self.assertIn('sport=basketball', text)
+            self.assertIn('sport=football', text)
+            self.assertIn('省略sport过滤', text)
+        self.assertNotIn('每次search_matches显式传sport=football', skill)
+        self.assertIn('迈阿密热火+6.5分', skill)
+        self.assertIn('selection_line=+6.5', skill)
+        self.assertIn('sport与范围在同一查询的各游标页保持一致', skill)
+        self.assertIn('football与football_parallel是工具服务器名称', context)
+
     def test_gateway_profile_cwd_cannot_silently_resolve_to_home(self):
         for cwd in (None, '', '.', '/root', '/workspace-missing'):
             with self.subTest(cwd=cwd):

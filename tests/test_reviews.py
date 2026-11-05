@@ -65,7 +65,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         return response
 
     async def fixture(self, index=1, **updates):
-        fixture_id = f"fixture-{index}"
+        fixture_id = updates.pop('id', f"fixture-{index}")
         payload = {"id": fixture_id, "source_id": fixture_id, "sport": "football", "competition_name": "League", "home_team": f"Alpha{index}", "away_team": f"Beta{index}",
                    "kickoff_at": (self.now + timedelta(hours=index)).isoformat(), "phase": "scheduled", "source_updated_at": self.now.isoformat(), "received_at": self.now.isoformat(),
                    "markets": [{"market_id": "total", "market_name": "全场大小", "kind": "total", "period": "full_time", "line": "2.5", "selection": "over", "price": "1.95", "source_updated_at": self.now.isoformat(), "received_at": self.now.isoformat()}], **updates}
@@ -1076,6 +1076,42 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(2, result.json()["candidate_count"])
         result = await self.post("resolve_match", search_key=key, team_a="Club A", team_b="Club B", to_utc=(self.now + timedelta(hours=1, minutes=30)).isoformat())
         self.assertTrue(result.json()["resolved"])
+
+    async def test_basketball_intent_resolves_own_sport_and_records_selected_away_line(self):
+        home, away = '金州勇士', '迈阿密热火'
+        market = {'market_id': '39', 'market_name': '全场让分', 'kind': 'handicap',
+                  'period': 'full_time', 'line': '-6.5', 'selection': 'away', 'price': '2.03',
+                  'source_updated_at': self.now.isoformat(), 'received_at': self.now.isoformat()}
+        fixture_id = await self.fixture(1, id='leyu:900000000001', sport='basketball',
+                                        home_team=home, away_team=away, markets=[market])
+        await self.fixture(2, sport='football', home_team='迈阿密国际', away_team='另一足球队')
+        scope = dict(team_query=away, sport='basketball', team_a=home, team_b=away,
+                     from_utc=(self.now-timedelta(hours=12)).isoformat(),
+                     to_utc=(self.now+timedelta(hours=72)).isoformat())
+        response = await self.post('search_matches', **scope)
+        self.assertEqual(200, response.status_code, response.text)
+        searched = response.json()
+        self.assertTrue(searched['search_complete'])
+        self.assertIsNone(searched['next_cursor'])
+        self.assertEqual([fixture_id], [item['id'] for item in searched['items']])
+        self.assertTrue(searched['resolution']['resolved'])
+        self.assertTrue(searched['resolution']['fixture']['realtime_eligible'])
+        result = await self.post('list_match_markets', fixture_id=fixture_id,
+                                 market_kind='handicap', period='full_time', selection='away')
+        self.assertEqual(200, result.status_code, result.text)
+        quote = result.json()['markets'][0]
+        self.assertEqual('away', quote['selection'])
+        self.assertEqual(Decimal('6.5'), Decimal(quote['selection_line']))
+        self.assertEqual(Decimal('-6.5'), Decimal(quote['line']))
+        pick = dict(fixture_id=fixture_id, quote_id=quote['quote_id'],
+                    evidence_text='推荐：迈阿密热火+6.5分；原文倍率不参与匹配')
+        recorded = await self.post('record_expert_signals', signals=[pick])
+        self.assertEqual(200, recorded.status_code, recorded.text)
+        self.assertEqual([], recorded.json()['rejected'])
+        self.assertEqual(fixture_id, recorded.json()['accepted'][0]['fixture_id'])
+        self.assertEqual(Decimal('2.03'), Decimal(recorded.json()['accepted'][0]['price']))
+        self.assertEqual(Decimal('6.5'), Decimal(recorded.json()['accepted'][0]['selection_line']))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
 
     async def test_signal_requires_market_read_and_uses_current_system_price(self):
         fixture_id = await self.fixture()
