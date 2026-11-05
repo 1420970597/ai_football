@@ -787,6 +787,7 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         completion = None
         try:
             async with self.pool.acquire() as holder, holder.transaction():
+                holder_pid = await holder.fetchval('SELECT pg_backend_pid()')
                 await worker.trace(holder, self.job, 'parallel_tool_receipt', {
                     'attempt_id': str(job['attempt_id']), 'status': 'succeeded'})
                 completion = asyncio.create_task(
@@ -794,8 +795,7 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
                 for _ in range(100):
                     waiting = await self.pool.fetchval(
                         "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() "
-                        "AND pid<>pg_backend_pid() AND wait_event_type='Lock' "
-                        "AND position('AS trace_lock' in query)>0)")
+                        "AND $1=ANY(pg_blocking_pids(pid)))", holder_pid)
                     if waiting:
                         break
                     await asyncio.sleep(.01)
