@@ -14,3 +14,6 @@
 # 发布范围修正（2026-11-05 08:37 UTC）
 
 E298实测发现E297回执过滤未随API更新到实际生成回执的review-worker。E300需在完整冻结通过及整窗终审后，自然idle下顺序发布API和review-worker，其他五服务保持不变；各自回退到API E297/worker E284。相对旧worker应用目录只有ingestion、result_check_queue、review_summary_evidence、routes/result_checks、routes/reviews五处已验证累计差异，worker主循环未变，保留并发2/实时下限2/历史并发0及模型配置。发布检查增加实际worker导入read_summary_evidence含quote证据恢复过滤，不再以API镜像为消费端生效证据。镜像d0360fbe、冻结34247a86、88应用迁移依赖文件精确核验exit0；完整回归仍进行中。
+## 冻结完整验证（2026-11-05 08:41 UTC）
+
+1375项637.487秒，actual exit0，0失败/错误/跳过，冻结源码34247a86核验true。证据.runtime/e300-candidate/.runtime/test-evidence/2792542/backend-tests.json，SHA256 c940d33ad7588d5e0ddde0cfeb8fdc976f6bb47ae5defb25541573aab735aa4e；摘要elapsed_seconds键不存在，因此不填0，以实际unittest输出为准。主任务分支接入f6d0c05，准确镜像/88文件源码及部署检查通过，等待本窗终审后才启动自然idle交接。
