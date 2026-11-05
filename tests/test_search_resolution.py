@@ -19,7 +19,7 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
     replay = evidence_support.ToolEvidenceAPITests.replay
 
     async def search(self, **kwargs):
-        return await self.post('search_matches', team_query='Alpha', team_a='Alpha', team_b='Beta', **kwargs)
+        return await self.post('search_matches', team_query='Alpha', team_a='Alpha1', team_b='Beta1', **kwargs)
 
     async def bindings(self):
         return await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings')
