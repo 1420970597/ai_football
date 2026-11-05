@@ -2539,3 +2539,5 @@ E277完整终审/E280接续（2026-11-05 04:31 UTC）：56采样1802.6秒/watch+
 E281只读延迟分解启动（2026-11-05 04:35 UTC）：两真实任务领取trace至hermes_request约3.98/4.60秒，包含配置读取和证据持久化，DB事务时间不能作纯客户端阶段计时。provider_elapsed是Hermes HTTP整体而非上游纯推理；已纠正解释口径。Hermes现有0.55CPU累计有节流但不能据总值断言当前瓶颈，启动容器内5秒只读CPU采样与E280自然事件对照，生产不改；E280当前约6分钟无新帖，TG/租约/健康正常，继续等待真实推荐，不生成测试消息。
 
 E282监听队列假设排除（2026-11-05 04:39 UTC）：远端桥容器自身netns ListenOverflows/ListenDrops/ReqQFullDoCookies/ReqQFullDrop全部0，默认队列5；只读actual exit0，不支持监听队列溢出根因，不为推测改队列/并发。第一次脚本残留AUDIT_END引用KeyError actual1保留并修正原检查重跑0。E280当前无新帖，API/TG健康、六租约有效，继续采样和真实推荐等待。
+
+最近24小时待处理核查（2026-11-05 04:41 UTC）：只读e283-recent-pending原检查actual exit0，时间窗内queued/retry/running/failed共30项，全部failed且eligible=false；23 source_edited、7 source_deleted，未发现可审核近期任务被网关恢复后重试队列遗留。不能把历史总体queued6/retry317当作近期实时积压，也不删除原失败记录。E280持续六群采集，当前无新增自然帖；保持样本不足，不宣称比赛匹配新验收。
