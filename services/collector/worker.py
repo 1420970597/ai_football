@@ -16,6 +16,7 @@ from .leyu_realtime import LeyuRealtime
 from .leyu_runtime import LeyuRuntime
 from .leyu_results import ResultCollector
 from .leyu_refresh import LeyuRefreshController
+from .upload_gate import UploadGate
 from .quote_snapshot import encode_snapshot, prepare_fixture_batches
 from .telegram import TelegramCollector
 
@@ -159,14 +160,14 @@ class CollectorService:
         self.pregame_far_refresh_seconds = max(self.pregame_near_refresh_seconds, pregame_far_refresh_seconds)
         self._odds_refresh_at: dict[str, float] = {}
         self.odds_fixture_budget = max(1, min(300, odds_fixture_budget))
-        self._upload_lock = asyncio.Lock()
+        self._upload_lock = UploadGate()
         self.last_upload_report: dict[str, Any] = {}
         self._poll_alert = ThresholdAlert(1, 0, raise_after=2, recover_after=3)
         self.quote_max_age_seconds = DEFAULT_QUOTE_MAX_AGE_SECONDS
         self.quote_policy_available = False
         self.runtime = runtime_factory(api, self.api_url, base_config)
         self.telegram = telegram_factory({}, api=api, api_url=self.api_url + "/telegram")
-        self.leyu_refresh = LeyuRefreshController(self.runtime, self.upload)
+        self.leyu_refresh = LeyuRefreshController(self.runtime, self.upload_precise)
         self.telegram.leyu_refresh = self.leyu_refresh.refresh
         self.resync = asyncio.Event()
         self.status: dict[str, Any] = {
@@ -238,7 +239,11 @@ class CollectorService:
         self.status["leyu"]["resync_requests"] += 1
         self.resync.set()
 
-    async def upload(self, fixtures: list[dict[str, Any]], *, odds_mids: list[str] | None = None) -> int:
+    async def upload_precise(self, fixtures: list[dict[str, Any]]) -> int:
+        return await self.upload(fixtures, precise=True)
+
+    async def upload(self, fixtures: list[dict[str, Any]], *, odds_mids: list[str] | None = None,
+                     precise: bool = False) -> int:
         accepted = 0
         selected = set(odds_mids) if odds_mids is not None else None
         outgoing = []
@@ -258,7 +263,7 @@ class CollectorService:
             response = None
             outcome = 'cancelled'
             try:
-                async with self._upload_lock:
+                async with (self._upload_lock.priority() if precise else self._upload_lock):
                     lock_acquired = time.monotonic()
                     response = await self.api.post(self.api_url + "/collector/fixtures", content=encode_snapshot(batch),
                                                    headers={"Content-Type": "application/json"})
@@ -473,6 +478,7 @@ class CollectorService:
                     await task
                     raise RuntimeError("collector component stopped unexpectedly")
         finally:
+            self._upload_lock.close()
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
