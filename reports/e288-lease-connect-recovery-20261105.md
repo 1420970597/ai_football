@@ -17,3 +17,7 @@
 候选首次构建错误手填了提交标签，未部署，保留 first-e288-collector-build-wrong-label.log；随后改为从 git rev-parse HEAD 获取完整提交号重新构建，actual exit 0，后续只允许标签和逐文件源码均精确核对的新镜像。构建成功不是完整验证或真实恢复验收。
 
 06:04 UTC：完整 1347 项 619.965 秒（报告622.468秒）actual exit 0，失败/错误/跳过均0、committed_source_verified=true；证据 SHA 3103d25e8200bc35c4e26ca68f784776046c214357f4fded79a36526d877c46e，原始 backend-tests.json 位于候选 .runtime/test-evidence/2466779。修复已接入当前任务分支 1d164df。修正后的 collector 镜像 d673df8bba70e8e79d4685f522a59b03b3a188380721c9650e3aac5aabaf593e，实际标签精确为候选完整提交号，15 个 Python/依赖文件逐字节与冻结候选相同，核验 actual exit 0。准备镜像归档与远端预加载；E287 尚未截止，生产未切换。
+
+06:22 UTC：远端预加载、仅镜像差异/实际环境一致检查均exit0，确认官方FloodWait已结束后切换。新collector fa99b2c3e7f17e54832e47a6bdbfea86b40e2740a0994335790c32b185c2abb3于06:16:26.595288598启动，原90秒租约交接期间409/lease_owned_elsewhere明确保留；06:18:59源状态恢复、两次连续就绪通过，apply actual exit0。未强制过期租约、未回滚数据、未提交资金订单。远端其余服务ID、环境和秘密挂载一致，七本地服务ID/启动/镜像逐项cmp exit0。E289于06:20:31.849590开始独立完整30分钟，六租约有效且单一owner；真实首ConnectTimeout重试恢复仍待自然样本，不能称根因消失或三秒完成。
+
+切换后只读台账核验actual exit0：252条推荐及报价摘要全部一致，406条旧ledger全部保留；未发生数据回滚。真实恢复样本仍须后续观察，不能将正常连接样本当作故障重试验证。E289前两条自然新消息均有同attempt双回执，其中一项实际推荐已接受，正在核对原图/比赛/盘口；此前推荐当前赛事finished但尚无确认结果，进一步只读定位赛果复查队列，未改写赛果。
