@@ -1645,6 +1645,8 @@ function readRoute() {
   else if ($("#content-dialog").open) $("#content-dialog").close();
 }
 $("#content-dialog").addEventListener("close", () => {
+  // Native close events are queued. A newer detail may already be open.
+  if ($("#content-dialog").open) return;
   clearTimeout(state.detailTimer);
   state.dialogSequence++;
   state.mediaUrls.forEach(URL.revokeObjectURL);

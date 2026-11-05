@@ -152,6 +152,7 @@ export function showDialog(modal, initialFocus) {
       }
     });
     modal.addEventListener("close", () => {
+      if (modal.open) return; // Ignore a queued close from a previous opening.
       const index = modalStack.indexOf(modal);
       if (index >= 0) modalStack.splice(index, 1);
       const origin = modalOrigins.get(modal);
