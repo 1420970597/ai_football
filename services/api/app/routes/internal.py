@@ -167,7 +167,8 @@ class FixtureInput(BaseModel):
                 raise ValueError('market quote count does not match complete snapshot')
         elif self.market_chunk_count is not None or self.market_quote_count is not None:
             raise ValueError('market chunk metadata requires market_chunks')
-        identities = [(q.market_id, q.period, q.line, q.selection.casefold()) for q in self.all_markets()]
+        # Match the database reference key, including legacy null/zero identity.
+        identities = [(q.market_id, q.period, q.line or Decimal("0"), q.selection.casefold()) for q in self.all_markets()]
         if len(identities) != len(set(identities)):
             raise ValueError('duplicate quote reference in fixture snapshot')
         return self

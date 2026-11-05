@@ -6,20 +6,8 @@ import uuid
 
 from fastapi import HTTPException
 
+from .quote_ingestion import quote_update_condition, upsert_quotes
 
-def quote_update_condition(current: str, incoming: str) -> str:
-    """SQL aliases are fixed by this module; values remain bound parameters."""
-    return (
-        f"coalesce({incoming}.source_updated_at,{incoming}.received_at)>=coalesce({current}.source_updated_at,{current}.received_at) "
-        f"AND (ROW({current}.market_name,{current}.market_kind,{current}.line,"
-        f"{current}.price,{current}.source_updated_at,{current}.source_time_quality,"
-        f"{current}.status,{current}.play_id,{current}.market_instance_id,"
-        f"{current}.selection_id,{current}.is_main,{current}.score_basis) "
-        f"IS DISTINCT FROM ROW({incoming}.market_name,{incoming}.market_kind,{incoming}.line,{incoming}.price,"
-        f"{incoming}.source_updated_at,{incoming}.source_time_quality,{incoming}.status,{incoming}.play_id,"
-        f"{incoming}.market_instance_id,{incoming}.selection_id,{incoming}.is_main,{incoming}.score_basis) "
-        f"OR {incoming}.source_updated_at IS NULL AND {current}.received_at IS DISTINCT FROM {incoming}.received_at)"
-    )
 
 
 async def ingest_fixture_batch(conn, items) -> int:
@@ -132,28 +120,7 @@ async def ingest_fixture_batch(conn, items) -> int:
             'play_id': row[13], 'market_instance_id': row[14], 'selection_id': row[15],
             'is_main': row[16], 'score_basis': row[17],
         } for row in quote_rows]
-        await conn.execute(
-            "INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,period,market_kind,line,selection,price,source_updated_at,"
-            "received_at,source_time_quality,status,play_id,market_instance_id,selection_id,is_main,score_basis) "
-            "SELECT q.id,q.fixture_id,q.market_id,q.market_name,q.period,q.market_kind,q.line,q.selection,q.price,q.source_updated_at,"
-            "q.received_at,q.source_time_quality,q.status,q.play_id,q.market_instance_id,q.selection_id,q.is_main,q.score_basis "
-            "FROM jsonb_to_recordset($1::jsonb) AS q(id uuid,fixture_id text,market_id text,market_name text,period text,"
-            "market_kind text,line numeric,selection text,price numeric,source_updated_at timestamptz,received_at timestamptz,"
-            "source_time_quality text,status text,play_id text,market_instance_id text,selection_id text,is_main boolean,score_basis text) "
-            # Avoid speculative INSERT/random primary-key probes for unchanged
-            # snapshots. The conflict predicate below still rechecks current
-            # state if another writer commits after this statement snapshot.
-            "LEFT JOIN v2_current_quotes stored ON stored.fixture_id=q.fixture_id "
-            "AND stored.market_id=q.market_id AND stored.period=q.period "
-            "AND coalesce(stored.line,0)=coalesce(q.line,0) AND stored.selection=q.selection "
-            "WHERE stored.id IS NULL OR (" + quote_update_condition("stored", "q") + ") "
-            "ON CONFLICT(fixture_id,market_id,period,(COALESCE(line,0)),selection) DO UPDATE SET market_name=EXCLUDED.market_name,market_kind=EXCLUDED.market_kind,line=EXCLUDED.line,"
-            "price=EXCLUDED.price,source_updated_at=EXCLUDED.source_updated_at,received_at=EXCLUDED.received_at,"
-            "source_time_quality=EXCLUDED.source_time_quality,status=EXCLUDED.status,play_id=EXCLUDED.play_id,"
-            "market_instance_id=EXCLUDED.market_instance_id,selection_id=EXCLUDED.selection_id,is_main=EXCLUDED.is_main,score_basis=EXCLUDED.score_basis "
-            "WHERE " + quote_update_condition("v2_current_quotes", "EXCLUDED"),
-            quote_payload,
-        )
+        await upsert_quotes(conn, quote_payload)
     if closures:
         await conn.executemany(
             "UPDATE v2_current_quotes q SET status='closed',received_at=$6 WHERE fixture_id=$1 "
