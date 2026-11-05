@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime
 
-from .review_state import trace
+from .review_state import append_traces, trace
 from .handicap_lines import line_terms
 from .review_completion import completion_issues, mentioned_fixtures
 from .review_summary_evidence import read_summary_evidence
@@ -87,7 +87,7 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
             'omitted_count': omitted, 'tool_rejection_counts': dict(reasons), 'content': chr(10).join(lines)}
 
 
-async def record_summary(conn, job, attempt_id, review_mode: str) -> int:
+async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_held: bool = False) -> int:
     """Caller holds the active job lock in the same completion transaction."""
     evidence = await read_summary_evidence(conn, job['id'], attempt_id, job['message_id'], SUMMARY_ITEM_LIMIT)
     mentioned = set().union(*(mentioned_fixtures(content) for content in evidence.model_contents))
@@ -95,5 +95,9 @@ async def record_summary(conn, job, attempt_id, review_mode: str) -> int:
     receipt = make_summary(evidence.signals, accepted_total=evidence.total, rejected=evidence.rejected, review_mode=review_mode,
                            identified=evidence.identified, identified_total=evidence.identified[0]['total'] if evidence.identified else 0,
                            incomplete=incomplete)
-    await trace(conn, job['id'], 'system_review_result', {'attempt_id': str(attempt_id), **receipt})
+    payload = {'attempt_id': str(attempt_id), **receipt}
+    if trace_lock_held:
+        await append_traces(conn, job['id'], [('system_review_result', payload)], trace_lock_held=True)
+    else:
+        await trace(conn, job['id'], 'system_review_result', payload)
     return evidence.total

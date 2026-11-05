@@ -365,13 +365,17 @@ async def keep_lease(pool, job: dict) -> None:
 async def _complete_review_once(pool, job: dict, started: float) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
-            current = await active_job(conn, job["id"], job["attempt_id"])
-            count = await record_summary(conn, current, job["attempt_id"], job.get('review_mode', 'real_time'))
+            # Reuse the trace lock acquired in this eligibility query. The
+            # receipt insert remains a later statement so a concurrent trace
+            # committed before lock acquisition is visible to its sequence read.
+            current = await active_job(conn, job["id"], job["attempt_id"], lock_trace_sequence=True)
+            count = await record_summary(conn, current, job["attempt_id"], job.get('review_mode', 'real_time'),
+                                         trace_lock_held=True)
             recovery = await market_recovery(conn, current, job['attempt_id'], job['attempts'])
             final_state = 'retry' if recovery else "succeeded" if count else "unresolved"
             if recovery:
-                await trace(conn, job['id'], 'market_recovery_scheduled',
-                            {'attempt_id': str(job['attempt_id']), **recovery})
+                await append_traces(conn, job['id'], [('market_recovery_scheduled',
+                                    {'attempt_id': str(job['attempt_id']), **recovery})], trace_lock_held=True)
             conclusion_elapsed_ms = max(0, (time.monotonic() - job.get('_claimed_monotonic', started)) * 1000)
             concluded = await conn.fetchrow(
                 "WITH completed_job AS ("

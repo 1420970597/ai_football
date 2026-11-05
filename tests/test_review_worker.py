@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import io
 import json
 import os
@@ -639,10 +640,10 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         original = worker.record_summary
         calls = 0
 
-        async def interrupted(*args):
+        async def interrupted(*args, **kwargs):
             nonlocal calls
             calls += 1
-            result = await original(*args)
+            result = await original(*args, **kwargs)
             if calls == 1:
                 raise TimeoutError('transaction must roll back its receipt')
             return result
@@ -734,6 +735,86 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await worker._conclusion_committed(self.pool, job))
         await self.pool.execute('UPDATE v2_analysis_jobs SET attempt_id=$1 WHERE id=$2', uuid.uuid4(), self.job)
         self.assertFalse(await worker._conclusion_committed(self.pool, job))
+
+    async def test_conclusion_reuses_eligibility_trace_lock_for_receipt_and_recovery(self):
+        for recovering in (False, True):
+            with self.subTest(recovering=recovering):
+                await self.make_queued()
+                job = await worker.claim_job(self.pool)
+                if recovering:
+                    fixture = await support.ReviewTests.fixture(self)
+                    await self.seed_market_receipt(job, fixture)
+                queries = []
+                pool = self.pool
+
+                class CountedConnection:
+                    def __init__(inner, conn):
+                        inner.conn = conn
+
+                    def __getattr__(inner, name):
+                        target = getattr(inner.conn, name)
+                        if name not in {'fetch', 'fetchrow', 'fetchval', 'execute'}:
+                            return target
+
+                        async def counted(query, *args):
+                            queries.append(query)
+                            return await target(query, *args)
+                        return counted
+
+                class CountedPool:
+                    @asynccontextmanager
+                    async def acquire(inner):
+                        async with pool.acquire() as conn:
+                            yield CountedConnection(conn)
+
+                await worker._complete_review_once(CountedPool(), job, worker.time.monotonic())
+                self.assertEqual(7 if recovering else 6, len(queries))
+                self.assertIn('v2-review-trace:', queries[0])
+                self.assertFalse(any(query.startswith('SELECT pg_advisory_xact_lock') for query in queries))
+                self.assertEqual('retry' if recovering else 'unresolved', await self.pool.fetchval(
+                    'SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+                self.assertEqual(1, await self.pool.fetchval(
+                    "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result' "
+                    "AND payload->>'attempt_id'=$2", self.job, str(job['attempt_id'])))
+                self.assertEqual(int(recovering), await self.pool.fetchval(
+                    "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='market_recovery_scheduled' "
+                    "AND payload->>'attempt_id'=$2", self.job, str(job['attempt_id'])))
+
+    async def test_conclusion_waits_for_concurrent_trace_and_reads_committed_sequence(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        await worker._add_trace(self.pool, job, 'hermes_result', {'content': 'no pick'})
+        completion = None
+        try:
+            async with self.pool.acquire() as holder, holder.transaction():
+                await worker.trace(holder, self.job, 'parallel_tool_receipt', {
+                    'attempt_id': str(job['attempt_id']), 'status': 'succeeded'})
+                completion = asyncio.create_task(
+                    worker._complete_review_once(self.pool, job, worker.time.monotonic()))
+                for _ in range(100):
+                    waiting = await self.pool.fetchval(
+                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() "
+                        "AND pid<>pg_backend_pid() AND wait_event_type='Lock' "
+                        "AND position('AS trace_lock' in query)>0)")
+                    if waiting:
+                        break
+                    await asyncio.sleep(.01)
+                self.assertTrue(waiting, 'completion must wait on the existing trace lock')
+                self.assertFalse(completion.done())
+            await asyncio.wait_for(completion, 5)
+        finally:
+            if completion is not None and not completion.done():
+                completion.cancel()
+                await asyncio.gather(completion, return_exceptions=True)
+        rows = await self.pool.fetch(
+            'SELECT sequence_no,trace_kind FROM v2_analysis_traces WHERE job_id=$1 ORDER BY sequence_no', self.job)
+        self.assertEqual(list(range(1, len(rows) + 1)), [row['sequence_no'] for row in rows])
+        order = {row['trace_kind']: row['sequence_no'] for row in rows}
+        self.assertLess(order['parallel_tool_receipt'], order['system_review_result'])
+        self.assertEqual(1, sum(row['trace_kind'] == 'hermes_result' for row in rows))
+        self.assertEqual(1, sum(row['trace_kind'] == 'system_review_result' for row in rows))
+        self.assertEqual('unresolved', await self.pool.fetchval(
+            'SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
 
     async def test_stale_worker_failure_cannot_overwrite_new_attempt(self):
         await self.make_queued()
