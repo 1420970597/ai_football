@@ -15,3 +15,9 @@
 ## 完整冻结与只读预览（2026-11-05 09:11 UTC）
 
 bd997a05完整1383项647.809秒actual exit0，0失败/错误/跳过，committed_source_verified=true，证据.runtime/e301-candidate/.runtime/test-evidence/2855773/backend-tests.json，SHA3b62c14a8c04be77c320657d51f62d47758726b0ca28a6d940789dc82b9f654a。主任务分支接入e88763a；无业务服务重启。固定59目标的预览正在执行，旧原始回执59份SHA256已只读保存，推荐/报价/台账快照已保存。首CLI容器因0600目标文件权限exit1，数据库未执行；保留失败，临时容器改以0:0读取只读挂载，文件权限不放宽，第二预览继续。当前尚未apply，不称历史纠正完成；未有completion_verified证据的旧回执保留，不填成功。
+
+## 实际追加、幂等及页面验收（2026-11-05 09:25 UTC）
+
+第二只读预览exit0：59目标中7可更正、52保守拒绝（36 completion_not_verified、5非当前完成审核、11已接受证据/范围不同）。仅7目标执行显式apply，实际exit0，移除10项同quote后来成功录入的拒绝误报；重跑7全部not_needed、exit0。14个1440/390真实浏览器场景exit0，逐份核对same attempt、原trace关联、透明更正说明、推荐卡片数量及无未解决误报/横向溢出。59原始payload SHA逐项相等；280旧推荐报价保持，新增1自然推荐至281；411旧ledger保持。证据e301-apply.jsonl、e301-idempotent-reapply.jsonl、e301-correction-output/correction-clicks.json、e301-original-and-browser-protection.json、e301-ledger-protection.json，相关exit均0。
+
+追加后更严格只读审计首次exit1：7更正/7审计及attempt/event耗时一致，但claim耗时JSON数值严格等值失败。诊断确认不是缺字段或业务耗时改变，而是原PG numeric保留了double转numeric的约1e-11毫秒尾差，经Python JSON float读写变为3位小数。原始59记录未修改，页面毫秒显示一致；不能声称新payload与原任意numeric逐位一致。e301-audit-values.json记录差值依据；e301-audit-diagnostic.json的顶层preserved=true为移除断言后沿用的错误标签，不作为通过证据，以逐项false及实际失败为准。后续必须以数据库JSONB原值合并避免往返精度损失，并补真实扩展精度测试；本项精确保留验收重新打开，不回滚或清理原数据。
