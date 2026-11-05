@@ -1,6 +1,6 @@
 # E266：修复 Hermes 网关项目上下文加载
 
-更新于2026-11-05 01:57 UTC。状态：代码已写、针对性与真实框架隔离验证通过，完整冻结验证进行中。
+更新于2026-11-05 02:06 UTC。状态：完整冻结隔离验证通过，等待原观察终审后真实发布联调。
 
 目标：让真实 API 网关加载项目约束，并在启动时阻止工作目录悄然偏离。责任目录为 integrations/hermes、tests、reports。前置依赖为固定 Hermes v0.22.5 镜像及完整预载技能；不改模型、工具权限、消息内容或业务校验。
 
@@ -13,3 +13,5 @@
 性能边界：这是此前缺失规则的加载修复，相对实际原提示可能增加token，不能声称去重加速或三秒成功。后续效率分析以真实请求为准。
 
 候选99d3bee：显式terminal.cwd、启动profile目录与完整上下文验证及7项测试。针对性命令 `docker run ... ai-football-verifier:v2.0.0-dev python -m unittest tests.test_hermes_runner -v` 实际exit0；原技能失败路径继续覆盖。固定Hermes摘要9c556157在network=none、独立临时HERMES_HOME、只读候选workspace中实际调用build_profile_terminal_scope及两个启动验证，输出目录/workspace与project_context_complete/mandatory_skill_complete均true，实际exit0。不是手工传目录绕过profile。完整回归使用 `.runtime/e209-live/e266-full-suite.sh`，冻结运行中不修改候选。
+
+完整冻结结果：1331项613.641秒，报告总616.206秒，实际exit0、0failure/error/skip、committed_source_verified=true，源码99d3bee2e74b5a46dc25b5c3699864eb896d6b96。证据 `.runtime/e266-candidate/.runtime/test-evidence/1983133/backend-tests.json` SHA7288ba3c889f99b53218089f2902a80c6774953c5e477833ccb44c8a8e23c02a。发布只切Hermes，现有API及worker镜像继续保留，预检查合并配置exit0；发布脚本备份旧配置和runner、校验gate与其他六容器，异常恢复原两文件并重建原服务后释放gate。仍需真实新会话确认上下文加载，不能用该隔离结果替代实际模型验证。
