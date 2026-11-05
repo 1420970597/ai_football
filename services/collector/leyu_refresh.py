@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import re
 import time
@@ -10,6 +11,8 @@ from typing import Any, Awaitable, Callable
 
 from .leyu import LeyuClient
 from .leyu_protocol import LeyuError, RateLimited
+
+log = logging.getLogger('platform.collector.refresh')
 
 
 class LeyuRequestBudget:
@@ -114,6 +117,9 @@ class LeyuRefreshController:
 
     async def _refresh(self, identity: str, mid: str) -> dict[str, Any]:
         stage = "source"
+        started = time.monotonic()
+        ingestion_started = None
+        outcome = 'cancelled'
         try:
             async with asyncio.timeout(self.deadline_seconds):
                 fixture = await self.runtime.refresh_match(mid)
@@ -121,6 +127,7 @@ class LeyuRefreshController:
                     raise LeyuError("fixture_identity_mismatch")
                 observation = fixture.pop("_current_observation", None)
                 stage = "ingestion"
+                ingestion_started = time.monotonic()
                 accepted = await self.upload([fixture])
                 if type(accepted) is not int or accepted not in {0, 1}:
                     raise LeyuError("invalid_ingestion_receipt")
@@ -128,31 +135,44 @@ class LeyuRefreshController:
                     # Parent and quote clocks are independent. A committed batch
                     # may update quotes while rejecting its stale parent; do not
                     # invent a quote row count from the parent receipt.
-                    return {**self._result(identity, mid, "parent_unchanged_recheck_quotes"),
+                    outcome = 'parent_unchanged_recheck_quotes'
+                    return {**self._result(identity, mid, outcome),
                             "snapshot_committed": True, "quote_writes_verified": False,
                             "current_observation": observation}
-                return {**self._result(identity, mid, "written", accepted=1),
+                outcome = 'written'
+                return {**self._result(identity, mid, outcome, accepted=1),
                         "snapshot_committed": True, "quote_writes_verified": False,
                         "current_observation": observation}
         except RateLimited as exc:
+            outcome = 'upstream_rate_limited'
             self.defer_requests(max(60, exc.retry_after_seconds or 0))
             return self._result(identity, mid, "upstream_rate_limited", retry=self.cooldown_remaining())
         except TimeoutError:
             report = getattr(self.runtime, "last_refresh_report", {})
             if stage == "source" and report.get("stage") == "lock_wait":
+                outcome = 'refresh_busy'
                 return self._result(identity, mid, "refresh_busy")
             if stage == "source":
                 self.defer_requests(2)
-            return self._result(identity, mid, "refresh_timeout")
+            outcome = 'refresh_timeout'
+            return self._result(identity, mid, outcome)
         except LeyuError as exc:
             if stage == "source" and exc.category not in {"refresh_busy", "refresh_throttled", "fixture_not_loaded", "fixture_not_open"}:
                 self.defer_requests(2)
             reason = exc.category if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", exc.category) else "refresh_failed"
+            outcome = reason
             return self._result(identity, mid, reason)
         except Exception:
             if stage == "source":
                 self.defer_requests(2)
-            return self._result(identity, mid, "ingestion_failed" if stage == "ingestion" else "refresh_failed")
+            outcome = "ingestion_failed" if stage == "ingestion" else "refresh_failed"
+            return self._result(identity, mid, outcome)
+        finally:
+            finished = time.monotonic()
+            log.info('Leyu precise refresh outcome=%s stage=%s source_ms=%.1f ingestion_ms=%.1f elapsed_ms=%.1f',
+                     outcome, stage, ((ingestion_started or finished) - started) * 1000,
+                     (finished - ingestion_started) * 1000 if ingestion_started is not None else 0,
+                     (finished - started) * 1000)
 
     async def close(self) -> None:
         tasks = [entry["task"] for entry in self._inflight.values()]

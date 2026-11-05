@@ -253,9 +253,27 @@ class CollectorService:
                         item["reason"], item["fixture_hash"], item["quote_count"])
         for batch in batches:
             # Poll 与 WS 更新相同记录；在事务边界串行，避免远端行锁互等。
-            async with self._upload_lock:
-                response = await self.api.post(self.api_url + "/collector/fixtures", content=encode_snapshot(batch),
-                                               headers={"Content-Type": "application/json"})
+            started = time.monotonic()
+            lock_acquired = None
+            response = None
+            outcome = 'cancelled'
+            try:
+                async with self._upload_lock:
+                    lock_acquired = time.monotonic()
+                    response = await self.api.post(self.api_url + "/collector/fixtures", content=encode_snapshot(batch),
+                                                   headers={"Content-Type": "application/json"})
+                outcome = 'response'
+            except Exception:
+                outcome = 'transport_error'
+                raise
+            finally:
+                finished = time.monotonic()
+                log.info('Leyu fixture upload outcome=%s stage=%s lock_wait_ms=%.1f http_ms=%.1f elapsed_ms=%.1f response_status=%s fixture_count=%s',
+                         outcome, 'waiting_lock' if lock_acquired is None else 'request',
+                         ((lock_acquired or finished) - started) * 1000,
+                         (finished - lock_acquired) * 1000 if lock_acquired is not None else 0,
+                         (finished - started) * 1000,
+                         response.status_code if response is not None else 'unknown', len(batch))
             response.raise_for_status()
             document = response.json()
             if (not isinstance(document, dict) or type(document.get("accepted")) is not int
