@@ -2923,3 +2923,9 @@ REAgetArticle精确方法为abstract_method，源码为空而body_status=not_ava
 ### 2026-11-05 16:58 UTC — E342无外部刷新录入事务设计
 
 当前目标是将无需刷新时的录入预检与最终写入放在同一事务，完整重复资格核验/fixture-before-quote锁/快照及不可变证据不变；有刷新仍释放预检连接、I/O后重开事务。工作包目标、责任、依赖、缺口、动作、验收与失败处理见reports/e342-record-no-refresh-transaction-20261105.md。当前生产不改，E341继续；计划先代码/真实隔离PG行为与事务计数，再完整冻结，窗口终审后才允许API候选部署。E339证据提交2f92072已推送核对实际结果随后记录。
+
+### 2026-11-05 17:03 UTC — E342定向116通过，冻结完整验证
+
+代码8a0f8db及新增5项真实PG测试已写，116项/97.973秒actual0；无刷新仅一次begin/commit，有外部刷新仍两次事务且I/O无连接；权限/终场/停盘/过期/重复和receipt异常回滚保持。候选已独立冻结完整回归，API仍E333、workerE339、collectorE336，未改监控中的线上源码。E338远端bridge同窗3147请求全200/category=none、4有界段、SHA139cfcf3668add35ce33fd30c7ff5356132b894902321a005ef6e0f36ca41517，实际0。
+
+前阶段2f92072已实际推送/远端引用精确一致0。最新设计559f160及实现8a0f8db后续一同推送。REAgetArticle实际带matchId/type，是比赛相关文章候选，尚未证明规则；继续DTO/调用语义，unknown收益保持。worker无Docker health对象，直接读取该模板失败已纠正为running/启动时间、schema与实际加载核验，不把缺省health对象误报故障。
