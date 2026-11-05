@@ -321,6 +321,39 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(('first_half', 'total', baseline, 'finished', 'live', 'loss', -1),
                          tuple(projected_match[key] for key in ('period', 'market_kind', 'score_baseline', 'fixture_phase', 'phase', 'outcome', 'unit_net')))
 
+    async def test_nonzero_equivalence_rebuild_keeps_prior_ledger_quote_and_unknown_rule(self):
+        signal = await self.signal(phase='live', line='1.75')
+        baseline = dict(home=0, away=1, half_home=0, half_away=0)
+        await self.pool.execute('UPDATE v2_expert_signals SET score_baseline=$2 WHERE id=$1', signal, baseline)
+        await self.pool.execute('UPDATE v2_quote_evidence SET score_baseline=$2 WHERE reference_id=$1', signal, baseline)
+        quote = [dict(r) for r in await self.pool.fetch('SELECT * FROM v2_quote_evidence WHERE reference_id=$1', signal)]
+        with patch.object(result_ledger, 'ALGORITHM_VERSION', 'football-asian-4-native-line-basis'), \
+             patch.object(result_ledger, 'settle', return_value=pending('live_market_score_rule_unknown')):
+            response = await self.submit(self.result(home=0, away=1, half_home=0, half_away=1))
+        self.assertEqual(200, response.status_code, response.text)
+        old = dict(await self.pool.fetchrow('SELECT * FROM v2_signal_settlements WHERE signal_id=$1', signal))
+        for _ in range(2):
+            response = await self.client.post('/internal/collector/results/rebuild',
+                json={'fixture_ids':['fixture']}, headers={'Authorization':'Bearer isolated-collector'})
+            self.assertEqual(200, response.status_code, response.text)
+        rows = await self.pool.fetch('SELECT * FROM v2_signal_settlements WHERE signal_id=$1 ORDER BY algorithm_version', signal)
+        self.assertEqual(2, len(rows))
+        self.assertEqual(old, dict(rows[0]))
+        self.assertEqual(('loss', -1, 1), tuple(rows[1][k] for k in ('outcome','unit_net','effective_stake')))
+        self.assertTrue(rows[1]['reason'].endswith(':score_basis_outcome_equivalent'))
+        self.assertEqual(quote, [dict(r) for r in await self.pool.fetch('SELECT * FROM v2_quote_evidence WHERE reference_id=$1', signal)])
+        projected = await self.pool.fetchrow('SELECT outcome,unit_net,score_basis,score_baseline FROM v2_expert_signals WHERE id=$1', signal)
+        self.assertEqual(('loss', -1, 'unknown', baseline), tuple(projected))
+        # A later confirmed score change can make the two interpretations
+        # disagree. Retract the projection, retaining both prior receipts.
+        response = await self.submit(self.result(home=1, away=1, half_home=0, half_away=1,
+            source_updated_at=(self.now+timedelta(seconds=1)).isoformat()))
+        self.assertEqual(200, response.status_code, response.text)
+        projected = await self.pool.fetchrow('SELECT outcome,unit_net,settled_at FROM v2_expert_signals WHERE id=$1', signal)
+        self.assertEqual(('pending', None, None), tuple(projected))
+        self.assertEqual(3, await self.pool.fetchval('SELECT count(*) FROM v2_signal_settlements WHERE signal_id=$1', signal))
+        self.assertEqual(old, dict(await self.pool.fetchrow('SELECT * FROM v2_signal_settlements WHERE signal_id=$1 AND algorithm_version=$2', signal, 'football-asian-4-native-line-basis')))
+
     async def test_missing_or_mismatched_immutable_price_never_creates_profit(self):
         missing = await self.signal(evidence=False)
         mismatch = await self.signal(line='3.5')

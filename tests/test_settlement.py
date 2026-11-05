@@ -113,6 +113,58 @@ class SettlementTests(unittest.TestCase):
                 self.assertEqual('pending', settle(self.signal(phase='live', score_baseline=zero, **extra), result).outcome)
         self.assertEqual('pending', settle(self.signal(phase='live', score_baseline=zero), self.result(status='provisional')).outcome)
 
+    def test_nonzero_baseline_only_settles_identical_explicit_financial_results(self):
+        baseline = dict(home=1, away=0, half_home=1, half_away=0)
+        markets = [('total', side, line) for side in ('over', 'under')
+                   for line in ('0', '.75', '1', '1.25', '1.75', '2', '2.25', '2.75', '4')]
+        markets += [('handicap', side, line) for side in ('home', 'away')
+                    for line in ('-2.25', '-.75', '-.25', '0', '.25', '.75', '2.25')]
+        markets += [('winner', side, None) for side in ('home', 'away', 'draw')]
+        agreed = set()
+        conflicts = 0
+        for period in ('full_time', 'first_half', 'second_half'):
+            selected_baseline = baseline if period != 'second_half' else dict(
+                home=2, away=0, half_home=1, half_away=0)
+            for kind, selection, line in markets:
+                for home, away in ((1, 0), (1, 1), (2, 0), (3, 1)):
+                    signal = self.signal(kind, selection, line, phase='live', period=period,
+                                         score_baseline=selected_baseline)
+                    result = self.result(home, away, half_home=1, half_away=0)
+                    full, remaining = [settle(dict(signal, score_basis=b), result)
+                                       for b in ('full_period', 'remaining_period')]
+                    actual = settle(signal, result)
+                    compare = lambda s: (s.outcome, s.unit_net, s.effective_stake)
+                    if full.outcome != 'pending' and remaining.outcome != 'pending' and compare(full) == compare(remaining):
+                        self.assertEqual(compare(full), compare(actual))
+                        self.assertTrue(actual.reason.endswith(':score_basis_outcome_equivalent'))
+                        agreed.add(actual.outcome)
+                    else:
+                        self.assertEqual('pending', actual.outcome)
+                        self.assertIsNone(actual.unit_net)
+                        conflicts += 1
+                    self.assertNotIn('score_basis', signal)
+        for line, expected in (('.25', 'half_win'), ('-.25', 'half_loss'), ('0', 'push')):
+            value = settle(self.signal('handicap', 'home', line, phase='live',
+                           score_baseline={'home':1,'away':1}), self.result(2, 2))
+            self.assertEqual(expected, value.outcome)
+            self.assertTrue(value.reason.endswith(':score_basis_outcome_equivalent'))
+            agreed.add(value.outcome)
+        self.assertTrue({'win', 'loss', 'half_win', 'half_loss', 'push'} <= agreed)
+        self.assertGreater(conflicts, 0)
+
+    def test_nonzero_equivalence_does_not_ignore_invalid_evidence_or_distinct_rule(self):
+        result = self.result(1, 0, half_home=1, half_away=0)
+        baseline = dict(home=1, away=0, half_home=1, half_away=0)
+        good = self.signal(line='1.75', phase='live', score_baseline=baseline)
+        actual = settle(good, result)
+        self.assertEqual(('loss', Decimal('-1'), Decimal('1')),
+                         (actual.outcome, actual.unit_net, actual.effective_stake))
+        for extra in ({'score_basis':'other'}, {'score_baseline':{}},
+                      {'score_baseline':{'home':2,'away':0}}, {'period':'first_half','score_baseline':{'home':1,'away':0}},
+                      {'price':'NaN'}, {'line':'.1'}, {'selection':'bad'}, {'kind':'team_total'}):
+            self.assertEqual('pending', settle(dict(good, **extra), result).outcome)
+        self.assertEqual('pending', settle(good, dict(result,status='provisional')).outcome)
+
     def test_actual_zero_baseline_half_over_is_loss(self):
         value = settle(self.signal(line='.75', price='1.76', phase='live', period='first_half',
                                   score_baseline=dict(home=0, away=0, half_home=0, half_away=0)),

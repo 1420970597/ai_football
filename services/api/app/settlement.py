@@ -85,9 +85,23 @@ def settle(signal: dict, result: dict) -> Settlement:
         # Explicit zero in this period makes full and remaining scores equal.
         # Keep the original unknown rule; missing period scores are not zero.
         baseline = _period_scores(signal.get("period", "full_time"), signal.get("score_baseline") or {})
-        if signal.get("phase") != "live" or basis != "unknown" or baseline != (0, 0):
+        if signal.get("phase") != "live" or basis != "unknown" or baseline is None:
             return pending("live_market_score_rule_unknown")
-        zero_equivalent = True
+        if baseline == (0, 0):
+            zero_equivalent = True
+        else:
+            # Do not choose a provider rule or rewrite the immutable unknown
+            # basis. A result is provable only when BOTH supported meanings
+            # yield the same outcome, net return and effective stake.
+            variants = [settle(dict(signal, score_basis=explicit), result)
+                        for explicit in ('full_period', 'remaining_period')]
+            full, remaining = variants
+            if (full.outcome != 'pending' and remaining.outcome != 'pending'
+                and (full.outcome, full.unit_net, full.effective_stake)
+                == (remaining.outcome, remaining.unit_net, remaining.effective_stake)):
+                return Settlement(full.outcome, full.unit_net, full.effective_stake,
+                                  full.reason + ':score_basis_outcome_equivalent')
+            return pending("live_market_score_rule_unknown")
     reason_suffix = ":zero_baseline_score_equivalent" if zero_equivalent else ""
     home, away = map(Decimal, scores)
     kind, selection = signal.get("kind"), signal.get("selection")

@@ -11,7 +11,7 @@ from .expert_statistics import QUOTE_VALID_SQL
 from .settlement import pending, settle
 from .handicap_lines import line_basis
 
-ALGORITHM_VERSION = 'football-asian-4-native-line-basis'
+ALGORITHM_VERSION = 'football-asian-5-outcome-equivalence'
 
 
 def result_facts(row):
