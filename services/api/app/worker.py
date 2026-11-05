@@ -257,10 +257,11 @@ async def claim_job(pool):
 async def _claim_job(pool):
     async with pool.acquire() as conn:
         async with conn.transaction():
-            if not await _scheduler_lock(conn):
-                return None
             realtime_claims = await prepare_claim_schedule(
-                conn, MAX_ATTEMPTS, EXHAUSTED_BATCH_SIZE, PERSISTENT_RETRY_FAILURES)
+                conn, MAX_ATTEMPTS, EXHAUSTED_BATCH_SIZE, PERSISTENT_RETRY_FAILURES,
+                scheduler_lock=SCHEDULER_LOCK)
+            if realtime_claims is None:
+                return None
             replay_allowed = False
             if HISTORICAL_CONCURRENCY > 0:
                 historical_active = await conn.fetchval(

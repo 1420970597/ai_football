@@ -24,9 +24,9 @@ class CountedPool:
                     if name not in {'fetch', 'fetchrow', 'fetchval', 'execute'}:
                         return method
 
-                    async def counted(query, *args):
+                    async def counted(query, *args, **kwargs):
                         queries.append(query)
-                        return await method(query, *args)
+                        return await method(query, *args, **kwargs)
                     return counted
 
             yield Connection()
@@ -42,13 +42,14 @@ class ClaimRoundTripTests(unittest.IsolatedAsyncioTestCase):
             "UPDATE v2_analysis_jobs SET state='queued',attempts=0,attempt_id=NULL,lease_until=NULL WHERE id=$1",
             self.job)
 
-    async def test_claim_six_statements_reuses_activation_lock(self):
+    async def test_claim_five_statements_reuses_activation_lock(self):
         await self.queue()
         counted = CountedPool(self.pool)
         with patch.object(worker, 'HISTORICAL_CONCURRENCY', 0):
             claimed = await worker.claim_job(counted)
         self.assertEqual(self.job, claimed['id'])
-        self.assertEqual(6, len(counted.queries))
+        self.assertEqual(5, len(counted.queries))
+        self.assertIn('scheduler_gate AS MATERIALIZED', counted.queries[0])
         self.assertIn('v2-review-trace:', counted.queries[-2])
         self.assertIn('INSERT INTO v2_analysis_traces', counted.queries[-1])
         self.assertFalse(any(q.startswith('SELECT pg_advisory_xact_lock') for q in counted.queries))
@@ -97,6 +98,39 @@ class ClaimRoundTripTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(1, 'previous_receipt'), (2, 'attempt_claimed')],
                          [(r['sequence_no'], r['trace_kind']) for r in rows])
         self.assertEqual(str(result['attempt_id']), rows[1]['payload']['attempt_id'])
+
+    async def test_contended_setup_does_not_expire_jobs_or_initialize_pairs(self):
+        await self.pool.execute(
+            "UPDATE v2_analysis_jobs SET attempts=$2,lease_until=now()-interval '1 second' WHERE id=$1",
+            self.job, worker.MAX_ATTEMPTS)
+        before = await self.pool.fetchrow(
+            'SELECT state,attempts,attempt_id,lease_until,last_error FROM v2_analysis_jobs WHERE id=$1', self.job)
+        async with self.pool.acquire() as holder, holder.transaction():
+            self.assertTrue(await worker._scheduler_lock(holder))
+            counted = CountedPool(self.pool)
+            self.assertIsNone(await asyncio.wait_for(worker.claim_job(counted), 2))
+            self.assertEqual(1, len(counted.queries))
+            self.assertEqual(before, await self.pool.fetchrow(
+                'SELECT state,attempts,attempt_id,lease_until,last_error FROM v2_analysis_jobs WHERE id=$1', self.job))
+            for table in ('v2_review_source_schedule', 'v2_review_expert_schedule', 'v2_analysis_traces'):
+                self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM '+table))
+
+    async def test_gated_setup_keeps_transaction_budgets_and_rolls_back(self):
+        class AbortSetup(Exception):
+            pass
+        async with self.pool.acquire() as conn:
+            with self.assertRaises(AbortSetup):
+                async with conn.transaction():
+                    self.assertEqual(0, await worker.prepare_claim_schedule(
+                        conn, worker.MAX_ATTEMPTS, worker.EXHAUSTED_BATCH_SIZE,
+                        worker.PERSISTENT_RETRY_FAILURES, scheduler_lock=worker.SCHEDULER_LOCK))
+                    self.assertEqual('2s', await conn.fetchval('SHOW lock_timeout'))
+                    self.assertEqual('3s', await conn.fetchval('SHOW statement_timeout'))
+                    self.assertEqual(1, await conn.fetchval('SELECT count(*) FROM v2_review_source_schedule'))
+                    raise AbortSetup()
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_review_source_schedule'))
+        async with self.pool.acquire() as conn, conn.transaction():
+            self.assertTrue(await worker._scheduler_lock(conn), 'aborted setup must release the advisory lock')
 
     async def test_trace_insert_failure_rolls_back_claim_and_releases_locks(self):
         await self.queue()
