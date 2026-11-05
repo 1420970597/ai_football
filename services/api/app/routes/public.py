@@ -109,11 +109,11 @@ async def matches(
     items = rows[:page_size]
     fixture_ids = [row["id"] for row in items]
     quote_rows = await database.current_pool().fetch(
-        "WITH ranked AS (SELECT id AS quote_id,fixture_id,market_id,market_name,period,market_kind,line,selection,price,status,is_main,source_updated_at,received_at,"
-        "row_number() OVER (PARTITION BY fixture_id ORDER BY is_main DESC,source_updated_at DESC NULLS LAST,market_id,line,selection) AS position "
-        "FROM v2_current_quotes WHERE fixture_id=ANY($1::text[])) "
-        "SELECT quote_id,fixture_id,market_id,market_name,period,market_kind,line,selection,price,status,is_main,source_updated_at,received_at FROM ranked "
-        "WHERE position<=24 ORDER BY fixture_id,market_id,line,selection", fixture_ids,
+        "SELECT q.* FROM unnest($1::text[]) AS wanted(fixture_id) CROSS JOIN LATERAL ("
+        "SELECT id AS quote_id,fixture_id,market_id,market_name,period,market_kind,line,selection,price,status,is_main,source_updated_at,received_at "
+        "FROM v2_current_quotes WHERE fixture_id=wanted.fixture_id "
+        "ORDER BY is_main DESC,source_updated_at DESC NULLS LAST,market_id,line,selection LIMIT 24) q "
+        "ORDER BY q.fixture_id,q.market_id,q.line,q.selection", fixture_ids,
     ) if fixture_ids else []
     by_fixture: dict[str, list[dict]] = {}
     max_quote_age = await runtime_quote_max_age(request.app.state.settings)

@@ -534,6 +534,73 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(403, (await self.client.get(f'/api/v1/public/messages/{self.message}/media/0')).status_code)
         self.assertEqual(403, (await self.client.get(f'/api/v1/public/experts/{self.expert}/messages')).status_code)
 
+    async def test_public_summary_matches_window_ranking_at_maximum_and_paginated_sizes(self):
+        fixture_ids = [f'summary-{number:03d}' for number in range(205)]
+        await self.pool.executemany(
+            "INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) "
+            "VALUES($1,$1,'football','summary-test','Alpha','Beta','2026-10-26T12:00:00Z',$2)",
+            [(identifier, ('scheduled', 'live', 'finished', 'cancelled')[number % 4])
+             for number, identifier in enumerate(fixture_ids)])
+        quotes = []
+        for number, fixture_id in enumerate(fixture_ids):
+            if number % 7 == 0:
+                continue
+            for option in range(31):
+                quotes.append((uuid.uuid4(), fixture_id, f'market-{option // 3:02d}',
+                               Decimal(option % 3) / 4, 'over' if option % 2 else 'under',
+                               Decimal('1.8') + Decimal(option) / 100,
+                               None if option % 5 == 0 else self.now - timedelta(seconds=option % 4),
+                               'closed' if option % 3 == 0 else 'active', option % 6 == 0))
+        await self.pool.executemany(
+            "INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,period,market_kind,"
+            "line,selection,price,source_updated_at,status,is_main) "
+            "VALUES($1,$2,$3,'大小','full_time','total',$4,$5,$6,$7,$8,$9)", quotes)
+        # The previous SQL is an independent reference for membership, field
+        # values and display order, including main lines and unknown times.
+        reference = await self.pool.fetch(
+            "SELECT quote_id,fixture_id,market_id,market_name,period,market_kind,line,selection,"
+            "price,status,is_main,source_updated_at,received_at FROM ("
+            "SELECT id AS quote_id,fixture_id,market_id,market_name,period,market_kind,line,selection,"
+            "price,status,is_main,source_updated_at,received_at,row_number() OVER ("
+            "PARTITION BY fixture_id ORDER BY is_main DESC,source_updated_at DESC NULLS LAST,"
+            "market_id,line,selection) AS position FROM v2_current_quotes "
+            "WHERE fixture_id=ANY($1::text[])) ranked WHERE position<=24 "
+            "ORDER BY fixture_id,market_id,line,selection", fixture_ids)
+        expected = {}
+        for row in reference:
+            expected.setdefault(row['fixture_id'], []).append(public.jsonable_encoder(
+                public.line_projection(row) | {'fresh': public.fresh_quote(row, 60)}))
+        for phase, page_size in [('all', 50), ('all', 200), ('live', 200),
+                                 ('scheduled', 200), ('finished', 200), ('cancelled', 200)]:
+            with self.subTest(phase=phase, page_size=page_size):
+                params = {'phase': phase, 'page_size': page_size, 'date': '2026-10-26',
+                          'tz': 'UTC', 'league': 'summary-test'}
+                seen = []
+                while True:
+                    response = await self.client.get('/api/v1/public/matches', params=params)
+                    self.assertEqual(200, response.status_code, response.text)
+                    body = response.json()
+                    for item in body['items']:
+                        markets = expected.get(item['id'], [])
+                        self.assertEqual(markets, item['markets'])
+                        self.assertLessEqual(len(markets), 24)
+                        self.assertTrue(item['markets_are_summary'])
+                        self.assertEqual(any(row['fresh'] for row in markets) and
+                                         item['phase'] in {'live', 'scheduled'}, item['quote_fresh'])
+                        if phase != 'all':
+                            self.assertEqual(phase, item['phase'])
+                        seen.append(item['id'])
+                    if not body['next_cursor']:
+                        break
+                    params['cursor'] = body['next_cursor']
+                selected = [identifier for number, identifier in enumerate(fixture_ids)
+                            if phase == 'all' or
+                            ('scheduled', 'live', 'finished', 'cancelled')[number % 4] == phase]
+                self.assertEqual(selected, seen)
+        empty = await self.client.get('/api/v1/public/matches', params={'q': 'no-matching-fixture'})
+        self.assertEqual(200, empty.status_code)
+        self.assertEqual([], empty.json()['items'])
+
     async def test_exact_league_multiselect_does_not_match_similar_names(self):
         await self.pool.execute("UPDATE v2_fixtures SET competition_id='league-1'")
         selected = await self.client.get('/api/v1/public/matches', params=[('league_ids','league-1'),('league_ids','league-2')])
