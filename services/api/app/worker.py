@@ -452,7 +452,12 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
                 accepted_context = await read_accepted_context(conn, job['id'], job['attempt_id'])
         except (TimeoutError, asyncpg.PostgresError) as exc:
             raise ReviewEvidenceUnavailable('recovery evidence temporarily unavailable') from exc
-        await _add_trace(pool, job, 'recovery_accepted_context', accepted_context)
+        if accepted_context['accepted']:
+            await _add_trace(pool, job, 'recovery_accepted_context', accepted_context)
+        else:
+            # A provider retry before any acceptance needs the original input,
+            # without an empty hint, extra trace or new model-call argument.
+            accepted_context = None
     for turn in range(3):
         kwargs = {'client': model_client} if model_client is not None else {}
         if accepted_context is not None and not turn:

@@ -91,6 +91,13 @@ class RecoveryContextTests(unittest.IsolatedAsyncioTestCase):
                 await worker._review_until_verified(self.pool,SimpleNamespace(),job)
         model.assert_not_awaited()
 
+    async def test_retry_without_accepted_signals_keeps_original_model_call(self):
+        job={'id':self.job,'attempt_id':self.attempt,'attempts':2,'message':{}}
+        with patch.object(worker,'review_message',AsyncMock(return_value=('聊天',{'content':'聊天'}))) as model:
+            await worker._review_until_verified(self.pool,SimpleNamespace(),job)
+        self.assertNotIn('accepted_context',model.await_args.kwargs)
+        self.assertEqual(0,await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE trace_kind='recovery_accepted_context'"))
+
 
 class RecoveryImageContextTests(unittest.IsolatedAsyncioTestCase):
     async def test_original_reply_and_structured_image_preserved_separately(self):
