@@ -9,3 +9,7 @@
 ## 候选与定向通过（2026-11-05 09:30 UTC）
 
 9733007冻结，32定向23.260秒actual exit0。新增真实PG长numeric正常纠正原值相等、v1精度修复保留前两代trace/追加一次/审计、并发一次、伪造来源及业务差异拒绝四场景；原8纠正场景继续通过。新trace在同事务trace序列锁内以原JSONB合并确定性字段，失败整体回滚。限定v1同job/attempt、除content/拒绝/纠正元信息与claim尾差外原值完全相同，尾差绝对值须小于0.000001ms，不接受任意耗时改动。完整冻结套件启动，期间不修改候选源码；未对生产执行本修复。
+
+## 完整冻结与有界维护（2026-11-05 09:43 UTC）
+
+97330077完整1387项675.235秒actual exit0、0失败错误跳过/源码true，报告SHA7eb240afe72b0536fa687a7a0ef5bc797067c06f6e711a47004106ed68df61c1（.runtime/e304-candidate/.runtime/test-evidence/2919580/backend-tests.json）。维护镜像sha256:9517bf2f37460fd6791f382e0e863d2e8318bb9a3f10cd73c0a401ea142f5eb1，完整源码标签及89文件精确核验exit0。首次构建标签为短号，第二次改完整号并重核验；无运行服务切换。既定7目标只读preview实际exit0，全部would_correct/receipt-jsonb-precision-v1、均0拒绝移除；显式apply正在逐事务执行。前两代所有system回执SHA和全推荐/台账快照已保存，不能在追加未完成时称最终验收通过。E305完整套件按E304 actual0后顺序启动，候选不修改。
