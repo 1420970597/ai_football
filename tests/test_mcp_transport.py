@@ -67,6 +67,28 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('attempt', captured[0][1]['attempt_id'])
         self.assertEqual('Bearer isolated-mcp-transport', captured[0][2])
 
+    async def test_search_optional_pair_schema_forwarding_and_resolution(self):
+        tools = (await self.rpc('tools/list')).json()['result']['tools']
+        self.assertEqual(4, len(tools))
+        tool = next(t for t in tools if t['name'] == 'search_matches')
+        for key in ('team_a', 'team_b'):
+            self.assertIn(key, tool['inputSchema']['properties'])
+            self.assertNotIn(key, tool['inputSchema']['required'])
+        captured = []
+        def upstream(request):
+            import json
+            captured.append(json.loads(request.content))
+            return httpx.Response(200, json={'search_complete': True, 'resolution': {
+                'resolved': True, 'fixture': {'fixture_id': 'fixture-1', 'realtime_eligible': True}}})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        response = await self.rpc('tools/call', {'name': 'search_matches', 'arguments': {
+            'review_id': 'job', 'attempt_id': 'attempt', 'team_query': 'Alpha',
+            'team_a': 'Alpha', 'team_b': 'Beta'}})
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(('Alpha', 'Beta'), (captured[0]['team_a'], captured[0]['team_b']))
+        self.assertFalse(response.json()['result'].get('isError', False))
+
     async def test_market_intent_filters_are_optional_and_forwarded(self):
         tools_response = await self.rpc('tools/list')
         tool = next(item for item in tools_response.json()['result']['tools']

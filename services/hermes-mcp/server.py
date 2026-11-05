@@ -83,11 +83,13 @@ async def _request(path: str, payload: dict) -> dict:
 async def search_matches(review_id: str, attempt_id: str, team_query: str,
                          phase: str = "all", competition_query: str | None = None,
                          from_utc: str | None = None, to_utc: str | None = None,
-                         cursor: str | None = None, page_size: int = 100, sport: str | None = None) -> dict:
-    """phase=all检索全部比赛阶段，每页最多100场，连续翻页至next_cursor为空。严格队名零候选且日期范围≤7天时，可用原中文片段召回；retrieval_basis=source_fragment_candidate只表示候选，仍须独立核对双方/梯队/时间，不能当同名或别名证明。仅唯一且realtime_eligible=true可读实时盘。"""
+                         cursor: str | None = None, page_size: int = 100, sport: str | None = None,
+                         team_a: str | None = None, team_b: str | None = None) -> dict:
+    """phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
     return await _post("search_matches", {
         "review_id": review_id, "attempt_id": attempt_id, "team_query": team_query,
         "phase": phase, "competition_query": competition_query, "sport": sport,
+        "team_a": team_a, "team_b": team_b,
         "from_utc": from_utc, "to_utc": to_utc, "cursor": cursor, "page_size": page_size,
     })
 

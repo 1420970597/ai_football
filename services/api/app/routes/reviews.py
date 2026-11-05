@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.encoders import jsonable_encoder
 import httpx
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
@@ -20,11 +19,12 @@ from ..review_state import authorize, fresh_quote, quote_context
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, MAX_MARKETS
 from ..runtime_settings import runtime_quote_max_age
 from ..quote_observation import confirmation_for
-from ..team_matching import normalize_team_name, team_name_matches
+from ..team_matching import normalize_team_name
 from ..review_candidates import snapshot_candidates
 from ..review_cursors import encode_cursor, decode_cursor
 from ..review_search_scope import continuation_scope, scope_key
 from ..signal_persistence import persist_signal
+from ..review_resolution import resolve_candidates
 
 router = APIRouter(prefix="/internal/mcp")
 
@@ -47,6 +47,8 @@ class SearchInput(AttemptInput):
     to_utc: AwareDatetime | None = None
     cursor: str | None = Field(default=None, max_length=1000)
     page_size: int = Field(default=100, ge=1, le=100)
+    team_a: str | None = Field(default=None, min_length=2, max_length=160)
+    team_b: str | None = Field(default=None, min_length=2, max_length=160)
 
     @field_validator('sport', mode='before')
     @classmethod
@@ -59,6 +61,11 @@ class SearchInput(AttemptInput):
             raise ValueError("start must precede end")
         if not self.team_query.strip():
             raise ValueError("team name is required")
+        if (self.team_a is None) != (self.team_b is None):
+            raise ValueError('both team identities are required for inline resolution')
+        if self.team_a is not None and (not normalize_team_name(self.team_a) or not normalize_team_name(self.team_b)
+                or normalize_team_name(self.team_a) == normalize_team_name(self.team_b)):
+            raise ValueError('two distinct team identities are required')
         return self
 
 
@@ -241,6 +248,17 @@ async def search_matches(body: SearchInput, request: Request):
                 body.review_id, search_key, cursor, not has_more, total,
             )
             result = {"search_key": search_key, "items": [row["candidate_data"] for row in page], "next_cursor": cursor, "search_complete": not has_more, "total_candidates": total}
+            if body.team_a is not None:
+                result['resolution'] = {'resolved': False, 'reason': 'search_not_complete'}
+                if not has_more:
+                    candidates = await conn.fetch(
+                        'SELECT fixture_id,candidate_data FROM v2_match_search_candidates '
+                        'WHERE job_id=$1 AND search_key=$2', body.review_id, search_key)
+                    # League/time/phase constraints already belong to this
+                    # immutable snapshot, including continued search scope.
+                    intent = ResolveInput(review_id=body.review_id, attempt_id=body.attempt_id,
+                        search_key=search_key, team_a=body.team_a, team_b=body.team_b)
+                    result['resolution'] = await resolve_candidates(conn, intent, candidates)
             return await tool_success(conn, body, result, {"scope": scope, "search_key": search_key, "after": position, "returned": len(page), "total": total, "complete": not has_more})
 
 
@@ -255,36 +273,7 @@ async def resolve_match(body: ResolveInput, request: Request):
             if not complete:
                 raise HTTPException(status_code=409, detail="all candidate pages must be read first")
             rows = await conn.fetch("SELECT fixture_id,candidate_data FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2", body.review_id, body.search_key)
-            matches = []
-            if normalize_team_name(body.team_a) == normalize_team_name(body.team_b):
-                raise HTTPException(status_code=422, detail="two distinct team identities are required")
-            for row in rows:
-                fixture = row["candidate_data"]
-                home_match = team_name_matches(body.team_a, fixture["home_team"], fixture.get("home_aliases", []))
-                away_match = team_name_matches(body.team_a, fixture["away_team"], fixture.get("away_aliases", []))
-                home_other = team_name_matches(body.team_b, fixture["home_team"], fixture.get("home_aliases", []))
-                away_other = team_name_matches(body.team_b, fixture["away_team"], fixture.get("away_aliases", []))
-                if not ((home_match and away_other) or (away_match and home_other)):
-                    continue
-                if body.competition and normalize_team_name(body.competition) != normalize_team_name(fixture["competition_name"]):
-                    continue
-                kickoff = datetime.fromisoformat(fixture["kickoff_at"])
-                if body.from_utc and kickoff < body.from_utc or body.to_utc and kickoff > body.to_utc:
-                    continue
-                matches.append(row)
-            if len(matches) != 1:
-                result = {"resolved": False, "reason": "no_matching_fixture" if not matches else "ambiguous_fixture", "candidate_count": len(matches)}
-            else:
-                fixture = matches[0]
-                evidence = jsonable_encoder(body.model_dump(exclude={"review_id", "attempt_id"}))
-                await conn.execute(
-                    "INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
-                    body.review_id, body.attempt_id, fixture["fixture_id"], body.search_key, evidence,
-                )
-                current_phase = await conn.fetchval('SELECT phase FROM v2_fixtures WHERE id=$1', fixture['fixture_id'])
-                result = {"resolved": True, "fixture": {**fixture["candidate_data"], 'phase': current_phase,
-                    'realtime_eligible': current_phase in {'scheduled', 'live'},
-                    'eligibility_reason': None if current_phase in {'scheduled', 'live'} else current_phase}}
+            result = await resolve_candidates(conn, body, rows)
             return await tool_success(conn, body, result, {'result': {'resolved': result['resolved'], 'candidate_count': result.get('candidate_count')}})
 
 
