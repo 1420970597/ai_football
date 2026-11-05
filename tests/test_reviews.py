@@ -159,6 +159,47 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], unknown.json()['markets'])
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
 
+    async def test_explicit_total_query_reads_exact_options_and_retains_source_evidence(self):
+        fixture_id = await self.fixture(markets=[
+            {'market_id': market, 'market_name': market, 'kind': kind, 'period': period,
+             'line': line, 'selection': selection, 'price': '1.95',
+             'source_updated_at': self.now.isoformat(), 'received_at': self.now.isoformat()}
+            for market, kind, period, line, selection in (
+                ('total', 'total', 'full_time', '2.5', 'over'),
+                ('total', 'total', 'full_time', '2.5', 'under'),
+                ('other', 'total', 'full_time', '3.5', 'over'),
+                ('half', 'total', 'first_half', '2.5', 'over'),
+                ('handicap', 'handicap', 'full_time', '2.5', 'home'))])
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        response = await self.post('list_match_markets', fixture_id=fixture_id, market_query=' 大２.５ ')
+        self.assertEqual(200, response.status_code, response.text)
+        result = response.json()
+        self.assertEqual({'market_kind': 'total', 'line': '2.5', 'selection': 'over'}, result['market_filter'])
+        self.assertEqual(5, result['market_coverage']['total_quotes'])
+        self.assertEqual(2, result['market_coverage']['matched_quotes'])
+        self.assertEqual({'full_time', 'first_half'}, {q['period'] for q in result['markets']})
+        self.assertTrue(all(q['selection'] == 'over' and Decimal(q['line']) == Decimal('2.5')
+                            for q in result['markets']))
+        self.assertEqual(2, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+        parameters = await self.pool.fetchval("SELECT payload->'parameters' FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='mcp_list_match_markets'", self.job)
+        self.assertEqual('大2.5', parameters['market_query'])
+
+    async def test_conflicting_total_shorthand_does_not_broaden_authorized_quotes(self):
+        fixture_id = await self.fixture(markets=[
+            {'market_id': 'total', 'market_name': '全场大小', 'kind': 'total', 'period': 'full_time',
+             'line': '2.5', 'selection': selection, 'price': '1.95',
+             'source_updated_at': self.now.isoformat(), 'received_at': self.now.isoformat()}
+            for selection in ('over', 'under')])
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        response = await self.post('list_match_markets', fixture_id=fixture_id, market_query='大2.5', selection='under')
+        self.assertEqual(200, response.status_code, response.text)
+        result = response.json()
+        self.assertEqual({'selection': 'under', 'market_query': '大2.5'}, result['market_filter'])
+        self.assertEqual([], result['markets'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+
     async def test_full_match_filter_alias_preserves_native_line_and_away_direction(self):
         fixture_id = 'leyu:5635232'
         await self.fixture(id=fixture_id, source_id=fixture_id, markets=[
