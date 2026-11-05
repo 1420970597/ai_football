@@ -254,7 +254,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                 return getattr(self.conn, name)
 
             async def execute(self, query, *args):
-                if query.startswith('INSERT INTO v2_current_quotes'):
+                if 'INSERT INTO v2_current_quotes' in query:
                     entered.set()
                     await asyncio.wait_for(release.wait(), timeout=5)
                 return await self.conn.execute(query, *args)
