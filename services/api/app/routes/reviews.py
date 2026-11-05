@@ -293,34 +293,37 @@ async def _bound_active_fixture(conn, body: MarketInput) -> dict:
     return fixture
 
 
-async def _refresh_bound_market(body: MarketInput, request: Request, *, force: bool = False) -> dict:
-    """Verify ownership first; hold no database connection across source I/O."""
-    settings = request.app.state.settings
-    url = getattr(settings, 'market_refresh_url', '')
-    if not url:
-        return {'attempted': False, 'reason': 'refresh_unconfigured'}
-    async with database.current_pool().acquire() as conn:
-        async with conn.transaction():
-            job = await active_tool_job(conn, body.review_id, body.attempt_id)
-            age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
-            if job['review_mode'] != 'real_time' or not 0 <= age <= REALTIME_WINDOW_SECONDS:
-                return {'attempted': False, 'reason': 'historical_review_not_current'}
-            fixture = await _bound_active_fixture(conn, body)
-            filters = {'market_kind': body.market_kind, 'period': body.period, 'line': body.line,
-                       'selection': body.selection, 'market_query': body.market_query}
-            if not force:
-                total_quotes, candidates = await _read_market_quotes(conn, body.fixture_id, filters)
-                if len(candidates) > MAX_MARKETS:
-                    raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
-                quotes = [quote for quote in candidates if _market_matches(quote, filters)]
-                if quotes:
-                    max_age = await runtime_quote_max_age(settings, conn)
-                    if all(fresh_quote(quote, max_age) for quote in quotes):
-                        return {'attempted': False, 'reason': 'quotes_already_fresh'}
-                elif total_quotes and any(value is not None for value in filters.values()):
-                    return {'attempted': False, 'reason': 'no_quotes_for_filter'}
-            source_match_id = fixture['source_id']
-    return await _request_market_refresh(body.fixture_id, source_match_id, request)
+async def _market_snapshot(conn, body, settings, filters):
+    fixture = await _bound_active_fixture(conn, body)
+    total_quotes, candidates = await _read_market_quotes(conn, body.fixture_id, filters)
+    if len(candidates) > MAX_MARKETS:
+        raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
+    quotes = [quote for quote in candidates if _market_matches(quote, filters)]
+    max_age = await runtime_quote_max_age(settings, conn)
+    return fixture, total_quotes, quotes, max_age
+
+
+async def _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh):
+    confirmations = {q['id']: confirmation_for(refresh.get('_observation'), q, fixture, max_age) for q in quotes}
+    if quotes:
+        await conn.executemany(
+            "INSERT INTO v2_review_market_reads(job_id,attempt_id,quote_id,source_updated_at,price,quote_context) VALUES($1,$2,$3,$4,$5,$6) "
+            "ON CONFLICT(job_id,attempt_id,quote_id) DO UPDATE SET source_updated_at=EXCLUDED.source_updated_at,price=EXCLUDED.price,quote_context=EXCLUDED.quote_context,created_at=now()",
+            [(body.review_id, body.attempt_id, q['id'], q['source_updated_at'], q['price'],
+              quote_context(q, fixture) | ({'current_confirmation': confirmations[q['id']]} if confirmations[q['id']] else {})) for q in quotes],
+        )
+    refresh.pop('_observation', None)
+    market_filter = {key: str(value) if key == 'line' and value is not None else value
+                     for key, value in filters.items() if value is not None}
+    coverage = {'total_quotes': total_quotes, 'matched_quotes': len(quotes),
+                'returned_quotes': len(quotes), 'complete_for_filter': True}
+    result = {'fixture': dict(fixture), 'markets': [dict(q) | {'quote_id': str(q['id']),
+              'fresh': fresh_quote(q, max_age), 'confirmed_current': bool(confirmations[q['id']]),
+              'can_record': fresh_quote(q, max_age) or bool(confirmations[q['id']])} for q in quotes],
+              'refresh': refresh, 'market_filter': market_filter, 'market_coverage': coverage}
+    return await tool_success(conn, body, result, {'fixture_id': body.fixture_id,
+        'quote_ids': [str(q['id']) for q in quotes], 'refresh': refresh,
+        'market_filter': market_filter, 'market_coverage': coverage})
 
 
 async def _request_market_refresh(fixture_id: str, source_match_id: str, request: Request) -> dict:
@@ -357,38 +360,35 @@ async def _request_market_refresh(fixture_id: str, source_match_id: str, request
 @tool_evidence('mcp_list_match_markets')
 async def list_match_markets(body: MarketInput, request: Request):
     authorize(request, request.app.state.settings.mcp_internal_token)
-    refresh = await _refresh_bound_market(body, request)
+    settings = request.app.state.settings
+    filters = {'market_kind': body.market_kind, 'period': body.period, 'line': body.line,
+               'selection': body.selection, 'market_query': body.market_query}
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            job = await active_tool_job(conn, body.review_id, body.attempt_id)
+            fixture, total_quotes, quotes, max_age = await _market_snapshot(conn, body, settings, filters)
+            age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
+            reason = None
+            if not getattr(settings, 'market_refresh_url', ''):
+                reason = 'refresh_unconfigured'
+            elif job['review_mode'] != 'real_time' or not 0 <= age <= REALTIME_WINDOW_SECONDS:
+                reason = 'historical_review_not_current'
+            elif quotes and all(fresh_quote(quote, max_age) for quote in quotes):
+                reason = 'quotes_already_fresh'
+            elif not quotes and total_quotes and any(value is not None for value in filters.values()):
+                reason = 'no_quotes_for_filter'
+            if reason:
+                return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age,
+                                                 filters, {'attempted': False, 'reason': reason})
+            source_match_id = fixture['source_id']
+    # Nothing from the preflight transaction authorizes the post-I/O result.
+    # Release its connection and locks, then reread every eligibility witness.
+    refresh = await _request_market_refresh(body.fixture_id, source_match_id, request)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
-            fixture = await _bound_active_fixture(conn, body)
-            filters = {'market_kind': body.market_kind, 'period': body.period, 'line': body.line,
-                       'selection': body.selection, 'market_query': body.market_query}
-            total_quotes, candidates = await _read_market_quotes(conn, body.fixture_id, filters)
-            if len(candidates) > MAX_MARKETS:
-                raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
-            quotes = [quote for quote in candidates if _market_matches(quote, filters)]
-            max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
-            confirmations = {q['id']: confirmation_for(refresh.get('_observation'), q, fixture, max_quote_age) for q in quotes}
-            if quotes:
-                await conn.executemany(
-                    "INSERT INTO v2_review_market_reads(job_id,attempt_id,quote_id,source_updated_at,price,quote_context) VALUES($1,$2,$3,$4,$5,$6) "
-                    "ON CONFLICT(job_id,attempt_id,quote_id) DO UPDATE SET source_updated_at=EXCLUDED.source_updated_at,price=EXCLUDED.price,quote_context=EXCLUDED.quote_context,created_at=now()",
-                    [(body.review_id, body.attempt_id, q["id"], q["source_updated_at"], q["price"],
-                      quote_context(q, fixture) | ({'current_confirmation': confirmations[q['id']]} if confirmations[q['id']] else {})) for q in quotes],
-                )
-            refresh.pop('_observation', None)
-            market_filter = {key: str(value) if key == 'line' and value is not None else value
-                             for key, value in filters.items() if value is not None}
-            market_coverage = {'total_quotes': total_quotes, 'matched_quotes': len(quotes),
-                               'returned_quotes': len(quotes), 'complete_for_filter': True}
-            result = {"fixture": dict(fixture), "markets": [dict(q) | {"quote_id": str(q["id"]), "fresh": fresh_quote(q, max_quote_age),
-                      'confirmed_current': bool(confirmations[q['id']]),
-                      'can_record': fresh_quote(q, max_quote_age) or bool(confirmations[q['id']])} for q in quotes],
-                      "refresh": refresh, "market_filter": market_filter, "market_coverage": market_coverage}
-            return await tool_success(conn, body, result, {"fixture_id": body.fixture_id,
-                "quote_ids": [str(q["id"]) for q in quotes], "refresh": refresh,
-                "market_filter": market_filter, "market_coverage": market_coverage})
+            fixture, total_quotes, quotes, max_age = await _market_snapshot(conn, body, settings, filters)
+            return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh)
 
 
 @router.post("/record_expert_signals")

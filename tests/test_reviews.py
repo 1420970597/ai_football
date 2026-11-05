@@ -510,6 +510,83 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(retry.json()['accepted']))
         self.assertEqual('2.05000', retry.json()['accepted'][0]['price'])
 
+    async def test_fresh_market_read_uses_one_database_transaction_with_complete_receipt(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        queries = []
+
+        async def init(conn):
+            await conn.set_type_codec('jsonb', schema='pg_catalog', encoder=json.dumps, decoder=json.loads)
+            conn.add_query_logger(lambda record: queries.append(record.query))
+
+        await self.pool.close()
+        self.pool = await asyncpg.create_pool(self.admin_url.rsplit('/', 1)[0] + '/' + self.dbname,
+                                              min_size=1, max_size=1, init=init)
+        database.pool = self.pool
+        self.client._transport.app.state.settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        with patch.object(reviews, '_request_market_refresh', side_effect=AssertionError('fresh quotes need no I/O')):
+            response = await self.post('list_match_markets', fixture_id=fixture_id)
+        await asyncio.sleep(0)
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(1, sum(query.startswith('BEGIN') for query in queries), queries)
+        result = response.json()
+        self.assertEqual('quotes_already_fresh', result['refresh']['reason'])
+        quote = result['markets'][0]
+        self.assertTrue(quote['can_record'])
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads WHERE job_id=$1', self.job))
+        self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='mcp_list_match_markets' AND payload->>'status'='succeeded' AND payload ? 'response_snapshot'", self.job))
+        read = await self.pool.fetchrow('SELECT price,quote_context FROM v2_review_market_reads WHERE job_id=$1', self.job)
+        self.assertEqual(Decimal(quote['price']), read['price'])
+        self.assertEqual(fixture_id, read['quote_context']['fixture_id'])
+
+    async def test_refresh_releases_single_pool_connection_and_rereads_updated_price(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes'")
+        await self.pool.close()
+
+        async def init(conn):
+            await conn.set_type_codec('jsonb', schema='pg_catalog', encoder=json.dumps, decoder=json.loads)
+
+        self.pool = await asyncpg.create_pool(self.admin_url.rsplit('/', 1)[0] + '/' + self.dbname,
+                                              min_size=1, max_size=1, init=init)
+        database.pool = self.pool
+        self.client._transport.app.state.settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        factory = httpx.AsyncClient
+
+        async def handler(request):
+            async with asyncio.timeout(2):
+                await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now(),price=2.35")
+            return httpx.Response(200, json={'accepted': True, 'reason': 'written'})
+
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+            response = await self.post('list_match_markets', fixture_id=fixture_id)
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual('2.35000', response.json()['markets'][0]['price'])
+        self.assertTrue(response.json()['markets'][0]['fresh'])
+        self.assertEqual(Decimal('2.35'), await self.pool.fetchval('SELECT price FROM v2_review_market_reads WHERE job_id=$1', self.job))
+
+    async def test_author_disabled_during_refresh_cannot_commit_market_read_evidence(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes'")
+        self.client._transport.app.state.settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        factory = httpx.AsyncClient
+
+        async def handler(request):
+            await self.pool.execute('UPDATE v2_source_experts SET enabled=false WHERE source_id=$1 AND expert_id=$2', self.source, self.expert)
+            return httpx.Response(200, json={'accepted': True, 'reason': 'written'})
+
+        with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+            response = await self.post('list_match_markets', fixture_id=fixture_id)
+        self.assertEqual(409, response.status_code, response.text)
+        self.assertEqual('message or source is not eligible', response.json()['detail'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+        self.assertEqual(0, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='mcp_list_match_markets'", self.job))
+
     async def test_filtered_market_does_not_refresh_for_unrelated_stale_quotes(self):
         fixture_id = await self.fixture(markets=[
             {"market_id": "total", "market_name": "全场大小", "kind": "total", "period": "full_time",
