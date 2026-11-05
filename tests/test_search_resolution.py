@@ -1,6 +1,7 @@
 import os
 import unittest
 import uuid
+from unittest.mock import patch
 
 from app.review_completion import completion_issues
 import test_reviews as support
@@ -50,6 +51,43 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.bindings())
         await self.resolve(response.json()['search_key'])
         self.assertEqual(1, await self.bindings())
+
+    async def test_explicit_resolution_uses_six_remote_statements_and_replay_is_exact(self):
+        fixture = await self.fixture()
+        search = (await self.post('search_matches', team_query='Alpha')).json()
+        counted = evidence_support._CountingPool(self.pool)
+        with patch('app.routes.reviews.database.current_pool', return_value=counted):
+            response = await self.post('resolve_match', search_key=search['search_key'],
+                                       team_a='Alpha1', team_b='Beta1')
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(6, counted.commands)
+        result = response.json()
+        self.assertEqual(fixture, result['fixture']['id'])
+        self.assertEqual(result, (await self.replay('mcp_resolve_match'))[1])
+        self.assertEqual(1, await self.bindings())
+
+    async def test_complete_empty_snapshot_returns_no_match_without_binding(self):
+        search = (await self.post('search_matches', team_query='Absent')).json()
+        self.assertTrue(search['search_complete'])
+        self.assertEqual([], search['items'])
+        response = await self.post('resolve_match', search_key=search['search_key'],
+                                   team_a='Absent', team_b='Other')
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual({'resolved': False, 'reason': 'no_matching_fixture', 'candidate_count': 0},
+                         response.json())
+        self.assertEqual(0, await self.bindings())
+
+    async def test_completed_snapshot_from_previous_attempt_cannot_resolve(self):
+        await self.fixture()
+        search = (await self.post('search_matches', team_query='Alpha')).json()
+        self.attempt = uuid.uuid4()
+        await self.pool.execute('UPDATE v2_analysis_jobs SET attempt_id=$1 WHERE id=$2',
+                                self.attempt, self.job)
+        response = await self.post('resolve_match', search_key=search['search_key'],
+                                   team_a='Alpha1', team_b='Beta1')
+        self.assertEqual(409, response.status_code, response.text)
+        self.assertEqual('all candidate pages must be read first', response.json()['detail'])
+        self.assertEqual(0, await self.bindings())
 
     async def test_partial_same_and_blank_teams_never_create_search_or_binding(self):
         await self.fixture()

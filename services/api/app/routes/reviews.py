@@ -270,10 +270,16 @@ async def resolve_match(body: ResolveInput, request: Request):
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
-            complete = await conn.fetchval("SELECT complete FROM v2_match_searches WHERE job_id=$1 AND search_key=$2 AND attempt_id=$3", body.review_id, body.search_key, body.attempt_id)
-            if not complete:
+            snapshot = await conn.fetch(
+                'SELECT s.complete,c.fixture_id,c.candidate_data FROM v2_match_searches s '
+                'LEFT JOIN v2_match_search_candidates c ON s.complete AND c.job_id=s.job_id AND c.search_key=s.search_key '
+                'WHERE s.job_id=$1 AND s.search_key=$2 AND s.attempt_id=$3',
+                body.review_id, body.search_key, body.attempt_id)
+            if not snapshot or not snapshot[0]['complete']:
                 raise HTTPException(status_code=409, detail="all candidate pages must be read first")
-            rows = await conn.fetch("SELECT fixture_id,candidate_data FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2", body.review_id, body.search_key)
+            # A completed zero-candidate search still has its search witness;
+            # the LEFT JOIN's empty candidate must not enter team resolution.
+            rows = [row for row in snapshot if row['fixture_id'] is not None]
             result = await resolve_candidates(conn, body, rows)
             return await tool_success(conn, body, result, {'result': {'resolved': result['resolved'], 'candidate_count': result.get('candidate_count')}})
 
