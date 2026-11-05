@@ -21,3 +21,11 @@
 候选6b73d1d完整1401项662.756秒（冻结包装665.212秒），actual0，0失败/错误/跳过，committed_source_verified=true；原始backend-tests SHA256 `d83b98f1c12049f1d2b2d6d0be932d4f45d4c02da8543efec926c41f6706fc4a`，路径`.runtime/e308-candidate/.runtime/test-evidence/3018294/backend-tests.json`。API镜像`d2f73abc49621edd8b64ff60a55fa8408ac8a3ea0aff785bc53c8dce6bb1d955`与91文件/requirements逐项一致；MCP镜像`4dcc01894d42e725539f01ea846d405925d12a549130951c8d7a047e45e7e649`源码/requirements一致，actual0。发布前check实际0。
 
 E307完整1802.6秒六群健康、API健康全200，窗口末51应审中49完成、2进行中，待自然完成再切。准备按API→MCP→Hermes更新schema，Hermes固定框架镜像不变，workspace与配置改为冻结候选只读挂载；主工作树技能仍未热改。独立工具仍四个，两会话别名保持。回滚明确指向当前E305 API、实际E227 MCP和原Hermes工作区，不复跑旧消息。只有真实新消息使用短路径并核对原图/盘口后才可宣称真实联调。
+
+## 发布失败保留、回滚及第二次切换（2026-11-05 10:32 UTC）
+
+首轮gate 10:26:43暂停/10:26:44自然空闲；三服务均健康后，发布核验脚本误导入不存在的`resolve_snapshot_matches`（实际公共函数`resolve_candidates`），actual1触发三服务自动回滚，gate释放actual0。源码和完整测试未修改。保存e308-apply-01.sh/e308-apply.log/e308-apply.exit=1、首轮before快照。首轮浏览器尾部两样本因切换API第二页502而actual1，不能算功能通过，保留重跑。
+
+修正仅核验脚本函数名，第二轮check0；gate 10:29:41.837765暂停/10:29:43.003760自然空闲；API→MCP→Hermes实际依次切换，`e308-apply-02.exit=0`、gate-02 actual0。实际进程导入共同resolver/两队可选schema/完整中文AGENTS哈希和新技能都通过，三服务重建，其余四容器ID/start、全服务环境指纹及资源配额一致；固定Hermes镜像不变。291条原信号全部不变业务字段和报价哈希保持，413条原结算台账全部保留，preservation actual0。源码三阶段cherry-pick到主任务分支3efb849/30b07ec/5e3dba2，业务目录与冻结6b73d1d无差异。生产Hermes继续冻结目录挂载。
+
+E309跨发布监控继续但包含首轮错误回滚，API短暂代际日志未全部归档，不能用于完整连续稳定通过；明确另起E310 10:31:45.613817起1800秒新版本窗口。尚无新版本短路径自然消息性能结论，不能把1401测试或上线检查当3秒成功证据。
