@@ -17,3 +17,5 @@ E267真实超时显示ingest_fixtures在5000ms预算内，准备阶段6728.178ms
 03:19 UTC：cb8425b完整组合1336项616.211秒/报告618.809秒，actual exit0，0failure/error/skip、committed_source_verified=true。证据.runtime/e274-candidate/.runtime/test-evidence/2135837/backend-tests.json SHAfff15e0e0dca1b916baeb18545435e84f73facf9406613025663c58301898116。精确候选/镜像/完整证据/两服务实际合并配置检查actual exit0。主任务分支接入7eefb21，当前容器依旧E267 API/E257 worker，尚未发布。下一步等E271截止与终审，持有自然idle gate后只更换API+worker，复核既有38条快照80台账，再开E275完整30分钟覆盖多轮原300秒寿命。
 
 03:25 UTC：E271完整1802.5秒终审后，03:22:41.359201暂停领取/03:22:44.723364自然idle；API8fe9f8a9于03:23:13.031686534启动，worker4031c3a1于03:23:45.057608013启动，共用精确fb647082镜像。实际函数源码验证含TTL与领取CTE，APIready及原结算版本通过；其余五服务身份/启动/镜像/环境/预算不变，API和worker环境/预算不变，apply及gate actual exit0。38原推荐不可变摘要/80结算台账/结果与单位收益前后核对exit0。补充元数据命令直接取worker.State.Health.Status失败，因为worker没有该键；已用Running/RestartCount核验true/0，不将其声称HTTP就绪。E275从03:24:28.843093起完整30分钟，持续API数字预算/PG等待，尚无发布后稳定结论。
+
+03:48 UTC中途：E275约22分钟未捕获database temporarily unavailable或request failure；API/worker均restart0，既有图片推荐双端原图及finished状态通过。窗口尚未结束且无新发专家帖，不能以此宣称完整图文推荐链路或三秒通过。SDK7次低频小文字探测均200也不等于工具/多模态稳定证明。
