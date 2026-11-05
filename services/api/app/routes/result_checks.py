@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from .. import database
+from ..result_check_queue import claim_due_results
 from ..result_ledger import ingest_result
 from ..review_state import authorize
 from .results import ResultInput
@@ -33,21 +34,11 @@ async def claim_results(body: ClaimInput, request: Request):
                 "ORDER BY created_at DESC LIMIT 5000) s JOIN v2_fixtures f ON f.id=s.fixture_id "
                 "WHERE f.sport='football' AND f.source_id LIKE 'leyu:%' AND f.kickoff_at<=now() "
                 "ON CONFLICT DO NOTHING")
-            rows = await conn.fetch(
-                "SELECT c.fixture_id,f.source_id,f.kickoff_at,f.home_team,f.away_team FROM v2_result_checks c JOIN v2_fixtures f ON f.id=c.fixture_id "
-                "WHERE c.next_check_at<=now() AND (c.lease_until IS NULL OR c.lease_until<now()) "
-                "AND f.kickoff_at>now()-interval '30 days' "
-                "AND (f.phase='finished' OR f.kickoff_at<=now()-interval '100 minutes') "
-                "AND NOT EXISTS(SELECT 1 FROM v2_fixture_results r WHERE r.fixture_id=f.id "
-                "AND r.version=(SELECT max(x.version) FROM v2_fixture_results x WHERE x.fixture_id=f.id) "
-                "AND r.status='confirmed' AND r.received_at<now()-interval '7 days') "
-                "ORDER BY c.next_check_at,c.fixture_id LIMIT $1 FOR UPDATE OF c SKIP LOCKED", body.limit)
+            rows = await claim_due_results(conn, body.limit)
             output = []
             for row in rows:
-                lease = uuid.uuid4()
-                await conn.execute("UPDATE v2_result_checks SET lease_id=$2,lease_until=now()+interval '90 seconds' WHERE fixture_id=$1",row['fixture_id'],lease)
                 output.append({'fixture_id':row['fixture_id'],'source_match_id':row['source_id'].removeprefix('leyu:'),
-                               'kickoff_at':row['kickoff_at'],'home_team':row['home_team'],'away_team':row['away_team'],'lease_id':str(lease)})
+                               'kickoff_at':row['kickoff_at'],'home_team':row['home_team'],'away_team':row['away_team'],'lease_id':str(row['lease_id'])})
     return {'items':output,'lease_seconds':LEASE_SECONDS}
 
 
