@@ -24,13 +24,17 @@ jobs:
         run: docker run --rm --cpus=.5 --memory=256m --network none -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
       - name: Isolated PostgreSQL and frozen Python tests
         run: sh infra/test/run.sh
+      - name: Unprivileged API image from private frozen source
+        run: sh infra/check-api-image.sh
       - name: Compose contract with explicit fake configuration
         run: sh infra/check-runtime.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: backend-evidence
-          path: .runtime/test-evidence/
+          path: |
+            .runtime/test-evidence/
+            .runtime/api-image-smoke-*/evidence/
           include-hidden-files: true
           retention-days: 14
   browser:
