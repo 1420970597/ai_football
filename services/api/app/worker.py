@@ -104,16 +104,24 @@ async def _scheduler_lock(conn):
     return row['locked']
 
 
-async def _advance_turn(conn, source_id, expert_id):
-    turn = await conn.fetchval(
-        'WITH next_turn AS MATERIALIZED ('
+def _turn_advance_ctes(source_parameter='$1', expert_parameter='$2'):
+    return (
+        'next_turn AS MATERIALIZED ('
         ' SELECT GREATEST(COALESCE((SELECT max(last_turn) FROM v2_review_source_schedule),0),'
         ' COALESCE((SELECT max(last_turn) FROM v2_review_expert_schedule),0))+1 AS turn'
         '), advanced_source AS ('
         ' UPDATE v2_review_source_schedule s SET last_turn=n.turn FROM next_turn n'
-        ' WHERE s.source_id=$1 RETURNING s.source_id'
-        ') UPDATE v2_review_expert_schedule e SET last_turn=n.turn FROM next_turn n'
-        ' WHERE e.expert_id=$2 AND EXISTS(SELECT 1 FROM advanced_source) RETURNING e.last_turn',
+        f' WHERE s.source_id={source_parameter} RETURNING s.source_id'
+        '), advanced_expert AS ('
+        ' UPDATE v2_review_expert_schedule e SET last_turn=n.turn FROM next_turn n'
+        f' WHERE e.expert_id={expert_parameter} AND EXISTS(SELECT 1 FROM advanced_source)'
+        ' RETURNING e.last_turn)'
+    )
+
+
+async def _advance_turn(conn, source_id, expert_id):
+    turn = await conn.fetchval(
+        'WITH ' + _turn_advance_ctes() + ' SELECT last_turn FROM advanced_expert',
         source_id, expert_id)
     if turn is None:
         raise RuntimeError('review scheduling pair disappeared while advancing turn')
@@ -163,10 +171,14 @@ async def _claim_from_lane(conn, mode):
             sorted(PERSISTENT_RETRY_FAILURES))
         if not pair:
             return None
-        turn = await _advance_turn(conn, pair['source_id'], pair['expert_id'])
         persistent_row_retry = _persistent_retry_condition('j', '$6')
         row = await conn.fetchrow(
-            'SELECT j.id,j.message_id,j.attempts FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id '
+            # Data-modifying CTEs also advance an empty/locked pair. The next
+            # probe must not repeatedly select that pair and starve other work.
+            'WITH ' + _turn_advance_ctes('$4', '$5') +
+            ' SELECT j.id,j.message_id,j.attempts,'
+            '(SELECT last_turn FROM advanced_expert) AS scheduler_turn '
+            'FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id '
             'WHERE j.source_id=$4 AND j.expert_id=$5 AND '
             "((j.state IN('queued','retry','running') AND j.attempts<$1) OR (" + persistent_row_retry + ")) AND " + lane +
             " AND ((j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))"
@@ -181,6 +193,9 @@ async def _claim_from_lane(conn, mode):
             pair['source_id'], pair['expert_id'],
             sorted(PERSISTENT_RETRY_FAILURES))
         if row:
+            turn = row['scheduler_turn']
+            if turn is None:
+                raise RuntimeError('review scheduling pair disappeared while advancing turn')
             return row, pair, turn, probe + 1
     return None
 

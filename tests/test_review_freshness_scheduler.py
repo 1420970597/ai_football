@@ -146,6 +146,45 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(15, await worker._advance_turn(conn, source, expert))
         self.assertEqual((15, 15), tuple(await self.pool.fetchrow('SELECT s.last_turn,e.last_turn FROM v2_review_source_schedule s CROSS JOIN v2_review_expert_schedule e')))
 
+    async def test_pair_selection_and_turn_advance_fit_two_remote_queries(self):
+        pair = await self.pair()
+        ready = (await self.queued(pair, age=1))[0]
+        async with self.pool.acquire() as conn, conn.transaction():
+            self.assertTrue(await worker._scheduler_lock(conn))
+            await worker.prepare_claim_schedule(
+                conn, worker.MAX_ATTEMPTS, worker.EXHAUSTED_BATCH_SIZE, worker.PERSISTENT_RETRY_FAILURES)
+            calls = []
+
+            class CountedConnection:
+                async def fetchrow(inner, query, *args):
+                    calls.append(query)
+                    return await conn.fetchrow(query, *args)
+
+            row, selected, turn, probes = await worker._claim_from_lane(CountedConnection(), 'fresh_real_time')
+            self.assertEqual(ready, row['id'])
+            self.assertEqual(pair, (selected['source_id'], selected['expert_id']))
+            self.assertEqual((1, 1), (turn, probes))
+            self.assertEqual(2, len(calls), 'a selected pair must not require a third remote turn update')
+            self.assertEqual((1, 1), tuple(await conn.fetchrow(
+                'SELECT s.last_turn,e.last_turn FROM v2_review_source_schedule s '
+                'CROSS JOIN v2_review_expert_schedule e')))
+
+    async def test_claim_turn_failure_rolls_back_source_expert_job_and_receipt(self):
+        source, expert = await self.pair()
+        ready = (await self.queued((source, expert), age=1))[0]
+        await self.pool.execute('INSERT INTO v2_review_source_schedule(source_id,last_turn) VALUES($1,11)', source)
+        await self.pool.execute('INSERT INTO v2_review_expert_schedule(expert_id,last_turn) VALUES($1,13)', expert)
+        await self.pool.execute("CREATE FUNCTION reject_claim_turn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'isolated claim turn failure'; END $$")
+        await self.pool.execute('CREATE TRIGGER reject_claim_turn BEFORE UPDATE ON v2_review_expert_schedule FOR EACH ROW EXECUTE FUNCTION reject_claim_turn()')
+        with self.assertRaises(asyncpg.RaiseError):
+            await worker.claim_job(self.pool)
+        self.assertEqual((11, 13), tuple(await self.pool.fetchrow(
+            'SELECT s.last_turn,e.last_turn FROM v2_review_source_schedule s '
+            'CROSS JOIN v2_review_expert_schedule e')))
+        self.assertEqual(('queued', 0, None), tuple(await self.pool.fetchrow(
+            'SELECT state,attempts,attempt_id FROM v2_analysis_jobs WHERE id=$1', ready)))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1', ready))
+
     async def test_old_backlog_does_not_precede_current_messages_and_sources_stay_fair(self):
         pairs = [await self.pair() for _ in range(3)]
         for pair in pairs:
