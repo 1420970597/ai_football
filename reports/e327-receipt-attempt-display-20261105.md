@@ -5,3 +5,5 @@
 设计：latest_summary仍返回原不可变回执，但同一查询附加最新job/attempt的状态及is_current_attempt，跨job或跨attempt明确false。不得修改payload、回填接受数、隐藏旧证据或把retry标成功。网页将旧回执标题改为“上次已保存的审核结果”，明确“正在审核/等待重试/排队/失败”及保留已确认推荐，以卡片展示实时台账；当前attempt的有效回执保留原标题。API缺少新字段的旧版本保持兼容，不臆测为过期。
 
 验收：隔离PG覆盖同attempt有效、同job新attempt无回执、更新job排队、旧payload不变及后续当前回执恢复；无额外逐行查询。Docker浏览器桌面/手机使用候选静态代码、真实只读12项及响应级注入的时效字段验证旧/新状态；注入只在浏览器，不写生产，不冒充后端联调通过。定向冻结后完整回归，API/web分服务受控发布再真实验证。失败保留旧记录与当前状态，不将界面文案改动算审核收尾成功。
+
+13:19 UTC：独立候选312fd4b加入同查询latest job/attempt状态及is_current_attempt，原payload原样。Docker桌面1440/手机390×retry/running/queued/current/legacy共10点击actual0，12真实卡片保留、原汇总内容未变、无JS异常/溢出。时效元数据仅在浏览器响应层注入，不能声称后端或生产已生效；证据e327-browser-output/receipt-clicks.json。随后8c22947合入E324零接受重试不传空提示修正及1行为；新冻结预计1434，后端定向/全套等待原E324结束，尚未执行。未修改被测ef23653。
