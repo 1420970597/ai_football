@@ -13,3 +13,9 @@ E256固定连接对照00:37:47–01:14:00共601轮/2173.1秒实际exit0，1202�
 E262供应商参数核验：依据[DeepSeek官方思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode)核对thinking.type=disabled；网页工具两次502后，Docker受限HTTP读取官方页实际exit0。Hermes内现有SDK默认/disabled各3次，全部200且正确四字回答、脚本exit0；disabled的3次里2次仍非空reasoning_content（只存长度、不保存内容），无法证明当前网关按该参数关闭。因此没有修改生产参数或宣称提速。低频SDK七次探测00:44至01:15均200、实际exit0，01:16继续下一组。
 
 E261去重候选仅在独立worktree：37项原Hermes契约与固定真实框架预载通过，冻结完整回归中，生产上下文尚未修改。去重不是本窗条件，也不是本窗自然样本效果。继续会话，最终截点和原命令退出码后续追加。
+
+01:39 UTC 终审追加：01:02:30.984815至01:32:32.809756，55采样1801.8秒、watch/finalizer均实际exit0，SHA1ea5a1bdec7c36f1098b9bfd85babe0a97ce7adb8ca45897f382c7c3877e2fe2。37自然新帖31ready/6unsupported，216版本169旧修订；六来源租约全有效单owner、health/ready采样全200、TG2降级、API17Timeout，稳定性未通过。当前eligible含旧帖新编辑共32，全部有任务；审计读取时24unresolved/6succeeded/1queued/1running，不能声称全部审核完成。六条推荐加一条已结算回顾图，双端共14场景实际exit0，授权原图/同attempt回执/当前phase/无溢出/关闭通过。桥同截点导出实际exit0，汇总另附；审计状态在读取时观察，不伪造精确截点历史状态。
+
+模型失败367ab6f2在141107.018ms后返回HermesProviderUnavailable，已自动retry；安全提取Hermes实际APIError为“Upstream HTTP/2 stream failed”，不是已验证的上游权限拒绝，也不能把日志代码位置401冒充HTTP状态。思考内容不输出，秘密检测未命中，临时日志提取脚本收尾移除。E261在本窗结束后才生效，新效果归E265，不能归入本窗。
+
+E264最初4种捕获语句40次prepare含20次截断语句语法错误，脚本exit0不等于全部通过。按服务器track_activity_query_size=1024跳过截断后，2种完整语句20次prepare全通过、无类型内省，原/独立P50 398.462/254.944ms、max486.933/537.776ms，实际exit0；未复现五秒准备截止，不因此放宽生产超时。所有准备出的业务SQL均未执行。
