@@ -11,3 +11,5 @@
 14:15 UTC：HelpCenterUtilsKt.a精确内部类（首次误用$原名invalid_request1保留）REA方法<clinit>返回完整smali、exit0，明确SPORT_RULES映射case4；结合b方法case4→AppTheme.a.g().ru()，确认体育规则实际从主题配置ru()读取。AppTheme定义在classes5，classes3仅引用，初次选classes3 invalid_request1保留；classes5 g反编译0返回ThemeKt.e0((String)g.getValue())，继续追踪工厂及配置。离线898录制请求规则链接字段扫描0，仅第三方监控/域名分发规则，未取得体育规则链接；结果e330-recorded-rule-links.json，不能据此声称App不存在规则。
 
 14:28 UTC：中文默认Z→lazy h→t5.i.invoke→ThemeKt.h→g0的Java/smali均真实REA退出0，g0构造ua.b$c并设置语言ZhCN。ua.b$c的定义经普通DEX class_def定位在classes6；前面按引用所在分片选classes5/8导致invalid_request1，已保留，转精确定义分片继续ru方法。这里引用/定义区别只是静态定位证据，未把失败称作不存在。E329近24小时待处理22项全部原文编辑/删除失效，eligible0；补扫86次/2091条、deferred0，不构成新发言模型验收。
+
+14:33 UTC：ua.b$c本身仅构造方法，ru为继承方法；普通class_def核验其父类ua.e。错误选择ua.b父外部类得到method_not_found1保留，现转精确父类方法。不能将子类不声明误判为配置不存在，仍无官方计分口径正文。
