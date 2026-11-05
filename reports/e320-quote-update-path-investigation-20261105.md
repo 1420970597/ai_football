@@ -15,3 +15,5 @@
 12:35 UTC：采样201/600.147秒actual0，12:26:19.702/22.685 backend3404429 quote_upsert实际IO/DataFileRead，持续1.036/4.036秒、无阻塞PID；12:26:24.548请求0d483589同PID/ingestion135执行5000.875ms超时，支持本次报价磁盘读取等待，而非推测锁等待。其他IO/transactionid样本独立保留。生产readonly SELECT EXPLAIN对1/2000输入均使用v2_quotes_reference_unique Index Scan、无写入/无ANALYZE，actual0。
 
 隔离候选482083d：SQL拆入quote_ingestion，以同一固定字段及单调条件生成存量UPDATE和缺失INSERT ON CONFLICT；固定quote_id。输入引用校验对齐数据库coalesce(line,0)拒绝null/zero双重目标。新增5个PG行为覆盖混合更新插入/无变xmin、冲突输入拒绝、整批回滚、并发已存在新版本及并发新插入重验；定向50/30.373秒actual0。候选冻结完整1418预计运行中，未发布、未改被测代码。
+
+12:48 UTC：冻结482083d完整1418/695.655秒退出1，唯一失败为原并发测试按SQL开头`INSERT INTO v2_current_quotes`暂停，CTE开头变更导致等待事件未触发；保留失败日志e320-full-suite-01.stderr及退出码，不算通过。完整运行结束后仅修正暂停识别为包含报价INSERT，原引用无阻塞、第二写者锁超时、最终价格及绑定断言不变。新冻结版本需先重跑该行为与报价组合，再完整回归，不能用定向通过代替完整验收。E323独立候选已经开始完整回归，与失败的E320未合并；下一轮重跑顺序等待E323结束，避免并行高负载。
