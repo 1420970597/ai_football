@@ -29,7 +29,7 @@ class MessageEventIndexTests(unittest.IsolatedAsyncioTestCase):
         await self.conn.execute('CREATE INDEX CONCURRENTLY v2_telegram_events_message_latest_idx '
                                 'ON v2_telegram_events(message_id,received_at DESC,id DESC)')
         before = await self.conn.fetchrow("SELECT oid,relfilenode FROM pg_class WHERE oid='v2_telegram_events_message_latest_idx'::regclass")
-        self.assertEqual(['027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql'], await apply_migrations(self.conn))
+        self.assertEqual(['027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql','029_review_latest_result_lookup.sql'], await apply_migrations(self.conn))
         self.assertEqual(before, await self.conn.fetchrow("SELECT oid,relfilenode FROM pg_class WHERE oid='v2_telegram_events_message_latest_idx'::regclass"))
         self.assertEqual([], await apply_migrations(self.conn))
         await check_schema(self.conn)
@@ -58,7 +58,7 @@ class MessageEventIndexTests(unittest.IsolatedAsyncioTestCase):
         query = 'SELECT id,last_error,content FROM v2_telegram_events WHERE message_id=$1 ORDER BY received_at DESC,id DESC LIMIT 1'
         expected = await self.conn.fetchrow(query, message)
         rows_before = await self.conn.fetch('SELECT *,xmin::text AS row_version,ctid::text AS location FROM v2_telegram_events ORDER BY id')
-        self.assertEqual(['027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql'], await apply_migrations(self.conn))
+        self.assertEqual(['027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql','029_review_latest_result_lookup.sql'], await apply_migrations(self.conn))
         self.assertEqual(rows_before, await self.conn.fetch('SELECT *,xmin::text AS row_version,ctid::text AS location FROM v2_telegram_events ORDER BY id'))
         self.assertEqual(expected, await self.conn.fetchrow(query, message))
         self.assertIsNone(await self.conn.fetchrow(query, uuid.uuid4()))

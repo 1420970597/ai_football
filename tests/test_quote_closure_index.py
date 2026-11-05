@@ -27,7 +27,7 @@ class QuoteClosureIndexTests(unittest.IsolatedAsyncioTestCase):
         await self.prior_schema()
         await self.conn.execute("CREATE INDEX CONCURRENTLY v2_quotes_nonclosed_fixture_idx ON v2_current_quotes(fixture_id) WHERE status <> 'closed'")
         before = await self.conn.fetchrow("SELECT oid,relfilenode FROM pg_class WHERE oid='v2_quotes_nonclosed_fixture_idx'::regclass")
-        self.assertEqual(['026_quote_nonclosed_lookup.sql','027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql'], await apply_migrations(self.conn))
+        self.assertEqual(['026_quote_nonclosed_lookup.sql','027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql','029_review_latest_result_lookup.sql'], await apply_migrations(self.conn))
         self.assertEqual(before, await self.conn.fetchrow("SELECT oid,relfilenode FROM pg_class WHERE oid='v2_quotes_nonclosed_fixture_idx'::regclass"))
         await check_schema(self.conn)
 
@@ -57,7 +57,7 @@ class QuoteClosureIndexTests(unittest.IsolatedAsyncioTestCase):
             "CASE WHEN i=1 THEN 'active' WHEN i=2 THEN 'suspended' ELSE 'closed' END "
             "FROM generate_series(1,12000) i")
         before = await self.conn.fetch('SELECT *,xmin::text AS row_version,ctid::text AS location FROM v2_current_quotes ORDER BY id')
-        self.assertEqual(['026_quote_nonclosed_lookup.sql','027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql'], await apply_migrations(self.conn))
+        self.assertEqual(['026_quote_nonclosed_lookup.sql','027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql','029_review_latest_result_lookup.sql'], await apply_migrations(self.conn))
         self.assertEqual(before, await self.conn.fetch('SELECT *,xmin::text AS row_version,ctid::text AS location FROM v2_current_quotes ORDER BY id'))
         self.assertEqual([], await apply_migrations(self.conn))
         await check_schema(self.conn)
