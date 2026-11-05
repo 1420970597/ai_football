@@ -11,3 +11,11 @@
 09:32:31.599960690出现fixture upsert LockNotAvailableError，request c5e9a0de-f451-418d-a7d3-0c77d8949f50/backend3402613，保留e303-error-moments-mid.json，不将本窗稳定性判通过。09:35:37起1秒间隔/最长10分钟只读等待采样，用于捕获同项目阻塞，尚未复现相同等待，不能猜阻塞者或放宽锁超时。
 
 首图片c5f7f719-4524-4a38-8d81-a29084211b34巴基斯坦—印度赛前上半大0.75实际1.49、同attempt accepted1；1440/390双端原图点击actual0，证据e303-first-image-output。第二080cabb4-e37d-47a2-a1ef-c0f8c5973a8a为编辑后revision2，狮城水手—阿德莱德联客+1实际1.99、原图2.04不阻断，原图目视及双端2场景actual0（e303-second-image-output）。两条分别事件85.114/112.417秒，三秒失败。另“等水上车”和引用旧图的口号无新增意图，0接受合理；旧revision有一无attempt失效任务，最新revision2均已完整回执，失败计数增量不能直接说模型故障，失效原因仍需精确核对。09:42样本6eligible5完整1进行中，继续跟踪，不提前称无漏审。
+
+## 完整窗口终审（2026-11-05 09:50 UTC）
+
+09:16:18.628240—09:46:21.145963，56采样1802.4秒，watch/finalizer actual0，SHA219e8ccc42e2d04038a201dfdd8cf10b294112eff3d6d64013ef1e1f90eefbde。六源连接/六租约单owner全程正常，7新帖6ready/1unsupported，163旧修订；6eligible全部完整同attempt双回执，无缺失/在途。API633 events全200，但fixtures一次LockNotAvailableError；远端桥3064日志3063个200/1个503，对应同09:32:31 fixtures，3722.5ms，桥SHA06f022不变。本窗稳定验收不通过，不将events成功替代赛事链路成功。
+
+第三图片d30d169d-f441-45a8-93e5-a8827e65033d阿姆塔特—伊尔赤姆全场大1.5实际2.00 accepted1，模型124.840秒/事件134.163秒。e303-third-image-browser实际exit0，双端2场景授权原图/同attempt/当前阶段及卡片数量通过，原图目视补核继续。三图合计3接受（双端6场景），另三条无具体新推荐接受0，全部自然输入，不写假消息。三秒仍不通过。
+
+1秒间隔只读锁观察601采样/1389观测actual0：09:43:02—03 backend3402300等3402829、09:43:51等3402854，transactionid最长观察1.788秒，operation尚为other_project_query；与09:32超时PID3402613不同，不能混同归因。quote DataFileRead最长活跃观察0.962秒。e303-db-wait-final-summary.json保留3阻塞观测，前中段无阻塞不代表最终全无；下一观察细分有限项目表操作，不输出SQL/参数。E30609:46:29.636043起新完整周期，继续联调。
