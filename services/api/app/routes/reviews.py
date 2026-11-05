@@ -391,11 +391,81 @@ async def list_match_markets(body: MarketInput, request: Request):
             return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh)
 
 
+async def _record_current_signals(conn, body, request, observations):
+    """Caller owns the transaction; revalidate current state before writes."""
+    accepted, rejected = [], []
+    job = await active_tool_job(conn, body.review_id, body.attempt_id)
+    message_age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
+    current_message = 0 <= message_age <= REALTIME_WINDOW_SECONDS
+    if job['review_mode'] == 'historical_replay' or not current_message:
+        reason = ('message_timestamp_in_future' if message_age < 0
+                  else 'historical_review_not_current')
+        result = {"expert": job["display_nickname"], "accepted": [],
+                  "rejected": [{"index": index, "reason": reason}
+                               for index, _ in enumerate(body.signals)]}
+        return await tool_success(conn, body, result, {"review_mode": job['review_mode'], **result,
+            'message_age_seconds': round(message_age, 3)})
+    max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
+    # Projection/result ingestion locks fixtures before updating quotes.
+    # Lock every selected bound fixture in that same global order before
+    # touching a quote; a joined q,f lock can acquire q first and deadlock.
+    await conn.fetch(
+        'SELECT f.id FROM v2_fixtures f JOIN v2_review_fixture_bindings b ON b.fixture_id=f.id '
+        'WHERE b.job_id=$1 AND b.attempt_id=$2 AND f.id=ANY($3::text[]) '
+        'ORDER BY f.source_id FOR SHARE OF f',
+        body.review_id, body.attempt_id, sorted({pick.fixture_id for pick in body.signals}),
+    )
+    # Read only requested (fixture, quote) pairs, once in stable order.
+    # Keep fixture-before-quote locking while avoiding N remote reads
+    # under the fixture locks. Each intent is still validated below.
+    quotes = await conn.fetch(
+            "SELECT q.*,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context,r.source_updated_at AS read_source_time,r.price AS read_price FROM v2_current_quotes q "
+            "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
+            "JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 "
+            "JOIN (SELECT DISTINCT fixture_id,quote_id FROM unnest($3::text[],$4::uuid[]) AS pairs(fixture_id,quote_id)) wanted "
+            "ON wanted.fixture_id=q.fixture_id AND wanted.quote_id=q.id "
+            "ORDER BY q.fixture_id,q.id FOR SHARE OF q",
+            body.review_id, body.attempt_id,
+            [pick.fixture_id for pick in body.signals], [pick.quote_id for pick in body.signals],
+    )
+    by_quote = {(quote['fixture_id'], quote['id']): quote for quote in quotes}
+    for index, pick in enumerate(body.signals):
+        # Bind intent and score context, then snapshot current price.
+        quote = by_quote.get((pick.fixture_id, pick.quote_id))
+        reason = None
+        confirmation = None
+        if quote:
+            fixture = dict(quote) | {'id': quote['fixture_id']}
+            confirmation = confirmation_for(observations.get(pick.fixture_id), quote, fixture, max_quote_age)
+            confirmation = confirmation or confirmation_for(quote['read_context'].get('current_confirmation'), quote, fixture, max_quote_age)
+        if not quote:
+            reason = "quote_not_read_or_changed"
+        elif {k: v for k, v in quote['read_context'].items() if k != 'current_confirmation'} != quote_context(quote, quote):
+            reason = 'quote_or_score_context_changed'
+        elif quote["phase"] not in {"scheduled", "live"}:
+            reason = "fixture_not_active"
+        elif not fresh_quote(quote, max_quote_age) and not confirmation:
+            reason = "quote_inactive_unknown_or_stale"
+        if reason:
+            rejected.append({"index": index, "reason": reason})
+            continue
+        recorded_price = quote['price']
+        result = await persist_signal(conn, job=job, attempt_id=body.attempt_id,
+                                      quote=quote, pick=pick, confirmation=confirmation)
+        if result:
+            new_id = result['id']
+        else:
+            existing = await conn.fetchrow("SELECT id,recommendation_price FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND selection=$6 AND market_kind=$7 AND (line IS NOT DISTINCT FROM $5::numeric OR market_kind='winner' AND COALESCE(line,0)=0 AND COALESCE($5::numeric,0)=0)", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"], quote["market_kind"])
+            new_id, recorded_price = existing['id'], existing['recommendation_price']
+        accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(recorded_price), **line_terms(quote)})
+    result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
+    return await tool_success(conn, body, result, result)
+
+
 @router.post("/record_expert_signals")
 @tool_evidence('mcp_record_expert_signals')
 async def record_expert_signals(body: RecordInput, request: Request):
     authorize(request, request.app.state.settings.mcp_internal_token)
-    accepted, rejected = [], []
     observations = {}
     # A long model turn must not turn a previously valid read into a permanent
     # rejection. Recheck only the selected, already-read and bound fixtures.
@@ -418,6 +488,11 @@ async def record_expert_signals(body: RecordInput, request: Request):
                     q['read_context'].get('current_confirmation'), q, dict(q) | {'id': q['fixture_identity']}, reusable_age)}
             else:
                 stale_fixtures = {}
+            if not stale_fixtures:
+                # No external I/O separates validation from writing. Keep the
+                # current transaction, and let the shared finalizer reread all
+                # eligibility and quote witnesses before acquiring write locks.
+                return await _record_current_signals(conn, body, request, observations)
     # Shared collector budget still coalesces and limits provider calls. Do not
     # hold the database transaction during I/O or extend a terminated lease.
     for fixture_id in sorted(stale_fixtures):
@@ -431,69 +506,4 @@ async def record_expert_signals(body: RecordInput, request: Request):
         observations[fixture_id] = refreshed.get('_observation')
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            job = await active_tool_job(conn, body.review_id, body.attempt_id)
-            message_age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
-            current_message = 0 <= message_age <= REALTIME_WINDOW_SECONDS
-            if job['review_mode'] == 'historical_replay' or not current_message:
-                reason = ('message_timestamp_in_future' if message_age < 0
-                          else 'historical_review_not_current')
-                result = {"expert": job["display_nickname"], "accepted": [],
-                          "rejected": [{"index": index, "reason": reason}
-                                       for index, _ in enumerate(body.signals)]}
-                return await tool_success(conn, body, result, {"review_mode": job['review_mode'], **result,
-                    'message_age_seconds': round(message_age, 3)})
-            max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
-            # Projection/result ingestion locks fixtures before updating quotes.
-            # Lock every selected bound fixture in that same global order before
-            # touching a quote; a joined q,f lock can acquire q first and deadlock.
-            await conn.fetch(
-                'SELECT f.id FROM v2_fixtures f JOIN v2_review_fixture_bindings b ON b.fixture_id=f.id '
-                'WHERE b.job_id=$1 AND b.attempt_id=$2 AND f.id=ANY($3::text[]) '
-                'ORDER BY f.source_id FOR SHARE OF f',
-                body.review_id, body.attempt_id, sorted({pick.fixture_id for pick in body.signals}),
-            )
-            # Read only requested (fixture, quote) pairs, once in stable order.
-            # Keep fixture-before-quote locking while avoiding N remote reads
-            # under the fixture locks. Each intent is still validated below.
-            quotes = await conn.fetch(
-                    "SELECT q.*,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context,r.source_updated_at AS read_source_time,r.price AS read_price FROM v2_current_quotes q "
-                    "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
-                    "JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 "
-                    "JOIN (SELECT DISTINCT fixture_id,quote_id FROM unnest($3::text[],$4::uuid[]) AS pairs(fixture_id,quote_id)) wanted "
-                    "ON wanted.fixture_id=q.fixture_id AND wanted.quote_id=q.id "
-                    "ORDER BY q.fixture_id,q.id FOR SHARE OF q",
-                    body.review_id, body.attempt_id,
-                    [pick.fixture_id for pick in body.signals], [pick.quote_id for pick in body.signals],
-            )
-            by_quote = {(quote['fixture_id'], quote['id']): quote for quote in quotes}
-            for index, pick in enumerate(body.signals):
-                # Bind intent and score context, then snapshot current price.
-                quote = by_quote.get((pick.fixture_id, pick.quote_id))
-                reason = None
-                confirmation = None
-                if quote:
-                    fixture = dict(quote) | {'id': quote['fixture_id']}
-                    confirmation = confirmation_for(observations.get(pick.fixture_id), quote, fixture, max_quote_age)
-                    confirmation = confirmation or confirmation_for(quote['read_context'].get('current_confirmation'), quote, fixture, max_quote_age)
-                if not quote:
-                    reason = "quote_not_read_or_changed"
-                elif {k: v for k, v in quote['read_context'].items() if k != 'current_confirmation'} != quote_context(quote, quote):
-                    reason = 'quote_or_score_context_changed'
-                elif quote["phase"] not in {"scheduled", "live"}:
-                    reason = "fixture_not_active"
-                elif not fresh_quote(quote, max_quote_age) and not confirmation:
-                    reason = "quote_inactive_unknown_or_stale"
-                if reason:
-                    rejected.append({"index": index, "reason": reason})
-                    continue
-                recorded_price = quote['price']
-                result = await persist_signal(conn, job=job, attempt_id=body.attempt_id,
-                                              quote=quote, pick=pick, confirmation=confirmation)
-                if result:
-                    new_id = result['id']
-                else:
-                    existing = await conn.fetchrow("SELECT id,recommendation_price FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND selection=$6 AND market_kind=$7 AND (line IS NOT DISTINCT FROM $5::numeric OR market_kind='winner' AND COALESCE(line,0)=0 AND COALESCE($5::numeric,0)=0)", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"], quote["market_kind"])
-                    new_id, recorded_price = existing['id'], existing['recommendation_price']
-                accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(recorded_price), **line_terms(quote)})
-            result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
-            return await tool_success(conn, body, result, result)
+            return await _record_current_signals(conn, body, request, observations)
