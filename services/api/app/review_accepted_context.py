@@ -16,7 +16,10 @@ async def read_accepted_context(conn, job_id, attempt_id):
         "FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id "
         "WHERE s.message_id=$1 AND s.withdrawn_at IS NULL "
         "ORDER BY s.created_at,s.id LIMIT $2", job['message_id'], CONTEXT_LIMIT + 1)
-    return {'accepted': [dict(row) for row in rows[:CONTEXT_LIMIT]],
+    accepted = [dict(row) for row in rows[:CONTEXT_LIMIT]]
+    for item in accepted:
+        item['kickoff_at'] = item['kickoff_at'].isoformat() if item['kickoff_at'] else None
+    return {'accepted': accepted,
             'truncated': len(rows) > CONTEXT_LIMIT, 'limit': CONTEXT_LIMIT}
 
 
