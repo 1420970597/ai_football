@@ -24,6 +24,7 @@ from ..team_matching import normalize_team_name, team_name_matches
 from ..review_candidates import snapshot_candidates
 from ..review_cursors import encode_cursor, decode_cursor
 from ..review_search_scope import continuation_scope, scope_key
+from ..signal_persistence import persist_signal
 
 router = APIRouter(prefix="/internal/mcp")
 
@@ -496,22 +497,11 @@ async def record_expert_signals(body: RecordInput, request: Request):
                 if reason:
                     rejected.append({"index": index, "reason": reason})
                     continue
-                baseline = {"home": quote["home_score"], "away": quote["away_score"], "half_home": quote["half_home_score"], "half_away": quote["half_away_score"]}
-                new_id = uuid.uuid4()
                 recorded_price = quote['price']
-                result = await conn.fetchrow(
-                    "INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,period,market_kind,line,selection,recommendation_price,quote_time,confidence,evidence_text,score_baseline,score_basis) "
-                    "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(message_id,fixture_id,market_id,period,(COALESCE(line,0)),selection) DO NOTHING RETURNING id",
-                    new_id, job["message_id"], job["expert_id"], quote["fixture_id"], quote["phase"], quote["market_id"], quote["market_name"], quote["period"], quote["market_kind"], quote["line"], quote["selection"], quote["price"], quote["source_updated_at"], pick.confidence, pick.evidence_text, baseline, quote["score_basis"],
-                )
+                result = await persist_signal(conn, job=job, attempt_id=body.attempt_id,
+                                              quote=quote, pick=pick, confirmation=confirmation)
                 if result:
-                    await conn.execute(
-                        "INSERT INTO v2_quote_evidence(id,fixture_id,market_id,market_name,period,line,selection,price,evidence_kind,reference_id,source_updated_at,evidence,score_baseline) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'expert_signal',$9,$10,$11,$12)",
-                        uuid.uuid4(), quote["fixture_id"], quote["market_id"], quote["market_name"], quote["period"], quote["line"], quote["selection"], quote["price"], new_id, quote["source_updated_at"], {"job_id": str(body.review_id), "attempt_id": str(body.attempt_id), "quote_id": str(pick.quote_id), "score_basis": quote["score_basis"], "market_kind": quote["market_kind"], 'current_confirmation': confirmation,
-                        **line_terms(quote),
-                        'reviewed_price': str(quote['read_price']) if quote['read_price'] is not None else None,
-                        'reviewed_source_updated_at': quote['read_source_time'].isoformat() if quote['read_source_time'] else None}, baseline,
-                    )
+                    new_id = result['id']
                 else:
                     existing = await conn.fetchrow("SELECT id,recommendation_price FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND selection=$6 AND market_kind=$7 AND (line IS NOT DISTINCT FROM $5::numeric OR market_kind='winner' AND COALESCE(line,0)=0 AND COALESCE($5::numeric,0)=0)", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"], quote["market_kind"])
                     new_id, recorded_price = existing['id'], existing['recommendation_price']
