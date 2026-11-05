@@ -863,7 +863,9 @@ function traceBlocks(traces) {
 }
 function traceMarkup(traces = [], systemSummary = null, modelResult = null) {
   const latest = systemSummary || traces.filter((t) => t.trace_kind === "system_review_result" && typeof t.payload?.content === "string").at(-1);
-  const receipt = latest ? `<section class="detail-section system-review-result"><h3>系统确认的审核结果</h3><pre class="raw-text">${esc(latest.payload.content)}</pre><p class="form-note">此处只汇总系统已接受记录及工具拒绝原因；模型原始输出保留在下方。</p></section>` : "";
+  const priorReceipt = latest?.is_current_attempt === false;
+  const receiptState = { queued: "新审核正在排队", running: "新审核正在处理中", retry: "新审核等待重试", failed: "新审核未能完成", cancelled: "新审核已取消" }[latest?.state] || "本次审核尚无对应汇总";
+  const receipt = latest ? `<section class="detail-section system-review-result"><h3>${priorReceipt ? "上次已保存的审核结果" : "系统确认的审核结果"}</h3>${priorReceipt ? `<p class="notice receipt-status" role="status">${esc(receiptState)}。下方为先前审核保存的汇总，数量可能与上方已确认推荐不同；已接受推荐继续保留。</p>` : ""}<pre class="raw-text">${esc(latest.payload.content)}</pre><p class="form-note">此处只汇总系统已接受记录及工具拒绝原因；模型原始输出保留在下方。</p></section>` : "";
   const modelContent = modelResult?.payload?.content;
   const modelAnalysis = typeof modelContent === "string" && modelContent.trim()
     ? `<section class="detail-section model-review-result"><h3>Hermes 最新分析</h3><pre class="raw-text">${esc(modelContent)}</pre><p class="form-note">模型分析供核查；实际推荐以系统确认结果为准。</p></section>` : "";

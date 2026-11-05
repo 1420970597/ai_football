@@ -130,8 +130,13 @@ async def trace_page(pool, request, actor, message_id, *, context='user', limit=
 
 async def latest_summary(pool, message_id):
     row = await pool.fetchrow(
-        "SELECT t.id,j.id AS review_id,j.state,j.last_error,t.sequence_no,t.trace_kind,t.payload,t.created_at "
-        "FROM v2_analysis_jobs j JOIN v2_analysis_traces t ON t.job_id=j.id "
+        "SELECT t.id,j.id AS review_id,current_job.state,current_job.last_error,"
+        "current_job.attempt_id AS current_attempt_id,"
+        "(j.id=current_job.id AND COALESCE(t.payload->>'attempt_id'=current_job.attempt_id::text,false)) AS is_current_attempt,"
+        "t.sequence_no,t.trace_kind,t.payload,t.created_at "
+        "FROM (SELECT id,state,last_error,attempt_id FROM v2_analysis_jobs WHERE message_id=$1 "
+        "ORDER BY created_at DESC,id DESC LIMIT 1) current_job "
+        "JOIN v2_analysis_jobs j ON j.message_id=$1 JOIN v2_analysis_traces t ON t.job_id=j.id "
         "WHERE j.message_id=$1 AND t.trace_kind='system_review_result' "
         "ORDER BY j.created_at DESC,j.id DESC,t.sequence_no DESC,t.id DESC LIMIT 1", message_id)
     return trace_projection(row, message_id) if row else None
