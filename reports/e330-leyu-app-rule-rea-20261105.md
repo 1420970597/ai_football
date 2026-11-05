@@ -13,3 +13,7 @@
 14:28 UTC：中文默认Z→lazy h→t5.i.invoke→ThemeKt.h→g0的Java/smali均真实REA退出0，g0构造ua.b$c并设置语言ZhCN。ua.b$c的定义经普通DEX class_def定位在classes6；前面按引用所在分片选classes5/8导致invalid_request1，已保留，转精确定义分片继续ru方法。这里引用/定义区别只是静态定位证据，未把失败称作不存在。E329近24小时待处理22项全部原文编辑/删除失效，eligible0；补扫86次/2091条、deferred0，不构成新发言模型验收。
 
 14:33 UTC：ua.b$c本身仅构造方法，ru为继承方法；普通class_def核验其父类ua.e。错误选择ua.b父外部类得到method_not_found1保留，现转精确父类方法。不能将子类不声明误判为配置不存在，仍无官方计分口径正文。
+
+14:40 UTC重要更正：ua.e.ru→rL(2788)→ua.a.a[2788]的完整REA源码已取得，实际常量为“了解规则，秒解各类赛事”，是帮助菜单描述而非URL。前述“规则地址配置调用链”推断不成立，保留原记录并在此纠正；SPORT_RULES菜单存在已证实，但地址尚未定位。数组c方法覆盖2000–2999，静态decompile0、不执行App，不含官方计分规则。继续从帮助中心事件/导航处理而非沿描述文本找URL，结算保持未知不改收益。
+
+14:54 UTC：实际点击处理HelpCenterViewModel.k反编译完整0，case4调用WebViewJumpHelper.m，传入AppTheme.g().ou()与i5.a.G()。REA分别证实ou→rL(2785)即标题“体育规则”，G返回c("",c,"/app/tutorialNew/sportRules")，首次取得实际体育规则H5路径，继续核验c的域名/配置组合。证据ev_9068be33c306ed2e2809105ba8911a36acb5794b0506468cefe73fa767475262、ev_4a0dd04fc8f00fd9c2095729b60da622e1f1ec420395e60a166a304778eac8d6、ev_bba0c9b7deae2271ab0728ea6dd59dde23705219000d56fb1d9182c80e09931a；均为静态证据，尚未读取规则正文。一次误用CLI命名参数返回Unknown flag1，按既有help改为位置参数成功；普通索引首次容器非root读0600失败，未放宽权限，改user0只读核验真实类定义。E331约半程无新帖、六群/租约正常；无样本不称审核通过。
