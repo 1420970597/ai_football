@@ -13,14 +13,21 @@ class HermesRunnerTests(unittest.TestCase):
         cli = ModuleType('hermes_cli.main')
         cli.main = Mock()
         config = ModuleType('hermes_cli.config')
+        config.get_hermes_home = Mock(return_value=Path('/isolated-hermes-home'))
         config.load_config_readonly = Mock(return_value={'skills': {'auto_load': ['expert-review']}})
+        root = Path(__file__).resolve().parents[1] / 'integrations/hermes'
+        terminal_scope = ModuleType('tools.terminal_scope')
+        terminal_scope.build_profile_terminal_scope = Mock(return_value={'TERMINAL_CWD': str(root)})
+        prompt_builder = ModuleType('agent.prompt_builder')
+        prompt_builder.build_context_files_prompt = Mock(return_value=(root / 'AGENTS.md').read_text())
         skill_commands = ModuleType('agent.skill_commands')
         skill = (Path(__file__).resolve().parents[1] / 'integrations/hermes/skills/expert-review/SKILL.md').read_text()
         body = skill.split('---', 2)[2].strip()
         skill_commands.build_auto_load_prompt = Mock(return_value=(body, ['expert-review'], []))
         package = ModuleType('hermes_cli')
         modules = {'toolsets': toolsets, 'hermes_cli': package, 'hermes_cli.main': cli,
-                   'hermes_cli.config': config, 'agent.skill_commands': skill_commands}
+                   'hermes_cli.config': config, 'agent.skill_commands': skill_commands,
+                   'tools.terminal_scope': terminal_scope, 'agent.prompt_builder': prompt_builder}
         spec = importlib.util.spec_from_file_location('project_hermes_runner', Path(__file__).resolve().parents[1] / 'integrations/hermes/runner.py')
         runner = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, modules):
@@ -33,6 +40,35 @@ class HermesRunnerTests(unittest.TestCase):
             runner.main()
         self.assertEqual(['skills_list', 'skill_view'], toolsets.create_custom_toolset.call_args.kwargs['tools'])
         cli.main.assert_called_once_with()
+
+    def test_gateway_profile_cwd_cannot_silently_resolve_to_home(self):
+        for cwd in (None, '', '.', '/root', '/workspace-missing'):
+            with self.subTest(cwd=cwd):
+                runner, toolsets, cli, modules = self.runner()
+                modules['tools.terminal_scope'].build_profile_terminal_scope.return_value = {'TERMINAL_CWD': cwd}
+                with patch.dict(sys.modules, modules), self.assertRaisesRegex(RuntimeError, 'working directory'):
+                    runner.main()
+                cli.main.assert_not_called()
+                toolsets.create_custom_toolset.assert_not_called()
+
+    def test_missing_or_truncated_context_cannot_start_gateway(self):
+        for prompt in ('', '# Project Context\npartial rules'):
+            with self.subTest(prompt=prompt):
+                runner, toolsets, cli, modules = self.runner()
+                modules['agent.prompt_builder'].build_context_files_prompt.return_value = prompt
+                with patch.dict(sys.modules, modules), self.assertRaisesRegex(RuntimeError, 'missing or incomplete'):
+                    runner.main()
+                cli.main.assert_not_called()
+                toolsets.create_custom_toolset.assert_not_called()
+
+    def test_context_verification_uses_profile_scope_and_disables_install_fallback(self):
+        runner, _, _, modules = self.runner()
+        root = Path(runner.__file__).parent
+        with patch.dict(sys.modules, modules):
+            runner.verify_project_context(root)
+        modules['tools.terminal_scope'].build_profile_terminal_scope.assert_called_once_with(Path('/isolated-hermes-home'))
+        modules['agent.prompt_builder'].build_context_files_prompt.assert_called_once_with(
+            cwd=str(root), skip_soul=True, allow_install_tree_fallback=False)
 
     def test_missing_project_mount_fails_before_gateway_starts(self):
         runner, toolsets, cli, modules = self.runner()

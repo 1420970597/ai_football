@@ -9,6 +9,11 @@ providers:
     key_env: HERMES_PROVIDER_API_KEY
     transport: chat_completions
 
+# The gateway resolves "." to the profile home, not the process working dir.
+# Keep project rules pinned to the read-only mounted workspace.
+terminal:
+  cwd: /workspace
+
 agent:
   max_turns: 128
   # Durable review jobs own transient retries and retain per-attempt evidence.

@@ -3,6 +3,21 @@ from toolsets import create_custom_toolset
 from pathlib import Path
 
 
+def verify_project_context(root):
+    from hermes_cli.config import get_hermes_home
+    from tools.terminal_scope import build_profile_terminal_scope
+    from agent.prompt_builder import build_context_files_prompt
+
+    scope = build_profile_terminal_scope(get_hermes_home())
+    cwd = scope.get('TERMINAL_CWD')
+    if not cwd or not Path(cwd).is_absolute() or Path(cwd).resolve() != root.resolve():
+        raise RuntimeError('Hermes profile working directory must match the project mount')
+    body = (root / 'AGENTS.md').read_text(encoding='utf-8').strip()
+    prompt = build_context_files_prompt(cwd=cwd, skip_soul=True, allow_install_tree_fallback=False)
+    if not body or body not in prompt:
+        raise RuntimeError('Hermes profile project context is missing or incomplete')
+
+
 def verify_preloaded_skill(root):
     from hermes_cli.config import load_config_readonly
     from agent.skill_commands import build_auto_load_prompt
@@ -21,6 +36,7 @@ def main():
     root = Path(__file__).resolve().parent
     if not (root / 'AGENTS.md').is_file() or not (root / 'skills/expert-review/SKILL.md').is_file():
         raise RuntimeError('Hermes project context and expert-review skill must be mounted')
+    verify_project_context(root)
     create_custom_toolset(
         'expert-skills', '只读专家审核技能', tools=['skills_list', 'skill_view'],
     )
