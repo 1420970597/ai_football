@@ -84,6 +84,10 @@ async def open_pool(settings: Settings, *, migrate: bool = False, verify: bool =
         min_size=2,
         max_size=24,
         command_timeout=5,
+        # Keep the driver's bounded 100-entry cache, but avoid TTL expiry
+        # accumulating many sequential Close round trips before the next query.
+        # Schema invalidation and capacity eviction remain driver-managed.
+        max_cached_statement_lifetime=0,
         max_inactive_connection_lifetime=180,
         server_settings={
             "application_name": "ai-football-platform-v2",
