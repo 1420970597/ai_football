@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 import httpx
 
 from app import database, main
-from app.database_diagnostics import exception_backend_pids
+from app.database_diagnostics import exception_backend_pids, exception_timeout_budget
 from app.routes import telegram
 
 
@@ -87,6 +87,39 @@ ADMIN_URL = os.environ.get('TEST_DATABASE_ADMIN_URL','')
 
 @unittest.skipUnless(ADMIN_URL,'requires explicit task-owned temporary PostgreSQL')
 class DatabaseFailurePostgresTests(unittest.IsolatedAsyncioTestCase):
+    async def test_timeout_budget_distinguishes_slow_execution_from_exhausted_preparation(self):
+        query = 'SELECT pg_sleep($1::float8)'
+        async with self.pool.acquire() as conn:
+            await conn.fetchval(query, 0)
+            try:
+                await conn.fetchval(query, 0.2, timeout=0.03)
+            except TimeoutError as exc:
+                budget = json.loads(exception_timeout_budget(exc))[0]
+                self.assertEqual('execution_wait', budget['phase'])
+                self.assertEqual(30, budget['budget_ms'])
+                self.assertGreaterEqual(budget['execute_ms'], 20)
+                self.assertLess(budget['prepare_ms'], 30)
+            else:
+                self.fail('real execution must exceed the command budget')
+        original = asyncpg.Connection._get_statement
+        async def delayed_prepare(connection, *args, **kwargs):
+            statement = await original(connection, *args, **kwargs)
+            await asyncio.sleep(0.06)
+            return statement
+        async with self.pool.acquire() as conn:
+            with patch.object(asyncpg.Connection, '_get_statement', delayed_prepare):
+                try:
+                    await conn.fetchval('SELECT $1::int', 1, timeout=0.02)
+                except TimeoutError as exc:
+                    budget = json.loads(exception_timeout_budget(exc))[0]
+                    self.assertEqual('preparation_exhausted', budget['phase'])
+                    self.assertEqual(20, budget['budget_ms'])
+                    self.assertGreaterEqual(budget['prepare_ms'], 50)
+                    self.assertLess(budget['remaining_ms'], 0)
+                else:
+                    self.fail('preparation must exhaust the command budget before execution')
+        self.assertEqual(1, await self.pool.fetchval('SELECT 1'))
+
     async def test_backend_pid_metadata_failure_does_not_replace_original_error(self):
         async with self.pool.acquire() as conn:
             try:

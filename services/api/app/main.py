@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 
 from . import auth, database, identity_lifecycle
 from .config import load_settings
-from .database_diagnostics import exception_backend_pids
+from .database_diagnostics import exception_backend_pids, exception_timeout_budget
 from .health import HermesProbe, MCPProbe, StorageProbe
 from .routes import accounts, admin, admin_reviews, expert_content, internal, operations, public, renewal, result_checks, results, reviews, telegram
 from .security import decrypt_secret
@@ -138,8 +138,9 @@ async def database_temporarily_unavailable(request: Request, exc: Exception):
     non-idempotent operation.  Callers must reconcile such writes first.
     """
     request_id = getattr(request.state, "request_id", "")
-    log.warning("database temporarily unavailable request_id=%s category=%s frames=%s backend_pids=%s",
-                request_id, type(exc).__name__, _safe_exception_frames(exc), exception_backend_pids(exc))
+    log.warning("database temporarily unavailable request_id=%s category=%s frames=%s driver_budget=%s backend_pids=%s",
+                request_id, type(exc).__name__, _safe_exception_frames(exc),
+                exception_timeout_budget(exc), exception_backend_pids(exc))
     content = {"detail": "数据库暂时繁忙，请稍后重试", "code": "database_temporarily_unavailable",
                "request_id": request_id, "retryable": True, "automatic_retry": False}
     if request.method not in {"GET", "HEAD", "OPTIONS"}:

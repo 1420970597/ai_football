@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from app.main import _safe_exception_frames, unexpected_error
-from app.database_diagnostics import exception_backend_pids
+from app.database_diagnostics import exception_backend_pids, exception_timeout_budget
 from starlette.requests import Request
 
 
@@ -32,8 +32,11 @@ class ApiErrorLoggingTests(unittest.TestCase):
             lookalike.fail()
         except TimeoutError as exc:
             self.assertEqual('none', exception_backend_pids(exc))
+            self.assertEqual('none', exception_timeout_budget(exc))
         self.assertEqual(0, lookalike.calls)
         self.assertEqual('none', exception_backend_pids(TimeoutError('private-value')))
+        self.assertEqual('none', exception_timeout_budget(TimeoutError('private-value')))
+        self.assertEqual('none', exception_timeout_budget(RuntimeError('private-value')))
 
     def test_traceback_formatter_contains_only_bounded_code_locations(self):
         try:
