@@ -2541,3 +2541,5 @@ E281只读延迟分解启动（2026-11-05 04:35 UTC）：两真实任务领取tr
 E282监听队列假设排除（2026-11-05 04:39 UTC）：远端桥容器自身netns ListenOverflows/ListenDrops/ReqQFullDoCookies/ReqQFullDrop全部0，默认队列5；只读actual exit0，不支持监听队列溢出根因，不为推测改队列/并发。第一次脚本残留AUDIT_END引用KeyError actual1保留并修正原检查重跑0。E280当前无新帖，API/TG健康、六租约有效，继续采样和真实推荐等待。
 
 最近24小时待处理核查（2026-11-05 04:41 UTC）：只读e283-recent-pending原检查actual exit0，时间窗内queued/retry/running/failed共30项，全部failed且eligible=false；23 source_edited、7 source_deleted，未发现可审核近期任务被网关恢复后重试队列遗留。不能把历史总体queued6/retry317当作近期实时积压，也不删除原失败记录。E280持续六群采集，当前无新增自然帖；保持样本不足，不宣称比赛匹配新验收。
+
+E284重复配置回执优化设计（2026-11-05 04:47 UTC）：每任务现有GET+POST ack，即便同版本已消费仍额外远端锁/读。拟由GET只声明已存在的有效同active版本消费证据，工作器严格校验provider/version/prompt后跳过重复ack；首次/旧API/未消费保持原路，仍每任务读取最新、不生成假消费、不缓存配置。E279指纹冲突候选不接入；单独候选需真实PG首次/重复/换版/失配/丢失响应行为及完整套件后才发布。E280窗口不改生产。
