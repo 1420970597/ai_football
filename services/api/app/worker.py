@@ -15,6 +15,7 @@ from .hermes_client import HermesProviderUnavailable, ReplyMediaPending, delete_
 from .review_state import active_job, append_traces, trace
 from .review_summary import record_summary
 from .review_recovery import market_recovery
+from .review_accepted_context import read_accepted_context
 from .review_completion import completion_issues, continuation_prompt, mentioned_fixtures
 from .review_policy import FRESH_PRIORITY_WINDOW_SECONDS, REALTIME_WINDOW_SECONDS
 from .review_scheduler_setup import persistent_retry_condition as _persistent_retry_condition, prepare_claim_schedule
@@ -444,8 +445,18 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
     usage_totals = {}
     check_retries = 0
     message = job['message'] | {'review_mode': job.get('review_mode', 'real_time')}
+    accepted_context = None
+    if job.get('attempts', 1) > 1 and message['review_mode'] == 'real_time':
+        try:
+            async with pool.acquire() as conn, conn.transaction():
+                accepted_context = await read_accepted_context(conn, job['id'], job['attempt_id'])
+        except (TimeoutError, asyncpg.PostgresError) as exc:
+            raise ReviewEvidenceUnavailable('recovery evidence temporarily unavailable') from exc
+        await _add_trace(pool, job, 'recovery_accepted_context', accepted_context)
     for turn in range(3):
         kwargs = {'client': model_client} if model_client is not None else {}
+        if accepted_context is not None and not turn:
+            kwargs['accepted_context'] = accepted_context
         if turn:
             kwargs.update(continuation=continuation_prompt(issues), continuation_round=turn)
         content, summary = await review_message(settings, message, job['id'], job['attempt_id'], **kwargs)
