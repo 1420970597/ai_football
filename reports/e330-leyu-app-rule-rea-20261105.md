@@ -9,3 +9,5 @@
 14:12 UTC：Docker现有REA6.7.0可用，JADX0.7.1/494MiB/单worker，未安装依赖。standings.requestData原名不在去编译方法列表，首轮invalid_request1保留；用返回的精确s方法重试0，源码明确launch("getRuleInfo", OBStandingsRuleViewModel$requestData$1)。下一层invokeSuspend有元数据但JADX无法建立唯一反汇编，execution_failure1，不重复相同请求。帮助中心HelpCenterUtilsKt类清单0、b方法反编译0、HelpCenterItemType清单0：确认存在SPORT_RULES菜单和主题配置动态跳转，需要继续核对switch映射。普通DEX索引只是定位候选：h5RuleDesc实际属于邀请奖金实体，已排除，不能误称体育规则。全部分析network none，未改结算或访问投注。
 
 14:15 UTC：HelpCenterUtilsKt.a精确内部类（首次误用$原名invalid_request1保留）REA方法<clinit>返回完整smali、exit0，明确SPORT_RULES映射case4；结合b方法case4→AppTheme.a.g().ru()，确认体育规则实际从主题配置ru()读取。AppTheme定义在classes5，classes3仅引用，初次选classes3 invalid_request1保留；classes5 g反编译0返回ThemeKt.e0((String)g.getValue())，继续追踪工厂及配置。离线898录制请求规则链接字段扫描0，仅第三方监控/域名分发规则，未取得体育规则链接；结果e330-recorded-rule-links.json，不能据此声称App不存在规则。
+
+14:28 UTC：中文默认Z→lazy h→t5.i.invoke→ThemeKt.h→g0的Java/smali均真实REA退出0，g0构造ua.b$c并设置语言ZhCN。ua.b$c的定义经普通DEX class_def定位在classes6；前面按引用所在分片选classes5/8导致invalid_request1，已保留，转精确定义分片继续ru方法。这里引用/定义区别只是静态定位证据，未把失败称作不存在。E329近24小时待处理22项全部原文编辑/删除失效，eligible0；补扫86次/2091条、deferred0，不构成新发言模型验收。
