@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from types import SimpleNamespace
@@ -6,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import uuid
 
 import asyncpg
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import httpx
 
 from app import database
@@ -88,6 +89,89 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
         self._Client.response = self._Response(403, {})
         with patch.object(operations.httpx, "AsyncClient", self._Client):
             self.assertEqual({"state": "rejected", "reason": "http_403"}, await operations.collector_health(request))
+
+
+class DiagnosticConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    def request(self, probe):
+        state = SimpleNamespace(settings=SimpleNamespace(),
+            hermes_probe=SimpleNamespace(check=lambda: probe('gateway')),
+            storage_probe=SimpleNamespace(check=lambda: probe('storage')),
+            mcp_probe=SimpleNamespace(check=lambda: probe('mcp')))
+        return SimpleNamespace(app=SimpleNamespace(state=state))
+
+    async def test_all_independent_probes_start_without_waiting_for_other_results(self):
+        started = set()
+        ready = asyncio.Event()
+        values = {'database': ('rows', 'verified', 'stats', None), 'gateway': 'unavailable',
+                  'storage': 'unconfigured', 'mcp': 'unverified',
+                  'collector': {'state': 'rejected', 'reason': 'http_403'}}
+
+        async def probe(name):
+            started.add(name)
+            if len(started) == 5:
+                ready.set()
+            await asyncio.wait_for(ready.wait(), 1)
+            return values[name]
+
+        request = self.request(probe)
+        with patch.object(operations, '_diagnostic_database', new=lambda _: probe('database')), \
+             patch.object(operations, 'collector_health', new=lambda _: probe('collector')):
+            result = await operations._diagnostic_snapshot(request)
+        self.assertEqual(set(values), started)
+        self.assertEqual(list(values.values()), result)
+
+    async def test_probe_failure_cancels_and_drains_all_siblings(self):
+        started, finished = set(), set()
+        ready = asyncio.Event()
+
+        async def probe(name):
+            started.add(name)
+            if len(started) == 5:
+                ready.set()
+            try:
+                await ready.wait()
+                if name == 'gateway':
+                    raise RuntimeError('isolated probe failure')
+                await asyncio.Event().wait()
+            finally:
+                finished.add(name)
+
+        request = self.request(probe)
+        with patch.object(operations, '_diagnostic_database', new=lambda _: probe('database')), \
+             patch.object(operations, 'collector_health', new=lambda _: probe('collector')):
+            with self.assertRaisesRegex(RuntimeError, 'isolated probe failure'):
+                await operations._diagnostic_snapshot(request)
+        self.assertEqual(5, len(started))
+        self.assertEqual(started, finished)
+
+    async def test_deadline_cancels_all_probes_and_endpoint_returns_real_timeout(self):
+        started, finished = set(), set()
+
+        async def probe(name):
+            started.add(name)
+            try:
+                await asyncio.Event().wait()
+            finally:
+                finished.add(name)
+
+        request = self.request(probe)
+        with patch.object(operations, 'DIAGNOSTIC_TIMEOUT_SECONDS', .05), \
+             patch.object(operations, 'require_admin', AsyncMock(return_value={'role': 'admin'})), \
+             patch.object(operations, '_diagnostic_database', new=lambda _: probe('database')), \
+             patch.object(operations, 'collector_health', new=lambda _: probe('collector')):
+            with self.assertRaises(HTTPException) as result:
+                await operations.diagnostics(request)
+        self.assertEqual(503, result.exception.status_code)
+        self.assertEqual(5, len(started))
+        self.assertEqual(started, finished)
+
+    async def test_unauthorized_request_never_starts_probes(self):
+        with patch.object(operations, 'require_admin', AsyncMock(side_effect=HTTPException(401))), \
+             patch.object(operations, '_diagnostic_snapshot', AsyncMock()) as snapshot:
+            with self.assertRaises(HTTPException) as result:
+                await operations.diagnostics(SimpleNamespace())
+        self.assertEqual(401, result.exception.status_code)
+        snapshot.assert_not_awaited()
 
 
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'), 'requires task-owned temporary database')

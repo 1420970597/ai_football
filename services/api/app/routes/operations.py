@@ -108,48 +108,79 @@ async def collector_health(request: Request) -> dict:
     }
 
 
+async def _diagnostic_database(settings):
+    """One connection, sequential SQL; never share it across probe tasks."""
+    async with database.current_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "WITH queue AS (SELECT created_at FROM v2_analysis_jobs WHERE state IN('queued','retry','running') ORDER BY created_at LIMIT 5001),"
+            "media AS (SELECT created_at FROM v2_expert_messages WHERE media_state<>'ready' AND deleted_at IS NULL ORDER BY created_at LIMIT 5001),"
+            "unknowns AS (SELECT created_at FROM v2_bet_orders WHERE state='unknown' ORDER BY created_at LIMIT 5001),"
+            "unresolved AS (SELECT id FROM v2_analysis_jobs WHERE state IN('failed','unresolved') LIMIT 5001),"
+            "stale AS (SELECT id FROM v2_current_quotes WHERE status='active' AND (source_updated_at IS NULL OR "
+            "source_updated_at>now() OR source_updated_at<now()-($1::int*interval '1 second')) LIMIT 5001) "
+            "SELECT (SELECT count(*) FROM queue) AS queue_count,(SELECT min(created_at) FROM queue) AS queue_oldest,"
+            "(SELECT count(*) FROM media) AS media_count,(SELECT min(created_at) FROM media) AS media_oldest,"
+            "(SELECT count(*) FROM unknowns) AS unknown_count,(SELECT min(created_at) FROM unknowns) AS unknown_oldest,"
+            "(SELECT count(*) FROM unresolved) AS unresolved_count,(SELECT count(*) FROM stale) AS stale_count,"
+            "(SELECT source_updated_at FROM v2_fixtures WHERE phase IN('live','scheduled') ORDER BY source_updated_at DESC NULLS LAST LIMIT 1) AS fixture_source_at,"
+            "(SELECT source_updated_at FROM v2_current_quotes WHERE status='active' ORDER BY source_updated_at DESC NULLS LAST LIMIT 1) AS quote_source_at,"
+            "(SELECT created_at FROM v2_expert_messages ORDER BY created_at DESC LIMIT 1) AS message_received_at,"
+            "(SELECT max(checked_at) FROM v2_source_checkpoints) AS telegram_checkpoint_at,"
+            "(SELECT max(last_message_id) FROM v2_source_checkpoints) AS telegram_high_water",
+            await runtime_quote_max_age(settings, conn),
+        )
+        try:
+            await database.check_schema(conn)
+            schema = 'verified'
+        except database.MigrationRequired:
+            schema = 'migration_required'
+        stats = await conn.fetchrow('SELECT numbackends,blks_read,blks_hit,temp_bytes,deadlocks FROM pg_stat_database WHERE datname=current_database()')
+        model_evidence = await conn.fetchrow(
+            "SELECT created_at,payload->>'model' AS model FROM v2_analysis_traces "
+            "WHERE trace_kind='hermes_result' ORDER BY created_at DESC LIMIT 1")
+    return row, schema, stats, model_evidence
+
+
+async def _diagnostic_probe(probe, fallback):
+    return await probe.check() if probe else fallback
+
+
+DIAGNOSTIC_TIMEOUT_SECONDS = 5
+
+
+async def _diagnostic_snapshot(request):
+    state = request.app.state
+    storage_fallback = (
+        "configured_unverified" if all(os.environ.get(key) for key in
+            ('S3_ENDPOINT_URL', 'S3_BUCKET', 'S3_ACCESS_KEY', 'S3_SECRET_KEY')) else "unconfigured")
+    tasks = []
+    try:
+        async with asyncio.timeout(DIAGNOSTIC_TIMEOUT_SECONDS):
+            # Independent resources; drain siblings before returning on failure.
+            tasks = [
+                asyncio.create_task(_diagnostic_database(state.settings)),
+                asyncio.create_task(state.hermes_probe.check()),
+                asyncio.create_task(_diagnostic_probe(getattr(state, 'storage_probe', None), storage_fallback)),
+                asyncio.create_task(_diagnostic_probe(getattr(state, 'mcp_probe', None), 'unverified')),
+                asyncio.create_task(collector_health(request)),
+            ]
+            return await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @router.get('/diagnostics')
 async def diagnostics(request: Request):
     await require_admin(request)
     try:
-        async with asyncio.timeout(5):
-            async with database.current_pool().acquire() as conn:
-                row = await conn.fetchrow(
-                    "WITH queue AS (SELECT created_at FROM v2_analysis_jobs WHERE state IN('queued','retry','running') ORDER BY created_at LIMIT 5001),"
-                    "media AS (SELECT created_at FROM v2_expert_messages WHERE media_state<>'ready' AND deleted_at IS NULL ORDER BY created_at LIMIT 5001),"
-                    "unknowns AS (SELECT created_at FROM v2_bet_orders WHERE state='unknown' ORDER BY created_at LIMIT 5001),"
-                    "unresolved AS (SELECT id FROM v2_analysis_jobs WHERE state IN('failed','unresolved') LIMIT 5001),"
-                    "stale AS (SELECT id FROM v2_current_quotes WHERE status='active' AND (source_updated_at IS NULL OR "
-                    "source_updated_at>now() OR source_updated_at<now()-($1::int*interval '1 second')) LIMIT 5001) "
-                    "SELECT (SELECT count(*) FROM queue) AS queue_count,(SELECT min(created_at) FROM queue) AS queue_oldest,"
-                    "(SELECT count(*) FROM media) AS media_count,(SELECT min(created_at) FROM media) AS media_oldest,"
-                    "(SELECT count(*) FROM unknowns) AS unknown_count,(SELECT min(created_at) FROM unknowns) AS unknown_oldest,"
-                    "(SELECT count(*) FROM unresolved) AS unresolved_count,(SELECT count(*) FROM stale) AS stale_count,"
-                    "(SELECT source_updated_at FROM v2_fixtures WHERE phase IN('live','scheduled') ORDER BY source_updated_at DESC NULLS LAST LIMIT 1) AS fixture_source_at,"
-                    "(SELECT source_updated_at FROM v2_current_quotes WHERE status='active' ORDER BY source_updated_at DESC NULLS LAST LIMIT 1) AS quote_source_at,"
-                    "(SELECT created_at FROM v2_expert_messages ORDER BY created_at DESC LIMIT 1) AS message_received_at,"
-                    "(SELECT max(checked_at) FROM v2_source_checkpoints) AS telegram_checkpoint_at,"
-                    "(SELECT max(last_message_id) FROM v2_source_checkpoints) AS telegram_high_water",
-                    await runtime_quote_max_age(request.app.state.settings, conn),
-                )
-                try:
-                    await database.check_schema(conn)
-                    schema = 'verified'
-                except database.MigrationRequired:
-                    schema = 'migration_required'
-                stats = await conn.fetchrow('SELECT numbackends,blks_read,blks_hit,temp_bytes,deadlocks FROM pg_stat_database WHERE datname=current_database()')
-            gateway = await request.app.state.hermes_probe.check()
+        facts, gateway, storage, mcp, collector = await _diagnostic_snapshot(request)
+        row, schema, stats, model_evidence = facts
     except TimeoutError:
         raise HTTPException(503, '运维查询暂时超时，请稍后重试') from None
-    storage_probe = getattr(request.app.state, "storage_probe", None)
-    mcp_probe = getattr(request.app.state, "mcp_probe", None)
-    storage = await storage_probe.check() if storage_probe else (
-        "configured_unverified" if all(os.environ.get(key) for key in ('S3_ENDPOINT_URL','S3_BUCKET','S3_ACCESS_KEY','S3_SECRET_KEY')) else "unconfigured"
-    )
-    mcp = await mcp_probe.check() if mcp_probe else "unverified"
-    model_evidence = await database.current_pool().fetchrow(
-        "SELECT created_at,payload->>'model' AS model FROM v2_analysis_traces "
-        "WHERE trace_kind='hermes_result' ORDER BY created_at DESC LIMIT 1")
     provider = 'unverified'
     if model_evidence:
         age = (datetime.now(timezone.utc)-model_evidence['created_at']).total_seconds()
@@ -159,7 +190,7 @@ async def diagnostics(request: Request):
         'hermes': {'gateway': gateway, 'provider': provider, **(
             {'last_result_at': model_evidence['created_at'], 'model': model_evidence['model'],
              'basis': 'persisted_framework_result_not_accuracy'} if model_evidence else {})},
-        'collector': await collector_health(request),
+        'collector': collector,
         'storage': storage,
         'mcp': mcp,
         'review_queue': count_state(row['queue_count']) | {'oldest_at': row['queue_oldest']},
