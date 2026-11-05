@@ -13,3 +13,7 @@
 10:39:50现有单场明细请求1474.7ms，实际只返回6玩法主/附加共12块，无BTTS；不是模型漏读返回中的盘口。旧SAZ SHA69e39d8ab42b358c7dd349b46042384f5beea4da77ded8b9c20a8c8a19bcd59e，离线遍历898请求有界解析1,036,462解码字节，39非JSON排除，不把这些排除当全部未找到。首过滤只命中108/393复合半场BTTS，扩大命名后命中过多触发100项上限actual1，未静默截断；改精确raw360/646两条后actual0：玩法12=两队都进球/24=上半场/76=下半场，ot Yes/No、无盘口线，1e5价格尺度，主响应内实际hl/ol不是只靠字典名称。
 
 raw360 getMatchBaseInfoByOddsPB及raw646 matchDetail/getMatchOddsInfo1PB请求只含mcid/mid/newUser。10:49:17按raw360已知参数去掉当前列表euid过滤再对同一真实比赛做一次有界只读验证1700.693ms，仍6种玩法，无BTTS；不猜mcid或赛事权限，也不复跑已过期专家任务。现有REA缓存CLI依赖incur/zod缺失，Docker调用两次均1；没有修改全局依赖，当前结果明确为普通Python格式解析，非REA Evidence。保存原始SAZ项目内0600供后续定向证据复核。下一步核对第二明细接口的确切参数/响应层级，再决定全场BTTS接入；生产协议/结算未改。
+
+### 2026-11-05 11:09 UTC — 原始请求参数复核与限制
+
+`e312-capture-parameters-03.json` 实际退出0，逐条独立解析请求纠正先前形状报告：raw360 为 POST getMatchBaseInfoByOddsPB，正文 mid/mcid/newUser；raw646 为 GET matchDetail/getMatchOddsInfo1PB，无正文，参数在查询串（cuid/isMr/mcid/mid/newUser/t）。先前将 raw646 记为正文参数来自解析器复用上一条 document，属于研究脚本错误，不作为接入契约依据。真实 GET 请求 10:56:04 返回 LeyuError，证据仅记录异常类型，不能据此推断 HTTP 状态或上游权限原因；没有连续重试或猜测参数。当前仍缺可用的该场 BTTS 真实报价，不宣称支持已上线。
