@@ -9,7 +9,7 @@ from app.review_summary import make_summary
 
 class NativeHandicapTests(unittest.TestCase):
     def test_capture_home_hv_and_away_option_have_opposite_lines(self):
-        for market in ('4', '19'):
+        for market in ('4', '19', '39'):
             for raw in ('1', '.25', '-.5', '-1.75', '0'):
                 for side in ('home', 'away'):
                     quote = dict(fixture_id='leyu:360', market_id=market, market_kind='handicap',
@@ -26,7 +26,7 @@ class NativeHandicapTests(unittest.TestCase):
     def test_other_sources_and_markets_do_not_flip(self):
         base = dict(fixture_id='leyu:360', market_id='4', market_kind='handicap', selection='away', line='1')
         for change in ({'fixture_id':'other:360'}, {'fixture_id':'leyu:unverified'},
-                       {'market_id':'39'}, {'market_kind':'total'}):
+                       {'market_id':'unverified'}, {'market_kind':'total'}):
             terms = line_terms(base | change)
             self.assertEqual({'line_basis':'selection', 'selection_line':'1'}, terms)
 
@@ -73,3 +73,28 @@ class NativeHandicapTests(unittest.TestCase):
         self.assertEqual('-1', receipt['items'][0]['selection_line'])
         self.assertIn('盘口线 -1，方向 客队', receipt['content'])
         self.assertEqual('1', quote['line'])
+
+    def test_verified_basketball_away_plus_six_half_uses_home_raw_line(self):
+        # E336: hv=-6.5, home on=-6.5, away on=+6.5.
+        quote = dict(fixture_id='leyu:5817686', market_id='39', market_kind='handicap',
+                     selection='away', line='-6.5', period='full_time', quote_id='basket-away')
+        wire = snapshot_result('mcp_list_match_markets', {'fixture': {'id': quote['fixture_id']},
+                               'markets': [quote], 'refresh': {'attempted': False}}, compact_markets=True)
+        self.assertEqual(('provider_home', '6.5', '-6.5'),
+                         tuple(wire['markets'][0][k] for k in ('line_basis', 'selection_line', 'line')))
+        receipt = make_summary([quote | {'recommendation_price':'2.03'}], accepted_total=1,
+                               rejected=[], review_mode='real_time')
+        self.assertEqual('6.5', receipt['items'][0]['selection_line'])
+        self.assertIn('盘口线 6.5，方向 客队', receipt['content'])
+        self.assertEqual('-6.5', quote['line'])
+        self.assertNotIn('selection_line', quote)
+
+    def test_basketball_projection_does_not_enable_football_settlement(self):
+        for side in ('home', 'away'):
+            quote = dict(fixture_id='leyu:5817686', market_id='39', market_kind='handicap',
+                         selection=side, line='-6.5')
+            value = settle(dict(kind='handicap', sport='basketball', price='2.03',
+                                phase='scheduled', period='full_time', **quote, **line_terms(quote)),
+                           dict(status='confirmed', home=100, away=99))
+            self.assertEqual(('pending', 'sport_requires_provider_settlement'),
+                             (value.outcome, value.reason))

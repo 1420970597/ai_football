@@ -1,6 +1,6 @@
 """Preserve native home-view lines while declaring the selected option's line.
 
-Verified Leyu football markets 4/19 carry home-view hl.hv; option on is
+Verified Leyu football markets 4/19 and basketball market 39 carry home-view hl.hv; option on is
 opposite for ot=2. Other providers and market kinds retain their own contract.
 No stored quote, signal, selection identifier or order snapshot is rewritten.
 """
@@ -11,7 +11,7 @@ def line_basis(row, fixture_id=None):
     identity = str(fixture_id or row.get('fixture_id') or '')
     native = identity.startswith('leyu:') and identity[5:].isdigit()
     return ('provider_home' if native and row.get('market_kind') == 'handicap'
-            and str(row.get('market_id')) in {'4', '19'} else 'selection')
+            and str(row.get('market_id')) in {'4', '19', '39'} else 'selection')
 
 
 def line_terms(row, fixture_id=None):
