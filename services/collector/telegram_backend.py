@@ -34,6 +34,7 @@ _SOURCE_SERIALIZED_PATHS = frozenset({
     '/author-backfill',
 })
 _IDEMPOTENT_RETRY_PATHS = frozenset({'/events', '/checkpoints/claim', '/observed'})
+_CONNECT_RETRY_PATHS = frozenset({'/events', '/checkpoints/claim'})
 _IDEMPOTENT_RETRY_AFTER_FALLBACK_SECONDS = 0.5
 _IDEMPOTENT_RETRY_AFTER_MAX_SECONDS = 2.0
 _OBSERVED_REQUEST_TIMEOUT = httpx.Timeout(8, connect=3)
@@ -96,14 +97,14 @@ class TelegramBackend:
                     response = await self.client.request(method, self.api_url + path, **kwargs)
                 except httpx.TimeoutException as exc:
                     # A failed connection sent no request body. Retry only the
-                    # same-owner lease claim once; the caller's total deadline
-                    # still applies. Read/commit ambiguity keeps its own policy.
-                    claim_connect_timeout = operation == '/checkpoints/claim' and isinstance(exc, httpx.ConnectTimeout)
-                    if method != 'POST' or attempt or not (operation == '/observed' or claim_connect_timeout):
+                    # identical event or same-owner claim once under the same
+                    # lock and caller deadline. Read ambiguity is not widened.
+                    connect_timeout = operation in _CONNECT_RETRY_PATHS and isinstance(exc, httpx.ConnectTimeout)
+                    if method != 'POST' or attempt or not (operation == '/observed' or connect_timeout):
                         raise
                     delay = _IDEMPOTENT_RETRY_AFTER_FALLBACK_SECONDS
                     log.warning('Telegram backend retry method=POST operation=%s category=%s attempt=1 retry_after_s=%.3f',
-                                operation, 'ConnectTimeout' if claim_connect_timeout else 'timeout', delay)
+                                operation, 'ConnectTimeout' if connect_timeout else 'timeout', delay)
                 else:
                     if not (method == 'POST' and operation in _IDEMPOTENT_RETRY_PATHS
                             and response.status_code == 503 and attempt == 0):

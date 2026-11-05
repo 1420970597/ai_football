@@ -55,7 +55,9 @@ class LeaseConnectRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_other_failures_and_write_paths_do_not_gain_transport_retries(self):
         cases = [(kind, 'POST', '/checkpoints/claim') for kind in
                  (httpx.ReadTimeout, httpx.PoolTimeout, httpx.ConnectError)]
-        cases += [(httpx.ConnectTimeout, 'POST', '/events'),
+        cases += [(kind, 'POST', '/events') for kind in
+                  (httpx.ReadTimeout, httpx.PoolTimeout, httpx.ConnectError)]
+        cases += [(httpx.ConnectTimeout, 'POST', '/directory'),
                   (httpx.ConnectTimeout, 'PUT', '/checkpoints')]
         for error, method, path in cases:
             with self.subTest(error=error.__name__, method=method, path=path):
