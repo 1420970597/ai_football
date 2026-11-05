@@ -214,6 +214,7 @@ async def _activate_claim(conn, job_id, attempt, mode, realtime_claims):
         'm.created_at AS event_persisted_at,'
         "GREATEST(0,round((extract(epoch FROM(clock_timestamp()-m.created_at))*1000)::numeric,3))::double precision AS event_to_claim_ms,"
         'e.display_nickname,s.display_name AS source_name,c.lease_until AS claimed_lease_until,'
+        "pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || ($1::uuid)::text,0)) AS trace_lock,"
         "COALESCE(CASE WHEN r.deleted_at IS NULL THEN r.raw_text END,"
         "m.reply_context->>'text',m.reply_context->>'raw_text') AS reply_text,"
         "CASE WHEN r.id IS NULL THEN NULL ELSE jsonb_build_object('id',r.id,'revision',r.revision,"
@@ -233,6 +234,7 @@ async def _activate_claim(conn, job_id, attempt, mode, realtime_claims):
     if row is None:
         raise RuntimeError('claimed review job or message disappeared during activation')
     message = dict(row)
+    message.pop('trace_lock')
     return message.pop('claimed_lease_until'), message
 
 
@@ -285,7 +287,9 @@ async def _claim_job(pool):
             attempt = uuid.uuid4()
             lease_until, message = await _activate_claim(conn, row['id'], attempt, mode, realtime_claims)
             event_to_claim_ms = message['event_to_claim_ms']
-            await trace(conn, row["id"], "attempt_claimed", {"attempt_id": str(attempt), "attempt": row["attempts"] + 1,
+            # Activation already holds this task's trace lock. Allocate the
+            # sequence in a later statement, after any prior writer committed.
+            await append_traces(conn, row["id"], [("attempt_claimed", {"attempt_id": str(attempt), "attempt": row["attempts"] + 1,
                 'source_id': str(pair['source_id']), 'expert_id': str(pair['expert_id']), 'concurrency_limit': pair['concurrency_limit'],
                 'active_expert_leases_before': pair['active_leases'], 'scheduler_turn': turn, 'pair_probes': probes,
                 'review_mode': mode, 'scheduler_lane': scheduler_lane,
@@ -296,7 +300,7 @@ async def _claim_job(pool):
                 'queue_wait_ms': max(0, round((datetime.now(timezone.utc) - message['created_at']).total_seconds() * 1000, 3)),
                 'event_persisted_at': message['event_persisted_at'].isoformat()
                     if message['event_persisted_at'] else None,
-                'event_to_claim_ms': event_to_claim_ms})
+                'event_to_claim_ms': event_to_claim_ms})], trace_lock_held=True)
             return {"id": row["id"], "attempt_id": attempt, "attempts": row["attempts"] + 1, "message": dict(message),
                     'source_id': pair['source_id'], 'expert_id': pair['expert_id'], 'lease_until': lease_until,
                     'review_mode': mode, 'scheduler_lane': scheduler_lane}
