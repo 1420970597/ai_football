@@ -182,6 +182,23 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Decimal('0.5'), Decimal(result['markets'][0]['line']))
         self.assertEqual(Decimal('-0.5'), Decimal(result['markets'][0]['selection_line']))
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+
+    async def test_full_filter_alias_matches_full_time_without_expanding_half_or_direction(self):
+        fixture_id = await self.fixture(markets=[
+            {'market_id': market, 'market_name': market, 'kind': 'total', 'period': period,
+             'line': '2.5', 'selection': selection, 'price': '1.95',
+             'source_updated_at': self.now.isoformat(), 'received_at': self.now.isoformat()}
+            for market, period, selection in (
+                ('total', 'full_time', 'over'), ('total', 'full_time', 'under'),
+                ('half', 'first_half', 'over'))])
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        response = await self.post('list_match_markets', fixture_id=fixture_id,
+                                   market_kind='total', period='full', line='2.5', selection='over')
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual('full_time', response.json()['market_filter']['period'])
+        self.assertEqual([('full_time', 'over')],
+                         [(q['period'], q['selection']) for q in response.json()['markets']])
         unknown = await self.post('list_match_markets', fixture_id=fixture_id, period='unknown_full_match')
         self.assertEqual(200, unknown.status_code)
         self.assertEqual([], unknown.json()['markets'])

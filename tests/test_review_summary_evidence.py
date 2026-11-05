@@ -110,3 +110,61 @@ class SummaryEvidenceTests(unittest.IsolatedAsyncioTestCase):
                     raise AbortCompletion()
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_traces'))
         self.assertEqual('running', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+
+
+@unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'), 'requires isolated database')
+class RecoveredRejectionTests(unittest.IsolatedAsyncioTestCase):
+    asyncSetUp = support.ReviewTests.asyncSetUp
+    asyncTearDown = support.ReviewTests.asyncTearDown
+    fixture = support.ReviewTests.fixture
+    evidence = SummaryEvidenceTests.evidence
+    context = support.ReviewTests.context
+    post = support.ReviewTests.post
+    search_all = support.ReviewTests.search_all
+    resolve = support.ReviewTests.resolve
+    read_market = support.ReviewTests.read_market
+
+    async def accepted_pick(self):
+        fixture = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        quote = await self.pool.fetchval('SELECT id FROM v2_current_quotes WHERE fixture_id=$1', fixture)
+        pick = {'fixture_id': fixture, 'quote_id': str(quote), 'evidence_text': '全场大2.5'}
+        rejected = await self.post('record_expert_signals', signals=[pick])
+        self.assertEqual('quote_not_read_or_changed', rejected.json()['rejected'][0]['reason'])
+        await self.read_market(fixture)
+        accepted = await self.post('record_expert_signals', signals=[pick])
+        self.assertEqual(1, len(accepted.json()['accepted']))
+        return pick, accepted.json()['accepted'][0]['signal_id']
+
+    async def test_later_system_acceptance_removes_only_final_unresolved_and_keeps_failure_trace(self):
+        await self.accepted_pick()
+        result = await self.evidence()
+        self.assertEqual(1, result.total)
+        self.assertEqual([], result.rejected)
+        self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE trace_kind='mcp_record_expert_signals' AND jsonb_array_length(payload->'rejected')>0"))
+
+    async def test_other_quote_fixture_and_missing_or_invalid_index_remain_unresolved(self):
+        pick, _ = await self.accepted_pick()
+        cases = [({'fixture_id': pick['fixture_id'], 'quote_id': str(uuid.uuid4())}, 0),
+                 ({'fixture_id': 'another-fixture', 'quote_id': pick['quote_id']}, 0),
+                 (pick, 'bad'), (pick, -1), (pick, 100000000000000000000), (pick, None)]
+        async with self.pool.acquire() as conn, conn.transaction():
+            for wrong, index in cases:
+                await trace(conn, self.job, 'mcp_record_expert_signals', {
+                    'attempt_id': str(self.attempt), 'parameters': {'signals': [wrong]},
+                    'rejected': [{'index': index, 'reason': 'quote_not_read_or_changed'}]})
+        result = await self.evidence()
+        self.assertEqual(len(cases), len(result.rejected))
+
+    async def test_signal_without_immutable_quote_evidence_does_not_clear_rejection(self):
+        _, signal_id = await self.accepted_pick()
+        await self.pool.execute('DELETE FROM v2_quote_evidence WHERE reference_id=$1', uuid.UUID(signal_id))
+        self.assertEqual(1, len((await self.evidence()).rejected))
+
+    async def test_another_message_signal_evidence_cannot_clear_this_message_rejection(self):
+        _, signal_id = await self.accepted_pick()
+        other = uuid.uuid4()
+        await self.pool.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) VALUES($1,$2,$3,'different','other',now())", other, self.source, self.expert)
+        await self.pool.execute('UPDATE v2_expert_signals SET message_id=$2 WHERE id=$1', uuid.UUID(signal_id), other)
+        self.assertEqual(1, len((await self.evidence()).rejected))

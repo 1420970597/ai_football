@@ -88,7 +88,7 @@ class MarketInput(AttemptInput):
     @field_validator('period', mode='before')
     @classmethod
     def normalize_full_period_alias(cls, value):
-        return 'full_time' if value == 'full_match' else value
+        return 'full_time' if value in ('full_match', 'full') else value
 
     @field_validator('market_query', mode='before')
     @classmethod
