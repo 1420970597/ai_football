@@ -7,3 +7,9 @@
 验收：首次仍实际ack、已确认同版本后续请求无POST、重复读取不写审计/updated_at、切换版本恢复ack、指纹不一致仍拒绝、丢失ack重试不重复审计、旧API无字段仍确认。定向真实临时PG及完整冻结套件；失败不发布。发布在完整E280窗口后自然idle，仅更新API+worker，保留E276/E274分别回退及其他五服务快照。先完成候选与验证再决定发布，不改当前采集。
 
 04:52验证阶段：真实临时PG定向26项23.904秒actual exit0；随后将新测试对其他测试方法的调用改为独立ASGI消费，不改业务代码，再跑26项23.812秒actual exit0。覆盖首次GET+POST、同版第二次仅GET且updated_at未变、激活换版恢复GET+POST并两次消费审计、旧API无字段保持POST、提示摘要不符即使ack标记true仍拒绝、存储回执各身份字段损坏或consumed_versions缺失均false、丢失已提交ack重试不重复审计。候选9d7c27d67ffadf28b90167a9e1afac8bd6f92fde已冻结完整套件；尚未发布，原SYSTEM_PROMPT完全未改。
+
+05:12发布与真实验证：完整1342项627.031秒/报告629.481秒actual exit0，0失败错误跳过、源码核验true，证据.runtime/e284-candidate/.runtime/test-evidence/2344525/backend-tests.json，SHA cbe23cd7e7ef58757527299f595ce8fadc79829224c83560a5a314f77b136402。镜像3c9c55c5109f6544c0251553852d1bbf0946484a0eab6623ea921b9a77496c7f。
+
+首轮05:03:22暂停/05:03:23自然idle，实际仅GET已成功，校验脚本却把hermes-agent默认选择器当显式deepseek override断言失败，apply1、gate0，自动恢复E276/E274。first-e284-*全保留，未修改应用候选、模型配置或测试期望。只读确认override null、选择器hermes-agent、Hermes默认deepseek-v4.1-flash；配置version1a3d248aba0a83dcb7b643d7e1f700d064230c2e13801a70a7fad7ea92ff127e，模型version7d378a91f08471ac323c832f826cd95e0d4cb6b0fdc860df19459cd6bf165d6d，prompt222388e0dde4957ff096435cdf283f676e1c01e8003c9f536599f76f30a84173不变。校验脚本改成这些实际基线，并独立检查Hermes默认，原发布重跑。
+
+第二轮05:08:15暂停/05:08:16自然idle，API05:08:52、worker05:09:23启动，apply/gate actual exit0，均健康0restart。只API+worker重建，其余五服务完整快照相等，两服务环境与预算相等；旧TTL0/领取优化/v5结算仍加载。真实工作器当前配置读取只有GET，821.378ms，未重复POST，原精确模型/配置/提示版本保持，不等同于端到端三秒达标。252原推荐/报价摘要与406旧结算台账全部保持，保护比较actual exit0。E28505:10:29.710168开始完整观察，需真实新任务验证整体耗时和同attempt回执，继续会话。
