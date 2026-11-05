@@ -11,6 +11,7 @@ import test_admin_reviews as support
 class ReceiptAttemptTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = support.AdminReviewTests.asyncSetUp
     asyncTearDown = support.AdminReviewTests.asyncTearDown
+    add_job = support.AdminReviewTests.add_job
 
     async def receipt(self, job, attempt, sequence=20):
         payload={'attempt_id':str(attempt),'accepted_count':7,'content':'系统已接受7条推荐'}
