@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import os
 
 import httpx
@@ -30,6 +31,8 @@ MARKET_WAIT_SECONDS = 8
 MAX_PENDING_MARKET_CALLS = 8
 market_gate = asyncio.Lock()
 pending_market_calls = 0
+pending_market_requests = 0
+market_reads: dict[str, dict] = {}
 
 
 class ExpertPick(BaseModel):
@@ -40,9 +43,49 @@ class ExpertPick(BaseModel):
 
 
 async def _post(path: str, payload: dict) -> dict:
-    global pending_market_calls
+    global pending_market_requests
     if path not in {'list_match_markets', 'record_expert_signals'}:
         return await _request(path, payload)
+    if pending_market_requests >= MAX_PENDING_MARKET_CALLS:
+        raise ToolError("盘口复核队列繁忙；保留当前消息为待核验")
+    pending_market_requests += 1
+    try:
+        return await _market_request(path, payload)
+    finally:
+        pending_market_requests -= 1
+
+
+async def _market_request(path: str, payload: dict) -> dict:
+    if path == 'record_expert_signals':
+        return await _admitted_market_request(path, payload)
+    # Both MCP aliases may request the exact same read concurrently. Reuse
+    # only that in-flight read, including its attempt and every filter; there
+    # is no completed-result cache or sharing across authorization contexts.
+    key = json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    entry = market_reads.get(key)
+    if entry is not None and entry['task'].done():
+        market_reads.pop(key)
+        entry = None
+    if entry is None:
+        if len(market_reads) >= MAX_PENDING_MARKET_CALLS:
+            raise ToolError("盘口复核队列繁忙；保留当前消息为待核验")
+        entry = {'task': asyncio.create_task(_admitted_market_request(path, payload)), 'waiters': 0}
+        market_reads[key] = entry
+    entry['waiters'] += 1
+    try:
+        return await asyncio.shield(entry['task'])
+    finally:
+        entry['waiters'] -= 1
+        if not entry['waiters']:
+            if market_reads.get(key) is entry:
+                market_reads.pop(key)
+            if not entry['task'].done():
+                entry['task'].cancel()
+            await asyncio.gather(entry['task'], return_exceptions=True)
+
+
+async def _admitted_market_request(path: str, payload: dict) -> dict:
+    global pending_market_calls
     if pending_market_calls >= MAX_PENDING_MARKET_CALLS:
         raise ToolError("盘口复核队列繁忙；保留当前消息为待核验")
     pending_market_calls += 1

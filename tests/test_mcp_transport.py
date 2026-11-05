@@ -238,3 +238,154 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
             await self.server._post('list_match_markets', {})
         self.assertEqual({'detail': '暂不可用'}, await self.server._post('record_expert_signals', {}))
         self.assertEqual(0, self.server.pending_market_calls)
+
+    async def test_identical_market_reads_share_only_inflight_operation(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+        async def upstream(request):
+            calls.append(request.content)
+            entered.set()
+            await release.wait()
+            return httpx.Response(200, json={'markets': [{'quote_id': 'quote'}]})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        payload = {'review_id': 'job', 'attempt_id': 'attempt', 'fixture_id': 'fixture', 'line': None}
+        first = asyncio.create_task(self.server._post('list_match_markets', payload))
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(self.server._post('list_match_markets', dict(reversed(list(payload.items())))))
+        await asyncio.sleep(0)
+        self.assertEqual(1, len(calls))
+        self.assertEqual(2, self.server.pending_market_requests)
+        release.set()
+        results = await asyncio.gather(first, second)
+        self.assertEqual(results[0], results[1])
+        self.assertFalse(self.server.market_reads)
+        await self.server._post('list_match_markets', payload)
+        self.assertEqual(2, len(calls))
+        self.assertEqual(0, self.server.pending_market_requests)
+
+    async def test_market_read_identity_isolates_attempt_and_every_filter(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+        async def upstream(request):
+            calls.append(request.content)
+            if len(calls) == 1:
+                entered.set()
+                await release.wait()
+            return httpx.Response(200, json={'ok': True})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        payload = {'review_id': 'job', 'attempt_id': 'attempt', 'fixture_id': 'fixture',
+                   'market_kind': 'handicap', 'period': 'full_time', 'line': '-6.5',
+                   'selection': 'away', 'market_query': '让分'}
+        variants = [payload | {key: 'other'} for key in payload]
+        # Keep each batch within the original eight-request admission budget.
+        for offset in range(0, len(variants), 7):
+            calls.clear(); entered.clear(); release.clear()
+            first = asyncio.create_task(self.server._post('list_match_markets', payload))
+            await asyncio.wait_for(entered.wait(), 1)
+            others = [asyncio.create_task(self.server._post('list_match_markets', item))
+                      for item in variants[offset:offset+7]]
+            await asyncio.sleep(0)
+            self.assertEqual(1+len(others), len(self.server.market_reads))
+            release.set()
+            await asyncio.gather(first, *others)
+            self.assertEqual(1+len(others), len(calls))
+            self.assertFalse(self.server.market_reads)
+
+    async def test_shared_read_one_cancel_keeps_other_waiter_and_final_cancel_drains(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls, cancelled = [], []
+        async def upstream(request):
+            calls.append(request.content)
+            entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancelled.append(True)
+                raise
+            return httpx.Response(200, json={'ok': True})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        payload = {'review_id': 'job', 'attempt_id': 'attempt', 'fixture_id': 'fixture'}
+        first = asyncio.create_task(self.server._post('list_match_markets', payload))
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(self.server._post('list_match_markets', payload))
+        await asyncio.sleep(0)
+        first.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await first
+        self.assertFalse(cancelled)
+        self.assertEqual(1, self.server.pending_market_calls)
+        second.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await second
+        self.assertEqual([True], cancelled)
+        self.assertFalse(self.server.market_reads)
+        self.assertEqual(0, self.server.pending_market_calls)
+        self.assertEqual(0, self.server.pending_market_requests)
+        release.set()
+        self.assertEqual({'ok': True}, await self.server._post('list_match_markets', payload))
+        self.assertEqual(2, len(calls))
+
+    async def test_shared_read_failure_is_not_cached_and_writes_never_coalesce(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        paths = []
+        async def upstream(request):
+            paths.append(request.url.path)
+            if request.url.path.endswith('/list_match_markets'):
+                entered.set()
+                await release.wait()
+                return httpx.Response(503, json={'detail': '暂不可用'})
+            return httpx.Response(200, json={'accepted': []})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        payload = {'review_id': 'job', 'attempt_id': 'attempt', 'fixture_id': 'fixture'}
+        first = asyncio.create_task(self.server._post('list_match_markets', payload))
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(self.server._post('list_match_markets', payload))
+        await asyncio.sleep(0)
+        release.set()
+        errors = await asyncio.gather(first, second, return_exceptions=True)
+        self.assertTrue(all(isinstance(error, self.server.ToolError) for error in errors))
+        self.assertEqual(1, len(paths))
+        self.assertFalse(self.server.market_reads)
+        with self.assertRaises(self.server.ToolError):
+            await self.server._post('list_match_markets', payload)
+        writes = await asyncio.gather(*(self.server._post('record_expert_signals', payload) for _ in range(2)))
+        self.assertEqual([{'accepted': []}, {'accepted': []}], writes)
+        self.assertEqual(4, len(paths))
+        self.assertEqual(0, self.server.pending_market_requests)
+
+    async def test_shared_mcp_read_survives_one_waiter_cancellation(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+        async def upstream(request):
+            calls.append(request.content)
+            entered.set()
+            await release.wait()
+            return httpx.Response(200, json={'markets': [], 'fixture': {'id': 'fixture'}})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        arguments = {'review_id': 'job', 'attempt_id': 'attempt', 'fixture_id': 'fixture'}
+        first = asyncio.create_task(self.rpc('tools/call', {
+            'name': 'list_match_markets', 'arguments': arguments}))
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(self.rpc('tools/call', {
+            'name': 'list_match_markets', 'arguments': arguments}))
+        for _ in range(100):
+            if self.server.pending_market_requests == 2:
+                break
+            await asyncio.sleep(.001)
+        self.assertEqual(2, self.server.pending_market_requests)
+        first.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await first
+        release.set()
+        result = await asyncio.wait_for(second, 1)
+        self.assertEqual(200, result.status_code)
+        self.assertFalse(result.json()['result'].get('isError', False))
+        self.assertEqual(1, len(calls))
+        self.assertFalse(self.server.market_reads)
+        self.assertEqual(0, self.server.pending_market_calls)
+        self.assertEqual(0, self.server.pending_market_requests)
