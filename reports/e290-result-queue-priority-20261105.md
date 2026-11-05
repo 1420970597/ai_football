@@ -17,3 +17,5 @@
 命令与退出码：`docker exec -i ai-football-v2-api-1 python - < .runtime/e209-live/e290-result-queue-read.py` exit 0；真实只读输出 .runtime/e209-live/e290-result-queue-read.json。下一步：独立候选实现及定向验证；E289 监控继续。
 
 06:37 UTC 定向阶段：冻结候选 bc07d3e，`bash .runtime/e209-live/e290-targeted.sh` 实际 exit 0，50 项 / 36.190 秒。覆盖首次事实三名额、最终事实复核一名额、空类别补满、limit=1、最新 provisional/void 分类、旧范围/未到期/活动及过期租约、锁跳过、并发不重复和回滚后新租约；原结果/台账/乐鱼终场契约一并通过。实现将选择与批量 UUID 租约写入合并单 SQL，保留原新增检查 SQL，减少串行往返。完整冻结测试已启动，生产未修改。
+
+06:47 UTC 完整冻结阶段：候选 bc07d3e3e30af13c50dbaa549ad663fce843dba7，1354 项 / 619.277 秒（证据报告621.608秒），0失败/错误/跳过，源码核验true，实际 exit 0；证据 .runtime/e290-candidate/.runtime/test-evidence/2552561/backend-tests.json，SHA d29c4a7631bcb52ef58124a08136d55428dbd033e3c58b02f1078422b7506db0。主任务分支阶段接入0d6a692。候选镜像fdb917a4、完整提交标签精确一致，88应用/迁移/依赖文件核对exit0；发布预检查exit0。初次镜像标签因错误相对Git路径为空，以及首次元信息写入相对证据路径失败均保留first-e290-image-wrong-label.txt，正确构建后才进入发布检查，错误镜像未部署。生产尚未切换，等待E289完整窗口；拟自然idle仅切API、其他六本地服务及远端服务不重启，不改变配置/预算和历史证据。
