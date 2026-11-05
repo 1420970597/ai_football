@@ -29,7 +29,7 @@ class QuoteSummaryIndexTests(unittest.IsolatedAsyncioTestCase):
                                 'v2_current_quotes(fixture_id,is_main DESC,source_updated_at DESC NULLS LAST,'
                                 'market_id,line,selection)')
         before = await self.conn.fetchrow("SELECT oid,relfilenode FROM pg_class WHERE oid='v2_quotes_fixture_summary_idx'::regclass")
-        self.assertEqual(['028_quote_summary_lookup.sql'], await apply_migrations(self.conn))
+        self.assertEqual(['028_quote_summary_lookup.sql', '029_review_latest_result_lookup.sql'], await apply_migrations(self.conn))
         self.assertEqual(before, await self.conn.fetchrow(
             "SELECT oid,relfilenode FROM pg_class WHERE oid='v2_quotes_fixture_summary_idx'::regclass"))
         self.assertEqual([], await apply_migrations(self.conn))
@@ -69,7 +69,7 @@ class QuoteSummaryIndexTests(unittest.IsolatedAsyncioTestCase):
         selected = ['fixture-1', 'fixture-2', 'fixture-20', 'missing']
         expected = await self.conn.fetch(query, selected)
         self.assertEqual(72, len(expected))
-        self.assertEqual(['028_quote_summary_lookup.sql'], await apply_migrations(self.conn))
+        self.assertEqual(['028_quote_summary_lookup.sql', '029_review_latest_result_lookup.sql'], await apply_migrations(self.conn))
         self.assertEqual(before, await self.conn.fetch('SELECT *,xmin::text AS row_version,ctid::text AS location FROM v2_current_quotes ORDER BY id'))
         self.assertEqual(expected, await self.conn.fetch(query, selected))
         await self.conn.execute('ANALYZE v2_current_quotes')
