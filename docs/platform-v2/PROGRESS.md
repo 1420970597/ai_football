@@ -2619,3 +2619,5 @@ E294自然图文/结算浏览器完成（2026-11-05 08:02 UTC）：三自然消�
 E294完整终审/E295切换中（2026-11-05 08:07 UTC）：56样本1802.5秒actual watch/finalizer0，SHA1954a30d057d9b426c1809335b5f4e46e9568837ea8f292adb34ce5d06593762；27新帖23ready/4unsupported、23当前eligible全回执0缺失在途，首TG unavailable保留，APIevents692全200。07:45一次fixtures SQL execution_wait超5000ms，桥2次fixtures503，完整稳定仍不通过，详见E294报告。E295仅collector于08:05:16.169555732切33d7958e/1b652a28，已授权连接，等待旧90秒租约自然交接，未提前称ready。E297334e9fd完整1373项635.961秒actual0、0失败错误跳过/源码true，SHA71c5db5021837517afe584fb9a1a97c28c0acda0e222e8c0c070aef6f9be36d9，镜像482034cc已构建待源码核验，collector稳定后再自然idle仅API发布。
 
 E295与E297顺序发布/E298接续（2026-11-05 08:11 UTC）：E295仅远端collector切1b652a28/33d7958e，08:07:25六源自然租约交接后连续ready，apply actual0；267原推荐/报价+409旧ledger保护0，其他远端服务及七本地服务相同。E297仅API08:09:48.965393242切482034cc，暂停领取/自然idle后apply/gate0，ready/v5/六服务环境预算相等；88文件核验0。代码4c76238接入。E298新完整30分钟已启动，起点以容器started记录为准，原结果两小时跟踪继续；E294 SQL执行超时仍待定位，不将发布当全部解决。
+
+E299执行等待研究启动（2026-11-05 08:13 UTC）：E294超时实际在当前盘口批量upsert，不是首段fixture upsert；5000ms执行等待有PID但无历史锁证据，不能猜锁或加超时。工作包reports/e299-fixture-sql-wait-investigation-20261105.md记录最长10分钟/3秒间隔、同项目同角色有界只读活动/阻塞采样，不输出SQL正文或凭据，业务源码未改。E298及真实赛果跟踪继续，E297原台账保护校验进行中。
