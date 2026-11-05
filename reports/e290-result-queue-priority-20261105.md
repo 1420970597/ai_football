@@ -15,3 +15,5 @@
 失败处理：任何隔离测试失败保留失败记录并修复原检查，未完整验证不发布；不清空队列、不放宽赛事编号/双方/时间证据、不把上游未终场当系统漏结算。生产效果须另附实际证据，不能以代码完成替代。
 
 命令与退出码：`docker exec -i ai-football-v2-api-1 python - < .runtime/e209-live/e290-result-queue-read.py` exit 0；真实只读输出 .runtime/e209-live/e290-result-queue-read.json。下一步：独立候选实现及定向验证；E289 监控继续。
+
+06:37 UTC 定向阶段：冻结候选 bc07d3e，`bash .runtime/e209-live/e290-targeted.sh` 实际 exit 0，50 项 / 36.190 秒。覆盖首次事实三名额、最终事实复核一名额、空类别补满、limit=1、最新 provisional/void 分类、旧范围/未到期/活动及过期租约、锁跳过、并发不重复和回滚后新租约；原结果/台账/乐鱼终场契约一并通过。实现将选择与批量 UUID 租约写入合并单 SQL，保留原新增检查 SQL，减少串行往返。完整冻结测试已启动，生产未修改。
