@@ -537,7 +537,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads WHERE job_id=$1', self.job))
         self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='mcp_list_match_markets' AND payload->>'status'='succeeded' AND payload ? 'response_snapshot'", self.job))
         read = await self.pool.fetchrow('SELECT price,quote_context FROM v2_review_market_reads WHERE job_id=$1', self.job)
-        self.assertEqual(Decimal(quote['price']), read['price'])
+        self.assertNotIn('price', quote)  # Price is persisted, not exposed for model matching.
+        self.assertEqual(Decimal('1.95'), read['price'])
         self.assertEqual(fixture_id, read['quote_context']['fixture_id'])
 
     async def test_refresh_releases_single_pool_connection_and_rereads_updated_price(self):
@@ -564,7 +565,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
             response = await self.post('list_match_markets', fixture_id=fixture_id)
         self.assertEqual(200, response.status_code, response.text)
-        self.assertEqual('2.35000', response.json()['markets'][0]['price'])
+        self.assertNotIn('price', response.json()['markets'][0])
         self.assertTrue(response.json()['markets'][0]['fresh'])
         self.assertEqual(Decimal('2.35'), await self.pool.fetchval('SELECT price FROM v2_review_market_reads WHERE job_id=$1', self.job))
 
