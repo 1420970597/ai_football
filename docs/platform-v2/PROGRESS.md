@@ -2929,3 +2929,7 @@ REAgetArticle精确方法为abstract_method，源码为空而body_status=not_ava
 代码8a0f8db及新增5项真实PG测试已写，116项/97.973秒actual0；无刷新仅一次begin/commit，有外部刷新仍两次事务且I/O无连接；权限/终场/停盘/过期/重复和receipt异常回滚保持。候选已独立冻结完整回归，API仍E333、workerE339、collectorE336，未改监控中的线上源码。E338远端bridge同窗3147请求全200/category=none、4有界段、SHA139cfcf3668add35ce33fd30c7ff5356132b894902321a005ef6e0f36ca41517，实际0。
 
 前阶段2f92072已实际推送/远端引用精确一致0。最新设计559f160及实现8a0f8db后续一同推送。REAgetArticle实际带matchId/type，是比赛相关文章候选，尚未证明规则；继续DTO/调用语义，unknown收益保持。worker无Docker health对象，直接读取该模板失败已纠正为running/启动时间、schema与实际加载核验，不把缺省health对象误报故障。
+
+### 2026-11-05 17:11 UTC — E343真实比分点击503定位及修复设计
+
+真实浏览器1440滚球200后未开赛503/actual1；API17:06:19/26 matches:111整体5秒耗尽。赛事过滤已有索引，盘口WindowAgg大扫描真实只读ANALYZE超时；LATERAL逐场24同排序试验2812.829ms/1150行，保留未覆盖200场局限。工作包目标/责任/依赖/决策/验收与失败处理见reports/e343-public-phase-summary-20261105.md，先实现等价读取与真实PG测试，不改正在冻结E342或生产。E342完整回归仍进行，E341六群健康、当前无新帖不充模型样本。
