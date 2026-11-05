@@ -94,12 +94,16 @@ class TelegramBackend:
             for attempt in range(2):
                 try:
                     response = await self.client.request(method, self.api_url + path, **kwargs)
-                except httpx.TimeoutException:
-                    if method != 'POST' or operation != '/observed' or attempt:
+                except httpx.TimeoutException as exc:
+                    # A failed connection sent no request body. Retry only the
+                    # same-owner lease claim once; the caller's total deadline
+                    # still applies. Read/commit ambiguity keeps its own policy.
+                    claim_connect_timeout = operation == '/checkpoints/claim' and isinstance(exc, httpx.ConnectTimeout)
+                    if method != 'POST' or attempt or not (operation == '/observed' or claim_connect_timeout):
                         raise
                     delay = _IDEMPOTENT_RETRY_AFTER_FALLBACK_SECONDS
-                    log.warning('Telegram backend retry method=POST operation=%s category=timeout attempt=1 retry_after_s=%.3f',
-                                operation, delay)
+                    log.warning('Telegram backend retry method=POST operation=%s category=%s attempt=1 retry_after_s=%.3f',
+                                operation, 'ConnectTimeout' if claim_connect_timeout else 'timeout', delay)
                 else:
                     if not (method == 'POST' and operation in _IDEMPOTENT_RETRY_PATHS
                             and response.status_code == 503 and attempt == 0):
