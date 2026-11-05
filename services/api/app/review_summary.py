@@ -7,6 +7,7 @@ from datetime import datetime
 from .review_state import trace
 from .handicap_lines import line_terms
 from .review_completion import completion_issues, mentioned_fixtures
+from .review_summary_evidence import read_summary_evidence
 
 SUMMARY_ITEM_LIMIT = 100
 PHASES = {'scheduled': '未开赛', 'live': '滚球', 'finished': '已完场', 'cancelled': '取消或延期'}
@@ -88,31 +89,11 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
 
 async def record_summary(conn, job, attempt_id, review_mode: str) -> int:
     """Caller holds the active job lock in the same completion transaction."""
-    total = await conn.fetchval('SELECT count(*) FROM v2_expert_signals WHERE message_id=$1', job['message_id'])
-    rows = await conn.fetch(
-        'SELECT s.id AS signal_id,s.fixture_id,f.home_team,f.away_team,f.competition_name,f.kickoff_at,'
-        's.phase,s.market_id,s.market_name,s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time '
-        'FROM v2_expert_signals s JOIN v2_fixtures f ON f.id=s.fixture_id WHERE s.message_id=$1 '
-        'ORDER BY s.created_at,s.id LIMIT $2', job['message_id'], SUMMARY_ITEM_LIMIT)
-    records = await conn.fetch(
-        "SELECT payload->'rejected' AS rejected FROM v2_analysis_traces WHERE job_id=$1 "
-        "AND trace_kind='mcp_record_expert_signals' AND payload->>'attempt_id'=$2 ORDER BY sequence_no",
-        job['id'], str(attempt_id))
-    rejected = [item for record in records for item in (record['rejected'] or [])]
-    identified = await conn.fetch(
-        'SELECT b.fixture_id,f.home_team,f.away_team,f.competition_name,f.kickoff_at,f.phase,count(*) OVER() AS total '
-        'FROM v2_review_fixture_bindings b JOIN v2_fixtures f ON f.id=b.fixture_id '
-        'WHERE b.job_id=$1 AND b.attempt_id=$2 AND NOT EXISTS('
-        'SELECT 1 FROM v2_expert_signals s WHERE s.message_id=$3 AND s.fixture_id=b.fixture_id) '
-        'ORDER BY f.kickoff_at,b.fixture_id LIMIT $4', job['id'], attempt_id, job['message_id'], SUMMARY_ITEM_LIMIT)
-    model_turns = await conn.fetch(
-        "SELECT payload->>'content' AS content FROM v2_analysis_traces WHERE job_id=$1 "
-        "AND payload->>'attempt_id'=$2 AND trace_kind IN ('hermes_result','hermes_partial_result')",
-        job['id'], str(attempt_id))
-    mentioned = set().union(*(mentioned_fixtures(row['content'] or '') for row in model_turns))
+    evidence = await read_summary_evidence(conn, job['id'], attempt_id, job['message_id'], SUMMARY_ITEM_LIMIT)
+    mentioned = set().union(*(mentioned_fixtures(content) for content in evidence.model_contents))
     incomplete = await completion_issues(conn, job['id'], attempt_id, mentioned)
-    receipt = make_summary([dict(row) for row in rows], accepted_total=total, rejected=rejected, review_mode=review_mode,
-                           identified=[dict(row) for row in identified], identified_total=identified[0]['total'] if identified else 0,
+    receipt = make_summary(evidence.signals, accepted_total=evidence.total, rejected=evidence.rejected, review_mode=review_mode,
+                           identified=evidence.identified, identified_total=evidence.identified[0]['total'] if evidence.identified else 0,
                            incomplete=incomplete)
     await trace(conn, job['id'], 'system_review_result', {'attempt_id': str(attempt_id), **receipt})
-    return total
+    return evidence.total
