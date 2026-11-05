@@ -83,6 +83,63 @@ class ReceiptCorrectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'quote_not_read_or_changed': 1}, (await self.receipts())[-1]['payload']['tool_rejection_counts'])
         self.assertEqual('not_needed', (await self.correct())['status'])
 
+    async def extended_precision(self):
+        await self.pool.execute("""UPDATE v2_analysis_traces SET payload=payload ||
+            '{"claim_to_conclusion_ms":149037.68100000001140870153903961181640625}'::jsonb
+            WHERE job_id=$1 AND trace_kind='system_review_result'""", self.job)
+
+    async def exact_claim(self):
+        return await self.pool.fetchval("""SELECT count(DISTINCT payload->'claim_to_conclusion_ms')=1
+            FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result'""", self.job)
+
+    async def legacy_precision_correction(self):
+        await self.completed()
+        await self.extended_precision()
+        await self.correct()
+        await self.pool.execute("""UPDATE v2_analysis_traces SET payload=jsonb_set(payload,
+            '{claim_to_conclusion_ms}','149037.681'::jsonb) WHERE id=(
+            SELECT id FROM v2_analysis_traces WHERE job_id=$1 ORDER BY sequence_no DESC LIMIT 1)""", self.job)
+
+    async def test_database_numeric_preserved_without_float_roundtrip(self):
+        await self.completed()
+        await self.extended_precision()
+        await self.correct()
+        self.assertTrue(await self.exact_claim())
+
+    async def test_legacy_precision_append_keeps_both_traces_and_is_idempotent(self):
+        await self.legacy_precision_correction()
+        before = await self.receipts()
+        self.assertEqual('would_correct', (await self.correct(False))['status'])
+        self.assertEqual(before, await self.receipts())
+        self.assertEqual('corrected', (await self.correct())['status'])
+        after = await self.receipts()
+        self.assertEqual(before, after[:2])
+        self.assertEqual(after[0]['payload']['claim_to_conclusion_ms'], after[2]['payload']['claim_to_conclusion_ms'])
+        self.assertEqual('receipt-jsonb-precision-v1', after[-1]['payload']['receipt_correction']['algorithm'])
+        self.assertEqual('not_needed', (await self.correct())['status'])
+        self.assertEqual(3, len(await self.receipts()))
+        self.assertEqual(2, await self.pool.fetchval("SELECT count(*) FROM v2_audit_log WHERE action='review_receipt_corrected'"))
+
+    async def test_legacy_precision_concurrent_append_once(self):
+        await self.legacy_precision_correction()
+        results = await asyncio.gather(self.correct(), self.correct())
+        self.assertEqual(['corrected', 'not_needed'], sorted(r['status'] for r in results))
+        self.assertEqual(3, len(await self.receipts()))
+
+    async def test_legacy_precision_scope_and_foreign_original_are_not_repaired(self):
+        await self.legacy_precision_correction()
+        for mutation in ("payload || '{\"outcome\":\"failed\"}'::jsonb",
+                         "jsonb_set(payload,'{receipt_correction,previous_trace_id}',to_jsonb(gen_random_uuid()::text))",
+                         "jsonb_set(payload,'{claim_to_conclusion_ms}','148000'::jsonb)"):
+            async with self.pool.acquire() as conn:
+                tx = conn.transaction(); await tx.start()
+                try:
+                    await conn.execute('UPDATE v2_analysis_traces SET payload=' + mutation +
+                        ' WHERE id=(SELECT id FROM v2_analysis_traces WHERE job_id=$1 ORDER BY sequence_no DESC LIMIT 1)', self.job)
+                    self.assertEqual('not_needed', (await correct_recovered_receipt(conn, self.job, apply=True))['status'])
+                finally:
+                    await tx.rollback()
+
     async def test_concurrent_corrections_append_once(self):
         await self.completed()
         results = await asyncio.gather(self.correct(), self.correct())
