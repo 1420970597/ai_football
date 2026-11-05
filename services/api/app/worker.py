@@ -12,7 +12,7 @@ import httpx
 from . import database
 from .config import load_settings
 from .hermes_client import HermesProviderUnavailable, ReplyMediaPending, delete_session, resolve_review_settings, review_message
-from .review_state import active_job, trace
+from .review_state import active_job, append_traces, trace
 from .review_summary import record_summary
 from .review_recovery import market_recovery
 from .review_completion import completion_issues, continuation_prompt, mentioned_fixtures
@@ -289,8 +289,10 @@ async def _claim_job(pool):
 async def _add_trace(pool, job: dict, kind: str, payload: dict) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await active_job(conn, job["id"], job["attempt_id"])
-            await trace(conn, job["id"], kind, {"attempt_id": str(job["attempt_id"]), **payload})
+            await active_job(conn, job["id"], job["attempt_id"], lock_trace_sequence=True)
+            await append_traces(conn, job["id"], [
+                (kind, {"attempt_id": str(job["attempt_id"]), **payload}),
+            ], trace_lock_held=True)
 
 
 async def _renew_lease(pool, job, *, budget=5.0):
