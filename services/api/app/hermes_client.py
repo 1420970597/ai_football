@@ -92,15 +92,16 @@ async def resolve_review_settings(settings, *, client=None):
                 or metadata.get('provider') != provider or not isinstance(metadata.get('provenance'), dict)
                 or metadata['provenance'].get('prompt_sha256') != local_prompt):
             raise RuntimeError('review configuration artifact provenance does not match worker')
-        token = value.get('consumption_token')
-        if not isinstance(token, str) or not 1 <= len(token) <= 4096:
-            raise RuntimeError('review configuration consumption token is missing')
-        response = await _configuration_request('post', settings.review_config_url.rstrip('/')+'/ack',
-            client=client, headers=headers,
-            json={'token': token, 'model': model or None, 'provider': provider, 'prompt_sha256': local_prompt})
-        ack = response.json()
-        if ack.get('accepted') is not True or ack.get('version') != metadata['version']:
-            raise RuntimeError('review configuration consumption was not acknowledged')
+        if metadata.get('consumption_acknowledged') is not True:
+            token = value.get('consumption_token')
+            if not isinstance(token, str) or not 1 <= len(token) <= 4096:
+                raise RuntimeError('review configuration consumption token is missing')
+            response = await _configuration_request('post', settings.review_config_url.rstrip('/')+'/ack',
+                client=client, headers=headers,
+                json={'token': token, 'model': model or None, 'provider': provider, 'prompt_sha256': local_prompt})
+            ack = response.json()
+            if ack.get('accepted') is not True or ack.get('version') != metadata['version']:
+                raise RuntimeError('review configuration consumption was not acknowledged')
     return FrozenReviewSettings(vars(settings) | {
         "hermes_model": model or settings.hermes_model,
         "runtime_model_override": bool(model), "configuration_version": version,

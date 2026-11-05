@@ -49,13 +49,22 @@ async def runtime_configuration(settings, connection=None) -> dict:
     quote_age = int(values.get("quote_max_age_seconds", getattr(settings, "quote_max_age_seconds", 15)))
     from .model_configuration import legacy_state
     state = governance or legacy_state(settings, values.get('hermes_analysis_model'))
+    active = state['active']
+    consumed = state.get('last_consumption')
+    acknowledged = (isinstance(consumed, dict)
+        and active['version'] in state.get('consumed_versions', [])
+        and consumed.get('consumer') == 'review_worker'
+        and consumed.get('version') == active['version']
+        and consumed.get('model') == active['model']
+        and consumed.get('provider') == active['provider']
+        and consumed.get('prompt_sha256') == active['provenance']['prompt_sha256'])
     snapshot = {"model": state['active']['model'],
                 "quote_max_age_seconds": quote_age}
     version = hashlib.sha256(json.dumps({**snapshot, 'model_version': state['active']['version']}, sort_keys=True).encode()).hexdigest()
     return {**snapshot, "configuration_version": version, 'model_configuration': {
         'version': state['active']['version'], 'revision': state['active']['revision'],
         'provider': state['active']['provider'], 'provenance': state['active']['provenance'],
-        'origin': state['active']['origin']}}
+        'origin': state['active']['origin'], 'consumption_acknowledged': acknowledged}}
 
 
 async def runtime_quote_max_age(settings, connection=None) -> int:

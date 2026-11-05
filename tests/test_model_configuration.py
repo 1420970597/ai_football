@@ -19,6 +19,74 @@ import test_identity as support
 
 @unittest.skipUnless(support.TEST_URL, 'requires isolated database')
 class ModelConfigurationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_consumed_snapshot_avoids_repeat_ack_and_new_version_requires_it(self):
+        transport = httpx.ASGITransport(app=self.app)
+        calls = []
+        async def handler(request):
+            calls.append((request.method, request.url.path))
+            return await transport.handle_async_request(request)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            first = await hermes_client.resolve_review_settings(self.app.state.settings, client=client)
+            before = await self.pool.fetchval('SELECT updated_at FROM v2_admin_settings WHERE setting_key=$1', models.STATE_KEY)
+            second = await hermes_client.resolve_review_settings(self.app.state.settings, client=client)
+            self.assertEqual(first.model_configuration_version, second.model_configuration_version)
+            self.assertEqual([('GET', '/internal/review/config'), ('POST', '/internal/review/config/ack'),
+                              ('GET', '/internal/review/config')], calls)
+            self.assertEqual(before, await self.pool.fetchval('SELECT updated_at FROM v2_admin_settings WHERE setting_key=$1', models.STATE_KEY))
+            candidate = await self.create()
+            await self.prepare(candidate)
+            self.assertEqual(200, (await self.call(candidate, 'activate')).status_code)
+            third = await hermes_client.resolve_review_settings(self.app.state.settings, client=client)
+            self.assertNotEqual(first.model_configuration_version, third.model_configuration_version)
+            self.assertEqual([('GET', '/internal/review/config'), ('POST', '/internal/review/config/ack')], calls[-2:])
+        self.assertEqual(2, await self.pool.fetchval("SELECT count(*) FROM v2_audit_log WHERE action='model_configuration_consumed'"))
+
+    async def test_acknowledged_flag_still_rejects_changed_prompt_and_old_api_repeats_ack(self):
+        transport = httpx.ASGITransport(app=self.app)
+        mode = 'original'
+        ack_calls = 0
+        async def handler(request):
+            nonlocal ack_calls
+            response = await transport.handle_async_request(request)
+            await response.aread()
+            if request.url.path.endswith('/ack'):
+                ack_calls += 1
+            elif request.method == 'GET' and mode != 'original':
+                value = response.json()
+                if mode == 'old_api':
+                    value['model_configuration'].pop('consumption_acknowledged', None)
+                else:
+                    value['model_configuration']['consumption_acknowledged'] = True
+                    value['model_configuration']['provenance']['prompt_sha256'] = '0' * 64
+                return httpx.Response(200, json=value, request=request)
+            return response
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await hermes_client.resolve_review_settings(self.app.state.settings, client=client)
+            self.assertEqual(1, ack_calls)
+            mode = 'old_api'
+            await hermes_client.resolve_review_settings(self.app.state.settings, client=client)
+            self.assertEqual(2, ack_calls)
+            mode = 'changed_prompt'
+            with self.assertRaisesRegex(RuntimeError, 'provenance'):
+                await hermes_client.resolve_review_settings(self.app.state.settings, client=client)
+            self.assertEqual(2, ack_calls)
+        self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_audit_log WHERE action='model_configuration_consumed'"))
+
+    async def test_incomplete_stored_receipt_does_not_suppress_ack(self):
+        from app.runtime_settings import runtime_configuration
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app)) as client:
+            await hermes_client.resolve_review_settings(self.app.state.settings, client=client)
+        state = await models.read_state(self.pool, self.app.state.settings)
+        self.assertTrue((await runtime_configuration(self.app.state.settings))['model_configuration']['consumption_acknowledged'])
+        for key in ('consumer', 'version', 'provider', 'model', 'prompt_sha256'):
+            altered = deepcopy(state)
+            altered['last_consumption'][key] = 'changed'
+            await models.save_state(self.pool, self.app.state.settings, altered)
+            self.assertFalse((await runtime_configuration(self.app.state.settings))['model_configuration']['consumption_acknowledged'], key)
+        state['consumed_versions'] = []
+        await models.save_state(self.pool, self.app.state.settings, state)
+        self.assertFalse((await runtime_configuration(self.app.state.settings))['model_configuration']['consumption_acknowledged'])
+
     async def test_lost_acknowledgement_recovers_without_double_consumption_audit(self):
         transport = httpx.ASGITransport(app=self.app)
         ack_calls = 0
