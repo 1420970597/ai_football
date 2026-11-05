@@ -9,13 +9,13 @@ import uuid
 import asyncpg
 
 from app.database import MIGRATIONS, apply_migrations, check_schema
-from tests.test_migrations import MigrationTests
+from tests import test_migrations
 
 
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'), 'requires isolated database')
 class MessageEventIndexTests(unittest.IsolatedAsyncioTestCase):
-    asyncSetUp = MigrationTests.asyncSetUp
-    asyncTearDown = MigrationTests.asyncTearDown
+    asyncSetUp = test_migrations.MigrationTests.asyncSetUp
+    asyncTearDown = test_migrations.MigrationTests.asyncTearDown
 
     async def prior_schema(self):
         with tempfile.TemporaryDirectory() as folder:
