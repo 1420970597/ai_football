@@ -23,3 +23,7 @@ c477eb03-14a5-483e-98f2-72af6f9a643f：原图相册为火鹰FC—铁虎FC上半0
 - E296发布后五phase及专家/会员/个人入口双端共16场景通过，e296-phase-artifacts-browser.exit0，截图/报告在e296-phase-evidence/output/playwright/。首次同样用例exit0但产物卷误挂/work，未保留截图；纠正/evidence后重跑产物完整，未用首轮截图不存在宣称证据齐全。
 
 最终窗口计数、源异常、API/桥错误及剩余任务将在实际截止后追加。若有任务未完成继续追踪，不能以HTTP200或容器exit0替代业务验收。E295远端预加载/预检查0、16文件与固定镜像一致，窗口结束前不切collector；E297冻结回归仍进行。
+
+08:07 UTC 最终窗口：07:33:28.254903—08:03:30.791809，56样本1802.5秒，watch/finalizer actual exit0，SHA1954a30d057d9b426c1809335b5f4e46e9568837ea8f292adb34ce5d06593762。27新帖23ready/4unsupported、189旧帖修订、217创建版本；23当前eligible全部同attempt回执、0缺失/在途。两条当前推荐各接受1项；另c0c75619町田泽维亚主让1.5@系统1.82，端到端84973.917ms/模型73002.931ms，须继续原图页面核验，不能仅模型文字验收。健康端点全200、无坏租约/退避采样，首TG unavailable状态仍保留，整体telegram_all_healthy=false。
+
+API692条events全部200，但07:45:00.524560892赛事批量入库出现一次TimeoutError（请求8ddb1ea7-3729-4c98-9163-177d0653dad8，ingest_fixture_batch:120），诊断明确execution_wait：5000ms预算、prepare0.012ms、execute5003.107ms，不是准备耗尽。远端桥3096条慢/失败记录中fixtures两次503：一次BrokenPipeError，下游回复3398.4ms；一次与上述API超时相关7357.2ms。不能宣称数据库错误0或网络根因修复，需继续有界锁/等待证据研究。
