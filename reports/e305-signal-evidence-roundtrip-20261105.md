@@ -9,3 +9,11 @@
 ## 定向验证（2026-11-05 09:37 UTC）
 
 cd3532f候选冻结，103项89.800秒actual exit0，5新增真实PG行为验证单SQL快照/原价与已读价区分、重复不改、证据触发器失败无孤立推荐、外层回滚、调用方事务要求；已有接口多推荐、当前价格/意图、期间、重复、未读/越权/租约及I/O重校验回归通过。证据e305-targeted-01.log/.exit。完整套件待E304结束后顺序执行，避免同时完整高负载测试。生产仍E300，未将候选当生效。
+
+## 完整冻结与仅API发布（2026-11-05 09:59 UTC）
+
+cd3532f56完整1392项674.450秒actual exit0、0失败错误跳过/源码true，SHA c50d56eb6bf8c74bf8cba4d680b32cb773f808f6d9f6072bf991c92db9fb500a，证据.runtime/e305-candidate/.runtime/test-evidence/2946135/backend-tests.json。API镜像35b8e779/完整源码标签和90文件精确核验actual0，预发布check0。09:53:05.598770暂停领取，09:53:08.878402自然idle持有；仅API09:53:36.122135541重建，ready/实际persist_signal与调用入口加载核验0，另外六个本地服务ID/启动时间/配置及所有预算不变，apply/gate均0并解除暂停。不重启实际worker/MCP/Hermes/远端采集器，不改结算算法或下注许可。
+
+首台账保护脚本actual1，不能覆盖：原snapshot错误排除了不存在的withdrawn_reason，遗漏实际withdrawal_reason。只读逐字段重建证明唯一差异e7538e9c-2134-45df-aa61-14372e2287bb于09:54:04 source_edited，源revision1已有revision2、旧源deleted_at与withdrawn_at相同；将当前withdrawal_reason还原null便与原完整immutable hash逐字相等。不是放弃校验：补验要求差异集合恰为该一个已验证源编辑，所有其它不可变字段/全部报价SHA/411旧ledger逐项保持，284原信号数量不变，actual0。原失败和e305-preservation-diagnostic.json保留，补验e305-ledger-protection-02.json。新snapshot-v2使用真实字段名，仅供后续同版本前后比较，不改旧证据。
+
+E30709:55:14.528373起新版完整30分钟；当前还没有新版窗口内的新自然推荐，不将代码加载和隔离验证称真实录入延迟通过。E306跨版本窗口已在API重建前持续归档旧API全部日志，期末必须合并新旧审计，不以新容器日志覆盖旧错误。
