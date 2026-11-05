@@ -11,3 +11,6 @@
 隔离执行计划对照：同一2000报价批次，四轮交替基线/候选、每次事务回滚，EXPLAIN ANALYZE BUFFERS仅在临时测试DB。相同报价执行中位49.903→12.739ms、shared hit8000→37、冲突2000→0；1%变化49.120→14.591ms、冲突2000→20；全变化90.036→96.653ms，有约7.3%回退；更旧55.007→14.247ms、冲突2000→0。这是小型热缓存样本，不代表生产端到端延迟。小表允许seq scan，因此另用生产只读EXPLAIN SELECT（无ANALYZE/无写入）核对293万报价规模：Nested Loop+v2_quotes_reference_unique Index Scan，无全表扫描，exit0。
 
 原始证据.runtime/e209-live/e300-targeted-01.exit/log、e300-quote-plan-probe-02.json/exit、e300-production-plan-read.json/exit。首次探针JSON类型解码错误exit1，修正探针后重跑0，业务未为此改变；一次向只读容器docker cp失败1，改用单次容器只读挂载，不修改生产容器。完整验证通过后，仍需原台账保护、准确镜像源码核对、等待E298整窗结束和自然idle单API发布，随后另启完整30分钟真实复验。收益不足、语义失败或新错误时保留记录并恢复前版镜像，不回滚原数据。
+# 发布范围修正（2026-11-05 08:37 UTC）
+
+E298实测发现E297回执过滤未随API更新到实际生成回执的review-worker。E300需在完整冻结通过及整窗终审后，自然idle下顺序发布API和review-worker，其他五服务保持不变；各自回退到API E297/worker E284。相对旧worker应用目录只有ingestion、result_check_queue、review_summary_evidence、routes/result_checks、routes/reviews五处已验证累计差异，worker主循环未变，保留并发2/实时下限2/历史并发0及模型配置。发布检查增加实际worker导入read_summary_evidence含quote证据恢复过滤，不再以API镜像为消费端生效证据。镜像d0360fbe、冻结34247a86、88应用迁移依赖文件精确核验exit0；完整回归仍进行中。
