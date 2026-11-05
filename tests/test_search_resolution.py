@@ -4,6 +4,7 @@ import uuid
 
 from app.review_completion import completion_issues
 import test_reviews as support
+from tests import test_review_tool_evidence as evidence_support
 
 
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'), 'requires isolated database')
@@ -15,6 +16,7 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
     fixture = support.ReviewTests.fixture
     read_market = support.ReviewTests.read_market
     resolve = support.ReviewTests.resolve
+    replay = evidence_support.ToolEvidenceAPITests.replay
 
     async def search(self, **kwargs):
         return await self.post('search_matches', team_query='Alpha', team_a='Alpha', team_b='Beta', **kwargs)
@@ -29,7 +31,10 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
         result = response.json()
         self.assertTrue(result['search_complete'])
         self.assertTrue(result['resolution']['resolved'])
-        self.assertEqual(fixture, result['resolution']['fixture']['fixture_id'])
+        payload, replayed = await self.replay('mcp_search_matches')
+        self.assertEqual(result, replayed)
+        self.assertIn(fixture, payload['response_snapshot']['references']['fixture_ids'])
+        self.assertEqual(fixture, result['resolution']['fixture']['id'])
         self.assertEqual(1, await self.bindings())
         quote = await self.read_market(fixture)
         recorded = await self.post('record_expert_signals', signals=[{
@@ -56,20 +61,20 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_match_searches'))
 
     async def test_no_binding_before_last_page_and_resolution_uses_all_pages(self):
-        target = await self.fixture('target')
-        await self.fixture('other', away_team='Gamma')
+        target = await self.fixture(1)
+        await self.fixture(2, away_team='Gamma')
         first = (await self.search(page_size=1)).json()
         self.assertFalse(first['search_complete'])
         self.assertEqual('search_not_complete', first['resolution']['reason'])
         self.assertEqual(0, await self.bindings())
         final = (await self.search(page_size=1, cursor=first['next_cursor'])).json()
         self.assertTrue(final['search_complete'])
-        self.assertEqual(target, final['resolution']['fixture']['fixture_id'])
+        self.assertEqual(target, final['resolution']['fixture']['id'])
         self.assertEqual(1, await self.bindings())
 
     async def test_bad_cursor_and_changed_attempt_never_bind(self):
-        await self.fixture('one')
-        await self.fixture('two', away_team='Gamma')
+        await self.fixture(1)
+        await self.fixture(2, away_team='Gamma')
         first = (await self.search(page_size=1)).json()
         bad = await self.search(page_size=1, cursor=first['next_cursor']+'x')
         self.assertIn(bad.status_code, (400, 409))
@@ -81,8 +86,8 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.bindings())
 
     async def test_ambiguous_and_wrong_opponent_never_bind(self):
-        await self.fixture('one')
-        await self.fixture('two')
+        await self.fixture(1)
+        await self.fixture(2, home_team='Alpha1', away_team='Beta1')
         ambiguous = (await self.search()).json()
         self.assertFalse(ambiguous['resolution']['resolved'])
         self.assertEqual('ambiguous_fixture', ambiguous['resolution']['reason'])
@@ -91,18 +96,18 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.bindings())
 
     async def test_league_scope_disambiguates_and_terminal_fixture_is_not_tradeable(self):
-        target = await self.fixture('target', competition_name='First League', phase='finished')
-        await self.fixture('other', competition_name='Other League')
+        target = await self.fixture(1, competition_name='First League', phase='finished')
+        await self.fixture(2, competition_name='Other League')
         response = (await self.search(competition_query='First League')).json()
-        self.assertEqual(target, response['resolution']['fixture']['fixture_id'])
+        self.assertEqual(target, response['resolution']['fixture']['id'])
         self.assertFalse(response['resolution']['fixture']['realtime_eligible'])
         market = await self.post('list_match_markets', fixture_id=target)
         self.assertEqual(409, market.status_code)
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
 
     async def test_permission_lost_between_pages_prevents_inline_binding(self):
-        await self.fixture('one')
-        await self.fixture('two', away_team='Gamma')
+        await self.fixture(1)
+        await self.fixture(2, away_team='Gamma')
         first = (await self.search(page_size=1)).json()
         await self.pool.execute('UPDATE v2_expert_sources SET enabled=false')
         response = await self.search(page_size=1, cursor=first['next_cursor'])

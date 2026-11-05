@@ -77,6 +77,8 @@ def snapshot_result(kind, result, *, compact_markets=False):
             _budget_error()
         value = _project(result, {'search_key', 'next_cursor', 'search_complete', 'total_candidates'})
         value['items'] = [_project(item, SEARCH_FIXTURE_FIELDS) for item in result['items']]
+        if 'resolution' in result:
+            value['resolution'] = snapshot_result('mcp_resolve_match', result['resolution'])
     elif kind == 'mcp_resolve_match':
         value = _project(result, {'resolved', 'reason', 'candidate_count'})
         if 'fixture' in result:
@@ -159,6 +161,8 @@ def _references(kind, wire):
     fixtures, quotes = set(), set()
     if kind == 'mcp_search_matches':
         fixtures.update(item['id'] for item in wire['items'])
+        if wire.get('resolution', {}).get('resolved'):
+            fixtures.add(wire['resolution']['fixture']['id'])
     elif kind == 'mcp_resolve_match' and wire.get('resolved'):
         fixtures.add(wire['fixture']['id'])
     elif kind == 'mcp_list_match_markets':
