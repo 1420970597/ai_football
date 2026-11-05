@@ -23,3 +23,7 @@
 发布预案：等待现有E314完整窗口结束及冻结全套实际0，核对候选镜像与完整commit后，仅API自然空闲门切换，实际worker/MCP/Hermes及其他六容器保持。API运行核验单事务分支、原原子持久化/结算算法和schema027。记录信号/原报价/结算不可变哈希，失败可恢复同schema027的E311 API，不回滚数据库、不使用旧026镜像。上线后另起独立1800秒，不将E314旧版本样本当优化结果。
 
 11:36耗时口径纠正：复核hermes_client.py，provider_elapsed_ms在请求Hermes /chat/completions前后计时，包含框架及工具，不是纯模型提供方推理。本报告前文“无工具审核provider8047.928ms”仍是Hermes HTTP，不能据此给模型最低延迟下界；“上游模型最低已测8秒”撤回，更正为该自然无工具样本Hermes HTTP约8秒。model_elapsed_ms同样是工作器整体审核流程。早先E281/E291已有此限制，本轮重新核对后保留纠正链。
+
+## 完整通过（2026-11-05 11:40 UTC）
+
+冻结全套1407项、unittest683.443秒、记录总685.952秒，actual0、0失败/错误/跳过，committed_source_verified=true。backend-tests路径.runtime/e315-candidate/.runtime/test-evidence/3175249/backend-tests.json，SHA abbbf6588268a1f0be2bac201ce4e922cc2ab99c6a0beca8d1a1252e3f4da951。候选未上线，E314最后采样41应审全部双回执，窗口尚未结束；部署检查明确要求E314归档及10浏览器点击实际0，不使用未完成标记作通过。
