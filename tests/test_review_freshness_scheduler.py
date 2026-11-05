@@ -64,6 +64,71 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def complete(self,job):
         await self.pool.execute("UPDATE v2_analysis_jobs SET state='unresolved',lease_until=NULL WHERE id=$1",job['id'])
 
+    async def test_waiting_fresh_message_precedes_repeated_new_arrivals(self):
+        pair = await self.pair()
+        waiting = (await self.queued(pair, age=120))[0]
+        await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '90 seconds' WHERE id=$1", waiting)
+        await self.queued(pair, age=1, count=5)
+        job = await worker.claim_job(self.pool)
+        self.assertEqual(waiting, job['id'])
+        self.assertEqual('fresh_real_time', job['scheduler_lane'])
+        receipt = await self.pool.fetchval("SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='attempt_claimed'", waiting)
+        self.assertEqual(60, receipt['fresh_aging_threshold_seconds'])
+
+    async def test_recent_queue_stays_newest_first_before_aging_threshold(self):
+        pair = await self.pair()
+        older = (await self.queued(pair, age=120))[0]
+        newest = (await self.queued(pair, age=1))[0]
+        await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '30 seconds' WHERE id=$1", older)
+        self.assertEqual(newest, (await worker.claim_job(self.pool))['id'])
+
+    async def test_at_threshold_waiting_message_is_eligible_for_aging_priority(self):
+        pair = await self.pair()
+        waiting = (await self.queued(pair, age=120))[0]
+        await self.queued(pair, age=1)
+        await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=statement_timestamp()-interval '60 seconds' WHERE id=$1", waiting)
+        self.assertEqual(waiting, (await worker.claim_job(self.pool))['id'])
+
+    async def test_aged_queues_keep_source_round_robin_instead_of_draining_one_group(self):
+        pairs = [await self.pair() for _ in range(3)]
+        waiting = []
+        for pair in pairs:
+            job = (await self.queued(pair, age=120))[0]
+            waiting.append(job)
+            await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '90 seconds' WHERE id=$1", job)
+            await self.queued(pair, age=1, count=3)
+        seen = []
+        for _ in pairs:
+            job = await worker.claim_job(self.pool)
+            self.assertIn(job['id'], waiting)
+            seen.append(job['source_id'])
+            await self.complete(job)
+        self.assertEqual({pair[0] for pair in pairs}, set(seen))
+
+    async def test_oldest_waiting_fresh_job_wins_without_promoting_older_lane(self):
+        pair = await self.pair()
+        old_lane = (await self.queued(pair, age=worker.FRESH_PRIORITY_WINDOW_SECONDS+120))[0]
+        first = (await self.queued(pair, age=150))[0]
+        second = (await self.queued(pair, age=180))[0]
+        await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '4 hours' WHERE id=$1", old_lane)
+        await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '100 seconds' WHERE id=$1", first)
+        await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '80 seconds' WHERE id=$1", second)
+        await self.queued(pair, age=1)
+        job = await worker.claim_job(self.pool)
+        self.assertEqual(first, job['id'])
+        await self.complete(job)
+        self.assertEqual(second, (await worker.claim_job(self.pool))['id'])
+        self.assertEqual('queued', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', old_lane))
+
+    async def test_expired_running_attempt_precedes_waiting_fresh_queue(self):
+        pair = await self.pair()
+        waiting = (await self.queued(pair, age=120))[0]
+        await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '90 seconds' WHERE id=$1", waiting)
+        expired = (await self.queued(pair, age=1, state='running', attempts=1))[0]
+        job = await worker.claim_job(self.pool)
+        self.assertEqual(expired, job['id'])
+        self.assertEqual(2, job['attempts'])
+
     async def test_turn_progress_is_global_and_atomic_when_expert_update_fails(self):
         source, expert = await self.pair()
         await self.pool.execute('INSERT INTO v2_review_source_schedule(source_id,last_turn) VALUES($1,11)', source)

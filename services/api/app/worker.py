@@ -37,6 +37,7 @@ REVIEW_TIMEOUT = max(60, min(1800, int(os.environ.get("REVIEW_TIMEOUT_SECONDS", 
 CLAIM_TIMEOUT_SECONDS = 30
 SCHEDULER_LOCK = 'platform-v2-review-fair-scheduler'
 MAX_PAIR_PROBES = 8
+FRESH_AGING_THRESHOLD_SECONDS = 60
 EXHAUSTED_BATCH_SIZE = 100
 # Posting age controls audit scheduling, not whether a match is prematch/live.
 # Historical replay preserves the original text and may not create live signals.
@@ -133,6 +134,14 @@ def _lane_condition(mode, realtime_parameter='$2', fresh_parameter='$3'):
 
 async def _claim_from_lane(conn, mode):
     lane = _lane_condition(mode)
+    # Keep the lane's original posting-age eligibility. Within that lane,
+    # sustained newer arrivals must not repeatedly overtake an already waiting
+    # message. Running lease recovery still sorts before either queued group.
+    waiting_order = (
+        "CASE WHEN j.state<>'running' AND j.created_at<=statement_timestamp()"
+        f"-({FRESH_AGING_THRESHOLD_SECONDS}*interval '1 second') THEN j.created_at END ASC NULLS LAST,"
+        if mode == 'fresh_real_time' else ''
+    )
     persistent_pair_retry = _persistent_retry_condition('j', '$5')
     for probe in range(MAX_PAIR_PROBES):
         pair = await conn.fetchrow(
@@ -164,7 +173,7 @@ async def _claim_from_lane(conn, mode):
             " OR (j.state IN('queued','retry','failed') AND j.available_at<=statement_timestamp())) AND " + ELIGIBLE_MESSAGE +
             " ORDER BY (j.state='running') DESC,"
             "CASE WHEN j.state='running' THEN j.lease_until END NULLS FIRST,"
-            "CASE WHEN j.state='running' THEN j.created_at END,"
+            "CASE WHEN j.state='running' THEN j.created_at END," + waiting_order +
             "CASE WHEN j.state<>'running' THEN j.message_posted_at END DESC,"
             "CASE WHEN j.state<>'running' THEN j.available_at END,j.created_at,j.id "
             'LIMIT 1 FOR UPDATE OF j SKIP LOCKED',
@@ -265,6 +274,7 @@ async def _claim_job(pool):
                 'active_expert_leases_before': pair['active_leases'], 'scheduler_turn': turn, 'pair_probes': probes,
                 'review_mode': mode, 'scheduler_lane': scheduler_lane,
                 'fresh_priority_window_seconds': FRESH_PRIORITY_WINDOW_SECONDS,
+                'fresh_aging_threshold_seconds': FRESH_AGING_THRESHOLD_SECONDS,
                 'realtime_window_seconds': REALTIME_WINDOW_SECONDS,
                 'message_age_seconds': max(0, round((datetime.now(timezone.utc)-message['posted_at']).total_seconds(),3)),
                 'queue_wait_ms': max(0, round((datetime.now(timezone.utc) - message['created_at']).total_seconds() * 1000, 3)),
