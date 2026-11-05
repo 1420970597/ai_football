@@ -13,3 +13,5 @@
 失败处理：记录原失败/截图，未过不切web；必要时仅回退本项目web镜像，不改变API/collector/Hermes和远端台账。
 
 07:46 UTC：冻结0a3d209，真实浏览器1440/390两个确定竞态场景actual exit0。真实接口先取得200后暂扣第二详情响应，明确把第一次close延到第二弹窗open=true才投递；释放响应后6→4→6推荐、正确新URL/回执、Tab焦点在弹窗内、Escape/正常关闭均通过。候选两模块仅在测试浏览器内替换，生产web尚未变；证据e296-browser-output/dialog-reopen.json。准备固定源码web镜像及逐资源核验，再仅切web并重跑原失败用例。
+
+07:53 UTC 发布与原用例验收：仅web切f26b2ff370c5736a7a011aa421b4bce7de8a274fc77b82ec3a3030e76ec37dae，镜像源码0a3d2096b494c4a2a0d47b57051216f8fc07644c，静态资源/配置逐项一致，apply/nginx/健康exit0；其他六服务ID、环境、预算不变。原六+四推荐双端用例第一次上线后重跑在登录阶段429失败，未触碰限流；等待当前窗口后重跑，4场景actual exit0，6/4推荐、同attempt回执、当前未开赛及无横向溢出通过，e296-live-session-output/natural-clicks.json。成功会话仅保存在受保护本地.runtime供后续只读测试复用，不提交或输出；原失败证据不覆盖。此次实际修复的是迟到close导致的新详情失效，未声称消除所有网络故障。
