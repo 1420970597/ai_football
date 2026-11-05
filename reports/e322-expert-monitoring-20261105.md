@@ -17,3 +17,5 @@
 13:07 UTC：受限原会话Docker Playwright只读验证桌面1440/手机390共2点击actual0；逐项核对12比赛/市场/期间/盘口线/方向、12卡片、无页面异常或横向溢出。实际汇总两端仍7项且属于首轮e93355e3，明确记录fully_completed=false，不修改既存回执；证据e322-multimatch-output/multimatch-clicks.json及截图。已阅读Playwright技能并核对固定浏览器镜像中npx可用，使用项目现有脚本方式，不新增依赖。
 
 13:24 UTC窗口后跟进：第四attempt7b31f6b4于13:12:26领取，13:20:51模型完成、13:20:52.720673同attempt系统回执accepted_count12、任务succeeded，累计12信号均保留。事件至结论3165536.507ms（约52.76分钟，含三轮恢复和交接维护等待），不能以最终成功宣称速度正常；E322截止时的在途状态和错误仍原样保留。后续真实浏览器复查当前12项汇总，不改原失败或旧7项回执。
+
+13:31 UTC：第四轮收尾后真实Docker浏览器桌面/手机共2点击0，页面已接受12、当前比赛phase全部scheduled，最新Hermes/system_summary同attempt、completion_verified=true、卡片数量一致且无页面错误/溢出。文本消息无图片，不能将本次计为图片测试；前一双推荐的宣传图视检证据独立。证据e322-complete-browser-output/natural-clicks.json。该消息审核完整性现已恢复，52.76分钟延迟问题继续由E320/E324修正验证。
