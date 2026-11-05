@@ -165,6 +165,52 @@ class IndependentQuoteIngestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await self.pool.fetchval('SELECT source_updated_at FROM v2_fixtures'))
         self.assertIsNone(await self.pool.fetchval('SELECT source_updated_at FROM v2_current_quotes'))
 
+    async def test_identical_or_older_quote_does_not_wait_for_unrelated_quote_row_lock(self):
+        initial = self.snapshot(-10, -5)
+        self.assertEqual(200, (await self.post(initial)).status_code)
+        before = await self.pool.fetchrow('SELECT id,price,source_updated_at,received_at,xmin::text FROM v2_current_quotes')
+        async with self.pool.acquire() as blocker:
+            async with blocker.transaction():
+                await blocker.fetch('SELECT id FROM v2_current_quotes FOR UPDATE')
+                for older in (False, True):
+                    incoming = copy.deepcopy(initial)
+                    incoming['received_at'] = datetime.now(timezone.utc).isoformat()
+                    incoming['markets'][0]['received_at'] = incoming['received_at']
+                    if older:
+                        incoming['markets'][0]['source_updated_at'] = (datetime.now(timezone.utc)-timedelta(minutes=1)).isoformat()
+                        incoming['markets'][0]['price'] = '2.50'
+                    response = await asyncio.wait_for(self.post(incoming), 2)
+                    self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(before, await self.pool.fetchrow('SELECT id,price,source_updated_at,received_at,xmin::text FROM v2_current_quotes'))
+
+    async def test_quote_changed_after_prefilter_still_rechecks_monotonic_conflict(self):
+        initial = self.snapshot(-20, -30)
+        self.assertEqual(200, (await self.post(initial)).status_code)
+        incoming = self.snapshot(-10, -10)
+        incoming['markets'][0]['price'] = '2.05'
+        blocker = await self.pool.acquire()
+        transaction = blocker.transaction()
+        await transaction.start()
+        task = None
+        try:
+            committed_at = datetime.now(timezone.utc)-timedelta(seconds=1)
+            await blocker.execute("UPDATE v2_current_quotes SET price=2.20,source_updated_at=$1", committed_at)
+            task = asyncio.create_task(self.post(incoming))
+            with self.assertRaises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(task), .1)
+            await transaction.commit()
+            response = await asyncio.wait_for(task, 5)
+            self.assertEqual(200, response.status_code, response.text)
+            actual = await self.pool.fetchrow('SELECT price,source_updated_at FROM v2_current_quotes')
+            self.assertEqual((Decimal('2.20'), committed_at), tuple(actual.values()))
+        finally:
+            if blocker.is_in_transaction():
+                await transaction.rollback()
+            await self.pool.release(blocker)
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
     async def test_concurrent_confirmed_result_lock_prevents_inflight_quote_reopening(self):
         self.assertEqual(200,(await self.post(self.snapshot(-20,-30))).status_code)
         blocker=await self.pool.acquire()
