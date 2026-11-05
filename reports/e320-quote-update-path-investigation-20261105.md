@@ -11,3 +11,7 @@
 12:27 UTC隔离草案对照actual0，具名临时PG、2000报价、每情形四轮交替执行并回滚。现有/草案执行中位：完全相同16.317/16.5605ms；1%变化14.6215/17.677ms（约20.9%回退）；全变化167.7335/71.208ms（约57.5%改善），shared hit49514.5→3056；更旧17.3955/26.409ms（约51.8%回退）。这是小型热缓存样本，不证明生产冷盘吞吐。草案把变化存量UPDATE与缺失INSERT放同一数据修改CTE，保持最终ON CONFLICT重验；尚无应用代码或生产写路径变化。
 
 新等待采样12:19:58.531153起600秒进行中，暂捕获一次非报价分类的DataFileRead .471秒和transactionid等待1.423秒，不替12:19:22的quote失败定因。下一步先独立职责拆分和行为测试，特别null/zero唯一碰撞必须显式拒绝，原API身份/租约/时钟/终态保护不变；评估低变化回退及生产只读计划后再决定采用。
+
+12:35 UTC：采样201/600.147秒actual0，12:26:19.702/22.685 backend3404429 quote_upsert实际IO/DataFileRead，持续1.036/4.036秒、无阻塞PID；12:26:24.548请求0d483589同PID/ingestion135执行5000.875ms超时，支持本次报价磁盘读取等待，而非推测锁等待。其他IO/transactionid样本独立保留。生产readonly SELECT EXPLAIN对1/2000输入均使用v2_quotes_reference_unique Index Scan、无写入/无ANALYZE，actual0。
+
+隔离候选482083d：SQL拆入quote_ingestion，以同一固定字段及单调条件生成存量UPDATE和缺失INSERT ON CONFLICT；固定quote_id。输入引用校验对齐数据库coalesce(line,0)拒绝null/zero双重目标。新增5个PG行为覆盖混合更新插入/无变xmin、冲突输入拒绝、整批回滚、并发已存在新版本及并发新插入重验；定向50/30.373秒actual0。候选冻结完整1418预计运行中，未发布、未改被测代码。
