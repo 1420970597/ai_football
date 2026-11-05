@@ -330,11 +330,24 @@ async def _refresh_bound_market(body: MarketInput, request: Request, *, force: b
                 elif total_quotes and any(value is not None for value in filters.values()):
                     return {'attempted': False, 'reason': 'no_quotes_for_filter'}
             source_match_id = fixture['source_id']
+    return await _request_market_refresh(body.fixture_id, source_match_id, request)
+
+
+async def _request_market_refresh(fixture_id: str, source_match_id: str, request: Request) -> dict:
+    """I/O only, after this call's transaction validated the bound active fixture.
+
+    Callers must revalidate the attempt and quote after I/O before recording.
+    Never retain a connection, permission witness or observation across calls.
+    """
+    settings = request.app.state.settings
+    url = getattr(settings, 'market_refresh_url', '')
+    if not url:
+        return {'attempted': False, 'reason': 'refresh_unconfigured'}
     try:
         async with asyncio.timeout(9):
             async with httpx.AsyncClient(timeout=httpx.Timeout(8.5, connect=2), trust_env=False, follow_redirects=False) as client:
                 response = await client.post(url, headers={'Authorization': 'Bearer ' + settings.collector_token},
-                    json={'fixture_id': body.fixture_id, 'source_match_id': source_match_id})
+                    json={'fixture_id': fixture_id, 'source_match_id': source_match_id})
                 response.raise_for_status()
                 value = response.json()
         if not isinstance(value, dict) or type(value.get('accepted')) is not bool:
@@ -404,19 +417,27 @@ async def record_expert_signals(body: RecordInput, request: Request):
                     'SELECT q.*,f.id AS fixture_identity,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context '
                     'FROM v2_current_quotes q JOIN v2_fixtures f ON f.id=q.fixture_id '
                     'JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 '
-                    'WHERE q.id=ANY($3::uuid[])', body.review_id, body.attempt_id, [p.quote_id for p in body.signals])
+                    'JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 '
+                    'JOIN (SELECT DISTINCT fixture_id,quote_id FROM unnest($3::text[],$4::uuid[]) AS pairs(fixture_id,quote_id)) wanted '
+                    'ON wanted.fixture_id=q.fixture_id AND wanted.quote_id=q.id',
+                    body.review_id, body.attempt_id,
+                    [p.fixture_id for p in body.signals], [p.quote_id for p in body.signals])
                 max_age = await runtime_quote_max_age(request.app.state.settings, conn)
                 reusable_age = max(0, max_age-QUOTE_CONFIRMATION_WRITE_HEADROOM_SECONDS)
-                stale_fixtures = {q['fixture_id'] for q in rows if q['phase'] in {'scheduled', 'live'} and q['status'] == 'active' and not fresh_quote(q, reusable_age) and not confirmation_for(
+                stale_fixtures = {q['fixture_id']: q['source_id'] for q in rows if q['phase'] in {'scheduled', 'live'} and q['status'] == 'active' and not fresh_quote(q, reusable_age) and not confirmation_for(
                     q['read_context'].get('current_confirmation'), q, dict(q) | {'id': q['fixture_identity']}, reusable_age)}
             else:
-                stale_fixtures = set()
+                stale_fixtures = {}
     # Shared collector budget still coalesces and limits provider calls. Do not
     # hold the database transaction during I/O or extend a terminated lease.
     for fixture_id in sorted(stale_fixtures):
         if len(observations) >= 4:
             break
-        refreshed = await _refresh_bound_market(MarketInput(review_id=body.review_id, attempt_id=body.attempt_id, fixture_id=fixture_id), request, force=True)
+        # The preceding transaction already checked this exact requested pair,
+        # its read receipt, current binding and active phase. Repeating that
+        # transaction before the same I/O adds WAN round trips without making
+        # the final post-I/O validation any stronger.
+        refreshed = await _request_market_refresh(fixture_id, stale_fixtures[fixture_id], request)
         observations[fixture_id] = refreshed.get('_observation')
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
