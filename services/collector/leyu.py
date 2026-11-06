@@ -262,6 +262,24 @@ class LeyuClient:
         else:
             fixture.pop("collection_error", None)
 
+    @staticmethod
+    def _single_match_rows(details: Any, mid: str) -> list:
+        rows = details.get("data") if isinstance(details, Mapping) and "data" in details else details
+        if isinstance(rows, Mapping):
+            rows = [rows]
+        if not isinstance(rows, list):
+            raise LeyuError("invalid_single_match_odds_rows")
+        play_data = details.get("playData", []) if isinstance(details, Mapping) else []
+        if not isinstance(play_data, list) or len(play_data) > 500:
+            raise LeyuError("invalid_single_match_play_data")
+        verified = [block for block in play_data if isinstance(block, Mapping)
+                    and str(block.get("mid")) == mid
+                    and str(block.get("hpid")) in {"10", "11"}
+                    and str(block.get("chpid")) == str(block.get("hpid"))]
+        return [dict(row, _verified_team_play_data=verified)
+                if isinstance(row, Mapping) and str(row.get("mid")) == mid
+                and str(row.get("csid")) == "1" else row for row in rows]
+
     async def fetch_match(self, source_match_id: str, *, fixture: Mapping[str, Any]) -> dict[str, Any]:
         """One existing, bound match detail request; never fetch the station or renew login."""
         mid = self.validate_match_id(source_match_id)
@@ -277,11 +295,7 @@ class LeyuClient:
                 "cuid": self.cuid, "cos": 0, "orpt": 0, "euid": "3020101",
                 "mid": mid, "mcid": 0, "newUser": 0,
             })
-        rows = details.get("data") if isinstance(details, Mapping) and "data" in details else details
-        if isinstance(rows, Mapping):
-            rows = [rows]
-        if not isinstance(rows, list):
-            raise LeyuError("invalid_single_match_odds_rows")
+        rows = self._single_match_rows(details, mid)
         matches = [row for row in rows if isinstance(row, Mapping) and str(row.get("mid")) == mid]
         if len(matches) != 1:
             raise LeyuError("fixture_detail_missing" if not matches else "ambiguous_fixture_detail")
@@ -360,11 +374,7 @@ class LeyuClient:
                     raise limited
                 details = await self._request(client, "POST", DEFAULT_MATCH_ODDS_PATH, json=body)
                 single_match_fallbacks += 1
-                rows = details.get("data") if isinstance(details, Mapping) and "data" in details else details
-                if isinstance(rows, Mapping):
-                    rows = [rows]
-                if not isinstance(rows, list):
-                    raise LeyuError("invalid_single_match_odds_rows")
+                rows = self._single_match_rows(details, mid)
                 return next((row for row in rows if isinstance(row, Mapping) and str(row.get("mid")) == mid), None)
 
             async def fetch_batch(batch: list[str]) -> None:

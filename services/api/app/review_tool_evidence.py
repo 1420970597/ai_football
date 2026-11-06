@@ -38,7 +38,7 @@ QUOTE_FIELDS = frozenset({
     'id', 'fixture_id', 'market_id', 'market_name', 'period', 'market_kind', 'line', 'selection', 'price',
     'source_updated_at', 'received_at', 'source_time_quality', 'status', 'play_id', 'market_instance_id',
     'selection_id', 'is_main', 'score_basis', 'quote_id', 'fresh', 'confirmed_current', 'can_record',
-    'line_basis', 'selection_line',
+    'line_basis', 'selection_line', 'team_side',
 })
 # Native lookup identifiers and receipt metadata remain in the database/read
 # evidence; the model identifies each complete option by quote_id. Keep the
@@ -47,7 +47,7 @@ MODEL_QUOTE_FIELDS = QUOTE_FIELDS - {
     'id', 'fixture_id', 'market_id', 'play_id', 'market_instance_id', 'selection_id',
     'price', 'source_updated_at', 'received_at', 'source_time_quality', 'is_main',
 }
-ACCEPTED_FIELDS = frozenset({'index', 'signal_id', 'duplicate', 'fixture_id', 'market_name', 'period', 'line', 'selection', 'price', 'line_basis', 'selection_line'})
+ACCEPTED_FIELDS = frozenset({'index', 'signal_id', 'duplicate', 'fixture_id', 'market_name', 'period', 'line', 'selection', 'price', 'line_basis', 'selection_line', 'team_side'})
 REJECTED_FIELDS = frozenset({'index', 'reason'})
 log = logging.getLogger(__name__)
 

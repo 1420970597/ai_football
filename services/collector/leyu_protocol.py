@@ -33,6 +33,10 @@ MARKETS = {
 # selection codes were verified from an authorized current detail response.
 # Do not recognize them for football, an unknown sport, or a missing csid.
 SPORT_MARKETS = {
+    "1": {
+        "10": ("team_total", "full_time", "主队进球大小"),
+        "11": ("team_total", "full_time", "客队进球大小"),
+    },
     "2": {
         "38": ("total", "full_time", "全场大小"),
         "39": ("handicap", "full_time", "全场让分"),
@@ -281,6 +285,12 @@ def parse_quotes(payload: Any, fixture_id: str, updated_at: datetime | None = No
         sport_markets = SPORT_MARKETS.get(str(row.get("csid") or ""), {})
         definitions = {str(item.get("chpid")): item for item in objects(row.get("hpsPns", []))}
         containers = objects(row.get("hpsData", [])) or [row]
+        # The authoritative single-match response also carries playData next
+        # to data. Only the caller's same-match, verified native markets enter
+        # this extra container. Their main/additional status is not attested.
+        supplementary = objects(row.get("_verified_team_play_data", []))
+        if supplementary:
+            containers = [*containers, {"hpsAdd": supplementary}]
         for container in containers:
             for key in ("hps", "hpsAdd"):
                 for block in objects(container.get(key, [])):
@@ -290,6 +300,8 @@ def parse_quotes(payload: Any, fixture_id: str, updated_at: datetime | None = No
                     definition = definitions.get(market_id, {})
                     kind, period, default_name = sport_markets.get(
                         market_id, MARKETS.get(market_id, ("unsupported", f"source_{market_id}", market_id)))
+                    if kind == "team_total" and str(block.get("hpid")) != market_id:
+                        kind, period = "unsupported", f"source_{market_id}"
                     name = str(definition.get("hpn") or block.get("hpn") or default_name)
                     for line in objects(block.get("hl", [])):
                         raw_line = line.get("hv", line.get("line"))
@@ -304,6 +316,8 @@ def parse_quotes(payload: Any, fixture_id: str, updated_at: datetime | None = No
                             selection_raw = str(option.get("ot") or "")
                             selection = {"1": "home", "2": "away", "X": "draw", "Over": "over", "Under": "under"}.get(selection_raw)
                             if not selection:
+                                continue
+                            if kind == "team_total" and selection not in {"over", "under"}:
                                 continue
                             try:
                                 price = Decimal(str(option.get("ov", ""))) / ODDS_SCALE

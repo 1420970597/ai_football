@@ -26,6 +26,7 @@ from ..review_search_scope import continuation_scope, scope_key
 from ..signal_persistence import persist_signals
 from ..review_resolution import resolve_candidates
 from ..review_market_query import market_filters
+from ..team_totals import team_total_terms
 
 router = APIRouter(prefix="/internal/mcp")
 
@@ -326,7 +327,8 @@ async def _market_read_result(conn, body, fixture, total_quotes, quotes, max_age
                 'returned_quotes': len(quotes), 'complete_for_filter': True}
     result = {'fixture': dict(fixture), 'markets': [dict(q) | {'quote_id': str(q['id']),
               'fresh': fresh_quote(q, max_age), 'confirmed_current': bool(confirmations[q['id']]),
-              'can_record': fresh_quote(q, max_age) or bool(confirmations[q['id']])} for q in quotes],
+              'can_record': fresh_quote(q, max_age) or bool(confirmations[q['id']]),
+              'team_side': team_total_terms(q, fixture['id']).get('team_side')} for q in quotes],
               'refresh': refresh, 'market_filter': market_filter, 'market_coverage': coverage}
     return await tool_success(conn, body, result, {'fixture_id': body.fixture_id,
         'quote_ids': [str(q['id']) for q in quotes], 'refresh': refresh,
@@ -381,7 +383,8 @@ async def list_match_markets(body: MarketInput, request: Request):
                 reason = 'historical_review_not_current'
             elif quotes and all(fresh_quote(quote, max_age) for quote in quotes):
                 reason = 'quotes_already_fresh'
-            elif not quotes and total_quotes and any(value is not None for value in filters.values()):
+            elif (not quotes and total_quotes and any(value is not None for value in filters.values())
+                  and not (fixture['sport'] == 'football' and filters['market_kind'] == 'team_total')):
                 reason = 'no_quotes_for_filter'
             if reason:
                 return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age,
@@ -451,6 +454,8 @@ async def _record_current_signals(conn, body, request, observations):
             reason = 'quote_or_score_context_changed'
         elif quote["phase"] not in {"scheduled", "live"}:
             reason = "fixture_not_active"
+        elif quote['market_kind'] == 'team_total' and not team_total_terms(quote, quote['fixture_id']):
+            reason = 'team_total_native_identity_unknown'
         elif not fresh_quote(quote, max_quote_age) and not confirmation:
             reason = "quote_inactive_unknown_or_stale"
         if reason:
@@ -460,7 +465,7 @@ async def _record_current_signals(conn, body, request, observations):
     saved = await persist_signals(conn, job=job, attempt_id=body.attempt_id,
                                  entries=[(quote, pick, confirmation) for _, quote, pick, confirmation in valid])
     for (index, quote, _, _), result in zip(valid, saved):
-        accepted.append({"index": index, "signal_id": str(result['id']), "duplicate": result['duplicate'], "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(result['price']), **line_terms(quote)})
+        accepted.append({"index": index, "signal_id": str(result['id']), "duplicate": result['duplicate'], "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(result['price']), **line_terms(quote), **team_total_terms(quote, quote['fixture_id'])})
     result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
     return await tool_success(conn, body, result, result)
 

@@ -119,13 +119,16 @@ def settle(signal: dict, result: dict) -> Settlement:
             return pending("unsupported_selection")
         won = (home > away and selection == "home") or (away > home and selection == "away") or (home == away and selection == "draw")
         return Settlement("win" if won else "loss", price - ONE if won else -ONE, ONE, "three_way_winner" + reason_suffix)
-    if kind not in {"handicap", "total"}:
+    if kind not in {"handicap", "total", "team_total"}:
         return pending("unsupported_market")
+    team_side = signal.get('team_side')
+    if kind == 'team_total' and team_side not in {'home', 'away'}:
+        return pending('team_total_side_unknown')
     if (line * 4) != (line * 4).to_integral_value():
         return pending("unsupported_line_increment")
-    if kind == "handicap" and selection not in {"home", "away"} or kind == "total" and selection not in {"over", "under"}:
+    if kind == "handicap" and selection not in {"home", "away"} or kind in {"total", "team_total"} and selection not in {"over", "under"}:
         return pending("unsupported_selection")
-    if kind == "total" and line < 0:
+    if kind in {"total", "team_total"} and line < 0:
         return pending("invalid_total_line")
     # line 是所选方的让受让，不能把客队线再次反号。
     lower = (line / HALF).to_integral_value(rounding=ROUND_FLOOR) * HALF
@@ -135,7 +138,8 @@ def settle(signal: dict, result: dict) -> Settlement:
         if kind == "handicap":
             margin = (home - away if selection == "home" else away - home) + part
         else:
-            margin = home + away - part
+            goals = home if team_side == 'home' else away
+            margin = (goals if kind == 'team_total' else home + away) - part
             if selection == "under":
                 margin = -margin
         returns.append(price - ONE if margin > 0 else -ONE if margin < 0 else ZERO)

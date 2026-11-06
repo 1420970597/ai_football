@@ -125,6 +125,29 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, result.status_code, result.text)
         return result.json()["markets"][0]
 
+    async def test_native_team_totals_keep_sides_read_binding_and_idempotent_prices(self):
+        markets=[{'market_id':mid,'market_name':name,'kind':'team_total','period':'full_time',
+                  'line':'1.75','selection':'over','price':price,'source_updated_at':self.now.isoformat(),
+                  'received_at':self.now.isoformat(),'play_id':mid,'market_instance_id':'instance-'+mid,
+                  'selection_id':'option-'+mid,'score_basis':'full_period'}
+                 for mid,name,price in (('10','Alpha1进球大小','1.95'),('11','Beta1进球大小','2.05'))]
+        fixture_id=await self.fixture(id='leyu:5715236',markets=markets)
+        key,_=await self.search_all();await self.resolve(key)
+        read=await self.post('list_match_markets',fixture_id=fixture_id,market_kind='team_total')
+        self.assertEqual(200,read.status_code,read.text)
+        quotes=read.json()['markets'];self.assertEqual({'home','away'},{q['team_side']for q in quotes})
+        self.assertTrue(all(q['can_record']for q in quotes))
+        self.assertEqual(0,len((await self.post('list_match_markets',fixture_id=fixture_id,market_kind='total')).json()['markets']))
+        picks=[{'fixture_id':fixture_id,'quote_id':q['quote_id'],'evidence_text':'该队进球大1.75'}for q in quotes]
+        first=await self.post('record_expert_signals',signals=picks)
+        self.assertEqual(200,first.status_code,first.text);self.assertEqual(2,len(first.json()['accepted']))
+        again=await self.post('record_expert_signals',signals=picks)
+        self.assertTrue(all(item['duplicate']for item in again.json()['accepted']))
+        self.assertEqual({'1.95','2.05'},{str(Decimal(item['price']).normalize())for item in again.json()['accepted']})
+        self.assertEqual(2,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals WHERE message_id=$1',self.message))
+        evidence=await self.pool.fetch("SELECT evidence FROM v2_quote_evidence WHERE evidence_kind='expert_signal'")
+        self.assertEqual({'home','away'},{r['evidence']['team_side']for r in evidence})
+
     async def test_bound_fixture_read_preserves_native_fixture_fields(self):
         fixture_id = await self.fixture()
         key, _ = await self.search_all()

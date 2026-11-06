@@ -11,8 +11,9 @@ from .expert_statistics import QUOTE_VALID_SQL
 from .settlement import pending, settle
 from .handicap_lines import line_basis
 from .score_rules import settlement_rule
+from .team_totals import team_total_terms
 
-ALGORITHM_VERSION = 'football-asian-6-leyu-period-totals'
+ALGORITHM_VERSION = 'football-asian-7-native-team-totals'
 
 
 def result_facts(row):
@@ -33,7 +34,8 @@ async def project_settlements(conn, fixture, version, facts):
         inputs = {'sport': fixture['sport'], 'kind': row['market_kind'], 'period': row['period'],
                   'phase': row['phase'], 'price': str(row['recommendation_price']), 'line': str(row['line']) if row['line'] is not None else None,
                   'selection': row['selection'], 'score_basis': row['score_basis'], 'score_baseline': row['score_baseline'],
-                  'line_basis': line_basis(row, fixture['id'])}
+                  'line_basis': line_basis(row, fixture['id']),
+                  **team_total_terms(row, fixture['id'])}
         rule = settlement_rule(fixture, row)
         value = settle(inputs, facts) if row['quote_valid'] else pending('recommendation_quote_evidence_missing_or_mismatched')
         calculation = {'signal': inputs, 'result': facts}

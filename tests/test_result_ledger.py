@@ -70,6 +70,24 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
     async def submit(self, body):
         return await self.client.post('/internal/collector/results', json={'items':[body]}, headers={'Authorization':'Bearer isolated-collector'})
 
+    async def test_native_team_total_projection_keeps_unknown_rule_and_immutable_history(self):
+        await self.pool.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) VALUES('leyu:5715236','leyu:5715236','football','League','Alpha','Beta',$1,'live')",self.now)
+        ids=[]
+        for mid in ('10','11'):
+            signal=uuid.uuid4();ids.append(signal)
+            await self.pool.execute("INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,market_kind,period,line,selection,recommendation_price,quote_time,confidence,score_basis,score_baseline) VALUES($1,$2,$3,'leyu:5715236','live',$4,'单队进球大小','team_total','full_time',1.75,'over',1.9,now(),0.8,'unknown',$5)",signal,self.message,self.expert,mid,{'home':1,'away':0})
+            await self.pool.execute("INSERT INTO v2_quote_evidence(id,evidence_kind,reference_id,fixture_id,market_id,market_name,period,line,selection,price,source_updated_at,evidence,score_baseline) SELECT $1,'expert_signal',id,fixture_id,market_id,market_name,period,line,selection,recommendation_price,quote_time,jsonb_build_object('score_basis',score_basis,'market_kind',market_kind),score_baseline FROM v2_expert_signals WHERE id=$2",uuid.uuid4(),signal)
+        body=self.result(fixture_id='leyu:5715236',home=2,away=1)
+        response=await self.submit(body);self.assertEqual(200,response.status_code,response.text)
+        rows=await self.pool.fetch("SELECT market_id,outcome,unit_net,score_basis FROM v2_expert_signals WHERE id=ANY($1::uuid[]) ORDER BY market_id",ids)
+        self.assertEqual([('10','pending',None,'unknown'),('11','loss',Decimal('-1'),'unknown')],[tuple(r.values())for r in rows])
+        ledger=await self.pool.fetch("SELECT signal_id,result_version,algorithm_version,outcome,unit_net,reason,calculation,created_at FROM v2_signal_settlements WHERE signal_id=ANY($1::uuid[]) ORDER BY signal_id",ids)
+        self.assertEqual({'home','away'},{r['calculation']['signal']['team_side']for r in ledger})
+        self.assertTrue(all('score_rule'not in r['calculation']for r in ledger))
+        self.assertEqual(200,(await self.submit(body)).status_code)
+        again=await self.pool.fetch("SELECT signal_id,result_version,algorithm_version,outcome,unit_net,reason,calculation,created_at FROM v2_signal_settlements WHERE signal_id=ANY($1::uuid[]) ORDER BY signal_id",ids)
+        self.assertEqual(ledger,again)
+
     async def assert_settlement_lock_allows_reference_but_blocks_writers(self, mode):
         await self.signal()
         self.assertEqual(200, (await self.submit(self.result())).status_code)

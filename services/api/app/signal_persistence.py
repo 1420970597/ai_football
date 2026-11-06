@@ -3,6 +3,7 @@ import uuid
 from decimal import Decimal
 
 from .handicap_lines import line_terms
+from .team_totals import team_total_terms
 
 
 def _signal_context(job, attempt_id, quote, pick, confirmation):
@@ -13,6 +14,7 @@ def _signal_context(job, attempt_id, quote, pick, confirmation):
                 'quote_id': str(pick.quote_id), 'score_basis': quote['score_basis'],
                 'market_kind': quote['market_kind'], 'current_confirmation': confirmation,
                 **line_terms(quote),
+                **team_total_terms(quote, quote['fixture_id']),
                 'reviewed_price': str(quote['read_price']) if quote['read_price'] is not None else None,
                 'reviewed_source_updated_at': quote['read_source_time'].isoformat() if quote['read_source_time'] else None}
     return baseline, evidence

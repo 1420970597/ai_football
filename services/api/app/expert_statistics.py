@@ -88,7 +88,7 @@ class StatisticsScope:
 def statistics_scope(days: int = Query(default=30, ge=1, le=3650),
                      source_id: uuid.UUID | None = None,
                      phase: str = Query(default='all', pattern='^(all|scheduled|live)$'),
-                     market_kind: str = Query(default='all', pattern='^(all|winner|handicap|total)$'),
+                     market_kind: str = Query(default='all', pattern='^(all|winner|handicap|total|team_total)$'),
                      from_utc: datetime | None = None, to_utc: datetime | None = None):
     if any(value is not None and (value.tzinfo is None or value.utcoffset() is None) for value in (from_utc, to_utc)):
         raise HTTPException(422, '统计时间必须包含时区')

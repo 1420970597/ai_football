@@ -25,6 +25,16 @@ class QuoteObservationTests(unittest.TestCase):
     def confirm(self, observation=None, quote=None, fixture=None):
         return confirmation_for(observation or self.observation, quote or self.quote, fixture or self.fixture, 15, self.now)
 
+    def test_native_team_total_side_identity_is_required_for_current_confirmation(self):
+        fixture=self.fixture|{'id':'leyu:5715236','source_id':'leyu:5715236'}
+        quote=self.quote|{'market_kind':'team_total','market_id':'10','play_id':'10','selection':'over','line':Decimal('1.75')}
+        observation=self.observation|{'fixture_id':fixture['id'],'source_match_id':'5715236',
+            'quotes':[quote|{'source_updated_at':quote['source_updated_at'].isoformat()}]}
+        self.assertIsNotNone(self.confirm(observation,quote,fixture))
+        for change in ({'play_id':'11'},{'market_id':'87','play_id':'87'},{'period':'first_half'}):
+            bad=quote|change
+            self.assertIsNone(self.confirm(observation|{'quotes':[bad]},bad,fixture))
+
     def test_independent_exact_current_observation_preserves_old_source_time_and_order_gate(self):
         result = self.confirm()
         self.assertIsNotNone(result)

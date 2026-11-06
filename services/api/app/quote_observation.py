@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+from .team_totals import team_total_terms
 
 DETAIL_PATH = '/yewu11/v1/w/getMatchBaseInfoByOddsPB'
 CONTEXT_FIELDS = ('phase', 'home_score', 'away_score', 'half_home_score', 'half_away_score')
@@ -47,7 +48,9 @@ def confirmation_for(observation, quote, fixture, max_age, now=None):
             return None
         if observation['context'] != {key: fixture[key] for key in CONTEXT_FIELDS}:
             return None
-        if quote['status'] != 'active' or quote['market_kind'] not in {'winner', 'handicap', 'total'}:
+        if quote['status'] != 'active' or quote['market_kind'] not in {'winner', 'handicap', 'total', 'team_total'}:
+            return None
+        if quote['market_kind'] == 'team_total' and not team_total_terms(quote, fixture['id']):
             return None
         if not all(quote[key] for key in ('play_id', 'market_instance_id', 'selection_id')):
             return None
