@@ -66,6 +66,8 @@
 
 15:48 UTC核心执行修复定向验收通过：专家倍率1.95、参考行情过期/关闭，但执行器从乐鱼当前盘口读到2.35及轮换选项编号`option-current`；当前赔率用于限额查询、授权、订单和不可变阶段证据。当前market/play/line/direction任何不匹配仍失败关闭；API校验15秒报价时间和每项本人授权，未知接单继续查单不重发。
 
-16:09 UTC全量冻结与候选完成：干净worktree提交`6683b5e0ee6465d973da42d1106e850f9a2393c2`运行`sh infra/test/run.sh`，退出0；机器报告1592项、773.086秒、失败0/错误0/跳过0、`committed_source_verified=true`、恢复差异为空，报告SHA256 `90db74e8846dffc0a4bcc44964fbc683f7c107fc272e2f478314af171e778e1c`。候选API镜像ID `sha256:6881f532e1cd29a329e4bae487f5c15087c758dc5d7bdb5fb8119fec67ebc4ab`，executor镜像ID `sha256:7bb430ea156c67ca30c34cd5192406076f7daaac3dc915c998f3d9d183bdd7e8`，两者完整OCI revision标签匹配提交；容器导入检查均0。`sh infra/remote/check-compose.sh`退出0，4项配置通过，started=false、secrets_used=false。源码提交已推送，远端分支引用为`6683b5e0ee6465d973da42d1106e850f9a2393c2`。
+16:09 UTC初次全量冻结与候选通过：干净worktree提交`6683b5e0ee6465d973da42d1106e850f9a2393c2`运行全套1592项退出0；之后只修正`quote_observation.py`一条过时注释，未改业务逻辑。为精确绑定最终提交重新冻结。
+
+16:28 UTC最终冻结与候选完成：最终提交`2f763690fc5a6c087f8912fd4210e038a3ed9200`的干净worktree运行`sh infra/test/run.sh`，退出0；机器报告1592项、774.610秒、失败0/错误0/跳过0、`committed_source_verified=true`、恢复差异为空，报告SHA256 `773bd2bd183f188e94fcee1ab8164a235c1e815660eb4d51f134cbd7f0325534`。候选API镜像`ai-football-api:2.0.0-dev-livequote-2f76369` ID `sha256:98acc3c5d1b318490595b5f384835051e59a7083ad743c5a4200a00912dfbd08`；executor镜像`ai-football-executor:2.0.0-dev-livequote-2f76369` ID `sha256:11c02130c317cdee8436581faf914db11876521ea9cbc1ca628faa83af6e02db`，完整OCI revision均匹配最终提交。两镜像容器导入检查和最终`sh infra/remote/check-compose.sh`均退出0；Compose报告4项配置通过、started=false、secrets_used=false。最终提交已推送至当前分支。
 
 部署状态：未替换生产服务。生产API`LIVE_ORDERS_ENABLED=true`且本人策略开启；切换会让之后的真实推荐进入可下单链，用户此前已明确实际交易未授权。不得以当前没有待执行信号或隔离通过推断获得资金授权。保留候选镜像和提交供后续实盘授权后切换；本次未修改个人策略、实盘开关、生产账户或下单数据。
