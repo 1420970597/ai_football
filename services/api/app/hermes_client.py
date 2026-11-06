@@ -8,6 +8,7 @@ import json
 import re
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import timezone
 from types import MappingProxyType
 from urllib.parse import unquote, urlsplit
@@ -39,6 +40,35 @@ class HermesProviderUnavailable(RuntimeError):
 
     def __init__(self):
         super().__init__("Hermes provider returned a transient error")
+
+
+@dataclass(frozen=True)
+class PreparedReviewInput:
+    review_id: str
+    attempt_id: str
+    parts: list[dict] = field(repr=False)
+    elapsed_ms: float
+
+
+async def prepare_review_input(message, review_id, attempt_id):
+    started = time.monotonic()
+    parts = await _content_parts(message, str(review_id), str(attempt_id))
+    return PreparedReviewInput(str(review_id), str(attempt_id), parts,
+                               round((time.monotonic() - started) * 1000, 3))
+
+
+async def resolve_and_prepare(settings, message, review_id, attempt_id, *, client=None):
+    """Independent reads only; cancel and drain the sibling on every failure."""
+    tasks = [asyncio.create_task(resolve_review_settings(settings, client=client)),
+             asyncio.create_task(prepare_review_input(message, review_id, attempt_id))]
+    try:
+        async with asyncio.timeout(30):
+            return await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _framework_no_reply(content: str, *models: str | None) -> bool:
@@ -222,13 +252,22 @@ async def _content_parts(message: dict, review_id: str, attempt_id: str, *, acce
 
 async def review_message(settings: Settings, message: dict, review_id: uuid.UUID, attempt_id: uuid.UUID,
                          *, client: httpx.AsyncClient | None = None, continuation: str | None = None,
-                         continuation_round: int = 0, accepted_context=None) -> tuple[str, dict]:
+                         continuation_round: int = 0, accepted_context=None,
+                         prepared_input: PreparedReviewInput | None = None) -> tuple[str, dict]:
     preparation_started = time.monotonic()
     if (continuation is None) != (continuation_round == 0) or not 0 <= continuation_round <= 2:
         raise ValueError('invalid review continuation round')
-    parts = ([{'type': 'text', 'text': continuation}] if continuation is not None
-             else await _content_parts(message, str(review_id), str(attempt_id), accepted_context=accepted_context))
-    preparation_elapsed_ms = round((time.monotonic() - preparation_started) * 1000, 3)
+    if prepared_input is not None:
+        if (not isinstance(prepared_input, PreparedReviewInput) or continuation_round
+                or accepted_context is not None
+                or (prepared_input.review_id, prepared_input.attempt_id) != (str(review_id), str(attempt_id))):
+            raise ValueError('prepared review input does not belong to this initial attempt')
+        parts = prepared_input.parts
+        preparation_elapsed_ms = prepared_input.elapsed_ms
+    else:
+        parts = ([{'type': 'text', 'text': continuation}] if continuation is not None
+                 else await _content_parts(message, str(review_id), str(attempt_id), accepted_context=accepted_context))
+        preparation_elapsed_ms = round((time.monotonic() - preparation_started) * 1000, 3)
     headers = {
         "Authorization": f"Bearer {settings.hermes_api_key}",
         "Idempotency-Key": str(attempt_id) + (f'-continuation-{continuation_round}' if continuation_round else ''),

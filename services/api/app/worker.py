@@ -11,7 +11,8 @@ import uuid
 import httpx
 from . import database
 from .config import load_settings
-from .hermes_client import HermesProviderUnavailable, ReplyMediaPending, delete_session, resolve_review_settings, review_message
+from .hermes_client import (HermesProviderUnavailable, ReplyMediaPending, delete_session,
+                            resolve_and_prepare, resolve_review_settings, review_message)
 from .review_state import active_job, append_traces, trace
 from .review_summary import record_summary
 from .review_recovery import market_recovery
@@ -415,7 +416,7 @@ async def _read_completion_issues(pool, job, mentioned):
             await asyncio.sleep(.1)
 
 
-async def _review_until_verified(pool, settings, job: dict, *, model_client=None):
+async def _review_until_verified(pool, settings, job: dict, *, model_client=None, prepared_input=None):
     """All turns share the caller's overall deadline, heartbeat and frozen config."""
     mentioned = set()
     issues = {}
@@ -425,6 +426,8 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
     message = job['message'] | {'review_mode': job.get('review_mode', 'real_time')}
     accepted_context = None
     if job.get('attempts', 1) > 1 and message['review_mode'] == 'real_time':
+        if prepared_input is not None:
+            raise ValueError('recovery review cannot reuse an initial prepared input')
         try:
             async with pool.acquire() as conn, conn.transaction():
                 accepted_context = await read_accepted_context(conn, job['id'], job['attempt_id'])
@@ -438,6 +441,8 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
             accepted_context = None
     for turn in range(3):
         kwargs = {'client': model_client} if model_client is not None else {}
+        if prepared_input is not None and not turn:
+            kwargs['prepared_input'] = prepared_input
         if accepted_context is not None and not turn:
             kwargs['accepted_context'] = accepted_context
         if turn:
@@ -468,10 +473,20 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
     started = time.monotonic()
     failure_stage = "configuration"
     try:
-        if model_client is None:
+        prepared_input = None
+        preflight_started = time.monotonic()
+        reply = job['message'].get('reply_archive') or {}
+        has_images = bool(job['message'].get('media_objects') or (
+            reply.get('media_state') == 'ready' and not reply.get('deleted') and reply.get('media_objects')))
+        if job.get('attempts', 1) == 1 and has_images and getattr(settings, 'review_config_url', None):
+            settings, prepared_input = await resolve_and_prepare(
+                settings, job['message'] | {'review_mode': job.get('review_mode', 'real_time')},
+                job['id'], job['attempt_id'], client=model_client)
+        elif model_client is None:
             settings = await resolve_review_settings(settings)
         else:
             settings = await resolve_review_settings(settings, client=model_client)
+        preflight_elapsed_ms = round((time.monotonic() - preflight_started) * 1000, 3)
         failure_stage = "model_request_persistence"
         await _add_trace(pool, job, "hermes_request", {
             "message_id": str(job["message"]["id"]), "raw_text": job["message"]["raw_text"],
@@ -480,8 +495,11 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
             "model": settings.hermes_model, "worker_attempt": job["attempts"],
             "review_mode": job.get('review_mode','real_time'),
             "configuration_version": getattr(settings, "configuration_version", None),
+            'parallel_input_preparation': prepared_input is not None,
+            'preflight_elapsed_ms': preflight_elapsed_ms,
         })
-        review_call = _review_until_verified(pool, settings, job, model_client=model_client)
+        review_options = {'prepared_input': prepared_input} if prepared_input is not None else {}
+        review_call = _review_until_verified(pool, settings, job, model_client=model_client, **review_options)
         failure_stage = "model_review"
         review_task = asyncio.create_task(asyncio.wait_for(review_call, timeout=REVIEW_TIMEOUT))
         lease_task = asyncio.create_task(keep_lease(pool, job))
