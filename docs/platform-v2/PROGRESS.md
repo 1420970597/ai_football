@@ -3380,3 +3380,11 @@ E421代码阶段隔离通过：单读盘详情候选只建身份索引、每个�
 - 动作：更新 `hermes_client.SYSTEM_PROMPT` 对齐预载技能，并在 `test_hermes_client` 增加提示契约回归；未切换运行中的Hermes/worker镜像，也未改自动投注服务。
 - 隔离验证：`docker run --rm --name ai-football-hermes-prompt-test --cpus=.25 --memory=256m -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/source/services/api:/source/services:/source:/source/tests -v "$PWD:/source:ro" -w /source/tests ai-football-verifier:v2.0.0-dev python -m unittest -q test_hermes_client`，退出0，10项/8.319秒。该结果只证明Hermes client/prompt测试通过，不代表全套、真实模型、部署或延迟验收通过。
 - 验收/失败：候选必须完整冻结全套回归；模型只在服务器成功 inline 绑定时跳过resolve；缺失/模糊候选仍不得读盘/写推荐；重复完成搜索应改新查询而不重放；自然消息必须逐图、逐市场证据核验并产生当前系统回执。任一语义误绑或测试失败则不部署并保留失败证据。E458旧部署的1800秒观察继续至约18:02:58 UTC；其后完成冻结全套、同源镜像/配置核对、受控单worker生效并新开完整30分钟观察，再评估目标。3秒总延迟仍未解决，省去一次MCP调用不能代替真实延迟验收。
+
+### 2026-11-06 18:03 UTC — E458 完整观察通过健康门但缺少自然专家帖，E459 冻结回归启动
+
+- E458 观察容器 `ai-football-e458-independent-watch` 于 17:32:52.186050 启动，17:33:02 左右首样本，18:03:01.190180 结束；56 样本、1802.6 秒，容器退出码 0，`health_all_200=true`、`telegram_all_healthy=true`。窗口各次health/ready为200，Telegram connected/authorized、6/6 source lease、单 owner、无source error/degraded/deferred；状态持续为1个caught_up、5个catching_up。
+- 窗口共创建177个消息版本，均属于窗口开始前发布的历史帖子补读/修订；新发布日期帖子0，当前窗口eligible审核0、窗口trace 0。source-version延迟指标无窗口内版本可计算。Telegram回调全局计数增加1883、staged增加31、unmapped增加1852；`_live_messages`将未配置聊天计入unmapped，因此该全局数不是受监控群组漏收数。历史队列状态是全库累计值，不能当作本窗口失败证据。
+- 结论：E458通过连接与传输健康门，但没有自然新帖可验证审核/比赛盘口匹配，也没有资格证明解析功能完全正常。E457仍是最近一个自然图片推荐正向样本；E459提示修复尚未部署，且真实消息到结论151.048秒、Hermes等待134.674秒，3秒性能验收失败。
+- 部署范围复核：改动在 `services/api/app/hermes_client.py`，运行中的API与review-worker `/app/app/hermes_client.py` 摘要都仍为旧值 `de220700…f06934e`，候选摘要 `342c7460…7401b8`。实际执行模型/工具循环的是 `ai-football-v2-review-worker-1`（当前E446），因此完整回归后只更新review-worker镜像，并须经自然idle/暂停新领取handoff；不重建API、collector或executor。
+- 下一步：从独立干净worktree `.runtime/e459-verification` 对提交 `b9f86304ee160fab9de022676fc9cc942023e9cd` 执行 `BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`。本次隔离fixtures不连生产provider或资金；测试退出码、实际报告项数、跳过/错误及源码清洁证明均记录后再判断是否构建和受控切换。切换后另起1800秒观察；真实当前专家帖及其原文/图片、审核回执、唯一比赛绑定、具体盘口和quote证据缺一不计解析通过，等待不到样本则继续监控而不宣称正常。
