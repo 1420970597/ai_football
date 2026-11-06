@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .review_completion import DETAIL_LIMIT, pagination_issues, unfinished_searches_cte
+from .review_period_intent import INTENT_VALID_SQL
 
 
 @dataclass(frozen=True)
@@ -29,7 +30,7 @@ async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int
     row = await conn.fetchrow(
         "/* v2-summary-evidence */ WITH " + unfinished_searches_cte() + ", message_signals AS MATERIALIZED ("
         " SELECT id,fixture_id,phase,market_id,market_name,market_kind,period,line,selection,"
-        " recommendation_price,quote_time,created_at FROM v2_expert_signals WHERE message_id=$3),"
+        " recommendation_price,quote_time,created_at FROM v2_expert_signals s WHERE message_id=$3 AND " + INTENT_VALID_SQL + "),"
         " attempt_traces AS MATERIALIZED ("
         " SELECT trace_kind,payload,sequence_no FROM v2_analysis_traces WHERE job_id=$1 "
         " AND payload->>'attempt_id'=($2::uuid)::text "

@@ -125,6 +125,33 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, result.status_code, result.text)
         return result.json()["markets"][0]
 
+    async def test_source_period_conflict_is_rejected_and_matching_period_remains_accepted(self):
+        await self.pool.execute("UPDATE v2_expert_messages SET raw_text='上半大2.5' WHERE id=$1",self.message)
+        fixture=await self.fixture()
+        key,_=await self.search_all();await self.resolve(key)
+        quote=await self.read_market(fixture)
+        pick={'fixture_id':fixture,'quote_id':quote['quote_id'],'confidence':.8,
+              'evidence_text':'No half time market; using the full time line instead'}
+        response=await self.post('record_expert_signals',signals=[pick])
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual('source_period_intent_conflict',response.json()['rejected'][0]['reason'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        await self.pool.execute("UPDATE v2_expert_messages SET raw_text='全场大2.5' WHERE id=$1",self.message)
+        response=await self.post('record_expert_signals',signals=[pick])
+        self.assertEqual(1,len(response.json()['accepted']))
+
+    async def test_ambiguous_half_shorthand_cannot_be_overridden_by_model_explanation(self):
+        await self.pool.execute("UPDATE v2_expert_messages SET raw_text='半大2.5 等水上' WHERE id=$1",self.message)
+        fixture=await self.fixture()
+        key,_=await self.search_all();await self.resolve(key)
+        quote=await self.read_market(fixture)
+        response=await self.post('record_expert_signals',signals=[{'fixture_id':fixture,
+            'quote_id':quote['quote_id'],'confidence':.9,'evidence_text':'Only full time is available so it must mean full time'}])
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual('source_period_intent_ambiguous',response.json()['rejected'][0]['reason'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_quote_evidence'))
+
     async def test_native_team_totals_keep_sides_read_binding_and_idempotent_prices(self):
         markets=[{'market_id':mid,'market_name':name,'kind':'team_total','period':'full_time',
                   'line':'1.75','selection':'over','price':price,'source_updated_at':self.now.isoformat(),

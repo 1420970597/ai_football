@@ -12,6 +12,7 @@ from .settlement import pending, settle
 from .handicap_lines import line_basis
 from .score_rules import settlement_rule
 from .team_totals import team_total_terms
+from .review_period_intent import INTENT_VALID_SQL
 
 ALGORITHM_VERSION = 'football-asian-7-native-team-totals'
 
@@ -27,10 +28,14 @@ def result_facts(row):
 
 
 async def project_settlements(conn, fixture, version, facts):
-    rows = await conn.fetch('SELECT s.*,' + QUOTE_VALID_SQL +
-                            ' AS quote_valid FROM v2_expert_signals s WHERE fixture_id=$1 ORDER BY id FOR UPDATE', fixture['id'])
+    rows = await conn.fetch('SELECT s.*,' + QUOTE_VALID_SQL + ' AS quote_valid,' + INTENT_VALID_SQL +
+                            ' AS intent_valid FROM v2_expert_signals s WHERE fixture_id=$1 ORDER BY id FOR UPDATE', fixture['id'])
     projections = []
     for row in rows:
+        # An audited intent correction is not a betting result. Its pending
+        # projection and prior financial calculations remain separate.
+        if not row['intent_valid']:
+            continue
         inputs = {'sport': fixture['sport'], 'kind': row['market_kind'], 'period': row['period'],
                   'phase': row['phase'], 'price': str(row['recommendation_price']), 'line': str(row['line']) if row['line'] is not None else None,
                   'selection': row['selection'], 'score_basis': row['score_basis'], 'score_baseline': row['score_baseline'],

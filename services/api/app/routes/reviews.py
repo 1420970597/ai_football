@@ -27,6 +27,7 @@ from ..signal_persistence import persist_signals
 from ..review_resolution import resolve_candidates
 from ..review_market_query import market_filters
 from ..team_totals import team_total_terms
+from ..review_period_intent import period_intent_rejection
 
 router = APIRouter(prefix="/internal/mcp")
 
@@ -456,6 +457,8 @@ async def _record_current_signals(conn, body, request, observations):
             reason = "fixture_not_active"
         elif quote['market_kind'] == 'team_total' and not team_total_terms(quote, quote['fixture_id']):
             reason = 'team_total_native_identity_unknown'
+        elif period_intent_rejection(job['raw_text'], quote):
+            reason = period_intent_rejection(job['raw_text'], quote)
         elif not fresh_quote(quote, max_quote_age) and not confirmation:
             reason = "quote_inactive_unknown_or_stale"
         if reason:

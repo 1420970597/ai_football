@@ -21,6 +21,8 @@ REASONS = {
     'quote_inactive_unknown_or_stale': '盘口停用、源时间未知或报价过期',
     'historical_review_not_current': '历史消息仅保留分析，不生成实时推荐',
     'message_timestamp_in_future': '消息发布时间晚于当前时间',
+    'source_period_intent_conflict': '原文推荐期间与盘口期间冲突，不能改用其他期间',
+    'source_period_intent_ambiguous': '原文期间简写存在歧义，不能按可售盘口推断期间',
 }
 
 

@@ -174,7 +174,7 @@ async def match_detail(fixture_id: str, request: Request):
     signal_rows = await database.current_pool().fetch(
         "SELECT s.id,s.expert_id,e.display_nickname,s.phase,f.phase AS fixture_phase,f.match_state,"
         "s.market_id,s.market_name,s.market_kind,s.period,s.score_baseline,s.line,s.selection,"
-        "s.recommendation_price,s.quote_time,s.outcome,s.unit_net,s.created_at "
+        "s.recommendation_price,s.quote_time,s.outcome,s.unit_net,s.created_at,s.withdrawn_at,s.withdrawal_reason "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
         "JOIN v2_fixtures f ON f.id=s.fixture_id "
         "WHERE s.fixture_id=$1 ORDER BY s.created_at DESC LIMIT 100", fixture_id,

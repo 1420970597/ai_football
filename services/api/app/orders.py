@@ -55,7 +55,7 @@ async def eligible_signal(conn, signal_id, max_age: int):
         "JOIN v2_current_quotes q ON q.fixture_id=s.fixture_id AND q.market_id=s.market_id AND q.period=s.period "
         "AND q.market_kind=s.market_kind AND (q.line IS NOT DISTINCT FROM s.line OR "
         "s.market_kind='winner' AND COALESCE(q.line,0)=0 AND COALESCE(s.line,0)=0) "
-        "AND q.selection=s.selection WHERE s.id=$1", signal_id,
+        "AND q.selection=s.selection WHERE s.id=$1 FOR SHARE OF s", signal_id,
     )
     if not row:
         raise HTTPException(409, "推荐及原生盘口不可用")

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, Query
+from .review_period_intent import INTENT_VALID_SQL
 
 
 def metrics(row: dict) -> dict:
@@ -34,6 +35,7 @@ METRIC_SQL = (
 QUALITY_METRIC_SQL = (
     "COUNT(s.id) AS total_signals,COUNT(s.id) FILTER(WHERE s.statistics_eligible) AS eligible_signals,"
     "COUNT(s.id) FILTER(WHERE NOT s.statistics_eligible) AS excluded_signals,"
+    "COUNT(s.id) FILTER(WHERE NOT s.intent_valid) AS invalid_recommendation_intent,"
     "COUNT(s.id) FILTER(WHERE NOT s.quote_valid) AS missing_quote_evidence,"
     "COUNT(s.id) FILTER(WHERE s.quote_valid AND s.outcome<>'pending' AND NOT s.settlement_valid) AS invalid_settlement_evidence,"
     "COUNT(s.id) FILTER(WHERE s.statistics_eligible AND s.outcome='pending') AS pending,"
@@ -65,7 +67,7 @@ DEFINITIONS = {
     'unit_roi': '一单位净收益合计 ÷ 有效结算本金（半赢半输计0.5，走盘作废计0）',
     'scope': '专家推荐统计，与真实账户成交收益分开；撤回记录保留证据并继续结算',
     'time_basis': '已结算按最新结算时间，待结算按推荐创建时间；所有窗口为UTC左闭右开',
-    'quality': '收益只含不可变系统报价及最新赛果计算台账一致的记录，缺失或损坏记录单列排除，不补零',
+    'quality': '收益只含推荐意图有效、不可变系统报价及最新赛果计算台账一致的记录；意图纠错、缺失或损坏记录单列排除，不补零',
     'sample_state': '少于30条已结算记录标为有限样本；30条以上也不代表未来盈利或统计显著性',
 }
 
@@ -101,7 +103,8 @@ def statistics_scope(days: int = Query(default=30, ge=1, le=3650),
 
 def signal_scope(scope: StatisticsScope, expert_id=None, *, classify=True):
     args = [scope.start, scope.end, scope.source_id, scope.phase, scope.market_kind, expert_id]
-    columns = ',' + QUOTE_VALID_SQL + ' AS quote_valid,(' + SETTLEMENT_VALID_SQL + ') AS settlement_valid' if classify else ''
+    columns = (',' + QUOTE_VALID_SQL + ' AS quote_valid,(' + SETTLEMENT_VALID_SQL + ') AS settlement_valid,'
+               + INTENT_VALID_SQL + ' AS intent_valid') if classify else ''
     opening = 'WITH checked AS MATERIALIZED (' if classify else 'WITH scoped AS ('
     query = (
         opening + 'SELECT s.*' + columns + ' '
@@ -113,7 +116,7 @@ def signal_scope(scope: StatisticsScope, expert_id=None, *, classify=True):
         'AND ($6::uuid IS NULL OR s.expert_id=$6)) '
     )
     if classify:
-        query += ",scoped AS (SELECT checked.*,quote_valid AND (outcome='pending' OR settlement_valid) AS statistics_eligible FROM checked) "
+        query += ",scoped AS (SELECT checked.*,intent_valid AND quote_valid AND (outcome='pending' OR settlement_valid) AS statistics_eligible FROM checked) "
     return query, args
 
 
