@@ -316,6 +316,35 @@ async def timeout_cleanup_case(conn, http):
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def provider_stall_case(conn, http):
+    row = await seed(conn, 'provider_stall')
+    settings = SimpleNamespace(hermes_api_url=HERMES+'/v1', hermes_api_key='isolated-framework-key',
+                               hermes_model='hermes-agent')
+    source = {'source_name': '隔离群', 'display_nickname': '隔离专家', 'posted_at': row['posted_at'],
+              'raw_text': row['raw_text'], 'media_objects': []}
+    started = asyncio.get_running_loop().time()
+    try:
+        async with asyncio.timeout(15):
+            await review_message(settings, source, row['job'], row['attempt'])
+    except HermesProviderUnavailable:
+        pass
+    else:
+        raise AssertionError('silent provider must fail instead of completing a recommendation')
+    elapsed = asyncio.get_running_loop().time()-started
+    assert 1 <= elapsed < 15, elapsed
+    observed = (await http.get(PROVIDER+'/evidence')).json().get('blocked_turns', {})
+    assert str(row['job']) in observed, 'deadline must be exercised by a real framework provider request'
+    assert not await conn.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_signals WHERE message_id=$1)', row['message'])
+    assert not await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind LIKE 'mcp_%')", row['job'])
+    await delete_session(settings, row['job'], row['attempt'], client=http)
+    await run_case(conn, http, 'no_intent')
+    print(json.dumps({'scenario': 'provider_stall', 'provider_is_fixture': True,
+                      'isolated_socket_timeout_seconds': 2, 'transient_failure': True,
+                      'cleanup_and_next_request_verified': True, 'accepted_signals': 0,
+                      'elapsed_ms': round(elapsed*1000, 1)}), flush=True)
+
+
 async def run():
     conn = await asyncpg.connect(checked_dsn())
     try:
@@ -326,6 +355,9 @@ async def run():
             for scenario in os.environ.get('INTEGRATION_SCENARIOS', 'normal,adversarial,length').split(','):
                 if scenario == 'timeout_cleanup':
                     await timeout_cleanup_case(conn, http)
+                    continue
+                if scenario == 'provider_stall':
+                    await provider_stall_case(conn, http)
                     continue
                 if scenario not in {'normal', 'adversarial', 'length', 'budget', 'parallel', 'no_intent', 'provider_503', 'reply_image'}:
                     raise RuntimeError('unknown isolated scenario')

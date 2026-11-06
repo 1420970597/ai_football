@@ -8,6 +8,16 @@ providers:
     api: ${HERMES_PROVIDER_BASE_URL}
     key_env: HERMES_PROVIDER_API_KEY
     transport: chat_completions
+  # Named custom routes resolve to agent.provider=custom in the pinned runtime.
+  # Per-model budgets must use that runtime id, not the route's display name.
+  custom:
+    models:
+      deepseek-v4.1-flash:
+        timeout_seconds: 30
+        stale_timeout_seconds: 30
+      cline-pass/deepseek-v4.1-flash:
+        timeout_seconds: 30
+        stale_timeout_seconds: 30
 
 # The gateway resolves "." to the profile home, not the process working dir.
 # Keep project rules pinned to the read-only mounted workspace.

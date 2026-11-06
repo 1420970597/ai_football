@@ -24,6 +24,7 @@ cp -a integrations/hermes "$SNAPSHOT/integrations/"
 cp tests/integration/hermes_roundtrip.py tests/integration/hermes_provider_fixture.py "$SNAPSHOT/tests/integration/"
 cp tests/test_hermes_fixture_contract.py "$SNAPSHOT/tests/"
 sed 's/max_turns: 128/max_turns: 4/' "$SNAPSHOT/integrations/hermes/config.yaml" > "$EVIDENCE/budget-config.yaml"
+sed 's/timeout_seconds: 30/timeout_seconds: 2/g' "$SNAPSHOT/integrations/hermes/config.yaml" > "$EVIDENCE/silent-config.yaml"
 cleanup() {
   local code=$?
   trap - EXIT
@@ -70,6 +71,9 @@ start_hermes() {
 assert_retry_policy() {
   docker exec "$HERMES" python -c 'from hermes_cli.config import load_config_readonly; agent=load_config_readonly().get("agent",{}); assert agent.get("api_max_retries")==1 and agent.get("auto_recovery_cycles")==0; print("provider_retry_policy=single_attempt_durable_worker_retry")'
 }
+assert_provider_timeouts() {
+  docker exec "$HERMES" python -c 'import os;from hermes_cli.runtime_provider import resolve_runtime_provider;from hermes_cli.timeouts import get_provider_request_timeout,get_provider_stale_timeout;from agent.chat_completion_helpers import _StreamingCall;from types import SimpleNamespace;r=resolve_runtime_provider(requested="custom:cline",explicit_api_key=os.environ["HERMES_PROVIDER_API_KEY"],explicit_base_url=os.environ["HERMES_PROVIDER_BASE_URL"],target_model=os.environ["HERMES_MODEL"]);assert r["provider"]=="custom";models=("deepseek-v4.1-flash","cline-pass/deepseek-v4.1-flash");assert all(get_provider_request_timeout(r["provider"],m)==30 and get_provider_stale_timeout(r["provider"],m)==30 for m in models);call=object.__new__(_StreamingCall);call.agent=SimpleNamespace(provider=r["provider"],model=models[0],base_url=os.environ["HERMES_PROVIDER_BASE_URL"]);call.api_kwargs={"model":models[0]};assert call._stream_timeouts()==(30.0,30.0,30.0);call._resolve_stale_timeout();assert call._stream_stale_timeout==30;assert get_provider_request_timeout("custom","other-model") is None;print("actual_custom_provider_exact_model_timeouts=30s")'
+}
 wait_services() {
   verify --cpus=.125 --memory=128m "$VERIFIER" python -c 'import httpx,time; endpoints=[("http://api:8080/readyz",{}),("http://provider-fixture:8999/evidence",{}),("http://hermes-mcp:8090/mcp",{}),("http://ai-football-v2-hermes-integration:8642/v1/models",{"Authorization":"Bearer isolated-framework-key"})]; exec("for url,headers in endpoints:\n for attempt in range(180):\n  try:\n   r=httpx.get(url,headers=headers,timeout=2,trust_env=False)\n   if r.status_code in (200,401): break\n  except httpx.HTTPError: pass\n  time.sleep(.5)\n else: raise RuntimeError(\"isolated service not ready: \"+url)\nprint(\"isolated_services_ready\")")'
 }
@@ -85,6 +89,7 @@ cases() {
 start_hermes "$SNAPSHOT/integrations/hermes/config.yaml"
 wait_services
 assert_retry_policy
+assert_provider_timeouts
 hashes > "$EVIDENCE/framework-before.json"
 readonly_skill
 cases timeout_cleanup,reply_image,normal,adversarial,length,parallel,no_intent,provider_503
@@ -97,6 +102,11 @@ cmp "$EVIDENCE/framework-before.json" "$EVIDENCE/framework-after.json"
 printf 'framework_config_skill_hashes_unchanged=true\n'
 cases normal
 docker logs "$HERMES" > "$EVIDENCE/framework-main.log" 2>&1
+docker rm -f "$HERMES" >/dev/null
+start_hermes "$EVIDENCE/silent-config.yaml"
+wait_services
+cases provider_stall
+docker logs "$HERMES" > "$EVIDENCE/framework-silent.log" 2>&1
 docker rm -f "$HERMES" >/dev/null
 start_hermes "$EVIDENCE/budget-config.yaml"
 wait_services
