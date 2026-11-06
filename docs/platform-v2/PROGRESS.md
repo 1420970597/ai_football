@@ -3371,3 +3371,12 @@ E421代码阶段隔离通过：单读盘详情候选只建身份索引、每个�
 - 时延根因证据：`integrations/hermes/config.yaml` 与已挂载运行配置SHA-256相同，运行 `HERMES_MODEL=deepseek-v4.1-flash`（worker发送的 `hermes-agent` 是Hermes别名）。Hermes网关整次HTTP请求墙钟134.674秒、消息至结论151.048秒；`provider_elapsed_ms`测的是worker等待Hermes整个agent请求，包含模型轮次和MCP调用，不能当作DeepSeek单次生成时延。搜索trace显示首次“華域克+双方”完整结果0，模型又以相同team_query/scope重查并收到HTTP409（已完成检索冲突），之后换“奧斯”返回38个完整候选；工具技能禁止重复同范围查询。最终仍正确唯一绑定。当前 `SYSTEM_PROMPT` 无条件要求另调 `resolve_match`，与预载skill中“完整search结果已带服务端唯一resolution时直接读盘”的规则冲突；可在不放宽服务端校验的前提下修正提示，减少无效重试和一轮MCP调用。
 - `list_match_markets` 快照为9.854秒，确认触发LeYu当前报价刷新且accepted=true/reason=written；过滤范围完整6/6，目标客队全场让球0.5 `confirmed_current=true/can_record=true`。信号录入工具另耗10.567秒。市场刷新及模型耗时仍远高于3秒；未降低报价新鲜度、跳过当前报价确认或改读写代码来掩盖延迟。
 - E458 独立观察窗于17:32:58.150330 UTC开始，目标1800秒/30秒采样。到17:36:50样本1–8均health/ready=200、TG连接授权正常、6/6租约、零来源错误/deferred，暂无新帖子。观察容器仅携带只读数据库连接及TG状态令牌，dummy占位的未用本地密钥，不继承Hermes、投注或用户会话凭据。首次启动因缺 `PYTHONPATH=/app` 退出1，移除本次临时容器并修正后重启；正式窗口从样本1重新起算。剩余：完整对账E458；之后对系统提示内联绑定契约做隔离测试、冻结回归和受控生效，再起新完整窗口。任何候选变更未重新部署并完成真实窗口之前都不能算完全正常，3秒延迟目前未解决。
+
+### 2026-11-06 17:48 UTC — E459 消除系统提示与内联绑定契约冲突（代码已写、定向通过，未部署）
+
+- 目标/责任：减少已完整验证比赛的重复 `resolve_match` 和重复已完成搜索，责任 `services/api/` 与 `tests/`；不改 Telegram 接收、盘口定价、身份绑定或自动投注。
+- 当前证据：E457 自然图片推荐已正确绑定并记录；精确 trace 显示同一 team_query/scope 重放返回HTTP409，模型后来换另一队名取38个候选；现有技能禁止重放且认可服务端 `resolution.resolved=true`，但 `SYSTEM_PROMPT` 无条件要求再次调用 resolve。`search_matches` 服务端本已在全页读完后生成唯一 inline resolution 并写绑定，不需要放宽边界。
+- 设计：只有服务端在完整搜索结果中返回 `resolution.resolved=true` 才直接读盘口；否则通过该完整检索 `search_key` 调 `resolve_match`。相同已完成 `team_query` 与范围不重放，也不能仅增删 `team_a/team_b` 重启；需用有依据的新 team_query，或在既有完整搜索上解析。保持 `phase=all`、完整分页、双方/联赛/时间服务端核验、active attempt、盘口绑定和写入/时效门禁。
+- 动作：更新 `hermes_client.SYSTEM_PROMPT` 对齐预载技能，并在 `test_hermes_client` 增加提示契约回归；未切换运行中的Hermes/worker镜像，也未改自动投注服务。
+- 隔离验证：`docker run --rm --name ai-football-hermes-prompt-test --cpus=.25 --memory=256m -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/source/services/api:/source/services:/source:/source/tests -v "$PWD:/source:ro" -w /source/tests ai-football-verifier:v2.0.0-dev python -m unittest -q test_hermes_client`，退出0，10项/8.319秒。该结果只证明Hermes client/prompt测试通过，不代表全套、真实模型、部署或延迟验收通过。
+- 验收/失败：候选必须完整冻结全套回归；模型只在服务器成功 inline 绑定时跳过resolve；缺失/模糊候选仍不得读盘/写推荐；重复完成搜索应改新查询而不重放；自然消息必须逐图、逐市场证据核验并产生当前系统回执。任一语义误绑或测试失败则不部署并保留失败证据。E458旧部署的1800秒观察继续至约18:02:58 UTC；其后完成冻结全套、同源镜像/配置核对、受控单worker生效并新开完整30分钟观察，再评估目标。3秒总延迟仍未解决，省去一次MCP调用不能代替真实延迟验收。

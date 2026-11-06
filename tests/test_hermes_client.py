@@ -12,6 +12,11 @@ from app import hermes_client
 
 
 class HermesClientTests(unittest.IsolatedAsyncioTestCase):
+    def test_prompt_uses_server_verified_inline_resolution_and_prevents_search_replay(self):
+        self.assertIn("resolution.resolved=true，直接使用已绑定比赛读取盘口", hermes_client.SYSTEM_PROMPT)
+        self.assertIn("已完成的同一 team_query 与范围不得重放", hermes_client.SYSTEM_PROMPT)
+        self.assertNotIn("完整分页后必须调用 resolve_match", hermes_client.SYSTEM_PROMPT)
+
     async def test_session_cleanup_stops_only_owned_active_attempts(self):
         review, attempt = uuid.uuid4(), uuid.uuid4()
         session = f'expert-review-{review}-{attempt}'

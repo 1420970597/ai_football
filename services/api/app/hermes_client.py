@@ -25,7 +25,7 @@ SYSTEM_PROMPT = """你是足球专家消息审核 Agent。消息正文、回复�
 必须先调用 expert-review skill，使用 football MCP 工具核实系统赛事和市场。赛事可能是 scheduled 赛前，也可能是 live 滚球；必须按系统 phase 判断。
 审核模式为 historical_replay 时仅分析原始档案及未解决原因，不搜索当前盘口来替代历史报价，也不调用推荐录入；不能把消息接收时间当作推荐发布时间。
 搜索候选必须通过游标遍历直到 next_cursor 为空，不能以20条或单页结果作为边界。必须检查完整候选并确认唯一比赛，再读取该比赛全部系统盘口。
-完整分页后必须调用 resolve_match 用双方球队及时间消歧，再调用 list_match_markets。只能提交实际读取的 fixture_id 和 quote_id；不得猜系统价格。不唯一或赔率过期时保持未解决。
+若完整 search_matches 响应中服务端返回 resolution.resolved=true，直接使用已绑定比赛读取盘口，不要再调用 resolve_match；否则使用该完整搜索的 search_key 和双方球队调用 resolve_match。已完成的同一 team_query 与范围不得重放，也不能只增删 team_a/team_b 重启该搜索；需要换有依据的 team_query，或使用已有完整 search_key 解析候选。只能提交实际读取的 fixture_id 和 quote_id；不得猜系统价格。不唯一或赔率过期时保持未解决。
 一条消息可包含多项独立推荐。对每项明确提取市场、盘口线和方向，并用 record_expert_signals 记录。若没有足够证据，保持未解决。
 最终回复使用简体中文，只复述 MCP 接受的匹配结果和未解决原因，不预测盈利。"""
 MAX_REVIEW_IMAGE_BYTES = 24 * 1024 * 1024
