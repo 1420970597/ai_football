@@ -514,6 +514,69 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue('_session-' in urlsplit(proxy_urls[0]).password)
         self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
 
+    async def test_http_expired_refresh_relaunches_own_app_token_and_preserves_consent(self):
+        account=await self.healthy()
+        _,expert,_,_=await self.signal()
+        await self.enable([expert])
+        policy=await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1',self.user['id'])
+        session={'leyu_api_base':'https://venue.invalid','leyu_origin':'https://ui.invalid',
+                 'leyu_request_id':'expired-own-session','leyu_app_token':'own-existing-app-token'}
+        await self.pool.execute("UPDATE v2_leyu_accounts SET encrypted_session=$2,last_verified_at=now()-interval '5 minutes' WHERE id=$1",
+                                account['id'],encrypt_secret(b'k'*32,json.dumps(session)))
+        await self.worker_api.post('/internal/executor/dispatch')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        self.assertEqual('account',work['kind'])
+        calls=[]
+        def app_http(request):
+            calls.append(request)
+            if request.url.path.endswith('/preInfo'):
+                return httpx.Response(200,json={'status_code':6000,'data':{'ip':'1.1.1.1'}})
+            self.assertTrue(request.url.path.endswith('/launch'),request.url.path)
+            self.assertEqual('own-existing-app-token',request.headers['x-api-token'])
+            self.assertEqual('false',json.loads(request.content)['sendMoney'])
+            return httpx.Response(200,json={'status_code':6000,'data':{
+                'url':'https://venue.invalid/index?token=renewed-own-session','h5Url':'https://ui.invalid'}})
+        def venue_http(request):
+            calls.append(request)
+            self.assertEqual(AMOUNT_PATH,request.url.path)
+            if request.headers['requestId']=='expired-own-session':
+                return httpx.Response(401,json={'code':'0401013','msg':'private-expiry-response'})
+            self.assertEqual('renewed-own-session',request.headers['requestId'])
+            return httpx.Response(200,json={'amount':'100'})
+        executor=Executor(self.worker_api,'https://platform.invalid/internal/executor',
+            client_factory=lambda scope,session,**kw:AccountProtocolClient(scope,session,transport=httpx.MockTransport(venue_http),**kw),
+            session_factory=lambda scope,config,hooks:AccountSessionManager(scope,config,hooks,
+                direct_transport=httpx.MockTransport(app_http),verify_public_hosts=False))
+        document={'routes':{name:{'key':'k'*16,'iv':'i'*16} for name in ('','/site/api','/game/api')}}
+        with patch('services.collector.leyu_session.private_document',return_value=document):
+            await executor.account_job(work)
+        current=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',account['id'])
+        self.assertEqual(('healthy','ready',2),(current['health_state'],current['renewal_state'],current['config_revision']))
+        self.assertGreater(current['last_verified_at'],account['last_verified_at'])
+        self.assertEqual('renewed-own-session',account_jobs.decode_document(b'k'*32,current['encrypted_session'])['leyu_request_id'])
+        self.assertEqual(policy,await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1',self.user['id']))
+        self.assertEqual('succeeded',await self.pool.fetchval('SELECT state FROM v2_account_jobs WHERE id=$1',uuid.UUID(work['job_id'])))
+        self.assertEqual(2,sum(request.url.path==AMOUNT_PATH for request in calls))
+        self.assertEqual(1,sum(request.url.path.endswith('/launch') for request in calls))
+        self.assertFalse(any(request.url.path.endswith('/login') or request.url.path==BET_PATH for request in calls))
+        async with self.pool.acquire() as conn,conn.transaction():
+            await orders.account_policy(conn,self.user['id'],self.settings)
+
+    async def test_http_permission_denied_refresh_never_renews_or_sends(self):
+        account=await self.healthy()
+        await self.api.post('/api/v1/accounts/leyu/refresh')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        manager=AccountSessionManager(AccountScope(**work['scope']),work['config'],RenewalHooks(None,None,None))
+        manager.renew=AsyncMock()
+        executor=Executor(self.worker_api,'https://platform.invalid/internal/executor',
+            session_factory=lambda *args:manager,client_factory=lambda scope,session,**kw:AccountProtocolClient(
+                scope,session,transport=httpx.MockTransport(lambda request:httpx.Response(403,json={'code':'0401015'})),**kw))
+        await executor.account_job(work)
+        manager.renew.assert_not_awaited()
+        job=await self.pool.fetchrow('SELECT * FROM v2_account_jobs WHERE id=$1',uuid.UUID(work['job_id']))
+        self.assertEqual(('failed','account_http_rejected','403'),(job['state'],job['last_error'],job['details']['provider_code']))
+        self.assertEqual(account['encrypted_session'],await self.pool.fetchval('SELECT encrypted_session FROM v2_leyu_accounts WHERE id=$1',account['id']))
+
     async def test_reservation_concurrent_idempotent_limits(self):
         await self.healthy()
         s1,e1,_,_=await self.signal()

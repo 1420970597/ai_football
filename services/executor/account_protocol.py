@@ -15,7 +15,7 @@ from uuid import UUID
 
 import httpx
 
-from services.collector.leyu_protocol import LeyuError, MAX_RESPONSE_BYTES, ODDS_SCALE, SUCCESS_CODES, decode_envelope, parse_line, timestamp
+from services.collector.leyu_protocol import AUTH_CODES, AuthExpired, LeyuError, MAX_RESPONSE_BYTES, ODDS_SCALE, SUCCESS_CODES, decode_envelope, parse_line, timestamp
 from .account_session import AccountScope, VenueSession
 
 AMOUNT_PATH = "/yewu12/api/user/amount"
@@ -249,8 +249,6 @@ class AccountProtocolClient:
         try:
             async with asyncio.timeout(12), self.http.stream("POST" if body is not None else "GET", self.session.base_url + path,
                                                           **({"json": dict(body)} if body is not None else {})) as response:
-                if response.status_code >= 300:
-                    raise LeyuError("account_http_rejected", str(response.status_code))
                 raw = bytearray()
                 async for chunk in response.aiter_bytes():
                     raw.extend(chunk)
@@ -259,7 +257,17 @@ class AccountProtocolClient:
                 try:
                     payload = json.loads(raw)
                 except (ValueError, UnicodeError):
+                    if response.status_code >= 300:
+                        raise LeyuError("account_http_rejected", str(response.status_code)) from None
                     raise LeyuError("invalid_account_response") from None
+                if response.status_code >= 300:
+                    # The venue also returns its explicit session-expiry code
+                    # with HTTP 401. Status alone never authorizes renewal, and
+                    # a submitted order must retain its unknown-result handling.
+                    code = str(payload.get("code", "")) if isinstance(payload, Mapping) else ""
+                    if not submission and response.status_code in {401, 403} and code in AUTH_CODES:
+                        raise AuthExpired("session_expired", code)
+                    raise LeyuError("account_http_rejected", str(response.status_code))
                 return payload if submission else decode_envelope(payload) if isinstance(payload, Mapping) and "code" in payload else payload
         except (httpx.HTTPError, TimeoutError):
             raise LeyuError("account_transport_failure") from None

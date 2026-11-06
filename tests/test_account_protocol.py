@@ -251,6 +251,7 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
                  ({"code": 0, "data": {"orderDetailRespList": [{"orderStatusCode": 1}]}}, SubmissionUnknown),
                  ({"code": 0, "data": {"orderDetailRespList": [{"orderStatusCode": 9, "orderNo": "O"}]}}, SubmissionUnknown),
                  ({"code": None}, SubmissionUnknown), ({"code": True}, SubmissionUnknown),
+                 (httpx.Response(401, json={"code": "0401013", "msg": "private-session"}), SubmissionUnknown),
                  (httpx.Response(403, text="private-refusal-body"), SubmissionUnknown),
                  (httpx.Response(200, text="private-invalid-json"), SubmissionUnknown)]
         for response, error in cases:
@@ -267,6 +268,35 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AuthExpired):
             await self.client.balance()
         self.assertEqual(1, len(self.requests))
+
+    async def test_http_auth_code_identifies_expiry_without_retrying_the_read(self):
+        for status in (401, 403):
+            for code in ("0401013", "0401014"):
+                with self.subTest(status=status, code=code):
+                    before = len(self.requests)
+                    self.responses[AMOUNT_PATH] = httpx.Response(status, json={"code": code, "msg": "private-session"})
+                    with self.assertRaises(AuthExpired) as caught:
+                        await self.client.balance()
+                    self.assertEqual(("session_expired", code), (caught.exception.category, caught.exception.code))
+                    self.assertNotIn("private-session", str(caught.exception))
+                    self.assertEqual(before + 1, len(self.requests))
+                    self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
+
+    async def test_http_status_without_explicit_expiry_never_authorizes_renewal(self):
+        cases = [(401, {}), (401, {"code": "0401015"}), (403, {"code": "0401015"}),
+                 (429, {"code": "0401013"}), (503, {"code": "0401013"}), (401, ["0401013"])]
+        for status, body in cases:
+            with self.subTest(status=status, body=body):
+                self.responses[AMOUNT_PATH] = httpx.Response(status, json=body)
+                with self.assertRaises(LeyuError) as caught:
+                    await self.client.balance()
+                self.assertNotIsInstance(caught.exception, AuthExpired)
+                self.assertEqual(("account_http_rejected", str(status)), (caught.exception.category, caught.exception.code))
+        self.responses[AMOUNT_PATH] = httpx.Response(401, text="private-invalid-json")
+        with self.assertRaises(LeyuError) as caught:
+            await self.client.balance()
+        self.assertNotIsInstance(caught.exception, AuthExpired)
+        self.assertNotIn("private-invalid-json", str(caught.exception))
 
     async def test_compressed_order_page_has_explicit_window_and_no_fake_pnl(self):
         data = {"total": 1, "records": [{"day": "2026-10-20", "data": [
