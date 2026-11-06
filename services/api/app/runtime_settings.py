@@ -70,6 +70,11 @@ async def runtime_configuration(settings, connection=None) -> dict:
 async def runtime_quote_max_age(settings, connection=None) -> int:
     connection = connection or database.current_pool()
     rows = await connection.fetch("SELECT setting_key,encrypted_value FROM v2_admin_settings WHERE setting_key=ANY($1::text[])", ['quote_max_age_seconds'])
+    return quote_max_age_from_rows(settings, rows)
+
+
+def quote_max_age_from_rows(settings, rows) -> int:
+    """Decode a current settings read without another query or a cache."""
     for row in rows:
         if row['setting_key'] != 'quote_max_age_seconds':
             continue

@@ -17,7 +17,7 @@ from ..review_policy import REALTIME_WINDOW_SECONDS
 from ..handicap_lines import line_terms
 from ..review_state import authorize, fresh_quote, quote_context
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, MAX_MARKETS
-from ..runtime_settings import runtime_quote_max_age
+from ..runtime_settings import quote_max_age_from_rows, runtime_quote_max_age
 from ..quote_observation import confirmation_for
 from ..team_matching import normalize_team_name
 from ..review_candidates import snapshot_candidates
@@ -284,8 +284,9 @@ async def _market_snapshot(conn, body, settings, filters):
     rows = await conn.fetch(
         'SELECT f AS fixture,EXISTS(SELECT 1 FROM v2_review_fixture_bindings b '
         'WHERE b.job_id=$' + str(review_parameter) + ' AND b.attempt_id=$' + str(attempt_parameter) +
-        ' AND b.fixture_id=$1) AS review_fixture_bound,inventory.total_quotes,q.* '
+        ' AND b.fixture_id=$1) AS review_fixture_bound,inventory.total_quotes,policy AS quote_age_policy,q.* '
         "FROM (VALUES(1)) anchor(value) LEFT JOIN v2_fixtures f ON f.id=$1 AND f.phase IN ('scheduled','live') "
+        "LEFT JOIN v2_admin_settings policy ON policy.setting_key='quote_max_age_seconds' "
         'LEFT JOIN LATERAL (SELECT count(*)::integer AS total_quotes '
         'FROM v2_current_quotes WHERE fixture_id=f.id) inventory ON TRUE '
         'LEFT JOIN LATERAL (SELECT q.* FROM v2_current_quotes q WHERE q.fixture_id=f.id AND ' + where +
@@ -299,12 +300,13 @@ async def _market_snapshot(conn, body, settings, filters):
     fixture = dict(rows[0]['fixture'])
     total_quotes = rows[0]['total_quotes']
     candidates = [{key: value for key, value in row.items()
-                   if key not in {'fixture', 'review_fixture_bound', 'total_quotes'}}
+                   if key not in {'fixture', 'review_fixture_bound', 'total_quotes', 'quote_age_policy'}}
                   for row in rows if row['id'] is not None]
     if len(candidates) > MAX_MARKETS:
         raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
     quotes = [quote for quote in candidates if _market_matches(quote, filters)]
-    max_age = await runtime_quote_max_age(settings, conn)
+    policy = rows[0]['quote_age_policy']
+    max_age = quote_max_age_from_rows(settings, [] if policy is None else [policy])
     return fixture, total_quotes, quotes, max_age
 
 
