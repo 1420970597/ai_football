@@ -469,6 +469,37 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(6, counted_pool.commands)
         self.assertEqual(2, second.json()['total_candidates'])
 
+    async def test_complete_first_page_reuses_all_candidates_for_inline_binding(self):
+        await self.fixture(1)
+        counted_pool = _CountingPool(self.pool)
+        with patch('app.routes.reviews.database.current_pool', return_value=counted_pool):
+            response = await self.post('search_matches', team_query='Alpha', sport='football',
+                                       team_a='Alpha1', team_b='Beta1')
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual(9,counted_pool.commands)
+        wire=response.json()
+        self.assertTrue(wire['resolution']['resolved'])
+        self.assertEqual('fixture-1',wire['resolution']['fixture']['id'])
+        self.assertEqual('scheduled',wire['resolution']['fixture']['phase'])
+        self.assertEqual(wire,(await self.replay('mcp_search_matches'))[1])
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+
+    async def test_final_page_inline_binding_includes_a_previous_page_candidate(self):
+        await self.fixture(1)
+        await self.fixture(2)
+        scope=dict(team_query='Alpha',sport='football',page_size=1,team_a='Alpha1',team_b='Beta1')
+        first=(await self.post('search_matches',**scope)).json()
+        self.assertFalse(first['search_complete'])
+        self.assertFalse(first['resolution']['resolved'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+        last=await self.post('search_matches',**scope,cursor=first['next_cursor'])
+        self.assertEqual(200,last.status_code,last.text)
+        wire=last.json()
+        self.assertEqual(['fixture-2'],[r['id'] for r in wire['items']])
+        self.assertTrue(wire['resolution']['resolved'])
+        self.assertEqual('fixture-1',wire['resolution']['fixture']['id'])
+        self.assertEqual(wire,(await self.replay('mcp_search_matches',offset=1))[1])
+
     async def test_market_snapshot_is_exact_multi_chunk_and_immutable_after_price_change(self):
         await self.fixture()
         await self.pool.execute("ALTER TABLE v2_fixtures ADD COLUMN private_token text DEFAULT 'must-not-store'")

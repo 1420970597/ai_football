@@ -227,7 +227,7 @@ async def search_matches(body: SearchInput, request: Request):
                 raise HTTPException(status_code=409, detail="search already complete; use resolution tool")
             position = _position(request, body, search_key)
             rows = await conn.fetch(
-                "SELECT position,candidate_data FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2 "
+                "SELECT position,fixture_id,candidate_data FROM v2_match_search_candidates WHERE job_id=$1 AND search_key=$2 "
                 "AND position>$3 ORDER BY position LIMIT $4", body.review_id, search_key, position, body.page_size + 1,
             )
             has_more = len(rows) > body.page_size
@@ -242,7 +242,7 @@ async def search_matches(body: SearchInput, request: Request):
             if body.team_a is not None:
                 result['resolution'] = {'resolved': False, 'reason': 'search_not_complete'}
                 if not has_more:
-                    candidates = await conn.fetch(
+                    candidates = page if position == 0 else await conn.fetch(
                         'SELECT fixture_id,candidate_data FROM v2_match_search_candidates '
                         'WHERE job_id=$1 AND search_key=$2', body.review_id, search_key)
                     # League/time/phase constraints already belong to this

@@ -86,6 +86,24 @@ class QuoteUpdateExistingTests(unittest.IsolatedAsyncioTestCase):
                 if owner.is_in_transaction():await transaction.rollback()
         self.assertEqual(Decimal('2.55'),await self.pool.fetchval('SELECT price FROM v2_current_quotes'))
 
+    async def test_waited_update_still_applies_newer_input_after_tuple_moves(self):
+        value=await self.payload()
+        value['markets'][0].update(price='2.05',source_updated_at=(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat())
+        payload=await self.capture(value)
+        async with self.pool.acquire() as owner,self.pool.acquire() as writer:
+            transaction=owner.transaction();await transaction.start();task=None
+            try:
+                await owner.execute("UPDATE v2_current_quotes SET price=2.55,source_updated_at=clock_timestamp()")
+                task=asyncio.create_task(upsert_quotes(writer,payload))
+                await asyncio.sleep(.05)
+                self.assertFalse(task.done())
+                await transaction.commit()
+                await asyncio.wait_for(task,2)
+            finally:
+                if task and not task.done():task.cancel();await asyncio.gather(task,return_exceptions=True)
+                if owner.is_in_transaction():await transaction.rollback()
+        self.assertEqual(Decimal('2.05'),await self.pool.fetchval('SELECT price FROM v2_current_quotes'))
+
     async def test_concurrent_insert_conflict_rechecks_newer_row_and_identity(self):
         value=await self.payload();value['markets']=[fixtures.quote(1,source_updated_at=(datetime.now(timezone.utc)-timedelta(seconds=2)).isoformat())]
         payload=await self.capture(value)
