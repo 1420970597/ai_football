@@ -2,7 +2,8 @@
 
 Only the authenticated collector's single-match, no-cache detail read can supply
 these witnesses. Poll receipts, connection health and model claims cannot.
-Orders deliberately continue using review_state.fresh_quote and their preflight.
+Orders keep this collector witness separate from the executioner's live account
+preflight; provider source timestamps are not execution quote timestamps.
 """
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
