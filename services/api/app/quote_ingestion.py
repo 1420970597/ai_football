@@ -34,6 +34,9 @@ def _same_reference(stored: str, incoming: str) -> str:
 
 async def upsert_quotes(conn, payload):
     # Caller holds fixture state locks and rejects duplicate normalized keys.
+    # Locate each reference once. Materialize its stable id and update need,
+    # then recheck the live row after any concurrent UPDATE wait. Missing
+    # references still use ON CONFLICT to revalidate a concurrent insertion.
     # Fixed field/alias constants build SQL; every incoming value is bound.
     fields = ('id', 'fixture_id', 'market_id', 'period', 'selection', *QUOTE_FIELDS)
     updates = ','.join(f'{field}=q.{field}' for field in QUOTE_FIELDS)
@@ -45,14 +48,17 @@ async def upsert_quotes(conn, payload):
         "market_kind text,line numeric,selection text,price numeric,"
         "source_updated_at timestamptz,received_at timestamptz,source_time_quality text,"
         "status text,play_id text,market_instance_id text,selection_id text,"
-        "is_main boolean,score_basis text)), updated AS ("
-        "UPDATE v2_current_quotes stored SET " + updates + " FROM incoming q WHERE "
-        + _same_reference('stored', 'q') + "AND (" + quote_update_condition('stored', 'q')
+        "is_main boolean,score_basis text)), matched AS MATERIALIZED ("
+        "SELECT q.*,stored.id AS existing_id,("
+        + quote_update_condition('stored', 'q') + ") AS needs_update "
+        "FROM incoming q LEFT JOIN v2_current_quotes stored ON "
+        + _same_reference('stored', 'q') + "), updated AS ("
+        "UPDATE v2_current_quotes stored SET " + updates + " FROM matched q WHERE "
+        "q.needs_update AND stored.id=q.existing_id AND (" + quote_update_condition('stored', 'q')
         + ") RETURNING stored.id) "
         "INSERT INTO v2_current_quotes(" + ','.join(fields) + ") "
-        "SELECT " + ','.join('q.' + field for field in fields) + " FROM incoming q "
-        "WHERE NOT EXISTS(SELECT 1 FROM v2_current_quotes stored WHERE "
-        + _same_reference('stored', 'q') + ") "
+        "SELECT " + ','.join('q.' + field for field in fields) + " FROM matched q "
+        "WHERE q.existing_id IS NULL "
         "ON CONFLICT(fixture_id,market_id,period,(COALESCE(line,0)),selection) "
         "DO UPDATE SET " + conflicts + " WHERE "
         + quote_update_condition('v2_current_quotes', 'EXCLUDED'),

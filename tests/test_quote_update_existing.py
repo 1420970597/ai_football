@@ -101,3 +101,45 @@ class QuoteUpdateExistingTests(unittest.IsolatedAsyncioTestCase):
                 if owner.is_in_transaction():await transaction.rollback()
         row=await self.pool.fetchrow("SELECT id,price FROM v2_current_quotes WHERE market_id='m1'")
         self.assertEqual((expected,Decimal('2.77')),tuple(row.values()))
+
+    async def test_reference_mapping_keeps_fixture_period_line_and_selection_separate(self):
+        markets=[fixtures.quote(0,period=period,line=line,selection=side)
+                 for period in ('full_time','first_half')for line in ('0','0.5')for side in ('home','away')]
+        for identity in ('f','g'):
+            self.assertEqual(200,(await self.post(fixtures.fixture(id=identity,source_id=identity,markets=markets))).status_code)
+        before=await self.pool.fetch('SELECT id,fixture_id,period,line,selection,price FROM v2_current_quotes ORDER BY id')
+        stamp=(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()
+        changed=copy.deepcopy(markets)
+        changed[-1].update(price='2.47',source_updated_at=stamp)
+        self.assertEqual(200,(await self.post(fixtures.fixture(id='g',source_id='g',markets=changed))).status_code)
+        after=await self.pool.fetch('SELECT id,fixture_id,period,line,selection,price FROM v2_current_quotes ORDER BY id')
+        self.assertEqual([r['id']for r in before],[r['id']for r in after])
+        for old,new in zip(before,after):
+            target=(old['fixture_id'],old['period'],old['line'],old['selection'])==('g','first_half',Decimal('.5'),'away')
+            self.assertEqual(Decimal('2.47')if target else old['price'],new['price'])
+
+    async def test_full_mixed_batch_preserves_unchanged_and_old_versions_and_existing_ids(self):
+        value=fixtures.chunked(2000)
+        stamp=(datetime.now(timezone.utc)-timedelta(seconds=30)).isoformat()
+        for chunk in value['market_chunks']:
+            for quote in chunk:quote['source_updated_at']=stamp
+        self.assertEqual(200,(await self.post(value)).status_code)
+        before={r['market_id']:r for r in await self.pool.fetch('SELECT id,market_id,price,xmin::text AS version FROM v2_current_quotes')}
+        changed=copy.deepcopy(value)
+        for index,quote in enumerate(q for chunk in changed['market_chunks']for q in chunk):
+            if 500<=index<1000:
+                quote.update(price='2.11',source_updated_at=(datetime.now(timezone.utc)-timedelta(minutes=1)).isoformat())
+            elif 1000<=index<1500:
+                quote.update(price='2.37',source_updated_at=datetime.now(timezone.utc).isoformat())
+            elif index>=1500:quote['market_id']='new-'+quote['market_id']
+        changed['markets_complete']=False
+        self.assertEqual(200,(await self.post(changed)).status_code)
+        after={r['market_id']:r for r in await self.pool.fetch('SELECT id,market_id,price,xmin::text AS version FROM v2_current_quotes')}
+        self.assertEqual(2500,len(after))
+        for index in range(2000):
+            key='m'+str(index)
+            self.assertEqual(before[key]['id'],after[key]['id'])
+            if 1000<=index<1500:
+                self.assertEqual(Decimal('2.37'),after[key]['price'])
+                self.assertNotEqual(before[key]['version'],after[key]['version'])
+            else:self.assertEqual(before[key],after[key])
