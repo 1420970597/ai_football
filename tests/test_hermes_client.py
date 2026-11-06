@@ -147,6 +147,49 @@ class HermesClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('Hermes provider returned a transient error', str(raised.exception))
         self.assertNotIn('temporary upstream detail', str(raised.exception))
 
+    async def test_framework_empty_completion_is_transient_even_with_stop(self):
+        template = ("isolated-model didn't produce a reply this time, even after retries. "
+                    "Send `continue` to try again, or switch models with /model.")
+        contents = ['', ' \n ', template, '⚠️ No reply: '+template, 'No reply: '+template,
+                    [{'type': 'text', 'text': '⚠️ No reply: '}, {'type': 'text', 'text': template}],
+                    '⚠️ No reply: '+template.replace('isolated-model', 'returned-model'),
+                    '⚠️ No reply: '+template.replace('isolated-model', 'The model'),
+                    "⚠️ No reply: the model provider didn't answer after all retries. Send /retry, or switch models with /model.",
+                    'No reply: the turn stopped while a tool result was still pending. Send `continue` to let the model summarize.',
+                    '⚠️ No reply: the turn stopped while a tool result was still pending and the model produced no follow-up text. Send `continue` to let it summarize.']
+        settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1', hermes_api_key='isolated-key',
+                                   hermes_model='isolated-model')
+        for content in contents:
+            with self.subTest(content=content):
+                async def handler(_request):
+                    return httpx.Response(200, json={'model': 'returned-model', 'choices': [
+                        {'finish_reason': 'stop', 'message': {'content': content}}]})
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    with patch.object(hermes_client, '_content_parts', AsyncMock(return_value=[])):
+                        with self.assertRaises(hermes_client.HermesProviderUnavailable) as raised:
+                            await hermes_client.review_message(settings, {}, uuid.uuid4(), uuid.uuid4(), client=client)
+                self.assertEqual('Hermes provider returned a transient error', str(raised.exception))
+
+    async def test_legitimate_review_and_quoted_no_reply_are_not_transient(self):
+        template = ("isolated-model didn't produce a reply this time, even after retries. "
+                    "Send `continue` to try again, or switch models with /model.")
+        settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1', hermes_api_key='isolated-key',
+                                   hermes_model='isolated-model')
+        contents = ['无新增推荐意图', '已接受工具核验结果', '原文引用：⚠️ No reply: '+template,
+                    '⚠️ No reply: '+template+'\n补充：已核对推荐。',
+                    '⚠️ No reply: '+template.replace('isolated-model', 'different-model')]
+        for content in contents:
+            with self.subTest(content=content):
+                async def handler(_request):
+                    return httpx.Response(200, json={'model': 'isolated-model', 'choices': [
+                        {'finish_reason': 'stop', 'message': {'content': content}}]})
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    with patch.object(hermes_client, '_content_parts', AsyncMock(return_value=[])):
+                        result, summary = await hermes_client.review_message(
+                            settings, {}, uuid.uuid4(), uuid.uuid4(), client=client)
+                self.assertEqual(content, result)
+                self.assertEqual(content, summary['content'])
+
 
 if __name__ == '__main__':
     unittest.main()

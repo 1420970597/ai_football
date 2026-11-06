@@ -41,6 +41,25 @@ class HermesProviderUnavailable(RuntimeError):
         super().__init__("Hermes provider returned a transient error")
 
 
+def _framework_no_reply(content: str, *models: str | None) -> bool:
+    # Pinned Hermes v0.22.5 can return these local explanations with HTTP 200
+    # and finish_reason=stop. They are not assistant review completions. Match
+    # entire known templates, never a quoted substring or a general refusal.
+    text = content.strip()
+    if not text:
+        return True
+    bodies = {
+        "the model provider didn't answer after all retries. Send /retry, or switch models with /model.",
+        "the turn stopped while a tool result was still pending and the model produced no follow-up text. Send `continue` to let it summarize.",
+        "the turn stopped while a tool result was still pending. Send `continue` to let the model summarize.",
+    }
+    for model in (*models, 'The model'):
+        if isinstance(model, str) and model:
+            bodies.add(f"{model} didn't produce a reply this time, even after retries. "
+                       "Send `continue` to try again, or switch models with /model.")
+    return any(text == prefix + body for prefix in ('', '⚠️ No reply: ', 'No reply: ') for body in bodies)
+
+
 class FrozenReviewSettings:
     def __init__(self, values):
         object.__setattr__(self, '_values', MappingProxyType(values))
@@ -253,6 +272,8 @@ async def review_message(settings: Settings, message: dict, review_id: uuid.UUID
         content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
     if not isinstance(content, str):
         raise RuntimeError("Hermes returned an unsupported result shape")
+    if _framework_no_reply(content, settings.hermes_model, payload.get('model')):
+        raise HermesProviderUnavailable()
     summary = {"model": payload.get("model"), "finish_reason": choice.get("finish_reason"),
                "usage": payload.get("usage"), "content": content[:20000],
                "image_count": sum(part.get('type') == 'image_url' for part in parts),

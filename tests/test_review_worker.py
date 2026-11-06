@@ -12,9 +12,10 @@ import unittest
 import uuid
 
 import asyncpg
+import httpx
 
 import test_reviews as support
-from app import worker
+from app import hermes_client, worker
 from app.database import apply_migrations, migration_files
 from infra.remote.review_handoff import try_hold_idle_scheduler, pause_new_claims
 from infra.remote import review_handoff
@@ -870,6 +871,56 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.pool.fetchval(
             "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind IN ('hermes_result','system_review_result')",
             self.job))
+
+    async def test_http_stop_no_reply_retries_and_recovers_without_false_receipts(self):
+        await self.make_queued(attempts=worker.MAX_ATTEMPTS-1)
+        job = await worker.claim_job(self.pool)
+        first_attempt = job['attempt_id']
+        contents = iter([
+            "⚠️ No reply: isolated-model didn't produce a reply this time, even after retries. "
+            "Send `continue` to try again, or switch models with /model.",
+            '无新增推荐意图',
+        ])
+        calls = []
+
+        async def handler(request):
+            calls.append(request.headers['Idempotency-Key'])
+            return httpx.Response(200, json={'model': 'isolated-model', 'choices': [
+                {'finish_reason': 'stop', 'message': {'content': next(contents)}}]})
+
+        settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1', hermes_api_key='isolated-key',
+                                   hermes_model='isolated-model')
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with (patch.object(hermes_client, '_content_parts', AsyncMock(return_value=[])),
+                  patch.object(worker, 'delete_session', AsyncMock()),
+                  patch.object(worker.random, 'randint', return_value=0)):
+                await worker.process_job(self.pool, settings, job, model_client=client)
+                row = await self.pool.fetchrow(
+                    "SELECT state,last_error,lease_until,available_at>now()+interval '899 seconds' AS delayed "
+                    'FROM v2_analysis_jobs WHERE id=$1', self.job)
+                self.assertEqual(('retry', 'HermesProviderUnavailable', None, True), tuple(row))
+                failure = await self.pool.fetchval(
+                    "SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_failure'", self.job)
+                self.assertEqual('provider_transient', failure['failure_category'])
+                self.assertTrue(failure['retryable'])
+                self.assertEqual(0, await self.pool.fetchval(
+                    "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 "
+                    "AND trace_kind IN ('hermes_result','system_review_result')", self.job))
+                await self.pool.execute(
+                    "UPDATE v2_analysis_jobs SET available_at=now()-interval '1 second' WHERE id=$1", self.job)
+                recovered = await worker.claim_job(self.pool)
+                self.assertEqual(worker.MAX_ATTEMPTS+1, recovered['attempts'])
+                self.assertNotEqual(first_attempt, recovered['attempt_id'])
+                await worker.process_job(self.pool, settings, recovered, model_client=client)
+        self.assertEqual([str(first_attempt), str(recovered['attempt_id'])], calls)
+        self.assertEqual('unresolved', await self.pool.fetchval(
+            'SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        results = await self.pool.fetch(
+            "SELECT trace_kind,payload FROM v2_analysis_traces WHERE job_id=$1 "
+            "AND trace_kind IN ('hermes_result','system_review_result') ORDER BY sequence_no", self.job)
+        self.assertEqual(['hermes_result', 'system_review_result'], [r['trace_kind'] for r in results])
+        self.assertTrue(all(r['payload']['attempt_id'] == str(recovered['attempt_id']) for r in results))
+        self.assertEqual('无新增推荐意图', results[0]['payload']['content'])
 
     async def test_provider_transient_remains_claimable_after_attempt_limit(self):
         await self.make_queued()
