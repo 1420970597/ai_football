@@ -21,6 +21,34 @@ from app.ingestion import ingest_fixture, ingest_fixture_batch
 from app.routes import internal, reviews
 
 
+class MarketPeriodInputTests(unittest.TestCase):
+    def body(self, period):
+        return reviews.MarketInput(review_id=uuid.uuid4(), attempt_id=uuid.uuid4(),
+                                   fixture_id='fixture-period-test', period=period)
+
+    def test_exact_chinese_periods_and_existing_full_aliases(self):
+        for raw, expected in (('全场', 'full_time'), ('上半场', 'first_half'),
+                              ('下半场', 'second_half'), ('full_match', 'full_time'),
+                              ('full', 'full_time')):
+            with self.subTest(raw=raw):
+                self.assertEqual(expected, self.body(raw).period)
+
+    def test_canonical_unknown_ascii_and_none_keep_existing_semantics(self):
+        for period in ('full_time', 'first_half', 'second_half', 'unknown_full_match', None):
+            with self.subTest(period=period):
+                self.assertEqual(period, self.body(period).period)
+
+    def test_ambiguous_or_unrecognized_chinese_period_is_rejected(self):
+        for period in ('半场', '加时', '全场大小', '全场上半场', '全场;DROP TABLE', ''):
+            with self.subTest(period=period), self.assertRaises(ValueError):
+                self.body(period)
+
+    def test_non_string_periods_remain_invalid(self):
+        for period in ([], {}, 1, True):
+            with self.subTest(period=period), self.assertRaises(ValueError):
+                self.body(period)
+
+
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_ADMIN_URL"), "requires isolated database")
 class ReviewTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -223,6 +251,31 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Decimal('0.5'), Decimal(result['markets'][0]['line']))
         self.assertEqual(Decimal('-0.5'), Decimal(result['markets'][0]['selection_line']))
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+
+    async def test_chinese_period_filters_keep_exact_period_line_and_direction(self):
+        fixture_id = await self.fixture(markets=[
+            {'market_id': period, 'market_name': period, 'kind': 'total', 'period': period,
+             'line': line, 'selection': selection, 'price': '1.95',
+             'source_updated_at': self.now.isoformat(), 'received_at': self.now.isoformat()}
+            for period in ('full_time', 'first_half', 'second_half')
+            for line, selection in (('2.5', 'over'), ('2.5', 'under'), ('3.5', 'over'))])
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        for raw, canonical in (('全场', 'full_time'), ('上半场', 'first_half'),
+                               ('下半场', 'second_half')):
+            with self.subTest(period=raw):
+                response = await self.post('list_match_markets', fixture_id=fixture_id,
+                                           market_kind='total', period=raw, line='2.5', selection='over')
+                self.assertEqual(200, response.status_code, response.text)
+                result = response.json()
+                self.assertEqual(canonical, result['market_filter']['period'])
+                self.assertEqual([(canonical, Decimal('2.5'), 'over')],
+                                 [(q['period'], Decimal(q['line']), q['selection'])
+                                  for q in result['markets']])
+        self.assertEqual(3, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+        unknown = await self.post('list_match_markets', fixture_id=fixture_id, period='半场')
+        self.assertEqual(422, unknown.status_code)
+        self.assertEqual(3, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
 
     async def test_full_filter_alias_matches_full_time_without_expanding_half_or_direction(self):
         fixture_id = await self.fixture(markets=[
