@@ -132,7 +132,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         body = reviews.MarketInput(**self.context(fixture_id=fixture_id))
         async with self.pool.acquire() as conn:
             expected = dict(await conn.fetchrow('SELECT * FROM v2_fixtures WHERE id=$1', fixture_id))
-            actual = await reviews._bound_active_fixture(conn, body)
+            actual, _, _, _ = await reviews._market_snapshot(
+                conn, body, self.client._transport.app.state.settings, reviews.market_filters(body))
         self.assertEqual(expected, actual)
         self.assertIsInstance(actual['kickoff_at'], datetime)
 

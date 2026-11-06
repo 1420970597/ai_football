@@ -156,20 +156,6 @@ def _market_filter_sql(fixture_id: str, filters: dict):
     return ' AND '.join(clauses), values
 
 
-async def _read_market_quotes(conn, fixture_id: str, filters: dict):
-    where, values = _market_filter_sql(fixture_id, filters)
-    values.append(MAX_MARKETS + 1)
-    rows = await conn.fetch(
-        'SELECT inventory.total_quotes,q.* '
-        'FROM (SELECT count(*)::integer AS total_quotes FROM v2_current_quotes WHERE fixture_id=$1) inventory '
-        'LEFT JOIN LATERAL (SELECT q.* FROM v2_current_quotes q WHERE ' + where +
-        ' ORDER BY q.period,q.market_id,q.line,q.selection LIMIT $' + str(len(values)) + ') q ON TRUE',
-        *values,
-    )
-    quotes = [row for row in rows if row['id'] is not None]
-    return rows[0]['total_quotes'], quotes
-
-
 def _key(request: Request) -> bytes:
     return request.app.state.settings.mcp_internal_token.encode()
 
@@ -288,25 +274,33 @@ async def resolve_match(body: ResolveInput, request: Request):
             return await tool_success(conn, body, result, {'result': {'resolved': result['resolved'], 'candidate_count': result.get('candidate_count')}})
 
 
-async def _bound_active_fixture(conn, body: MarketInput) -> dict:
-    row = await conn.fetchrow(
-        "SELECT f.*,EXISTS(SELECT 1 FROM v2_review_fixture_bindings b "
-        "WHERE b.job_id=$1 AND b.attempt_id=$2 AND b.fixture_id=$3) AS review_fixture_bound "
-        "FROM (VALUES(1)) AS anchor(value) LEFT JOIN v2_fixtures f "
-        "ON f.id=$3 AND f.phase IN ('scheduled','live')",
-        body.review_id, body.attempt_id, body.fixture_id,
-    )
-    fixture = dict(row)
-    if not fixture.pop('review_fixture_bound'):
-        raise HTTPException(409, detail='fixture must be uniquely resolved first')
-    if fixture['id'] is None:
-        raise HTTPException(409, detail='fixture is no longer active')
-    return fixture
-
-
 async def _market_snapshot(conn, body, settings, filters):
-    fixture = await _bound_active_fixture(conn, body)
-    total_quotes, candidates = await _read_market_quotes(conn, body.fixture_id, filters)
+    where, values = _market_filter_sql(body.fixture_id, filters)
+    values.extend((body.review_id, body.attempt_id, MAX_MARKETS + 1))
+    review_parameter, attempt_parameter, limit_parameter = range(len(values)-2, len(values)+1)
+    # One statement observes the current binding, fixture and complete quote
+    # inventory together. Composite rows preserve native Decimal/UTC values;
+    # the anchor also preserves explicit errors when no active fixture exists.
+    rows = await conn.fetch(
+        'SELECT f AS fixture,EXISTS(SELECT 1 FROM v2_review_fixture_bindings b '
+        'WHERE b.job_id=$' + str(review_parameter) + ' AND b.attempt_id=$' + str(attempt_parameter) +
+        ' AND b.fixture_id=$1) AS review_fixture_bound,inventory.total_quotes,q.* '
+        "FROM (VALUES(1)) anchor(value) LEFT JOIN v2_fixtures f ON f.id=$1 AND f.phase IN ('scheduled','live') "
+        'LEFT JOIN LATERAL (SELECT count(*)::integer AS total_quotes '
+        'FROM v2_current_quotes WHERE fixture_id=f.id) inventory ON TRUE '
+        'LEFT JOIN LATERAL (SELECT q.* FROM v2_current_quotes q WHERE q.fixture_id=f.id AND ' + where +
+        ' ORDER BY q.period,q.market_id,q.line,q.selection LIMIT $' + str(limit_parameter) + ') q ON TRUE',
+        *values,
+    )
+    if not rows[0]['review_fixture_bound']:
+        raise HTTPException(409, detail='fixture must be uniquely resolved first')
+    if rows[0]['fixture'] is None:
+        raise HTTPException(409, detail='fixture is no longer active')
+    fixture = dict(rows[0]['fixture'])
+    total_quotes = rows[0]['total_quotes']
+    candidates = [{key: value for key, value in row.items()
+                   if key not in {'fixture', 'review_fixture_bound', 'total_quotes'}}
+                  for row in rows if row['id'] is not None]
     if len(candidates) > MAX_MARKETS:
         raise HTTPException(413, detail='tool evidence budget exceeded; no partial response returned')
     quotes = [quote for quote in candidates if _market_matches(quote, filters)]
