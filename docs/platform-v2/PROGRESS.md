@@ -3388,3 +3388,16 @@ E421代码阶段隔离通过：单读盘详情候选只建身份索引、每个�
 - 结论：E458通过连接与传输健康门，但没有自然新帖可验证审核/比赛盘口匹配，也没有资格证明解析功能完全正常。E457仍是最近一个自然图片推荐正向样本；E459提示修复尚未部署，且真实消息到结论151.048秒、Hermes等待134.674秒，3秒性能验收失败。
 - 部署范围复核：改动在 `services/api/app/hermes_client.py`，运行中的API与review-worker `/app/app/hermes_client.py` 摘要都仍为旧值 `de220700…f06934e`，候选摘要 `342c7460…7401b8`。实际执行模型/工具循环的是 `ai-football-v2-review-worker-1`（当前E446），因此完整回归后只更新review-worker镜像，并须经自然idle/暂停新领取handoff；不重建API、collector或executor。
 - 下一步：从独立干净worktree `.runtime/e459-verification` 对提交 `b9f86304ee160fab9de022676fc9cc942023e9cd` 执行 `BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh`。本次隔离fixtures不连生产provider或资金；测试退出码、实际报告项数、跳过/错误及源码清洁证明均记录后再判断是否构建和受控切换。切换后另起1800秒观察；真实当前专家帖及其原文/图片、审核回执、唯一比赛绑定、具体盘口和quote证据缺一不计解析通过，等待不到样本则继续监控而不宣称正常。
+
+### 2026-11-06 18:32 UTC — E459 全套回归发现受治理提示摘要阻断，停止候选发布
+
+- 冻结来源为提交 `b9f86304ee160fab9de022676fc9cc942023e9cd`，worktree `.runtime/e459-verification` 清洁且 `committed_source_verified=true`。实际命令 `BUILDX_BUILDER=ai-football-e131 sh infra/test/run.sh` 在 Docker 中运行 1593 项、770.558 秒，0 failures、1 error、0 skipped，整体退出 1；机器证据 `.runtime/e459-verification/.runtime/test-evidence/2892661/backend-tests.json` SHA-256=`4911432a4e66591ed5c771039c56a58995086369fd3114085b2ae94dd091760c`。错误为 `test_model_configuration.ModelConfigurationTests.test_deployed_persisted_legacy_baseline_remains_consumable`：候选修改改变 SYSTEM_PROMPT，工作器正确以 `review configuration artifact provenance does not match worker` 拒绝部署中的不可变提示来源 `222388e0…a84173`。因此候选未构建/部署，E459验收不通过。
+- 既有模型治理要求真实人工标注比较报告及管理员逐差异审核后才能激活新提示来源；不能改存量摘要、伪造人工报告、修改测试期望或放宽工作器来源校验。相同提示调整已在E279/E357因缺少该证据停止。此轮恢复受控提示文本与E446运行契约，保留提交/失败报告，不以“测试大多通过”发布。
+- 回退当前恢复摘要用Docker验证；随后研究不改变 SYSTEM_PROMPT/模型配置版本的服务端实现路径，只能在保持完整候选分页、双方球队唯一核验、当前报价绑定和 active attempt 校验下改进。任一方案若需要批准模型提示来源，需先提供可审查的真实比较证据并走既有管理员审核流程；当前3秒链路目标仍失败。
+
+### 2026-11-06 18:40 UTC — E459 提示候选撤回，原治理配置回归通过，E460 监控准备
+
+- 已撤销本分支未发布的 `SYSTEM_PROMPT` 修改与相应新测试，恢复 SHA-256 `222388e0dde4957ff096435cdf283f676e1c01e8003c9f536599f76f30a84173` 对应的受控配置。Docker命令 `docker run --rm --name ai-football-e459-baseline-check --cpus=.25 --memory=256m --network ai-football-e459-prompt-check-1106 ... python -m unittest -q test_model_configuration.ModelConfigurationTests.test_deployed_persisted_legacy_baseline_remains_consumable test_hermes_client` 实际10项/10.652秒/退出0；PostgreSQL为本任务具名临时网络与容器，未连生产。临时DB和网络清理在此阶段结束后单独执行并记录。
+- 提示变更失败原因和候选冻结报告分别保留；同类提示优化未获真实人工标注报告和管理员差异审核，遵守既有E357结论撤回，不修改模型台账、不部署、不更新 API/review-worker。E459最初错误数报告中的 `committed_source_verified=true` 只证明失败测试针对干净已提交快照，不代表通过。
+- 服务端优化研究：`search_matches` 已有经E408完整回归的单页候选复用及数据库往返优化；实际部署API E456含该实现。继续改变检索候选范围前必须证明 search_key、不可变候选快照、游标续页、inline/独立resolve、记录轨迹和 completion_issues 一致；任何按双队名扩展候选均需纳入检索身份/范围，不能只追加未纳入快照键的隐式输入。本阶段尚无新服务端代码候选，也没有可部署优化。
+- 下一步：恢复E458只读监控容器的同一最小配置后，独立重命名并启动E460完整1800秒/30秒观察，继续比对6个已配置来源、每条新发布日期作者帖、媒体、job、当前attempt和系统回执；精确分源官方Telegram扫描仅在有自然帖时执行。若没有新帖，仅记健康与样本不足，不用历史编辑或回放冒充解析通过。仍需新的图片/文字专家样本证明唯一比赛、期间、盘口线、方向及quote evidence；真实消息到结论≤3秒目前未满足。
