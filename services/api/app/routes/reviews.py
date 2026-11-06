@@ -92,7 +92,7 @@ class MarketInput(AttemptInput):
     @field_validator('market_kind', mode='before')
     @classmethod
     def normalize_market_kind_alias(cls, value):
-        if value == 'over_under':
+        if value in ('over_under', 'totals'):
             return 'total'
         return 'handicap' if value == 'asian_handicap' else value
 
