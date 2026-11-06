@@ -3347,3 +3347,5 @@ E421代码阶段隔离通过：单读盘详情候选只建身份索引、每个�
 16:21 UTC E455分阶段延迟复核仅输出计时字段：两条新帖Hermes provider分别10,921ms和19,400ms，system conclusion 23,472ms和28,327ms；scheduler claim为1,919ms和1,599ms，图片/上下文准备为917ms和0ms。provider单项已超过3秒，不可能靠本地排队优化达标；仍需保留上游实际恢复/延迟证据，优先优化可控采集与数据库阶段。原冻结全套仍在运行，未修改被测源码。
 
 16:24 UTC E456部署前只读基线观察器启动，窗口30分钟、30秒采样；首样本API health/ready均200，Telegram六来源connected/authorized、6/6租约单owner、degraded=false，无来源错误/deferred；1群caught_up、5群catching_up。观察器窗口当前无新帖、审核项为0；总任务状态含历史failed/retry，必须按本窗current-version与attempt证据区分，不把历史积压直接算成本窗漏审。冻结完整套仍运行，观察器只读，不部署/下注/结算。
+
+16:29 UTC E456冻结套报告完成：source commit=`2f763690fc5a6c087f8912fd4210e038a3ed9200`、`committed_source_verified=true`，1592项/774.610秒/0失败/错误/跳过；Docker中独立JSON门禁断言实际退出0。测试容器自动清理导致原套shell退出码未持久化，保留该限制，不伪称取回原退出码；机器报告的冻结套返回条件与零失败/跳过一致。构建基于此只读干净worktree进行，不改其源文件；测试范围为隔离fixtures、无真实provider或资金。E456基线观察继续中。
