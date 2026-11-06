@@ -3349,3 +3349,5 @@ E421代码阶段隔离通过：单读盘详情候选只建身份索引、每个�
 16:24 UTC E456部署前只读基线观察器启动，窗口30分钟、30秒采样；首样本API health/ready均200，Telegram六来源connected/authorized、6/6租约单owner、degraded=false，无来源错误/deferred；1群caught_up、5群catching_up。观察器窗口当前无新帖、审核项为0；总任务状态含历史failed/retry，必须按本窗current-version与attempt证据区分，不把历史积压直接算成本窗漏审。冻结完整套仍运行，观察器只读，不部署/下注/结算。
 
 16:29 UTC E456冻结套报告完成：source commit=`2f763690fc5a6c087f8912fd4210e038a3ed9200`、`committed_source_verified=true`，1592项/774.610秒/0失败/错误/跳过；Docker中独立JSON门禁断言实际退出0。测试容器自动清理导致原套shell退出码未持久化，保留该限制，不伪称取回原退出码；机器报告的冻结套返回条件与零失败/跳过一致。构建基于此只读干净worktree进行，不改其源文件；测试范围为隔离fixtures、无真实provider或资金。E456基线观察继续中。
+
+16:39 UTC E456 API候选构建命令Docker退出0，镜像`ai-football-api:2.0.0-dev-e456-2f76369` ID=`sha256:cc8ba7089420935ec379540d694c52bc9f21884d27913638a0178cf39f2ec68c`。镜像内72个app文件、28个migration文件和requirements均与冻结树哈希一致；早段first-half evidence加载断言通过（第一次探针因未设PYTHONPATH失败，设`PYTHONPATH=/app`后原断言重跑退出0）。Compose等价检查退出0，仅API镜像变化、其余7项service config完全相同；4个shell及4个Python门控脚本在Docker语法解析退出0。部署脚本尚未执行；E456基线仍健康，待自然空闲门后才可应用。
