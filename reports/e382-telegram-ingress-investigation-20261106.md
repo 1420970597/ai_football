@@ -1,0 +1,9 @@
+# E382 Telegram 入站延迟分段核验
+
+更新时间2026-11-06 01:20 UTC。状态：研究中。目标定位E380真实编辑从source_version到collector回调延迟124至172秒；责任services/collector、运行观察和tests，依赖当前六群授权映射、事务持久化及回调阶段日志。现有证据不等于事件循环阻塞，更不能把全部延迟归于模型。
+
+设计：只读项目collector的六分钟有界日志及已安装Telethon1.42.0实际源码，按当前监控chat映射把频道difference日志转成source_no和monitored布尔，不输出频道编号、会话或凭据。核验实时dispatch是否串行、library在读取updates队列前是否同步处理difference，关联延迟编辑的批量回调。若需要优化，只在原采集生命周期内实施有界调度或独立补采，不修改第三方全局包、不静默丢消息、不提前确认持久化、不绕过TG等待。
+
+01:16只读e382-telegram-ingress-probe.py命令docker exec ai-football-v2-storage-tunnel-1实际0，远端仅本项目collector读取；完整update_loop与dispatch_update已保留。代码显示默认并行dispatch，但difference请求在updates队列消费之前按循环await。00:36–00:42日志36次channel_difference，按当前六源映射其中35个非监控频道，仅00:40:17.673354868为监控来源3；紧接该时刻十四个旧编辑回调一起进入。这支持源3通过官方difference补齐，尚不能证明35次其它频道请求造成全部124–172秒等待，也不能证明消息提前到达网络层。
+
+e382-ingress-source-correlation初次读取未挂载/run/probe.py失败1保留；02将先前实际读取脚本嵌入任务输入，仍只读且actual0。没有开启第二个TG接收会话、没有改授权配置或底层消息盒状态。下一步继续关联源3官方恢复节奏与历史补采时间，建立可重复场景再实施最小修复；自然E381完整窗持续，不能把减少背景频道视为已证实修复。
