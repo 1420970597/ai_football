@@ -5,6 +5,7 @@ applicable. Other selections, image-only messages and unrelated commentary do
 not gain an invented period. Ambiguous shorthand remains unresolved.
 """
 from decimal import Decimal
+from datetime import datetime, timezone
 import re
 import unicodedata
 
@@ -23,7 +24,39 @@ INTENT_VALID_SQL = ("NOT (s.withdrawn_at IS NOT NULL AND COALESCE(s.withdrawal_r
                     "'review_source_period_intent_ambiguous','review_source_period_intent_conflict'))")
 
 
-def period_intent_rejection(text, quote):
+def _early_first_half(quote, posted_at, now):
+    """Use attempt-bound provider snapshots, never a model's claimed period."""
+    candidate = quote.get('intent_candidate')
+    if not isinstance(candidate, dict) or posted_at is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    try:
+        observed = datetime.fromisoformat(candidate['received_at'].replace('Z', '+00:00'))
+        current = quote['fixture_received_at']
+        if (candidate.get('id') != quote['fixture_id']
+                or candidate.get('source_id') != quote.get('source_id')
+                or not re.fullmatch(r'leyu:[0-9]+', quote['fixture_id'])
+                or candidate.get('sport') != 'football'
+                or quote.get('fixture_sport') != 'football'
+                or candidate.get('phase') != 'live' or quote.get('phase') != 'live'
+                or candidate.get('match_state') != '6'
+                or quote.get('fixture_match_state') != '6'
+                or type(candidate.get('clock_minute')) is not int
+                or type(quote.get('fixture_clock_minute')) is not int
+                or not 0 <= candidate['clock_minute'] < 45
+                or not 0 <= quote['fixture_clock_minute'] < 45):
+            return False
+        # Receipt times describe observations, not invented provider timestamps.
+        return (0 <= (now-posted_at).total_seconds() <= 300
+                and -60 <= (observed-posted_at).total_seconds() <= 120
+                and 0 <= (now-observed).total_seconds() <= 180
+                and 0 <= (now-current).total_seconds() <= 120
+                and observed <= current)
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+        return False
+
+
+def period_intent_rejection(text, quote, *, posted_at=None, now=None):
     if quote.get('market_kind') not in {'total', 'team_total'} or quote.get('line') is None:
         return None
     constraints = set()
@@ -39,7 +72,10 @@ def period_intent_rejection(text, quote):
             line = (line + other) / 2
         if line % Decimal('.25') or line != quote['line'] or selection != quote['selection']:
             continue
-        constraints.add(_PERIODS.get(match['period'], 'ambiguous'))
+        period = _PERIODS.get(match['period'], 'ambiguous')
+        if period == 'ambiguous' and _early_first_half(quote, posted_at, now):
+            period = 'first_half'
+        constraints.add(period)
     if not constraints:
         return None
     if 'ambiguous' in constraints:

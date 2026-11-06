@@ -429,8 +429,13 @@ async def _record_current_signals(conn, body, request, observations):
     # Keep fixture-before-quote locking while avoiding N remote reads
     # under the fixture locks. Each intent is still validated below.
     quotes = await conn.fetch(
-            "SELECT q.*,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context,r.source_updated_at AS read_source_time,r.price AS read_price FROM v2_current_quotes q "
+            "SELECT q.*,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,"
+            "f.sport AS fixture_sport,f.match_state AS fixture_match_state,f.clock_minute AS fixture_clock_minute,"
+            "f.received_at AS fixture_received_at,c.candidate_data AS intent_candidate,"
+            "r.quote_context AS read_context,r.source_updated_at AS read_source_time,r.price AS read_price FROM v2_current_quotes q "
             "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
+            "LEFT JOIN v2_match_searches search ON search.job_id=b.job_id AND search.search_key=b.search_key AND search.attempt_id=$2 AND search.complete "
+            "LEFT JOIN v2_match_search_candidates c ON c.job_id=search.job_id AND c.search_key=search.search_key AND c.fixture_id=q.fixture_id "
             "JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 "
             "JOIN (SELECT DISTINCT fixture_id,quote_id FROM unnest($3::text[],$4::uuid[]) AS pairs(fixture_id,quote_id)) wanted "
             "ON wanted.fixture_id=q.fixture_id AND wanted.quote_id=q.id "
@@ -445,10 +450,12 @@ async def _record_current_signals(conn, body, request, observations):
         quote = by_quote.get((pick.fixture_id, pick.quote_id))
         reason = None
         confirmation = None
+        period_rejection = None
         if quote:
             fixture = dict(quote) | {'id': quote['fixture_id']}
             confirmation = confirmation_for(observations.get(pick.fixture_id), quote, fixture, max_quote_age)
             confirmation = confirmation or confirmation_for(quote['read_context'].get('current_confirmation'), quote, fixture, max_quote_age)
+            period_rejection = period_intent_rejection(job['raw_text'], quote, posted_at=job['posted_at'])
         if not quote:
             reason = "quote_not_read_or_changed"
         elif {k: v for k, v in quote['read_context'].items() if k != 'current_confirmation'} != quote_context(quote, quote):
@@ -457,8 +464,8 @@ async def _record_current_signals(conn, body, request, observations):
             reason = "fixture_not_active"
         elif quote['market_kind'] == 'team_total' and not team_total_terms(quote, quote['fixture_id']):
             reason = 'team_total_native_identity_unknown'
-        elif period_intent_rejection(job['raw_text'], quote):
-            reason = period_intent_rejection(job['raw_text'], quote)
+        elif period_rejection:
+            reason = period_rejection
         elif not fresh_quote(quote, max_quote_age) and not confirmation:
             reason = "quote_inactive_unknown_or_stale"
         if reason:

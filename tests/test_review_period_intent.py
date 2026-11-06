@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import datetime, timedelta, timezone
 import unittest
 
 from app.review_period_intent import period_intent_rejection
@@ -6,8 +7,9 @@ from app.review_period_intent import period_intent_rejection
 
 class PeriodIntentTests(unittest.TestCase):
     def quote(self, **changes):
-        return dict(market_kind='total', line=Decimal('3.75'), selection='over',
-                    period='full_time', **changes)
+        value = dict(market_kind='total', line=Decimal('3.75'), selection='over', period='full_time')
+        value.update(changes)
+        return value
 
     def test_explicit_matching_periods_and_both_totals_orders(self):
         for text, period in (('全场 3.5/4大', 'full_time'), ('上半大3.5/4', 'first_half'),
@@ -37,3 +39,25 @@ class PeriodIntentTests(unittest.TestCase):
             self.assertIsNone(period_intent_rejection(text,self.quote()))
         quote=self.quote();quote['market_kind']='handicap'
         self.assertIsNone(period_intent_rejection('半大3.5/4',quote))
+
+    def test_verified_early_leyu_first_half_context_resolves_bare_half(self):
+        now = datetime.now(timezone.utc)
+        quote = self.quote(period='first_half', fixture_id='leyu:5821685', source_id='leyu:5821685',
+                           phase='live', fixture_sport='football', fixture_match_state='6',
+                           fixture_clock_minute=15, fixture_received_at=now,
+                           intent_candidate={'id':'leyu:5821685','source_id':'leyu:5821685',
+                               'sport':'football','phase':'live','match_state':'6','clock_minute':15,
+                               'received_at':(now-timedelta(seconds=5)).isoformat()})
+        posted = now - timedelta(seconds=10)
+        self.assertIsNone(period_intent_rejection('半场大3.75', quote, posted_at=posted, now=now))
+
+    def test_early_context_does_not_resolve_stale_or_non_leyu_half(self):
+        now = datetime.now(timezone.utc)
+        quote = self.quote(period='first_half', fixture_id='source:1', source_id='source:1',
+                           phase='live', fixture_sport='football', fixture_match_state='6',
+                           fixture_clock_minute=15, fixture_received_at=now,
+                           intent_candidate={'id':'source:1','source_id':'source:1','sport':'football',
+                               'phase':'live','match_state':'6','clock_minute':15,
+                               'received_at':(now-timedelta(seconds=5)).isoformat()})
+        self.assertEqual('source_period_intent_ambiguous', period_intent_rejection(
+            '半场大3.75', quote, posted_at=now-timedelta(seconds=10), now=now))
