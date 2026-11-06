@@ -25,6 +25,20 @@ class SourceFragmentTests(unittest.TestCase):
             with self.subTest(start=start, end=end):
                 self.assertEqual((), source_fragments('卡洛斯卡萨雷斯农业', start, end))
 
+    def test_club_prefix_in_original_source_is_recalled_without_identity_alias(self):
+        for query in ('德瓦联合万丹', '德瓦联合'):
+            with self.subTest(query=query):
+                terms = source_fragments(query, self.start, self.end)
+                self.assertIn('德瓦', terms)
+                self.assertLessEqual(len(terms), 12)
+                self.assertTrue(all(term in query for term in terms))
+                self.assertFalse(team_name_matches(query, '德瓦FC'))
+
+    def test_generic_club_prefix_does_not_expand_candidate_identity(self):
+        terms = source_fragments('青年德瓦联合', self.start, self.end)
+        self.assertNotIn('青年', terms)
+        self.assertNotIn('联合', terms)
+
     def test_latin_short_chinese_and_generic_suffixes_are_not_generated(self):
         for query in ('Agropecuario U20', '农业', '埃斯卡', 'Alpha Beta'):
             self.assertEqual((), source_fragments(query, self.start, self.end))

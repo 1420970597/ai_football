@@ -413,6 +413,35 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(resolved.json()['resolved'])
         self.assertEqual('fixture-1', resolved.json()['fixture']['id'])
 
+    async def test_source_club_prefix_recalls_fixture_but_does_not_bind_alias(self):
+        await self.fixture(1, home_team='PSIM日惹', away_team='德瓦FC',
+                           competition_name='印尼超级联赛')
+        await self.fixture(2, home_team='PSIM日惹', away_team='德瓦FC(女)',
+                           competition_name='印尼超级联赛')
+        result = await self.post('search_matches', team_query='德瓦联合万丹',
+            competition_query='印尼超级联赛', sport='football',
+            from_utc=self.now.isoformat(), to_utc=(self.now+timedelta(days=3)).isoformat(),
+            team_a='永亚卡达', team_b='德瓦联合万丹', page_size=1)
+        self.assertEqual(200, result.status_code, result.text)
+        first = result.json()
+        self.assertEqual(2, first['total_candidates'])
+        self.assertFalse(first['search_complete'])
+        self.assertFalse(first['resolution']['resolved'])
+        self.assertEqual('source_fragment_candidate', first['items'][0]['retrieval_basis'])
+        continued = await self.post('search_matches', team_query='德瓦联合万丹',
+            competition_query='印尼超级联赛', sport='football',
+            from_utc=self.now.isoformat(), to_utc=(self.now+timedelta(days=3)).isoformat(),
+            team_a='永亚卡达', team_b='德瓦联合万丹', page_size=1, cursor=first['next_cursor'])
+        self.assertEqual(200, continued.status_code, continued.text)
+        self.assertTrue(continued.json()['search_complete'])
+        self.assertFalse(continued.json()['resolution']['resolved'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+        resolved = await self.post('resolve_match', search_key=first['search_key'],
+                                   team_a='PSIM日惹', team_b='德瓦FC')
+        self.assertTrue(resolved.json()['resolved'])
+        self.assertEqual('fixture-1', resolved.json()['fixture']['id'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
     async def test_strict_chinese_search_does_not_mix_fragment_candidates(self):
         query = '卡洛斯卡萨雷斯农业'
         await self.fixture(1, home_team=query+'U20')

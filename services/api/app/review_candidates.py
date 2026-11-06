@@ -40,7 +40,10 @@ def source_fragments(query, start, end):
         return ()
     fragments = {}
     for run in re.findall(r'[\u3400-\u9fff]{4,}', normalize_team_name(query)):
-        for value in (run[-2:], *(run[i:i+3] for i in range(len(run)-2))):
+        # A source name such as 德瓦联合万丹 shares its club prefix with
+        # 德瓦FC, but neither its suffix nor any trigram does. These are
+        # retrieval fragments only; resolution still verifies both teams.
+        for value in (run[-2:], run[:2], *(run[i:i+3] for i in range(len(run)-2))):
             if value not in _GENERIC_FRAGMENTS:
                 fragments.setdefault(value, None)
     return tuple(fragments)[:12]
