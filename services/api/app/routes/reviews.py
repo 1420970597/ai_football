@@ -27,7 +27,7 @@ from ..signal_persistence import persist_signals
 from ..review_resolution import resolve_candidates
 from ..review_market_query import market_filters
 from ..team_totals import team_total_terms
-from ..review_period_intent import period_intent_rejection
+from ..review_period_intent import period_intent_rejection, verified_early_first_half_context
 
 router = APIRouter(prefix="/internal/mcp")
 
@@ -452,6 +452,7 @@ async def _record_current_signals(conn, body, request, observations):
         confirmation = None
         period_rejection = None
         if quote:
+            quote = dict(quote)
             fixture = dict(quote) | {'id': quote['fixture_id']}
             confirmation = confirmation_for(observations.get(pick.fixture_id), quote, fixture, max_quote_age)
             confirmation = confirmation or confirmation_for(quote['read_context'].get('current_confirmation'), quote, fixture, max_quote_age)
@@ -471,6 +472,8 @@ async def _record_current_signals(conn, body, request, observations):
         if reason:
             rejected.append({"index": index, "reason": reason})
             continue
+        quote['source_period_context'] = verified_early_first_half_context(
+            job['raw_text'], quote, posted_at=job['posted_at'])
         valid.append((index, quote, pick, confirmation))
     saved = await persist_signals(conn, job=job, attempt_id=body.attempt_id,
                                  entries=[(quote, pick, confirmation) for _, quote, pick, confirmation in valid])

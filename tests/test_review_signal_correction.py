@@ -61,6 +61,18 @@ class SignalCorrectionTests(unittest.IsolatedAsyncioTestCase):
         stats,=await summaries(self.pool,scope.start,scope.end,scope=scope)
         self.assertEqual((1,1,0),(stats['total_signals'],stats['invalid_recommendation_intent'],stats['eligible_signals']))
 
+    async def test_verified_early_half_evidence_is_not_later_withdrawn_as_ambiguous(self):
+        signal,_=await self.legacy_signal()
+        await self.pool.execute("UPDATE v2_quote_evidence SET evidence=evidence || $2::jsonb "
+            'WHERE reference_id=$1 AND evidence_kind=\'expert_signal\'',signal,
+            {'source_period_context':{'algorithm':'leyu-early-first-half-stage-v1',
+                'fixture_id':'fixture-1','source_id':'fixture-1','match_state':'6',
+                'search_clock_minute':15,'quote_clock_minute':16}})
+        result=await self.correct(signal,False)
+        self.assertEqual(('not_needed','period_context_verified_at_acceptance'),
+                         (result['status'],result['reason']))
+        self.assertIsNone(await self.pool.fetchval('SELECT withdrawn_at FROM v2_expert_signals WHERE id=$1',signal))
+
     async def test_already_settled_quote_and_ledger_remain_immutable_on_rebuild(self):
         signal,fixture=await self.legacy_signal()
         body=ResultInput(fixture_id=fixture,provider_reference='isolated-result',status='confirmed',

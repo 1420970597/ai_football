@@ -83,3 +83,35 @@ def period_intent_rejection(text, quote, *, posted_at=None, now=None):
     if quote['period'] not in constraints:
         return 'source_period_intent_conflict'
     return None
+
+
+def verified_early_first_half_context(text, quote, *, posted_at=None, now=None):
+    """Return the immutable source facts that justified a bare-half decision."""
+    if quote.get('market_kind') not in {'total', 'team_total'} or quote.get('line') is None:
+        return None
+    text = unicodedata.normalize('NFKC', text or '')
+    for match in _TOTAL.finditer(text):
+        if match['period'] not in {'半', '半场', '半場'}:
+            continue
+        selection = 'over' if (match['before'] or match['after']) == '大' else 'under'
+        line = Decimal(match['a'] or match['c'])
+        split = match['b'] or match['d']
+        if split is not None:
+            other = Decimal(split)
+            if abs(other-line) != Decimal('.5'):
+                continue
+            line = (line+other)/2
+        if line != quote['line'] or selection != quote['selection'] or quote['period'] != 'first_half':
+            continue
+        if not _early_first_half(quote, posted_at, now):
+            return None
+        candidate = quote['intent_candidate']
+        observed = datetime.fromisoformat(candidate['received_at'].replace('Z', '+00:00'))
+        received = quote['fixture_received_at']
+        return {'algorithm': 'leyu-early-first-half-stage-v1',
+                'fixture_id': quote['fixture_id'], 'source_id': quote['source_id'],
+                'match_state': '6', 'search_clock_minute': candidate['clock_minute'],
+                'quote_clock_minute': quote['fixture_clock_minute'],
+                'search_received_at': observed.isoformat(),
+                'quote_received_at': received.isoformat()}
+    return None

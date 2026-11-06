@@ -38,6 +38,18 @@ async def correct_period_signal(conn, job_id, signal_id, *, apply=False):
                          else 'ineligible', 'reason': 'signal_already_withdrawn'}
     if await conn.fetchval('SELECT EXISTS(SELECT 1 FROM v2_bet_orders WHERE signal_id=$1)', signal_id):
         return result | {'status': 'ineligible', 'reason': 'signal_has_order_requires_separate_reconciliation'}
+    evidence = await conn.fetchrow(
+        "SELECT evidence FROM v2_quote_evidence WHERE evidence_kind='expert_signal' "
+        'AND reference_id=$1 ORDER BY captured_at DESC LIMIT 1', signal_id)
+    period_context = evidence['evidence'].get('source_period_context') if evidence else None
+    if (isinstance(period_context, dict)
+            and period_context.get('algorithm') == 'leyu-early-first-half-stage-v1'
+            and period_context.get('fixture_id') == signal['fixture_id']
+            and period_context.get('source_id') == signal['fixture_id']
+            and period_context.get('match_state') == '6'
+            and all(type(period_context.get(key)) is int and 0 <= period_context[key] < 45
+                    for key in ('search_clock_minute', 'quote_clock_minute'))):
+        return result | {'status': 'not_needed', 'reason': 'period_context_verified_at_acceptance'}
     reason = period_intent_rejection(row['raw_text'], signal)
     if reason is None:
         return result | {'status': 'not_needed', 'reason': 'no_verified_period_conflict'}

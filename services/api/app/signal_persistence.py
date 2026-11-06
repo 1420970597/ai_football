@@ -17,6 +17,8 @@ def _signal_context(job, attempt_id, quote, pick, confirmation):
                 **team_total_terms(quote, quote['fixture_id']),
                 'reviewed_price': str(quote['read_price']) if quote['read_price'] is not None else None,
                 'reviewed_source_updated_at': quote['read_source_time'].isoformat() if quote['read_source_time'] else None}
+    if quote.get('source_period_context') is not None:
+        evidence['source_period_context'] = quote['source_period_context']
     return baseline, evidence
 
 

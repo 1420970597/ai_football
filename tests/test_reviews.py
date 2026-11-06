@@ -175,6 +175,12 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(expected, len(response.json()['accepted']))
                 if not expected:
                     self.assertEqual('source_period_intent_ambiguous', response.json()['rejected'][0]['reason'])
+                else:
+                    evidence = await self.pool.fetchrow(
+                        "SELECT evidence FROM v2_quote_evidence WHERE reference_id=$1 AND evidence_kind='expert_signal'",
+                        uuid.UUID(response.json()['accepted'][0]['signal_id']))
+                    period_context = evidence['evidence']['source_period_context']
+                    self.assertEqual('leyu-early-first-half-stage-v1', period_context['algorithm'])
 
     async def test_native_team_totals_keep_sides_read_binding_and_idempotent_prices(self):
         markets=[{'market_id':mid,'market_name':name,'kind':'team_total','period':'full_time',
