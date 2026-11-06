@@ -7,6 +7,7 @@ import uuid
 from app.review_state import trace
 from app.review_summary import make_summary, record_summary
 from app.review_summary_evidence import read_summary_evidence
+from app.review_completion import completion_issues
 import test_reviews as support
 
 
@@ -40,6 +41,48 @@ class SummaryEvidenceTests(unittest.IsolatedAsyncioTestCase):
         result = await self.evidence()
         self.assertEqual((0, [], [], [], []), (
             result.total, result.signals, result.rejected, result.identified, result.model_contents))
+        self.assertEqual({}, result.pagination_issues)
+
+    async def test_no_mentions_receipt_uses_snapshot_pagination_and_one_read(self):
+        await self.pool.execute(
+            "INSERT INTO v2_match_searches(job_id,attempt_id,search_key,team_query,phase,expected_cursor) "
+            "VALUES($1,$2,'unfinished','Alpha','all','next-page')", self.job, self.attempt)
+        scope = {'sport': 'basketball', 'phase': 'all', 'from_utc': '2026-11-06T00:00:00Z'}
+        async with self.pool.acquire() as conn, conn.transaction():
+            await trace(conn, self.job, 'mcp_search_matches', {
+                'attempt_id': str(self.attempt), 'search_key': 'unfinished',
+                'status': 'succeeded', 'scope': scope})
+            await trace(conn, self.job, 'hermes_result', {
+                'attempt_id': str(self.attempt), 'content': '聊天，未进行推荐'})
+            expected = await completion_issues(conn, self.job, self.attempt, set())
+            counted = CountedConnection(conn)
+            await record_summary(counted, {'id': self.job, 'message_id': self.message}, self.attempt, 'real_time')
+            self.assertEqual(1, len(counted.reads))
+        receipt = await self.pool.fetchval(
+            "SELECT payload FROM v2_analysis_traces WHERE trace_kind='system_review_result'")
+        self.assertEqual(expected, receipt['completion_issues'])
+        self.assertFalse(receipt['completion_verified'])
+        self.assertEqual('next-page', expected['unfinished_searches'][0]['cursor'])
+        self.assertEqual(scope, expected['unfinished_searches'][0]['scope'])
+
+    async def test_snapshot_pagination_preserves_real_count_limit_and_attempt_scope(self):
+        await self.pool.execute(
+            "INSERT INTO v2_match_searches(job_id,attempt_id,search_key,team_query,phase,expected_cursor) "
+            "SELECT $1,$2,'current-'||i,'Alpha','all','cursor-'||i FROM generate_series(1,105)i",
+            self.job, self.attempt)
+        await self.pool.execute(
+            "INSERT INTO v2_match_searches(job_id,attempt_id,search_key,team_query,phase) "
+            "VALUES($1,$2,'old-attempt','Alpha','all'),($1,$3,'completed','Alpha','all')",
+            self.job, uuid.uuid4(), self.attempt)
+        await self.pool.execute(
+            "UPDATE v2_match_searches SET complete=true WHERE search_key='completed'")
+        result = await self.evidence()
+        async with self.pool.acquire() as conn:
+            expected = await completion_issues(conn, self.job, self.attempt, set())
+        self.assertEqual(expected, result.pagination_issues)
+        self.assertEqual(105, result.pagination_issues['unfinished_search_count'])
+        self.assertEqual(100, len(result.pagination_issues['unfinished_searches']))
+        self.assertNotIn('old-attempt', {r['search_key'] for r in result.pagination_issues['unfinished_searches']})
 
     async def test_attempt_isolation_and_trace_order_preserve_unverified_mentions(self):
         async with self.pool.acquire() as conn, conn.transaction():

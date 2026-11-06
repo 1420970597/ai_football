@@ -91,7 +91,8 @@ async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_
     """Caller holds the active job lock in the same completion transaction."""
     evidence = await read_summary_evidence(conn, job['id'], attempt_id, job['message_id'], SUMMARY_ITEM_LIMIT)
     mentioned = set().union(*(mentioned_fixtures(content) for content in evidence.model_contents))
-    incomplete = await completion_issues(conn, job['id'], attempt_id, mentioned)
+    incomplete = (await completion_issues(conn, job['id'], attempt_id, mentioned)
+                  if mentioned else evidence.pagination_issues)
     receipt = make_summary(evidence.signals, accepted_total=evidence.total, rejected=evidence.rejected, review_mode=review_mode,
                            identified=evidence.identified, identified_total=evidence.identified[0]['total'] if evidence.identified else 0,
                            incomplete=incomplete)

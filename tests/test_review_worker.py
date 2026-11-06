@@ -768,7 +768,10 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
                             yield CountedConnection(conn)
 
                 await worker._complete_review_once(CountedPool(), job, worker.time.monotonic())
-                self.assertEqual(7 if recovering else 6, len(queries))
+                self.assertEqual(6 if recovering else 5, len(queries))
+                self.assertEqual(1, sum('v2-summary-evidence' in query for query in queries))
+                self.assertFalse(any('unbound AS' in query for query in queries),
+                                 'no model fixture mentions use pagination evidence from the same snapshot')
                 self.assertIn('v2-review-trace:', queries[0])
                 self.assertFalse(any(query.startswith('SELECT pg_advisory_xact_lock') for query in queries))
                 self.assertEqual('retry' if recovering else 'unresolved', await self.pool.fetchval(

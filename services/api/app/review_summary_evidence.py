@@ -2,6 +2,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from .review_completion import DETAIL_LIMIT, pagination_issues, unfinished_searches_cte
+
 
 @dataclass(frozen=True)
 class SummaryEvidence:
@@ -10,6 +12,7 @@ class SummaryEvidence:
     rejected: list[dict]
     identified: list[dict]
     model_contents: list[str]
+    pagination_issues: dict
 
 
 def _timestamps(rows: list[dict]) -> list[dict]:
@@ -24,14 +27,16 @@ def _timestamps(rows: list[dict]) -> list[dict]:
 
 async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int) -> SummaryEvidence:
     row = await conn.fetchrow(
-        "/* v2-summary-evidence */ WITH message_signals AS MATERIALIZED ("
+        "/* v2-summary-evidence */ WITH " + unfinished_searches_cte() + ", message_signals AS MATERIALIZED ("
         " SELECT id,fixture_id,phase,market_id,market_name,market_kind,period,line,selection,"
         " recommendation_price,quote_time,created_at FROM v2_expert_signals WHERE message_id=$3),"
         " attempt_traces AS MATERIALIZED ("
         " SELECT trace_kind,payload,sequence_no FROM v2_analysis_traces WHERE job_id=$1 "
         " AND payload->>'attempt_id'=($2::uuid)::text "
         " AND trace_kind IN('mcp_record_expert_signals','hermes_result','hermes_partial_result')) "
-        "SELECT (SELECT count(*) FROM message_signals) AS total,"
+        "SELECT (SELECT count(*) FROM unfinished) AS unfinished_count,"
+        " (SELECT jsonb_agg(x) FROM (SELECT * FROM unfinished ORDER BY search_key LIMIT $5) x) AS unfinished,"
+        " (SELECT count(*) FROM message_signals) AS total,"
         " (SELECT jsonb_agg(to_jsonb(x)-'created_at' ORDER BY x.created_at,x.signal_id) FROM ("
         " SELECT s.id AS signal_id,s.fixture_id,f.home_team,f.away_team,f.competition_name,f.kickoff_at,"
         " s.phase,s.market_id,s.market_name,s.market_kind,s.period,s.line::text AS line,s.selection,"
@@ -57,11 +62,12 @@ async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int
         " ORDER BY f.kickoff_at,b.fixture_id LIMIT $4) x) AS identified,"
         " (SELECT jsonb_agg(payload->>'content' ORDER BY sequence_no) FROM attempt_traces "
         " WHERE trace_kind IN('hermes_result','hermes_partial_result')) AS model_contents",
-        job_id, attempt_id, message_id, limit,
+        job_id, attempt_id, message_id, limit, DETAIL_LIMIT,
     )
     return SummaryEvidence(
         total=row['total'], signals=_timestamps(row['signals'] or []),
         rejected=row['rejected'] or [],
         identified=_timestamps(row['identified'] or []),
         model_contents=[content or '' for content in (row['model_contents'] or [])],
+        pagination_issues=pagination_issues(row['unfinished_count'], row['unfinished']),
     )

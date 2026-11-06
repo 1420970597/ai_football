@@ -7,6 +7,26 @@ import re
 DETAIL_LIMIT = 100
 
 
+def unfinished_searches_cte() -> str:
+    """Same attempt-scoped pagination evidence for final and live checks."""
+    return (
+        "unfinished AS ("
+        " SELECT s.search_key,s.team_query,s.phase,s.competition_query,s.from_utc,s.to_utc,"
+        " s.expected_cursor AS cursor,(SELECT t.payload->'scope' FROM v2_analysis_traces t "
+        " WHERE t.job_id=s.job_id AND t.trace_kind='mcp_search_matches' "
+        " AND t.payload->>'attempt_id'=($2::uuid)::text AND t.payload->>'search_key'=s.search_key "
+        " AND t.payload->>'status'='succeeded' ORDER BY t.sequence_no DESC LIMIT 1) AS scope "
+        " FROM v2_match_searches s WHERE s.job_id=$1 AND s.attempt_id=$2 AND NOT s.complete)"
+    )
+
+
+def pagination_issues(count: int, searches: list) -> dict:
+    if not count:
+        return {}
+    return {'unfinished_search_count': count, 'unfinished_searches': searches or [],
+            'unbound_mention_count': 0, 'unbound_mentions': [], 'detail_limit': DETAIL_LIMIT}
+
+
 def mentioned_fixtures(content: str) -> set[str]:
     # A mention only requests verification; it can never authorize a binding.
     return set(re.findall(r'(?<![\w:])leyu:\d{1,24}(?!\w)', content[:20000]))
@@ -14,13 +34,7 @@ def mentioned_fixtures(content: str) -> set[str]:
 
 async def completion_issues(conn, job_id, attempt_id, mentioned: set[str]) -> dict:
     row = await conn.fetchrow(
-        "WITH unfinished AS ("
-        " SELECT s.search_key,s.team_query,s.phase,s.competition_query,s.from_utc,s.to_utc,"
-        " s.expected_cursor AS cursor,(SELECT t.payload->'scope' FROM v2_analysis_traces t "
-        " WHERE t.job_id=s.job_id AND t.trace_kind='mcp_search_matches' "
-        " AND t.payload->>'attempt_id'=($2::uuid)::text AND t.payload->>'search_key'=s.search_key "
-        " AND t.payload->>'status'='succeeded' ORDER BY t.sequence_no DESC LIMIT 1) AS scope "
-        " FROM v2_match_searches s WHERE s.job_id=$1 AND s.attempt_id=$2 AND NOT s.complete),"
+        "WITH " + unfinished_searches_cte() + ","
         " unbound AS (SELECT m.fixture_id,(SELECT jsonb_build_object('search_key',s.search_key,"
         " 'search_complete',s.complete,'fixture',c.candidate_data) "
         " FROM v2_match_search_candidates c JOIN v2_match_searches s "
