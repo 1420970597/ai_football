@@ -138,7 +138,7 @@ class NativeNoLinePreflightTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     with self.assertRaisesRegex(LeyuError,'selected_native_quote_changed'):
                         await client.preflight(selected,Decimal(1))
-            self.assertEqual(3,len(seen))
+            self.assertEqual(3 if kind=='winner' else 1,len(seen))
 
 
 if __name__=='__main__':

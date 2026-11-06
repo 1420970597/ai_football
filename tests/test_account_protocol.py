@@ -152,9 +152,9 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(LeyuError):
                 await self.client.balance()
 
-    async def test_preflight_three_reads_concurrent_exact_native_request(self):
+    async def test_preflight_reads_current_price_before_limits_and_submission(self):
         prepared = await self.prepare()
-        self.assertEqual(3, self.peak)
+        self.assertEqual(2, self.peak)
         self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
         detail = prepared.payload["seriesOrders"][0]["orderDetailList"][0]
         self.assertEqual(("2.00", "1.95", "195000", "2.5", "1:0"),
@@ -166,6 +166,23 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
         altered = prepared.payload
         altered["seriesOrders"].clear()
         self.assertEqual(1, len(prepared.payload["seriesOrders"]))
+
+    async def test_expert_price_is_not_a_price_lock(self):
+        self.responses[LATEST_MARKET_PATH] = latest()
+        self.responses[LATEST_MARKET_PATH][0]["marketOddsList"][0]["oddsValue"] = "235000"
+        prepared = await self.prepare()
+        detail = prepared.payload["seriesOrders"][0]["orderDetailList"][0]
+        self.assertEqual(("2.35", "235000"), (detail["oddFinally"], detail["odds"]))
+
+    async def test_live_option_id_rotation_uses_current_option_for_limits_and_order(self):
+        self.responses[LATEST_MARKET_PATH] = latest()
+        self.responses[LATEST_MARKET_PATH][0]["marketOddsList"][0]["id"] = "option-current"
+        self.responses[LIMITS_PATH] = [{"code": 0, "playOptionsId": "option-current", "minBet": "1", "orderMaxPay": "10"}]
+        prepared = await self.prepare()
+        detail = prepared.payload["seriesOrders"][0]["orderDetailList"][0]
+        self.assertEqual("option-current", detail["playOptionsId"])
+        request = next(request for request in self.requests if request.url.path == LIMITS_PATH)
+        self.assertEqual("option-current", json.loads(request.content)["orderMaxBetMoney"][0]["playOptionId"])
 
     async def test_changed_native_identity_quote_state_direction_and_limits_rejected(self):
         cases = [(LATEST_MARKET_PATH, "id", "other"), (LATEST_MARKET_PATH, "matchInfoId", "other"),
@@ -179,7 +196,7 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
             self.responses[path][0][key] = value
             with self.subTest(key=key, value=value), self.assertRaises(LeyuError):
                 await self.prepare()
-        for key, value in (("id", "other"), ("oddsType", "Under"), ("oddsStatus", 3), ("oddsValue", "195001")):
+        for key, value in (("oddsType", "Under"), ("oddsStatus", 3)):
             self.responses[LATEST_MARKET_PATH], self.responses[LIMITS_PATH] = latest(), limits()
             self.responses[LATEST_MARKET_PATH][0]["marketOddsList"][0][key] = value
             with self.subTest(option=key), self.assertRaises(LeyuError):
@@ -372,7 +389,7 @@ class OrderNormalizationTests(unittest.TestCase):
         self.assertFalse(result["absence_proves_rejection"])
 
     def test_invalid_native_price_and_direction_rejected(self):
-        for changes in ({"price": Decimal("NaN")}, {"price": Decimal("1.950001")}, {"selection_code": "1"}, {"selection_id": ""}):
+        for changes in ({"price": Decimal("NaN")}, {"price": Decimal("-0.01")}, {"selection_code": "1"}, {"selection_id": ""}):
             with self.assertRaises(LeyuError):
                 selection(**changes)
 

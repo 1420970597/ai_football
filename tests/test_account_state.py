@@ -663,8 +663,9 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         signal,expert,message,quote=await self.signal()
         await self.enable([expert])
         await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '2 minutes' WHERE id=$1",quote)
-        with self.assertRaises(Exception):
-            await self.reserve(signal)
+        order = await self.reserve(signal)
+        self.assertEqual('pending', order['state'])
+        await self.pool.execute('DELETE FROM v2_bet_orders WHERE id=$1', order['id'])
         await self.pool.execute('UPDATE v2_current_quotes SET source_updated_at=now() WHERE id=$1',quote)
         await self.pool.execute('UPDATE v2_source_experts SET enabled=FALSE')
         with self.assertRaises(Exception):
@@ -719,6 +720,48 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.user['id']=other
         await self.recent_session()
         self.assertEqual([],(await self.api.get('/api/v1/accounts/orders')).json()['items'])
+
+    async def test_stale_expert_price_reserves_market_and_uses_current_provider_price(self):
+        await self.healthy()
+        signal,expert,_,quote=await self.signal()
+        await self.enable([expert])
+        await self.pool.execute("UPDATE v2_current_quotes SET price=1.50,status='closed',source_updated_at=now()-interval '10 minutes' WHERE id=$1",quote)
+        reserved=(await self.worker_api.post('/internal/executor/dispatch')).json()
+        self.assertEqual(1,reserved['reserved'])
+        work=(await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
+        self.assertEqual('order',work['kind'])
+        calls=[]
+        def live_provider(request):
+            calls.append(request)
+            if request.url.path==LATEST_MARKET_PATH:
+                query=json.loads(request.content)['idList'][0]
+                self.assertEqual('option',query['oddsId'])
+                return httpx.Response(200,json={'code':0,'data':[{'id':'market','matchInfoId':query['matchInfoId'],'playId':'2',
+                    'matchStatus':1,'matchOver':0,'matchHandicapStatus':0,'status':0,'marketValue':'2.5',
+                    'marketOddsList':[{'id':'option-current','oddsType':'Over','oddsStatus':1,'oddsValue':'235000'}]}]})
+            if request.url.path==LIMITS_PATH:
+                detail=json.loads(request.content)['orderMaxBetMoney'][0]
+                self.assertEqual(('option-current','235000'),(detail['playOptionId'],detail['oddsValue']))
+                return httpx.Response(200,json={'code':0,'data':[{'code':0,'playOptionsId':'option-current','minBet':'1','orderMaxPay':'10'}]})
+            if request.url.path==AMOUNT_PATH:
+                return httpx.Response(200,json={'amount':'100'})
+            if request.url.path==BET_PATH:
+                body=json.loads(request.content)['seriesOrders'][0]['orderDetailList'][0]
+                self.assertEqual(('option-current','2.35','235000'),(body['playOptionsId'],body['oddFinally'],body['odds']))
+                return httpx.Response(200,json={'code':0,'data':{'orderDetailRespList':[{'orderNo':'LIVE-PRICE','orderStatusCode':1}]}})
+            raise AssertionError(request.url.path)
+        executor=Executor(self.worker_api,'https://platform.invalid/internal/executor',live_orders_enabled=True,
+            client_factory=lambda scope,session,**kwargs:AccountProtocolClient(scope,session,transport=httpx.MockTransport(live_provider),**kwargs))
+        await executor.order_job(work)
+        order=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',uuid.UUID(work['order_id']))
+        self.assertEqual(('accepted',Decimal('2.35'),'LIVE-PRICE'),(order['state'],order['price'],order['provider_order_no']))
+        self.assertEqual(('option-current',Decimal('2.35'),Decimal('1.95')),
+            (order['quote_snapshot']['selection_id'],Decimal(order['quote_snapshot']['price']),Decimal(order['quote_snapshot']['expert_recommendation_price'])))
+        self.assertTrue(order['quote_snapshot']['provider_quote_checked_at'])
+        evidence=await self.pool.fetch("SELECT evidence FROM v2_quote_evidence WHERE evidence_kind='order_attempt' AND reference_id=$1 ORDER BY evidence->>'stage'",order['id'])
+        self.assertEqual(['2.35','2.35'],[item['evidence']['price'] for item in evidence])
+        self.assertTrue(all(item['evidence']['odds_change_policy']=='accept_current_provider_quote' for item in evidence))
+        self.assertEqual(1,sum(request.url.path==BET_PATH for request in calls))
 
     async def test_unknown_mock_submission_not_requeued_or_released(self):
         await self.healthy()
@@ -841,14 +884,14 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         manager=AccountSessionManager(AccountScope(**work['scope']),work['config'],RenewalHooks(None,None,None))
         async with AccountProtocolClient(manager.scope,manager.venue_session(),transport=httpx.MockTransport(self.native)) as client:
             from services.executor.account_protocol import NativeSelection
-            prepared=await client.preflight(NativeSelection(**work['selection']),Decimal(work['stake']),device_imei=work['config']['leyu_app_uuid'])
-        for field,value in [('marketValue','3.5'),('betAmount','3.00'),('scoreBenchmark','9:9'),('playOptionsId','different')]:
+            prepared=await client.preflight(NativeSelection.from_snapshot(work['selection']),Decimal(work['stake']),device_imei=work['config']['leyu_app_uuid'])
+        for field,value in [('marketValue','3.5'),('betAmount','3.00'),('scoreBenchmark','9:9'),('playOptions','Under')]:
             payload=prepared.payload
             payload['seriesOrders'][0]['orderDetailList'][0][field]=value
             encoded=json.dumps(payload,sort_keys=True,separators=(',',':'))
             prefix=f"{manager.scope.user_id}:{manager.scope.account_id}:{manager.scope.revision}:"
-            digest=hashlib.sha256((prefix+encoded).encode()).hexdigest()
-            result=await self.worker_api.post(f"/internal/executor/orders/{order['id']}/authorize",json={'attempt_id':work['attempt_id'],'prepared_digest':digest,'payload_json':encoded})
+            digest=hashlib.sha256((prefix+prepared.checked_at+":"+encoded).encode()).hexdigest()
+            result=await self.worker_api.post(f"/internal/executor/orders/{order['id']}/authorize",json={'attempt_id':work['attempt_id'],'prepared_digest':digest,'payload_json':encoded,'quote_checked_at':prepared.checked_at})
             self.assertEqual(422,result.status_code,result.text)
         self.assertEqual('pending',await self.pool.fetchval('SELECT state FROM v2_bet_orders WHERE id=$1',order['id']))
 

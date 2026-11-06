@@ -35,12 +35,13 @@ class OrderStageEvidenceTests(unittest.IsolatedAsyncioTestCase):
         work=(await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
         manager=AccountSessionManager(AccountScope(**work['scope']),work['config'],RenewalHooks(None,None,None))
         async with AccountProtocolClient(manager.scope,manager.venue_session(),transport=httpx.MockTransport(self.native)) as client:
-            prepared=await client.preflight(NativeSelection(**work['selection']),order['stake'],device_imei=work['config']['leyu_app_uuid'])
+            prepared=await client.preflight(NativeSelection.from_snapshot(work['selection']),order['stake'],device_imei=work['config']['leyu_app_uuid'])
         return order,work,prepared
 
     async def authorize(self,order,work,prepared,**updates):
         return await self.worker_api.post(f"/internal/executor/orders/{order['id']}/authorize",json={
-            'attempt_id':work['attempt_id'],'prepared_digest':prepared.digest,'payload_json':prepared.payload_json,**updates})
+            'attempt_id':work['attempt_id'],'prepared_digest':prepared.digest,'payload_json':prepared.payload_json,
+            'quote_checked_at':prepared.checked_at,**updates})
 
     async def evidence(self,order):
         return await self.pool.fetch("SELECT * FROM v2_quote_evidence WHERE evidence_kind='order_attempt' AND reference_id=$1 ORDER BY evidence->>'stage'",order['id'])
@@ -52,7 +53,7 @@ class OrderStageEvidenceTests(unittest.IsolatedAsyncioTestCase):
         payload['session']={'token':'private-token-sentinel','password':'private-password-sentinel'}
         encoded=json.dumps(payload,sort_keys=True,separators=(',',':'))
         prefix=f"{work['scope']['user_id']}:{work['scope']['account_id']}:{work['scope']['revision']}:"
-        digest=hashlib.sha256((prefix+encoded).encode()).hexdigest()
+        digest=hashlib.sha256((prefix+prepared.checked_at+":"+encoded).encode()).hexdigest()
         first=await self.authorize(order,work,prepared,payload_json=encoded,prepared_digest=digest)
         self.assertEqual(200,first.status_code,first.text)
         records=await self.evidence(order)
@@ -121,12 +122,13 @@ class OrderStageEvidenceTests(unittest.IsolatedAsyncioTestCase):
         row=await self.pool.fetchrow('SELECT state,prepared_digest,submitted_at,reserved_stake FROM v2_bet_orders WHERE id=$1',order['id'])
         self.assertEqual(('pending',None,None,order['reserved_stake']),tuple(row.values()))
 
-    async def test_invalid_prepared_content_and_stale_quote_never_add_stage(self):
+    async def test_invalid_prepared_content_and_stale_quote_uses_provider_preflight(self):
         order,work,prepared=await self.prepared_order()
         self.assertEqual(422,(await self.authorize(order,work,prepared,prepared_digest='0'*64)).status_code)
         await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes'")
-        self.assertEqual(409,(await self.authorize(order,work,prepared)).status_code)
-        self.assertEqual([],await self.evidence(order))
+        self.assertEqual(200,(await self.authorize(order,work,prepared)).status_code)
+        records=await self.evidence(order)
+        self.assertEqual(['preflight_validated','submission_authorized'],[r['evidence']['stage'] for r in records])
 
     async def test_wrong_attempt_and_outside_transaction_cannot_append_evidence(self):
         order,work,prepared=await self.prepared_order()
@@ -147,7 +149,7 @@ class OrderStageEvidenceTests(unittest.IsolatedAsyncioTestCase):
         payload['seriesOrders'][0]['orderDetailList'][0].update(marketValue='',playOptions='1')
         encoded=json.dumps(payload,sort_keys=True,separators=(',',':'))
         prefix=f"{work['scope']['user_id']}:{work['scope']['account_id']}:{work['scope']['revision']}:"
-        digest=hashlib.sha256((prefix+encoded).encode()).hexdigest()
+        digest=hashlib.sha256((prefix+prepared.checked_at+":"+encoded).encode()).hexdigest()
         response=await self.authorize(order,work,prepared,payload_json=encoded,prepared_digest=digest)
         self.assertEqual(200,response.status_code,response.text)
         records=await self.evidence(order)

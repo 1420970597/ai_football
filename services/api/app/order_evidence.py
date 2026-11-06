@@ -38,12 +38,15 @@ def stage_document(order, signal, attempt_id, prepared_digest, stage):
         'provider_match_id': order['quote_snapshot']['match_id'],
         'market_kind': signal['current_kind'], 'period': signal['period'],
         'line': None if signal['line'] is None else _decimal(signal['line']),
-        'selection': signal['selection'], 'price': _decimal(signal['current_price']),
+        'selection': signal['selection'], 'price': _decimal(order['price']),
+        'expert_recommendation_price': order['quote_snapshot'].get('expert_recommendation_price'),
+        'reference_quote_price': order['quote_snapshot'].get('reference_quote_price'),
+        'provider_quote_checked_at': order['quote_snapshot'].get('provider_quote_checked_at'),
         'stake': _decimal(order['stake']), 'currency': 'CNY',
-        'odds_change_policy': 'reject', 'order_type': 'single',
+        'odds_change_policy': 'accept_current_provider_quote', 'order_type': 'single',
         'source_updated_at': source_time.astimezone(timezone.utc).isoformat(),
         'play_id': signal['play_id'], 'market_instance_id': signal['market_instance_id'],
-        'selection_id': signal['selection_id'], 'score_basis': signal['current_basis'],
+        'selection_id': order['quote_snapshot'].get('selection_id', signal['selection_id']), 'score_basis': signal['current_basis'],
         'phase': signal['current_phase'],
         'score_benchmark': order['quote_snapshot']['score_benchmark'],
         'score_baseline': {'home': signal['home_score'], 'away': signal['away_score']},
@@ -66,7 +69,7 @@ async def append_stage(conn, order, signal, attempt_id, prepared_digest, stage):
     identity = stage_identity(order['id'], attempt_id, stage)
     values = (
         identity, signal['fixture_id'], signal['market_id'], signal['market_name'], signal['period'],
-        signal['line'], signal['selection'], signal['current_price'], order['id'],
+        signal['line'], signal['selection'], order['price'], order['id'],
         signal['source_updated_at'], document, document['score_baseline'],
     )
     inserted = await conn.fetchval(

@@ -98,6 +98,7 @@ class JobFinish(AttemptInput):
 class AuthorizeInput(AttemptInput):
     prepared_digest: str = Field(pattern="^[a-f0-9]{64}$")
     payload_json: str = Field(min_length=1, max_length=20000)
+    quote_checked_at: AwareDatetime
 
 
 class OrderFinish(AttemptInput):
@@ -523,7 +524,11 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                 raise HTTPException(409,'订单准备租约失效')
             account,signal=await orders.recheck_order(conn,order,request.app.state.settings,include_signal=True)
             prefix=f"{account['user_id']}:{account['id']}:{account['config_revision']}:"
-            if hashlib.sha256((prefix+body.payload_json).encode()).hexdigest()!=body.prepared_digest:
+            checked_age=(datetime.now(timezone.utc)-body.quote_checked_at).total_seconds()
+            if checked_age < 0 or checked_age > 15:
+                raise HTTPException(409,'实时赔率预检已过期')
+            checked_at=body.quote_checked_at.isoformat()
+            if hashlib.sha256((prefix+checked_at+":"+body.payload_json).encode()).hexdigest()!=body.prepared_digest:
                 raise HTTPException(422,'订单准备摘要不匹配')
             try:
                 payload=json.loads(body.payload_json)
@@ -539,15 +544,29 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                     and orders.prepared_line_matches(detail['marketValue'],snapshot['line'],snapshot['kind'])
                     and detail['scoreBenchmark']==snapshot['score_benchmark']
                     and payload['deviceImei']==credentials['device_uuid'] and Decimal(detail['betAmount'])==order['stake']
-                    and Decimal(detail['oddFinally'])==order['price'] and Decimal(detail['odds'])==order['price']*100000
-                    and all(str(detail[target])==str(snapshot[source]) for target,source in [('matchId','match_id'),('marketId','market_instance_id'),('playId','play_id'),('playOptionsId','selection_id'),('playOptions','selection_code')]))
+                    and Decimal(detail['oddFinally']) > Decimal('1')
+                    and Decimal(detail['odds']) == Decimal(detail['oddFinally']) * 100000
+                    and isinstance(detail['playOptionsId'],str) and 0 < len(detail['playOptionsId']) <= 160
+                    and '\n' not in detail['playOptionsId'] and '\r' not in detail['playOptionsId']
+                    and all(str(detail[target])==str(snapshot[source]) for target,source in [('matchId','match_id'),('marketId','market_instance_id'),('playId','play_id'),('playOptions','selection_code')]))
             except (ValueError,KeyError,IndexError,TypeError,InvalidOperation):
                 valid=False
             if not valid:
                 raise HTTPException(422,'订单准备内容超出已预留推荐许可')
-            await order_evidence.append_stage(conn,order,signal,body.attempt_id,body.prepared_digest,'preflight_validated')
+            execution_price = Decimal(detail['oddFinally'])
+            evidence_signal = dict(signal)
+            evidence_signal['current_price'] = execution_price
+            order_for_evidence = dict(order)
+            order_for_evidence['price'] = execution_price
+            snapshot = dict(order['quote_snapshot'])
+            snapshot.update(price=str(execution_price), selection_id=str(detail['playOptionsId']),
+                            provider_quote_checked_at=checked_at)
+            order_for_evidence['quote_snapshot'] = snapshot
+            await conn.execute("UPDATE v2_bet_orders SET price=$2,quote_snapshot=$3::jsonb WHERE id=$1",order_id,execution_price,snapshot)
+            await order_evidence.append_stage(conn,order_for_evidence,evidence_signal,body.attempt_id,body.prepared_digest,'preflight_validated')
             await conn.execute("UPDATE v2_bet_orders SET state='submitting',prepared_digest=$2,submitted_at=now(),lease_until=now()+interval '30 seconds',updated_at=now() WHERE id=$1",order_id,body.prepared_digest)
-            await order_evidence.append_stage(conn,order,signal,body.attempt_id,body.prepared_digest,'submission_authorized')
+            order_for_evidence['price'] = execution_price
+            await order_evidence.append_stage(conn,order_for_evidence,evidence_signal,body.attempt_id,body.prepared_digest,'submission_authorized')
             await audit(conn,None,'executor','order_send_authorized','bet_order',str(order_id))
     return {'scope':jobs.scope(account),'execution_id':str(order_id),'prepared_digest':body.prepared_digest}
 
