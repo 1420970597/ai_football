@@ -149,7 +149,7 @@ async def _claim_from_lane(conn, mode):
     waiting_order = (
         "CASE WHEN j.state<>'running' AND j.created_at<=statement_timestamp()"
         f"-({FRESH_AGING_THRESHOLD_SECONDS}*interval '1 second') THEN j.created_at END ASC NULLS LAST,"
-        if mode == 'fresh_real_time' else ''
+        if mode in {'fresh_real_time', 'real_time'} else ''
     )
     query = claim_pair_and_job_query(lane, ELIGIBLE_MESSAGE, waiting_order, _turn_advance_ctes(
         '(SELECT source_id FROM selected_pair)', '(SELECT expert_id FROM selected_pair)'))

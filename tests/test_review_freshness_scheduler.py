@@ -82,6 +82,45 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '30 seconds' WHERE id=$1", older)
         self.assertEqual(newest, (await worker.claim_job(self.pool))['id'])
 
+    async def test_waiting_realtime_retry_precedes_newer_posts_in_same_lane(self):
+        pair = await self.pair()
+        waiting = (await self.queued(pair, age=3600))[0]
+        await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '90 seconds' WHERE id=$1", waiting)
+        for _ in range(3):
+            await self.queued(pair, age=worker.FRESH_PRIORITY_WINDOW_SECONDS+30)
+        job = await worker.claim_job(self.pool)
+        self.assertEqual(waiting, job['id'])
+        self.assertEqual('real_time', job['scheduler_lane'])
+        self.assertEqual('real_time', job['review_mode'])
+        self.assertEqual(self.now-timedelta(seconds=3600), job['message']['posted_at'])
+
+    async def test_recent_realtime_queue_still_prefers_newest_before_aging(self):
+        pair = await self.pair()
+        older = (await self.queued(pair, age=3600))[0]
+        newest = (await self.queued(pair, age=worker.FRESH_PRIORITY_WINDOW_SECONDS+30))[0]
+        await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '30 seconds' WHERE id=$1", older)
+        self.assertEqual(newest, (await worker.claim_job(self.pool))['id'])
+
+    async def test_expired_realtime_lease_precedes_aged_waiting_retry(self):
+        pair = await self.pair()
+        waiting = (await self.queued(pair, age=3600))[0]
+        await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '90 seconds' WHERE id=$1", waiting)
+        expired = (await self.queued(pair, age=worker.FRESH_PRIORITY_WINDOW_SECONDS+30, state='running', attempts=1))[0]
+        job = await worker.claim_job(self.pool)
+        self.assertEqual(expired, job['id'])
+        self.assertEqual(2, job['attempts'])
+
+    async def test_aged_realtime_queue_keeps_fresh_lane_priority(self):
+        older_pair, fresh_pair = await self.pair(), await self.pair()
+        waiting = (await self.queued(older_pair, age=3600))[0]
+        await self.pool.execute("UPDATE v2_analysis_jobs SET created_at=now()-interval '90 seconds' WHERE id=$1", waiting)
+        fresh = (await self.queued(fresh_pair, age=1))[0]
+        job = await worker.claim_job(self.pool)
+        self.assertEqual(fresh, job['id'])
+        self.assertEqual('fresh_real_time', job['scheduler_lane'])
+        await self.complete(job)
+        self.assertEqual(waiting, (await worker.claim_job(self.pool))['id'])
+
     async def test_at_threshold_waiting_message_is_eligible_for_aging_priority(self):
         pair = await self.pair()
         waiting = (await self.queued(pair, age=120))[0]
