@@ -1,4 +1,8 @@
 """Stable quote identities: update changed rows; insert missing rows with conflict revalidation."""
+from collections import Counter
+
+
+MIN_PREFETCH_QUOTES_PER_FIXTURE = 256
 
 def quote_update_condition(current: str, incoming: str) -> str:
     """SQL aliases are fixed by this module; values remain bound parameters."""
@@ -41,6 +45,17 @@ async def upsert_quotes(conn, payload):
     fields = ('id', 'fixture_id', 'market_id', 'period', 'selection', *QUOTE_FIELDS)
     updates = ','.join(f'{field}=q.{field}' for field in QUOTE_FIELDS)
     conflicts = ','.join(f'{field}=EXCLUDED.{field}' for field in QUOTE_FIELDS)
+    counts = Counter(row['fixture_id'] for row in payload)
+    dense = counts and min(counts.values()) >= MIN_PREFETCH_QUOTES_PER_FIXTURE
+    # Dense snapshots otherwise repeat the same fixture's index traversal for
+    # every selection. Keep sparse WS updates on the exact-reference path;
+    # fetching a whole fixture costs more than those few point lookups.
+    prefetch = (
+        "current_rows AS MATERIALIZED (SELECT stored.* FROM v2_current_quotes stored "
+        "JOIN (SELECT DISTINCT fixture_id FROM incoming) selected USING(fixture_id)), "
+        if dense else ""
+    )
+    stored_relation = 'current_rows' if dense else 'v2_current_quotes'
     await conn.execute(
         "WITH incoming AS MATERIALIZED ("
         "SELECT * FROM jsonb_to_recordset($1::jsonb) AS q("
@@ -48,10 +63,10 @@ async def upsert_quotes(conn, payload):
         "market_kind text,line numeric,selection text,price numeric,"
         "source_updated_at timestamptz,received_at timestamptz,source_time_quality text,"
         "status text,play_id text,market_instance_id text,selection_id text,"
-        "is_main boolean,score_basis text)), matched AS MATERIALIZED ("
+        "is_main boolean,score_basis text)), " + prefetch + "matched AS MATERIALIZED ("
         "SELECT q.*,stored.id AS existing_id,("
         + quote_update_condition('stored', 'q') + ") AS needs_update "
-        "FROM incoming q LEFT JOIN v2_current_quotes stored ON "
+        "FROM incoming q LEFT JOIN " + stored_relation + " stored ON "
         + _same_reference('stored', 'q') + "), updated AS ("
         "UPDATE v2_current_quotes stored SET " + updates + " FROM matched q WHERE "
         "q.needs_update AND stored.id=q.existing_id AND (" + quote_update_condition('stored', 'q')
