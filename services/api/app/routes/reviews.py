@@ -23,7 +23,7 @@ from ..team_matching import normalize_team_name
 from ..review_candidates import snapshot_candidates
 from ..review_cursors import encode_cursor, decode_cursor
 from ..review_search_scope import continuation_scope, scope_key
-from ..signal_persistence import persist_signal
+from ..signal_persistence import persist_signals
 from ..review_resolution import resolve_candidates
 from ..review_market_query import market_filters
 
@@ -435,6 +435,7 @@ async def _record_current_signals(conn, body, request, observations):
             [pick.fixture_id for pick in body.signals], [pick.quote_id for pick in body.signals],
     )
     by_quote = {(quote['fixture_id'], quote['id']): quote for quote in quotes}
+    valid = []
     for index, pick in enumerate(body.signals):
         # Bind intent and score context, then snapshot current price.
         quote = by_quote.get((pick.fixture_id, pick.quote_id))
@@ -455,15 +456,11 @@ async def _record_current_signals(conn, body, request, observations):
         if reason:
             rejected.append({"index": index, "reason": reason})
             continue
-        recorded_price = quote['price']
-        result = await persist_signal(conn, job=job, attempt_id=body.attempt_id,
-                                      quote=quote, pick=pick, confirmation=confirmation)
-        if result:
-            new_id = result['id']
-        else:
-            existing = await conn.fetchrow("SELECT id,recommendation_price FROM v2_expert_signals WHERE message_id=$1 AND fixture_id=$2 AND market_id=$3 AND period=$4 AND selection=$6 AND market_kind=$7 AND (line IS NOT DISTINCT FROM $5::numeric OR market_kind='winner' AND COALESCE(line,0)=0 AND COALESCE($5::numeric,0)=0)", job["message_id"], quote["fixture_id"], quote["market_id"], quote["period"], quote["line"], quote["selection"], quote["market_kind"])
-            new_id, recorded_price = existing['id'], existing['recommendation_price']
-        accepted.append({"index": index, "signal_id": str(new_id), "duplicate": not bool(result), "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(recorded_price), **line_terms(quote)})
+        valid.append((index, quote, pick, confirmation))
+    saved = await persist_signals(conn, job=job, attempt_id=body.attempt_id,
+                                 entries=[(quote, pick, confirmation) for _, quote, pick, confirmation in valid])
+    for (index, quote, _, _), result in zip(valid, saved):
+        accepted.append({"index": index, "signal_id": str(result['id']), "duplicate": result['duplicate'], "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(result['price']), **line_terms(quote)})
     result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
     return await tool_success(conn, body, result, result)
 
