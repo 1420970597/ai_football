@@ -3345,3 +3345,5 @@ E421代码阶段隔离通过：单读盘详情候选只建身份索引、每个�
 16:16 UTC 已核对投注修复候选的只读源码挂载：干净detached worktree，HEAD `2f763690fc5a6c087f8912fd4210e038a3ed9200`，与当前分支提交一致。其受限Docker完整套已运行，不另起重复资源；结果尚未生成。待原套通过后基于同一已测提交继续构建含TG期间上下文修复的API候选、受控单服务生效及全新30分钟观察；E455已证明连接与当前回执正常，但catch-up及三秒延迟验收仍失败。
 
 16:21 UTC E455分阶段延迟复核仅输出计时字段：两条新帖Hermes provider分别10,921ms和19,400ms，system conclusion 23,472ms和28,327ms；scheduler claim为1,919ms和1,599ms，图片/上下文准备为917ms和0ms。provider单项已超过3秒，不可能靠本地排队优化达标；仍需保留上游实际恢复/延迟证据，优先优化可控采集与数据库阶段。原冻结全套仍在运行，未修改被测源码。
+
+16:24 UTC E456部署前只读基线观察器启动，窗口30分钟、30秒采样；首样本API health/ready均200，Telegram六来源connected/authorized、6/6租约单owner、degraded=false，无来源错误/deferred；1群caught_up、5群catching_up。观察器窗口当前无新帖、审核项为0；总任务状态含历史failed/retry，必须按本窗current-version与attempt证据区分，不把历史积压直接算成本窗漏审。冻结完整套仍运行，观察器只读，不部署/下注/结算。
