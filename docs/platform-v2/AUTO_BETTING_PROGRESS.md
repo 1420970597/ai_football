@@ -51,3 +51,6 @@
 2026-11-06 05:20 UTC真实无资金恢复证据：交接锁显式释放exit0；新executor自然账户任务05:19:37取得本人续期租约，05:19:59.671557完成succeeded。只读postflight exit0，health=healthy、renewal=ready、config_revision由10增至12、校验年龄约5秒、资金预检120秒时效恢复。auto_enabled=true、emergency=false、绑定许可与会员有效，策略指纹与部署前逐字相同；没有代改专家、金额或许可。当前所选专家五分钟内pending推荐0、资金订单0，不能以此宣称已真实成交。远端进程只读摘要exit0，新镜像running=true、restarts0、错误类别空；collector/bridge未重启。下一步观察至少一个自然刷新周期并写根因报告，确认恢复持续。
 
 2026-11-06 05:21 UTC阶段结束：第二个自然账户刷新05:21:05.654143再次succeeded，最终只读postflight exit0确认校验年龄约18秒、healthy/ready、auto_enabled=true、emergency=false、绑定许可和会员有效，个人策略指纹与发布前相同，配置版本稳定12。续期审计显示05:19:54成功且login_submitted=true：原App token亦过期后走既有受租约登录一次，并非测试交易。资金订单仍0，五分钟内所选专家pending推荐0；不追投旧推荐，不宣称真实成交已验收。根因与证据已写reports/auto-betting-session-expiry-20261106.md。状态：HTTP失效识别修复隔离验证通过，远端执行器部署及持续无资金账户刷新真实联调通过；实际资金成交未测试。最后动作：提交本轮报告与进度并核对远端，不包含其他工作包PROGRESS.md修改。
+## 2026-11-06 自动投注再次排查
+
+用户反馈自动投注仍失效。13:13-13:30 UTC只读检查：账户校验持续成功、个人策略开启且绑定匹配、会员和限额有效；executor `/dispatch`直接探测200，活动订单0。推荐对照发现最近滚球推荐盘口closed、价格1.78→3.50、报价约1549秒未更新；其他近期推荐为scheduled，当前执行协议不支持赛前。远端collector日志出现持续36-51秒Leyu轮询、`state=partial`及网络超时，无法提供15秒阈值内新报价。结论是当前无可执行信号，不通过放宽资格、伪造报价或真实下单“修复”。详细报告：reports/auto-betting-still-inactive-20261106.md。状态：外部行情依赖受阻，账户和执行器链路正常。
