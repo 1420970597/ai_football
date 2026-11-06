@@ -52,7 +52,7 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
         await self.resolve(response.json()['search_key'])
         self.assertEqual(1, await self.bindings())
 
-    async def test_explicit_resolution_uses_six_remote_statements_and_replay_is_exact(self):
+    async def test_explicit_resolution_uses_five_remote_statements_and_replay_is_exact(self):
         fixture = await self.fixture()
         search = (await self.post('search_matches', team_query='Alpha')).json()
         counted = evidence_support._CountingPool(self.pool)
@@ -60,7 +60,7 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
             response = await self.post('resolve_match', search_key=search['search_key'],
                                        team_a='Alpha1', team_b='Beta1')
         self.assertEqual(200, response.status_code, response.text)
-        self.assertEqual(6, counted.commands)
+        self.assertEqual(5, counted.commands)
         result = response.json()
         self.assertEqual(fixture, result['fixture']['id'])
         self.assertEqual(result, (await self.replay('mcp_resolve_match'))[1])
