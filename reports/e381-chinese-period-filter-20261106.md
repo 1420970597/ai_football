@@ -13,3 +13,7 @@
 00:38 UTC：源码阶段77ffdff0828536a4fe41e981c5a5fe0fa2e7d368已推送并核对远端完整引用，干净工作树冻结1501项正在运行，未修改冻结源。候选镜像ai-football-api:2.0.0-dev-e381-77ffdff构建actual0，镜像SHA bf216a98e483167d9dc9cbdf4a7fa0e86f28cfccbe17798f1855cce61d962178；96项源码、依赖、10001用户、无网三入口、实际期间行为与原提示摘要精确核验0。首次镜像检查缺少PYTHONPATH导致ModuleNotFoundError，保留01失败，02显式使用镜像工作目录路径后原检查通过。以当前API容器自身Compose来源做仅API镜像增量预检actual0，其他六服务不变；未部署，等待完整冻结和E380完整自然监控结束。证据e381-image-build.exit、e381-image-check.json、e381-config-precheck.json；下一步冻结验收、自然空闲门和单API受控生效，不借中文别名放宽匹配或三秒阈值。
 
 00:44 UTC：完整冻结1501项/728.210秒actual0，0失败、0错误、0跳过，committed_source_verified=true；机器报告693777/backend-tests.json SHA3527e58e8510f08c83c2aeec3cab32b026b7415a09aa412386aeb16d49cc20e6。首证据核验忘记docker -i导致空输出却退出0，判定无效并保留01；修正stdin转发后重跑相同断言，实际输出来源、1501计数及报告摘要，actual0。已准备API单服务自然空闲门、前后配置/账本核对及加载断言；仍待E380窗口结束才部署，不修改已冻结源码。
+
+01:07 UTC：E380完整窗结束后，00:58:41暂停新领取，00:58:45自然空闲门持锁；仅API镜像受控生效，apply/gate均actual0并正常释放。加载源码有限期间断言、schema029与三入口检查actual0；other_six_services_unchanged、configuration_and_budgets_unchanged均true，402旧推荐/536账本及报价完整保留，无数据库回滚。实际Chromium1440/390八场景actual0，含两条自然新图推荐、两图回顾、九场完场旧帖；原图decode、当前同attempt双回执、卡数、关闭点击一致，JS错误/横向溢出/响应注入/生产写均0。没有中文参数自然复现，不能把浏览器通过冒充真实同类模型参数验证。
+
+新1800秒独立窗01:04:00.619074 UTC开始，容器ai-football-e381-independent-watch；首样本六群、六单owner租约和health/ready正常。准备监控脚本首轮容器默认10001对0600证据目录写入PermissionError，未运行监控；改任务容器user0保持目录原权限后重跑启动成功。首层工具JS构造错误没有执行命令，保留失败事实。最终脚本等待完整窗后才终审；延迟及非零滚球基线口径仍未验收。
