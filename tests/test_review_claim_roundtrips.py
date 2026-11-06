@@ -42,13 +42,13 @@ class ClaimRoundTripTests(unittest.IsolatedAsyncioTestCase):
             "UPDATE v2_analysis_jobs SET state='queued',attempts=0,attempt_id=NULL,lease_until=NULL WHERE id=$1",
             self.job)
 
-    async def test_claim_five_statements_reuses_activation_lock(self):
+    async def test_claim_four_statements_reuses_activation_lock(self):
         await self.queue()
         counted = CountedPool(self.pool)
         with patch.object(worker, 'HISTORICAL_CONCURRENCY', 0):
             claimed = await worker.claim_job(counted)
         self.assertEqual(self.job, claimed['id'])
-        self.assertEqual(5, len(counted.queries))
+        self.assertEqual(4, len(counted.queries))
         self.assertIn('scheduler_gate AS MATERIALIZED', counted.queries[0])
         self.assertIn('v2-review-trace:', counted.queries[-2])
         self.assertIn('INSERT INTO v2_analysis_traces', counted.queries[-1])

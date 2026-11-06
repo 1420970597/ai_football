@@ -12,6 +12,48 @@ def persistent_retry_condition(job_alias: str, categories_parameter: str) -> str
     )
 
 
+def claim_pair_and_job_query(lane, eligible_message, waiting_order, turn_ctes):
+    """Lock one fair pair, skip locked jobs, and advance even an empty pair.
+
+    The caller already holds the transaction-scoped scheduler lock. Activation
+    and trace insertion stay in later statements so a prior trace committed
+    while waiting on its advisory lock is visible to the sequence allocation.
+    """
+    persistent_retry = persistent_retry_condition('j', '$5')
+    candidate = (
+        "((j.state IN('queued','retry','running') AND j.attempts<$1) OR (" + persistent_retry + ")) AND " + lane +
+        " AND ((j.state IN('queued','retry','failed') AND j.available_at<=statement_timestamp()) OR "
+        "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))) AND " + eligible_message
+    )
+    return (
+        "WITH selected_pair AS MATERIALIZED (SELECT ss.source_id,es.expert_id,es.concurrency_limit,"
+        "(SELECT count(*) FROM v2_analysis_jobs running WHERE running.expert_id=es.expert_id "
+        "AND running.state='running' AND running.lease_until>statement_timestamp()) AS active_leases "
+        "FROM v2_review_source_schedule ss JOIN v2_expert_sources s ON s.id=ss.source_id "
+        "JOIN v2_source_experts se ON se.source_id=s.id JOIN v2_experts e ON e.id=se.expert_id "
+        "JOIN v2_review_expert_schedule es ON es.expert_id=e.id "
+        "WHERE s.enabled AND e.enabled AND se.enabled AND (SELECT count(*) FROM v2_analysis_jobs running "
+        "WHERE running.expert_id=es.expert_id AND running.state='running' AND running.lease_until>statement_timestamp())<GREATEST(es.concurrency_limit,$4) "
+        "AND EXISTS(SELECT 1 FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
+        "WHERE j.source_id=ss.source_id AND j.expert_id=es.expert_id AND " + candidate + " ) "
+        "ORDER BY ss.last_turn,es.last_turn,ss.source_id,es.expert_id LIMIT 1 "
+        "FOR SHARE OF s,e,se FOR UPDATE OF ss,es), "
+        "selected_job AS MATERIALIZED (SELECT j.id,j.message_id,j.attempts "
+        "FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
+        "JOIN selected_pair p ON p.source_id=j.source_id AND p.expert_id=j.expert_id "
+        "WHERE " + candidate +
+        " ORDER BY (j.state='running') DESC,"
+        "CASE WHEN j.state='running' THEN j.lease_until END NULLS FIRST,"
+        "CASE WHEN j.state='running' THEN j.created_at END," + waiting_order +
+        "CASE WHEN j.state<>'running' THEN j.message_posted_at END DESC,"
+        "CASE WHEN j.state<>'running' THEN j.available_at END,j.created_at,j.id "
+        "LIMIT 1 FOR UPDATE OF j SKIP LOCKED), " + turn_ctes +
+        " SELECT p.source_id,p.expert_id,p.concurrency_limit,p.active_leases,"
+        "j.id,j.message_id,j.attempts,(SELECT last_turn FROM advanced_expert) AS scheduler_turn "
+        "FROM selected_pair p LEFT JOIN selected_job j ON true"
+    )
+
+
 async def prepare_claim_schedule(conn, max_attempts, batch_size, persistent_failures, *, scheduler_lock=None):
     """Use the caller's scheduler lock, or acquire it before any housekeeping.
 

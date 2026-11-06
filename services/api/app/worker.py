@@ -18,7 +18,7 @@ from .review_recovery import market_recovery
 from .review_accepted_context import read_accepted_context
 from .review_completion import completion_issues, continuation_prompt, mentioned_fixtures
 from .review_policy import FRESH_PRIORITY_WINDOW_SECONDS, REALTIME_WINDOW_SECONDS
-from .review_scheduler_setup import persistent_retry_condition as _persistent_retry_condition, prepare_claim_schedule
+from .review_scheduler_setup import claim_pair_and_job_query, prepare_claim_schedule
 from fastapi import HTTPException
 import asyncpg
 
@@ -151,52 +151,21 @@ async def _claim_from_lane(conn, mode):
         f"-({FRESH_AGING_THRESHOLD_SECONDS}*interval '1 second') THEN j.created_at END ASC NULLS LAST,"
         if mode == 'fresh_real_time' else ''
     )
-    persistent_pair_retry = _persistent_retry_condition('j', '$5')
+    query = claim_pair_and_job_query(lane, ELIGIBLE_MESSAGE, waiting_order, _turn_advance_ctes(
+        '(SELECT source_id FROM selected_pair)', '(SELECT expert_id FROM selected_pair)'))
     for probe in range(MAX_PAIR_PROBES):
-        pair = await conn.fetchrow(
-            "SELECT ss.source_id,es.expert_id,es.concurrency_limit,"
-            "(SELECT count(*) FROM v2_analysis_jobs running WHERE running.expert_id=es.expert_id "
-            "AND running.state='running' AND running.lease_until>statement_timestamp()) AS active_leases "
-            "FROM v2_review_source_schedule ss JOIN v2_expert_sources s ON s.id=ss.source_id "
-            "JOIN v2_source_experts se ON se.source_id=s.id JOIN v2_experts e ON e.id=se.expert_id "
-            "JOIN v2_review_expert_schedule es ON es.expert_id=e.id "
-            "WHERE s.enabled AND e.enabled AND se.enabled AND (SELECT count(*) FROM v2_analysis_jobs running "
-            "WHERE running.expert_id=es.expert_id AND running.state='running' AND running.lease_until>statement_timestamp())<GREATEST(es.concurrency_limit,$4) "
-            "AND EXISTS(SELECT 1 FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id "
-            "WHERE j.source_id=ss.source_id AND j.expert_id=es.expert_id AND "
-            "((j.state IN('queued','retry','running') AND j.attempts<$1) OR (" + persistent_pair_retry + ")) AND " + lane +
-            " AND ((j.state IN('queued','retry','failed') AND j.available_at<=statement_timestamp()) OR "
-            "(j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))) AND " + ELIGIBLE_MESSAGE + ") "
-            "ORDER BY ss.last_turn,es.last_turn,ss.source_id,es.expert_id LIMIT 1 FOR SHARE OF s,e,se FOR UPDATE OF ss,es",
+        selected = await conn.fetchrow(
+            query,
             MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, FRESH_PRIORITY_WINDOW_SECONDS, EXPERT_CONCURRENCY_FLOOR,
             sorted(PERSISTENT_RETRY_FAILURES))
-        if not pair:
+        if not selected:
             return None
-        persistent_row_retry = _persistent_retry_condition('j', '$6')
-        row = await conn.fetchrow(
-            # Data-modifying CTEs also advance an empty/locked pair. The next
-            # probe must not repeatedly select that pair and starve other work.
-            'WITH ' + _turn_advance_ctes('$4', '$5') +
-            ' SELECT j.id,j.message_id,j.attempts,'
-            '(SELECT last_turn FROM advanced_expert) AS scheduler_turn '
-            'FROM v2_analysis_jobs j JOIN v2_expert_messages m ON m.id=j.message_id '
-            'WHERE j.source_id=$4 AND j.expert_id=$5 AND '
-            "((j.state IN('queued','retry','running') AND j.attempts<$1) OR (" + persistent_row_retry + ")) AND " + lane +
-            " AND ((j.state='running' AND (j.lease_until IS NULL OR j.lease_until<=statement_timestamp()))"
-            " OR (j.state IN('queued','retry','failed') AND j.available_at<=statement_timestamp())) AND " + ELIGIBLE_MESSAGE +
-            " ORDER BY (j.state='running') DESC,"
-            "CASE WHEN j.state='running' THEN j.lease_until END NULLS FIRST,"
-            "CASE WHEN j.state='running' THEN j.created_at END," + waiting_order +
-            "CASE WHEN j.state<>'running' THEN j.message_posted_at END DESC,"
-            "CASE WHEN j.state<>'running' THEN j.available_at END,j.created_at,j.id "
-            'LIMIT 1 FOR UPDATE OF j SKIP LOCKED',
-            MAX_ATTEMPTS, REALTIME_WINDOW_SECONDS, FRESH_PRIORITY_WINDOW_SECONDS,
-            pair['source_id'], pair['expert_id'],
-            sorted(PERSISTENT_RETRY_FAILURES))
-        if row:
-            turn = row['scheduler_turn']
-            if turn is None:
-                raise RuntimeError('review scheduling pair disappeared while advancing turn')
+        turn = selected['scheduler_turn']
+        if turn is None:
+            raise RuntimeError('review scheduling pair disappeared while advancing turn')
+        if selected['id'] is not None:
+            row = {key: selected[key] for key in ('id', 'message_id', 'attempts')}
+            pair = {key: selected[key] for key in ('source_id', 'expert_id', 'concurrency_limit', 'active_leases')}
             return row, pair, turn, probe + 1
     return None
 

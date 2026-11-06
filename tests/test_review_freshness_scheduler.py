@@ -146,7 +146,7 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(15, await worker._advance_turn(conn, source, expert))
         self.assertEqual((15, 15), tuple(await self.pool.fetchrow('SELECT s.last_turn,e.last_turn FROM v2_review_source_schedule s CROSS JOIN v2_review_expert_schedule e')))
 
-    async def test_pair_selection_and_turn_advance_fit_two_remote_queries(self):
+    async def test_pair_selection_and_turn_advance_fit_one_remote_query(self):
         pair = await self.pair()
         ready = (await self.queued(pair, age=1))[0]
         async with self.pool.acquire() as conn, conn.transaction():
@@ -164,10 +164,58 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ready, row['id'])
             self.assertEqual(pair, (selected['source_id'], selected['expert_id']))
             self.assertEqual((1, 1), (turn, probes))
-            self.assertEqual(2, len(calls), 'a selected pair must not require a third remote turn update')
+            self.assertEqual(1, len(calls), 'pair, job and turn must use one remote command')
             self.assertEqual((1, 1), tuple(await conn.fetchrow(
                 'SELECT s.last_turn,e.last_turn FROM v2_review_source_schedule s '
                 'CROSS JOIN v2_review_expert_schedule e')))
+
+    async def test_single_pass_pair_keeps_source_locked_until_claim_transaction_ends(self):
+        source, expert = await self.pair()
+        await self.queued((source, expert), age=1)
+        stopping = None
+        try:
+            async with self.pool.acquire() as conn, conn.transaction():
+                self.assertTrue(await worker._scheduler_lock(conn))
+                await worker.prepare_claim_schedule(
+                    conn, worker.MAX_ATTEMPTS, worker.EXHAUSTED_BATCH_SIZE, worker.PERSISTENT_RETRY_FAILURES)
+                pid = await conn.fetchval('SELECT pg_backend_pid()')
+                selected = await worker._claim_from_lane(conn, 'fresh_real_time')
+                self.assertEqual(source, selected[1]['source_id'])
+                stopping = asyncio.create_task(self.pool.execute(
+                    'UPDATE v2_expert_sources SET enabled=false WHERE id=$1', source))
+                blocked = False
+                for _ in range(100):
+                    blocked = await self.pool.fetchval(
+                        'SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() '
+                        'AND $1=ANY(pg_blocking_pids(pid)))', pid)
+                    if blocked:
+                        break
+                    await asyncio.sleep(.01)
+                self.assertTrue(blocked, 'source stop must wait for the selected pair shared lock')
+                self.assertFalse(stopping.done())
+            await asyncio.wait_for(stopping, 5)
+            self.assertIsNone(await worker.claim_job(self.pool))
+            self.assertEqual(0, await self.pool.fetchval(
+                "SELECT count(*) FROM v2_analysis_jobs WHERE state='running'"))
+        finally:
+            if stopping is not None and not stopping.done():
+                stopping.cancel()
+                await asyncio.gather(stopping, return_exceptions=True)
+
+    async def test_single_pass_empty_lane_does_not_advance_other_lane_pair(self):
+        source, expert = await self.pair()
+        ready = (await self.queued((source, expert), age=worker.FRESH_PRIORITY_WINDOW_SECONDS + 5))[0]
+        async with self.pool.acquire() as conn, conn.transaction():
+            self.assertTrue(await worker._scheduler_lock(conn))
+            await worker.prepare_claim_schedule(
+                conn, worker.MAX_ATTEMPTS, worker.EXHAUSTED_BATCH_SIZE, worker.PERSISTENT_RETRY_FAILURES)
+            self.assertIsNone(await worker._claim_from_lane(conn, 'fresh_real_time'))
+            self.assertEqual((0, 0), tuple(await conn.fetchrow(
+                'SELECT s.last_turn,e.last_turn FROM v2_review_source_schedule s '
+                'CROSS JOIN v2_review_expert_schedule e')))
+            selected = await worker._claim_from_lane(conn, 'real_time')
+            self.assertEqual(ready, selected[0]['id'])
+            self.assertEqual((1, 1), (selected[2], selected[3]))
 
     async def test_claim_turn_failure_rolls_back_source_expert_job_and_receipt(self):
         source, expert = await self.pair()
