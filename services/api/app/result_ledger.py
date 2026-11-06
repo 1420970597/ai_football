@@ -10,8 +10,9 @@ from fastapi import HTTPException
 from .expert_statistics import QUOTE_VALID_SQL
 from .settlement import pending, settle
 from .handicap_lines import line_basis
+from .score_rules import settlement_rule
 
-ALGORITHM_VERSION = 'football-asian-5-outcome-equivalence'
+ALGORITHM_VERSION = 'football-asian-6-leyu-period-totals'
 
 
 def result_facts(row):
@@ -33,8 +34,15 @@ async def project_settlements(conn, fixture, version, facts):
                   'phase': row['phase'], 'price': str(row['recommendation_price']), 'line': str(row['line']) if row['line'] is not None else None,
                   'selection': row['selection'], 'score_basis': row['score_basis'], 'score_baseline': row['score_baseline'],
                   'line_basis': line_basis(row, fixture['id'])}
+        rule = settlement_rule(fixture, row)
         value = settle(inputs, facts) if row['quote_valid'] else pending('recommendation_quote_evidence_missing_or_mismatched')
         calculation = {'signal': inputs, 'result': facts}
+        # Existing provable settlements keep their reason and first-settled
+        # timestamp. Only resolve the previously ambiguous provider rule.
+        if rule and value.outcome == 'pending' and value.reason == 'live_market_score_rule_unknown':
+            effective_inputs = dict(inputs, score_basis=rule['score_basis'])
+            value = settle(effective_inputs, facts)
+            calculation.update(score_rule=rule, effective_signal=effective_inputs)
         projections.append((row['id'], value, calculation))
     if projections:
         await _store_settlement_batch(conn, fixture['id'], version, projections)
