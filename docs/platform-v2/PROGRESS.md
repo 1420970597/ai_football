@@ -3459,3 +3459,4 @@ E421代码阶段隔离通过：单读盘详情候选只建身份索引、每个�
 - 本阶段实际命令：`bash .runtime/e209-live/e466-monitor.sh`退出0；容器状态/日志、API `/readyz`、remote-link与storage-tunnel状态均为只读检查；官方扫描管道因空输入解析失败退出1。源代码和生产配置未修改。工作树中的用户文件`reports/feijipan-share-20261031/`保留不动。
 - 21:27:15 UTC再次通过既有SSH脚本重试官方逐源扫描，调用端因link容器中断退出137，标准输出为空；下游JSON归纳器仅报告`no_json`，未把它计为“无新帖”。21:28:46 UTC，link/storage tunnel累计重启计数分别51/58，API仍unhealthy；在link容器内运行的无写入SSH `true` 探测同样中途退出137，未取得对端错误类别。E466截至sample18（21:28:40）仍无可用Telegram/LeYu状态，数据库采样器仍在重试。远程隧道恢复前，官方可信作者核对、采集回执核对和盘口状态验收均为外部依赖受阻。
 - 21:35 UTC持续故障确认：E466状态采样已到sample32，仍全为`ConnectionRefusedError`，数据库采样器elapsed约931秒仍未取得数据库marker；link/storage tunnel累计重启81/92次，API仍running但unhealthy。没有任何Telegram消息/审核/盘口业务数据样本，状态仍为外部依赖受阻。
+- 21:43 UTC继续检查：E466 market样本47，仍不可达，最近数个样本出现`gaierror`；remote-link与storage-tunnel当前均`restarting/unhealthy`，累计重启116/132次，API仍unhealthy。服务连接失败已经包含名称解析与连接拒绝两类；不推断为Telegram凭据、模型或盘口绑定错误，不调整服务网络/SSH配置。
