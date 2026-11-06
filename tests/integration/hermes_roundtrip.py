@@ -332,8 +332,12 @@ async def provider_stall_case(conn, http):
         raise AssertionError('silent provider must fail instead of completing a recommendation')
     elapsed = asyncio.get_running_loop().time()-started
     assert 1 <= elapsed < 15, elapsed
-    observed = (await http.get(PROVIDER+'/evidence')).json().get('blocked_turns', {})
-    assert str(row['job']) in observed, 'deadline must be exercised by a real framework provider request'
+    observed = (await http.get(PROVIDER+'/evidence')).json()
+    assert str(row['job']) in observed.get('blocked_turns', {}), 'deadline must be exercised by a real framework provider request'
+    request_count = observed.get('blocked_turn_requests', {}).get(str(row['job']), 0)
+    # v0.22.5 also rebuilds the primary client once after transport exhaustion.
+    # HERMES_STREAM_RETRIES=0 removes nested reconnects inside BOTH attempts.
+    assert request_count == 2, 'expected one stream request plus one final primary-client recovery'
     assert not await conn.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_signals WHERE message_id=$1)', row['message'])
     assert not await conn.fetchval(
         "SELECT EXISTS(SELECT 1 FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind LIKE 'mcp_%')", row['job'])
@@ -341,6 +345,7 @@ async def provider_stall_case(conn, http):
     await run_case(conn, http, 'no_intent')
     print(json.dumps({'scenario': 'provider_stall', 'provider_is_fixture': True,
                       'isolated_socket_timeout_seconds': 2, 'transient_failure': True,
+                      'provider_requests': request_count,
                       'cleanup_and_next_request_verified': True, 'accepted_signals': 0,
                       'elapsed_ms': round(elapsed*1000, 1)}), flush=True)
 

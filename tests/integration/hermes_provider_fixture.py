@@ -266,7 +266,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_error(422)
                     return
                 with lock:
-                    evidence.setdefault('blocked_turns', {})[review.group(1)] = True
+                    key = review.group(1)
+                    evidence.setdefault('blocked_turns', {})[key] = True
+                    counts = evidence.setdefault('blocked_turn_requests', {})
+                    counts[key] = counts.get(key, 0) + 1
                 time.sleep(5)
                 message, reason = {'role': 'assistant', 'content': '隔离调用完成'}, 'stop'
             else:

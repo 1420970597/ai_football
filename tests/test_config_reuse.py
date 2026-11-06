@@ -208,11 +208,30 @@ class ComposeBoundaryTests(unittest.TestCase):
         services["api"]["networks"] = {"edge-private": {"ipv4_address": "172.30.253.3"}, "app-private": {}, "storage-private": {}}
         services["web"]["networks"] = {"edge-private": {"ipv4_address": "172.30.253.2"}, "egress": {}}
         services["hermes"]["environment"]["HERMES_PROVIDER_API_KEY"] = "fixture-only"
+        services["hermes"]["environment"]["HERMES_STREAM_RETRIES"] = "0"
         return {"services": services, "networks": {"app-private": {"internal": True}, "storage-private": {"internal": True},
             "edge-private": {"internal": True, "ipam": {"config": [{"subnet": "172.30.253.0/28"}]}}}}
 
     def test_valid_minimal_service_boundary(self):
         self.assertEqual([], validate_compose(self.fixture(), Path.cwd()))
+
+    def test_hermes_stream_network_retries_cannot_multiply_durable_attempts(self):
+        for value in (None, "1", "2", "-1", "invalid", False):
+            with self.subTest(value=value):
+                document = self.fixture()
+                environment = document["services"]["hermes"]["environment"]
+                if value is None:
+                    environment.pop("HERMES_STREAM_RETRIES")
+                else:
+                    environment["HERMES_STREAM_RETRIES"] = value
+                self.assertTrue(any("流式瞬态重试" in message
+                                    for message in validate_compose(document, Path.cwd())))
+
+    def test_stream_retry_setting_is_hermes_only(self):
+        document = self.fixture()
+        document["services"]["review-worker"]["environment"]["HERMES_STREAM_RETRIES"] = "0"
+        self.assertTrue(any("非白名单配置键" in message
+                            for message in validate_compose(document, Path.cwd())))
 
     def test_collector_refresh_budgets_are_the_only_added_runtime_controls(self):
         expected = {

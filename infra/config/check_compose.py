@@ -27,7 +27,7 @@ PERMITTED = {
                             "TELEGRAM_CONTROL_HOST", "TELEGRAM_CONTROL_PORT"},
     "executor": {"PLATFORM_EXECUTOR_API", "EXECUTOR_INTERNAL_TOKEN", "EXECUTOR_LIVE_ORDERS_ENABLED"},
     "hermes-mcp": {"PLATFORM_INTERNAL_API", "EXPERT_MCP_TOKEN", "MCP_HOST", "MCP_PORT"},
-    "hermes": {"HERMES_HOME", "API_SERVER_ENABLED", "API_SERVER_KEY", "API_SERVER_HOST", "API_SERVER_PORT", "HERMES_MODEL", "HERMES_PROVIDER_BASE_URL", "HERMES_PROVIDER_API_KEY", "MCP_SERVER_URL", "EXPERT_MCP_TOKEN", "HERMES_GATEWAY_NO_SUPERVISE"},
+    "hermes": {"HERMES_HOME", "API_SERVER_ENABLED", "API_SERVER_KEY", "API_SERVER_HOST", "API_SERVER_PORT", "HERMES_MODEL", "HERMES_PROVIDER_BASE_URL", "HERMES_PROVIDER_API_KEY", "MCP_SERVER_URL", "EXPERT_MCP_TOKEN", "HERMES_GATEWAY_NO_SUPERVISE", "HERMES_STREAM_RETRIES"},
     "web": set(),
 }
 
@@ -90,6 +90,8 @@ def validate(document: dict, project_root: Path) -> list[str]:
                 errors.append(f"{name}配置路径超出工作区")
     if "hermes" in services and "HERMES_PROVIDER_API_KEY" not in services["hermes"].get("environment", {}):
         errors.append("模型提供方配置应仅交 Hermes")
+    if "hermes" in services and str(services["hermes"].get("environment", {}).get("HERMES_STREAM_RETRIES")) != "0":
+        errors.append("Hermes 流式瞬态重试必须交由持久审核任务处理")
     for name in services:
         if name != "hermes" and "HERMES_PROVIDER_API_KEY" in services[name].get("environment", {}):
             errors.append(f"{name}不应获取模型提供方密钥")

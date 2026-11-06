@@ -279,6 +279,8 @@ services:
       MCP_SERVER_URL: http://hermes-mcp:8090/mcp
       EXPERT_MCP_TOKEN: ${EXPERT_MCP_TOKEN:?Set the project MCP service token}
       HERMES_GATEWAY_NO_SUPERVISE: "1"
+      # Durable review jobs own transient retries; avoid nested stream reconnects.
+      HERMES_STREAM_RETRIES: "0"
     volumes:
       - type: bind
         source: ./integrations/hermes
