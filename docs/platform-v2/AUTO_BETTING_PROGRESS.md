@@ -43,3 +43,11 @@
 冻结验证进展：协议23项exit0、共用App续期27项exit0。账户状态47项首跑exit1，唯一错误为临时数据库清理时account_state_test缺少pg_signal_backend权限（DROP DATABASE WITH FORCE无法终止连接），非业务断言失败；不放宽应用校验，给本轮独立临时测试角色补充既有标准清理权限后原47项完整重跑，首次日志保留account-test-first.log。新增两个HTTP401恢复/403不续期场景业务断言首跑均通过。生产尚未修改。
 
 2026-11-06隔离验证通过：协议23项0.629秒exit0，共用App续期27项0.377秒exit0；账户状态47项补齐临时角色清理权限后原命令完整重跑92.996秒exit0，无跳过，合计97项。修复前失败和首次测试环境清理失败均保留。覆盖正常HTTP401业务过期恢复、本人token复用不密码登录、配置版本增长与原个人策略逐字段保留、403权限不续期、429/5xx不误判、实盘发送HTTP401未知且单次、跨账户与未知结果恢复保护。源冻结在.runtime/auto-betting-401-release；期间未修改被测代码。线上资金预检exit0：个人启用1、活动账户任务0、续期0、资金订单0。下一阶段构建带源码提交标识镜像、传输校验、短账户空闲锁交接仅替换远端executor，随后只读余额与自然任务核验，不创建测试订单。状态：代码已写／隔离验证通过，未部署。
+
+2026-11-06候选发布阶段开始：修复提交5e3f0f29a5dd5384c2103b6cd2f358dc1cb88f01已push并与远端refs一致（exit0）。独立worktree切到此提交且干净；期间仅此提交代码与测试进入候选，其他工作包文件保留。固定基础镜像、已有受限BuildKit（CPU0.5/内存384MiB）构建executor候选exit0；镜像ai-football-executor:2.0.0-dev-autobet401-5e3f0f2，ID sha256:13e47479eab72ede5528c95edf5dcf7618738b3b597bc5dd62f4ebfdcf6e8bf1，OCI源码标识匹配提交。首次构建命令因独立worktree内重复相对路径exit128，修正路径后成功；没有应用代码宿主执行。仅准备并传输镜像，未重启服务。
+
+2026-11-06 05:19 UTC执行器候选部署exit0：镜像受保护SSH传输docker load后ID匹配，空闲账户交接锁确认running_jobs0、active_orders0、policy_modified=false。远端按实际Compose标签保留全部环境/覆盖链，追加本轮executor镜像覆盖，config校验通过，只替换executor；2026-11-06T05:19:05.552Z启动，新镜像ID与OCI源码匹配5e3f0f2，live_enabled=true。collector及api-bridge容器ID前后完全相同，本机API/web/review-worker没有被部署。短账户锁已请求显式释放，未发测试订单。发布前本人策略指纹3f820c1c42ad73a143aad59c1710bbc6c8f28b55c99303ee079f57cae1ae02f8，仍待验证自然余额刷新是否恢复及策略未变；不能先称实盘验收成功。
+
+2026-11-06 05:20 UTC真实无资金恢复证据：交接锁显式释放exit0；新executor自然账户任务05:19:37取得本人续期租约，05:19:59.671557完成succeeded。只读postflight exit0，health=healthy、renewal=ready、config_revision由10增至12、校验年龄约5秒、资金预检120秒时效恢复。auto_enabled=true、emergency=false、绑定许可与会员有效，策略指纹与部署前逐字相同；没有代改专家、金额或许可。当前所选专家五分钟内pending推荐0、资金订单0，不能以此宣称已真实成交。远端进程只读摘要exit0，新镜像running=true、restarts0、错误类别空；collector/bridge未重启。下一步观察至少一个自然刷新周期并写根因报告，确认恢复持续。
+
+2026-11-06 05:21 UTC阶段结束：第二个自然账户刷新05:21:05.654143再次succeeded，最终只读postflight exit0确认校验年龄约18秒、healthy/ready、auto_enabled=true、emergency=false、绑定许可和会员有效，个人策略指纹与发布前相同，配置版本稳定12。续期审计显示05:19:54成功且login_submitted=true：原App token亦过期后走既有受租约登录一次，并非测试交易。资金订单仍0，五分钟内所选专家pending推荐0；不追投旧推荐，不宣称真实成交已验收。根因与证据已写reports/auto-betting-session-expiry-20261106.md。状态：HTTP失效识别修复隔离验证通过，远端执行器部署及持续无资金账户刷新真实联调通过；实际资金成交未测试。最后动作：提交本轮报告与进度并核对远端，不包含其他工作包PROGRESS.md修改。
