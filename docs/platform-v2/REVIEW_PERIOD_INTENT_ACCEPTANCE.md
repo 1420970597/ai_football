@@ -1,6 +1,10 @@
 # E443 推荐期间意图保护
 
-更新时间：2026-11-06 10:31 UTC。状态：隔离定向验证通过，完整冻结及发布尚未完成。
+更新时间：2026-11-06 10:49 UTC。状态：完整冻结、受控发布、单条审计纠错和真实桌面/手机验证通过；新完整监控尚在进行。
+
+发布命令bash .runtime/e209-live/e443-controlled-rollout.sh actual0，apply/gate均0。仅API/worker/web重建，另外四个本地服务及环境、挂载、权限、CPU/内存预算保持；444推荐、659旧结算行及报价不可变摘要完整。单条纠错bash .runtime/e209-live/e443-correction-apply.sh actual0，保留原消息、报价、旧trace与账本，追加审计与accepted=0新回执，投影unresolved/withdrawn并排除统计，无订单提交。bash .runtime/e209-live/e443-browser-checks.sh actual0，1440/390真实22场景含五阶段标签10次、自然消息/原图与诊断8次、纠错和明确全场对照4次；原图467×57/756×391可解码、同attempt回执、系统原价1.70/1.88保持，无横向溢出或JS异常。已人工查看纠错手机截图，撤销原因及统计排除可见。E445于10:46启动1800秒新观察与独立终审，未到截止，不能以此宣称三秒或整体专家链路全部完成。
+
+完整候选6c2a7bea28f4767320ff2116e000de882c6077dd：bash .runtime/e209-live/e443-full-suite.sh，1572项/762.370秒actual0，无失败错误跳过，机器764.816秒；独立证据SHA256 f53dd00875ac554f2d2da860de51291f6fb03b6002c240415fe08fe5531f4b56，committed_source_verified=true。API/worker候选8741b8f3…538e、web9c9714f1…9a9、100源码/迁移依赖精确、原prompt/v7/期间守卫实载、配置预检及前端语法均0。10:43:53.911182暂停新领取、10:43:55.165709原任务自然结束持锁，准备仅API、worker、web切换；其余服务及原台账须独立复验，不以全套通过冒充发布成功。
 
 10:31 UTC Docker原整组03实际202项/292.433秒退出0，无失败错误跳过；覆盖原文期间冲突/歧义无写入、明确全场正常录入、纠错预演/追加/幂等、审计失败全回滚、旧报价及旧已结算台账不可变、结果重建不恢复误录、已有订单拒绝及47项账户契约。命令bash .runtime/e209-live/e443-targeted-tests.sh，证据e443-targeted-tests-03.log/.exit。01缺账户库变量47skip不计通过；02启动器sed失败后误启，停止仅本任务测试容器实际137，03补专用account_state_test建库角色重跑，业务代码冻结期间未改。
 
