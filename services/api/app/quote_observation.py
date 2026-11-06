@@ -72,3 +72,44 @@ def confirmation_for(observation, quote, fixture, max_age, now=None):
         return witness
     except (KeyError, TypeError, ValueError, InvalidOperation, OverflowError):
         return None
+
+
+def confirmations_for(observation, quotes, fixture, max_age, now=None):
+    """Index one read's candidates once; retain single-quote validation exactly."""
+    candidates = observation.get('quotes') if isinstance(observation, dict) else None
+    if not isinstance(candidates, list) or len(candidates) > 2000:
+        return {q['id']: confirmation_for(observation, q, fixture, max_age, now) for q in quotes}
+
+    def key(identity):
+        # A malformed non-scalar native field keeps the original equality
+        # path. The valid wire contract uses strings or None throughout.
+        if any(value is not None and not isinstance(value, str) for value in identity.values()):
+            raise TypeError('non-scalar quote identity')
+        return tuple(identity[field] for field in QUOTE_FIELDS)
+
+    indexed = {}
+    for item in candidates:
+        try:
+            identity = _identity(item)
+        except (KeyError, TypeError, ValueError, InvalidOperation):
+            continue
+        except OverflowError:
+            return {q['id']: confirmation_for(observation, q, fixture, max_age, now) for q in quotes}
+        try:
+            identity_key = key(identity)
+        except TypeError:
+            return {q['id']: confirmation_for(observation, q, fixture, max_age, now) for q in quotes}
+        matches = indexed.setdefault(identity_key, [])
+        if len(matches) < 2:
+            # Two equal candidates suffice to retain the duplicate rejection.
+            matches.append(item)
+    result = {}
+    for quote in quotes:
+        try:
+            matches = indexed.get(key(_identity(quote)), [])
+        except (KeyError, TypeError, ValueError, InvalidOperation, OverflowError):
+            result[quote['id']] = confirmation_for(observation, quote, fixture, max_age, now)
+            continue
+        result[quote['id']] = confirmation_for(
+            {**observation, 'quotes': matches}, quote, fixture, max_age, now)
+    return result

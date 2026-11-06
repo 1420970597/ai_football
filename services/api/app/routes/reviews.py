@@ -18,7 +18,7 @@ from ..handicap_lines import line_terms
 from ..review_state import authorize, fresh_quote, quote_context
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, MAX_MARKETS
 from ..runtime_settings import quote_max_age_from_rows, runtime_quote_max_age
-from ..quote_observation import confirmation_for
+from ..quote_observation import confirmation_for, confirmations_for
 from ..team_matching import normalize_team_name
 from ..review_candidates import snapshot_candidates
 from ..review_cursors import encode_cursor, decode_cursor
@@ -311,7 +311,7 @@ async def _market_snapshot(conn, body, settings, filters):
 
 
 async def _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh):
-    confirmations = {q['id']: confirmation_for(refresh.get('_observation'), q, fixture, max_age) for q in quotes}
+    confirmations = confirmations_for(refresh.get('_observation'), quotes, fixture, max_age)
     if quotes:
         await conn.executemany(
             "INSERT INTO v2_review_market_reads(job_id,attempt_id,quote_id,source_updated_at,price,quote_context) VALUES($1,$2,$3,$4,$5,$6) "

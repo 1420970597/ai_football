@@ -2,8 +2,10 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
+from unittest.mock import patch
 
-from app.quote_observation import confirmation_for, DETAIL_PATH
+from app.quote_observation import confirmation_for, confirmations_for, DETAIL_PATH
+from app import quote_observation
 from app.review_state import fresh_quote
 
 
@@ -68,3 +70,62 @@ class QuoteObservationTests(unittest.TestCase):
         for change in ({'status':'closed'},{'status':'suspended'},{'selection_id':''},{'market_instance_id':''},
                        {'play_id':''},{'market_kind':'unsupported'},{'price':None}):
             self.assertIsNone(self.confirm(quote={**self.quote,**change}))
+
+    def assert_batch_equal(self, observation, quotes=None, fixture=None):
+        quotes = quotes or [self.quote | {'id': 'q'}]
+        fixture = fixture or self.fixture
+        before = deepcopy(observation)
+        expected = {q['id']: confirmation_for(observation,q,fixture,15,self.now) for q in quotes}
+        actual = confirmations_for(observation,quotes,fixture,15,self.now)
+        self.assertEqual(expected,actual)
+        self.assertEqual(before,observation)
+        return actual
+
+    def test_batch_exact_witness_duplicate_invalid_and_malformed_identity_parity(self):
+        self.assertIsNotNone(self.assert_batch_equal(self.observation)['q'])
+        invalid = self.observation['quotes'][0] | {'source_updated_at': None}
+        for entries in ([],[invalid,*self.observation['quotes']],self.observation['quotes']*3,
+                        [self.observation['quotes'][0] | {'market_id': ['malformed']},*self.observation['quotes']],
+                        self.observation['quotes']*2001):
+            with self.subTest(count=len(entries)):
+                self.assert_batch_equal(self.observation | {'quotes': entries})
+        self.assert_batch_equal(self.observation, [self.quote | {'id':'bad','market_id':['malformed']}])
+        for observation in (None,{},self.observation | {'quotes': None},self.observation | {'path':'wrong'},
+                            self.observation | {'completed_at':(self.now+timedelta(seconds=1)).isoformat()},
+                            self.observation | {'started_at':(self.now-timedelta(seconds=16)).isoformat()}):
+            with self.subTest(observation=observation):
+                self.assert_batch_equal(observation)
+
+    def test_batch_keeps_changed_quote_and_fixture_rejections(self):
+        for change in ({'price':Decimal('2.01')},{'source_updated_at':None},{'line':Decimal('-1')},
+                       {'status':'closed'},{'selection_id':''},{'market_kind':'unsupported'},
+                       {'source_updated_at':self.now.replace(tzinfo=None)}):
+            self.assertIsNone(self.assert_batch_equal(self.observation,[self.quote | {'id':'q',**change}])['q'])
+        for change in ({'phase':'finished'},{'home_score':1},{'source_id':'other'}):
+            self.assertIsNone(self.assert_batch_equal(self.observation,fixture=self.fixture | change)['q'])
+
+    def test_batch_2000_candidates_normalize_linearly_and_keep_every_witness(self):
+        quotes=[self.quote | {'id':str(i),'selection_id':str(i)} for i in range(2000)]
+        observation=self.observation | {'quotes':[self.observation['quotes'][0] | {'selection_id':str(i)} for i in range(2000)]}
+        with patch.object(quote_observation,'_identity',wraps=quote_observation._identity) as identity:
+            actual=confirmations_for(observation,quotes,self.fixture,15,self.now)
+        self.assertEqual(2000,len(actual))
+        self.assertTrue(all(actual.values()))
+        self.assertLessEqual(identity.call_count,8000)
+        for index in (0,999,1999):
+            self.assertEqual(confirmation_for(observation,quotes[index],self.fixture,15,self.now),actual[str(index)])
+
+    def test_batch_rechecks_expiration_after_indexing_instead_of_freezing_admission_time(self):
+        clock=[self.now]
+        class AdvancingDateTime(datetime):
+            @classmethod
+            def now(cls,tz=None):
+                return clock[0]
+        original=quote_observation._identity
+        def normalize(value):
+            clock[0]=self.now+timedelta(seconds=16)
+            return original(value)
+        with patch.object(quote_observation,'datetime',AdvancingDateTime), \
+             patch.object(quote_observation,'_identity',side_effect=normalize):
+            result=confirmations_for(self.observation,[self.quote | {'id':'q'}],self.fixture,15)
+        self.assertIsNone(result['q'])
