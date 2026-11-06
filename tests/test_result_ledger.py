@@ -372,6 +372,76 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(3, await self.pool.fetchval('SELECT count(*) FROM v2_signal_settlements WHERE signal_id=$1', signal))
         self.assertEqual(old, dict(await self.pool.fetchrow('SELECT * FROM v2_signal_settlements WHERE signal_id=$1 AND algorithm_version=$2', signal, 'football-asian-4-native-line-basis')))
 
+    async def native_handicap_signal(self, *, selection='home', line='.25', baseline=None):
+        signal = await self.native_total_signal(selection=selection,line=line,baseline=baseline)
+        await self.pool.execute(
+            "UPDATE v2_expert_signals SET market_id='4',market_kind='handicap',market_name='全场让球' WHERE id=$1",signal)
+        await self.pool.execute(
+            "UPDATE v2_quote_evidence SET market_id='4',market_name='全场让球' WHERE reference_id=$1",signal)
+        return signal
+
+    async def test_native_handicap_unknown_rebuild_appends_rule_without_changing_original_evidence(self):
+        baseline={'home':0,'away':2}
+        signal=await self.native_handicap_signal(baseline=baseline)
+        quotes=[dict(r) for r in await self.pool.fetch('SELECT * FROM v2_quote_evidence WHERE reference_id=$1',signal)]
+        with (patch.object(result_ledger,'ALGORITHM_VERSION','football-asian-7-native-team-totals'),
+              patch.object(result_ledger,'settlement_rule',return_value=None)):
+            response=await self.submit(self.result(fixture_id='leyu:360',home=4,away=5))
+        self.assertEqual(200,response.status_code,response.text)
+        old=dict(await self.pool.fetchrow('SELECT * FROM v2_signal_settlements WHERE signal_id=$1',signal))
+        self.assertEqual('pending',old['outcome'])
+        for _ in range(2):
+            response=await self.client.post('/internal/collector/results/rebuild',json={'fixture_ids':['leyu:360']},
+                                           headers={'Authorization':'Bearer isolated-collector'})
+            self.assertEqual(200,response.status_code,response.text)
+        rows=await self.pool.fetch('SELECT * FROM v2_signal_settlements WHERE signal_id=$1 ORDER BY algorithm_version',signal)
+        self.assertEqual(2,len(rows));self.assertEqual(old,dict(rows[0]))
+        new=rows[1]
+        self.assertEqual(('win',Decimal('1'),Decimal('1')),tuple(new[k] for k in ('outcome','unit_net','effective_stake')))
+        calculation=new['calculation']
+        self.assertEqual('unknown',calculation['signal']['score_basis'])
+        self.assertEqual('remaining_period',calculation['effective_signal']['score_basis'])
+        self.assertEqual('leyu-football-fulltime-live-handicap-e448-20261106',calculation['score_rule']['reference'])
+        self.assertEqual(('unknown',baseline),tuple(await self.pool.fetchrow('SELECT score_basis,score_baseline FROM v2_expert_signals WHERE id=$1',signal)))
+        self.assertEqual(quotes,[dict(r) for r in await self.pool.fetch('SELECT * FROM v2_quote_evidence WHERE reference_id=$1',signal)])
+        corrected=await self.submit(self.result(fixture_id='leyu:360',home=4,away=6,source_updated_at=(self.now+timedelta(seconds=1)).isoformat()))
+        self.assertEqual(200,corrected.status_code,corrected.text)
+        self.assertEqual(('half_win',Decimal('.5'),2),tuple(await self.pool.fetchrow('SELECT outcome,unit_net,result_version FROM v2_expert_signals WHERE id=$1',signal)))
+        self.assertEqual(3,await self.pool.fetchval('SELECT count(*) FROM v2_signal_settlements WHERE signal_id=$1',signal))
+        self.assertEqual(old,dict(await self.pool.fetchrow('SELECT * FROM v2_signal_settlements WHERE signal_id=$1 AND algorithm_version=$2',signal,old['algorithm_version'])))
+
+    async def test_native_handicap_preserves_existing_equivalent_result_and_historical_date(self):
+        signal=await self.native_handicap_signal(baseline={'home':0,'away':1})
+        with (patch.object(result_ledger,'ALGORITHM_VERSION','football-asian-7-native-team-totals'),
+              patch.object(result_ledger,'settlement_rule',return_value=None)):
+            response=await self.submit(self.result(fixture_id='leyu:360',home=0,away=3))
+        self.assertEqual(200,response.status_code,response.text)
+        historical=self.now-timedelta(days=3)
+        await self.pool.execute('UPDATE v2_signal_settlements SET created_at=$2 WHERE signal_id=$1',signal,historical)
+        await self.pool.execute('UPDATE v2_expert_signals SET settled_at=$2 WHERE id=$1',signal,historical)
+        old=dict(await self.pool.fetchrow('SELECT * FROM v2_signal_settlements WHERE signal_id=$1',signal))
+        self.assertEqual('loss',old['outcome'])
+        response=await self.client.post('/internal/collector/results/rebuild',json={'fixture_ids':['leyu:360']},
+                                       headers={'Authorization':'Bearer isolated-collector'})
+        self.assertEqual(200,response.status_code,response.text)
+        rows=await self.pool.fetch('SELECT * FROM v2_signal_settlements WHERE signal_id=$1 ORDER BY algorithm_version',signal)
+        self.assertEqual(2,len(rows));self.assertEqual(old,dict(rows[0]))
+        self.assertEqual((old['reason'],old['calculation'],historical),(rows[1]['reason'],rows[1]['calculation'],rows[1]['created_at']))
+        self.assertEqual(historical,await self.pool.fetchval('SELECT settled_at FROM v2_expert_signals WHERE id=$1',signal))
+
+    async def test_native_handicap_cannot_bypass_quote_or_baseline_validation(self):
+        bad=await self.native_handicap_signal(baseline={'home':0,'away':2})
+        missing=await self.native_handicap_signal(line='.75')
+        reversed_score=await self.native_handicap_signal(line='1.25',baseline={'home':6,'away':2})
+        await self.pool.execute('UPDATE v2_quote_evidence SET price=3 WHERE reference_id=$1',bad)
+        response=await self.submit(self.result(fixture_id='leyu:360',home=4,away=5))
+        self.assertEqual(200,response.status_code,response.text)
+        for identity,reason in ((bad,'recommendation_quote_evidence_missing_or_mismatched'),
+                                (missing,'live_score_baseline_missing'),
+                                (reversed_score,'baseline_exceeds_official_result')):
+            row=await self.pool.fetchrow('SELECT outcome,unit_net,settlement_reason FROM v2_expert_signals WHERE id=$1',identity)
+            self.assertEqual(('pending',None,reason),tuple(row))
+
     async def native_total_signal(self, *, period='full_time', selection='over', line='2.25', baseline=None):
         signal = await self.signal(selection=selection, line=line, phase='live', period=period)
         market = '2' if period == 'full_time' else '18'

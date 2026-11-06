@@ -14,7 +14,7 @@ from .score_rules import settlement_rule
 from .team_totals import team_total_terms
 from .review_period_intent import INTENT_VALID_SQL
 
-ALGORITHM_VERSION = 'football-asian-7-native-team-totals'
+ALGORITHM_VERSION = 'football-asian-8-native-live-handicap'
 
 
 def result_facts(row):

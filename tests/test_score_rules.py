@@ -2,7 +2,7 @@ from copy import deepcopy
 from decimal import Decimal
 import unittest
 
-from app.score_rules import LEYU_PERIOD_TOTAL_RULE, settlement_rule
+from app.score_rules import LEYU_PERIOD_TOTAL_RULE, LEYU_REMAINING_HANDICAP_RULE, settlement_rule
 from app.settlement import settle
 
 
@@ -69,3 +69,66 @@ class NativeTotalRuleTests(unittest.TestCase):
         for change in ({'price': 'NaN'}, {'line': '.1'}, {'selection': 'invalid'}):
             self.assertEqual('pending', settle(signal | change, result).outcome)
         self.assertEqual('void', settle(signal, {'status': 'void'}).outcome)
+
+
+class NativeHandicapRuleTests(unittest.TestCase):
+    def signal(self):
+        return dict(market_id='4', market_kind='handicap', period='full_time',
+                    phase='live', score_basis='unknown')
+
+    def test_only_verified_native_fulltime_live_handicap_has_remaining_rule(self):
+        fixture = {'id':'leyu:5808400','sport':'football'}
+        signal = self.signal()
+        original = deepcopy(signal)
+        self.assertEqual({'reference':LEYU_REMAINING_HANDICAP_RULE,'score_basis':'remaining_period',
+                          'provider':'leyu','market_id':'4','period':'full_time'}, settlement_rule(fixture,signal))
+        self.assertEqual(original,signal)
+        for changed in ({'id':'other:5808400'},{'id':'leyu:１２３'},{'id':'leyu:123\n'},
+                        {'sport':'basketball'}):
+            self.assertIsNone(settlement_rule(fixture | changed,signal))
+        for changed in ({'market_id':'19'},{'market_id':'10'},{'market_id':'11'},{'market_id':'39'},
+                        {'market_id':'2'},{'market_kind':'total'},{'market_kind':'team_total'},
+                        {'period':'first_half'},{'period':'second_half'},{'phase':'scheduled'},
+                        {'score_basis':'full_period'},{'score_basis':'remaining_period'},{'score_basis':None}):
+            self.assertIsNone(settlement_rule(fixture,signal | changed))
+
+    def test_all_fourteen_discriminating_native_receipts_use_remaining_scores(self):
+        # E330 minimal native ordinary-order projection, source SHA c9b93ae8...c9829.
+        # Lines are selected-team display lines; production native lines are home-view.
+        samples = [
+            ('home','.75',(0,2),(0,3),'half_loss'),
+            ('home','.25',(0,2),(4,5),'win'),
+            ('home','.5',(0,2),(4,5),'win'),
+            ('away','.25',(2,1),(2,2),'win'),
+            ('away','.75',(1,0),(2,0),'half_loss'),
+            ('away','.75',(2,0),(3,0),'half_loss'),
+            ('home','-.5',(0,3),(1,3),'win'),
+            ('away','.75',(2,0),(3,1),'win'),
+            ('away','.25',(1,0),(1,0),'half_win'),
+            ('away','-.25',(3,0),(3,2),'win'),
+            ('away','0',(2,0),(3,2),'win'),
+            ('home','-.25',(0,2),(1,3),'half_loss'),
+            ('away','.75',(2,0),(3,0),'half_loss'),
+            ('away','.25',(2,0),(2,1),'win'),
+        ]
+        rule=settlement_rule({'id':'leyu:5808400','sport':'football'},self.signal())
+        for side,line,before,after,expected in samples:
+            with self.subTest(side=side,line=line,before=before,after=after):
+                native_line=Decimal(line) * (-1 if side=='away' else 1)
+                signal=dict(kind='handicap',selection=side,line=str(native_line),price='1.90',
+                            period='full_time',phase='live',line_basis='provider_home',
+                            score_baseline={'home':before[0],'away':before[1]})
+                result={'status':'confirmed','home':after[0],'away':after[1]}
+                self.assertEqual(expected,settle(signal | {'score_basis':rule['score_basis']},result).outcome)
+                self.assertNotEqual(expected,settle(signal | {'score_basis':'full_period'},result).outcome)
+
+    def test_remaining_rule_requires_usable_baseline_and_confirmed_result(self):
+        signal=dict(kind='handicap',selection='home',line='.25',price='1.90',
+                    period='full_time',phase='live',score_basis='remaining_period',
+                    score_baseline={'home':0,'away':2},line_basis='provider_home')
+        result={'status':'confirmed','home':4,'away':5}
+        for change in ({'score_baseline':{}},{'score_baseline':{'home':6,'away':2}},
+                       {'line':'.1'},{'price':'NaN'},{'selection':'draw'}):
+            self.assertEqual('pending',settle(signal | change,result).outcome)
+        self.assertEqual('pending',settle(signal,result | {'status':'provisional'}).outcome)
+        self.assertEqual('void',settle(signal,{'status':'void'}).outcome)
