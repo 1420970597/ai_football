@@ -1497,6 +1497,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                     'quote_id':quote['quote_id'], 'evidence_text':'Alpha 大2.5'}])
                 self.assertEqual([],result.json()['accepted'])
                 self.assertEqual('quote_or_score_context_changed',result.json()['rejected'][0]['reason'])
+                self.assertEqual([field], result.json()['rejected'][0]['context_changed_fields'])
                 await self.pool.execute(f'UPDATE v2_current_quotes SET {field}=$1',original[field])
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
 
@@ -1721,6 +1722,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         response = await self.post('record_expert_signals', signals=[{'fixture_id':fixture_id, 'quote_id':quote['quote_id'], 'evidence_text':'Alpha over'}])
         self.assertEqual(200, response.status_code, response.text)
         self.assertEqual('quote_or_score_context_changed', response.json()['rejected'][0]['reason'])
+        self.assertEqual(['away_score', 'home_score', 'phase'],
+                         response.json()['rejected'][0]['context_changed_fields'])
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
 
     async def test_quote_projection_rejects_older_event_and_closes_only_full_snapshot(self):

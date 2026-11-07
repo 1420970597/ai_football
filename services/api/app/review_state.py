@@ -15,6 +15,14 @@ def quote_context(quote, fixture) -> dict:
          'selection': quote['selection']}
 
 
+def quote_context_changed_fields(previous: dict, current: dict) -> list[str]:
+    """Describe an already-rejected context using only trusted contract names."""
+    changed = [key for key in current if key not in previous or previous[key] != current[key]]
+    if previous.keys() - current.keys() - {'current_confirmation'}:
+        changed.append('unexpected_read_context')
+    return sorted(changed)
+
+
 def authorize(request: Request, token: str) -> None:
     supplied = request.headers.get("authorization", "")
     if not token or not supplied.lower().startswith("bearer ") or not hmac.compare_digest(supplied[7:].strip(), token):

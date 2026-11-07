@@ -12,6 +12,52 @@ from app import hermes_client
 
 
 class HermesClientTests(unittest.IsolatedAsyncioTestCase):
+    async def image_summary(self, message, *, prepared=False):
+        parts = [{'type': 'text', 'text': 'isolated input'},
+                 {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,isolated'}}]
+        async def handler(_request):
+            return httpx.Response(200, json={'choices': [
+                {'finish_reason': 'stop', 'message': {'content': '核验结果'}}]})
+        settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1', hermes_api_key='isolated-key',
+                                   hermes_model='isolated-model')
+        review, attempt = uuid.uuid4(), uuid.uuid4()
+        prepared_input = (hermes_client.PreparedReviewInput(str(review), str(attempt), parts, 1.0)
+                          if prepared else None)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with patch.object(hermes_client, '_content_parts', AsyncMock(return_value=parts)) as build:
+                _, summary = await hermes_client.review_message(settings, message, review, attempt,
+                    client=client, prepared_input=prepared_input)
+        self.assertEqual(0 if prepared else 1, build.await_count)
+        return summary
+
+    async def test_own_image_bytes_count_without_reply(self):
+        summary = await self.image_summary({'media_objects': [{'bytes': 123}]})
+        self.assertEqual((1, 123), (summary['image_count'], summary['image_bytes']))
+
+    async def test_own_and_ready_reply_image_bytes_are_combined(self):
+        summary = await self.image_summary({'media_objects': [{'bytes': 123}],
+            'reply_archive': {'media_state': 'ready', 'media_objects': [{'bytes': 77}]}})
+        self.assertEqual(200, summary['image_bytes'])
+
+    async def test_deleted_reply_does_not_hide_own_image_bytes(self):
+        summary = await self.image_summary({'media_objects': [{'bytes': 123}],
+            'reply_archive': {'media_state': 'ready', 'deleted': True, 'media_objects': [{'bytes': 77}]}})
+        self.assertEqual(123, summary['image_bytes'])
+
+    async def test_unavailable_reply_does_not_hide_own_image_bytes(self):
+        summary = await self.image_summary({'media_objects': [{'bytes': 123}],
+            'reply_archive': {'media_state': 'unsupported', 'media_objects': [{'bytes': 77}]}})
+        self.assertEqual(123, summary['image_bytes'])
+
+    async def test_ready_reply_only_image_bytes_count(self):
+        summary = await self.image_summary({'media_objects': [],
+            'reply_archive': {'media_state': 'ready', 'media_objects': [{'bytes': 77}]}})
+        self.assertEqual(77, summary['image_bytes'])
+
+    async def test_prepared_own_image_keeps_byte_count_without_reloading(self):
+        summary = await self.image_summary({'media_objects': [{'bytes': 123}]}, prepared=True)
+        self.assertEqual(123, summary['image_bytes'])
+
     async def test_session_cleanup_stops_only_owned_active_attempts(self):
         review, attempt = uuid.uuid4(), uuid.uuid4()
         session = f'expert-review-{review}-{attempt}'

@@ -48,7 +48,7 @@ MODEL_QUOTE_FIELDS = QUOTE_FIELDS - {
     'price', 'source_updated_at', 'received_at', 'source_time_quality', 'is_main',
 }
 ACCEPTED_FIELDS = frozenset({'index', 'signal_id', 'duplicate', 'fixture_id', 'market_name', 'period', 'line', 'selection', 'price', 'line_basis', 'selection_line', 'team_side'})
-REJECTED_FIELDS = frozenset({'index', 'reason'})
+REJECTED_FIELDS = frozenset({'index', 'reason', 'context_changed_fields'})
 log = logging.getLogger(__name__)
 
 

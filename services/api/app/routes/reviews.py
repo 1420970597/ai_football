@@ -15,7 +15,7 @@ from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_val
 from .. import database
 from ..review_policy import REALTIME_WINDOW_SECONDS
 from ..handicap_lines import line_terms
-from ..review_state import authorize, fresh_quote, quote_context
+from ..review_state import authorize, fresh_quote, quote_context, quote_context_changed_fields
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, MAX_MARKETS
 from ..runtime_settings import quote_max_age_from_rows, runtime_quote_max_age
 from ..quote_observation import confirmation_for, confirmations_for
@@ -490,7 +490,11 @@ async def _record_current_signals(conn, body, request, observations):
         elif not fresh_quote(quote, max_quote_age) and not confirmation:
             reason = "quote_inactive_unknown_or_stale"
         if reason:
-            rejected.append({"index": index, "reason": reason})
+            rejection = {"index": index, "reason": reason}
+            if reason == 'quote_or_score_context_changed':
+                rejection['context_changed_fields'] = quote_context_changed_fields(
+                    quote['read_context'], quote_context(quote, quote))
+            rejected.append(rejection)
             continue
         quote['source_period_context'] = verified_early_first_half_context(
             job['raw_text'], quote, posted_at=job['posted_at'])
