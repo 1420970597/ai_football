@@ -1650,7 +1650,7 @@ for (const width of [1440, 390]) {
         assert.doesNotMatch(text, /等待赛果结算/);
         assert.doesNotMatch(text, /待结算/);
         assert.match(text, /系统赔率 1\.96/);
-        assert.match(text, /比赛：已完场/);
+        assert.match(text, /比赛：完场/);
         assert.match(text, /推荐：滚球/);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
         assert.equal(log.filter(request => ["POST", "PUT", "PATCH", "DELETE"].includes(request.method)).length, 0);
