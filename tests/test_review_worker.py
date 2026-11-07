@@ -609,7 +609,7 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         await self.make_queued()
         job = await worker.claim_job(self.pool)
         heartbeat_stopped = asyncio.Event()
-        original_add_trace = worker._add_trace
+        original_complete = worker._complete_review_once
 
         async def heartbeat(*_args):
             try:
@@ -617,13 +617,13 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 heartbeat_stopped.set()
 
-        async def add_trace(pool, active, kind, payload):
-            if kind == 'hermes_result':
-                self.assertTrue(heartbeat_stopped.is_set())
-            return await original_add_trace(pool, active, kind, payload)
+        async def complete(*args):
+            self.assertTrue(heartbeat_stopped.is_set())
+            self.assertIsInstance(args[3], dict)
+            return await original_complete(*args)
 
         with patch.object(worker, 'keep_lease', heartbeat), \
-                patch.object(worker, '_add_trace', add_trace), \
+                patch.object(worker, '_complete_review_once', complete), \
                 patch.object(worker, 'review_message', AsyncMock(return_value=('no pick', {'content': 'no pick'}))), \
                 patch.object(worker, 'delete_session', AsyncMock()):
             await worker.process_job(self.pool, SimpleNamespace(hermes_model='synthetic'), job)
@@ -634,6 +634,39 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, await self.pool.fetchval(
             "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result'",
             self.job))
+
+    async def test_model_result_and_receipt_commit_together_without_a_separate_result_transaction(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        original_summary = worker.record_summary
+        original_add_trace = worker._add_trace
+        separate_writes = []
+
+        async def summary(conn, *args, **kwargs):
+            self.assertEqual(1, await conn.fetchval(
+                "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='hermes_result'", self.job))
+            self.assertEqual(0, await self.pool.fetchval(
+                "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='hermes_result'", self.job),
+                'model evidence must not become visible before its conclusion commits')
+            return await original_summary(conn, *args, **kwargs)
+
+        async def add_trace(pool, active, kind, payload):
+            separate_writes.append(kind)
+            return await original_add_trace(pool, active, kind, payload)
+
+        with patch.object(worker, 'record_summary', summary), \
+                patch.object(worker, '_add_trace', add_trace), \
+                patch.object(worker, 'review_message', AsyncMock(return_value=('no pick', {'content': 'no pick'}))), \
+                patch.object(worker, 'delete_session', AsyncMock()):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model='synthetic'), job)
+        self.assertEqual(['hermes_request'], separate_writes)
+        rows = await self.pool.fetch(
+            "SELECT trace_kind,xmin::text AS transaction_id,payload->>'attempt_id' AS attempt "
+            "FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind IN ('hermes_result','system_review_result') "
+            "ORDER BY sequence_no", self.job)
+        self.assertEqual(['hermes_result', 'system_review_result'], [r['trace_kind'] for r in rows])
+        self.assertEqual(1, len({r['transaction_id'] for r in rows}))
+        self.assertEqual({str(job['attempt_id'])}, {r['attempt'] for r in rows})
 
     async def test_conclusion_rollback_retries_without_repeating_model_or_receipt(self):
         await self.make_queued()
@@ -706,6 +739,11 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('conclusion_persistence', failure['failure_stage'])
         self.assertEqual(0, await self.pool.fetchval(
             "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result'", self.job))
+        model_result = await self.pool.fetchrow(
+            "SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='hermes_result'", self.job)
+        self.assertIsNotNone(model_result, 'exhausted conclusion retries must preserve the model audit')
+        self.assertEqual('no pick', model_result['payload']['content'])
+        self.assertEqual(str(job['attempt_id']), model_result['payload']['attempt_id'])
 
     async def test_conclusion_recovery_rechecks_source_eligibility_before_retry(self):
         await self.make_queued()

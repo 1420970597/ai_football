@@ -1,6 +1,6 @@
 # E500：合并模型结果与系统结论提交
 
-更新时间：2026-11-07 03:32 UTC。状态：设计已记录，代码未写。
+更新时间：2026-11-07 03:41 UTC。状态：代码已写、定向隔离验证通过；待独立冻结全套，未部署。
 
 - 目标与责任：减少services/api审核工作器在真实模型返回后重复获取远端事务与任务/轨迹锁的往返；tests使用具名隔离PostgreSQL验证。保持collector与当前完整观察版本不变，部署只涉及审核worker。
 - 前置与当前证据：E494八项自然模型审核均完成，但结论10.315—36.118秒。当前成功路径先`_add_trace(hermes_result)`单独事务，再`_complete_review`另起事务、重复active_job及轨迹锁；任务租约、媒体/消息版本和来源资格须保留。现有E168恢复能重试系统结论而不重新调用模型，不能破坏。
@@ -10,3 +10,11 @@
 - 失败处理：任一资格、恢复、序号或审计测试失败停止候选上线，修复后重跑原检查；正常路径节省事务不等于三秒，外部模型用时与WS拥塞分别保留未解决。当前仅研究设计，不报已修复。
 
 资源：定向PG上限0.5CPU/384MiB，测试runner 0.75CPU/512MiB，监控每项0.1CPU/128MiB；单套验证串行，无并行高负载构建。持久化数据库与账户只读检查不使用测试DSN。
+
+## 定向真实PG验证
+
+固定验证器镜像`sha256:a8fc0cb5dbebed71df5688f33c3963a076151c7d41ca8e7625520b8ab7ffc234`；内部网络`ai-football-v2-e500-target`及具名临时PG，仅测试DSN。`python -m unittest -q test_review_worker test_review_completion test_review_summary test_review_summary_evidence`在Docker执行103项、99.721秒，原生退出0、OOM=false，无跳过。测试源码运行期间未修改。
+
+新增真实事务可见性断言：record_summary所在连接能读取未提交模型结果，另一连接仍看不到；最终两条轨迹xmin一致、attempt一致；成功路径独立_add_trace仅hermes_request。已有回滚、丢失COMMIT确认、来源失效、心跳、顺序及恢复行为回归通过；连续两次结论失败仍保存原模型审计并进入原retry策略。
+
+原生日志`.runtime/e209-live/e500-target/output.log` SHA256=`f4e8b6a0781bfffb47fef26df2d08df88d4765f78794fefc408f198ff0e63103`；容器状态及退出码同目录保存。仅证明隔离行为，不宣称生产时延改善或三秒通过。

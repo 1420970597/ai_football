@@ -337,13 +337,20 @@ async def keep_lease(pool, job: dict) -> None:
             delay = HEARTBEAT_SECONDS
 
 
-async def _complete_review_once(pool, job: dict, started: float) -> None:
+async def _complete_review_once(pool, job: dict, started: float, model_result: dict | None = None) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
             # Reuse the trace lock acquired in this eligibility query. The
             # receipt insert remains a later statement so a concurrent trace
             # committed before lock acquisition is visible to its sequence read.
             current = await active_job(conn, job["id"], job["attempt_id"], lock_trace_sequence=True)
+            if model_result is not None:
+                # The model evidence and its receipt share eligibility, sequence
+                # ownership and COMMIT. A rollback retries the saved response,
+                # never the provider call or a separately committed duplicate.
+                await append_traces(conn, job['id'], [('hermes_result',
+                                    {**model_result, 'attempt_id': str(job['attempt_id'])})],
+                                    trace_lock_held=True)
             count = await record_summary(conn, current, job["attempt_id"], job.get('review_mode', 'real_time'),
                                          trace_lock_held=True)
             recovery = await market_recovery(conn, current, job['attempt_id'], job['attempts'])
@@ -385,14 +392,17 @@ async def _conclusion_committed(pool, job: dict) -> bool:
         "AND t.payload->>'outcome'=j.state)", job['id'], job['attempt_id']))
 
 
-async def _complete_review(pool, job: dict, started: float) -> None:
+async def _complete_review(pool, job: dict, started: float, model_result: dict | None = None) -> None:
     transient = (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError,
                  asyncpg.DeadlockDetectedError, asyncpg.SerializationError,
                  asyncpg.PostgresConnectionError)
     async with asyncio.timeout(15):
         for attempt in range(2):
             try:
-                await _complete_review_once(pool, job, started)
+                if model_result is None:
+                    await _complete_review_once(pool, job, started)
+                else:
+                    await _complete_review_once(pool, job, started, model_result)
                 return
             except transient:
                 if await _conclusion_committed(pool, job):
@@ -470,6 +480,7 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
 
 async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncClient | None = None) -> None:
     review_task = lease_task = None
+    model_result = None
     started = time.monotonic()
     failure_stage = "configuration"
     try:
@@ -516,19 +527,26 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
         lease_task = None
         claim_elapsed_ms = max(0, (time.monotonic() - job.get('_claimed_monotonic', started)) * 1000)
         event_to_claim_ms = job['message'].get('event_to_claim_ms')
-        failure_stage = "model_result_persistence"
-        await _add_trace(pool, job, "hermes_result", {**summary,
+        model_result = {**summary,
             "scheduler_claim_elapsed_ms": job.get('_scheduler_claim_elapsed_ms'),
             "model_elapsed_ms": round((time.monotonic() - started) * 1000, 3),
             "claim_to_result_ms": round(claim_elapsed_ms, 3),
             "event_to_result_ms": round(event_to_claim_ms + claim_elapsed_ms, 3)
-            if event_to_claim_ms is not None else None})
+            if event_to_claim_ms is not None else None}
         failure_stage = "conclusion_persistence"
-        await _complete_review(pool, job, started)
+        await _complete_review(pool, job, started, model_result)
     except asyncio.CancelledError:
         # 退出后保留租约，其他工作器待到期接管，不覆盖已接受推荐。
         raise
     except Exception as exc:
+        if failure_stage == 'conclusion_persistence' and model_result is not None:
+            try:
+                # Keep the original model audit if both conclusion attempts
+                # fail. active_job still rejects a cancelled/committed attempt;
+                # a lost COMMIT acknowledgement cannot add a duplicate result.
+                await _add_trace(pool, job, 'hermes_result', model_result)
+            except Exception:
+                pass
         if isinstance(exc, ReviewEvidenceUnavailable):
             failure_stage = 'completion_evidence'
         category = type(exc).__name__
