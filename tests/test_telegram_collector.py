@@ -40,6 +40,9 @@ class Message:
     async def get_sender(self):
         return SimpleNamespace(id=self.sender_id, first_name="专家", last_name="甲", username="test-expert")
 
+    async def get_reply_message(self):
+        return None
+
 
 class Backend:
     def __init__(self):

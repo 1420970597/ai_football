@@ -952,15 +952,19 @@ class TelegramCollector:
         sender = getattr(message, "sender", None)
         manifests = []
         raw_text = "\n\n".join(item.message for item in members if getattr(item, "message", None))
-        reply = next((item.reply_to_msg_id for item in members if getattr(item, "reply_to_msg_id", None)), None)
+        reply_member = next((item for item in members if getattr(item, "reply_to_msg_id", None)), None)
+        reply = reply_member.reply_to_msg_id if reply_member is not None else None
         reply_context = {}
         sender_task = asyncio.create_task(message.get_sender()) if sender is None and not channel_post_identity else None
         reply_task = None
         if reply:
             try:
-                reply_task = asyncio.create_task(message.get_reply_message())
-            except Exception:
-                reply_context = {"unavailable": True}
+                reply_task = asyncio.create_task(reply_member.get_reply_message())
+            except BaseException:
+                if sender_task is not None:
+                    sender_task.cancel()
+                    await asyncio.gather(sender_task, return_exceptions=True)
+                raise
         lookup_tasks = [task for task in (sender_task, reply_task) if task is not None]
         lookup_results = await asyncio.gather(*lookup_tasks, return_exceptions=True)
         lookup_values = dict(zip((task for task in (sender_task, reply_task) if task is not None), lookup_results))
@@ -971,7 +975,9 @@ class TelegramCollector:
             sender = sender_result
         if reply_task is not None:
             replied = lookup_values[reply_task]
-            if isinstance(replied, BaseException) or replied is None:
+            if isinstance(replied, BaseException):
+                raise replied
+            if replied is None:
                 reply_context = {"unavailable": True}
             else:
                 reply_context = {"message_id": str(replied.id), "sender_id": str(getattr(replied, "sender_id", "") or ""),
