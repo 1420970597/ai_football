@@ -38,6 +38,21 @@ class MarketPeriodInputTests(unittest.TestCase):
             with self.subTest(period=period):
                 self.assertEqual(period, self.body(period).period)
 
+    def test_exact_numeric_half_aliases_keep_line_direction_and_kind(self):
+        for raw, expected in (('1h', 'first_half'), ('2h', 'second_half')):
+            with self.subTest(period=raw):
+                body = reviews.MarketInput(review_id=uuid.uuid4(), attempt_id=uuid.uuid4(),
+                    fixture_id='fixture-period-test', market_kind='handicap', period=raw,
+                    line='0.75', selection='away')
+                self.assertEqual(expected, body.period)
+                self.assertEqual(('handicap', Decimal('0.75'), 'away'),
+                                 (body.market_kind, body.line, body.selection))
+
+    def test_numeric_half_aliases_do_not_accept_prefixes_or_ambiguous_half(self):
+        for period in ('1hour', '2half', '1h_extra', '21h', '半场'):
+            with self.subTest(period=period), self.assertRaises(ValueError):
+                self.body(period)
+
     def test_exact_match_alias_keeps_native_handicap_scope(self):
         body = reviews.MarketInput(review_id=uuid.uuid4(), attempt_id=uuid.uuid4(),
             fixture_id='fixture-period-test', market_kind='handicap', period='match',
@@ -444,6 +459,25 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, unknown.status_code)
         self.assertEqual([], unknown.json()['markets'])
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+
+    async def test_numeric_half_filters_keep_native_period_line_and_direction(self):
+        fixture_id = await self.fixture(markets=[
+            {'market_id': f'{period}-{line}', 'market_name': period, 'kind': 'total', 'period': period,
+             'line': line, 'selection': selection, 'price': '1.95',
+             'source_updated_at': self.now.isoformat(), 'received_at': self.now.isoformat()}
+            for period in ('full_time', 'first_half', 'second_half')
+            for line in ('1.5', '2.5') for selection in ('over', 'under')])
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        for alias, expected in (('1h', 'first_half'), ('2h', 'second_half')):
+            with self.subTest(period=alias):
+                response = await self.post('list_match_markets', fixture_id=fixture_id,
+                    market_kind='totals', period=alias, line='1.5', selection='over')
+                self.assertEqual(200, response.status_code, response.text)
+                result = response.json()
+                self.assertEqual(expected, result['market_filter']['period'])
+                self.assertEqual([(expected, 'over', Decimal('1.5'))],
+                    [(q['period'], q['selection'], Decimal(str(q['line']))) for q in result['markets']])
 
     async def test_asian_handicap_filter_alias_preserves_native_period_and_selection(self):
         fixture_id = 'leyu:5635231'
