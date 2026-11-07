@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import gzip
 import json
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
@@ -310,6 +310,158 @@ class RealtimeLoopTests(unittest.IsolatedAsyncioTestCase):
             service._enqueue_event(event)
         await service._consume(stop)
         self.assertEqual([first, second], delivered)
+
+    async def test_native_frame_larger_than_queue_reaches_ready_consumer_in_run(self):
+        stop = asyncio.Event()
+        delivered = []
+        frame = {"cmd": "C103", "cd": [{"mid": str(i), "msc": ["S1|1:0"],
+                 "ctsp": "1790923618643"} for i in range(300)]}
+
+        async def on_batch(batch):
+            delivered.extend(batch)
+            if len(delivered) == 300:
+                stop.set()
+
+        class Socket:
+            send = AsyncMock()
+            sent_frame = False
+            async def recv(self):
+                if not self.sent_frame:
+                    self.sent_frame = True
+                    return json.dumps(frame)
+                await stop.wait()
+                return json.dumps({"cmd": "C0"})
+
+        class Connection:
+            async def __aenter__(self):
+                return Socket()
+            async def __aexit__(self, *args):
+                pass
+
+        service = LeyuRealtime(lambda: {"leyu_api_base": "https://business.invalid", "leyu_request_id": "authorized"},
+                               lambda: [], on_batch, AsyncMock(), connector=lambda *a, **kw: Connection())
+        await asyncio.wait_for(service.run(stop), timeout=3)
+        self.assertEqual([f"leyu:{i}" for i in range(300)], [event["fixture_id"] for event in delivered])
+        self.assertEqual((300, 300, 0), (service.stats["events_received"], service.stats["events_delivered"], service.stats["dropped"]))
+        self.assertEqual(300, service.stats["frame_events_max"])
+        self.assertGreater(service.stats["backpressure_waits"], 0)
+        self.assertEqual(0, service.stats["backpressure_timeouts"])
+        self.assertEqual(128, service.queue.maxsize)
+        self.assertLessEqual(service.stats["queue_high_water"], 128)
+        expected_source_time = datetime.fromtimestamp(1790923618.643, timezone.utc).isoformat()
+        self.assertTrue(all(event["source_updated_at"] == expected_source_time for event in delivered))
+
+    async def test_frame_backpressure_preserves_distinct_markets_and_original_timestamps(self):
+        stop = asyncio.Event()
+        delivered = []
+        async def on_batch(batch):
+            delivered.extend(batch)
+        service = LeyuRealtime(lambda: {}, lambda: [], on_batch, AsyncMock(), queue_size=1)
+        rows = []
+        for index in range(10):
+            row = snapshot()
+            row["hls2"]["4"][0]["hid"] = f"market-{index}"
+            rows.append(row)
+        events = push_events({"cmd": "C105", "cd": rows}, received_at=datetime(2026, 10, 26, tzinfo=timezone.utc))
+        consumer = asyncio.create_task(service._consume(stop))
+        try:
+            await service._enqueue_frame(events)
+            await asyncio.wait_for(service.queue.join(), timeout=2)
+        finally:
+            stop.set()
+            consumer.cancel()
+            await asyncio.gather(consumer, return_exceptions=True)
+        self.assertEqual(events, delivered)
+        self.assertEqual(10, service.stats["events_delivered"])
+        self.assertEqual(0, service.stats["dropped"])
+        self.assertEqual(1, service.stats["queue_high_water"])
+
+    async def test_blocked_consumer_uses_one_frame_deadline_and_resyncs_precise_drops(self):
+        stop, entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        delivered = []
+        async def on_batch(batch):
+            entered.set()
+            await release.wait()
+            delivered.extend(batch)
+        resync = AsyncMock()
+        service = LeyuRealtime(lambda: {}, lambda: [], on_batch, resync, queue_size=1)
+        service._enqueue_event({"fixture_id": "leyu:initial", "payload": {"mid": "initial"}})
+        consumer = asyncio.create_task(service._consume(stop))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            events = [{"fixture_id": f"leyu:{i}", "payload": {"mid": str(i)}} for i in range(20)]
+            started = asyncio.get_running_loop().time()
+            with patch("services.collector.leyu_realtime.FRAME_ENQUEUE_BUDGET_SECONDS", .03):
+                await service._enqueue_frame(events)
+            self.assertLess(asyncio.get_running_loop().time() - started, .3)
+            self.assertEqual((2, 19, 1), (service.stats["events_received"], service.stats["dropped"], service.queue.qsize()))
+            self.assertEqual(1, service.stats["backpressure_waits"])
+            self.assertEqual(1, service.stats["backpressure_timeouts"])
+            self.assertTrue(service._gap)
+            release.set()
+            await asyncio.wait_for(service.queue.join(), timeout=2)
+            self.assertEqual(["leyu:initial", "leyu:0"], [event["fixture_id"] for event in delivered])
+            self.assertEqual(1, resync.await_count)
+            self.assertEqual(0, service.queue._unfinished_tasks)
+        finally:
+            release.set()
+            stop.set()
+            consumer.cancel()
+            await asyncio.gather(consumer, return_exceptions=True)
+
+    async def test_cancelled_frame_put_does_not_enqueue_later(self):
+        service = LeyuRealtime(lambda: {}, lambda: [], AsyncMock(), AsyncMock(), queue_size=1)
+        initial = {"fixture_id": "leyu:initial", "payload": {"mid": "initial"}}
+        service._enqueue_event(initial)
+        task = asyncio.create_task(service._enqueue_frame([{"fixture_id": "leyu:late", "payload": {"mid": "late"}}]))
+        try:
+            while not service.stats["backpressure_waits"]:
+                await asyncio.sleep(0)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertEqual(initial, service.queue.get_nowait())
+            service.queue.task_done()
+            await asyncio.sleep(0)
+            self.assertTrue(service.queue.empty())
+            self.assertEqual((1, 0, 0), (service.stats["events_received"], service.stats["dropped"], service.stats["backpressure_timeouts"]))
+            self.assertFalse(service.queue._putters)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_bounded_frame_pressure_returns_to_application_heartbeat(self):
+        stop = asyncio.Event()
+        sent = []
+        class Socket:
+            sent_frame = False
+            async def send(self, value):
+                sent.append(json.loads(value))
+                if sum(item["cmd"] == "C0" for item in sent) == 2:
+                    stop.set()
+            async def recv(self):
+                if not self.sent_frame:
+                    self.sent_frame = True
+                    return json.dumps({"cmd": "C103", "cd": [{"mid": str(i), "msc": ["S1|1:0"]} for i in range(20)]})
+                await stop.wait()
+                return json.dumps({"cmd": "C0"})
+        class Connection:
+            async def __aenter__(self):
+                return Socket()
+            async def __aexit__(self, *args):
+                pass
+        async def blocked_batch(batch):
+            await asyncio.Event().wait()
+        service = LeyuRealtime(lambda: {"leyu_api_base": "https://business.invalid", "leyu_request_id": "authorized"},
+                               lambda: [], blocked_batch, AsyncMock(), queue_size=1,
+                               connector=lambda *a, **kw: Connection())
+        with patch("services.collector.leyu_realtime.FRAME_ENQUEUE_BUDGET_SECONDS", .03), \
+             patch("services.collector.leyu_realtime.HEARTBEAT_SECONDS", .01):
+            await asyncio.wait_for(service.run(stop), timeout=1)
+        self.assertEqual(2, sum(item["cmd"] == "C0" for item in sent))
+        self.assertGreater(service.stats["dropped"], 0)
+        self.assertEqual(20, service.stats["events_received"] + service.stats["dropped"])
+        self.assertEqual(0, service.stats["reconnects"])
 
     def test_unknown_or_future_source_time_does_not_pollute_latency_sample(self):
         service = LeyuRealtime(lambda: {}, lambda: [], AsyncMock(), AsyncMock())

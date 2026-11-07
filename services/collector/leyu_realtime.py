@@ -29,6 +29,7 @@ MAX_PUSH_BYTES = 1024 * 1024
 PUSH_COMMANDS = frozenset({"C2", "C21", "C101", "C102", "C1021", "C103", "C104", "C105", "C106", "C109", "C110", "C118", "C1301", "C303", "C302"})
 ODDS_COMMANDS = frozenset({"C105", "C2", "C21"})
 LATENCY_WINDOW_SIZE = 256
+FRAME_ENQUEUE_BUDGET_SECONDS = 2.0
 log = logging.getLogger("platform.collector.websocket")
 
 
@@ -194,6 +195,8 @@ class LeyuRealtime:
             "state": "stopped", "reconnects": 0, "received": 0, "events_received": 0,
             "events_delivered": 0, "batches_delivered": 0, "dropped": 0,
             "delivery_failures": 0, "queue_depth": 0, "queue_high_water": 0,
+            "frame_events_max": 0, "backpressure_waits": 0,
+            "backpressure_timeouts": 0, "backpressure_wait_ms_total": 0.0,
             "subscription_requests_sent": 0,
             "subscription_expected": 0, "subscription_send_missing": 0,
             "subscription_send_missing_ratio": None,
@@ -282,21 +285,46 @@ class LeyuRealtime:
             queue_wait_samples=len(self._queue_waits),
         )
 
-    def _enqueue_event(self, event: dict[str, Any]) -> bool:
+    def _record_admission(self, event: dict[str, Any], *, accepted: bool) -> bool:
         self._record_event(event)
-        try:
-            self.queue.put_nowait(event)
-        except asyncio.QueueFull:
+        if not accepted:
             self.stats["dropped"] += 1
-            self.stats["queue_depth"] = self.queue.qsize()
             self._gap = True
-            self._record_queue_health()
-            return False
-        self.stats["events_received"] += 1
+        else:
+            self.stats["events_received"] += 1
         self.stats["queue_depth"] = self.queue.qsize()
         self.stats["queue_high_water"] = max(self.stats["queue_high_water"], self.queue.qsize())
         self._record_queue_health()
-        return True
+        return accepted
+
+    def _enqueue_event(self, event: dict[str, Any]) -> bool:
+        try:
+            self.queue.put_nowait(event)
+        except asyncio.QueueFull:
+            return self._record_admission(event, accepted=False)
+        return self._record_admission(event, accepted=True)
+
+    async def _enqueue_frame(self, events: list[dict[str, Any]]) -> None:
+        self.stats["frame_events_max"] = max(self.stats["frame_events_max"], len(events))
+        deadline = time.monotonic() + FRAME_ENQUEUE_BUDGET_SECONDS
+        for event in events:
+            remaining = deadline - time.monotonic()
+            if not self.queue.full() or remaining <= 0:
+                self._enqueue_event(event)
+                continue
+            # Share one bounded wait budget across the frame. A synchronous
+            # put_nowait loop can fill the queue before a ready consumer runs.
+            self.stats["backpressure_waits"] += 1
+            started = time.monotonic()
+            try:
+                await asyncio.wait_for(self.queue.put(event), timeout=remaining)
+            except asyncio.TimeoutError:
+                self.stats["backpressure_timeouts"] += 1
+                self._record_admission(event, accepted=False)
+            else:
+                self._record_admission(event, accepted=True)
+            finally:
+                self.stats["backpressure_wait_ms_total"] += round((time.monotonic() - started) * 1000, 3)
 
     async def _subscriptions(self, socket, previous: dict[str, dict]) -> dict[str, dict]:
         mids = await _value(self.mids_provider())
@@ -460,8 +488,7 @@ class LeyuRealtime:
                                 continue
                             rate_limit_streak = 0
                             self.stats["rate_limit_streak"] = 0
-                            for event in events:
-                                self._enqueue_event(event)
+                            await self._enqueue_frame(events)
                 except (LeyuError, OSError, ConnectionClosed, InvalidStatus, TimeoutError) as exc:
                     retry_after = None
                     limited = isinstance(exc, RateLimited)
