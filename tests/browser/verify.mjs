@@ -1676,12 +1676,12 @@ for (const width of [1440, 390]) {
       await card.waitFor();
       assert.match(await card.innerText(), /原版本已失效/);
       assert.doesNotMatch(await card.innerText(), /原消息已删除/);
-      await card.locator('[data-message]').click();
+      await card.locator('.text-link[data-message]').click();
       const detail = page.locator('#content-dialog[open]');
-      await detail.locator('.raw-text').waitFor();
+      await detail.locator('.raw-text').first().waitFor();
       assert.match(await detail.locator('.message-meta').innerText(), /原版本已失效/);
       assert.doesNotMatch(await detail.locator('.message-meta').innerText(), /原消息已删除/);
-      assert.equal(await detail.locator('.raw-text').innerText(), message.raw_text);
+      assert.equal(await detail.locator('.raw-text').first().innerText(), message.raw_text);
       await detail.locator('#message-media img').first().waitFor();
       assert.equal(await detail.locator('#message-media img').count(), 1);
       assert.match(await detail.locator('#message-signals').innerText(), /系统赔率 1\.96/);
