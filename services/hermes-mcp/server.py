@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import os
+from typing import Annotated
 
 import httpx
 from mcp.server import MCPServer
@@ -162,8 +163,10 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
 async def search_matches(review_id: str, attempt_id: str, team_query: str,
                          phase: str = "all", competition_query: str | None = None,
                          from_utc: str | None = None, to_utc: str | None = None,
-                         cursor: str | None = None, page_size: int = 100, sport: str | None = None,
-                         team_a: str | None = None, team_b: str | None = None,
+                         cursor: Annotated[str | None, Field(description="仅逐字复制本次search_matches返回的next_cursor；首查不传，禁止自行构造游标。")] = None,
+                         page_size: int = 100, sport: str | None = None,
+                         team_a: Annotated[str | None, Field(description="原文或原图明确可读的第一支球队名；双方已知时首次查询即与team_b成对传入，复用服务端唯一绑定。")] = None,
+                         team_b: Annotated[str | None, Field(description="原文或原图明确可读的第二支球队名；双方已知时首次查询即与team_a成对传入，不从候选猜造原文球队。")] = None,
                          read_markets: bool = False, market_kind: str | None = None,
                          period: str | None = None) -> dict:
     """team_query必填，team_a/team_b不能替代它。phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。已知玩法/期间时read_markets=true可在唯一绑定后返回market_result，复用此读盘而不重复调用；期间使用full_time/first_half/second_half。不完整或不唯一时不读。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
@@ -180,7 +183,9 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str,
 
 
 @mcp.tool()
-async def resolve_match(review_id: str, attempt_id: str, search_key: str,
+async def resolve_match(review_id: str, attempt_id: str,
+                        search_key: Annotated[str, Field(min_length=64, max_length=64, pattern='^[0-9a-f]{64}$',
+                            description="逐字复制本次search_matches回执的search_key（64位小写十六进制标识）；绝不是球队描述或自行生成的哈希。先连续翻页至search_complete=true。")],
                         team_a: str, team_b: str, competition: str | None = None,
                         from_utc: str | None = None, to_utc: str | None = None,
                         read_markets: bool = False, market_kind: str | None = None,
@@ -212,8 +217,13 @@ async def list_match_markets(review_id: str, attempt_id: str, fixture_id: str,
 
 @mcp.tool()
 async def record_expert_signals(review_id: str, attempt_id: str, signals: list[ExpertPick]) -> dict:
-    """立即提交当前比赛已读的确切quote_id；系统核验同一盘口及比分上下文，按当前有效系统赔率记录。价格刷新不改变推荐意图；检查accepted/rejected及返回的实际保存价格。"""
-    return await _post("record_expert_signals", {"review_id": review_id, "attempt_id": attempt_id, "signals": [pick.model_dump() for pick in signals]})
+    """立即提交当前比赛已读的确切quote_id；系统核验同一盘口及比分上下文，按当前有效系统赔率记录。价格刷新不改变推荐意图；检查accepted/rejected及实际保存价格。rejection_guidance的retry_same_evidence=false表示同证据不可恢复：报告该项未解决，不反复换盘口或刷新，其他独立推荐继续核验。"""
+    result = await _post("record_expert_signals", {"review_id": review_id, "attempt_id": attempt_id, "signals": [pick.model_dump() for pick in signals]})
+    guidance = [{'index': item['index'], 'reason': item['reason'],
+                 'retry_same_evidence': False, 'action': 'report_unresolved'}
+                for item in result.get('rejected', []) if isinstance(item, dict)
+                and type(item.get('index')) is int and item.get('reason') == 'source_period_intent_ambiguous']
+    return result | {'rejection_guidance': guidance} if guidance else result
 
 
 class BearerAuthentication:

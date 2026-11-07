@@ -68,6 +68,94 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('attempt', captured[0][1]['attempt_id'])
         self.assertEqual('Bearer isolated-mcp-transport', captured[0][2])
 
+    async def test_resolve_schema_explains_and_constrains_native_search_reference(self):
+        tools = (await self.rpc('tools/list')).json()['result']['tools']
+        tool = next(t for t in tools if t['name'] == 'resolve_match')
+        reference = tool['inputSchema']['properties']['search_key']
+        self.assertEqual(64, reference.get('minLength'))
+        self.assertEqual(64, reference.get('maxLength'))
+        self.assertEqual('^[0-9a-f]{64}$', reference.get('pattern'))
+        self.assertIn('search_matches', reference.get('description', ''))
+        self.assertIn('search_key', reference.get('description', ''))
+
+    async def test_invalid_resolve_references_do_not_reach_business_api(self):
+        captured = []
+        def upstream(request):
+            captured.append(request)
+            return httpx.Response(200, json={'resolved': False})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        for reference in ('拉贾斯坦邦联 vs 戈库拉姆喀拉拉', 'a'*63, 'a'*65, 'z'*64, 'A'*64):
+            with self.subTest(reference=reference):
+                response = await self.rpc('tools/call', {'name': 'resolve_match', 'arguments': {
+                    'review_id': 'job', 'attempt_id': 'attempt', 'search_key': reference,
+                    'team_a': 'Alpha', 'team_b': 'Beta'}})
+                self.assertTrue(response.json()['result'].get('isError', False))
+        self.assertEqual([], captured)
+
+    async def test_valid_resolve_reference_is_forwarded_verbatim(self):
+        reference = '0123456789abcdef'*4
+        captured = []
+        def upstream(request):
+            captured.append(json.loads(request.content))
+            return httpx.Response(200, json={'resolved': False, 'reason': 'ambiguous'})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        response = await self.rpc('tools/call', {'name': 'resolve_match', 'arguments': {
+            'review_id': 'job', 'attempt_id': 'attempt', 'search_key': reference,
+            'team_a': 'Alpha', 'team_b': 'Beta'}})
+        self.assertFalse(response.json()['result'].get('isError', False))
+        self.assertEqual(1, len(captured))
+        self.assertEqual(reference, captured[0]['search_key'])
+        self.assertEqual(('job', 'attempt', 'Alpha', 'Beta'),
+                         tuple(captured[0][k] for k in ('review_id', 'attempt_id', 'team_a', 'team_b')))
+
+    async def test_search_schema_identifies_original_pair_and_opaque_cursor(self):
+        tools = (await self.rpc('tools/list')).json()['result']['tools']
+        properties = next(t for t in tools if t['name'] == 'search_matches')['inputSchema']['properties']
+        for key in ('team_a', 'team_b'):
+            self.assertIn('原文', properties[key].get('description', ''))
+            self.assertIn('成对', properties[key].get('description', ''))
+        self.assertIn('next_cursor', properties['cursor'].get('description', ''))
+
+    async def test_ambiguous_period_guidance_preserves_native_mixed_results(self):
+        native = {'expert': {'id': 'expert'}, 'accepted': [{'index': 0, 'signal_id': 'signal'}],
+                  'rejected': [{'index': 1, 'reason': 'source_period_intent_ambiguous'},
+                               {'index': 2, 'reason': 'quote_inactive_unknown_or_stale'}]}
+        captured = []
+        def upstream(request):
+            captured.append(json.loads(request.content))
+            return httpx.Response(200, json=native)
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        response = await self.rpc('tools/call', {'name': 'record_expert_signals', 'arguments': {
+            'review_id': 'job', 'attempt_id': 'attempt',
+            'signals': [{'fixture_id': 'fixture', 'quote_id': 'quote', 'evidence_text': '半大0.5'}]}})
+        result = response.json()['result']
+        self.assertFalse(result.get('isError', False))
+        body = result.get('structuredContent') or json.loads(result['content'][0]['text'])
+        self.assertEqual(native['accepted'], body['accepted'])
+        self.assertEqual(native['rejected'], body['rejected'])
+        self.assertEqual([{'index': 1, 'reason': 'source_period_intent_ambiguous',
+                          'retry_same_evidence': False, 'action': 'report_unresolved'}], body.get('rejection_guidance'))
+        self.assertEqual(1, len(captured))
+        self.assertEqual(('job', 'attempt'), (captured[0]['review_id'], captured[0]['attempt_id']))
+
+    async def test_recoverable_rejection_and_success_have_no_terminal_guidance(self):
+        for native in ({'accepted': [{'index': 0}], 'rejected': []},
+                       {'accepted': [], 'rejected': [{'index': 0, 'reason': 'quote_inactive_unknown_or_stale'}]},
+                       {'accepted': [], 'rejected': [{'index': 0, 'reason': 'source_period_intent_conflict'}]}):
+            with self.subTest(native=native):
+                await self.server.client.aclose()
+                self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(
+                    lambda request: httpx.Response(200, json=native)))
+                result = (await self.rpc('tools/call', {'name': 'record_expert_signals', 'arguments': {
+                    'review_id': 'job', 'attempt_id': 'attempt',
+                    'signals': [{'fixture_id': 'fixture', 'quote_id': 'quote', 'evidence_text': '大0.5'}]}})).json()['result']
+                self.assertFalse(result.get('isError', False))
+                body = result.get('structuredContent') or json.loads(result['content'][0]['text'])
+                self.assertEqual(native, body)
+
     async def test_search_optional_pair_schema_forwarding_and_resolution(self):
         tools = (await self.rpc('tools/list')).json()['result']['tools']
         self.assertEqual(4, len(tools))
@@ -134,7 +222,7 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
                 self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
                 arguments = {'review_id': 'job', 'attempt_id': 'current', 'team_a': 'Alpha', 'team_b': 'Beta',
                              'read_markets': True, 'market_kind': 'total', 'period': 'first_half'}
-                arguments.update({'team_query': 'Alpha'} if name == 'search_matches' else {'search_key': 'complete-search'})
+                arguments.update({'team_query': 'Alpha'} if name == 'search_matches' else {'search_key': 'a'*64})
                 response = await self.rpc('tools/call', {'name': name, 'arguments': arguments})
                 result = response.json()['result']
                 self.assertFalse(result.get('isError', False), result)
@@ -162,7 +250,7 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
                     self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
                     arguments = {'review_id': 'job', 'attempt_id': 'attempt', 'read_markets': True,
                                  'team_a': 'Alpha', 'team_b': 'Beta'}
-                    arguments.update({'team_query': 'Alpha'} if name == 'search_matches' else {'search_key': 'search'})
+                    arguments.update({'team_query': 'Alpha'} if name == 'search_matches' else {'search_key': 'a'*64})
                     result = (await self.rpc('tools/call', {'name': name, 'arguments': arguments})).json()['result']
                     self.assertFalse(result.get('isError', False))
                     self.assertEqual([name], calls)
@@ -266,7 +354,7 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
             self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
             arguments = {'review_id': 'job', 'attempt_id': 'attempt', 'team_a': 'Alpha', 'team_b': 'Beta',
                          'market_kind': 'total', 'period': 'first_half'}
-            arguments.update({'team_query': 'Alpha'} if name == 'search_matches' else {'search_key': 'search'})
+            arguments.update({'team_query': 'Alpha'} if name == 'search_matches' else {'search_key': 'a'*64})
             result = (await self.rpc('tools/call', {'name': name, 'arguments': arguments})).json()['result']
             self.assertFalse(result.get('isError', False))
             self.assertEqual([name], calls)
