@@ -28,6 +28,7 @@ from ..review_resolution import resolve_candidates
 from ..review_market_query import market_filters
 from ..team_totals import team_total_terms
 from ..review_period_intent import period_intent_rejection, verified_early_first_half_context
+from quote_witness import known_quote_snapshot
 
 router = APIRouter(prefix="/internal/mcp")
 
@@ -337,7 +338,8 @@ async def _market_read_result(conn, body, fixture, total_quotes, quotes, max_age
         'market_filter': market_filter, 'market_coverage': coverage})
 
 
-async def _request_market_refresh(fixture_id: str, source_match_id: str, request: Request) -> dict:
+async def _request_market_refresh(fixture_id: str, source_match_id: str, request: Request, *,
+                                  known_snapshot=None) -> dict:
     """I/O only, after this call's transaction validated the bound active fixture.
 
     Callers must revalidate the attempt and quote after I/O before recording.
@@ -347,11 +349,14 @@ async def _request_market_refresh(fixture_id: str, source_match_id: str, request
     url = getattr(settings, 'market_refresh_url', '')
     if not url:
         return {'attempted': False, 'reason': 'refresh_unconfigured'}
+    payload = {'fixture_id': fixture_id, 'source_match_id': source_match_id}
+    if known_snapshot is not None:
+        payload['known_snapshot'] = known_snapshot
     try:
         async with asyncio.timeout(9):
             async with httpx.AsyncClient(timeout=httpx.Timeout(8.5, connect=2), trust_env=False, follow_redirects=False) as client:
                 response = await client.post(url, headers={'Authorization': 'Bearer ' + settings.collector_token},
-                    json={'fixture_id': fixture_id, 'source_match_id': source_match_id})
+                    json=payload)
                 response.raise_for_status()
                 value = response.json()
         if not isinstance(value, dict) or type(value.get('accepted')) is not bool:
@@ -359,8 +364,12 @@ async def _request_market_refresh(fixture_id: str, source_match_id: str, request
         reason = str(value.get('reason', ''))
         if not reason or not all(char.isascii() and (char.isalnum() or char == '_') for char in reason) or len(reason) > 80:
             reason = 'refresh_completed' if value['accepted'] else 'refresh_unavailable'
+        unchanged = (known_snapshot is not None and reason == 'observed_unchanged'
+                     and value['accepted'] is False and value.get('written') is False
+                     and value.get('snapshot_committed') is False and value.get('current_only') is True)
         return {'attempted': True, 'accepted': value['accepted'], 'reason': reason,
-                '_observation': value.get('current_observation') if value.get('snapshot_committed') is True else None}
+                '_observation': value.get('current_observation')
+                    if value.get('snapshot_committed') is True or unchanged else None}
     except (httpx.HTTPError, ValueError, TimeoutError):
         # A refresh is optional evidence gathering, never a reason to mark old
         # prices fresh or replay an unknown upstream operation automatically.
@@ -392,9 +401,11 @@ async def list_match_markets(body: MarketInput, request: Request):
                 return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age,
                                                  filters, {'attempted': False, 'reason': reason})
             source_match_id = fixture['source_id']
+            known_snapshot = known_quote_snapshot(fixture, quotes)
     # Nothing from the preflight transaction authorizes the post-I/O result.
     # Release its connection and locks, then reread every eligibility witness.
-    refresh = await _request_market_refresh(body.fixture_id, source_match_id, request)
+    refresh = await _request_market_refresh(body.fixture_id, source_match_id, request,
+                                            known_snapshot=known_snapshot)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
@@ -515,6 +526,10 @@ async def record_expert_signals(body: RecordInput, request: Request):
                 # current transaction, and let the shared finalizer reread all
                 # eligibility and quote witnesses before acquiring write locks.
                 return await _record_current_signals(conn, body, request, observations)
+            known_snapshots = {}
+            for fixture_id in stale_fixtures:
+                selected = [quote for quote in rows if quote['fixture_id'] == fixture_id]
+                known_snapshots[fixture_id] = known_quote_snapshot(selected[0], selected)
     # Shared collector budget still coalesces and limits provider calls. Do not
     # hold the database transaction during I/O or extend a terminated lease.
     for fixture_id in sorted(stale_fixtures):
@@ -524,7 +539,8 @@ async def record_expert_signals(body: RecordInput, request: Request):
         # its read receipt, current binding and active phase. Repeating that
         # transaction before the same I/O adds WAN round trips without making
         # the final post-I/O validation any stronger.
-        refreshed = await _request_market_refresh(fixture_id, stale_fixtures[fixture_id], request)
+        refreshed = await _request_market_refresh(fixture_id, stale_fixtures[fixture_id], request,
+                                                   known_snapshot=known_snapshots[fixture_id])
         observations[fixture_id] = refreshed.get('_observation')
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():

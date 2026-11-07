@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable
 
 from .leyu import LeyuClient
 from .leyu_protocol import LeyuError, RateLimited
+from quote_witness import fingerprint, snapshot_matches, validate_known_snapshot
 
 log = logging.getLogger('platform.collector.refresh')
 
@@ -69,8 +70,11 @@ class LeyuRefreshController:
                 "reason": reason, "retry_after_seconds": math.ceil(max(0, retry))}
 
     async def refresh(self, body: dict[str, Any]) -> dict[str, Any]:
-        if set(body) != {"fixture_id", "source_match_id"}:
+        required = {"fixture_id", "source_match_id"}
+        if set(body) not in (required, required | {'known_snapshot'}):
             raise ValueError("invalid refresh body")
+        known = validate_known_snapshot(body['known_snapshot']) if 'known_snapshot' in body else None
+        known_key = fingerprint(known) if known is not None else None
         identity, requested_mid = body["fixture_id"], body["source_match_id"]
         if not isinstance(identity, str) or not 1 <= len(identity) <= 160:
             raise ValueError("invalid refresh identity")
@@ -87,6 +91,8 @@ class LeyuRefreshController:
         if fixture.get("phase") not in {"scheduled", "live"}:
             return self._result(identity, requested_mid, "fixture_not_open")
         entry = self._inflight.get(identity)
+        if entry is not None and entry.get('known_key') != known_key:
+            return self._result(identity, requested_mid, "refresh_busy")
         if entry is None:
             remaining = self.cooldown_remaining()
             if remaining:
@@ -101,7 +107,8 @@ class LeyuRefreshController:
             active = {str(item.get("source_match_id") or "") for item in self.runtime.fixtures.values()}
             self._last_by_mid = {key: stamp for key, stamp in self._last_by_mid.items() if key in active}
             self._last_by_mid[mid] = now
-            entry = {"task": asyncio.create_task(self._refresh(identity, mid)), "waiters": 0}
+            entry = {"task": asyncio.create_task(self._refresh(identity, mid, known)),
+                     "waiters": 0, "known_key": known_key}
             self._inflight[identity] = entry
         entry["waiters"] += 1
         try:
@@ -115,7 +122,7 @@ class LeyuRefreshController:
                     entry["task"].cancel()
                     await asyncio.gather(entry["task"], return_exceptions=True)
 
-    async def _refresh(self, identity: str, mid: str) -> dict[str, Any]:
+    async def _refresh(self, identity: str, mid: str, known_snapshot=None) -> dict[str, Any]:
         stage = "source"
         started = time.monotonic()
         ingestion_started = None
@@ -126,6 +133,11 @@ class LeyuRefreshController:
                 if fixture.get("id") != identity or str(fixture.get("source_match_id") or "") != mid:
                     raise LeyuError("fixture_identity_mismatch")
                 observation = fixture.pop("_current_observation", None)
+                if known_snapshot is not None and snapshot_matches(known_snapshot, observation,
+                        fixture_id=identity, source_match_id=mid):
+                    outcome = 'observed_unchanged'
+                    return {**self._result(identity, mid, outcome), 'snapshot_committed': False,
+                            'current_only': True, 'current_observation': observation}
                 stage = "ingestion"
                 ingestion_started = time.monotonic()
                 accepted = await self.upload([fixture])

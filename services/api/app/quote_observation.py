@@ -10,27 +10,8 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from .team_totals import team_total_terms
-
-DETAIL_PATH = '/yewu11/v1/w/getMatchBaseInfoByOddsPB'
-CONTEXT_FIELDS = ('phase', 'home_score', 'away_score', 'half_home_score', 'half_away_score')
-QUOTE_FIELDS = ('market_id', 'market_kind', 'period', 'line', 'selection', 'price',
-                'source_updated_at', 'status', 'play_id', 'market_instance_id', 'selection_id', 'score_basis')
-
-
-def _stamp(value):
-    stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
-    if stamp.tzinfo is None:
-        raise ValueError('timestamp requires timezone')
-    return stamp.astimezone(timezone.utc)
-
-
-def _identity(quote):
-    value = {key: quote[key] for key in QUOTE_FIELDS}
-    for key in ('line', 'price'):
-        if value[key] is not None:
-            value[key] = str(Decimal(str(value[key])).normalize())
-    value['source_updated_at'] = _stamp(value['source_updated_at']).isoformat()
-    return value
+from quote_witness import (DETAIL_PATH, CONTEXT_FIELDS, QUOTE_FIELDS,
+                           aware_stamp as _stamp, quote_identity as _identity)
 
 
 def confirmation_for(observation, quote, fixture, max_age, now=None):
