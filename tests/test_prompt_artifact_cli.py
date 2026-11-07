@@ -1,10 +1,14 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from infra.remote.deploy_prompt_artifact import verified_report
+from infra.remote import deploy_prompt_artifact as release_cli
 
 
 class PromptArtifactCliTests(unittest.TestCase):
@@ -54,3 +58,15 @@ class PromptArtifactCliTests(unittest.TestCase):
         (self.app / 'requirements.txt').write_text('different dependency')
         with self.assertRaises(ValueError):
             self.verify()
+
+
+class PromptArtifactCliRoleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_worker_only_configuration_is_rejected_before_database_connection(self):
+        environment = {'DATABASE_URL': 'postgresql://isolated/test', 'HERMES_API_KEY': 'isolated-worker'}
+        args = SimpleNamespace(report='verified-separately.json', source_commit='a' * 40)
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(release_cli, 'verified_report', return_value=(b'isolated report', {'tests': 1})), \
+                patch.object(release_cli.asyncpg, 'connect', AsyncMock()) as connect:
+            with self.assertRaisesRegex(RuntimeError, 'APP_SESSION_SECRET'):
+                await release_cli.run(args)
+        connect.assert_not_awaited()

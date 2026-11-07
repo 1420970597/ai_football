@@ -1,6 +1,10 @@
 """Software artifact handoff contracts with an isolated PostgreSQL database."""
 from copy import deepcopy
+from contextlib import redirect_stdout
 import asyncio
+import io
+import os
+from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 
@@ -10,6 +14,7 @@ import httpx
 from app import hermes_client, model_artifact_release as releases, model_configuration as models
 from app.routes import internal
 from app.runtime_settings import runtime_configuration
+from infra.remote import deploy_prompt_artifact as release_cli
 import test_identity as support
 
 
@@ -43,6 +48,25 @@ class PromptArtifactReleaseTests(unittest.IsolatedAsyncioTestCase):
 
     async def state(self):
         return await models.read_state(self.pool, self.settings)
+
+    async def test_release_cli_decrypts_existing_state_with_api_configuration_without_worker_secret(self):
+        environment = {'DATABASE_URL': support.TEST_URL.rsplit('/', 1)[0] + '/' + self.db_name,
+            'APP_SESSION_SECRET': '01' * 32, 'DATA_ENCRYPTION_KEY': self.settings.encryption_key.hex(),
+            'EXPERT_MCP_TOKEN': 'isolated-mcp', 'COLLECTOR_INTERNAL_TOKEN': 'isolated-collector'}
+        args = SimpleNamespace(report='verified-separately.json', **self.arguments)
+        with patch.dict(os.environ, environment, clear=True), redirect_stdout(io.StringIO()), \
+                patch.object(release_cli, 'verified_report', return_value=(b'isolated verified report', {'tests': 1616})):
+            await release_cli.run(args)
+        state = await self.state()
+        self.assertEqual(self.before['active'], state['artifact_deployments'][0]['before'])
+        self.assertEqual(models.prompt_digest(), state['active']['provenance']['prompt_sha256'])
+        self.assertEqual(1616, state['artifact_deployments'][0]['test_count'])
+        self.assertEqual(self.before['consumed_versions'], state['consumed_versions'])
+        details = await self.pool.fetchval(
+            "SELECT details FROM v2_audit_log WHERE action='model_prompt_artifact_deployed'")
+        self.assertEqual(self.before['active'], details['before'])
+        self.assertEqual(state['active'], details['after'])
+        self.assertFalse(details['quality_approval'])
 
     async def test_new_worker_consumes_and_old_inflight_ack_preserves_new_active_receipt(self):
         result = await self.deploy()

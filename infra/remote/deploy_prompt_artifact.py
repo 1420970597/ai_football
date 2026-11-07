@@ -42,10 +42,13 @@ def verified_report(report_path, source_commit, app_root=Path('/app')):
 
 async def run(args):
     raw, report = verified_report(args.report, args.source_commit)
-    settings = load_settings(role='worker')
+    # Governance ciphertext is owned by the API role; workers never receive its key.
+    settings = load_settings(role='api')
     conn = await asyncpg.connect(settings.database_url, timeout=5, command_timeout=5,
         server_settings={'application_name': 'explicit-prompt-artifact-release', 'statement_timeout': '5000'})
     try:
+        for type_name in ('json', 'jsonb'):
+            await conn.set_type_codec(type_name, schema='pg_catalog', encoder=json.dumps, decoder=json.loads)
         async with asyncio.timeout(30), conn.transaction():
             result = await deploy_prompt_artifact(conn, settings, release_id=args.release_id,
                 source_commit=args.source_commit, test_report_sha256=hashlib.sha256(raw).hexdigest(),
