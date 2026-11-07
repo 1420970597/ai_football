@@ -424,7 +424,9 @@ async function setup({
         to_utc: "2026-10-26T11:00:00Z",
       });
     if (p === "/public/signals")
-      return reply({ items: [signal], next_cursor: null, limited: !mode.user });
+      return reply({ items: [mode.signalWithdrawalReason ? { ...signal,
+        withdrawn_at: "2026-10-26T11:12:00Z", withdrawal_reason: mode.signalWithdrawalReason,
+        outcome: "pending", unit_net: null } : signal], next_cursor: null, limited: !mode.user });
     if (mode.pagedEvidence && p === `/public/messages/${mid}/traces`)
       return reply({ items: [{ trace_kind: "model_output", payload: { content: "后页模型原文完整结尾" + "原文".repeat(4000) }, created_at: "2026-10-26T11:11:05Z" }], next_cursor: null });
     if (mode.pagedEvidence && p === `/public/messages/${mid}/signals`)
@@ -1626,6 +1628,38 @@ await test("手机多盘口与长队名保持分行且不遮挡比赛按钮", as
     await context.close();
   }
 });
+for (const width of [1440, 390]) {
+  for (const [reason, expected] of [
+    ["source_edited", "原消息已编辑，原版本推荐已撤回"],
+    ["source_deleted", "原消息已删除，该推荐已撤回"],
+    ["source_disabled", "该推荐已撤回"],
+    ["review_source_period_intent_conflict", "已撤销：推荐期间无法核验"],
+  ]) {
+    await test(`撤回推荐状态 ${reason} / ${width}`, async () => {
+      const { page, context, log } = await setup({ dual: true, signalWithdrawalReason: reason });
+      try {
+        await page.setViewportSize({ width, height: 960 });
+        await page.locator('[data-page=experts]:visible').first().click();
+        await page.locator('[data-expert-tab=signals]').click();
+        const card = page.locator('#signals-list .signal-card').first();
+        await card.waitFor();
+        const text = await card.innerText();
+        assert.ok(text.includes(expected));
+        assert.doesNotMatch(text, /等待赛果结算/);
+        assert.doesNotMatch(text, /待结算/);
+        assert.match(text, /系统赔率 1\.96/);
+        assert.match(text, /比赛：已完场/);
+        assert.match(text, /推荐：滚球/);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+        assert.equal(log.filter(request => ["POST", "PUT", "PATCH", "DELETE"].includes(request.method)).length, 0);
+        if (reason === "source_edited")
+          await page.screenshot({ path: `${evidence}/withdrawn-source-edited-${width}.png` });
+      } finally {
+        await context.close();
+      }
+    });
+  }
+}
 assert.deepEqual(caught, []);
 await fs.writeFile(
   process.env.BROWSER_RESULTS || "/work/tests/browser/results.json",
