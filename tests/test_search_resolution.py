@@ -25,6 +25,35 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
     async def bindings(self):
         return await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings')
 
+    async def test_complete_mixed_name_spacing_binds_without_second_resolution(self):
+        fixture = await self.fixture(home_team='CD印加', away_team='梅塔潘')
+        await self.fixture(2, home_team='CD印加(女)', away_team='梅塔潘(女)')
+        response = await self.post('search_matches', team_query='梅塔潘',
+                                   team_a='CD 印加', team_b='梅塔潘')
+        self.assertEqual(200, response.status_code, response.text)
+        result = response.json()
+        self.assertTrue(result['search_complete'])
+        self.assertEqual(fixture, result['resolution']['fixture']['id'])
+        self.assertEqual(1, await self.bindings())
+        self.assertEqual(result, (await self.replay('mcp_search_matches'))[1])
+        self.assertEqual(0, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE trace_kind='mcp_resolve_match'"))
+
+    async def test_mixed_name_spacing_still_requires_last_page_and_unique_fixture(self):
+        await self.fixture(home_team='CD印加', away_team='梅塔潘')
+        await self.fixture(2, home_team='CD 印加', away_team='梅塔潘')
+        first = (await self.post('search_matches', team_query='梅塔潘',
+            team_a='CD 印加', team_b='梅塔潘', page_size=1)).json()
+        self.assertFalse(first['search_complete'])
+        self.assertEqual('search_not_complete', first['resolution']['reason'])
+        self.assertEqual(0, await self.bindings())
+        last = (await self.post('search_matches', team_query='梅塔潘',
+            team_a='CD 印加', team_b='梅塔潘', page_size=1, cursor=first['next_cursor'])).json()
+        self.assertTrue(last['search_complete'])
+        self.assertEqual({'resolved': False, 'reason': 'ambiguous_fixture', 'candidate_count': 2},
+                         last['resolution'])
+        self.assertEqual(0, await self.bindings())
+
     async def test_complete_unique_search_binds_reads_records_and_passes_completion(self):
         fixture = await self.fixture()
         response = await self.search()

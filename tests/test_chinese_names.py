@@ -6,6 +6,21 @@ from app.team_matching import normalize_team_name, team_name_matches
 
 
 class ChineseNameTests(unittest.TestCase):
+    def test_chinese_boundary_spacing_preserves_full_team_identity(self):
+        for query, candidate in (('CD 印加', 'CD印加'), ('CD\u3000印加', 'CD印加'),
+                                 ('CD 印 加', 'CD印加'), ('DC 电力', 'DC电力'),
+                                 ('CD印加', 'CD 印加'), ('圣 菲联', '圣菲联')):
+            with self.subTest(query=query, candidate=candidate):
+                self.assertTrue(team_name_matches(query, candidate))
+        for candidate in ('CD印加女', 'CD印加(女)', 'CD印加U21', 'CD印加后备',
+                          'CD印加二队', 'CD印第', 'CD印加体育'):
+            with self.subTest(candidate=candidate):
+                self.assertFalse(team_name_matches('CD 印加', candidate))
+        self.assertFalse(team_name_matches('CD 印', 'CD印加'))
+        self.assertFalse(team_name_matches('A B中文', 'AB中文'))
+        self.assertFalse(team_name_matches('A中文 B C', 'A中文BC'))
+        self.assertFalse(team_name_matches('Alpha Beta', 'AlphaBeta'))
+
     def test_real_russian_fixture_names_and_league_fold(self):
         self.assertEqual('莫斯科火车头', normalize_team_name('莫斯科火車頭'))
         self.assertTrue(team_name_matches('莫斯科斯巴達', '莫斯科斯巴达'))

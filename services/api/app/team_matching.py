@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unicodedata
 
 from .chinese_names import fold_chinese
@@ -72,6 +73,11 @@ def _name_forms(value: str) -> set[str]:
     expanded = set(forms)
     for form in forms:
         expanded.update(_club_marker_variants(form))
+    # Mixed-script source labels may insert layout spacing around Chinese
+    # characters ("CD 印加" / "CD印加"). Compare the entire identity after
+    # removing only those boundaries; keep Latin word and squad boundaries.
+    expanded.update(re.sub(r'(?<=[\u3400-\u9fff]) +| +(?=[\u3400-\u9fff])', '', form)
+                    for form in tuple(expanded))
     return expanded
 
 
