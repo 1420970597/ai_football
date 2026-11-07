@@ -173,7 +173,7 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         more = list(fixture_batches([{"id": str(n), "markets": [{}] * 100} for n in range(25)]))
         self.assertEqual([20, 5], [len(batch) for batch in more])
         metadata = list(fixture_batches([{"id": str(n), "markets": []} for n in range(501)]))
-        self.assertEqual([250, 250, 1], [len(batch) for batch in metadata])
+        self.assertEqual([500, 1], [len(batch) for batch in metadata])
 
     async def test_upload_sends_only_due_odds_without_marking_partial_snapshot_complete(self):
         fixtures = [

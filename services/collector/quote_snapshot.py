@@ -9,6 +9,7 @@ from .leyu_protocol import LeyuError
 
 MAX_FIXTURE_QUOTES = 2000
 MAX_MARKET_CHUNK = 500
+MAX_BATCH_FIXTURES = 500  # Existing API FixtureBatch limit; byte/quote budgets still split first.
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
 EMPTY_SNAPSHOT_BYTES = len(b'{"items":[]}')
 
@@ -41,7 +42,7 @@ def encode_snapshot(items: list[dict[str, Any]]) -> bytes:
     return encoded
 
 
-def prepare_fixture_batches(fixtures: list[dict[str, Any]], *, max_items: int = 250,
+def prepare_fixture_batches(fixtures: list[dict[str, Any]], *, max_items: int = MAX_BATCH_FIXTURES,
                             quote_budget: int = MAX_FIXTURE_QUOTES) -> tuple[list[list[dict[str, Any]]], dict[str, Any]]:
     batches, batch, quotes = [], [], 0
     batch_bytes = EMPTY_SNAPSHOT_BYTES

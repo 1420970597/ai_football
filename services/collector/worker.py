@@ -17,7 +17,7 @@ from .leyu_runtime import LeyuRuntime
 from .leyu_results import ResultCollector
 from .leyu_refresh import LeyuRefreshController
 from .upload_gate import UploadGate
-from .quote_snapshot import encode_snapshot, prepare_fixture_batches
+from .quote_snapshot import MAX_BATCH_FIXTURES, encode_snapshot, prepare_fixture_batches
 from .telegram import TelegramCollector
 
 log = logging.getLogger("platform.collector")
@@ -106,7 +106,7 @@ async def wait_for_work(stop: asyncio.Event, delay: float, wake: asyncio.Event |
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def fixture_batches(fixtures: list[dict[str, Any]], max_items: int = 250, quote_budget: int = 2000):
+def fixture_batches(fixtures: list[dict[str, Any]], max_items: int = MAX_BATCH_FIXTURES, quote_budget: int = 2000):
     batches, _ = prepare_fixture_batches(fixtures, max_items=max_items, quote_budget=quote_budget)
     yield from batches
 

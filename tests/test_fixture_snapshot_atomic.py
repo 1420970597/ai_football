@@ -95,6 +95,22 @@ class SnapshotAtomicTests(unittest.IsolatedAsyncioTestCase):
     async def post(self,payload):
         return await self.client.post('/internal/collector/fixtures',json={'items':[payload]})
 
+    async def test_500_metadata_fixtures_commit_and_replay_with_five_second_statement_budget(self):
+        await self.pool.execute("ALTER DATABASE "+self.dbname+" SET statement_timeout='5s'")
+        await self.pool.expire_connections()
+        items = [fixture(id=f'metadata:{index}', source_id=f'metadata:{index}',
+                         markets=[], markets_complete=False) for index in range(500)]
+        for _ in range(2):
+            response = await self.client.post('/internal/collector/fixtures', json={'items': items})
+            self.assertEqual(200, response.status_code, response.text)
+            self.assertEqual(500, response.json()['accepted'])
+            self.assertEqual(500, await self.pool.fetchval('SELECT count(*) FROM v2_fixtures'))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_current_quotes'))
+        rejected = await self.client.post('/internal/collector/fixtures', json={'items': items + [
+            fixture(id='metadata:overflow', source_id='metadata:overflow', markets=[])]})
+        self.assertEqual(422, rejected.status_code)
+        self.assertEqual(500, await self.pool.fetchval('SELECT count(*) FROM v2_fixtures'))
+
     async def test_full_501_snapshot_closes_only_after_all_chunks_and_replay_keeps_ids(self):
         self.assertEqual(200,(await self.post(fixture(markets=[quote(999)]))).status_code)
         payload=chunked()

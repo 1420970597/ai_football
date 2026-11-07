@@ -28,6 +28,25 @@ def fixture(count,identity="leyu:one",complete=True):
 
 
 class QuoteChunkWireTests(unittest.TestCase):
+    def test_metadata_batches_use_real_api_limit_without_dropping_fixtures(self):
+        from app.routes.internal import FixtureBatch
+        from pydantic import ValidationError
+        rows = [{**fixture(0, f'fixture:{index}'), 'sport': 'football',
+                 'competition_name': 'Synthetic league', 'home_team': 'Synthetic home',
+                 'away_team': 'Synthetic away', 'kickoff_at': '2026-10-27T18:00:00+00:00',
+                 'received_at': '2026-10-27T18:00:00+00:00'} for index in range(1001)]
+        batches, report = prepare_fixture_batches(rows)
+        self.assertEqual([500, 500, 1], [len(batch) for batch in batches])
+        self.assertEqual(rows, [row for batch in batches for row in batch])
+        self.assertEqual(0, report['quarantined_fixtures'])
+        for batch in batches:
+            validated = FixtureBatch.model_validate(json.loads(encode_snapshot(batch)))
+            self.assertEqual(len(batch), len(validated.items))
+            self.assertTrue(all(not item.all_markets() for item in validated.items))
+            self.assertLessEqual(len(encode_snapshot(batch)), MAX_SNAPSHOT_BYTES)
+        with self.assertRaises(ValidationError):
+            FixtureBatch.model_validate({'items': rows[:501]})
+
     def test_exact_utf8_batch_boundary_and_one_byte_less_preserve_items(self):
         rows = [{**fixture(0, str(i)), 'text': '中🙂"\\\n' * (i + 1)} for i in range(3)]
         exact = len(encode_snapshot(rows[:2]))
@@ -43,7 +62,7 @@ class QuoteChunkWireTests(unittest.TestCase):
         rows = [fixture(0, f'fixture:{i}') for i in range(1001)]
         with patch('services.collector.quote_snapshot.encode_snapshot', wraps=encode_snapshot) as encoded:
             batches, report = prepare_fixture_batches(rows)
-        self.assertEqual([250, 250, 250, 250, 1], [len(batch) for batch in batches])
+        self.assertEqual([500, 500, 1], [len(batch) for batch in batches])
         self.assertEqual(rows, [row for batch in batches for row in batch])
         self.assertEqual(0, report['quarantined_fixtures'])
         # A complexity regression must not restore quadratic prefix work;
