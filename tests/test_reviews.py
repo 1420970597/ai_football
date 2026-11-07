@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
@@ -1172,7 +1173,6 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         settings.quote_max_age_seconds = 15
         clock = [base]
         observations = []
-        record_age_reads = []
         recording = [False]
         factory = httpx.AsyncClient
 
@@ -1192,22 +1192,38 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                 'reason': 'parent_unchanged_recheck_quotes', 'snapshot_committed': True,
                 'current_observation': observation})
 
-        async def age_budget(settings, connection=None):
-            if recording[0]:
-                record_age_reads.append(True)
-                # No wall-clock sleeps: real SQL separates the two validations.
-                # The original witness has 3s left before the final 4s of work.
-                clock[0] = base+timedelta(seconds=12 if len(record_age_reads) == 1 else 16)
-            return 15
+        class TimedConnection:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def __getattr__(self, name):
+                return getattr(self.conn, name)
+
+            async def fetch(self, query, *args):
+                result = await self.conn.fetch(query, *args)
+                if 'FOR SHARE OF q' in query:
+                    # Advance at the final real SQL read, independent of how
+                    # the live age policy is retrieved. No wall-clock sleeps.
+                    clock[0] = base+timedelta(seconds=16)
+                return result
+
+        class TimedPool:
+            @asynccontextmanager
+            async def acquire(inner):
+                async with self.pool.acquire() as conn:
+                    yield TimedConnection(conn)
 
         def confirm(observation, quote, fixture, max_age):
             return confirmation_for(observation, quote, fixture, max_age, now=clock[0])
 
         def fresh(quote, max_age):
+            if recording[0] and clock[0] == base:
+                # The first witness has 3s remaining before final SQL work.
+                clock[0] = base+timedelta(seconds=12)
             return fresh_quote(quote, max_age, now=clock[0])
 
         with patch.object(reviews.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)), \
-                patch.object(reviews, 'runtime_quote_max_age', side_effect=age_budget), \
+                patch.object(database, 'current_pool', return_value=TimedPool()), \
                 patch.object(reviews, 'confirmation_for', side_effect=confirm), \
                 patch.object(reviews, 'fresh_quote', side_effect=fresh):
             quote = await self.read_market(fixture_id)
@@ -1554,7 +1570,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                 if 'FOR SHARE OF q' in query:
                     await asyncio.sleep(.15)
                 result = await self.conn.fetch(query, *args)
-                if query.startswith('SELECT f.id') and 'FOR SHARE OF f' in query:
+                if 'FOR SHARE OF f' in query:
                     locked.set()
                 return result
 

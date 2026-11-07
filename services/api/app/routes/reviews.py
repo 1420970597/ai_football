@@ -428,16 +428,23 @@ async def _record_current_signals(conn, body, request, observations):
                                for index, _ in enumerate(body.signals)]}
         return await tool_success(conn, body, result, {"review_mode": job['review_mode'], **result,
             'message_age_seconds': round(message_age, 3)})
-    max_quote_age = await runtime_quote_max_age(request.app.state.settings, conn)
     # Projection/result ingestion locks fixtures before updating quotes.
     # Lock every selected bound fixture in that same global order before
     # touching a quote; a joined q,f lock can acquire q first and deadlock.
-    await conn.fetch(
+    # Read the current policy in this same statement, including an empty
+    # fixture selection. Never cache a preflight policy across external I/O.
+    fixtures_and_policy = await conn.fetch(
+        'WITH locked AS MATERIALIZED ('
         'SELECT f.id FROM v2_fixtures f JOIN v2_review_fixture_bindings b ON b.fixture_id=f.id '
         'WHERE b.job_id=$1 AND b.attempt_id=$2 AND f.id=ANY($3::text[]) '
-        'ORDER BY f.source_id FOR SHARE OF f',
+        'ORDER BY f.source_id FOR SHARE OF f) '
+        'SELECT locked.id,policy AS quote_age_policy FROM (VALUES(1)) anchor(value) '
+        'LEFT JOIN locked ON TRUE '
+        "LEFT JOIN v2_admin_settings policy ON policy.setting_key='quote_max_age_seconds'",
         body.review_id, body.attempt_id, sorted({pick.fixture_id for pick in body.signals}),
     )
+    policy = fixtures_and_policy[0]['quote_age_policy']
+    max_quote_age = quote_max_age_from_rows(request.app.state.settings, [] if policy is None else [policy])
     # Read only requested (fixture, quote) pairs, once in stable order.
     # Keep fixture-before-quote locking while avoiding N remote reads
     # under the fixture locks. Each intent is still validated below.
