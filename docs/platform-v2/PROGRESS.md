@@ -3678,3 +3678,5 @@ E421代码阶段隔离通过：单读盘详情候选只建身份索引、每个�
 目标：缩短WS新报价等待整站metadata上传的时间；责任目录services/collector、tests，前置为现有UploadGate的2次优先后让出普通请求及事务串行契约。01:52:33真实只读证据：WS quote source lag p95=1233.2ms、delivery p95=8472.2ms，一般队列等待p95=4087.3ms；poll轮询55秒。dropped153与delivery_failures33是累计值，尚不能归因于单窗；quote源时钟保持，64滚球/64赛前有界抽样均无15秒新价，不称全库。源码on_push走普通upload，精准刷新才走有界优先，存在可定位调度缺口。
 
 设计与动作：只让已标准化WS推送使用现有有界优先门，不增加HTTP并发，不改批次预算、完整性、单调版本、报价时间、TTL、模型或投注校验。新增真实CollectorService/MockTransport竞争测试先复现普通轮询抢先，再验推送与精准请求先行、普通请求仍推进、峰值并发1；原UploadGate的公平/取消/关闭及快照单调契约一并复跑。通过后独立提交冻结完整测试、同源collector镜像与远端精确差异核验，再研究空闲交接及完整新观察窗；失败保留原报告并恢复本候选，不修改已授权执行器或个人策略。当前仅设计，未写代码、未变线上。
+
+- 01:56 UTC E486先新增实际CollectorService竞争测试，在旧实现原生1复现顺序current→precise→poll→push1/2/3，推送落后普通轮询；保留e486-priority-before.log。只改WS upload调用复用现有有界优先门，未增加并发或改协议。相同新增场景与完整collector生命周期、门公平/取消/关闭、精准刷新、实时协议、快照批次/线契约共96项Docker无网验证4.308秒、0失败错误跳过、原生0。新顺序current→push1→push2→poll→push3→precise，峰值HTTP并发1、普通轮询仍获机会。旧precise回调测试仅去掉不再准确的only名称，断言不变。进入提交和干净冻结全套阶段；线上collector未变。

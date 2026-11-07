@@ -206,6 +206,49 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.service.resync.is_set())
         self.service.runtime.collect.assert_not_called()
 
+    async def test_push_priority_is_bounded_and_keeps_ingestion_serial(self):
+        started, release = asyncio.Event(), asyncio.Event()
+        order = []
+        active = peak = 0
+
+        async def handler(request):
+            nonlocal active, peak
+            identity = json.loads(request.content)["items"][0]["id"]
+            active += 1
+            peak = max(peak, active)
+            order.append(identity)
+            try:
+                if identity == "current":
+                    started.set()
+                    await release.wait()
+                await asyncio.sleep(0)
+                return httpx.Response(200, json={"accepted": 1})
+            finally:
+                active -= 1
+
+        def fixture(identity):
+            return {"id": identity, "markets": []}
+
+        self.service.runtime.apply_push = lambda events: ([fixture(events[0]["fixture_id"])], False)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as api:
+            self.service.api = api
+            current = asyncio.create_task(self.service.upload([fixture("current")]))
+            await started.wait()
+            poll = asyncio.create_task(self.service.upload([fixture("poll")]))
+            await asyncio.sleep(0)
+            pushes = []
+            for identity in ("push1", "push2", "push3"):
+                pushes.append(asyncio.create_task(self.service.on_push([{"fixture_id": identity}])))
+                await asyncio.sleep(0)
+            precise = asyncio.create_task(self.service.upload_precise([fixture("precise")]))
+            await asyncio.sleep(0)
+            release.set()
+            await asyncio.wait_for(asyncio.gather(current, poll, *pushes, precise), 2)
+        self.assertEqual(["current", "push1", "push2", "poll", "push3", "precise"], order)
+        self.assertEqual(1, peak)
+        self.assertFalse(self.service._upload_lock.locked())
+        self.assertFalse(self.service.resync.is_set())
+
     async def test_partial_limit_uploads_schedule_and_only_marks_successful_odds(self):
         stop = asyncio.Event()
         self.service.runtime.last_report = {"fixtures": 2, "odds_requested_fixtures": 2,

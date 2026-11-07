@@ -64,7 +64,7 @@ class UploadGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(gate.locked());gate.release()
         self.assertTrue(await waiter);gate.release()
 
-    async def test_only_fixed_precise_callback_sets_upload_priority(self):
+    async def test_fixed_precise_callback_sets_upload_priority(self):
         service=CollectorService.__new__(CollectorService);service.upload=AsyncMock(return_value=1)
         self.assertEqual(1,await service.upload_precise([{'id':'fixture'}]))
         service.upload.assert_awaited_once_with([{'id':'fixture'}],precise=True)

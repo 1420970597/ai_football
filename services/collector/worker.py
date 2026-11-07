@@ -295,7 +295,10 @@ class CollectorService:
         if needs_resync:
             self.resync.set()
         if fixtures:
-            accepted = await self.upload(fixtures)
+            # Share the bounded priority lane with precise refreshes. The gate
+            # still serializes ingestion and serves a normal waiter after two
+            # priority uploads, so a push stream cannot starve the full poll.
+            accepted = await self.upload(fixtures, precise=True)
             self.status["leyu"]["last_push_accepted"] = accepted
             self.status["leyu"]["last_push_quarantined_fixtures"] = self.last_upload_report.get("quarantined_fixtures", 0)
             self.status["leyu"]["max_observed_fixture_quotes"] = self.last_upload_report.get("max_observed_fixture_quotes", 0)
