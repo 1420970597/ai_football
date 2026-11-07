@@ -101,7 +101,7 @@ class MarketInput(AttemptInput):
     def normalize_full_period_alias(cls, value):
         if not isinstance(value, str):
             return value
-        return {'full_match': 'full_time', 'full': 'full_time',
+        return {'full_match': 'full_time', 'full': 'full_time', 'match': 'full_time',
                 '全场': 'full_time', '上半场': 'first_half',
                 '下半场': 'second_half'}.get(value, value)
 

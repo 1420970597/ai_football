@@ -38,6 +38,17 @@ class MarketPeriodInputTests(unittest.TestCase):
             with self.subTest(period=period):
                 self.assertEqual(period, self.body(period).period)
 
+    def test_exact_match_alias_keeps_native_handicap_scope(self):
+        body = reviews.MarketInput(review_id=uuid.uuid4(), attempt_id=uuid.uuid4(),
+            fixture_id='fixture-period-test', market_kind='handicap', period='match',
+            line='0.75', selection='home')
+        self.assertEqual('full_time', body.period)
+        self.assertEqual(('handicap', Decimal('0.75'), 'home'),
+                         (body.market_kind, body.line, body.selection))
+        for unknown in ('rematch', 'match_half', 'full_match_extra'):
+            with self.subTest(period=unknown):
+                self.assertEqual(unknown, self.body(unknown).period)
+
     def test_ambiguous_or_unrecognized_chinese_period_is_rejected(self):
         for period in ('半场', '加时', '全场大小', '全场上半场', '全场;DROP TABLE', ''):
             with self.subTest(period=period), self.assertRaises(ValueError):
@@ -414,12 +425,14 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                 ('half', 'first_half', 'over'))])
         key, _ = await self.search_all()
         await self.resolve(key)
-        response = await self.post('list_match_markets', fixture_id=fixture_id,
-                                   market_kind='total', period='full', line='2.5', selection='over')
-        self.assertEqual(200, response.status_code, response.text)
-        self.assertEqual('full_time', response.json()['market_filter']['period'])
-        self.assertEqual([('full_time', 'over')],
-                         [(q['period'], q['selection']) for q in response.json()['markets']])
+        for alias in ('full', 'full_match', 'match'):
+            with self.subTest(period=alias):
+                response = await self.post('list_match_markets', fixture_id=fixture_id,
+                                           market_kind='total', period=alias, line='2.5', selection='over')
+                self.assertEqual(200, response.status_code, response.text)
+                self.assertEqual('full_time', response.json()['market_filter']['period'])
+                self.assertEqual([('full_time', 'over')],
+                                 [(q['period'], q['selection']) for q in response.json()['markets']])
         unknown = await self.post('list_match_markets', fixture_id=fixture_id, period='unknown_full_match')
         self.assertEqual(200, unknown.status_code)
         self.assertEqual([], unknown.json()['markets'])
