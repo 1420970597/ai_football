@@ -15,7 +15,7 @@ import httpx
 
 from app.hermes_client import HermesProviderUnavailable, SYSTEM_PROMPT, delete_session, review_message
 from app.review_tool_evidence import replay_snapshot
-from app import blobstore
+from app import blobstore, worker
 
 COUNT = 260
 TARGET = COUNT - 1
@@ -179,6 +179,37 @@ async def run_case(conn, http, scenario):
         assert summary['image_count'] == 1 and summary['image_bytes'] == len(base64.b64decode(IMAGE))
         finish = summary['finish_reason']
         assert finish == 'stop'
+    elif scenario == 'tool_unavailable':
+        settings = SimpleNamespace(hermes_api_key='isolated-framework-key', hermes_api_url=HERMES+'/v1', hermes_model='hermes-agent')
+        source = {'source_name': '隔离群', 'display_nickname': '隔离专家', 'posted_at': data['posted_at'],
+                  'raw_text': data['raw_text'], 'media_objects': [{
+                      'object_key': 'v2/tg/isolated-recovery.png', 'mime_type': 'image/png',
+                      'bytes': len(base64.b64decode(IMAGE)),
+                      'sha256': hashlib.sha256(base64.b64decode(IMAGE)).hexdigest()}]}
+
+        async def codecs(connection):
+            for kind in ('json', 'jsonb'):
+                await connection.set_type_codec(kind, schema='pg_catalog', encoder=json.dumps, decoder=json.loads)
+
+        pool = await asyncpg.create_pool(checked_dsn(), min_size=1, max_size=2, init=codecs)
+        try:
+            with patch.object(blobstore, 'read_image', AsyncMock(return_value=base64.b64decode(IMAGE))) as read:
+                async with asyncio.timeout(180):
+                    _, summary = await worker._review_until_verified(pool, settings,
+                        {'id': job, 'attempt_id': attempt, 'message': source, 'review_mode': 'real_time'}, model_client=http)
+            read.assert_awaited_once_with('v2/tg/isolated-recovery.png')
+            assert summary['completion_verified'] and summary['completion_rounds'] == 2, summary
+            partials = await conn.fetch("SELECT sequence_no,payload FROM v2_analysis_traces "
+                "WHERE job_id=$1 AND payload->>'attempt_id'=($2::uuid)::text "
+                "AND trace_kind='hermes_partial_result'", job, attempt)
+            assert len(partials) == 1 and partials[0]['payload']['completion_issues']['tool_availability_unverified']
+            assert await conn.fetchval("SELECT EXISTS(SELECT 1 FROM v2_analysis_traces WHERE job_id=$1 "
+                "AND payload->>'attempt_id'=($2::uuid)::text AND sequence_no>$3 AND trace_kind='mcp_search_matches' "
+                "AND payload->>'status'='succeeded')", job, attempt, partials[0]['sequence_no'])
+            finish = summary['finish_reason']
+            assert finish == 'stop'
+        finally:
+            await pool.close()
     else:
         body = {'model': 'hermes-agent', 'stream': False, 'messages': [
             {'role': 'system', 'content': SYSTEM_PROMPT}, {'role': 'user', 'content': [
@@ -364,7 +395,7 @@ async def run():
                 if scenario == 'provider_stall':
                     await provider_stall_case(conn, http)
                     continue
-                if scenario not in {'normal', 'adversarial', 'length', 'budget', 'parallel', 'no_intent', 'provider_503', 'reply_image'}:
+                if scenario not in {'normal', 'adversarial', 'length', 'budget', 'parallel', 'no_intent', 'provider_503', 'reply_image', 'tool_unavailable'}:
                     raise RuntimeError('unknown isolated scenario')
                 await run_case(conn, http, scenario)
     finally:

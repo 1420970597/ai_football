@@ -103,7 +103,7 @@ assert_retry_policy
 assert_provider_timeouts
 hashes > "$EVIDENCE/framework-before.json"
 readonly_skill
-cases timeout_cleanup,reply_image,normal,adversarial,length,parallel,no_intent,provider_503
+cases timeout_cleanup,reply_image,tool_unavailable,normal,adversarial,length,parallel,no_intent,provider_503
 printf 'restart_task_owned_framework\n'
 docker restart "$HERMES" >/dev/null
 wait_services

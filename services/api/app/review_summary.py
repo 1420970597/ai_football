@@ -6,7 +6,8 @@ from datetime import datetime
 
 from .review_state import append_traces, trace
 from .handicap_lines import line_terms
-from .review_completion import completion_issues, mentioned_fixtures
+from .review_completion import (completion_issues, mentioned_fixtures, tool_recovery_pending,
+                                tool_unavailability_claim, tool_unavailability_issues)
 from .review_summary_evidence import read_summary_evidence
 
 SUMMARY_ITEM_LIMIT = 100
@@ -79,9 +80,13 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
     if not items and not reasons and not identified_items:
         lines.append('本次工具尚无已确认的盘口录入；模型原始说明仅供核查。')
     if incomplete:
-        lines.append(f"审核核验未完成：{incomplete['unfinished_search_count']} 个检索尚未读取全部分页，"
-                     f"{incomplete['unbound_mention_count']} 个模型提及的比赛编号没有当前工具绑定；"
-                     '已达到本次续审上限，不能认定全部匹配。仅已接受记录有效，其余保留未解决。')
+        if incomplete.get('tool_availability_unverified'):
+            lines.append('审核核验未完成：模型声称工具不可用，之后尚无当前审核尝试的成功工具调用证据；'
+                         '不能认定全部匹配。仅已接受记录有效，其余保持待核验。')
+        if incomplete['unfinished_search_count'] or incomplete['unbound_mention_count']:
+            lines.append(f"审核核验未完成：{incomplete['unfinished_search_count']} 个检索尚未读取全部分页，"
+                         f"{incomplete['unbound_mention_count']} 个模型提及的比赛编号没有当前工具绑定；"
+                         '已达到本次续审上限，不能认定全部匹配。仅已接受记录有效，其余保留未解决。')
     return {'schema_version': 1, 'language': 'zh-CN', 'basis': 'committed_system_signals',
             'review_mode': review_mode, 'accepted_count': accepted_total, 'items': items,
             'identified_without_signal': identified_items, 'identified_omitted_count': identified_omitted,
@@ -95,6 +100,11 @@ async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_
     mentioned = set().union(*(mentioned_fixtures(content) for content in evidence.model_contents))
     incomplete = (await completion_issues(conn, job['id'], attempt_id, mentioned)
                   if mentioned else evidence.pagination_issues)
+    if review_mode == 'real_time' and evidence.model_contents:
+        claimed = tool_unavailability_claim(evidence.model_contents[-1])
+        if claimed or (any(tool_unavailability_claim(content) for content in evidence.model_contents[:-1])
+                and await tool_recovery_pending(conn, job['id'], attempt_id)):
+            incomplete = {**tool_unavailability_issues(), **incomplete}
     receipt = make_summary(evidence.signals, accepted_total=evidence.total, rejected=evidence.rejected, review_mode=review_mode,
                            identified=evidence.identified, identified_total=evidence.identified[0]['total'] if evidence.identified else 0,
                            incomplete=incomplete)

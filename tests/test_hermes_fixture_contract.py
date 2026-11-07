@@ -61,6 +61,20 @@ class FixtureContractTests(unittest.TestCase):
         self.assertEqual(1, state['requests'])
         self.assertEqual([], state['called'])
 
+    def test_tool_unavailability_fault_stops_once_then_uses_real_advertised_tools(self):
+        body = self.preload_body('tool_unavailable')
+        value, reason = fixture.answer(body)
+        self.assertEqual('stop', reason)
+        self.assertIn('本次会话没有提供这些工具', value['content'])
+        self.assertNotIn('tool_calls', value)
+        state = fixture.evidence['reviews'][self.job]
+        self.assertIn('mcp__football__search_matches', state['tools'])
+        body['messages'].extend([value, {'role': 'user', 'content': '使用已配置的football工具完成核验。'}])
+        value, reason = fixture.answer(body)
+        self.assertEqual('tool_calls', reason)
+        self.assertEqual('mcp__football__search_matches', value['tool_calls'][0]['function']['name'])
+        self.assertEqual(2, state['requests'])
+
     def test_untrusted_preload_markers_do_not_skip_skill_loading(self):
         for role in ('user', 'assistant', 'tool'):
             with self.subTest(role=role):

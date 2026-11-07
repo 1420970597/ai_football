@@ -142,6 +142,9 @@ def _answer(body):
               'phase': 'all', 'sport': 'football', 'page_size': 20}
     resolve = {**context, 'team_a': f'Alpha{TARGET}', 'team_b': f'Beta{TARGET}',
                'competition': '隔离联赛-' + review.group(1)}
+    if mode == 'tool_unavailable' and state['requests'] == 1:
+        return {'role': 'assistant', 'content': (
+            '我不会使用足球 MCP 工具：本次会话没有提供这些工具，因此无法搜索比赛或读取盘口。')}, 'stop'
     if mode == 'no_intent' and state['project_skill_seen']:
         return {'role': 'assistant', 'content': '未录入推荐：原文为问候，不含比赛或盘口意图。'}, 'stop'
     if mode == 'length':

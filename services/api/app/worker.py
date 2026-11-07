@@ -17,7 +17,8 @@ from .review_state import active_job, append_traces, trace
 from .review_summary import record_summary
 from .review_recovery import market_recovery
 from .review_accepted_context import read_accepted_context
-from .review_completion import completion_issues, continuation_prompt, mentioned_fixtures
+from .review_completion import (completion_issues, continuation_prompt, mentioned_fixtures,
+                                tool_recovery_pending, tool_unavailability_claim, tool_unavailability_issues)
 from .review_policy import FRESH_PRIORITY_WINDOW_SECONDS, REALTIME_WINDOW_SECONDS
 from .review_scheduler_setup import claim_pair_and_job_query, prepare_claim_schedule
 from fastapi import HTTPException
@@ -412,14 +413,18 @@ async def _complete_review(pool, job: dict, started: float, model_result: dict |
                 await asyncio.sleep(.1)
 
 
-async def _read_completion_issues(pool, job, mentioned):
+async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, require_tool_recovery=False):
     transient = (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError,
                  asyncpg.DeadlockDetectedError, asyncpg.SerializationError, asyncpg.PostgresConnectionError)
     for retry in range(2):
         try:
             async with pool.acquire() as conn, conn.transaction():
                 await active_job(conn, job['id'], job['attempt_id'])
-                return await completion_issues(conn, job['id'], job['attempt_id'], mentioned), retry
+                issues = await completion_issues(conn, job['id'], job['attempt_id'], mentioned)
+                if tool_claim or (require_tool_recovery
+                        and await tool_recovery_pending(conn, job['id'], job['attempt_id'])):
+                    issues = {**tool_unavailability_issues(), **issues}
+                return issues, retry
         except transient as exc:
             if retry:
                 raise ReviewEvidenceUnavailable('current review evidence temporarily unavailable') from exc
@@ -435,6 +440,7 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
     check_retries = 0
     message = job['message'] | {'review_mode': job.get('review_mode', 'real_time')}
     accepted_context = None
+    tool_recovery_required = False
     if job.get('attempts', 1) > 1 and message['review_mode'] == 'real_time':
         if prepared_input is not None:
             raise ValueError('recovery review cannot reuse an initial prepared input')
@@ -465,10 +471,17 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
             if isinstance(value, (int, float)):
                 usage_totals[key] = usage_totals.get(key, 0) + value
         mentioned.update(mentioned_fixtures(content))
-        issues, retries = await _read_completion_issues(pool, job, mentioned)
+        tool_claim = message['review_mode'] == 'real_time' and tool_unavailability_claim(content)
+        recovery_options = ({'tool_claim': tool_claim, 'require_tool_recovery': tool_recovery_required}
+                            if tool_claim or tool_recovery_required else {})
+        issues, retries = await _read_completion_issues(pool, job, mentioned, **recovery_options)
+        tool_recovery_required = bool(issues.get('tool_availability_unverified'))
         check_retries += retries
         summary = {**summary, 'completion_verified': not issues, 'completion_rounds': turn + 1,
                    'completion_issues': issues, 'completion_check_retries': check_retries}
+        if turn == 2 and tool_recovery_required:
+            await _add_trace(pool, job, 'hermes_partial_result', summary)
+            raise HermesProviderUnavailable()
         if not issues or turn == 2:
             summary.update(totals)
             if usage_totals:
