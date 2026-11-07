@@ -364,12 +364,13 @@ async def _request_market_refresh(fixture_id: str, source_match_id: str, request
         reason = str(value.get('reason', ''))
         if not reason or not all(char.isascii() and (char.isalnum() or char == '_') for char in reason) or len(reason) > 80:
             reason = 'refresh_completed' if value['accepted'] else 'refresh_unavailable'
-        unchanged = (known_snapshot is not None and reason == 'observed_unchanged'
+        current_only = (known_snapshot is not None and reason in {
+                         'observed_unchanged', 'observed_current_projection_unconfirmed'}
                      and value['accepted'] is False and value.get('written') is False
                      and value.get('snapshot_committed') is False and value.get('current_only') is True)
         return {'attempted': True, 'accepted': value['accepted'], 'reason': reason,
                 '_observation': value.get('current_observation')
-                    if value.get('snapshot_committed') is True or unchanged else None}
+                    if value.get('snapshot_committed') is True or current_only else None}
     except (httpx.HTTPError, ValueError, TimeoutError):
         # A refresh is optional evidence gathering, never a reason to mark old
         # prices fresh or replay an unknown upstream operation automatically.

@@ -128,6 +128,8 @@ class LeyuRefreshController:
         stage = "source"
         started = time.monotonic()
         ingestion_started = None
+        observation = None
+        known_observed = False
         outcome = 'cancelled'
         try:
             async with asyncio.timeout(self.deadline_seconds):
@@ -135,14 +137,15 @@ class LeyuRefreshController:
                 if fixture.get("id") != identity or str(fixture.get("source_match_id") or "") != mid:
                     raise LeyuError("fixture_identity_mismatch")
                 observation = fixture.pop("_current_observation", None)
+                known_observed = known_snapshot is not None and snapshot_matches(
+                    known_snapshot, observation, fixture_id=identity, source_match_id=mid)
                 delivered = False
                 if known_snapshot is not None and self.can_skip_upload is not None:
                     try:
                         delivered = self.can_skip_upload(fixture) is True
                     except Exception:
                         pass  # Optional cost proof must never drop a native update.
-                if delivered and snapshot_matches(known_snapshot, observation,
-                        fixture_id=identity, source_match_id=mid):
+                if delivered and known_observed:
                     outcome = 'observed_unchanged'
                     return {**self._result(identity, mid, outcome), 'snapshot_committed': False,
                             'current_only': True, 'current_observation': observation}
@@ -168,6 +171,13 @@ class LeyuRefreshController:
             self.defer_requests(max(60, exc.retry_after_seconds or 0))
             return self._result(identity, mid, "upstream_rate_limited", retry=self.cooldown_remaining())
         except TimeoutError:
+            if stage == "ingestion" and known_observed:
+                # The attempted projection write is unconfirmed. Its timeout
+                # cannot erase an already completed exact native observation.
+                # The API must still reread and validate every selected row.
+                outcome = 'observed_current_projection_unconfirmed'
+                return {**self._result(identity, mid, outcome), 'snapshot_committed': False,
+                        'current_only': True, 'current_observation': observation}
             report = getattr(self.runtime, "last_refresh_report", {})
             if stage == "source" and report.get("stage") == "lock_wait":
                 outcome = 'refresh_busy'
