@@ -1,6 +1,7 @@
 """真实 MCP SDK 流式 HTTP 协议验证；使用隔离假业务响应。"""
 import importlib.util
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -113,6 +114,102 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'review_id': 'job', 'attempt_id': 'attempt', 'fixture_id': 'fixture',
                           'market_kind': 'total', 'period': 'full_time', 'line': '2.75',
                           'selection': 'over', 'market_query': '全场大小'}, captured[0])
+
+    async def test_search_and_resolve_can_read_only_their_bound_market(self):
+        tools = (await self.rpc('tools/list')).json()['result']['tools']
+        for name in ('search_matches', 'resolve_match'):
+            with self.subTest(tool=name):
+                schema = next(t['inputSchema'] for t in tools if t['name'] == name)
+                self.assertFalse(schema['properties']['read_markets']['default'])
+                calls = []
+                resolution = {'resolved': True, 'fixture': {'id': 'bound-fixture', 'realtime_eligible': True}}
+                def upstream(request):
+                    path = request.url.path.rsplit('/', 1)[-1]
+                    calls.append((path, json.loads(request.content)))
+                    if path == 'list_match_markets':
+                        return httpx.Response(200, json={'markets': [{'quote_id': 'native-quote', 'can_record': True}]})
+                    return httpx.Response(200, json=resolution if name == 'resolve_match' else {
+                        'search_complete': True, 'next_cursor': None, 'resolution': resolution})
+                await self.server.client.aclose()
+                self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+                arguments = {'review_id': 'job', 'attempt_id': 'current', 'team_a': 'Alpha', 'team_b': 'Beta',
+                             'read_markets': True, 'market_kind': 'total', 'period': 'first_half'}
+                arguments.update({'team_query': 'Alpha'} if name == 'search_matches' else {'search_key': 'complete-search'})
+                response = await self.rpc('tools/call', {'name': name, 'arguments': arguments})
+                result = response.json()['result']
+                self.assertFalse(result.get('isError', False), result)
+                data = json.loads(result['content'][0]['text'])
+                self.assertEqual('native-quote', data['market_result']['markets'][0]['quote_id'])
+                self.assertEqual([name, 'list_match_markets'], [c[0] for c in calls])
+                self.assertNotIn('read_markets', calls[0][1])
+                self.assertNotIn('market_kind', calls[0][1])
+                self.assertEqual({'review_id': 'job', 'attempt_id': 'current', 'fixture_id': 'bound-fixture',
+                                 'market_kind': 'total', 'period': 'first_half'}, calls[1][1])
+
+    async def test_composed_market_read_does_not_bypass_pagination_or_eligibility(self):
+        for name in ('search_matches', 'resolve_match'):
+            for resolution in ({'resolved': False, 'reason': 'ambiguous_fixture'},
+                               {'resolved': False, 'reason': 'no_matching_fixture'},
+                               {'resolved': True, 'fixture': {'id': 'finished', 'realtime_eligible': False}},
+                               {'resolved': True, 'fixture': {'realtime_eligible': True}}):
+                with self.subTest(tool=name, resolution=resolution):
+                    calls = []
+                    def upstream(request):
+                        calls.append(request.url.path.rsplit('/', 1)[-1])
+                        return httpx.Response(200, json=resolution if name == 'resolve_match' else {
+                            'search_complete': True, 'next_cursor': None, 'resolution': resolution})
+                    await self.server.client.aclose()
+                    self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+                    arguments = {'review_id': 'job', 'attempt_id': 'attempt', 'read_markets': True,
+                                 'team_a': 'Alpha', 'team_b': 'Beta'}
+                    arguments.update({'team_query': 'Alpha'} if name == 'search_matches' else {'search_key': 'search'})
+                    result = (await self.rpc('tools/call', {'name': name, 'arguments': arguments})).json()['result']
+                    self.assertFalse(result.get('isError', False))
+                    self.assertEqual([name], calls)
+
+    async def test_composed_read_waits_for_last_page_and_preserves_lease_failure(self):
+        calls = []
+        def upstream(request):
+            path = request.url.path.rsplit('/', 1)[-1]
+            body = json.loads(request.content); calls.append((path, body))
+            if path == 'list_match_markets':
+                return httpx.Response(409, json={'detail': 'review attempt is no longer active'})
+            complete = body['cursor'] == 'next-page'
+            return httpx.Response(200, json={'search_complete': complete,
+                'next_cursor': None if complete else 'next-page', 'resolution': {
+                    'resolved': True, 'fixture': {'id': 'fixture', 'realtime_eligible': True}}})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        arguments = {'review_id': 'job', 'attempt_id': 'attempt', 'team_query': 'Alpha',
+                     'team_a': 'Alpha', 'team_b': 'Beta', 'read_markets': True}
+        first = (await self.rpc('tools/call', {'name': 'search_matches', 'arguments': arguments})).json()['result']
+        self.assertFalse(first.get('isError', False))
+        self.assertEqual(['search_matches'], [c[0] for c in calls])
+        arguments['cursor'] = 'next-page'
+        second = (await self.rpc('tools/call', {'name': 'search_matches', 'arguments': arguments})).json()['result']
+        self.assertTrue(second['isError'])
+        self.assertEqual(['search_matches', 'search_matches', 'list_match_markets'], [c[0] for c in calls])
+        self.assertEqual('next-page', calls[1][1]['cursor'])
+        self.assertEqual('attempt', calls[2][1]['attempt_id'])
+        self.assertEqual(0, self.server.pending_market_requests)
+        self.assertFalse(self.server.market_gate.locked())
+
+    async def test_market_filters_alone_do_not_enable_composed_reads(self):
+        for name in ('search_matches', 'resolve_match'):
+            calls = []
+            def upstream(request):
+                calls.append(request.url.path.rsplit('/', 1)[-1])
+                resolution = {'resolved': True, 'fixture': {'id': 'fixture', 'realtime_eligible': True}}
+                return httpx.Response(200, json=resolution if name == 'resolve_match' else {
+                    'search_complete': True, 'next_cursor': None, 'resolution': resolution})
+            await self.server.client.aclose()
+            self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+            arguments = {'review_id': 'job', 'attempt_id': 'attempt', 'team_a': 'Alpha', 'team_b': 'Beta',
+                         'market_kind': 'total', 'period': 'first_half'}
+            arguments.update({'team_query': 'Alpha'} if name == 'search_matches' else {'search_key': 'search'})
+            result = (await self.rpc('tools/call', {'name': name, 'arguments': arguments})).json()['result']
+            self.assertFalse(result.get('isError', False))
+            self.assertEqual([name], calls)
 
     async def test_transport_failure_is_sanitized_tool_error(self):
         def timeout(request):

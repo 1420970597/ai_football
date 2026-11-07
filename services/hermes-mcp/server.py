@@ -122,31 +122,59 @@ async def _request(path: str, payload: dict) -> dict:
         raise ToolError("系统工具暂不可用") from None
 
 
+async def _with_bound_markets(result: dict, resolution: dict | None,
+                              review_id: str, attempt_id: str,
+                              market_kind: str | None, period: str | None) -> dict:
+    """Compose existing guarded operations, never derive a fixture identity."""
+    if not isinstance(resolution, dict) or resolution.get('resolved') is not True:
+        return result
+    fixture = resolution.get('fixture')
+    if (not isinstance(fixture, dict) or fixture.get('realtime_eligible') is not True
+            or not isinstance(fixture.get('id'), str) or not fixture['id']):
+        return result
+    markets = await _post('list_match_markets', {
+        'review_id': review_id, 'attempt_id': attempt_id, 'fixture_id': fixture['id'],
+        'market_kind': market_kind, 'period': period,
+    })
+    return {**result, 'market_result': markets}
+
+
 @mcp.tool()
 async def search_matches(review_id: str, attempt_id: str, team_query: str,
                          phase: str = "all", competition_query: str | None = None,
                          from_utc: str | None = None, to_utc: str | None = None,
                          cursor: str | None = None, page_size: int = 100, sport: str | None = None,
-                         team_a: str | None = None, team_b: str | None = None) -> dict:
-    """phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
-    return await _post("search_matches", {
+                         team_a: str | None = None, team_b: str | None = None,
+                         read_markets: bool = False, market_kind: str | None = None,
+                         period: str | None = None) -> dict:
+    """phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。已知玩法/期间时read_markets=true可在唯一绑定后返回market_result，复用此读盘而不重复调用；不完整或不唯一时不读。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
+    result = await _post("search_matches", {
         "review_id": review_id, "attempt_id": attempt_id, "team_query": team_query,
         "phase": phase, "competition_query": competition_query, "sport": sport,
         "team_a": team_a, "team_b": team_b,
         "from_utc": from_utc, "to_utc": to_utc, "cursor": cursor, "page_size": page_size,
     })
+    if read_markets and result.get('search_complete') is True and result.get('next_cursor') is None:
+        return await _with_bound_markets(result, result.get('resolution'), review_id, attempt_id,
+                                         market_kind, period)
+    return result
 
 
 @mcp.tool()
 async def resolve_match(review_id: str, attempt_id: str, search_key: str,
                         team_a: str, team_b: str, competition: str | None = None,
-                        from_utc: str | None = None, to_utc: str | None = None) -> dict:
-    """全候选翻页结束后，用双方系统队名或常见别名、联赛和时间唯一消歧；支持常见缩写、标点/重音差异和清晰队名前缀，多候选返回未解决。优先使用候选中的标准队名。"""
-    return await _post("resolve_match", {
+                        from_utc: str | None = None, to_utc: str | None = None,
+                        read_markets: bool = False, market_kind: str | None = None,
+                        period: str | None = None) -> dict:
+    """全候选翻页结束后，用双方系统队名或常见别名、联赛和时间唯一消歧；支持常见缩写、标点/重音差异和清晰队名前缀，多候选返回未解决。优先使用候选中的标准队名。玩法/期间明确时read_markets=true可在唯一活动绑定后返回market_result，复用读盘减少模型轮次；失败仍保留工具错误。"""
+    result = await _post("resolve_match", {
         "review_id": review_id, "attempt_id": attempt_id, "search_key": search_key,
         "team_a": team_a, "team_b": team_b, "competition": competition,
         "from_utc": from_utc, "to_utc": to_utc,
     })
+    if read_markets:
+        return await _with_bound_markets(result, result, review_id, attempt_id, market_kind, period)
+    return result
 
 
 @mcp.tool()
