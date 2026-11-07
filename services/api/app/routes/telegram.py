@@ -58,6 +58,10 @@ class ClaimInput(BaseModel):
     owner: uuid.UUID
 
 
+class ReleaseInput(BaseModel):
+    owner: uuid.UUID
+
+
 class AdvanceInput(ClaimInput):
     last_message_id: int = Field(ge=0)
     previous_message_id: int = Field(ge=0)
@@ -626,6 +630,17 @@ async def claim_checkpoint(body: ClaimInput, request: Request):
                 await source_for(conn, body.chat_id)
                 raise HTTPException(status_code=409, detail="Telegram source is owned by another collector")
     return dict(row)
+
+
+@router.post("/internal/telegram/checkpoints/release")
+async def release_checkpoints(body: ReleaseInput, request: Request):
+    authorized(request)
+    released = await database.current_pool().fetchval(
+        "WITH released AS (UPDATE v2_source_checkpoints SET lease_until=clock_timestamp() "
+        "WHERE collector_owner=$1 AND lease_until>clock_timestamp() RETURNING 1) "
+        "SELECT count(*) FROM released", body.owner,
+    )
+    return {"released_sources": released}
 
 
 @router.put("/internal/telegram/checkpoints")

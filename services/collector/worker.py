@@ -492,8 +492,10 @@ class CollectorService:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            await self.leyu_refresh.close()
-            await self.telegram.disconnect()
+            try:
+                await self.telegram.disconnect()
+            finally:
+                await self.leyu_refresh.close()
             self.status["leyu"]["state"] = "stopped"
             self.status["telegram"]["state"] = "stopped"
 

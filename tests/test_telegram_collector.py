@@ -55,6 +55,7 @@ class Backend:
         self.observed_items = []
         self.orphan_items = []
         self.orphan_acks = []
+        self.released_owners = []
 
     async def sources(self):
         return self.source_items
@@ -62,6 +63,10 @@ class Backend:
     async def checkpoint(self, chat_id, owner):
         self.checkpoints.append((chat_id, owner))
         return {"last_message_id": self.positions.get(chat_id, 0)}
+
+    async def release_sources(self, owner):
+        self.released_owners.append(owner)
+        return {'released_sources': 0}
 
     async def advance(self, chat_id, owner, last_message_id, previous):
         if self.positions.get(chat_id, 0) != previous:

@@ -38,6 +38,7 @@ _CONNECT_RETRY_PATHS = frozenset({'/events', '/checkpoints/claim'})
 _IDEMPOTENT_RETRY_AFTER_FALLBACK_SECONDS = 0.5
 _IDEMPOTENT_RETRY_AFTER_MAX_SECONDS = 2.0
 _OBSERVED_REQUEST_TIMEOUT = httpx.Timeout(8, connect=3)
+_RELEASE_REQUEST_TIMEOUT = httpx.Timeout(3, connect=1)
 
 
 def _idempotent_retry_delay(response: httpx.Response) -> float:
@@ -89,6 +90,8 @@ class TelegramBackend:
 
         async def request():
             timeout = _OBSERVED_REQUEST_TIMEOUT if operation == '/observed' else None
+            if operation == '/checkpoints/release':
+                timeout = _RELEASE_REQUEST_TIMEOUT
             kwargs = {'json': body}
             if timeout is not None:
                 kwargs['timeout'] = timeout
@@ -157,6 +160,9 @@ class TelegramBackend:
 
     async def checkpoint(self, chat_id: str, owner: str) -> dict:
         return await self._call("POST", "/checkpoints/claim", {"chat_id": chat_id, "owner": owner})
+
+    async def release_sources(self, owner: str) -> dict:
+        return await self._call("POST", "/checkpoints/release", {"owner": owner})
 
     async def advance(self, chat_id: str, owner: str, last_message_id: int, previous: int) -> dict:
         body = {"chat_id": chat_id, "owner": owner, "last_message_id": last_message_id,

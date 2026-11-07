@@ -64,6 +64,23 @@ class CollectorLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.api.aclose()
 
+    async def test_telegram_quiesces_before_unrelated_refresh_cleanup(self):
+        stop = asyncio.Event()
+        stop.set()
+        order = []
+        self.service.telegram.disconnect.side_effect = lambda: order.append('telegram')
+        self.service.leyu_refresh.close = AsyncMock(side_effect=lambda: order.append('refresh'))
+        await self.service.run(stop)
+        self.assertEqual(['telegram', 'refresh'], order)
+
+    async def test_refresh_cleanup_failure_still_closes_telegram(self):
+        stop = asyncio.Event()
+        stop.set()
+        self.service.leyu_refresh.close = AsyncMock(side_effect=RuntimeError('isolated refresh cleanup failure'))
+        with self.assertRaises(RuntimeError):
+            await self.service.run(stop)
+        self.service.telegram.disconnect.assert_awaited_once()
+
     async def test_telegram_source_health_prefers_lease_failure_category(self):
         self.assertEqual("TimeoutError", source_error_detail({"state": "lease_deferred", "lease_error": "TimeoutError"}))
         self.assertEqual("unavailable", source_error_detail({"state": "unavailable"}))

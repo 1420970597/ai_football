@@ -155,6 +155,7 @@ class TelegramCollector:
         self.media_delete = media_delete
         self.client = None
         self.owner = str(uuid.uuid4())
+        self._source_claim_attempted = False
         self.sources: dict[str, dict] = {}
         self.locks: dict[str, asyncio.Lock] = {}
         self.live_event_delivery = {
@@ -362,6 +363,16 @@ class TelegramCollector:
         if self.control_server:
             await self.control_server.close()
             self.control_server = None
+        if self._source_claim_attempted:
+            # A lost claim response may still have granted ownership. Release
+            # only after all local writers and Telegram handlers are drained.
+            async with asyncio.timeout(4):
+                result = await self.backend.release_sources(self.owner)
+            count = result.get('released_sources') if isinstance(result, dict) else None
+            if type(count) is not int or count < 0:
+                raise ValueError('invalid Telegram lease release acknowledgment')
+            self._source_claim_attempted = False
+            log.info('Telegram source leases released count=%d', count)
 
     async def start_control_server(self, *, token: str, host="0.0.0.0", port=8092):
         if not self.control_server:
@@ -401,6 +412,7 @@ class TelegramCollector:
         return entity
 
     async def _checkpoint(self, chat_id: str):
+        self._source_claim_attempted = True
         return await self.backend.checkpoint(chat_id, self.owner)
 
     async def _cancel_live_media_tasks(self):
