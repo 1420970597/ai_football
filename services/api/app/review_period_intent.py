@@ -1,8 +1,8 @@
 """Constrain explicit textual totals periods; never infer intent from availability.
 
-Only period-adjacent totals with the same exact Asian line and direction are
-applicable. Other selections, image-only messages and unrelated commentary do
-not gain an invented period. Ambiguous shorthand remains unresolved.
+Period-adjacent totals and their same-clause numeric alternatives share the
+same period and direction. Other selections, image-only messages and unrelated
+commentary do not gain an invented period. Ambiguous shorthand stays unresolved.
 """
 from decimal import Decimal
 from datetime import datetime, timezone
@@ -16,12 +16,43 @@ _TOTAL = re.compile(
     r'(?:\s*/\s*(?P<b>\d{1,5}(?:\.\d{1,3})?))?'
     r'|(?P<c>\d{1,5}(?:\.\d{1,3})?)'
     r'(?:\s*/\s*(?P<d>\d{1,5}(?:\.\d{1,3})?))?\s*(?P<after>[大小]))')
+_NEXT_LINE = re.compile(
+    r'[ \t]+(?P<a>\d{1,5}(?:\.\d{1,3})?)'
+    r'(?:[ \t]*/[ \t]*(?P<b>\d{1,5}(?:\.\d{1,3})?))?(?=$|[ \t])')
+_AMOUNT_SUFFIX = re.compile(r'(?:注|仓|倉|成|手|米|元|块|塊|[uU]\b|单位|單位|倍|水|赔率|賠率)')
 _PERIODS = {'上半场': 'first_half', '上半場': 'first_half', '上半': 'first_half',
             '下半场': 'second_half', '下半場': 'second_half', '下半': 'second_half',
             '全场': 'full_time', '全場': 'full_time'}
 CORRECTION_REASONS = ('review_source_period_intent_ambiguous', 'review_source_period_intent_conflict')
 INTENT_VALID_SQL = ("NOT (s.withdrawn_at IS NOT NULL AND COALESCE(s.withdrawal_reason,'') IN ("
                     "'review_source_period_intent_ambiguous','review_source_period_intent_conflict'))")
+
+
+def _asian_line(first, second):
+    line = Decimal(first)
+    if second is not None:
+        other = Decimal(second)
+        if abs(other - line) != Decimal('.5'):
+            return None
+        line = (line + other) / 2
+    return None if line % Decimal('.25') else line
+
+
+def _text_totals(text):
+    text = unicodedata.normalize('NFKC', text or '')
+    for match in _TOTAL.finditer(text):
+        line = _asian_line(match['a'] or match['c'], match['b'] or match['d'])
+        if line is None:
+            continue
+        selection = 'over' if (match['before'] or match['after']) == '大' else 'under'
+        yield match['period'], selection, line
+        end = match.end()
+        while following := _NEXT_LINE.match(text, end):
+            line = _asian_line(following['a'], following['b'])
+            if line is None or _AMOUNT_SUFFIX.match(text[following.end():].lstrip(' \t')):
+                break
+            yield match['period'], selection, line
+            end = following.end()
 
 
 def _early_first_half(quote, posted_at, now):
@@ -60,19 +91,10 @@ def period_intent_rejection(text, quote, *, posted_at=None, now=None):
     if quote.get('market_kind') not in {'total', 'team_total'} or quote.get('line') is None:
         return None
     constraints = set()
-    text = unicodedata.normalize('NFKC', text or '')
-    for match in _TOTAL.finditer(text):
-        selection = 'over' if (match['before'] or match['after']) == '大' else 'under'
-        line = Decimal(match['a'] or match['c'])
-        split = match['b'] or match['d']
-        if split is not None:
-            other = Decimal(split)
-            if abs(other - line) != Decimal('.5'):
-                continue
-            line = (line + other) / 2
-        if line % Decimal('.25') or line != quote['line'] or selection != quote['selection']:
+    for raw_period, selection, line in _text_totals(text):
+        if line != quote['line'] or selection != quote['selection']:
             continue
-        period = _PERIODS.get(match['period'], 'ambiguous')
+        period = _PERIODS.get(raw_period, 'ambiguous')
         if period == 'ambiguous' and _early_first_half(quote, posted_at, now):
             period = 'first_half'
         constraints.add(period)
@@ -89,18 +111,9 @@ def verified_early_first_half_context(text, quote, *, posted_at=None, now=None):
     """Return the immutable source facts that justified a bare-half decision."""
     if quote.get('market_kind') not in {'total', 'team_total'} or quote.get('line') is None:
         return None
-    text = unicodedata.normalize('NFKC', text or '')
-    for match in _TOTAL.finditer(text):
-        if match['period'] not in {'半', '半场', '半場'}:
+    for raw_period, selection, line in _text_totals(text):
+        if raw_period not in {'半', '半场', '半場'}:
             continue
-        selection = 'over' if (match['before'] or match['after']) == '大' else 'under'
-        line = Decimal(match['a'] or match['c'])
-        split = match['b'] or match['d']
-        if split is not None:
-            other = Decimal(split)
-            if abs(other-line) != Decimal('.5'):
-                continue
-            line = (line+other)/2
         if line != quote['line'] or selection != quote['selection'] or quote['period'] != 'first_half':
             continue
         if not _early_first_half(quote, posted_at, now):

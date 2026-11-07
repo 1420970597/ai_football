@@ -179,34 +179,41 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_quote_evidence'))
 
     async def test_bare_half_uses_only_the_attempt_bound_early_leyu_stage(self):
-        for index, state, minute, expected in ((1, '6', 15, 1), (2, '7', 46, 0)):
+        for index, state, minute, age, expected in ((1, '6', 15, 0, 2), (2, '7', 46, 0, 0),
+                                                  (3, '6', 25, 600, 0)):
             with self.subTest(state=state):
-                await self.pool.execute("UPDATE v2_expert_messages SET raw_text='半场0.5/1大' WHERE id=$1",
+                await self._reset_job_posted_at(self.now-timedelta(seconds=age))
+                await self.pool.execute("UPDATE v2_expert_messages SET raw_text='半大0.75 0.5   来开门红' WHERE id=$1",
                                         self.message)
                 fixture_id = await self.fixture(index=index, id=f'leyu:582168{index}', phase='live',
                     kickoff_at=self.now-timedelta(minutes=minute), match_state=state, clock_minute=minute,
                     home_score=0, away_score=0, half_home_score=0, half_away_score=0,
                     markets=[{'market_id':'18','market_name':'上半场大小','kind':'total',
-                        'period':'first_half','line':'0.75','selection':'over','price':'1.95',
+                        'period':'first_half','line':line,'selection':'over','price':'1.95',
                         'source_updated_at':self.now.isoformat(),'received_at':self.now.isoformat(),
-                        'score_basis':'unknown','play_id':'18','market_instance_id':f'half-{index}',
-                        'selection_id':f'over-{index}'}])
+                        'score_basis':'unknown','play_id':'18','market_instance_id':f'half-{index}-{line}',
+                        'selection_id':f'over-{index}-{line}'} for line in ('0.75', '0.5')])
                 key, _ = await self.search_all(team=f'Alpha{index}')
                 await self.resolve(key, index=index)
-                quote = await self.read_market(fixture_id)
+                read = await self.post('list_match_markets', fixture_id=fixture_id)
+                self.assertEqual(200, read.status_code, read.text)
+                quotes = read.json()['markets']
+                self.assertEqual(2, len(quotes))
                 response = await self.post('record_expert_signals', signals=[{
                     'fixture_id':fixture_id,'quote_id':quote['quote_id'],'confidence':.8,
-                    'evidence_text':'半场0.5/1大'}])
+                    'evidence_text':'半大0.75 0.5'} for quote in quotes])
                 self.assertEqual(200, response.status_code, response.text)
                 self.assertEqual(expected, len(response.json()['accepted']))
                 if not expected:
-                    self.assertEqual('source_period_intent_ambiguous', response.json()['rejected'][0]['reason'])
+                    self.assertEqual(['source_period_intent_ambiguous'] * 2,
+                                     [r['reason'] for r in response.json()['rejected']])
                 else:
-                    evidence = await self.pool.fetchrow(
-                        "SELECT evidence FROM v2_quote_evidence WHERE reference_id=$1 AND evidence_kind='expert_signal'",
-                        uuid.UUID(response.json()['accepted'][0]['signal_id']))
-                    period_context = evidence['evidence']['source_period_context']
-                    self.assertEqual('leyu-early-first-half-stage-v1', period_context['algorithm'])
+                    for accepted in response.json()['accepted']:
+                        evidence = await self.pool.fetchrow(
+                            "SELECT evidence FROM v2_quote_evidence WHERE reference_id=$1 AND evidence_kind='expert_signal'",
+                            uuid.UUID(accepted['signal_id']))
+                        period_context = evidence['evidence']['source_period_context']
+                        self.assertEqual('leyu-early-first-half-stage-v1', period_context['algorithm'])
 
     async def test_native_team_totals_keep_sides_read_binding_and_idempotent_prices(self):
         markets=[{'market_id':mid,'market_name':name,'kind':'team_total','period':'full_time',
