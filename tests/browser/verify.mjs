@@ -1662,6 +1662,39 @@ for (const width of [1440, 390]) {
     });
   }
 }
+for (const width of [1440, 390]) {
+  await test(`消息旧版本失效标识 / ${width}`, async () => {
+    const previousDeletedAt = message.deleted_at;
+    message.deleted_at = "2026-10-26T11:12:00Z";
+    const { page, context, log } = await setup({ dual: true });
+    try {
+      await page.setViewportSize({ width, height: 960 });
+      await page.locator('[data-page=experts]:visible').first().click();
+      await page.locator('.section-tabs [data-page=messages]').click();
+      await page.locator('#message-expert').selectOption(id);
+      const card = page.locator('.message-card').first();
+      await card.waitFor();
+      assert.match(await card.innerText(), /原版本已失效/);
+      assert.doesNotMatch(await card.innerText(), /原消息已删除/);
+      await card.locator('[data-message]').click();
+      const detail = page.locator('#content-dialog[open]');
+      await detail.locator('.raw-text').waitFor();
+      assert.match(await detail.locator('.message-meta').innerText(), /原版本已失效/);
+      assert.doesNotMatch(await detail.locator('.message-meta').innerText(), /原消息已删除/);
+      assert.equal(await detail.locator('.raw-text').innerText(), message.raw_text);
+      await detail.locator('#message-media img').first().waitFor();
+      assert.equal(await detail.locator('#message-media img').count(), 1);
+      assert.match(await detail.locator('#message-signals').innerText(), /系统赔率 1\.96/);
+      assert.equal(await detail.evaluate(e => e.scrollWidth > e.clientWidth), false);
+      assert.equal(log.filter(request => ["POST", "PUT", "PATCH", "DELETE"].includes(request.method)).length, 0);
+      await page.screenshot({ path: `${evidence}/invalid-message-version-${width}.png` });
+    } finally {
+      if (previousDeletedAt === undefined) delete message.deleted_at;
+      else message.deleted_at = previousDeletedAt;
+      await context.close();
+    }
+  });
+}
 assert.deepEqual(caught, []);
 await fs.writeFile(
   process.env.BROWSER_RESULTS || "/work/tests/browser/results.json",
