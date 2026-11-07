@@ -30,7 +30,7 @@ _INSERT_SNAPSHOT = (
     "OR EXISTS (SELECT 1 FROM unnest(f.home_aliases || f.away_aliases) alias WHERE "
     "lower(btrim(alias))=$8 OR regexp_replace(translate(lower(btrim(alias)),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]))) "
     "AND ($9='' OR regexp_replace(translate(lower(f.competition_name),$6,$7),"
-    "'[^[:alnum:]]+',' ','g') LIKE '%'||$9||'%') "
+    "'[^[:alnum:]]+',' ','g') LIKE $9) "
     "AND ($10::timestamptz IS NULL OR f.kickoff_at >= $10) AND ($11::timestamptz IS NULL OR f.kickoff_at <= $11) "
     "AND ($12::text IS NULL OR f.sport=$12) RETURNING 1) SELECT count(*) FROM inserted"
 )
@@ -55,11 +55,16 @@ async def snapshot_candidates(conn, *, review_id, search_key, phase, team_query,
     name_source = 'áàâäãåéèêëíìîïóòôöõúùûüýÿçñ'
     name_target = 'aaaaaaeeeeiiiiooooouuuuyycn'
     competition_term = normalize_competition_name(competition, sport)
+    # A verified short name denotes this exact competition, not a similarly
+    # prefixed youth/women's competition. Ordinary queries keep substring search.
+    competition_pattern = competition_term
+    if competition_term and competition_term == normalize_team_name(competition):
+        competition_pattern = '%' + competition_term + '%'
     chinese_source, chinese_target = sql_chinese_fold(team_query+' '+competition_term)
     args = (review_id, search_key, phase, '%'+team_query.strip().casefold()+'%',
             ['%'+v+'%' for v in team_search_variants(team_query)],
             name_source+chinese_source, name_target+chinese_target, team_query.strip().casefold(),
-            competition_term, from_utc, to_utc, sport, False)
+            competition_pattern, from_utc, to_utc, sport, False)
     count = await conn.fetchval(_INSERT_SNAPSHOT, *args)
     fragments = source_fragments(team_query, from_utc, to_utc) if count == 0 else ()
     if fragments:

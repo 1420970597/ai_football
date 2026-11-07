@@ -21,7 +21,7 @@ class CompetitionAliasTests(unittest.IsolatedAsyncioTestCase):
         for index, (alias, full) in enumerate((('英超', '英格兰超级联赛'), ('英冠', '英格兰冠军联赛')), 1):
             with self.subTest(alias=alias):
                 fixture = await self.fixture(index, competition_name=full)
-                for offset, decoy in enumerate(('英格兰联赛杯', '英格兰女子超级联赛'), 10):
+                for offset, decoy in enumerate(('英格兰联赛杯', '英格兰女子超级联赛', full + '青年'), 10):
                     await self.fixture(index * 100 + offset, competition_name=decoy,
                                        home_team=f'Alpha{index}', away_team=f'Beta{index}')
                 result = await self.search(sport='football', competition_query=alias,
@@ -33,6 +33,13 @@ class CompetitionAliasTests(unittest.IsolatedAsyncioTestCase):
                     'SELECT competition_query FROM v2_match_searches WHERE job_id=$1 AND search_key=$2',
                     self.job, result['search_key'])
                 self.assertEqual(alias, scope)
+
+    async def test_verified_alias_does_not_match_only_prefixed_youth_competition(self):
+        await self.fixture(competition_name='英格兰超级联赛青年')
+        result = await self.search(sport='football', competition_query='英超',
+                                   team_a='Alpha1', team_b='Beta1')
+        self.assertEqual([], result['items'])
+        self.assertFalse(result['resolution']['resolved'])
 
     async def test_explicit_resolution_uses_same_verified_alias(self):
         await self.fixture(competition_name='英格兰超级联赛')
