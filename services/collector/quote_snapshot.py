@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import OrderedDict
 from typing import Any
 
 from .leyu_protocol import LeyuError
@@ -12,6 +13,64 @@ MAX_MARKET_CHUNK = 500
 MAX_BATCH_FIXTURES = 500  # Existing API FixtureBatch limit; byte/quote budgets still split first.
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
 EMPTY_SNAPSHOT_BYTES = len(b'{"items":[]}')
+
+
+def delivered_fixture_fingerprint(fixture: dict[str, Any]) -> str | None:
+    """All delivered native facts, excluding receipt clocks only.
+
+    Chunking is transport framing, not another market snapshot. Invalid or
+    unsupported encodings conservatively disable the optional upload shortcut.
+    """
+    try:
+        if not isinstance(fixture.get('id'), str) or not fixture['id']:
+            return None
+        value = {key: item for key, item in fixture.items() if key != 'received_at'}
+        if 'market_chunks' in value:
+            chunks = value.pop('market_chunks')
+            if ('markets' in value or not isinstance(chunks, list)
+                    or any(not isinstance(chunk, list) for chunk in chunks)):
+                return None
+            markets = [quote for chunk in chunks for quote in chunk]
+            if (value.pop('market_chunk_count', None) != len(chunks)
+                    or value.pop('market_quote_count', None) != len(markets)):
+                return None
+        else:
+            markets = value.pop('markets', [])
+        if (not isinstance(markets, list) or len(markets) > MAX_FIXTURE_QUOTES
+                or any(not isinstance(quote, dict) for quote in markets)):
+            return None
+        value['markets'] = [{key: item for key, item in quote.items() if key != 'received_at'}
+                            for quote in markets]
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+                                        allow_nan=False).encode()).hexdigest()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+class DeliveredFixtureSnapshots:
+    """Bounded process-local evidence of acknowledged complete HTTP payloads."""
+    def __init__(self, capacity: int = 1024):
+        if type(capacity) is not int or capacity < 1:
+            raise ValueError('positive snapshot capacity required')
+        self.capacity = capacity
+        self._hashes: OrderedDict[str, str] = OrderedDict()
+
+    def forget(self, fixtures: list[dict[str, Any]]) -> None:
+        for fixture in fixtures:
+            self._hashes.pop(fixture.get('id'), None)
+
+    def remember(self, fixtures: list[dict[str, Any]]) -> None:
+        for fixture in fixtures:
+            self.forget([fixture])
+            identity = delivered_fixture_fingerprint(fixture)
+            if identity is not None:
+                self._hashes[fixture['id']] = identity
+                while len(self._hashes) > self.capacity:
+                    self._hashes.popitem(last=False)
+
+    def matches(self, fixture: dict[str, Any]) -> bool:
+        identity = delivered_fixture_fingerprint(fixture)
+        return identity is not None and self._hashes.get(fixture.get('id')) == identity
 
 
 def snapshot_quote_count(fixture: dict[str, Any]) -> int:

@@ -61,7 +61,33 @@ class UnchangedQuoteRefreshTests(unittest.IsolatedAsyncioTestCase):
         runtime = SimpleNamespace(fixtures={fixture['id']: fixture},
             request_budget=LeyuRequestBudget(), refresh_match=fetch or AsyncMock(return_value=returned))
         upload = AsyncMock(return_value=1)
-        return LeyuRefreshController(runtime, upload), runtime, upload, fixture, known
+        return LeyuRefreshController(runtime, upload, can_skip_upload=lambda current: True), runtime, upload, fixture, known
+
+    async def test_without_full_delivery_proof_keeps_original_upload(self):
+        controller, _, upload, fixture, known = self.controller()
+        controller.can_skip_upload = None
+        result = await controller.refresh({'fixture_id': fixture['id'], 'source_match_id': '12345',
+                                           'known_snapshot': known})
+        upload.assert_awaited_once()
+        self.assertEqual('written', result['reason'])
+
+    async def test_other_native_facts_changed_keeps_original_upload(self):
+        controller, _, upload, fixture, known = self.controller()
+        controller.can_skip_upload = lambda current: False
+        result = await controller.refresh({'fixture_id': fixture['id'], 'source_match_id': '12345',
+                                           'known_snapshot': known})
+        upload.assert_awaited_once()
+        self.assertEqual('written', result['reason'])
+
+    async def test_failed_delivery_comparison_keeps_original_upload(self):
+        controller, _, upload, fixture, known = self.controller()
+        def invalid(current):
+            raise ValueError('invalid delivery proof')
+        controller.can_skip_upload = invalid
+        result = await controller.refresh({'fixture_id': fixture['id'], 'source_match_id': '12345',
+                                           'known_snapshot': known})
+        upload.assert_awaited_once()
+        self.assertEqual('written', result['reason'])
 
     async def test_exact_known_quotes_are_observed_without_claiming_a_write(self):
         controller, runtime, upload, fixture, known = self.controller()

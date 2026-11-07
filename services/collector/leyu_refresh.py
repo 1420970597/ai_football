@@ -48,8 +48,10 @@ class LeyuRequestBudget:
 
 class LeyuRefreshController:
     def __init__(self, runtime, upload: Callable[..., Awaitable[int]], *,
-                 deadline_seconds: float = 8, clock: Callable[[], float] = time.monotonic):
+                 deadline_seconds: float = 8, clock: Callable[[], float] = time.monotonic,
+                 can_skip_upload: Callable[[dict[str, Any]], bool] | None = None):
         self.runtime, self.upload = runtime, upload
+        self.can_skip_upload = can_skip_upload
         self.budget = getattr(runtime, "request_budget", None) or LeyuRequestBudget(clock=clock)
         self.clock = clock
         self.deadline_seconds = min(8, max(.01, deadline_seconds))
@@ -133,7 +135,13 @@ class LeyuRefreshController:
                 if fixture.get("id") != identity or str(fixture.get("source_match_id") or "") != mid:
                     raise LeyuError("fixture_identity_mismatch")
                 observation = fixture.pop("_current_observation", None)
-                if known_snapshot is not None and snapshot_matches(known_snapshot, observation,
+                delivered = False
+                if known_snapshot is not None and self.can_skip_upload is not None:
+                    try:
+                        delivered = self.can_skip_upload(fixture) is True
+                    except Exception:
+                        pass  # Optional cost proof must never drop a native update.
+                if delivered and snapshot_matches(known_snapshot, observation,
                         fixture_id=identity, source_match_id=mid):
                     outcome = 'observed_unchanged'
                     return {**self._result(identity, mid, outcome), 'snapshot_committed': False,

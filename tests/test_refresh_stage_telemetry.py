@@ -10,6 +10,7 @@ import httpx
 from services.collector.leyu_protocol import LeyuError
 from services.collector.leyu_refresh import LeyuRefreshController, LeyuRequestBudget
 from services.collector.worker import CollectorService
+from services.collector.quote_snapshot import DeliveredFixtureSnapshots
 
 
 def fixture():
@@ -74,7 +75,7 @@ class RefreshTelemetryTests(unittest.IsolatedAsyncioTestCase):
         controller.deadline_seconds = 1
         with self.assertLogs('platform.collector.refresh', level='INFO') as logs:
             task = asyncio.create_task(controller.refresh({'fixture_id': fixture()['id'], 'source_match_id': fixture()['source_match_id']}))
-            await entered.wait()
+            await asyncio.wait_for(entered.wait(), 1)
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
@@ -93,6 +94,7 @@ class UploadTelemetryTests(unittest.IsolatedAsyncioTestCase):
         service.api = SimpleNamespace(post=post)
         service.api_url = 'http://telemetry-private-host/internal'
         service._upload_lock = asyncio.Lock()
+        service._delivered_snapshots = DeliveredFixtureSnapshots()
         return service
 
     async def test_waiting_lock_cancel_sends_nothing_and_keeps_lock_owner(self):
@@ -124,7 +126,7 @@ class UploadTelemetryTests(unittest.IsolatedAsyncioTestCase):
         service = self.service(mocked)
         with self.assertLogs('platform.collector', level='INFO') as logs:
             task = asyncio.create_task(service.upload([fixture()]))
-            await entered.wait()
+            await asyncio.wait_for(entered.wait(), 1)
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task

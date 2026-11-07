@@ -87,7 +87,8 @@ class RecordTransactionPathTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes'")
         counted = CountedPool(self.pool)
 
-        async def refresh(*args):
+        async def refresh(*args, known_snapshot=None):
+            self.assertTrue(known_snapshot is None or set(known_snapshot) == {'context_sha256', 'quote_sha256'})
             self.assertEqual(['begin', 'commit'], counted.events)
             self.assertEqual(self.pool.get_size(), self.pool.get_idle_size())
             await self.pool.execute('UPDATE v2_current_quotes SET source_updated_at=now(),price=2.03')

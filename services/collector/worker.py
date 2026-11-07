@@ -17,7 +17,8 @@ from .leyu_runtime import LeyuRuntime
 from .leyu_results import ResultCollector
 from .leyu_refresh import LeyuRefreshController
 from .upload_gate import UploadGate
-from .quote_snapshot import MAX_BATCH_FIXTURES, encode_snapshot, prepare_fixture_batches
+from .quote_snapshot import (DeliveredFixtureSnapshots, MAX_BATCH_FIXTURES,
+                             encode_snapshot, prepare_fixture_batches)
 from .telegram import TelegramCollector
 
 log = logging.getLogger("platform.collector")
@@ -161,13 +162,15 @@ class CollectorService:
         self._odds_refresh_at: dict[str, float] = {}
         self.odds_fixture_budget = max(1, min(300, odds_fixture_budget))
         self._upload_lock = UploadGate()
+        self._delivered_snapshots = DeliveredFixtureSnapshots()
         self.last_upload_report: dict[str, Any] = {}
         self._poll_alert = ThresholdAlert(1, 0, raise_after=2, recover_after=3)
         self.quote_max_age_seconds = DEFAULT_QUOTE_MAX_AGE_SECONDS
         self.quote_policy_available = False
         self.runtime = runtime_factory(api, self.api_url, base_config)
         self.telegram = telegram_factory({}, api=api, api_url=self.api_url + "/telegram")
-        self.leyu_refresh = LeyuRefreshController(self.runtime, self.upload_precise)
+        self.leyu_refresh = LeyuRefreshController(self.runtime, self.upload_precise,
+                                                can_skip_upload=self._delivered_snapshots.matches)
         self.telegram.leyu_refresh = self.leyu_refresh.refresh
         self.resync = asyncio.Event()
         self.status: dict[str, Any] = {
@@ -265,6 +268,9 @@ class CollectorService:
             try:
                 async with (self._upload_lock.priority() if precise else self._upload_lock):
                     lock_acquired = time.monotonic()
+                    # An unknown HTTP outcome may already have committed. Retire
+                    # earlier evidence before attempting any replacement.
+                    self._delivered_snapshots.forget(batch)
                     response = await self.api.post(self.api_url + "/collector/fixtures", content=encode_snapshot(batch),
                                                    headers={"Content-Type": "application/json"})
                 outcome = 'response'
@@ -285,6 +291,7 @@ class CollectorService:
                     or not 0 <= document['accepted'] <= len(batch)):
                 raise LeyuError("invalid_ingestion_receipt")
             accepted += document["accepted"]
+            self._delivered_snapshots.remember(batch)
         # Set only after the last await; the caller then reads this exact upload
         # report without a poll/push interleaving replacing it in the meantime.
         self.last_upload_report = report
