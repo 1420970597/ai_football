@@ -161,6 +161,27 @@ class RemoteTransportTests(unittest.TestCase):
     def tearDown(self):
         self.bridge.shutdown();self.bridge.server_close();self.thread.join(2)
         self.upstream.shutdown();self.upstream.server_close();self.upthread.join(2);self.temp.cleanup()
+    def test_collector_lease_release_forwards_exact_owner_once(self):
+        body=json.dumps({'owner':'11111111-2222-4333-8444-555555555555'}).encode()
+        path='/internal/telegram/checkpoints/release'
+        self.assertEqual(200,self.request('POST',path,body))
+        self.assertEqual([('POST',path,body)],self.upstream.calls)
+    def test_collector_lease_release_does_not_grant_other_roles_or_methods(self):
+        path='/internal/telegram/checkpoints/release'
+        for method,token in (('POST','executor'),('POST','wrong'),('GET','collector'),('PUT','collector')):
+            with self.subTest(method=method,token=token):
+                self.assertEqual(403,self.request(method,path,token=token))
+        self.assertFalse(permitted('DELETE',path,'Bearer '+TOKENS['collector'],TOKENS))
+        self.assertEqual([],self.upstream.calls)
+    def test_collector_lease_release_has_no_suffix_query_or_encoded_escape(self):
+        for path in ('/internal/telegram/checkpoints/release/',
+                     '/internal/telegram/checkpoints/release/anything',
+                     '/internal/telegram/checkpoints/release?owner=anything',
+                     '/internal/telegram/checkpoints/%72elease',
+                     '/internal/telegram/checkpoints/../release'):
+            with self.subTest(path=path):
+                self.assertEqual(403,self.request('POST',path))
+        self.assertEqual([],self.upstream.calls)
     def test_explicit_live_gate_allows_only_authenticated_executor_claim(self):
         path = '/internal/executor/claim?live_capable=true'
         self.assertEqual(403, self.request('POST', path, token='executor'))

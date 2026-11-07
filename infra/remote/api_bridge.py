@@ -20,7 +20,7 @@ COLLECTOR_ROUTES = {
     'GET': (r'/internal/collector/(config|renewal/config)', r'/internal/telegram/(sources|pending)'),
     'POST': (r'/internal/collector/(fixtures|results|renewal/claim)', rf'/internal/collector/renewal/{UUID}/finish',
              r'/internal/collector/results/(claim|observations|finish)',
-             r'/internal/telegram/(checkpoints/claim|events|events/receipts|observed|observed/ack|media/orphans|media/orphans/ack)'),
+             r'/internal/telegram/(checkpoints/claim|checkpoints/release|events|events/receipts|observed|observed/ack|media/orphans|media/orphans/ack)'),
     'PUT': (r'/internal/collector/renewal/config', r'/internal/telegram/(directory|checkpoints|session|author-backfill)'),
 }
 EXECUTOR_ROUTES = {
