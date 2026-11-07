@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterable, Mapping
 
 import httpx
 
 from .leyu import LeyuClient, safe_base_url
-from .leyu_protocol import AuthExpired, LeyuError
+from .leyu_protocol import AuthExpired, LeyuError, RateLimited
+from .leyu_refresh import LeyuRequestBudget
 from .leyu_session import AppSessionRenewer, LoginProxy
 
 LOCAL_DEFAULT_KEYS = frozenset({"leyu_app_signing_config", "leyu_app_discovery_config", "leyu_user_agent",
@@ -30,6 +32,11 @@ class LeyuRuntime:
         self.last_report: dict[str, Any] = {}
         self.fixtures: dict[str, dict[str, Any]] = {}
         self._collection_lock = asyncio.Lock()
+        self._refresh_lock = asyncio.Lock()
+        self.request_budget = LeyuRequestBudget()
+        self._push_revision = 0
+        self._market_push_revisions: dict[tuple[str, tuple], int] = {}
+        self.last_refresh_report: dict[str, Any] = {}
 
     async def _rpc(self, method: str, path: str, **kwargs) -> dict[str, Any]:
         try:
@@ -143,9 +150,104 @@ class LeyuRuntime:
 
     async def collect(self, *, odds_mids: Iterable[str] | Callable[[list[dict[str, Any]]], Iterable[str]] | None = None) -> list[dict[str, Any]]:
         async with self._collection_lock:
-            return await self._collect(odds_mids=odds_mids)
+            self.request_budget.require_available()
+            try:
+                result = await self._collect(odds_mids=odds_mids)
+            except RateLimited as exc:
+                self.request_budget.defer_requests(max(60, exc.retry_after_seconds or 0))
+                raise
+            except LeyuError:
+                self.request_budget.defer_requests(2)
+                raise
+            if self.last_report.get("rate_limited"):
+                self.request_budget.defer_requests(max(60, self.last_report.get("retry_after_seconds") or 0))
+            elif self.last_report.get("failed_batches"):
+                self.request_budget.defer_requests(2)
+            return result
+
+    async def refresh_match(self, source_match_id: str, *, lock_timeout_seconds: float = 8) -> dict[str, Any]:
+        """One bounded priority lane, independent of the long station poll."""
+        mid = LeyuClient.validate_match_id(source_match_id)
+        self.last_refresh_report = {"stage": "lock_wait", "state": "waiting"}
+        try:
+            async with asyncio.timeout(min(8, max(.001, lock_timeout_seconds))):
+                await self._refresh_lock.acquire()
+        except TimeoutError:
+            self.last_refresh_report["state"] = "timed_out"
+            raise LeyuError("refresh_busy") from None
+        except asyncio.CancelledError:
+            self.last_refresh_report["state"] = "cancelled"
+            raise
+        try:
+            self.last_refresh_report = {"stage": "source", "state": "running"}
+            self.request_budget.require_available()
+            matches = [fixture for fixture in self.fixtures.values()
+                       if str(fixture.get("source_match_id") or "") == mid]
+            if len(matches) != 1:
+                raise LeyuError("fixture_not_loaded")
+            previous = matches[0]
+            if previous.get("phase") not in {"scheduled", "live"}:
+                raise LeyuError("fixture_not_open")
+            push_revision_at_start = self._push_revision
+            try:
+                await self.load()
+            except LeyuError:
+                if not (self.config_validation_error and self.version > 0 and self.config):
+                    raise
+            # No AuthExpired handler here: only the normal poll may claim renewal.
+            client = LeyuClient.from_config(self.config)
+            config_version = self.version
+            self.request_budget.claim_precise_start(mid)
+            fixture = await client.fetch_match(mid, fixture=deepcopy(previous))
+            if self.version != config_version:
+                raise LeyuError("refresh_configuration_changed")
+            observation = fixture.pop("_current_observation", None)
+            self._merge_fixture(fixture, self.fixtures.get(previous["id"]), push_revision_at_start)
+            self.fixtures[fixture["id"]] = deepcopy(fixture)
+            # A concurrent station snapshot must not delete priority-read quotes.
+            for quote in fixture.get("markets", []):
+                self._push_revision += 1
+                self._market_push_revisions[(fixture["id"], self._market_key(quote))] = self._push_revision
+            return {**fixture, "_current_observation": observation}
+        finally:
+            self.last_refresh_report["state"] = "finished"
+            self._refresh_lock.release()
+
+    def _merge_fixture(self, fixture: dict[str, Any], previous: dict[str, Any] | None,
+                       push_revision_at_start: int) -> None:
+        if not previous:
+            return
+        incoming_time = self._source_time(fixture.get("source_updated_at") or fixture.get("received_at"))
+        previous_time = self._source_time(previous.get("source_updated_at") or previous.get("received_at"))
+        if previous_time and (not incoming_time or incoming_time < previous_time):
+            for key in ("phase", "match_state", "home_score", "away_score", "half_home_score",
+                        "half_away_score", "clock_minute", "source_updated_at", "source_time_quality", "received_at"):
+                if key in previous:
+                    fixture[key] = previous[key]
+        complete = bool(fixture.get("markets_complete"))
+        prior_markets = {self._market_key(quote): quote for quote in previous.get("markets", [])}
+        markets = {} if complete else dict(prior_markets)
+        for quote in fixture.get("markets", []):
+            key = self._market_key(quote)
+            current = prior_markets.get(key)
+            current_time = self._source_time(current.get("source_updated_at")) if current else None
+            incoming_time = self._source_time(quote.get("source_updated_at"))
+            if current_time and (not incoming_time or incoming_time < current_time):
+                markets[key] = current
+            else:
+                markets[key] = {**(current or {}), **quote}
+        if complete:
+            for key, quote in prior_markets.items():
+                revision = self._market_push_revisions.get((fixture["id"], key), 0)
+                if key not in markets and revision > push_revision_at_start:
+                    markets[key] = quote
+                    fixture["markets_complete"] = False
+        fixture["markets"] = list(markets.values())
 
     async def _collect(self, *, odds_mids: Iterable[str] | Callable[[list[dict[str, Any]]], Iterable[str]] | None = None) -> list[dict[str, Any]]:
+        # A full HTTP response has no verified snapshot-wide source watermark.
+        # Track accepted concurrent deltas without treating receive time as quote time.
+        push_revision_at_start = self._push_revision
         try:
             await self.load()
         except LeyuError:
@@ -170,26 +272,18 @@ class LeyuRuntime:
         self.last_report = {**client.last_report, "config_version": self.version}
         previous_fixtures = self.fixtures
         for fixture in result:
-            previous = previous_fixtures.get(fixture["id"])
-            if not previous or fixture.get("markets_complete"):
-                continue
-            markets = {(quote.get("market_id"), quote.get("period"), quote.get("line"), quote.get("selection")): quote
-                       for quote in previous.get("markets", [])}
-            for quote in fixture.get("markets", []):
-                key = (quote.get("market_id"), quote.get("period"), quote.get("line"), quote.get("selection"))
-                current = markets.get(key)
-                if current and current.get("source_updated_at") and quote.get("source_updated_at"):
-                    if quote["source_updated_at"] < current["source_updated_at"]:
-                        continue
-                markets[key] = {**(current or {}), **quote}
-            fixture["markets"] = list(markets.values())
-            fixture["markets_complete"] = False
+            self._merge_fixture(fixture, previous_fixtures.get(fixture["id"]), push_revision_at_start)
         self.fixtures = {fixture["id"]: deepcopy(fixture) for fixture in result}
+        active_keys = {(identity, self._market_key(quote)) for identity, fixture in self.fixtures.items()
+                       for quote in fixture.get("markets", [])}
+        self._market_push_revisions = {key: revision for key, revision in self._market_push_revisions.items()
+                                       if key in active_keys}
         return result
 
     def apply_push(self, events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
         """将已核验增量附于可丢弃全量投影；未知状态/比赛要求补同步。"""
         affected: dict[str, dict[str, Any]] = {}
+        affected_markets: dict[str, dict[tuple, dict[str, Any]]] = {}
         resync = False
         for event in events:
             identity = str(event.get("fixture_id") or "")
@@ -209,11 +303,12 @@ class LeyuRuntime:
             for quote in event.get("markets", []):
                 key = self._market_key(quote)
                 previous = indexed.get(key)
-                quote_time = quote.get("source_updated_at")
+                quote_time = self._source_time(quote.get("source_updated_at"))
                 if not quote_time:
                     resync = True
                     continue
-                if previous and previous.get("source_updated_at") and quote_time < previous["source_updated_at"]:
+                previous_time = self._source_time(previous.get("source_updated_at")) if previous else None
+                if previous_time and quote_time < previous_time:
                     continue
                 merged = {**(previous or {}), **quote}
                 if not quote.get("status_evidence"):
@@ -224,7 +319,11 @@ class LeyuRuntime:
                     # 报价变化本身不证明复盘；沿用已有状态，未知/无效价格仍停盘。
                     merged["status"] = previous["status"] if quote.get("price") else "suspended"
                 merged.pop("status_evidence", None)
+                if merged == previous:
+                    continue
                 indexed[key] = merged
+                self._push_revision += 1
+                self._market_push_revisions[(identity, key)] = self._push_revision
                 changed.append(merged)
             current["markets"] = list(indexed.values())
             current["received_at"] = event.get("received_at") or current.get("received_at")
@@ -232,9 +331,33 @@ class LeyuRuntime:
                 output = affected.setdefault(identity, {**deepcopy(current), "markets": [], "markets_complete": False})
                 output.update({key: value for key, value in current.items() if key != "markets"})
                 output["markets_complete"] = False
-                output["markets"].extend(deepcopy(changed))
+                # A WS frame batch can repeat one selection hundreds of times.
+                # Emit each accepted identity once, with its latest coherent
+                # state, rather than rejecting the entire fixture at ingestion.
+                output_markets = affected_markets.setdefault(identity, {})
+                for quote in changed:
+                    output_markets[self._market_key(quote)] = deepcopy(quote)
+                output["markets"] = list(output_markets.values())
         return list(affected.values()), resync
 
     @staticmethod
     def _market_key(quote: Mapping[str, Any]) -> tuple:
-        return quote.get("market_id"), quote.get("period"), quote.get("line"), quote.get("selection")
+        line = quote.get("line")
+        if quote.get("market_kind") == "winner" and line is not None and not isinstance(line, bool):
+            try:
+                parsed = Decimal(str(line))
+                if parsed.is_finite() and parsed == 0:
+                    line = None
+            except (InvalidOperation, ValueError):
+                pass
+        return quote.get("market_id"), quote.get("period"), line, quote.get("selection")
+
+    @staticmethod
+    def _source_time(value: Any) -> datetime | None:
+        if not value:
+            return None
+        try:
+            stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return stamp.astimezone(timezone.utc) if stamp.tzinfo else None
+        except (ValueError, TypeError):
+            return None

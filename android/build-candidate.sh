@@ -8,8 +8,8 @@ output_dir="$android_dir/build/artifacts"
 cleanup() { docker rm -f "$build_container" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 mkdir -p "$output_dir"
-# The production APK starts with an explicit HTTPS pairing address.  Keep
-# fixtures and cleartext URLs out of the application source so a test endpoint
+# The APK starts with an explicitly entered HTTP/HTTPS pairing address. Keep
+# fixtures and hardcoded cleartext URLs out of application source so a test endpoint
 # cannot silently become the default service in a release candidate.
 if rg -n --glob '*.java' --glob '*.kt' --glob '*.xml' \
   'http://|localhost|127\.0\.0\.1|0\.0\.0\.0|[A-Za-z0-9.-]+\.invalid|[A-Za-z0-9.-]+\.test' \
@@ -41,6 +41,7 @@ docker cp "$build_container:/workspace/frozen/android/app/build/outputs/apk/debu
 docker cp "$build_container:/workspace/frozen/android/app/build/outputs/apk/release/app-release-unsigned.apk" "$output_dir/ballnews-2.0.0-dev-unsigned.apk"
 docker cp "$build_container:/workspace/frozen/source-sha256.txt" "$output_dir/source-sha256.txt"
 docker cp "$build_container:/workspace/frozen/android/app/build/reports/lint-results-debug.xml" "$output_dir/lint-results-debug.xml"
+rm -rf "$output_dir/unit-results"
 docker cp "$build_container:/workspace/frozen/android/app/build/test-results/testDebugUnitTest" "$output_dir/unit-results"
 git -C "$project_dir" rev-parse HEAD > "$output_dir/source-parent-commit.txt"
 git -C "$project_dir" status --porcelain -- android tests/android > "$output_dir/source-worktree-status.txt"

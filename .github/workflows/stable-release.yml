@@ -1,0 +1,122 @@
+name: Publish externally approved stable release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact reviewed main commit covered by the external approval
+        type: string
+        required: true
+      evidence_run_id:
+        description: Successful main workflow run containing stable-approved-bundle
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.ref == 'refs/heads/main' && inputs.source_commit == github.sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: stable-release
+    permissions:
+      contents: write
+      actions: read
+      packages: read
+    env:
+      STABLE_RELEASE_ENVIRONMENT: stable-release
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: stable-approved-bundle
+          path: .runtime/stable-bundle
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.evidence_run_id }}
+          repository: ${{ github.repository }}
+      - name: Freeze current source and artifact run identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+        run: |
+          set -eu
+          case "$EVIDENCE_RUN_ID" in ''|*[!0-9]*) exit 1;; esac
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p .runtime/stable-current
+          git status --porcelain --untracked-files=all > .runtime/stable-current/worktree.txt
+          test ! -s .runtime/stable-current/worktree.txt
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$EVIDENCE_RUN_ID" > .runtime/stable-current/artifact-run.json
+      - name: Build bounded validation toolchain
+        run: docker build --memory 768m --cpu-period 100000 --cpu-quota 50000 -f infra/test/Dockerfile -t ai-football-stable-verifier:local .
+      - name: Verify external custody before pulling release images
+        env:
+          STABLE_RELEASE_TRUSTED_PUBLIC_KEY: ${{ vars.STABLE_RELEASE_TRUSTED_PUBLIC_KEY }}
+        run: |
+          docker run --rm --cpus=.5 --memory=256m --network none \
+            -e STABLE_RELEASE_TRUSTED_PUBLIC_KEY -e GITHUB_REPOSITORY \
+            -v "$PWD:/workspace:ro" -w /workspace ai-football-stable-verifier:local \
+            python infra/release/stable_execute.py image-list --plan .runtime/stable-bundle/release-plan.json \
+            --manifest .runtime/stable-bundle/signing-manifest.json --apk .runtime/stable-bundle/app.apk \
+            --package-output .runtime/stable-bundle/package-verification.txt \
+            --worktree-status .runtime/stable-bundle/source-worktree-status.txt \
+            --image-inspect .runtime/stable-bundle/image-inspect.json --evidence .runtime/stable-bundle/evidence \
+            --notes .runtime/stable-bundle/release-notes.md --attestation .runtime/stable-bundle/release-approval.json \
+            > .runtime/stable-current/images.txt
+      - name: Pull immutable approved images and inspect their actual identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          while IFS= read -r image; do docker pull "$image"; done < .runtime/stable-current/images.txt
+          set --
+          while IFS= read -r image; do set -- "$@" "$image"; done < .runtime/stable-current/images.txt
+          test "$#" -eq 6
+          docker image inspect "$@" > .runtime/stable-current/pulled-images.json
+      - name: Reverify actual APK without signing or private keys
+        run: |
+          set -eu
+          docker build --memory 1g --cpu-period 100000 --cpu-quota 50000 --target toolchain -f android/Dockerfile -t ai-football-stable-android:local .
+          docker run --rm --cpus=.5 --memory=384m --network none -v "$PWD/.runtime/stable-bundle:/bundle:ro" \
+            ai-football-stable-android:local sh -ec 'apksigner verify --verbose --print-certs /bundle/app.apk; aapt dump badging /bundle/app.apk' \
+            > .runtime/stable-current/package-verification.txt
+      - name: Publish once after exact main, device, signature and environment gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STABLE_RELEASE_TRUSTED_PUBLIC_KEY: ${{ vars.STABLE_RELEASE_TRUSTED_PUBLIC_KEY }}
+        run: |
+          set -eu
+          git status --porcelain --untracked-files=all > .runtime/stable-current/worktree.txt
+          docker run --rm --cpus=.5 --memory=384m \
+            -e GH_TOKEN -e STABLE_RELEASE_TRUSTED_PUBLIC_KEY -e GITHUB_REPOSITORY -e GITHUB_ACTIONS \
+            -e GITHUB_REF -e GITHUB_SHA -e STABLE_RELEASE_ENVIRONMENT \
+            -v "$PWD:/workspace:ro" -w /workspace ai-football-stable-verifier:local \
+            python infra/release/stable_execute.py execute --plan .runtime/stable-bundle/release-plan.json \
+            --manifest .runtime/stable-bundle/signing-manifest.json --apk .runtime/stable-bundle/app.apk \
+            --package-output .runtime/stable-bundle/package-verification.txt \
+            --worktree-status .runtime/stable-bundle/source-worktree-status.txt \
+            --image-inspect .runtime/stable-bundle/image-inspect.json --evidence .runtime/stable-bundle/evidence \
+            --notes .runtime/stable-bundle/release-notes.md --attestation .runtime/stable-bundle/release-approval.json \
+            --actual-package-output .runtime/stable-current/package-verification.txt \
+            --pulled-image-inspect .runtime/stable-current/pulled-images.json \
+            --artifact-run .runtime/stable-current/artifact-run.json --actual-worktree-status .runtime/stable-current/worktree.txt \
+            > .runtime/stable-current/result.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: stable-publication-result
+          path: .runtime/stable-current/result.json
+          include-hidden-files: true
+          retention-days: 30
+      - name: End registry session
+        if: always()
+        run: docker logout ghcr.io

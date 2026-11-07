@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {comparePixels,decodePng} from './visual-pixels.mjs';
+const sample={width:10,height:10,pixels:Buffer.alloc(400,255)};
+assert.equal(comparePixels(sample,sample).passed,true);
+const minor={...sample,pixels:Buffer.from(sample.pixels)};minor.pixels[0]=240;
+assert.equal(comparePixels(sample,minor).changed_pixels,0);
+const major={...sample,pixels:Buffer.from(sample.pixels)};major.pixels[0]=0;
+assert.equal(comparePixels(sample,major).passed,false);
+assert.deepEqual(comparePixels(sample,major).changed_bounds,{x:0,y:0,width:1,height:1});
+assert.equal(comparePixels(sample,{...sample,width:9}).reason,'dimensions_changed');
+assert.throws(()=>decodePng(Buffer.from('invalid')));
+console.log('PASS visual pixel thresholds, bounds, dimension mismatch and invalid image');

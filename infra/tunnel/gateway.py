@@ -47,16 +47,24 @@ class Config:
         return value
 
 
-def ssh_command(config: Config) -> list[str]:
-    return [
+def ssh_command(config: Config, *, transport: str = 'combined') -> list[str]:
+    if transport not in {'combined', 'database', 'media'}:
+        raise ValueError('invalid tunnel transport')
+    command = [
         "ssh", "-F", config.ssh_config, "-NT", "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=yes", "-o", "ExitOnForwardFailure=yes",
         "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
         "-o", "ConnectTimeout=10", "-o", "LogLevel=ERROR",
-        "-L", f"0.0.0.0:{config.pg_local_port}:{config.pg_remote_host}:{config.pg_remote_port}",
-        "-L", f"127.0.0.1:{config.s3_forward_port}:{config.s3_remote_host}:{config.s3_remote_port}",
-        config.ssh_host,
     ]
+    if transport != 'combined':
+        # Even an inherited SSH config must not merge database and media back
+        # into one TCP stream through an existing multiplexing control socket.
+        command += ['-o', 'ControlMaster=no', '-o', 'ControlPath=none']
+    if transport in {'combined', 'database'}:
+        command += ['-L', f'0.0.0.0:{config.pg_local_port}:{config.pg_remote_host}:{config.pg_remote_port}']
+    if transport in {'combined', 'media'}:
+        command += ['-L', f'127.0.0.1:{config.s3_forward_port}:{config.s3_remote_host}:{config.s3_remote_port}']
+    return command + [config.ssh_host]
 
 
 def parse_connect(header: bytes, allowed_authority: str) -> None:
@@ -147,33 +155,46 @@ def health(config: Config) -> int:
 
 
 def run(config: Config) -> int:
-    process = subprocess.Popen(ssh_command(config), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    processes = []
     stopping = threading.Event()
+
+    def terminate_children():
+        for process in processes:
+            if process.poll() is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
 
     def terminate(signum, frame) -> None:
         stopping.set()
-        process.terminate()
+        terminate_children()
 
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
     try:
+        for transport in ('database', 'media'):
+            processes.append(subprocess.Popen(ssh_command(config, transport=transport),
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
         with ConnectServer(("0.0.0.0", config.s3_proxy_port), config.s3_authority, config.s3_forward_port) as server:
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             print("storage tunnel supervisor started", flush=True)
-            while not stopping.wait(1):
-                if process.poll() is not None:
-                    print("storage tunnel SSH disconnected", flush=True)
-                    return 1
-            server.shutdown()
+            try:
+                while not stopping.wait(1):
+                    if any(process.poll() is not None for process in processes):
+                        print("storage tunnel SSH disconnected", flush=True)
+                        return 1
+            finally:
+                server.shutdown()
     finally:
-        if process.poll() is None:
-            process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        terminate_children()
+        for process in processes:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
     return 0
 
 

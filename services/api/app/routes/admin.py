@@ -15,6 +15,7 @@ from ..security import encrypt_secret, decrypt_secret
 from ..membership import has_entitlement
 from .operations import collector_health
 from .renewal import LEYU_CONFIG_KEYS, LEYU_SECRET_KEYS, revision_locked
+from ..runtime_settings import RUNTIME_KEYS, validate_runtime_value
 
 router = APIRouter(prefix="/api/v1/admin")
 SECRET_SETTINGS = set(LEYU_SECRET_KEYS) | {"telegram_api_hash", "telegram_session", "leyu_login_password", "leyu_app_signing_config", "leyu_app_discovery_config", "leyu_login_proxy_password_template"}
@@ -121,6 +122,38 @@ def _setting_diff(key: str, before: str | None, after: str | None) -> dict:
 class SettingsInput(BaseModel):
     values: dict[str, str | int | bool] = Field(max_length=30)
     expected_leyu_version: int | None = Field(default=None, ge=1)
+    expected_model_revision: int | None = Field(default=None, ge=1)
+
+
+class ModelCandidateInput(BaseModel):
+    model: str = Field(max_length=200)
+    provider: str | None = Field(default=None, max_length=200)
+    provenance: dict[str, str]
+    expected_revision: int = Field(ge=1)
+
+
+class ModelEvidenceInput(BaseModel):
+    expected_revision: int = Field(ge=1)
+    report_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    report: dict
+
+
+class ModelReviewDecision(BaseModel):
+    sample_id: str = Field(min_length=1, max_length=200)
+    decision: str = Field(pattern='^(accept|reject)$')
+    note: str = Field(min_length=3, max_length=500)
+
+
+class ModelReviewInput(BaseModel):
+    expected_revision: int = Field(ge=1)
+    report_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    candidate_fingerprint: str = Field(pattern=r'^[0-9a-f]{64}$')
+    reason: str = Field(min_length=3, max_length=500)
+    decisions: list[ModelReviewDecision] = Field(max_length=1000)
+
+
+class ModelActivationInput(BaseModel):
+    expected_revision: int = Field(ge=1)
 
 
 class PlanInput(BaseModel):
@@ -242,6 +275,19 @@ async def list_source_experts(source_id: uuid.UUID, request: Request):
                             **configured_sender_identity(row["platform_sender_id"])) for row in rows]}
 
 
+@router.get('/sources/{source_id}/directory')
+async def source_directory(source_id: uuid.UUID, request: Request):
+    await require_admin(request)
+    pool = database.current_pool()
+    if not await pool.fetchval('SELECT 1 FROM v2_expert_sources WHERE id=$1', source_id):
+        raise HTTPException(404, '来源不存在')
+    row = await pool.fetchrow('SELECT state,reason,retry_after,admins,last_attempt_at,last_success_at FROM v2_telegram_directories WHERE source_id=$1', source_id)
+    if not row:
+        return {'state': 'pending', 'items': [], 'automatic': True}
+    return {key: value for key, value in dict(row).items() if key!='admins'} | {
+        'items': row['admins'], 'automatic': True, 'trust_automatically_granted': False}
+
+
 @router.post("/sources/{source_id}/experts", status_code=201)
 async def add_source_expert(source_id: uuid.UUID, body: SourceExpertInput, request: Request):
     admin = await require_admin(request)
@@ -256,9 +302,15 @@ async def add_source_expert(source_id: uuid.UUID, body: SourceExpertInput, reque
                 "ON CONFLICT(platform_sender_id) DO UPDATE SET display_nickname=EXCLUDED.display_nickname,updated_at=now() "
                 "RETURNING id", uuid.uuid4(), body.sender_id.strip(), body.nickname.strip(),
             )
+            checkpoint = await conn.fetchval(
+                "SELECT last_message_id FROM v2_source_checkpoints WHERE source_id=$1", source_id)
+            upper_id = int(checkpoint or 0)
             await conn.execute(
-                "INSERT INTO v2_source_experts(source_id,expert_id,enabled) VALUES($1,$2,TRUE) "
-                "ON CONFLICT(source_id,expert_id) DO UPDATE SET enabled=TRUE", source_id, expert_id,
+                "INSERT INTO v2_source_experts(source_id,expert_id,enabled,backfill_since,backfill_cursor,backfill_until_id,backfill_completed_at) "
+                "VALUES($1,$2,TRUE,now()-interval '7 days',$3::bigint,$4::bigint,CASE WHEN $4::bigint=0 THEN now() ELSE NULL END) "
+                "ON CONFLICT(source_id,expert_id) DO UPDATE SET enabled=TRUE,backfill_since=now()-interval '7 days',"
+                "backfill_cursor=EXCLUDED.backfill_cursor,backfill_until_id=EXCLUDED.backfill_until_id,"
+                "backfill_completed_at=EXCLUDED.backfill_completed_at", source_id, expert_id, upper_id + 1, upper_id,
             )
             await audit(conn, admin["id"], "admin", "telegram_expert_trusted", "expert", str(expert_id), details={
                 "source_id": str(source_id), "sender_id": body.sender_id, "trust_basis": "manual", "telegram_admin_verified": False,
@@ -295,10 +347,13 @@ async def get_settings(request: Request):
     }
     for row in rows:
         key = row["setting_key"]
+        if key not in ALLOWED_SETTINGS:
+            continue
         try:
             value = decrypt_secret(settings.encryption_key, row["encrypted_value"])
         except Exception:
-            output[key] = {"configured": False, "masked": True}
+            output[key] = {"configured": True, "masked": True, "value": None,
+                           "state": "unreadable", "reason": "configuration_key_or_ciphertext_invalid"}
             continue
         output[key] = {
             "configured": True,
@@ -316,10 +371,15 @@ async def get_settings(request: Request):
         "pending" if collector.get("state") == "reachable" else
         "unavailable"
     )
+    from ..model_configuration import read_state, public_state
+    model_state = await read_state(database.current_pool(), settings)
+    output['hermes_analysis_model'] = {**output['hermes_analysis_model'], 'value': model_state['active']['model'] or '',
+        'state': 'active', 'pending_candidates': sum(item['status'] != 'activated' for item in model_state['candidates'])}
     return {
         "items": output,
         "allowed_keys": sorted(ALLOWED_SETTINGS),
         "leyu_version": version,
+        'model_configuration': public_state(model_state),
         "runtime": {
             "state": runtime_state,
             "desired_version": version,
@@ -337,6 +397,11 @@ async def update_settings(body: SettingsInput, request: Request):
     unknown = set(body.values) - ALLOWED_SETTINGS
     if unknown:
         raise HTTPException(status_code=422, detail="包含不允许的配置键")
+    for key in set(body.values) & RUNTIME_KEYS:
+        try:
+            body.values[key] = validate_runtime_value(key, body.values[key])
+        except ValueError as exc:
+            raise HTTPException(422, detail=str(exc)) from None
     relay = str(body.values.get("leyu_collection_relay", "")).strip()
     if relay:
         try:
@@ -351,8 +416,13 @@ async def update_settings(body: SettingsInput, request: Request):
                 or any(ord(c) <= 32 or ord(c) == 127 for c in relay)):
             raise HTTPException(status_code=422, detail="采集中转必须为无路径、无凭据的 HTTPS 来源")
     pool = database.current_pool()
+    model_candidate = None
     async with pool.acquire() as conn:
         async with conn.transaction():
+            if 'hermes_analysis_model' in body.values:
+                from ..model_configuration import lock
+                await lock(conn)
+            await verify_sensitive_admin_session(conn, admin)
             leyu_keys = set(body.values) & LEYU_CONFIG_KEYS
             version = None
             if leyu_keys:
@@ -363,6 +433,13 @@ async def update_settings(body: SettingsInput, request: Request):
             before_values: dict[str, str | None] = {}
             for key, value in body.values.items():
                 text = str(value).strip()
+                if key == 'hermes_analysis_model':
+                    from ..model_configuration import stage
+                    if body.expected_model_revision is None:
+                        raise HTTPException(409, '模型候选需要当前配置版本，请刷新设置')
+                    model_candidate, _ = await stage(conn, request.app.state.settings, admin, text,
+                        expected_revision=body.expected_model_revision, request_id=getattr(request.state, 'request_id', ''))
+                    continue
                 if not text and key in SECRET_SETTINGS:
                     continue
                 if len(text) > 4096:
@@ -401,15 +478,59 @@ async def update_settings(body: SettingsInput, request: Request):
                 "application_state": "persisted_unverified" if leyu_keys & set(changed) else "persisted",
                 "runtime_acknowledged": False,
             }
-            await audit(conn, admin["id"], "admin", "settings_updated", "admin_settings", "", details=details)
+            await audit(conn, admin["id"], "admin", "settings_updated", "admin_settings", "",
+                        getattr(request.state, "request_id", ""), details=details)
     application = {
-        "state": "persisted_unverified" if leyu_keys & set(changed) else "persisted",
+        "state": "model_candidate_pending" if model_candidate else "persisted_unverified" if leyu_keys & set(changed) else "persisted",
         "requested_revision": version,
         "runtime_acknowledged": False,
-        "reason": "配置已写入数据库，等待采集服务回执" if leyu_keys & set(changed) else "配置已写入数据库",
+        "reason": "新模型仅保存为待验证候选，当前模型继续生效；需比较证据、人工复核与显式激活" if model_candidate else "配置已写入数据库，等待采集服务回执" if leyu_keys & set(changed) else "配置已写入数据库",
     }
     return {"updated": sorted(changed), "secrets_masked": sorted(SECRET_SETTINGS & set(body.values)),
-            "leyu_version": version, "application": application}
+            "leyu_version": version, "application": application, 'model_candidate': model_candidate}
+
+
+@router.get('/model-configuration')
+async def model_configuration_status(request: Request):
+    await require_admin(request)
+    from ..model_configuration import public_state, read_state
+    return public_state(await read_state(database.current_pool(), request.app.state.settings))
+
+
+@router.post('/model-configuration/candidates', status_code=201)
+async def create_model_candidate(body: ModelCandidateInput, request: Request):
+    identity = await require_admin(request)
+    from ..model_configuration import public_state, stage
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            candidate, state = await stage(conn, request.app.state.settings, identity, body.model,
+                provider=body.provider, provenance=body.provenance, expected_revision=body.expected_revision,
+                request_id=getattr(request.state, 'request_id', ''))
+    return {'candidate': candidate, 'configuration': public_state(state)}
+
+
+async def _model_candidate_operation(request, candidate_id, body, operation):
+    identity = await require_admin(request)
+    from ..model_configuration import mutate
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            return await mutate(conn, request.app.state.settings, identity, candidate_id, body.expected_revision,
+                operation, body.model_dump(mode='json'), getattr(request.state, 'request_id', ''))
+
+
+@router.post('/model-configuration/candidates/{candidate_id}/evidence')
+async def attach_model_evidence(candidate_id: uuid.UUID, body: ModelEvidenceInput, request: Request):
+    return await _model_candidate_operation(request, candidate_id, body, 'evidence')
+
+
+@router.post('/model-configuration/candidates/{candidate_id}/review')
+async def review_model_candidate(candidate_id: uuid.UUID, body: ModelReviewInput, request: Request):
+    return await _model_candidate_operation(request, candidate_id, body, 'review')
+
+
+@router.post('/model-configuration/candidates/{candidate_id}/activate')
+async def activate_model_candidate(candidate_id: uuid.UUID, body: ModelActivationInput, request: Request):
+    return await _model_candidate_operation(request, candidate_id, body, 'activate')
 
 
 @router.get("/membership/plans")
@@ -430,6 +551,11 @@ async def upsert_plan(code: str, body: PlanInput, request: Request):
     plan_id = uuid.uuid4()
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"membership-plan:{code}")
+            previous = await conn.fetchrow(
+                "SELECT name,price,currency,duration_days,entitlements,enabled FROM v2_membership_plans WHERE code=$1 FOR UPDATE", code,
+            )
             plan_id = await conn.fetchval(
                 "INSERT INTO v2_membership_plans(id,code,name,price,currency,duration_days,entitlements,enabled) "
                 "VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,"
@@ -438,7 +564,12 @@ async def upsert_plan(code: str, body: PlanInput, request: Request):
                 plan_id, body.code, body.name, body.price, body.currency, body.duration_days,
                 body.entitlements, body.enabled,
             )
-            await audit(conn, admin["id"], "admin", "membership_plan_updated", "membership_plan", body.code)
+            after = body.model_dump(mode="json", exclude={"code"})
+            before = dict(previous) if previous else None
+            if before is not None:
+                before["price"] = str(before["price"])
+            await audit(conn, admin["id"], "admin", "membership_plan_updated", "membership_plan", body.code,
+                        getattr(request.state, "request_id", ""), {"before": before, "after": after})
     return {"id": str(plan_id), "code": body.code, "enabled": body.enabled}
 
 
@@ -448,6 +579,7 @@ async def grant_membership(body: GrantInput, request: Request):
     pool = database.current_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
             reason = body.reason.strip()
             if len(reason) < 3:
                 raise HTTPException(status_code=422, detail="开通原因至少三个非空字符")
@@ -524,6 +656,7 @@ async def revoke_membership(membership_id: uuid.UUID, body: RevokeInput, request
         raise HTTPException(status_code=422, detail="撤销原因至少三个非空字符")
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
             row = await conn.fetchrow("SELECT user_id,status FROM v2_memberships WHERE id=$1 FOR UPDATE", membership_id)
             if not row:
                 raise HTTPException(status_code=404, detail="会员授予不存在")

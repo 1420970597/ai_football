@@ -1,14 +1,16 @@
 """Telegram directory behavior using actual TL entity/role types and fake RPCs only."""
 from datetime import datetime, timezone
 from types import SimpleNamespace
+import asyncio
+import copy
 import unittest
 
 from telethon import utils
 from telethon.errors import ChatAdminRequiredError, ChannelPrivateError, UserNotParticipantError, FloodWaitError
-from telethon.tl.functions.channels import GetParticipantsRequest
+from telethon.tl.functions.channels import GetParticipantsRequest, GetParticipantRequest
 from telethon.tl.functions.messages import GetFullChatRequest
 from telethon.tl.types import (Channel, ChannelForbidden, ChannelParticipantAdmin, ChannelParticipantCreator,
-    ChannelParticipantsAdmins, Chat, ChatAdminRights, ChatParticipant, ChatParticipantAdmin,
+    ChannelParticipantsAdmins, ChannelParticipantsSearch, ChannelParticipant, Chat, ChatAdminRights, ChatParticipant, ChatParticipantAdmin,
     ChatParticipantCreator, ChatParticipants, ChatParticipantsForbidden, ChatPhotoEmpty, InputChannel, User)
 
 from collector.telegram import TelegramCollector
@@ -56,11 +58,17 @@ class DirectoryClient(legacy.Client):
         if self.error:
             raise self.error
         if isinstance(request, GetParticipantsRequest):
-            assert isinstance(request.filter, ChannelParticipantsAdmins)
+            assert isinstance(request.filter, (ChannelParticipantsAdmins, ChannelParticipantsSearch))
             if request.offset == self.fail_at:
                 raise FloodWaitError(None, capture=12)
             start = 0 if self.repeat_page else request.offset
             return SimpleNamespace(participants=self.roles[start:start + min(request.limit, self.page_cap)], users=self.users, count=len(self.roles))
+        if isinstance(request, GetParticipantRequest):
+            user_id = request.participant.id
+            role = next((item for item in self.roles if item.user_id == user_id), None)
+            if role is None:
+                raise UserNotParticipantError(None)
+            return SimpleNamespace(participant=role)
         if isinstance(request, GetFullChatRequest):
             members = ChatParticipantsForbidden(request.chat_id) if self.forbidden else ChatParticipants(request.chat_id, self.roles, 1)
             return SimpleNamespace(full_chat=SimpleNamespace(participants=members), users=self.users)
@@ -78,6 +86,122 @@ class TelegramDirectoryTests(unittest.IsolatedAsyncioTestCase):
     def use_group(self, entity):
         self.client.entities[str(utils.get_peer_id(entity))] = entity
         return str(utils.get_peer_id(entity))
+
+    async def test_member_search_includes_ordinary_users_but_admin_directory_stays_admin_only(self):
+        chat_id = self.use_group(group(54))
+        self.client.users = [User(id=7, first_name='管理员'), User(id=8, first_name='普通专家', username='normal_expert')]
+        self.client.roles = [ChatParticipantAdmin(7, 1, NOW), ChatParticipant(8, 7, NOW)]
+        result = await self.collector.control('/members', {'chat_id':chat_id, 'q':'普通专家'})
+        self.assertEqual('ready',result['state'])
+        self.assertEqual(['8'],[item['sender_id'] for item in result['items']])
+        self.assertEqual('member', result['items'][0]['admin_kind'])
+        for term in ('8','normal_expert','@NORMAL_EXPERT'):
+            result = await self.collector.control('/members', {'chat_id':chat_id, 'q':term})
+            self.assertEqual(['8'],[item['sender_id'] for item in result['items']])
+        result = await self.collector.control('/admins', {'chat_id':chat_id})
+        self.assertEqual(['7'],[item['sender_id'] for item in result['items']])
+
+    async def test_channel_members_use_search_filter_and_paginate_beyond_first_fifty(self):
+        chat_id=self.use_group(group(55,channel=True))
+        self.client.page_cap=17
+        self.client.users=[User(id=i,first_name='普通专家'+str(i)) for i in range(1,108)]
+        self.client.roles=[ChannelParticipant(i,NOW) for i in range(1,108)]
+        seen=[]
+        cursor=None
+        for _ in range(3):
+            result=await self.collector.control('/members',{'chat_id':chat_id,'q':'普通','cursor':cursor})
+            self.assertEqual('ready',result['state'],result)
+            seen.extend(item['sender_id'] for item in result['items'])
+            cursor=result['next_cursor']
+        self.assertEqual(107,len(set(seen)))
+        self.assertEqual(107,len(seen))
+        self.assertIsNone(cursor)
+        self.assertTrue(all(isinstance(r.filter,ChannelParticipantsSearch) for r in self.client.rpc_calls))
+
+    async def test_channel_exact_username_requires_membership_not_global_user_lookup(self):
+        chat_id=self.use_group(group(56,channel=True))
+        self.client.entities['@normal_expert']=User(id=8,first_name='普通专家')
+        self.client.roles=[ChannelParticipant(8,NOW)]
+        result=await self.collector.control('/members',{'chat_id':chat_id,'q':'@normal_expert'})
+        self.assertEqual(['8'],[item['sender_id'] for item in result['items']])
+        self.client.roles=[]
+        result=await self.collector.control('/members',{'chat_id':chat_id,'q':'@normal_expert'})
+        self.assertEqual('unavailable',result['state'])
+        self.assertEqual([],result['items'])
+
+    async def test_member_permission_failure_and_flood_wait_are_not_reported_empty_success(self):
+        chat_id=self.use_group(group(57))
+        self.client.forbidden=True
+        result=await self.collector.control('/members',{'chat_id':chat_id})
+        self.assertEqual('member_enumeration_restricted',result['reason'])
+        self.client.forbidden=False
+        self.client.error=FloodWaitError(None,capture=18)
+        result=await self.collector.control('/members',{'chat_id':chat_id})
+        self.assertEqual('flood_wait',result['state'])
+        self.assertEqual(18,result['retry_after'])
+
+    async def test_auto_directory_collects_all_pages_and_refreshes_trusted_profile_without_granting_trust(self):
+        chat_id=self.use_group(group(60))
+        self.client.users=[User(id=i,first_name='现昵称'+str(i)) for i in range(1,108)]
+        self.client.roles=[ChatParticipantAdmin(i,1,NOW) for i in range(1,108)]
+        backend=self.collector.backend
+        persisted=[]
+        async def save(body):
+            persisted.append(copy.deepcopy(body))
+        backend.directory=save
+        source={'trusted_sender_ids':['7']}
+        await self.collector.connect()
+        await self.collector._refresh_directory(chat_id,source)
+        self.assertEqual(107,len(persisted[0]['admins']))
+        self.assertEqual([{'sender_id':'7','nickname':'现昵称7'}],persisted[0]['profiles'])
+        self.assertEqual(['7'],source['trusted_sender_ids'])
+        await self.collector._refresh_directory(chat_id,source)
+        self.assertEqual(1,len(persisted))
+        source['trusted_sender_ids'].append('8')
+        await self.collector._refresh_directory(chat_id,source)
+        self.assertEqual(2,len(persisted))
+        self.assertEqual(2,len(persisted[-1]['profiles']))
+
+    async def test_auto_directory_does_not_replace_last_complete_snapshot_with_partial_page(self):
+        chat_id=self.use_group(group(61,channel=True))
+        self.client.users=[User(id=i,first_name='专家'+str(i)) for i in range(1,108)]
+        self.client.roles=[ChannelParticipantAdmin(user_id=i,promoted_by=1,admin_rights=ChatAdminRights(),can_edit=False,date=NOW) for i in range(1,108)]
+        self.client.fail_at=50
+        persisted=[]
+        async def save(body):
+            persisted.append(body)
+        self.collector.backend.directory=save
+        await self.collector.connect()
+        await self.collector._refresh_directory(chat_id,{'trusted_sender_ids':['7']})
+        self.assertEqual('flood_wait',persisted[0]['state'])
+        self.assertEqual([],persisted[0]['admins'])
+
+    async def test_multiple_groups_run_concurrently_and_one_directory_failure_does_not_stop_messages(self):
+        backend=self.collector.backend
+        backend.source_items=[{'chat_id':self.use_group(group(i)),'trusted_sender_ids':['7'],'allow_media':True} for i in (62,63,64,65)]
+        persisted=[]
+        async def save(body):
+            persisted.append(body)
+            if body['chat_id']=='-62':
+                raise ConnectionError('isolated backend failure')
+        backend.directory=save
+        active,peak=0,0
+        original=self.client.iter_messages
+        async def messages(*args,**kwargs):
+            nonlocal active,peak
+            active+=1
+            peak=max(peak,active)
+            await asyncio.sleep(.01)
+            async for item in original(*args,**kwargs):
+                yield item
+            active-=1
+        self.client.iter_messages=messages
+        result=await self.collector.sync_once()
+        self.assertEqual(4,len(result['sources']))
+        self.assertEqual(4,len(persisted))
+        self.assertTrue(all(value['state']=='caught_up' for value in result['sources'].values()),result)
+        self.assertGreaterEqual(peak,2)
+        self.assertLessEqual(peak,3)
 
     async def test_search_runs_over_all_joined_groups_and_excludes_private_chats(self):
         self.client.dialogs = [dialog(group(index, f"普通群{index}")) for index in range(1, 107)]

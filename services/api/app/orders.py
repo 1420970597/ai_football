@@ -9,7 +9,6 @@ from fastapi import HTTPException
 
 from .auth import audit
 from .membership import has_entitlement
-from .review_state import fresh_quote
 from .security import decrypt_secret
 
 
@@ -42,7 +41,7 @@ async def invalid_policies(conn):
     )
 
 
-async def eligible_signal(conn, signal_id, max_age: int):
+async def eligible_signal(conn, signal_id, max_age: int | None = None):
     row = await conn.fetchrow(
         "SELECT s.*,m.source_id,m.platform_message_id,m.revision AS message_revision,m.deleted_at,m.media_state,"
         "e.enabled AS expert_enabled,src.enabled AS source_enabled,se.enabled AS trusted,f.phase AS current_phase,"
@@ -52,19 +51,19 @@ async def eligible_signal(conn, signal_id, max_age: int):
         "JOIN v2_experts e ON e.id=s.expert_id JOIN v2_expert_sources src ON src.id=m.source_id "
         "JOIN v2_source_experts se ON se.source_id=src.id AND se.expert_id=e.id JOIN v2_fixtures f ON f.id=s.fixture_id "
         "JOIN v2_current_quotes q ON q.fixture_id=s.fixture_id AND q.market_id=s.market_id AND q.period=s.period "
-        "AND q.line=s.line AND q.selection=s.selection WHERE s.id=$1", signal_id,
+        "AND q.market_kind=s.market_kind AND (q.line IS NOT DISTINCT FROM s.line OR "
+        "s.market_kind='winner' AND COALESCE(q.line,0)=0 AND COALESCE(s.line,0)=0) "
+        "AND q.selection=s.selection WHERE s.id=$1 FOR SHARE OF s", signal_id,
     )
     if not row:
         raise HTTPException(409, "推荐及原生盘口不可用")
     now = datetime.now(timezone.utc)
-    quote = {"source_updated_at": row["source_updated_at"], "price": row["current_price"], "status": row["status"]}
     if (row["outcome"] != "pending" or row["current_phase"] != "live" or row["sport"] != "football"
             or row["deleted_at"] or row["withdrawn_at"] or row["media_state"] != "ready" or not all((row["expert_enabled"], row["source_enabled"], row["trusted"]))
-            or not fresh_quote(quote, max_age, now) or row["recommendation_price"] != row["current_price"]
             or any(not row[key] for key in ("play_id", "market_instance_id", "selection_id"))
             or row["current_kind"] not in {"winner", "handicap", "total"}
             or row["created_at"] < now - timedelta(minutes=5)):
-        raise HTTPException(409, "推荐、来源、滚球状态或当前报价不满足实盘条件")
+        raise HTTPException(409, "推荐、来源或滚球盘口不满足实盘条件")
     latest = await conn.fetchval("SELECT max(revision) FROM v2_expert_messages WHERE source_id=$1 AND platform_message_id=$2",
                                  row["source_id"], row["platform_message_id"])
     if latest != row["message_revision"]:
@@ -111,7 +110,7 @@ async def reserve_signal(conn, user_id, signal_id, settings):
     previous = await conn.fetchrow("SELECT * FROM v2_bet_orders WHERE user_id=$1 AND signal_id=$2 AND account_id IS NOT NULL", user_id, signal_id)
     if previous:
         return previous
-    signal = await eligible_signal(conn, signal_id, settings.quote_max_age_seconds)
+    signal = await eligible_signal(conn, signal_id)
     if signal["expert_id"] not in policy["allowed_experts"]:
         raise HTTPException(403, "本人未允许此专家自动投注")
     stake = policy["stake_per_order"]
@@ -128,7 +127,10 @@ async def reserve_signal(conn, user_id, signal_id, settings):
                 "play_id": signal["play_id"], "selection_id": signal["selection_id"],
                 "selection_code": {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}.get(signal["selection"]),
                 "sport_id": "1", "chpid": signal["market_id"], "kind": signal["current_kind"], "period": signal["period"],
-                "line": str(signal["line"]), "price": str(signal["current_price"]), "phase": "live", "score_benchmark": score}
+                "line": str(signal["line"]) if signal["line"] is not None else None,
+                "price": str(signal["current_price"]), "reference_quote_price": str(signal["current_price"]),
+                "expert_recommendation_price": str(signal["recommendation_price"]),
+                "phase": "live", "score_benchmark": score}
     identity = uuid.uuid4()
     row = await conn.fetchrow(
         "INSERT INTO v2_bet_orders(id,user_id,signal_id,idempotency_key,state,stake,price,account_id,binding_revision,config_revision,"
@@ -152,18 +154,21 @@ async def protect_inflight_binding(conn,user_id):
                        "WHERE user_id=$1 AND state='submitting' AND (lease_until IS NULL OR lease_until<=now())",user_id)
 
 
-async def recheck_order(conn, order, settings):
+async def recheck_order(conn, order, settings, *, include_signal=False):
     account, policy = await account_policy(conn, order["user_id"], settings)
     if (account["id"] != order["account_id"] or account["binding_revision"] != order["binding_revision"]
             or account["config_revision"] != order["config_revision"] or policy["revision"] != order["policy_revision"]):
         raise HTTPException(409, "账户、会话或本人限额版本已变化")
-    signal = await eligible_signal(conn, order["signal_id"], settings.quote_max_age_seconds)
+    signal = await eligible_signal(conn, order["signal_id"])
     if signal["expert_id"] not in policy["allowed_experts"] or order["stake"] > policy["max_per_order"]:
         raise HTTPException(409, "推荐或单笔许可已失效")
     current = order["quote_snapshot"]
-    if any(str(signal[key]) != str(current[key]) for key in ("play_id", "market_instance_id", "selection_id")):
+    if any(str(signal[key]) != str(current[key]) for key in ("play_id", "market_instance_id")):
         raise HTTPException(409, "原生盘口标识已经变化")
-    return account
+    selection_code = {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}.get(signal["selection"])
+    if not selection_code or current["selection_code"] != selection_code:
+        raise HTTPException(409, "推荐方向与原生盘口不匹配")
+    return (account, signal) if include_signal else account
 
 
 def prepared_line(value, kind):
@@ -179,3 +184,14 @@ def prepared_line(value, kind):
         return sum(values)/len(values) if all(value.is_finite() for value in values) else None
     except Exception:
         return None
+
+
+def prepared_line_matches(raw, expected, kind):
+    """No-line winner is compatible with legacy zero, never a missing Asian line."""
+    if isinstance(raw, bool) or isinstance(expected, bool):
+        return False
+    actual = prepared_line(raw, kind)
+    wanted = prepared_line(expected, kind)
+    if kind == 'winner':
+        return expected != '' and actual == Decimal('0') and wanted == Decimal('0')
+    return actual is not None and wanted is not None and actual == wanted

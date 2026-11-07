@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
+import hmac
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 
 from .. import database
 from ..blobstore import image_mime, read_image
-from ..expert_statistics import DEFINITIONS, METRIC_SQL, metrics
+from ..expert_statistics import StatisticsScope, statistics_scope, summaries, trend
+from .. import message_read
+from .. import media_grants
 from .public import _decode_cursor, _encode_cursor, _has_entitlement
 
 router = APIRouter(prefix='/api/v1/public')
@@ -36,54 +42,36 @@ async def leagues(match_date: date | None = Query(default=None, alias='date'),
 
 
 @router.get('/experts/{expert_id}')
-async def expert_detail(expert_id: uuid.UUID, days: int = Query(default=30, ge=1, le=3650)):
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
-    row = await database.current_pool().fetchrow(
-        'SELECT e.id,e.display_nickname,e.avatar_object_key,e.enabled,' + METRIC_SQL +
-        ' FROM v2_experts e LEFT JOIN v2_expert_signals s ON s.expert_id=e.id AND s.created_at >= $2 AND s.created_at < $3 '
-        'WHERE e.id=$1 AND e.enabled GROUP BY e.id', expert_id, start, end,
-    )
-    if not row:
+async def expert_detail(expert_id: uuid.UUID, scope: StatisticsScope = Depends(statistics_scope)):
+    rows = await summaries(database.current_pool(), scope.start, scope.end, scope=scope, expert_id=expert_id)
+    if not rows:
         raise HTTPException(404, '专家不存在')
-    return {'expert': metrics(dict(row)), 'from_utc': start, 'to_utc': end, 'definitions': DEFINITIONS}
+    return {'expert': rows[0], **scope.response()}
 
 
 @router.get('/experts/{expert_id}/trend')
-async def expert_trend(expert_id: uuid.UUID, days: int = Query(default=365, ge=1, le=3650)):
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
-    rows = await database.current_pool().fetch(
-        "WITH daily AS (SELECT date_trunc('day',settled_at AT TIME ZONE 'UTC') AS day,"
-        "SUM(unit_net) AS net,COUNT(*) AS settled,SUM(effective_stake) AS effective "
-        "FROM v2_expert_signals WHERE expert_id=$1 AND outcome<>'pending' AND settled_at >= $2 AND settled_at < $3 "
-        "GROUP BY 1) SELECT day,net,settled,effective,SUM(net) OVER(ORDER BY day) AS cumulative_unit_net,"
-        "SUM(net) OVER(ORDER BY day)/SUM(settled) OVER(ORDER BY day) AS average_unit_net,"
-        "SUM(net) OVER(ORDER BY day)/NULLIF(SUM(effective) OVER(ORDER BY day),0) AS unit_roi "
-        "FROM daily ORDER BY day", expert_id, start, end,
-    )
-    return {'items': [dict(row) for row in rows], 'from_utc': start, 'to_utc': end,
-            'timezone': 'UTC', 'definitions': DEFINITIONS, 'basis': 'latest_settlement_at_latest_result'}
+async def expert_trend(expert_id: uuid.UUID, scope: StatisticsScope = Depends(statistics_scope)):
+    pool = database.current_pool()
+    summary = await summaries(pool, scope.start, scope.end, scope=scope, expert_id=expert_id)
+    if not summary:
+        raise HTTPException(404, '专家不存在')
+    return {'items': await trend(pool, expert_id, scope), 'summary': summary[0], **scope.response(),
+            'timezone': 'UTC', 'basis': 'latest_settlement_at_latest_result'}
 
 
 async def require_history(request: Request):
-    if not await _has_entitlement(request, 'expert_full_history'):
-        raise HTTPException(403, '完整专家记录需要会员权益')
+    return await message_read.reader(request)
 
 
-def media_links(message: dict):
-    message['media_objects'] = [
-        {k: v for k, v in media.items() if k not in {'object_key', 'bucket'}} |
-        {'url': f"/api/v1/public/messages/{message['id']}/media/{index}"}
-        for index, media in enumerate(message.get('media_objects') or [])
-    ]
+def media_links(message: dict, request, actor):
+    message['media_objects'] = message_read.message_projection(message, request=request, actor=actor)['media_objects']
     return message
 
 
 @router.get('/experts/{expert_id}/messages')
 async def expert_messages(expert_id: uuid.UUID, request: Request, cursor: str | None = Query(default=None, max_length=1000),
                           limit: int = Query(default=30, ge=1, le=100)):
-    await require_history(request)
+    actor = await require_history(request)
     cursor_scope = {'kind': 'expert_messages', 'expert_id': str(expert_id)}
     decoded = _decode_cursor(cursor, request, cursor_scope)
     try:
@@ -99,50 +87,81 @@ async def expert_messages(expert_id: uuid.UUID, request: Request, cursor: str | 
         "ORDER BY m.posted_at DESC,m.id DESC LIMIT $4", expert_id, decoded[0] if decoded else None, cursor_id, limit+1,
     )
     page = rows[:limit]
-    return {'items': [media_links(dict(row)) for row in page],
+    return {'items': [media_links(dict(row), request, actor) for row in page],
             'next_cursor': _encode_cursor(page[-1]['posted_at'], str(page[-1]['id']), request, cursor_scope) if len(rows)>limit and page else None}
 
 
 @router.get('/messages/{message_id}')
 async def message_detail(message_id: uuid.UUID, request: Request):
-    await require_history(request)
+    actor = await require_history(request)
     pool = database.current_pool()
     message = await pool.fetchrow(
         'SELECT m.*,e.display_nickname,s.display_name AS source_name FROM v2_expert_messages m '
         'JOIN v2_experts e ON e.id=m.expert_id JOIN v2_expert_sources s ON s.id=m.source_id WHERE m.id=$1', message_id,
     )
     if not message:
-        raise HTTPException(404, '消息原文不存在')
-    traces = await pool.fetch(
-        'SELECT j.id AS review_id,j.state,j.last_error,t.sequence_no,t.trace_kind,t.payload,t.created_at '
-        'FROM v2_analysis_jobs j LEFT JOIN v2_analysis_traces t ON t.job_id=j.id '
-        'WHERE j.message_id=$1 ORDER BY j.created_at,t.sequence_no', message_id,
-    )
-    signals = await pool.fetch(
-        "SELECT s.*,f.competition_name,f.home_team,f.away_team,f.kickoff_at,"
-        "(SELECT ev.evidence->>'quote_id' FROM v2_quote_evidence ev WHERE ev.reference_id=s.id "
-        "AND ev.evidence_kind='expert_signal' ORDER BY ev.captured_at LIMIT 1) AS quote_id "
-        'FROM v2_expert_signals s '
-        'JOIN v2_fixtures f ON f.id=s.fixture_id WHERE s.message_id=$1 ORDER BY s.created_at,s.id', message_id,
-    )
-    return {'message': media_links(dict(message)), 'analysis': [dict(row) for row in traces],
-            'signals': [dict(row) for row in signals]}
+        raise message_read.private_error(404, '消息原文不存在')
+    return JSONResponse(jsonable_encoder(await message_read.detail(pool, request, actor, message)), headers=message_read.HEADERS)
+
+
+@router.get('/messages/{message_id}/traces')
+async def message_traces(message_id: uuid.UUID, request: Request,
+                         limit: int = Query(default=30, ge=1, le=100),
+                         cursor: str | None = Query(default=None, max_length=1000)):
+    actor = await require_history(request)
+    pool = database.current_pool()
+    if not await pool.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_messages WHERE id=$1)', message_id):
+        raise message_read.private_error(404, '消息原文不存在')
+    return JSONResponse(jsonable_encoder(await message_read.trace_page(pool, request, actor, message_id, limit=limit, cursor=cursor)),
+                        headers=message_read.HEADERS)
+
+
+@router.get('/messages/{message_id}/signals')
+async def message_signals(message_id: uuid.UUID, request: Request,
+                          limit: int = Query(default=30, ge=1, le=100),
+                          cursor: str | None = Query(default=None, max_length=1000)):
+    actor = await require_history(request)
+    pool = database.current_pool()
+    if not await pool.fetchval('SELECT EXISTS(SELECT 1 FROM v2_expert_messages WHERE id=$1)', message_id):
+        raise message_read.private_error(404, '消息原文不存在')
+    return JSONResponse(jsonable_encoder(await message_read.signal_page(pool, request, actor, message_id, limit=limit, cursor=cursor)),
+                        headers=message_read.HEADERS)
+
+
+@router.get('/messages/{message_id}/tools/{trace_id}')
+async def message_tool_response(message_id: uuid.UUID, trace_id: uuid.UUID, request: Request):
+    await require_history(request)
+    return JSONResponse(jsonable_encoder(await message_read.tool_response(database.current_pool(), message_id, trace_id)),
+                        headers=message_read.HEADERS)
 
 
 @router.get('/messages/{message_id}/media/{index}')
 async def message_media(message_id: uuid.UUID, index: int, request: Request):
-    await require_history(request)
-    objects = await database.current_pool().fetchval('SELECT media_objects FROM v2_expert_messages WHERE id=$1', message_id)
+    actor = await require_history(request)
+    return await read_message_media(message_id, index, request=request, actor=actor)
+
+
+async def read_message_media(message_id: uuid.UUID, index: int, *, request: Request, actor, context='user'):
+    row = await database.current_pool().fetchrow('SELECT id,revision,media_objects FROM v2_expert_messages WHERE id=$1', message_id)
+    objects = row['media_objects'] if row else None
     if not objects or index < 0 or index >= len(objects):
-        raise HTTPException(404, '消息图片不存在')
+        raise message_read.private_error(404, '消息图片不存在')
     media = objects[index]
+    if not isinstance(media, dict):
+        raise message_read.private_error(415, '图片存储证据无效')
+    media_grants.verify(request.app.state.settings.session_secret, actor, dict(row), index, media, context,
+                        request.query_params.get('grant'))
     mime = media.get('mime_type')
     if mime not in {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}:
-        raise HTTPException(415, '图片格式不可展示')
+        raise message_read.private_error(415, '图片格式不可展示')
     try:
         content = await read_image(media['object_key'])
         if image_mime(content) != mime:
             raise ValueError('media type mismatch')
+        if media.get('sha256') and not hmac.compare_digest(hashlib.sha256(content).hexdigest(), str(media['sha256'])):
+            raise ValueError('media digest mismatch')
+        if media.get('bytes') is not None and len(content) != media['bytes']:
+            raise ValueError('media length mismatch')
     except Exception:
-        raise HTTPException(503, '远端图片暂不可读') from None
+        raise message_read.private_error(503, '远端图片暂不可读') from None
     return Response(content, media_type=mime, headers={'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline'})

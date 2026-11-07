@@ -1,0 +1,9 @@
+# E224 模型上下文与盘口体积研究
+
+更新时间：2026-11-04 15:04 UTC。状态：研究中，不修改线上模型或提示。
+
+目标：降低模型重复接收的候选和盘口体积及空查询次数，保留完整意图和可回溯工具证据。责任目录services/api、services/hermes-mcp、integrations/hermes、tests、reports；前置E222完整窗及E223候选。真实eccf31c1审核11搜索、模型176146.744ms/usage178389tokens；所有盘口筛选参数为空，盘口工具8829.652ms、快照17096字节46选项。SYSTEM_PROMPT仍要求全部系统盘口，与技能优先窄筛选有冲突。提示变更必须保留当前模型治理provenance，不能直接改哈希、填人工作假标注或关闭版本核验。
+
+只读原快照严格校验call_id/分块/字节/SHA后，使用现有_market_matches离线重放：原SHA9bdc4ef699dd6dee78310cd96ebdd69646c46c8d56c950f1a59a94782b5ff498；玩法+期间22选项9597字节，准确意图1选项3134字节。已实际录入quote_id均完整保留；这是离线同数据比较，不代表已减少真实模型延迟。失败记录：首次chunk查询未加job_id导致7秒statement timeout/exit1，立即改按job_id索引范围及原call_id读取后exit0，未提高预算。未将空文件当通过。
+
+决策/缺口：不把E221单样本JSON/low结果直接用于完整工具agent；固定Hermes源码API只确认reasoning/service_tier的model_options，不能推定response_format会传入上游。不移除MCP共享盘口准入，collector存在refresh_busy/2秒间隔，取消串行未必提升有效录入。优先用可独立验证的检索召回减少空查询；盘口筛选策略另准备真实同样本对照及合法版本发布路径。验收需所有原推荐覆盖、身份/期间/方向/线一致、停盘/未知时效不放行、模型总耗时及各工具耗时分别统计；未达三秒如实保留。失败不截断分页、不猜别名或放宽绑定。

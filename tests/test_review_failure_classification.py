@@ -1,9 +1,11 @@
 import asyncio
 import unittest
+from unittest.mock import patch
 
 import httpx
 
-from app.worker import LeaseLost, failure_category
+from app.hermes_client import HermesProviderUnavailable
+from app.worker import LeaseLost, failure_category, retry_delay_seconds
 
 
 class ReviewFailureClassificationTests(unittest.TestCase):
@@ -24,6 +26,20 @@ class ReviewFailureClassificationTests(unittest.TestCase):
         self.assertEqual(("visual_input_invalid", False), failure_category(
             RuntimeError("remote image has unsupported Telegram image type"),
         ))
+
+    def test_provider_error_uses_transient_category_and_longer_backoff(self):
+        self.assertEqual(("provider_transient", True), failure_category(HermesProviderUnavailable()))
+        with patch('app.worker.random.randint', return_value=0):
+            self.assertEqual(60, retry_delay_seconds('provider_transient', 1))
+            self.assertEqual(120, retry_delay_seconds('provider_transient', 2))
+            self.assertEqual(900, retry_delay_seconds('provider_transient', 8))
+            self.assertEqual(900, retry_delay_seconds('network', 8))
+            self.assertEqual(300, retry_delay_seconds('internal', 8))
+
+    def test_persistent_retry_backoff_uses_bounded_jitter(self):
+        with patch('app.worker.random.randint', return_value=60) as jitter:
+            self.assertEqual(960, retry_delay_seconds('provider_transient', 8))
+            jitter.assert_called_once_with(0, 60)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from types import SimpleNamespace
@@ -6,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import uuid
 
 import asyncpg
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import httpx
 
 from app import database
@@ -46,7 +47,13 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
             "source_health": {
                 "leyu": {"state": "unavailable", "last_error": "websocket_http_403", "fixtures": 3, "config_version": 7},
                 "websocket": {"state": "backoff", "reconnects": 2, "queue_depth": 4,
+                              "last_delivery_error_category": "fixture_quote_budget_exceeded",
+                              "subscription_expected": 100, "subscription_send_missing": 2,
+                              "subscription_miss_ratio": None, "queue_alert_state": "degraded",
                               "source_lag_ms_p95": 1250.5, "delivery_age_ms_p95": 2100,
+                              "quote_source_lag_ms_p95": 5100.5, "quote_source_lag_unknown_count": 3,
+                              "quote_source_lag_too_old_count": 2, "quote_source_lag_window_size": 20,
+                              "quote_delivery_age_ms_p95": 6200, "quote_delivery_age_samples": 15,
                               "raw_payload": {"token": "must-not-leak"}},
                 "future": {"secret": "must-not-leak"},
             },
@@ -59,8 +66,18 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("websocket_http_403", result["sources"]["leyu"]["last_error"])
         self.assertEqual(7, result["sources"]["leyu"]["config_version"])
         self.assertEqual(4, result["sources"]["websocket"]["queue_depth"])
+        self.assertEqual('fixture_quote_budget_exceeded', result['sources']['websocket']['last_delivery_error_category'])
         self.assertEqual(1250.5, result["sources"]["websocket"]["source_lag_ms_p95"])
         self.assertEqual(2100, result["sources"]["websocket"]["delivery_age_ms_p95"])
+        self.assertEqual(5100.5, result['sources']['websocket']['quote_source_lag_ms_p95'])
+        self.assertEqual(3, result['sources']['websocket']['quote_source_lag_unknown_count'])
+        self.assertEqual(2, result['sources']['websocket']['quote_source_lag_too_old_count'])
+        self.assertEqual(20, result['sources']['websocket']['quote_source_lag_window_size'])
+        self.assertEqual(6200, result['sources']['websocket']['quote_delivery_age_ms_p95'])
+        self.assertEqual(15, result['sources']['websocket']['quote_delivery_age_samples'])
+        self.assertEqual(2, result['sources']['websocket']['subscription_send_missing'])
+        self.assertIsNone(result['sources']['websocket']['subscription_miss_ratio'])
+        self.assertEqual('degraded', result['sources']['websocket']['queue_alert_state'])
         self.assertNotIn("raw_payload", result["sources"]["websocket"])
         self.assertNotIn("account", json.dumps(result))
         self.assertNotIn("future", result["sources"])
@@ -72,6 +89,89 @@ class CollectorHealthTests(unittest.IsolatedAsyncioTestCase):
         self._Client.response = self._Response(403, {})
         with patch.object(operations.httpx, "AsyncClient", self._Client):
             self.assertEqual({"state": "rejected", "reason": "http_403"}, await operations.collector_health(request))
+
+
+class DiagnosticConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    def request(self, probe):
+        state = SimpleNamespace(settings=SimpleNamespace(),
+            hermes_probe=SimpleNamespace(check=lambda: probe('gateway')),
+            storage_probe=SimpleNamespace(check=lambda: probe('storage')),
+            mcp_probe=SimpleNamespace(check=lambda: probe('mcp')))
+        return SimpleNamespace(app=SimpleNamespace(state=state))
+
+    async def test_all_independent_probes_start_without_waiting_for_other_results(self):
+        started = set()
+        ready = asyncio.Event()
+        values = {'database': ('rows', 'verified', 'stats', None), 'gateway': 'unavailable',
+                  'storage': 'unconfigured', 'mcp': 'unverified',
+                  'collector': {'state': 'rejected', 'reason': 'http_403'}}
+
+        async def probe(name):
+            started.add(name)
+            if len(started) == 5:
+                ready.set()
+            await asyncio.wait_for(ready.wait(), 1)
+            return values[name]
+
+        request = self.request(probe)
+        with patch.object(operations, '_diagnostic_database', new=lambda _: probe('database')), \
+             patch.object(operations, 'collector_health', new=lambda _: probe('collector')):
+            result = await operations._diagnostic_snapshot(request)
+        self.assertEqual(set(values), started)
+        self.assertEqual(list(values.values()), result)
+
+    async def test_probe_failure_cancels_and_drains_all_siblings(self):
+        started, finished = set(), set()
+        ready = asyncio.Event()
+
+        async def probe(name):
+            started.add(name)
+            if len(started) == 5:
+                ready.set()
+            try:
+                await ready.wait()
+                if name == 'gateway':
+                    raise RuntimeError('isolated probe failure')
+                await asyncio.Event().wait()
+            finally:
+                finished.add(name)
+
+        request = self.request(probe)
+        with patch.object(operations, '_diagnostic_database', new=lambda _: probe('database')), \
+             patch.object(operations, 'collector_health', new=lambda _: probe('collector')):
+            with self.assertRaisesRegex(RuntimeError, 'isolated probe failure'):
+                await operations._diagnostic_snapshot(request)
+        self.assertEqual(5, len(started))
+        self.assertEqual(started, finished)
+
+    async def test_deadline_cancels_all_probes_and_endpoint_returns_real_timeout(self):
+        started, finished = set(), set()
+
+        async def probe(name):
+            started.add(name)
+            try:
+                await asyncio.Event().wait()
+            finally:
+                finished.add(name)
+
+        request = self.request(probe)
+        with patch.object(operations, 'DIAGNOSTIC_TIMEOUT_SECONDS', .05), \
+             patch.object(operations, 'require_admin', AsyncMock(return_value={'role': 'admin'})), \
+             patch.object(operations, '_diagnostic_database', new=lambda _: probe('database')), \
+             patch.object(operations, 'collector_health', new=lambda _: probe('collector')):
+            with self.assertRaises(HTTPException) as result:
+                await operations.diagnostics(request)
+        self.assertEqual(503, result.exception.status_code)
+        self.assertEqual(5, len(started))
+        self.assertEqual(started, finished)
+
+    async def test_unauthorized_request_never_starts_probes(self):
+        with patch.object(operations, 'require_admin', AsyncMock(side_effect=HTTPException(401))), \
+             patch.object(operations, '_diagnostic_snapshot', AsyncMock()) as snapshot:
+            with self.assertRaises(HTTPException) as result:
+                await operations.diagnostics(SimpleNamespace())
+        self.assertEqual(401, result.exception.status_code)
+        snapshot.assert_not_awaited()
 
 
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'), 'requires task-owned temporary database')
@@ -114,6 +214,9 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result['freshness']['telegram_checkpoint_at'])
         self.assertIsNone(result['freshness']['telegram_high_water'])
         self.assertEqual(0,result['unknown_orders']['count'])
+        tasks = {item['key']: item for item in result['tasks']}
+        self.assertEqual('clear', tasks['unknown_orders']['state'])
+        self.assertEqual('unverified', tasks['migration_failures']['state'])
 
     async def test_anonymous_is_rejected_and_order_access_is_read_only(self):
         self.assertEqual(401,(await self.http.get('/api/v1/admin/orders')).status_code)
@@ -123,6 +226,19 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([],response.json()['items'])
             self.assertTrue(response.json()['read_only'])
             self.assertEqual(405,(await self.http.post('/api/v1/admin/orders')).status_code)
+
+    async def test_provider_health_uses_recent_saved_result_without_claiming_accuracy(self):
+        source, expert, message, job = [uuid.uuid4() for _ in range(4)]
+        await self.pool.execute("INSERT INTO v2_expert_sources(id,platform_chat_id,display_name) VALUES($1,'isolated-model','模型健康样本')", source)
+        await self.pool.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,'8877','样本作者')", expert)
+        await self.pool.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) VALUES($1,$2,$3,'1','纯测试',now())", message,source,expert)
+        await self.pool.execute("INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key) VALUES($1,$2,'unresolved','isolated-model-health')",job,message)
+        await self.pool.execute("INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) VALUES($1,$2,1,'hermes_result',$3)",uuid.uuid4(),job,{'model':'hermes-agent','content':'private content must not be forwarded'})
+        with patch.object(operations,'require_admin',AsyncMock(return_value=self.actor)), patch.dict(os.environ,{},clear=True):
+            result=(await self.http.get('/api/v1/admin/diagnostics')).json()
+        self.assertEqual('recent_success',result['hermes']['provider'])
+        self.assertEqual('persisted_framework_result_not_accuracy',result['hermes']['basis'])
+        self.assertNotIn('private content',json.dumps(result))
 
     async def test_real_order_rows_exclude_secrets_and_cursor_is_bound_to_filters(self):
         user, account, source, expert, message = [uuid.uuid4() for _ in range(5)]

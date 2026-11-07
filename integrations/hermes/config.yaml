@@ -8,9 +8,31 @@ providers:
     api: ${HERMES_PROVIDER_BASE_URL}
     key_env: HERMES_PROVIDER_API_KEY
     transport: chat_completions
+  # Named custom routes resolve to agent.provider=custom in the pinned runtime.
+  # Per-model budgets must use that runtime id, not the route's display name.
+  custom:
+    models:
+      deepseek-v4.1-flash:
+        timeout_seconds: 30
+        stale_timeout_seconds: 30
+      cline-pass/deepseek-v4.1-flash:
+        timeout_seconds: 30
+        stale_timeout_seconds: 30
+
+# The gateway resolves "." to the profile home, not the process working dir.
+# Keep project rules pinned to the read-only mounted workspace.
+terminal:
+  cwd: /workspace
 
 agent:
   max_turns: 128
+  # The current visual route accepts explicit none; keep other model defaults.
+  reasoning_overrides:
+    deepseek-v4.1-flash: false
+    cline-pass/deepseek-v4.1-flash: false
+  # Durable review jobs own transient retries and retain per-attempt evidence.
+  api_max_retries: 1
+  auto_recovery_cycles: 0
   image_input_mode: native
   disabled_toolsets:
     - web
@@ -30,21 +52,51 @@ agent:
     - debugging
 
 skills:
+  auto_load:
+    - expert-review
   external_dirs:
     - /workspace/skills
+
+# Review jobs already have stable IDs; generating chat titles adds an unrelated
+# provider request for every independent review session.
+auxiliary:
+  title_generation:
+    enabled: false
 
 tools:
   tool_search:
     enabled: "off"
 
+# A complete 60-quote response is ~48–60K characters before the MCP JSON
+# envelope. The default 50K spill threshold hides it behind a file that this
+# deliberately restricted agent cannot read. Keep the existing finite 100K
+# per-result / 200K per-turn framework limits; do not grant filesystem tools.
+tool_budget:
+  mcp_result_size_chars: 100000
+
 platform_toolsets:
   api_server:
     - expert-skills
     - mcp-football
+    - mcp-football_parallel
 
 mcp_servers:
   football:
     url: http://hermes-mcp:8090/mcp
+    supports_parallel_tool_calls: true
+    headers:
+      Authorization: "Bearer ${EXPERT_MCP_TOKEN}"
+    tools:
+      resources: false
+      prompts: false
+      include:
+        - search_matches
+        - resolve_match
+        - list_match_markets
+        - record_expert_signals
+  football_parallel:
+    url: http://hermes-mcp:8090/mcp
+    supports_parallel_tool_calls: true
     headers:
       Authorization: "Bearer ${EXPERT_MCP_TOKEN}"
     tools:

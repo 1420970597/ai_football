@@ -1,0 +1,25 @@
+# E229 存储传输延迟调查
+
+更新时间：2026-11-04 15:53 UTC。状态：研究中，未改生产连接或资源。
+
+目标：区分数据库锁竞争、远端网络和共享SSH转发导致的长尾，避免把所有5秒超时都误判为业务锁。责任目录infra/tunnel、reports、docs/platform-v2；前置E227冻结观察及只读数据库权限。中段237个TG事件请求有3个503，跨接口12次TimeoutError，包含readyz的简单fetchval、collector_config、renewal_config与checkpoint，而不只是比赛锁。单凭这些日志不能确定网络根因。
+
+现有gateway.py把PG和S3转发放在同一个SSH进程/传输中，CPU上限0.25核；累计throttle计数很高，但瞬时CPU约0.31%，累计值不能证明本窗饱和。设计：先记录当前及短窗cgroup差值；建立项目归属、资源受限、使用原受保护主机校验配置的临时第二转发，只作只读SELECT1对照，原连接/服务不重启，TLS策略不降低。每条连接只读、每秒至多一个探针、连接及命令原5秒界限，至少3分钟成对样本。记录连接失败与P50/P95/max，不输出DSN/密钥或SSH原始错误。禁止基于单个ping或一次成功切换生产；如新连接TLS身份不匹配，应保留失败而非关闭验证。
+
+若对照支持传输隔离，再单独记录分离PG/S3隧道设计、故障恢复、预算、兼容和回滚测试；仍须新完整30分钟验收。若两侧同时慢，继续查远端资源及链路，不无依据加CPU或延长API超时。本阶段不修改持久数据。
+
+15:54对照开始：临时ai-football-e229-transport-probe使用原固定镜像和只读/run/storage配置，0.1核96MiB，无宿主端口，独立SSH运输。未重启或修改原隧道；已接入项目既有egress/storage-private网络。首探针早于SSH就绪，新路由ConnectionRefusedError退出，保留原证据，不记成功；Docker health真实healthy后同脚本第02轮重跑，61对/3秒间隔/原5秒截止，纯只读SELECT1。生产30分钟窗口仍冻结E227。
+
+16:00成对结果：第02轮仍ConnectionRefused，诊断TCP15432两个目标均可连接；asyncpg显式覆盖host后需同时保留原port，补明确15432后第03轮15:56:02–15:59:15完整61对exit0，双方0失败。shared P50 211.657/P95 263.655/max427.95ms，独立新运输121.501/125.192/243.079ms。原TLS/数据库/SQL/命令预算未降低。首TCP诊断漏docker-i未执行，纠正后真实两端连接成功，未将空输出计通过。此对照证明新运输更快，不能单独分辨新连接与PG/S3隔离各自贡献，也不能排除更长窗口故障。
+
+设计已记录：保留现有单storage-tunnel服务、端点、配置、TLS和总CPU预算，不改变业务DSN/权限。只把监督器内PG和S3两个-L分为两条独立SSH进程，显式禁止ControlMaster复用，继续严格主机校验/固定目的/连接截止。任一子进程失败必须关闭监听、终止两者并退出供容器恢复；信号也清理所有子进程，5秒等待后kill。无额外常驻服务/公网端口/配置秘密副本。ssh_command默认combined供兼容，run明确database/media。先命令边界/失败与退出/原代理真实转发测试，再冻结构建、临时同源真实只读连通及成对指标；固定E227窗口结束后才能idle切换，台账与原图复测，原镜像可回滚，现有数据不清理。不得用旧61对结果冒称新分离实现验收。
+
+16:03代码与定向通过：实现两个独立SSH监督进程，保留combined命令兼容，显式ControlMaster=no/ControlPath=none，原PG/S3白名单/主机校验/端点不变；任一失败关闭真实代理监听并收割两个子进程，部分启动失败也清理已启动进程。初15项2.026秒exit0；补充真实Python子进程模拟SSH存活并发送监督器SIGTERM（不访问上游），最终16项3.022秒exit0，实际两个子进程退出/代理端口关闭。冻结后完整Docker回归及同源临时真实隧道验证，尚未动原容器。临时对照仍保持项目归属，之后按任务清理。
+
+16:10同源真实分离隧道验收：固定264770fd76227937a12dc2f45a5d339da09bb873构建exit0，镜像d9b932d91464022faef29d6e2aec09f5e3f3c2cdfb529a4404fb351fec6f2552/full revision核对。临时新镜像实际两条独立SSH（docker top首命令缺PID列失败，补pid,comm核实），原配置只读、0.1核96MiB。15:05记录应为16:05:12左右至16:08:23的61对纯SELECT1全部成功：对照P50/P95 179.212/264.536ms，分离候选131.115/146.391ms/max262.129ms。该轮与早先新连接对照不混用。故障试验仅向任务临时容器两条SSH中的一个发SIGTERM，监督器检测断开、关闭代理并退出1，符合预期，不影响原服务；任务容器已删除，原存储隧道仍原ID/资源。临时E225 PG及网络已按归属清理。完整冻结后端仍运行，未部署。
+
+16:13切换门禁决策：原gate持有调度advisory锁的数据库连接也经过现有隧道，直接替换会使门禁失效。因此先启动受限的任务临时已验证分离隧道；仅gate容器通过extra_hosts把原storage-tunnel主机名解析到临时端点，原DSN/端口/TLS身份不变，生产服务仍原路由。Compose run当前版本没有--add-host，已在发布前help核实，改为仅该gate的Compose DNS覆盖，并单独config --quiet验证。自然idle后先停止已空闲worker，再替换本项目storage-tunnel，ready后更新API/worker；每阶段检查gate仍held/无失败，门禁释放后才移除临时运输。临时多0.1核96MiB，不常驻；正式隧道仍0.25核128MiB，Hermes/MCP/web/remote-link/远端采集不重启。旧镜像和配置保留可回退，原持久数据不删除。当前完整回归未结束，尚未启动idle gate或切生产。
+
+16:15完整合并冻结验证通过：264770fd76227937a12dc2f45a5d339da09bb873完整1269项561.934秒exit0/无失败错误跳过/恢复差异{}；报告SHA84089ab44061fceac42674ee0165c4317c5a719ac1e2c889eb57554f67fa4853。同源API buildx exit0，镜像2cb2d23772a4e1140e0b9a3563a9d8627fd806ccff7dc87b796374f67d5af6f7/full revision核对；隧道镜像同前。首次候选工作目录相对SHA/标识失败，已在根目录重新核实、未更改测试源。受限临时handoff运输healthy，gate开始；正式15场台账before只读保存，尚未切生产。原API/MCP/web/Hermes等资源快照保留。
+
+16:20上线及原数据验证：16:14:23.808075暂停claim，16:14:41.665182自然idle，独立handoff运输门禁跨原隧道更换持续有效，deploy exit0/API ready200/worker运行/gate正常release。正式隧道仍0.25核128MiB，原DSN/TLS/配置/端点不变，MCP/web/Hermes/remote-link未重启；临时运输已删。正常15场rebuild200；before/after38原推荐报价/38结果/80台账版本及created_at全一致exit0。真实Chromium1440/390各2详情exit0，原图解码、同attempt回执、模型文本/API一致、无JS错误横溢。新冻结1800秒窗口16:16:38.417428起，16:46:39后终审，不用前几分钟健康取代完整观察。E230引用图候选未部署。

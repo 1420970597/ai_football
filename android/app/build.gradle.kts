@@ -9,8 +9,8 @@ android {
         applicationId = "com.aifootball.platform"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20000
-        versionName = "2.0.0-dev"
+        versionCode = providers.gradleProperty("platformVersionCode").orElse("20000").get().toInt()
+        versionName = providers.gradleProperty("platformVersionName").orElse("2.0.0-dev").get()
     }
     buildTypes {
         debug { applicationIdSuffix = ".dev"; versionNameSuffix = "+debug" }

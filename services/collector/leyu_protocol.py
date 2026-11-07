@@ -29,14 +29,29 @@ MARKETS = {
     "2": ("total", "full_time", "全场大小"),
     "18": ("total", "first_half", "上半场大小"),
 }
+# Source ids are sport scoped. These basketball full-game ids and native
+# selection codes were verified from an authorized current detail response.
+# Do not recognize them for football, an unknown sport, or a missing csid.
+SPORT_MARKETS = {
+    "1": {
+        "10": ("team_total", "full_time", "主队进球大小"),
+        "11": ("team_total", "full_time", "客队进球大小"),
+    },
+    "2": {
+        "38": ("total", "full_time", "全场大小"),
+        "39": ("handicap", "full_time", "全场让分"),
+    },
+}
 
 
 class LeyuError(RuntimeError):
     """只携带脱敏类别及短业务码，不包含响应、URL 或凭据。"""
 
-    def __init__(self, category: str, code: str = ""):
+    def __init__(self, category: str, code: str = "", *, operation: str = "", http_status: int | None = None):
         self.category = category
         self.code = code if re.fullmatch(r"[0-9]{1,12}", code) else ""
+        self.operation = operation if operation in {"fixture_snapshot", "odds_batch", "odds_single"} else ""
+        self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
         super().__init__(category + (f" code={self.code}" if self.code else ""))
 
 
@@ -45,7 +60,10 @@ class AuthExpired(LeyuError):
 
 
 class RateLimited(LeyuError):
-    pass
+    def __init__(self, category: str, code: str = "", *, retry_after_seconds: int | None = None, **kwargs):
+        super().__init__(category, code, **kwargs)
+        self.retry_after_seconds = (min(900, max(0, retry_after_seconds))
+                                    if type(retry_after_seconds) is int else None)
 
 
 def objects(value: Any) -> list[Mapping[str, Any]]:
@@ -181,7 +199,8 @@ def phase_for(raw: Mapping[str, Any]) -> str:
         return "cancelled"
     if status in {"1", "live"}:
         return "live"
-    if status in {"0", "scheduled"}:
+    # Existing authorized protocol: 110 means about to start, not cancelled.
+    if status in {"0", "110", "scheduled"}:
         return "scheduled"
     # 未核验的上游状态不映射为可交易阶段。
     return "cancelled"
@@ -263,8 +282,15 @@ def parse_quotes(payload: Any, fixture_id: str, updated_at: datetime | None = No
     received = timestamp(updated_at or datetime.now(timezone.utc))
     result: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in _market_rows(payload, fixture_id):
+        sport_markets = SPORT_MARKETS.get(str(row.get("csid") or ""), {})
         definitions = {str(item.get("chpid")): item for item in objects(row.get("hpsPns", []))}
         containers = objects(row.get("hpsData", [])) or [row]
+        # The authoritative single-match response also carries playData next
+        # to data. Only the caller's same-match, verified native markets enter
+        # this extra container. Their main/additional status is not attested.
+        supplementary = objects(row.get("_verified_team_play_data", []))
+        if supplementary:
+            containers = [*containers, {"hpsAdd": supplementary}]
         for container in containers:
             for key in ("hps", "hpsAdd"):
                 for block in objects(container.get(key, [])):
@@ -272,17 +298,26 @@ def parse_quotes(payload: Any, fixture_id: str, updated_at: datetime | None = No
                     if not market_id:
                         continue
                     definition = definitions.get(market_id, {})
-                    kind, period, default_name = MARKETS.get(market_id, ("unsupported", f"source_{market_id}", market_id))
+                    kind, period, default_name = sport_markets.get(
+                        market_id, MARKETS.get(market_id, ("unsupported", f"source_{market_id}", market_id)))
+                    if kind == "team_total" and str(block.get("hpid")) != market_id:
+                        kind, period = "unsupported", f"source_{market_id}"
                     name = str(definition.get("hpn") or block.get("hpn") or default_name)
                     for line in objects(block.get("hl", [])):
                         raw_line = line.get("hv", line.get("line"))
-                        numeric_line = Decimal("0") if kind == "winner" and raw_line in (None, "") else parse_line(raw_line)
-                        if numeric_line is None:
+                        numeric_line = parse_line(raw_line)
+                        if kind == "winner":
+                            if raw_line not in (None, "") and numeric_line != Decimal("0"):
+                                continue
+                            numeric_line = None
+                        elif numeric_line is None:
                             continue
                         for option in objects(line.get("ol", [])):
                             selection_raw = str(option.get("ot") or "")
                             selection = {"1": "home", "2": "away", "X": "draw", "Over": "over", "Under": "under"}.get(selection_raw)
                             if not selection:
+                                continue
+                            if kind == "team_total" and selection not in {"over", "under"}:
                                 continue
                             try:
                                 price = Decimal(str(option.get("ov", ""))) / ODDS_SCALE
@@ -296,9 +331,9 @@ def parse_quotes(payload: Any, fixture_id: str, updated_at: datetime | None = No
                                 status = "suspended"
                             item = {
                                 "market_id": market_id, "market_name": name, "market_kind": kind, "kind": kind,
-                                "period": period, "line": str(numeric_line), "selection": selection,
+                                "period": period, "line": str(numeric_line) if numeric_line is not None else None, "selection": selection,
                                 # 只有明确赛前才可用整期比分；滚球基线需规则证据后单独标定。
-                                "score_basis": "full_period" if str(row.get("ms", "")) in {"0", "scheduled"} else "unknown",
+                                "score_basis": "full_period" if phase_for(row) == "scheduled" else "unknown",
                                 "price": str(price) if price is not None else None,
                                 "source_updated_at": source_time, "received_at": received,
                                 "source_time_quality": "known" if source_time else "unknown", "status": status,

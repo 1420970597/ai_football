@@ -7,7 +7,6 @@ import {
   toast,
   jsonTrace,
   newId,
-  confirmAction,
 } from "./ui.js";
 let app;
 let exportedPage = null;
@@ -119,24 +118,6 @@ async function issueRecovery(userId, label) {
   };
 }
 
-async function mfaRecoveryCodes() {
-  if (
-    !(await confirmAction(
-      "生成新一组管理员恢复码？旧恢复码将失效。每个码仅可使用一次，请离线妥善保管。",
-    ))
-  )
-    return;
-  try {
-    const data = await adminApi("/mfa/recovery-codes", { method: "POST" });
-    app.dialog(
-      "管理员一次性恢复码",
-      `<section class="detail-section" data-once-secret><p class="notice">${esc(data.message || "恢复码只显示一次，请离线保存。")}</p><pre class="raw-text">${esc((data.codes || []).join("\n"))}</pre><p class="form-note">恢复登录仍需管理员邮箱和密码。关闭窗口后页面不保留恢复码。</p></section>`,
-    );
-  } catch (error) {
-    toast(error.message);
-  }
-}
-
 export function initIdentity(context) {
   app = context;
   document.addEventListener("click", async (event) => {
@@ -144,8 +125,6 @@ export function initIdentity(context) {
     if (!button) return;
     if (button.hasAttribute("data-password-recovery"))
       return passwordRecovery();
-    if (button.hasAttribute("data-use-admin-recovery"))
-      return app.auth("admin-recovery");
     if (button.dataset.export) return exportSection(button.dataset.export);
     if (button.dataset.exportNext)
       return exportSection(button.dataset.exportNext, button.dataset.cursor);
@@ -154,7 +133,6 @@ export function initIdentity(context) {
         button.dataset.userRecovery,
         button.dataset.userLabel,
       );
-    if (button.id === "generate-mfa-recovery") return mfaRecoveryCodes();
     if (button.hasAttribute("data-export-download") && exportedPage) {
       const url = URL.createObjectURL(
         new Blob([JSON.stringify(exportedPage, null, 2)], {
@@ -205,7 +183,7 @@ export function initIdentity(context) {
   $("#closure-cancel").onclick = () => {
     app.dialog(
       "取消注销申请",
-      '<section class="detail-section"><form id="cancel-closure-form" class="compact-form"><p>取消后自动投注仍保持关闭，需由本人重新授权。</p><label>本人密码<input name="password" type="password" autocomplete="current-password" required></label><button class="primary-button">取消注销</button></form></section>',
+      '<section class="detail-section"><form id="cancel-closure-form" class="compact-form"><p>取消后自动投注仍保持关闭，需由本人重新授权。</p><button class="primary-button">取消注销</button></form></section>',
     );
     $("#cancel-closure-form").onsubmit = (event) => {
       event.preventDefault();
@@ -213,7 +191,6 @@ export function initIdentity(context) {
       submit(form, async () => {
         await api("/auth/closure/cancel", {
           method: "POST",
-          body: { password: form.elements.password.value },
         });
         form.reset();
         $("#content-dialog").close();

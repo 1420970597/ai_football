@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
+import hmac
 import json
 import re
 import uuid
@@ -11,13 +12,14 @@ from urllib.parse import urlsplit
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr
 
-from .. import account_jobs as jobs, database, orders
-from ..auth import _limit, audit, require_recent, require_user, verify_sensitive_session
+from .. import account_jobs as jobs, database, orders, order_evidence
+from ..auth import _limit, audit, require_user, verify_sensitive_session
 from ..membership import has_entitlement
 from ..review_state import authorize
 from ..security import encrypt_secret
+from ..handicap_lines import line_projection
 
 router = APIRouter(prefix="/api/v1/accounts")
 executor_router = APIRouter(prefix="/internal/executor")
@@ -31,6 +33,10 @@ class LeyuBindingInput(Input):
     account_label: str = Field(min_length=1, max_length=80)
     username: str = Field(min_length=1, max_length=120)
     password: str = Field(min_length=1, max_length=256)
+
+
+class DeviceAuthorizationInput(Input):
+    security_code: SecretStr
 
 
 class AutoBetInput(Input):
@@ -70,12 +76,19 @@ class Receipt(Input):
     state: str = Field(pattern="^(settled|unsettled)$")
     net_profit: Decimal | None = Field(default=None, max_digits=16, decimal_places=5)
     pnl_basis: str = Field(default="unknown", pattern="^(unknown|provider_reported_net|gross_return_minus_stake)$")
-    fees: Decimal | None = None
+    fees: Decimal | None = Field(default=None, max_digits=16, decimal_places=5)
+    price: Decimal | None = Field(default=None, gt=1, max_digits=12, decimal_places=5)
+    stake: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=5)
+    payout: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=5)
+    currency: str | None = Field(default=None, pattern="^[A-Z]{3}$")
+    placed_at: AwareDatetime | None = None
+    settled_at: AwareDatetime | None = None
 
 
 class JobFinish(AttemptInput):
     status: str = Field(pattern="^(success|failed|unknown|rejected)$")
     category: str = Field(default="", max_length=80, pattern="^[A-Za-z0-9_]*$")
+    provider_code: str = Field(default="", pattern="^[0-9]{0,12}$")
     balance: Decimal | None = Field(default=None, ge=0, max_digits=16, decimal_places=2)
     observed_at: AwareDatetime | None = None
     receipts: list[Receipt] = Field(default_factory=list, max_length=10)
@@ -85,6 +98,7 @@ class JobFinish(AttemptInput):
 class AuthorizeInput(AttemptInput):
     prepared_digest: str = Field(pattern="^[a-f0-9]{64}$")
     payload_json: str = Field(min_length=1, max_length=20000)
+    quote_checked_at: AwareDatetime
 
 
 class OrderFinish(AttemptInput):
@@ -101,44 +115,55 @@ def service_auth(request):
 @router.get("/leyu")
 async def get_leyu_account(request: Request):
     user = await require_user(request)
-    row = await database.current_pool().fetchrow("SELECT id,account_label,health_state,last_verified_at,updated_at,available_balance,balance_observed_at,config_revision,binding_revision,renewal_state "
-                                                "FROM v2_leyu_accounts WHERE user_id=$1 AND health_state<>'disabled'", user["id"])
+    pool = database.current_pool()
+    row = await pool.fetchrow("SELECT id,account_label,health_state,last_verified_at,updated_at,available_balance,balance_observed_at,config_revision,binding_revision,renewal_state,renewal_retry_after "
+                              "FROM v2_leyu_accounts WHERE user_id=$1 AND health_state<>'disabled'", user["id"])
     policy = await database.current_pool().fetchrow("SELECT auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,daily_timezone,emergency_stopped,revision "
                                                    "FROM v2_user_bet_settings WHERE user_id=$1", user["id"])
-    tasks = await database.current_pool().fetch("SELECT id,kind,state,last_error,updated_at FROM v2_account_jobs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 5", user["id"])
-    return {"account": dict(row) if row else None, "betting": dict(policy) if policy else None, "tasks": [dict(item) for item in tasks],
+    tasks = await pool.fetch("SELECT id,kind,state,last_error,created_at,updated_at,binding_revision,details "
+                             "FROM v2_account_jobs WHERE user_id=$1 ORDER BY created_at DESC,id DESC LIMIT 5", user["id"])
+    account = dict(row) if row else None
+    if row:
+        account['reverification_available'] = await jobs.reverification_available(pool, row)
+    return {"account": account, "betting": dict(policy) if policy else None,
+            "tasks": [jobs.public_task(item, row['binding_revision'] if row else None) for item in tasks],
             "execution_capability": {"protocol_adapter": True, "live_enabled": orders.live_enabled(request.app.state.settings), "prematch": "unsupported"}}
 
 
 @router.put("/leyu")
 async def bind_leyu_account(body: LeyuBindingInput, request: Request):
     user = await require_user(request)
-    require_recent(user)
     await _limit(request,'account_bind',str(user['id']),maximum=6)
     username, label = body.username.strip(), body.account_label.strip()
     if not username or not label or any(char in username for char in "\r\n"):
         raise HTTPException(422, "账户名称无效")
     settings = request.app.state.settings
-    encrypted = encrypt_secret(settings.encryption_key, json.dumps({"username": username, "password": body.password, "device_uuid": uuid.uuid4().hex}, separators=(",", ":")))
+    identity = jobs.identity_hash(settings.encryption_key, username)
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             await conn.fetchrow("SELECT id FROM v2_users WHERE id=$1 FOR UPDATE", user["id"])
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"user-account:{user['id']}")
-            await conn.fetchrow('SELECT id FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE',user['id'])
+            previous = await conn.fetchrow('SELECT * FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE',user['id'])
             await verify_sensitive_session(conn, user)
             await orders.protect_inflight_binding(conn,user['id'])
+            device_uuid = uuid.uuid4().hex
+            if previous and previous['provider_identity_hash'] == identity and previous['encrypted_credentials']:
+                prior_credentials = jobs.decode_document(settings.encryption_key, previous['encrypted_credentials'])
+                device_uuid = prior_credentials.get('device_uuid') or device_uuid
+            encrypted = encrypt_secret(settings.encryption_key, json.dumps(
+                {"username": username, "password": body.password, "device_uuid": device_uuid}, separators=(",", ":")))
             try:
                 account = await conn.fetchrow("INSERT INTO v2_leyu_accounts(id,user_id,encrypted_credentials,account_label,provider_identity_hash) VALUES($1,$2,$3,$4,$5) "
                     "ON CONFLICT(user_id) DO UPDATE SET encrypted_credentials=EXCLUDED.encrypted_credentials,account_label=EXCLUDED.account_label,provider_identity_hash=EXCLUDED.provider_identity_hash,"
                     "encrypted_session=NULL,health_state='unverified',config_revision=v2_leyu_accounts.config_revision+1,binding_revision=v2_leyu_accounts.binding_revision+1,"
                     "last_verified_at=NULL,available_balance=NULL,balance_observed_at=NULL,renewal_state='ready',renewal_attempt=NULL,renewal_lease_until=NULL,renewal_retry_after=NULL,updated_at=now() RETURNING *",
-                    uuid.uuid4(), user["id"], encrypted, label, jobs.identity_hash(settings.encryption_key, username))
+                    uuid.uuid4(), user["id"], encrypted, label, identity)
             except asyncpg.UniqueViolationError:
                 raise HTTPException(409, "该乐鱼身份已经绑定其它平台账户") from None
             await conn.execute("INSERT INTO v2_user_bet_settings(user_id) VALUES($1) ON CONFLICT DO NOTHING", user["id"])
             await conn.execute("UPDATE v2_user_bet_settings SET auto_enabled=FALSE,emergency_stopped=TRUE,consent_account_id=NULL,consent_binding_revision=NULL,revision=revision+1,updated_at=now() WHERE user_id=$1", user["id"])
             await orders.cancel_unsent(conn, user["id"], "account_rebound")
-            await conn.execute("UPDATE v2_account_jobs SET state='failed',last_error='account_rebound',updated_at=now() WHERE account_id=$1 AND state IN('queued','running')", account["id"])
+            await conn.execute("UPDATE v2_account_jobs SET state='failed',last_error='account_rebound',details=details-'encrypted_authorization_code'-'authorization_expires_at',updated_at=now() WHERE account_id=$1 AND state IN('queued','running')", account["id"])
             task = await jobs.enqueue(conn, account, "verify")
             await audit(conn, user["id"], "user", "leyu_account_bound", "leyu_account", str(account["id"]), details={"binding_revision": account["binding_revision"]})
     return {"state": "unverified", "account_label": label, "task_id": str(task["id"]), "message": "本人凭据已加密保存，已排队进行无资金校验；原有自动投注许可已撤销。"}
@@ -153,7 +178,7 @@ async def unbind_leyu_account(request: Request):
             await orders.protect_inflight_binding(conn,user['id'])
             await conn.execute("UPDATE v2_leyu_accounts SET health_state='disabled',encrypted_credentials='',encrypted_session=NULL,provider_identity_hash=NULL,config_revision=config_revision+1,binding_revision=binding_revision+1,updated_at=now() WHERE user_id=$1", user["id"])
             await disable_policy(conn, user["id"], "account_unbound")
-            await conn.execute("UPDATE v2_account_jobs SET state='failed',last_error='account_unbound',updated_at=now() WHERE user_id=$1 AND state IN('queued','running')", user["id"])
+            await conn.execute("UPDATE v2_account_jobs SET state='failed',last_error='account_unbound',details=details-'encrypted_authorization_code'-'authorization_expires_at',updated_at=now() WHERE user_id=$1 AND state IN('queued','running')", user["id"])
             await audit(conn, user["id"], "user", "leyu_account_unbound", "leyu_account", str(user["id"]))
     return {"unbound": True, "auto_betting": False}
 
@@ -173,17 +198,59 @@ async def verify_account(request: Request):
             account = await conn.fetchrow("SELECT * FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE", user["id"])
             if not account or account["health_state"] == "disabled":
                 raise HTTPException(404, "尚未绑定本人账户")
-            if account["renewal_state"] in {"unknown", "rejected"}:
-                raise HTTPException(409, "上次登录未知或被拒绝，核对后需重新绑定以授权")
+            if account['renewal_retry_after'] and account['renewal_retry_after'] > datetime.now(timezone.utc):
+                raise HTTPException(409, "账户登录正在冷却，请在冷却结束后重新校验")
+            recover_rejected = account['health_state'] == 'rejected' or account['renewal_state'] in {'unknown', 'rejected'}
+            if recover_rejected:
+                if account['renewal_state'] == 'unknown' or not await jobs.reverification_available(conn, account):
+                    raise HTTPException(409, "账户登录状态未知或被拒绝；只有更新登录协议配置后才能重新校验")
+                await disable_policy(conn, user['id'], 'protocol_configuration_reverification')
+                await conn.execute(
+                    "UPDATE v2_leyu_accounts SET health_state='unverified',encrypted_session=NULL,last_verified_at=NULL,"
+                    "available_balance=NULL,balance_observed_at=NULL,renewal_state='ready',renewal_attempt=NULL,"
+                    "renewal_lease_until=NULL,renewal_retry_after=NULL,updated_at=now() WHERE id=$1", account['id'])
+                await audit(conn, user['id'], 'user', 'leyu_protocol_reverification_queued', 'leyu_account',
+                            str(account['id']), details={'protocol_configuration_updated': True,
+                                                         'binding_revision': account['binding_revision']})
             task = await jobs.enqueue(conn, account, "refresh" if account["health_state"] == "healthy" else "verify")
     return {"task_id": str(task["id"]), "state": task["state"]}
+
+
+@router.post("/leyu/device-authorization", status_code=202)
+async def authorize_leyu_device(body: DeviceAuthorizationInput, request: Request):
+    user = await require_user(request)
+    await _limit(request, 'account_device_authorization', str(user['id']), maximum=5)
+    code = body.security_code.get_secret_value().strip()
+    if not re.fullmatch(r'[A-Za-z0-9]{4,32}', code):
+        raise HTTPException(422, '请填写乐鱼 App 生成的授权安全码')
+    settings = request.app.state.settings
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            account = await conn.fetchrow('SELECT * FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE', user['id'])
+            if not account or account['health_state'] == 'disabled':
+                raise HTTPException(404, '尚未绑定本人账户')
+            await verify_sensitive_session(conn, user)
+            latest = await conn.fetchrow('SELECT * FROM v2_account_jobs WHERE account_id=$1 AND binding_revision=$2 ORDER BY created_at DESC,id DESC LIMIT 1', account['id'], account['binding_revision'])
+            if (account['renewal_state'] not in {'rejected', 'ready'} or not latest
+                    or jobs.public_task(latest, account['binding_revision'])['recovery_action'] != 'provider_identity_verification'):
+                raise HTTPException(409, '当前账户不处于已确认的新设备授权验证状态')
+            if account['renewal_retry_after'] and account['renewal_retry_after'] > datetime.now(timezone.utc):
+                raise HTTPException(409, '账户登录正在冷却，请稍后提交授权安全码')
+            await orders.protect_inflight_binding(conn, user['id'])
+            await disable_policy(conn, user['id'], 'device_authorization')
+            await conn.execute("UPDATE v2_leyu_accounts SET health_state='unverified',encrypted_session=NULL,renewal_state='ready',renewal_attempt=NULL,renewal_lease_until=NULL,renewal_retry_after=NULL,updated_at=now() WHERE id=$1", account['id'])
+            task = await jobs.enqueue(conn, account, 'verify')
+            await conn.execute('UPDATE v2_account_jobs SET details=$2 WHERE id=$1', task['id'], {
+                'device_authorization': True,
+                'encrypted_authorization_code': encrypt_secret(settings.encryption_key, code),
+                'authorization_expires_at': (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()})
+            await audit(conn, user['id'], 'user', 'leyu_device_authorization_queued', 'leyu_account', str(account['id']), details={'binding_revision': account['binding_revision']})
+    return {'task_id': str(task['id']), 'state': task['state']}
 
 
 @router.put("/leyu/auto-betting")
 async def configure_auto_betting(body: AutoBetInput, request: Request):
     user = await require_user(request)
-    if body.enabled:
-        require_recent(user)
     settings = request.app.state.settings
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
@@ -236,10 +303,11 @@ async def list_orders(request: Request, limit: int = 30, before: uuid.UUID | Non
     if not 1 <= limit <= 100:
         raise HTTPException(422, "订单页大小无效")
     rows = await database.current_pool().fetch("SELECT o.id,o.state,o.stake,o.price,o.created_at,o.updated_at,o.provider_order_no,o.reserved_stake,o.settled_net,o.settled_at,"
-        "s.fixture_id,s.market_name,s.line,s.selection,e.display_nickname FROM v2_bet_orders o JOIN v2_expert_signals s ON s.id=o.signal_id "
+        "o.provider_price,o.provider_stake,o.provider_payout,o.provider_currency,o.provider_fees,o.provider_placed_at,o.receipt_observed_at,o.pnl_basis,"
+        "s.fixture_id,s.market_id,s.market_kind,s.market_name,s.period,s.line,s.selection,e.display_nickname FROM v2_bet_orders o JOIN v2_expert_signals s ON s.id=o.signal_id "
         "JOIN v2_experts e ON e.id=s.expert_id WHERE o.user_id=$1 AND ($2::uuid IS NULL OR (o.created_at,o.id)<"
         "(SELECT created_at,id FROM v2_bet_orders WHERE id=$2 AND user_id=$1)) ORDER BY o.created_at DESC,o.id DESC LIMIT $3", user["id"], before, limit)
-    return {"items": [dict(row) for row in rows], "next_cursor": str(rows[-1]["id"]) if len(rows) == limit else None}
+    return {"items": [line_projection(row) for row in rows], "next_cursor": str(rows[-1]["id"]) if len(rows) == limit else None}
 
 
 @executor_router.post("/claim")
@@ -252,11 +320,22 @@ async def claim_work(request: Request, live_capable: bool = False):
             account = await conn.fetchrow("SELECT a.* FROM v2_leyu_accounts a WHERE a.health_state<>'disabled' AND EXISTS(SELECT 1 FROM v2_account_jobs j WHERE j.account_id=a.id AND j.state='queued' AND j.binding_revision=a.binding_revision) ORDER BY a.updated_at FOR UPDATE OF a SKIP LOCKED LIMIT 1")
             if account:
                 job = await conn.fetchrow("SELECT * FROM v2_account_jobs WHERE account_id=$1 AND state='queued' AND binding_revision=$2 ORDER BY created_at LIMIT 1 FOR UPDATE", account["id"], account["binding_revision"])
+                authorization = job['details'] or {}
+                if authorization.get('encrypted_authorization_code') and datetime.fromisoformat(authorization['authorization_expires_at']) <= datetime.now(timezone.utc):
+                    await conn.execute("UPDATE v2_account_jobs SET state='failed',last_error='device_authorization_expired',details=$2,updated_at=now() WHERE id=$1", job['id'], {'device_authorization': True})
+                    await conn.execute("UPDATE v2_leyu_accounts SET health_state='rejected',renewal_state='rejected',updated_at=now() WHERE id=$1", account['id'])
+                    return {'kind': 'idle'}
                 config = await jobs.private_config(conn, account, settings)
+                if authorization.get('encrypted_authorization_code'):
+                    from ..security import decrypt_secret
+                    config['leyu_app_authorization_code'] = decrypt_secret(settings.encryption_key, authorization['encrypted_authorization_code'])
                 attempt = uuid.uuid4()
                 await conn.execute("UPDATE v2_account_jobs SET state='running',attempt_id=$2,config_revision=$3,lease_until=now()+interval '300 seconds',updated_at=now() WHERE id=$1", job["id"], attempt, account["config_revision"])
                 reconcile = await conn.fetch("SELECT id,provider_order_no,created_at FROM v2_bet_orders WHERE user_id=$1 AND provider_identity_hash=$2 AND state IN('accepted','unknown') AND provider_order_no IS NOT NULL ORDER BY updated_at LIMIT 2", account["user_id"], account["provider_identity_hash"])
-                await conn.execute('UPDATE v2_account_jobs SET details=$2 WHERE id=$1',job['id'],{'orders':{str(row['id']):row['provider_order_no'] for row in reconcile}})
+                job_details = {'orders': {str(row['id']): row['provider_order_no'] for row in reconcile}}
+                if authorization.get('device_authorization'):
+                    job_details['device_authorization'] = True
+                await conn.execute('UPDATE v2_account_jobs SET details=$2 WHERE id=$1', job['id'], job_details)
                 return {"kind": "account", "job_id": str(job["id"]), "attempt_id": str(attempt), "scope": jobs.scope(account), "config": config, "orders": [dict(row) for row in reconcile]}
             if live_capable and orders.live_enabled(settings):
                 account = await conn.fetchrow("SELECT a.* FROM v2_leyu_accounts a WHERE EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.account_id=a.id AND o.state='pending' AND o.attempt_id IS NULL) ORDER BY a.updated_at FOR UPDATE OF a SKIP LOCKED LIMIT 1")
@@ -296,7 +375,9 @@ async def dispatch(request: Request):
                 except HTTPException:
                     continue
         async with conn.transaction():
-            rows = await conn.fetch("SELECT a.* FROM v2_leyu_accounts a WHERE a.health_state='healthy' AND (a.last_verified_at<now()-interval '60 seconds' OR EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.user_id=a.user_id AND o.state IN('accepted','unknown') AND o.provider_order_no IS NOT NULL AND o.updated_at<now()-interval '30 seconds')) "
+            rows = await conn.fetch("SELECT a.* FROM v2_leyu_accounts a WHERE a.health_state='healthy' AND a.renewal_state='ready' "
+                "AND (a.renewal_retry_after IS NULL OR a.renewal_retry_after<=now()) "
+                "AND (a.last_verified_at<now()-interval '60 seconds' OR EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.user_id=a.user_id AND o.state IN('accepted','unknown') AND o.provider_order_no IS NOT NULL AND o.updated_at<now()-interval '30 seconds')) "
                 "AND NOT EXISTS(SELECT 1 FROM v2_account_jobs j WHERE j.account_id=a.id AND j.state IN('queued','running')) ORDER BY a.updated_at FOR UPDATE OF a SKIP LOCKED LIMIT 20")
             for account in rows:
                 await jobs.enqueue(conn, account, "refresh")
@@ -353,6 +434,8 @@ async def finish_account_renewal(job_id: uuid.UUID, body: RenewalFinish, request
     service_auth(request)
     if set(body.metadata)-{'category','code','login_submitted'} or not re.fullmatch('[A-Za-z0-9_]{0,80}',str(body.metadata.get('category',''))) or not re.fullmatch('[0-9]{0,12}',str(body.metadata.get('code',''))):
         raise HTTPException(422,'续期审计字段无效')
+    if 'login_submitted' in body.metadata and type(body.metadata['login_submitted']) is not bool:
+        raise HTTPException(422, '续期发送状态必须为布尔值')
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             job,account=await jobs.active_job(conn,job_id,body.attempt_id)
@@ -364,7 +447,9 @@ async def finish_account_renewal(job_id: uuid.UUID, body: RenewalFinish, request
             expired=account['renewal_lease_until']<=datetime.now(timezone.utc)
             state='unknown' if expired else body.status if body.status in {'unknown','rejected'} else 'ready'
             await conn.execute("UPDATE v2_leyu_accounts SET renewal_state=$2,renewal_lease_until=NULL,renewal_retry_after=now()+interval '60 seconds',updated_at=now() WHERE id=$1",account['id'],state)
-            await conn.execute("UPDATE v2_account_jobs SET details=details||$2::jsonb WHERE id=$1",job_id,{'renewal_attempt':str(body.renewal_attempt),'renewal_status':'unknown' if expired else body.status})
+            await conn.execute("UPDATE v2_account_jobs SET details=details||$2::jsonb WHERE id=$1",job_id,
+                {'renewal_attempt':str(body.renewal_attempt),'renewal_status':'unknown' if expired else body.status,
+                 'provider_code':body.metadata.get('code',''), 'login_submitted':body.metadata.get('login_submitted')})
             await audit(conn,None,'executor','account_renewal_finished','leyu_account',str(account['id']),details={'state':state,**body.metadata})
     return {'state':state}
 
@@ -372,14 +457,24 @@ async def finish_account_renewal(job_id: uuid.UUID, body: RenewalFinish, request
 @executor_router.post('/jobs/{job_id}/finish')
 async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
     service_auth(request)
+    finish_document = body.model_dump(mode='json')
+    if not body.provider_code:
+        finish_document.pop('provider_code')
+    finish_sha256=hashlib.sha256(json.dumps(finish_document,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             prior=await conn.fetchrow('SELECT * FROM v2_account_jobs WHERE id=$1',job_id)
-            expected='succeeded' if body.status=='success' else body.status
+            # During a rolling deployment an older executor reports failed even
+            # after its renewal hook persisted an ambiguous login. Keep that
+            # durable uncertainty; a final generic failure cannot erase it.
+            effective_status = 'unknown' if body.status == 'failed' and prior and prior['details'].get('renewal_status') == 'unknown' else body.status
+            expected='succeeded' if effective_status=='success' else effective_status
             if prior and prior['attempt_id']==body.attempt_id and prior['state']==expected:
-                return {'status':body.status,'idempotent':True}
+                if not hmac.compare_digest(str(prior['details'].get('finish_sha256','')),finish_sha256):
+                    raise HTTPException(409,'同一次任务回执内容冲突，保留首次记录')
+                return {'status':effective_status,'idempotent':True}
             job,account=await jobs.active_job(conn,job_id,body.attempt_id)
-            if body.status=='success':
+            if effective_status=='success':
                 document=jobs.decode_document(request.app.state.settings.encryption_key,account['encrypted_session']) if account['encrypted_session'] else {}
                 now=datetime.now(timezone.utc)
                 if body.balance is None or not body.observed_at or not -5<=(now-body.observed_at).total_seconds()<=60 or not document.get('leyu_request_id'):
@@ -387,14 +482,28 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
                 planned=job['details'].get('orders',{})
                 if any(str(identity) not in planned for identity in body.scanned_orders) or any(receipt.order_no not in planned.values() for receipt in body.receipts):
                     raise HTTPException(422,'查单回执超出此本人任务的订单范围')
-                await conn.execute("UPDATE v2_leyu_accounts SET health_state='healthy',last_verified_at=now(),available_balance=$2,balance_observed_at=$3,updated_at=now() WHERE id=$1",account['id'],body.balance,body.observed_at)
+                await conn.execute("UPDATE v2_leyu_accounts SET health_state='healthy',renewal_state='ready',renewal_attempt=NULL,"
+                                   "renewal_lease_until=NULL,renewal_retry_after=NULL,last_verified_at=now(),available_balance=$2,"
+                                   "balance_observed_at=$3,updated_at=now() WHERE id=$1",account['id'],body.balance,body.observed_at)
                 await jobs.reconcile_receipts(conn,account,[receipt.model_dump(mode='json') for receipt in body.receipts])
                 await conn.execute('UPDATE v2_bet_orders SET updated_at=now() WHERE id=ANY($1::uuid[]) AND user_id=$2',body.scanned_orders,account['user_id'])
-            elif body.status in {'unknown','rejected'}:
-                await conn.execute("UPDATE v2_leyu_accounts SET health_state=$2,updated_at=now() WHERE id=$1",account['id'],'rejected' if body.status=='rejected' else 'renewal_required')
-            await conn.execute("UPDATE v2_account_jobs SET state=$2,last_error=$3,lease_until=NULL,details=$4,updated_at=now() WHERE id=$1",job_id,'succeeded' if body.status=='success' else body.status,body.category,{'receipts':len(body.receipts)})
-            await audit(conn,None,'executor','account_job_finished','leyu_account',str(account['id']),details={'kind':job['kind'],'status':body.status,'category':body.category})
-    return {'status':body.status}
+            elif effective_status in {'unknown','rejected'}:
+                await conn.execute("UPDATE v2_leyu_accounts SET health_state=$2,renewal_state=$3,renewal_attempt=NULL,"
+                                   "renewal_lease_until=NULL,updated_at=now() WHERE id=$1",account['id'],
+                                   'rejected' if effective_status=='rejected' else 'renewal_required',effective_status)
+            elif effective_status == 'failed' and job['kind'] in {'refresh', 'reconcile'}:
+                # A failed read does not prove the session expired. Keep the
+                # account's identity and state, but do not create another read
+                # job on every dispatch tick while last_verified_at is old.
+                await conn.execute(
+                    "UPDATE v2_leyu_accounts SET renewal_retry_after=GREATEST(renewal_retry_after,"
+                    "now()+interval '60 seconds'),updated_at=now() WHERE id=$1", account['id'])
+            details = {'receipts':len(body.receipts),'finish_sha256':finish_sha256}
+            if body.provider_code:
+                details['provider_code'] = body.provider_code
+            await conn.execute("UPDATE v2_account_jobs SET state=$2,last_error=$3,lease_until=NULL,details=details||$4::jsonb,updated_at=now() WHERE id=$1",job_id,expected,body.category,details)
+            await audit(conn,None,'executor','account_job_finished','leyu_account',str(account['id']),details={'kind':job['kind'],'status':effective_status,'category':body.category})
+    return {'status':effective_status}
 
 
 async def locked_order(conn,order_id):
@@ -413,9 +522,13 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
             order=await locked_order(conn,order_id)
             if order['state']!='pending' or order['attempt_id']!=body.attempt_id or not order['lease_until'] or order['lease_until']<=datetime.now(timezone.utc):
                 raise HTTPException(409,'订单准备租约失效')
-            account=await orders.recheck_order(conn,order,request.app.state.settings)
+            account,signal=await orders.recheck_order(conn,order,request.app.state.settings,include_signal=True)
             prefix=f"{account['user_id']}:{account['id']}:{account['config_revision']}:"
-            if hashlib.sha256((prefix+body.payload_json).encode()).hexdigest()!=body.prepared_digest:
+            checked_age=(datetime.now(timezone.utc)-body.quote_checked_at).total_seconds()
+            if checked_age < 0 or checked_age > 15:
+                raise HTTPException(409,'实时赔率预检已过期')
+            checked_at=body.quote_checked_at.isoformat()
+            if hashlib.sha256((prefix+checked_at+":"+body.payload_json).encode()).hexdigest()!=body.prepared_digest:
                 raise HTTPException(422,'订单准备摘要不匹配')
             try:
                 payload=json.loads(body.payload_json)
@@ -428,16 +541,32 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                     and payload['currencyCode']=='CNY' and str(payload['deviceType'])=='3' and payload['openMiltSingle']==0
                     and str(series[0]['seriesType'])=='1' and series[0]['seriesSum']==1 and series[0]['fullBet']==0
                     and detail['marketTypeFinally']=='EU' and detail['matchType']==2 and str(detail['sportId'])=='1'
-                    and orders.prepared_line(detail['marketValue'],snapshot['kind'])==Decimal(snapshot['line'])
+                    and orders.prepared_line_matches(detail['marketValue'],snapshot['line'],snapshot['kind'])
                     and detail['scoreBenchmark']==snapshot['score_benchmark']
                     and payload['deviceImei']==credentials['device_uuid'] and Decimal(detail['betAmount'])==order['stake']
-                    and Decimal(detail['oddFinally'])==order['price'] and Decimal(detail['odds'])==order['price']*100000
-                    and all(str(detail[target])==str(snapshot[source]) for target,source in [('matchId','match_id'),('marketId','market_instance_id'),('playId','play_id'),('playOptionsId','selection_id'),('playOptions','selection_code')]))
+                    and Decimal(detail['oddFinally']) > Decimal('1')
+                    and Decimal(detail['odds']) == Decimal(detail['oddFinally']) * 100000
+                    and isinstance(detail['playOptionsId'],str) and 0 < len(detail['playOptionsId']) <= 160
+                    and '\n' not in detail['playOptionsId'] and '\r' not in detail['playOptionsId']
+                    and all(str(detail[target])==str(snapshot[source]) for target,source in [('matchId','match_id'),('marketId','market_instance_id'),('playId','play_id'),('playOptions','selection_code')]))
             except (ValueError,KeyError,IndexError,TypeError,InvalidOperation):
                 valid=False
             if not valid:
                 raise HTTPException(422,'订单准备内容超出已预留推荐许可')
+            execution_price = Decimal(detail['oddFinally'])
+            evidence_signal = dict(signal)
+            evidence_signal['current_price'] = execution_price
+            order_for_evidence = dict(order)
+            order_for_evidence['price'] = execution_price
+            snapshot = dict(order['quote_snapshot'])
+            snapshot.update(price=str(execution_price), selection_id=str(detail['playOptionsId']),
+                            provider_quote_checked_at=checked_at)
+            order_for_evidence['quote_snapshot'] = snapshot
+            await conn.execute("UPDATE v2_bet_orders SET price=$2,quote_snapshot=$3::jsonb WHERE id=$1",order_id,execution_price,snapshot)
+            await order_evidence.append_stage(conn,order_for_evidence,evidence_signal,body.attempt_id,body.prepared_digest,'preflight_validated')
             await conn.execute("UPDATE v2_bet_orders SET state='submitting',prepared_digest=$2,submitted_at=now(),lease_until=now()+interval '30 seconds',updated_at=now() WHERE id=$1",order_id,body.prepared_digest)
+            order_for_evidence['price'] = execution_price
+            await order_evidence.append_stage(conn,order_for_evidence,evidence_signal,body.attempt_id,body.prepared_digest,'submission_authorized')
             await audit(conn,None,'executor','order_send_authorized','bet_order',str(order_id))
     return {'scope':jobs.scope(account),'execution_id':str(order_id),'prepared_digest':body.prepared_digest}
 
