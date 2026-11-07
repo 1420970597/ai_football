@@ -1,6 +1,6 @@
 # E520：全场期间别名的精确盘口检索
 
-更新时间：2026-11-07 06:02 UTC。状态：代码已写、82项定向隔离验证通过；未部署，准备独立冻结全套。
+更新时间：2026-11-07 06:26 UTC。状态：82项定向及1626项独立冻结全套通过、同源候选与仅API配置差异通过；准备受控切换，尚未报自然流量验收。
 
 - 目标/责任：services/api盘口筛选与tests契约，避免模型使用明确全场别名match时得到假零项再重复宽查询；不更改球队匹配、期间事实、方向、价格、权限或自动投注范围。
 - 依赖/现场证据：E510自然推荐be507ebd当前尝试先以market_kind=handicap、period=match读取leyu:5786006，195报价中返回0；随后宽查让球返回18项，最终接受全场主队受让0.75。该无效窄查询和后续模型调用浪费一次往返。现有MarketInput已经将full_match/full及明确中文全场映射full_time，match未覆盖；未知ASCII期间保留零项、含糊中文拒绝的合同必须保留。
@@ -11,3 +11,7 @@
 补充研究：E516合成文本两请求均HTTP200/正确，当前模式3508.916ms、显式thinking disabled 3560.046ms，均37总token、无思考输出；不能证明加速，当前不改模型配置。reasoning_config=false在固定custom transport没有生成任何请求差异，显式extra_body才有差异；没有做无意义重复探测或把单样本结论推广至图片。
 
 定向证据：新增精确match输入测试在修改前运行6项，唯一失败为实际period仍match，原生退出1/OOM=false，日志SHA256=`173a3d37cd77cd5fc99d8a412cd6d11bf0e6f4a2edebeb6ef4e8b09ad0770ab1`。仅添加该精确别名后，固定Docker验证器及具名临时PostgreSQL运行`python -m unittest -q test_reviews`，82项/101.482秒，原生退出0/OOM=false，05:57:44.180699906—05:59:27.746273243；日志SHA256=`f966883d99df44189d91ab30f0882d359f46c501822cc1b53b9fa6e00e51cf2c`。真实数据库集成同时覆盖full/full_match/match只返回全场所选项、未知期间仍空、半场及反向不混入，原行级绑定及当前尝试合同全通过。测试期间应用代码冻结，未访问真实上游或资金。
+
+完整验证：提交`517c34d476a3d48c0aacbd587bf2fae0e2d11e72`已推送并核对远端引用；独立干净worktree运行e520-isolated-tests.sh，1626项/1111.319秒，原生0/OOM=false，错误/失败/跳过0，提交源码校验通过，06:23:51.73082587结束。完整报告SHA256=`a98ddd6f01e55e1798988baa14f1145a68b8dfd2e7425ce138ffdc14b32fdfd2`。
+
+候选`ai-football-api:2.0.0-dev-e520-517c34d`镜像`sha256:a69a34bacfc3434cc7c9a58a1d457796060ded43f6f109d8b5af344caa746d2f`，构建原生0；101个app/migration文件及requirements与冻结源逐项一致，核验SHA256=`2c677755c1886dadd177d3f9e64d89352fa7868248c23e3915178c552a531606`。e520-precheck.sh退出0，只API镜像改变，其他服务配置一致。受控切换使用实际最新worker Compose标签，先暂停新审核领取并排空活动任务，仅替换API，核验加载模块/别名/健康、其它6容器及原模型配置版本不变、不可变信号/报价/台账保全后释放；失败只回滚API旧镜像，保留持久化数据和现有许可。切换后独立E524自然30分钟；E521保留桥接期间任何降级。
