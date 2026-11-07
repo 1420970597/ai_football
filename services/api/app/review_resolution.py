@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 
+from .competition_names import normalize_competition_name
 from .team_matching import normalize_team_name, team_name_matches
 
 if TYPE_CHECKING:
@@ -26,8 +27,10 @@ async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
         away_other = team_name_matches(body.team_b, fixture['away_team'], fixture.get('away_aliases', []))
         if not ((home_match and away_other) or (away_match and home_other)):
             continue
-        if body.competition and normalize_team_name(body.competition) != normalize_team_name(fixture['competition_name']):
-            continue
+        if body.competition:
+            sport = fixture.get('sport')
+            if normalize_competition_name(body.competition, sport) != normalize_competition_name(fixture['competition_name'], sport):
+                continue
         kickoff = datetime.fromisoformat(fixture['kickoff_at'])
         if body.from_utc and kickoff < body.from_utc or body.to_utc and kickoff > body.to_utc:
             continue

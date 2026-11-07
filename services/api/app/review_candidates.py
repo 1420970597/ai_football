@@ -5,6 +5,7 @@ from datetime import timedelta
 import re
 
 from .chinese_names import sql_chinese_fold
+from .competition_names import normalize_competition_name
 from .review_tool_evidence import FIXTURE_FIELDS
 from .team_matching import normalize_team_name, team_search_variants
 
@@ -53,11 +54,12 @@ async def snapshot_candidates(conn, *, review_id, search_key, phase, team_query,
                               competition, sport, from_utc, to_utc):
     name_source = 'áàâäãåéèêëíìîïóòôöõúùûüýÿçñ'
     name_target = 'aaaaaaeeeeiiiiooooouuuuyycn'
-    chinese_source, chinese_target = sql_chinese_fold(team_query+' '+competition)
+    competition_term = normalize_competition_name(competition, sport)
+    chinese_source, chinese_target = sql_chinese_fold(team_query+' '+competition_term)
     args = (review_id, search_key, phase, '%'+team_query.strip().casefold()+'%',
             ['%'+v+'%' for v in team_search_variants(team_query)],
             name_source+chinese_source, name_target+chinese_target, team_query.strip().casefold(),
-            normalize_team_name(competition), from_utc, to_utc, sport, False)
+            competition_term, from_utc, to_utc, sport, False)
     count = await conn.fetchval(_INSERT_SNAPSHOT, *args)
     fragments = source_fragments(team_query, from_utc, to_utc) if count == 0 else ()
     if fragments:
