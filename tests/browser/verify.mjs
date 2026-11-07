@@ -179,6 +179,7 @@ async function setup({
   dual = false,
   initialError = false,
   captureLoading = false,
+  signalWithdrawalReason = "",
 } = {}) {
   const context = await browser.newContext({
     viewport: mobile
@@ -203,6 +204,7 @@ async function setup({
     slow: captureLoading,
     tg: "idle",
     version: 7,
+    signalWithdrawalReason,
   };
   const page = await context.newPage();
   page.on("pageerror", (error) => caught.push(error.message));
