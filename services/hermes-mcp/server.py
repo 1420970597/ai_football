@@ -124,7 +124,8 @@ async def _request(path: str, payload: dict) -> dict:
 
 async def _with_bound_markets(result: dict, resolution: dict | None,
                               review_id: str, attempt_id: str,
-                              market_kind: str | None, period: str | None) -> dict:
+                              market_kind: str | None, period: str | None,
+                              *, search_key: str | None = None) -> dict:
     """Compose existing guarded operations, never derive a fixture identity."""
     if not isinstance(resolution, dict) or resolution.get('resolved') is not True:
         return result
@@ -132,10 +133,28 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
     if (not isinstance(fixture, dict) or fixture.get('realtime_eligible') is not True
             or not isinstance(fixture.get('id'), str) or not fixture['id']):
         return result
-    markets = await _post('list_match_markets', {
-        'review_id': review_id, 'attempt_id': attempt_id, 'fixture_id': fixture['id'],
-        'market_kind': market_kind, 'period': period,
-    })
+    try:
+        markets = await _post('list_match_markets', {
+            'review_id': review_id, 'attempt_id': attempt_id, 'fixture_id': fixture['id'],
+            'market_kind': market_kind, 'period': period,
+        })
+    except ToolError as exc:
+        # Search/binding has already committed before this optional read.
+        # Keep its native receipt visible even though the composed call failed;
+        # otherwise a repeated search is correctly rejected as already complete.
+        receipt = {'review_id': review_id, 'attempt_id': attempt_id,
+            **{key: result[key] for key in ('search_key', 'search_complete', 'next_cursor') if key in result},
+            'resolution': {'resolved': True, 'fixture': {key: fixture[key] for key in (
+                'id', 'realtime_eligible', 'home_team', 'away_team', 'competition_name',
+                'sport', 'phase', 'kickoff_at') if key in fixture}}}
+        if search_key is not None:
+            receipt.setdefault('search_key', search_key)
+        raise ToolError(json.dumps({'completed_receipt': receipt,
+            'failed_operation': 'list_match_markets', 'market_read_succeeded': False,
+            'error': str(exc),
+            'recovery': '检索/绑定回执已保留，但未成功读盘；仅在同一活动review_id/attempt_id下使用原生'
+                        'search_key或已绑定fixture继续核验，不要重复已完成检索，不要猜编号；租约失效则停止。'},
+            ensure_ascii=False)) from None
     return {**result, 'market_result': markets}
 
 
@@ -147,7 +166,7 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str,
                          team_a: str | None = None, team_b: str | None = None,
                          read_markets: bool = False, market_kind: str | None = None,
                          period: str | None = None) -> dict:
-    """phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。已知玩法/期间时read_markets=true可在唯一绑定后返回market_result，复用此读盘而不重复调用；不完整或不唯一时不读。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
+    """team_query必填，team_a/team_b不能替代它。phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。已知玩法/期间时read_markets=true可在唯一绑定后返回market_result，复用此读盘而不重复调用；期间使用full_time/first_half/second_half。不完整或不唯一时不读。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
     result = await _post("search_matches", {
         "review_id": review_id, "attempt_id": attempt_id, "team_query": team_query,
         "phase": phase, "competition_query": competition_query, "sport": sport,
@@ -173,7 +192,8 @@ async def resolve_match(review_id: str, attempt_id: str, search_key: str,
         "from_utc": from_utc, "to_utc": to_utc,
     })
     if read_markets:
-        return await _with_bound_markets(result, result, review_id, attempt_id, market_kind, period)
+        return await _with_bound_markets(result, result, review_id, attempt_id, market_kind, period,
+                                         search_key=search_key)
     return result
 
 

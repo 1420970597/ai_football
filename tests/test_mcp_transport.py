@@ -194,6 +194,66 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, self.server.pending_market_requests)
         self.assertFalse(self.server.market_gate.locked())
 
+    async def test_composed_read_failure_keeps_bounded_receipt_as_protocol_error(self):
+        for name in ('search_matches', 'resolve_match'):
+            for failure in ('lease', 'timeout'):
+                with self.subTest(tool=name, failure=failure):
+                    calls = []
+                    resolution = {'resolved': True, 'fixture': {
+                        'id': 'bound-fixture', 'realtime_eligible': True,
+                        'home_team': 'Alpha', 'away_team': 'Beta', 'quote_id': 'not-a-market-read'}}
+                    def upstream(request):
+                        path = request.url.path.rsplit('/', 1)[-1]
+                        calls.append((path, json.loads(request.content)))
+                        if path == 'list_match_markets':
+                            if failure == 'timeout':
+                                raise httpx.ReadTimeout('isolated protocol timeout', request=request)
+                            return httpx.Response(409, json={'detail': 'review attempt is no longer active'})
+                        if name == 'resolve_match':
+                            return httpx.Response(200, json=resolution)
+                        return httpx.Response(200, json={'search_key': 'a'*64,
+                            'search_complete': True, 'next_cursor': None, 'resolution': resolution,
+                            'items': [{'quote_id': 'must-not-leak'}]})
+                    await self.server.client.aclose()
+                    self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+                    arguments = {'review_id': 'job', 'attempt_id': 'current', 'team_a': 'Alpha',
+                        'team_b': 'Beta', 'read_markets': True, 'market_kind': 'total', 'period': 'first_half'}
+                    arguments.update({'team_query': 'Alpha'} if name == 'search_matches' else {'search_key': 'a'*64})
+                    result = (await self.rpc('tools/call', {'name': name, 'arguments': arguments})).json()['result']
+                    self.assertTrue(result['isError'])
+                    text = result['content'][0]['text']
+                    error = json.loads(text[text.index('{'):])
+                    self.assertFalse(error['market_read_succeeded'])
+                    self.assertEqual('list_match_markets', error['failed_operation'])
+                    self.assertNotIn('market_result', error)
+                    receipt = error['completed_receipt']
+                    self.assertEqual(('job', 'current', 'a'*64),
+                        (receipt['review_id'], receipt['attempt_id'], receipt['search_key']))
+                    self.assertEqual('bound-fixture', receipt['resolution']['fixture']['id'])
+                    self.assertNotIn('quote_id', receipt['resolution']['fixture'])
+                    self.assertNotIn('items', receipt)
+                    self.assertIn('超时' if failure == 'timeout' else 'no longer active', error['error'])
+                    self.assertEqual([name, 'list_match_markets'], [c[0] for c in calls])
+                    self.assertEqual('current', calls[1][1]['attempt_id'])
+                    self.assertEqual(0, self.server.pending_market_requests)
+                    self.assertEqual(0, self.server.pending_market_calls)
+                    self.assertFalse(self.server.market_gate.locked())
+                    self.assertEqual({}, self.server.market_reads)
+
+    async def test_initial_search_failure_never_invents_a_completed_receipt(self):
+        calls = []
+        def upstream(request):
+            calls.append(request.url.path.rsplit('/', 1)[-1])
+            return httpx.Response(409, json={'detail': 'review attempt is no longer active'})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        result = (await self.rpc('tools/call', {'name': 'search_matches', 'arguments': {
+            'review_id': 'job', 'attempt_id': 'current', 'team_query': 'Alpha',
+            'team_a': 'Alpha', 'team_b': 'Beta', 'read_markets': True}})).json()['result']
+        self.assertTrue(result['isError'])
+        self.assertNotIn('completed_receipt', result['content'][0]['text'])
+        self.assertEqual(['search_matches'], calls)
+
     async def test_market_filters_alone_do_not_enable_composed_reads(self):
         for name in ('search_matches', 'resolve_match'):
             calls = []
