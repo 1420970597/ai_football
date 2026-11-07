@@ -276,7 +276,7 @@ class ModelConfigurationTests(unittest.IsolatedAsyncioTestCase):
             json={'token': value['consumption_token'], 'model': 'wrong/model', 'provider': value['provider'], 'prompt_sha256': models.prompt_digest()})
         self.assertEqual(409, bad.status_code)
 
-    async def test_deployed_persisted_legacy_baseline_remains_consumable(self):
+    async def test_deployed_persisted_legacy_baseline_requires_explicit_artifact_handoff(self):
         # This is the artifact fingerprint already acknowledged by the deployed
         # worker, rather than a baseline generated from the code under test.
         fingerprint = '222388e0dde4957ff096435cdf283f676e1c01e8003c9f536599f76f30a84173'
@@ -288,13 +288,22 @@ class ModelConfigurationTests(unittest.IsolatedAsyncioTestCase):
                 await models.save_state(conn, self.app.state.settings, state, self.admin_id)
         factory = httpx.AsyncClient
         with patch.object(hermes_client.httpx, 'AsyncClient', side_effect=lambda **kw: factory(transport=httpx.ASGITransport(app=self.app), **kw)):
+            with self.assertRaisesRegex(RuntimeError, 'provenance'):
+                await hermes_client.resolve_review_settings(self.app.state.settings)
+            self.assertEqual(state, await models.read_state(self.pool, self.app.state.settings))
+            from app.model_artifact_release import deploy_prompt_artifact
+            async with self.pool.acquire() as conn, conn.transaction():
+                await deploy_prompt_artifact(conn, self.app.state.settings, release_id='legacy-release-contract',
+                    source_commit='a' * 40, test_report_sha256='b' * 64, test_count=1,
+                    expected_active_version=state['active']['version'], expected_prompt_sha256=fingerprint)
             snapshot = await hermes_client.resolve_review_settings(self.app.state.settings)
         self.assertEqual('cline-pass/deepseek-v4.1-flash', snapshot.hermes_model)
         consumed = await models.read_state(self.pool, self.app.state.settings)
-        self.assertEqual(state['active'], consumed['active'])
-        self.assertEqual(state['revision'], consumed['revision'])
-        self.assertEqual(fingerprint, consumed['active']['provenance']['prompt_sha256'])
-        self.assertEqual(state['active']['version'], snapshot.model_configuration_version)
+        self.assertEqual(state['active'], consumed['artifact_deployments'][0]['before'])
+        self.assertEqual(state['revision'] + 1, consumed['revision'])
+        self.assertEqual(models.prompt_digest(), consumed['active']['provenance']['prompt_sha256'])
+        self.assertNotEqual(fingerprint, consumed['active']['provenance']['prompt_sha256'])
+        self.assertEqual(consumed['active']['version'], snapshot.model_configuration_version)
 
     async def test_model_governance_cipher_failure_does_not_disable_quote_ttl(self):
         await self.create()

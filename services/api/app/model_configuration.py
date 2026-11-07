@@ -68,8 +68,10 @@ def decode_state(settings, ciphertext):
         if active.get('version') != digest({k: v for k, v in active.items() if k != 'version'}):
             raise ValueError
         _provenance(active['provenance'])
+        from .model_artifact_release import validated_releases
+        releases = validated_releases(value)
         consumed = value.get('consumed_versions', [])
-        if (not isinstance(consumed, list) or len(consumed) > MAX_CANDIDATES+1
+        if (not isinstance(consumed, list) or len(consumed) > MAX_CANDIDATES+len(releases)+1
                 or any(not isinstance(item, str) or not HASH.fullmatch(item) for item in consumed)):
             raise ValueError
         return value
@@ -138,6 +140,9 @@ async def acknowledge(conn, settings, token, model, provider, prompt_sha256):
     await lock(conn)
     state = await read_state(conn, settings)
     accepted_versions = {state['active']['version']} | {item.get('activated_version') for item in state['candidates']} | {item['baseline_version'] for item in state['candidates']}
+    from .model_artifact_release import validated_releases
+    for release in validated_releases(state):
+        accepted_versions.update((release['before']['version'], release['after']['version']))
     if claim['version'] not in accepted_versions:
         raise HTTPException(409, '配置消费版本无有效激活记录')
     receipt = {**claim, 'consumed_at': datetime.now(timezone.utc).isoformat(), 'consumer': 'review_worker'}
