@@ -26,6 +26,17 @@ class MarketPeriodInputTests(unittest.TestCase):
         return reviews.MarketInput(review_id=uuid.uuid4(), attempt_id=uuid.uuid4(),
                                    fixture_id='fixture-period-test', period=period)
 
+    def test_total_goals_alias_is_exact_and_other_kinds_are_preserved(self):
+        for raw, expected in (('total_goals', 'total'), ('unknown_total_goals', 'unknown_total_goals'),
+                              ('handicap', 'handicap'), ('team_total', 'team_total'), (None, None)):
+            with self.subTest(raw=raw):
+                body = reviews.MarketInput(review_id=uuid.uuid4(), attempt_id=uuid.uuid4(),
+                    fixture_id='fixture-period-test', market_kind=raw, period='first_half',
+                    line='0.5', selection='over')
+                self.assertEqual(expected, body.market_kind)
+                self.assertEqual(('first_half', Decimal('0.5'), 'over'),
+                                 (body.period, body.line, body.selection))
+
     def test_exact_chinese_periods_and_existing_full_aliases(self):
         for raw, expected in (('全场', 'full_time'), ('上半场', 'first_half'),
                               ('下半场', 'second_half'), ('full_match', 'full_time'),
@@ -344,6 +355,37 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         unknown = await self.post('list_match_markets', fixture_id=fixture_id,
                                  market_kind='unknown_totals', period='first_half')
         self.assertEqual(200, unknown.status_code, unknown.text)
+        self.assertEqual([], unknown.json()['markets'])
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
+
+    async def test_total_goals_reads_only_the_bound_half_line_and_direction(self):
+        fixture_id = await self.fixture(markets=[
+            {'market_id': market, 'market_name': market, 'kind': kind, 'period': period,
+             'line': line, 'selection': selection, 'price': '1.95',
+             'source_updated_at': self.now.isoformat(), 'received_at': self.now.isoformat()}
+            for market, kind, period, line, selection in (
+                ('half', 'total', 'first_half', '0.5', 'over'),
+                ('half', 'total', 'first_half', '0.5', 'under'),
+                ('full', 'total', 'full_time', '0.5', 'over'),
+                ('half-extra', 'total', 'first_half', '0.75', 'over'),
+                ('handicap', 'handicap', 'first_half', '0.5', 'home'))])
+        unread = await self.post('list_match_markets', fixture_id=fixture_id,
+                                market_kind='total_goals', period='first_half')
+        self.assertEqual(409, unread.status_code)
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        response = await self.post('list_match_markets', fixture_id=fixture_id,
+            market_kind='total_goals', period='first_half', line='0.5', selection='over')
+        self.assertEqual(200, response.status_code, response.text)
+        result = response.json()
+        self.assertEqual('total', result['market_filter']['market_kind'])
+        self.assertEqual(1, len(result['markets']))
+        self.assertEqual(('total', 'first_half', 'over', Decimal('.5')),
+                         tuple(result['markets'][0][k] for k in ('market_kind', 'period', 'selection'))
+                         + (Decimal(result['markets'][0]['line']),))
+        unknown = await self.post('list_match_markets', fixture_id=fixture_id,
+                                 market_kind='unknown_total_goals', period='first_half')
+        self.assertEqual(200, unknown.status_code)
         self.assertEqual([], unknown.json()['markets'])
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_market_reads'))
 
