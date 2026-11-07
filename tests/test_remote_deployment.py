@@ -310,6 +310,7 @@ class RealWorkerContractTests(unittest.IsolatedAsyncioTestCase):
         from services.collector.telegram_backend import TelegramBackend
         from services.collector.leyu_runtime import LeyuRuntime
         from services.collector.worker import get_config, CollectorService
+        from services.collector.quote_snapshot import DeliveredFixtureSnapshots
         from services.executor.worker import Executor
         calls=[]
         async def handle(request):
@@ -325,6 +326,7 @@ class RealWorkerContractTests(unittest.IsolatedAsyncioTestCase):
             await get_config(client,root)
             collector=CollectorService.__new__(CollectorService)
             collector.api=client;collector.api_url=root;collector._upload_lock=asyncio.Lock()
+            collector._delivered_snapshots=DeliveredFixtureSnapshots()
             await collector.upload([{'id':'11111111-1111-1111-1111-111111111111','source_match_id':'sample','markets':[]}])
             runtime=LeyuRuntime(client,root)
             await runtime._rpc('GET','/config');await runtime._claim('synthetic')
