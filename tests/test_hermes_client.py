@@ -124,6 +124,16 @@ class HermesClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured[0].headers['X-Hermes-Session-Id'], captured[1].headers['X-Hermes-Session-Id'])
         self.assertNotEqual(captured[0].headers['Idempotency-Key'], captured[1].headers['Idempotency-Key'])
         self.assertEqual([{'type': 'text', 'text': '继续分页'}], json.loads(captured[1].content)['messages'][-1]['content'])
+        for request in captured:
+            system = json.loads(request.content)['messages'][0]
+            self.assertEqual('system', system['role'])
+            self.assertEqual(hermes_client.SYSTEM_PROMPT, system['content'])
+            self.assertIn('无需重复加载技能', system['content'])
+            self.assertIn('search_complete=true 且 resolution.resolved=true', system['content'])
+            self.assertIn('否则完整分页后调用 resolve_match', system['content'])
+            self.assertIn('筛选范围内的完整系统盘口', system['content'])
+            self.assertNotIn('完整分页后必须调用 resolve_match', system['content'])
+            self.assertNotIn('读取该比赛全部系统盘口', system['content'])
         self.assertEqual(0, summary['image_count'])
         self.assertEqual(0, summary['image_bytes'])
 
