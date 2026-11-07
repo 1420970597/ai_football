@@ -26,6 +26,10 @@ terminal:
 
 agent:
   max_turns: 128
+  # The current visual route accepts explicit none; keep other model defaults.
+  reasoning_overrides:
+    deepseek-v4.1-flash: false
+    cline-pass/deepseek-v4.1-flash: false
   # Durable review jobs own transient retries and retain per-attempt evidence.
   api_max_retries: 1
   auto_recovery_cycles: 0

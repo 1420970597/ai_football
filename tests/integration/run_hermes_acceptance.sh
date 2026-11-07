@@ -18,13 +18,16 @@ HERMES="$TASK-hermes"
 DSN='postgresql://postgres@ai-football-v2-pgverify:5432/v2_integration_test'
 mkdir -p "$SNAPSHOT/services/collector" "$SNAPSHOT/tests/integration" "$SNAPSHOT/integrations" "$SNAPSHOT/infra/test"
 cp -a services/api services/hermes-mcp "$SNAPSHOT/services/"
+cp services/quote_witness.py "$SNAPSHOT/services/"
 cp services/collector/requirements.txt "$SNAPSHOT/services/collector/"
 cp infra/test/Dockerfile "$SNAPSHOT/infra/test/"
 cp -a integrations/hermes "$SNAPSHOT/integrations/"
-cp tests/integration/hermes_roundtrip.py tests/integration/hermes_provider_fixture.py "$SNAPSHOT/tests/integration/"
+cp tests/integration/hermes_roundtrip.py tests/integration/hermes_provider_fixture.py tests/integration/hermes_reasoning_contract.py "$SNAPSHOT/tests/integration/"
 cp tests/test_hermes_fixture_contract.py "$SNAPSHOT/tests/"
+chmod -R a+rX "$SNAPSHOT"
 sed 's/max_turns: 128/max_turns: 4/' "$SNAPSHOT/integrations/hermes/config.yaml" > "$EVIDENCE/budget-config.yaml"
 sed 's/timeout_seconds: 30/timeout_seconds: 2/g' "$SNAPSHOT/integrations/hermes/config.yaml" > "$EVIDENCE/silent-config.yaml"
+chmod a+r "$EVIDENCE/budget-config.yaml" "$EVIDENCE/silent-config.yaml"
 cleanup() {
   local code=$?
   trap - EXIT
@@ -46,10 +49,10 @@ docker build --memory 512m --cpu-period 100000 --cpu-quota 50000 \
   -f "$SNAPSHOT/infra/test/Dockerfile" -t "$VERIFIER" "$SNAPSHOT" > "$EVIDENCE/verifier-build.log" 2>&1
 docker image inspect "$VERIFIER" "$HERMES_IMAGE" "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$EVIDENCE/images.txt"
 verify() {
-  docker run --rm --network "$NETWORK" --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m --pids-limit=128 -e PYTHONDONTWRITEBYTECODE=1 -v "$SNAPSHOT:/workspace:ro" -w /workspace -e PYTHONPATH=/workspace/services/api:/workspace "$@"
+  docker run --rm --network "$NETWORK" --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m --pids-limit=128 -e PYTHONDONTWRITEBYTECODE=1 -v "$SNAPSHOT:/workspace:ro" -w /workspace -e PYTHONPATH=/workspace/services/api:/workspace/services:/workspace "$@"
 }
 service() {
-  docker run -d --network "$NETWORK" --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m --pids-limit=128 -e PYTHONDONTWRITEBYTECODE=1 -v "$SNAPSHOT:/workspace:ro" -w /workspace -e PYTHONPATH=/workspace/services/api:/workspace --label "ai-football.test=$TASK" "$@"
+  docker run -d --network "$NETWORK" --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m --pids-limit=128 -e PYTHONDONTWRITEBYTECODE=1 -v "$SNAPSHOT:/workspace:ro" -w /workspace -e PYTHONPATH=/workspace/services/api:/workspace/services:/workspace --label "ai-football.test=$TASK" "$@"
 }
 docker run --rm --network=none --cpus=.25 --memory=256m --pids-limit=64 --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m -e PYTHONDONTWRITEBYTECODE=1 -v "$SNAPSHOT:/workspace:ro" -w /workspace "$VERIFIER" python -m unittest discover -s tests -p test_hermes_fixture_contract.py -v
 
@@ -86,6 +89,14 @@ readonly_skill() {
 cases() {
   verify --cpus=.25 --memory=256m -e INTEGRATION_DATABASE_URL="$DSN" -e INTEGRATION_SCENARIOS="$1" "$VERIFIER" python tests/integration/hermes_roundtrip.py
 }
+docker run --rm --network none --cpus=.2 --memory=192m --pids-limit=96 \
+  --read-only --cap-drop=ALL --security-opt=no-new-privileges --user 10000:10000 \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m -e PYTHONDONTWRITEBYTECODE=1 \
+  -e PYTHONPATH=/opt/hermes -e HERMES_HOME=/tmp/isolated-hermes -w /opt/hermes \
+  --entrypoint /opt/hermes/.venv/bin/python \
+  -v "$SNAPSHOT/tests/integration/hermes_reasoning_contract.py:/contract.py:ro" \
+  -v "$SNAPSHOT/integrations/hermes/config.yaml:/config.yaml:ro" \
+  "$HERMES_IMAGE" /contract.py /config.yaml > "$EVIDENCE/reasoning-contract.log" 2>&1
 start_hermes "$SNAPSHOT/integrations/hermes/config.yaml"
 wait_services
 assert_retry_policy
