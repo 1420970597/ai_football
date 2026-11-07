@@ -76,7 +76,11 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.close()
         admin=await asyncpg.connect(DSN)
         try:
-            await admin.execute('DROP DATABASE '+self.dbname+' WITH (FORCE)')
+            # The pool has already closed all owned connections. Ordinary DROP
+            # also handles transient autovacuum workers without requesting the
+            # extra cross-role termination privileges required by FORCE. A
+            # leaked client connection must still make cleanup fail visibly.
+            await admin.execute('DROP DATABASE '+self.dbname)
         finally:
             await admin.close()
 
