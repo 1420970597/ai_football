@@ -68,6 +68,28 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('attempt', captured[0][1]['attempt_id'])
         self.assertEqual('Bearer isolated-mcp-transport', captured[0][2])
 
+    async def test_bounded_league_search_forwards_empty_team_without_inventing_resolution(self):
+        captured = []
+
+        async def upstream(request):
+            captured.append(json.loads(request.content))
+            return httpx.Response(200, json={'items': [{'id': 'candidate-only',
+                'retrieval_basis': 'competition_time_candidate'}], 'next_cursor': None,
+                'search_complete': True, 'resolution': {'resolved': False}})
+
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        arguments = {'review_id': 'job', 'attempt_id': 'attempt', 'team_query': '',
+            'competition_query': '捷克丙级联赛', 'sport': 'football',
+            'from_utc': '2026-11-08T00:00:00Z', 'to_utc': '2026-11-09T00:00:00Z',
+            'read_markets': True, 'market_kind': 'total', 'period': 'full_time'}
+        response = await self.rpc('tools/call', {'name': 'search_matches', 'arguments': arguments})
+        self.assertFalse(response.json()['result'].get('isError', False), response.text)
+        self.assertEqual(1, len(captured), 'unresolved league candidates must not trigger a market read')
+        for name in ('review_id', 'attempt_id', 'team_query', 'competition_query', 'sport', 'from_utc', 'to_utc'):
+            self.assertEqual(arguments[name], captured[0][name])
+        self.assertNotIn('market_result', response.json()['result'].get('structuredContent', {}))
+
     async def test_resolve_schema_explains_and_constrains_native_search_reference(self):
         tools = (await self.rpc('tools/list')).json()['result']['tools']
         tool = next(t for t in tools if t['name'] == 'resolve_match')

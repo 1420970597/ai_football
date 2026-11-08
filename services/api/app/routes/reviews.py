@@ -5,7 +5,7 @@ import hashlib
 import json
 import unicodedata
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -14,6 +14,7 @@ from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_val
 
 from .. import database
 from ..review_policy import REALTIME_WINDOW_SECONDS
+from ..competition_names import normalize_competition_name
 from ..handicap_lines import line_terms
 from ..review_line_intent import line_intent_rejection
 from ..review_state import authorize, fresh_quote, quote_context, quote_context_changed_fields
@@ -44,7 +45,7 @@ class AttemptInput(BaseModel):
 
 
 class SearchInput(AttemptInput):
-    team_query: str = Field(min_length=2, max_length=120)
+    team_query: str = Field(max_length=120)
     phase: str = Field(default="all", pattern="^(all|live|scheduled|finished|cancelled)$")
     competition_query: str | None = Field(default=None, max_length=120)
     sport: str | None = Field(default=None, min_length=1, max_length=20, pattern=r'^[a-z][a-z0-9_]{0,19}$')
@@ -64,8 +65,13 @@ class SearchInput(AttemptInput):
     def valid_window(self):
         if self.from_utc and self.to_utc and self.from_utc > self.to_utc:
             raise ValueError("start must precede end")
-        if not self.team_query.strip():
-            raise ValueError("team name is required")
+        if self.team_query.strip():
+            if len(self.team_query) < 2:
+                raise ValueError("team name must contain at least two characters")
+        elif (len(normalize_competition_name(self.competition_query or '', self.sport)) < 2 or not self.sport
+              or not self.from_utc or not self.to_utc
+              or not timedelta(0) < self.to_utc-self.from_utc <= timedelta(days=7)):
+            raise ValueError("league-only search requires competition, sport and a positive window of at most seven days")
         if (self.team_a is None) != (self.team_b is None):
             raise ValueError('both team identities are required for inline resolution')
         if self.team_a is not None and (not normalize_team_name(self.team_a) or not normalize_team_name(self.team_b)

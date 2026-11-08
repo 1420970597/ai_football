@@ -22,6 +22,7 @@ _INSERT_SNAPSHOT = (
     "WITH inserted AS (INSERT INTO v2_match_search_candidates(job_id,search_key,fixture_id,position,candidate_data) "
     "SELECT $1,$2,f.id,row_number() OVER(ORDER BY f.kickoff_at,f.id)," + _CANDIDATE_JSON
     + " || CASE WHEN $13::boolean THEN jsonb_build_object('retrieval_basis','source_fragment_candidate') "
+    + "WHEN $4='%%' THEN jsonb_build_object('retrieval_basis','competition_time_candidate') "
     "ELSE '{}'::jsonb END FROM v2_fixtures f "
     "WHERE f.phase IN ('live','scheduled','finished','cancelled') AND ($3='all' OR f.phase=$3) "
     "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 "
