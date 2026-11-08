@@ -21,6 +21,7 @@ from fastapi.encoders import jsonable_encoder
 from . import database
 from .handicap_lines import line_terms
 from .review_state import active_job, append_traces, authorize, trace
+from .review_resolution import DISAMBIGUATION_LIMIT
 
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
 CHUNK_BYTES = 23 * 1024  # Base64 plus the fixed metadata remains below 32 KiB.
@@ -109,7 +110,11 @@ def snapshot_result(kind, result, *, compact_markets=False):
                 'max_window_days', 'does_not_confirm_identity',
             })
     elif kind == 'mcp_resolve_match':
-        value = _project(result, {'resolved', 'reason', 'candidate_count'})
+        value = _project(result, {'resolved', 'reason', 'candidate_count', 'matching_candidates_complete'})
+        if 'matching_candidates' in result:
+            if len(result['matching_candidates']) > DISAMBIGUATION_LIMIT:
+                _budget_error()
+            value['matching_candidates'] = [_search_fixture(item) for item in result['matching_candidates']]
         if 'fixture' in result:
             value['fixture'] = _search_fixture(result['fixture'])
     elif kind == 'mcp_list_match_markets':

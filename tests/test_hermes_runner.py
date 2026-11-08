@@ -59,7 +59,8 @@ class HermesRunnerTests(unittest.TestCase):
         self.assertIn('sport与范围在同一查询的各游标页保持一致', skill)
         self.assertIn('football与football_parallel是工具服务器名称', context)
         for text in ('逐场区分赛果反馈与新增推荐', '本身不代表旧单', '只有本场有回顾证据',
-                     '正文无需再次写方向或盘口', '缺有效报价不等于没有推荐意图'):
+                     '正文无需再次写方向或盘口', '缺有效报价不等于没有推荐意图',
+                     'ambiguous_fixture 不表示没有比赛', 'matching_candidates'):
             self.assertIn(text, skill)
 
     def test_gateway_profile_cwd_cannot_silently_resolve_to_home(self):

@@ -51,7 +51,9 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
             team_a='CD 印加', team_b='梅塔潘', page_size=1, cursor=first['next_cursor'])).json()
         self.assertTrue(last['search_complete'])
         self.assertEqual({'resolved': False, 'reason': 'ambiguous_fixture', 'candidate_count': 2},
-                         last['resolution'])
+                         {key:last['resolution'][key]for key in ('resolved','reason','candidate_count')})
+        self.assertEqual(2,len(last['resolution']['matching_candidates']))
+        self.assertTrue(last['resolution']['matching_candidates_complete'])
         self.assertEqual(0, await self.bindings())
 
     async def test_complete_unique_search_binds_reads_records_and_passes_completion(self):

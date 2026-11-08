@@ -13,6 +13,9 @@ from .team_matching import normalize_team_name, team_name_matches, with_verified
 if TYPE_CHECKING:
     from .routes.reviews import ResolveInput
 
+DISAMBIGUATION_LIMIT = 20
+DISAMBIGUATION_FIELDS = ('id', 'sport', 'competition_name', 'home_team', 'away_team', 'kickoff_at', 'phase')
+
 
 async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
     """Caller verifies the active attempt and completed, attempt-owned search."""
@@ -37,8 +40,15 @@ async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
             continue
         matches.append(row)
     if len(matches) != 1:
-        return {'resolved': False, 'reason': 'no_matching_fixture' if not matches else 'ambiguous_fixture',
-                'candidate_count': len(matches)}
+        result = {'resolved': False, 'reason': 'no_matching_fixture' if not matches else 'ambiguous_fixture',
+                  'candidate_count': len(matches)}
+        if matches:
+            ordered = sorted(matches, key=lambda row: (row['candidate_data']['kickoff_at'], row['fixture_id']))
+            result['matching_candidates'] = [
+                {key: row['candidate_data'].get(key) for key in DISAMBIGUATION_FIELDS}
+                for row in ordered[:DISAMBIGUATION_LIMIT]]
+            result['matching_candidates_complete'] = len(matches) <= DISAMBIGUATION_LIMIT
+        return result
     fixture = matches[0]
     evidence = jsonable_encoder(body.model_dump(exclude={'review_id', 'attempt_id'}))
     projected = with_verified_aliases(fixture['candidate_data'])
