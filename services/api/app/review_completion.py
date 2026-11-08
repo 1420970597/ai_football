@@ -6,6 +6,7 @@ import re
 import unicodedata
 
 from .review_intent_retry import intent_retry_ctes, intent_retry_projection
+from .review_phase_claims import current_phase_claims
 
 DETAIL_LIMIT = 100
 
@@ -110,7 +111,7 @@ def explicit_text_pick(content: str) -> bool:
 
 
 async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], content: str = '',
-                            require_intent_review: bool = False) -> dict:
+                            require_intent_review: bool = False, *, final_content: str = '') -> dict:
     row = await conn.fetchrow(
         "WITH " + unfinished_searches_cte() + "," + intent_retry_ctes() + ","
         " named_claims AS (SELECT unnest(string_to_array($5::text,chr(10))) AS content),"
@@ -138,17 +139,26 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
         " ORDER BY s.complete DESC,s.search_key LIMIT 1) AS candidate "
         " FROM mentions m WHERE NOT EXISTS("
         " SELECT 1 FROM v2_review_fixture_bindings b WHERE b.job_id=$1 AND b.attempt_id=$2 "
-        " AND b.fixture_id=m.fixture_id)) "
+        " AND b.fixture_id=m.fixture_id)),"
+        " phase_conflicts AS (SELECT DISTINCT c.fixture_id,c.claimed_phase,f.phase AS actual_phase "
+        " FROM jsonb_to_recordset($7::jsonb) c(fixture_id text,claimed_phase text) "
+        " JOIN v2_review_fixture_bindings b ON b.fixture_id=c.fixture_id "
+        " AND b.job_id=$1 AND b.attempt_id=$2 JOIN v2_fixtures f ON f.id=b.fixture_id "
+        " WHERE f.phase<>c.claimed_phase) "
         " SELECT (SELECT count(*) FROM unfinished) AS unfinished_count,"
         " (SELECT jsonb_agg(x) FROM (SELECT * FROM unfinished ORDER BY search_key LIMIT $4) x) AS unfinished,"
         " (SELECT count(*) FROM unbound) AS unbound_count,"
         " (SELECT jsonb_agg(x) FROM (SELECT * FROM unbound ORDER BY fixture_id LIMIT $4) x) AS unbound,"
+        " (SELECT count(*) FROM phase_conflicts) AS phase_conflict_count,"
+        " (SELECT jsonb_agg(x) FROM (SELECT * FROM phase_conflicts "
+        " ORDER BY fixture_id,claimed_phase LIMIT $4) x) AS phase_conflicts,"
         " ($6::boolean AND NOT EXISTS(SELECT 1 FROM v2_review_fixture_bindings b "
         " WHERE b.job_id=$1 AND b.attempt_id=$2)) AS intent_unverified," + intent_retry_projection(),
         job_id, attempt_id, sorted(mentioned), DETAIL_LIMIT,
-        '\n'.join(_named_claim_clauses(content[:60002])), require_intent_review)
+        '\n'.join(_named_claim_clauses(content[:60002])), require_intent_review,
+        current_phase_claims(final_content))
     if (not row['unfinished_count'] and not row['unbound_count'] and not row['intent_unverified']
-            and not row['line_intent_retry_count']):
+            and not row['line_intent_retry_count'] and not row['phase_conflict_count']):
         return {}
     result = {'unfinished_search_count': row['unfinished_count'], 'unfinished_searches': row['unfinished'] or [],
             'unbound_mention_count': row['unbound_count'], 'unbound_mentions': row['unbound'] or [],
@@ -158,10 +168,18 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
     if row['line_intent_retry_count']:
         result['line_intent_retry_count'] = row['line_intent_retry_count']
         result['line_intent_retries'] = row['line_intent_retries'] or []
+    if row['phase_conflict_count']:
+        result['phase_claim_conflict_count'] = row['phase_conflict_count']
+        result['phase_claim_conflicts'] = row['phase_conflicts'] or []
     return result
 
 
 def continuation_prompt(issues: dict) -> str:
+    phase_hint = (
+        '最终说明中的当前比赛阶段与服务端当前事实不一致，请按phase_claim_conflicts的actual_phase纠正说明。'
+        '这不是新的推荐或录入许可；保留既有身份绑定、盘口及已接受信号。'
+        '若其余检查均通过，只修正说明，不重新搜索、重复读盘或重复录入。'
+        if issues.get('phase_claim_conflict_count') else '')
     line_hint = (
         '所提交quote_id的实际盘口与该项原始证据不一致，当前任务已读取同比赛/玩法/期间/方向的精确选项。'
         '请核对原图文、source_intent及matching_read_quote_ids并纠正编号；不得改写原意迁就邻近盘口，'
@@ -178,7 +196,7 @@ def continuation_prompt(issues: dict) -> str:
         '请使用当前实际提供的赛事检索及盘口工具核验原图文，不能仅改口说已完成。'
         '实际调用失败则保留错误，不自行扩大权限、虚构工具结果或猜测编号。'
         if issues.get('tool_availability_unverified') else '')
-    return line_hint + intent_hint + tool_hint + (
+    return phase_hint + line_hint + intent_hint + tool_hint + (
         '服务端工具证据核验尚未通过，请在本会话继续当前审核。沿用原 review_id、attempt_id、原图文和权限。'
         '先完成 unfinished_searches 中每个检索的准确 next cursor，保持原 scope（尤其 sport、phase、时间范围），'
         '连续分页直到无下一页，不要重启已完成检索。对模型提及但无绑定的比赛，只有原推荐意图且双方球队、'

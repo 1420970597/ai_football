@@ -16,6 +16,7 @@ from .hermes_client import (HermesProviderUnavailable, ReplyMediaPending, delete
 from .review_state import active_job, append_traces, trace
 from .review_summary import record_summary
 from .review_recovery import market_recovery
+from .review_phase_claims import current_phase_claims
 from .review_accepted_context import read_accepted_context
 from .review_completion import (completion_issues, continuation_prompt, mentioned_fixtures, named_identity_claims, explicit_text_pick,
                                 tool_recovery_pending, tool_unavailability_claim, tool_unavailability_issues)
@@ -414,7 +415,7 @@ async def _complete_review(pool, job: dict, started: float, model_result: dict |
 
 
 async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, require_tool_recovery=False,
-                                  named_content='', require_intent_review=False):
+                                  named_content='', require_intent_review=False, final_content=''):
     transient = (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError,
                  asyncpg.DeadlockDetectedError, asyncpg.SerializationError, asyncpg.PostgresConnectionError)
     for retry in range(2):
@@ -423,7 +424,8 @@ async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, req
                 await active_job(conn, job['id'], job['attempt_id'])
                 args = ((named_content, True) if require_intent_review
                         else (named_content,) if named_content else ())
-                issues = await completion_issues(conn, job['id'], job['attempt_id'], mentioned, *args)
+                phase_options = {'final_content': final_content} if final_content else {}
+                issues = await completion_issues(conn, job['id'], job['attempt_id'], mentioned, *args, **phase_options)
                 if tool_claim or (require_tool_recovery
                         and await tool_recovery_pending(conn, job['id'], job['attempt_id'])):
                     issues = {**tool_unavailability_issues(), **issues}
@@ -482,6 +484,8 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
         named_content = named_identity_claims(named_contents)
         if named_content:
             recovery_options['named_content'] = named_content
+        if current_phase_claims(content):
+            recovery_options['final_content'] = content
         if (message['review_mode'] == 'real_time' and not accepted_context
                 and explicit_text_pick(message.get('raw_text', ''))):
             recovery_options['require_intent_review'] = True
