@@ -10,7 +10,7 @@ from .review_completion import (completion_issues, mentioned_fixtures, named_ide
                                 tool_unavailability_claim, tool_unavailability_issues)
 from .review_summary_evidence import read_summary_evidence
 from .review_intent_retry import intent_matches_quote
-from .review_phase_claims import current_phase_claims
+from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
 
 SUMMARY_ITEM_LIMIT = 100
@@ -121,7 +121,8 @@ async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_
     intent_rejected = any(entry.get('intent_context') for entry in evidence.rejected)
     final_content = evidence.model_contents[-1] if evidence.model_contents else ''
     phase_options = ({'final_content': final_content}
-                     if current_phase_claims(final_content) or split_line_claim_conflicts(final_content) else {})
+                     if current_phase_claims(final_content) or named_phase_claims(final_content)
+                     or split_line_claim_conflicts(final_content) else {})
     incomplete = (await completion_issues(conn, job['id'], attempt_id, mentioned, named_content, require_intent,
                                          **phase_options)
                   if mentioned or named_content or require_intent or intent_rejected or phase_options

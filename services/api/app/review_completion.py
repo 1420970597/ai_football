@@ -6,7 +6,7 @@ import re
 import unicodedata
 
 from .review_intent_retry import intent_retry_ctes, intent_retry_projection
-from .review_phase_claims import current_phase_claims
+from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
 
 DETAIL_LIMIT = 100
@@ -142,8 +142,21 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
         " FROM mentions m WHERE NOT EXISTS("
         " SELECT 1 FROM v2_review_fixture_bindings b WHERE b.job_id=$1 AND b.attempt_id=$2 "
         " AND b.fixture_id=m.fixture_id)),"
+        " phase_claims AS (SELECT * FROM jsonb_to_recordset($7::jsonb) "
+        " AS c(fixture_id text,claimed_phase text,content text)),"
+        " phase_attributions AS (SELECT fixture_id,claimed_phase FROM phase_claims WHERE fixture_id IS NOT NULL "
+        " UNION ALL SELECT min(b.fixture_id),c.claimed_phase FROM phase_claims c "
+        " JOIN v2_review_fixture_bindings b ON b.job_id=$1 AND b.attempt_id=$2 "
+        " JOIN v2_match_search_candidates bc ON bc.job_id=b.job_id "
+        " AND bc.search_key=b.search_key AND bc.fixture_id=b.fixture_id "
+        " WHERE c.fixture_id IS NULL AND length(bc.candidate_data->>'home_team')>1 "
+        " AND length(bc.candidate_data->>'away_team')>1 "
+        " AND bc.candidate_data->>'home_team'<>bc.candidate_data->>'away_team' "
+        " AND strpos(c.content,bc.candidate_data->>'home_team')>0 "
+        " AND strpos(c.content,bc.candidate_data->>'away_team')>0 "
+        " GROUP BY c.content,c.claimed_phase HAVING count(DISTINCT b.fixture_id)=1),"
         " phase_conflicts AS (SELECT DISTINCT c.fixture_id,c.claimed_phase,f.phase AS actual_phase "
-        " FROM jsonb_to_recordset($7::jsonb) c(fixture_id text,claimed_phase text) "
+        " FROM phase_attributions c "
         " JOIN v2_review_fixture_bindings b ON b.fixture_id=c.fixture_id "
         " AND b.job_id=$1 AND b.attempt_id=$2 JOIN v2_fixtures f ON f.id=b.fixture_id "
         " WHERE f.phase<>c.claimed_phase) "
@@ -158,7 +171,7 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
         " WHERE b.job_id=$1 AND b.attempt_id=$2)) AS intent_unverified," + intent_retry_projection(),
         job_id, attempt_id, sorted(mentioned), DETAIL_LIMIT,
         '\n'.join(_named_claim_clauses(content[:60002])), require_intent_review,
-        current_phase_claims(final_content))
+        current_phase_claims(final_content) + named_phase_claims(final_content))
     if (not row['unfinished_count'] and not row['unbound_count'] and not row['intent_unverified']
             and not row['line_intent_retry_count'] and not row['phase_conflict_count'] and not display_conflicts):
         return {}

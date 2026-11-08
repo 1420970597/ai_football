@@ -16,7 +16,7 @@ from .hermes_client import (HermesProviderUnavailable, ReplyMediaPending, delete
 from .review_state import active_job, append_traces, trace
 from .review_summary import record_summary
 from .review_recovery import market_recovery
-from .review_phase_claims import current_phase_claims
+from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
 from .review_accepted_context import read_accepted_context
 from .review_completion import (completion_issues, continuation_prompt, mentioned_fixtures, named_identity_claims, explicit_text_pick,
@@ -485,7 +485,7 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
         named_content = named_identity_claims(named_contents)
         if named_content:
             recovery_options['named_content'] = named_content
-        if current_phase_claims(content) or split_line_claim_conflicts(content):
+        if current_phase_claims(content) or named_phase_claims(content) or split_line_claim_conflicts(content):
             recovery_options['final_content'] = content
         if (message['review_mode'] == 'real_time' and not accepted_context
                 and explicit_text_pick(message.get('raw_text', ''))):

@@ -16,7 +16,7 @@ _VALUES = '|'.join(sorted(map(re.escape, _PHASES), key=len, reverse=True))
 _EXPLICIT = re.compile(
     rf'(?:(?:当前(?:系统)?(?:比赛)?|系统)(?:阶段|状态)|phase|status)'
     rf'(?:\s*[:=为是]\s*|\s+)({_VALUES})(?![A-Za-z0-9_\u4e00-\u9fff])', re.I)
-_ISOLATED = re.compile(rf'(?:[,;|])\s*({_VALUES})\s*(?=[,;|。.]|$)', re.I)
+_ISOLATED = re.compile(rf'(?:[,;|(])\s*({_VALUES})\s*(?=[,;|。.)]|$)', re.I)
 _PAIRED = re.compile(
     rf'(?<![A-Za-z0-9_\u4e00-\u9fff])({_VALUES})'
     rf'(?:\s*\(\s*|\s+)({_VALUES})(?![A-Za-z0-9_\u4e00-\u9fff])', re.I)
@@ -29,9 +29,7 @@ def single_fixture_id(text: str) -> str | None:
     return next(iter(fixtures)) if len(fixtures) == 1 else None
 
 
-def current_phase_claims(content: str) -> list[dict[str, str]]:
-    """Only a single explicit fixture ID per nonquoted line is attributable."""
-    claims = set()
+def _current_phase_lines(content: str):
     fenced = False
     for raw in content[:20000].splitlines():
         line = unicodedata.normalize('NFKC', raw).strip()
@@ -42,12 +40,28 @@ def current_phase_claims(content: str) -> list[dict[str, str]]:
             continue
         line = re.sub(r'“[^”]*”|「[^」]*」', '', line)
         line = line.replace('**', '').replace('`', '')
-        fixture = single_fixture_id(line)
-        if fixture is None:
-            continue
+        phases = set()
         patterns = (_EXPLICIT,) if _HISTORICAL.search(line) else (_EXPLICIT, _ISOLATED, _PAIRED)
         for pattern in patterns:
             for match in pattern.finditer(line):
                 for value in match.groups():
-                    claims.add((fixture, _PHASES[value.lower()]))
+                    phases.add(_PHASES[value.lower()])
+        if phases:
+            yield line, phases
+
+
+def current_phase_claims(content: str) -> list[dict[str, str]]:
+    """Only a single explicit fixture ID per nonquoted line is attributable."""
+    claims = set()
+    for line, phases in _current_phase_lines(content):
+        fixture = single_fixture_id(line)
+        if fixture is not None:
+            claims.update((fixture, phase) for phase in phases)
     return [{'fixture_id': fixture, 'claimed_phase': phase} for fixture, phase in sorted(claims)]
+
+
+def named_phase_claims(content: str) -> list[dict[str, str]]:
+    """Text hints only; SQL must prove one existing attempt-owned team pair."""
+    claims = {(line, phase) for line, phases in _current_phase_lines(content)
+              if 'leyu:' not in line for phase in phases}
+    return [{'content': line, 'claimed_phase': phase} for line, phase in sorted(claims)]
