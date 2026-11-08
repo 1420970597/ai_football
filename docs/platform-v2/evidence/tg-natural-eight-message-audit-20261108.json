@@ -1,0 +1,243 @@
+{
+  "schema": "safe-live-natural-review-audit-v1",
+  "read_only": true,
+  "source_commit": "19b0157265b9540f4c0d589dffbd6e678736e4d8",
+  "window_start": "2026-11-08 19:58:06.304297+00:00",
+  "natural_messages": 8,
+  "text_only": 6,
+  "image_messages": 2,
+  "all_eight_manually_reviewed": true,
+  "positive_recommendation_samples": 0,
+  "actual_original_image_hashes_verified_and_primary_viewed": 2,
+  "missing_receipts": 0,
+  "incorrect_recommendation_samples_found": 0,
+  "three_second_target_passed": false,
+  "latency_sample_note": "Stored event-to-conclusion metric; does not prove posted-to-conclusion latency or positive recommendation latency.",
+  "latency_summary": {
+    "provider_elapsed_ms": {
+      "min": 2062.237,
+      "median": 3447.3795,
+      "max": 8557.429
+    },
+    "model_elapsed_ms": {
+      "min": 4934.024,
+      "median": 6751.0555,
+      "max": 12578.339
+    },
+    "event_to_conclusion_ms": {
+      "min": 10263.994,
+      "median": 18522.307,
+      "max": 81132.997
+    },
+    "queue_wait_ms": {
+      "min": 2627.695,
+      "median": 8910.6855,
+      "max": 71446.089
+    },
+    "scheduler_claim_elapsed_ms": {
+      "min": 1602.311,
+      "median": 1761.7415,
+      "max": 3227.072
+    },
+    "prompt_tokens": {
+      "min": 14299,
+      "median": 14798.5,
+      "max": 15057
+    }
+  },
+  "cases": [
+    {
+      "message_alias": 1,
+      "source_text_chars": 3,
+      "media_count": 0,
+      "media_sha256": [],
+      "manual_category": "non_recommendation_chat",
+      "full_model_conclusion_manually_read": true,
+      "original_images_primary_viewed": false,
+      "model_conclusion_sha256": "e972b86287c0fba343d171e729cdbbc6bfd01b49c16f1e14ce15212bcb9ac8b3",
+      "worker_completion_verified": true,
+      "final_transaction_verified": true,
+      "accepted_signals": 0,
+      "latency": {
+        "provider_elapsed_ms": 8557.429,
+        "model_elapsed_ms": 12578.339,
+        "scheduler_claim_elapsed_ms": 2517.514,
+        "event_to_conclusion_ms": 18633.727,
+        "queue_wait_ms": 2627.695,
+        "prompt_tokens": 14836
+      }
+    },
+    {
+      "message_alias": 2,
+      "source_text_chars": 1,
+      "media_count": 0,
+      "media_sha256": [],
+      "manual_category": "non_recommendation_chat",
+      "full_model_conclusion_manually_read": true,
+      "original_images_primary_viewed": false,
+      "model_conclusion_sha256": "75e911a7fcfae680675dbb42ec347b2aafc0b572b6d874418c9c2e9ae4576f93",
+      "worker_completion_verified": true,
+      "final_transaction_verified": true,
+      "accepted_signals": 0,
+      "latency": {
+        "provider_elapsed_ms": 3497.344,
+        "model_elapsed_ms": 7978.484,
+        "scheduler_claim_elapsed_ms": 1730.65,
+        "event_to_conclusion_ms": 15398.635,
+        "queue_wait_ms": 4232.467,
+        "prompt_tokens": 14311
+      }
+    },
+    {
+      "message_alias": 3,
+      "source_text_chars": 2,
+      "media_count": 0,
+      "media_sha256": [],
+      "manual_category": "non_recommendation_chat",
+      "full_model_conclusion_manually_read": true,
+      "original_images_primary_viewed": false,
+      "model_conclusion_sha256": "314dd42712a2ad7a58ddffa99bfde84f0c76de0aa1436c754a92becebeaa6e8b",
+      "worker_completion_verified": true,
+      "final_transaction_verified": true,
+      "accepted_signals": 0,
+      "latency": {
+        "provider_elapsed_ms": 3397.415,
+        "model_elapsed_ms": 5810.992,
+        "scheduler_claim_elapsed_ms": 1613.507,
+        "event_to_conclusion_ms": 42003.159,
+        "queue_wait_ms": 33997.526,
+        "prompt_tokens": 14799
+      }
+    },
+    {
+      "message_alias": 4,
+      "source_text_chars": 2,
+      "media_count": 0,
+      "media_sha256": [],
+      "manual_category": "non_recommendation_chat",
+      "full_model_conclusion_manually_read": true,
+      "original_images_primary_viewed": false,
+      "model_conclusion_sha256": "0b6f885c51559a665c9441c11bd8951af541ce62d5944ae975a42951fe423141",
+      "worker_completion_verified": true,
+      "final_transaction_verified": true,
+      "accepted_signals": 0,
+      "latency": {
+        "provider_elapsed_ms": 2869.676,
+        "model_elapsed_ms": 5659.578,
+        "scheduler_claim_elapsed_ms": 1792.833,
+        "event_to_conclusion_ms": 35680.462,
+        "queue_wait_ms": 27864.474,
+        "prompt_tokens": 14795
+      }
+    },
+    {
+      "message_alias": 5,
+      "source_text_chars": 4,
+      "media_count": 0,
+      "media_sha256": [],
+      "manual_category": "non_recommendation_chat",
+      "full_model_conclusion_manually_read": true,
+      "original_images_primary_viewed": false,
+      "model_conclusion_sha256": "ec55435616b73bc61718bb1f637865c3db42bffffa5fffd6cd6852177e9b1461",
+      "worker_completion_verified": true,
+      "final_transaction_verified": true,
+      "accepted_signals": 0,
+      "latency": {
+        "provider_elapsed_ms": 3358.537,
+        "model_elapsed_ms": 7807.697,
+        "scheduler_claim_elapsed_ms": 1602.311,
+        "event_to_conclusion_ms": 81132.997,
+        "queue_wait_ms": 71446.089,
+        "prompt_tokens": 14798
+      }
+    },
+    {
+      "message_alias": 6,
+      "source_text_chars": 4,
+      "media_count": 0,
+      "media_sha256": [],
+      "manual_category": "non_recommendation_chat",
+      "full_model_conclusion_manually_read": true,
+      "original_images_primary_viewed": false,
+      "model_conclusion_sha256": "48e3fd6864c9872fbb7a9309e3ed67bc6dc88c069e03c990e8c81ad0917dee3b",
+      "worker_completion_verified": true,
+      "final_transaction_verified": true,
+      "accepted_signals": 0,
+      "latency": {
+        "provider_elapsed_ms": 2062.237,
+        "model_elapsed_ms": 4934.024,
+        "scheduler_claim_elapsed_ms": 3227.072,
+        "event_to_conclusion_ms": 10263.994,
+        "queue_wait_ms": 3380.375,
+        "prompt_tokens": 14299
+      }
+    },
+    {
+      "message_alias": 7,
+      "source_text_chars": 0,
+      "media_count": 1,
+      "media_sha256": [
+        "e3709bf8c499ac4aba62facfb0aaf7030b2293bfb7b3459247692dae95bb3c40"
+      ],
+      "manual_category": "non_recommendation_sticker",
+      "full_model_conclusion_manually_read": true,
+      "original_images_primary_viewed": true,
+      "model_conclusion_sha256": "6e07aa3ec09beac6e7b0dbbee709a5d8784b51d18f28c3f6b51d2c8439d9a0ae",
+      "worker_completion_verified": true,
+      "final_transaction_verified": true,
+      "accepted_signals": 0,
+      "latency": {
+        "provider_elapsed_ms": 3560.262,
+        "model_elapsed_ms": 6381.102,
+        "scheduler_claim_elapsed_ms": 1603.695,
+        "event_to_conclusion_ms": 18410.887,
+        "queue_wait_ms": 9713.987,
+        "prompt_tokens": 15049
+      }
+    },
+    {
+      "message_alias": 8,
+      "source_text_chars": 0,
+      "media_count": 1,
+      "media_sha256": [
+        "fd4c9f662a6a76d782c7a89ff6ecc8162475f78a544b12b4d9ad6a830b43609b"
+      ],
+      "manual_category": "non_recommendation_sticker",
+      "full_model_conclusion_manually_read": true,
+      "original_images_primary_viewed": true,
+      "model_conclusion_sha256": "43c6fc2dae7368aa061e9af52133922117017de027e333250b459657f98d9b14",
+      "worker_completion_verified": true,
+      "final_transaction_verified": true,
+      "accepted_signals": 0,
+      "latency": {
+        "provider_elapsed_ms": 3824.878,
+        "model_elapsed_ms": 7121.009,
+        "scheduler_claim_elapsed_ms": 1864.46,
+        "event_to_conclusion_ms": 17676.598,
+        "queue_wait_ms": 8107.384,
+        "prompt_tokens": 15057
+      }
+    }
+  ],
+  "production_writes": 0,
+  "model_configuration_changed": false,
+  "raw_source_or_identities_exported": false,
+  "raw_evidence_sha256": "7926dca0d2a52e18f3358d2854283f133ddf1f4f3a495b53e08744220cfbe2d7",
+  "retained_probe_failures": [
+    {
+      "case": "e1594",
+      "native_exit_code": 1,
+      "stage": "archive_copy_into_readonly_rootfs"
+    },
+    {
+      "case": "e1595",
+      "native_exit_code": 1,
+      "stage": "archive_copy_from_tmpfs"
+    },
+    {
+      "case": "e1596",
+      "native_exit_code": 0,
+      "stage": "owned_tmpfs_tar_stream_export"
+    }
+  ]
+}

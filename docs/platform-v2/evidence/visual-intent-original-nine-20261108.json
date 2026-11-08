@@ -1,0 +1,187 @@
+{
+  "passed": true,
+  "source_commit": "875028c27be043f469d05624f9a02987306dde70",
+  "manual_scope": "all nine full final texts plus authoritative phase SQL and real final transaction receipts",
+  "cases": [
+    {
+      "bound_fixtures": [
+        "leyu:5593645"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 22782.304,
+      "completion_rounds": 1,
+      "transaction_completion_verified": true,
+      "case": "e1575",
+      "tool_phases": {
+        "leyu:5593645": "scheduled"
+      },
+      "final_sha256": "6813edf0a5ac5db4d4479b09fed5539e86b179b0910b7f6da9396b94890c9823",
+      "full_final_manually_read": true,
+      "intent_phase_direction_period_line_and_rules_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5593645"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 21537.353,
+      "completion_rounds": 1,
+      "transaction_completion_verified": true,
+      "case": "e1576",
+      "tool_phases": {
+        "leyu:5593645": "scheduled"
+      },
+      "final_sha256": "8c5e63f67e11c3267992cdfa806ddf5431ff2cddacb0525132ba6b29677f49f0",
+      "full_final_manually_read": true,
+      "intent_phase_direction_period_line_and_rules_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5593645"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 28534.286,
+      "completion_rounds": 1,
+      "transaction_completion_verified": true,
+      "case": "e1577",
+      "tool_phases": {
+        "leyu:5593645": "scheduled"
+      },
+      "final_sha256": "9a214c3d0035ec8239f8929c6c1cb192f21ee5060d0c83ba2ae31cab9a1d75d3",
+      "full_final_manually_read": true,
+      "intent_phase_direction_period_line_and_rules_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5803626",
+        "leyu:5803628"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 35085.117,
+      "completion_rounds": 1,
+      "transaction_completion_verified": true,
+      "case": "e1578",
+      "tool_phases": {
+        "leyu:5803626": "live",
+        "leyu:5803628": "live"
+      },
+      "final_sha256": "cbdacf214e0051a3e5e1b289ff267ef75e6aa52f31c935f401c9baf62aedbab3",
+      "full_final_manually_read": true,
+      "intent_phase_direction_period_line_and_rules_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5803626",
+        "leyu:5803628"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 18905.809,
+      "completion_rounds": 1,
+      "transaction_completion_verified": true,
+      "case": "e1579",
+      "tool_phases": {
+        "leyu:5803626": "live",
+        "leyu:5803628": "live"
+      },
+      "final_sha256": "9ebf4b6d63b81b8b6427490ca67ad05199028045496db6a84efe5823aa3dfb16",
+      "full_final_manually_read": true,
+      "intent_phase_direction_period_line_and_rules_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5803626",
+        "leyu:5803628"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 14349.913,
+      "completion_rounds": 1,
+      "transaction_completion_verified": true,
+      "case": "e1580",
+      "tool_phases": {
+        "leyu:5803626": "live",
+        "leyu:5803628": "live"
+      },
+      "final_sha256": "419adb2cfe9ab6bf4ba7cfae487c7441767aa76f2220b9613ab6de210bbdff8b",
+      "full_final_manually_read": true,
+      "intent_phase_direction_period_line_and_rules_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5720800"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 17337.494,
+      "completion_rounds": 1,
+      "transaction_completion_verified": true,
+      "case": "e1581",
+      "tool_phases": {
+        "leyu:5720800": "scheduled"
+      },
+      "final_sha256": "7206802cecb5f1d223270251b3c37fa15af0f119644461d537798e30b4f50c84",
+      "full_final_manually_read": true,
+      "intent_phase_direction_period_line_and_rules_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5720800"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 22596.443,
+      "completion_rounds": 1,
+      "transaction_completion_verified": true,
+      "case": "e1582",
+      "tool_phases": {
+        "leyu:5720800": "scheduled"
+      },
+      "final_sha256": "5d3eab114b70547da9b781b5de750d838aeec86578b59ae044167d4d1733be7f",
+      "full_final_manually_read": true,
+      "intent_phase_direction_period_line_and_rules_manually_checked": true
+    },
+    {
+      "bound_fixtures": [
+        "leyu:5720800"
+      ],
+      "image_count": 1,
+      "signal_count": 0,
+      "order_count": 0,
+      "elapsed_ms": 17968.197,
+      "completion_rounds": 1,
+      "transaction_completion_verified": true,
+      "case": "e1583",
+      "tool_phases": {
+        "leyu:5720800": "scheduled"
+      },
+      "final_sha256": "f539d37b42f623c3587376f94fb2053ac23f9aa2e38ba6e627defa5e0126bf88",
+      "full_final_manually_read": true,
+      "intent_phase_direction_period_line_and_rules_manually_checked": true
+    }
+  ],
+  "only_identity_intent_and_explanation_evidence": true,
+  "no_quote_or_production_recommendation_claim": true,
+  "provider_configuration_changed": false,
+  "production_writes": 0,
+  "funded_tests": 0,
+  "three_second_target_passed": false,
+  "previous_e1539_intent_and_e1543_rules_failures_not_overwritten": true,
+  "remaining_efficiency_gaps": [
+    "Some cases still repeat a complete zero-inventory read.",
+    "e1580 preserves original split line but adds a mathematically correct 1.25 magnitude despite the instruction to omit conversion prose."
+  ],
+  "does_not_establish_fresh_natural_positive_recommendation": true
+}
