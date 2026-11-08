@@ -78,6 +78,17 @@ def team_search_variants(value: str, *, sport: str | None = None) -> tuple[str, 
     return tuple(sorted(variants))
 
 
+def verified_team_search_variants(value: str, *, sport: str | None = None) -> dict[str, tuple[str, ...]]:
+    """Keep verified retrieval vocabulary tied to the candidate's actual sport."""
+    normalized = normalize_team_name(value)
+    variants = {}
+    for group in VERIFIED_TEAM_NAMES:
+        names = {normalize_team_name(name) for name in group['names']}
+        if normalized in names and (sport is None or sport == group['sport']):
+            variants.setdefault(group['sport'], set()).update(names)
+    return {key: tuple(sorted(values)) for key, values in variants.items()}
+
+
 def _club_marker_variants(value: str) -> set[str]:
     tokens = value.split()
     variants = {value}

@@ -17,7 +17,7 @@ from .review_state import active_job, append_traces, trace
 from .review_summary import record_summary
 from .review_recovery import market_recovery
 from .review_accepted_context import read_accepted_context
-from .review_completion import (completion_issues, continuation_prompt, mentioned_fixtures,
+from .review_completion import (completion_issues, continuation_prompt, mentioned_fixtures, named_identity_claims, explicit_text_pick,
                                 tool_recovery_pending, tool_unavailability_claim, tool_unavailability_issues)
 from .review_policy import FRESH_PRIORITY_WINDOW_SECONDS, REALTIME_WINDOW_SECONDS
 from .review_scheduler_setup import claim_pair_and_job_query, prepare_claim_schedule
@@ -413,14 +413,17 @@ async def _complete_review(pool, job: dict, started: float, model_result: dict |
                 await asyncio.sleep(.1)
 
 
-async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, require_tool_recovery=False):
+async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, require_tool_recovery=False,
+                                  named_content='', require_intent_review=False):
     transient = (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError,
                  asyncpg.DeadlockDetectedError, asyncpg.SerializationError, asyncpg.PostgresConnectionError)
     for retry in range(2):
         try:
             async with pool.acquire() as conn, conn.transaction():
                 await active_job(conn, job['id'], job['attempt_id'])
-                issues = await completion_issues(conn, job['id'], job['attempt_id'], mentioned)
+                args = ((named_content, True) if require_intent_review
+                        else (named_content,) if named_content else ())
+                issues = await completion_issues(conn, job['id'], job['attempt_id'], mentioned, *args)
                 if tool_claim or (require_tool_recovery
                         and await tool_recovery_pending(conn, job['id'], job['attempt_id'])):
                     issues = {**tool_unavailability_issues(), **issues}
@@ -434,6 +437,7 @@ async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, req
 async def _review_until_verified(pool, settings, job: dict, *, model_client=None, prepared_input=None):
     """All turns share the caller's overall deadline, heartbeat and frozen config."""
     mentioned = set()
+    named_contents = []
     issues = {}
     totals = {}
     usage_totals = {}
@@ -471,9 +475,16 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
             if isinstance(value, (int, float)):
                 usage_totals[key] = usage_totals.get(key, 0) + value
         mentioned.update(mentioned_fixtures(content))
+        named_contents.append(content)
         tool_claim = message['review_mode'] == 'real_time' and tool_unavailability_claim(content)
         recovery_options = ({'tool_claim': tool_claim, 'require_tool_recovery': tool_recovery_required}
                             if tool_claim or tool_recovery_required else {})
+        named_content = named_identity_claims(named_contents)
+        if named_content:
+            recovery_options['named_content'] = named_content
+        if (message['review_mode'] == 'real_time' and not accepted_context
+                and explicit_text_pick(message.get('raw_text', ''))):
+            recovery_options['require_intent_review'] = True
         issues, retries = await _read_completion_issues(pool, job, mentioned, **recovery_options)
         tool_recovery_required = bool(issues.get('tool_availability_unverified'))
         check_retries += retries

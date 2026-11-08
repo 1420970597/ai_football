@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 
 DETAIL_LIMIT = 100
 
@@ -71,37 +72,79 @@ def mentioned_fixtures(content: str) -> set[str]:
     return set(re.findall(r'(?<![\w:])leyu:\d{1,24}(?!\w)', content[:20000]))
 
 
-async def completion_issues(conn, job_id, attempt_id, mentioned: set[str]) -> dict:
+def named_identity_claims(contents) -> str:
+    """A negative verification hint, never permission to bind a candidate."""
+    claims = []
+    for content in contents[:3]:
+        text = content[:20000]
+        if re.search(r'已(?:经)?[^，。；\n]{0,16}(?:匹配|识别|找到|确认|定位)'
+                     r'|(?:匹配|识别|找到|确认|定位)(?:成功|完成)', text):
+            claims.append(text)
+    return '\n'.join(claims)
+
+
+def explicit_text_pick(content: str) -> bool:
+    """Request verification of a plain instruction; never create a pick."""
+    if not isinstance(content, str) or len(content) > 100:
+        return False
+    text = unicodedata.normalize('NFKC', content)
+    number = r'\d{1,3}(?:\.\d{1,3})?(?:\s*/\s*\d{1,3}(?:\.\d{1,3})?)?'
+    return bool(re.fullmatch(
+        rf'\s*(?:追|跟|上)\s*(?:{number}\s*[大小](?:球)?|[大小](?:球)?\s*{number})\s*[。!]*\s*', text))
+
+
+async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], content: str = '',
+                            require_intent_review: bool = False) -> dict:
     row = await conn.fetchrow(
         "WITH " + unfinished_searches_cte() + ","
+        " mentions AS (SELECT unnest($3::text[]) AS fixture_id UNION "
+        " SELECT c.fixture_id FROM v2_match_search_candidates c JOIN v2_match_searches s "
+        " ON s.job_id=c.job_id AND s.search_key=c.search_key "
+        " WHERE $5::text<>'' AND c.job_id=$1 AND s.attempt_id=$2 "
+        " AND length(c.candidate_data->>'home_team')>1 "
+        " AND length(c.candidate_data->>'away_team')>1 "
+        " AND c.candidate_data->>'home_team'<>c.candidate_data->>'away_team' "
+        " AND strpos($5,c.candidate_data->>'home_team')>0 "
+        " AND strpos($5,c.candidate_data->>'away_team')>0),"
         " unbound AS (SELECT m.fixture_id,(SELECT jsonb_build_object('search_key',s.search_key,"
         " 'search_complete',s.complete,'fixture',c.candidate_data) "
         " FROM v2_match_search_candidates c JOIN v2_match_searches s "
         " ON s.job_id=c.job_id AND s.search_key=c.search_key "
         " WHERE c.job_id=$1 AND s.attempt_id=$2 AND c.fixture_id=m.fixture_id "
         " ORDER BY s.complete DESC,s.search_key LIMIT 1) AS candidate "
-        " FROM unnest($3::text[]) AS m(fixture_id) WHERE NOT EXISTS("
+        " FROM mentions m WHERE NOT EXISTS("
         " SELECT 1 FROM v2_review_fixture_bindings b WHERE b.job_id=$1 AND b.attempt_id=$2 "
         " AND b.fixture_id=m.fixture_id)) "
         " SELECT (SELECT count(*) FROM unfinished) AS unfinished_count,"
         " (SELECT jsonb_agg(x) FROM (SELECT * FROM unfinished ORDER BY search_key LIMIT $4) x) AS unfinished,"
         " (SELECT count(*) FROM unbound) AS unbound_count,"
-        " (SELECT jsonb_agg(x) FROM (SELECT * FROM unbound ORDER BY fixture_id LIMIT $4) x) AS unbound",
-        job_id, attempt_id, sorted(mentioned), DETAIL_LIMIT)
-    if not row['unfinished_count'] and not row['unbound_count']:
+        " (SELECT jsonb_agg(x) FROM (SELECT * FROM unbound ORDER BY fixture_id LIMIT $4) x) AS unbound,"
+        " ($6::boolean AND NOT EXISTS(SELECT 1 FROM v2_review_fixture_bindings b "
+        " WHERE b.job_id=$1 AND b.attempt_id=$2)) AS intent_unverified",
+        job_id, attempt_id, sorted(mentioned), DETAIL_LIMIT,
+        content[:60002] if named_identity_claims([content]) else '', require_intent_review)
+    if not row['unfinished_count'] and not row['unbound_count'] and not row['intent_unverified']:
         return {}
-    return {'unfinished_search_count': row['unfinished_count'], 'unfinished_searches': row['unfinished'] or [],
+    result = {'unfinished_search_count': row['unfinished_count'], 'unfinished_searches': row['unfinished'] or [],
             'unbound_mention_count': row['unbound_count'], 'unbound_mentions': row['unbound'] or [],
             'detail_limit': DETAIL_LIMIT}
+    if row['intent_unverified']:
+        result['text_intent_unverified'] = True
+    return result
 
 
 def continuation_prompt(issues: dict) -> str:
+    intent_hint = (
+        '原正文是明确的新增追大小指令，目前没有当前审核的工具身份绑定。请结合会话原图文继续核验；'
+        '不要求图片高亮、已下注或注单确认。原文指令本身不批准绑定，仍须完整检索并核对双方、'
+        '梯队、时间和唯一性；完场也可确认身份但不得读取实时盘口或补录历史推荐。'
+        if issues.get('text_intent_unverified') else '')
     tool_hint = (
         '本项目配置了football与football_parallel受限MCP工具。上轮声称工具不可用，尚无后续成功调用证据；'
         '请使用当前实际提供的赛事检索及盘口工具核验原图文，不能仅改口说已完成。'
         '实际调用失败则保留错误，不自行扩大权限、虚构工具结果或猜测编号。'
         if issues.get('tool_availability_unverified') else '')
-    return tool_hint + (
+    return intent_hint + tool_hint + (
         '服务端工具证据核验尚未通过，请在本会话继续当前审核。沿用原 review_id、attempt_id、原图文和权限。'
         '先完成 unfinished_searches 中每个检索的准确 next cursor，保持原 scope（尤其 sport、phase、时间范围），'
         '连续分页直到无下一页，不要重启已完成检索。对模型提及但无绑定的比赛，只有原推荐意图且双方球队、'

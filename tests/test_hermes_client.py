@@ -27,7 +27,8 @@ class HermesClientTests(unittest.IsolatedAsyncioTestCase):
         system = '\n'.join(m['content'] for m in requests[0]['messages'] if m['role'] == 'system')
         for required in ('必须', '联赛', 'team_query=""', 'competition_query', '7天', '原文双方',
                          '比分两侧', '联赛标签', '黄框数字',
-                         'read_markets=true', 'market_result', '不重复', '完场或取消仍须唯一解析'):
+                         'read_markets=true', 'market_result', '不重复', '完场或取消仍须唯一解析',
+                         '不要求图片高亮', '注单确认'):
             self.assertIn(required, system)
 
     async def image_summary(self, message, *, prepared=False):

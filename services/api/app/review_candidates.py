@@ -7,7 +7,7 @@ import re
 from .chinese_names import sql_chinese_fold
 from .competition_names import normalize_competition_name
 from .review_tool_evidence import FIXTURE_FIELDS
-from .team_matching import normalize_team_name, team_search_variants
+from .team_matching import normalize_team_name, team_search_variants, verified_team_search_variants
 
 _GENERIC_FRAGMENTS = frozenset({
     '青年', '青年队', '联队', '竞技', '体育', '足球', '大学', '城市', '联合',
@@ -28,6 +28,12 @@ _INSERT_SNAPSHOT = (
     "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 "
     "OR regexp_replace(translate(lower(f.home_team),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]) "
     "OR regexp_replace(translate(lower(f.away_team),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]) "
+    "OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE($14::jsonb->f.sport,'[]'::jsonb)) "
+    "verified(pattern) WHERE "
+    "regexp_replace(translate(lower(f.home_team),$6,$7),'[^[:alnum:]]+',' ','g') LIKE verified.pattern "
+    "OR regexp_replace(translate(lower(f.away_team),$6,$7),'[^[:alnum:]]+',' ','g') LIKE verified.pattern "
+    "OR EXISTS (SELECT 1 FROM unnest(f.home_aliases || f.away_aliases) alias WHERE "
+    "regexp_replace(translate(lower(btrim(alias)),$6,$7),'[^[:alnum:]]+',' ','g') LIKE verified.pattern)) "
     "OR EXISTS (SELECT 1 FROM unnest(f.home_aliases || f.away_aliases) alias WHERE "
     "lower(btrim(alias))=$8 OR regexp_replace(translate(lower(btrim(alias)),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]))) "
     "AND ($9='' OR regexp_replace(translate(lower(f.competition_name),$6,$7),"
@@ -61,14 +67,17 @@ async def snapshot_candidates(conn, *, review_id, search_key, phase, team_query,
     competition_pattern = competition_term
     if competition_term and competition_term == normalize_team_name(competition):
         competition_pattern = '%' + competition_term + '%'
-    chinese_source, chinese_target = sql_chinese_fold(team_query+' '+competition_term)
+    verified_variants = verified_team_search_variants(team_query, sport=sport)
+    verified_patterns = {key: ['%'+name+'%' for name in names] for key, names in verified_variants.items()}
+    chinese_source, chinese_target = sql_chinese_fold(' '.join((team_query, competition_term,
+        *(name for names in verified_variants.values() for name in names))))
     args = (review_id, search_key, phase, '%'+team_query.strip().casefold()+'%',
             ['%'+v+'%' for v in team_search_variants(team_query, sport=sport)],
             name_source+chinese_source, name_target+chinese_target, team_query.strip().casefold(),
-            competition_pattern, from_utc, to_utc, sport, False)
+            competition_pattern, from_utc, to_utc, sport, False, verified_patterns)
     count = await conn.fetchval(_INSERT_SNAPSHOT, *args)
     fragments = source_fragments(team_query, from_utc, to_utc) if count == 0 else ()
     if fragments:
-        widened = (*args[:4], ['%'+v+'%' for v in fragments], *args[5:12], True)
+        widened = (*args[:4], ['%'+v+'%' for v in fragments], *args[5:12], True, *args[13:])
         count = await conn.fetchval(_INSERT_SNAPSHOT, *widened)
     return count
