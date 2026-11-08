@@ -1,0 +1,157 @@
+{
+  "window_start": "2026-11-08T18:38:57.971537+00:00",
+  "window_last_database_sample": "2026-11-08T19:08:59.129075+00:00",
+  "independent_finished": {
+    "event": "finished",
+    "samples": 55,
+    "elapsed_seconds": 1803.0,
+    "health_all_200": true,
+    "telegram_all_healthy": true,
+    "baseline_live_event_counters": {
+      "received": 104435,
+      "staged": 5711,
+      "deferred": 0,
+      "unmapped_source": 98724
+    },
+    "final_live_event_counters": {
+      "received": 105956,
+      "staged": 5743,
+      "deferred": 0,
+      "unmapped_source": 100213
+    },
+    "live_event_delta": {
+      "received": 1521,
+      "staged": 32,
+      "deferred": 0,
+      "unmapped_source": 1489
+    }
+  },
+  "database_samples": 55,
+  "database_sample_errors": [],
+  "health_non_200_samples": [],
+  "telegram_degraded_samples": [],
+  "telegram_final": {
+    "http_status": 200,
+    "connected": true,
+    "authorized": true,
+    "state": "connected",
+    "degraded": false,
+    "source_count": 6,
+    "source_states": {
+      "caught_up": 1,
+      "catching_up": 5
+    },
+    "source_errors": {}
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 170,
+    "published_posts": 0,
+    "older_posts_revised": 170,
+    "published_ready": 0,
+    "published_pending": 0,
+    "published_unsupported": 0
+  },
+  "reviews_final": {
+    "eligible": 0,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 0,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 0,
+    "avg_ms": null,
+    "p95_ms": null,
+    "within_3s": 0,
+    "older_backlog_versions_received": 170
+  },
+  "trace_counts_final": [],
+  "market_samples": 61,
+  "market_degraded_samples": [],
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T19:08:03.162609+00:00",
+    "last_poll_elapsed_ms": 28204.1,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 23006,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 20.7,
+    "oldest_quote_age_seconds": 344722.3,
+    "failed_batches": 0
+  },
+  "includes_successful_api_handoff": false,
+  "whole_database_freshness_claim": false,
+  "official_source_scans": [
+    {
+      "source_alias": "source_1",
+      "trusted_sender_count": 0,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_2",
+      "trusted_sender_count": 1,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_3",
+      "trusted_sender_count": 2,
+      "scanned": 9,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_4",
+      "trusted_sender_count": 0,
+      "scanned": 10,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_5",
+      "trusted_sender_count": 3,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_6",
+      "trusted_sender_count": 1,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    }
+  ],
+  "official_posts": 0,
+  "normalized_posts": 0,
+  "missing_posts": 0,
+  "current_natural_positive_sample": false,
+  "read_only": true,
+  "production_writes": 0,
+  "three_second_target_passed": false,
+  "evidence_sha256": {
+    "e1400-independent-final.jsonl": "a56a1ee5728067c802af5a28187911f3a98b76e144b6d94136f859c66914fc61",
+    "e1400-market-final.jsonl": "f070486b04f3e249b8bf8dc5cae4e683ba50a2d83f20c08eabd95073c7bdf4d5",
+    "e1400-official-scan.json": "a5cb099961512dd90c55ff49a072c37d6b686ffb0166c62209e9be62605f946f",
+    "e1400-official-reconcile.json": "415457a6475a4584d6f35a5fbe4eaaeddcf306339112e0d536f8e6ab2f561275",
+    "e1400-natural-audit.json": "9e32c55f84943ca09d9758c9c75c392cf98079166687aeddb362187a24dd760e",
+    "e1400-semantic-compact.json": "6f6d79fd9aac2b086ca3cb37664947031c6f99095c298447786719c20500367f"
+  }
+}

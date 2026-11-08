@@ -1,0 +1,17 @@
+{
+  "actual_original_final": "e1438",
+  "read_only": true,
+  "conflicts": [
+    {
+      "fixture_id": "leyu:5803626",
+      "actual_phase": "live",
+      "claimed_phase": "scheduled"
+    },
+    {
+      "fixture_id": "leyu:5803628",
+      "actual_phase": "live",
+      "claimed_phase": "scheduled"
+    }
+  ],
+  "passed": true
+}
