@@ -68,10 +68,44 @@ def _preloaded_project_skill(messages):
                and all(marker in msg['content'] for marker in markers) for msg in messages)
 
 
+def tool_description_contract(body):
+    """Measure only advertised schemas at the actual framework/provider boundary."""
+    functions = {t['function']['name']: t['function'] for t in body.get('tools', [])
+                 if t.get('type') == 'function'}
+    if not functions:
+        return None
+    primary = {n.removeprefix('mcp__football__'): f for n, f in functions.items()
+               if n.startswith('mcp__football__')}
+    parallel = {n.removeprefix('mcp__football_parallel__'): f for n, f in functions.items()
+                if n.startswith('mcp__football_parallel__')}
+    names = {'search_matches', 'resolve_match', 'list_match_markets', 'record_expert_signals'}
+    complete = primary.keys() == parallel.keys() == names
+    same = complete and all(
+        {k: v for k, v in primary[n].items() if k not in {'name', 'description'}} ==
+        {k: v for k, v in parallel[n].items() if k not in {'name', 'description'}} for n in names)
+    descriptions = complete and all(
+        len(primary[n].get('description', '')) > len(parallel[n].get('description', ''))
+        and 'football.' in parallel[n].get('description', '') for n in names)
+    actual = list(primary.values()) + list(parallel.values())
+    full = list(primary.values()) + [
+        {**p, 'description': primary[n].get('description', '')}
+        for n, p in parallel.items() if n in primary]
+    size = lambda value: len(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                       separators=(',', ':')).encode())
+    return {'complete_four_pairs': complete, 'non_description_schemas_equal': same,
+            'secondary_reference_descriptions': descriptions,
+            'actual_eight_function_bytes': size(actual),
+            'symmetric_full_description_hypothesis_bytes': size(full),
+            'static_byte_reduction': size(full) - size(actual)}
+
+
 def _observe(state, body, tools):
     state['requests'] += 1
     state['models'] = sorted(set(state['models']) | {str(body.get('model'))})
     state['tools'] = sorted(set(state['tools']) | set(tools))
+    contract = tool_description_contract(body)
+    if contract is not None:
+        state.setdefault('tool_description_contracts', []).append(contract)
     for msg in body.get('messages', []):
         if not isinstance(msg.get('content'), list):
             continue

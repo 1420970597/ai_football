@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import os
+from contextvars import ContextVar
 from typing import Annotated
 
 import httpx
@@ -46,7 +47,21 @@ def compact_tool_result(result):
     return result.model_copy(update={'content': [content.model_copy(update={'text': text})]})
 
 
+compact_descriptions: ContextVar[bool] = ContextVar('compact_tool_descriptions', default=False)
+
+
 class CompactMCPServer(MCPServer):
+    async def list_tools(self):
+        tools = await super().list_tools()
+        if not compact_descriptions.get():
+            return tools
+        # The primary connection still advertises the full descriptions. Keep
+        # every input schema (including its field descriptions) and annotation;
+        # this second session exists to avoid the pinned client's RPC lock.
+        return [tool.model_copy(update={'description':
+            f'独立并行调用football.{tool.name}；完整规则见同名主工具，'
+            '参数、分页、绑定、读盘及录入校验不变。'}) for tool in tools]
+
     async def call_tool(self, name: str, arguments: dict, context=None):
         result = await super().call_tool(name, arguments, context=context)
         return compact_tool_result(result)
@@ -279,7 +294,13 @@ class BearerAuthentication:
             await send({"type": "http.response.start", "status": 401, "headers": [(b"content-type", b"application/json")]})
             await send({"type": "http.response.body", "body": b'{"detail":"service authentication required"}'})
             return
-        await self.app(scope, receive, send)
+        profiles = [value for name, value in scope.get('headers', [])
+                    if name.lower() == b'x-football-tool-profile']
+        token = compact_descriptions.set(profiles == [b'parallel-compact-v1'])
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            compact_descriptions.reset(token)
 
 
 async def main() -> None:

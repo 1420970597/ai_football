@@ -34,6 +34,28 @@ class FixtureContractTests(unittest.TestCase):
         self.assertEqual(fixture.nested(value, 'next_cursor'), 'page2')
         self.assertIsNone(fixture.nested(value, 'missing'))
 
+    def test_description_probe_observes_all_parameters_at_provider_boundary(self):
+        for tool in self.tools:
+            function = tool['function']
+            function['description'] = ('完整主工具说明。' * 80 if
+                function['name'].startswith('mcp__football__') else '调用football.同名主工具')
+        result = fixture.tool_description_contract({'tools': self.tools})
+        self.assertTrue(result['complete_four_pairs'])
+        self.assertTrue(result['non_description_schemas_equal'])
+        self.assertTrue(result['secondary_reference_descriptions'])
+        self.assertGreater(result['static_byte_reduction'], 1500)
+
+    def test_description_probe_rejects_schema_difference_or_missing_connection(self):
+        target = next(t['function'] for t in self.tools
+                      if t['function']['name'] == 'mcp__football_parallel__resolve_match')
+        target['parameters'] = {'properties': {'name': {'maxLength': 1}}}
+        result = fixture.tool_description_contract({'tools': self.tools})
+        self.assertTrue(result['complete_four_pairs'])
+        self.assertFalse(result['non_description_schemas_equal'])
+        result = fixture.tool_description_contract({'tools': self.tools[:-1]})
+        self.assertFalse(result['complete_four_pairs'])
+        self.assertIsNone(fixture.tool_description_contract({'tools': []}))
+
     def test_first_turn_reads_skill(self):
         value, reason = fixture.answer(self.body())
         self.assertEqual(reason, 'tool_calls')
