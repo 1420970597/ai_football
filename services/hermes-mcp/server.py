@@ -126,7 +126,8 @@ async def _request(path: str, payload: dict) -> dict:
 async def _with_bound_markets(result: dict, resolution: dict | None,
                               review_id: str, attempt_id: str,
                               market_kind: str | None, period: str | None,
-                              *, search_key: str | None = None) -> dict:
+                              *, search_key: str | None = None,
+                              market_query: str | None = None) -> dict:
     """Compose existing guarded operations, never derive a fixture identity."""
     if not isinstance(resolution, dict) or resolution.get('resolved') is not True:
         return result
@@ -135,10 +136,13 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
             or not isinstance(fixture.get('id'), str) or not fixture['id']):
         return result
     try:
-        markets = await _post('list_match_markets', {
+        market_parameters = {
             'review_id': review_id, 'attempt_id': attempt_id, 'fixture_id': fixture['id'],
             'market_kind': market_kind, 'period': period,
-        })
+        }
+        if market_query is not None:
+            market_parameters['market_query'] = market_query
+        markets = await _post('list_match_markets', market_parameters)
     except ToolError as exc:
         # Search/binding has already committed before this optional read.
         # Keep its native receipt visible even though the composed call failed;
@@ -168,7 +172,9 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str,
                          team_a: Annotated[str | None, Field(description="原文或原图明确可读的第一支球队名；双方已知时首次查询即与team_b成对传入，复用服务端唯一绑定。")] = None,
                          team_b: Annotated[str | None, Field(description="原文或原图明确可读的第二支球队名；双方已知时首次查询即与team_a成对传入，不从候选猜造原文球队。")] = None,
                          read_markets: bool = False, market_kind: str | None = None,
-                         period: str | None = None) -> dict:
+                         period: str | None = None,
+                         market_query: Annotated[str | None, Field(max_length=120,
+                             description="原文明示的盘口查询，例如小3.5、大0.5/1；仅传给唯一绑定后的读盘，不参与球队检索，不比较倍率。")] = None) -> dict:
     """team_query必传。原名或片段无双方对应候选时，可传空串展开同联赛：必须同时给competition_query、sport及正区间≤7天的from_utc/to_utc；competition_time_candidate只是待核验候选，不是身份绑定。phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。已知玩法/期间时read_markets=true可在唯一绑定后返回market_result，复用此读盘而不重复调用；期间使用full_time/first_half/second_half。不完整或不唯一时不读。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
     result = await _post("search_matches", {
         "review_id": review_id, "attempt_id": attempt_id, "team_query": team_query,
@@ -178,7 +184,7 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str,
     })
     if read_markets and result.get('search_complete') is True and result.get('next_cursor') is None:
         return await _with_bound_markets(result, result.get('resolution'), review_id, attempt_id,
-                                         market_kind, period)
+                                         market_kind, period, market_query=market_query)
     return result
 
 
@@ -189,7 +195,9 @@ async def resolve_match(review_id: str, attempt_id: str,
                         team_a: str, team_b: str, competition: str | None = None,
                         from_utc: str | None = None, to_utc: str | None = None,
                         read_markets: bool = False, market_kind: str | None = None,
-                        period: str | None = None) -> dict:
+                        period: str | None = None,
+                        market_query: Annotated[str | None, Field(max_length=120,
+                            description="原文明示的盘口查询，例如小3.5、大0.5/1；仅传给唯一绑定后的读盘，不改变比赛消歧依据。")] = None) -> dict:
     """全候选翻页结束后，用双方系统队名或常见别名、联赛和时间唯一消歧；支持常见缩写、标点/重音差异和清晰队名前缀，多候选返回未解决。优先使用候选中的标准队名。玩法/期间明确时read_markets=true可在唯一活动绑定后返回market_result，复用读盘减少模型轮次；失败仍保留工具错误。"""
     result = await _post("resolve_match", {
         "review_id": review_id, "attempt_id": attempt_id, "search_key": search_key,
@@ -198,7 +206,7 @@ async def resolve_match(review_id: str, attempt_id: str,
     })
     if read_markets:
         return await _with_bound_markets(result, result, review_id, attempt_id, market_kind, period,
-                                         search_key=search_key)
+                                         search_key=search_key, market_query=market_query)
     return result
 
 
