@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .review_completion import DETAIL_LIMIT, pagination_issues, unfinished_searches_cte, explicit_text_pick
+from .review_intent_claims import explicit_visual_instruction
 from .review_period_intent import INTENT_VALID_SQL
 
 
@@ -16,6 +17,7 @@ class SummaryEvidence:
     pagination_issues: dict
     explicit_text_pick: bool = False
     accepted_signal_ids: list[str] = field(default_factory=list)
+    explicit_visual_instruction: bool = False
 
 
 def _timestamps(rows: list[dict]) -> list[dict]:
@@ -69,7 +71,10 @@ async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int
         " jsonb_array_elements(t.payload->'accepted') a(value) WHERE t.trace_kind='mcp_record_expert_signals' "
         " AND t.payload->>'status'='succeeded') AS accepted_signal_ids,"
         " (SELECT CASE WHEN length(raw_text)<=100 THEN raw_text ELSE '' END "
-        " FROM v2_expert_messages WHERE id=$3) AS source_text",
+        " FROM v2_expert_messages WHERE id=$3) AS source_text,"
+        " (SELECT EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(media_objects,'[]'::jsonb)) media "
+        " WHERE lower(media->>'mime_type') LIKE 'image/%') "
+        " FROM v2_expert_messages WHERE id=$3) AS source_has_image",
         job_id, attempt_id, message_id, limit, DETAIL_LIMIT,
     )
     return SummaryEvidence(
@@ -80,4 +85,5 @@ async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int
         pagination_issues=pagination_issues(row['unfinished_count'], row['unfinished']),
         explicit_text_pick=explicit_text_pick(row['source_text'] or ''),
         accepted_signal_ids=row['accepted_signal_ids'] or [],
+        explicit_visual_instruction=explicit_visual_instruction(row['source_text'] or '', row.get('source_has_image', False)),
     )

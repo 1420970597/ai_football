@@ -20,6 +20,7 @@ from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
 from .review_accepted_context import read_accepted_context
 from .review_completion import (completion_issues, continuation_prompt, mentioned_fixtures, named_identity_claims, explicit_text_pick,
+                                explicit_visual_instruction,
                                 tool_recovery_pending, tool_unavailability_claim, tool_unavailability_issues)
 from .review_policy import FRESH_PRIORITY_WINDOW_SECONDS, REALTIME_WINDOW_SECONDS
 from .review_scheduler_setup import claim_pair_and_job_query, prepare_claim_schedule
@@ -416,7 +417,8 @@ async def _complete_review(pool, job: dict, started: float, model_result: dict |
 
 
 async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, require_tool_recovery=False,
-                                  named_content='', require_intent_review=False, final_content=''):
+                                  named_content='', require_intent_review=False, final_content='',
+                                  require_visual_instruction_review=False):
     transient = (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError,
                  asyncpg.DeadlockDetectedError, asyncpg.SerializationError, asyncpg.PostgresConnectionError)
     for retry in range(2):
@@ -426,6 +428,8 @@ async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, req
                 args = ((named_content, True) if require_intent_review
                         else (named_content,) if named_content else ())
                 phase_options = {'final_content': final_content} if final_content else {}
+                if require_visual_instruction_review:
+                    phase_options['require_visual_instruction_review'] = True
                 issues = await completion_issues(conn, job['id'], job['attempt_id'], mentioned, *args, **phase_options)
                 if tool_claim or (require_tool_recovery
                         and await tool_recovery_pending(conn, job['id'], job['attempt_id'])):
@@ -487,6 +491,11 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
             recovery_options['named_content'] = named_content
         if current_phase_claims(content) or named_phase_claims(content) or split_line_claim_conflicts(content):
             recovery_options['final_content'] = content
+        if (message['review_mode'] == 'real_time' and explicit_visual_instruction(
+                message.get('raw_text', ''), any(
+                    isinstance(media, dict) and str(media.get('mime_type', '')).lower().startswith('image/')
+                    for media in message.get('media_objects', [])))):
+            recovery_options.update(require_visual_instruction_review=True, final_content=content)
         if (message['review_mode'] == 'real_time' and not accepted_context
                 and explicit_text_pick(message.get('raw_text', ''))):
             recovery_options['require_intent_review'] = True
