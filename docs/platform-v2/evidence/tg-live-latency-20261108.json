@@ -1,0 +1,526 @@
+{
+  "schema": "tg-live-latency-research-v1",
+  "generated_at": "2026-11-08T10:08:59.240779+00:00",
+  "research_only": true,
+  "business_code_changed": false,
+  "database_business_writes": 0,
+  "api_source_commit": "82b8d8d26b35266a967e9df252e2c3abe159f3b7",
+  "web_source_commit": "651bca3729d8d40d2bcd3abfa15f37f1c17bacc2",
+  "timing_quantile_method": "nearest_rank: ceil(0.95*n)-1; distinct per-metric samples, not summed end-to-end",
+  "earlier_attempts_preserved": [
+    "e930 original timing p95 used floor index; excluded from nearest-rank evidence",
+    "e932 original received-time-only query hit 100-row limit; not complete",
+    "e933 initial remote clock brackets include SSH/Docker startup; offset estimate not a clock correction",
+    "official web reference retrieval unavailable; reset behavior verified against installed asyncpg 0.32.0 source"
+  ],
+  "raw_content_or_credentials_retained": false,
+  "end_to_end_3s_passed": false,
+  "fresh_natural_model_review_passed": false,
+  "evidence": {
+    "version_classification": {
+      "native_exit": 0,
+      "result": {
+        "observed_at": "2026-11-08T09:56:52.925605+00:00",
+        "read_only": true,
+        "window_hours": 1,
+        "row_limit": 500,
+        "rows_examined": 399,
+        "rows": [
+          {
+            "kind": "first_capture",
+            "posting_age": "older_than_day",
+            "count": 333,
+            "earliest_posted_at": "2023-10-08 08:37:10+00:00",
+            "latest_posted_at": "2026-05-08 12:41:35+00:00",
+            "max_revision": 1,
+            "same_text": 0,
+            "same_media": 0,
+            "same_reply": 0,
+            "same_hash": 0,
+            "same_visible_payload": 0
+          },
+          {
+            "kind": "first_capture",
+            "posting_age": "within_hour",
+            "count": 51,
+            "earliest_posted_at": "2026-11-08 09:09:27+00:00",
+            "latest_posted_at": "2026-11-08 09:55:46+00:00",
+            "max_revision": 1,
+            "same_text": 0,
+            "same_media": 0,
+            "same_reply": 0,
+            "same_hash": 0,
+            "same_visible_payload": 0
+          },
+          {
+            "kind": "subsequent_version",
+            "posting_age": "older_than_day",
+            "count": 10,
+            "earliest_posted_at": "2026-11-02 11:52:56+00:00",
+            "latest_posted_at": "2026-11-02 12:09:12+00:00",
+            "max_revision": 2,
+            "same_text": 10,
+            "same_media": 10,
+            "same_reply": 0,
+            "same_hash": 0,
+            "same_visible_payload": 0
+          },
+          {
+            "kind": "subsequent_version",
+            "posting_age": "within_hour",
+            "count": 5,
+            "earliest_posted_at": "2026-11-08 09:11:07+00:00",
+            "latest_posted_at": "2026-11-08 09:30:16+00:00",
+            "max_revision": 2,
+            "same_text": 5,
+            "same_media": 3,
+            "same_reply": 5,
+            "same_hash": 0,
+            "same_visible_payload": 3
+          }
+        ],
+        "raw_content_retained": false
+      }
+    },
+    "same_visible_payload_edit_fields": {
+      "native_exit": 0,
+      "result": {
+        "observed_at": "2026-11-08T09:58:04.068436+00:00",
+        "read_only": true,
+        "row_limit": 100,
+        "output_limit": 30,
+        "rows": [
+          {
+            "id": "5f4029d6-c0e2-4ac5-881a-d4b85e610c5e",
+            "revision": 2,
+            "posted_at": "2026-11-08 09:11:07+00:00",
+            "previous_kind": "message",
+            "current_kind": "edit",
+            "previous_media_state": "ready",
+            "current_media_state": "ready",
+            "source_version_delta_seconds": "4.000000",
+            "changed_event_fields": [
+              "event_kind",
+              "source_version_at",
+              "version_key"
+            ]
+          },
+          {
+            "id": "a899acf3-dd0a-4606-bddc-206bee73a869",
+            "revision": 2,
+            "posted_at": "2026-11-08 09:12:10+00:00",
+            "previous_kind": "message",
+            "current_kind": "edit",
+            "previous_media_state": "ready",
+            "current_media_state": "ready",
+            "source_version_delta_seconds": "28.000000",
+            "changed_event_fields": [
+              "event_kind",
+              "source_version_at",
+              "version_key"
+            ]
+          },
+          {
+            "id": "9cb948ff-7730-45f5-99b2-b0cbb3167d3a",
+            "revision": 2,
+            "posted_at": "2026-11-08 09:12:12+00:00",
+            "previous_kind": "message",
+            "current_kind": "edit",
+            "previous_media_state": "pending",
+            "current_media_state": "ready",
+            "source_version_delta_seconds": "3.000000",
+            "changed_event_fields": [
+              "event_kind",
+              "source_version_at",
+              "version_key"
+            ]
+          }
+        ],
+        "raw_content_or_metadata_values_retained": false
+      }
+    },
+    "collector_timings": {
+      "native_exit": 0,
+      "result": {
+        "read_only": true,
+        "sample_cap_per_metric": 1000,
+        "matching_record_counts": {
+          "recent_history": 102,
+          "live_image_stage": 25,
+          "media_commit": 14,
+          "live_media_finished": 7,
+          "live_text_stage": 61
+        },
+        "metrics": {
+          "live_image_stage.lookup_ms": {
+            "samples": 25,
+            "median_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "live_image_stage.media_ms": {
+            "samples": 25,
+            "median_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 0.1
+          },
+          "live_image_stage.persist_ms": {
+            "samples": 25,
+            "median_ms": 1421.7,
+            "p95_ms": 1939.9,
+            "max_ms": 2218.6
+          },
+          "live_image_stage.source_age_ms": {
+            "samples": 25,
+            "median_ms": 3262.8,
+            "p95_ms": 10904.1,
+            "max_ms": 15442.5
+          },
+          "live_image_stage.total_ms": {
+            "samples": 25,
+            "median_ms": 1421.7,
+            "p95_ms": 1939.9,
+            "max_ms": 2218.7
+          },
+          "live_media_finished.elapsed_ms": {
+            "samples": 7,
+            "median_ms": 3741.7,
+            "p95_ms": 6050.2,
+            "max_ms": 6050.2
+          },
+          "live_text_stage.lookup_ms": {
+            "samples": 61,
+            "median_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "live_text_stage.media_ms": {
+            "samples": 61,
+            "median_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "live_text_stage.persist_ms": {
+            "samples": 61,
+            "median_ms": 0.0,
+            "p95_ms": 1612.9,
+            "max_ms": 2027.9
+          },
+          "live_text_stage.source_age_ms": {
+            "samples": 61,
+            "median_ms": 4549.7,
+            "p95_ms": 14444.7,
+            "max_ms": 19155.3
+          },
+          "live_text_stage.total_ms": {
+            "samples": 61,
+            "median_ms": 0.0,
+            "p95_ms": 1612.9,
+            "max_ms": 2027.9
+          },
+          "media_commit.elapsed_ms": {
+            "samples": 14,
+            "median_ms": 1574.9,
+            "p95_ms": 1692.5,
+            "max_ms": 1692.5
+          },
+          "recent_history.elapsed_ms": {
+            "samples": 102,
+            "median_ms": 784.7,
+            "p95_ms": 4960.3,
+            "max_ms": 12805.4
+          }
+        },
+        "raw_log_lines_retained": false
+      }
+    },
+    "api_timings": {
+      "native_exit": 0,
+      "result": {
+        "read_only": true,
+        "sample_cap_per_metric": 1000,
+        "matching_record_counts": {
+          "api_live": 166,
+          "api_reconciliation": 244,
+          "api_delete": 10
+        },
+        "metrics": {
+          "api_delete.elapsed_ms": {
+            "samples": 10,
+            "median_ms": 2724.15,
+            "p95_ms": 4101.9,
+            "max_ms": 4101.9
+          },
+          "api_delete.pool_wait_ms": {
+            "samples": 10,
+            "median_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "api_delete.remaining_ms": {
+            "samples": 10,
+            "median_ms": 247.45,
+            "p95_ms": 290.4,
+            "max_ms": 290.4
+          },
+          "api_delete.transaction_ms": {
+            "samples": 10,
+            "median_ms": 2524.75,
+            "p95_ms": 3854.3,
+            "max_ms": 3854.3
+          },
+          "api_live.elapsed_ms": {
+            "samples": 166,
+            "median_ms": 1187.6,
+            "p95_ms": 1605.8,
+            "max_ms": 1759.6
+          },
+          "api_live.event_sql_ms": {
+            "samples": 166,
+            "median_ms": 246.0,
+            "p95_ms": 491.8,
+            "max_ms": 527.7
+          },
+          "api_live.pool_wait_ms": {
+            "samples": 166,
+            "median_ms": 0.0,
+            "p95_ms": 0.1,
+            "max_ms": 0.3
+          },
+          "api_live.remaining_ms": {
+            "samples": 166,
+            "median_ms": 247.3,
+            "p95_ms": 287.3,
+            "max_ms": 306.0
+          },
+          "api_live.source_message_lock_ms": {
+            "samples": 166,
+            "median_ms": 245.75,
+            "p95_ms": 491.4,
+            "max_ms": 537.2
+          },
+          "api_live.transaction_ms": {
+            "samples": 166,
+            "median_ms": 944.0,
+            "p95_ms": 1435.7,
+            "max_ms": 1512.8
+          },
+          "api_reconciliation.elapsed_ms": {
+            "samples": 244,
+            "median_ms": 2500.2,
+            "p95_ms": 4809.9,
+            "max_ms": 6979.0
+          },
+          "api_reconciliation.event_snapshot_ms": {
+            "samples": 244,
+            "median_ms": 245.5,
+            "p95_ms": 1233.1,
+            "max_ms": 1965.1
+          },
+          "api_reconciliation.pool_wait_ms": {
+            "samples": 244,
+            "median_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 1158.9
+          },
+          "api_reconciliation.remaining_ms": {
+            "samples": 244,
+            "median_ms": 247.4,
+            "p95_ms": 288.1,
+            "max_ms": 467.8
+          },
+          "api_reconciliation.transaction_ms": {
+            "samples": 244,
+            "median_ms": 2260.95,
+            "p95_ms": 4560.6,
+            "max_ms": 5597.4
+          }
+        },
+        "raw_log_lines_retained": false
+      }
+    },
+    "readonly_pool_lifecycle": {
+      "native_exit": 0,
+      "result": {
+        "observed_at": "2026-11-08T10:04:22.446390+00:00",
+        "read_only": true,
+        "business_writes": 0,
+        "new_pool_max_size": 1,
+        "asyncpg_version": "0.32.0",
+        "metrics": {
+          "acquire_ms": {
+            "samples": 5,
+            "median_ms": 0.047,
+            "min_ms": 0.045,
+            "max_ms": 0.052
+          },
+          "begin_ms": {
+            "samples": 5,
+            "median_ms": 245.386,
+            "min_ms": 141.473,
+            "max_ms": 248.229
+          },
+          "select_ms": {
+            "samples": 5,
+            "median_ms": 245.862,
+            "min_ms": 233.962,
+            "max_ms": 493.372
+          },
+          "commit_ms": {
+            "samples": 5,
+            "median_ms": 245.324,
+            "min_ms": 125.522,
+            "max_ms": 247.385
+          },
+          "release_ms": {
+            "samples": 5,
+            "median_ms": 245.697,
+            "min_ms": 245.032,
+            "max_ms": 247.849
+          }
+        },
+        "installed_driver_release_awaits_reset": true,
+        "installed_pool_release_shields_cleanup": true,
+        "default_reset_preserved": true
+      }
+    },
+    "new_unsupported_media": {
+      "native_exit": 0,
+      "result": {
+        "observed_at": "2026-11-08T10:05:54.515702+00:00",
+        "read_only": true,
+        "created_and_posted_window_hours": 1,
+        "row_limit": 100,
+        "rows_examined": 17,
+        "truncated": false,
+        "state_counts": {
+          "unsupported": 17
+        },
+        "reason_counts": {
+          "non_image_mime": 17
+        },
+        "mime_counts": {
+          "video/webm": 9,
+          "audio/ogg": 5,
+          "video/mp4": 3
+        },
+        "with_text": 0,
+        "raw_content_retained": false
+      }
+    },
+    "remote_clock_initial_startup_included": {
+      "native_exit": 0,
+      "result": {
+        "observed_at": "2026-11-08T10:06:29.430761+00:00",
+        "read_only": true,
+        "clock_or_ntp_changes": false,
+        "clock_domain": "remote_collector_vs_local_remote_link",
+        "samples": [
+          {
+            "round_trip_ms": 2275.648,
+            "estimated_remote_offset_ms": 1064.131,
+            "bracket_uncertainty_ms": 1137.824,
+            "absolute_offset_upper_bound_ms": 2201.955
+          },
+          {
+            "round_trip_ms": 1996.12,
+            "estimated_remote_offset_ms": 930.154,
+            "bracket_uncertainty_ms": 998.06,
+            "absolute_offset_upper_bound_ms": 1928.214
+          },
+          {
+            "round_trip_ms": 2196.103,
+            "estimated_remote_offset_ms": 1017.089,
+            "bracket_uncertainty_ms": 1098.052,
+            "absolute_offset_upper_bound_ms": 2115.141
+          }
+        ]
+      }
+    },
+    "remote_clock_ready_bracket": {
+      "native_exit": 0,
+      "result": {
+        "observed_at": "2026-11-08T10:06:50.502050+00:00",
+        "read_only": true,
+        "clock_or_ntp_changes": false,
+        "clock_domain": "remote_collector_vs_local_remote_link",
+        "ssh_docker_startup_excluded": true,
+        "samples": [
+          {
+            "round_trip_ms": 116.905,
+            "estimated_remote_offset_ms": -0.357,
+            "bracket_uncertainty_ms": 58.453,
+            "absolute_offset_upper_bound_ms": 58.81
+          },
+          {
+            "round_trip_ms": 116.661,
+            "estimated_remote_offset_ms": -0.347,
+            "bracket_uncertainty_ms": 58.331,
+            "absolute_offset_upper_bound_ms": 58.678
+          },
+          {
+            "round_trip_ms": 186.242,
+            "estimated_remote_offset_ms": -35.148,
+            "bracket_uncertainty_ms": 93.121,
+            "absolute_offset_upper_bound_ms": 128.269
+          },
+          {
+            "round_trip_ms": 116.644,
+            "estimated_remote_offset_ms": -0.309,
+            "bracket_uncertainty_ms": 58.322,
+            "absolute_offset_upper_bound_ms": 58.632
+          },
+          {
+            "round_trip_ms": 116.473,
+            "estimated_remote_offset_ms": -0.373,
+            "bracket_uncertainty_ms": 58.236,
+            "absolute_offset_upper_bound_ms": 58.61
+          }
+        ]
+      }
+    },
+    "database_clock_bracket": {
+      "native_exit": 0,
+      "result": {
+        "observed_at": "2026-11-08T10:06:25.412524+00:00",
+        "read_only": true,
+        "clock_or_ntp_changes": false,
+        "clock_domain": "database_vs_local_api",
+        "samples": [
+          {
+            "round_trip_ms": 860.469,
+            "estimated_remote_offset_ms": -126.951,
+            "bracket_uncertainty_ms": 430.235,
+            "absolute_offset_upper_bound_ms": 557.185
+          },
+          {
+            "round_trip_ms": 245.248,
+            "estimated_remote_offset_ms": -63.993,
+            "bracket_uncertainty_ms": 122.624,
+            "absolute_offset_upper_bound_ms": 186.617
+          },
+          {
+            "round_trip_ms": 247.47,
+            "estimated_remote_offset_ms": -64.313,
+            "bracket_uncertainty_ms": 123.735,
+            "absolute_offset_upper_bound_ms": 188.049
+          }
+        ]
+      }
+    },
+    "provider_native_probe": {
+      "native_exit": 0,
+      "result": {
+        "observed_at": "2026-11-08T10:05:31.077541+00:00",
+        "production_job": false,
+        "request_limit": 1,
+        "model": "deepseek-v4.1-flash",
+        "sdk": false,
+        "stream_field_omitted": true,
+        "status": 404,
+        "same_invalid_request": false,
+        "elapsed_ms": 111.81
+      }
+    }
+  }
+}
