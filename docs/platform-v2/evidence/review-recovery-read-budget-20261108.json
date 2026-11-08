@@ -1,6 +1,7 @@
 {
   "schema": "review-recovery-read-budget-v1",
   "source_commit": "303894fed8d15e87ea214198b32a25fbb280ae06",
+  "observed_at": "2026-11-08T21:23:43.124063+00:00",
   "source_commit_remote_verified": true,
   "isolated_real_postgresql": true,
   "targeted_and_related_suites": [
@@ -29,6 +30,7 @@
     "transient_market_recovery_before": 6,
     "transient_market_recovery_after": 6
   },
+  "round_trips_scope": "completion without appending a new model_result in this call",
   "verified_contracts": [
     "same job/attempt/message scope",
     "prefetch requires held trace lock",
@@ -49,5 +51,23 @@
     "services/api/app/worker.py": "39b19795e10780b8c2b96c32b58148632e1962e9c8fe8e71e32714106ce085e5",
     "tests/test_review_worker.py": "0cd5f7ca695af5f58a65f0c972e69d604975213a17e99b42e6140d33d61ead9d",
     "tests/test_review_recovery_evidence.py": "d0736e1d69ace9e824e4f5b20bcc002eeb02e26acf4777d38f870351743d5ceb"
+  },
+  "completion_with_model_result_fixture": {
+    "before_source_commit": "875028c27be043f469d05624f9a02987306dde70",
+    "after_source_commit": "303894fed8d15e87ea214198b32a25fbb280ae06",
+    "provider_calls": 0,
+    "model_result_is_protocol_fixture": true,
+    "isolated_real_postgresql": true,
+    "no_market_receipt_before": 6,
+    "no_market_receipt_after": 5,
+    "transient_market_recovery_before": 7,
+    "transient_market_recovery_after": 7,
+    "model_result_and_receipt_same_transaction": true,
+    "both_native_exit_codes": 0,
+    "driver_sha256": "486f080738c8881fd39e71e8946eae13785bf092183aa00e589c4e01f487b198",
+    "logs_sha256": {
+      "before": "a6676aa798c5cb1ed21497b541c0f9edbc7b33e06f61a2fb2c78e81e740f5ecd",
+      "after": "d0e0ec9d936ca58621d02f8f595fd8036c5c47fea4baa858217a9e76d9bb46dc"
+    }
   }
 }
