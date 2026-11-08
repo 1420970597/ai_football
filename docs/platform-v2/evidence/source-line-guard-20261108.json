@@ -1,0 +1,161 @@
+{
+  "generated_at": "2026-11-08T09:53:36.745367+00:00",
+  "scope": "source-line consistency guard, one verified correction and corresponding web display",
+  "backend_source_commit": "82b8d8d26b35266a967e9df252e2c3abe159f3b7",
+  "frontend_source_commit": "651bca3729d8d40d2bcd3abfa15f37f1c17bacc2",
+  "api_image_id": "sha256:0f3ed7d3adca9b15be9eab0102efc13cf1130c7dec10f3f8d76d796525867235",
+  "web_image_id": "sha256:d8f82dd4229be1027c378188865c7af5aac1d55fc6686c5201dd1cba52898fc3",
+  "full_tests": {
+    "tests": 1775,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "native_seconds": 1178.884,
+    "wrapper_seconds": 1182.956,
+    "native_exit": 0
+  },
+  "framework": {
+    "scenarios": 14,
+    "fixture_contract_tests": 17,
+    "pinned_framework_contract_tests": 3,
+    "native_exit": 0,
+    "provider_is_explicit_fixture": true,
+    "line_conflict_accepted_signals": 0,
+    "line_conflict_search": {
+      "page_count": 13,
+      "total_candidates": 260,
+      "complete": true
+    }
+  },
+  "preserved_initial_failures": {
+    "framework_network_pool_exhausted_exit": 1,
+    "retired_only_completed_owned_test_networks": true,
+    "browser_old_44_case_exit": 1,
+    "browser_old_expected_failures": 4
+  },
+  "browser_isolated": {
+    "cases": 44,
+    "native_exit": 0,
+    "widths": [
+      1440,
+      390
+    ],
+    "source": "e921r2-browser-candidate-source",
+    "production_api": false
+  },
+  "rollout": {
+    "api_worker": {
+      "only_api_and_worker_recreated": true,
+      "other_five_local_and_four_remote_containers_unchanged": true,
+      "model_prompt_permissions_and_mounts_unchanged": true
+    },
+    "financial": {
+      "old_orders_preserved": 1,
+      "policy_and_account_ownership_unchanged": true,
+      "financial_pre_and_post_snapshots_idle": true,
+      "no_funds_lock_or_order_mutation": true
+    },
+    "ledger": {
+      "signals_before": 598,
+      "signals_after": 598,
+      "old_ledger_rows": 854,
+      "immutable_signals_quotes_and_ledger_preserved": true,
+      "database_rollback": false
+    },
+    "web": {
+      "only_web_recreated": true,
+      "other_six_local_and_four_remote_unchanged": true,
+      "configuration_budgets_preserved": true
+    }
+  },
+  "correction": {
+    "result": {
+      "job_id": "fd32cb13-4ebe-419f-9f2c-4f9495476845",
+      "signal_id": "15a859a2-e69a-4ded-9913-9fa3f71f0595",
+      "algorithm": "source-line-intent-correction-v1",
+      "applied": true,
+      "status": "corrected",
+      "reason": "source_line_intent_conflict"
+    },
+    "original_evidence_preserved": true,
+    "statistics_intent_excluded_verified": true,
+    "historical_backbet": false,
+    "orders_submitted": false
+  },
+  "live_browser": {
+    "results": [
+      {
+        "width": 1440,
+        "status": "passed",
+        "current_receipt": true,
+        "accepted_count": 0,
+        "original_signal_price_preserved": true,
+        "original_image_sha_and_pixels_verified": true,
+        "correct_reason_visible": true,
+        "served_app_sha_verified": true,
+        "close_reopen": true
+      },
+      {
+        "width": 390,
+        "status": "passed",
+        "current_receipt": true,
+        "accepted_count": 0,
+        "original_signal_price_preserved": true,
+        "original_image_sha_and_pixels_verified": true,
+        "correct_reason_visible": true,
+        "served_app_sha_verified": true,
+        "close_reopen": true
+      }
+    ],
+    "production_writes": false,
+    "response_injection": false
+  },
+  "live_browser_artifacts": "private local .runtime/e209-live/e919r2-browser-live",
+  "guard_only_cost": {
+    "source_commit": "82b8d8d26b35266a967e9df252e2c3abe159f3b7",
+    "source_sha256": "53bdbc6fa14417e6a9df1418c53c998a587b1e8c92968bfdbbb0c50e1a11587f",
+    "calls": 3000,
+    "median_ms": 0.009705,
+    "p95_ms": 0.018478,
+    "max_ms": 80.109848,
+    "scope": "local consistency guard only; excludes model, IO, database and end-to-end latency",
+    "external_calls": 0
+  },
+  "remaining_external_model_probe": {
+    "observed_at": "2026-11-08T09:43:29.259943+00:00",
+    "production_job": false,
+    "request_limit": 1,
+    "model": "deepseek-v4.1-flash",
+    "sdk": false,
+    "stream_field_omitted": true,
+    "status": 404,
+    "same_invalid_request": false,
+    "elapsed_ms": 125.537
+  },
+  "remaining_model_catalog": {
+    "observed_at": "2026-11-08T09:43:30.135011+00:00",
+    "read_only": true,
+    "production_job": false,
+    "model": "deepseek-v4.1-flash",
+    "status": 200,
+    "body_keys": [
+      "data",
+      "object"
+    ],
+    "data_type": "list",
+    "model_count": 25,
+    "first_item_keys": [
+      "created",
+      "display_name",
+      "id",
+      "object",
+      "owned_by",
+      "type"
+    ],
+    "requested_model_present": false
+  },
+  "overall_delivery_complete": false,
+  "three_second_end_to_end_passed": false,
+  "new_post_release_natural_recommendation_verified": false,
+  "next": "E908/E909 full 1800-second live window and overlapping E910/E911; real model route restoration and new current recommendations"
+}
