@@ -1,7 +1,7 @@
 {
   "schema": "tg-live-latency-research-v1",
   "generated_at": "2026-11-08T10:08:59.240779+00:00",
-  "research_only": true,
+  "research_only": false,
   "business_code_changed": false,
   "database_business_writes": 0,
   "api_source_commit": "82b8d8d26b35266a967e9df252e2c3abe159f3b7",
@@ -762,7 +762,7 @@
     "baseline_successful_latency_quantiles_exclude_timeout": true,
     "cpu_trial_applied": false
   },
-  "updated_at": "2026-11-08T10:31:05.733649+00:00",
+  "updated_at": "2026-11-08T10:43:26.620433+00:00",
   "resource_trial_aba": {
     "temporary_candidate_native_exit": 0,
     "temporary_candidate": [
@@ -1904,5 +1904,122 @@
     "tool_observer_same_source_permission_retry": "e947r2",
     "tool_observer_interval_not_claimed_complete": true
   },
-  "user_reported_no_gateway_configuration_changes": true
+  "user_reported_no_gateway_configuration_changes": true,
+  "deployment_change_kind": "live_collector_cpu_quota_and_protected_environment_only",
+  "post_resource_market_observation": {
+    "status_sample_native_exit": 0,
+    "status_sample": {
+      "started_at": "2026-11-08T10:39:33.384250+00:00",
+      "ended_at": "2026-11-08T10:41:05.554514+00:00",
+      "duration_seconds": 92.17,
+      "samples": 90,
+      "healthy_count": 90,
+      "fresh_any_count": 0,
+      "states": {
+        "partial": 90
+      },
+      "whole_poll_samples": [
+        {
+          "last_poll_elapsed_ms": 22630.2,
+          "fixtures": 2045,
+          "odds_requested_fixtures": 96,
+          "complete_market_fixtures": 96,
+          "accepted": 2044,
+          "fresh_active_quotes": 0,
+          "newest_quote_age_seconds": 20.9,
+          "poll_in_progress": true
+        },
+        {
+          "last_poll_elapsed_ms": 24386.9,
+          "fixtures": 2046,
+          "odds_requested_fixtures": 96,
+          "complete_market_fixtures": 96,
+          "accepted": 2046,
+          "fresh_active_quotes": 0,
+          "newest_quote_age_seconds": 17.4,
+          "poll_in_progress": true
+        },
+        {
+          "last_poll_elapsed_ms": 27794.0,
+          "fixtures": 2047,
+          "odds_requested_fixtures": 96,
+          "complete_market_fixtures": 96,
+          "accepted": 2045,
+          "fresh_active_quotes": 0,
+          "newest_quote_age_seconds": 23.0,
+          "poll_in_progress": true
+        },
+        {
+          "last_poll_elapsed_ms": 28396.9,
+          "fixtures": 2045,
+          "odds_requested_fixtures": 96,
+          "complete_market_fixtures": 96,
+          "accepted": 2045,
+          "fresh_active_quotes": 0,
+          "newest_quote_age_seconds": 21.1,
+          "poll_in_progress": true
+        },
+        {
+          "last_poll_elapsed_ms": 24117.2,
+          "fixtures": 2043,
+          "odds_requested_fixtures": 96,
+          "complete_market_fixtures": 96,
+          "accepted": 2043,
+          "fresh_active_quotes": 0,
+          "newest_quote_age_seconds": 18.7,
+          "poll_in_progress": true
+        }
+      ],
+      "status_max_ms": 1912.883
+    },
+    "numeric_log_native_exit": 0,
+    "numeric_log": {
+      "read_only": true,
+      "window_start": "2026-11-08T10:25:20Z",
+      "counts": {
+        "fixture_upload_200": 319,
+        "fixture_upload": 319,
+        "poll_freshness_problem": 32,
+        "whole_poll": 32
+      },
+      "numeric_totals": {
+        "uploaded_fixture_occurrences": 65973
+      },
+      "metrics": {
+        "fixture_upload.elapsed_ms": {
+          "samples": 319,
+          "sum_ms": 1028452.1,
+          "median_ms": 3177.6,
+          "p95_ms": 5062.3,
+          "max_ms": 6043.0
+        },
+        "fixture_upload.http_ms": {
+          "samples": 319,
+          "sum_ms": 692768.7,
+          "median_ms": 2068.2,
+          "p95_ms": 3177.6,
+          "max_ms": 4136.3
+        },
+        "fixture_upload.lock_wait_ms": {
+          "samples": 319,
+          "sum_ms": 335681.8,
+          "median_ms": 706.4,
+          "p95_ms": 2894.4,
+          "max_ms": 4153.9
+        },
+        "whole_poll.elapsed_ms": {
+          "samples": 32,
+          "sum_ms": 922193.7,
+          "median_ms": 28665.4,
+          "p95_ms": 34835.0,
+          "max_ms": 35009.8
+        }
+      },
+      "raw_log_lines_retained": false,
+      "upload_poll_correlation_not_proven": true,
+      "can_include_precise_or_push_uploads": true
+    },
+    "initial_log_wrapper_failed_exit": 1,
+    "further_business_code_changed": false
+  }
 }
