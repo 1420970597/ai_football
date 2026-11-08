@@ -86,7 +86,7 @@ def _early_first_half(quote, posted_at, now):
             return False
         # Receipt times describe observations, not invented provider timestamps.
         return (0 <= (now-posted_at).total_seconds() <= 300
-                and -60 <= (observed-posted_at).total_seconds() <= 120
+                and -60 <= (observed-posted_at).total_seconds() <= 300
                 and 0 <= (now-observed).total_seconds() <= 180
                 and 0 <= (now-current).total_seconds() <= 120
                 and observed <= current)
@@ -128,8 +128,9 @@ def verified_early_first_half_context(text, quote, *, posted_at=None, now=None):
         candidate = quote['intent_candidate']
         observed = datetime.fromisoformat(candidate['received_at'].replace('Z', '+00:00'))
         received = quote['fixture_received_at']
-        return {'algorithm': 'leyu-early-first-half-stage-v1',
+        return {'algorithm': 'leyu-early-first-half-stage-v2',
                 'fixture_id': quote['fixture_id'], 'source_id': quote['source_id'],
+                'message_posted_at': posted_at.isoformat(), 'source_age_limit_seconds': 300,
                 'match_state': '6', 'search_clock_minute': candidate['clock_minute'],
                 'quote_clock_minute': quote['fixture_clock_minute'],
                 'search_received_at': observed.isoformat(),

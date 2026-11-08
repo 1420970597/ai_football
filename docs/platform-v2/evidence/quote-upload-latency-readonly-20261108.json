@@ -1,0 +1,42 @@
+{
+  "read_only": true,
+  "observed_at": "2026-11-08T14:51:42.413064+00:00",
+  "scope": "last 10 minutes, capped 10000 log lines; not a full latency trace",
+  "upload_batches": 213,
+  "upload_http_ms": {
+    "count": 213,
+    "min": 1381.5,
+    "median": 2070.0,
+    "max": 4612.9
+  },
+  "upload_lock_ms": {
+    "count": 213,
+    "min": 0.0,
+    "median": 10.8,
+    "max": 3277.0
+  },
+  "upload_fixture_counts": {
+    "count": 213,
+    "min": 1,
+    "median": 7,
+    "max": 500
+  },
+  "upload_status_counts": {
+    "200": 212,
+    "unknown": 1
+  },
+  "poll_ms": {
+    "count": 24,
+    "min": 21960.0,
+    "median": 24781.35,
+    "max": 29192.6
+  },
+  "collector_resources": {
+    "CPUPerc": "7.04%",
+    "MemUsage": "219.9MiB / 512MiB",
+    "MemPerc": "42.95%",
+    "PIDs": "8"
+  },
+  "raw_logs_or_credentials_retained": false,
+  "production_writes": 0
+}

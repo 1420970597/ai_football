@@ -28,7 +28,8 @@ class HermesClientTests(unittest.IsolatedAsyncioTestCase):
         for required in ('必须', '联赛', 'team_query=""', 'competition_query', '7天', '原文双方',
                          '比分两侧', '联赛标签', '黄框数字',
                          'read_markets=true', 'market_result', '不重复', '完场或取消仍须唯一解析',
-                         '不要求图片高亮', '注单确认'):
+                         '不要求图片高亮', '注单确认', '逐场区分赛果反馈与新增推荐',
+                         '本身不代表旧单', '只有本场有回顾证据'):
             self.assertIn(required, system)
 
     async def image_summary(self, message, *, prepared=False):

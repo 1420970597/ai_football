@@ -53,7 +53,9 @@ async def _correct_signal(conn, job_id, signal_id, *, apply, source_line=False):
         'AND reference_id=$1 ORDER BY captured_at DESC LIMIT 1', signal_id)
     period_context = evidence['evidence'].get('source_period_context') if evidence else None
     if (not source_line and isinstance(period_context, dict)
-            and period_context.get('algorithm') == 'leyu-early-first-half-stage-v1'
+            and period_context.get('algorithm') in {'leyu-early-first-half-stage-v1', 'leyu-early-first-half-stage-v2'}
+            and (period_context['algorithm'] == 'leyu-early-first-half-stage-v1'
+                 or period_context.get('source_age_limit_seconds') == 300)
             and period_context.get('fixture_id') == signal['fixture_id']
             and period_context.get('source_id') == signal['fixture_id']
             and period_context.get('match_state') == '6'

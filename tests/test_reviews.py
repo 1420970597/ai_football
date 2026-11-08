@@ -240,7 +240,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                             "SELECT evidence FROM v2_quote_evidence WHERE reference_id=$1 AND evidence_kind='expert_signal'",
                             uuid.UUID(accepted['signal_id']))
                         period_context = evidence['evidence']['source_period_context']
-                        self.assertEqual('leyu-early-first-half-stage-v1', period_context['algorithm'])
+                        self.assertEqual('leyu-early-first-half-stage-v2', period_context['algorithm'])
 
     async def test_native_team_totals_keep_sides_read_binding_and_idempotent_prices(self):
         markets=[{'market_id':mid,'market_name':name,'kind':'team_total','period':'full_time',

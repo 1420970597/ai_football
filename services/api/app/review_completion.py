@@ -70,8 +70,20 @@ def pagination_issues(count: int, searches: list) -> dict:
 
 
 def mentioned_fixtures(content: str) -> set[str]:
-    # A mention only requests verification; it can never authorize a binding.
-    return set(re.findall(r'(?<![\w:])leyu:\d{1,24}(?!\w)', content[:20000]))
+    # A claim only requests verification; it can never authorize a binding.
+    # Explicitly excluded, identity-mismatched candidates are not pick claims.
+    # An old positive claim remains in the caller's attempt-wide union.
+    mentioned = set()
+    for clause in re.split(r'[\n。；;!！?？]+', content[:20000]):
+        rejected = re.search(r'不作为绑定|不予绑定|明确排除|排除[该此](?:候选|比赛)', clause)
+        mismatch = re.search(r'[与和].{0,100}(?:原文|原推荐).{0,100}(?:不符|不同)'
+                             r'|无关|非原文|不是原文|不属于原推荐', clause)
+        positive = re.search(r'(?:已(?:经)?|确认)[^，,:：]{0,16}(?:绑定|匹配|识别|定位)', clause)
+        if rejected and mismatch and not positive:
+            continue
+        # Chinese prose next to an ASCII provider ID is a valid boundary.
+        mentioned.update(re.findall(r'(?<![A-Za-z0-9_:])leyu:[0-9]{1,24}(?![A-Za-z0-9_:])', clause))
+    return mentioned
 
 
 def named_identity_claims(contents) -> str:

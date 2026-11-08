@@ -79,7 +79,7 @@ class PeriodIntentTests(unittest.TestCase):
             quote['line'] = line
             self.assertIsNone(period_intent_rejection('半大0.75 0.5 来开门红', quote, posted_at=posted, now=now))
             evidence = verified_early_first_half_context('半大0.75 0.5 来开门红', quote, posted_at=posted, now=now)
-            self.assertEqual('leyu-early-first-half-stage-v1', evidence['algorithm'])
+            self.assertEqual('leyu-early-first-half-stage-v2', evidence['algorithm'])
             stale_posted = now - timedelta(minutes=10)
             self.assertEqual('source_period_intent_ambiguous', period_intent_rejection(
                 '半大0.75 0.5 来开门红', quote, posted_at=stale_posted, now=now))
