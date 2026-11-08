@@ -33,7 +33,7 @@ FIXTURE_FIELDS = frozenset({
     'home_score', 'away_score', 'clock_minute', 'source_updated_at', 'received_at', 'source_time_quality',
     'half_home_score', 'half_away_score',
 })
-SEARCH_FIXTURE_FIELDS = FIXTURE_FIELDS | {'realtime_eligible', 'eligibility_reason', 'retrieval_basis'}
+SEARCH_FIXTURE_FIELDS = FIXTURE_FIELDS | {'realtime_eligible', 'eligibility_reason', 'retrieval_basis', 'verified_alias_sources'}
 QUOTE_FIELDS = frozenset({
     'id', 'fixture_id', 'market_id', 'market_name', 'period', 'market_kind', 'line', 'selection', 'price',
     'source_updated_at', 'received_at', 'source_time_quality', 'status', 'play_id', 'market_instance_id',
@@ -70,13 +70,22 @@ def _unsupported_markets(quotes):
             for key, count in sorted(groups.items())]
 
 
+def _search_fixture(item):
+    value = _project(item, SEARCH_FIXTURE_FIELDS)
+    if 'verified_alias_sources' in value:
+        value['verified_alias_sources'] = _project(value['verified_alias_sources'], {
+            'registry_version', 'home', 'away',
+        })
+    return value
+
+
 def snapshot_result(kind, result, *, compact_markets=False):
     """Only these declared tool fields can reach either the model or evidence."""
     if kind == 'mcp_search_matches':
         if len(result['items']) > 100:
             _budget_error()
         value = _project(result, {'search_key', 'next_cursor', 'search_complete', 'total_candidates'})
-        value['items'] = [_project(item, SEARCH_FIXTURE_FIELDS) for item in result['items']]
+        value['items'] = [_search_fixture(item) for item in result['items']]
         if 'resolution' in result:
             value['resolution'] = snapshot_result('mcp_resolve_match', result['resolution'])
         if 'next_search_guidance' in result:
@@ -87,7 +96,7 @@ def snapshot_result(kind, result, *, compact_markets=False):
     elif kind == 'mcp_resolve_match':
         value = _project(result, {'resolved', 'reason', 'candidate_count'})
         if 'fixture' in result:
-            value['fixture'] = _project(result['fixture'], SEARCH_FIXTURE_FIELDS)
+            value['fixture'] = _search_fixture(result['fixture'])
     elif kind == 'mcp_list_match_markets':
         if len(result['markets']) > MAX_MARKETS:
             _budget_error()

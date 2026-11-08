@@ -21,7 +21,7 @@ from ..review_state import authorize, fresh_quote, quote_context, quote_context_
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, MAX_MARKETS
 from ..runtime_settings import quote_max_age_from_rows, runtime_quote_max_age
 from ..quote_observation import confirmation_for, confirmations_for
-from ..team_matching import normalize_team_name
+from ..team_matching import normalize_team_name, with_verified_aliases
 from ..review_candidates import snapshot_candidates
 from ..review_cursors import encode_cursor, decode_cursor
 from ..review_search_scope import continuation_scope, scope_key
@@ -249,7 +249,7 @@ async def search_matches(body: SearchInput, request: Request):
                 "UPDATE v2_match_searches SET expected_cursor=$3,complete=$4,page_count=page_count+1,total_candidates=$5,updated_at=now() WHERE job_id=$1 AND search_key=$2",
                 body.review_id, search_key, cursor, not has_more, total,
             )
-            result = {"search_key": search_key, "items": [row["candidate_data"] for row in page], "next_cursor": cursor, "search_complete": not has_more, "total_candidates": total}
+            result = {"search_key": search_key, "items": [with_verified_aliases(row["candidate_data"]) for row in page], "next_cursor": cursor, "search_complete": not has_more, "total_candidates": total}
             if body.team_a is not None:
                 result['resolution'] = {'resolved': False, 'reason': 'search_not_complete'}
                 if not has_more:

@@ -1,0 +1,95 @@
+{
+  "window_start": "2026-11-08T11:49:02.851256+00:00",
+  "window_last_database_sample": "2026-11-08T12:19:03.955428+00:00",
+  "database_samples": 56,
+  "database_sample_errors": [],
+  "health_non_200_samples": [],
+  "telegram_degraded_samples": [],
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 197,
+    "published_posts": 30,
+    "older_posts_revised": 166,
+    "published_ready": 23,
+    "published_pending": 0,
+    "published_unsupported": 7
+  },
+  "reviews_final": {
+    "eligible": 23,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 23,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 31,
+    "avg_ms": "4120.8",
+    "p95_ms": "10936.4",
+    "within_3s": 14,
+    "older_backlog_versions_received": 166
+  },
+  "trace_counts_final": [
+    {
+      "trace_kind": "hermes_result",
+      "failure_category": null,
+      "finish_reason": "stop",
+      "count": 133
+    },
+    {
+      "trace_kind": "system_review_result",
+      "failure_category": null,
+      "finish_reason": null,
+      "count": 133
+    }
+  ],
+  "market_samples": 61,
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T12:18:09.149919+00:00",
+    "last_poll_elapsed_ms": 27317.9,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 36591,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 22.0,
+    "oldest_quote_age_seconds": 320127.3,
+    "failed_batches": 0
+  },
+  "official_reconcile": {
+    "read_only": true,
+    "official_posts": 31,
+    "normalized_posts": 30,
+    "matched": 30,
+    "missing": []
+  },
+  "exits": {
+    "e1000-independent-native": 0,
+    "e1000-launch-syntax": 0,
+    "e1000-official-scan": 0,
+    "e1000-window-start": 0,
+    "e1000-natural-audit": 0,
+    "e1000-after-handoff": 0,
+    "e1000-official-reconcile": 0,
+    "e1000-market-native": 0,
+    "e1000-completion-audit": 0
+  },
+  "observer_exits": {
+    "e1001-observer-controller": 0,
+    "e1001-observer-native": 0
+  },
+  "all_functionality_verified": false,
+  "production_writes": false,
+  "raw_original_messages_included": false
+}

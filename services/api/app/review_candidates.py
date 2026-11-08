@@ -63,7 +63,7 @@ async def snapshot_candidates(conn, *, review_id, search_key, phase, team_query,
         competition_pattern = '%' + competition_term + '%'
     chinese_source, chinese_target = sql_chinese_fold(team_query+' '+competition_term)
     args = (review_id, search_key, phase, '%'+team_query.strip().casefold()+'%',
-            ['%'+v+'%' for v in team_search_variants(team_query)],
+            ['%'+v+'%' for v in team_search_variants(team_query, sport=sport)],
             name_source+chinese_source, name_target+chinese_target, team_query.strip().casefold(),
             competition_pattern, from_utc, to_utc, sport, False)
     count = await conn.fetchval(_INSERT_SNAPSHOT, *args)

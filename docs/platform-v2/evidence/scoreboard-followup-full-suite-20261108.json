@@ -1,0 +1,13 @@
+{
+  "source_parent_commit": "edcf87549867cedd3871eee3733dd8df4988d050",
+  "committed_source_verified": true,
+  "tests": 1790,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "seconds": 1192.349,
+  "scope": "isolated fixtures; no live providers or money",
+  "native_exit": 0,
+  "controller_exit": 0,
+  "qualifies_new_alias_code": false
+}
