@@ -1,0 +1,635 @@
+{
+  "schema": "hermes-route-audit-v1",
+  "read_only": true,
+  "shared_gateway_changed": false,
+  "model_restored": false,
+  "source_configuration_matches_legacy": true,
+  "whole_chain_3s_passed": false,
+  "config_compare": {
+    "observed_at": "2026-11-08T10:33:53.794855+00:00",
+    "read_only": true,
+    "secret_values_emitted": false,
+    "sources": [
+      {
+        "source": "/protected/runtime.env",
+        "present": true,
+        "root_type": "dict",
+        "relevant_keys": [
+          "HERMES_API_KEY",
+          "HERMES_MODEL",
+          "HERMES_PROVIDER_API_KEY",
+          "HERMES_PROVIDER_BASE_URL"
+        ],
+        "comparisons": {
+          "HERMES_MODEL": {
+            "present": true,
+            "equals_current": false
+          },
+          "HERMES_PROVIDER_BASE_URL": {
+            "present": true,
+            "equals_current": true
+          },
+          "HERMES_PROVIDER_API_KEY": {
+            "present": true,
+            "equals_current": true
+          }
+        }
+      },
+      {
+        "source": "/project-runtime.env",
+        "present": true,
+        "root_type": "dict",
+        "relevant_keys": [
+          "HERMES_API_KEY",
+          "HERMES_MODEL",
+          "HERMES_PROVIDER_API_KEY",
+          "HERMES_PROVIDER_BASE_URL"
+        ],
+        "comparisons": {
+          "HERMES_MODEL": {
+            "present": true,
+            "equals_current": true
+          },
+          "HERMES_PROVIDER_BASE_URL": {
+            "present": true,
+            "equals_current": true
+          },
+          "HERMES_PROVIDER_API_KEY": {
+            "present": true,
+            "equals_current": true
+          }
+        }
+      },
+      {
+        "source": "/protected/legacy-environment.json",
+        "present": true,
+        "root_type": "dict",
+        "relevant_keys": [
+          "PI_LLM_API_KEY",
+          "PI_LLM_BASE_URL",
+          "PI_LLM_MODEL",
+          "PI_LLM_PROVIDER"
+        ],
+        "comparisons": {
+          "PI_LLM_MODEL": {
+            "present": true,
+            "equals_current": true
+          },
+          "PI_LLM_BASE_URL": {
+            "present": true,
+            "equals_current": true
+          },
+          "PI_LLM_API_KEY": {
+            "present": true,
+            "equals_current": true
+          }
+        }
+      },
+      {
+        "source": "/protected/legacy-reference-configs.json",
+        "present": true,
+        "root_type": "dict",
+        "relevant_keys": [],
+        "comparisons": {}
+      },
+      {
+        "source": "/protected/legacy-runtime-settings.json",
+        "present": true,
+        "root_type": "list",
+        "count": 1,
+        "row_keys": [
+          "name",
+          "settings",
+          "version"
+        ],
+        "settings_keys": [
+          "algorithm_alert_enabled",
+          "algorithm_alert_min_samples",
+          "algorithm_alert_threshold",
+          "algorithms",
+          "anchor_max_age_s",
+          "betting_enabled",
+          "betting_fixed_stake",
+          "betting_max_match_exposure",
+          "betting_max_total_exposure",
+          "betting_min_edge",
+          "betting_min_evidence_matches",
+          "betting_min_hit_count",
+          "betting_retry_base_delay_s",
+          "betting_retry_max_attempts",
+          "betting_stake_mode",
+          "decision_gate_enabled",
+          "decision_gate_min_ev",
+          "decision_mode",
+          "devig_method",
+          "devig_spread_warn_pp",
+          "execution_cost",
+          "fractional_kelly",
+          "leyu_app_token",
+          "llm_api_key",
+          "llm_base_url",
+          "llm_enabled",
+          "llm_experiment_enabled",
+          "llm_fallback_models",
+          "llm_interval_s",
+          "llm_max_tokens",
+          "llm_model",
+          "llm_review_max_age_s",
+          "llm_temperature",
+          "llm_timeout_s",
+          "max_algorithm_weight",
+          "max_total_exposure",
+          "min_ev",
+          "min_probability",
+          "model_blend_weight",
+          "model_shadow_enabled",
+          "model_training_cpu",
+          "model_training_enabled",
+          "model_training_matches",
+          "model_training_memory_mb",
+          "model_training_score_cooldown_s",
+          "primary_algorithm",
+          "quote_max_age_s",
+          "risk_correlation",
+          "score_change_cooldown_s",
+          "state_max_age_s",
+          "telegram_api_hash",
+          "telegram_api_id",
+          "telegram_enabled",
+          "telegram_min_confidence",
+          "telegram_queue_limit",
+          "telegram_signal_max_age_s",
+          "telegram_sources",
+          "telegram_vision_model",
+          "telegram_workers",
+          "weight_prior_matches"
+        ]
+      }
+    ],
+    "current_url_shape": {
+      "scheme": "http",
+      "port": 8885,
+      "path_is_v1": true,
+      "is_loopback": false,
+      "has_query": false,
+      "has_embedded_identity": false
+    },
+    "current_model_is_requested": true,
+    "mounted_profile_literal_checks": {
+      "provider_reference_present": true,
+      "model_env_reference_present": true,
+      "url_env_reference_present": true,
+      "key_env_reference_present": true
+    }
+  },
+  "provider_classification": {
+    "observed_at": "2026-11-08T10:34:15.483012+00:00",
+    "production_job": false,
+    "model": "deepseek-v4.1-flash",
+    "requests_limit": 2,
+    "secrets_emitted": false,
+    "generation": {
+      "status": 404,
+      "bytes": 135,
+      "body_sha256": "03f6aba4820c26f5ac0de95040539ca8544c4378ae3e0374dcc3ee9b874b1b77",
+      "content_type_json": true,
+      "redirect": false,
+      "known_root_keys": [
+        "error"
+      ],
+      "known_error_keys": [
+        "message",
+        "type"
+      ],
+      "type_category": "model_not_found",
+      "code_category": "other_or_absent",
+      "message_flags": {
+        "model_named": true,
+        "model_not_found": false,
+        "model_does_not_exist": false,
+        "no_available": false,
+        "no_such_model": false,
+        "invalid_request": false,
+        "no_route": false,
+        "path_not_found": false,
+        "forbidden": false,
+        "permission": false,
+        "no_access": false,
+        "quota": false,
+        "upstream": false,
+        "channel": false,
+        "provider": false,
+        "not_supported": true,
+        "not_found": false,
+        "available_models": false
+      },
+      "message_chars": 84,
+      "elapsed_ms": 24.061
+    },
+    "catalog": {
+      "status": 200,
+      "bytes": 3293,
+      "body_sha256": "68ad0e54a48cd6e2e12b89babff0026f51a17151cf9bd64b3f6637923e8d37bc",
+      "content_type_json": true,
+      "redirect": false,
+      "known_root_keys": [
+        "data",
+        "object"
+      ],
+      "known_error_keys": [],
+      "type_category": "other_or_absent",
+      "code_category": "other_or_absent",
+      "message_flags": {
+        "model_named": false,
+        "model_not_found": false,
+        "model_does_not_exist": false,
+        "no_available": false,
+        "no_such_model": false,
+        "invalid_request": false,
+        "no_route": false,
+        "path_not_found": false,
+        "forbidden": false,
+        "permission": false,
+        "no_access": false,
+        "quota": false,
+        "upstream": false,
+        "channel": false,
+        "provider": false,
+        "not_supported": false,
+        "not_found": false,
+        "available_models": false
+      },
+      "message_chars": 0,
+      "model_count": 25,
+      "requested_model_present": false,
+      "deepseek_model_count": 0,
+      "prefixed_requested_model_present": false,
+      "elapsed_ms": 4.103
+    }
+  },
+  "target_identity": {
+    "read_only": true,
+    "target_port_is_8885": true,
+    "target_resolves_to_host_interface": true,
+    "resolved_count": 1,
+    "addresses_emitted": false
+  },
+  "group_state": [
+    {
+      "read_only": "on",
+      "key_matches": 1,
+      "key_active": true,
+      "key_unexpired": true,
+      "assigned_group": true
+    },
+    {
+      "group_platform": "openai",
+      "group_status": "active",
+      "group_not_deleted": true,
+      "model_routing_enabled": false,
+      "allowlist_type": "object",
+      "allowlist_count": null,
+      "allowlist_has_requested": false,
+      "has_fallback_group": false,
+      "updated_at": "2026-09-14T10:31:22.722239+08:00"
+    },
+    {
+      "platform": "openai",
+      "type": "apikey",
+      "status": "active",
+      "schedulable": false,
+      "count": 8,
+      "not_expired": 8,
+      "temporary_blocked": 0,
+      "rate_limited": 0,
+      "overloaded": 0,
+      "explicit_requested_mapping": 4,
+      "explicit_old_prefixed_mapping": 1,
+      "wildcard_mapping": 0,
+      "mapping_empty_or_absent": 0,
+      "openai_passthrough": 0,
+      "latest_updated_at": "2026-11-08T18:34:44.483669+08:00"
+    },
+    {
+      "platform": "openai",
+      "type": "apikey",
+      "status": "active",
+      "schedulable": true,
+      "count": 1,
+      "not_expired": 1,
+      "temporary_blocked": 0,
+      "rate_limited": 0,
+      "overloaded": 0,
+      "explicit_requested_mapping": 0,
+      "explicit_old_prefixed_mapping": 0,
+      "wildcard_mapping": 0,
+      "mapping_empty_or_absent": 0,
+      "openai_passthrough": 0,
+      "latest_updated_at": "2026-11-08T18:06:44.400051+08:00"
+    },
+    {
+      "platform": "openai",
+      "type": "apikey",
+      "status": "error",
+      "schedulable": false,
+      "count": 3,
+      "not_expired": 3,
+      "temporary_blocked": 0,
+      "rate_limited": 0,
+      "overloaded": 0,
+      "explicit_requested_mapping": 2,
+      "explicit_old_prefixed_mapping": 0,
+      "wildcard_mapping": 0,
+      "mapping_empty_or_absent": 1,
+      "openai_passthrough": 1,
+      "latest_updated_at": "2026-11-08T01:01:01.183269+08:00"
+    },
+    {
+      "platform": "openai",
+      "type": "oauth",
+      "status": "error",
+      "schedulable": false,
+      "count": 7,
+      "not_expired": 7,
+      "temporary_blocked": 0,
+      "rate_limited": 0,
+      "overloaded": 0,
+      "explicit_requested_mapping": 0,
+      "explicit_old_prefixed_mapping": 0,
+      "wildcard_mapping": 0,
+      "mapping_empty_or_absent": 1,
+      "openai_passthrough": 0,
+      "latest_updated_at": "2026-10-13T12:27:32.136663+08:00"
+    },
+    {
+      "composite_routes": 0,
+      "requested_routes": 0,
+      "enabled_requested_routes": 0,
+      "wildcard_routes": 0
+    },
+    {
+      "channels": 0,
+      "active_channels": 0,
+      "requested_mapping_channels": 0
+    }
+  ],
+  "mapped_account_state": [
+    {
+      "ordinal": 1,
+      "platform": "openai",
+      "type": "apikey",
+      "status": "active",
+      "schedulable": false,
+      "requested_mapping_present": true,
+      "requested_mapping_identity": false,
+      "requested_mapping_old_prefix": false,
+      "old_prefix_mapping_present": false,
+      "credential_field_names": [
+        "api_key",
+        "base_url",
+        "model_mapping"
+      ],
+      "extra_field_names": [
+        "upstream_billing_probe",
+        "openai_responses_supported",
+        "upstream_billing_probe_enabled",
+        "upstream_billing_rate_sync_enabled",
+        "openai_long_context_billing_enabled",
+        "openai_apikey_responses_websockets_v2_mode",
+        "openai_apikey_responses_websockets_v2_enabled"
+      ],
+      "error_present": false,
+      "error_flags": {
+        "forbidden": false,
+        "unauthorized": false,
+        "invalid_api_key": false,
+        "http_401": false,
+        "http_403": false,
+        "http_502": false,
+        "quota": false,
+        "balance": false,
+        "timeout": false
+      },
+      "notes_present": false,
+      "auto_pause_on_expired": true,
+      "expires_at": null,
+      "last_used_at": "2026-10-05T02:33:24.408731+08:00",
+      "updated_at": "2026-11-08T16:18:44.172192+08:00"
+    },
+    {
+      "ordinal": 2,
+      "platform": "openai",
+      "type": "apikey",
+      "status": "error",
+      "schedulable": false,
+      "requested_mapping_present": true,
+      "requested_mapping_identity": false,
+      "requested_mapping_old_prefix": false,
+      "old_prefix_mapping_present": false,
+      "credential_field_names": [
+        "api_key",
+        "base_url",
+        "model_mapping"
+      ],
+      "extra_field_names": [
+        "openai_responses_mode",
+        "upstream_billing_probe",
+        "openai_responses_supported",
+        "upstream_billing_probe_enabled",
+        "upstream_billing_rate_sync_enabled",
+        "openai_long_context_billing_enabled",
+        "openai_apikey_responses_websockets_v2_mode",
+        "openai_apikey_responses_websockets_v2_enabled"
+      ],
+      "error_present": true,
+      "error_flags": {
+        "forbidden": false,
+        "unauthorized": false,
+        "invalid_api_key": false,
+        "http_401": true,
+        "http_403": false,
+        "http_502": false,
+        "quota": false,
+        "balance": false,
+        "timeout": false
+      },
+      "notes_present": false,
+      "auto_pause_on_expired": true,
+      "expires_at": null,
+      "last_used_at": "2026-10-04T06:45:34.368158+08:00",
+      "updated_at": "2026-10-07T14:54:37.744722+08:00"
+    },
+    {
+      "ordinal": 3,
+      "platform": "openai",
+      "type": "apikey",
+      "status": "active",
+      "schedulable": false,
+      "requested_mapping_present": true,
+      "requested_mapping_identity": false,
+      "requested_mapping_old_prefix": false,
+      "old_prefix_mapping_present": false,
+      "credential_field_names": [
+        "api_key",
+        "base_url",
+        "model_mapping"
+      ],
+      "extra_field_names": [
+        "openai_responses_mode",
+        "duplicate_operation_id",
+        "openai_responses_supported",
+        "upstream_billing_probe_enabled",
+        "upstream_billing_rate_sync_enabled",
+        "openai_long_context_billing_enabled",
+        "openai_apikey_responses_websockets_v2_mode",
+        "openai_apikey_responses_websockets_v2_enabled"
+      ],
+      "error_present": false,
+      "error_flags": {
+        "forbidden": false,
+        "unauthorized": false,
+        "invalid_api_key": false,
+        "http_401": false,
+        "http_403": false,
+        "http_502": false,
+        "quota": false,
+        "balance": false,
+        "timeout": false
+      },
+      "notes_present": false,
+      "auto_pause_on_expired": true,
+      "expires_at": null,
+      "last_used_at": "2026-10-07T02:59:10.558616+08:00",
+      "updated_at": "2026-10-07T17:46:33.237185+08:00"
+    },
+    {
+      "ordinal": 4,
+      "platform": "openai",
+      "type": "apikey",
+      "status": "active",
+      "schedulable": false,
+      "requested_mapping_present": true,
+      "requested_mapping_identity": false,
+      "requested_mapping_old_prefix": false,
+      "old_prefix_mapping_present": false,
+      "credential_field_names": [
+        "api_key",
+        "base_url",
+        "model_mapping"
+      ],
+      "extra_field_names": [
+        "upstream_billing_probe",
+        "upstream_model_metadata",
+        "openai_responses_supported",
+        "upstream_billing_probe_enabled",
+        "upstream_billing_rate_sync_enabled",
+        "openai_long_context_billing_enabled",
+        "openai_apikey_responses_websockets_v2_mode",
+        "openai_apikey_responses_websockets_v2_enabled"
+      ],
+      "error_present": false,
+      "error_flags": {
+        "forbidden": false,
+        "unauthorized": false,
+        "invalid_api_key": false,
+        "http_401": false,
+        "http_403": false,
+        "http_502": false,
+        "quota": false,
+        "balance": false,
+        "timeout": false
+      },
+      "notes_present": false,
+      "auto_pause_on_expired": true,
+      "expires_at": null,
+      "last_used_at": "2026-10-07T19:56:45.589631+08:00",
+      "updated_at": "2026-11-08T16:58:44.436657+08:00"
+    },
+    {
+      "ordinal": 5,
+      "platform": "openai",
+      "type": "apikey",
+      "status": "active",
+      "schedulable": false,
+      "requested_mapping_present": true,
+      "requested_mapping_identity": false,
+      "requested_mapping_old_prefix": true,
+      "old_prefix_mapping_present": true,
+      "credential_field_names": [
+        "api_key",
+        "base_url",
+        "model_mapping",
+        "header_overrides",
+        "header_override_enabled"
+      ],
+      "extra_field_names": [
+        "upstream_billing_probe",
+        "upstream_model_metadata",
+        "openai_responses_supported",
+        "upstream_billing_probe_enabled",
+        "upstream_billing_rate_sync_enabled",
+        "openai_long_context_billing_enabled",
+        "openai_apikey_responses_websockets_v2_mode",
+        "openai_apikey_responses_websockets_v2_enabled"
+      ],
+      "error_present": false,
+      "error_flags": {
+        "forbidden": false,
+        "unauthorized": false,
+        "invalid_api_key": false,
+        "http_401": false,
+        "http_403": false,
+        "http_502": false,
+        "quota": false,
+        "balance": false,
+        "timeout": false
+      },
+      "notes_present": false,
+      "auto_pause_on_expired": true,
+      "expires_at": null,
+      "last_used_at": "2026-11-02T21:38:24.707213+08:00",
+      "updated_at": "2026-11-08T16:16:44.308216+08:00"
+    },
+    {
+      "ordinal": 6,
+      "platform": "openai",
+      "type": "apikey",
+      "status": "error",
+      "schedulable": false,
+      "requested_mapping_present": true,
+      "requested_mapping_identity": true,
+      "requested_mapping_old_prefix": false,
+      "old_prefix_mapping_present": false,
+      "credential_field_names": [
+        "api_key",
+        "base_url",
+        "model_mapping"
+      ],
+      "extra_field_names": [
+        "upstream_billing_probe",
+        "openai_responses_supported",
+        "upstream_billing_probe_enabled",
+        "openai_long_context_billing_enabled",
+        "openai_apikey_responses_websockets_v2_mode",
+        "openai_apikey_responses_websockets_v2_enabled"
+      ],
+      "error_present": true,
+      "error_flags": {
+        "forbidden": true,
+        "unauthorized": false,
+        "invalid_api_key": false,
+        "http_401": false,
+        "http_403": true,
+        "http_502": false,
+        "quota": false,
+        "balance": true,
+        "timeout": false
+      },
+      "notes_present": false,
+      "auto_pause_on_expired": true,
+      "expires_at": null,
+      "last_used_at": "2026-11-08T00:25:37.458128+08:00",
+      "updated_at": "2026-11-08T01:01:01.183269+08:00"
+    }
+  ]
+}
