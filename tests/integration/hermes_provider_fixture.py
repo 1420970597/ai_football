@@ -210,7 +210,10 @@ def _answer(body):
             return {'role': 'assistant', 'content': '隔离工具缺少比赛或报价标识，保持未解决。'}, 'stop'
         return _call(state, tools, 'record_expert_signals', {**context, 'signals': [{
             'fixture_id': fixture['id'], 'quote_id': quote['quote_id'],
-            'evidence_text': '隔离推荐大2.5，价格仅取系统工具', 'confidence': 0.8}]})
+            'evidence_text': ('隔离推荐大2.5/3，价格仅取系统工具' if mode == 'line_conflict'
+                              else '隔离推荐大2.5，价格仅取系统工具'), 'confidence': 0.8}]})
+    if mode == 'line_conflict' and name.endswith('record_expert_signals') and nested(last, 'rejected'):
+        return {'role': 'assistant', 'content': '原文为大2.5/3，已读报价仅大2.5，线值不符，保持未解决。'}, 'stop'
     if nested(last, 'accepted'):
         return {'role': 'assistant', 'content': f'已按系统工具记录 Alpha{TARGET} 对 Beta{TARGET}，赛前全场大2.5；此为隔离验收。'}, 'stop'
     return {'role': 'assistant', 'content': '工具未返回可核验结果，保持未解决。'}, 'stop'

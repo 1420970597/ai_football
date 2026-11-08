@@ -15,6 +15,7 @@ from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_val
 from .. import database
 from ..review_policy import REALTIME_WINDOW_SECONDS
 from ..handicap_lines import line_terms
+from ..review_line_intent import line_intent_rejection
 from ..review_state import authorize, fresh_quote, quote_context, quote_context_changed_fields
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, MAX_MARKETS
 from ..runtime_settings import quote_max_age_from_rows, runtime_quote_max_age
@@ -471,12 +472,14 @@ async def _record_current_signals(conn, body, request, observations):
         reason = None
         confirmation = None
         period_rejection = None
+        line_rejection = None
         if quote:
             quote = dict(quote)
             fixture = dict(quote) | {'id': quote['fixture_id']}
             confirmation = confirmation_for(observations.get(pick.fixture_id), quote, fixture, max_quote_age)
             confirmation = confirmation or confirmation_for(quote['read_context'].get('current_confirmation'), quote, fixture, max_quote_age)
             period_rejection = period_intent_rejection(job['raw_text'], quote, posted_at=job['posted_at'])
+            line_rejection = line_intent_rejection(pick.evidence_text, quote)
         if not quote:
             reason = "quote_not_read_or_changed"
         elif {k: v for k, v in quote['read_context'].items() if k != 'current_confirmation'} != quote_context(quote, quote):
@@ -487,6 +490,8 @@ async def _record_current_signals(conn, body, request, observations):
             reason = 'team_total_native_identity_unknown'
         elif period_rejection:
             reason = period_rejection
+        elif line_rejection:
+            reason = line_rejection
         elif not fresh_quote(quote, max_quote_age) and not confirmation:
             reason = "quote_inactive_unknown_or_stale"
         if reason:

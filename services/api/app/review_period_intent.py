@@ -23,9 +23,11 @@ _AMOUNT_SUFFIX = re.compile(r'(?:注|仓|倉|成|手|米|元|块|塊|[uU]\b|单�
 _PERIODS = {'上半场': 'first_half', '上半場': 'first_half', '上半': 'first_half',
             '下半场': 'second_half', '下半場': 'second_half', '下半': 'second_half',
             '全场': 'full_time', '全場': 'full_time'}
-CORRECTION_REASONS = ('review_source_period_intent_ambiguous', 'review_source_period_intent_conflict')
+CORRECTION_REASONS = ('review_source_period_intent_ambiguous', 'review_source_period_intent_conflict',
+                      'review_source_line_intent_conflict', 'review_source_selection_intent_conflict')
 INTENT_VALID_SQL = ("NOT (s.withdrawn_at IS NOT NULL AND COALESCE(s.withdrawal_reason,'') IN ("
-                    "'review_source_period_intent_ambiguous','review_source_period_intent_conflict'))")
+                    "'review_source_period_intent_ambiguous','review_source_period_intent_conflict',"
+                    "'review_source_line_intent_conflict','review_source_selection_intent_conflict'))")
 
 
 def _asian_line(first, second):
@@ -46,13 +48,18 @@ def _text_totals(text):
             continue
         selection = 'over' if (match['before'] or match['after']) == '大' else 'under'
         yield match['period'], selection, line
-        end = match.end()
-        while following := _NEXT_LINE.match(text, end):
-            line = _asian_line(following['a'], following['b'])
-            if line is None or _AMOUNT_SUFFIX.match(text[following.end():].lstrip(' \t')):
-                break
+        for line in following_total_lines(text, match.end()):
             yield match['period'], selection, line
-            end = following.end()
+
+
+def following_total_lines(text, start):
+    """Same-clause numeric alternatives share direction; stakes do not."""
+    while following := _NEXT_LINE.match(text, start):
+        line = _asian_line(following['a'], following['b'])
+        if line is None or _AMOUNT_SUFFIX.match(text[following.end():].lstrip(' \t')):
+            break
+        yield line
+        start = following.end()
 
 
 def _early_first_half(quote, posted_at, now):

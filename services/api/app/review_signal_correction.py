@@ -1,19 +1,29 @@
-"""Explicit maintenance of period-invalid signals, with append-only evidence."""
+"""Explicit maintenance of source-intent-invalid signals, with append-only evidence."""
 from .admin_reviews import context
 from .auth import audit
 from .review_period_intent import CORRECTION_REASONS, period_intent_rejection
+from .review_line_intent import line_intent_rejection
 from .review_state import trace
 from .review_summary import record_summary
 
 ALGORITHM = 'source-period-intent-correction-v1'
+LINE_ALGORITHM = 'source-line-intent-correction-v1'
 
 
 async def correct_period_signal(conn, job_id, signal_id, *, apply=False):
+    return await _correct_signal(conn, job_id, signal_id, apply=apply)
+
+
+async def correct_line_signal(conn, job_id, signal_id, *, apply=False):
+    return await _correct_signal(conn, job_id, signal_id, apply=apply, source_line=True)
+
+
+async def _correct_signal(conn, job_id, signal_id, *, apply, source_line=False):
     """Caller owns transaction and explicit administrative maintenance authority."""
     if not conn.is_in_transaction():
         raise RuntimeError('signal correction requires a transaction')
     result = {'job_id': str(job_id), 'signal_id': str(signal_id),
-              'algorithm': ALGORITHM, 'applied': False}
+              'algorithm': LINE_ALGORITHM if source_line else ALGORITHM, 'applied': False}
     row = await context(conn, job_id)
     signal = await conn.fetchrow('SELECT * FROM v2_expert_signals WHERE id=$1', signal_id)
     if not row or not signal or signal['message_id'] != row['message_id']:
@@ -42,7 +52,7 @@ async def correct_period_signal(conn, job_id, signal_id, *, apply=False):
         "SELECT evidence FROM v2_quote_evidence WHERE evidence_kind='expert_signal' "
         'AND reference_id=$1 ORDER BY captured_at DESC LIMIT 1', signal_id)
     period_context = evidence['evidence'].get('source_period_context') if evidence else None
-    if (isinstance(period_context, dict)
+    if (not source_line and isinstance(period_context, dict)
             and period_context.get('algorithm') == 'leyu-early-first-half-stage-v1'
             and period_context.get('fixture_id') == signal['fixture_id']
             and period_context.get('source_id') == signal['fixture_id']
@@ -50,15 +60,17 @@ async def correct_period_signal(conn, job_id, signal_id, *, apply=False):
             and all(type(period_context.get(key)) is int and 0 <= period_context[key] < 45
                     for key in ('search_clock_minute', 'quote_clock_minute'))):
         return result | {'status': 'not_needed', 'reason': 'period_context_verified_at_acceptance'}
-    reason = period_intent_rejection(row['raw_text'], signal)
+    reason = (line_intent_rejection(signal['evidence_text'], signal) if source_line
+              else period_intent_rejection(row['raw_text'], signal))
     if reason is None:
-        return result | {'status': 'not_needed', 'reason': 'no_verified_period_conflict'}
+        return result | {'status': 'not_needed', 'reason': 'no_verified_line_conflict' if source_line
+                         else 'no_verified_period_conflict'}
     original = await conn.fetchrow(
         "SELECT id,payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='system_review_result' "
         'ORDER BY sequence_no DESC,id DESC LIMIT 1', job_id)
     if not original or original['payload'].get('attempt_id') != str(row['attempt_id']):
         return result | {'status': 'ineligible', 'reason': 'current_attempt_receipt_missing'}
-    correction = {'algorithm': ALGORITHM, 'reason': reason, 'signal_id': str(signal_id),
+    correction = {'algorithm': result['algorithm'], 'reason': reason, 'signal_id': str(signal_id),
                   'previous_trace_id': str(original['id']), 'previous_job_state': row['state'],
                   'previous_outcome': signal['outcome'], 'original_quote_preserved': True}
     result |= {'status': 'would_correct', 'reason': reason}
@@ -67,23 +79,27 @@ async def correct_period_signal(conn, job_id, signal_id, *, apply=False):
     await conn.execute(
         'UPDATE v2_expert_signals SET withdrawn_at=now(),withdrawal_reason=$2,'
         "outcome='pending',unit_net=NULL,effective_stake=0,settled_at=NULL,"
-        "settlement_reason='recommendation_source_period_intent_invalid' WHERE id=$1",
-        signal_id, 'review_' + reason)
+        "settlement_reason=$3 WHERE id=$1",
+        signal_id, 'review_' + reason, 'recommendation_source_line_intent_invalid' if source_line
+        else 'recommendation_source_period_intent_invalid')
     await trace(conn, job_id, 'system_signal_correction', {'attempt_id': str(row['attempt_id']), **correction})
     remaining = await record_summary(conn, {'id': job_id, 'message_id': row['message_id']},
                                      row['attempt_id'], row['review_mode'])
     # Preserve original timing as database JSON numerics, without float reencoding.
     await conn.execute(
         "UPDATE v2_analysis_traces t SET payload=t.payload || jsonb_build_object("
-        "'signal_correction',$3::jsonb,'outcome',$4::text,'content',t.payload->>'content' || '\n纠错：原推荐期间无法核验，该条录入已撤销并排除统计；原始报价及审核记录保留。') "
+        "'signal_correction',$3::jsonb,'outcome',$4::text,'content',t.payload->>'content' || $5::text) "
         "|| (o.payload-ARRAY['schema_version','language','basis','review_mode','accepted_count','items',"
         "'identified_without_signal','identified_omitted_count','completion_verified','completion_issues',"
         "'omitted_count','tool_rejection_counts','content','outcome','receipt_correction','signal_correction']) "
         'FROM v2_analysis_traces o WHERE o.id=$2 AND t.id=('
         'SELECT id FROM v2_analysis_traces WHERE job_id=$1 ORDER BY sequence_no DESC,id DESC LIMIT 1)',
-        job_id, original['id'], correction, 'succeeded' if remaining else 'unresolved')
+        job_id, original['id'], correction, 'succeeded' if remaining else 'unresolved',
+        '\n纠错：原推荐盘口线与来源证据不一致，该条录入已撤销并排除统计；原始报价及审核记录保留。' if source_line
+        else '\n纠错：原推荐期间无法核验，该条录入已撤销并排除统计；原始报价及审核记录保留。')
     await conn.execute('UPDATE v2_analysis_jobs SET state=$2,updated_at=now() WHERE id=$1',
                        job_id, 'succeeded' if remaining else 'unresolved')
-    await audit(conn, None, 'system', 'review_signal_period_corrected', 'expert_signal',
+    await audit(conn, None, 'system', 'review_signal_line_corrected' if source_line
+                else 'review_signal_period_corrected', 'expert_signal',
                 str(signal_id), details=correction)
     return result | {'status': 'corrected', 'applied': True}
