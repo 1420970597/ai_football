@@ -1,0 +1,187 @@
+{
+  "schema": "safe-dedicated-post-api-release-observation-v1",
+  "api_source_commit": "303894fed8d15e87ea214198b32a25fbb280ae06",
+  "window_start": "2026-11-08T21:30:21.089727+00:00",
+  "window_end": "2026-11-08T22:00:22.511174+00:00",
+  "dedicated_post_api_release_window": true,
+  "web_only_handoff_inside_window": true,
+  "all_native_exits_zero": true,
+  "official_sources_complete": 6,
+  "official_posts": 6,
+  "official_matched": 6,
+  "official_missing": 0,
+  "ready_messages_completed": 5,
+  "unsupported_media_retained": 1,
+  "unsupported_media_manually_viewed": false,
+  "manual_semantic_samples": [
+    {
+      "alias": 1,
+      "semantic_class": "esports_recommendation_without_fixture",
+      "original_sha256": "bbff4a0900eee0523fe81c7377bd47498f19876f4e6c7e0550da34adfb4b1f30",
+      "original_and_full_final_and_reply_manually_read": true,
+      "unique_original_image_manually_viewed": true,
+      "provider_elapsed_ms": 42361.437,
+      "event_to_conclusion_ms": 56562.563,
+      "queue_wait_ms": 8363.925,
+      "usage": {
+        "total_tokens": 54946,
+        "prompt_tokens": 52468,
+        "completion_tokens": 2478
+      },
+      "accepted_signals": 0
+    },
+    {
+      "alias": 2,
+      "semantic_class": "esports_recommendation_without_fixture",
+      "original_sha256": "6518d11ced60abaae77adcc261adff8fa8a0ccd8c7e229a0b508de57207b82b9",
+      "original_and_full_final_and_reply_manually_read": true,
+      "unique_original_image_manually_viewed": false,
+      "provider_elapsed_ms": 61080.542,
+      "event_to_conclusion_ms": 74029.935,
+      "queue_wait_ms": 6598.288,
+      "usage": {
+        "total_tokens": 94262,
+        "prompt_tokens": 93040,
+        "completion_tokens": 1222
+      },
+      "accepted_signals": 0
+    },
+    {
+      "alias": 3,
+      "semantic_class": "no_recommendation_intent",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original_and_full_final_and_reply_manually_read": true,
+      "unique_original_image_manually_viewed": true,
+      "provider_elapsed_ms": 3861.506,
+      "event_to_conclusion_ms": 66069.563,
+      "queue_wait_ms": 57333.307,
+      "usage": {
+        "total_tokens": 15059,
+        "prompt_tokens": 14912,
+        "completion_tokens": 147
+      },
+      "accepted_signals": 0
+    },
+    {
+      "alias": 4,
+      "semantic_class": "no_recommendation_intent",
+      "original_sha256": "4cc7b00050cb1c211acf0c51c02e8de829712f8a1b19d2a5a37cfb874a200024",
+      "original_and_full_final_and_reply_manually_read": true,
+      "unique_original_image_manually_viewed": false,
+      "provider_elapsed_ms": 3629.019,
+      "event_to_conclusion_ms": 47695.935,
+      "queue_wait_ms": 39200.184,
+      "usage": {
+        "total_tokens": 15063,
+        "prompt_tokens": 14944,
+        "completion_tokens": 119
+      },
+      "accepted_signals": 0
+    },
+    {
+      "alias": 5,
+      "semantic_class": "no_recommendation_intent",
+      "original_sha256": "67b15dee2c458dac4a22f33e73c7db151d5b38a09d34f6a1d72215104984795c",
+      "original_and_full_final_and_reply_manually_read": true,
+      "unique_original_image_manually_viewed": false,
+      "provider_elapsed_ms": 3904.521,
+      "event_to_conclusion_ms": 57923.54,
+      "queue_wait_ms": 48956.842,
+      "usage": {
+        "total_tokens": 15052,
+        "prompt_tokens": 14953,
+        "completion_tokens": 99
+      },
+      "accepted_signals": 0
+    }
+  ],
+  "positive_intent_without_fixture_samples": 2,
+  "identified_intents_without_fixture": [
+    3,
+    4
+  ],
+  "accepted_current_positive_recommendations": 0,
+  "current_attempt_complete_zero_candidate_searches": 10,
+  "current_week_exact_original_name_or_alias_fixture_count": 0,
+  "database_samples": 55,
+  "market_samples": 61,
+  "observer_samples": 91,
+  "observer_read_errors": 0,
+  "health_non_200_samples": [],
+  "telegram_degraded_samples": [],
+  "telegram_final": {
+    "http_status": 200,
+    "connected": true,
+    "authorized": true,
+    "state": "connected",
+    "degraded": false,
+    "source_count": 6,
+    "source_states": {
+      "caught_up": 1,
+      "catching_up": 5
+    },
+    "source_errors": {}
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 193,
+    "published_posts": 6,
+    "older_posts_revised": 187,
+    "published_ready": 5,
+    "published_pending": 0,
+    "published_unsupported": 1
+  },
+  "reviews_final": {
+    "eligible": 5,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 5,
+    "missing_receipt": 0
+  },
+  "event_persistence_latency": {
+    "event_versions": 6,
+    "avg_ms": "5660.6",
+    "p95_ms": "9676.4",
+    "within_3s": 1,
+    "older_backlog_versions_received": 187
+  },
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T21:59:52.170962+00:00",
+    "last_poll_elapsed_ms": 19370.4,
+    "last_complete_at": null,
+    "freshness": "partial",
+    "fresh_active_quotes": 23,
+    "known_time_active_quotes": 22267,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 11.1,
+    "oldest_quote_age_seconds": 355022.4,
+    "failed_batches": 0
+  },
+  "whole_database_freshness_claim": false,
+  "three_second_acceptance": false,
+  "within_three_seconds_conclusions": 0,
+  "queue_delay_unresolved": true,
+  "esports_feed_coverage_research_pending": true,
+  "raw_evidence_sha256": {
+    "e1660-watch-summary.json": "fc2a5e09ecac2e6ba2d3a7fa7fbb8be14d339ab742ea1e1eaff8de3d10906a2a",
+    "e1660-natural-audit.json": "74e5da728c990f72d3251db1567a480d1bd16bd40dc5e2b4633ca96d5691156e",
+    "e1660-official-scan.json": "0a1fd522e565a4fbd3b6c0c6b121d65b75b0eb04f960e4f987d38d68cac1adf9",
+    "e1660-official-reconcile.json": "648c76ed8926ccbd505ef04ff530f55f8038ec13cda4dd7bb8b357e234ca18c4",
+    "e1661-composition-readonly.jsonl": "554207edd541cdf3a19f68da0c085a3a93c019785df43bcc343f4e7307f7a468",
+    "e1734-natural-detail.json": "962d17b878c871189b3a6fc3ed560709ce28bc12b23c01bf9297dc6a62c5ad4d",
+    "e1735-images-summary.json": "85abc8c798d9781187c5827ae0d1a5abbf9150717d350fa056b70b798892e557",
+    "e1737-search-zero.json": "b2bad3a7f6ea3eec802e9c044e8f6261d74a44c6ca8f630017287204528bc89a"
+  }
+}
