@@ -164,7 +164,7 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
 
 
 @mcp.tool()
-async def search_matches(review_id: str, attempt_id: str, team_query: str,
+async def search_matches(review_id: str, attempt_id: str, team_query: str | None = None,
                          phase: str = "all", competition_query: str | None = None,
                          from_utc: str | None = None, to_utc: str | None = None,
                          cursor: Annotated[str | None, Field(description="仅逐字复制本次search_matches返回的next_cursor；首查不传，禁止自行构造游标。")] = None,
@@ -175,7 +175,11 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str,
                          period: str | None = None,
                          market_query: Annotated[str | None, Field(max_length=120,
                              description="原文明示的盘口查询，例如小3.5、大0.5/1；仅传给唯一绑定后的读盘，不参与球队检索，不比较倍率。")] = None) -> dict:
-    """team_query必传。原名或片段无双方对应候选时，可传空串展开同联赛：必须同时给competition_query、sport及正区间≤7天的from_utc/to_utc；competition_time_candidate只是待核验候选，不是身份绑定。phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。已知玩法/期间时read_markets=true可在唯一绑定后返回market_result，复用此读盘而不重复调用；期间使用full_time/first_half/second_half。不完整或不唯一时不读。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
+    """提供team_query，或同时提供原文明示的team_a/team_b并逐字复用team_a检索；显式team_query包括空串不被覆盖。原名或片段无双方对应候选时，可传空串展开同联赛：必须同时给competition_query、sport及正区间≤7天的from_utc/to_utc；competition_time_candidate只是待核验候选，不是身份绑定。phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。已知玩法/期间时read_markets=true可在唯一绑定后返回market_result，复用此读盘而不重复调用；期间使用full_time/first_half/second_half。不完整或不唯一时不读。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
+    if team_query is None:
+        if not team_a or not team_a.strip() or not team_b or not team_b.strip():
+            raise ToolError('提供team_query，或同时提供原文明示且非空的team_a和team_b')
+        team_query = team_a
     result = await _post("search_matches", {
         "review_id": review_id, "attempt_id": attempt_id, "team_query": team_query,
         "phase": phase, "competition_query": competition_query, "sport": sport,
@@ -215,7 +219,7 @@ async def list_match_markets(review_id: str, attempt_id: str, fixture_id: str,
                              market_kind: str | None = None, period: str | None = None,
                              line: str | None = None, selection: str | None = None,
                              market_query: str | None = None) -> dict:
-    """读取已绑定比赛的盘口。按类别、期间、方向或名称筛选，按selection_line匹配所选方让受让；line_basis=provider_home时line为原生主队线、客队selection_line符号相反，line筛选须用原生线，未确认口径先读玩法期间方向整组。零结果放宽筛选，省略筛选返回完整盘口。赔率不参与意图匹配；can_record表示服务端校验通过。"""
+    """读取已绑定比赛的盘口。按类别、期间、方向或名称筛选，按selection_line匹配所选方让受让；line_basis=provider_home时line为原生主队线、客队selection_line符号相反，line筛选须用原生线，未确认口径先读玩法期间方向整组。先核对market_coverage：total_quotes=0且complete_for_filter=true是完整零库存，停止同场重复读取并保留未解决；仅有库存但筛选零命中或覆盖不足时放宽筛选，省略筛选返回完整盘口。赔率不参与意图匹配；can_record表示服务端校验通过。"""
     return await _post("list_match_markets", {
         "review_id": review_id, "attempt_id": attempt_id, "fixture_id": fixture_id,
         "market_kind": market_kind, "period": period, "line": line,
