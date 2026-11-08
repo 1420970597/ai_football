@@ -830,6 +830,29 @@ await test("完整原文、两条系统买入、工具证据与图片", async ()
   await page.locator("#messages-more").click();
   await context.close();
 });
+await test("授权原图可鼠标键盘展开收起且重开复位", async () => {
+  const { page, context } = await setup({ dual: true, mobile: true });
+  await page.locator('.mobile-bottom [data-page="experts"]').click();
+  await page.locator('[data-expert-tab="signals"]').click();
+  await page.locator("#signals-list [data-message]").first().click();
+  const toggle = page.locator("#message-media .original-image-toggle").first();
+  await toggle.waitFor();
+  assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+  const image = page.locator("#message-media img").first();
+  const original = await image.getAttribute("src");
+  await toggle.click();
+  assert.equal(await toggle.getAttribute("aria-expanded"), "true");
+  assert.equal(await image.getAttribute("src"), original);
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(await page.locator("#content-dialog").evaluate((e) => e.scrollWidth > e.clientWidth), false);
+  await page.keyboard.press("Escape");
+  await page.locator("#signals-list [data-message]").first().click();
+  await toggle.waitFor();
+  assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+  await context.close();
+});
 await test("原文增量加载、最新系统回执及完整工具返回", async () => {
   const { page, context, mode, log } = await setup({ dual: true, mobile: true });
   mode.pagedEvidence = true;

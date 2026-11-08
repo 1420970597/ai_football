@@ -998,7 +998,27 @@ async function openMessage(id, context = "user") {
           const img = document.createElement("img");
           img.src = objectUrl;
           img.alt = "Telegram 原消息授权图片 " + (index + 1);
-          status.replaceWith(img);
+          const item = document.createElement("div");
+          item.className = "message-image";
+          const frame = document.createElement("div");
+          frame.className = "original-image-frame";
+          frame.id = "message-original-" + sequence + "-" + index;
+          const toggle = document.createElement("button");
+          toggle.type = "button";
+          toggle.className = "small-button original-image-toggle";
+          toggle.textContent = "放大查看原图";
+          toggle.setAttribute("aria-controls", frame.id);
+          toggle.setAttribute("aria-expanded", "false");
+          toggle.addEventListener("click", () => {
+            const expanded = toggle.getAttribute("aria-expanded") !== "true";
+            toggle.setAttribute("aria-expanded", String(expanded));
+            toggle.textContent = expanded ? "收起原图" : "放大查看原图";
+            item.classList.toggle("is-expanded", expanded);
+            if (!expanded) frame.scrollTo(0, 0);
+          });
+          frame.append(img);
+          item.append(toggle, frame);
+          status.replaceWith(item);
         })
         .catch(() => (status.textContent = "图片暂不可读，请稍后重新打开消息"));
     }

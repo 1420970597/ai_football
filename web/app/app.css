@@ -1377,6 +1377,31 @@ dialog::backdrop {
   max-height: 320px;
   border: 1px solid var(--line);
 }
+.message-image {
+  min-width: 0;
+  max-width: 100%;
+}
+.original-image-toggle {
+  display: block;
+  margin-bottom: 6px;
+}
+.original-image-frame {
+  max-width: 100%;
+  overflow: auto;
+}
+.original-image-frame img {
+  display: block;
+}
+.message-image.is-expanded {
+  width: 100%;
+}
+.message-image.is-expanded .original-image-frame {
+  max-height: 65vh;
+}
+.message-image.is-expanded img {
+  max-width: none;
+  max-height: none;
+}
 .trace-block {
   border: 1px solid var(--line);
   margin: 8px 0;

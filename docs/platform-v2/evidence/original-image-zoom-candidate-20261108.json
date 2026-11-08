@@ -1,0 +1,70 @@
+{
+  "date": "2026-11-08",
+  "candidate_only": true,
+  "deployment_verified": false,
+  "full_browser_cases": 45,
+  "full_browser_failures": 0,
+  "browser_errors": [],
+  "frozen_browser_native_exit": 0,
+  "frozen_browser_controller_exit": 0,
+  "first_regression_native_exit": 1,
+  "first_regression_failure": "network none reports navigator.onLine false; preserved bounded failed run",
+  "corrected_test_environment": "task-owned internal Docker network; unchanged frozen source",
+  "real_candidate": {
+    "results": [
+      {
+        "width": 1440,
+        "status": "passed",
+        "message_id": "ea272be8-8840-4386-aff7-038cc43ce38d",
+        "attempt_id": "5c99ae59-7356-41a9-a958-b81f749ed7ba",
+        "accepted_count": 1,
+        "fixture_id": "leyu:5593321",
+        "signal_id": "89e465ef-795b-4580-b31b-820f665804f5",
+        "period": "first_half",
+        "kind": "total",
+        "line": 1.5,
+        "selection": "over",
+        "system_price": 1.67,
+        "original_image_sha256": "70373f89e94da7dd57b7259f28820f6a2341e6813970e55885e17a7da64f158f",
+        "original_authorized": true,
+        "close_reopen": true,
+        "original_size": {
+          "width": 1179,
+          "height": 2562,
+          "naturalWidth": 1177,
+          "naturalHeight": 2560
+        },
+        "mouse_and_keyboard_zoom": true,
+        "local_scroll": true
+      },
+      {
+        "width": 390,
+        "status": "passed",
+        "message_id": "ea272be8-8840-4386-aff7-038cc43ce38d",
+        "attempt_id": "5c99ae59-7356-41a9-a958-b81f749ed7ba",
+        "accepted_count": 1,
+        "fixture_id": "leyu:5593321",
+        "signal_id": "89e465ef-795b-4580-b31b-820f665804f5",
+        "period": "first_half",
+        "kind": "total",
+        "line": 1.5,
+        "selection": "over",
+        "system_price": 1.67,
+        "original_image_sha256": "70373f89e94da7dd57b7259f28820f6a2341e6813970e55885e17a7da64f158f",
+        "original_authorized": true,
+        "close_reopen": true,
+        "original_size": {
+          "width": 1179,
+          "height": 2562,
+          "naturalWidth": 1177,
+          "naturalHeight": 2560
+        },
+        "mouse_and_keyboard_zoom": true,
+        "local_scroll": true
+      }
+    ],
+    "production_writes": false,
+    "response_injection": false
+  },
+  "no_model_or_media_authorization_changes": true
+}
