@@ -1,0 +1,84 @@
+{
+  "source_commit": "be94bfc7afd4dfa90b9b7374030993d41cacca7f",
+  "new_4b90_candidate_already_deployed": false,
+  "window_start": "2026-11-08T16:01:21.700216+00:00",
+  "window_end": "2026-11-08T16:31:22.715446+00:00",
+  "database_samples": 55,
+  "database_errors": 0,
+  "tg_all_healthy": true,
+  "sources": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "official_raw_messages": 3,
+  "official_normalized_posts": 2,
+  "official_matched": 2,
+  "official_missing": [],
+  "current_reviews": {
+    "eligible": 2,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 2,
+    "missing_receipt": 0
+  },
+  "human_source_and_authorized_image_review": "passed",
+  "images_hash_verified": 3,
+  "new_pick": {
+    "fixture_id": "leyu:5593645",
+    "period": "full_time",
+    "line": "3.500",
+    "selection": "under",
+    "recommendation_price": "2.00000",
+    "reviewed_price": "2.00000",
+    "outcome": "pending",
+    "kickoff_at": "2026-11-08 20:00:00+00:00"
+  },
+  "messages": [
+    {
+      "classification": "new_full_time_total_under",
+      "media_images": 1,
+      "system_signal_count": 1,
+      "event_to_conclusion_ms": 104743.089,
+      "tools": [
+        {
+          "kind": "mcp_search_matches",
+          "elapsed_ms": 4848.62
+        },
+        {
+          "kind": "mcp_list_match_markets",
+          "elapsed_ms": 14089.853
+        },
+        {
+          "kind": "mcp_list_match_markets",
+          "elapsed_ms": 12738.485
+        },
+        {
+          "kind": "mcp_record_expert_signals",
+          "elapsed_ms": 13427.508
+        }
+      ]
+    },
+    {
+      "classification": "promotion_without_new_supported_pick",
+      "media_images": 2,
+      "system_signal_count": 0,
+      "event_to_conclusion_ms": 17179.303,
+      "tools": []
+    }
+  ],
+  "event_latency": {
+    "event_versions": 2,
+    "avg_ms": "4588.0",
+    "p95_ms": "4897.6",
+    "within_3s": 0,
+    "older_backlog_versions_received": 164
+  },
+  "poll_snapshot_fresh_samples": 0,
+  "whole_database_freshness_claim": false,
+  "three_second_goal_verified": false,
+  "production_test_writes": 0,
+  "funded_tests": 0,
+  "natural_user_enabled_execution_not_treated_as_test": true
+}
