@@ -63,6 +63,28 @@ class CurrentPhaseClaimTests(unittest.TestCase):
                          self.claims('按截图识别 leyu:1，当前系统阶段 live。'))
         self.assertEqual([], self.claims('leyu:1，引用“当前阶段：赛前”。'))
 
+    def test_actual_replay_preserves_both_phase_and_contradictory_bilingual_label(self):
+        text = ('水晶宫 VS 利物浦：已唯一绑定（leyu:5803628，phase=live，赛前 scheduled）。'
+                '原意图为水晶宫全场让球受让 +1/1.5；无有效报价。')
+        self.assertEqual([dict(fixture_id='leyu:5803628', claimed_phase=phase)
+                          for phase in ('live', 'scheduled')], self.claims(text))
+
+    def test_bilingual_phase_labels_preserve_each_explicit_value(self):
+        for label, phases in (('scheduled（赛前）', ('scheduled',)),
+                              ('滚球 live', ('live',)),
+                              ('live（赛前）', ('live', 'scheduled')),
+                              ('已完场 finished', ('finished',))):
+            with self.subTest(label=label):
+                self.assertEqual([dict(fixture_id='leyu:1', claimed_phase=phase) for phase in phases],
+                                 self.claims(f'比赛 leyu:1，{label}，无报价。'))
+
+    def test_bilingual_source_labels_and_ambiguous_ids_are_not_current_evidence(self):
+        for text in ('原文 leyu:1，赛前 scheduled。',
+                     'leyu:1，引用“赛前 scheduled”。',
+                     'leyu:1，推荐时为赛前 scheduled。',
+                     'leyu:1 与 leyu:2，赛前 scheduled。'):
+            self.assertEqual([], self.claims(text))
+
 
 class SplitLineClaimTests(unittest.TestCase):
     def conflicts(self, text):
@@ -198,6 +220,26 @@ class ReviewPhaseCompletionTests(unittest.IsolatedAsyncioTestCase):
         (_, summary), _ = await self.review([text] * 3)
         self.assertFalse(summary['completion_verified'])
         self.assertEqual('live', summary['completion_issues']['phase_claim_conflicts'][0]['actual_phase'])
+
+    async def test_correct_phase_field_does_not_hide_wrong_bilingual_phase_label(self):
+        await self.prepare()
+        text = '已唯一绑定（leyu:1，phase=live，赛前 scheduled），无有效报价。'
+        (_, summary), model = await self.review([text] * 3)
+        self.assertFalse(summary['completion_verified'])
+        self.assertEqual(3, model.await_count)
+        conflict = summary['completion_issues']['phase_claim_conflicts'][0]
+        self.assertEqual(('scheduled', 'live'), (conflict['claimed_phase'], conflict['actual_phase']))
+
+    async def test_transaction_rechecks_contradictory_bilingual_phase(self):
+        await self.prepare()
+        async with self.pool.acquire() as conn, conn.transaction():
+            await trace(conn, self.job, 'hermes_result', dict(attempt_id=str(self.attempt),
+                content='leyu:1，phase=live，赛前 scheduled。', completion_verified=True))
+            await record_summary(conn, dict(id=self.job, message_id=self.message), self.attempt, 'real_time')
+        receipt = await self.pool.fetchval(
+            "SELECT payload FROM v2_analysis_traces WHERE trace_kind='system_review_result'")
+        self.assertFalse(receipt['completion_verified'])
+        self.assertIn('阶段', receipt['content'])
 
     async def test_split_line_explanation_conflict_cannot_finish_as_verified(self):
         await self.prepare()

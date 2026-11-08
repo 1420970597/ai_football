@@ -17,6 +17,9 @@ _EXPLICIT = re.compile(
     rf'(?:(?:当前(?:系统)?(?:比赛)?|系统)(?:阶段|状态)|phase|status)'
     rf'(?:\s*[:=为是]\s*|\s+)({_VALUES})(?![A-Za-z0-9_\u4e00-\u9fff])', re.I)
 _ISOLATED = re.compile(rf'(?:[,;|])\s*({_VALUES})\s*(?=[,;|。.]|$)', re.I)
+_PAIRED = re.compile(
+    rf'(?<![A-Za-z0-9_\u4e00-\u9fff])({_VALUES})'
+    rf'(?:\s*\(\s*|\s+)({_VALUES})(?![A-Za-z0-9_\u4e00-\u9fff])', re.I)
 _HISTORICAL = re.compile(r'原文|引用|推荐时|当时|历史|截图|source_intent', re.I)
 _HISTORICAL_PREFIX = re.compile(r'^(?:原文|引用|推荐时|当时|历史|source_intent)', re.I)
 
@@ -42,8 +45,9 @@ def current_phase_claims(content: str) -> list[dict[str, str]]:
         fixture = single_fixture_id(line)
         if fixture is None:
             continue
-        patterns = (_EXPLICIT,) if _HISTORICAL.search(line) else (_EXPLICIT, _ISOLATED)
+        patterns = (_EXPLICIT,) if _HISTORICAL.search(line) else (_EXPLICIT, _ISOLATED, _PAIRED)
         for pattern in patterns:
             for match in pattern.finditer(line):
-                claims.add((fixture, _PHASES[match[1].lower()]))
+                for value in match.groups():
+                    claims.add((fixture, _PHASES[value.lower()]))
     return [{'fixture_id': fixture, 'claimed_phase': phase} for fixture, phase in sorted(claims)]
