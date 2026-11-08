@@ -10,6 +10,7 @@ import httpx
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, Field
 
 API_URL = os.environ.get("PLATFORM_INTERNAL_API", "http://api:8080/internal/mcp").rstrip("/")
@@ -24,7 +25,34 @@ client = httpx.AsyncClient(
     limits=httpx.Limits(max_connections=32, max_keepalive_connections=8),
     headers={"Authorization": f"Bearer {API_TOKEN}"},
 )
-mcp = MCPServer("football-expert-platform")
+def compact_tool_result(result):
+    """Keep native evidence and metadata; remove only root JSON indentation."""
+    if not isinstance(result, CallToolResult) or result.is_error or len(result.content) != 1:
+        return result
+    content = result.content[0]
+    if not isinstance(content, TextContent):
+        return result
+    try:
+        value = json.loads(content.text)
+        if not isinstance(value, dict):
+            return result
+        if result.structured_content is not None and value != result.structured_content:
+            return result
+        text = json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+    except (TypeError, ValueError):
+        return result
+    if text == content.text:
+        return result
+    return result.model_copy(update={'content': [content.model_copy(update={'text': text})]})
+
+
+class CompactMCPServer(MCPServer):
+    async def call_tool(self, name: str, arguments: dict, context=None):
+        result = await super().call_tool(name, arguments, context=context)
+        return compact_tool_result(result)
+
+
+mcp = CompactMCPServer("football-expert-platform")
 # Both advertised MCP aliases reach this single process. The collector admits
 # one precise refresh at a time; queue market operations here without blocking
 # independent fixture searches or changing the collector's upstream budget.
