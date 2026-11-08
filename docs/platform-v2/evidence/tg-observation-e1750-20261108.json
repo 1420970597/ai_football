@@ -1,0 +1,90 @@
+{
+  "window_start": "2026-11-08T22:20:47.148565+00:00",
+  "window_last_database_sample": "2026-11-08T22:50:49.471418+00:00",
+  "database_samples": 55,
+  "market_samples": 61,
+  "messages_final": {
+    "created_versions": 174,
+    "published_posts": 17,
+    "older_posts_revised": 157,
+    "published_ready": 15,
+    "published_pending": 0,
+    "published_unsupported": 2
+  },
+  "reviews_final": {
+    "eligible": 15,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 3,
+    "with_receipt": 12,
+    "missing_receipt": 0
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "event_latency_final": {
+    "event_versions": 17,
+    "avg_ms": "5257.6",
+    "p95_ms": "15918.2",
+    "within_3s": 8,
+    "older_backlog_versions_received": 157
+  },
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T22:50:15.271660+00:00",
+    "last_poll_elapsed_ms": 19471.6,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 22468,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 15.2,
+    "oldest_quote_age_seconds": 358045.6,
+    "failed_batches": 0
+  },
+  "schema": "natural_tg_observation_v2",
+  "source_commit": "27cb7dee5039c1b5c49b46fa657369c8a132415e",
+  "native_exit": 0,
+  "official_sources_complete": 6,
+  "official_raw_posts": 17,
+  "normalized_posts": 17,
+  "matched": 17,
+  "missing": 0,
+  "observer_samples": 91,
+  "observer_read_errors": 0,
+  "health_all_200": false,
+  "telegram_all_healthy": false,
+  "health_non_200_samples": [
+    {
+      "observed_at": "2026-11-08T22:25:48.212727+00:00",
+      "health": {
+        "healthz": null,
+        "readyz": null
+      }
+    }
+  ],
+  "includes_successful_api_handoff": true,
+  "dedicated_post_api_release_window": false,
+  "whole_database_freshness_claim": false,
+  "three_second_acceptance": false,
+  "original_summary_not_overwritten": true,
+  "manual_original_and_media_match_e1743": true,
+  "overlapping_posts_not_counted_again": true,
+  "reviewed_messages": 15,
+  "additional_unique_manual_samples_relative_to_e1743": 0,
+  "raw_sha256": {
+    "e1750-watch-summary.json": "a964bb84fed8a8e370aad895d6994f8cdb8ba828d96b2a69c642a06ef9fe88c5",
+    "e1750-official-scan.json": "21c31309f0aeaca1b624af9d5e58be410342076e40cab58f4e6a839fbbf2bcdf",
+    "e1750-official-reconcile.json": "f5fb60cb7584fd4cc78dcb02e2617fd028a6b89f91908455919d4e090a09a651",
+    "e1750-natural-audit.json": "7bb7e4e0e7affb5b0594453ab6d428013e072c11be130d4359964c972f15823e",
+    "e1751-composition-readonly.jsonl": "96697a29e0a60fef797febc0f614c71c1ff2ab0fffe14928fb6a47d7980d9047"
+  }
+}

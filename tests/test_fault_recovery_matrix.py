@@ -141,6 +141,12 @@ class TelegramDatabaseRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM '+table))
 
     async def test_s3_deadline_late_completion_then_retry_enqueues_one_database_job(self):
+        await self._assert_s3_late_completion_recovery()
+
+    async def test_s3_late_upload_recovery_after_slow_preparation(self):
+        await self._assert_s3_late_completion_recovery(preparation_delay=.35)
+
+    async def _assert_s3_late_completion_recovery(self, preparation_delay=0):
         backend = TelegramBackend(self.client, 'http://test/internal/telegram')
         client = tg_support.Client()
         message = tg_support.Message(1, media=True, mime='image/png')
@@ -155,11 +161,29 @@ class TelegramDatabaseRecoveryTests(unittest.IsolatedAsyncioTestCase):
         collector.sources = {'-1001':source}
         entered, release, finished = threading.Event(), threading.Event(), threading.Event()
         writes, objects = [], {}
+        loop = asyncio.get_running_loop()
+        transfer_deadlines = []
+
+        class UploadDeadlineAsyncio:
+            def __getattr__(inner, name):
+                return getattr(asyncio, name)
+
+            def timeout(inner, delay):
+                if delay != .25:
+                    return asyncio.timeout(delay)
+                # Inject expiry only once the real S3 worker has entered.
+                # Preparation and its database commit are unrelated to this
+                # late-upload fault and can exceed .25s under the CPU budget.
+                deadline = asyncio.timeout(None)
+                transfer_deadlines.append(deadline)
+                return deadline
+
         class S3:
             def put_object(inner, **kwargs):
                 writes.append(kwargs['Key'])
                 if len(writes) == 1:
                     entered.set()
+                    loop.call_soon_threadsafe(transfer_deadlines[0].reschedule, loop.time())
                     release.wait(5)
                 objects[kwargs['Key']] = kwargs['Body']
                 finished.set()
@@ -167,14 +191,25 @@ class TelegramDatabaseRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 pass
         env = {'S3_BUCKET':'test-private', 'S3_ENDPOINT_URL':'https://invalid.example',
                'S3_ACCESS_KEY':'test-only', 'S3_SECRET_KEY':'test-only'}
+        original_prepare = collector._prepare_media_candidate
+
+        async def prepare(*args, **kwargs):
+            if preparation_delay:
+                await asyncio.sleep(preparation_delay)
+            return await original_prepare(*args, **kwargs)
+
         try:
             await collector._sync_source('-1001', source)
             self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
             with patch.dict(os.environ, env), patch('collector.telegram.boto3.client', return_value=S3()), \
-                    patch('collector.telegram.MEDIA_TRANSFER_SECONDS', .25):
+                    patch('collector.telegram.MEDIA_TRANSFER_SECONDS', .25), \
+                    patch('collector.telegram.asyncio', UploadDeadlineAsyncio()), \
+                    patch.object(collector, '_prepare_media_candidate', prepare):
                 try:
-                    await collector.retry_pending()
+                    await asyncio.wait_for(collector.retry_pending(), 5)
                     self.assertTrue(entered.is_set())
+                    self.assertTrue(transfer_deadlines[0].expired())
+                    self.assertFalse(finished.is_set())
                     row = await self.pool.fetchrow('SELECT media_state,media_objects FROM v2_expert_messages')
                     self.assertEqual('failed', row['media_state'])
                     self.assertEqual(1, len(row['media_objects']))

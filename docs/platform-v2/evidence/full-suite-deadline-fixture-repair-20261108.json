@@ -1,0 +1,108 @@
+{
+  "observed_at": "2026-11-08T23:22:21.427617+00:00",
+  "source_commit": "91155c00aa97a74eef0d1927fc1d9930394405dd",
+  "original_full_suite": {
+    "tests": 1952,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1307.575
+  },
+  "original_full_native_exit": 1,
+  "failed_test": "test_s3_deadline_late_completion_then_retry_enqueues_one_database_job",
+  "original_failure_preserved": true,
+  "reproduction": {
+    "read_only_frozen_source": true,
+    "source_commit": "91155c00aa97a74eef0d1927fc1d9930394405dd",
+    "cases": [
+      {
+        "delay_seconds": 0,
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "native_test_exit": 0,
+        "preparation_events": [
+          {
+            "injected_preparation_delay_seconds": 0,
+            "exception_type": "RuntimeError",
+            "elapsed_ms": 1.95
+          },
+          {
+            "injected_preparation_delay_seconds": 0,
+            "completed": true,
+            "elapsed_ms": 0.757
+          },
+          {
+            "injected_preparation_delay_seconds": 0,
+            "completed": true,
+            "elapsed_ms": 0.767
+          }
+        ],
+        "failure_tail": []
+      },
+      {
+        "delay_seconds": 0,
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "native_test_exit": 0,
+        "preparation_events": [
+          {
+            "injected_preparation_delay_seconds": 0,
+            "exception_type": "RuntimeError",
+            "elapsed_ms": 1.45
+          },
+          {
+            "injected_preparation_delay_seconds": 0,
+            "completed": true,
+            "elapsed_ms": 0.7
+          },
+          {
+            "injected_preparation_delay_seconds": 0,
+            "completed": true,
+            "elapsed_ms": 0.533
+          }
+        ],
+        "failure_tail": []
+      },
+      {
+        "delay_seconds": 0.35,
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0,
+        "native_test_exit": 1,
+        "preparation_events": [
+          {
+            "injected_preparation_delay_seconds": 0.35,
+            "exception_type": "CancelledError",
+            "elapsed_ms": 91.365
+          }
+        ],
+        "failure_tail": [
+          "AssertionError: False is not true"
+        ]
+      }
+    ],
+    "production_writes": 0,
+    "real_provider_calls": 0
+  },
+  "repair": "Inject the real transfer timeout after the S3 worker enters; independently bound the whole test and retain all failed-state, late-completion and exactly-once job checks. Added slow preparation case.",
+  "application_source_changed_for_fixture_repair": false,
+  "targeted_result": {
+    "tests": 55,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 13.483,
+    "test_source_sha256": "fc86b1939dd224492425b6b00637e9ace55283759fc20cde1894cddb58f408c3",
+    "application_source_unchanged": true,
+    "production_writes": 0,
+    "real_provider_calls": 0
+  },
+  "full_1953_regression_pending": true,
+  "production_changed": false,
+  "three_second_acceptance": false
+}
