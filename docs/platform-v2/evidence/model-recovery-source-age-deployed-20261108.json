@@ -1,0 +1,89 @@
+{
+  "source_commit": "9343fded7735ed4af5cc67a934251cc6e47420ea",
+  "image": "sha256:455a7a59b968e34cbd63f602fbd0fc274a07addeb01fa7471cad6ac9e7278a1c",
+  "completed_at": "2026-11-08T11:20:52Z",
+  "checks": {
+    "e968-full-controller": 0,
+    "e976r2-build-candidate": 0,
+    "e979-controller": 0,
+    "e979-apply": 0,
+    "e979-gate-native": 0,
+    "e979-launch-controller": 0
+  },
+  "image_source_check": {
+    "source_commit": "9343fded7735ed4af5cc67a934251cc6e47420ea",
+    "component": "api",
+    "exact_service_files": 103,
+    "requirements_exact": true,
+    "shared_contract_sha256": "83939e29bd9ecbb8a8c08456a614885fbdfc810f99df591f67f3d761426d9575"
+  },
+  "api_loaded_sources": {
+    "all_api_worker_sources_verified": true,
+    "files": 73,
+    "tool_recovery_and_ordered_policy_lock_loaded": true,
+    "context_diagnostics_and_wire_whitelist_loaded": true,
+    "source_line_guard_and_audited_correction_loaded": true
+  },
+  "worker_loaded_sources": {
+    "all_api_worker_sources_verified": true,
+    "files": 73,
+    "tool_recovery_and_ordered_policy_lock_loaded": true,
+    "context_diagnostics_and_wire_whitelist_loaded": true,
+    "source_line_guard_and_audited_correction_loaded": true
+  },
+  "health_ready": {
+    "statuses": [
+      200,
+      200
+    ]
+  },
+  "rollout": {
+    "only_api_and_worker_recreated": true,
+    "other_five_local_and_four_remote_containers_unchanged": true,
+    "model_prompt_permissions_and_mounts_unchanged": true
+  },
+  "ledger_preservation": {
+    "signals_before": 603,
+    "signals_after": 603,
+    "old_ledger_rows": 854,
+    "immutable_signals_quotes_and_ledger_preserved": true,
+    "database_rollback": false
+  },
+  "financial_preservation": {
+    "old_orders_preserved": 1,
+    "policy_and_account_ownership_unchanged": true,
+    "financial_pre_and_post_snapshots_idle": true,
+    "no_funds_lock_or_order_mutation": true
+  },
+  "warmup_status_samples": 16,
+  "warmup_unhealthy_samples": 14,
+  "last_two_warmup_samples": [
+    {
+      "observed_at": "2026-11-08T11:20:19.131720+00:00",
+      "attempt": 15,
+      "read_only": true,
+      "http_status": 200,
+      "state": "connected",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 1
+    },
+    {
+      "observed_at": "2026-11-08T11:20:22.389769+00:00",
+      "attempt": 16,
+      "read_only": true,
+      "http_status": 200,
+      "state": "connected",
+      "connected": true,
+      "authorized": true,
+      "source_count": 6,
+      "expected_source_count": 6,
+      "consecutive_healthy": 2
+    }
+  ],
+  "historical_backbet_or_funds_test": false,
+  "shared_gateway_modified": false,
+  "full_latency_goal_met": false
+}
