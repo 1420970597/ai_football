@@ -1,0 +1,78 @@
+{
+  "date": "2026-11-08",
+  "scope": "web candidate only; pending production publication",
+  "app_js_sha256": "25b4f3454a0bcf969c737c45ddbd8640b475237b23ca62463c41ce2dd6b4e715",
+  "real_read_only_browser": {
+    "before_native_exit": 1,
+    "before_visible_row_top": [
+      27,
+      -6
+    ],
+    "after_native_exit": 0,
+    "results": [
+      {
+        "width": 1440,
+        "passed": true,
+        "rows": 50,
+        "facts_ms": 2287,
+        "summaries_settled_ms": 3886,
+        "summary_responses": [
+          {
+            "status": 200
+          }
+        ],
+        "pending_rows": 0,
+        "focus_preserved": true,
+        "visible_fixture_anchor_preserved": true,
+        "scroll_before": 350,
+        "scroll_after": 389,
+        "anchor_top_before": 27,
+        "anchor_top_after": 27
+      },
+      {
+        "width": 390,
+        "passed": true,
+        "rows": 50,
+        "facts_ms": 1402,
+        "summaries_settled_ms": 2997,
+        "summary_responses": [
+          {
+            "status": 200
+          }
+        ],
+        "pending_rows": 0,
+        "focus_preserved": true,
+        "visible_fixture_anchor_preserved": true,
+        "scroll_before": 350,
+        "scroll_after": 414,
+        "anchor_top_before": 0,
+        "anchor_top_after": 0
+      }
+    ],
+    "response_injection": false,
+    "production_writes": 0
+  },
+  "isolated_mock_browser": {
+    "cases": 49,
+    "passed": 49,
+    "browser_errors": [],
+    "native_exit": 0,
+    "container_network": "dedicated internal Docker network; no external egress"
+  },
+  "preserved_harness_failures": {
+    "e1270": "network none reports browser offline; no application exception",
+    "e1281": "all behavior assertions passed but incorrect result environment name caused EROFS; rerun e1286 passed"
+  },
+  "screenshots_visually_reviewed": [
+    {
+      "width": 1440,
+      "sha256": "ec15a74db382d2a069271cebfdb8a9b2fbd5f7e3a79b6e826ffb4dd6f8deda2e"
+    },
+    {
+      "width": 390,
+      "sha256": "5dd7370162b052f43e9ed4a8bca7f044ec6abc10ae7f01ea530d2f999ee1c62f"
+    }
+  ],
+  "backend_full_suite_claim": false,
+  "production_writes": 0
+}

@@ -295,6 +295,12 @@ async function loadMatchSummaries(identifiers, sequence, parentSignal) {
   const timer = setTimeout(cancel, 25000);
   const current = () => !parentSignal.aborted && sequence === state.matchSequence && state.page === "scores";
   const merge = (ids, summaries = []) => {
+    const rows = $$("#matches-list .match-row");
+    const anchor = rows.find((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.top >= 0 && rect.bottom <= window.innerHeight;
+    });
+    const anchorTop = anchor?.getBoundingClientRect().top;
     const requested = new Set(ids), byId = new Map(summaries.map((m) => [m.fixture_id, m]));
     for (const m of state.matches) {
       if (!requested.has(m.id)) continue;
@@ -304,11 +310,15 @@ async function loadMatchSummaries(identifiers, sequence, parentSignal) {
       m.quote_fresh = !!summary?.quote_fresh && summary.phase === m.phase;
     }
     const matches = new Map(state.matches.filter((m) => requested.has(m.id)).map((m) => [m.id, m]));
-    for (const row of $$("#matches-list .match-row")) {
+    for (const row of rows) {
       const m = matches.get(row.dataset.fixture);
       if (m) row.querySelector(".match-odds").innerHTML = renderMatchOdds(m);
     }
     updateMatchServiceState();
+    if (anchor?.isConnected) {
+      const shift = anchor.getBoundingClientRect().top - anchorTop;
+      if (Math.abs(shift) > 0.5) window.scrollBy(0, shift);
+    }
   };
   let offset = 0;
   try {

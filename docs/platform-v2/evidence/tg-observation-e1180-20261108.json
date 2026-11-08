@@ -1,0 +1,89 @@
+{
+  "window_start": "2026-11-08T16:26:43.687730+00:00",
+  "window_end": "2026-11-08T16:56:44.924303+00:00",
+  "application_at_natural_recommendation": "be94bfc7afd4dfa90b9b7374030993d41cacca7f",
+  "window_crosses_four_service_handoff": true,
+  "database_samples": 55,
+  "database_errors": 0,
+  "tg_all_healthy": false,
+  "tg_connected_and_authorized_at_window_end": true,
+  "tg_state_at_window_end": "unavailable",
+  "tg_connected_readiness_restored_after_handoff": true,
+  "official_normalized_posts": 4,
+  "official_matched": 4,
+  "official_missing": [],
+  "current_reviews": {
+    "eligible": 4,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 4,
+    "missing_receipt": 0
+  },
+  "human_source_and_authorized_media_review": "passed",
+  "authorized_images_hash_verified": 2,
+  "new_pick": {
+    "fixture_id": "leyu:5720799",
+    "period": "full_time",
+    "line": "-0.750",
+    "evidence_line": "0.750",
+    "selection": "away",
+    "recommendation_price": "2.14000",
+    "reviewed_price": "2.14000",
+    "outcome": "pending",
+    "kickoff_at": "2026-11-08 17:30:00+00:00"
+  },
+  "messages": [
+    {
+      "classification": "feedback_or_promotion_without_new_pick",
+      "signals": 0,
+      "media_images": 0,
+      "event_to_conclusion_ms": 11698.69,
+      "tools": []
+    },
+    {
+      "classification": "feedback_or_promotion_without_new_pick",
+      "signals": 0,
+      "media_images": 1,
+      "event_to_conclusion_ms": 21925.917,
+      "tools": []
+    },
+    {
+      "classification": "new_full_time_away_handicap",
+      "signals": 1,
+      "media_images": 1,
+      "event_to_conclusion_ms": 68997.042,
+      "tools": [
+        {
+          "kind": "mcp_search_matches",
+          "elapsed_ms": 4996.273
+        },
+        {
+          "kind": "mcp_list_match_markets",
+          "elapsed_ms": 11366.722
+        },
+        {
+          "kind": "mcp_record_expert_signals",
+          "elapsed_ms": 10720.068
+        }
+      ]
+    },
+    {
+      "classification": "feedback_or_promotion_without_new_pick",
+      "signals": 0,
+      "media_images": 0,
+      "event_to_conclusion_ms": 17932.918,
+      "tools": []
+    }
+  ],
+  "event_latency": {
+    "event_versions": 8,
+    "avg_ms": "3041.5",
+    "p95_ms": "4957.2",
+    "within_3s": 5,
+    "older_backlog_versions_received": 161
+  },
+  "three_second_goal_verified": false,
+  "production_test_writes": 0,
+  "funded_tests": 0
+}
