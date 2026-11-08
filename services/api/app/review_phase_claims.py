@@ -14,9 +14,16 @@ _PHASES = {
 }
 _VALUES = '|'.join(sorted(map(re.escape, _PHASES), key=len, reverse=True))
 _EXPLICIT = re.compile(
-    rf'(?:当前(?:比赛)?(?:阶段|状态)|phase|status)\s*[:=]\s*({_VALUES})(?![A-Za-z_\u4e00-\u9fff])', re.I)
+    rf'(?:(?:当前(?:系统)?(?:比赛)?|系统)(?:阶段|状态)|phase|status)'
+    rf'(?:\s*[:=为是]\s*|\s+)({_VALUES})(?![A-Za-z0-9_\u4e00-\u9fff])', re.I)
 _ISOLATED = re.compile(rf'(?:[,;|])\s*({_VALUES})\s*(?=[,;|。.]|$)', re.I)
 _HISTORICAL = re.compile(r'原文|引用|推荐时|当时|历史|截图|source_intent', re.I)
+_HISTORICAL_PREFIX = re.compile(r'^(?:原文|引用|推荐时|当时|历史|source_intent)', re.I)
+
+
+def single_fixture_id(text: str) -> str | None:
+    fixtures = set(_IDS.findall(text))
+    return next(iter(fixtures)) if len(fixtures) == 1 else None
 
 
 def current_phase_claims(content: str) -> list[dict[str, str]]:
@@ -28,14 +35,15 @@ def current_phase_claims(content: str) -> list[dict[str, str]]:
         if line.startswith(('```', '~~~')):
             fenced = not fenced
             continue
-        if fenced or line.startswith('>') or _HISTORICAL.search(line):
+        if fenced or line.startswith('>') or _HISTORICAL_PREFIX.search(line):
             continue
+        line = re.sub(r'“[^”]*”|「[^」]*」', '', line)
         line = line.replace('**', '').replace('`', '')
-        fixtures = set(_IDS.findall(line))
-        if len(fixtures) != 1:
+        fixture = single_fixture_id(line)
+        if fixture is None:
             continue
-        fixture = next(iter(fixtures))
-        for pattern in (_EXPLICIT, _ISOLATED):
+        patterns = (_EXPLICIT,) if _HISTORICAL.search(line) else (_EXPLICIT, _ISOLATED)
+        for pattern in patterns:
             for match in pattern.finditer(line):
                 claims.add((fixture, _PHASES[match[1].lower()]))
     return [{'fixture_id': fixture, 'claimed_phase': phase} for fixture, phase in sorted(claims)]

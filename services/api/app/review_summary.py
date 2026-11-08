@@ -11,6 +11,7 @@ from .review_completion import (completion_issues, mentioned_fixtures, named_ide
 from .review_summary_evidence import read_summary_evidence
 from .review_intent_retry import intent_matches_quote
 from .review_phase_claims import current_phase_claims
+from .review_line_claims import split_line_claim_conflicts
 
 SUMMARY_ITEM_LIMIT = 100
 PHASES = {'scheduled': '未开赛', 'live': '滚球', 'finished': '已完场', 'cancelled': '取消或延期'}
@@ -84,6 +85,9 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
     if not items and not reasons and not identified_items:
         lines.append('本次工具尚无已确认的盘口录入；模型原始说明仅供核查。')
     if incomplete:
+        if incomplete.get('display_line_conflict_count'):
+            lines.append('审核核验未完成：模型盘口说明与其原始分盘文字的幅度自相矛盾；'
+                         '不能认定该盘口已核验，以工具实际接受的记录为准。')
         if incomplete.get('phase_claim_conflict_count'):
             lines.append('审核核验未完成：模型最终说明的比赛阶段与当前服务端事实冲突；'
                          '比赛阶段以系统记录为准，其余保持待核验。')
@@ -116,7 +120,8 @@ async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_
                       and not evidence.total and not evidence.identified)
     intent_rejected = any(entry.get('intent_context') for entry in evidence.rejected)
     final_content = evidence.model_contents[-1] if evidence.model_contents else ''
-    phase_options = {'final_content': final_content} if current_phase_claims(final_content) else {}
+    phase_options = ({'final_content': final_content}
+                     if current_phase_claims(final_content) or split_line_claim_conflicts(final_content) else {})
     incomplete = (await completion_issues(conn, job['id'], attempt_id, mentioned, named_content, require_intent,
                                          **phase_options)
                   if mentioned or named_content or require_intent or intent_rejected or phase_options
