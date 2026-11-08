@@ -1,0 +1,57 @@
+{
+  "schema": "safe-verification-evidence-v1",
+  "recorded_at_utc": "2026-11-08T15:12:41.300944+00:00",
+  "stage": "isolated related validation; clean full suite and repeated actual model acceptance pending",
+  "named_claim_related": {
+    "tests": 176,
+    "seconds": 371.776,
+    "native_exit": 0,
+    "controller_exit": 0,
+    "failures": 0,
+    "errors": 0
+  },
+  "mixed_instruction_contract_before": {
+    "tests": 2,
+    "seconds": 0.085,
+    "native_exit": 1,
+    "failures": 2,
+    "errors": 0
+  },
+  "mixed_instruction_client_skill_images_after": {
+    "tests": 34,
+    "seconds": 8.777,
+    "native_exit": 0,
+    "failures": 0,
+    "errors": 0
+  },
+  "clean_discovery": {
+    "discovered_tests": 1840,
+    "discovery_errors": 0
+  },
+  "previous_actual_mixed_replay": {
+    "model": "deepseek-v4.1-flash",
+    "fixture_count": 7101,
+    "original_image_sha256": "e9be6ef5de496abe43464c4d87088bb40c72793027fa8d08480f796054a61393",
+    "bound_fixtures": [
+      "leyu:5720800"
+    ],
+    "completion_verified": true,
+    "completion_rounds": 1,
+    "elapsed_ms": 43678.87,
+    "signal_count": 0,
+    "order_count": 0
+  },
+  "previous_actual_mixed_replay_semantic_acceptance": false,
+  "semantic_failure_reason": "No-new-recommendation claim contradicted extracted selected handicap; tool binding alone is insufficient.",
+  "new_project_instruction": "Selected image does not require body to repeat line or direction; unavailable quote does not remove recommendation intent.",
+  "old_feedback_negative_cases_preserved": true,
+  "explicit_ids_and_other_attempt_guards_preserved": true,
+  "failed_isolated_evidence_preserved": true,
+  "preserved_files_secret_scan": {
+    "files_checked": 26,
+    "secret_value_occurrences": 0
+  },
+  "gateway_or_provider_configuration_writes": 0,
+  "production_data_writes": 0,
+  "funded_tests": 0
+}

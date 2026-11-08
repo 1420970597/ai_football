@@ -2,6 +2,7 @@
 import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from datetime import timedelta
 import unittest
 import uuid
 
@@ -95,3 +96,46 @@ class NamedReviewCompletionTests(unittest.IsolatedAsyncioTestCase):
         receipt = await self.pool.fetchval("SELECT payload FROM v2_analysis_traces WHERE trace_kind='system_review_result'")
         self.assertFalse(receipt['completion_verified'])
         self.assertEqual(1, receipt['completion_issues']['unbound_mention_count'])
+
+    async def test_bound_pair_does_not_require_every_same_named_historical_candidate(self):
+        await self.fixture(1,id='leyu:1',phase='finished')
+        await self.fixture(2,id='leyu:2',phase='finished',home_team='Alpha1',away_team='Beta1',
+                           kickoff_at=(self.now-timedelta(hours=3)).isoformat())
+        page=await self.post('search_matches',team_query='Alpha1')
+        key=page.json()['search_key']
+        result=await self.post('resolve_match',search_key=key,team_a='Alpha1',team_b='Beta1',
+                               from_utc=self.now.isoformat())
+        self.assertTrue(result.json()['resolved'])
+        text='已唯一识别 Alpha1 对 Beta1，fixture leyu:1，无有效报价。'
+        job=dict(id=self.job,attempt_id=self.attempt,message={})
+        with patch.object(worker,'review_message',AsyncMock(return_value=(text,{'content':text})))as call:
+            _,summary=await worker._review_until_verified(self.pool,SimpleNamespace(),job)
+        self.assertTrue(summary['completion_verified'])
+        self.assertEqual(1,call.await_count)
+        async with self.pool.acquire()as conn,conn.transaction():
+            await trace(conn,self.job,'hermes_result',{**summary,'attempt_id':str(self.attempt),'content':text})
+            await record_summary(conn,dict(id=self.job,message_id=self.message),self.attempt,'real_time')
+        receipt=await self.pool.fetchval("SELECT payload FROM v2_analysis_traces WHERE trace_kind='system_review_result'")
+        self.assertTrue(receipt['completion_verified'])
+        async with self.pool.acquire()as conn:
+            explicit=await completion_issues(conn,self.job,self.attempt,{'leyu:2'},text)
+        self.assertEqual(1,explicit['unbound_mention_count'])
+        await self.pool.execute('UPDATE v2_review_fixture_bindings SET attempt_id=$2 WHERE job_id=$1',self.job,uuid.uuid4())
+        self.assertEqual(2,(await self.issues(text))['unbound_mention_count'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+
+    async def test_names_from_distinct_claims_cannot_form_an_extra_pair(self):
+        await self.fixture(1,id='leyu:1',phase='finished',home_team='Crystal',away_team='Liverpool')
+        await self.fixture(2,id='leyu:2',phase='finished',home_team='Ipswich',away_team='Bournemouth')
+        await self.fixture(3,id='leyu:3',phase='finished',home_team='Bournemouth',away_team='Liverpool')
+        page=await self.post('search_matches',team_query='',competition_query='League',sport='football',
+                             from_utc=self.now.isoformat(),to_utc=(self.now+timedelta(hours=4)).isoformat())
+        self.assertEqual(200,page.status_code,page.text)
+        for home,away in(('Crystal','Liverpool'),('Ipswich','Bournemouth')):
+            result=await self.post('resolve_match',search_key=page.json()['search_key'],team_a=home,team_b=away)
+            self.assertTrue(result.json()['resolved'])
+        self.assertEqual({},await self.issues('已唯一识别 Crystal 对 Liverpool，leyu:1。\n已唯一识别 Ipswich 对 Bournemouth，leyu:2。'))
+        issues=await self.issues('已唯一识别 Crystal 对 Liverpool，leyu:1。已唯一识别 Bournemouth 对 Liverpool。')
+        self.assertEqual(1,issues['unbound_mention_count'])
+        self.assertEqual('leyu:3',issues['unbound_mentions'][0]['fixture_id'])

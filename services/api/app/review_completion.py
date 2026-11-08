@@ -86,15 +86,17 @@ def mentioned_fixtures(content: str) -> set[str]:
     return mentioned
 
 
-def named_identity_claims(contents) -> str:
-    """A negative verification hint, never permission to bind a candidate."""
-    claims = []
-    for content in contents[:3]:
-        text = content[:20000]
+def _named_claim_clauses(text):
+    for clause in re.split(r'[\n。；;!！?？]+', text):
         if re.search(r'已(?:经)?[^，。；\n]{0,16}(?:匹配|识别|找到|确认|定位)'
-                     r'|(?:匹配|识别|找到|确认|定位)(?:成功|完成)', text):
-            claims.append(text)
-    return '\n'.join(claims)
+                     r'|(?:匹配|识别|找到|确认|定位)(?:成功|完成)', clause):
+            yield clause
+
+
+def named_identity_claims(contents) -> str:
+    """Preserve claim boundaries; never authorize a binding from model prose."""
+    return '\n'.join(clause for content in contents[:3]
+                     for clause in _named_claim_clauses(content[:20000]))
 
 
 def explicit_text_pick(content: str) -> bool:
@@ -111,6 +113,7 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
                             require_intent_review: bool = False) -> dict:
     row = await conn.fetchrow(
         "WITH " + unfinished_searches_cte() + "," + intent_retry_ctes() + ","
+        " named_claims AS (SELECT unnest(string_to_array($5::text,chr(10))) AS content),"
         " mentions AS (SELECT unnest($3::text[]) AS fixture_id UNION "
         " SELECT c.fixture_id FROM v2_match_search_candidates c JOIN v2_match_searches s "
         " ON s.job_id=c.job_id AND s.search_key=c.search_key "
@@ -118,8 +121,15 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
         " AND length(c.candidate_data->>'home_team')>1 "
         " AND length(c.candidate_data->>'away_team')>1 "
         " AND c.candidate_data->>'home_team'<>c.candidate_data->>'away_team' "
-        " AND strpos($5,c.candidate_data->>'home_team')>0 "
-        " AND strpos($5,c.candidate_data->>'away_team')>0),"
+        " AND EXISTS(SELECT 1 FROM named_claims n "
+        " WHERE strpos(n.content,c.candidate_data->>'home_team')>0 "
+        " AND strpos(n.content,c.candidate_data->>'away_team')>0) "
+        " AND NOT EXISTS(SELECT 1 FROM v2_review_fixture_bindings b "
+        " JOIN v2_match_search_candidates bc ON bc.job_id=b.job_id "
+        " AND bc.search_key=b.search_key AND bc.fixture_id=b.fixture_id "
+        " WHERE b.job_id=c.job_id AND b.attempt_id=$2 "
+        " AND bc.candidate_data->>'home_team'=c.candidate_data->>'home_team' "
+        " AND bc.candidate_data->>'away_team'=c.candidate_data->>'away_team')),"
         " unbound AS (SELECT m.fixture_id,(SELECT jsonb_build_object('search_key',s.search_key,"
         " 'search_complete',s.complete,'fixture',c.candidate_data) "
         " FROM v2_match_search_candidates c JOIN v2_match_searches s "
@@ -136,7 +146,7 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
         " ($6::boolean AND NOT EXISTS(SELECT 1 FROM v2_review_fixture_bindings b "
         " WHERE b.job_id=$1 AND b.attempt_id=$2)) AS intent_unverified," + intent_retry_projection(),
         job_id, attempt_id, sorted(mentioned), DETAIL_LIMIT,
-        content[:60002] if named_identity_claims([content]) else '', require_intent_review)
+        '\n'.join(_named_claim_clauses(content[:60002])), require_intent_review)
     if (not row['unfinished_count'] and not row['unbound_count'] and not row['intent_unverified']
             and not row['line_intent_retry_count']):
         return {}
