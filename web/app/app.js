@@ -143,6 +143,11 @@ function route(
     ].includes(page)
   )
     page = "scores";
+  if (page !== "scores") {
+    state.matchAbort?.abort();
+    ++state.matchSequence;
+    clearTimeout(state.retryTimer);
+  }
   if (phase) state.phase = phase;
   state.page = page;
   if (page === "messages") state.messageContext = asAdmin ? "admin" : "user";
@@ -235,27 +240,25 @@ function setDate(date) {
 function quoteLabel(q) {
   return `${q.market_name || q.market_kind || "盘口"} ${period(q.period)} ${lineLabel(q)} ${selection(q.selection)} ${decimal(q.price)}`;
 }
+function renderMatchOdds(m) {
+  const all = m.markets || [], first = all.find((q) => q.is_main !== false) || all[0];
+  const quotes = first ? all.filter((q) => q.market_id === first.market_id &&
+    q.period === first.period && q.line === first.line).slice(0, 3) : [];
+  const empty = m.markets_status === "loading" ? "盘口加载中…"
+    : m.markets_status === "unavailable" ? "盘口暂时不可用" : "暂无有效赔率";
+  return (quotes.length ? quotes.map((q) => `<span class="${q.fresh === false || !m.quote_fresh ? "stale" : ""}" title="${esc(quoteLabel(q))}">${esc(selection(q.selection))} ${esc(lineLabel(q))} ${decimal(q.price)}</span>`).join("") : `<span class="stale">${empty}</span>`) +
+    (all.length > quotes.length ? '<button class="detail-button" data-match="' + esc(m.id) + '">更多盘口 ›</button>' : "");
+}
 function renderMatches() {
   const items = currentMatches();
   $("#matches-list").innerHTML = items
     .map((m) => {
-      const all = m.markets || [],
-        first = all.find((q) => q.is_main !== false) || all[0];
-      const related = first
-          ? all.filter(
-              (q) =>
-                q.market_id === first.market_id &&
-                q.period === first.period &&
-                q.line === first.line,
-            )
-          : [],
-        quotes = related.slice(0, 3);
       const score = m.home_score === null || m.home_score === undefined
         ? (m.phase === "scheduled"
           ? '<img class="match-vs-icon" src="/assets/cc-reference/home_match_vs_icon.png" alt="VS" width="24" height="18">'
           : "－")
         : esc(m.home_score) + " : " + esc(m.away_score ?? "－");
-      return `<article class="match-row" data-fixture="${esc(m.id)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${score}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${quotes.length ? quotes.map((q) => `<span class="${q.fresh === false || !m.quote_fresh ? "stale" : ""}" title="${esc(quoteLabel(q))}">${esc(selection(q.selection))} ${esc(lineLabel(q))} ${decimal(q.price)}</span>`).join("") : '<span class="stale">暂无有效赔率</span>'}${all.length > quotes.length ? '<button class="detail-button" data-match="' + esc(m.id) + '">更多盘口 ›</button>' : ""}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button></article>`;
+      return `<article class="match-row" data-fixture="${esc(m.id)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${score}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${renderMatchOdds(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button></article>`;
     })
     .join("");
   $("#fixture-count").textContent =
@@ -271,6 +274,62 @@ function renderMatches() {
         ? "可先在全部赛事中点击星标关注。"
         : "尝试切换日期、状态或联赛；没有比赛不会补入演示数据。",
     });
+}
+function updateMatchServiceState() {
+  const stale = state.matches.filter((m) => m.markets?.length && !m.quote_fresh).length;
+  const pending = state.matches.filter((m) => m.markets_status === "loading").length;
+  const unavailable = state.matches.filter((m) => m.markets_status === "unavailable").length;
+  $("#service-state").textContent = `赛事服务已响应 · ${state.matches.length} 场已载入${pending ? " · 盘口加载中 " + pending + " 场" : ""}${unavailable ? " · 盘口暂时不可用 " + unavailable + " 场" : ""}${stale ? " · " + stale + " 场报价过期或时间未知" : ""}`;
+  const notices = [];
+  if (unavailable) notices.push(`${unavailable} 场比赛盘口暂时不可用，比分和状态已更新；可稍后刷新盘口。`);
+  if (stale) notices.push(`${stale} 场比赛报价过期或时间未知，保留显示供查询；详情会标明报价状态。`);
+  $("#matches-notice").hidden = !notices.length;
+  $("#matches-notice").className = "notice";
+  $("#matches-notice").textContent = notices.join(" ");
+}
+async function loadMatchSummaries(identifiers, sequence, parentSignal) {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  parentSignal.addEventListener("abort", cancel, { once: true });
+  if (parentSignal.aborted) cancel();
+  const timer = setTimeout(cancel, 25000);
+  const current = () => !parentSignal.aborted && sequence === state.matchSequence && state.page === "scores";
+  const merge = (ids, summaries = []) => {
+    const requested = new Set(ids), byId = new Map(summaries.map((m) => [m.fixture_id, m]));
+    for (const m of state.matches) {
+      if (!requested.has(m.id)) continue;
+      const summary = byId.get(m.id);
+      m.markets = summary?.markets || [];
+      m.markets_status = summary ? "loaded" : "unavailable";
+      m.quote_fresh = !!summary?.quote_fresh && summary.phase === m.phase;
+    }
+    const matches = new Map(state.matches.filter((m) => requested.has(m.id)).map((m) => [m.id, m]));
+    for (const row of $$("#matches-list .match-row")) {
+      const m = matches.get(row.dataset.fixture);
+      if (m) row.querySelector(".match-odds").innerHTML = renderMatchOdds(m);
+    }
+    updateMatchServiceState();
+  };
+  let offset = 0;
+  try {
+    for (; offset < identifiers.length && !controller.signal.aborted; offset += 50) {
+      const batch = identifiers.slice(offset, offset + 50);
+      try {
+        const result = await api("/public/match-summaries?" + params({ fixture_ids: batch }),
+          { signal: controller.signal, timeout: 7000 });
+        if (!current()) return;
+        if (!Array.isArray(result.items)) throw new Error("盘口摘要响应不完整");
+        merge(batch, result.items);
+      } catch {
+        if (!current()) return;
+        merge(batch);
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+    parentSignal.removeEventListener("abort", cancel);
+    if (current() && offset < identifiers.length) merge(identifiers.slice(offset));
+  }
 }
 async function loadMatches(append = false) {
   const queryKey = JSON.stringify([state.date, state.phase, state.sport, [...state.leagueIds].sort(), state.q]);
@@ -305,6 +364,7 @@ async function loadMatches(append = false) {
     const refreshDeadline = performance.now() + 30000;
     let cursor = append ? state.cursor : null;
     const items = [];
+    const summaryIds = [];
     let result;
     const seenCursors = new Set();
     do {
@@ -321,10 +381,17 @@ async function loadMatches(append = false) {
             q: state.q,
             cursor,
             page_size: Math.min(200, Math.max(50, targetCount - items.length)),
+            include_markets: false,
           }),
         { signal: controller.signal },
       );
       if (sequence !== state.matchSequence) return;
+      if (result.markets_included === false) {
+        for (const match of result.items) {
+          match.markets_status = "loading";
+          summaryIds.push(match.id);
+        }
+      }
       const ids = new Set(items.map((match) => match.id));
       items.push(...result.items.filter((match) => !ids.has(match.id)));
       cursor = result.next_cursor;
@@ -344,16 +411,8 @@ async function loadMatches(append = false) {
     renderMatches();
     if (!append) scrollTo({ top: scrollPosition, behavior: "instant" });
     $("#last-updated").textContent = "更新 " + time(result.server_time);
-    const stale = state.matches.filter(
-      (m) => m.markets?.length && !m.quote_fresh,
-    ).length;
-    $("#service-state").textContent =
-      `赛事服务已响应 · ${state.matches.length} 场已载入${stale ? " · " + stale + " 场报价过期或时间未知" : ""}`;
-    if (stale) {
-      $("#matches-notice").hidden = false;
-      $("#matches-notice").textContent =
-        `${stale} 场比赛报价过期或时间未知，保留显示供查询；详情会标明报价状态。`;
-    }
+    updateMatchServiceState();
+    if (summaryIds.length) void loadMatchSummaries([...new Set(summaryIds)], sequence, controller.signal);
   } catch (error) {
     if (controller.signal.aborted || sequence !== state.matchSequence) return;
     $("#service-state").textContent = "赛事服务暂未响应";

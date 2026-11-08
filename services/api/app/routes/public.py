@@ -46,6 +46,43 @@ async def _has_entitlement(request: Request, key: str) -> bool:
     return await has_entitlement(identity["id"], key)
 
 
+async def _quote_summaries(request: Request, fixture_ids: list[str]) -> dict[str, list[dict]]:
+    if not fixture_ids:
+        return {}
+    quote_rows = await database.current_pool().fetch(
+        "SELECT q.* FROM unnest($1::text[]) AS wanted(fixture_id) CROSS JOIN LATERAL ("
+        "SELECT id AS quote_id,fixture_id,market_id,market_name,period,market_kind,line,selection,price,status,is_main,source_updated_at,received_at "
+        "FROM v2_current_quotes WHERE fixture_id=wanted.fixture_id "
+        "ORDER BY is_main DESC,source_updated_at DESC NULLS LAST,market_id,line,selection LIMIT 24) q "
+        "ORDER BY q.fixture_id,q.market_id,q.line,q.selection", fixture_ids,
+    )
+    by_fixture: dict[str, list[dict]] = {}
+    max_quote_age = await runtime_quote_max_age(request.app.state.settings)
+    for quote in quote_rows:
+        by_fixture.setdefault(quote["fixture_id"], []).append(
+            line_projection(quote) | {'fresh': fresh_quote(quote, max_quote_age)})
+    return by_fixture
+
+
+@router.get('/match-summaries')
+async def match_summaries(request: Request, fixture_ids: list[str] = Query(min_length=1, max_length=50)):
+    if any(not identifier.strip() or len(identifier) > 120 for identifier in fixture_ids):
+        raise HTTPException(422, '比赛标识无效')
+    identifiers = list(dict.fromkeys(fixture_ids))
+    rows = await database.current_pool().fetch(
+        'SELECT id,phase FROM v2_fixtures WHERE id=ANY($1::text[])', identifiers)
+    phases = {row['id']: row['phase'] for row in rows}
+    summaries = await _quote_summaries(request, [identifier for identifier in identifiers if identifier in phases])
+    return {'items': [
+        {'fixture_id': identifier, 'phase': phases[identifier],
+         'markets': summaries.get(identifier, []), 'markets_status': 'loaded',
+         'quote_fresh': phases[identifier] in {'scheduled', 'live'} and
+                        any(quote['fresh'] for quote in summaries.get(identifier, []))}
+        for identifier in identifiers if identifier in phases],
+        'missing_fixture_ids': [identifier for identifier in identifiers if identifier not in phases],
+        'server_time': datetime.now(timezone.utc)}
+
+
 @router.get("/matches")
 async def matches(
     request: Request,
@@ -58,6 +95,7 @@ async def matches(
     tz: str = Query(default='Asia/Shanghai', max_length=80),
     cursor: str | None = None,
     page_size: int = Query(default=50, ge=1, le=200),
+    include_markets: bool = True,
 ):
     clauses: list[str] = []
     args: list[object] = []
@@ -108,26 +146,18 @@ async def matches(
     has_more = len(rows) > page_size
     items = rows[:page_size]
     fixture_ids = [row["id"] for row in items]
-    quote_rows = await database.current_pool().fetch(
-        "SELECT q.* FROM unnest($1::text[]) AS wanted(fixture_id) CROSS JOIN LATERAL ("
-        "SELECT id AS quote_id,fixture_id,market_id,market_name,period,market_kind,line,selection,price,status,is_main,source_updated_at,received_at "
-        "FROM v2_current_quotes WHERE fixture_id=wanted.fixture_id "
-        "ORDER BY is_main DESC,source_updated_at DESC NULLS LAST,market_id,line,selection LIMIT 24) q "
-        "ORDER BY q.fixture_id,q.market_id,q.line,q.selection", fixture_ids,
-    ) if fixture_ids else []
-    by_fixture: dict[str, list[dict]] = {}
-    max_quote_age = await runtime_quote_max_age(request.app.state.settings)
-    for quote in quote_rows:
-        by_fixture.setdefault(quote["fixture_id"], []).append(line_projection(quote) | {'fresh': fresh_quote(quote, max_quote_age)})
+    by_fixture = await _quote_summaries(request, fixture_ids) if include_markets else {}
     output = []
     for row in items:
         item = dict(row)
         item["markets"] = by_fixture.get(row["id"], [])
         item['quote_fresh'] = any(q['fresh'] for q in item['markets']) and item['phase'] in {'scheduled','live'}
         item['markets_are_summary'] = True
+        item['markets_status'] = 'loaded' if include_markets else 'not_requested'
         output.append(item)
     next_cursor = _encode_cursor(items[-1]["kickoff_at"], items[-1]["id"], request, cursor_scope) if has_more and items else None
-    return {"items": output, "next_cursor": next_cursor, "page_size": page_size, "server_time": datetime.now(timezone.utc)}
+    return {"items": output, "next_cursor": next_cursor, "page_size": page_size,
+            "markets_included": include_markets, "server_time": datetime.now(timezone.utc)}
 
 
 async def _match_markets(fixture_id: str, request: Request, phase: str, *, cursor=None, page_size=500):

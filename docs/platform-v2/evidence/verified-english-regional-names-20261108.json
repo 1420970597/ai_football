@@ -1,0 +1,55 @@
+{
+  "observed_date_utc": "2026-11-08",
+  "publisher": "7M",
+  "purpose": "same-publisher same-ID Chinese club names only",
+  "http_metadata": [
+    {
+      "team_id": "18",
+      "language": "gb",
+      "url": "https://www.7m.hk/football/data/teams/js_data?file=team_info&id=18&lang=gb",
+      "status": 200,
+      "bytes": 5662,
+      "sha256": "17bdb9a3f7377a77f7b3512a46fcc8bd586a98a9dc0695a679fc1360aee45783",
+      "exact_team_name": "伊普斯维奇"
+    },
+    {
+      "team_id": "674",
+      "language": "gb",
+      "url": "https://www.7m.hk/football/data/teams/js_data?file=team_info&id=674&lang=gb",
+      "status": 200,
+      "bytes": 3440,
+      "sha256": "352ac18375ce90b8899ac05e5d1b953c54ebe465076670e68f33dfa39e178a92",
+      "exact_team_name": "伯恩茅斯"
+    },
+    {
+      "team_id": "18",
+      "language": "big",
+      "url": "https://www.7m.hk/football/data/teams/js_data?file=team_info&id=18&lang=big",
+      "status": 200,
+      "bytes": 5658,
+      "sha256": "20c38dfad38597978b98dd5e45adcd852a2f5329c18b8ee84d6bfe7df08ea7eb",
+      "exact_team_name": "葉士域治"
+    },
+    {
+      "team_id": "674",
+      "language": "big",
+      "url": "https://www.7m.hk/football/data/teams/js_data?file=team_info&id=674&lang=big",
+      "status": 200,
+      "bytes": 3448,
+      "sha256": "d5c7dec445e96e5055c8607c4198118151f72ebeb99f2a3b6687f831f17a722e",
+      "exact_team_name": "般尼茅夫"
+    }
+  ],
+  "application_scope": "football; complete Chinese labels only",
+  "rights": "public factual name metadata only; no image, biography, branding or static assets reused",
+  "upstream_fixture_facts_unchanged": true,
+  "primary_source_first_read_timeout_retained": true,
+  "directed_regression": {
+    "tests": 10,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 13.294,
+    "native_exit": 0
+  },
+  "deployment_acceptance": false
+}

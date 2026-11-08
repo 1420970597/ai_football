@@ -317,7 +317,26 @@ async function setup({
       mode.admin = false;
       return reply({ ok: true });
     }
+    if (p === "/public/match-summaries") {
+      const identifiers = url.searchParams.getAll("fixture_ids");
+      const delay = mode.summaryDelay || 0, failed = mode.summaryError;
+      const price = mode.summaryPrice || quote.price;
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      if (failed) return reply({ detail: "隔离测试：盘口读取超时" }, 503);
+      return reply({ items: identifiers.map((identifier) => {
+        const fixture = identifier.startsWith("long-")
+          ? fixtures[Number(identifier.slice(5)) % fixtures.length]
+          : fixtures.find((f) => f.id === identifier);
+        return {fixture_id: identifier, phase: fixture.phase, markets: [{...quote, price}],
+          quote_fresh: ["live", "scheduled"].includes(fixture.phase), markets_status: "loaded"};
+      }), missing_fixture_ids: [], server_time: "2026-10-26T11:15:00Z" });
+    }
     if (p === "/public/matches") {
+      const result = (items, next_cursor, server_time) => ({
+        items: mode.asyncSummaries ? items.map((fixture) => ({...fixture, markets: [],
+          markets_status: "not_requested", quote_fresh: false})) : items,
+        ...(mode.asyncSummaries ? {markets_included: false} : {}), next_cursor, server_time,
+      });
       if (mode.slow) await new Promise((r) => setTimeout(r, 700));
       if (mode.error) return reply({ detail: "隔离测试：上游读取超时" }, 503);
       if (mode.long) {
@@ -328,21 +347,14 @@ async function setup({
         if (mode.removeFirst) all.shift();
         const start = Number(url.searchParams.get("cursor") || 0);
         const end = start + Number(url.searchParams.get("page_size") || 50);
-        return reply({
-          items: all.slice(start, end),
-          next_cursor: end < all.length ? String(end) : null,
-          server_time: "2026-10-26T11:15:00Z",
-        });
+        return reply(result(all.slice(start, end), end < all.length ? String(end) : null,
+          "2026-10-26T11:15:00Z"));
       }
-      return reply({
-        items: fixtures.filter(
+      return reply(result(fixtures.filter(
           (f) =>
             url.searchParams.get("phase") === "all" ||
             f.phase === url.searchParams.get("phase"),
-        ),
-        next_cursor: url.searchParams.has("cursor") ? null : "next-fixtures",
-        server_time: "2026-10-26T11:12:00Z",
-      });
+        ), url.searchParams.has("cursor") ? null : "next-fixtures", "2026-10-26T11:12:00Z"));
     }
     if (p === "/public/leagues")
       return reply({
@@ -1102,6 +1114,80 @@ await test("比赛状态切换等待和失败时不能保留其他状态的旧�
   await page.waitForFunction(() => document.querySelector('#matches-state').textContent.includes('读取超时'));
   assert.equal(await page.locator('.match-row').count(), 0);
   assert.match(page.url(), /phase=live/);
+  await context.close();
+});
+for (const mobile of [false, true]) {
+  await test(`盘口失败仍显示正确比赛状态与真实比分 / ${mobile ? "手机" : "桌面"}`, async () => {
+    const {page, context, mode, log} = await setup({mobile});
+    mode.asyncSummaries = true;
+    mode.summaryError = true;
+    await page.locator('.score-tabs [data-phase=finished]').click();
+    await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 1 &&
+      document.querySelector('.match-odds').textContent.includes('暂时不可用'));
+    assert.equal(await page.locator('.match-phase').innerText(), '完场');
+    assert.match(await page.locator('#matches-notice').innerText(), /比分和状态已更新/);
+    assert.equal(await page.locator('#matches-state').isVisible(), false);
+    assert.equal(await page.locator('body').evaluate((e) => e.scrollWidth > innerWidth), false);
+    assert.ok(log.some((r) => r.path === '/public/matches' && r.query.includes('include_markets=false')));
+    assert.equal(log.filter((r) => r.path === '/public/match-summaries').length, 1);
+    await context.close();
+  });
+}
+await test("盘口晚响应不能覆盖新筛选，离页取消后台读取", async () => {
+  const {page, context, mode, log} = await setup();
+  mode.asyncSummaries = true;
+  mode.summaryDelay = 700;
+  mode.summaryPrice = '9.99';
+  const firstSummary = page.waitForRequest((r) => new URL(r.url()).pathname.endsWith('/public/match-summaries'));
+  await page.locator('.score-tabs [data-phase=finished]').click();
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 1 &&
+    document.querySelector('.match-odds').textContent.includes('加载中'));
+  await firstSummary;
+  mode.summaryDelay = 0;
+  mode.summaryPrice = '2.01';
+  await page.locator('.score-tabs [data-phase=live]').click();
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 3 &&
+    [...document.querySelectorAll('.match-odds')].every((e) => e.textContent.includes('2.01')));
+  await page.waitForTimeout(800);
+  assert.equal(await page.locator('.match-phase:not(.live)').count(), 0);
+  assert.equal(await page.locator('.match-odds').filter({hasText:'9.99'}).count(), 0);
+  mode.summaryDelay = 700;
+  await page.locator('#refresh-matches').click();
+  await page.waitForFunction(() => document.querySelector('.match-odds').textContent.includes('加载中'));
+  await page.locator('.main-nav [data-page=experts]').click();
+  const before = log.filter((r) => r.path === '/public/match-summaries').length;
+  await page.waitForTimeout(800);
+  assert.equal(await page.locator('#view-experts').isVisible(), true);
+  assert.equal(log.filter((r) => r.path === '/public/match-summaries').length, before);
+  await context.close();
+});
+await test("异步盘口分批上限50且多页刷新保持完整顺序", async () => {
+  const {page, context, mode, log} = await setup();
+  mode.asyncSummaries = true;
+  mode.long = true;
+  await page.locator('#refresh-matches').click();
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 50 &&
+    !document.querySelector('#service-state').textContent.includes('加载中'));
+  await page.locator('#load-more').click();
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 100 &&
+    !document.querySelector('#service-state').textContent.includes('加载中'));
+  const before = log.length;
+  const lastBatch = page.waitForResponse((r) => {
+    const url = new URL(r.url());
+    return url.pathname.endsWith('/public/match-summaries') &&
+      url.searchParams.getAll('fixture_ids')[0] === 'long-50';
+  });
+  await page.locator('#refresh-matches').click();
+  await lastBatch;
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 100 &&
+    !document.querySelector('#service-state').textContent.includes('加载中'));
+  await page.waitForFunction(() => [...document.querySelectorAll('.match-odds')].every((e) => !e.textContent.includes('加载中')));
+  const batches = log.slice(before).filter((r) => r.path === '/public/match-summaries');
+  assert.equal(batches.length, 2);
+  assert.ok(log.filter((r) => r.path === '/public/match-summaries').every((r) =>
+    new URLSearchParams(r.query).getAll('fixture_ids').length <= 50));
+  assert.deepEqual(await page.locator('.match-row').evaluateAll((rows) => rows.map((r) => r.dataset.fixture)),
+    Array.from({length:100}, (_, i) => 'long-' + i));
   await context.close();
 });
 await test("普通成员搜索可选为监控作者且读取管理员仍调用原接口", async () => {
