@@ -247,7 +247,16 @@ async def run_case(conn, http, scenario):
             "ORDER BY (payload->>'chunk_index')::int", job, manifest['call_id'])
         result = replay_snapshot(manifest, [chunk['payload'] for chunk in chunks])
         assert result['accepted'] == []
-        assert result['rejected'] == [{'index': 0, 'reason': 'source_line_intent_conflict'}]
+        assert result['rejected'] == [{
+            'index': 0, 'reason': 'source_line_intent_conflict',
+            'intent_context': {
+                'fixture_id': f"{data['prefix']}-{TARGET}",
+                'market_id': 'total', 'market_kind': 'total',
+                'period': 'full_time', 'selection': 'over',
+                'source_intent': {'selection': 'over', 'lines': ['2.75']},
+                'selected_selection_line': '2.500',
+            },
+        }], result
     elif scenario in {'length', 'budget'}:
         assert not signals and not search and not traces, 'exhausted framework must not create recommendations or tool evidence'
         assert not any('record_expert_signals' in name for name in evidence['called'])
