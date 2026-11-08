@@ -685,6 +685,7 @@ if (process.argv.includes("--a11y")) {
   process.exit(process.exitCode || 0);
 }
 async function test(name, action) {
+  if (process.env.BROWSER_TEST_FILTER && !name.includes(process.env.BROWSER_TEST_FILTER)) return;
   try {
     await action();
     results.push({ name, status: "passed" });
@@ -1190,6 +1191,127 @@ await test("异步盘口分批上限50且多页刷新保持完整顺序", async 
     Array.from({length:100}, (_, i) => 'long-' + i));
   await context.close();
 });
+for (const mobile of [false, true]) {
+  await test(`Telegram目录迟到的来源加载不得覆盖成员搜索 ${mobile ? "手机" : "桌面"}`, async () => {
+    const {page, context, mode, log} = await setup({dual: true, mobile});
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    let started;
+    const entered = new Promise(resolve => { started = resolve; });
+    try {
+      mode.tgSearch = true;
+      await page.goto('http://127.0.0.1:8080/#admin?asadmin=1');
+      await page.locator('[data-admin-tab=telegram]').click();
+      await page.waitForFunction(() => document.querySelector('#trusted-experts h3') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      await page.route(`**/api/v1/admin/sources/${id}/experts`, async route => {
+        started();
+        await held;
+        await route.fulfill({status: 200, contentType: 'application/json',
+          body: JSON.stringify({items: [{...expert, platform_sender_id: '12345'}]})});
+      });
+      await page.route('**/api/v1/admin/telegram/admins?*', route => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({state: 'available', items: []})}));
+      await page.locator('#source-select').selectOption(id);
+      await entered;
+      await page.locator('#tg-directory-scope').selectOption('members');
+      await page.waitForFunction(() => document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      await page.locator('#tg-admin-search').fill('普通老师');
+      await page.locator('#tg-admin-search-form button').first().click();
+      await page.locator('#source-admins [data-author="12345"]').waitFor();
+      const before = log.filter(x => x.path === '/admin/telegram/members').length;
+      release();
+      await page.waitForFunction(() => document.querySelector('#trusted-experts h3') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      assert.equal(await page.locator('#source-admins [data-author="12345"]').count(), 1);
+      assert.match(await page.locator('#source-admins').innerText(), /普通成员/);
+      assert.equal(await page.locator('#tg-admin-search').inputValue(), '普通老师');
+      assert.equal(log.filter(x => x.path === '/admin/telegram/members').length, before);
+    } finally {
+      release();
+      await context.close();
+    }
+  });
+  await test(`Telegram目录迟到的同源旧请求不得覆盖新一轮来源 ${mobile ? "手机" : "桌面"}`, async () => {
+    const {page, context, mode} = await setup({dual: true, mobile});
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    let started;
+    const entered = new Promise(resolve => { started = resolve; });
+    try {
+      mode.tgSearch = true;
+      await page.goto('http://127.0.0.1:8080/#admin?asadmin=1');
+      await page.locator('[data-admin-tab=telegram]').click();
+      await page.waitForFunction(() => document.querySelector('#trusted-experts h3') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      let requests = 0;
+      await page.route(`**/api/v1/admin/sources/${id}/experts`, async route => {
+        const first = ++requests === 1;
+        if (first) { started(); await held; }
+        await route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify({items: [
+          {...expert, display_nickname: first ? '较早作者' : '最新作者', platform_sender_id: '12345'}]})});
+      });
+      await page.locator('#source-select').selectOption(id);
+      await entered;
+      await page.locator('#source-select').selectOption(id);
+      await page.waitForFunction(() => document.querySelector('#trusted-experts').textContent.includes('最新作者') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      release();
+      await page.waitForResponse(r => new URL(r.url()).pathname === `/api/v1/admin/sources/${id}/experts`);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.match(await page.locator('#trusted-experts').innerText(), /最新作者/);
+      assert.doesNotMatch(await page.locator('#trusted-experts').innerText(), /较早作者/);
+    } finally {
+      release();
+      await context.close();
+    }
+  });
+}
+for (const mobile of [false, true]) for (const failOldRequest of [false, true]) {
+  await test(`Telegram目录迟到的跨源返回${failOldRequest ? "失败" : "成功"}不覆盖当前作者 ${mobile ? "手机" : "桌面"}`, async () => {
+    const {page, context, mode} = await setup({dual: true, mobile});
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    let started;
+    const entered = new Promise(resolve => { started = resolve; });
+    try {
+      mode.tgSearch = true;
+      await page.route('**/api/v1/admin/sources', route => route.fulfill({status: 200,
+        contentType: 'application/json', body: JSON.stringify({items: [
+          {id, platform_chat_id: '-1001234567', display_name: '原来源', enabled: true, allow_media: true},
+          {id: mid, platform_chat_id: '-1009876543', display_name: '另一来源', enabled: true, allow_media: true}]})}));
+      await page.goto('http://127.0.0.1:8080/#admin?asadmin=1');
+      await page.locator('[data-admin-tab=telegram]').click();
+      await page.waitForFunction(() => document.querySelector('#trusted-experts h3') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      let requests = 0;
+      await page.route(`**/api/v1/admin/sources/${id}/experts`, async route => {
+        const first = ++requests === 1;
+        if (first) { started(); await held; }
+        await route.fulfill({status: first && failOldRequest ? 503 : 200, contentType: 'application/json',
+          body: JSON.stringify(first && failOldRequest ? {detail: '较早来源读取失败'} : {items: [
+            {...expert, display_nickname: first ? '较早作者' : '最新作者', platform_sender_id: '12345'}]})});
+      });
+      await page.locator('#source-select').selectOption(id);
+      await entered;
+      await page.locator('#source-select').selectOption(mid);
+      await page.waitForFunction(() => document.querySelector('#trusted-experts h3') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      await page.locator('#source-select').selectOption(id);
+      await page.waitForFunction(() => document.querySelector('#trusted-experts').textContent.includes('最新作者') &&
+        document.querySelector('#source-admins').getAttribute('aria-busy') === 'false');
+      const lateResponse = page.waitForResponse(r => new URL(r.url()).pathname === `/api/v1/admin/sources/${id}/experts`);
+      release();
+      await lateResponse;
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.match(await page.locator('#trusted-experts').innerText(), /最新作者/);
+      assert.doesNotMatch(await page.locator('#trusted-experts').innerText(), /较早/);
+    } finally {
+      release();
+      await context.close();
+    }
+  });
+}
 await test("普通成员搜索可选为监控作者且读取管理员仍调用原接口", async () => {
   const { page, context, mode, log } = await setup({dual:true});
   mode.tgSearch = true;

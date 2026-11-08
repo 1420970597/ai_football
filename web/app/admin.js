@@ -27,6 +27,7 @@ let dialogsQuery = "",
   adminsQuery = "";
 let dialogsSequence = 0,
   adminsSequence = 0;
+let sourceSequence = 0;
 let grantKey = newId();
 let adminPlans = [];
 let adminSequence = 0;
@@ -334,7 +335,8 @@ function selectedSource() {
   return sources.find((s) => s.id === $("#source-select").value);
 }
 async function selectSource() {
-  ++adminsSequence;
+  const sequence = ++sourceSequence;
+  const directorySequence = ++adminsSequence;
   adminsQuery = "";
   $("#tg-admin-search").value = "";
   const source = selectedSource();
@@ -355,7 +357,7 @@ async function selectSource() {
   if (!source) return;
   try {
     const data = await adminApi("/sources/" + source.id + "/experts");
-    if (selectedSource()?.id !== source.id) return;
+    if (sequence !== sourceSequence || selectedSource()?.id !== source.id) return;
     $("#trusted-experts").innerHTML =
       "<h3>信任作者</h3>" +
       data.items
@@ -366,10 +368,11 @@ async function selectSource() {
         )
         .join("");
   } catch (error) {
-    if (selectedSource()?.id !== source.id) return;
+    if (sequence !== sourceSequence || selectedSource()?.id !== source.id) return;
     $("#trusted-experts").textContent = error.message;
   }
-  if (selectedSource()?.id === source.id) await listAdmins(false);
+  if (sequence === sourceSequence && selectedSource()?.id === source.id &&
+      adminsSequence === directorySequence) await listAdmins(false);
 }
 const tgNames = {
   idle: "未开始授权",

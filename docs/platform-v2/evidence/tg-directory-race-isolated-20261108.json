@@ -1,0 +1,51 @@
+{
+  "schema": "telegram-directory-source-generation-isolated-v1",
+  "old_source_browser_exit": 1,
+  "old_deterministic_failed_cases": 8,
+  "candidate_focused_passed_cases": 8,
+  "candidate_full_browser_passed_cases": 57,
+  "candidate_focused_and_full_native_exits": 0,
+  "browser_errors": 0,
+  "source_changes": [
+    "source_selection_generation",
+    "do_not_start_old_automatic_directory_request_after_new_search"
+  ],
+  "administrator_backend_and_explicit_button_unchanged": true,
+  "production_writes": 0,
+  "provider_calls": 0,
+  "production_web_deployment_pending": true,
+  "real_post_fix_browser_acceptance_pending": true,
+  "environment_failure_retained": {
+    "e1678": {
+      "exit": 1,
+      "cases": 4
+    },
+    "e1680": {
+      "exit": 1,
+      "cases": 1
+    },
+    "cause": "network_none_reports_browser_offline",
+    "corrected": "dedicated_internal_network_without_external_access"
+  },
+  "focused_case_names": [
+    "Telegram目录迟到的来源加载不得覆盖成员搜索 桌面",
+    "Telegram目录迟到的同源旧请求不得覆盖新一轮来源 桌面",
+    "Telegram目录迟到的来源加载不得覆盖成员搜索 手机",
+    "Telegram目录迟到的同源旧请求不得覆盖新一轮来源 手机",
+    "Telegram目录迟到的跨源返回成功不覆盖当前作者 桌面",
+    "Telegram目录迟到的跨源返回失败不覆盖当前作者 桌面",
+    "Telegram目录迟到的跨源返回成功不覆盖当前作者 手机",
+    "Telegram目录迟到的跨源返回失败不覆盖当前作者 手机"
+  ],
+  "tested_frozen_files_sha256": {
+    "web/app/admin.js": "6c6dfc36e05165a6c8e0aa302f4b400f08d6c22930f5c8938d88c16d9c066b7d",
+    "tests/browser/verify.mjs": "be8bc0b39b1d28d5d7941847bd122d4ae40ba3934d7ce2cf06ec4496e6306b6b"
+  },
+  "raw_evidence_sha256": {
+    "e1683-before-results/results.json": "8b179955578552e09d5557ccb9bf701de0628e7dab6307f6464643d65be618eb",
+    "e1684-candidate-results/results.json": "fa526e0207927877644555649b9b309a9306836f5b592dfbe068e5482c6531d6",
+    "e1685-full-browser-results/results.json": "5959164bea3ab3df4aacf18dc5bcec4f269d05eba63c986d78688134ec3c2593",
+    "e1668-live-browser/results.json": "99ef8bcebfd2a81331d4c1d0406a625c6afd3da8b471ebdd090e4bd02ff8232f",
+    "e1676-live-browser/results.json": "807db3f79305ef10e13d7cdbcf42b61a35876114fcb7c2265d2622cdafc7383c"
+  }
+}
