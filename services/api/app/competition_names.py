@@ -6,6 +6,7 @@ from .team_matching import normalize_team_name
 _FOOTBALL_ALIASES = {
     '英超': '英格兰超级联赛',
     '英冠': '英格兰冠军联赛',
+    '西甲': '西班牙甲级联赛',
 }
 
 
