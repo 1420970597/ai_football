@@ -762,7 +762,7 @@
     "baseline_successful_latency_quantiles_exclude_timeout": true,
     "cpu_trial_applied": false
   },
-  "updated_at": "2026-11-08T10:23:46.517352+00:00",
+  "updated_at": "2026-11-08T10:31:05.733649+00:00",
   "resource_trial_aba": {
     "temporary_candidate_native_exit": 0,
     "temporary_candidate": [
@@ -1309,6 +1309,13 @@
       "official-reconcile": 0,
       "natural-audit": 0,
       "completion-audit": 0
+    },
+    "official_reconciliation": {
+      "read_only": true,
+      "official_posts": 44,
+      "normalized_posts": 41,
+      "matched": 41,
+      "missing": []
     }
   },
   "maintenance_crossing_window": {
@@ -1434,7 +1441,7 @@
     "original_failure_flags_preserved": true
   },
   "latest_bounded_provider_probe": {
-    "observed_at": "2026-11-08T10:20:36.952721+00:00",
+    "observed_at": "2026-11-08T10:30:41.235275+00:00",
     "production_job": false,
     "request_limit": 1,
     "model": "deepseek-v4.1-flash",
@@ -1442,6 +1449,460 @@
     "stream_field_omitted": true,
     "status": 404,
     "same_invalid_request": false,
-    "elapsed_ms": 195.411
-  }
+    "elapsed_ms": 311.899
+  },
+  "permanent_resource_tuning": {
+    "native_exit": 0,
+    "apply_evidence": [
+      {
+        "event": "resource_apply_verified",
+        "resource_document_commit": "46da48f01a2731c63d4f5c5ea64de5da56d22ee1",
+        "collector_cpu": 0.5,
+        "persistent_compose_cpu": 0.5,
+        "same_instance_process_image_environment_mount_network_memory_pids": true,
+        "other_project_instances_unchanged": true,
+        "database_or_order_writes": false,
+        "old_env_backup_preserved": true
+      },
+      {
+        "observed_at": "2026-11-08T10:25:17.063049+00:00",
+        "connected": true,
+        "authorized": true,
+        "state": "connected",
+        "degraded": false,
+        "source_count": 6,
+        "elapsed_ms": 499.247,
+        "account_or_credentials_retained": false
+      },
+      {
+        "observed_at": "2026-11-08T10:25:19.783173+00:00",
+        "connected": true,
+        "authorized": true,
+        "state": "connected",
+        "degraded": false,
+        "source_count": 6,
+        "elapsed_ms": 206.88,
+        "account_or_credentials_retained": false
+      },
+      {
+        "collector_cpus": "0.5",
+        "non_cpu_configuration_sha256": "0520f9dea71c0bc9e34dbffae73399fac923b3c294534a158fee470abe63f0fb",
+        "service_count": 4,
+        "service_names": [
+          "api-bridge",
+          "collector",
+          "executor",
+          "socket-guard"
+        ],
+        "raw_configuration_or_credentials_retained": false
+      },
+      {
+        "event": "resource_apply_finished",
+        "native_exit": 0
+      }
+    ],
+    "post_status_native_exit": 0,
+    "post_status": {
+      "observed_at": "2026-11-08T10:28:01.743880+00:00",
+      "read_only": true,
+      "duration_seconds": 120.284,
+      "requested_samples": 60,
+      "successful_samples": 60,
+      "connected_authorized_samples": 60,
+      "error_categories": {},
+      "local_thread_to_event_loop_status_roundtrip_ms": {
+        "median": 3.544,
+        "p95": 406.018,
+        "max": 2092.043
+      },
+      "cpu_quota": "50000 100000",
+      "cgroup_cpu_delta": {
+        "usage_usec": 10876157,
+        "user_usec": 10425661,
+        "system_usec": 450496,
+        "core_sched.force_idle_usec": 0,
+        "nr_periods": 1032,
+        "nr_throttled": 109,
+        "throttled_usec": 4999288,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      },
+      "host_busy_fraction": 0.1671,
+      "per_request_observations": [
+        {
+          "observed_at": "2026-11-08T10:26:01.659522+00:00",
+          "elapsed_ms": 70.822,
+          "cpu_usage_usec": 18072,
+          "throttled_usec": 49906
+        },
+        {
+          "observed_at": "2026-11-08T10:26:03.592505+00:00",
+          "elapsed_ms": 3.702,
+          "cpu_usage_usec": 3629,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:05.592437+00:00",
+          "elapsed_ms": 3.52,
+          "cpu_usage_usec": 3952,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:07.592706+00:00",
+          "elapsed_ms": 3.729,
+          "cpu_usage_usec": 3569,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:09.592187+00:00",
+          "elapsed_ms": 3.1,
+          "cpu_usage_usec": 2693,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:11.592958+00:00",
+          "elapsed_ms": 3.79,
+          "cpu_usage_usec": 3660,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:13.592879+00:00",
+          "elapsed_ms": 3.611,
+          "cpu_usage_usec": 3241,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:15.591978+00:00",
+          "elapsed_ms": 2.652,
+          "cpu_usage_usec": 2157,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:17.595076+00:00",
+          "elapsed_ms": 5.519,
+          "cpu_usage_usec": 2867,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:19.593270+00:00",
+          "elapsed_ms": 3.542,
+          "cpu_usage_usec": 2884,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:21.593344+00:00",
+          "elapsed_ms": 3.55,
+          "cpu_usage_usec": 2994,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:23.593123+00:00",
+          "elapsed_ms": 3.258,
+          "cpu_usage_usec": 2888,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:25.593409+00:00",
+          "elapsed_ms": 3.397,
+          "cpu_usage_usec": 3391,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:28.352872+00:00",
+          "elapsed_ms": 712.342,
+          "cpu_usage_usec": 360715,
+          "throttled_usec": 343428
+        },
+        {
+          "observed_at": "2026-11-08T10:26:29.643474+00:00",
+          "elapsed_ms": 2.898,
+          "cpu_usage_usec": 3512,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:31.644449+00:00",
+          "elapsed_ms": 3.654,
+          "cpu_usage_usec": 3684,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:33.644471+00:00",
+          "elapsed_ms": 3.605,
+          "cpu_usage_usec": 4300,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:35.644258+00:00",
+          "elapsed_ms": 3.332,
+          "cpu_usage_usec": 3211,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:37.644652+00:00",
+          "elapsed_ms": 3.634,
+          "cpu_usage_usec": 3832,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:39.647181+00:00",
+          "elapsed_ms": 5.996,
+          "cpu_usage_usec": 4313,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:41.645761+00:00",
+          "elapsed_ms": 4.52,
+          "cpu_usage_usec": 4479,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:43.645167+00:00",
+          "elapsed_ms": 3.808,
+          "cpu_usage_usec": 2740,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:45.850754+00:00",
+          "elapsed_ms": 208.85,
+          "cpu_usage_usec": 112049,
+          "throttled_usec": 90828
+        },
+        {
+          "observed_at": "2026-11-08T10:26:47.645660+00:00",
+          "elapsed_ms": 3.682,
+          "cpu_usage_usec": 3459,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:49.645616+00:00",
+          "elapsed_ms": 3.542,
+          "cpu_usage_usec": 3720,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:51.645169+00:00",
+          "elapsed_ms": 3.006,
+          "cpu_usage_usec": 2659,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:55.381789+00:00",
+          "elapsed_ms": 1739.482,
+          "cpu_usage_usec": 890708,
+          "throttled_usec": 818499
+        },
+        {
+          "observed_at": "2026-11-08T10:26:55.647894+00:00",
+          "elapsed_ms": 5.505,
+          "cpu_usage_usec": 6273,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:57.646303+00:00",
+          "elapsed_ms": 3.806,
+          "cpu_usage_usec": 2571,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:26:59.647070+00:00",
+          "elapsed_ms": 4.504,
+          "cpu_usage_usec": 3544,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:01.645811+00:00",
+          "elapsed_ms": 3.171,
+          "cpu_usage_usec": 3355,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:03.648462+00:00",
+          "elapsed_ms": 3.895,
+          "cpu_usage_usec": 4368,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:05.647477+00:00",
+          "elapsed_ms": 2.819,
+          "cpu_usage_usec": 3436,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:07.647720+00:00",
+          "elapsed_ms": 2.985,
+          "cpu_usage_usec": 3330,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:09.647414+00:00",
+          "elapsed_ms": 2.598,
+          "cpu_usage_usec": 3175,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:11.648052+00:00",
+          "elapsed_ms": 3.151,
+          "cpu_usage_usec": 2859,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:13.856774+00:00",
+          "elapsed_ms": 211.729,
+          "cpu_usage_usec": 115438,
+          "throttled_usec": 96399
+        },
+        {
+          "observed_at": "2026-11-08T10:27:15.647831+00:00",
+          "elapsed_ms": 2.704,
+          "cpu_usage_usec": 2965,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:17.648255+00:00",
+          "elapsed_ms": 2.938,
+          "cpu_usage_usec": 2456,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:19.648812+00:00",
+          "elapsed_ms": 3.416,
+          "cpu_usage_usec": 3066,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:21.650257+00:00",
+          "elapsed_ms": 3.69,
+          "cpu_usage_usec": 2678,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:24.053354+00:00",
+          "elapsed_ms": 406.018,
+          "cpu_usage_usec": 206621,
+          "throttled_usec": 188687
+        },
+        {
+          "observed_at": "2026-11-08T10:27:25.650291+00:00",
+          "elapsed_ms": 2.92,
+          "cpu_usage_usec": 2485,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:27.650652+00:00",
+          "elapsed_ms": 3.091,
+          "cpu_usage_usec": 3628,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:29.657707+00:00",
+          "elapsed_ms": 10.078,
+          "cpu_usage_usec": 11850,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:31.650624+00:00",
+          "elapsed_ms": 2.904,
+          "cpu_usage_usec": 3505,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:33.650946+00:00",
+          "elapsed_ms": 3.147,
+          "cpu_usage_usec": 2990,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:35.651458+00:00",
+          "elapsed_ms": 3.546,
+          "cpu_usage_usec": 3518,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:37.651228+00:00",
+          "elapsed_ms": 3.106,
+          "cpu_usage_usec": 2664,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:39.651736+00:00",
+          "elapsed_ms": 3.103,
+          "cpu_usage_usec": 2912,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:41.651970+00:00",
+          "elapsed_ms": 3.246,
+          "cpu_usage_usec": 3007,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:43.651968+00:00",
+          "elapsed_ms": 3.15,
+          "cpu_usage_usec": 2980,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:45.652316+00:00",
+          "elapsed_ms": 3.349,
+          "cpu_usage_usec": 2700,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:47.651826+00:00",
+          "elapsed_ms": 2.835,
+          "cpu_usage_usec": 2894,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:49.651988+00:00",
+          "elapsed_ms": 2.896,
+          "cpu_usage_usec": 2927,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:51.653033+00:00",
+          "elapsed_ms": 3.805,
+          "cpu_usage_usec": 3699,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:53.652304+00:00",
+          "elapsed_ms": 3.0,
+          "cpu_usage_usec": 2744,
+          "throttled_usec": 0
+        },
+        {
+          "observed_at": "2026-11-08T10:27:57.741494+00:00",
+          "elapsed_ms": 2092.043,
+          "cpu_usage_usec": 1042745,
+          "throttled_usec": 1059976
+        },
+        {
+          "observed_at": "2026-11-08T10:27:57.869001+00:00",
+          "elapsed_ms": 126.304,
+          "cpu_usage_usec": 74827,
+          "throttled_usec": 50934
+        },
+        {
+          "observed_at": "2026-11-08T10:27:59.748401+00:00",
+          "elapsed_ms": 4.82,
+          "cpu_usage_usec": 2688,
+          "throttled_usec": 0
+        }
+      ],
+      "successful_latency_quantiles_only": true,
+      "error_elapsed_is_not_service_completion": true,
+      "raw_status_account_or_token_retained": false,
+      "continuous_loop_lag_measurement": false,
+      "samples_can_miss_unsampled_stalls": true
+    },
+    "full_post_resource_1800s_audit_complete": false,
+    "no_shared_gateway_or_executor_change": true,
+    "first_monitor_launch_syntax_failure_preserved": true,
+    "first_tool_observer_native_exit": 2,
+    "first_tool_observer_controller_exit": 1,
+    "tool_observer_same_source_permission_retry": "e947r2",
+    "tool_observer_interval_not_claimed_complete": true
+  },
+  "user_reported_no_gateway_configuration_changes": true
 }
