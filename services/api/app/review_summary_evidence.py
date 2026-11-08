@@ -1,6 +1,7 @@
 """One consistent, attempt-scoped snapshot for the deterministic receipt."""
 from dataclasses import dataclass, field
 from datetime import datetime
+from uuid import UUID
 
 from .review_completion import DETAIL_LIMIT, pagination_issues, unfinished_searches_cte, explicit_text_pick
 from .review_intent_claims import explicit_visual_instruction
@@ -15,6 +16,10 @@ class SummaryEvidence:
     identified: list[dict]
     model_contents: list[str]
     pagination_issues: dict
+    job_id: UUID
+    attempt_id: UUID
+    message_id: UUID
+    has_market_tool_receipts: bool
     explicit_text_pick: bool = False
     accepted_signal_ids: list[str] = field(default_factory=list)
     explicit_visual_instruction: bool = False
@@ -38,8 +43,10 @@ async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int
         " attempt_traces AS MATERIALIZED ("
         " SELECT trace_kind,payload,sequence_no FROM v2_analysis_traces WHERE job_id=$1 "
         " AND payload->>'attempt_id'=($2::uuid)::text "
-        " AND trace_kind IN('mcp_record_expert_signals','hermes_result','hermes_partial_result')) "
+        " AND trace_kind IN('mcp_list_match_markets','mcp_record_expert_signals','hermes_result','hermes_partial_result')) "
         "SELECT (SELECT count(*) FROM unfinished) AS unfinished_count,"
+        " EXISTS(SELECT 1 FROM attempt_traces WHERE trace_kind IN "
+        " ('mcp_list_match_markets','mcp_record_expert_signals')) AS has_market_tool_receipts,"
         " (SELECT jsonb_agg(x) FROM (SELECT * FROM unfinished ORDER BY search_key LIMIT $5) x) AS unfinished,"
         " (SELECT count(*) FROM message_signals) AS total,"
         " (SELECT jsonb_agg(to_jsonb(x)-'created_at' ORDER BY x.created_at,x.signal_id) FROM ("
@@ -78,6 +85,8 @@ async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int
         job_id, attempt_id, message_id, limit, DETAIL_LIMIT,
     )
     return SummaryEvidence(
+        job_id=job_id, attempt_id=attempt_id, message_id=message_id,
+        has_market_tool_receipts=row['has_market_tool_receipts'],
         total=row['total'], signals=_timestamps(row['signals'] or []),
         rejected=row['rejected'] or [],
         identified=_timestamps(row['identified'] or []),

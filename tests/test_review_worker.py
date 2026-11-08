@@ -807,7 +807,7 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
                             yield CountedConnection(conn)
 
                 await worker._complete_review_once(CountedPool(), job, worker.time.monotonic())
-                self.assertEqual(6 if recovering else 5, len(queries))
+                self.assertEqual(6 if recovering else 4, len(queries))
                 self.assertEqual(1, sum('v2-summary-evidence' in query for query in queries))
                 self.assertFalse(any('unbound AS' in query for query in queries),
                                  'no model fixture mentions use pagination evidence from the same snapshot')

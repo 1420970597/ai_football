@@ -14,7 +14,8 @@ from .config import load_settings
 from .hermes_client import (HermesProviderUnavailable, ReplyMediaPending, delete_session,
                             resolve_and_prepare, resolve_review_settings, review_message)
 from .review_state import active_job, append_traces, trace
-from .review_summary import record_summary
+from .review_summary import SUMMARY_ITEM_LIMIT, record_summary
+from .review_summary_evidence import read_summary_evidence
 from .review_recovery import market_recovery
 from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
@@ -355,9 +356,14 @@ async def _complete_review_once(pool, job: dict, started: float, model_result: d
                 await append_traces(conn, job['id'], [('hermes_result',
                                     {**model_result, 'attempt_id': str(job['attempt_id'])})],
                                     trace_lock_held=True)
+            # Read after the trace lock: a tool receipt committed while we
+            # waited must participate in both the summary and recovery check.
+            evidence = await read_summary_evidence(
+                conn, current['id'], job['attempt_id'], current['message_id'], SUMMARY_ITEM_LIMIT)
             count = await record_summary(conn, current, job["attempt_id"], job.get('review_mode', 'real_time'),
-                                         trace_lock_held=True)
-            recovery = await market_recovery(conn, current, job['attempt_id'], job['attempts'])
+                                         trace_lock_held=True, evidence=evidence)
+            recovery = (await market_recovery(conn, current, job['attempt_id'], job['attempts'])
+                        if evidence.has_market_tool_receipts else None)
             final_state = 'retry' if recovery else "succeeded" if count else "unresolved"
             if recovery:
                 await append_traces(conn, job['id'], [('market_recovery_scheduled',

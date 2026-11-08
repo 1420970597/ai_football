@@ -8,7 +8,7 @@ from .review_state import append_traces, trace
 from .handicap_lines import line_terms
 from .review_completion import (completion_issues, mentioned_fixtures, named_identity_claims, tool_recovery_pending,
                                 tool_unavailability_claim, tool_unavailability_issues)
-from .review_summary_evidence import read_summary_evidence
+from .review_summary_evidence import SummaryEvidence, read_summary_evidence
 from .review_intent_retry import intent_matches_quote
 from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
@@ -115,9 +115,15 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
             'omitted_count': omitted, 'tool_rejection_counts': dict(reasons), 'content': chr(10).join(lines)}
 
 
-async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_held: bool = False) -> int:
+async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_held: bool = False,
+                         evidence: SummaryEvidence | None = None) -> int:
     """Caller holds the active job lock in the same completion transaction."""
-    evidence = await read_summary_evidence(conn, job['id'], attempt_id, job['message_id'], SUMMARY_ITEM_LIMIT)
+    if evidence is None:
+        evidence = await read_summary_evidence(conn, job['id'], attempt_id, job['message_id'], SUMMARY_ITEM_LIMIT)
+    elif (not trace_lock_held or not isinstance(evidence, SummaryEvidence)
+          or (evidence.job_id, evidence.attempt_id, evidence.message_id)
+          != (job['id'], attempt_id, job['message_id'])):
+        raise ValueError('prefetched summary evidence requires the same locked review attempt')
     mentioned = set().union(*(mentioned_fixtures(content) for content in evidence.model_contents))
     named_content = named_identity_claims(evidence.model_contents)
     require_intent = (review_mode == 'real_time' and evidence.explicit_text_pick
