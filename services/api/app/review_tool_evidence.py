@@ -48,7 +48,7 @@ MODEL_QUOTE_FIELDS = QUOTE_FIELDS - {
     'price', 'source_updated_at', 'received_at', 'source_time_quality', 'is_main',
 }
 ACCEPTED_FIELDS = frozenset({'index', 'signal_id', 'duplicate', 'fixture_id', 'market_name', 'period', 'line', 'selection', 'price', 'line_basis', 'selection_line', 'team_side'})
-REJECTED_FIELDS = frozenset({'index', 'reason', 'context_changed_fields'})
+REJECTED_FIELDS = frozenset({'index', 'reason', 'context_changed_fields', 'intent_context'})
 log = logging.getLogger(__name__)
 
 
@@ -58,6 +58,21 @@ def _budget_error():
 
 def _project(value, fields):
     return {key: value[key] for key in fields if key in value}
+
+
+def _rejection(item):
+    value = _project(item, REJECTED_FIELDS)
+    if 'intent_context' in value:
+        context = value['intent_context']
+        value['intent_context'] = _project(context, {
+            'fixture_id', 'market_id', 'market_kind', 'period', 'selection',
+            'source_intent', 'selected_selection_line',
+        })
+        if 'source_intent' in value['intent_context']:
+            value['intent_context']['source_intent'] = _project(context['source_intent'], {
+                'selection_line', 'selection', 'lines',
+            })
+    return value
 
 
 def _unsupported_markets(quotes):
@@ -124,7 +139,7 @@ def snapshot_result(kind, result, *, compact_markets=False):
             _budget_error()
         value = {'expert': result['expert'],
                  'accepted': [_project(item, ACCEPTED_FIELDS) for item in result['accepted']],
-                 'rejected': [_project(item, REJECTED_FIELDS) for item in result['rejected']]}
+                 'rejected': [_rejection(item) for item in result['rejected']]}
     else:
         raise ValueError('unknown review tool')
     encoded = jsonable_encoder(value, custom_encoder={Decimal: str})

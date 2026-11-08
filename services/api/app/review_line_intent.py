@@ -33,10 +33,8 @@ def _line(match, *, negative=False):
     return first if first % Decimal('.25') == 0 else None
 
 
-def line_intent_rejection(evidence_text, quote):
-    kind = quote.get('market_kind')
-    if kind not in {'handicap', 'total', 'team_total'} or quote.get('line') is None:
-        return None
+def evidence_line_intent(evidence_text, kind):
+    """Canonical explicit intent only; ambiguous evidence supplies no diagnosis."""
     text = unicodedata.normalize('NFKC', evidence_text or '').replace('−', '-')
     if kind == 'handicap':
         lines = {_line(m, negative=(m['sign'] or m['chinese']) in {'-', '让', '讓'})
@@ -44,8 +42,9 @@ def line_intent_rejection(evidence_text, quote):
                  if not _PRICE_PREFIX.search(text[max(0,m.start()-12):m.start()])} - {None}
         if len(lines) != 1:
             return None
-        selected_line = line_terms(quote)['selection_line']
-        return ('source_line_intent_conflict' if Decimal(selected_line) != next(iter(lines)) else None)
+        return {'selection_line': str(next(iter(lines)))}
+    if kind not in {'total', 'team_total'}:
+        return None
     intents = set()
     for match in _TOTAL.finditer(text):
         direction = 'over' if match['direction'] == '大' else 'under'
@@ -56,8 +55,32 @@ def line_intent_rejection(evidence_text, quote):
     directions = {direction for direction, _ in intents}
     if len(directions) != 1:
         return None
-    direction = next(iter(directions))
-    if quote.get('selection') != direction:
+    return {'selection': next(iter(directions)), 'lines': [str(line) for _, line in sorted(intents)]}
+
+
+def line_intent_rejection(evidence_text, quote):
+    if quote.get('line') is None:
+        return None
+    intent = evidence_line_intent(evidence_text, quote.get('market_kind'))
+    if not intent:
+        return None
+    if 'selection_line' in intent:
+        return ('source_line_intent_conflict' if Decimal(line_terms(quote)['selection_line'])
+                != Decimal(intent['selection_line']) else None)
+    if quote.get('selection') != intent['selection']:
         return 'source_selection_intent_conflict'
     return ('source_line_intent_conflict'
-            if (direction, Decimal(str(quote['line']))) not in intents else None)
+            if Decimal(str(quote['line'])) not in {Decimal(line) for line in intent['lines']} else None)
+
+
+def line_intent_context(evidence_text, quote):
+    # Team-total native team identity requires its own proof; do not suggest a
+    # correction across team scopes merely because the numeric lines agree.
+    if quote.get('market_kind') not in {'handicap', 'total'}:
+        return None
+    intent = evidence_line_intent(evidence_text, quote['market_kind'])
+    if not intent or len(intent.get('lines', [])) > 32:
+        return None
+    return {key: str(quote[key]) for key in ('fixture_id', 'market_id', 'market_kind', 'period')} | {
+        'selection': quote['selection'] if quote['market_kind'] == 'handicap' else intent['selection'],
+        'source_intent': intent, 'selected_selection_line': line_terms(quote)['selection_line']}

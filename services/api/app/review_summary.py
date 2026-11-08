@@ -9,6 +9,7 @@ from .handicap_lines import line_terms
 from .review_completion import (completion_issues, mentioned_fixtures, named_identity_claims, tool_recovery_pending,
                                 tool_unavailability_claim, tool_unavailability_issues)
 from .review_summary_evidence import read_summary_evidence
+from .review_intent_retry import intent_matches_quote
 
 SUMMARY_ITEM_LIMIT = 100
 PHASES = {'scheduled': '未开赛', 'live': '滚球', 'finished': '已完场', 'cancelled': '取消或延期'}
@@ -24,6 +25,8 @@ REASONS = {
     'message_timestamp_in_future': '消息发布时间晚于当前时间',
     'source_period_intent_conflict': '原文推荐期间与盘口期间冲突，不能改用其他期间',
     'source_period_intent_ambiguous': '原文期间简写存在歧义，不能按可售盘口推断期间',
+    'source_line_intent_conflict': '原证据盘口线与所提交报价编号不一致',
+    'source_selection_intent_conflict': '原证据方向与所提交报价编号不一致',
 }
 
 
@@ -80,6 +83,9 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
     if not items and not reasons and not identified_items:
         lines.append('本次工具尚无已确认的盘口录入；模型原始说明仅供核查。')
     if incomplete:
+        if incomplete.get('line_intent_retry_count'):
+            lines.append('审核核验未完成：错盘口编号被拦截后，已读精确选项尚未纠正确认；'
+                         '已达到本次续审上限，其余保留未解决。')
         if incomplete.get('text_intent_unverified'):
             lines.append('审核核验未完成：原文有明确的新增追大小指令，但当前工具尚未确认比赛身份；'
                          '不能仅凭模型称无新增推荐就认定审核完成，保留未解决。')
@@ -104,14 +110,19 @@ async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_
     named_content = named_identity_claims(evidence.model_contents)
     require_intent = (review_mode == 'real_time' and evidence.explicit_text_pick
                       and not evidence.total and not evidence.identified)
+    intent_rejected = any(entry.get('intent_context') for entry in evidence.rejected)
     incomplete = (await completion_issues(conn, job['id'], attempt_id, mentioned, named_content, require_intent)
-                  if mentioned or named_content or require_intent else evidence.pagination_issues)
+                  if mentioned or named_content or require_intent or intent_rejected else evidence.pagination_issues)
     if review_mode == 'real_time' and evidence.model_contents:
         claimed = tool_unavailability_claim(evidence.model_contents[-1])
         if claimed or (any(tool_unavailability_claim(content) for content in evidence.model_contents[:-1])
                 and await tool_recovery_pending(conn, job['id'], attempt_id)):
             incomplete = {**tool_unavailability_issues(), **incomplete}
-    receipt = make_summary(evidence.signals, accepted_total=evidence.total, rejected=evidence.rejected, review_mode=review_mode,
+    accepted_ids = set(evidence.accepted_signal_ids)
+    rejected = [entry for entry in evidence.rejected if not any(
+        str(signal['signal_id']) in accepted_ids and intent_matches_quote(entry.get('intent_context'), signal)
+        for signal in evidence.signals)]
+    receipt = make_summary(evidence.signals, accepted_total=evidence.total, rejected=rejected, review_mode=review_mode,
                            identified=evidence.identified, identified_total=evidence.identified[0]['total'] if evidence.identified else 0,
                            incomplete=incomplete)
     payload = {'attempt_id': str(attempt_id), **receipt}

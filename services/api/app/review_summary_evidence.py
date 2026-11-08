@@ -1,5 +1,5 @@
 """One consistent, attempt-scoped snapshot for the deterministic receipt."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from .review_completion import DETAIL_LIMIT, pagination_issues, unfinished_searches_cte, explicit_text_pick
@@ -15,6 +15,7 @@ class SummaryEvidence:
     model_contents: list[str]
     pagination_issues: dict
     explicit_text_pick: bool = False
+    accepted_signal_ids: list[str] = field(default_factory=list)
 
 
 def _timestamps(rows: list[dict]) -> list[dict]:
@@ -64,6 +65,9 @@ async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int
         " ORDER BY f.kickoff_at,b.fixture_id LIMIT $4) x) AS identified,"
         " (SELECT jsonb_agg(payload->>'content' ORDER BY sequence_no) FROM attempt_traces "
         " WHERE trace_kind IN('hermes_result','hermes_partial_result')) AS model_contents,"
+        " (SELECT jsonb_agg(a.value->>'signal_id') FROM attempt_traces t CROSS JOIN LATERAL "
+        " jsonb_array_elements(t.payload->'accepted') a(value) WHERE t.trace_kind='mcp_record_expert_signals' "
+        " AND t.payload->>'status'='succeeded') AS accepted_signal_ids,"
         " (SELECT CASE WHEN length(raw_text)<=100 THEN raw_text ELSE '' END "
         " FROM v2_expert_messages WHERE id=$3) AS source_text",
         job_id, attempt_id, message_id, limit, DETAIL_LIMIT,
@@ -75,4 +79,5 @@ async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int
         model_contents=[content or '' for content in (row['model_contents'] or [])],
         pagination_issues=pagination_issues(row['unfinished_count'], row['unfinished']),
         explicit_text_pick=explicit_text_pick(row['source_text'] or ''),
+        accepted_signal_ids=row['accepted_signal_ids'] or [],
     )

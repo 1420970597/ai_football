@@ -16,7 +16,7 @@ from .. import database
 from ..review_policy import REALTIME_WINDOW_SECONDS
 from ..competition_names import normalize_competition_name
 from ..handicap_lines import line_terms
-from ..review_line_intent import line_intent_rejection
+from ..review_line_intent import line_intent_rejection, line_intent_context
 from ..review_state import authorize, fresh_quote, quote_context, quote_context_changed_fields
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, MAX_MARKETS
 from ..runtime_settings import quote_max_age_from_rows, runtime_quote_max_age
@@ -510,6 +510,10 @@ async def _record_current_signals(conn, body, request, observations):
             reason = "quote_inactive_unknown_or_stale"
         if reason:
             rejection = {"index": index, "reason": reason}
+            if reason in {'source_line_intent_conflict', 'source_selection_intent_conflict'}:
+                diagnostic = line_intent_context(pick.evidence_text, quote)
+                if diagnostic:
+                    rejection['intent_context'] = diagnostic
             if reason == 'quote_or_score_context_changed':
                 rejection['context_changed_fields'] = quote_context_changed_fields(
                     quote['read_context'], quote_context(quote, quote))
