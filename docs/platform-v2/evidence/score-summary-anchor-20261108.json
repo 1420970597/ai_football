@@ -1,6 +1,6 @@
 {
   "date": "2026-11-08",
-  "scope": "web candidate only; pending production publication",
+  "scope": "web published and production revalidated; backend latency acceptance separate",
   "app_js_sha256": "25b4f3454a0bcf969c737c45ddbd8640b475237b23ca62463c41ce2dd6b4e715",
   "real_read_only_browser": {
     "before_native_exit": 1,
@@ -74,5 +74,191 @@
     }
   ],
   "backend_full_suite_claim": false,
-  "production_writes": 0
+  "production_writes": 0,
+  "production_release": {
+    "completed_at_utc": "2026-11-08T17:31:17Z",
+    "source_commit": "b187600582795593d50d64582210e5cbb05587e2",
+    "web_image": "ai-football-web:2.0.0-dev-e1295-b187600",
+    "web_image_id": "sha256:3c2f6244cc2b5e3dd963a140d9ccb91554b8cd4adfd7f67f3d7c9ba0494f0aef",
+    "other_local_containers_preserved": 6,
+    "remote_containers_preserved": 4,
+    "anchor": {
+      "results": [
+        {
+          "width": 1440,
+          "passed": true,
+          "rows": 50,
+          "facts_ms": 1801,
+          "summaries_settled_ms": 3300,
+          "summary_responses": [
+            {
+              "status": 200
+            }
+          ],
+          "pending_rows": 0,
+          "focus_preserved": true,
+          "visible_fixture_anchor_preserved": true,
+          "scroll_before": 350,
+          "scroll_after": 389,
+          "anchor_top_before": 27,
+          "anchor_top_after": 27
+        },
+        {
+          "width": 390,
+          "passed": true,
+          "rows": 50,
+          "facts_ms": 1405,
+          "summaries_settled_ms": 2802,
+          "summary_responses": [
+            {
+              "status": 200
+            }
+          ],
+          "pending_rows": 0,
+          "focus_preserved": true,
+          "visible_fixture_anchor_preserved": true,
+          "scroll_before": 350,
+          "scroll_after": 414,
+          "anchor_top_before": 0,
+          "anchor_top_after": 0
+        }
+      ],
+      "response_injection": false,
+      "production_writes": 0
+    },
+    "phase_and_original_image_cases": [
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "finished",
+        "status": "passed",
+        "click_to_rows_ms": 1885,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "live",
+        "status": "passed",
+        "click_to_rows_ms": 1201,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "scheduled",
+        "status": "passed",
+        "click_to_rows_ms": 1201,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "cancelled",
+        "status": "passed",
+        "click_to_rows_ms": 1195,
+        "markets_included": false,
+        "server_items": 0,
+        "dom_rows": 0
+      },
+      {
+        "width": 1440,
+        "case": "phase_click",
+        "phase": "all",
+        "status": "passed",
+        "click_to_rows_ms": 1106,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 1440,
+        "case": "original_image",
+        "status": "passed",
+        "authorized": true,
+        "original_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+        "mouse_and_keyboard": true,
+        "scroll": true,
+        "close_reopen": true,
+        "production_writes": 0
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "finished",
+        "status": "passed",
+        "click_to_rows_ms": 1609,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "live",
+        "status": "passed",
+        "click_to_rows_ms": 992,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "scheduled",
+        "status": "passed",
+        "click_to_rows_ms": 1002,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "cancelled",
+        "status": "passed",
+        "click_to_rows_ms": 792,
+        "markets_included": false,
+        "server_items": 0,
+        "dom_rows": 0
+      },
+      {
+        "width": 390,
+        "case": "phase_click",
+        "phase": "all",
+        "status": "passed",
+        "click_to_rows_ms": 896,
+        "markets_included": false,
+        "server_items": 50,
+        "dom_rows": 50
+      },
+      {
+        "width": 390,
+        "case": "original_image",
+        "status": "passed",
+        "authorized": true,
+        "original_sha256": "ca05336e352366a1e8eceed477a5037204c7fc51bf3663c44785543d31b75b61",
+        "mouse_and_keyboard": true,
+        "scroll": true,
+        "close_reopen": true,
+        "production_writes": 0
+      }
+    ],
+    "screenshots_visually_reviewed": [
+      {
+        "width": 1440,
+        "sha256": "bde784c433413b35f8f90d21826845b391e24f5652ef69d382536428fa200ca2"
+      },
+      {
+        "width": 390,
+        "sha256": "bbe5d6d5ac751078e332834fde08e10c5619f7b64c54e7dfee6bba6dd23ea3fa"
+      }
+    ]
+  }
 }
