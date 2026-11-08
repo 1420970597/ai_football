@@ -365,7 +365,9 @@ async def dispatch(request: Request):
                 await audit(conn, policy['user_id'], 'system', 'automatic_betting_suspended', 'betting_settings', str(policy['user_id']))
         if orders.live_enabled(settings):
             pairs = await conn.fetch("SELECT b.user_id,s.id AS signal_id FROM v2_user_bet_settings b JOIN v2_expert_signals s ON s.expert_id=ANY(b.allowed_experts) "
+                "JOIN v2_expert_messages m ON m.id=s.message_id "
                 "WHERE b.auto_enabled AND NOT b.emergency_stopped AND s.created_at>now()-interval '5 minutes' AND s.outcome='pending' "
+                "AND m.posted_at>=now()-interval '5 minutes' AND m.posted_at<=now()+interval '5 seconds' "
                 "AND NOT EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.user_id=b.user_id AND o.signal_id=s.id AND o.account_id IS NOT NULL) ORDER BY s.created_at LIMIT 30")
             for pair in pairs:
                 try:

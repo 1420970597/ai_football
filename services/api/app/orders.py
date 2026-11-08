@@ -43,7 +43,7 @@ async def invalid_policies(conn):
 
 async def eligible_signal(conn, signal_id, max_age: int | None = None):
     row = await conn.fetchrow(
-        "SELECT s.*,m.source_id,m.platform_message_id,m.revision AS message_revision,m.deleted_at,m.media_state,"
+        "SELECT s.*,m.source_id,m.platform_message_id,m.revision AS message_revision,m.deleted_at,m.media_state,m.posted_at AS message_posted_at,"
         "e.enabled AS expert_enabled,src.enabled AS source_enabled,se.enabled AS trusted,f.phase AS current_phase,"
         "f.sport,f.home_score,f.away_score,q.id AS quote_id,q.price AS current_price,q.source_updated_at,"
         "q.status,q.play_id,q.market_instance_id,q.selection_id,q.market_kind AS current_kind,q.score_basis AS current_basis "
@@ -62,7 +62,9 @@ async def eligible_signal(conn, signal_id, max_age: int | None = None):
             or row["deleted_at"] or row["withdrawn_at"] or row["media_state"] != "ready" or not all((row["expert_enabled"], row["source_enabled"], row["trusted"]))
             or any(not row[key] for key in ("play_id", "market_instance_id", "selection_id"))
             or row["current_kind"] not in {"winner", "handicap", "total"}
-            or row["created_at"] < now - timedelta(minutes=5)):
+            or row["created_at"] < now - timedelta(minutes=5)
+            or row["message_posted_at"] < now - timedelta(minutes=5)
+            or row["message_posted_at"] > now + timedelta(seconds=5)):
         raise HTTPException(409, "推荐、来源或滚球盘口不满足实盘条件")
     latest = await conn.fetchval("SELECT max(revision) FROM v2_expert_messages WHERE source_id=$1 AND platform_message_id=$2",
                                  row["source_id"], row["platform_message_id"])
