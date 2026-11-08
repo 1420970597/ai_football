@@ -1,0 +1,170 @@
+{
+  "window_start": "2026-11-08T19:04:06.740911+00:00",
+  "window_last_database_sample": "2026-11-08T19:34:07.761263+00:00",
+  "independent_finished": {
+    "event": "finished",
+    "samples": 55,
+    "elapsed_seconds": 1802.8,
+    "health_all_200": false,
+    "telegram_all_healthy": false,
+    "baseline_live_event_counters": {
+      "received": 105689,
+      "staged": 5732,
+      "deferred": 0,
+      "unmapped_source": 99957
+    },
+    "final_live_event_counters": {
+      "received": 107260,
+      "staged": 5752,
+      "deferred": 0,
+      "unmapped_source": 101508
+    },
+    "live_event_delta": {
+      "received": 1571,
+      "staged": 20,
+      "deferred": 0,
+      "unmapped_source": 1551
+    }
+  },
+  "database_samples": 55,
+  "database_sample_errors": [],
+  "health_non_200_samples": [
+    {
+      "observed_at": "2026-11-08T19:30:17.759862+00:00",
+      "health": {
+        "healthz": null,
+        "readyz": null
+      }
+    }
+  ],
+  "telegram_degraded_samples": [],
+  "telegram_final": {
+    "http_status": 200,
+    "connected": true,
+    "authorized": true,
+    "state": "connected",
+    "degraded": false,
+    "source_count": 6,
+    "source_states": {
+      "caught_up": 1,
+      "catching_up": 5
+    },
+    "source_errors": {}
+  },
+  "source_leases_final": {
+    "sources": 6,
+    "active": 6,
+    "owners": 1
+  },
+  "messages_final": {
+    "created_versions": 149,
+    "published_posts": 0,
+    "older_posts_revised": 149,
+    "published_ready": 0,
+    "published_pending": 0,
+    "published_unsupported": 0
+  },
+  "reviews_final": {
+    "eligible": 0,
+    "missing_jobs": 0,
+    "archived_with_suppression_receipt": 0,
+    "in_progress": 0,
+    "with_receipt": 0,
+    "missing_receipt": 0
+  },
+  "event_latency_final": {
+    "event_versions": 0,
+    "avg_ms": null,
+    "p95_ms": null,
+    "within_3s": 0,
+    "older_backlog_versions_received": 149
+  },
+  "trace_counts_final": [],
+  "market_samples": 61,
+  "market_degraded_samples": [],
+  "market_poll_fresh_samples": 0,
+  "last_leyu_poll_snapshot": {
+    "state": "partial",
+    "failure_group": "freshness",
+    "last_error_code": "",
+    "last_operation": "",
+    "last_http_status": null,
+    "poll_in_progress": true,
+    "last_poll_at": "2026-11-08T19:33:33.978330+00:00",
+    "last_poll_elapsed_ms": 29762.8,
+    "last_complete_at": null,
+    "freshness": "stale",
+    "fresh_active_quotes": 0,
+    "known_time_active_quotes": 23033,
+    "quote_max_age_seconds": 15,
+    "newest_quote_age_seconds": 24.6,
+    "oldest_quote_age_seconds": 346254.6,
+    "failed_batches": 0
+  },
+  "includes_successful_api_handoff": false,
+  "whole_database_freshness_claim": false,
+  "official_source_scans": [
+    {
+      "source_alias": "source_1",
+      "trusted_sender_count": 0,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_2",
+      "trusted_sender_count": 1,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_3",
+      "trusted_sender_count": 2,
+      "scanned": 2,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_4",
+      "trusted_sender_count": 0,
+      "scanned": 10,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_5",
+      "trusted_sender_count": 3,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    },
+    {
+      "source_alias": "source_6",
+      "trusted_sender_count": 1,
+      "scanned": 1,
+      "complete": true,
+      "eligible_posts": 0
+    }
+  ],
+  "official_posts": 0,
+  "normalized_posts": 0,
+  "missing_posts": 0,
+  "current_natural_positive_sample": false,
+  "read_only": true,
+  "production_writes": 0,
+  "three_second_target_passed": false,
+  "handoff_intersection": {
+    "completed_at": "2026-11-08T19:32:47Z",
+    "includes_service_restarts": true,
+    "dedicated_post_release_window": false
+  },
+  "evidence_sha256": {
+    "e1430-independent-final.jsonl": "d443481017a96835378bc6a4fb5aa5ee6100566a66c169d916119ca2da44615f",
+    "e1430-market-final.jsonl": "d8fbe8e9c94eca51683a08721ecc6e303d65225e183917b20a37d5f5c6b178cb",
+    "e1430-official-scan.json": "4709c22f1d21c80204466ee2b55d8a39be8f32fc0c00c7812a4c15dc5f809447",
+    "e1430-official-reconcile.json": "415457a6475a4584d6f35a5fbe4eaaeddcf306339112e0d536f8e6ab2f561275",
+    "e1430-natural-audit.json": "6dbbd609f2d58862864a22c93774bf719524a919e79ede369f276b13eed9def8",
+    "e1430-semantic-compact.json": "6f6d79fd9aac2b086ca3cb37664947031c6f99095c298447786719c20500367f"
+  }
+}
