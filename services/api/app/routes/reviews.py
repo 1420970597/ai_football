@@ -261,6 +261,14 @@ async def search_matches(body: SearchInput, request: Request):
                     intent = ResolveInput(review_id=body.review_id, attempt_id=body.attempt_id,
                         search_key=search_key, team_a=body.team_a, team_b=body.team_b)
                     result['resolution'] = await resolve_candidates(conn, intent, candidates)
+            if (not has_more and body.team_query.strip()
+                    and not result.get('resolution', {}).get('resolved')):
+                result['next_search_guidance'] = {
+                    'condition': 'source_pair_not_found_and_league_readable',
+                    'action': 'search_complete_league_candidates', 'team_query': '',
+                    'required_scope': ['competition_query', 'sport', 'from_utc', 'to_utc'],
+                    'max_window_days': 7, 'does_not_confirm_identity': True,
+                }
             return await tool_success(conn, body, result, {"scope": scope, "search_key": search_key, "after": position, "returned": len(page), "total": total, "complete": not has_more})
 
 

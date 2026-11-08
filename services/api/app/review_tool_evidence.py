@@ -79,6 +79,11 @@ def snapshot_result(kind, result, *, compact_markets=False):
         value['items'] = [_project(item, SEARCH_FIXTURE_FIELDS) for item in result['items']]
         if 'resolution' in result:
             value['resolution'] = snapshot_result('mcp_resolve_match', result['resolution'])
+        if 'next_search_guidance' in result:
+            value['next_search_guidance'] = _project(result['next_search_guidance'], {
+                'condition', 'action', 'team_query', 'required_scope',
+                'max_window_days', 'does_not_confirm_identity',
+            })
     elif kind == 'mcp_resolve_match':
         value = _project(result, {'resolved', 'reason', 'candidate_count'})
         if 'fixture' in result:

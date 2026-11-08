@@ -12,6 +12,23 @@ from app import hermes_client
 
 
 class HermesClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_initial_system_prompt_requires_bounded_league_search_before_unresolved(self):
+        requests = []
+        async def handler(request):
+            requests.append(json.loads(request.content))
+            return httpx.Response(200, json={'choices': [
+                {'finish_reason': 'stop', 'message': {'content': '未解决'}}]})
+        settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1',
+            hermes_api_key='isolated-key', hermes_model='isolated-model')
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with patch.object(hermes_client, '_content_parts', AsyncMock(return_value=[
+                    {'type': 'text', 'text': 'isolated image review'}])):
+                await hermes_client.review_message(settings, {}, uuid.uuid4(), uuid.uuid4(), client=client)
+        system = '\n'.join(m['content'] for m in requests[0]['messages'] if m['role'] == 'system')
+        for required in ('必须', '联赛', 'team_query=""', 'competition_query', '7天', '原文双方',
+                         '比分两侧', '联赛标签', '黄框数字'):
+            self.assertIn(required, system)
+
     async def image_summary(self, message, *, prepared=False):
         parts = [{'type': 'text', 'text': 'isolated input'},
                  {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,isolated'}}]
