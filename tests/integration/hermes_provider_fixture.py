@@ -123,6 +123,10 @@ def _calls(state, tools, calls):
     tool_calls = []
     for index, call in enumerate(calls):
         suffix, args, unknown = call[:3]
+        if not unknown and suffix=='list_match_markets':
+            # This fixture's declared source is a full-time total. Keep that
+            # pre-inventory fact separate from any inventory filter.
+            args={**args,'source_periods':['full_time']}
         server = calls[index][3] if len(calls[index]) > 3 else None
         name = suffix if unknown else next((name for name in tools if name.endswith(suffix)
                                             and (server is None or name.startswith('mcp__' + server + '__'))), None)

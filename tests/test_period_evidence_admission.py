@@ -67,7 +67,8 @@ class PeriodAdmissionApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def original_path(self, text='破蛋'):
         fixture=await self.prepare(text=text)
-        self.assertEqual([],await self.read(fixture,market_kind='total',period='full_time',line='0.5'))
+        self.assertEqual([],await self.read(fixture,market_kind='total',period='full_time',line='0.5',
+                                         source_periods=['full_time','first_half']))
         quotes=await self.read(fixture)
         half=next(q for q in quotes if q['period']=='first_half')
         return fixture,quotes,half

@@ -7,6 +7,7 @@ import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 import httpx
@@ -97,6 +98,7 @@ class MarketInput(AttemptInput):
     line: Decimal | None = Field(default=None, max_digits=8, decimal_places=3)
     selection: str | None = Field(default=None, max_length=32, pattern=r'^[a-z][a-z0-9_]{0,31}$')
     market_query: str | None = Field(default=None, max_length=120)
+    source_periods: list[Literal['full_time','first_half','second_half']] | None = Field(default=None,max_length=3)
 
     @field_validator('market_kind', mode='before')
     @classmethod
@@ -308,7 +310,9 @@ async def _market_snapshot(conn, body, settings, filters):
     review_parameter, attempt_parameter, limit_parameter = range(len(values)-2, len(values)+1)
     values.append({'algorithm':'premarket-source-intent-v1',
                    **{key:str(value)if isinstance(value,Decimal)else value
-                      for key,value in filters.items()}})
+                      for key,value in filters.items()},
+                   **({'source_periods':body.source_periods or []}
+                      if 'source_periods' in body.model_fields_set else {})})
     # One statement observes the current binding, fixture and complete quote
     # inventory together. Composite rows preserve native Decimal/UTC values;
     # the anchor also preserves explicit errors when no active fixture exists.
@@ -545,7 +549,7 @@ async def _record_current_signals(conn, body, request, observations):
         elif not fresh_quote(quote, max_quote_age) and not confirmation:
             reason = "quote_inactive_unknown_or_stale"
         if reason:
-            if evidence_period_reason and reason in {
+            if (evidence_period_reason or period_rejection=='source_period_unverified_before_market_read') and reason in {
                     'source_period_intent_ambiguous','source_period_unverified_before_market_read'}:
                 # Keep the first read declaration intact. This separate denial
                 # survives rewording and retries of this exact source job/pick.

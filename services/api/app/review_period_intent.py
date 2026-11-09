@@ -164,8 +164,13 @@ def premarket_period_rejection(text, quote, declaration, *, has_visual_source=Fa
     """
     if (has_visual_source and quote.get('market_kind') in {'total','team_total'}
             and isinstance(declaration,dict)
-            and declaration.get('algorithm') == 'premarket-source-intent-v1'
-            and declaration.get('period') is None):
+            and declaration.get('algorithm') == 'premarket-source-intent-v1'):
+        # The first read filter is a legacy single-period declaration. New
+        # callers separate source periods from inventory filters, including an
+        # explicit empty list for unknown and multiple periods for image picks.
+        periods = declaration.get('source_periods', [declaration.get('period')])
+        if isinstance(periods,list) and quote.get('period') in periods:
+            return None
         for raw_period, selection, line in _text_totals(text):
             if line != quote.get('line') or selection != quote.get('selection'):
                 continue

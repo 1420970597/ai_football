@@ -186,7 +186,7 @@ class MCPDescriptionBudgetTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_explicit_intent_is_opt_in_and_preserves_nullable_argument_types(self):
         primary = {t['name']: t for t in await self.tools()}
-        fields = {'read_markets', 'market_kind', 'period', 'market_query'}
+        fields = {'read_markets', 'market_kind', 'period', 'market_query','source_periods'}
         for profile in ('market-intent-v1', 'parallel-intent-v1'):
             actual = {t['name']: t for t in await self.tools({'X-Football-Tool-Profile': profile})}
             self.assertEqual(set(primary), set(actual))

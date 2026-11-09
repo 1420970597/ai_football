@@ -6,7 +6,7 @@ import json
 import os
 from contextvars import ContextVar
 from decimal import Decimal, InvalidOperation
-from typing import Annotated
+from typing import Annotated, Literal
 
 import httpx
 from mcp.server import MCPServer
@@ -87,6 +87,8 @@ def compact_tool_result(result):
 compact_descriptions: ContextVar[bool] = ContextVar('compact_tool_descriptions', default=False)
 compact_market_tables: ContextVar[bool] = ContextVar('compact_market_tables', default=False)
 explicit_market_intent: ContextVar[bool] = ContextVar('explicit_market_intent', default=False)
+SourcePeriods = Annotated[list[Literal['full_time','first_half','second_half']] | None,
+    Field(max_length=3,description='首次读盘前从原文/所选图片明确的推荐期间清单；未知填[]，单项如[first_half]，多期间图片须在首次一次列全。读盘period只是筛选，不证明来源；读盘后不得扩充清单或按库存补期间。')]
 INTENT_ARGUMENT_DESCRIPTIONS = {
     'read_markets': '原文或图片已明确双方、玩法及期间的新增推荐，首次search_matches或消歧resolve_match传true，并同时传market_kind、period和market_query；只在完整搜索且唯一活动绑定后返回market_result。复用该结果，不重复list_match_markets；完整过滤结果中原期间/线/方向全部closed或suspended时直接说明原盘口不可用，禁止去掉筛选再读盘找替代线。未知意图保持false，不猜参数。',
     'market_kind': '原文明示的玩法：大小球用total，让球用handicap；与read_markets=true一起传，不从赔率猜玩法。其他玩法按工具已知原生类型核验。',
@@ -110,8 +112,9 @@ class CompactMCPServer(MCPServer):
             if compact_descriptions.get():
                 updates['description'] = (f'独立并行调用football.{tool.name}；完整规则见同名主工具，'
                     '参数、分页、绑定、读盘及录入校验不变。')
-            if explicit_market_intent.get() and tool.name in {'search_matches', 'resolve_match'}:
-                fields = ('read_markets', 'market_kind', 'period', 'market_query')
+            if explicit_market_intent.get() and tool.name in {'search_matches', 'resolve_match','list_match_markets'}:
+                fields = (('read_markets', 'market_kind', 'period', 'market_query','source_periods')
+                          if tool.name != 'list_match_markets' else ('source_periods',))
                 schema = dict(tool.input_schema)
                 properties = dict(schema['properties'])
                 for field in fields:
@@ -235,7 +238,8 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
                               *, search_key: str | None = None,
                               market_query: str | None = None,
                               record_source_intent: bool = False,
-                              evidence_text: str | None = None) -> dict:
+                              evidence_text: str | None = None,
+                              source_periods: SourcePeriods = None) -> dict:
     """Compose existing guarded operations, never derive a fixture identity."""
     if not isinstance(resolution, dict) or resolution.get('resolved') is not True:
         return result
@@ -250,6 +254,7 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
         }
         if market_query is not None:
             market_parameters['market_query'] = market_query
+        market_parameters.update(_source_period_parameters(source_periods))
         markets = await _post('list_match_markets', market_parameters)
     except ToolError as exc:
         # Search/binding has already committed before this optional read.
@@ -309,6 +314,12 @@ def _require_source_record_scope(read_markets, market_kind, period, market_query
         raise ToolError('一轮录入需要read_markets=true、来源明确的total/期间/market_query及非空原文证据')
 
 
+def _source_period_parameters(source_periods):
+    if source_periods is not None or explicit_market_intent.get():
+        return {'source_periods':source_periods or []}
+    return {}
+
+
 def _unique_source_total(markets, fixture_id, market_kind, period):
     """Select nothing unless the native exact scope contains one eligible row."""
     if not isinstance(markets, dict):
@@ -357,6 +368,7 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str | None
                          read_markets: Annotated[bool, Field(description="来源已明确玩法/期间时合并读盘；明确单项total/期间/方向/数字线时，须同时传record_source_intent=true、market_query和evidence_text，由原生完整唯一有效范围决定是否录入。")] = False,
                          market_kind: str | None = None,
                          period: str | None = None,
+                         source_periods: SourcePeriods = None,
                          market_query: Annotated[str | None, Field(max_length=120,
                              description="原文明示的盘口查询，例如小3.5、大0.5/1；仅传给唯一绑定后的读盘，不参与球队检索，不比较倍率。")] = None,
                          record_source_intent: Annotated[bool, Field(description="来源明确双方、total玩法、期间、方向及线值时须传true，同时read_markets=true并提供market_query/evidence_text；仅完整唯一绑定且原生精确范围恰好一个有效选项时复用原生录入，返回record_result。未知期间保持false，默认不录入。")] = False,
@@ -378,7 +390,8 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str | None
     if read_markets and result.get('search_complete') is True and result.get('next_cursor') is None:
         return await _with_bound_markets(result, result.get('resolution'), review_id, attempt_id,
                                          market_kind, period, market_query=market_query,
-                                         record_source_intent=record_source_intent, evidence_text=evidence_text)
+                                         record_source_intent=record_source_intent, evidence_text=evidence_text,
+                                         source_periods=source_periods)
     return result
 
 
@@ -390,6 +403,7 @@ async def resolve_match(review_id: str, attempt_id: str,
                         from_utc: str | None = None, to_utc: str | None = None,
                         read_markets: bool = False, market_kind: str | None = None,
                         period: str | None = None,
+                        source_periods: SourcePeriods = None,
                         market_query: Annotated[str | None, Field(max_length=120,
                             description="原文明示的盘口查询，例如小3.5、大0.5/1；仅传给唯一绑定后的读盘，不改变比赛消歧依据。")] = None,
                         record_source_intent: Annotated[bool, Field(description="来源明确total玩法、期间、方向及线值时传true并提供原文证据；仅已完成唯一绑定及精确唯一有效读盘后复用原生录入，record_result才是接受事实，默认false。")] = False,
@@ -406,7 +420,8 @@ async def resolve_match(review_id: str, attempt_id: str,
     if read_markets:
         return await _with_bound_markets(result, result, review_id, attempt_id, market_kind, period,
                                          search_key=search_key, market_query=market_query,
-                                         record_source_intent=record_source_intent, evidence_text=evidence_text)
+                                         record_source_intent=record_source_intent, evidence_text=evidence_text,
+                                         source_periods=source_periods)
     return result
 
 
@@ -414,12 +429,14 @@ async def resolve_match(review_id: str, attempt_id: str,
 async def list_match_markets(review_id: str, attempt_id: str, fixture_id: str,
                              market_kind: str | None = None, period: str | None = None,
                              line: str | None = None, selection: str | None = None,
-                             market_query: str | None = None) -> dict:
+                             market_query: str | None = None,
+                             source_periods: SourcePeriods = None) -> dict:
     """读取已绑定比赛的盘口。按类别、期间、方向或名称筛选，按selection_line匹配所选方让受让；line_basis=provider_home时line为原生主队线、客队selection_line符号相反，line筛选须用原生线，未确认口径先读玩法期间方向整组。先核对market_coverage：total_quotes=0且complete_for_filter=true是完整零库存，停止同场重复读取并保留未解决；仅有库存但筛选零命中或覆盖不足时放宽筛选，省略筛选返回完整盘口。赔率不参与意图匹配；can_record表示服务端校验通过。"""
     return await _post("list_match_markets", {
         "review_id": review_id, "attempt_id": attempt_id, "fixture_id": fixture_id,
         "market_kind": market_kind, "period": period, "line": line,
         "selection": selection, "market_query": market_query,
+        **_source_period_parameters(source_periods),
     })
 
 
