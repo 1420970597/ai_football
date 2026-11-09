@@ -189,8 +189,7 @@ async def _content_parts(message: dict, review_id: str, attempt_id: str, *, acce
         f"引用档案状态: {reply_status}；引用档案编号: {reply.get('id', '无')}；"
         f"引用原文发布时间UTC: {reply.get('posted_at', '未知')}。\n"
         f"当前消息图片{len(current_media)}张，引用消息图片{len(reply_media)}张；"
-        "引用文字及图片仅提供上下文，不表示本条采用原推荐，也不能据此猜新盘口。\n"
-        "请使用 expert-review skill。"
+        "引用文字及图片仅提供上下文，不表示本条采用原推荐，也不能据此猜新盘口。"
     )
     parts: list[dict] = [{"type": "text", "text": prompt}]
     if accepted_context is not None:
