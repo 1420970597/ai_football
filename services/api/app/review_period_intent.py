@@ -31,6 +31,43 @@ INTENT_VALID_SQL = ("NOT (s.withdrawn_at IS NOT NULL AND COALESCE(s.withdrawal_r
                     "'review_source_line_intent_conflict','review_source_selection_intent_conflict',"
                     "'review_source_period_not_supported','review_source_selection_not_supported'))")
 
+_UNCERTAIN_PERIOD = re.compile(
+    r'(?:未|没有|没|无|无法)\s*(?:明确|明示|标明|确认|给出|判断)?\s*(?:推荐)?期间'
+    r'|(?:来源|原文|正文|原图|图片)?期间\s*(?:未知|不明|不明确|未明确|未确认|缺失)'
+    r'|(?:source\s+)?period\s+(?:is\s+)?(?:unknown|unclear|unspecified|not\s+explicit)', re.I)
+_INVENTORY_SUBSTITUTION = re.compile(
+    r'(?:按|依据|根据|参照|基于|以)[^。；;\n]{0,24}'
+    r'(?:库存|可售|可用盘口|唯一(?:同线)?选项|最近似选项)[^。；;\n]{0,24}(?:录|记|推|认|选|替|作)'
+    r'|us(?:e|ed|es|ing)\s+(?:the\s+)?(?:only\s+available|inventory)', re.I)
+_NEGATED_SUBSTITUTION = re.compile(r'(?:不|不能|不可|不应|不得|不会|没有|无需|不是|not|never)\s*$', re.I)
+
+
+def period_intent_key(quote):
+    """Canonical per-pick denial key; its binding supplies fixture identity."""
+    if quote.get('market_kind') not in {'total','team_total'} or quote.get('line') is None:
+        return None
+    line=Decimal(str(quote['line']))
+    if not line.is_finite():
+        return None
+    number=format((line if line else Decimal(0)).normalize(),'f')
+    return ':'.join((quote['market_kind'],quote['period'],number,quote['selection']))
+
+
+def evidence_period_rejection(evidence_text, quote):
+    """A contradictory admission can deny a pick, never prove image contents."""
+    key=period_intent_key(quote)
+    if key is None:
+        return None
+    for denied in quote.get('prior_source_period_denials') or []:
+        if isinstance(denied,dict) and denied.get(key)=='source_period_intent_ambiguous':
+            return 'source_period_intent_ambiguous'
+    text=unicodedata.normalize('NFKC',evidence_text or '')[:3000]
+    if _UNCERTAIN_PERIOD.search(text):
+        for match in _INVENTORY_SUBSTITUTION.finditer(text):
+            if not _NEGATED_SUBSTITUTION.search(text[max(0,match.start()-12):match.start()]):
+                return 'source_period_intent_ambiguous'
+    return None
+
 
 def _asian_line(first, second):
     line = Decimal(first)

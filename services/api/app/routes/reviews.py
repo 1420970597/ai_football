@@ -29,7 +29,8 @@ from ..signal_persistence import persist_signals
 from ..review_resolution import resolve_candidates
 from ..review_market_query import market_filters
 from ..team_totals import team_total_terms
-from ..review_period_intent import period_intent_rejection, verified_early_first_half_context, premarket_period_rejection
+from ..review_period_intent import (period_intent_rejection, verified_early_first_half_context,
+                                   premarket_period_rejection, evidence_period_rejection, period_intent_key)
 from quote_witness import known_quote_snapshot
 
 router = APIRouter(prefix="/internal/mcp")
@@ -467,9 +468,11 @@ async def _record_current_signals(conn, body, request, observations):
         'WITH locked AS MATERIALIZED ('
         'SELECT f.id FROM v2_fixtures f JOIN v2_review_fixture_bindings b ON b.fixture_id=f.id '
         'WHERE b.job_id=$1 AND b.attempt_id=$2 AND f.id=ANY($3::text[]) '
-        'ORDER BY f.source_id FOR SHARE OF f) '
-        'SELECT locked.id,policy AS quote_age_policy FROM (VALUES(1)) anchor(value) '
-        'LEFT JOIN locked ON TRUE '
+        'ORDER BY f.source_id FOR SHARE OF f), locked_bindings AS MATERIALIZED ('
+        'SELECT b.fixture_id AS id FROM v2_review_fixture_bindings b JOIN locked ON locked.id=b.fixture_id '
+        'WHERE b.job_id=$1 AND b.attempt_id=$2 ORDER BY b.fixture_id FOR UPDATE OF b) '
+        'SELECT locked_bindings.id,policy AS quote_age_policy FROM (VALUES(1)) anchor(value) '
+        'LEFT JOIN locked_bindings ON TRUE '
         "LEFT JOIN v2_admin_settings policy ON policy.setting_key='quote_max_age_seconds'",
         body.review_id, body.attempt_id, sorted({pick.fixture_id for pick in body.signals}),
     )
@@ -483,6 +486,9 @@ async def _record_current_signals(conn, body, request, observations):
             "f.sport AS fixture_sport,f.match_state AS fixture_match_state,f.clock_minute AS fixture_clock_minute,"
             "f.received_at AS fixture_received_at,c.candidate_data AS intent_candidate,"
             "b.evidence->'source_market_intent' AS source_market_intent,"
+            "(SELECT COALESCE(jsonb_agg(prior.evidence->'source_period_denials'),'[]'::jsonb) "
+            "FROM v2_review_fixture_bindings prior WHERE prior.job_id=b.job_id "
+            "AND prior.fixture_id=b.fixture_id AND prior.evidence ? 'source_period_denials') AS prior_source_period_denials,"
             "r.quote_context AS read_context,r.source_updated_at AS read_source_time,r.price AS read_price FROM v2_current_quotes q "
             "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
             "LEFT JOIN v2_match_searches search ON search.job_id=b.job_id AND search.search_key=b.search_key AND search.attempt_id=$2 AND search.complete "
@@ -495,6 +501,12 @@ async def _record_current_signals(conn, body, request, observations):
             [pick.fixture_id for pick in body.signals], [pick.quote_id for pick in body.signals],
     )
     by_quote = {(quote['fixture_id'], quote['id']): quote for quote in quotes}
+    batch_period_denials = {}
+    for pick in body.signals:
+        quote = by_quote.get((pick.fixture_id,pick.quote_id))
+        if quote and evidence_period_rejection(pick.evidence_text,quote):
+            batch_period_denials.setdefault(pick.fixture_id,{})[period_intent_key(quote)] = 'source_period_intent_ambiguous'
+    stored_period_denials = set()
     valid = []
     for index, pick in enumerate(body.signals):
         # Bind intent and score context, then snapshot current price.
@@ -503,8 +515,11 @@ async def _record_current_signals(conn, body, request, observations):
         confirmation = None
         period_rejection = None
         line_rejection = None
+        evidence_period_reason = None
         if quote:
             quote = dict(quote)
+            quote['prior_source_period_denials'] = [*(quote.get('prior_source_period_denials') or []),
+                                                    batch_period_denials.get(pick.fixture_id,{})]
             fixture = dict(quote) | {'id': quote['fixture_id']}
             confirmation = confirmation_for(observations.get(pick.fixture_id), quote, fixture, max_quote_age)
             confirmation = confirmation or confirmation_for(quote['read_context'].get('current_confirmation'), quote, fixture, max_quote_age)
@@ -512,6 +527,8 @@ async def _record_current_signals(conn, body, request, observations):
             period_rejection = period_rejection or premarket_period_rejection(
                 job['raw_text'],quote,quote['source_market_intent'],has_visual_source=bool(job['media_objects']),
                 posted_at=job['posted_at'])
+            evidence_period_reason = evidence_period_rejection(pick.evidence_text,quote)
+            period_rejection = period_rejection or evidence_period_reason
             line_rejection = line_intent_rejection(pick.evidence_text, quote)
         if not quote:
             reason = "quote_not_read_or_changed"
@@ -528,6 +545,19 @@ async def _record_current_signals(conn, body, request, observations):
         elif not fresh_quote(quote, max_quote_age) and not confirmation:
             reason = "quote_inactive_unknown_or_stale"
         if reason:
+            if evidence_period_reason and reason in {
+                    'source_period_intent_ambiguous','source_period_unverified_before_market_read'}:
+                # Keep the first read declaration intact. This separate denial
+                # survives rewording and retries of this exact source job/pick.
+                denial_key = period_intent_key(quote)
+                if (pick.fixture_id,denial_key) not in stored_period_denials:
+                    await conn.execute(
+                        "UPDATE v2_review_fixture_bindings SET evidence=jsonb_set(evidence,'{source_period_denials}',"
+                        "COALESCE(evidence->'source_period_denials','{}'::jsonb)||$4::jsonb,true) "
+                        "WHERE job_id=$1 AND attempt_id=$2 AND fixture_id=$3",
+                        body.review_id,body.attempt_id,pick.fixture_id,
+                        {denial_key:'source_period_intent_ambiguous'})
+                    stored_period_denials.add((pick.fixture_id,denial_key))
             rejection = {"index": index, "reason": reason}
             if reason in {'source_line_intent_conflict', 'source_selection_intent_conflict'}:
                 diagnostic = line_intent_context(pick.evidence_text, quote)
