@@ -1,0 +1,31 @@
+{
+  "release_completed_at": "2026-11-09T07:27:57Z",
+  "source_commit": "31b5317e1d691d369630a9221e5f6a308c33006c",
+  "image_id": "sha256:c056cae73fdf599a8c7e4425e2c144dd810c76ce0c17e134c6a3b618aef846d6",
+  "exact_source": {
+    "source_commit": "31b5317e1d691d369630a9221e5f6a308c33006c",
+    "component": "collector",
+    "exact_service_files": 17,
+    "requirements_exact": true,
+    "shared_contract_sha256": "83939e29bd9ecbb8a8c08456a614885fbdfc810f99df591f67f3d761426d9575"
+  },
+  "loaded_author_before_album": true,
+  "native_precheck_apply_controller_exits": 0,
+  "other_remote_services_unchanged": 3,
+  "local_services_unchanged": 7,
+  "model_configuration_unchanged": true,
+  "current_user_execution_flags_preserved": {
+    "executor": "true",
+    "api-bridge": "true"
+  },
+  "environment_mounts_security_resources_preserved": true,
+  "runtime_cpu": 0.5,
+  "runtime_memory_bytes": 536870912,
+  "retiring_process_exit": 0,
+  "startup_not_ready_observations": 5,
+  "post_release_natural_window_started_at": "2026-11-09T07:28:07.800586745Z",
+  "funded_test_orders": 0,
+  "historical_backfill": false,
+  "natural_window_acceptance_pending": true,
+  "ten_second_accepted_order_slo_proven": false
+}

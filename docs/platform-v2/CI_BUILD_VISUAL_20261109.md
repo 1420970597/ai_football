@@ -19,3 +19,5 @@ API本地E2028错误选择legacy builder，与原Dockerfile COPY --chmod不兼�
 07:15 UTC远程读回：f3f794350d9e6effec7667fd4c782ed498495391的42550995808后端、Android与截图步骤成功，另contracts成功；browser后续真实API集成的独立快照同样遗漏共享文件。上一轮未覆盖该独立入口，现补齐单行复制，并检查其他快照入口：Hermes已有协议文件。E2072通用failed日志为空，E2073直接job日志/步骤/产物明确定位原失败，未将空日志当作通过。
 
 E2077完整运行真实API/私有临时PG/nginx的基础16项、账户扩展9项，全部通过、浏览器错误0；保留6次场景预期的权限/错误HTTP观察。合成执行器verified4/refresh1/receipts1/资金调用0/失败0，共享协议快照SHA等同原始输入；固定资源BuildKit与专属隔离网，未接触生产账户。E2078安全导出0。状态：完整本地集成通过，下一提交远程结果仍待验收。
+
+远程验收完成：提交90c2ab78c0a28c46f3857eeb64347ea3a82dcd96，GitHub 42578796407的backend/browser/android及42578796475的contracts全部成功。E2115下载并验证原生后端1981项、失败/错误/跳过0；关键7文件SHA等同该提交，API镜像非root10001、105源码、28迁移、共享协议SHA正确。真实API基础16及账户扩展9均通过且浏览器错误0，视觉仍使用原阈值通过。精确检查链接与安全产物摘要见evidence/ci-all-checks-remote-20261109.json。此远程结论对应该提交，不能证明生产TG、盘口全新鲜或十秒真实接单。
