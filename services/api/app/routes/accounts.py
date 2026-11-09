@@ -131,7 +131,9 @@ async def get_leyu_account(request: Request):
     return {"account": account, "betting": dict(policy) if policy else None,
             "profitability_definition": PROFITABILITY_DEFINITION,
             "tasks": [jobs.public_task(item, row['binding_revision'] if row else None) for item in tasks],
-            "execution_capability": {"protocol_adapter": True, "live_enabled": orders.live_enabled(request.app.state.settings), "prematch": "unsupported"}}
+            "execution_capability": {"protocol_adapter": True, "live_enabled": orders.live_enabled(request.app.state.settings),
+                                     "supported_sports": ["football"], "supported_phases": ["live"],
+                                     "prematch": "unsupported", "basketball": "unsupported"}}
 
 
 @router.put("/leyu")
@@ -373,6 +375,7 @@ async def dispatch(request: Request):
             pairs = await conn.fetch("SELECT b.user_id,s.id AS signal_id FROM v2_user_bet_settings b JOIN v2_expert_signals s ON "
                 "((b.expert_selection_mode='manual' AND s.expert_id=ANY(b.allowed_experts)) OR "
                 "(b.expert_selection_mode='profitable' AND s.expert_id=ANY($1::uuid[]))) "
+                "JOIN v2_fixtures f ON f.id=s.fixture_id AND f.sport='football' AND f.phase='live' "
                 "JOIN v2_expert_messages m ON m.id=s.message_id "
                 "WHERE b.auto_enabled AND NOT b.emergency_stopped AND s.created_at>now()-interval '5 minutes' AND s.outcome='pending' "
                 "AND m.posted_at>=now()-interval '5 minutes' AND m.posted_at<=now()+interval '5 seconds' "

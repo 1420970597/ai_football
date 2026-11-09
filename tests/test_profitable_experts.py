@@ -63,6 +63,83 @@ class ProfitableExpertTests(unittest.IsolatedAsyncioTestCase):
         rows = await profitability_rows(self.pool, expert_id=expert)
         return rows[0] if rows else None
 
+    async def queued_signal(self, template, *, sport='football', phase='live', age_seconds=0):
+        """Native-shaped candidates share the trusted author, never a provider."""
+        original = await self.pool.fetchrow('SELECT * FROM v2_expert_signals WHERE id=$1', template)
+        signal, quote = uuid.uuid4(), uuid.uuid4()
+        fixture = 'leyu:' + uuid.uuid4().hex
+        await self.pool.execute(
+            "INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase,source_updated_at) "
+            "VALUES($1,$1,$2,'联赛','甲','乙',now(),$3,now())", fixture, sport, phase)
+        await self.pool.execute(
+            "INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,line,selection,price,source_updated_at,period,market_kind,status,play_id,market_instance_id,selection_id) "
+            "VALUES($1,$2,'2','全场大小',2.5,'over',1.95,now(),'full_time','total','active','2','market','option')", quote, fixture)
+        await self.pool.execute(
+            "INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,line,selection,recommendation_price,quote_time,confidence,period,market_kind,score_baseline,created_at) "
+            "VALUES($1,$2,$3,$4,$5,'2','全场大小',2.5,'over',1.95,now(),0.9,'full_time','total',$6,now()-$7::int*interval '1 second')",
+            signal, original['message_id'], original['expert_id'], fixture, phase, {'home_score':0,'away_score':0}, age_seconds)
+        return signal
+
+    async def assert_unsupported_candidates_do_not_starve(self, mode):
+        await self.healthy()
+        supported, expert, _, _ = await self.signal()
+        unsupported = []
+        scopes = [('football', 'scheduled'), ('basketball', 'live'), ('basketball', 'scheduled')]
+        for index in range(31):
+            sport, phase = scopes[index % len(scopes)]
+            unsupported.append(await self.queued_signal(supported, sport=sport, phase=phase, age_seconds=120-index))
+        await self.enable([expert])
+        if mode == 'profitable':
+            await self.history(expert)
+            self.assertEqual(200, (await self.mode('profitable')).status_code)
+            self.assertEqual([], (await self.api.get('/api/v1/accounts/leyu')).json()['betting']['allowed_experts'])
+        response = await self.worker_api.post('/internal/executor/dispatch')
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(1, response.json()['reserved'], response.text)
+        rows = await self.pool.fetch('SELECT signal_id FROM v2_bet_orders ORDER BY created_at')
+        self.assertEqual([supported], [row['signal_id'] for row in rows])
+        self.assertEqual(0, (await self.worker_api.post('/internal/executor/dispatch')).json()['reserved'])
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+        # Pre-filtering must not replace the authoritative reservation guard.
+        for signal in unsupported[:3]:
+            with self.assertRaises(HTTPException) as rejected:
+                await self.reserve(signal)
+            self.assertIn('推荐、来源或滚球盘口', rejected.exception.detail)
+
+    async def test_manual_supported_candidate_after_31_unsupported_is_not_starved(self):
+        await self.assert_unsupported_candidates_do_not_starve('manual')
+
+    async def test_profitable_unselected_candidate_after_31_unsupported_is_not_starved(self):
+        await self.assert_unsupported_candidates_do_not_starve('profitable')
+
+    async def test_dispatch_preserves_supported_order_and_owner_exposure(self):
+        await self.healthy()
+        later, expert, _, _ = await self.signal()
+        earlier = await self.queued_signal(later, age_seconds=60)
+        await self.enable([expert], daily='2', exposure='2')
+        self.assertEqual(1, (await self.worker_api.post('/internal/executor/dispatch')).json()['reserved'])
+        rows = await self.pool.fetch('SELECT signal_id,reserved_stake FROM v2_bet_orders')
+        self.assertEqual([(earlier, Decimal('2'))], [tuple(row.values()) for row in rows])
+        self.assertEqual(0, (await self.worker_api.post('/internal/executor/dispatch')).json()['reserved'])
+        self.assertIsNone(await self.pool.fetchval('SELECT id FROM v2_bet_orders WHERE signal_id=$1', later))
+
+    async def test_current_fixture_scope_is_rechecked_after_reservation(self):
+        await self.healthy()
+        signal, expert, _, _ = await self.signal()
+        await self.enable([expert])
+        order = await self.reserve(signal)
+        fixture = await self.pool.fetchval('SELECT fixture_id FROM v2_expert_signals WHERE id=$1', signal)
+        for sport, phase in [('football','finished'), ('basketball','live')]:
+            with self.subTest(sport=sport, phase=phase):
+                await self.pool.execute('UPDATE v2_fixtures SET sport=$2,phase=$3 WHERE id=$1', fixture, sport, phase)
+                async with self.pool.acquire() as conn:
+                    async with conn.transaction():
+                        with self.assertRaises(HTTPException):
+                            await orders.recheck_order(conn, order, self.settings)
+        self.assertEqual('idle', (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()['kind'])
+        row = await self.pool.fetchrow('SELECT state,reserved_stake FROM v2_bet_orders WHERE id=$1', order['id'])
+        self.assertEqual(('cancelled', Decimal('0')), tuple(row.values()))
+
     async def test_manual_default_and_owner_modes_preserve_existing_limits(self):
         await self.healthy()
         _, expert, _, _ = await self.signal()
@@ -76,6 +153,10 @@ class ProfitableExpertTests(unittest.IsolatedAsyncioTestCase):
         account = (await self.api.get('/api/v1/accounts/leyu')).json()
         self.assertEqual('profitable', account['betting']['expert_selection_mode'])
         self.assertEqual(30, account['profitability_definition']['days'])
+        self.assertEqual(['football'], account['execution_capability']['supported_sports'])
+        self.assertEqual(['live'], account['execution_capability']['supported_phases'])
+        self.assertEqual('unsupported', account['execution_capability']['prematch'])
+        self.assertEqual('unsupported', account['execution_capability']['basketball'])
         self.assertEqual(422, (await self.mode('invalid')).status_code)
         self.assertEqual(422, (await self.mode('manual')).status_code)
         self.assertEqual(200, (await self.mode('manual', [expert])).status_code)

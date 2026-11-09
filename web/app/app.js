@@ -1247,7 +1247,7 @@ async function loadAccount() {
       $("#betting-status").textContent += " 当前实盘执行未开放。";
     if (data.execution_capability?.prematch === "unsupported")
       $("#betting-status").textContent +=
-        " 赛前自动投注暂未支持，赛前专家推荐仍可浏览。";
+        " 当前自动执行仅支持足球滚球；赛前及篮球专家推荐仍可浏览。";
     for (const name of [
       "stake_per_order",
       "max_per_order",
