@@ -86,6 +86,7 @@ mcp_servers:
     supports_parallel_tool_calls: true
     headers:
       Authorization: "Bearer ${EXPERT_MCP_TOKEN}"
+      X-Football-Tool-Profile: market-table-v1
     tools:
       resources: false
       prompts: false
@@ -99,7 +100,7 @@ mcp_servers:
     supports_parallel_tool_calls: true
     headers:
       Authorization: "Bearer ${EXPERT_MCP_TOKEN}"
-      X-Football-Tool-Profile: parallel-compact-v1
+      X-Football-Tool-Profile: parallel-table-v1
     tools:
       resources: false
       prompts: false

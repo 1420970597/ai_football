@@ -169,14 +169,17 @@ class MCPDescriptionBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outputs[0], outputs[1])
         self.assertEqual(arguments['search_key'], captured[0]['search_key'])
 
-    def test_only_secondary_connection_declares_fixed_non_secret_profile(self):
+    def test_connections_declare_lossless_tables_and_secondary_compact_descriptions(self):
         config = yaml.safe_load((ROOT / 'integrations/hermes/config.yaml').read_text())
         servers = config['mcp_servers']
         self.assertEqual({'football', 'football_parallel'}, set(servers))
         primary, parallel = servers['football'], servers['football_parallel']
-        self.assertEqual('parallel-compact-v1',
+        self.assertEqual('parallel-table-v1',
                          parallel['headers'].get('X-Football-Tool-Profile'))
-        self.assertNotIn('X-Football-Tool-Profile', primary['headers'])
+        self.assertEqual('market-table-v1',
+                         primary['headers'].get('X-Football-Tool-Profile'))
         without_profile = {**parallel, 'headers': {k: v for k, v in parallel['headers'].items()
                                                  if k != 'X-Football-Tool-Profile'}}
-        self.assertEqual(primary, without_profile)
+        primary_without_profile = {**primary, 'headers': {
+            k: v for k, v in primary['headers'].items() if k != 'X-Football-Tool-Profile'}}
+        self.assertEqual(primary_without_profile, without_profile)
