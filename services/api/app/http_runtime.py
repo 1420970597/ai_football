@@ -155,5 +155,3 @@ def register_error_handlers(app):
         asyncpg.PostgresConnectionError,
     ):
         app.add_exception_handler(transient_database_error, database_temporarily_unavailable)
-
-
