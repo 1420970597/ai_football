@@ -140,7 +140,7 @@ async def run_case(conn, http, scenario):
         """)
         await conn.execute("""
             CREATE OR REPLACE FUNCTION v2_integration_parallel_probe_insert() RETURNS trigger
-            LANGUAGE plpgsql AS $$
+            LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $$
             DECLARE probe bigint;
             BEGIN
                 INSERT INTO v2_integration_parallel_probe(job_id,fixture_id,started_at)

@@ -3,6 +3,8 @@
 set -euo pipefail
 ROOT=$(pwd)
 [ -f "$ROOT/AGENTS.md" ] && [ -d "$ROOT/tests/integration" ]
+REVIEW_API_ROLE=${REVIEW_API_ROLE:-api}
+case "$REVIEW_API_ROLE" in api|mcp) ;; *) printf 'invalid_review_api_role\n';exit 2;; esac
 TASK="af-hermes-framework-$$"
 EVIDENCE="$ROOT/.runtime/$TASK"
 SNAPSHOT="$EVIDENCE/snapshot"
@@ -21,6 +23,9 @@ cp -a services/api services/hermes-mcp "$SNAPSHOT/services/"
 cp services/quote_witness.py "$SNAPSHOT/services/"
 cp services/collector/requirements.txt "$SNAPSHOT/services/collector/"
 cp infra/test/Dockerfile "$SNAPSHOT/infra/test/"
+if [ "$REVIEW_API_ROLE" = mcp ]; then
+  cp -a infra/db infra/config "$SNAPSHOT/infra/"
+fi
 cp -a integrations/hermes "$SNAPSHOT/integrations/"
 cp tests/integration/hermes_roundtrip.py tests/integration/hermes_provider_fixture.py tests/integration/hermes_reasoning_contract.py "$SNAPSHOT/tests/integration/"
 cp tests/test_hermes_fixture_contract.py "$SNAPSHOT/tests/"
@@ -64,7 +69,13 @@ for i in $(seq 1 60); do
   sleep .5
 done
 verify --cpus=.25 --memory=256m -e DATABASE_URL="$DSN" "$VERIFIER" python -c 'import asyncio,os,asyncpg; from app.database import apply_migrations; exec("async def main():\n c=await asyncpg.connect(os.environ[\"DATABASE_URL\"]); result=await apply_migrations(c); print(\"isolated_migrations\",len(result)); await c.close()\n"); asyncio.run(main())'
-service --name "$API" --network-alias api --cpus=.35 --memory=384m -e DATABASE_URL="$DSN" -e APP_SESSION_SECRET=0101010101010101010101010101010101010101010101010101010101010101 -e DATA_ENCRYPTION_KEY=0202020202020202020202020202020202020202020202020202020202020202 -e EXPERT_MCP_TOKEN=isolated-tools -e COLLECTOR_INTERNAL_TOKEN=isolated-collector -e QUOTE_MAX_AGE_SECONDS=600 -e LIVE_ORDERS_ENABLED=false -e TELEGRAM_CONTROL_URL=http://absent-collector:8092 "$VERIFIER" python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 2 >/dev/null
+if [ "$REVIEW_API_ROLE" = mcp ]; then
+  verify --cpus=.125 --memory=128m -e DATABASE_URL="$DSN" "$VERIFIER" python -c 'import asyncio,os,asyncpg;from infra.db.provision_mcp import provision;exec("async def main():\n c=await asyncpg.connect(os.environ[\"DATABASE_URL\"]);result=await provision(c,\"v2_runtime_mcp_framework\",\"isolated-framework-mcp-password-32-characters\");assert result[\"verified\"];await c.close()\n");asyncio.run(main())'
+  TOOLS_DSN='postgresql://v2_runtime_mcp_framework@ai-football-v2-pgverify:5432/v2_integration_test'
+  service --name "$API" --network-alias api --cpus=.20 --memory=256m -e DATABASE_URL="$TOOLS_DSN" -e EXPERT_MCP_TOKEN=isolated-tools -e COLLECTOR_INTERNAL_TOKEN=isolated-collector -e QUOTE_MAX_AGE_SECONDS=600 -e TELEGRAM_CONTROL_URL=http://absent-collector:8092 "$VERIFIER" python -m uvicorn app.mcp_app:app --host 0.0.0.0 --port 8080 --workers 1 >/dev/null
+else
+  service --name "$API" --network-alias api --cpus=.35 --memory=384m -e DATABASE_URL="$DSN" -e APP_SESSION_SECRET=0101010101010101010101010101010101010101010101010101010101010101 -e DATA_ENCRYPTION_KEY=0202020202020202020202020202020202020202020202020202020202020202 -e EXPERT_MCP_TOKEN=isolated-tools -e COLLECTOR_INTERNAL_TOKEN=isolated-collector -e QUOTE_MAX_AGE_SECONDS=600 -e LIVE_ORDERS_ENABLED=false -e TELEGRAM_CONTROL_URL=http://absent-collector:8092 "$VERIFIER" python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 2 >/dev/null
+fi
 service --name "$MCP" --network-alias hermes-mcp --cpus=.20 --memory=192m -e EXPERT_MCP_TOKEN=isolated-tools -e PLATFORM_INTERNAL_API=http://api:8080/internal/mcp "$VERIFIER" python services/hermes-mcp/server.py >/dev/null
 service --name "$PROVIDER" --network-alias provider-fixture --cpus=.125 --memory=96m "$VERIFIER" python tests/integration/hermes_provider_fixture.py >/dev/null
 start_hermes() {
