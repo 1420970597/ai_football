@@ -50,7 +50,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 printf 'frozen_snapshot=%s\n' "$EVIDENCE"
 find "$SNAPSHOT" -type f ! -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum > "$EVIDENCE/source.sha256"
-docker build --memory 512m --cpu-period 100000 --cpu-quota 50000 \
+docker buildx build --builder "${BUILDX_BUILDER:-default}" --load --provenance=false --sbom=false \
   -f "$SNAPSHOT/infra/test/Dockerfile" -t "$VERIFIER" "$SNAPSHOT" > "$EVIDENCE/verifier-build.log" 2>&1
 docker image inspect "$VERIFIER" "$HERMES_IMAGE" "$PG_IMAGE" --format '{{.Id}} {{json .RepoDigests}}' > "$EVIDENCE/images.txt"
 verify() {
