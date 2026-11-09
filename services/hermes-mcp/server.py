@@ -26,8 +26,39 @@ client = httpx.AsyncClient(
     limits=httpx.Limits(max_connections=32, max_keepalive_connections=8),
     headers={"Authorization": f"Bearer {API_TOKEN}"},
 )
+
+
+def market_table_view(value):
+    """Factor repeated quote keys only; every row remains exactly recoverable."""
+    if not isinstance(value, dict):
+        return value
+    if isinstance(value.get('market_result'), dict):
+        child = market_table_view(value['market_result'])
+        if child is not value['market_result']:
+            return value | {'market_result': child}
+    quotes = value.get('markets')
+    if (not isinstance(quotes, list) or not 8 <= len(quotes) <= 2000
+            or 'market_table' in value or not isinstance(quotes[0], dict)):
+        return value
+    columns = sorted(quotes[0])
+    if not columns or 'quote_id' not in columns:
+        return value
+    keys = set(columns)
+    if any(not isinstance(row, dict) or set(row) != keys
+           or not isinstance(row['quote_id'], str) or not row['quote_id'] for row in quotes):
+        return value
+    table = {'encoding': 'column-rows-v1', 'columns': columns,
+             'rows': [[row[column] for column in columns] for row in quotes],
+             'decoding': '每行按columns逐列对应一个完整盘口；同一行的quote_id、期间、线值、方向和可录入状态必须一起核对，不跨行混合。'}
+    candidate = {key: item for key, item in value.items() if key != 'markets'} | {'market_table': table}
+    if len(json.dumps(candidate, ensure_ascii=False, separators=(',', ':'), allow_nan=False)) >= len(
+            json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False)):
+        return value
+    return candidate
+
+
 def compact_tool_result(result):
-    """Keep native evidence and metadata; remove only root JSON indentation."""
+    """Keep native metadata, with an explicit opt-in lossless quote table view."""
     if not isinstance(result, CallToolResult) or result.is_error or len(result.content) != 1:
         return result
     content = result.content[0]
@@ -39,15 +70,21 @@ def compact_tool_result(result):
             return result
         if result.structured_content is not None and value != result.structured_content:
             return result
+        if compact_market_tables.get():
+            value = market_table_view(value)
         text = json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
     except (TypeError, ValueError):
         return result
     if text == content.text:
         return result
-    return result.model_copy(update={'content': [content.model_copy(update={'text': text})]})
+    updates = {'content': [content.model_copy(update={'text': text})]}
+    if result.structured_content is not None:
+        updates['structured_content'] = value
+    return result.model_copy(update=updates)
 
 
 compact_descriptions: ContextVar[bool] = ContextVar('compact_tool_descriptions', default=False)
+compact_market_tables: ContextVar[bool] = ContextVar('compact_market_tables', default=False)
 
 
 class CompactMCPServer(MCPServer):
@@ -296,11 +333,13 @@ class BearerAuthentication:
             return
         profiles = [value for name, value in scope.get('headers', [])
                     if name.lower() == b'x-football-tool-profile']
-        token = compact_descriptions.set(profiles == [b'parallel-compact-v1'])
+        token = compact_descriptions.set(profiles in ([b'parallel-compact-v1'], [b'parallel-table-v1']))
+        table_token = compact_market_tables.set(profiles in ([b'market-table-v1'], [b'parallel-table-v1']))
         try:
             await self.app(scope, receive, send)
         finally:
             compact_descriptions.reset(token)
+            compact_market_tables.reset(table_token)
 
 
 async def main() -> None:
