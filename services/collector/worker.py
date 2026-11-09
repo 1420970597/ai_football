@@ -161,7 +161,7 @@ class CollectorService:
         self.pregame_far_refresh_seconds = max(self.pregame_near_refresh_seconds, pregame_far_refresh_seconds)
         self._odds_refresh_at: dict[str, float] = {}
         self.odds_fixture_budget = max(1, min(300, odds_fixture_budget))
-        self._upload_lock = UploadGate()
+        self._upload_lock = UploadGate(max_active=2)
         self._delivered_snapshots = DeliveredFixtureSnapshots()
         self.last_upload_report: dict[str, Any] = {}
         self._poll_alert = ThresholdAlert(1, 0, raise_after=2, recover_after=3)
@@ -260,22 +260,36 @@ class CollectorService:
             log.warning("Leyu fixture quarantined category=%s fixture_hash=%s quote_count=%s",
                         item["reason"], item["fixture_hash"], item["quote_count"])
         for batch in batches:
-            # Poll 与 WS 更新相同记录；在事务边界串行，避免远端行锁互等。
+            # Atomically reserve both native identities for the entire batch.
+            # Missing identities retain the conservative global barrier.
+            keys=set()
+            for fixture in batch:
+                if any(not isinstance(fixture.get(key),str) or not fixture[key] for key in ('id','source_id')):
+                    keys=None
+                    break
+                keys.update(('id:'+fixture['id'],'source:'+fixture['source_id']))
             started = time.monotonic()
             lock_acquired = None
             response = None
             outcome = 'cancelled'
             try:
-                async with (self._upload_lock.priority() if precise else self._upload_lock):
+                async with self._upload_lock.hold(keys, priority=precise):
                     lock_acquired = time.monotonic()
                     # An unknown HTTP outcome may already have committed. Retire
                     # earlier evidence before attempting any replacement.
                     self._delivered_snapshots.forget(batch)
                     response = await self.api.post(self.api_url + "/collector/fixtures", content=encode_snapshot(batch),
                                                    headers={"Content-Type": "application/json"})
+                    response.raise_for_status()
+                    document = response.json()
+                    if (not isinstance(document, dict) or type(document.get("accepted")) is not int
+                            or not 0 <= document['accepted'] <= len(batch)):
+                        raise LeyuError("invalid_ingestion_receipt")
+                    accepted += document["accepted"]
+                    self._delivered_snapshots.remember(batch)
                 outcome = 'response'
             except Exception:
-                outcome = 'transport_error'
+                outcome = 'response_error' if response is not None else 'transport_error'
                 raise
             finally:
                 finished = time.monotonic()
@@ -285,13 +299,6 @@ class CollectorService:
                          (finished - lock_acquired) * 1000 if lock_acquired is not None else 0,
                          (finished - started) * 1000,
                          response.status_code if response is not None else 'unknown', len(batch))
-            response.raise_for_status()
-            document = response.json()
-            if (not isinstance(document, dict) or type(document.get("accepted")) is not int
-                    or not 0 <= document['accepted'] <= len(batch)):
-                raise LeyuError("invalid_ingestion_receipt")
-            accepted += document["accepted"]
-            self._delivered_snapshots.remember(batch)
         # Set only after the last await; the caller then reads this exact upload
         # report without a poll/push interleaving replacing it in the meantime.
         self.last_upload_report = report
@@ -303,8 +310,8 @@ class CollectorService:
             self.resync.set()
         if fixtures:
             # Share the bounded priority lane with precise refreshes. The gate
-            # still serializes ingestion and serves a normal waiter after two
-            # priority uploads, so a push stream cannot starve the full poll.
+            # serializes overlapping fixtures and serves an eligible normal
+            # waiter after two priority grants; disjoint batches may overlap.
             accepted = await self.upload(fixtures, precise=True)
             self.status["leyu"]["last_push_accepted"] = accepted
             self.status["leyu"]["last_push_quarantined_fixtures"] = self.last_upload_report.get("quarantined_fixtures", 0)

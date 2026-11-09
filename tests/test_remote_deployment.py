@@ -332,6 +332,7 @@ class RealWorkerContractTests(unittest.IsolatedAsyncioTestCase):
         from services.collector.leyu_runtime import LeyuRuntime
         from services.collector.worker import get_config, CollectorService
         from services.collector.quote_snapshot import DeliveredFixtureSnapshots
+        from services.collector.upload_gate import UploadGate
         from services.executor.worker import Executor
         calls=[]
         async def handle(request):
@@ -346,7 +347,7 @@ class RealWorkerContractTests(unittest.IsolatedAsyncioTestCase):
             root='http://api-bridge:8081/internal'
             await get_config(client,root)
             collector=CollectorService.__new__(CollectorService)
-            collector.api=client;collector.api_url=root;collector._upload_lock=asyncio.Lock()
+            collector.api=client;collector.api_url=root;collector._upload_lock=UploadGate(max_active=2)
             collector._delivered_snapshots=DeliveredFixtureSnapshots()
             await collector.upload([{'id':'11111111-1111-1111-1111-111111111111','source_match_id':'sample','markets':[]}])
             runtime=LeyuRuntime(client,root)

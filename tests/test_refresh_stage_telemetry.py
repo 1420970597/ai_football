@@ -11,6 +11,7 @@ from services.collector.leyu_protocol import LeyuError
 from services.collector.leyu_refresh import LeyuRefreshController, LeyuRequestBudget
 from services.collector.worker import CollectorService
 from services.collector.quote_snapshot import DeliveredFixtureSnapshots
+from services.collector.upload_gate import UploadGate
 
 
 def fixture():
@@ -93,7 +94,7 @@ class UploadTelemetryTests(unittest.IsolatedAsyncioTestCase):
         service = CollectorService.__new__(CollectorService)
         service.api = SimpleNamespace(post=post)
         service.api_url = 'http://telemetry-private-host/internal'
-        service._upload_lock = asyncio.Lock()
+        service._upload_lock = UploadGate(max_active=2)
         service._delivered_snapshots = DeliveredFixtureSnapshots()
         return service
 
