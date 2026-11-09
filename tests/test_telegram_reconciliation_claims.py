@@ -19,6 +19,7 @@ from collector.telegram import TelegramCollector
 from collector.telegram_backend import TelegramBackend
 import test_telegram_api as support
 import test_telegram_collector as collector_support
+from tests.test_migrations import migration_suffix
 
 
 class ReconciliationBatchLeaseUnitTests(unittest.IsolatedAsyncioTestCase):
@@ -1045,11 +1046,7 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
             await conn.execute("INSERT INTO v2_telegram_events(id,source_id,platform_message_id,version_key,source_version_at,event_kind,content,media_state,next_check_at) "
                                "VALUES($1,$2,'99',$3,now(),'message','{}','ready',now()-interval '1 hour')",event,source,hashlib.sha256(b'migration').hexdigest())
             before = dict(await conn.fetchrow('SELECT * FROM v2_telegram_events'))
-            self.assertEqual(['019_telegram_reconciliation_claims.sql','020_review_job_notifications.sql',
-                              '021_review_search_all_phases.sql','022_result_observations.sql',
-                              '023_telegram_author_backfill.sql','024_telegram_observation_request_id.sql',
-                          '025_telegram_event_members_lookup.sql','026_quote_nonclosed_lookup.sql',
-                          '027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql','029_review_latest_result_lookup.sql'],
+            self.assertEqual(migration_suffix('019_telegram_reconciliation_claims.sql'),
                              await database.apply_migrations(conn))
             after = dict(await conn.fetchrow('SELECT * FROM v2_telegram_events'))
             self.assertEqual(before,{key:after[key] for key in before})

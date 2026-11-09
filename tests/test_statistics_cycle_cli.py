@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.parse import urlsplit
 import uuid
 
@@ -34,11 +35,25 @@ class StatisticsCycleCLITests(unittest.IsolatedAsyncioTestCase):
         self.directory.cleanup()
 
     async def command(self, *args):
+        source = Path(__file__).resolve().parents[1]
+        module_paths = (source/'services/api', source/'services', source)
         process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'app.statistics_cycle', *args,
-            env={**os.environ, 'DATABASE_URL':self.dsn}, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            cwd=source, env={**os.environ, 'DATABASE_URL':self.dsn,
+                'PYTHONPATH':os.pathsep.join(map(str, module_paths))},
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await asyncio.wait_for(process.communicate(), 30)
         self.assertEqual(b'', stderr)
         return process.returncode, json.loads(stdout)
+
+    async def test_cli_uses_current_frozen_source_despite_unrelated_parent_pythonpath(self):
+        async with self.pool.acquire() as conn:
+            await apply_migrations(conn)
+        manifest = Path(self.directory.name) / 'frozen-source-plan.json'
+        with patch.dict(os.environ, {'PYTHONPATH':self.directory.name}):
+            code, result = await self.command('preview', '--output', str(manifest))
+        self.assertEqual(0, code)
+        self.assertEqual('preview', result['action'])
+        self.assertEqual(0, result['expert_count'])
 
     async def test_preview_private_manifest_apply_replay_and_revoke(self):
         async with self.pool.acquire() as conn:

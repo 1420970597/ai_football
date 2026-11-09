@@ -11,6 +11,12 @@ import asyncpg
 from app.database import MIGRATIONS, MigrationRequired, apply_migrations, check_schema
 
 
+def migration_suffix(first: str) -> list[str]:
+    """Exact current upgrade list anchored at the migration under test."""
+    versions = sorted(path.name for path in MIGRATIONS.glob('[0-9]*_*.sql'))
+    return versions[versions.index(first):]
+
+
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_ADMIN_URL"), "requires isolated database admin URL")
 class MigrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -62,9 +68,7 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         await self.conn.execute("INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key) VALUES($1,$2,'queued',$3)", job, message, str(job))
         await self.conn.execute("INSERT INTO v2_match_searches(job_id,search_key,team_query,phase) VALUES($1,'original','Team','all')", job)
         before = dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job))
-        self.assertEqual(['021_review_search_all_phases.sql','022_result_observations.sql',
-                          '023_telegram_author_backfill.sql','024_telegram_observation_request_id.sql',
-                          '025_telegram_event_members_lookup.sql','026_quote_nonclosed_lookup.sql','027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql','029_review_latest_result_lookup.sql'],
+        self.assertEqual(migration_suffix('021_review_search_all_phases.sql'),
                          await apply_migrations(self.conn))
         self.assertEqual(before, dict(await self.conn.fetchrow('SELECT * FROM v2_match_searches WHERE job_id=$1', job)))
         for phase in ('finished', 'cancelled'):
@@ -93,9 +97,7 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         await self.conn.execute("INSERT INTO v2_fixture_results(fixture_id,version,provider_reference,content_hash,status,home_score,away_score,source_updated_at,evidence) "
                                 "VALUES('original',1,'known','original','confirmed',2,0,now(),'{}')")
         before=dict(await self.conn.fetchrow('SELECT * FROM v2_fixture_results'))
-        self.assertEqual(['022_result_observations.sql','023_telegram_author_backfill.sql',
-                          '024_telegram_observation_request_id.sql','025_telegram_event_members_lookup.sql',
-                          '026_quote_nonclosed_lookup.sql','027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql','029_review_latest_result_lookup.sql'],
+        self.assertEqual(migration_suffix('022_result_observations.sql'),
                          await apply_migrations(self.conn))
         after=dict(await self.conn.fetchrow('SELECT * FROM v2_fixture_results'))
         self.assertEqual(before,{k:after[k] for k in before})
@@ -116,8 +118,7 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         await self.conn.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,'123','Expert'),($2,'-100123','Channel')",expert,channel_expert)
         await self.conn.execute('INSERT INTO v2_source_experts(source_id,expert_id) VALUES($1,$2),($1,$3)',source,expert,channel_expert)
         await self.conn.execute('INSERT INTO v2_source_checkpoints(source_id,last_message_id) VALUES($1,72)',source)
-        self.assertEqual(['023_telegram_author_backfill.sql','024_telegram_observation_request_id.sql',
-                          '025_telegram_event_members_lookup.sql','026_quote_nonclosed_lookup.sql','027_telegram_message_event_lookup.sql','028_quote_summary_lookup.sql','029_review_latest_result_lookup.sql'],
+        self.assertEqual(migration_suffix('023_telegram_author_backfill.sql'),
                          await apply_migrations(self.conn))
         rows=await self.conn.fetch('SELECT expert_id,backfill_cursor,backfill_until_id,backfill_since,backfill_completed_at FROM v2_source_experts WHERE source_id=$1 ORDER BY expert_id',source)
         trusted=next(row for row in rows if row['expert_id']==expert)

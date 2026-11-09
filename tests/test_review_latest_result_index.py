@@ -38,7 +38,7 @@ class ReviewLatestResultIndexTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await other.close()
         self.assertEqual(1, sum(bool(v) for v in results))
-        self.assertIn(['029_review_latest_result_lookup.sql'], results)
+        self.assertIn(test_migrations.migration_suffix('029_review_latest_result_lookup.sql'), results)
         self.assertEqual(before, await self.conn.fetchrow(query))
         self.assertEqual([], await apply_migrations(self.conn))
         await check_schema(self.conn)
@@ -73,7 +73,7 @@ class ReviewLatestResultIndexTests(unittest.IsolatedAsyncioTestCase):
         query = "SELECT created_at,payload->>'model' AS model FROM v2_analysis_traces WHERE trace_kind='hermes_result' ORDER BY created_at DESC LIMIT 1"
         expected = await self.conn.fetchrow(query)
         self.assertEqual('sample-model-10', expected['model'])
-        self.assertEqual(['029_review_latest_result_lookup.sql'], await apply_migrations(self.conn))
+        self.assertEqual(test_migrations.migration_suffix('029_review_latest_result_lookup.sql'), await apply_migrations(self.conn))
         self.assertEqual(before, await self.conn.fetch(
             'SELECT *,xmin::text AS row_version,ctid::text AS location FROM v2_analysis_traces ORDER BY sequence_no'))
         self.assertEqual(expected, await self.conn.fetchrow(query))

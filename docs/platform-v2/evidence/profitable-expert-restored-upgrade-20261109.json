@@ -1,0 +1,43 @@
+{
+  "isolated_restored_database": true,
+  "production_writes": 0,
+  "before_migration_count": 28,
+  "applied": [
+    "030_profitable_expert_mode.sql"
+  ],
+  "repeat_migration_no_op": true,
+  "original_tables": {
+    "v2_expert_signals": {
+      "rows": 675,
+      "digest": "59504d4f176e6bedf24a48c7c6cc4cc7"
+    },
+    "v2_signal_settlements": {
+      "rows": 920,
+      "digest": "17b0fa80f69dcbadcfe30490c3ed25a9"
+    },
+    "v2_bet_orders": {
+      "rows": 2,
+      "digest": "5c55b73f38db243d7ab72214552b4d7d"
+    },
+    "v2_quote_evidence": {
+      "rows": 679,
+      "digest": "417acbe3ac048115a9b044e39fc31f6e"
+    },
+    "v2_fixture_results": {
+      "rows": 335,
+      "digest": "c6c1db62b32c11a56a330e54f9bdc10d"
+    }
+  },
+  "owner_policies_preserved_and_manual": true,
+  "reset_experts": 3,
+  "reset_signals": 579,
+  "reset_idempotent": true,
+  "unaffected_statistics_preserved": true,
+  "reset_clears_effective_accuracy_and_net": true,
+  "revoke_restores_exact_statistics": true,
+  "original_ledger_orders_quotes_and_results_preserved": true,
+  "audit_and_exclusion_snapshots_preserved": true,
+  "backup_restore_function_export_first_attempt_failed_and_preserved": true,
+  "production_migration_or_statistics_reset_performed": false,
+  "rollback_schema_smoke_scope": "Only before any profitable-mode activation and before any active statistics reset; schema compatibility does not establish business compatibility."
+}
