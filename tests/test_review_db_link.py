@@ -55,6 +55,14 @@ class ReviewLinkTests(unittest.TestCase):
         self.assertEqual('ssh', execute.call_args.args[0])
         logged.assert_called_once_with('review_link_unavailable', flush=True)
 
+    def test_health_mode_never_reads_ssh_credentials_or_starts_another_tunnel(self):
+        with patch.object(review_link.sys, 'argv', ['review_link.py', '--health']), \
+                patch.object(review_link, 'health', return_value=0) as health, \
+                patch.object(review_link.Path, 'read_text', side_effect=AssertionError('health read credentials')), \
+                patch.object(review_link.os, 'execvp', side_effect=AssertionError('health spawned SSH')):
+            self.assertEqual(0, review_link.main())
+        health.assert_called_once_with()
+
     def test_compose_only_adds_restricted_remote_process_and_private_local_forward(self):
         root = Path(__file__).resolve().parents[1]
         remote = yaml.safe_load((root/'infra/remote/compose.review-tools.remote.yml').read_text())
@@ -74,4 +82,9 @@ class ReviewLinkTests(unittest.TestCase):
         self.assertNotIn('environment', link)
         self.assertTrue(all(v['read_only'] for v in link['volumes']))
         self.assertNotIn('tunnel.json', str(link))
-        self.assertEqual(.05, link['cpus'])
+        self.assertEqual(.15, link['cpus'])
+        self.assertEqual(['python', '-S', '/deployment/review_link.py'], link['entrypoint'])
+        self.assertEqual(['CMD', 'python', '-S', '/deployment/review_link.py', '--health'], link['healthcheck']['test'])
+        self.assertEqual('4s', link['healthcheck']['timeout'])
+        self.assertEqual('64m', link['mem_limit'])
+        self.assertEqual(16, link['pids_limit'])

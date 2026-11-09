@@ -7,7 +7,7 @@ services:
       review-db-link: {condition: service_healthy}
   review-db-link:
     image: ${REMOTE_TUNNEL_IMAGE:?Pin verified storage tunnel image by digest}
-    entrypoint: [python, /deployment/review_link.py]
+    entrypoint: [python, -S, /deployment/review_link.py]
     volumes:
       - {type: bind, source: ./infra/remote/review_link.py, target: /deployment/review_link.py, read_only: true, bind: {create_host_path: false}}
       - {type: bind, source: ./.runtime/tunnel/ssh_config, target: /run/storage/ssh_config, read_only: true, bind: {create_host_path: false}}
@@ -15,7 +15,7 @@ services:
       - {type: bind, source: ./.runtime/tunnel/known_hosts, target: /run/storage/known_hosts, read_only: true, bind: {create_host_path: false}}
       - {type: bind, source: ./.runtime/review-tools/link.json, target: /run/review-tools/link.json, read_only: true, bind: {create_host_path: false}}
     healthcheck:
-      test: [CMD, python, /deployment/review_link.py, --health]
+      test: [CMD, python, -S, /deployment/review_link.py, --health]
       interval: 15s
       timeout: 4s
       retries: 3
@@ -26,7 +26,9 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: ['/tmp:rw,noexec,nosuid,nodev,size=16m']
-    cpus: .05
+    # At .05 CPU the bounded Python probe took 5.737s and exceeded 4s.
+    # .15 CPU with stdlib-only startup measured 1.711-1.803s on the live link.
+    cpus: .15
     mem_limit: 64m
     pids_limit: 16
     logging: {driver: json-file, options: {max-size: 10m, max-file: '3'}}
