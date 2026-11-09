@@ -85,19 +85,44 @@ def compact_tool_result(result):
 
 compact_descriptions: ContextVar[bool] = ContextVar('compact_tool_descriptions', default=False)
 compact_market_tables: ContextVar[bool] = ContextVar('compact_market_tables', default=False)
+explicit_market_intent: ContextVar[bool] = ContextVar('explicit_market_intent', default=False)
+INTENT_ARGUMENT_DESCRIPTIONS = {
+    'read_markets': '原文或图片已明确双方、玩法及期间的新增推荐，首次search_matches或消歧resolve_match传true，并同时传market_kind、period和market_query；只在完整搜索且唯一活动绑定后返回market_result。复用该结果，不重复list_match_markets；完整过滤结果中原期间/线/方向全部closed或suspended时直接说明原盘口不可用，禁止去掉筛选再读盘找替代线。未知意图保持false，不猜参数。',
+    'market_kind': '原文明示的玩法：大小球用total，让球用handicap；与read_markets=true一起传，不从赔率猜玩法。其他玩法按工具已知原生类型核验。',
+    'period': '按原文明示期间：全场full_time、上半场first_half、下半场second_half。已知时与read_markets=true一起传；不能把上半场换成全场，未知时不要猜。',
+}
 
 
 class CompactMCPServer(MCPServer):
     async def list_tools(self):
         tools = await super().list_tools()
-        if not compact_descriptions.get():
-            return tools
-        # The primary connection still advertises the full descriptions. Keep
-        # every input schema (including its field descriptions) and annotation;
-        # this second session exists to avoid the pinned client's RPC lock.
-        return [tool.model_copy(update={'description':
-            f'独立并行调用football.{tool.name}；完整规则见同名主工具，'
-            '参数、分页、绑定、读盘及录入校验不变。'}) for tool in tools]
+        # Legacy profiles retain native schemas. Only the explicit intent
+        # profiles request these nullable fields on every lookup. The second
+        # connection also avoids the pinned client's per-session RPC lock.
+        result = []
+        for tool in tools:
+            updates = {}
+            if explicit_market_intent.get() and tool.name == 'search_matches':
+                updates['description'] = (tool.description or '').replace(
+                    'resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。',
+                    'resolved=true时绑定已完成：fixture.realtime_eligible=true才可读盘；false或phase为finished/cancelled时停止读盘，说明不可实时录入；仅未唯一绑定时再resolve_match。')
+            if compact_descriptions.get():
+                updates['description'] = (f'独立并行调用football.{tool.name}；完整规则见同名主工具，'
+                    '参数、分页、绑定、读盘及录入校验不变。')
+            if explicit_market_intent.get() and tool.name in {'search_matches', 'resolve_match'}:
+                fields = ('read_markets', 'market_kind', 'period', 'market_query')
+                schema = dict(tool.input_schema)
+                properties = dict(schema['properties'])
+                for field in fields:
+                    properties[field] = {key: value for key, value in properties[field].items()
+                                         if key != 'default'}
+                    if field in INTENT_ARGUMENT_DESCRIPTIONS:
+                        properties[field]['description'] = INTENT_ARGUMENT_DESCRIPTIONS[field]
+                schema['properties'] = properties
+                schema['required'] = list(dict.fromkeys([*schema.get('required', []), *fields]))
+                updates['input_schema'] = schema
+            result.append(tool.model_copy(update=updates) if updates else tool)
+        return result
 
     async def call_tool(self, name: str, arguments: dict, context=None):
         result = await super().call_tool(name, arguments, context=context)
@@ -333,13 +358,19 @@ class BearerAuthentication:
             return
         profiles = [value for name, value in scope.get('headers', [])
                     if name.lower() == b'x-football-tool-profile']
-        token = compact_descriptions.set(profiles in ([b'parallel-compact-v1'], [b'parallel-table-v1']))
-        table_token = compact_market_tables.set(profiles in ([b'market-table-v1'], [b'parallel-table-v1']))
+        token = compact_descriptions.set(profiles in (
+            [b'parallel-compact-v1'], [b'parallel-table-v1'], [b'parallel-intent-v1']))
+        table_token = compact_market_tables.set(profiles in (
+            [b'market-table-v1'], [b'parallel-table-v1'],
+            [b'market-intent-v1'], [b'parallel-intent-v1']))
+        intent_token = explicit_market_intent.set(profiles in (
+            [b'market-intent-v1'], [b'parallel-intent-v1']))
         try:
             await self.app(scope, receive, send)
         finally:
             compact_descriptions.reset(token)
             compact_market_tables.reset(table_token)
+            explicit_market_intent.reset(intent_token)
 
 
 async def main() -> None:

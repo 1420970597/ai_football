@@ -174,12 +174,90 @@ class MCPDescriptionBudgetTests(unittest.IsolatedAsyncioTestCase):
         servers = config['mcp_servers']
         self.assertEqual({'football', 'football_parallel'}, set(servers))
         primary, parallel = servers['football'], servers['football_parallel']
-        self.assertEqual('parallel-table-v1',
+        self.assertEqual('parallel-intent-v1',
                          parallel['headers'].get('X-Football-Tool-Profile'))
-        self.assertEqual('market-table-v1',
+        self.assertEqual('market-intent-v1',
                          primary['headers'].get('X-Football-Tool-Profile'))
         without_profile = {**parallel, 'headers': {k: v for k, v in parallel['headers'].items()
                                                  if k != 'X-Football-Tool-Profile'}}
         primary_without_profile = {**primary, 'headers': {
             k: v for k, v in primary['headers'].items() if k != 'X-Football-Tool-Profile'}}
         self.assertEqual(primary_without_profile, without_profile)
+
+    async def test_explicit_intent_is_opt_in_and_preserves_nullable_argument_types(self):
+        primary = {t['name']: t for t in await self.tools()}
+        fields = {'read_markets', 'market_kind', 'period', 'market_query'}
+        for profile in ('market-intent-v1', 'parallel-intent-v1'):
+            actual = {t['name']: t for t in await self.tools({'X-Football-Tool-Profile': profile})}
+            self.assertEqual(set(primary), set(actual))
+            if profile == 'market-intent-v1':
+                self.assertIn('仅未唯一绑定时再resolve_match', actual['search_matches']['description'])
+                self.assertNotIn('否则用resolve_match继续核验', actual['search_matches']['description'])
+            for name in ('search_matches', 'resolve_match'):
+                before, after = primary[name]['inputSchema'], actual[name]['inputSchema']
+                self.assertEqual(set(before['required']) | fields, set(after['required']))
+                for field, original in before['properties'].items():
+                    changed = after['properties'][field]
+                    if field not in fields:
+                        self.assertEqual(original, changed)
+                        continue
+                    self.assertNotIn('default', changed)
+                    self.assertGreater(len(changed['description']), 30)
+                    self.assertEqual({k: v for k, v in original.items() if k not in {'default', 'description'}},
+                                     {k: v for k, v in changed.items() if k != 'description'})
+            self.assertEqual(primary, {t['name']: t for t in await self.tools()})
+
+    async def test_explicit_unknown_intent_remains_search_only_and_authentication_still_required(self):
+        calls = []
+        def upstream(request):
+            calls.append(request.url.path)
+            return httpx.Response(200, json={'search_complete': True, 'next_cursor': None,
+                'resolution': {'resolved': False, 'reason': 'ambiguous'}})
+        await self.server.client.aclose()
+        self.server.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        profile = {'X-Football-Tool-Profile': 'market-intent-v1'}
+        arguments = {'review_id': 'job', 'attempt_id': 'attempt', 'team_query': 'Alpha',
+                     'read_markets': False, 'market_kind': None, 'period': None, 'market_query': None}
+        denied = await self.rpc(headers={**profile, 'Authorization': 'Bearer invalid'})
+        self.assertEqual(401, denied.status_code)
+        response = await self.rpc('tools/call', {'name': 'search_matches', 'arguments': arguments}, profile)
+        self.assertFalse(response.json()['result'].get('isError', False))
+        self.assertEqual(['/internal/mcp/search_matches'], calls)
+
+    async def test_simultaneous_explicit_and_legacy_lists_do_not_share_schema_mutations(self):
+        primary = await self.native_tools()
+        original = MCPServer.list_tools
+        entered, together = 0, asyncio.Event()
+        async def delayed(instance):
+            nonlocal entered
+            entered += 1
+            if entered == 2:
+                together.set()
+            await asyncio.wait_for(together.wait(), 3)
+            return await original(instance)
+        with patch.object(MCPServer, 'list_tools', delayed):
+            explicit, legacy = await asyncio.gather(
+                self.tools({'X-Football-Tool-Profile': 'market-intent-v1'}), self.tools())
+        self.assertEqual(primary, legacy)
+        self.assertEqual(primary, await self.tools())
+        search = next(t for t in explicit if t['name'] == 'search_matches')
+        self.assertIn('read_markets', search['inputSchema']['required'])
+
+    async def test_explicit_profile_context_is_reset_after_failure_or_cancellation(self):
+        for cancelled in (False, True):
+            async def failing(scope, receive, send):
+                self.assertTrue(self.server.explicit_market_intent.get())
+                self.assertTrue(self.server.compact_market_tables.get())
+                self.assertTrue(self.server.compact_descriptions.get())
+                if cancelled:
+                    raise asyncio.CancelledError()
+                raise RuntimeError('isolated explicit intent failure')
+            wrapper = self.server.BearerAuthentication(failing)
+            scope = {'type': 'http', 'headers': [
+                (b'authorization', b'Bearer isolated-description-budget'),
+                (b'x-football-tool-profile', b'parallel-intent-v1')]}
+            with self.assertRaises(asyncio.CancelledError if cancelled else RuntimeError):
+                await wrapper(scope, None, None)
+            self.assertFalse(self.server.explicit_market_intent.get())
+            self.assertFalse(self.server.compact_market_tables.get())
+            self.assertFalse(self.server.compact_descriptions.get())
