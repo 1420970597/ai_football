@@ -94,6 +94,14 @@ def _named_claim_clauses(text):
         if re.search(r'已(?:经)?[^，。；\n]{0,16}(?:匹配|识别|找到|确认|定位)'
                      r'|(?:匹配|识别|找到|确认|定位)(?:成功|完成)', clause):
             yield clause
+            continue
+        system_pair = re.search(r'对应(?:的)?系统(?:比赛|对阵)(?:为|是|[:：])', clause)
+        if system_pair and not re.search(
+                r'(?:无法|不能|未能|尚未|尚不能|没有|不可|不要|未)[^，,:：]{0,16}$',
+                clause[:system_pair.start()]):
+            # This is a request for the existing attempt-scoped negative check,
+            # never a binding or evidence inferred from the model's wording.
+            yield clause
 
 
 def named_identity_claims(contents) -> str:

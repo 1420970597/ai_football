@@ -13,6 +13,19 @@ from app.review_summary import record_summary
 import test_reviews as support
 
 
+class NamedSystemPairClaimTests(unittest.TestCase):
+    def test_only_asserted_system_pair_statements_enter_existing_binding_check(self):
+        for content in ('对应系统比赛为 Alpha1 对 Beta1。',
+                        '对应的系统对阵是 Alpha1 VS Beta1。'):
+            with self.subTest(content=content):
+                self.assertIn('Alpha1', named_identity_claims([content]))
+        for content in ('无法确认对应系统比赛为 Alpha1 对 Beta1。',
+                        '尚未确定对应的系统对阵是 Alpha1 VS Beta1。',
+                        '对应系统比赛可能为 Alpha1 对 Beta1。'):
+            with self.subTest(content=content):
+                self.assertEqual('', named_identity_claims([content]))
+
+
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'), 'requires task-owned isolated database')
 class NamedReviewCompletionTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = support.ReviewTests.asyncSetUp
@@ -42,6 +55,42 @@ class NamedReviewCompletionTests(unittest.IsolatedAsyncioTestCase):
                                 self.job, uuid.uuid4())
         self.assertEqual({}, await self.issues(text))
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+
+    async def test_system_pair_statement_without_fixture_id_requires_actual_binding(self):
+        await self.prepare()
+        text = '这场已识别但已完场。\n\n对应系统比赛为 Alpha1 对 Beta1，工具返回 finished，未录入。'
+        job = dict(id=self.job, attempt_id=self.attempt, message={})
+        with patch.object(worker, 'review_message', AsyncMock(return_value=(text, {'content': text}))) as call:
+            _, summary = await worker._review_until_verified(self.pool, SimpleNamespace(), job)
+        self.assertEqual(3, call.await_count)
+        self.assertFalse(summary['completion_verified'])
+        self.assertEqual(1, summary['completion_issues']['unbound_mention_count'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_real_binding_satisfies_same_system_pair_statement_in_one_turn(self):
+        key = await self.prepare()
+        response = await self.post('resolve_match', search_key=key, team_a='Alpha1', team_b='Beta1')
+        self.assertTrue(response.json()['resolved'])
+        text = '对应的系统对阵是 Alpha1 对 Beta1，已完场，无有效实时推荐。'
+        job = dict(id=self.job, attempt_id=self.attempt, message={})
+        with patch.object(worker, 'review_message', AsyncMock(return_value=(text, {'content': text}))) as call:
+            _, summary = await worker._review_until_verified(self.pool, SimpleNamespace(), job)
+        self.assertEqual(1, call.await_count)
+        self.assertTrue(summary['completion_verified'])
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+
+    async def test_final_receipt_rechecks_system_pair_statement_from_prior_turn(self):
+        await self.prepare()
+        async with self.pool.acquire() as conn, conn.transaction():
+            await trace(conn, self.job, 'hermes_partial_result', dict(attempt_id=str(self.attempt),
+                content='对应系统比赛为 Alpha1 对 Beta1，已完场。'))
+            await trace(conn, self.job, 'hermes_result', dict(attempt_id=str(self.attempt),
+                content='本次审核结束', completion_verified=True))
+            await record_summary(conn, dict(id=self.job, message_id=self.message), self.attempt, 'real_time')
+        receipt = await self.pool.fetchval("SELECT payload FROM v2_analysis_traces WHERE trace_kind='system_review_result'")
+        self.assertFalse(receipt['completion_verified'])
+        self.assertEqual(1, receipt['completion_issues']['unbound_mention_count'])
 
     async def test_negative_single_team_and_unsearched_pair_do_not_request_binding(self):
         await self.prepare()
