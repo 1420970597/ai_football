@@ -335,6 +335,27 @@ class FixtureUploadWorkerTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(any(service._delivered_snapshots.matches(f) for f in fixtures))
             self.assertFalse(service._upload_lock.locked())
 
+    async def test_station_cancel_before_consumers_start_preserves_evidence_and_logs_dispatch(self):
+        async def handler(request):
+            self.fail('cancelled station upload must not dispatch an HTTP request')
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as api:
+            service = self.service(api)
+            fixtures = [self.fixture(c) for c in 'ab']
+            service._delivered_snapshots.remember(fixtures)
+            previous = service.last_upload_report
+            with self.one_fixture_batches(), self.assertLogs('platform.collector', level='INFO') as logs:
+                task = asyncio.create_task(service.upload(fixtures))
+                await asyncio.sleep(0)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            self.assertTrue(all(service._delivered_snapshots.matches(f) for f in fixtures))
+            self.assertIs(previous, service.last_upload_report)
+            self.assertFalse(service._upload_lock.locked())
+            self.assertEqual(1, len(logs.output))
+            self.assertIn('outcome=cancelled stage=waiting_dispatch', logs.output[0])
+
     async def test_station_shared_native_source_stays_serial_across_batches(self):
         entered, release = asyncio.Event(), asyncio.Event()
         calls = []

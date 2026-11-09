@@ -262,23 +262,37 @@ class CollectorService:
         # use both existing gate slots without creating one task per batch.
         remaining = iter(batches)
         failed = False
+        dispatched = False
+        started = time.monotonic()
 
         async def drain() -> int:
-            nonlocal failed
+            nonlocal failed, dispatched
             subtotal = 0
             for batch in remaining:
                 if failed:
                     break
                 try:
+                    dispatched = True
                     subtotal += await self._upload_batch(batch, precise=precise)
                 except BaseException:
                     failed = True
                     raise
             return subtotal
 
-        tasks = [asyncio.create_task(drain()) for _ in range(min(2, len(batches)))]
+        # Precise refreshes and small pushes need no extra scheduling hop.
+        # Enter their lock immediately so cancellation retains batch telemetry.
+        tasks = []
         try:
-            accepted = sum(await asyncio.gather(*tasks))
+            if len(batches) == 1:
+                accepted = await drain()
+            else:
+                tasks = [asyncio.create_task(drain()) for _ in range(min(2, len(batches)))]
+                accepted = sum(await asyncio.gather(*tasks))
+        except asyncio.CancelledError:
+            if not dispatched:
+                log.info('Leyu fixture upload outcome=cancelled stage=waiting_dispatch elapsed_ms=%.1f fixture_count=%s',
+                         (time.monotonic() - started) * 1000, len(outgoing))
+            raise
         finally:
             for task in tasks:
                 if not task.done():
