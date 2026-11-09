@@ -56,7 +56,7 @@ class RecordPolicyRoundTripTests(unittest.IsolatedAsyncioTestCase):
             "ON CONFLICT(setting_key) DO UPDATE SET encrypted_value=EXCLUDED.encrypted_value", raw)
         return raw
 
-    async def test_valid_record_saves_native_price_with_one_policy_only_read(self):
+    async def test_valid_record_saves_native_price_without_policy_only_roundtrips(self):
         pick = await self.prepare_pick()
         counted = CountedPool(self.pool)
         with patch.object(reviews.database, 'current_pool', return_value=counted):
@@ -67,8 +67,8 @@ class RecordPolicyRoundTripTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(('fixture-1', 'full_time', 'over', '2.500', '1.95000'),
                          tuple(accepted[k] for k in ('fixture_id', 'period', 'selection', 'line', 'price')))
         separate_policy_reads = [sql for sql in counted.reads if 'WHERE setting_key=ANY' in sql]
-        self.assertEqual(1, len(separate_policy_reads),
-                         'preflight may read the policy; final validation must share its fixture-lock read')
+        self.assertEqual(0, len(separate_policy_reads),
+                         'preflight and final validation must each include their current policy read')
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
         self.assertNotIn('quote_age_policy', response.text)
 

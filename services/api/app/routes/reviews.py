@@ -19,7 +19,7 @@ from ..handicap_lines import line_terms
 from ..review_line_intent import line_intent_rejection, line_intent_context
 from ..review_state import authorize, fresh_quote, quote_context, quote_context_changed_fields
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, MAX_MARKETS
-from ..runtime_settings import quote_max_age_from_rows, runtime_quote_max_age
+from ..runtime_settings import quote_max_age_from_rows
 from ..quote_observation import confirmation_for, confirmations_for
 from ..team_matching import normalize_team_name, with_verified_aliases
 from ..review_candidates import snapshot_candidates
@@ -549,16 +549,24 @@ async def record_expert_signals(body: RecordInput, request: Request):
         async with conn.transaction():
             job = await active_tool_job(conn, body.review_id, body.attempt_id)
             if job['review_mode'] == 'real_time' and 0 <= (datetime.now(timezone.utc)-job['posted_at']).total_seconds() <= REALTIME_WINDOW_SECONDS:
-                rows = await conn.fetch(
+                snapshot = await conn.fetch(
+                    'SELECT policy AS quote_age_policy,selected.* FROM (VALUES(1)) anchor(value) '
+                    "LEFT JOIN v2_admin_settings policy ON policy.setting_key='quote_max_age_seconds' "
+                    'LEFT JOIN LATERAL ('
                     'SELECT q.*,f.id AS fixture_identity,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,r.quote_context AS read_context '
                     'FROM v2_current_quotes q JOIN v2_fixtures f ON f.id=q.fixture_id '
                     'JOIN v2_review_market_reads r ON r.quote_id=q.id AND r.job_id=$1 AND r.attempt_id=$2 '
                     'JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 '
                     'JOIN (SELECT DISTINCT fixture_id,quote_id FROM unnest($3::text[],$4::uuid[]) AS pairs(fixture_id,quote_id)) wanted '
-                    'ON wanted.fixture_id=q.fixture_id AND wanted.quote_id=q.id',
+                    'ON wanted.fixture_id=q.fixture_id AND wanted.quote_id=q.id) selected ON TRUE',
                     body.review_id, body.attempt_id,
                     [p.fixture_id for p in body.signals], [p.quote_id for p in body.signals])
-                max_age = await runtime_quote_max_age(request.app.state.settings, conn)
+                # Include the current policy even when no requested pair is
+                # readable. Keep its encrypted row out of refresh witnesses.
+                policy = snapshot[0]['quote_age_policy']
+                max_age = quote_max_age_from_rows(request.app.state.settings, [] if policy is None else [policy])
+                rows = [{key: value for key, value in row.items() if key != 'quote_age_policy'}
+                        for row in snapshot if row['id'] is not None]
                 reusable_age = max(0, max_age-QUOTE_CONFIRMATION_WRITE_HEADROOM_SECONDS)
                 stale_fixtures = {q['fixture_id']: q['source_id'] for q in rows if q['phase'] in {'scheduled', 'live'} and q['status'] == 'active' and not fresh_quote(q, reusable_age) and not confirmation_for(
                     q['read_context'].get('current_confirmation'), q, dict(q) | {'id': q['fixture_identity']}, reusable_age)}
