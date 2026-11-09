@@ -15,6 +15,7 @@ _LINE = rf'(?P<a>{_NUMBER})(?:\s*/\s*(?P<second_sign>[+-])?\s*(?P<b>{_NUMBER}))?
 _HANDICAP = re.compile(rf'(?:(?<![A-Za-z0-9_./@])(?P<sign>[+-])|(?P<chinese>受让|受讓|让|讓))\s*{_LINE}'
                        r'(?![\d./+—–-])(?!(?:[ \t]*)(?:[uU]\b|元|注|倍|水|仓|倉|单位|單位|:))')
 _TOTAL = re.compile(rf'(?<![大小])(?P<direction>[大小])\s*{_LINE}(?![\d./+—–-])')
+_ENGLISH_TOTAL = re.compile(rf'\b(?:over|under)\s*{_LINE}(?![\d./+—–-])', re.IGNORECASE)
 _PRICE_PREFIX = re.compile(r'(?:赔率|賠率|倍率|odds|@)\s*$', re.IGNORECASE)
 
 
@@ -56,6 +57,13 @@ def evidence_line_intent(evidence_text, kind):
     if len(directions) != 1:
         return None
     return {'selection': next(iter(directions)), 'lines': [str(line) for _, line in sorted(intents)]}
+
+
+def source_has_explicit_total_line(text):
+    """Presence only; preserve independent picks with different directions."""
+    normalized = unicodedata.normalize('NFKC', text or '')
+    return any(_line(match) is not None for pattern in (_TOTAL,_ENGLISH_TOTAL)
+               for match in pattern.finditer(normalized))
 
 
 def line_intent_rejection(evidence_text, quote):

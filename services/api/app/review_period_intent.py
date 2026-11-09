@@ -24,10 +24,12 @@ _PERIODS = {'上半场': 'first_half', '上半場': 'first_half', '上半': 'fir
             '下半场': 'second_half', '下半場': 'second_half', '下半': 'second_half',
             '全场': 'full_time', '全場': 'full_time'}
 CORRECTION_REASONS = ('review_source_period_intent_ambiguous', 'review_source_period_intent_conflict',
-                      'review_source_line_intent_conflict', 'review_source_selection_intent_conflict')
+                      'review_source_line_intent_conflict', 'review_source_selection_intent_conflict',
+                      'review_source_period_not_supported', 'review_source_selection_not_supported')
 INTENT_VALID_SQL = ("NOT (s.withdrawn_at IS NOT NULL AND COALESCE(s.withdrawal_reason,'') IN ("
                     "'review_source_period_intent_ambiguous','review_source_period_intent_conflict',"
-                    "'review_source_line_intent_conflict','review_source_selection_intent_conflict'))")
+                    "'review_source_line_intent_conflict','review_source_selection_intent_conflict',"
+                    "'review_source_period_not_supported','review_source_selection_not_supported'))")
 
 
 def _asian_line(first, second):
@@ -111,6 +113,24 @@ def period_intent_rejection(text, quote, *, posted_at=None, now=None):
         return 'source_period_intent_ambiguous'
     if quote['period'] not in constraints:
         return 'source_period_intent_conflict'
+    return None
+
+
+def premarket_period_rejection(text, quote, declaration, *, has_visual_source=False):
+    """An unknown pre-market period cannot be supplied by the inventory.
+
+    A concrete textual line continues through the existing per-pick guards.
+    Image/shorthand-only totals must have a period before reading any markets.
+    The declaration is attempt/fixture-bound and write-once, not model prose
+    submitted alongside an already chosen quote.
+    """
+    from .review_line_intent import source_has_explicit_total_line
+    if (has_visual_source and quote.get('market_kind') in {'total','team_total'}
+            and isinstance(declaration,dict)
+            and declaration.get('algorithm') == 'premarket-source-intent-v1'
+            and declaration.get('period') is None
+            and not source_has_explicit_total_line(text)):
+        return 'source_period_unverified_before_market_read'
     return None
 
 

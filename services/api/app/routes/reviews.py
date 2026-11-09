@@ -29,7 +29,7 @@ from ..signal_persistence import persist_signals
 from ..review_resolution import resolve_candidates
 from ..review_market_query import market_filters
 from ..team_totals import team_total_terms
-from ..review_period_intent import period_intent_rejection, verified_early_first_half_context
+from ..review_period_intent import period_intent_rejection, verified_early_first_half_context, premarket_period_rejection
 from quote_witness import known_quote_snapshot
 
 router = APIRouter(prefix="/internal/mcp")
@@ -305,10 +305,17 @@ async def _market_snapshot(conn, body, settings, filters):
     where, values = _market_filter_sql(body.fixture_id, filters)
     values.extend((body.review_id, body.attempt_id, MAX_MARKETS + 1))
     review_parameter, attempt_parameter, limit_parameter = range(len(values)-2, len(values)+1)
+    values.append({'algorithm':'premarket-source-intent-v1',
+                   **{key:str(value)if isinstance(value,Decimal)else value
+                      for key,value in filters.items()}})
     # One statement observes the current binding, fixture and complete quote
     # inventory together. Composite rows preserve native Decimal/UTC values;
     # the anchor also preserves explicit errors when no active fixture exists.
     rows = await conn.fetch(
+        'WITH declared AS (UPDATE v2_review_fixture_bindings SET evidence=evidence || '
+        "jsonb_build_object('source_market_intent',$" + str(len(values)) + '::jsonb) '
+        'WHERE job_id=$' + str(review_parameter) + ' AND attempt_id=$' + str(attempt_parameter) +
+        " AND fixture_id=$1 AND NOT evidence ? 'source_market_intent' RETURNING fixture_id) "
         'SELECT f AS fixture,EXISTS(SELECT 1 FROM v2_review_fixture_bindings b '
         'WHERE b.job_id=$' + str(review_parameter) + ' AND b.attempt_id=$' + str(attempt_parameter) +
         ' AND b.fixture_id=$1) AS review_fixture_bound,inventory.total_quotes,policy AS quote_age_policy,q.* '
@@ -475,6 +482,7 @@ async def _record_current_signals(conn, body, request, observations):
             "SELECT q.*,f.source_id,f.phase,f.home_score,f.away_score,f.half_home_score,f.half_away_score,"
             "f.sport AS fixture_sport,f.match_state AS fixture_match_state,f.clock_minute AS fixture_clock_minute,"
             "f.received_at AS fixture_received_at,c.candidate_data AS intent_candidate,"
+            "b.evidence->'source_market_intent' AS source_market_intent,"
             "r.quote_context AS read_context,r.source_updated_at AS read_source_time,r.price AS read_price FROM v2_current_quotes q "
             "JOIN v2_fixtures f ON f.id=q.fixture_id JOIN v2_review_fixture_bindings b ON b.fixture_id=q.fixture_id AND b.job_id=$1 AND b.attempt_id=$2 "
             "LEFT JOIN v2_match_searches search ON search.job_id=b.job_id AND search.search_key=b.search_key AND search.attempt_id=$2 AND search.complete "
@@ -501,6 +509,8 @@ async def _record_current_signals(conn, body, request, observations):
             confirmation = confirmation_for(observations.get(pick.fixture_id), quote, fixture, max_quote_age)
             confirmation = confirmation or confirmation_for(quote['read_context'].get('current_confirmation'), quote, fixture, max_quote_age)
             period_rejection = period_intent_rejection(job['raw_text'], quote, posted_at=job['posted_at'])
+            period_rejection = period_rejection or premarket_period_rejection(
+                job['raw_text'],quote,quote['source_market_intent'],has_visual_source=bool(job['media_objects']))
             line_rejection = line_intent_rejection(pick.evidence_text, quote)
         if not quote:
             reason = "quote_not_read_or_changed"

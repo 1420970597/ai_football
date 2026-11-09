@@ -15,6 +15,13 @@ SOURCE_NAMES = (
 
 
 class SourceLeagueNameTests(unittest.TestCase):
+    def test_observed_norway_abbreviation_is_scoped_to_football(self):
+        self.assertEqual(normalize_competition_name('挪威超级联赛','football'),
+                         normalize_competition_name('挪超','football'))
+        for sport in (None,'basketball'):
+            self.assertNotEqual(normalize_competition_name('挪威超级联赛',sport),
+                                normalize_competition_name('挪超',sport))
+
     def test_observed_whole_names_share_one_football_identity(self):
         for source, canonical in SOURCE_NAMES:
             with self.subTest(source=source):

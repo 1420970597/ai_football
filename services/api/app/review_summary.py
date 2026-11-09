@@ -28,6 +28,7 @@ REASONS = {
     'message_timestamp_in_future': '消息发布时间晚于当前时间',
     'source_period_intent_conflict': '原文推荐期间与盘口期间冲突，不能改用其他期间',
     'source_period_intent_ambiguous': '原文期间简写存在歧义，不能按可售盘口推断期间',
+    'source_period_unverified_before_market_read': '原文无明确大小球线值且首次读盘前期间未确认；不能从可售盘口倒推，须保留未解决',
     'source_line_intent_conflict': '原证据盘口线与所提交报价编号不一致',
     'source_selection_intent_conflict': '原证据方向与所提交报价编号不一致',
 }

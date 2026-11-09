@@ -19,6 +19,8 @@ def _signal_context(job, attempt_id, quote, pick, confirmation):
                 'reviewed_source_updated_at': quote['read_source_time'].isoformat() if quote['read_source_time'] else None}
     if quote.get('source_period_context') is not None:
         evidence['source_period_context'] = quote['source_period_context']
+    if quote.get('source_market_intent') is not None:
+        evidence['source_market_intent'] = quote['source_market_intent']
     return baseline, evidence
 
 
