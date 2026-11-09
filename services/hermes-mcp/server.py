@@ -313,6 +313,9 @@ def _unique_source_total(markets, fixture_id, market_kind, period):
     """Select nothing unless the native exact scope contains one eligible row."""
     if not isinstance(markets, dict):
         return None
+    parent = markets.get('fixture')
+    if not isinstance(parent, dict) or parent.get('id') != fixture_id:
+        return None
     scope, coverage, quotes = (markets.get(key) for key in ('market_filter', 'market_coverage', 'markets'))
     if (not isinstance(scope, dict) or not isinstance(coverage, dict)
             or not isinstance(quotes, list) or len(quotes) != 1
@@ -325,7 +328,8 @@ def _unique_source_total(markets, fixture_id, market_kind, period):
             or scope.get('selection') not in {'over', 'under'}):
         return None
     quote = quotes[0]
-    if (not isinstance(quote, dict) or quote.get('fixture_id') != fixture_id
+    if (not isinstance(quote, dict)
+            or ('fixture_id' in quote and quote['fixture_id'] != fixture_id)
             or quote.get('market_kind') != market_kind or quote.get('period') != period
             or quote.get('selection') != scope['selection'] or quote.get('status') != 'active'
             or quote.get('can_record') is not True or not isinstance(quote.get('quote_id'), str)
@@ -346,17 +350,19 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str | None
                          phase: str = "all", competition_query: str | None = None,
                          from_utc: str | None = None, to_utc: str | None = None,
                          cursor: Annotated[str | None, Field(description="仅逐字复制本次search_matches返回的next_cursor；首查不传，禁止自行构造游标。")] = None,
-                         page_size: int = 100, sport: str | None = None,
+                         page_size: int = 100,
+                         sport: Annotated[str | None, Field(description="按来源实际体育项目传football或basketball等；原图足球联赛可识别时须传football，联赛简称仅在对应项目内归一。确实未知才省略，不以工具服务器名称猜项目。")] = None,
                          team_a: Annotated[str | None, Field(description="原文或原图明确可读的第一支球队名；双方已知时首次查询即与team_b成对传入，复用服务端唯一绑定。")] = None,
                          team_b: Annotated[str | None, Field(description="原文或原图明确可读的第二支球队名；双方已知时首次查询即与team_a成对传入，不从候选猜造原文球队。")] = None,
-                         read_markets: bool = False, market_kind: str | None = None,
+                         read_markets: Annotated[bool, Field(description="来源已明确玩法/期间时合并读盘；明确单项total/期间/方向/数字线时，须同时传record_source_intent=true、market_query和evidence_text，由原生完整唯一有效范围决定是否录入。")] = False,
+                         market_kind: str | None = None,
                          period: str | None = None,
                          market_query: Annotated[str | None, Field(max_length=120,
                              description="原文明示的盘口查询，例如小3.5、大0.5/1；仅传给唯一绑定后的读盘，不参与球队检索，不比较倍率。")] = None,
-                         record_source_intent: Annotated[bool, Field(description="来源明确双方、total玩法、期间、方向及线值时可传true，同时read_markets=true并提供market_query/evidence_text；仅完整唯一绑定且原生精确范围恰好一个有效选项时复用原生录入，返回record_result。未知期间保持false，默认不录入。")] = False,
+                         record_source_intent: Annotated[bool, Field(description="来源明确双方、total玩法、期间、方向及线值时须传true，同时read_markets=true并提供market_query/evidence_text；仅完整唯一绑定且原生精确范围恰好一个有效选项时复用原生录入，返回record_result。未知期间保持false，默认不录入。")] = False,
                          evidence_text: Annotated[str | None, Field(max_length=3000,
                              description="与record_source_intent=true一起传的本项原文/原图选择证据；不得根据可售库存补造期间、方向或线值。")] = None) -> dict:
-    """提供team_query，或同时提供原文明示的team_a/team_b并逐字复用team_a检索；显式team_query包括空串不被覆盖。原名或片段无双方对应候选时，可传空串展开同联赛：必须同时给competition_query、sport及正区间≤7天的from_utc/to_utc；competition_time_candidate只是待核验候选，不是身份绑定。phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。已知玩法/期间时read_markets=true可在唯一绑定后返回market_result，复用此读盘而不重复调用；期间使用full_time/first_half/second_half。不完整或不唯一时不读。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
+    """首次查询即传来源体育项目sport、双方team_a/team_b及原始时间范围。来源明确单项大小球、期间、方向与数字线时，同时传read_markets=true、market_kind=total、period、market_query、record_source_intent=true和evidence_text；工具在完整唯一有效范围内直接录入，返回record_result才算接受，不再重复提交。未知期间保持不录入。提供team_query，或同时提供原文明示的team_a/team_b并逐字复用team_a检索；显式team_query包括空串不被覆盖。原名或片段无双方对应候选时，可传空串展开同联赛：必须同时给competition_query、sport及正区间≤7天的from_utc/to_utc；competition_time_candidate只是待核验候选，不是身份绑定。phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。已知玩法/期间时read_markets=true可在唯一绑定后返回market_result，复用此读盘而不重复调用；期间使用full_time/first_half/second_half。不完整或不唯一时不读。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
     if record_source_intent:
         _require_source_record_scope(read_markets, market_kind, period, market_query, evidence_text)
     if team_query is None:
@@ -389,7 +395,7 @@ async def resolve_match(review_id: str, attempt_id: str,
                         record_source_intent: Annotated[bool, Field(description="来源明确total玩法、期间、方向及线值时传true并提供原文证据；仅已完成唯一绑定及精确唯一有效读盘后复用原生录入，record_result才是接受事实，默认false。")] = False,
                         evidence_text: Annotated[str | None, Field(max_length=3000,
                             description="本项来源推荐证据，与record_source_intent=true一起提供，不从库存反推。")] = None) -> dict:
-    """全候选翻页结束后，用双方系统队名或常见别名、联赛和时间唯一消歧；支持常见缩写、标点/重音差异和清晰队名前缀，多候选返回未解决。优先使用候选中的标准队名。玩法/期间明确时read_markets=true可在唯一活动绑定后返回market_result，复用读盘减少模型轮次；失败仍保留工具错误。"""
+    """全候选翻页结束后，用双方系统队名或常见别名、联赛和时间唯一消歧。来源已明确单项total/期间/方向/数字线时，同时传read_markets=true、market_kind/period/market_query、record_source_intent=true和evidence_text，在完整唯一有效读盘后复用原生录入；检查record_result，不重复提交已接受项。支持常见缩写、标点/重音差异和清晰队名前缀，多候选返回未解决。优先使用候选中的标准队名。其它玩法/期间明确时read_markets=true可在唯一活动绑定后返回market_result，复用读盘减少模型轮次；失败仍保留工具错误。"""
     if record_source_intent:
         _require_source_record_scope(read_markets, market_kind, period, market_query, evidence_text)
     result = await _post("resolve_match", {

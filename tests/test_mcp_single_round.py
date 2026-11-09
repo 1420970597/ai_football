@@ -25,11 +25,12 @@ class SingleRoundRecordTests(unittest.IsolatedAsyncioTestCase):
                 'market_kind': 'total', 'market_id': '18', 'period': 'first_half',
                 'line': '1.500', 'selection': 'over', 'status': 'active', 'can_record': True} | changes
 
-    async def install(self, *, quotes=None, coverage=None, filters=None,
+    async def install(self, *, quotes=None, coverage=None, filters=None, market_fixture=...,
                       resolution=None, complete=True, failure=None, record_wait=None, record_result=None):
         calls = []
         quotes = [self.quote()] if quotes is None else quotes
-        markets = {'markets': quotes,
+        markets = {'fixture': {'id': 'leyu:123456'} if market_fixture is ... else market_fixture,
+                   'markets': quotes,
                    'market_filter': {'market_kind': 'total', 'period': 'first_half',
                                      'line': '1.5', 'selection': 'over'} if filters is None else filters,
                    'market_coverage': {'total_quotes': 30, 'matched_quotes': len(quotes),
@@ -95,6 +96,24 @@ class SingleRoundRecordTests(unittest.IsolatedAsyncioTestCase):
         value = json.loads(result['content'][0]['text'])
         self.assertNotIn('record_result', value)
         self.assertEqual(['search_matches', 'list_match_markets'], [p for p, _ in calls])
+
+    async def test_native_parent_scopes_rows_without_duplicated_fixture_identity(self):
+        quote = self.quote()
+        quote.pop('fixture_id')
+        calls = await self.install(quotes=[quote])
+        result = await self.call()
+        self.assertEqual(['search_matches', 'list_match_markets', 'record_expert_signals'],
+                         [path for path, _ in calls])
+        self.assertEqual('1.95000', result['record_result']['accepted'][0]['price'])
+        self.assertEqual('leyu:123456', calls[-1][1]['signals'][0]['fixture_id'])
+
+    async def test_missing_or_mismatched_native_parent_never_records(self):
+        for fixture in (None, {}, {'id': ''}, {'id': 'leyu:other'}):
+            with self.subTest(fixture=fixture):
+                calls = await self.install(market_fixture=fixture)
+                result = await self.call()
+                self.assertFalse(result['source_intent_recording']['attempted'])
+                self.assertNotIn('record_expert_signals', [path for path, _ in calls])
 
     async def test_invalid_fast_path_request_fails_before_any_lookup(self):
         for changes in ({'read_markets': False}, {'period': None}, {'period': 'unknown'},
