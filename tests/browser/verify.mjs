@@ -1869,6 +1869,8 @@ for (const width of [1440, 390]) {
     ["review_source_period_intent_conflict", "已撤销：推荐期间无法核验"],
     ["review_source_line_intent_conflict", "已撤销：推荐盘口线与来源证据不一致"],
     ["review_source_selection_intent_conflict", "已撤销：推荐方向与来源证据不一致"],
+    ["review_source_period_not_supported", "已撤销：来源未明确推荐期间"],
+    ["review_source_selection_not_supported", "已撤销：来源未选择该推荐项"],
   ]) {
     await test(`撤回推荐状态 ${reason} / ${width}`, async () => {
       const { page, context, log } = await setup({ dual: true, signalWithdrawalReason: reason });
@@ -1885,6 +1887,14 @@ for (const width of [1440, 390]) {
           assert.doesNotMatch(text, /推荐期间无法核验|期间纠错/);
         if (reason === "review_source_line_intent_conflict") assert.match(text, /盘口线纠错，已排除统计/);
         if (reason === "review_source_selection_intent_conflict") assert.match(text, /方向纠错，已排除统计/);
+        if (reason === "review_source_period_not_supported") {
+          assert.match(text, /期间证据不足，已排除统计/);
+          assert.doesNotMatch(text, /方向纠错|盘口线纠错|选择证据不足/);
+        }
+        if (reason === "review_source_selection_not_supported") {
+          assert.match(text, /选择证据不足，已排除统计/);
+          assert.doesNotMatch(text, /方向纠错|盘口线纠错|期间纠错|推荐方向与来源/);
+        }
         assert.doesNotMatch(text, /等待赛果结算/);
         assert.doesNotMatch(text, /待结算/);
         assert.match(text, /系统赔率 1\.96/);
@@ -1894,7 +1904,7 @@ for (const width of [1440, 390]) {
         assert.equal(log.filter(request => ["POST", "PUT", "PATCH", "DELETE"].includes(request.method)).length, 0);
         if (reason === "source_edited")
           await page.screenshot({ path: `${evidence}/withdrawn-source-edited-${width}.png` });
-        if (["review_source_line_intent_conflict", "review_source_selection_intent_conflict"].includes(reason))
+        if (["review_source_line_intent_conflict", "review_source_selection_intent_conflict", "review_source_period_not_supported", "review_source_selection_not_supported"].includes(reason))
           await page.screenshot({ path: `${evidence}/withdrawn-${reason}-${width}.png` });
       } finally {
         await context.close();
