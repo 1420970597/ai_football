@@ -95,6 +95,19 @@ def _utc(value):
     return value.astimezone(timezone.utc)
 
 
+def _trusted_message_author(chat_id, source, message):
+    """Keep the durable author boundary available before optional Telegram I/O."""
+    sender_id = str(getattr(message, "sender_id", "") or "")
+    trusted_sender_ids = {str(value) for value in source.get("trusted_sender_ids", [])}
+    channel_post_identity = (not sender_id and bool(getattr(message, "post", False))
+                             and chat_id in trusted_sender_ids)
+    if channel_post_identity:
+        # Explicitly trusted broadcast posts can lack from_id; ordinary group
+        # messages and anonymous administrators do not inherit this identity.
+        sender_id = chat_id
+    return (sender_id, channel_post_identity) if sender_id in trusted_sender_ids else None
+
+
 def _message_revision_evidence(message):
     return (message.id, str(message.date), str(getattr(message, 'edit_date', None)),
             getattr(message, 'message', ''), getattr(message, 'reply_to_msg_id', None),
@@ -160,6 +173,7 @@ class TelegramCollector:
         self.locks: dict[str, asyncio.Lock] = {}
         self.live_event_delivery = {
             "received": 0, "staged": 0, "deferred": 0, "unmapped_source": 0,
+            "ignored_author": 0,
             "last_received_at": None, "last_staged_at": None,
             "last_deferred_at": None, "last_deferred_category": None,
         }
@@ -927,6 +941,8 @@ class TelegramCollector:
         return sorted(members, key=lambda item: item.id)
 
     async def _process_message(self, chat_id: str, source: dict, message, entity=None):
+        if _trusted_message_author(chat_id, source, message) is None:
+            return {"state": "ignored_author"}
         members = await self._expand_album(message, entity) if getattr(message, "grouped_id", None) else [message]
         return await self._process_group(chat_id, source, members)
 
@@ -938,17 +954,10 @@ class TelegramCollector:
                            submission: dict | None = None, known_receipts: dict | None = None):
         """Persist the complete immutable version before any media transfer."""
         message = members[0]
-        sender_id = str(getattr(message, "sender_id", "") or "")
-        trusted_sender_ids = {str(value) for value in source.get("trusted_sender_ids", [])}
-        channel_post_identity = (not sender_id and bool(getattr(message, "post", False))
-                                 and chat_id in trusted_sender_ids)
-        if channel_post_identity:
-            # Broadcast channel posts can have no from_id/sender_id. A channel
-            # may be explicitly trusted as the author; do not apply this
-            # fallback to ordinary group messages or anonymous admins.
-            sender_id = chat_id
-        if sender_id not in trusted_sender_ids:
+        author = _trusted_message_author(chat_id, source, message)
+        if author is None:
             return {"state": "ignored_author"}, None
+        sender_id, channel_post_identity = author
         sender = getattr(message, "sender", None)
         manifests = []
         raw_text = "\n\n".join(item.message for item in members if getattr(item, "message", None))
@@ -1215,6 +1224,9 @@ class TelegramCollector:
             return
         payload = None
         group = sorted(members, key=lambda item: item.id) if full_album else members
+        if _trusted_message_author(chat_id, source, group[0]) is None:
+            delivery["ignored_author"] += 1
+            return
         started = time.monotonic()
         source_version_at = max(_utc(getattr(item, 'edit_date', None) or item.date) for item in group)
         source_age_ms = max(0.0, (datetime.now(timezone.utc) - source_version_at).total_seconds() * 1000)
