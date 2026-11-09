@@ -53,6 +53,7 @@ class Settings:
     hermes_provider: str = "custom:cline"
     review_config_url: str = "http://api:8080/internal/review/config"
     market_refresh_url: str = ""
+    quote_policy_projection: bool = False
 
 
 def _secret_bytes(name: str, expected: int) -> bytes:
@@ -70,24 +71,25 @@ def _secret_bytes(name: str, expected: int) -> bytes:
 
 
 def load_settings(*, role: str = "api") -> Settings:
-    if role not in {"api", "worker"}:
+    if role not in {"api", "worker", "mcp"}:
         raise ValueError("unknown service configuration role")
     return Settings(
         database_url=database_url(),
         session_secret=_secret_bytes("APP_SESSION_SECRET", 32) if role == "api" else b"",
         encryption_key=_secret_bytes("DATA_ENCRYPTION_KEY", 32) if role == "api" else b"",
         hermes_api_url=_clean(os.environ.get("HERMES_API_URL", "http://hermes:8642/v1")).rstrip("/"),
-        hermes_api_key=_required("HERMES_API_KEY") if role == "worker" else _clean(os.environ.get("HERMES_API_KEY", "")),
+        hermes_api_key=_required("HERMES_API_KEY") if role == "worker" else "" if role == "mcp" else _clean(os.environ.get("HERMES_API_KEY", "")),
         hermes_model=_clean(os.environ.get("HERMES_API_MODEL", "hermes-agent")),
-        mcp_internal_token=_required("EXPERT_MCP_TOKEN") if role == "api" else "",
-        collector_token=_required("COLLECTOR_INTERNAL_TOKEN") if role == "api" else "",
+        mcp_internal_token=_required("EXPERT_MCP_TOKEN") if role in {"api", "mcp"} else "",
+        collector_token=_required("COLLECTOR_INTERNAL_TOKEN") if role in {"api", "mcp"} else "",
         quote_max_age_seconds=max(1, int(_clean(os.environ.get("QUOTE_MAX_AGE_SECONDS", "15")))),
         cookie_secure=_clean(os.environ.get("COOKIE_SECURE", "true")).lower() == "true",
-        bootstrap_admin_email=_clean(os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "")).lower(),
-        bootstrap_admin_password=_clean(os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "")),
+        bootstrap_admin_email=_clean(os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "")).lower() if role != "mcp" else "",
+        bootstrap_admin_password=_clean(os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "")) if role != "mcp" else "",
         executor_token=_clean(os.environ.get("EXECUTOR_INTERNAL_TOKEN", "")) if role == "api" else "",
         live_orders_enabled=role == "api" and _clean(os.environ.get("LIVE_ORDERS_ENABLED", "false")).lower() == "true",
         hermes_provider=_clean(os.environ.get("HERMES_API_PROVIDER", "custom:cline")),
         review_config_url=_clean(os.environ.get("REVIEW_CONFIG_URL", "http://api:8080/internal/review/config")),
         market_refresh_url=_clean(os.environ.get("TELEGRAM_CONTROL_URL", "http://collector:8092")).rstrip("/") + "/leyu/refresh",
+        quote_policy_projection=role == "mcp",
     )

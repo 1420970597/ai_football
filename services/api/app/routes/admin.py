@@ -464,6 +464,9 @@ async def update_settings(body: SettingsInput, request: Request):
                     key, encrypted, admin["id"],
                 )
                 changed.append(key)
+            if 'quote_max_age_seconds' in changed:
+                from ..review_quote_policy import sync_quote_policy
+                await sync_quote_policy(conn, request.app.state.settings)
             if leyu_keys & set(changed):
                 version = await conn.fetchval("UPDATE v2_configuration_revisions SET revision=revision+1,updated_at=now() WHERE namespace='leyu' RETURNING revision")
             details = {

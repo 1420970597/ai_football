@@ -79,7 +79,15 @@ def quote_max_age_from_rows(settings, rows) -> int:
         if row['setting_key'] != 'quote_max_age_seconds':
             continue
         try:
-            return int(validate_runtime_value('quote_max_age_seconds', decrypt_secret(settings.encryption_key, row['encrypted_value'])))
+            value = row['encrypted_value']
+            if getattr(settings, 'quote_policy_projection', False):
+                prefix = 'mcp-quote-policy-v1:'
+                if not isinstance(value, str) or not value.startswith(prefix):
+                    raise ValueError('unverified public quote policy')
+                value = value[len(prefix):]
+            else:
+                value = decrypt_secret(settings.encryption_key, value)
+            return int(validate_runtime_value('quote_max_age_seconds', value))
         except Exception:
             raise HTTPException(503, '运行配置不可读取，请核对值和密钥版本') from None
     return int(getattr(settings, 'quote_max_age_seconds', 15))
