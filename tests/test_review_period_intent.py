@@ -2,7 +2,7 @@ from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 import unittest
 
-from app.review_period_intent import period_intent_rejection, verified_early_first_half_context
+from app.review_period_intent import period_intent_rejection, verified_early_first_half_context, premarket_period_rejection
 
 
 class PeriodIntentTests(unittest.TestCase):
@@ -78,6 +78,9 @@ class PeriodIntentTests(unittest.TestCase):
         for line in (Decimal('.75'), Decimal('.5')):
             quote['line'] = line
             self.assertIsNone(period_intent_rejection('半大0.75 0.5 来开门红', quote, posted_at=posted, now=now))
+            self.assertIsNone(premarket_period_rejection('半大0.75 0.5 来开门红',quote,
+                {'algorithm':'premarket-source-intent-v1','period':None},has_visual_source=True,
+                posted_at=posted,now=now))
             evidence = verified_early_first_half_context('半大0.75 0.5 来开门红', quote, posted_at=posted, now=now)
             self.assertEqual('leyu-early-first-half-stage-v2', evidence['algorithm'])
             stale_posted = now - timedelta(minutes=10)

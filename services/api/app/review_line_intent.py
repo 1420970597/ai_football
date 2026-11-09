@@ -15,6 +15,7 @@ _LINE = rf'(?P<a>{_NUMBER})(?:\s*/\s*(?P<second_sign>[+-])?\s*(?P<b>{_NUMBER}))?
 _HANDICAP = re.compile(rf'(?:(?<![A-Za-z0-9_./@])(?P<sign>[+-])|(?P<chinese>受让|受讓|让|讓))\s*{_LINE}'
                        r'(?![\d./+—–-])(?!(?:[ \t]*)(?:[uU]\b|元|注|倍|水|仓|倉|单位|單位|:))')
 _TOTAL = re.compile(rf'(?<![大小])(?P<direction>[大小])\s*{_LINE}(?![\d./+—–-])')
+_TOTAL_SUFFIX = re.compile(rf'(?<![A-Za-z0-9_./@:+—–-]){_LINE}\s*(?P<direction>[大小])(?![大小])')
 _ENGLISH_TOTAL = re.compile(rf'\b(?:over|under)\s*{_LINE}(?![\d./+—–-])', re.IGNORECASE)
 _PRICE_PREFIX = re.compile(r'(?:赔率|賠率|倍率|odds|@)\s*$', re.IGNORECASE)
 
@@ -34,6 +35,18 @@ def _line(match, *, negative=False):
     return first if first % Decimal('.25') == 0 else None
 
 
+def _total_matches(text):
+    # Choose the leftmost complete expression, so the direction in "1.5大
+    # 2.5小" cannot also become a prefix for the following numeric line.
+    end = 0
+    for match in sorted((match for pattern in (_TOTAL, _TOTAL_SUFFIX)
+                         for match in pattern.finditer(text)), key=lambda match: match.start()):
+        if match.start() < end or _PRICE_PREFIX.search(text[max(0,match.start()-12):match.start()]):
+            continue
+        end = match.end()
+        yield match
+
+
 def evidence_line_intent(evidence_text, kind):
     """Canonical explicit intent only; ambiguous evidence supplies no diagnosis."""
     text = unicodedata.normalize('NFKC', evidence_text or '').replace('−', '-')
@@ -47,7 +60,7 @@ def evidence_line_intent(evidence_text, kind):
     if kind not in {'total', 'team_total'}:
         return None
     intents = set()
-    for match in _TOTAL.finditer(text):
+    for match in _total_matches(text):
         direction = 'over' if match['direction'] == '大' else 'under'
         line = _line(match)
         if line is not None:
@@ -61,9 +74,9 @@ def evidence_line_intent(evidence_text, kind):
 
 def source_has_explicit_total_line(text):
     """Presence only; preserve independent picks with different directions."""
-    normalized = unicodedata.normalize('NFKC', text or '')
-    return any(_line(match) is not None for pattern in (_TOTAL,_ENGLISH_TOTAL)
-               for match in pattern.finditer(normalized))
+    normalized = unicodedata.normalize('NFKC', text or '').replace('−', '-')
+    return (any(_line(match) is not None for match in _total_matches(normalized))
+            or any(_line(match) is not None for match in _ENGLISH_TOTAL.finditer(normalized)))
 
 
 def line_intent_rejection(evidence_text, quote):

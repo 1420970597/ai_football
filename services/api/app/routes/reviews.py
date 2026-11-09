@@ -510,7 +510,8 @@ async def _record_current_signals(conn, body, request, observations):
             confirmation = confirmation or confirmation_for(quote['read_context'].get('current_confirmation'), quote, fixture, max_quote_age)
             period_rejection = period_intent_rejection(job['raw_text'], quote, posted_at=job['posted_at'])
             period_rejection = period_rejection or premarket_period_rejection(
-                job['raw_text'],quote,quote['source_market_intent'],has_visual_source=bool(job['media_objects']))
+                job['raw_text'],quote,quote['source_market_intent'],has_visual_source=bool(job['media_objects']),
+                posted_at=job['posted_at'])
             line_rejection = line_intent_rejection(pick.evidence_text, quote)
         if not quote:
             reason = "quote_not_read_or_changed"

@@ -116,20 +116,27 @@ def period_intent_rejection(text, quote, *, posted_at=None, now=None):
     return None
 
 
-def premarket_period_rejection(text, quote, declaration, *, has_visual_source=False):
+def premarket_period_rejection(text, quote, declaration, *, has_visual_source=False,
+                               posted_at=None, now=None):
     """An unknown pre-market period cannot be supplied by the inventory.
 
-    A concrete textual line continues through the existing per-pick guards.
-    Image/shorthand-only totals must have a period before reading any markets.
+    A concrete textual line alone does not establish its period. An explicit
+    source period for this line/direction retains the existing per-pick guards.
     The declaration is attempt/fixture-bound and write-once, not model prose
     submitted alongside an already chosen quote.
     """
-    from .review_line_intent import source_has_explicit_total_line
     if (has_visual_source and quote.get('market_kind') in {'total','team_total'}
             and isinstance(declaration,dict)
             and declaration.get('algorithm') == 'premarket-source-intent-v1'
-            and declaration.get('period') is None
-            and not source_has_explicit_total_line(text)):
+            and declaration.get('period') is None):
+        for raw_period, selection, line in _text_totals(text):
+            if line != quote.get('line') or selection != quote.get('selection'):
+                continue
+            period = _PERIODS.get(raw_period)
+            if period == quote.get('period') or (period is None
+                    and quote.get('period') == 'first_half'
+                    and _early_first_half(quote, posted_at, now)):
+                return None
         return 'source_period_unverified_before_market_read'
     return None
 

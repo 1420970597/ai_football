@@ -62,6 +62,30 @@ class SourceLineIntentTests(unittest.TestCase):
         self.assertEqual('source_selection_intent_conflict',
                          self.reject('小1.5/2', kind='total', selection='over', line='1.75'))
 
+    def test_chinese_total_suffix_has_the_same_line_and_direction_as_prefix(self):
+        for text in ('1.5/2大 @9.99', '上半场１．５／２大，倍率1.53', '1.75 大'):
+            with self.subTest(text=text):
+                self.assertIsNone(self.reject(text, kind='total', selection='over', line='1.75'))
+                self.assertEqual('source_line_intent_conflict',
+                    self.reject(text, kind='total', selection='over', line='1.5'))
+                self.assertEqual('source_selection_intent_conflict',
+                    self.reject(text, kind='total', selection='under', line='1.75'))
+
+    def test_suffix_does_not_truncate_scores_dates_odds_or_invalid_lines(self):
+        from app.review_line_intent import evidence_line_intent, source_has_explicit_total_line
+        for text in ('比分1-0大', '2026-11-09大', '@1.5大', '赔率 1.5大', '-1.5大', '−1.5大',
+                     '0.5/1.5大', '0.5/1/1.5大', '1.5大小', '1.3大'):
+            with self.subTest(text=text):
+                self.assertIsNone(evidence_line_intent(text, 'total'))
+                self.assertFalse(source_has_explicit_total_line(text))
+
+    def test_suffix_preserves_independent_picks_and_adjacent_line_alternatives(self):
+        self.assertIsNone(self.reject('1.5大，2.5小', kind='total', selection='over', line='4'))
+        for line in ('1.5', '1.75'):
+            self.assertIsNone(self.reject('1.5大 1.75 @9.99', kind='total', selection='over', line=line))
+        self.assertEqual('source_line_intent_conflict',
+            self.reject('1.5大 1.75 @9.99', kind='total', selection='over', line='2'))
+
     def test_independent_or_unsupported_intents_are_not_guessed(self):
         self.assertIsNone(self.reject('大2.5、小3.5', kind='total', selection='over', line='4'))
         self.assertIsNone(self.reject('全场大小2.5', kind='total', selection='over', line='2.5'))

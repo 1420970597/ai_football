@@ -3,18 +3,19 @@ from decimal import Decimal
 import re
 
 
-_TOTAL = re.compile(r'([大小])\s*(\d{1,5}(?:\.\d{1,3})?)(?:\s*/\s*(\d{1,5}(?:\.\d{1,3})?))?')
+_TOTAL = re.compile(r'(?:(?P<before>[大小])\s*)?(?P<a>\d{1,5}(?:\.\d{1,3})?)'
+                    r'(?:\s*/\s*(?P<b>\d{1,5}(?:\.\d{1,3})?))?\s*(?P<after>[大小])?')
 
 
 def market_filters(body):
     filters = {key: getattr(body, key) for key in
                ('market_kind', 'period', 'line', 'selection', 'market_query')}
     match = _TOTAL.fullmatch(filters['market_query'] or '')
-    if match is None:
+    if match is None or bool(match['before']) == bool(match['after']):
         return filters
-    line = Decimal(match[2])
-    if match[3] is not None:
-        other = Decimal(match[3])
+    line = Decimal(match['a'])
+    if match['b'] is not None:
+        other = Decimal(match['b'])
         # An Asian split total is two adjacent half-goal boundaries.
         if abs(other - line) != Decimal('0.5'):
             return filters
@@ -22,7 +23,7 @@ def market_filters(body):
     if line > Decimal('99999.999') or line % Decimal('0.25'):
         return filters
     explicit = {'market_kind': 'total', 'line': line,
-                'selection': 'over' if match[1] == '大' else 'under'}
+                'selection': 'over' if (match['before'] or match['after']) == '大' else 'under'}
     if any(filters[key] is not None and filters[key] != value for key, value in explicit.items()):
         return filters
     # The original query remains in the immutable tool parameters. Return the
