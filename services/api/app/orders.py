@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from .auth import audit
 from .membership import has_entitlement
 from .security import decrypt_secret
+from .expert_profitability import require_expert_permission
 
 
 def live_enabled(settings) -> bool:
@@ -113,8 +114,7 @@ async def reserve_signal(conn, user_id, signal_id, settings):
     if previous:
         return previous
     signal = await eligible_signal(conn, signal_id)
-    if signal["expert_id"] not in policy["allowed_experts"]:
-        raise HTTPException(403, "本人未允许此专家自动投注")
+    await require_expert_permission(conn, policy, signal['expert_id'])
     stake = policy["stake_per_order"]
     if stake <= 0 or stake > policy["max_per_order"]:
         raise HTTPException(409, "单笔限额不足")
@@ -162,7 +162,8 @@ async def recheck_order(conn, order, settings, *, include_signal=False):
             or account["config_revision"] != order["config_revision"] or policy["revision"] != order["policy_revision"]):
         raise HTTPException(409, "账户、会话或本人限额版本已变化")
     signal = await eligible_signal(conn, order["signal_id"])
-    if signal["expert_id"] not in policy["allowed_experts"] or order["stake"] > policy["max_per_order"]:
+    await require_expert_permission(conn, policy, signal['expert_id'])
+    if order["stake"] > policy["max_per_order"]:
         raise HTTPException(409, "推荐或单笔许可已失效")
     current = order["quote_snapshot"]
     if any(str(signal[key]) != str(current[key]) for key in ("play_id", "market_instance_id")):

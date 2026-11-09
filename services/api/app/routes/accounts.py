@@ -9,6 +9,7 @@ import json
 import re
 import uuid
 from urllib.parse import urlsplit
+from typing import Literal
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, Request
@@ -20,6 +21,7 @@ from ..membership import has_entitlement
 from ..review_state import authorize
 from ..security import encrypt_secret
 from ..handicap_lines import line_projection
+from ..expert_profitability import PROFITABILITY_DEFINITION, profitability_rows, profitable
 
 router = APIRouter(prefix="/api/v1/accounts")
 executor_router = APIRouter(prefix="/internal/executor")
@@ -43,6 +45,7 @@ class AutoBetInput(Input):
     enabled: bool
     confirmation_phrase: str = ""
     allowed_experts: list[uuid.UUID] = Field(default_factory=list, max_length=100)
+    expert_selection_mode: Literal['manual', 'profitable'] = 'manual'
     stake_per_order: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
     max_per_order: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
     daily_limit: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
@@ -118,7 +121,7 @@ async def get_leyu_account(request: Request):
     pool = database.current_pool()
     row = await pool.fetchrow("SELECT id,account_label,health_state,last_verified_at,updated_at,available_balance,balance_observed_at,config_revision,binding_revision,renewal_state,renewal_retry_after "
                               "FROM v2_leyu_accounts WHERE user_id=$1 AND health_state<>'disabled'", user["id"])
-    policy = await database.current_pool().fetchrow("SELECT auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,daily_timezone,emergency_stopped,revision "
+    policy = await database.current_pool().fetchrow("SELECT auto_enabled,allowed_experts,expert_selection_mode,stake_per_order,max_per_order,daily_limit,open_exposure_limit,daily_timezone,emergency_stopped,revision "
                                                    "FROM v2_user_bet_settings WHERE user_id=$1", user["id"])
     tasks = await pool.fetch("SELECT id,kind,state,last_error,created_at,updated_at,binding_revision,details "
                              "FROM v2_account_jobs WHERE user_id=$1 ORDER BY created_at DESC,id DESC LIMIT 5", user["id"])
@@ -126,6 +129,7 @@ async def get_leyu_account(request: Request):
     if row:
         account['reverification_available'] = await jobs.reverification_available(pool, row)
     return {"account": account, "betting": dict(policy) if policy else None,
+            "profitability_definition": PROFITABILITY_DEFINITION,
             "tasks": [jobs.public_task(item, row['binding_revision'] if row else None) for item in tasks],
             "execution_capability": {"protocol_adapter": True, "live_enabled": orders.live_enabled(request.app.state.settings), "prematch": "unsupported"}}
 
@@ -261,7 +265,7 @@ async def configure_auto_betting(body: AutoBetInput, request: Request):
                 await disable_policy(conn, user["id"], "user_disabled")
                 return {"enabled": False, "emergency_stopped": True}
             await verify_sensitive_session(conn, user)
-            if body.confirmation_phrase != "I_UNDERSTAND" or not body.allowed_experts:
+            if body.confirmation_phrase != "I_UNDERSTAND" or (body.expert_selection_mode == 'manual' and not body.allowed_experts):
                 raise HTTPException(422, "需要明确本人许可并选择允许的专家")
             if min(body.stake_per_order, body.max_per_order, body.daily_limit, body.open_exposure_limit) <= 0 or body.stake_per_order > body.max_per_order or body.max_per_order > min(body.daily_limit, body.open_exposure_limit):
                 raise HTTPException(422, "投注限额关系无效")
@@ -274,16 +278,16 @@ async def configure_auto_betting(body: AutoBetInput, request: Request):
             if not await has_entitlement(user["id"], "automatic_betting", connection=conn):
                 raise HTTPException(403, "当前会员没有自动投注权益")
             valid = await conn.fetchval("SELECT count(*) FROM v2_experts WHERE id=ANY($1::uuid[]) AND enabled", list(set(body.allowed_experts)))
-            if valid != len(set(body.allowed_experts)):
+            if body.expert_selection_mode == 'manual' and valid != len(set(body.allowed_experts)):
                 raise HTTPException(422, "允许专家包含无效条目")
-            await conn.execute("INSERT INTO v2_user_bet_settings(user_id,auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,emergency_stopped,consent_account_id,consent_binding_revision,daily_timezone) "
-                "VALUES($1,TRUE,$2,$3,$4,$5,$6,FALSE,$7,$8,$9) ON CONFLICT(user_id) DO UPDATE SET auto_enabled=TRUE,allowed_experts=EXCLUDED.allowed_experts,"
+            await conn.execute("INSERT INTO v2_user_bet_settings(user_id,auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,emergency_stopped,consent_account_id,consent_binding_revision,daily_timezone,expert_selection_mode) "
+                "VALUES($1,TRUE,$2,$3,$4,$5,$6,FALSE,$7,$8,$9,$10) ON CONFLICT(user_id) DO UPDATE SET auto_enabled=TRUE,allowed_experts=EXCLUDED.allowed_experts,expert_selection_mode=EXCLUDED.expert_selection_mode,"
                 "stake_per_order=EXCLUDED.stake_per_order,max_per_order=EXCLUDED.max_per_order,daily_limit=EXCLUDED.daily_limit,open_exposure_limit=EXCLUDED.open_exposure_limit,"
                 "emergency_stopped=FALSE,consent_account_id=EXCLUDED.consent_account_id,consent_binding_revision=EXCLUDED.consent_binding_revision,daily_timezone=EXCLUDED.daily_timezone,revision=v2_user_bet_settings.revision+1,updated_at=now()",
-                user["id"], list(set(body.allowed_experts)), body.stake_per_order, body.max_per_order, body.daily_limit, body.open_exposure_limit, account["id"], account["binding_revision"], body.daily_timezone)
+                user["id"], list(set(body.allowed_experts)), body.stake_per_order, body.max_per_order, body.daily_limit, body.open_exposure_limit, account["id"], account["binding_revision"], body.daily_timezone, body.expert_selection_mode)
             await orders.cancel_unsent(conn, user["id"], "policy_changed")
-            await audit(conn, user["id"], "user", "auto_betting_authorized", "leyu_account", str(account["id"]), details={"binding_revision": account["binding_revision"], "daily_timezone": body.daily_timezone})
-    return {"enabled": True, "emergency_stopped": False, "state": "armed", "daily_timezone": body.daily_timezone}
+            await audit(conn, user["id"], "user", "auto_betting_authorized", "leyu_account", str(account["id"]), details={"binding_revision": account["binding_revision"], "daily_timezone": body.daily_timezone, 'expert_selection_mode': body.expert_selection_mode, 'profitability_definition': PROFITABILITY_DEFINITION if body.expert_selection_mode == 'profitable' else None})
+    return {"enabled": True, "emergency_stopped": False, "state": "armed", "daily_timezone": body.daily_timezone, 'expert_selection_mode': body.expert_selection_mode, 'profitability_definition': PROFITABILITY_DEFINITION}
 
 
 @router.post("/leyu/emergency-stop")
@@ -364,11 +368,15 @@ async def dispatch(request: Request):
                 await disable_policy(conn, policy['user_id'], 'permission_invalidated')
                 await audit(conn, policy['user_id'], 'system', 'automatic_betting_suspended', 'betting_settings', str(policy['user_id']))
         if orders.live_enabled(settings):
-            pairs = await conn.fetch("SELECT b.user_id,s.id AS signal_id FROM v2_user_bet_settings b JOIN v2_expert_signals s ON s.expert_id=ANY(b.allowed_experts) "
+            has_dynamic = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM v2_user_bet_settings WHERE auto_enabled AND NOT emergency_stopped AND expert_selection_mode='profitable')")
+            profitable_ids = [r['expert_id'] for r in await profitability_rows(conn) if profitable(r)] if has_dynamic else []
+            pairs = await conn.fetch("SELECT b.user_id,s.id AS signal_id FROM v2_user_bet_settings b JOIN v2_expert_signals s ON "
+                "((b.expert_selection_mode='manual' AND s.expert_id=ANY(b.allowed_experts)) OR "
+                "(b.expert_selection_mode='profitable' AND s.expert_id=ANY($1::uuid[]))) "
                 "JOIN v2_expert_messages m ON m.id=s.message_id "
                 "WHERE b.auto_enabled AND NOT b.emergency_stopped AND s.created_at>now()-interval '5 minutes' AND s.outcome='pending' "
                 "AND m.posted_at>=now()-interval '5 minutes' AND m.posted_at<=now()+interval '5 seconds' "
-                "AND NOT EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.user_id=b.user_id AND o.signal_id=s.id AND o.account_id IS NOT NULL) ORDER BY s.created_at LIMIT 30")
+                "AND NOT EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.user_id=b.user_id AND o.signal_id=s.id AND o.account_id IS NOT NULL) ORDER BY s.created_at LIMIT 30", profitable_ids)
             for pair in pairs:
                 try:
                     async with conn.transaction():

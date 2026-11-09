@@ -129,7 +129,7 @@ async def export_own_data(request: Request, section: str = Query(default="profil
                     raise HTTPException(422, "个人资料不使用分页游标")
                 profile = await conn.fetchrow("SELECT id,email,display_name,created_at,updated_at,closure_requested_at FROM v2_users WHERE id=$1", user["id"])
                 account = await conn.fetchrow("SELECT id,account_label,health_state,last_verified_at,updated_at FROM v2_leyu_accounts WHERE user_id=$1", user["id"])
-                policy = await conn.fetchrow("SELECT auto_enabled,allowed_experts,stake_per_order,max_per_order,daily_limit,open_exposure_limit,emergency_stopped,updated_at FROM v2_user_bet_settings WHERE user_id=$1", user["id"])
+                policy = await conn.fetchrow("SELECT auto_enabled,allowed_experts,expert_selection_mode,stake_per_order,max_per_order,daily_limit,open_exposure_limit,emergency_stopped,updated_at FROM v2_user_bet_settings WHERE user_id=$1", user["id"])
                 items = [{"profile": dict(profile), "leyu_account": dict(account) if account else None, "betting_policy": dict(policy) if policy else None}]
             elif section == "memberships":
                 rows = await conn.fetch("SELECT m.id,m.status,m.starts_at,m.ends_at,m.created_at,m.grant_source,p.code,p.name,p.price,p.currency,p.entitlements FROM v2_memberships m JOIN v2_membership_plans p ON p.id=m.plan_id WHERE m.user_id=$1 AND ($2::timestamptz IS NULL OR (m.created_at,m.id)<($2,$3::uuid)) ORDER BY m.created_at DESC,m.id DESC LIMIT $4", user["id"], stamp, identifier, limit + 1)

@@ -17,6 +17,7 @@ def metrics(row: dict) -> dict:
     net = Decimal(str(value.get('unit_net') or 0))
     win_units = Decimal(value.get('win', 0)) + Decimal(value.get('half_win', 0)) / 2
     value.update(settled_signals=settled, winning_signals=value.get('win', 0) + value.get('half_win', 0),
+                 effective_settled_signals=sum(value.get(key, 0) for key in ('win','half_win','loss','half_loss')),
                  accuracy=float(win_units / effective) if effective else None,
                  average_unit_net=float(net / settled) if settled else None,
                  unit_roi=float(net / effective) if effective else None,
@@ -69,6 +70,8 @@ DEFINITIONS = {
     'time_basis': '已结算按最新结算时间，待结算按推荐创建时间；所有窗口为UTC左闭右开',
     'quality': '收益只含推荐意图有效、不可变系统报价及最新赛果计算台账一致的记录；意图纠错、缺失或损坏记录单列排除，不补零',
     'sample_state': '少于30条已结算记录标为有限样本；30条以上也不代表未来盈利或统计显著性',
+    'effective_settled_signals': '有完整有效证据的全赢、半赢、全输、半输条数；走盘、作废和待结算不计',
+    'statistics_reset': '已重新起算的专家排除重置快照中的旧有效结算，原始推荐、结算和真实账户收益保留；旧单赛果修订不重新进入新周期',
 }
 
 
@@ -113,7 +116,10 @@ def signal_scope(scope: StatisticsScope, expert_id=None, *, classify=True):
         "AND (CASE WHEN s.outcome='pending' THEN s.created_at ELSE COALESCE(s.settled_at,s.created_at) END)<$2 "
         'AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM v2_expert_messages m WHERE m.id=s.message_id AND m.source_id=$3)) '
         "AND ($4::text='all' OR s.phase=$4) AND ($5::text='all' OR s.market_kind=$5) "
-        'AND ($6::uuid IS NULL OR s.expert_id=$6)) '
+        'AND ($6::uuid IS NULL OR s.expert_id=$6) '
+        'AND NOT EXISTS(SELECT 1 FROM v2_expert_statistics_reset_signals excluded '
+        'JOIN v2_expert_statistics_resets reset ON reset.id=excluded.reset_id '
+        'WHERE excluded.signal_id=s.id AND reset.revoked_at IS NULL)) '
     )
     if classify:
         query += ",scoped AS (SELECT checked.*,intent_valid AND quote_valid AND (outcome='pending' OR settlement_valid) AS statistics_eligible FROM checked) "
@@ -123,7 +129,10 @@ def signal_scope(scope: StatisticsScope, expert_id=None, *, classify=True):
 async def summaries(pool, start: datetime, end: datetime, *, scope: StatisticsScope | None = None, expert_id=None):
     scope = scope or StatisticsScope(start, end)
     prefix, args = signal_scope(scope, expert_id)
-    rows = await pool.fetch(prefix + 'SELECT e.id,e.display_nickname,e.avatar_object_key,e.enabled,' + QUALITY_METRIC_SQL +
+    rows = await pool.fetch(prefix + 'SELECT e.id,e.display_nickname,e.avatar_object_key,e.enabled,' +
+        '(SELECT max(r.created_at) FROM v2_expert_statistics_reset_experts re '
+        'JOIN v2_expert_statistics_resets r ON r.id=re.reset_id '
+        'WHERE re.expert_id=e.id AND r.revoked_at IS NULL) AS statistics_reset_at,' + QUALITY_METRIC_SQL +
         ' FROM v2_experts e LEFT JOIN scoped s ON s.expert_id=e.id '
         'WHERE e.enabled AND ($6::uuid IS NULL OR e.id=$6) GROUP BY e.id '
         'ORDER BY unit_net DESC,total_signals DESC,e.display_nickname,e.id', *args)

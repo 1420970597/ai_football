@@ -66,6 +66,7 @@ jobs:
             .runtime/web-integration-*/snapshot/reports/jiebao-score-reference/images/integration-*
             .runtime/model-configuration-ui-*/results.json
             .runtime/visual-ui-*/visual-results.json
+            .runtime/visual-ui-*/profitable-browser-results.json
             .runtime/visual-ui-*/*.png
             .runtime/match-markets-ui-*/results.json
             .runtime/match-markets-ui-*/*.png

@@ -902,7 +902,8 @@ async function openExpert(id) {
     if (sequence !== state.dialogSequence) return;
     const e = data.expert;
     const detailWindow = `近${state.expertFilters.days}天 · ${stamp(data.from_utc)} 至 ${stamp(data.to_utc)}`;
-    const qualityNote = `证据不足排除 ${esc(e.excluded_signals ?? 0)} 条（缺报价 ${esc(e.missing_quote_evidence ?? 0)}，结算证据无效 ${esc(e.invalid_settlement_evidence ?? 0)}，推荐意图纠错 ${esc(e.invalid_recommendation_intent ?? 0)}）。`;
+    const qualityNote = `证据不足排除 ${esc(e.excluded_signals ?? 0)} 条（缺报价 ${esc(e.missing_quote_evidence ?? 0)}，结算证据无效 ${esc(e.invalid_settlement_evidence ?? 0)}，推荐意图纠错 ${esc(e.invalid_recommendation_intent ?? 0)}）。` +
+      (e.statistics_reset_at ? ` 本周期重新起算于 ${esc(stamp(e.statistics_reset_at))}，旧有效结算不再计入准确率及1单位收益；原始结算与真实账户收益保留。` : "");
     $("#dialog-title").textContent = e.display_nickname;
     $("#dialog-content").innerHTML =
       `<section class="detail-section"><div class="expert-name"><span class="avatar">${esc(e.display_nickname.slice(0, 1))}</span><h2>${esc(e.display_nickname)}</h2></div><p class="muted">${detailWindow}</p><div class="metrics-grid"><div><small>已结算推荐</small><strong>${esc(e.settled_signals)}</strong></div><div><small>加权准确率</small><strong>${percent(e.accuracy)}</strong></div><div><small>1单位净收益</small><strong>${e.settled_signals ? signed(e.unit_net) : "样本不足"}</strong></div><div><small>有效本金 ROI</small><strong>${percent(e.unit_roi)}</strong></div></div><p class="muted">全赢 ${e.win ?? 0} · 半赢 ${e.half_win ?? 0} · 全输 ${e.loss ?? 0} · 半输 ${e.half_loss ?? 0} · 走盘 ${e.push ?? 0} · 作废 ${e.void ?? 0} · 待结算 ${e.pending ?? 0}</p><p class="form-note">平均每条净收益 ${e.settled_signals ? signed(e.average_unit_net) : "样本不足"}；准确率按赢/输有效份额加权，走盘与作废排除。统计基于不可变系统报价及最新赛果结算证据。${qualityNote}</p></section><section class="detail-section"><h3>累计一单位净收益走势</h3>${chart(trend.items)}<p class="form-note">与所选统计窗口一致，按UTC结算日累计；无结算日不补收益。</p></section><section class="detail-section"><button class="primary-button" data-expert-messages="${esc(id)}">查看该专家全部发言与审核原文</button></section>`;
@@ -1240,7 +1241,7 @@ async function loadAccount() {
     const b = data.betting || {};
     $("#betting-status").textContent =
       b.auto_enabled && !b.emergency_stopped
-        ? "自动投注已启用；执行前仍会核验信号与敞口。"
+        ? `自动投注已启用（${b.expert_selection_mode === "profitable" ? "近30天全部盈利专家" : "手动专家名单"}）；执行前仍会核验专家资格、信号与敞口。`
         : "自动投注已关闭。紧急停止始终可用。";
     if (data.execution_capability?.live_enabled === false)
       $("#betting-status").textContent += " 当前实盘执行未开放。";
@@ -1266,6 +1267,8 @@ async function loadAccount() {
       timezone.add(option);
     }
     timezone.value = timezoneValue;
+    $("#betting-form").elements.expert_selection_mode.value =
+      b.expert_selection_mode || "manual";
     $("#betting-form").elements.enabled.checked =
       !!b.auto_enabled && !b.emergency_stopped;
     $$("#bet-experts input").forEach(
@@ -1294,7 +1297,8 @@ function configureBetControls() {
     enabled = form.elements.enabled.checked,
     loading = form.getAttribute("aria-busy") === "true";
   for (const input of $$("input,select", form)) {
-    input.disabled = loading || (input.name !== "enabled" && !enabled);
+    input.disabled = loading || (input.name !== "enabled" && !enabled) ||
+      (input.name === "expert" && form.elements.expert_selection_mode.value === "profitable");
     if (input.type === "number") input.required = enabled;
   }
   $("button", form).disabled = loading;
@@ -1665,13 +1669,16 @@ function events() {
     }
   };
   $("#betting-form").elements.enabled.onchange = configureBetControls;
+  $("#betting-form").elements.expert_selection_mode.onchange = configureBetControls;
   $("#betting-form").onsubmit = (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     submit(form, async () => {
       const fd = new FormData(form);
       const enabled = fd.has("enabled");
-      if (enabled && !fd.getAll("expert").length)
+      const mode = fd.get("expert_selection_mode") || "manual";
+      const selectedExperts = $$("#bet-experts input:checked").map((input) => input.value);
+      if (enabled && mode === "manual" && !selectedExperts.length)
         throw new Error("至少选择一位允许跟随的专家");
       if (enabled && !fd.has("confirmed"))
         throw new Error("请先确认本人账户资金与投注风险");
@@ -1679,7 +1686,8 @@ function events() {
         enabled,
         ...(enabled ? { daily_timezone: fd.get("daily_timezone") } : {}),
         confirmation_phrase: enabled ? "I_UNDERSTAND" : "",
-        allowed_experts: fd.getAll("expert"),
+        expert_selection_mode: mode,
+        allowed_experts: selectedExperts,
       };
       for (const key of [
         "stake_per_order",

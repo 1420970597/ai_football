@@ -364,6 +364,20 @@
                     type="checkbox"
                   />我本人启用自动投注</label
                 >
+                <div id="betting-expert-mode-control">
+                <label
+                  >专家跟随模式<select
+                    name="expert_selection_mode"
+                    aria-describedby="betting-expert-mode-note"
+                  >
+                    <option value="manual">手动选择专家</option>
+                    <option value="profitable">自动跟随全部盈利专家</option>
+                  </select></label
+                >
+                <p id="betting-expert-mode-note" class="form-note">
+                  盈利模式动态跟随当前统计周期内近30天1单位净收益大于0、且有有效结算的全部专家，不限于下方已选名单。走盘、作废不计有效结算；各统计页面筛选不改变此条件。由本人保存后生效，每单本金及限额保持本人设置。
+                </p>
+                </div>
                 <fieldset>
                   <legend>允许跟随的专家</legend>
                   <div id="bet-experts" class="checkbox-grid"></div>
