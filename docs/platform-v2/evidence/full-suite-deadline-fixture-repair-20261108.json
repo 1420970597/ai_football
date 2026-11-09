@@ -102,7 +102,22 @@
     "production_writes": 0,
     "real_provider_calls": 0
   },
-  "full_1953_regression_pending": true,
+  "full_1953_regression_pending": false,
   "production_changed": false,
-  "three_second_acceptance": false
+  "three_second_acceptance": false,
+  "new_full_regression": {
+    "source_parent_commit": "238b1d04829cf37cf3ccaa1ef21badc8a17d6c2c",
+    "committed_source_verified": true,
+    "tests": 1953,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1324.165,
+    "native_exit": 0,
+    "controller_exit": 0,
+    "raw_report_sha256": "7a77609cba179f639799b239cdd970eff9add826f0db703f65a1bdb2821b4662",
+    "runner_state": "2026-11-08T23:26:09.254511463Z 2026-11-08T23:48:15.73155285Z 0 false",
+    "application_timeouts_or_deadlines_relaxed": false,
+    "original_failure_preserved": true
+  }
 }
