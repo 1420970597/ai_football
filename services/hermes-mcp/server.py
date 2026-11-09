@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 from contextvars import ContextVar
+from decimal import Decimal, InvalidOperation
 from typing import Annotated
 
 import httpx
@@ -232,7 +233,9 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
                               review_id: str, attempt_id: str,
                               market_kind: str | None, period: str | None,
                               *, search_key: str | None = None,
-                              market_query: str | None = None) -> dict:
+                              market_query: str | None = None,
+                              record_source_intent: bool = False,
+                              evidence_text: str | None = None) -> dict:
     """Compose existing guarded operations, never derive a fixture identity."""
     if not isinstance(resolution, dict) or resolution.get('resolved') is not True:
         return result
@@ -265,7 +268,77 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
             'recovery': '检索/绑定回执已保留，但未成功读盘；仅在同一活动review_id/attempt_id下使用原生'
                         'search_key或已绑定fixture继续核验，不要重复已完成检索，不要猜编号；租约失效则停止。'},
             ensure_ascii=False)) from None
-    return {**result, 'market_result': markets}
+    combined = {**result, 'market_result': markets}
+    if not record_source_intent:
+        return combined
+    quote = _unique_source_total(markets, fixture['id'], market_kind, period)
+    if quote is None:
+        return combined | {'source_intent_recording': {
+            'attempted': False, 'reason': 'no_unique_source_option'}}
+    try:
+        recorded = await _post('record_expert_signals', {
+            'review_id': review_id, 'attempt_id': attempt_id,
+            'signals': [ExpertPick(fixture_id=fixture['id'], quote_id=quote['quote_id'],
+                                   evidence_text=evidence_text).model_dump()],
+        })
+        if (not isinstance(recorded, dict) or not isinstance(recorded.get('accepted'), list)
+                or not isinstance(recorded.get('rejected'), list)):
+            raise ToolError('录入响应无法核验；保留结果未知状态')
+    except ToolError as exc:
+        receipt = {'review_id': review_id, 'attempt_id': attempt_id,
+            **{key: result[key] for key in ('search_key', 'search_complete', 'next_cursor') if key in result},
+            'resolution': {'resolved': True, 'fixture': {'id': fixture['id'], 'realtime_eligible': True}},
+            'market_result': markets}
+        if search_key is not None:
+            receipt.setdefault('search_key', search_key)
+        raise ToolError(json.dumps({'completed_receipt': receipt,
+            'failed_operation': 'record_expert_signals', 'record_result_verified': False,
+            'error': str(exc),
+            'recovery': '检索、绑定与读盘已完成，录入结果未核验。不要重启已完成检索；'
+                        '仅在同一活动review_id/attempt_id下核对原生回执，必要时使用相同已读quote_id'
+                        '和原证据进行幂等录入。租约失效立即停止，不把读盘成功称为推荐成功。'},
+            ensure_ascii=False)) from None
+    return combined | {'record_result': recorded, 'source_intent_recording': {'attempted': True}}
+
+
+def _require_source_record_scope(read_markets, market_kind, period, market_query, evidence_text):
+    if (read_markets is not True or market_kind != 'total'
+            or period not in {'full_time', 'first_half', 'second_half'}
+            or not isinstance(market_query, str) or not market_query.strip()
+            or not isinstance(evidence_text, str) or not evidence_text.strip()):
+        raise ToolError('一轮录入需要read_markets=true、来源明确的total/期间/market_query及非空原文证据')
+
+
+def _unique_source_total(markets, fixture_id, market_kind, period):
+    """Select nothing unless the native exact scope contains one eligible row."""
+    if not isinstance(markets, dict):
+        return None
+    scope, coverage, quotes = (markets.get(key) for key in ('market_filter', 'market_coverage', 'markets'))
+    if (not isinstance(scope, dict) or not isinstance(coverage, dict)
+            or not isinstance(quotes, list) or len(quotes) != 1
+            or coverage.get('complete_for_filter') is not True
+            or type(coverage.get('total_quotes')) is not int or coverage['total_quotes'] < 1
+            or type(coverage.get('matched_quotes')) is not int or coverage['matched_quotes'] != 1
+            or type(coverage.get('returned_quotes')) is not int or coverage['returned_quotes'] != 1
+            or scope.get('market_kind') != market_kind or market_kind != 'total'
+            or scope.get('period') != period or period not in {'full_time', 'first_half', 'second_half'}
+            or scope.get('selection') not in {'over', 'under'}):
+        return None
+    quote = quotes[0]
+    if (not isinstance(quote, dict) or quote.get('fixture_id') != fixture_id
+            or quote.get('market_kind') != market_kind or quote.get('period') != period
+            or quote.get('selection') != scope['selection'] or quote.get('status') != 'active'
+            or quote.get('can_record') is not True or not isinstance(quote.get('quote_id'), str)
+            or not quote['quote_id']):
+        return None
+    try:
+        line, offered = Decimal(str(scope.get('line'))), Decimal(str(quote.get('line')))
+        if (not line.is_finite() or not offered.is_finite() or line < 0
+                or line % Decimal('.25') or line != offered):
+            return None
+    except (InvalidOperation, ValueError):
+        return None
+    return quote
 
 
 @mcp.tool()
@@ -279,8 +352,13 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str | None
                          read_markets: bool = False, market_kind: str | None = None,
                          period: str | None = None,
                          market_query: Annotated[str | None, Field(max_length=120,
-                             description="原文明示的盘口查询，例如小3.5、大0.5/1；仅传给唯一绑定后的读盘，不参与球队检索，不比较倍率。")] = None) -> dict:
+                             description="原文明示的盘口查询，例如小3.5、大0.5/1；仅传给唯一绑定后的读盘，不参与球队检索，不比较倍率。")] = None,
+                         record_source_intent: Annotated[bool, Field(description="来源明确双方、total玩法、期间、方向及线值时可传true，同时read_markets=true并提供market_query/evidence_text；仅完整唯一绑定且原生精确范围恰好一个有效选项时复用原生录入，返回record_result。未知期间保持false，默认不录入。")] = False,
+                         evidence_text: Annotated[str | None, Field(max_length=3000,
+                             description="与record_source_intent=true一起传的本项原文/原图选择证据；不得根据可售库存补造期间、方向或线值。")] = None) -> dict:
     """提供team_query，或同时提供原文明示的team_a/team_b并逐字复用team_a检索；显式team_query包括空串不被覆盖。原名或片段无双方对应候选时，可传空串展开同联赛：必须同时给competition_query、sport及正区间≤7天的from_utc/to_utc；competition_time_candidate只是待核验候选，不是身份绑定。phase=all检索全部阶段，连续分页至next_cursor为空。原文双方明确时可成对传team_a/team_b，仅完整检索结束后服务端唯一核验并返回resolution；resolved=true且realtime_eligible=true可直接读盘，否则用resolve_match继续核验。已知玩法/期间时read_markets=true可在唯一绑定后返回market_result，复用此读盘而不重复调用；期间使用full_time/first_half/second_half。不完整或不唯一时不读。严格队名零候选且日期≤7天时可用原文片段召回，source_fragment_candidate仅表示候选，不是球队同名证明。"""
+    if record_source_intent:
+        _require_source_record_scope(read_markets, market_kind, period, market_query, evidence_text)
     if team_query is None:
         if not team_a or not team_a.strip() or not team_b or not team_b.strip():
             raise ToolError('提供team_query，或同时提供原文明示且非空的team_a和team_b')
@@ -293,7 +371,8 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str | None
     })
     if read_markets and result.get('search_complete') is True and result.get('next_cursor') is None:
         return await _with_bound_markets(result, result.get('resolution'), review_id, attempt_id,
-                                         market_kind, period, market_query=market_query)
+                                         market_kind, period, market_query=market_query,
+                                         record_source_intent=record_source_intent, evidence_text=evidence_text)
     return result
 
 
@@ -306,8 +385,13 @@ async def resolve_match(review_id: str, attempt_id: str,
                         read_markets: bool = False, market_kind: str | None = None,
                         period: str | None = None,
                         market_query: Annotated[str | None, Field(max_length=120,
-                            description="原文明示的盘口查询，例如小3.5、大0.5/1；仅传给唯一绑定后的读盘，不改变比赛消歧依据。")] = None) -> dict:
+                            description="原文明示的盘口查询，例如小3.5、大0.5/1；仅传给唯一绑定后的读盘，不改变比赛消歧依据。")] = None,
+                        record_source_intent: Annotated[bool, Field(description="来源明确total玩法、期间、方向及线值时传true并提供原文证据；仅已完成唯一绑定及精确唯一有效读盘后复用原生录入，record_result才是接受事实，默认false。")] = False,
+                        evidence_text: Annotated[str | None, Field(max_length=3000,
+                            description="本项来源推荐证据，与record_source_intent=true一起提供，不从库存反推。")] = None) -> dict:
     """全候选翻页结束后，用双方系统队名或常见别名、联赛和时间唯一消歧；支持常见缩写、标点/重音差异和清晰队名前缀，多候选返回未解决。优先使用候选中的标准队名。玩法/期间明确时read_markets=true可在唯一活动绑定后返回market_result，复用读盘减少模型轮次；失败仍保留工具错误。"""
+    if record_source_intent:
+        _require_source_record_scope(read_markets, market_kind, period, market_query, evidence_text)
     result = await _post("resolve_match", {
         "review_id": review_id, "attempt_id": attempt_id, "search_key": search_key,
         "team_a": team_a, "team_b": team_b, "competition": competition,
@@ -315,7 +399,8 @@ async def resolve_match(review_id: str, attempt_id: str,
     })
     if read_markets:
         return await _with_bound_markets(result, result, review_id, attempt_id, market_kind, period,
-                                         search_key=search_key, market_query=market_query)
+                                         search_key=search_key, market_query=market_query,
+                                         record_source_intent=record_source_intent, evidence_text=evidence_text)
     return result
 
 
