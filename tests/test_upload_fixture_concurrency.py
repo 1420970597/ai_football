@@ -1,11 +1,14 @@
 import asyncio
+from functools import partial
 import json
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import httpx
 
 from services.collector.leyu_protocol import LeyuError
+from services.collector.quote_snapshot import prepare_fixture_batches
 from services.collector.upload_gate import UploadGate
 from services.collector.worker import CollectorService
 
@@ -213,6 +216,149 @@ class FixtureUploadWorkerTests(unittest.IsolatedAsyncioTestCase):
 
     def fixture(self, identity, source=None):
         return {'id': identity, 'source_id': source or identity, 'markets': [], 'markets_complete': True}
+
+    def one_fixture_batches(self):
+        return patch('services.collector.worker.prepare_fixture_batches',
+                     partial(prepare_fixture_batches, max_items=1))
+
+    async def test_single_station_upload_uses_two_batch_slots_and_reports_complete_total(self):
+        entered = [asyncio.Event() for _ in range(3)]
+        release = asyncio.Event()
+        active = peak = 0
+
+        async def handler(request):
+            nonlocal active, peak
+            number = int(json.loads(request.content)['items'][0]['id'])
+            active += 1
+            peak = max(peak, active)
+            entered[number].set()
+            try:
+                await release.wait()
+                return httpx.Response(200, json={'accepted': 1})
+            finally:
+                active -= 1
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as api:
+            service = self.service(api)
+            fixtures = [self.fixture(str(i)) for i in range(3)]
+            with self.one_fixture_batches():
+                task = asyncio.create_task(service.upload(fixtures))
+                try:
+                    await asyncio.wait_for(asyncio.gather(entered[0].wait(), entered[1].wait()), 2)
+                    self.assertFalse(entered[2].is_set())
+                finally:
+                    release.set()
+                    result = await task
+            self.assertEqual(3, result)
+            self.assertEqual(2, peak)
+            self.assertTrue(all(service._delivered_snapshots.matches(f) for f in fixtures))
+            self.assertFalse(service._upload_lock.locked())
+
+    async def test_station_failure_cancels_inflight_sibling_and_leaves_unstarted_proof(self):
+        second_entered, second_cancelled = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def handler(request):
+            identity = json.loads(request.content)['items'][0]['id']
+            calls.append(identity)
+            if identity == 'a':
+                await second_entered.wait()
+                raise httpx.ReadTimeout('isolated unknown response', request=request)
+            second_entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                second_cancelled.set()
+                raise
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as api:
+            service = self.service(api)
+            fixtures = [self.fixture(c) for c in 'abcd']
+            service._delivered_snapshots.remember(fixtures)
+            previous = service.last_upload_report
+            with self.one_fixture_batches():
+                with self.assertRaises(httpx.ReadTimeout):
+                    await asyncio.wait_for(service.upload(fixtures), 2)
+            self.assertEqual(['a', 'b'], calls)
+            self.assertTrue(second_cancelled.is_set())
+            self.assertFalse(any(service._delivered_snapshots.matches(f) for f in fixtures[:2]))
+            self.assertTrue(all(service._delivered_snapshots.matches(f) for f in fixtures[2:]))
+            self.assertIs(previous, service.last_upload_report)
+            self.assertFalse(service._upload_lock.locked())
+
+    async def test_station_failure_keeps_only_confirmed_successful_batch_proof(self):
+        first_finished = asyncio.Event()
+
+        async def handler(request):
+            if json.loads(request.content)['items'][0]['id'] == 'a':
+                first_finished.set()
+                return httpx.Response(200, json={'accepted': 1})
+            await first_finished.wait()
+            raise httpx.ReadTimeout('isolated', request=request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as api:
+            service = self.service(api)
+            a, b = self.fixture('a'), self.fixture('b')
+            with self.one_fixture_batches():
+                with self.assertRaises(httpx.ReadTimeout):
+                    await service.upload([a, b])
+            self.assertTrue(service._delivered_snapshots.matches(a))
+            self.assertFalse(service._delivered_snapshots.matches(b))
+            self.assertFalse(service._upload_lock.locked())
+
+    async def test_station_parent_cancellation_drains_both_active_requests(self):
+        entered = [asyncio.Event(), asyncio.Event()]
+        cancelled = set()
+
+        async def handler(request):
+            number = int(json.loads(request.content)['items'][0]['id'])
+            entered[number].set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.add(number)
+                raise
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as api:
+            service = self.service(api)
+            fixtures = [self.fixture(str(i)) for i in range(2)]
+            service._delivered_snapshots.remember(fixtures)
+            with self.one_fixture_batches():
+                task = asyncio.create_task(service.upload(fixtures))
+                try:
+                    await asyncio.wait_for(asyncio.gather(*(e.wait() for e in entered)), 2)
+                finally:
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+            self.assertEqual({0, 1}, cancelled)
+            self.assertFalse(any(service._delivered_snapshots.matches(f) for f in fixtures))
+            self.assertFalse(service._upload_lock.locked())
+
+    async def test_station_shared_native_source_stays_serial_across_batches(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def handler(request):
+            calls.append(json.loads(request.content)['items'][0]['id'])
+            if len(calls) == 1:
+                entered.set()
+                await release.wait()
+            return httpx.Response(200, json={'accepted': 1})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as api:
+            service = self.service(api)
+            with self.one_fixture_batches():
+                task = asyncio.create_task(service.upload([self.fixture('a', 'shared'),
+                                                          self.fixture('b', 'shared')]))
+                try:
+                    await asyncio.wait_for(entered.wait(), 2)
+                    await asyncio.sleep(0)
+                    self.assertEqual(['a'], calls)
+                finally:
+                    release.set()
+                    self.assertEqual(2, await task)
+            self.assertEqual(['a', 'b'], calls)
 
     async def test_real_worker_starts_disjoint_uploads_concurrently_with_limit_two(self):
         entered = [asyncio.Event() for _ in range(3)]

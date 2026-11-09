@@ -247,7 +247,6 @@ class CollectorService:
 
     async def upload(self, fixtures: list[dict[str, Any]], *, odds_mids: list[str] | None = None,
                      precise: bool = False) -> int:
-        accepted = 0
         selected = set(odds_mids) if odds_mids is not None else None
         outgoing = []
         for fixture in fixtures:
@@ -259,50 +258,77 @@ class CollectorService:
         for item in report["quarantined"]:
             log.warning("Leyu fixture quarantined category=%s fixture_hash=%s quote_count=%s",
                         item["reason"], item["fixture_hash"], item["quote_count"])
-        for batch in batches:
-            # Atomically reserve both native identities for the entire batch.
-            # Missing identities retain the conservative global barrier.
-            keys=set()
-            for fixture in batch:
-                if any(not isinstance(fixture.get(key),str) or not fixture[key] for key in ('id','source_id')):
-                    keys=None
+        # Two event-loop consumers share this iterator. A station snapshot can
+        # use both existing gate slots without creating one task per batch.
+        remaining = iter(batches)
+        failed = False
+
+        async def drain() -> int:
+            nonlocal failed
+            subtotal = 0
+            for batch in remaining:
+                if failed:
                     break
-                keys.update(('id:'+fixture['id'],'source:'+fixture['source_id']))
-            started = time.monotonic()
-            lock_acquired = None
-            response = None
-            outcome = 'cancelled'
-            try:
-                async with self._upload_lock.hold(keys, priority=precise):
-                    lock_acquired = time.monotonic()
-                    # An unknown HTTP outcome may already have committed. Retire
-                    # earlier evidence before attempting any replacement.
-                    self._delivered_snapshots.forget(batch)
-                    response = await self.api.post(self.api_url + "/collector/fixtures", content=encode_snapshot(batch),
-                                                   headers={"Content-Type": "application/json"})
-                    response.raise_for_status()
-                    document = response.json()
-                    if (not isinstance(document, dict) or type(document.get("accepted")) is not int
-                            or not 0 <= document['accepted'] <= len(batch)):
-                        raise LeyuError("invalid_ingestion_receipt")
-                    accepted += document["accepted"]
-                    self._delivered_snapshots.remember(batch)
-                outcome = 'response'
-            except Exception:
-                outcome = 'response_error' if response is not None else 'transport_error'
-                raise
-            finally:
-                finished = time.monotonic()
-                log.info('Leyu fixture upload outcome=%s stage=%s lock_wait_ms=%.1f http_ms=%.1f elapsed_ms=%.1f response_status=%s fixture_count=%s',
-                         outcome, 'waiting_lock' if lock_acquired is None else 'request',
-                         ((lock_acquired or finished) - started) * 1000,
-                         (finished - lock_acquired) * 1000 if lock_acquired is not None else 0,
-                         (finished - started) * 1000,
-                         response.status_code if response is not None else 'unknown', len(batch))
+                try:
+                    subtotal += await self._upload_batch(batch, precise=precise)
+                except BaseException:
+                    failed = True
+                    raise
+            return subtotal
+
+        tasks = [asyncio.create_task(drain()) for _ in range(min(2, len(batches)))]
+        try:
+            accepted = sum(await asyncio.gather(*tasks))
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         # Set only after the last await; the caller then reads this exact upload
         # report without a poll/push interleaving replacing it in the meantime.
         self.last_upload_report = report
         return accepted
+
+    async def _upload_batch(self, batch: list[dict[str, Any]], *, precise: bool) -> int:
+        # Atomically reserve both native identities for the entire batch.
+        # Missing identities retain the conservative global barrier.
+        keys = set()
+        for fixture in batch:
+            if any(not isinstance(fixture.get(key), str) or not fixture[key] for key in ('id', 'source_id')):
+                keys = None
+                break
+            keys.update(('id:' + fixture['id'], 'source:' + fixture['source_id']))
+        started = time.monotonic()
+        lock_acquired = None
+        response = None
+        outcome = 'cancelled'
+        try:
+            async with self._upload_lock.hold(keys, priority=precise):
+                lock_acquired = time.monotonic()
+                # An unknown HTTP outcome may already have committed. Retire
+                # earlier evidence before attempting any replacement.
+                self._delivered_snapshots.forget(batch)
+                response = await self.api.post(self.api_url + "/collector/fixtures", content=encode_snapshot(batch),
+                                               headers={"Content-Type": "application/json"})
+                response.raise_for_status()
+                document = response.json()
+                if (not isinstance(document, dict) or type(document.get("accepted")) is not int
+                        or not 0 <= document['accepted'] <= len(batch)):
+                    raise LeyuError("invalid_ingestion_receipt")
+                self._delivered_snapshots.remember(batch)
+            outcome = 'response'
+            return document['accepted']
+        except Exception:
+            outcome = 'response_error' if response is not None else 'transport_error'
+            raise
+        finally:
+            finished = time.monotonic()
+            log.info('Leyu fixture upload outcome=%s stage=%s lock_wait_ms=%.1f http_ms=%.1f elapsed_ms=%.1f response_status=%s fixture_count=%s',
+                     outcome, 'waiting_lock' if lock_acquired is None else 'request',
+                     ((lock_acquired or finished) - started) * 1000,
+                     (finished - lock_acquired) * 1000 if lock_acquired is not None else 0,
+                     (finished - started) * 1000,
+                     response.status_code if response is not None else 'unknown', len(batch))
 
     async def on_push(self, events: list[dict[str, Any]]) -> None:
         fixtures, needs_resync = self.runtime.apply_push(events)
