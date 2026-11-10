@@ -12,7 +12,7 @@ from .review_summary_evidence import SummaryEvidence, read_summary_evidence
 from .review_intent_retry import intent_matches_quote
 from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
-from .review_intent_claims import source_intent_denial
+from .review_intent_claims import source_intent_denial, image_access_unavailable
 from .review_quote_claims import missing_handicap_claims
 
 SUMMARY_ITEM_LIMIT = 100
@@ -103,6 +103,9 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
         if incomplete.get('source_visual_intent_conflict'):
             lines.append('审核核验未完成：原文明确可单可串并附图，模型仍否认新增推荐意图；'
                          '已达到本次续审上限，保留未解决。该指令不批准绑定、报价或录入。')
+        if incomplete.get('visual_access_unverified'):
+            lines.append('审核核验未完成：当前原图尚未确认可读，不能把图像读取失败当成没有推荐；'
+                         '保留未解决，不从现有盘口反推原图内容。')
         if incomplete.get('tool_availability_unverified'):
             lines.append('审核核验未完成：模型声称工具不可用，之后尚无当前审核尝试的成功工具调用证据；'
                          '不能认定全部匹配。仅已接受记录有效，其余保持待核验。')
@@ -138,6 +141,8 @@ async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_
     if (review_mode == 'real_time' and evidence.explicit_visual_instruction
             and source_intent_denial(final_content)):
         phase_options.update(require_visual_instruction_review=True, final_content=final_content)
+    if (review_mode == 'real_time' and evidence.source_has_image and image_access_unavailable(final_content)):
+        phase_options.update(require_visual_access_review=True, final_content=final_content)
     incomplete = (await completion_issues(conn, job['id'], attempt_id, mentioned, named_content, require_intent,
                                          **phase_options)
                   if mentioned or named_content or require_intent or intent_rejected or phase_options

@@ -28,7 +28,7 @@ from ..review_cursors import encode_cursor, decode_cursor
 from ..review_search_scope import continuation_scope, scope_key
 from ..signal_persistence import persist_signals
 from ..review_resolution import resolve_candidates
-from ..review_market_query import market_filters
+from ..review_market_query import market_filters, handicap_query_guidance
 from ..team_totals import team_total_terms
 from ..review_period_intent import (period_intent_rejection, verified_early_first_half_context,
                                    premarket_period_rejection, evidence_period_rejection, period_intent_key)
@@ -416,6 +416,9 @@ async def _request_market_refresh(fixture_id: str, source_match_id: str, request
 @tool_evidence('mcp_list_match_markets')
 async def list_match_markets(body: MarketInput, request: Request):
     authorize(request, request.app.state.settings.mcp_internal_token)
+    guidance = handicap_query_guidance(body)
+    if guidance:
+        raise HTTPException(422, detail=guidance)
     settings = request.app.state.settings
     filters = market_filters(body)
     async with database.current_pool().acquire() as conn:

@@ -20,9 +20,11 @@ _PAST_SECTION = re.compile(
 _NOT_CURRENT = re.compile(
     r'昨天|昨日|前天|之前|回顾|回顧|赛果|賽果|收米|反馈|反饋|取消|撤回|延期|已赢|已贏|已输|已輸|[✅❌]')
 _QUESTION = re.compile(r'[?？]|可以[吗嗎]|怎[么麼]看|是否|要不要')
+_CURRENT_TAIL = re.compile(r'\s*等水上[车車]\s*[。!！]*$')
+_IMAGE_TOTAL = re.compile(rf'[大小]\s*{_NUMBER}(?:\s+{_NUMBER})?\s*[。!！]*')
 
 
-def explicit_text_pick(content: str) -> bool:
+def explicit_text_pick(content: str, *, has_image: bool = False) -> bool:
     """Request tool verification, never extract picks or infer match identity.
 
     Deliberately conservative: clear recommendation labels or a whole period
@@ -49,12 +51,42 @@ def explicit_text_pick(content: str) -> bool:
             historical = True
         if historical or _NOT_CURRENT.search(line) or _QUESTION.search(line):
             continue
+        line = _CURRENT_TAIL.sub('', line).strip()
         if recommendation:
             pick = recommendation['pick']
             if evidence_line_intent(pick, 'handicap') or evidence_line_intent(pick, 'total'):
                 return True
         elif _PERIOD_TOTAL.fullmatch(line) and evidence_line_intent(line, 'total'):
             return True
+        elif has_image and len(line) <= 100 and _IMAGE_TOTAL.fullmatch(line):
+            # Only request verification. An additional number may be an
+            # alternative line or price; this check never selects either.
+            if evidence_line_intent(line, 'total'):
+                return True
+    return False
+
+
+def image_access_unavailable(content: str) -> bool:
+    """A current explicit failed-image-reading claim, never an OCR result."""
+    if not isinstance(content, str) or len(content) > 20000:
+        return False
+    fenced = False
+    for raw in content.splitlines():
+        line = unicodedata.normalize('NFKC', raw).strip()
+        if line.startswith(('```', '~~~')):
+            fenced = not fenced
+            continue
+        if (fenced or line.startswith(('>', '原文引用', '引用原文', '上轮说明', '上輪說明'))
+                or _PAST_SECTION.search(line)):
+            continue
+        line = re.sub(r'“[^”]*”|「[^」]*」|"[^"]*"|`[^`]*`', '', line)
+        for clause in re.split(r'[。；;]', line):
+            if re.search(r'如果|假如|倘若|不能断言|不可断言|并非|並非|不是', clause):
+                continue
+            if (re.search(r'图片|圖片|图像|圖像|原图|原圖|截图|截圖', clause)
+                    and re.search(r'看不清|无法看清|無法看清|无法读取|無法讀取|'
+                                  r'无法辨认|無法辨認|无法看到|無法看到|不能读取|不能讀取', clause)):
+                return True
     return False
 
 

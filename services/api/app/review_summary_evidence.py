@@ -23,6 +23,7 @@ class SummaryEvidence:
     explicit_text_pick: bool = False
     accepted_signal_ids: list[str] = field(default_factory=list)
     explicit_visual_instruction: bool = False
+    source_has_image: bool = False
 
 
 def _timestamps(rows: list[dict]) -> list[dict]:
@@ -92,7 +93,8 @@ async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int
         identified=_timestamps(row['identified'] or []),
         model_contents=[content or '' for content in (row['model_contents'] or [])],
         pagination_issues=pagination_issues(row['unfinished_count'], row['unfinished']),
-        explicit_text_pick=explicit_text_pick(row['source_text'] or ''),
+        explicit_text_pick=explicit_text_pick(row['source_text'] or '', has_image=row.get('source_has_image', False)),
         accepted_signal_ids=row['accepted_signal_ids'] or [],
         explicit_visual_instruction=explicit_visual_instruction(row['source_text'] or '', row.get('source_has_image', False)),
+        source_has_image=row.get('source_has_image', False),
     )

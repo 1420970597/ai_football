@@ -5,7 +5,7 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-10.2'
+REGISTRY_VERSION = '2026-11-10.3'
 VERIFIED_TEAM_NAMES = (
     {
         'sport': 'football',
@@ -53,5 +53,11 @@ VERIFIED_TEAM_NAMES = (
         'sport': 'basketball',
         'names': ('东京太阳摇滚', '涩谷太阳摇滚', 'Tokyo Sunrockers', 'Sunrockers Shibuya'),
         'reference': 'sunrockers:2026-27+publisher:211465+leyu:26100:20261110',
+    },
+    {
+        'sport': 'football',
+        'names': ('柔佛达鲁塔克欣C队U20', '达罗塔晋C队U20', '柔佛新山C队(U20)',
+                  'Johor Darul Takzim C(U20)'),
+        'reference': '7m:749715+titan:3111931+leyu:276426:20261110',
     },
 )

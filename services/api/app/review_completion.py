@@ -7,7 +7,8 @@ import re
 from .review_intent_retry import intent_retry_ctes, intent_retry_projection
 from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
-from .review_intent_claims import explicit_text_pick, explicit_visual_instruction, source_intent_denial
+from .review_intent_claims import (explicit_text_pick, explicit_visual_instruction,
+                                 source_intent_denial, image_access_unavailable)
 from .review_quote_claims import missing_handicap_claims, read_quote_claim_conflicts
 
 DETAIL_LIMIT = 100
@@ -115,9 +116,11 @@ def named_identity_claims(contents) -> str:
 
 async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], content: str = '',
                             require_intent_review: bool = False, *, final_content: str = '',
-                            require_visual_instruction_review: bool = False) -> dict:
+                            require_visual_instruction_review: bool = False,
+                            require_visual_access_review: bool = False) -> dict:
     display_conflicts = split_line_claim_conflicts(final_content)
     visual_intent_conflict = require_visual_instruction_review and source_intent_denial(final_content)
+    visual_access_conflict = require_visual_access_review and image_access_unavailable(final_content)
     quote_claim_conflicts = await read_quote_claim_conflicts(
         conn, job_id, attempt_id, missing_handicap_claims(final_content))
     row = await conn.fetchrow(
@@ -180,7 +183,7 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
         current_phase_claims(final_content) + named_phase_claims(final_content))
     if (not row['unfinished_count'] and not row['unbound_count'] and not row['intent_unverified']
             and not row['line_intent_retry_count'] and not row['phase_conflict_count'] and not display_conflicts
-            and not visual_intent_conflict and not quote_claim_conflicts):
+            and not visual_intent_conflict and not visual_access_conflict and not quote_claim_conflicts):
         return {}
     result = {'unfinished_search_count': row['unfinished_count'], 'unfinished_searches': row['unfinished'] or [],
             'unbound_mention_count': row['unbound_count'], 'unbound_mentions': row['unbound'] or [],
@@ -189,6 +192,8 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
         result['text_intent_unverified'] = True
     if visual_intent_conflict:
         result['source_visual_intent_conflict'] = True
+    if visual_access_conflict:
+        result['visual_access_unverified'] = True
     if row['line_intent_retry_count']:
         result['line_intent_retry_count'] = row['line_intent_retry_count']
         result['line_intent_retries'] = row['line_intent_retries'] or []
@@ -205,6 +210,12 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
 
 
 def continuation_prompt(issues: dict) -> str:
+    visual_access_hint = (
+        '当前消息有已提供的结构化原图，但最终说明明确表示无法读取或看清图片，不能据此认定审核完成。'
+        '请在原会话复核实际原图，逐段查看球队、联赛、时间及所选项；不要仅查看文字便忽略图片。'
+        '如确实无法辨认，保留具体未解决项，不能凭空补球队、期间、盘口，也不能改称没有新增推荐。'
+        '这只要求图像核验，不提供任何比赛绑定或录入许可。'
+        if issues.get('visual_access_unverified') else '')
     quote_claim_hint = (
         '最终说明声称某个具体让受让线不存在，但当前尝试的已读盘口包含该所选线，'
         '见read_quote_claim_conflicts。请逐项复核原图文、已有绑定及同一行quote_id/selection_line，'
@@ -245,7 +256,7 @@ def continuation_prompt(issues: dict) -> str:
         '请使用当前实际提供的赛事检索及盘口工具核验原图文，不能仅改口说已完成。'
         '实际调用失败则保留错误，不自行扩大权限、虚构工具结果或猜测编号。'
         if issues.get('tool_availability_unverified') else '')
-    return quote_claim_hint + visual_hint + display_hint + phase_hint + line_hint + intent_hint + tool_hint + (
+    return visual_access_hint + quote_claim_hint + visual_hint + display_hint + phase_hint + line_hint + intent_hint + tool_hint + (
         '服务端工具证据核验尚未通过，请在本会话继续当前审核。沿用原 review_id、attempt_id、原图文和权限。'
         '先完成 unfinished_searches 中每个检索的准确 next cursor，保持原 scope（尤其 sport、phase、时间范围），'
         '连续分页直到无下一页，不要重启已完成检索。对模型提及但无绑定的比赛，只有原推荐意图且双方球队、'

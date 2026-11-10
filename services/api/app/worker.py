@@ -20,6 +20,7 @@ from .review_recovery import market_recovery
 from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
 from .review_quote_claims import missing_handicap_claims
+from .review_intent_claims import image_access_unavailable
 from .review_accepted_context import read_accepted_context
 from .review_completion import (completion_issues, continuation_prompt, mentioned_fixtures, named_identity_claims, explicit_text_pick,
                                 explicit_visual_instruction,
@@ -425,7 +426,7 @@ async def _complete_review(pool, job: dict, started: float, model_result: dict |
 
 async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, require_tool_recovery=False,
                                   named_content='', require_intent_review=False, final_content='',
-                                  require_visual_instruction_review=False):
+                                  require_visual_instruction_review=False, require_visual_access_review=False):
     transient = (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError,
                  asyncpg.DeadlockDetectedError, asyncpg.SerializationError, asyncpg.PostgresConnectionError)
     for retry in range(2):
@@ -437,6 +438,8 @@ async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, req
                 phase_options = {'final_content': final_content} if final_content else {}
                 if require_visual_instruction_review:
                     phase_options['require_visual_instruction_review'] = True
+                if require_visual_access_review:
+                    phase_options['require_visual_access_review'] = True
                 issues = await completion_issues(conn, job['id'], job['attempt_id'], mentioned, *args, **phase_options)
                 if tool_claim or (require_tool_recovery
                         and await tool_recovery_pending(conn, job['id'], job['attempt_id'])):
@@ -457,6 +460,9 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
     usage_totals = {}
     check_retries = 0
     message = job['message'] | {'review_mode': job.get('review_mode', 'real_time')}
+    has_image = any(isinstance(media, dict)
+                    and str(media.get('mime_type', '')).lower().startswith('image/')
+                    for media in message.get('media_objects', []))
     accepted_context = None
     tool_recovery_required = False
     if job.get('attempts', 1) > 1 and message['review_mode'] == 'real_time':
@@ -499,13 +505,13 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
         if (current_phase_claims(content) or named_phase_claims(content) or split_line_claim_conflicts(content)
                 or missing_handicap_claims(content)):
             recovery_options['final_content'] = content
+        if (message['review_mode'] == 'real_time' and has_image and image_access_unavailable(content)):
+            recovery_options.update(require_visual_access_review=True, final_content=content)
         if (message['review_mode'] == 'real_time' and explicit_visual_instruction(
-                message.get('raw_text', ''), any(
-                    isinstance(media, dict) and str(media.get('mime_type', '')).lower().startswith('image/')
-                    for media in message.get('media_objects', [])))):
+                message.get('raw_text', ''), has_image)):
             recovery_options.update(require_visual_instruction_review=True, final_content=content)
         if (message['review_mode'] == 'real_time' and not accepted_context
-                and explicit_text_pick(message.get('raw_text', ''))):
+                and explicit_text_pick(message.get('raw_text', ''), has_image=has_image)):
             recovery_options['require_intent_review'] = True
         issues, retries = await _read_completion_issues(pool, job, mentioned, **recovery_options)
         tool_recovery_required = bool(issues.get('tool_availability_unverified'))
