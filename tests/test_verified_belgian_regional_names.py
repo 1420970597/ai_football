@@ -34,7 +34,7 @@ class BelgianAliasAPITests(unittest.IsolatedAsyncioTestCase):
         result=response.json();self.assertTrue(result['resolution']['resolved'])
         self.assertEqual(wanted,result['resolution']['fixture']['id'])
         refs=result['resolution']['fixture']['verified_alias_sources']
-        self.assertEqual({'registry_version':'2026-11-08.3',
+        self.assertEqual({'registry_version':'2026-11-10.1',
                           'home':'7m:7:20261108','away':'7m:1609:20261108'},refs)
         stored=await self.pool.fetchrow('SELECT home_team,away_team,home_aliases,away_aliases FROM v2_fixtures WHERE id=$1',wanted)
         self.assertEqual(('根特','科特赖克',[],[]),tuple(stored))

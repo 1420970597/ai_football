@@ -125,6 +125,10 @@ def _prefix_match(query: str, candidate: str) -> bool:
     # prefix of its women's/youth/reserve team identity.
     if any('\u3400' <= char <= '\u9fff' for char in query + candidate):
         return False
+    # A translated U21 alias must not make its adult/U19 club a valid prefix.
+    age = r'(?<!\w)u\s*(\d{1,2})(?!\w)'
+    if re.findall(age, query) != re.findall(age, candidate):
+        return False
     query_tokens = query.split()
     candidate_tokens = candidate.split()
     if not query_tokens or len(query_tokens) > len(candidate_tokens):

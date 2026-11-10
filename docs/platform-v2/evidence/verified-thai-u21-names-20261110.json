@@ -1,0 +1,59 @@
+{
+  "registry_version": "2026-11-10.1",
+  "retrieved_at": "2026-11-10T08:55:00Z",
+  "basis": "Reviewed cross-publisher identity chain; native Chinese labels are not claimed to occur in 7M metadata",
+  "sport": "football",
+  "squad": "U21",
+  "source_message": "74732fe2-e238-4fba-80f5-0452dd531926",
+  "source_image_sha256": "b38d2b8fcd297b388d122b44c8c1fc76959797ffe80ee92f40b75bc3578505db",
+  "native_label_image_message": "b9267f0f-34ee-4668-906f-5f333edf9fed",
+  "native_label_image_sha256": "62df958bb538f8d715e7588935d560cb98e54497438f558c5aec6268a20e6a33",
+  "native_fixture": {
+    "id": "leyu:5840587",
+    "home_team_id": "329173",
+    "home_team": "卡森邦迪特大学U21",
+    "away_team_id": "330276",
+    "away_team": "巴蜀基利U21",
+    "competition_id": "50275",
+    "competition_name": "泰国联赛U21",
+    "kickoff_at": "2026-11-10T08:30:00Z",
+    "read_only_observation": "E2878 at 08:51, one native result, first half 21 minutes, 0-0"
+  },
+  "identity_chain": [
+    "Source scoreboard names both U21 sides, 16:30 local kickoff and minute 10-11.",
+    "The other authorized original names both native U21 sides, minute 14:31, and displays KBUFC and PT Prachuap crests.",
+    "7M independent U21 team 750141 names 博乐大学(U21) and Kasem Bundit University(U21) in the same metadata record.",
+    "7M independent U21 team 750221 names 巴蜀(U21) and PT Prachuap FC(U21) and lists this pairing at 16:30 on November 10.",
+    "Titan match 3111935 lists 博乐大学U21 versus 普拉查普U21 at the same date and 16:30 local kickoff.",
+    "Native immutable team IDs, opponent pair, exact kickoff, squad, contemporaneous original images and independent publisher pairings jointly establish the reviewed aliases; no inference from betting prices."
+  ],
+  "sources": [
+    {
+      "url": "https://www.7m.hk/football/data/teams/js_data?file=team_info&id=750141&lang=gb",
+      "sha256": "efcd4e8d13e62b76f45245145fcf1a140251c86d9a5aecaf4df05ffb367bbf80",
+      "direct_names": ["博乐大学(U21)", "Kasem Bundit University(U21)"]
+    },
+    {
+      "url": "https://www.7m.hk/football/data/teams/750141",
+      "sha256": "41a0261e0918fbf693de3ab739b7644b6b5bb78950d53472dd161b100d71d80b",
+      "direct_names": ["博樂大學(U21)", "Kasem Bundit University(U21)"]
+    },
+    {
+      "url": "https://www.7m.hk/football/data/teams/750221",
+      "sha256": "3ed15e26ffde8ff82d23de98b269288b9cca865b33929b2b62f382fbc7edbe22",
+      "direct_names": ["巴蜀(U21)", "PT Prachuap FC(U21)"]
+    },
+    {
+      "url": "https://op1.titan007.com/Oddslist/3111935.htm",
+      "direct_names": ["博乐大学U21", "普拉查普U21"],
+      "capture": "Browser provider public page; direct HTTP client failed and no local body hash is claimed"
+    }
+  ],
+  "limitations": [
+    "The away simplified metadata request timed out; its successful page record is used instead.",
+    "Cross-publisher native Chinese transliterations are explicitly reviewed labels, not literal 7M fields.",
+    "Only complete football U21 labels are registered; adult, U19, women or basketball equivalence is not granted.",
+    "Names assist retrieval and identity checks; Leyu remains the match, market, price and result authority.",
+    "This evidence does not authorize production historical recommendation replay or funded tests."
+  ]
+}

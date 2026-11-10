@@ -1,10 +1,11 @@
 """Reviewed identity vocabulary; provenance lives beside the acceptance evidence.
 
-Only whole labels from a single publisher's same-team record belong here.
-Adding a squad suffix or another sport requires independent identity evidence.
+Only reviewed whole labels with recorded identity evidence belong here.
+Cross-publisher labels require an explicit evidence chain; adding a squad
+suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-08.3'
+REGISTRY_VERSION = '2026-11-10.1'
 VERIFIED_TEAM_NAMES = (
     {
         'sport': 'football',
@@ -30,5 +31,17 @@ VERIFIED_TEAM_NAMES = (
         'sport': 'football',
         'names': ('科特赖克', '哥積克'),
         'reference': '7m:1609:20261108',
+    },
+    {
+        'sport': 'football',
+        'names': ('卡森邦迪特大学U21', '博乐大学U21', '博乐大学(U21)',
+                  'Kasem Bundit University(U21)', 'Kasem Bundit University U21'),
+        'reference': '7m:750141+leyu:329173:20261110',
+    },
+    {
+        'sport': 'football',
+        'names': ('巴蜀基利U21', '普拉查普U21', '普拉查普(U21)', '巴蜀(U21)',
+                  'PT Prachuap FC(U21)', 'PT Prachuap U21', 'Prachuap U21'),
+        'reference': '7m:750221+leyu:330276:20261110',
     },
 )
