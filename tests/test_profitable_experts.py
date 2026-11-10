@@ -84,7 +84,9 @@ class ProfitableExpertTests(unittest.IsolatedAsyncioTestCase):
         await self.healthy()
         supported, expert, _, _ = await self.signal()
         unsupported = []
-        scopes = [('football', 'scheduled'), ('basketball', 'live'), ('basketball', 'scheduled')]
+        # Keep this regression focused on candidates that the current executor
+        # must reject, while basketball and scheduled football are supported.
+        scopes = [('baseball', 'scheduled'), ('baseball', 'live'), ('baseball', 'scheduled')]
         for index in range(31):
             sport, phase = scopes[index % len(scopes)]
             unsupported.append(await self.queued_signal(supported, sport=sport, phase=phase, age_seconds=120-index))
@@ -104,7 +106,7 @@ class ProfitableExpertTests(unittest.IsolatedAsyncioTestCase):
         for signal in unsupported[:3]:
             with self.assertRaises(HTTPException) as rejected:
                 await self.reserve(signal)
-            self.assertIn('推荐、来源或滚球盘口', rejected.exception.detail)
+            self.assertIn('推荐、来源或', rejected.exception.detail)
 
     async def test_manual_supported_candidate_after_31_unsupported_is_not_starved(self):
         await self.assert_unsupported_candidates_do_not_starve('manual')
@@ -153,10 +155,10 @@ class ProfitableExpertTests(unittest.IsolatedAsyncioTestCase):
         account = (await self.api.get('/api/v1/accounts/leyu')).json()
         self.assertEqual('profitable', account['betting']['expert_selection_mode'])
         self.assertEqual(30, account['profitability_definition']['days'])
-        self.assertEqual(['football'], account['execution_capability']['supported_sports'])
-        self.assertEqual(['live'], account['execution_capability']['supported_phases'])
-        self.assertEqual('unsupported', account['execution_capability']['prematch'])
-        self.assertEqual('unsupported', account['execution_capability']['basketball'])
+        self.assertEqual(['football', 'basketball'], account['execution_capability']['supported_sports'])
+        self.assertEqual(['scheduled', 'live'], account['execution_capability']['supported_phases'])
+        self.assertEqual('supported', account['execution_capability']['prematch'])
+        self.assertEqual('full_time_winner_total_handicap', account['execution_capability']['basketball'])
         self.assertEqual(422, (await self.mode('invalid')).status_code)
         self.assertEqual(422, (await self.mode('manual')).status_code)
         self.assertEqual(200, (await self.mode('manual', [expert])).status_code)
