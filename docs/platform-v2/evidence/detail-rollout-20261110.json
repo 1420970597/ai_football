@@ -1,0 +1,54 @@
+{
+  "source_commit": "9cbd2f32bf63e868afcc67d000fb36aa67d3664d",
+  "deployed_at_utc": "2026-11-10T08:15:47Z",
+  "image_id": "sha256:62a4c2acb589dfc09ae23ac2c0e5edb5c33b377024766e025f5c6faf56dd8099",
+  "app_js_sha256": "71984c6019d3a8b442f201ead00246d0b61c40f18d4b41aaeb95fd2213fa9729",
+  "ci": {
+    "main_run": 42778746598,
+    "boundary_run": 42778746524,
+    "all_four_jobs_success": true,
+    "backend_tests": 2141,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "complete_source_manifest_files": 1206,
+    "complete_source_manifest_verified": true
+  },
+  "isolated_browser": {
+    "behavior_scenarios": 67,
+    "accessibility_checks": 23,
+    "accessibility_scans": 30,
+    "native_exit_codes": [0, 0],
+    "oom_killed": false
+  },
+  "rollout": {
+    "only_web_recreated": true,
+    "other_local_services_preserved": 7,
+    "remote_services_preserved": 4,
+    "runtime_configuration_preserved": true,
+    "whole_user_policy_preserved": true,
+    "api_live_enabled": true,
+    "global_live_enabled": true,
+    "apply_exit_code": 0,
+    "controller_exit_code": 0
+  },
+  "real_browser": {
+    "widths": [1440, 390],
+    "direct_link_stable_close_exit_code": 0,
+    "basketball_winner_period_and_close_exit_code": 0,
+    "native_market_id": "37",
+    "response_injection": false,
+    "funded_tests": 0,
+    "artifact_directories": [
+      "output/playwright/e2848-dialog-close",
+      "output/playwright/e2849-basketball-winner"
+    ]
+  },
+  "limitations": {
+    "model_generation_healthy": false,
+    "expert_review_recovery_verified": false,
+    "natural_post_to_accepted_order_within_ten_seconds_verified": false,
+    "latest_generation_probe_native_exit_code": 1,
+    "latest_generation_probe_error": "ReadTimeout"
+  }
+}
