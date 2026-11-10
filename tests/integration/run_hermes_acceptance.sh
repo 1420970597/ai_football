@@ -20,7 +20,7 @@ HERMES="$TASK-hermes"
 DSN='postgresql://postgres@ai-football-v2-pgverify:5432/v2_integration_test'
 mkdir -p "$SNAPSHOT/services/collector" "$SNAPSHOT/tests/integration" "$SNAPSHOT/integrations" "$SNAPSHOT/infra/test"
 cp -a services/api services/hermes-mcp "$SNAPSHOT/services/"
-cp services/quote_witness.py "$SNAPSHOT/services/"
+cp services/quote_witness.py services/execution_scope.py services/basketball_scores.py "$SNAPSHOT/services/"
 cp services/collector/requirements.txt "$SNAPSHOT/services/collector/"
 cp infra/test/Dockerfile "$SNAPSHOT/infra/test/"
 if [ "$REVIEW_API_ROLE" = mcp ]; then
