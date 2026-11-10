@@ -30,7 +30,7 @@ MARKETS = {
     "18": ("total", "first_half", "上半场大小"),
 }
 # Source ids are sport scoped. These basketball full-game ids and native
-# selection codes were verified from an authorized current detail response.
+# selection codes were verified from authorized current detail responses.
 # Do not recognize them for football, an unknown sport, or a missing csid.
 SPORT_MARKETS = {
     "1": {
@@ -38,6 +38,7 @@ SPORT_MARKETS = {
         "11": ("team_total", "full_time", "客队进球大小"),
     },
     "2": {
+        "37": ("winner", "full_time", "全场独赢"),
         "38": ("total", "full_time", "全场大小"),
         "39": ("handicap", "full_time", "全场让分"),
     },
