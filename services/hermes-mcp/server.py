@@ -87,6 +87,7 @@ def compact_tool_result(result):
 compact_descriptions: ContextVar[bool] = ContextVar('compact_tool_descriptions', default=False)
 compact_market_tables: ContextVar[bool] = ContextVar('compact_market_tables', default=False)
 explicit_market_intent: ContextVar[bool] = ContextVar('explicit_market_intent', default=False)
+budget_descriptions: ContextVar[bool] = ContextVar('budget_tool_descriptions', default=False)
 SourcePeriods = Annotated[list[Literal['full_time','first_half','second_half']] | None,
     Field(max_length=3,description='首次读盘前从原文/所选图片明确的推荐期间清单；未知填[]，单项如[first_half]，多期间图片须在首次一次列全。读盘period只是筛选，不证明来源；读盘后不得扩充清单或按库存补期间。')]
 INTENT_ARGUMENT_DESCRIPTIONS = {
@@ -94,6 +95,43 @@ INTENT_ARGUMENT_DESCRIPTIONS = {
     'market_kind': '原文明示的玩法：大小球用total，让球用handicap；与read_markets=true一起传，不从赔率猜玩法。其他玩法按工具已知原生类型核验。',
     'period': '按原文明示期间：全场full_time、上半场first_half、下半场second_half。已知时与read_markets=true一起传；不能把上半场换成全场，未知时不要猜。',
 }
+
+# These profiles are used with the complete, preloaded expert-review skill.
+# Only descriptions change: validation schemas and business calls stay native.
+BUDGET_TOOL_DESCRIPTIONS = {
+    'search_matches': 'expert-review已预载，勿重复skill_view。同场查询只调用一次。查全部阶段并连续翻页；传原文双方、sport及原始日期。唯一活动绑定可合并读盘；明确单项total/期间/方向/线时record_source_intent=true，以record_result为准。未知期间不录入。',
+    'resolve_match': 'expert-review已预载；用完整search_key及双方/联赛/时间消歧，已绑定不重做。明确单项total可合并读盘录入，以record_result为准；非活动不读盘。',
+    'list_match_markets': 'expert-review已预载；读取已唯一活动绑定的盘口，先声明来源期间。让球按selection_line，line筛选用原生线。完整零库存停止重读；部分/筛选零命中有据再放宽。',
+    'record_expert_signals': 'expert-review已预载；提交本任务已读quote_id，以accepted/rejected/系统价格为准。retry_same_evidence=false停止该项重试，其余继续。',
+}
+BUDGET_ARGUMENT_DESCRIPTIONS = {
+    'cursor': '逐字复制本查询next_cursor；首查不传，连续读至空。',
+    'sport': '来源实际项目，如football/basketball；未知才省略。',
+    'team_a': '来源明确可读的第一队；双方已知时与team_b首次成对传入。',
+    'team_b': '来源明确可读的第二队；不从候选补造。',
+    'read_markets': '来源明确玩法/期间时true；唯一活动绑定合并读盘并复用。',
+    'market_kind': '来源玩法，如total/handicap；不从赔率猜。',
+    'period': '来源明确的full_time/first_half/second_half；未知不猜。',
+    'source_periods': '来源明确的全部期间，首读一次列全；未知[]。period仅筛选，读盘后禁扩充。',
+    'market_query': '逐字来源方向/线值，如小3.5、大0.5/1；不比较倍率。',
+    'record_source_intent': '明确单项total/期间/方向/线时true，同时read_markets=true及evidence_text；检查record_result。',
+    'evidence_text': '本项原文/所选原图证据；不得按库存补造期间、方向或线。',
+    'search_key': '逐字复制当前完整search_matches回执的64位标识。',
+}
+
+
+def budget_schema_descriptions(schema):
+    """Copy schema descriptions without changing types, defaults or constraints."""
+    if isinstance(schema, list):
+        return [budget_schema_descriptions(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    result = {key: budget_schema_descriptions(value) for key, value in schema.items()}
+    for name, prop in result.get('properties', {}).items():
+        if (name in BUDGET_ARGUMENT_DESCRIPTIONS
+                and ('description' in prop or name in {'market_query', 'evidence_text'})):
+            prop['description'] = BUDGET_ARGUMENT_DESCRIPTIONS[name]
+    return result
 
 
 class CompactMCPServer(MCPServer):
@@ -125,6 +163,16 @@ class CompactMCPServer(MCPServer):
                 schema['properties'] = properties
                 schema['required'] = list(dict.fromkeys([*schema.get('required', []), *fields]))
                 updates['input_schema'] = schema
+            if budget_descriptions.get():
+                updates['description'] = BUDGET_TOOL_DESCRIPTIONS[tool.name]
+                if compact_descriptions.get():
+                    updates['description'] = (
+                        '仅供不同对阵独立并行，勿重复主连接同场查询。' + updates['description']
+                        if tool.name == 'search_matches' else
+                        f'独立对阵并行调用football.{tool.name}；expert-review已预载，'
+                        '参数及校验同主工具，勿重复同场操作。')
+                updates['input_schema'] = budget_schema_descriptions(
+                    updates.get('input_schema', tool.input_schema))
             result.append(tool.model_copy(update=updates) if updates else tool)
         return result
 
@@ -467,18 +515,24 @@ class BearerAuthentication:
         profiles = [value for name, value in scope.get('headers', [])
                     if name.lower() == b'x-football-tool-profile']
         token = compact_descriptions.set(profiles in (
-            [b'parallel-compact-v1'], [b'parallel-table-v1'], [b'parallel-intent-v1']))
+            [b'parallel-compact-v1'], [b'parallel-table-v1'], [b'parallel-intent-v1'],
+            [b'parallel-budget-v1']))
         table_token = compact_market_tables.set(profiles in (
             [b'market-table-v1'], [b'parallel-table-v1'],
-            [b'market-intent-v1'], [b'parallel-intent-v1']))
+            [b'market-intent-v1'], [b'parallel-intent-v1'],
+            [b'market-budget-v1'], [b'parallel-budget-v1']))
         intent_token = explicit_market_intent.set(profiles in (
-            [b'market-intent-v1'], [b'parallel-intent-v1']))
+            [b'market-intent-v1'], [b'parallel-intent-v1'],
+            [b'market-budget-v1'], [b'parallel-budget-v1']))
+        budget_token = budget_descriptions.set(profiles in (
+            [b'market-budget-v1'], [b'parallel-budget-v1']))
         try:
             await self.app(scope, receive, send)
         finally:
             compact_descriptions.reset(token)
             compact_market_tables.reset(table_token)
             explicit_market_intent.reset(intent_token)
+            budget_descriptions.reset(budget_token)
 
 
 async def main() -> None:
