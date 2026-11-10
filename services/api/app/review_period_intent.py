@@ -44,7 +44,7 @@ _NEGATED_SUBSTITUTION = re.compile(r'(?:不|不能|不可|不应|不得|不会|�
 
 def period_intent_key(quote):
     """Canonical per-pick denial key; its binding supplies fixture identity."""
-    if quote.get('market_kind') not in {'total','team_total'} or quote.get('line') is None:
+    if quote.get('market_kind') not in {'total','team_total','handicap'} or quote.get('line') is None:
         return None
     line=Decimal(str(quote['line']))
     if not line.is_finite():
@@ -162,7 +162,7 @@ def premarket_period_rejection(text, quote, declaration, *, has_visual_source=Fa
     The declaration is attempt/fixture-bound and write-once, not model prose
     submitted alongside an already chosen quote.
     """
-    if (has_visual_source and quote.get('market_kind') in {'total','team_total'}
+    if (has_visual_source and quote.get('market_kind') in {'total','team_total','handicap'}
             and isinstance(declaration,dict)
             and declaration.get('algorithm') == 'premarket-source-intent-v1'):
         # The first read filter is a legacy single-period declaration. New

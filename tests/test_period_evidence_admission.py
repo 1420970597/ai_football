@@ -39,7 +39,7 @@ class PeriodEvidenceAdmissionTests(unittest.TestCase):
                 self.assertIsNone(period.evidence_period_rejection(evidence,self.quote()))
 
     def test_other_market_and_absent_evidence_do_not_invent_a_period(self):
-        self.assertIsNone(period.evidence_period_rejection(ADMISSION,self.quote(market_kind='handicap')))
+        self.assertIsNone(period.evidence_period_rejection(ADMISSION,self.quote(market_kind='winner')))
         for text in ('',None,'原文只说破蛋','期间未知，等待来源确认'):
             self.assertIsNone(period.evidence_period_rejection(text,self.quote()))
 

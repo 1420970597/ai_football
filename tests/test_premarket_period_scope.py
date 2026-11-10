@@ -34,7 +34,7 @@ class PremarketPeriodScopeTests(unittest.TestCase):
             with self.subTest(text=text):self.assertIsNotNone(self.reject(scope,text))
 
     def test_other_markets_do_not_gain_or_lose_period_authority(self):
-        self.assertIsNone(self.reject({'period':'full_time'},market_kind='handicap'))
+        self.assertIsNone(self.reject({'period':'full_time'},market_kind='winner'))
 
 
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'),'requires isolated PostgreSQL')

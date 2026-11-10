@@ -30,8 +30,8 @@ class PremarketSourcePresenceTests(unittest.TestCase):
         self.assertIsNone(premarket_period_rejection('1.5大',quote,unknown))
         self.assertIsNone(premarket_period_rejection('1.5大',quote,
             {**unknown,'period':'first_half'},has_visual_source=True))
-        self.assertIsNone(premarket_period_rejection('主队+1.5',
-            {**quote,'market_kind':'handicap'},unknown,has_visual_source=True))
+        self.assertIsNone(premarket_period_rejection('主队胜',
+            {**quote,'market_kind':'winner'},unknown,has_visual_source=True))
 
     def test_text_period_proof_belongs_to_selected_line_and_direction(self):
         quote={'market_kind':'total','line':Decimal('1.5'),'selection':'over','period':'first_half'}
