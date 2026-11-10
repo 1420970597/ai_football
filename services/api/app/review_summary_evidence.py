@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from .review_completion import DETAIL_LIMIT, pagination_issues, unfinished_searches_cte, explicit_text_pick
-from .review_intent_claims import explicit_visual_instruction
+from .review_intent_claims import explicit_visual_instruction, explicit_current_total_items
 from .review_period_intent import INTENT_VALID_SQL
 
 
@@ -24,6 +24,7 @@ class SummaryEvidence:
     accepted_signal_ids: list[str] = field(default_factory=list)
     explicit_visual_instruction: bool = False
     source_has_image: bool = False
+    source_total_items: list[dict] = field(default_factory=list)
 
 
 def _timestamps(rows: list[dict]) -> list[dict]:
@@ -97,4 +98,5 @@ async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int
         accepted_signal_ids=row['accepted_signal_ids'] or [],
         explicit_visual_instruction=explicit_visual_instruction(row['source_text'] or '', row.get('source_has_image', False)),
         source_has_image=row.get('source_has_image', False),
+        source_total_items=explicit_current_total_items(row['source_text'] or ''),
     )

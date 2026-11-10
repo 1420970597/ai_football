@@ -24,18 +24,11 @@ _CURRENT_TAIL = re.compile(r'\s*等水上[车車]\s*[。!！]*$')
 _IMAGE_TOTAL = re.compile(rf'[大小]\s*{_NUMBER}(?:\s+{_NUMBER})?\s*[。!！]*')
 
 
-def explicit_text_pick(content: str, *, has_image: bool = False) -> bool:
-    """Request tool verification, never extract picks or infer match identity.
-
-    Deliberately conservative: clear recommendation labels or a whole period
-    total line count; historical sections require an explicit current label.
-    The existing whole-message follow instruction remains supported.
-    """
+def _current_pick_lines(content: str):
+    """Yield bounded current clauses, excluding history, quotes and questions."""
     if not isinstance(content, str) or len(content) > 20000:
-        return False
+        return
     text = unicodedata.normalize('NFKC', content)
-    if len(text) <= 100 and _FOLLOW.fullmatch(text):
-        return True
     historical = fenced = False
     for raw in text.splitlines():
         line = raw.strip()
@@ -51,10 +44,19 @@ def explicit_text_pick(content: str, *, has_image: bool = False) -> bool:
             historical = True
         if historical or _NOT_CURRENT.search(line) or _QUESTION.search(line):
             continue
-        line = _CURRENT_TAIL.sub('', line).strip()
+        yield _CURRENT_TAIL.sub('', recommendation['pick'] if recommendation else line).strip(), bool(recommendation)
+
+
+def explicit_text_pick(content: str, *, has_image: bool = False) -> bool:
+    """Request tool verification, never infer identity or authorize a pick."""
+    if not isinstance(content, str) or len(content) > 20000:
+        return False
+    text = unicodedata.normalize('NFKC', content)
+    if len(text) <= 100 and _FOLLOW.fullmatch(text):
+        return True
+    for line, recommendation in _current_pick_lines(content):
         if recommendation:
-            pick = recommendation['pick']
-            if evidence_line_intent(pick, 'handicap') or evidence_line_intent(pick, 'total'):
+            if evidence_line_intent(line, 'handicap') or evidence_line_intent(line, 'total'):
                 return True
         elif _PERIOD_TOTAL.fullmatch(line) and evidence_line_intent(line, 'total'):
             return True
@@ -64,6 +66,34 @@ def explicit_text_pick(content: str, *, has_image: bool = False) -> bool:
             if evidence_line_intent(line, 'total'):
                 return True
     return False
+
+
+def explicit_current_total_items(content: str) -> list[dict]:
+    """Negative review obligations, without fixture identity or recording rights.
+
+    Only whole current period/total clauses count. Bare half, numeric
+    alternatives and text mixed with team identities need model interpretation.
+    """
+    periods = {'全场': 'full_time', '全場': 'full_time',
+               '上半场': 'first_half', '上半場': 'first_half', '上半': 'first_half',
+               '下半场': 'second_half', '下半場': 'second_half', '下半': 'second_half'}
+    items = []
+    seen = set()
+    for line, _ in _current_pick_lines(content):
+        if not _PERIOD_TOTAL.fullmatch(line):
+            continue
+        period = next((value for prefix, value in periods.items() if line.startswith(prefix)), None)
+        intent = evidence_line_intent(line, 'total')
+        if not period or not intent or len(intent['lines']) != 1:
+            continue
+        key = (period, intent['lines'][0], intent['selection'])
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(items) == 32:
+            return items + [{'reason': 'source_total_item_budget_exceeded'}]
+        items.append(dict(period=period, line=key[1], selection=key[2], source_text=line))
+    return items
 
 
 def image_access_unavailable(content: str) -> bool:

@@ -10,6 +10,7 @@ from .review_line_claims import split_line_claim_conflicts
 from .review_intent_claims import (explicit_text_pick, explicit_visual_instruction,
                                  source_intent_denial, image_access_unavailable)
 from .review_quote_claims import missing_handicap_claims, read_quote_claim_conflicts
+from .review_source_items import source_total_review_gaps
 
 DETAIL_LIMIT = 100
 
@@ -20,7 +21,7 @@ def tool_unavailability_claim(content: str) -> bool:
     if not re.match(r'^(?:我(?:当前)?(?:无法|不能|不会|没有|不具备)|(?:本次|当前|这个)(?:会话|环境)'
                     r'|I\s+(?:cannot|can\x27t|do not|don\x27t)|This\b|The current\b|No\b)', first, re.I):
         return False
-    if not re.search(r'MCP|football|足球.*工具|赛事.*工具|盘口.*工具', first, re.I):
+    if not re.search(r'MCP|football|足球.*工具|比赛.*工具|赛事.*工具|盘口.*工具', first, re.I):
         return False
     return bool(re.search(
         r'(?:本次|当前|这个)(?:会话|环境).{0,80}(?:没有|未)(?:提供|开放|启用|配置).{0,40}工具'
@@ -28,6 +29,10 @@ def tool_unavailability_claim(content: str) -> bool:
         r'|我(?:当前)?(?:无法|不能)(?:审核|处理|核验)(?:这条消息|该消息|本条消息|此消息)'
         r'[^。；;\n“「"`]{0,100}(?:当前|本轮)(?:没有|尚无)可用的\s*'
         r'(?:football|足球|MCP).{0,60}工具'
+        r'|我(?:当前)?(?:无法|不能|不会)(?:审核|处理|核验)(?:这条消息|该消息|本条消息|此消息)'
+        r'[：:，,]\s*(?:因为|由于)?\s*(?:当前|本次)(?:提供的)?(?:上下文|会话|环境)(?:里|中)?'
+        r'(?:没有|未提供|未配置)(?:可用的)?(?:比赛|赛事|足球|盘口)'
+        r'(?:(?:或|与|和|及)(?:比赛|赛事|足球|盘口))?工具'
         r'|\bI\s+(?:cannot|can\x27t)\s+(?:use|access).{0,45}(?:MCP|football).{0,20}tools\b'
         r'|\bI\s+(?:do not|don\x27t)\s+have\s+access\s+to.{0,45}(?:MCP|football).{0,20}tools\b'
         r'|\b(?:this|current)\s+(?:session|environment).{0,40}(?:has no|does not provide).{0,30}tools\b'
@@ -117,7 +122,9 @@ def named_identity_claims(contents) -> str:
 async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], content: str = '',
                             require_intent_review: bool = False, *, final_content: str = '',
                             require_visual_instruction_review: bool = False,
-                            require_visual_access_review: bool = False) -> dict:
+                            require_visual_access_review: bool = False,
+                            source_total_items: list[dict] | None = None) -> dict:
+    source_item_gaps = await source_total_review_gaps(conn, job_id, attempt_id, source_total_items or [])
     display_conflicts = split_line_claim_conflicts(final_content)
     visual_intent_conflict = require_visual_instruction_review and source_intent_denial(final_content)
     visual_access_conflict = require_visual_access_review and image_access_unavailable(final_content)
@@ -183,13 +190,16 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
         current_phase_claims(final_content) + named_phase_claims(final_content))
     if (not row['unfinished_count'] and not row['unbound_count'] and not row['intent_unverified']
             and not row['line_intent_retry_count'] and not row['phase_conflict_count'] and not display_conflicts
-            and not visual_intent_conflict and not visual_access_conflict and not quote_claim_conflicts):
+            and not visual_intent_conflict and not visual_access_conflict and not quote_claim_conflicts
+            and not source_item_gaps):
         return {}
     result = {'unfinished_search_count': row['unfinished_count'], 'unfinished_searches': row['unfinished'] or [],
             'unbound_mention_count': row['unbound_count'], 'unbound_mentions': row['unbound'] or [],
             'detail_limit': DETAIL_LIMIT}
     if row['intent_unverified']:
         result['text_intent_unverified'] = True
+    if source_item_gaps:
+        result['source_total_review_gaps'] = source_item_gaps
     if visual_intent_conflict:
         result['source_visual_intent_conflict'] = True
     if visual_access_conflict:
@@ -210,6 +220,13 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
 
 
 def continuation_prompt(issues: dict) -> str:
+    source_item_hint = (
+        '原正文仍有明确当前推荐条目尚无覆盖该玩法/期间/线值/方向的工具读盘，见source_total_review_gaps。'
+        '其他条目成功不等于本条完成。请重新结合完整原图逐项辨认双方、联赛和时间并完成检索核验；'
+        '不能仅因本行没有再次写球队而忽略原图中可能对应的独立比赛。'
+        '这些原文字段只提示漏查，不证明球队或绑定；不要按相同数字自动选比赛，也不要向用户确认后才检索。'
+        '确有歧义、完场或无有效盘口仍保留具体未解决，不能猜测录入；已经接受的项目不重复提交。'
+        if issues.get('source_total_review_gaps') else '')
     visual_access_hint = (
         '当前消息有已提供的结构化原图，但最终说明明确表示无法读取或看清图片，不能据此认定审核完成。'
         '请在原会话复核实际原图，逐段查看球队、联赛、时间及所选项；不要仅查看文字便忽略图片。'
@@ -256,7 +273,7 @@ def continuation_prompt(issues: dict) -> str:
         '请使用当前实际提供的赛事检索及盘口工具核验原图文，不能仅改口说已完成。'
         '实际调用失败则保留错误，不自行扩大权限、虚构工具结果或猜测编号。'
         if issues.get('tool_availability_unverified') else '')
-    return visual_access_hint + quote_claim_hint + visual_hint + display_hint + phase_hint + line_hint + intent_hint + tool_hint + (
+    return source_item_hint + visual_access_hint + quote_claim_hint + visual_hint + display_hint + phase_hint + line_hint + intent_hint + tool_hint + (
         '服务端工具证据核验尚未通过，请在本会话继续当前审核。沿用原 review_id、attempt_id、原图文和权限。'
         '先完成 unfinished_searches 中每个检索的准确 next cursor，保持原 scope（尤其 sport、phase、时间范围），'
         '连续分页直到无下一页，不要重启已完成检索。对模型提及但无绑定的比赛，只有原推荐意图且双方球队、'

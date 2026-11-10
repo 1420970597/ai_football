@@ -16,12 +16,15 @@ CLAIM = ('我不会使用足球 MCP 工具，也不会使用终端或文件工�
 NATIVE_ABSENCE_CLAIM = (
     '我不能审核这条消息：本轮所需的工具尚未接入，当前没有可用的 football / football_parallel MCP 工具'
     '（我这边只有技能读取和通用文件、命令行工具），无法检索比赛、读取盘口或录入推荐。')
+CONTEXT_ABSENCE_CLAIM = '我不会审核这条消息，因为当前提供的上下文里没有可用的比赛或盘口工具。'
 
 
 class ToolClaimBoundaryTests(unittest.TestCase):
     def test_explicit_self_limitations_are_only_negative_completion_hints(self):
         from app.review_completion import tool_unavailability_claim
-        for content in (CLAIM, NATIVE_ABSENCE_CLAIM, '当前会话没有提供足球MCP工具，无法执行核验。',
+        for content in (CLAIM, NATIVE_ABSENCE_CLAIM, CONTEXT_ABSENCE_CLAIM,
+                        '我无法处理本条消息：本次上下文中未提供可用的赛事与盘口工具。',
+                        '当前会话没有提供足球MCP工具，无法执行核验。',
                         '我无法使用football MCP工具。',
                         'I cannot use football MCP tools because this session does not provide any tools.',
                         "I don't have access to football MCP tools.", 'No football MCP tools are available.'):
@@ -34,6 +37,7 @@ class ToolClaimBoundaryTests(unittest.TestCase):
                         'I quote: ' + CLAIM, '本次完整检索没有匹配比赛。',
                         '我不能断言当前没有可用的 football MCP 工具，实际调用已成功。',
                         '我不能审核原文引用：“当前没有可用的 football MCP 工具”。',
+                        '我不会审核这条消息，假如当前上下文没有比赛或盘口工具。',
                         '我没有调用足球MCP工具，因为本条是表情包，无推荐意图。',
                         '本条没有推荐意图，无需调用足球MCP工具。'):
             with self.subTest(content=content):
@@ -121,6 +125,11 @@ class ReviewToolAvailabilityTests(unittest.IsolatedAsyncioTestCase):
             "SELECT count(*) FROM v2_analysis_traces WHERE trace_kind='hermes_partial_result'"))
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
 
+    async def test_current_context_absence_requires_actual_tool_recovery(self):
+        with self.assertRaises(worker.HermesProviderUnavailable):
+            await self.run_model([(CONTEXT_ABSENCE_CLAIM, {'content': CONTEXT_ABSENCE_CLAIM})] * 3)
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+
     async def test_quoted_tool_absence_and_ordinary_no_intent_keep_one_turn(self):
         for content in ('原文引用：' + CLAIM, '> ' + CLAIM,
                         '本条是熊猫表情包，没有推荐意图，无需调用工具。',
@@ -171,6 +180,11 @@ class ReviewToolAvailabilityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_final_receipt_rejects_native_no_available_tools_claim(self):
         receipt = await self.receipt(claim=NATIVE_ABSENCE_CLAIM)
+        self.assertFalse(receipt['completion_verified'])
+        self.assertTrue(receipt['completion_issues']['tool_availability_unverified'])
+
+    async def test_final_receipt_rejects_current_context_absence_claim(self):
+        receipt = await self.receipt(claim=CONTEXT_ABSENCE_CLAIM)
         self.assertFalse(receipt['completion_verified'])
         self.assertTrue(receipt['completion_issues']['tool_availability_unverified'])
 

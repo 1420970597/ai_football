@@ -264,7 +264,18 @@ async def search_matches(body: SearchInput, request: Request):
                     intent = ResolveInput(review_id=body.review_id, attempt_id=body.attempt_id,
                         search_key=search_key, team_a=body.team_a, team_b=body.team_b)
                     result['resolution'] = await resolve_candidates(conn, intent, candidates)
-            if (not has_more and body.team_query.strip()
+            if not has_more and total == 0 and body.competition_query:
+                # A source league label may include a youth suffix absent from
+                # the provider's league name. Request an independent team
+                # search; never silently relax this immutable search scope.
+                result['next_search_guidance'] = {
+                    'condition': 'competition_filtered_search_complete_but_empty',
+                    'action': 'search_source_team_without_competition_filter',
+                    'required_scope': ['team_query', 'sport', 'phase', 'from_utc', 'to_utc'],
+                    'does_not_confirm_identity': True,
+                    **({'team_query': body.team_query} if body.team_query.strip() else {}),
+                }
+            elif (not has_more and body.team_query.strip()
                     and not result.get('resolution', {}).get('resolved')):
                 if result.get('resolution', {}).get('reason') == 'ambiguous_fixture':
                     result['next_search_guidance'] = {

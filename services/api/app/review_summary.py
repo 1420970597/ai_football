@@ -88,6 +88,9 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
     if not items and not reasons and not identified_items:
         lines.append('本次工具尚无已确认的盘口录入；模型原始说明仅供核查。')
     if incomplete:
+        if incomplete.get('source_total_review_gaps'):
+            lines.append('审核核验未完成：原文的独立推荐条目尚未逐项取得对应范围的工具核验；'
+                         '其余项目成功不能替代遗漏项，保留未解决。')
         if incomplete.get('display_line_conflict_count'):
             lines.append('审核核验未完成：模型盘口说明与其原始分盘文字的幅度自相矛盾；'
                          '不能认定该盘口已核验，以工具实际接受的记录为准。')
@@ -143,6 +146,8 @@ async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_
         phase_options.update(require_visual_instruction_review=True, final_content=final_content)
     if (review_mode == 'real_time' and evidence.source_has_image and image_access_unavailable(final_content)):
         phase_options.update(require_visual_access_review=True, final_content=final_content)
+    if review_mode == 'real_time' and evidence.source_total_items:
+        phase_options['source_total_items'] = evidence.source_total_items
     incomplete = (await completion_issues(conn, job['id'], attempt_id, mentioned, named_content, require_intent,
                                          **phase_options)
                   if mentioned or named_content or require_intent or intent_rejected or phase_options
