@@ -24,6 +24,25 @@ _CURRENT_TAIL = re.compile(r'\s*等水上[车車]\s*[。!！]*$')
 _IMAGE_TOTAL = re.compile(rf'[大小]\s*{_NUMBER}(?:\s+{_NUMBER})?\s*[。!！]*')
 
 
+def bare_total_source_notice(content: str, *, has_image: bool = False) -> str:
+    """Describe missing caption facts; never classify a picture or choose a pick."""
+    if not has_image or not isinstance(content, str) or len(content) > 100:
+        return ''
+    text = unicodedata.normalize('NFKC', content).strip()
+    if not _IMAGE_TOTAL.fullmatch(text) or not evidence_line_intent(text, 'total'):
+        return ''
+    return (
+        '来源期间校验提示（仅负向约束，不证明任何图片内容）: '
+        '本条正文仅有大小方向及数字，没有期间或完整赛前对阵。'
+        '先核验全部原图和可读回复：若图片仅为带分钟、比分的滚球比分条，'
+        '不能套用赛前完整推荐清单的整场约定；比赛正在上半场或下半场也不证明投注期间。'
+        '只有原图本身确为未开赛的完整对阵推荐清单，才可按该清单语境确认整场。'
+        '真实所选图片或可读回复明确期间时继续正常核验；'
+        '否则source_periods=[]、record_source_intent=false，不默认全场或按库存补期间。'
+        '多个数字的原始表达必须完整保留，不能删除或自行选其中一个；不明项保留未解决。\n'
+    )
+
+
 def _current_pick_lines(content: str):
     """Yield bounded current clauses, excluding history, quotes and questions."""
     if not isinstance(content, str) or len(content) > 20000:
