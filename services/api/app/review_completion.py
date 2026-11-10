@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
 
 from .review_intent_retry import intent_retry_ctes, intent_retry_projection
 from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
-from .review_intent_claims import explicit_visual_instruction, source_intent_denial
+from .review_intent_claims import explicit_text_pick, explicit_visual_instruction, source_intent_denial
 
 DETAIL_LIMIT = 100
 
@@ -108,16 +107,6 @@ def named_identity_claims(contents) -> str:
     """Preserve claim boundaries; never authorize a binding from model prose."""
     return '\n'.join(clause for content in contents[:3]
                      for clause in _named_claim_clauses(content[:20000]))
-
-
-def explicit_text_pick(content: str) -> bool:
-    """Request verification of a plain instruction; never create a pick."""
-    if not isinstance(content, str) or len(content) > 100:
-        return False
-    text = unicodedata.normalize('NFKC', content)
-    number = r'\d{1,3}(?:\.\d{1,3})?(?:\s*/\s*\d{1,3}(?:\.\d{1,3})?)?'
-    return bool(re.fullmatch(
-        rf'\s*(?:追|跟|上)\s*(?:{number}\s*[大小](?:球)?|[大小](?:球)?\s*{number})\s*[。!]*\s*', text))
 
 
 async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], content: str = '',
@@ -231,7 +220,7 @@ def continuation_prompt(issues: dict) -> str:
         '必要时重读以获取当前报价，实际不可用或无法确认则保留未解决。'
         if issues.get('line_intent_retry_count') else '')
     intent_hint = (
-        '原正文是明确的新增追大小指令，目前没有当前审核的工具身份绑定。请结合会话原图文继续核验；'
+        '原正文有明确的推荐或追线指令，目前没有当前审核的工具身份绑定。请结合完整原图文逐项继续核验；'
         '不要求图片高亮、已下注或注单确认。原文指令本身不批准绑定，仍须完整检索并核对双方、'
         '梯队、时间和唯一性；完场也可确认身份但不得读取实时盘口或补录历史推荐。'
         if issues.get('text_intent_unverified') else '')

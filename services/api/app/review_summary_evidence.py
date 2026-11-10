@@ -77,7 +77,7 @@ async def read_summary_evidence(conn, job_id, attempt_id, message_id, limit: int
         " (SELECT jsonb_agg(a.value->>'signal_id') FROM attempt_traces t CROSS JOIN LATERAL "
         " jsonb_array_elements(t.payload->'accepted') a(value) WHERE t.trace_kind='mcp_record_expert_signals' "
         " AND t.payload->>'status'='succeeded') AS accepted_signal_ids,"
-        " (SELECT CASE WHEN length(raw_text)<=100 THEN raw_text ELSE '' END "
+        " (SELECT CASE WHEN length(raw_text)<=20000 THEN raw_text ELSE '' END "
         " FROM v2_expert_messages WHERE id=$3) AS source_text,"
         " (SELECT EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(media_objects,'[]'::jsonb)) media "
         " WHERE lower(media->>'mime_type') LIKE 'image/%') "

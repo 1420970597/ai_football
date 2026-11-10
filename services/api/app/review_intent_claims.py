@@ -2,9 +2,60 @@
 import re
 import unicodedata
 
+from .review_line_intent import evidence_line_intent
+
 _CAPTION = re.compile(r'\s*(?:[1-9]\d?\s*[xX×*]\s*[1-9]\d?\s*)?可[单單]可串\s*[。!]*\s*')
 _TIME_HEADER = re.compile(r'[\w /·()（）-]{1,40}\s+(?:[01]?\d|2[0-3]):[0-5]\d')
 _HISTORICAL_HEADER = re.compile(r'昨天|昨日|前天|之前|回顾|回顧|赛果|賽果|收米|反馈|反饋|历史|歷史|取消|延期')
+
+_NUMBER = r'\d{1,3}(?:\.\d{1,3})?(?:\s*/\s*\d{1,3}(?:\.\d{1,3})?)?'
+_FOLLOW = re.compile(
+    rf'\s*(?:追|跟|上)\s*(?:{_NUMBER}\s*[大小](?:球)?|[大小](?:球)?\s*{_NUMBER})\s*[。!]*\s*')
+_RECOMMEND = re.compile(r'^(?P<current>今日|今天|现在|現在|新增|最新)?推[荐薦]\s*[:：]\s*(?P<pick>.+)$')
+_PERIOD_TOTAL = re.compile(
+    rf'(?:上半场|上半場|下半场|下半場|全场|全場|上半|下半|半场|半場|半)\s*'
+    rf'(?:{_NUMBER}\s*[大小](?:球)?|[大小]\s*{_NUMBER}(?:球)?)\s*[。!]*')
+_PAST_SECTION = re.compile(
+    r'^(?:昨天|昨日|前天|之前|历史|歷史|回顾|回顧|赛果|賽果|战绩|戰績|复盘|復盤|反馈|反饋)')
+_NOT_CURRENT = re.compile(
+    r'昨天|昨日|前天|之前|回顾|回顧|赛果|賽果|收米|反馈|反饋|取消|撤回|延期|已赢|已贏|已输|已輸|[✅❌]')
+_QUESTION = re.compile(r'[?？]|可以[吗嗎]|怎[么麼]看|是否|要不要')
+
+
+def explicit_text_pick(content: str) -> bool:
+    """Request tool verification, never extract picks or infer match identity.
+
+    Deliberately conservative: clear recommendation labels or a whole period
+    total line count; historical sections require an explicit current label.
+    The existing whole-message follow instruction remains supported.
+    """
+    if not isinstance(content, str) or len(content) > 20000:
+        return False
+    text = unicodedata.normalize('NFKC', content)
+    if len(text) <= 100 and _FOLLOW.fullmatch(text):
+        return True
+    historical = fenced = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith(('```', '~~~')):
+            fenced = not fenced
+            continue
+        if fenced or not line or len(line) > 500 or line.startswith(('>', '原文引用', '引用原文')):
+            continue
+        recommendation = _RECOMMEND.fullmatch(line)
+        if recommendation and recommendation['current']:
+            historical = False
+        elif _PAST_SECTION.search(line):
+            historical = True
+        if historical or _NOT_CURRENT.search(line) or _QUESTION.search(line):
+            continue
+        if recommendation:
+            pick = recommendation['pick']
+            if evidence_line_intent(pick, 'handicap') or evidence_line_intent(pick, 'total'):
+                return True
+        elif _PERIOD_TOTAL.fullmatch(line) and evidence_line_intent(line, 'total'):
+            return True
+    return False
 
 
 def explicit_visual_instruction(content: str, has_image: bool) -> bool:

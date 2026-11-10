@@ -97,7 +97,7 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
             lines.append('审核核验未完成：错盘口编号被拦截后，已读精确选项尚未纠正确认；'
                          '已达到本次续审上限，其余保留未解决。')
         if incomplete.get('text_intent_unverified'):
-            lines.append('审核核验未完成：原文有明确的新增追大小指令，但当前工具尚未确认比赛身份；'
+            lines.append('审核核验未完成：原文有明确的推荐或追线指令，但当前工具尚未确认比赛身份；'
                          '不能仅凭模型称无新增推荐就认定审核完成，保留未解决。')
         if incomplete.get('source_visual_intent_conflict'):
             lines.append('审核核验未完成：原文明确可单可串并附图，模型仍否认新增推荐意图；'
