@@ -16,6 +16,7 @@ from uuid import UUID
 import httpx
 
 from services.collector.leyu_protocol import AUTH_CODES, AuthExpired, LeyuError, MAX_RESPONSE_BYTES, ODDS_SCALE, SUCCESS_CODES, decode_envelope, parse_line, timestamp
+from services.execution_scope import native_execution_market_supported, native_match_type
 from .account_session import AccountScope, VenueSession
 
 AMOUNT_PATH = "/yewu12/api/user/amount"
@@ -90,11 +91,11 @@ class NativeSelection:
         for value in (self.match_id, self.market_instance_id, self.play_id, self.selection_id, self.chpid):
             if not isinstance(value, str) or not value or len(value) > 160 or "\n" in value or "\r" in value:
                 raise LeyuError("invalid_native_selection")
-        if (self.kind not in {"winner", "handicap", "total"} or self.period not in {"full_time", "first_half", "second_half"}
-                or self.selection_code not in {"1", "2", "X", "Over", "Under"} or not self.sport_id.isdigit()):
+        if (not native_execution_market_supported(self.sport_id, self.chpid, self.kind, self.period)
+                or self.selection_code not in {"1", "2", "X", "Over", "Under"}):
             raise LeyuError("unsupported_native_selection")
         allowed = {"winner": {"1", "2", "X"}, "handicap": {"1", "2"}, "total": {"Over", "Under"}}
-        if self.selection_code not in allowed[self.kind]:
+        if self.selection_code not in allowed[self.kind] or self.sport_id == "2" and self.selection_code == "X":
             raise LeyuError("native_selection_direction_mismatch")
         line = None if self.kind == 'winner' and self.line is None else number(self.line)
         if self.kind == 'winner':
@@ -330,16 +331,17 @@ class AccountProtocolClient:
                 "scan_complete": complete and not ambiguous, "ambiguous": ambiguous, "absence_proves_rejection": False}
 
     async def preflight(self, selection: NativeSelection, stake: Decimal, *, device_imei: str = "") -> PreparedBet:
-        if selection.phase != "live":
-            raise LeyuError("prematch_execution_protocol_unverified")
+        match_type = native_match_type(selection.phase)
+        if match_type is None:
+            raise LeyuError("unsupported_execution_phase")
         amount = number(stake, minimum=Decimal("0.01"))
         if amount != amount.quantize(Decimal("0.01")):
             raise LeyuError("invalid_account_stake_precision")
         latest_query = {"idList": [{"marketId": selection.market_instance_id, "matchInfoId": selection.match_id,
                         "oddsId": selection.selection_id, "oddsType": selection.selection_code, "playId": selection.play_id,
-                        "chpid": selection.chpid, "matchType": 2, "sportId": int(selection.sport_id)}]}
+                        "chpid": selection.chpid, "matchType": match_type, "sportId": int(selection.sport_id)}]}
         limit_detail = {"marketId": selection.market_instance_id, "matchId": selection.match_id, "playId": selection.play_id,
-                        "playOptionId": selection.selection_id, "oddsValue": str(int(selection.price * ODDS_SCALE)), "matchType": 2, "deviceType": 3}
+                        "playOptionId": selection.selection_id, "oddsValue": str(int(selection.price * ODDS_SCALE)), "matchType": match_type, "deviceType": 3}
         try:
             latest = await self._request(LATEST_MARKET_PATH, latest_query)
         except BaseException:
@@ -350,7 +352,8 @@ class AccountProtocolClient:
         if len(markets) != 1:
             raise LeyuError("selected_native_market_not_unique")
         market = markets[0]
-        if (str(market.get("matchStatus")) != "1" or str(market.get("matchOver", "0")) != "0"
+        expected_status = "0" if selection.phase == "scheduled" else "1"
+        if (str(market.get("matchStatus")) != expected_status or str(market.get("matchOver", "0")) != "0"
                 or str(market.get("matchHandicapStatus")) != "0" or str(market.get("status")) != "0"):
             raise LeyuError("selected_native_market_not_open")
         options = [row for row in _rows(market.get("marketOddsList"))
@@ -394,7 +397,7 @@ class AccountProtocolClient:
         detail = {"betAmount": format(amount, ".2f"), "matchId": selection.match_id, "marketId": selection.market_instance_id,
                   "playId": selection.play_id, "playOptions": selection.selection_code, "playOptionsId": current_selection_id,
                   "oddFinally": str(price), "odds": str(int(price * ODDS_SCALE)), "marketValue": "" if raw_line is None else str(raw_line),
-                  "marketTypeFinally": "EU", "matchType": 2, "sportId": selection.sport_id, "scoreBenchmark": selection.score_benchmark}
+                  "marketTypeFinally": "EU", "matchType": match_type, "sportId": selection.sport_id, "scoreBenchmark": selection.score_benchmark}
         if market.get("placeNum") is not None:
             detail["placeNum"] = market["placeNum"]
         payload = {"acceptOdds": 2, "currencyCode": "CNY", "deviceImei": device_imei, "deviceType": "3", "openMiltSingle": 0,

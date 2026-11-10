@@ -72,6 +72,7 @@ DEFINITIONS = {
     'sample_state': '少于30条已结算记录标为有限样本；30条以上也不代表未来盈利或统计显著性',
     'effective_settled_signals': '有完整有效证据的全赢、半赢、全输、半输条数；走盘、作废和待结算不计',
     'statistics_reset': '已重新起算的专家排除重置快照中的旧有效结算，原始推荐、结算和真实账户收益保留；旧单赛果修订不重新进入新周期',
+    'sport': '按来源赛事的football或basketball分别统计；all仅用于兼容既有汇总调用，不改变自动跟随的盈利专家资格',
 }
 
 
@@ -82,11 +83,12 @@ class StatisticsScope:
     source_id: uuid.UUID | None = None
     phase: str = 'all'
     market_kind: str = 'all'
+    sport: str = 'all'
 
     def response(self):
         return {'from_utc': self.start, 'to_utc': self.end,
                 'filters': {'source_id': str(self.source_id) if self.source_id else None,
-                            'phase': self.phase, 'market_kind': self.market_kind},
+                            'phase': self.phase, 'market_kind': self.market_kind, 'sport': self.sport},
                 'time_basis': 'latest_settlement_at; pending_created_at', 'definitions': DEFINITIONS}
 
 
@@ -94,18 +96,21 @@ def statistics_scope(days: int = Query(default=30, ge=1, le=3650),
                      source_id: uuid.UUID | None = None,
                      phase: str = Query(default='all', pattern='^(all|scheduled|live)$'),
                      market_kind: str = Query(default='all', pattern='^(all|winner|handicap|total|team_total)$'),
-                     from_utc: datetime | None = None, to_utc: datetime | None = None):
+                     from_utc: datetime | None = None, to_utc: datetime | None = None,
+                     sport: str = Query(default='all', pattern='^(all|football|basketball)$')):
     if any(value is not None and (value.tzinfo is None or value.utcoffset() is None) for value in (from_utc, to_utc)):
         raise HTTPException(422, '统计时间必须包含时区')
     end = to_utc.astimezone(timezone.utc) if to_utc else datetime.now(timezone.utc)
     start = from_utc.astimezone(timezone.utc) if from_utc else end - timedelta(days=days)
     if start >= end or end-start > timedelta(days=3650):
         raise HTTPException(422, '统计时间范围必须递增且不超过3650天')
-    return StatisticsScope(start, end, source_id, phase, market_kind)
+    return StatisticsScope(start, end, source_id, phase, market_kind, sport)
 
 
 def signal_scope(scope: StatisticsScope, expert_id=None, *, classify=True):
-    args = [scope.start, scope.end, scope.source_id, scope.phase, scope.market_kind, expert_id]
+    if scope.sport not in {'all', 'football', 'basketball'}:
+        raise HTTPException(422, '未知统计运动类型')
+    args = [scope.start, scope.end, scope.source_id, scope.phase, scope.market_kind, expert_id, scope.sport]
     columns = (',' + QUOTE_VALID_SQL + ' AS quote_valid,(' + SETTLEMENT_VALID_SQL + ') AS settlement_valid,'
                + INTENT_VALID_SQL + ' AS intent_valid') if classify else ''
     opening = 'WITH checked AS MATERIALIZED (' if classify else 'WITH scoped AS ('
@@ -117,6 +122,7 @@ def signal_scope(scope: StatisticsScope, expert_id=None, *, classify=True):
         'AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM v2_expert_messages m WHERE m.id=s.message_id AND m.source_id=$3)) '
         "AND ($4::text='all' OR s.phase=$4) AND ($5::text='all' OR s.market_kind=$5) "
         'AND ($6::uuid IS NULL OR s.expert_id=$6) '
+        "AND ($7::text='all' OR EXISTS(SELECT 1 FROM v2_fixtures f WHERE f.id=s.fixture_id AND f.sport=$7)) "
         'AND NOT EXISTS(SELECT 1 FROM v2_expert_statistics_reset_signals excluded '
         'JOIN v2_expert_statistics_resets reset ON reset.id=excluded.reset_id '
         'WHERE excluded.signal_id=s.id AND reset.revoked_at IS NULL)) '

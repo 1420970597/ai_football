@@ -24,7 +24,8 @@ class StatisticsBenchmarkTests(unittest.TestCase):
         self.assertIn('statistics_eligible',query)
         self.assertIn('settled_at',query)
         self.assertIn('WITH checked AS MATERIALIZED',query)
-        self.assertEqual(6,len(args))
+        self.assertEqual(7,len(args))
+        self.assertEqual('all',args[6])
         self.assertIn('x.enabled',cases['statistics_source_options'][0])
         self.assertNotIn('v2_quote_evidence',cases['statistics_source_options'][0])
 

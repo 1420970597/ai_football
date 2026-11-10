@@ -31,8 +31,8 @@ async def preview_reset(conn, *, at: datetime | None = None) -> dict:
     prefix, args = signal_scope(StatisticsScope(datetime.min.replace(tzinfo=timezone.utc), at))
     signals = await conn.fetch(prefix +
         "SELECT id,expert_id,outcome,unit_net,result_version FROM scoped WHERE statistics_eligible "
-        "AND outcome IN('win','half_win','loss','half_loss') AND expert_id=ANY($7::uuid[]) "
-        "ORDER BY id LIMIT $8", *args, [r['expert_id'] for r in affected], MAX_RESET_SIGNALS + 1)
+        "AND outcome IN('win','half_win','loss','half_loss') AND expert_id=ANY($8::uuid[]) "
+        "ORDER BY id LIMIT $9", *args, [r['expert_id'] for r in affected], MAX_RESET_SIGNALS + 1)
     if len(signals) > MAX_RESET_SIGNALS:
         raise ValueError('reset snapshot exceeds reviewed batch budget; no partial reset allowed')
     snapshot = [{'signal_id': str(r['id']), 'expert_id': str(r['expert_id']), 'outcome': r['outcome'],

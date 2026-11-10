@@ -222,21 +222,23 @@ async def experts(scope: StatisticsScope = Depends(statistics_scope)):
 
 
 @router.get("/signals")
-async def signals(request: Request, cursor: str | None = None, page_size: int = Query(default=20, ge=1, le=100)):
+async def signals(request: Request, cursor: str | None = None, page_size: int = Query(default=20, ge=1, le=100),
+                  sport: str = Query(default='all', pattern='^(all|football|basketball)$')):
     full_history = await _has_entitlement(request, "expert_full_history")
     identity = await get_identity(request)
     if not full_history:
         page_size = min(page_size, 5)
         cursor = None
-    args: list[object] = []
+    args: list[object] = [sport]
+    cursor_scope = {'kind': 'signals', **({'sport': sport} if sport != 'all' else {})}
     cursor_clause = ""
     if cursor and full_history:
         try:
-            created_at, signal_id = _decode_cursor(cursor, request, {'kind': 'signals'})
+            created_at, signal_id = _decode_cursor(cursor, request, cursor_scope)
         except HTTPException:
             raise
         args.extend((created_at, signal_id))
-        cursor_clause = f"AND (s.created_at,s.id) < ($1,$2)"
+        cursor_clause = "AND (s.created_at,s.id) < ($2,$3)"
     args.append(page_size + 1)
     rows = await database.current_pool().fetch(
         "SELECT s.id,s.message_id,s.expert_id,e.display_nickname,s.fixture_id,f.sport,f.competition_name,f.home_team,f.away_team,"
@@ -246,7 +248,7 @@ async def signals(request: Request, cursor: str | None = None, page_size: int = 
         "s.confidence,s.outcome,s.unit_net,s.created_at,m.raw_text "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
         "JOIN v2_fixtures f ON f.id=s.fixture_id JOIN v2_expert_messages m ON m.id=s.message_id "
-        f"WHERE TRUE {cursor_clause} ORDER BY s.created_at DESC,s.id DESC LIMIT ${len(args)}", *args,
+        f"WHERE ($1::text='all' OR f.sport=$1) {cursor_clause} ORDER BY s.created_at DESC,s.id DESC LIMIT ${len(args)}", *args,
     )
     has_more = len(rows) > page_size
     items = [line_projection(row) for row in rows[:page_size]]
@@ -254,8 +256,8 @@ async def signals(request: Request, cursor: str | None = None, page_size: int = 
         for item in items:
             item.pop("raw_text", None)
             item.pop("confidence", None)
-    next_cursor = _encode_cursor(items[-1]["created_at"], str(items[-1]["id"]), request, {'kind': 'signals'}) if has_more and items and full_history else None
-    return {"items": items, "next_cursor": next_cursor, "limited": not full_history, "signed_in": bool(identity)}
+    next_cursor = _encode_cursor(items[-1]["created_at"], str(items[-1]["id"]), request, cursor_scope) if has_more and items and full_history else None
+    return {"items": items, "next_cursor": next_cursor, "limited": not full_history, "signed_in": bool(identity), 'sport': sport}
 
 
 @router.get("/signals/{signal_id}")

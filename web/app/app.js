@@ -43,8 +43,9 @@ const state = {
   matches: [],
   cursor: null,
   experts: [],
-  expertFilters: { days: 30, phase: 'all', market_kind: 'all', source_id: '' },
+  expertFilters: { days: 30, phase: 'all', market_kind: 'all', source_id: '', sport: 'football' },
   expertSequence: 0,
+  signalSequence: 0,
   signals: [],
   signalCursor: null,
   messages: [],
@@ -518,12 +519,19 @@ export function signalCard(s, renderContext = "user") {
           : "期间纠错，已排除统计";
   return `<article class="signal-card"><div class="signal-meta"><button data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || "专家昵称未记录")}</button><span>${stamp(s.created_at)}</span><span class="badge ${esc(fixturePhase || "unknown")}" title="当前比赛状态">比赛：${esc(fixtureStatus)}</span><span class="badge recommendation-phase" title="专家发布推荐时的比赛阶段">推荐：${esc(recommendationPhase)}</span><span class="badge ${esc(s.outcome)}">${esc(withdrawn && s.outcome === "pending" ? "已撤回" : outcomes[s.outcome] || s.outcome || "待结算")}</span></div><div class="signal-match">${hasFixture ? esc(s.home_team) + ' <span class="muted">vs</span> ' + esc(s.away_team) : "赛事编号：" + esc(s.fixture_id)}</div><div class="muted">${esc(s.competition_name || "")} ${s.kickoff_at ? stamp(s.kickoff_at) : ""}</div><div class="signal-pick"><span>${esc(s.market_name)} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><span>系统赔率 <strong>${decimal(s.recommendation_price)}</strong></span></div><div class="signal-evidence">${intentCorrected ? `<strong class="negative">${esc(intentCorrectionNotice)}</strong><br>` : withdrawn ? `<strong class="negative">${esc(withdrawalNotice)}</strong><br>` : ""}报价时间：${stamp(s.quote_time)}　报价编号：${esc(s.quote_id || "历史记录未提供")} ${s.score_baseline?.home !== null && s.score_baseline?.home !== undefined ? "　比分基线 " + esc(s.score_baseline.home) + ":" + esc(s.score_baseline.away) : ""}</div><div class="signal-actions">${s.fixture_id ? `<button class="text-link" data-match="${esc(s.fixture_id)}" data-quote="${esc(s.quote_id || "")}">系统比赛与盘口</button>` : ""}<button class="text-link" ${s.message_id ? `data-message="${esc(s.message_id)}" data-context="${renderContext}"` : `data-signal="${esc(s.id)}"`}>完整原文与审核</button><span class="${color(s.unit_net)}">${intentCorrected ? esc(intentCorrectionLabel) : withdrawn ? "原推荐已撤回" : s.outcome !== "pending" && s.unit_net !== null ? "1单位净收益 " + signed(s.unit_net) : "等待赛果结算"}</span></div></article>`;
 }
+function effectiveSettledCount(expert) {
+  if (Object.hasOwn(expert, 'effective_settled_signals')) return expert.effective_settled_signals;
+  const counts = ['win', 'half_win', 'loss', 'half_loss'].map(key => expert[key]);
+  return counts.every(count => Number.isInteger(count) && count >= 0) ? counts.reduce((sum, count) => sum + count, 0) : null;
+}
 function renderExperts() {
+  const sportLabel = state.expertFilters.sport === 'basketball' ? '篮球' : '足球';
+  $('#experts-title').textContent = sportLabel + '专家推荐';
   const experts = state.experts;
   $("#experts-list").innerHTML = experts
     .map(
       (e, i) =>
-        `<article class="expert-row" data-expert-row="${esc(e.id)}"><div class="expert-identity"><button class="expert-name" data-expert="${esc(e.id)}"><span class="avatar">${esc((e.display_nickname || "?").slice(0, 1))}</span><span><strong>${esc(e.display_nickname)}</strong><small>${i + 1} 位 · 近${state.expertFilters.days}天 ${esc(e.total_signals ?? 0)} 条 · 证据不足排除 ${esc(e.excluded_signals ?? 0)}</small></span></button><button class="expert-follow" data-follow-expert="${esc(e.id)}" aria-label="关注 ${esc(e.display_nickname)}，仅当前浏览器" aria-pressed="${followedExperts.has(e.id)}" title="关注仅保存于当前浏览器，不启用自动投注">${followedExperts.has(e.id) ? "★" : "☆"}</button></div><span>${esc(e.settled_signals ?? 0)}</span><span>${percent(e.accuracy)}</span><span class="${color(e.unit_net)}">${e.settled_signals ? signed(e.unit_net) : "样本不足"}</span></article>`,
+        `<article class="expert-row" data-expert-row="${esc(e.id)}"><div class="expert-identity"><button class="expert-name" data-expert="${esc(e.id)}"><span class="avatar">${esc((e.display_nickname || "?").slice(0, 1))}</span><span><strong>${esc(e.display_nickname)}</strong><small>${sportLabel} · ${i + 1} 位 · 近${state.expertFilters.days}天 ${esc(e.total_signals ?? 0)} 条 · 证据不足排除 ${esc(e.excluded_signals ?? 0)}</small></span></button><button class="expert-follow" data-follow-expert="${esc(e.id)}" aria-label="关注 ${esc(e.display_nickname)}，仅当前浏览器" aria-pressed="${followedExperts.has(e.id)}" title="关注仅保存于当前浏览器，不启用自动投注">${followedExperts.has(e.id) ? "★" : "☆"}</button></div><span>${esc(effectiveSettledCount(e) ?? '样本不足')}</span><span>${percent(e.accuracy)}</span><span class="${color(e.unit_net)}">${e.settled_signals ? signed(e.unit_net) : "样本不足"}</span></article>`,
     )
     .join("");
   applyExpertFollowing();
@@ -589,11 +597,14 @@ async function loadExperts() {
   }
 }
 async function loadSignals(append = false) {
+  const sequence = ++state.signalSequence;
+  const sport = state.expertFilters.sport;
   try {
     const data = await api(
       "/public/signals?" +
-        params({ page_size: 20, cursor: append ? state.signalCursor : null }),
+        params({ page_size: 20, cursor: append ? state.signalCursor : null, sport }),
     );
+    if (sequence !== state.signalSequence) return;
     state.signals = append ? [...state.signals, ...data.items] : data.items;
     state.signalCursor = data.next_cursor;
     $("#signals-list").innerHTML =
@@ -602,6 +613,7 @@ async function loadSignals(append = false) {
     $("#signals-more").hidden = !data.next_cursor;
     $("#signals-limited").hidden = !data.limited;
   } catch (error) {
+    if (sequence !== state.signalSequence) return;
     $("#signals-list").innerHTML =
       `<div class="empty-state">${esc(error.message)}</div>`;
   }
@@ -909,7 +921,8 @@ async function openExpert(id) {
     ]);
     if (sequence !== state.dialogSequence) return;
     const e = data.expert;
-    const detailWindow = `近${state.expertFilters.days}天 · ${stamp(data.from_utc)} 至 ${stamp(data.to_utc)}`;
+    const sportLabel = state.expertFilters.sport === 'basketball' ? '篮球' : '足球';
+    const detailWindow = `${sportLabel} · 近${state.expertFilters.days}天 · ${stamp(data.from_utc)} 至 ${stamp(data.to_utc)}`;
     const qualityNote = `证据不足排除 ${esc(e.excluded_signals ?? 0)} 条（缺报价 ${esc(e.missing_quote_evidence ?? 0)}，结算证据无效 ${esc(e.invalid_settlement_evidence ?? 0)}，推荐意图纠错 ${esc(e.invalid_recommendation_intent ?? 0)}）。` +
       (e.statistics_reset_at ? ` 本周期重新起算于 ${esc(stamp(e.statistics_reset_at))}，旧有效结算不再计入准确率及1单位收益；原始结算与真实账户收益保留。` : "");
     $("#dialog-title").textContent = e.display_nickname;
@@ -1477,7 +1490,12 @@ function events() {
   $('#expert-stats-filter').onsubmit = (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    state.expertFilters = {days: Number(form.get('days')), phase: form.get('phase'), market_kind: form.get('market_kind'), source_id: form.get('source_id')};
+    state.expertFilters = {days: Number(form.get('days')), phase: form.get('phase'), market_kind: form.get('market_kind'), source_id: form.get('source_id'), sport: form.get('sport')};
+    state.signalSequence++;
+    state.signals = [];
+    state.signalCursor = null;
+    $('#signals-list').innerHTML = '<div class="empty-state">正在读取所选运动推荐…</div>';
+    $('#signals-more').hidden = true;
     state.experts = [];
     renderExperts();
     loadExperts();

@@ -1,9 +1,13 @@
-"""足球专家一单位结算。输入证据不足时返回 pending，禁止猜测滚球规则。"""
+"""专家一单位结算。按体育和期间验证证据，禁止猜测滚球或加时规则。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
+import re
+
+from basketball_scores import SCORE_RULE_REFERENCE, validate_no_overtime_evidence
+from execution_scope import execution_market_supported
 
 ZERO = Decimal("0")
 ONE = Decimal("1")
@@ -48,6 +52,8 @@ def _period_scores(period: str, result: dict) -> tuple[int, int] | None:
 
 
 def settle(signal: dict, result: dict) -> Settlement:
+    if signal.get('sport') == 'basketball':
+        return _settle_basketball(signal, result)
     if signal.get("sport", "football") != "football":
         return pending("sport_requires_provider_settlement")
     if result.get("status") == "void":
@@ -103,6 +109,51 @@ def settle(signal: dict, result: dict) -> Settlement:
                                   full.reason + ':score_basis_outcome_equivalent')
             return pending("live_market_score_rule_unknown")
     reason_suffix = ":zero_baseline_score_equivalent" if zero_equivalent else ""
+    return _settle_market(signal, price, line, scores, reason_suffix)
+
+
+def _settle_basketball(signal: dict, result: dict) -> Settlement:
+    if not execution_market_supported('basketball', str(signal.get('market_id')), signal.get('kind'), signal.get('period')):
+        return pending('basketball_market_or_period_unverified')
+    if result.get('status') == 'void':
+        return Settlement('void', ZERO, ZERO, 'provider_confirmed_void')
+    if result.get('status') != 'confirmed':
+        return pending('result_not_confirmed')
+    proof = result.get('evidence')
+    if (not isinstance(proof, dict)
+            or re.fullmatch(r'leyu_native_detail:[0-9]+', str(result.get('provider_reference', ''))) is None
+            or result['provider_reference'] != 'leyu_native_detail:' + str(proof.get('mid', ''))):
+        return pending('basketball_final_period_evidence_missing')
+    try:
+        validate_no_overtime_evidence(result.get('home'), result.get('away'),
+                                      result.get('half_home'), result.get('half_away'), result.get('evidence'))
+        price = Decimal(str(signal['price']))
+        raw_line = signal.get('line')
+        line = None if signal.get('kind') == 'winner' and raw_line is None else Decimal(str(raw_line))
+        if (isinstance(raw_line, bool) or not price.is_finite() or price <= ONE
+                or signal.get('kind') == 'winner' and line not in (None, ZERO)
+                or signal.get('kind') != 'winner' and (line is None or not line.is_finite() or line * 2 != (line * 2).to_integral_value())):
+            return pending('invalid_price_or_line')
+    except (InvalidOperation, KeyError):
+        return pending('invalid_price_or_line')
+    except ValueError as exc:
+        return pending(str(exc))
+    if signal.get('phase') not in {'scheduled', 'live'} or signal.get('score_basis', 'unknown') not in {'unknown', 'full_period'}:
+        return pending('basketball_score_rule_unverified')
+    if signal.get('kind') == 'winner' and signal.get('selection') not in {'home', 'away'}:
+        return pending('unsupported_selection')
+    if signal.get('kind') == 'winner' and result['home'] == result['away']:
+        return pending('basketball_tied_winner_rule_unverified')
+    # These are verified native FULL_TIME markets. Use their complete score,
+    # independently of the football remaining-period live handicap policy.
+    value = _settle_market(signal, price, line, (result['home'], result['away']), '')
+    if value.outcome == 'pending':
+        return value
+    reason = 'two_way_winner' if signal.get('kind') == 'winner' else value.reason
+    return Settlement(value.outcome, value.unit_net, value.effective_stake, SCORE_RULE_REFERENCE + ':' + reason)
+
+
+def _settle_market(signal, price, line, scores, reason_suffix):
     home, away = map(Decimal, scores)
     kind, selection = signal.get("kind"), signal.get("selection")
     line_basis = signal.get('line_basis', 'selection')

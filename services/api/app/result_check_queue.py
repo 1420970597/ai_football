@@ -11,7 +11,7 @@ async def claim_due_results(conn, limit: int):
     return await conn.fetch(
         """WITH due AS MATERIALIZED (
             SELECT c.fixture_id,c.next_check_at,f.source_id,f.kickoff_at,
-                   f.home_team,f.away_team,
+                   f.home_team,f.away_team,f.sport,
                    COALESCE(r.status IN ('confirmed','void'),false) AS has_final
             FROM v2_result_checks c JOIN v2_fixtures f ON f.id=c.fixture_id
             LEFT JOIN LATERAL (
@@ -49,7 +49,7 @@ async def claim_due_results(conn, limit: int):
                 lease_until=now()+interval '90 seconds'
             FROM numbered n WHERE c.fixture_id=n.fixture_id
             RETURNING c.fixture_id,n.source_id,n.kickoff_at,n.home_team,
-                      n.away_team,c.lease_id,n.lease_position
+                      n.away_team,n.sport,c.lease_id,n.lease_position
         ) SELECT * FROM leased ORDER BY lease_position""",
         limit, [uuid.uuid4() for _ in range(limit)],
     )

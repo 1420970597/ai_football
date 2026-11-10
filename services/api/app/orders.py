@@ -6,6 +6,7 @@ import json
 import uuid
 
 from fastapi import HTTPException
+from execution_scope import execution_market_supported, native_sport_id
 
 from .auth import audit
 from .membership import has_entitlement
@@ -59,14 +60,16 @@ async def eligible_signal(conn, signal_id, max_age: int | None = None):
     if not row:
         raise HTTPException(409, "推荐及原生盘口不可用")
     now = datetime.now(timezone.utc)
-    if (row["outcome"] != "pending" or row["current_phase"] != "live" or row["sport"] != "football"
+    if (row["outcome"] != "pending" or row["current_phase"] not in {"scheduled", "live"}
+            or row["phase"] != row["current_phase"]
             or row["deleted_at"] or row["withdrawn_at"] or row["media_state"] != "ready" or not all((row["expert_enabled"], row["source_enabled"], row["trusted"]))
             or any(not row[key] for key in ("play_id", "market_instance_id", "selection_id"))
-            or row["current_kind"] not in {"winner", "handicap", "total"}
+            or not execution_market_supported(row["sport"], row["market_id"], row["current_kind"], row["period"])
+            or row["sport"] == "basketball" and row["selection"] == "draw"
             or row["created_at"] < now - timedelta(minutes=5)
             or row["message_posted_at"] < now - timedelta(minutes=5)
             or row["message_posted_at"] > now + timedelta(seconds=5)):
-        raise HTTPException(409, "推荐、来源或滚球盘口不满足实盘条件")
+        raise HTTPException(409, "推荐、来源或当前比赛盘口不满足实盘条件")
     latest = await conn.fetchval("SELECT max(revision) FROM v2_expert_messages WHERE source_id=$1 AND platform_message_id=$2",
                                  row["source_id"], row["platform_message_id"])
     if latest != row["message_revision"]:
@@ -123,16 +126,16 @@ async def reserve_signal(conn, user_id, signal_id, settings):
         raise HTTPException(409, "当日或开放敞口限额不足")
     baseline = signal["score_baseline"] or {}
     score = ""
-    if baseline.get("home_score") is not None and baseline.get("away_score") is not None:
+    if signal["current_phase"] == "live" and baseline.get("home_score") is not None and baseline.get("away_score") is not None:
         score = f"{baseline['home_score']}:{baseline['away_score']}"
     snapshot = {"match_id": signal["fixture_id"].split(":", 1)[-1], "market_instance_id": signal["market_instance_id"],
                 "play_id": signal["play_id"], "selection_id": signal["selection_id"],
                 "selection_code": {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}.get(signal["selection"]),
-                "sport_id": "1", "chpid": signal["market_id"], "kind": signal["current_kind"], "period": signal["period"],
+                "sport_id": native_sport_id(signal["sport"]), "chpid": signal["market_id"], "kind": signal["current_kind"], "period": signal["period"],
                 "line": str(signal["line"]) if signal["line"] is not None else None,
                 "price": str(signal["current_price"]), "reference_quote_price": str(signal["current_price"]),
                 "expert_recommendation_price": str(signal["recommendation_price"]),
-                "phase": "live", "score_benchmark": score}
+                "phase": signal["current_phase"], "score_benchmark": score}
     identity = uuid.uuid4()
     row = await conn.fetchrow(
         "INSERT INTO v2_bet_orders(id,user_id,signal_id,idempotency_key,state,stake,price,account_id,binding_revision,config_revision,"
@@ -166,6 +169,8 @@ async def recheck_order(conn, order, settings, *, include_signal=False):
     if order["stake"] > policy["max_per_order"]:
         raise HTTPException(409, "推荐或单笔许可已失效")
     current = order["quote_snapshot"]
+    if current["phase"] != signal["current_phase"] or current["sport_id"] != native_sport_id(signal["sport"]):
+        raise HTTPException(409, "比赛阶段或体育项目已经变化")
     if any(str(signal[key]) != str(current[key]) for key in ("play_id", "market_instance_id")):
         raise HTTPException(409, "原生盘口标识已经变化")
     selection_code = {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}.get(signal["selection"])

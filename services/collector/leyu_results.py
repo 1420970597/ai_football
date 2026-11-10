@@ -8,6 +8,7 @@ import json
 import time
 
 import httpx
+from basketball_scores import no_overtime_scores, provisional_conflict_scores
 
 from .leyu import DEFAULT_RESULT_DETAIL_PATH, LeyuClient
 from .leyu_protocol import LeyuError, RateLimited, score, timestamp
@@ -17,12 +18,16 @@ def normalize_result(detail: dict, target: dict, *, requested_at: datetime, obse
     mid = str(detail.get('mid') or '')
     if mid != target['source_match_id']:
         raise LeyuError('result_fixture_mismatch')
-    if (str(detail.get('csid')) != '1' or not timestamp(detail.get('mgt'))
+    sport = target.get('sport', 'football')
+    expected_sport = {'football': '1', 'basketball': '2'}.get(sport)
+    if (expected_sport is None or str(detail.get('csid')) != expected_sport or not timestamp(detail.get('mgt'))
             or timestamp(detail.get('mgt')) != timestamp(target['kickoff_at'])
             or detail.get('mhn') != target['home_team'] or detail.get('man') != target['away_team']):
         raise LeyuError('result_identity_mismatch')
     if str(detail.get('mmp')) != '999' or str(detail.get('ms')) not in {'3','4'}:
         raise LeyuError('result_not_final')
+    if sport == 'basketball':
+        return _basketball_result(detail, target, requested_at=requested_at, observed_at=observed_at)
     if str(detail.get('mft')) != '0':
         raise LeyuError('result_period_unsupported')
     scores = detail.get('msc')
@@ -45,6 +50,41 @@ def normalize_result(detail: dict, target: dict, *, requested_at: datetime, obse
                         'period':'999','state':str(detail['ms']),'score_period':'S1','source_time_quality':'unknown',
                         'full_time':f'{full[0]}:{full[1]}','first_half':f'{half[0]}:{half[1]}',
                         'second_half':f'{second[0]}:{second[1]}','decoded_response_sha256':digest}}
+
+
+def _basketball_result(detail, target, *, requested_at, observed_at):
+    # mft 0 and 7 were both observed in verified ordinary basketball finals.
+    # It is not an overtime flag; establish no overtime from complete periods.
+    if str(detail.get('mft')) not in {'0', '7'}:
+        raise LeyuError('result_period_unsupported')
+    try:
+        periods = no_overtime_scores(detail.get('msc'))
+    except ValueError as exc:
+        if str(exc) not in {'basketball_overtime_rule_unverified', 'basketball_overtime_or_period_scores_conflict'}:
+            raise LeyuError(str(exc)) from None
+        try:
+            periods, conflict_reason = provisional_conflict_scores(detail.get('msc'))
+        except ValueError as conflict:
+            raise LeyuError(str(conflict)) from None
+    else:
+        conflict_reason = None
+    full, half, second = (periods[p] for p in ('S1', 'S2', 'S3'))
+    digest = hashlib.sha256(json.dumps(detail, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+    return {**{k: target[k] for k in ('fixture_id', 'lease_id')},
+            'provider_reference': 'leyu_native_detail:' + str(detail['mid']),
+            'status': 'provisional' if conflict_reason else 'confirmed', 'home': full[0], 'away': full[1], 'half_home': half[0], 'half_away': half[1],
+            'source_updated_at': None, 'requested_at': requested_at.isoformat(), 'observed_at': observed_at.isoformat(),
+            'evidence': {'source': 'leyu_native_detail', 'path': DEFAULT_RESULT_DETAIL_PATH, 'mid': str(detail['mid']),
+                         'sport': '2', 'period': '999', 'state': str(detail['ms']), 'mft': str(detail['mft']),
+                         'score_period': 'S1', 'source_time_quality': 'unknown',
+                         'score_scope': 'full_time_unverified' if conflict_reason else 'full_time_no_overtime',
+                         'overtime': ('observed:' + ':'.join(map(str, periods['S7'])) if 'S7' in periods else 'unverified') if conflict_reason else 'none_verified',
+                         **({'conflict_reason': conflict_reason} if conflict_reason else {}),
+                         'full_time': f'{full[0]}:{full[1]}',
+                         'first_half': f'{half[0]}:{half[1]}', 'second_half': f'{second[0]}:{second[1]}',
+                         **{'quarter_' + str(i): ':'.join(map(str, periods[p]))
+                            for i, p in enumerate(('S19', 'S20', 'S21', 'S22'), 1)},
+                         'decoded_response_sha256': digest}}
 
 
 async def fetch_result(client: LeyuClient, target: dict) -> dict:
@@ -72,7 +112,8 @@ class ResultCollector:
                 raise LeyuError('result_configuration_changed')
             response = await self.api.post(self.url+'/observations',json=body)
             response.raise_for_status()
-            return {'confirmed':1,'settled':response.json().get('settled',0)}
+            return {'confirmed':int(body['status'] == 'confirmed'),'settled':response.json().get('settled',0),
+                    **({'provisional':1,'reason':body['evidence']['conflict_reason']} if body['status']=='provisional' else {})}
         except asyncio.CancelledError:
             # A cancelled request never submits facts; its persisted lease expires.
             raise

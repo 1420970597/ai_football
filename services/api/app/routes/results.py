@@ -23,15 +23,19 @@ class ResultInput(BaseModel):
     source_updated_at: AwareDatetime
     evidence: dict[str, str] = Field(min_length=1, max_length=20)
 
+    def permits_period_conflict(self):
+        # Only the leased native-observation subtype can prove a conflict.
+        return False
+
     @model_validator(mode='after')
     def validate_score(self):
         if self.status == 'confirmed' and (self.home is None or self.away is None):
             raise ValueError('确认赛果必须有双方比分')
         if (self.half_home is None) != (self.half_away is None):
             raise ValueError('半场比分必须成对')
-        if self.home is not None and self.half_home is not None and self.half_home > self.home:
-            raise ValueError('半场比分大于全场比分')
-        if self.away is not None and self.half_away is not None and self.half_away > self.away:
+        conflict = (self.home is not None and self.half_home is not None and self.half_home > self.home
+                    or self.away is not None and self.half_away is not None and self.half_away > self.away)
+        if conflict and not self.permits_period_conflict():
             raise ValueError('半场比分大于全场比分')
         if not self.provider_reference.strip() or any(not k.strip() or not v.strip() or len(k) > 100 or len(v) > 4000 for k, v in self.evidence.items()):
             raise ValueError('赛果来源引用及证据不能为空或过长')

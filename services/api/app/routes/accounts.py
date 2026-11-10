@@ -14,6 +14,7 @@ from typing import Literal
 import asyncpg
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr
+from execution_scope import native_match_type
 
 from .. import account_jobs as jobs, database, orders, order_evidence
 from ..auth import _limit, audit, require_user, verify_sensitive_session
@@ -132,8 +133,8 @@ async def get_leyu_account(request: Request):
             "profitability_definition": PROFITABILITY_DEFINITION,
             "tasks": [jobs.public_task(item, row['binding_revision'] if row else None) for item in tasks],
             "execution_capability": {"protocol_adapter": True, "live_enabled": orders.live_enabled(request.app.state.settings),
-                                     "supported_sports": ["football"], "supported_phases": ["live"],
-                                     "prematch": "unsupported", "basketball": "unsupported"}}
+                                     "supported_sports": ["football", "basketball"], "supported_phases": ["scheduled", "live"],
+                                     "prematch": "supported", "basketball": "full_time_winner_total_handicap"}}
 
 
 @router.put("/leyu")
@@ -375,7 +376,11 @@ async def dispatch(request: Request):
             pairs = await conn.fetch("SELECT b.user_id,s.id AS signal_id FROM v2_user_bet_settings b JOIN v2_expert_signals s ON "
                 "((b.expert_selection_mode='manual' AND s.expert_id=ANY(b.allowed_experts)) OR "
                 "(b.expert_selection_mode='profitable' AND s.expert_id=ANY($1::uuid[]))) "
-                "JOIN v2_fixtures f ON f.id=s.fixture_id AND f.sport='football' AND f.phase='live' "
+                "JOIN v2_fixtures f ON f.id=s.fixture_id AND f.phase IN('scheduled','live') AND s.phase=f.phase "
+                "AND (f.sport='football' AND s.market_kind IN('winner','total','handicap') "
+                "AND s.period IN('full_time','first_half','second_half') OR f.sport='basketball' AND s.period='full_time' "
+                "AND ((s.market_id='37' AND s.market_kind='winner' AND s.selection IN('home','away')) "
+                "OR (s.market_id='38' AND s.market_kind='total') OR (s.market_id='39' AND s.market_kind='handicap'))) "
                 "JOIN v2_expert_messages m ON m.id=s.message_id "
                 "WHERE b.auto_enabled AND NOT b.emergency_stopped AND s.created_at>now()-interval '5 minutes' AND s.outcome='pending' "
                 "AND m.posted_at>=now()-interval '5 minutes' AND m.posted_at<=now()+interval '5 seconds' "
@@ -553,7 +558,8 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
                 valid=(len(series)==1 and len(details)==1 and type(payload['acceptOdds']) is int and payload['acceptOdds']==2 and str(payload['preBet'])=='0'
                     and payload['currencyCode']=='CNY' and str(payload['deviceType'])=='3' and payload['openMiltSingle']==0
                     and str(series[0]['seriesType'])=='1' and series[0]['seriesSum']==1 and series[0]['fullBet']==0
-                    and detail['marketTypeFinally']=='EU' and detail['matchType']==2 and str(detail['sportId'])=='1'
+                    and detail['marketTypeFinally']=='EU' and type(detail['matchType']) is int
+                    and detail['matchType']==native_match_type(snapshot['phase']) and str(detail['sportId'])==snapshot['sport_id']
                     and orders.prepared_line_matches(detail['marketValue'],snapshot['line'],snapshot['kind'])
                     and detail['scoreBenchmark']==snapshot['score_benchmark']
                     and payload['deviceImei']==credentials['device_uuid'] and Decimal(detail['betAmount'])==order['stake']

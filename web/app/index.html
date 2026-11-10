@@ -163,6 +163,7 @@
           </div>
           <div id="experts-state" class="empty-state" hidden></div>
           <form id="expert-stats-filter" class="filter-row" aria-label="专家统计筛选">
+            <label>运动<select name="sport"><option value="football">足球</option><option value="basketball">篮球</option></select></label>
             <label>统计窗口<select name="days"><option value="7">近7天</option><option value="30" selected>近30天</option><option value="90">近90天</option><option value="365">近365天</option></select></label>
             <label>推荐阶段<select name="phase"><option value="all">全部阶段</option><option value="scheduled">赛前</option><option value="live">滚球</option></select></label>
             <label>玩法<select name="market_kind"><option value="all">全部玩法</option><option value="winner">独赢</option><option value="handicap">让球</option><option value="total">大小</option><option value="team_total">单队进球大小</option></select></label>
@@ -375,7 +376,7 @@
                   </select></label
                 >
                 <p id="betting-expert-mode-note" class="form-note">
-                  盈利模式动态跟随当前统计周期内近30天1单位净收益大于0、且有有效结算的全部专家，不限于下方已选名单。走盘、作废不计有效结算；各统计页面筛选不改变此条件。当前自动执行仅支持足球滚球，赛前及篮球专家推荐仍可浏览。由本人保存后生效，每单本金及限额保持本人设置。
+                  盈利模式动态跟随当前统计周期内近30天1单位净收益大于0、且有有效结算的全部专家，不限于下方已选名单。走盘、作废不计有效结算；各统计页面筛选不改变此条件。自动执行支持足球赛前与滚球，以及篮球全场胜负、大小、让分的赛前与滚球。由本人保存后生效，每单本金及限额保持本人设置。
                 </p>
                 </div>
                 <fieldset>
@@ -434,7 +435,7 @@
                   ><input
                     name="confirmed"
                     type="checkbox"
-                  />我了解自动投注会使用本人账户资金，目前仅自动执行足球滚球，并确认以上专家与限额；赛前及篮球专家推荐仍可浏览。</label
+                  />我了解自动投注会使用本人账户资金，支持足球赛前与滚球、篮球全场胜负及大小让分的赛前与滚球，并确认以上专家、每单本金与限额。</label
                 ><button class="primary-button">保存投注设置</button>
               </form>
               <button id="emergency-stop" class="danger-button">

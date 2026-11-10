@@ -37,7 +37,7 @@ try{
     await page.route('**/api/v1/**',async route=>{
       const request=route.request(),p=new URL(request.url()).pathname.replace('/api/v1','');
       if(p==='/auth/me')return route.fulfill({json:{user:{id:'synthetic-owner',role:'user',display_name:'隔离验收用户',email:'synthetic@test.invalid'},membership:{name:'专家会员',entitlements:{automatic_betting:true}}}});
-      if(p==='/accounts/leyu')return route.fulfill({json:{account:{account_label:'隔离账户',health_state:'healthy',renewal_state:'ready',last_verified_at:instant},betting:b,tasks:[],execution_capability:{live_enabled:true,supported_sports:['football'],supported_phases:['live'],prematch:'unsupported',basketball:'unsupported'}}});
+      if(p==='/accounts/leyu')return route.fulfill({json:{account:{account_label:'隔离账户',health_state:'healthy',renewal_state:'ready',last_verified_at:instant},betting:b,tasks:[],execution_capability:{live_enabled:true,supported_sports:['football','basketball'],supported_phases:['scheduled','live'],prematch:'supported',basketball:'full_time_winner_total_handicap'}}});
       if(p==='/accounts/orders')return route.fulfill({json:{items:[],next_cursor:null}});
       if(p==='/accounts/leyu/auto-betting'){
         assert.equal(request.method(),'PUT');const body=request.postDataJSON();writes.push(body);
@@ -50,11 +50,11 @@ try{
     const form=page.locator('#betting-form'),mode=form.locator('[name=expert_selection_mode]');
     await mode.waitFor();await page.waitForFunction(()=>document.querySelector('#betting-form').getAttribute('aria-busy')==='false');
     assert.equal(await mode.inputValue(),'manual');assert.equal(writes.length,0,'loading must not authorize a new mode');
-    assert.ok((await page.locator('#betting-status').innerText()).includes('仅支持足球滚球'));
-    assert.ok((await page.locator('#betting-status').innerText()).includes('赛前及篮球专家推荐仍可浏览'));
+    assert.ok(!(await page.locator('#betting-status').innerText()).includes('仅支持足球滚球'));
+    assert.ok(!(await page.locator('#betting-status').innerText()).includes('赛前及篮球专家推荐仍可浏览'));
     assert.ok((await page.locator('#betting-expert-mode-note').innerText()).includes('不限于下方已选名单'));
-    assert.ok((await page.locator('#betting-expert-mode-note').innerText()).includes('仅支持足球滚球'));
-    assert.ok((await form.locator('[name=confirmed]').locator('..').innerText()).includes('目前仅自动执行足球滚球'));
+    assert.ok((await page.locator('#betting-expert-mode-note').innerText()).includes('足球赛前与滚球，以及篮球全场胜负、大小、让分的赛前与滚球'));
+    assert.ok((await form.locator('[name=confirmed]').locator('..').innerText()).includes('足球赛前与滚球、篮球全场胜负及大小让分的赛前与滚球'));
     assert.equal(await form.locator('[name=expert]').first().isChecked(),true);
     await mode.selectOption('profitable');
     assert.equal(await form.locator('[name=expert]').first().isDisabled(),true);
@@ -82,7 +82,7 @@ try{
     for(const[key,value]of Object.entries({stake_per_order:'2',max_per_order:'3',daily_limit:'10',open_exposure_limit:'5'}))assert.equal(writes[0][key],value);
     assert.equal(await mode.inputValue(),'profitable');
     assert.ok((await page.locator('#betting-status').innerText()).includes('近30天全部盈利专家'));
-    assert.ok((await page.locator('#betting-status').innerText()).includes('赛前及篮球专家推荐仍可浏览'));
+    assert.ok(!(await page.locator('#betting-status').innerText()).includes('赛前及篮球专家推荐仍可浏览'));
     await mode.selectOption('manual');assert.equal(await form.locator('[name=expert]').first().isEnabled(),true);
     await form.locator('[name=expert]').first().uncheck();
     await form.locator('button.primary-button').click();await page.waitForTimeout(100);assert.equal(writes.length,1,'manual mode without expert must be rejected');

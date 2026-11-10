@@ -203,9 +203,9 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
                 await self.prepare()
         self.assertNotIn(BET_PATH, [request.url.path for request in self.requests])
 
-    async def test_prematch_and_invalid_stake_never_guess_or_request(self):
-        for stage in ("scheduled", "finished", "unknown"):
-            with self.assertRaisesRegex(LeyuError, "prematch_execution_protocol_unverified"):
+    async def test_unsupported_phase_and_invalid_stake_never_guess_or_request(self):
+        for stage in ("finished", "cancelled", "unknown"):
+            with self.assertRaisesRegex(LeyuError, "unsupported_execution_phase"):
                 await self.client.preflight(selection(phase=stage), Decimal("2"))
         for stake in (Decimal("0"), Decimal("-1"), Decimal("NaN"), Decimal("1.001")):
             with self.assertRaises(LeyuError):

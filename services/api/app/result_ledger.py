@@ -14,7 +14,8 @@ from .score_rules import settlement_rule
 from .team_totals import team_total_terms
 from .review_period_intent import INTENT_VALID_SQL
 
-ALGORITHM_VERSION = 'football-asian-8-native-live-handicap'
+# Keep the established audit series name while extending its sport coverage.
+ALGORITHM_VERSION = 'football-asian-9-basketball-no-overtime'
 
 
 def result_facts(row):
@@ -25,6 +26,15 @@ def result_facts(row):
     if row['source_updated_at'] is None:
         facts.update(observed_at=row['observed_at'].isoformat(), source_time_quality='unknown')
     return facts
+
+
+def _version_facts(facts):
+    """Compare latest result facts independently of poll receipts and hashes."""
+    content = {key: facts[key] for key in ('status', 'home', 'away', 'half_home', 'half_away',
+                                          'provider_reference', 'source_updated_at')}
+    if facts['source_updated_at'] is not None:
+        content['evidence'] = facts['evidence']
+    return content
 
 
 async def project_settlements(conn, fixture, version, facts):
@@ -41,6 +51,8 @@ async def project_settlements(conn, fixture, version, facts):
                   'selection': row['selection'], 'score_basis': row['score_basis'], 'score_baseline': row['score_baseline'],
                   'line_basis': line_basis(row, fixture['id']),
                   **team_total_terms(row, fixture['id'])}
+        if fixture['sport'] == 'basketball':
+            inputs['market_id'] = row['market_id']
         rule = settlement_rule(fixture, row)
         value = settle(inputs, facts) if row['quote_valid'] else pending('recommendation_quote_evidence_missing_or_mismatched')
         calculation = {'signal': inputs, 'result': facts}
@@ -125,11 +137,10 @@ async def ingest_result(conn, item) -> dict:
              'source_updated_at': source_time.astimezone(timezone.utc).isoformat() if source_time else None, 'evidence': item.evidence}
     # Observation receipts and full-response hashes change at each poll; only a
     # changed result creates another result version. Keep the original receipt.
-    digest_facts = facts if source_time else {k:v for k,v in facts.items() if k != 'evidence'}
-    digest = hashlib.sha256(json.dumps(digest_facts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    digest_facts = _version_facts(facts)
     if not source_time:
         facts.update(observed_at=observed_at.astimezone(timezone.utc).isoformat(), source_time_quality='unknown')
-    if previous and previous['content_hash'] == digest:
+    if previous and _version_facts(result_facts(previous)) == digest_facts:
         return {'version': previous['version'], 'duplicate': True,
                 **await project_settlements(conn, fixture, previous['version'], result_facts(previous))}
     if previous and not source_time and previous['source_updated_at']:
@@ -137,6 +148,11 @@ async def ingest_result(conn, item) -> dict:
     if previous and clock <= (previous['source_updated_at'] or previous['observed_at']):
         raise HTTPException(409, '旧赛果或同时间冲突赛果不能覆盖当前版本')
     version = previous['version'] + 1 if previous else 1
+    # A verified correction may restore facts seen before an intervening
+    # provisional result. Preserve all prior rows and identify this occurrence
+    # by its version, while consecutive identical facts remain idempotent above.
+    digest = hashlib.sha256(json.dumps({'version': version, 'facts': digest_facts},
+                                      sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     await conn.execute(
         'INSERT INTO v2_fixture_results(fixture_id,version,provider_reference,content_hash,status,home_score,away_score,'
         'half_home_score,half_away_score,source_updated_at,evidence,observed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',

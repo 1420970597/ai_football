@@ -1,0 +1,207 @@
+{
+  "scope": "prematch auto betting and common execution sports integration",
+  "source_base_sha": "4b8a0b34547669f14fe15f7e8d8f7a4084c284af",
+  "production_writes": 0,
+  "funded_test_submissions": 0,
+  "deployed": false,
+  "python": {
+    "image_sha256": "a8fc0cb5dbebed71df5688f33c3963a076151c7d41ca8e7625520b8ab7ffc234",
+    "tests": 104,
+    "exit_code": 0,
+    "log_sha256": "153d551ccb9894e61dc281a7ac7be2faece1299162f82ccdc0fa4e7d6de2b305",
+    "resource_limits": {
+      "cpus": 0.25,
+      "memory_mib": 256
+    },
+    "database_network": "ai-football-e3056-full-private",
+    "database_guard": "ai-football-v2-pgtest / account_state_test / postgres / unique account_state_uuid_test per case"
+  },
+  "browser": {
+    "image_sha256": "ece536b0cb81dd6dabfa43c57163750589f023219a28e7fc41e4b64e8b989a7c",
+    "exit_code": 0,
+    "viewports": [
+      1440,
+      390
+    ],
+    "baseline_visual_review": true,
+    "result_sha256": "f2c1a9f4d1bc62a9f4c3ae42d19a34511d99408515262cfafea5d39419aa859a"
+  },
+  "native_readonly": [
+    {
+      "read_only": true,
+      "production_writes": 0,
+      "money_submissions": 0,
+      "login_or_renewal": false,
+      "max_requests": 2,
+      "observed_at": "2026-11-10T14:33:44.963393+00:00",
+      "requests": [
+        {
+          "endpoint": "queryLatestMarketInfo",
+          "http_status": 200,
+          "provider_code": "0000000",
+          "request_sha256": "74fe5db929d4ff4c"
+        },
+        {
+          "endpoint": "queryMarketMaxMinBetMoney",
+          "http_status": 200,
+          "provider_code": "0000000",
+          "request_sha256": "022f766528485b28"
+        }
+      ],
+      "unique_existing_armed_personal_account": true,
+      "account_scope_sha256": "d5c7e09ff949d485",
+      "session_scope": "personal_account_encrypted_session",
+      "candidate": {
+        "fixture_sha256": "5d71770ab73c1933",
+        "quote_sha256": "3ac41d0568eb9f59",
+        "phase": "scheduled",
+        "sport": "football",
+        "period": "full_time",
+        "market_id": "2",
+        "play_id": "2",
+        "line": "3.000",
+        "source_updated_at": "2026-11-10T14:33:17.135000+00:00"
+      },
+      "quote_response_type": "list",
+      "exact_market_count": 1,
+      "market_state": {
+        "matchStatus": "0",
+        "matchOver": "0",
+        "matchHandicapStatus": "0",
+        "status": "0"
+      },
+      "limit_response_type": "list",
+      "exact_limit_count": 1,
+      "limits": {
+        "code": "0",
+        "type": "",
+        "minBet": "2",
+        "orderMaxPay": "7500"
+      }
+    },
+    {
+      "read_only": true,
+      "production_writes": 0,
+      "money_submissions": 0,
+      "login_or_renewal": false,
+      "max_requests": 2,
+      "observed_at": "2026-11-10T14:40:45.074278+00:00",
+      "requests": [
+        {
+          "endpoint": "queryLatestMarketInfo",
+          "http_status": 200,
+          "provider_code": "0000000",
+          "request_sha256": "fc52d182613fe8b9"
+        },
+        {
+          "endpoint": "queryMarketMaxMinBetMoney",
+          "http_status": 200,
+          "provider_code": "0000000",
+          "request_sha256": "7f61c8a30de48c72"
+        }
+      ],
+      "unique_existing_armed_personal_account": true,
+      "account_scope_sha256": "d5c7e09ff949d485",
+      "session_scope": "personal_account_encrypted_session",
+      "candidate": {
+        "fixture_sha256": "2cc461e4c36dff28",
+        "quote_sha256": "ab0a61621c8e1f30",
+        "phase": "scheduled",
+        "sport": "basketball",
+        "period": "full_time",
+        "market_id": "38",
+        "play_id": "38",
+        "line": "157.500",
+        "source_updated_at": "2026-11-10T14:40:04.570000+00:00"
+      },
+      "quote_response_type": "list",
+      "exact_market_count": 1,
+      "market_state": {
+        "matchStatus": "0",
+        "matchOver": "0",
+        "matchHandicapStatus": "0",
+        "status": "0"
+      },
+      "limit_response_type": "list",
+      "exact_limit_count": 1,
+      "limits": {
+        "code": "0",
+        "type": "",
+        "minBet": "2",
+        "orderMaxPay": "2500"
+      }
+    }
+  ],
+  "files": [
+    {
+      "path": "services/executor/account_protocol.py",
+      "sha256": "712a6dca52a8888be1bb248a774e1ef821638d6b8355ee558167fb4be31a69f4",
+      "matches_worktree": true
+    },
+    {
+      "path": "services/executor/Dockerfile",
+      "sha256": "2d79bfe8fec1f204c4f0837709ff86ad011f1144300552da01102e706c770f66",
+      "matches_worktree": true
+    },
+    {
+      "path": "services/api/app/orders.py",
+      "sha256": "31f46cf144fef3e5db13a50936792462f8503a1348e749ffbd1ed58de25c8f9b",
+      "matches_worktree": true
+    },
+    {
+      "path": "services/api/app/routes/accounts.py",
+      "sha256": "e704dbd760f7e7bf099129e12413fd4d280fdf08af5b4f7ad61f88c2a20369a7",
+      "matches_worktree": true
+    },
+    {
+      "path": "services/api/Dockerfile",
+      "sha256": "0c6eb1c25ebb538eaa533b9c58c52cf989461c90a67d317e0fd791c4009fd443",
+      "matches_worktree": true
+    },
+    {
+      "path": "services/collector/Dockerfile",
+      "sha256": "400ee2f827bb7b856f6098c4c22042ddc6ebdd7c25a3cf86e62b11c8e91cbe4f",
+      "matches_worktree": true
+    },
+    {
+      "path": "services/execution_scope.py",
+      "sha256": "ef392a2b8b5e1f18d2bba4adadca55c0e334ceb215243598ae115fc8b70fbc0b",
+      "matches_worktree": true
+    },
+    {
+      "path": "tests/test_account_protocol.py",
+      "sha256": "c97ff2590cbbc6a9c6f14ef4165efa513b4956cc0f3047646a4b0ded88926a8c",
+      "matches_worktree": true
+    },
+    {
+      "path": "tests/test_prematch_execution.py",
+      "sha256": "2d9c33dbb35abfcdaaff0b8510a2b0e8f9f8b8314366f18e930691c3732ae813",
+      "matches_worktree": true
+    },
+    {
+      "path": "tests/browser/profitable-experts.mjs",
+      "sha256": "db4bfbbe5c90d93ab4dc4f022bb503b939ded6afa83cd2a8311c467d6a624c6e",
+      "matches_worktree": true
+    },
+    {
+      "path": "tests/browser/profitable-expert-baselines/manifest.json",
+      "sha256": "55e46d1401f0ffbfde56f4aedcfc7e854829f6bdce6ae228f60989a1abfe9f21",
+      "matches_worktree": true
+    },
+    {
+      "path": "tests/browser/profitable-expert-baselines/profitable-mode-1440.png",
+      "sha256": "98a3c3741e61da657ededb6667890b8de745e060f9936fd33eb6023662587c71",
+      "matches_worktree": true
+    },
+    {
+      "path": "tests/browser/profitable-expert-baselines/profitable-mode-390.png",
+      "sha256": "d760b8423a66f4260676223e03d74333d2f474f1db35fc737e9b16f00ca64afc",
+      "matches_worktree": true
+    }
+  ],
+  "limitations": [
+    "No funded submission or deployment was used for acceptance.",
+    "Existing five minute freshness is retained; ten second target remains unimplemented and unverified.",
+    "Basketball settlement and sports statistics belong to independent work packages."
+  ]
+}

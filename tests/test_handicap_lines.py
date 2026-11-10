@@ -96,5 +96,5 @@ class NativeHandicapTests(unittest.TestCase):
             value = settle(dict(kind='handicap', sport='basketball', price='2.03',
                                 phase='scheduled', period='full_time', **quote, **line_terms(quote)),
                            dict(status='confirmed', home=100, away=99))
-            self.assertEqual(('pending', 'sport_requires_provider_settlement'),
+            self.assertEqual(('pending', 'basketball_final_period_evidence_missing'),
                              (value.outcome, value.reason))

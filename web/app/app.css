@@ -701,6 +701,8 @@ h3 {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  flex-shrink: 0;
+  white-space: nowrap;
   font-size: 12px;
 }
 #expert-stats-filter select {
