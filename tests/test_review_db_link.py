@@ -74,7 +74,7 @@ class ReviewLinkTests(unittest.TestCase):
         self.assertEqual(1, len(service['env_file']))
         self.assertNotIn('volumes', service)
         self.assertNotIn('environment', service)
-        self.assertEqual(.2, service['cpus'])
+        self.assertEqual(.4, service['cpus'])
         local = yaml.safe_load((root/'infra/remote/compose.review-tools.local.yml').read_text())
         self.assertEqual({'hermes-mcp', 'review-db-link'}, set(local['services']))
         link = local['services']['review-db-link']

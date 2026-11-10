@@ -11,7 +11,9 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: ['/tmp:rw,noexec,nosuid,nodev,size=16m']
-    cpus: .2
+    # Four concurrent reviews share this process; 0.2 cores throttled the
+    # validated search/read workload. Keep a bounded 0.4-core allowance.
+    cpus: .4
     mem_limit: 256m
     pids_limit: 64
     healthcheck:
