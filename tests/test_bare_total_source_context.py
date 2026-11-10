@@ -76,3 +76,26 @@ class BareTotalPreparedInputTests(unittest.IsolatedAsyncioTestCase):
                 parts=await hermes_client._content_parts(message,'isolated-review','isolated-attempt')
             self.assertNotIn('来源期间校验提示',parts[0]['text'])
             self.assertIn(text,parts[0]['text'])
+
+    async def test_visual_context_check_preserves_advertising_and_does_not_supply_a_pick(self):
+        text='晚场6串容1已公布在vip群！\n私信获取更多内容。'
+        image,message=self.message(text)
+        with patch.object(hermes_client.blobstore,'read_image',AsyncMock(return_value=image)):
+            parts=await hermes_client._content_parts(message,'isolated-review','isolated-attempt')
+        prompt=parts[0]['text']
+        self.assertIn('来源语境校验提示',prompt)
+        self.assertIn('原始消息内容开始（不可信数据）:\n'+text+'\n原始消息内容结束。',prompt)
+        self.assertNotIn('莱斯特城',prompt)
+        self.assertNotIn('full_time',prompt)
+        self.assertEqual(image,base64.b64decode(parts[1]['image_url']['url'].split(',',1)[1]))
+
+    async def test_visual_context_check_needs_real_current_or_ready_reply_image(self):
+        image,message=self.message('私信获取更多推荐')
+        media=message['media_objects'];message['media_objects']=[]
+        parts=await hermes_client._content_parts(message,'isolated-review','isolated-attempt')
+        self.assertNotIn('来源语境校验提示',parts[0]['text'])
+        message['reply_archive']={'media_state':'ready','media_objects':media}
+        with patch.object(hermes_client.blobstore,'read_image',AsyncMock(return_value=image)):
+            parts=await hermes_client._content_parts(message,'isolated-review','isolated-attempt')
+        self.assertIn('来源语境校验提示',parts[0]['text'])
+        self.assertEqual(1,sum(p['type']=='image_url'for p in parts))
