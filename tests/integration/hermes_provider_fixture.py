@@ -92,8 +92,20 @@ def tool_description_contract(body):
         for n, p in parallel.items() if n in primary]
     size = lambda value: len(json.dumps(value, ensure_ascii=False, sort_keys=True,
                                        separators=(',', ':')).encode())
+    uses_budget = any('expert-review已预载' in f.get('description', '') for f in actual)
+    if uses_budget:
+        budget_verified = (complete and same
+            and all('expert-review已预载' in f.get('description', '') for f in actual)
+            and '不同对阵独立并行' in parallel['search_matches'].get('description', '')
+            and all('football.' in parallel[n].get('description', '')
+                    for n in names - {'search_matches'})
+            and size(actual) <= 18000)
+    else:
+        budget_verified = complete and same and descriptions and size(full) - size(actual) > 1500
     return {'complete_four_pairs': complete, 'non_description_schemas_equal': same,
             'secondary_reference_descriptions': descriptions,
+            'description_profile': 'both-compact' if uses_budget else 'secondary-compact',
+            'description_budget_verified': bool(budget_verified),
             'actual_eight_function_bytes': size(actual),
             'symmetric_full_description_hypothesis_bytes': size(full),
             'static_byte_reduction': size(full) - size(actual)}

@@ -228,7 +228,7 @@ async def run_case(conn, http, scenario):
     description_contracts = evidence.get('tool_description_contracts', [])
     assert description_contracts and all(
         contract['complete_four_pairs'] and contract['non_description_schemas_equal']
-        and contract['secondary_reference_descriptions'] and contract['static_byte_reduction'] > 1500
+        and contract['description_budget_verified']
         for contract in description_contracts), description_contracts
     assert not evidence['canary_exposed'], 'disabled secret-reading tool must not execute'
     signals = await conn.fetch('SELECT fixture_id,market_kind,period,line,selection,recommendation_price FROM v2_expert_signals WHERE message_id=$1', message)

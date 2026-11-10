@@ -44,6 +44,8 @@ class FixtureContractTests(unittest.TestCase):
         self.assertTrue(result['non_description_schemas_equal'])
         self.assertTrue(result['secondary_reference_descriptions'])
         self.assertGreater(result['static_byte_reduction'], 1500)
+        self.assertTrue(result['description_budget_verified'])
+        self.assertEqual('secondary-compact', result['description_profile'])
 
     def test_description_probe_rejects_schema_difference_or_missing_connection(self):
         target = next(t['function'] for t in self.tools
@@ -55,6 +57,44 @@ class FixtureContractTests(unittest.TestCase):
         result = fixture.tool_description_contract({'tools': self.tools[:-1]})
         self.assertFalse(result['complete_four_pairs'])
         self.assertIsNone(fixture.tool_description_contract({'tools': []}))
+
+    def budget_descriptions(self):
+        for tool in self.tools:
+            function = tool['function']
+            if function['name'].startswith('mcp__football__'):
+                function['description'] = 'expert-review已预载；完整主工具规则。'
+            elif function['name'].endswith('search_matches'):
+                function['description'] = '仅供不同对阵独立并行；expert-review已预载。'
+            elif function['name'].startswith('mcp__football_parallel__'):
+                function['description'] = '独立对阵并行调用football.同名工具；expert-review已预载。'
+
+    def test_description_probe_accepts_both_compact_connections_under_total_budget(self):
+        self.budget_descriptions()
+        result = fixture.tool_description_contract({'tools': self.tools})
+        self.assertTrue(result['description_budget_verified'])
+        self.assertEqual('both-compact', result['description_profile'])
+        self.assertLessEqual(result['actual_eight_function_bytes'], 18000)
+
+    def test_both_compact_contract_rejects_excess_bytes_and_missing_preload_or_parallel_rule(self):
+        self.budget_descriptions()
+        for tool in self.tools:
+            if tool['function']['name'].startswith('mcp__'):
+                tool['function']['description'] += '过长说明' * 1000
+        self.assertFalse(fixture.tool_description_contract({'tools': self.tools})['description_budget_verified'])
+        for marker in ('expert-review已预载', '不同对阵独立并行'):
+            self.budget_descriptions()
+            target = next(t['function'] for t in self.tools
+                          if t['function']['name'] == 'mcp__football_parallel__search_matches')
+            target['description'] = target['description'].replace(marker, '')
+            self.assertFalse(fixture.tool_description_contract({'tools': self.tools})['description_budget_verified'])
+
+    def test_both_compact_contract_still_rejects_schema_difference_and_missing_pair(self):
+        self.budget_descriptions()
+        target = next(t['function'] for t in self.tools
+                      if t['function']['name'] == 'mcp__football_parallel__resolve_match')
+        target['parameters'] = {'properties': {'name': {'maxLength': 1}}}
+        self.assertFalse(fixture.tool_description_contract({'tools': self.tools})['description_budget_verified'])
+        self.assertFalse(fixture.tool_description_contract({'tools': self.tools[:-1]})['description_budget_verified'])
 
     def test_first_turn_reads_skill(self):
         value, reason = fixture.answer(self.body())
