@@ -20,4 +20,8 @@ docker run --rm --network "$task_network" --cpus .5 --memory 768m --pids-limit 1
   -e BROWSER_EVIDENCE_DIR=/evidence \
   -v "$task_root:/work:ro" -v "$task_evidence:/evidence" \
   ai-football-browser:v2.0.0-dev tests/browser/sports-expert-statistics.mjs
+docker run --rm --network "$task_network" --cpus .5 --memory 768m --pids-limit 128 \
+  -e BROWSER_EVIDENCE_DIR=/evidence \
+  -v "$task_root:/work:ro" -v "$task_evidence:/evidence" \
+  ai-football-browser:v2.0.0-dev tests/browser/basketball-score-display.mjs
 printf 'Browser evidence: %s\n' "$task_evidence/results.json"

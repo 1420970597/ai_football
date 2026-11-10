@@ -30,7 +30,7 @@
           ><span>球讯比分<small>QIUXUN SCORE</small></span></a
         >
         <nav class="main-nav" aria-label="主导航">
-          <button class="active" data-page="scores">足球比分</button
+          <button class="active" data-page="scores" data-sport-label>足球比分</button
           ><button data-page="scores" data-phase="scheduled">近日赛程</button
           ><button data-page="scores" data-phase="finished">完场比分</button
           ><button data-page="experts">专家推荐</button
@@ -42,7 +42,7 @@
     <main id="main" class="site-width main-layout" tabindex="-1">
       <aside class="left-rail" aria-label="赛事与专家服务导航">
         <h2>赛事中心</h2>
-        <button class="rail-active" data-page="scores">
+        <button class="rail-active" data-page="scores" data-sport-label>
           足球比分 <span id="fixture-count">—</span></button
         ><button data-page="scores" data-phase="live">滚球赛事</button
         ><button data-page="scores" data-phase="scheduled">近日赛程</button
@@ -77,7 +77,7 @@
           <div class="sports-bar" role="group" aria-label="体育项目">
             <button class="active" data-sport="football">足球</button
             ><button data-sport="basketball">篮球</button
-            ><span>比分与盘口</span>
+            ><span id="sport-context">足球比分与盘口</span>
           </div>
           <div class="score-tabs" role="group" aria-label="比赛状态">
             <button data-phase="all" class="active">全部</button

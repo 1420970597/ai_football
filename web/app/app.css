@@ -439,6 +439,14 @@ h3 {
   white-space: nowrap;
   padding: 6px 0;
 }
+.score-button .basketball-half-score {
+  display: block;
+  color: #6b6479;
+  font-size: 9px;
+  font-weight: normal;
+  letter-spacing: 0;
+  line-height: 12px;
+}
 .match-vs-icon {
   display: block;
   width: 24px;
@@ -462,6 +470,13 @@ h3 {
   color: #38663d;
   padding: 1px 3px;
   border-radius: 2px;
+}
+.match-odds .odds-market {
+  flex-basis: 100%;
+  background: transparent;
+  color: #52677c;
+  padding: 0;
+  font-size: 9px;
 }
 .match-odds .stale {
   background: #f2f2f4;
@@ -2125,6 +2140,11 @@ dialog::backdrop {
 }
 .detail-hero #refresh-detail {
   margin-top: 12px;
+}
+.sport-tag,
+.sport-badge {
+  color: var(--purple);
+  font-weight: 600;
 }
 .market-table td:first-child {
   overflow-wrap: anywhere;

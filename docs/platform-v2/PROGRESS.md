@@ -5741,3 +5741,9 @@ E3141 已结束并通过：Docker 冻结回归2260项，失败/错误/跳过均�
 部署后只读TG准确度观察窗已于17:25:12 UTC启动，使用独立30分钟监控ID `20261110T172512Z`，不重放历史、不写入生产。首样本健康200、Telegram connected/authorized且无来源错误；数据库即时统计显示新消息42、审核任务21，首个监控快照尚未到5分钟刷新点。E2717连续监控保持运行，后续按窗口采样消息、任务、工具回执、绑定和未审核数，发现遗漏或误配立即回到来源/原图证据修复链路。
 
 E3150窗口于17:25:12–17:55:44 UTC完成，1832.945秒、退出码0。全程healthz/readyz=200，Telegram connected/authorized、source_errors为空；实时4条新帖、2次编辑均有审核任务，`unreviewed_current_or_edit=0`、失败/重试/活动任务均为0。窗口新增任务主要是9个Telegram来源的历史追赶消息，按`historical_backlog_auto_suppressed_by_operator`保留未解决，不混入实时准确率；9个来源仍catching_up、2个caught_up。实时窗口没有专家推荐样本，接受信号为0，不能据此宣称抽取准确率已被正向样本验证；E2717连续只读监控继续运行。
+
+### 2026-11-10 18:22 UTC 页面同步篮球赛事展示
+
+当前目标为将已生效的篮球赛事、盘口和分运动统计同步到电脑与手机网页。公共赛事接口新增只读的`half_home_score`/`half_away_score`投影，比赛详情推荐记录携带来源赛事`sport`，不改变投注开关、订单或生产数据。页面保留篮球筛选到比分深链，动态更新导航和标题，篮球比赛卡片显示有证据的半场比分与全场盘口名称，详情和推荐卡明确篮球标签；足球显示路径保持原行为。
+
+责任目录为`services/api/app/routes/public.py`、`web/app/`及`tests/browser/`。新增隔离浏览器场景`tests/browser/basketball-score-display.mjs`覆盖1440/390视口、点击篮球、`sport=basketball`请求、比分/半场比分/全场让分、详情深链、无横向溢出与零写接口；专家分运动回归仍由`tests/browser/sports-expert-statistics.mjs`覆盖。验收证据：新场景两视口2/2通过、专家分运动场景2/2通过、既有网页验收67/67通过，均为Docker浏览器隔离样本，无生产写入；网页镜像`ai-football-web:page-basketball-candidate`和API镜像`ai-football-api:page-basketball-candidate`构建退出0，Node/Python语法检查退出0。`sh tests/browser/check.sh`因宿主Docker预定义地址池已耗尽在创建临时网络前退出，未将该环境故障计入功能失败；使用默认隔离Docker网络直接运行同一验收通过。下一步为提交并推送本页面阶段，生产网页切换仍需沿现有发布门禁执行，真实篮球上游数据继续由只读监控验证。

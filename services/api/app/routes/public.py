@@ -140,7 +140,7 @@ async def matches(
     args.append(page_size + 1)
     rows = await database.current_pool().fetch(
         f"SELECT id,source_id,sport,competition_id,competition_name,home_team,away_team,kickoff_at,phase,"
-        f"match_state,home_score,away_score,clock_minute,source_updated_at,received_at "
+        f"match_state,home_score,away_score,clock_minute,half_home_score,half_away_score,source_updated_at,received_at "
         f"FROM v2_fixtures WHERE {where} ORDER BY kickoff_at,id LIMIT ${len(args)}", *args,
     )
     has_more = len(rows) > page_size
@@ -195,14 +195,14 @@ async def match_markets(fixture_id: str, request: Request, cursor: str | None = 
 async def match_detail(fixture_id: str, request: Request):
     fixture = await database.current_pool().fetchrow(
         "SELECT id,source_id,sport,competition_id,competition_name,home_team,away_team,kickoff_at,phase,"
-        "match_state,home_score,away_score,clock_minute,source_updated_at,received_at "
+        "match_state,home_score,away_score,clock_minute,half_home_score,half_away_score,source_updated_at,received_at "
         "FROM v2_fixtures WHERE id=$1", fixture_id,
     )
     if not fixture:
         raise HTTPException(status_code=404, detail="比赛不存在")
     market_page = await _match_markets(fixture_id, request, fixture['phase'])
     signal_rows = await database.current_pool().fetch(
-        "SELECT s.id,s.expert_id,e.display_nickname,s.phase,f.phase AS fixture_phase,f.match_state,"
+        "SELECT s.id,s.expert_id,e.display_nickname,f.sport,s.phase,f.phase AS fixture_phase,f.match_state,"
         "s.market_id,s.market_name,s.market_kind,s.period,s.score_baseline,s.line,s.selection,"
         "s.recommendation_price,s.quote_time,s.outcome,s.unit_net,s.created_at,s.withdrawn_at,s.withdrawal_reason "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "

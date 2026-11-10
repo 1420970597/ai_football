@@ -26,6 +26,9 @@ import {
 import { initAdmin, loadAdmin } from "./admin.js";
 import { initIdentity } from "./identity.js";
 const initial = new URLSearchParams(location.hash.split("?")[1] || "");
+const SPORT_LABELS = { football: "足球", basketball: "篮球" };
+const validSport = (value) => Object.hasOwn(SPORT_LABELS, value);
+const sportLabel = (value = state.sport) => SPORT_LABELS[value] || SPORT_LABELS.football;
 const state = {
   page: "scores",
   date: validDate(initial.get("date")) ? initial.get("date") : dayKey(),
@@ -34,7 +37,7 @@ const state = {
   )
     ? initial.get("phase")
     : "all",
-  sport: "football",
+  sport: validSport(initial.get("sport")) ? initial.get("sport") : "football",
   leagueIds: initial.getAll("league_ids").slice(0, 100),
   leagueOptions: [],
   leagueRequest: null,
@@ -160,6 +163,7 @@ function route(
         params({
           date: state.date,
           phase: state.phase,
+          sport: state.sport,
           league_ids: state.leagueIds,
         })
       : "");
@@ -196,7 +200,7 @@ function route(
   if (page === "admin") loadAdmin();
   document.title =
     {
-      scores: "足球即时比分",
+      scores: sportLabel() + "即时比分",
       experts: "专家推荐",
       messages: "发言与审核原文",
       membership: "会员服务",
@@ -230,7 +234,11 @@ function renderDates() {
     button.setAttribute("aria-pressed", String(selected));
   }
   $("#score-title").textContent =
-    state.sport === "basketball" ? "篮球即时比分" : "足球即时比分";
+    sportLabel() + "即时比分";
+  $("#sport-context").textContent = sportLabel() + "比分与盘口";
+  $$('[data-sport-label]').forEach((element) => {
+    element.firstChild.nodeValue = sportLabel() + "比分 ";
+  });
 }
 function setDate(date) {
   if (!validDate(date)) return;
@@ -247,19 +255,30 @@ function renderMatchOdds(m) {
     q.period === first.period && q.line === first.line).slice(0, 3) : [];
   const empty = m.markets_status === "loading" ? "盘口加载中…"
     : m.markets_status === "unavailable" ? "盘口暂时不可用" : "暂无有效赔率";
-  return (quotes.length ? quotes.map((q) => `<span class="${q.fresh === false || !m.quote_fresh ? "stale" : ""}" title="${esc(quoteLabel(q))}">${esc(selection(q.selection))} ${esc(lineLabel(q))} ${decimal(q.price)}</span>`).join("") : `<span class="stale">${empty}</span>`) +
+  const market = m.sport === "basketball" && first
+    ? `<span class="odds-market">${esc(period(first.period))} · ${esc(first.market_name || first.market_kind || "盘口")}</span>`
+    : "";
+  return market + (quotes.length ? quotes.map((q) => `<span class="${q.fresh === false || !m.quote_fresh ? "stale" : ""}" title="${esc(quoteLabel(q))}">${esc(selection(q.selection))} ${esc(lineLabel(q))} ${decimal(q.price)}</span>`).join("") : `<span class="stale">${empty}</span>`) +
     (all.length > quotes.length ? '<button class="detail-button" data-match="' + esc(m.id) + '">更多盘口 ›</button>' : "");
+}
+function scoreMarkup(match) {
+  const hasScore = match.home_score !== null && match.home_score !== undefined;
+  const score = hasScore
+    ? esc(match.home_score) + " : " + esc(match.away_score ?? "－")
+    : match.phase === "scheduled"
+      ? '<img class="match-vs-icon" src="/assets/cc-reference/home_match_vs_icon.png" alt="VS" width="24" height="18">'
+      : "－";
+  const half = match.sport === "basketball" &&
+      match.half_home_score !== null && match.half_home_score !== undefined
+    ? `<small class="basketball-half-score">半场 ${esc(match.half_home_score)} : ${esc(match.half_away_score ?? "－")}</small>`
+    : "";
+  return score + half;
 }
 function renderMatches() {
   const items = currentMatches();
   $("#matches-list").innerHTML = items
     .map((m) => {
-      const score = m.home_score === null || m.home_score === undefined
-        ? (m.phase === "scheduled"
-          ? '<img class="match-vs-icon" src="/assets/cc-reference/home_match_vs_icon.png" alt="VS" width="24" height="18">'
-          : "－")
-        : esc(m.home_score) + " : " + esc(m.away_score ?? "－");
-      return `<article class="match-row" data-fixture="${esc(m.id)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${score}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${renderMatchOdds(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button></article>`;
+      return `<article class="match-row" data-fixture="${esc(m.id)}" data-sport="${esc(m.sport || state.sport)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${scoreMarkup(m)}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${renderMatchOdds(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button></article>`;
     })
     .join("");
   $("#fixture-count").textContent =
@@ -517,7 +536,8 @@ export function signalCard(s, renderContext = "user") {
         : s.withdrawal_reason === "review_source_period_not_supported"
           ? "期间证据不足，已排除统计"
           : "期间纠错，已排除统计";
-  return `<article class="signal-card"><div class="signal-meta"><button data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || "专家昵称未记录")}</button><span>${stamp(s.created_at)}</span><span class="badge ${esc(fixturePhase || "unknown")}" title="当前比赛状态">比赛：${esc(fixtureStatus)}</span><span class="badge recommendation-phase" title="专家发布推荐时的比赛阶段">推荐：${esc(recommendationPhase)}</span><span class="badge ${esc(s.outcome)}">${esc(withdrawn && s.outcome === "pending" ? "已撤回" : outcomes[s.outcome] || s.outcome || "待结算")}</span></div><div class="signal-match">${hasFixture ? esc(s.home_team) + ' <span class="muted">vs</span> ' + esc(s.away_team) : "赛事编号：" + esc(s.fixture_id)}</div><div class="muted">${esc(s.competition_name || "")} ${s.kickoff_at ? stamp(s.kickoff_at) : ""}</div><div class="signal-pick"><span>${esc(s.market_name)} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><span>系统赔率 <strong>${decimal(s.recommendation_price)}</strong></span></div><div class="signal-evidence">${intentCorrected ? `<strong class="negative">${esc(intentCorrectionNotice)}</strong><br>` : withdrawn ? `<strong class="negative">${esc(withdrawalNotice)}</strong><br>` : ""}报价时间：${stamp(s.quote_time)}　报价编号：${esc(s.quote_id || "历史记录未提供")} ${s.score_baseline?.home !== null && s.score_baseline?.home !== undefined ? "　比分基线 " + esc(s.score_baseline.home) + ":" + esc(s.score_baseline.away) : ""}</div><div class="signal-actions">${s.fixture_id ? `<button class="text-link" data-match="${esc(s.fixture_id)}" data-quote="${esc(s.quote_id || "")}">系统比赛与盘口</button>` : ""}<button class="text-link" ${s.message_id ? `data-message="${esc(s.message_id)}" data-context="${renderContext}"` : `data-signal="${esc(s.id)}"`}>完整原文与审核</button><span class="${color(s.unit_net)}">${intentCorrected ? esc(intentCorrectionLabel) : withdrawn ? "原推荐已撤回" : s.outcome !== "pending" && s.unit_net !== null ? "1单位净收益 " + signed(s.unit_net) : "等待赛果结算"}</span></div></article>`;
+  const signalSport = s.sport && validSport(s.sport) ? `<span class="badge sport-badge">${sportLabel(s.sport)}</span>` : "";
+  return `<article class="signal-card"><div class="signal-meta"><button data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || "专家昵称未记录")}</button><span>${stamp(s.created_at)}</span>${signalSport}<span class="badge ${esc(fixturePhase || "unknown")}" title="当前比赛状态">比赛：${esc(fixtureStatus)}</span><span class="badge recommendation-phase" title="专家发布推荐时的比赛阶段">推荐：${esc(recommendationPhase)}</span><span class="badge ${esc(s.outcome)}">${esc(withdrawn && s.outcome === "pending" ? "已撤回" : outcomes[s.outcome] || s.outcome || "待结算")}</span></div><div class="signal-match">${hasFixture ? esc(s.home_team) + ' <span class="muted">vs</span> ' + esc(s.away_team) : "赛事编号：" + esc(s.fixture_id)}</div><div class="muted">${esc(s.competition_name || "")} ${s.kickoff_at ? stamp(s.kickoff_at) : ""}</div><div class="signal-pick"><span>${esc(s.market_name)} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><span>系统赔率 <strong>${decimal(s.recommendation_price)}</strong></span></div><div class="signal-evidence">${intentCorrected ? `<strong class="negative">${esc(intentCorrectionNotice)}</strong><br>` : withdrawn ? `<strong class="negative">${esc(withdrawalNotice)}</strong><br>` : ""}报价时间：${stamp(s.quote_time)}　报价编号：${esc(s.quote_id || "历史记录未提供")} ${s.score_baseline?.home !== null && s.score_baseline?.home !== undefined ? "　比分基线 " + esc(s.score_baseline.home) + ":" + esc(s.score_baseline.away) : ""}</div><div class="signal-actions">${s.fixture_id ? `<button class="text-link" data-match="${esc(s.fixture_id)}" data-quote="${esc(s.quote_id || "")}">系统比赛与盘口</button>` : ""}<button class="text-link" ${s.message_id ? `data-message="${esc(s.message_id)}" data-context="${renderContext}"` : `data-signal="${esc(s.id)}"`}>完整原文与审核</button><span class="${color(s.unit_net)}">${intentCorrected ? esc(intentCorrectionLabel) : withdrawn ? "原推荐已撤回" : s.outcome !== "pending" && s.unit_net !== null ? "1单位净收益 " + signed(s.unit_net) : "等待赛果结算"}</span></div></article>`;
 }
 function effectiveSettledCount(expert) {
   if (Object.hasOwn(expert, 'effective_settled_signals')) return expert.effective_settled_signals;
@@ -830,8 +850,11 @@ async function openMatch(id, { refresh = false, quoteId = null } = {}) {
     state.quotePrices = new Map(data.markets.map((q) => [q.quote_id, q.price]));
     if (state.activeMatch !== id || sequence !== state.dialogSequence) return;
     $("#dialog-title").textContent = f.home_team + " vs " + f.away_team;
+    const halfScore = f.sport === "basketball" && f.half_home_score !== null && f.half_home_score !== undefined
+      ? ` · 半场比分 ${esc(f.half_home_score)} : ${esc(f.half_away_score ?? "－")}`
+      : "";
     $("#dialog-content").innerHTML =
-      `<section class="detail-hero"><p>${esc(f.competition_name)} · ${stamp(f.kickoff_at)}</p><div class="detail-teams"><h3>${esc(f.home_team)}</h3><strong>${f.home_score === null || f.home_score === undefined ? "VS" : esc(f.home_score) + " : " + esc(f.away_score)}</strong><h3>${esc(f.away_team)}</h3></div><p>${esc(phases[f.phase] || f.match_state)} ${f.phase === "live" && f.clock_minute !== null ? esc(f.clock_minute ?? "") + "′" : ""} · 上游更新 ${stamp(f.source_updated_at)}</p><button class="small-button" id="refresh-detail">刷新本场数据</button></section><section class="detail-section"><h3>系统当前盘口</h3>${data.markets.length ? marketMarkup(data.markets, state.matchFilters) : '<div class="empty-state">暂无有效赔率。上游尚未提供盘口或当前已停盘。</div>'}</section><section class="detail-section"><h3>本场专家推荐</h3>${data.expert_signals.map((s) => signalCard({ ...s, home_team: f.home_team, away_team: f.away_team, competition_name: f.competition_name, fixture_id: f.id })).join("") || '<p class="muted">暂无已绑定本场的专家推荐</p>'}</section><p class="data-footnote">当前未提供阵容、直播事件及球队历史资料，不生成推测信息。</p>`;
+      `<section class="detail-hero"><p><span class="sport-tag">${esc(sportLabel(f.sport))}</span> · ${esc(f.competition_name)} · ${stamp(f.kickoff_at)}</p><div class="detail-teams"><h3>${esc(f.home_team)}</h3><strong>${f.home_score === null || f.home_score === undefined ? "VS" : esc(f.home_score) + " : " + esc(f.away_score)}</strong><h3>${esc(f.away_team)}</h3></div><p>${esc(phases[f.phase] || f.match_state)} ${f.phase === "live" && f.clock_minute !== null ? esc(f.clock_minute ?? "") + "′" : ""}${halfScore} · 上游更新 ${stamp(f.source_updated_at)}</p><button class="small-button" id="refresh-detail">刷新本场数据</button></section><section class="detail-section"><h3>${esc(sportLabel(f.sport))}当前盘口</h3>${data.markets.length ? marketMarkup(data.markets, state.matchFilters) : '<div class="empty-state">暂无有效赔率。上游尚未提供盘口或当前已停盘。</div>'}</section><section class="detail-section"><h3>本场专家推荐</h3>${data.expert_signals.map((s) => signalCard({ ...s, sport: f.sport, home_team: f.home_team, away_team: f.away_team, competition_name: f.competition_name, fixture_id: f.id })).join("") || '<p class="muted">暂无已绑定本场的专家推荐</p>'}</section><p class="data-footnote">当前未提供阵容、直播事件及球队历史资料，不生成推测信息。</p>`;
     $("#refresh-detail").onclick = () => openMatch(id, { refresh: true });
     const marketSection = $("#dialog-content .detail-section");
     const renderMarkets = () => {
@@ -1754,7 +1777,7 @@ function events() {
 function setDetail(type, id) {
   const query = params({
     ...(state.page === "scores"
-      ? { date: state.date, phase: state.phase }
+      ? { date: state.date, phase: state.phase, sport: state.sport }
       : {}),
     [type]: id,
     ...(type === "message" && state.messageContext === "admin"
@@ -1782,6 +1805,7 @@ function readRoute() {
     )
   )
     state.phase = p.get("phase");
+  if (validSport(p.get("sport"))) state.sport = p.get("sport");
   state.leagueIds = p
     .getAll("league_ids")
     .filter((value) => value && value.length <= 100)
@@ -1815,6 +1839,7 @@ $("#content-dialog").addEventListener("close", () => {
               params({
                 date: state.date,
                 phase: state.phase,
+                sport: state.sport,
                 league_ids: state.leagueIds,
               })
             : ""),
