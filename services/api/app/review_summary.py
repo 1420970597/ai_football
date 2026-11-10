@@ -13,6 +13,7 @@ from .review_intent_retry import intent_matches_quote
 from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
 from .review_intent_claims import source_intent_denial
+from .review_quote_claims import missing_handicap_claims
 
 SUMMARY_ITEM_LIMIT = 100
 PHASES = {'scheduled': '未开赛', 'live': '滚球', 'finished': '已完场', 'cancelled': '取消或延期'}
@@ -133,7 +134,7 @@ async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_
     final_content = evidence.model_contents[-1] if evidence.model_contents else ''
     phase_options = ({'final_content': final_content}
                      if current_phase_claims(final_content) or named_phase_claims(final_content)
-                     or split_line_claim_conflicts(final_content) else {})
+                     or split_line_claim_conflicts(final_content) or missing_handicap_claims(final_content) else {})
     if (review_mode == 'real_time' and evidence.explicit_visual_instruction
             and source_intent_denial(final_content)):
         phase_options.update(require_visual_instruction_review=True, final_content=final_content)

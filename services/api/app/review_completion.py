@@ -8,6 +8,7 @@ from .review_intent_retry import intent_retry_ctes, intent_retry_projection
 from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
 from .review_intent_claims import explicit_text_pick, explicit_visual_instruction, source_intent_denial
+from .review_quote_claims import missing_handicap_claims, read_quote_claim_conflicts
 
 DETAIL_LIMIT = 100
 
@@ -117,6 +118,8 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
                             require_visual_instruction_review: bool = False) -> dict:
     display_conflicts = split_line_claim_conflicts(final_content)
     visual_intent_conflict = require_visual_instruction_review and source_intent_denial(final_content)
+    quote_claim_conflicts = await read_quote_claim_conflicts(
+        conn, job_id, attempt_id, missing_handicap_claims(final_content))
     row = await conn.fetchrow(
         "WITH " + unfinished_searches_cte() + "," + intent_retry_ctes() + ","
         " named_claims AS (SELECT unnest(string_to_array($5::text,chr(10))) AS content),"
@@ -177,7 +180,7 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
         current_phase_claims(final_content) + named_phase_claims(final_content))
     if (not row['unfinished_count'] and not row['unbound_count'] and not row['intent_unverified']
             and not row['line_intent_retry_count'] and not row['phase_conflict_count'] and not display_conflicts
-            and not visual_intent_conflict):
+            and not visual_intent_conflict and not quote_claim_conflicts):
         return {}
     result = {'unfinished_search_count': row['unfinished_count'], 'unfinished_searches': row['unfinished'] or [],
             'unbound_mention_count': row['unbound_count'], 'unbound_mentions': row['unbound'] or [],
@@ -195,10 +198,20 @@ async def completion_issues(conn, job_id, attempt_id, mentioned: set[str], conte
     if display_conflicts:
         result['display_line_conflict_count'] = len(display_conflicts)
         result['display_line_conflicts'] = display_conflicts[:DETAIL_LIMIT]
+    if quote_claim_conflicts:
+        result['read_quote_claim_conflict_count'] = len(quote_claim_conflicts)
+        result['read_quote_claim_conflicts'] = quote_claim_conflicts
     return result
 
 
 def continuation_prompt(issues: dict) -> str:
+    quote_claim_hint = (
+        '最终说明声称某个具体让受让线不存在，但当前尝试的已读盘口包含该所选线，'
+        '见read_quote_claim_conflicts。请逐项复核原图文、已有绑定及同一行quote_id/selection_line，'
+        '不要因十进制正号省略或通用“让分”名称误说反方向，也不要用自由文字否认已有回执。'
+        '这只是矛盾提示，不证明原图身份、期间、方向或可交易性，不批准录入；'
+        '真实来源证据不足或当前盘口不可用仍保持未解决并如实说明。保留已接受项，禁止猜编号或自动补录。'
+        if issues.get('read_quote_claim_conflict_count') else '')
     visual_hint = (
         '原正文明确“可单可串”且附有原图，最终说明却否认新增推荐意图。请重新核验本会话原图文；'
         '不能仅因图片是已成交注单或正文没有再次跟进，就忽略该明确指令。'
@@ -232,7 +245,7 @@ def continuation_prompt(issues: dict) -> str:
         '请使用当前实际提供的赛事检索及盘口工具核验原图文，不能仅改口说已完成。'
         '实际调用失败则保留错误，不自行扩大权限、虚构工具结果或猜测编号。'
         if issues.get('tool_availability_unverified') else '')
-    return visual_hint + display_hint + phase_hint + line_hint + intent_hint + tool_hint + (
+    return quote_claim_hint + visual_hint + display_hint + phase_hint + line_hint + intent_hint + tool_hint + (
         '服务端工具证据核验尚未通过，请在本会话继续当前审核。沿用原 review_id、attempt_id、原图文和权限。'
         '先完成 unfinished_searches 中每个检索的准确 next cursor，保持原 scope（尤其 sport、phase、时间范围），'
         '连续分页直到无下一页，不要重启已完成检索。对模型提及但无绑定的比赛，只有原推荐意图且双方球队、'

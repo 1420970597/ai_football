@@ -19,6 +19,7 @@ from .review_summary_evidence import read_summary_evidence
 from .review_recovery import market_recovery
 from .review_phase_claims import current_phase_claims, named_phase_claims
 from .review_line_claims import split_line_claim_conflicts
+from .review_quote_claims import missing_handicap_claims
 from .review_accepted_context import read_accepted_context
 from .review_completion import (completion_issues, continuation_prompt, mentioned_fixtures, named_identity_claims, explicit_text_pick,
                                 explicit_visual_instruction,
@@ -495,7 +496,8 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
         named_content = named_identity_claims(named_contents)
         if named_content:
             recovery_options['named_content'] = named_content
-        if current_phase_claims(content) or named_phase_claims(content) or split_line_claim_conflicts(content):
+        if (current_phase_claims(content) or named_phase_claims(content) or split_line_claim_conflicts(content)
+                or missing_handicap_claims(content)):
             recovery_options['final_content'] = content
         if (message['review_mode'] == 'real_time' and explicit_visual_instruction(
                 message.get('raw_text', ''), any(
