@@ -13,12 +13,15 @@ import test_reviews as support
 
 CLAIM = ('我不会使用足球 MCP 工具，也不会使用终端或文件工具：本次会话没有提供这些工具，'
          '因此我无法搜索比赛、读取市场盘口，也无法记录任何内容。')
+NATIVE_ABSENCE_CLAIM = (
+    '我不能审核这条消息：本轮所需的工具尚未接入，当前没有可用的 football / football_parallel MCP 工具'
+    '（我这边只有技能读取和通用文件、命令行工具），无法检索比赛、读取盘口或录入推荐。')
 
 
 class ToolClaimBoundaryTests(unittest.TestCase):
     def test_explicit_self_limitations_are_only_negative_completion_hints(self):
         from app.review_completion import tool_unavailability_claim
-        for content in (CLAIM, '当前会话没有提供足球MCP工具，无法执行核验。',
+        for content in (CLAIM, NATIVE_ABSENCE_CLAIM, '当前会话没有提供足球MCP工具，无法执行核验。',
                         '我无法使用football MCP工具。',
                         'I cannot use football MCP tools because this session does not provide any tools.',
                         "I don't have access to football MCP tools.", 'No football MCP tools are available.'):
@@ -29,6 +32,8 @@ class ToolClaimBoundaryTests(unittest.TestCase):
         from app.review_completion import tool_unavailability_claim
         for content in ('原文引用：' + CLAIM, '> ' + CLAIM, '我引用原文：' + CLAIM,
                         'I quote: ' + CLAIM, '本次完整检索没有匹配比赛。',
+                        '我不能断言当前没有可用的 football MCP 工具，实际调用已成功。',
+                        '我不能审核原文引用：“当前没有可用的 football MCP 工具”。',
                         '我没有调用足球MCP工具，因为本条是表情包，无推荐意图。',
                         '本条没有推荐意图，无需调用足球MCP工具。'):
             with self.subTest(content=content):
@@ -109,6 +114,13 @@ class ReviewToolAvailabilityTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(worker.HermesProviderUnavailable):
             await self.run_model([(claim, {'content': claim})] * 3)
 
+    async def test_native_no_available_tools_claim_cannot_silently_finish(self):
+        with self.assertRaises(worker.HermesProviderUnavailable):
+            await self.run_model([(NATIVE_ABSENCE_CLAIM, {'content': NATIVE_ABSENCE_CLAIM})] * 3)
+        self.assertEqual(3, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE trace_kind='hermes_partial_result'"))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
     async def test_quoted_tool_absence_and_ordinary_no_intent_keep_one_turn(self):
         for content in ('原文引用：' + CLAIM, '> ' + CLAIM,
                         '本条是熊猫表情包，没有推荐意图，无需调用工具。',
@@ -133,7 +145,7 @@ class ReviewToolAvailabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(receipt['completion_verified'])
         self.assertIn('历史回放', receipt['content'])
 
-    async def receipt(self, *, partial=False, real_tool=False):
+    async def receipt(self, *, partial=False, real_tool=False, claim=CLAIM):
         if partial:
             await trace(self.pool, self.job, 'mcp_search_matches',
                         {'attempt_id': str(self.attempt), 'status': 'succeeded'})
@@ -145,7 +157,7 @@ class ReviewToolAvailabilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(200, response.status_code, response.text)
         async with self.pool.acquire() as conn, conn.transaction():
             await trace(conn, self.job, 'hermes_result',
-                        {'attempt_id': str(self.attempt), 'content': '已经完成' if partial else CLAIM,
+                        {'attempt_id': str(self.attempt), 'content': '已经完成' if partial else claim,
                          'completion_verified': True})
             await record_summary(conn, {'id': self.job, 'message_id': self.message}, self.attempt, 'real_time')
         return await self.pool.fetchval(
@@ -156,6 +168,11 @@ class ReviewToolAvailabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(receipt['completion_verified'])
         self.assertTrue(receipt['completion_issues']['tool_availability_unverified'])
         self.assertIn('工具', receipt['content'])
+
+    async def test_final_receipt_rejects_native_no_available_tools_claim(self):
+        receipt = await self.receipt(claim=NATIVE_ABSENCE_CLAIM)
+        self.assertFalse(receipt['completion_verified'])
+        self.assertTrue(receipt['completion_issues']['tool_availability_unverified'])
 
     async def test_final_receipt_requires_tool_after_claim_not_before_it(self):
         receipt = await self.receipt(partial=True)

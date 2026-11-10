@@ -23,6 +23,9 @@ def tool_unavailability_claim(content: str) -> bool:
     return bool(re.search(
         r'(?:本次|当前|这个)(?:会话|环境).{0,80}(?:没有|未)(?:提供|开放|启用|配置).{0,40}工具'
         r'|我.{0,20}(?:无法|不能)(?:访问|使用).{0,45}(?:MCP|football|足球).{0,20}工具'
+        r'|我(?:当前)?(?:无法|不能)(?:审核|处理|核验)(?:这条消息|该消息|本条消息|此消息)'
+        r'[^。；;\n“「"`]{0,100}(?:当前|本轮)(?:没有|尚无)可用的\s*'
+        r'(?:football|足球|MCP).{0,60}工具'
         r'|\bI\s+(?:cannot|can\x27t)\s+(?:use|access).{0,45}(?:MCP|football).{0,20}tools\b'
         r'|\bI\s+(?:do not|don\x27t)\s+have\s+access\s+to.{0,45}(?:MCP|football).{0,20}tools\b'
         r'|\b(?:this|current)\s+(?:session|environment).{0,40}(?:has no|does not provide).{0,30}tools\b'
