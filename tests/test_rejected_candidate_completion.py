@@ -12,6 +12,27 @@ import test_review_completion as completion_support
 
 
 class RejectedCandidateMentionTests(unittest.TestCase):
+    def test_source_kickoff_excludes_single_same_name_candidate_without_a_pick_claim(self):
+        text=('两点说明：同组20:00还有一场13:20Z开球的越南U23 vs 泰国U23滚球盘'
+              '（leyu:98886201，已1-0进行中），按截图开球时间20:00排除，绑定的是尚未开赛那场。'
+              '越南U23 vs 泰国U23已唯一绑定 leyu:98886008。')
+        self.assertEqual({'leyu:98886008'},mentioned_fixtures(text))
+
+    def test_time_exclusion_needs_distinct_times_and_explicit_source_basis(self):
+        for text in ('leyu:1按截图开球时间20:00排除',
+                     'leyu:1开球20:00，按截图开球时间20:00排除',
+                     'leyu:1开球13:20，按库存时间20:00排除',
+                     'leyu:1开球13:20，按截图开球时间20:00尚不能排除',
+                     'leyu:1和leyu:2开球13:20，按截图开球时间20:00排除'):
+            with self.subTest(text=text):
+                self.assertIn('leyu:1',mentioned_fixtures(text))
+
+    def test_time_exclusion_does_not_erase_a_positive_claim_in_the_same_or_prior_clause(self):
+        for text in ('已唯一绑定leyu:1，开球13:20，按截图开球时间20:00排除',
+                     '已唯一绑定leyu:1。候选leyu:1开球13:20，按截图开球时间20:00排除'):
+            with self.subTest(text=text):
+                self.assertEqual({'leyu:1'},mentioned_fixtures(text))
+
     def test_explicit_irrelevant_candidate_is_not_a_positive_fixture_claim(self):
         content=('唯一未绑定候选仍是EAFC24电子赛（leyu:2119387627093266434，完场），'
                  '与原文英超正赛的开球时间、赛制均不符，不作为绑定，也不读其盘口。\n'
@@ -37,6 +58,32 @@ class RejectedCandidateCompletionTests(unittest.IsolatedAsyncioTestCase):
     context=support.ReviewTests.context
     post=support.ReviewTests.post
     prepare_search=completion_support.ReviewCompletionTests.prepare_search
+
+    async def test_time_excluded_alternate_does_not_force_a_binding_after_complete_search(self):
+        page=await self.prepare_search()
+        await self.post('search_matches',team_query='Alpha',cursor=page['next_cursor'])
+        self.assertTrue((await self.post('resolve_match',search_key=page['search_key'],
+                                       team_a='Alpha1',team_b='Beta1')).json()['resolved'])
+        text='已唯一绑定leyu:1。候选leyu:2开球13:20，按截图开球时间20:00排除。'
+        job={'id':self.job,'attempt_id':self.attempt,'message':{}}
+        with patch.object(worker,'review_message',AsyncMock(return_value=(text,{'content':text})))as call:
+            _,summary=await worker._review_until_verified(self.pool,SimpleNamespace(),job)
+        self.assertTrue(summary['completion_verified'])
+        self.assertEqual(1,call.await_count)
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_time_exclusion_cannot_erase_an_earlier_positive_claim_or_unread_pages(self):
+        await self.prepare_search()
+        texts=['已唯一绑定leyu:2。','候选leyu:2开球13:20，按截图开球时间20:00排除。','完成']
+        job={'id':self.job,'attempt_id':self.attempt,'message':{}}
+        with patch.object(worker,'review_message',AsyncMock(side_effect=[(t,{'content':t})for t in texts]))as call:
+            _,summary=await worker._review_until_verified(self.pool,SimpleNamespace(),job)
+        self.assertFalse(summary['completion_verified'])
+        self.assertEqual(1,summary['completion_issues']['unfinished_search_count'])
+        self.assertEqual(1,summary['completion_issues']['unbound_mention_count'])
+        self.assertEqual(3,call.await_count)
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
 
     async def test_complete_search_and_real_binding_finish_once_and_receipt_uses_same_claims(self):
         page=await self.prepare_search()

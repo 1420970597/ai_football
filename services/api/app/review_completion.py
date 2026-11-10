@@ -91,10 +91,17 @@ def mentioned_fixtures(content: str) -> set[str]:
         mismatch = re.search(r'[与和].{0,100}(?:原文|原推荐).{0,100}(?:不符|不同)'
                              r'|无关|非原文|不是原文|不属于原推荐', clause)
         positive = re.search(r'(?:已(?:经)?|确认)[^，,:：]{0,16}(?:绑定|匹配|识别|定位)', clause)
-        if rejected and mismatch and not positive:
+        tokens = set(re.findall(r'(?<![A-Za-z0-9_:])leyu:[0-9]{1,24}(?![A-Za-z0-9_:])', clause))
+        # A clearly excluded alternate kickoff is not a positive match claim.
+        # Require one ID, distinct clock values and an explicit source-time exclusion.
+        times = {(int(hour), int(minute)) for hour, minute in
+                 re.findall(r'(?<!\d)([0-2]?\d)[:：]([0-5]\d)(?!\d)', clause)}
+        source_time_excluded = len(tokens) == 1 and len(times) > 1 and re.search(
+            r'按(?:原图|原文|截图)(?:的)?(?:开球)?时间\s*[0-2]?\d[:：][0-5]\d\s*排除', clause)
+        if not positive and ((rejected and mismatch) or source_time_excluded):
             continue
         # Chinese prose next to an ASCII provider ID is a valid boundary.
-        mentioned.update(re.findall(r'(?<![A-Za-z0-9_:])leyu:[0-9]{1,24}(?![A-Za-z0-9_:])', clause))
+        mentioned.update(tokens)
     return mentioned
 
 
