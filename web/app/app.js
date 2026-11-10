@@ -1744,7 +1744,15 @@ function setDetail(type, id) {
       : {}),
   });
   const hash = "#" + state.page + "?" + query;
-  if (location.hash !== hash) history.pushState({ detail: true }, "", hash);
+  if (location.hash !== hash) {
+    const [page, currentQuery] = location.hash.slice(1).split("?");
+    const current = new URLSearchParams(currentQuery || "");
+    // Canonicalizing a direct detail link must not create a second copy:
+    // closing that copy would navigate back to and reopen the same detail.
+    if (page === state.page && current.get(type) === id)
+      history.replaceState(history.state, "", hash);
+    else history.pushState({ detail: true }, "", hash);
+  }
 }
 function readRoute() {
   const [page, query] = location.hash.slice(1).split("?");

@@ -1337,6 +1337,39 @@ await test("普通成员搜索可选为监控作者且读取管理员仍调用�
   assert.equal(log.filter(r=>r.path.startsWith('/admin/telegram/') && ['admins','members'].some(x=>r.path.endsWith(x))).at(-1).path, '/admin/telegram/admins');
   await context.close();
 });
+for (const width of [1440, 390]) {
+  for (const [pageName, type, value, ready] of [
+    ["scores", "match", "match-0", "#market-period"],
+    ["experts", "expert", id, ".metrics-grid"],
+    ["messages", "message", mid, ".raw-text"],
+  ]) {
+    await test(`详情直达规范化不新增历史且稳定关闭 ${type} / ${width}`, async () => {
+      const { page, context, log } = await setup({ dual: true, mobile: width === 390 });
+      try {
+        const before = await page.evaluate(() => history.length);
+        await page.goto(`http://127.0.0.1:8080/#${pageName}?${type}=${value}`);
+        await page.locator(`#content-dialog[open] ${ready}`).first().waitFor();
+        assert.equal(await page.evaluate(() => history.length), before + 1);
+        assert.notEqual(await page.evaluate(() => history.state?.detail), true);
+        const opened = await page.evaluate(() => history.length);
+        await page.reload();
+        await page.locator(`#content-dialog[open] ${ready}`).first().waitFor();
+        assert.equal(await page.evaluate(() => history.length), opened);
+        if (width === 390) await page.keyboard.press("Escape");
+        else await page.locator("#content-dialog [data-close-dialog]").click();
+        await page.waitForFunction(() => !document.querySelector("#content-dialog").open &&
+          !["match", "expert", "message"].some(key =>
+            new URLSearchParams(location.hash.split("?")[1] || "").has(key)));
+        await page.waitForTimeout(300);
+        assert.equal(await page.locator("#content-dialog").evaluate(e => e.open), false);
+        assert.equal(await page.evaluate(() => history.length), opened);
+        assert.equal(log.filter(r => ["POST", "PUT", "PATCH", "DELETE"].includes(r.method)).length, 0);
+      } finally {
+        await context.close();
+      }
+    });
+  }
+}
 await test("详情深链、前进后退、主附线筛选与保留筛选刷新", async () => {
   const { page, context } = await setup({ dual: true });
   await page.locator(".detail-button").first().click();
