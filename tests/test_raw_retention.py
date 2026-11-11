@@ -3,9 +3,13 @@ import asyncio
 import os
 import unittest
 import uuid
-from datetime import timedelta
+from types import SimpleNamespace
+from fastapi import HTTPException
+from datetime import datetime, timedelta, timezone
 from app.raw_retention import sweep, validate_local_target
 from app.message_read import message_projection
+from app import message_read
+from app.routes.expert_content import read_message_media
 from app.retention_media import claim_expired_media, acknowledge_expired_media
 import test_result_ledger as support
 
@@ -29,12 +33,45 @@ class LocalRetentionGuardTests(unittest.TestCase):
         self.assertEqual([], result['media_objects'])
         self.assertNotIn('should never',repr(result))
 
+    def test_read_time_expiry_does_not_wait_for_background_cleanup(self):
+        result = message_projection({'id':uuid.uuid4(), 'posted_at':datetime.now(timezone.utc)-timedelta(hours=72,seconds=1),
+            'raw_content_expired_at':None, 'raw_text':'private original', 'source_evidence':{'text':'private original'},
+            'reply_context':{'text':'private reply'}, 'media_objects':[{'object_key':'private'}]})
+        self.assertTrue(result['raw_content_expired'])
+        self.assertEqual({},result['source_evidence'])
+        self.assertNotIn('private',repr(result))
+
 
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'),'requires isolated database')
 class RawRetentionTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = support.ResultLedgerTests.asyncSetUp
     asyncTearDown = support.ResultLedgerTests.asyncTearDown
     signal = support.ResultLedgerTests.signal
+
+    async def test_deadline_blocks_existing_raw_traces_tools_and_image_before_sweep(self):
+        await self.pool.execute("UPDATE v2_expert_messages SET posted_at=clock_timestamp()-interval '72 hours'+interval '3 seconds',media_objects=$1 WHERE id=$2",
+            [{'object_key':'v2/telegram/messages/chat/1/hash'}],self.message)
+        job,attempt=uuid.uuid4(),uuid.uuid4()
+        await self.pool.execute("INSERT INTO v2_analysis_jobs(id,message_id,state,idempotency_key,attempt_id) VALUES($1,$2,'queued','boundary',$3)",job,self.message,attempt)
+        tool=uuid.uuid4()
+        for sequence,kind in enumerate(('hermes_result','system_review_result','mcp_search_matches'),1):
+            await self.pool.execute("INSERT INTO v2_analysis_traces(id,job_id,sequence_no,trace_kind,payload) VALUES($1,$2,$3,$4,$5)",
+                tool if sequence==3 else uuid.uuid4(),job,sequence,kind,{'attempt_id':str(attempt),'text':'private original'})
+        await asyncio.sleep(3.1)
+        row=await self.pool.fetchrow('SELECT * FROM v2_expert_messages WHERE id=$1',self.message)
+        self.assertIsNone(row['raw_content_expired_at'])
+        self.assertTrue(row['raw_text'])
+        self.assertTrue(message_projection(dict(row))['raw_content_expired'])
+        request=SimpleNamespace(app=self.app)
+        self.assertEqual([], (await message_read.trace_page(self.pool,request,None,self.message))['items'])
+        self.assertIsNone(await message_read.latest_summary(self.pool,self.message))
+        self.assertIsNone(await message_read.latest_model_result(self.pool,self.message))
+        with self.assertRaises(HTTPException) as error:
+            await message_read.tool_response(self.pool,self.message,tool)
+        self.assertEqual(404,error.exception.status_code)
+        with self.assertRaises(HTTPException) as error:
+            await read_message_media(self.message,0,request=request,actor=None)
+        self.assertEqual(404,error.exception.status_code)
 
     async def test_old_raw_content_expires_without_mutating_parsed_decisions(self):
         signal = await self.signal()

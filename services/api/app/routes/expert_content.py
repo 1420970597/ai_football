@@ -145,7 +145,9 @@ async def message_media(message_id: uuid.UUID, index: int, request: Request):
 
 
 async def read_message_media(message_id: uuid.UUID, index: int, *, request: Request, actor, context='user'):
-    row = await database.current_pool().fetchrow('SELECT id,revision,media_objects FROM v2_expert_messages WHERE id=$1', message_id)
+    row = await database.current_pool().fetchrow('SELECT id,revision,media_objects,posted_at,raw_content_expired_at FROM v2_expert_messages WHERE id=$1', message_id)
+    if row and message_read.raw_content_expired(dict(row)):
+        raise message_read.private_error(404, '消息图片已按三天留存策略清除')
     objects = row['media_objects'] if row else None
     if not objects or index < 0 or index >= len(objects):
         raise message_read.private_error(404, '消息图片不存在')

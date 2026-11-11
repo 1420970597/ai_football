@@ -1161,7 +1161,7 @@ async def telegram_messages(request: Request, expert_id: uuid.UUID | None = None
             raise HTTPException(status_code=400, detail="消息分页游标无效") from None
     page_size = max(1, min(limit, 100))
     rows = await database.current_pool().fetch(
-        "SELECT m.id,m.raw_text,m.media_objects,m.media_state,m.posted_at,m.edited_at,m.revision,m.deleted_at,"
+        "SELECT m.id,m.raw_text,m.media_objects,m.media_state,m.posted_at,m.edited_at,m.revision,m.deleted_at,m.raw_content_expired_at,"
         "e.display_nickname,m.expert_id,m.source_id,m.platform_message_id,t.last_error "
         "FROM v2_expert_messages m JOIN v2_experts e ON e.id=m.expert_id LEFT JOIN v2_telegram_events t ON t.message_id=m.id "
         "WHERE ($1::uuid IS NULL OR m.expert_id=$1) AND ($2::timestamptz IS NULL OR (m.posted_at,m.id)<($2,$3)) "
@@ -1172,8 +1172,8 @@ async def telegram_messages(request: Request, expert_id: uuid.UUID | None = None
         payload = json.dumps([str(expert_id) if expert_id else "all", page[-1]["posted_at"].isoformat(), str(page[-1]["id"])]).encode()
         signature = hmac.new(request.app.state.settings.encryption_key, payload, hashlib.sha256).digest()
         next_cursor = base64.urlsafe_b64encode(payload + signature).decode().rstrip("=")
-    items = [dict(row) | {'media_objects': message_read.message_projection(
-        dict(row), admin=True, request=request, actor=actor)['media_objects']} for row in page]
+    items = [dict(row) | message_read.message_projection(
+        dict(row), admin=True, request=request, actor=actor) for row in page]
     return JSONResponse(jsonable_encoder({"items": items, "next_cursor": next_cursor}),
                         headers=message_read.HEADERS)
 

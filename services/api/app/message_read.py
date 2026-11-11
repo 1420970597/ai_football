@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 
@@ -17,6 +18,18 @@ from .handicap_lines import line_projection
 HEADERS = {'Cache-Control': 'private, no-store'}
 CURSOR_SECONDS = 900
 TOOL_KINDS = ('mcp_search_matches', 'mcp_resolve_match', 'mcp_list_match_markets', 'mcp_record_expert_signals')
+RAW_AVAILABLE_SQL = ("EXISTS(SELECT 1 FROM v2_expert_messages raw_message WHERE raw_message.id=j.message_id "
+                     "AND raw_message.raw_content_expired_at IS NULL "
+                     "AND raw_message.posted_at>clock_timestamp()-interval '72 hours')")
+
+
+def raw_content_expired(row):
+    if row.get('raw_content_expired_at') or row.get('last_error') == 'raw_content_expired':
+        return True
+    posted = row.get('posted_at')
+    if isinstance(posted, str):
+        posted = datetime.fromisoformat(posted.replace('Z', '+00:00'))
+    return bool(posted and posted <= datetime.now(timezone.utc)-timedelta(hours=72))
 
 
 def private_error(code, detail):
@@ -39,10 +52,11 @@ def message_projection(row, *, admin=False, request=None, actor=None):
                'reply_context', 'display_nickname', 'source_name', 'created_at', 'last_error', 'source_evidence',
                'raw_content_expired_at')
     result = {key: trace_payload(row[key]) for key in allowed if key in row}
-    if row.get('raw_content_expired_at') or row.get('last_error') == 'raw_content_expired':
+    if raw_content_expired(row):
         result['raw_text'] = '原文已按三天留存策略清除；解析后的专家决策继续保存。'
         result['reply_context'] = {}
         result['media_objects'] = []
+        result['source_evidence'] = {}
         result['raw_content_expired'] = True
         return result
     root = '/api/v1/admin/telegram/messages/' if admin else '/api/v1/public/messages/'
@@ -122,6 +136,7 @@ async def trace_page(pool, request, actor, message_id, *, context='user', limit=
         "SELECT t.id,j.id AS review_id,j.state,j.last_error,j.created_at AS job_created_at,"
         "t.sequence_no,t.trace_kind,CASE WHEN t.trace_kind='tool_response_chunk' THEN t.payload-'data_base64' ELSE t.payload END AS payload,t.created_at "
         "FROM v2_analysis_jobs j JOIN v2_analysis_traces t ON t.job_id=j.id WHERE j.message_id=$1 "
+        "AND " + RAW_AVAILABLE_SQL + " "
         "AND ($2::timestamptz IS NULL OR (j.created_at,j.id,t.sequence_no,t.id)>($2,$3,$4,$5)) "
         "ORDER BY j.created_at,j.id,t.sequence_no,t.id LIMIT $6", message_id, stamp, job, sequence, trace_id, limit+1)
     page = rows[:limit]
@@ -144,7 +159,7 @@ async def latest_summary(pool, message_id):
         "FROM (SELECT id,state,last_error,attempt_id FROM v2_analysis_jobs WHERE message_id=$1 "
         "ORDER BY created_at DESC,id DESC LIMIT 1) current_job "
         "JOIN v2_analysis_jobs j ON j.message_id=$1 JOIN v2_analysis_traces t ON t.job_id=j.id "
-        "WHERE j.message_id=$1 AND t.trace_kind='system_review_result' "
+        "WHERE j.message_id=$1 AND t.trace_kind='system_review_result' AND " + RAW_AVAILABLE_SQL + " "
         "ORDER BY j.created_at DESC,j.id DESC,t.sequence_no DESC,t.id DESC LIMIT 1", message_id)
     return trace_projection(row, message_id) if row else None
 
@@ -157,9 +172,9 @@ async def latest_model_result(pool, message_id):
     """
     row = await pool.fetchrow(
         "SELECT t.id,j.id AS review_id,j.state,j.last_error,t.sequence_no,t.trace_kind,t.payload,t.created_at "
-        "FROM (SELECT id,state,last_error,attempt_id FROM v2_analysis_jobs WHERE message_id=$1 "
+        "FROM (SELECT id,message_id,state,last_error,attempt_id FROM v2_analysis_jobs WHERE message_id=$1 "
         "ORDER BY created_at DESC,id DESC LIMIT 1) j JOIN v2_analysis_traces t ON t.job_id=j.id "
-        "WHERE t.trace_kind='hermes_result' AND t.payload->>'attempt_id'=j.attempt_id::text "
+        "WHERE t.trace_kind='hermes_result' AND t.payload->>'attempt_id'=j.attempt_id::text AND " + RAW_AVAILABLE_SQL + " "
         "ORDER BY t.sequence_no DESC,t.id DESC LIMIT 1", message_id)
     return trace_projection(row, message_id) if row else None
 
@@ -184,7 +199,8 @@ async def signal_page(pool, request, actor, message_id, *, context='user', limit
 async def detail(pool, request, actor, message, *, context='user'):
     traces = await trace_page(pool, request, actor, message['id'], context=context)
     signals = await signal_page(pool, request, actor, message['id'], context=context)
-    if not traces['items']:
+    expired = raw_content_expired(dict(message))
+    if not traces['items'] and not expired:
         pending = await pool.fetchrow('SELECT id AS review_id,state,last_error,created_at FROM v2_analysis_jobs '
             'WHERE message_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1', message['id'])
         if pending:
@@ -192,8 +208,8 @@ async def detail(pool, request, actor, message, *, context='user'):
                                 'payload': {'note': '审核尚未保存轨迹，原文继续保留'}}]
     return {'message': message_projection(dict(message), admin=context=='admin', request=request, actor=actor), 'analysis': traces['items'],
             'analysis_next_cursor': traces['next_cursor'], 'analysis_has_more': traces['has_more'],
-            'system_summary': await latest_summary(pool, message['id']),
-            'latest_model_result': await latest_model_result(pool, message['id']),
+            'system_summary': None if expired else await latest_summary(pool, message['id']),
+            'latest_model_result': None if expired else await latest_model_result(pool, message['id']),
             'signals': signals['items'], 'signals_next_cursor': signals['next_cursor'],
             'signals_has_more': signals['has_more'], 'page_size': 30}
 
@@ -201,7 +217,8 @@ async def detail(pool, request, actor, message, *, context='user'):
 async def tool_response(pool, message_id, trace_id):
     row = await pool.fetchrow(
         "SELECT t.job_id,t.trace_kind,t.payload FROM v2_analysis_traces t JOIN v2_analysis_jobs j ON j.id=t.job_id "
-        "WHERE t.id=$1 AND j.message_id=$2 AND t.trace_kind=ANY($3::text[])", trace_id, message_id, list(TOOL_KINDS))
+        "WHERE t.id=$1 AND j.message_id=$2 AND t.trace_kind=ANY($3::text[]) AND " + RAW_AVAILABLE_SQL,
+        trace_id, message_id, list(TOOL_KINDS))
     if not row:
         raise private_error(404, '完整工具记录不存在')
     manifest = (row['payload'] or {}).get('response_snapshot')
