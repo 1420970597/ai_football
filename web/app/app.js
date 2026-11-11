@@ -196,8 +196,11 @@ function route(
     renderDates();
     loadMatches();
     loadLeagues();
-    loadManualBet();
-    accountHistory.load();
+    // An identity read in flight runs both of these itself once it settles.
+    if (!identityFlight) {
+      loadManualBet();
+      accountHistory.load();
+    }
   }
   if (page === "experts") loadExperts();
   if (page === "membership") loadPlans();
@@ -647,7 +650,8 @@ async function loadExperts() {
         title: "暂无专家记录",
         description: "已启用的可信作者及其真实推荐会显示在这里。",
       });
-    await loadSignals();
+    // Signals render only inside the experts view; route("experts") reloads them.
+    if (state.page === "experts") await loadSignals();
   } catch (error) {
     if (sequence !== state.expertSequence) return;
     if (!state.experts.length) displayError($("#experts-state"), error);
@@ -1212,11 +1216,21 @@ const entitlementName = (k) =>
     expert_live_signals: "滚球专家推荐",
     automatic_betting: "本人账户自动投注",
   })[k] || k;
-async function loadIdentities() {
+let identityFlight = null;
+// Concurrent callers share one in-flight read. `fresh` (after a session
+// change) starts a new read that supersedes the one still in flight.
+function loadIdentities(fresh = false) {
+  if (identityFlight && !fresh) return identityFlight;
+  const flight = readIdentities(() => identityFlight === flight);
+  return (identityFlight = flight);
+}
+async function readIdentities(current) {
   const results = await Promise.allSettled([
     api("/auth/me"),
     api("/admin/me", { context: "admin" }),
   ]);
+  if (!current()) return identityFlight;
+  identityFlight = null;
   for (const [index, r] of results.entries()) {
     const key = index ? "admin" : "user";
     if (r.status === "fulfilled") state[key] = r.value;
@@ -1802,7 +1816,8 @@ function events() {
         );
         form.reset();
         $("#auth-dialog").close();
-        await loadIdentities();
+        // The routed view awaits this same read instead of issuing its own.
+        const identities = loadIdentities(true);
         toast("登录成功");
         if (state.authTab.startsWith("admin")) route("admin");
         else if (state.pendingDetail) {
@@ -1810,6 +1825,7 @@ function events() {
           state.pendingDetail = null;
           openMessage(pending.id, pending.context);
         } else route("account");
+        await identities;
         loadExperts();
       } catch (error) {
         $("#auth-message").textContent = error.message;
@@ -1822,6 +1838,7 @@ function events() {
       await api("/auth/logout", { method: "POST" });
       state.user = null;
       accountHistory.identify(null);
+      loadIdentities(true);
       loadAccount();
       toast("已退出用户会话");
     } catch (error) {
@@ -1832,6 +1849,7 @@ function events() {
     try {
       await api("/admin/logout", { method: "POST", context: "admin" });
       state.admin = null;
+      loadIdentities(true);
       loadAdmin();
       toast("已退出管理员会话");
     } catch (error) {
@@ -2038,10 +2056,10 @@ initAdmin({ state, loadIdentities, auth, route, openMessage, loadPlans });
 initIdentity({ state, dialog, auth, loadAccount });
 events();
 renderDates();
-loadIdentities().then(() => {
-  if (state.page === "admin") loadAdmin();
-});
-loadExperts();
+loadIdentities();
+// route() below loads the experts and admin views itself; other first screens
+// still need the expert list for the side ranking and expert pickers.
+if (location.hash.slice(1).split("?")[0] !== "experts") loadExperts();
 readRoute();
 $("#header-clock").textContent = dayKey() + " 北京时间";
 setInterval(() => {
