@@ -36,6 +36,11 @@ def normalize_team_name(value: str) -> str:
     return " ".join("".join(chars).split())
 
 
+def compact_chinese_boundaries(value: str) -> str:
+    """Drop layout spacing next to Chinese characters; keep Latin word boundaries."""
+    return re.sub(r'(?<=[\u3400-\u9fff]) +| +(?=[\u3400-\u9fff])', '', value)
+
+
 def _verified_group(value: str, sport: str | None):
     normalized = normalize_team_name(value)
     for group in VERIFIED_TEAM_NAMES:
@@ -115,8 +120,7 @@ def _name_forms(value: str, *, sport: str | None = None) -> set[str]:
     # Mixed-script source labels may insert layout spacing around Chinese
     # characters ("CD 印加" / "CD印加"). Compare the entire identity after
     # removing only those boundaries; keep Latin word and squad boundaries.
-    expanded.update(re.sub(r'(?<=[\u3400-\u9fff]) +| +(?=[\u3400-\u9fff])', '', form)
-                    for form in tuple(expanded))
+    expanded.update(compact_chinese_boundaries(form) for form in tuple(expanded))
     return expanded
 
 

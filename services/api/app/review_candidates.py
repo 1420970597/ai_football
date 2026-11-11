@@ -7,7 +7,8 @@ import re
 from .chinese_names import sql_chinese_fold
 from .competition_names import normalize_competition_name
 from .review_tool_evidence import FIXTURE_FIELDS
-from .team_matching import normalize_team_name, team_search_variants, verified_team_search_variants
+from .team_matching import (compact_chinese_boundaries, normalize_team_name, team_search_variants,
+                            verified_team_search_variants)
 
 _GENERIC_FRAGMENTS = frozenset({
     '青年', '青年队', '联队', '竞技', '体育', '足球', '大学', '城市', '联合',
@@ -71,8 +72,13 @@ async def snapshot_candidates(conn, *, review_id, search_key, phase, team_query,
     verified_patterns = {key: ['%'+name+'%' for name in names] for key, names in verified_variants.items()}
     chinese_source, chinese_target = sql_chinese_fold(' '.join((team_query, competition_term,
         *(name for names in verified_variants.values() for name in names))))
+    # Telegram layouts write "雪兰莪 U20" while the provider stores "雪兰莪U20".
+    # The compact form only widens candidate recall; resolution still compares
+    # the complete identity of both teams, squads and age groups.
+    variants = dict.fromkeys(team_search_variants(team_query, sport=sport))
+    variants.update(dict.fromkeys(compact_chinese_boundaries(value) for value in tuple(variants)))
     args = (review_id, search_key, phase, '%'+team_query.strip().casefold()+'%',
-            ['%'+v+'%' for v in team_search_variants(team_query, sport=sport)],
+            ['%'+v+'%' for v in variants],
             name_source+chinese_source, name_target+chinese_target, team_query.strip().casefold(),
             competition_pattern, from_utc, to_utc, sport, False, verified_patterns)
     count = await conn.fetchval(_INSERT_SNAPSHOT, *args)

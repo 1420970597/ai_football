@@ -39,6 +39,32 @@ class SearchResolutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.pool.fetchval(
             "SELECT count(*) FROM v2_analysis_traces WHERE trace_kind='mcp_resolve_match'"))
 
+    async def test_spaced_age_group_query_recalls_compact_provider_name_without_widening_identity(self):
+        # 生产样本：来源写“雪兰莪 U20”，平台存“雪兰莪U20”；修复前同一场完整检索为零候选。
+        fixture = await self.fixture(home_team='雪兰莪U20', away_team='柔佛达鲁塔克欣C队U20')
+        await self.fixture(2, home_team='雪兰莪', away_team='柔佛达鲁塔克欣')
+        response = await self.post('search_matches', team_query='雪兰莪 U20')
+        self.assertEqual(200, response.status_code, response.text)
+        result = response.json()
+        self.assertTrue(result['search_complete'])
+        self.assertEqual([fixture], [item['id'] for item in result['items']])
+        self.assertNotIn('retrieval_basis', result['items'][0])
+        self.assertEqual(0, await self.bindings())
+        resolved = await self.post('resolve_match', search_key=result['search_key'],
+                                   team_a='雪兰莪 U20', team_b='柔佛达鲁塔克欣C队 U20')
+        self.assertEqual(200, resolved.status_code, resolved.text)
+        self.assertTrue(resolved.json()['resolved'])
+        self.assertEqual(fixture, resolved.json()['fixture']['id'])
+        self.assertEqual(1, await self.bindings())
+
+    async def test_spaced_query_recall_never_binds_adult_side_or_wrong_opponent(self):
+        await self.fixture(home_team='雪兰莪U20', away_team='柔佛达鲁塔克欣C队U20')
+        response = await self.post('search_matches', team_query='雪兰莪 U20',
+                                   team_a='雪兰莪 U21', team_b='柔佛达鲁塔克欣C队 U21')
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertFalse(response.json()['resolution']['resolved'])
+        self.assertEqual(0, await self.bindings())
+
     async def test_mixed_name_spacing_still_requires_last_page_and_unique_fixture(self):
         await self.fixture(home_team='CD印加', away_team='梅塔潘')
         await self.fixture(2, home_team='CD 印加', away_team='梅塔潘')
