@@ -15,7 +15,10 @@ try{
   page.on('pageerror',e=>errors.push(e.name));
   page.on('response',r=>{if(new URL(r.url()).pathname==='/api/v1/public/match-summaries')summaryResponses.push({status:r.status()});});
   const facts=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/public/matches');
-  const start=Date.now();await page.goto(target+'/#scores',{waitUntil:'domcontentloaded'});
+  // scope=all is the path this test covers: rows start with a placeholder and are
+  // filled by /match-summaries. The default scope=recommended draws the odds cell
+  // from expert signals and never requests summaries, so it cannot show this race.
+  const start=Date.now();await page.goto(target+'/#scores?scope=all',{waitUntil:'domcontentloaded'});
   assert.equal((await facts).status(),200);
   await page.locator('#matches-list .match-row').first().waitFor();
   const ids=await page.locator('#matches-list .match-row').evaluateAll(rs=>rs.map(r=>r.dataset.fixture));
