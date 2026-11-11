@@ -110,7 +110,7 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         for index in range(31):
             platform_id = str(1000 + index)
             member_id = 1000 + index
-            body = self.event(version=f"historical-{index}", days_ago=3, media=True)
+            body = self.event(version=f"historical-{index}", days_ago=2, media=True)
             body.update(platform_message_id=platform_id, member_message_ids=[member_id])
             body['media_manifest'][0]['message_id'] = member_id
             response = await self.post(body)
@@ -172,7 +172,7 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], (await self.client.get("/internal/telegram/pending")).json()["items"])
 
     async def test_historical_ready_message_is_preserved_without_automatic_model_job(self):
-        body = self.event(days_ago=3, media=True)
+        body = self.event(days_ago=2, media=True)
         body.update(media_state='ready', media_objects=[{
             'object_key':'telegram/test/history-image', 'mime_type':'image/jpeg',
             'sha256':'a'*64, 'bytes':100,
@@ -192,6 +192,25 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         repeated = await self.post(body)
         self.assertEqual(response.json()['message_id'], repeated.json()['message_id'])
         self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
+
+    async def test_backfill_beyond_three_days_cannot_restore_original_or_media(self):
+        body = self.event(days_ago=4, media=True)
+        body.update(media_state='ready',media_objects=[{
+            'object_key':'v2/telegram/messages/chat/old/hash','mime_type':'image/jpeg',
+            'sha256':'a'*64,'bytes':100,
+        }])
+        response=await self.post(body)
+        self.assertEqual(200,response.status_code,response.text)
+        message=await self.pool.fetchrow('SELECT raw_text,media_objects,raw_content_expired_at FROM v2_expert_messages')
+        self.assertEqual('',message['raw_text'])
+        self.assertEqual([],message['media_objects'])
+        self.assertIsNotNone(message['raw_content_expired_at'])
+        event=await self.pool.fetchrow('SELECT content,media_objects FROM v2_telegram_events')
+        self.assertEqual(({},[]),tuple(event))
+        job=await self.pool.fetchrow('SELECT state,last_error FROM v2_analysis_jobs')
+        self.assertEqual(('failed','raw_content_expired'),tuple(job))
+        self.assertEqual([], (await self.client.get('/internal/telegram/pending')).json()['items'])
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_raw_retention_media'))
 
     async def test_future_timestamp_is_preserved_but_never_claimed_as_live(self):
         body = self.event(minutes=30)

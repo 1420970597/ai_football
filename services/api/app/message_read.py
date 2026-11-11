@@ -36,8 +36,15 @@ async def reader(request, *, admin=False):
 
 def message_projection(row, *, admin=False, request=None, actor=None):
     allowed = ('id', 'raw_text', 'posted_at', 'edited_at', 'revision', 'deleted_at', 'media_state',
-               'reply_context', 'display_nickname', 'source_name', 'created_at', 'last_error', 'source_evidence')
+               'reply_context', 'display_nickname', 'source_name', 'created_at', 'last_error', 'source_evidence',
+               'raw_content_expired_at')
     result = {key: trace_payload(row[key]) for key in allowed if key in row}
+    if row.get('raw_content_expired_at') or row.get('last_error') == 'raw_content_expired':
+        result['raw_text'] = '原文已按三天留存策略清除；解析后的专家决策继续保存。'
+        result['reply_context'] = {}
+        result['media_objects'] = []
+        result['raw_content_expired'] = True
+        return result
     root = '/api/v1/admin/telegram/messages/' if admin else '/api/v1/public/messages/'
     result['media_objects'] = []
     for index, media in enumerate(row.get('media_objects') or []):

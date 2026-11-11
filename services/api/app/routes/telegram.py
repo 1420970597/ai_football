@@ -968,6 +968,9 @@ async def media_orphans(body: MediaOrphansInput, request: Request):
             "ORDER BY c.object_key,c.updated_at LIMIT $3",
             body.owner, body.older_than_hours, body.limit,
         )
+        if len(rows) < body.limit:
+            from ..retention_media import claim_expired_media
+            rows = list(rows) + list(await claim_expired_media(conn, body.owner, body.limit-len(rows)))
     return {"items": [dict(row) for row in rows], "state": "ready"}
 
 
@@ -991,7 +994,9 @@ async def acknowledge_media_orphans(body: MediaOrphansAckInput, request: Request
                 "WHERE obj->>'object_key'=ANY($2::text[]))",
                 body.owner, keys,
             )
-    return {"acknowledged": int(result.rsplit(" ", 1)[-1]), "object_keys": len(keys)}
+            from ..retention_media import acknowledge_expired_media
+            retired = await acknowledge_expired_media(conn, body.owner, keys)
+    return {"acknowledged": int(result.rsplit(" ", 1)[-1]), "object_keys": len(keys), "retention_reclaimed": retired}
 
 
 @router.post("/internal/telegram/observed")

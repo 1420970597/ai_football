@@ -99,7 +99,7 @@ async def match_summaries(request: Request, fixture_ids: list[str] = Query(min_l
         raise HTTPException(422, '比赛标识无效')
     identifiers = list(dict.fromkeys(fixture_ids))
     rows = await database.current_pool().fetch(
-        'SELECT id,phase FROM v2_fixtures WHERE id=ANY($1::text[])', identifiers)
+        'SELECT id,phase FROM v2_fixtures WHERE id=ANY($1::text[]) AND decision_context_only_at IS NULL', identifiers)
     phases = {row['id']: row['phase'] for row in rows}
     summaries = await _quote_summaries(request, [identifier for identifier in identifiers if identifier in phases])
     return {'items': [
@@ -127,7 +127,7 @@ async def matches(
     include_markets: bool = True,
     recommended_only: bool = False,
 ):
-    clauses: list[str] = []
+    clauses: list[str] = ['decision_context_only_at IS NULL']
     args: list[object] = []
 
     def bind(value: object) -> str:
@@ -213,7 +213,8 @@ async def _match_markets(fixture_id: str, request: Request, phase: str, *, curso
             raise HTTPException(400, '盘口分页游标无效') from None
     rows = await database.current_pool().fetch(
         "SELECT id AS quote_id,market_id,market_name,period,market_kind,line,selection,price,status,is_main,score_basis,source_updated_at,received_at "
-        "FROM v2_current_quotes WHERE fixture_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT $3",
+        "FROM v2_current_quotes WHERE fixture_id=$1 AND EXISTS(SELECT 1 FROM v2_fixtures f WHERE f.id=$1 AND f.decision_context_only_at IS NULL) "
+        "AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT $3",
         fixture_id, after, page_size + 1,
     )
     items = rows[:page_size]
@@ -310,7 +311,7 @@ async def signal_detail(signal_id: str, request: Request):
     except ValueError:
         raise message_read.private_error(404, "记录不存在") from None
     row = await database.current_pool().fetchrow(
-        "SELECT s.*,f.phase AS fixture_phase,f.match_state,e.display_nickname,m.raw_text,m.media_objects,m.revision AS message_revision,m.posted_at,m.source_id,j.id AS job_id,j.state AS job_state "
+        "SELECT s.*,f.phase AS fixture_phase,f.match_state,e.display_nickname,m.raw_text,m.media_objects,m.raw_content_expired_at,m.revision AS message_revision,m.posted_at,m.source_id,j.id AS job_id,j.state AS job_state "
         "FROM v2_expert_signals s JOIN v2_experts e ON e.id=s.expert_id "
         "JOIN v2_fixtures f ON f.id=s.fixture_id "
         "JOIN v2_expert_messages m ON m.id=s.message_id LEFT JOIN LATERAL(SELECT id,state FROM v2_analysis_jobs "
@@ -320,6 +321,9 @@ async def signal_detail(signal_id: str, request: Request):
     if not row:
         raise message_read.private_error(404, "记录不存在")
     item = line_projection(row)
+    if item.get('raw_content_expired_at'):
+        item['raw_text'] = '原文已按三天留存策略清除；解析后的专家决策继续保存。'
+        item['raw_content_expired'] = True
     item['media_objects'] = message_read.message_projection({'id': item['message_id'], 'revision': item['message_revision'],
         'media_objects': item.get('media_objects')}, request=request, actor=actor)['media_objects']
     page = await message_read.trace_page(database.current_pool(), request, actor, item['message_id'])

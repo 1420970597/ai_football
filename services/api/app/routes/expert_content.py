@@ -32,7 +32,7 @@ async def leagues(match_date: date | None = Query(default=None, alias='date'),
     start = datetime.combine(match_date, time.min, zone).astimezone(timezone.utc) if match_date else None
     end = datetime.combine(match_date + timedelta(days=1), time.min, zone).astimezone(timezone.utc) if match_date else None
     rows = await database.current_pool().fetch(
-        "SELECT competition_id,competition_name,COUNT(*) AS match_count FROM v2_fixtures WHERE sport=$1 "
+        "SELECT competition_id,competition_name,COUNT(*) AS match_count FROM v2_fixtures WHERE sport=$1 AND decision_context_only_at IS NULL "
         "AND ($2='all' OR phase=$2) AND ($3::timestamptz IS NULL OR kickoff_at >= $3) "
         "AND ($4::timestamptz IS NULL OR kickoff_at < $4) "
         "AND ($3::timestamptz IS NOT NULL OR phase IN ('live','scheduled')) "
@@ -64,7 +64,10 @@ async def require_history(request: Request):
 
 
 def media_links(message: dict, request, actor):
-    message['media_objects'] = message_read.message_projection(message, request=request, actor=actor)['media_objects']
+    projection = message_read.message_projection(message, request=request, actor=actor)
+    message['media_objects'] = projection['media_objects']
+    if projection.get('raw_content_expired'):
+        message.update(raw_text=projection['raw_text'], raw_content_expired=True, reply_context={})
     return message
 
 
@@ -79,7 +82,7 @@ async def expert_messages(expert_id: uuid.UUID, request: Request, cursor: str | 
     except ValueError:
         raise HTTPException(400, '消息游标无效') from None
     rows = await database.current_pool().fetch(
-        "SELECT m.id,m.raw_text,m.media_objects,m.media_state,m.posted_at,m.edited_at,m.revision,m.deleted_at,"
+        "SELECT m.id,m.raw_text,m.media_objects,m.media_state,m.posted_at,m.edited_at,m.revision,m.deleted_at,m.raw_content_expired_at,"
         "e.display_nickname,j.state AS analysis_state,j.last_error AS analysis_error "
         "FROM v2_expert_messages m JOIN v2_experts e ON e.id=m.expert_id "
         "LEFT JOIN LATERAL(SELECT state,last_error FROM v2_analysis_jobs WHERE message_id=m.id ORDER BY created_at DESC LIMIT 1) j ON TRUE "

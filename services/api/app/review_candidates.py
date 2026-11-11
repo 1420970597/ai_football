@@ -24,7 +24,7 @@ _INSERT_SNAPSHOT = (
     + " || CASE WHEN $13::boolean THEN jsonb_build_object('retrieval_basis','source_fragment_candidate') "
     + "WHEN $4='%%' THEN jsonb_build_object('retrieval_basis','competition_time_candidate') "
     "ELSE '{}'::jsonb END FROM v2_fixtures f "
-    "WHERE f.phase IN ('live','scheduled','finished','cancelled') AND ($3='all' OR f.phase=$3) "
+    "WHERE f.decision_context_only_at IS NULL AND f.phase IN ('live','scheduled','finished','cancelled') AND ($3='all' OR f.phase=$3) "
     "AND (lower(f.home_team) LIKE $4 OR lower(f.away_team) LIKE $4 "
     "OR regexp_replace(translate(lower(f.home_team),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]) "
     "OR regexp_replace(translate(lower(f.away_team),$6,$7),'[^[:alnum:]]+',' ','g') LIKE ANY($5::text[]) "
