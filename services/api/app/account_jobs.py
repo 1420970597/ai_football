@@ -29,7 +29,9 @@ def public_task(row, binding_revision):
     item['current_binding'] = item['binding_revision'] == binding_revision
     category = item.get('last_error') or ''
     item['recovery_action'] = None
-    if (category == 'app_login_rejected' and code == '6026') or (details.get('device_authorization') and item['state'] in {'failed', 'rejected'}):
+    if category == 'order_reconciliation_partial' and item['state'] == 'succeeded':
+        item['message'] = '余额校验已成功；部分历史订单暂未核对，系统将继续查单，相关未结本金仍计入敞口。'
+    elif (category == 'app_login_rejected' and code == '6026') or (details.get('device_authorization') and item['state'] in {'failed', 'rejected'}):
         item['message'] = '乐鱼新设备身份验证' + (f'（{code}）' if code else '') + '未完成；请在常用设备的乐鱼 App 获取授权安全码，在下方提交。安全码过期或错误时请获取新码，不要重新绑定。'
         item['recovery_action'] = 'provider_identity_verification'
     elif category == 'app_login_rejected':
