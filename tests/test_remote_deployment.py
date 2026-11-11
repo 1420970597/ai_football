@@ -152,6 +152,17 @@ class FakeAPI(BaseHTTPRequestHandler):
 
 
 class RemoteTransportTests(unittest.TestCase):
+    def test_history_receipt_is_executor_only_and_exact(self):
+        path='/internal/executor/jobs/11111111-2222-4333-8444-555555555555/history/finish'
+        self.assertTrue(permitted('POST',path,'Bearer '+TOKENS['executor'],TOKENS))
+        self.assertFalse(permitted('POST',path,'Bearer '+TOKENS['collector'],TOKENS))
+        self.assertFalse(permitted('GET',path,'Bearer '+TOKENS['executor'],TOKENS))
+        for invalid in (path+'/',path+'?other=1',path+'/anything',path.replace('history','%68istory'),path.replace('history','../history')):
+            self.assertFalse(permitted('POST',invalid,'Bearer '+TOKENS['executor'],TOKENS))
+        body=json.dumps({'attempt_id':'11111111-2222-4333-8444-555555555555','complete':True,'items':[]}).encode()
+        self.assertEqual(200,self.request('POST',path,body,token='executor'))
+        self.assertEqual([('POST',path,body)],self.upstream.calls)
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.path=str(Path(self.temp.name)/'api.sock')
         self.upstream=UnixServer(self.path,FakeAPI);self.upstream.calls=[];self.upstream.response_status=200;self.upstream.response_headers={}

@@ -25,6 +25,7 @@ COLLECTOR_ROUTES = {
 }
 EXECUTOR_ROUTES = {
     'POST': (r'/internal/executor/(claim|dispatch)', rf'/internal/executor/jobs/{UUID}/(finish|renewal/claim|renewal/finish)',
+             rf'/internal/executor/jobs/{UUID}/history/finish',
              rf'/internal/executor/orders/{UUID}/(authorize|finish)'),
     'PUT': (rf'/internal/executor/jobs/{UUID}/session',),
 }
