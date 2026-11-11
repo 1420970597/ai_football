@@ -355,7 +355,7 @@ function renderMatches() {
   const items = currentMatches();
   $("#matches-list").innerHTML = items
     .map((m) => {
-      return `<article class="match-row" data-fixture="${esc(m.id)}" data-sport="${esc(m.sport || state.sport)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${scoreMarkup(m)}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${oddsCellMarkup(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button>${state.matchScope === 'recommended' ? matchRecommendationMarkup(m) : ''}</article>`;
+      return `<article class="match-row" data-fixture="${esc(m.id)}" data-sport="${esc(m.sport || state.sport)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${scoreMarkup(m)}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${oddsCellMarkup(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">详情</button>${state.matchScope === 'recommended' ? matchRecommendationMarkup(m) : ''}</article>`;
     })
     .join("");
   $$('#matches-list > .match-row').forEach((row, index) => {
@@ -383,7 +383,13 @@ function updateMatchServiceState() {
     $('#matches-notice').hidden = true;
     return;
   }
-  const stale = state.matches.filter((m) => m.markets?.length && !m.quote_fresh).length;
+  // Finished and cancelled matches have no live quote to be stale, and the API
+  // reports quote_fresh=false for them by design. Counting them told a reader
+  // that all fifty finished matches on screen had expired quotes, which reads
+  // as a source outage rather than as a normal end of match.
+  const stale = state.matches.filter(
+    (m) => ["scheduled", "live"].includes(m.phase) && m.markets?.length && !m.quote_fresh,
+  ).length;
   const pending = state.matches.filter((m) => m.markets_status === "loading").length;
   const unavailable = state.matches.filter((m) => m.markets_status === "unavailable").length;
   $("#service-state").textContent = `赛事服务已响应 · ${state.matches.length} 场已载入${pending ? " · 盘口加载中 " + pending + " 场" : ""}${unavailable ? " · 盘口暂时不可用 " + unavailable + " 场" : ""}${stale ? " · " + stale + " 场报价过期或时间未知" : ""}`;

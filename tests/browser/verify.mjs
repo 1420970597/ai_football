@@ -345,8 +345,11 @@ async function setup({
         const fixture = identifier.startsWith("long-")
           ? fixtures[Number(identifier.slice(5)) % fixtures.length]
           : fixtures.find((f) => f.id === identifier);
+        // Same rule as the real route: a finished match reports quote_fresh=false
+        // because it has no live quote to expire, not because its source is stale.
         return {fixture_id: identifier, phase: fixture.phase, markets: [{...quote, price}],
-          quote_fresh: ["live", "scheduled"].includes(fixture.phase), markets_status: "loaded"};
+          quote_fresh: ["live", "scheduled"].includes(fixture.phase) && identifier !== mode.staleQuote,
+          markets_status: "loaded"};
       }), missing_fixture_ids: [], server_time: "2026-10-26T11:15:00Z" });
     }
     if (p === "/public/matches") {
@@ -768,11 +771,57 @@ await test("桌面比分密度、状态查询、日期与详情", async () => {
   );
   await page.locator('.score-tabs [data-phase="all"]').click();
   await page.waitForSelector(".match-row");
+  // The header names the last column "详情"; a one-character label there made
+  // the cell unreadable and, once widened, unpredictable at phone width.
+  assert.equal(
+    (await page.locator(".detail-button").first().innerText()).trim(),
+    "详情",
+  );
+  assert.equal(
+    (await page
+      .locator(".score-table-head > span")
+      .last()
+      .innerText()).trim(),
+    "详情",
+  );
   await page.locator(".detail-button").first().click();
   await page.waitForSelector(".market-table");
   assert.match(await page.locator("#dialog-content").innerText(), /q-system-1/);
   assert.match(await page.locator("#dialog-content").innerText(), /过期/);
   await page.keyboard.press("Escape");
+  await context.close();
+});
+await test("完场比赛不计入报价过期告警，只有赛程中的比赛才算", async () => {
+  const { page, context, mode } = await setup();
+  await page.locator('[data-match-scope="all"]').click();
+  // The fixture's only finished match is alone on the "finished" tab, so a stale
+  // count above zero on that tab can only come from treating it as stale.
+  await page.locator('.score-tabs [data-phase="finished"]').click();
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 1);
+  assert.equal(await page.locator('.match-phase').innerText(), '完场');
+  const finishedNotice = await page.locator("#matches-notice").innerText();
+  assert.ok(
+    !finishedNotice.includes("报价过期"),
+    `完场比赛不应报报价过期：${finishedNotice}`,
+  );
+  assert.ok(
+    !(await page.locator("#service-state").innerText()).includes("报价过期"),
+  );
+  // A single stale live quote must still be reported, so the fix cannot hide a real one.
+  // The freshness only comes from the summaries route, so this half has to run in
+  // the shape that requests it: rows first, quotes filled in afterwards.
+  mode.staleQuote = "match-0";
+  mode.asyncSummaries = true;
+  await page.locator('.score-tabs [data-phase="live"]').click();
+  await page.waitForFunction(
+    () => document.querySelector('#matches-notice').textContent.includes('报价过期'),
+    null,
+    { timeout: 10000 },
+  );
+  assert.match(
+    await page.locator("#service-state").innerText(),
+    /1 场报价过期或时间未知/,
+  );
   await context.close();
 });
 await test("手机无横向溢出、关注与弹层", async () => {

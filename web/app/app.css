@@ -461,7 +461,7 @@ h3 {
   display: grid;
   grid-template-columns:
     65px 45px 45px minmax(75px, 1fr) 48px minmax(75px, 1fr)
-    116px 32px;
+    116px 40px;
   align-items: center;
   text-align: center;
 }
@@ -1826,7 +1826,7 @@ dialog::backdrop {
   .match-row {
     grid-template-columns:
       43px 0 0 minmax(78px, 1fr) 49px minmax(78px, 1fr)
-      0 26px;
+      0 40px;
     min-height: 78px;
     padding: 16px 4px 4px;
     row-gap: 2px;
@@ -2194,7 +2194,7 @@ dialog::backdrop {
   .main-layout[data-page="scores"] .match-row {
     grid-template-columns:
       110px 42px 40px minmax(78px, 1fr) 46px minmax(78px, 1fr)
-      130px 26px;
+      130px 40px;
   }
 }
 .league-label {
@@ -2344,8 +2344,11 @@ dialog {
     padding-block: 8px;
   }
   .detail-button {
-    width: 26px;
+    /* The label is "详情", so the column has to hold two characters; a 26px
+       box clipped it to a single glyph in the live render. */
+    width: 40px;
     min-height: 40px;
+    font-size: 12px;
   }
   html {
     scroll-padding-bottom: calc(80px + env(safe-area-inset-bottom));
@@ -2467,7 +2470,7 @@ dialog {
 }
 @media (max-width: 720px) {
   .match-row[data-sport="basketball"] {
-    grid-template-columns: 43px 0 0 minmax(60px, 1fr) 84px minmax(60px, 1fr) 0 26px;
+    grid-template-columns: 43px 0 0 minmax(60px, 1fr) 84px minmax(60px, 1fr) 0 40px;
   }
   .match-row[data-sport="basketball"] .score-button {
     font-size: 16px;

@@ -19,7 +19,7 @@
         "height": 960
       },
       "file": "scores-1440.png",
-      "sha256": "62e773437e64c670eafcc398bc591a5c55693191b66e9c1ac43342588be4ad66",
+      "sha256": "e503a60e1702c54e1af424733ebe70f6ccc87a797977e3702ffd26a3f9c81c3f",
       "status": "baseline_written"
     },
     {
@@ -29,7 +29,7 @@
         "height": 960
       },
       "file": "schedule-1440.png",
-      "sha256": "f5637881322f32162323deb726f07c592b34969a7ac3356ffd1e55b656720e58",
+      "sha256": "fde476c5595be98c97b5e3a34f813726db7da94f0381bc8d936db24261f5e32b",
       "status": "baseline_written"
     },
     {
@@ -89,7 +89,7 @@
         "height": 844
       },
       "file": "scores-390.png",
-      "sha256": "496f30530f2a238c09c1a0d444ab42e0fda0e52ece1c66d18240a43dc59b804b",
+      "sha256": "22b42e36b5c3f461c31985aa8b3959b1344473f214ba088242670cbc341110f7",
       "status": "baseline_written"
     },
     {
@@ -99,7 +99,7 @@
         "height": 844
       },
       "file": "schedule-390.png",
-      "sha256": "d4f29b5a8daf42256513bc4db092dc1c915439901c0c6c22690e451544d680c2",
+      "sha256": "551d2da1aba02cb7c52e03ead4033e87b4f6b77420a0e1c75f29cf960d3719fb",
       "status": "baseline_written"
     },
     {
@@ -149,7 +149,7 @@
         "height": 844
       },
       "file": "match-detail-390.png",
-      "sha256": "817440364a40be39169c5d068404e5794ea95b5663a1f9a188f1de05794a4b49",
+      "sha256": "b1473ea4d7cf03dd3e6275dcd40d35e60837e27dc9c866cbd98f53e913543d62",
       "status": "baseline_written"
     }
   ]
