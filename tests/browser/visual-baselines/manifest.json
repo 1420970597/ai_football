@@ -19,7 +19,7 @@
         "height": 960
       },
       "file": "scores-1440.png",
-      "sha256": "8eba7eb4d4900bbe02f1b48a6d89b001d0a9b32e8ccbf99069e72f02afdda9d6",
+      "sha256": "94a2f984ecc5639e366920cf69a37f50fb605ac467caf5023955b4cb6531eb40",
       "status": "baseline_written"
     },
     {
@@ -29,7 +29,7 @@
         "height": 960
       },
       "file": "schedule-1440.png",
-      "sha256": "d993ca67c84237605341d7dab91f565606d528625a89bfb0c444d0fb437a364c",
+      "sha256": "de5bb46eb8187b7811526714ab08fc0b8d7109b1249baea67a7c79758d9636c3",
       "status": "baseline_written"
     },
     {
@@ -39,7 +39,7 @@
         "height": 960
       },
       "file": "experts-1440.png",
-      "sha256": "5694f547cccf314c93db28f20104021b35eaba5b7fd8f6b24a0c223aa3625294",
+      "sha256": "d7363913c338f0a7cdbe2ab23d5f1e2732a500fa7f1a55220569f315eaaff393",
       "status": "baseline_written"
     },
     {
@@ -49,7 +49,7 @@
         "height": 960
       },
       "file": "membership-1440.png",
-      "sha256": "c8630c37571f765ca951c42468d78ccb431756d3348ec0f2f6228fda2edc25ac",
+      "sha256": "54855fb5a1222e03084e74dd5a420499bc6a9a9e0361b464872e0060dcf90d11",
       "status": "baseline_written"
     },
     {
@@ -59,7 +59,7 @@
         "height": 960
       },
       "file": "account-guest-1440.png",
-      "sha256": "a9d9f83e985b2ed8d0dd34532a813fbed3a23ddb93a292884bbc8b464378ddfd",
+      "sha256": "89c2ca38415f2ca289e883f4b935b8a21d3e0096a4757486c34a24c3a72cf6bb",
       "status": "baseline_written"
     },
     {
@@ -79,7 +79,7 @@
         "height": 960
       },
       "file": "match-detail-1440.png",
-      "sha256": "ed9fcadb388414553a1a4a7d4c59d75f28edb3e2d6c645eb067f18293e8f4c1e",
+      "sha256": "d29f0cb2a70bb88df85d5e085f1a4e51b503a530985b5ba7609f7e1733e6256a",
       "status": "baseline_written"
     },
     {
@@ -89,7 +89,7 @@
         "height": 844
       },
       "file": "scores-390.png",
-      "sha256": "1313bcc13cd35b7f28f750aff89d10be7057305148ac4189b09d01196d165665",
+      "sha256": "81865af71eedc673625384dce4b990b79b3b296616762510840e4ef3ee1f1cf7",
       "status": "baseline_written"
     },
     {
@@ -99,7 +99,7 @@
         "height": 844
       },
       "file": "schedule-390.png",
-      "sha256": "826b351d9beb5a61430c4c2cac694be5fc7b456a6f83a7d4ef3ec4ab8761b460",
+      "sha256": "e48aeec9e3fed8d1e812668146f25b72d6b6ffa190551a86b6d988cdcb794d73",
       "status": "baseline_written"
     },
     {
@@ -109,7 +109,7 @@
         "height": 844
       },
       "file": "experts-390.png",
-      "sha256": "2155638aec6ba5ea32e6497d9a4b5c28f30911f50a5648ae837e894913b300d9",
+      "sha256": "4e80621b6de61099a884eeb7a0796cfc912f8b957d2136a3a62946c521d3d192",
       "status": "baseline_written"
     },
     {
@@ -149,7 +149,7 @@
         "height": 844
       },
       "file": "match-detail-390.png",
-      "sha256": "53c654c0bff07473d0c7a9643beb3c6f8bdf6e7d7636eca3bc2ddd1e2ba6b5b4",
+      "sha256": "79306640a4a52e2efbd2ac98f3f5f0e9a8b5c9c9c9806cf1ab8266b7341d6d0d",
       "status": "baseline_written"
     }
   ]

@@ -1,0 +1,248 @@
+{
+  "updated_at": "2026-11-11T04:10:04.034679+00:00",
+  "phase": "storage migration verified",
+  "implementation_commits": [
+    "422ade060de8398af777c19eed82291a92b34ca4",
+    "158e805dbd37bdae82b2cf191e455904be1ebc11",
+    "b74a58344f83d565eb00d4c15bab49007d34c489"
+  ],
+  "database": {
+    "location": "local Docker PostgreSQL",
+    "version": "16.15",
+    "volume": "ai-football-v2-local-pgdata",
+    "host_port_published": false,
+    "transport": "verify-full TLS",
+    "remote_original": "recovery source only; not deleted",
+    "remote_object_storage": "unchanged"
+  },
+  "retention": {
+    "raw_hours": 72,
+    "read_deadline_hours": 72,
+    "physical_cycle_deadline_seconds": 25,
+    "cycle_interval_seconds": 2,
+    "permanent": "parsed decisions, saved statistics and required normalized context/evidence; no TTL on permanent ledgers",
+    "future_fixtures": "kept until their historical cutoff; not expired merely because collected earlier",
+    "recovery_snapshots": "protected migration snapshots excluded from online reads and online raw TTL; no old remote database deletion"
+  },
+  "source_restore": {
+    "tables": 50,
+    "rows": 6547177,
+    "canonical_copy_differences": [],
+    "verified": true
+  },
+  "initial_redaction": {
+    "counts": {
+      "messages": 86561,
+      "events": 86561,
+      "fixtures": 53896,
+      "jobs": 319,
+      "traces": 148054
+    },
+    "milliseconds": 37329,
+    "permanent_tables_checked": 13,
+    "permanent_data_unchanged": true
+  },
+  "local_recovery": {
+    "tables": 53,
+    "rows": 2625940,
+    "canonical_copy_differences": [],
+    "verified": true,
+    "isolated_network": "none",
+    "production_writes": false
+  },
+  "backup_checksums_sha256": {
+    "final-v2.dump": "b4bca0cece6fc92b5fd06353881a140b4071da3b94fcee5da6fcf269097ddd7f",
+    "local-postcutover.dump": "24f99ff1b7f5a9b087d3f9222c4cd942708956ace74b135170255e7ef2806269"
+  },
+  "role_audit": {
+    "unexpected_writable_tables": [],
+    "retention_role_attributes": {
+      "rolsuper": false,
+      "rolcreaterole": false,
+      "rolcreatedb": false,
+      "rolreplication": false
+    }
+  },
+  "client_connections": {
+    "api": {
+      "local_database": true,
+      "tls": true,
+      "superuser": false
+    },
+    "review-worker": {
+      "local_database": true,
+      "tls": true,
+      "superuser": false
+    },
+    "local-mcp-api": {
+      "local_database": true,
+      "tls": true,
+      "superuser": false
+    },
+    "raw-retention": {
+      "local_database": true,
+      "tls": true,
+      "superuser": false
+    }
+  },
+  "tests": [
+    {
+      "scope": "latest-image storage, Telegram, manifest and homepage",
+      "tests": 50,
+      "seconds": 87.374,
+      "exit_code": 0,
+      "skipped": 0
+    },
+    {
+      "scope": "message evidence and media grants",
+      "tests": 15,
+      "seconds": 35.601,
+      "exit_code": 0,
+      "skipped": 0
+    }
+  ],
+  "browser": {
+    "runs_after_latest_patch": 1,
+    "checks": 20,
+    "passed": 20,
+    "failed": 0,
+    "production_writes": 0,
+    "viewport_widths": [
+      1440,
+      390
+    ],
+    "evidence_directory": "output/playwright/local-db-20261111-v4"
+  },
+  "api_image": {
+    "tag": "ai-football-api:2.0.0-dev-localdb-history-retention-20261111-04",
+    "id": "sha256:41e3bcd68791fee18a29ba96e8e872b2e5f33cbeee3cbbc56756495efce99516"
+  },
+  "ci_browser_remedy": {
+    "commit": "83caaa64e816a8db04931b92ca4315966ceda3b9",
+    "original_run": 42953768025,
+    "new_run": 42955408663,
+    "synthetic_delay_ms": 150,
+    "desktop_mobile_checks": 2,
+    "local_exit_code": 0,
+    "new_timeout_or_skipped_assertions": false
+  },
+  "ci_visual_baselines": {
+    "review": {
+      "updated_reviewed_screens": 10,
+      "unchanged_screens": 4,
+      "channel_threshold": 16,
+      "max_changed_ratio": 0.002,
+      "fixture_changed": false
+    },
+    "frozen_screen_comparisons": 14,
+    "local_exit_code": 0,
+    "mutation_guard": {
+      "expected_exit_code": 1,
+      "screens_detecting_mutation": 14,
+      "all_differences_within_header": true,
+      "guard_active": true,
+      "thresholds_unchanged": true,
+      "scope": "synthetic CSS header mutation persists across hash route changes on the same page",
+      "previous_verification": "initial expectation of two changed screens was incorrect; retained in visual-negative-verification.json"
+    },
+    "runtime_ui_changed": false
+  },
+  "ci_final": {
+    "conclusion": "",
+    "head_sha": "83caaa64e816a8db04931b92ca4315966ceda3b9",
+    "jobs": [
+      {
+        "conclusion": "",
+        "name": "backend",
+        "status": "in_progress"
+      },
+      {
+        "conclusion": "success",
+        "name": "android",
+        "status": "completed"
+      },
+      {
+        "conclusion": "failure",
+        "name": "browser",
+        "status": "completed"
+      }
+    ],
+    "run_id": 42955408663,
+    "status": "in_progress"
+  },
+  "remote_retirement": {
+    "old_tools_api": "exited",
+    "active_platform_sessions": 0,
+    "original_database_deleted": false
+  },
+  "observation_windows": [
+    {
+      "started_at": "2026-11-11T03:07:34.923455+00:00",
+      "last_sample_at": "2026-11-11T03:37:34.582791+00:00",
+      "samples": 31,
+      "completed": true,
+      "summary": {
+        "type": "window_complete",
+        "seconds": 1800,
+        "samples": 31,
+        "unhealthy_samples": 1,
+        "scope": "storage and Telegram transport only"
+      },
+      "unhealthy_sample_times": [
+        "2026-11-11T03:26:34.611263+00:00"
+      ],
+      "max_physical_cleanup_lag_seconds": 0,
+      "scope": "database and Telegram transport only; no decision-outcome checks"
+    },
+    {
+      "started_at": "2026-11-11T03:35:32.417347+00:00",
+      "last_sample_at": "2026-11-11T04:05:32.190672+00:00",
+      "samples": 31,
+      "completed": true,
+      "summary": {
+        "type": "window_complete",
+        "seconds": 1800,
+        "samples": 31,
+        "unhealthy_samples": 0,
+        "scope": "storage and Telegram transport only",
+        "physical_cleanup_budget_seconds": 27,
+        "budget_basis": "existing 25-second cycle deadline plus 2-second interval; reads expire at 72 hours"
+      },
+      "unhealthy_sample_times": [],
+      "max_physical_cleanup_lag_seconds": 0.0,
+      "scope": "database and Telegram transport only; no decision-outcome checks"
+    }
+  ],
+  "first_window_failure": {
+    "at": "2026-11-11T03:26:34.611263+00:00",
+    "unexpired_flag_raw_rows": 1,
+    "seconds_past_72h": 3.611,
+    "remedy": "read-time deadline added; original failed observation retained"
+  },
+  "latest_storage_report": {
+    "at": "2026-11-11T04:08:37.263051+00:00",
+    "scope": "storage only",
+    "database_bytes": 3437886487,
+    "tables": 53,
+    "expired_message_content": 0,
+    "expired_event_content": 0,
+    "expired_event_max_lag_seconds": 0.0,
+    "expired_message_max_lag_seconds": 0.0,
+    "expired_full_fixture_projections": 0,
+    "historical_minimal_contexts": 315,
+    "expired_current_quotes": 0,
+    "quote_count_method": "bounded 50-parent reads; concurrent cleanup may reduce totals during report",
+    "queued_media": 0,
+    "retention_status": {
+      "last_completed_at": "2026-11-11 04:08:37.231719+00:00",
+      "last_error_category": null
+    },
+    "tls": true
+  },
+  "open_bug": {
+    "id": "BUG-EXPERT-RESULT-20261111",
+    "status": "user reported; not independently reproduced or repaired",
+    "scope_excluded": "gambling settlement repair and repeated outcome monitoring"
+  },
+  "temporary_recovery_resources": "task-owned recovery container and volume removed after verification"
+}
