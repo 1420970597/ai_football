@@ -378,6 +378,28 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(order_nos=order_nos),self.assertRaises(LeyuError):
                 await self.client.lookup_many(order_nos,begin=self.begin,end=self.end)
 
+    async def test_two_orders_cost_one_history_scan_instead_of_one_per_order(self):
+        for order_no in ('FIRST','OTHER'):
+            await self.client.lookup(order_no,begin=self.begin,end=self.end,max_pages=2)
+        self.assertEqual(4,len(self.requests),'per-order lookups, as the worker issued them before the fix')
+        self.requests.clear()
+        await self.client.lookup_many(['FIRST','OTHER'],begin=self.begin,end=self.end,max_pages=2)
+        self.assertEqual([(0,1),(1,1)],[(body['orderStatus'],body['page']) for body in map(lambda r:json.loads(r.content),self.requests)])
+
+    async def test_lookup_many_page_limit_leaves_every_missing_order_unresolved(self):
+        def pages(request):
+            body=json.loads(request.content)
+            start=(body['page']-1)*100
+            return {'total':250,'records':[{'orderNo':'FIRST' if n==0 else f'O{n}','betAmount':'2'} for n in range(start,start+100)]} \
+                if body['orderStatus']==1 else {'total':0,'records':[]}
+        self.responses[ORDERS_PATH]=pages
+        result=await self.client.lookup_many(['FIRST','LATER'],begin=self.begin,end=self.end,max_pages=2)
+        self.assertEqual(3,len(self.requests))
+        self.assertEqual((True,False),(result['FIRST']['found'],result['LATER']['found']))
+        for item in result.values():
+            self.assertFalse(item['scan_complete'])
+            self.assertFalse(item['absence_proves_rejection'])
+
     async def test_conflicting_target_receipts_never_selected_as_authoritative(self):
         self.responses[ORDERS_PATH] = {"total": 2, "records": [
             {"orderNo": "TARGET", "profitAmount": "1"}, {"orderNo": "TARGET", "profitAmount": "-1"}]}
