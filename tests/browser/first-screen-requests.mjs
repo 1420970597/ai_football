@@ -42,6 +42,8 @@ const history = { status: 'completed', account_id: 'budget-account', binding_rev
   match_count: 0, unsettled_match_count: 0, settled_match_count: 0, association_complete: true, unmapped_order_count: 0, matches: [] };
 
 const once = ['/auth/me', '/admin/me'];
+const icon = '/assets/cc-reference/home_match_vs_icon.png';
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Admin and QR code scripts stay off every first screen that does not need them.
 const lazy = { '/assets/qrcode.js': 0, '/assets/admin.js': 0 };
 // Exact counts per first screen; every other request is still capped at one.
@@ -54,6 +56,10 @@ const scenarios = [
   { name: 'guest-admin', hash: '#admin', expect: { '/public/experts': 1, '/assets/admin.js': 1 } },
   { name: 'user-scores', hash: '#scores', signedIn: true, expect: { '/public/experts': 1, '/accounts/leyu/manual-betting': 1,
     'POST /accounts/history/refresh': 1, '/accounts/history': 0 } },
+  // The match list is rebuilt when manual-betting settings arrive; the row icon must not be fetched again,
+  // whether the rebuild lands while the icon is still in flight or after everything has loaded.
+  { name: 'user-scores-slow-icon', hash: '#scores', signedIn: true, iconDelay: 300, expect: { [icon]: 1, '/accounts/leyu/manual-betting': 1 } },
+  { name: 'user-scores-late-settings', hash: '#scores', signedIn: true, settingsDelay: 700, expect: { [icon]: 1, '/accounts/leyu/manual-betting': 1 } },
   { name: 'user-account', hash: '#account', signedIn: true, expect: { '/public/experts': 1, '/accounts/leyu': 1 } },
   { name: 'sign-in', hash: '#scores', signIn: true, expect: { 'POST /auth/login': 1, '/accounts/leyu': 1, '/public/experts': 1 } },
 ];
@@ -74,10 +80,14 @@ try {
       if (p === '/auth/login') { signedIn = true; return route.fulfill({ json: { user: { id: user.user.id }, csrf_token: 'test-csrf' } }); }
       if (signedIn && p === '/auth/me') return route.fulfill({ json: user });
       if (signedIn && p === '/accounts/leyu') return route.fulfill({ json: account });
-      if (signedIn && p === '/accounts/leyu/manual-betting') return route.fulfill({ json: manualBet });
+      if (signedIn && p === '/accounts/leyu/manual-betting') {
+        if (scenario.settingsDelay) await wait(scenario.settingsDelay);
+        return route.fulfill({ json: manualBet });
+      }
       if (signedIn && p.startsWith('/accounts/history')) return route.fulfill({ json: history });
       return fixtureRoute(route);
     });
+    if (scenario.iconDelay) await page.route('**' + icon, async route => { await wait(scenario.iconDelay); await route.continue(); });
     const settle = async () => { await page.waitForLoadState('networkidle'); await page.waitForTimeout(300); };
     await page.goto('http://127.0.0.1:8080/' + scenario.hash);
     await settle();

@@ -284,7 +284,7 @@ function scoreMarkup(match) {
   const score = hasScore
     ? esc(match.home_score) + " : " + esc(match.away_score ?? "－")
     : match.phase === "scheduled"
-      ? '<img class="match-vs-icon" src="/assets/cc-reference/home_match_vs_icon.png" alt="VS" width="24" height="18">'
+      ? '<img class="match-vs-icon" alt="VS" width="24" height="18">'
       : "－";
   const half = match.sport === "basketball" &&
       match.half_home_score !== null && match.half_home_score !== undefined
@@ -299,6 +299,17 @@ function matchRecommendationMarkup(match) {
     `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div><button class="text-link" data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button><span class="muted">${esc(phases[s.phase] || '阶段未知')} · ${stamp(s.created_at)}</span></div><div class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></div><div class="recommendation-result"><span>推荐时系统赔率 ${decimal(s.recommendation_price)}</span><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button>${stake !== null ? `<button class="small-button manual-bet" data-bet-signal="${esc(s.id)}">实盘买入 ${decimal(stake)}</button>` : ''}</div><small class="muted">报价时间 ${stamp(s.quote_time)}</small></article>`
   ).join('') || '<p class="muted">关联记录已变更，请刷新列表。</p>'}${match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
 }
+const vsIcons = [];
+// Every refresh rebuilds the rows. They adopt the icon nodes already in use,
+// because a fresh <img> can make the browser request the file again.
+function adoptVsIcons() {
+  $$("#matches-list .match-vs-icon").forEach((slot, index) => {
+    const loaded = vsIcons[index];
+    if (loaded && !(loaded.complete && !loaded.naturalWidth)) return slot.replaceWith(loaded);
+    slot.src = "/assets/cc-reference/home_match_vs_icon.png";
+    vsIcons[index] = slot;
+  });
+}
 function renderMatches() {
   const items = currentMatches();
   $("#matches-list").innerHTML = items
@@ -310,6 +321,7 @@ function renderMatches() {
     const fixtureId = items[index].id;
     row.insertAdjacentHTML('beforeend', `<div class="match-account-history" data-account-fixture="${esc(fixtureId)}"${state.user ? '' : ' hidden'}>${accountHistory.matchMarkup(fixtureId)}</div>`);
   });
+  adoptVsIcons();
   $("#fixture-count").textContent =
     state.matches.length + (state.cursor ? "+" : "");
   $("#load-more").hidden = !state.cursor;
