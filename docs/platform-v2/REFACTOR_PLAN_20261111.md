@@ -85,3 +85,25 @@
 
 生产 48 小时按刷新结果拆分 `mcp_list_match_markets` 耗时：触发并完成上游刷新（`written`）433 次，平均 5278 ms、p50 4504 ms；未触发刷新的各类（冷却、筛选无报价、已新鲜等）p50 在 24–632 ms。即读盘 4.6 秒的均值几乎全部是对上游的精确刷新 I/O，不是数据库往返；继续优化要从“何时需要刷新”入手，属于审核时效与证据新鲜度的取舍，不在本次行为保持型重构内。
 
+
+### R5 db-runtime（已合并 `f82a609a`，未发布）
+
+- 迁移 `035_drop_redundant_active_quote_index.sql`：删除 `v2_current_quotes_active_idx`。它与覆盖全部状态的 `v2_current_quotes_fixture_fresh_idx` 键相同，生产 `idx_scan=0`（5608 kB），每次活跃报价更新都白白维护。迁移先断言覆盖索引存在且有效。回滚 SQL 写在迁移头部。
+- `/public/signals`：一次请求内会话只解析一次，数据库往返 6 → 4。
+- `infra/quality/docker-leftovers-inventory.sh`（只读清单）与 `docker-leftovers-cleanup.sh`（默认 dry-run，`--execute` 才删除；保护 `ai-football-v2[-_]*` 与构建器）。
+- 合并结果验证：`feat-r5-merge` 11 个模块 140 项，退出 0。
+- 发布约束：`check_schema` 精确比对迁移集合，含 035 的镜像要求 api、review-worker、local-mcp-api 同批切换。
+- 未实现、留作后续：535 MB 的 `v2_quotes_fixture_summary_idx` 膨胀度量后 `REINDEX CONCURRENTLY`；已完场报价更早回收（改变留存语义）；连接池上限之和（48+24+8）等于 `max_connections=80`，实测在用 13–18 条，未改。
+
+### R1 tests-speed（已合并 `df652323`）
+
+- `tests/dbsupport.py`：每个用例从“已迁移模板库”克隆，不再逐用例顺序应用全部迁移；模板名带迁移集合摘要与创建角色，迁移变化或测试打补丁换旧结构时不会复用错模板。
+- `infra/test/run.sh`：显式子网（默认地址池已满）、依赖未变时复用镜像、可按模块运行、可选全主机串行锁、最后一行 `exit=N` 且作为退出码；`tests/browser/check.sh` 同样改用显式子网。
+- 结果：完整冻结套件 2342 项 495.4 秒，退出 0（基线 2312 项 969 秒；多出的 30 项是本分支新增用例）。三模块对比 199.7 / 182.8 秒 → 64.8 秒。
+- 保留的失败记录：首次完整套件未运行（直接执行 `infra/test/run.sh`，文件模式 100644，`Permission denied`，0 项）；改 `sh infra/test/run.sh` 后通过。未打补丁基线上两条账户用例失败属 R6 修复前的既有状态，见 `ACCOUNT_REFRESH_FIX_20261111.md`。
+
+### R4 collector-telegram（纯搬移 `71b56415` 已测，待合并；其余为度量结论）
+
+- 已做：6 个无状态辅助函数移入 `services/collector/telegram_common.py`，`telegram.py` 1741 → 1697 行，11 个模块 344 项退出 0。
+- 不再拆的原因：测试对 `collector.telegram.<常量>` 打了 17 个名字的补丁，搬走后补丁落在重导出副本上静默失效；最长的几个函数是带租约、幂等和可信作者判定的单事务流程，拆分即改业务路径。
+- 度量发现，未改：`media_orphans`（`routes/telegram.py:945-979`）每轮同步（约 10 秒）调用一次，每次三次顺序扫描，而孤儿阈值是 24 小时；管理端消息列表（`routes/telegram.py:1163-1168`）缺 `(posted_at DESC, id DESC)` 索引。前者适合节流到分钟级并加部分索引，属行为节奏变更，另行决定。

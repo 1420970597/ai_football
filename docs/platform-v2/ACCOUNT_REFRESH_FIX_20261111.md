@@ -24,7 +24,7 @@
 | --- | --- |
 | `services/executor/account_protocol.py` | 新增 `lookup_many`：同一批（≤2 笔）订单每个历史页只读一次；`lookup` 委托给它。`absence_proves_rejection` 恒为 False。 |
 | `services/executor/worker.py` | 一次任务只做一轮历史扫描；`LeyuError`（非 `AuthExpired`）记入 `reconciliation_errors`，不拖累已核验的余额；`AuthExpired` 与未知异常仍让任务失败；最终余额再次成功才上报。 |
-| `services/api/app/account_jobs.py` | `order_reconciliation_partial` 且任务成功时给出说明文案（本次未发布到 API，当前无此状态）。 |
+| `services/api/app/account_jobs.py` | `order_reconciliation_partial` 且任务成功时给出说明文案（本次没有为它发布 API；更正见第 6 节）。 |
 
 生产代码与并行会话留在主检出的未提交补丁逐行相同；本分支新增 7 个回归用例并修正一个夹具顺序问题（策略变更会按既有设计取消仍为 pending 的订单并清零预留本金，夹具需先置 accepted）。两笔订单的历史读取从 4 次降为 2 次（上限 8 → 4）。
 
@@ -72,6 +72,6 @@
 ## 6. 未完成与限制
 
 - “部分对账”分支（查单失败但余额成功）只有隔离测试证据；发布后的真实刷新走的是完全成功路径。
-- API 的部分对账文案未发布；网页对该状态的展示待前端包核对。
+- 更正（11:25 UTC 核对）：此前写“API 的部分对账文案未发布”不准确。运行中的 API 镜像 `sha256:d0f13e9dd4a0…` 内 `app/account_jobs.py` 的 SHA-256 与集成分支相同，即该文案已随并行会话 06:48 UTC 的 API 镜像（从其含未提交补丁的工作树构建）在线上；本次没有为它另行发布。网页对该状态的展示待前端包核对。
 - 是否改用 `yewurecord` 路径或 `queryOrderStatus`、是否把版本号跟到 2.0.3，需先做只读实测，未做。
 - 若同一账户同时有 3 笔以上待对账订单，每次任务仍只处理 2 笔（既有上限），其余顺延。
