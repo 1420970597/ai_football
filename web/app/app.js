@@ -58,6 +58,7 @@ const state = {
   messageCursor: null,
   user: null,
   admin: null,
+  manualBet: null,
   authTab: "login",
   messageContext: "user",
   favoritesOnly: false,
@@ -195,6 +196,7 @@ function route(
     renderDates();
     loadMatches();
     loadLeagues();
+    loadManualBet();
     accountHistory.load();
   }
   if (page === "experts") loadExperts();
@@ -290,8 +292,9 @@ function scoreMarkup(match) {
 }
 function matchRecommendationMarkup(match) {
   const signals = match.expert_signals || [];
+  const stake = state.user && state.manualBet?.enabled ? state.manualBet.stake_per_order : null;
   return `<section class="match-recommendations" aria-label="本场专家关联盘口">${signals.map(s =>
-    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div><button class="text-link" data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button><span class="muted">${esc(phases[s.phase] || '阶段未知')} · ${stamp(s.created_at)}</span></div><div class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></div><div class="recommendation-result"><span>推荐时系统赔率 ${decimal(s.recommendation_price)}</span><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button></div><small class="muted">报价时间 ${stamp(s.quote_time)}</small></article>`
+    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div><button class="text-link" data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button><span class="muted">${esc(phases[s.phase] || '阶段未知')} · ${stamp(s.created_at)}</span></div><div class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></div><div class="recommendation-result"><span>推荐时系统赔率 ${decimal(s.recommendation_price)}</span><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button>${stake !== null ? `<button class="small-button manual-bet" data-bet-signal="${esc(s.id)}">实盘买入 ${decimal(stake)}</button>` : ''}</div><small class="muted">报价时间 ${stamp(s.quote_time)}</small></article>`
   ).join('') || '<p class="muted">关联记录已变更，请刷新列表。</p>'}${match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
 }
 function renderMatches() {
@@ -825,7 +828,7 @@ function marketMarkup(markets, filters = { period: "all", scope: "all" }) {
     controls +
     [...groups.entries()]
       .map(
-        ([key, quotes]) =>
+        ([, quotes]) =>
           `<section class="market-group" data-period="${esc(quotes[0].period)}"><h4>${esc(period(quotes[0].period))} · ${esc(quotes[0].market_name)}</h4><div class="table-scroll"><table class="market-table"><thead><tr><th>盘口线 / 方向</th><th>系统赔率</th><th>报价状态 / 时间</th></tr></thead><tbody>${quotes.map((q) => `<tr data-main="${q.is_main !== false}" data-quote="${esc(q.quote_id)}"><td>${esc(lineLabel(q))} · ${esc(selection(q.selection))} <small>${q.is_main === false ? "附加线" : "主线"}</small><br><small>${esc(q.quote_id || "无编号")}</small></td><td class="${q.change > 0 ? "price-up" : q.change < 0 ? "price-down" : ""}">${decimal(q.price)}${q.change > 0 ? " ↑" : q.change < 0 ? " ↓" : ""}</td><td>${q.status && !["active", "open"].includes(q.status) ? esc({ suspended: "停盘", closed: "关闭" }[q.status] || q.status) : q.fresh ? "有效" : "过期 / 时间未知"}<br><small>${stamp(q.source_updated_at)}</small></td></tr>`).join("")}</tbody></table></div></section>`,
       )
       .join("")
@@ -1226,7 +1229,7 @@ async function loadIdentities() {
   $("#user-logout").hidden = !state.user;
   $("#admin-logout").hidden = !state.admin;
   accountHistory.identify(state.user?.user.id);
-  if (state.page === 'scores') accountHistory.load();
+  if (state.page === 'scores') { accountHistory.load(); loadManualBet(); }
 }
 function stopAccountPolling() {
   clearTimeout(state.accountPollTimer);
@@ -1407,6 +1410,74 @@ async function loadOrders(append = false) {
       `<div class="notice">${error.status === 404 ? "订单服务尚未开放" : esc(error.message)}，保留已读取记录，不补入模拟订单。</div>`;
   }
 }
+async function loadManualBet() {
+  const panel = $("#manual-bet-panel");
+  if (!panel) return;
+  if (!state.user) {
+    state.manualBet = null;
+    panel.hidden = true;
+    if (state.page === "scores") renderMatches();
+    return;
+  }
+  try {
+    const data = await api("/accounts/leyu/manual-betting");
+    state.manualBet = data;
+    panel.hidden = false;
+    const form = $("#manual-bet-form");
+    for (const name of [
+      "stake_per_order",
+      "daily_limit",
+      "open_exposure_limit",
+    ]) {
+      const input = form.elements[name];
+      if (document.activeElement !== input)
+        input.value = Number(data[name]) > 0 ? data[name] : "";
+    }
+    $("#manual-bet-status").textContent = data.emergency_stopped
+      ? "已紧急停止；保存金额时需再确认一次才会恢复手动下注。"
+      : !data.enabled
+      ? "尚未保存下注金额；保存后才显示实盘买入按钮。"
+      : !data.live_enabled
+        ? "金额已保存，但当前实盘执行未开放，买入会被拒绝。"
+        : !data.account_ready
+          ? "金额已保存，但本人乐鱼账户尚未通过校验，买入会被拒绝。"
+          : !data.entitlement
+            ? "金额已保存，但当前会员没有实盘交易权益，买入会被拒绝。"
+            : `已保存每单 ${decimal(data.stake_per_order)} 元；日限额按 ${data.daily_timezone} 计算；买入按当前盘口重新核验，赔率或盘口变化会被拒绝。`;
+  } catch {
+    state.manualBet = null;
+    panel.hidden = true;
+  }
+  if (state.page === "scores") renderMatches();
+}
+async function placeManualBet(signalId, button) {
+  const stake = state.manualBet?.stake_per_order;
+  if (!stake) {
+    toast("请先保存每单下注金额");
+    return;
+  }
+  const ok = await confirmAction(
+    `确认以 ${decimal(stake)} 元实盘买入该专家推荐？系统按当前盘口重新核验，赔率或盘口变化会被拒绝。`,
+  );
+  if (!ok) return;
+  button.disabled = true;
+  try {
+    const { order } = await api("/accounts/leyu/manual-betting/orders", {
+      method: "POST",
+      body: { signal_id: signalId },
+    });
+    toast(
+      order.state === "pending"
+        ? `已预留 ${decimal(order.stake)} 元 · 赔率 ${decimal(order.price)}，等待执行器提交；可在个人中心查看订单`
+        : `该推荐已存在订单（${order.state}），未重复下单`,
+    );
+    if (state.page === "scores") accountHistory.load();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
 function auth(tab = "login") {
   const isAdmin = tab === "admin";
   state.authTab = tab;
@@ -1551,6 +1622,10 @@ function events() {
       );
       return;
     }
+    if (button.dataset.betSignal) {
+      placeManualBet(button.dataset.betSignal, button);
+      return;
+    }
     if (button.dataset.signal) {
       openSignal(button.dataset.signal);
       return;
@@ -1645,6 +1720,34 @@ function events() {
   $("#refresh-messages").onclick = () => loadMessages();
   $("#messages-more").onclick = () => loadMessages(true);
   $("#refresh-orders").onclick = () => loadOrders();
+  $("#manual-bet-form").onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    try {
+      const rearm = Boolean(state.manualBet && state.manualBet.emergency_stopped);
+      if (
+        rearm &&
+        !(await confirmAction(
+          "紧急停止后恢复手动下注？确认后才会重新接受实盘买入。",
+        ))
+      )
+        return;
+      await api("/accounts/leyu/manual-betting", {
+        method: "PUT",
+        body: {
+          stake_per_order: form.elements.stake_per_order.value,
+          daily_limit: form.elements.daily_limit.value,
+          open_exposure_limit: form.elements.open_exposure_limit.value,
+          daily_timezone: state.manualBet?.daily_timezone || "Asia/Shanghai",
+          confirmation_phrase: rearm ? "I_UNDERSTAND" : "",
+        },
+      });
+      toast("下注金额已保存");
+      await loadManualBet();
+    } catch (error) {
+      toast(error.message);
+    }
+  };
   $("#orders-more").onclick = () => loadOrders(true);
   $("#refresh-account").onclick = () => loadAccount();
   $("#verify-account").onclick = async () => {

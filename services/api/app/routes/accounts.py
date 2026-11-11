@@ -54,6 +54,18 @@ class AutoBetInput(Input):
     daily_timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=100)
 
 
+class ManualBetInput(Input):
+    stake_per_order: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    daily_limit: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    open_exposure_limit: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    daily_timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=100)
+    confirmation_phrase: str = Field(default="", max_length=40)
+
+
+class ManualBetOrderInput(Input):
+    signal_id: uuid.UUID
+
+
 class AttemptInput(Input):
     attempt_id: uuid.UUID
 
@@ -89,6 +101,12 @@ class Receipt(Input):
     settled_at: AwareDatetime | None = None
 
 
+class ReconciliationError(Input):
+    order_id: uuid.UUID
+    category: str = Field(min_length=1, max_length=80, pattern="^[A-Za-z0-9_]+$")
+    provider_code: str = Field(default="", pattern="^[0-9]{0,12}$")
+
+
 class JobFinish(AttemptInput):
     status: str = Field(pattern="^(success|failed|unknown|rejected)$")
     category: str = Field(default="", max_length=80, pattern="^[A-Za-z0-9_]*$")
@@ -97,6 +115,7 @@ class JobFinish(AttemptInput):
     observed_at: AwareDatetime | None = None
     receipts: list[Receipt] = Field(default_factory=list, max_length=10)
     scanned_orders: list[uuid.UUID] = Field(default_factory=list,max_length=2)
+    reconciliation_errors: list[ReconciliationError] = Field(default_factory=list, max_length=2)
 
 
 class AuthorizeInput(AttemptInput):
@@ -146,7 +165,7 @@ async def bind_leyu_account(body: LeyuBindingInput, request: Request):
         raise HTTPException(422, "账户名称无效")
     settings = request.app.state.settings
     identity = jobs.identity_hash(settings.encryption_key, username)
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             await conn.fetchrow("SELECT id FROM v2_users WHERE id=$1 FOR UPDATE", user["id"])
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"user-account:{user['id']}")
@@ -179,7 +198,7 @@ async def bind_leyu_account(body: LeyuBindingInput, request: Request):
 @router.delete("/leyu")
 async def unbind_leyu_account(request: Request):
     user = await require_user(request)
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             await conn.fetchrow("SELECT id FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE", user["id"])
             await orders.protect_inflight_binding(conn,user['id'])
@@ -200,7 +219,7 @@ async def disable_policy(conn, user_id, reason):
 async def verify_account(request: Request):
     user = await require_user(request)
     await _limit(request,'account_verify',str(user['id']),maximum=10)
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             account = await conn.fetchrow("SELECT * FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE", user["id"])
             if not account or account["health_state"] == "disabled":
@@ -231,7 +250,7 @@ async def authorize_leyu_device(body: DeviceAuthorizationInput, request: Request
     if not re.fullmatch(r'[A-Za-z0-9]{4,32}', code):
         raise HTTPException(422, '请填写乐鱼 App 生成的授权安全码')
     settings = request.app.state.settings
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             account = await conn.fetchrow('SELECT * FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE', user['id'])
             if not account or account['health_state'] == 'disabled':
@@ -259,7 +278,7 @@ async def authorize_leyu_device(body: DeviceAuthorizationInput, request: Request
 async def configure_auto_betting(body: AutoBetInput, request: Request):
     user = await require_user(request)
     settings = request.app.state.settings
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             if body.enabled:
                 await conn.fetchrow("SELECT id FROM v2_users WHERE id=$1 FOR UPDATE", user["id"])
@@ -293,10 +312,73 @@ async def configure_auto_betting(body: AutoBetInput, request: Request):
     return {"enabled": True, "emergency_stopped": False, "state": "armed", "daily_timezone": body.daily_timezone, 'expert_selection_mode': body.expert_selection_mode, 'profitability_definition': PROFITABILITY_DEFINITION}
 
 
+@router.get("/leyu/manual-betting")
+async def get_manual_betting(request: Request):
+    user = await require_user(request)
+    pool = database.current_pool()
+    policy = await pool.fetchrow("SELECT manual_stake,daily_limit,open_exposure_limit,daily_timezone,emergency_stopped "
+                                 "FROM v2_user_bet_settings WHERE user_id=$1", user["id"])
+    account = await pool.fetchrow("SELECT health_state,renewal_state,last_verified_at FROM v2_leyu_accounts "
+                                  "WHERE user_id=$1 AND health_state<>'disabled'", user["id"])
+    ready = bool(account and account["health_state"] == "healthy" and account["renewal_state"] == "ready"
+                 and account["last_verified_at"]
+                 and (datetime.now(timezone.utc) - account["last_verified_at"]).total_seconds() <= 120)
+    return {
+        "stake_per_order": policy["manual_stake"] if policy else Decimal("0"),
+        "daily_limit": policy["daily_limit"] if policy else Decimal("0"),
+        "open_exposure_limit": policy["open_exposure_limit"] if policy else Decimal("0"),
+        "daily_timezone": (policy["daily_timezone"] if policy else None) or "Asia/Shanghai",
+        "enabled": bool(policy and policy["manual_stake"] > 0 and not policy["emergency_stopped"]),
+        "emergency_stopped": bool(policy and policy["emergency_stopped"]),
+        "account_ready": ready,
+        "live_enabled": orders.live_enabled(request.app.state.settings),
+        "entitlement": await has_entitlement(user["id"], "automatic_betting"),
+    }
+
+
+@router.put("/leyu/manual-betting")
+async def configure_manual_betting(body: ManualBetInput, request: Request):
+    user = await require_user(request)
+    async with database.current_pool().acquire() as conn, conn.transaction():
+        account = await conn.fetchrow("SELECT * FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE", user["id"])
+        if not account or account["health_state"] != "healthy" or not account["encrypted_session"]:
+            raise HTTPException(409, "本人乐鱼账户尚未通过无资金校验")
+        await verify_sensitive_session(conn, user)
+        if not orders.manual_limits_valid(body.stake_per_order, body.daily_limit, body.open_exposure_limit):
+            raise HTTPException(422, "每单金额必须为正且不超过每日限额与开放敞口上限")
+        if not await conn.fetchval("SELECT EXISTS(SELECT 1 FROM pg_timezone_names WHERE name=$1)", body.daily_timezone):
+            raise HTTPException(422, "日限额时区无效，请选择可识别的时区名称")
+        current = await conn.fetchrow("SELECT emergency_stopped FROM v2_user_bet_settings WHERE user_id=$1 FOR UPDATE", user["id"])
+        if current and current["emergency_stopped"] and body.confirmation_phrase != "I_UNDERSTAND":
+            raise HTTPException(403, "紧急停止后需要显式确认才能恢复手动下注")
+        await conn.execute(
+            "INSERT INTO v2_user_bet_settings(user_id,auto_enabled,emergency_stopped,manual_stake,daily_limit,open_exposure_limit,daily_timezone) "
+            "VALUES($1,FALSE,FALSE,$2,$3,$4,$5) ON CONFLICT(user_id) DO UPDATE SET manual_stake=EXCLUDED.manual_stake,"
+            "daily_limit=EXCLUDED.daily_limit,open_exposure_limit=EXCLUDED.open_exposure_limit,daily_timezone=EXCLUDED.daily_timezone,"
+            "emergency_stopped=FALSE,revision=v2_user_bet_settings.revision+1,updated_at=now()",
+            user["id"], body.stake_per_order, body.daily_limit, body.open_exposure_limit, body.daily_timezone)
+        await audit(conn, user["id"], "user", "manual_betting_configured", "betting_settings", str(user["id"]),
+                   details={"stake_per_order": str(body.stake_per_order), "daily_limit": str(body.daily_limit),
+                            "open_exposure_limit": str(body.open_exposure_limit), "daily_timezone": body.daily_timezone})
+    return {"enabled": True, "stake_per_order": body.stake_per_order, "daily_timezone": body.daily_timezone}
+
+
+@router.post("/leyu/manual-betting/orders", status_code=202)
+async def place_manual_bet(body: ManualBetOrderInput, request: Request):
+    user = await require_user(request)
+    await _limit(request, "manual_bet", str(user["id"]), maximum=20)
+    settings = request.app.state.settings
+    async with database.current_pool().acquire() as conn, conn.transaction():
+        await verify_sensitive_session(conn, user)
+        order = await orders.reserve_signal(conn, user["id"], body.signal_id, settings, manual=True)
+    return {"order": {"id": str(order["id"]), "state": order["state"], "stake": str(order["stake"]),
+                      "price": str(order["price"]), "manual": bool(order["manual"])}}
+
+
 @router.post("/leyu/emergency-stop")
 async def emergency_stop(request: Request):
     user = await require_user(request)
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             await conn.fetchrow("SELECT id FROM v2_leyu_accounts WHERE user_id=$1 FOR UPDATE", user["id"])
             await disable_policy(conn, user["id"], "emergency_stop")
@@ -321,7 +403,7 @@ async def list_orders(request: Request, limit: int = 30, before: uuid.UUID | Non
 async def claim_work(request: Request, live_capable: bool = False):
     service_auth(request)
     settings = request.app.state.settings
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             await jobs.expire_leases(conn)
             account = await conn.fetchrow("SELECT a.* FROM v2_leyu_accounts a WHERE a.health_state<>'disabled' AND EXISTS(SELECT 1 FROM v2_account_jobs j WHERE j.account_id=a.id AND j.state='queued' AND j.binding_revision=a.binding_revision) ORDER BY a.updated_at FOR UPDATE OF a SKIP LOCKED LIMIT 1")
@@ -415,7 +497,7 @@ async def dispatch(request: Request):
 @executor_router.post("/jobs/{job_id}/renewal/claim")
 async def claim_account_renewal(job_id: uuid.UUID, body: RenewalClaim, request: Request):
     service_auth(request)
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             job, account = await jobs.active_job(conn, job_id, body.attempt_id)
             if job['kind'] == 'history':
@@ -444,7 +526,7 @@ async def persist_account_session(job_id: uuid.UUID, body: PersistInput, request
             parts = urlsplit(value)
             if parts.scheme!='https' or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment or parts.path not in ('','/'):
                 raise HTTPException(422, "个人会话来源必须HTTPS")
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             job, account = await jobs.active_job(conn, job_id, body.attempt_id)
             if (account["config_revision"] != body.expected_revision or account["renewal_state"] != 'running' or account["renewal_attempt"] != body.renewal_attempt
@@ -466,7 +548,7 @@ async def finish_account_renewal(job_id: uuid.UUID, body: RenewalFinish, request
         raise HTTPException(422,'续期审计字段无效')
     if 'login_submitted' in body.metadata and type(body.metadata['login_submitted']) is not bool:
         raise HTTPException(422, '续期发送状态必须为布尔值')
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             job,account=await jobs.active_job(conn,job_id,body.attempt_id)
             if (job['details'].get('renewal_attempt')==str(body.renewal_attempt)
@@ -487,11 +569,15 @@ async def finish_account_renewal(job_id: uuid.UUID, body: RenewalFinish, request
 @executor_router.post('/jobs/{job_id}/finish')
 async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
     service_auth(request)
+    if bool(body.reconciliation_errors) != (body.category == 'order_reconciliation_partial') or (body.reconciliation_errors and body.status != 'success'):
+        raise HTTPException(422,'部分查单回执必须同时具备成功余额校验与错误明细')
     finish_document = body.model_dump(mode='json')
     if not body.provider_code:
         finish_document.pop('provider_code')
+    if not body.reconciliation_errors:
+        finish_document.pop('reconciliation_errors')
     finish_sha256=hashlib.sha256(json.dumps(finish_document,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             prior=await conn.fetchrow('SELECT * FROM v2_account_jobs WHERE id=$1',job_id)
             # During a rolling deployment an older executor reports failed even
@@ -512,13 +598,22 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
                 if body.balance is None or not body.observed_at or not -5<=(now-body.observed_at).total_seconds()<=60 or not document.get('leyu_request_id'):
                     raise HTTPException(422,'无资金校验缺少有效余额、观测时间或本人会话')
                 planned=job['details'].get('orders',{})
-                if any(str(identity) not in planned for identity in body.scanned_orders) or any(receipt.order_no not in planned.values() for receipt in body.receipts):
+                failed_ids = {str(item.order_id) for item in body.reconciliation_errors}
+                if (any(str(identity) not in planned for identity in body.scanned_orders)
+                        or any(receipt.order_no not in planned.values() for receipt in body.receipts)
+                        or not failed_ids <= planned.keys()
+                        or len(failed_ids) != len(body.reconciliation_errors)
+                        or failed_ids.intersection(str(identity) for identity in body.scanned_orders)
+                        or any(receipt.order_no in {planned[identity] for identity in failed_ids} for receipt in body.receipts)):
                     raise HTTPException(422,'查单回执超出此本人任务的订单范围')
                 await conn.execute("UPDATE v2_leyu_accounts SET health_state='healthy',renewal_state='ready',renewal_attempt=NULL,"
                                    "renewal_lease_until=NULL,renewal_retry_after=NULL,last_verified_at=now(),available_balance=$2,"
                                    "balance_observed_at=$3,updated_at=now() WHERE id=$1",account['id'],body.balance,body.observed_at)
                 await jobs.reconcile_receipts(conn,account,[receipt.model_dump(mode='json') for receipt in body.receipts])
-                await conn.execute('UPDATE v2_bet_orders SET updated_at=now() WHERE id=ANY($1::uuid[]) AND user_id=$2',body.scanned_orders,account['user_id'])
+                # Timestamp failed reads too: preserve financial state/exposure,
+                # while the scheduler rotates accounts/orders and backs off.
+                attempted = body.scanned_orders + [item.order_id for item in body.reconciliation_errors]
+                await conn.execute('UPDATE v2_bet_orders SET updated_at=now() WHERE id=ANY($1::uuid[]) AND user_id=$2',attempted,account['user_id'])
             elif effective_status in {'unknown','rejected'}:
                 await conn.execute("UPDATE v2_leyu_accounts SET health_state=$2,renewal_state=$3,renewal_attempt=NULL,"
                                    "renewal_lease_until=NULL,updated_at=now() WHERE id=$1",account['id'],
@@ -533,6 +628,8 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
             details = {'receipts':len(body.receipts),'finish_sha256':finish_sha256}
             if body.provider_code:
                 details['provider_code'] = body.provider_code
+            if body.reconciliation_errors:
+                details['reconciliation_errors'] = [item.model_dump(mode='json') for item in body.reconciliation_errors]
             await conn.execute("UPDATE v2_account_jobs SET state=$2,last_error=$3,lease_until=NULL,details=details||$4::jsonb,updated_at=now() WHERE id=$1",job_id,expected,body.category,details)
             await audit(conn,None,'executor','account_job_finished','leyu_account',str(account['id']),details={'kind':job['kind'],'status':effective_status,'category':body.category})
     return {'status':effective_status}
@@ -549,7 +646,7 @@ async def locked_order(conn,order_id):
 @executor_router.post('/orders/{order_id}/authorize')
 async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request):
     service_auth(request)
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             order=await locked_order(conn,order_id)
             if order['state']!='pending' or order['attempt_id']!=body.attempt_id or not order['lease_until'] or order['lease_until']<=datetime.now(timezone.utc):
@@ -607,7 +704,7 @@ async def authorize_order(order_id:uuid.UUID,body:AuthorizeInput,request:Request
 @executor_router.post('/orders/{order_id}/finish')
 async def finish_order(order_id:uuid.UUID,body:OrderFinish,request:Request):
     service_auth(request)
-    async with database.current_pool().acquire() as conn:
+    async with database.current_pool().acquire() as conn:  # noqa: SIM117
         async with conn.transaction():
             order=await locked_order(conn,order_id)
             if order['attempt_id']!=body.attempt_id:

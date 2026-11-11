@@ -963,6 +963,113 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Decimal('2'),Decimal(str(visible['provider_price'])))
         self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
 
+    async def test_history_rate_limit_preserves_fresh_balance_and_other_receipt(self):
+        account=await self.healthy()
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        first=await self.reserve(signal)
+        second_signal,second_expert,_,_=await self.signal()
+        await self.enable([expert,second_expert])
+        second=await self.reserve(second_signal)
+        for order,number in ((first,'SETTLED'),(second,'LIMITED')):
+            await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no=$2 WHERE id=$1",order['id'],number)
+        policy=dict(await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1',self.user['id']))
+        await self.pool.execute("UPDATE v2_leyu_accounts SET last_verified_at=now()-interval '12 hours' WHERE id=$1",account['id'])
+        before=await self.pool.fetchval('SELECT last_verified_at FROM v2_leyu_accounts WHERE id=$1',account['id'])
+        await self.api.post('/api/v1/accounts/leyu/refresh')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        original=self.native
+        calls=0
+        limited=False
+        def native(request):
+            nonlocal calls
+            if request.url.path==ORDERS_PATH:
+                calls+=1
+                if limited:
+                    return httpx.Response(200,json={'code':'0403001','msg':'网关限流'})
+                settled=json.loads(request.content)['orderStatus']==1
+                return httpx.Response(200,json={'code':0,'data':{'total':1 if settled else 0,'records':[
+                    {'orderNo':'SETTLED','betAmount':'2','profitAmount':'1.90'}] if settled else []}})
+            return original(request)
+        executor=Executor(self.worker_api,'https://platform.invalid/internal/executor',
+            client_factory=lambda scope,session,**kw:AccountProtocolClient(scope,session,transport=httpx.MockTransport(native),**kw))
+        await executor.account_job(work)
+        self.assertEqual(2,calls,'two orders must share the same unsettled/settled history reads')
+        settled=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',first['id'])
+        self.assertEqual(('settled',Decimal('0'),Decimal('1.90')),(settled['state'],settled['reserved_stake'],settled['settled_net']))
+        # A later provider rejection remains isolated from the balance result.
+        limited=True
+        await self.api.post('/api/v1/accounts/leyu/refresh')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        await executor.account_job(work)
+        refreshed=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',account['id'])
+        self.assertGreater(refreshed['last_verified_at'],before)
+        self.assertLess((datetime.now(timezone.utc)-refreshed['balance_observed_at']).total_seconds(),10)
+        self.assertEqual('healthy',refreshed['health_state'])
+        job=await self.pool.fetchrow('SELECT * FROM v2_account_jobs WHERE id=$1',uuid.UUID(work['job_id']))
+        self.assertEqual(('succeeded','order_reconciliation_partial'),(job['state'],job['last_error']))
+        self.assertEqual([{'order_id':str(second['id']),'category':'upstream_rejected','provider_code':'0403001'}],job['details']['reconciliation_errors'])
+        self.assertIn('部分历史订单',account_jobs.public_task(job,account['binding_revision'])['message'])
+        retained=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',second['id'])
+        self.assertEqual(('accepted',second['reserved_stake'],None),(retained['state'],retained['reserved_stake'],retained['settled_net']))
+        self.assertEqual(policy,dict(await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1',self.user['id'])))
+        self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
+
+    async def test_reconciliation_error_scope_and_lease_remain_enforced(self):
+        account=await self.healthy()
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        order=await self.reserve(signal)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='unknown',provider_order_no='EXACT' WHERE id=$1",order['id'])
+        await self.api.post('/api/v1/accounts/leyu/refresh')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        url=f"/internal/executor/jobs/{work['job_id']}/finish"
+        error={'order_id':str(order['id']),'category':'upstream_rejected','provider_code':'0403001'}
+        body={'attempt_id':work['attempt_id'],'status':'success','category':'order_reconciliation_partial',
+              'balance':'100','observed_at':datetime.now(timezone.utc).isoformat(),'reconciliation_errors':[error]}
+        for changes in (
+            {'reconciliation_errors':[error|{'order_id':str(uuid.uuid4())}]},
+            {'reconciliation_errors':[error,error]},
+            {'scanned_orders':[str(order['id'])]},
+            {'receipts':[{'order_no':'EXACT','state':'settled','net_profit':'2'}]},
+            {'observed_at':(datetime.now(timezone.utc)-timedelta(minutes=2)).isoformat()},
+        ):
+            response=await self.worker_api.post(url,json=body|changes)
+            self.assertEqual(422,response.status_code,response.text)
+        await self.pool.execute("UPDATE v2_account_jobs SET lease_until=now()-interval '1 second' WHERE id=$1",uuid.UUID(work['job_id']))
+        self.assertEqual(409,(await self.worker_api.post(url,json=body)).status_code)
+        stored=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',order['id'])
+        self.assertEqual(('unknown',order['reserved_stake']),(stored['state'],stored['reserved_stake']))
+
+    async def test_history_failure_never_masks_final_balance_failure(self):
+        account=await self.healthy()
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        order=await self.reserve(signal)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='unknown',provider_order_no='EXACT' WHERE id=$1",order['id'])
+        await self.pool.execute("UPDATE v2_leyu_accounts SET last_verified_at=now()-interval '12 hours' WHERE id=$1",account['id'])
+        before=await self.pool.fetchval('SELECT last_verified_at FROM v2_leyu_accounts WHERE id=$1',account['id'])
+        await self.api.post('/api/v1/accounts/leyu/refresh')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        balance_calls=0
+        original=self.native
+        def native(request):
+            nonlocal balance_calls
+            if request.url.path==ORDERS_PATH:
+                return httpx.Response(200,json={'code':'0403001'})
+            if request.url.path==AMOUNT_PATH:
+                balance_calls+=1
+                if balance_calls>1:
+                    return httpx.Response(503,json={'code':'503'})
+            return original(request)
+        executor=Executor(self.worker_api,'https://platform.invalid/internal/executor',
+            client_factory=lambda scope,session,**kw:AccountProtocolClient(scope,session,transport=httpx.MockTransport(native),**kw))
+        await executor.account_job(work)
+        self.assertEqual(before,await self.pool.fetchval('SELECT last_verified_at FROM v2_leyu_accounts WHERE id=$1',account['id']))
+        job=await self.pool.fetchrow('SELECT * FROM v2_account_jobs WHERE id=$1',uuid.UUID(work['job_id']))
+        self.assertEqual(('failed','account_http_rejected'),(job['state'],job['last_error']))
+        self.assertEqual(order['reserved_stake'],await self.pool.fetchval('SELECT reserved_stake FROM v2_bet_orders WHERE id=$1',order['id']))
+
     async def test_receipt_rejects_invalid_official_fields(self):
         from pydantic import ValidationError
         for extra in ({'price':'NaN'},{'price':'1'},{'stake':'-1'},{'settled_at':'2026-10-20T10:00:00'},{'currency':'usd'}):
@@ -1131,6 +1238,70 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((None,'unknown'),(by_number['BAD-CURRENCY']['settled_net'],by_number['BAD-CURRENCY']['pnl_basis']))
         self.assertEqual(2,await self.pool.fetchval('SELECT count(*) FROM v2_order_receipt_evidence'))
         self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
+
+    async def test_manual_bet_uses_own_saved_stake_without_auto_betting_authorization(self):
+        await self.healthy()
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        await self.pool.execute('UPDATE v2_user_bet_settings SET auto_enabled=FALSE WHERE user_id=$1',self.user['id'])
+        configured=await self.api.put('/api/v1/accounts/leyu/manual-betting',json={'stake_per_order':'3','daily_limit':'4','open_exposure_limit':'4','daily_timezone':'Asia/Shanghai'})
+        self.assertEqual(200,configured.status_code,configured.text)
+        settings=(await self.api.get('/api/v1/accounts/leyu/manual-betting')).json()
+        self.assertEqual((Decimal('3'),True,True,True),(Decimal(settings['stake_per_order']),settings['enabled'],settings['account_ready'],settings['entitlement']))
+        first=await self.api.post('/api/v1/accounts/leyu/manual-betting/orders',json={'signal_id':str(signal)})
+        self.assertEqual(202,first.status_code,first.text)
+        order=first.json()['order']
+        self.assertEqual((Decimal('3'),True), (Decimal(order['stake']),order['manual']))
+        repeat=await self.api.post('/api/v1/accounts/leyu/manual-betting/orders',json={'signal_id':str(signal)})
+        self.assertEqual(order['id'],repeat.json()['order']['id'],'重复点击不得重复占用敞口')
+        stored=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',uuid.UUID(order['id']))
+        self.assertEqual((True,Decimal('3'),Decimal('3')),(stored['manual'],stored['stake'],stored['reserved_stake']))
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders WHERE user_id=$1',self.user['id']))
+        self.assertFalse(await self.pool.fetchval('SELECT auto_enabled FROM v2_user_bet_settings WHERE user_id=$1',self.user['id']),'手动下注不得改写自动投注授权')
+
+    async def test_manual_bet_respects_limits_and_membership(self):
+        await self.healthy()
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        no_stake=await self.api.post('/api/v1/accounts/leyu/manual-betting/orders',json={'signal_id':str(signal)})
+        self.assertEqual(409,no_stake.status_code,no_stake.text)
+        over=await self.api.put('/api/v1/accounts/leyu/manual-betting',json={'stake_per_order':'5','daily_limit':'4','open_exposure_limit':'4','daily_timezone':'Asia/Shanghai'})
+        self.assertEqual(422,over.status_code,over.text)
+        unknown_tz=await self.api.put('/api/v1/accounts/leyu/manual-betting',json={'stake_per_order':'2','daily_limit':'4','open_exposure_limit':'4','daily_timezone':'Not/AZone'})
+        self.assertEqual(422,unknown_tz.status_code,unknown_tz.text)
+        self.assertEqual(200,(await self.api.put('/api/v1/accounts/leyu/manual-betting',json={'stake_per_order':'2','daily_limit':'2','open_exposure_limit':'2','daily_timezone':'Asia/Shanghai'})).status_code)
+        first=await self.api.post('/api/v1/accounts/leyu/manual-betting/orders',json={'signal_id':str(signal)})
+        self.assertEqual(202,first.status_code,first.text)
+        second_signal,*_=await self.signal()
+        full=await self.api.post('/api/v1/accounts/leyu/manual-betting/orders',json={'signal_id':str(second_signal)})
+        self.assertEqual(409,full.status_code,'日限额与开放敞口用满后不得继续下注')
+        row=await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1',uuid.UUID(first.json()['order']['id']))
+        self.assertEqual(200,(await self.api.put('/api/v1/accounts/leyu/manual-betting',json={'stake_per_order':'2','daily_limit':'4','open_exposure_limit':'4','daily_timezone':'Asia/Shanghai'})).status_code)
+        async with self.pool.acquire() as conn:
+            with self.assertRaises(orders.HTTPException):
+                await orders.recheck_order(conn,row,self.settings)
+        await self.pool.execute('DELETE FROM v2_memberships WHERE user_id=$1',self.user['id'])
+        expired=await self.api.post('/api/v1/accounts/leyu/manual-betting/orders',json={'signal_id':str(second_signal)})
+        self.assertEqual(403,expired.status_code,'手动下注不得绕过会员实盘权益')
+
+    async def test_manual_bet_rearm_requires_explicit_confirmation(self):
+        await self.healthy()
+        self.settings.live_orders_enabled=True
+        await self.pool.execute("INSERT INTO v2_admin_settings(setting_key,encrypted_value) VALUES('auto_betting_enabled',$1) ON CONFLICT(setting_key) DO UPDATE SET encrypted_value=EXCLUDED.encrypted_value",encrypt_secret(b'k'*32,'true'))
+        plan=uuid.uuid4()
+        await self.pool.execute("INSERT INTO v2_membership_plans(id,code,name,price,duration_days,enabled,entitlements) VALUES($1,$2,'VIP',10,30,TRUE,$3)",plan,str(plan),{'automatic_betting':True})
+        await self.pool.execute("INSERT INTO v2_memberships(id,user_id,plan_id,status,starts_at,ends_at,grant_source) VALUES($1,$2,$3,'active',now()-interval '1 minute',now()+interval '1 day','test')",uuid.uuid4(),self.user['id'],plan)
+        body={'stake_per_order':'2','daily_limit':'4','open_exposure_limit':'4','daily_timezone':'Asia/Shanghai'}
+        await self.pool.execute("INSERT INTO v2_user_bet_settings(user_id,auto_enabled,emergency_stopped) VALUES($1,FALSE,FALSE) ON CONFLICT(user_id) DO UPDATE SET emergency_stopped=FALSE",self.user['id'])
+        first=await self.api.put('/api/v1/accounts/leyu/manual-betting',json=body)
+        self.assertEqual(200,first.status_code,first.text)
+        self.assertEqual(200,(await self.api.post('/api/v1/accounts/leyu/emergency-stop')).status_code)
+        self.assertTrue((await self.api.get('/api/v1/accounts/leyu/manual-betting')).json()['emergency_stopped'])
+        refused=await self.api.put('/api/v1/accounts/leyu/manual-betting',json=body)
+        self.assertEqual(403,refused.status_code,'紧急停止后不得仅凭保存金额恢复')
+        self.assertTrue((await self.api.get('/api/v1/accounts/leyu/manual-betting')).json()['emergency_stopped'])
+        self.assertEqual(200,(await self.api.put('/api/v1/accounts/leyu/manual-betting',json={**body,'confirmation_phrase':'I_UNDERSTAND'})).status_code)
+        self.assertFalse((await self.api.get('/api/v1/accounts/leyu/manual-betting')).json()['emergency_stopped'])
 
 
 if __name__=='__main__':

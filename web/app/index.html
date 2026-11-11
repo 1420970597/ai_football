@@ -126,6 +126,18 @@
           </div>
           <div id="matches-notice" class="notice" role="status" hidden></div>
           <section id="account-history-summary" class="account-history-summary" aria-live="polite" aria-label="本人近七日实盘记录">登录后查看本人近 7 日账户记录。</section>
+          <section id="manual-bet-panel" class="manual-bet-panel" aria-label="一键实盘下注设置" hidden>
+            <form id="manual-bet-form">
+              <strong>一键实盘下注金额</strong>
+              <div class="form-grid">
+                <label>每单金额<input name="stake_per_order" type="number" min="0.01" step="0.01" required /></label>
+                <label>每日限额<input name="daily_limit" type="number" min="0.01" step="0.01" required /></label>
+                <label>开放敞口上限<input name="open_exposure_limit" type="number" min="0.01" step="0.01" required /></label>
+              </div>
+              <button class="primary-button" type="submit">保存下注金额</button>
+              <small id="manual-bet-status" class="muted">保存后可在下方专家关联比赛点“实盘买入”。下单按当前盘口重新核验，账户未校验或实盘未开放时不可下单。</small>
+            </form>
+          </section>
           <div class="score-table">
             <div class="score-table-head" aria-hidden="true">
               <span>联赛</span><span>时间</span><span>状态</span
@@ -942,7 +954,7 @@
       </form>
       <div class="form-actions auth-assistance">
         <button class="text-link" data-password-recovery>用户忘记密码</button
-      </div>
+      ></div>
     </dialog>
     <dialog
       id="content-dialog"

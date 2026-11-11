@@ -95,3 +95,37 @@ E556/E558只读检查原退出0，未创建/授权/提交资金请求。本人�
 E605 对订单 5442ae90-e627-4036-bf58-844c75ade3b2 的只读查询原退出 0：state=settled；平台 placed_at=07:32:26.149 UTC，settled_at=09:25:47.490 UTC，receipt_observed_at=09:26:08.714167 UTC。本金 5.00、成交赔率 1.95000、平台 payout=9.75000、settled_net=4.75000，pnl_basis=provider_reported_net。币种及手续费仍为 NULL，不推断未知字段。本次观察没有提交或授权订单；继续沿用此前 revision14 的个人许可，不补投历史推荐、不扩大允许专家。
 
 证据为受保护路径 .runtime/e209-live/e605-receipt-extended.json；实际命令 docker exec -i ai-football-v2-api-1 python -（输入只读脚本），原退出 0。2026-11-07 10:25 UTC 复核查询后纠正此前说明：E605 另一份自然订单查询只筛选最近两小时，并非“未结算订单”筛选；07:32 创建的此订单在09:33已超出该时间窗，故返回空数组，不能以该空数组证明结算。上述已结算结论来自独立按订单编号查询的最终回执。此为单笔自然实盘闭环证据，不代表总体盈利或低延迟目标达标。下一步继续核验自然新推荐、盘口绑定和真实订单回执；不使用资金测试。
+
+### 2026-11-11 — 足球/篮球专家推荐独立入口与账户刷新阻塞修复
+
+阶段开始：当前目标为推荐页明确分开足球/篮球，并修复本人开启自动投注后账户校验不再更新的问题。责任目录web/app、services/executor、services/api与tests；前置依赖为本人既有许可、真实余额与订单回执，不变更个人开关、金额、限额、专家盈利资格或既有五分钟信号窗口；10秒仅为延迟目标。分支fix/TASK-78-hermes-telegram-sync，基线33c7624d；保留无关未跟踪reports/feijipan-share-20261031/。
+
+已确认：远端实际executor和api-bridge均live=true，本机同名旧executor早已退出，不能据其false环境误判线上。本人账户最后成功校验停于11月10日13:35 UTC，其后520次刷新失败upstream_rejected/0403001，超出120秒资金预检有效期。受保护会话从本机API直接流送远端实际executor进行单次余额只读请求，HTTP200/code0000000，未登录、未交易，命令退出0；因此不能将整个会话判为失效。当前account_job将历史查单与余额刷新合为全成全败，正在核验历史订单查询是否拖累有效余额刷新。REA当前binary_session工具失败cleanup_incomplete/ESRCH，保留原失败，不清理无关进程，使用已有协议证据和定向真实只读请求继续。
+
+缺口与验收：隔离验证查单失败时有效余额仍可刷新、查单错误独立可见、订单未知状态与敞口不被抹除、过期租约与跨账户回执仍拒绝；真实自然刷新至少两次推进且个人策略指纹不变。网页增加独立足球/篮球推荐入口并验证统计、推荐列表与详情不串项目，桌面/手机真实浏览器点击及生产页面验收。失败保留原退出码并修复后重跑，不使用真实资金测试，不补投历史推荐。状态：研究中，未发布本轮修改。
+
+设计已记录／代码阶段：真实逐笔只读请求复现第一笔found=true、完整查单，第二笔upstream_rejected/0403001；定向读取被拒绝响应仅输出脱敏中文原因，确认为“网关限流”，不是会话过期或猜测日期范围。余额HTTP200/0000000仍有效。修复将每笔已知查单错误作为有范围约束的reconciliation_errors独立持久化；只有最终余额再次成功且观测有效才刷新账户，AuthExpired与未知异常仍让任务失败。成功查单的真实回执照常结算，失败订单保持未知/已接单状态及预留本金；页面显示余额成功与部分查单未完成。API先发布以兼容旧执行器，之后切换新执行器，未变个人资金许可。专家页增加独立足球/篮球按钮、选中状态、按运动的URL与刷新/详情保留；统计和推荐请求继续携带相同sport且屏蔽迟到响应。定向Docker验证已从独立不可变源码快照启动，运行时不修改该快照。
+
+### 2026-11-11 — 首页一键实盘下注与下注金额配置
+
+阶段目标：在比分首页为已登录用户提供“一键实盘买入”和可保存的每单金额，让用户按专家决策手动买入；不新增第二套下单通道，全部复用既有独立执行器、账户锁与查单协议。责任目录 `web/app/`、`services/api/`（orders、accounts 路由、迁移）、`tests/`。
+
+设计要点（已写入代码）：手动订单复用 `orders.reserve_signal(..., manual=True)`，与自动投注同一资金路径，仅把“必须已启用自动投注”换成“本人已保存合法每单金额”；仍强制会员实盘权益、账户绑定/健康/续期、全局与本地实盘开关、当日限额与开放敞口、报价过期与盘口变化复核。手动订单以 `manual` 列区分，`recheck_order` 对手动单比对当前金额而非专家单笔许可。幂等键沿用 `expert:{user}:{signal}`，重复点击返回既有订单而不重复占用敞口，前端不提供“未知回执重试”。
+
+数据与接口：新增迁移 `services/api/migrations/034_manual_betting.sql`（`v2_user_bet_settings.manual_stake`、`v2_bet_orders.manual`）。新增 `GET/PUT /api/v1/accounts/leyu/manual-betting` 与 `POST /api/v1/accounts/leyu/manual-betting/orders`；金额保存需敏感会话复核，校验正数、日限额/敞口上限与时区名称。
+
+已验证证据（真实命令、均退出0）：
+- 隔离数据库（`postgres:16-alpine`，tmpfs）应用全部迁移至 `034_manual_betting.sql`，确认 `manual_stake numeric`、`manual boolean`。
+- `python -m unittest test_manual_betting_limits test_profitable_experts test_account_state`：71项通过（含新增2项手动下注用例：金额保存后可下单且不改写自动投注授权、重复点击返回同一订单、日限额/敞口用满拒绝、策略变更后复核失败、会员权益撤销返回403）。
+- `node --check web/app/app.js` 通过（容器 `node:22-alpine`）。
+- 新增 `test_manual_bet_rearm_requires_explicit_confirmation`：紧急停止后仅保存金额返回 403，带 `I_UNDERSTAND` 才恢复；连同既有用例共 74 项通过。
+- 修正首页保存金额时未回传 `daily_timezone` 会覆盖用户已存时区的问题，并在状态行显式展示日限额时区。
+
+剩余依赖与限制：本机 Docker 默认地址池已耗尽（`all predefined address pools have been fully subnetted`），`sh infra/test/run.sh` 在创建测试网络时中止（该次失败因管道丢失退出码，已记录），故全量冻结套件本轮未完成，需在网络容量或既有网络复用方案确认后重跑；真实浏览器桌面/手机下单点击与真实资金投产仍待后续验收。已知静态检查告警为仓库既有约定（`web/app/app.js` 既有的 `innerHTML`+`esc()` 渲染、`tests/test_account_state.py` 既有类型标注、`membership.py` 既有 `is True` 写法），本轮未改写；为消除静态安全规则的误报，两处既有 SQL 仅合并为单条字面量、绑定参数不变，语义不变（`COALESCE(lease_until,now())<=now()` 与 `lease_until IS NULL OR lease_until<=now()` 等价）。
+- 环境自查：前两项模块级套件中的 10 个 ERROR 均源于本轮传给 `TEST_DATABASE_ADMIN_URL` 的主机名不在测试守卫允许集合内（`pgtest`/`ai-football-v2-pgverify`），改用被允许的主机名后 `test_api_database_failures`(10) 与 `test_fault_recovery_matrix`(8) 全部通过；不是代码缺陷。
+- 全量冻结套件（`infra/test/frozen_suite.py`，199 个测试模块）正在修正后的环境变量下重跑；临时数据库、网络与镜像均在本机 Docker 内，未接触生产。
+- 自查并修复本轮实现中的缺陷：`recheck_order` 原用 `"manual" in order` 判断订单来源，而 asyncpg `Record` 的 `in` 遍历的是**值**，会让手动下单在查单时误走自动投注分支。已抽出 `order_is_manual(order)`（`KeyError`/`IndexError` 视为自动），并在 `tests/test_manual_betting_limits.py` 增加复现该语义的回归用例（7 个用例通过）。
+- 工作树边界：仓库中另有他人未提交改动（`services/executor/`、`services/api/app/account_jobs.py` 的查单分类文案、`orders.py` 内与本功能无关的 `COALESCE(lease_until,now())` 等 hunk）。本轮不把它们并入本功能提交，也不回滚。
+- 全量冻结套件结果：`infra/test/frozen_suite.py`（Docker `ai-football-verifier:v2.0.0-dev`，隔离临时 PostgreSQL `manual-bet-pg`，宿主网络 `manual-bet-test-net`）**Ran 2312 tests in 964.606s — OK**，退出码 0，无 ERROR/FAIL；日志 `.runtime/test-evidence/manual-bet-suite3.log`。该运行在最终代码上执行（含 `order_is_manual` 修复），SOURCE_IS_CLEAN=false 如实标记为未提交工作树。
+- 尚未完成（未获授权）：真实资金实盘点击验收。仓库规则与用户既有约束要求不得在未经明确授权时用真钱证明功能；本轮全部验证均为协议样本、无资金替身与隔离数据库。
+
