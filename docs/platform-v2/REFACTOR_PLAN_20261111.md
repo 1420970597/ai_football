@@ -104,6 +104,6 @@
 
 ### R4 collector-telegram（纯搬移 `71b56415` 已测，待合并；其余为度量结论）
 
-- 已做：6 个无状态辅助函数移入 `services/collector/telegram_common.py`，`telegram.py` 1741 → 1697 行，11 个模块 344 项退出 0。
-- 不再拆的原因：测试对 `collector.telegram.<常量>` 打了 17 个名字的补丁，搬走后补丁落在重导出副本上静默失效；最长的几个函数是带租约、幂等和可信作者判定的单事务流程，拆分即改业务路径。
+- 已做：6 个无状态辅助定义移入 `services/collector/telegram_common.py`（50 行），`telegram.py` 1741 → 1697 行。搬移后 `r4-move` 344 项退出 0；搬移前基线 `r4-base` 是另一组模块（510 项退出 0），两次范围不同，不能直接对比。同范围补跑尚未出结果，合并前以它为准。
+- 不再拆的原因：测试对 `collector.telegram.<常量>` 打了十余个名字的补丁（按 `patch('collector.telegram.大写名'` 检索为 16 个），搬走后补丁落在重导出副本上静默失效；最长的几个函数是带租约、幂等和可信作者判定的单事务流程，拆分即改业务路径。
 - 度量发现，未改：`media_orphans`（`routes/telegram.py:945-979`）每轮同步（约 10 秒）调用一次，每次三次顺序扫描，而孤儿阈值是 24 小时；管理端消息列表（`routes/telegram.py:1163-1168`）缺 `(posted_at DESC, id DESC)` 索引。前者适合节流到分钟级并加部分索引，属行为节奏变更，另行决定。
