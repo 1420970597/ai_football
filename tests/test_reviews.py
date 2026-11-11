@@ -1085,6 +1085,39 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
             expired = await self.post('list_match_markets', fixture_id=fixture_id)
         self.assertEqual(409, expired.status_code, expired.text)
 
+    async def test_collector_backoff_hint_is_recorded_for_recovery_without_making_quotes_recordable(self):
+        fixture_id = await self.fixture()
+        key, _ = await self.search_all()
+        await self.resolve(key)
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '5 minutes'")
+        self.client._transport.app.state.settings.market_refresh_url = 'http://collector:8092/leyu/refresh'
+        factory = httpx.AsyncClient
+        for hint, recorded in ((137, 137), (900, 900), (0, None), (901, None), (True, None), ('137', None), (-3, None)):
+            with self.subTest(hint=hint):
+                async def handler(request, hint=hint):
+                    return httpx.Response(200, json={'accepted': False, 'written': False, 'written_fixtures': 0,
+                                                     'reason': 'upstream_cooldown', 'retry_after_seconds': hint})
+                with patch.object(reviews.httpx, 'AsyncClient',
+                                  side_effect=lambda **kw: factory(transport=httpx.MockTransport(handler), **kw)):
+                    response = await self.post('list_match_markets', fixture_id=fixture_id)
+                self.assertEqual(200, response.status_code, response.text)
+                result = response.json()
+                # 模型看到的回执口径不变；退避提示只进入系统轨迹供有界恢复使用。
+                self.assertEqual({'attempted': True, 'accepted': False, 'reason': 'upstream_cooldown'}, result['refresh'])
+                self.assertTrue(result['markets'])
+                self.assertTrue(all(not item['fresh'] and not item['confirmed_current'] and not item['can_record']
+                                    for item in result['markets']))
+                refresh = await self.pool.fetchval(
+                    "SELECT payload->'refresh' FROM v2_analysis_traces WHERE job_id=$1 "
+                    "AND trace_kind='mcp_list_match_markets' ORDER BY sequence_no DESC LIMIT 1", self.job)
+                self.assertEqual(recorded, refresh.get('retry_after_seconds'))
+                self.assertNotIn('_observation', refresh)
+        rejected = await self.post('record_expert_signals', signals=[{
+            'fixture_id': fixture_id, 'quote_id': result['markets'][0]['quote_id'], 'evidence_text': '赛前 大2.5'}])
+        self.assertEqual(200, rejected.status_code, rejected.text)
+        self.assertEqual([], rejected.json()['accepted'])
+        self.assertEqual('quote_inactive_unknown_or_stale', rejected.json()['rejected'][0]['reason'])
+
     async def test_unbound_or_historical_review_cannot_trigger_source_refresh(self):
         fixture_id = await self.fixture()
         self.client._transport.app.state.settings.market_refresh_url = 'http://collector:8092/leyu/refresh'

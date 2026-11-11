@@ -414,9 +414,15 @@ async def _request_market_refresh(fixture_id: str, source_match_id: str, request
                          'observed_unchanged', 'observed_current_projection_unconfirmed'}
                      and value['accepted'] is False and value.get('written') is False
                      and value.get('snapshot_committed') is False and value.get('current_only') is True)
-        return {'attempted': True, 'accepted': value['accepted'], 'reason': reason,
-                '_observation': value.get('current_observation')
-                    if value.get('snapshot_committed') is True or current_only else None}
+        result = {'attempted': True, 'accepted': value['accepted'], 'reason': reason,
+                  '_observation': value.get('current_observation')
+                      if value.get('snapshot_committed') is True or current_only else None}
+        retry_after = value.get('retry_after_seconds')
+        if value['accepted'] is False and type(retry_after) is int and 0 < retry_after <= 900:
+            # Collector-owned shared backoff. It schedules the bounded system
+            # recovery only; it never makes a stale price fresh or recordable.
+            result['retry_after_seconds'] = retry_after
+        return result
     except (httpx.HTTPError, ValueError, TimeoutError):
         # A refresh is optional evidence gathering, never a reason to mark old
         # prices fresh or replay an unknown upstream operation automatically.

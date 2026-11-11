@@ -208,8 +208,9 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def make_queued(self, attempts=0):
         await self.pool.execute("UPDATE v2_analysis_jobs SET state='queued',attempts=$2,attempt_id=NULL,lease_until=NULL WHERE id=$1", self.job, attempts)
 
-    async def seed_market_receipt(self, job, fixture, reason='refresh_timeout', *, attempt=None):
+    async def seed_market_receipt(self, job, fixture, reason='refresh_timeout', *, attempt=None, retry_after=None):
         attempt = attempt or job['attempt_id']
+        hint = {} if retry_after is None else {'retry_after_seconds': retry_after}
         await self.pool.execute(
             "INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) "
             "VALUES($1,$2,$3,'synthetic-recovery','{}') ON CONFLICT DO NOTHING",
@@ -218,7 +219,7 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
             async with conn.transaction():
                 await worker.trace(conn, job['id'], 'mcp_list_match_markets', {
                     'attempt_id': str(attempt), 'fixture_id': fixture, 'status': 'succeeded',
-                    'refresh': {'attempted': True, 'accepted': reason == 'written', 'reason': reason}})
+                    'refresh': {'attempted': True, 'accepted': reason == 'written', 'reason': reason, **hint}})
 
     async def finish_without_pick(self, job):
         with patch.object(worker, 'review_message', AsyncMock(return_value=('未录入', {'content': '未录入'}))), \
@@ -278,13 +279,68 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_market_recovery_does_not_retry_permanent_or_unconfigured_refresh(self):
         fixture = await support.ReviewTests.fixture(self)
-        for reason in ('fixture_not_open', 'fixture_not_loaded', 'refresh_unconfigured', 'refresh_invalid_response', 'upstream_rate_limited'):
+        # 上游限流/冷却不再归入永久失败：它由下方专门用例按采集器退避窗口延迟恢复一次。
+        for reason in ('fixture_not_open', 'fixture_not_loaded', 'refresh_unconfigured', 'refresh_invalid_response',
+                       'permission_denied', 'authorized_session_missing'):
             with self.subTest(reason=reason):
                 await self.make_queued()
                 job = await worker.claim_job(self.pool)
                 await self.seed_market_receipt(job, fixture, reason)
                 await self.finish_without_pick(job)
                 self.assertEqual('unresolved', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+
+    async def test_upstream_backoff_waits_for_collector_window_then_retries_once(self):
+        # 生产样本 7b99412b/f02e4024：采集器共享冷却期内读盘全部 can_record=false，
+        # 明确推荐未录入且任务直接 unresolved。恢复必须等到冷却结束，而不是 20 秒后再撞一次。
+        fixture = await support.ReviewTests.fixture(self)
+        cases = (('upstream_cooldown', 137, 142), ('upstream_cooldown', None, 65), ('upstream_cooldown', 12, 65),
+                 ('upstream_rate_limited', 900, 905), ('upstream_rate_limited', 5000, 65),
+                 ('upstream_cooldown', '137', 65), ('upstream_timeout', None, 20))
+        for reason, hint, expected in cases:
+            with self.subTest(reason=reason, hint=hint):
+                await self.pool.execute("DELETE FROM v2_analysis_traces WHERE job_id=$1", self.job)
+                await self.make_queued()
+                await self.pool.execute("UPDATE v2_analysis_jobs SET available_at=now()-interval '1 second' WHERE id=$1", self.job)
+                job = await worker.claim_job(self.pool)
+                await self.seed_market_receipt(job, fixture, reason, retry_after=hint)
+                await self.finish_without_pick(job)
+                row = await self.pool.fetchrow(
+                    'SELECT state,last_error,extract(epoch FROM available_at-now()) AS wait '
+                    'FROM v2_analysis_jobs WHERE id=$1', self.job)
+                self.assertEqual(('retry', 'temporary_market_refresh_failure'), (row['state'], row['last_error']))
+                self.assertTrue(expected - 5 <= row['wait'] <= expected, row['wait'])
+                recovery = await self.pool.fetchval(
+                    "SELECT payload FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='market_recovery_scheduled'", self.job)
+                self.assertEqual(expected, recovery['delay_seconds'])
+                self.assertEqual(fixture, recovery['fixtures'][0]['fixture_id'])
+                self.assertEqual(reason, recovery['fixtures'][0]['reason'])
+                self.assertIsNone(await worker.claim_job(self.pool))
+                self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_upstream_backoff_recovery_is_bounded_and_never_bypasses_freshness(self):
+        fixture = await support.ReviewTests.fixture(self)
+        await self.make_queued()
+        for turn in (1, 2):
+            await self.pool.execute("UPDATE v2_analysis_jobs SET available_at=now()-interval '1 second' WHERE id=$1", self.job)
+            job = await worker.claim_job(self.pool)
+            await self.seed_market_receipt(job, fixture, 'upstream_cooldown', retry_after=300)
+            await self.finish_without_pick(job)
+            self.assertEqual('retry' if turn == 1 else 'unresolved',
+                             await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual(1, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='market_recovery_scheduled'", self.job))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_upstream_backoff_after_accepted_signal_or_later_success_does_not_retry(self):
+        fixture = await support.ReviewTests.fixture(self)
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        await self.seed_market_receipt(job, fixture, 'upstream_cooldown', retry_after=300)
+        await self.seed_market_receipt(job, fixture, 'written')
+        await self.finish_without_pick(job)
+        self.assertEqual('unresolved', await self.pool.fetchval('SELECT state FROM v2_analysis_jobs WHERE id=$1', self.job))
+        self.assertEqual(0, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='market_recovery_scheduled'", self.job))
 
     async def test_market_recovery_stops_at_second_attempt_and_closed_fixture(self):
         fixture = await support.ReviewTests.fixture(self)
