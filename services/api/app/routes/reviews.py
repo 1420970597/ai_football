@@ -335,7 +335,11 @@ async def _market_snapshot(conn, body, settings, filters):
         'SELECT f AS fixture,EXISTS(SELECT 1 FROM v2_review_fixture_bindings b '
         'WHERE b.job_id=$' + str(review_parameter) + ' AND b.attempt_id=$' + str(attempt_parameter) +
         ' AND b.fixture_id=$1) AS review_fixture_bound,inventory.total_quotes,policy AS quote_age_policy,q.* '
+        # A retired row is one the source stopped reporting. Reading its markets
+        # would offer a price the source no longer quotes, so it is treated the
+        # same as a closed fixture: no current markets for this binding.
         "FROM (VALUES(1)) anchor(value) LEFT JOIN v2_fixtures f ON f.id=$1 AND f.phase IN ('scheduled','live') "
+        "AND f.stale_projection_at IS NULL "
         "LEFT JOIN v2_admin_settings policy ON policy.setting_key='quote_max_age_seconds' "
         'LEFT JOIN LATERAL (SELECT count(*)::integer AS total_quotes '
         'FROM v2_current_quotes WHERE fixture_id=f.id) inventory ON TRUE '

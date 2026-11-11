@@ -190,7 +190,11 @@ async def matches(
     include_markets: bool = True,
     recommended_only: bool = False,
 ):
-    clauses: list[str] = ['decision_context_only_at IS NULL']
+    clauses: list[str] = ['decision_context_only_at IS NULL',
+                          # A retired live/scheduled row is one the source stopped
+                          # reporting; it must not appear as current. Finished and
+                          # cancelled rows keep their history.
+                          "(stale_projection_at IS NULL OR phase IN ('finished','cancelled'))"]
     args: list[object] = []
 
     def bind(value: object) -> str:

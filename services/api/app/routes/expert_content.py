@@ -33,6 +33,8 @@ async def leagues(match_date: date | None = Query(default=None, alias='date'),
     end = datetime.combine(match_date + timedelta(days=1), time.min, zone).astimezone(timezone.utc) if match_date else None
     rows = await database.current_pool().fetch(
         "SELECT competition_id,competition_name,COUNT(*) AS match_count FROM v2_fixtures WHERE sport=$1 AND decision_context_only_at IS NULL "
+        # Counting a retired row would show an empty league in the filter list.
+        "AND (stale_projection_at IS NULL OR phase IN ('finished','cancelled')) "
         "AND ($2='all' OR phase=$2) AND ($3::timestamptz IS NULL OR kickoff_at >= $3) "
         "AND ($4::timestamptz IS NULL OR kickoff_at < $4) "
         "AND ($3::timestamptz IS NOT NULL OR phase IN ('live','scheduled')) "

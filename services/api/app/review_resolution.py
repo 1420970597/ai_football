@@ -54,11 +54,17 @@ async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
     projected = with_verified_aliases(fixture['candidate_data'])
     if 'verified_alias_sources' in projected:
         evidence['verified_alias_sources'] = projected['verified_alias_sources']
-    phase = await conn.fetchval(
+    bound = await conn.fetchrow(
         'WITH bound AS (INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) '
         'VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING fixture_id) '
-        'SELECT phase FROM v2_fixtures WHERE id=$3',
+        'SELECT phase,stale_projection_at FROM v2_fixtures WHERE id=$3',
         body.review_id, body.attempt_id, fixture['fixture_id'], body.search_key, evidence)
+    phase = bound['phase'] if bound is not None else None
+    # A binding may still be created for a row the source stopped reporting, so
+    # the recommendation can be explained, but such a row is never eligible for
+    # a new live signal.
+    eligible = phase in {'scheduled', 'live'} and (bound is None or bound['stale_projection_at'] is None)
     return {'resolved': True, 'fixture': {**projected, 'phase': phase,
-            'realtime_eligible': phase in {'scheduled', 'live'},
-            'eligibility_reason': None if phase in {'scheduled', 'live'} else phase}}
+            'realtime_eligible': eligible,
+            'eligibility_reason': None if eligible else
+            ('source_stopped_reporting' if phase in {'scheduled', 'live'} else phase)}}

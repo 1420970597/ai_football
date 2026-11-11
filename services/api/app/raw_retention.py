@@ -134,6 +134,19 @@ async def sweep(conn, *, limit=1000, quote_limit=5000):
             await run(table + '_deleted',
                 'WITH old AS (SELECT p.id FROM ' + _name(table) + ' p WHERE ' + expired + ' AND ' + safe +
                 ' LIMIT $1 FOR UPDATE OF p SKIP LOCKED) DELETE FROM ' + _name(table) + ' p USING old WHERE p.id=old.id')
+        # A row that still claims to be in play must still be reported. The
+        # collector submits every fixture the station lists on each poll and
+        # ingestion stamps last_reported_at, throttled to five minutes, so half
+        # an hour of silence means the source dropped the row rather than that
+        # the row simply never changed. This records only absence: no score,
+        # result or cancellation is inferred, and the next accepted snapshot
+        # reinstates the row immediately.
+        await run('fixtures_stale_retired',
+            "WITH old AS (SELECT id FROM v2_fixtures WHERE stale_projection_at IS NULL "
+            "AND decision_context_only_at IS NULL AND phase IN ('live','scheduled') "
+            "AND last_reported_at<clock_timestamp()-interval '30 minutes' "
+            "ORDER BY last_reported_at,id LIMIT $1 FOR UPDATE SKIP LOCKED) "
+            "UPDATE v2_fixtures f SET stale_projection_at=clock_timestamp() FROM old WHERE f.id=old.id")
         await run('fixtures_archived',
             "WITH old AS (SELECT id FROM v2_fixtures WHERE decision_context_only_at IS NULL "
             "AND kickoff_at<clock_timestamp()-interval '72 hours' ORDER BY kickoff_at,id "

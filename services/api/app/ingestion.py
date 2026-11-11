@@ -93,6 +93,21 @@ async def ingest_fixture_batch(conn, items) -> int:
         payload,
     )
     accepted_sources = {record['source_id'] for record in stored if record['accepted']}
+    if stored:
+        # The station sends every fixture it currently lists on each poll, but
+        # the upsert above deliberately skips rows whose content did not change.
+        # Presence therefore needs its own write, or a quiet match would look
+        # abandoned. Throttled to one write per row per five minutes so the
+        # unchanged-row fast path survives the ~1900-row poll; a row coming back
+        # from the sweeper is reinstated immediately because it is stale.
+        # Neither column claims a result: only that the source still lists it.
+        await conn.execute(
+            "UPDATE v2_fixtures f SET last_reported_at=clock_timestamp(),stale_projection_at=NULL "
+            "WHERE f.source_id=ANY($1::text[]) AND (f.stale_projection_at IS NOT NULL "
+            "OR f.last_reported_at IS NULL "
+            "OR f.last_reported_at<clock_timestamp()-interval '5 minutes')",
+            [record['source_id'] for record in stored],
+        )
     quote_rows, closures, finished = [], [], []
     for record in stored:
         item = fixtures[record["source_id"]]

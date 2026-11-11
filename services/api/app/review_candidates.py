@@ -16,8 +16,11 @@ _GENERIC_FRAGMENTS = frozenset({
 })
 _CANDIDATE_JSON = (
     'jsonb_build_object(' + ','.join("'" + field + "',f." + field for field in sorted(FIXTURE_FIELDS))
-    + ", 'realtime_eligible', f.phase IN ('scheduled','live'), "
-    + "'eligibility_reason', CASE WHEN f.phase IN ('scheduled','live') THEN NULL ELSE f.phase END)"
+    # A retired row is one the source stopped reporting. It is still returned as
+    # history so an old message can be explained, but it is never tradable.
+    + ", 'realtime_eligible', f.phase IN ('scheduled','live') AND f.stale_projection_at IS NULL, "
+    + "'eligibility_reason', CASE WHEN f.phase NOT IN ('scheduled','live') THEN f.phase "
+    + "WHEN f.stale_projection_at IS NOT NULL THEN 'source_stopped_reporting' ELSE NULL END)"
 )
 _INSERT_SNAPSHOT = (
     "WITH inserted AS (INSERT INTO v2_match_search_candidates(job_id,search_key,fixture_id,position,candidate_data) "
