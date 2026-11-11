@@ -1240,21 +1240,36 @@ async function openMessage(id, context = "user") {
       `<div class="empty-state">${esc(error.message)}${error.status === 403 ? '<br><button class="small-button" data-login="login">登录后继续阅读</button> <button class="small-button" data-page="membership">查看会员权益</button>' : ""}</div>`;
   }
 }
+// A free plan has no price and no term to count down, and a paid plan costs more
+// than a day. Printing the raw numbers ("0 CNY", "3650 天") reads as a broken
+// shop page rather than as what the plan gives you.
+function planPrice(plan) {
+  const price = Number(plan.price);
+  if (!Number.isFinite(price) || price <= 0) return '<span class="plan-free">免费</span>';
+  return `${decimal(plan.price, price % 1 ? 2 : 0)}<small> ${esc(plan.currency)}</small>`;
+}
+function planTerm(plan) {
+  const days = Number(plan.duration_days);
+  if (!Number.isFinite(days) || days <= 0) return "有效期以授予记录为准";
+  return days >= 3650 ? "长期有效" : `${esc(plan.duration_days)} 天`;
+}
 async function loadPlans() {
   try {
     if (state.page === "membership") await loadIdentities();
     const data = await api("/public/membership/plans");
     state.plans = data.items;
+    // Payment is not configured, so every plan is genuinely unbuyable right now;
+    // the button says so instead of fading out one labelled "未配置".
     $("#plans-list").innerHTML =
       data.items
         .map(
           (p) =>
-            `<article class="plan-card"><h3>${esc(p.name)}</h3>${(state.user?.membership?.active_plans || [{ code: state.user?.membership?.code }]).some((plan) => plan.code === p.code) ? '<span class="badge">当前有效方案</span>' : ""}<div class="plan-price">${decimal(p.price, Number(p.price) % 1 ? 2 : 0)}<small> ${esc(p.currency)}</small></div><p>${esc(p.duration_days)} 天</p><ul>${
+            `<article class="plan-card"><h3>${esc(p.name)}</h3>${(state.user?.membership?.active_plans || [{ code: state.user?.membership?.code }]).some((plan) => plan.code === p.code) ? '<span class="badge">当前有效方案</span>' : ""}<div class="plan-price">${planPrice(p)}</div><p>${planTerm(p)}</p><ul>${
               Object.entries(p.entitlements)
                 .filter(([, v]) => v === true)
                 .map(([k]) => `<li>${esc(entitlementName(k))}</li>`)
                 .join("") || "<li>无额外权益</li>"
-            }</ul><button disabled>在线支付未配置</button></article>`,
+            }</ul><button disabled aria-describedby="payment-note">暂不支持在线购买</button></article>`,
         )
         .join("") || '<div class="empty-state">暂无可用会员方案</div>';
     $("#membership-current").textContent = state.user?.membership

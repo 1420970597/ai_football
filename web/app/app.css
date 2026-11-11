@@ -1000,6 +1000,10 @@ h3 {
   font-size: 12px;
   font-weight: normal;
 }
+.plan-price .plan-free {
+  font-size: 22px;
+  letter-spacing: 2px;
+}
 .plan-card p {
   font-size: 11px;
   color: #6c583c;
