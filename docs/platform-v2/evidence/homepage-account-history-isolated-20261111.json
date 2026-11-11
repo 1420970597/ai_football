@@ -1,5 +1,10 @@
 {
   "recorded_at": "2026-11-11T02:21:45Z",
+  "feature_commit": "1bedbf7c0b17eb94912ca12ecb16cecf5ecf7ce8",
+  "feature_remote_verified_at": "2026-11-11T02:24:19Z",
+  "branch": "fix/TASK-78-hermes-telegram-sync",
+  "feature_remote_matches_commit": true,
+  "temporary_database_removed": true,
   "scope": "read-only personal seven-day history; no manual wagering implementation",
   "source_tree_initial": "3c398184497550204f464c0d1fedd6d32f859a26",
   "source_tree_final": "7c3d9ab42ae60e1bee992401eac22e322ea1c4c7",
