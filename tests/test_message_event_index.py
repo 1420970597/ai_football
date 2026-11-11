@@ -59,7 +59,13 @@ class MessageEventIndexTests(unittest.IsolatedAsyncioTestCase):
         expected = await self.conn.fetchrow(query, message)
         rows_before = await self.conn.fetch('SELECT *,xmin::text AS row_version,ctid::text AS location FROM v2_telegram_events ORDER BY id')
         self.assertEqual(test_migrations.migration_suffix('027_telegram_message_event_lookup.sql'), await apply_migrations(self.conn))
-        self.assertEqual(rows_before, await self.conn.fetch('SELECT *,xmin::text AS row_version,ctid::text AS location FROM v2_telegram_events ORDER BY id'))
+        rows_after = await self.conn.fetch('SELECT *,xmin::text AS row_version,ctid::text AS location FROM v2_telegram_events ORDER BY id')
+        self.assertEqual(len(rows_before), len(rows_after))
+        # Later migrations may add nullable columns without rewriting old rows.
+        # Check every original field plus xmin/ctid, one row at a time: a real
+        # mismatch must identify its row rather than diff 12,000 large records.
+        for before, after in zip(rows_before, rows_after):
+            self.assertEqual(dict(before), {name: after[name] for name in before.keys()}, str(before['id']))
         self.assertEqual(expected, await self.conn.fetchrow(query, message))
         self.assertIsNone(await self.conn.fetchrow(query, uuid.uuid4()))
         self.assertEqual(1, await self.conn.fetchval('SELECT count(*) FROM v2_telegram_events WHERE message_id IS NULL'))
