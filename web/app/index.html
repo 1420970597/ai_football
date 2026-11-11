@@ -79,6 +79,10 @@
             ><button data-sport="basketball">篮球</button
             ><span id="sport-context">足球比分与盘口</span>
           </div>
+          <div class="section-tabs homepage-match-tabs" role="group" aria-label="首页比赛范围">
+            <button class="active" data-match-scope="recommended" aria-pressed="true">专家关联比赛</button>
+            <button data-match-scope="all" aria-pressed="false">全部赛事</button>
+          </div>
           <div class="score-tabs" role="group" aria-label="比赛状态">
             <button data-phase="all" class="active">全部</button
             ><button data-phase="live">滚球</button
@@ -125,7 +129,7 @@
             <div class="score-table-head" aria-hidden="true">
               <span>联赛</span><span>时间</span><span>状态</span
               ><span>主队</span><span>比分</span><span>客队</span
-              ><span>当前盘口 / 赔率</span><span>详情</span>
+              ><span id="match-market-heading">专家关联盘口</span><span>详情</span>
             </div>
             <div id="matches-list" aria-live="polite"></div>
             <div id="matches-state" class="empty-state"></div>
@@ -133,8 +137,8 @@
               继续加载赛事
             </button>
           </div>
-          <p class="data-footnote">
-            上游报价时间未知、过期或停盘时，均不视为可交易报价。关注仅保存在当前浏览器。
+          <p class="data-footnote" id="matches-footnote">
+            专家记录展示推荐时的盘口与系统赔率，供查询原文及结算；不代表当前成交价格。关注仅保存在当前浏览器。
           </p>
         </section>
         <section id="view-experts" class="view" aria-labelledby="experts-title">
@@ -152,6 +156,10 @@
             ><button data-expert-tab="signals" aria-pressed="false">
               最新推荐</button
             ><button data-page="messages">发言与审核原文</button>
+          </div>
+          <div class="section-tabs expert-sport-tabs" role="group" aria-label="专家推荐运动类型">
+            <button class="active" data-expert-sport="football" aria-pressed="true">足球专家推荐</button>
+            <button data-expert-sport="basketball" aria-pressed="false">篮球专家推荐</button>
           </div>
           <div class="stat-help">
             一单位收益使用推荐时系统赔率；准确率和收益不等同于实盘盈利。<button

@@ -661,7 +661,9 @@ async function setup({
     if (p === "/admin/audit") return reply({ items: [] });
     return reply({ ok: true, state: "unverified", message: "隔离测试已保存" });
   });
-  await page.goto("http://127.0.0.1:8080");
+  // Legacy score-table scenarios exercise the explicit all-fixtures view.
+  // The expert-only default is covered by homepage-expert-matches.mjs.
+  await page.goto("http://127.0.0.1:8080/#scores?scope=all");
   if (captureLoading) {
     await page.waitForSelector(".skeleton-row");
     await page.screenshot({

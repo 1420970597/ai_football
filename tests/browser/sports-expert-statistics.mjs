@@ -59,9 +59,10 @@ try{
     });
     async function selectSport(sport){
       const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/public/experts'&&new URL(r.url()).searchParams.get('sport')===sport);
-      await page.locator('#expert-stats-filter [name=sport]').selectOption(sport);
-      await page.locator('#expert-stats-filter button').click();await response;
+      await page.locator(`[data-expert-sport="${sport}"]`).click();await response;
       await page.waitForFunction(sport=>document.querySelector('#experts-title').textContent===(sport==='basketball'?'篮球':'足球')+'专家推荐',sport);
+      assert.equal(await page.locator(`[data-expert-sport="${sport}"]`).getAttribute('aria-pressed'),'true');
+      assert.equal(new URL(page.url()).hash,'#experts?sport='+sport);
     }
     await page.goto('http://127.0.0.1:8080/#experts');
     await page.waitForSelector('#experts-list [data-expert="sport-expert"]');
@@ -84,6 +85,7 @@ try{
     await page.locator('.yield-chart').waitFor();
     assert.match(await page.locator('#dialog-content').innerText(),/篮球/);
     assert.match(await page.locator('#dialog-content').innerText(),/25\.0%/);
+    assert.match(new URL(page.url()).hash,/sport=basketball/);
     assert.ok(reads.slice(before).filter(x=>x.path.includes('sport-expert')).every(x=>x.sport==='basketball'));
     await page.locator('#content-dialog [data-close-dialog]').click();
     await page.locator('#content-dialog').waitFor({state:'hidden'});
@@ -99,6 +101,11 @@ try{
     assert.equal(await page.locator('#expert-signals').isVisible(),true);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.screenshot({path:output+'/sports-experts-'+width+'.png'});
+    await page.reload();
+    await page.waitForFunction(()=>document.querySelector('#signals-list').textContent.includes('篮球主队'));
+    assert.equal(await page.locator('[data-expert-sport="basketball"]').getAttribute('aria-pressed'),'true');
+    assert.equal(await page.locator('#expert-stats-filter [name=sport]').inputValue(),'basketball');
+    assert.match(await page.locator('#experts-list').innerText(),/25\.0%/);
     assert.deepEqual(writes,[]);
     results.push({width,passed:true,scope:'football_and_basketball_separate',late_response_ignored:true,sample_insufficiency_visible:true,production_writes:0});
     await context.close();

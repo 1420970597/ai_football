@@ -128,7 +128,7 @@ try {
       return route.fulfill({ status: 404, json: { detail: "未包含此隔离接口" } });
     });
 
-    await page.goto("http://127.0.0.1:8080/#scores");
+    await page.goto("http://127.0.0.1:8080/#scores?scope=all");
     const basketballMatches = page.waitForResponse((response) => {
       const url = new URL(response.url());
       return (

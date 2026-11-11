@@ -64,6 +64,35 @@ async def _quote_summaries(request: Request, fixture_ids: list[str]) -> dict[str
     return by_fixture
 
 
+_VISIBLE_RECOMMENDATIONS_FROM = (
+    "FROM v2_expert_signals s JOIN v2_expert_messages m ON m.id=s.message_id "
+    "JOIN v2_experts e ON e.id=s.expert_id JOIN v2_expert_sources src ON src.id=m.source_id "
+    "JOIN v2_source_experts se ON se.source_id=src.id AND se.expert_id=e.id "
+)
+_VISIBLE_RECOMMENDATIONS_WHERE = (
+    "s.withdrawn_at IS NULL AND m.deleted_at IS NULL AND e.enabled AND src.enabled AND se.enabled "
+    "AND NOT EXISTS(SELECT 1 FROM v2_expert_messages newer WHERE newer.source_id=m.source_id "
+    "AND newer.platform_message_id=m.platform_message_id AND newer.revision>m.revision)"
+)
+
+
+async def _recommendation_summaries(fixture_ids: list[str], limit: int) -> dict[str, list[dict]]:
+    if not fixture_ids:
+        return {}
+    rows = await database.current_pool().fetch(
+        "SELECT picked.* FROM unnest($1::text[]) wanted(fixture_id) CROSS JOIN LATERAL ("
+        "SELECT s.id,s.expert_id,e.display_nickname,s.fixture_id,s.phase,s.market_id,s.market_name,"
+        "s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time,s.score_baseline,"
+        "s.outcome,s.unit_net,s.created_at " + _VISIBLE_RECOMMENDATIONS_FROM +
+        "WHERE s.fixture_id=wanted.fixture_id AND " + _VISIBLE_RECOMMENDATIONS_WHERE +
+        " ORDER BY s.created_at DESC,s.id DESC LIMIT $2) picked "
+        "ORDER BY picked.fixture_id,picked.created_at DESC,picked.id DESC", fixture_ids, limit+1)
+    output: dict[str, list[dict]] = {}
+    for row in rows:
+        output.setdefault(row['fixture_id'], []).append(line_projection(row))
+    return output
+
+
 @router.get('/match-summaries')
 async def match_summaries(request: Request, fixture_ids: list[str] = Query(min_length=1, max_length=50)):
     if any(not identifier.strip() or len(identifier) > 120 for identifier in fixture_ids):
@@ -96,6 +125,7 @@ async def matches(
     cursor: str | None = None,
     page_size: int = Query(default=50, ge=1, le=200),
     include_markets: bool = True,
+    recommended_only: bool = False,
 ):
     clauses: list[str] = []
     args: list[object] = []
@@ -131,8 +161,13 @@ async def matches(
         start = datetime.combine(match_date, time.min, zone).astimezone(timezone.utc)
         end = datetime.combine(match_date + timedelta(days=1), time.min, zone).astimezone(timezone.utc)
         clauses.append(f"kickoff_at >= {bind(start)} AND kickoff_at < {bind(end)}")
+    if recommended_only:
+        clauses.append("EXISTS(SELECT 1 " + _VISIBLE_RECOMMENDATIONS_FROM +
+                       "WHERE s.fixture_id=v2_fixtures.id AND " + _VISIBLE_RECOMMENDATIONS_WHERE + ")")
     cursor_scope = {'kind': 'matches', 'phase': phase, 'sport': sport, 'league': league,
                     'league_ids': sorted(set(league_ids or [])), 'q': q, 'date': match_date, 'tz': tz}
+    if recommended_only:
+        cursor_scope['recommended_only'] = True
     decoded = _decode_cursor(cursor, request, cursor_scope)
     if decoded:
         clauses.append(f"(kickoff_at,id) > ({bind(decoded[0])},{bind(decoded[1])})")
@@ -147,6 +182,9 @@ async def matches(
     items = rows[:page_size]
     fixture_ids = [row["id"] for row in items]
     by_fixture = await _quote_summaries(request, fixture_ids) if include_markets else {}
+    full_history = await _has_entitlement(request, 'expert_full_history') if recommended_only else False
+    recommendation_limit = 20 if full_history else 5
+    recommendations = await _recommendation_summaries(fixture_ids, recommendation_limit) if recommended_only else {}
     output = []
     for row in items:
         item = dict(row)
@@ -154,10 +192,14 @@ async def matches(
         item['quote_fresh'] = any(q['fresh'] for q in item['markets']) and item['phase'] in {'scheduled','live'}
         item['markets_are_summary'] = True
         item['markets_status'] = 'loaded' if include_markets else 'not_requested'
+        if recommended_only:
+            item['expert_signals'] = recommendations.get(row['id'], [])[:recommendation_limit]
+            item['expert_signals_has_more'] = len(recommendations.get(row['id'], [])) > recommendation_limit
+            item['recommendations_limited'] = not full_history
         output.append(item)
     next_cursor = _encode_cursor(items[-1]["kickoff_at"], items[-1]["id"], request, cursor_scope) if has_more and items else None
     return {"items": output, "next_cursor": next_cursor, "page_size": page_size,
-            "markets_included": include_markets, "server_time": datetime.now(timezone.utc)}
+            "markets_included": include_markets, "recommended_only": recommended_only, "server_time": datetime.now(timezone.utc)}
 
 
 async def _match_markets(fixture_id: str, request: Request, phase: str, *, cursor=None, page_size=500):

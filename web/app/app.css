@@ -1207,6 +1207,14 @@ legend {
   font-size: 12px;
   line-height: 1.8;
 }
+.expert-sport-tabs {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.expert-sport-tabs button {
+  min-width: 128px;
+}
 .inline-form {
   display: flex;
   gap: 8px;
@@ -2273,4 +2281,28 @@ dialog {
   font-size: 12px;
   color: #787181;
   line-height: 1.9;
+}
+
+/* Read-only expert evidence grouped below each homepage match. */
+.homepage-match-tabs { margin: 8px 0; }
+.match-recommendations { grid-column: 1 / -1; width: 100%; padding: 8px 12px; text-align: left; border-top: 1px dashed var(--line); background: #f7fafc; }
+.match-recommendation { padding: 8px 0; overflow-wrap: anywhere; }
+.match-recommendation + .match-recommendation { border-top: 1px solid var(--line); }
+.match-recommendation > div:first-child, .recommendation-result { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.recommendation-market { padding: 6px 0; color: #263b50; }
+.match-recommendation small { display: block; margin-top: 5px; }
+@media (max-width: 640px) {
+  .match-recommendations { grid-row: 3; padding: 6px 8px; }
+  .match-recommendation { font-size: 12px; line-height: 1.5; }
+  .match-recommendation .text-link { min-height: 32px; }
+}
+@media (max-width: 720px) {
+  .match-row[data-sport="basketball"] {
+    grid-template-columns: 43px 0 0 minmax(60px, 1fr) 84px minmax(60px, 1fr) 0 26px;
+  }
+  .match-row[data-sport="basketball"] .score-button {
+    font-size: 16px;
+    white-space: nowrap;
+    letter-spacing: 0;
+  }
 }
