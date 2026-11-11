@@ -16,9 +16,11 @@ trap cleanup EXIT INT TERM
 mkdir -p "$test_output"
 docker build -f infra/test/Dockerfile -t ai-football-verifier:v2.0.0-dev .
 docker network create --internal "$test_network" >/dev/null
+# Disposable PostgreSQL and runner each use .75 CPU (1.5 total). Repeated
+# empty-schema setup is CPU-bound; keep the test deadline and assertions intact.
 docker run -d --name "$test_database" --network "$test_network" \
   --network-alias ai-football-v2-pgverify --network-alias ai-football-v2-pgtest \
-  --cpus=.5 --memory=384m --tmpfs /var/lib/postgresql/data:rw,size=256m \
+  --cpus=.75 --memory=384m --tmpfs /var/lib/postgresql/data:rw,size=256m \
   -e POSTGRES_HOST_AUTH_METHOD=trust \
   postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36 >/dev/null
 test_ready=0
