@@ -703,16 +703,19 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_fixture_results'))
 
     async def test_unknown_time_quotes_and_chinese_calendar(self):
-        await self.pool.execute("UPDATE v2_fixtures SET phase='finished',kickoff_at='2026-10-25T16:30:00Z'")
+        utc_day = self.now.replace(hour=0,minute=0,second=0,microsecond=0)-timedelta(days=1)
+        kickoff = utc_day+timedelta(hours=16,minutes=30)
+        chinese_day = (kickoff+timedelta(hours=8)).date().isoformat()
+        await self.pool.execute("UPDATE v2_fixtures SET phase='finished',kickoff_at=$1",kickoff)
         await self.pool.execute("INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,line,selection,price,source_updated_at,status) VALUES($1,'fixture','total','大小',2.5,'over',2,NULL,'active')", uuid.uuid4())
-        response = await self.client.get('/api/v1/public/matches', params={'date':'2026-10-26','phase':'finished','tz':'Asia/Shanghai'})
+        response = await self.client.get('/api/v1/public/matches', params={'date':chinese_day,'phase':'finished','tz':'Asia/Shanghai'})
         self.assertEqual(200, response.status_code, response.text)
         self.assertEqual(1, len(response.json()['items']))
         self.assertFalse(response.json()['items'][0]['quote_fresh'])
         detail = await self.client.get('/api/v1/public/matches/fixture')
         self.assertEqual(200, detail.status_code, detail.text)
         self.assertFalse(detail.json()['markets'][0]['fresh'])
-        self.assertEqual([], (await self.client.get('/api/v1/public/matches', params={'date':'2026-10-25','phase':'finished'})).json()['items'])
+        self.assertEqual([], (await self.client.get('/api/v1/public/matches', params={'date':utc_day.date().isoformat(),'phase':'finished','tz':'Asia/Shanghai'})).json()['items'])
 
     async def test_guest_cannot_read_original_or_media(self):
         self.assertEqual(403, (await self.client.get(f'/api/v1/public/messages/{self.message}')).status_code)
@@ -721,10 +724,11 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_public_summary_matches_window_ranking_at_maximum_and_paginated_sizes(self):
         fixture_ids = [f'summary-{number:03d}' for number in range(205)]
+        kickoff = self.now.replace(hour=12,minute=0,second=0,microsecond=0)
         await self.pool.executemany(
             "INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) "
-            "VALUES($1,$1,'football','summary-test','Alpha','Beta','2026-10-26T12:00:00Z',$2)",
-            [(identifier, ('scheduled', 'live', 'finished', 'cancelled')[number % 4])
+            "VALUES($1,$1,'football','summary-test','Alpha','Beta',$3,$2)",
+            [(identifier, ('scheduled', 'live', 'finished', 'cancelled')[number % 4],kickoff)
              for number, identifier in enumerate(fixture_ids)])
         quotes = []
         for number, fixture_id in enumerate(fixture_ids):
@@ -758,7 +762,7 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         for phase, page_size in [('all', 50), ('all', 200), ('live', 200),
                                  ('scheduled', 200), ('finished', 200), ('cancelled', 200)]:
             with self.subTest(phase=phase, page_size=page_size):
-                params = {'phase': phase, 'page_size': page_size, 'date': '2026-10-26',
+                params = {'phase': phase, 'page_size': page_size, 'date': kickoff.date().isoformat(),
                           'tz': 'UTC', 'league': 'summary-test'}
                 seen = []
                 while True:

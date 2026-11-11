@@ -1,16 +1,18 @@
-"""闭盘保留演练仅删恢复目标的无引用投影，真实临时PG事务验证。"""
+"""迁移前30天闭盘清理的历史恢复兼容性；当前72小时策略另行验证。"""
 import copy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import os
 import unittest
 import uuid
+from unittest.mock import patch
 
 import asyncpg
 
 from infra.recovery.bundle import RecoveryError, audit_inventory, restore_bundle
 from infra.recovery.retention import apply_retention, plan_retention
 import test_recovery as support
+from services.api.app import database as recovery_database
 
 
 class RetentionConnectionGuardTests(unittest.IsolatedAsyncioTestCase):
@@ -33,8 +35,45 @@ class RetentionConnectionGuardTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(os.environ.get('RECOVERY_TEST_ADMIN_URL'), 'requires explicit task-owned temporary recovery PostgreSQL')
-class RetentionRehearsalTests(unittest.IsolatedAsyncioTestCase):
+class CurrentRetentionRecoveryTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = support.RecoveryIntegrationTests.asyncSetUp
+    asyncTearDown = support.RecoveryIntegrationTests.asyncTearDown
+    populate = support.RecoveryIntegrationTests.populate
+    bundle = support.RecoveryIntegrationTests.bundle
+
+    async def test_current_schema_rejects_expired_quotes_and_roundtrips_context(self):
+        old = datetime.now(timezone.utc)-timedelta(days=60)
+        await self.source.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,"
+            "home_team,away_team,kickoff_at,phase,source_updated_at,received_at) "
+            "VALUES('ttl-recovery','ttl-recovery','football','isolated','A','B',$1,'finished',$1,$1)",old)
+        self.assertIsNotNone(await self.source.fetchval("SELECT decision_context_only_at "
+            "FROM v2_fixtures WHERE id='ttl-recovery'"))
+        quote = uuid.uuid4()
+        await self.source.execute("INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,"
+            "line,selection,price,source_updated_at,received_at,status) "
+            "VALUES($1,'ttl-recovery','isolated','isolated',0,'home',1.95,$2,$2,'closed')",quote,old)
+        self.assertEqual(0,await self.source.fetchval('SELECT count(*) FROM v2_current_quotes WHERE id=$1',quote))
+        before=dict(await self.source.fetchrow("SELECT * FROM v2_fixtures WHERE id='ttl-recovery'"))
+        stream,_=await self.bundle()
+        report=await restore_bundle(self.target,stream,self.backup_key,support.MemoryObjects())
+        self.assertEqual({},report['differences'])
+        self.assertEqual(before,dict(await self.target.fetchrow("SELECT * FROM v2_fixtures WHERE id='ttl-recovery'")))
+        plan=await plan_retention(self.target,cutoff=datetime.now(timezone.utc)-timedelta(days=30,seconds=5))
+        self.assertEqual([],plan['rows'])
+        self.assertEqual(0,await self.target.fetchval('SELECT count(*) FROM v2_current_quotes WHERE id=$1',quote))
+
+
+@unittest.skipUnless(os.environ.get('RECOVERY_TEST_ADMIN_URL'), 'requires explicit task-owned temporary recovery PostgreSQL')
+class RetentionRehearsalTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # The offline 30-day rehearsal operates on pre-TTL backup schemas.
+        # Keep this historical contract without weakening production's 72-hour
+        # triggers. Current-schema recovery and raw TTL have separate tests.
+        definitions = [item for item in recovery_database.migration_files()
+                       if int(item[0].split('_')[0]) < 33]
+        with patch.object(recovery_database,'migration_files',return_value=definitions):
+            await support.RecoveryIntegrationTests.asyncSetUp(self)
+        self.assertIsNone(await self.source.fetchval("SELECT to_regclass('v2_raw_retention_status')"))
     asyncTearDown = support.RecoveryIntegrationTests.asyncTearDown
     populate = support.RecoveryIntegrationTests.populate
     bundle = support.RecoveryIntegrationTests.bundle

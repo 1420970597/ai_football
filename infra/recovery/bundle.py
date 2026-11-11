@@ -80,6 +80,14 @@ async def empty_target(conn,names):
                 "WHERE seed.singleton IS DISTINCT FROM TRUE OR seed.realtime_claims_since_replay<>0 "
                 "OR seed.updated_at IS DISTINCT FROM (SELECT applied_at FROM v2_schema_migrations "
                 "WHERE version='017_review_freshness_lanes.sql')")
+        if name=='v2_raw_retention_status' and count:
+            # Only migration 033's untouched singleton is initialization data.
+            # Heartbeats, counts and failures belong to the target and must
+            # never be overwritten, even if no raw rows currently remain.
+            count=await conn.fetchval("SELECT count(*) FROM v2_raw_retention_status "
+                "WHERE singleton IS DISTINCT FROM TRUE OR last_started_at IS NOT NULL "
+                "OR last_completed_at IS NOT NULL OR last_error_category IS NOT NULL "
+                "OR last_counts IS DISTINCT FROM '{}'::jsonb")
         if count:
             raise RecoveryError('restore_target_contains_business_data')
 

@@ -244,6 +244,36 @@ class RecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual({},objects.items)
                 self.assertEqual(0,await self.target.fetchval('SELECT count(*) FROM v2_users'))
 
+    async def test_pristine_retention_seed_restores_source_status_exactly(self):
+        seed=dict(await self.target.fetchrow('SELECT * FROM v2_raw_retention_status'))
+        self.assertEqual({'singleton':True,'last_started_at':None,'last_completed_at':None,
+            'last_error_category':None,'last_counts':{}},seed)
+        await self.source.execute("UPDATE v2_raw_retention_status SET last_started_at=now(),"
+            "last_completed_at=now(),last_counts=$1",{'messages':7})
+        expected=dict(await self.source.fetchrow('SELECT * FROM v2_raw_retention_status'))
+        stream,_=await self.bundle()
+        report=await restore_bundle(self.target,stream,self.backup_key,MemoryObjects())
+        self.assertEqual({},report['differences'])
+        self.assertEqual(expected,dict(await self.target.fetchrow('SELECT * FROM v2_raw_retention_status')))
+
+    async def test_used_retention_seed_never_overwrites_target_or_uploads_media(self):
+        stream,_=await self.bundle()
+        changes=("last_started_at=now()","last_completed_at=now()",
+            "last_error_category='test-only'","last_counts='{\"messages\":0}'::jsonb")
+        for change in changes:
+            with self.subTest(change=change):
+                await self.target.execute("UPDATE v2_raw_retention_status SET last_started_at=NULL,"
+                    "last_completed_at=NULL,last_error_category=NULL,last_counts='{}'::jsonb")
+                await self.target.execute('UPDATE v2_raw_retention_status SET '+change)
+                before=dict(await self.target.fetchrow('SELECT * FROM v2_raw_retention_status'))
+                objects=MemoryObjects()
+                stream.seek(0)
+                with self.assertRaisesRegex(RecoveryError,'restore_target_contains_business_data'):
+                    await restore_bundle(self.target,stream,self.backup_key,objects)
+                self.assertEqual(before,dict(await self.target.fetchrow('SELECT * FROM v2_raw_retention_status')))
+                self.assertEqual({},objects.items)
+                self.assertEqual(0,await self.target.fetchval('SELECT count(*) FROM v2_users'))
+
     async def test_backup_is_encrypted_wrong_key_and_corrupt_chunk_rejected(self):
         stream,manifest=await self.bundle()
         raw=stream.getvalue()

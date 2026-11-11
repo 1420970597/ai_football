@@ -275,7 +275,7 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def test_old_backlog_does_not_precede_current_messages_and_sources_stay_fair(self):
         pairs = [await self.pair() for _ in range(3)]
         for pair in pairs:
-            await self.queued(pair,age=120000000,count=35)
+            await self.queued(pair,age=2*24*60*60,count=35)
             await self.queued(pair,age=60,count=4)
         original = [dict(row) for row in await self.pool.fetch('SELECT id,raw_text,posted_at FROM v2_expert_messages ORDER BY id')]
         seen = []
@@ -310,7 +310,7 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def test_eight_to_one_budget_survives_new_pool_and_history_concurrency_is_global(self):
         realtime,historical = await self.pair(),await self.pair()
         await self.queued(realtime,age=60,count=12)
-        await self.queued(historical,age=120000000,count=4)
+        await self.queued(historical,age=2*24*60*60,count=4)
         for _ in range(8):
             job = await worker.claim_job(self.pool)
             self.assertEqual('real_time',job['review_mode'])
@@ -347,7 +347,7 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_historical_expired_attempt_precedes_other_replay_and_keeps_original_time(self):
         pair = await self.pair()
-        expired = (await self.queued(pair,age=120000000,state='running',attempts=2))[0]
+        expired = (await self.queued(pair,age=2*24*60*60,state='running',attempts=2))[0]
         await self.queued(pair,age=90000)
         stamp = await self.pool.fetchval('SELECT message_posted_at FROM v2_analysis_jobs WHERE id=$1',expired)
         job = await worker.claim_job(self.pool)
@@ -438,7 +438,7 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("UPDATE v2_analysis_jobs SET state='unresolved',lease_until=NULL")
         cross = await self.pair(expert=pair[1])
         await self.queued(pair,age=60)
-        await self.queued(cross,age=120000000)
+        await self.queued(cross,age=2*24*60*60)
         second = await self.new_pool()
         try:
             values = await asyncio.gather(worker.claim_job(self.pool),worker.claim_job(second))
@@ -448,7 +448,7 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_disabled_replay_future_messages_and_retry_delay_are_not_claimed(self):
         historical = await self.pair()
-        await self.queued(historical,age=120000000)
+        await self.queued(historical,age=2*24*60*60)
         future = (await self.queued(await self.pair(),age=-3600))[0]
         delayed = (await self.queued(await self.pair(),age=30,state='retry'))[0]
         await self.pool.execute("UPDATE v2_analysis_jobs SET available_at=now()+interval '1 minute' WHERE id=$1",delayed)
@@ -460,7 +460,7 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_projected_timestamp_cannot_be_spoofed_and_copy_restore_remains_valid(self):
         pair = await self.pair()
-        job = (await self.queued(pair,age=120000000))[0]
+        job = (await self.queued(pair,age=2*24*60*60))[0]
         before = await self.pool.fetchrow('SELECT message_id,message_posted_at FROM v2_analysis_jobs WHERE id=$1',job)
         await self.pool.execute('UPDATE v2_analysis_jobs SET message_posted_at=now() WHERE id=$1',job)
         self.assertEqual(before['message_posted_at'],await self.pool.fetchval('SELECT message_posted_at FROM v2_analysis_jobs WHERE id=$1',job))
@@ -481,7 +481,7 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
         second = await self.pair(source=first[0])
         third = await self.pair()
         for pair in (first,second,third):
-            await self.queued(pair,age=120000000,count=5)
+            await self.queued(pair,age=2*24*60*60,count=5)
         seen = []
         for _ in range(9):
             job = await worker.claim_job(self.pool)
@@ -539,7 +539,9 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(old_job,{key:migrated[key] for key in old_job})
             self.assertEqual(posted,migrated['message_posted_at'])
             self.assertEqual('historical_replay',migrated['review_mode'])
-            self.assertEqual(old_message,dict(await conn.fetchrow('SELECT * FROM v2_expert_messages WHERE id=$1',message)))
+            migrated_message=dict(await conn.fetchrow('SELECT * FROM v2_expert_messages WHERE id=$1',message))
+            self.assertEqual(old_message,{key:migrated_message[key] for key in old_message})
+            self.assertIsNone(migrated_message['raw_content_expired_at'])
             self.assertEqual([],await apply_migrations(conn))
         finally:
             await conn.close()
@@ -547,7 +549,7 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_historical_mode_reaches_model_as_copy_without_changing_original_message(self):
         pair = await self.pair()
-        await self.queued(pair,age=120000000)
+        await self.queued(pair,age=2*24*60*60)
         job = await worker.claim_job(self.pool)
         before = dict(job['message'])
         model = AsyncMock(return_value=('Historical archive only',{'content':'Historical archive only'}))
