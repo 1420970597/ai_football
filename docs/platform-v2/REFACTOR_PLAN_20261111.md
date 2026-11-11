@@ -102,8 +102,8 @@
 - 结果：完整冻结套件 2342 项 495.4 秒，退出 0（基线 2312 项 969 秒；多出的 30 项是本分支新增用例）。三模块对比 199.7 / 182.8 秒 → 64.8 秒。
 - 保留的失败记录：首次完整套件未运行（直接执行 `infra/test/run.sh`，文件模式 100644，`Permission denied`，0 项）；改 `sh infra/test/run.sh` 后通过。未打补丁基线上两条账户用例失败属 R6 修复前的既有状态，见 `ACCOUNT_REFRESH_FIX_20261111.md`。
 
-### R4 collector-telegram（纯搬移 `71b56415` 已测，待合并；其余为度量结论）
+### R4 collector-telegram（纯搬移已合并 `2799abe5`；其余为度量结论）
 
-- 已做：6 个无状态辅助定义移入 `services/collector/telegram_common.py`（50 行），`telegram.py` 1741 → 1697 行。搬移后 `r4-move` 344 项退出 0；搬移前基线 `r4-base` 是另一组模块（510 项退出 0），两次范围不同，不能直接对比。同范围补跑尚未出结果，合并前以它为准。
+- 已做：6 个无状态辅助定义移入 `services/collector/telegram_common.py`（50 行），`telegram.py` 1741 → 1697 行。搬移后 `r4-move` 344 项退出 0；搬移前基线 `r4-base` 是另一组模块（510 项退出 0），两次范围不同，不能直接对比。补跑 `r4-move-gap` 166 项退出 0。合并结果上 `feat-r4-merge` 跑全部 `tests/test_telegram*.py` 与 `tests/test_collector*.py` 共 19 个模块，344 项退出 0。
 - 不再拆的原因：测试对 `collector.telegram.<常量>` 打了十余个名字的补丁（按 `patch('collector.telegram.大写名'` 检索为 16 个），搬走后补丁落在重导出副本上静默失效；最长的几个函数是带租约、幂等和可信作者判定的单事务流程，拆分即改业务路径。
 - 度量发现，未改：`media_orphans`（`routes/telegram.py:945-979`）每轮同步（约 10 秒）调用一次，每次三次顺序扫描，而孤儿阈值是 24 小时；管理端消息列表（`routes/telegram.py:1163-1168`）缺 `(posted_at DESC, id DESC)` 索引。前者适合节流到分钟级并加部分索引，属行为节奏变更，另行决定。
