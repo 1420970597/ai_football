@@ -117,10 +117,13 @@ try {
             ],
           },
         });
-      if (endpoint === "/public/matches/" + basketball.id)
+      if (endpoint === "/public/matches/" + basketball.id) {
+        // Exercise the loading state before the response is rendered.
+        await new Promise((resolve) => setTimeout(resolve, 150));
         return route.fulfill({
           json: { fixture: basketball, markets: [market], expert_signals: [] },
         });
+      }
       if (endpoint === "/public/experts")
         return route.fulfill({ json: { items: [], source_options: [] } });
       if (endpoint === "/public/signals")
@@ -147,6 +150,7 @@ try {
     assert.match(page.url(), /sport=basketball/);
     await page.locator('.match-row[data-sport="basketball"] .score-button').click();
     await page.locator("#content-dialog").waitFor({ state: "visible" });
+    await page.locator("#dialog-content .detail-hero").waitFor({ state: "visible" });
     assert.match(await page.locator("#dialog-content").innerText(), /篮球/);
     assert.match(await page.locator("#dialog-content").innerText(), /半场比分 36 : 32/);
     assert.match(await page.locator("#dialog-content").innerText(), /全场让分/);
