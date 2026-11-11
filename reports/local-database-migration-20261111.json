@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-11T04:10:04.034679+00:00",
+  "updated_at": "2026-11-11T05:31:47.078062+00:00",
   "phase": "storage migration verified",
   "implementation_commits": [
     "422ade060de8398af777c19eed82291a92b34ca4",
@@ -113,6 +113,25 @@
     ],
     "evidence_directory": "output/playwright/local-db-20261111-v4"
   },
+  "production_scope_navigation": {
+    "results": [
+      {
+        "width": 1440,
+        "recommended_count": 25,
+        "all_count": 50,
+        "passed": true
+      },
+      {
+        "width": 390,
+        "recommended_count": 25,
+        "all_count": 50,
+        "passed": true
+      }
+    ],
+    "errors": [],
+    "writes": [],
+    "production_writes": 0
+  },
   "api_image": {
     "tag": "ai-football-api:2.0.0-dev-localdb-history-retention-20261111-04",
     "id": "sha256:41e3bcd68791fee18a29ba96e8e872b2e5f33cbeee3cbbc56756495efce99516"
@@ -147,28 +166,305 @@
     },
     "runtime_ui_changed": false
   },
-  "ci_final": {
-    "conclusion": "",
-    "head_sha": "83caaa64e816a8db04931b92ca4315966ceda3b9",
-    "jobs": [
+  "ci_execution_remedy": {
+    "diagnostic_attempt_commit": "1e2642a34f2d7eebdb82fb3773cb37a4f0a01528",
+    "superseded_runs": [
+      42955408663,
+      42958556833
+    ],
+    "superseded_backend_result": "cancelled at the 20-minute job limit; no completed test report",
+    "fix_commit": "4f8c69a1cc0d58ed152d15264fca99d74d4c48e4",
+    "root_cause": "whole-record comparison included newly added columns; unittest generated a quadratic large-list failure diff",
+    "job_limit_minutes": 20,
+    "postgres_cpu": 0.5,
+    "runner_cpu": 0.75,
+    "total_test_cpu": 1.25,
+    "tests_removed": false,
+    "progress": "newline and flush before each test starts",
+    "targeted_regressions": [
       {
-        "conclusion": "",
-        "name": "backend",
-        "status": "in_progress"
+        "tests": 3,
+        "seconds": 5.093,
+        "exit_code": 0
       },
+      {
+        "tests": 8,
+        "seconds": 8.277,
+        "exit_code": 0
+      }
+    ],
+    "migration_budget_experiment": [
+      {
+        "cpu": ".5",
+        "migrations": 32,
+        "samples": [
+          {
+            "seconds": 0.897595,
+            "migration_seconds": 0.787538,
+            "tables": 52
+          },
+          {
+            "seconds": 1.047043,
+            "migration_seconds": 0.92624,
+            "tables": 52
+          },
+          {
+            "seconds": 0.923649,
+            "migration_seconds": 0.768744,
+            "tables": 52
+          },
+          {
+            "seconds": 0.932742,
+            "migration_seconds": 0.827786,
+            "tables": 52
+          },
+          {
+            "seconds": 0.975442,
+            "migration_seconds": 0.837067,
+            "tables": 52
+          }
+        ],
+        "median_seconds": 0.932742,
+        "scope": "disposable Docker PostgreSQL; no production connection"
+      },
+      {
+        "cpu": ".75",
+        "migrations": 32,
+        "samples": [
+          {
+            "seconds": 0.607929,
+            "migration_seconds": 0.507925,
+            "tables": 52
+          },
+          {
+            "seconds": 0.67253,
+            "migration_seconds": 0.600294,
+            "tables": 52
+          },
+          {
+            "seconds": 0.586348,
+            "migration_seconds": 0.52659,
+            "tables": 52
+          },
+          {
+            "seconds": 0.910229,
+            "migration_seconds": 0.816631,
+            "tables": 52
+          },
+          {
+            "seconds": 0.636212,
+            "migration_seconds": 0.547497,
+            "tables": 52
+          }
+        ],
+        "median_seconds": 0.636212,
+        "scope": "disposable Docker PostgreSQL; no production connection"
+      },
+      {
+        "cpu": ".5",
+        "migrations": 32,
+        "samples": [
+          {
+            "seconds": 1.032528,
+            "migration_seconds": 0.887826,
+            "tables": 52
+          },
+          {
+            "seconds": 0.937724,
+            "migration_seconds": 0.843646,
+            "tables": 52
+          },
+          {
+            "seconds": 0.973696,
+            "migration_seconds": 0.878163,
+            "tables": 52
+          },
+          {
+            "seconds": 0.998753,
+            "migration_seconds": 0.823425,
+            "tables": 52
+          },
+          {
+            "seconds": 0.899674,
+            "migration_seconds": 0.829166,
+            "tables": 52
+          }
+        ],
+        "median_seconds": 0.973696,
+        "scope": "disposable Docker PostgreSQL; no production connection"
+      }
+    ],
+    "budget_decision": "CPU increase reverted after the comparison defect was isolated",
+    "private_diagnostic": "bounded sampling stopped with exit 137; not a complete suite result"
+  },
+  "ci_browser_integration_remedy": {
+    "commit": "c64c6614",
+    "reason": "old all-match assumptions were applied to the new default associated-match scope",
+    "scope_assertions": "default two associated fixtures, explicit all four fixtures, unchanged five-role matrix",
+    "production_scope_navigation": "read-only desktop and mobile passed",
+    "ci_run": 42961319797,
+    "ci_artifacts": [
+      {
+        "file": "integration-results.json",
+        "entries": 17,
+        "passed": 17,
+        "failed": 0,
+        "browser_errors": 0,
+        "sha256": "2ab77bfc972ec69ace0fcef5f7c02f91ba6546dc5411d635fe20fc59e68ccff6"
+      },
+      {
+        "file": "integration-account-results.json",
+        "entries": 9,
+        "passed": 9,
+        "failed": 0,
+        "browser_errors": 0,
+        "sha256": "69b4c71b8cbd09f216e6a2e2fb2e273e1ab96647a5f7e6eb84668466f07751bd"
+      },
+      {
+        "file": "visual-results.json",
+        "entries": 14,
+        "passed": 14,
+        "failed": 0,
+        "browser_errors": 0,
+        "sha256": "183da4efc19dc0b4edfacc523110db82f9e84574c8ec952862dc02901dc1816b"
+      }
+    ]
+  },
+  "ci_final": {
+    "conclusion": "success",
+    "head_sha": "88d4c5aad7431ca8c4b18099d19d2b5fb4bb55c5",
+    "jobs": [
       {
         "conclusion": "success",
         "name": "android",
         "status": "completed"
       },
       {
-        "conclusion": "failure",
+        "conclusion": "success",
         "name": "browser",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "name": "backend",
         "status": "completed"
       }
     ],
-    "run_id": 42955408663,
-    "status": "in_progress"
+    "run_id": 42964601925,
+    "status": "completed"
+  },
+  "ci_completed_failure": {
+    "source_parent_commit": "0fb296d3458bf67997cd33ecb7414aa28d631f9c",
+    "committed_source_verified": true,
+    "tests": 2295,
+    "failures": 12,
+    "errors": 14,
+    "skipped": 0,
+    "seconds": 942.497,
+    "scope": "isolated fixtures; no live providers or money",
+    "run_id": 42961319797,
+    "report_sha256": "36e6e034791932d906c9eea51f5dee57d994937436d9a97d01d90c1471e1b716",
+    "unittest_seconds": 939.56
+  },
+  "ci_storage_compatibility": {
+    "status": "targeted and full CI verification passed",
+    "runtime_application_changes": false,
+    "generic_recovery_change": "allow only untouched raw-retention seed; used targets fail closed",
+    "raw_ttl_checks_disabled": false,
+    "historical_rehearsal_schema": "before migration 033; offline 30-day protocol",
+    "current_schema_recovery": "expired quote rejected; minimal context exact roundtrip",
+    "regressions": [
+      {
+        "scope": "five current-schema recovery, source transport, scheduler and list modules",
+        "tests": 137,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "execution_log": "ci-retention-compat-regression-v2.log"
+      },
+      {
+        "scope": "historical and current retention recovery",
+        "tests": 10,
+        "seconds": 41.576,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "exit_code": 0,
+        "execution_log": "ci-retention-compat-rehearsal-v3.log"
+      }
+    ],
+    "preserved_failures": [
+      {
+        "log": "ci-retention-compat-regression.log",
+        "reason": "runner omitted services from PYTHONPATH",
+        "exit_code": 1
+      },
+      {
+        "log": "ci-retention-compat-regression-v2.log",
+        "tests": 146,
+        "seconds": 220.713,
+        "failures": 6,
+        "errors": 1,
+        "exit_code": 1,
+        "reason": "30-day historical fixture incompatible with current 72-hour policy"
+      }
+    ],
+    "source_sha256": {
+      "infra/recovery/bundle.py": "9002bf6c9a2b85badc19ad37b31a7e18f9b5f9de3cb8aa401fd5beabcd73d3de",
+      "tests/test_recovery.py": "cd4af0626a7d144684edc4c49e087a7b4a8c0a9ddea7bc33cd9f8a8a6728b26b",
+      "tests/test_recovery_line_contract.py": "1037048e22ace756d1d2427c040b6d85597d278675acd1638d7010c445aa75e8",
+      "tests/test_retention_rehearsal.py": "9fa55ff81b4641be2cf51897dbfd66250d43fb29fef722ba4da130784a3a12f1",
+      "tests/test_review_freshness_scheduler.py": "cd516630b6815b1fc444112b373af3a25ffcf91f37d8a9df7820270b3e4a50c1",
+      "tests/test_telegram_reconciliation_claims.py": "e34648d95ef1d5215af4f585394e2aecbfaafe0ab6166dcd5ac0b073127c3374",
+      "tests/test_result_ledger.py": "0f7dd2e0452617f27ca5eaeef9871801e12d9b971eb0507d801be181ff657724"
+    },
+    "full_ci_run": 42964601925
+  },
+  "ci_latest_browser_artifacts": [
+    {
+      "file": "integration-results.json",
+      "entries": 17,
+      "passed": 17,
+      "failed": 0,
+      "browser_errors": 0,
+      "fixture_unavailable_responses": 5,
+      "unavailable_scope": "explicitly unconfigured Telegram control and image storage; not production",
+      "sha256": "f172c2515561778c10e9b6727dc216a748df07314902ce0aa4f1d724f1551a08"
+    },
+    {
+      "file": "integration-account-results.json",
+      "entries": 9,
+      "passed": 9,
+      "failed": 0,
+      "browser_errors": 0,
+      "fixture_unavailable_responses": 0,
+      "unavailable_scope": "explicitly unconfigured Telegram control and image storage; not production",
+      "sha256": "a8017a28981fa9f4de71c6bac39c4e93021c1f945e882eed6e86b82cec6cb605"
+    },
+    {
+      "file": "visual-results.json",
+      "entries": 14,
+      "passed": 14,
+      "failed": 0,
+      "browser_errors": 0,
+      "fixture_unavailable_responses": 0,
+      "unavailable_scope": "explicitly unconfigured Telegram control and image storage; not production",
+      "sha256": "5b59711032433e2ac5f793c815bfcf0f60816540a159e478e15d3b0477118c8f"
+    }
+  ],
+  "ci_latest_backend_artifacts": {
+    "source_parent_commit": "deba33eda213b5146c67887ccfa1559b76acd6c2",
+    "committed_source_verified": true,
+    "tests": 2298,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 795.155,
+    "scope": "isolated fixtures; no live providers or money",
+    "run_id": 42964601925,
+    "head_sha": "88d4c5aad7431ca8c4b18099d19d2b5fb4bb55c5",
+    "owned_frozen_files_match": true,
+    "report_sha256": "a5bdc45de757398fc3b8cdf1ef1440b2854e0ead9af69977e24f94859306351e"
   },
   "remote_retirement": {
     "old_tools_api": "exited",
@@ -220,9 +516,9 @@
     "remedy": "read-time deadline added; original failed observation retained"
   },
   "latest_storage_report": {
-    "at": "2026-11-11T04:08:37.263051+00:00",
+    "at": "2026-11-11T05:30:24.279527+00:00",
     "scope": "storage only",
-    "database_bytes": 3437886487,
+    "database_bytes": 3440540695,
     "tables": 53,
     "expired_message_content": 0,
     "expired_event_content": 0,
@@ -234,7 +530,7 @@
     "quote_count_method": "bounded 50-parent reads; concurrent cleanup may reduce totals during report",
     "queued_media": 0,
     "retention_status": {
-      "last_completed_at": "2026-11-11 04:08:37.231719+00:00",
+      "last_completed_at": "2026-11-11 05:30:24.515479+00:00",
       "last_error_category": null
     },
     "tls": true
