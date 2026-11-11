@@ -968,11 +968,13 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         signal,expert,_,_=await self.signal()
         await self.enable([expert])
         first=await self.reserve(signal)
+        # Accept before the next policy change; re-enabling cancels pending orders and zeroes their reserved stake.
+        await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no='SETTLED' WHERE id=$1",first['id'])
         second_signal,second_expert,_,_=await self.signal()
         await self.enable([expert,second_expert])
         second=await self.reserve(second_signal)
-        for order,number in ((first,'SETTLED'),(second,'LIMITED')):
-            await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no=$2 WHERE id=$1",order['id'],number)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no='LIMITED' WHERE id=$1",second['id'])
+        self.assertEqual([Decimal('2'),Decimal('2')],[await self.pool.fetchval('SELECT reserved_stake FROM v2_bet_orders WHERE id=$1',o['id']) for o in (first,second)])
         policy=dict(await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1',self.user['id']))
         await self.pool.execute("UPDATE v2_leyu_accounts SET last_verified_at=now()-interval '12 hours' WHERE id=$1",account['id'])
         before=await self.pool.fetchval('SELECT last_verified_at FROM v2_leyu_accounts WHERE id=$1',account['id'])
@@ -1069,6 +1071,127 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         job=await self.pool.fetchrow('SELECT * FROM v2_account_jobs WHERE id=$1',uuid.UUID(work['job_id']))
         self.assertEqual(('failed','account_http_rejected'),(job['state'],job['last_error']))
         self.assertEqual(order['reserved_stake'],await self.pool.fetchval('SELECT reserved_stake FROM v2_bet_orders WHERE id=$1',order['id']))
+
+    async def two_accepted_orders(self):
+        account=await self.healthy()
+        signal,expert,_,_=await self.signal()
+        await self.enable([expert])
+        first=await self.reserve(signal)
+        # Accept the first order before the policy changes again: re-enabling
+        # correctly cancels still-pending orders and releases their stake.
+        await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no='ONE' WHERE id=$1",first['id'])
+        second_signal,second_expert,_,_=await self.signal()
+        await self.enable([expert,second_expert])
+        second=await self.reserve(second_signal)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no='TWO' WHERE id=$1",second['id'])
+        self.assertEqual([('accepted',Decimal('2'),None,'ONE'),('accepted',Decimal('2'),None,'TWO')],await self.order_money(first,second))
+        await self.pool.execute("UPDATE v2_leyu_accounts SET last_verified_at=now()-interval '12 hours' WHERE id=$1",account['id'])
+        account=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',account['id'])
+        await self.api.post('/api/v1/accounts/leyu/refresh')
+        work=(await self.worker_api.post('/internal/executor/claim')).json()
+        self.assertEqual({'ONE','TWO'},{item['provider_order_no'] for item in work['orders']})
+        return account,first,second,work
+
+    async def run_account_job(self,work,history,balance='100'):
+        """history(request, nth_history_read) answers ORDERS_PATH; returns history and balance read counts."""
+        counts={'history':0,'balance':0}
+        def native(request):
+            if request.url.path==ORDERS_PATH:
+                counts['history']+=1
+                return history(request,counts['history'])
+            if request.url.path==AMOUNT_PATH:
+                counts['balance']+=1
+                return httpx.Response(200,json={'amount':balance})
+            return self.native(request)
+        executor=Executor(self.worker_api,'https://platform.invalid/internal/executor',
+            client_factory=lambda scope,session,**kw:AccountProtocolClient(scope,session,transport=httpx.MockTransport(native),**kw))
+        await executor.account_job(work)
+        job=await self.pool.fetchrow('SELECT * FROM v2_account_jobs WHERE id=$1',uuid.UUID(work['job_id']))
+        return counts,job
+
+    async def order_money(self,*orders_):
+        return [tuple(await self.pool.fetchrow('SELECT state,reserved_stake,settled_net,provider_order_no FROM v2_bet_orders WHERE id=$1',order['id']))
+                for order in orders_]
+
+    async def test_two_orders_fit_a_gateway_budget_of_two_history_reads(self):
+        # Production incident: the gateway answered 0403001 once one refresh
+        # issued more than two history reads. Per-order lookups needed four
+        # (2 orders x unsettled/settled); the shared scan needs two.
+        account,first,second,work=await self.two_accepted_orders()
+        def history(request,nth):
+            if nth>2:
+                return httpx.Response(200,json={'code':'0403001','msg':'网关限流'})
+            settled=json.loads(request.content)['orderStatus']==1
+            return httpx.Response(200,json={'code':0,'data':{'total':1 if settled else 0,'records':[
+                {'orderNo':'ONE','betAmount':'2','profitAmount':'1.90'}] if settled else []}})
+        counts,job=await self.run_account_job(work,history)
+        self.assertEqual({'history':2,'balance':2},counts)
+        self.assertEqual(('succeeded',''),(job['state'],job['last_error']))
+        self.assertNotIn('reconciliation_errors',job['details'])
+        self.assertEqual([('settled',Decimal('0'),Decimal('1.90'),'ONE'),('accepted',second['reserved_stake'],None,'TWO')],
+                         await self.order_money(first,second))
+        self.assertGreater(await self.pool.fetchval('SELECT last_verified_at FROM v2_leyu_accounts WHERE id=$1',account['id']),account['last_verified_at'])
+
+    async def test_second_history_read_rate_limited_keeps_both_orders_and_advances_balance(self):
+        account,first,second,work=await self.two_accepted_orders()
+        before=await self.order_money(first,second)
+        policy=dict(await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1',self.user['id']))
+        def history(request,nth):
+            if nth>1:
+                return httpx.Response(200,json={'code':'0403001','msg':'网关限流'})
+            # The unsettled page that was read does contain ONE; a half-read
+            # scan is still not allowed to move any order.
+            return httpx.Response(200,json={'code':0,'data':{'total':1,'records':[{'orderNo':'ONE','betAmount':'2'}]}})
+        counts,job=await self.run_account_job(work,history,balance='88.50')
+        self.assertEqual({'history':2,'balance':2},counts)
+        self.assertEqual(('succeeded','order_reconciliation_partial'),(job['state'],job['last_error']))
+        self.assertCountEqual([{'order_id':str(order['id']),'category':'upstream_rejected','provider_code':'0403001'} for order in (first,second)],
+                              job['details']['reconciliation_errors'])
+        self.assertEqual(0,job['details']['receipts'])
+        self.assertIn('部分历史订单',account_jobs.public_task(job,account['binding_revision'])['message'])
+        refreshed=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',account['id'])
+        self.assertEqual(('healthy','ready',Decimal('88.50')),(refreshed['health_state'],refreshed['renewal_state'],refreshed['available_balance']))
+        self.assertGreater(refreshed['last_verified_at'],account['last_verified_at'])
+        self.assertGreater(refreshed['balance_observed_at'],account['balance_observed_at'])
+        self.assertEqual(before,await self.order_money(first,second))
+        self.assertEqual([('accepted',first['reserved_stake'],None,'ONE'),('accepted',second['reserved_stake'],None,'TWO')],before)
+        self.assertEqual(first['reserved_stake']+second['reserved_stake'],
+                         await self.pool.fetchval('SELECT sum(reserved_stake) FROM v2_bet_orders WHERE user_id=$1',self.user['id']))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_order_receipt_evidence'))
+        self.assertEqual(policy,dict(await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1',self.user['id'])))
+        self.assertNotIn(BET_PATH,[request.url.path for request in self.native_requests])
+
+    async def test_expired_session_during_history_read_still_fails_the_job(self):
+        account,first,second,work=await self.two_accepted_orders()
+        before=await self.order_money(first,second)
+        counts,job=await self.run_account_job(work,lambda request,nth:httpx.Response(200,json={'code':'0401013'}),balance='88.50')
+        # No final balance read and no partial success once the session is gone.
+        self.assertEqual({'history':1,'balance':1},counts)
+        self.assertEqual(('failed','session_expired','0401013'),(job['state'],job['last_error'],job['details']['provider_code']))
+        self.assertNotIn('reconciliation_errors',job['details'])
+        refreshed=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',account['id'])
+        self.assertEqual((account['last_verified_at'],account['available_balance'],account['balance_observed_at']),
+                         (refreshed['last_verified_at'],refreshed['available_balance'],refreshed['balance_observed_at']))
+        self.assertEqual(before,await self.order_money(first,second))
+
+    async def test_order_beyond_shared_page_limit_stays_accepted_with_exposure(self):
+        # The shared window starts at the older order, so a newer order can sit
+        # past the two-page bound. Not finding it is never a rejection.
+        account,first,second,work=await self.two_accepted_orders()
+        def history(request,nth):
+            body=json.loads(request.content)
+            if body['orderStatus']==0:
+                return httpx.Response(200,json={'code':0,'data':{'total':0,'records':[]}})
+            start=(body['page']-1)*100
+            return httpx.Response(200,json={'code':0,'data':{'total':250,'records':[
+                {'orderNo':'ONE','betAmount':'2','profitAmount':'1.90'} if n==0 else {'orderNo':f'FILL{n}','betAmount':'2'}
+                for n in range(start,start+100)]}})
+        counts,job=await self.run_account_job(work,history)
+        self.assertEqual({'history':3,'balance':2},counts)
+        self.assertEqual(('succeeded',''),(job['state'],job['last_error']))
+        self.assertEqual([('settled',Decimal('0'),Decimal('1.90'),'ONE'),('accepted',second['reserved_stake'],None,'TWO')],
+                         await self.order_money(first,second))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_order_receipt_evidence WHERE order_id=$1',second['id']))
 
     async def test_receipt_rejects_invalid_official_fields(self):
         from pydantic import ValidationError

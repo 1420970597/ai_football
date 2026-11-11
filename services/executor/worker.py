@@ -98,11 +98,27 @@ class Executor:
                         balance = await client.balance()
                 receipts = []
                 scanned = []
+                reconciliation_errors = []
                 async with self.client_factory(manager.scope, session) as client:
-                    for order in work.get("orders", [])[:2]:
-                        created = datetime.fromisoformat(order["created_at"].replace("Z", "+00:00"))
-                        lookup = await client.lookup(order["provider_order_no"], begin=created - timedelta(minutes=5),
-                                                     end=datetime.now(timezone.utc) + timedelta(minutes=5), max_pages=2)
+                    planned_orders = work.get("orders", [])[:2]
+                    lookups = {}
+                    if planned_orders:
+                        begin = min(datetime.fromisoformat(order['created_at'].replace('Z', '+00:00')) for order in planned_orders) - timedelta(minutes=5)
+                        try:
+                            lookups = await client.lookup_many([order['provider_order_no'] for order in planned_orders],
+                                                               begin=begin, end=datetime.now(timezone.utc) + timedelta(minutes=5), max_pages=2)
+                        except AuthExpired:
+                            raise
+                        except LeyuError as exc:
+                            # An order-history read failure does not invalidate a
+                            # separately verified balance or another order's receipt.
+                            # Keep this order unresolved; never release its exposure.
+                            reconciliation_errors.extend({"order_id": order['id'], "category": exc.category,
+                                                          "provider_code": exc.code} for order in planned_orders)
+                    for order in planned_orders:
+                        if order['provider_order_no'] not in lookups:
+                            continue
+                        lookup = lookups[order['provider_order_no']]
                         scanned.append(order['id'])
                         if lookup["found"] and not lookup.get("ambiguous"):
                             item = lookup["receipt"]
@@ -112,6 +128,8 @@ class Executor:
                     if work.get('orders'):
                         balance = await client.balance()
                 result.update(status="success", balance=balance["available"], observed_at=balance["observed_at"], receipts=receipts,scanned_orders=scanned)
+                if reconciliation_errors:
+                    result.update(category="order_reconciliation_partial", reconciliation_errors=reconciliation_errors)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

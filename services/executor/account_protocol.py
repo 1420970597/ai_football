@@ -296,39 +296,49 @@ class AccountProtocolClient:
         return order_page(await self._request(ORDERS_PATH, body), state, page, size)
 
     async def lookup(self, order_no: str, *, begin: datetime, end: datetime, max_pages: int = 10) -> dict[str, Any]:
+        return (await self.lookup_many([order_no], begin=begin, end=end, max_pages=max_pages))[order_no]
+
+    async def lookup_many(self, order_nos: list[str], *, begin: datetime, end: datetime, max_pages: int = 10) -> dict[str, dict[str, Any]]:
+        """Scan each account-history page once for this bounded group of orders."""
+        if (not 1 <= len(order_nos) <= 2 or len(set(order_nos)) != len(order_nos)
+                or any(not order_no or len(order_no) > 160 for order_no in order_nos)
+                or not 1 <= max_pages <= 100):
+            raise LeyuError("invalid_account_order_lookup")
         try:
             async with asyncio.timeout(60):
-                return await self._lookup(order_no, begin=begin, end=end, max_pages=max_pages)
+                return await self._lookup_many(order_nos, begin=begin, end=end, max_pages=max_pages)
         except TimeoutError:
             raise LeyuError("account_lookup_deadline_exceeded") from None
 
-    async def _lookup(self, order_no: str, *, begin: datetime, end: datetime, max_pages: int) -> dict[str, Any]:
-        if not order_no or len(order_no) > 160 or not 1 <= max_pages <= 100:
-            raise LeyuError("invalid_account_order_lookup")
+    async def _lookup_many(self, order_nos: list[str], *, begin: datetime, end: datetime, max_pages: int) -> dict[str, dict[str, Any]]:
         matches = []
         complete = True
-        ambiguous = False
+        conflicts = set()
         for state in ("unsettled", "settled"):
             previous_ids = set()
             for page in range(1, max_pages + 1):
                 response = await self.orders(state, page=page, begin=begin, end=end)
                 if response["total"] is None:
                     complete = False
-                ambiguous |= order_no in response["conflicting_order_ids"]
+                conflicts.update(response["conflicting_order_ids"])
                 identities = {(item["identifier_kind"], item["order_no"]) for item in response["items"]}
                 if response["malformed_records"] or (page > 1 and identities and identities <= previous_ids):
                     complete = False
                 previous_ids |= identities
-                matches.extend(item for item in response["items"] if item["identifier_kind"] == "order" and item["order_no"] == order_no)
+                matches.extend(item for item in response["items"] if item["identifier_kind"] == "order" and item["order_no"] in order_nos)
                 if not response["has_more"]:
                     break
                 if page == max_pages:
                     complete = False
         # 缺失不能证明拒单；结算回执优于同订单的短暂未结缓存。
-        unique = {item["state"]: item for item in matches}
-        ambiguous |= any(any(previous != item for previous in matches if previous["state"] == item["state"]) for item in matches)
-        return {"found": bool(unique) and not ambiguous, "receipt": None if ambiguous else unique.get("settled") or unique.get("unsettled"),
-                "scan_complete": complete and not ambiguous, "ambiguous": ambiguous, "absence_proves_rejection": False}
+        result = {}
+        for order_no in order_nos:
+            items = [item for item in matches if item['order_no'] == order_no]
+            unique = {item["state"]: item for item in items}
+            ambiguous = order_no in conflicts or any(any(previous != item for previous in items if previous["state"] == item["state"]) for item in items)
+            result[order_no] = {"found": bool(unique) and not ambiguous, "receipt": None if ambiguous else unique.get("settled") or unique.get("unsettled"),
+                                "scan_complete": complete and not ambiguous, "ambiguous": ambiguous, "absence_proves_rejection": False}
+        return result
 
     async def preflight(self, selection: NativeSelection, stake: Decimal, *, device_imei: str = "") -> PreparedBet:
         match_type = native_match_type(selection.phase)
