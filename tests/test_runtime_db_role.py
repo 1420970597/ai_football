@@ -8,7 +8,8 @@ import uuid
 
 import asyncpg
 
-from app.database import apply_migrations, check_schema
+import dbsupport
+from app.database import check_schema
 from infra.config.reuse_inventory import parse_env
 from infra.db.provision_runtime import (ProvisionError, inspect, private_path, provision,
     runtime_dsn, save_private, verify)
@@ -48,10 +49,9 @@ class RuntimeRoleDatabaseTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError('only explicit task Docker PostgreSQL permitted')
         self.admin=await asyncpg.connect(url)
         self.name='least_privilege_'+uuid.uuid4().hex
-        await self.admin.execute(f'CREATE DATABASE "{self.name}"')
+        await dbsupport.create_database(self.admin,url,self.name)
         self.dsn=url.rsplit('/',1)[0]+'/'+self.name
         self.conn=await asyncpg.connect(self.dsn)
-        await apply_migrations(self.conn)
         await self.conn.execute('CREATE TABLE legacy_history(id integer PRIMARY KEY,value text)')
         await self.conn.execute("INSERT INTO legacy_history VALUES(1,'retained')")
         self.role='v2_runtime_'+uuid.uuid4().hex

@@ -11,7 +11,9 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 docker build --memory 768m --cpu-period 100000 --cpu-quota 50000 -f "$task_root/tests/browser/Dockerfile" -t ai-football-browser:v2.0.0-dev "$task_root"
-docker network create --internal --label ai-football.task=web-browser "$task_network" >/dev/null
+# Explicit subnet: Docker's default address pools may be exhausted on this host.
+docker network create --internal --subnet "${BROWSER_TEST_SUBNET:-10.93.78.16/28}" \
+  --label ai-football.task=web-browser "$task_network" >/dev/null
 docker run --rm --network "$task_network" --cpus .75 --memory 1g --pids-limit 256 \
   -e BROWSER_EVIDENCE_DIR=/evidence -e BROWSER_RESULTS=/evidence/results.json \
   -v "$task_root:/work:ro" -v "$task_evidence:/evidence" \

@@ -12,6 +12,7 @@ import asyncpg
 from fastapi import FastAPI
 import httpx
 
+import dbsupport
 from app import auth, database
 from app.main import request_context
 from app.routes import internal, telegram
@@ -26,9 +27,9 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.name = "telegram_" + uuid.uuid4().hex
         self.control = await asyncpg.connect(TEST_URL)
-        await self.control.execute(f'CREATE DATABASE "{self.name}"')
+        await dbsupport.create_database(self.control, TEST_URL, self.name)
         url = TEST_URL.rsplit("/", 1)[0] + "/" + self.name
-        self.pool = await database.open_pool(SimpleNamespace(database_url=url), migrate=True)
+        self.pool = await database.open_pool(SimpleNamespace(database_url=url))
         self.app = FastAPI()
         self.app.middleware("http")(request_context)
         self.app.state.settings = SimpleNamespace(collector_token="test-collector-token", encryption_key=bytes(range(32)))

@@ -16,8 +16,8 @@ import asyncpg
 from fastapi import FastAPI
 import httpx
 
+import dbsupport
 from app import database
-from app.database import apply_migrations
 from app.ingestion import ingest_fixture, ingest_fixture_batch
 from app.routes import internal, reviews
 
@@ -108,15 +108,13 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.admin_url = os.environ["TEST_DATABASE_ADMIN_URL"]
         self.dbname = "test_reviews_" + uuid.uuid4().hex
         self.admin = await asyncpg.connect(self.admin_url)
-        await self.admin.execute(f'CREATE DATABASE "{self.dbname}"')
+        await dbsupport.create_database(self.admin, self.admin_url, self.dbname)
         url = self.admin_url.rsplit("/", 1)[0] + "/" + self.dbname
 
         async def codecs(conn):
             await conn.set_type_codec("jsonb", schema="pg_catalog", encoder=json.dumps, decoder=json.loads)
 
         self.pool = await asyncpg.create_pool(url, min_size=1, max_size=4, init=codecs)
-        async with self.pool.acquire() as conn:
-            await apply_migrations(conn)
         database.pool = self.pool
         app = FastAPI()
         app.state.settings = SimpleNamespace(mcp_internal_token="isolated-tools", collector_token="isolated-collector", quote_max_age_seconds=60)

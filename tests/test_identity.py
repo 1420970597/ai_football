@@ -12,6 +12,7 @@ import asyncpg
 from fastapi import FastAPI
 import httpx
 
+import dbsupport
 from app import auth, database, identity_lifecycle
 from app.membership import resolve_memberships
 from app.routes import accounts, admin, public
@@ -67,9 +68,9 @@ class IdentityIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.db_name = "identity_" + uuid.uuid4().hex
         self.control = await asyncpg.connect(TEST_URL)
-        await self.control.execute(f'CREATE DATABASE "{self.db_name}"')
+        await dbsupport.create_database(self.control, TEST_URL, self.db_name)
         url = TEST_URL.rsplit("/", 1)[0] + "/" + self.db_name
-        self.pool = await database.open_pool(SimpleNamespace(database_url=url), migrate=True)
+        self.pool = await database.open_pool(SimpleNamespace(database_url=url))
         self.app = FastAPI()
         self.app.state.settings = SimpleNamespace(cookie_secure=False, encryption_key=bytes(range(32)), hermes_api_key="test")
         self.app.state.hermes_probe = SimpleNamespace(check=AsyncMock(return_value="unverified"))
