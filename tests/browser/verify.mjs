@@ -217,6 +217,10 @@ async function setup({
     signalWithdrawalReason,
   };
   const page = await context.newPage();
+  let releaseLoading;
+  const loadingGate = captureLoading
+    ? new Promise((resolve) => { releaseLoading = resolve; })
+    : null;
   page.on("pageerror", (error) => caught.push(error.message));
   await page.route("**/api/v1/**", async (route) => {
     const req = route.request(),
@@ -347,6 +351,7 @@ async function setup({
           markets_status: "not_requested", quote_fresh: false})) : items,
         ...(mode.asyncSummaries ? {markets_included: false} : {}), next_cursor, server_time,
       });
+      if (loadingGate) await loadingGate;
       if (mode.slow) await new Promise((r) => setTimeout(r, 700));
       if (mode.error) return reply({ detail: "隔离测试：上游读取超时" }, 503);
       if (mode.long) {
@@ -678,10 +683,14 @@ async function setup({
   // The expert-only default is covered by homepage-expert-matches.mjs.
   await page.goto("http://127.0.0.1:8080/#scores?scope=all");
   if (captureLoading) {
-    await page.waitForSelector(".skeleton-row");
-    await page.screenshot({
-      path: evidence + "/candidate-mobile-loading-fixture.png",
-    });
+    try {
+      await page.waitForSelector("#matches-state .skeleton-row");
+      await page.screenshot({
+        path: evidence + "/candidate-mobile-loading-fixture.png",
+      });
+    } finally {
+      releaseLoading();
+    }
   }
   await page.waitForSelector(
     initialError ? "#matches-state [data-retry]" : ".match-row",

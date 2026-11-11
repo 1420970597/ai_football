@@ -1416,7 +1416,7 @@ async function loadManualBet() {
   if (!state.user) {
     state.manualBet = null;
     panel.hidden = true;
-    if (state.page === "scores") renderMatches();
+    if (state.page === "scores" && state.matches.length) renderMatches();
     return;
   }
   try {
@@ -1448,7 +1448,7 @@ async function loadManualBet() {
     state.manualBet = null;
     panel.hidden = true;
   }
-  if (state.page === "scores") renderMatches();
+  if (state.page === "scores" && state.matches.length) renderMatches();
 }
 async function placeManualBet(signalId, button) {
   const stake = state.manualBet?.stake_per_order;
