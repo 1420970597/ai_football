@@ -1,0 +1,43 @@
+{
+  "recorded_at": "2026-11-11T02:21:45Z",
+  "scope": "read-only personal seven-day history; no manual wagering implementation",
+  "source_tree_initial": "3c398184497550204f464c0d1fedd6d32f859a26",
+  "source_tree_final": "7c3d9ab42ae60e1bee992401eac22e322ea1c4c7",
+  "production_deployed": false,
+  "real_provider_access": false,
+  "real_orders_submitted": 0,
+  "candidate_images": {
+    "web": "sha256:145fe1bca0e292c20e4cfadf4bd32f74a166316348738a4b1ae31c2a09e00059",
+    "api": "sha256:371f53771152835a7c99ab8e4ce1f1fc7ea7a217017361556a40ef6add6c9c42",
+    "executor": "sha256:0671a6e34ad09050013e549ce70adec2cee13860a613b9d1cfc49a403753131f"
+  },
+  "checks": [
+    {"name": "working-tree related Python regression", "passed": 94, "exit_code": 0},
+    {"name": "isolated source related Python regression", "passed": 90, "seconds": 110.087, "exit_code": 0},
+    {"name": "final API image history and renewal boundary tests", "passed": 18, "seconds": 14.975, "exit_code": 0},
+    {"name": "personal history desktop/mobile", "passed": 12, "exit_code": 0},
+    {"name": "expert homepage desktop/mobile", "passed": 2, "exit_code": 0},
+    {"name": "existing browser suite", "passed": 67, "exit_code": 0},
+    {"name": "actual API history routes", "routes": 3, "exit_code": 0},
+    {"name": "packaged executor import", "exit_code": 0}
+  ],
+  "screenshots": [
+    "output/playwright/homepage-history-20261111/history-1440.png",
+    "output/playwright/homepage-history-20261111/history-390.png"
+  ],
+  "browser_results": "output/playwright/homepage-history-20261111/full-ui-results.json",
+  "resource_limits": {
+    "python_cpu": 0.75, "python_memory_mib": 768,
+    "browser_cpu": 0.75, "browser_memory_mib": 1024,
+    "postgres_cpu": 0.35, "postgres_memory_mib": 256
+  },
+  "commands": [
+    "docker run --rm --name ai-football-history-frozen-tests-20261111 --network bridge --link ai-football-history-pg-20261111:ai-football-v2-pgtest --cpus .75 --memory 768m --pids-limit 192 -v /root/ai_football/.runtime/homepage-history-stage/source:/workspace:ro -e PYTHONPATH=/workspace:/workspace/services/api:/workspace/services:/workspace/tests -e ACCOUNT_TEST_DATABASE_URL=postgresql://account_state_test:history-test-only@ai-football-v2-pgtest/postgres -e TEST_DATABASE_ADMIN_URL=postgresql://account_state_test:history-test-only@ai-football-v2-pgtest/postgres ai-football-verifier:v2.0.0-dev python -m unittest test_account_history test_account_protocol test_account_state test_homepage_expert_matches -q",
+    "docker run --rm --name ai-football-history-frozen-browser-20261111 --network bridge --cpus .75 --memory 1g --pids-limit 192 -v /root/ai_football/.runtime/homepage-history-stage/source:/work:ro -v /root/ai_football/output/playwright/homepage-history-20261111:/evidence -e BROWSER_EVIDENCE_DIR=/evidence -e BROWSER_RESULTS=/evidence/full-ui-results.json --entrypoint sh ai-football-browser:v2.0.0-dev -c 'node tests/browser/homepage-account-history.mjs && node tests/browser/homepage-expert-matches.mjs && node tests/browser/verify.mjs'",
+    "docker run --rm --name ai-football-history-final-tests-20261111 --network bridge --link ai-football-history-pg-20261111:ai-football-v2-pgtest --cpus .75 --memory 768m --pids-limit 192 -v /root/ai_football/.runtime/homepage-history-stage/source-final:/workspace:ro -w /workspace -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/workspace:/workspace/services/api:/workspace/services:/workspace/tests -e ACCOUNT_TEST_DATABASE_URL=postgresql://account_state_test:history-test-only@ai-football-v2-pgtest/postgres --entrypoint python ai-football-api:history-candidate-20261111 -m unittest test_account_history test_account_state.AccountStateTests.test_private_session_cas_and_renewal_mutex test_account_state.AccountStateTests.test_account_worker_balance_without_funds_marks_verified test_account_state.AccountStateTests.test_account_rebinding_invalidates_running_renewal_cas test_account_state.AccountStateTests.test_receipt_replay_is_idempotent_but_conflicting_finish_cannot_replace_evidence -q",
+    "docker build --memory 768m --cpu-period 100000 --cpu-quota 50000 -f services/api/Dockerfile -t ai-football-api:history-candidate-20261111 .runtime/homepage-history-stage/source-final",
+    "docker build --memory 512m --cpu-period 100000 --cpu-quota 50000 -f web/app/Dockerfile -t ai-football-web:history-candidate-20261111 .runtime/homepage-history-stage/source-final",
+    "docker build --memory 512m --cpu-period 100000 --cpu-quota 50000 -f services/executor/Dockerfile -t ai-football-executor:history-candidate-20261111 .runtime/homepage-history-stage/source-final"
+  ],
+  "initial_failures_retained_in_progress_record": true
+}

@@ -15,6 +15,7 @@ import httpx
 from services.collector.leyu_protocol import AuthExpired, LeyuError
 from .account_protocol import AccountProtocolClient, NativeSelection, SubmissionPermit, SubmissionRejected, SubmissionUnknown
 from .account_session import AccountScope, AccountSessionManager, RenewalHooks
+from .account_history import run as run_account_history
 
 log = logging.getLogger("platform.executor")
 
@@ -75,6 +76,9 @@ class Executor:
         return self.session_factory(scope, work["config"], RenewalHooks(claim, persist, finish))
 
     async def account_job(self, work):
+        if work.get("history") is not None:
+            await run_account_history(self, work)
+            return
         root = f"/jobs/{work['job_id']}"
         result = {"attempt_id": work["attempt_id"], "status": "failed", "category": ""}
         manager = None

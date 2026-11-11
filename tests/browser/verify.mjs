@@ -174,6 +174,16 @@ const record = {
 };
 const results = [];
 let caught = [];
+function assertReadOnlyNavigation(log) {
+  const writes = log.filter(request => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method));
+  for (const request of writes) {
+    assert.equal(request.path, '/accounts/history/refresh', '阅读页面只能安排本人只读历史同步');
+    assert.equal(request.method, 'POST');
+    assert.deepEqual(request.body, {});
+    assert.equal(request.headers['x-session-context'], 'user');
+    assert.equal(request.headers['x-csrf-token'], 'user-test-csrf');
+  }
+}
 async function setup({
   mobile = false,
   dual = false,
@@ -488,6 +498,9 @@ async function setup({
         },
       });
     if (p === "/accounts/orders") return reply({ items: [] });
+    if (p === '/accounts/history' || p === '/accounts/history/refresh')
+      return mode.user ? reply({ status: 'completed', matches: [], association_complete: true })
+        : reply({ detail: '尚未登录' }, 401);
     if (p === "/admin/status")
       return reply({
         database: "healthy",
@@ -1365,7 +1378,7 @@ for (const width of [1440, 390]) {
         await page.waitForTimeout(300);
         assert.equal(await page.locator("#content-dialog").evaluate(e => e.open), false);
         assert.equal(await page.evaluate(() => history.length), opened);
-        assert.equal(log.filter(r => ["POST", "PUT", "PATCH", "DELETE"].includes(r.method)).length, 0);
+        assertReadOnlyNavigation(log);
       } finally {
         await context.close();
       }
@@ -1936,7 +1949,7 @@ for (const width of [1440, 390]) {
         assert.match(text, /比赛：完场/);
         assert.match(text, /推荐：滚球/);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-        assert.equal(log.filter(request => ["POST", "PUT", "PATCH", "DELETE"].includes(request.method)).length, 0);
+        assertReadOnlyNavigation(log);
         if (reason === "source_edited")
           await page.screenshot({ path: `${evidence}/withdrawn-source-edited-${width}.png` });
         if (["review_source_line_intent_conflict", "review_source_selection_intent_conflict", "review_source_period_not_supported", "review_source_selection_not_supported"].includes(reason))
@@ -1971,7 +1984,7 @@ for (const width of [1440, 390]) {
       assert.equal(await detail.locator('#message-media img').count(), 1);
       assert.match(await detail.locator('#message-signals').innerText(), /系统赔率 1\.96/);
       assert.equal(await detail.evaluate(e => e.scrollWidth > e.clientWidth), false);
-      assert.equal(log.filter(request => ["POST", "PUT", "PATCH", "DELETE"].includes(request.method)).length, 0);
+      assertReadOnlyNavigation(log);
       await page.screenshot({ path: `${evidence}/invalid-message-version-${width}.png` });
     } finally {
       if (previousDeletedAt === undefined) delete message.deleted_at;

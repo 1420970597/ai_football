@@ -6,6 +6,7 @@ COPY web/app/app.js /usr/share/nginx/html/assets/app.js
 COPY web/app/ui.js /usr/share/nginx/html/assets/ui.js
 COPY web/app/admin.js /usr/share/nginx/html/assets/admin.js
 COPY web/app/identity.js /usr/share/nginx/html/assets/identity.js
+COPY web/app/account-history.js /usr/share/nginx/html/assets/account-history.js
 COPY web/app/qrcode.js /usr/share/nginx/html/assets/qrcode.js
 COPY web/app/qrcode.LICENSE /usr/share/nginx/html/assets/qrcode.LICENSE
 COPY web/app/cc-reference /usr/share/nginx/html/assets/cc-reference

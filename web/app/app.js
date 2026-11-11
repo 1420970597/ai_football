@@ -25,6 +25,8 @@ import {
 } from "./ui.js";
 import { initAdmin, loadAdmin } from "./admin.js";
 import { initIdentity } from "./identity.js";
+import { createAccountHistory } from "./account-history.js";
+const accountHistory = createAccountHistory();
 const initial = new URLSearchParams(location.hash.split("?")[1] || "");
 const SPORT_LABELS = { football: "足球", basketball: "篮球" };
 const validSport = (value) => Object.hasOwn(SPORT_LABELS, value);
@@ -193,6 +195,7 @@ function route(
     renderDates();
     loadMatches();
     loadLeagues();
+    accountHistory.load();
   }
   if (page === "experts") loadExperts();
   if (page === "membership") loadPlans();
@@ -298,6 +301,10 @@ function renderMatches() {
       return `<article class="match-row" data-fixture="${esc(m.id)}" data-sport="${esc(m.sport || state.sport)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${scoreMarkup(m)}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${state.matchScope === 'recommended' ? '推荐盘口见下方' : renderMatchOdds(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button>${state.matchScope === 'recommended' ? matchRecommendationMarkup(m) : ''}</article>`;
     })
     .join("");
+  $$('#matches-list > .match-row').forEach((row, index) => {
+    const fixtureId = items[index].id;
+    row.insertAdjacentHTML('beforeend', `<div class="match-account-history" data-account-fixture="${esc(fixtureId)}"${state.user ? '' : ' hidden'}>${accountHistory.matchMarkup(fixtureId)}</div>`);
+  });
   $("#fixture-count").textContent =
     state.matches.length + (state.cursor ? "+" : "");
   $("#load-more").hidden = !state.cursor;
@@ -1218,6 +1225,8 @@ async function loadIdentities() {
     state.user?.user.display_name || "登录 / 注册";
   $("#user-logout").hidden = !state.user;
   $("#admin-logout").hidden = !state.admin;
+  accountHistory.identify(state.user?.user.id);
+  if (state.page === 'scores') accountHistory.load();
 }
 function stopAccountPolling() {
   clearTimeout(state.accountPollTimer);
@@ -1225,7 +1234,8 @@ function stopAccountPolling() {
   state.accountPollStartedAt = Date.now();
 }
 function renderAccountVerification(data) {
-  const tasks = data.tasks || [];
+  accountHistory.binding(data.account);
+  const tasks = (data.tasks || []).filter(task => task.kind !== 'history');
   const current = tasks.find((task) => task.current_binding !== false);
   const active = current && ["queued", "running"].includes(current.state);
   const taskLabels = { queued: "已排队", running: "校验中", succeeded: "校验成功", failed: "校验失败", unknown: "结果未知", rejected: "授权被拒绝" };
@@ -1708,6 +1718,7 @@ function events() {
     try {
       await api("/auth/logout", { method: "POST" });
       state.user = null;
+      accountHistory.identify(null);
       loadAccount();
       toast("已退出用户会话");
     } catch (error) {

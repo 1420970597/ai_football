@@ -332,18 +332,28 @@ async def claim_work(request: Request, live_capable: bool = False):
                     await conn.execute("UPDATE v2_account_jobs SET state='failed',last_error='device_authorization_expired',details=$2,updated_at=now() WHERE id=$1", job['id'], {'device_authorization': True})
                     await conn.execute("UPDATE v2_leyu_accounts SET health_state='rejected',renewal_state='rejected',updated_at=now() WHERE id=$1", account['id'])
                     return {'kind': 'idle'}
-                config = await jobs.private_config(conn, account, settings)
+                history_request = None
+                if job['kind'] == 'history':
+                    from .account_history import work_request
+                    history_request = await work_request(conn, job)
+                    session = jobs.decode_document(settings.encryption_key, account['encrypted_session'])
+                    config = {key: session[key] for key in ('leyu_api_base', 'leyu_origin', 'leyu_request_id') if key in session}
+                else:
+                    config = await jobs.private_config(conn, account, settings)
                 if authorization.get('encrypted_authorization_code'):
                     from ..security import decrypt_secret
                     config['leyu_app_authorization_code'] = decrypt_secret(settings.encryption_key, authorization['encrypted_authorization_code'])
                 attempt = uuid.uuid4()
                 await conn.execute("UPDATE v2_account_jobs SET state='running',attempt_id=$2,config_revision=$3,lease_until=now()+interval '300 seconds',updated_at=now() WHERE id=$1", job["id"], attempt, account["config_revision"])
-                reconcile = await conn.fetch("SELECT id,provider_order_no,created_at FROM v2_bet_orders WHERE user_id=$1 AND provider_identity_hash=$2 AND state IN('accepted','unknown') AND provider_order_no IS NOT NULL ORDER BY updated_at LIMIT 2", account["user_id"], account["provider_identity_hash"])
+                reconcile = [] if history_request else await conn.fetch("SELECT id,provider_order_no,created_at FROM v2_bet_orders WHERE user_id=$1 AND provider_identity_hash=$2 AND state IN('accepted','unknown') AND provider_order_no IS NOT NULL ORDER BY updated_at LIMIT 2", account["user_id"], account["provider_identity_hash"])
                 job_details = {'orders': {str(row['id']): row['provider_order_no'] for row in reconcile}}
                 if authorization.get('device_authorization'):
                     job_details['device_authorization'] = True
                 await conn.execute('UPDATE v2_account_jobs SET details=$2 WHERE id=$1', job['id'], job_details)
-                return {"kind": "account", "job_id": str(job["id"]), "attempt_id": str(attempt), "scope": jobs.scope(account), "config": config, "orders": [dict(row) for row in reconcile]}
+                work = {"kind": "account", "job_id": str(job["id"]), "attempt_id": str(attempt), "scope": jobs.scope(account), "config": config, "orders": [dict(row) for row in reconcile]}
+                if history_request:
+                    work['history'] = history_request
+                return work
             if live_capable and orders.live_enabled(settings):
                 account = await conn.fetchrow("SELECT a.* FROM v2_leyu_accounts a WHERE EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.account_id=a.id AND o.state='pending' AND o.attempt_id IS NULL) ORDER BY a.updated_at FOR UPDATE OF a SKIP LOCKED LIMIT 1")
                 if account:
@@ -408,6 +418,8 @@ async def claim_account_renewal(job_id: uuid.UUID, body: RenewalClaim, request: 
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
             job, account = await jobs.active_job(conn, job_id, body.attempt_id)
+            if job['kind'] == 'history':
+                raise HTTPException(409, '只读历史任务不能发起账户登录或续期')
             if account["config_revision"] != body.expected_revision:
                 raise HTTPException(409, "个人账户配置版本冲突")
             credentials = jobs.decode_document(request.app.state.settings.encryption_key, account["encrypted_credentials"])
@@ -492,6 +504,8 @@ async def finish_account_job(job_id: uuid.UUID,body:JobFinish,request:Request):
                     raise HTTPException(409,'同一次任务回执内容冲突，保留首次记录')
                 return {'status':effective_status,'idempotent':True}
             job,account=await jobs.active_job(conn,job_id,body.attempt_id)
+            if job['kind'] == 'history':
+                raise HTTPException(409, '只读历史任务必须通过专用历史回执完成')
             if effective_status=='success':
                 document=jobs.decode_document(request.app.state.settings.encryption_key,account['encrypted_session']) if account['encrypted_session'] else {}
                 now=datetime.now(timezone.utc)

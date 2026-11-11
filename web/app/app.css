@@ -2306,3 +2306,9 @@ dialog {
     letter-spacing: 0;
   }
 }
+/* Read-only personal order evidence under the associated match. */
+.account-history-summary { display:flex; flex-wrap:wrap; gap:6px 16px; padding:12px; margin:10px 0; border:1px solid var(--border, #dce1e8); border-radius:6px; }
+.account-history-summary small { width:100%; color:var(--muted, #596579); overflow-wrap:anywhere; }
+.match-account-history { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 16px; padding:8px 12px; background:var(--surface-alt, #f7f9fb); border-top:1px solid var(--border, #dce1e8); font-size:12px; }
+.match-account-history[hidden] { display:none; }
+.match-account-history small { color:var(--muted, #596579); }
