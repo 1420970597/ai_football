@@ -15,11 +15,13 @@ import uuid
 import zipfile
 
 import asyncpg
+import dbsupport
 
 from infra.recovery.bundle import RecoveryError,audit_inventory,create_bundle,restore_bundle,validate_isolated_dsn
 from infra.recovery.cli import IsolatedObjectDirectory,ROOT,project_path
 from infra.recovery.legacy_quality import classify,plan
-from services.api.app.database import apply_migrations,check_schema
+from services.api.app import database
+from services.api.app.database import check_schema
 from services.api.app.security import decrypt_secret,encrypt_secret,token_hash
 
 DSN=os.environ.get('RECOVERY_TEST_ADMIN_URL','')
@@ -133,7 +135,8 @@ class RecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.names=['recovery_'+uuid.uuid4().hex+'_source_test','recovery_'+uuid.uuid4().hex+'_target_test']
         self.connections=[]
         for name in self.names:
-            await self.admin.execute('CREATE DATABASE '+name)
+            # Pass this module: a reusing fixture patches its migration_files.
+            await dbsupport.create_database(self.admin,DSN,name,database)
             dsn=urlunsplit((parts.scheme,parts.netloc,'/'+name,parts.query,''))
             if name==self.names[0]:
                 self.source_dsn=dsn
@@ -141,7 +144,6 @@ class RecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase):
             conn=await asyncpg.connect(dsn)
             for type_name in ('json','jsonb'):
                 await conn.set_type_codec(type_name,schema='pg_catalog',encoder=json.dumps,decoder=json.loads)
-            await apply_migrations(conn)
             self.connections.append(conn)
         self.source,self.target=self.connections
         self.data_key=b'd'*32

@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 import uuid
 
 import asyncpg
+import dbsupport
 from fastapi import FastAPI
 import httpx
 
@@ -36,7 +37,7 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         self.dbname='account_state_'+uuid.uuid4().hex+'_test'
         admin=await asyncpg.connect(DSN)
         try:
-            await admin.execute('CREATE DATABASE '+self.dbname)
+            await dbsupport.create_database(admin,DSN,self.dbname)
         finally:
             await admin.close()
         async def init(conn):
@@ -44,10 +45,6 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
                 await conn.set_type_codec(type_name,schema='pg_catalog',encoder=json.dumps,decoder=json.loads)
         task_dsn=urlunsplit((parts.scheme,parts.netloc,'/'+self.dbname,parts.query,''))
         self.pool=await asyncpg.create_pool(task_dsn,min_size=1,max_size=5,init=init)
-        root=Path(__file__).resolve().parents[1]
-        async with self.pool.acquire() as conn:
-            for migration in sorted((root/'services/api/migrations').glob('[0-9]*_*.sql')):
-                await conn.execute(migration.read_text())
         self.old_pool=database.pool
         database.pool=self.pool
         self.user={'id':uuid.uuid4(),'role':'user','session_kind':'user','reauthenticated_at':datetime.now(timezone.utc)}
