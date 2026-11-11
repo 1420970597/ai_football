@@ -968,11 +968,13 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         signal,expert,_,_=await self.signal()
         await self.enable([expert])
         first=await self.reserve(signal)
+        # Accept before the next policy change; re-enabling cancels pending orders and zeroes their reserved stake.
+        await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no='SETTLED' WHERE id=$1",first['id'])
         second_signal,second_expert,_,_=await self.signal()
         await self.enable([expert,second_expert])
         second=await self.reserve(second_signal)
-        for order,number in ((first,'SETTLED'),(second,'LIMITED')):
-            await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no=$2 WHERE id=$1",order['id'],number)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no='LIMITED' WHERE id=$1",second['id'])
+        self.assertEqual([Decimal('2'),Decimal('2')],[await self.pool.fetchval('SELECT reserved_stake FROM v2_bet_orders WHERE id=$1',o['id']) for o in (first,second)])
         policy=dict(await self.pool.fetchrow('SELECT * FROM v2_user_bet_settings WHERE user_id=$1',self.user['id']))
         await self.pool.execute("UPDATE v2_leyu_accounts SET last_verified_at=now()-interval '12 hours' WHERE id=$1",account['id'])
         before=await self.pool.fetchval('SELECT last_verified_at FROM v2_leyu_accounts WHERE id=$1',account['id'])
@@ -1075,11 +1077,14 @@ class AccountStateTests(unittest.IsolatedAsyncioTestCase):
         signal,expert,_,_=await self.signal()
         await self.enable([expert])
         first=await self.reserve(signal)
+        # Accept the first order before the policy changes again: re-enabling
+        # correctly cancels still-pending orders and releases their stake.
+        await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no='ONE' WHERE id=$1",first['id'])
         second_signal,second_expert,_,_=await self.signal()
         await self.enable([expert,second_expert])
         second=await self.reserve(second_signal)
-        for order,number in ((first,'ONE'),(second,'TWO')):
-            await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no=$2 WHERE id=$1",order['id'],number)
+        await self.pool.execute("UPDATE v2_bet_orders SET state='accepted',provider_order_no='TWO' WHERE id=$1",second['id'])
+        self.assertEqual([('accepted',Decimal('2'),None,'ONE'),('accepted',Decimal('2'),None,'TWO')],await self.order_money(first,second))
         await self.pool.execute("UPDATE v2_leyu_accounts SET last_verified_at=now()-interval '12 hours' WHERE id=$1",account['id'])
         account=await self.pool.fetchrow('SELECT * FROM v2_leyu_accounts WHERE id=$1',account['id'])
         await self.api.post('/api/v1/accounts/leyu/refresh')
