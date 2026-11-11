@@ -15,6 +15,8 @@ from .leyu_protocol import LeyuError, RateLimited, score, timestamp
 
 
 def normalize_result(detail: dict, target: dict, *, requested_at: datetime, observed_at: datetime) -> dict:
+    if not detail:
+        raise LeyuError('result_detail_unavailable')
     mid = str(detail.get('mid') or '')
     if mid != target['source_match_id']:
         raise LeyuError('result_fixture_mismatch')
@@ -118,10 +120,13 @@ class ResultCollector:
             # A cancelled request never submits facts; its persisted lease expires.
             raise
         except Exception as exc:
+            retry = {}
             if isinstance(exc,RateLimited):
-                self.runtime.request_budget.defer_requests(max(60,exc.retry_after_seconds or 0))
+                delay = max(60,exc.retry_after_seconds or 0)
+                self.runtime.request_budget.defer_requests(delay)
+                retry['retry_after_seconds'] = delay
             reason = exc.category if isinstance(exc,LeyuError) else 'result_transport_failure' if isinstance(exc,httpx.HTTPError) else 'result_check_failed'
-            response = await self.api.post(self.url+'/finish',json={**{k:target[k] for k in ('fixture_id','lease_id')},'reason':reason})
+            response = await self.api.post(self.url+'/finish',json={**{k:target[k] for k in ('fixture_id','lease_id')},'reason':reason,**retry})
             response.raise_for_status()
             return {'confirmed':0,'settled':0,'reason':reason}
 

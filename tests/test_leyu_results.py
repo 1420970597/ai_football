@@ -71,6 +71,31 @@ class NativeResultTests(unittest.IsolatedAsyncioTestCase):
             await fetch_result(client,self.target)
         self.assertEqual('invalid_result_detail',raised.exception.category)
 
+    async def test_empty_detail_is_unavailable_not_a_different_fixture(self):
+        client = LeyuClient('https://native.invalid', request_id='isolated', transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={'code': '0000000', 'data': {}})))
+        with self.assertRaises(LeyuError) as raised:
+            await fetch_result(client, self.target)
+        self.assertEqual('result_detail_unavailable', raised.exception.category)
+
+    async def test_shared_cooldown_skips_source_and_delivers_bounded_retry(self):
+        runtime = self.runtime()
+        def cooling():
+            raise RateLimited('shared_upstream_cooldown', retry_after_seconds=87)
+        runtime.request_budget.require_available = cooling
+        seen = []
+        def handle(request):
+            seen.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(200, json={'ok': True})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as api:
+            collector = ResultCollector(api, 'http://api.invalid/internal', runtime, {})
+            with patch('collector.leyu_results.fetch_result', new_callable=AsyncMock) as fetch:
+                outcome = await collector.check(self.target, None, 1)
+            fetch.assert_not_awaited()
+        self.assertEqual('shared_upstream_cooldown', outcome['reason'])
+        self.assertEqual('/internal/collector/results/finish', seen[0][0])
+        self.assertEqual(87, seen[0][1]['retry_after_seconds'])
+
     def runtime(self):
         return SimpleNamespace(version=1,config={},load=AsyncMock(),request_budget=SimpleNamespace(
             require_available=lambda:None,defer_requests=lambda seconds:None))

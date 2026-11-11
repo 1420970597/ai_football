@@ -1,12 +1,12 @@
 # BUG-EXPERT-RESULT-20261111 修复记录
 
-更新时间：2026-11-11 06:19 UTC。
+更新时间：2026-11-11 06:31 UTC。
 
 当前目标：定位部分已解析专家推荐未正常结算的实际原因，修复相应链路并保留不可变赛果与收益证据。
 
 ## 工作包：专家赛果恢复
 
-- 状态：代码已写。
+- 状态：隔离验证通过；历史缺证据恢复仍受外部依赖阻碍。
 - 责任目录：`services/api/`、`services/collector/`、`tests/`、`docs/platform-v2/`、`reports/`。
 - 前置依赖：现有终场协议契约、本机业务 PostgreSQL 的只读核验、Docker 内具名临时测试库。
 - 当前证据：迁移记录登记此缺陷但未独立复现；当前分支 `fix/TASK-78-hermes-telegram-sync`，起始提交 `657e45d5`。账户与执行器有既有未提交修改，本工作包不纳入。
@@ -25,4 +25,8 @@
 - 设计：空详情归类 `result_detail_unavailable`，不放宽终场/身份/期间证据；旧空详情与旧 `result_fixture_mismatch` 进入恢复队列，默认每轮四槽分配新结果二、恢复一、更正一，空余容量互补；源请求上限仍四、并发仍二。共享冷却不增加源失败次数，使用有界冷却时间重新排程；不把未知结果写成输赢或零收益。
 - 验收新增：大量较早到期空详情不得阻塞新结果，恢复与更正均有进度；共享冷却零源调用且不累计失败、不触发十六分钟指数退避；真实源失败仍退避，重复/失效/乱序合同保留。
 - 剩余外部依赖：部分历史比赛的可核验终场证据仍不可得；该部分不能标记修复完成。下一步先新增回归并确认原代码失败，再冻结补丁运行 Docker 验证。
-- 06:30 UTC 回归复现：从 `657e45d5` 导出冻结源码，只叠加新增测试；独立容器 `bug-expert-result-20261111-pg` 使用临时内存 PostgreSQL（0.5 CPU/256 MiB），runner 0.75 CPU/384 MiB，总 1.25 CPU/640 MiB，均无生产连接。`python -m unittest -v test_leyu_results test_result_checks test_result_check_priority` 29 项、31.456 秒，退出 1，7 个断言失败及 1 个缺少新重试字段错误，覆盖空结果误分类、限流失败累加/参数未验证及旧队列占满新结果槽。完整失败日志保留。补丁已写，接下来冻结最终代码回归。
+- 06:28 UTC 回归复现：从 `657e45d5` 导出冻结源码，只叠加新增测试；独立容器 `bug-expert-result-20261111-pg` 使用临时内存 PostgreSQL（0.5 CPU/256 MiB），runner 0.75 CPU/384 MiB，总 1.25 CPU/640 MiB，均无生产连接。`python -m unittest -v test_leyu_results test_result_checks test_result_check_priority` 29 项、31.456 秒，退出 1，7 个断言失败及 1 个缺少新重试字段错误，覆盖空结果误分类、限流失败累加/参数未验证及旧队列占满新结果槽。完整失败日志保留。
+- 06:29 UTC 规划证据阶段提交 `bb6b56ea`，推送退出 0，远端分支引用核对一致。此前已提交的主页阶段 `657e45d5` 同属现有分支；既有账户/执行器工作树未纳入。
+- 06:31 UTC 补丁冻结回归：同一专用临时 PostgreSQL 与资源预算，`python -m unittest -v test_leyu_results test_result_checks test_result_check_priority test_result_ledger test_settlement test_basketball_settlement test_expert_statistics test_sports_expert_statistics`，105 项、81.841 秒，0 失败/错误/跳过，退出 0。覆盖正常终场、缺证据、重复/乱序、并发/租约、赛果更正与收益时间保持，含新增 8 项测试。三份生产原模块摘要与起始提交对应文件完全一致，适合最小派生镜像，不覆盖其他阶段实现。
+- 下一步：提交补丁并推送核对，构建仅包含三个责任模块的角色派生镜像；配置差异检查后只切换 API 与远端采集器，再做只读联调。历史未知赛果仍待外部证据，不能关闭整项缺陷。
+- 提交前 `git diff --check` 首次因进度记录末尾多一空行退出 2，删除该空行后重跑；六个责任源码/测试的 SHA256 检查均通过，未改变已测代码。

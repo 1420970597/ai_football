@@ -151,6 +151,48 @@ class ResultCheckTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(409,response.status_code,response.text)
         self.assertEqual('loss',await self.pool.fetchval('SELECT outcome FROM v2_expert_signals'))
 
+    async def test_shared_cooldown_preserves_failures_and_honors_bounded_retry(self):
+        target, = await self.prepare()
+        await self.pool.execute('UPDATE v2_result_checks SET failures=12')
+        body = {k: target[k] for k in ('fixture_id', 'lease_id')}
+        response = await self.post('finish', body | {'reason': 'shared_upstream_cooldown', 'retry_after_seconds': 87})
+        self.assertEqual(200, response.status_code, response.text)
+        row = await self.pool.fetchrow('SELECT *,now() AS checked_now FROM v2_result_checks')
+        self.assertEqual(12, row['failures'])
+        self.assertTrue(85 <= (row['next_check_at']-row['checked_now']).total_seconds() <= 87)
+        self.assertIsNone(row['lease_id'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_fixture_results'))
+        self.assertEqual('pending', await self.pool.fetchval('SELECT outcome FROM v2_expert_signals'))
+
+    async def test_retry_delay_cannot_bypass_reason_contract_or_bounds(self):
+        target, = await self.prepare()
+        body = {k: target[k] for k in ('fixture_id', 'lease_id')}
+        for change in ({'reason': 'upstream_timeout', 'retry_after_seconds': 1},
+                       {'reason': 'shared_upstream_cooldown', 'retry_after_seconds': 901},
+                       {'reason': 'shared_upstream_cooldown', 'retry_after_seconds': 0},
+                       {'reason': 'shared_upstream_cooldown', 'retry_after_seconds': True}):
+            with self.subTest(change=change):
+                self.assertEqual(422, (await self.post('finish', body | change)).status_code)
+
+    async def test_provider_rate_limit_counts_real_attempt_and_preserves_retry_delay(self):
+        target, = await self.prepare()
+        body = {k: target[k] for k in ('fixture_id', 'lease_id')}
+        response = await self.post('finish', body | {'reason': 'upstream_rate_limited', 'retry_after_seconds': 120})
+        self.assertEqual(200, response.status_code, response.text)
+        row = await self.pool.fetchrow('SELECT *,now() AS checked_now FROM v2_result_checks')
+        self.assertEqual(1, row['failures'])
+        self.assertTrue(118 <= (row['next_check_at']-row['checked_now']).total_seconds() <= 120)
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_fixture_results'))
+
+    async def test_old_collector_shared_cooldown_defaults_to_short_retry(self):
+        target, = await self.prepare()
+        await self.pool.execute('UPDATE v2_result_checks SET failures=12')
+        body = {k: target[k] for k in ('fixture_id', 'lease_id')}
+        self.assertEqual(200, (await self.post('finish', body | {'reason': 'shared_upstream_cooldown'})).status_code)
+        row = await self.pool.fetchrow('SELECT *,now() AS checked_now FROM v2_result_checks')
+        self.assertEqual(12, row['failures'])
+        self.assertTrue(58 <= (row['next_check_at']-row['checked_now']).total_seconds() <= 60)
+
     async def test_later_scoreboard_snapshot_cannot_erase_confirmed_result(self):
         target,=await self.prepare()
         self.assertEqual(200,(await self.post('observations',self.observation(target))).status_code)

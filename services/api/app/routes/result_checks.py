@@ -18,6 +18,7 @@ from .results import ResultInput
 router = APIRouter(prefix='/internal/collector/results')
 LEASE_SECONDS = 90
 DETAIL_PATH = '/yewu11/v1/m/matchDetail/getMatchDetailPB'
+RATE_LIMIT_REASONS = frozenset({'shared_upstream_cooldown', 'http_rate_limited', 'upstream_rate_limited'})
 
 
 class ClaimInput(BaseModel):
@@ -120,6 +121,13 @@ async def record_observation(body: ObservationInput, request: Request):
 
 class FinishInput(CheckIdentity):
     reason: str = Field(pattern='^[a-z][a-z0-9_]{0,79}$')
+    retry_after_seconds: int | None = Field(default=None, ge=1, le=900, strict=True)
+
+    @model_validator(mode='after')
+    def validate_retry(self):
+        if self.retry_after_seconds is not None and self.reason not in RATE_LIMIT_REASONS:
+            raise ValueError('仅限流或共享冷却可以提交重试时间')
+        return self
 
 
 @router.post('/finish')
@@ -131,6 +139,9 @@ async def finish_check(body: FinishInput, request: Request):
             waiting = body.reason == 'result_not_final'
             await conn.execute(
                 "UPDATE v2_result_checks SET lease_id=NULL,lease_until=NULL,last_reason=$2,last_checked_at=now(),"
-                "next_check_at=now()+make_interval(secs=>CASE WHEN $3 THEN 30 ELSE LEAST(1800,30*power(2,LEAST(failures,5)))::int END),"
-                "failures=CASE WHEN $3 THEN 0 ELSE failures+1 END WHERE fixture_id=$1",body.fixture_id,body.reason,waiting)
+                "next_check_at=now()+make_interval(secs=>CASE WHEN $3 THEN 30 WHEN $4 THEN COALESCE($5::int,60) "
+                "ELSE LEAST(1800,30*power(2,LEAST(failures,5)))::int END),"
+                "failures=CASE WHEN $3 THEN 0 WHEN $2='shared_upstream_cooldown' THEN failures ELSE failures+1 END "
+                "WHERE fixture_id=$1", body.fixture_id, body.reason, waiting,
+                body.reason in RATE_LIMIT_REASONS, body.retry_after_seconds)
     return {'ok':True}

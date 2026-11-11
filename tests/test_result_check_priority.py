@@ -118,3 +118,27 @@ class ResultCheckPriorityTests(unittest.IsolatedAsyncioTestCase):
         next_row, = await self.claim()
         self.assertNotEqual(first['lease_id'], next_row['lease_id'])
         self.assertEqual('new', next_row['fixture_id'])
+
+    async def test_missing_detail_backlog_cannot_delay_fresh_finals_or_corrections(self):
+        for i in range(8):
+            name = 'missing' + str(i)
+            await self.add(name, due_minutes=100-i)
+            await self.pool.execute(
+                "UPDATE v2_result_checks SET failures=50,last_reason=$2 WHERE fixture_id=$1",
+                name, 'result_fixture_mismatch' if i % 2 else 'result_detail_unavailable')
+        for i in range(3):
+            await self.add('fresh' + str(i), due_minutes=3-i)
+        await self.add('correction', final='confirmed', due_minutes=60)
+        self.assertEqual(['fresh0', 'fresh1', 'missing0', 'correction'],
+                         [r['fixture_id'] for r in await self.claim()])
+        self.assertEqual(['fresh2', 'missing1', 'missing2', 'missing3'],
+                         [r['fixture_id'] for r in await self.claim()])
+
+    async def test_recovery_uses_spare_capacity_but_never_overrides_active_leases(self):
+        for i in range(6):
+            await self.add('missing' + str(i))
+        await self.pool.execute("UPDATE v2_result_checks SET failures=1,last_reason='result_detail_unavailable'")
+        await self.pool.execute("UPDATE v2_result_checks SET lease_until=now()+interval '1 minute' WHERE fixture_id='missing0'")
+        self.assertEqual(['missing1', 'missing2', 'missing3', 'missing4'],
+                         [r['fixture_id'] for r in await self.claim()])
+        self.assertEqual(['missing5'], [r['fixture_id'] for r in await self.claim()])
