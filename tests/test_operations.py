@@ -10,6 +10,7 @@ import asyncpg
 from fastapi import FastAPI, HTTPException
 import httpx
 
+import dbsupport
 from app import database
 from app.routes import operations
 
@@ -180,12 +181,10 @@ class OperationsTests(unittest.IsolatedAsyncioTestCase):
         self.dsn = os.environ['TEST_DATABASE_ADMIN_URL']
         self.admin = await asyncpg.connect(self.dsn)
         self.name = 'test_operations_' + uuid.uuid4().hex
-        await self.admin.execute('CREATE DATABASE '+self.name)
+        await dbsupport.create_database(self.admin, self.dsn, self.name)
         async def init(conn):
             await conn.set_type_codec('jsonb', schema='pg_catalog', encoder=json.dumps, decoder=json.loads)
         self.pool = await asyncpg.create_pool(self.dsn.rsplit('/',1)[0]+'/'+self.name, init=init)
-        async with self.pool.acquire() as conn:
-            await database.apply_migrations(conn)
         self.previous = database.pool
         database.pool = self.pool
         self.app = FastAPI()

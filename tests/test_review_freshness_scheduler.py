@@ -14,6 +14,7 @@ import uuid
 
 import asyncpg
 
+import dbsupport
 from app import worker
 from app.database import apply_migrations, migration_files
 
@@ -27,11 +28,9 @@ class ReviewFreshnessSchedulerTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError('freshness scheduler tests require task-owned Docker PostgreSQL')
         self.name = 'test_review_freshness_' + uuid.uuid4().hex
         self.admin = await asyncpg.connect(self.admin_url)
-        await self.admin.execute('CREATE DATABASE '+self.name)
+        await dbsupport.create_database(self.admin, self.admin_url, self.name)
         self.url = self.admin_url.rsplit('/',1)[0]+'/'+self.name
         self.pool = await self.new_pool()
-        async with self.pool.acquire() as conn:
-            await apply_migrations(conn)
         self.now = datetime.now(timezone.utc)
 
     async def asyncTearDown(self):

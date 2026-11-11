@@ -14,8 +14,8 @@ import asyncpg
 from fastapi import FastAPI
 import httpx
 
+import dbsupport
 from app import admin_reviews as review_logic, auth, database, worker
-from app.database import apply_migrations
 from app.routes import admin_reviews
 from app.security import token_hash
 
@@ -32,15 +32,13 @@ class AdminReviewTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError('管理员审核测试只接受具名临时Docker数据库')
         self.control = await asyncpg.connect(ADMIN_URL)
         self.name = 'test_admin_reviews_' + uuid.uuid4().hex
-        await self.control.execute('CREATE DATABASE ' + self.name)
+        await dbsupport.create_database(self.control, ADMIN_URL, self.name)
         url = urlunsplit((parts.scheme, parts.netloc, '/' + self.name, parts.query, ''))
 
         async def codecs(conn):
             await conn.set_type_codec('jsonb', schema='pg_catalog', encoder=json.dumps, decoder=json.loads)
 
         self.pool = await asyncpg.create_pool(url, min_size=1, max_size=6, init=codecs, command_timeout=5)
-        async with self.pool.acquire() as conn:
-            await apply_migrations(conn)
         database.pool = self.pool
         self.app = FastAPI()
         self.app.state.settings = SimpleNamespace(session_secret=b'isolated-admin-review-cursor-key!')

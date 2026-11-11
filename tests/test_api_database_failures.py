@@ -15,6 +15,7 @@ import asyncpg
 from fastapi import FastAPI, HTTPException
 import httpx
 
+import dbsupport
 from app import database, main
 from app.database_diagnostics import exception_backend_pids, exception_timeout_budget
 from app.routes import telegram
@@ -140,15 +141,13 @@ class DatabaseFailurePostgresTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError('database failure tests only allow the isolated Docker administrator')
         self.name = 'test_db_failures_' + uuid.uuid4().hex
         self.control = await asyncpg.connect(ADMIN_URL)
-        await self.control.execute('CREATE DATABASE ' + self.name)
+        await dbsupport.create_database(self.control, ADMIN_URL, self.name)
         self.url = urlunsplit((parts.scheme,parts.netloc,'/'+self.name,parts.query,''))
         async def codecs(conn):
             for kind in ('json','jsonb'):
                 await conn.set_type_codec(kind,schema='pg_catalog',encoder=json.dumps,decoder=json.loads)
         self.pool = await asyncpg.create_pool(self.url,min_size=1,max_size=3,init=codecs,command_timeout=2,
             server_settings={'lock_timeout':'75','statement_timeout':'1000'})
-        async with self.pool.acquire() as conn:
-            await database.apply_migrations(conn)
         self.old_pool = database.pool
         database.pool = self.pool
         self.app = http_app()
