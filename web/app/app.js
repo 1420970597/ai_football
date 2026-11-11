@@ -1267,6 +1267,8 @@ async function loadPlans() {
 }
 const entitlementName = (k) =>
   ({
+    expert_summary: "专家摘要与排行",
+    public_fixtures: "公开赛程与比分",
     expert_full_history: "完整专家记录",
     expert_live_signals: "滚球专家推荐",
     automatic_betting: "本人账户自动投注",

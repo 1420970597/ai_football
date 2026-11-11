@@ -126,6 +126,10 @@ const plans = [
     currency: "CNY",
     duration_days: 30,
     entitlements: {
+      // The free plan seeds these two keys; a card that prints them raw shows
+      // readers `expert_summary` instead of a name they can understand.
+      expert_summary: true,
+      public_fixtures: true,
       expert_full_history: true,
       expert_live_signals: true,
       automatic_betting: true,
@@ -1062,6 +1066,15 @@ await test("游客权益拒绝、会员未配置支付、注册校验", async ()
   await page.locator('#dialog-content [data-page="membership"]').click();
   await page.waitForSelector(".plan-card");
   assert.equal(await page.locator(".plan-card button").isDisabled(), true);
+  // Every entitlement shows a name a reader can use; no raw key may leak through.
+  const benefits = await page
+    .locator(".plan-card li")
+    .allTextContents();
+  assert.ok(benefits.length > 0, "plan_card_lists_no_entitlements");
+  assert.deepEqual(
+    benefits.filter((text) => /^[a-z][a-z_]*$/.test(text.trim())),
+    [],
+  );
   await page.keyboard.press("Escape");
   await page.waitForFunction(() => !document.querySelector("#content-dialog").open);
   await page.locator("#account-entry").click();
