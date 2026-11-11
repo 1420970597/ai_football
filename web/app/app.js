@@ -325,7 +325,7 @@ function betButtonMarkup(signal) {
 function matchRecommendationMarkup(match) {
   const signals = match.expert_signals || [];
   return `<section class="match-recommendations" aria-label="本场专家关联盘口">${signals.map(s =>
-    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div><button class="text-link" data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button><span class="muted">${esc(phases[s.phase] || '阶段未知')} · ${stamp(s.created_at)}</span></div><div class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></div><div class="recommendation-result"><span>推荐时系统赔率 ${decimal(s.recommendation_price)}</span><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button>${betButtonMarkup(s)}</div><small class="muted">报价时间 ${stamp(s.quote_time)}</small><div class="manual-bet-slot">${betResultMarkup(s.id)}</div></article>`
+    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div class="recommendation-line"><button class="text-link" data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button><span class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><span>推荐时系统赔率 <strong>${decimal(s.recommendation_price)}</strong></span><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span></div><div class="recommendation-line recommendation-meta"><span class="muted">${esc(phases[s.phase] || '阶段未知')} · 报价 ${stamp(s.quote_time)}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button>${betButtonMarkup(s)}</div><div class="manual-bet-slot">${betResultMarkup(s.id)}</div></article>`
   ).join('') || '<p class="muted">关联记录已变更，请刷新列表。</p>'}${match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
 }
 const vsIcons = [];
@@ -339,11 +339,20 @@ function adoptVsIcons() {
     vsIcons[index] = slot;
   });
 }
+function oddsCellMarkup(m) {
+  if (state.matchScope !== 'recommended') return renderMatchOdds(m);
+  const signals = m.expert_signals || [], more = m.expert_signals_has_more ? '+' : '';
+  // The cell used to say "see below", which spends a column on nothing. It now
+  // carries the count of expert picks on this match; the details stay below.
+  if (!signals.length) return '<span class="stale">暂无专家盘口</span>';
+  const latest = signals[0];
+  return `<span class="odds-market">${esc(signals.length)}${esc(more)} 条专家盘口</span><span>${esc(selection(latest.selection))} ${esc(lineLabel(latest))} ${decimal(latest.recommendation_price)}</span>`;
+}
 function renderMatches() {
   const items = currentMatches();
   $("#matches-list").innerHTML = items
     .map((m) => {
-      return `<article class="match-row" data-fixture="${esc(m.id)}" data-sport="${esc(m.sport || state.sport)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${scoreMarkup(m)}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${state.matchScope === 'recommended' ? '推荐盘口见下方' : renderMatchOdds(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button>${state.matchScope === 'recommended' ? matchRecommendationMarkup(m) : ''}</article>`;
+      return `<article class="match-row" data-fixture="${esc(m.id)}" data-sport="${esc(m.sport || state.sport)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${scoreMarkup(m)}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${oddsCellMarkup(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">析</button>${state.matchScope === 'recommended' ? matchRecommendationMarkup(m) : ''}</article>`;
     })
     .join("");
   $$('#matches-list > .match-row').forEach((row, index) => {

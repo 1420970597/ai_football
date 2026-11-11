@@ -30,10 +30,15 @@ export function createAccountHistory() {
     const panel = document.querySelector('#account-history-summary');
     if (panel) {
       const data = snapshot || { status: owner ? 'queued' : 'guest' };
+      const guest = !owner;
       const totals = data.observed_at
         ? `<span>已核验 ${esc(data.order_count)} 单 / ${esc(data.match_count)} 场 · 待结算 ${esc(data.unsettled_match_count)} 场 · 已结算 ${esc(data.settled_match_count)} 场</span><small>下单窗口 ${stamp(data.window_start)} — ${stamp(data.window_end)}（北京时间）；读取于 ${stamp(data.observed_at)}${data.unmapped_order_count ? `；${esc(data.unmapped_order_count)} 单缺少赛事编号` : ''}</small>` : '';
       const completed = data.status === 'completed';
-      panel.innerHTML = `<strong>本人近 7 日实盘记录</strong><span>${esc(completed ? '历史订单已读取' : statusText[data.status] || '账户历史尚未读取')}</span>${totals}<small>按整场比赛关联，不表示买入了相同专家盘口。仅统计真实已结算回执；待结算不计盈亏，不同币种分别展示。</small>${['failed', 'partial', 'timeout', 'unavailable'].includes(data.status) ? '<button class="small-button" data-history-retry>重新读取历史</button>' : ''}`;
+      // A guest gets one line, not a panel: the scores list is what they came for.
+      panel.className = 'account-history-summary' + (guest ? ' guest' : '');
+      panel.innerHTML = guest
+        ? `<span>${esc(statusText.guest)}</span>`
+        : `<strong>本人近 7 日实盘记录</strong><span>${esc(completed ? '历史订单已读取' : statusText[data.status] || '账户历史尚未读取')}</span>${totals}<small>按整场比赛关联，不表示买入了相同专家盘口。仅统计真实已结算回执；待结算不计盈亏，不同币种分别展示。</small>${['failed', 'partial', 'timeout', 'unavailable'].includes(data.status) ? '<button class="small-button" data-history-retry>重新读取历史</button>' : ''}`;
       panel.querySelector('[data-history-retry]')?.addEventListener('click', () => {
         started = false;
         load();

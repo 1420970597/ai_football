@@ -335,19 +335,57 @@ h3 {
   font-size: 13px;
   white-space: nowrap;
 }
+.scores-toolbar .section-tabs {
+  flex: 0 0 auto;
+  border-bottom: 0;
+  border-right: 1px solid var(--line);
+}
+.scores-toolbar .section-tabs button {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  color: var(--muted);
+}
+.scores-toolbar .section-tabs button.active {
+  color: var(--brand);
+}
+.scores-toolbar .score-tabs {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
 .score-tabs button.active,
 .section-tabs button.active {
   color: var(--brand);
   font-weight: bold;
   border-bottom: 2px solid var(--brand);
 }
+/* Scope and status share one row: two stacked tab bars cost 86px of first screen. */
+.scores-toolbar {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+}
 .date-strip {
   display: flex;
-  padding: 9px 8px;
-  gap: 4px;
-  border-bottom: 1px solid var(--line);
   align-items: center;
+  gap: 6px 10px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
   background: var(--surface);
+  flex-wrap: wrap;
+}
+.date-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.strip-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .date-strip > button {
   font-size: 22px;
@@ -1723,6 +1761,31 @@ dialog::backdrop {
     font-size: 13px;
     padding: 9px 2px;
   }
+  /* Scope keeps its two words on phones; the status row scrolls instead of wrapping. */
+  .scores-toolbar {
+    flex-direction: column;
+  }
+  .scores-toolbar .homepage-match-tabs {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .scores-toolbar .homepage-match-tabs button {
+    flex: 1;
+    padding: 8px 4px;
+    font-size: 12px;
+  }
+  .scores-toolbar .score-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .scores-toolbar .score-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .scores-toolbar .score-tabs button {
+    flex: 1 0 auto;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
   .date-strip {
     padding: 6px 4px;
   }
@@ -2348,13 +2411,15 @@ dialog {
 }
 
 /* Read-only expert evidence grouped below each homepage match. */
-.homepage-match-tabs { margin: 8px 0; }
-.match-recommendations { grid-column: 1 / -1; width: 100%; padding: 8px 12px; text-align: left; border-top: 1px dashed var(--line); background: var(--surface); }
-.match-recommendation { padding: 8px 0; overflow-wrap: anywhere; }
+.homepage-match-tabs { flex: 0 0 auto; }
+.match-recommendations { grid-column: 1 / -1; width: 100%; padding: 6px 12px; text-align: left; border-top: 1px dashed var(--line); background: var(--surface); }
+.match-recommendation { padding: 5px 0; overflow-wrap: anywhere; }
 .match-recommendation + .match-recommendation { border-top: 1px solid var(--line); }
-.match-recommendation > div:first-child, .recommendation-result { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
-.recommendation-market { padding: 6px 0; color: var(--ink-2); }
-.match-recommendation small { display: block; margin-top: 5px; }
+/* Two evidence lines: who/what/price/state, then provenance and the buy action. */
+.recommendation-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; line-height: 1.5; }
+.recommendation-market { color: var(--ink-2); }
+.recommendation-meta { margin-top: 3px; font-size: 12px; }
+.recommendation-meta .manual-bet { margin-left: auto; }
 /* One-click real-money entry: a full-size target, and a stated reason when it is off. */
 .manual-bet {
   min-height: 44px;
@@ -2408,6 +2473,8 @@ dialog {
 }
 /* Read-only personal order evidence under the associated match. */
 .account-history-summary { display:flex; flex-wrap:wrap; gap:6px 16px; padding:12px; margin:10px 0; border:1px solid var(--line); border-radius:6px; }
+/* Guests do not need a panel telling them to log in before every match list. */
+.account-history-summary.guest { padding:6px 12px; margin:6px 0; border:0; border-left:2px solid var(--line); border-radius:0; color:var(--muted); font-size:12px; }
 .account-history-summary small { width:100%; color:var(--muted); overflow-wrap:anywhere; }
 .match-account-history { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 16px; padding:8px 12px; background:var(--surface); border-top:1px solid var(--line); font-size:12px; }
 .match-account-history[hidden] { display:none; }

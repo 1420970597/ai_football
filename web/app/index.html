@@ -79,50 +79,54 @@
             ><button data-sport="basketball">篮球</button
             ><span id="sport-context">足球比分与盘口</span>
           </div>
-          <div class="section-tabs homepage-match-tabs" role="group" aria-label="首页比赛范围">
-            <button class="active" data-match-scope="recommended" aria-pressed="true">专家关联比赛</button>
-            <button data-match-scope="all" aria-pressed="false">全部赛事</button>
-          </div>
-          <div class="score-tabs" role="group" aria-label="比赛状态">
-            <button data-phase="all" class="active">全部</button
-            ><button data-phase="live">滚球</button
-            ><button data-phase="scheduled">未开赛</button
-            ><button data-phase="finished">已完场</button
-            ><button data-phase="cancelled">取消 / 延期</button>
+          <div class="scores-toolbar">
+            <div class="section-tabs homepage-match-tabs" role="group" aria-label="首页比赛范围">
+              <button class="active" data-match-scope="recommended" aria-pressed="true">专家关联</button>
+              <button data-match-scope="all" aria-pressed="false">全部赛事</button>
+            </div>
+            <div class="score-tabs" role="group" aria-label="比赛状态">
+              <button data-phase="all" class="active">全部</button
+              ><button data-phase="live">滚球</button
+              ><button data-phase="scheduled">未开赛</button
+              ><button data-phase="finished">已完场</button
+              ><button data-phase="cancelled">取消</button>
+            </div>
           </div>
           <div class="date-strip">
-            <button id="date-prev" aria-label="前一日">‹</button>
-            <div id="date-buttons"></div>
-            <label class="date-select"
-              ><span class="sr-only">选择比赛日期</span
-              ><input id="date-picker" type="date" /></label
-            ><button id="date-next" aria-label="后一日">›</button>
-          </div>
-          <div class="filter-row">
-            <label
-              ><span class="sr-only">联赛筛选</span
+            <div class="date-nav">
+              <button id="date-prev" aria-label="前一日">‹</button>
+              <div id="date-buttons"></div>
+              <label class="date-select"
+                ><span class="sr-only">选择比赛日期</span
+                ><input id="date-picker" type="date" /></label
+              ><button id="date-next" aria-label="后一日">›</button>
+            </div>
+            <div class="strip-filters">
+              <label
+                ><span class="sr-only">联赛筛选</span
+                ><button
+                  id="league-filter"
+                  type="button"
+                  class="small-button"
+                  aria-haspopup="dialog"
+                >
+                  全部联赛 ▾
+                </button></label
+              ><label class="search-wrap"
+                ><span class="sr-only">搜索球队或联赛</span
+                ><input
+                  id="match-search"
+                  type="search"
+                  placeholder="搜索球队 / 联赛"
+                /><span aria-hidden="true">⌕</span></label
               ><button
-                id="league-filter"
-                type="button"
+                id="favorites-filter"
                 class="small-button"
-                aria-haspopup="dialog"
+                aria-pressed="false"
               >
-                全部联赛 ▾
-              </button></label
-            ><label class="search-wrap"
-              ><span class="sr-only">搜索球队或联赛</span
-              ><input
-                id="match-search"
-                type="search"
-                placeholder="搜索球队 / 联赛"
-              /><span aria-hidden="true">⌕</span></label
-            ><button
-              id="favorites-filter"
-              class="small-button"
-              aria-pressed="false"
-            >
-              ☆ 关注
-            </button>
+                ☆ 关注
+              </button>
+            </div>
           </div>
           <div id="matches-notice" class="notice" role="status" hidden></div>
           <section id="account-history-summary" class="account-history-summary" aria-live="polite" aria-label="本人近七日实盘记录">登录后查看本人近 7 日账户记录。</section>
