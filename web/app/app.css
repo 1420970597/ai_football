@@ -2355,10 +2355,46 @@ dialog {
 .match-recommendation > div:first-child, .recommendation-result { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
 .recommendation-market { padding: 6px 0; color: var(--ink-2); }
 .match-recommendation small { display: block; margin-top: 5px; }
+/* One-click real-money entry: a full-size target, and a stated reason when it is off. */
+.manual-bet {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: var(--radius);
+  background: var(--buy);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.manual-bet:hover:not(:disabled) { background: var(--buy-strong); }
+.manual-bet:disabled { background: var(--surface-2); color: var(--muted); opacity: 1; }
+.manual-bet-blocked { display: inline-flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+.manual-bet-blocked small { margin: 0; font-size: 11px; line-height: 1.4; }
+.manual-bet-slot:empty { display: none; }
+.manual-bet-result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  margin-top: 8px;
+  padding: 8px 11px;
+  border-left: 3px solid var(--line-strong);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.manual-bet-result strong { font-weight: 600; }
+.manual-bet-result.pending { border-left-color: var(--brand); background: var(--brand-soft); }
+.manual-bet-result.failed { border-left-color: var(--red); background: var(--red-soft); color: var(--red); }
+.manual-bet-result.repeated { border-left-color: var(--warn); background: var(--warn-soft); color: var(--warn); }
+.confirm-message { display: flex; flex-direction: column; gap: 6px; padding: 0 20px 4px; line-height: 1.6; }
+.confirm-message span:first-child { font-weight: 600; font-size: 15px; }
 @media (max-width: 640px) {
   .match-recommendations { grid-row: 3; padding: 6px 8px; }
   .match-recommendation { font-size: 12px; line-height: 1.5; }
   .match-recommendation .text-link { min-height: 32px; }
+  .manual-bet { width: 100%; margin-top: 4px; }
+  .manual-bet-blocked { width: 100%; }
 }
 @media (max-width: 720px) {
   .match-row[data-sport="basketball"] {

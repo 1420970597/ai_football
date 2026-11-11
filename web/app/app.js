@@ -292,11 +292,40 @@ function scoreMarkup(match) {
     : "";
   return score + half;
 }
+// Why the buy button is unusable, in the same terms the backend would reject on.
+// Returning a reason rather than hiding the button keeps the rule visible instead of
+// leaving people to guess why a recommendation cannot be bought.
+function manualBetGate() {
+  const policy = state.manualBet;
+  if (!state.user) return { ready: false, reason: '登录后可配置一键下注金额' };
+  if (!policy) return { ready: false, reason: '下注设置尚未加载，可刷新重试' };
+  if (policy.emergency_stopped) return { ready: false, reason: '已紧急停止；先保存金额并确认恢复' };
+  if (!policy.enabled) return { ready: false, reason: '尚未保存每单下注金额' };
+  if (!policy.live_enabled) return { ready: false, reason: '实盘执行当前未开放' };
+  if (!policy.account_ready) return { ready: false, reason: '本人乐鱼账户尚未通过校验' };
+  if (!policy.entitlement) return { ready: false, reason: '当前会员没有实盘交易权益' };
+  return { ready: true, reason: '' };
+}
+// Placing a real order is slow enough that a toast has expired before the user looks.
+// The outcome is kept against the recommendation until the list is reloaded.
+const betResults = new Map();
+function betResultMarkup(signalId) {
+  const result = betResults.get(signalId);
+  if (!result) return '';
+  return `<div class="manual-bet-result ${esc(result.tone)}"><strong>${esc(result.title)}</strong><span>${esc(result.detail)}</span></div>`;
+}
+function betButtonMarkup(signal) {
+  const stake = state.manualBet?.stake_per_order;
+  if (!(Number(stake) > 0)) return '';
+  const gate = manualBetGate();
+  return gate.ready
+    ? `<button class="manual-bet" data-bet-signal="${esc(signal.id)}">实盘买入 ${decimal(stake)} 元</button>`
+    : `<span class="manual-bet-blocked"><button class="manual-bet" data-bet-signal="${esc(signal.id)}" disabled aria-describedby="bet-reason-${esc(signal.id)}">实盘买入 ${decimal(stake)} 元</button><small class="muted" id="bet-reason-${esc(signal.id)}">${esc(gate.reason)}</small></span>`;
+}
 function matchRecommendationMarkup(match) {
   const signals = match.expert_signals || [];
-  const stake = state.user && state.manualBet?.enabled ? state.manualBet.stake_per_order : null;
   return `<section class="match-recommendations" aria-label="本场专家关联盘口">${signals.map(s =>
-    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div><button class="text-link" data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button><span class="muted">${esc(phases[s.phase] || '阶段未知')} · ${stamp(s.created_at)}</span></div><div class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></div><div class="recommendation-result"><span>推荐时系统赔率 ${decimal(s.recommendation_price)}</span><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button>${stake !== null ? `<button class="small-button manual-bet" data-bet-signal="${esc(s.id)}">实盘买入 ${decimal(stake)}</button>` : ''}</div><small class="muted">报价时间 ${stamp(s.quote_time)}</small></article>`
+    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div><button class="text-link" data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button><span class="muted">${esc(phases[s.phase] || '阶段未知')} · ${stamp(s.created_at)}</span></div><div class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></div><div class="recommendation-result"><span>推荐时系统赔率 ${decimal(s.recommendation_price)}</span><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button>${betButtonMarkup(s)}</div><small class="muted">报价时间 ${stamp(s.quote_time)}</small><div class="manual-bet-slot">${betResultMarkup(s.id)}</div></article>`
   ).join('') || '<p class="muted">关联记录已变更，请刷新列表。</p>'}${match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
 }
 const vsIcons = [];
@@ -1500,8 +1529,25 @@ async function placeManualBet(signalId, button) {
     toast("请先保存每单下注金额");
     return;
   }
+  const signal = (state.matches || [])
+    .flatMap((match) => (match.expert_signals || []).map((item) => ({ match, item })))
+    .find(({ item }) => item.id === signalId);
+  const describeSignal = ({ match: fixture, item }) => {
+    const periodLabel = period(item.period);
+    // Some market names already carry the period; naming it twice reads like two bets.
+    const market = item.market_name || "盘口";
+    return `专家 ${item.display_nickname || "昵称未记录"} · ${market}${market.includes(periodLabel) ? "" : " " + periodLabel} ${lineLabel(item)} ${selection(item.selection)}`;
+  };
   const ok = await confirmAction(
-    `确认以 ${decimal(stake)} 元实盘买入该专家推荐？系统按当前盘口重新核验，赔率或盘口变化会被拒绝。`,
+    signal
+      ? [
+          `${signal.match.home_team} 对 ${signal.match.away_team}`,
+          describeSignal(signal),
+          `每单金额 ${decimal(stake)} 元 · 推荐时系统赔率 ${decimal(signal.item.recommendation_price)}`,
+          "确认后用当前盘口重新核验；赔率或盘口变化会被拒绝，不会按旧赔率成交。",
+        ].join("\n")
+      : `确认以 ${decimal(stake)} 元实盘买入该专家推荐？系统按当前盘口重新核验，赔率或盘口变化会被拒绝。`,
+    { title: "确认实盘买入", confirmLabel: `买入 ${decimal(stake)} 元` },
   );
   if (!ok) return;
   button.disabled = true;
@@ -1510,16 +1556,28 @@ async function placeManualBet(signalId, button) {
       method: "POST",
       body: { signal_id: signalId },
     });
-    toast(
+    betResults.set(
+      signalId,
       order.state === "pending"
-        ? `已预留 ${decimal(order.stake)} 元 · 赔率 ${decimal(order.price)}，等待执行器提交；可在个人中心查看订单`
-        : `该推荐已存在订单（${order.state}），未重复下单`,
+        ? {
+            tone: "pending",
+            title: `已预留 ${decimal(order.stake)} 元 · 赔率 ${decimal(order.price)}`,
+            detail: "等待执行器按当前盘口提交；结果记入个人中心订单，结算前不计盈亏。",
+          }
+        : {
+            tone: "repeated",
+            title: `该推荐已有订单（${order.state}）`,
+            detail: "未重复下单；完整记录见个人中心订单。",
+          },
     );
-    if (state.page === "scores") accountHistory.load();
+    if (state.page === "scores") {
+      renderMatches();
+      accountHistory.load();
+    }
   } catch (error) {
-    toast(error.message);
-  } finally {
-    button.disabled = false;
+    betResults.set(signalId, { tone: "failed", title: "下单未受理", detail: error.message });
+    if (state.page === "scores") renderMatches();
+    else toast(error.message);
   }
 }
 function auth(tab = "login") {

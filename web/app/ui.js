@@ -193,10 +193,21 @@ export function dialog(title, html) {
   const modal = $("#content-dialog");
   showDialog(modal, $("#dialog-title"));
 }
-export function confirmAction(message) {
+export function confirmAction(message, { title = "确认操作", confirmLabel = "确认" } = {}) {
   return new Promise((resolve) => {
     const modal = $("#confirm-dialog");
-    $("#confirm-message").textContent = message;
+    $("#confirm-title").textContent = title;
+    $("#confirm-yes").textContent = confirmLabel;
+    // Newlines in the message become separate lines: a real-money order needs a
+    // readable list of what is being bought, not one dense sentence.
+    const target = $("#confirm-message");
+    target.replaceChildren(
+      ...String(message).split("\n").map((line) => {
+        const row = document.createElement("span");
+        row.textContent = line;
+        return row;
+      }),
+    );
     const finish = (value) => {
       modal.close();
       resolve(value);
