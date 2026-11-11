@@ -1,0 +1,320 @@
+{
+  "defect": "BUG-EXPERT-RESULT-20261111",
+  "updated_at": "2026-11-11T07:13:23.479876+00:00",
+  "status": "code_fixes_deployed_historical_results_and_existing_ci_failures_block_closure",
+  "fully_closed": false,
+  "source_revisions": {
+    "backend_collector": "e6a4db5d30147d2f1107f6c680a68557776e701e",
+    "web": "085c80f18b5b117b794bc9fdcccdd3b2f6acf5f0"
+  },
+  "fixes": [
+    "empty result detail has a separate unavailable category",
+    "fresh/recovery/correction queue capacity",
+    "bounded upstream retry delay without counting shared cooldown as a source failure",
+    "account refresh preserves score loading and error states"
+  ],
+  "source_sha256": {
+    "services/api/app/result_check_queue.py": "12928df417e24e698d38c31b7d8fd0da170ab13f11b02eb5a42d28a198cc2de9",
+    "services/api/app/routes/result_checks.py": "14fac4f9f1e175350c0f10901f12f18b2d22fda838b3ccf58c7ab6bc153fee69",
+    "services/collector/leyu_results.py": "541ced426d813a0daadc0b9187b6e5dd09378e975e6093a4b08418622aaa178b",
+    "tests/test_leyu_results.py": "867c82b3a5c59ae421220a322db34f10f12deccb98974fb07d2b1cd8c164e043",
+    "tests/test_result_checks.py": "2adb8529ce490f1fc568a926e745d27189e2b3b61fee58d0ad16e0d9f800f154",
+    "tests/test_result_check_priority.py": "ba3b4b4927fd9cf1822428e0c815b4f084d742a74867bf2f5d719757790125ac",
+    "web/app/app.js": "0879970db0dd2db5d141a9a2273b425af54c135ac4586a56e55def71cad889fa",
+    "tests/browser/verify.mjs": "9b80ae6652aad86226756ec48eb2824c63b5fb049c0d067f8de301cc8f41e034"
+  },
+  "verification": {
+    "red": {
+      "tests": 29,
+      "failures": 7,
+      "errors": 1,
+      "seconds": 31.456,
+      "exit_code": 1
+    },
+    "green": {
+      "tests": 105,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 81.841,
+      "exit_code": 0
+    },
+    "browser_isolated": {
+      "passed": 67,
+      "failed": 0,
+      "exit_code": 0
+    },
+    "browser_production_readonly": {
+      "passed": 20,
+      "failed": 0,
+      "widths": [
+        1440,
+        390
+      ],
+      "sports": [
+        "football",
+        "basketball"
+      ],
+      "production_write_requests": 0,
+      "page_errors": 0,
+      "http_5xx": 0,
+      "exit_code": 0
+    },
+    "schema_preflight": {
+      "candidate_schema_matches_live": true,
+      "tls": true,
+      "read_only": "on"
+    },
+    "health": {
+      "/healthz": 200,
+      "/readyz": 200,
+      "telegram": {
+        "connected": true,
+        "authorized": true
+      },
+      "collector_health_fields": [
+        "leyu",
+        "results",
+        "telegram",
+        "websocket"
+      ]
+    },
+    "runtime_audit": [
+      {
+        "location": "local",
+        "role": "web",
+        "image": "sha256:1305e1ca5efce5cab41b52d3bc635b2f7c9b555f7566ea30799aa6d5e90508ed",
+        "state": "running",
+        "docker_health": "healthy",
+        "runtime_configuration_preserved": true
+      },
+      {
+        "location": "local",
+        "role": "api",
+        "image": "sha256:d0f13e9dd4a05dc53ab3c0a5fd5cb5da7ce50b727be8e7d06a49ff4d6aa1c330",
+        "state": "running",
+        "docker_health": "healthy",
+        "runtime_configuration_preserved": true
+      },
+      {
+        "location": "local",
+        "unrelated_containers_unchanged": 7
+      },
+      {
+        "location": "remote",
+        "role": "collector",
+        "image": "sha256:6a2d6814f9b2e68a8c5981c9c36457a36959cb38030c094531e88e6dfd1eb4ea",
+        "state": "running",
+        "docker_health": "not_configured",
+        "runtime_configuration_preserved": true
+      },
+      {
+        "location": "remote",
+        "unrelated_containers_unchanged": 3
+      }
+    ],
+    "ci": {
+      "run_id": 42974673415,
+      "head_sha": "085c80f18b5b117b794bc9fdcccdd3b2f6acf5f0",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "jobs": [
+        {
+          "name": "android",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "browser",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "backend",
+          "status": "completed",
+          "conclusion": "cancelled"
+        }
+      ]
+    },
+    "edge_ci": {
+      "run_id": 42974673425,
+      "head_sha": "085c80f18b5b117b794bc9fdcccdd3b2f6acf5f0",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    "ci_full_suite": {
+      "source_parent_commit": "0c10c5572a047001f1a1ff5978f8f6457e35fad1",
+      "committed_source_verified": true,
+      "tests": 2319,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0,
+      "task_source_files_matched": 8,
+      "account_sources_match_prefix_baseline": true,
+      "artifact_sha256": "efd637c7c724e0654b4b320b911f7880ccf3b1683cd6e020771b1736736aa972",
+      "seconds": 1167.242,
+      "job_time_limit_minutes": 20,
+      "api_image_and_compose_steps": "not_run_after_cancellation",
+      "failures_in_pre_patch_baseline": {
+        "tests": 2,
+        "failures": 2,
+        "seconds": 2.411,
+        "exit_code": 1,
+        "cases": [
+          "test_history_failure_never_masks_final_balance_failure",
+          "test_history_rate_limit_preserves_fresh_balance_and_other_receipt"
+        ],
+        "account_files_unchanged_between_baseline_and_fix": true
+      }
+    }
+  },
+  "resources": {
+    "test_postgres": {
+      "cpu": 0.5,
+      "memory_mib": 256,
+      "tmpfs_mib": 128
+    },
+    "test_runner": {
+      "cpu": 0.75,
+      "memory_mib": 384
+    },
+    "browser_runner": {
+      "cpu": 0.75,
+      "memory_mib": 1024
+    }
+  },
+  "deployment_incidents": [
+    {
+      "component": "api",
+      "reason": "mutable base tag differed from original running image; startup schema guard rejected candidate",
+      "recovered": true,
+      "resolution": "restore original exact image; rebuild from original exact base; readonly schema preflight; redeploy",
+      "database_migrations": 0,
+      "data_rollback": false
+    },
+    {
+      "component": "web",
+      "reason": "private build context retained mode 0600 for app.js; nginx returned HTTP403",
+      "recovered": true,
+      "resolution": "restore original image; correct non-secret script mode 0644; real nginx HTTP200 and uid101 read smoke; redeploy; repeat original production browser checks"
+    }
+  ],
+  "remaining_dependency": {
+    "snapshot_at": "2026-11-11 06:55:38.687418+00:00",
+    "missing_result_groups": [
+      {
+        "sport": "basketball",
+        "settlement_reason": "result_not_confirmed",
+        "has_result_evidence": false,
+        "signals": 72,
+        "fixtures": 28
+      },
+      {
+        "sport": "football",
+        "settlement_reason": "result_not_confirmed",
+        "has_result_evidence": false,
+        "signals": 9,
+        "fixtures": 4
+      }
+    ],
+    "pending_signals": 81,
+    "fixtures": 32,
+    "other_pending_categories": [
+      {
+        "sport": "basketball",
+        "settlement_reason": "recommendation_source_intent_invalid",
+        "has_result_evidence": false,
+        "signals": 1,
+        "fixtures": 1
+      },
+      {
+        "sport": "football",
+        "settlement_reason": "live_market_score_rule_unknown",
+        "has_result_evidence": true,
+        "signals": 1,
+        "fixtures": 1
+      },
+      {
+        "sport": "football",
+        "settlement_reason": "recommendation_source_intent_invalid",
+        "has_result_evidence": true,
+        "signals": 1,
+        "fixtures": 1
+      },
+      {
+        "sport": "football",
+        "settlement_reason": "recommendation_source_line_intent_invalid",
+        "has_result_evidence": true,
+        "signals": 1,
+        "fixtures": 1
+      },
+      {
+        "sport": "football",
+        "settlement_reason": "recommendation_source_period_intent_invalid",
+        "has_result_evidence": true,
+        "signals": 1,
+        "fixtures": 1
+      }
+    ],
+    "native_detail_probes": "two existing authorized fixture detail reads returned empty objects",
+    "historical_result_probes": "football and basketball default date returned successful empty lists; one bounded explicit-date read timed out",
+    "required_evidence": "verified upstream final score with fixture identity and required period scores",
+    "fabricated_settlements": 0,
+    "real_bets": 0
+  },
+  "result_check_reasons_at_snapshot": [
+    {
+      "last_reason": "result_fixture_mismatch",
+      "checks": 375
+    },
+    {
+      "last_reason": "result_detail_unavailable",
+      "checks": 26
+    },
+    {
+      "last_reason": "upstream_rate_limited",
+      "checks": 26
+    },
+    {
+      "last_reason": "confirmed",
+      "checks": 16
+    },
+    {
+      "last_reason": "shared_upstream_cooldown",
+      "checks": 7
+    },
+    {
+      "last_reason": "upstream_timeout",
+      "checks": 2
+    },
+    {
+      "last_reason": "",
+      "checks": 1
+    }
+  ],
+  "test_cleanup": {
+    "task_postgres_stopped_and_removed": true,
+    "task_account_baseline_postgres_stopped_and_removed": true,
+    "task_nginx_stopped_and_removed": true,
+    "other_project_resources_removed": false
+  },
+  "private_log_sha256": {
+    "red.log": "fb7647925247e103ecca89c0987384db4e844c07b322161a5b9f10d68f642485",
+    "green.log": "dea2c46a1b2e68a8d2a865bdcdbf60c6d5780016769e705aad34fda7cb9da31e",
+    "browser-after.log": "939f95fd84f0b765f6aa3b1755e7560a4b8c1e29e1e173e2e7a280c0c5a7120c",
+    "browser-fixed.log": "8f989fae6478f92e2ec36214c31c8c2e213e75be17dff50bee547b7ae8033fa5",
+    "deploy-api.log": "dfb948a3fc7de704a7c48099355fb5496a8e44c9e92e1b9402f55f6e84d8bf03",
+    "restore-api.log": "1173ec33ce60afa08a4ff1617fd06d37ef6bf4fa1cdc43877f76b0ead8ac21cf",
+    "deploy-api-pinned.log": "1173ec33ce60afa08a4ff1617fd06d37ef6bf4fa1cdc43877f76b0ead8ac21cf",
+    "deploy-collector.log": "89d7527e387c9ac7d43b201d73deecc705e7b49323b406349916a308c3189946",
+    "deploy-web.log": "cff05b9f83a914968019dd198190ef389ab7b2697350363d75b5f601499497e5",
+    "restore-web.log": "cff05b9f83a914968019dd198190ef389ab7b2697350363d75b5f601499497e5",
+    "deploy-web-fixed.log": "cff05b9f83a914968019dd198190ef389ab7b2697350363d75b5f601499497e5",
+    "web-smoke.log": "882644ac11a0c1a0a0ad215ebf84d8f9356c1c68397e63ed32a41cfe5674090b",
+    "production-browser-v3/results.json": "efb7d3d711ede266cd119561b0bd1aa62899348d600653a9634eed33ded9d5fd",
+    "production-browser-v4/results.json": "f446bb107ff6bcf698038b0ee7a8d2c17b14724991b1aeff0898060fb24e058c",
+    "ci-backend-job.log": "1fd8672f93439f3109f5b949a1c088b21a2239f5264dc14872de3d8dfa58edba",
+    "account-baseline.log": "bf46437827711f97022170569d2d1f5ad255f9e6b8cd8a8793bbb5fd0ddbbc67"
+  },
+  "details": "docs/platform-v2/BUG_EXPERT_RESULT_20261111.md"
+}
