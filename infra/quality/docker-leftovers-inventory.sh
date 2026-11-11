@@ -40,7 +40,7 @@ cutoff_epoch=$((now - hours * 3600))
 cutoff=$(date -u -d "@$cutoff_epoch" +%Y-%m-%dT%H:%M:%S)
 
 container_format='{{.Id}}{{"\t"}}{{.Name}}{{"\t"}}{{.Created}}{{"\t"}}{{.State.Status}}{{"\t"}}{{with index .Config.Labels "com.docker.compose.project"}}{{.}}{{end}}{{"\t"}}{{with index .Config.Labels "com.docker.compose.oneoff"}}{{.}}{{end}}{{"\t"}}{{range $k,$v := .NetworkSettings.Networks}}{{$k}},{{end}}{{"\t"}}{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}},{{end}}{{end}}'
-network_format='{{.Id}}{{"\t"}}{{.Name}}{{"\t"}}{{.Created}}{{"\t"}}{{range .IPAM.Config}}{{.Subnet}} {{end}}{{"\t"}}{{range .Containers}}{{.Name}},{{end}}'
+network_format='{{.Id}}{{"\t"}}{{.Name}}{{"\t"}}{{.Created}}{{"\t"}}{{if .IPAM.Config}}{{range .IPAM.Config}}{{.Subnet}} {{end}}{{else}}-{{end}}{{"\t"}}{{range .Containers}}{{.Name}},{{end}}'
 
 # 快照必须完整：容器集合在读取期间变化（其他任务起停容器）时重试，
 # 否则缺失的容器会让它占用的网络被误判为无人引用。
@@ -145,7 +145,7 @@ if [ "$tsv" = 1 ]; then
   exit 0
 fi
 
-awk -v hours="$hours" -v scope="$scope" '
+awk -v hours="$hours" -v scope="$scope" -v sampled="$stats" '
 BEGIN { FS = "\t" }
 function pool(s) { return s ~ /^172\.(1[7-9]|2[0-9]|3[01])\./ || s ~ /^192\.168\./ }
 $1 == "S" { summary[$2] = $3; next }
@@ -166,13 +166,13 @@ $1 == "C" { held[$7]++; held_count++; if ($4 == "running") held_running[++held_r
 $1 == "N" && $6 == "remove" {
   networks[++network_count] = sprintf("  %-46s %s", $3, $4)
   count = split($4, subnets, " ")
-  for (i = 1; i <= count; i++) if (pool(subnets[i])) pooled++; else explicit++
+  for (i = 1; i <= count; i++) if (pool(subnets[i])) pooled++; else if (subnets[i] != "-") explicit++
   next
 }
 $1 == "N" { held_networks[++held_network_count] = "  " $3 "  <- " $7 }
 END {
   printf "遗留测试容器与网络清单（只读；范围 --scope %s，仅含创建超过 %d 小时者）\n\n", scope, hours
-  printf "可清理的运行中容器 %d 个，实测占用内存合计 %.1f MiB%s\n", running_count, freed, (unknown ? "（另有 " unknown " 个采样失败，未计入）" : "")
+  printf "可清理的运行中容器 %d 个，实测占用内存合计 %.1f MiB%s\n", running_count, freed, (unknown ? "（另有 " unknown " 个" (sampled == 1 ? "采样失败" : "未采样(--no-stats)") "，未计入）" : "")
   for (i = 1; i <= running_count; i++) print running[i]
   printf "\n可清理的已退出/未启动容器 %d 个（不占内存，占容器元数据与可写层），按名称归类：\n", exited_count
   for (key in exited) printf "  %5d  %s\n", exited[key], key | "sort -rn | head -n 15"
