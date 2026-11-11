@@ -37,8 +37,9 @@ def _decode_cursor(value: str | None, request: Request, scope) -> tuple[datetime
     return decode_cursor(request.app.state.settings.session_secret, scope, value)
 
 
-async def _has_entitlement(request: Request, key: str) -> bool:
-    identity = await get_identity(request)
+async def _has_entitlement(request: Request, key: str, identity=...) -> bool:
+    if identity is ...:
+        identity = await get_identity(request)
     if identity is None:
         return False
     if identity["role"] == "admin":
@@ -267,8 +268,8 @@ async def experts(scope: StatisticsScope = Depends(statistics_scope)):
 @router.get("/signals")
 async def signals(request: Request, cursor: str | None = None, page_size: int = Query(default=20, ge=1, le=100),
                   sport: str = Query(default='all', pattern='^(all|football|basketball)$')):
-    full_history = await _has_entitlement(request, "expert_full_history")
     identity = await get_identity(request)
+    full_history = await _has_entitlement(request, "expert_full_history", identity)
     if not full_history:
         page_size = min(page_size, 5)
         cursor = None
