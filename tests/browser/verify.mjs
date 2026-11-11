@@ -1211,6 +1211,9 @@ await test("异步盘口分批上限50且多页刷新保持完整顺序", async 
   assert.equal(batches.length, 2);
   assert.ok(log.filter((r) => r.path === '/public/match-summaries').every((r) =>
     new URLSearchParams(r.query).getAll('fixture_ids').length <= 50));
+  // The row draws the main line and three selections; the list must ask for the
+  // row shape rather than pulling up to 24 quotes per fixture and discarding most.
+  assert.ok(batches.every((r) => new URLSearchParams(r.query).get('mode') === 'row'));
   assert.deepEqual(await page.locator('.match-row').evaluateAll((rows) => rows.map((r) => r.dataset.fixture)),
     Array.from({length:100}, (_, i) => 'long-' + i));
   await context.close();

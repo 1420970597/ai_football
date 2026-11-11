@@ -276,8 +276,11 @@ function renderMatchOdds(m) {
   const market = m.sport === "basketball" && first
     ? `<span class="odds-market">${esc(period(first.period))} · ${esc(first.market_name || first.market_kind || "盘口")}</span>`
     : "";
+  // A row-shaped summary carries only the quotes drawn here plus the size of the
+  // full set; markets_total is what decides whether "更多盘口" leads anywhere.
+  const total = m.markets_total ?? all.length;
   return market + (quotes.length ? quotes.map((q) => `<span class="${q.fresh === false || !m.quote_fresh ? "stale" : ""}" title="${esc(quoteLabel(q))}">${esc(selection(q.selection))} ${esc(lineLabel(q))} ${decimal(q.price)}</span>`).join("") : `<span class="stale">${empty}</span>`) +
-    (all.length > quotes.length ? '<button class="detail-button" data-match="' + esc(m.id) + '">更多盘口 ›</button>' : "");
+    (total > quotes.length ? '<button class="detail-button" data-match="' + esc(m.id) + '">更多盘口 ›</button>' : "");
 }
 function scoreMarkup(match) {
   const hasScore = match.home_score !== null && match.home_score !== undefined;
@@ -429,7 +432,10 @@ async function loadMatchSummaries(identifiers, sequence, parentSignal) {
     for (; offset < identifiers.length && !controller.signal.aborted; offset += 50) {
       const batch = identifiers.slice(offset, offset + 50);
       try {
-        const result = await api("/public/match-summaries?" + params({ fixture_ids: batch }),
+        // The row draws the main line and three selections; asking for the row
+        // shape returns just those (plus markets_total) instead of up to 24
+        // quotes per fixture that nothing on this page displays.
+        const result = await api("/public/match-summaries?" + params({ fixture_ids: batch, mode: "row" }),
           { signal: controller.signal, timeout: 7000 });
         if (!current()) return;
         if (!Array.isArray(result.items)) throw new Error("盘口摘要响应不完整");

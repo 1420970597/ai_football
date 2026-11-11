@@ -47,6 +47,54 @@ async def _has_entitlement(request: Request, key: str, identity=...) -> bool:
     return await has_entitlement(identity["id"], key)
 
 
+async def _row_quotes(request: Request, fixture_ids: list[str]) -> dict[str, dict]:
+    """Exactly the quotes a match row renders, plus the size of the full set.
+
+    The list row shows the main market line and three selections, yet the full
+    summary ships up to 24 quotes per fixture — around 1,000 quotes for a page of
+    50, of which about 100 are drawn. The row shape picks the same anchor quote
+    (first by is_main, freshness, market) and the same three selections in the
+    same order the client would, so what renders is unchanged while the payload
+    drops by roughly nine tenths.
+    """
+    if not fixture_ids:
+        return {}
+    # Mirrors renderMatchOdds exactly: build the same 24-quote window, re-sort it
+    # by (market_id, line, selection), take the first quote whose is_main is not
+    # false (NULL counts as main, like the client's `is_main !== false`), then
+    # the first three quotes of that market, period and line.
+    rows = await database.current_pool().fetch(
+        "WITH wanted AS (SELECT unnest($1::text[]) AS fixture_id), "
+        "windowed AS ("
+        "  SELECT w.fixture_id AS want_id, q.* FROM wanted w CROSS JOIN LATERAL ("
+        "    SELECT id AS quote_id,fixture_id,market_id,market_name,period,market_kind,line,selection,price,"
+        "           status,is_main,source_updated_at,received_at "
+        "    FROM v2_current_quotes WHERE fixture_id=w.fixture_id "
+        "    ORDER BY is_main DESC,source_updated_at DESC NULLS LAST,market_id,line,selection LIMIT 24) q), "
+        "ordered AS (SELECT windowed.*, row_number() OVER (PARTITION BY want_id ORDER BY market_id,line,selection) AS rn "
+        "            FROM windowed), "
+        "anchor AS (SELECT DISTINCT ON (want_id) want_id,market_id,period,line FROM ordered "
+        "           ORDER BY want_id,(coalesce(is_main,true) IS FALSE),rn), "
+        "picked AS (SELECT o.*, row_number() OVER (PARTITION BY o.want_id ORDER BY o.rn) AS grp_rn "
+        "           FROM ordered o JOIN anchor a USING (want_id) "
+        "           WHERE o.market_id=a.market_id AND o.period=a.period AND o.line IS NOT DISTINCT FROM a.line) "
+        "SELECT p.quote_id,p.fixture_id,p.market_id,p.market_name,p.period,p.market_kind,p.line,"
+        "       p.selection,p.price,p.status,p.is_main,p.source_updated_at,p.received_at,"
+        "       (SELECT count(*) FROM v2_current_quotes c WHERE c.fixture_id=p.want_id) AS total "
+        "FROM picked p WHERE p.grp_rn<=3 ORDER BY p.want_id,p.grp_rn", fixture_ids,
+    )
+    max_quote_age = await runtime_quote_max_age(request.app.state.settings)
+    output: dict[str, dict] = {}
+    for row in rows:
+        # total is per-fixture metadata, not part of a quote; keep it out of the
+        # quote object so the row shape stays a strict subset of the full one.
+        total = row['total']
+        quote = {key: value for key, value in row.items() if key != 'total'}
+        entry = output.setdefault(quote['fixture_id'], {'markets': [], 'markets_total': total})
+        entry['markets'].append(line_projection(quote) | {'fresh': fresh_quote(quote, max_quote_age)})
+    return output
+
+
 async def _quote_summaries(request: Request, fixture_ids: list[str]) -> dict[str, list[dict]]:
     if not fixture_ids:
         return {}
@@ -95,14 +143,28 @@ async def _recommendation_summaries(fixture_ids: list[str], limit: int) -> dict[
 
 
 @router.get('/match-summaries')
-async def match_summaries(request: Request, fixture_ids: list[str] = Query(min_length=1, max_length=50)):
+async def match_summaries(request: Request, fixture_ids: list[str] = Query(min_length=1, max_length=50),
+                          mode: str = Query(default='full', pattern='^(full|row)$')):
     if any(not identifier.strip() or len(identifier) > 120 for identifier in fixture_ids):
         raise HTTPException(422, '比赛标识无效')
     identifiers = list(dict.fromkeys(fixture_ids))
     rows = await database.current_pool().fetch(
         'SELECT id,phase FROM v2_fixtures WHERE id=ANY($1::text[]) AND decision_context_only_at IS NULL', identifiers)
     phases = {row['id']: row['phase'] for row in rows}
-    summaries = await _quote_summaries(request, [identifier for identifier in identifiers if identifier in phases])
+    wanted = [identifier for identifier in identifiers if identifier in phases]
+    if mode == 'row':
+        compact = await _row_quotes(request, wanted)
+        return {'items': [
+            {'fixture_id': identifier, 'phase': phases[identifier],
+             'markets': compact.get(identifier, {}).get('markets', []),
+             'markets_total': compact.get(identifier, {}).get('markets_total', 0),
+             'markets_status': 'loaded',
+             'quote_fresh': phases[identifier] in {'scheduled', 'live'} and
+                            any(quote['fresh'] for quote in compact.get(identifier, {}).get('markets', []))}
+            for identifier in identifiers if identifier in phases],
+            'missing_fixture_ids': [identifier for identifier in identifiers if identifier not in phases],
+            'shape': 'row', 'server_time': datetime.now(timezone.utc)}
+    summaries = await _quote_summaries(request, wanted)
     return {'items': [
         {'fixture_id': identifier, 'phase': phases[identifier],
          'markets': summaries.get(identifier, []), 'markets_status': 'loaded',

@@ -50,6 +50,33 @@ class AsyncScoreSummaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(old['quote_fresh'],item['quote_fresh'])
         self.assertEqual('loaded',item['markets_status'])
 
+    async def test_row_shape_returns_exactly_the_quotes_the_row_draws(self):
+        quotes=[dict(market_id='total',market_name='全场大小',kind='total',period='full_time',
+            line=str(2+i/4),selection=selection,price='1.95',source_updated_at=self.now.isoformat(),
+            received_at=self.now.isoformat())for i in range(30)for selection in ('over','under')]
+        fixture=await self.fixture(1,markets=quotes)
+        full=(await self.client.get('/api/v1/public/match-summaries',params={'fixture_ids':fixture})).json()['items'][0]
+        row=(await self.client.get('/api/v1/public/match-summaries',
+            params={'fixture_ids':fixture,'mode':'row'})).json()
+        self.assertEqual('row',row['shape'])
+        item=row['items'][0]
+        # The row shows the main market line and at most three of its selections.
+        self.assertLessEqual(len(item['markets']),3)
+        # markets_total counts every current quote, not just the ones shipped.
+        self.assertEqual(len(quotes),item['markets_total'])
+        self.assertEqual(24,len(full['markets']))
+        # The row shape is a prefix of the full size in the same order, so the
+        # row never shows a quote the full shape would not have shown.
+        self.assertEqual(full['markets'][:len(item['markets'])],item['markets'])
+        self.assertEqual(full['quote_fresh'],item['quote_fresh'])
+        self.assertEqual('loaded',item['markets_status'])
+
+    async def test_row_shape_rejects_unknown_mode(self):
+        fixture=await self.fixture(1)
+        response=await self.client.get('/api/v1/public/match-summaries',
+            params={'fixture_ids':fixture,'mode':'everything'})
+        self.assertEqual(422,response.status_code,response.text)
+
     async def test_empty_finished_and_unknown_fixtures_remain_distinct(self):
         fixture=await self.fixture(1,phase='finished',markets=[])
         response=await self.client.get('/api/v1/public/match-summaries',params=[('fixture_ids',fixture),('fixture_ids','unknown')])
