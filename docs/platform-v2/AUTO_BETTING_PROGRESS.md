@@ -128,4 +128,7 @@ E605 对订单 5442ae90-e627-4036-bf58-844c75ade3b2 的只读查询原退出 0�
 - 工作树边界：仓库中另有他人未提交改动（`services/executor/`、`services/api/app/account_jobs.py` 的查单分类文案、`orders.py` 内与本功能无关的 `COALESCE(lease_until,now())` 等 hunk）。本轮不把它们并入本功能提交，也不回滚。
 - 全量冻结套件结果：`infra/test/frozen_suite.py`（Docker `ai-football-verifier:v2.0.0-dev`，隔离临时 PostgreSQL `manual-bet-pg`，宿主网络 `manual-bet-test-net`）**Ran 2312 tests in 964.606s — OK**，退出码 0，无 ERROR/FAIL；日志 `.runtime/test-evidence/manual-bet-suite3.log`。该运行在最终代码上执行（含 `order_is_manual` 修复），SOURCE_IS_CLEAN=false 如实标记为未提交工作树。
 - 尚未完成（未获授权）：真实资金实盘点击验收。仓库规则与用户既有约束要求不得在未经明确授权时用真钱证明功能；本轮全部验证均为协议样本、无资金替身与隔离数据库。
+- 生产部署（2026-11-11）：提交 `657e45d5` 已推送至 `origin/fix/TASK-78-hermes-telegram-sync`。镜像 `ai-football-api:2.0.0-dev-manualbet-657e45d5`、`ai-football-web:2.0.0-dev-manualbet-657e45d5` 由该提交构建。先用 `compose run --rm migrate`（新镜像）对生产库执行结构升级，`schema migration completed applied_count=1`，退出0；运行账号无 DDL 权限时首次尝试被 `InsufficientPrivilegeError` 正确拒绝，改用 `LOCAL_DATABASE_MIGRATION_URL` 的迁移角色后成功。随后 `compose up -d --no-deps api web` 重建两服务，api `Healthy`。
+- 生产验证：`v2_schema_migrations` 最新版本为 `034_manual_betting.sql`；`/readyz` 返回 200；`GET /api/v1/accounts/leyu/manual-betting` 返回 401（路由存在且要求身份）、`PUT`/`POST .../orders` 返回 422（请求体校验先于鉴权，未产生副作用）；`http://127.0.0.1:3003/` 已返回含「每单金额」的新首页；web `/healthz` 200；api 近 5 分钟日志无 error/traceback。
+- 仍未经授权：真实资金下单验收（需用户明确许可后才能执行）。
 
