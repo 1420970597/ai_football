@@ -46,6 +46,25 @@ def tool_unavailability_issues() -> dict:
             'tool_availability_unverified': True}
 
 
+_SERIALIZED_TOOL_CALL_END = re.compile(
+    r'(?:</(?:parameter|invoke|function_calls|tool_call|function)>\s*)+$')
+
+
+def unexecuted_tool_call_claim(content: str) -> bool:
+    """The turn ended on serialized tool-call markup instead of a conclusion.
+
+    The provider then executed nothing: the intended call exists only as text.
+    This is a negative completeness hint, never evidence for a match or quote.
+    """
+    return bool(_SERIALIZED_TOOL_CALL_END.search(content.rstrip()[-400:]))
+
+
+def unexecuted_tool_call_issues() -> dict:
+    return {'unfinished_search_count': 0, 'unfinished_searches': [],
+            'unbound_mention_count': 0, 'unbound_mentions': [], 'detail_limit': DETAIL_LIMIT,
+            'tool_call_unexecuted': True}
+
+
 async def tool_recovery_pending(conn, job_id, attempt_id) -> bool:
     """Only real successful MCP evidence after this attempt's last alert counts."""
     return bool(await conn.fetchval(
@@ -280,7 +299,14 @@ def continuation_prompt(issues: dict) -> str:
         '请使用当前实际提供的赛事检索及盘口工具核验原图文，不能仅改口说已完成。'
         '实际调用失败则保留错误，不自行扩大权限、虚构工具结果或猜测编号。'
         if issues.get('tool_availability_unverified') else '')
-    return source_item_hint + visual_access_hint + quote_claim_hint + visual_hint + display_hint + phase_hint + line_hint + intent_hint + tool_hint + (
+    unexecuted_hint = (
+        '上轮输出停在一段未执行的工具调用标记上：该调用只被写成了文字，没有真正执行，也没有给出审核结论。'
+        '请在本会话通过实际工具接口继续：提交上轮已核验但尚未执行的调用（例如record_expert_signals），'
+        '逐项检查accepted/rejected后再用简体中文给出最终说明，不要再把调用内容写进正文。'
+        '这不是新的绑定、盘口或录入许可：仍只能提交本次尝试已读取且can_record为真的确切quote_id；'
+        '来源证据不足、停盘或无有效盘口的项保留未解决，已经接受的项不重复提交。'
+        if issues.get('tool_call_unexecuted') else '')
+    return unexecuted_hint + source_item_hint + visual_access_hint + quote_claim_hint + visual_hint + display_hint + phase_hint + line_hint + intent_hint + tool_hint + (
         '服务端工具证据核验尚未通过，请在本会话继续当前审核。沿用原 review_id、attempt_id、原图文和权限。'
         '先完成 unfinished_searches 中每个检索的准确 next cursor，保持原 scope（尤其 sport、phase、时间范围），'
         '连续分页直到无下一页，不要重启已完成检索。对模型提及但无绑定的比赛，只有原推荐意图且双方球队、'

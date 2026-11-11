@@ -19,6 +19,28 @@ NATIVE_ABSENCE_CLAIM = (
 CONTEXT_ABSENCE_CLAIM = '我不会审核这条消息，因为当前提供的上下文里没有可用的比赛或盘口工具。'
 
 
+# 生产样本 a17d1748：三项 can_record=true 的推荐已核验，但最后一次提交只被写成了正文。
+TAG = '<' + '/parameter>'
+LEAKED_CALL = ('Batch A: football: Egypt; parallel: Eibar. Then Alavés.\n\nLet me do batch A.' + TAG)
+
+
+class UnexecutedToolCallBoundaryTests(unittest.TestCase):
+    def test_trailing_serialized_call_is_detected(self):
+        from app.review_completion import unexecuted_tool_call_claim
+        for content in (LEAKED_CALL, LEAKED_CALL + '\n', LEAKED_CALL + '\n<' + '/invoke>\n<' + '/function_calls>  ',
+                        '现在提交。<' + '/tool_call>', 'x' * 30000 + TAG):
+            with self.subTest(content=content[-40:]):
+                self.assertTrue(unexecuted_tool_call_claim(content))
+
+    def test_conclusions_quotes_and_mid_text_markup_are_not_detected(self):
+        from app.review_completion import unexecuted_tool_call_claim
+        for content in ('', '本条是赛果反馈，没有新增推荐。', '已接受 1 条推荐：全场大2.5。',
+                        '原文包含标记 ' + TAG + '，但与审核无关，本条无推荐。',
+                        LEAKED_CALL + '\n\n已提交并接受 2 条推荐。', '参数说明：parameter>', '比分 2>1，已完场。'):
+            with self.subTest(content=content[-40:]):
+                self.assertFalse(unexecuted_tool_call_claim(content))
+
+
 class ToolClaimBoundaryTests(unittest.TestCase):
     def test_explicit_self_limitations_are_only_negative_completion_hints(self):
         from app.review_completion import tool_unavailability_claim
@@ -112,6 +134,47 @@ class ReviewToolAvailabilityTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(worker.HermesProviderUnavailable):
             await self.run_model(model)
         self.assertEqual(3, len(calls))
+
+    async def test_unexecuted_tool_call_continues_until_a_real_conclusion(self):
+        final = '已提交并核对工具回执，本条没有可录入的推荐。'
+        (content, summary), model = await self.run_model([(LEAKED_CALL, {'content': LEAKED_CALL}),
+                                                         (final, {'content': final})])
+        self.assertEqual(final, content)
+        self.assertEqual(2, model.await_count)
+        self.assertTrue(summary['completion_verified'])
+        self.assertEqual(2, summary['completion_rounds'])
+        prompt = model.await_args_list[1].kwargs['continuation']
+        self.assertIn('未执行的工具调用', prompt)
+        self.assertIn('不是新的绑定、盘口或录入许可', prompt)
+        self.assertEqual(1, model.await_args_list[1].kwargs['continuation_round'])
+        partial = await self.pool.fetchval(
+            "SELECT payload FROM v2_analysis_traces WHERE trace_kind='hermes_partial_result'")
+        self.assertTrue(partial['completion_issues']['tool_call_unexecuted'])
+        self.assertFalse(partial['completion_verified'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_repeated_unexecuted_tool_call_ends_unverified_without_inventing_signals(self):
+        (_, summary), model = await self.run_model([(LEAKED_CALL, {'content': LEAKED_CALL})] * 3)
+        self.assertEqual(3, model.await_count)
+        self.assertFalse(summary['completion_verified'])
+        self.assertTrue(summary['completion_issues']['tool_call_unexecuted'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+
+    async def test_historical_replay_does_not_continue_for_serialized_call_text(self):
+        job = {'id': self.job, 'attempt_id': self.attempt, 'message': {}, 'review_mode': 'historical_replay'}
+        with patch.object(worker, 'review_message', AsyncMock(return_value=(LEAKED_CALL, {'content': LEAKED_CALL}))) as model:
+            _, summary = await worker._review_until_verified(self.pool, SimpleNamespace(), job)
+        self.assertEqual(1, model.await_count)
+        self.assertTrue(summary['completion_verified'])
+
+    async def test_final_receipt_marks_unexecuted_tool_call_even_if_worker_flag_is_true(self):
+        receipt = await self.receipt(claim=LEAKED_CALL)
+        self.assertFalse(receipt['completion_verified'])
+        self.assertTrue(receipt['completion_issues']['tool_call_unexecuted'])
+        self.assertNotIn('tool_availability_unverified', receipt['completion_issues'])
+        self.assertIn('未执行的工具调用', receipt['content'])
+        self.assertEqual(0, receipt['accepted_count'])
 
     async def test_english_explicit_tool_absence_also_requires_recovery(self):
         claim = 'I cannot use football MCP tools because this session does not provide any tools.'

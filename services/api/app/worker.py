@@ -24,7 +24,8 @@ from .review_intent_claims import image_access_unavailable, explicit_current_tot
 from .review_accepted_context import read_accepted_context
 from .review_completion import (completion_issues, continuation_prompt, mentioned_fixtures, named_identity_claims, explicit_text_pick,
                                 explicit_visual_instruction,
-                                tool_recovery_pending, tool_unavailability_claim, tool_unavailability_issues)
+                                tool_recovery_pending, tool_unavailability_claim, tool_unavailability_issues,
+                                unexecuted_tool_call_claim, unexecuted_tool_call_issues)
 from .review_policy import FRESH_PRIORITY_WINDOW_SECONDS, REALTIME_WINDOW_SECONDS
 from .review_scheduler_setup import claim_pair_and_job_query, prepare_claim_schedule
 from fastapi import HTTPException
@@ -427,7 +428,7 @@ async def _complete_review(pool, job: dict, started: float, model_result: dict |
 async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, require_tool_recovery=False,
                                   named_content='', require_intent_review=False, final_content='',
                                   require_visual_instruction_review=False, require_visual_access_review=False,
-                                  source_total_items=None):
+                                  source_total_items=None, unexecuted_tool_call=False):
     transient = (TimeoutError, asyncpg.LockNotAvailableError, asyncpg.QueryCanceledError,
                  asyncpg.DeadlockDetectedError, asyncpg.SerializationError, asyncpg.PostgresConnectionError)
     for retry in range(2):
@@ -447,6 +448,8 @@ async def _read_completion_issues(pool, job, mentioned, *, tool_claim=False, req
                 if tool_claim or (require_tool_recovery
                         and await tool_recovery_pending(conn, job['id'], job['attempt_id'])):
                     issues = {**tool_unavailability_issues(), **issues}
+                if unexecuted_tool_call:
+                    issues = {**unexecuted_tool_call_issues(), **issues}
                 return issues, retry
         except transient as exc:
             if retry:
@@ -502,6 +505,8 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
         tool_claim = message['review_mode'] == 'real_time' and tool_unavailability_claim(content)
         recovery_options = ({'tool_claim': tool_claim, 'require_tool_recovery': tool_recovery_required}
                             if tool_claim or tool_recovery_required else {})
+        if message['review_mode'] == 'real_time' and unexecuted_tool_call_claim(content):
+            recovery_options['unexecuted_tool_call'] = True
         named_content = named_identity_claims(named_contents)
         if named_content:
             recovery_options['named_content'] = named_content

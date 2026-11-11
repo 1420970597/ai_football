@@ -7,7 +7,8 @@ from datetime import datetime
 from .review_state import append_traces, trace
 from .handicap_lines import line_terms
 from .review_completion import (completion_issues, mentioned_fixtures, named_identity_claims, tool_recovery_pending,
-                                tool_unavailability_claim, tool_unavailability_issues)
+                                tool_unavailability_claim, tool_unavailability_issues,
+                                unexecuted_tool_call_claim, unexecuted_tool_call_issues)
 from .review_summary_evidence import SummaryEvidence, read_summary_evidence
 from .review_intent_retry import intent_matches_quote
 from .review_phase_claims import current_phase_claims, named_phase_claims
@@ -109,6 +110,9 @@ def make_summary(rows, *, accepted_total: int, rejected, review_mode: str, ident
         if incomplete.get('visual_access_unverified'):
             lines.append('审核核验未完成：当前原图尚未确认可读，不能把图像读取失败当成没有推荐；'
                          '保留未解决，不从现有盘口反推原图内容。')
+        if incomplete.get('tool_call_unexecuted'):
+            lines.append('审核核验未完成：模型输出停在未执行的工具调用上，没有给出结论；'
+                         '该调用并未真正执行，不能认定全部核验。仅已接受记录有效，其余保留未解决。')
         if incomplete.get('tool_availability_unverified'):
             lines.append('审核核验未完成：模型声称工具不可用，之后尚无当前审核尝试的成功工具调用证据；'
                          '不能认定全部匹配。仅已接受记录有效，其余保持待核验。')
@@ -157,6 +161,8 @@ async def record_summary(conn, job, attempt_id, review_mode: str, *, trace_lock_
         if claimed or (any(tool_unavailability_claim(content) for content in evidence.model_contents[:-1])
                 and await tool_recovery_pending(conn, job['id'], attempt_id)):
             incomplete = {**tool_unavailability_issues(), **incomplete}
+        if unexecuted_tool_call_claim(evidence.model_contents[-1]):
+            incomplete = {**unexecuted_tool_call_issues(), **incomplete}
     accepted_ids = set(evidence.accepted_signal_ids)
     rejected = [entry for entry in evidence.rejected if not any(
         str(signal['signal_id']) in accepted_ids and intent_matches_quote(entry.get('intent_context'), signal)
