@@ -64,6 +64,17 @@ async function api(path, { method = "GET", body, admin = false } = {}) {
     throw new Error("API returned non-JSON status=" + response.status() + " path=" + path);
   return { status: response.status(), data: JSON.parse(raw) };
 }
+await scenario("真实API首页默认关联范围与全部赛事切换", async () => {
+  await page.goto(origin);
+  await page.waitForSelector(".match-row");
+  assert.equal(await page.locator('[data-match-scope="recommended"]').getAttribute('aria-pressed'), 'true');
+  assert.deepEqual((await page.locator('.match-row').evaluateAll(rows => rows.map(row => row.dataset.fixture))).sort(),
+    ['web-integration-match-0', 'web-integration-match-1']);
+  await page.locator('[data-match-scope="all"]').click();
+  await page.waitForFunction(() => document.querySelectorAll('.match-row').length === 4);
+  assert.equal(await page.locator('[data-match-scope="all"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('[data-match-scope="recommended"]').getAttribute('aria-pressed'), 'false');
+});
 await scenario("真实API比分投影、联赛多选和赛前赛果", async () => {
   const holdDirectory = async () => {
     let release, ready, completed;
@@ -79,8 +90,10 @@ await scenario("真实API比分投影、联赛多选和赛前赛果", async () =
     return { fetched, delivered, release: () => release() };
   };
   // Hold the real successful response: clicking before catalog delivery must show loading.
+  // Start a fresh document so a same-page scope hash cannot reuse the previous catalog.
+  await page.goto('about:blank');
   const initialDirectory = await holdDirectory();
-  await page.goto(origin);
+  await page.goto(origin + '/#scores?scope=all');
   await page.waitForSelector(".match-row");
   assert.equal(await page.locator(".match-row").count(), 4);
   const initialCatalog = await initialDirectory.fetched;
@@ -492,6 +505,8 @@ for (const role of [
     async function openPublicPages() {
       await rolePage.locator(".main-nav [data-page=scores]:not([data-phase])").click();
       await rolePage.waitForSelector(".match-row");
+      await rolePage.locator('[data-match-scope="all"]').click();
+      await rolePage.waitForFunction(() => document.querySelectorAll('.match-row').length === 4);
       assert.equal((await request("/public/matches")).status, 200);
       await rolePage.locator('.match-row[data-fixture="web-integration-match-0"] .score-button').click();
       await rolePage.waitForFunction(() => document.querySelector("#dialog-content").textContent.includes("测试主队甲"));
