@@ -212,6 +212,15 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], (await self.client.get('/internal/telegram/pending')).json()['items'])
         self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_raw_retention_media'))
 
+    async def test_expired_media_batch_fits_existing_collectors_delete_ack_budget(self):
+        await self.pool.executemany('INSERT INTO v2_raw_retention_media(object_key,source_id) VALUES($1,$2)',
+            [('v2/telegram/messages/chat/expired/'+str(i),self.source_id)for i in range(25)])
+        response=await self.client.post('/internal/telegram/media/orphans',json={
+            'owner':str(self.owner),'limit':100,'older_than_hours':24})
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual(10,len(response.json()['items']))
+        self.assertEqual(10,await self.pool.fetchval('SELECT count(*) FROM v2_raw_retention_media WHERE claim_until>now()'))
+
     async def test_future_timestamp_is_preserved_but_never_claimed_as_live(self):
         body = self.event(minutes=30)
         body['posted_at'] = (self.event_time + timedelta(minutes=30)).isoformat()

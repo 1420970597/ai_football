@@ -112,6 +112,18 @@ class RawRetentionTests(unittest.IsolatedAsyncioTestCase):
             "VALUES($1,'fixture','total','大小','full_time',2.5,'over',1.9,'active',now())",uuid.uuid4())
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_current_quotes'))
 
+    async def test_small_batches_advance_past_protected_contexts_and_wrap(self):
+        await self.signal()
+        old=self.now-timedelta(days=4)
+        await self.pool.execute('UPDATE v2_fixtures SET kickoff_at=$1',old)
+        for identity in ('aaa-unreferenced','zzz-unreferenced'):
+            await self.pool.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) "
+                "VALUES($1,$1,'football','history','A','B',$2,'finished')",identity,old)
+        async with self.pool.acquire() as conn:
+            for _ in range(8):
+                await sweep(conn,limit=1,quote_limit=1)
+        self.assertEqual(['fixture'],[r['id']for r in await self.pool.fetch('SELECT id FROM v2_fixtures')])
+
     async def test_media_retirement_checks_source_ownership_leases_and_live_references(self):
         owner,other=uuid.uuid4(),uuid.uuid4()
         await self.pool.execute("INSERT INTO v2_source_checkpoints(source_id,collector_owner,lease_until) "

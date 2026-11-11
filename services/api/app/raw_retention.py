@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import signal
+from datetime import datetime
 from urllib.parse import parse_qs, urlsplit
 
 import asyncpg
@@ -31,7 +32,7 @@ def _name(value):
     return '"' + value + '"'
 
 
-async def unreferenced(conn, parent, *, cascades=False):
+async def unreferenced(conn, parent, *, cascades=False, correlated=False):
     """Use actual incoming keys; do not bypass an unknown future constraint."""
     rows = await conn.fetch(
         "SELECT c.relname AS name,n.nspname AS schema,f.confdeltype,"
@@ -55,7 +56,11 @@ async def unreferenced(conn, parent, *, cascades=False):
             if not all(re.fullmatch(r'[a-z_][a-z0-9_]*', v) for v in (child, key)):
                 raise ValueError('unexpected_retention_column')
             pairs.append('r."' + child + '"=p."' + key + '"')
-        clauses.append('NOT EXISTS(SELECT 1 FROM ' + _name(row['name']) + ' r WHERE ' + ' AND '.join(pairs) + ')')
+        # On the very large current-quote child, a hash anti join can scan
+        # millions of rows before honoring the parent batch limit. All
+        # fixture reference columns are indexed by the retention migration.
+        tail = ' OFFSET 0' if correlated else ''
+        clauses.append('NOT EXISTS(SELECT 1 FROM ' + _name(row['name']) + ' r WHERE ' + ' AND '.join(pairs) + tail + ')')
     return ' AND '.join(clauses) or 'TRUE'
 
 
@@ -71,7 +76,11 @@ async def sweep(conn, *, limit=1000, quote_limit=5000):
         await conn.execute("UPDATE v2_raw_retention_status SET last_started_at=clock_timestamp() WHERE singleton")
 
         async def run(name, sql, batch=limit):
-            result = await conn.execute(sql, batch)
+            try:
+                result = await conn.execute(sql, batch)
+            except Exception as exc:
+                log.error('retention_statement_failed operation=%s category=%s', name, type(exc).__name__)
+                raise
             counts[name] = int(result.rsplit(' ', 1)[-1])
 
         await run('messages_expired',
@@ -141,10 +150,29 @@ async def sweep(conn, *, limit=1000, quote_limit=5000):
             "CROSS JOIN LATERAL(SELECT p.id FROM v2_current_quotes p WHERE p.fixture_id=f.id AND " + safe_quotes +
             " LIMIT $1 FOR UPDATE OF p SKIP LOCKED) selected LIMIT $1) "
             "DELETE FROM v2_current_quotes p USING old WHERE p.id=old.id", quote_limit)
-        safe_fixtures = await unreferenced(conn, 'v2_fixtures')
+        # Bound checks, not just successful deletes. Protected historical
+        # contexts must not force a scan of every archived parent per batch.
+        previous = await conn.fetchval('SELECT last_counts FROM v2_raw_retention_status WHERE singleton')
+        previous = json.loads(previous) if isinstance(previous, str) else (previous or {})
+        cursor = previous.get('fixture_gc_cursor') or {}
+        after_time = datetime.fromisoformat(cursor['kickoff_at']) if cursor else None
+        if after_time is not None and after_time.tzinfo is None:
+            raise ValueError('retention_cursor_timezone_required')
+        after_id = cursor.get('id') if cursor else None
+        query = ("SELECT kickoff_at,id FROM v2_fixtures WHERE decision_context_only_at IS NOT NULL "
+                 "AND ($1::timestamptz IS NULL OR (kickoff_at,id)>($1,$2::text)) "
+                 "ORDER BY kickoff_at,id LIMIT $3")
+        parents = await conn.fetch(query, after_time, after_id, limit)
+        if not parents and cursor:
+            parents = await conn.fetch(query, None, None, limit)
+        safe_fixtures = await unreferenced(conn, 'v2_fixtures', correlated=True)
         await run('fixtures_deleted',
-            "WITH old AS (SELECT p.id FROM v2_fixtures p WHERE p.decision_context_only_at IS NOT NULL AND " +
-            safe_fixtures + " LIMIT $1 FOR UPDATE OF p SKIP LOCKED) DELETE FROM v2_fixtures p USING old WHERE p.id=old.id")
+            "WITH old AS (SELECT p.id FROM v2_fixtures p WHERE p.id=ANY($1::text[]) "
+            "AND p.decision_context_only_at IS NOT NULL AND " + safe_fixtures +
+            " FOR UPDATE OF p SKIP LOCKED) DELETE FROM v2_fixtures p USING old WHERE p.id=old.id",
+            [parent['id'] for parent in parents])
+        counts['fixture_gc_cursor'] = ({'kickoff_at': parents[-1]['kickoff_at'].isoformat(), 'id': parents[-1]['id']}
+                                       if parents else None)
         await conn.execute(
             "UPDATE v2_raw_retention_status SET last_completed_at=clock_timestamp(),"
             "last_error_category=NULL,last_counts=$1::jsonb WHERE singleton", json.dumps(counts))
@@ -165,7 +193,7 @@ async def run():
                 server_settings={'application_name': 'platform-v2-local-retention'})
             async with asyncio.timeout(25):
                 counts = await sweep(conn, quote_limit=5000)
-            log.info('retention_batch %s', json.dumps(counts))
+            log.info('retention_batch %s', json.dumps({k: v for k, v in counts.items() if not k.endswith('_cursor')}))
         except asyncio.CancelledError:
             raise
         except Exception as exc:

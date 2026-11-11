@@ -945,6 +945,9 @@ def _valid_media_key(value: str) -> bool:
 @router.post("/internal/telegram/media/orphans")
 async def media_orphans(body: MediaOrphansInput, request: Request):
     authorized(request)
+    # The existing collector gives its sequential S3 delete/ack pass five
+    # seconds. Large replies time out before acknowledging any deletions.
+    batch_limit = min(body.limit, 10)
     async with database.current_pool().acquire() as conn:
         rows = await conn.fetch(
             "WITH candidates AS ("
@@ -966,11 +969,11 @@ async def media_orphans(body: MediaOrphansInput, request: Request):
             "FROM candidates c LEFT JOIN ready_refs r ON r.object_key=c.object_key "
             "WHERE c.object_key IS NOT NULL AND r.object_key IS NULL "
             "ORDER BY c.object_key,c.updated_at LIMIT $3",
-            body.owner, body.older_than_hours, body.limit,
+            body.owner, body.older_than_hours, batch_limit,
         )
-        if len(rows) < body.limit:
+        if len(rows) < batch_limit:
             from ..retention_media import claim_expired_media
-            rows = list(rows) + list(await claim_expired_media(conn, body.owner, body.limit-len(rows)))
+            rows = list(rows) + list(await claim_expired_media(conn, body.owner, batch_limit-len(rows)))
     return {"items": [dict(row) for row in rows], "state": "ready"}
 
 
