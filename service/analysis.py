@@ -633,6 +633,10 @@ class AnalysisService:
             self._settle_wake.set()
         if not self.config.change_trigger or not mids:
             return
+        if self._fast_live_enabled() and isinstance(rt, RealtimeHub):
+            mids = [mid for mid in mids if competition_type(rt.match_info(str(mid))) == 'real']
+            if not mids:
+                return
         debounce = max(0.0, _to_float(self.config.change_debounce_s,
                                       DEFAULT_CHANGE_DEBOUNCE_S))
         if self._fast_live_enabled():
@@ -859,6 +863,8 @@ class AnalysisService:
         with self._sched_lock:
             first = self._pending_first.pop(mid, None)
         snapshot = rt.decision_snapshot(mid)
+        if competition_type(snapshot.get('info') or {}) != 'real':
+            return {}
         try:
             row = self.live_expert.compute(snapshot, rt, first)
             if not row:
@@ -902,11 +908,14 @@ class AnalysisService:
         want = {str(m) for m in mids if m}
         if not want:
             return self._latest or {"count": 0, "summary": {}, "decisions": []}
-        # 先把这几场的**最新赔率**拉回来，否则算的是旧价（见 refresh_matches）
-        refresh = self.refresh_matches(sorted(want))
         # 用候选表把 mid 映射回完整赛事信息（联赛/队名/快照）
         cand_by_id = {str(m.get("match_id")): m
                       for m in self.candidates(only_live=False)}
+        want.intersection_update(cand_by_id)
+        if not want:
+            return {"count": 0, "summary": {}, "decisions": []}
+        # Only real candidates may request fresh odds or enter the decision engine.
+        refresh = self.refresh_matches(sorted(want))
         items: List[Tuple[str, str, str, str, List[Any], Any, Dict[str, Any]]] = []
         # 同样批量取（触发式决策每批最多 12 场，但批量版统一路径更简单，
         # 且避免了 per-match 的指纹校验）。
@@ -1458,7 +1467,7 @@ class AnalysisService:
         Returns:
             统计字典（\u5305\u542b requested/stored/snapshots/issues）。
         """
-        live_ids = self.live_match_ids()
+        live_ids = self.live_match_ids_by_type('real')
         if not live_ids:
             return {"requested": 0, "stored": 0, "snapshots": 0,
                     "skipped": "无进行中赛事或赛程不可用"}
@@ -2155,6 +2164,8 @@ class AnalysisService:
         live_ids = self.live_match_ids()
         out: List[Dict[str, Any]] = []
         for m in matches:
+            if competition_type(m) != 'real':
+                continue
             st = str(m.get("state") or "")
             if st == "delisted":
                 continue
@@ -2204,6 +2215,9 @@ class AnalysisService:
         force: bool = False,
     ) -> Optional[MatchDecision]:
         """对指定赛事给出决策（带缓存）。"""
+        match = self.valuation.get_match(match_id)
+        if match is None or competition_type(match) != 'real':
+            return None
         key = "%s|%s" % (match_id, market or "")
         now = time.time()
         if not force:
@@ -2212,9 +2226,6 @@ class AnalysisService:
                 if hit and (now - hit[0]) <= self.config.cache_ttl_s:
                     return hit[1]
 
-        match = self.valuation.get_match(match_id)
-        if match is None:
-            return None
         mkt = market or self._market_for(match)
         if mkt is None:
             return None

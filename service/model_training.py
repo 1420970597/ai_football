@@ -318,6 +318,8 @@ def run(root: Path, cycle: int, cpu: int, memory: int, *, check_only: bool = Fal
                              'cohort_verified': cohort_verified, 'check_only': check_only,
                              'last_completed_version': completed.get('candidate_version'),
                              'completed_matches': len(consumed),
+                             'completed_training_decisions': completed.get('training_decisions'),
+                             'completed_training_at': completed.get('completed_at'),
                              'cycle_ready': cohort_verified and new_count is not None and new_count >= cycle and len(cohort_ids) >= 100,
                              'limits': limits, 'minimum_matches': 100, 'error': ''}
     status.update(data_version=DATA_VERSION, feature_version=FEATURE_VERSION,
@@ -435,6 +437,7 @@ def run(root: Path, cycle: int, cpu: int, memory: int, *, check_only: bool = Fal
             'cohort_ids': sorted(completed_ids), 'training_decisions': len(rows),
             'approved': bool(decision.get('approved'))})
         status.update(last_completed_version=model['version'], completed_matches=len(completed_ids),
+                      completed_training_decisions=len(rows), completed_training_at=model['updated_at'],
                       new_matches=None, pending_cohort_verified=False, cycle_ready=False)
         status['candidate'] = {'version': model['version'], 'promotion': decision,
                                'parameter_count': model.get('parameter_count'), 'architecture': model.get('architecture'),

@@ -396,13 +396,45 @@ class LiveExpertTests(unittest.TestCase):
         service = LiveExpertService()
         for change, expected in [({'score': None}, '缺少即时比分'),
                                  ({'suspended': True}, '盘口暂停'),
-                                 ({'score_age_s': 500}, '比分数据过期'),
-                                 ({'info': {'league': 'EAFC'}}, '虚拟比赛')]:
+                                 ({'score_age_s': 500}, '比分数据过期')]:
             snapshot = {**hub.decision_snapshot('m'), **change}
             row = service.compute(snapshot, hub)
             self.assertFalse(row['picks'])
             self.assertTrue(any(expected in r for r in row['reasons']))
             self.assertIsNone(row['remaining_goals'])
+
+    def test_nonreal_decisions_never_reach_compute_pool_or_journal(self):
+        from pathlib import Path
+        hub = self.hub()
+        with tempfile.TemporaryDirectory() as directory:
+            service = LiveExpertService()
+            service.journal_root = directory
+            service.calculation_pool = MagicMock()
+            service.on_decision = MagicMock()
+            for info in ({'league': 'EAFC'}, {'league': '杯赛 8分钟'}, {}):
+                row = service.compute({**hub.decision_snapshot('m'), 'info': info}, hub)
+                self.assertEqual(row, {})
+            service.calculation_pool.calculate.assert_not_called()
+            service.on_decision.assert_not_called()
+            self.assertFalse(list(Path(directory).rglob('*')))
+            self.assertFalse(service._results)
+
+    def test_scheduler_excludes_virtual_and_unknown_before_queuing(self):
+        hub = self.hub()
+        hub._info['v'] = {'league':'EAFC', 'sport_id':'1'}
+        service = AnalysisService(MagicMock(), realtime=hub, config=AnalysisConfig(use_llm=False))
+        service.notify_price_change(['m','v','unknown'])
+        self.assertEqual(set(service._pending), {'m'})
+        with patch.object(service.live_expert, 'compute') as compute:
+            self.assertEqual(service._compute_live_match('v'), {})
+        compute.assert_not_called()
+
+    def test_direct_legacy_analysis_rejects_cached_virtual_decision(self):
+        valuation = MagicMock()
+        valuation.get_match.return_value = {'league':'EAFC'}
+        service = AnalysisService(valuation, config=AnalysisConfig(use_llm=False))
+        service._cache['v|'] = (time.time(), MagicMock())
+        self.assertIsNone(service.analyze('v'))
 
     def test_one_suspended_market_does_not_disable_other_markets(self):
         hub = self.hub()
@@ -585,6 +617,7 @@ class UnknownStateMessageTests(unittest.TestCase):
 
     def test_end_phase_hidden_without_inventing_settlement_proof(self):
         hub = RealtimeHub(MagicMock(), resume=False)
+        hub._info['m'] = {'league':'英格兰超级联赛','sport_id':'1'}
         hub._status['m'] = {'mmp': '999'}
         hub._changed_state('m')
         service = LiveExpertService()

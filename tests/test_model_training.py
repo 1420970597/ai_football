@@ -28,6 +28,21 @@ class ModelTrainingLifecycleTests(unittest.TestCase):
     def approval():
         return approved_artifact()['promotion']
 
+    def test_training_cycle_boundary_uses_50_new_matches_but_keeps_100_match_qualification(self):
+        cases = ((100, 51, False), (100, 50, True), (50, 0, False))
+        for total_count, consumed_count, expected_ready in cases:
+            rows = [sample_row(i) for i in range(total_count)]
+            with self.subTest(total_count=total_count, consumed_count=consumed_count), tempfile.TemporaryDirectory(dir=Path.cwd()) as directory, \
+                    patch('service.model_training.constrain', return_value={}), \
+                    patch('service.model_training._completed_cohort', return_value={
+                        'cohort_ids': [str(i) for i in range(consumed_count)]}), \
+                    patch('service.model_training.training_cohort_progress', return_value=self.progress(rows)), \
+                    patch('service.model_training.dataset') as dataset:
+                status = run(Path(directory) / 'ledger', 50, 1, 256, check_only=True)
+            self.assertEqual(status['new_matches'], total_count - consumed_count)
+            self.assertEqual(status['cycle_ready'], expected_ready)
+            dataset.assert_not_called()
+
     def test_large_round_dispatches_frozen_cohort_without_local_dataset(self):
         rows = [sample_row(i) for i in range(120)]
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory, \
@@ -148,6 +163,26 @@ class ModelTrainingLifecycleTests(unittest.TestCase):
     def artifact(self, **changes):
         return {**approved_artifact('candidate'), 'promotion': {'approved': False,
                 'reasons': ['insufficient evidence']}, **changes}
+
+    def test_waiting_cycle_retains_last_completed_samples_separately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate = self.artifact(version='previous',cohort_ids=['a'])
+            atomic_json(root/'models'/'candidate-previous.json',candidate)
+            atomic_json(root/'models'/'completed-training.json',{
+                'data_version':DATA_VERSION,'feature_version':FEATURE_VERSION,
+                'validation_contract_version':VALIDATION_CONTRACT_VERSION,
+                'candidate_version':'previous','cohort_ids':['a'],
+                'completed_at':candidate['updated_at'],'training_decisions':4786})
+            status = self.run_empty_cycle(root)
+            self.assertEqual(status['completed_training_decisions'],4786)
+            self.assertEqual(status['completed_training_at'],candidate['updated_at'])
+            self.assertIsNone(status['training_decisions'])
+            self.assertEqual(status['new_matches'],0)
+        with tempfile.TemporaryDirectory() as directory:
+            status = self.run_empty_cycle(Path(directory))
+            self.assertIsNone(status['completed_training_decisions'])
+            self.assertIsNone(status['completed_training_at'])
 
     def run_empty_cycle(self, root):
         def empty_dataset(*args, audit, **kwargs):

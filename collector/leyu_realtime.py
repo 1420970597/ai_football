@@ -1509,6 +1509,11 @@ class RealtimeHub:
         self._notify_state_change(mids)
         self._save_scores(force=True)
 
+    def match_info(self, mid: str) -> Dict[str, Any]:
+        """Copy classification metadata without reading the odds book or disk."""
+        with self._lock:
+            return dict(self._info.get(str(mid), {}))
+
     def decision_snapshot(self, mid: str) -> Dict[str, Any]:
         """Copy score, status and quotes under the same writer lock."""
         with self._lock:

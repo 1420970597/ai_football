@@ -601,7 +601,7 @@ class TestNoArtificialCap(unittest.TestCase):
             valuation=mock.MagicMock(), realtime=None,
             config=AnalysisConfig(use_llm=False, cycle_limit=0))
         svc.valuation.list_matches.return_value = [
-            {"match_id": str(i), "markets": ["HAD"], "state": "active"}
+            {"match_id": str(i), "league": "英格兰超级联赛", "markets": ["HAD"], "state": "active"}
             for i in range(25)
         ]
         svc.live_match_ids = lambda: None  # 退回按 state 判定
@@ -615,7 +615,7 @@ class TestNoArtificialCap(unittest.TestCase):
             valuation=mock.MagicMock(), realtime=None,
             config=AnalysisConfig(use_llm=False))
         svc.valuation.list_matches.return_value = [
-            {"match_id": str(i), "markets": ["HAD"], "state": "active"}
+            {"match_id": str(i), "league": "英格兰超级联赛", "markets": ["HAD"], "state": "active"}
             for i in range(25)
         ]
         svc.live_match_ids = lambda: None

@@ -1792,7 +1792,7 @@ def _start_background(
             先把订阅建起来，链路就能自愈（拿到新行情后又会持续更新）。
             """
             try:
-                live = list(source.live_match_ids(SOCCER_SPORT_ID))
+                live = list(source.live_match_ids(SOCCER_SPORT_ID, real_only=True))
             except Exception as exc:  # noqa: BLE001 - 订阅源失败不终止推送
                 print("警告：获取订阅列表失败：%s" % exc)
                 if hub.subscribed():
@@ -1817,7 +1817,9 @@ def _start_background(
                 root = hub.trend_store.root
                 if root is None:
                     return []
-                return sorted(p.stem for p in root.glob("*.jsonl"))
+                from core.live_model import competition_type
+                return sorted(p.stem for p in root.glob("*.jsonl")
+                              if competition_type(hub.match_info(p.stem)) == 'real')
             except OSError:
                 return []
 
@@ -1847,7 +1849,7 @@ def _start_background(
 
         # 分析服务复用同一个 Hub（用于读走势）
         ana.realtime = hub
-        print("实时推送已启动（订阅全部进行中足球%s）"
+        print("实时推送已启动（仅订阅真实足球%s）"
               % ("，上限 %d 场" % max_matches if max_matches > 0 else ""))
 
         # **主路径：盘口变动触发决策**（用户要求的触发时机）。

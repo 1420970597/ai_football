@@ -38,6 +38,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from core.models import OddsSnapshot, utcnow
+from core.live_model import competition_type
 
 from .leyu_client import (
     DEFAULT_HOST,
@@ -199,7 +200,7 @@ class SnapshotSource(ABC):
         return []
 
     def live_match_ids(self, sport_id: str = SOCCER_SPORT_ID,
-                       grace_s: float = LIVE_GRACE_S) -> List[str]:
+                       grace_s: float = LIVE_GRACE_S, *, real_only: bool = False) -> List[str]:
         """列出全部**进行中**赛事的 ID（可选能力，默认从 `schedule()` 推导）。
 
         语义：该列表必须覆盖乐鱼页面「滚球」列表里的全部赛事，
@@ -226,6 +227,12 @@ class SnapshotSource(ABC):
         out: List[str] = []
         for m in self.schedule():
             if want and str(getattr(m, "sport_id", "")) != want:
+                continue
+            if real_only and competition_type({
+                'league': getattr(m, 'tournament', ''), 'home': getattr(m, 'home', ''),
+                'away': getattr(m, 'away', ''), 'sport': getattr(m, 'sport', ''),
+                'sport_id': getattr(m, 'sport_id', ''),
+            }) != 'real':
                 continue
             if not _counts_as_live(m, now_ms, grace_s):
                 continue

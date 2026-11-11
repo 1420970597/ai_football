@@ -494,7 +494,7 @@ class S3Archive:
         return {'identity': identity, 'catalog': tuple(row)}
 
     def commit_cleanup(self, path: Path, token: Mapping[str, Any]) -> dict[str, int]:
-        """Only fast identity/catalog checks and unlink inside the EX lock."""
+        """Revalidate content and unlink inside the EX lock."""
         total = {'files': 0, 'bytes': 0}
         with closing(self._db()) as db, db:
             row = db.execute(
@@ -510,6 +510,17 @@ class S3Archive:
                 return total
             if (not file_stat.S_ISREG(current.st_mode)
                     or self._cleanup_identity(current) != token.get('identity')):
+                return total
+            # Some filesystems can preserve all stat timestamps for a rapid
+            # same-size rewrite. A final digest check closes that race before
+            # unlinking, even when ``prepare_cleanup`` observed the old bytes.
+            with path.open('rb') as original:
+                digest = hashlib.file_digest(original, 'sha256').hexdigest()
+            try:
+                if (digest != row[2]
+                        or self._cleanup_identity(path.lstat()) != token.get('identity')):
+                    return total
+            except FileNotFoundError:
                 return total
             path.unlink()
             db.execute('UPDATE files SET cleaned=1 WHERE path=?', (self._relative(path),))
@@ -538,6 +549,21 @@ class S3Archive:
             ).fetchone()
         if expected is None:
             raise OSError("归档缺少完整对象校验信息")
+        # Every pack uploaded by this worker carries its immutable SHA256 in
+        # object metadata.  HEAD avoids downloading multi-GB packs merely to
+        # prove a fact already recorded by the upload transaction.  Older
+        # objects or S3-compatible gateways that do not expose metadata use
+        # the original range-read verification below.
+        head = getattr(self.client, "head_object", None)
+        if callable(head):
+            try:
+                response = head(Bucket=self.bucket, Key=key)
+                metadata = response.get("Metadata", {})
+                advertised = metadata.get("sha256") or metadata.get("x-amz-meta-sha256")
+                if (int(response.get("ContentLength", -1)), advertised) == tuple(expected):
+                    return
+            except (OSError, KeyError, TypeError, ValueError):
+                pass
         digest, size = hashlib.sha256(), 0
         for block in self._range_blocks(key, 0, expected[0]):
             digest.update(block)
