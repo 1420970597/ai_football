@@ -23,7 +23,6 @@ import {
   api,
   jsonTrace,
 } from "./ui.js";
-import { initAdmin, loadAdmin } from "./admin.js";
 import { initIdentity } from "./identity.js";
 import { createAccountHistory } from "./account-history.js";
 const accountHistory = createAccountHistory();
@@ -1216,6 +1215,25 @@ const entitlementName = (k) =>
     expert_live_signals: "滚球专家推荐",
     automatic_betting: "本人账户自动投注",
   })[k] || k;
+let adminModule = null;
+// admin.js is fetched and bound the first time the admin view is opened.
+async function loadAdmin() {
+  // Started before the import so a slow module fetch cannot cause a second read.
+  const identities = loadIdentities();
+  adminModule ||= import("./admin.js").then((admin) => {
+    admin.initAdmin({ state, loadIdentities, auth, route, openMessage, loadPlans });
+    return admin;
+  });
+  let admin;
+  try {
+    admin = await adminModule;
+  } catch {
+    adminModule = null;
+    toast("管理中心加载失败，请刷新后重试");
+    return;
+  }
+  await admin.loadAdmin(identities);
+}
 let identityFlight = null;
 // Concurrent callers share one in-flight read. `fresh` (after a session
 // change) starts a new read that supersedes the one still in flight.
@@ -1823,6 +1841,7 @@ function events() {
         else if (state.pendingDetail) {
           const pending = state.pendingDetail;
           state.pendingDetail = null;
+          await identities;
           openMessage(pending.id, pending.context);
         } else route("account");
         await identities;
@@ -2052,7 +2071,6 @@ $("#content-dialog").addEventListener("close", () => {
       );
   }
 });
-initAdmin({ state, loadIdentities, auth, route, openMessage, loadPlans });
 initIdentity({ state, dialog, auth, loadAccount });
 events();
 renderDates();
