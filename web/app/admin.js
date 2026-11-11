@@ -21,6 +21,33 @@ let leyuVersion = null;
 let modelConfiguration = null;
 let qrAttempt = null;
 let tgTimer = null;
+let tgRender = 0;
+let qrLibrary = null;
+// The QR generator is a classic script that only Telegram sign-in needs.
+const loadQrcode = () =>
+  (qrLibrary ||= new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "/assets/qrcode.js";
+    script.onload = resolve;
+    script.onerror = () => {
+      qrLibrary = null;
+      script.remove();
+      reject(new Error("二维码组件加载失败，请点击检查状态重试"));
+    };
+    document.head.append(script);
+  }));
+function drawQr(target, auth) {
+  const qr = window.qrcode(0, "M");
+  qr.addData(auth.qr_url);
+  qr.make();
+  target.innerHTML =
+    qr.createSvgTag({ scalable: true, margin: 2 }) +
+    `<p class="form-note">Telegram → 设置 → 设备 → 连接桌面设备<br>有效至 ${stamp(auth.expires_at)}</p>`;
+  const svg = $("svg", target);
+  svg.classList.add("qr-code");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Telegram 官方登录二维码");
+}
 let dialogsCursor = null;
 let adminsCursor = null;
 let dialogsQuery = "",
@@ -42,9 +69,9 @@ export function initAdmin(context) {
   app = context;
   bind();
 }
-export async function loadAdmin() {
+export async function loadAdmin(identities = app.loadIdentities()) {
   const sequence = ++adminSequence;
-  await app.loadIdentities();
+  await identities;
   if (sequence !== adminSequence) return;
   const admin = app.state.admin;
   $("#admin-content").hidden = !admin;
@@ -387,6 +414,7 @@ const tgNames = {
 };
 function renderTelegram(data) {
   const auth = data.auth || data;
+  const render = ++tgRender;
   qrAttempt = auth.attempt_id || null;
   $("#telegram-status").textContent =
     `${data.connected ? "连接已建立" : "当前未连接"} · ${data.authorized ? "已授权" : tgNames[auth.state] || auth.state || "待检查"}${data.account ? " · " + (data.account.display_name || data.account.username || data.account.id) : ""}`;
@@ -408,16 +436,14 @@ function renderTelegram(data) {
     auth.state === "waiting_qr" &&
     /^tg:\/\/login\?token=/.test(auth.qr_url)
   ) {
-    const qr = window.qrcode(0, "M");
-    qr.addData(auth.qr_url);
-    qr.make();
-    target.innerHTML =
-      qr.createSvgTag({ scalable: true, margin: 2 }) +
-      `<p class="form-note">Telegram → 设置 → 设备 → 连接桌面设备<br>有效至 ${stamp(auth.expires_at)}</p>`;
-    const svg = $("svg", target);
-    svg.classList.add("qr-code");
-    svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", "Telegram 官方登录二维码");
+    if (window.qrcode) drawQr(target, auth);
+    else {
+      target.textContent = "正在生成二维码…";
+      loadQrcode().then(
+        () => render === tgRender && drawQr(target, auth),
+        (error) => render === tgRender && (target.textContent = error.message),
+      );
+    }
   } else if (auth.error) target.textContent = tgError(auth.error);
   else if (auth.state) target.textContent = tgNames[auth.state] || auth.state;
   clearTimeout(tgTimer);

@@ -23,7 +23,6 @@ import {
   api,
   jsonTrace,
 } from "./ui.js";
-import { initAdmin, loadAdmin } from "./admin.js";
 import { initIdentity } from "./identity.js";
 import { createAccountHistory } from "./account-history.js";
 const accountHistory = createAccountHistory();
@@ -196,8 +195,11 @@ function route(
     renderDates();
     loadMatches();
     loadLeagues();
-    loadManualBet();
-    accountHistory.load();
+    // An identity read in flight runs both of these itself once it settles.
+    if (!identityFlight) {
+      loadManualBet();
+      accountHistory.load();
+    }
   }
   if (page === "experts") loadExperts();
   if (page === "membership") loadPlans();
@@ -282,7 +284,7 @@ function scoreMarkup(match) {
   const score = hasScore
     ? esc(match.home_score) + " : " + esc(match.away_score ?? "－")
     : match.phase === "scheduled"
-      ? '<img class="match-vs-icon" src="/assets/cc-reference/home_match_vs_icon.png" alt="VS" width="24" height="18">'
+      ? '<img class="match-vs-icon" alt="VS" width="24" height="18">'
       : "－";
   const half = match.sport === "basketball" &&
       match.half_home_score !== null && match.half_home_score !== undefined
@@ -297,6 +299,17 @@ function matchRecommendationMarkup(match) {
     `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div><button class="text-link" data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button><span class="muted">${esc(phases[s.phase] || '阶段未知')} · ${stamp(s.created_at)}</span></div><div class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></div><div class="recommendation-result"><span>推荐时系统赔率 ${decimal(s.recommendation_price)}</span><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button>${stake !== null ? `<button class="small-button manual-bet" data-bet-signal="${esc(s.id)}">实盘买入 ${decimal(stake)}</button>` : ''}</div><small class="muted">报价时间 ${stamp(s.quote_time)}</small></article>`
   ).join('') || '<p class="muted">关联记录已变更，请刷新列表。</p>'}${match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
 }
+const vsIcons = [];
+// Every refresh rebuilds the rows. They adopt the icon nodes already in use,
+// because a fresh <img> can make the browser request the file again.
+function adoptVsIcons() {
+  $$("#matches-list .match-vs-icon").forEach((slot, index) => {
+    const loaded = vsIcons[index];
+    if (loaded && !(loaded.complete && !loaded.naturalWidth)) return slot.replaceWith(loaded);
+    slot.src = "/assets/cc-reference/home_match_vs_icon.png";
+    vsIcons[index] = slot;
+  });
+}
 function renderMatches() {
   const items = currentMatches();
   $("#matches-list").innerHTML = items
@@ -308,6 +321,7 @@ function renderMatches() {
     const fixtureId = items[index].id;
     row.insertAdjacentHTML('beforeend', `<div class="match-account-history" data-account-fixture="${esc(fixtureId)}"${state.user ? '' : ' hidden'}>${accountHistory.matchMarkup(fixtureId)}</div>`);
   });
+  adoptVsIcons();
   $("#fixture-count").textContent =
     state.matches.length + (state.cursor ? "+" : "");
   $("#load-more").hidden = !state.cursor;
@@ -647,7 +661,8 @@ async function loadExperts() {
         title: "暂无专家记录",
         description: "已启用的可信作者及其真实推荐会显示在这里。",
       });
-    await loadSignals();
+    // Signals render only inside the experts view; route("experts") reloads them.
+    if (state.page === "experts") await loadSignals();
   } catch (error) {
     if (sequence !== state.expertSequence) return;
     if (!state.experts.length) displayError($("#experts-state"), error);
@@ -1212,11 +1227,40 @@ const entitlementName = (k) =>
     expert_live_signals: "滚球专家推荐",
     automatic_betting: "本人账户自动投注",
   })[k] || k;
-async function loadIdentities() {
+let adminModule = null;
+// admin.js is fetched and bound the first time the admin view is opened.
+async function loadAdmin() {
+  // Started before the import so a slow module fetch cannot cause a second read.
+  const identities = loadIdentities();
+  adminModule ||= import("./admin.js").then((admin) => {
+    admin.initAdmin({ state, loadIdentities, auth, route, openMessage, loadPlans });
+    return admin;
+  });
+  let admin;
+  try {
+    admin = await adminModule;
+  } catch {
+    adminModule = null;
+    toast("管理中心加载失败，请刷新后重试");
+    return;
+  }
+  await admin.loadAdmin(identities);
+}
+let identityFlight = null;
+// Concurrent callers share one in-flight read. `fresh` (after a session
+// change) starts a new read that supersedes the one still in flight.
+function loadIdentities(fresh = false) {
+  if (identityFlight && !fresh) return identityFlight;
+  const flight = readIdentities(() => identityFlight === flight);
+  return (identityFlight = flight);
+}
+async function readIdentities(current) {
   const results = await Promise.allSettled([
     api("/auth/me"),
     api("/admin/me", { context: "admin" }),
   ]);
+  if (!current()) return identityFlight;
+  identityFlight = null;
   for (const [index, r] of results.entries()) {
     const key = index ? "admin" : "user";
     if (r.status === "fulfilled") state[key] = r.value;
@@ -1802,14 +1846,17 @@ function events() {
         );
         form.reset();
         $("#auth-dialog").close();
-        await loadIdentities();
+        // The routed view awaits this same read instead of issuing its own.
+        const identities = loadIdentities(true);
         toast("登录成功");
         if (state.authTab.startsWith("admin")) route("admin");
         else if (state.pendingDetail) {
           const pending = state.pendingDetail;
           state.pendingDetail = null;
+          await identities;
           openMessage(pending.id, pending.context);
         } else route("account");
+        await identities;
         loadExperts();
       } catch (error) {
         $("#auth-message").textContent = error.message;
@@ -1822,6 +1869,7 @@ function events() {
       await api("/auth/logout", { method: "POST" });
       state.user = null;
       accountHistory.identify(null);
+      loadIdentities(true);
       loadAccount();
       toast("已退出用户会话");
     } catch (error) {
@@ -1832,6 +1880,7 @@ function events() {
     try {
       await api("/admin/logout", { method: "POST", context: "admin" });
       state.admin = null;
+      loadIdentities(true);
       loadAdmin();
       toast("已退出管理员会话");
     } catch (error) {
@@ -2034,14 +2083,13 @@ $("#content-dialog").addEventListener("close", () => {
       );
   }
 });
-initAdmin({ state, loadIdentities, auth, route, openMessage, loadPlans });
 initIdentity({ state, dialog, auth, loadAccount });
 events();
 renderDates();
-loadIdentities().then(() => {
-  if (state.page === "admin") loadAdmin();
-});
-loadExperts();
+loadIdentities();
+// route() below loads the experts and admin views itself; other first screens
+// still need the expert list for the side ranking and expert pickers.
+if (location.hash.slice(1).split("?")[0] !== "experts") loadExperts();
 readRoute();
 $("#header-clock").textContent = dayKey() + " 北京时间";
 setInterval(() => {
