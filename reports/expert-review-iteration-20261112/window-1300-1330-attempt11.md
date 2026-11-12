@@ -70,3 +70,5 @@
 没有确认新业务根因，未修改业务/测试/部署，无fix commit或新业务发布，不修改禁止模块、来源或模型/全局设置；既存.omc未触碰。raw导出0、raw剩余0、manifest.files=[]，无临时模型凭据。不因反复核验相同旧窗触发代码发布或历史重审。剩余依赖是合法来源/历史时钟新证据，而非重复次数。
 
 15:45 UTC 最终验收：Docker无网络finish.py退出0，严格结果schema、来源/分页/盘口/延迟单位、23键嵌套探针、6冻结脚本哈希、脱敏和报告JSON写后读回全部通过；raw=0、manifest.files=[]。Git diff --check及起点7f5b5ef8以来业务/测试/部署零差异检查0，既存.omc保留。最终messages_examined=33、unresolved_examined=26仅表示同哈希来源语义复用，7来源未完成分析，status=blocked。没有fix commit、业务回归/构建/新部署或交易；当前仅待脱敏证据提交推送及远端核对。
+
+15:46 UTC 证据提交da6cd3a0c07e091fcedd3c91dac522457ef5e676已commit/push，ls-remote与本地HEAD精确一致，均0；规划b68d1be5亦同步。提交后Docker无网络只读复核严格schema/报告与私有脱敏JSON读回一致/脱敏/6冻结哈希/空raw和manifest通过0；业务/测试/部署零变化、仅既存.omc保留。最终blocked，7来源未完成分析且历史时钟和接受来源证明仍缺；无fix commit、业务回归、新部署、历史重审或交易。本独立进程调查结束，后续须有新增可核合法来源/时钟证据；固定窗重复不能增加准确率样本或自动解除阻塞。
