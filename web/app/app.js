@@ -269,7 +269,7 @@ function renderDates() {
   });
   $('#match-market-heading').textContent = state.matchScope === 'recommended' ? '专家关联盘口' : '当前盘口 / 赔率';
   $('#matches-footnote').textContent = state.matchScope === 'recommended'
-    ? '专家记录展示推荐时的盘口与系统赔率，供查询原文及结算；不代表当前成交价格。关注仅保存在当前浏览器。'
+    ? '买入前重新询价，接受当前赔率；实际成交以账户回执为准。关注仅保存在当前浏览器。'
     : '上游报价时间未知、过期或停盘时，均不视为可交易报价。关注仅保存在当前浏览器。';
   $$('[data-sport-label]').forEach((element) => {
     element.firstChild.nodeValue = sportLabel() + "比分 ";
