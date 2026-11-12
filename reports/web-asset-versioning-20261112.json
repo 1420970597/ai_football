@@ -1,0 +1,375 @@
+{
+  "recorded_at": "2026-11-12T07:43:36.210553+00:00",
+  "stage": "deployed_development_candidate; scoped_asset_fix_verified; not_complete_platform_delivery",
+  "branch": "refactor/TASK-78-web-ux",
+  "source_commit": "26ac5f8cfc9e0690570ad134dd11f94c5c567680",
+  "version": "2.0.0-dev-assets.20261112.1",
+  "image": "sha256:2fb58c6963503f44d6e5d8f55ee0832eb09b8ff63e64550a3420ecae146bf7e0",
+  "rollback_image": "sha256:270af6e3d3d9c0b3124f738186ae77575109921888e386459cc283aae16718e2",
+  "asset_prefix": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/",
+  "source_sha256": {
+    "web/app/Dockerfile": "ecde745a1c2c9a74b6ff4f4b8442f44c32ef6aedbaa12d965105c04efbd80960",
+    "web/app/nginx.conf": "bf866f2d028065c3afb3bb600b226c1644f094dbbd794ba1741d4158c8d6589d",
+    "web/app/version-assets.sh": "3f61870e8e71afae6e0b0473178f59fd66ff2e5603f3c33ff4d3e950c90a5906",
+    "tests/web/asset-versioning-build.sh": "48fe5886b7997c9700c0fd7892286cebed263e024d1da1879673af3c947acf17",
+    "tests/web/asset-versioning-check.sh": "1d0a97bbac4cb52ef9d7d41a99deea1a72ac2a35963d2ad3164bece0b6823517",
+    "tests/browser/asset-versioning.mjs": "662071914f65cef9855cd64d7b532e358afb7f006ce86c08aa98c67374cbad81",
+    "tests/browser/manual-bet.mjs": "418d71b580f53370363a6345d7137dad7217e93ad9ea50ace68c7839045137b3",
+    "tests/browser/visual-regression.mjs": "3bc82ebeb05212b72cfce0fe62e54d501eb8a7900150caf543e2639da2c39687",
+    ".github/workflows/verify.yml": "1e049fe1748482a63aeb80572177dbbe26702e4d728f177e89473f1bc4b8cbcb"
+  },
+  "isolated": {
+    "command": "sh tests/web/asset-versioning-check.sh",
+    "exit_code": 0,
+    "version_and_stale_edge": {
+      "status": "passed",
+      "synthetic_data": true,
+      "production_evidence": false,
+      "versions": [
+        "6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d",
+        "d2fd0e05efdd74dcd2979ffdf5eecb66cbec023e75cf5a6f4e11d96c025665c6"
+      ],
+      "results": [
+        {
+          "origin": "http://web",
+          "version": "6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d",
+          "dependencies": 10,
+          "headers_and_missing_paths": "passed"
+        },
+        {
+          "origin": "http://next",
+          "version": "d2fd0e05efdd74dcd2979ffdf5eecb66cbec023e75cf5a6f4e11d96c025665c6",
+          "dependencies": 10,
+          "headers_and_missing_paths": "passed"
+        },
+        {
+          "width": 1440,
+          "generation": 0,
+          "version": "6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d",
+          "asset_responses": 8,
+          "stale_cache_mix": false
+        },
+        {
+          "width": 1440,
+          "generation": 1,
+          "version": "d2fd0e05efdd74dcd2979ffdf5eecb66cbec023e75cf5a6f4e11d96c025665c6",
+          "asset_responses": 8,
+          "stale_cache_mix": false
+        },
+        {
+          "width": 390,
+          "generation": 0,
+          "version": "6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d",
+          "asset_responses": 8,
+          "stale_cache_mix": false
+        },
+        {
+          "width": 390,
+          "generation": 1,
+          "version": "d2fd0e05efdd74dcd2979ffdf5eecb66cbec023e75cf5a6f4e11d96c025665c6",
+          "asset_responses": 8,
+          "stale_cache_mix": false
+        }
+      ],
+      "errors": [],
+      "writes": []
+    },
+    "visual": {
+      "status": "passed",
+      "screens": 14,
+      "baseline_updated": false,
+      "max_changed_ratio": 0
+    },
+    "manual": {
+      "results": [
+        {
+          "width": 1440,
+          "case": "blocked",
+          "mode": "尚未保存每单下注金额",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "blocked",
+          "mode": "实盘执行当前未开放",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "blocked",
+          "mode": "本人乐鱼账户尚未通过校验",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "blocked",
+          "mode": "当前会员没有实盘交易权益",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "blocked",
+          "mode": "紧急停止",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "unset-visible",
+          "text": "尚未保存每单下注金额，先在上方设置里填写并保存",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "confirm",
+          "lines": [
+            "利物浦 对 曼城",
+            "专家 林老师 TG · 全场 · 亚洲让球 -0.25 主队",
+            "每单金额 2.00 元 · 推荐时系统赔率 1.96",
+            "确认后用当前盘口重新核验；赔率或盘口变化会被拒绝，不会按旧赔率成交。"
+          ],
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "result-persists",
+          "text": "已预留 2.00 元 · 赔率 1.96\n等待执行器按当前盘口提交；结果记入个人中心订单，结算前不计盈亏。",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "rejected",
+          "text": "下单未受理\n当前盘口已变化，请重新确认",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "blocked",
+          "mode": "尚未保存每单下注金额",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "blocked",
+          "mode": "实盘执行当前未开放",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "blocked",
+          "mode": "本人乐鱼账户尚未通过校验",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "blocked",
+          "mode": "当前会员没有实盘交易权益",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "blocked",
+          "mode": "紧急停止",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "unset-visible",
+          "text": "尚未保存每单下注金额，先在上方设置里填写并保存",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "confirm",
+          "lines": [
+            "利物浦 对 曼城",
+            "专家 林老师 TG · 全场 · 亚洲让球 -0.25 主队",
+            "每单金额 2.00 元 · 推荐时系统赔率 1.96",
+            "确认后用当前盘口重新核验；赔率或盘口变化会被拒绝，不会按旧赔率成交。"
+          ],
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "result-persists",
+          "text": "已预留 2.00 元 · 赔率 1.96\n等待执行器按当前盘口提交；结果记入个人中心订单，结算前不计盈亏。",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "rejected",
+          "text": "下单未受理\n当前盘口已变化，请重新确认",
+          "ok": true
+        }
+      ],
+      "errors": []
+    }
+  },
+  "regression": {
+    "browser_command": "sh tests/browser/check.sh",
+    "exit_code": 0,
+    "main_checks": 68,
+    "a11y_command": "Docker internal network: tests/browser/verify.mjs --a11y",
+    "a11y_exit_code": 0,
+    "a11y_checks": 23,
+    "a11y_scans": 30,
+    "a11y_violations": 0,
+    "compression_command": "sh tests/web/compression-check.sh",
+    "compression_exit_code": 0
+  },
+  "deployment": {
+    "command": "captured Compose chain + candidate.yml up -d --no-deps --no-build --pull never --force-recreate --wait --wait-timeout 120 web",
+    "exit_code": 0,
+    "config_check": {
+      "status": "passed",
+      "changed_paths": [
+        "services.web.image"
+      ],
+      "before_image": "sha256:270af6e3d3d9c0b3124f738186ae77575109921888e386459cc283aae16718e2",
+      "after_image": "sha256:2fb58c6963503f44d6e5d8f55ee0832eb09b8ff63e64550a3420ecae146bf7e0"
+    },
+    "post_check": {
+      "status": "passed",
+      "changed_service": "web",
+      "other_project_services_unchanged": 9,
+      "web_health": "healthy",
+      "restart_count": 0
+    },
+    "first_public_css_headers": {
+      "etag": "W/\"6af56d1f-119d1\"",
+      "cache-control": "public, max-age=31536000, immutable",
+      "cf-cache-status": "MISS"
+    },
+    "public_html_and_9_resources_byte_equal": true,
+    "live_read_only_browser": {
+      "status": "passed",
+      "production_evidence": true,
+      "authenticated": false,
+      "expected_prefix": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/",
+      "results": [
+        {
+          "width": 1440,
+          "view": "scores",
+          "rows": 27,
+          "overflow": false,
+          "stylesheet": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.css"
+        },
+        {
+          "width": 1440,
+          "view": "experts",
+          "rows": 27,
+          "overflow": false,
+          "stylesheet": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.css"
+        },
+        {
+          "width": 1440,
+          "view": "membership",
+          "rows": 27,
+          "overflow": false,
+          "stylesheet": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.css"
+        },
+        {
+          "width": 1440,
+          "view": "account",
+          "rows": 27,
+          "overflow": false,
+          "stylesheet": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.css"
+        },
+        {
+          "width": 1440,
+          "view": "admin",
+          "rows": 27,
+          "overflow": false,
+          "stylesheet": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.css"
+        },
+        {
+          "width": 390,
+          "view": "scores",
+          "rows": 27,
+          "overflow": false,
+          "stylesheet": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.css"
+        },
+        {
+          "width": 390,
+          "view": "experts",
+          "rows": 27,
+          "overflow": false,
+          "stylesheet": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.css"
+        },
+        {
+          "width": 390,
+          "view": "membership",
+          "rows": 27,
+          "overflow": false,
+          "stylesheet": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.css"
+        },
+        {
+          "width": 390,
+          "view": "account",
+          "rows": 27,
+          "overflow": false,
+          "stylesheet": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.css"
+        },
+        {
+          "width": 390,
+          "view": "admin",
+          "rows": 27,
+          "overflow": false,
+          "stylesheet": "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.css"
+        }
+      ],
+      "assets": [
+        "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.css",
+        "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/app.js",
+        "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/account-history.js",
+        "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/identity.js",
+        "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/ui.js",
+        "/assets/v6b6b434d00c33275aa30155b8886e34725bd2cce3e8e475d221f894978ef206d/cc-reference/home_match_vs_icon.png"
+      ],
+      "errors": [],
+      "failed": [],
+      "writes": []
+    },
+    "live_exit_code": 0
+  },
+  "failure_history": [
+    {
+      "phase": "first artifact check",
+      "exit_code": 1,
+      "cause": "mktemp 0700 prevented nginx worker traversal",
+      "fixed": "build-time static directory permissions",
+      "evidence": ".runtime/web-assets-1699939"
+    },
+    {
+      "phase": "second artifact check",
+      "exit_code": 1,
+      "cause": "fragment-only probe navigation did not load a new document",
+      "fixed": "document navigation with generation parameter",
+      "evidence": ".runtime/web-assets-1703560"
+    },
+    {
+      "phase": "config validator",
+      "exit_code": 2,
+      "cause": "default unprivileged verifier could not read protected 0700 directory",
+      "fixed": "same host UID in network-none container; protected permissions preserved"
+    },
+    {
+      "phase": "first live probe",
+      "exit_code": 1,
+      "cause": "probe incorrectly required guest to load authenticated admin module",
+      "fixed": "assert guest dependency set; admin bytes verified separately",
+      "evidence": ".runtime/asset-versioning-release-20261112/live-first.log"
+    }
+  ],
+  "limits": [
+    "Synthetic two-deployment stale-edge test is not two production releases.",
+    "Live browser covers anonymous public views only; no real transaction or authenticated account test.",
+    "Only current version directory is shipped; old open tabs may require refresh before first lazy module load.",
+    "No main/deployment-branch merge, formal release, Android build, backend changes, secret rotation or financial configuration change.",
+    "Original WEB_VERIFICATION_SNAPSHOT.json remains historical f0dd1c8c evidence."
+  ],
+  "evidence_roots": [
+    ".runtime/web-assets-1706805",
+    ".runtime/browser-ui-1712343",
+    "/root/ai_football/.runtime/asset-versioning-release-20261112"
+  ]
+}
