@@ -1,12 +1,13 @@
-# Append with web.yml and review-schema.yml to the validated Compose chain.
+# Apply last after historical API image overlays in the validated Compose chain.
+# Retain web.yml and review-schema.yml for the other already validated roles.
 # Business credentials remain external; migration 038 is already applied.
 x-production-api:
-  source_revision: 3049c0503e51d45bf76eb43d082c80e0358944b2
-  artifact_version: 2.0.0-dev-manual-intents.20261112.1
-  base_image: sha256:3b5ab51b46b81dda6b9ee309846877ce1c207c18a1f783c82728182c4f62f3be
+  source_revision: fd8ccf76a8ad21735e1ddf77d38ba5f5453970d8
+  artifact_version: 2.0.0-dev-availability.20261112.1
+  base_image: sha256:7dd693d6eb5fe41a4a045379d8fa34ea28204a4ab37d405edfabd193fba6e369
   schema: 038_manual_buy_intents.sql
-  scope: executable-homepage-distinct-manual-buy-intents
+  scope: pending-homepage-manual-provider-repricing
 
 services:
   api:
-    image: sha256:7dd693d6eb5fe41a4a045379d8fa34ea28204a4ab37d405edfabd193fba6e369
+    image: sha256:a6debc6b0401b2ffbcc2e8ec6283d52f1e89b5eb51438eb2f93a30b82ef79616
