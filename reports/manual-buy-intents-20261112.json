@@ -1,0 +1,515 @@
+{
+  "task": "distinct-confirmed-manual-buy-intents",
+  "source_commit": "3049c0503e51d45bf76eb43d082c80e0358944b2",
+  "version": "2.0.0-dev-manual-intents.20261112.1",
+  "status": "production-entry-accepted",
+  "production_test_order_writes": 0,
+  "production_migration_executed": true,
+  "checks": {
+    "source-check": {
+      "status": "passed",
+      "file_changes": {
+        "api": [
+          "app/orders.py",
+          "app/routes/accounts.py",
+          "migrations/038_manual_buy_intents.sql"
+        ],
+        "review-worker": [
+          "migrations/038_manual_buy_intents.sql"
+        ],
+        "local-mcp-api": [
+          "migrations/037_correct_legacy_sport_labels.sql",
+          "migrations/038_manual_buy_intents.sql"
+        ]
+      },
+      "frozen_tests": 40,
+      "source_commit": "3049c0503e51d45bf76eb43d082c80e0358944b2",
+      "config_only_images": true,
+      "runtime_users_preserved": true,
+      "web_source_exact": true,
+      "full_role_catalogue_verified": true
+    },
+    "post-check": {
+      "status": "passed",
+      "roles": {
+        "api": {
+          "image": "sha256:7dd693d6eb5fe41a4a045379d8fa34ea28204a4ab37d405edfabd193fba6e369",
+          "restart_count": 0,
+          "state": "healthy"
+        },
+        "web": {
+          "image": "sha256:109c6816f30a1f5f0aa7ab7bd83bda4777c5c0b55472d6576529e29392d5b8b4",
+          "restart_count": 0,
+          "state": "healthy"
+        },
+        "review-worker": {
+          "image": "sha256:0716a73ccc2466417eba6ed0c3cdc8660db498cc2a10fdb8eace3017f950a96c",
+          "restart_count": 0,
+          "state": "running"
+        },
+        "local-mcp-api": {
+          "image": "sha256:a88e2b101f74698db85e0b1b6b9cacb8c67631ff7f39aad59a5cde8eee3d412d",
+          "restart_count": 0,
+          "state": "healthy"
+        }
+      },
+      "runtime_configuration_preserved": true,
+      "other_services_unchanged": 6
+    },
+    "preflight": {
+      "status": "passed",
+      "applied_versions": 36,
+      "pending": [
+        "038_manual_buy_intents.sql"
+      ],
+      "orders": 42,
+      "order_states": [
+        {
+          "manual": false,
+          "state": "accepted",
+          "count": 4,
+          "with_provider_reference": 4
+        },
+        {
+          "manual": false,
+          "state": "cancelled",
+          "count": 13,
+          "with_provider_reference": 0
+        },
+        {
+          "manual": false,
+          "state": "settled",
+          "count": 25,
+          "with_provider_reference": 25
+        }
+      ],
+      "original_index": "CREATE UNIQUE INDEX v2_order_user_signal_unique ON public.v2_bet_orders USING btree (user_id, signal_id) WHERE (account_id IS NOT NULL)",
+      "runtime_role_can_ddl": false,
+      "migration_permission_verified": true,
+      "read_only": true
+    },
+    "restore-check": {
+      "status": "passed",
+      "scope": "restored order table and migration registry; migration/index recovery only",
+      "backup_sha256": "d21ff77c0943c7ad32c06e5de0ae530fc45756f53fdaca4bea9f204ad295fb5c",
+      "before": {
+        "rows": 42,
+        "digest": "95811c5bd985671be8d8f4cca745f835"
+      },
+      "after": {
+        "rows": 42,
+        "digest": "95811c5bd985671be8d8f4cca745f835"
+      },
+      "all_orders_preserved": true,
+      "migration_repeatable": true
+    },
+    "migration": {
+      "status": "passed",
+      "applied": [
+        "038_manual_buy_intents.sql"
+      ],
+      "all_orders_unchanged": true,
+      "before": {
+        "rows": 42,
+        "digest": "4771a2288476d58431c16d5e49fb0f5c"
+      },
+      "after": {
+        "rows": 42,
+        "digest": "4771a2288476d58431c16d5e49fb0f5c"
+      },
+      "index": "CREATE UNIQUE INDEX v2_order_user_signal_unique ON public.v2_bet_orders USING btree (user_id, signal_id) WHERE ((account_id IS NOT NULL) AND (NOT manual))"
+    },
+    "production-api": {
+      "status": "passed",
+      "at": "2026-11-12T08:51:31.217141+00:00",
+      "production_writes": 0,
+      "asset_prefix": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/",
+      "assets_verified": [
+        {
+          "entry": "3003",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/account-history.js",
+          "sha256": "fb5052d67c44ea1958dd32e55890f4e45023c7290d5fc7ca9947eda602efdbdf"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/admin.js",
+          "sha256": "779587d2ca56158cec6e9fa8f3860d75c268c841a80b6084a84d0ee5baa1c4b8"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/app.css",
+          "sha256": "1d110b4c3e8f75d09854aaf88f6b856f4819e410ac283dc6c31955cf7631f46d"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/app.js",
+          "sha256": "c783b60ecb95fe885b2f316541a85668e1cfa43dc673ec3b20681e4700311e0f"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/cc-reference/home_announcement_icon.png",
+          "sha256": "eef1d1c46b5f196252e3c84949c7a5add411e97918a9c48b12a81074b415bc9c"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/cc-reference/home_match_vs_icon.png",
+          "sha256": "13823abb3f43e1560ac5ac642641d2167251c220add402985ea88a3cc49fe310"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/identity.js",
+          "sha256": "77f0cab62ca8d3baa2c5c9aa993448d99e5e3bcefd94be5df8a61d3153bfeaf2"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/qrcode.js",
+          "sha256": "18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/ui.js",
+          "sha256": "71ff0f33cff1ab7d6b467d59b64f9e438a92c5e2cbee7955fdfa901d4b2c0f33"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/account-history.js",
+          "sha256": "fb5052d67c44ea1958dd32e55890f4e45023c7290d5fc7ca9947eda602efdbdf"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/admin.js",
+          "sha256": "779587d2ca56158cec6e9fa8f3860d75c268c841a80b6084a84d0ee5baa1c4b8"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/app.css",
+          "sha256": "1d110b4c3e8f75d09854aaf88f6b856f4819e410ac283dc6c31955cf7631f46d"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/app.js",
+          "sha256": "c783b60ecb95fe885b2f316541a85668e1cfa43dc673ec3b20681e4700311e0f"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/cc-reference/home_announcement_icon.png",
+          "sha256": "eef1d1c46b5f196252e3c84949c7a5add411e97918a9c48b12a81074b415bc9c"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/cc-reference/home_match_vs_icon.png",
+          "sha256": "13823abb3f43e1560ac5ac642641d2167251c220add402985ea88a3cc49fe310"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/identity.js",
+          "sha256": "77f0cab62ca8d3baa2c5c9aa993448d99e5e3bcefd94be5df8a61d3153bfeaf2"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/qrcode.js",
+          "sha256": "18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/v39cf35704f3a2ffbe5dbeebf1bb6db95379c0de72bdf1ee15e47cded5b3c1946/ui.js",
+          "sha256": "71ff0f33cff1ab7d6b467d59b64f9e438a92c5e2cbee7955fdfa901d4b2c0f33"
+        }
+      ],
+      "api_checks": [
+        {
+          "entry": "3003",
+          "sport": "football",
+          "http": 200,
+          "matches": 0,
+          "recommendations": 0,
+          "ms": 41
+        },
+        {
+          "entry": "3003",
+          "sport": "basketball",
+          "http": 200,
+          "matches": 0,
+          "recommendations": 0,
+          "ms": 29
+        },
+        {
+          "entry": "public",
+          "sport": "football",
+          "http": 200,
+          "matches": 0,
+          "recommendations": 0,
+          "ms": 53
+        },
+        {
+          "entry": "public",
+          "sport": "basketball",
+          "http": 200,
+          "matches": 0,
+          "recommendations": 0,
+          "ms": 72
+        }
+      ]
+    },
+    "production-browser": {
+      "status": "passed",
+      "results": [
+        {
+          "width": 1440,
+          "sport": "football",
+          "matches": 0,
+          "recommendations": 0,
+          "all_pending": true,
+          "no_empty_fixtures": true
+        },
+        {
+          "width": 1440,
+          "sport": "basketball",
+          "matches": 0,
+          "recommendations": 0,
+          "all_pending": true,
+          "no_empty_fixtures": true
+        },
+        {
+          "width": 390,
+          "sport": "football",
+          "matches": 0,
+          "recommendations": 0,
+          "all_pending": true,
+          "no_empty_fixtures": true
+        },
+        {
+          "width": 390,
+          "sport": "basketball",
+          "matches": 0,
+          "recommendations": 0,
+          "all_pending": true,
+          "no_empty_fixtures": true
+        }
+      ],
+      "real_production_reads": true,
+      "production_writes": 0,
+      "errors": [],
+      "writes": []
+    }
+  },
+  "role_readiness": [
+    {
+      "role": "api",
+      "schema_check": "passed",
+      "tls": true,
+      "read_only": true,
+      "ready": true
+    },
+    {
+      "role": "review-worker",
+      "schema_check": "passed",
+      "tls": true,
+      "read_only": true
+    },
+    {
+      "role": "local-mcp-api",
+      "schema_check": "passed",
+      "tls": true,
+      "read_only": true,
+      "ready": true
+    }
+  ],
+  "browser": {
+    "homepage": {
+      "results": [
+        {
+          "width": 1440,
+          "passed": true,
+          "read_only": true,
+          "grouped_recommendations": true,
+          "sport_and_phase_isolation": true,
+          "scope_reload": true,
+          "stale_response_ignored": true
+        },
+        {
+          "width": 1030,
+          "passed": true,
+          "read_only": true,
+          "grouped_recommendations": true,
+          "sport_and_phase_isolation": true,
+          "scope_reload": true,
+          "stale_response_ignored": true
+        },
+        {
+          "width": 390,
+          "passed": true,
+          "read_only": true,
+          "grouped_recommendations": true,
+          "sport_and_phase_isolation": true,
+          "scope_reload": true,
+          "stale_response_ignored": true
+        }
+      ],
+      "errors": [],
+      "synthetic_data": true,
+      "production_writes": 0
+    },
+    "manual": {
+      "results": [
+        {
+          "width": 1440,
+          "case": "blocked",
+          "mode": "尚未保存每单下注金额",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "blocked",
+          "mode": "实盘执行当前未开放",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "blocked",
+          "mode": "本人乐鱼账户尚未通过校验",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "blocked",
+          "mode": "当前会员没有实盘交易权益",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "blocked",
+          "mode": "紧急停止",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "unset-visible",
+          "text": "尚未保存每单下注金额，先在上方设置里填写并保存",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "confirm",
+          "lines": [
+            "利物浦 对 曼城",
+            "专家 林老师 TG · 全场 · 亚洲让球 -0.25 主队",
+            "每单金额 2.00 元",
+            "提交前读取当前盘口并重新询价，接受当前赔率；盘口线或方向失效时拒绝，实际成交赔率以账户回执为准。"
+          ],
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "result-persists",
+          "text": "已预留 2.00 元\n等待执行器重新询价并按当前盘口提交；实际成交以账户回执为准，结果记入个人中心订单。",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "separate-confirmations",
+          "ok": true
+        },
+        {
+          "width": 1440,
+          "case": "rejected",
+          "text": "下单未受理\n当前盘口已变化，请重新确认",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "blocked",
+          "mode": "尚未保存每单下注金额",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "blocked",
+          "mode": "实盘执行当前未开放",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "blocked",
+          "mode": "本人乐鱼账户尚未通过校验",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "blocked",
+          "mode": "当前会员没有实盘交易权益",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "blocked",
+          "mode": "紧急停止",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "unset-visible",
+          "text": "尚未保存每单下注金额，先在上方设置里填写并保存",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "confirm",
+          "lines": [
+            "利物浦 对 曼城",
+            "专家 林老师 TG · 全场 · 亚洲让球 -0.25 主队",
+            "每单金额 2.00 元",
+            "提交前读取当前盘口并重新询价，接受当前赔率；盘口线或方向失效时拒绝，实际成交赔率以账户回执为准。"
+          ],
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "result-persists",
+          "text": "已预留 2.00 元\n等待执行器重新询价并按当前盘口提交；实际成交以账户回执为准，结果记入个人中心订单。",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "separate-confirmations",
+          "ok": true
+        },
+        {
+          "width": 390,
+          "case": "rejected",
+          "text": "下单未受理\n当前盘口已变化，请重新确认",
+          "ok": true
+        }
+      ],
+      "errors": []
+    }
+  },
+  "isolated_tests": {
+    "tests": 40,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 19.862,
+    "evidence": ".runtime/test-evidence/1872596/backend-tests.json"
+  },
+  "gate": [
+    {
+      "event": "claims_paused",
+      "at": "2026-11-12 08:47:05.268904+00:00"
+    },
+    {
+      "event": "idle_gate_held",
+      "at": "2026-11-12 08:47:05.336813+00:00"
+    },
+    {
+      "event": "gate_released",
+      "was_held": true
+    }
+  ],
+  "limits": [
+    "No real-money order was sent for verification",
+    "Historical accepted receipts were not cleared or reclassified",
+    "Restore drill covers the affected order table and migration registry only",
+    "MCP first deployment failed; missing previously-applied 037 catalogue was added and the original checks passed"
+  ]
+}
