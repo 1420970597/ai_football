@@ -129,6 +129,36 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(72,await self.conn.fetchval('SELECT last_message_id FROM v2_source_checkpoints WHERE source_id=$1',source))
         self.assertEqual([],await apply_migrations(self.conn))
 
+    async def test_legacy_sport_labels_upgrade_corrects_only_the_label(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for path in MIGRATIONS.glob('*.sql'):
+                if path.name < '037':
+                    Path(folder,path.name).write_bytes(path.read_bytes())
+            await apply_migrations(self.conn,Path(folder))
+        # Rows written before the mapping was fixed: five unmapped upstream ids
+        # and the snooker invitational that was mislabelled baseball.
+        await self.conn.execute(
+            "INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase,source_updated_at) VALUES"
+            "('tt','leyu:1','source_8','TT精英系列赛','A','B',now(),'finished',now()),"
+            "('vb','leyu:2','source_9','CEV欧洲排球挑战杯','C','D',now(),'finished',now()),"
+            "('cr','leyu:3','source_37','ICC一日国际赛锦标赛','E','F',now(),'finished',now()),"
+            "('af','leyu:4','source_6','NFL 美国职业美式足球','G','H',now(),'finished',now()),"
+            "('bb','leyu:5','source_3','墨西哥太平洋联盟','I','J',now(),'finished',now()),"
+            "('sn','leyu:6','baseball','冠中冠','罗尼·奥沙利文','肖恩·墨菲',now(),'finished',now())")
+        before=dict(await self.conn.fetchrow("SELECT * FROM v2_fixtures WHERE id='bb'"))
+        self.assertEqual(migration_suffix('037_correct_legacy_sport_labels.sql'),
+                         await apply_migrations(self.conn))
+        labels=dict(await self.conn.fetch("SELECT id,sport FROM v2_fixtures"))
+        self.assertEqual({'tt':'table_tennis','vb':'volleyball','cr':'cricket','af':'american_football',
+                          'bb':'baseball','sn':'snooker'},labels)
+        # The correction is a label edit, not a re-projection: scores, phases,
+        # kickoff times and the rest of the row are byte-identical.
+        after=dict(await self.conn.fetchrow("SELECT * FROM v2_fixtures WHERE id='bb'"))
+        self.assertNotEqual(before['sport'],after['sport'])
+        self.assertEqual({k:v for k,v in before.items() if k!='sport'},
+                         {k:v for k,v in after.items() if k!='sport'})
+        self.assertEqual([],await apply_migrations(self.conn))
+
     async def test_failed_batch_rolls_back_and_can_retry(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
