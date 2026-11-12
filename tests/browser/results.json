@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-26",
+  "date": "2026-11-12T07:02:00.827Z",
   "environment": "isolated Docker / mock API / no real credentials or bets",
   "results": [
     {
@@ -7,11 +7,31 @@
       "status": "passed"
     },
     {
+      "name": "完场比赛不计入报价过期告警，只有赛程中的比赛才算",
+      "status": "passed"
+    },
+    {
       "name": "手机无横向溢出、关注与弹层",
       "status": "passed"
     },
     {
+      "name": "专家统计筛选与详情趋势使用同一结算窗口",
+      "status": "passed"
+    },
+    {
       "name": "完整原文、两条系统买入、工具证据与图片",
+      "status": "passed"
+    },
+    {
+      "name": "授权原图可鼠标键盘展开收起且重开复位",
+      "status": "passed"
+    },
+    {
+      "name": "原文增量加载、最新系统回执及完整工具返回",
+      "status": "passed"
+    },
+    {
+      "name": "采集中转热配置可保存与清空，保留原业务域名",
       "status": "passed"
     },
     {
@@ -32,6 +52,86 @@
     },
     {
       "name": "初始失败与无赛事状态、请求竞态不覆盖新筛选",
+      "status": "passed"
+    },
+    {
+      "name": "比赛状态切换等待和失败时不能保留其他状态的旧行",
+      "status": "passed"
+    },
+    {
+      "name": "盘口失败仍显示正确比赛状态与真实比分 / 桌面",
+      "status": "passed"
+    },
+    {
+      "name": "盘口失败仍显示正确比赛状态与真实比分 / 手机",
+      "status": "passed"
+    },
+    {
+      "name": "盘口晚响应不能覆盖新筛选，离页取消后台读取",
+      "status": "passed"
+    },
+    {
+      "name": "异步盘口分批上限50且多页刷新保持完整顺序",
+      "status": "passed"
+    },
+    {
+      "name": "Telegram目录迟到的来源加载不得覆盖成员搜索 桌面",
+      "status": "passed"
+    },
+    {
+      "name": "Telegram目录迟到的同源旧请求不得覆盖新一轮来源 桌面",
+      "status": "passed"
+    },
+    {
+      "name": "Telegram目录迟到的来源加载不得覆盖成员搜索 手机",
+      "status": "passed"
+    },
+    {
+      "name": "Telegram目录迟到的同源旧请求不得覆盖新一轮来源 手机",
+      "status": "passed"
+    },
+    {
+      "name": "Telegram目录迟到的跨源返回成功不覆盖当前作者 桌面",
+      "status": "passed"
+    },
+    {
+      "name": "Telegram目录迟到的跨源返回失败不覆盖当前作者 桌面",
+      "status": "passed"
+    },
+    {
+      "name": "Telegram目录迟到的跨源返回成功不覆盖当前作者 手机",
+      "status": "passed"
+    },
+    {
+      "name": "Telegram目录迟到的跨源返回失败不覆盖当前作者 手机",
+      "status": "passed"
+    },
+    {
+      "name": "普通成员搜索可选为监控作者且读取管理员仍调用原接口",
+      "status": "passed"
+    },
+    {
+      "name": "详情直达规范化不新增历史且稳定关闭 match / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "详情直达规范化不新增历史且稳定关闭 expert / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "详情直达规范化不新增历史且稳定关闭 message / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "详情直达规范化不新增历史且稳定关闭 match / 390",
+      "status": "passed"
+    },
+    {
+      "name": "详情直达规范化不新增历史且稳定关闭 expert / 390",
+      "status": "passed"
+    },
+    {
+      "name": "详情直达规范化不新增历史且稳定关闭 message / 390",
       "status": "passed"
     },
     {
@@ -63,7 +163,7 @@
       "status": "passed"
     },
     {
-      "name": "敏感操作再次验证保留原输入并隔离身份",
+      "name": "本人乐鱼绑定与管理员登录不触发二次验证",
       "status": "passed"
     },
     {
@@ -91,15 +191,87 @@
       "status": "passed"
     },
     {
-      "name": "管理员换机保留原因子、再次验证上下文与新备用码",
-      "status": "passed"
-    },
-    {
-      "name": "管理员换机关闭清密钥、继续登记、明确替换、过期取消",
+      "name": "手机管理员系统设置无二次验证入口",
       "status": "passed"
     },
     {
       "name": "Telegram目录及管理员搜索重置游标、空结果、清空与请求乱序",
+      "status": "passed"
+    },
+    {
+      "name": "手机多盘口与长队名保持分行且不遮挡比赛按钮",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 source_edited / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 source_deleted / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 source_disabled / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 review_source_period_intent_conflict / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 review_source_line_intent_conflict / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 review_source_selection_intent_conflict / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 review_source_period_not_supported / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 review_source_selection_not_supported / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 source_edited / 390",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 source_deleted / 390",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 source_disabled / 390",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 review_source_period_intent_conflict / 390",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 review_source_line_intent_conflict / 390",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 review_source_selection_intent_conflict / 390",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 review_source_period_not_supported / 390",
+      "status": "passed"
+    },
+    {
+      "name": "撤回推荐状态 review_source_selection_not_supported / 390",
+      "status": "passed"
+    },
+    {
+      "name": "消息旧版本失效标识 / 1440",
+      "status": "passed"
+    },
+    {
+      "name": "消息旧版本失效标识 / 390",
       "status": "passed"
     }
   ],

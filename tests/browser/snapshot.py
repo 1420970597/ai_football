@@ -8,11 +8,19 @@ import re
 import struct
 
 ROOT = Path(__file__).resolve().parents[2]
+# 期望条数必须写在封存器里：它证明跑的是哪一版场景集合，而不只是"没报错"。
+# 数值随脚本增删场景而变，改这里时必须同时说明是哪次提交增删了场景。
 CHECKS = (
-    ("tests/browser/results.json", "sh tests/browser/check.sh", 25),
-    ("tests/browser/integration-results.json", "sh tests/browser/integration-check.sh", 11),
+    # 25 → 68：2550e106（2026-10-26）之后持续扩充场景，并因 d1961418
+    # 删除 3 项换机/再次验证场景。以当前 verify.mjs 实跑结果为准（68 项全 PASS、无重复名）。
+    ("tests/browser/results.json", "sh tests/browser/check.sh", 68),
+    # 11 → 17：4ec64643（2026-10-27）补齐账户浏览器成功链，新增 6 个场景
+    # （注册登录、管理员来源/套餐/会员授予、本人绑定、限额与停用、撤销会员）。
+    ("tests/browser/integration-results.json", "sh tests/browser/integration-check.sh", 17),
     ("tests/browser/report-results.json", "Docker network none: tests/browser/report-check.mjs", 3),
-    ("tests/browser/accessibility-results.json", "sh tests/browser/accessibility-check.sh", 29),
+    # 29 → 23：d1961418（2026-10-30）按 AGENTS.md 七.4 移除二次验证门禁，
+    # 删掉 8 项换机/MFA 检查、新增 2 项「系统设置不提供二次验证入口」。
+    ("tests/browser/accessibility-results.json", "sh tests/browser/accessibility-check.sh", 23),
 )
 
 
@@ -33,7 +41,9 @@ def snapshot():
         else:
             assert all(row["status"] == "passed" for row in rows)
         if "scans" in data:
-            assert len(data["scans"]) == 38
+            # 38 → 30：同上 d1961418，减去 10 项 MFA/换机/取消弹层扫描、
+            # 加上 2 项 admin-system 扫描。
+            assert len(data["scans"]) == 30
             assert not any(row["violations"] for row in data["scans"])
             assert all(row["state"] == "css_colors_measured" and
                        (row["decorative"] or row["minimum_ratio"] >= row["threshold"])

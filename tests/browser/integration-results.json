@@ -1,7 +1,11 @@
 {
-  "date": "2026-10-27T20:09:45.209Z",
+  "date": "2026-11-12T06:59:13.205Z",
   "environment": "fresh source API + nginx + isolated temporary PostgreSQL; artificial seeded data; live orders disabled; no provider services",
   "results": [
+    {
+      "name": "真实API首页默认关联范围与全部赛事切换",
+      "status": "passed"
+    },
     {
       "name": "真实API比分投影、联赛多选和赛前赛果",
       "status": "passed"
@@ -11,7 +15,7 @@
       "status": "passed"
     },
     {
-      "name": "真实管理员MFA与独立用户会话并存",
+      "name": "真实管理员仅凭主密码登录且会话保持隔离",
       "status": "passed"
     },
     {
@@ -32,10 +36,6 @@
     },
     {
       "name": "真实人工恢复码重置、再次登录和管理员恢复码一次显示",
-      "status": "passed"
-    },
-    {
-      "name": "真实管理员换机、错误验证码保留旧因子、恢复码登录",
       "status": "passed"
     },
     {
@@ -82,7 +82,7 @@
       "status": 503
     },
     {
-      "path": "/api/v1/admin/telegram/admins",
+      "path": "/api/v1/public/messages/22222222-2222-4222-8222-222222222222/media/0",
       "status": 503
     },
     {
@@ -496,7 +496,13 @@
           "status": 200
         },
         {
-          "path": "/public/messages/22222222-2222-4222-8222-222222222222/media/0",
+          "path": "/public/messages/22222222-2222-4222-8222-222222222222",
+          "context": "user",
+          "method": "GET",
+          "status": 200
+        },
+        {
+          "path": "/public/messages/22222222-2222-4222-8222-222222222222/media/0?grant=WzEsIjE4ZmMyZjMxMmNiMjc5NTc1YjYxNmQ0NGU2NmM2NTQ1ZTQwZTQzNjdjYjBiYjE4YjIwZmQ2Yzk0YjhiMTQ3MjgiLCIyMDI2LTExLTEyVDA2OjU5OjA0LjI4MTA5NiswMDowMCIsIm1lZGlhIl2wei6_z5lb2AEzrsLwdOxhwooZUdAEy1nSys-Low2s_w",
           "context": "user",
           "method": "GET",
           "status": 503
@@ -659,6 +665,31 @@
           "method": "GET",
           "status": 200
         }
+      ],
+      "status": "passed"
+    }
+  ],
+  "league_directory_evidence": [
+    {
+      "check": "early_click_waits_for_real_catalog",
+      "http_status": 200,
+      "league_ids": [
+        "league-0",
+        "league-1"
+      ],
+      "status": "passed"
+    },
+    {
+      "check": "closed_directory_late_response_cannot_replace_match",
+      "http_status": 200,
+      "status": "passed"
+    },
+    {
+      "check": "transport_failure_explicit_retry_current_phase",
+      "fault": "synthetic_transport_failure",
+      "retry_http_status": 200,
+      "league_ids": [
+        "league-1"
       ],
       "status": "passed"
     }
