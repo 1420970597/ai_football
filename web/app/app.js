@@ -352,7 +352,7 @@ function matchRecommendationMarkup(match) {
   // filter had worked.
   if (!signals.length && !match.expert_signals_has_more) return '';
   return `<section class="match-recommendations" aria-label="本场专家关联盘口">${signals.map(s =>
-    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div class="recommendation-expert"><span class="avatar" aria-hidden="true">${esc((s.display_nickname || '?').slice(0, 1))}</span><button data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button></div><div class="recommendation-body"><span class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><span class="recommendation-price">推荐时系统赔率 <strong>${decimal(s.recommendation_price)}</strong></span><div class="recommendation-meta"><span>${esc(phases[s.phase] || '阶段未知')} · 报价 ${stamp(s.quote_time)}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button></div></div><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span>${betButtonMarkup(s)}<div class="manual-bet-slot">${betResultMarkup(s.id)}</div></article>`
+    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div class="recommendation-expert"><span class="avatar" aria-hidden="true">${esc((s.display_nickname || '?').slice(0, 1))}</span><button data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button></div><div class="recommendation-body"><span class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><div class="recommendation-meta"><span>${esc(phases[s.phase] || '阶段未知')} · 推荐 ${stamp(s.created_at)}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button></div></div><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span>${betButtonMarkup(s)}<div class="manual-bet-slot">${betResultMarkup(s.id)}</div></article>`
   ).join('')}${match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
 }
 const vsIcons = [];
@@ -374,7 +374,7 @@ function oddsCellMarkup(m) {
   // No picks means a dash, not a sentence: the empty text repeated on every row.
   if (!signals.length) return '<span class="odds-none" aria-label="本场暂无专家盘口">—</span>';
   const latest = signals[0];
-  return `<span class="odds-market">${esc(signals.length)}${esc(more)} 条专家盘口</span><span>${esc(selection(latest.selection))} ${esc(lineLabel(latest))} ${decimal(latest.recommendation_price)}</span>`;
+  return `<span class="odds-market">${esc(signals.length)}${esc(more)} 条专家盘口</span><span>${esc(selection(latest.selection))} ${esc(lineLabel(latest))}</span>`;
 }
 function renderMatches() {
   const items = currentMatches();
@@ -1650,10 +1650,10 @@ async function placeManualBet(signalId, button) {
       ? [
           `${signal.match.home_team} 对 ${signal.match.away_team}`,
           describeSignal(signal),
-          `每单金额 ${decimal(stake)} 元 · 推荐时系统赔率 ${decimal(signal.item.recommendation_price)}`,
-          "确认后用当前盘口重新核验；赔率或盘口变化会被拒绝，不会按旧赔率成交。",
+          `每单金额 ${decimal(stake)} 元`,
+          "提交前读取当前盘口并重新询价，接受当前赔率；盘口线或方向失效时拒绝，实际成交赔率以账户回执为准。",
         ].join("\n")
-      : `确认以 ${decimal(stake)} 元实盘买入该专家推荐？系统按当前盘口重新核验，赔率或盘口变化会被拒绝。`,
+      : `确认以 ${decimal(stake)} 元实盘买入该专家推荐？提交前重新询价并接受当前赔率，实际成交以账户回执为准。`,
     { title: "确认实盘买入", confirmLabel: `买入 ${decimal(stake)} 元` },
   );
   if (!ok) return;
@@ -1668,8 +1668,8 @@ async function placeManualBet(signalId, button) {
       order.state === "pending"
         ? {
             tone: "pending",
-            title: `已预留 ${decimal(order.stake)} 元 · 赔率 ${decimal(order.price)}`,
-            detail: "等待执行器按当前盘口提交；结果记入个人中心订单，结算前不计盈亏。",
+            title: `已预留 ${decimal(order.stake)} 元`,
+            detail: "等待执行器重新询价并按当前盘口提交；实际成交以账户回执为准，结果记入个人中心订单。",
           }
         : {
             tone: "repeated",

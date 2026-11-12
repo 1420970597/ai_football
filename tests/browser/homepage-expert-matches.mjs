@@ -7,6 +7,7 @@ import path from 'node:path';
 import {fixtureRoute,instant} from './visual-fixture.mjs';
 
 const output=process.env.BROWSER_EVIDENCE_DIR||'/evidence';
+const baseUrl=process.env.HOMEPAGE_EXPERT_BASE_URL||'http://127.0.0.1:8080';
 await fs.mkdir(output,{recursive:true});
 const server=http.createServer(async(req,res)=>{
   try{
@@ -45,7 +46,7 @@ try{
         reads.push({p,sport,scope,phase});
         if(hold&&sport==='football'){hold=false;startHeld();await new Promise(resolve=>{releaseHeld=resolve;});}
         if(fail)return route.fulfill({status:503,json:{detail:'隔离服务暂不可用'}});
-        let items=phase==='cancelled'?[]:[match(sport,phase)];
+        let items=['cancelled','finished'].includes(phase)?[]:[match(sport,phase)];
         if(scope==='false')items=items.concat({...match(sport,phase),id:'unrelated',home_team:'没有专家的比赛',expert_signals:[]});
         return route.fulfill({json:{items,next_cursor:null,markets_included:false,recommended_only:scope==='true',server_time:instant}});
       }
@@ -54,13 +55,14 @@ try{
       if(p==='/public/matches/basketball-match')return route.fulfill({json:{fixture:match('basketball'),markets:[],expert_signals:[],server_time:instant}});
       return fixtureRoute(route);
     });
-    await page.goto('http://127.0.0.1:8080/');
+    await page.goto(baseUrl+'/');
     await page.locator('[data-fixture="football-match"] [data-recommendation]').first().waitFor();
     assert.equal(reads[0].scope,'true');
     assert.equal(await page.locator('[data-match-scope="recommended"]').getAttribute('aria-pressed'),'true');
     assert.equal(await page.locator('.match-row').count(),1);
     assert.equal(await page.locator('.match-recommendation').count(),2);
-    assert.match(await page.locator('#matches-list').innerText(),/推荐时系统赔率 1.95/);
+    assert.doesNotMatch(await page.locator('#matches-list').innerText(),/推荐时系统赔率|1\.95/);
+    assert.equal(await page.locator('.recommendation-price').count(),0);
     assert.match(await page.locator('#matches-list').innerText(),/本场专家/);
     assert.match(await page.locator('#matches-list').innerText(),/另一位专家/);
     assert.doesNotMatch(await page.locator('#matches-list').innerText(),/没有专家的比赛/);
@@ -83,9 +85,8 @@ try{
     await page.locator('#content-dialog [data-close-dialog]').click();
     await page.locator('#content-dialog').waitFor({state:'hidden'});
     await page.locator('.score-tabs [data-phase="finished"]').click();
-    await page.waitForFunction(()=>document.querySelector('.match-phase')?.textContent==='完场');
-    // Finished is a fixture phase, not proof that its recommendation settled.
-    assert.match(await page.locator('.match-recommendation').first().innerText(),/待结算/);
+    await page.waitForFunction(()=>document.querySelector('#matches-state').textContent.includes('暂无符合条件的专家关联比赛'));
+    assert.equal(await page.locator('.match-row').count(),0);
     await page.locator('.score-tabs [data-phase="cancelled"]').click();
     await page.waitForFunction(()=>document.querySelector('#matches-state').textContent.includes('暂无符合条件的专家关联比赛'));
     assert.equal(await page.locator('.match-row').count(),0);

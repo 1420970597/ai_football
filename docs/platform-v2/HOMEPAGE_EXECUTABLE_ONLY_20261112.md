@@ -3,7 +3,7 @@
 ## 工作包
 
 - 目标：按用户补充要求，在展示前排除会触发“推荐、来源或当前比赛盘口不满足实盘条件”的推荐；保留未结算条件。
-- 责任目录：services/api/app/routes/、tests/、docs/platform-v2/、reports/；生产镜像固定同步到主检出infra/production/。
+- 责任目录：services/api/app/routes/、web/app/、tests/、docs/platform-v2/、reports/；生产镜像固定同步到主检出infra/production/。
 - 前置依赖：网页分支24a4c22a、线上API61acb952；当前public模块必须匹配线上，不从较旧主检出重建。
 - 当前证据：orders.eligible_signal还检查五分钟推荐/原文时效、原文未来时间、媒体ready、阶段一致、原生标识与执行支持范围；现有首页只检查pending和来源可见性。报价缺失、关闭、过期也不应展示为可执行推荐。
 - 缺口：未结算并不代表仍可下单；失效推荐仍占比赛分页和摘要名额。
@@ -17,3 +17,15 @@
 ### 2026-11-12 08:18 UTC 设计已记录
 
 Git/当前交接/线上镜像/订单原校验及首页查询已核对；主检出四份账户未提交文件原样保留。初次只读搜索含无匹配glob及旧证据文件名，退出2；已改为目标文件查询，退出0，无写入失败。资源沿用专项PG0.5CPU/384MiB、runner0.75CPU/512MiB及浏览器0.5CPU/768MiB。效率优先，只检查本次查询及已有首页专项。下一步规划提交、实现冻结和Docker专项验证。
+
+### 2026-11-12 08:19 UTC 用户补充赔率规则
+
+用户要求赔率变化不应使用旧赔率，首页可以不显示赔率。复核现有reserve_signal已读取q.current_price，执行器preflight已从当前原生盘口重新询价并将新赔率用于限额及提交；acceptOdds=2，历史赔率只作为不可变审计证据。现有test_stale_expert_price_reserves_market_and_uses_current_provider_price和test_expert_price_is_not_a_price_lock可直接复验。无需改写交易协议。新增范围：移除首页推荐卡/摘要及买入确认/预留提示的旧赔率数字，确认文案明确接受当前赔率、以账户回执为准；价格本身变化不会从列表过滤。需要局部web重建及新资源版本，复用已有整组版本化流程，不重做全套视觉基线。下一步冻结后端/网页和专项测试。
+
+### 2026-11-12 08:20 UTC 首轮专项失败及样本修复
+
+Docker原命令TEST_SUBNET=10.93.83.0/28 sh infra/test/run.sh tests.test_homepage_expert_matches tests.test_async_score_summaries tests.test_account_state.AccountStateTests.test_stale_expert_price_reserves_market_and_uses_current_provider_price tests.test_account_protocol退出1：49项、一个样本错误。price=1在数据库既有price>1约束下无法构造，改用数据库允许但不可执行的NaN样本；不删除或放宽约束。原失败证据.runtime/test-evidence/1824227保留；隔离验收尚未通过，无生产变更。补充首页专项可指向实际nginx镜像，准备重跑原49项和实际产物浏览器。
+
+### 2026-11-12 08:20 UTC 后端隔离验证通过
+
+原49项同命令重跑退出0，9.708秒，0失败/错误/跳过；冻结证据.runtime/test-evidence/1826477。首页13项及多分支子场景涵盖推荐/来源/媒体/阶段/原生盘口/时效/分页与上限；实际订单协议样本验证推荐价1.95、本地报价1.50、提交前原生报价2.35时，限额、提交及订单证据使用2.35而非旧价。全部订单为临时数据库与MockTransport，不发生真实交易。线上orders与executor account_protocol逐文件SHA同被测源码。当前开始源码提交推送及实际API/web候选构建、只读和浏览器验收；浏览器尚未验收，不部署。

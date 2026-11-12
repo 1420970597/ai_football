@@ -117,9 +117,11 @@ try {
       await message.waitFor();
       const lines = await message.locator('span').allInnerTexts();
       const joined = lines.join('\n');
-      for (const expected of ['利物浦 对 曼城', '林老师 TG', '亚洲让球', '1.96', '2.00 元']) {
+      for (const expected of ['利物浦 对 曼城', '林老师 TG', '亚洲让球', '重新询价', '接受当前赔率', '账户回执', '2.00 元']) {
         assert.ok(joined.includes(expected), `${width}: dialog must state "${expected}"; saw "${joined}"`);
       }
+      assert.ok(!joined.includes('1.96') && !joined.includes('赔率或盘口变化会被拒绝'), 'historical odds must not be a buy price or price lock');
+      assert.equal(await page.locator('.recommendation-price').count(), 0);
       // The period must appear exactly once: a market name that already carries it is not repeated.
       assert.equal(joined.split('全场').length - 1, 1, `${width}: period named once; saw "${joined}"`);
       assert.equal(await page.locator('#confirm-title').innerText(), '确认实盘买入');

@@ -14,7 +14,25 @@ import test_result_ledger as support
 class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = support.ResultLedgerTests.asyncSetUp
     asyncTearDown = support.ResultLedgerTests.asyncTearDown
-    signal = support.ResultLedgerTests.signal
+
+    async def signal(self, *args, **kwargs):
+        kwargs.setdefault('phase', 'live')
+        signal = await support.ResultLedgerTests.signal(self, *args, **kwargs)
+        await self.pool.execute(
+            "INSERT INTO v2_current_quotes(id,fixture_id,market_id,market_name,period,market_kind,line,selection,"
+            "price,source_updated_at,status,play_id,market_instance_id,selection_id) "
+            "SELECT $1,fixture_id,market_id,market_name,period,market_kind,line,selection,2,now(),"
+            "'active','native-play','native-market','native-selection' FROM v2_expert_signals WHERE id=$2",
+            uuid.uuid4(), signal)
+        return signal
+
+    async def move_signal(self, signal, fixture, *, market='total', phase='live'):
+        await self.pool.execute(
+            "UPDATE v2_current_quotes q SET fixture_id=$2,market_id=$3 FROM v2_expert_signals s "
+            "WHERE s.id=$1 AND q.fixture_id=s.fixture_id AND q.line IS NOT DISTINCT FROM s.line "
+            "AND q.selection=s.selection AND q.period=s.period", signal, fixture, market)
+        await self.pool.execute('UPDATE v2_expert_signals SET fixture_id=$2,market_id=$3,phase=$4 WHERE id=$1',
+                                signal, fixture, market, phase)
 
     async def trusted(self):
         await self.pool.execute('INSERT INTO v2_source_experts(source_id,expert_id) VALUES($1,$2)', self.source, self.expert)
@@ -71,7 +89,7 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) "
                                 "VALUES('basketball','basketball','basketball','Basket League','Basket home','Basket away',$1,'scheduled')", self.now+timedelta(minutes=1))
         basketball_signal = await self.signal(line='220.5')
-        await self.pool.execute("UPDATE v2_expert_signals SET fixture_id='basketball',market_id='38' WHERE id=$1", basketball_signal)
+        await self.move_signal(basketball_signal, 'basketball', market='38', phase='scheduled')
         self.assertEqual(['fixture'], [m['id'] for m in (await self.listing(sport='football', phase='live'))['items']])
         self.assertEqual(['basketball'], [m['id'] for m in (await self.listing(sport='basketball', phase='scheduled'))['items']])
         self.assertEqual([], (await self.listing(sport='football', phase='finished'))['items'])
@@ -145,7 +163,7 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
                 "VALUES($1,$1,'football','League','Home','Away',$2,'live')",
                 identifier, self.now + timedelta(minutes=index + 1))
             signal = await self.signal(line=str(index + 3))
-            await self.pool.execute('UPDATE v2_expert_signals SET fixture_id=$2 WHERE id=$1', signal, identifier)
+            await self.move_signal(signal, identifier)
         first = await self.listing(page_size=1)
         self.assertEqual(['pending-0'], [m['id'] for m in first['items']])
         self.assertTrue(first['next_cursor'])
@@ -155,14 +173,14 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("UPDATE v2_expert_signals SET outcome='void' WHERE fixture_id='pending-0'")
         self.assertEqual(['pending-1'], [m['id'] for m in (await self.listing())['items']])
 
-    async def test_finished_pending_market_is_not_mistaken_for_settlement(self):
+    async def test_finished_pending_market_is_hidden_without_settling_history(self):
         await self.trusted()
         signal = await self.signal()
         await self.pool.execute("UPDATE v2_fixtures SET phase='finished' WHERE id='fixture'")
-        item = (await self.listing(phase='finished'))['items'][0]
-        self.assertEqual('pending', item['expert_signals'][0]['outcome'])
-        await self.pool.execute("UPDATE v2_expert_signals SET outcome='win' WHERE id=$1", signal)
         self.assertEqual([], (await self.listing(phase='finished'))['items'])
+        detail = (await self.client.get('/api/v1/public/matches/fixture')).json()
+        self.assertEqual('pending', detail['expert_signals'][0]['outcome'])
+        self.assertEqual('pending', await self.pool.fetchval('SELECT outcome FROM v2_expert_signals WHERE id=$1', signal))
 
     async def test_old_scope_cursor_is_rejected_and_settlement_race_keeps_page_cursor(self):
         await self.trusted()
@@ -177,10 +195,128 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
             "INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) "
             "VALUES('later','later','football','League','Home','Away',$1,'live')", self.now + timedelta(minutes=1))
         later = await self.signal(line='3.5')
-        await self.pool.execute("UPDATE v2_expert_signals SET fixture_id='later' WHERE id=$1", later)
+        await self.move_signal(later, 'later')
         with patch.object(public, '_recommendation_summaries', AsyncMock(return_value={})):
             raced = await self.listing(page_size=1)
             self.assertEqual([], raced['items'])
             self.assertTrue(raced['next_cursor'])
         after_race = await self.listing(page_size=1, cursor=raced['next_cursor'])
         self.assertEqual(['later'], [item['id'] for item in after_race['items']])
+
+    async def test_ineligible_signal_conditions_are_hidden_before_order_reservation(self):
+        from app.orders import eligible_signal
+        from fastapi import HTTPException
+        await self.trusted()
+        signal = await self.signal()
+        cases = [
+            "UPDATE v2_expert_signals SET created_at=now()-interval '301 seconds'",
+            "UPDATE v2_expert_messages SET posted_at=now()-interval '301 seconds'",
+            "UPDATE v2_expert_messages SET posted_at=now()+interval '6 seconds'",
+            "UPDATE v2_expert_messages SET media_state='pending'",
+            "UPDATE v2_expert_signals SET phase='scheduled'",
+            "UPDATE v2_fixtures SET phase='finished'",
+            "UPDATE v2_fixtures SET phase='cancelled'",
+            "UPDATE v2_expert_signals SET market_kind='unsupported'",
+            "UPDATE v2_current_quotes SET play_id=NULL",
+            "UPDATE v2_current_quotes SET market_instance_id=''",
+            "UPDATE v2_current_quotes SET selection_id=NULL",
+        ]
+        for sql in cases:
+            with self.subTest(condition=sql):
+                async with self.pool.acquire() as conn:
+                    transaction = conn.transaction()
+                    await transaction.start()
+                    try:
+                        await conn.execute(sql)
+                        with self.assertRaises(HTTPException):
+                            await eligible_signal(conn, signal)
+                        # Use this transaction's connection for the public read.
+                        with patch.object(public.database, 'current_pool', return_value=conn):
+                            self.assertEqual([], (await self.listing())['items'])
+                    finally:
+                        await transaction.rollback()
+        self.assertEqual(1, len((await self.listing())['items']))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+
+    async def test_exact_native_quote_and_runtime_freshness_required_without_price_lock(self):
+        await self.trusted()
+        signal = await self.signal()
+        cases = [
+            "DELETE FROM v2_current_quotes",
+            "UPDATE v2_current_quotes SET status='suspended'",
+            "UPDATE v2_current_quotes SET status='closed'",
+            "UPDATE v2_current_quotes SET source_updated_at=NULL",
+            "UPDATE v2_current_quotes SET source_updated_at=now()-interval '61 seconds'",
+            "UPDATE v2_current_quotes SET source_updated_at=now()+interval '5 seconds'",
+            "UPDATE v2_current_quotes SET price=NULL",
+            "UPDATE v2_current_quotes SET price='NaN'::numeric",
+            "UPDATE v2_current_quotes SET line=3.5",
+            "UPDATE v2_current_quotes SET selection='under'",
+            "UPDATE v2_current_quotes SET period='first_half'",
+            "UPDATE v2_current_quotes SET market_id='other'",
+            "UPDATE v2_current_quotes SET market_kind='handicap'",
+        ]
+        for sql in cases:
+            with self.subTest(condition=sql):
+                async with self.pool.acquire() as conn:
+                    transaction = conn.transaction()
+                    await transaction.start()
+                    try:
+                        await conn.execute(sql)
+                        with patch.object(public.database, 'current_pool', return_value=conn):
+                            self.assertEqual([], (await self.listing())['items'])
+                    finally:
+                        await transaction.rollback()
+        # Changed odds keep the recommendation visible; the immutable original is evidence only.
+        await self.pool.execute('UPDATE v2_current_quotes SET price=2.35')
+        self.assertEqual(str(signal), (await self.listing())['items'][0]['expert_signals'][0]['id'])
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '30 seconds'")
+        with patch.object(public, 'runtime_quote_max_age', AsyncMock(return_value=15)):
+            self.assertEqual([], (await self.listing())['items'])
+        self.assertEqual(1, len((await self.listing())['items']))
+
+    async def test_invalid_recommendations_do_not_consume_summary_limits_or_match_pages(self):
+        from app.orders import eligible_signal
+        await self.trusted()
+        for i in range(22):
+            invalid = await self.signal(line=str(i + 20))
+            await self.pool.execute("UPDATE v2_expert_signals SET created_at=now()-interval '6 minutes' WHERE id=$1", invalid)
+        self.assertEqual([], (await self.listing(page_size=1))['items'])
+        valid = [await self.signal(line=str(i + 1)) for i in range(6)]
+        item = (await self.listing(page_size=1))['items'][0]
+        self.assertEqual(5, len(item['expert_signals']))
+        self.assertTrue(item['expert_signals_has_more'])
+        with patch.object(public, '_has_entitlement', AsyncMock(return_value=True)):
+            item = (await self.listing())['items'][0]
+        self.assertEqual({str(s) for s in valid}, {s['id'] for s in item['expert_signals']})
+        self.assertFalse(item['expert_signals_has_more'])
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                for identifier in valid:
+                    self.assertEqual(identifier, (await eligible_signal(conn, identifier))['id'])
+
+    async def test_winner_null_zero_and_supported_basketball_markets(self):
+        from services.execution_scope import BASKETBALL_MARKETS, execution_market_supported
+        await self.trusted()
+        await self.signal()
+        for market, (kind, period) in BASKETBALL_MARKETS.items():
+            with self.subTest(market=market):
+                await self.pool.execute("UPDATE v2_fixtures SET sport='basketball'")
+                await self.pool.execute('UPDATE v2_expert_signals SET market_id=$1,market_kind=$2,period=$3,selection=$4,line=$5',
+                    market, kind, period, 'home' if kind!='total' else 'over', None if kind=='winner' else Decimal('2.25'))
+                await self.pool.execute('UPDATE v2_current_quotes SET market_id=$1,market_kind=$2,period=$3,selection=$4,line=$5',
+                    market, kind, period, 'home' if kind!='total' else 'over', Decimal('0') if kind=='winner' else Decimal('2.25'))
+                self.assertTrue(execution_market_supported('basketball', market, kind, period))
+                self.assertEqual(1, len((await self.listing())['items']))
+                for invalid in ("UPDATE v2_expert_signals SET period='first_half'",
+                                "UPDATE v2_expert_signals SET selection='draw'",
+                                "UPDATE v2_expert_signals SET market_id='unknown'"):
+                    async with self.pool.acquire() as conn:
+                        tx = conn.transaction()
+                        await tx.start()
+                        try:
+                            await conn.execute(invalid)
+                            with patch.object(public.database, 'current_pool', return_value=conn):
+                                self.assertEqual([], (await self.listing())['items'])
+                        finally:
+                            await tx.rollback()
