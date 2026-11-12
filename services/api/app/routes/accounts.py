@@ -64,6 +64,7 @@ class ManualBetInput(Input):
 
 class ManualBetOrderInput(Input):
     signal_id: uuid.UUID
+    request_id: uuid.UUID
 
 
 class AttemptInput(Input):
@@ -370,9 +371,10 @@ async def place_manual_bet(body: ManualBetOrderInput, request: Request):
     settings = request.app.state.settings
     async with database.current_pool().acquire() as conn, conn.transaction():
         await verify_sensitive_session(conn, user)
-        order = await orders.reserve_signal(conn, user["id"], body.signal_id, settings, manual=True)
+        order = await orders.reserve_signal(conn, user["id"], body.signal_id, settings, manual=True, request_id=body.request_id)
     return {"order": {"id": str(order["id"]), "state": order["state"], "stake": str(order["stake"]),
-                      "price": str(order["price"]), "manual": bool(order["manual"])}}
+                      "price": str(order["price"]), "manual": bool(order["manual"])},
+            "request_id": str(body.request_id), "replayed": order['request_replayed']}
 
 
 @router.post("/leyu/emergency-stop")

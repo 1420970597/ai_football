@@ -22,6 +22,7 @@ import {
   submit,
   api,
   jsonTrace,
+  newId,
 } from "./ui.js";
 import { initIdentity } from "./identity.js";
 import { createAccountHistory } from "./account-history.js";
@@ -1659,9 +1660,9 @@ async function placeManualBet(signalId, button) {
   if (!ok) return;
   button.disabled = true;
   try {
-    const { order } = await api("/accounts/leyu/manual-betting/orders", {
+    const { order, replayed } = await api("/accounts/leyu/manual-betting/orders", {
       method: "POST",
-      body: { signal_id: signalId },
+      body: { signal_id: signalId, request_id: newId() },
     });
     betResults.set(
       signalId,
@@ -1672,9 +1673,9 @@ async function placeManualBet(signalId, button) {
             detail: "等待执行器重新询价并按当前盘口提交；实际成交以账户回执为准，结果记入个人中心订单。",
           }
         : {
-            tone: "repeated",
-            title: `该推荐已有订单（${order.state}）`,
-            detail: "未重复下单；完整记录见个人中心订单。",
+            tone: "pending",
+            title: `本次买入请求状态（${order.state}）`,
+            detail: `${replayed ? '本次确认已处理；' : ''}请在个人中心核对本次订单，实际成交以账户回执为准。`,
           },
     );
     if (state.page === "scores") {

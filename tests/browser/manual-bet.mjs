@@ -42,8 +42,13 @@ async function open(page, mode) {
     if (p === '/accounts/leyu') return route.fulfill({ json: { account: null, binding_revision: 0 } });
     if (p === '/accounts/leyu/manual-betting') return route.fulfill({ json: policy(mode) });
     if (p === '/accounts/leyu/manual-betting/orders') {
+      const body = request.postDataJSON();
+      assert.match(body.request_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+      assert.deepEqual(Object.keys(body).sort(), ['request_id', 'signal_id']);
+      mode.__requests?.push(body);
       if (mode.__fail) return route.fulfill({ status: 409, json: { detail: '当前盘口已变化，请重新确认' } });
-      return route.fulfill({ status: 202, json: { order: { id: 'order-1', state: mode.__repeat ? 'accepted' : 'pending', stake: '2', price: '1.96' } } });
+      return route.fulfill({ status: 202, json: { request_id:body.request_id,replayed:false,
+        order: { id: 'order-'+(mode.__requests?.length||1), state: 'pending', stake: '2', price: '2.35' } } });
     }
     if (p.startsWith('/accounts/history')) return route.fulfill({ json: {
       status: 'completed', account_id: 'bet-account', binding_revision: 1, observed_at: instant, order_count: 0,
@@ -104,7 +109,8 @@ try {
       const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN' });
       const page = await context.newPage();
       page.on('pageerror', error => errors.push(`${width} enabled: ${error.message}`));
-      await open(page, {});
+      const requests = [];
+      await open(page, {__requests:requests});
       await page.goto(baseUrl+'/#scores?scope=recommended');
       await page.waitForLoadState('networkidle');
       const button = page.locator('[data-bet-signal]').first();
@@ -137,6 +143,14 @@ try {
       await page.waitForTimeout(5200); // longer than the toast lifetime
       assert.equal(await result.isVisible(), true, 'outcome must still be visible after the toast expires');
       results.push({ width, case: 'result-persists', text, ok: true });
+      await page.locator('[data-bet-signal]').first().click();
+      await page.locator('#confirm-yes').click();
+      await page.waitForFunction(() => document.querySelector('.manual-bet-result')?.textContent.includes('已预留'));
+      assert.equal(requests.length,2);
+      assert.notEqual(requests[0].request_id,requests[1].request_id,'each explicit confirmation is a distinct buy');
+      assert.equal(requests[0].signal_id,requests[1].signal_id);
+      assert.doesNotMatch(await page.locator('.manual-bet-result').innerText(),/该推荐已有订单|未重复下单/);
+      results.push({width,case:'separate-confirmations',ok:true});
       await context.close();
     }
 

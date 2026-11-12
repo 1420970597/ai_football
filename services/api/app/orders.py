@@ -137,14 +137,25 @@ async def exposure_totals(conn, user_id, daily_timezone: str, at: datetime | Non
     )
 
 
-async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = False):
+async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = False,
+                         request_id: uuid.UUID | None = None):
     if manual:
         account, policy = await manual_policy(conn, user_id, settings)
     else:
         account, policy = await account_policy(conn, user_id, settings)
-    previous = await conn.fetchrow("SELECT * FROM v2_bet_orders WHERE user_id=$1 AND signal_id=$2 AND account_id IS NOT NULL", user_id, signal_id)
+    if manual:
+        if request_id is None:
+            raise HTTPException(422, "买入请求缺少确认编号，请刷新页面后重新确认")
+        idempotency_key = f"manual:{user_id}:{request_id}"
+        previous = await conn.fetchrow("SELECT * FROM v2_bet_orders WHERE user_id=$1 AND idempotency_key=$2", user_id, idempotency_key)
+        if previous and (previous['signal_id'] != signal_id or previous['account_id'] != account['id']
+                         or previous['binding_revision'] != account['binding_revision']):
+            raise HTTPException(409, "买入确认编号与推荐或本人账户不一致，请重新确认")
+    else:
+        idempotency_key = f"expert:{user_id}:{signal_id}"
+        previous = await conn.fetchrow("SELECT * FROM v2_bet_orders WHERE user_id=$1 AND signal_id=$2 AND account_id IS NOT NULL", user_id, signal_id)
     if previous:
-        return previous
+        return dict(previous) | {'request_replayed': True} if manual else previous
     signal = await eligible_signal(conn, signal_id)
     if manual:
         stake = policy["manual_stake"]
@@ -174,11 +185,11 @@ async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = F
     row = await conn.fetchrow(
         "INSERT INTO v2_bet_orders(id,user_id,signal_id,idempotency_key,state,stake,price,account_id,binding_revision,config_revision,"
         "policy_revision,provider_identity_hash,reserved_stake,quote_snapshot,manual) VALUES($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9,$10,$11,$5,$12,$13) RETURNING *",
-        identity, user_id, signal_id, f"expert:{user_id}:{signal_id}", stake, signal["current_price"], account["id"],
+        identity, user_id, signal_id, idempotency_key, stake, signal["current_price"], account["id"],
         account["binding_revision"], account["config_revision"], policy["revision"], account["provider_identity_hash"], snapshot, manual,
     )
     await audit(conn, user_id, "user" if manual else "system", "manual_order_reserved" if manual else "order_reserved", "bet_order", str(identity), details={"stake": str(stake), "signal_id": str(signal_id)})
-    return row
+    return dict(row) | {'request_replayed': False} if manual else row
 
 
 async def cancel_unsent(conn, user_id, reason: str):
