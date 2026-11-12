@@ -99,3 +99,88 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(20, len(item['expert_signals']))
         self.assertTrue(item['expert_signals_has_more'])
         self.assertFalse(item['recommendations_limited'])
+
+    async def test_all_settled_outcomes_hide_fixture_without_deleting_history(self):
+        await self.trusted()
+        signal = await self.signal()
+        for outcome in ('win', 'half_win', 'loss', 'half_loss', 'push', 'void'):
+            with self.subTest(outcome=outcome):
+                await self.pool.execute('UPDATE v2_expert_signals SET outcome=$2 WHERE id=$1', signal, outcome)
+                self.assertEqual([], (await self.listing())['items'])
+                all_matches = await self.client.get('/api/v1/public/matches')
+                self.assertEqual(['fixture'], [item['id'] for item in all_matches.json()['items']])
+                detail = await self.client.get('/api/v1/public/matches/fixture')
+                self.assertEqual(200, detail.status_code, detail.text)
+                self.assertEqual(outcome, detail.json()['expert_signals'][0]['outcome'])
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+
+    async def test_mixed_markets_filter_before_guest_and_member_summary_limits(self):
+        await self.trusted()
+        pending = [await self.signal(line=str(i + 1)) for i in range(6)]
+        for i in range(22):
+            settled = await self.signal(line=str(i + 20))
+            await self.pool.execute("UPDATE v2_expert_signals SET outcome='win' WHERE id=$1", settled)
+        item = (await self.listing())['items'][0]
+        self.assertEqual(5, len(item['expert_signals']))
+        self.assertTrue(item['expert_signals_has_more'])
+        self.assertEqual({'pending'}, {s['outcome'] for s in item['expert_signals']})
+        with patch.object(public, '_has_entitlement', AsyncMock(return_value=True)):
+            item = (await self.listing())['items'][0]
+        self.assertEqual({str(identifier) for identifier in pending}, {s['id'] for s in item['expert_signals']})
+        self.assertFalse(item['expert_signals_has_more'])
+        await self.pool.execute("UPDATE v2_expert_signals SET outcome='push' WHERE id=$1", pending[0])
+        item = (await self.listing())['items'][0]
+        self.assertEqual(5, len(item['expert_signals']))
+        self.assertFalse(item['expert_signals_has_more'])
+
+    async def test_settlement_filters_fixtures_before_pagination_and_refresh(self):
+        await self.trusted()
+        settled = await self.signal()
+        await self.pool.execute("UPDATE v2_expert_signals SET outcome='loss' WHERE id=$1", settled)
+        for index in range(2):
+            identifier = f'pending-{index}'
+            await self.pool.execute(
+                "INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) "
+                "VALUES($1,$1,'football','League','Home','Away',$2,'live')",
+                identifier, self.now + timedelta(minutes=index + 1))
+            signal = await self.signal(line=str(index + 3))
+            await self.pool.execute('UPDATE v2_expert_signals SET fixture_id=$2 WHERE id=$1', signal, identifier)
+        first = await self.listing(page_size=1)
+        self.assertEqual(['pending-0'], [m['id'] for m in first['items']])
+        self.assertTrue(first['next_cursor'])
+        second = await self.listing(page_size=1, cursor=first['next_cursor'])
+        self.assertEqual(['pending-1'], [m['id'] for m in second['items']])
+        self.assertIsNone(second['next_cursor'])
+        await self.pool.execute("UPDATE v2_expert_signals SET outcome='void' WHERE fixture_id='pending-0'")
+        self.assertEqual(['pending-1'], [m['id'] for m in (await self.listing())['items']])
+
+    async def test_finished_pending_market_is_not_mistaken_for_settlement(self):
+        await self.trusted()
+        signal = await self.signal()
+        await self.pool.execute("UPDATE v2_fixtures SET phase='finished' WHERE id='fixture'")
+        item = (await self.listing(phase='finished'))['items'][0]
+        self.assertEqual('pending', item['expert_signals'][0]['outcome'])
+        await self.pool.execute("UPDATE v2_expert_signals SET outcome='win' WHERE id=$1", signal)
+        self.assertEqual([], (await self.listing(phase='finished'))['items'])
+
+    async def test_old_scope_cursor_is_rejected_and_settlement_race_keeps_page_cursor(self):
+        await self.trusted()
+        await self.signal()
+        scope = {'kind':'matches','phase':'all','sport':None,'league':None,'league_ids':[],
+                 'q':None,'date':None,'tz':'Asia/Shanghai','recommended_only':True}
+        old_cursor = public.encode_cursor(b'k'*32, scope, self.now, 'fixture')
+        response = await self.client.get('/api/v1/public/matches', params={
+            'recommended_only':'true','cursor':old_cursor})
+        self.assertEqual(400, response.status_code)
+        await self.pool.execute(
+            "INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase) "
+            "VALUES('later','later','football','League','Home','Away',$1,'live')", self.now + timedelta(minutes=1))
+        later = await self.signal(line='3.5')
+        await self.pool.execute("UPDATE v2_expert_signals SET fixture_id='later' WHERE id=$1", later)
+        with patch.object(public, '_recommendation_summaries', AsyncMock(return_value={})):
+            raced = await self.listing(page_size=1)
+            self.assertEqual([], raced['items'])
+            self.assertTrue(raced['next_cursor'])
+        after_race = await self.listing(page_size=1, cursor=raced['next_cursor'])
+        self.assertEqual(['later'], [item['id'] for item in after_race['items']])

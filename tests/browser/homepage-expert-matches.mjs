@@ -35,7 +35,7 @@ try{
         display_nickname:i?'另一位专家':'本场专家',phase:'scheduled',market_id:sport==='football'?'2':'38',
         market_name:sport==='football'?'全场大小':'全场总分',market_kind:'total',period:i?'first_half':'full_time',
         line:sport==='football'?'2.5':'220.5',selection_line:sport==='football'?'2.5':'220.5',selection:i?'under':'over',
-        recommendation_price:'1.95',quote_time:instant,created_at:instant,outcome:phase==='finished'?'win':'pending'}))});
+        recommendation_price:'1.95',quote_time:instant,created_at:instant,outcome:'pending'}))});
     await page.route('**/api/v1/**',async route=>{
       const req=route.request(),url=new URL(req.url()),p=url.pathname.replace('/api/v1','');
       if(req.method()!=='GET')writes.push(p);
@@ -84,7 +84,8 @@ try{
     await page.locator('#content-dialog').waitFor({state:'hidden'});
     await page.locator('.score-tabs [data-phase="finished"]').click();
     await page.waitForFunction(()=>document.querySelector('.match-phase')?.textContent==='完场');
-    assert.match(await page.locator('.match-recommendation').first().innerText(),/全赢/);
+    // Finished is a fixture phase, not proof that its recommendation settled.
+    assert.match(await page.locator('.match-recommendation').first().innerText(),/待结算/);
     await page.locator('.score-tabs [data-phase="cancelled"]').click();
     await page.waitForFunction(()=>document.querySelector('#matches-state').textContent.includes('暂无符合条件的专家关联比赛'));
     assert.equal(await page.locator('.match-row').count(),0);

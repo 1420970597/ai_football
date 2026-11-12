@@ -17,3 +17,9 @@
 ### 2026-11-12 07:58 UTC 设计已记录
 
 Git/镜像/模块SHA/局部源码与既有测试检查退出0；保留主检出四份账户未提交文件。预算沿用测试PG0.5CPU/384MiB、runner0.75CPU/512MiB；浏览器0.5CPU/768MiB。效率优先，只跑本次筛选及受影响查询/首页场景，不重复全套浏览器、视觉和后端。下一步规划提交、实施与冻结专项验证。
+
+### 2026-11-12 08:02 UTC 隔离验证通过
+
+TEST_SUBNET=10.93.81.0/28 sh infra/test/run.sh tests.test_homepage_expert_matches tests.test_async_score_summaries退出0：16项、4.439秒、0失败/错误/跳过；冻结源码证据.runtime/test-evidence/1775902/backend-tests.json。首页模块9项含5项新增回归，覆盖六种已结算结果、混合盘口、游客/会员上限、分页、刷新、完场待结、旧游标拒绝及并发结算空壳/游标继续。独立临时PG已清理。
+
+Docker内部网络10.93.82.0/28、0.5CPU/768MiB运行tests/browser/homepage-expert-matches.mjs退出0：1440/1030/390三视口、双运动/筛选/刷新/迟到响应/原文权限/几何布局通过，0页面错误、0写请求；证据主检出.runtime/homepage-pending-release-20261112/browser/。未改HTML/CSS/业务JS，不重跑无关全套。下一步源码提交推送、从当前API精确镜像仅覆盖同源public模块，先真实只读联调再仅切API。

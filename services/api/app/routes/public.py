@@ -119,7 +119,7 @@ _VISIBLE_RECOMMENDATIONS_FROM = (
     "JOIN v2_source_experts se ON se.source_id=src.id AND se.expert_id=e.id "
 )
 _VISIBLE_RECOMMENDATIONS_WHERE = (
-    "s.withdrawn_at IS NULL AND m.deleted_at IS NULL AND e.enabled AND src.enabled AND se.enabled "
+    "s.outcome='pending' AND s.withdrawn_at IS NULL AND m.deleted_at IS NULL AND e.enabled AND src.enabled AND se.enabled "
     "AND NOT EXISTS(SELECT 1 FROM v2_expert_messages newer WHERE newer.source_id=m.source_id "
     "AND newer.platform_message_id=m.platform_message_id AND newer.revision>m.revision)"
 )
@@ -235,6 +235,7 @@ async def matches(
                     'league_ids': sorted(set(league_ids or [])), 'q': q, 'date': match_date, 'tz': tz}
     if recommended_only:
         cursor_scope['recommended_only'] = True
+        cursor_scope['recommendation_outcome'] = 'pending'
     decoded = _decode_cursor(cursor, request, cursor_scope)
     if decoded:
         clauses.append(f"(kickoff_at,id) > ({bind(decoded[0])},{bind(decoded[1])})")
@@ -254,6 +255,10 @@ async def matches(
     recommendations = await _recommendation_summaries(fixture_ids, recommendation_limit) if recommended_only else {}
     output = []
     for row in items:
+        if recommended_only and not recommendations.get(row['id']):
+            # Settlement may complete between fixture selection and summaries.
+            # Keep the raw-page cursor below so pagination still moves forward.
+            continue
         item = dict(row)
         item["markets"] = by_fixture.get(row["id"], [])
         item['quote_fresh'] = any(q['fresh'] for q in item['markets']) and item['phase'] in {'scheduled','live'}
