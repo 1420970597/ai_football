@@ -74,3 +74,5 @@
 最终仍依赖1回复原始时间、6音视频语义、5不确定表达、名称/期间来源证明、真实检测时钟/窗口及媒体/COMMIT/限流细分。静态同哈希重试无法自行补齐来源证明和未保存的历史时钟；最终blocked，后续需可核的新证据，不靠重复窗口或放宽门禁解除。
 
 15:14 UTC 最终验收：Docker无网络finish.py退出0，严格结果schema、数量/分页/盘口/时延单位、6份冻结脚本/schema、探针、脱敏、报告JSON写后读回与空raw/manifest全部通过；git diff --check和起点22df47e6至今业务/测试/部署零变更核对0，.omc保留。messages_examined=33/unresolved_examined=26为同哈希既有语义复用，7来源仍未完成分析；最终blocked。报告window-1300-1330-attempt8.{md,json}。活动阶段为仅文档证据提交推送，无fix commit、新业务回归或发布。
+
+15:15 UTC 证据提交01b37dd661b7af93117da2d3ab1263cb05fc5967已push、ls-remote精确一致，commit/push/核对均0；规划0846b68d也已同步。提交后Docker无网络读回/脱敏/schema字段/6冻结哈希/空raw和manifest检查0；业务/测试/部署零变更0，仅既存.omc未跟踪。无fix commit、新业务回归、发布、历史重审或交易。最终blocked，此交接只记录本窗分析覆盖和未闭合证据，不证明20秒或全局准确率达标。
