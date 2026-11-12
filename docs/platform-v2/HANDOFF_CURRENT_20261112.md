@@ -4,6 +4,8 @@
 
 > 本轮用户已明确要求覆盖原业务端口并正式上线。正式业务入口已验收为 `0.0.0.0:3003`，域名 `football.5545.eu.cc` 回源同一新版；生产覆盖固定在 `infra/production/web.yml`，幂等启动退出 0、重建容器 0。当前生产状态以 `PRODUCTION_ENTRY_20261112.md` 和 `reports/production-entry-20261112.json` 为准。
 
+> 最新业务变更：首页“专家关联”现在只展示未结算比赛及推荐盘口。源码 `423143b4` 位于 `refactor/TASK-78-web-ux`，API 镜像 `sha256:61acb952…` 已上线，生产覆盖为 `infra/production/api.yml`；web 镜像不变。混合状态场次只返回 pending 盘口，全部结算后移出；“全部赛事”、详情、历史与统计保留。16 项后端专项、三个隔离视口和真实桌面/手机双运动检查通过。权威记录是网页工作树及该已推送分支的 `docs/platform-v2/HOMEPAGE_PENDING_ONLY_20261112.md`、`reports/homepage-pending-only-20261112.json`；主检出 public 模块较旧，禁止从它重建覆盖当前生产 API。
+
 ## 已完成的续接阶段
 
 - 最新网页交接及修复证据已在 `refactor/TASK-78-web-ux` 推送；远端引用核对为 `01c4510b0cdfe100d461ce5be7ab077320476d53`。

@@ -1,0 +1,11 @@
+# Append to the validated API Compose chain. Only the homepage public-query
+# module differs from the original running image; credentials remain external.
+x-production-api:
+  source_revision: 423143b4867b65c445d950207a2ee51202c19217
+  artifact_version: 2.0.0-dev-pending.20261112.1
+  base_image: sha256:928e9800f2c78e26f93ff38c8718a32e715eb3e47fb284c98fc7f117b33dd37a
+  scope: pending-only-homepage-expert-matches
+
+services:
+  api:
+    image: sha256:61acb952441eb982a5c73b1c4e239c479847d64c4f49bb616c480a71503ef18d
