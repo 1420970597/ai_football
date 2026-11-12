@@ -1372,7 +1372,9 @@
   },
   "documentation_commits": {
     "planning": "09460e524baf0d9d4c87a88631861863e705c26b",
-    "planning_remote_verified": true
+    "planning_remote_verified": true,
+    "evidence": "c500b327f12d45efd341ca5ffe6cad75d3694cb5",
+    "evidence_remote_verified": true
   },
   "incremental_verification": {
     "compared_with_attempt": 47,
@@ -1748,7 +1750,15 @@
       "production_write": false
     }
   ],
-  "investigation_documentation_corrections": [],
+  "investigation_documentation_corrections": [
+    {
+      "phase": "post_validation_document_count",
+      "initial_count": 4,
+      "actual_count": 5,
+      "corrected": true,
+      "business_evidence_changed": false
+    }
+  ],
   "investigation_privacy_incidents": [],
   "investigation_validation_failures": [],
   "source_recovery_metadata": {
