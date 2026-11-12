@@ -66,7 +66,7 @@
         >
           <div class="section-title">
             <h1 id="score-title">足球即时比分</h1>
-            <span id="last-updated">等待更新</span
+            <span id="last-updated" class="meta-chip">等待更新</span
             ><button
               id="refresh-matches"
               class="small-button"
@@ -76,12 +76,14 @@
             </button>
           </div>
           <div class="sports-bar" role="group" aria-label="体育项目">
-            <button class="active" data-sport="football">足球</button
-            ><button data-sport="basketball">篮球</button
-            ><span id="sport-context">足球比分与盘口</span>
+            <div class="sport-switch">
+              <button class="active" data-sport="football">足球</button
+              ><button data-sport="basketball">篮球</button>
+            </div>
+            <span id="sport-context">足球比分与盘口</span>
           </div>
           <div class="scores-toolbar">
-            <div class="section-tabs homepage-match-tabs" role="group" aria-label="首页比赛范围">
+            <div class="homepage-match-tabs" role="group" aria-label="首页比赛范围">
               <button class="active" data-match-scope="recommended" aria-pressed="true">专家关联</button>
               <button data-match-scope="all" aria-pressed="false">全部赛事</button>
             </div>
@@ -912,7 +914,7 @@
         </section>
         <section class="side-panel">
           <h2>数据状态</h2>
-          <p id="service-state">正在连接赛事服务</p>
+          <div id="service-state">正在连接赛事服务</div>
           <p class="muted">采集新鲜度与服务连通分别展示。</p>
         </section>
       </aside>

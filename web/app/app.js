@@ -156,6 +156,10 @@ function route(
     clearTimeout(state.retryTimer);
   }
   if (phase) state.phase = phase;
+  // A different page starts at its own top. Without this the browser keeps the
+  // previous scroll offset, and a shorter page lands mid-way down with its own
+  // first row already scrolled under the sticky header.
+  if (state.page !== page) scrollTo({ top: 0, behavior: "instant" });
   state.page = page;
   if (page === "messages") state.messageContext = asAdmin ? "admin" : "user";
   const hash =
@@ -232,7 +236,7 @@ function renderDates() {
             : date === shiftDay(today, 1)
               ? "明日"
               : date.slice(5).replace("-", "/");
-      return `<button data-date="${date}" aria-pressed="${offset === 0}" class="${offset === 0 ? "active" : ""}">${label}<small>${date.slice(5).replace("-", "/")}</small></button>`;
+      return `<button data-date="${date}" aria-pressed="${offset === 0}" class="${offset === 0 ? "active" : ""}${date === today ? " today" : ""}">${label}<small>${date.slice(5).replace("-", "/")}</small></button>`;
     })
     .join("");
   for (const button of $$(".score-tabs [data-phase],[data-sport]")) {
@@ -330,9 +334,13 @@ function betButtonMarkup(signal) {
 }
 function matchRecommendationMarkup(match) {
   const signals = match.expert_signals || [];
+  // A match with no signals renders nothing at all. The old empty sentence was
+  // repeated on every row of the recommended scope and only restated that the
+  // filter had worked.
+  if (!signals.length && !match.expert_signals_has_more) return '';
   return `<section class="match-recommendations" aria-label="本场专家关联盘口">${signals.map(s =>
-    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div class="recommendation-line"><button class="text-link" data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button><span class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><span>推荐时系统赔率 <strong>${decimal(s.recommendation_price)}</strong></span><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span></div><div class="recommendation-line recommendation-meta"><span class="muted">${esc(phases[s.phase] || '阶段未知')} · 报价 ${stamp(s.quote_time)}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button>${betButtonMarkup(s)}</div><div class="manual-bet-slot">${betResultMarkup(s.id)}</div></article>`
-  ).join('') || '<p class="muted">关联记录已变更，请刷新列表。</p>'}${match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
+    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div class="recommendation-expert"><span class="avatar" aria-hidden="true">${esc((s.display_nickname || '?').slice(0, 1))}</span><button data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button></div><div class="recommendation-body"><span class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><span class="recommendation-price">推荐时系统赔率 <strong>${decimal(s.recommendation_price)}</strong></span></div><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span>${betButtonMarkup(s)}<div class="recommendation-meta"><span>${esc(phases[s.phase] || '阶段未知')} · 报价 ${stamp(s.quote_time)}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button></div><div class="manual-bet-slot">${betResultMarkup(s.id)}</div></article>`
+  ).join('')}${match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
 }
 const vsIcons = [];
 // Every refresh rebuilds the rows. They adopt the icon nodes already in use,
@@ -350,7 +358,8 @@ function oddsCellMarkup(m) {
   const signals = m.expert_signals || [], more = m.expert_signals_has_more ? '+' : '';
   // The cell used to say "see below", which spends a column on nothing. It now
   // carries the count of expert picks on this match; the details stay below.
-  if (!signals.length) return '<span class="stale">暂无专家盘口</span>';
+  // No picks means a dash, not a sentence: the empty text repeated on every row.
+  if (!signals.length) return '<span class="odds-none" aria-label="本场暂无专家盘口">—</span>';
   const latest = signals[0];
   return `<span class="odds-market">${esc(signals.length)}${esc(more)} 条专家盘口</span><span>${esc(selection(latest.selection))} ${esc(lineLabel(latest))} ${decimal(latest.recommendation_price)}</span>`;
 }
