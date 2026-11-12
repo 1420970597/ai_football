@@ -73,3 +73,5 @@
 无确认新根因，未改业务/测试/部署、未创建fix commit或新业务发布，不修改模型/全局设置或其他禁止模块。既有13:38修复不能靠本旧窗重复核验验收，故不为本轮虚构修复或触发发布。既存.omc保留。原文/图片/轨迹未导出，raw=0，manifest.files=[]；没有临时模型凭据。
 
 15:35 UTC 最终验收：Docker无网络finish.py退出0，严格结果schema、数量/来源/连续分页/盘口与时延单位、6冻结脚本哈希、脱敏、报告JSON写后读回和空raw/manifest全部通过。git diff --check以及起点60d58c1c至今业务/测试/部署零变化检查0，仅既存.omc未跟踪保留。最终messages_examined=33、unresolved_examined=26仅指同哈希既有语义复用；7来源未完成分析，status=blocked。没有fix commit、新业务回归/构建/部署或资金测试；当前仅待脱敏证据提交推送及远端核对。
+
+15:36 UTC 证据ddc3450f8e5e93ae4dd55fc75391210adf17960b已commit/push/ls-remote精确核对，均0；规划a3b1310c亦已同步。提交后Docker无网络只读复核严格schema/报告读回/脱敏/6冻结哈希和空raw/manifest0；业务/测试/部署无变化，仅既存.omc保留。最终blocked，无fix commit/业务修复/新业务回归/新部署/历史重审或交易。下一步需要新增可核来源与历史时钟证据；同窗第十次无变化核验不恢复缺失证据，不增加独立准确率样本。
