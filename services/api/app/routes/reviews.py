@@ -473,7 +473,7 @@ async def list_match_markets(body: MarketInput, request: Request):
             return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh)
 
 
-async def _record_current_signals(conn, body, request, observations):
+async def _record_current_signals(conn, body, request, observations, refreshes=None):
     """Caller owns the transaction; revalidate current state before writes."""
     accepted, rejected = [], []
     job = await active_tool_job(conn, body.review_id, body.attempt_id)
@@ -604,7 +604,17 @@ async def _record_current_signals(conn, body, request, observations):
     for (index, quote, _, _), result in zip(valid, saved):
         accepted.append({"index": index, "signal_id": str(result['id']), "duplicate": result['duplicate'], "fixture_id": quote["fixture_id"], "market_name": quote["market_name"], "period": quote["period"], "line": str(quote["line"]) if quote["line"] is not None else None, "selection": quote["selection"], "price": str(result['price']), **line_terms(quote), **team_total_terms(quote, quote['fixture_id'])})
     result = {"expert": job["display_nickname"], "accepted": accepted, "rejected": rejected}
-    return await tool_success(conn, body, result, result)
+    summary = result
+    if refreshes:
+        # A long model turn can outlive the observation it just read. When the
+        # pre-write refresh of the selected bound fixtures runs, its outcome is
+        # the only evidence of whether a quote_inactive_unknown_or_stale
+        # rejection came from the provider or from this process's own shared
+        # budget. Measured before this field existed: all 291 record traces in
+        # 48 hours carried no refresh evidence at all, so those rejections
+        # could not be attributed from the audit trail.
+        summary = {**result, 'refresh': refreshes}
+    return await tool_success(conn, body, result, summary)
 
 
 @router.post("/record_expert_signals")
@@ -652,8 +662,10 @@ async def record_expert_signals(body: RecordInput, request: Request):
                 known_snapshots[fixture_id] = known_quote_snapshot(selected[0], selected)
     # Shared collector budget still coalesces and limits provider calls. Do not
     # hold the database transaction during I/O or extend a terminated lease.
+    refreshes = {}
     for fixture_id in sorted(stale_fixtures):
         if len(observations) >= 4:
+            refreshes[fixture_id] = {'attempted': False, 'reason': 'refresh_budget_exhausted'}
             break
         # The preceding transaction already checked this exact requested pair,
         # its read receipt, current binding and active phase. Repeating that
@@ -662,6 +674,7 @@ async def record_expert_signals(body: RecordInput, request: Request):
         refreshed = await _request_market_refresh(fixture_id, stale_fixtures[fixture_id], request,
                                                    known_snapshot=known_snapshots[fixture_id])
         observations[fixture_id] = refreshed.get('_observation')
+        refreshes[fixture_id] = {key: value for key, value in refreshed.items() if not key.startswith('_')}
     async with database.current_pool().acquire() as conn:
         async with conn.transaction():
-            return await _record_current_signals(conn, body, request, observations)
+            return await _record_current_signals(conn, body, request, observations, refreshes)

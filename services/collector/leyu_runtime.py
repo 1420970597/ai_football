@@ -154,7 +154,11 @@ class LeyuRuntime:
             try:
                 result = await self._collect(odds_mids=odds_mids)
             except RateLimited as exc:
-                self.request_budget.defer_requests(max(60, exc.retry_after_seconds or 0))
+                # Only a limit the provider returned is new evidence. A gate
+                # this poll already honoured would otherwise be extended from
+                # inside its own exception path.
+                if exc.category != 'shared_upstream_cooldown':
+                    self.request_budget.defer_requests(max(60, exc.retry_after_seconds or 0))
                 raise
             except LeyuError:
                 self.request_budget.defer_requests(2)

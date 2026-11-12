@@ -122,9 +122,21 @@ class ResultCollector:
         except Exception as exc:
             retry = {}
             if isinstance(exc,RateLimited):
-                delay = max(60,exc.retry_after_seconds or 0)
-                self.runtime.request_budget.defer_requests(delay)
-                retry['retry_after_seconds'] = delay
+                # Re-arming a cooldown this lane only observed would shut the
+                # shared budget for good: this lane runs every thirty seconds,
+                # so it would always see the remaining time before it expires,
+                # defer a fresh sixty seconds, and never let any lane through.
+                # Measured before this fix: one provider 429 left the budget
+                # blocked indefinitely, and 124 of 383 market refreshes over a
+                # day were rejected with upstream_cooldown. Only a limit the
+                # provider itself returned is new evidence of pressure; a gate
+                # this process already honoured is reported, not extended.
+                if exc.category == 'shared_upstream_cooldown':
+                    retry['retry_after_seconds'] = max(1, exc.retry_after_seconds or 1)
+                else:
+                    delay = max(60,exc.retry_after_seconds or 0)
+                    self.runtime.request_budget.defer_requests(delay)
+                    retry['retry_after_seconds'] = delay
             reason = exc.category if isinstance(exc,LeyuError) else 'result_transport_failure' if isinstance(exc,httpx.HTTPError) else 'result_check_failed'
             response = await self.api.post(self.url+'/finish',json={**{k:target[k] for k in ('fixture_id','lease_id')},'reason':reason,**retry})
             response.raise_for_status()

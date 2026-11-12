@@ -383,6 +383,7 @@ class CollectorService:
             retry_after = None
             stage = "source"
             problem = False
+            observed_gate = False
             try:
                 requested_mids: list[str] = []
                 def choose_odds(fixtures: list[dict[str, Any]]) -> list[str]:
@@ -442,6 +443,7 @@ class CollectorService:
                 problem = True
                 source_failure = stage == "source"
                 rate_limited = isinstance(exc, RateLimited)
+                observed_gate = rate_limited and exc.category == "shared_upstream_cooldown"
                 retry_after = exc.retry_after_seconds if rate_limited else None
                 update = {"state": "unavailable", "last_error": category(exc),
                           "last_error_code": exc.code if isinstance(exc, LeyuError) else "",
@@ -462,7 +464,10 @@ class CollectorService:
                     current_poll_completed_at=datetime.now(timezone.utc).isoformat())
             rate_limit_streak = rate_limit_streak + 1 if rate_limited else 0
             delay = collection_retry_delay(self.interval, failures, rate_limit_streak=rate_limit_streak, retry_after=retry_after)
-            if rate_limited or source_failure:
+            # A cooldown this loop merely observed was raised by its own budget
+            # gate, not by the provider. Re-arming it would escalate its own
+            # wait on every pass and the budget would never drain.
+            if (rate_limited and not observed_gate) or source_failure:
                 self.leyu_refresh.defer_requests(delay)
             self._poll_alert.observe(1 if problem else 0)
             self.status["leyu"].update(last_poll_at=poll_at.isoformat(),

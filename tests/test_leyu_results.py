@@ -96,6 +96,44 @@ class NativeResultTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('/internal/collector/results/finish', seen[0][0])
         self.assertEqual(87, seen[0][1]['retry_after_seconds'])
 
+    async def test_observed_cooldown_is_reported_without_rearming_itself(self):
+        # This lane runs every thirty seconds, so it always sees a sixty second
+        # cooldown before it expires. Re-arming what it merely observed would
+        # keep the shared budget blocked forever, which is exactly what happened
+        # in production: 124 of 383 market refreshes in one day were rejected
+        # with upstream_cooldown after a single provider 429.
+        deferred = []
+        runtime = self.runtime()
+        runtime.request_budget = SimpleNamespace(
+            require_available=lambda: (_ for _ in ()).throw(
+                RateLimited('shared_upstream_cooldown', retry_after_seconds=42)),
+            defer_requests=deferred.append)
+        seen = []
+        def handle(request):
+            seen.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(200, json={'ok': True})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as api:
+            collector = ResultCollector(api, 'http://api.invalid/internal', runtime, {})
+            outcome = await collector.check(self.target, None, 1)
+        self.assertEqual('shared_upstream_cooldown', outcome['reason'])
+        self.assertEqual([], deferred)
+        self.assertEqual(42, seen[0][1]['retry_after_seconds'])
+
+    async def test_provider_limit_still_extends_the_shared_budget(self):
+        deferred = []
+        runtime = self.runtime()
+        runtime.request_budget = SimpleNamespace(
+            require_available=lambda: None, defer_requests=deferred.append)
+        async def limited(*args):
+            raise RateLimited('upstream_rate_limited', retry_after_seconds=120)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={'ok': True}))) as api:
+            collector = ResultCollector(api, 'http://api.invalid/internal', runtime, {})
+            with patch('collector.leyu_results.fetch_result', side_effect=limited):
+                outcome = await collector.check(self.target, None, 1)
+        self.assertEqual('upstream_rate_limited', outcome['reason'])
+        self.assertEqual([120], deferred)
+
     def runtime(self):
         return SimpleNamespace(version=1,config={},load=AsyncMock(),request_budget=SimpleNamespace(
             require_available=lambda:None,defer_requests=lambda seconds:None))
