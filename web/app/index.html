@@ -181,6 +181,7 @@
             <button class="active" data-expert-sport="football" aria-pressed="true">足球专家推荐</button>
             <button data-expert-sport="basketball" aria-pressed="false">篮球专家推荐</button>
           </div>
+          <div id="expert-summary" class="expert-summary" aria-label="本页专家统计汇总"></div>
           <div class="stat-help">
             一单位收益使用推荐时系统赔率；准确率和收益不等同于实盘盈利。<button
               id="stats-help"
@@ -273,17 +274,26 @@
           <div class="section-title"><h2>权益说明</h2></div>
           <div class="benefit-grid">
             <article>
-              <span>▤</span>
+              <span aria-hidden="true"><svg
+                  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+                  stroke-linecap="round" stroke-linejoin="round"
+                ><path d="M5 4h11l3 3v13H5z" /><path d="M8 9h8M8 13h8M8 17h5" /></svg></span>
               <h3>完整专家记录</h3>
               <p>文字、图片、模型输出与工具证据可回查。</p>
             </article>
             <article>
-              <span>◎</span>
+              <span aria-hidden="true"><svg
+                  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+                  stroke-linecap="round" stroke-linejoin="round"
+                ><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /><path d="M12 4v5M12 15v5M4 12h5M15 12h5" /></svg></span>
               <h3>精确赛事与盘口</h3>
               <p>赛前与滚球分别绑定系统赛事及报价。</p>
             </article>
             <article>
-              <span>↗</span>
+              <span aria-hidden="true"><svg
+                  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+                  stroke-linecap="round" stroke-linejoin="round"
+                ><path d="M4 17l5-5 4 3 7-8" /><path d="M15 7h5v5" /></svg></span>
               <h3>透明收益统计</h3>
               <p>分清待结算、走盘、一单位收益与实盘收益。</p>
             </article>
@@ -924,12 +934,27 @@
       ><button data-page="admin">管理中心</button>
     </footer>
     <nav class="mobile-bottom" aria-label="手机主导航">
-      <button data-page="scores" class="active"><span>▣</span>比分</button
+      <button data-page="scores" class="active"><span aria-hidden="true"><svg
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+            stroke-linecap="round" stroke-linejoin="round"
+          ><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M3 15h18M8 4v16" /></svg></span>比分</button
       ><button data-page="scores" data-phase="scheduled">
-        <span>▦</span>赛程</button
-      ><button data-page="experts"><span>◎</span>专家</button
-      ><button data-page="membership"><span>♧</span>会员</button
-      ><button data-page="account"><span>♙</span>我的</button>
+        <span aria-hidden="true"><svg
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+            stroke-linecap="round" stroke-linejoin="round"
+          ><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M8 3v4M16 3v4M3 11h18" /></svg></span>赛程</button
+      ><button data-page="experts"><span aria-hidden="true"><svg
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+            stroke-linecap="round" stroke-linejoin="round"
+          ><circle cx="12" cy="8" r="3.5" /><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6" /></svg></span>专家</button
+      ><button data-page="membership"><span aria-hidden="true"><svg
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+            stroke-linecap="round" stroke-linejoin="round"
+          ><path d="M4 8h16v3a2 2 0 0 0 0 4v3H4v-3a2 2 0 0 0 0-4z" /><path d="M13 8v10" /></svg></span>会员</button
+      ><button data-page="account"><span aria-hidden="true"><svg
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+            stroke-linecap="round" stroke-linejoin="round"
+          ><circle cx="12" cy="9" r="3.5" /><path d="M5 20.5c0-3.6 3.1-6.5 7-6.5s7 2.9 7 6.5" /></svg></span>我的</button>
     </nav>
     <dialog id="auth-dialog" aria-labelledby="auth-title">
       <div class="dialog-header">

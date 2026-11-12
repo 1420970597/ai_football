@@ -666,6 +666,36 @@ function effectiveSettledCount(expert) {
   const counts = ['win', 'half_win', 'loss', 'half_loss'].map(key => expert[key]);
   return counts.every(count => Number.isInteger(count) && count >= 0) ? counts.reduce((sum, count) => sum + count, 0) : null;
 }
+function renderExpertSummary(experts) {
+  const box = $("#expert-summary");
+  if (!box) return;
+  // Summarised from the list already on screen; asking the API for a second
+  // aggregate would let the two disagree about the same window.
+  const settled = experts.reduce((sum, e) => {
+    const count = effectiveSettledCount(e);
+    return sum + (Number.isFinite(count) ? count : 0);
+  }, 0);
+  const net = experts.reduce((sum, e) => sum + (Number(e.unit_net) || 0), 0);
+  const weighted = experts.reduce((sum, e) => {
+    const count = Number(e.effective_settled_signals ?? effectiveSettledCount(e));
+    const accuracy = Number(e.accuracy);
+    return sum + (Number.isFinite(count) && Number.isFinite(accuracy) ? count * accuracy : 0);
+  }, 0);
+  const accuracy = settled > 0 ? weighted / settled : null;
+  const tone = net > 0 ? "positive" : net < 0 ? "negative" : "";
+  const cells = [
+    ["专家数", experts.length ? String(experts.length) : "样本不足", ""],
+    ["有效结算", settled ? String(settled) : "样本不足", ""],
+    ["准确率", settled ? percent(accuracy) : "样本不足", ""],
+    ["1单位净收益", settled ? signed(net) : "样本不足", settled ? tone : ""],
+  ];
+  box.innerHTML = cells
+    .map(([label, value, extra]) =>
+      `<div class="expert-summary-item"><small>${esc(label)}</small><strong class="${extra}">${esc(value)}</strong></div>`,
+    )
+    .join("");
+}
+
 function renderExperts() {
   const sportLabel = state.expertFilters.sport === 'basketball' ? '篮球' : '足球';
   $('#experts-title').textContent = sportLabel + '专家推荐';
@@ -682,6 +712,7 @@ function renderExperts() {
     )
     .join("");
   applyExpertFollowing();
+  renderExpertSummary(experts);
   $("#top-experts").innerHTML =
     experts
       .slice(0, 5)
