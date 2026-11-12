@@ -1,6 +1,6 @@
 {
   "format": "football-visual-baseline-v1",
-  "fixture_sha256": "d19b7fbdad0dbfe641f94a1221b1b69e8d09e9491f0be402e509f445157678fb",
+  "fixture_sha256": "59c897f5c3d59a6c4026f9bdaf7f3aa21306f90a98fc7b0d814574e95860889e",
   "browser_version": "141.0.7390.37",
   "locale": "zh-CN",
   "timezone": "Asia/Shanghai",
@@ -19,7 +19,7 @@
         "height": 960
       },
       "file": "scores-1440.png",
-      "sha256": "e503a60e1702c54e1af424733ebe70f6ccc87a797977e3702ffd26a3f9c81c3f",
+      "sha256": "7cc944bd81e796cfa6a7d158e88af9f46446a2d798b6deb8a20c1a5058cd86a1",
       "status": "baseline_written"
     },
     {
@@ -29,7 +29,7 @@
         "height": 960
       },
       "file": "schedule-1440.png",
-      "sha256": "fde476c5595be98c97b5e3a34f813726db7da94f0381bc8d936db24261f5e32b",
+      "sha256": "c6227b4a59d506729e8cb7382255e70de46a8923a9d372c1ed7aed0fbf217cae",
       "status": "baseline_written"
     },
     {
@@ -39,7 +39,7 @@
         "height": 960
       },
       "file": "experts-1440.png",
-      "sha256": "57e8cc620f12c82f77b41953fa5d192b667cb03be28f0c2fcd4fde8ce8de9486",
+      "sha256": "d4c38fd80c711fb42cd22baa8751a736d98728ae813139d668a01f89a30ebffe",
       "status": "baseline_written"
     },
     {
@@ -49,7 +49,7 @@
         "height": 960
       },
       "file": "membership-1440.png",
-      "sha256": "06df285413a4bd4bac6fed2ab4b908bc63e11b289214cff9471f049ee2cc8c6f",
+      "sha256": "e121a10932f9ce54eb80d38c2f93dbb4904651be19260fcec4e9e98459691977",
       "status": "baseline_written"
     },
     {
@@ -59,7 +59,7 @@
         "height": 960
       },
       "file": "account-guest-1440.png",
-      "sha256": "89846b274a0ebac7deaeaa8792359b4123614814313952e80db2023f1fe9ff0e",
+      "sha256": "d93ea06b9af06558492b5f187b4a04c4fbf26606480a69b5ce6c6c2dce2480d4",
       "status": "baseline_written"
     },
     {
@@ -69,7 +69,7 @@
         "height": 960
       },
       "file": "admin-guest-1440.png",
-      "sha256": "1aa27848051fdfee80bf5eac13c1df40d8ce7af2055f95d55a1987d34202dae5",
+      "sha256": "0f2c34705fe44b8a78725aae98a26a4d2499b5bc6abe33c0238829aa841db8b4",
       "status": "baseline_written"
     },
     {
@@ -79,7 +79,7 @@
         "height": 960
       },
       "file": "match-detail-1440.png",
-      "sha256": "f2bdaa23a71eaa599db79c44a9239a25b4195b284bd9e9d6a66925d414952e50",
+      "sha256": "9fe243099b95cf42363ebe613138cc7d0cffb030f7fbd5a700ddcb0d91f45015",
       "status": "baseline_written"
     },
     {
@@ -89,7 +89,7 @@
         "height": 844
       },
       "file": "scores-390.png",
-      "sha256": "22b42e36b5c3f461c31985aa8b3959b1344473f214ba088242670cbc341110f7",
+      "sha256": "2dc7cf6bf72d901a9e29868ece3f8b9a8337f610e2a654bd6656fba4e91f0d4f",
       "status": "baseline_written"
     },
     {
@@ -99,7 +99,7 @@
         "height": 844
       },
       "file": "schedule-390.png",
-      "sha256": "551d2da1aba02cb7c52e03ead4033e87b4f6b77420a0e1c75f29cf960d3719fb",
+      "sha256": "8a7830c2bd0a33ef9cf33e859725ba510bb1b0ece1cdf9dcb7d9076e1bd63c82",
       "status": "baseline_written"
     },
     {
@@ -109,7 +109,7 @@
         "height": 844
       },
       "file": "experts-390.png",
-      "sha256": "d1e8ea68bb72aedcbfb14aa82b41662189f2f2bf6b913d70413d9846413ad77a",
+      "sha256": "ff11ba34dbb658036c25c1508cf8f26c22acd29060b8986bab28f470de056df5",
       "status": "baseline_written"
     },
     {
@@ -119,7 +119,7 @@
         "height": 844
       },
       "file": "membership-390.png",
-      "sha256": "14e3089cd509c61c8b7388c51d9436be0b8d8a11c3517ac28059be54f688b302",
+      "sha256": "7807b200d7e6180b275a6cdba4defa9739455f548e1b35456bf6c37df0b0b8b5",
       "status": "baseline_written"
     },
     {
@@ -129,7 +129,7 @@
         "height": 844
       },
       "file": "account-guest-390.png",
-      "sha256": "1932a99e21c2c3d70f3b193321948a3320733034a3525b229d9a25286740144a",
+      "sha256": "87843dcaaae43cc8e1949cf0982655ad2d9a9d34b4ace7449acfbcc37f6818da",
       "status": "baseline_written"
     },
     {
@@ -139,7 +139,7 @@
         "height": 844
       },
       "file": "admin-guest-390.png",
-      "sha256": "37ceb0edde89ca016d9bf4c15d192e6474ccfc89fe0d498da8ebc591ccad1824",
+      "sha256": "f0524a68511541d877c90804572163e57073ce47ecbad01d807c744063b688eb",
       "status": "baseline_written"
     },
     {
@@ -149,7 +149,7 @@
         "height": 844
       },
       "file": "match-detail-390.png",
-      "sha256": "b1473ea4d7cf03dd3e6275dcd40d35e60837e27dc9c866cbd98f53e913543d62",
+      "sha256": "970b29f242c6e5e8d91fd96a97fd346d9e07f81407c6efff177f4d339b88ae78",
       "status": "baseline_written"
     }
   ]

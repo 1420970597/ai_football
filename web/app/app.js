@@ -239,6 +239,19 @@ function renderDates() {
       return `<button data-date="${date}" aria-pressed="${offset === 0}" class="${offset === 0 ? "active" : ""}${date === today ? " today" : ""}">${label}<small>${date.slice(5).replace("-", "/")}</small></button>`;
     })
     .join("");
+  // 日期条在窄屏是横向滚动容器。选中日期必须自己滚进可视区：
+  // 390 下「今日」原本被裁掉 22px，360 下被裁掉 52px，用户看不到当前选中项。
+  // 只滚动这条 strip，不能用 scrollIntoView：它会连带滚动整个文档，
+  // 把 Chromium 的 Tab 顺序起点挪到当前视口，首个 Tab 就跳过页首「跳至主要内容」。
+  {
+    const strip = $("#date-buttons"),
+      active = strip?.querySelector(".active");
+    if (strip && active && strip.scrollWidth > strip.clientWidth) {
+      const box = strip.getBoundingClientRect(),
+        cell = active.getBoundingClientRect();
+      strip.scrollLeft += cell.left - box.left - (box.width - cell.width) / 2;
+    }
+  }
   for (const button of $$(".score-tabs [data-phase],[data-sport]")) {
     const selected = button.dataset.phase
       ? button.dataset.phase === state.phase
@@ -339,7 +352,7 @@ function matchRecommendationMarkup(match) {
   // filter had worked.
   if (!signals.length && !match.expert_signals_has_more) return '';
   return `<section class="match-recommendations" aria-label="本场专家关联盘口">${signals.map(s =>
-    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div class="recommendation-expert"><span class="avatar" aria-hidden="true">${esc((s.display_nickname || '?').slice(0, 1))}</span><button data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button></div><div class="recommendation-body"><span class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><span class="recommendation-price">推荐时系统赔率 <strong>${decimal(s.recommendation_price)}</strong></span></div><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span>${betButtonMarkup(s)}<div class="recommendation-meta"><span>${esc(phases[s.phase] || '阶段未知')} · 报价 ${stamp(s.quote_time)}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button></div><div class="manual-bet-slot">${betResultMarkup(s.id)}</div></article>`
+    `<article class="match-recommendation" data-recommendation="${esc(s.id)}"><div class="recommendation-expert"><span class="avatar" aria-hidden="true">${esc((s.display_nickname || '?').slice(0, 1))}</span><button data-expert="${esc(s.expert_id)}">${esc(s.display_nickname || '专家昵称未记录')}</button></div><div class="recommendation-body"><span class="recommendation-market">${esc(s.market_name || '盘口')} · ${esc(period(s.period))} · ${esc(lineLabel(s))} · <strong>${esc(selection(s.selection))}</strong></span><span class="recommendation-price">推荐时系统赔率 <strong>${decimal(s.recommendation_price)}</strong></span><div class="recommendation-meta"><span>${esc(phases[s.phase] || '阶段未知')} · 报价 ${stamp(s.quote_time)}</span><button class="text-link" data-signal="${esc(s.id)}">原文与审核</button></div></div><span class="badge ${esc(s.outcome)}">${esc(outcomes[s.outcome] || '结算状态未知')}</span>${betButtonMarkup(s)}<div class="manual-bet-slot">${betResultMarkup(s.id)}</div></article>`
   ).join('')}${match.expert_signals_has_more ? `<button class="text-link" data-match="${esc(match.id)}">更多本场专家记录 ›</button>` : ''}</section>`;
 }
 const vsIcons = [];

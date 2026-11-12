@@ -1046,7 +1046,13 @@ h3 {
   color: var(--brand);
 }
 .recommendation-body {
+  /* 正文列自己承载「盘口 → 赔率 → 元信息」：元信息贴到正文列底部，
+     与买入按钮列的下沿对齐。原来元信息单独占一整行，
+     卡高由 44px 按钮列决定，正文下方空出 32px。 */
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  align-self: stretch;
 }
 .recommendation-market {
   color: var(--ink-2);
@@ -1074,10 +1080,11 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 .recommendation-meta {
-  grid-column: 2 / -1;
   display: flex;
   align-items: center;
   gap: var(--s3);
+  margin-top: auto;
+  padding-top: var(--s2);
   font-size: var(--text-2xs);
   color: var(--muted);
 }
@@ -2709,9 +2716,16 @@ dialog[open] {
   .filter-row input {
     font-size: var(--text-xs);
   }
-  .filter-row > .small-button {
+  /* 用后代选择器而不是 `>`：`#league-filter` 包在 <label> 里，子选择器够不到它，
+     而它同样会在 360/375 下折成两行（实测 HEAD 就是 46px）。 */
+  .filter-row > .small-button,
+  .strip-filters .small-button {
     padding: var(--s1) var(--s2);
     font-size: var(--text-xs);
+    /* 「全部联赛 ▾」「☆ 关注」在 360/390 下墨迹只需 44–52px，但被 flex 压缩后
+       折成两行、行高翻倍，把整条筛选栏顶高。保持单行，宽度随内容。 */
+    white-space: nowrap;
+    flex: 0 0 auto;
   }
 
   /* 比赛行重排：时间/状态 → 队名与比分 → 盘口 */
@@ -3212,8 +3226,10 @@ dialog[open] {
     text-align: left;
   }
   .recommendation-meta {
-    grid-column: 1 / -1;
-    grid-row: auto;
+    /* 窄屏正文列不再有固定高度，margin-top:auto 自然收敛为 0；
+       上方 8px 间距由本元素的 padding-top 提供，与桌面一致。
+       再叠一层 margin 会让赔率与元信息之间出现 16px 空档。 */
+    margin-top: 0;
     flex-wrap: wrap;
     gap: var(--s1) var(--s3);
   }

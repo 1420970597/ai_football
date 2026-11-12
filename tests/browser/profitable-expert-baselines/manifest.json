@@ -8,7 +8,7 @@
     {
       "width": 1440,
       "file": "profitable-mode-1440.png",
-      "sha256": "5360de377706cf3b9de9570318fd8863bd44e8c3c23de4e7074532e129c12f66",
+      "sha256": "8bc6f0f84de0d70d98dbaa2ba05723a0dda9250b43e01874af33906bb9f78ab5",
       "status": "baseline_written",
       "clicks": "passed",
       "owner_confirmation": "required",
@@ -17,7 +17,7 @@
     {
       "width": 390,
       "file": "profitable-mode-390.png",
-      "sha256": "74188dda65b99a28aec3b3bc12ee36dc15deb7d98485f62dfb3673d45a7a9258",
+      "sha256": "72d8d24c34498b0017d8426f78ea84f680a9ee36de4663035642de2aae845b6e",
       "status": "baseline_written",
       "clicks": "passed",
       "owner_confirmation": "required",
