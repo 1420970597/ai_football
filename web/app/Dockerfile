@@ -10,4 +10,6 @@ COPY web/app/account-history.js /usr/share/nginx/html/assets/account-history.js
 COPY web/app/qrcode.js /usr/share/nginx/html/assets/qrcode.js
 COPY web/app/qrcode.LICENSE /usr/share/nginx/html/assets/qrcode.LICENSE
 COPY web/app/cc-reference /usr/share/nginx/html/assets/cc-reference
+COPY web/app/version-assets.sh /tmp/version-assets.sh
+RUN sh /tmp/version-assets.sh && rm /tmp/version-assets.sh
 EXPOSE 80

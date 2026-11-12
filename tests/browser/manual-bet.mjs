@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fixtureRoute, instant, fixtures } from './visual-fixture.mjs';
 
 const output = process.env.BROWSER_EVIDENCE_DIR || '/evidence';
+const baseUrl = process.env.MANUAL_BET_BASE_URL || 'http://127.0.0.1:8080';
 await fs.mkdir(output, { recursive: true });
 const server = http.createServer(async (req, res) => {
   try {
@@ -67,7 +68,7 @@ try {
       const page = await context.newPage();
       page.on('pageerror', error => errors.push(`${width} blocked: ${error.message}`));
       await open(page, mode);
-      await page.goto('http://127.0.0.1:8080/#scores?scope=recommended');
+      await page.goto(baseUrl+'/#scores?scope=recommended');
       await page.waitForLoadState('networkidle');
       const button = page.locator('[data-bet-signal]').first();
       await button.waitFor();
@@ -87,7 +88,7 @@ try {
       const page = await context.newPage();
       page.on('pageerror', error => errors.push(`${width} unset: ${error.message}`));
       await open(page, { stake_per_order: '0', enabled: false });
-      await page.goto('http://127.0.0.1:8080/#scores?scope=recommended');
+      await page.goto(baseUrl+'/#scores?scope=recommended');
       await page.waitForLoadState('networkidle');
       const button = page.locator('[data-bet-signal]').first();
       await button.waitFor();
@@ -104,7 +105,7 @@ try {
       const page = await context.newPage();
       page.on('pageerror', error => errors.push(`${width} enabled: ${error.message}`));
       await open(page, {});
-      await page.goto('http://127.0.0.1:8080/#scores?scope=recommended');
+      await page.goto(baseUrl+'/#scores?scope=recommended');
       await page.waitForLoadState('networkidle');
       const button = page.locator('[data-bet-signal]').first();
       await button.waitFor();
@@ -143,7 +144,7 @@ try {
       const page = await context.newPage();
       page.on('pageerror', error => errors.push(`${width} rejected: ${error.message}`));
       await open(page, { __fail: true });
-      await page.goto('http://127.0.0.1:8080/#scores?scope=recommended');
+      await page.goto(baseUrl+'/#scores?scope=recommended');
       await page.waitForLoadState('networkidle');
       await page.locator('[data-bet-signal]').first().click();
       await page.locator('#confirm-yes').click();

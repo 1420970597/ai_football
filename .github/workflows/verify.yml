@@ -50,6 +50,8 @@ jobs:
         run: sh tests/browser/model-configuration-check.sh
       - name: Frozen fixture screenshot regression
         run: sh tests/browser/visual-check.sh
+      - name: Content-versioned nginx assets and stale edge cache isolation
+        run: sh tests/web/asset-versioning-check.sh
       - name: Complete market pagination and late response isolation
         run: sh tests/browser/match-markets-check.sh
       - name: Browser with real API and temporary database
@@ -70,6 +72,10 @@ jobs:
             .runtime/visual-ui-*/*.png
             .runtime/match-markets-ui-*/results.json
             .runtime/match-markets-ui-*/*.png
+            .runtime/web-assets-*/asset-versioning-results.json
+            .runtime/web-assets-*/visual-results.json
+            .runtime/web-assets-*/manual-bet-results.json
+            .runtime/web-assets-*/image-id.txt
           include-hidden-files: true
           retention-days: 14
   android:

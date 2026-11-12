@@ -7,6 +7,8 @@ import path from 'node:path';
 import {fixtureRoute,instant} from './visual-fixture.mjs';
 import {comparePixels,decodePng} from './visual-pixels.mjs';
 const root='/work/web/app',baseline='/work/tests/browser/visual-baselines',output=process.env.VISUAL_RESULTS||'/evidence';
+// Allow the same frozen fixtures and pixels to validate the actual nginx image.
+const baseUrl=process.env.VISUAL_BASE_URL||'http://127.0.0.1:8080';
 const update=process.argv.includes('--update');
 if(update&&process.env.VISUAL_BASELINE_UPDATE!=='reviewed')throw Error('explicit reviewed baseline update required');
 const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
@@ -37,7 +39,7 @@ try{
     await page.route('**/api/v1/**',fixtureRoute);
     const screens=[['scores','#scores'],['schedule','#scores?phase=scheduled'],['experts','#experts'],['membership','#membership'],['account-guest','#account'],['admin-guest','#admin'],['match-detail','#scores?match=visual-match-0']];
     for(const [name,route] of screens){
-      await page.goto('http://127.0.0.1:8080/'+route);await page.waitForLoadState('networkidle');
+      await page.goto(baseUrl+'/'+route);await page.waitForLoadState('networkidle');
       if(name==='scores'||name==='schedule')await page.locator('.match-row').first().waitFor({timeout:10000}).catch(async error=>{
         console.log('fixture empty scores: '+await page.locator('#matches-state').textContent());throw error;
       });
