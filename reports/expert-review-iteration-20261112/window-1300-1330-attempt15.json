@@ -3,7 +3,7 @@
   "window_start": "2026-11-12T13:00:00Z",
   "window_end": "2026-11-12T13:30:00Z",
   "attempt": 15,
-  "updated_at": "2026-11-12T16:27:53.924032+00:00",
+  "updated_at": "2026-11-12T16:33:16.017553+00:00",
   "status": "blocked",
   "readonly": true,
   "tls_verified": true,
@@ -1191,7 +1191,7 @@
   },
   "source_semantics_basis": "Existing source-only independent extraction reused after all 40 source hashes, 10 authorized image hashes and 33 full trace hashes were revalidated; no new semantic extraction or human image inspection.",
   "evidence_hashes": {
-    "window_sha256": "92fbdd9ffa4fc7ed4f29fef7bdf1f58877ca564f42ce11baba924ae4fcb195c1",
+    "window_sha256": "0f3edabd97a5757110f3e71adf8534eae32a9abbca05682583d938f2b03f43a6",
     "quote_snapshot_sha256": "c05acfc57847da32b7e5060d59cba5871d100c8336dba57bc6f6f71a4a584004",
     "media_sha256": [
       "fe25bcf32950113a2294a8792a1f52cd1bfb58acab2fd722ff0b46f1021cfffe",
@@ -1432,10 +1432,10 @@
     "result-schema.json": "569418de92a306dd08efe75ef645bbdcba875fbe9a3156638ae70b342a38ead7",
     "gap-probe.py": "4df52b37ace18b2f27ac358dd1a6479ec4faa11fe666ecad64835ceb5a297a22",
     "latency-phases.py": "9a2f1be9e0d31f68089956d6aa0421620c65e3aea3d14f4473dc60e33eed77a3",
-    "reply-clock-probe.py": "24b523ba9f328d993a3c816d112c81967ee56eef681830ae5ab9fa9d4e97a4d7",
-    "collector-contract.py": "5c54a9254f5b53c033aede90d690f973f0e01d55bc08ca1987c4961e5d283c6e",
-    "prepare-finish.py": "0eb1d045630e9d964a9ac6923ba7ffaec41c7b35a55a70032d2fecd206411b4f",
-    "finish.py": "c9f94fac17567ec8b5b7bb687c8dbb470d83456633c59d228ed5a04e17313d5a"
+    "reply-clock-probe.py": "515b3c0dc31ab69f6b2c868dcf68d6fec0d4fb71c2264463e8863ad2f702e3f3",
+    "collector-contract.py": "aeebaff1a5d2cde20902142e3b5988a1f1766fc9907ff520604adcd554bc8cbf",
+    "prepare-finish.py": "0e08f2534ba6ab1f06f56d0f67fde4ab98b508eef465d2767896c574b43f39d3",
+    "finish.py": "1e123d4ea59ff97a9ddf51a91c7c6bb3930d4db6c44f182f5946923e7640553f"
   },
   "evidence_gap_probe": {
     "schema_version": 1,
@@ -1656,17 +1656,39 @@
       "business_failure": false
     }
   ],
-  "investigation_validation_failures": [],
+  "investigation_validation_failures": [
+    {
+      "operation": "post-commit read-only redaction validation",
+      "exit_code": 1,
+      "cause": "anonymous builder-count metadata key contained a forbidden source-field substring; finish added metadata after its last redaction check",
+      "aggregate_shell_exit_code": 0,
+      "aggregate_status_not_used_as_validation": true,
+      "corrected_by": "rename anonymous count key and re-run full redaction after all added metadata; refreeze investigation scripts",
+      "rerun_exit_code": 0,
+      "business_failure": false,
+      "source_or_identity_values_leaked": false
+    },
+    {
+      "operation": "full finish validation rerun",
+      "exit_code": 1,
+      "cause": "a second anonymous reply-count metadata key retained the same forbidden substring",
+      "corrected_by": "rename both anonymous count fields; preserve final redaction allowlist and refreeze investigation scripts",
+      "rerun_exit_code": 0,
+      "business_failure": false,
+      "report_written_before_failure": false,
+      "source_or_identity_values_leaked": false
+    }
+  ],
   "reply_clock_metadata_probe": {
     "schema_version": 1,
     "attempt": 15,
     "window_start": "2026-11-12T13:00:00Z",
     "window_end": "2026-11-12T13:30:00Z",
-    "at": "2026-11-12T16:29:32.969358+00:00",
+    "at": "2026-11-12T16:33:58.248357+00:00",
     "tls": true,
     "read_only": "on",
     "metadata_versions": 40,
-    "reply_contexts": 1,
+    "reply_count": 1,
     "timestamp_allowlist_size": 8,
     "message_context_clock_key_count": 0,
     "event_context_clock_key_count": 0,
@@ -1676,7 +1698,7 @@
   },
   "collector_reply_clock_contract": {
     "collector_source_sha256": "25dfb7e0ad234fe0f913bb496a52985a19f7f0950e59404eabc4f1e095f500d2",
-    "reply_context_builder_count": 1,
+    "reply_builder_count": 1,
     "original_reply_time_written": false,
     "source_read_only": true,
     "interpretation": "Current collector builder does not persist original reply time; this explains provenance visibility only and is not evidence of a unique recommendation omission."
