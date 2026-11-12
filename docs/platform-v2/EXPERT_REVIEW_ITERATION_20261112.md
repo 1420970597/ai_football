@@ -101,3 +101,5 @@
 2026-11-12 15:14 UTC attempt8最终验收：Docker无网络finish.py严格schema、数量/分页/盘口/时延单位、6冻结脚本/schema、探针、脱敏及空raw/manifest和JSON读回均0；git diff --check及起点22df47e6至今业务/测试/部署零变更0。报告window-1300-1330-attempt8.{md,json}，33来源语义/26未解决为同哈希复用，7来源未完成分析，最终blocked。活动阶段为文档证据提交推送，无fix commit、新业务回归、部署或资金测试，.omc保留。
 
 2026-11-12 15:15 UTC attempt8证据01b37dd661b7af93117da2d3ab1263cb05fc5967已push且远端精确一致，commit/push/核对均0；规划0846b68d亦已同步。提交后Docker无网络读回/脱敏/schema字段/冻结哈希/空raw和manifest检查0，业务/测试/部署零变更0，.omc保留。最终blocked，1回复/6音视频未完成语义，5表达及接受名称/期间和历史计时仍缺证；无fix commit、新业务回归、部署、模型调用、历史重审或资金测试。本条作为独立进程交接；同哈希重复核验不能恢复历史检测时钟或增加准确率样本。
+
+2026-11-12 15:22 UTC attempt9独立规划：仅固定半开窗13:00–13:30，权威分支起点39f1e65f及远端一致，既存.omc保留。已读AGENTS/交接/上一窗及attempt8结论，Git/Docker/脚本读取0；当前40/34/7仅为前次证据，不能提前当本轮DB结果。工作包见window-1300-1330-attempt9.md，优先增量及已知历史计时键嵌套探针；原始材料只在Docker内存、未知时间回复排除，raw导出0。先提交规划并核对远端，再TLS只读核验；有证据缺口继续blocked。
