@@ -22,7 +22,7 @@
 | 检查 | 结果 |
 | --- | --- |
 | `verify.mjs` | 68 PASS / 0 FAIL |
-| `verify.mjs --a11y` | 38 扫描、29 检查、0 违规、0 浏览器错误 |
+| `verify.mjs --a11y` | 30 扫描、23 检查、0 违规、0 浏览器错误 |
 | `homepage-expert-matches.mjs` | 1440/1030/390 全通过 |
 | `manual-bet.mjs` | `ok:18` |
 | `basketball-score-display.mjs` | 2/2 |

@@ -5767,7 +5767,7 @@ BUG-EXPERT-RESULT-20261111：研究及规划阶段 `bb6b56ea` 已提交推送并
 
 `refactor/TASK-78-web-ux` 提交 `f0dd1c8c` 已推送并与远端引用核对一致。该提交含三处测量后修正的排版缺陷（推荐卡正文 31.9px 空洞、窄屏多 8px、筛选栏折行、选中日期被裁），14 张视觉基线与控制组基线均按当前源码重新渲染并逐张复核后同提交落地（详见 `VISUAL_REDESIGN_RELEASE_20261112.md`）。
 
-验证：`verify.mjs` 68 PASS/0 FAIL；`verify.mjs --a11y` 38 扫描/29 检查/0 违规/0 页面错误；`manual-bet` ok:18；`first-screen-requests` 10/10；`homepage-account-history` 12/12；`basketball-score-display` 与 `sports-expert-statistics` 各 2/2；`visual-check.sh` 比对模式三项全 PASS。连续两次同源生成基线在阈值内差异 0 像素，截图确定性成立。
+验证：`verify.mjs` 68 PASS/0 FAIL；`verify.mjs --a11y` 30 扫描/23 检查/0 违规/0 页面错误；`manual-bet` ok:18；`first-screen-requests` 10/10；`homepage-account-history` 12/12；`basketball-score-display` 与 `sports-expert-statistics` 各 2/2；`visual-check.sh` 比对模式三项全 PASS。连续两次同源生成基线在阈值内差异 0 像素，截图确定性成立。
 
 上线：镜像 `sha256:270af6e3…`，候选 `.runtime/task78-visual-ux-20261112/candidate.yml`，沿用 176 层 compose 链仅重建 web，退出 0；其余 10 个服务容器 ID 未变。web 由 `0c39e031…`（CSS 2496 行）切到 `270af6e3…`（CSS 3361 行），healthy、restart 0。外部 `https://football.5545.eu.cc` 首页/`app.css`/`app.js` 均 200；真实 Chromium 1440/390 打开线上比分页 24 行、无横向溢出、无 JS 异常（两个 401 为游客 `/auth/me` 预期）。
 
