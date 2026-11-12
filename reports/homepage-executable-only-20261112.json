@@ -1,0 +1,398 @@
+{
+  "task": "homepage-executable-only-and-current-odds",
+  "source_commit": "80480f497453e3ba23affc4e39f6665e5e980bad",
+  "version": "2.0.0-dev-executable.20261112.1",
+  "status": "production-entry-accepted",
+  "production_writes": 0,
+  "checks": {
+    "source-check": {
+      "status": "passed",
+      "api_app_changed": [
+        "app/routes/public.py"
+      ],
+      "source_sha256": "f6f89b33e177e6cd7797f03450039f5f48bde2284d9b88bf8ef7d153d66fce18",
+      "frozen_tests": 49,
+      "web_source_exact": true,
+      "web_assets": 10,
+      "source_commit": "80480f497453e3ba23affc4e39f6665e5e980bad",
+      "config_changed": [
+        "api.image",
+        "web.image"
+      ]
+    },
+    "post-check": {
+      "status": "passed",
+      "config_changed": [
+        "api.image",
+        "web.image"
+      ],
+      "other_services_unchanged": 8,
+      "images": {
+        "api": "sha256:3b5ab51b46b81dda6b9ee309846877ce1c207c18a1f783c82728182c4f62f3be",
+        "web": "sha256:39f76615ff4166cd095a79e9561cd51336d06df288533e131df990f8c72dccae"
+      }
+    },
+    "live-read": {
+      "at": "2026-11-12T08:23:11.338806+00:00",
+      "read_only": true,
+      "production_writes": 0,
+      "results": [
+        {
+          "sport": "football",
+          "http": 200,
+          "matches": 0,
+          "eligible_signals_verified": 0,
+          "all_matches": 200,
+          "ms": 276
+        },
+        {
+          "sport": "basketball",
+          "http": 200,
+          "matches": 0,
+          "eligible_signals_verified": 0,
+          "all_matches": 200,
+          "ms": 111
+        }
+      ],
+      "existing_pending_age_summary": {
+        "pending": 92,
+        "older_than_order_window": 91
+      }
+    },
+    "production-api": {
+      "status": "passed",
+      "at": "2026-11-12T08:31:06.916540+00:00",
+      "production_writes": 0,
+      "asset_prefix": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/",
+      "assets_verified": [
+        {
+          "entry": "3003",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/account-history.js",
+          "sha256": "fb5052d67c44ea1958dd32e55890f4e45023c7290d5fc7ca9947eda602efdbdf"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/admin.js",
+          "sha256": "d1ea1b128f7bd033b98f0727e9f2a595bffb547ea8be4147efa80cb0d892cd69"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/app.css",
+          "sha256": "2428b28b2df0122e948a98d7da66332d2d11902cfc0dc013a3ac493b26b67db7"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/app.js",
+          "sha256": "32a7adcbb74408c588b59365304d109c4a0a2cd6cc287ab4f2bf25b643458014"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/cc-reference/home_announcement_icon.png",
+          "sha256": "eef1d1c46b5f196252e3c84949c7a5add411e97918a9c48b12a81074b415bc9c"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/cc-reference/home_match_vs_icon.png",
+          "sha256": "13823abb3f43e1560ac5ac642641d2167251c220add402985ea88a3cc49fe310"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/identity.js",
+          "sha256": "77f0cab62ca8d3baa2c5c9aa993448d99e5e3bcefd94be5df8a61d3153bfeaf2"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/qrcode.js",
+          "sha256": "18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780"
+        },
+        {
+          "entry": "3003",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/ui.js",
+          "sha256": "71ff0f33cff1ab7d6b467d59b64f9e438a92c5e2cbee7955fdfa901d4b2c0f33"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/account-history.js",
+          "sha256": "fb5052d67c44ea1958dd32e55890f4e45023c7290d5fc7ca9947eda602efdbdf"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/admin.js",
+          "sha256": "d1ea1b128f7bd033b98f0727e9f2a595bffb547ea8be4147efa80cb0d892cd69"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/app.css",
+          "sha256": "2428b28b2df0122e948a98d7da66332d2d11902cfc0dc013a3ac493b26b67db7"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/app.js",
+          "sha256": "32a7adcbb74408c588b59365304d109c4a0a2cd6cc287ab4f2bf25b643458014"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/cc-reference/home_announcement_icon.png",
+          "sha256": "eef1d1c46b5f196252e3c84949c7a5add411e97918a9c48b12a81074b415bc9c"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/cc-reference/home_match_vs_icon.png",
+          "sha256": "13823abb3f43e1560ac5ac642641d2167251c220add402985ea88a3cc49fe310"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/identity.js",
+          "sha256": "77f0cab62ca8d3baa2c5c9aa993448d99e5e3bcefd94be5df8a61d3153bfeaf2"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/qrcode.js",
+          "sha256": "18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780"
+        },
+        {
+          "entry": "public",
+          "path": "/assets/ve8df0db8178c56598857fbc468acc832b09e78ff2d950e2530f61448de53832a/ui.js",
+          "sha256": "71ff0f33cff1ab7d6b467d59b64f9e438a92c5e2cbee7955fdfa901d4b2c0f33"
+        }
+      ],
+      "api_checks": [
+        {
+          "entry": "3003",
+          "sport": "football",
+          "http": 200,
+          "matches": 0,
+          "recommendations": 0,
+          "ms": 226
+        },
+        {
+          "entry": "3003",
+          "sport": "basketball",
+          "http": 200,
+          "matches": 0,
+          "recommendations": 0,
+          "ms": 45
+        },
+        {
+          "entry": "public",
+          "sport": "football",
+          "http": 200,
+          "matches": 0,
+          "recommendations": 0,
+          "ms": 65
+        },
+        {
+          "entry": "public",
+          "sport": "basketball",
+          "http": 200,
+          "matches": 0,
+          "recommendations": 0,
+          "ms": 83
+        }
+      ]
+    },
+    "production-browser": {
+      "status": "passed",
+      "results": [
+        {
+          "width": 1440,
+          "sport": "football",
+          "matches": 0,
+          "recommendations": 0,
+          "all_pending": true,
+          "no_empty_fixtures": true
+        },
+        {
+          "width": 1440,
+          "sport": "basketball",
+          "matches": 0,
+          "recommendations": 0,
+          "all_pending": true,
+          "no_empty_fixtures": true
+        },
+        {
+          "width": 390,
+          "sport": "football",
+          "matches": 0,
+          "recommendations": 0,
+          "all_pending": true,
+          "no_empty_fixtures": true
+        },
+        {
+          "width": 390,
+          "sport": "basketball",
+          "matches": 0,
+          "recommendations": 0,
+          "all_pending": true,
+          "no_empty_fixtures": true
+        }
+      ],
+      "real_production_reads": true,
+      "production_writes": 0,
+      "errors": [],
+      "writes": []
+    }
+  },
+  "isolated_browser": {
+    "results": [
+      {
+        "width": 1440,
+        "passed": true,
+        "read_only": true,
+        "grouped_recommendations": true,
+        "sport_and_phase_isolation": true,
+        "scope_reload": true,
+        "stale_response_ignored": true
+      },
+      {
+        "width": 1030,
+        "passed": true,
+        "read_only": true,
+        "grouped_recommendations": true,
+        "sport_and_phase_isolation": true,
+        "scope_reload": true,
+        "stale_response_ignored": true
+      },
+      {
+        "width": 390,
+        "passed": true,
+        "read_only": true,
+        "grouped_recommendations": true,
+        "sport_and_phase_isolation": true,
+        "scope_reload": true,
+        "stale_response_ignored": true
+      }
+    ],
+    "errors": [],
+    "synthetic_data": true,
+    "production_writes": 0
+  },
+  "manual_bet_browser": {
+    "results": [
+      {
+        "width": 1440,
+        "case": "blocked",
+        "mode": "尚未保存每单下注金额",
+        "ok": true
+      },
+      {
+        "width": 1440,
+        "case": "blocked",
+        "mode": "实盘执行当前未开放",
+        "ok": true
+      },
+      {
+        "width": 1440,
+        "case": "blocked",
+        "mode": "本人乐鱼账户尚未通过校验",
+        "ok": true
+      },
+      {
+        "width": 1440,
+        "case": "blocked",
+        "mode": "当前会员没有实盘交易权益",
+        "ok": true
+      },
+      {
+        "width": 1440,
+        "case": "blocked",
+        "mode": "紧急停止",
+        "ok": true
+      },
+      {
+        "width": 1440,
+        "case": "unset-visible",
+        "text": "尚未保存每单下注金额，先在上方设置里填写并保存",
+        "ok": true
+      },
+      {
+        "width": 1440,
+        "case": "confirm",
+        "lines": [
+          "利物浦 对 曼城",
+          "专家 林老师 TG · 全场 · 亚洲让球 -0.25 主队",
+          "每单金额 2.00 元",
+          "提交前读取当前盘口并重新询价，接受当前赔率；盘口线或方向失效时拒绝，实际成交赔率以账户回执为准。"
+        ],
+        "ok": true
+      },
+      {
+        "width": 1440,
+        "case": "result-persists",
+        "text": "已预留 2.00 元\n等待执行器重新询价并按当前盘口提交；实际成交以账户回执为准，结果记入个人中心订单。",
+        "ok": true
+      },
+      {
+        "width": 1440,
+        "case": "rejected",
+        "text": "下单未受理\n当前盘口已变化，请重新确认",
+        "ok": true
+      },
+      {
+        "width": 390,
+        "case": "blocked",
+        "mode": "尚未保存每单下注金额",
+        "ok": true
+      },
+      {
+        "width": 390,
+        "case": "blocked",
+        "mode": "实盘执行当前未开放",
+        "ok": true
+      },
+      {
+        "width": 390,
+        "case": "blocked",
+        "mode": "本人乐鱼账户尚未通过校验",
+        "ok": true
+      },
+      {
+        "width": 390,
+        "case": "blocked",
+        "mode": "当前会员没有实盘交易权益",
+        "ok": true
+      },
+      {
+        "width": 390,
+        "case": "blocked",
+        "mode": "紧急停止",
+        "ok": true
+      },
+      {
+        "width": 390,
+        "case": "unset-visible",
+        "text": "尚未保存每单下注金额，先在上方设置里填写并保存",
+        "ok": true
+      },
+      {
+        "width": 390,
+        "case": "confirm",
+        "lines": [
+          "利物浦 对 曼城",
+          "专家 林老师 TG · 全场 · 亚洲让球 -0.25 主队",
+          "每单金额 2.00 元",
+          "提交前读取当前盘口并重新询价，接受当前赔率；盘口线或方向失效时拒绝，实际成交赔率以账户回执为准。"
+        ],
+        "ok": true
+      },
+      {
+        "width": 390,
+        "case": "result-persists",
+        "text": "已预留 2.00 元\n等待执行器重新询价并按当前盘口提交；实际成交以账户回执为准，结果记入个人中心订单。",
+        "ok": true
+      },
+      {
+        "width": 390,
+        "case": "rejected",
+        "text": "下单未受理\n当前盘口已变化，请重新确认",
+        "ok": true
+      }
+    ],
+    "errors": []
+  },
+  "failures_preserved": [
+    "price=1 test sample violated DB constraint; original 49 tests rerun passed",
+    "protected configuration read permission; same UID verified",
+    "API user declaration restored to 10001:10001; original post-check rerun passed"
+  ]
+}
