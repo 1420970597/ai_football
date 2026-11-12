@@ -2,9 +2,11 @@
 
 本入口用于主检出 `fix/TASK-78-hermes-telegram-sync`，避免把旧的未解决交接当作最新网页状态。
 
+> 最新上线：源码3049c050（网页工作树/已推送分支）已支持首页每次明确确认独立买入；同推荐的旧accepted不再代替新请求，同确认编号重发只一单，金额/敞口/账户权限仍校验。首页仅展示pending且满足推荐级实盘条件的场次/盘口，移除旧赔率，买入按当前盘口及提交前原生询价。038增量已应用，原42条订单事务内逐行摘要不变；实际资金测试0。40项专项、20项买入交互及公网/手机检查通过。当前四角色镜像固定于infra/production/api.yml、web.yml、review-schema.yml，三份必须一起复用；详情见MANUAL_BUY_RELEASE_20261112.md。主检出业务代码较旧，禁止从主检出重建覆盖已上线镜像，也不得把他人账户未提交修改混入本次提交。
+
 > 本轮用户已明确要求覆盖原业务端口并正式上线。正式业务入口已验收为 `0.0.0.0:3003`，域名 `football.5545.eu.cc` 回源同一新版；生产覆盖固定在 `infra/production/web.yml`，幂等启动退出 0、重建容器 0。当前生产状态以 `PRODUCTION_ENTRY_20261112.md` 和 `reports/production-entry-20261112.json` 为准。
 
-> 最新业务变更：首页“专家关联”现在只展示未结算比赛及推荐盘口。源码 `423143b4` 位于 `refactor/TASK-78-web-ux`，API 镜像 `sha256:61acb952…` 已上线，生产覆盖为 `infra/production/api.yml`；web 镜像不变。混合状态场次只返回 pending 盘口，全部结算后移出；“全部赛事”、详情、历史与统计保留。16 项后端专项、三个隔离视口和真实桌面/手机双运动检查通过。权威记录是网页工作树及该已推送分支的 `docs/platform-v2/HOMEPAGE_PENDING_ONLY_20261112.md`、`reports/homepage-pending-only-20261112.json`；主检出 public 模块较旧，禁止从它重建覆盖当前生产 API。
+> 08:08历史阶段：首页仅未结算筛选423143b4/API61acb952曾上线；已被上述可执行筛选和独立手动买入版本替代。原始证据保留在网页工作树HOMEPAGE_PENDING_ONLY_20261112.md及homepage-pending-only-20261112.json，不作为当前镜像清单。
 
 ## 已完成的续接阶段
 
