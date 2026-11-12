@@ -95,12 +95,16 @@ global_enabled(conn, settings) = True  # v2_admin_settings.auto_betting_enabled 
 
 其中 `v` 是按 `version_key` 命中的**已存版本**，`i` 是**本次提交体**。既然库内 2685 行全部可由自身内容重算出正确的 `version_key`（检查 1 的第四项），那么命中同一 `version_key` 的已存行内容必然等于当初计算该键时使用的指纹。**因此 409 的唯一可能来源是：采集器提交的 `content`（即提交体除 `owner`/`media_objects`/`media_state`/`last_error`/`reconciliation` 之外的字段）与该 `version_key` 所对应的原始指纹不一致。**
 
-采集器只有一处计算 `version_key`（`services/collector/telegram.py:1020`），指纹**包含** `media_state` 与 `last_error`，但服务端 `content` **不包含**这两个字段。这是一个真实存在的字段集不对称：
+**字段集是对称的，两侧不对称的假设已被排除。** 采集器 `_stage_group`（`services/collector/telegram.py:1016-1022`）先用完整 `payload` 减去 `{owner, sender_nickname, media_objects}` 算出指纹，**之后**才写入 `media_state`；`last_error`、`reconciliation` 同样在哈希之后追加。服务端 `content` 用 `exclude={owner, media_objects, media_state, last_error, reconciliation}` 构造，其键集恰好等于指纹键集（16 个 payload 键 − 4 = 12，再减 `sender_nickname` 后两侧都剩 11 个比较键）。所以「指纹含 media_state/last_error 而 content 不含」不成立，不能作为 409 的解释。
 
-- 若某条消息第一次以 `media_state="pending"` 提交并入库，之后采集器以 `media_state="ready"` 重新暂存同一条消息 → 指纹变化 → 产生**新的** `version_key` → 命中不到旧行 → 不会 409（这条路径是安全的）。
-- 但如果同一 `version_key` 的两次提交之间，**指纹之外**、**content 之内**的某个字段发生了变化（`reply_context` 从 `{}` 变为 `{"unavailable": true}`，或 `raw_text`/`member_message_ids` 因相册成员枚举顺序/边界不同而不同），就会命中旧行并触发 409。
+由此剩下唯一自洽的推断：**同一 `version_key` 的两次提交携带了不同的 `payload`**，而两次 payload 的差异必须落在指纹内、却在归一化后产生同一哈希——只有两种可能：
 
-**这是推断，不是结论。** 关键不确定性：指纹与 content 都基于同一个 `payload` 字典构造，理论上应同步变化；出现不一致只能来自「同一 `version_key` 的两次提交用到不同的 `payload`」，而代码里没有缓存或复用 `payload` 的路径（`version_key` 只在 `_stage_group` 内计算一次，`telegram.py:901/1271` 的两处引用分别是回执与删除路径）。
+1. 上游对象在两次读取之间返回了不同的字段值，而该值本身不参与实际内容（例如 `media_manifest` 中某个字段在有/无之间跳动，却在序列化后等价）；
+2. `version_key` 被复用/传递而非重新计算——`_stage_group` 之外若存在直接构造 payload 的路径（历史回填、重放、pending 重试），该路径可能沿用了旧 `version_key`。
+
+**仍未证实，两种都需要采集器侧落盘证据**，检查方法见下。数据库侧已排除：2685 行全部自洽、无重复三元组、单一 13 键形状。
+
+> 勘误（2026-11-12 复核）：本节早先版本称「指纹包含 `media_state` 与 `last_error`，服务端 content 不包含」，该说法与 `_stage_group` 的实际顺序不符，已更正。
 
 **推翻/证实它的检查方法**（尚未执行，需要采集器把提交体落盘或加日志）：
 
