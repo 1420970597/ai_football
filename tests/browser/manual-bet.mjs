@@ -80,6 +80,24 @@ try {
       await context.close();
     }
 
+    // 1b. A visitor who has not set an amount must still see that the entry point
+    // exists. It used to render nothing at all, so the feature was undiscoverable.
+    {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN' });
+      const page = await context.newPage();
+      page.on('pageerror', error => errors.push(`${width} unset: ${error.message}`));
+      await open(page, { stake_per_order: '0', enabled: false });
+      await page.goto('http://127.0.0.1:8080/#scores?scope=recommended');
+      await page.waitForLoadState('networkidle');
+      const button = page.locator('[data-bet-signal]').first();
+      await button.waitFor();
+      assert.equal(await button.isDisabled(), true, `${width}: unset stake must not be buyable`);
+      const text = await page.locator('#' + (await button.getAttribute('aria-describedby'))).innerText();
+      assert.ok(text.includes('设置'), `${width}: unset stake must point at the settings; saw "${text}"`);
+      results.push({ width, case: 'unset-visible', text, ok: true });
+      await context.close();
+    }
+
     // 2. The buy target is large enough to tap, and the dialog names the bet.
     {
       const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN' });

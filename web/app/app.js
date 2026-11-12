@@ -303,7 +303,7 @@ function manualBetGate() {
   if (!state.user) return { ready: false, reason: '登录后可配置一键下注金额' };
   if (!policy) return { ready: false, reason: '下注设置尚未加载，可刷新重试' };
   if (policy.emergency_stopped) return { ready: false, reason: '已紧急停止；先保存金额并确认恢复' };
-  if (!policy.enabled) return { ready: false, reason: '尚未保存每单下注金额' };
+  if (!policy.enabled) return { ready: false, reason: '尚未保存每单下注金额，先在上方设置里填写并保存' };
   if (!policy.live_enabled) return { ready: false, reason: '实盘执行当前未开放' };
   if (!policy.account_ready) return { ready: false, reason: '本人乐鱼账户尚未通过校验' };
   if (!policy.entitlement) return { ready: false, reason: '当前会员没有实盘交易权益' };
@@ -318,12 +318,15 @@ function betResultMarkup(signalId) {
   return `<div class="manual-bet-result ${esc(result.tone)}"><strong>${esc(result.title)}</strong><span>${esc(result.detail)}</span></div>`;
 }
 function betButtonMarkup(signal) {
-  const stake = state.manualBet?.stake_per_order;
-  if (!(Number(stake) > 0)) return '';
+  const stake = Number(state.manualBet?.stake_per_order) > 0 ? state.manualBet.stake_per_order : null;
   const gate = manualBetGate();
-  return gate.ready
-    ? `<button class="manual-bet" data-bet-signal="${esc(signal.id)}">实盘买入 ${decimal(stake)} 元</button>`
-    : `<span class="manual-bet-blocked"><button class="manual-bet" data-bet-signal="${esc(signal.id)}" disabled aria-describedby="bet-reason-${esc(signal.id)}">实盘买入 ${decimal(stake)} 元</button><small class="muted" id="bet-reason-${esc(signal.id)}">${esc(gate.reason)}</small></span>`;
+  const label = stake ? `实盘买入 ${decimal(stake)} 元` : '配置金额后实盘买入';
+  // An unset stake used to render nothing at all, so the entry point was invisible
+  // until someone happened to find the settings panel. Keep it on every row and let
+  // the reason do the explaining.
+  return gate.ready && stake
+    ? `<button class="manual-bet" data-bet-signal="${esc(signal.id)}">${label}</button>`
+    : `<span class="manual-bet-blocked"><button class="manual-bet" data-bet-signal="${esc(signal.id)}" disabled aria-describedby="bet-reason-${esc(signal.id)}">${label}</button><small class="muted" id="bet-reason-${esc(signal.id)}">${esc(gate.reason)}</small></span>`;
 }
 function matchRecommendationMarkup(match) {
   const signals = match.expert_signals || [];
