@@ -5,6 +5,7 @@ import hmac
 import uuid
 
 from fastapi import HTTPException, Request
+from .review_deadline import remaining_review_seconds
 
 
 def quote_context(quote, fixture) -> dict:
@@ -29,14 +30,23 @@ def authorize(request: Request, token: str) -> None:
         raise HTTPException(status_code=401, detail="service authentication failed")
 
 
-async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID, *, lock_trace_sequence: bool = False):
+def ensure_detection_deadline(job):
+    if job['review_mode'] == 'real_time':
+        remaining = remaining_review_seconds(job['detected_at'])
+        if remaining is not None and remaining <= 0:
+            raise HTTPException(status_code=409, detail={
+                'category': 'detection_deadline_exceeded', 'limit_seconds': 20})
+
+
+async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID, *, lock_trace_sequence: bool = False,
+                     enforce_deadline: bool = False):
     trace_lock_column = (
         ",pg_advisory_xact_lock(hashtextextended('v2-review-trace:' || j.id::text,0)) AS trace_lock"
         if lock_trace_sequence else ""
     )
     job = await conn.fetchrow(
         "SELECT j.id,j.message_id,j.state,j.attempt_id,j.lease_until,j.review_mode,m.posted_at,m.raw_text,m.media_objects,m.revision,"
-        "m.deleted_at,m.media_state,e.id AS expert_id,e.display_nickname,e.enabled AS expert_enabled,"
+        "m.deleted_at,m.media_state,m.detected_at,e.id AS expert_id,e.display_nickname,e.enabled AS expert_enabled,"
         "s.enabled AS source_enabled,se.enabled AS trusted,"
         "request.sequence_no AS hermes_request_sequence,request.configuration_version,request.model,"
         "CASE WHEN request.reply_archive->>'media_state'='ready' "
@@ -73,6 +83,8 @@ async def active_job(conn, review_id: uuid.UUID, attempt_id: uuid.UUID, *, lock_
         raise HTTPException(status_code=409, detail="message has a newer revision")
     if job['reply_media_changed']:
         raise HTTPException(status_code=409, detail='referenced image message changed after review started')
+    if enforce_deadline:
+        ensure_detection_deadline(job)
     return job
 
 

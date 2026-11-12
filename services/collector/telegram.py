@@ -145,6 +145,7 @@ class TelegramCollector:
         self.reconcile_commit_slots = asyncio.Semaphore(RECONCILE_GLOBAL_COMMIT_CONCURRENCY)
         self.recent_recovery: dict[str, dict] = {}
         self.entity_cache: OrderedDict[str, tuple] = OrderedDict()
+        self.detection_times: OrderedDict[tuple, str] = OrderedDict()
         self.control_server = None
         self.auth_client = None
         self.auth_task = None
@@ -673,6 +674,7 @@ class TelegramCollector:
 
             phase_counts['pages'] += 1
             members = await timed('telegram_page', read_page())
+            page_detected_at = datetime.now(timezone.utc).isoformat()
             lookup = getattr(self.backend, 'event_receipts', None)
             known = None
             last = cursor
@@ -684,6 +686,7 @@ class TelegramCollector:
                 if not sender_id and getattr(message, 'post', False):
                     sender_id = chat_id
                 if sender_id in {str(value) for value in source['trusted_sender_ids']}:
+                    self._remember_detection(chat_id, [message], page_detected_at)
                     grouped_id = getattr(message, 'grouped_id', None)
                     if grouped_id:
                         cached = albums.get(grouped_id)
@@ -899,20 +902,40 @@ class TelegramCollector:
     async def _process_message(self, chat_id: str, source: dict, message, entity=None):
         if _trusted_message_author(chat_id, source, message) is None:
             return {"state": "ignored_author"}
+        self._remember_detection(chat_id, [message])
         members = await self._expand_album(message, entity) if getattr(message, "grouped_id", None) else [message]
         return await self._process_group(chat_id, source, members)
+
+    def _remember_detection(self, chat_id, members, detected_at=None):
+        """Include album aggregation/lookup time and preserve the first retry observation.
+
+        The database is authoritative once persisted. This bounded cache also
+        preserves an earlier callback when a failed delivery is polled again.
+        """
+        detected_at = detected_at or datetime.now(timezone.utc).isoformat()
+        stamps = []
+        for message in members:
+            digest = hashlib.sha256(json.dumps(_message_revision_evidence(message)).encode()).hexdigest()
+            key = (chat_id, digest)
+            self.detection_times.setdefault(key, detected_at)
+            stamps.append(self.detection_times[key])
+        while len(self.detection_times) > 8192:
+            self.detection_times.popitem(last=False)
+        return min(stamps, default=detected_at)
 
     async def _process_group(self, chat_id: str, source: dict, members: list):
         result, _ = await self._stage_group(chat_id, source, members)
         return result
 
     async def _stage_group(self, chat_id: str, source: dict, members: list, *, reconciliation: dict | None = None,
-                           submission: dict | None = None, known_receipts: dict | None = None):
+                           submission: dict | None = None, known_receipts: dict | None = None,
+                           detected_at: str | None = None):
         """Persist the complete immutable version before any media transfer."""
         message = members[0]
         author = _trusted_message_author(chat_id, source, message)
         if author is None:
             return {"state": "ignored_author"}, None
+        detected_at = self._remember_detection(chat_id, members, detected_at)
         sender_id, channel_post_identity = author
         sender = getattr(message, "sender", None)
         manifests = []
@@ -974,6 +997,9 @@ class TelegramCollector:
         # 昵称变化不制造消息版本；后台按稳定作者编号独立更新展示名。
         fingerprint = {key: value for key, value in payload.items() if key not in {"owner", "sender_nickname", "media_objects"}}
         payload["version_key"] = hashlib.sha256(json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        # Observation metadata is not message content and must not change the
+        # immutable version key on retry, media completion, or reconciliation.
+        payload['detected_at'] = detected_at
         supported = (len(manifests) <= MAX_MEDIA_COUNT and source.get("allow_media", True)
                      and all(item["mime_type"] in ALLOWED_IMAGE_TYPES and item["bytes"] <= MAX_MEDIA_BYTES
                              and item["width"] * item["height"] <= MAX_IMAGE_PIXELS for item in manifests)
@@ -1160,11 +1186,15 @@ class TelegramCollector:
                 log.warning("Telegram media retry deferred category=%s", type(exc).__name__)
 
     async def _on_message(self, event):
+        chat_id = str(event.chat_id)
+        source = self.sources.get(chat_id)
+        if source and _trusted_message_author(chat_id, source, event.message) is not None:
+            self._remember_detection(chat_id, [event.message])
         if getattr(event.message, "grouped_id", None):
             # 新相册由 Album 回调完整聚合；编辑相册仍需读取全组。
             if isinstance(event, events.NewMessage.Event) and not getattr(event.message, "edit_date", None):
                 return
-        await self._live_messages(str(event.chat_id), [event.message], entity=getattr(event, 'chat', None))
+        await self._live_messages(chat_id, [event.message], entity=getattr(event, 'chat', None))
 
     async def _on_album(self, event):
         await self._live_messages(str(event.chat_id), list(event.messages), full_album=True,
@@ -1173,7 +1203,8 @@ class TelegramCollector:
     async def _live_messages(self, chat_id, members, full_album=False, entity=None):
         delivery = self.live_event_delivery
         delivery["received"] += 1
-        delivery["last_received_at"] = datetime.now(timezone.utc).isoformat()
+        detected_at = datetime.now(timezone.utc).isoformat()
+        delivery["last_received_at"] = detected_at
         source = self.sources.get(chat_id)
         if not source:
             delivery["unmapped_source"] += 1
@@ -1183,6 +1214,7 @@ class TelegramCollector:
         if _trusted_message_author(chat_id, source, group[0]) is None:
             delivery["ignored_author"] += 1
             return
+        detected_at = self._remember_detection(chat_id, group, detected_at)
         started = time.monotonic()
         source_version_at = max(_utc(getattr(item, 'edit_date', None) or item.date) for item in group)
         source_age_ms = max(0.0, (datetime.now(timezone.utc) - source_version_at).total_seconds() * 1000)
@@ -1196,7 +1228,7 @@ class TelegramCollector:
             lookup_ms = (time.monotonic() - lookup_started) * 1000
             persist_started = time.monotonic()
             # The event transaction validates this owner and lease; a separate checkpoint RPC only serializes live callbacks.
-            _, payload = await self._stage_group(chat_id, source, group)
+            _, payload = await self._stage_group(chat_id, source, group, detected_at=detected_at)
             persist_ms = (time.monotonic() - persist_started) * 1000
             delivery["staged"] += 1
             delivery["last_staged_at"] = datetime.now(timezone.utc).isoformat()

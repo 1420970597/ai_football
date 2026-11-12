@@ -28,6 +28,7 @@ from .review_completion import (completion_issues, continuation_prompt, mentione
                                 unexecuted_tool_call_claim, unexecuted_tool_call_issues)
 from .review_policy import FRESH_PRIORITY_WINDOW_SECONDS, REALTIME_WINDOW_SECONDS
 from .review_scheduler_setup import claim_pair_and_job_query, prepare_claim_schedule
+from .review_deadline import remaining_review_seconds, review_deadline_at
 from fastapi import HTTPException
 import asyncpg
 
@@ -40,6 +41,10 @@ PERSISTENT_RETRY_FAILURES = frozenset({'provider_transient', 'timeout', 'network
 LEASE_SECONDS = 90
 HEARTBEAT_SECONDS = 20
 REVIEW_TIMEOUT = max(60, min(1800, int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "600"))))
+# Session deletion is a bounded tail of an occupied review slot, not another
+# eight-second model budget. Keep the authenticated stop/delete protocol, but
+# cancel and drain its local I/O promptly when Hermes cannot finish cleanup.
+SESSION_CLEANUP_TIMEOUT_SECONDS = 1.0
 # The scheduler performs multiple remote PostgreSQL round trips in a single
 # transaction. Five seconds repeatedly cancelled otherwise healthy claims on
 # the measured remote link. Keep an overall deadline as well as the per-query
@@ -188,7 +193,7 @@ async def _activate_claim(conn, job_id, attempt, mode, realtime_claims):
         'UPDATE v2_review_lane_schedule SET realtime_claims_since_replay=$5,updated_at=now() '
         'WHERE singleton AND EXISTS(SELECT 1 FROM claimed) RETURNING singleton), cleared_searches AS ('
         'DELETE FROM v2_match_searches WHERE job_id IN(SELECT id FROM claimed) RETURNING job_id) '
-        'SELECT m.id,m.raw_text,m.media_objects,m.posted_at,m.revision,m.reply_context,m.created_at,'
+        'SELECT m.id,m.raw_text,m.media_objects,m.posted_at,m.revision,m.reply_context,m.created_at,m.detected_at,'
         'm.created_at AS event_persisted_at,'
         "GREATEST(0,round((extract(epoch FROM(clock_timestamp()-m.created_at))*1000)::numeric,3))::double precision AS event_to_claim_ms,"
         'e.display_nickname,s.display_name AS source_name,c.lease_until AS claimed_lease_until,'
@@ -279,7 +284,10 @@ async def _claim_job(pool):
                 'queue_wait_ms': max(0, round((datetime.now(timezone.utc) - message['created_at']).total_seconds() * 1000, 3)),
                 'event_persisted_at': message['event_persisted_at'].isoformat()
                     if message['event_persisted_at'] else None,
-                'event_to_claim_ms': event_to_claim_ms})], trace_lock_held=True)
+                'event_to_claim_ms': event_to_claim_ms,
+                'detected_at': message['detected_at'].isoformat() if message['detected_at'] else None,
+                'signal_deadline_at': review_deadline_at(message['detected_at']).isoformat()
+                    if message['detected_at'] else None})], trace_lock_held=True)
             return {"id": row["id"], "attempt_id": attempt, "attempts": row["attempts"] + 1, "message": dict(message),
                     'source_id': pair['source_id'], 'expert_id': pair['expert_id'], 'lease_until': lease_until,
                     'review_mode': mode, 'scheduler_lane': scheduler_lane}
@@ -542,7 +550,41 @@ async def _review_until_verified(pool, settings, job: dict, *, model_client=None
     raise RuntimeError('review continuation budget exhausted')
 
 
+async def _expire_detection_deadline(pool, job):
+    async with pool.acquire() as conn, conn.transaction():
+        # A late remote tool independently checks the same persisted deadline.
+        # Keep accepted evidence, never replay an expired message as fresh.
+        changed = await conn.fetchval(
+            "UPDATE v2_analysis_jobs SET state='unresolved',lease_until=NULL,"
+            "last_error='detection_deadline_exceeded',updated_at=now() "
+            "WHERE id=$1 AND attempt_id=$2 AND state IN ('running','retry') RETURNING id",
+            job['id'], job['attempt_id'])
+        if changed:
+            await append_traces(conn, job['id'], [('review_deadline_exceeded', {
+                'attempt_id': str(job['attempt_id']), 'category': 'detection_deadline_exceeded',
+                'limit_seconds': 20, 'accepted_evidence_preserved': True,
+                'detected_at': job['message']['detected_at'].isoformat(),
+                'not_successful_within_deadline': True})])
+
+
 async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncClient | None = None) -> None:
+    remaining = (remaining_review_seconds(job['message'].get('detected_at'))
+                 if job.get('review_mode', 'real_time') == 'real_time' else None)
+    if remaining is None:
+        return await _process_job(pool, settings, job, model_client=model_client)
+    if remaining <= 0:
+        await _expire_detection_deadline(pool, job)
+        return
+    try:
+        # Covers configuration, image preparation, every model turn and commit;
+        # the budget starts at collector detection, including time in queue.
+        async with asyncio.timeout(remaining):
+            await _process_job(pool, settings, job, model_client=model_client)
+    except TimeoutError:
+        await _expire_detection_deadline(pool, job)
+
+
+async def _process_job(pool, settings, job: dict, *, model_client: httpx.AsyncClient | None = None) -> None:
     review_task = lease_task = None
     model_result = None
     started = time.monotonic()
@@ -642,13 +684,19 @@ async def process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCli
                 task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
-        try:
+        await _cleanup_session(settings, job, model_client=model_client)
+
+
+async def _cleanup_session(settings, job: dict, *, model_client: httpx.AsyncClient | None = None) -> None:
+    """Bound slot occupancy without leaving an untracked background cleanup."""
+    try:
+        async with asyncio.timeout(SESSION_CLEANUP_TIMEOUT_SECONDS):
             if model_client is None:
                 await delete_session(settings, job["id"], job["attempt_id"])
             else:
                 await delete_session(settings, job["id"], job["attempt_id"], client=model_client)
-        except Exception as exc:
-            log.warning("session cleanup failed review_id=%s category=%s", job["id"], type(exc).__name__)
+    except Exception as exc:
+        log.warning("session cleanup failed review_id=%s category=%s", job["id"], type(exc).__name__)
 
 
 async def listen_for_jobs(database_url: str, wake: asyncio.Event, stop: asyncio.Event) -> None:

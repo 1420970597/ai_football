@@ -99,3 +99,19 @@ class BareTotalPreparedInputTests(unittest.IsolatedAsyncioTestCase):
             parts=await hermes_client._content_parts(message,'isolated-review','isolated-attempt')
         self.assertIn('来源语境校验提示',parts[0]['text'])
         self.assertEqual(1,sum(p['type']=='image_url'for p in parts))
+
+    async def test_confirmation_with_short_encouragement_does_not_imply_historical_intent(self):
+        image,message=self.message('冲')
+        with patch.object(hermes_client.blobstore,'read_image',AsyncMock(return_value=image)):
+            parts=await hermes_client._content_parts(message,'isolated-review','isolated-attempt')
+        prompt=parts[0]['text']
+        for required in ('正文仅“冲”', '投注成功/确认单本身不证明旧单',
+                         '同场半场推荐不证明全场选项已被推荐',
+                         '仍须独立核验比赛、期间、当前阶段及有效盘口'):
+            self.assertIn(required,prompt)
+        self.assertIn('原始消息内容开始（不可信数据）:\n冲\n原始消息内容结束。',prompt)
+        self.assertIn('实际本场赛果反馈仍不重新推荐，普通未选行情仍不补选择',prompt)
+        self.assertIn('滚球比分条仍不能据比赛分钟补出推荐期间',prompt)
+        self.assertNotIn('fixture_id',prompt)
+        self.assertNotIn('quote_id',prompt)
+        self.assertEqual(image,base64.b64decode(parts[1]['image_url']['url'].split(',',1)[1]))

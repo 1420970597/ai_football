@@ -1,0 +1,77 @@
+{
+  "schema": "expert-review-latency-window-v1",
+  "window_start_utc": "2026-11-12T12:30:00Z",
+  "window_end_utc": "2026-11-12T12:58:44.254652Z",
+  "source": {
+    "type": "read_only_production_snapshot",
+    "snapshot_file": "window-initial.private.json",
+    "jobs_truncated": false,
+    "analysis_execution": "Docker, network disabled, read-only evidence mount, user 0, CPU 0.25, memory 128 MiB",
+    "analysis_exit_code": 0,
+    "contains_message_text_or_full_private_identifiers": false
+  },
+  "sample": {
+    "jobs": 33,
+    "experts": 8,
+    "signals": 9,
+    "attempt_claimed_traces": 33,
+    "hermes_request_traces": 32,
+    "hermes_result_traces": 31,
+    "system_review_result_traces": 31,
+    "states": {"succeeded": 9, "unresolved": 22, "failed": 2},
+    "scheduler_lanes": {"fresh_real_time": 33}
+  },
+  "measurement_contract": {
+    "quantiles": "nearest rank, with P50 and P95 computed over each metric's own observed sample",
+    "origin": "first persisted event received_at; all 33 equal expert message created_at in this snapshot",
+    "original_detection_timestamp_available": false,
+    "original_detection_sla_verifiable": false,
+    "claim": "attempt_claimed.payload.event_to_claim_ms",
+    "first_acceptance": "timestamp of first successful mcp_record_expert_signals trace carrying a non-empty accepted list, minus first persisted event timestamp",
+    "last_acceptance": "timestamp of last successful mcp_record_expert_signals trace carrying a non-empty accepted list, minus first persisted event timestamp",
+    "acceptance_commit_caveat": "A trace timestamp is inside the tool transaction, not an observed COMMIT. Reported acceptance delays are approximations and may understate externally visible commit delay.",
+    "conclusion": "system_review_result.payload.event_to_conclusion_ms; this is later than initial accepted recommendation and must not replace that metric",
+    "concurrency": "half-open claim trace to final conclusion trace intervals, or job updated_at when a conclusion is absent; does not include post-conclusion session cleanup",
+    "misses_are_not_successes": "An unresolved or timed-out message does not count as successful identification within 20 seconds. Nine accepted signals are a selected success sample, not all 33 messages."
+  },
+  "seconds": {
+    "persisted_to_claim": {"n": 33, "min": 0.014, "p50": 0.309, "p95": 9.733, "max": 14.106, "over_20": 0},
+    "persisted_to_first_accepted_tool_trace": {"n": 9, "min": 7.2, "p50": 15.148, "p95": 49.65, "max": 49.65, "over_20": 3},
+    "persisted_to_last_accepted_tool_trace": {"n": 9, "min": 7.2, "p50": 15.148, "p95": 49.65, "max": 49.65, "over_20": 3},
+    "persisted_to_conclusion": {"n": 31, "min": 4.468, "p50": 14.07, "p95": 51.356, "max": 54.178, "over_20": 10},
+    "claim_to_first_accepted_tool_trace": {"n": 9, "min": 6.898, "p50": 10.266, "p95": 48.989, "max": 48.989, "over_20": 2},
+    "claim_to_conclusion": {"n": 31, "min": 4.102, "p50": 13.641, "p95": 51.339, "max": 53.506, "over_20": 9},
+    "preflight": {"n": 32, "min": 0.004, "p50": 0.009, "p95": 0.02, "max": 0.044, "over_20": 0},
+    "provider_total": {"n": 31, "min": 4.069, "p50": 13.602, "p95": 51.309, "max": 53.408, "over_20": 9},
+    "mcp_search_matches": {"n": 12, "min": 0.022, "p50": 0.028, "p95": 0.079, "max": 0.079, "over_20": 0},
+    "mcp_list_match_markets": {"n": 9, "min": 0.009, "p50": 0.493, "p95": 1.227, "max": 1.227, "over_20": 0},
+    "mcp_record_expert_signals": {"n": 9, "min": 0.007, "p50": 0.016, "p95": 0.028, "max": 0.028, "over_20": 0},
+    "mcp_resolve_match": {"n": 5, "min": 0.004, "p50": 0.005, "p95": 0.009, "max": 0.009, "over_20": 0}
+  },
+  "observed_concurrency": {
+    "maximum_global_claim_intervals": 4,
+    "experts": [
+      {"anonymous_label": "E1", "jobs": 2, "maximum_overlapping_claim_intervals": 2},
+      {"anonymous_label": "E2", "jobs": 2, "maximum_overlapping_claim_intervals": 1},
+      {"anonymous_label": "E3", "jobs": 2, "maximum_overlapping_claim_intervals": 1},
+      {"anonymous_label": "E4", "jobs": 3, "maximum_overlapping_claim_intervals": 1},
+      {"anonymous_label": "E5", "jobs": 4, "maximum_overlapping_claim_intervals": 2},
+      {"anonymous_label": "E6", "jobs": 1, "maximum_overlapping_claim_intervals": 1},
+      {"anonymous_label": "E7", "jobs": 8, "maximum_overlapping_claim_intervals": 2},
+      {"anonymous_label": "E8", "jobs": 11, "maximum_overlapping_claim_intervals": 2}
+    ],
+    "interpretation": "This window proves four review intervals can overlap and at least two reviews for one expert can overlap. It does not prove unlimited capacity, absence of all contention, or a strict 20-second guarantee. No historical replay lane was claimed in this window."
+  },
+  "accepted_outliers": [
+    {"job_prefix": "fdb31ea6", "queue_s": 14.106, "first_acceptance_s": 23.436, "conclusion_s": 29.09, "provider_s": 14.946, "model_rounds": 1, "explanation": "A 14.106-second queue delay consumed most of the end-to-end budget before the model started."},
+    {"job_prefix": "c56a0d8f", "queue_s": 0.668, "first_acceptance_s": 49.65, "conclusion_s": 54.178, "provider_s": 53.408, "model_rounds": 2, "first_round_provider_s": 41.356, "first_round_prompt_tokens": 143517, "first_round_completion_tokens": 2707, "explanation": "The first round returned without verified completion after searches and resolution. A correctness continuation added another model round. Fast database tools did not dominate the elapsed time."},
+    {"job_prefix": "fe22b3ae", "queue_s": 0.119, "first_acceptance_s": 30.243, "conclusion_s": 36.235, "provider_s": 36.062, "model_rounds": 1, "prompt_tokens": 99748, "completion_tokens": 1439, "tool_trace_times_s": {"search": 7.495, "resolve": 20.201, "markets": 26.782, "record": 30.243}, "explanation": "Large intervals between fast tool calls indicate model/provider round-trip time dominates this accepted recommendation."}
+  ],
+  "conclusions": [
+    "The observed window violates 20 seconds even when the later persistence origin is used: at least 3 of 9 accepted recommendations were late.",
+    "The original detection timestamp is absent, so this window cannot establish the true detection-to-recommendation distribution.",
+    "Current tool SQL latency and media input preparation do not explain the largest delays in this window; avoid broad database rewrites based on older remote-database reports.",
+    "Do not relax complete search, unique identity, phase, period, line, current price or trusted-source checks to reduce latency.",
+    "A shared absolute API write fence prevents late signals, but timeouts remain unresolved failures of the success SLA and must be reported separately."
+  ]
+}

@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 import httpx
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, field_validator
 
 from .. import database
 from ..auth import audit, require_admin
@@ -103,6 +103,7 @@ class EventInput(ClaimInput):
     sender_nickname: str = Field(default="", max_length=120)
     source_version_at: AwareDatetime
     posted_at: AwareDatetime
+    detected_at: AwareDatetime | None = None
     raw_text: str = Field(default="", max_length=20000)
     reply_to_platform_message_id: str | None = Field(default=None, max_length=160)
     reply_context: dict = Field(default_factory=dict, max_length=10)
@@ -111,6 +112,13 @@ class EventInput(ClaimInput):
     media_objects: list[dict] = Field(default_factory=list, max_length=10)
     last_error: str | None = Field(default=None, max_length=100)
     reconciliation: ReconciliationReference | None = None
+
+    @field_validator('detected_at')
+    @classmethod
+    def detection_cannot_extend_budget_into_the_future(cls, value):
+        if value is not None and value > datetime.now(timezone.utc):
+            raise ValueError('detected_at must not be in the future')
+        return value
 
 
 class SessionInput(BaseModel):
@@ -332,7 +340,7 @@ def review_job_metadata(source_id, body: EventInput):
 async def persist_fast_event(conn, source_id, body: EventInput):
     """Take a fresh post-lock snapshot and apply the live event atomically."""
     content = jsonable_encoder(body.model_dump(
-        exclude={"owner", "media_objects", "media_state", "last_error", "reconciliation"}))
+        exclude={"owner", "media_objects", "media_state", "last_error", "reconciliation", "detected_at"}))
     body_payload = jsonable_encoder(body.model_dump(exclude={"reconciliation"}))
     content_payload = content
     job = review_job_metadata(source_id, body) if body.media_state == "ready" else None
@@ -417,12 +425,12 @@ async def persist_fast_event(conn, source_id, body: EventInput):
         " (d.version_id IS NOT NULL OR d.current_id IS NULL OR EXISTS(SELECT 1 FROM superseded_event))),"
         "inserted_message AS ("
         " INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,reply_to_platform_message_id,raw_text,"
-        " media_objects,posted_at,revision,content_hash,media_state,edited_at,reply_context) "
+        " media_objects,posted_at,revision,content_hash,media_state,edited_at,reply_context,detected_at) "
         " SELECT i.message_id,i.source_id,d.expert_id,d.body->>'platform_message_id',"
         " NULLIF(d.body->>'reply_to_platform_message_id',''),d.body->>'raw_text',d.body->'media_objects',"
         " (d.body->>'posted_at')::timestamptz,d.next_revision,d.body->>'version_key',d.body->>'media_state',"
         " CASE WHEN d.body->>'event_kind'='edit' THEN (d.body->>'source_version_at')::timestamptz END,"
-        " d.body->'reply_context' FROM event_gate d JOIN input i ON i.source_id=d.source_id "
+        " d.body->'reply_context',(d.body->>'detected_at')::timestamptz FROM event_gate d JOIN input i ON i.source_id=d.source_id "
         " WHERE d.version_id IS NULL RETURNING id),"
         "inserted_event AS ("
         " INSERT INTO v2_telegram_events(id,source_id,platform_message_id,version_key,source_version_at,event_kind,content,"
@@ -502,8 +510,8 @@ async def insert_event_message_and_members(conn, *, message_id, event_id, source
         " SELECT 1 AS ready WHERE $21::uuid IS NULL UNION ALL SELECT 1 FROM superseded_event),"
         "inserted_message AS ("
         " INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,reply_to_platform_message_id,raw_text,"
-        " media_objects,posted_at,revision,content_hash,media_state,edited_at,reply_context) "
-        " SELECT $1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14 FROM event_gate RETURNING id),"
+        " media_objects,posted_at,revision,content_hash,media_state,edited_at,reply_context,detected_at) "
+        " SELECT $1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$29 FROM event_gate RETURNING id),"
         "inserted_event AS ("
         " INSERT INTO v2_telegram_events(id,source_id,platform_message_id,version_key,source_version_at,event_kind,content,"
         " media_objects,media_state,message_id,last_error) "
@@ -535,7 +543,7 @@ async def insert_event_message_and_members(conn, *, message_id, event_id, source
         body.source_version_at, body.event_kind, content, body.last_error, body.member_message_ids,
         nickname, previous_event_id, job.get('idempotency_key'), job.get('initial_state'),
         job.get('review_mode'), job.get('suppression'), job.get('trace_payload'),
-        job.get('job_id'), job.get('trace_id'),
+        job.get('job_id'), job.get('trace_id'), body.detected_at,
     )
     if not row['message_id'] or not row['event_id']:
         raise RuntimeError("Telegram event insert lost its current-version fence")
@@ -814,7 +822,7 @@ async def ingest_event(body: EventInput, request: Request):
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))",
                                f"telegram:{source['id']}:{body.platform_message_id}")
             if body.reconciliation is not None:
-                payload = jsonable_encoder(body.model_dump(exclude={'owner', 'reconciliation'}))
+                payload = jsonable_encoder(body.model_dump(exclude={'owner', 'reconciliation', 'detected_at'}))
                 duplicate = await telegram_reconciliation.apply_claim(
                     conn, source['id'], body.owner, body.reconciliation,
                     platform_message_id=body.platform_message_id, member_message_ids=body.member_message_ids,
@@ -883,7 +891,7 @@ async def ingest_event(body: EventInput, request: Request):
             if not event and current and current["source_version_at"] > body.source_version_at:
                 ack = await acknowledge_reconciliation()
                 return {"persisted": True, "state": "ignored_stale", **ack}
-            content = jsonable_encoder(body.model_dump(exclude={"owner", "media_objects", "media_state", "last_error", "reconciliation"}))
+            content = jsonable_encoder(body.model_dump(exclude={"owner", "media_objects", "media_state", "last_error", "reconciliation", "detected_at"}))
             media_objects = body.media_objects
             if event and body.media_state in {'pending', 'failed'} and not media_objects:
                 # History staging/retry must not erase candidates registered

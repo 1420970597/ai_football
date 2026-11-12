@@ -20,8 +20,9 @@ from fastapi.encoders import jsonable_encoder
 
 from . import database
 from .handicap_lines import line_terms
-from .review_state import active_job, append_traces, authorize, trace
+from .review_state import active_job, append_traces, authorize, trace, ensure_detection_deadline
 from .review_resolution import DISAMBIGUATION_LIMIT
+from .review_deadline import remaining_review_seconds
 
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
 CHUNK_BYTES = 23 * 1024  # Base64 plus the fixed metadata remains below 32 KiB.
@@ -236,6 +237,7 @@ class ToolCall:
     started: float
     validated: bool = False
     job: object = None
+    budget: object = None
 
 
 _current: ContextVar[ToolCall | None] = ContextVar('review_tool_call', default=None)
@@ -243,12 +245,16 @@ _current: ContextVar[ToolCall | None] = ContextVar('review_tool_call', default=N
 
 async def active_tool_job(conn, review_id, attempt_id, *, lock_trace_sequence=False):
     if lock_trace_sequence:
-        job = await active_job(conn, review_id, attempt_id, lock_trace_sequence=True)
+        job = await active_job(conn, review_id, attempt_id, lock_trace_sequence=True, enforce_deadline=True)
     else:
-        job = await active_job(conn, review_id, attempt_id)
+        job = await active_job(conn, review_id, attempt_id, enforce_deadline=True)
     current = _current.get()
     if current is not None:
         current.validated, current.job = True, job
+        if current.budget is not None and job['review_mode'] == 'real_time':
+            remaining = remaining_review_seconds(job['detected_at'])
+            if remaining is not None:
+                current.budget.reschedule(asyncio.get_running_loop().time() + remaining)
     return job
 
 
@@ -294,7 +300,26 @@ async def tool_success(conn, body, result, summary):
         'status': 'succeeded', 'parameters': _parameters(body), 'response_snapshot': manifest,
         'elapsed_ms': round((time.perf_counter() - current.started) * 1000, 3)}))
     await append_traces(conn, body.review_id, records, trace_lock_held=True)
+    # Trace persistence may itself have waited for a database lock. Recheck
+    # before returning to the transaction manager; its COMMIT is inside the
+    # same absolute async budget, including stale-quote refresh I/O.
+    ensure_detection_deadline(job)
     return wire
+
+
+async def _bounded_tool(function, body, request, current):
+    budget = asyncio.timeout(None)
+    try:
+        async with budget:
+            current.budget = budget
+            return await function(body, request)
+    except TimeoutError:
+        if budget.expired():
+            raise HTTPException(status_code=409, detail={
+                'category': 'detection_deadline_exceeded', 'limit_seconds': 20}) from None
+        raise
+    finally:
+        current.budget = None
 
 
 def tool_evidence(kind):
@@ -305,7 +330,7 @@ def tool_evidence(kind):
             current = ToolCall(kind, str(uuid.uuid4()), time.perf_counter())
             token = _current.set(current)
             try:
-                return await function(body, request)
+                return await _bounded_tool(function, body, request, current)
             except HTTPException as original:
                 # Only a previously authenticated, current attempt may audit an
                 # expected rejection. Database failures never enter this path.
