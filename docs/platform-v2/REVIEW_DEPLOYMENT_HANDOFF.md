@@ -40,3 +40,4 @@ docker exec -i ai-football-v2-review-worker-1 python - \
 2026-11-12 17:46 UTC attempt21最终调查验收首轮0：Docker禁网finish.py严格schema、来源/分页/盘口/时延/调度/恢复性、15冻结哈希、完整脱敏/报告读回/raw与manifest空/权限通过；Git diff --check及业务/测试/部署零变化0、.omc保留。7来源和名称/期间/历史时钟缺口未闭合，最终blocked；33/26仅同哈希语义复用、新语义0。无业务fix/新业务回归/模型调用/历史重审/交易/部署。下一步独立只读复验、4份文档证据提交推送及远端核对。
 
 2026-11-12 17:46 UTC attempt21证据3e3e9db358d5dc4d7c9857115858d8f650356d05已commit/push/远端精确一致0，规划d64e1a2e同步。独立Docker只读schema/15哈希/完整脱敏/报告读回/raw及manifest空/权限复验0；Git边界/diff-check0，仅4份脱敏文档，业务/测试/部署零变化，.omc保留。最终blocked，33/26只同哈希语义复用、新语义0、7来源与名称/期间/历史时钟未闭合，无业务fix/新业务回归/部署/模型调用/历史重审/交易。独立工作包结束，后续需新增合法来源或历史计时证明，重复同窗不增加准确率样本。
+2026-11-12 17:54 UTC attempt22独立规划：固定UTC[13:00,13:30)，权威起点ba1b70c5/远端一致、既存.omc保留。AGENTS/最新交接/审核包、前窗及attempt21结论/schema已读，Git/Docker预检0。window-1300-1330-attempt22.md先核恢复元数据，再Docker现有TLS只读内存调查；原始posted_at先验72小时、未知年龄回复不读，raw/manifest空。尚无本轮DB证据，不提前解除blocked；下一步规划提交推送及冻结核验，不重审、不交易。
