@@ -8,6 +8,15 @@ export const fixtures=Array.from({length:12},(_,i)=>({id:'visual-match-'+i,sport
   phase:i<3?'live':i===7?'finished':'scheduled',match_state:'active',kickoff_at:instant,source_updated_at:instant,
   home_score:i<3?1:null,away_score:i<3?0:null,clock_minute:i<3?63:null,quote_fresh:i!==3,
   markets:[{...quote,fresh:i!==3}]}));
+// visual-match-1 覆盖篮球：三位数比分 + 半场比分 + 让分盘口。
+// 12 条全是足球时，14 张基线永远看不见 108 : 102 这类比分的排版，
+// 比分列宽度就是靠这个盲区漏掉的——基线全绿，真机上「客队」却被压掉一个字。
+// 其余 11 条保持不动：verify.mjs 的 16 行 / 12 个 VS 图标契约走的是它自己的 fixture，
+// 不读这一份；这里只影响 14 张基线截图的构图。
+Object.assign(fixtures[1],{sport:'basketball',competition_id:'visual-league-basketball',
+  competition_name:'中国男子篮球职业联赛',home_team:'广东华南虎',away_team:'辽宁飞豹',
+  home_score:108,away_score:102,half_home_score:56,half_away_score:50,
+  markets:[{...quote,market_name:'全场让分',market_kind:'handicap',line:'-4.5',fresh:true}]});
 export const expert={id:'visual-expert',display_nickname:'林老师 TG',total_signals:25,settled_signals:20,
   win:10,half_win:2,loss:5,half_loss:1,push:1,void:1,pending:5,effective_stake:16.5,unit_net:3.42,
   accuracy:11/16.5,average_unit_net:.171,unit_roi:3.42/16.5};
