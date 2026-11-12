@@ -23,3 +23,21 @@ Git/镜像/模块SHA/局部源码与既有测试检查退出0；保留主检出�
 TEST_SUBNET=10.93.81.0/28 sh infra/test/run.sh tests.test_homepage_expert_matches tests.test_async_score_summaries退出0：16项、4.439秒、0失败/错误/跳过；冻结源码证据.runtime/test-evidence/1775902/backend-tests.json。首页模块9项含5项新增回归，覆盖六种已结算结果、混合盘口、游客/会员上限、分页、刷新、完场待结、旧游标拒绝及并发结算空壳/游标继续。独立临时PG已清理。
 
 Docker内部网络10.93.82.0/28、0.5CPU/768MiB运行tests/browser/homepage-expert-matches.mjs退出0：1440/1030/390三视口、双运动/筛选/刷新/迟到响应/原文权限/几何布局通过，0页面错误、0写请求；证据主检出.runtime/homepage-pending-release-20261112/browser/。未改HTML/CSS/业务JS，不重跑无关全套。下一步源码提交推送、从当前API精确镜像仅覆盖同源public模块，先真实只读联调再仅切API。
+
+### 2026-11-12 08:04 UTC 源码与真实只读候选联调通过
+
+规划a787a803及源码423143b4已推送，远端423143b4867b65c445d950207a2ee51202c19217一致。基于当前线上精确API镜像928e9800…只覆盖public模块，构建退出0，候选sha256:61acb952441eb982a5c73b1c4e239c479847d64c4f49bb616c480a71503ef18d，OCI revision匹配源码。全/app文件摘要对比唯一差异app/routes/public.py，摘要6226d758…与冻结16项测试源码一致；Compose唯一差异services.api.image，退出0。数据库TLS/挂载/原环境复用，不输出秘密。
+
+候选在当前API网络命名空间、受保护相同配置、default_transaction_read_only=on及8秒查询超时下运行ASGI只读请求退出0：足球8场/11条、137ms；篮球3场/10条、28ms，摘要全部pending。所有验收零交易写入。当前阶段：通过review-worker内有界空闲门排空后，只切API；网页、review-worker及其他服务不重建。
+
+### 2026-11-12 08:07 UTC 仅API切换完成
+
+review-worker现有有界调度门于08:04:55 UTC取得空闲窗口后执行仅API切换，Compose退出0；随即释放门，gate正常退出0。API镜像61acb952…为healthy、RestartCount0、readyz返回ready；原环境字典/命令/挂载/资源/端口/安全/健康设置相同，其他9个同项目服务的ID与镜像未变。网页资源未改，不需要刷新CDN或构建web。当前活动为公网桌面/手机真实只读显示与公开接口pending断言，尚未将该阶段记为发布验收通过。
+
+### 2026-11-12 08:08 UTC 发布验收通过
+
+3003端口与正式域名分别读取足球/篮球专家关联列表，4项真实API检查退出0：足球8场11条、篮球3场10条，所有返回比赛均有pending摘要且无已结算项；全部赛事查询仍正常、不附加专家摘要。真实Chromium1440/390双运动共4项通过，DOM盘口状态全部待结算、无空比赛壳、无横向溢出、0页面错误/写请求，刷新保留篮球范围。期间没有修改订单、用户策略、推荐/结算记录或进行生产测试数据写入。
+
+Docker封存reports/homepage-pending-only-20261112.json退出0，包含冻结源摘要/16项测试/三个隔离视口/空闲门/配置镜像唯一差异/候选真实只读/部署后四API及四浏览器检查。所有范围验收通过，无失败候选发布；不冒充其他历史缺陷验收。
+
+源码423143b4已推送。当前阶段为证据提交及主检出生产API镜像覆盖/交接入口同步；网页镜像2fb58c69…不变，当前API镜像61acb952…可按原摘要928e9800…只回退API，禁止回滚已有数据。下次部署应使用infra/production/api.yml固定本阶段API镜像，并复用原生产web覆盖。

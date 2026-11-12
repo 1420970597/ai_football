@@ -1,0 +1,175 @@
+{
+  "recorded_at": "2026-11-12T08:08:03.283885+00:00",
+  "scope": "homepage recommended_only: pending expert recommendations only; all matches and history unchanged",
+  "status": "deployed_verified",
+  "source_commit": "423143b4867b65c445d950207a2ee51202c19217",
+  "image": "sha256:61acb952441eb982a5c73b1c4e239c479847d64c4f49bb616c480a71503ef18d",
+  "isolated": {
+    "command": "TEST_SUBNET=10.93.81.0/28 sh infra/test/run.sh tests.test_homepage_expert_matches tests.test_async_score_summaries",
+    "exit_code": 0,
+    "tests": 16,
+    "seconds": 4.439,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "browser_command": "Docker internal network: tests/browser/homepage-expert-matches.mjs",
+    "browser_exit_code": 0,
+    "viewports": [
+      1440,
+      1030,
+      390
+    ]
+  },
+  "pre_deploy_check": {
+    "status": "passed",
+    "config_changed": [
+      "services.api.image"
+    ],
+    "app_changed": [
+      "app/routes/public.py"
+    ],
+    "source_sha256": "6226d7586c224581b64998cb6dac08e14bd373232345fab8e32186984a20b35c",
+    "isolated_tests": 16,
+    "frozen_test_source_verified": true,
+    "candidate_image": "sha256:61acb952441eb982a5c73b1c4e239c479847d64c4f49bb616c480a71503ef18d"
+  },
+  "candidate_live_read_only": {
+    "at": "2026-11-12T08:03:46.834703+00:00",
+    "read_only": true,
+    "production_writes": 0,
+    "results": [
+      {
+        "sport": "football",
+        "http": 200,
+        "matches": 8,
+        "recommendations": 11,
+        "more": false,
+        "ms": 137
+      },
+      {
+        "sport": "basketball",
+        "http": 200,
+        "matches": 3,
+        "recommendations": 10,
+        "more": false,
+        "ms": 28
+      }
+    ]
+  },
+  "deploy_command": "captured API Compose chain + candidate.yml up -d --no-deps --no-build --pull never --force-recreate --wait --wait-timeout 90 api",
+  "deploy_exit_code": 0,
+  "post_deploy_check": {
+    "status": "passed",
+    "api_health": "healthy",
+    "other_services_unchanged": 9,
+    "image": "sha256:61acb952441eb982a5c73b1c4e239c479847d64c4f49bb616c480a71503ef18d",
+    "restart_count": 0
+  },
+  "review_idle_gate": [
+    {
+      "event": "claims_paused",
+      "at": "2026-11-12 08:04:55.510449+00:00"
+    },
+    {
+      "event": "idle_gate_held",
+      "at": "2026-11-12 08:04:55.578693+00:00"
+    },
+    {
+      "event": "gate_released",
+      "was_held": true
+    }
+  ],
+  "production_api": {
+    "status": "passed",
+    "read_only": true,
+    "writes": 0,
+    "results": [
+      {
+        "origin": "http://127.0.0.1:3003",
+        "sport": "football",
+        "http": 200,
+        "matches": 8,
+        "recommendations": 11,
+        "all_pending": true,
+        "all_matches_scope_unchanged": true
+      },
+      {
+        "origin": "http://127.0.0.1:3003",
+        "sport": "basketball",
+        "http": 200,
+        "matches": 3,
+        "recommendations": 10,
+        "all_pending": true,
+        "all_matches_scope_unchanged": true
+      },
+      {
+        "origin": "https://football.5545.eu.cc",
+        "sport": "football",
+        "http": 200,
+        "matches": 8,
+        "recommendations": 11,
+        "all_pending": true,
+        "all_matches_scope_unchanged": true
+      },
+      {
+        "origin": "https://football.5545.eu.cc",
+        "sport": "basketball",
+        "http": 200,
+        "matches": 3,
+        "recommendations": 10,
+        "all_pending": true,
+        "all_matches_scope_unchanged": true
+      }
+    ]
+  },
+  "production_browser": {
+    "status": "passed",
+    "results": [
+      {
+        "width": 1440,
+        "sport": "football",
+        "matches": 8,
+        "recommendations": 11,
+        "all_pending": true,
+        "no_empty_fixtures": true
+      },
+      {
+        "width": 1440,
+        "sport": "basketball",
+        "matches": 3,
+        "recommendations": 10,
+        "all_pending": true,
+        "no_empty_fixtures": true
+      },
+      {
+        "width": 390,
+        "sport": "football",
+        "matches": 8,
+        "recommendations": 11,
+        "all_pending": true,
+        "no_empty_fixtures": true
+      },
+      {
+        "width": 390,
+        "sport": "basketball",
+        "matches": 3,
+        "recommendations": 10,
+        "all_pending": true,
+        "no_empty_fixtures": true
+      }
+    ],
+    "real_production_reads": true,
+    "production_writes": 0,
+    "errors": [],
+    "writes": []
+  },
+  "new_test_orders": 0,
+  "database_migrations": 0,
+  "web_rebuilt": false,
+  "limits": [
+    "Only homepage expert-related listings and their summaries were changed.",
+    "Fixture phase is not a settlement outcome; finished matches with pending recommendations remain eligible under phase/date filters.",
+    "Production checks are anonymous and read-only; no trading policies or financial evidence were changed."
+  ],
+  "evidence_directory": ".runtime/homepage-pending-release-20261112"
+}
