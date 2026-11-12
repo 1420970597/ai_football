@@ -1,0 +1,14 @@
+# Explicit optional project Git transport. Add after compose.yml only when used.
+services:
+  supervisor:
+    environment:
+      GIT_SSH_COMMAND: ssh -i /run/expert-git/key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/run/expert-git/known_hosts
+    volumes:
+      - type: bind
+        source: ${EXPERT_GIT_KEY_FILE:?set explicitly authorized existing SSH key file}
+        target: /run/expert-git/key
+        read_only: true
+      - type: bind
+        source: ${EXPERT_GIT_KNOWN_HOSTS_FILE:?set explicitly authorized known_hosts file}
+        target: /run/expert-git/known_hosts
+        read_only: true

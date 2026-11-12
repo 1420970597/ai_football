@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "window_start", "window_end", "status", "messages_examined", "unresolved_examined",
+    "confirmed_omissions", "confirmed_misbindings", "latency_target_met", "summary",
+    "evidence_paths", "fix_commits", "validation", "remaining_issues"
+  ],
+  "properties": {
+    "window_start": {"type": "string"},
+    "window_end": {"type": "string"},
+    "status": {"type": "string", "enum": ["complete", "blocked", "needs_retry"]},
+    "messages_examined": {"type": "integer", "minimum": 0},
+    "unresolved_examined": {"type": "integer", "minimum": 0},
+    "confirmed_omissions": {"type": "integer", "minimum": 0},
+    "confirmed_misbindings": {"type": "integer", "minimum": 0},
+    "latency_target_met": {"type": "boolean"},
+    "summary": {"type": "string"},
+    "evidence_paths": {"type": "array", "items": {"type": "string"}},
+    "fix_commits": {"type": "array", "items": {"type": "string"}},
+    "validation": {"type": "array", "items": {"type": "string"}},
+    "remaining_issues": {"type": "array", "items": {"type": "string"}}
+  }
+}
