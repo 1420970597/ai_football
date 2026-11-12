@@ -366,6 +366,7 @@ function renderMatches() {
     row.insertAdjacentHTML('beforeend', `<div class="match-account-history" data-account-fixture="${esc(fixtureId)}"${state.user ? '' : ' hidden'}>${accountHistory.matchMarkup(fixtureId)}</div>`);
   });
   adoptVsIcons();
+  renderLiveCount();
   $("#fixture-count").textContent =
     state.matches.length + (state.cursor ? "+" : "");
   $("#load-more").hidden = !state.cursor;
@@ -380,6 +381,18 @@ function renderMatches() {
         : "尝试切换日期、状态或联赛；没有比赛不会补入演示数据。",
     });
 }
+// The header count reads the matches already in state. A separate live endpoint
+// would be a second source for a number the list is showing anyway.
+function renderLiveCount() {
+  const badge = $("#live-count");
+  if (!badge) return;
+  const live = state.matches.filter((m) => m.phase === "live").length;
+  badge.hidden = !live;
+  if (!live) return;
+  badge.innerHTML = `滚球 <strong>${live}</strong> 场`;
+  badge.setAttribute("aria-label", `当前列表有 ${live} 场滚球`);
+}
+
 function updateMatchServiceState() {
   if (state.matchScope === 'recommended') {
     $('#service-state').textContent = `专家关联赛事已响应 · ${state.matches.length} 场已载入`;
