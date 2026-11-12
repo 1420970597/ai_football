@@ -5886,3 +5886,5 @@ API a6debc6b/源码fd8ccf76；39项专项通过。最终公网及3003四API、14
 2026-11-12 15:04 UTC attempt7最终验收：Docker无网络finish.py严格schema、数量/分页/盘口/延迟单位、冻结哈希、5不确定语义/缺工具口径、脱敏与空raw/manifest全部0，报告JSON写后读回一致；Git diff --check及起点909ec76b至今业务/测试/部署零变化0，.omc保留。报告window-1300-1330-attempt7.{md,json}，33/26为同哈希语义复用，7来源仍未完成分析，最终blocked。活动阶段为仅文档证据提交推送，无fix commit、新代码部署或交易。
 
 2026-11-12 15:04 UTC attempt7证据4514f73ff4aacc75222dc7d4e1a93b3a5f765fa9已提交/push/远端精确核对，均0；规划bbd3b33f亦已同步。仅四份文档/脱敏报告，业务/测试/部署零变化，既存.omc保留；无fix commit、历史重审、交易或新部署，raw=0/manifest空，最终blocked。下一步等待可核来源/检测/媒体/提交证据，不用重复窗口复核替代恢复证明。
+
+2026-11-12 15:11 UTC attempt8固定13:00–13:30窗独立规划：起点22df47e6及远端一致，仅既存.omc保留。已读AGENTS、最新交接/工作包、上一窗与attempt7结论；实际路径重读/Git/Docker核对0，旧打包路径组合读取2已记录。活动工作包window-1300-1330-attempt8.md：Docker现有TLS只读内存重核来源/工具/接受/计时，优先检查缺口增量，并追加有界历史元数据探针；未知时间回复不读、不导出raw、不重审历史。本轮尚无DB结果，blocked不提前解除。下一步规划提交推送及只读调查。

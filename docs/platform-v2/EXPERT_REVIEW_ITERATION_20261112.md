@@ -93,3 +93,5 @@
 2026-11-12 15:04 UTC attempt7最终检查：Docker无网络finish.py退出0，严格schema、数量/分页/盘口/延迟单位、冻结脚本、脱敏、报告读回及空raw/manifest均通过；Git diff --check及起点909ec76b至今业务/测试/部署零变化0。报告window-1300-1330-attempt7.{md,json}，33已核来源语义/26未解决仅同哈希复用，另7来源未完成分析，最终blocked；.omc保留。活动阶段为仅文档证据提交推送，无fix commit/新业务发布/历史重审/交易。
 
 2026-11-12 15:04 UTC attempt7证据阶段4514f73ff4aacc75222dc7d4e1a93b3a5f765fa9已push且远端精确一致，commit/push/核对均0；规划bbd3b33f也已同步。仅本轮四份文档/脱敏报告，业务/测试/部署未变，.omc保留，raw与manifest空。最终blocked，来源/检测/名称/期间与分段计时缺口保留，无fix commit/模型调用/新代码部署/交易。下一步需要可核新增证据，不自动重审历史、不把第七次相同窗口核对当成20秒或全局准确率通过。
+
+2026-11-12 15:11 UTC attempt8独立规划：权威分支refactor/TASK-78-web-ux、起点22df47e610a281b24dd43f0cc61eda0197f4e493与远端一致，既存.omc保留。工程约束、最新交接/工作包、上一窗及attempt7脱敏结论已读，实际路径读取/Git/Docker检查0；旧打包路径组合读取2已记录。工作包window-1300-1330-attempt8.md：先核证据增量，再有界查历史计时/来源证明能否恢复；Docker TLS只读内存处理，不读取未知时间回复、不导出原文、不重审历史。尚无本轮DB结果，不提前解除blocked；下一步规划提交推送和只读核验。
