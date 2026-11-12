@@ -1,7 +1,7 @@
 {
-  "recorded_at": "2026-11-12T07:04:07.267872+00:00",
+  "recorded_at": "2026-11-12T07:19:27.000461+00:00",
   "stage": "isolated_validation_passed; not production or release",
-  "web_source_commit": null,
+  "web_source_commit": "f0dd1c8c7be27d58bf6acf41bf1f6865d2baa85e",
   "source_note": "Frozen candidate web files are identified by exact hashes. A commit is supplied only after this source has been committed; null means a not-yet-committed candidate. Report/docs are a separate verification artifact.",
   "checks": [
     {

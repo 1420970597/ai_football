@@ -57,5 +57,5 @@
 ## 四、遗留
 
 1. 个人中心 1440 下两列网格行高不均：`我的乐鱼账户` 465px 与 `自动投注与限额` 816px 同排，前者下方空约 351px。测过三种方案（多列流 `column-count`、整行跨列、单列全宽），均改善空档但会改变既有分区顺序或增加滚动长度，未纳入本次上线。
-2. 尚未做前端资源指纹（文件名哈希）与 ETag/304；当前 `web/app/Dockerfile` 逐个文件 COPY，浏览器缓存只能靠 nginx 默认协商。
+2. 前端资源没有内容指纹（文件名不含哈希）。`ETag`/`304` 本身可用：nginx 发 `ETag: "6af55c9d-1198f"` 与 `Last-Modified`，带 `If-None-Match` 或 `If-Modified-Since` 均返回 304、0 字节。问题在边缘缓存，已复现为上线缺陷，详见 `HANDOFF_VISUAL_FRONTEND_20261112.md` 第 3 节。
 3. 主检出 `/root/ai_football` 仍在 `fix/TASK-78-hermes-telegram-sync` 分支且带他人未提交改动（`account_jobs.py`、`account_protocol.py`、`worker.py`、`test_account_protocol.py`）；本次上线的前端源码来自 `refactor/TASK-78-web-ux`，两条分支尚未合并，需在合并时统一。
