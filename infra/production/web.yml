@@ -1,0 +1,12 @@
+# Existing business entry promotion. Append to the validated running Compose
+# chain; this file deliberately supplies no credentials or backend overrides.
+x-production-entry:
+  domain: football.5545.eu.cc
+  host_port: 3003
+  source_revision: 26ac5f8cfc9e0690570ad134dd11f94c5c567680
+  artifact_version: 2.0.0-dev-assets.20261112.1
+  scope: production-business-entry
+
+services:
+  web:
+    image: sha256:2fb58c6963503f44d6e5d8f55ee0832eb09b8ff63e64550a3420ecae146bf7e0
