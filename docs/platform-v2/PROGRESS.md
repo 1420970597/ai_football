@@ -5902,3 +5902,5 @@ API a6debc6b/源码fd8ccf76；39项专项通过。最终公网及3003四API、14
 2026-11-12 15:25 UTC attempt9最终验收：Docker finish.py严格schema/数量/分页/盘口/时延单位/23键嵌套探针、6冻结哈希、脱敏、报告JSON写后读回与空raw/manifest全部0；git diff --check及起点39f1e65f至今业务/测试/部署零变化0，.omc保留。报告window-1300-1330-attempt9.{md,json}，33/26仅同哈希语义复用，7来源未完成分析，最终blocked。当前活动阶段为仅文档证据提交推送；无fix commit、新业务回归、重审/交易/部署，不把重复窗口视为新准确率样本。
 
 2026-11-12 15:26 UTC attempt9证据2807087ee514c61bb69f9ed508cc48d16517ad26已commit/push/ls-remote精确核对，均0；规划4c954049亦同步。提交后Docker无网络schema/报告读回/脱敏/6冻结哈希/空raw及manifest复验0；仅本轮报告/进度，业务/测试/部署无改动，.omc保留。最终blocked，无fix commit/业务回归/新部署/重审或交易。新嵌套计时核验未恢复历史检测/媒体/COMMIT/限流细分，下一步需要新增合法来源或时钟证明，重复窗口不增加准确率样本。
+
+2026-11-12 15:33 UTC attempt10固定13:00–13:30窗独立规划：起点60d58c1c与远端一致，既存.omc保留。已读AGENTS/最新交接/工作包、上一窗及attempt9脱敏结论/严格schema，Git/Docker/调查入口读取0；本轮尚无DB结果。工作包window-1300-1330-attempt10.md：先查证据增量、Docker TLS只读内存核验来源/媒体/工具/接受及分段计时；未知时间回复排除，不导出raw、不重审历史。下一步规划提交推送、冻结调查脚本及只读调查，blocked不提前解除。
