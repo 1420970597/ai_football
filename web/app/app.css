@@ -770,8 +770,13 @@ h3 {
 .score-table-head,
 .match-row {
   display: grid;
+  /* 比分列按最长的真实比分定宽，而不是按足球的「1 : 0」。
+     篮球加时赛会打出 108 : 102 这类三对三，20px/700 tabular-nums 实测约 90px；
+     列宽定在 52px 时文字会溢出自己的盒子，压到客队第一个字上，
+     而 boundingBox 量的是格子不是墨迹，只看盒子的断言永远发现不了。
+     多出来的宽度由左右两个 minmax(0, 1fr) 队名列均摊，行高与联赛列不变。 */
   grid-template-columns:
-    120px 52px 48px minmax(0, 1fr) 52px minmax(0, 1fr) 160px 40px;
+    120px 52px 48px minmax(0, 1fr) 96px minmax(0, 1fr) 160px 40px;
   align-items: center;
   text-align: center;
 }
@@ -2514,8 +2519,10 @@ dialog[open] {
   }
   .score-table-head,
   .match-row {
+    /* 比分列与 1440 同宽：字号没变，三对三比分要的空间也一样，
+       宽度从盘口列借（140 → 128），不动队名列。 */
     grid-template-columns:
-      110px 48px 44px minmax(0, 1fr) 48px minmax(0, 1fr) 140px 36px;
+      110px 48px 44px minmax(0, 1fr) 92px minmax(0, 1fr) 128px 36px;
   }
   .match-odds {
     gap: 4px;
@@ -3236,8 +3243,9 @@ dialog[open] {
   }
   .main-layout[data-page="scores"] .score-table-head,
   .main-layout[data-page="scores"] .match-row {
+    /* 比分列同为 96px；宽度仍从盘口列借，不动两个队名列。 */
     grid-template-columns:
-      120px 52px 48px minmax(0, 1fr) 52px minmax(0, 1fr) 168px 36px;
+      120px 52px 48px minmax(0, 1fr) 96px minmax(0, 1fr) 152px 36px;
   }
   .main-layout[data-page="scores"] .match-league {
     display: flex;
@@ -3277,8 +3285,10 @@ dialog[open] {
   }
   .main-layout[data-page="scores"] .score-table-head,
   .main-layout[data-page="scores"] .match-row {
+    /* 单列布局下右栏已隐藏，横向更紧；比分列仍要放得下三对三，
+       从盘口列（132 → 120）让出 12px。 */
     grid-template-columns:
-      110px 48px 44px minmax(0, 1fr) 48px minmax(0, 1fr) 132px 36px;
+      110px 48px 44px minmax(0, 1fr) 92px minmax(0, 1fr) 120px 36px;
   }
 }
 

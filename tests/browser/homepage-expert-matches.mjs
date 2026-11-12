@@ -21,7 +21,7 @@ await new Promise(resolve=>server.listen(8080,'127.0.0.1',resolve));
 const browser=await chromium.launch({headless:true,args:['--disable-dev-shm-usage']});
 const results=[],errors=[];
 try{
-  for(const width of [1440,390]){
+  for(const width of [1440,1030,390]){
     const context=await browser.newContext({viewport:{width,height:960},locale:'zh-CN'});
     const page=await context.newPage(),reads=[],writes=[];
     let fail=false,hold=false,releaseHeld,startHeld;
@@ -29,7 +29,8 @@ try{
     page.on('pageerror',error=>errors.push(error.message));
     const match=(sport,phase='live')=>({id:sport+'-match',sport,competition_name:sport==='football'?'足球联赛':'篮球联赛',
       home_team:sport==='football'?'足球主队':'篮球主队',away_team:'客队',phase,clock_minute:33,
-      home_score:sport==='football'?1:74,away_score:sport==='football'?0:70,kickoff_at:instant,source_updated_at:instant,
+      // 篮球取三对三（加时赛真实比分），这是比分列要放下的最长内容；两对两放得下不代表它放得下。
+      home_score:sport==='football'?1:108,away_score:sport==='football'?0:102,kickoff_at:instant,source_updated_at:instant,
       markets:[],expert_signals_has_more:false,expert_signals:[0,1].map(i=>({id:sport+'-signal-'+i,expert_id:sport+'-expert',
         display_nickname:i?'另一位专家':'本场专家',phase:'scheduled',market_id:sport==='football'?'2':'38',
         market_name:sport==='football'?'全场大小':'全场总分',market_kind:'total',period:i?'first_half':'full_time',
@@ -102,6 +103,11 @@ try{
     await page.waitForFunction(()=>document.querySelector('#matches-notice').hidden);
     await page.reload();
     await page.locator('[data-fixture="basketball-match"] [data-recommendation]').first().waitFor();
+    // 先量文字有没有溢出自己的格子。boundingBox 返回的是网格轨道的边框盒，
+    // 文字超出时盒子照旧待在列内、压着客队的字画出去，所以「盒子先后顺序」永远为真，
+    // 看不见这类溢出。scrollWidth 比 clientWidth 才是真正能失败的那个数。
+    const fit=await page.locator('.match-row[data-sport="basketball"] .score-button').evaluate(el=>{const b=el.getBoundingClientRect();return {scrollWidth:el.scrollWidth,clientWidth:el.clientWidth,track:Math.round(b.width*10)/10};});
+    assert.ok(fit.scrollWidth<=fit.clientWidth+1,JSON.stringify({width,fit}));
     const home=await page.locator('.match-row .team-home').boundingBox();
     const score=await page.locator('.match-row .score-button').boundingBox();
     const away=await page.locator('.match-row .team-away').boundingBox();
