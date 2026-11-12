@@ -375,7 +375,7 @@ h3 {
   color: var(--brand);
   background: var(--brand-soft);
   border-left: 3px solid var(--brand);
-  padding-left: 9px;
+  padding-left: var(--s2);
 }
 .left-rail button span {
   float: right;
@@ -669,12 +669,12 @@ h3 {
   font-size: var(--text-sm);
 }
 .filter-row select {
-  max-width: 155px;
+  max-width: 156px;
   font-size: var(--text-sm);
   padding: var(--s1);
 }
 .filter-row input {
-  padding: var(--s1) 25px var(--s1) var(--s2);
+  padding: var(--s1) var(--s4) var(--s1) var(--s2);
   min-width: 0;
   font-size: var(--text-sm);
 }
@@ -791,7 +791,7 @@ h3 {
   border-bottom: 1px solid var(--line);
   min-height: 40px;
   font-size: var(--text-sm);
-  padding: 2px 0;
+  padding: 0;
   transition: background-color 120ms;
 }
 .match-row:nth-child(even) {
@@ -849,7 +849,7 @@ h3 {
 .team-button {
   font-size: var(--text-md);
   color: var(--ink);
-  padding: var(--s1) 3px;
+  padding: var(--s1);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -902,7 +902,7 @@ h3 {
 .match-odds span {
   background: var(--green-soft);
   color: var(--green);
-  padding: 1px 3px;
+  padding: 0 var(--s1);
   border-radius: 2px;
   white-space: nowrap;
 }
@@ -1088,7 +1088,7 @@ h3 {
   background: var(--brand-soft);
   color: var(--brand);
   border-radius: 4px;
-  padding: 0 6px;
+  padding: 0 var(--s2);
   white-space: nowrap;
 }
 .match-recommendation > .badge {
@@ -1124,7 +1124,7 @@ h3 {
 /* 一键实盘买入：这是全站唯一使用真实资金的按钮 */
 .manual-bet {
   min-height: 44px;
-  padding: 0 18px;
+  padding: 0 var(--s4);
   border-radius: var(--radius);
   background: var(--buy);
   color: var(--paper);
@@ -1656,7 +1656,7 @@ h3 {
 .message-preview {
   white-space: pre-wrap;
   line-height: 1.8;
-  max-height: 110px;
+  max-height: 112px;
   overflow: hidden;
   font-size: var(--text-md);
   overflow-wrap: anywhere;
@@ -1750,7 +1750,7 @@ h3 {
   font-size: var(--text-sm);
   color: var(--ink-2);
   line-height: 1.9;
-  min-height: 65px;
+  min-height: 64px;
   list-style: none;
 }
 .plan-card li::before {
@@ -1971,7 +1971,7 @@ textarea {
   width: 15px !important;
   height: 15px;
   min-height: 0;
-  margin: 3px 0 0;
+  margin: var(--s1) 0 0;
 }
 .form-note {
   color: var(--muted);
@@ -2431,7 +2431,7 @@ dialog[open] {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   padding: var(--s3);
-  max-height: 330px;
+  max-height: 328px;
   overflow: auto;
 }
 .metrics-grid {
@@ -2687,7 +2687,7 @@ dialog[open] {
     scroll-snap-align: center;
   }
   .date-select input {
-    width: 118px;
+    width: 120px;
     font-size: var(--text-2xs);
   }
   .strip-filters {
@@ -2718,7 +2718,7 @@ dialog[open] {
     /* 18px 顶部留白让时间/状态这一行浮在队伍行之上，同时把整行控制在 80px 内：
        18 + 40（队伍按钮）+ 2（行距）+ 12（盘口）+ 4（底部）= 76px。 */
     min-height: 0;
-    padding: 18px var(--s1) var(--s1);
+    padding: 16px var(--s1) var(--s1);
     row-gap: 2px;
     border-bottom: 1px solid var(--line);
   }
