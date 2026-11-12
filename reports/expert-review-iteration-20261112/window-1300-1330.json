@@ -1,0 +1,2758 @@
+{
+  "schema_version": 1,
+  "window_start": "2026-11-12T13:00:00Z",
+  "window_end": "2026-11-12T13:30:00Z",
+  "status": "blocked",
+  "updated_at": "2026-11-12T13:55:17.203967+00:00",
+  "scope": "closed pre-release window only; independent source-only pinned Hermes extraction, not human image inspection; business DB read-only and TLS; no historical rereview/transaction/replay",
+  "counts": {
+    "metadata_versions": 40,
+    "unique_current_versions": 40,
+    "event_and_message_sets_equal": true,
+    "experts": 6,
+    "review_jobs": 34,
+    "succeeded": 7,
+    "unresolved": 27,
+    "unsupported_without_job": 6,
+    "source_semantics_reviewed": 33,
+    "unresolved_source_semantics_reviewed": 26,
+    "source_only_batches": 10,
+    "additional_focused_period_batches": 1,
+    "source_images_read_hashed_validated": 10,
+    "source_images_access_errors": 0,
+    "partially_accepted_detected": 0,
+    "confirmed_omissions": 0,
+    "confirmed_misbindings": 0,
+    "confirmation_limit": "zero confirmed is not proof of zero omissions/misbindings",
+    "true_detection_window_versions": null,
+    "event_persistence_window_proxy_versions": 40
+  },
+  "source_categories": {
+    "emotion": 6,
+    "result_feedback": 4,
+    "chatter": 11,
+    "advertisement": 5,
+    "unknown_reply_excluded": 1
+  },
+  "metrics": {
+    "schema_version": 1,
+    "window_start": "2026-11-12T13:00:00Z",
+    "window_end": "2026-11-12T13:30:00Z",
+    "snapshot_at": "2026-11-12 13:41:08.898798+00:00",
+    "read_only": "on",
+    "tls": true,
+    "messages": 40,
+    "jobs": 34,
+    "experts": 6,
+    "states": {
+      "succeeded": 7,
+      "unresolved": 27
+    },
+    "no_job_unsupported": 6,
+    "signals": 7,
+    "unknown_detection": 40,
+    "unknown_reply": 1,
+    "failures": {
+      "provider_transient": 4
+    },
+    "toolstats": {
+      "mcp_search_matches:succeeded": 11,
+      "mcp_resolve_match:succeeded": 2,
+      "mcp_list_match_markets:succeeded": 7,
+      "mcp_record_expert_signals:succeeded": 7
+    },
+    "seconds": {
+      "persisted_to_first_claim": {
+        "n": 34,
+        "min": 0.03,
+        "p50": 0.332,
+        "p95": 29.74,
+        "max": 52.415,
+        "over_20": 2
+      },
+      "first_acceptance_lower_bound_s": {
+        "n": 7,
+        "min": 12.535,
+        "p50": 36.692,
+        "p95": 105.513,
+        "max": 105.513,
+        "over_20": 6
+      },
+      "all_observed_acceptances_lower_bound_s": {
+        "n": 7,
+        "min": 12.535,
+        "p50": 36.692,
+        "p95": 105.513,
+        "max": 105.513,
+        "over_20": 6
+      },
+      "conclusion_lower_bound_s": {
+        "n": 34,
+        "min": 4.218,
+        "p50": 15.882,
+        "p95": 139.905,
+        "max": 334.102,
+        "over_20": 13
+      },
+      "all_attempt_persisted_to_claim": {
+        "n": 38,
+        "min": 0.03,
+        "p50": 0.358,
+        "p95": 131.494,
+        "max": 326.715,
+        "over_20": 6
+      },
+      "preflight": {
+        "n": 37,
+        "min": 0.005,
+        "p50": 0.01,
+        "p95": 0.058,
+        "max": 0.458,
+        "over_20": 0
+      },
+      "provider": {
+        "n": 33,
+        "min": 4.135,
+        "p50": 8.63,
+        "p95": 76.532,
+        "max": 111.11,
+        "over_20": 8
+      },
+      "model_input_preparation": {
+        "n": 33,
+        "min": 0.0,
+        "p50": 0.0,
+        "p95": 0.059,
+        "max": 0.36,
+        "over_20": 0
+      },
+      "claim_to_model_result": {
+        "n": 33,
+        "min": 4.167,
+        "p50": 8.663,
+        "p95": 76.647,
+        "max": 111.165,
+        "over_20": 8
+      },
+      "mcp_search_matches": {
+        "n": 11,
+        "min": 0.019,
+        "p50": 0.032,
+        "p95": 0.101,
+        "max": 0.101,
+        "over_20": 0
+      },
+      "mcp_resolve_match": {
+        "n": 2,
+        "min": 0.006,
+        "p50": 0.006,
+        "p95": 0.007,
+        "max": 0.007,
+        "over_20": 0
+      },
+      "mcp_list_match_markets": {
+        "n": 7,
+        "min": 0.013,
+        "p50": 1.386,
+        "p95": 2.856,
+        "max": 2.856,
+        "over_20": 0
+      },
+      "mcp_record_expert_signals": {
+        "n": 7,
+        "min": 0.021,
+        "p50": 0.027,
+        "p95": 1.879,
+        "max": 1.879,
+        "over_20": 0
+      }
+    },
+    "maximum_review_intervals": 4,
+    "maximum_per_expert_review_intervals": 2,
+    "searches": [
+      {
+        "case": "94f2a801",
+        "complete": true,
+        "page_count": 1,
+        "total_candidates": 2,
+        "phase": "all",
+        "competition_filter": false,
+        "time_bounds": true,
+        "has_expected_cursor": false
+      },
+      {
+        "case": "272cb38e",
+        "complete": true,
+        "page_count": 1,
+        "total_candidates": 1,
+        "phase": "all",
+        "competition_filter": false,
+        "time_bounds": true,
+        "has_expected_cursor": false
+      },
+      {
+        "case": "97c8b255",
+        "complete": true,
+        "page_count": 1,
+        "total_candidates": 1,
+        "phase": "all",
+        "competition_filter": false,
+        "time_bounds": true,
+        "has_expected_cursor": false
+      },
+      {
+        "case": "ed78d647",
+        "complete": true,
+        "page_count": 1,
+        "total_candidates": 1,
+        "phase": "all",
+        "competition_filter": false,
+        "time_bounds": true,
+        "has_expected_cursor": false
+      },
+      {
+        "case": "ed78d647",
+        "complete": true,
+        "page_count": 1,
+        "total_candidates": 1,
+        "phase": "all",
+        "competition_filter": false,
+        "time_bounds": true,
+        "has_expected_cursor": false
+      },
+      {
+        "case": "3f5a2aec",
+        "complete": true,
+        "page_count": 1,
+        "total_candidates": 0,
+        "phase": "all",
+        "competition_filter": true,
+        "time_bounds": true,
+        "has_expected_cursor": false
+      },
+      {
+        "case": "3f5a2aec",
+        "complete": true,
+        "page_count": 1,
+        "total_candidates": 1,
+        "phase": "all",
+        "competition_filter": false,
+        "time_bounds": true,
+        "has_expected_cursor": false
+      },
+      {
+        "case": "5830c68b",
+        "complete": true,
+        "page_count": 1,
+        "total_candidates": 1,
+        "phase": "all",
+        "competition_filter": false,
+        "time_bounds": true,
+        "has_expected_cursor": false
+      },
+      {
+        "case": "874b3044",
+        "complete": true,
+        "page_count": 1,
+        "total_candidates": 1,
+        "phase": "all",
+        "competition_filter": false,
+        "time_bounds": true,
+        "has_expected_cursor": false
+      },
+      {
+        "case": "10abddc5",
+        "complete": true,
+        "page_count": 1,
+        "total_candidates": 0,
+        "phase": "all",
+        "competition_filter": true,
+        "time_bounds": true,
+        "has_expected_cursor": false
+      },
+      {
+        "case": "10abddc5",
+        "complete": true,
+        "page_count": 1,
+        "total_candidates": 1,
+        "phase": "all",
+        "competition_filter": false,
+        "time_bounds": true,
+        "has_expected_cursor": false
+      }
+    ],
+    "cases": [
+      {
+        "case": "94f2a801",
+        "state": "succeeded",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 1,
+        "attempts": 1,
+        "trace_hash": "f5e78ee376d00045c51eed82130d6093b35aa0c6bb77b27535ced3ede7f9c3f3",
+        "source_sha256": "5b6d9fade58a7cb215ae2bdc1de1ba64bb081b8fd3ed4fb1b48db5439491290d",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.034,
+        "first_acceptance_lower_bound_s": 25.072,
+        "all_observed_acceptances_lower_bound_s": 25.072,
+        "conclusion_lower_bound_s": 31.04,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 33.985,
+            "queue_wait_ms": 34.592,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": [
+          {
+            "kind": "mcp_search_matches",
+            "status": "succeeded",
+            "elapsed_ms": 65.81,
+            "complete": true,
+            "total": 2,
+            "returned": 2,
+            "search_parameters_present": {
+              "team_query": true,
+              "competition_query": false,
+              "from_utc": true,
+              "to_utc": true,
+              "phase": true,
+              "sport": true
+            },
+            "phase": "all",
+            "continuous_after": false
+          },
+          {
+            "kind": "mcp_resolve_match",
+            "status": "succeeded",
+            "elapsed_ms": 7.162
+          },
+          {
+            "kind": "mcp_list_match_markets",
+            "status": "succeeded",
+            "elapsed_ms": 1385.544,
+            "market_filter": {
+              "line": "0.5",
+              "period": "first_half",
+              "selection": "over",
+              "market_kind": "total"
+            },
+            "market_coverage": {
+              "total_quotes": 96,
+              "matched_quotes": 1,
+              "returned_quotes": 1,
+              "complete_for_filter": true
+            }
+          },
+          {
+            "kind": "mcp_record_expert_signals",
+            "status": "succeeded",
+            "elapsed_ms": 24.384,
+            "accepted": 1,
+            "rejected_reasons": []
+          }
+        ]
+      },
+      {
+        "case": "3a9d2a1e",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "dc96767cc76140aa7a395c1f1a0f976a2c4b786dab1b68f1d3a8fe6602ccceed",
+        "source_sha256": "218f11002b6bdcfaa9c40eccc860e4815e9462f1cdf62e873909305a413f1584",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.038,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 4.462,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 2,
+            "event_to_claim_ms": 37.668,
+            "queue_wait_ms": 38.386,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "ed60f0b1",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "493e846b8c9c6214a99381600c087216ca258a2a8b6c2ff6325b96fb13d3b509",
+        "source_sha256": "49dfb58528aaa2581388193e2737a8f9d6b39b2260c7acc46e1066b15b4f5e48",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.785,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 10.12,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 2,
+            "event_to_claim_ms": 784.876,
+            "queue_wait_ms": 785.458,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "a3834c6b",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "304f5de445a4963701eb591fbeae20ab06b495d28a02f7e79bf726ebcf4d85f3",
+        "source_sha256": "71cec1b1ba3bd47f36756a4d0b56f3d91098376a4ad55c2509e4d222495ec1e3",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.368,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 9.046,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 2,
+            "event_to_claim_ms": 368.145,
+            "queue_wait_ms": 369.722,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "272cb38e",
+        "state": "succeeded",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 1,
+        "attempts": 1,
+        "trace_hash": "1fb592e9c4863d4a71ccee41c9e27e8f0cb650a564e63f1d262b7313f8da470d",
+        "source_sha256": "08256e42f58edfa2a00e6a45992d7e5413d18a6d51d10d7e6a86c3a9e301c69a",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.868,
+        "first_acceptance_lower_bound_s": 12.535,
+        "all_observed_acceptances_lower_bound_s": 12.535,
+        "conclusion_lower_bound_s": 17.035,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 2,
+            "event_to_claim_ms": 868.258,
+            "queue_wait_ms": 868.961,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": [
+          {
+            "kind": "mcp_search_matches",
+            "status": "succeeded",
+            "elapsed_ms": 26.947,
+            "complete": true,
+            "total": 1,
+            "returned": 1,
+            "search_parameters_present": {
+              "team_query": true,
+              "competition_query": false,
+              "from_utc": true,
+              "to_utc": true,
+              "phase": true,
+              "sport": true
+            },
+            "phase": "all",
+            "continuous_after": false
+          },
+          {
+            "kind": "mcp_list_match_markets",
+            "status": "succeeded",
+            "elapsed_ms": 1261.475,
+            "market_filter": {
+              "line": "0.75",
+              "period": "first_half",
+              "selection": "over",
+              "market_kind": "total"
+            },
+            "market_coverage": {
+              "total_quotes": 188,
+              "matched_quotes": 1,
+              "returned_quotes": 1,
+              "complete_for_filter": true
+            }
+          },
+          {
+            "kind": "mcp_record_expert_signals",
+            "status": "succeeded",
+            "elapsed_ms": 27.368,
+            "accepted": 1,
+            "rejected_reasons": []
+          }
+        ]
+      },
+      {
+        "case": "fd18ec64",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "fc2e2e4724ab8a6b02c07e93fb52b60323938b9f405a83f68fba90fe3744ab00",
+        "source_sha256": "bf9cb551e796b7efc12c8e95223377f9135f6d403dfc9daea14e9a1ee4265b08",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.502,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 7.463,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 2,
+            "event_to_claim_ms": 501.936,
+            "queue_wait_ms": 502.913,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "97c8b255",
+        "state": "succeeded",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 1,
+        "attempts": 1,
+        "trace_hash": "a753587bf5a045cd6c5801be87f6471436dc569f310a2c44590c070ce0c62608",
+        "source_sha256": "858f98d74bf7dc1727ec5a48ebe87eace2f9875fb528f75be771c5849bc24256",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.546,
+        "first_acceptance_lower_bound_s": 26.238,
+        "all_observed_acceptances_lower_bound_s": 26.238,
+        "conclusion_lower_bound_s": 31.137,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 2,
+            "event_to_claim_ms": 546.297,
+            "queue_wait_ms": 557.563,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": [
+          {
+            "kind": "mcp_search_matches",
+            "status": "succeeded",
+            "elapsed_ms": 83.745,
+            "complete": true,
+            "total": 1,
+            "returned": 1,
+            "search_parameters_present": {
+              "team_query": true,
+              "competition_query": false,
+              "from_utc": true,
+              "to_utc": true,
+              "phase": true,
+              "sport": true
+            },
+            "phase": "all",
+            "continuous_after": false
+          },
+          {
+            "kind": "mcp_list_match_markets",
+            "status": "succeeded",
+            "elapsed_ms": 1477.99,
+            "market_filter": {
+              "line": "0.75",
+              "period": "first_half",
+              "selection": "over",
+              "market_kind": "total"
+            },
+            "market_coverage": {
+              "total_quotes": 86,
+              "matched_quotes": 1,
+              "returned_quotes": 1,
+              "complete_for_filter": true
+            }
+          },
+          {
+            "kind": "mcp_record_expert_signals",
+            "status": "succeeded",
+            "elapsed_ms": 31.758,
+            "accepted": 1,
+            "rejected_reasons": []
+          }
+        ]
+      },
+      {
+        "case": "0d2b1cd0",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "f0da4f2718bdb1ea561dc6226fb92d10b262ad15148edcf7ed37d400c3c71420",
+        "source_sha256": "6d7a4a24bcac1d385327898ea3870f5fae1d2d142abaf0ed8b492c99729672dd",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.037,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 4.466,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 37.043,
+            "queue_wait_ms": 37.829,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "ed78d647",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "387ae0dafb9cfa2dc39512684bdbc08b88392590aa053015f98bfa9a4b8e2ad6",
+        "source_sha256": "b16f8da4db0695ff75e931e97d331fa5414284a637314d38d7acec5cb2f7f3c3",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.421,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 16.416,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 421.446,
+            "queue_wait_ms": 422.956,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": [
+          {
+            "kind": "mcp_search_matches",
+            "status": "succeeded",
+            "elapsed_ms": 52.818,
+            "complete": true,
+            "total": 1,
+            "returned": 1,
+            "search_parameters_present": {
+              "team_query": true,
+              "competition_query": false,
+              "from_utc": true,
+              "to_utc": true,
+              "phase": true,
+              "sport": true
+            },
+            "phase": "all",
+            "continuous_after": false
+          },
+          {
+            "kind": "mcp_search_matches",
+            "status": "succeeded",
+            "elapsed_ms": 101.434,
+            "complete": true,
+            "total": 1,
+            "returned": 1,
+            "search_parameters_present": {
+              "team_query": true,
+              "competition_query": false,
+              "from_utc": true,
+              "to_utc": true,
+              "phase": true,
+              "sport": true
+            },
+            "phase": "all",
+            "continuous_after": false
+          }
+        ]
+      },
+      {
+        "case": "0f2ec6c8",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "ad399fe97b6307511a6be357b9f7a128a3d0a36842f30c8be5dc3efd6784a858",
+        "source_sha256": "32eebdb2ff00a63f95d7dbe1cc1460b5b8260513f221712b9b633422e2dc1eac",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.051,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 6.424,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 50.648,
+            "queue_wait_ms": 53.594,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "cedd168a",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "92ae3528179e4167bc5a5a9f23fb2de4073935d9d33f696682b2d7219a817012",
+        "source_sha256": "d43e8dd6371eb6961647e2748c2aa1066d7533164e61a0a2a9a3e8a2c42a5f78",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.339,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 7.18,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 338.713,
+            "queue_wait_ms": 340.404,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "8ad076ec",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "3182949e02644f1e75be5e3bb26c4abcef54ca5df52ada59002fdf1d0b6e1f8f",
+        "source_sha256": "db4475ebe108a946bcc30b2bf18704ced1a397d2fe7d48b3e11f9cc1e05aefd3",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.031,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 4.218,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 31.255,
+            "queue_wait_ms": 41.165,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "f8ccd727",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "7ce6e5b26e44c4b3d00300516615afabf1a3894615bab2c5a6410f5f3674806c",
+        "source_sha256": "f6a8c8b3a5386065b096cf325c55b7993a9762146b879f5c01cb8934d9d41f4b",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.05,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 9.805,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 49.998,
+            "queue_wait_ms": 51.384,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "e3ea5e74",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "5bab3b306bb99a56c2f35540476c4c67a1d933f723e7224c3b71a37ff3ff1aca",
+        "source_sha256": "386b65f378fd8e426f1c1f354d7d877d0068073211c91c40f5cb4f3fbe63d3d7",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 4.244,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 9.89,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 4244.443,
+            "queue_wait_ms": 4245.705,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "a2a587bd",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "a66b5aa7dbd5a111858c15c2bb51872b2e7a6fed8e237517d72f49a76efa2449",
+        "source_sha256": "5d8b23e8ec7ee121adbfd5b3ab0d90c0a17112e1aa8c69048d2281d9d5cb7113",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 9.918,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 16.854,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 9918.213,
+            "queue_wait_ms": 9918.951,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "06343f75",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "5783fdce6eec9b95d2bce6b5b2a827d0df0a729ad661aeccdebbfbe39d804a4d",
+        "source_sha256": "ca4fa7db7998699d9af0014189035882b58d8aeaeb97c580bdb456791b636fbc",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 9.8,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 15.882,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 9800.129,
+            "queue_wait_ms": 9801.25,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "8694017d",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 3,
+        "trace_hash": "b339e32817bb5d1a1fe308076e5a76224f8aaff4e68fe6386985b44118032096",
+        "source_sha256": "321232df7eee36d68f0539b0a07eaff96f43a66a113fb1e68938810c202792e2",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.04,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 334.102,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 40.293,
+            "queue_wait_ms": 41.514,
+            "active_expert_leases_before": 0
+          },
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 129974.535,
+            "queue_wait_ms": 129975.353,
+            "active_expert_leases_before": 0
+          },
+          {
+            "scheduler_lane": "real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 326714.647,
+            "queue_wait_ms": 326715.635,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "92b4e0ca",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "f76eafa3ea872658a305df7b4bdbeddbe196ba4fda7f473984ea58a6411d2774",
+        "source_sha256": "be6d83c141de2e8bd8053dfeb1988fee8163d77f5083babcf0652238d3bd4824",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.178,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 56.987,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 177.59,
+            "queue_wait_ms": 180.399,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "1553eb85",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "b1ebf0d4a68e9d82f2ad61a7d7fdb3dd217d38d8dfb68d8eaad48a6f6ec90ead",
+        "source_sha256": "3144e95c74e4bdb6f1dac4c8ad75517ac626e4b03c6fe5fd98790f9348f4676b",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.427,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 60.89,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 427.054,
+            "queue_wait_ms": 427.996,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "5830c68b",
+        "state": "succeeded",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 1,
+        "attempts": 1,
+        "trace_hash": "b86a99261fb0ad0b46b2dd0c572cd9017988e5d04cbadc5d538c1adc8083af4f",
+        "source_sha256": "6a7a20760806e7c3937e2513814e95237c3941fdc1c0cec302ad80357cfdd826",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 52.415,
+        "first_acceptance_lower_bound_s": 66.37,
+        "all_observed_acceptances_lower_bound_s": 66.37,
+        "conclusion_lower_bound_s": 71.977,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 52415.499,
+            "queue_wait_ms": 52416.072,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": [
+          {
+            "kind": "mcp_search_matches",
+            "status": "succeeded",
+            "elapsed_ms": 24.506,
+            "complete": true,
+            "total": 1,
+            "returned": 1,
+            "search_parameters_present": {
+              "team_query": true,
+              "competition_query": false,
+              "from_utc": true,
+              "to_utc": true,
+              "phase": true,
+              "sport": true
+            },
+            "phase": "all",
+            "continuous_after": false
+          },
+          {
+            "kind": "mcp_list_match_markets",
+            "status": "succeeded",
+            "elapsed_ms": 2856.248,
+            "market_filter": {
+              "line": "0.75",
+              "period": "first_half",
+              "selection": "over",
+              "market_kind": "total"
+            },
+            "market_coverage": {
+              "total_quotes": 209,
+              "matched_quotes": 1,
+              "returned_quotes": 1,
+              "complete_for_filter": true
+            }
+          },
+          {
+            "kind": "mcp_record_expert_signals",
+            "status": "succeeded",
+            "elapsed_ms": 33.094,
+            "accepted": 1,
+            "rejected_reasons": []
+          }
+        ]
+      },
+      {
+        "case": "9aa53999",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "778cfc7347c1a4b450eefb34489a8747b46c9ee096dd36ecc01ee1fb0e287c61",
+        "source_sha256": "3112ffd42eb791e9b0e7bbc4c14a5178e7781ceab18daf352a3729050bdb1ab1",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 29.74,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 38.271,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 29740.192,
+            "queue_wait_ms": 29740.978,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "3f5a2aec",
+        "state": "succeeded",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 1,
+        "attempts": 1,
+        "trace_hash": "a7db7d3dc41ba2ba0e8cb5a31eac1a1918edd0242e2a146c82ff7f64c95b98a8",
+        "source_sha256": "4f3b5204580bb7b8dbaa516e605cbab128dcd2d6f15525de6e1011a7945fa804",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.358,
+        "first_acceptance_lower_bound_s": 36.692,
+        "all_observed_acceptances_lower_bound_s": 36.692,
+        "conclusion_lower_bound_s": 43.438,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 357.836,
+            "queue_wait_ms": 358.517,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": [
+          {
+            "kind": "mcp_search_matches",
+            "status": "succeeded",
+            "elapsed_ms": 27.832,
+            "complete": true,
+            "total": 0,
+            "returned": 0,
+            "search_parameters_present": {
+              "team_query": true,
+              "competition_query": true,
+              "from_utc": true,
+              "to_utc": true,
+              "phase": true,
+              "sport": true
+            },
+            "phase": "all",
+            "continuous_after": false
+          },
+          {
+            "kind": "mcp_search_matches",
+            "status": "succeeded",
+            "elapsed_ms": 31.711,
+            "complete": true,
+            "total": 1,
+            "returned": 1,
+            "search_parameters_present": {
+              "team_query": true,
+              "competition_query": false,
+              "from_utc": true,
+              "to_utc": true,
+              "phase": true,
+              "sport": true
+            },
+            "phase": "all",
+            "continuous_after": false
+          },
+          {
+            "kind": "mcp_resolve_match",
+            "status": "succeeded",
+            "elapsed_ms": 5.515
+          },
+          {
+            "kind": "mcp_list_match_markets",
+            "status": "succeeded",
+            "elapsed_ms": 668.797,
+            "market_filter": {
+              "line": "0.75",
+              "period": "first_half",
+              "selection": "over",
+              "market_kind": "total"
+            },
+            "market_coverage": {
+              "total_quotes": 209,
+              "matched_quotes": 1,
+              "returned_quotes": 1,
+              "complete_for_filter": true
+            }
+          },
+          {
+            "kind": "mcp_record_expert_signals",
+            "status": "succeeded",
+            "elapsed_ms": 20.803,
+            "accepted": 1,
+            "rejected_reasons": []
+          }
+        ]
+      },
+      {
+        "case": "abde93d2",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "557cfd068ab0ca8f95805b665d524dae880327b7cf7ca43a6e5053e8e5497f84",
+        "source_sha256": "aec0965d555c89f7e46b166f211d12cdb8b66ad4020a2053e8b15fa0fd767db6",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.164,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 12.717,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 163.862,
+            "queue_wait_ms": 164.778,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "874b3044",
+        "state": "succeeded",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 1,
+        "attempts": 1,
+        "trace_hash": "c61663594b3ca41e342c2557266b68e96b4c4df8a7324884cf83be9602b5974a",
+        "source_sha256": "6a2f489c264c14148703c935e47f1dec85b89a792c9708ccfd8f66f5818fe411",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.04,
+        "first_acceptance_lower_bound_s": 64.552,
+        "all_observed_acceptances_lower_bound_s": 64.552,
+        "conclusion_lower_bound_s": 76.714,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 39.722,
+            "queue_wait_ms": 40.502,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": [
+          {
+            "kind": "mcp_search_matches",
+            "status": "succeeded",
+            "elapsed_ms": 48.416,
+            "complete": true,
+            "total": 1,
+            "returned": 1,
+            "search_parameters_present": {
+              "team_query": true,
+              "competition_query": false,
+              "from_utc": true,
+              "to_utc": true,
+              "phase": true,
+              "sport": true
+            },
+            "phase": "all",
+            "continuous_after": false
+          },
+          {
+            "kind": "mcp_list_match_markets",
+            "status": "succeeded",
+            "elapsed_ms": 1650.549,
+            "market_filter": {
+              "line": "0.75",
+              "period": "first_half",
+              "selection": "over",
+              "market_kind": "total"
+            },
+            "market_coverage": {
+              "total_quotes": 213,
+              "matched_quotes": 1,
+              "returned_quotes": 1,
+              "complete_for_filter": true
+            }
+          },
+          {
+            "kind": "mcp_record_expert_signals",
+            "status": "succeeded",
+            "elapsed_ms": 25.441,
+            "accepted": 1,
+            "rejected_reasons": []
+          }
+        ]
+      },
+      {
+        "case": "da7a5c48",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 2,
+        "trace_hash": "dd3ed51a7482cb37ee2e95fe1d2cc2c853f25e049bc4c29540f8a1bc8e2e886e",
+        "source_sha256": "287f9eb8970f46e92444cb029453aa8f3e523abde9f35f45fbbcd67209d1d2dc",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.607,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 138.165,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 607.378,
+            "queue_wait_ms": 608.698,
+            "active_expert_leases_before": 1
+          },
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 131494.044,
+            "queue_wait_ms": 131494.945,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "10abddc5",
+        "state": "succeeded",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 1,
+        "attempts": 1,
+        "trace_hash": "7c540305dfa762124312b52cc99178c0b4149ac82d10665fd79637b6f05949de",
+        "source_sha256": "937dcd95a3364e2180370d226bad4ba56c6058800dffc0c1d5e06f3e93d41266",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.213,
+        "first_acceptance_lower_bound_s": 105.513,
+        "all_observed_acceptances_lower_bound_s": 105.513,
+        "conclusion_lower_bound_s": 111.422,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 213.118,
+            "queue_wait_ms": 213.914,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": [
+          {
+            "kind": "mcp_search_matches",
+            "status": "succeeded",
+            "elapsed_ms": 18.558,
+            "complete": true,
+            "total": 0,
+            "returned": 0,
+            "search_parameters_present": {
+              "team_query": true,
+              "competition_query": true,
+              "from_utc": true,
+              "to_utc": true,
+              "phase": true,
+              "sport": true
+            },
+            "phase": "all",
+            "continuous_after": false
+          },
+          {
+            "kind": "mcp_search_matches",
+            "status": "succeeded",
+            "elapsed_ms": 20.451,
+            "complete": true,
+            "total": 1,
+            "returned": 1,
+            "search_parameters_present": {
+              "team_query": true,
+              "competition_query": false,
+              "from_utc": true,
+              "to_utc": true,
+              "phase": true,
+              "sport": true
+            },
+            "phase": "all",
+            "continuous_after": false
+          },
+          {
+            "kind": "mcp_list_match_markets",
+            "status": "succeeded",
+            "elapsed_ms": 13.008,
+            "market_filter": {
+              "line": "0.75",
+              "period": "first_half",
+              "selection": "over",
+              "market_kind": "total"
+            },
+            "market_coverage": {
+              "total_quotes": 213,
+              "matched_quotes": 1,
+              "returned_quotes": 1,
+              "complete_for_filter": true
+            }
+          },
+          {
+            "kind": "mcp_record_expert_signals",
+            "status": "succeeded",
+            "elapsed_ms": 1878.636,
+            "accepted": 1,
+            "rejected_reasons": []
+          }
+        ]
+      },
+      {
+        "case": "ea758257",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 2,
+        "trace_hash": "9543a15c91498ec8c19fed33d4f6e2645c6d7c1e2c7e94e72c12f99e2c34cb82",
+        "source_sha256": "5749e7400571398d0928e6c1b8d3e0070a2a80cb138aacf0b333b508df8940e1",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.227,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 139.905,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 227.024,
+            "queue_wait_ms": 227.694,
+            "active_expert_leases_before": 1
+          },
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 130073.645,
+            "queue_wait_ms": 130074.205,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "20e2ed75",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": true,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "53df1f329beb201ef1e6863c8f919cd26ada975dd087127b1653d937777e6ed2",
+        "source_sha256": "d36eb4c332514f93fe51d8a32f9b7a33120b1878239c7a154f7fe2ffcfefff4a",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.04,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 6.497,
+        "claims": [
+          {
+            "scheduler_lane": null,
+            "concurrency_limit": null,
+            "event_to_claim_ms": 39.852,
+            "queue_wait_ms": null,
+            "active_expert_leases_before": null
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "040bd1f3",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "f470a90f7ba3a5782bde655a788ff1658faa74c0f794772048fb2622dc8c8193",
+        "source_sha256": "c5ddac27c0c9c4ef90eb3a33f103c223a88b2476227dc9e30de123b476f95682",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.056,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 4.423,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 56.179,
+            "queue_wait_ms": 56.841,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "131a24f4",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "5102ca5a846dd29ea5a3ca68be777cbd2c1ee77327b32bc6007bd945bc0c94e1",
+        "source_sha256": "adad88af7acfc763c57b82bb79e38c03ad66ace563c12beb6da6d24deba6f795",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.03,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 19.549,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 29.791,
+            "queue_wait_ms": 30.492,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "4ddaf69b",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "9dd8073f32ee8efb8a40cc451658f53aad1f7b38dd6b708ab5e6b61b484b4362",
+        "source_sha256": "577945f5e2904386944c6b8b9c1f6749e3aef7e95431d5bfaab28b2739d949b6",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.554,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 23.705,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 553.683,
+            "queue_wait_ms": 554.384,
+            "active_expert_leases_before": 1
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "bbe0087a",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "e20e5e3356626d9981b521f11fcea2f18f41988e1adf737802e6ac3dcb391135",
+        "source_sha256": "39930b06d959b5b2589db4e2be1a1fbbc92b3b0fccbe95121282c1dc0ddf613d",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.045,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 7.016,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 45.202,
+            "queue_wait_ms": 46.18,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "1021c67f",
+        "state": "unresolved",
+        "revision": 1,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "f21f9af67fb1f4446602e4a3a5ca83e10cda345b033dc55b25d38f0453b675f2",
+        "source_sha256": "713d40d07a911b3ad4bd1916d8e824f928f480fd2239e09ff760dc358d49483a",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.332,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 6.342,
+        "claims": [
+          {
+            "scheduler_lane": "fresh_real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 332.447,
+            "queue_wait_ms": 336.858,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      },
+      {
+        "case": "3aa7f6bf",
+        "state": "unresolved",
+        "revision": 2,
+        "media_state": "ready",
+        "reply_excluded": false,
+        "source_current": true,
+        "trusted": true,
+        "signal_count": 0,
+        "attempts": 1,
+        "trace_hash": "4ca60d607c62d0fd21226690372d1f36865578b5daea7df6cd7f89461176727a",
+        "source_sha256": "f5087512fa5d3556e974fa2869869d6507c84084ffc741a14af20c29bb4c0b12",
+        "detected_at": null,
+        "persisted_to_first_claim_s": 0.388,
+        "first_acceptance_lower_bound_s": null,
+        "all_observed_acceptances_lower_bound_s": null,
+        "conclusion_lower_bound_s": 6.655,
+        "claims": [
+          {
+            "scheduler_lane": "real_time",
+            "concurrency_limit": 1,
+            "event_to_claim_ms": 388.045,
+            "queue_wait_ms": 388.652,
+            "active_expert_leases_before": 0
+          }
+        ],
+        "tools": []
+      }
+    ],
+    "snapshot_sha256": "34b119e2b9ece3b11fa8b33d4dc08bdad8186f0aead211c52dc07a2d59335e32",
+    "limitations": [
+      "detected_at absent on all pre-release versions; persisted timing is a lower bound",
+      "signal created_at and successful record trace are in-transaction timestamps, actual commit visibility not measured",
+      "all observed acceptances is not a completeness proof",
+      "media detection/download/upload spans not retrospectively recoverable from mutable event timestamps",
+      "one undated reply and its sensitive trace fields intentionally excluded",
+      "unsupported media has no accessible authorized image evidence"
+    ],
+    "measurement_contract": {
+      "selection": "40 unique message versions; event received window and COALESCE(detected_at,created_at) window sets verified equal; no estimated original detection",
+      "first_claim": "attempt_claimed.payload.event_to_claim_ms/1000, not the transaction trace timestamp",
+      "accepted_origin": "min Telegram event.received_at per message version",
+      "first_acceptance": "first successful nonempty mcp_record_expert_signals trace timestamp minus persisted origin; in-transaction approximation",
+      "all_acceptance": "last successful nonempty record trace; seven observed single-signal source items, not all possible items coverage",
+      "conclusion": "system_review_result.payload.event_to_conclusion_ms/1000, reported separately",
+      "quantiles": "nearest rank, each observed metric denominator retained",
+      "concurrency": "half-open claim-to-conclusion/failure intervals; excludes post-conclusion cleanup",
+      "media": "download/upload/queue exact spans absent for pre-release data; no estimates from posted_at",
+      "commit": "tool handler and trace timings available; actual externally visible COMMIT latency unknown",
+      "boundary_limitation": "40 is the persisted-event proxy cohort, not a proven original detection cohort; true detection boundary membership cannot be reconstructed; no adjacent windows read",
+      "queue_wait_ms": "payload is time since message.created_at; retries include prior processing/backoff, not pure queue wait; max 326.715635s over 38 attempts"
+    },
+    "maximum_distinct_experts_overlapping": 2
+  },
+  "semantics_and_tool_evidence": {
+    "scope": "independent source-only pinned Hermes semantics plus deterministic immutable tool evidence checks; not human image inspection",
+    "tool_snapshot_count": 27,
+    "tool_snapshots_all_valid": true,
+    "tool_snapshots": [
+      {
+        "case": "10abddc5",
+        "tool": "mcp_search_matches",
+        "sha256": "bce4e4d270eb07095dfbb1e510f656c946c3a03d8da4ac7b71eaa9ebab12e8a4",
+        "valid": true
+      },
+      {
+        "case": "10abddc5",
+        "tool": "mcp_search_matches",
+        "sha256": "f941760f9cfae5e4e8f8cde73dc9608be9c41cdd5107f21636fc8861a134965e",
+        "valid": true
+      },
+      {
+        "case": "10abddc5",
+        "tool": "mcp_list_match_markets",
+        "sha256": "dcc074111a7cbd8b2deadf32d831f0c442c0079432630d300573507546553fcc",
+        "valid": true
+      },
+      {
+        "case": "10abddc5",
+        "tool": "mcp_record_expert_signals",
+        "sha256": "c5b1f791275f56eff8d523c5c0095da6e4e04124f800743c04626c82fba48849",
+        "valid": true
+      },
+      {
+        "case": "272cb38e",
+        "tool": "mcp_search_matches",
+        "sha256": "8d139d797a9307f7b43a8b3ba06e4690a830a079b872c830efb3d2945a90a5dd",
+        "valid": true
+      },
+      {
+        "case": "272cb38e",
+        "tool": "mcp_list_match_markets",
+        "sha256": "83fe294e4ef8a95c6fe2558caef0782abe51030727fd792f61f3ee700d598008",
+        "valid": true
+      },
+      {
+        "case": "272cb38e",
+        "tool": "mcp_record_expert_signals",
+        "sha256": "85a995c11783687f5ec8c83bcf14c1c3934bc1cc0616582e9043a4705ad5eb7d",
+        "valid": true
+      },
+      {
+        "case": "3f5a2aec",
+        "tool": "mcp_search_matches",
+        "sha256": "8a9491a9613a0832e101d923e454295c1b29999fecce38bf2931b27d6d0ea904",
+        "valid": true
+      },
+      {
+        "case": "3f5a2aec",
+        "tool": "mcp_search_matches",
+        "sha256": "f685933d1ec87d65033e599b43a6d2dca872acd45de692470797426702eca80d",
+        "valid": true
+      },
+      {
+        "case": "3f5a2aec",
+        "tool": "mcp_resolve_match",
+        "sha256": "a84ba1aca38c3b45df59a4eccb0823250935118cc772e3846b84a0dc404f69f8",
+        "valid": true
+      },
+      {
+        "case": "3f5a2aec",
+        "tool": "mcp_list_match_markets",
+        "sha256": "5397a3cea68a767cfb28482b3f8e92652e56e9e0b2950ffb9e09d56d010d4dd6",
+        "valid": true
+      },
+      {
+        "case": "3f5a2aec",
+        "tool": "mcp_record_expert_signals",
+        "sha256": "4c9767fbb0bf98a65e9f9f80713f6c59d7b72aa5453f3568f3bc46c4bea4bc98",
+        "valid": true
+      },
+      {
+        "case": "5830c68b",
+        "tool": "mcp_search_matches",
+        "sha256": "c71304fc395911a50f4fe01ba1639ebaf575e88aa2fa33778eb5f66578462feb",
+        "valid": true
+      },
+      {
+        "case": "5830c68b",
+        "tool": "mcp_list_match_markets",
+        "sha256": "35668c046fcce021015198e7af12aad01b445c3eb7dece6007a2d8857750148c",
+        "valid": true
+      },
+      {
+        "case": "5830c68b",
+        "tool": "mcp_record_expert_signals",
+        "sha256": "ae52f915b81afbf1ff281a16d69d1234f9f7b8abcc710f6cc0ed338331f0b129",
+        "valid": true
+      },
+      {
+        "case": "874b3044",
+        "tool": "mcp_search_matches",
+        "sha256": "b198ba29177d5a997d3cf4d5a94d6c6af308fab1458aaf5fb0e4297726f42434",
+        "valid": true
+      },
+      {
+        "case": "874b3044",
+        "tool": "mcp_list_match_markets",
+        "sha256": "cb5bddb24753f35d8b008e6689fbc9511a9fc23372b69016109a864b08f8e0b6",
+        "valid": true
+      },
+      {
+        "case": "874b3044",
+        "tool": "mcp_record_expert_signals",
+        "sha256": "d118fbe09fdc9ba184a61d71a24326c5db109eff3b5807e12a2b3a6030f7a3f7",
+        "valid": true
+      },
+      {
+        "case": "94f2a801",
+        "tool": "mcp_search_matches",
+        "sha256": "4d102176ad9e8f36b7e6eb445b9e8075ef316dc80c2a800756319bb6293c9046",
+        "valid": true
+      },
+      {
+        "case": "94f2a801",
+        "tool": "mcp_resolve_match",
+        "sha256": "9993dc3c7d50e5b141d3699de86e9d884daea7f86071f250f39f012bc1acf868",
+        "valid": true
+      },
+      {
+        "case": "94f2a801",
+        "tool": "mcp_list_match_markets",
+        "sha256": "d6ebeaf32534619d08775c77622f98ba8156030fee606227384b505a9e8be545",
+        "valid": true
+      },
+      {
+        "case": "94f2a801",
+        "tool": "mcp_record_expert_signals",
+        "sha256": "19aaa5c414049a8bacbdf6954449824687d359d647cb7a2e6baed0944889ec1c",
+        "valid": true
+      },
+      {
+        "case": "97c8b255",
+        "tool": "mcp_search_matches",
+        "sha256": "8d1aed0b9c5d8e6350bb755cea12a53041c31bf9e0e167f885d4eb33afaa3cb7",
+        "valid": true
+      },
+      {
+        "case": "97c8b255",
+        "tool": "mcp_list_match_markets",
+        "sha256": "bfbaf4f8cf319dd6699e152f638088464f5ee3b4dc79400b35797750b9372676",
+        "valid": true
+      },
+      {
+        "case": "97c8b255",
+        "tool": "mcp_record_expert_signals",
+        "sha256": "db216e8504ce13894220249e6a004af0397bead649917c0024cfba7708817600",
+        "valid": true
+      },
+      {
+        "case": "ed78d647",
+        "tool": "mcp_search_matches",
+        "sha256": "8e655448400ea8ef10f5399e3e0d00f33ba0e185edd503d3e4ec62f6a5233c05",
+        "valid": true
+      },
+      {
+        "case": "ed78d647",
+        "tool": "mcp_search_matches",
+        "sha256": "f5805aa3bad2e3b9b804491c754b3b0a68d3084708aa10c478ac41e82776f264",
+        "valid": true
+      }
+    ],
+    "accepted": [
+      {
+        "case": "94f2a801",
+        "source_category": "new_selection",
+        "source_item_count": 1,
+        "source_both_teams_match_immutable_candidate": false,
+        "source_period": "first_half",
+        "source_period_equals_signal": true,
+        "source_line_equals_signal": true,
+        "source_selection_equals_signal": true,
+        "signal_period": "first_half",
+        "signal_market_kind": "total",
+        "signal_line": "0.500",
+        "signal_selection": "over",
+        "signal_and_read_context_agree": true,
+        "snapshot_phase": "live",
+        "read_phase": "live",
+        "complete_search": true,
+        "explicit_binding": true,
+        "request_matches_latest_source": true,
+        "request_media_matches_latest_source": true,
+        "source_revision": 1,
+        "record_duplicate": false,
+        "withdrawn": false,
+        "initial_read_price_equals_signal": true,
+        "accepted_record_price_equals_signal": true
+      },
+      {
+        "case": "272cb38e",
+        "source_category": "new_selection",
+        "source_item_count": 1,
+        "source_both_teams_match_immutable_candidate": true,
+        "source_period": "first_half",
+        "source_period_equals_signal": true,
+        "source_line_equals_signal": true,
+        "source_selection_equals_signal": true,
+        "signal_period": "first_half",
+        "signal_market_kind": "total",
+        "signal_line": "0.750",
+        "signal_selection": "over",
+        "signal_and_read_context_agree": true,
+        "snapshot_phase": "live",
+        "read_phase": "live",
+        "complete_search": true,
+        "explicit_binding": true,
+        "request_matches_latest_source": true,
+        "request_media_matches_latest_source": true,
+        "source_revision": 1,
+        "record_duplicate": false,
+        "withdrawn": false,
+        "initial_read_price_equals_signal": true,
+        "accepted_record_price_equals_signal": true
+      },
+      {
+        "case": "97c8b255",
+        "source_category": "new_selection",
+        "source_item_count": 1,
+        "source_both_teams_match_immutable_candidate": true,
+        "source_period": "first_half",
+        "source_period_equals_signal": true,
+        "source_line_equals_signal": true,
+        "source_selection_equals_signal": true,
+        "signal_period": "first_half",
+        "signal_market_kind": "total",
+        "signal_line": "0.750",
+        "signal_selection": "over",
+        "signal_and_read_context_agree": true,
+        "snapshot_phase": "live",
+        "read_phase": "live",
+        "complete_search": true,
+        "explicit_binding": true,
+        "request_matches_latest_source": true,
+        "request_media_matches_latest_source": true,
+        "source_revision": 1,
+        "record_duplicate": false,
+        "withdrawn": false,
+        "initial_read_price_equals_signal": true,
+        "accepted_record_price_equals_signal": true
+      },
+      {
+        "case": "5830c68b",
+        "source_category": "new_selection",
+        "source_item_count": 1,
+        "source_both_teams_match_immutable_candidate": true,
+        "source_period": null,
+        "source_period_equals_signal": false,
+        "source_line_equals_signal": true,
+        "source_selection_equals_signal": true,
+        "signal_period": "first_half",
+        "signal_market_kind": "total",
+        "signal_line": "0.750",
+        "signal_selection": "over",
+        "signal_and_read_context_agree": true,
+        "snapshot_phase": "live",
+        "read_phase": "live",
+        "complete_search": true,
+        "explicit_binding": true,
+        "request_matches_latest_source": true,
+        "request_media_matches_latest_source": true,
+        "source_revision": 1,
+        "record_duplicate": false,
+        "withdrawn": false,
+        "initial_read_price_equals_signal": true,
+        "accepted_record_price_equals_signal": true
+      },
+      {
+        "case": "3f5a2aec",
+        "source_category": "new_selection",
+        "source_item_count": 1,
+        "source_both_teams_match_immutable_candidate": true,
+        "source_period": "first_half",
+        "source_period_equals_signal": true,
+        "source_line_equals_signal": true,
+        "source_selection_equals_signal": true,
+        "signal_period": "first_half",
+        "signal_market_kind": "total",
+        "signal_line": "0.750",
+        "signal_selection": "over",
+        "signal_and_read_context_agree": true,
+        "snapshot_phase": "live",
+        "read_phase": "live",
+        "complete_search": true,
+        "explicit_binding": true,
+        "request_matches_latest_source": true,
+        "request_media_matches_latest_source": true,
+        "source_revision": 1,
+        "record_duplicate": false,
+        "withdrawn": false,
+        "initial_read_price_equals_signal": true,
+        "accepted_record_price_equals_signal": true
+      },
+      {
+        "case": "874b3044",
+        "source_category": "new_selection",
+        "source_item_count": 1,
+        "source_both_teams_match_immutable_candidate": true,
+        "source_period": "first_half",
+        "source_period_equals_signal": true,
+        "source_line_equals_signal": true,
+        "source_selection_equals_signal": true,
+        "signal_period": "first_half",
+        "signal_market_kind": "total",
+        "signal_line": "0.750",
+        "signal_selection": "over",
+        "signal_and_read_context_agree": true,
+        "snapshot_phase": "live",
+        "read_phase": "live",
+        "complete_search": true,
+        "explicit_binding": true,
+        "request_matches_latest_source": true,
+        "request_media_matches_latest_source": true,
+        "source_revision": 1,
+        "record_duplicate": false,
+        "withdrawn": false,
+        "initial_read_price_equals_signal": true,
+        "accepted_record_price_equals_signal": true
+      },
+      {
+        "case": "10abddc5",
+        "source_category": "new_selection",
+        "source_item_count": 1,
+        "source_both_teams_match_immutable_candidate": true,
+        "source_period": "first_half",
+        "source_period_equals_signal": true,
+        "source_line_equals_signal": true,
+        "source_selection_equals_signal": true,
+        "signal_period": "first_half",
+        "signal_market_kind": "total",
+        "signal_line": "0.750",
+        "signal_selection": "over",
+        "signal_and_read_context_agree": true,
+        "snapshot_phase": "live",
+        "read_phase": "live",
+        "complete_search": true,
+        "explicit_binding": true,
+        "request_matches_latest_source": true,
+        "request_media_matches_latest_source": true,
+        "source_revision": 1,
+        "record_duplicate": false,
+        "withdrawn": false,
+        "initial_read_price_equals_signal": false,
+        "accepted_record_price_equals_signal": true
+      }
+    ],
+    "unresolved": [
+      {
+        "case": "3a9d2a1e",
+        "state": "unresolved",
+        "source_category": "emotion",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "dc96767cc76140aa7a395c1f1a0f976a2c4b786dab1b68f1d3a8fe6602ccceed"
+      },
+      {
+        "case": "ed60f0b1",
+        "state": "unresolved",
+        "source_category": "result_feedback",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "493e846b8c9c6214a99381600c087216ca258a2a8b6c2ff6325b96fb13d3b509"
+      },
+      {
+        "case": "a3834c6b",
+        "state": "unresolved",
+        "source_category": "chatter",
+        "certainty": "uncertain",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "304f5de445a4963701eb591fbeae20ab06b495d28a02f7e79bf726ebcf4d85f3"
+      },
+      {
+        "case": "fd18ec64",
+        "state": "unresolved",
+        "source_category": "chatter",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "fc2e2e4724ab8a6b02c07e93fb52b60323938b9f405a83f68fba90fe3744ab00"
+      },
+      {
+        "case": "0d2b1cd0",
+        "state": "unresolved",
+        "source_category": "chatter",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "f0da4f2718bdb1ea561dc6226fb92d10b262ad15148edcf7ed37d400c3c71420"
+      },
+      {
+        "case": "ed78d647",
+        "state": "unresolved",
+        "source_category": "result_feedback",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 2,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "387ae0dafb9cfa2dc39512684bdbc08b88392590aa053015f98bfa9a4b8e2ad6"
+      },
+      {
+        "case": "0f2ec6c8",
+        "state": "unresolved",
+        "source_category": "result_feedback",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "ad399fe97b6307511a6be357b9f7a128a3d0a36842f30c8be5dc3efd6784a858"
+      },
+      {
+        "case": "cedd168a",
+        "state": "unresolved",
+        "source_category": "result_feedback",
+        "certainty": "uncertain",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "92ae3528179e4167bc5a5a9f23fb2de4073935d9d33f696682b2d7219a817012"
+      },
+      {
+        "case": "8ad076ec",
+        "state": "unresolved",
+        "source_category": "advertisement",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "3182949e02644f1e75be5e3bb26c4abcef54ca5df52ada59002fdf1d0b6e1f8f"
+      },
+      {
+        "case": "f8ccd727",
+        "state": "unresolved",
+        "source_category": "advertisement",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "7ce6e5b26e44c4b3d00300516615afabf1a3894615bab2c5a6410f5f3674806c"
+      },
+      {
+        "case": "e3ea5e74",
+        "state": "unresolved",
+        "source_category": "advertisement",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "5bab3b306bb99a56c2f35540476c4c67a1d933f723e7224c3b71a37ff3ff1aca"
+      },
+      {
+        "case": "a2a587bd",
+        "state": "unresolved",
+        "source_category": "advertisement",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "a66b5aa7dbd5a111858c15c2bb51872b2e7a6fed8e237517d72f49a76efa2449"
+      },
+      {
+        "case": "06343f75",
+        "state": "unresolved",
+        "source_category": "advertisement",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "5783fdce6eec9b95d2bce6b5b2a827d0df0a729ad661aeccdebbfbe39d804a4d"
+      },
+      {
+        "case": "8694017d",
+        "state": "unresolved",
+        "source_category": "chatter",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "b339e32817bb5d1a1fe308076e5a76224f8aaff4e68fe6386985b44118032096"
+      },
+      {
+        "case": "92b4e0ca",
+        "state": "unresolved",
+        "source_category": "chatter",
+        "certainty": "uncertain",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "f76eafa3ea872658a305df7b4bdbeddbe196ba4fda7f473984ea58a6411d2774"
+      },
+      {
+        "case": "1553eb85",
+        "state": "unresolved",
+        "source_category": "chatter",
+        "certainty": "uncertain",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "b1ebf0d4a68e9d82f2ad61a7d7fdb3dd217d38d8dfb68d8eaad48a6f6ec90ead"
+      },
+      {
+        "case": "9aa53999",
+        "state": "unresolved",
+        "source_category": "emotion",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "778cfc7347c1a4b450eefb34489a8747b46c9ee096dd36ecc01ee1fb0e287c61"
+      },
+      {
+        "case": "abde93d2",
+        "state": "unresolved",
+        "source_category": "chatter",
+        "certainty": "uncertain",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "557cfd068ab0ca8f95805b665d524dae880327b7cf7ca43a6e5053e8e5497f84"
+      },
+      {
+        "case": "da7a5c48",
+        "state": "unresolved",
+        "source_category": "emotion",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "dd3ed51a7482cb37ee2e95fe1d2cc2c853f25e049bc4c29540f8a1bc8e2e886e"
+      },
+      {
+        "case": "ea758257",
+        "state": "unresolved",
+        "source_category": "chatter",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "9543a15c91498ec8c19fed33d4f6e2645c6d7c1e2c7e94e72c12f99e2c34cb82"
+      },
+      {
+        "case": "20e2ed75",
+        "state": "unresolved",
+        "source_category": "unknown_reply_excluded",
+        "certainty": "unknown",
+        "source_item_count": null,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "53df1f329beb201ef1e6863c8f919cd26ada975dd087127b1653d937777e6ed2"
+      },
+      {
+        "case": "040bd1f3",
+        "state": "unresolved",
+        "source_category": "chatter",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "f470a90f7ba3a5782bde655a788ff1658faa74c0f794772048fb2622dc8c8193"
+      },
+      {
+        "case": "131a24f4",
+        "state": "unresolved",
+        "source_category": "chatter",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "5102ca5a846dd29ea5a3ca68be777cbd2c1ee77327b32bc6007bd945bc0c94e1"
+      },
+      {
+        "case": "4ddaf69b",
+        "state": "unresolved",
+        "source_category": "emotion",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "9dd8073f32ee8efb8a40cc451658f53aad1f7b38dd6b708ab5e6b61b484b4362"
+      },
+      {
+        "case": "bbe0087a",
+        "state": "unresolved",
+        "source_category": "emotion",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "e20e5e3356626d9981b521f11fcea2f18f41988e1adf737802e6ac3dcb391135"
+      },
+      {
+        "case": "1021c67f",
+        "state": "unresolved",
+        "source_category": "chatter",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "f21f9af67fb1f4446602e4a3a5ca83e10cda345b033dc55b25d38f0453b675f2"
+      },
+      {
+        "case": "3aa7f6bf",
+        "state": "unresolved",
+        "source_category": "emotion",
+        "certainty": "clear",
+        "source_item_count": 0,
+        "search_count": 0,
+        "market_reads": 0,
+        "record_calls": 0,
+        "source_current": true,
+        "trace_sha256": "4ca60d607c62d0fd21226690372d1f36865578b5daea7df6cd7f89461176727a"
+      }
+    ],
+    "source_batches": [
+      {
+        "cases": [
+          "94f2a801",
+          "3a9d2a1e",
+          "a3834c6b",
+          "fd18ec64",
+          "0d2b1cd0",
+          "0f2ec6c8",
+          "cedd168a",
+          "8ad076ec",
+          "f8ccd727",
+          "e3ea5e74",
+          "a2a587bd",
+          "06343f75",
+          "8694017d",
+          "92b4e0ca",
+          "1553eb85",
+          "3f5a2aec",
+          "abde93d2",
+          "874b3044",
+          "10abddc5",
+          "ea758257",
+          "040bd1f3",
+          "131a24f4",
+          "bbe0087a",
+          "1021c67f"
+        ],
+        "completed": true,
+        "api_calls": 1,
+        "tools": 0,
+        "elapsed_s": 23.289
+      },
+      {
+        "cases": [
+          "ed60f0b1"
+        ],
+        "completed": true,
+        "api_calls": 1,
+        "tools": 0,
+        "elapsed_s": 59.494
+      },
+      {
+        "cases": [
+          "272cb38e"
+        ],
+        "completed": true,
+        "api_calls": 1,
+        "tools": 0,
+        "elapsed_s": 27.696
+      },
+      {
+        "cases": [
+          "97c8b255"
+        ],
+        "completed": true,
+        "api_calls": 1,
+        "tools": 0,
+        "elapsed_s": 27.595
+      },
+      {
+        "cases": [
+          "ed78d647"
+        ],
+        "completed": true,
+        "api_calls": 1,
+        "tools": 0,
+        "elapsed_s": 21.009
+      },
+      {
+        "cases": [
+          "5830c68b"
+        ],
+        "completed": true,
+        "api_calls": 1,
+        "tools": 0,
+        "elapsed_s": 12.885
+      },
+      {
+        "cases": [
+          "9aa53999"
+        ],
+        "completed": true,
+        "api_calls": 1,
+        "tools": 0,
+        "elapsed_s": 11.207
+      },
+      {
+        "cases": [
+          "da7a5c48"
+        ],
+        "completed": true,
+        "api_calls": 1,
+        "tools": 0,
+        "elapsed_s": 16.397
+      },
+      {
+        "cases": [
+          "4ddaf69b"
+        ],
+        "completed": true,
+        "api_calls": 1,
+        "tools": 0,
+        "elapsed_s": 12.308
+      },
+      {
+        "cases": [
+          "3aa7f6bf"
+        ],
+        "completed": true,
+        "api_calls": 1,
+        "tools": 0,
+        "elapsed_s": 12.291
+      }
+    ]
+  },
+  "unsupported_metadata": [
+    {
+      "case": "Mbc0514e",
+      "media_state": "unsupported",
+      "source_sha256": "6a445fb1c0aeedb19b887dd62b7acaa1ed28e21aa1140c0b7bfb977a0e6f8b8a",
+      "semantic_review_complete": false
+    },
+    {
+      "case": "Mac2a560",
+      "media_state": "unsupported",
+      "source_sha256": "fcd397f7428d2d64d52660f30d167a3a5203bc5a20808e798dddf19ef60ff231",
+      "semantic_review_complete": false
+    },
+    {
+      "case": "Mc7d0c12",
+      "media_state": "unsupported",
+      "source_sha256": "5f56884f445a8275919023fecec08bd907446afcef1af83d699710519e85de90",
+      "semantic_review_complete": false
+    },
+    {
+      "case": "M3e48c64",
+      "media_state": "unsupported",
+      "source_sha256": "761c455c77059a06df7dc7d161f56574ffd1dfe1dcdedee01f59ce0f3bcd65bc",
+      "semantic_review_complete": false
+    },
+    {
+      "case": "M341a087",
+      "media_state": "unsupported",
+      "source_sha256": "df3e66c8a66acb7974fbd4f67fcf4df7c20d9f52a8d184f68c5c52f74aeaac3c",
+      "semantic_review_complete": false
+    },
+    {
+      "case": "Mf5ecb08",
+      "media_state": "unsupported",
+      "source_sha256": "5850c8cdcb7b042563c4dbba15ff3be6a174dd71839756032b2833cb0dda0f44",
+      "semantic_review_complete": false
+    }
+  ],
+  "accepted_latency_outliers": [
+    {
+      "case": "94f2a801",
+      "first_queue_s": 0.034,
+      "first_and_all_observed_acceptance_lower_bound_s": 25.072,
+      "provider_s": 30.944,
+      "completion_rounds": 1,
+      "model_elapsed_s": 30.976,
+      "tool_total_s": 1.483
+    },
+    {
+      "case": "97c8b255",
+      "first_queue_s": 0.546,
+      "first_and_all_observed_acceptance_lower_bound_s": 26.238,
+      "provider_s": 30.061,
+      "completion_rounds": 1,
+      "model_elapsed_s": 30.545,
+      "tool_total_s": 1.593
+    },
+    {
+      "case": "5830c68b",
+      "first_queue_s": 52.415,
+      "first_and_all_observed_acceptance_lower_bound_s": 66.37,
+      "provider_s": 19.48,
+      "completion_rounds": 1,
+      "model_elapsed_s": 19.538,
+      "tool_total_s": 2.914
+    },
+    {
+      "case": "3f5a2aec",
+      "first_queue_s": 0.358,
+      "first_and_all_observed_acceptance_lower_bound_s": 36.692,
+      "provider_s": 43.011,
+      "completion_rounds": 1,
+      "model_elapsed_s": 43.059,
+      "tool_total_s": 0.755
+    },
+    {
+      "case": "874b3044",
+      "first_queue_s": 0.04,
+      "first_and_all_observed_acceptance_lower_bound_s": 64.552,
+      "provider_s": 76.532,
+      "completion_rounds": 1,
+      "model_elapsed_s": 76.647,
+      "tool_total_s": 1.724
+    },
+    {
+      "case": "10abddc5",
+      "first_queue_s": 0.213,
+      "first_and_all_observed_acceptance_lower_bound_s": 105.513,
+      "provider_s": 111.11,
+      "completion_rounds": 1,
+      "model_elapsed_s": 111.165,
+      "tool_total_s": 1.931
+    }
+  ],
+  "remaining_issues": [
+    {
+      "case": "20e2ed75",
+      "category": "reply_original_posted_at_unknown",
+      "consequence": "reply and possibly quoting detailed traces not read/exported; semantic review incomplete"
+    },
+    {
+      "cases": [
+        "Mbc0514e",
+        "Mac2a560",
+        "Mc7d0c12",
+        "M3e48c64",
+        "M341a087",
+        "Mf5ecb08"
+      ],
+      "category": "unsupported_media",
+      "consequence": "2 audio/ogg, 1 video/mp4 and 3 video/webm; metadata only, no authorized still-image content; not a confirmed model omission"
+    },
+    {
+      "case": "94f2a801",
+      "category": "unverified_source_name_substitution",
+      "consequence": "one exact source team name does not match immutable candidate identity/aliases; resolve used a canonical name absent from original; no registered alias proof; cannot conclude the fixture is wrong"
+    },
+    {
+      "case": "5830c68b",
+      "category": "source_period_needs_independent_confirmation",
+      "consequence": "first source-only extraction returned period null with first-half phase; second returned generic half; all tools consistently first_half; no confirmed period error"
+    },
+    {
+      "cases": [
+        "a3834c6b",
+        "cedd168a",
+        "92b4e0ca",
+        "1553eb85",
+        "abde93d2"
+      ],
+      "category": "short_source_expression_ambiguous",
+      "consequence": "no explicit fixture/period/line/direction/new item extracted; retain uncertainty, do not invent signals"
+    },
+    {
+      "category": "latency_target_failed",
+      "consequence": "6 of 7 observed accepted signals exceed 20s even from later persistence origin; true detection and actual commit visibility unknown; no global SLA claim"
+    }
+  ],
+  "raw_files_metadata": [
+    {
+      "path": "raw/extraction.json",
+      "sha256": "9b751ee9d54c7a4932a48abc2db4609386b582d3f4bb132aeec2787e5a25a83b",
+      "bytes": 14732
+    },
+    {
+      "path": "raw/window.json",
+      "sha256": "34b119e2b9ece3b11fa8b33d4dc08bdad8186f0aead211c52dc07a2d59335e32",
+      "bytes": 305296
+    },
+    {
+      "path": "raw/media.json",
+      "sha256": "e43bf436b6bd35032d6caf9508df27398133a7b928ba7fa46bd298b0969d1c31",
+      "bytes": 1045871
+    },
+    {
+      "path": "raw/bindings.json",
+      "sha256": "fcb6c70ba64c25d5f54c38b0f96b90abfa2952e88b1d003f8e290440f07dbfe0",
+      "bytes": 16074
+    },
+    {
+      "path": "raw/extraction-period.json",
+      "sha256": "3022dd3aa272ff5a22ded5098dfb066a2145d4eb8ff3996e877546d4eefc96af",
+      "bytes": 985
+    }
+  ],
+  "code_fix": {
+    "required_change_confirmed": false,
+    "fix_commits": [],
+    "deployment": "not performed in this run; existing 13:38 release is outside this observed window",
+    "reason": "no uniquely provable source omission or wrong binding; residual identity/period and external capacity uncertainty cannot justify loosening checks or changing provider/global configuration"
+  },
+  "validation": [
+    {
+      "command": "docker exec -i ai-football-v2-api-1 python - < snapshot-window.py > raw/window.json",
+      "exit_code": 0,
+      "scope": "readonly repeatable-read TLS, 40 versions and complete task/evidence sets; manifest registered before export"
+    },
+    {
+      "command": "docker exec -i ai-football-v2-api-1 python -c authorized blobstore read/validate < raw/window.json > raw/media.json",
+      "exit_code": 0,
+      "scope": "10 images, SHA match, decoder validation, all single-frame"
+    },
+    {
+      "command": "docker exec -i ai-football-v2-api-1 python -c readonly binding/market-read export < raw/window.json > raw/bindings.json",
+      "exit_code": 0,
+      "scope": "8 bindings and 7 market reads"
+    },
+    {
+      "command": "docker run --rm --network none --cpus=.25 --memory=192m --user 0 -v <attempt>:/evidence --entrypoint python dc881af353be /evidence/metrics.py",
+      "exit_code": 0,
+      "scope": "seconds quantiles, retry/queue/concurrency distributions; first claim/conclusion corrected to payload clocks"
+    },
+    {
+      "command": "docker run --rm --network none --cpus=.25 --memory=192m --user 0 -e PYTHONPATH=/source/services/api -v <authority>:/source:ro -v <attempt>:/evidence --entrypoint python dc881af353be /evidence/check-evidence.py",
+      "exit_code": 0,
+      "scope": "27 complete response checksums; 7 signal/read/price-context/binding checks; source exact name and period gaps retained"
+    },
+    {
+      "command": "docker run --rm <network=Hermes namespace; no MCP/DB env> --cpus=.3 --memory=768m --read-only --entrypoint /opt/hermes/.venv/bin/python 9c5561579f3f /evidence/extract-source.py",
+      "exit_code": 0,
+      "scope": "10 source-only serial batches + 1 focused recheck; tools=0, session persistence disabled; diagnostic model calls do not count as production SLA samples"
+    },
+    {
+      "command": "docker exec -i ai-football-v2-api-1 python - < read-only quote evidence check",
+      "exit_code": 0,
+      "scope": "all 7 signal prices/quote times equal immutable expert_signal evidence; 1 initial read price differs after allowed pre-record refresh"
+    },
+    {
+      "command": "docker run --rm --network none --cpus=.25 --memory=192m --entrypoint python dc881af353be /evidence/validate-and-clean.py",
+      "exit_code": 0,
+      "scope": "strict final schema/types/window, source/task/sample counts, 27 tool snapshots, all 7 accepted context plus immutable recorded prices, public content/credential/identifier exclusion, own raw/env cleanup"
+    },
+    {
+      "command": "docker exec -i ai-football-v2-api-1 python - < metadata-only concurrency and final-version check",
+      "exit_code": 0,
+      "scope": "max four overlapping reviews across two distinct experts; 40 versions, no newer revisions or deletions; sslmode verify-full and CA present"
+    }
+  ],
+  "record_price_evidence_checks": [
+    {
+      "case": "10abddc5",
+      "price_evidence_rows": 1,
+      "signal_price_and_quote_time_agree": true,
+      "evidence_pick_agree": true
+    },
+    {
+      "case": "272cb38e",
+      "price_evidence_rows": 1,
+      "signal_price_and_quote_time_agree": true,
+      "evidence_pick_agree": true
+    },
+    {
+      "case": "3f5a2aec",
+      "price_evidence_rows": 1,
+      "signal_price_and_quote_time_agree": true,
+      "evidence_pick_agree": true
+    },
+    {
+      "case": "5830c68b",
+      "price_evidence_rows": 1,
+      "signal_price_and_quote_time_agree": true,
+      "evidence_pick_agree": true
+    },
+    {
+      "case": "874b3044",
+      "price_evidence_rows": 1,
+      "signal_price_and_quote_time_agree": true,
+      "evidence_pick_agree": true
+    },
+    {
+      "case": "94f2a801",
+      "price_evidence_rows": 1,
+      "signal_price_and_quote_time_agree": true,
+      "evidence_pick_agree": true
+    },
+    {
+      "case": "97c8b255",
+      "price_evidence_rows": 1,
+      "signal_price_and_quote_time_agree": true,
+      "evidence_pick_agree": true
+    }
+  ],
+  "validation_failures_retained": [
+    {
+      "command": "initial final-report aggregate assertions",
+      "exit_code": 1,
+      "cause": "incorrect investigative assertion required initial market-read price to equal later recorded current price; caught by final validation before commit",
+      "resolution": "separate immutable intent/score context from mutable current price; verified actual immutable expert_signal evidence for all 7 in TLS read-only query; stronger intended assertions pass",
+      "business_code_modified": false
+    }
+  ],
+  "connection_verification": {
+    "tls": true,
+    "sslmode": "verify-full",
+    "sslrootcert_present": true,
+    "transaction_read_only": "on",
+    "final_version_recheck": {
+      "versions": 40,
+      "newer": 0,
+      "deleted": 0
+    }
+  },
+  "raw_cleanup": {
+    "completed": true,
+    "deleted_files": 5,
+    "model_env_deleted": true,
+    "manifest_files": 0,
+    "at": "2026-11-12T13:55:53.014166+00:00"
+  }
+}
