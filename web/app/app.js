@@ -1550,7 +1550,7 @@ async function loadManualBet() {
     $("#manual-bet-status").textContent = data.emergency_stopped
       ? "已紧急停止；保存金额时需再确认一次才会恢复手动下注。"
       : !data.enabled
-      ? "尚未保存下注金额；保存后才显示实盘买入按钮。"
+      ? "尚未保存下注金额；保存后每条推荐都能直接实盘买入。"
       : !data.live_enabled
         ? "金额已保存，但当前实盘执行未开放，买入会被拒绝。"
         : !data.account_ready
