@@ -20,7 +20,19 @@ RATE_LIMIT_CODES = {"0401038", "0400429"}
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_DECODED_BYTES = 64 * 1024 * 1024
 ODDS_SCALE = Decimal("100000")
-SPORTS = {"1": "football", "2": "basketball", "5": "tennis", "7": "baseball", "10": "badminton", "4": "ice_hockey"}
+SPORTS = {
+    "1": "football", "2": "basketball", "5": "tennis", "10": "badminton", "4": "ice_hockey",
+    # Identified from what the station actually listed under each csid, not
+    # assumed: 3 is 墨西哥太平洋联盟/多米尼加职业棒球联赛/委内瑞拉职业棒球联赛;
+    # 6 is NFL/CFL/美国大学美式足球; 8 is TT杯/WTT - 男单; 9 is CEV排球/NCA女子排球;
+    # 37 is ICC一日国际赛/二十20/澳大利亚谢菲尔德盾. 7 was labelled baseball here,
+    # but every row it produced was 冠中冠 (Champion of Champions) with snooker
+    # players, so that label was wrong and the real baseball rows fell through to
+    # source_3. Unmapped ids keep an explicit source_N token rather than being
+    # folded into a sport this process has not identified.
+    "3": "baseball", "6": "american_football", "7": "snooker",
+    "8": "table_tennis", "9": "volleyball", "37": "cricket",
+}
 MARKETS = {
     "1": ("winner", "full_time", "全场独赢"),
     "17": ("winner", "first_half", "上半场独赢"),

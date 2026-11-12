@@ -72,6 +72,24 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual("basketball", parse_fixtures([match(csid="2")])[0]["sport"])
         self.assertEqual("source_999", parse_fixtures([match(csid="999")])[0]["sport"])
 
+    def test_each_station_sport_id_maps_to_what_it_actually_lists(self):
+        # Production rows showed what each csid really carries: 7 held 冠中冠
+        # fixtures between 奥沙利文, 特鲁姆普 and 罗伯森, which is snooker, not
+        # baseball; the real baseball leagues (墨西哥太平洋联盟, 多米尼加 and
+        # 委内瑞拉职业棒球联赛) arrived as 3 and fell through to source_3.
+        expected = {"1": "football", "2": "basketball", "3": "baseball", "4": "ice_hockey",
+                    "5": "tennis", "6": "american_football", "7": "snooker", "8": "table_tennis",
+                    "9": "volleyball", "10": "badminton", "37": "cricket"}
+        for csid, sport in expected.items():
+            with self.subTest(csid=csid):
+                self.assertEqual(sport, parse_fixtures([match(csid=csid)])[0]["sport"])
+
+    def test_unknown_sport_ids_stay_explicit_instead_of_being_assigned_a_sport(self):
+        for csid in ("11", "999"):
+            with self.subTest(csid=csid):
+                self.assertEqual(f"source_{csid}", parse_fixtures([match(csid=csid)])[0]["sport"])
+        self.assertEqual("source_unknown", parse_fixtures([match(csid=None)])[0]["sport"])
+
     def test_scheduled_finished_unknown_and_clock_zero_period(self):
         self.assertEqual("scheduled", parse_fixtures([match(ms=0)])[0]["phase"])
         self.assertEqual("finished", parse_fixtures([match(ms=1, mmp="999")])[0]["phase"])

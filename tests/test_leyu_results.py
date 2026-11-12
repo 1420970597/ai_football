@@ -3,6 +3,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -10,7 +11,8 @@ import httpx
 
 from collector.leyu import LeyuClient, DEFAULT_RESULT_DETAIL_PATH
 from collector.leyu_protocol import LeyuError, RateLimited
-from collector.leyu_results import normalize_result, fetch_result, ResultCollector
+from collector.leyu_results import (normalize_result, fetch_result, ResultCollector,
+                                    RESULT_READ_SPACING_SECONDS)
 
 
 class NativeResultTests(unittest.IsolatedAsyncioTestCase):
@@ -133,6 +135,26 @@ class NativeResultTests(unittest.IsolatedAsyncioTestCase):
                 outcome = await collector.check(self.target, None, 1)
         self.assertEqual('upstream_rate_limited', outcome['reason'])
         self.assertEqual([120], deferred)
+
+    async def test_result_reads_are_spaced_like_every_other_station_request(self):
+        # This lane used to fire two result reads at once with no spacing while
+        # every market read honours a two second floor. Its bursts were the
+        # provider load that produced the 429s in the first place, so the floor
+        # has to be observable here rather than assumed.
+        stamps = []
+        async def fake(*args):
+            stamps.append(time.monotonic())
+            raise LeyuError('result_detail_unavailable')
+        runtime = self.runtime()
+        stamped = SimpleNamespace(**vars(runtime))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={'ok': True}))) as api:
+            collector = ResultCollector(api, 'http://api.invalid/internal', stamped, {})
+            with patch('collector.leyu_results.fetch_result', side_effect=fake):
+                await asyncio.gather(*(collector.check(self.target, None, 1) for _ in range(3)))
+        self.assertEqual(3, len(stamps))
+        gaps = [later - earlier for earlier, later in zip(stamps, stamps[1:])]
+        self.assertTrue(all(gap >= RESULT_READ_SPACING_SECONDS - .05 for gap in gaps), gaps)
 
     def runtime(self):
         return SimpleNamespace(version=1,config={},load=AsyncMock(),request_budget=SimpleNamespace(

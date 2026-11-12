@@ -137,11 +137,22 @@ async def finish_check(body: FinishInput, request: Request):
         async with conn.transaction():
             await require_lease(conn,body)
             waiting = body.reason == 'result_not_final'
+            # Two very different questions share this table. A fixture with no
+            # final yet must be re-read soon: the result is still owed to the
+            # expert ledger. A fixture that already has a confirmed final is
+            # only being watched for a correction, and a failed detail read
+            # there proves the source will not answer right now. Measured before
+            # this split: 315 such rows were re-read every sixteen minutes,
+            # single fixtures reached 775 attempts, and that traffic was the
+            # origin of the provider limits that then blocked market refreshes.
             await conn.execute(
-                "UPDATE v2_result_checks SET lease_id=NULL,lease_until=NULL,last_reason=$2,last_checked_at=now(),"
+                "WITH ctx AS (SELECT EXISTS(SELECT 1 FROM v2_fixture_results r "
+                "WHERE r.fixture_id=$1 AND r.status IN ('confirmed','void')) AS settled) "
+                "UPDATE v2_result_checks c SET lease_id=NULL,lease_until=NULL,last_reason=$2,last_checked_at=now(),"
                 "next_check_at=now()+make_interval(secs=>CASE WHEN $3 THEN 30 WHEN $4 THEN COALESCE($5::int,60) "
-                "ELSE LEAST(1800,30*power(2,LEAST(failures,5)))::int END),"
-                "failures=CASE WHEN $3 THEN 0 WHEN $2='shared_upstream_cooldown' THEN failures ELSE failures+1 END "
-                "WHERE fixture_id=$1", body.fixture_id, body.reason, waiting,
+                "WHEN ctx.settled THEN LEAST(21600,300*power(2,LEAST(c.failures,6)))::int "
+                "ELSE LEAST(1800,30*power(2,LEAST(c.failures,5)))::int END),"
+                "failures=CASE WHEN $3 THEN 0 WHEN $2='shared_upstream_cooldown' THEN c.failures ELSE c.failures+1 END "
+                "FROM ctx WHERE c.fixture_id=$1", body.fixture_id, body.reason, waiting,
                 body.reason in RATE_LIMIT_REASONS, body.retry_after_seconds)
     return {'ok':True}

@@ -13,6 +13,9 @@ from basketball_scores import no_overtime_scores, provisional_conflict_scores
 from .leyu import DEFAULT_RESULT_DETAIL_PATH, LeyuClient
 from .leyu_protocol import LeyuError, RateLimited, score, timestamp
 
+# Matches the station client's own two second spacing between market reads.
+RESULT_READ_SPACING_SECONDS = 2.0
+
 
 def normalize_result(detail: dict, target: dict, *, requested_at: datetime, observed_at: datetime) -> dict:
     if not detail:
@@ -105,9 +108,23 @@ async def fetch_result(client: LeyuClient, target: dict) -> dict:
 class ResultCollector:
     def __init__(self, api, api_url, runtime, status):
         self.api,self.url,self.runtime,self.status = api,api_url.rstrip('/')+'/collector/results',runtime,status
+        self._next_read = 0.0
+        self._pace_lock = asyncio.Lock()
+
+    async def _pace(self):
+        # The station client spaces every market read two seconds apart. This
+        # lane fired two result reads at once with no spacing at all, so its
+        # bursts reached the provider as a single spike. Pacing here is the
+        # same floor the other lanes already honour.
+        async with self._pace_lock:
+            wait = self._next_read - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._next_read = time.monotonic() + RESULT_READ_SPACING_SECONDS
 
     async def check(self, target, client, version):
         try:
+            await self._pace()
             self.runtime.request_budget.require_available()
             body = await fetch_result(client,target)
             if version != self.runtime.version:

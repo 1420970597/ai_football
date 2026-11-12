@@ -193,6 +193,40 @@ class ResultCheckTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(12, row['failures'])
         self.assertTrue(58 <= (row['next_check_at']-row['checked_now']).total_seconds() <= 60)
 
+    async def test_failed_reread_of_a_settled_fixture_backs_off_far_slower(self):
+        # A finished final is only re-read for corrections. Before this split,
+        # a failed detail read on an already settled fixture retried every
+        # sixteen minutes at the cap: 315 rows did exactly that, individual
+        # fixtures reached 775 attempts, and that traffic produced the provider
+        # limits which then blocked market refreshes for every other lane.
+        target, = await self.prepare()
+        self.assertEqual(200, (await self.post('observations', self.observation(target))).status_code)
+        await self.due()
+        correction, = await self.claim()
+        body = {k: correction[k] for k in ('fixture_id', 'lease_id')}
+        for attempt, expected in ((1, 300), (2, 600), (3, 1200)):
+            if attempt > 1:
+                await self.due()
+                correction, = await self.claim()
+                body = {k: correction[k] for k in ('fixture_id', 'lease_id')}
+            response = await self.post('finish', body | {'reason': 'result_detail_unavailable'})
+            self.assertEqual(200, response.status_code, response.text)
+            row = await self.pool.fetchrow('SELECT *,now() AS checked_now FROM v2_result_checks')
+            self.assertEqual(attempt, row['failures'])
+            delay = (row['next_check_at'] - row['checked_now']).total_seconds()
+            self.assertTrue(expected - 3 <= delay <= expected + 3, (attempt, delay))
+
+    async def test_untraded_fixture_without_final_keeps_short_backoff(self):
+        # The result is still owed here, so the short ladder must survive: an
+        # unclaimed final has to be picked up long before a correction would be.
+        target, = await self.prepare()
+        await self.pool.execute('UPDATE v2_result_checks SET failures=5')
+        body = {k: target[k] for k in ('fixture_id', 'lease_id')}
+        self.assertEqual(200, (await self.post('finish', body | {'reason': 'result_detail_unavailable'})).status_code)
+        row = await self.pool.fetchrow('SELECT *,now() AS checked_now FROM v2_result_checks')
+        self.assertEqual(6, row['failures'])
+        self.assertTrue(955 <= (row['next_check_at'] - row['checked_now']).total_seconds() <= 965)
+
     async def test_later_scoreboard_snapshot_cannot_erase_confirmed_result(self):
         target,=await self.prepare()
         self.assertEqual(200,(await self.post('observations',self.observation(target))).status_code)
