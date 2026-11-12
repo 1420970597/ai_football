@@ -44,7 +44,7 @@ async def invalid_policies(conn):
     )
 
 
-async def eligible_signal(conn, signal_id, max_age: int | None = None):
+async def eligible_signal(conn, signal_id, max_age: int | None = None, *, manual: bool = False):
     row = await conn.fetchrow(
         "SELECT s.*,m.source_id,m.platform_message_id,m.revision AS message_revision,m.deleted_at,m.media_state,m.posted_at AS message_posted_at,"
         "e.enabled AS expert_enabled,src.enabled AS source_enabled,se.enabled AS trusted,f.phase AS current_phase,"
@@ -67,8 +67,8 @@ async def eligible_signal(conn, signal_id, max_age: int | None = None):
             or any(not row[key] for key in ("play_id", "market_instance_id", "selection_id"))
             or not execution_market_supported(row["sport"], row["market_id"], row["current_kind"], row["period"])
             or row["sport"] == "basketball" and row["selection"] == "draw"
-            or row["created_at"] < now - timedelta(minutes=5)
-            or row["message_posted_at"] < now - timedelta(minutes=5)
+            or not manual and (row["created_at"] < now - timedelta(minutes=5)
+                               or row["message_posted_at"] < now - timedelta(minutes=5))
             or row["message_posted_at"] > now + timedelta(seconds=5)):
         raise HTTPException(409, "推荐、来源或当前比赛盘口不满足实盘条件")
     latest = await conn.fetchval("SELECT max(revision) FROM v2_expert_messages WHERE source_id=$1 AND platform_message_id=$2",
@@ -156,7 +156,7 @@ async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = F
         previous = await conn.fetchrow("SELECT * FROM v2_bet_orders WHERE user_id=$1 AND signal_id=$2 AND account_id IS NOT NULL", user_id, signal_id)
     if previous:
         return dict(previous) | {'request_replayed': True} if manual else previous
-    signal = await eligible_signal(conn, signal_id)
+    signal = await eligible_signal(conn, signal_id, manual=manual)
     if manual:
         stake = policy["manual_stake"]
         if not manual_limits_valid(stake, policy["daily_limit"], policy["open_exposure_limit"]):
@@ -219,7 +219,7 @@ async def recheck_order(conn, order, settings, *, include_signal=False):
     if (account["id"] != order["account_id"] or account["binding_revision"] != order["binding_revision"]
             or account["config_revision"] != order["config_revision"] or policy["revision"] != order["policy_revision"]):
         raise HTTPException(409, "账户、会话或本人限额版本已变化")
-    signal = await eligible_signal(conn, order["signal_id"])
+    signal = await eligible_signal(conn, order["signal_id"], manual=manual)
     if manual:
         if order["stake"] != policy["manual_stake"]:
             raise HTTPException(409, "手动下注金额已变更")

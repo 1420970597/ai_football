@@ -123,7 +123,6 @@ _VISIBLE_RECOMMENDATIONS_WHERE = (
     "s.outcome='pending' AND s.withdrawn_at IS NULL AND m.deleted_at IS NULL AND e.enabled AND src.enabled AND se.enabled "
     "AND m.media_state='ready' AND f.phase IN ('scheduled','live') AND s.phase=f.phase "
     "AND f.stale_projection_at IS NULL AND f.decision_context_only_at IS NULL "
-    "AND s.created_at>=now()-interval '5 minutes' AND m.posted_at>=now()-interval '5 minutes' "
     "AND m.posted_at<=now()+interval '5 seconds' "
     "AND ((f.sport='football' AND s.market_kind IN ('winner','handicap','total') "
     "AND s.period IN ('full_time','first_half','second_half')) OR (f.sport='basketball' "
@@ -134,8 +133,9 @@ _VISIBLE_RECOMMENDATIONS_WHERE = (
 )
 
 
-def _visible_recommendations_where(quote_age_parameter: str) -> str:
-    # Same native selection as eligible_signal; a changed price is still valid.
+def _visible_recommendations_where() -> str:
+    # Manual confirmation reprices this native selection at the provider.
+    # Cache age is not proof that the recommendation or selection has expired.
     # EXISTS avoids duplicate recommendations for legacy NULL/zero winner lines.
     return _VISIBLE_RECOMMENDATIONS_WHERE + (
         " AND EXISTS(SELECT 1 FROM v2_current_quotes q WHERE q.fixture_id=s.fixture_id "
@@ -146,12 +146,11 @@ def _visible_recommendations_where(quote_age_parameter: str) -> str:
         "AND q.play_id IS NOT NULL AND q.play_id<>'' "
         "AND q.market_instance_id IS NOT NULL AND q.market_instance_id<>'' "
         "AND q.selection_id IS NOT NULL AND q.selection_id<>'' "
-        "AND q.source_updated_at<=now() "
-        "AND q.source_updated_at>=now()-make_interval(secs=>" + quote_age_parameter + "::int))"
+        "AND (q.source_updated_at IS NULL OR q.source_updated_at<=now()))"
     )
 
 
-async def _recommendation_summaries(fixture_ids: list[str], limit: int, max_quote_age: int) -> dict[str, list[dict]]:
+async def _recommendation_summaries(fixture_ids: list[str], limit: int) -> dict[str, list[dict]]:
     if not fixture_ids:
         return {}
     rows = await database.current_pool().fetch(
@@ -159,9 +158,9 @@ async def _recommendation_summaries(fixture_ids: list[str], limit: int, max_quot
         "SELECT s.id,s.expert_id,e.display_nickname,s.fixture_id,s.phase,s.market_id,s.market_name,"
         "s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time,s.score_baseline,"
         "s.outcome,s.unit_net,s.created_at " + _VISIBLE_RECOMMENDATIONS_FROM +
-        "WHERE s.fixture_id=wanted.fixture_id AND " + _visible_recommendations_where('$3') +
+        "WHERE s.fixture_id=wanted.fixture_id AND " + _visible_recommendations_where() +
         " ORDER BY s.created_at DESC,s.id DESC LIMIT $2) picked "
-        "ORDER BY picked.fixture_id,picked.created_at DESC,picked.id DESC", fixture_ids, limit+1, max_quote_age)
+        "ORDER BY picked.fixture_id,picked.created_at DESC,picked.id DESC", fixture_ids, limit+1)
     output: dict[str, list[dict]] = {}
     for row in rows:
         output.setdefault(row['fixture_id'], []).append(line_projection(row))
@@ -255,16 +254,14 @@ async def matches(
         end = datetime.combine(match_date + timedelta(days=1), time.min, zone).astimezone(timezone.utc)
         clauses.append(f"kickoff_at >= {bind(start)} AND kickoff_at < {bind(end)}")
     if recommended_only:
-        max_quote_age = await runtime_quote_max_age(request.app.state.settings)
-        quote_age_parameter = bind(max_quote_age)
         clauses.append("EXISTS(SELECT 1 " + _VISIBLE_RECOMMENDATIONS_FROM +
-                       "WHERE s.fixture_id=v2_fixtures.id AND " + _visible_recommendations_where(quote_age_parameter) + ")")
+                       "WHERE s.fixture_id=v2_fixtures.id AND " + _visible_recommendations_where() + ")")
     cursor_scope = {'kind': 'matches', 'phase': phase, 'sport': sport, 'league': league,
                     'league_ids': sorted(set(league_ids or [])), 'q': q, 'date': match_date, 'tz': tz}
     if recommended_only:
         cursor_scope['recommended_only'] = True
         cursor_scope['recommendation_outcome'] = 'pending'
-        cursor_scope['recommendation_eligibility'] = 'executable-v1'
+        cursor_scope['recommendation_eligibility'] = 'provider-reprice-v2'
     decoded = _decode_cursor(cursor, request, cursor_scope)
     if decoded:
         clauses.append(f"(kickoff_at,id) > ({bind(decoded[0])},{bind(decoded[1])})")
@@ -281,7 +278,7 @@ async def matches(
     by_fixture = await _quote_summaries(request, fixture_ids) if include_markets else {}
     full_history = await _has_entitlement(request, 'expert_full_history') if recommended_only else False
     recommendation_limit = 20 if full_history else 5
-    recommendations = await _recommendation_summaries(fixture_ids, recommendation_limit, max_quote_age) if recommended_only else {}
+    recommendations = await _recommendation_summaries(fixture_ids, recommendation_limit) if recommended_only else {}
     output = []
     for row in items:
         if recommended_only and not recommendations.get(row['id']):

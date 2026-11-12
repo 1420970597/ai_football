@@ -17,3 +17,13 @@
 ### 2026-11-12 09:41 UTC 设计已记录
 
 Git/当前交接/源查询/交易资格及原生预检既有样本已核对，原四份账户修改保留。docker exec API内default_transaction_read_only=on的两次分层诊断退出0，未发送资金请求。已向用户说明上次过严筛选的错误。效率优先，复用已过的网页/独立买入/038结构证据，仅跑本次资格与相关首页/订单专项。下一步规划提交、两处局部实现、冻结验证及API单角色发布。
+
+### 2026-11-12 09:53 UTC 代码已写，进入冻结隔离验证
+
+两处业务修改：首页不以推荐/缓存年龄清空有效关联；manual标志贯穿预留和最终复核，自动五分钟限制保留。新增旧推荐手动Mock完整执行2.35与自动拒绝、缓存未知/十分钟前仍展示、实际失效条件与分页限额回归。git diff --check退出0。下一步在任务专用Docker临时数据库冻结运行首页、独立确认、报价/未知提交及阶段证据专项；不重跑未变的网页构建或数据库迁移。
+
+首次直接执行infra/test/run.sh退出126（现有脚本无执行位），未启动测试或触碰运行数据；改用sh调用原脚本，不修改权限或测试内容。
+
+### 2026-11-12 09:55 UTC 隔离验证通过
+
+命令：TEST_SUBNET=10.93.88.0/28 sh infra/test/run.sh tests.test_homepage_expert_matches tests.test_manual_buy_intents tests.test_async_score_summaries tests.test_order_stage_evidence tests.test_account_state.AccountStateTests.test_stale_expert_price_reserves_market_and_uses_current_provider_price tests.test_account_state.AccountStateTests.test_unknown_mock_submission_not_requeued_or_released tests.test_account_state.AccountStateTests.test_withdrawn_recommendation_cannot_reserve_money。退出0，39 tests，17.437秒，失败/错误/跳过均0；冻结哈希与报告位于.runtime/test-evidence/2044608/backend-tests.json。旧推荐完整手动Mock接受2.35、自动拒绝，独立确认/网络重放/限额及未知不重试均通过。无真实资金请求。下一步提交推送、仅API不可变薄层镜像、真实只读候选与端口/双端浏览器验收。

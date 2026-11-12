@@ -209,8 +209,6 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
         await self.trusted()
         signal = await self.signal()
         cases = [
-            "UPDATE v2_expert_signals SET created_at=now()-interval '301 seconds'",
-            "UPDATE v2_expert_messages SET posted_at=now()-interval '301 seconds'",
             "UPDATE v2_expert_messages SET posted_at=now()+interval '6 seconds'",
             "UPDATE v2_expert_messages SET media_state='pending'",
             "UPDATE v2_expert_signals SET phase='scheduled'",
@@ -229,7 +227,7 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
                     try:
                         await conn.execute(sql)
                         with self.assertRaises(HTTPException):
-                            await eligible_signal(conn, signal)
+                            await eligible_signal(conn, signal, manual=True)
                         # Use this transaction's connection for the public read.
                         with patch.object(public.database, 'current_pool', return_value=conn):
                             self.assertEqual([], (await self.listing())['items'])
@@ -238,15 +236,13 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len((await self.listing())['items']))
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
 
-    async def test_exact_native_quote_and_runtime_freshness_required_without_price_lock(self):
+    async def test_exact_active_native_quote_required_without_cached_age_or_price_lock(self):
         await self.trusted()
         signal = await self.signal()
         cases = [
             "DELETE FROM v2_current_quotes",
             "UPDATE v2_current_quotes SET status='suspended'",
             "UPDATE v2_current_quotes SET status='closed'",
-            "UPDATE v2_current_quotes SET source_updated_at=NULL",
-            "UPDATE v2_current_quotes SET source_updated_at=now()-interval '61 seconds'",
             "UPDATE v2_current_quotes SET source_updated_at=now()+interval '5 seconds'",
             "UPDATE v2_current_quotes SET price=NULL",
             "UPDATE v2_current_quotes SET price='NaN'::numeric",
@@ -270,17 +266,34 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
         # Changed odds keep the recommendation visible; the immutable original is evidence only.
         await self.pool.execute('UPDATE v2_current_quotes SET price=2.35')
         self.assertEqual(str(signal), (await self.listing())['items'][0]['expert_signals'][0]['id'])
-        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '30 seconds'")
-        with patch.object(public, 'runtime_quote_max_age', AsyncMock(return_value=15)):
-            self.assertEqual([], (await self.listing())['items'])
-        self.assertEqual(1, len((await self.listing())['items']))
+        for timestamp in ("NULL", "now()-interval '10 minutes'"):
+            await self.pool.execute(f"UPDATE v2_current_quotes SET source_updated_at={timestamp}")
+            with patch.object(public, 'runtime_quote_max_age', AsyncMock(return_value=15)) as freshness:
+                self.assertEqual(1, len((await self.listing())['items']))
+                freshness.assert_not_awaited()
+
+    async def test_older_pending_recommendation_remains_visible_for_manual_provider_repricing(self):
+        from app.orders import eligible_signal
+        from fastapi import HTTPException
+        await self.trusted()
+        signal = await self.signal()
+        await self.pool.execute("UPDATE v2_expert_signals SET created_at=now()-interval '1 hour'")
+        await self.pool.execute("UPDATE v2_expert_messages SET posted_at=now()-interval '1 hour'")
+        await self.pool.execute("UPDATE v2_current_quotes SET source_updated_at=now()-interval '10 minutes'")
+        self.assertEqual(str(signal), (await self.listing())['items'][0]['expert_signals'][0]['id'])
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                with self.assertRaises(HTTPException):
+                    await eligible_signal(conn, signal)
+                self.assertEqual(signal, (await eligible_signal(conn, signal, manual=True))['id'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
 
     async def test_invalid_recommendations_do_not_consume_summary_limits_or_match_pages(self):
         from app.orders import eligible_signal
         await self.trusted()
         for i in range(22):
             invalid = await self.signal(line=str(i + 20))
-            await self.pool.execute("UPDATE v2_expert_signals SET created_at=now()-interval '6 minutes' WHERE id=$1", invalid)
+            await self.pool.execute("UPDATE v2_expert_signals SET withdrawn_at=now() WHERE id=$1", invalid)
         self.assertEqual([], (await self.listing(page_size=1))['items'])
         valid = [await self.signal(line=str(i + 1)) for i in range(6)]
         item = (await self.listing(page_size=1))['items'][0]

@@ -4,6 +4,7 @@ from decimal import Decimal
 import unittest
 import uuid
 import asyncpg
+import httpx
 import test_account_state as support
 
 
@@ -17,6 +18,7 @@ class ManualBuyIntentTests(unittest.IsolatedAsyncioTestCase):
     signal = support.AccountStateTests.signal
     enable = support.AccountStateTests.enable
     reserve = support.AccountStateTests.reserve
+    native = support.AccountStateTests.native
 
     async def configured(self, limit='10'):
         await self.healthy()
@@ -59,6 +61,45 @@ class ManualBuyIntentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len({r.json()['order']['id'] for r in responses}))
         self.assertEqual({True,False}, {r.json()['replayed'] for r in responses})
         self.assertEqual(Decimal('2'), await self.pool.fetchval('SELECT sum(reserved_stake) FROM v2_bet_orders'))
+
+    async def test_older_manual_intent_rechecks_and_submits_current_provider_price(self):
+        from fastapi import HTTPException
+        from services.api.app import orders
+        from services.executor.account_protocol import AccountProtocolClient, BET_PATH, LATEST_MARKET_PATH
+        from services.executor.worker import Executor
+        signal, quote = await self.configured()
+        await self.pool.execute("UPDATE v2_expert_signals SET created_at=now()-interval '1 hour' WHERE id=$1", signal)
+        await self.pool.execute("UPDATE v2_expert_messages SET posted_at=now()-interval '1 hour'")
+        await self.pool.execute("UPDATE v2_current_quotes SET price=1.50,source_updated_at=now()-interval '10 minutes' WHERE id=$1", quote)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                with self.assertRaises(HTTPException):
+                    await orders.eligible_signal(conn, signal)
+        response = await self.buy(signal)
+        self.assertEqual(202, response.status_code, response.text)
+        work = (await self.worker_api.post('/internal/executor/claim?live_capable=true')).json()
+        self.assertEqual('order', work['kind'])
+
+        def current_provider(request):
+            result = self.native(request)
+            if request.url.path == LATEST_MARKET_PATH:
+                value = result.json()
+                value['data'][0]['marketOddsList'][0]['oddsValue'] = '235000'
+                return httpx.Response(200, json=value)
+            if request.url.path == BET_PATH:
+                import json
+                detail = json.loads(request.content)['seriesOrders'][0]['orderDetailList'][0]
+                self.assertEqual(('2.35', '235000'), (detail['oddFinally'], detail['odds']))
+            return result
+
+        executor = Executor(self.worker_api, 'https://platform.invalid/internal/executor', live_orders_enabled=True,
+            client_factory=lambda scope, session, **kwargs: AccountProtocolClient(
+                scope, session, transport=httpx.MockTransport(current_provider), **kwargs))
+        await executor.order_job(work)
+        stored = await self.pool.fetchrow('SELECT * FROM v2_bet_orders WHERE id=$1', uuid.UUID(work['order_id']))
+        self.assertEqual((True, 'accepted', Decimal('2.35')), (stored['manual'], stored['state'], stored['price']))
+        self.assertEqual(Decimal('1.95'), Decimal(stored['quote_snapshot']['expert_recommendation_price']))
+        self.assertEqual(1, sum(request.url.path == BET_PATH for request in self.native_requests))
 
     async def test_separate_confirmations_serialize_and_keep_daily_exposure_limits(self):
         signal, _ = await self.configured(limit='4')
