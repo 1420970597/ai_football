@@ -71,3 +71,5 @@
 未确认新业务根因，因此没有业务修改、fix commit、业务回归/构建或新部署；调查断言不冒充业务回归。禁止模块/来源/模型/全局设置无修改，既存.omc保留。raw导出0，raw剩余0，manifest.files=[]，无临时模型凭据；不因重复旧窗核验发布代码或重审历史。下一步严格schema、分段口径、冻结/脱敏、读回和Git边界验证及证据提交推送。
 
 15:57 UTC 最终验收通过：`docker run --rm -i --network none --cpus=.25 --memory=192m --pids-limit=64 --user 0 -v <attempt12>:/evidence -v <authority>:/source --entrypoint python dc881af353be /evidence/finish.py`退出0，严格最终schema、来源数量/分页/盘口/单位、新分段7项集合与算术、7冻结脚本/schema、脱敏及报告JSON写后读回均通过。raw=0、manifest.files=[]。`git diff --check`及起点a9615f66以来业务/测试/部署目录零差异均0，仅既存.omc保留。最终33/26仅同哈希语义复用，7来源未完成、status=blocked；本轮无fix commit/业务回归/新部署/模型调用/历史重审/交易。活动阶段为本轮四份脱敏报告/进度提交推送和远端核对。
+
+15:58 UTC 证据提交663458ed34c15503f09bc9a13087b208cea23e1b已commit/push、ls-remote精确核对，均0；规划bc4643ac亦同步。提交后Docker无网络只读严格schema/报告与私有脱敏JSON读回一致、7冻结哈希、计时分段证据一致、脱敏及空raw/manifest复核0；业务/测试/部署零变化0，仅既存.omc保留。最终blocked：7来源未完成、名称/期间与历史时钟缺口仍在。新分段只加强旧窗慢样本定位，不能据此认定新的可修根因、修改模型/容量或触发历史重审。本轮结束，无fix commit/新业务回归/新部署/交易；下一步须有新增合法来源或历史时钟证明，重复固定窗不增加准确率样本。
