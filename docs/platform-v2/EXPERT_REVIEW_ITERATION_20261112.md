@@ -67,3 +67,5 @@
 2026-11-12 14:33 UTC attempt4最终schema与证据验收通过0：Docker无网络校验冻结调查脚本、分页/接受上下文、延迟单位和分布、脱敏、空raw/manifest并写报告后读回一致。git diff --check0，较起点业务/测试/部署无差异，.omc保留。最终blocked；messages_examined=33/unresolved_examined=26是同哈希语义复用数，不包括未完成来源分析的1回复及6音视频。证据报告window-1300-1330-attempt4.{md,json}，活动阶段为提交推送，无新业务发布。
 
 2026-11-12 14:34 UTC attempt4证据392008ef5ceff98bef51e3f72eec61d5be30f0d2远端精确核对通过，commit/push/ls-remote均0，规划28a5d915也已同步。仅文档证据，无业务/测试/部署变更、fix commit、模型调用或资金测试；原始证据导出0、raw及manifest空。最终blocked；本条作为独立进程交接，固定窗口不前移、不重审历史，也不从其他窗口提取原始内容填补本窗缺口。
+
+2026-11-12 14:42 UTC attempt5独立规划开始：固定13:00–13:30半开窗，起点3a0df8bd/远端一致，仅既存.omc保留。AGENTS、最新交接、上一窗和前四次脱敏结论已读；本轮未取得DB证据，保持原blocked。活动工作包见window-1300-1330-attempt5.md：Docker内存TLS只读核验版本/轨迹/图片/工具/接受风险及分段时钟，未知时间回复排除，不导出原始材料、不重放历史。读取及Git核对命令0；下一步规划阶段提交推送和有界审计。
