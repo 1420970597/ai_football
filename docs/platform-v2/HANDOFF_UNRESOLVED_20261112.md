@@ -214,30 +214,93 @@ global_enabled(conn, settings) = True  # v2_admin_settings.auto_betting_enabled 
 
 某次历史会话中 `S3_SECRET_KEY` 曾被回显到会话记录。**建议轮换该密钥**（本文不复述其值）。轮换步骤：在 `minio-20261111/local-storage.env` 生成新密钥 → 更新 MinIO 用户 → 更新 api/collector 的环境 → 重启这两个服务 → 验证一次媒体上传与下载。
 
+### 4.6 线上前端的构建来源与部署分支不一致（交接必读）
+
+**事实**：公网 `football.5545.eu.cc` 服务的 web 镜像 `sha256:0c39e031…f5778`
+（`docker image inspect` 显示构建于 2026-11-12 02:16），其
+`/usr/share/nginx/html/assets/app.js` 为 **111871 字节**，`grep -c 'data-bet-signal'`
+返回 **2**（每行买入控件存在）。这与
+`refactor/TASK-78-web-ux`（`e16d4482`）工作树里的 `web/app/app.js`（111871 字节）**逐字节同尺寸**。
+
+而部署分支 `fix/TASK-78-hermes-telegram-sync`（`f37fd07f`）的
+`web/app/app.js` 是 **2056 行 / 103900 字节**，不含 `data-bet-signal`、
+`配置金额后实盘买入`、`尚未保存每单下注金额` 这三个字符串。
+
+**结论**：当前线上前端由 `refactor/TASK-78-web-ux` 构建，**没有**从部署分支构建。
+两个分支在 `web/app/` 上相差 713 行。
+
+**为什么这是未解决问题**：
+
+1. 谁能重建线上前端，取决于「记得去 web-ux 工作树构建」，而不是仓库当前分支。这不是可复现的发布路径。
+2. 若有人从部署分支构建一次 web 镜像并部署，线上会**静默失去**每行买入控件、`aria-describedby`
+   阻断说明与新的弹窗行为——即 §5.2 的验收底线会整体回退，而镜像摘要变化不会被业务监控发现。
+3. `refactor/TASK-78-web-ux` 落后部署分支 5 个提交（均为文档），但两者未合并，
+   合并方向未定。
+
+**未做**：本轮没有合并这两个分支。合并是有风险的代码动作（部署分支需吸收 713 行前端，
+web-ux 需吸收 5 个文档提交），且与用户刚下的前端重构指令重叠——重构本来就要重写这批文件，
+先合并再重写会浪费一次冲突处理。
+
+**建议**：让前端重构直接在 `refactor/TASK-78-web-ux` 上进行，完成后把该分支合并或变基到部署分支，
+使「部署分支 == 线上代码」重新成立；合并后**必须**核对镜像摘要与
+`grep -c 'data-bet-signal'`，不能只看构建成功。
+
+**复核命令**：
+
+```sh
+# 线上实际服务的 bundle 特征
+docker exec ai-football-v2-web-1 sh -c \
+  'wc -c /usr/share/nginx/html/assets/app.js; grep -c "data-bet-signal" /usr/share/nginx/html/assets/app.js'
+
+# 两个分支在该目录的差异规模
+git diff --stat f37fd07f refactor/TASK-78-web-ux -- web/app/
+
+# 部署分支是否缺失每行买入控件（应输出 0）
+git grep -c 'data-bet-signal' f37fd07f -- web/app/ | wc -l
+```
+
 ---
 
 ## 五、前端与体验（未解决，已被用户指定为下一阶段）
 
 用户最新指令：「重构新版视觉前端，由你设计，委托子代理使用opus5.5执行」。
 
-### 5.1 现状基线
+### 5.1 现状基线（**先读 §4.6，基线不在部署分支上**）
+
+生产 web 镜像 `sha256:0c39e031…f5778` 的前端来自
+`refactor/TASK-78-web-ux`（`e16d4482`，已推送），**不是**部署分支
+`fix/TASK-78-hermes-telegram-sync` 里的 `web/app/`。因此重构必须以 web-ux 工作树
+`/root/ai_football/.runtime/refactor-wt/web-ux/web/app/` 为基线：
 
 | 文件 | 行数 | 字节 |
 | --- | --- | --- |
-| `web/app/app.css` | 2322 | 42875 |
-| `web/app/app.js` | 2056 | 103900 |
-| `web/app/index.html` | 986 | 46568 |
-| `web/app/admin.js` | 925 | — |
-| `web/app/ui.js` | 300 | — |
-| `web/app/identity.js` | 203 | — |
+| `app.css` | 2496 | 48933 |
+| `app.js` | 2203 | 111871 |
+| `index.html` | 989 | 46748 |
+| `admin.js` | 951 | 46945 |
+| `ui.js` | 311 | 9914 |
+| `identity.js` | 203 | 9188 |
+| `account-history.js` | 111 | 5974 |
 
-现有设计变量（`app.css:1-20`）：
+（对照：部署分支的 `web/app/` 少 713 行，`app.js`/`app.css` 分别为 2056 行/2322 行，
+**没有**每行买入控件 `data-bet-signal`、`配置金额后实盘买入`、`尚未保存每单下注金额`。
+不要再把这个目录当成线上前端。）
+
+现有设计变量（`app.css:1-24`，已含对比度注释）：
 ```css
---purple:#0868c5  --purple-dark:#07539c  --orange:#ef7d26  --orange-text:#aa4809
---red:#bd382f     --green:#14663f      --ink:#283443     --muted:#5c6978
---line:#e0e7ee    --paper:#fff         --background:#f3f6f9  --gold:#ad7b32
-font: 14px/1.5 Arial, "Microsoft YaHei", "PingFang SC", sans-serif;
+--header:#0e2440  --on-dark-muted:#b8c7da  --brand:#0b5fc4  --brand-strong:#084c9e
+--brand-soft:#e9f1fc  --focus:#0a3f8f  --ink:#17212e  --ink-2:#3b4858  --muted:#586576
+--line:#dfe5ec  --line-strong:#7a8797  --paper:#fff  --surface:#f6f8fa
+--surface-2:#edf1f5  --background:#eef2f6
+/* 中文比分惯例：红=进行中/胜/涨，绿=负/跌 */
+--red:#c4291c  --red-soft:#fdeeec  --red-line:#f3c9c4
+--green:#11693f  --green-soft:#e6f5ec  --warn:#8a5200
 ```
+
+已有视觉回归基线（14 张，桌面 1440 / 手机 390）：
+`.runtime/refactor-wt/web-ux/tests/browser/visual-baselines/`，覆盖
+`scores`/`schedule`/`match-detail`/`experts`/`membership`/`account`/`admin`。
+重构后这些基线**必然**要更新，但更新必须由重构后的真实截图产生，不能为了通过而清空。
 
 现有视图与关键 id：`view-scores`、`view-experts`、`view-messages`、`view-membership`、`view-account`；`manual-bet-panel`/`manual-bet-form`/`manual-bet-status`、`matches-list`/`matches-state`/`load-more`、`plans-list`、`experts-list`/`expert-ranking`/`expert-signals`、`messages-list`、`identity-panel`、`account-content`。
 
@@ -278,8 +341,9 @@ font: 14px/1.5 Arial, "Microsoft YaHei", "PingFang SC", sans-serif;
 | 11 | 无当前 Android 包 | 客户端 | 需构建 | 从当前提交重建 |
 | 12 | 镜像迁移数 35 vs 36 | 构建 | 无 | 下次统一构建修正 |
 | 13 | `S3_SECRET_KEY` 轮换 | 安全 | 无 | 见 §4.5 |
-| 14 | 前端视觉重构 | 体验 | 已排期 | 见第五节 |
-| 15 | 前端性能（指纹/ETag/自适应轮询） | 性能 | 无 | 见 §5.3 |
+| 14 | **线上前端来自 web-ux，部署分支缺 713 行** | 发布可复现性 | 与重构重叠 | 见 §4.6，随重构一并合并 |
+| 15 | 前端视觉重构 | 体验 | 已排期 | 见第五节 |
+| 16 | 前端性能（指纹/ETag/自适应轮询） | 性能 | 无 | 见 §5.3 |
 
 ---
 
