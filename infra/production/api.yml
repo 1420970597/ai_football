@@ -1,13 +1,13 @@
 # Apply last after historical API image overlays in the validated Compose chain.
-# Retain web.yml and review-schema.yml for the other already validated roles.
-# Business credentials remain external; migration 038 is already applied.
+# Retain expert-review.json and append homepage-dedup.json after legacy overlays.
+# Business credentials remain external; migration 039 is already applied.
 x-production-api:
-  source_revision: fd8ccf76a8ad21735e1ddf77d38ba5f5453970d8
-  artifact_version: 2.0.0-dev-availability.20261112.1
-  base_image: sha256:7dd693d6eb5fe41a4a045379d8fa34ea28204a4ab37d405edfabd193fba6e369
-  schema: 038_manual_buy_intents.sql
-  scope: pending-homepage-manual-provider-repricing
+  source_revision: 6eb9a2df1958223fe74cc4442786dbd441984138
+  artifact_version: 2.0.0-dev-intent-dedup.20261113.1
+  base_image: sha256:44aae2f65e838d2f36592cc5e92dfdb9d92ba9e9f00495534938f1d4e1e248de
+  schema: 039_review_detection_deadline.sql
+  scope: unsettled-homepage-and-automatic-intent-deduplication
 
 services:
   api:
-    image: sha256:a6debc6b0401b2ffbcc2e8ec6283d52f1e89b5eb51438eb2f93a30b82ef79616
+    image: sha256:eec79eb0213eab6f6b0592aa450625eb356a5c02c86490ecd2c5f38dcfe37dad
