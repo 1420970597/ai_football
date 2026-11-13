@@ -65,3 +65,15 @@
 - 冻结重跑原十模块及新增历史准入场景共224项、32.206秒，失败/错误/跳过均0，退出0；冻结证据2007116/backend-tests.json。新正常频道帖子、普通个人作者既有策略、历史保留、重试防重、编辑/相册/媒体、源与租约撤销均在集合内。
 - 本次只改API审核入队条件和抑制轨迹参数，原文版本指纹、detected_at、交易权限、已生成/结算台账保持；不重新执行已失败历史任务，也不将其改成成功。collector和web无二次业务改动，不重复构建或重启。
 - 下一步：提交推送修正，基于运行API ed554800仅替换telegram路由模块，校验现有配置后切换API；继续读取真实回补与审核结果，明确历史超时与新发言20秒验收范围。
+
+## 2026-11-13 14:44 UTC：生产验收与发布记录
+
+- 二次修正80a97e434b8c4276c13871e79882f71848f7936d已推送fix/TASK-79-channel-identity并核对远端引用。第一次切换前检查有1个有效审核租约，安全退出42且未写生产；等其自然完成后重跑原发布脚本退出0。仅API于14:37:13–14:37:34 UTC切换并就绪，collector/web未再次重启；review-worker和半小时supervisor的容器ID、镜像及启动时间与接手前完全一致。
+- 最终镜像：API d2e3b742231656dec0d5a19cdbe9a740bfafbce53941f943ec444b7160723359（实现80a97e43）；collector dd6feb990625900247f7170732666bff933524020f20351b55e56e52de1def0a、web956247d1a4f96adb4bcfc555f2e47347b10d512231fb4e8556521d278d7d187d（实现611be25c）。三个角色运行镜像及五份业务模块SHA逐一核对一致；API/web健康，Telegram已连接且授权有效，迁移记录仍38条，本轮结构变更0。
+- 14:38:20 UTC只读验收：两个新恢复广播来源分别137/14个事件版本，共151；二者近72小时固定上界回补游标均完成，且分别已有1条决策记录。事件含编辑版本，并非151条独立发言或可投注推荐；游标完成不等于每条原文成功解析。已有两个广播来源游标也完成。未新增外部来源、未恢复已撤销映射，1个没有可信作者的supergroup继续不授信。
+- 首版恢复期间形成的56条历史detection_deadline_exceeded记录保留未解决，未改检测时间、未重放旧任务、未冒称成功。最终只读策略探针：频道60秒帖子实时入队、600秒帖子历史保留、个人作者600秒仍按既有策略；探针未持久化。超过300秒的频道历史实时排队数为0，20秒业务截止不放宽。两个发布窗口均无新检测审核任务，因此不能宣称已验证全局或多专家并发20秒达标。
+- 224项原十模块回归全通过：测试自身32.206秒、包装器计时33.927秒，失败/错误/跳过0。隔离管理页1440/390宽度的显式保存和负数身份通过；生产首页同两宽度实际回读通过，日期导航、日期筛选及重载仍有效，当前实际专家比赛1场（会随赛况变化）。线上新资源模块SHA与冻结源码一致，无浏览器JS异常或横向溢出，生产浏览器写入0，资金测试0。
+- 其余来源仍存在version_content_conflict和真实Telegram FloodWait；保留退避与错误，不将本次身份修复宣称为所有来源健康。历史未解决解析、整段历史可见性及多专家实时延迟仍是后续独立缺口；本轮没有借修复放松交易权限或自动投注防重。
+- 证据：reports/telegram-channel-completion-20261113.json；受限runtime保存原日志、只读快照、回滚配置和失败码。实际后端命令为`sh infra/test/run.sh test_telegram_channel_identity test_telegram_collector test_telegram_recent_recovery test_telegram_directory test_telegram_sources test_telegram_api test_telegram_author_before_album test_telegram_detection_timing test_telegram_profile_batch test_telegram_reconciliation_claims`，退出0；初版`sh .runtime/tg-channel-completion-20261113/deploy.sh`退出0，二次`sh .runtime/tg-channel-completion-20261113/history-release/deploy.sh`先42后0。均未使用真实投注验收。
+- 运维覆盖：沿用expert-review、homepage-dedup、homepage-dates、homepage-live-gap，最后追加infra/production/telegram-channel-identity.json；既有覆盖中的角色镜像指针也同步到当前版本，避免组合顺序误回退。现有环境、挂载、网络、端口、身份和资源限制保持；本轮无依赖升级。
+- 当前状态：本轮频道身份采集、有限历史恢复和生产验收通过；完整产品交付及全局时延未作声明。下一步将发布证据与累积镜像清单分别提交至来源分支及根运维分支，核对远端；保留接手前其他人的未提交内容。
