@@ -4,7 +4,9 @@
   "required": [
     "window_start", "window_end", "status", "messages_examined", "unresolved_examined",
     "confirmed_omissions", "confirmed_misbindings", "latency_target_met", "summary",
-    "evidence_paths", "fix_commits", "validation", "remaining_issues"
+    "evidence_paths", "fix_commits", "validation", "remaining_issues", "task_kind", "analysis_status",
+    "repair_status", "issue_key", "evidence_fingerprint", "incremental_evidence", "retryable",
+    "validation_passed", "blocker_codes", "repair_candidates"
   ],
   "properties": {
     "window_start": {"type": "string"},
@@ -19,6 +21,25 @@
     "evidence_paths": {"type": "array", "items": {"type": "string"}},
     "fix_commits": {"type": "array", "items": {"type": "string"}},
     "validation": {"type": "array", "items": {"type": "string"}},
-    "remaining_issues": {"type": "array", "items": {"type": "string"}}
+    "remaining_issues": {"type": "array", "items": {"type": "string"}},
+    "task_kind": {"type": "string", "enum": ["scan", "repair"]},
+    "analysis_status": {"type": "string", "enum": ["complete", "partial", "failed", "not_run"]},
+    "repair_status": {"type": "string", "enum": ["not_needed", "pending", "blocked", "validated", "failed"]},
+    "issue_key": {"type": "string"},
+    "evidence_fingerprint": {"type": "string"},
+    "incremental_evidence": {"type": "boolean"},
+    "retryable": {"type": "boolean"},
+    "validation_passed": {"type": "boolean"},
+    "blocker_codes": {"type": "array", "items": {"type": "string", "enum": ["media_unavailable", "evidence_incomplete", "provider_unavailable", "upstream_unavailable", "validation_failed", "release_blocked", "no_increment", "timeout", "read_failed", "accuracy_uncertain"]}},
+    "repair_candidates": {
+      "type": "array", "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["issue_key", "evidence_fingerprint", "minimal_reproduction", "defect_count"],
+        "properties": {
+          "issue_key": {"type": "string"}, "evidence_fingerprint": {"type": "string"},
+          "minimal_reproduction": {"type": "boolean"}, "defect_count": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
   }
 }

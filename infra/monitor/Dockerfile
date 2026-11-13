@@ -3,6 +3,7 @@ ARG EXPERT_MONITOR_BASE_IMAGE=sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d
 FROM ${EXPERT_MONITOR_BASE_IMAGE}
 USER 0:0
 COPY expert_iteration_supervisor.py /opt/expert-monitor/expert_iteration_supervisor.py
+COPY scan_scheduler.py /opt/expert-monitor/scan_scheduler.py
 COPY result-schema.json /opt/expert-monitor/result-schema.json
 COPY toolchain-packages.tsv /opt/expert-monitor/toolchain-packages.tsv
 COPY toolchain-python-packages.json /opt/expert-monitor/toolchain-python-packages.json

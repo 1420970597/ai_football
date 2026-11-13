@@ -98,7 +98,7 @@ class ExpertIterationSupervisorTests(unittest.TestCase):
     def test_prompt_sets_real_half_open_window_accuracy_and_transaction_boundaries(self):
         prompt = make_prompt(self.config, self.start, self.start + PERIOD_SECONDS, self.state)
         for term in ("2026-11-12T13:00:00Z", "2026-11-12T13:30:00Z", "半开窗口", "20秒",
-                     "多专家", "不猜", "冻结", "Docker", "不执行实盘投注", "posted_at", "72小时",
+                     "多专家", "不猜", "Docker", "不执行实盘投注", "posted_at", "72小时",
                      "raw-evidence-manifest.json", "最早原始posted_at", "落盘前先写manifest"):
             self.assertIn(term, prompt)
 
@@ -213,7 +213,7 @@ class ExpertIterationSupervisorTests(unittest.TestCase):
             self.assertEqual((124, True), result)
             terminate.assert_called_once_with(12345, signal.SIGTERM)
             self.assertTrue(launch.call_args.kwargs["start_new_session"])
-            self.assertEqual(1790, capture.call_args.args[3])
+            self.assertEqual(590, capture.call_args.args[3])
             self.assertEqual(subprocess.PIPE, launch.call_args.kwargs["stdout"])
             self.assertEqual(subprocess.PIPE, launch.call_args.kwargs["stderr"])
 

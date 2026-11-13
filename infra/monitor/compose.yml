@@ -17,7 +17,8 @@ services:
       EXPERT_SOURCE_ROOT: ${EXPERT_SOURCE_ROOT:?set authoritative source tree absolute path}
       EXPERT_ITERATION_STATE_DIR: ${EXPERT_ITERATION_STATE_DIR:?set project private runtime directory}
       EXPERT_ITERATION_FIRST_START: ${EXPERT_ITERATION_FIRST_START:-2026-11-12T13:00:00Z}
-      EXPERT_ITERATION_TIMEOUT_SECONDS: "1800"
+      EXPERT_ITERATION_TIMEOUT_SECONDS: "600"
+      EXPERT_REPAIR_TIMEOUT_SECONDS: "600"
       EXPERT_ITERATION_RETRY_SECONDS: "300"
       CODEX_HOME: /run/expert-codex-home
       PYTHONDONTWRITEBYTECODE: "1"
@@ -62,16 +63,7 @@ services:
         max-size: "2m"
         max-file: "3"
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - >-
-          import json,os,time,pathlib;
-          p=pathlib.Path(os.environ['EXPERT_ITERATION_STATE_DIR'])/'status.json';
-          d=json.loads(p.read_text());
-          assert time.time()-p.stat().st_mtime<1900;
-          assert d['state'] in ('waiting','running','succeeded','dry_run')
+      test: [CMD, python, /opt/expert-monitor/expert_iteration_supervisor.py, --health]
       interval: 60s
       timeout: 5s
       retries: 2

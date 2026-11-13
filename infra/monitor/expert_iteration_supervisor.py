@@ -1,8 +1,8 @@
 """Run one independent, audited expert-review agent per closed UTC window.
 
 The supervisor never queries business data or deploys services itself. It owns
-the cadence, lease, bounded child process, private evidence retention and
-success watermark. The agent follows the project's existing review/release
+the cadence, serial lease, bounded child process, private evidence retention,
+explicit analysis gaps and independent repair backlog. The agent follows the project's review/release
 contracts. Credentials are injected as read-only files, never copied or logged.
 """
 from __future__ import annotations
@@ -20,9 +20,15 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Callable
+
+if __package__:
+    from . import scan_scheduler as scheduler
+else:
+    import scan_scheduler as scheduler
 
 UTC = timezone.utc
 PERIOD_SECONDS = 1800
@@ -35,6 +41,8 @@ ITEM_TYPES = frozenset({"agent_message", "reasoning", "command_execution", "mcp_
 EVENT_STATUSES = frozenset({"in_progress", "completed", "failed", "interrupted", "cancelled",
                            "queued", "running", "success", "errored"})
 SAFE_EVENT_ID = re.compile(r"(?:item_[0-9]{1,12}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\Z")
+BLOCKER_CODES = frozenset({"media_unavailable", "evidence_incomplete", "provider_unavailable", "upstream_unavailable",
+                           "validation_failed", "release_blocked", "no_increment", "timeout", "read_failed", "accuracy_uncertain"})
 
 
 def utc_timestamp(value: float) -> str:
@@ -68,9 +76,11 @@ class Config:
     codex_binary: str = "/usr/local/bin/codex"
     codex_home: Path = Path("/run/expert-codex-home")
     schema_path: Path = Path("/opt/expert-monitor/result-schema.json")
-    timeout_seconds: int = PERIOD_SECONDS
+    timeout_seconds: int = 600
     retry_seconds: int = 300
     project_root: Path | None = None
+    repair_timeout_seconds: int = 600
+    heartbeat: Callable | None = None
 
     @classmethod
     def from_environment(cls) -> "Config":
@@ -83,9 +93,10 @@ class Config:
             codex_home=Path(os.environ.get("CODEX_HOME", "/run/expert-codex-home")),
             schema_path=Path(os.environ.get(
                 "EXPERT_ITERATION_SCHEMA", "/opt/expert-monitor/result-schema.json")),
-            timeout_seconds=int(os.environ.get("EXPERT_ITERATION_TIMEOUT_SECONDS", "1800")),
+            timeout_seconds=int(os.environ.get("EXPERT_ITERATION_TIMEOUT_SECONDS", "600")),
             retry_seconds=int(os.environ.get("EXPERT_ITERATION_RETRY_SECONDS", "300")),
             project_root=Path(os.environ["EXPERT_PROJECT_ROOT"]).resolve(),
+            repair_timeout_seconds=int(os.environ.get("EXPERT_REPAIR_TIMEOUT_SECONDS", "600")),
         )
         if config.first_start % PERIOD_SECONDS:
             raise ValueError("First window must start on a UTC half-hour boundary")
@@ -93,6 +104,8 @@ class Config:
             raise ValueError("Agent timeout must be between 1 and 1800 seconds")
         if not 1 <= config.retry_seconds <= PERIOD_SECONDS:
             raise ValueError("Retry delay must be between 1 and 1800 seconds")
+        if not 60 <= config.repair_timeout_seconds <= 900:
+            raise ValueError("Repair timeout must be between 60 and 900 seconds")
         if not config.source_root.is_dir():
             raise ValueError("Authoritative source tree does not exist")
         # Do not allow a typo to place raw expert content in Git-visible reports.
@@ -100,7 +113,8 @@ class Config:
             raise ValueError("Private state must be inside the project's .runtime directory")
         if not config.source_root.is_relative_to(config.project_root) or not config.state_dir.is_relative_to(config.project_root):
             raise ValueError("Source and private state must stay inside the designated project")
-        return config
+        # Migrate legacy 1800s settings without allowing a scan to hold the lane.
+        return replace(config, timeout_seconds=min(config.timeout_seconds, scheduler.SCAN_BUDGET))
 
 
 class AlreadyRunning(RuntimeError):
@@ -139,10 +153,33 @@ def next_window(progress: dict, now: float) -> tuple[int, int] | None:
     return (start, end) if end <= now else None
 
 
-def make_prompt(config: Config, start: int, end: int, attempt_dir: Path) -> str:
+def make_prompt(config: Config, start: int, end: int, attempt_dir: Path, task: dict | None = None) -> str:
+    task = task or {"kind": "scan"}
+    phase = ("本轮只读扫描：禁止改业务、Git提交/推送、重复planning或更新历史进度文档。"
+             "只读取最新短handoff、上一窗结构化结果及本窗新样本，不遍历数十篇旧报告。"
+             "扫描完成与修复完成分开：全部可访问样本已核验时analysis_status=complete；"
+             "缺图片/证据不足时用partial，读取整体失败用failed。媒体或修复blocked不能把已做分析说成未做。"
+             "现存相同原图/unsupported已核验但证据仍不可判定时partial、retryable=false，保留缺口等待新证据，禁止重复烧同图。"
+             "确认缺陷且有最小失败复现才填写repair_candidates；issue_key为稳定缺陷标识SHA256，"
+             "evidence_fingerprint只来自新样本版本、阻塞状态与失败断言，不包含时间/重试号/文档/HEAD。"
+             "无新增证据不得重复生成planning、文档或提交。扫描只写本次私有runtime。"
+             if task["kind"] == "scan" else
+             f"本轮独立修复：只处理已确认缺陷issue_key={task['issue_key']}，"
+             f"evidence_fingerprint={task['evidence_fingerprint']}；"
+             f"前次最小复现位于本窗attempt={task['analysis_attempt']}的私有证据。"
+             "先核对最小复现和实际源代码，确认真实漏配/延迟原因后最小修改对应审核/采集/监控代码；"
+             "添加针对性回归、冻结后Docker验证，对准确率有影响时复验相关正负例与隔离原图。"
+             "按现有门禁串行准备、验收并部署；发布受阻保留待办，不妨碍后续扫描。"
+             "仅真实业务/测试源修复才提交必要源码和简短说明；无代码增量禁止planning/doc空提交。"
+             "稳定外部阻塞用repair_status=blocked、retryable=false，等待新证据，不反复调用自己。"
+             "validated必须有真实源码提交、validation_passed=true及验收证据；不能用文档提交当修复。"
+             "本轮analysis_status=not_run，不重扫全站或历史旧窗。")
     return f"""你是用户已明确授权的球讯项目专家审核迭代子代理。仅处理UTC半开窗口
 [{utc_timestamp(start)}, {utc_timestamp(end)})。权威工作树：{config.source_root}。
-本次运行独立且不恢复聊天，先读AGENTS.md、最新交接和本工作包/上一窗脱敏结论。
+本次运行独立且不恢复聊天；task_kind={task['kind']}。只读AGENTS.md及最新短交接。
+最新交接仅读docs/platform-v2/EXPERT_REVIEW_INCIDENT_20261113.md末尾最多80行；
+上一窗结构化摘要：{json.dumps(task.get('previous_scan'), ensure_ascii=False)}。
+{phase}
 
 任务：在Docker中使用现有TLS只读业务连接核对窗口内检测到的受信任专家发言、
 其最新有效版本、审核任务/工具轨迹/原文和已获授权图片。分析所有未解决及部分接受
@@ -155,11 +192,8 @@ source_edited旧任务、非推荐、广告、原文缺比赛、遮挡或上游�
 媒体、Hermes、工具及提交分别测量。不要用发帖时间/审核结束替换检测或推荐时间。
 记录多专家同时发言的并发、队列最长等待、模型容量/限流和超20秒样本，低样本不宣称达标。
 
-默认只读调查。确认真实漏配/延迟根因后，用户已授权立即最小修复，但只能在本权威树
-对应审核/采集/监控代码内修改；先记录可审查工作包及失败样本，添加针对性回归、冻结
-后Docker验证。对准确率有潜在影响时复验相关既有正负例和真实原文/图片隔离样本。
-按现有门禁准备、验收并顺序部署修复；禁止直接照抄旧根源码覆盖线上。无法满足验证
-或发布条件时保留真实失败并标blocked，不靠禁用检查、清任务或造数据通过。
+通用修复边界仅在task_kind=repair时启用；scan不具备业务写或Git授权。禁止直接照抄
+旧根源码覆盖线上；不靠禁用检查、清任务或造数据通过。一次失败不阻塞后续窗口。
 
 严格边界：不修改账户、订单、财务、资金开关、金额、用户许可、来源配置/作者白名单、
 模型提供方或全局设置；不补投、重放或重审历史以产生交易，不执行实盘投注测试。
@@ -175,11 +209,11 @@ Git、Docker及文本/文件管理。不加群、不发消息、不泄露原文/
 落盘前先写manifest，原文不得直接放attempt根或其他目录；用完立即删除，控制器也按
 manifest清理。不得将原文写入Git报告、最终JSON、工具日志或Codex长期记忆。控制器
 只保存事件脱敏元数据与哈希，不保存命令/stdout/stderr原文。公开脱敏结论可写
-reports/expert-review-iteration-20261112/，记录窗口、数量、证据定位、根因、提交、
-测试命令/退出码、发布状态和剩余限制。每阶段更新项目进度并按既有规则提交推送。
+reports/expert-review-iteration-20261112/，但仅真实修复源代码有增量时才写必要说明；
+scan/无增量repair不得写报告/规划/进度提交。固定失败类别与计数交给控制器登记。
 最终必须按给定JSON schema回答，window_start/window_end与上述完全一致。
-status=complete只代表本窗分析及已确认修复验收完成，不代表20秒或全局准确率达标。
-有未分析数据、无法访问图片、未验证修复或外部阻塞时用blocked/needs_retry，并说明。
+analysis_status与repair_status分别如实填写，不代表20秒或全局准确率达标。
+issue_key及evidence_fingerprint仅repair根字段填写对应任务值，scan根字段留空。
 """
 
 
@@ -360,6 +394,33 @@ def redact_final(source: Path, destination: Path):
             redacted[key] = value if type(value) is int else None
         if type(result.get("latency_target_met")) is bool:
             redacted["latency_target_met"] = result["latency_target_met"]
+        for key, allowed in (("task_kind", {"scan", "repair"}),
+                             ("analysis_status", {"complete", "partial", "failed", "not_run"}),
+                             ("repair_status", {"not_needed", "pending", "blocked", "validated", "failed"})):
+            value = result.get(key)
+            if isinstance(value, str) and value in allowed:
+                redacted[key] = value
+        for key in ("issue_key", "evidence_fingerprint"):
+            value = result.get(key)
+            if value == "" or scheduler.is_hash(value):
+                redacted[key] = value
+        for key in ("incremental_evidence", "retryable", "validation_passed"):
+            if type(result.get(key)) is bool:
+                redacted[key] = result[key]
+        candidates = result.get("repair_candidates")
+        if isinstance(candidates, list) and len(candidates) <= 50:
+            valid = all(isinstance(item, dict) and set(item) == {"issue_key", "evidence_fingerprint", "minimal_reproduction", "defect_count"}
+                        and scheduler.is_hash(item["issue_key"]) and scheduler.is_hash(item["evidence_fingerprint"])
+                        and type(item["minimal_reproduction"]) is bool and type(item["defect_count"]) is int
+                        and item["defect_count"] > 0 for item in candidates)
+            if valid:
+                redacted["repair_candidates"] = candidates
+        blockers = result.get("blocker_codes")
+        if isinstance(blockers, list) and len(blockers) <= 12 and all(isinstance(value, str) and value in BLOCKER_CODES for value in blockers):
+            redacted["blocker_codes"] = blockers
+        commits = result.get("fix_commits")
+        if isinstance(commits, list) and len(commits) <= 20 and all(isinstance(value, str) and re.fullmatch(r"[a-f0-9]{40}", value) for value in commits):
+            redacted["fix_commits"] = commits
         summary = result.get("summary")
         if isinstance(summary, str) and summary.strip():
             redacted["summary"] = "Agent supplied a summary; free text withheld."
@@ -381,7 +442,7 @@ def run_child(config: Config, prompt: str, attempt_dir: Path) -> tuple[int, bool
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        env=environment, start_new_session=True, bufsize=0)
             capture_output(process, prompt.encode(), output, config.timeout_seconds - grace,
-                           lambda: prune_private_evidence(config, time.time()))
+                           lambda: (prune_private_evidence(config, time.time()), config.heartbeat() if config.heartbeat else None))
             return process.returncode, False
         except subprocess.TimeoutExpired:
             if process is not None:
@@ -433,6 +494,67 @@ def validate_result(path: Path, start: int, end: int) -> tuple[bool, str]:
     if not isinstance(result.get("summary"), str) or not result["summary"].strip():
         return False, "missing_result_summary"
     return True, "complete"
+
+
+def validate_task_result(path: Path, task: dict) -> tuple[bool, str, dict]:
+    try:
+        result = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False, "missing_or_invalid_final_json", {}
+    if not isinstance(result, dict) or result.get("window_start") != utc_timestamp(task["start"]) or result.get("window_end") != utc_timestamp(task["end"]):
+        return False, "result_window_mismatch", {}
+    keys = ("messages_examined", "unresolved_examined", "confirmed_omissions", "confirmed_misbindings")
+    if any(type(result.get(key)) is not int or result[key] < 0 for key in keys) or result["unresolved_examined"] > result["messages_examined"]:
+        return False, "invalid_result_counts", {}
+    if result.get("task_kind") != task["kind"]:
+        return False, "result_task_mismatch", {}
+    if not all(type(result.get(key)) is bool for key in ("retryable", "validation_passed", "incremental_evidence", "latency_target_met")):
+        return False, "invalid_result_flags", {}
+    blockers, candidates = result.get("blocker_codes"), result.get("repair_candidates")
+    if not isinstance(blockers, list) or len(blockers) > 12 or not all(isinstance(code, str) and code in BLOCKER_CODES for code in blockers):
+        return False, "invalid_blocker_codes", {}
+    if not isinstance(candidates, list) or len(candidates) > 50 or not all(
+            isinstance(item, dict) and set(item) == {"issue_key", "evidence_fingerprint", "minimal_reproduction", "defect_count"}
+            and scheduler.is_hash(item["issue_key"]) and scheduler.is_hash(item["evidence_fingerprint"])
+            and type(item["minimal_reproduction"]) is bool and type(item["defect_count"]) is int and item["defect_count"] > 0
+            for item in candidates):
+        return False, "invalid_repair_candidates", {}
+    if task["kind"] == "scan":
+        if result.get("analysis_status") not in {"complete", "partial", "failed"}:
+            return False, "invalid_analysis_status", {}
+        if result.get("repair_status") not in {"not_needed", "pending", "blocked"}:
+            return False, "scan_cannot_validate_repairs", {}
+    else:
+        if result.get("analysis_status") != "not_run" or result.get("issue_key") != task["issue_key"] or result.get("evidence_fingerprint") != task["evidence_fingerprint"]:
+            return False, "repair_evidence_mismatch", {}
+        if result.get("repair_status") not in {"pending", "blocked", "validated", "failed"}:
+            return False, "invalid_repair_status", {}
+    commits = result.get("fix_commits")
+    if not isinstance(commits, list) or len(commits) > 20 or not all(isinstance(value, str) and re.fullmatch(r"[a-f0-9]{40}", value) for value in commits):
+        return False, "invalid_fix_commits", {}
+    if result.get("repair_status") == "validated" and (not commits or not result["validation_passed"]):
+        return False, "repair_validation_missing", {}
+    retained = (*keys, "task_kind", "analysis_status", "repair_status", "issue_key", "evidence_fingerprint",
+                "retryable", "validation_passed", "incremental_evidence", "latency_target_met", "blocker_codes", "repair_candidates", "fix_commits")
+    return True, "analysis_" + result["analysis_status"] if task["kind"] == "scan" else "repair_" + result["repair_status"], {key: result.get(key) for key in retained}
+
+
+def repository_revision(root: Path) -> str | None:
+    try:
+        result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, timeout=5, check=False)
+        value = result.stdout.decode().strip()
+        return value if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", value) else None
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return None
+
+
+def has_source_commit(root: Path, before: str, after: str) -> bool:
+    try:
+        result = subprocess.run(["git", "-C", str(root), "diff", "--name-only", before, after], capture_output=True, timeout=5, check=False)
+        prefixes = ("services/api/app/", "services/collector/", "integrations/hermes/skills/", "infra/monitor/")
+        return result.returncode == 0 and any(path.startswith(prefixes) for path in result.stdout.decode().splitlines())
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return False
 
 
 def prune_private_evidence(config: Config, now: float) -> int:
@@ -511,51 +633,190 @@ def prune_manifest_evidence(attempt_dir: Path, now: float) -> int:
 
 
 def run_window(config: Config, start: int, end: int, *,
-               clock: Callable[[], float] = time.time, runner: Callable = run_child,
-               dry_run: bool = False) -> dict:
+               clock: Callable[[], float] | None = None, runner: Callable = run_child,
+               dry_run: bool = False, task: dict | None = None) -> dict:
+    clock = time.time if clock is None else clock
     path = config.state_dir / "windows" / f"{start}.json"
     old = json.loads(path.read_text()) if path.exists() else {}
     attempt = int(old.get("attempt", 0)) + 1
     attempt_dir = config.state_dir / "attempts" / str(start) / str(attempt)
     attempt_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
-    prompt = make_prompt(config, start, end, attempt_dir)
+    prompt = make_prompt(config, start, end, attempt_dir, task)
     (attempt_dir / "prompt.txt").write_text(prompt)
     record = {"schema_version": 1, "window_start": utc_timestamp(start), "window_end": utc_timestamp(end),
               "attempt": attempt, "started_at": utc_timestamp(clock()), "finished_at": None,
               "state": "dry_run" if dry_run else "running", "exit_code": None,
               "max_run_seconds": config.timeout_seconds, "previous_state": old.get("state")}
+    if task:
+        record.update(task_kind=task["kind"], task_token=task["token"])
     atomic_json(path, record)
-    atomic_json(config.state_dir / "status.json", record)
+    if task is None:
+        atomic_json(config.state_dir / "status.json", record)
     if dry_run:
         return record
+    before_revision = None
     try:
-        exit_code, timed_out = runner(config, prompt, attempt_dir)
-        valid, category = validate_result(attempt_dir / "final.json", start, end) if exit_code == 0 else (False, "child_failed")
+        before_revision = repository_revision(config.source_root) if task else None
+        remaining = min(config.timeout_seconds, task["deadline_at"] - clock()) if task and "deadline_at" in task else config.timeout_seconds
+        if remaining <= 0:
+            exit_code, timed_out = 124, True
+        else:
+            exit_code, timed_out = runner(replace(config, timeout_seconds=remaining), prompt, attempt_dir)
+        if task:
+            valid, category, result = validate_task_result(attempt_dir / "final.json", task) if exit_code == 0 else (False, "child_failed", {})
+            after_revision = repository_revision(config.source_root)
+            changed = before_revision is not None and after_revision is not None and before_revision != after_revision
+            if task["kind"] == "scan" and changed:
+                valid, category = False, "scan_changed_repository"
+            if task["kind"] == "repair" and result.get("repair_status") == "validated" and (
+                    not changed or after_revision not in result.get("fix_commits", []) or not has_source_commit(config.source_root, before_revision, after_revision)):
+                valid, category = False, "repair_has_no_source_commit"
+            record.update(result_valid=valid, result=result, repository_changed=changed)
+        else:
+            valid, category = validate_result(attempt_dir / "final.json", start, end) if exit_code == 0 else (False, "child_failed")
         prune_manifest_evidence(attempt_dir, clock())
         if (attempt_dir / "retention-status.json").exists():
             valid, category = False, "invalid_raw_evidence_manifest"
+        if task:
+            record["result_valid"] = valid
+        state = "succeeded" if valid else "timed_out" if timed_out else "failed"
+        if task and valid:
+            state = ("analysed" if result["analysis_status"] == "complete" else "partial" if result["analysis_status"] == "partial" else "analysis_failed") if task["kind"] == "scan" else "repaired" if result["repair_status"] == "validated" else "repair_pending"
         record.update({"finished_at": utc_timestamp(clock()), "exit_code": exit_code,
-                       "state": "succeeded" if valid else "timed_out" if timed_out else "failed",
+                       "state": state,
                        "category": category, "timed_out": timed_out})
+    except KeyboardInterrupt:
+        record.update(finished_at=utc_timestamp(clock()), state="interrupted", exit_code=130,
+                      category="child_interrupted", result_valid=False)
     except Exception as error:
         record.update({"finished_at": utc_timestamp(clock()), "state": "failed", "exit_code": 1,
-                       "category": "supervisor_child_" + type(error).__name__})
+                       "category": "supervisor_child_" + type(error).__name__, "result_valid": False})
     atomic_json(path, record)
     # Retain every attempt's metadata even though raw evidence has a 72h cap.
     atomic_json(config.state_dir / "history" / f"{start}-{attempt}.json", record)
     return record
 
 
+def load_schedule(config: Config, now: float) -> tuple[dict, dict]:
+    path = config.state_dir / "schedule-v3.json"
+    backlog_path = config.state_dir / "repair-backlog.json"
+    state = json.loads(path.read_text()) if path.exists() else scheduler.initial_state(config.first_start)
+    scheduler.validate_state(state, config.first_start)
+    backlog = json.loads(backlog_path.read_text()) if backlog_path.exists() else {}
+    if not isinstance(backlog, dict) or not all(scheduler.is_hash(key) and isinstance(value, dict)
+            and value.get("issue_key") == key and scheduler.is_hash(value.get("evidence_fingerprint")) for key, value in backlog.items()):
+        raise ValueError("invalid repair backlog")
+    if not state["legacy_imported"]:
+        # Validate the old cursor if present, but never rewrite it or infer that
+        # blocked analyses succeeded. Original attempts/history stay untouched.
+        load_progress(config)
+        directory = config.state_dir / "windows"
+        records = [json.loads(item.read_text()) for item in sorted(directory.glob("*.json"))] if directory.exists() else []
+        scheduler.import_legacy(state, records, parse_timestamp, now)
+        state["legacy_history_records"] = len(list((config.state_dir / "history").glob("*.json")))
+    scheduler.enumerate_windows(state, now)
+    active = state.get("active_task")
+    if active:
+        journal = config.state_dir / "windows" / f"{active['start']}.json"
+        record = json.loads(journal.read_text()) if journal.exists() else {}
+        if record.get("task_token") == active["token"] and record.get("finished_at") is not None:
+            scheduler.finish_task(state, backlog, record, now, config.retry_seconds)
+        else:
+            scheduler.recover_interrupted(state, backlog, now, config.retry_seconds)
+    else:
+        scheduler.recover_interrupted(state, backlog, now, config.retry_seconds)
+    return state, backlog
+
+
+def save_schedule(config: Config, state: dict, backlog: dict):
+    # Backlog first, then the task journal/cursor. Result replay is idempotent if
+    # power is lost between these two atomic replacements.
+    atomic_json(config.state_dir / "repair-backlog.json", backlog)
+    atomic_json(config.state_dir / "schedule-v3.json", state)
+
+
+def write_health(config: Config, state: dict, backlog: dict, now: float | None = None):
+    now = time.time() if now is None else now
+    scheduler.enumerate_windows(state, now)
+    atomic_json(config.state_dir / "status.json", scheduler.health_snapshot(state, backlog, now, now))
+
+
+def health_check(config: Config, now: float | None = None) -> int:
+    now = time.time() if now is None else now
+    try:
+        status = json.loads((config.state_dir / "status.json").read_text())
+        active = status.get("active_task")
+        healthy = status.get("schema_version") == 3 and status.get("coverage_healthy") is True and now - status["heartbeat_at"] <= 90
+        healthy = healthy and (active is None or now <= active["deadline_at"] + 10)
+        return 0 if healthy else 1
+    except (OSError, ValueError, KeyError, TypeError):
+        return 1
+
+
+def import_analysis(config: Config, state: dict, payload_path: Path, now: float) -> dict:
+    """Explicit operator proof import; never reinterpret old failed records."""
+    payload_path = payload_path.resolve()
+    root = config.project_root or config.source_root
+    if not payload_path.is_relative_to(root) or payload_path.stat().st_size > MAX_EVENT_BYTES:
+        raise ValueError("analysis import must be a bounded project file")
+    body = payload_path.read_bytes()
+    payload = json.loads(body)
+    if payload.get("schema_version") != 1 or not isinstance(payload.get("windows"), list) or not 1 <= len(payload["windows"]) <= 1000:
+        raise ValueError("invalid analysis import")
+    updates = []
+    for item in payload["windows"]:
+        start, end = parse_timestamp(item["window_start"]), parse_timestamp(item["window_end"])
+        if str(start) not in state["windows"] or end != start + PERIOD_SECONDS or end > now:
+            raise ValueError("import window not closed/enumerated")
+        if item.get("analysis_status") not in {"complete", "partial"}:
+            raise ValueError("import must report explicit analysis coverage")
+        counts = {key: item.get(key) for key in ("messages_examined", "unresolved_examined")}
+        if any(type(value) is not int or value < 0 for value in counts.values()) or counts["unresolved_examined"] > counts["messages_examined"]:
+            raise ValueError("invalid import counts")
+        original = Path(item["evidence_file"])
+        evidence = original.resolve()
+        if original.is_symlink() or not evidence.is_relative_to(root) or not evidence.is_file() or evidence.stat().st_size > 16 * MAX_EVENT_BYTES:
+            raise ValueError("invalid import evidence file")
+        digest = hashlib.sha256(evidence.read_bytes()).hexdigest()
+        if digest != item.get("evidence_sha256"):
+            raise ValueError("analysis import evidence checksum differs")
+        updates.append((start, {"analysis_status": item["analysis_status"], "manual_verified": True,
+                               "manual_counts": counts, "manual_evidence_sha256": digest,
+                               "manual_evidence_file": str(evidence.relative_to(root)), "manual_imported_at": now,
+                               "exhausted": item["analysis_status"] != "complete", "retry_at": now + config.retry_seconds}))
+    for start, fields in updates:
+        state["windows"][str(start)].update(fields)
+    scheduler.update_cursors(state)
+    receipt = {"schema_version": 1, "payload_sha256": hashlib.sha256(body).hexdigest(),
+               "windows": [start for start, _ in updates], "imported_at": now}
+    atomic_json(config.state_dir / "imports" / f"{receipt['payload_sha256']}.json", receipt)
+    return receipt
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true", help="Process at most one due window")
     parser.add_argument("--dry-run", action="store_true", help="Prepare one due window without launching an agent")
+    parser.add_argument("--health", action="store_true", help="Check heartbeat, deadline and actual analysis coverage")
+    parser.add_argument("--import-analysis", type=Path, help="Register hash-bound operator analysis; no agent/model calls")
     options = parser.parse_args()
     os.umask(0o077)
     config = Config.from_environment()
-    lock = acquire_lock(config.state_dir)
-    # Keep the open descriptor referenced until main exits; closing releases flock.
-    progress = load_progress(config)
+    if options.health:
+        return health_check(config)
+    with acquire_lock(config.state_dir):
+        return run_supervisor(config, options)
+
+
+def run_supervisor(config: Config, options) -> int:
+    state, backlog = load_schedule(config, time.time())
+    save_schedule(config, state, backlog)
+    if options.import_analysis:
+        receipt = import_analysis(config, state, options.import_analysis, time.time())
+        save_schedule(config, state, backlog)
+        write_health(config, state, backlog)
+        print(json.dumps(receipt), flush=True)
+        return 0
 
     def stop(signum, frame):
         raise KeyboardInterrupt
@@ -565,27 +826,35 @@ def main() -> int:
     while True:
         now = time.time()
         prune_private_evidence(config, now)
-        if recover_recorded_success(config, progress):
-            continue
-        window = next_window(progress, now)
-        if window is None:
-            atomic_json(config.state_dir / "status.json", {
-                "state": "waiting", "at": utc_timestamp(now),
-                "finished_watermark": utc_timestamp(progress["finished_watermark"]),
-                "next_window_end": utc_timestamp(progress["finished_watermark"] + PERIOD_SECONDS)})
+        task = scheduler.choose_task(state, backlog, now, config.timeout_seconds, config.repair_timeout_seconds)
+        write_health(config, state, backlog, now)
+        save_schedule(config, state, backlog)
+        if task is None:
             if options.once or options.dry_run:
                 return 0
-            time.sleep(min(30, progress["finished_watermark"] + PERIOD_SECONDS - now))
+            time.sleep(min(30, (int(now // PERIOD_SECONDS) + 1) * PERIOD_SECONDS - now))
             continue
-        record = run_window(config, *window, dry_run=options.dry_run)
-        atomic_json(config.state_dir / "status.json", record)
+        if options.dry_run:
+            task["token"] = "dry-run"
+            task["previous_scan"] = state.get("last_scan")
+            record = run_window(config, task["start"], task["end"], dry_run=True, task=task)
+            print(json.dumps(record), flush=True)
+            return 0
+        task["previous_scan"] = state.get("last_scan")
+        scheduler.reserve_task(state, backlog, task, now, uuid.uuid4().hex)
+        save_schedule(config, state, backlog)
+        write_health(config, state, backlog, now)
+        task = state["active_task"]
+        runtime = replace(config, timeout_seconds=task["budget_seconds"], heartbeat=lambda: write_health(config, state, backlog))
+        record = run_window(runtime, task["start"], task["end"], task=task)
+        scheduler.finish_task(state, backlog, record, time.time(), config.retry_seconds)
+        save_schedule(config, state, backlog)
+        write_health(config, state, backlog)
         print(json.dumps(record, ensure_ascii=False), flush=True)
-        commit_success(config, progress, record)
-        if options.once or options.dry_run:
-            return 0 if record["state"] in {"succeeded", "dry_run"} else 1
-        if record["state"] != "succeeded":
-            # Keep the same closed window for retry; never silently skip it.
-            time.sleep(config.retry_seconds)
+        if record["exit_code"] == 130:
+            return 130
+        if options.once:
+            return 0 if record["state"] in {"analysed", "repaired"} else 1
 
 
 if __name__ == "__main__":
