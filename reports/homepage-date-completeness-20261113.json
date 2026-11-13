@@ -1,5 +1,5 @@
 {
-  "stage": "isolated_validation_passed_production_pending",
+  "stage": "frontend_production_acceptance_passed_upstream_completeness_unresolved",
   "source_parent_commit": "0b1d6031ec6640cde5997a03389af312718a5ff2",
   "source_sha256": {
     "web/app/app.js": "4748a55cf1328e895cb9a6b9ef1691fd825e773dba123c546ef59247569dc70f",
@@ -268,5 +268,65 @@
   "limitations": [
     "No exact active quote for current pending signals; empty-set API comparison is not end-to-end completeness evidence.",
     "Recent unresolved analysis jobs remain an upstream coverage gap; frontend patch does not claim to fix parsing."
-  ]
+  ],
+  "source_revision": "00d8945e023ef633b3e02b484d3020dac8af6f0d",
+  "production_browser": {
+    "results": [
+      {
+        "width": 1440,
+        "passed": true,
+        "current_recommended_fixtures": 0,
+        "date_navigation_visible": true,
+        "default_all_dates": true,
+        "explicit_date_request": true,
+        "date_reload": true,
+        "production_mutations": 0
+      },
+      {
+        "width": 390,
+        "passed": true,
+        "current_recommended_fixtures": 0,
+        "date_navigation_visible": true,
+        "default_all_dates": true,
+        "explicit_date_request": true,
+        "date_reload": true,
+        "production_mutations": 0
+      }
+    ],
+    "errors": [],
+    "writes": [],
+    "production_mutations": 0
+  },
+  "production_release": {
+    "checked_at_utc": "2026-11-13T10:23:39.446704+00:00",
+    "web_image": "sha256:1dc43a954be4bd9d6cd002c03bbe0cff7502baf1670ea4eafc10a7df14e1d42a",
+    "backend_container_ids_and_started_at_unchanged": true,
+    "http": [
+      {
+        "base": "http://127.0.0.1:3003",
+        "http_status": 200,
+        "immutable_js_and_css_sha_verified": true
+      },
+      {
+        "base": "https://football.5545.eu.cc",
+        "http_status": 200,
+        "immutable_js_and_css_sha_verified": true
+      }
+    ],
+    "source_sha256": {
+      "app.js": "4748a55cf1328e895cb9a6b9ef1691fd825e773dba123c546ef59247569dc70f",
+      "app.css": "bc34340bb99e938642124d90cc01f25902514a06de3b432c78887b1a9a21f9ec"
+    },
+    "database_changes": 0,
+    "funded_test_orders": 0
+  },
+  "preflight": {
+    "preflight": "passed",
+    "role": "web",
+    "candidate_image": "sha256:1dc43a954be4bd9d6cd002c03bbe0cff7502baf1670ea4eafc10a7df14e1d42a",
+    "environment_mounts_networks_ports_resources_preserved": true,
+    "api_and_review_restart": false,
+    "schema_changes": 0,
+    "funded_test_orders": 0
+  }
 }

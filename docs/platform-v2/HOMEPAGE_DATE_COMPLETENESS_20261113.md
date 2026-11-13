@@ -23,3 +23,16 @@
 - 浏览器使用Playwright现有仓库脚本、独立internal Docker网络、0.65 CPU/640 MiB、全部接口合成拦截。1440/1030/390宽度日期切换、日历、刷新、运动及状态隔离、过期响应和错误保留通过；1440/390分别验证67场跨日赛事、首空页跳过、加载后续与刷新完整。5组全通过，JS错误0，写请求0，截图完成手机视觉检查。
 - 实际命令：docker run browser执行tests/browser/homepage-expert-matches.mjs退出0；首次直接运行infra/test/run.sh因原文件不可执行退出126，改为sh调用同一脚本，不更改权限或检查；sh infra/test/run.sh test_homepage_expert_matches退出0，18项通过/0跳过，7.090秒，使用独立具名临时PostgreSQL。
 - 阶段状态：代码已写、隔离验证通过；发布及生产回读未完成。下一步冻结两份前端SHA，基于当前实际web镜像构建薄层，仅切换web，审核服务保持运行。
+
+## 2026-11-13 10:24 UTC：前端生产验收
+
+- 实现提交00d8945e023ef633b3e02b484d3020dac8af6f0d已推送refactor/TASK-78-web-ux，远端引用逐字核对。两份前端源SHA同时匹配冻结后端快照、浏览器实际源码及发布上下文，未把三份既有Hermes差异混入提交或镜像。
+- 使用当前实际web 4ba5a2f6为基底，legacy Docker builder受0.3 CPU/256 MiB限制，薄层镜像1dc43a954be4bd9d6cd002c03bbe0cff7502baf1670ea4eafc10a7df14e1d42a构建退出0。不可变资源目录v3502dea3e280c58aa96494ec7156a8127723d970ff3fa117b7b9d13293b7d6f4，由JS及CSS共同摘要生成，保留相对模块与资源。
+- 发布预检首次退出1：Compose将内存字节序列化为数字字符串，与Docker整数比较失败；核对实际值均134217728/268435456后按整数比较重跑退出0，未放宽资源限制。环境、挂载、网络、3003端口、命令与资源均与原容器一致。
+- 仅重建web，发布命令退出0、容器healthy。API、local-MCP及review-worker的容器ID、镜像与StartedAt前后逐字一致；未暂停supervisor或消息审核，没有本次维护排队窗口。Compose关于既有孤立minio的提示保留，未执行清理。
+- 生产1440/390两种宽度只读浏览器全部通过：日期栏可见、默认全部日期、选日请求、刷新保持日期、无横向溢出、JS错误0、写请求0。首次截图等待条件只读旧服务提示而捕获加载骨架，修正验收等待至骨架消失后重跑，两组仍通过且实际空状态截图已核验；应用源码未变。
+- 原3003入口与公网HTTPS均200，两份不可变JS/CSS内容SHA和冻结源码一致。首次urllib探针继承无关环境代理返回403，显式不继承代理后对同一地址重跑成功，TLS证书校验保留，没有修改生产网络。
+- 实际命令：docker build退出0；Docker内preflight.py退出0；sh私有deploy.sh退出0；docker run browser live-browser.mjs退出0；Docker内postcheck.py退出0。完整参数、原始失败、Compose与回滚文件保存在本任务私有runtime，仓库仅存脱敏证据。
+- 状态：日期及分页/目录展示修复发布验收通过；专家发言到决策全链路完整性仍未验收。当前线上专家可买入列表0场，与没有精确活动原盘口的独立聚合相符；不能据此宣称所有专家发言均已正确识别，未解决任务也不能直接等同遗漏投注。
+- 后续生产覆盖须在历史覆盖之后追加infra/production/homepage-dates.json，现有homepage-dedup.json、expert-review.json及主检出web.yml同步当前web指针，防止复用旧覆盖回退日期修复。回滚只切回本轮原web镜像，业务API及数据库无迁移。
+- 下一步：继续原有闭合窗口巡检，对未解决发言按真实推荐意图、比赛候选、原盘口与超时证据分类；该独立上游缺口不以放宽首页可买入门禁解决。
