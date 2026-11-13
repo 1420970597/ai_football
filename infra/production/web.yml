@@ -3,10 +3,10 @@
 x-production-entry:
   domain: football.5545.eu.cc
   host_port: 3003
-  source_revision: 6eb9a2df1958223fe74cc4442786dbd441984138
-  artifact_version: 2.0.0-dev-intent-dedup.20261113.1
+  source_revision: 00d8945e023ef633b3e02b484d3020dac8af6f0d
+  artifact_version: 2.0.0-dev-homepage-dates.20261113.1
   scope: production-business-entry
 
 services:
   web:
-    image: sha256:4ba5a2f696a6bda6b9b1056fc29c41aa8cbdc6b9103514ff028d2b92bd346c0d
+    image: sha256:1dc43a954be4bd9d6cd002c03bbe0cff7502baf1670ea4eafc10a7df14e1d42a
