@@ -358,6 +358,26 @@ class AccountHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["scan_complete"])
         self.assertFalse(result["absence_proves_rejection"])
 
+    async def test_lookup_many_reads_pages_once_and_keeps_conflicts_order_scoped(self):
+        def records(request):
+            settled=json.loads(request.content)['orderStatus']==1
+            return {'total':3 if settled else 0,'records':[
+                {'orderNo':'FIRST','profitAmount':'1.90'},
+                {'orderNo':'OTHER','profitAmount':'1'},
+                {'orderNo':'OTHER','profitAmount':'-1'},
+            ] if settled else []}
+        self.responses[ORDERS_PATH]=records
+        result=await self.client.lookup_many(['FIRST','OTHER'],begin=self.begin,end=self.end,max_pages=2)
+        self.assertEqual(2,len(self.requests))
+        self.assertTrue(result['FIRST']['found'])
+        self.assertEqual('1.90',result['FIRST']['receipt']['net_profit'])
+        self.assertTrue(result['OTHER']['ambiguous'])
+        self.assertFalse(result['OTHER']['found'])
+        self.assertFalse(result['OTHER']['absence_proves_rejection'])
+        for order_nos in ([],['FIRST','FIRST'],['A','B','C'],['']):
+            with self.subTest(order_nos=order_nos),self.assertRaises(LeyuError):
+                await self.client.lookup_many(order_nos,begin=self.begin,end=self.end)
+
     async def test_conflicting_target_receipts_never_selected_as_authoritative(self):
         self.responses[ORDERS_PATH] = {"total": 2, "records": [
             {"orderNo": "TARGET", "profitAmount": "1"}, {"orderNo": "TARGET", "profitAmount": "-1"}]}
