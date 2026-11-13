@@ -7,6 +7,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import time
@@ -29,6 +30,15 @@ from ..review_policy import REALTIME_WINDOW_SECONDS, FRESH_PRIORITY_WINDOW_SECON
 
 
 router = APIRouter()
+log = logging.getLogger('platform.api')
+
+
+def log_version_conflict(stored: dict, incoming: dict, *, path: str) -> None:
+    """Report schema fields only; never emit message values or identifiers."""
+    allowed = EventInput.model_fields.keys() - {'owner', 'sender_nickname'}
+    fields = sorted(key for key in allowed if stored.get(key) != incoming.get(key)
+                    or (key in stored) != (key in incoming))
+    log.warning('Telegram event version conflict path=%s fields=%s', path, ','.join(fields) or 'none')
 
 
 def record_event_phase(request: Request, name: str, started: float) -> None:
@@ -491,10 +501,15 @@ async def persist_fast_event(conn, source_id, body: EventInput):
         " d.version_message_id) AS message_id,(SELECT id FROM resolved_job) AS job_id,"
         "CASE WHEN d.version_id IS NOT NULL AND d.body->>'media_state' IN ('pending','failed') "
         " AND d.body->'media_objects'='[]'::jsonb THEN d.version_media_objects ELSE d.body->'media_objects' END AS media_objects "
+        " ,CASE WHEN d.outcome='version_conflict' THEN d.version_content END AS conflicting_content "
         "FROM decision d",
         source_id, body_payload, content_payload, job_payload, uuid.uuid4(), uuid.uuid4(),
     )
-    return dict(row)
+    result = dict(row)
+    conflicting_content = result.pop('conflicting_content', None)
+    if result['outcome'] == 'version_conflict':
+        log_version_conflict(conflicting_content or {}, content, path='live')
+    return result
 
 
 async def insert_event_message_and_members(conn, *, message_id, event_id, source_id, expert_id,
@@ -917,6 +932,7 @@ async def ingest_event(body: EventInput, request: Request):
                 media_objects = event['media_objects']
             immutable_content = {key: value for key, value in content.items() if key != "sender_nickname"}
             if event and {key: value for key, value in event["content"].items() if key != "sender_nickname"} != immutable_content:
+                log_version_conflict(event['content'], content, path='reconciliation')
                 raise HTTPException(status_code=409, detail="same message version has conflicting content")
             if event and event["media_state"] == "ready":
                 await conn.execute("UPDATE v2_experts SET display_nickname=$2,updated_at=now() WHERE id=$1 AND display_nickname IS DISTINCT FROM $2", expert["id"], body.sender_nickname.strip())
