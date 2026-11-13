@@ -1,5 +1,5 @@
 {
-  "status": "isolated_validation_passed_not_deployed",
+  "status": "deployed_and_runtime_verified",
   "date_utc": "2026-11-13",
   "authoritative_branch": "refactor/TASK-78-web-ux",
   "source_parent_commit": "b992195f5258dc64295822e7f396be4caec4e114",
@@ -47,5 +47,96 @@
   "historical_financial_records_modified": false,
   "manual_independent_confirmations_preserved": true,
   "production_source_strategy": "thin overlays of actual running images; uncommitted unrelated Hermes changes excluded",
-  "preexisting_hermes_dirty_files_preserved": 3
+  "preexisting_hermes_dirty_files_preserved": 3,
+  "functional_commit": "6eb9a2df1958223fe74cc4442786dbd441984138",
+  "verified_at_utc": "2026-11-13T09:44:31.714027+00:00",
+  "production_images": {
+    "api": "sha256:eec79eb0213eab6f6b0592aa450625eb356a5c02c86490ecd2c5f38dcfe37dad",
+    "local-mcp-api": "sha256:6291c59678dc7c9f34b4b62834f62ee13b5adeeb32c726c261d35255b35d8435",
+    "web": "sha256:4ba5a2f696a6bda6b9b1056fc29c41aa8cbdc6b9103514ff028d2b92bd346c0d"
+  },
+  "production_schema_entries": 38,
+  "public_https": {
+    "public_https_new_script_verified": true,
+    "checked_at_utc": "2026-11-13T09:42:52.518173+00:00",
+    "read_only": true,
+    "status": 200,
+    "script_sha256": "dcb56a0057d8024b5436c56acd220ff93636e03f4f6a52f25266aabfe0c7ebdd"
+  },
+  "local_homepage": [
+    {
+      "sport": "football",
+      "eligible_fixtures": 0,
+      "returned_fixtures": 0,
+      "pages": 1,
+      "complete_for_current_eligibility": true
+    },
+    {
+      "sport": "basketball",
+      "eligible_fixtures": 0,
+      "returned_fixtures": 0,
+      "pages": 1,
+      "complete_for_current_eligibility": true
+    }
+  ],
+  "live_browser": [
+    {
+      "width": 1440,
+      "passed": true,
+      "current_recommended_fixtures": 0,
+      "expert_dates_unbounded": true,
+      "all_matches_date_filter": true
+    },
+    {
+      "width": 390,
+      "passed": true,
+      "current_recommended_fixtures": 0,
+      "expert_dates_unbounded": true,
+      "all_matches_date_filter": true
+    }
+  ],
+  "runtime_integrity": {
+    "all_patched_code_sha256_verified": true,
+    "startup_environment_and_resources_preserved": true,
+    "worker_image_preserved": true,
+    "functional_commit": "6eb9a2df1958223fe74cc4442786dbd441984138"
+  },
+  "maintenance_windows": [
+    {
+      "attempt": 1,
+      "exit_code": 42,
+      "pause_started_at": "2026-11-13T09:29:23.440196+00:00",
+      "pause_ended_at": "2026-11-13T09:32:48.493784+00:00",
+      "detected_during_pause": 0,
+      "maintenance_queued_deadline_elapsed": 0,
+      "detected_at_reset": false
+    },
+    {
+      "attempt": 2,
+      "exit_code": 42,
+      "pause_started_at": "2026-11-13T09:34:14.558790+00:00",
+      "pause_ended_at": "2026-11-13T09:37:47.678582+00:00",
+      "detected_during_pause": 5,
+      "maintenance_queued_deadline_elapsed": 4,
+      "detected_at_reset": false
+    },
+    {
+      "attempt": 3,
+      "exit_code": 0,
+      "pause_started_at": "2026-11-13T09:38:27.939014+00:00",
+      "pause_ended_at": "2026-11-13T09:39:25.328364+00:00",
+      "detected_during_pause": 1,
+      "maintenance_queued_deadline_elapsed": 1,
+      "detected_at_reset": false
+    }
+  ],
+  "monitor": {
+    "state": "resume_after_source_operations_commit",
+    "final_state_evidence": "root checkout reports/homepage-dedup-20261113.json"
+  },
+  "limitations": [
+    "当前符合实盘展示条件的足球和篮球推荐均为0；仅验证当前有效集合无遗漏，不代表所有TG发言已经成功识别。",
+    "第三个维护窗出现1条超过20秒的排队记录；检测时间未重置，维护过程不作为常态20秒SLA通过证据。",
+    "历史重复订单保留原始资金及结算记录；本轮资金测试0。"
+  ]
 }
