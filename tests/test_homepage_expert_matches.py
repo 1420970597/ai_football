@@ -123,6 +123,63 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as conn, conn.transaction():
             await eligible_signal(conn, signal, manual=True)
 
+    async def test_prematch_native_handicap_at_nonzero_ties_keeps_original_line(self):
+        from app.orders import eligible_signal
+        from fastapi import HTTPException
+        await self.trusted()
+        signal = await self.signal(phase='scheduled', selection='away', line='-1')
+        await self.pool.execute(
+            "INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase,home_score,away_score) "
+            "VALUES('leyu:5737851','native-tied-score-test','football','League','Home','Away',now(),'live',2,2)")
+        await self.move_signal(signal, 'leyu:5737851', market='4', phase='scheduled')
+        await self.pool.execute("UPDATE v2_expert_signals SET market_kind='handicap',score_basis='full_period'")
+        await self.pool.execute("UPDATE v2_current_quotes SET market_kind='handicap',score_basis='unknown',price=1.32")
+        for score in (1, 2, 6):
+            with self.subTest(tied_score=score):
+                await self.pool.execute("UPDATE v2_fixtures SET home_score=$1,away_score=$1 WHERE id='leyu:5737851'", score)
+                items = (await self.listing())['items']
+                self.assertEqual(['leyu:5737851'], [m['id'] for m in items])
+                self.assertEqual(Decimal('1'), Decimal(items[0]['expert_signals'][0]['selection_line']))
+                async with self.pool.acquire() as conn, conn.transaction():
+                    current = await eligible_signal(conn, signal, manual=True)
+                    self.assertEqual(Decimal('1.32'), current['current_price'])
+                    with self.assertRaises(HTTPException):
+                        await eligible_signal(conn, signal, manual=False)
+        for home, away in ((1, 2), (2, 1), (None, None), (2, None), (-1, -1)):
+            with self.subTest(invalid_or_unequal=(home, away)):
+                await self.pool.execute("UPDATE v2_fixtures SET home_score=$1,away_score=$2 WHERE id='leyu:5737851'", home, away)
+                self.assertEqual([], (await self.listing())['items'])
+                async with self.pool.acquire() as conn, conn.transaction():
+                    with self.assertRaises(HTTPException):
+                        await eligible_signal(conn, signal, manual=True)
+        await self.pool.execute("UPDATE v2_fixtures SET home_score=2,away_score=2 WHERE id='leyu:5737851'")
+        for change, restore in (
+            ("status='closed'", "status='active'"),
+            ("status='suspended'", "status='active'"),
+            ("line=-0.5", "line=-1"),
+            ("selection='home'", "selection='away'"),
+            ("period='first_half'", "period='full_time'"),
+            ("score_basis='remaining_period'", "score_basis='unknown'"),
+        ):
+            with self.subTest(not_original_active_option=change):
+                await self.pool.execute('UPDATE v2_current_quotes SET '+change)
+                self.assertEqual([], (await self.listing())['items'])
+                await self.pool.execute('UPDATE v2_current_quotes SET '+restore)
+        await self.pool.execute("UPDATE v2_expert_signals SET market_id='19',period='first_half'")
+        await self.pool.execute("UPDATE v2_current_quotes SET market_id='19',period='first_half'")
+        self.assertEqual([], (await self.listing())['items'])
+        await self.pool.execute("UPDATE v2_expert_signals SET market_id='4',period='full_time'")
+        await self.pool.execute("UPDATE v2_current_quotes SET market_id='4',period='full_time'")
+        await self.pool.execute(
+            "INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase,home_score,away_score) "
+            "VALUES('other:5737851','other-tied-score-test','football','League','Home','Away',now(),'live',2,2)")
+        await self.move_signal(signal, 'other:5737851', market='4', phase='scheduled')
+        self.assertEqual([], (await self.listing())['items'])
+        async with self.pool.acquire() as conn, conn.transaction():
+            with self.assertRaises(HTTPException):
+                await eligible_signal(conn, signal, manual=True)
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+
     async def test_disabled_withdrawn_deleted_and_superseded_records_are_excluded(self):
         await self.trusted()
         signal = await self.signal()
