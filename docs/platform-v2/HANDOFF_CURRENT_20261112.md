@@ -1,5 +1,7 @@
 # 当前续接入口（2026-11-12）
 
+> 2026-11-13 14:45 UTC 频道身份修复已上线：业务实现611be25c及80a97e43，来源分支fix/TASK-79-channel-identity运维f4c05c73已推送并核对远端；最新源码工作树为.runtime/tg79-channel-identity。API d2e3b742、collector dd6feb99、web956247d1运行文件SHA一致，224项回归及1440/390页面验证通过。两条无个人ID的广播来源恢复，近72小时游标均完成，共151个事件版本且各有决策记录；不等于151条推荐或全部解析成功。历史56条超时仍保留，超过300秒的频道历史不抢实时审核，20秒截止未放宽，未证明全局并发20秒。未配作者的supergroup未自动授信，其他来源既有FloodWait/版本冲突仍待处理，资金测试0、迁移0。证据TELEGRAM_CHANNEL_COMPLETION_20261113.md及reports/telegram-channel-completion-20261113.json；原日期/首页修复保留，生产累计覆盖最后追加telegram-channel-identity.json。
+
 > 2026-11-13 首页实际场次复核：欧克莱卡诺vs马可尼骏马已识别，两条赛前客队+1决策的精确原盘口已关闭，结束前快照活动盘口0；未将其强行恢复。另确认并修复native4全场让球只放行0:0的过严条件，已知非负同分亦可等价，原线/来源/活动门禁及自动阶段限制保留。实现3a034d5b、权威运维12a21027；API f4f5aa12上线，web1dc43a95保持；96项隔离及真实非空桌面/手机回读通过。仅API切换19秒，审核/网页/监控未重启，发布窗无新检测任务不代表全局20秒验收。最新证据HOMEPAGE_LIVE_GAP_20261113.md及reports/homepage-live-gap-20261113.json，旧日期修复保留，生产最后追加homepage-live-gap.json；本场整段历史可见性与未解决审核仍未全面验收。
 
 > 2026-11-13 首页完整性与自动投注防重修复已上线原3003入口：实现6eb9a2df、权威运维0b1d6031；API eec79eb0/local-MCP 6291c596/web 4ba5a2f6，253项后端与23项隔离UI场景通过，真实桌面/手机与公网脚本SHA回读通过。半小时常驻已恢复，历史覆盖仍不完整；维护期5条排队超20秒已如实记录，检测时间未重置。当前符合实盘展示条件的足球/篮球均0场，历史重单账务保留。最新证据HOMEPAGE_DEDUP_20261113.md及reports/homepage-dedup-20261113.json；生产覆盖最后追加homepage-dedup.json。

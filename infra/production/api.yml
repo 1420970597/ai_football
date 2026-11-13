@@ -1,13 +1,13 @@
 # Apply last after historical API image overlays in the validated Compose chain.
-# Retain expert-review.json, then append homepage-dedup.json, homepage-dates.json and homepage-live-gap.json after legacy overlays.
+# Retain expert-review.json, then append homepage-dedup.json, homepage-dates.json and homepage-live-gap.json, then telegram-channel-identity.json after legacy overlays.
 # Business credentials remain external; migration 039 is already applied.
 x-production-api:
-  source_revision: 3a034d5b970eb3a491d7e4017370bf6eeaad7765
-  artifact_version: 2.0.0-dev-tied-handicap.20261113.1
-  base_image: sha256:eec79eb0213eab6f6b0592aa450625eb356a5c02c86490ecd2c5f38dcfe37dad
+  source_revision: 80a97e434b8c4276c13871e79882f71848f7936d
+  artifact_version: 2.0.0-dev-telegram-channel.20261113.1
+  base_image: sha256:ed5548003b58ab361568c19e1d215eb167ee16b1e1210f5229146a9c545a4f08
   schema: 039_review_detection_deadline.sql
-  scope: unsettled-homepage-and-tied-score-manual-handicap
+  scope: telegram-channel-identity-with-existing-homepage-fixes
 
 services:
   api:
-    image: sha256:f4f5aa124ea399e3251f0ef3fa80eaf31c9ed9b96f722b797ae11d7a9b226c92
+    image: sha256:d2e3b742231656dec0d5a19cdbe9a740bfafbce53941f943ec444b7160723359

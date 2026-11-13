@@ -1,7 +1,7 @@
 {
   "services": {
     "api": {
-      "image": "sha256:f4f5aa124ea399e3251f0ef3fa80eaf31c9ed9b96f722b797ae11d7a9b226c92"
+      "image": "sha256:d2e3b742231656dec0d5a19cdbe9a740bfafbce53941f943ec444b7160723359"
     },
     "review-worker": {
       "image": "sha256:519a4ca4078eb836c3f9bf7ec22ce45ec6c1c426c338240f0293f18899607a08"
@@ -10,7 +10,7 @@
       "image": "sha256:6291c59678dc7c9f34b4b62834f62ee13b5adeeb32c726c261d35255b35d8435"
     },
     "collector": {
-      "image": "sha256:26c2a5e94371d3e566994a48f4d8a53243e18ff07ec4f11babe6f0809ce8ea11",
+      "image": "sha256:dd6feb990625900247f7170732666bff933524020f20351b55e56e52de1def0a",
       "volumes": [
         {
           "type": "bind",
@@ -52,7 +52,7 @@
       "image": "sha256:44bd067d9a41bcf72b2a5fc71cde600bc78377d22af687b1de74400a522bf800"
     },
     "web": {
-      "image": "sha256:1dc43a954be4bd9d6cd002c03bbe0cff7502baf1670ea4eafc10a7df14e1d42a"
+      "image": "sha256:956247d1a4f96adb4bcfc555f2e47347b10d512231fb4e8556521d278d7d187d"
     }
   }
 }
