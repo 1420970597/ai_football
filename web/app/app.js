@@ -34,6 +34,7 @@ const sportLabel = (value = state.sport) => SPORT_LABELS[value] || SPORT_LABELS.
 const state = {
   page: "scores",
   date: validDate(initial.get("date")) ? initial.get("date") : dayKey(),
+  allRecommendedDates: !validDate(initial.get("date")),
   phase: ["all", "live", "scheduled", "finished", "cancelled"].includes(
     initial.get("phase"),
   )
@@ -126,6 +127,12 @@ function currentMatches() {
     ? state.matches.filter((m) => favorites.has(m.id))
     : state.matches;
 }
+function matchDateFilter() {
+  return state.matchScope === 'recommended' && state.allRecommendedDates ? undefined : state.date;
+}
+function matchDateRoute() {
+  return matchDateFilter() || 'all';
+}
 function displayError(element, error, retry = true) {
   stateBox(element, {
     title: error.status === 403 ? "需要完整记录权益" : error.message,
@@ -169,7 +176,7 @@ function route(
     (page === "scores"
       ? "?" +
         params({
-          date: state.date,
+          date: matchDateRoute(),
           phase: state.phase,
           sport: state.sport,
           league_ids: state.leagueIds,
@@ -224,8 +231,10 @@ function route(
 }
 function renderDates() {
   const selected = state.date;
-  $("#date-picker").value = selected;
-  $("#date-buttons").innerHTML = [-2, -1, 0, 1, 2]
+  const allDates = !matchDateFilter();
+  $("#date-picker").value = allDates ? '' : selected;
+  $("#date-buttons").innerHTML = (state.matchScope === 'recommended'
+    ? `<button data-date-all aria-pressed="${allDates}" class="${allDates ? 'active' : ''}">全部日期<small>未结算</small></button>` : '') + [-2, -1, 0, 1, 2]
     .map((offset) => {
       const date = shiftDay(selected, offset),
         today = dayKey();
@@ -237,7 +246,8 @@ function renderDates() {
             : date === shiftDay(today, 1)
               ? "明日"
               : date.slice(5).replace("-", "/");
-      return `<button data-date="${date}" aria-pressed="${offset === 0}" class="${offset === 0 ? "active" : ""}${date === today ? " today" : ""}">${label}<small>${date.slice(5).replace("-", "/")}</small></button>`;
+      const active = !allDates && offset === 0;
+      return `<button data-date="${date}" aria-pressed="${active}" class="${active ? "active" : ""}${date === today ? " today" : ""}">${label}<small>${date.slice(5).replace("-", "/")}</small></button>`;
     })
     .join("");
   // 日期条在窄屏是横向滚动容器。选中日期必须自己滚进可视区：
@@ -269,9 +279,9 @@ function renderDates() {
     button.setAttribute('aria-pressed', String(selected));
   });
   $('#match-market-heading').textContent = state.matchScope === 'recommended' ? '专家关联盘口' : '当前盘口 / 赔率';
-  $('.date-nav').hidden = state.matchScope === 'recommended';
+  $('.date-nav').hidden = false;
   $('#matches-footnote').textContent = state.matchScope === 'recommended'
-    ? '展示所有日期仍可买入的未结算专家推荐。买入前重新询价，接受当前赔率；实际成交以账户回执为准。关注仅保存在当前浏览器。'
+    ? `展示${allDates ? '全部日期' : selected + '（北京时间开赛）'}仍可买入的未结算专家推荐。买入前重新询价，接受当前赔率；实际成交以账户回执为准。关注仅保存在当前浏览器。`
     : '上游报价时间未知、过期或停盘时，均不视为可交易报价。关注仅保存在当前浏览器。';
   $$('[data-sport-label]').forEach((element) => {
     element.firstChild.nodeValue = sportLabel() + "比分 ";
@@ -280,6 +290,7 @@ function renderDates() {
 function setDate(date) {
   if (!validDate(date)) return;
   state.date = date;
+  state.allRecommendedDates = false;
   state.matches = [];
   route("scores", { replace: true });
 }
@@ -382,7 +393,11 @@ function renderMatches() {
   const items = currentMatches();
   $("#matches-list").innerHTML = items
     .map((m) => {
-      return `<article class="match-row" data-fixture="${esc(m.id)}" data-sport="${esc(m.sport || state.sport)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time">${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${scoreMarkup(m)}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${oddsCellMarkup(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">详情</button>${state.matchScope === 'recommended' ? matchRecommendationMarkup(m) : ''}</article>`;
+      const kickoff = m.kickoff_at && new Date(m.kickoff_at);
+      const kickoffDate = kickoff && Number.isFinite(kickoff.getTime()) ? dayKey(kickoff) : '';
+      const dateLabel = state.matchScope === 'recommended' && kickoffDate
+        ? `<small>${esc(kickoffDate.slice(5).replace('-', '/'))}</small>` : '';
+      return `<article class="match-row" data-fixture="${esc(m.id)}" data-sport="${esc(m.sport || state.sport)}"><div class="match-league"><span class="league-label" title="${esc(m.competition_name)}">${esc(m.competition_name || "联赛未标注")}</span><button class="favorite" data-favorite="${esc(m.id)}" aria-label="关注 ${esc(m.home_team)} 对 ${esc(m.away_team)}" aria-pressed="${favorites.has(m.id)}">${favorites.has(m.id) ? "★" : "☆"}</button></div><span class="match-time" title="${esc(stamp(m.kickoff_at))} 北京时间">${dateLabel}${time(m.kickoff_at)}</span><span class="match-phase ${esc(m.phase)}">${m.phase === "live" && m.clock_minute !== null ? esc(m.clock_minute) + "′" : esc(phases[m.phase] || m.match_state || "未知")}</span><button class="team-button team-home" data-match="${esc(m.id)}">${esc(m.home_team)}</button><button class="score-button" data-match="${esc(m.id)}" aria-label="查看比赛详情">${scoreMarkup(m)}</button><button class="team-button team-away" data-match="${esc(m.id)}">${esc(m.away_team)}</button><div class="match-odds">${oddsCellMarkup(m)}</div><button class="detail-button" data-match="${esc(m.id)}" aria-label="查看 ${esc(m.home_team)} 比赛详情">详情</button>${state.matchScope === 'recommended' ? matchRecommendationMarkup(m) : ''}</article>`;
     })
     .join("");
   $$('#matches-list > .match-row').forEach((row, index) => {
@@ -498,7 +513,7 @@ async function loadMatchSummaries(identifiers, sequence, parentSignal) {
   }
 }
 async function loadMatches(append = false) {
-  const queryKey = JSON.stringify([state.date, state.phase, state.sport, state.matchScope, [...state.leagueIds].sort(), state.q]);
+  const queryKey = JSON.stringify([matchDateRoute(), state.phase, state.sport, state.matchScope, [...state.leagueIds].sort(), state.q]);
   if (queryKey !== state.matchQueryKey) {
     state.matchAbort?.abort();
     ++state.matchSequence;
@@ -539,7 +554,7 @@ async function loadMatches(append = false) {
       result = await api(
         "/public/matches?" +
           params({
-            date: state.matchScope === 'recommended' ? undefined : state.date,
+            date: matchDateFilter(),
             tz: "Asia/Shanghai",
             phase: state.phase,
             sport: state.sport,
@@ -565,7 +580,10 @@ async function loadMatches(append = false) {
       if (cursor && seenCursors.has(cursor))
         throw new Error("赛事分页游标重复，请稍后重试");
       if (cursor) seenCursors.add(cursor);
-    } while (refreshPages && cursor && items.length < targetCount);
+    // A settlement between the fixture query and its summaries can empty a raw
+    // page. Its cursor still leads to valid fixtures; never treat it as the end.
+    } while (cursor && ((!items.length) ||
+      ((refreshPages || state.matchScope === 'recommended') && items.length < targetCount)));
     if (sequence !== state.matchSequence) return;
     const scrollPosition = scrollY;
     state.matches = append
@@ -609,7 +627,7 @@ function loadLeagues() {
     const data = await api(
       "/public/leagues?" +
         params({
-          date: state.date,
+          date: matchDateFilter(),
           phase: state.phase,
           sport: state.sport,
           tz: "Asia/Shanghai",
@@ -1743,6 +1761,12 @@ function events() {
       auth(button.dataset.authTab);
       return;
     }
+    if (button.hasAttribute('data-date-all')) {
+      state.allRecommendedDates = true;
+      state.matches = [];
+      route('scores', { replace: true });
+      return;
+    }
     if (button.dataset.date) {
       setDate(button.dataset.date);
       return;
@@ -2162,7 +2186,7 @@ function events() {
 function setDetail(type, id) {
   const query = params({
     ...(state.page === "scores"
-      ? { date: state.date, phase: state.phase, sport: state.sport, scope: state.matchScope }
+      ? { date: matchDateRoute(), phase: state.phase, sport: state.sport, scope: state.matchScope }
       : state.page === "experts" ? { sport: state.expertFilters.sport } : {}),
     [type]: id,
     ...(type === "message" && state.messageContext === "admin"
@@ -2183,7 +2207,10 @@ function setDetail(type, id) {
 function readRoute() {
   const [page, query] = location.hash.slice(1).split("?");
   const p = new URLSearchParams(query || "");
-  if (page === 'scores') state.matchScope = p.get('scope') === 'all' ? 'all' : 'recommended';
+  if (page === 'scores') {
+    state.matchScope = p.get('scope') === 'all' ? 'all' : 'recommended';
+    state.allRecommendedDates = !validDate(p.get('date'));
+  }
   if (validDate(p.get("date"))) state.date = p.get("date");
   if (
     ["all", "live", "scheduled", "finished", "cancelled"].includes(
@@ -2240,7 +2267,7 @@ $("#content-dialog").addEventListener("close", () => {
           (state.page === "scores"
             ? "?" +
               params({
-                date: state.date,
+                date: matchDateRoute(),
                 phase: state.phase,
                 sport: state.sport,
                 league_ids: state.leagueIds,

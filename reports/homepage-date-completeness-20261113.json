@@ -1,0 +1,272 @@
+{
+  "stage": "isolated_validation_passed_production_pending",
+  "source_parent_commit": "0b1d6031ec6640cde5997a03389af312718a5ff2",
+  "source_sha256": {
+    "web/app/app.js": "4748a55cf1328e895cb9a6b9ef1691fd825e773dba123c546ef59247569dc70f",
+    "web/app/app.css": "bc34340bb99e938642124d90cc01f25902514a06de3b432c78887b1a9a21f9ec"
+  },
+  "backend": {
+    "tests": 18,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 8.166
+  },
+  "browser": {
+    "results": [
+      {
+        "width": 1440,
+        "passed": true,
+        "read_only": true,
+        "grouped_recommendations": true,
+        "sport_and_phase_isolation": true,
+        "scope_reload": true,
+        "stale_response_ignored": true,
+        "all_unsettled_dates": true,
+        "explicit_dates_and_calendar": true,
+        "date_consistent_leagues": true,
+        "all_matches_date_filter_preserved": true
+      },
+      {
+        "width": 1030,
+        "passed": true,
+        "read_only": true,
+        "grouped_recommendations": true,
+        "sport_and_phase_isolation": true,
+        "scope_reload": true,
+        "stale_response_ignored": true,
+        "all_unsettled_dates": true,
+        "explicit_dates_and_calendar": true,
+        "date_consistent_leagues": true,
+        "all_matches_date_filter_preserved": true
+      },
+      {
+        "width": 390,
+        "passed": true,
+        "read_only": true,
+        "grouped_recommendations": true,
+        "sport_and_phase_isolation": true,
+        "scope_reload": true,
+        "stale_response_ignored": true,
+        "all_unsettled_dates": true,
+        "explicit_dates_and_calendar": true,
+        "date_consistent_leagues": true,
+        "all_matches_date_filter_preserved": true
+      },
+      {
+        "width": 1440,
+        "passed": true,
+        "fixtures": 67,
+        "empty_page_skipped": true,
+        "pagination_and_refresh_complete": true,
+        "cross_date_labels": true,
+        "production_writes": 0
+      },
+      {
+        "width": 390,
+        "passed": true,
+        "fixtures": 67,
+        "empty_page_skipped": true,
+        "pagination_and_refresh_complete": true,
+        "cross_date_labels": true,
+        "production_writes": 0
+      }
+    ],
+    "errors": [],
+    "synthetic_data": true,
+    "production_writes": 0
+  },
+  "production_diagnosis": {
+    "checked_at_utc": "2026-11-13T10:19:06.545567+00:00",
+    "read_only": "on",
+    "pending_layers": [
+      {
+        "sport": "basketball",
+        "signal_phase": "scheduled",
+        "fixture_phase": "finished",
+        "media_state": "unsupported",
+        "stale": false,
+        "context_only": true,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 32,
+        "fixtures": 15
+      },
+      {
+        "sport": "basketball",
+        "signal_phase": "scheduled",
+        "fixture_phase": "live",
+        "media_state": "unsupported",
+        "stale": true,
+        "context_only": true,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 11,
+        "fixtures": 4
+      },
+      {
+        "sport": "basketball",
+        "signal_phase": "scheduled",
+        "fixture_phase": "live",
+        "media_state": "unsupported",
+        "stale": false,
+        "context_only": true,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 9,
+        "fixtures": 6
+      },
+      {
+        "sport": "basketball",
+        "signal_phase": "scheduled",
+        "fixture_phase": "live",
+        "media_state": "ready",
+        "stale": true,
+        "context_only": false,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 2,
+        "fixtures": 1
+      },
+      {
+        "sport": "basketball",
+        "signal_phase": "live",
+        "fixture_phase": "live",
+        "media_state": "unsupported",
+        "stale": true,
+        "context_only": true,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 1,
+        "fixtures": 1
+      },
+      {
+        "sport": "basketball",
+        "signal_phase": "live",
+        "fixture_phase": "finished",
+        "media_state": "unsupported",
+        "stale": false,
+        "context_only": true,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 1,
+        "fixtures": 1
+      },
+      {
+        "sport": "football",
+        "signal_phase": "scheduled",
+        "fixture_phase": "finished",
+        "media_state": "ready",
+        "stale": false,
+        "context_only": false,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 3,
+        "fixtures": 1
+      },
+      {
+        "sport": "football",
+        "signal_phase": "scheduled",
+        "fixture_phase": "finished",
+        "media_state": "unsupported",
+        "stale": false,
+        "context_only": true,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 3,
+        "fixtures": 1
+      },
+      {
+        "sport": "football",
+        "signal_phase": "scheduled",
+        "fixture_phase": "live",
+        "media_state": "ready",
+        "stale": false,
+        "context_only": false,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 2,
+        "fixtures": 1
+      },
+      {
+        "sport": "football",
+        "signal_phase": "live",
+        "fixture_phase": "finished",
+        "media_state": "ready",
+        "stale": false,
+        "context_only": false,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 2,
+        "fixtures": 2
+      },
+      {
+        "sport": "football",
+        "signal_phase": "scheduled",
+        "fixture_phase": "scheduled",
+        "media_state": "unsupported",
+        "stale": false,
+        "context_only": true,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 1,
+        "fixtures": 1
+      },
+      {
+        "sport": "football",
+        "signal_phase": "live",
+        "fixture_phase": "finished",
+        "media_state": "unsupported",
+        "stale": false,
+        "context_only": true,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 1,
+        "fixtures": 1
+      },
+      {
+        "sport": "football",
+        "signal_phase": "live",
+        "fixture_phase": "live",
+        "media_state": "unsupported",
+        "stale": false,
+        "context_only": true,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 1,
+        "fixtures": 1
+      },
+      {
+        "sport": "football",
+        "signal_phase": "scheduled",
+        "fixture_phase": "live",
+        "media_state": "ready",
+        "stale": true,
+        "context_only": false,
+        "enabled": true,
+        "exact_active_quote": false,
+        "signals": 1,
+        "fixtures": 1
+      }
+    ],
+    "last_30m_analysis_jobs": [
+      {
+        "state": "unresolved",
+        "last_error": "detection_deadline_exceeded",
+        "count": 13
+      },
+      {
+        "state": "unresolved",
+        "last_error": null,
+        "count": 13
+      }
+    ],
+    "funded_test_orders": 0
+  },
+  "production_writes": 0,
+  "schema_changes": 0,
+  "limitations": [
+    "No exact active quote for current pending signals; empty-set API comparison is not end-to-end completeness evidence.",
+    "Recent unresolved analysis jobs remain an upstream coverage gap; frontend patch does not claim to fix parsing."
+  ]
+}

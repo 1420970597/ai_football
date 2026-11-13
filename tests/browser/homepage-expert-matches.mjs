@@ -46,13 +46,13 @@ try{
         const sport=url.searchParams.get('sport'),scope=url.searchParams.get('recommended_only');
         const phase=url.searchParams.get('phase')==='all'?'live':url.searchParams.get('phase');
         reads.push({p,sport,scope,phase,date:url.searchParams.get('date')});
-        if(scope==='true')assert.equal(url.searchParams.has('date'),false,'unsettled expert matches span kickoff dates');
         if(hold&&sport==='football'){hold=false;startHeld();await new Promise(resolve=>{releaseHeld=resolve;});}
         if(fail)return route.fulfill({status:503,json:{detail:'隔离服务暂不可用'}});
         let items=['cancelled','finished'].includes(phase)?[]:[match(sport,phase)];
         if(scope==='false')items=items.concat({...match(sport,phase),id:'unrelated',home_team:'没有专家的比赛',expert_signals:[]});
         return route.fulfill({json:{items,next_cursor:null,markets_included:false,recommended_only:scope==='true',server_time:instant}});
       }
+      if(p==='/public/leagues')reads.push({p,date:url.searchParams.get('date')});
       if(p==='/public/match-summaries')return route.fulfill({json:{items:url.searchParams.getAll('fixture_ids').map(id=>({fixture_id:id,phase:'live',markets:[],quote_fresh:false}))}});
       if(p==='/public/signals/basketball-signal-0')return route.fulfill({status:403,json:{detail:'需要完整原文权益'}});
       if(p==='/public/matches/basketball-match')return route.fulfill({json:{fixture:match('basketball'),markets:[],expert_signals:[],server_time:instant}});
@@ -62,8 +62,35 @@ try{
     await page.locator('[data-fixture="football-match"] [data-recommendation]').first().waitFor();
     assert.equal(reads[0].scope,'true');
     assert.equal(reads[0].date,null);
-    assert.equal(await page.locator('.date-nav').isVisible(),false);
-    assert.match(await page.locator('#matches-footnote').innerText(),/所有日期/);
+    assert.equal(await page.locator('.date-nav').isVisible(),true);
+    assert.equal(await page.locator('[data-date-all]').getAttribute('aria-pressed'),'true');
+    assert.match(await page.locator('#matches-footnote').innerText(),/全部日期/);
+    assert.equal(reads.find(r=>r.p==='/public/leagues').date,null);
+    assert.equal(await page.locator('.match-time small').innerText(),'10/26');
+    const chosen=await page.locator('[data-date]').first().getAttribute('data-date');
+    await Promise.all([
+      page.waitForResponse(r=>r.url().includes('/public/matches?')&&new URL(r.url()).searchParams.get('date')===chosen),
+      page.locator(`[data-date="${chosen}"]`).click(),
+    ]);
+    await page.locator('.match-recommendation').first().waitFor();
+    assert.equal(await page.locator('#date-picker').inputValue(),chosen);
+    assert.equal(reads.filter(r=>r.p==='/public/leagues').at(-1).date,chosen);
+    await page.reload();
+    await page.locator('.match-recommendation').first().waitFor();
+    assert.equal(reads.filter(r=>r.p==='/public/matches').at(-1).date,chosen);
+    await page.locator('#date-next').click();
+    await page.waitForFunction(date=>document.querySelector('#date-picker').value!==date,chosen);
+    await page.locator('#date-picker').fill('2026-11-01');
+    await page.locator('#date-picker').dispatchEvent('change');
+    await page.locator('.match-recommendation').first().waitFor();
+    assert.match(page.url(),/date=2026-11-01/);
+    await page.locator('[data-date-all]').click();
+    await page.locator('.match-recommendation').first().waitFor();
+    assert.match(page.url(),/date=all/);
+    assert.equal(reads.filter(r=>r.p==='/public/matches').at(-1).date,null);
+    await page.reload();
+    await page.locator('.match-recommendation').first().waitFor();
+    assert.equal(await page.locator('[data-date-all]').getAttribute('aria-pressed'),'true');
     assert.equal(await page.locator('[data-match-scope="recommended"]').getAttribute('aria-pressed'),'true');
     assert.equal(await page.locator('.match-row').count(),1);
     assert.equal(await page.locator('.match-recommendation').count(),2);
@@ -75,7 +102,7 @@ try{
     await page.locator('[data-match-scope="all"]').click();
     await page.locator('[data-fixture="unrelated"]').waitFor();
     assert.equal(await page.locator('.date-nav').isVisible(),true);
-    assert.match(reads.at(-1).date,/^\d{4}-\d{2}-\d{2}$/);
+    assert.match(reads.filter(r=>r.p==='/public/matches').at(-1).date,/^\d{4}-\d{2}-\d{2}$/);
     assert.equal(await page.locator('.match-recommendation').count(),0);
     await page.reload();
     await page.locator('[data-fixture="unrelated"]').waitFor();
@@ -125,7 +152,48 @@ try{
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.screenshot({path:output+'/homepage-expert-matches-'+width+'.png',fullPage:true});
     assert.deepEqual(writes,[]);
-    results.push({width,passed:true,read_only:true,grouped_recommendations:true,sport_and_phase_isolation:true,scope_reload:true,stale_response_ignored:true,all_unsettled_dates:true,all_matches_date_filter_preserved:true});
+    results.push({width,passed:true,read_only:true,grouped_recommendations:true,sport_and_phase_isolation:true,scope_reload:true,stale_response_ignored:true,all_unsettled_dates:true,explicit_dates_and_calendar:true,date_consistent_leagues:true,all_matches_date_filter_preserved:true});
+    await context.close();
+  }
+  // Non-empty, cross-date, multi-page evidence: the first raw page disappeared
+  // during settlement; later fixtures must still be reached, including refresh.
+  for(const width of [1440,390]){
+    const context=await browser.newContext({viewport:{width,height:960},locale:'zh-CN'});
+    const page=await context.newPage(),writes=[],cursors=[];activePage=page;
+    page.on('pageerror',error=>errors.push(error.message));
+    const fixtures=Array.from({length:67},(_,i)=>({id:'paged-'+i,sport:'football',competition_name:'跨日联赛',
+      home_team:'主队'+i,away_team:'客队'+i,phase:'live',clock_minute:30,home_score:0,away_score:0,
+      kickoff_at:i%2?'2026-10-27T11:11:00Z':instant,markets:[],expert_signals:[{id:'signal-'+i,
+        expert_id:'expert-'+i,display_nickname:'专家'+i,market_kind:'total',period:'full_time',line:'2.5',
+        selection_line:'2.5',selection:'over',outcome:'pending',created_at:instant}]}));
+    await page.route('**/api/v1/**',async route=>{
+      const request=route.request(),url=new URL(request.url()),p=url.pathname.replace('/api/v1','');
+      if(request.method()!=='GET')writes.push(p);
+      if(p==='/public/matches'){
+        const cursor=url.searchParams.get('cursor');cursors.push(cursor);
+        const items=cursor==='after-race'?fixtures.slice(0,50):cursor==='after-fifty'?fixtures.slice(50):[];
+        return route.fulfill({json:{items,next_cursor:cursor==='after-fifty'?null:cursor==='after-race'?'after-fifty':'after-race',markets_included:false,server_time:instant}});
+      }
+      return fixtureRoute(route);
+    });
+    await page.goto(baseUrl+'/');
+    await page.waitForFunction(()=>document.querySelectorAll('.match-row').length===50);
+    assert.deepEqual(cursors.slice(0,2),[null,'after-race']);
+    assert.equal(await page.locator('#fixture-count').innerText(),'50+');
+    assert.equal(await page.locator('#load-more').isVisible(),true);
+    await page.locator('#load-more').click();
+    await page.waitForFunction(()=>document.querySelectorAll('.match-row').length===67);
+    assert.equal(await page.locator('#fixture-count').innerText(),'67');
+    assert.equal(await page.locator('#load-more').isVisible(),false);
+    assert.deepEqual(new Set(await page.locator('.match-time small').allTextContents()),new Set(['10/26','10/27']));
+    await page.locator('#refresh-matches').click();
+    await page.waitForFunction(()=>document.querySelector('#load-more').disabled===false);
+    assert.equal(await page.locator('.match-row').count(),67);
+    assert.equal(new Set(await page.locator('.match-row').evaluateAll(rows=>rows.map(r=>r.dataset.fixture))).size,67);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await page.screenshot({path:output+'/homepage-pagination-'+width+'.png',fullPage:false});
+    assert.deepEqual(writes,[]);
+    results.push({width,passed:true,fixtures:67,empty_page_skipped:true,pagination_and_refresh_complete:true,cross_date_labels:true,production_writes:0});
     await context.close();
   }
   assert.deepEqual(errors,[]);

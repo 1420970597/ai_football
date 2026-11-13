@@ -841,6 +841,10 @@ h3 {
   font-size: var(--text-xs);
   color: var(--muted);
 }
+.match-time small {
+  display: block;
+  font-size: inherit;
+}
 .match-phase {
   color: var(--muted);
   font-size: var(--text-xs);
