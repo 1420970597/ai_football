@@ -228,6 +228,18 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(response.json()['result'].get('isError'))
                 self.assertEqual([], calls)
 
+    async def test_source_league_must_be_declared_before_any_lookup(self):
+        calls, _ = await self.install()
+        item = self.item()
+        del item['competition_query']
+        response = await self.rpc('tools/call', {'name': 'review_match_batch', 'arguments': {
+            'review_id': 'job', 'attempt_id': 'active', 'items': [item]}})
+        self.assertTrue(response.json()['result'].get('isError'))
+        self.assertEqual([], calls)
+        tools = (await self.rpc('tools/list')).json()['result']['tools']
+        schema = next(tool for tool in tools if tool['name'] == 'review_match_batch')['inputSchema']
+        self.assertIn('competition_query', schema['$defs']['SourceMatchIntent']['required'])
+
     async def test_cancellation_drains_active_and_waiting_items(self):
         entered = asyncio.Event()
         calls, concurrency = await self.install(wait=entered)

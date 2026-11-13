@@ -26,6 +26,7 @@ class BatchBudgetTests(unittest.IsolatedAsyncioTestCase):
     def item(self, index=0, **updates):
         return self.server.SourceMatchIntent.model_validate({
             'team_a': f'Alpha{index}', 'team_b': f'Beta{index}', 'sport': 'football',
+            'competition_query': None,
             'from_utc': '2026-11-12T00:00:00Z', 'to_utc': '2026-11-13T00:00:00Z',
             'market_kind': 'handicap', 'period': 'full_time', 'source_periods': ['full_time'],
             'selection_team': 'team_a', 'selection_line': '-.25',

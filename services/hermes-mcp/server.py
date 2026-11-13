@@ -114,7 +114,7 @@ BUDGET_ARGUMENT_DESCRIPTIONS = {
     'sport': '来源实际项目，如football/basketball；未知才省略。',
     'team_a': '来源明确第一队；与team_b成对。',
     'team_b': '来源明确第二队，不从候选补造。',
-    'competition_query': '来源可读联赛；未知才省略。',
+    'competition_query': '可读来源联赛必填；未知显式null。',
     'selection_team': '所选原文team_a或team_b；不是系统主客。',
     'selection_line': '所选球队带符号线：受让正、让球负。',
     'read_markets': '来源明确玩法/期间时true；唯一活动绑定合并读盘并复用。',
@@ -215,7 +215,7 @@ class SourceMatchIntent(BaseModel):
     team_a: str = Field(min_length=1, max_length=160, description='原文第一支球队，保留梯队/年龄/性别；不是从候选补造。')
     team_b: str = Field(min_length=1, max_length=160, description='原文第二支球队，来源顺序不等于系统主客。')
     sport: str = Field(min_length=1, max_length=40)
-    competition_query: str | None = Field(default=None, max_length=160, description='来源可读联赛须保留，避免真实比赛与电子赛同名歧义；未知才省略。')
+    competition_query: str | None = Field(max_length=160, description='必填：来源可读联赛须原样保留，避免真实比赛与电子赛同名歧义；来源未知才显式null。')
     from_utc: str = Field(min_length=1, max_length=40)
     to_utc: str = Field(min_length=1, max_length=40)
     market_kind: str = Field(min_length=1, max_length=80)
