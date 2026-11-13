@@ -111,6 +111,66 @@ class BatchBudgetTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('record_result', receipt)
             self.assertEqual(120, len(restore_rows(receipt['market_result']['source_selection_quotes'])))
 
+    async def test_exact_single_acceptance_uses_short_unchanged_native_receipt(self):
+        native = self.native(count=1)
+        native['source_intent_recording'] = {'attempted': True}
+        quote = native['market_result']['markets'][0]
+        native['record_result']['accepted'][0].update(
+            period=quote['period'], selection=quote['selection'], line=quote['line'],
+            selection_line=quote['selection_line'], price='1.93')
+        before = copy.deepcopy(native)
+        with patch.object(self.server, '_accepted_batch_receipt', side_effect=lambda view: view):
+            full = self.server._batch_result_view(native, self.item())
+        brief = self.server._batch_result_view(native, self.item())
+        self.assertEqual(before, native)
+        self.assertEqual(native['record_result'], brief['record_result'])
+        self.assertEqual('accepted-source-receipt-v1', brief['presentation']['kind'])
+        self.assertTrue(brief['presentation']['native_evidence_persisted'])
+        self.assertNotIn('items', brief)
+        self.assertNotIn('market_result', brief)
+        self.assertEqual(quote['quote_id'], brief['source_quote_receipt']['quote_id'])
+        self.assertEqual(quote['selection_line'], brief['source_quote_receipt']['selection_line'])
+        self.assertEqual(full['resolution']['fixture'], brief['resolution']['fixture'])
+        self.assertTrue(brief['source_quote_receipt']['can_record'])
+        self.assertLess(len(json.dumps(brief)), len(json.dumps(full)))
+
+    async def test_short_receipt_never_hides_rejection_unknown_or_inconsistent_scope(self):
+        native = self.native(count=1)
+        native['source_intent_recording'] = {'attempted': True}
+        quote = native['market_result']['markets'][0]
+        native['record_result']['accepted'][0].update(
+            period=quote['period'], selection=quote['selection'], line=quote['line'],
+            selection_line=quote['selection_line'])
+        mutations = [lambda r: r['record_result']['rejected'].append({'index': 0, 'reason': 'closed'}),
+            lambda r: r['record_result']['accepted'][0].update(selection='home'),
+            lambda r: r['record_result']['accepted'][0].update(selection_line='0.25'),
+            lambda r: r['record_result']['accepted'][0].update(line='NaN'),
+            lambda r: r['record_result']['accepted'][0].update(fixture_id='other'),
+            lambda r: r['source_intent_recording'].update(attempted=False),
+            lambda r: r['market_result']['markets'][0].update(status='suspended'),
+            lambda r: r['market_result']['markets'][0].update(can_record=False),
+            lambda r: r['market_result'].update(fixture={'id': 'wrong'}),
+            lambda r: r['market_result']['market_coverage'].update(complete_for_filter=False),
+            lambda r: r.update(search_complete=False, next_cursor='unread')]
+        for mutate in mutations:
+            changed = copy.deepcopy(native)
+            mutate(changed)
+            view = self.server._batch_result_view(changed, self.item())
+            self.assertEqual('source-selection-view-v1', view['presentation']['kind'])
+            self.assertIn('market_result', view)
+            self.assertEqual(changed['record_result'], view['record_result'])
+
+    async def test_invalid_short_receipt_presentation_keeps_accepted_evidence(self):
+        view = {'search_complete': True, 'next_cursor': None,
+            'source_intent_recording': {'attempted': True},
+            'record_result': {'accepted': [{'signal_id': 'still-accepted'}], 'rejected': []},
+            'resolution': {'resolved': True}, 'market_result': {'presentation': None}}
+        self.assertIs(view, self.server._accepted_batch_receipt(view))
+        view['market_result'].update(presentation={'all_source_selection_states': True,
+            'requires_manual_market_review': False}, source_selection_quotes={
+                'encoding': 'shared-column-rows-v1', 'shared': {}, 'rows': [[]]})
+        self.assertIs(view, self.server._accepted_batch_receipt(view))
+
     async def test_source_line_view_uses_selected_side_line_and_preserves_rejections(self):
         native = self.native(count=3)
         native['market_result']['markets'].append(native['market_result']['markets'][0] |

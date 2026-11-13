@@ -40,6 +40,8 @@ description: 审核 Telegram 赛前及滚球专家图文消息，完整搜索并
 
 ## 图片中的推荐意图
 
+批量项的presentation.kind=accepted-source-receipt-v1表示该项已获原生接受且精确选项已核验；record_result原样保留，source_quote_receipt仅作已接受证据引用，完整原生查询与行情另已持久保存。它不是可重新选盘的库存，不为复述明细再次查询或录入；其它未知、歧义、拒绝项仍独立按实际回执核验。
+
 批量回执的presentation.kind=source-selection-view-v1表示来源精确选择展示，完整原生搜索/读盘证据已保存；market_result使用native_market_filter/native_market_coverage及source_selection_quotes，不能把它当作完整库存markets。shared-column-rows-v1按每行zip(columns,row)后合并shared可无损还原一项，所有字段仍须来自同一行；resolution.matching_candidates也可能使用该编码。候选items只展示部分时有明确displayed_count/items_complete，不能据截断列表声称没有比赛。withheld_for_inline_budget或requires_manual_market_review须继续按原生回执用单场工具核验，不当作无盘；已经record_result.accepted的项保留，不重做搜索。录入结果未知只核对原生证据，不盲重试。
 
 正文为空不等于没有推荐。可信作者发送的截图中，明确选中、高亮选中背景、圈画/箭头指向的单个投注选项，以及“注单已确认”或投注确认单中的选项，都是需要提取的推荐证据；不要求作者在正文再次复述。先结合完整图片、相册及回复识别球队、期间、玩法、方向和盘口线，再通过下列工具流程核验。

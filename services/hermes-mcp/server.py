@@ -666,7 +666,72 @@ def _batch_result_view(result, item):
                 requires_manual_market_review=True, withheld_for_inline_budget=True)
             market['native_counts']['displayed_source_selection_quotes'] = 0
         presentation['requires_manual_market_review'] = True
-    return view
+    return _accepted_batch_receipt(view)
+
+
+def _accepted_batch_receipt(view):
+    """Avoid repeating inventories after one exact native acceptance.
+
+    All native evidence remains persisted by the API. Unresolved, rejected,
+    incomplete or multi-option results retain the full source-selection view.
+    This is a presentation change, never an alternative acceptance decision.
+    """
+    record = view.get('record_result')
+    resolution = view.get('resolution')
+    market = view.get('market_result')
+    recording = view.get('source_intent_recording')
+    if (not isinstance(record, dict) or not isinstance(record.get('accepted'), list)
+            or len(record['accepted']) != 1 or record.get('rejected') != []
+            or not isinstance(resolution, dict) or resolution.get('resolved') is not True
+            or not isinstance(market, dict) or view.get('search_complete') is not True
+            or view.get('next_cursor') is not None or not isinstance(recording, dict)
+            or recording.get('attempted') is not True):
+        return view
+    display = market.get('presentation', {})
+    if (not isinstance(display, dict) or display.get('all_source_selection_states') is not True
+            or display.get('requires_manual_market_review') is not False):
+        return view
+    rows = market.get('source_selection_quotes')
+    if isinstance(rows, dict) and rows.get('encoding') == 'shared-column-rows-v1':
+        columns, shared, values = rows.get('columns'), rows.get('shared'), rows.get('rows')
+        if (not isinstance(columns, list) or not all(isinstance(key, str) for key in columns)
+                or len(set(columns)) != len(columns) or not isinstance(shared, dict)
+                or not isinstance(values, list) or len(values) != 1
+                or not isinstance(values[0], list) or len(values[0]) != len(columns)):
+            return view
+        rows = [dict(zip(columns, values[0])) | shared]
+    if not isinstance(rows, list) or len(rows) != 1:
+        return view
+    quote, accepted = rows[0], record['accepted'][0]
+    fixture = resolution.get('fixture', {})
+    market_fixture = market.get('fixture')
+    if not all(isinstance(value, dict) for value in (quote, accepted, fixture, market_fixture)):
+        return view
+    if (not quote.get('quote_id') or not accepted.get('signal_id')
+            or accepted.get('index') != 0 or quote.get('status') != 'active'
+            or quote.get('can_record') is not True or market_fixture.get('id') != fixture.get('id')
+            or accepted.get('fixture_id') != fixture.get('id')
+            or any(accepted.get(key) != quote.get(key) for key in ('period', 'selection'))):
+        return view
+    try:
+        for key in ('line', 'selection_line'):
+            left, right = Decimal(str(accepted.get(key))), Decimal(str(quote.get(key)))
+            if not left.is_finite() or left != right:
+                return view
+    except (InvalidOperation, TypeError, ValueError):
+        return view
+    result = {key: value for key, value in view.items()
+              if key not in {'items', 'market_result', 'resolution', 'presentation'}}
+    result['resolution'] = {'resolved': True,
+        'source_team_sides': resolution.get('source_team_sides'),
+        'fixture': dict(fixture)}
+    result['source_quote_receipt'] = {key: quote[key] for key in (
+        'quote_id', 'market_kind', 'period', 'selection', 'line', 'selection_line', 'line_basis',
+        'status', 'can_record') if key in quote}
+    result['presentation'] = {'kind': 'accepted-source-receipt-v1',
+        'native_evidence_persisted': True, 'record_result_unchanged': True,
+        'not_market_inventory': True, 'repeat_query_required': False}
+    return result
 
 
 def _batch_error_view(error, item):
