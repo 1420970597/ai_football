@@ -1,0 +1,44 @@
+{
+  "services": {
+    "api": {
+      "image": "sha256:562145962a7253f363e76b201f20f67b679b422ac16e52355b1a37e8f3bfa5fb",
+      "command": [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--workers",
+        "2",
+        "--proxy-headers",
+        "--no-access-log"
+      ],
+      "entrypoint": [],
+      "mem_limit": 805306368,
+      "memswap_limit": 1610612736,
+      "cpus": 0.4
+    },
+    "collector": {
+      "image": "sha256:f30b034c25f1d7e71e445ab203570034285a3b0d41e48f154993a659ce920242",
+      "command": [
+        "python",
+        "-m",
+        "collector.worker"
+      ],
+      "entrypoint": null,
+      "mem_limit": 536870912,
+      "memswap_limit": 1073741824,
+      "cpus": 0.5
+    }
+  },
+  "x-telegram-409-release": {
+    "source_revision": "4a42e38163f370e9b4baea034aa1f0d63b363553",
+    "scope": "retention-bounded-archive-and-expired-version-terminal-receipts",
+    "schema_changes": 0,
+    "raw_retention_hours": 72,
+    "history_floor_cache_seconds": 300,
+    "review_detection_deadline_seconds": 20,
+    "automatic_betting_permissions_unchanged_by_release": true
+  }
+}
