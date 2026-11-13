@@ -39,3 +39,5 @@ v3镜像`sha256:018f93654bcf669de1743291664da38891f575e168194b0baa22a1e116592b05
 01:10:31.942223 UTC，权威树记录提交`3b01c2da8f0616544906a09e3407756be528c833`已推送并与远端引用核对后，以精确018f9365镜像启动常驻容器，Compose退出0。实际限制0.5 CPU/768MiB，process_healthy=true；新任务为UTC00:30–01:00（北京时间08:30–09:00），已产生真实子代理事件，600秒截止，前一23:30–00:00结果仍保留。coverage_healthy=false、17窗尚未扫描、1失败/4partial，水位缺口仍如实显示，不能将启动当作全量补齐。之后不并发改变权威源树Git引用，根检出单独提交本运行证据。常驻每个闭合半小时优先分析新窗；已确认缺陷按证据和预算进入独立修复，完成修复须再次通过冻结与发布门禁。
 
 实际启动命令为`docker compose --project-directory /root/ai_football/.runtime/refactor-wt/web-ux --env-file /root/ai_football/.runtime/expert-review-incident-20261113/monitor.env -f /root/ai_football/.runtime/refactor-wt/web-ux/infra/monitor/compose.yml -f /root/ai_football/.runtime/refactor-wt/web-ux/infra/monitor/compose.git.yml up -d --no-deps --no-build --pull never supervisor`，退出0；Docker inspect和资源受限Docker内读取status/schedule/events均退出0。最新常驻启动证据保存在根检出发布报告；权威源分支同名报告为启动前历史快照，不能把pending_start当现状。
+
+最终发布指针检查首轮退出1：检查器误要求继承基础Compose的Hermes镜像必须在四镜像覆盖中显式存在。已核实四个显式镜像完全一致，Hermes实际运行镜像仍为原固定9c556157；修正检查器为四显式加一继承实际值后原检查退出0，不更改生产配置或镜像来迎合检查。报告保留原失败及正确范围。
