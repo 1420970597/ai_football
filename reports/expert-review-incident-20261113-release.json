@@ -1,0 +1,322 @@
+{
+  "schema_version": 1,
+  "business_source_commit": "91512d69e445dd55083390c39812dac6f597afa3",
+  "status": "deployed_and_read_back",
+  "model_probe": {
+    "passed": true,
+    "source_commit": "91512d69e445dd55083390c39812dac6f597afa3",
+    "task": "af-incident-six-20261113005556-4167515",
+    "actual_provider": true,
+    "synthetic_inventory": true,
+    "production_business_writes": 0,
+    "real_orders": 0,
+    "cases": [
+      {
+        "scenario": "six_positive",
+        "passed": true,
+        "accepted": 6,
+        "expected_accepted": 6,
+        "request_elapsed_ms": 20028.904,
+        "signal_max_detected_ms": 16183.865000000002,
+        "checks": {
+          "actual_model_finished": true,
+          "batch_selected_once": true,
+          "first_mcp_call_is_batch": true,
+          "allowed_tool_names": true,
+          "all_six_searched_complete": true,
+          "readable_competition_preserved": true,
+          "six_item_receipt_present": true,
+          "precise_accepted_set": true,
+          "all_signal_fixtures_task_owned": true,
+          "native_concurrency_at_most_two": true,
+          "candidate_api_source_loaded": true,
+          "signals_within_actual_detection_deadline": true,
+          "record_responses_within_actual_detection_deadline": true,
+          "zero_order_rows": true,
+          "model_extracted_six_source_pairs": true,
+          "correct_side_line_0": true,
+          "correct_side_line_1": true,
+          "correct_side_line_2": true,
+          "correct_side_line_3": true,
+          "correct_side_line_4": true,
+          "correct_side_line_5": true,
+          "all_six_item_indexes": true
+        },
+        "session_cleanup_verified": true,
+        "last_record_http_completed_detected_ms": 16380.131,
+        "http_maximum": 2,
+        "asgi_lifecycle_maximum": 2
+      },
+      {
+        "scenario": "mixed_negative",
+        "passed": true,
+        "accepted": 4,
+        "expected_accepted": 4,
+        "request_elapsed_ms": 17141.379,
+        "signal_max_detected_ms": 8212.545,
+        "checks": {
+          "actual_model_finished": true,
+          "batch_selected_once": true,
+          "first_mcp_call_is_batch": true,
+          "allowed_tool_names": true,
+          "all_six_searched_complete": true,
+          "readable_competition_preserved": true,
+          "six_item_receipt_present": true,
+          "precise_accepted_set": true,
+          "all_signal_fixtures_task_owned": true,
+          "native_concurrency_at_most_two": true,
+          "candidate_api_source_loaded": true,
+          "signals_within_actual_detection_deadline": true,
+          "record_responses_within_actual_detection_deadline": true,
+          "zero_order_rows": true,
+          "model_extracted_six_source_pairs": true,
+          "correct_side_line_0": true,
+          "correct_side_line_1": true,
+          "correct_side_line_2": true,
+          "correct_side_line_3": true,
+          "all_six_item_indexes": true,
+          "true_ambiguity_preserved": true,
+          "suspended_pick_not_recorded": true
+        },
+        "session_cleanup_verified": true,
+        "last_record_http_completed_detected_ms": 8296.947,
+        "http_maximum": 2,
+        "asgi_lifecycle_maximum": 2
+      }
+    ],
+    "limits": "synthetic inventory; no production worker/queue/TG timing; historical prices not replayed",
+    "source_file_checksums_matched": true,
+    "strict_result_sha256": "b0c4a97a092c78d92428e7c655bb8cd5ff936c0c70e15e8a0c10840a7f384c50"
+  },
+  "images": {
+    "api": "sha256:44aae2f65e838d2f36592cc5e92dfdb9d92ba9e9f00495534938f1d4e1e248de",
+    "review-worker": "sha256:519a4ca4078eb836c3f9bf7ec22ce45ec6c1c426c338240f0293f18899607a08",
+    "local-mcp-api": "sha256:8e4216d7dde5647e7f6fdae7340ac4c231f4a0a8686de84d94a22e28745e337c",
+    "hermes-mcp": "sha256:44bd067d9a41bcf72b2a5fc71cde600bc78377d22af687b1de74400a522bf800",
+    "hermes": "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d"
+  },
+  "deployed_environment_values_unchanged": true,
+  "existing_binds_preserved": true,
+  "unaffected_containers_identity_image_and_started_at_unchanged": [
+    "/ai-football-v2-collector-1",
+    "/ai-football-v2-executor-1",
+    "/ai-football-v2-local-storage-local-postgres-1",
+    "/ai-football-v2-minio-1",
+    "/ai-football-v2-raw-retention-1",
+    "/ai-football-v2-web-1"
+  ],
+  "gate_events": [
+    {
+      "event": "claims_paused",
+      "at": "2026-11-13T00:58:25.277739+00:00",
+      "queue": {
+        "observed_at": "2026-11-13T00:58:25.285857+00:00",
+        "recent_jobs": 8,
+        "active_leases": 0,
+        "queued_jobs": 0,
+        "queued_detection_deadline_elapsed": 0,
+        "detected_during_pause": 0,
+        "maintenance_queued_deadline_elapsed": 0,
+        "maintenance_deadline_conclusions": 0,
+        "detection_unknown": 0
+      },
+      "detected_at_reset": false
+    },
+    {
+      "event": "idle_gate_held",
+      "at": "2026-11-13 00:58:25.288766+00:00",
+      "queue": {
+        "observed_at": "2026-11-13T00:58:25.289370+00:00",
+        "recent_jobs": 8,
+        "active_leases": 0,
+        "queued_jobs": 0,
+        "queued_detection_deadline_elapsed": 0,
+        "detected_during_pause": 0,
+        "maintenance_queued_deadline_elapsed": 0,
+        "maintenance_deadline_conclusions": 0,
+        "detection_unknown": 0
+      }
+    },
+    {
+      "event": "claims_pause_ending",
+      "at": "2026-11-13T01:01:38.160959+00:00",
+      "pause_started_at": "2026-11-13T00:58:25.277739+00:00",
+      "queue": {
+        "observed_at": "2026-11-13T01:01:38.164789+00:00",
+        "recent_jobs": 8,
+        "active_leases": 0,
+        "queued_jobs": 0,
+        "queued_detection_deadline_elapsed": 0,
+        "detected_during_pause": 0,
+        "maintenance_queued_deadline_elapsed": 0,
+        "maintenance_deadline_conclusions": 0,
+        "detection_unknown": 0
+      },
+      "maintenance_interval_not_normal_sla": true,
+      "detected_at_reset": false
+    },
+    {
+      "event": "gate_released",
+      "was_held": true,
+      "at": "2026-11-13T01:01:38.171012+00:00",
+      "pause_started_at": "2026-11-13T00:58:25.277739+00:00"
+    }
+  ],
+  "release_exit_code": 0,
+  "schema_changes": 0,
+  "database_migration_count": 38,
+  "real_orders_placed": 0,
+  "validation": {
+    "base_combined": {
+      "tests": 452,
+      "source_commit": "453cd54b",
+      "exit_code": 0
+    },
+    "final_affected_protocol_and_prompt_suite": {
+      "tests": 141,
+      "recorded_source_parent_commit": "8d68e53e9b31288caf352a0eabcb8f5f46f610c9",
+      "recorded_committed_source_verified": false,
+      "tested_changed_source_checksums_match_business_commit": "91512d69e445dd55083390c39812dac6f597afa3",
+      "exit_code": 0
+    },
+    "deployment_fault_simulation": {
+      "tests": 8,
+      "exit_code": 0
+    }
+  },
+  "monitor": {
+    "image": "sha256:018f93654bcf669de1743291664da38891f575e168194b0baa22a1e116592b05",
+    "actual_one_shot_window": [
+      "2026-11-12T23:30:00Z",
+      "2026-11-13T00:00:00Z"
+    ],
+    "messages_examined": 24,
+    "unresolved_examined": 22,
+    "analysis": "partial",
+    "child_exit_code": 0,
+    "wrapper_exit_code": 1,
+    "persistent_service": "running",
+    "container_started_at": "2026-11-13T01:10:31.942223392Z",
+    "observed_at": "2026-11-13T01:11:12.864268+00:00",
+    "process_healthy": true,
+    "coverage_healthy": false,
+    "coverage_lag_seconds": 43200,
+    "unscanned_windows": 17,
+    "failed_windows": 1,
+    "partial_windows": 4,
+    "active_window": [
+      "2026-11-13T00:30:00+00:00",
+      "2026-11-13T01:00:00+00:00"
+    ],
+    "active_task_deadline_at": "2026-11-13T01:20:32.187299+00:00",
+    "actual_child_event_count": 16,
+    "actual_child_event_types": [
+      "thread.started",
+      "turn.started",
+      "item.completed",
+      "item.started",
+      "item.completed",
+      "item.started",
+      "item.completed",
+      "item.started",
+      "item.completed",
+      "item.completed",
+      "item.started",
+      "item.completed",
+      "item.started",
+      "item.completed",
+      "item.started",
+      "item.completed"
+    ],
+    "cpu_limit": 0.5,
+    "memory_limit_bytes": 805306368,
+    "compose_start_exit_code": 0,
+    "source_head_at_start": "3b01c2da8f0616544906a09e3407756be528c833"
+  },
+  "limits": [
+    "真实模型验收使用专属临时库和合成当前盘口，不是历史实盘回放。",
+    "隔离用例不证明生产TG、排队、多专家突发、图片准备和上游刷新的全局20秒容量。",
+    "未解决期间与unsupported缺失证据保留；历史来源阶段消歧能力缺口另在持续backlog。",
+    "维护暂停队列计时不重置，维护间隙另统计。"
+  ],
+  "running_source_file_hashes_verified": [
+    {
+      "role": "api",
+      "sha256": {
+        "/app/app/review_resolution.py": "f82dc73445a334c0db1c0cc41bcfe5de87916040d5b8a8e85e2cb8f3d69514fc",
+        "/app/app/review_tool_evidence.py": "2fd92d05643a8ae5156b64e875458228236af142d3754952ccfc542d36c050f4"
+      }
+    },
+    {
+      "role": "local-mcp-api",
+      "sha256": {
+        "/app/app/review_resolution.py": "f82dc73445a334c0db1c0cc41bcfe5de87916040d5b8a8e85e2cb8f3d69514fc",
+        "/app/app/review_tool_evidence.py": "2fd92d05643a8ae5156b64e875458228236af142d3754952ccfc542d36c050f4"
+      }
+    },
+    {
+      "role": "review-worker",
+      "sha256": {
+        "/app/app/worker.py": "68168b7400d6c1bcee237b3603c6c3b90a228f66269e9f42f62c86016ee72bec"
+      }
+    },
+    {
+      "role": "hermes-mcp",
+      "sha256": {
+        "/app/server.py": "beb3ee1f82585b5bf3667d93255a66addfcc62593c22a4973c0dcdf7e4130e7a"
+      }
+    },
+    {
+      "role": "hermes",
+      "sha256": {
+        "/workspace/skills/expert-review/SKILL.md": "ed4450a80bbb8c1b4b64b30cd113a47d5ac191e17be7d7f76bd3bf0c45dfce49"
+      }
+    }
+  ],
+  "runtime_configuration_read_only_verified": true,
+  "natural_observation": {
+    "observed_at": "2026-11-13T01:03:49.801598+00:00",
+    "read_only": true,
+    "detected_at_reset": false,
+    "historical_reviews_submitted": 0,
+    "real_orders_placed_by_validation": 0,
+    "cohorts": {
+      "maintenance": {
+        "from": "2026-11-13T00:58:25.277739+00:00",
+        "to": "2026-11-13T01:01:38.171012+00:00",
+        "messages": 0,
+        "media_ready": 0,
+        "unsupported": 0,
+        "jobs": [],
+        "signals": 0,
+        "messages_with_signals": 0,
+        "max_detected_to_signal_created_ms": null
+      },
+      "after_release": {
+        "from": "2026-11-13T01:01:38.171012+00:00",
+        "to": "2026-11-13T01:03:49.801598+00:00",
+        "messages": 0,
+        "media_ready": 0,
+        "unsupported": 0,
+        "jobs": [],
+        "signals": 0,
+        "messages_with_signals": 0,
+        "max_detected_to_signal_created_ms": null
+      }
+    },
+    "limits": [
+      "只读上线后自然样本，样本不足不能推断全局20秒或多专家容量。",
+      "signal.created_at是事务内时间，不单独证明生产提交可见或前端显示完成时间。"
+    ]
+  },
+  "collector_read_only_status": {
+    "connected": true,
+    "authorized": true,
+    "state": "connected",
+    "checked_at_utc": "2026-11-13T01:05:53Z",
+    "last_received_at": "2026-11-13T01:05:53.489871+00:00",
+    "last_staged_at": "2026-11-13T00:56:51.600971+00:00",
+    "comment": "Telegram整体持续接收；无新已映射专家检测样本不能推断识别率。"
+  },
+  "source_release_record_commit": "3b01c2da8f0616544906a09e3407756be528c833"
+}
