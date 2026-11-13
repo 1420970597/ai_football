@@ -1,7 +1,7 @@
 {
   "services": {
     "api": {
-      "image": "sha256:d2e3b742231656dec0d5a19cdbe9a740bfafbce53941f943ec444b7160723359"
+      "image": "sha256:562145962a7253f363e76b201f20f67b679b422ac16e52355b1a37e8f3bfa5fb"
     },
     "review-worker": {
       "image": "sha256:519a4ca4078eb836c3f9bf7ec22ce45ec6c1c426c338240f0293f18899607a08"
@@ -10,7 +10,7 @@
       "image": "sha256:6291c59678dc7c9f34b4b62834f62ee13b5adeeb32c726c261d35255b35d8435"
     },
     "collector": {
-      "image": "sha256:dd6feb990625900247f7170732666bff933524020f20351b55e56e52de1def0a",
+      "image": "sha256:f30b034c25f1d7e71e445ab203570034285a3b0d41e48f154993a659ce920242",
       "volumes": [
         {
           "type": "bind",
