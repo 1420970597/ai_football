@@ -41,6 +41,31 @@ _INVENTORY_SUBSTITUTION = re.compile(
     r'|us(?:e|ed|es|ing)\s+(?:the\s+)?(?:only\s+available|inventory)', re.I)
 _NEGATED_SUBSTITUTION = re.compile(r'(?:不|不能|不可|不应|不得|不会|没有|无需|不是|not|never)\s*$', re.I)
 
+_QUARTER_CAPTION = re.compile(r'^(?:推荐[:：]?\s*)?(?:第?[一二三四1-4]|首|末)[节節](?P<pick>[^\n。；;]{1,80})$')
+_OTHER_SCOPE = re.compile(r'全[场場]|[上下]半|昨天|昨日|回顾|回顧|反馈|反饋|取消|撤回|[?？]|开始|開始|进行|進行|比分|目前|剩余|剩餘')
+
+
+def single_quarter_source(text):
+    """Recognize only a bounded, current single-quarter pick caption.
+
+    This negative scope guard supplies neither an identity nor a quote. Mixed
+    periods, commentary and multi-item messages need independent per-pick review.
+    """
+    if not isinstance(text, str) or len(text) > 100:
+        return False
+    text = unicodedata.normalize('NFKC', text).strip()
+    match = _QUARTER_CAPTION.fullmatch(text)
+    return bool(match and not _OTHER_SCOPE.search(text)
+                and re.search(r'[+-]\s*\d|[大小]\s*\d|\d\s*[大小]', match['pick']))
+
+
+def single_quarter_source_notice(text):
+    if not single_quarter_source(text):
+        return ''
+    return ('来源单节期间约束：正文明确单节推荐。当前工具仅支持全场、上半场、下半场，'
+            '均不能替代该单节；不要声明full_time或半场，不读这些期间的盘口或提交录入。'
+            '保留单节暂不支持的未解决原因，不将比赛当前节次当作推荐期间。\n')
+
 
 def period_intent_key(quote):
     """Canonical per-pick denial key; its binding supplies fixture identity."""
@@ -134,6 +159,9 @@ def _early_first_half(quote, posted_at, now):
 
 
 def period_intent_rejection(text, quote, *, posted_at=None, now=None):
+    if (quote.get('fixture_sport') == 'basketball' and single_quarter_source(text)
+            and quote.get('period') in {'full_time', 'first_half', 'second_half'}):
+        return 'source_period_not_supported'
     if quote.get('market_kind') not in {'total', 'team_total'} or quote.get('line') is None:
         return None
     constraints = set()

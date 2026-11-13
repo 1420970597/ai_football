@@ -136,7 +136,8 @@ def snapshot_result(kind, result, *, compact_markets=False):
                  'refresh': _project(result['refresh'], {'attempted', 'accepted', 'reason'})}
         # Replay retains the exact declared coverage; it must not reinterpret
         # old snapshots or silently remove any supported/closed option.
-        value.update(_project(result, {'market_coverage', 'market_filter', 'unsupported_markets'}))
+        value.update(_project(result, {'market_coverage', 'market_filter', 'unsupported_markets',
+                                      'reason', 'rejection_guidance'}))
         if omitted:
             coverage = dict(value.get('market_coverage') or {})
             if not coverage:

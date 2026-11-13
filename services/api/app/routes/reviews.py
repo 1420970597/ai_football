@@ -31,7 +31,8 @@ from ..review_resolution import resolve_candidates
 from ..review_market_query import market_filters, handicap_query_guidance
 from ..team_totals import team_total_terms
 from ..review_period_intent import (period_intent_rejection, verified_early_first_half_context,
-                                   premarket_period_rejection, evidence_period_rejection, period_intent_key)
+                                   premarket_period_rejection, evidence_period_rejection, period_intent_key,
+                                   single_quarter_source)
 from quote_witness import known_quote_snapshot
 
 router = APIRouter(prefix="/internal/mcp")
@@ -447,6 +448,16 @@ async def list_match_markets(body: MarketInput, request: Request):
         async with conn.transaction():
             job = await active_tool_job(conn, body.review_id, body.attempt_id)
             fixture, total_quotes, quotes, max_age = await _market_snapshot(conn, body, settings, filters)
+            if fixture['sport'] == 'basketball' and single_quarter_source(job['raw_text']):
+                # Validate the live attempt and binding first, but expose no
+                # whole/half inventory and create no market-read witness.
+                result = {'fixture': dict(fixture), 'markets': [],
+                          'refresh': {'attempted': False, 'reason': 'source_period_not_supported'},
+                          'reason': 'source_period_not_supported',
+                          'rejection_guidance': {'retry_same_evidence': False}}
+                return await tool_success(conn, body, result, {
+                    'fixture_id': body.fixture_id, 'quote_ids': [],
+                    'reason': 'source_period_not_supported'})
             age = (datetime.now(timezone.utc) - job['posted_at']).total_seconds()
             reason = None
             if not getattr(settings, 'market_refresh_url', ''):

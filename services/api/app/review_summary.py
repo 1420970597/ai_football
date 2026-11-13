@@ -29,6 +29,7 @@ REASONS = {
     'historical_review_not_current': '历史消息仅保留分析，不生成实时推荐',
     'message_timestamp_in_future': '消息发布时间晚于当前时间',
     'source_period_intent_conflict': '原文推荐期间与盘口期间冲突，不能改用其他期间',
+    'source_period_not_supported': '来源明确的推荐期间暂不支持，不能替换成全场或半场',
     'source_period_intent_ambiguous': '来源期间证据存在歧义，不能按可售盘口推断或替代期间',
     'source_period_unverified_before_market_read': '首次读盘前期间未确认，来源也未独立明确该项期间；不能从可售盘口倒推，须保留未解决',
     'source_line_intent_conflict': '原证据盘口线与所提交报价编号不一致',
