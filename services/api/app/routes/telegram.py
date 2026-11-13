@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import base64
 import hashlib
 import hmac
@@ -39,6 +39,14 @@ def log_version_conflict(stored: dict, incoming: dict, *, path: str) -> None:
     fields = sorted(key for key in allowed if stored.get(key) != incoming.get(key)
                     or (key in stored) != (key in incoming))
     log.warning('Telegram event version conflict path=%s fields=%s', path, ','.join(fields) or 'none')
+
+
+async def expired_event_receipt(conn, source_id, body):
+    # Older collectors may have uploaded before discovering expiry. Keep the
+    # existing orphan cleanup path without recreating an original or review.
+    if body.media_objects:
+        await conn.execute('SELECT v2_queue_retention_media($1,$2)', source_id, body.media_objects)
+    return {'persisted': True, 'state': 'expired', 'reason': 'raw_content_expired'}
 
 
 def record_event_phase(request: Request, name: str, started: float) -> None:
@@ -301,7 +309,7 @@ async def event_ingest_snapshot(conn, body: EventInput, source_id, owner):
         " SELECT e.id,e.source_version_at FROM v2_telegram_events e "
         " WHERE e.source_id=$1 AND e.platform_message_id=$2 AND e.is_current),"
         "version_event AS MATERIALIZED ("
-        " SELECT e.id,e.is_current,e.message_id,e.media_state,e.media_objects,e.content "
+        " SELECT e.id,e.is_current,e.message_id,e.media_state,e.media_objects,e.content,e.raw_content_expired_at "
         " FROM v2_telegram_events e "
         " WHERE e.source_id=$1 AND e.platform_message_id=$2 AND e.version_key=$5),"
         "revision AS MATERIALIZED ("
@@ -316,7 +324,8 @@ async def event_ingest_snapshot(conn, body: EventInput, source_id, owner):
         "(SELECT message_id FROM version_event) AS event_message_id,"
         "(SELECT media_state FROM version_event) AS event_media_state,"
         "(SELECT media_objects FROM version_event) AS event_media_objects,"
-        "(SELECT content FROM version_event) AS event_content,(SELECT value FROM revision) AS next_revision",
+        "(SELECT content FROM version_event) AS event_content,"
+        "(SELECT raw_content_expired_at FROM version_event) AS event_expired_at,(SELECT value FROM revision) AS next_revision",
         source_id, body.platform_message_id, body.sender_id, body.member_message_ids, body.version_key, owner,
     )
     event = None
@@ -325,6 +334,7 @@ async def event_ingest_snapshot(conn, body: EventInput, source_id, owner):
             "id": row["event_id"], "is_current": row["event_is_current"],
             "message_id": row["event_message_id"], "media_state": row["event_media_state"],
             "media_objects": row["event_media_objects"], "content": row["event_content"],
+            "raw_content_expired_at": row['event_expired_at'],
         }
     return {
         "source_enabled": row["source_enabled"], "lease_active": row["lease_active"],
@@ -392,7 +402,7 @@ async def persist_fast_event(conn, source_id, body: EventInput):
         " SELECT e.id,e.source_version_at FROM input i JOIN v2_telegram_events e ON e.source_id=i.source_id "
         " AND e.platform_message_id=i.body->>'platform_message_id' AND e.is_current),"
         "version_event AS MATERIALIZED ("
-        " SELECT e.id,e.is_current,e.message_id,e.media_state,e.media_objects,e.content "
+        " SELECT e.id,e.is_current,e.message_id,e.media_state,e.media_objects,e.content,e.raw_content_expired_at "
         " FROM input i JOIN v2_telegram_events e ON e.source_id=i.source_id "
         " AND e.platform_message_id=i.body->>'platform_message_id' AND e.version_key=i.body->>'version_key'),"
         "revision AS MATERIALIZED ("
@@ -415,6 +425,8 @@ async def persist_fast_event(conn, source_id, body: EventInput):
         " WHEN COALESCE(jsonb_array_length(i.body->'media_manifest'),0)>0 "
         " AND NOT COALESCE(ss.allow_media,FALSE) AND i.body->>'media_state'<>'unsupported' THEN 'media_disabled' "
         " WHEN v.id IS NOT NULL AND NOT v.is_current THEN 'superseded' "
+        " WHEN (i.body->>'posted_at')::timestamptz<statement_timestamp()-interval '72 hours' "
+        " OR v.raw_content_expired_at IS NOT NULL THEN 'expired' "
         " WHEN v.id IS NOT NULL AND (v.content-'sender_nickname') IS DISTINCT FROM "
         " (i.content-'sender_nickname') THEN 'version_conflict' "
         " WHEN v.id IS NULL AND c.source_version_at>(i.body->>'source_version_at')::timestamptz THEN 'ignored_stale' "
@@ -826,6 +838,8 @@ async def ingest_event(body: EventInput, request: Request):
                     raise HTTPException(status_code=403, detail="source media is disabled")
                 if outcome == "superseded":
                     return {"persisted": True, "state": "superseded", "message_id": str(result["message_id"])}
+                if outcome == 'expired':
+                    return await expired_event_receipt(conn, source['id'], body)
                 if outcome == "ignored_stale":
                     return {"persisted": True, "state": "ignored_stale"}
                 if outcome == "version_conflict":
@@ -921,6 +935,10 @@ async def ingest_event(body: EventInput, request: Request):
             if event and not event["is_current"]:
                 ack = await acknowledge_reconciliation()
                 return {"persisted": True, "state": "superseded", "message_id": str(event["message_id"]), **ack}
+            if (body.posted_at < datetime.now(timezone.utc)-timedelta(hours=72)
+                    or event and event.get('raw_content_expired_at') is not None):
+                expired = await expired_event_receipt(conn, source['id'], body)
+                return {**expired, **(await acknowledge_reconciliation())}
             if not event and current and current["source_version_at"] > body.source_version_at:
                 ack = await acknowledge_reconciliation()
                 return {"persisted": True, "state": "ignored_stale", **ack}

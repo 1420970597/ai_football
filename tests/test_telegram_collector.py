@@ -26,13 +26,14 @@ from collector.telegram import TelegramCollector, MAX_MEDIA_BYTES, _valid_image,
 CONFIG = {"telegram_api_id": "12345", "telegram_api_hash": "test-api-hash-only",
           "telegram_session": "test-session-only", "telegram_source_enabled": "true",
           "telegram_account": json.dumps({"id": "1234", "display_name": "测试账号"})}
+MESSAGE_DATE = datetime.now(timezone.utc).replace(microsecond=0)-timedelta(hours=4)
 
 
 class Message:
     def __init__(self, identifier, text="阿森纳 全场大2.5", *, media=False, grouped=None, sender=7, edited=None, mime="image/jpeg"):
         self.id, self.message = identifier, text
         self.sender_id, self.grouped_id, self.edit_date = sender, grouped, edited
-        self.date = datetime(2026, 10, 26, tzinfo=timezone.utc)
+        self.date = MESSAGE_DATE
         self.reply_to_msg_id = None
         self.media = SimpleNamespace(id=identifier) if media else None
         self.file = SimpleNamespace(mime_type=mime, size=100, width=800, height=600) if media else None
@@ -179,6 +180,9 @@ class Client:
             messages = [item for item in messages if item.sender_id == filters['from_user']]
         if 'max_id' in filters:
             messages = [item for item in messages if item.id < filters['max_id']]
+        if filters.get('offset_date'):
+            messages = [item for item in messages if (item.date > filters['offset_date'] if reverse
+                                                     else item.date < filters['offset_date'])]
         if min_id:
             messages = [item for item in messages if item.id > min_id]
         messages = sorted(messages, key=lambda item: item.id, reverse=not reverse)
@@ -293,7 +297,7 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(105, self.backend.positions["-1001"])
         # Recent recovery uses a bounded head page; archival reads retain the
         # unbounded cursor scan and advance independently.
-        self.assertEqual([25, None] * 5, self.client.query_limits)
+        self.assertEqual([25, 1, None] + [25, None] * 4, self.client.query_limits)
         await self.collector.sync_once()
         self.assertEqual(1, self.client.connect_count)
         self.assertEqual(1, len(self.created))

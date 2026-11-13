@@ -149,6 +149,7 @@ class TelegramCollector:
         self.reconcile_pending: dict[str, list[dict]] = {}
         self.reconcile_commit_slots = asyncio.Semaphore(RECONCILE_GLOBAL_COMMIT_CONCURRENCY)
         self.recent_recovery: dict[str, dict] = {}
+        self.retained_history_floor: dict[str, tuple] = {}
         self.entity_cache: OrderedDict[str, tuple] = OrderedDict()
         self.detection_times: OrderedDict[tuple, str] = OrderedDict()
         self.control_server = None
@@ -321,6 +322,7 @@ class TelegramCollector:
             self.directory_trusted.clear()
             self.reconcile_pending.clear()
             self.recent_recovery.clear()
+            self.retained_history_floor.clear()
             self.entity_cache.clear()
             self.invalid_session_fingerprint = None
             self._verified_identity = None
@@ -330,6 +332,7 @@ class TelegramCollector:
 
     async def disconnect(self):
         self.entity_cache.clear()
+        self.retained_history_floor.clear()
         await self._cancel_auth()
         await self._cancel_live_media_tasks()
         if self.client:
@@ -595,6 +598,20 @@ class TelegramCollector:
             self.directory_retry_at[chat_id] = time.monotonic() + 30
             log.warning('Telegram directory persistence deferred category=%s', type(exc).__name__)
 
+    async def _retained_history_start(self, chat_id, entity):
+        cached = self.retained_history_floor.get(chat_id)
+        if cached and cached[0] is self.client and cached[1] > time.monotonic():
+            return cached[2]
+        cutoff = datetime.now(timezone.utc)-timedelta(hours=72)
+        first = None
+        # min_id takes priority over offset_date in Telethon. Seek by date
+        # separately, then resume the durable ID cursor within that window.
+        async for message in self.client.iter_messages(entity, offset_date=cutoff, reverse=True, limit=1):
+            first = int(message.id)
+            break
+        self.retained_history_floor[chat_id] = (self.client, time.monotonic()+300, first)
+        return first
+
     async def _sync_source(self, chat_id: str, source: dict) -> dict:
         if time.monotonic() < self.retry_at.get(chat_id, 0):
             return {"state": "backoff"}
@@ -610,12 +627,19 @@ class TelegramCollector:
         started = time.monotonic()
         catching_up = False
         entity = await self._entity(chat_id)
-        async for message in self.client.iter_messages(entity, min_id=original, reverse=True, limit=None):
+        floor = await self._retained_history_start(chat_id, entity)
+        if floor is None:
+            state = 'recent_deferred' if recent['state']=='deferred' else recent['state']
+            return {'state': state, 'last_message_id': original, 'observed': 0, 'recent_history': recent}
+        async for message in self.client.iter_messages(entity, min_id=max(original, floor-1), reverse=True, limit=None):
             if not message or int(message.id) <= last:
                 continue
-            # 先持久原文/待媒体状态，确认后才推进高水位；不使用内存 seen 集合。
-            await self._process_message(chat_id, source, message, entity)
-            last, count = int(message.id), count + 1
+            if _utc(message.date) < datetime.now(timezone.utc)-timedelta(hours=72):
+                last, count = int(message.id), count + 1
+            else:
+                # 先持久原文/待媒体状态，确认后才推进高水位；不使用内存 seen 集合。
+                await self._process_message(chat_id, source, message, entity)
+                last, count = int(message.id), count + 1
             if count % 25 == 0:
                 async with lock:
                     await self.backend.advance(chat_id, self.owner, last, original)
@@ -764,9 +788,9 @@ class TelegramCollector:
         until_id = int(task['until_id'])
         since = _utc(datetime.fromisoformat(str(task['since']).replace('Z', '+00:00')))
         source_peer = sender_id == str(chat_id) and sender_id.startswith('-')
-        if source_peer:
-            # Raw retention follows the original post, not its latest edit.
-            since = max(since, datetime.now(timezone.utc) - timedelta(hours=72))
+        # Personal-author backfill has the same raw TTL as channel posts.
+        # Retention follows the original post, never its latest edit.
+        since = max(since, datetime.now(timezone.utc) - timedelta(hours=72))
         if until_id <= 0:
             await self.backend.advance_author_backfill(chat_id, self.owner, sender_id, previous, previous, True)
             return {'state': 'complete', 'sender_id': sender_id, 'processed': 0}
@@ -1030,7 +1054,7 @@ class TelegramCollector:
         if submission is not None:
             submission['payload'] = payload
         first = await self.backend.event(payload)
-        if first.get("state") in {"ready", "reconciled", "superseded", "ignored_stale", "deleted"} or not manifests or not supported:
+        if first.get("state") in {"ready", "reconciled", "superseded", "ignored_stale", "deleted", "expired"} or not manifests or not supported:
             return first, None
         payload["media_objects"] = list(first.get("media_objects") or [])
         return first, payload

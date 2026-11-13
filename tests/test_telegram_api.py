@@ -202,14 +202,9 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         }])
         response=await self.post(body)
         self.assertEqual(200,response.status_code,response.text)
-        message=await self.pool.fetchrow('SELECT raw_text,media_objects,raw_content_expired_at FROM v2_expert_messages')
-        self.assertEqual('',message['raw_text'])
-        self.assertEqual([],message['media_objects'])
-        self.assertIsNotNone(message['raw_content_expired_at'])
-        event=await self.pool.fetchrow('SELECT content,media_objects FROM v2_telegram_events')
-        self.assertEqual(({},[]),tuple(event))
-        job=await self.pool.fetchrow('SELECT state,last_error FROM v2_analysis_jobs')
-        self.assertEqual(('failed','raw_content_expired'),tuple(job))
+        self.assertEqual('expired',response.json()['state'])
+        for table in ['v2_expert_messages','v2_telegram_events','v2_analysis_jobs']:
+            self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM '+table))
         self.assertEqual([], (await self.client.get('/internal/telegram/pending')).json()['items'])
         self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_raw_retention_media'))
 
