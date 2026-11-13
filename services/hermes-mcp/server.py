@@ -13,7 +13,7 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 API_URL = os.environ.get("PLATFORM_INTERNAL_API", "http://api:8080/internal/mcp").rstrip("/")
 API_TOKEN = os.environ.get("EXPERT_MCP_TOKEN", "")
@@ -33,6 +33,10 @@ def market_table_view(value):
     """Factor repeated quote keys only; every row remains exactly recoverable."""
     if not isinstance(value, dict):
         return value
+    if isinstance(value.get('items'), list) and all(
+            isinstance(item, dict) and 'index' in item for item in value['items']):
+        return value | {'items': [item | {'result': market_table_view(item['result'])}
+            if isinstance(item.get('result'), dict) else item for item in value['items']]}
     if isinstance(value.get('market_result'), dict):
         child = market_table_view(value['market_result'])
         if child is not value['market_result']:
@@ -99,6 +103,7 @@ INTENT_ARGUMENT_DESCRIPTIONS = {
 # These profiles are used with the complete, preloaded expert-review skill.
 # Only descriptions change: validation schemas and business calls stay native.
 BUDGET_TOOL_DESCRIPTIONS = {
+    'review_match_batch': 'expert-review多场明确来源首选：一次提交最多6个不同对阵，内部2路连续分页、唯一绑定、读盘并立即精确录入；复用每项原生回执。双方、可读联赛、期间、玩法及原文证据先确认，不从库存补字段；歧义/无盘逐项未解决。',
     'search_matches': 'expert-review已预载，勿重复skill_view。同场查询只调用一次。查全部阶段并连续翻页；传原文双方、sport及原始日期。唯一活动绑定可合并读盘；明确单项total/期间/方向/线时record_source_intent=true，以record_result为准。未知期间不录入。',
     'resolve_match': 'expert-review已预载；用完整search_key及双方/联赛/时间消歧，已绑定不重做。明确单项total可合并读盘录入，以record_result为准；非活动不读盘。',
     'list_match_markets': 'expert-review已预载；读取已唯一活动绑定的盘口，先声明来源期间。让球按selection_line，line筛选用原生线。完整零库存停止重读；部分/筛选零命中有据再放宽。',
@@ -200,6 +205,40 @@ class ExpertPick(BaseModel):
     confidence: float = Field(default=0.5, ge=0, le=1)
 
 
+class SourceMatchIntent(BaseModel):
+    """A bounded source claim; only native operations can confirm or accept it."""
+    model_config = {'extra': 'forbid'}
+    team_a: str = Field(min_length=1, max_length=160, description='原文第一支球队，保留梯队/年龄/性别；不是从候选补造。')
+    team_b: str = Field(min_length=1, max_length=160, description='原文第二支球队，来源顺序不等于系统主客。')
+    sport: str = Field(min_length=1, max_length=40)
+    competition_query: str | None = Field(default=None, max_length=160, description='来源可读联赛须保留，避免真实比赛与电子赛同名歧义；未知才省略。')
+    from_utc: str = Field(min_length=1, max_length=40)
+    to_utc: str = Field(min_length=1, max_length=40)
+    market_kind: str = Field(min_length=1, max_length=80)
+    period: Literal['full_time', 'first_half', 'second_half']
+    source_periods: Annotated[list[Literal['full_time', 'first_half', 'second_half']], Field(min_length=1, max_length=3)]
+    market_query: str | None = Field(default=None, max_length=120, description='大小球原表达，如大2.5/3；让球不填此筛选。')
+    selection_team: Literal['team_a', 'team_b'] | None = Field(default=None, description='让球来源明确选哪一支原文队伍；使用team_a或team_b，不假设主客。')
+    selection_line: Decimal | None = Field(default=None, max_digits=8, decimal_places=3,
+        multiple_of=Decimal('.25'), allow_inf_nan=False, description='来源所选球队带符号线；受让为正、让球为负，不填系统主队口径。')
+    evidence_text: str = Field(min_length=1, max_length=3000)
+
+    @model_validator(mode='after')
+    def explicit_scope(self):
+        if (not self.team_a.strip() or not self.team_b.strip() or self.team_a.strip() == self.team_b.strip()
+                or not self.evidence_text.strip() or self.period not in self.source_periods):
+            raise ValueError('完整来源双方、证据及首读前期间清单为必需，未知项用单场工具保留未解决')
+        if self.market_kind == 'handicap':
+            if self.selection_team is None or self.selection_line is None or self.market_query is not None:
+                raise ValueError('让球需要原文所选队伍及带符号selection_line，不传market_query')
+        elif self.market_kind == 'total':
+            if not self.market_query or self.selection_team is not None or self.selection_line is not None:
+                raise ValueError('大小球需要来源market_query，不使用让球选择字段')
+        elif self.selection_team is not None or self.selection_line is not None:
+            raise ValueError('其它玩法不支持自动按所选方线录入')
+        return self
+
+
 async def _post(path: str, payload: dict) -> dict:
     global pending_market_requests
     if path not in {'list_match_markets', 'record_expert_signals'}:
@@ -287,7 +326,9 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
                               market_query: str | None = None,
                               record_source_intent: bool = False,
                               evidence_text: str | None = None,
-                              source_periods: SourcePeriods = None) -> dict:
+                              source_periods: SourcePeriods = None,
+                              source_selection: str | None = None,
+                              source_selection_line: Decimal | None = None) -> dict:
     """Compose existing guarded operations, never derive a fixture identity."""
     if not isinstance(resolution, dict) or resolution.get('resolved') is not True:
         return result
@@ -324,7 +365,10 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
     combined = {**result, 'market_result': markets}
     if not record_source_intent:
         return combined
-    quote = _unique_source_total(markets, fixture['id'], market_kind, period)
+    quote = (_unique_source_handicap(markets, fixture['id'], period,
+                                    source_selection, source_selection_line)
+             if market_kind == 'handicap' else
+             _unique_source_total(markets, fixture['id'], market_kind, period))
     if quote is None:
         return combined | {'source_intent_recording': {
             'attempted': False, 'reason': 'no_unique_source_option'}}
@@ -402,6 +446,268 @@ def _unique_source_total(markets, fixture_id, market_kind, period):
     except (InvalidOperation, ValueError):
         return None
     return quote
+
+
+def _unique_source_handicap(markets, fixture_id, period, selection, selection_line):
+    """Use the native selected-side line, never negate or reinterpret line."""
+    if not isinstance(markets, dict) or selection not in {'home', 'away'} or selection_line is None:
+        return None
+    if not isinstance(markets.get('fixture'), dict) or markets['fixture'].get('id') != fixture_id:
+        return None
+    scope, coverage, rows = (markets.get(key) for key in ('market_filter', 'market_coverage', 'markets'))
+    if (not isinstance(scope, dict) or not isinstance(coverage, dict) or not isinstance(rows, list)
+            or scope.get('market_kind') != 'handicap' or scope.get('period') != period
+            or scope.get('market_query') or scope.get('line') is not None
+            or scope.get('selection') not in (None, selection)
+            or coverage.get('complete_for_filter') is not True
+            or type(coverage.get('matched_quotes')) is not int
+            or coverage['matched_quotes'] != len(rows)
+            or type(coverage.get('returned_quotes')) is not int
+            or coverage.get('returned_quotes') != len(rows)):
+        return None
+    matches = []
+    for row in rows:
+        if (not isinstance(row, dict) or row.get('market_kind') != 'handicap'
+                or row.get('period') != period or row.get('selection') != selection
+                or row.get('fixture_id', fixture_id) != fixture_id):
+            continue
+        try:
+            line = Decimal(str(row.get('selection_line')))
+        except (InvalidOperation, ValueError, TypeError):
+            continue
+        if line.is_finite() and line == selection_line:
+            matches.append(row)
+    if len(matches) != 1:
+        return None
+    quote = matches[0]
+    return (quote if quote.get('status') == 'active' and quote.get('can_record') is True
+            and isinstance(quote.get('quote_id'), str) and quote['quote_id'] else None)
+
+
+async def _review_batch_item(review_id, attempt_id, item):
+    result = None
+    cursor = None
+    candidates = []
+    # Native search owns the candidate snapshot and verifies every next_cursor.
+    # An unusually large source-name scope remains explicitly incomplete.
+    for page_index in range(20):
+        try:
+            page_result = await _post('search_matches', {
+                'review_id': review_id, 'attempt_id': attempt_id,
+                'team_query': item.team_a, 'team_a': item.team_a, 'team_b': item.team_b,
+                'phase': 'all', 'competition_query': item.competition_query, 'sport': item.sport,
+                'from_utc': item.from_utc, 'to_utc': item.to_utc, 'cursor': cursor, 'page_size': 100})
+        except ToolError as exc:
+            if result is None:
+                raise
+            raise ToolError(json.dumps({'completed_receipt': result,
+                'failed_operation': 'search_matches', 'error': str(exc),
+                'recovery': '仅同一活动任务沿回执next_cursor继续；未完整翻页不读盘、不重新首查。'},
+                ensure_ascii=False)) from None
+        result = page_result
+        page = result.get('items')
+        if not isinstance(page, list) or len(page) > 100:
+            return result | {'batch_unresolved': 'invalid_native_page'}
+        candidates.extend(page)
+        result = result | {'items': list(candidates), 'batch_candidate_pages': page_index + 1}
+        cursor = result.get('next_cursor')
+        if result.get('search_complete') is True and cursor is None:
+            resolution = result.get('resolution') or {}
+            sides = resolution.get('source_team_sides') or {}
+            if not isinstance(sides, dict):
+                sides = {}
+            selected = sides.get(item.selection_team)
+            can_select = item.market_kind == 'total' or (
+                item.market_kind == 'handicap' and set(sides) == {'team_a', 'team_b'}
+                and all(isinstance(side, str) for side in sides.values())
+                and set(sides.values()) == {'home', 'away'})
+            return await _with_bound_markets(result, resolution, review_id, attempt_id,
+                item.market_kind, item.period, market_query=item.market_query,
+                record_source_intent=can_select, evidence_text=item.evidence_text,
+                source_periods=item.source_periods, source_selection=selected,
+                source_selection_line=item.selection_line)
+        if not isinstance(cursor, str) or not cursor:
+            return result | {'batch_unresolved': 'invalid_or_incomplete_native_cursor'}
+    return result | {'batch_unresolved': 'pagination_budget_exceeded'}
+
+
+def _batch_result_view(result, item):
+    """Present native receipts and source-specific rows, never a fake inventory.
+
+    The native API has already persisted every complete search/market response.
+    This view is deliberately different from a native list_match_markets result.
+    """
+    def compact_rows(rows):
+        if not rows:
+            return []
+        if not all(isinstance(row, dict) and set(row) == set(rows[0]) for row in rows):
+            return rows
+        shared = {key: rows[0][key] for key in rows[0]
+                  if all(row[key] == rows[0][key] for row in rows)}
+        columns = sorted(set(rows[0]) - set(shared))
+        return {'encoding': 'shared-column-rows-v1', 'shared': shared,
+                'columns': columns, 'rows': [[row[key] for key in columns] for row in rows],
+                'decoding': '每行先按columns对应，再合并shared，完整恢复一条原生记录；不得跨行混用编号或状态。'}
+
+    def fixture_view(fixture):
+        return {key: fixture[key] for key in (
+            'id', 'sport', 'competition_name', 'home_team', 'away_team', 'kickoff_at',
+            'phase', 'realtime_eligible', 'eligibility_reason', 'match_state', 'clock_minute',
+            'home_score', 'away_score') if key in fixture}
+
+    def size(value):
+        return len(json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False))
+
+    if not isinstance(result, dict):
+        raise ToolError('批量原生响应不是对象；结果未知，禁止盲重试')
+    view = {key: result[key] for key in (
+        'review_id', 'attempt_id', 'search_key', 'search_complete', 'next_cursor',
+        'total_candidates', 'batch_candidate_pages', 'batch_unresolved',
+        'source_intent_recording', 'record_result') if key in result}
+    presentation = {'kind': 'source-selection-view-v1',
+                    'native_evidence': '完整原生检索、读盘与录入回执已由API持久化；此处是来源选择展示，不是完整库存。'}
+    resolution = result.get('resolution')
+    if isinstance(resolution, dict):
+        view['resolution'] = dict(resolution)
+        if isinstance(resolution.get('fixture'), dict):
+            view['resolution']['fixture'] = fixture_view(resolution['fixture'])
+        if isinstance(resolution.get('matching_candidates'), list):
+            # All disambiguation candidates remain available, losslessly.
+            view['resolution']['matching_candidates'] = compact_rows(resolution['matching_candidates'])
+    candidates = result.get('items')
+    if isinstance(candidates, list):
+        shown = candidates[:3]
+        view['items'] = [fixture_view(row) for row in shown if isinstance(row, dict)]
+        presentation['candidates'] = {'native_returned_count': len(candidates),
+            'displayed_count': len(view['items']), 'items_complete': len(candidates) == len(view['items']),
+            'native_search_complete': result.get('search_complete') is True,
+            'fields_projected': True, 'not_a_no_match_claim': True}
+    if isinstance(result.get('next_search_guidance'), dict):
+        view['next_search_guidance'] = result['next_search_guidance']
+    markets = result.get('market_result')
+    if isinstance(markets, dict):
+        scope = markets.get('market_filter')
+        scope = scope if isinstance(scope, dict) else {}
+        sides = resolution.get('source_team_sides') if isinstance(resolution, dict) else None
+        selection = sides.get(item.selection_team) if isinstance(sides, dict) else None
+        wanted_line = item.selection_line
+        known_scope = item.market_kind == 'handicap' and selection in {'home', 'away'} and wanted_line is not None
+        if item.market_kind == 'total':
+            selection = scope.get('selection')
+            try:
+                wanted_line = Decimal(str(scope.get('line')))
+                known_scope = selection in {'over', 'under'} and wanted_line.is_finite()
+            except (InvalidOperation, ValueError, TypeError):
+                known_scope = False
+        rows = markets.get('markets')
+        rows = rows if isinstance(rows, list) else []
+        coverage = markets.get('market_coverage')
+        known_scope = (known_scope and isinstance(coverage, dict)
+            and coverage.get('complete_for_filter') is True
+            and coverage.get('matched_quotes') == len(rows) and coverage.get('returned_quotes') == len(rows)
+            and scope.get('market_kind') == item.market_kind and scope.get('period') == item.period)
+        if item.market_kind == 'handicap':
+            known_scope = known_scope and scope.get('selection') in (None, selection) and scope.get('line') is None
+        selected = []
+        for row in rows:
+            if (not known_scope or not isinstance(row, dict)
+                    or row.get('market_kind') != item.market_kind or row.get('period') != item.period
+                    or row.get('selection') != selection):
+                continue
+            try:
+                line = Decimal(str(row.get('selection_line')))
+            except (InvalidOperation, ValueError, TypeError):
+                continue
+            if line.is_finite() and line == wanted_line:
+                selected.append(row)
+        view['market_result'] = {
+            'native_market_filter': scope,
+            'native_market_coverage': markets.get('market_coverage'),
+            'native_counts': {'returned_quotes': len(rows), 'source_selection_quotes': len(selected)},
+            'source_selection_quotes': compact_rows(selected),
+            'presentation': {'kind': 'derived-source-selection', 'all_source_selection_states': known_scope,
+                'selection': selection if known_scope else None,
+                'selection_line': str(wanted_line) if known_scope else None,
+                'market_kind': item.market_kind, 'period': item.period,
+                'requires_manual_market_review': not known_scope,
+                'not_native_complete_inventory': True},
+        }
+        if isinstance(markets.get('fixture'), dict):
+            view['market_result']['fixture'] = fixture_view(markets['fixture'])
+        if isinstance(markets.get('refresh'), dict):
+            view['market_result']['refresh'] = {key: markets['refresh'][key]
+                for key in ('attempted', 'accepted', 'reason') if key in markets['refresh']}
+    view['presentation'] = presentation
+    # Six native inventories can individually fit 90K while their envelope
+    # cannot. Never make their successful/unknown receipts disappear into a
+    # framework spill file. Explicitly withhold a pathological display rather
+    # than returning a truncated inventory as complete.
+    if size(view) > 14400:
+        if 'items' in view:
+            view['items'] = []
+            presentation['candidates'].update(displayed_count=0, items_complete=False,
+                                               withheld_for_inline_budget=True)
+        if 'market_result' in view:
+            market = view['market_result']
+            market['source_selection_quotes'] = []
+            market['presentation'].update(all_source_selection_states=False,
+                requires_manual_market_review=True, withheld_for_inline_budget=True)
+            market['native_counts']['displayed_source_selection_quotes'] = 0
+        presentation['requires_manual_market_review'] = True
+    return view
+
+
+def _batch_error_view(error, item):
+    """Turn a composed JSON error into readable receipts without double escaping."""
+    try:
+        failure = json.loads(str(error))
+    except (ValueError, TypeError):
+        failure = None
+    if not isinstance(failure, dict):
+        return {'error': str(error)[:160], 'unresolved': True, 'native_outcome_unknown': True,
+                'retry_without_native_evidence': False}
+    view = {key: failure[key] for key in (
+        'failed_operation', 'market_read_succeeded', 'record_result_verified') if key in failure}
+    view.update(error=str(failure.get('error', '原生操作未完成'))[:160], unresolved=True,
+                native_outcome_unknown=failure.get('failed_operation') == 'record_expert_signals',
+                retry_without_native_evidence=False)
+    if isinstance(failure.get('completed_receipt'), dict):
+        view['completed_receipt'] = _batch_result_view(failure['completed_receipt'], item)
+    return view
+
+
+@mcp.tool()
+async def review_match_batch(review_id: str, attempt_id: str,
+                             items: Annotated[list[SourceMatchIntent], Field(min_length=1, max_length=6)]) -> dict:
+    """多场明确推荐首查一次提交，最多6个不同来源对阵、内部2路并发。逐项原生连续分页、唯一绑定、声明来源期间、读取当前盘口并立即精确录入total/handicap；未知字段不用此工具。带原文可读联赛，避免电子赛同名。让球selection_team指原文team_a/team_b，selection_line为所选球队带符号线，不猜主客或价格。其它玩法仅返回原生读盘，需继续核验。每项检查record_result；无接受回执不声称成功。"""
+    keys = [(item.sport.casefold(), frozenset((item.team_a.strip().casefold(), item.team_b.strip().casefold())))
+            for item in items]
+    if len(set(keys)) != len(keys):
+        raise ToolError('批量只接受不同来源对阵；同场多项复用单场工具及完整来源期间，不重复检索')
+    slots = asyncio.Semaphore(2)
+
+    async def run(index, item):
+        async with slots:
+            try:
+                result = await _review_batch_item(review_id, attempt_id, item)
+                return {'index': index, 'result': _batch_result_view(result, item)}
+            except ToolError as exc:
+                # A failed independent item cannot erase another committed
+                # receipt. Native composed errors preserve completed_receipt.
+                return {'index': index, **_batch_error_view(exc, item)}
+            except Exception as exc:
+                return {'index': index, 'error_class': type(exc).__name__,
+                        'unresolved': True, 'protocol_failure': True,
+                        'native_outcome_unknown': True, 'retry_without_native_evidence': False}
+
+    tasks = [asyncio.create_task(run(index, item)) for index, item in enumerate(items)]
+    try:
+        return {'items': await asyncio.gather(*tasks)}
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @mcp.tool()

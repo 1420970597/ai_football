@@ -40,13 +40,13 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
     async def rpc(self, method, params=None):
         return await self.client.post('/mcp', json={'jsonrpc':'2.0','id':1,'method':method,'params':params or {}})
 
-    async def test_authentication_and_only_four_tools(self):
+    async def test_authentication_and_only_bounded_review_tools(self):
         forbidden = await self.client.post('/mcp', headers={'Authorization':'Bearer invalid'}, json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
         self.assertEqual(401, forbidden.status_code)
         response = await self.rpc('tools/list')
         self.assertEqual(200, response.status_code, response.text)
         tools = response.json()['result']['tools']
-        self.assertEqual({'search_matches','resolve_match','list_match_markets','record_expert_signals'}, {t['name'] for t in tools})
+        self.assertEqual({'search_matches','resolve_match','list_match_markets','record_expert_signals','review_match_batch'}, {t['name'] for t in tools})
         for tool in tools:
             self.assertIn('attempt_id', tool['inputSchema']['required'])
         search = next(tool for tool in tools if tool['name'] == 'search_matches')
@@ -180,7 +180,7 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_search_optional_pair_schema_forwarding_and_resolution(self):
         tools = (await self.rpc('tools/list')).json()['result']['tools']
-        self.assertEqual(4, len(tools))
+        self.assertEqual(5, len(tools))
         tool = next(t for t in tools if t['name'] == 'search_matches')
         for key in ('team_a', 'team_b'):
             self.assertIn(key, tool['inputSchema']['properties'])

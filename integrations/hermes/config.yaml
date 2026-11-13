@@ -91,6 +91,7 @@ mcp_servers:
       resources: false
       prompts: false
       include:
+        - review_match_batch
         - search_matches
         - resolve_match
         - list_match_markets

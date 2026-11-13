@@ -112,6 +112,11 @@ def snapshot_result(kind, result, *, compact_markets=False):
             })
     elif kind == 'mcp_resolve_match':
         value = _project(result, {'resolved', 'reason', 'candidate_count', 'matching_candidates_complete'})
+        sides = result.get('source_team_sides')
+        if (isinstance(sides, dict) and set(sides) == {'team_a', 'team_b'}
+                and all(isinstance(side, str) for side in sides.values())
+                and set(sides.values()) == {'home', 'away'}):
+            value['source_team_sides'] = sides
         if 'matching_candidates' in result:
             if len(result['matching_candidates']) > DISAMBIGUATION_LIMIT:
                 _budget_error()

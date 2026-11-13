@@ -35,9 +35,9 @@ class MCPSourcePeriodScopeTests(unittest.IsolatedAsyncioTestCase):
     async def test_new_profile_requires_source_scope_on_all_market_capable_tools(self):
         self.client.headers['X-Football-Tool-Profile']='parallel-intent-v1'
         tools=(await self.rpc('tools/list')).json()['result']['tools']
-        self.assertEqual(4,len(tools))
+        self.assertEqual(5,len(tools))
         for tool in tools:
-            if tool['name']=='record_expert_signals':continue
+            if tool['name'] in {'record_expert_signals','review_match_batch'}:continue
             self.assertIn('source_periods',tool['inputSchema']['required'])
             self.assertNotIn('default',tool['inputSchema']['properties']['source_periods'])
 

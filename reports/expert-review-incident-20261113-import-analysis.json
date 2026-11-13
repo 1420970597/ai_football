@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "windows": [
+    {
+      "window_start": "2026-11-12T17:00:00Z",
+      "window_end": "2026-11-12T17:30:00Z",
+      "analysis_status": "partial",
+      "messages_examined": 34,
+      "unresolved_examined": 31,
+      "evidence_file": "/root/ai_football/.runtime/refactor-wt/web-ux/reports/expert-review-incident-20261113-accuracy.json",
+      "evidence_sha256": "74b30121312f3c28d638df5d63dd81f914680e704a6e035ae63b54ec0afcd8f8"
+    },
+    {
+      "window_start": "2026-11-12T17:30:00Z",
+      "window_end": "2026-11-12T18:00:00Z",
+      "analysis_status": "partial",
+      "messages_examined": 12,
+      "unresolved_examined": 11,
+      "evidence_file": "/root/ai_football/.runtime/refactor-wt/web-ux/reports/expert-review-incident-20261113-accuracy.json",
+      "evidence_sha256": "74b30121312f3c28d638df5d63dd81f914680e704a6e035ae63b54ec0afcd8f8"
+    },
+    {
+      "window_start": "2026-11-12T18:00:00Z",
+      "window_end": "2026-11-12T18:30:00Z",
+      "analysis_status": "complete",
+      "messages_examined": 7,
+      "unresolved_examined": 7,
+      "evidence_file": "/root/ai_football/.runtime/refactor-wt/web-ux/reports/expert-review-incident-20261113-accuracy.json",
+      "evidence_sha256": "74b30121312f3c28d638df5d63dd81f914680e704a6e035ae63b54ec0afcd8f8"
+    },
+    {
+      "window_start": "2026-11-12T18:30:00Z",
+      "window_end": "2026-11-12T19:00:00Z",
+      "analysis_status": "partial",
+      "messages_examined": 8,
+      "unresolved_examined": 6,
+      "evidence_file": "/root/ai_football/.runtime/refactor-wt/web-ux/reports/expert-review-incident-20261113-accuracy.json",
+      "evidence_sha256": "74b30121312f3c28d638df5d63dd81f914680e704a6e035ae63b54ec0afcd8f8"
+    }
+  ]
+}

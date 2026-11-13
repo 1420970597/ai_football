@@ -64,7 +64,18 @@ async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
     # the recommendation can be explained, but such a row is never eligible for
     # a new live signal.
     eligible = phase in {'scheduled', 'live'} and (bound is None or bound['stale_projection_at'] is None)
-    return {'resolved': True, 'fixture': {**projected, 'phase': phase,
+    # Preserve which source name proved each side; a composition must never
+    # assume that source order equals provider home/away order. Overlapping
+    # names can identify one fixture without proving a unique orientation.
+    source_sides = None
+    home_a = team_name_matches(body.team_a, projected['home_team'], projected.get('home_aliases', []), sport=projected.get('sport'))
+    away_a = team_name_matches(body.team_a, projected['away_team'], projected.get('away_aliases', []), sport=projected.get('sport'))
+    home_b = team_name_matches(body.team_b, projected['home_team'], projected.get('home_aliases', []), sport=projected.get('sport'))
+    away_b = team_name_matches(body.team_b, projected['away_team'], projected.get('away_aliases', []), sport=projected.get('sport'))
+    if (home_a and away_b) != (away_a and home_b):
+        source_sides = ({'team_a': 'home', 'team_b': 'away'} if home_a and away_b
+                        else {'team_a': 'away', 'team_b': 'home'})
+    return {'resolved': True, 'source_team_sides': source_sides, 'fixture': {**projected, 'phase': phase,
             'realtime_eligible': eligible,
             'eligibility_reason': None if eligible else
             ('source_stopped_reporting' if phase in {'scheduled', 'live'} else phase)}}

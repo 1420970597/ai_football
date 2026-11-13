@@ -1,0 +1,126 @@
+{
+  "schema": "expert-review-scheduler-incident-v1",
+  "incident_window_utc": ["2026-11-12T17:00:00Z", "2026-11-12T19:00:00Z"],
+  "incident_window_beijing": ["2026-11-13T01:00:00+08:00", "2026-11-13T03:00:00+08:00"],
+  "source_parent_commit": "d56666533721584046fd3192b8a81da677bad6c7",
+  "snapshot": {
+    "basename": "window-1700-1900.private.json",
+    "snapshot_at_utc": "2026-11-12T23:35:07.955305Z",
+    "read_only": true,
+    "tls": true,
+    "truncated": false,
+    "selection": "original posted OR first detected OR edited in the window",
+    "message_versions_total": 61,
+    "posted_in_window": 60,
+    "detected_in_window": 61,
+    "edited_in_window": 2,
+    "jobs": 56,
+    "unsupported_media_versions_without_jobs": 5,
+    "job_states": {"unresolved": 55, "succeeded": 1},
+    "deadline_exceeded_jobs": 4,
+    "other_unresolved_jobs": 51,
+    "signals": 1,
+    "interpretation": "Four deadlines do not explain all 55 unresolved jobs. Other unresolved conclusions require an independent intent and omission review; they are not all missed recommendations."
+  },
+  "observed_seconds": {
+    "detection_to_persist": {"n": 61, "p50": 0.007, "p95": 0.314, "max": 13.312},
+    "persist_to_job_approximate_media_ready": {"n": 56, "p50": 0, "p95": 0.925, "max": 1.775},
+    "persist_to_claim": {"n": 56, "p50": 0.118, "p95": 5.915, "max": 7.516},
+    "detection_to_claim_trace": {"n": 56, "p50": 0.253, "p95": 6.167, "max": 13.593},
+    "preflight": {"n": 56, "p50": 0.008, "p95": 0.064, "max": 0.076},
+    "completed_provider_total": {"n": 52, "p50": 4.114, "p95": 12.819, "max": 14.971},
+    "detection_to_conclusion_trace": {"n": 52, "p50": 4.878, "p95": 13.807, "max": 16.846},
+    "detection_to_deadline_trace": {"n": 4, "min": 20.230, "max": 20.509},
+    "mcp_search_matches": {"n": 14, "p50": 0.086, "max": 0.163},
+    "mcp_list_match_markets": {"n": 7, "p50": 0.746, "max": 1.377},
+    "mcp_resolve_match": {"n": 2, "p50": 0.025, "max": 0.153},
+    "mcp_record_expert_signals": {"n": 1, "max": 0.033}
+  },
+  "capacity_evidence": {
+    "deployed_worker_slots": 4,
+    "deployed_expert_concurrency_floor": 2,
+    "deployed_historical_concurrency": 0,
+    "database_expert_limit_seen_in_all_claims": 1,
+    "effective_per_expert_limit": "GREATEST(database limit 1, configured floor 2) = 2",
+    "observed_maximum_global_review_intervals": 2,
+    "anonymous_experts": [
+      {"label": "E1", "jobs": 3, "maximum_review_intervals": 1},
+      {"label": "E2", "jobs": 45, "maximum_review_intervals": 2},
+      {"label": "E3", "jobs": 4, "maximum_review_intervals": 1},
+      {"label": "E4", "jobs": 4, "maximum_review_intervals": 1}
+    ],
+    "proof_of_avoidable_overtaking": {
+      "job_prefix": "8c57d0d0",
+      "persist_to_claim_seconds": 6.117,
+      "same_expert_two_active_intervals_during_wait_seconds": 6.014,
+      "maximum_global_review_intervals_during_wait": 2,
+      "later_detected_jobs_admitted_during_wait": 2,
+      "effect": "The hot expert's allocation was full while two of the four global worker slots were unused. Newer messages overtook a waiting message under posted_at DESC. The 60-second aging guard could not help a 20-second budget."
+    },
+    "limits": "Intervals end at conclusion or deadline trace, so they exclude the bounded post-result session cleanup. This is a measured scheduling cause, not proof that raising model concurrency would be safe."
+  },
+  "deadline_examples": [
+    {"job_prefix": "e17644aa", "detection_to_claim_s": 0.027, "tool_trace_detection_offsets_s": [14.552, 14.536], "tool_kinds": ["search", "search"], "tool_elapsed_s": [0.150, 0.163], "deadline_trace_s": 20.331, "interpretation": "Fast admission, slow model work before the first search batch; no completed record evidence."},
+    {"job_prefix": "8c57d0d0", "detection_to_claim_s": 6.167, "tool_trace_detection_offsets_s": [16.273, 16.273, 17.035, 17.086], "tool_kinds": ["search", "search", "markets", "markets"], "tool_elapsed_s": [0.027, 0.029, 0.746, 0.035], "deadline_trace_s": 20.334, "interpretation": "Expert allocation and overtaking consumed about six seconds before model work. Both bound market groups had already been read before the deadline; source accuracy still requires separate review."},
+    {"job_prefix": "76c7a5bd", "detection_to_claim_s": 0.025, "tool_trace_detection_offsets_s": [8.352, 8.368, 15.664, 15.714], "tool_kinds": ["search", "search", "markets", "markets"], "tool_elapsed_s": [0.102, 0.108, 1.377, 0.031], "deadline_trace_s": 20.230, "interpretation": "No queue bottleneck. Model work between search and market stages consumed the budget. This is a later revision of an older posted message, not a 5418-second collector delivery claim."},
+    {"job_prefix": "4312bf9c", "detection_to_claim_s": 0.132, "tool_trace_detection_offsets_s": [4.298, 11.397, 15.981, 19.657], "tool_kinds": ["search_zero", "search_100_of_109", "search_last_9", "resolve"], "tool_elapsed_s": [0.112, 0.063, 0.007, 0.153], "deadline_trace_s": 20.509, "interpretation": "Complete candidate pagination and unique resolution consumed multiple model turns; unique resolution occurred just before the cutoff, with no record evidence."}
+  ],
+  "remote_cleanup_and_model_parameters": {
+    "worker_http_status_counts_17_to_19_utc": {"200": 185, "409": 4, "404": 8},
+    "worker_cleanup_failure_logs": 0,
+    "worker_review_failure_logs": 0,
+    "observed_http_429": 0,
+    "hermes_log_lines_retained_in_window": 9,
+    "orphaned_remote_run_or_429_cause_proven": false,
+    "deployed_hermes_model": "deepseek-v4.1-flash",
+    "deployed_reasoning_override": false,
+    "completed_prompt_tokens": {"n": 52, "p50": 17838, "p95": 59066, "max": 91177},
+    "completed_completion_tokens": {"n": 52, "p50": 120, "max": 921},
+    "caveat": "No cleanup warnings and no 429 in retained logs do not prove every canonical remote run stopped. No real model probe or upstream parameter/configuration change was performed."
+  },
+  "change": {
+    "scope": "worker _claim_from_lane waiting order only, plus dedicated isolated tests",
+    "known_detection_order": "earliest detected_at first, then job.created_at FIFO for equal detection times",
+    "legacy_compatibility": "Keep the original 60-second aging priority and NULL-detection newest-posted ordering. NULL remains unknown and is never replaced with an invented detection time.",
+    "unchanged": ["source and expert round robin", "global worker capacity 4", "effective expert capacity 2", "running lease recovery precedence", "posting-age lanes", "current-price and unique-identity safeguards", "model and upstream configuration"],
+    "goal": "Eliminate later-arrival overtaking within a fair source/expert pair without increasing simultaneous model or database demand.",
+    "not_a_claim": "EDF ordering alone cannot guarantee every recommendation is identified within 20 seconds, or that every expired message was recordable."
+  },
+  "verification": {
+    "status": "isolated_validation_passed_not_deployed",
+    "source_frozen_in_docker": true,
+    "runner_cpu": 0.3,
+    "runner_memory_mib": 256,
+    "dedicated_postgresql_cpu": 0.3,
+    "dedicated_postgresql_memory_mib": 256,
+    "uses_production_database": false,
+    "uses_live_model_or_orders": false,
+    "suite_selection": ["test_review_scheduler_deadlines", "test_review_freshness_scheduler", "test_review_worker", "test_review_worker_runtime", "test_review_worker_cleanup", "test_review_detection_deadline"],
+    "artifact_directory": ".runtime/expert-review-incident-20261113/scheduler-tests",
+    "exit_code": 0,
+    "tests": 139,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "unittest_seconds": 76.942,
+    "evidence_runner_seconds_including_discovery": 80.142,
+    "committed_source_verified": false,
+    "tested_source_sha256": {
+      "services/api/app/worker.py": "68168b7400d6c1bcee237b3603c6c3b90a228f66269e9f42f62c86016ee72bec",
+      "tests/test_review_scheduler_deadlines.py": "aee4eb1dae30a745f689a53aeec6d2b4d3fe41e00db788ee77f40b962882da8c"
+    },
+    "static_git_diff_check_exit_code": 0,
+    "actual_test_command": "docker run --rm --name ai-football-edf-suite-20261113 --user 0 --cpus 0.3 --memory 256m --network ai-football-edf-20261113 -e PYTHONDONTWRITEBYTECODE=1 -e SOURCE_COMMIT=d56666533721584046fd3192b8a81da677bad6c7 -e SOURCE_IS_CLEAN=false -e TEST_DATABASE_ADMIN_URL=postgresql://postgres@ai-football-v2-pgverify:5432/postgres --mount type=bind,source=/root/ai_football/.runtime/refactor-wt/web-ux,target=/source,readonly --mount type=bind,source=/root/ai_football/.runtime/expert-review-incident-20261113/scheduler-tests,target=/evidence ai-football-verifier:v2.0.0-dev python /source/infra/test/frozen_suite.py test_review_scheduler_deadlines test_review_freshness_scheduler test_review_worker test_review_worker_runtime test_review_worker_cleanup test_review_detection_deadline",
+    "dedicated_postgresql_image": "postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36",
+    "cleanup_command": "docker rm -f ai-football-edf-pg-20261113 && docker network rm ai-football-edf-20261113",
+    "cleanup_exit_code": 0,
+    "next_step": "Parent integration and production release decision. This isolated pass does not establish production omission rate or the 20-second success SLA."
+  },
+  "measurement_limits": [
+    "A trace created_at is a PostgreSQL transaction timestamp, not an observed COMMIT acknowledgment. Concurrent trace order can differ from numeric timestamps.",
+    "Job creation after message persistence approximates media-ready admission but is not a separately recorded media completion clock.",
+    "Posted-to-detected age includes edited and recovered old messages. It must not be presented as pure Telegram transport delay.",
+    "Successful fast conclusions are selected survivors of the deadline policy; deadline failures are not successes in the 20-second recognition metric.",
+    "Combined MCP call arguments are not all present in child API trace parameters. Their absence cannot prove the model failed to use an existing combined tool."
+  ]
+}

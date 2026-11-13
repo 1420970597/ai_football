@@ -65,7 +65,7 @@ class MCPDescriptionBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(expected, actual)
 
     def assert_only_top_descriptions_changed(self, primary, parallel):
-        self.assertEqual(4, len(primary))
+        self.assertEqual(5, len(primary))
         self.assertEqual([t['name'] for t in primary], [t['name'] for t in parallel])
         for original, compact in zip(primary, parallel):
             self.assertEqual({k: v for k, v in original.items() if k != 'description'},
@@ -182,6 +182,10 @@ class MCPDescriptionBudgetTests(unittest.IsolatedAsyncioTestCase):
                                                  if k != 'X-Football-Tool-Profile'}}
         primary_without_profile = {**primary, 'headers': {
             k: v for k, v in primary['headers'].items() if k != 'X-Football-Tool-Profile'}}
+        self.assertIn('review_match_batch', primary['tools']['include'])
+        self.assertNotIn('review_match_batch', parallel['tools']['include'])
+        primary_without_profile['tools'] = {**primary['tools'], 'include': [
+            name for name in primary['tools']['include'] if name != 'review_match_batch']}
         self.assertEqual(primary_without_profile, without_profile)
 
     async def test_explicit_intent_is_opt_in_and_preserves_nullable_argument_types(self):

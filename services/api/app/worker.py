@@ -157,12 +157,15 @@ def _lane_condition(mode, realtime_parameter='$2', fresh_parameter='$3'):
 
 async def _claim_from_lane(conn, mode):
     lane = _lane_condition(mode)
-    # Keep the lane's original posting-age eligibility. Within that lane,
-    # sustained newer arrivals must not repeatedly overtake an already waiting
-    # message. Running lease recovery still sorts before either queued group.
+    # Keep posting-age lanes and legacy aging, but known detections have one
+    # absolute 20-second budget. Order those by earliest detection, rather than
+    # letting newer posts repeatedly overtake them until the old 60s threshold.
+    # NULL detections retain legacy ordering; lease recovery still sorts first.
     waiting_order = (
         "CASE WHEN j.state<>'running' AND j.created_at<=statement_timestamp()"
         f"-({FRESH_AGING_THRESHOLD_SECONDS}*interval '1 second') THEN j.created_at END ASC NULLS LAST,"
+        "CASE WHEN j.state<>'running' THEN m.detected_at END ASC NULLS LAST,"
+        "CASE WHEN j.state<>'running' AND m.detected_at IS NOT NULL THEN j.created_at END ASC NULLS LAST,"
         if mode in {'fresh_real_time', 'real_time'} else ''
     )
     query = claim_pair_and_job_query(lane, ELIGIBLE_MESSAGE, waiting_order, _turn_advance_ctes(
