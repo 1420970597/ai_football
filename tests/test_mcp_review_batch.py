@@ -239,6 +239,27 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
         tools = (await self.rpc('tools/list')).json()['result']['tools']
         schema = next(tool for tool in tools if tool['name'] == 'review_match_batch')['inputSchema']
         self.assertIn('competition_query', schema['$defs']['SourceMatchIntent']['required'])
+        for token in ('handicap', 'null'):
+            self.assertIn(token, schema['$defs']['SourceMatchIntent']['properties']['market_query']['description'])
+
+    async def test_empty_optional_query_is_absence_without_losing_handicap_scope(self):
+        for empty in ('', '  \t'):
+            calls, _ = await self.install()
+            result = await self.call([self.item(market_query=empty)])
+            self.assertTrue(result['items'][0]['result']['record_result']['accepted'])
+            market = next(body for path, body in calls if path == 'list_match_markets')
+            self.assertNotIn('market_query', market)
+            recorded = next(body for path, body in calls if path == 'record_expert_signals')
+            self.assertTrue(recorded['signals'][0]['quote_id'].endswith(':away:0.5'))
+
+    async def test_empty_total_query_does_not_guess_a_source_line(self):
+        for empty in ('', '  \t'):
+            calls, _ = await self.install()
+            response = await self.rpc('tools/call', {'name': 'review_match_batch', 'arguments': {
+                'review_id': 'job', 'attempt_id': 'active', 'items': [self.item(
+                    market_kind='total', market_query=empty, selection_team=None, selection_line=None)]}})
+            self.assertTrue(response.json()['result'].get('isError'))
+            self.assertEqual([], calls)
 
     async def test_cancellation_drains_active_and_waiting_items(self):
         entered = asyncio.Event()

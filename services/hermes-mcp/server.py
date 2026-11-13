@@ -139,6 +139,9 @@ def budget_schema_descriptions(schema):
         if (name in BUDGET_ARGUMENT_DESCRIPTIONS
                 and ('description' in prop or name in {'market_query', 'evidence_text'})):
             prop['description'] = BUDGET_ARGUMENT_DESCRIPTIONS[name]
+    properties = result.get('properties', {})
+    if all(name in properties for name in ('market_query', 'selection_team', 'selection_line')):
+        properties['market_query']['description'] = '仅total填原表达；handicap省略或null，使用selection_team/selection_line。'
     return result
 
 
@@ -221,7 +224,7 @@ class SourceMatchIntent(BaseModel):
     market_kind: str = Field(min_length=1, max_length=80)
     period: Literal['full_time', 'first_half', 'second_half']
     source_periods: Annotated[list[Literal['full_time', 'first_half', 'second_half']], Field(min_length=1, max_length=3)]
-    market_query: str | None = Field(default=None, max_length=120, description='大小球原表达，如大2.5/3；让球不填此筛选。')
+    market_query: str | None = Field(default=None, max_length=120, description='仅total填大小球原表达；handicap必须省略或null，使用selection_team/selection_line，不同时填此筛选。')
     selection_team: Literal['team_a', 'team_b'] | None = Field(default=None, description='让球来源明确选哪一支原文队伍；使用team_a或team_b，不假设主客。')
     selection_line: Decimal | None = Field(default=None, max_digits=8, decimal_places=3,
         multiple_of=Decimal('.25'), allow_inf_nan=False, description='来源所选球队带符号线；受让为正、让球为负，不填系统主队口径。')
@@ -229,6 +232,11 @@ class SourceMatchIntent(BaseModel):
 
     @model_validator(mode='after')
     def explicit_scope(self):
+        # Some clients serialize optional text as an empty string. It carries
+        # no market instruction; normalize only that representation of absence.
+        # A nonempty, conflicting handicap query must still fail closed.
+        if isinstance(self.market_query, str) and not self.market_query.strip():
+            self.market_query = None
         if (not self.team_a.strip() or not self.team_b.strip() or self.team_a.strip() == self.team_b.strip()
                 or not self.evidence_text.strip() or self.period not in self.source_periods):
             raise ValueError('完整来源双方、证据及首读前期间清单为必需，未知项用单场工具保留未解决')
