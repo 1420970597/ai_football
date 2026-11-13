@@ -1,7 +1,7 @@
 {
   "services": {
     "api": {
-      "image": "sha256:eec79eb0213eab6f6b0592aa450625eb356a5c02c86490ecd2c5f38dcfe37dad"
+      "image": "sha256:f4f5aa124ea399e3251f0ef3fa80eaf31c9ed9b96f722b797ae11d7a9b226c92"
     },
     "review-worker": {
       "image": "sha256:519a4ca4078eb836c3f9bf7ec22ce45ec6c1c426c338240f0293f18899607a08"
