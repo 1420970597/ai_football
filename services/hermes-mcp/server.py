@@ -112,15 +112,15 @@ BUDGET_TOOL_DESCRIPTIONS = {
 BUDGET_ARGUMENT_DESCRIPTIONS = {
     'cursor': '逐字复制本查询next_cursor；首查不传，连续读至空。',
     'sport': '来源实际项目，如football/basketball；未知才省略。',
-    'team_a': '来源明确可读的第一队；双方已知时与team_b首次成对传入。',
-    'team_b': '来源明确可读的第二队；不从候选补造。',
+    'team_a': '来源明确第一队；与team_b成对。',
+    'team_b': '来源明确第二队，不从候选补造。',
     'competition_query': '来源可读联赛；未知才省略。',
     'selection_team': '所选原文team_a或team_b；不是系统主客。',
     'selection_line': '所选球队带符号线：受让正、让球负。',
     'read_markets': '来源明确玩法/期间时true；唯一活动绑定合并读盘并复用。',
     'market_kind': '来源玩法，如total/handicap；不从赔率猜。',
-    'period': '来源明确的full_time/first_half/second_half；未知不猜。',
-    'source_periods': '来源明确的全部期间，首读一次列全；未知[]。period仅筛选，读盘后禁扩充。',
+    'period': '来源明确期间；未知不猜。',
+    'source_periods': '来源全部期间首读前一次声明；未知[]，读盘后禁扩充。',
     'market_query': '逐字来源方向/线值，如小3.5、大0.5/1；不比较倍率。',
     'record_source_intent': '明确单项total/期间/方向/线时true，同时read_markets=true及evidence_text；检查record_result。',
     'evidence_text': '本项原文/所选原图证据；不得按库存补造期间、方向或线。',
@@ -179,8 +179,7 @@ class CompactMCPServer(MCPServer):
                         if tool.name == 'review_match_batch' else
                         '仅供不同对阵独立并行，勿重复主连接同场查询。' + updates['description']
                         if tool.name == 'search_matches' else
-                        f'独立对阵并行调用football.{tool.name}；expert-review已预载，'
-                        '参数及校验同主工具，勿重复同场操作。')
+                        f'expert-review独立对阵并行，参数及校验同football.{tool.name}。')
                 updates['input_schema'] = budget_schema_descriptions(
                     updates.get('input_schema', tool.input_schema))
             result.append(tool.model_copy(update=updates) if updates else tool)
