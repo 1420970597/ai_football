@@ -68,10 +68,17 @@ class AdvanceInput(ClaimInput):
 
 
 class AuthorBackfillInput(ClaimInput):
-    sender_id: str = Field(pattern=r'^[1-9][0-9]{0,18}$')
+    sender_id: str = Field(pattern=r'^-?[1-9][0-9]{0,18}$')
     previous_cursor: int = Field(ge=0)
     cursor: int = Field(ge=0)
     complete: bool = False
+
+    @field_validator('sender_id')
+    @classmethod
+    def stable_sender_range(cls, value):
+        if not -(2 ** 63) <= int(value) < 2 ** 63:
+            raise ValueError('sender identity is outside signed 64-bit range')
+        return value
 
 
 class ObserveInput(ClaimInput):
@@ -184,8 +191,11 @@ async def sync_directory(body: DirectoryInput, request: Request):
         if profile.sender_id in seen or not profile.nickname.strip() or any(ord(c)<32 for c in profile.nickname):
             raise HTTPException(422, '管理员目录不完整或包含重复身份')
         seen.add(profile.sender_id)
-        if item.get('admin_kind') not in {'owner', 'administrator'}:
+        if item.get('admin_kind') not in {'owner', 'administrator', 'channel'}:
             raise HTTPException(422, '管理员角色无效')
+        if item['admin_kind'] == 'channel' and (profile.sender_id != body.chat_id
+                                               or not profile.sender_id.startswith('-')):
+            raise HTTPException(422, '频道身份须为该来源自身的稳定编号')
         safe_admins.append({'sender_id': profile.sender_id, 'nickname': profile.nickname.strip(),
             'username': str(item.get('username') or '')[:80], 'admin_kind': item['admin_kind'],
             'has_avatar': bool(item.get('has_avatar')), 'avatar_state': 'not_loaded' if item.get('has_avatar') else 'absent'})
@@ -595,7 +605,8 @@ async def collector_sources(request: Request):
         "'until_id',se.backfill_until_id,'since',se.backfill_since) ORDER BY se.added_at,e.id) "
         "FILTER (WHERE se.enabled AND e.enabled AND se.backfill_completed_at IS NULL "
         "AND se.backfill_since IS NOT NULL AND se.backfill_cursor>0 "
-        "AND e.platform_sender_id ~ '^[1-9][0-9]{0,18}$'),'[]'::jsonb) AS author_backfills "
+        "AND (e.platform_sender_id ~ '^[1-9][0-9]{0,18}$' "
+        "OR e.platform_sender_id=s.platform_chat_id)),'[]'::jsonb) AS author_backfills "
         "FROM v2_expert_sources s LEFT JOIN v2_source_experts se ON se.source_id=s.id "
         "LEFT JOIN v2_experts e ON e.id=se.expert_id WHERE s.enabled GROUP BY s.id ORDER BY s.id"
     )

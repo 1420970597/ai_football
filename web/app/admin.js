@@ -555,7 +555,7 @@ async function listAdmins(append = false, scope = "admins") {
       .map(
         (e) => {
           const username = e.username ? `@${e.username}` : "无用户名";
-          const role = e.admin_kind === "owner" ? "群主" : e.admin_kind === "administrator" ? "管理员" : e.admin_kind === "member" ? "普通成员" : "身份未确认";
+          const role = e.admin_kind === "channel" ? "频道身份（无个人ID）" : e.admin_kind === "owner" ? "群主" : e.admin_kind === "administrator" ? "管理员" : e.admin_kind === "member" ? "普通成员" : "身份未确认";
           const avatar = e.has_avatar ? "头像可用" : e.avatar_state === "absent" ? "无头像" : "头像未读取";
           const anonymous = e.sender_identity_kind === "chat_sender" || String(e.sender_id).startsWith("-")
             ? " · 频道/群组发言身份，不代表具体匿名个人"

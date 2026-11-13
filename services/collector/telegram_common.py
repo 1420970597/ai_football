@@ -25,14 +25,19 @@ def _utc(value):
 
 
 def _trusted_message_author(chat_id, source, message):
-    """Keep the durable author boundary available before optional Telegram I/O."""
+    """Keep the durable author boundary available before optional Telegram I/O.
+
+    Use only explicitly trusted stable peers. Broadcast posts may omit the
+    sender entirely. A group can also explicitly trust its collective posting
+    peer, but this never identifies the person behind an anonymous message.
+    """
+    chat_id = str(chat_id)
     sender_id = str(getattr(message, "sender_id", "") or "")
-    trusted_sender_ids = {str(value) for value in source.get("trusted_sender_ids", [])}
-    channel_post_identity = (not sender_id and bool(getattr(message, "post", False))
-                             and chat_id in trusted_sender_ids)
+    trusted_sender_ids = {str(value) for value in source.get("trusted_sender_ids") or ()}
+    channel_post_identity = chat_id in trusted_sender_ids and (
+        sender_id == chat_id
+        or (not sender_id and bool(getattr(message, "post", False))))
     if channel_post_identity:
-        # Explicitly trusted broadcast posts can lack from_id; ordinary group
-        # messages and anonymous administrators do not inherit this identity.
         sender_id = chat_id
     return (sender_id, channel_post_identity) if sender_id in trusted_sender_ids else None
 

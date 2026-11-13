@@ -295,7 +295,8 @@ async def add_source_expert(source_id: uuid.UUID, body: SourceExpertInput, reque
     async with pool.acquire() as conn:
         async with conn.transaction():
             await verify_sensitive_admin_session(conn, admin)
-            if not await conn.fetchval("SELECT 1 FROM v2_expert_sources WHERE id=$1", source_id):
+            source_chat_id = await conn.fetchval("SELECT platform_chat_id FROM v2_expert_sources WHERE id=$1", source_id)
+            if source_chat_id is None:
                 raise HTTPException(status_code=404, detail="来源不存在")
             expert_id = await conn.fetchval(
                 "INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,$2,$3) "
@@ -307,10 +308,11 @@ async def add_source_expert(source_id: uuid.UUID, body: SourceExpertInput, reque
             upper_id = int(checkpoint or 0)
             await conn.execute(
                 "INSERT INTO v2_source_experts(source_id,expert_id,enabled,backfill_since,backfill_cursor,backfill_until_id,backfill_completed_at) "
-                "VALUES($1,$2,TRUE,now()-interval '7 days',$3::bigint,$4::bigint,CASE WHEN $4::bigint=0 THEN now() ELSE NULL END) "
-                "ON CONFLICT(source_id,expert_id) DO UPDATE SET enabled=TRUE,backfill_since=now()-interval '7 days',"
+                "VALUES($1,$2,TRUE,now()-($5::integer*interval '1 hour'),$3::bigint,$4::bigint,CASE WHEN $4::bigint=0 THEN now() ELSE NULL END) "
+                "ON CONFLICT(source_id,expert_id) DO UPDATE SET enabled=TRUE,backfill_since=EXCLUDED.backfill_since,"
                 "backfill_cursor=EXCLUDED.backfill_cursor,backfill_until_id=EXCLUDED.backfill_until_id,"
                 "backfill_completed_at=EXCLUDED.backfill_completed_at", source_id, expert_id, upper_id + 1, upper_id,
+                72 if body.sender_id == source_chat_id else 168,
             )
             await audit(conn, admin["id"], "admin", "telegram_expert_trusted", "expert", str(expert_id), details={
                 "source_id": str(source_id), "sender_id": body.sender_id, "trust_basis": "manual", "telegram_admin_verified": False,

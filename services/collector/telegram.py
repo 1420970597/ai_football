@@ -77,6 +77,11 @@ MEDIA_COMMIT_SECONDS = 9
 SESSION_IDENTITY_SECONDS = 5
 
 
+def _broadcast_channel(entity) -> bool:
+    return (isinstance(entity, Channel) and bool(getattr(entity, 'broadcast', False))
+            and not bool(getattr(entity, 'megagroup', False)))
+
+
 def _factory(session: str, api_id: int, api_hash: str):
     # StringSession 只使用内存，不创建本地 SQLite。
     return TelegramClient(StringSession(session), api_id, api_hash, connection_retries=3,
@@ -682,10 +687,7 @@ class TelegramCollector:
                 if _utc(message.date) < cutoff:
                     return last, True
                 scanned += 1
-                sender_id = str(getattr(message, 'sender_id', '') or '')
-                if not sender_id and getattr(message, 'post', False):
-                    sender_id = chat_id
-                if sender_id in {str(value) for value in source['trusted_sender_ids']}:
+                if _trusted_message_author(chat_id, source, message) is not None:
                     self._remember_detection(chat_id, [message], page_detected_at)
                     grouped_id = getattr(message, 'grouped_id', None)
                     if grouped_id:
@@ -761,16 +763,22 @@ class TelegramCollector:
         previous = int(task['cursor'])
         until_id = int(task['until_id'])
         since = _utc(datetime.fromisoformat(str(task['since']).replace('Z', '+00:00')))
+        source_peer = sender_id == str(chat_id) and sender_id.startswith('-')
+        if source_peer:
+            # Raw retention follows the original post, not its latest edit.
+            since = max(since, datetime.now(timezone.utc) - timedelta(hours=72))
         if until_id <= 0:
             await self.backend.advance_author_backfill(chat_id, self.owner, sender_id, previous, previous, True)
             return {'state': 'complete', 'sender_id': sender_id, 'processed': 0}
         lock = self.locks.setdefault(chat_id, asyncio.Lock())
         entity = await self._entity(chat_id)
         messages = []
-        async for message in self.client.iter_messages(
-            entity, from_user=int(sender_id), max_id=previous,
-            limit=AUTHOR_BACKFILL_PAGE_SIZE + 1,
-        ):
+        options = {'max_id': previous, 'limit': AUTHOR_BACKFILL_PAGE_SIZE + 1}
+        if not source_peer:
+            options['from_user'] = int(sender_id)
+        # A channel post may have no from_id. An author search would drop it;
+        # scan the bounded source history and verify the stable peer below.
+        async for message in self.client.iter_messages(entity, **options):
             if int(message.id) <= until_id:
                 messages.append(message)
             if len(messages) >= AUTHOR_BACKFILL_PAGE_SIZE + 1:
@@ -783,6 +791,11 @@ class TelegramCollector:
             if _utc(message.date) < since:
                 complete = True
                 break
+            if source_peer:
+                author = _trusted_message_author(chat_id, source, message)
+                if author is None or author[0] != sender_id:
+                    last_cursor = int(message.id)
+                    continue
             result = await self._process_message(chat_id, source, message, entity)
             if result.get('state') == 'ignored_empty':
                 pass
@@ -1588,7 +1601,9 @@ class TelegramCollector:
             if term and not self._directory_matches(term, dialog.name, chat_id, username, "@" + (username or "")):
                 continue
             matches[chat_id] = {"chat_id": chat_id, "title": dialog.name, "username": username,
-                                "is_channel": bool(getattr(dialog, "is_channel", False)), "access_state": "joined"}
+                                "is_channel": bool(getattr(dialog, "is_channel", False)), "access_state": "joined",
+                                "source_kind": ('broadcast_channel' if _broadcast_channel(entity)
+                                                else 'supergroup' if isinstance(entity, Channel) else 'group')}
         # Dialog order changes whenever a new message arrives. Peer-ID ordering
         # keeps pagination stable across those recency changes.
         items = sorted(matches.values(), key=lambda item: int(item["chat_id"]))
@@ -1621,6 +1636,18 @@ class TelegramCollector:
         offset = self._offset(payload.get("cursor"))
         term = self._directory_term(payload)
         entity = await self._entity(chat_id)
+        if _broadcast_channel(entity):
+            peer_id = str(utils.get_peer_id(entity))
+            nickname = _nickname(entity, peer_id)
+            items = [] if offset or (term and not self._directory_matches(
+                term, peer_id, nickname, getattr(entity, 'username', None))) else [{
+                    'sender_id': peer_id, 'nickname': nickname,
+                    'username': getattr(entity, 'username', None), 'admin_kind': 'channel',
+                    'sender_identity_kind': 'chat_sender', 'individual_author_resolved': False,
+                    'has_avatar': False, 'avatar_state': 'not_loaded'}]
+            return {'items': items, 'next_cursor': None, 'state': 'ready', 'manual_id_allowed': True,
+                    'chat_id': peer_id, 'title': nickname, 'source_kind': 'broadcast_channel',
+                    'trust_automatically_granted': False, 'q': str(payload.get('q', '')).strip()}
         items = []
         if isinstance(entity, Channel):
             if term:
@@ -1668,6 +1695,8 @@ class TelegramCollector:
 
     async def _members(self, payload):
         entity = await self._entity(str(payload.get('chat_id', '')))
+        if _broadcast_channel(entity):
+            return await self._admins(payload)
         offset, term = self._offset(payload.get('cursor')), self._directory_term(payload)
         users = []
         if isinstance(entity, Chat):
