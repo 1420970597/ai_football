@@ -1,0 +1,264 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-11-13T00:41:01.715082Z",
+  "purpose": "真实独立单窗扫描验收及可复现的来源阶段消歧能力缺口；不构成全局准确率、20秒容量或自动修复上线验收。",
+  "privacy": {
+    "redacted": true,
+    "contains_message_body": false,
+    "contains_images": false,
+    "contains_credentials": false,
+    "contains_user_identity": false,
+    "private_artifacts_referenced_only": true,
+    "original_message_or_reply_text_not_copied": true
+  },
+  "runtime": {
+    "image_id": "sha256:018f93654bcf669de1743291664da38891f575e168194b0baa22a1e116592b05",
+    "window_start": "2026-11-12T23:30:00Z",
+    "window_end": "2026-11-13T00:00:00Z",
+    "half_open_utc": true,
+    "task_kind": "scan",
+    "attempt": 1,
+    "started_at": "2026-11-13T00:27:33.545025Z",
+    "finished_at": "2026-11-13T00:36:53.421626Z",
+    "elapsed_seconds": 559.877,
+    "state": "partial",
+    "child_exit_code": 0,
+    "timed_out": false,
+    "result_valid": true,
+    "category": "analysis_partial",
+    "final_independently_validated": true,
+    "history_equals_window": true,
+    "active_task_cleared": true,
+    "wrapper_exit_code_observed": 1,
+    "wrapper_exit_contract_for_partial": 1,
+    "wrapper_contract_note": "父代理实际exec会话5241返回外层exit1，与partial契约相符；子进程exit0和有效partial分析与旧coverage健康缺口分别解释。",
+    "repository_changed": false,
+    "git_check_scope": "控制器比较前后HEAD；父代理已有未提交业务改动不能归因本轮扫描。HEAD相同本身不证明任意未提交文件从未变化。",
+    "source_changes_by_this_observer": false,
+    "model_calls_by_this_observer": 0,
+    "repair_started_by_this_observer": false
+  },
+  "window_population": {
+    "selection": "消息版本detected_at位于本半开窗，当前事件；回复作为语境单独计数。",
+    "messages": 24,
+    "events": 24,
+    "all_message_detected_at_inside_window": true,
+    "missing_detected_at": 0,
+    "all_events_current": true,
+    "media_ready_messages": 23,
+    "unsupported_messages": 1,
+    "review_jobs": 23,
+    "unresolved_jobs_examined": 22,
+    "succeeded_jobs": 1,
+    "reply_context_records": 3,
+    "traces": 112,
+    "completed_searches": 4,
+    "search_candidates": 78,
+    "bindings": 2,
+    "market_reads": 3,
+    "signals": 1,
+    "messages_examined": 24,
+    "unresolved_examined": 22,
+    "confirmed_valid_recommendation_omissions": 0,
+    "confirmed_misbindings": 0,
+    "agent_analysis_category_counts": {
+      "no_new_explicit_recommendation": 20,
+      "source_period_unknown_and_deadline": 1,
+      "explicit_live_phase_not_used_to_disambiguate_retired_duplicate": 1,
+      "accepted_image_selection_verified": 1,
+      "unsupported_content_not_archived": 1
+    },
+    "classification_review_scope": "本观察者独立核对快照分母、时间范围、状态、哈希与结构一致性；语义分类来自本轮scan-evidence，不声称本观察者再次逐图判读。",
+    "unsupported_limit": "缺少被归档内容，无法判定推荐意图；不能算作已阅读原文、非推荐或已证明模型漏配。"
+  },
+  "analysis_and_coverage": {
+    "analysis_status": "partial",
+    "repair_status": "pending",
+    "blocker_codes": [
+      "media_unavailable",
+      "evidence_incomplete",
+      "timeout"
+    ],
+    "retryable": false,
+    "window_exhausted": true,
+    "same_window_retry_prevented_without_new_evidence": true,
+    "coverage_watermark_utc": "2026-11-12T13:00:00Z",
+    "scan_cursor_utc": "2026-11-12T13:30:00Z",
+    "coverage_lag_seconds_at_finish": 41400,
+    "unscanned_windows_at_finish": 17,
+    "failed_windows_at_finish": 1,
+    "partial_windows_at_finish": 4,
+    "coverage_healthy": false,
+    "interpretation": "本轮真实执行及有效partial登记通过，完整分析覆盖未通过；旧失败与partial仍显示不健康，不把进程存活或JSON合法当作完整覆盖成功。"
+  },
+  "privacy_and_retention_checks": {
+    "attempt_directory_mode": "0700",
+    "observed_private_artifact_modes": "0600",
+    "events": 78,
+    "invalid_event_json_lines": 0,
+    "unexpected_persisted_event_fields": 0,
+    "stdout_original_bytes_not_retained": 560004,
+    "stderr_bytes": 0,
+    "stderr_failure_categories": [],
+    "jsonl_keeps_only_type_item_type_id_status_exit_code_bytes_sha256": true,
+    "downloaded_media_files": 10,
+    "registered_raw_files_before_cleanup": 11,
+    "raw_bytes_before_cleanup": 802191,
+    "original_bundle_sha256": "70a2a94b51fe8d0d68f2d8c04b379cfaaa2e12293dab507046d2bba314197878",
+    "bundle_digest_independently_matched_before_cleanup": true,
+    "unregistered_raw_files_observed": 0,
+    "raw_symlinks_observed": 0,
+    "expired_files_observed": 0,
+    "raw_cleanup": {
+      "deleted_registered_files": 11,
+      "remaining_files": 0,
+      "manifest_files": 0
+    },
+    "remaining_manifest_entries": 0,
+    "retention_failure_marker_present": false,
+    "database_read_only_setting": "on",
+    "database_tls_enabled": true,
+    "original_bundle_and_images_deleted_at_end": true,
+    "normalized_evidence_and_synthetic_reproduction_remain_private": true
+  },
+  "resource_observation": {
+    "runtime_cpu_limit": 0.5,
+    "runtime_memory_limit_bytes": 805306368,
+    "read_only_rootfs": true,
+    "sample_source": "docker stats --no-stream；仅一次即时采样，未记录精确采样时刻。",
+    "sample_observed_after_utc": "2026-11-13T00:32:38Z",
+    "sample_observed_before_utc": "2026-11-13T00:33:20Z",
+    "sample_cpu_percent": 0.01,
+    "sample_memory_mib_displayed": 349.6,
+    "sample_memory_is_rounded": true,
+    "sample_pids": 23,
+    "sample_is_peak": false,
+    "peak_memory_measured": false,
+    "oom_observed_at_sample": false,
+    "limits_unchanged": true,
+    "fixture_256m_not_production_capacity_evidence": true
+  },
+  "observed_latency_and_concurrency": {
+    "clock_origin": "消息版本不可变detected_at；推荐用signal.created_at，审核终态另记。",
+    "accepted_signal_samples": 1,
+    "accepted_signal_detected_to_first_seconds": 9.779061,
+    "accepted_signal_detected_to_all_seconds": 9.779061,
+    "max_detection_to_claim_ms": 1804.359,
+    "max_queue_from_persistence_ms": 1599.529,
+    "deadline_exceeded_detected_to_final_trace_ms": [
+      20233.502,
+      20225.142
+    ],
+    "deadline_trace_samples_are_not_proven_valid_recommendation_omissions": true,
+    "peak_overlapping_review_jobs": 2,
+    "peak_distinct_experts_with_active_reviews": 1,
+    "multi_expert_simultaneous_capacity_verified": false,
+    "sustained_model_capacity_verified": false,
+    "global_20_second_target_verified": false,
+    "missing_timestamps": [
+      "independent_media_ready_at",
+      "transaction_commit_visibility_at"
+    ]
+  },
+  "repair_candidate": {
+    "issue_key": "5f4f4ad462cffaca92331e9f5c4baf550bc0379e1f534524a419b1cda09965f0",
+    "evidence_fingerprint": "c9d6293e34c058a7c7724e7a075ba47eac8b43321eb3024220438a565dc6899f",
+    "minimal_reproduction": true,
+    "defect_count": 1,
+    "backlog_status": "pending",
+    "repair_attempts": 0,
+    "kind": "source_phase_disambiguation_capability_gap",
+    "valid_recommendation_omission_proven": false,
+    "root_cause": "完成全阶段检索后，同队同联赛同时存在停报且不可实盘的scheduled旧重影和来源支持、可实盘的live候选；解析接口无phase/source_phase/claimed_phase证据参数，明确live来源不能收窄，返回ambiguous_fixture及2候选。",
+    "minimal_reproduction_assertion": "explicit_live_source_cannot_refine_completed_all_phase_ambiguity",
+    "actual_candidate_count": 2,
+    "source_supported_eligible_live_candidates": 1,
+    "resolver_has_phase_parameter": false,
+    "production_database_calls": 0,
+    "reproduction_expected_exit_code": 1,
+    "recorded_minimal_reproduction_exit_code": 1,
+    "reproduction_review": "静态复核现存合成ScopeHome/ScopeAway夹具及NoDB防访问断言，scan-evidence记录真实预期断言失败；本观察者未重跑脚本或模型。",
+    "private_artifact_directory": ".runtime/expert-review-iteration-20261112/continuous/attempts/1794526200/1",
+    "safe_fix_constraints": [
+      "必须有可靠来源阶段证据并纳入服务端验证；不能默认所有推荐均为live。",
+      "不得直接丢弃不可交易候选来消除歧义；保持完整全阶段检索、连续分页和唯一赛事绑定。",
+      "不放宽联赛、双方球队、时间、期间、盘口线、方向、来源启停或当前实盘资格校验。",
+      "本样本缺少历史有效盘口读取，不能宣称已证明有效推荐漏录或应当生成可投注信号。",
+      "任何修复须最小源改动、冻结后Docker回归和既有发布门禁；不得重审历史触发交易或修改账户资金来源配置。"
+    ],
+    "ready_for_separate_serial_repair": true,
+    "repair_execution_in_this_report": false
+  },
+  "controller_file_checksums": [
+    {
+      "image_path": "/opt/expert-monitor/expert_iteration_supervisor.py",
+      "sha256": "2dcacdc4dd709ed53f7082646712319b5dc3ded80bebd25687817a0740b3c997"
+    },
+    {
+      "image_path": "/opt/expert-monitor/scan_scheduler.py",
+      "sha256": "0477fb35cf35b09eaeec57402ae03d35651ccd01e3bac2e671b1c9e098367fc5"
+    },
+    {
+      "image_path": "/opt/expert-monitor/result-schema.json",
+      "sha256": "5245636434d0a89b8243946d3a32f212ba18f8ca4ac0955503831c0d164397d2"
+    }
+  ],
+  "private_evidence_checksums": [
+    {
+      "project_private_path": ".runtime/expert-review-iteration-20261112/continuous/windows/1794526200.json",
+      "sha256": "cd6e986d65147a089665f73c1af35154cb67c6b73fbf8df336d36a0ef19d189d",
+      "bytes": 1332
+    },
+    {
+      "project_private_path": ".runtime/expert-review-iteration-20261112/continuous/history/1794526200-1.json",
+      "sha256": "cd6e986d65147a089665f73c1af35154cb67c6b73fbf8df336d36a0ef19d189d",
+      "bytes": 1332
+    },
+    {
+      "project_private_path": ".runtime/expert-review-iteration-20261112/continuous/attempts/1794526200/1/final.json",
+      "sha256": "2becf2b93334dfdb74791977fa25f353bd7b87e889f6a773136bb86b9e3f353e",
+      "bytes": 1186
+    },
+    {
+      "project_private_path": ".runtime/expert-review-iteration-20261112/continuous/attempts/1794526200/1/output-summary.json",
+      "sha256": "ca318327ed1dffd5e5c7ee7c6bb98822a8a7856daf8e8f470c1ec14049411f83",
+      "bytes": 329
+    },
+    {
+      "project_private_path": ".runtime/expert-review-iteration-20261112/continuous/attempts/1794526200/1/metadata.json",
+      "sha256": "26f62f9bc73627205459901ea70574ae936189bcd16429840fdfcc55ba616908",
+      "bytes": 2781
+    },
+    {
+      "project_private_path": ".runtime/expert-review-iteration-20261112/continuous/attempts/1794526200/1/scan-evidence.json",
+      "sha256": "a680381bfbd5f76734a39f0f7c80394be4c3aa8f14941a04f687dbde0f9511ae",
+      "bytes": 26166
+    },
+    {
+      "project_private_path": ".runtime/expert-review-iteration-20261112/continuous/attempts/1794526200/1/scan-result.json",
+      "sha256": "ee364fed0686a7a2300e6b13c112c95847fab31a419a4906985ba20154ea62bd",
+      "bytes": 2757
+    },
+    {
+      "project_private_path": ".runtime/expert-review-iteration-20261112/continuous/attempts/1794526200/1/minimal_repro.py",
+      "sha256": "48bd041f5bf5828a7228f146e0d60eadc5a89ad4e0caa31d3ab3c9083a19ed64",
+      "bytes": 1699
+    },
+    {
+      "project_private_path": ".runtime/expert-review-iteration-20261112/continuous/attempts/1794526200/1/reproduction.json",
+      "sha256": "03a3f446f12cc0bdaa12141e21ce3bc6374e11e9ef8e16a124bd404542fd23f6",
+      "bytes": 346
+    }
+  ],
+  "validation": {
+    "json_types_checked_in_docker": true,
+    "docker_test_cpu_limit": 0.3,
+    "docker_test_memory": "256MiB",
+    "network": "none",
+    "project_mount": "read_only",
+    "only_write_target": "reports/expert-review-incident-20261113-monitor.json",
+    "business_database_calls_by_report_generator": 0,
+    "source_controller_doc_changes": false,
+    "git_commit_performed": false
+  }
+}
