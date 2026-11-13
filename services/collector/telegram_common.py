@@ -36,7 +36,11 @@ def _trusted_message_author(chat_id, source, message):
     trusted_sender_ids = {str(value) for value in source.get("trusted_sender_ids") or ()}
     channel_post_identity = chat_id in trusted_sender_ids and (
         sender_id == chat_id
-        or (not sender_id and bool(getattr(message, "post", False))))
+        or (not sender_id and bool(getattr(message, "post", False)))
+        # Profiles can sign broadcast posts. Preserve already configured
+        # personal identities; use channel trust only for verified posts.
+        or (source.get('verified_broadcast') is True and bool(getattr(message, 'post', False))
+            and sender_id not in trusted_sender_ids))
     if channel_post_identity:
         sender_id = chat_id
     return (sender_id, channel_post_identity) if sender_id in trusted_sender_ids else None

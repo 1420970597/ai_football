@@ -634,6 +634,8 @@ async def collector_sources(request: Request):
     authorized(request)
     rows = await database.current_pool().fetch(
         "SELECT s.id,s.platform_chat_id AS chat_id,s.display_name,s.allow_media,"
+        "EXISTS(SELECT 1 FROM v2_telegram_directories d WHERE d.source_id=s.id AND d.last_success_at IS NOT NULL "
+        "AND d.admins @> jsonb_build_array(jsonb_build_object('sender_id',s.platform_chat_id,'admin_kind','channel'))) AS verified_broadcast,"
         "COALESCE(array_agg(e.platform_sender_id) FILTER (WHERE se.enabled AND e.enabled),'{}') AS trusted_sender_ids,"
         "COALESCE(jsonb_agg(jsonb_build_object('sender_id',e.platform_sender_id,'cursor',se.backfill_cursor,"
         "'until_id',se.backfill_until_id,'since',se.backfill_since) ORDER BY se.added_at,e.id) "

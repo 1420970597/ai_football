@@ -778,7 +778,9 @@ class TelegramCollector:
                 runtime = self.source_runtime.setdefault(chat_id, {})
                 runtime.update(last_history_checked_at=datetime.now(timezone.utc).isoformat(),
                     head_message_id=int(head.id), head_posted_at=_utc(head.date).isoformat(),
-                    head_author_trusted=_trusted_message_author(chat_id, source, head) is not None)
+                    head_author_trusted=_trusted_message_author(chat_id, source, head) is not None,
+                    head_kind=type(head).__name__, head_action=type(getattr(head, 'action', None)).__name__,
+                    head_has_text=bool(getattr(head, 'message', None)), head_has_media=bool(getattr(head, 'media', None)))
             page_detected_at = datetime.now(timezone.utc).isoformat()
             lookup = getattr(self.backend, 'event_receipts', None)
             known = None
@@ -831,6 +833,7 @@ class TelegramCollector:
         try:
             async with asyncio.timeout(RECENT_HISTORY_SECONDS):
                 entity = await timed('telegram_entity', self._entity(chat_id))
+                source = dict(source, verified_broadcast=_broadcast_channel(entity))
                 head_cursor, complete = await page(entity, None)
                 if not complete:
                     cursor = min(state['cursor'], head_cursor) if state['cursor'] is not None else head_cursor
@@ -873,6 +876,7 @@ class TelegramCollector:
             return {'state': 'complete', 'sender_id': sender_id, 'processed': 0}
         lock = self.locks.setdefault(chat_id, asyncio.Lock())
         entity = await self._entity(chat_id)
+        source = dict(source, verified_broadcast=_broadcast_channel(entity))
         messages = []
         options = {'max_id': previous, 'limit': AUTHOR_BACKFILL_PAGE_SIZE + 1}
         if not source_peer:
@@ -935,9 +939,10 @@ class TelegramCollector:
                         stage = 'telegram_entity'
                         entity = await self._entity(chat_id)
                 for offset in range(0, len(identifiers), RECONCILE_ID_LIMIT):
-                    async with asyncio.timeout(RECONCILE_RPC_SECONDS):
-                        stage = 'telegram_messages'
-                        async with self.background_reads.slot():
+                    stage = 'telegram_budget'
+                    async with self.background_reads.slot():
+                        async with asyncio.timeout(RECONCILE_RPC_SECONDS):
+                            stage = 'telegram_messages'
                             members = await self.client.get_messages(entity, ids=identifiers[offset:offset+RECONCILE_ID_LIMIT])
                     by_id.update({entry.id: entry for entry in members if entry})
                 async def commit(item):
@@ -1015,6 +1020,8 @@ class TelegramCollector:
         return sorted(members, key=lambda item: item.id)
 
     async def _process_message(self, chat_id: str, source: dict, message, entity=None):
+        if entity is not None:
+            source = dict(source, verified_broadcast=_broadcast_channel(entity))
         if _trusted_message_author(chat_id, source, message) is None:
             return {"state": "ignored_author"}
         self._remember_detection(chat_id, [message])
@@ -1326,6 +1333,8 @@ class TelegramCollector:
             return
         runtime = self.source_runtime.setdefault(chat_id, {})
         runtime['last_live_received_at'] = detected_at
+        if entity is not None:
+            source = dict(source, verified_broadcast=_broadcast_channel(entity))
         payload = None
         group = sorted(members, key=lambda item: item.id) if full_album else members
         if _trusted_message_author(chat_id, source, group[0]) is None:
@@ -1678,9 +1687,21 @@ class TelegramCollector:
                             **({'reason': self.auth_state['reason']} if self.auth_state.get('reason') else {})}
                 if path == '/source-info':
                     entity = await self._group_entity(str(payload.get('chat_id', '')))
-                    return {'state': 'ready', 'chat_id': str(utils.get_peer_id(entity)),
+                    info = {'state': 'ready', 'chat_id': str(utils.get_peer_id(entity)),
                             'source_kind': 'broadcast_channel' if _broadcast_channel(entity) else 'group',
                             'title': str(entity.title)}
+                    if payload.get('inspect_messages') is True:
+                        chat = info['chat_id']
+                        source = dict(self.sources.get(chat, {}), verified_broadcast=_broadcast_channel(entity))
+                        info['messages'] = [{'message_id': int(m.id), 'kind': type(m).__name__,
+                            'action': type(getattr(m, 'action', None)).__name__, 'posted_at': _utc(m.date).isoformat(),
+                            'post': bool(getattr(m, 'post', False)), 'has_text': bool(getattr(m, 'message', None)),
+                            'has_media': bool(getattr(m, 'media', None)),
+                            'sender_kind': 'missing' if getattr(m, 'sender_id', None) is None else
+                                'own_peer' if str(m.sender_id)==chat else 'user' if m.sender_id>0 else 'other_peer',
+                            'trusted': _trusted_message_author(chat, source, m) is not None}
+                            async for m in self._history_messages(entity, limit=25)]
+                    return info
                 return await ({'/dialogs': self._dialogs, '/admins': self._admins, '/members': self._members}[path](payload))
             except FloodWaitError as exc:
                 return {"items": [], "state": "flood_wait", "retry_after": exc.seconds}

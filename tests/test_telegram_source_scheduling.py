@@ -86,6 +86,16 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1,len(self.backend.observation_calls))
         self.assertEqual(1,len(self.backend.events))
 
+    async def test_rate_budget_wait_is_not_misreported_as_rpc_timeout(self):
+        import time
+        self.client.messages['-1001']=[Message(1)]
+        self.queue('-1001',[[1]])
+        self.collector.background_reads.next_at=time.monotonic()+.04
+        with patch('collector.telegram.RECONCILE_RPC_SECONDS',.02):
+            report=await self.collector._reconcile_known('-1001',self.source)
+        self.assertEqual('ready',report['state'])
+        self.assertEqual(1,report['checked'])
+
     async def test_reconciliation_message_read_can_exceed_three_seconds(self):
         self.client.messages['-1001']=[Message(1)]
         self.queue('-1001',[[1]])

@@ -89,6 +89,27 @@ class ChannelIdentityCollectorTests(unittest.IsolatedAsyncioTestCase):
             message.get_sender.assert_not_awaited()
         self.assertEqual({self.chat_id},{item['sender_id'] for item in self.backend.calls})
 
+    async def test_verified_signed_broadcast_post_uses_explicit_channel_trust(self):
+        self.source['verified_broadcast'] = True
+        for identifier,sender in enumerate([7,-100999],100):
+            message=self.message(identifier,sender=sender,post=True)
+            result=await self.collector._process_group(self.chat_id,self.source,[message])
+            self.assertTrue(result['persisted'])
+            self.assertEqual(self.chat_id,self.backend.calls[-1]['sender_id'])
+            message.get_sender.assert_not_awaited()
+
+    async def test_unverified_group_or_forwarded_message_does_not_gain_signed_post_trust(self):
+        for verified,post in [(False,True),(True,False)]:
+            self.source['verified_broadcast']=verified
+            result=await self.collector._process_group(self.chat_id,self.source,[self.message(201,sender=7,post=post)])
+            self.assertEqual('ignored_author',result['state'])
+        self.assertEqual([],self.backend.calls)
+
+    async def test_existing_explicit_personal_identity_stays_stable_on_signed_replay(self):
+        from collector.telegram_common import _trusted_message_author
+        self.source.update(verified_broadcast=True,trusted_sender_ids=[self.chat_id,'7'])
+        self.assertEqual(('7',False),_trusted_message_author(self.chat_id,self.source,self.message(202,sender=7,post=True)))
+
     async def test_missing_sender_group_or_unsigned_untrusted_channel_stays_ignored(self):
         cases = [(self.source,self.message(1,post=False)),
                  (self.source|{'trusted_sender_ids':[]},self.message(2)),
