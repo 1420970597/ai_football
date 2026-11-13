@@ -24,6 +24,10 @@ async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
         raise HTTPException(status_code=422, detail='two distinct team identities are required')
     for row in rows:
         fixture = row['candidate_data']
+        # Only an explicit source claim can refine a completed all-phase
+        # search. Eligibility alone never proves which fixture was intended.
+        if body.source_phase is not None and fixture.get('phase') != body.source_phase:
+            continue
         sport = fixture.get('sport')
         home_match = team_name_matches(body.team_a, fixture['home_team'], fixture.get('home_aliases', []), sport=sport)
         away_match = team_name_matches(body.team_a, fixture['away_team'], fixture.get('away_aliases', []), sport=sport)
@@ -55,11 +59,15 @@ async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
     if 'verified_alias_sources' in projected:
         evidence['verified_alias_sources'] = projected['verified_alias_sources']
     bound = await conn.fetchrow(
-        'WITH bound AS (INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) '
-        'VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING fixture_id) '
-        'SELECT phase,stale_projection_at FROM v2_fixtures WHERE id=$3',
-        body.review_id, body.attempt_id, fixture['fixture_id'], body.search_key, evidence)
+        'WITH current AS (SELECT phase,stale_projection_at FROM v2_fixtures WHERE id=$3), '
+        'bound AS (INSERT INTO v2_review_fixture_bindings(job_id,attempt_id,fixture_id,search_key,evidence) '
+        'SELECT $1,$2,$3,$4,$5 FROM current WHERE $6::text IS NULL OR phase=$6 '
+        'ON CONFLICT DO NOTHING RETURNING fixture_id) '
+        'SELECT phase,stale_projection_at FROM current',
+        body.review_id, body.attempt_id, fixture['fixture_id'], body.search_key, evidence, body.source_phase)
     phase = bound['phase'] if bound is not None else None
+    if body.source_phase is not None and phase != body.source_phase:
+        return {'resolved': False, 'reason': 'source_phase_changed', 'candidate_count': 0}
     # A binding may still be created for a row the source stopped reporting, so
     # the recommendation can be explained, but such a row is never eligible for
     # a new live signal.

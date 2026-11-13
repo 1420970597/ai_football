@@ -87,6 +87,7 @@ class ResolveInput(AttemptInput):
     team_a: str = Field(min_length=2, max_length=160)
     team_b: str = Field(min_length=2, max_length=160)
     competition: str | None = Field(default=None, max_length=160)
+    source_phase: Literal['scheduled', 'live', 'finished', 'cancelled'] | None = None
     from_utc: AwareDatetime | None = None
     to_utc: AwareDatetime | None = None
 
