@@ -30,6 +30,7 @@ class SourceInput(BaseModel):
     display_name: str = Field(min_length=1, max_length=160)
     enabled: bool = True
     allow_media: bool = True
+    monitor_channel_posts: bool = False
 
     @field_validator("chat_id")
     @classmethod
@@ -215,8 +216,9 @@ async def list_sources(request: Request):
     await require_admin(request)
     rows = await database.current_pool().fetch(
         "SELECT s.id,s.platform_chat_id AS chat_id,s.display_name,s.enabled,s.allow_media,s.updated_at,"
-        "COUNT(se.expert_id) FILTER (WHERE se.enabled) AS trusted_admins "
+        "COUNT(se.expert_id) FILTER (WHERE se.enabled AND e.enabled) AS trusted_admins "
         "FROM v2_expert_sources s LEFT JOIN v2_source_experts se ON se.source_id=s.id "
+        "LEFT JOIN v2_experts e ON e.id=se.expert_id "
         "GROUP BY s.id ORDER BY s.display_name"
     )
     return {"items": [dict(row) for row in rows]}
@@ -225,6 +227,7 @@ async def list_sources(request: Request):
 @router.post("/sources", status_code=201)
 async def create_source(body: SourceInput, request: Request):
     admin = await require_admin(request)
+    info = await verified_source_info(request, body.chat_id) if body.monitor_channel_posts else None
     pool = database.current_pool()
     source_id = uuid.uuid4()
     async with pool.acquire() as conn:
@@ -240,8 +243,88 @@ async def create_source(body: SourceInput, request: Request):
                     raise HTTPException(status_code=409, detail="该 Telegram 来源已配置") from exc
                 raise
             await audit(conn, admin["id"], "admin", "telegram_source_created", "telegram_source", str(source_id))
+            if info and info['source_kind'] == 'broadcast_channel':
+                await trust_channel_publisher(conn, source_id, body.chat_id, body.display_name, admin['id'])
     return {"id": str(source_id), "chat_id": body.chat_id, "display_name": body.display_name,
-            "enabled": body.enabled, "allow_media": body.allow_media}
+            "enabled": body.enabled, "allow_media": body.allow_media,
+            "channel_publisher_trusted": bool(info and info['source_kind']=='broadcast_channel'),
+            "activation_state": 'waiting_collector' if info and info['source_kind']=='broadcast_channel' else 'needs_author'}
+
+
+async def verified_source_info(request, chat_id):
+    from .telegram import control
+    info = await control(request, '/source-info', {'chat_id': chat_id})
+    if (info.get('state') != 'ready' or str(info.get('chat_id')) != chat_id
+            or info.get('source_kind') not in {'broadcast_channel', 'group'}):
+        raise HTTPException(409, '来源尚未通过当前 Telegram 账号核验，请检查账号是否已加入、编号及连接状态后重试')
+    return info
+
+
+async def trust_channel_publisher(conn, source_id, chat_id, name, actor_id):
+    expert = await conn.fetchval(
+        "INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,$2,$3) "
+        "ON CONFLICT(platform_sender_id) DO UPDATE SET updated_at=v2_experts.updated_at RETURNING id",
+        uuid.uuid4(), chat_id, name[:120])
+    checkpoint = int(await conn.fetchval('SELECT last_message_id FROM v2_source_checkpoints WHERE source_id=$1', source_id) or 0)
+    await conn.execute(
+        "INSERT INTO v2_source_experts(source_id,expert_id,enabled,backfill_since,backfill_cursor,backfill_until_id,backfill_completed_at) "
+        "VALUES($1,$2,TRUE,now()-interval '72 hours',$3,$4,CASE WHEN $4::bigint=0 THEN now() ELSE NULL END) "
+        "ON CONFLICT(source_id,expert_id) DO UPDATE SET enabled=TRUE,backfill_since=EXCLUDED.backfill_since,"
+        "backfill_cursor=EXCLUDED.backfill_cursor,backfill_until_id=EXCLUDED.backfill_until_id,"
+        "backfill_completed_at=EXCLUDED.backfill_completed_at", source_id, expert, checkpoint+1, checkpoint)
+    await audit(conn, actor_id, 'admin', 'telegram_channel_publisher_trusted', 'expert', str(expert), details={
+        'source_id': str(source_id), 'trust_basis': 'explicit_verified_channel_publisher',
+        'sender_identity_kind': 'chat_sender', 'individual_author_resolved': False})
+
+
+@router.post('/sources/{source_id}/channel-publisher')
+async def enable_channel_publisher(source_id: uuid.UUID, request: Request):
+    admin = await require_admin(request)
+    row = await database.current_pool().fetchrow('SELECT platform_chat_id,display_name FROM v2_expert_sources WHERE id=$1', source_id)
+    if not row:
+        raise HTTPException(404, '来源不存在')
+    info = await verified_source_info(request, row['platform_chat_id'])
+    if info['source_kind'] != 'broadcast_channel':
+        raise HTTPException(409, '该来源是群组，请明确选择信任作者；不能自动信任群内全部发言')
+    async with database.current_pool().acquire() as conn:
+        async with conn.transaction():
+            await verify_sensitive_admin_session(conn, admin)
+            await trust_channel_publisher(conn, source_id, row['platform_chat_id'], row['display_name'], admin['id'])
+    return {'channel_publisher_trusted': True, 'activation_state': 'waiting_collector'}
+
+
+@router.get('/sources/{source_id}/monitoring')
+async def source_monitoring(source_id: uuid.UUID, request: Request):
+    await require_admin(request)
+    row = await database.current_pool().fetchrow(
+        "SELECT s.platform_chat_id,s.enabled,cp.lease_until,"
+        "(SELECT count(*) FROM v2_source_experts se JOIN v2_experts e ON e.id=se.expert_id "
+        "WHERE se.source_id=s.id AND se.enabled AND e.enabled) trusted_authors,"
+        "(SELECT max(received_at) FROM v2_telegram_events ev WHERE ev.source_id=s.id) last_persisted_at "
+        "FROM v2_expert_sources s LEFT JOIN v2_source_checkpoints cp ON cp.source_id=s.id WHERE s.id=$1", source_id)
+    if not row:
+        raise HTTPException(404, '来源不存在')
+    from .telegram import control
+    status = await control(request, '/status')
+    runtime = status.get('source_runtime', {}).get(row['platform_chat_id'])
+    loaded_at = status.get('sources_loaded_at')
+    try:
+        fresh = bool(loaded_at and 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(loaded_at)).total_seconds() < 30)
+    except (ValueError, TypeError):
+        fresh = False
+    health = status.get('source_health', {}).get('telegram', {})
+    lease_active = bool(row['lease_until'] and row['lease_until'] > datetime.now(timezone.utc))
+    state = ('disabled' if not row['enabled'] else 'needs_author' if not row['trusted_authors']
+             else 'disconnected' if not status.get('connected') or not status.get('authorized')
+             else 'waiting_collector' if runtime is None or not fresh
+             or runtime.get('trusted_sender_count') != row['trusted_authors'] else 'lease_unavailable' if not lease_active
+             else 'monitoring')
+    return {'state': state, 'loaded': runtime is not None, 'sources_loaded_at': status.get('sources_loaded_at'),
+            'lease_active': lease_active, 'trusted_authors': row['trusted_authors'],
+            'last_persisted_at': row['last_persisted_at'], 'runtime': runtime or {},
+            'history_state': health.get('source_states', {}).get(row['platform_chat_id']),
+            'history_error': health.get('source_errors', {}).get(row['platform_chat_id']),
+            'background_reads': status.get('background_reads', {})}
 
 
 @router.put("/sources/{source_id}")

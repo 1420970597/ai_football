@@ -12,7 +12,7 @@ import test_telegram_collector as fixtures
 class ReplyLookupFailureTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.backend = fixtures.Backend()
-        self.collector = TelegramCollector(fixtures.CONFIG, backend=self.backend)
+        self.collector = TelegramCollector(fixtures.CONFIG, background_read_interval=0, backend=self.backend)
         self.source = self.backend.source_items[0]
         self.collector.sources = {'-1001': self.source}
         self.message = fixtures.Message(105, text='半场大0.75')

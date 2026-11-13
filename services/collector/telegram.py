@@ -31,6 +31,7 @@ from telethon.tl.functions.messages import GetFullChatRequest
 
 from .telegram_backend import TelegramBackend
 from .telegram_control import ControlServer
+from .telegram_scheduling import TelegramReadBudget
 from .telegram_common import (SourceAccessError, config_int, _message_revision_evidence, _nickname,
                               _trusted_message_author, _utc)
 
@@ -121,7 +122,8 @@ def _image_dimensions(body: bytes, mime: str) -> dict:
 
 class TelegramCollector:
     def __init__(self, config: dict[str, str], *, api=None, api_url: str | None = None,
-                 backend=None, client_factory=None, media_store=None, media_delete=None):
+                 backend=None, client_factory=None, media_store=None, media_delete=None,
+                 background_read_interval=2.0):
         self.config = dict(config)
         self.backend = backend or (TelegramBackend(api, api_url) if api is not None and api_url else None)
         self.client_factory = client_factory or _factory
@@ -131,6 +133,14 @@ class TelegramCollector:
         self.owner = str(uuid.uuid4())
         self._source_claim_attempted = False
         self.sources: dict[str, dict] = {}
+        self.sources_loaded_at = None
+        self.source_runtime: dict[str, dict] = {}
+        self.source_refresh_lock = asyncio.Lock()
+        self.background_reads = TelegramReadBudget(background_read_interval)
+        self.recent_next_at: dict[str, float] = {}
+        self.archive_next_at: dict[str, float] = {}
+        self.reconcile_next_at: dict[str, float] = {}
+        self.lease_renew_next_at: dict[str, float] = {}
         self.locks: dict[str, asyncio.Lock] = {}
         self.live_event_delivery = {
             "received": 0, "staged": 0, "deferred": 0, "unmapped_source": 0,
@@ -392,7 +402,12 @@ class TelegramCollector:
 
     async def _checkpoint(self, chat_id: str):
         self._source_claim_attempted = True
-        return await self.backend.checkpoint(chat_id, self.owner)
+        checkpoint = await self.backend.checkpoint(chat_id, self.owner)
+        self.source_runtime.setdefault(chat_id, {}).update(lease_state='active',
+            lease_until=str(checkpoint.get('lease_until') or ''),
+            lease_checked_at=datetime.now(timezone.utc).isoformat())
+        self.lease_renew_next_at[chat_id] = time.monotonic()+30
+        return checkpoint
 
     async def _cancel_live_media_tasks(self):
         tasks = list(self.live_media_tasks.values())
@@ -464,7 +479,7 @@ class TelegramCollector:
         if not await self.connect():
             state = self.auth_state.get("state") if self.auth_state.get("state") in {"session_invalid", "failed"} else "unauthorized"
             return {"state": state, "sources": {}, **({'reason': self.auth_state['reason']} if self.auth_state.get('reason') else {})}
-        self.sources = {str(item["chat_id"]): item for item in await self.backend.sources()}
+        await self.refresh_sources()
         # Disabled sources are no longer read. Their immutable events remain
         # remote and will be scheduled again when the source is enabled.
         self.reconcile_pending = {chat: rows for chat, rows in self.reconcile_pending.items() if chat in self.sources}
@@ -500,7 +515,11 @@ class TelegramCollector:
                     if result[chat_id]["state"] != "backoff":
                         async with asyncio.timeout(SOURCE_HISTORY_SECONDS):
                             result[chat_id]['author_backfill'] = await self._sync_author_backfill(chat_id, source)
-                        reconciliation = await self._reconcile_known(chat_id, source)
+                        if time.monotonic() >= self.reconcile_next_at.get(chat_id, 0):
+                            reconciliation = await self._reconcile_known(chat_id, source)
+                            self.reconcile_next_at[chat_id] = time.monotonic()+30*self.background_reads.interval
+                        else:
+                            reconciliation = {'state': 'ready', 'scheduled': True}
                         result[chat_id]['reconciliation'] = reconciliation
                         if reconciliation['state'] == 'deferred':
                             result[chat_id]['history_state'] = result[chat_id]['state']
@@ -535,6 +554,45 @@ class TelegramCollector:
             cleanup = {"state": "deferred", "candidates": 0, "deleted": 0, "error": type(exc).__name__}
             log.warning("Telegram orphan media inventory unavailable category=%s", type(exc).__name__)
         return {"state": "connected", "sources": result, "media_cleanup": cleanup}
+
+    async def refresh_sources(self, *, renew_leases=False):
+        """Hot configuration and leases stay independent of historical RPCs."""
+        async with self.source_refresh_lock:
+            items = await self.backend.sources()
+            updated = {str(item['chat_id']): item for item in items}
+            for chat, source in updated.items():
+                before = self.sources.get(chat)
+                if before and before.get('trusted_sender_ids') != source.get('trusted_sender_ids'):
+                    self.recent_recovery.pop(chat, None)
+                    self.recent_next_at.pop(chat, None)
+                    self.archive_next_at.pop(chat, None)
+            self.sources = updated
+            self.sources_loaded_at = datetime.now(timezone.utc).isoformat()
+            self.source_runtime = {chat: row for chat, row in self.source_runtime.items() if chat in updated}
+        if renew_leases:
+            gate = asyncio.Semaphore(3)
+            async def renew(chat):
+                async with gate:
+                    if time.monotonic() < self.lease_renew_next_at.get(chat, 0):
+                        return
+                    row = self.source_runtime.setdefault(chat, {})
+                    try:
+                        async with asyncio.timeout(SOURCE_LEASE_REFRESH_SECONDS):
+                            async with self.locks.setdefault(chat, asyncio.Lock()):
+                                checkpoint = await self._checkpoint(chat)
+                        row.update(lease_state='active', lease_until=str(checkpoint.get('lease_until') or ''),
+                                   lease_checked_at=datetime.now(timezone.utc).isoformat())
+                    except Exception as exc:
+                        row.update(lease_state='unavailable', lease_error=type(exc).__name__)
+            await asyncio.gather(*(renew(chat) for chat in self.sources))
+
+    async def _history_messages(self, entity, **options):
+        # Every caller requests at most one bounded Telegram page. Background
+        # scans share the account budget, including FloodWait across sources.
+        async with self.background_reads.slot():
+            members = [m async for m in self.client.iter_messages(entity, **options)]
+        for message in members:
+            yield message
 
     async def _refresh_directory(self, chat_id: str, source: dict):
         if not callable(getattr(self.backend, 'directory', None)):
@@ -606,14 +664,14 @@ class TelegramCollector:
         first = None
         # min_id takes priority over offset_date in Telethon. Seek by date
         # separately, then resume the durable ID cursor within that window.
-        async for message in self.client.iter_messages(entity, offset_date=cutoff, reverse=True, limit=1):
+        async for message in self._history_messages(entity, offset_date=cutoff, reverse=True, limit=1):
             first = int(message.id)
             break
         self.retained_history_floor[chat_id] = (self.client, time.monotonic()+300, first)
         return first
 
     async def _sync_source(self, chat_id: str, source: dict) -> dict:
-        if time.monotonic() < self.retry_at.get(chat_id, 0):
+        if time.monotonic() < max(self.retry_at.get(chat_id, 0), self.background_reads.blocked_until):
             return {"state": "backoff"}
         # Claim the new process's lease before directory writes, but keep the
         # potentially slow Telegram enumeration outside the live-message lock.
@@ -621,17 +679,27 @@ class TelegramCollector:
         async with lock:
             checkpoint = await self._checkpoint(chat_id)
         await self._refresh_directory(chat_id, source)
-        recent = await self._recover_recent(chat_id, source)
+        if time.monotonic() >= self.recent_next_at.get(chat_id, 0):
+            recent = await self._recover_recent(chat_id, source)
+            if recent['state'] == 'caught_up':
+                self.recent_next_at[chat_id] = time.monotonic()+30*self.background_reads.interval
+        else:
+            recent = {'state': 'caught_up', 'scheduled': True}
         original = int(checkpoint["last_message_id"])
         last, count = original, 0
         started = time.monotonic()
         catching_up = False
+        if (time.monotonic() < self.archive_next_at.get(chat_id, 0)
+                or (original > 0 and recent.get('head_id') == original)):
+            return {'state': 'caught_up' if recent['state']=='caught_up' else 'recent_deferred',
+                    'last_message_id': original, 'observed': 0, 'recent_history': recent}
         entity = await self._entity(chat_id)
         floor = await self._retained_history_start(chat_id, entity)
         if floor is None:
             state = 'recent_deferred' if recent['state']=='deferred' else recent['state']
             return {'state': state, 'last_message_id': original, 'observed': 0, 'recent_history': recent}
-        async for message in self.client.iter_messages(entity, min_id=max(original, floor-1), reverse=True, limit=None):
+        async for message in self._history_messages(entity, min_id=max(original, floor-1), reverse=True,
+                                                    limit=SYNC_HISTORY_MAX_MESSAGES):
             if not message or int(message.id) <= last:
                 continue
             if _utc(message.date) < datetime.now(timezone.utc)-timedelta(hours=72):
@@ -655,6 +723,8 @@ class TelegramCollector:
                 await self.backend.advance(chat_id, self.owner, last, original)
         state = ('recent_deferred' if recent['state'] == 'deferred'
                  else 'catching_up' if catching_up or recent['state'] == 'catching_up' else 'caught_up')
+        if state == 'caught_up':
+            self.archive_next_at[chat_id] = time.monotonic()+150*self.background_reads.interval
         return {"state": state, "last_message_id": last, "observed": count, 'recent_history': recent}
 
     async def _recover_recent(self, chat_id: str, source: dict) -> dict:
@@ -699,10 +769,16 @@ class TelegramCollector:
             nonlocal scanned, persisted
             options = {'max_id': cursor} if cursor is not None else {}
             async def read_page():
-                return [m async for m in self.client.iter_messages(entity, limit=RECENT_HISTORY_PAGE_SIZE, **options)]
+                return [m async for m in self._history_messages(entity, limit=RECENT_HISTORY_PAGE_SIZE, **options)]
 
             phase_counts['pages'] += 1
             members = await timed('telegram_page', read_page())
+            if cursor is None and members:
+                head = members[0]
+                runtime = self.source_runtime.setdefault(chat_id, {})
+                runtime.update(last_history_checked_at=datetime.now(timezone.utc).isoformat(),
+                    head_message_id=int(head.id), head_posted_at=_utc(head.date).isoformat(),
+                    head_author_trusted=_trusted_message_author(chat_id, source, head) is not None)
             page_detected_at = datetime.now(timezone.utc).isoformat()
             lookup = getattr(self.backend, 'event_receipts', None)
             known = None
@@ -764,7 +840,8 @@ class TelegramCollector:
                     state['cursor'] = None
                     state.pop('cutoff', None)
                 result = {'state': 'caught_up' if complete else 'catching_up',
-                          'scanned': scanned, 'persisted': persisted}
+                          'scanned': scanned, 'persisted': persisted,
+                          'head_id': self.source_runtime.get(chat_id, {}).get('head_message_id')}
                 log.info('Telegram recent history complete state=%s elapsed_ms=%.1f scanned=%s persisted=%s timings=%s',
                          result['state'], (time.monotonic() - started) * 1000, scanned, persisted, timing_fields())
                 return result
@@ -802,7 +879,7 @@ class TelegramCollector:
             options['from_user'] = int(sender_id)
         # A channel post may have no from_id. An author search would drop it;
         # scan the bounded source history and verify the stable peer below.
-        async for message in self.client.iter_messages(entity, **options):
+        async for message in self._history_messages(entity, **options):
             if int(message.id) <= until_id:
                 messages.append(message)
             if len(messages) >= AUTHOR_BACKFILL_PAGE_SIZE + 1:
@@ -860,7 +937,8 @@ class TelegramCollector:
                 for offset in range(0, len(identifiers), RECONCILE_ID_LIMIT):
                     async with asyncio.timeout(RECONCILE_RPC_SECONDS):
                         stage = 'telegram_messages'
-                        members = await self.client.get_messages(entity, ids=identifiers[offset:offset+RECONCILE_ID_LIMIT])
+                        async with self.background_reads.slot():
+                            members = await self.client.get_messages(entity, ids=identifiers[offset:offset+RECONCILE_ID_LIMIT])
                     by_id.update({entry.id: entry for entry in members if entry})
                 async def commit(item):
                     nonlocal checked
@@ -1246,10 +1324,13 @@ class TelegramCollector:
         if not source:
             delivery["unmapped_source"] += 1
             return
+        runtime = self.source_runtime.setdefault(chat_id, {})
+        runtime['last_live_received_at'] = detected_at
         payload = None
         group = sorted(members, key=lambda item: item.id) if full_album else members
         if _trusted_message_author(chat_id, source, group[0]) is None:
             delivery["ignored_author"] += 1
+            runtime['ignored_author'] = runtime.get('ignored_author', 0)+1
             return
         detected_at = self._remember_detection(chat_id, group, detected_at)
         started = time.monotonic()
@@ -1268,6 +1349,8 @@ class TelegramCollector:
             _, payload = await self._stage_group(chat_id, source, group, detected_at=detected_at)
             persist_ms = (time.monotonic() - persist_started) * 1000
             delivery["staged"] += 1
+            runtime['live_staged'] = runtime.get('live_staged', 0)+1
+            runtime['last_live_staged_at'] = datetime.now(timezone.utc).isoformat()
             delivery["last_staged_at"] = datetime.now(timezone.utc).isoformat()
             media_ms = 0.0
             if payload is not None:
@@ -1541,6 +1624,11 @@ class TelegramCollector:
                     "authorized": bool(self.client and await self.client.is_user_authorized()),
                     "auth": dict(self.auth_state), "account": self.account,
                     "live_event_delivery": dict(self.live_event_delivery),
+                    "sources_loaded_at": self.sources_loaded_at,
+                    "source_runtime": {chat: dict(self.source_runtime.get(chat, {}),
+                        trusted_sender_count=len(source.get('trusted_sender_ids') or []))
+                        for chat, source in self.sources.items()},
+                    "background_reads": self.background_reads.status(),
                     "source_health": health}
         if path == "/auth/qr":
             return await self._start_qr(bool(payload.get("replace_existing")))
@@ -1583,11 +1671,16 @@ class TelegramCollector:
             self._rejected_identity_binding = None
             self.auth_state = {"state": "disconnected"}
             return {"state": "disconnected"}
-        if path in {"/dialogs", "/admins", "/members"}:
+        if path in {"/dialogs", "/admins", "/members", "/source-info"}:
             try:
                 if not await self.connect():
                     return {"items": [], "state": "unauthorized", "manual_id_allowed": False,
                             **({'reason': self.auth_state['reason']} if self.auth_state.get('reason') else {})}
+                if path == '/source-info':
+                    entity = await self._group_entity(str(payload.get('chat_id', '')))
+                    return {'state': 'ready', 'chat_id': str(utils.get_peer_id(entity)),
+                            'source_kind': 'broadcast_channel' if _broadcast_channel(entity) else 'group',
+                            'title': str(entity.title)}
                 return await ({'/dialogs': self._dialogs, '/admins': self._admins, '/members': self._members}[path](payload))
             except FloodWaitError as exc:
                 return {"items": [], "state": "flood_wait", "retry_after": exc.seconds}

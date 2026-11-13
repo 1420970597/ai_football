@@ -12,7 +12,7 @@ class RecentRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.backend = Backend()
         self.client = Client()
-        self.collector = TelegramCollector(CONFIG, backend=self.backend, client_factory=lambda *_: self.client)
+        self.collector = TelegramCollector(CONFIG, background_read_interval=0, backend=self.backend, client_factory=lambda *_: self.client)
         self.collector.client = self.client
         self.source = self.backend.source_items[0]
         self.collector.sources = {'-1001': self.source}
@@ -87,7 +87,7 @@ class RecentRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_restart_replays_durable_version_without_duplicate_event(self):
         self.client.messages['-1001'] = [self.recent(100)]
         await self.collector._recover_recent('-1001', self.source)
-        restarted = TelegramCollector(CONFIG, backend=self.backend, client_factory=lambda *_: self.client)
+        restarted = TelegramCollector(CONFIG, background_read_interval=0, backend=self.backend, client_factory=lambda *_: self.client)
         restarted.client = self.client
         await restarted._recover_recent('-1001', self.source)
         self.assertEqual(2, len(self.backend.calls))

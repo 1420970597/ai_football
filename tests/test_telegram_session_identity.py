@@ -37,7 +37,7 @@ class TelegramSessionIdentityTests(unittest.IsolatedAsyncioTestCase):
         def factory(*args):
             self.created.append(args[0])
             return self.client
-        self.collector = TelegramCollector(CONFIG, backend=self.backend, client_factory=factory)
+        self.collector = TelegramCollector(CONFIG, background_read_interval=0, backend=self.backend, client_factory=factory)
 
     async def asyncTearDown(self):
         await self.collector.disconnect()

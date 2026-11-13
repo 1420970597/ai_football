@@ -55,6 +55,7 @@ let dialogsQuery = "",
 let dialogsSequence = 0,
   adminsSequence = 0;
 let sourceSequence = 0;
+let sourceMonitorTimer = null;
 let grantKey = newId();
 let adminPlans = [];
 let adminSequence = 0;
@@ -374,7 +375,7 @@ async function selectSource() {
   );
   $("#expert-source-form button").disabled = !source;
   $("#source-state").textContent = source
-    ? `${source.platform_chat_id || source.chat_id} · ${source.enabled ? "监控中" : "已停用"} · ${source.allow_media ? "接收图片" : "仅文字"}`
+    ? `${source.platform_chat_id || source.chat_id} · ${source.enabled ? "已保存，正在核对采集回执" : "已停用"} · ${source.allow_media ? "接收图片" : "仅文字"}`
     : "先添加或选择监控来源";
   $("#source-toggle").textContent = source?.enabled ? "停用来源" : "启用来源";
   $("#source-admins").innerHTML = "";
@@ -382,6 +383,7 @@ async function selectSource() {
   $("#tg-admins-more").hidden = true;
   $("#trusted-experts").innerHTML = "";
   if (!source) return;
+  await loadSourceMonitoring(source.id);
   try {
     const data = await adminApi("/sources/" + source.id + "/experts");
     if (sequence !== sourceSequence || selectedSource()?.id !== source.id) return;
@@ -400,6 +402,28 @@ async function selectSource() {
   }
   if (sequence === sourceSequence && selectedSource()?.id === source.id &&
       adminsSequence === directorySequence) await listAdmins(false);
+}
+async function loadSourceMonitoring(sourceId) {
+  clearTimeout(sourceMonitorTimer);
+  try {
+    const data = await adminApi(`/sources/${sourceId}/monitoring`);
+    if (selectedSource()?.id !== sourceId) return;
+    const names = {disabled: "已停用", needs_author: "未生效：尚未授权发言身份", disconnected: "未生效：Telegram 未连接或未授权",
+      waiting_collector: "等待采集器加载", lease_unavailable: "采集租约不可用", monitoring: "实时监听已生效"};
+    const runtime = data.runtime || {};
+    const times = [];
+    if (data.last_persisted_at) times.push(`最近入库 ${new Date(data.last_persisted_at).toLocaleString()}`);
+    if (runtime.head_posted_at) times.push(`频道最近发言 ${new Date(runtime.head_posted_at).toLocaleString()}`);
+    const history = data.history_state === "flood_wait" || data.history_state === "backoff" ? "历史补收等待 Telegram 限流恢复" :
+      data.history_error ? `历史补收异常：${data.history_error}` : "";
+    $("#source-state").textContent = [names[data.state] || data.state, `信任身份 ${data.trusted_authors} 个`, history, ...times].filter(Boolean).join(" · ");
+    $("#source-channel-publisher").hidden = data.state !== "needs_author";
+  } catch (error) {
+    if (selectedSource()?.id === sourceId) $("#source-state").textContent = `监控状态未核验：${error.message}`;
+  } finally {
+    if (app.state.page === "admin" && app.state.admin && selectedSource()?.id === sourceId)
+      sourceMonitorTimer = setTimeout(() => loadSourceMonitoring(sourceId), 10000);
+  }
 }
 const tgNames = {
   idle: "未开始授权",
@@ -758,12 +782,22 @@ function bind() {
           display_name: fd.get("display_name"),
           enabled: true,
           allow_media: fd.has("allow_media"),
+          monitor_channel_posts: fd.has("monitor_channel_posts"),
         },
       });
       form.reset();
-      toast("监控来源已添加");
+      toast(created.channel_publisher_trusted ? "频道身份已授权，等待采集器加载" : "来源已保存，请选择信任作者");
       await loadSources(created.id);
     });
+  };
+  $("#source-channel-publisher").onclick = async () => {
+    const source = selectedSource();
+    if (!source) return;
+    try {
+      await adminApi(`/sources/${source.id}/channel-publisher`, {method: "POST", body: {}});
+      toast("频道发言已授权，等待采集器回执");
+      await selectSource();
+    } catch (error) { toast(error.message); }
   };
   $("#expert-source-form").onsubmit = (e) => {
     e.preventDefault();

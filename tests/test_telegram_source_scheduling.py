@@ -38,7 +38,7 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.backend=ScheduledBackend()
         self.client=Client()
-        self.collector=TelegramCollector(CONFIG,backend=self.backend,client_factory=lambda *_:self.client)
+        self.collector=TelegramCollector(CONFIG, background_read_interval=0,backend=self.backend,client_factory=lambda *_:self.client)
         self.source=self.backend.source_items[0]
         self.collector.client=self.client
         self.collector.sources={'-1001':self.source}
@@ -169,7 +169,7 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1,len(self.backend.events))
         self.assertFalse(self.collector.locks['-1001'].locked())
         self.backend.event=original
-        restarted=TelegramCollector(CONFIG,backend=self.backend,client_factory=lambda *_:self.client)
+        restarted=TelegramCollector(CONFIG, background_read_interval=0,backend=self.backend,client_factory=lambda *_:self.client)
         try:
             result=await asyncio.wait_for(restarted.sync_once(),.5)
             self.assertEqual('caught_up',result['sources']['-1001']['state'])
@@ -490,6 +490,8 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('backoff',second['sources']['-1001']['state'])
         self.client.get_messages=original
         self.collector.retry_at['-1001']=0
+        self.collector.background_reads.next_at=0
+        self.collector.background_reads.blocked_until=0
         third=await self.collector.sync_once()
         self.assertEqual('caught_up',third['sources']['-1001']['state'])
         self.assertEqual(1,len(self.backend.observation_calls))

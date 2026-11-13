@@ -29,7 +29,7 @@ class ChannelIdentityCollectorTests(unittest.IsolatedAsyncioTestCase):
         self.source = {'chat_id':self.chat_id, 'display_name':'频道显示名',
                        'trusted_sender_ids':[self.chat_id], 'allow_media':True}
         self.backend.source_items = [self.source]
-        self.collector = TelegramCollector(collector_fixture.CONFIG, backend=self.backend,
+        self.collector = TelegramCollector(collector_fixture.CONFIG, background_read_interval=0, backend=self.backend,
                                            client_factory=lambda *_:self.client)
         self.collector.client = self.client
         self.collector.sources = {self.chat_id:self.source}

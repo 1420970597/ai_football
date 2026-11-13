@@ -902,7 +902,7 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
         client.messages['-1001'][0].edit_date = (
             await self.pool.fetchval('SELECT source_version_at FROM v2_telegram_events')
         ) + timedelta(minutes=1)
-        collector = TelegramCollector(collector_support.CONFIG,backend=backend,client_factory=lambda *_:client)
+        collector = TelegramCollector(collector_support.CONFIG, background_read_interval=0,backend=backend,client_factory=lambda *_:client)
         collector.owner = str(self.owner)
         collector.client = client
         source = {'chat_id':'-1001','trusted_sender_ids':['7'],'allow_media':True}
@@ -943,7 +943,7 @@ class ReconciliationClaimsTests(unittest.IsolatedAsyncioTestCase):
             await collector.disconnect()
 
     def collector_for(self, backend, client):
-        collector = TelegramCollector(collector_support.CONFIG,backend=backend,client_factory=lambda *_:client)
+        collector = TelegramCollector(collector_support.CONFIG, background_read_interval=0,backend=backend,client_factory=lambda *_:client)
         collector.owner = str(self.owner)
         collector.client = client
         source = {'chat_id':'-1001','trusted_sender_ids':['7'],'allow_media':True}

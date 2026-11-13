@@ -1110,7 +1110,7 @@ async def control(request: Request, path: str, payload: dict | None = None):
             result = response.json()
     except (httpx.HTTPError, ValueError):
         raise HTTPException(status_code=503, detail="Telegram 控制服务暂不可用，请稍后重试") from None
-    if path not in {"/status", "/dialogs", "/admins", "/members"}:
+    if path not in {"/status", "/dialogs", "/admins", "/members", "/source-info"}:
         async with database.current_pool().acquire() as conn:
             await audit(conn, admin["id"], "admin", "telegram_control_" + path.rsplit("/", 1)[-1], "telegram_account",
                         str((payload or {}).get("attempt_id", "")), getattr(request.state, "request_id", ""))

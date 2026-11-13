@@ -484,6 +484,20 @@ class CollectorService:
             # 上游拒绝与网络失败按退避等待，WS补同步不能绕过失败退避。
             await wait_for_work(stop, delay, self.resync if failures == 0 and not rate_limited else None)
 
+    async def telegram_runtime_loop(self, stop: asyncio.Event) -> None:
+        """Apply source changes and renew leases even during historical backoff."""
+        while not stop.is_set():
+            try:
+                config = await get_config(self.api, self.api_url)
+                await self.telegram.apply_config(config)
+                if str(config.get('telegram_source_enabled', 'false')).lower() == 'true' and await self.telegram.connect():
+                    await self.telegram.refresh_sources(renew_leases=True)
+                elif str(config.get('telegram_source_enabled', 'false')).lower() != 'true':
+                    self.telegram.sources = {}
+            except Exception as exc:
+                log.warning('Telegram runtime refresh deferred category=%s', category(exc))
+            await wait_for_work(stop, 5)
+
     async def telegram_loop(self, stop: asyncio.Event) -> None:
         failures = 0
         while not stop.is_set():
@@ -531,6 +545,7 @@ class CollectorService:
             tasks = [asyncio.create_task(self.leyu_loop(stop), name="leyu-poll"),
                      asyncio.create_task(self.results.run(stop), name="leyu-results"),
                      asyncio.create_task(self.telegram_loop(stop), name="telegram-sync"),
+                     asyncio.create_task(self.telegram_runtime_loop(stop), name="telegram-runtime"),
                      asyncio.create_task(self.realtime.run(stop), name="leyu-realtime")]
             stopper = asyncio.create_task(stop.wait(), name="collector-stop")
             tasks.append(stopper)

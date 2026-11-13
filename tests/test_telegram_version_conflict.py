@@ -120,7 +120,7 @@ class RetainedHistoryCollectorTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.backend = collector_support.Backend()
         self.client = collector_support.Client()
-        self.collector = TelegramCollector(collector_support.CONFIG, backend=self.backend,
+        self.collector = TelegramCollector(collector_support.CONFIG, background_read_interval=0, backend=self.backend,
                                            client_factory=lambda *_: self.client)
         self.collector.client = self.client
         self.source = self.backend.source_items[0]

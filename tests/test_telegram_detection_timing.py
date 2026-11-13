@@ -13,7 +13,7 @@ import test_telegram_api as api_support
 class CollectorDetectionTests(unittest.IsolatedAsyncioTestCase):
     def make_collector(self):
         backend = collector_support.Backend()
-        collector = TelegramCollector(collector_support.CONFIG, backend=backend)
+        collector = TelegramCollector(collector_support.CONFIG, background_read_interval=0, backend=backend)
         collector.sources = {item['chat_id']: item for item in backend.source_items}
         collector._schedule_live_media = Mock()
         return collector, backend

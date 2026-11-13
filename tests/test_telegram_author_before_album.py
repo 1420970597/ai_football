@@ -13,7 +13,7 @@ class AuthorBeforeAlbumTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.backend = Backend()
         self.client = Client()
-        self.collector = TelegramCollector(CONFIG, backend=self.backend,
+        self.collector = TelegramCollector(CONFIG, background_read_interval=0, backend=self.backend,
                                            client_factory=lambda *_: self.client)
         self.collector.client = self.client
         self.source = self.backend.source_items[0]

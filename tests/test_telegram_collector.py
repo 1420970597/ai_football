@@ -245,7 +245,7 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
             self.created.append(session)
             return self.client
 
-        self.collector = TelegramCollector(CONFIG, backend=self.backend, client_factory=factory)
+        self.collector = TelegramCollector(CONFIG, background_read_interval=0, backend=self.backend, client_factory=factory)
 
     async def asyncTearDown(self):
         await self.collector.disconnect()
@@ -295,9 +295,9 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("caught_up", pages[-1]["state"])
         self.assertEqual(105, len(self.backend.events))
         self.assertEqual(105, self.backend.positions["-1001"])
-        # Recent recovery uses a bounded head page; archival reads retain the
-        # unbounded cursor scan and advance independently.
-        self.assertEqual([25, 1, None] + [25, None] * 4, self.client.query_limits)
+        # Both heads and archive pages are bounded before entering the shared
+        # account budget; the archive cursor still advances independently.
+        self.assertEqual([25, 1, 25] + [25, 25] * 4, self.client.query_limits)
         await self.collector.sync_once()
         self.assertEqual(1, self.client.connect_count)
         self.assertEqual(1, len(self.created))
@@ -564,7 +564,7 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("unavailable", result["sources"]["-1001"]["state"])
         self.assertEqual(3, self.backend.positions["-1002"])
 
-    async def test_flood_wait_only_backs_off_affected_source(self):
+    async def test_flood_wait_backs_off_background_reads_but_not_other_source_live_delivery(self):
         self.backend.source_items.append({"chat_id": "-1002", "trusted_sender_ids": ["7"], "allow_media": True})
         self.client.messages = {"-1001": [Message(1)], "-1002": [Message(3)]}
         original = self.client.iter_messages
@@ -578,7 +578,10 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.client.iter_messages = stream
         result = await self.collector.sync_once()
         self.assertEqual("flood_wait", result["sources"]["-1001"]["state"])
-        self.assertEqual(3, self.backend.positions["-1002"])
+        self.assertEqual('backoff', result['sources']['-1002']['state'])
+        self.assertNotIn('-1002', self.backend.positions)
+        await asyncio.wait_for(self.collector._live_messages('-1002', [Message(3)]), .2)
+        self.assertEqual(1, self.collector.live_event_delivery['staged'])
 
     async def test_untrusted_and_empty_messages_advance_without_review(self):
         self.client.messages["-1001"] = [Message(1, sender=8), Message(2, text="")]

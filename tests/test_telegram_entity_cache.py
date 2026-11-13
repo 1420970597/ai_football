@@ -11,7 +11,7 @@ class EntityCacheTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.client=Client()
         self.client.get_entity=AsyncMock(wraps=self.client.get_entity)
-        self.collector=TelegramCollector(CONFIG,backend=Backend(),client_factory=lambda *_:self.client)
+        self.collector=TelegramCollector(CONFIG, background_read_interval=0,backend=Backend(),client_factory=lambda *_:self.client)
         self.collector.client=self.client
 
     async def asyncTearDown(self):

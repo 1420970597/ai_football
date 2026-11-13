@@ -641,6 +641,7 @@
                           type="checkbox"
                           checked
                         />接收图片媒体</label
+                      ><label class="check-label"><input name="monitor_channel_posts" type="checkbox" checked />核验并信任广播频道发言（群组仍需选择作者）</label
                       ><button class="primary-button">添加监控来源</button>
                     </form>
                   </div>
@@ -650,7 +651,8 @@
                         <option value="">选择来源</option>
                       </select></label
                     >
-                    <div id="source-state"></div>
+                    <div id="source-state" role="status"></div>
+                    <button id="source-channel-publisher" class="small-button" hidden>核验并授权频道发言</button>
                     <div class="form-actions">
                       <button id="source-toggle" class="small-button" disabled>
                         停用来源</button

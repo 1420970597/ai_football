@@ -40,7 +40,7 @@ class ControlServer:
                     if length < 0 or length > 16384 or self.headers.get("Transfer-Encoding"):
                         self.send_error(413)
                         return
-                    if self.path not in {"/status", "/auth/qr", "/auth/password", "/auth/cancel", "/dialogs", "/admins", "/members", "/disconnect", "/leyu/refresh"}:
+                    if self.path not in {"/status", "/auth/qr", "/auth/password", "/auth/cancel", "/dialogs", "/admins", "/members", "/source-info", "/disconnect", "/leyu/refresh"}:
                         self.send_error(404)
                         return
                     raw = self.rfile.read(length)

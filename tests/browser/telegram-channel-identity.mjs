@@ -24,14 +24,25 @@ try{
   for(const width of [1440,390]){
     const context=await browser.newContext({viewport:{width,height:960},locale:'zh-CN'});
     const page=await context.newPage(),writes=[];
-    let trusted=false;
+    let trusted=false, created=false, activated=false;
+    const sourceRows=[{id:'channel-source',platform_chat_id:'-1001234567',display_name:'隔离频道',enabled:true,allow_media:true}];
     page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/api/v1/**',async route=>{
       const request=route.request(),p=new URL(request.url()).pathname.replace('/api/v1','');
       if(request.method()!=='GET')writes.push({path:p,body:request.postDataJSON()});
       const reply=json=>route.fulfill({json});
       if(p==='/admin/me')return reply({user:{id:'isolated-admin',role:'admin',display_name:'隔离管理员',email:'admin@test.invalid'}});
-      if(p==='/admin/sources')return reply({items:[{id:'channel-source',platform_chat_id:'-1001234567',display_name:'隔离频道',enabled:true,allow_media:true}]});
+      if(p==='/admin/sources'){
+        if(request.method()==='POST'){
+          const body=request.postDataJSON();assert.equal(body.monitor_channel_posts,true);
+          if(body.chat_id==='-1000000000')return route.fulfill({status:409,json:{detail:'来源尚未通过当前 Telegram 账号核验'}});
+          created=true;sourceRows.push({id:'new-channel',chat_id:body.chat_id,display_name:body.display_name,enabled:true,allow_media:true});
+          return route.fulfill({status:201,json:{id:'new-channel',channel_publisher_trusted:true}});
+        }
+        return reply({items:sourceRows});
+      }
+      if(p.endsWith('/monitoring'))return reply({state:p.includes('new-channel')?(activated?'monitoring':'waiting_collector'):(trusted?'monitoring':'needs_author'),
+        trusted_authors:trusted||created?1:0,runtime:activated?{head_posted_at:'2026-11-13T22:00:00Z'}:{},history_state:'backoff'});
       if(p==='/admin/sources/channel-source/experts'){
         if(request.method()==='POST'){trusted=true;return route.fulfill({status:201,json:{id:'channel-expert'}});}
         return reply({items:trusted?[{id:'channel-expert',platform_sender_id:'-1001234567',display_nickname:'频道发布身份',enabled:true}]:[]});
@@ -60,10 +71,26 @@ try{
     assert.equal(writes.length,1);
     assert.equal(writes[0].body.sender_id,'-1001234567');
     assert.equal(writes[0].path,'/admin/sources/channel-source/experts');
+    await page.locator('#source-form [name="chat_id"]').fill('-1009876543');
+    await page.locator('#source-form [name="display_name"]').fill('新增广播频道');
+    await page.locator('#source-form button').click();
+    await page.waitForFunction(()=>document.querySelector('#source-select').value==='new-channel');
+    await page.waitForFunction(()=>document.querySelector('#source-state').textContent.includes('等待采集器加载'));
+    activated=true;
+    await page.locator('#source-select').selectOption('channel-source');
+    await page.locator('#source-select').selectOption('new-channel');
+    await page.waitForFunction(()=>document.querySelector('#source-state').textContent.includes('实时监听已生效'));
+    assert.match(await page.locator('#source-state').innerText(),/历史补收等待 Telegram 限流恢复/);
+    await page.locator('#source-form [name="chat_id"]').fill('-1000000000');
+    await page.locator('#source-form [name="display_name"]').fill('未加入频道');
+    await page.locator('#source-form button').click();
+    await page.getByText('来源尚未通过当前 Telegram 账号核验',{exact:true}).waitFor();
+    assert.equal(await page.locator('#source-select').inputValue(),'new-channel');
     const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);
     assert.equal(overflow,false);
-    await page.locator('#source-admins').screenshot({path:path.join(evidence,`channel-identity-${width}.png`)});
-    results.push({width,passed:true,explicit_trust_writes:writes.length,negative_identity_preserved:true,overflow});
+    await page.locator('.source-layout').screenshot({path:path.join(evidence,`channel-identity-${width}.png`)});
+    results.push({width,passed:true,explicit_trust_writes:writes.length,negative_identity_preserved:true,verified_onboarding:true,
+      activation_receipt_visible:true,rejected_source_not_added:true,overflow});
     await context.close();
   }
   assert.deepEqual(errors,[]);

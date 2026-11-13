@@ -78,7 +78,7 @@ class DirectoryClient(legacy.Client):
 class TelegramDirectoryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.client = DirectoryClient()
-        self.collector = TelegramCollector(legacy.CONFIG, backend=legacy.Backend(), client_factory=lambda *args: self.client)
+        self.collector = TelegramCollector(legacy.CONFIG, background_read_interval=0, backend=legacy.Backend(), client_factory=lambda *args: self.client)
 
     async def asyncTearDown(self):
         await self.collector.disconnect()
@@ -180,22 +180,17 @@ class TelegramDirectoryTests(unittest.IsolatedAsyncioTestCase):
         backend=self.collector.backend
         backend.source_items=[{'chat_id':self.use_group(group(i)),'trusted_sender_ids':['7'],'allow_media':True} for i in (62,63,64,65)]
         persisted=[]
-        async def save(body):
-            persisted.append(body)
-            if body['chat_id']=='-62':
-                raise ConnectionError('isolated backend failure')
-        backend.directory=save
         active,peak=0,0
-        original=self.client.iter_messages
-        async def messages(*args,**kwargs):
+        async def save(body):
             nonlocal active,peak
             active+=1
             peak=max(peak,active)
             await asyncio.sleep(.01)
-            async for item in original(*args,**kwargs):
-                yield item
             active-=1
-        self.client.iter_messages=messages
+            persisted.append(body)
+            if body['chat_id']=='-62':
+                raise ConnectionError('isolated backend failure')
+        backend.directory=save
         result=await self.collector.sync_once()
         self.assertEqual(4,len(result['sources']))
         self.assertEqual(4,len(persisted))
