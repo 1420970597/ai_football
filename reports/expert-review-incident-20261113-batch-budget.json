@@ -1,0 +1,110 @@
+{
+  "schema": "expert-review-batch-budget-v1",
+  "updated_at": "2026-11-13T00:01:00Z",
+  "status": "isolated_validation_passed_awaiting_parent_integration",
+  "scope": "脱敏隔离MCP协议与纯展示测量；无数据库、模型、账户或交易调用；未部署",
+  "source": {
+    "worktree": ".runtime/refactor-wt/web-ux",
+    "parent_commit": "d56666533721584046fd3192b8a81da677bad6c7",
+    "committed_source_verified": false,
+    "frozen_sha256": {
+      "services/hermes-mcp/server.py": "b8d6b381913bf1244fa8a4ba6ff7a17c8be2fada62a07e2055527b914c4532b5",
+      "tests/test_mcp_batch_budget.py": "2154b6af0b3d0a82986289f85a90dd64e05ed33b1b511939c56edf3cc5dcc980",
+      "tests/test_review_source_team_sides.py": "b978dbb96d21b69267f9f2bfc9d8c7ade98450eb8d8eb23d17a359d226bc8d5c"
+    }
+  },
+  "root_cause": {
+    "condition": "六个合法单项盘口响应各自小于原生90K字符预算，但组合回执可大于Hermes单result100K字符限制",
+    "consequence": "框架可能将结果转存至本角色不可读文件，已接受或未知回执随整批不可见；嵌套JSON错误字符串又重复转义",
+    "initial_lossless_market_table_probe": {
+      "supported_quotes_per_item": 120,
+      "item_count": 6,
+      "native_single_item_indented_characters": 54535,
+      "batch_after_existing_market_table_characters": 116897,
+      "exceeded_100000_character_single_result_budget": true
+    }
+  },
+  "implementation": {
+    "source_changes": "仅新增_batch_result_view/_batch_error_view并接入review_match_batch.run；其余父代理业务变更不属于本报告改动",
+    "view_contract": [
+      "明确source-selection-view-v1派生展示；完整原生检索、读盘及录入响应继续由API持久化",
+      "盘口只展示来源明确的期间、所选球队方向与selection_line的所有匹配状态，不以provider_home原生line冒充所选方线",
+      "使用native_market_filter/native_market_coverage/native_counts/source_selection_quotes/presentation，删除原markets字段，避免删行后仍声称原生完整库存",
+      "shared-column-rows-v1按columns逐行还原再合并shared，可逆保留每条编号、期间、线值、方向与状态",
+      "候选items最多展示前三项，显式native/displayed count、items_complete、native_search_complete及字段投影；resolution.matching_candidates不丢项",
+      "极端单项展示超过14400字符时明确withheld_for_inline_budget与requires_manual_market_review，保留原生计数与已接受/拒绝/未知回执，不将未展示解释成没有比赛或盘口",
+      "JSON错误内completed_receipt结构化并复用投影，保留search_key/next_cursor及record_result_verified=false",
+      "单项非ToolError异常仅输出异常类名、protocol_failure及native_outcome_unknown；不泄露异常正文，不盲重试；CancelledError继续传播并由现有finally drain"
+    ],
+    "concurrency_and_authorization": "未更改既有worker2/4容量、batch内部2路、全局市场gate、API授权/attempt/连续分页/首次期间声明/当前报价与20秒围栏",
+    "hermes_threshold_changed": false
+  },
+  "validation": {
+    "image": "ai-football-verifier:v2.0.0-dev",
+    "image_id": "sha256:3f7e8399e581036b20c8ab360a68e35c63555a2cb32583f96099dee4dd5579f4",
+    "limits": {
+      "cpus": 0.3,
+      "memory_mib": 256,
+      "network": "none",
+      "source_mount": "read_only"
+    },
+    "selected_test_module": "test_mcp_batch_budget",
+    "tests": 9,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "unittest_seconds": 3.606,
+    "harness_seconds": 4.516,
+    "exit_code": 0,
+    "scenarios": [
+      "六项各120合法原生盘口：720条同源精确线状态行可逆保留，accepted不丢，真实MCP文本小于90K",
+      "六项record失败：completed_receipt结构化、unknown与false verified保留且真实MCP文本小于90K",
+      "selected-side -0.25与provider-home +0.25不混淆，closed/suspended/active全部保留，rejected不丢",
+      "total原生2.75/over来源视图；未知其它玩法明确需要继续核验",
+      "原生覆盖未完或来源方向未知时不声称已展示全部所选状态",
+      "2000候选显式部分展示，全部20条消歧候选可逆保留",
+      "续页错误保留原生next_cursor，不重新首查或声称录入成功",
+      "一项已成功而另一项JSONDecodeError：成功回执不丢，错误正文不泄露",
+      "极端300行大展示明确withheld/manual，计数与accepted保留"
+    ],
+    "serialization_probe": {
+      "item_count": 6,
+      "supported_quotes_per_item": 120,
+      "retained_source_selection_rows": 720,
+      "before_characters": 243797,
+      "success_view_characters": 57005,
+      "unknown_error_view_characters": 57395,
+      "requested_max_characters": 90000,
+      "exit_code": 0,
+      "note": "字符数使用ensure_ascii=false及紧凑JSON分隔符；真实MCP回归同时对content[0].text进行<90000断言"
+    },
+    "evidence_directory": ".runtime/expert-review-incident-20261113/batch-budget-tests",
+    "evidence_files": [
+      "tests.log",
+      "backend-tests.json"
+    ],
+    "commands": [
+      {
+        "command": "mkdir -p /root/ai_football/.runtime/expert-review-incident-20261113/batch-budget-tests && docker run --rm --network none --cpus .3 --memory 256m --user 0 --name ai-football-batch-budget-20261113 -e SOURCE_COMMIT=d56666533721584046fd3192b8a81da677bad6c7 -e SOURCE_IS_CLEAN=false -v /root/ai_football/.runtime/refactor-wt/web-ux:/source:ro -v /root/ai_football/.runtime/expert-review-incident-20261113/batch-budget-tests:/evidence --entrypoint python ai-football-verifier:v2.0.0-dev /source/infra/test/frozen_suite.py test_mcp_batch_budget > /root/ai_football/.runtime/expert-review-incident-20261113/batch-budget-tests/tests.log 2>&1; task_status=$?; tail -32 /root/ai_football/.runtime/expert-review-incident-20261113/batch-budget-tests/tests.log; exit \"$task_status\"",
+        "exit_code": 0
+      },
+      {
+        "command": "docker run --rm -i --network none --cpus .3 --memory 256m --user 0 --entrypoint python -e EXPERT_MCP_TOKEN=isolated-budget-measure -v /root/ai_football/.runtime/refactor-wt/web-ux:/source:ro ai-football-verifier:v2.0.0-dev -",
+        "stdin_program": "import importlib.util,json,sys\nsys.path[:0]=['/source','/source/services/api','/source/tests']\nfrom tests.test_mcp_batch_budget import BatchBudgetTests\nspec=importlib.util.spec_from_file_location('budget_measure','/source/services/hermes-mcp/server.py')\nmodule=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)\ncase=BatchBudgetTests('test_six_legal_120_quote_inventories_fit_and_keep_all_native_states_and_receipts');case.server=module\nsuccess=[];errors=[];raw=[]\nfor index in range(6):\n    native=case.native(index);item=case.item(index)\n    raw.append({'index':index,'result':native})\n    success.append({'index':index,'result':module._batch_result_view(native,item)})\n    del native['record_result']\n    error=module.ToolError(json.dumps({'completed_receipt':native,'failed_operation':'record_expert_signals','record_result_verified':False,'error':'系统工具超时'},ensure_ascii=False))\n    errors.append({'index':index,**module._batch_error_view(error,item)})\nsize=lambda x:len(json.dumps({'items':x},ensure_ascii=False,separators=(',',':'),allow_nan=False))\nprint(json.dumps({'six_120_before_characters':size(raw),'six_120_success_view_characters':size(success),'six_120_unknown_view_characters':size(errors),'limit_characters':90000,'retained_source_rows':720}))",
+        "exit_code": 0
+      },
+      {
+        "command": "git diff --check -- services/hermes-mcp/server.py tests/test_mcp_batch_budget.py tests/test_review_source_team_sides.py",
+        "exit_code": 0
+      }
+    ]
+  },
+  "limits": [
+    "这9项隔离测试不等于真实模型识别准确率或检测至推荐20秒达标；无真实模型、生产API或交易试验",
+    "新API球队方向10项测试尚未由本代理运行，父代理在统一冻结后的相关新旧回归中验证",
+    "14400字符触发的是显式展示降级，完整原生证据仍在API；requires_manual_market_review不能解释为无赛事/无盘口，也不能据此认定已识别成功",
+    "预算测量覆盖正常六项120行、所有状态、失败JSON回执与极端300行展示；不是对任意异常上游JSON长度的形式化证明",
+    "未更改生产参数、模型推理配置、权限、并发或截止时钟；未Git提交、部署或生产数据写入"
+  ],
+  "next": "父代理统一冻结运行API/MCP/worker相关新旧回归；通过后再按现有发布门禁处理"
+}

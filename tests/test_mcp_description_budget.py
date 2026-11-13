@@ -143,7 +143,7 @@ class MCPDescriptionBudgetTests(unittest.IsolatedAsyncioTestCase):
         response = await self.rpc('tools/call', {'name': 'place_bet', 'arguments': {}}, PROFILE)
         self.assertTrue(response.json()['result']['isError'])
         self.assertEqual({'search_matches', 'resolve_match', 'list_match_markets',
-                          'record_expert_signals'}, {t['name'] for t in await self.tools(PROFILE)})
+                          'record_expert_signals', 'review_match_batch'}, {t['name'] for t in await self.tools(PROFILE)})
 
     async def test_business_parameters_and_invalid_reference_stay_identical(self):
         captured = []

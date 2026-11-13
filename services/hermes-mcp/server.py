@@ -114,6 +114,9 @@ BUDGET_ARGUMENT_DESCRIPTIONS = {
     'sport': '来源实际项目，如football/basketball；未知才省略。',
     'team_a': '来源明确可读的第一队；双方已知时与team_b首次成对传入。',
     'team_b': '来源明确可读的第二队；不从候选补造。',
+    'competition_query': '来源可读联赛；未知才省略。',
+    'selection_team': '所选原文team_a或team_b；不是系统主客。',
+    'selection_line': '所选球队带符号线：受让正、让球负。',
     'read_markets': '来源明确玩法/期间时true；唯一活动绑定合并读盘并复用。',
     'market_kind': '来源玩法，如total/handicap；不从赔率猜。',
     'period': '来源明确的full_time/first_half/second_half；未知不猜。',
@@ -172,6 +175,8 @@ class CompactMCPServer(MCPServer):
                 updates['description'] = BUDGET_TOOL_DESCRIPTIONS[tool.name]
                 if compact_descriptions.get():
                     updates['description'] = (
+                        'expert-review多场用主连接football.review_match_batch，本连接不重复提交。'
+                        if tool.name == 'review_match_batch' else
                         '仅供不同对阵独立并行，勿重复主连接同场查询。' + updates['description']
                         if tool.name == 'search_matches' else
                         f'独立对阵并行调用football.{tool.name}；expert-review已预载，'

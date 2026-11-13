@@ -40,7 +40,7 @@ class ComposedMarketQueryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_both_existing_tools_advertise_bounded_optional_query(self):
         tools=(await self.rpc('tools/list')).json()['result']['tools']
-        self.assertEqual({'search_matches','resolve_match','list_match_markets','record_expert_signals'},{t['name']for t in tools})
+        self.assertEqual({'search_matches','resolve_match','list_match_markets','record_expert_signals','review_match_batch'},{t['name']for t in tools})
         for name in ('search_matches','resolve_match'):
             schema=next(t for t in tools if t['name']==name)['inputSchema']
             query=schema['properties']['market_query']

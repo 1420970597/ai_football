@@ -45,10 +45,10 @@ class CompactToolTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(captured))
         self.assertEqual(('job', 'attempt'), (captured[0]['review_id'], captured[0]['attempt_id']))
 
-    async def test_native_output_schema_and_four_tool_allowlist_are_unchanged(self):
+    async def test_native_output_schema_and_bounded_review_allowlist(self):
         response = await self.rpc('tools/list')
         tools = response.json()['result']['tools']
-        self.assertEqual({'search_matches','resolve_match','list_match_markets','record_expert_signals'},
+        self.assertEqual({'search_matches','resolve_match','list_match_markets','record_expert_signals','review_match_batch'},
                          {tool['name'] for tool in tools})
         for tool in tools:
             self.assertNotIn('outputSchema', tool, 'preserve the native bare-dict output contract')
