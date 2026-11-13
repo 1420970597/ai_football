@@ -39,7 +39,8 @@ def _version_facts(facts):
 
 async def project_settlements(conn, fixture, version, facts):
     rows = await conn.fetch('SELECT s.*,' + QUOTE_VALID_SQL + ' AS quote_valid,' + INTENT_VALID_SQL +
-                            ' AS intent_valid FROM v2_expert_signals s WHERE fixture_id=$1 ORDER BY id FOR UPDATE', fixture['id'])
+                            " AS intent_valid FROM v2_expert_signals s WHERE fixture_id=$1 "
+                            "AND COALESCE(s.withdrawal_reason,'')<>'duplicate_recommendation' ORDER BY id FOR UPDATE", fixture['id'])
     projections = []
     for row in rows:
         # An audited intent correction is not a betting result. Its pending

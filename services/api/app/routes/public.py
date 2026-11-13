@@ -17,6 +17,8 @@ from ..expert_statistics import StatisticsScope, source_options, statistics_scop
 from ..review_state import fresh_quote
 from ..handicap_lines import line_projection
 from .. import message_read
+from ..recommendation_eligibility import manual_phase_sql
+from ..signal_identity import identity_columns
 
 router = APIRouter(prefix="/api/v1/public")
 
@@ -121,7 +123,7 @@ _VISIBLE_RECOMMENDATIONS_FROM = (
 )
 _VISIBLE_RECOMMENDATIONS_WHERE = (
     "s.outcome='pending' AND s.withdrawn_at IS NULL AND m.deleted_at IS NULL AND e.enabled AND src.enabled AND se.enabled "
-    "AND m.media_state='ready' AND f.phase IN ('scheduled','live') AND s.phase=f.phase "
+    "AND m.media_state='ready' AND f.phase IN ('scheduled','live') "
     "AND f.stale_projection_at IS NULL AND f.decision_context_only_at IS NULL "
     "AND m.posted_at<=now()+interval '5 seconds' "
     "AND ((f.sport='football' AND s.market_kind IN ('winner','handicap','total') "
@@ -146,7 +148,7 @@ def _visible_recommendations_where() -> str:
         "AND q.play_id IS NOT NULL AND q.play_id<>'' "
         "AND q.market_instance_id IS NOT NULL AND q.market_instance_id<>'' "
         "AND q.selection_id IS NOT NULL AND q.selection_id<>'' "
-        "AND (q.source_updated_at IS NULL OR q.source_updated_at<=now()))"
+        "AND (q.source_updated_at IS NULL OR q.source_updated_at<=now()) AND " + manual_phase_sql() + ")"
     )
 
 
@@ -155,15 +157,18 @@ async def _recommendation_summaries(fixture_ids: list[str], limit: int) -> dict[
         return {}
     rows = await database.current_pool().fetch(
         "SELECT picked.* FROM unnest($1::text[]) wanted(fixture_id) CROSS JOIN LATERAL ("
-        "SELECT s.id,s.expert_id,e.display_nickname,s.fixture_id,s.phase,s.market_id,s.market_name,"
+        "SELECT ranked.* FROM (SELECT s.id,s.expert_id,e.display_nickname,s.fixture_id,s.phase,s.market_id,s.market_name,"
         "s.market_kind,s.period,s.line,s.selection,s.recommendation_price,s.quote_time,s.score_baseline,"
-        "s.outcome,s.unit_net,s.created_at " + _VISIBLE_RECOMMENDATIONS_FROM +
+        "s.outcome,s.unit_net,s.created_at,row_number() OVER(PARTITION BY s.expert_id," + identity_columns('s') +
+        " ORDER BY s.created_at DESC,s.id DESC) AS semantic_rank " + _VISIBLE_RECOMMENDATIONS_FROM +
         "WHERE s.fixture_id=wanted.fixture_id AND " + _visible_recommendations_where() +
-        " ORDER BY s.created_at DESC,s.id DESC LIMIT $2) picked "
+        ") ranked WHERE semantic_rank=1 ORDER BY created_at DESC,id DESC LIMIT $2) picked "
         "ORDER BY picked.fixture_id,picked.created_at DESC,picked.id DESC", fixture_ids, limit+1)
     output: dict[str, list[dict]] = {}
     for row in rows:
-        output.setdefault(row['fixture_id'], []).append(line_projection(row))
+        item = line_projection(row)
+        item.pop('semantic_rank', None)
+        output.setdefault(row['fixture_id'], []).append(item)
     return output
 
 

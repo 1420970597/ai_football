@@ -21,10 +21,12 @@ const server=http.createServer(async(req,res)=>{
 await new Promise(resolve=>server.listen(8080,'127.0.0.1',resolve));
 const browser=await chromium.launch({headless:true,args:['--disable-dev-shm-usage']});
 const results=[],errors=[];
+let activePage;
 try{
   for(const width of [1440,1030,390]){
     const context=await browser.newContext({viewport:{width,height:960},locale:'zh-CN'});
     const page=await context.newPage(),reads=[],writes=[];
+    activePage=page;
     let fail=false,hold=false,releaseHeld,startHeld;
     const held=new Promise(resolve=>{startHeld=resolve;});
     page.on('pageerror',error=>errors.push(error.message));
@@ -43,7 +45,8 @@ try{
       if(p==='/public/matches'){
         const sport=url.searchParams.get('sport'),scope=url.searchParams.get('recommended_only');
         const phase=url.searchParams.get('phase')==='all'?'live':url.searchParams.get('phase');
-        reads.push({p,sport,scope,phase});
+        reads.push({p,sport,scope,phase,date:url.searchParams.get('date')});
+        if(scope==='true')assert.equal(url.searchParams.has('date'),false,'unsettled expert matches span kickoff dates');
         if(hold&&sport==='football'){hold=false;startHeld();await new Promise(resolve=>{releaseHeld=resolve;});}
         if(fail)return route.fulfill({status:503,json:{detail:'隔离服务暂不可用'}});
         let items=['cancelled','finished'].includes(phase)?[]:[match(sport,phase)];
@@ -58,6 +61,9 @@ try{
     await page.goto(baseUrl+'/');
     await page.locator('[data-fixture="football-match"] [data-recommendation]').first().waitFor();
     assert.equal(reads[0].scope,'true');
+    assert.equal(reads[0].date,null);
+    assert.equal(await page.locator('.date-nav').isVisible(),false);
+    assert.match(await page.locator('#matches-footnote').innerText(),/所有日期/);
     assert.equal(await page.locator('[data-match-scope="recommended"]').getAttribute('aria-pressed'),'true');
     assert.equal(await page.locator('.match-row').count(),1);
     assert.equal(await page.locator('.match-recommendation').count(),2);
@@ -68,6 +74,8 @@ try{
     assert.doesNotMatch(await page.locator('#matches-list').innerText(),/没有专家的比赛/);
     await page.locator('[data-match-scope="all"]').click();
     await page.locator('[data-fixture="unrelated"]').waitFor();
+    assert.equal(await page.locator('.date-nav').isVisible(),true);
+    assert.match(reads.at(-1).date,/^\d{4}-\d{2}-\d{2}$/);
     assert.equal(await page.locator('.match-recommendation').count(),0);
     await page.reload();
     await page.locator('[data-fixture="unrelated"]').waitFor();
@@ -117,11 +125,14 @@ try{
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.screenshot({path:output+'/homepage-expert-matches-'+width+'.png',fullPage:true});
     assert.deepEqual(writes,[]);
-    results.push({width,passed:true,read_only:true,grouped_recommendations:true,sport_and_phase_isolation:true,scope_reload:true,stale_response_ignored:true});
+    results.push({width,passed:true,read_only:true,grouped_recommendations:true,sport_and_phase_isolation:true,scope_reload:true,stale_response_ignored:true,all_unsettled_dates:true,all_matches_date_filter_preserved:true});
     await context.close();
   }
   assert.deepEqual(errors,[]);
-}catch(error){results.push({passed:false,name:error.name,message:error.message});process.exitCode=1;}
+}catch(error){
+  const diagnostic=activePage&&!activePage.isClosed()?await activePage.locator('body').innerText():'';
+  results.push({passed:false,name:error.name,message:error.message,diagnostic});process.exitCode=1;
+}
 finally{
   await browser.close();await new Promise(resolve=>server.close(resolve));
   await fs.writeFile(output+'/homepage-expert-matches-results.json',JSON.stringify({results,errors,synthetic_data:true,production_writes:0},null,2)+'\n');

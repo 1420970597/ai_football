@@ -23,6 +23,7 @@ from ..review_state import authorize
 from ..security import encrypt_secret
 from ..handicap_lines import line_projection
 from ..expert_profitability import PROFITABILITY_DEFINITION, profitability_rows, profitable
+from ..signal_identity import same_intent_sql
 
 router = APIRouter(prefix="/api/v1/accounts")
 executor_router = APIRouter(prefix="/internal/executor")
@@ -467,7 +468,8 @@ async def dispatch(request: Request):
         if orders.live_enabled(settings):
             has_dynamic = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM v2_user_bet_settings WHERE auto_enabled AND NOT emergency_stopped AND expert_selection_mode='profitable')")
             profitable_ids = [r['expert_id'] for r in await profitability_rows(conn) if profitable(r)] if has_dynamic else []
-            pairs = await conn.fetch("SELECT b.user_id,s.id AS signal_id FROM v2_user_bet_settings b JOIN v2_expert_signals s ON "
+            pairs = await conn.fetch("SELECT b.user_id,s.id AS signal_id FROM v2_user_bet_settings b "
+                "JOIN v2_leyu_accounts a ON a.user_id=b.user_id JOIN v2_expert_signals s ON "
                 "((b.expert_selection_mode='manual' AND s.expert_id=ANY(b.allowed_experts)) OR "
                 "(b.expert_selection_mode='profitable' AND s.expert_id=ANY($1::uuid[]))) "
                 "JOIN v2_fixtures f ON f.id=s.fixture_id AND f.phase IN('scheduled','live') AND s.phase=f.phase "
@@ -476,14 +478,18 @@ async def dispatch(request: Request):
                 "AND ((s.market_id='37' AND s.market_kind='winner' AND s.selection IN('home','away')) "
                 "OR (s.market_id='38' AND s.market_kind='total') OR (s.market_id='39' AND s.market_kind='handicap'))) "
                 "JOIN v2_expert_messages m ON m.id=s.message_id "
-                "WHERE b.auto_enabled AND NOT b.emergency_stopped AND s.created_at>now()-interval '5 minutes' AND s.outcome='pending' "
+                "WHERE b.auto_enabled AND NOT b.emergency_stopped AND s.withdrawn_at IS NULL "
+                "AND s.created_at>now()-interval '5 minutes' AND s.outcome='pending' "
                 "AND m.posted_at>=now()-interval '5 minutes' AND m.posted_at<=now()+interval '5 seconds' "
-                "AND NOT EXISTS(SELECT 1 FROM v2_bet_orders o WHERE o.user_id=b.user_id AND o.signal_id=s.id AND o.account_id IS NOT NULL) ORDER BY s.created_at LIMIT 30", profitable_ids)
+                "AND NOT EXISTS(SELECT 1 FROM v2_bet_orders o JOIN v2_expert_signals previous ON previous.id=o.signal_id "
+                "WHERE o.user_id=b.user_id AND o.account_id=a.id AND " + same_intent_sql('previous', 's') +
+                ") ORDER BY s.created_at,s.id LIMIT 30", profitable_ids)
             for pair in pairs:
                 try:
                     async with conn.transaction():
-                        await orders.reserve_signal(conn, pair["user_id"], pair["signal_id"], settings)
-                        count += 1
+                        reserved = await orders.reserve_signal(conn, pair["user_id"], pair["signal_id"], settings)
+                        if reserved['signal_id'] == pair['signal_id']:
+                            count += 1
                 except HTTPException:
                     continue
         async with conn.transaction():

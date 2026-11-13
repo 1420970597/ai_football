@@ -12,6 +12,8 @@ from .auth import audit
 from .membership import has_entitlement
 from .security import decrypt_secret
 from .expert_profitability import require_expert_permission
+from .signal_identity import previous_intent_order
+from .recommendation_eligibility import manual_phase_sql
 
 
 def live_enabled(settings) -> bool:
@@ -48,7 +50,8 @@ async def eligible_signal(conn, signal_id, max_age: int | None = None, *, manual
     row = await conn.fetchrow(
         "SELECT s.*,m.source_id,m.platform_message_id,m.revision AS message_revision,m.deleted_at,m.media_state,m.posted_at AS message_posted_at,"
         "e.enabled AS expert_enabled,src.enabled AS source_enabled,se.enabled AS trusted,f.phase AS current_phase,"
-        "f.sport,f.home_score,f.away_score,q.id AS quote_id,q.price AS current_price,q.source_updated_at,"
+        "f.sport,f.home_score,f.away_score,f.stale_projection_at,f.decision_context_only_at,"
+        + manual_phase_sql() + " AS manual_phase_compatible,q.id AS quote_id,q.price AS current_price,q.source_updated_at,"
         "q.status,q.play_id,q.market_instance_id,q.selection_id,q.market_kind AS current_kind,q.score_basis AS current_basis "
         "FROM v2_expert_signals s JOIN v2_expert_messages m ON m.id=s.message_id "
         "JOIN v2_experts e ON e.id=s.expert_id JOIN v2_expert_sources src ON src.id=m.source_id "
@@ -62,7 +65,8 @@ async def eligible_signal(conn, signal_id, max_age: int | None = None, *, manual
         raise HTTPException(409, "推荐及原生盘口不可用")
     now = datetime.now(timezone.utc)
     if (row["outcome"] != "pending" or row["current_phase"] not in {"scheduled", "live"}
-            or row["phase"] != row["current_phase"]
+            or (not row['manual_phase_compatible'] if manual else row["phase"] != row["current_phase"])
+            or row['stale_projection_at'] or row['decision_context_only_at']
             or row["deleted_at"] or row["withdrawn_at"] or row["media_state"] != "ready" or not all((row["expert_enabled"], row["source_enabled"], row["trusted"]))
             or any(not row[key] for key in ("play_id", "market_instance_id", "selection_id"))
             or not execution_market_supported(row["sport"], row["market_id"], row["current_kind"], row["period"])
@@ -157,6 +161,10 @@ async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = F
     if previous:
         return dict(previous) | {'request_replayed': True} if manual else previous
     signal = await eligible_signal(conn, signal_id, manual=manual)
+    if not manual:
+        previous = await previous_intent_order(conn, user_id, account['id'], signal_id)
+        if previous:
+            return dict(previous) | {'request_replayed': True}
     if manual:
         stake = policy["manual_stake"]
         if not manual_limits_valid(stake, policy["daily_limit"], policy["open_exposure_limit"]):
@@ -169,10 +177,9 @@ async def reserve_signal(conn, user_id, signal_id, settings, *, manual: bool = F
     sums = await exposure_totals(conn, user_id, policy["daily_timezone"])
     if sums["daily"] + stake > policy["daily_limit"] or sums["exposure"] + stake > policy["open_exposure_limit"]:
         raise HTTPException(409, "当日或开放敞口限额不足")
-    baseline = signal["score_baseline"] or {}
     score = ""
-    if signal["current_phase"] == "live" and baseline.get("home_score") is not None and baseline.get("away_score") is not None:
-        score = f"{baseline['home_score']}:{baseline['away_score']}"
+    if signal["current_phase"] == "live" and signal['home_score'] is not None and signal['away_score'] is not None:
+        score = f"{signal['home_score']}:{signal['away_score']}"
     snapshot = {"match_id": signal["fixture_id"].split(":", 1)[-1], "market_instance_id": signal["market_instance_id"],
                 "play_id": signal["play_id"], "selection_id": signal["selection_id"],
                 "selection_code": {"home": "1", "away": "2", "draw": "X", "over": "Over", "under": "Under"}.get(signal["selection"]),
@@ -220,6 +227,9 @@ async def recheck_order(conn, order, settings, *, include_signal=False):
             or account["config_revision"] != order["config_revision"] or policy["revision"] != order["policy_revision"]):
         raise HTTPException(409, "账户、会话或本人限额版本已变化")
     signal = await eligible_signal(conn, order["signal_id"], manual=manual)
+    if not manual and await previous_intent_order(conn, order['user_id'], account['id'],
+                                                  order['signal_id'], excluding=order['id']):
+        raise HTTPException(409, '相同投注内容已有订单，已阻止重复自动投注')
     if manual:
         if order["stake"] != policy["manual_stake"]:
             raise HTTPException(409, "手动下注金额已变更")

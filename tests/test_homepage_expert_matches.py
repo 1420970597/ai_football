@@ -63,6 +63,66 @@ class HomepageExpertMatchesTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('expert_signals', all_matches['items'][0])
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
 
+    async def test_cross_date_unsettled_fixture_is_present_without_date_filter(self):
+        await self.trusted()
+        await self.signal()
+        await self.pool.execute("UPDATE v2_fixtures SET kickoff_at=now()-interval '1 day'")
+        self.assertEqual(['fixture'], [m['id'] for m in (await self.listing())['items']])
+        self.assertEqual([], (await self.listing(date=self.now.date().isoformat()))['items'])
+
+    async def test_kickoff_transition_requires_provably_equivalent_market(self):
+        from app.orders import eligible_signal
+        from fastapi import HTTPException
+        await self.trusted()
+        signal = await self.signal(phase='scheduled')
+        await self.pool.execute("UPDATE v2_expert_signals SET score_basis='full_period'")
+        await self.pool.execute("UPDATE v2_current_quotes SET score_basis='full_period'")
+        self.assertEqual(1, len((await self.listing())['items']))
+        async with self.pool.acquire() as conn, conn.transaction():
+            await eligible_signal(conn, signal, manual=True)
+            with self.assertRaises(HTTPException):
+                await eligible_signal(conn, signal, manual=False)
+        await self.pool.execute("UPDATE v2_current_quotes SET score_basis='remaining_period'")
+        self.assertEqual([], (await self.listing())['items'])
+
+    async def test_old_duplicate_messages_do_not_consume_summary_limits(self):
+        await self.trusted()
+        first = await self.signal()
+        for _ in range(7):
+            message = uuid.uuid4()
+            await self.pool.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) VALUES($1,$2,$3,$4,'repeat',now())",
+                                    message,self.source,self.expert,str(message))
+            await self.pool.execute("INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,market_id,market_name,market_kind,period,line,selection,recommendation_price,quote_time,confidence,score_basis,score_baseline) "
+                "SELECT $1,$2,expert_id,fixture_id,phase,market_id,market_name,market_kind,period,line,selection,recommendation_price,quote_time,confidence,score_basis,score_baseline FROM v2_expert_signals WHERE id=$3",
+                uuid.uuid4(),message,first)
+        distinct = await self.signal(line='3.5')
+        item = (await self.listing())['items'][0]
+        self.assertEqual(2, len(item['expert_signals']))
+        self.assertIn(str(distinct), {s['id'] for s in item['expert_signals']})
+        self.assertFalse(item['expert_signals_has_more'])
+
+    async def test_native_kickoff_handicap_zero_equivalence_and_verified_total_rule(self):
+        from app.orders import eligible_signal
+        from fastapi import HTTPException
+        await self.trusted()
+        signal = await self.signal(phase='scheduled')
+        await self.pool.execute("INSERT INTO v2_fixtures(id,source_id,sport,competition_name,home_team,away_team,kickoff_at,phase,home_score,away_score) "
+                                "VALUES('leyu:1234567','native-test','football','League','Home','Away',now(),'live',0,0)")
+        await self.move_signal(signal, 'leyu:1234567', market='4', phase='scheduled')
+        await self.pool.execute("UPDATE v2_expert_signals SET market_kind='handicap',score_basis='full_period'")
+        await self.pool.execute("UPDATE v2_current_quotes SET market_kind='handicap',score_basis='unknown'")
+        self.assertEqual(1, len((await self.listing())['items']))
+        await self.pool.execute("UPDATE v2_fixtures SET home_score=1 WHERE id='leyu:1234567'")
+        self.assertEqual([], (await self.listing())['items'])
+        async with self.pool.acquire() as conn, conn.transaction():
+            with self.assertRaises(HTTPException):
+                await eligible_signal(conn, signal, manual=True)
+        await self.pool.execute("UPDATE v2_expert_signals SET market_id='2',market_kind='total'")
+        await self.pool.execute("UPDATE v2_current_quotes SET market_id='2',market_kind='total'")
+        self.assertEqual(1, len((await self.listing())['items']))
+        async with self.pool.acquire() as conn, conn.transaction():
+            await eligible_signal(conn, signal, manual=True)
+
     async def test_disabled_withdrawn_deleted_and_superseded_records_are_excluded(self):
         await self.trusted()
         signal = await self.signal()

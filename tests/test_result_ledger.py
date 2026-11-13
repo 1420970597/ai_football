@@ -65,6 +65,21 @@ class ResultLedgerTests(unittest.IsolatedAsyncioTestCase):
         return {'fixture_id':'fixture','provider_reference':'official-1','status':'confirmed','home':1,'away':1,
                 'source_updated_at':self.now.isoformat(),'evidence':{'source':'isolated-official-fixture'}, **extra}
 
+    async def test_audited_duplicate_remains_evidence_without_double_settlement_or_statistics(self):
+        original = await self.signal(line='2.25')
+        duplicate = await self.signal(line='3.5')
+        await self.pool.execute("UPDATE v2_expert_signals SET withdrawn_at=now(),withdrawal_reason='duplicate_recommendation' WHERE id=$1", duplicate)
+        before = await self.pool.fetchrow('SELECT * FROM v2_quote_evidence WHERE reference_id=$1', duplicate)
+        response = await self.submit(self.result())
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_signal_settlements WHERE signal_id=$1', duplicate))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_signal_settlements WHERE signal_id=$1', original))
+        self.assertEqual(before, await self.pool.fetchrow('SELECT * FROM v2_quote_evidence WHERE reference_id=$1', duplicate))
+        from app.expert_statistics import signal_scope, StatisticsScope
+        from datetime import timedelta
+        query,args = signal_scope(StatisticsScope(self.now-timedelta(days=1),self.now+timedelta(days=1)))
+        self.assertEqual(1, await self.pool.fetchval(query+'SELECT count(*) FROM scoped',*args))
+
     async def submit(self, body):
         return await self.client.post('/internal/collector/results', json={'items':[body]}, headers={'Authorization':'Bearer isolated-collector'})
 

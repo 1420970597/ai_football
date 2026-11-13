@@ -269,8 +269,9 @@ function renderDates() {
     button.setAttribute('aria-pressed', String(selected));
   });
   $('#match-market-heading').textContent = state.matchScope === 'recommended' ? '专家关联盘口' : '当前盘口 / 赔率';
+  $('.date-nav').hidden = state.matchScope === 'recommended';
   $('#matches-footnote').textContent = state.matchScope === 'recommended'
-    ? '买入前重新询价，接受当前赔率；实际成交以账户回执为准。关注仅保存在当前浏览器。'
+    ? '展示所有日期仍可买入的未结算专家推荐。买入前重新询价，接受当前赔率；实际成交以账户回执为准。关注仅保存在当前浏览器。'
     : '上游报价时间未知、过期或停盘时，均不视为可交易报价。关注仅保存在当前浏览器。';
   $$('[data-sport-label]').forEach((element) => {
     element.firstChild.nodeValue = sportLabel() + "比分 ";
@@ -538,7 +539,7 @@ async function loadMatches(append = false) {
       result = await api(
         "/public/matches?" +
           params({
-            date: state.date,
+            date: state.matchScope === 'recommended' ? undefined : state.date,
             tz: "Asia/Shanghai",
             phase: state.phase,
             sport: state.sport,

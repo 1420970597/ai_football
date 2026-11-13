@@ -116,7 +116,7 @@ def signal_scope(scope: StatisticsScope, expert_id=None, *, classify=True):
     opening = 'WITH checked AS MATERIALIZED (' if classify else 'WITH scoped AS ('
     query = (
         opening + 'SELECT s.*' + columns + ' '
-        'FROM v2_expert_signals s WHERE '
+        "FROM v2_expert_signals s WHERE COALESCE(s.withdrawal_reason,'')<>'duplicate_recommendation' AND "
         "(CASE WHEN s.outcome='pending' THEN s.created_at ELSE COALESCE(s.settled_at,s.created_at) END)>=$1 "
         "AND (CASE WHEN s.outcome='pending' THEN s.created_at ELSE COALESCE(s.settled_at,s.created_at) END)<$2 "
         'AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM v2_expert_messages m WHERE m.id=s.message_id AND m.source_id=$3)) '

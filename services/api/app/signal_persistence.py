@@ -1,9 +1,10 @@
-"""Persist a validated signal and its immutable quote in one SQL command."""
+"""Expert-scoped deduplication, then one atomic signal/evidence batch write."""
 import uuid
 from decimal import Decimal
 
 from .handicap_lines import line_terms
 from .team_totals import team_total_terms
+from .signal_identity import DUPLICATE_REASON, same_intent_sql
 
 
 def _signal_context(job, attempt_id, quote, pick, confirmation):
@@ -57,6 +58,11 @@ async def persist_signals(conn, *, job, attempt_id, entries):
                         'quote_time': quote['source_updated_at'].isoformat() if quote['source_updated_at'] else None,
                         'confidence': str(pick.confidence), 'evidence_text': pick.evidence_text,
                         'baseline': baseline, 'evidence': evidence})
+    # Separate statement is essential: after a competing transaction commits,
+    # the INSERT's READ COMMITTED snapshot must see its canonical signal.
+    # Serialize this expert only; other experts remain concurrent.
+    await conn.fetch("SELECT pg_advisory_xact_lock(hashtextextended('expert-signal:'||$1::text,0))",
+                     str(job['expert_id']))
     inserted = await conn.fetch("""
         WITH incoming AS MATERIALIZED (
             SELECT * FROM jsonb_to_recordset($3::jsonb) AS i(position int,id uuid,
@@ -64,23 +70,45 @@ async def persist_signals(conn, *, job, attempt_id, entries):
                 period text,market_kind text,line numeric,selection text,price numeric,
                 quote_time timestamptz,confidence numeric,evidence_text text,
                 baseline jsonb,score_basis text,evidence jsonb)),
+        classified AS MATERIALIZED (
+            SELECT i.*,canonical.id AS duplicate_of FROM incoming i
+            LEFT JOIN LATERAL (
+                SELECT previous.id FROM v2_expert_signals previous
+                JOIN v2_expert_messages m ON m.id=previous.message_id
+                JOIN v2_expert_sources src ON src.id=m.source_id AND src.enabled
+                JOIN v2_source_experts se ON se.source_id=m.source_id
+                    AND se.expert_id=previous.expert_id AND se.enabled
+                WHERE previous.expert_id=$2 AND previous.message_id<>$1
+                    AND previous.withdrawn_at IS NULL AND m.deleted_at IS NULL
+                    AND NOT EXISTS(SELECT 1 FROM v2_expert_messages newer
+                        WHERE newer.source_id=m.source_id AND newer.platform_message_id=m.platform_message_id
+                        AND newer.revision>m.revision)
+                    AND """ + same_intent_sql('previous', 'i').replace('i.score_baseline', 'i.baseline') + """
+                ORDER BY previous.created_at,previous.id LIMIT 1
+            ) canonical ON true),
         saved AS (
             INSERT INTO v2_expert_signals(id,message_id,expert_id,fixture_id,phase,
                 market_id,market_name,period,market_kind,line,selection,recommendation_price,
-                quote_time,confidence,evidence_text,score_baseline,score_basis)
+                quote_time,confidence,evidence_text,score_baseline,score_basis,withdrawn_at,withdrawal_reason)
             SELECT id,$1,$2,fixture_id,phase,market_id,market_name,period,market_kind,line,
-                selection,price,quote_time,confidence,evidence_text,baseline,score_basis
-            FROM incoming ORDER BY fixture_id,market_id,period,COALESCE(line,0),selection
+                selection,price,quote_time,confidence,evidence_text,baseline,score_basis,
+                CASE WHEN duplicate_of IS NOT NULL THEN now() END,
+                CASE WHEN duplicate_of IS NOT NULL THEN '""" + DUPLICATE_REASON + """' END
+            FROM classified ORDER BY fixture_id,market_id,period,COALESCE(line,0),selection
             ON CONFLICT(message_id,fixture_id,market_id,period,(COALESCE(line,0)),selection)
                 DO NOTHING RETURNING id)
         INSERT INTO v2_quote_evidence(id,fixture_id,market_id,market_name,period,line,
             selection,price,evidence_kind,reference_id,source_updated_at,evidence,score_baseline)
         SELECT i.evidence_id,i.fixture_id,i.market_id,i.market_name,i.period,i.line,
-            i.selection,i.price,'expert_signal',saved.id,i.quote_time,i.evidence,i.baseline
-        FROM incoming i JOIN saved ON saved.id=i.id RETURNING reference_id AS id
+            i.selection,i.price,'expert_signal',saved.id,i.quote_time,
+            i.evidence || CASE WHEN i.duplicate_of IS NULL THEN '{}'::jsonb
+                ELSE jsonb_build_object('duplicate_of',i.duplicate_of) END,i.baseline
+        FROM classified i JOIN saved ON saved.id=i.id
+        RETURNING reference_id AS id,evidence->>'duplicate_of' AS duplicate_of
         """, job['message_id'], job['expert_id'], payload)
-    new_ids = {str(row['id']) for row in inserted}
-    results = {row['position']: {'id': uuid.UUID(row['id']), 'price': Decimal(row['price']), 'duplicate': False}
+    new_ids = {str(row['id']): row['duplicate_of'] for row in inserted}
+    results = {row['position']: {'id': uuid.UUID(row['id']), 'price': Decimal(row['price']),
+                                'duplicate': new_ids[row['id']] is not None}
                for row in payload if row['id'] in new_ids}
     conflicts = [row for row in payload if row['id'] not in new_ids]
     if conflicts:

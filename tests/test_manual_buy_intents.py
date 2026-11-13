@@ -133,6 +133,74 @@ class ManualBuyIntentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(202, manual.status_code, manual.text)
         self.assertNotEqual(str(first['id']), manual.json()['order']['id'])
 
+    async def copy_intent(self, signal, *, other_expert=False, **changes):
+        row = dict(await self.pool.fetchrow('SELECT * FROM v2_expert_signals WHERE id=$1', signal))
+        message = uuid.uuid4()
+        if other_expert:
+            row['expert_id'] = uuid.uuid4()
+            await self.pool.execute("INSERT INTO v2_experts(id,platform_sender_id,display_nickname) VALUES($1,$2,'Other')",
+                                    row['expert_id'], str(row['expert_id']))
+            await self.pool.execute('INSERT INTO v2_source_experts(source_id,expert_id) SELECT source_id,$1 FROM v2_expert_messages WHERE id=$2', row['expert_id'], row['message_id'])
+            await self.pool.execute('UPDATE v2_user_bet_settings SET allowed_experts=array_append(allowed_experts,$1)', row['expert_id'])
+        await self.pool.execute("INSERT INTO v2_expert_messages(id,source_id,expert_id,platform_message_id,raw_text,posted_at) "
+                                "SELECT $1,source_id,$2,$3,'repeat',now() FROM v2_expert_messages WHERE id=$4",
+                                message, row['expert_id'], str(message), row['message_id'])
+        row.update(id=uuid.uuid4(), message_id=message, **changes)
+        keys = ('id','message_id','expert_id','fixture_id','phase','market_id','market_name','market_kind','period',
+                'line','selection','recommendation_price','quote_time','confidence','score_basis','score_baseline')
+        await self.pool.execute('INSERT INTO v2_expert_signals('+','.join(keys)+') VALUES('+','.join(f'${i+1}' for i in range(len(keys)))+')',
+                                *(row[key] for key in keys))
+        return row['id']
+
+    async def test_concurrent_different_signal_and_expert_reserve_one_automatic_order(self):
+        signal, _ = await self.configured()
+        second = await self.copy_intent(signal, other_expert=True)
+        orders = await asyncio.gather(self.reserve(signal), self.reserve(second))
+        self.assertEqual(1, len({o['id'] for o in orders}))
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+        self.assertEqual(Decimal('2'), await self.pool.fetchval('SELECT sum(reserved_stake) FROM v2_bet_orders'))
+        for identity in (signal, second):
+            response = await self.buy(identity)
+            self.assertEqual(202, response.status_code, response.text)
+        self.assertEqual(3, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+
+    async def test_accepted_unknown_and_settled_orders_block_reposted_automatic_intent(self):
+        signal, _ = await self.configured()
+        first = await self.reserve(signal)
+        second = await self.copy_intent(signal)
+        for state in ('accepted','unknown','settled','cancelled'):
+            await self.pool.execute('UPDATE v2_bet_orders SET state=$2 WHERE id=$1', first['id'], state)
+            self.assertEqual(first['id'], (await self.reserve(second))['id'])
+            response = await self.worker_api.post('/internal/executor/dispatch')
+            self.assertEqual(200, response.status_code, response.text)
+            self.assertEqual(0, response.json()['reserved'])
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_bet_orders'))
+
+    async def test_changed_line_period_direction_and_relative_score_are_distinct_intents(self):
+        from services.api.app.signal_identity import previous_intent_order
+        signal, _ = await self.configured()
+        await self.pool.execute("UPDATE v2_expert_signals SET score_basis='remaining_period',score_baseline='{\"home\":1,\"away\":0}'::jsonb WHERE id=$1", signal)
+        first = await self.reserve(signal)
+        for change in ({'line':Decimal('3.5')}, {'period':'first_half'}, {'selection':'under'},
+                       {'score_baseline':{'home':2,'away':0}}):
+            other = await self.copy_intent(signal, **change)
+            async with self.pool.acquire() as conn:
+                self.assertIsNone(await previous_intent_order(conn, self.user['id'], first['account_id'], other))
+
+    async def test_unsent_legacy_duplicate_fails_execution_recheck(self):
+        from services.api.app.orders import recheck_order
+        from fastapi import HTTPException
+        signal, _ = await self.configured()
+        first = await self.reserve(signal)
+        second = await self.copy_intent(signal)
+        duplicate = await self.pool.fetchrow("INSERT INTO v2_bet_orders(id,user_id,signal_id,idempotency_key,state,stake,price,account_id,binding_revision,config_revision,policy_revision,provider_identity_hash,reserved_stake,quote_snapshot,manual) "
+            "SELECT $1,user_id,$2,$3,'pending',stake,price,account_id,binding_revision,config_revision,policy_revision,provider_identity_hash,reserved_stake,quote_snapshot,false FROM v2_bet_orders WHERE id=$4 RETURNING *",
+            uuid.uuid4(), second, str(uuid.uuid4()), first['id'])
+        async with self.pool.acquire() as conn, conn.transaction():
+            await recheck_order(conn, first, self.settings)
+            with self.assertRaisesRegex(HTTPException, '重复自动投注'):
+                await recheck_order(conn, duplicate, self.settings)
+
     async def test_upgrade_preserves_existing_manual_order_and_is_repeatable(self):
         from services.api.app.database import apply_migrations, check_schema
         signal, _ = await self.configured()
