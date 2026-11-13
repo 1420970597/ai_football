@@ -25,7 +25,7 @@ from ..security import encrypt_secret
 from .. import message_read
 from .. import telegram_reconciliation
 from ..telegram_profiles import profile_updates, sync_trusted_profiles
-from ..review_policy import REALTIME_WINDOW_SECONDS
+from ..review_policy import REALTIME_WINDOW_SECONDS, FRESH_PRIORITY_WINDOW_SECONDS
 
 
 router = APIRouter()
@@ -328,11 +328,16 @@ async def event_ingest_snapshot(conn, body: EventInput, source_id, owner):
 
 def review_job_metadata(source_id, body: EventInput):
     age = (datetime.now(timezone.utc) - body.posted_at.astimezone(timezone.utc)).total_seconds()
-    auto_review = 0 <= age <= REALTIME_WINDOW_SECONDS
+    source_peer = body.sender_id == body.chat_id and body.sender_id.startswith('-')
+    # Newly trusted channel identities recover bounded history independently
+    # of the main checkpoint. Retain old posts for explicit review rather than
+    # flooding the real-time queue with hours of previously unseen messages.
+    realtime_window = min(REALTIME_WINDOW_SECONDS, FRESH_PRIORITY_WINDOW_SECONDS) if source_peer else REALTIME_WINDOW_SECONDS
+    auto_review = 0 <= age <= realtime_window
     review_mode = 'real_time' if auto_review or age < 0 else 'historical_replay'
     initial_state = 'queued' if auto_review else 'unresolved'
     suppression = None if auto_review else (
-        'historical_backlog_auto_suppressed_by_operator' if age > REALTIME_WINDOW_SECONDS
+        'historical_backlog_auto_suppressed_by_operator' if age > realtime_window
         else 'message_timestamp_in_future')
     idempotency_key = hashlib.sha256(
         f"telegram:{source_id}:{body.platform_message_id}:{body.version_key}".encode()).hexdigest()
@@ -341,7 +346,9 @@ def review_job_metadata(source_id, body: EventInput):
         'review_mode': review_mode, 'suppression': suppression, 'idempotency_key': idempotency_key,
         'trace_payload': ({'reason': suppression, 'review_mode': review_mode,
                            'posted_at': body.posted_at.astimezone(timezone.utc).isoformat(),
-                           'realtime_window_seconds': REALTIME_WINDOW_SECONDS,
+                           'realtime_window_seconds': realtime_window,
+                           'configured_realtime_window_seconds': REALTIME_WINDOW_SECONDS,
+                           'source_peer_history': source_peer,
                            'source_message_preserved': True, 'media_preserved': True}
                           if suppression else None),
     }

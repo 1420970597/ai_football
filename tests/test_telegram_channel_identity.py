@@ -12,6 +12,7 @@ from telethon.tl.types import Channel, ChatPhotoEmpty
 from collector.telegram import TelegramCollector
 from collector.telegram_common import _trusted_message_author
 from app.routes import admin
+from app.routes.telegram import EventInput, review_job_metadata
 import test_telegram_collector as collector_fixture
 import test_telegram_directory as directory_fixture
 import test_telegram_api as api_fixture
@@ -143,6 +144,23 @@ class ChannelIdentityCollectorTests(unittest.IsolatedAsyncioTestCase):
         message.get_sender.assert_not_awaited()
 
 
+class ChannelHistoryAdmissionTests(unittest.TestCase):
+    def test_only_recent_channel_posts_enter_realtime_queue(self):
+        for sender,age,expected in [('-1001',60,'queued'),('-1001',600,'unresolved'),('7',600,'queued')]:
+            with self.subTest(sender=sender,age=age):
+                when=datetime.now(timezone.utc)-timedelta(seconds=age)
+                body=EventInput(chat_id='-1001',owner=uuid.uuid4(),platform_message_id='1',
+                    member_message_ids=[1],version_key='a'*64,sender_id=sender,sender_nickname='隔离身份',
+                    source_version_at=when,posted_at=when,detected_at=datetime.now(timezone.utc),
+                    raw_text='隔离测试',media_state='ready')
+                with patch('app.routes.telegram.FRESH_PRIORITY_WINDOW_SECONDS',300),patch('app.routes.telegram.REALTIME_WINDOW_SECONDS',86400):
+                    job=review_job_metadata(uuid.uuid4(),body)
+                self.assertEqual(expected,job['initial_state'])
+                if expected=='unresolved':
+                    self.assertEqual('historical_replay',job['review_mode'])
+                    self.assertEqual(300,job['trace_payload']['realtime_window_seconds'])
+
+
 @unittest.skipUnless(api_fixture.TEST_URL,'Explicit isolated temporary PostgreSQL is required')
 class ChannelIdentityApiTests(unittest.IsolatedAsyncioTestCase):
     asyncTearDown = api_fixture.TelegramApiTests.asyncTearDown
@@ -184,6 +202,19 @@ class ChannelIdentityApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(200,response.status_code,response.text)
         for table in ('v2_telegram_events','v2_expert_messages','v2_analysis_jobs'):
             self.assertEqual(1,await self.pool.fetchval(f'SELECT count(*) FROM {table}'))
+
+    async def test_channel_historical_recovery_is_preserved_without_realtime_queue(self):
+        await self.trust_channel()
+        old=datetime.now(timezone.utc)-timedelta(hours=2)
+        body=self.event()|{'sender_id':'-1001','posted_at':old.isoformat(),
+            'source_version_at':old.isoformat(),'detected_at':datetime.now(timezone.utc).isoformat()}
+        for _ in range(2):
+            response=await self.post(body)
+            self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_expert_messages'))
+        row=await self.pool.fetchrow('SELECT state,review_mode,last_error FROM v2_analysis_jobs')
+        self.assertEqual(('unresolved','historical_replay','historical_backlog_auto_suppressed_by_operator'),tuple(row))
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_analysis_traces'))
 
     async def test_channel_directory_metadata_never_grants_trust(self):
         self.client.headers['Authorization'] = 'Bearer test-collector-token'
