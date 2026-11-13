@@ -106,7 +106,7 @@ BUDGET_TOOL_DESCRIPTIONS = {
     'review_match_batch': 'expert-review多场明确来源首选：一次提交最多6个不同对阵，内部2路连续分页、唯一绑定、读盘并立即精确录入；复用每项原生回执。双方、可读联赛、期间、玩法及原文证据先确认，不从库存补字段；歧义/无盘逐项未解决。',
     'search_matches': 'expert-review已预载，勿重复skill_view。同场查询只调用一次。查全部阶段并连续翻页；传原文双方、sport及原始日期。唯一活动绑定可合并读盘；明确单项total/期间/方向/线时record_source_intent=true，以record_result为准。未知期间不录入。',
     'resolve_match': 'expert-review已预载；用完整search_key及双方/联赛/时间消歧，已绑定不重做。明确单项total可合并读盘录入，以record_result为准；非活动不读盘。',
-    'list_match_markets': 'expert-review已预载；读取已唯一活动绑定的盘口，先声明来源期间。让球按selection_line，line筛选用原生线。完整零库存停止重读；部分/筛选零命中有据再放宽。',
+    'list_match_markets': 'expert-review：明确total来源时record_source_intent=true，带market_query/evidence_text及原source_periods；恢复读盘后精确有效项立即录入，以record_result为准。未知不录入，完整零库存停止。',
     'record_expert_signals': 'expert-review已预载；提交本任务已读quote_id，以accepted/rejected/系统价格为准。retry_same_evidence=false停止该项重试，其余继续。',
 }
 BUDGET_ARGUMENT_DESCRIPTIONS = {
@@ -123,7 +123,7 @@ BUDGET_ARGUMENT_DESCRIPTIONS = {
     'period': '来源明确期间；未知不猜。',
     'source_periods': '来源全部期间首读前一次声明；未知[]，读盘后禁扩充。',
     'market_query': '逐字来源方向/线值，如小3.5、大0.5/1；不比较倍率。',
-    'record_source_intent': '明确单项total/期间/方向/线时true，同时read_markets=true及evidence_text；检查record_result。',
+    'record_source_intent': '来源明确total期间/方向/线时true，带market_query/evidence_text；只认record_result。',
     'evidence_text': '本项原文/所选原图证据；不得按库存补造期间、方向或线。',
     'search_key': '逐字复制当前完整search_matches回执的64位标识。',
 }
@@ -378,6 +378,15 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
     combined = {**result, 'market_result': markets}
     if not record_source_intent:
         return combined
+    return await _record_bound_markets(combined, markets, fixture, review_id, attempt_id,
+        market_kind, period, evidence_text, search_key=search_key,
+        source_selection=source_selection, source_selection_line=source_selection_line)
+
+
+async def _record_bound_markets(combined, markets, fixture, review_id, attempt_id,
+                                market_kind, period, evidence_text, *, search_key=None,
+                                source_selection=None, source_selection_line=None):
+    """Reuse the same native exact-scope gate after lookup or a recovery read."""
     quote = (_unique_source_handicap(markets, fixture['id'], period,
                                     source_selection, source_selection_line)
              if market_kind == 'handicap' else
@@ -396,8 +405,9 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
             raise ToolError('录入响应无法核验；保留结果未知状态')
     except ToolError as exc:
         receipt = {'review_id': review_id, 'attempt_id': attempt_id,
-            **{key: result[key] for key in ('search_key', 'search_complete', 'next_cursor') if key in result},
-            'resolution': {'resolved': True, 'fixture': {'id': fixture['id'], 'realtime_eligible': True}},
+            **{key: combined[key] for key in ('search_key', 'search_complete', 'next_cursor') if key in combined},
+            'resolution': {'resolved': True, 'fixture': {key: fixture[key]
+                for key in ('id', 'realtime_eligible') if key in fixture}},
             'market_result': markets}
         if search_key is not None:
             receipt.setdefault('search_key', search_key)
@@ -865,14 +875,24 @@ async def list_match_markets(review_id: str, attempt_id: str, fixture_id: str,
                              market_kind: str | None = None, period: str | None = None,
                              line: str | None = None, selection: str | None = None,
                              market_query: str | None = None,
-                             source_periods: SourcePeriods = None) -> dict:
-    """读取已绑定比赛的盘口。按类别、期间、方向或名称筛选，按selection_line匹配所选方让受让；line_basis=provider_home时line为原生主队线、客队selection_line符号相反，line筛选须用原生线，未确认口径先读玩法期间方向整组。先核对market_coverage：total_quotes=0且complete_for_filter=true是完整零库存，停止同场重复读取并保留未解决；仅有库存但筛选零命中或覆盖不足时放宽筛选，省略筛选返回完整盘口。赔率不参与意图匹配；can_record表示服务端校验通过。"""
-    return await _post("list_match_markets", {
+                             source_periods: SourcePeriods = None,
+                             record_source_intent: Annotated[bool, Field(description='明确来源total期间、方向与原线时可显式请求精确读盘后录入；需market_query/evidence_text及首读前source_periods，以record_result为准。未知期间保持false。')] = False,
+                             evidence_text: Annotated[str | None, Field(max_length=3000)] = None) -> dict:
+    """读取已绑定比赛的盘口。来源明确total/期间/原线/方向时，传record_source_intent=true、market_query、evidence_text及原source_periods；恢复读盘同样立即复用精确唯一有效项录入，以record_result为准。未知期间不录入，不主动轮询绕过限流。按类别、期间、方向或名称筛选，按selection_line匹配所选方让受让；line_basis=provider_home时line为原生主队线、客队selection_line符号相反，line筛选须用原生线，未确认口径先读玩法期间方向整组。先核对market_coverage：total_quotes=0且complete_for_filter=true是完整零库存，停止同场重复读取并保留未解决；仅有库存但筛选零命中或覆盖不足时放宽筛选，省略筛选返回完整盘口。赔率不参与意图匹配；can_record表示服务端校验通过。"""
+    if record_source_intent:
+        _require_source_record_scope(True, market_kind, period, market_query, evidence_text)
+        if not source_periods or period not in source_periods:
+            raise ToolError('精确读盘录入需要首读前已确认的来源期间清单；未知期间不录入')
+    markets = await _post("list_match_markets", {
         "review_id": review_id, "attempt_id": attempt_id, "fixture_id": fixture_id,
         "market_kind": market_kind, "period": period, "line": line,
         "selection": selection, "market_query": market_query,
         **_source_period_parameters(source_periods),
     })
+    if not record_source_intent:
+        return markets
+    return await _record_bound_markets({'market_result': markets}, markets,
+        {'id': fixture_id}, review_id, attempt_id, market_kind, period, evidence_text)
 
 
 @mcp.tool()
