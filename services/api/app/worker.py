@@ -675,10 +675,25 @@ async def _process_job(pool, settings, job: dict, *, model_client: httpx.AsyncCl
         persistent_retry = failure_trace_saved and failure in PERSISTENT_RETRY_FAILURES
         exhausted = not retryable or (job["attempts"] >= MAX_ATTEMPTS and not persistent_retry)
         delay = 0 if exhausted else retry_delay_seconds(failure, job["attempts"])
+        remaining = (remaining_review_seconds(job['message'].get('detected_at'))
+                     if job.get('review_mode', 'real_time') == 'real_time' else None)
+        retry_budget_exhausted = not exhausted and remaining is not None and delay >= remaining
+        if retry_budget_exhausted:
+            # Do not shorten provider backoff or queue an attempt that cannot
+            # start before the original detection deadline. This is not success
+            # and does not imply that the deadline has already elapsed.
+            await _add_trace(pool, job, 'review_retry_budget_exhausted', {
+                'failure_category': failure, 'retry_delay_seconds': delay,
+                'remaining_detection_seconds': remaining,
+                'accepted_evidence_preserved': True, 'retryable': False,
+            })
         await pool.execute(
             "UPDATE v2_analysis_jobs SET state=$3,available_at=now()+($4::int*interval '1 second'),"
             "lease_until=NULL,last_error=$5,updated_at=now() WHERE id=$1 AND attempt_id=$2 AND state='running'",
-            job["id"], job["attempt_id"], "failed" if exhausted else "retry", delay, category,
+            job["id"], job["attempt_id"],
+            "unresolved" if retry_budget_exhausted else ("failed" if exhausted else "retry"),
+            0 if retry_budget_exhausted else delay,
+            "retry_exceeds_detection_deadline" if retry_budget_exhausted else category,
         )
     finally:
         pending = [task for task in (review_task, lease_task) if task is not None]

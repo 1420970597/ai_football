@@ -943,6 +943,21 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(trace_row["payload"]["retryable"])
         cleanup.assert_awaited_once()
 
+    async def test_realtime_provider_backoff_terminates_and_is_not_reclaimed(self):
+        await self.make_queued()
+        await self.pool.execute('UPDATE v2_expert_messages SET detected_at=now() WHERE id=$1', self.message)
+        job = await worker.claim_job(self.pool)
+        with patch.object(worker, 'review_message', AsyncMock(side_effect=worker.HermesProviderUnavailable())), \
+             patch.object(worker, 'delete_session', AsyncMock()), \
+             patch.object(worker.random, 'randint', return_value=0):
+            await worker.process_job(self.pool, SimpleNamespace(hermes_model='isolated'), job)
+        row = await self.pool.fetchrow('SELECT state,last_error,lease_until FROM v2_analysis_jobs WHERE id=$1', self.job)
+        self.assertEqual(('unresolved', 'retry_exceeds_detection_deadline', None), tuple(row))
+        self.assertIsNone(await worker.claim_job(self.pool))
+        self.assertEqual(1, await self.pool.fetchval(
+            "SELECT count(*) FROM v2_analysis_traces WHERE job_id=$1 AND trace_kind='review_retry_budget_exhausted'", self.job))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
     async def test_provider_error_is_delayed_retry_without_false_result_or_receipt(self):
         await self.make_queued()
         job = await worker.claim_job(self.pool)
