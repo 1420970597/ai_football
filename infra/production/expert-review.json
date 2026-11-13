@@ -1,13 +1,13 @@
 {
   "services": {
     "api": {
-      "image": "sha256:dc881af353be29f1b69535544950160e6274ce096f1a15f5d43643f811f4d7db"
+      "image": "sha256:44aae2f65e838d2f36592cc5e92dfdb9d92ba9e9f00495534938f1d4e1e248de"
     },
     "review-worker": {
-      "image": "sha256:5a5c887c3fbd8a684797fb9e682667683d9975d57a25c7beca70ec16dc8be2a6"
+      "image": "sha256:519a4ca4078eb836c3f9bf7ec22ce45ec6c1c426c338240f0293f18899607a08"
     },
     "local-mcp-api": {
-      "image": "sha256:cc74710ccf3ebe3acffc37160015694813a4bb56f96aef4b3d35d10e8b260b36"
+      "image": "sha256:8e4216d7dde5647e7f6fdae7340ac4c231f4a0a8686de84d94a22e28745e337c"
     },
     "collector": {
       "image": "sha256:26c2a5e94371d3e566994a48f4d8a53243e18ff07ec4f11babe6f0809ce8ea11",
@@ -36,11 +36,20 @@
       "volumes": [
         {
           "type": "bind",
-          "source": "/root/ai_football/.runtime/expert-review-iteration-20261112/release/SKILL.md",
+          "source": "/root/ai_football/.runtime/expert-review-incident-20261113/release/hermes/config.yaml",
+          "target": "/opt/data/.hermes/config.yaml",
+          "read_only": true
+        },
+        {
+          "type": "bind",
+          "source": "/root/ai_football/.runtime/expert-review-incident-20261113/release/hermes/SKILL.md",
           "target": "/workspace/skills/expert-review/SKILL.md",
           "read_only": true
         }
       ]
+    },
+    "hermes-mcp": {
+      "image": "sha256:44bd067d9a41bcf72b2a5fc71cde600bc78377d22af687b1de74400a522bf800"
     }
   }
 }
