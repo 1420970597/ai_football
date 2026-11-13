@@ -147,12 +147,20 @@ class SourceRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1,budget.flood_waits)
 
     async def test_source_info_checks_real_type_not_negative_id(self):
+        import test_telegram_directory as directory
         from telethon import utils
         from telethon.tl.types import Channel,ChatPhotoEmpty
         entity=Channel(id=2,title='广播样本',photo=ChatPhotoEmpty(),date=datetime.now(timezone.utc),broadcast=True)
-        async def group(_):return entity
-        self.collector._group_entity=group
-        response=await self.collector.control('/source-info',{'chat_id':str(utils.get_peer_id(entity))})
+        chat=str(utils.get_peer_id(entity))
+        client=directory.DirectoryClient()
+        client.entities[chat]=entity
+        self.collector.client=client
+        response=await self.collector.control('/source-info',{'chat_id':chat})
+        self.assertEqual('ready',response['state'],response)
         self.assertEqual('broadcast_channel',response['source_kind'])
         entity.broadcast=False;entity.megagroup=True
-        self.assertEqual('group',(await self.collector.control('/source-info',{'chat_id':'-1002'}))['source_kind'])
+        self.assertEqual('group',(await self.collector.control('/source-info',{'chat_id':chat}))['source_kind'])
+        client.entities[chat].left=True
+        rejected=await self.collector.control('/source-info',{'chat_id':chat})
+        self.assertEqual('unavailable',rejected['state'])
+        self.assertEqual('account_has_not_joined',rejected['reason'])

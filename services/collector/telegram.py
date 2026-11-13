@@ -1686,7 +1686,7 @@ class TelegramCollector:
                     return {"items": [], "state": "unauthorized", "manual_id_allowed": False,
                             **({'reason': self.auth_state['reason']} if self.auth_state.get('reason') else {})}
                 if path == '/source-info':
-                    entity = await self._group_entity(str(payload.get('chat_id', '')))
+                    entity = await self._entity(str(payload.get('chat_id', '')))
                     info = {'state': 'ready', 'chat_id': str(utils.get_peer_id(entity)),
                             'source_kind': 'broadcast_channel' if _broadcast_channel(entity) else 'group',
                             'title': str(entity.title)}
