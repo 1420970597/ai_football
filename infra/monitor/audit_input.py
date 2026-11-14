@@ -29,10 +29,13 @@ async def prepare(value):
         signals.append({k:signal.get(k)for k in ('fixture_id','period','market_kind','line','selection','evidence_text')})
     request=next((t['payload']for t in reversed(traces)if t['trace_kind']=='hermes_request'),{})
     reply=request.get('reply_archive')or{}
+    reply_present=any(value is not None for value in reply.values())
+    reply_reference_present=bool(m.get('reply_to_platform_message_id') or m.get('reply_context')
+        or request.get('reply_text') or reply_present)
     reply_images=reply.get('media_objects')or[] if reply.get('media_state')=='ready'and not reply.get('deleted')else[]
     context={'source_text':m['raw_text'],'posted_at':m['posted_at'],'reply_context':m.get('reply_context'),
+        'reply_reference_present':reply_reference_present,
         'reply_text':request.get('reply_text'),
-        'reply_archive':{k:reply.get(k)for k in ('raw_text','posted_at','media_state','deleted')},
         'reply_image_count':len(reply_images),
         'media_state':m['media_state'],'image_count':len(m.get('media_objects')or[]),
         'unsupported_media':m.get('media_manifest')if m['media_state']=='unsupported'else None,
@@ -40,6 +43,8 @@ async def prepare(value):
         # Excluding it avoids anchoring this separate audit to its guesses.
         'tool_evidence':evidence,'accepted':signals,
         'state':m.get('state'),'last_error':m.get('last_error')}
+    if reply_present:
+        context['reply_archive']={k:reply.get(k)for k in ('raw_text','posted_at','media_state','deleted')}
     parts=[{'type':'text','text':json.dumps(context,ensure_ascii=False,default=str)}]
     total=0
     for media in (m.get('media_objects')or[])+reply_images:

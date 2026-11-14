@@ -48,6 +48,30 @@ class AuditInputTests(unittest.IsolatedAsyncioTestCase):
         return {'posted_at':datetime.now(timezone.utc).isoformat(),'traces':[], 'raw_text':'source',
             'media_state':'ready','media_objects':[], 'signals':[], 'reply_context':{}}
 
+    async def test_no_reply_does_not_invent_an_empty_reply_archive(self):
+        m=self.message()
+        m['traces']=[{'trace_kind':'hermes_request','payload':{'reply_archive':{
+            'raw_text':None,'posted_at':None,'media_state':None,'deleted':None}}}]
+        output=await audit_input.prepare({'message':m})
+        context=json.loads(output['parts'][0]['text'])
+        self.assertFalse(context['reply_reference_present'])
+        self.assertNotIn('reply_archive',context)
+        source=json.loads(independent_review.source_only_parts(output)[0]['text'])
+        self.assertIs(False,source['reply_reference_present'])
+
+    async def test_unavailable_referenced_reply_is_not_hidden(self):
+        m=self.message();m['reply_context']={'unavailable':True}
+        m['reply_to_platform_message_id']='source-reference'
+        output=await audit_input.prepare({'message':m})
+        context=json.loads(output['parts'][0]['text'])
+        self.assertTrue(context['reply_reference_present'])
+        self.assertEqual({'unavailable':True},context['reply_context'])
+
+    async def test_reference_without_reply_context_is_preserved(self):
+        m=self.message();m['reply_to_platform_message_id']='source-reference'
+        context=json.loads((await audit_input.prepare({'message':m}))['parts'][0]['text'])
+        self.assertTrue(context['reply_reference_present'])
+
     async def test_expired_source_is_never_loaded(self):
         m=self.message();m['posted_at']=(datetime.now(timezone.utc)-timedelta(hours=73)).isoformat()
         with patch.object(audit_input.blobstore,'read_image',AsyncMock())as image:

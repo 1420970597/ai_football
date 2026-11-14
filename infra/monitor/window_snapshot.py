@@ -68,7 +68,7 @@ async def snapshot():
                     'messages':required})
         ids=[uuid.UUID(m['stored_message_id'])for s in source_evidence for m in s.get('messages',[])if m.get('stored_message_id')]
         rows=await conn.fetch(
-            "SELECT m.id,m.source_id,m.expert_id,m.raw_text,m.reply_context,m.media_objects,m.media_state,"
+            "SELECT m.id,m.source_id,m.expert_id,m.raw_text,m.reply_context,m.reply_to_platform_message_id,m.media_objects,m.media_state,"
             "m.platform_message_id,m.revision,m.posted_at,m.detected_at,m.deleted_at,m.raw_content_expired_at,"
             "(SELECT ev.content->'media_manifest' FROM v2_telegram_events ev WHERE ev.message_id=m.id "
             "AND ev.is_current ORDER BY ev.received_at DESC LIMIT 1) media_manifest,"
