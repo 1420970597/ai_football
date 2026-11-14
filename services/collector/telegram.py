@@ -50,6 +50,7 @@ LIVE_MEDIA_CONCURRENCY = 2
 SYNC_HISTORY_MAX_MESSAGES = 25
 AUTHOR_BACKFILL_PAGE_SIZE = 10
 SOURCE_HISTORY_SECONDS = 25
+ARCHIVE_PREP_SLICE_SECONDS = 2
 # Stay below the 30-second remote claim lease and the 25-second API read timeout.
 RECONCILE_BATCH_SECONDS = 24
 RECONCILE_RPC_SECONDS = 5
@@ -765,7 +766,11 @@ class TelegramCollector:
             return {'state': ('caught_up' if recent['state']=='caught_up' else
                               'catching_up' if recent['state']=='catching_up' else 'recent_deferred'),
                     'last_message_id': original, 'observed': 0, 'recent_history': recent}
-        if not archive_priority and time.monotonic()-sync_started >= SOURCE_HISTORY_SECONDS/2:
+        # A 12s recent pass left 13s, but retention lookup + an archive page
+        # each wait behind the account RPC budget. Yield after the ordinary
+        # history slice instead of spending half the outer deadline first.
+        if not archive_priority and time.monotonic()-sync_started >= min(
+                ARCHIVE_PREP_SLICE_SECONDS,SOURCE_HISTORY_SECONDS/2):
             runtime['archive_priority'] = True
             return {'state': 'recent_deferred' if recent['state']=='deferred' else 'catching_up',
                     'last_message_id': original, 'observed': 0, 'recent_history': recent,
@@ -776,6 +781,11 @@ class TelegramCollector:
         if floor is None:
             state = 'recent_deferred' if recent['state']=='deferred' else recent['state']
             return {'state': state, 'last_message_id': original, 'observed': 0, 'recent_history': recent}
+        if time.monotonic()-sync_started >= SOURCE_HISTORY_SECONDS/2:
+            runtime['archive_priority'] = True
+            return {'state':'recent_deferred' if recent['state']=='deferred' else 'catching_up',
+                    'last_message_id':original,'observed':0,'recent_history':recent,
+                    'archive_history':{'state':'catching_up','reason':'retention_slice_yield'}}
         runtime['sync_stage'] = 'archive_page'
         async for message in self._history_messages(entity, min_id=max(original, floor-1), reverse=True,
                                                     limit=SYNC_HISTORY_MAX_MESSAGES):

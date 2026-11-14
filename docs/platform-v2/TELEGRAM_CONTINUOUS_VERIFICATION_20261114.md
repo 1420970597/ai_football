@@ -287,3 +287,10 @@
 - 独立审计容器ai-football-tg-continuous-audit实际04:56:07 UTC启动、running/restarts=0，0.2CPU/192MiB、network none，只通过本项目Docker API执行只读审核。72014eca已推送核对；之前04:57段为阶段标签，实际启动早于该标签。
 - 视频增加ffprobe5秒时长核验并标记未知/超出12秒的完整性缺口；Hermes对截断视频必须uncertain，不能从表情片头推断全片。初轮12项两测试假定旧命令/notes位置失败，修正测试适配真实probe后，冻结12项0.012秒退出0，.runtime/test-evidence/4110840/backend-tests.json；原失败4108941保留。
 - 04:58最新分钟样本17来源完整、degraded=false、live_deferred=0；没有新增采集恢复超时。本轮只加强只读验收证据，不重启业务或更改修复基线；05:00完整候选窗照常开始，连续0/3。
+
+## 05:04 UTC：归档预算二次定位与隔离通过
+
+- 实际04:58:56再次history_deadline stage=archive_page；此前“尚未发现”仅截至当次读取，不能据此完成验收。近期12018ms低于旧12.5秒门槛，随后冷retention与归档RPC共享余量超时，确认原半预算切片仍不足。
+- 前置近期工作超过独立2秒预算即让出归档至下一轮；冷retention若已过半外层截止也保存archive_priority并让出。保留25秒截止、2秒RPC间隔及完整持久游标，不通过延长时限掩盖问题。
+- 初轮141项有1旧时间切片测试失败，原因前置预算误复用SYNC_HISTORY_SLICE_SECONDS，改为独立ARCHIVE_PREP_SLICE_SECONDS后，冻结141项20.149秒退出0，.runtime/test-evidence/4123507/backend-tests.json；原4120803失败保留。
+- 04:30–05:00快照已于05:02保存，逐条独立审计自动运行；该窗因真实超时必失败。下一步最小采集器上线，修复后新完整起点最早05:30 UTC；当前仍0/3。
