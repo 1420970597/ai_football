@@ -11,6 +11,9 @@ class SourceIdentityTests(unittest.TestCase):
                             ('Alpha U23','Alpha vs Beta'),('Alpha U21','Alpha U19 vs Beta')]:
             with self.subTest(team=team):self.assertTrue(added_squad_markers(team,'Beta',source))
 
+    def test_other_team_marker_does_not_authorize_selected_team_marker(self):
+        self.assertTrue(added_squad_markers('Alpha Reserves','Beta Reserves','Alpha VS Beta Reserves'))
+
     def test_actual_source_markers_and_ordinary_names_are_preserved(self):
         for team,source in [('惠灵顿凤凰后备队','惠灵顿凤凰后备队VS奥克兰城'),
                             ('Alpha U23','Alpha U23 vs Beta'),('Alpha','Alpha vs Beta'),

@@ -16,4 +16,14 @@ def squad_markers(value):
 
 
 def added_squad_markers(team_a,team_b,source_text):
-    return (squad_markers(team_a)|squad_markers(team_b))-squad_markers(source_text or '')
+    source_text=unicodedata.normalize('NFKC',source_text or '').casefold()
+    result=set()
+    for team in (team_a,team_b):
+        markers=squad_markers(team)
+        if not markers:continue
+        # A qualifier on the opposite team or in a league heading cannot
+        # supply this team's identity. Only the actual full source name clears
+        # this narrow guard; visual aliases remain the model's separate work.
+        if unicodedata.normalize('NFKC',team).casefold()not in source_text:
+            result.update(markers)
+    return result
