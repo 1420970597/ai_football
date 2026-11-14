@@ -106,7 +106,7 @@ INTENT_ARGUMENT_DESCRIPTIONS = {
 # These profiles are used with the complete, preloaded expert-review skill.
 # Only descriptions change: validation schemas and business calls stay native.
 BUDGET_TOOL_DESCRIPTIONS = {
-    'review_match_batch': 'expert-review多场明确来源首选：一次提交最多6个不同对阵，内部2路连续分页、唯一绑定、读盘并立即精确录入；复用每项原生回执。双方、可读联赛、期间、玩法及原文证据先确认，不从库存补字段；歧义/无盘逐项未解决。',
+    'review_match_batch': 'expert-review单场或多场明确来源首选（1项也用此工具）：最多6个不同对阵，内部2路连续分页、唯一绑定、读盘并精确录入total/handicap/team_total；单队进球须selection_team。核实双方、联赛、期间及原文，不从库存补字段；无原期间盘口立即未解决，禁换期间。',
     'search_matches': 'expert-review已预载，勿重复skill_view。同场查询只调用一次。查全部阶段并连续翻页；传原文双方、sport及原始日期。唯一活动绑定可合并读盘；明确单项total/期间/方向/线时record_source_intent=true，以record_result为准。未知期间不录入。',
     'resolve_match': 'expert-review已预载；用完整search_key及双方/联赛/时间消歧，已绑定不重做。明确单项total可合并读盘录入，以record_result为准；非活动不读盘。',
     'list_match_markets': 'expert-review：明确total来源时record_source_intent=true，带market_query/evidence_text及原source_periods；恢复读盘后精确有效项立即录入，以record_result为准。未知不录入，完整零库存停止。',
@@ -389,6 +389,30 @@ async def _request(path: str, payload: dict) -> dict:
         raise ToolError("系统工具暂不可用") from None
 
 
+async def _read_source_markets(payload):
+    """Keep a complete empty declared scope distinct from other inventory."""
+    result = await _post('list_match_markets', payload)
+    coverage = result.get('market_coverage') or {}
+    scope = result.get('market_filter') or {}
+    periods = payload.get('source_periods')
+    if (isinstance(periods, list) and payload.get('period') in periods
+            and payload.get('market_kind') is not None
+            and scope.get('period') == payload['period']
+            and scope.get('market_kind') == payload['market_kind']
+            and coverage.get('complete_for_filter') is True
+            and coverage.get('matched_quotes') == 0
+            and coverage.get('returned_quotes') == 0
+            and result.get('markets') == []):
+        return result | {'source_scope_unavailable': {
+            'reason': 'no_quote_in_complete_source_scope',
+            'scope': scope, 'retry_same_scope': False,
+            'relax_source_period': False, 'relax_source_market_kind': False,
+            'action': 'report_unresolved_source_option',
+            'message': '原文声明的玩法/期间/线值完整筛选零盘口；total_quotes是其它库存，'
+                       '不证明原推荐有盘。保留未解决，不重复读盘、不去掉期间或改成其它玩法。'}}
+    return result
+
+
 async def _with_bound_markets(result: dict, resolution: dict | None,
                               review_id: str, attempt_id: str,
                               market_kind: str | None, period: str | None,
@@ -414,7 +438,7 @@ async def _with_bound_markets(result: dict, resolution: dict | None,
         if market_query is not None:
             market_parameters['market_query'] = market_query
         market_parameters.update(_source_period_parameters(source_periods))
-        markets = await _post('list_match_markets', market_parameters)
+        markets = await _read_source_markets(market_parameters)
     except ToolError as exc:
         # Search/binding has already committed before this optional read.
         # Keep its native receipt visible even though the composed call failed;
@@ -1044,7 +1068,7 @@ async def list_match_markets(review_id: str, attempt_id: str, fixture_id: str,
         _require_source_record_scope(True, market_kind, period, market_query, evidence_text)
         if not source_periods or period not in source_periods:
             raise ToolError('精确读盘录入需要首读前已确认的来源期间清单；未知期间不录入')
-    markets = await _post("list_match_markets", {
+    markets = await _read_source_markets({
         "review_id": review_id, "attempt_id": attempt_id, "fixture_id": fixture_id,
         "market_kind": market_kind, "period": period, "line": line,
         "selection": selection, "market_query": market_query,

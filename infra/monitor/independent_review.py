@@ -16,6 +16,10 @@ SYSTEM = '''你是独立图文验收器，只审核给定证据，不执行工�
 此时有明确跟进意图但缺归属或选择可classification=recommendation；只是预告/聊天为non_recommendation，不能因缺项伪造成功推荐。
 反之声明有图片而未提供、必要回复有编号且内容不可读、原图不可读、工具回执缺失或来源与已接受选择矛盾，仍为uncertain或有证据的遗漏/误配。
 完整可读推荐已被抽取但缺少完成检索/读盘证据，不适用上述来源缺项，仍须uncertain；不得用模型原说明当缺项证据。
+期间必须来自独立来源证据：滚球比分条、比赛分钟或“足球(滚球)大/小(2-2)，甲队v乙队，大4.5/5”
+没有明示所选期间时不能推断全场；库存只有全场或工具参数填full_time也不证明来源期间。
+这类来源确缺期间且零接受可正确未解决，不能按现有全场报价记confirmed_omission；完整赛前推荐清单另按整场语义。
+若正文或所选原图明确“全场”/“上半场”等期间，仍逐项按真实期间核验，不以同张图另一项缺期间否认该明确选择。
 图片必须实际可读；不能用前次模型的final代替看原图。未提供图片但声明有图时必须uncertain。
 image_count和reply_image_count分别是本条和已归档回复的实际图片数，回复元数据has_media不代表本条含图。
 纯笑声、表情或聊天回复若没有新增推荐指示，不因被回复消息的图片未提供就推断本条含推荐或缺图；
@@ -61,7 +65,7 @@ def run(value):
         'incomplete_tool_evidence','media_unavailable'}
     if not isinstance(parsed.get('reason_codes'),list)or any(r not in reason_allow for r in parsed['reason_codes']):raise ValueError('invalid_audit_reason')
     return {k:parsed[k]for k in ('classification','verdict','source_items','accepted_items','unresolved_items','reason_codes')}|{
-        'audit_protocol':'source-outcome-separation-v2',
+        'audit_protocol':'source-outcome-separation-v3',
         'input_sha256':hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest(),
         'tool_count':0,'persistent_session':False,'internal_output_bytes':len(sink.getvalue())}
 
