@@ -109,6 +109,50 @@ class RecentRecoveryTests(unittest.IsolatedAsyncioTestCase):
         result = await self.collector._recover_recent('-1001', self.source)
         self.assertEqual(1, result['persisted'])
 
+    async def test_contended_optional_second_page_yields_without_losing_cursor_or_new_head(self):
+        self.client.messages['-1001']=[self.recent(i)for i in range(1,7)]
+        original=self.backend.event
+        async def commit_then_contend(body):
+            result=await original(body)
+            if len(self.backend.calls)==3:await self.collector.background_reads.lock.acquire()
+            return result
+        self.backend.event=commit_then_contend
+        try:
+            with patch('collector.telegram.RECENT_HISTORY_PAGE_SIZE',3):
+                result=await asyncio.wait_for(self.collector._recover_recent('-1001',self.source),.5)
+            self.assertEqual('catching_up',result['state'])
+            self.assertEqual([6,5,4],[int(x['platform_message_id'])for x in self.backend.calls])
+            self.assertEqual(4,self.collector.recent_recovery['-1001']['cursor'])
+            self.assertTrue(self.collector.recent_recovery['-1001']['continuation_next'])
+            cutoff=self.collector.recent_recovery['-1001']['cutoff']
+        finally:
+            if self.collector.background_reads.lock.locked():self.collector.background_reads.lock.release()
+        self.backend.event=original
+        self.client.messages['-1001'].append(self.recent(7))
+        with patch('collector.telegram.RECENT_HISTORY_PAGE_SIZE',3):
+            await self.collector._recover_recent('-1001',self.source)
+            self.assertEqual(cutoff,self.collector.recent_recovery['-1001']['cutoff'])
+            result=await self.collector._recover_recent('-1001',self.source)
+        self.assertEqual('caught_up',result['state'])
+        self.assertEqual(set(range(1,8)),{int(x['platform_message_id'])for x in self.backend.calls})
+        self.assertEqual(7,len(self.backend.events))
+
+    async def test_rate_limited_second_page_yields_without_advancing_archive_checkpoint(self):
+        import time
+        self.client.messages['-1001']=[self.recent(i)for i in range(1,7)]
+        original=self.backend.event
+        async def commit_then_wait(body):
+            result=await original(body)
+            self.collector.background_reads.next_at=time.monotonic()+1
+            return result
+        self.backend.event=commit_then_wait
+        with patch('collector.telegram.RECENT_HISTORY_PAGE_SIZE',3):
+            result=await asyncio.wait_for(self.collector._recover_recent('-1001',self.source),.5)
+        self.assertEqual('catching_up',result['state'])
+        self.assertEqual(3,result['scanned'])
+        self.assertEqual([3],self.client.query_limits)
+        self.assertEqual(0,self.backend.positions.get('-1001',0))
+
     async def test_restart_replays_durable_version_without_duplicate_event(self):
         self.client.messages['-1001'] = [self.recent(100)]
         await self.collector._recover_recent('-1001', self.source)

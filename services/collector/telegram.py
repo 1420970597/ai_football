@@ -31,7 +31,7 @@ from telethon.tl.functions.messages import GetFullChatRequest
 
 from .telegram_backend import TelegramBackend
 from .telegram_control import ControlServer
-from .telegram_scheduling import TelegramReadBudget
+from .telegram_scheduling import TelegramReadBudget, TelegramBudgetBusy
 from .telegram_common import (SourceAccessError, config_int, _message_revision_evidence, _nickname,
                               _trusted_message_author, _utc)
 
@@ -590,10 +590,11 @@ class TelegramCollector:
                         row.update(lease_state='unavailable', lease_error=type(exc).__name__)
             await asyncio.gather(*(renew(chat) for chat in self.sources))
 
-    async def _history_messages(self, entity, **options):
+    async def _history_messages(self, entity, *, background_optional=False, **options):
         # Every caller requests at most one bounded Telegram page. Background
         # scans share the account budget, including FloodWait across sources.
-        async with self.background_reads.slot():
+        slot=self.background_reads.optional_slot() if background_optional else self.background_reads.slot()
+        async with slot:
             members = [m async for m in self.client.iter_messages(entity, **options)]
         for message in members:
             yield message
@@ -855,11 +856,12 @@ class TelegramCollector:
             elapsed = {name: round(value, 1) for name, value in sorted(phase_elapsed.items())}
             return json.dumps({'phase_ms': elapsed, **phase_counts}, sort_keys=True, separators=(',', ':'))
 
-        async def page(entity, cursor, continuation=False):
+        async def page(entity, cursor, continuation=False, optional=False):
             nonlocal scanned, persisted
             options = {'max_id': cursor} if cursor is not None else {}
             async def read_page():
-                return [m async for m in self._history_messages(entity, limit=RECENT_HISTORY_PAGE_SIZE, **options)]
+                return [m async for m in self._history_messages(entity, limit=RECENT_HISTORY_PAGE_SIZE,
+                                                               background_optional=optional, **options)]
 
             phase_counts['pages'] += 1
             members = await timed('telegram_page', read_page())
@@ -954,7 +956,10 @@ class TelegramCollector:
                     # preserve the cursor/cutoff and report catching_up.
                     # The next pass still checks new head messages first.
                     if time.monotonic()-started < RECENT_HISTORY_SECONDS/2:
-                        _, complete = await page(entity, cursor, continuation=True)
+                        try:
+                            _, complete = await page(entity, cursor, continuation=True,optional=True)
+                        except TelegramBudgetBusy:
+                            state['continuation_next'] = True
                     else:
                         state['continuation_next'] = True
                 if complete:
