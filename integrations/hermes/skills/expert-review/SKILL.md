@@ -16,7 +16,9 @@ description: 审核 Telegram 赛前及滚球专家图文消息，完整搜索并
 
 ## 先判断本条是否有新增意图
 
-多场完整推荐优先使用主连接的review_match_batch：先一次从原文/全部图片提取不同对阵，最多6项，显式保留可读联赛、原始时间范围和体育项目；每项带尚未读库存时确认的period/source_periods及原文证据。工具内部最多2路，沿原生next_cursor连续翻页并唯一绑定、读盘；精确total/handicap立即复用原生录入，逐项以record_result.accepted为准，不必等模型再抄quote_id。让球selection_team只能是本项原文team_a/team_b，selection_line是所选球队带符号线（受让正、让球负），market_query必须省略或null，不重复填球队/让球文字；不假定原文顺序等于系统主客、不自行翻原生line。仅total传原样market_query；其它玩法返回读盘仍须继续核验。每项独立保留已完成回执与未解决原因；一项歧义/无盘不阻止其它场，不能只处理前两场。单场多项或期间未知仍用原单场工具；禁止同一对阵既发batch又重复发单场首查。批量不豁免以下来源、分页、身份、期间、价格和截止校验。
+来源完整的单场或多场推荐优先使用主连接的review_match_batch，只有1项也直接批量：先一次从原文/全部图片提取不同对阵，最多6项，显式保留可读联赛、原始时间范围和体育项目；每项带尚未读库存时确认的period/source_periods及原文证据。工具内部最多2路，沿原生next_cursor连续翻页并唯一绑定、读盘；精确total/handicap/team_total立即复用原生录入，逐项以record_result.accepted为准，不必等模型再抄quote_id。让球selection_team只能是本项原文team_a/team_b，selection_line是所选球队带符号线（受让正、让球负），market_query必须省略或null，不重复填球队/让球文字；不假定原文顺序等于系统主客、不自行翻原生line。total及team_total传原样market_query；单队进球必须用team_total，并从原文给selection_team，不把单队进球换成整场大小，也不把所选球队填成selection=home/away（大小方向是over/under）。其它玩法返回读盘仍须继续核验。每项独立保留已完成回执与未解决原因；一项歧义/无盘不阻止其它场，不能只处理前两场。同场多项仍用单场工具复用一次身份；期间未知可批量period=null/source_periods=[]只核验身份，不读盘。禁止同一对阵既发batch又重复发单场首查。批量不豁免以下来源、分页、身份、期间、价格和截止校验。
+
+source_periods=[]明确表示来源期间未知，唯一身份核验后即说明缺期间，不调用读盘、枚举库存或根据比赛分钟补出期间。工具返回source_period_unknown时不重试读盘。source_scope_unavailable且完整原范围零项时说明原盘口当前不可用；total_quotes包含其它玩法/期间，不证明原推荐有盘，不去掉原期间、方向或线值反复刷新，也不替换为其它玩法。工具错误或完整性未知仍必须保留真实失败，不能冒充完整零库存。
 
 首次读盘必须区分source_periods与period：source_periods是尚未接触库存前从正文或所选原图确认的全部推荐期间，例["first_half"]或多期间图片["full_time","first_half"]；period仅是这次查询的筛选。来源未注明期间的“破蛋”、比分条、正在上半场或孤立数字线都填source_periods=[]，即使为核对库存暂时筛选full_time也不能将该筛选当来源。首次清单保存后不得扩充、改说明或换attempt绕过；若来源确有多个期间，必须在首次search_matches/resolve_match合并读盘或首次list_match_markets一次列全，后续分别核验。明确单项一轮录入同样传对应清单。原文对某项明示期间时保持该项正常核验，不能用另一项的期间替代。
 

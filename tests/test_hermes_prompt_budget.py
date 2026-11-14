@@ -60,3 +60,12 @@ class HermesPromptBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('team_a/team_b始终保留原文', skill)
         self.assertIn('禁止把候选home_team/away_team反填为来源', skill)
         self.assertNotIn('优先把候选实际返回的标准home_team/away_team原样传给解析工具', skill)
+
+    async def test_skill_matches_native_single_and_team_total_batch_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        skill = (root / 'integrations/hermes/skills/expert-review/SKILL.md').read_text()
+        for phrase in ('只有1项也直接批量', '精确total/handicap/team_total',
+                       'total及team_total传原样market_query', '单队进球必须用team_total',
+                       'source_period_unknown时不重试读盘', '不去掉原期间、方向或线值反复刷新'):
+            self.assertIn(phrase, skill)
+        self.assertNotIn('仅total传原样market_query', skill)
