@@ -1069,11 +1069,17 @@ class TelegramCollector:
         """
         detected_at = detected_at or datetime.now(timezone.utc).isoformat()
         stamps = []
+        newest_edit = max((getattr(m,'edit_date',None) for m in members
+                           if getattr(m,'edit_date',None) is not None),default=None)
         for message in members:
             digest = hashlib.sha256(json.dumps(_message_revision_evidence(message)).encode()).hexdigest()
             key = (chat_id, digest)
             self.detection_times.setdefault(key, detected_at)
-            stamps.append(self.detection_times[key])
+            # An unchanged album member was detected with the original post;
+            # it must not predate the actual edit now forming a new version.
+            # Retries of the edited member still preserve its first detection.
+            if newest_edit is None or getattr(message,'edit_date',None)==newest_edit:
+                stamps.append(self.detection_times[key])
         while len(self.detection_times) > 8192:
             self.detection_times.popitem(last=False)
         return min(stamps, default=detected_at)

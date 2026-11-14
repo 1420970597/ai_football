@@ -81,6 +81,19 @@ class CollectorDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(8192, len(collector.detection_times))
         self.assertTrue(all(len(key[1]) == 64 for key in collector.detection_times))
 
+    async def test_album_edit_does_not_reuse_unchanged_members_original_detection(self):
+        collector, backend = self.make_collector()
+        one=collector_support.Message(11,grouped=90,media=True)
+        two=collector_support.Message(12,text='',grouped=90,media=True)
+        original=(datetime.now(timezone.utc)-timedelta(seconds=73)).isoformat()
+        await collector._stage_group('-1001',collector.sources['-1001'],[one,two],detected_at=original)
+        one.edit_date=datetime.now(timezone.utc)-timedelta(seconds=1)
+        edited=datetime.now(timezone.utc).isoformat()
+        await collector._stage_group('-1001',collector.sources['-1001'],[one,two],detected_at=edited)
+        self.assertEqual(edited,backend.calls[-1]['detected_at'])
+        await collector._stage_group('-1001',collector.sources['-1001'],[one,two])
+        self.assertEqual(edited,backend.calls[-1]['detected_at'])
+
 
 @unittest.skipUnless(os.environ.get('TELEGRAM_TEST_DATABASE_URL'), 'requires isolated Telegram DB')
 class ApiDetectionTests(unittest.IsolatedAsyncioTestCase):
