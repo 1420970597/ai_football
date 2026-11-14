@@ -205,6 +205,18 @@ class HermesClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, summary['image_count'])
         self.assertEqual(0, summary['image_bytes'])
 
+    async def test_source_period_guidance_prevents_inventory_based_inference(self):
+        message={'source_name':'isolated','display_nickname':'isolated',
+                 'posted_at':__import__('datetime').datetime.now(__import__('datetime').timezone.utc),
+                 'raw_text':'足球（滚球）大/小 甲队大1.75','media_objects':[],
+                 'reply_context':{}}
+        parts=await hermes_client._content_parts(message,uuid.uuid4(),uuid.uuid4())
+        text=parts[0]['text']
+        self.assertIn('source_periods=[]',text)
+        self.assertIn('唯一识别比赛后明确缺少期间',text)
+        self.assertIn('单队大小不能改查整场大小',text)
+        self.assertIn('未知字段不猜',text)
+
     async def test_explicit_provider_error_is_not_returned_as_model_content(self):
         response_body = {
             'model': 'isolated-model',

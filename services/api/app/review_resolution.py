@@ -9,6 +9,7 @@ from fastapi.encoders import jsonable_encoder
 
 from .competition_names import normalize_competition_name
 from .team_matching import normalize_team_name, team_name_matches, with_verified_aliases
+from .review_team_identity import added_squad_markers
 
 if TYPE_CHECKING:
     from .routes.reviews import ResolveInput
@@ -19,6 +20,16 @@ DISAMBIGUATION_FIELDS = ('id', 'sport', 'competition_name', 'home_team', 'away_t
 
 async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
     """Caller verifies the active attempt and completed, attempt-owned search."""
+    # The source text is authoritative negative evidence. A later model turn
+    # must not adopt a candidate's reserve/women/youth qualifier absent from
+    # a text-only source. Images need their own visual evidence and are not
+    # interpreted by this guard.
+    source=await conn.fetchrow(
+        'SELECT m.raw_text,m.media_objects FROM v2_analysis_jobs j '
+        'JOIN v2_expert_messages m ON m.id=j.message_id WHERE j.id=$1 AND j.attempt_id=$2',
+        body.review_id,body.attempt_id)
+    if source and not source['media_objects'] and added_squad_markers(body.team_a,body.team_b,source['raw_text']):
+        return {'resolved':False,'reason':'source_squad_identity_unverified','candidate_count':0}
     matches = []
     if normalize_team_name(body.team_a) == normalize_team_name(body.team_b):
         raise HTTPException(status_code=422, detail='two distinct team identities are required')

@@ -606,6 +606,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_source_fragment_candidates_preserve_scope_pagination_and_identity(self):
         home, away = '阿根廷农业U20', '塔勒雷斯雷梅迪奥斯U20'
+        await self.pool.execute('UPDATE v2_expert_messages SET raw_text=$2 WHERE id=$1',
+                                self.message,home+'VS'+away)
         await self.fixture(1, home_team=home, away_team=away)
         await self.fixture(2, home_team=home, away_team=away, sport='basketball')
         await self.fixture(3, home_team=home, away_team=away,
