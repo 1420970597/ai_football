@@ -32,3 +32,20 @@ def normalize_competition_name(value: str, sport: str | None) -> str:
     if sport == 'football':
         return normalize_team_name(_FOOTBALL_ALIASES.get(normalized, normalized))
     return normalized
+
+
+def competition_query_members(value: str, sport: str | None) -> tuple[str, ...]:
+    """An umbrella source label covers only its documented adult divisions.
+
+    This is a query scope, never a canonical identity shared by divisions.
+    Women's, youth, virtual and unknown divisions do not belong to this set.
+    """
+    if sport == 'football' and normalize_team_name(value) == '欧国联':
+        return tuple(normalize_team_name('欧洲国家联赛'+division) for division in 'ABCD')
+    return ()
+
+
+def competition_query_matches(query: str, candidate: str, sport: str | None) -> bool:
+    members = competition_query_members(query, sport)
+    canonical = normalize_competition_name(candidate, sport)
+    return canonical in members if members else canonical == normalize_competition_name(query, sport)

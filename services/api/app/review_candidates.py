@@ -5,7 +5,7 @@ from datetime import timedelta
 import re
 
 from .chinese_names import sql_chinese_fold
-from .competition_names import normalize_competition_name
+from .competition_names import normalize_competition_name, competition_query_members
 from .review_tool_evidence import FIXTURE_FIELDS
 from .team_matching import (compact_chinese_boundaries, normalize_team_name, team_search_variants,
                             verified_team_search_variants)
@@ -43,7 +43,9 @@ _INSERT_SNAPSHOT = (
     "AND ($9='' OR regexp_replace(translate(lower(f.competition_name),$6,$7),"
     "'[^[:alnum:]]+',' ','g') LIKE $9) "
     "AND ($10::timestamptz IS NULL OR f.kickoff_at >= $10) AND ($11::timestamptz IS NULL OR f.kickoff_at <= $11) "
-    "AND ($12::text IS NULL OR f.sport=$12) RETURNING 1) SELECT count(*) FROM inserted"
+    "AND ($12::text IS NULL OR f.sport=$12) "
+    "AND ($15::text[] IS NULL OR regexp_replace(translate(lower(f.competition_name),$6,$7),"
+    "'[^[:alnum:]]+',' ','g')=ANY($15)) RETURNING 1) SELECT count(*) FROM inserted"
 )
 
 
@@ -66,12 +68,15 @@ async def snapshot_candidates(conn, *, review_id, search_key, phase, team_query,
     name_source = 'áàâäãåéèêëíìîïóòôöõúùûüýÿçñ'
     name_target = 'aaaaaaeeeeiiiiooooouuuuyycn'
     competition_term = normalize_competition_name(competition, sport)
+    competition_members = competition_query_members(competition, sport)
     # A verified short name denotes this exact competition, not a similarly
     # prefixed youth/women's competition. Ordinary queries keep substring search.
     competition_pattern = competition_term
     if (competition_term and competition_term == normalize_team_name(competition)
             and not (sport == 'basketball' and competition_term == 'nba')):
         competition_pattern = '%' + competition_term + '%'
+    if competition_members:
+        competition_pattern = ''
     verified_variants = verified_team_search_variants(team_query, sport=sport, competition=competition)
     verified_patterns = {key: ['%'+name+'%' for name in names] for key, names in verified_variants.items()}
     chinese_source, chinese_target = sql_chinese_fold(' '.join((team_query, competition_term,
@@ -84,7 +89,8 @@ async def snapshot_candidates(conn, *, review_id, search_key, phase, team_query,
     args = (review_id, search_key, phase, '%'+team_query.strip().casefold()+'%',
             ['%'+v+'%' for v in variants],
             name_source+chinese_source, name_target+chinese_target, team_query.strip().casefold(),
-            competition_pattern, from_utc, to_utc, sport, False, verified_patterns)
+            competition_pattern, from_utc, to_utc, sport, False, verified_patterns,
+            list(competition_members) if competition_members else None)
     count = await conn.fetchval(_INSERT_SNAPSHOT, *args)
     fragments = source_fragments(team_query, from_utc, to_utc) if count == 0 else ()
     if fragments:
