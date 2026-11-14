@@ -1,7 +1,7 @@
 {
   "services": {
     "api": {
-      "image": "sha256:f7f2518f06505fdcf17bda940f6da0f97111be9af55f9ad5c583f40b8c393b7d",
+      "image": "sha256:c964defe693b00217a466c37743d7fa1e5941fd25905713f55f52f4860aa98ed",
       "command": [
         "uvicorn",
         "app.main:app",
@@ -20,7 +20,7 @@
       "cpus": 0.4
     },
     "collector": {
-      "image": "sha256:6d86daf41f21a10de20b134a9718a07d15cf1fa81beb69cbbe947f6e1428ffea",
+      "image": "sha256:5482b33b78ad7c1428cc1b942a811bd5f1588fe10ba92125c753c3c07bf33978",
       "command": [
         "python",
         "-m",

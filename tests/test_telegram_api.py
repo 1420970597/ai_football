@@ -254,6 +254,30 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, await self.pool.fetchval("SELECT count(*) FROM v2_expert_messages"))
         self.assertIsNotNone(await self.pool.fetchval("SELECT deleted_at FROM v2_expert_messages WHERE id=$1", uuid.UUID(original.json()["message_id"])))
 
+    async def test_partial_album_delete_does_not_tombstone_surviving_members(self):
+        album=self.event(media=True)
+        album.update(platform_message_id='album:55',member_message_ids=[11,12],
+            media_manifest=[{'message_id':value,'mime_type':'image/jpeg','bytes':100} for value in (11,12)])
+        original=await self.post(album)
+        self.assertEqual(200,original.status_code,original.text)
+        deleted=self.event(version='delete-one',text='',kind='delete',minutes=1)
+        deleted.update(platform_message_id='delete:12',member_message_ids=[12])
+        response=await self.post(deleted)
+        self.assertEqual(200,response.status_code,response.text)
+        self.assertEqual([11],response.json()['surviving_member_ids'])
+        self.assertEqual([12],[r['platform_message_id']for r in await self.pool.fetch(
+            'SELECT platform_message_id FROM v2_telegram_tombstones ORDER BY platform_message_id')])
+        self.assertIsNotNone(await self.pool.fetchval('SELECT deleted_at FROM v2_expert_messages WHERE id=$1',uuid.UUID(original.json()['message_id'])))
+        survivor=self.event(version='surviving-revision',media=True,kind='edit',minutes=2)
+        survivor['platform_message_id']='album:55'
+        restored=await self.post(survivor)
+        self.assertEqual(200,restored.status_code,restored.text)
+        self.assertEqual('pending',restored.json()['state'])
+        self.assertNotEqual(original.json()['message_id'],restored.json()['message_id'])
+        self.assertEqual(1,await self.pool.fetchval('SELECT count(*) FROM v2_telegram_events WHERE is_current'))
+        replay=await self.post(album|{'version_key':hashlib.sha256(b'late-album').hexdigest()})
+        self.assertEqual('deleted',replay.json()['state'])
+
     async def test_checkpoint_lease_and_compare_and_swap(self):
         conflict = await self.client.post("/internal/telegram/checkpoints/claim", json={"chat_id": "-1001", "owner": str(uuid.uuid4())})
         self.assertEqual(409, conflict.status_code)
@@ -508,7 +532,12 @@ class TelegramApiTests(unittest.IsolatedAsyncioTestCase):
         deletion.update(platform_message_id="delete:11", member_message_ids=[11])
         self.assertEqual(200, (await self.post(deletion)).status_code)
         body.update(version_key=hashlib.sha256(b"partial-album").hexdigest(), member_message_ids=[10])
-        self.assertEqual("deleted", (await self.post(body)).json()["state"])
+        self.assertEqual("unsupported", (await self.post(body)).json()["state"])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_analysis_jobs'))
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        self.assertEqual([11], [row['platform_message_id'] for row in await self.pool.fetch(
+            'SELECT platform_message_id FROM v2_telegram_tombstones ORDER BY platform_message_id')])
+        self.assertEqual(1, await self.pool.fetchval('SELECT count(*) FROM v2_telegram_events WHERE is_current'))
 
     async def test_full_original_reading_pagination_with_identical_timestamps(self):
         ids = []

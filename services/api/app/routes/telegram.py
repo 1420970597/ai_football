@@ -899,7 +899,12 @@ async def ingest_event(body: EventInput, request: Request):
                     "WHERE e.source_id=$1 AND e.id IN (SELECT event_id FROM v2_telegram_event_members "
                     "WHERE platform_message_id=ANY($2::bigint[]))", source["id"], body.member_message_ids,
                 )
-                deleted_ids = sorted(set(body.member_message_ids) | {row["platform_message_id"] for row in affected})
+                # Removing one album member invalidates the old combined
+                # review, but does not prove its surviving members deleted.
+                # Tombstoning all siblings prevents their genuine revised
+                # album from ever being ingested by history reconciliation.
+                deleted_ids = sorted(set(body.member_message_ids))
+                surviving_ids = sorted({row["platform_message_id"] for row in affected} - set(deleted_ids))
                 await conn.executemany("INSERT INTO v2_telegram_tombstones(source_id,platform_message_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
                                        [(source["id"], item) for item in deleted_ids])
                 await withdraw(conn, source["id"], body.member_message_ids, "source_deleted")
@@ -907,7 +912,8 @@ async def ingest_event(body: EventInput, request: Request):
                                    "(SELECT event_id FROM v2_telegram_event_members WHERE platform_message_id=ANY($2::bigint[]))",
                                    source["id"], body.member_message_ids)
                 ack = await acknowledge_reconciliation()
-                return {"persisted": True, "state": "deleted", **ack}
+                return {"persisted": True, "state": "deleted",
+                        "surviving_member_ids": surviving_ids, **ack}
             deleted = (snapshot["tombstoned"] if snapshot is not None else await conn.fetchval(
                 "SELECT EXISTS(SELECT 1 FROM v2_telegram_tombstones WHERE source_id=$1 AND platform_message_id=ANY($2::bigint[]))",
                 source["id"], body.member_message_ids))

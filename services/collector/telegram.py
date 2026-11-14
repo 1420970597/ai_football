@@ -1572,7 +1572,24 @@ class TelegramCollector:
         try:
             async with self.locks.setdefault(chat_id, asyncio.Lock()):
                 await self._checkpoint(chat_id)
-            await self._delete(chat_id, [int(value) for value in event.deleted_ids])
+            result = await self._delete(chat_id, [int(value) for value in event.deleted_ids])
+            survivors = result.get('surviving_member_ids') if isinstance(result, dict) else None
+            if survivors:
+                if (not isinstance(survivors, list) or len(survivors) > 100
+                        or any(type(value) is not int or value <= 0 for value in survivors)):
+                    raise ValueError('invalid_surviving_album_members')
+                async with asyncio.timeout(12):
+                    entity = await self._entity(chat_id)
+                    async with self.background_reads.slot():
+                        remaining = await self.client.get_messages(entity, ids=survivors)
+                    groups=set()
+                    for message in remaining:
+                        if not message or int(message.id) in event.deleted_ids:
+                            continue
+                        key=getattr(message,'grouped_id',None) or int(message.id)
+                        if key in groups:continue
+                        groups.add(key)
+                        await self._live_messages(chat_id, [message], entity=entity)
         except Exception as exc:
             if isinstance(exc, AuthKeyDuplicatedError):
                 await self._invalidate_active_session()
