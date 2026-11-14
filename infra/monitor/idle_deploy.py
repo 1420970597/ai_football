@@ -12,8 +12,8 @@ import time
 
 
 def deploy(config,gate_script,release,services,log_path):
-    if not services or set(services)-{'api','local-mcp-api'}:
-        raise ValueError('only prepared API handoffs are supported')
+    if not services or set(services)-{'api','local-mcp-api','hermes-mcp'}:
+        raise ValueError('only prepared API and MCP handoffs are supported')
     if release.parent!=Path('/tmp') or not release.name.startswith('tg-idle-'):
         raise ValueError('unique remote release marker required')
     config=config.resolve(strict=True);gate_script=gate_script.resolve(strict=True)

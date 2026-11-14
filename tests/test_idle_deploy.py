@@ -7,7 +7,7 @@ from unittest.mock import MagicMock,patch
 from infra.monitor.idle_deploy import deploy
 
 class IdleDeployTests(unittest.TestCase):
-    def scenario(self,deploy_exit=0,deploy_error=None,gate_code=0):
+    def scenario(self,deploy_exit=0,deploy_error=None,gate_code=0,services=None):
         with tempfile.TemporaryDirectory()as folder:
             root=Path(folder);config=root/'private.json';script=root/'gate.py'
             config.write_text('{}');script.write_text('# gate')
@@ -21,7 +21,7 @@ class IdleDeployTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args,0)
             with patch('infra.monitor.idle_deploy.subprocess.Popen',return_value=gate),patch('infra.monitor.idle_deploy.subprocess.run',side_effect=run),patch('infra.monitor.idle_deploy.select.select',return_value=([gate.stdout],[],[])):
                 result=None;error=None
-                try:result=deploy(config,script,Path('/tmp/tg-idle-unit-test'),['api','local-mcp-api'],root/'log')
+                try:result=deploy(config,script,Path('/tmp/tg-idle-unit-test'),services or ['api','local-mcp-api'],root/'log')
                 except Exception as exc:error=exc
             self.assertEqual(['docker','compose'],calls[0][:2])
             self.assertEqual(['docker','exec','ai-football-v2-review-worker-1','touch','/tmp/tg-idle-unit-test'],calls[-1])
@@ -38,6 +38,11 @@ class IdleDeployTests(unittest.TestCase):
         result,error=self.scenario(deploy_exit=1)
         self.assertIsNone(result)
         self.assertEqual('candidate_deploy_failed',str(error))
+
+    def test_project_mcp_uses_the_same_bounded_handoff_and_release(self):
+        result,error=self.scenario(services=['hermes-mcp'])
+        self.assertIsNone(error)
+        self.assertEqual(['hermes-mcp'],result['services'])
 
     def test_timeout_also_releases_and_propagates(self):
         _,error=self.scenario(deploy_error=subprocess.TimeoutExpired('docker',12))
