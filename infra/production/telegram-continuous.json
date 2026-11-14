@@ -37,7 +37,7 @@
         "REVIEW_EXPERT_CONCURRENCY_FLOOR": "2",
         "REVIEW_HISTORICAL_CONCURRENCY": "0"
       },
-      "image": "sha256:253604556d26a05b3f8eb8e8d0b32f904282a5861ed9cf1c6311cb01a6870efa",
+      "image": "sha256:5074212b3e284d46aab2cdb427b0ab69deca84af39db608aeb8ef0a5e14a7a34",
       "command": [
         "python",
         "-m",
@@ -67,7 +67,7 @@
       "cpus": 0.4
     },
     "hermes-mcp": {
-      "image": "sha256:3bae3c7fd331220d9644f6e69e9ae0d3948564fc7b078ec1b70bb6b04aa76dea"
+      "image": "sha256:7ce3b71209ce386a2b6f9872b9b822a6b29696dcbc3a975af0640abd00605ba6"
     },
     "hermes": {
       "image": "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",
