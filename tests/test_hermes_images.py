@@ -107,6 +107,17 @@ class HermesImagesTests(unittest.IsolatedAsyncioTestCase):
         parts=await hermes_client._content_parts(self.message([]),'review','attempt')
         self.assertNotIn('逐场手绘勾叉',parts[0]['text'])
 
+    async def test_score_only_image_is_not_a_selection_but_explicit_followup_is_preserved(self):
+        for source in ('電莖得意 足球失意','上半场0.5大，等水上车'):
+            message=self.message([{'object_key':'score.png','mime_type':'image/png'}])
+            message['raw_text']=source
+            with patch.object(blobstore,'read_image',AsyncMock(return_value=PNG)):
+                parts=await hermes_client._content_parts(message,'review','attempt')
+            self.assertIn(source,parts[0]['text'])
+            self.assertIn('不证明大小方向、盘口期间或新推荐',parts[0]['text'])
+            self.assertIn('仍正常核验',parts[0]['text'])
+            self.assertEqual('image_url',parts[1]['type'])
+
     async def test_album_images_prepare_concurrently_with_a_bounded_reader_pool(self):
         active = peak = 0
 
