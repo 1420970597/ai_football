@@ -1,8 +1,29 @@
 """Stop redundant model continuations without approving unresolved identities."""
 async def repeated_identity_failure(conn,job_id,attempt_id,issues):
     allowed={'unfinished_search_count','unfinished_searches','unbound_mention_count',
-             'unbound_mentions','detail_limit','text_intent_unverified'}
+             'unbound_mentions','detail_limit','text_intent_unverified','source_total_review_gaps'}
     if set(issues)-allowed or issues.get('unfinished_search_count'):return False
+    gaps=issues.get('source_total_review_gaps')or[]
+    if gaps:
+        # One explicit total still cannot be read before its unique fixture
+        # exists. Only a complete negative original-pair/league search may
+        # terminate that gap, always unverified. Multiple items or candidate
+        # mentions must continue; they may refer to an independent fixture.
+        if (len(gaps)!=1 or issues.get('unbound_mention_count')
+                or set(gaps[0])!={'line','period','selection','source_text'}
+                or gaps[0].get('period')not in {'full_time','first_half','second_half'}
+                or gaps[0].get('selection')not in {'over','under'}):return False
+        if not await conn.fetchval(
+            "WITH pairs AS (SELECT DISTINCT payload->'parameters'->>'team_a' a,"
+            "payload->'parameters'->>'team_b' b FROM v2_analysis_traces "
+            "WHERE job_id=$1 AND payload->>'attempt_id'=($2::uuid)::text "
+            "AND trace_kind='mcp_search_matches' AND payload->>'status'='succeeded' "
+            "AND length(payload->'parameters'->>'team_a')>=2 "
+            "AND length(payload->'parameters'->>'team_b')>=2) "
+            "SELECT (SELECT count(*) FROM pairs)=1 "
+            "AND NOT EXISTS(SELECT 1 FROM v2_review_fixture_bindings WHERE job_id=$1 AND attempt_id=$2) "
+            "AND NOT EXISTS(SELECT 1 FROM v2_match_searches WHERE job_id=$1 AND attempt_id=$2 AND NOT complete)",
+            job_id,attempt_id):return False
     if not issues.get('unbound_mention_count'):
         if not issues.get('text_intent_unverified'):return False
         # A completed whole-league source search plus a failed original-pair
@@ -29,6 +50,7 @@ async def repeated_identity_failure(conn,job_id,attempt_id,issues):
             "((league.payload->'parameters')-'team_query'-'competition_query'-'cursor'-'page_size')))",
             job_id,attempt_id))
         if league_complete:return True
+        if gaps:return False
         # Sometimes the model correctly reports an unverified original pair
         # without naming a candidate, so there is no unbound mention. A second
         # explicit refusal for that same completed search is still evidence.

@@ -109,6 +109,7 @@ class IdentityStopIntegrationTests(unittest.IsolatedAsyncioTestCase):
             unbound_mentions=[],detail_limit=100,text_intent_unverified=True)
         async with self.pool.acquire()as conn:
             self.assertFalse(await repeated_identity_failure(conn,self.job,self.attempt,issues))
+
         await self.post('resolve_match',search_key=key,team_a='Unverified',team_b='Beta1')
         async with self.pool.acquire()as conn:
             self.assertTrue(await repeated_identity_failure(conn,self.job,self.attempt,issues))
@@ -117,5 +118,31 @@ class IdentityStopIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
         await self.post('search_matches',team_query='Beta',team_a='Another',team_b='Beta1')
+        async with self.pool.acquire()as conn:
+            self.assertFalse(await repeated_identity_failure(conn,self.job,self.attempt,issues))
+
+    async def test_single_total_gap_stops_only_after_complete_negative_pair_and_league(self):
+        gap=dict(line='1.5',period='first_half',selection='over',source_text='上半场1.5大')
+        issues=dict(unfinished_search_count=0,unfinished_searches=[],unbound_mention_count=0,
+            unbound_mentions=[],detail_limit=100,text_intent_unverified=True,source_total_review_gaps=[gap])
+        scope=dict(team_a='Unverified',team_b='Beta1',competition_query='Source League',sport='football',
+            from_utc='2026-11-14T00:00:00Z',to_utc='2026-11-17T00:00:00Z')
+        await self.post('search_matches',team_query='Unverified',**scope)
+        async with self.pool.acquire()as conn:
+            self.assertFalse(await repeated_identity_failure(conn,self.job,self.attempt,issues))
+        await self.post('search_matches',team_query='',**scope)
+        async with self.pool.acquire()as conn:
+            self.assertTrue(await repeated_identity_failure(conn,self.job,self.attempt,issues))
+            self.assertFalse(await repeated_identity_failure(conn,self.job,self.attempt,issues|{'source_total_review_gaps':[gap,gap]}))
+            self.assertFalse(await repeated_identity_failure(conn,self.job,self.attempt,issues|{'source_total_review_gaps':[{'reason':'source_total_read_budget_exceeded'}]}))
+        text='原文双方完整检索后零唯一身份，不能读盘，保持未解决。'
+        job={'id':self.job,'attempt_id':self.attempt,'message':{'raw_text':'上半场1.5大'},'review_mode':'real_time'}
+        with patch.object(worker,'review_message',AsyncMock(return_value=(text,{'content':text})))as model:
+            _,summary=await worker._review_until_verified(self.pool,SimpleNamespace(),job)
+        self.assertEqual(1,model.await_count)
+        self.assertFalse(summary['completion_verified'])
+        self.assertEqual('repeated_identity_unresolved',summary['completion_terminal'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+        await self.post('search_matches',team_query='Another',**(scope|{'team_a':'Another'}))
         async with self.pool.acquire()as conn:
             self.assertFalse(await repeated_identity_failure(conn,self.job,self.attempt,issues))
