@@ -7,6 +7,8 @@ preflight; provider source timestamps are not execution quote timestamps.
 """
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from collections import OrderedDict
+from copy import deepcopy
 import hashlib
 import json
 from .team_totals import team_total_terms
@@ -98,3 +100,35 @@ def confirmations_for(observation, quotes, fixture, max_age, now=None):
         result[quote['id']] = confirmation_for(
             {**observation, 'quotes': matches}, quote, fixture, max_age, now)
     return result
+
+
+class CurrentObservationPool:
+    """Bounded native market evidence, containing no review authorization.
+
+    Reuse never changes its original clocks. Each caller must independently
+    authorize its attempt, bind the fixture and validate current database rows.
+    """
+    def __init__(self, capacity=16):
+        if type(capacity) is not int or capacity < 1:
+            raise ValueError('positive observation capacity required')
+        self.capacity = capacity
+        self._observations = OrderedDict()
+
+    def remember(self, observation, quotes, fixture, max_age):
+        if not quotes or not any(confirmations_for(observation, quotes, fixture, max_age).values()):
+            return
+        self._observations[fixture['id']] = deepcopy(observation)
+        self._observations.move_to_end(fixture['id'])
+        while len(self._observations) > self.capacity:
+            self._observations.popitem(last=False)
+
+    def current(self, quotes, fixture, max_age):
+        observation = self._observations.get(fixture['id'])
+        if not quotes or observation is None:
+            return None
+        confirmations = confirmations_for(observation, quotes, fixture, max_age)
+        if not all(confirmations.values()):
+            # A changed/unknown quote or context cannot borrow a different
+            # row's confirmation. Keep the original expiry and fail closed.
+            return None
+        return deepcopy(observation)

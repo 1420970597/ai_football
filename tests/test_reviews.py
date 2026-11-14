@@ -1102,8 +1102,12 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                     response = await self.post('list_match_markets', fixture_id=fixture_id)
                 self.assertEqual(200, response.status_code, response.text)
                 result = response.json()
-                # 模型看到的回执口径不变；退避提示只进入系统轨迹供有界恢复使用。
-                self.assertEqual({'attempted': True, 'accepted': False, 'reason': 'upstream_cooldown'}, result['refresh'])
+                # Valid collector timing survives the native wire projection;
+                # this cannot make any quote fresh or bypass cooldown.
+                expected = {'attempted': True, 'accepted': False, 'reason': 'upstream_cooldown'}
+                if recorded is not None:
+                    expected['retry_after_seconds'] = recorded
+                self.assertEqual(expected, result['refresh'])
                 self.assertTrue(result['markets'])
                 self.assertTrue(all(not item['fresh'] and not item['confirmed_current'] and not item['can_record']
                                     for item in result['markets']))

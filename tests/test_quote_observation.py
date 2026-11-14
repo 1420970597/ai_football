@@ -4,7 +4,7 @@ from decimal import Decimal
 import unittest
 from unittest.mock import patch
 
-from app.quote_observation import confirmation_for, confirmations_for, DETAIL_PATH
+from app.quote_observation import confirmation_for, confirmations_for, CurrentObservationPool, DETAIL_PATH
 from app import quote_observation
 from app.review_state import fresh_quote
 
@@ -80,6 +80,31 @@ class QuoteObservationTests(unittest.TestCase):
         for change in ({'status':'closed'},{'status':'suspended'},{'selection_id':''},{'market_instance_id':''},
                        {'play_id':''},{'market_kind':'unsupported'},{'price':None}):
             self.assertIsNone(self.confirm(quote={**self.quote,**change}))
+
+    def test_observation_pool_preserves_original_time_and_defensively_copies(self):
+        pool = CurrentObservationPool()
+        quotes = [self.quote | {'id': 'q'}]
+        pool.remember(self.observation, quotes, self.fixture, 15)
+        result = pool.current(quotes, self.fixture, 10)
+        self.assertEqual(self.observation, result)
+        result['quotes'][0]['price'] = '9'
+        self.assertEqual(self.observation, pool.current(quotes, self.fixture, 10))
+        self.assertIsNone(pool.current(quotes, self.fixture, 1))
+        self.assertIsNone(pool.current(quotes, self.fixture | {'home_score': 1}, 15))
+        self.assertIsNone(pool.current([quotes[0] | {'price': Decimal('2.03')}], self.fixture, 15))
+        self.assertIsNone(pool.current([quotes[0] | {'status': 'suspended'}], self.fixture, 15))
+        self.assertIsNone(pool.current(quotes + [quotes[0] | {'id': 'other', 'selection_id': 'other'}], self.fixture, 15))
+
+    def test_observation_pool_has_bounded_fixture_capacity_and_rejects_invalid_evidence(self):
+        pool = CurrentObservationPool(capacity=1)
+        quotes = [self.quote | {'id': 'q'}]
+        pool.remember(self.observation | {'path': '/wrong'}, quotes, self.fixture, 15)
+        self.assertIsNone(pool.current(quotes, self.fixture, 15))
+        pool.remember(self.observation, quotes, self.fixture, 15)
+        other = self.fixture | {'id': 'leyu:other', 'source_id': 'leyu:other'}
+        pool.remember(self.observation | {'fixture_id': 'leyu:other', 'source_match_id': 'other'}, quotes, other, 15)
+        self.assertIsNone(pool.current(quotes, self.fixture, 15))
+        self.assertIsNotNone(pool.current(quotes, other, 15))
 
     def assert_batch_equal(self, observation, quotes=None, fixture=None):
         quotes = quotes or [self.quote | {'id': 'q'}]

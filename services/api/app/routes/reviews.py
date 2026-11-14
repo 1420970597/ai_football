@@ -21,7 +21,7 @@ from ..review_line_intent import line_intent_rejection, line_intent_context
 from ..review_state import authorize, fresh_quote, quote_context, quote_context_changed_fields
 from ..review_tool_evidence import active_tool_job, tool_evidence, tool_success, MAX_MARKETS
 from ..runtime_settings import quote_max_age_from_rows
-from ..quote_observation import confirmation_for, confirmations_for
+from ..quote_observation import confirmation_for, confirmations_for, CurrentObservationPool
 from ..team_matching import normalize_team_name, with_verified_aliases
 from ..review_candidates import snapshot_candidates
 from ..review_cursors import encode_cursor, decode_cursor
@@ -371,6 +371,12 @@ async def _market_snapshot(conn, body, settings, filters):
     return fixture, total_quotes, quotes, max_age
 
 
+def _current_observation_pool(request):
+    if not hasattr(request.app.state, 'current_quote_observations'):
+        request.app.state.current_quote_observations = CurrentObservationPool()
+    return request.app.state.current_quote_observations
+
+
 async def _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh):
     confirmations = confirmations_for(refresh.get('_observation'), quotes, fixture, max_age)
     if quotes:
@@ -400,7 +406,8 @@ async def _request_market_refresh(fixture_id: str, source_match_id: str, request
     """I/O only, after this call's transaction validated the bound active fixture.
 
     Callers must revalidate the attempt and quote after I/O before recording.
-    Never retain a connection, permission witness or observation across calls.
+    Never retain a connection or permission witness across calls. A native
+    observation may be reused only after separate current-row validation.
     """
     settings = request.app.state.settings
     url = getattr(settings, 'market_refresh_url', '')
@@ -474,6 +481,13 @@ async def list_match_markets(body: MarketInput, request: Request):
             elif (not quotes and total_quotes and any(value is not None for value in filters.values())
                   and not (fixture['sport'] == 'football' and filters['market_kind'] == 'team_total')):
                 reason = 'no_quotes_for_filter'
+            if reason is None:
+                observation = _current_observation_pool(request).current(
+                    quotes, fixture, max(0, max_age-QUOTE_CONFIRMATION_WRITE_HEADROOM_SECONDS))
+                if observation is not None:
+                    return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age,
+                        filters, {'attempted': False, 'reason': 'exact_current_observation_reused',
+                                  '_observation': observation})
             if reason:
                 return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age,
                                                  filters, {'attempted': False, 'reason': reason})
@@ -487,6 +501,7 @@ async def list_match_markets(body: MarketInput, request: Request):
         async with conn.transaction():
             await active_tool_job(conn, body.review_id, body.attempt_id)
             fixture, total_quotes, quotes, max_age = await _market_snapshot(conn, body, settings, filters)
+            _current_observation_pool(request).remember(refresh.get('_observation'), quotes, fixture, max_age)
             return await _market_read_result(conn, body, fixture, total_quotes, quotes, max_age, filters, refresh)
 
 

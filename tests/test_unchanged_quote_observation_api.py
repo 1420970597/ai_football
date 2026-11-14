@@ -105,6 +105,64 @@ class UnchangedQuoteObservationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(recorded.json()['accepted']))
         self.assertEqual(1, len(calls))
 
+    async def test_second_authorized_read_reuses_exact_native_observation_without_changing_time(self):
+        fixture_id = await self.prepare()
+        self.enable_refresh()
+        _, _, observation = await self.observation(fixture_id)
+        calls = []
+        def handler(request):
+            calls.append(request)
+            return self.response(observation)
+        with self.transport(handler):
+            first = await self.post('list_match_markets', fixture_id=fixture_id)
+            second = await self.post('list_match_markets', fixture_id=fixture_id)
+        self.assertEqual(200, second.status_code, second.text)
+        self.assertEqual(1, len(calls))
+        self.assertEqual('exact_current_observation_reused', second.json()['refresh']['reason'])
+        self.assertFalse(second.json()['refresh']['attempted'])
+        self.assertTrue(second.json()['markets'][0]['confirmed_current'])
+        native = await self.pool.fetchrow('SELECT source_updated_at,price FROM v2_current_quotes WHERE fixture_id=$1', fixture_id)
+        self.assertEqual(observation['quotes'][0]['source_updated_at'], str(native['source_updated_at']))
+        context = await self.pool.fetchval('SELECT quote_context FROM v2_review_market_reads')
+        self.assertEqual(observation['started_at'], context['current_confirmation']['started_at'])
+
+    async def test_reuse_cannot_bypass_revoked_attempt_source_or_fixture_binding(self):
+        fixture_id = await self.prepare()
+        self.enable_refresh()
+        _, _, observation = await self.observation(fixture_id)
+        with self.transport(lambda request: self.response(observation)):
+            self.assertEqual(200, (await self.post('list_match_markets', fixture_id=fixture_id)).status_code)
+        for sql in ("UPDATE v2_analysis_jobs SET lease_until=now()-interval '1 second'",
+                    'UPDATE v2_expert_sources SET enabled=false', 'DELETE FROM v2_review_fixture_bindings'):
+            await self.pool.execute("UPDATE v2_analysis_jobs SET lease_until=now()+interval '5 minutes'")
+            await self.pool.execute('UPDATE v2_expert_sources SET enabled=true')
+            await self.pool.execute(sql)
+            with self.transport(lambda request: self.fail('revoked read must not call collector')):
+                response = await self.post('list_match_markets', fixture_id=fixture_id)
+            self.assertEqual(409, response.status_code, response.text)
+
+    async def test_changed_price_or_near_expiry_forces_new_native_read(self):
+        fixture_id = await self.prepare()
+        self.enable_refresh()
+        calls = []
+        async def handler(request):
+            calls.append(request)
+            _, _, observation = await self.observation(fixture_id)
+            return self.response(observation)
+        with self.transport(handler):
+            await self.post('list_match_markets', fixture_id=fixture_id)
+            await self.pool.execute('UPDATE v2_current_quotes SET price=2.03')
+            changed = await self.post('list_match_markets', fixture_id=fixture_id)
+            self.assertEqual('2.03000', str(await self.pool.fetchval(
+                'SELECT price FROM v2_current_quotes WHERE fixture_id=$1', fixture_id)))
+            self.assertEqual(2, len(calls))
+            # Age within the policy but beyond its write headroom cannot skip I/O.
+            pool = self.client._transport.app.state.current_quote_observations
+            value = pool._observations[fixture_id]
+            value['started_at'] = (datetime.now(timezone.utc)-timedelta(seconds=11)).isoformat()
+            await self.post('list_match_markets', fixture_id=fixture_id)
+            self.assertEqual(3, len(calls))
+
     async def test_same_marker_without_valid_native_observation_is_not_current(self):
         fixture_id = await self.prepare()
         self.enable_refresh()
