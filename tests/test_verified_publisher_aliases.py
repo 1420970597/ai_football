@@ -5,7 +5,8 @@ from app.team_matching import team_name_matches,with_verified_aliases
 import test_reviews as support
 
 PAIRS=(('印度甲','印度甲级联赛','班加鲁鲁联','孟加拉鲁联合会','皇家克什米尔'),
-       ('拉脱超降','拉脱维亚超级联赛 - 附加赛','瓦尔麦斯','瓦尔米耶拉','图库姆斯'))
+       ('拉脱超降','拉脱维亚超级联赛 - 附加赛','瓦尔麦斯','瓦尔米耶拉','图库姆斯'),
+       ('港超联杯','香港联赛杯','南区足球会','冠忠南区','沙田'))
 
 class PublisherAliasTests(unittest.TestCase):
     def test_same_publisher_id_is_whole_name_and_scope_bound(self):
