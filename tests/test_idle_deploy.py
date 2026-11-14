@@ -16,6 +16,7 @@ class IdleDeployTests(unittest.TestCase):
             def run(args,**kwargs):
                 calls.append(args)
                 if args[:2]==['docker','compose']:
+                    self.assertEqual(25 if 'review-worker' in (services or []) else 12,kwargs['timeout'])
                     if deploy_error:raise deploy_error
                     return subprocess.CompletedProcess(args,deploy_exit)
                 return subprocess.CompletedProcess(args,0)

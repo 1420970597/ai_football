@@ -40,7 +40,7 @@ def deploy(config,gate_script,release,services,log_path):
             result=subprocess.run(['docker','compose','--project-name','ai-football-v2',
                 '--project-directory','/root/ai_football','-f',str(config),'up','-d',
                 '--no-deps','--pull','never',*services],stdout=log,stderr=subprocess.STDOUT,
-                timeout=12,check=False)
+                timeout=25 if 'review-worker' in services else 12,check=False)
         if result.returncode:raise RuntimeError('candidate_deploy_failed')
     except Exception as exc:
         operation_error=exc
