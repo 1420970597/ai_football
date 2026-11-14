@@ -94,3 +94,11 @@
 - 冻结Docker回归命令：sh infra/test/run.sh tests.test_telegram_album_fallback tests.test_telegram_audit_media tests.test_telegram_detection_timing tests.test_telegram_channel_identity tests.test_telegram_collector tests.test_telegram_media_scheduling tests.test_telegram_lease_release；退出0，162项、7.804秒，证据.runtime/test-evidence/3705267/backend-tests.json。先前独立媒体113项、5.039秒退出0，3695791。
 - 01:00与01:30起始的两个完整窗口已保留不通过审计，连续0/3；第二窗口已逐条进行无工具、无持久会话的独立图文复核，但歧义、未完成检索及未核验媒体不当作成功。02:00窗口已有真实失败，修复后另起完整周期。
 - 下一步：最小采集器分层发布、真实恢复核对；继续补齐媒体原件独立检查，并复核02:30后完整窗口。未称已完成验收。
+
+## 02:35 UTC：签名频道实时相册边界补全
+
+- 6f2a5fae远端一致；采集器eebaeb8b于02:27:03 UTC上线，导入及内部状态连接授权通过。02:00–02:30上游90条授权发言全部持久化、缺失0，82个聚合版本；仍有5次截止标记和28条未核验媒体，连续0/3。
+- 代码复核发现实时NewMessage前置作者判断未携带已验证广播频道元数据，签名频道的相册可能不启动补取，依赖较慢恢复扫描。现使用同会话、未过期实体缓存或事件已验证实体；不新增信任、不把群组或过期实体当广播频道。
+- 冻结Docker回归162项、8.454秒退出0，.runtime/test-evidence/3732705/backend-tests.json；覆盖签名频道事件/缓存、过期缓存、超级群负例与原采集/租约/媒体回归。
+- 独立核验已确认两条视频表情无新推荐；音频没有已配置的转录提供方，不推测内容，也不以此把窗口算正常。视频独立核验仅提供有界抽样，出现比赛/文字/截断歧义即未解决。
+- 下一步：发布签名频道相册补全并继续真实窗口，不重放历史成为新信号；媒体/独立审计代码仍单独核验。

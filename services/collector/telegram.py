@@ -1375,15 +1375,21 @@ class TelegramCollector:
     async def _on_message(self, event):
         chat_id = str(event.chat_id)
         source = self.sources.get(chat_id)
+        entity=getattr(event,'chat',None)
+        cached=self.entity_cache.get(chat_id)
+        if entity is None and cached and cached[0]is self.client and time.monotonic()<cached[1]:
+            entity=cached[2]
+        if source and entity is not None:
+            source=dict(source,verified_broadcast=_broadcast_channel(entity))
         if source and _trusted_message_author(chat_id, source, event.message) is not None:
             self._remember_detection(chat_id, [event.message])
         if getattr(event.message, "grouped_id", None):
             # 新相册由 Album 回调完整聚合；编辑相册仍需读取全组。
             if isinstance(event, events.NewMessage.Event) and not getattr(event.message, "edit_date", None):
                 if source and _trusted_message_author(chat_id,source,event.message)is not None:
-                    self._schedule_album_fallback(chat_id,event.message,getattr(event,'chat',None))
+                    self._schedule_album_fallback(chat_id,event.message,entity)
                 return
-        await self._live_messages(chat_id, [event.message], entity=getattr(event, 'chat', None))
+        await self._live_messages(chat_id, [event.message], entity=entity)
 
     async def _on_album(self, event):
         key=(str(event.chat_id),str(getattr(event.messages[0],'grouped_id',None)))
