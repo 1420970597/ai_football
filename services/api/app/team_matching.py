@@ -41,10 +41,18 @@ def compact_chinese_boundaries(value: str) -> str:
     return re.sub(r'(?<=[\u3400-\u9fff]) +| +(?=[\u3400-\u9fff])', '', value)
 
 
+def _verified_scope(group: dict, sport: str | None, competition: str | None) -> bool:
+    if group.get('competition') is None:
+        return True
+    # Import lazily: competition normalization itself uses normalize_team_name.
+    from .competition_names import normalize_competition_name
+    return normalize_competition_name(competition or '', sport) == normalize_competition_name(group['competition'], sport)
+
+
 def _verified_group(value: str, sport: str | None, competition: str | None = None):
     normalized = normalize_team_name(value)
     for group in VERIFIED_TEAM_NAMES:
-        if (group.get('competition') is None or group['competition'] == normalize_team_name(competition or '')) and sport == group['sport'] and normalized in {
+        if _verified_scope(group, sport, competition) and sport == group['sport'] and normalized in {
                 normalize_team_name(name) for name in group['names']}:
             return group
     return None
@@ -89,7 +97,7 @@ def verified_team_search_variants(value: str, *, sport: str | None = None, compe
     variants = {}
     for group in VERIFIED_TEAM_NAMES:
         names = {normalize_team_name(name) for name in group['names']}
-        if (group.get('competition') is None or group['competition'] == normalize_team_name(competition or '')) and normalized in names and (sport is None or sport == group['sport']):
+        if _verified_scope(group, sport, competition) and normalized in names and (sport is None or sport == group['sport']):
             variants.setdefault(group['sport'], set()).update(names)
     return {key: tuple(sorted(values)) for key, values in variants.items()}
 

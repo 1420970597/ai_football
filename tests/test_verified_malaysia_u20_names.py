@@ -33,6 +33,8 @@ class MalaysiaU20AliasAPITests(unittest.IsolatedAsyncioTestCase):
     fixture = support.ReviewTests.fixture
 
     async def test_original_pair_and_league_bind_only_c_u20_with_provenance(self):
+        await self.pool.execute('UPDATE v2_expert_messages SET raw_text=$2 WHERE id=$1',
+            self.message, '马统杯 雪兰莪U20 VS 达罗塔晋C队U20 全场大2.5')
         args = dict(home_team='雪兰莪U20', away_team='柔佛达鲁塔克欣C队U20',
                     competition_name='马来西亚总统杯U20', sport='football', phase='live')
         wanted = await self.fixture(1, **args)
@@ -51,6 +53,8 @@ class MalaysiaU20AliasAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
 
     async def test_duplicate_pair_and_wrong_opponent_do_not_gain_binding(self):
+        await self.pool.execute('UPDATE v2_expert_messages SET raw_text=$2 WHERE id=$1',
+            self.message, '雪兰莪U20 VS 达罗塔晋C队U20 全场大2.5')
         args = dict(home_team='雪兰莪U20', away_team='柔佛达鲁塔克欣C队U20', sport='football')
         await self.fixture(1, **args)
         wrong = await self.post('search_matches', team_query='达罗塔晋C队U20', sport='football',

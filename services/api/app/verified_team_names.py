@@ -5,8 +5,13 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.2'
+REGISTRY_VERSION = '2026-11-14.3'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport':'football','competition':'澳大利亚女子甲级联赛',
+        'names':('中央海岸水手(女)','中央海岸水手学院(女)'),
+        'reference':'7m:9047+live:5172881+leyu:297502:20261114',
+    },
     {
         'sport':'football','competition':'澳大利亚锦标赛',
         'names':('悉尼联','悉尼联58'),
