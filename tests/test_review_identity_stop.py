@@ -4,9 +4,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock,patch
 from app import worker
 from app.review_identity_stop import repeated_identity_failure
+from app.routes.reviews import ResolveInput
+import uuid
 import test_reviews as support
 
 class IdentityStopTests(unittest.IsolatedAsyncioTestCase):
+    def test_source_phase_contract_keeps_unknown_and_validates_explicit_phase(self):
+        args=dict(review_id=uuid.uuid4(),attempt_id=uuid.uuid4(),search_key='k'*64,team_a='Alpha',team_b='Beta')
+        self.assertIsNone(ResolveInput(**args).source_phase)
+        self.assertEqual('live',ResolveInput(**args,source_phase='live').source_phase)
+        with self.assertRaises(ValueError):ResolveInput(**args,source_phase='guess')
+
     def issues(self):
         return dict(unfinished_search_count=0,unfinished_searches=[],unbound_mention_count=1,
             unbound_mentions=[{'fixture_id':'leyu:1','candidate':{'search_key':'key','search_complete':True}}],
