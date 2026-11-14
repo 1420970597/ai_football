@@ -20,7 +20,7 @@
       "cpus": 0.4
     },
     "collector": {
-      "image": "sha256:85bbba84b5824112ea3e2756a71c3ae991d359f7d2ae904ed527e7311b72576c",
+      "image": "sha256:320c9e98162d3ee884b80d428afe3ba8797f72f59ddafb913d37edfe36a5ac54",
       "command": [
         "python",
         "-m",
@@ -37,7 +37,7 @@
         "REVIEW_EXPERT_CONCURRENCY_FLOOR": "2",
         "REVIEW_HISTORICAL_CONCURRENCY": "0"
       },
-      "image": "sha256:a6d90937a22ddff9a3b293192c1ab44798a7ae81a04df47a33bd1640e75c804e",
+      "image": "sha256:c7746faa734737235fbdbf9af3c3cf613d56f76941fc9d6586afeba545a0e395",
       "command": [
         "python",
         "-m",
@@ -67,7 +67,7 @@
       "cpus": 0.4
     },
     "hermes-mcp": {
-      "image": "sha256:8499c5c06c992de90ac67ebf88098ec30aca986a6503ee98de9857bd3173d4ba"
+      "image": "sha256:31742f4d7ced29096529c29030013c15a3af3897ec2f77863aa314264622f179"
     },
     "hermes": {
       "image": "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",

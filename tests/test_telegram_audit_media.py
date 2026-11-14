@@ -17,8 +17,19 @@ class AuditMediaTests(ChannelIdentityCollectorTests):
         self.assertEqual({},self.backend.events)
         m.date=datetime.now(timezone.utc)-timedelta(hours=73)
         self.assertEqual('expired',(await self.collector._inspect_media(self.entity,self.source,11))['state'])
-        m.date=datetime.now(timezone.utc);m.file.mime_type='audio/ogg'
+        m.date=datetime.now(timezone.utc);m.file.mime_type='application/octet-stream'
         self.assertEqual('unsupported_for_visual_audit',(await self.collector._inspect_media(self.entity,self.source,11))['state'])
+
+    async def test_audio_audit_returns_original_bytes_without_queue_or_signal(self):
+        m=self.message(12,hours_ago=1);m.file=SimpleNamespace(mime_type='audio/ogg',size=8);m.media=object()
+        self.client.get_messages=AsyncMock(return_value=m)
+        async def download(*args,**kwargs):yield b'OggSdata'
+        self.client.iter_download=download
+        result=await self.collector._inspect_media(self.entity,self.source,12)
+        self.assertEqual('ready',result['state'])
+        self.assertEqual('audio/ogg',result['mime_type'])
+        self.assertEqual(b'OggSdata',base64.b64decode(result['data_base64']))
+        self.assertEqual({},self.backend.events)
 
     async def test_untrusted_or_oversized_media_never_downloads(self):
         self.assertEqual('invalid_message',(await self.collector._inspect_media(self.entity,self.source,'11'))['state'])

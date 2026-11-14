@@ -643,7 +643,7 @@ class TelegramCollector:
         if posted+timedelta(hours=72)<=datetime.now(timezone.utc):return {'state':'expired'}
         file=getattr(message,'file',None);mime=getattr(file,'mime_type',None)
         size=int(getattr(file,'size',0)or 0)
-        if mime not in {'video/webm','video/mp4','application/x-tgsticker'}or not 0<size<=MAX_MEDIA_BYTES:
+        if mime not in {'video/webm','video/mp4','application/x-tgsticker','audio/ogg'}or not 0<size<=MAX_MEDIA_BYTES:
             return {'state':'unsupported_for_visual_audit'}
         body=bytearray()
         async with asyncio.timeout(12):

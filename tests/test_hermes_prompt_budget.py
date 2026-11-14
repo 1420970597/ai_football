@@ -40,6 +40,8 @@ class HermesPromptBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('review_id', prompt)
         self.assertIn('attempt_id', prompt)
         self.assertIn('不可信', prompt)
+        self.assertIn('bounded_source_search.complete=true',prompt)
+        self.assertIn('不重复resolve、改名或扩大日期',prompt)
 
     async def test_full_skill_keeps_visual_identity_period_and_receipt_rules(self):
         root = Path(__file__).resolve().parents[1]

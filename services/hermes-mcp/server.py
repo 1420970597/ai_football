@@ -639,9 +639,33 @@ def _unique_source_handicap(markets, fixture_id, period, selection, selection_li
             and isinstance(quote.get('quote_id'), str) and quote['quote_id'] else None)
 
 
+def _complete_league_stop(result, payload):
+    """A complete source league can reject a pair without another resolve."""
+    if (payload.get('team_query') != '' or not all(payload.get(key) for key in
+            ('team_a','team_b','competition_query','sport','from_utc','to_utc'))
+            or result.get('search_complete') is not True or result.get('next_cursor') is not None
+            or (result.get('resolution') or {}).get('resolved') is not False
+            or (result.get('resolution') or {}).get('candidate_count') != 0):
+        return result
+    try:
+        start=datetime.fromisoformat(payload['from_utc'].replace('Z','+00:00'))
+        end=datetime.fromisoformat(payload['to_utc'].replace('Z','+00:00'))
+        if start.tzinfo is None or end.tzinfo is None or not timedelta(0)<end-start<=timedelta(days=7):
+            return result
+    except (TypeError,ValueError):
+        return result
+    return result | {'bounded_source_search': {
+        'complete': True, 'retry_same_scope': False,
+        'reason': 'no_verified_source_pair_in_complete_scopes',
+        'scope': 'original_sport_competition_and_time_only',
+        'source_image_check': '若来源含图，重新逐字看原图双方及梯队；纠正读错字才可提交新原名，不按候选补名。原图仍相同则保留未解决，不重复同参数resolve或扩大日期。'}}
+
+
 async def _search_source_scopes(payload):
     """Follow only native bounded recall guidance, without a model roundtrip."""
-    result = await _post('search_matches', payload)
+    result = _complete_league_stop(await _post('search_matches', payload), payload)
+    if result.get('bounded_source_search'):
+        return result
     if (payload.get('cursor') or not payload.get('team_a') or not payload.get('team_b')
             or not payload.get('competition_query') or not payload.get('sport')
             or not payload.get('from_utc') or not payload.get('to_utc')):
@@ -674,7 +698,7 @@ async def _search_source_scopes(payload):
         receipt['league_scope'] = payload.get('team_query') == ''
         receipts.append(receipt)
         try:
-            result = await _post('search_matches', following)
+            result = _complete_league_stop(await _post('search_matches', following), following)
         except ToolError as exc:
             raise ToolError(json.dumps({'completed_receipt': result,
                 'failed_operation': 'search_matches', 'error': str(exc)}, ensure_ascii=False)) from None

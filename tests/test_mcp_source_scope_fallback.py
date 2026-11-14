@@ -82,6 +82,26 @@ class SourceScopeFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first,json.loads(str(caught.exception))['completed_receipt'])
         self.assertEqual(2,calls.await_count)
 
+    async def test_direct_or_final_cursor_complete_league_has_stop_receipt(self):
+        for cursor in (None,'native-next'):
+            calls=AsyncMock(return_value=self.response(items=[{'id':'unrelated'}],total_candidates=1))
+            with patch.object(self.server,'_post',calls):
+                value=await self.server._search_source_scopes(self.payload()|{'team_query':'','cursor':cursor})
+            self.assertEqual(1,calls.await_count)
+            self.assertTrue(value['bounded_source_search']['complete'])
+            self.assertFalse(value['bounded_source_search']['retry_same_scope'])
+            self.assertFalse(value['resolution']['resolved'])
+
+    async def test_direct_league_incomplete_ambiguous_or_unbounded_never_claims_stop(self):
+        for changes,result in [({},self.response(search_complete=False,next_cursor='native-next')),
+            ({},self.response(resolution={'resolved':False,'candidate_count':2,'reason':'ambiguous_fixture'})),
+            ({'to_utc':'2026-12-01T00:00:00Z'},self.response()),
+            ({'team_b':None},self.response())]:
+            calls=AsyncMock(return_value=result)
+            with patch.object(self.server,'_post',calls):
+                value=await self.server._search_source_scopes(self.payload()|{'team_query':''}|changes)
+            self.assertNotIn('bounded_source_search',value)
+
     async def test_source_phase_does_not_retry_an_empty_verified_identity_set(self):
         item=self.server.SourceMatchIntent(team_a='source A',team_b='source B',
             competition_query='source league',sport='football',source_phase='live',
