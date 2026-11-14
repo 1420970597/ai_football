@@ -268,3 +268,10 @@
 - 独立验收说明明确image_count和reply_image_count为实际图数；纯聊天的回复标记不能虚构本条图片，涉及跟进或补单而必要回复缺失仍为uncertain。Docker18项0.010秒退出0，证据.runtime/test-evidence/4088059/backend-tests.json；原4085942同18项通过，新增测试改为实际输入行为核验后重跑。
 - 04:34:12归档切片上线至04:49未见新的history_deadline/source deferred；分钟样本17来源完整，15 caught_up/2 catching_up，degraded=false。近期新增两条推荐7.446832秒/6.764810秒，尚不能代表完整周期成功。
 - 上一封存尝试因monitor包相对导入路径未装载退出1，补充infra/monitor路径后成功；未改窗口证据或业务数据。下一完整候选窗05:00–05:30 UTC，当前0/3。
+
+## 04:55 UTC：分钟采样之外的瞬时故障核验
+
+- 窗口汇总增加半开区间内真实collector日志检查，任何来源恢复/租约/会话/实时投递退避故障均否决source_health_ok；Docker日志读取失败也不能视为健康。仅输出计数，不复制原文或身份，原有封存窗口不改写。
+- 冻结Docker14项0.002秒退出0，.runtime/test-evidence/4100037/backend-tests.json。04:34:13之后实际采集日志无history_deadline/source deferred；共17来源分钟健康，后台RPC仍2秒间隔、flood_waits=0。
+- 原04:00窗口两条视频及笑声已在supplemental中补充复核为non_recommendation，旧audit.json保持四项不明原值；语音因既有STT各提供方/本地模型均未配置仍保持未核验。没有虚构转写或把语音当聊天。
+- 下一步固化逐条审计调度，确保每个闭合窗口自动完整审核并封存，不依赖手工触发；异常仍由本轮持续分析修复。当前连续0/3。

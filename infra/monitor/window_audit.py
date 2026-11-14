@@ -5,6 +5,7 @@ from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 
 
 def interval_health(samples, start, end):
@@ -66,4 +67,23 @@ def audit_directory(directory):
     if hashlib.sha256(body).hexdigest()!=summary['snapshot_sha256']:raise ValueError('snapshot_changed')
     audits={p.stem:json.loads(p.read_text())for p in(directory/'independent').glob('*.json')}
     health=[json.loads(p.read_text())for p in(directory.parent/'health').glob('*.json')]
-    return assemble(summary,json.loads(body),audits,health)
+    value=assemble(summary,json.loads(body),audits,health)
+    # Minute samples can miss a short recovery failure. Inspect only this
+    # window's collector log; retain counts, never source or message content.
+    result=subprocess.run(['docker','logs','--since',str(summary['start']),
+        '--until',str(summary['end']),'ai-football-v2-collector-1'],
+        capture_output=True,timeout=15,check=False)
+    if result.returncode!=0:
+        value.update(source_health_ok=False,collector_log_complete=False)
+    else:
+        failures=collector_failure_count((result.stdout+result.stderr).decode(errors='replace'))
+        value.update(collector_log_complete=True,collector_failures=failures)
+        if failures:value['source_health_ok']=False
+    return value
+
+
+def collector_failure_count(log):
+    markers=('Telegram source deferred','Telegram source unavailable',
+        'Telegram source lease refresh deferred','Telegram session invalidated',
+        'Telegram live event deferred','Telegram source backoff')
+    return sum(any(marker in line for marker in markers)for line in log.splitlines())

@@ -1,9 +1,17 @@
 import hashlib
 import unittest
-from infra.monitor.window_audit import assemble,interval_health,duplicate_count
+from infra.monitor.window_audit import assemble,interval_health,duplicate_count,collector_failure_count
 
 
 class WindowAuditTests(unittest.TestCase):
+    def test_transient_collector_failure_is_counted_even_between_health_samples(self):
+        log='Telegram recent history complete state=catching_up\n'+\
+            'Telegram source deferred category=history_deadline stage=archive_page\n'+\
+            'Telegram source lease refresh deferred category=TimeoutError\n'+\
+            'Telegram recent history complete state=caught_up'
+        self.assertEqual(2,collector_failure_count(log))
+        self.assertEqual(0,collector_failure_count('Telegram live event persisted'))
+
     def test_health_requires_interval_coverage_and_no_failed_sample(self):
         samples=[{'at':n,'ok':True}for n in range(1800,3661,60)]
         self.assertTrue(interval_health(samples,1800,3600))
