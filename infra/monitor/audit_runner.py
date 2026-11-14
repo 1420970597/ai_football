@@ -21,7 +21,10 @@ def review_command(container=None):
         raise ValueError('audit_must_not_share_realtime_hermes')
     if not target or not target[0].isalnum()or any(not(c.isalnum()or c in '_.-')for c in target):
         raise ValueError('invalid_audit_container')
-    return ['docker','exec','-i','--user','hermes',target,'nice','-n','19','python','-c']
+    # Timing out the Docker CLI does not stop its process inside the container.
+    # Bound that process group first; leave time for the CLI to collect exit.
+    return ['docker','exec','-i','--user','hermes',target,'nice','-n','19',
+            'timeout','--signal=TERM','--kill-after=2','60','python','-c']
 
 
 def pending_messages(directory):
@@ -45,7 +48,7 @@ def review_message(source,message):
         input=json.dumps({'message':message}).encode(),capture_output=True,timeout=40,check=False)
     if prepared.returncode:raise RuntimeError('prepare_failed')
     result=subprocess.run(review_command()+[review],input=prepared.stdout,
-        capture_output=True,timeout=65,check=False)
+        capture_output=True,timeout=68,check=False)
     if result.returncode:raise RuntimeError('review_failed')
     value=json.loads(result.stdout)
     if value.get('classification')not in CLASSES or value.get('verdict')not in VERDICTS:

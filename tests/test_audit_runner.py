@@ -25,10 +25,13 @@ class AuditRunnerTests(unittest.TestCase):
         self.assertEqual(2,run.call_count)
         self.assertIn('hermes',run.call_args.args[0])
         self.assertEqual(['nice','-n','19'], run.call_args.args[0][6:9])
+        self.assertEqual(['timeout','--signal=TERM','--kill-after=2','60'], run.call_args.args[0][9:13])
+        self.assertGreater(run.call_args.kwargs['timeout'],62)
         self.assertNotIn('private-source',json.dumps(result))
 
     def test_transport_or_permission_failure_cannot_be_sealed_as_valid_audit(self):
-        for response in [SimpleNamespace(returncode=1,stdout=b''),self.result(tool_count=1),
+        for response in [SimpleNamespace(returncode=1,stdout=b''),
+                         SimpleNamespace(returncode=124,stdout=b''),self.result(tool_count=1),
                          self.result(persistent_session=True),self.result(verdict='guess')]:
             with patch('audit_runner.subprocess.run',side_effect=[
                     SimpleNamespace(returncode=0,stdout=b'input'),response]):

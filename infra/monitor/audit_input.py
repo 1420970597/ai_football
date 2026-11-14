@@ -27,7 +27,6 @@ async def prepare(value):
     signals=[]
     for signal in m.get('signals')or[]:
         signals.append({k:signal.get(k)for k in ('fixture_id','period','market_kind','line','selection','evidence_text')})
-    final=next((t['payload'].get('content')for t in reversed(traces)if t['trace_kind']=='hermes_result'),None)
     request=next((t['payload']for t in reversed(traces)if t['trace_kind']=='hermes_request'),{})
     reply=request.get('reply_archive')or{}
     reply_images=reply.get('media_objects')or[] if reply.get('media_state')=='ready'and not reply.get('deleted')else[]
@@ -37,7 +36,9 @@ async def prepare(value):
         'reply_image_count':len(reply_images),
         'media_state':m['media_state'],'image_count':len(m.get('media_objects')or[]),
         'unsupported_media':m.get('media_manifest')if m['media_state']=='unsupported'else None,
-        'tool_evidence':evidence,'accepted':signals,'previous_final_untrusted':final,
+        # The model's narrative is not independent source or tool evidence.
+        # Excluding it avoids anchoring this separate audit to its guesses.
+        'tool_evidence':evidence,'accepted':signals,
         'state':m.get('state'),'last_error':m.get('last_error')}
     parts=[{'type':'text','text':json.dumps(context,ensure_ascii=False,default=str)}]
     total=0

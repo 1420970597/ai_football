@@ -56,6 +56,17 @@ class AuditInputTests(unittest.IsolatedAsyncioTestCase):
         context=json.loads(output['parts'][0]['text'])
         self.assertEqual('same-match prior recommendation',context['reply_text'])
 
+    async def test_previous_model_narrative_cannot_anchor_independent_source_audit(self):
+        m=self.message();m['state']='unresolved';m['traces']=[
+            {'trace_kind':'hermes_result','payload':{'content':'unverified source period claim'}}]
+        output=await audit_input.prepare({'message':m})
+        context=json.loads(output['parts'][0]['text'])
+        self.assertNotIn('previous_final_untrusted',context)
+        self.assertNotIn('unverified source period claim',json.dumps(output))
+        self.assertEqual('source',context['source_text'])
+        self.assertEqual('unresolved',context['state'])
+        self.assertEqual([],context['accepted'])
+
     async def test_reply_media_flag_does_not_invent_images_in_current_source(self):
         m=self.message();m['raw_text']='哈哈哈';m['reply_context']={'has_media':True}
         output=await audit_input.prepare({'message':m})
