@@ -18,3 +18,18 @@
 规则：sport=basketball且competition_name精确规范化为nba才扩展简称；NBA G联盟、NBA - 梦幻对垒、VS- NBA 2K23 PANDA独家均不共享该词汇。查询competition_query=NBA必须精确联赛。双方、日期、梯队和唯一性照旧校验；不据盘口是否可售反推比赛。
 
 另发现同名同时间的赛前/滚球双供应方候选。现有source_phase工具字段在工具API旧镜像被忽略；最小恢复已存在的阶段字段及解析规则，仅来源明确滚球等阶段才消歧，不默认选可售候选。实际部署与回归见连续监控记录。
+
+## 14:54 UTC补充完整名称证据
+
+14:50自然发言四组简称首轮均召回正确城市队，但缺已核验全名对应而不绑定。Docker只读获取以下各队页面全部200，正文同时出现简称和城市、标题明确同队；只登记完整中文映射，仍严格限定真实basketball/NBA。不登记泛城市、不推广到虚拟/梯队/女篮。无官方现场证据，延用以上第三方中文身份链；不把候选本身当名称来源。
+
+|来源路径（域名同nba.hupu.com）|简称→完整名|响应SHA256|
+|---|---|---|
+|/teams/cavaliers|骑士→克利夫兰骑士|9e2e2927dc706c0283c177c2a823f47bbf37fe806b4fa8f0c7153debbeabb28b|
+|/teams/mavericks|独行侠→达拉斯独行侠|b819de765a2c968eda51385ec31477e80d2d4bcda99244ab5ef0a473b1a5f3df|
+|/teams/grizzlies|灰熊→孟菲斯灰熊|b882465cfa3f5ded97477bb2ca3bc50f1dfa8141608bcb3cfad784410e681045|
+|/teams/nets|篮网→布鲁克林篮网|7453c06d08db457c00040ada5569ba8eb345d7a57b4784a52a6b15c75e553368|
+|/teams/timberwolves|森林狼→明尼苏达森林狼|1be7c2d434b8d0c705554c34fd3198af7e6d91d0aa7f209ad6e25d511f91021c|
+|/teams/bulls|公牛→芝加哥公牛|0622a9cc0f3c741f15b0084d68c515fa2168ad590a43b3a938e34be44ebc1dbe|
+|/teams/heat|热火→迈阿密热火|decc10131ce0772e56d39b9a189c697c67f3499b26ea5a9f45376a0aee243823|
+|/teams/pistons|活塞→底特律活塞|a5b9d6b34e3ce0509bcf7dcf0d6620a058c76b4683e467a97f930097a9e4a737|

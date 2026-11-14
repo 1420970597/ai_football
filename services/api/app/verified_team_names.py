@@ -5,7 +5,7 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.12'
+REGISTRY_VERSION = '2026-11-14.13'
 VERIFIED_TEAM_NAMES = (
     {
         'sport':'football','competition':'欧洲国家联赛B',
@@ -109,6 +109,14 @@ VERIFIED_TEAM_NAMES = (
         'names': ('国王', '萨克拉门托国王'),
         'reference': 'hupu:kings:20261114',
     },
+    {'sport':'basketball','competition':'nba','names':('骑士','克利夫兰骑士'),'reference':'hupu:cavaliers:20261114'},
+    {'sport':'basketball','competition':'nba','names':('独行侠','达拉斯独行侠'),'reference':'hupu:mavericks:20261114'},
+    {'sport':'basketball','competition':'nba','names':('灰熊','孟菲斯灰熊'),'reference':'hupu:grizzlies:20261114'},
+    {'sport':'basketball','competition':'nba','names':('篮网','布鲁克林篮网'),'reference':'hupu:nets:20261114'},
+    {'sport':'basketball','competition':'nba','names':('森林狼','明尼苏达森林狼'),'reference':'hupu:timberwolves:20261114'},
+    {'sport':'basketball','competition':'nba','names':('公牛','芝加哥公牛'),'reference':'hupu:bulls:20261114'},
+    {'sport':'basketball','competition':'nba','names':('热火','迈阿密热火'),'reference':'hupu:heat:20261114'},
+    {'sport':'basketball','competition':'nba','names':('活塞','底特律活塞'),'reference':'hupu:pistons:20261114'},
     {
         'sport': 'basketball', 'competition': 'nba',
         'names': ('开拓者', '波特兰开拓者'),

@@ -9,7 +9,11 @@ import test_reviews as support
 class NBAIdentityTests(unittest.TestCase):
     def test_short_names_only_expand_inside_exact_nba(self):
         for short, native in [('国王','萨克拉门托国王'),('开拓者','波特兰开拓者'),
-                              ('快船','洛杉矶快船'),('雷霆','俄克拉荷马城雷霆')]:
+                              ('快船','洛杉矶快船'),('雷霆','俄克拉荷马城雷霆'),
+                              ('骑士','克利夫兰骑士'),('独行侠','达拉斯独行侠'),
+                              ('灰熊','孟菲斯灰熊'),('篮网','布鲁克林篮网'),
+                              ('森林狼','明尼苏达森林狼'),('公牛','芝加哥公牛'),
+                              ('热火','迈阿密热火'),('活塞','底特律活塞')]:
             self.assertTrue(team_name_matches(short,native,sport='basketball',competition='NBA'))
             for competition in (None,'NBA G联盟','NBA - 梦幻对垒','VS- NBA 2K23 PANDA独家'):
                 self.assertFalse(team_name_matches(short,native,sport='basketball',competition=competition))
@@ -55,3 +59,18 @@ class NBAIdentityDatabaseTests(unittest.IsolatedAsyncioTestCase):
             competition_query='NBA',sport='basketball')).json()
         self.assertEqual('ambiguous_fixture',duplicate['resolution']['reason'])
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+
+    async def test_new_original_short_pairs_bind_without_replacing_source_names(self):
+        for index,(home,away,team_a,team_b)in enumerate((
+            ('克利夫兰骑士','达拉斯独行侠','骑士','独行侠'),
+            ('孟菲斯灰熊','布鲁克林篮网','灰熊','篮网'),
+            ('明尼苏达森林狼','芝加哥公牛','森林狼','公牛'),
+            ('迈阿密热火','底特律活塞','热火','活塞')),1):
+            await self.fixture(index,home_team=home,away_team=away,sport='basketball',competition_name='NBA')
+            result=(await self.post('search_matches',team_query=team_a,team_a=team_a,team_b=team_b,
+                                   sport='basketball',competition_query='NBA')).json()
+            self.assertTrue(result['resolution']['resolved'])
+            self.assertEqual({'team_a':'home','team_b':'away'},result['resolution']['source_team_sides'])
+            self.assertIn(team_a,result['resolution']['fixture']['home_aliases'])
+            self.assertIn(team_b,result['resolution']['fixture']['away_aliases'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
