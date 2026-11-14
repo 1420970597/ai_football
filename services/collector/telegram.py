@@ -737,17 +737,24 @@ class TelegramCollector:
         # potentially slow Telegram enumeration outside the live-message lock.
         lock = self.locks.setdefault(chat_id, asyncio.Lock())
         runtime = self.source_runtime.setdefault(chat_id, {})
+        sync_started = time.monotonic()
+        archive_priority = runtime.pop('archive_priority', False)
         runtime['sync_stage'] = 'checkpoint'
         async with lock:
             checkpoint = await self._checkpoint(chat_id)
-        runtime['sync_stage'] = 'directory'
-        await self._refresh_directory(chat_id, source)
+        if archive_priority:
+            # One old-page slice follows a slow recent slice. Its successor
+            # returns to the head; archive cannot starve behind slow heads.
+            recent = {'state': 'catching_up', 'scheduled': True}
+        else:
+            runtime['sync_stage'] = 'directory'
+            await self._refresh_directory(chat_id, source)
         runtime['sync_stage'] = 'recent_history'
-        if time.monotonic() >= self.recent_next_at.get(chat_id, 0):
+        if not archive_priority and time.monotonic() >= self.recent_next_at.get(chat_id, 0):
             recent = await self._recover_recent(chat_id, source)
             if recent['state'] == 'caught_up':
                 self.recent_next_at[chat_id] = time.monotonic()+30*self.background_reads.interval
-        else:
+        elif not archive_priority:
             recent = {'state': 'caught_up', 'scheduled': True}
         original = int(checkpoint["last_message_id"])
         last, count = original, 0
@@ -755,8 +762,14 @@ class TelegramCollector:
         catching_up = False
         if (time.monotonic() < self.archive_next_at.get(chat_id, 0)
                 or (original > 0 and recent.get('head_id') == original)):
-            return {'state': 'caught_up' if recent['state']=='caught_up' else 'recent_deferred',
+            return {'state': ('caught_up' if recent['state']=='caught_up' else
+                              'catching_up' if recent['state']=='catching_up' else 'recent_deferred'),
                     'last_message_id': original, 'observed': 0, 'recent_history': recent}
+        if not archive_priority and time.monotonic()-sync_started >= SOURCE_HISTORY_SECONDS/2:
+            runtime['archive_priority'] = True
+            return {'state': 'recent_deferred' if recent['state']=='deferred' else 'catching_up',
+                    'last_message_id': original, 'observed': 0, 'recent_history': recent,
+                    'archive_history': {'state': 'catching_up', 'reason': 'fair_slice_yield'}}
         entity = await self._entity(chat_id)
         runtime['sync_stage'] = 'retention_floor'
         floor = await self._retained_history_start(chat_id, entity)

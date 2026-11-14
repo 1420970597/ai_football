@@ -249,3 +249,9 @@
 - 全来源上游快照可持续一到两分钟，原串行循环会在快照期间停采健康。现由单个独立线程每60秒只读采样，不与快照争写同一文件；仅本任务监控重启，业务与最后业务修复时间不变。
 - 活动重复意图线值统一Decimal，2.5与2.500保持同一身份。冻结Docker13项退出0，命令sh infra/test/run.sh tests.test_window_audit tests.test_source_health_sample tests.test_consecutive_windows，证据见window-sampling-final-tests.log末尾与对应backend-tests.json。
 - 当前0/3。04:30起三个完整非空窗口仍须逐条语义、上游完整性、健康覆盖、无遗漏/误配/重复以及20秒截止全部满足。
+
+## 04:33 UTC：归档公平切片验证与新失败窗口
+
+- 04:31:40真实出现history_deadline stage=archive_page，04:30–05:00不得计成功。近期页公平切片未覆盖旧归档页共享总预算，现将慢近期轮后的下一轮专用于归档页；再下一轮恢复头部扫描。已完成近期但归档未完仍报告catching_up，不冒充caught_up或错误recent_deferred。
+- Docker103项15.992秒退出0，.runtime/test-evidence/4045268/backend-tests.json，覆盖慢近期之后旧游标推进、新头恢复、多来源、租约、媒体和目录。下一步最小采集器发布，不增加25秒总截止或RPC频率。
+- 04:00–04:30完整快照26条授权消息缺失0、25个聚合版本；存在发布/健康失败，仍0/3。独立复核随闭合快照继续，不因当前没有新发言而算成功。
