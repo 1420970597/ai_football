@@ -55,3 +55,12 @@ class AuditInputTests(unittest.IsolatedAsyncioTestCase):
         output=await audit_input.prepare({'message':m})
         context=json.loads(output['parts'][0]['text'])
         self.assertEqual('same-match prior recommendation',context['reply_text'])
+
+    async def test_reply_media_flag_does_not_invent_images_in_current_source(self):
+        m=self.message();m['raw_text']='哈哈哈';m['reply_context']={'has_media':True}
+        output=await audit_input.prepare({'message':m})
+        context=json.loads(output['parts'][0]['text'])
+        self.assertEqual(1,len(output['parts']))
+        self.assertEqual(0,context['image_count'])
+        self.assertEqual(0,context['reply_image_count'])
+        self.assertEqual({'has_media':True},context['reply_context'])
