@@ -16,7 +16,7 @@ state=unresolved且accepted为空是客观处理结果，不依赖旧模型自�
 且没有原图/正文中已明确的可核验选择被漏掉，则正确保留未解决，verdict=consistent；reason_codes如实写缺项。
 例如只有“还有一单”“双飞”“半场可以追一下啊”而无图片、无回复编号或可读回复时，不能凭附近消息猜推荐。
 此时有明确跟进意图但缺归属或选择可classification=recommendation；只是预告/聊天为non_recommendation，不能因缺项伪造成功推荐。
-反之声明有图片而未提供、必要回复有编号且内容不可读、原图不可读、工具回执缺失或来源与已接受选择矛盾，仍为uncertain或有证据的遗漏/误配。
+反之声明有图片而未提供、必要回复有编号且内容不可读、原图不可读、实际必需工具回执缺失或来源与已接受选择矛盾，仍为uncertain或有证据的遗漏/误配。
 完整可读推荐已被抽取但缺少完成检索/读盘证据，不适用上述来源缺项，仍须uncertain；不得用模型原说明当缺项证据。
 期间必须来自独立来源证据：滚球比分条、比赛分钟或“足球(滚球)大/小(2-2)，甲队v乙队，大4.5/5”
 没有明示所选期间时不能推断全场；库存只有全场或工具参数填full_time也不证明来源期间。
@@ -32,7 +32,9 @@ image_count和reply_image_count分别是本条和已归档回复的实际图片�
 专家倍率忽略；缺报价或上游停盘可以正常不接受，但证据要真实且完整。
 一条消息可多场多项。只将原文可唯一确认且实际工具有有效对应的遗漏记为confirmed_omission，
 来源无法唯一、无盘、非推荐不算遗漏；证据缺口用uncertain，不猜。
-仅返回JSON：{"classification":"non_recommendation|recommendation|uncertain","verdict":"consistent|confirmed_omission|confirmed_misbinding|uncertain","source_items":非负整数,"accepted_items":非负整数,"unresolved_items":非负整数,"reason_codes":["non_recommendation|missing_source_identity|missing_source_period|missing_source_selection|historical_feedback|source_incomplete|upstream_unavailable|candidate_ambiguity|exact_evidence_match|omitted_valid_selection|wrong_identity|wrong_period|wrong_line|wrong_direction|incomplete_tool_evidence|media_unavailable"]}。不输出原文、队名、人物、编号或说明文字。'''
+严格区分原生响应里的未知字段和响应缺失：home_score/away_score/source_updated_at为空是已返回的未知数据，不是工具响应丢失。search_complete=true、next_cursor=null且唯一绑定的检索已完整；来源期间unknown时list_match_markets和record_expert_signals均非必需，正确不调用不能计incomplete_tool_evidence。
+逐项先判断哪种操作实际必需，再判断其响应是否缺失/不完整。只有能够指出实际必需且缺少的响应才能给incomplete_tool_evidence；同时填写evidence_gaps，每项含从0开始的item_index、operation（search_matches/list_match_markets/record_expert_signals）、issue（missing_response/incomplete_response）。缺来源事实仍按missing_source_*；原生完整零盘、停盘或限流有完整回执仍属upstream_unavailable，不是响应丢失。不得列出无需执行的操作。
+仅返回JSON：{"classification":"non_recommendation|recommendation|uncertain","verdict":"consistent|confirmed_omission|confirmed_misbinding|uncertain","source_items":非负整数,"accepted_items":非负整数,"unresolved_items":非负整数,"reason_codes":["non_recommendation|missing_source_identity|missing_source_period|missing_source_selection|historical_feedback|source_incomplete|upstream_unavailable|candidate_ambiguity|exact_evidence_match|omitted_valid_selection|wrong_identity|wrong_period|wrong_line|wrong_direction|incomplete_tool_evidence|media_unavailable"],"evidence_gaps":[]}。不输出原文、队名、人物、编号或说明文字。'''
 CLASSES={'non_recommendation','recommendation','uncertain'}
 VERDICTS={'consistent','confirmed_omission','confirmed_misbinding','uncertain'}
 
@@ -84,14 +86,34 @@ def validate_source(value):
         for key in ('team_a','team_b','market_kind','selection'):
             if not (item.get(key)or'').strip()and key not in missing:missing.append(key)
         if item['period']=='unknown'and 'period'not in missing:missing.append('period')
+        if item.get('market_kind')in {'total','handicap','team_total'}and not (item.get('line')or'').strip()and 'line'not in missing:
+            missing.append('line')
         items.append(item|{'missing_fields':missing})
     return value|{'items':items}
 
 
 def source_observations(intent):
     return {key:intent[key]for key in ('classification','source_readable','necessary_reply_missing')}|{
-        'items':[{'period':item['period'],'missing_fields':item['missing_fields']}
+        'items':[{'period':item['period'],'missing_fields':item['missing_fields'],
+                  'market_lookup_required':item['period']!='unknown' and not item['missing_fields']}
                  for item in intent['items']]}
+
+
+def validate_evidence_gaps(parsed,intent):
+    gaps=parsed.get('evidence_gaps',[])
+    if not isinstance(gaps,list)or len(gaps)>600:raise ValueError('invalid_evidence_gaps')
+    for gap in gaps:
+        if (not isinstance(gap,dict)or set(gap)!={'item_index','operation','issue'}
+                or type(gap['item_index'])is not int or not 0<=gap['item_index']<len(intent['items'])
+                or gap['operation']not in {'search_matches','list_match_markets','record_expert_signals'}
+                or gap['issue']not in {'missing_response','incomplete_response'}):
+            raise ValueError('invalid_required_evidence_gap')
+        item=intent['items'][gap['item_index']]
+        if gap['operation']!='search_matches'and (item['period']=='unknown'or item['missing_fields']):
+            raise ValueError('source_gap_is_not_missing_market_receipt')
+    if ('incomplete_tool_evidence'in parsed['reason_codes'])!=bool(gaps):
+        raise ValueError('unsubstantiated_tool_evidence_gap')
+    return gaps
 
 
 def run(value):
@@ -124,8 +146,10 @@ def run(value):
         'omitted_valid_selection','wrong_identity','wrong_period','wrong_line','wrong_direction',
         'incomplete_tool_evidence','media_unavailable'}
     if not isinstance(parsed.get('reason_codes'),list)or any(r not in reason_allow for r in parsed['reason_codes']):raise ValueError('invalid_audit_reason')
+    gaps=validate_evidence_gaps(parsed,intent)
     return {k:parsed[k]for k in ('classification','verdict','source_items','accepted_items','unresolved_items','reason_codes')}|{
-        'audit_protocol':'source-outcome-separation-v7',
+        'audit_protocol':'source-outcome-separation-v8',
+        'evidence_gaps':gaps,
         'source_observations':source_observations(intent),
         'source_intent_sha256':hashlib.sha256(json.dumps(intent,sort_keys=True).encode()).hexdigest(),
         'source_first_agents':2,

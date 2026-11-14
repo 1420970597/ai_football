@@ -63,6 +63,28 @@ class IndependentReviewTests(unittest.TestCase):
         self.assertEqual([],normalized['items'][0]['missing_fields'])
         self.assertEqual(['team_a','period'],normalized['items'][1]['missing_fields'])
 
+    def test_tool_gap_must_name_an_actually_required_operation(self):
+        intent=dict(items=[dict(period='unknown',missing_fields=['period']),
+                          dict(period='first_half',missing_fields=[])])
+        base=dict(reason_codes=['incomplete_tool_evidence'])
+        with self.assertRaisesRegex(ValueError,'unsubstantiated'):
+            independent_review.validate_evidence_gaps(base,intent)
+        with self.assertRaisesRegex(ValueError,'source_gap'):
+            independent_review.validate_evidence_gaps(base|{'evidence_gaps':[
+                dict(item_index=0,operation='list_match_markets',issue='missing_response')]},intent)
+        gap=dict(item_index=1,operation='list_match_markets',issue='missing_response')
+        self.assertEqual([gap],independent_review.validate_evidence_gaps(base|{'evidence_gaps':[gap]},intent))
+        self.assertEqual([],independent_review.validate_evidence_gaps(
+            dict(reason_codes=['missing_source_period'],evidence_gaps=[]),intent))
+
+    def test_source_observations_keep_per_item_market_requirements_separate(self):
+        intent=dict(classification='recommendation',source_readable=True,necessary_reply_missing=False,
+            items=[dict(period='unknown',missing_fields=['period']),
+                   dict(period='full_time',missing_fields=[])])
+        observations=independent_review.source_observations(intent)
+        self.assertFalse(observations['items'][0]['market_lookup_required'])
+        self.assertTrue(observations['items'][1]['market_lookup_required'])
+
     def test_normalization_never_converts_an_uncertain_verdict_to_consistent(self):
         class Agent:
             def __init__(self,**kwargs):self.tools=[];self._session_db=None

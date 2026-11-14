@@ -19,6 +19,11 @@ class SemanticOutcomeProtocolTests(unittest.TestCase):
         self.assertIn('不能按现有全场报价记confirmed_omission', SYSTEM)
         self.assertIn('仍逐项按真实期间核验', SYSTEM)
 
+    def test_missing_wire_fields_are_not_missing_required_responses(self):
+        self.assertIn('未知数据，不是工具响应丢失',SYSTEM)
+        self.assertIn('list_match_markets和record_expert_signals均非必需',SYSTEM)
+        self.assertIn('同时填写evidence_gaps',SYSTEM)
+
     def test_protocol_does_not_relax_unknown_outcome_acceptance(self):
         passed,reasons=evaluate(dict(start=0,end=1800,upstream_complete=True,database_complete=True,
             source_health_ok=True,audit_complete=True,trusted_messages=1,recommendation_messages=1,
