@@ -281,6 +281,35 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
         for token in ('handicap', 'null'):
             self.assertIn(token, schema['$defs']['SourceMatchIntent']['properties']['market_query']['description'])
 
+    async def test_one_conflicting_handicap_never_blocks_other_source_receipts(self):
+        calls,concurrency=await self.install()
+        items=[self.item(n)for n in range(6)]
+        items[4]['market_query']='Home4 -0.5'
+        result=await self.call(items)
+        self.assertEqual(list(range(6)),[item['index']for item in result['items']])
+        rejected=result['items'][4]
+        self.assertTrue(rejected['source_validation_failed'])
+        self.assertFalse(rejected['native_calls_attempted'])
+        self.assertFalse(rejected['retry_without_corrected_source'])
+        self.assertEqual(5,sum(path=='record_expert_signals'for path,_ in calls))
+        self.assertFalse(any(body.get('team_a')=='Home4'or body.get('fixture_id')=='fixture:4'
+                            for _,body in calls))
+        self.assertLessEqual(concurrency()[1],2)
+        for index,item in enumerate(result['items']):
+            if index!=4:self.assertTrue(item['result']['record_result']['accepted'])
+
+    async def test_mixed_missing_period_scope_and_total_fields_never_guess_or_request_invalid_items(self):
+        for invalid in (dict(source_periods=['first_half']),dict(selection_team=None),
+                        dict(evidence_text='  '),dict(team_b='Home1'),
+                        dict(market_kind='total',selection_team=None,selection_line=None,market_query='')):
+            with self.subTest(invalid=invalid):
+                calls,_=await self.install()
+                result=await self.call([self.item(),self.item(1,**invalid)])
+                self.assertTrue(result['items'][0]['result']['record_result']['accepted'])
+                self.assertTrue(result['items'][1]['source_validation_failed'])
+                self.assertEqual(1,sum(path=='record_expert_signals'for path,_ in calls))
+                self.assertTrue(all(body.get('team_a')!='Home1'for _,body in calls))
+
     async def test_empty_optional_query_is_absence_without_losing_handicap_scope(self):
         for empty in ('', '  \t'):
             calls, _ = await self.install()

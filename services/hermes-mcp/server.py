@@ -265,6 +265,10 @@ class SourceMatchIntent(BaseModel):
         # A nonempty, conflicting handicap query must still fail closed.
         if isinstance(self.market_query, str) and not self.market_query.strip():
             self.market_query = None
+        return self
+
+    def require_source_scope(self):
+        """Reject this item's conflicting intent before any native operation."""
         if (not self.team_a.strip() or not self.team_b.strip() or self.team_a.strip() == self.team_b.strip()
                 or not self.evidence_text.strip()
                 or (self.source_periods and self.period not in self.source_periods)):
@@ -682,6 +686,7 @@ async def _search_source_scopes(payload):
 
 
 async def _review_batch_item(review_id, attempt_id, item):
+    item.require_source_scope()
     result = None
     cursor = None
     candidates = []
@@ -966,9 +971,19 @@ async def review_match_batch(review_id: str, attempt_id: str,
             for item in items]
     if len(set(keys)) != len(keys):
         raise ToolError('批量只接受不同来源对阵；同场多项复用单场工具及完整来源期间，不重复检索')
+    invalid={}
+    for index,item in enumerate(items):
+        try:item.require_source_scope()
+        except ValueError as exc:
+            invalid[index]={'index':index,'unresolved':True,'source_validation_failed':True,
+                'native_calls_attempted':False,'reason':'invalid_source_scope',
+                'error':str(exc),'retry_without_corrected_source':False}
+    if len(invalid)==len(items):
+        raise ToolError('本批所有项的来源字段均不完整或冲突；未执行任何业务请求，请按原文逐项修正来源字段')
     slots = asyncio.Semaphore(2)
 
     async def run(index, item):
+        if index in invalid:return invalid[index]
         async with slots:
             try:
                 result = await _review_batch_item(review_id, attempt_id, item)
