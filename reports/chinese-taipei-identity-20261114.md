@@ -1,0 +1,11 @@
+# 中国台湾／中国台北的成人足球身份
+
+2026-11-14 12:23/25UTC三个不同专家发言使用中国台湾或中国台湾(中)，库存中国台北；完整身份不一致导致137条联赛候选分页和重复搜索，均超过20秒。不能以同一场对手/时间独有作为唯一依据。
+
+7M公开中文实时数组sDt[5198357]明确球队939为中国台湾(中)，英文同赛事同编号Chinese Taipei(N)。中文SHA256 ffc8f28e7e8179fdc5c86894087f219c9b63973d9487ff7945a40106ba3f7380，英文65f2f106166a5ef590a143442f5050f46058b601504d15c320b746b0e5e4e6a0。独立同出版方球队资料 https://data.7m.com.cn/team_data/939/gb/index.shtml 标题直接中国台北(Chinese Taipei)，rq_id=939，SHA256 5ea537c6a7dfbe95eb6edbd3b98a3daa8fcdb2f4f490d2a672fa88a88a438211。同稳定编号直接连接两种中文，不需要模糊去前后缀。
+
+AFC成员协会页 https://www.the-afc.com/en/east/chinese_taipei.html 明确CHINESE TAIPEI FOOTBALL ASSOCIATION (CTFA)，SHA256 23c6905a41be5d56c38ea070148f702d3c9366d4e2dedd608e951d6a241eb2ab。协会首页 https://ctfa.com.tw/ 标注相同英文，SHA256 3e07ec57383dffa9e973d4b473cc6fc21a0189a4d69ca9018d118e15935d8ab8。中文男子代表队百科修订95505837亦连接Chinese Taipei及协会，SHA256 5e38672c04c069619fa0619e2f5bc3c3fea3bf8cd00d2496c49bc44189f320b6。Titan对应5288资料读取断开，不作为英语证据。
+
+仅登记football、国际友谊赛内完整中国台湾／中国台湾(中)／中国台北／Chinese Taipei四个标签；(中)是该记录已经验证的全名，不引入任意球队后缀删除。中国、男女梯队、其他联赛/项目全部保持原隔离。价格、期间、分页、唯一双方、实盘权限和20秒约束不变。
+
+首轮隔离测试实际暴露查询国际友谊未正规化，导致严格scope词汇不参与召回。该标签在Titan同记录明确联赛国际友谊、7M友谊赛、乐鱼国际友谊赛，补football完整国际友谊→国际友谊赛映射；不匹配后缀青年/女子/U19。原失败120项保留，修复后重新冻结执行。
