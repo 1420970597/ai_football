@@ -1102,6 +1102,7 @@ class TelegramCollector:
     async def _commit_reconciliation_item(self, chat_id: str, source: dict, item: dict, by_id: dict):
         reference = {'event_id': item['id'], 'version_key': item['version_key'], 'claim_id': item['claim_id']}
         result = {}
+        media_payload = None
         try:
             if not item.get('_reconcile_applied'):
                 ids = item['content']['member_message_ids']
@@ -1109,15 +1110,26 @@ class TelegramCollector:
                 missing = set(ids) - set(by_id)
                 if submission.get('payload'):
                     result = await self.backend.event(submission['payload'])
+                    if result.get('state') in {'pending', 'failed'}:
+                        media_payload = submission['payload']
                 elif missing:
                     result = await self._delete(chat_id, sorted(missing), reconciliation=reference,
                                                 submission=submission)
                 else:
-                    result, _ = await self._stage_group(
-                        chat_id, source, sorted((by_id[identifier] for identifier in ids), key=lambda entry: entry.id),
+                    members = sorted((by_id[identifier] for identifier in ids), key=lambda entry: entry.id)
+                    item['_reconcile_media_members'] = members
+                    result, media_payload = await self._stage_group(
+                        chat_id, source, members,
                         reconciliation=reference, submission=submission)
                 if not result.get('persisted'):
                     return 'event_not_committed'
+                if media_payload is not None and item.get('_reconcile_media_members'):
+                    # Persist first, then use the existing bounded/deduplicated
+                    # transfer lane. Waiting for the periodic retry consumes
+                    # the edit's 20-second detection deadline before enqueue.
+                    transfer_payload = {key: value for key, value in media_payload.items()
+                                        if key != 'reconciliation'}
+                    self._schedule_live_media(chat_id, transfer_payload, item['_reconcile_media_members'])
                 item['_reconcile_applied'] = True
             if result.get('reconciliation_acknowledged') is True:
                 item['_reconcile_acknowledged'] = True

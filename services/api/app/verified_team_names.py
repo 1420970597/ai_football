@@ -5,8 +5,28 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.15'
+REGISTRY_VERSION = '2026-11-14.16'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport':'football','competition':'巴西乙级联赛',
+        'names':('塞阿拉CE','塞阿拉','施亞拉','Ceara'),
+        'reference':'nowscore:2108:team358+zhwiki:1478898:94607468:20261114',
+    },
+    {
+        'sport':'football','competition':'巴西乙级联赛',
+        'names':('累西腓体育PE','累西腓体育','利斯菲體育會','Sport Club do Recife'),
+        'reference':'nowscore:4176:team358+zhwiki:2840273:90259115:20261114',
+    },
+    {
+        'sport':'football','competition':'巴西乙级联赛',
+        'names':('巴西雷加塔斯AL','巴西雷加塔斯','雷加塔斯巴西','CRB AL','Clube de Regatas Brasil'),
+        'reference':'nowscore:3954:teamDetail+zhwiki:2882182:89956506+crboficial:20261114',
+    },
+    {
+        'sport':'football','competition':'巴西乙级联赛',
+        'names':('戈亚斯GO','戈亚斯','戈伊亚斯','戈亞斯','Goias'),
+        'reference':'zhwiki:369022:95067626+nowscore:360:team358:20261114',
+    },
     {
         'sport':'football','competition':'西班牙乙级联赛',
         'names':('马洛卡','马略卡','馬略卡','RCD Mallorca','Real Club Deportivo Mallorca'),

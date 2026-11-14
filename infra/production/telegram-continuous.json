@@ -20,7 +20,7 @@
       "cpus": 0.4
     },
     "collector": {
-      "image": "sha256:fbf29d5879eb874dfb3bcb3904f4827f51d4149fb74fdc517b8e0e4ea330d271",
+      "image": "sha256:323db6ac4e78639e1bcbcd6f15e9a68b693ad2d45b07472b0399a822fa345d5a",
       "command": [
         "python",
         "-m",
@@ -49,7 +49,7 @@
       "cpus": 0.25
     },
     "local-mcp-api": {
-      "image": "sha256:c0f9de5469dd0016d818509afeeb579d86c90814d3501100332933a56003065f",
+      "image": "sha256:bf2416e78c2be6a3232abdda179f59ae806d1c6cb5179584f72b651c71b3107d",
       "command": [
         "uvicorn",
         "app.mcp_app:app",

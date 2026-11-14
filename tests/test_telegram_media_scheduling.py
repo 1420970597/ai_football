@@ -6,7 +6,7 @@ import os
 import threading
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
@@ -214,9 +214,41 @@ class MediaSchedulingTests(unittest.IsolatedAsyncioTestCase):
         async def upload(*_):
             raise AssertionError('reconciliation cannot transfer media')
         self.collector.media_store = upload
+        self.collector._schedule_live_media = Mock()
         await asyncio.wait_for(self.collector._reconcile_known('-1001', self.source), 1)
         self.assertEqual(2, len(self.backend.events))
         self.assertEqual('pending', list(self.backend.events.values())[-1]['media_state'])
+        self.collector._schedule_live_media.assert_called_once()
+        chat,payload,members=self.collector._schedule_live_media.call_args.args
+        self.assertEqual('-1001',chat)
+        self.assertEqual('pending',payload['media_state'])
+        self.assertNotIn('reconciliation',payload)
+        self.assertEqual([first],members)
+
+    async def test_reconciliation_edit_media_starts_without_waiting_for_periodic_retry(self):
+        first=Message(1,text='old')
+        await self.stage(first)
+        self.backend.observed_items=[{'content':next(iter(self.backend.events.values()))}]
+        first.message,first.media='edited image',SimpleNamespace(id=1)
+        first.file=SimpleNamespace(mime_type='image/jpeg',size=100,width=800,height=600)
+        first.edit_date=first.date+timedelta(minutes=1)
+        entered,release=asyncio.Event(),asyncio.Event()
+        async def upload(chat,message):
+            self.assertEqual('pending',list(self.backend.events.values())[-1]['media_state'])
+            entered.set()
+            await release.wait()
+            return stored(message.id)
+        self.collector.media_store=upload
+        try:
+            await asyncio.wait_for(self.collector._reconcile_known('-1001',self.source),1)
+            await asyncio.wait_for(entered.wait(),.5)
+            await asyncio.wait_for(self.collector._live_messages('-1001',[Message(99)]),.5)
+            self.assertTrue(any(v['platform_message_id']=='99'for v in self.backend.events.values()))
+        finally:
+            release.set()
+            await asyncio.gather(*tuple(self.collector.live_media_tasks.values()))
+        edited=[v for v in self.backend.events.values()if v['raw_text']=='edited image'][0]
+        self.assertEqual('ready',edited['media_state'])
 
     async def test_media_timeout_is_durable_failed_then_one_retry_recovers(self):
         await self.stage(Message(1, media=True))
