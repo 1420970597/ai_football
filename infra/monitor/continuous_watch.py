@@ -36,6 +36,7 @@ def main():
     state=json.loads(statefile.read_text())if statefile.exists()else{'streak':0,'windows':{}}
     while not state.get('complete'):
         now=int(time.time())
+        failure=None
         for end in range(first+1800,now-30+1,1800):
             directory=root/str(end-1800);summaryfile=directory/'snapshot-summary.json'
             if not summaryfile.exists():
@@ -48,19 +49,24 @@ def main():
                     if result.returncode!=0:raise RuntimeError('snapshot_exit_'+str(result.returncode))
                     summary=save(root,result.stdout)
                 except (Exception,)as exc:
-                    atomic(root/'watch-status.json',{'state':'snapshot_failed','window_end':end,
-                        'reason':type(exc).__name__,'at':now,'streak':0})
+                    failure={'state':'snapshot_failed','window_end':end,
+                             'reason':type(exc).__name__,'at':now,'streak':0}
                     state=dict(state,streak=0,complete=False);atomic(statefile,state)
                     break
+        # Capture later windows even while an earlier human/agent audit is
+        # pending, but never advance acceptance beyond that missing audit.
+        for end in range(first+1800,now-30+1,1800):
+            directory=root/str(end-1800);summaryfile=directory/'snapshot-summary.json'
+            if not summaryfile.exists():break
             auditfile=directory/'audit.json'
-            if not auditfile.exists():continue
+            if not auditfile.exists():break
             evidence=json.loads(auditfile.read_text());summary=json.loads(summaryfile.read_text())
             if evidence.get('snapshot_sha256')!=summary['snapshot_sha256']:
-                atomic(root/'watch-status.json',{'state':'audit_hash_mismatch','window_end':end,'at':now})
-                continue
+                failure={'state':'audit_hash_mismatch','window_end':end,'at':now}
+                break
             evidence['audit_sha256']=hashlib.sha256(auditfile.read_bytes()).hexdigest()
             state=record(state,evidence);atomic(statefile,state)
-        atomic(root/'watch-status.json',{'state':'completed'if state.get('complete')else'watching',
+        atomic(root/'watch-status.json',failure or {'state':'completed'if state.get('complete')else'watching',
             'at':int(time.time()),'streak':state.get('streak',0),'last_end':state.get('last_end'),
             'next_window_end':(int(time.time())//1800+1)*1800})
         # Raw retention uses original posted_at, never file mtime or edit time.
