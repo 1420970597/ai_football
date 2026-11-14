@@ -1105,6 +1105,29 @@ class ReviewWorkerTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(worker.LeaseLost):
                 await worker.keep_lease(self.pool, job)
 
+    async def test_revoked_database_attempt_releases_occupied_model_slot(self):
+        await self.make_queued()
+        job = await worker.claim_job(self.pool)
+        stopped = asyncio.Event()
+        async def model():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+        task = asyncio.create_task(model())
+        await asyncio.sleep(0)
+        try:
+            await worker.cancel_ineligible_reviews(self.pool, {task: job})
+            self.assertFalse(task.done())
+            await self.pool.execute("UPDATE v2_analysis_jobs SET state='failed',last_error='source_edited',lease_until=NULL WHERE id=$1", job['id'])
+            await worker.cancel_ineligible_reviews(self.pool, {task: job})
+            self.assertTrue(task.cancelled())
+            self.assertTrue(stopped.is_set())
+            self.assertEqual('source_edited', await self.pool.fetchval('SELECT last_error FROM v2_analysis_jobs WHERE id=$1', job['id']))
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     async def test_two_backlogged_experts_share_default_worker_concurrency(self):
         await self.make_queued()
         _, other = await self.add_expert(source=self.source)

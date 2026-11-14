@@ -60,6 +60,7 @@ class ReviewWorkerRuntimeTests(unittest.IsolatedAsyncioTestCase):
              patch.object(worker.database, 'close_pool', new=close_pool), \
              patch.object(worker.httpx, 'AsyncClient', return_value=client), \
              patch.object(worker, 'listen_for_jobs', side_effect=listen), \
+             patch.object(worker, 'cancel_ineligible_reviews', AsyncMock()), \
              patch.object(worker, 'claim_job', side_effect=claim), \
              patch.object(worker, 'process_job', side_effect=process):
             runtime = asyncio.create_task(worker.run())

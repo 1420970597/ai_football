@@ -30,6 +30,7 @@ from .review_completion import (completion_issues, continuation_prompt, mentione
 from .review_policy import FRESH_PRIORITY_WINDOW_SECONDS, REALTIME_WINDOW_SECONDS
 from .review_scheduler_setup import claim_pair_and_job_query, prepare_claim_schedule
 from .review_deadline import remaining_review_seconds, review_deadline_at
+from .review_cancellation import cancel_ineligible_reviews
 from fastapi import HTTPException
 import asyncpg
 
@@ -745,7 +746,7 @@ async def listen_for_jobs(database_url: str, wake: asyncio.Event, stop: asyncio.
 async def run() -> None:
     settings = load_settings(role="worker")
     pool = await database.open_pool(settings)
-    active: set[asyncio.Task] = set()
+    active: dict[asyncio.Task, dict] = {}
     wake, stop = asyncio.Event(), asyncio.Event()
     model_client = httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=3.0), trust_env=False,
         limits=httpx.Limits(max_connections=8, max_keepalive_connections=8, keepalive_expiry=30.0))
@@ -753,13 +754,14 @@ async def run() -> None:
     try:
         while True:
             wake.clear()
+            await cancel_ineligible_reviews(pool, active)
             while len(active) < CONCURRENCY:
                 job = await claim_job(pool)
                 if not job:
                     break
                 task = asyncio.create_task(process_job(pool, settings, job, model_client=model_client))
-                active.add(task)
-                task.add_done_callback(active.discard)
+                active[task] = job
+                task.add_done_callback(lambda finished: active.pop(finished, None))
             if active:
                 await asyncio.wait(active, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
             else:
