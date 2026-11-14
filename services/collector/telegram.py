@@ -25,7 +25,7 @@ from PIL import Image
 from telethon.tl.types import (Channel, ChannelForbidden, ChannelParticipantsAdmins, ChannelParticipantsSearch,
                               ChannelParticipantAdmin, ChannelParticipantCreator, Chat, ChatForbidden,
                               ChatParticipantAdmin, ChatParticipantCreator, ChatParticipantsForbidden,
-                              UserProfilePhotoEmpty)
+                              UserProfilePhotoEmpty, MessageMediaWebPage, Photo)
 from telethon.tl.functions.channels import GetParticipantsRequest, GetParticipantRequest
 from telethon.tl.functions.messages import GetFullChatRequest
 
@@ -1589,7 +1589,15 @@ class TelegramCollector:
         try:
             phase_started = time.monotonic()
             chunks = []
-            async for chunk in self.client.iter_download(message.media, request_size=256 * 1024):
+            location = message.media
+            if isinstance(location, MessageMediaWebPage):
+                # iter_download accepts a Photo, not its web-preview envelope.
+                # Never fetch the linked URL or substitute another message.
+                photo = getattr(message, 'photo', None)
+                if not isinstance(photo, Photo):
+                    raise ValueError('web_preview_photo_unavailable')
+                location = photo
+            async for chunk in self.client.iter_download(location, request_size=256 * 1024):
                 size += len(chunk)
                 if size > MAX_MEDIA_BYTES:
                     raise ValueError("media_size_limit")
