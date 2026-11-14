@@ -24,6 +24,22 @@ def atomic(path,value):
     temporary.replace(path)
 
 
+def sample_health(source, root, now):
+    """Keep interval evidence separate from original-message snapshots."""
+    try:
+        result = subprocess.run(['docker', 'exec', '-i', 'ai-football-v2-api-1', 'python', '-'],
+            input=(source/'infra/monitor/source_health_sample.py').read_bytes(),
+            capture_output=True, timeout=15, check=False)
+        if result.returncode != 0: raise RuntimeError('health_sample_failed')
+        value = json.loads(result.stdout)
+        if type(value.get('ok')) is not bool: raise ValueError('invalid_health_sample')
+    except Exception as exc:
+        value = {'at': now, 'ok': False, 'reasons': ['health_sample_'+type(exc).__name__]}
+    directory = root/'health'
+    directory.mkdir(exist_ok=True, mode=0o700)
+    atomic(directory/(str(now)+'.json'), value)
+
+
 def main():
     os.umask(0o077)
     source=Path(os.environ['EXPERT_SOURCE_ROOT']);root=Path(os.environ['EVIDENCE_DIR'])
@@ -34,8 +50,12 @@ def main():
     if first%1800:raise ValueError('Unaligned first window')
     statefile=root/'acceptance-state.json'
     state=json.loads(statefile.read_text())if statefile.exists()else{'streak':0,'windows':{}}
+    next_health = 0
     while not state.get('complete'):
         now=int(time.time())
+        if now >= next_health:
+            sample_health(source, root, now)
+            next_health = int(time.time())+60
         failure=None
         for repairfile in sorted(root.glob('repair-*.json')):
             repair=json.loads(repairfile.read_text())
