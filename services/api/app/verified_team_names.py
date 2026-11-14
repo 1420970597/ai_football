@@ -5,8 +5,20 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.9'
+REGISTRY_VERSION = '2026-11-14.10'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport':'football','competition':'西班牙女子甲级联赛',
+        'names':('特内里费体育(女)','科斯塔阿德赫特内里费(女)',
+                 '科斯塔阿德赫特内里费 (女)','格拉纳迪拉特内里费苏女足',
+                 '格拉纳迪拉特内里费女足','CD Tenerife Femenino','Costa Adeje Tenerife'),
+        'reference':'titan:24725:bfdata+alias3+7m:23506+official:tfe-femenino:history:20261114',
+    },
+    {
+        'sport':'football','competition':'西班牙女子甲级联赛',
+        'names':('西班牙人(女)','西班牙人女足','爱斯宾奴(女)','愛斯賓奴女足'),
+        'reference':'7m:6852:gb+big:20261114',
+    },
     {
         'sport':'football','competition':'国际友谊赛',
         'names':('中国台湾','中国台湾(中)','中国台北','Chinese Taipei'),
