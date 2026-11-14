@@ -99,6 +99,18 @@ class HermesPromptBudgetTests(unittest.IsolatedAsyncioTestCase):
                        '禁止改成total','不读盘、不提交quote'):
             self.assertIn(phrase,skill)
 
+    async def test_esports_pick_requires_native_identity_without_inventing_supported_period(self):
+        root=Path(__file__).resolve().parents[1]
+        skill=(root/'integrations/hermes/skills/expert-review/SKILL.md').read_text()
+        for phrase in ('电子竞技明确选项也必须先查原生赛事',
+                       '不得未经查询就声称工具只覆盖足球篮球、不包含电竞',
+                       'sport=esports调用review_match_batch',
+                       'market_kind保留原文“击杀总数”、period=null/source_periods=[]',
+                       '“第一局”不是full_time或上下半场，不借BO5推断全场',
+                       '不能推导整个平台不支持该项目',
+                       '禁止把击杀大小改成足球进球total'):
+            self.assertIn(phrase,skill)
+
     async def test_skill_matches_native_single_and_team_total_batch_contract(self):
         root = Path(__file__).resolve().parents[1]
         skill = (root / 'integrations/hermes/skills/expert-review/SKILL.md').read_text()

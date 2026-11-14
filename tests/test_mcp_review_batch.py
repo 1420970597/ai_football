@@ -122,6 +122,21 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('source_period_unknown',native['source_intent_recording']['reason'])
         self.assertEqual(['search_matches'],[path for path,_ in calls])
 
+    async def test_esports_first_game_kills_preserves_sport_and_never_reads_full_match_markets(self):
+        calls,_=await self.install(paginate=True)
+        item=self.item(sport='esports',competition_query='2026 全球总决赛',
+            market_kind='击杀总数',period=None,source_periods=[],
+            market_query='第一局击杀总数大于27.5',selection_team=None,selection_line=None,
+            evidence_text='Gen.G vs BLG 第一局击杀总数大于27.5')
+        native=(await self.call([item]))['items'][0]['result']
+        self.assertTrue(native['search_complete'])
+        self.assertTrue(native['resolution']['resolved'])
+        self.assertEqual('source_period_unknown',native['source_intent_recording']['reason'])
+        self.assertEqual(['search_matches','search_matches'],[path for path,_ in calls])
+        self.assertEqual([None,'native-next'],[body.get('cursor')for _,body in calls])
+        self.assertTrue(all(body['sport']=='esports'for _,body in calls))
+        self.assertTrue(all(body['competition_query']=='2026 全球总决赛'for _,body in calls))
+
     async def test_selected_team_uses_native_orientation_not_source_order(self):
         def swap(path, body, result):
             if path == 'search_matches':
