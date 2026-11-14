@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from .review_policy import REALTIME_WINDOW_SECONDS
+from .review_deadline import remaining_review_seconds
 
 # One additional model attempt; do not turn unavailable markets into an
 # unbounded refresh loop or compete indefinitely with new Telegram messages.
@@ -44,6 +45,13 @@ async def market_recovery(conn, job, attempt_id, attempts: int) -> dict | None:
     if (job['review_mode'] != 'real_time' or not 0 <= age <= REALTIME_WINDOW_SECONDS
             or attempts >= MARKET_RECOVERY_ATTEMPTS):
         return None
+    # A recovery scheduled after the original absolute cutoff can never
+    # accept a signal and would overwrite an already completed partial result
+    # with a later deadline error. Keep the original receipt and unavailable
+    # market evidence instead; never grant a fresh detection budget.
+    remaining=remaining_review_seconds(job.get('detected_at'))
+    if remaining is not None and remaining<=RECOVERY_DELAY_SECONDS:
+        return None
     rows = await conn.fetch(
         "WITH latest AS MATERIALIZED ("
         " SELECT DISTINCT ON (payload->>'fixture_id') payload FROM v2_analysis_traces "
@@ -82,7 +90,10 @@ async def market_recovery(conn, job, attempt_id, attempts: int) -> dict | None:
     )
     if not rows:
         return None
-    return {'reason': 'temporary_market_refresh_failure', 'delay_seconds': recovery_delay_seconds(rows),
+    delay=recovery_delay_seconds(rows)
+    if remaining is not None and delay>=remaining:
+        return None
+    return {'reason': 'temporary_market_refresh_failure', 'delay_seconds': delay,
             'attempt_limit': MARKET_RECOVERY_ATTEMPTS,
             'fixtures': [{'fixture_id': row['fixture_id'], 'reason': row['reason'],
                           **({'retry_after_seconds': row['retry_after']} if row['retry_after'] is not None else {})}
