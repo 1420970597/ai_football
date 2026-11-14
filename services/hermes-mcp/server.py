@@ -90,6 +90,7 @@ def compact_tool_result(result):
 
 
 compact_descriptions: ContextVar[bool] = ContextVar('compact_tool_descriptions', default=False)
+terminal_review: ContextVar[dict | None] = ContextVar('terminal_review', default=None)
 compact_market_tables: ContextVar[bool] = ContextVar('compact_market_tables', default=False)
 explicit_market_intent: ContextVar[bool] = ContextVar('explicit_market_intent', default=False)
 budget_descriptions: ContextVar[bool] = ContextVar('budget_tool_descriptions', default=False)
@@ -191,8 +192,30 @@ class CompactMCPServer(MCPServer):
         return result
 
     async def call_tool(self, name: str, arguments: dict, context=None):
-        result = await super().call_tool(name, arguments, context=context)
-        return compact_tool_result(result)
+        # Child read tasks inherit this per-call holder; setting a new
+        # ContextVar value in a child would not reach the parent RPC.
+        token = terminal_review.set({})
+        try:
+            try:
+                result = await super().call_tool(name, arguments, context=context)
+            except ToolError as exc:
+                if not terminal_review.get():
+                    raise
+                result = CallToolResult(content=[TextContent(type='text', text=str(exc))], is_error=True)
+            stopped = terminal_review.get()
+            if stopped and result.is_error:
+                # An authenticated business refusal is not a failed MCP
+                # connection. Keep the refusal explicit, stop this attempt,
+                # and do not trip the shared transport breaker for new jobs.
+                value = {'review_terminal_state': stopped, 'stop_review': True,
+                         'retryable': False, 'accepted': [],
+                         'diagnostic': [part.text[:2400] for part in result.content
+                                        if isinstance(part, TextContent)]}
+                result = CallToolResult(content=[TextContent(type='text',
+                    text=json.dumps(value, ensure_ascii=False))], structured_content=value, is_error=False)
+            return compact_tool_result(result)
+        finally:
+            terminal_review.reset(token)
 
 
 mcp = CompactMCPServer("football-expert-platform")
@@ -330,6 +353,19 @@ async def _request(path: str, payload: dict) -> dict:
             detail = exc.response.json().get("detail", "工具请求被拒绝")
         except (ValueError, AttributeError):
             detail = "工具请求被拒绝"
+        reasons = {
+            'review attempt is no longer active': 'attempt_inactive',
+            'message or source is not eligible': 'source_ineligible',
+            'message has a newer revision': 'source_revised',
+            'referenced image message changed after review started': 'reply_revised',
+        }
+        reason = reasons.get(detail) if isinstance(detail, str) else None
+        if isinstance(detail, dict) and detail.get('category') == 'detection_deadline_exceeded':
+            reason = 'detection_deadline_exceeded'
+        if exc.response.status_code == 409 and reason is not None:
+            stopped = terminal_review.get()
+            if stopped is not None:
+                stopped.update(reason=reason, operation=path)
         raise ToolError(str(detail)[:240]) from None
     except httpx.HTTPError:
         raise ToolError("系统工具暂不可用") from None

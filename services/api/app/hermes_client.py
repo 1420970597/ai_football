@@ -383,14 +383,24 @@ async def delete_session(settings: Settings, review_id: uuid.UUID, attempt_id: u
         response = await client.delete(url, headers=headers, timeout=httpx.Timeout(8.0, connect=2.0))
         if response.status_code in {200, 204, 404}:
             return
-        if response.status_code != 409 or response.json().get('error', {}).get('code') != 'session_active_turn':
+        active_conflict = (response.status_code == 409
+            and response.json().get('error', {}).get('code') == 'session_active_turn')
+        # The pinned framework can drop its write guard before the durable
+        # run settles, reporting session_busy as HTTP 500. Inspect and stop
+        # only this authenticated attempt's known runs, never enumerate.
+        if not active_conflict and response.status_code != 500:
             response.raise_for_status()
         await _stop_review_runs(settings, session_id, attempt_id, client=client, headers=headers)
+        transient_errors = 0
         while True:
             await asyncio.sleep(.1)
             response = await client.delete(url, headers=headers, timeout=httpx.Timeout(8.0, connect=2.0))
             if response.status_code in {200, 204, 404}:
                 return
+            if response.status_code == 500:
+                transient_errors += 1
+                if transient_errors < 3:
+                    continue
             if response.status_code != 409 or response.json().get('error', {}).get('code') != 'session_active_turn':
                 response.raise_for_status()
 

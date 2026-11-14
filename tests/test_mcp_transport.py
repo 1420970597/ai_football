@@ -297,7 +297,8 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(['search_matches'], [c[0] for c in calls])
         arguments['cursor'] = 'next-page'
         second = (await self.rpc('tools/call', {'name': 'search_matches', 'arguments': arguments})).json()['result']
-        self.assertTrue(second['isError'])
+        self.assertFalse(second.get('isError', False))
+        self.assertTrue(json.loads(second['content'][0]['text'])['stop_review'])
         self.assertEqual(['search_matches', 'search_matches', 'list_match_markets'], [c[0] for c in calls])
         self.assertEqual('next-page', calls[1][1]['cursor'])
         self.assertEqual('attempt', calls[2][1]['attempt_id'])
@@ -330,8 +331,13 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
                         'team_b': 'Beta', 'read_markets': True, 'market_kind': 'total', 'period': 'first_half'}
                     arguments.update({'team_query': 'Alpha'} if name == 'search_matches' else {'search_key': 'a'*64})
                     result = (await self.rpc('tools/call', {'name': name, 'arguments': arguments})).json()['result']
-                    self.assertTrue(result['isError'])
+                    self.assertEqual(failure == 'timeout', result.get('isError', False))
                     text = result['content'][0]['text']
+                    if failure == 'lease':
+                        terminal = json.loads(text)
+                        self.assertTrue(terminal['stop_review'])
+                        self.assertEqual([], terminal['accepted'])
+                        text = terminal['diagnostic'][0]
                     error = json.loads(text[text.index('{'):])
                     self.assertFalse(error['market_read_succeeded'])
                     self.assertEqual('list_match_markets', error['failed_operation'])
@@ -360,7 +366,8 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
         result = (await self.rpc('tools/call', {'name': 'search_matches', 'arguments': {
             'review_id': 'job', 'attempt_id': 'current', 'team_query': 'Alpha',
             'team_a': 'Alpha', 'team_b': 'Beta', 'read_markets': True}})).json()['result']
-        self.assertTrue(result['isError'])
+        self.assertFalse(result.get('isError', False))
+        self.assertTrue(json.loads(result['content'][0]['text'])['stop_review'])
         self.assertNotIn('completed_receipt', result['content'][0]['text'])
         self.assertEqual(['search_matches'], calls)
 

@@ -131,6 +131,30 @@ class HermesClientTests(unittest.IsolatedAsyncioTestCase):
                         await hermes_client.delete_session(settings, review, attempt, client=client)
                 self.assertEqual(['DELETE', 'GET'], calls)
 
+    async def test_session_busy_500_stops_only_owned_run_before_retry(self):
+        review, attempt = uuid.uuid4(), uuid.uuid4()
+        session = f'expert-review-{review}-{attempt}'
+        settings = SimpleNamespace(hermes_api_url='http://hermes.invalid/v1', hermes_api_key='isolated-key')
+        calls, deletes, stopped = [], 0, False
+        async def handler(request):
+            nonlocal deletes, stopped
+            calls.append((request.method, request.url.path))
+            if request.method == 'DELETE':
+                deletes += 1
+                return httpx.Response(500, text='Internal Server Error') if deletes == 1 else httpx.Response(204)
+            if request.method == 'POST':
+                self.assertTrue(request.url.path.endswith(str(attempt)+'/stop'))
+                stopped = True
+                return httpx.Response(200, json={'status': 'stopping'})
+            if not request.url.path.endswith(str(attempt)):
+                return httpx.Response(404)
+            return httpx.Response(200, json={'session_id': session, 'status': 'cancelled' if stopped else 'running'})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await hermes_client.delete_session(settings, review, attempt, client=client)
+        self.assertTrue(stopped)
+        self.assertEqual(2, deletes)
+        self.assertEqual(1, sum(method == 'POST' for method, _ in calls))
+
     async def test_session_cleanup_normal_and_unrelated_conflicts_do_not_stop_runs(self):
         for status in [200, 204, 404, 403, 409]:
             with self.subTest(status=status):
