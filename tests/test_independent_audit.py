@@ -48,3 +48,10 @@ class AuditInputTests(unittest.IsolatedAsyncioTestCase):
             output=await audit_input.prepare({'message':m})
         self.assertEqual(2,len(output['parts']));image.assert_awaited_once_with('private/reply')
         self.assertEqual(1,json.loads(output['parts'][0]['text'])['reply_image_count'])
+
+    async def test_review_time_reply_text_is_preserved_as_untrusted_evidence(self):
+        m=self.message();m['traces']=[{'trace_kind':'hermes_request','payload':{
+            'reply_text':'same-match prior recommendation'}}]
+        output=await audit_input.prepare({'message':m})
+        context=json.loads(output['parts'][0]['text'])
+        self.assertEqual('same-match prior recommendation',context['reply_text'])

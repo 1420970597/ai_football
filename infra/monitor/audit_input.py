@@ -32,6 +32,7 @@ async def prepare(value):
     reply=request.get('reply_archive')or{}
     reply_images=reply.get('media_objects')or[] if reply.get('media_state')=='ready'and not reply.get('deleted')else[]
     context={'source_text':m['raw_text'],'posted_at':m['posted_at'],'reply_context':m.get('reply_context'),
+        'reply_text':request.get('reply_text'),
         'reply_archive':{k:reply.get(k)for k in ('raw_text','posted_at','media_state','deleted')},
         'reply_image_count':len(reply_images),
         'media_state':m['media_state'],'image_count':len(m.get('media_objects')or[]),
