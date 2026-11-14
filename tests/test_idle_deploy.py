@@ -24,7 +24,8 @@ class IdleDeployTests(unittest.TestCase):
                 try:result=deploy(config,script,Path('/tmp/tg-idle-unit-test'),services or ['api','local-mcp-api'],root/'log')
                 except Exception as exc:error=exc
             self.assertEqual(['docker','compose'],calls[0][:2])
-            self.assertEqual(['docker','exec','ai-football-v2-review-worker-1','touch','/tmp/tg-idle-unit-test'],calls[-1])
+            gate_container = 'ai-football-v2-api-1' if 'review-worker' in (services or []) else 'ai-football-v2-review-worker-1'
+            self.assertEqual(['docker','exec',gate_container,'touch','/tmp/tg-idle-unit-test'],calls[-1])
             self.assertTrue(gate.stdout.closed)
             return result,error
 
@@ -43,6 +44,16 @@ class IdleDeployTests(unittest.TestCase):
         result,error=self.scenario(services=['hermes-mcp'])
         self.assertIsNone(error)
         self.assertEqual(['hermes-mcp'],result['services'])
+
+    def test_worker_handoff_uses_stable_api_gate_and_releases_it(self):
+        result,error=self.scenario(services=['review-worker','hermes-mcp'])
+        self.assertIsNone(error)
+        self.assertEqual(['review-worker','hermes-mcp'],result['services'])
+
+    def test_worker_and_its_gate_api_cannot_be_recreated_together(self):
+        with patch('infra.monitor.idle_deploy.subprocess.Popen')as start:
+            with self.assertRaises(ValueError):deploy(Path('/x'),Path('/y'),Path('/tmp/tg-idle-unit'),['api','review-worker'],Path('/z'))
+            start.assert_not_called()
 
     def test_timeout_also_releases_and_propagates(self):
         _,error=self.scenario(deploy_error=subprocess.TimeoutExpired('docker',12))

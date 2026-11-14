@@ -258,7 +258,7 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
             [self.item(selection_line=None)], [self.item(selection_line='.3')],
             [self.item(selection_line='NaN')], [self.item(market_query='Away0+0.5')],
             [self.item(review_id='different')], [self.item(), self.item()],
-            [self.item(n) for n in range(7)]]
+            [self.item(n) for n in range(13)]]
         for items in invalid:
             with self.subTest(items=items):
                 calls, _ = await self.install()
@@ -266,6 +266,15 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
                     'review_id': 'job', 'attempt_id': 'active', 'items': items}})
                 self.assertTrue(response.json()['result'].get('isError'))
                 self.assertEqual([], calls)
+
+    async def test_twelve_sources_share_one_batch_without_increasing_native_concurrency(self):
+        calls, concurrency = await self.install()
+        result = await self.call([self.item(n) for n in range(12)])
+        self.assertEqual(list(range(12)), [entry['index'] for entry in result['items']])
+        self.assertTrue(all(entry['result']['record_result']['accepted'] for entry in result['items']))
+        self.assertEqual(12, sum(path == 'record_expert_signals' for path, _ in calls))
+        self.assertLessEqual(concurrency()[1], 2)
+        self.assertEqual(0, concurrency()[0])
 
     async def test_source_league_must_be_declared_before_any_lookup(self):
         calls, _ = await self.install()

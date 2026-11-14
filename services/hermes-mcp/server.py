@@ -106,7 +106,7 @@ INTENT_ARGUMENT_DESCRIPTIONS = {
 # These profiles are used with the complete, preloaded expert-review skill.
 # Only descriptions change: validation schemas and business calls stay native.
 BUDGET_TOOL_DESCRIPTIONS = {
-    'review_match_batch': 'expert-review单场或多场明确来源首选（1项也用此工具）：最多6个不同对阵，内部2路连续分页、唯一绑定、读盘并精确录入total/handicap/team_total；单队进球须selection_team。核实双方、联赛、期间及原文，不从库存补字段；无原期间盘口立即未解决，禁换期间。',
+    'review_match_batch': 'expert-review单场或多场明确来源首选（1项也用此工具）：最多12个不同对阵，内部2路连续分页、唯一绑定、读盘并精确录入total/handicap/team_total；单队进球须selection_team。核实双方、联赛、期间及原文，不从库存补字段；无原期间盘口立即未解决，禁换期间。',
     'search_matches': 'expert-review已预载，勿重复skill_view。同场查询只调用一次。查全部阶段并连续翻页；传原文双方、sport及原始日期。唯一活动绑定可合并读盘；明确单项total/期间/方向/线时record_source_intent=true，以record_result为准。未知期间不录入。',
     'resolve_match': 'expert-review已预载；用完整search_key及双方/联赛/时间消歧，已绑定不重做。明确单项total可合并读盘录入，以record_result为准；非活动不读盘。',
     'list_match_markets': 'expert-review：明确total来源时record_source_intent=true，带market_query/evidence_text及原source_periods；恢复读盘后精确有效项立即录入，以record_result为准。未知不录入，完整零库存停止。',
@@ -748,7 +748,7 @@ async def _review_batch_item(review_id, attempt_id, item):
     return result | {'batch_unresolved': 'pagination_budget_exceeded'}
 
 
-def _batch_result_view(result, item):
+def _batch_result_view(result, item, *, display_budget=14400):
     """Present native receipts and source-specific rows, never a fake inventory.
 
     The native API has already persisted every complete search/market response.
@@ -860,11 +860,11 @@ def _batch_result_view(result, item):
             view['market_result']['refresh'] = {key: markets['refresh'][key]
                 for key in ('attempted', 'accepted', 'reason') if key in markets['refresh']}
     view['presentation'] = presentation
-    # Six native inventories can individually fit 90K while their envelope
+    # Twelve native inventories can individually fit 90K while their envelope
     # cannot. Never make their successful/unknown receipts disappear into a
     # framework spill file. Explicitly withhold a pathological display rather
     # than returning a truncated inventory as complete.
-    if size(view) > 14400:
+    if size(view) > display_budget:
         if 'items' in view:
             view['items'] = []
             presentation['candidates'].update(displayed_count=0, items_complete=False,
@@ -944,7 +944,7 @@ def _accepted_batch_receipt(view):
     return result
 
 
-def _batch_error_view(error, item):
+def _batch_error_view(error, item, *, display_budget=14400):
     """Turn a composed JSON error into readable receipts without double escaping."""
     try:
         failure = json.loads(str(error))
@@ -959,14 +959,14 @@ def _batch_error_view(error, item):
                 native_outcome_unknown=failure.get('failed_operation') == 'record_expert_signals',
                 retry_without_native_evidence=False)
     if isinstance(failure.get('completed_receipt'), dict):
-        view['completed_receipt'] = _batch_result_view(failure['completed_receipt'], item)
+        view['completed_receipt'] = _batch_result_view(failure['completed_receipt'], item, display_budget=display_budget)
     return view
 
 
 @mcp.tool()
 async def review_match_batch(review_id: str, attempt_id: str,
-                             items: Annotated[list[SourceMatchIntent], Field(min_length=1, max_length=6)]) -> dict:
-    """多场明确推荐首查一次提交，最多6个不同来源对阵、内部2路并发。逐项连续分页、唯一绑定、声明期间、读当前盘口并精确录入total/handicap/team_total。期间未知传period=null/source_periods=[]，只识别不读盘。带原文可读联赛。handicap用原文selection_team及所选方带符号selection_line；team_total用selection_team及market_query，不猜主客或价格。其它玩法只读盘。每项检查record_result，无回执不称成功。"""
+                             items: Annotated[list[SourceMatchIntent], Field(min_length=1, max_length=12)]) -> dict:
+    """多场明确推荐首查一次提交，最多12个不同来源对阵、内部2路并发。逐项连续分页、唯一绑定、声明期间、读当前盘口并精确录入total/handicap/team_total。期间未知传period=null/source_periods=[]，只识别不读盘。带原文可读联赛。handicap用原文selection_team及所选方带符号selection_line；team_total用selection_team及market_query，不猜主客或价格。其它玩法只读盘。每项检查record_result，无回执不称成功。"""
     keys = [(item.sport.casefold(), frozenset((item.team_a.strip().casefold(), item.team_b.strip().casefold())))
             for item in items]
     if len(set(keys)) != len(keys):
@@ -981,17 +981,18 @@ async def review_match_batch(review_id: str, attempt_id: str,
     if len(invalid)==len(items):
         raise ToolError('本批所有项的来源字段均不完整或冲突；未执行任何业务请求，请按原文逐项修正来源字段')
     slots = asyncio.Semaphore(2)
+    display_budget = min(14400, 86400 // len(items))
 
     async def run(index, item):
         if index in invalid:return invalid[index]
         async with slots:
             try:
                 result = await _review_batch_item(review_id, attempt_id, item)
-                return {'index': index, 'result': _batch_result_view(result, item)}
+                return {'index': index, 'result': _batch_result_view(result, item, display_budget=display_budget)}
             except ToolError as exc:
                 # A failed independent item cannot erase another committed
                 # receipt. Native composed errors preserve completed_receipt.
-                return {'index': index, **_batch_error_view(exc, item)}
+                return {'index': index, **_batch_error_view(exc, item, display_budget=display_budget)}
             except Exception as exc:
                 return {'index': index, 'error_class': type(exc).__name__,
                         'unresolved': True, 'protocol_failure': True,

@@ -134,6 +134,27 @@ class BatchBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(brief['source_quote_receipt']['can_record'])
         self.assertLess(len(json.dumps(brief)), len(json.dumps(full)))
 
+    async def test_twelve_large_receipts_fit_without_claiming_withheld_quotes_complete(self):
+        native = [self.native(index, count=120) for index in range(12)]
+        before = copy.deepcopy(native)
+        async def review(job, attempt, item):
+            return native[int(item.team_a.removeprefix('Alpha'))]
+        with patch.object(self.server, '_review_batch_item', side_effect=review):
+            result, text = await self.batch([self.item(index) for index in range(12)])
+        self.assertLess(len(text), 90000)
+        self.assertEqual(before, native)
+        self.assertEqual(list(range(12)), [entry['index'] for entry in result['items']])
+        for index, entry in enumerate(result['items']):
+            view = entry['result']
+            self.assertEqual(native[index]['record_result'], view['record_result'])
+            market = view['market_result']
+            if market['presentation'].get('withheld_for_inline_budget'):
+                self.assertFalse(market['presentation']['all_source_selection_states'])
+                self.assertTrue(market['presentation']['requires_manual_market_review'])
+                self.assertEqual([], market['source_selection_quotes'])
+            else:
+                self.assertEqual(native[index]['market_result']['markets'], restore_rows(market['source_selection_quotes']))
+
     async def test_short_receipt_never_hides_rejection_unknown_or_inconsistent_scope(self):
         native = self.native(count=1)
         native['source_intent_recording'] = {'attempted': True}

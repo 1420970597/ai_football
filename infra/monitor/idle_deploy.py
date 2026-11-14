@@ -12,12 +12,15 @@ import time
 
 
 def deploy(config,gate_script,release,services,log_path):
-    if not services or set(services)-{'api','local-mcp-api','hermes-mcp'}:
+    if not services or set(services)-{'api','local-mcp-api','hermes-mcp','review-worker'}:
         raise ValueError('only prepared API and MCP handoffs are supported')
+    if 'review-worker' in services and 'api' in services:
+        raise ValueError('worker handoff requires a stable API gate process')
     if release.parent!=Path('/tmp') or not release.name.startswith('tg-idle-'):
         raise ValueError('unique remote release marker required')
     config=config.resolve(strict=True);gate_script=gate_script.resolve(strict=True)
-    gate=subprocess.Popen(['docker','exec','-i','ai-football-v2-review-worker-1',
+    gate_container = 'ai-football-v2-api-1' if 'review-worker' in services else 'ai-football-v2-review-worker-1'
+    gate=subprocess.Popen(['docker','exec','-i',gate_container,
         'python','-','--release-file',str(release)],stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     held=False;started=None;operation_error=None;gate_code=None
@@ -44,7 +47,7 @@ def deploy(config,gate_script,release,services,log_path):
     finally:
         # The remote gate has its own 45-second lifetime as a final fallback.
         # Always release on deployment failure; never leave claims paused.
-        released=subprocess.run(['docker','exec','ai-football-v2-review-worker-1',
+        released=subprocess.run(['docker','exec',gate_container,
             'touch',str(release)],capture_output=True,timeout=4,check=False)
         try:gate_code=gate.wait(timeout=5)
         except subprocess.TimeoutExpired:
