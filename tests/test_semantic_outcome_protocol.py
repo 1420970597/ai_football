@@ -1,5 +1,5 @@
 import unittest
-from infra.monitor.independent_review import SYSTEM
+from infra.monitor.independent_review import SYSTEM, SOURCE_SYSTEM
 from infra.monitor.consecutive_windows import evaluate
 
 
@@ -23,6 +23,13 @@ class SemanticOutcomeProtocolTests(unittest.TestCase):
         self.assertIn('未知数据，不是工具响应丢失',SYSTEM)
         self.assertIn('list_match_markets和record_expert_signals均非必需',SYSTEM)
         self.assertIn('同时填写evidence_gaps',SYSTEM)
+
+    def test_source_reader_has_same_complete_prematch_convention_without_inventory_inference(self):
+        self.assertIn('完整赛前推荐清单', SOURCE_SYSTEM)
+        self.assertIn('period=full_time', SOURCE_SYSTEM)
+        self.assertIn('若来源是否赛前仍不清楚则unknown', SOURCE_SYSTEM)
+        self.assertIn('不看候选开赛时间/状态/库存', SOURCE_SYSTEM)
+        self.assertIn('滚球裸短句、比分条', SOURCE_SYSTEM)
 
     def test_protocol_does_not_relax_unknown_outcome_acceptance(self):
         passed,reasons=evaluate(dict(start=0,end=1800,upstream_complete=True,database_complete=True,
