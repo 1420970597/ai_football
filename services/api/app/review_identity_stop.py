@@ -7,7 +7,7 @@ async def repeated_identity_failure(conn,job_id,attempt_id,issues):
         if not issues.get('text_intent_unverified'):return False
         # A completed whole-league source search plus a failed original-pair
         # search is an explainable unresolved result, never identity approval.
-        return bool(await conn.fetchval(
+        league_complete=bool(await conn.fetchval(
             "SELECT EXISTS(SELECT 1 FROM v2_analysis_traces league "
             "WHERE league.job_id=$1 AND league.payload->>'attempt_id'=($2::uuid)::text "
             "AND league.trace_kind='mcp_search_matches' AND league.payload->>'status'='succeeded' "
@@ -28,6 +28,32 @@ async def repeated_identity_failure(conn,job_id,attempt_id,issues):
             "AND ((original.payload->'parameters')-'team_query'-'competition_query'-'cursor'-'page_size')="
             "((league.payload->'parameters')-'team_query'-'competition_query'-'cursor'-'page_size')))",
             job_id,attempt_id))
+        if league_complete:return True
+        # Sometimes the model correctly reports an unverified original pair
+        # without naming a candidate, so there is no unbound mention. A second
+        # explicit refusal for that same completed search is still evidence.
+        # This only ends unverified; it never creates binding or acceptance.
+        return bool(await conn.fetchval(
+            "WITH calls AS (SELECT trace_kind,payload FROM v2_analysis_traces "
+            "WHERE job_id=$1 AND payload->>'attempt_id'=($2::uuid)::text "
+            "AND payload->>'status'='succeeded' "
+            "AND trace_kind IN ('mcp_search_matches','mcp_resolve_match')), "
+            "pairs AS (SELECT DISTINCT payload->'parameters'->>'team_a' a,"
+            "payload->'parameters'->>'team_b' b FROM calls "
+            "WHERE payload->'parameters'->>'team_a' IS NOT NULL "
+            "AND payload->'parameters'->>'team_b' IS NOT NULL) "
+            "SELECT (SELECT count(*) FROM pairs)=1 "
+            "AND NOT EXISTS(SELECT 1 FROM v2_review_fixture_bindings WHERE job_id=$1 AND attempt_id=$2) "
+            "AND NOT EXISTS(SELECT 1 FROM v2_match_searches WHERE job_id=$1 AND attempt_id=$2 AND NOT complete) "
+            "AND EXISTS(SELECT 1 FROM calls s JOIN calls r ON "
+            "r.payload->'parameters'->>'search_key'=s.payload->>'search_key' "
+            "AND r.payload->'parameters'->>'team_a'=s.payload->'parameters'->>'team_a' "
+            "AND r.payload->'parameters'->>'team_b'=s.payload->'parameters'->>'team_b' "
+            "WHERE s.trace_kind='mcp_search_matches' AND s.payload->>'complete'='true' "
+            "AND s.payload->'resolution'->>'resolved'='false' "
+            "AND s.payload->'resolution'->>'candidate_count'='0' "
+            "AND r.trace_kind='mcp_resolve_match' AND r.payload->'result'->>'resolved'='false' "
+            "AND r.payload->'result'->>'candidate_count'='0')",job_id,attempt_id))
     mentions=issues.get('unbound_mentions')or[]
     if len(mentions)!=1 or issues['unbound_mention_count']!=1:return False
     # Parameters are system-captured tool arguments. A repeated negative
