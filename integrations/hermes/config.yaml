@@ -26,6 +26,9 @@ terminal:
 
 agent:
   max_turns: 128
+  # Chat Completions otherwise defaults to Codex-only intermediate-ack recovery.
+  # Continue an announced-but-unexecuted tool action within the same session.
+  intent_ack_continuation: true
   # The current visual route accepts explicit none; keep other model defaults.
   reasoning_overrides:
     deepseek-v4.1-flash: false
