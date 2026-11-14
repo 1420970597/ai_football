@@ -20,7 +20,7 @@
       "cpus": 0.4
     },
     "collector": {
-      "image": "sha256:5482b33b78ad7c1428cc1b942a811bd5f1588fe10ba92125c753c3c07bf33978",
+      "image": "sha256:85bbba84b5824112ea3e2756a71c3ae991d359f7d2ae904ed527e7311b72576c",
       "command": [
         "python",
         "-m",

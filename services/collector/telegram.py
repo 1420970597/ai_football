@@ -1169,6 +1169,12 @@ class TelegramCollector:
         preserves an earlier callback when a failed delivery is polled again.
         """
         detected_at = detected_at or datetime.now(timezone.utc).isoformat()
+        # A deletion changes an album's content without editing its surviving
+        # Telegram members. Keep that observed revision separate from their
+        # original arrival, and reuse it on retries of the same composition.
+        group_key = self._album_revision_key(chat_id, members)
+        if group_key in self.detection_times:
+            return self.detection_times[group_key]
         stamps = []
         newest_edit = max((getattr(m,'edit_date',None) for m in members
                            if getattr(m,'edit_date',None) is not None),default=None)
@@ -1184,6 +1190,12 @@ class TelegramCollector:
         while len(self.detection_times) > 8192:
             self.detection_times.popitem(last=False)
         return min(stamps, default=detected_at)
+
+    @staticmethod
+    def _album_revision_key(chat_id, members):
+        evidence = [_message_revision_evidence(m) for m in sorted(members, key=lambda m: m.id)]
+        digest = hashlib.sha256(json.dumps(evidence).encode()).hexdigest()
+        return (chat_id, 'album-revision:' + digest)
 
     async def _process_group(self, chat_id: str, source: dict, members: list):
         result, _ = await self._stage_group(chat_id, source, members)
@@ -1569,6 +1581,7 @@ class TelegramCollector:
         chat_id = str(getattr(event, "chat_id", "") or "")
         if chat_id not in self.sources:
             return
+        observed_at = datetime.now(timezone.utc).isoformat()
         try:
             async with self.locks.setdefault(chat_id, asyncio.Lock()):
                 await self._checkpoint(chat_id)
@@ -1589,7 +1602,11 @@ class TelegramCollector:
                         key=getattr(message,'grouped_id',None) or int(message.id)
                         if key in groups:continue
                         groups.add(key)
-                        await self._live_messages(chat_id, [message], entity=entity)
+                        members = await self._expand_album(message, entity)
+                        self.detection_times.setdefault(self._album_revision_key(chat_id, members), observed_at)
+                        while len(self.detection_times) > 8192:
+                            self.detection_times.popitem(last=False)
+                        await self._live_messages(chat_id, members, full_album=True, entity=entity)
         except Exception as exc:
             if isinstance(exc, AuthKeyDuplicatedError):
                 await self._invalidate_active_session()
