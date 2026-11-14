@@ -64,6 +64,7 @@ def transcribe(media):
     """Run only in the separate no-network local-STT Docker container."""
     import av
     from faster_whisper import WhisperModel
+    from opencc import OpenCC
     body=audio_body(media)
     with av.open(io.BytesIO(body))as container:
         duration=float(container.duration/av.time_base)if container.duration else None
@@ -71,16 +72,17 @@ def transcribe(media):
         return {'sha256':media['sha256'],'duration':duration,'reads':[]}
     model=WhisperModel('/model',device='cpu',compute_type='int8',cpu_threads=1,
                        num_workers=1,local_files_only=True)
-    reads=[]
+    reads=[];simplified=OpenCC('t2s')
     for beam in (5,1):
         segments,info=model.transcribe(io.BytesIO(body),beam_size=beam,
-            initial_prompt='以下为简体中文口语原文，逐字转写。',
             condition_on_previous_text=False,vad_filter=False,temperature=0)
         reads.append({'language':info.language,'language_probability':info.language_probability,
-            'segments':[{'start':s.start,'end':s.end,'text':s.text,'avg_logprob':s.avg_logprob,
+            'segments':[{'start':s.start,'end':s.end,'text':simplified.convert(s.text),
+                         'original_text':s.text,'avg_logprob':s.avg_logprob,
                          'no_speech_prob':s.no_speech_prob,'compression_ratio':s.compression_ratio}
                         for s in segments]})
     return {'sha256':media['sha256'],'duration':duration,'reads':reads,
+            'script_normalization':'OpenCC-1.1.9:t2s',
             'model_revision':'Systran/faster-whisper-small@536b0662742c02347bc0e980a01041f333bce120'}
 
 
