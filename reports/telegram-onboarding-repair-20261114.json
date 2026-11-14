@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-14T00:01:16.820424+00:00",
+  "generated_at": "2026-11-14T00:06:45.162713+00:00",
   "scope": "telegram-admin-channel-onboarding-and-reception",
   "source_revisions": {
     "api": "85cf28a57b9d18d639ba5b55d45724aa09ba26eb",
@@ -56,7 +56,7 @@
   },
   "runtime_hashes_verified": true,
   "production": {
-    "at": "2026-11-14T00:01:16.820424+00:00",
+    "at": "2026-11-14T00:06:45.162713+00:00",
     "read_only": "on",
     "api_ready_status": 200,
     "api_runtime_sha256": {
@@ -66,23 +66,23 @@
     "migrations": 38,
     "connected": true,
     "authorized": true,
-    "sources_loaded_at": "2026-11-14T00:01:12.911081+00:00",
+    "sources_loaded_at": "2026-11-14T00:06:39.533176+00:00",
     "source_count": 17,
     "active_lease_count": 17,
     "background_reads": {
-      "requests": 142,
+      "requests": 281,
       "flood_waits": 0,
-      "retry_after": 2.0,
+      "retry_after": 0,
       "minimum_interval_seconds": 2.0
     },
     "live": {
-      "received": 198,
-      "staged": 2,
+      "received": 415,
+      "staged": 9,
       "deferred": 0,
-      "unmapped_source": 189,
-      "ignored_author": 7,
-      "last_received_at": "2026-11-14T00:01:06.873440+00:00",
-      "last_staged_at": "2026-11-13T23:58:10.796033+00:00",
+      "unmapped_source": 396,
+      "ignored_author": 10,
+      "last_received_at": "2026-11-14T00:06:42.652371+00:00",
+      "last_staged_at": "2026-11-14T00:06:38.661320+00:00",
       "last_deferred_at": null,
       "last_deferred_category": null
     },
@@ -91,27 +91,37 @@
       "mapping": {
         "enabled": true,
         "expert_enabled": true,
-        "backfill_cursor": 78652,
+        "backfill_cursor": 78612,
         "backfill_until_id": 78661,
         "backfill_completed_at": null
       },
       "events": {
-        "versions": 10,
-        "projected": 10,
-        "ready": 10,
-        "media_pending": 0,
-        "last_received": "2026-11-14 00:00:12.494590+00:00"
+        "versions": 47,
+        "projected": 47,
+        "ready": 41,
+        "media_pending": 5,
+        "last_received": "2026-11-14 00:06:01.120407+00:00"
       },
       "jobs": [
         {
           "state": "unresolved",
           "review_mode": "historical_replay",
           "last_error": "historical_backlog_auto_suppressed_by_operator",
-          "count": 10
+          "count": 41
         }
       ]
     },
     "nonhistorical_reviews_after_first_release": [
+      {
+        "state": "failed",
+        "last_error": "source_edited",
+        "count": 2
+      },
+      {
+        "state": "running",
+        "last_error": null,
+        "count": 2
+      },
       {
         "state": "succeeded",
         "last_error": null,
@@ -125,7 +135,7 @@
       {
         "state": "unresolved",
         "last_error": null,
-        "count": 48
+        "count": 51
       }
     ],
     "funded_test_orders": 0,
@@ -133,19 +143,46 @@
   },
   "telegram_health": {
     "state": "connected",
-    "last_error": "",
+    "last_error": "source_unavailable",
     "source_count": 17,
-    "degraded": false,
+    "degraded": true,
     "media_cleanup": {
       "state": "ready",
       "candidates": 0,
       "deleted": 0
     },
-    "last_success_at": "2026-11-14T00:00:14.518675+00:00"
+    "last_success_at": "2026-11-14T00:06:04.191273+00:00"
+  },
+  "latest_message_coverage": {
+    "at": "2026-11-14T00:05:54.927885+00:00",
+    "sources": [
+      {
+        "source_ref": "dd4aeb679e1d",
+        "state": "ready",
+        "checked": 25,
+        "trusted_normal": 0,
+        "trusted_normal_missing": 0
+      },
+      {
+        "source_ref": "ad1d1535d47e",
+        "state": "ready",
+        "checked": 25,
+        "trusted_normal": 6,
+        "trusted_normal_missing": 0
+      },
+      {
+        "source_ref": "59eac4dc9248",
+        "state": "ready",
+        "checked": 25,
+        "trusted_normal": 24,
+        "trusted_normal_missing": 0
+      }
+    ]
   },
   "source_state_counts": {
-    "caught_up": 14,
-    "catching_up": 3
+    "caught_up": 15,
+    "recent_deferred": 1,
+    "catching_up": 1
   },
   "production_logs_since_collector_release": {
     "version_content_conflicts": 0,
