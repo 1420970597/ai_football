@@ -40,8 +40,17 @@ class HermesPromptBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('review_id', prompt)
         self.assertIn('attempt_id', prompt)
         self.assertIn('不可信', prompt)
-        self.assertIn('bounded_source_search.complete=true',prompt)
-        self.assertIn('不重复resolve、改名或扩大日期',prompt)
+        self.assertEqual('eb6a7f03068c80a8f84aad0b3810c4e011e0cbae82b47d767b2a7fb2f5b2975f',
+                         __import__('hashlib').sha256(prompt.encode()).hexdigest())
+
+    async def test_complete_source_stop_guidance_is_per_attempt_and_preserves_attested_prompt(self):
+        from datetime import datetime, timezone
+        message={'source_name':'isolated','display_nickname':'isolated','posted_at':datetime.now(timezone.utc),
+                 'raw_text':'没有唯一身份的原文','media_objects':[],'reply_context':{}}
+        parts=await hermes_client._content_parts(message,uuid.uuid4(),uuid.uuid4())
+        self.assertIn('bounded_source_search.complete=true且retry_same_scope=false',parts[0]['text'])
+        self.assertIn('不重复resolve、改名或扩大日期',parts[0]['text'])
+        self.assertIn('其它独立项继续核验',parts[0]['text'])
 
     async def test_full_skill_keeps_visual_identity_period_and_receipt_rules(self):
         root = Path(__file__).resolve().parents[1]
