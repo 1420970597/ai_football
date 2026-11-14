@@ -13,6 +13,16 @@ from window_audit import audit_directory
 from continuous_watch import atomic
 
 
+def review_command(container=None):
+    """Semantic audit has its own CPU/memory cgroup and no business tools."""
+    target=container or os.environ.get('EXPERT_AUDIT_HERMES_CONTAINER','ai-football-tg-semantic-hermes')
+    if target=='ai-football-v2-hermes-1':
+        raise ValueError('audit_must_not_share_realtime_hermes')
+    if not target or not target[0].isalnum()or any(not(c.isalnum()or c in '_.-')for c in target):
+        raise ValueError('invalid_audit_container')
+    return ['docker','exec','-i','--user','hermes',target,'nice','-n','19','python','-c']
+
+
 def pending_messages(directory):
     summary=json.loads((directory/'snapshot-summary.json').read_text())
     body=Path(summary['snapshot_file']).read_bytes()
@@ -33,8 +43,8 @@ def review_message(source,message):
     prepared=subprocess.run(['docker','exec','-i','ai-football-v2-api-1','python','-c',prep],
         input=json.dumps({'message':message}).encode(),capture_output=True,timeout=40,check=False)
     if prepared.returncode:raise RuntimeError('prepare_failed')
-    result=subprocess.run(['docker','exec','-i','--user','hermes','ai-football-v2-hermes-1',
-        'nice','-n','19','python','-c',review],input=prepared.stdout,capture_output=True,timeout=65,check=False)
+    result=subprocess.run(review_command()+[review],input=prepared.stdout,
+        capture_output=True,timeout=65,check=False)
     if result.returncode:raise RuntimeError('review_failed')
     value=json.loads(result.stdout)
     if value.get('classification')not in CLASSES or value.get('verdict')not in VERDICTS:
