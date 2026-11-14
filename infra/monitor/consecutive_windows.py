@@ -41,6 +41,9 @@ def record(state: dict, evidence: dict) -> dict:
     if previous is not None and start < previous:
         raise ValueError('Cannot import historical windows into the streak')
     passed, reasons = evaluate(evidence)
+    if state.get('repair_at')is not None and start<state['repair_at']:
+        passed=False
+        reasons.append('repair_during_window')
     streak = state.get('streak', 0) if previous == start else 0
     streak = streak+1 if passed else 0
     windows[key] = dict(evidence, passed=passed, reasons=reasons)

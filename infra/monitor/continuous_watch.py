@@ -12,7 +12,7 @@ from pathlib import Path
 import subprocess
 import time
 
-from consecutive_windows import record
+from consecutive_windows import record,repaired
 from save_window import save
 
 
@@ -37,6 +37,13 @@ def main():
     while not state.get('complete'):
         now=int(time.time())
         failure=None
+        for repairfile in sorted(root.glob('repair-*.json')):
+            repair=json.loads(repairfile.read_text())
+            if type(repair.get('at'))is not int or not isinstance(repair.get('revision'),str):
+                raise ValueError('Invalid repair marker')
+            if repair['at']>state.get('repair_at',0):
+                state=repaired(state,revision=repair['revision'],at=repair['at'])
+                atomic(statefile,state)
         for end in range(first+1800,now-30+1,1800):
             directory=root/str(end-1800);summaryfile=directory/'snapshot-summary.json'
             if not summaryfile.exists():

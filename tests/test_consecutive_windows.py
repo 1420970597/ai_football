@@ -44,3 +44,10 @@ class ConsecutiveWindowTests(unittest.TestCase):
         state=json.loads(json.dumps(record({},good(3600))))
         self.assertEqual(2,record(state,good(5400))['streak'])
         with self.assertRaises(ValueError):record(state,good(1800))
+
+    def test_window_straddling_repair_cannot_count(self):
+        state=repaired({},revision='actual-live-repair',at=4000)
+        state=record(state,good(3600))
+        self.assertEqual(0,state['streak'])
+        self.assertIn('repair_during_window',state['windows']['3600']['reasons'])
+        self.assertEqual(1,record(state,good(5400))['streak'])

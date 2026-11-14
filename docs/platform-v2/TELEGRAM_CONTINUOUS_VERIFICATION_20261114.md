@@ -110,3 +110,8 @@
 - 独立审计分离为API只读准备、Hermes无工具无持久会话判断、Hermes内存有界视频抽样；读取原消息及审核时引用图片、重放精确工具快照，输出只有分类/原因码/哈希。没有写入推荐、创建会话或外发原文报告。
 - 冻结Docker检查命令sh infra/test/run.sh tests.test_independent_audit tests.test_audit_video tests.test_consecutive_windows tests.test_window_snapshot tests.test_save_window；15项、0.035秒退出0，证据.runtime/test-evidence/3751479/backend-tests.json。先前视频/窗口12项回归退出0，3722671及3743891。
 - 02:30后截至02:38尚无新授权消息，不能提前计为成功。上游核对和独立历史失败原因审计继续；72小时原始内容保留规则不变。
+
+## 02:47 UTC：修复跨窗不得计成功
+
+- 连续状态新增实际发布修复标记；任何起点早于最后修复时间的窗口，即便其它审计都通过，也明确repair_during_window并清零。保留之前失败窗口，不把半窗旧代码与半窗新代码当作完整新版本证据。
+- Docker冻结16项、0.015秒退出0，.runtime/test-evidence/3763383/backend-tests.json；覆盖跨窗修复拒绝、重启、重复、失败不可改写、原始证据保留与独立审计隔离。下一步仅重启本任务监控加载新状态机，不重启业务。
