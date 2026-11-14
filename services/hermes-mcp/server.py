@@ -643,7 +643,8 @@ async def _search_source_scopes(payload):
             result['bounded_source_search'] = {
                 'complete': True, 'retry_same_scope': False,
                 'reason': 'no_verified_source_pair_in_complete_scopes',
-                'scope': 'original_sport_competition_and_time_only'}
+                'scope': 'original_sport_competition_and_time_only',
+                'source_image_check': '若来源含图，重新逐字看原图双方及梯队；纠正读错字才可提交新原名，不按候选补名。原图仍相同则保留未解决，不重复同参数resolve或扩大日期。'}
     return result
 
 
@@ -678,7 +679,8 @@ async def _review_batch_item(review_id, attempt_id, item):
         cursor = result.get('next_cursor')
         if result.get('search_complete') is True and cursor is None:
             resolution = result.get('resolution') or {}
-            if resolution.get('resolved') is not True and item.source_phase is not None:
+            if (resolution.get('resolved') is not True and item.source_phase is not None
+                    and resolution.get('candidate_count') != 0):
                 search_key = result.get('search_key')
                 if isinstance(search_key, str) and re.fullmatch(r'[0-9a-f]{64}', search_key):
                     resolution = await _post('resolve_match', {

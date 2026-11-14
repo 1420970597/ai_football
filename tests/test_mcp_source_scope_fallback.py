@@ -32,6 +32,7 @@ class SourceScopeFallbackTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.payload()[key],body[key])
         self.assertFalse(value['resolution']['resolved'])
         self.assertFalse(value['bounded_source_search']['retry_same_scope'])
+        self.assertIn('不按候选补名',value['bounded_source_search']['source_image_check'])
         self.assertEqual(2,len(value['prior_source_search_scopes']))
 
     async def test_incomplete_fallback_keeps_cursor_and_exact_scope_without_completion_claim(self):
@@ -80,3 +81,14 @@ class SourceScopeFallbackTests(unittest.IsolatedAsyncioTestCase):
                 await self.server._search_source_scopes(self.payload())
         self.assertEqual(first,json.loads(str(caught.exception))['completed_receipt'])
         self.assertEqual(2,calls.await_count)
+
+    async def test_source_phase_does_not_retry_an_empty_verified_identity_set(self):
+        item=self.server.SourceMatchIntent(team_a='source A',team_b='source B',
+            competition_query='source league',sport='football',source_phase='live',
+            from_utc='2026-11-14T00:00:00Z',to_utc='2026-11-17T00:00:00Z',
+            market_kind='total',market_query='大0.5',period=None,source_periods=[],evidence_text='source')
+        calls=AsyncMock(return_value=self.response())
+        with patch.object(self.server,'_post',calls):
+            value=await self.server._review_batch_item('job','attempt',item)
+        self.assertEqual(1,calls.await_count)
+        self.assertFalse(value['resolution']['resolved'])
