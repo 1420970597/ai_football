@@ -149,6 +149,7 @@ class TelegramCollector:
             "last_deferred_at": None, "last_deferred_category": None,
         }
         self.live_media_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self.live_album_tasks: dict[tuple[str,str],asyncio.Task] = {}
         self.media_transfers: set[tuple[str, str]] = set()
         self.media_slots = asyncio.Semaphore(LIVE_MEDIA_CONCURRENCY)
         self.retry_slots = asyncio.Semaphore(MEDIA_RETRY_CONCURRENCY)
@@ -410,8 +411,9 @@ class TelegramCollector:
         return checkpoint
 
     async def _cancel_live_media_tasks(self):
-        tasks = list(self.live_media_tasks.values())
+        tasks = list(self.live_media_tasks.values())+list(self.live_album_tasks.values())
         self.live_media_tasks.clear()
+        self.live_album_tasks.clear()
         for task in tasks:
             task.cancel()
         if tasks:
@@ -626,6 +628,30 @@ class TelegramCollector:
         return {'state': 'ready', 'messages': items, 'complete': complete,
                 'next_cursor': None if complete else int(page[-1].id),
                 'window_start': start.isoformat(), 'window_end': end.isoformat()}
+
+    async def _inspect_media(self,entity,source,identifier):
+        """Private, read-only bounded evidence for unsupported-media audits."""
+        if type(identifier)is not int or identifier<=0:return {'state':'invalid_message'}
+        async with self.background_reads.slot():
+            message=await self.client.get_messages(entity,ids=identifier)
+        if not message:return {'state':'missing'}
+        if _trusted_message_author(str(utils.get_peer_id(entity)),source,message)is None:
+            return {'state':'untrusted'}
+        posted=_utc(message.date)
+        if posted+timedelta(hours=72)<=datetime.now(timezone.utc):return {'state':'expired'}
+        file=getattr(message,'file',None);mime=getattr(file,'mime_type',None)
+        size=int(getattr(file,'size',0)or 0)
+        if mime not in {'video/webm','video/mp4','application/x-tgsticker'}or not 0<size<=MAX_MEDIA_BYTES:
+            return {'state':'unsupported_for_visual_audit'}
+        body=bytearray()
+        async with asyncio.timeout(12):
+            async for chunk in self.client.iter_download(message.media,request_size=256*1024):
+                body.extend(chunk)
+                if len(body)>MAX_MEDIA_BYTES:raise ValueError('audit_media_limit')
+        if len(body)!=size:raise ValueError('audit_media_size_mismatch')
+        import base64
+        return {'state':'ready','posted_at':posted.isoformat(),'mime_type':mime,
+                'sha256':hashlib.sha256(body).hexdigest(),'data_base64':base64.b64encode(body).decode()}
 
     async def _refresh_directory(self, chat_id: str, source: dict):
         if not callable(getattr(self.backend, 'directory', None)):
@@ -1354,12 +1380,37 @@ class TelegramCollector:
         if getattr(event.message, "grouped_id", None):
             # 新相册由 Album 回调完整聚合；编辑相册仍需读取全组。
             if isinstance(event, events.NewMessage.Event) and not getattr(event.message, "edit_date", None):
+                if source and _trusted_message_author(chat_id,source,event.message)is not None:
+                    self._schedule_album_fallback(chat_id,event.message,getattr(event,'chat',None))
                 return
         await self._live_messages(chat_id, [event.message], entity=getattr(event, 'chat', None))
 
     async def _on_album(self, event):
+        key=(str(event.chat_id),str(getattr(event.messages[0],'grouped_id',None)))
+        fallback=self.live_album_tasks.pop(key,None)
+        if fallback and fallback is not asyncio.current_task():
+            fallback.cancel()
+            await asyncio.gather(fallback,return_exceptions=True)
         await self._live_messages(str(event.chat_id), list(event.messages), full_album=True,
                                   entity=getattr(event, 'chat', None))
+
+    def _schedule_album_fallback(self,chat_id,message,entity):
+        key=(chat_id,str(message.grouped_id))
+        if key in self.live_album_tasks or len(self.live_album_tasks)>=32:return
+        async def collect():
+            await asyncio.sleep(.75)
+            async with asyncio.timeout(4):
+                peer=entity if entity is not None else await self._entity(chat_id)
+                members=await self._expand_album(message,peer)
+                await self._live_messages(chat_id,members,full_album=True,entity=peer)
+                log.info('Telegram album fallback complete members=%s',len(members))
+        task=asyncio.create_task(collect());self.live_album_tasks[key]=task
+        def finished(done):
+            if self.live_album_tasks.get(key)is done:self.live_album_tasks.pop(key,None)
+            try:done.result()
+            except asyncio.CancelledError:pass
+            except Exception as exc:log.warning('Telegram album fallback deferred category=%s',type(exc).__name__)
+        task.add_done_callback(finished)
 
     async def _live_messages(self, chat_id, members, full_album=False, entity=None):
         delivery = self.live_event_delivery
@@ -1733,6 +1784,10 @@ class TelegramCollector:
                         chat = info['chat_id']
                         source = dict(self.sources.get(chat, {}), verified_broadcast=_broadcast_channel(entity))
                         return info | await self._inspect_window(entity, source, payload)
+                    if 'inspect_media_message_id'in payload:
+                        chat=info['chat_id']
+                        source=dict(self.sources.get(chat,{}),verified_broadcast=_broadcast_channel(entity))
+                        return await self._inspect_media(entity,source,payload['inspect_media_message_id'])
                     if payload.get('inspect_messages') is True:
                         chat = info['chat_id']
                         source = dict(self.sources.get(chat, {}), verified_broadcast=_broadcast_channel(entity))
