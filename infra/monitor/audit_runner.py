@@ -1,4 +1,5 @@
-"""Audit closed private windows in a single Docker-only, read-only lane."""
+"""Audit closed private windows with bounded Docker-only, read-only work."""
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import fcntl
 import hashlib
@@ -58,15 +59,30 @@ def audit_window(source,directory):
     if(directory/'audit.json').exists():return
     summary,messages=pending_messages(directory)
     destination=directory/'independent';destination.mkdir(exist_ok=True,mode=0o700)
+    pending=[]
     for message in messages:
         ref=hashlib.sha256(str(message['id']).encode()).hexdigest()[:12]
         target=destination/(ref+'.json')
         if target.exists():continue
-        # Transport failures may be retried; a valid uncertain verdict is kept.
-        value=review_message(source,message)
-        value.update(message_ref=ref,snapshot_sha256=summary['snapshot_sha256'])
-        atomic(target,value)
-        print(json.dumps({'message_ref':ref,'verdict':value['verdict']}),flush=True)
+        pending.append((message,ref,target))
+    errors=[]
+    # Two independent reads share the existing isolated 0.30 CPU/768 MiB
+    # cgroup. Model network waits overlap; no business concurrency changes.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        jobs={executor.submit(review_message,source,message):(ref,target)
+              for message,ref,target in pending}
+        for job in as_completed(jobs):
+            ref,target=jobs[job]
+            try:value=job.result()
+            except Exception as exc:
+                errors.append(type(exc).__name__)
+                continue
+            # Transport failures may retry; valid uncertainty is immutable.
+            value.update(message_ref=ref,snapshot_sha256=summary['snapshot_sha256'])
+            if target.exists():raise ValueError('audit_result_already_exists')
+            atomic(target,value)
+            print(json.dumps({'message_ref':ref,'verdict':value['verdict']}),flush=True)
+    if errors:raise RuntimeError('audit_transport_incomplete')
     value=audit_directory(directory)
     if not value['audit_complete']:raise ValueError('audit_incomplete')
     atomic(directory/'audit.json',value)
