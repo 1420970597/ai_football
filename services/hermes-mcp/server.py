@@ -854,6 +854,11 @@ def _batch_result_view(result, item, *, display_budget=14400):
                 'requires_manual_market_review': not known_scope,
                 'not_native_complete_inventory': True},
         }
+        if isinstance(markets.get('source_scope_unavailable'),dict):
+            # Preserve the already-verified terminal source scope. Dropping
+            # this guidance here made the model read the same empty filter
+            # again despite a complete native zero-quote response.
+            view['market_result']['source_scope_unavailable'] = dict(markets['source_scope_unavailable'])
         if isinstance(markets.get('fixture'), dict):
             view['market_result']['fixture'] = fixture_view(markets['fixture'])
         if isinstance(markets.get('refresh'), dict):

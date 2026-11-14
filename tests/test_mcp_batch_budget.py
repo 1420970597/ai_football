@@ -155,6 +155,20 @@ class BatchBudgetTests(unittest.IsolatedAsyncioTestCase):
             else:
                 self.assertEqual(native[index]['market_result']['markets'], restore_rows(market['source_selection_quotes']))
 
+    async def test_complete_empty_source_scope_keeps_no_repeat_guidance_in_batch_view(self):
+        native = self.native(count=0)
+        native.pop('record_result')
+        guidance = dict(reason='no_quote_in_complete_source_scope',retry_same_scope=False,
+                        relax_source_period=False,action='report_unresolved_source_option')
+        native['market_result']['source_scope_unavailable'] = guidance
+        native['source_intent_recording'] = dict(attempted=False,reason='no_unique_source_option')
+        before = copy.deepcopy(native)
+        view = self.server._batch_result_view(native,self.item())
+        self.assertEqual(before,native)
+        self.assertEqual(guidance,view['market_result']['source_scope_unavailable'])
+        self.assertEqual(0,view['market_result']['native_market_coverage']['matched_quotes'])
+        self.assertNotIn('record_result',view)
+
     async def test_short_receipt_never_hides_rejection_unknown_or_inconsistent_scope(self):
         native = self.native(count=1)
         native['source_intent_recording'] = {'attempted': True}
