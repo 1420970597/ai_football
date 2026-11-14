@@ -32,7 +32,7 @@
       "cpus": 0.5
     },
     "review-worker": {
-      "image": "sha256:ea313f4e538346991ad608b55a53e70cbc5ce157fe639e65f5ab2ff0dc3f5991",
+      "image": "sha256:233f55e7d7b19b68f83d4b1ea0647fb31f66d68489e7782a9d86e6bff369d700",
       "command": [
         "python",
         "-m",
@@ -62,7 +62,7 @@
       "cpus": 0.4
     },
     "hermes-mcp": {
-      "image": "sha256:8502bdd125b05415e80a0eb9adfd30091f91e232e25802b19697bc576c5adf78"
+      "image": "sha256:5f55159d63b918a9e5723433635e90b79506a76da459b3626af1e0bf3e10a6f1"
     },
     "hermes": {
       "image": "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d",
