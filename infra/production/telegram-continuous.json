@@ -49,7 +49,7 @@
       "cpus": 0.25
     },
     "local-mcp-api": {
-      "image": "sha256:8d0451162f0c002b277098fff6b54d0ac12f5f2e92931e9449aab9174ec59866",
+      "image": "sha256:91aae88967fb963c3f40bac554076411858bb7a274f7462a1cf34e519b3ce320",
       "command": [
         "uvicorn",
         "app.mcp_app:app",

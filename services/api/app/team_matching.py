@@ -101,11 +101,18 @@ def team_search_variants(value: str, *, sport: str | None = None, competition: s
 
 def verified_team_search_variants(value: str, *, sport: str | None = None, competition: str | None = None) -> dict[str, tuple[str, ...]]:
     """Keep verified retrieval vocabulary tied to the candidate's actual sport."""
+    from .competition_names import competition_query_matches
     normalized = normalize_team_name(value)
     variants = {}
     for group in VERIFIED_TEAM_NAMES:
         names = {normalize_team_name(name) for name in group['names']}
-        if _verified_scope(group, sport, competition) and normalized in names and (sport is None or sport == group['sport']):
+        # An umbrella query may retrieve its explicitly enumerated divisions.
+        # Binding still compares both full identities against the candidate's
+        # actual division through _verified_scope, never the umbrella label.
+        in_scope = (_verified_scope(group, sport, competition) or
+                    (bool(group.get('competition')) and competition_query_matches(
+                        competition or '', group['competition'], sport)))
+        if in_scope and normalized in names and (sport is None or sport == group['sport']):
             variants.setdefault(group['sport'], set()).update(names)
     return {key: tuple(sorted(values)) for key, values in variants.items()}
 

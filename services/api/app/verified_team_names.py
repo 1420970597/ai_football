@@ -5,8 +5,18 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-14.11'
+REGISTRY_VERSION = '2026-11-14.12'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport':'football','competition':'欧洲国家联赛B',
+        'names':('波黑','波斯尼亚和黑塞哥维那','波斯尼亞和黑塞哥維那'),
+        'reference':'zhwiki:522238:95172807+nfsbih:men:a-national-team:20261114',
+    },
+    {
+        'sport':'football','competition':'欧洲国家联赛B',
+        'names':('威尔士','威尔斯','威爾斯','Wales'),
+        'reference':'zhwiki:193578:93417827+faw:20261114',
+    },
     {
         'sport':'football','competition':'西班牙女子甲级联赛',
         'names':('特内里费体育(女)','科斯塔阿德赫特内里费(女)',
