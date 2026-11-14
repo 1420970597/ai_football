@@ -220,6 +220,8 @@ async def _content_parts(message: dict, review_id: str, attempt_id: str, *, acce
     parts: list[dict] = [{"type": "text", "text": prompt}]
     # Per-attempt guidance does not mutate the attested system-prompt artifact.
     parts[0]['text'] += (
+        '\n原文明示滚球/走地且全量候选同队同时间分赛前/滚球时，'
+        'resolve_match传source_phase=live消歧；阶段未知不传，不从可售性推断。'
         '\n执行要求：直接调用授权工具，不输出计划或待调用宣言。'
         '来源完整的单场或多场total/handicap优先review_match_batch（可1项），'
         '携带原文双方、体育项目、时间范围、来源期间和所选线/方向；未知字段不猜。'

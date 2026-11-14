@@ -7,6 +7,7 @@ import test_reviews as support
 class SourceIdentityTests(unittest.TestCase):
     def test_missing_reserve_women_and_age_cannot_be_invented(self):
         for team,source in [('惠灵顿凤凰后备队','惠灵顿凤凰VS奥克兰城'),
+                            ('甲队(女)','甲队 VS 乙队'),('甲队（女）','甲队 VS 乙队'),
                             ('Alpha Reserves','Alpha vs Beta'),('Alpha Women','Alpha vs Beta'),
                             ('Alpha U23','Alpha vs Beta'),('Alpha U21','Alpha U19 vs Beta')]:
             with self.subTest(team=team):self.assertTrue(added_squad_markers(team,'Beta',source))
@@ -16,9 +17,14 @@ class SourceIdentityTests(unittest.TestCase):
 
     def test_actual_source_markers_and_ordinary_names_are_preserved(self):
         for team,source in [('惠灵顿凤凰后备队','惠灵顿凤凰后备队VS奥克兰城'),
+                            ('甲队(女)','甲队(女) VS 乙队'),('甲队（女）','甲队（女） VS 乙队'),
+                            ('博乐大学U21','博乐大学 U21 VS 乙队'),
                             ('Alpha U23','Alpha U23 vs Beta'),('Alpha','Alpha vs Beta'),
                             ('女队甲','女子联赛 女队甲对乙队')]:
             with self.subTest(team=team):self.assertFalse(added_squad_markers(team,'Beta',source))
+
+    def test_age_token_prefix_cannot_supply_another_age(self):
+        self.assertTrue(added_squad_markers('Alpha U2','Beta','Alpha U21 vs Beta'))
 
 
 @unittest.skipUnless(os.environ.get('TEST_DATABASE_ADMIN_URL'),'requires isolated PG')
@@ -40,3 +46,14 @@ class SourceIdentityDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('source_squad_identity_unverified',result['reason'])
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_candidate_parenthesized_women_marker_requires_original_identity(self):
+        await self.fixture(1,home_team='甲队(女)',away_team='乙队(女)')
+        await self.pool.execute('UPDATE v2_expert_messages SET raw_text=$2 WHERE id=$1',
+            self.message,'甲队VS乙队 全场大2.5')
+        page=(await self.post('search_matches',team_query='甲队')).json()
+        result=(await self.post('resolve_match',search_key=page['search_key'],
+            team_a='甲队(女)',team_b='乙队(女)')).json()
+        self.assertFalse(result['resolved'])
+        self.assertEqual('source_squad_identity_unverified',result['reason'])
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))

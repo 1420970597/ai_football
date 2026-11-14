@@ -40,10 +40,11 @@ async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
         if body.source_phase is not None and fixture.get('phase') != body.source_phase:
             continue
         sport = fixture.get('sport')
-        home_match = team_name_matches(body.team_a, fixture['home_team'], fixture.get('home_aliases', []), sport=sport)
-        away_match = team_name_matches(body.team_a, fixture['away_team'], fixture.get('away_aliases', []), sport=sport)
-        home_other = team_name_matches(body.team_b, fixture['home_team'], fixture.get('home_aliases', []), sport=sport)
-        away_other = team_name_matches(body.team_b, fixture['away_team'], fixture.get('away_aliases', []), sport=sport)
+        identity_scope = {'sport': sport, 'competition': fixture.get('competition_name')}
+        home_match = team_name_matches(body.team_a, fixture['home_team'], fixture.get('home_aliases', []), **identity_scope)
+        away_match = team_name_matches(body.team_a, fixture['away_team'], fixture.get('away_aliases', []), **identity_scope)
+        home_other = team_name_matches(body.team_b, fixture['home_team'], fixture.get('home_aliases', []), **identity_scope)
+        away_other = team_name_matches(body.team_b, fixture['away_team'], fixture.get('away_aliases', []), **identity_scope)
         if not ((home_match and away_other) or (away_match and home_other)):
             continue
         if body.competition:
@@ -87,10 +88,11 @@ async def resolve_candidates(conn, body: ResolveInput, rows) -> dict:
     # assume that source order equals provider home/away order. Overlapping
     # names can identify one fixture without proving a unique orientation.
     source_sides = None
-    home_a = team_name_matches(body.team_a, projected['home_team'], projected.get('home_aliases', []), sport=projected.get('sport'))
-    away_a = team_name_matches(body.team_a, projected['away_team'], projected.get('away_aliases', []), sport=projected.get('sport'))
-    home_b = team_name_matches(body.team_b, projected['home_team'], projected.get('home_aliases', []), sport=projected.get('sport'))
-    away_b = team_name_matches(body.team_b, projected['away_team'], projected.get('away_aliases', []), sport=projected.get('sport'))
+    identity_scope = {'sport': projected.get('sport'), 'competition': projected.get('competition_name')}
+    home_a = team_name_matches(body.team_a, projected['home_team'], projected.get('home_aliases', []), **identity_scope)
+    away_a = team_name_matches(body.team_a, projected['away_team'], projected.get('away_aliases', []), **identity_scope)
+    home_b = team_name_matches(body.team_b, projected['home_team'], projected.get('home_aliases', []), **identity_scope)
+    away_b = team_name_matches(body.team_b, projected['away_team'], projected.get('away_aliases', []), **identity_scope)
     if (home_a and away_b) != (away_a and home_b):
         source_sides = ({'team_a': 'home', 'team_b': 'away'} if home_a and away_b
                         else {'team_a': 'away', 'team_b': 'home'})

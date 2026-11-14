@@ -70,6 +70,8 @@ async def snapshot():
         rows=await conn.fetch(
             "SELECT m.id,m.source_id,m.expert_id,m.raw_text,m.reply_context,m.media_objects,m.media_state,"
             "m.platform_message_id,m.revision,m.posted_at,m.detected_at,m.deleted_at,m.raw_content_expired_at,"
+            "(SELECT ev.content->'media_manifest' FROM v2_telegram_events ev WHERE ev.message_id=m.id "
+            "AND ev.is_current ORDER BY ev.received_at DESC LIMIT 1) media_manifest,"
             "j.id job_id,j.state,j.review_mode,j.last_error,j.attempt_id,"
             "(SELECT jsonb_agg(to_jsonb(es)) FROM v2_expert_signals es WHERE es.message_id=m.id) signals "
             "FROM v2_expert_messages m LEFT JOIN v2_analysis_jobs j ON j.message_id=m.id "

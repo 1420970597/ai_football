@@ -5,8 +5,28 @@ Cross-publisher labels require an explicit evidence chain; adding a squad
 suffix or another sport requires independent identity evidence.
 """
 
-REGISTRY_VERSION = '2026-11-10.3'
+REGISTRY_VERSION = '2026-11-14.1'
 VERIFIED_TEAM_NAMES = (
+    {
+        'sport': 'basketball', 'competition': 'nba',
+        'names': ('国王', '萨克拉门托国王'),
+        'reference': 'hupu:kings:20261114',
+    },
+    {
+        'sport': 'basketball', 'competition': 'nba',
+        'names': ('开拓者', '波特兰开拓者'),
+        'reference': 'hupu:blazers:20261114',
+    },
+    {
+        'sport': 'basketball', 'competition': 'nba',
+        'names': ('快船', '洛杉矶快船'),
+        'reference': 'hupu:clippers:20261114',
+    },
+    {
+        'sport': 'basketball', 'competition': 'nba',
+        'names': ('雷霆', '俄克拉荷马城雷霆'),
+        'reference': 'hupu:thunder:20261114',
+    },
     {
         'sport': 'football',
         'names': ('恰斯拉夫', '卡拉夫', 'FK Caslav'),

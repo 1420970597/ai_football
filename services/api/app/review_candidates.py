@@ -69,16 +69,17 @@ async def snapshot_candidates(conn, *, review_id, search_key, phase, team_query,
     # A verified short name denotes this exact competition, not a similarly
     # prefixed youth/women's competition. Ordinary queries keep substring search.
     competition_pattern = competition_term
-    if competition_term and competition_term == normalize_team_name(competition):
+    if (competition_term and competition_term == normalize_team_name(competition)
+            and not (sport == 'basketball' and competition_term == 'nba')):
         competition_pattern = '%' + competition_term + '%'
-    verified_variants = verified_team_search_variants(team_query, sport=sport)
+    verified_variants = verified_team_search_variants(team_query, sport=sport, competition=competition)
     verified_patterns = {key: ['%'+name+'%' for name in names] for key, names in verified_variants.items()}
     chinese_source, chinese_target = sql_chinese_fold(' '.join((team_query, competition_term,
         *(name for names in verified_variants.values() for name in names))))
     # Telegram layouts write "雪兰莪 U20" while the provider stores "雪兰莪U20".
     # The compact form only widens candidate recall; resolution still compares
     # the complete identity of both teams, squads and age groups.
-    variants = dict.fromkeys(team_search_variants(team_query, sport=sport))
+    variants = dict.fromkeys(team_search_variants(team_query, sport=sport, competition=competition))
     variants.update(dict.fromkeys(compact_chinese_boundaries(value) for value in tuple(variants)))
     args = (review_id, search_key, phase, '%'+team_query.strip().casefold()+'%',
             ['%'+v+'%' for v in variants],

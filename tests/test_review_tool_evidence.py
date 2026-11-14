@@ -281,6 +281,8 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(3, len(data['items']))
         for home, away, fixture_id in [('Club A', 'Club B', 'fixture-1'),
             ('Club A U21', 'Club B U21', 'fixture-3'), ('Club A Women', 'Club B Women', 'fixture-4')]:
+            await self.pool.execute('UPDATE v2_expert_messages SET raw_text=$2 WHERE id=$1',
+                self.message,home+' VS '+away)
             match = await self.post('resolve_match', search_key=data['search_key'], team_a=home, team_b=away)
             self.assertEqual(fixture_id, match.json()['fixture']['id'])
         unknown = await self.post('search_matches', team_query='Club', sport='source_31')
@@ -476,7 +478,8 @@ class ToolEvidenceAPITests(unittest.IsolatedAsyncioTestCase):
             response = await self.post('search_matches', team_query='Alpha', sport='football',
                                        team_a='Alpha1', team_b='Beta1')
         self.assertEqual(200,response.status_code,response.text)
-        self.assertEqual(9,counted_pool.commands)
+        # Includes one source-identity evidence read, reusing the candidate page.
+        self.assertEqual(10,counted_pool.commands)
         wire=response.json()
         self.assertTrue(wire['resolution']['resolved'])
         self.assertEqual('fixture-1',wire['resolution']['fixture']['id'])

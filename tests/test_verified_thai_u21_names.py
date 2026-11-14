@@ -39,6 +39,8 @@ class ThaiU21AliasAPITests(unittest.IsolatedAsyncioTestCase):
     fixture = support.ReviewTests.fixture
 
     async def native_fixture(self, index, **overrides):
+        await self.pool.execute('UPDATE v2_expert_messages SET raw_text=$2 WHERE id=$1',
+            self.message,'博乐大学 U21 VS 普拉查普 U21 泰U21 全场大2.5')
         return await self.fixture(index, **dict(
             home_team='卡森邦迪特大学U21', away_team='巴蜀基利U21',
             competition_name='泰国联赛U21', sport='football', phase='live',
