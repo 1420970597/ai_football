@@ -20,7 +20,7 @@
       "cpus": 0.4
     },
     "collector": {
-      "image": "sha256:79f2ab3df8c684fd890baf819d1d80d35ab046512503aea7b5aaba3d861fff9e",
+      "image": "sha256:dcce5147fc13b07d9ac10079d5d6a12b6617474fe22dc92f3b78d2709aa32ac2",
       "command": [
         "python",
         "-m",
@@ -102,6 +102,6 @@
     "required_nonempty_contiguous_windows": 3,
     "review_deadline_seconds": 20,
     "acceptance_state": "in_progress",
-    "source_revision": "85d0f2a2"
+    "source_revision": "204b9ee0"
   }
 }
