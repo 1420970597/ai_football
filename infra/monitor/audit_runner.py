@@ -14,6 +14,43 @@ from audit_lane import AuditLane, LOCAL
 from independent_review import CLASSES, VERDICTS
 from window_audit import audit_directory
 from continuous_watch import atomic
+from audit_audio import checked_transcript
+
+AUDIO_LOCK=threading.Lock()
+
+
+def prepare_audio(source,prepared):
+    """One bounded no-network STT process; the business pipeline is untouched."""
+    value=json.loads(prepared)
+    audio=[m for m in value.get('unsupported_media',[])if m.get('state')=='ready'and m.get('mime_type')=='audio/ogg']
+    if not audio:return prepared
+    image=os.environ.get('EXPERT_AUDIO_AUDIT_IMAGE','')
+    model=os.environ.get('EXPERT_AUDIO_AUDIT_MODEL','')
+    if not image.startswith('sha256:')or len(image)!=71 or not model:
+        value['audio_audits']=[{'state':'audio_uncertain','sha256':m['sha256'],'reason':'audio_audit_unconfigured'}for m in audio]
+        return json.dumps(value).encode()
+    notes=[]
+    for media in audio:
+        name='ai-football-audio-audit-'+__import__('uuid').uuid4().hex[:16]
+        command=['docker','run','--rm','--name',name,'--network','none','--read-only',
+            '--cpus','.4','--memory','1536m','--pids-limit','64','--cap-drop','ALL',
+            '--security-opt','no-new-privileges:true','-e','PYTHONDONTWRITEBYTECODE=1',
+            '--tmpfs','/tmp:rw,nosuid,nodev,size=16m',
+            '-v',str(source/'infra/monitor/audit_audio.py')+':/audit_audio.py:ro',
+            '-v',str(Path(model).resolve(strict=True))+':/model:ro',
+            '--entrypoint','python',image,'/audit_audio.py']
+        with AUDIO_LOCK:
+            try:
+                result=subprocess.run(command,input=json.dumps(media).encode(),capture_output=True,timeout=180,check=False)
+                if result.returncode or len(result.stdout)>128*1024:raise RuntimeError('audio_decode_failed')
+                note=checked_transcript(media,json.loads(result.stdout))
+            except (subprocess.TimeoutExpired,ValueError,RuntimeError):
+                note={'state':'audio_uncertain','reason':'audio_decode_failed'}
+            finally:
+                subprocess.run(['docker','rm','-f',name],capture_output=True,timeout=5,check=False)
+        notes.append(note|{'sha256':media['sha256']})
+    value['audio_audits']=notes
+    return json.dumps(value,ensure_ascii=False).encode()
 
 
 def review_command(container=None):
@@ -49,11 +86,12 @@ def review_message(source,message):
     prepared=subprocess.run(['docker','exec','-i','ai-football-v2-api-1','python','-c',prep],
         input=json.dumps({'message':message}).encode(),capture_output=True,timeout=40,check=False)
     if prepared.returncode:raise RuntimeError('prepare_failed')
+    prepared_audio=prepare_audio(source,prepared.stdout)
     lane=getattr(LOCAL,'lane',None)
     if lane is not None:
-        value=lane.review(prepared.stdout)
+        value=lane.review(prepared_audio)
     else:
-        result=subprocess.run(review_command()+[review],input=prepared.stdout,
+        result=subprocess.run(review_command()+[review],input=prepared_audio,
             capture_output=True,timeout=68,check=False)
         if result.returncode:raise RuntimeError('review_failed')
         value=json.loads(result.stdout)

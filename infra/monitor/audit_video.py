@@ -26,6 +26,10 @@ def prepare(value):
     parts=list(value['parts']);notes=[]
     for media in value.get('unsupported_media')or[]:
         if media.get('state')!='ready':notes.append({'state':media.get('state')});continue
+        if media.get('mime_type')=='audio/ogg':
+            matching=[a for a in value.get('audio_audits',[])if a.get('sha256')==media.get('sha256')]
+            notes.append(matching[0]if len(matching)==1 else {'state':'audio_uncertain'})
+            continue
         if media.get('mime_type')not in {'video/webm','video/mp4'}:
             notes.append({'state':'unsupported_visual_format'});continue
         body=base64.b64decode(media['data_base64'],validate=True)

@@ -48,6 +48,14 @@ class AuditVideoTests(unittest.TestCase):
         output=prepare({'parts':[],'unsupported_media':[{'state':'unsupported_for_visual_audit'}]})
         self.assertIn('unsupported_for_visual_audit',output['parts'][0]['text'])
 
+    def test_audio_note_requires_exact_original_hash_and_missing_stays_unknown(self):
+        media={'state':'ready','mime_type':'audio/ogg','sha256':'original'}
+        note={'state':'transcribed_audio','sha256':'original','text':'isolated-chat','machine_transcript':True}
+        for notes,expected in [([], 'audio_uncertain'),([dict(note,sha256='wrong')],'audio_uncertain'),([note],'transcribed_audio')]:
+            output=prepare({'parts':[],'unsupported_media':[media],'audio_audits':notes})
+            value=json.loads(output['parts'][0]['text'])['independent_media_audit'][0]
+            self.assertEqual(expected,value['state'])
+
     def test_decoder_receives_seekable_memory_and_descriptor_always_closes(self):
         body=b'bounded-video-with-index-at-end'
         media={'state':'ready','mime_type':'video/mp4',
