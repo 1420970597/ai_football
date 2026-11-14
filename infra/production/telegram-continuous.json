@@ -1,7 +1,7 @@
 {
   "services": {
     "api": {
-      "image": "sha256:d60787841d0dc8c40ab22627097d4be61a44814284d74c3f0fd08628dcd4e767",
+      "image": "sha256:a91fd8a1017b710bd42987cab68d281c492cb63f6939e68e21bf48ed9f3602e8",
       "command": [
         "uvicorn",
         "app.main:app",
@@ -44,7 +44,7 @@
       "cpus": 0.25
     },
     "local-mcp-api": {
-      "image": "sha256:d71d2f28f064ded57b5bc5249a9166aa7800a66d624ce201f3006084f3bd6ed5",
+      "image": "sha256:f6ffe93b3a587178500cbf7d7d9cd08ea546e8d27c7ffb59195bc1d3daab76e3",
       "command": [
         "uvicorn",
         "app.mcp_app:app",
