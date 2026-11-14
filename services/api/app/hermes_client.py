@@ -227,6 +227,8 @@ async def _content_parts(message: dict, review_id: str, attempt_id: str, *, acce
         'resolve_match传source_phase=live消歧；阶段未知不传，不从可售性推断。'
         '\n执行要求：直接调用授权工具，不输出计划或待调用宣言。'
         '来源完整的单场或多场total/handicap优先review_match_batch（可1项），'
+        '同条先列全新增对阵，一批最多6项；超过6项继续提交剩余不同对阵。'
+        '已满足批量字段时首查直接批量，不先逐场search再重复批量。'
         '携带原文双方、体育项目、时间范围、来源期间和所选线/方向；未知字段不猜。'
         '滚球期间未知时source_periods=[]，唯一识别比赛后明确缺少期间；'
         '单队大小不能改查整场大小，不能枚举库存或重复读盘来补来源字段。'

@@ -53,3 +53,10 @@ class HermesPromptBudgetTests(unittest.IsolatedAsyncioTestCase):
                        '欧洲盘／歐洲盤／亚洲盘', '未知源时间', 'accepted'):
             with self.subTest(rule=phrase):
                 self.assertIn(phrase, skill)
+
+    async def test_skill_never_promotes_candidate_name_into_source_identity(self):
+        root = Path(__file__).resolve().parents[1]
+        skill = (root / 'integrations/hermes/skills/expert-review/SKILL.md').read_text()
+        self.assertIn('team_a/team_b始终保留原文', skill)
+        self.assertIn('禁止把候选home_team/away_team反填为来源', skill)
+        self.assertNotIn('优先把候选实际返回的标准home_team/away_team原样传给解析工具', skill)
