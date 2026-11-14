@@ -70,20 +70,31 @@ def audit_directory(directory):
     value=assemble(summary,json.loads(body),audits,health)
     # Minute samples can miss a short recovery failure. Inspect only this
     # window's collector log; retain counts, never source or message content.
-    result=subprocess.run(['docker','logs','--since',str(summary['start']),
-        '--until',str(summary['end']),'ai-football-v2-collector-1'],
-        capture_output=True,timeout=15,check=False)
-    if result.returncode!=0:
+    running=subprocess.run(['docker','inspect','ai-football-v2-collector-1',
+        '--format','{{.State.StartedAt}}'],capture_output=True,timeout=10,check=False)
+    try:
+        started=datetime.fromisoformat(running.stdout.decode().strip().replace('Z','+00:00')).timestamp()
+    except(ValueError,UnicodeError):started=None
+    if running.returncode!=0 or started is None or started>summary['start']:
+        # Recreating a container discards its predecessor's log stream.
+        # An empty new stream cannot prove the older interval was healthy.
         value.update(source_health_ok=False,collector_log_complete=False)
     else:
-        failures=collector_failure_count((result.stdout+result.stderr).decode(errors='replace'))
-        value.update(collector_log_complete=True,collector_failures=failures)
-        if failures:value['source_health_ok']=False
+        result=subprocess.run(['docker','logs','--since',str(summary['start']),
+            '--until',str(summary['end']),'ai-football-v2-collector-1'],
+            capture_output=True,timeout=15,check=False)
+        if result.returncode!=0:
+            value.update(source_health_ok=False,collector_log_complete=False)
+        else:
+            failures=collector_failure_count((result.stdout+result.stderr).decode(errors='replace'))
+            value.update(collector_log_complete=True,collector_failures=failures)
+            if failures:value['source_health_ok']=False
     return value
 
 
 def collector_failure_count(log):
     markers=('Telegram source deferred','Telegram source unavailable',
         'Telegram source lease refresh deferred','Telegram session invalidated',
-        'Telegram live event deferred','Telegram source backoff')
+        'Telegram live event deferred','Telegram source backoff',
+        'Telegram recent history deferred','Telegram media retry deferred')
     return sum(any(marker in line for marker in markers)for line in log.splitlines())

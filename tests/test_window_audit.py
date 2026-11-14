@@ -1,9 +1,30 @@
 import hashlib
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 import unittest
-from infra.monitor.window_audit import assemble,interval_health,duplicate_count,collector_failure_count
+from unittest.mock import patch
+from infra.monitor.window_audit import assemble,interval_health,duplicate_count,collector_failure_count,audit_directory
 
 
 class WindowAuditTests(unittest.TestCase):
+    def test_recreated_container_cannot_supply_predecessor_log_evidence(self):
+        with tempfile.TemporaryDirectory()as name:
+            root=Path(name);window=root/'1800';window.mkdir();(window/'independent').mkdir()
+            (root/'health').mkdir();body=b'{"messages":[]}'
+            snapshot=window/'snapshot.json';snapshot.write_bytes(body)
+            summary=dict(start=1800,end=3600,snapshot_sha256=hashlib.sha256(body).hexdigest(),
+                snapshot_file=str(snapshot),trusted_messages=0,missing_messages=0,
+                upstream_complete=True,database_complete=True)
+            (window/'snapshot-summary.json').write_text(json.dumps(summary))
+            with patch('infra.monitor.window_audit.subprocess.run',return_value=SimpleNamespace(
+                    returncode=0,stdout=b'1970-01-01T01:01:00Z'))as run:
+                result=audit_directory(window)
+            self.assertFalse(result['source_health_ok'])
+            self.assertFalse(result['collector_log_complete'])
+            self.assertEqual(1,run.call_count)
+
     def test_transient_collector_failure_is_counted_even_between_health_samples(self):
         log='Telegram recent history complete state=catching_up\n'+\
             'Telegram source deferred category=history_deadline stage=archive_page\n'+\
