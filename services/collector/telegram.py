@@ -538,7 +538,8 @@ class TelegramCollector:
                 except TimeoutError:
                     result[chat_id] = {'state': 'unavailable', 'error': 'TimeoutError', 'reason': 'history_deadline',
                                        'reconciliation_pending': len(self.reconcile_pending.get(chat_id, []))}
-                    log.warning('Telegram source deferred category=history_deadline')
+                    log.warning('Telegram source deferred category=history_deadline stage=%s',
+                                self.source_runtime.get(chat_id, {}).get('sync_stage', 'unknown'))
                 except Exception as exc:
                     result[chat_id] = {"state": "unavailable", "error": type(exc).__name__,
                                        'reconciliation_pending': len(self.reconcile_pending.get(chat_id, []))}
@@ -735,9 +736,13 @@ class TelegramCollector:
         # Claim the new process's lease before directory writes, but keep the
         # potentially slow Telegram enumeration outside the live-message lock.
         lock = self.locks.setdefault(chat_id, asyncio.Lock())
+        runtime = self.source_runtime.setdefault(chat_id, {})
+        runtime['sync_stage'] = 'checkpoint'
         async with lock:
             checkpoint = await self._checkpoint(chat_id)
+        runtime['sync_stage'] = 'directory'
         await self._refresh_directory(chat_id, source)
+        runtime['sync_stage'] = 'recent_history'
         if time.monotonic() >= self.recent_next_at.get(chat_id, 0):
             recent = await self._recover_recent(chat_id, source)
             if recent['state'] == 'caught_up':
@@ -753,10 +758,12 @@ class TelegramCollector:
             return {'state': 'caught_up' if recent['state']=='caught_up' else 'recent_deferred',
                     'last_message_id': original, 'observed': 0, 'recent_history': recent}
         entity = await self._entity(chat_id)
+        runtime['sync_stage'] = 'retention_floor'
         floor = await self._retained_history_start(chat_id, entity)
         if floor is None:
             state = 'recent_deferred' if recent['state']=='deferred' else recent['state']
             return {'state': state, 'last_message_id': original, 'observed': 0, 'recent_history': recent}
+        runtime['sync_stage'] = 'archive_page'
         async for message in self._history_messages(entity, min_id=max(original, floor-1), reverse=True,
                                                     limit=SYNC_HISTORY_MAX_MESSAGES):
             if not message or int(message.id) <= last:

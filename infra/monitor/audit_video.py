@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import os
 import struct
 import subprocess
 
@@ -30,10 +31,21 @@ def prepare(value):
         body=base64.b64decode(media['data_base64'],validate=True)
         if len(body)>8*1024*1024 or hashlib.sha256(body).hexdigest()!=media['sha256']:
             raise ValueError('invalid_media_bytes')
-        result=subprocess.run(['ffmpeg','-v','error','-threads','1','-i','pipe:0','-t','12',
-            '-vf','fps=2,scale=768:768:force_original_aspect_ratio=decrease',
-            '-frames:v','24','-threads','1','-f','image2pipe','-vcodec','png','pipe:1'],
-            input=body,capture_output=True,timeout=15)
+        # Ordinary MP4 may keep its index at the end and require seeking.
+        # A pipe silently loses those frames. A Linux memory file provides
+        # seeking without writing original video to persistent disk.
+        descriptor=os.memfd_create('telegram-audit-video',flags=os.MFD_CLOEXEC)
+        try:
+            offset=0
+            while offset<len(body): offset+=os.write(descriptor,body[offset:])
+            os.lseek(descriptor,0,os.SEEK_SET)
+            result=subprocess.run(['ffmpeg','-v','error','-threads','1','-i',
+                '/proc/self/fd/'+str(descriptor),'-t','12',
+                '-vf','fps=2,scale=768:768:force_original_aspect_ratio=decrease',
+                '-frames:v','24','-threads','1','-f','image2pipe','-vcodec','png','pipe:1'],
+                pass_fds=(descriptor,),capture_output=True,timeout=15)
+        finally:
+            os.close(descriptor)
         if result.returncode or len(result.stdout)>24*1024*1024:raise ValueError('video_decode_failed')
         frames=png_frames(result.stdout)
         notes.append({'state':'sampled_video','frames':len(frames),'interval_seconds':.5,

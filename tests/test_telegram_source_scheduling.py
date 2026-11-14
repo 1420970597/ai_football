@@ -175,6 +175,8 @@ class SourceSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('connected',report['state'])
         self.assertEqual('unavailable',report['sources']['-1001']['state'])
         self.assertEqual('history_deadline',report['sources']['-1001']['reason'])
+        self.assertIn(self.collector.source_runtime['-1001']['sync_stage'],
+                      {'recent_history','archive_page'})
         self.assertEqual(0,self.backend.positions.get('-1001',0))
         self.assertEqual(1,len(self.backend.events))
         self.assertFalse(self.collector.locks['-1001'].locked())
