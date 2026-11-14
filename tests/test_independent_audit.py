@@ -151,6 +151,20 @@ class AuditInputTests(unittest.IsolatedAsyncioTestCase):
             output=await audit_input.prepare({'message':m})
         self.assertEqual(2,len(output['parts']));image.assert_awaited_once_with('private/reply')
         self.assertEqual(1,json.loads(output['parts'][0]['text'])['reply_image_count'])
+        self.assertEqual(['reply_archive'],json.loads(output['parts'][0]['text'])['image_roles'])
+
+    async def test_current_and_reply_image_roles_follow_actual_input_order(self):
+        m=self.message();m['media_objects']=[{'object_key':'private/current'}]
+        m['traces']=[{'trace_kind':'hermes_request','payload':{'reply_archive':{
+            'media_state':'ready','deleted':False,'media_objects':[{'object_key':'private/reply'}]}}}]
+        with patch.object(audit_input.blobstore,'read_image',AsyncMock(return_value=b'image'))as image,\
+                patch.object(audit_input.blobstore,'image_mime',return_value='image/png'):
+            output=await audit_input.prepare({'message':m})
+        context=json.loads(output['parts'][0]['text'])
+        self.assertEqual(['current_source','reply_archive'],context['image_roles'])
+        self.assertEqual(['private/current','private/reply'],[call.args[0]for call in image.await_args_list])
+        source=json.loads(independent_review.source_only_parts(output)[0]['text'])
+        self.assertEqual(context['image_roles'],source['image_roles'])
 
     async def test_review_time_reply_text_is_preserved_as_untrusted_evidence(self):
         m=self.message();m['traces']=[{'trace_kind':'hermes_request','payload':{

@@ -43,6 +43,8 @@ async def prepare(value):
         # Excluding it avoids anchoring this separate audit to its guesses.
         'tool_evidence':evidence,'accepted':signals,
         'state':m.get('state'),'last_error':m.get('last_error')}
+    context['image_roles']=(['current_source']*len(m.get('media_objects')or[])
+                            +['reply_archive']*len(reply_images))
     if reply_present:
         context['reply_archive']={k:reply.get(k)for k in ('raw_text','posted_at','media_state','deleted')}
     parts=[{'type':'text','text':json.dumps(context,ensure_ascii=False,default=str)}]
