@@ -2,8 +2,32 @@
 async def repeated_identity_failure(conn,job_id,attempt_id,issues):
     allowed={'unfinished_search_count','unfinished_searches','unbound_mention_count',
              'unbound_mentions','detail_limit','text_intent_unverified'}
-    if (set(issues)-allowed or issues.get('unfinished_search_count')
-            or not issues.get('unbound_mention_count')):return False
+    if set(issues)-allowed or issues.get('unfinished_search_count'):return False
+    if not issues.get('unbound_mention_count'):
+        if not issues.get('text_intent_unverified'):return False
+        # A completed whole-league source search plus a failed original-pair
+        # search is an explainable unresolved result, never identity approval.
+        return bool(await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM v2_analysis_traces league "
+            "WHERE league.job_id=$1 AND league.payload->>'attempt_id'=($2::uuid)::text "
+            "AND league.trace_kind='mcp_search_matches' AND league.payload->>'status'='succeeded' "
+            "AND league.payload->>'complete'='true' AND league.payload->'parameters'->>'team_query'='' "
+            "AND length(league.payload->'parameters'->>'competition_query')>=2 "
+            "AND league.payload->'parameters'->>'sport' IS NOT NULL "
+            "AND league.payload->'parameters'->>'from_utc' IS NOT NULL "
+            "AND league.payload->'parameters'->>'to_utc' IS NOT NULL "
+            "AND league.payload->'resolution'->>'resolved'='false' "
+            "AND league.payload->'resolution'->>'candidate_count'='0' "
+            "AND EXISTS(SELECT 1 FROM v2_analysis_traces original WHERE original.job_id=league.job_id "
+            "AND original.payload->>'attempt_id'=league.payload->>'attempt_id' "
+            "AND original.trace_kind='mcp_search_matches' AND original.payload->>'status'='succeeded' "
+            "AND original.payload->>'complete'='true' "
+            "AND length(original.payload->'parameters'->>'team_query')>=2 "
+            "AND original.payload->'resolution'->>'resolved'='false' "
+            "AND original.payload->'resolution'->>'candidate_count'='0' "
+            "AND ((original.payload->'parameters')-'team_query'-'competition_query'-'cursor'-'page_size')="
+            "((league.payload->'parameters')-'team_query'-'competition_query'-'cursor'-'page_size')))",
+            job_id,attempt_id))
     mentions=issues.get('unbound_mentions')or[]
     if len(mentions)!=1 or issues['unbound_mention_count']!=1:return False
     # Parameters are system-captured tool arguments. A repeated negative

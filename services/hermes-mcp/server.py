@@ -6,6 +6,7 @@ import json
 import os
 import re
 from contextvars import ContextVar
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
 
@@ -590,19 +591,76 @@ def _unique_source_handicap(markets, fixture_id, period, selection, selection_li
             and isinstance(quote.get('quote_id'), str) and quote['quote_id'] else None)
 
 
+async def _search_source_scopes(payload):
+    """Follow only native bounded recall guidance, without a model roundtrip."""
+    result = await _post('search_matches', payload)
+    if (payload.get('cursor') or not payload.get('team_a') or not payload.get('team_b')
+            or not payload.get('competition_query') or not payload.get('sport')
+            or not payload.get('from_utc') or not payload.get('to_utc')):
+        return result
+    try:
+        start = datetime.fromisoformat(payload['from_utc'].replace('Z', '+00:00'))
+        end = datetime.fromisoformat(payload['to_utc'].replace('Z', '+00:00'))
+        if start.tzinfo is None or end.tzinfo is None or not timedelta(0) < end-start <= timedelta(days=7):
+            return result
+    except (TypeError, ValueError):
+        return result
+    receipts = []
+    original = payload
+    for _ in range(2):
+        guidance = result.get('next_search_guidance') or {}
+        if (result.get('search_complete') is not True or result.get('next_cursor') is not None
+                or (result.get('resolution') or {}).get('resolved') is True):
+            break
+        action = guidance.get('action')
+        if action == 'search_source_team_without_competition_filter':
+            following = original | {'competition_query': None, 'cursor': None}
+        elif action == 'search_complete_league_candidates':
+            following = original | {'team_query': '', 'cursor': None}
+        else:
+            break
+        if not following['team_query'] and any(r.get('league_scope') for r in receipts):
+            break
+        receipt = {key: result[key] for key in ('search_key','search_complete',
+            'next_cursor','total_candidates','resolution') if key in result}
+        receipt['league_scope'] = payload.get('team_query') == ''
+        receipts.append(receipt)
+        try:
+            result = await _post('search_matches', following)
+        except ToolError as exc:
+            raise ToolError(json.dumps({'completed_receipt': result,
+                'failed_operation': 'search_matches', 'error': str(exc)}, ensure_ascii=False)) from None
+        payload = following
+        if following['team_query'] == '':
+            break
+    if receipts:
+        result = result | {'prior_source_search_scopes': receipts,
+            'source_search_scope': {key: payload[key] for key in
+                ('team_query','competition_query','sport','phase','from_utc','to_utc') if key in payload}}
+        if (payload.get('team_query') == '' and result.get('search_complete') is True
+                and result.get('next_cursor') is None
+                and (result.get('resolution') or {}).get('resolved') is not True):
+            result['bounded_source_search'] = {
+                'complete': True, 'retry_same_scope': False,
+                'reason': 'no_verified_source_pair_in_complete_scopes',
+                'scope': 'original_sport_competition_and_time_only'}
+    return result
+
+
 async def _review_batch_item(review_id, attempt_id, item):
     result = None
     cursor = None
     candidates = []
+    scope = {}
     # Native search owns the candidate snapshot and verifies every next_cursor.
     # An unusually large source-name scope remains explicitly incomplete.
     for page_index in range(20):
         try:
-            page_result = await _post('search_matches', {
+            page_result = await _search_source_scopes({
                 'review_id': review_id, 'attempt_id': attempt_id,
                 'team_query': item.team_a, 'team_a': item.team_a, 'team_b': item.team_b,
                 'phase': 'all', 'competition_query': item.competition_query, 'sport': item.sport,
-                'from_utc': item.from_utc, 'to_utc': item.to_utc, 'cursor': cursor, 'page_size': 100})
+                'from_utc': item.from_utc, 'to_utc': item.to_utc, 'cursor': cursor, 'page_size': 100, **scope})
         except ToolError as exc:
             if result is None:
                 raise
@@ -611,6 +669,7 @@ async def _review_batch_item(review_id, attempt_id, item):
                 'recovery': '仅同一活动任务沿回执next_cursor继续；未完整翻页不读盘、不重新首查。'},
                 ensure_ascii=False)) from None
         result = page_result
+        scope = result.get('source_search_scope') or scope
         page = result.get('items')
         if not isinstance(page, list) or len(page) > 100:
             return result | {'batch_unresolved': 'invalid_native_page'}
@@ -681,7 +740,8 @@ def _batch_result_view(result, item):
     view = {key: result[key] for key in (
         'review_id', 'attempt_id', 'search_key', 'search_complete', 'next_cursor',
         'total_candidates', 'batch_candidate_pages', 'batch_unresolved',
-        'source_intent_recording', 'record_result') if key in result}
+        'source_intent_recording', 'record_result', 'source_search_scope',
+        'prior_source_search_scopes', 'bounded_source_search') if key in result}
     presentation = {'kind': 'source-selection-view-v1',
                     'native_evidence': '完整原生检索、读盘与录入回执已由API持久化；此处是来源选择展示，不是完整库存。'}
     resolution = result.get('resolution')
@@ -922,7 +982,7 @@ async def search_matches(review_id: str, attempt_id: str, team_query: str | None
         if not team_a or not team_a.strip() or not team_b or not team_b.strip():
             raise ToolError('提供team_query，或同时提供原文明示且非空的team_a和team_b')
         team_query = team_a
-    result = await _post("search_matches", {
+    result = await _search_source_scopes({
         "review_id": review_id, "attempt_id": attempt_id, "team_query": team_query,
         "phase": phase, "competition_query": competition_query, "sport": sport,
         "team_a": team_a, "team_b": team_b,

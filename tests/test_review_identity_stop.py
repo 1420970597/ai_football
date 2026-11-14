@@ -82,3 +82,21 @@ class IdentityStopIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await repeated_identity_failure(conn,self.job,self.attempt,issues))
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
         self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_complete_empty_pair_and_league_are_terminal_unresolved_not_verified(self):
+        issues=dict(unfinished_search_count=0,unfinished_searches=[],unbound_mention_count=0,
+            unbound_mentions=[],detail_limit=100,text_intent_unverified=True)
+        scope=dict(team_a='Unverified',team_b='Beta1',competition_query='Source League',sport='football',
+            from_utc='2026-11-14T00:00:00Z',to_utc='2026-11-17T00:00:00Z')
+        await self.post('search_matches',team_query='Unverified',**scope)
+        async with self.pool.acquire()as conn:
+            self.assertFalse(await repeated_identity_failure(conn,self.job,self.attempt,issues))
+        await self.post('search_matches',team_query='',**scope)
+        await self.pool.execute("UPDATE v2_analysis_traces SET payload=jsonb_set(payload,'{parameters,team_b}','\"Other\"'::jsonb) WHERE job_id=$1 AND trace_kind='mcp_search_matches' AND payload->'parameters'->>'team_query'=''",self.job)
+        async with self.pool.acquire()as conn:
+            self.assertFalse(await repeated_identity_failure(conn,self.job,self.attempt,issues))
+        await self.pool.execute("UPDATE v2_analysis_traces SET payload=jsonb_set(payload,'{parameters,team_b}','\"Beta1\"'::jsonb) WHERE job_id=$1 AND trace_kind='mcp_search_matches' AND payload->'parameters'->>'team_query'=''",self.job)
+        async with self.pool.acquire()as conn:
+            self.assertTrue(await repeated_identity_failure(conn,self.job,self.attempt,issues))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_review_fixture_bindings'))
+        self.assertEqual(0,await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
