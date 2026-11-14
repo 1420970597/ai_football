@@ -42,7 +42,8 @@ def assemble(summary,snapshot,audits,health):
         if not audit or audit.get('snapshot_sha256')!=summary['snapshot_sha256']:
             missing+=1
         else:checked.append(audit)
-        late=message.get('last_error')=='detection_deadline_exceeded'
+        late=message.get('last_error') in {'detection_deadline_exceeded',
+                                              'retry_exceeds_detection_deadline'}
         for signal in message.get('signals')or[]:
             if message.get('detected_at')and (datetime.fromisoformat(signal['created_at'])-
                 datetime.fromisoformat(message['detected_at'])).total_seconds()>20:late=True

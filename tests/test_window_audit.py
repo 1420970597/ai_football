@@ -59,3 +59,13 @@ class WindowAuditTests(unittest.TestCase):
         self.assertEqual(1,duplicate_count([{'signals':[signal,dict(signal)]}]))
         self.assertEqual(1,duplicate_count([{'signals':[signal,dict(signal,line='2.500')]}]))
         self.assertEqual(0,duplicate_count([{'signals':[signal,dict(signal,withdrawn_at='now')]}]))
+
+    def test_retry_cannot_finish_before_original_deadline_is_also_a_failure(self):
+        summary=dict(start=1800,end=3600,snapshot_sha256='exact',trusted_messages=1,
+            missing_messages=0,upstream_complete=True,database_complete=True)
+        snapshot={'messages':[dict(id='m',review_mode='real_time',
+            last_error='retry_exceeds_detection_deadline')]}
+        ref=hashlib.sha256(b'm').hexdigest()[:12]
+        audit=dict(snapshot_sha256='exact',classification='recommendation',verdict='consistent')
+        value=assemble(summary,snapshot,{ref:audit},[])
+        self.assertEqual(1,value['deadline_violations'])
