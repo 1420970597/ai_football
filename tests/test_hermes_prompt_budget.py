@@ -72,6 +72,15 @@ class HermesPromptBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('禁止把候选home_team/away_team反填为来源', skill)
         self.assertNotIn('优先把候选实际返回的标准home_team/away_team原样传给解析工具', skill)
 
+    async def test_corner_intent_never_reads_goal_totals_or_invents_supported_type(self):
+        root=Path(__file__).resolve().parents[1]
+        skill=(root/'integrations/hermes/skills/expert-review/SKILL.md').read_text()
+        for rule in ('角球大小与进球大小是不同玩法','禁止用market_kind=total',
+                     '不得发明corner_total','market_query=角球',
+                     '返回unsupported_markets时准确说明系统当前不支持该原生玩法',
+                     '不提交任何quote'):
+            self.assertIn(rule,skill)
+
     async def test_skill_matches_native_single_and_team_total_batch_contract(self):
         root = Path(__file__).resolve().parents[1]
         skill = (root / 'integrations/hermes/skills/expert-review/SKILL.md').read_text()
