@@ -122,6 +122,19 @@ class ReviewBatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('source_period_unknown',native['source_intent_recording']['reason'])
         self.assertEqual(['search_matches'],[path for path,_ in calls])
 
+    async def test_breakthrough_shortcode_without_source_line_only_binds_identity(self):
+        calls,_=await self.install(paginate=True)
+        item=self.item(market_kind='total',period=None,source_periods=[],
+            market_query='破',selection_team=None,selection_line=None,
+            evidence_text='破；来源比赛行Home0 0-0 Away0，25分钟，未选期间或数字线')
+        native=(await self.call([item]))['items'][0]['result']
+        self.assertTrue(native['search_complete'])
+        self.assertTrue(native['resolution']['resolved'])
+        self.assertEqual('source_period_unknown',native['source_intent_recording']['reason'])
+        self.assertFalse(native['source_intent_recording']['attempted'])
+        self.assertEqual(['search_matches','search_matches'],[path for path,_ in calls])
+        self.assertTrue(all('period'not in body and 'market_query'not in body for _,body in calls))
+
     async def test_esports_first_game_kills_preserves_sport_and_never_reads_full_match_markets(self):
         calls,_=await self.install(paginate=True)
         item=self.item(sport='esports',competition_query='2026 全球总决赛',

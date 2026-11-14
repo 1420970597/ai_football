@@ -99,6 +99,16 @@ class HermesPromptBudgetTests(unittest.IsolatedAsyncioTestCase):
                        '禁止改成total','不读盘、不提交quote'):
             self.assertIn(phrase,skill)
 
+    async def test_breakthrough_short_text_scoreboard_does_not_invent_period_or_half_goal_line(self):
+        root=Path(__file__).resolve().parents[1]
+        skill=(root/'integrations/hermes/skills/expert-review/SKILL.md').read_text()
+        for phrase in ('“破／破蛋”加普通滚球比分条不是已选盘口',
+                       '不能补成全场大0.5','0-0是当前比分',
+                       'market_query保留原短句“破”、period=null、source_periods=[]',
+                       '不补数字、不读盘、不录入','来源另外明确半场大0.5或全场大0.5时仍按该明确所选项核验',
+                       '看到任何候选/库存之前保存来源缺期间及缺数字线'):
+            self.assertIn(phrase,skill)
+
     async def test_esports_pick_requires_native_identity_without_inventing_supported_period(self):
         root=Path(__file__).resolve().parents[1]
         skill=(root/'integrations/hermes/skills/expert-review/SKILL.md').read_text()
