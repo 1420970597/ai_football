@@ -41,7 +41,20 @@ async def sample():
         headers={'Authorization': 'Bearer '+settings.collector_token}) as client:
         response = await client.post('http://collector:8092/status', json={})
         response.raise_for_status()
-    return summarize(response.json(), at=datetime.now(timezone.utc).timestamp())
+    value = summarize(response.json(), at=datetime.now(timezone.utc).timestamp())
+    # A collector heartbeat cannot prove the parsing tool process is ready.
+    # Check its real DB-aware readiness, without any review or betting write.
+    try:
+        async with httpx.AsyncClient(trust_env=False, timeout=3) as client:
+            ready = await client.get('http://local-mcp-api:8080/readyz')
+            value['tool_api_ready'] = (ready.status_code == 200
+                and ready.json().get('status') == 'ready' and ready.json().get('role') == 'mcp')
+    except (httpx.HTTPError, ValueError, AttributeError):
+        value['tool_api_ready'] = False
+    if not value['tool_api_ready']:
+        value['reasons'].append('tool_api_not_ready')
+        value['ok'] = False
+    return value
 
 
 if __name__ == '__main__':
