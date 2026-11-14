@@ -66,6 +66,31 @@ class RecentRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([25, 25], self.client.query_limits)
         self.assertEqual(50, len(self.backend.calls))
 
+    async def test_slow_head_yields_durable_cursor_then_next_pass_finishes_older_gap(self):
+        self.client.messages['-1001'] = [self.recent(i) for i in range(1,7)]
+        original=self.client.iter_messages
+        async def slow_head(*args,**kwargs):
+            await asyncio.sleep(.04)
+            async for message in original(*args,**kwargs):yield message
+        self.client.iter_messages=slow_head
+        with patch('collector.telegram.RECENT_HISTORY_PAGE_SIZE',3),patch('collector.telegram.RECENT_HISTORY_SECONDS',.06):
+            result=await self.collector._recover_recent('-1001',self.source)
+        self.assertEqual('catching_up',result['state'])
+        self.assertEqual([6,5,4],[int(x['platform_message_id'])for x in self.backend.calls])
+        self.assertEqual(4,self.collector.recent_recovery['-1001']['cursor'])
+        cutoff=self.collector.recent_recovery['-1001']['cutoff']
+        self.client.iter_messages=original
+        self.client.messages['-1001'].append(self.recent(7))
+        with patch('collector.telegram.RECENT_HISTORY_PAGE_SIZE',3):
+            result=await self.collector._recover_recent('-1001',self.source)
+            self.assertEqual('3',self.backend.calls[3]['platform_message_id'])
+            self.assertEqual(cutoff,self.collector.recent_recovery['-1001']['cutoff'])
+            result=await self.collector._recover_recent('-1001',self.source)
+            self.assertIn('7',[x['platform_message_id']for x in self.backend.calls])
+        self.assertEqual('caught_up',result['state'])
+        self.assertIsNone(self.collector.recent_recovery['-1001']['cursor'])
+        self.assertEqual(set(range(1,8)),{int(x['platform_message_id'])for x in self.backend.calls})
+
     async def test_cancelled_unknown_commit_is_not_cached_and_retries(self):
         self.client.messages['-1001'] = [self.recent(100)]
         entered = asyncio.Event()

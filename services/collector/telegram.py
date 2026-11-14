@@ -798,8 +798,9 @@ class TelegramCollector:
 
         Receipt cache entries follow durable event commits only. Losing this
         bounded cache on restart causes safe replays, never skipped messages.
-        Each pass checks the head before continuing older pages, so old work
-        cannot hide newly arrived messages.
+        Normally each pass checks the head before older pages. After a slow
+        head, one continuation-only slice guarantees old gaps make progress;
+        the following slice checks the head again. Live events stay separate.
         """
         if not source.get('trusted_sender_ids'):
             return {'state': 'caught_up', 'scanned': 0, 'persisted': 0}
@@ -917,11 +918,22 @@ class TelegramCollector:
             async with asyncio.timeout(RECENT_HISTORY_SECONDS):
                 entity = await timed('telegram_entity', self._entity(chat_id))
                 source = dict(source, verified_broadcast=_broadcast_channel(entity))
-                head_cursor, complete = await page(entity, None)
-                if not complete:
+                continuation_only = state.pop('continuation_next', False) and state['cursor'] is not None
+                if continuation_only:
+                    _, complete = await page(entity, state['cursor'], continuation=True)
+                else:
+                    head_cursor, complete = await page(entity, None)
+                if not complete and not continuation_only:
                     cursor = min(state['cursor'], head_cursor) if state['cursor'] is not None else head_cursor
                     state['cursor'] = cursor
-                    _, complete = await page(entity, cursor, continuation=True)
+                    # A contended first page has already spent the second
+                    # page's fair share. Yield after its durable commits;
+                    # preserve the cursor/cutoff and report catching_up.
+                    # The next pass still checks new head messages first.
+                    if time.monotonic()-started < RECENT_HISTORY_SECONDS/2:
+                        _, complete = await page(entity, cursor, continuation=True)
+                    else:
+                        state['continuation_next'] = True
                 if complete:
                     state['cursor'] = None
                     state.pop('cutoff', None)
