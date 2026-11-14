@@ -286,7 +286,20 @@ async def _post(path: str, payload: dict) -> dict:
         raise ToolError("盘口复核队列繁忙；保留当前消息为待核验")
     pending_market_requests += 1
     try:
-        return await _market_request(path, payload)
+        result = await _market_request(path, payload)
+        # A provider spacing refusal is not a stale-price permission. Wait
+        # once inside this authenticated read instead of spending another
+        # model turn; the backend still checks the original 20s deadline.
+        # Never replay a write or bypass upstream cooldown/unknown results.
+        refresh = result.get('refresh') if isinstance(result, dict) else None
+        if path == 'list_match_markets' and isinstance(refresh, dict):
+            wait = refresh.get('retry_after_seconds')
+            if (refresh.get('reason') == 'refresh_throttled'
+                    and refresh.get('accepted') is False
+                    and type(wait) in (int, float) and 0 < wait <= 2):
+                await asyncio.sleep(wait)
+                result = await _market_request(path, payload)
+        return result
     finally:
         pending_market_requests -= 1
 
