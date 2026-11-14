@@ -1,0 +1,37 @@
+services:
+  tg-semantic-hermes:
+    image: ${EXPERT_SEMANTIC_HERMES_IMAGE:?Use the verified exact Hermes image digest}
+    pull_policy: never
+    container_name: ai-football-tg-semantic-hermes
+    restart: unless-stopped
+    entrypoint: ["sleep", "infinity"]
+    user: "10000:10000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 0.30
+    mem_limit: 768m
+    pids_limit: 96
+    env_file:
+      - ${EXPERT_SEMANTIC_HERMES_ENV_FILE:?Use the protected model-only env file}
+    environment:
+      HERMES_HOME: /opt/data/.hermes
+      HOME: /opt/data/home
+      PYTHONDONTWRITEBYTECODE: "1"
+    tmpfs:
+      - /opt/data:rw,noexec,nosuid,nodev,size=128m,mode=0700,uid=10000,gid=10000
+      - /opt/data/.hermes:rw,noexec,nosuid,nodev,size=96m,mode=0700,uid=10000,gid=10000
+      - /tmp:rw,nosuid,nodev,size=64m,mode=1777
+    volumes:
+      - ${EXPERT_SEMANTIC_HERMES_CONFIG_FILE:?Use existing readonly Hermes model configuration}:/opt/data/.hermes/config.yaml:ro
+    networks: [egress]
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+networks:
+  egress:
+    external: true
+    name: ai-football-v2_egress
