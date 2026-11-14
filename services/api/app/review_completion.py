@@ -48,6 +48,11 @@ def tool_unavailability_issues() -> dict:
 
 _SERIALIZED_TOOL_CALL_END = re.compile(
     r'(?:</(?:parameter|invoke|function_calls|tool_call|function)>\s*)+$')
+_PENDING_TOOL_ACTION = re.compile(
+    r'^(?:Let me (?:make the call|call(?: [A-Za-z_][A-Za-z_0-9.]*)?|do the search)'
+    r'|I(?:\x27ll| will) (?:now )?(?:call|invoke) [A-Za-z_][A-Za-z_0-9.]*'
+    r'|现在(?:调用|执行)(?:比赛检索|检索工具|搜索工具|盘口工具)'
+    r')[.!。！]*$', re.I)
 
 
 def unexecuted_tool_call_claim(content: str) -> bool:
@@ -56,7 +61,12 @@ def unexecuted_tool_call_claim(content: str) -> bool:
     The provider then executed nothing: the intended call exists only as text.
     This is a negative completeness hint, never evidence for a match or quote.
     """
-    return bool(_SERIALIZED_TOOL_CALL_END.search(content.rstrip()[-400:]))
+    tail = content.rstrip()[-400:]
+    # A provider can finish with plain prospective prose, without emitting a
+    # native call at all. This only prevents a false completion; it grants no
+    # fixture binding, quote or signal, and never parses tool arguments.
+    last_line = tail.splitlines()[-1].strip() if tail else ''
+    return bool(_SERIALIZED_TOOL_CALL_END.search(tail) or _PENDING_TOOL_ACTION.fullmatch(last_line))
 
 
 def unexecuted_tool_call_issues() -> dict:

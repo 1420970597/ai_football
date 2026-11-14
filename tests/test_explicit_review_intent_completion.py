@@ -61,6 +61,28 @@ class ExplicitReviewIntentTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(1, call.await_count)
                 self.assertTrue(summary['completion_verified'])
 
+    async def test_formatted_source_pick_cannot_finish_without_identity_tools(self):
+        for text in ('国际友谊赛\n甲队VS乙队\n足球（滚球）大/小 全场大2.5\n正反随意 红黑勿怪',
+                     '09:00 测试联赛\n甲队VS乙队\n足球（初盘）让球 客-0.25'):
+            with self.subTest(text=text):
+                self.assertTrue(checks.explicit_text_pick(text))
+                job = dict(id=self.job, attempt_id=self.attempt, message={'raw_text': text})
+                model = AsyncMock(return_value=('当前没有新增推荐。', {}))
+                with patch.object(worker, 'review_message', model):
+                    _, summary = await worker._review_until_verified(self.pool, SimpleNamespace(), job)
+                self.assertEqual(3, model.await_count)
+                self.assertFalse(summary['completion_verified'])
+                self.assertTrue(summary['completion_issues']['text_intent_unverified'])
+        self.assertEqual(0, await self.pool.fetchval('SELECT count(*) FROM v2_expert_signals'))
+
+    async def test_form_rows_in_feedback_quotes_and_questions_are_not_current(self):
+        for text in ('赛果反馈\n足球（滚球）大/小 全场大2.5',
+                     '> 足球（初盘）让球 客-0.25',
+                     '足球（滚球）大/小 全场大2.5？', '足球（滚球）大/小 全场大2.5 收米',
+                     '足球（初盘）让球 客-0.25 取消', '赔率1.75\n比分0-0'):
+            with self.subTest(text=text):
+                self.assertFalse(checks.explicit_text_pick(text))
+
     async def test_final_receipt_does_not_trust_plain_directive_no_intent_prose(self):
         await self.pool.execute('UPDATE v2_expert_messages SET raw_text=$2 WHERE id=$1', self.message, '追 4.5/5 大')
         async with self.pool.acquire() as conn, conn.transaction():

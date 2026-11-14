@@ -25,6 +25,23 @@ LEAKED_CALL = ('Batch A: football: Egypt; parallel: Eibar. Then Alavés.\n\nLet 
 
 
 class UnexecutedToolCallBoundaryTests(unittest.TestCase):
+    def test_prospective_tool_prose_is_not_a_completed_review(self):
+        from app.review_completion import unexecuted_tool_call_claim
+        for content in ('Let me analyze the source.\n\nLet me call.',
+                        'Let me make the call.', 'Let me do the search.',
+                        'I will now call search_matches.', '现在调用比赛检索。'):
+            with self.subTest(content=content):
+                self.assertTrue(unexecuted_tool_call_claim(content))
+
+    def test_reported_or_completed_actions_do_not_request_continuation(self):
+        from app.review_completion import unexecuted_tool_call_claim
+        for content in ('I called search_matches and no fixture matched.',
+                        '> Let me call.', '原文引用：Let me call.',
+                        'Let me call.\n本条是赛果反馈，没有新增推荐。',
+                        'The source says “Let me call.”', 'Let me analyze this result.'):
+            with self.subTest(content=content):
+                self.assertFalse(unexecuted_tool_call_claim(content))
+
     def test_trailing_serialized_call_is_detected(self):
         from app.review_completion import unexecuted_tool_call_claim
         for content in (LEAKED_CALL, LEAKED_CALL + '\n', LEAKED_CALL + '\n<' + '/invoke>\n<' + '/function_calls>  ',

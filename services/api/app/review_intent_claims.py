@@ -22,6 +22,12 @@ _NOT_CURRENT = re.compile(
 _QUESTION = re.compile(r'[?？]|可以[吗嗎]|怎[么麼]看|是否|要不要')
 _CURRENT_TAIL = re.compile(r'\s*等水上[车車]\s*[。!！]*$')
 _IMAGE_TOTAL = re.compile(rf'[大小]\s*{_NUMBER}(?:\s+{_NUMBER})?\s*[。!！]*')
+_FORM_TOTAL = re.compile(
+    rf'^(?:足球|篮球|籃球)\s*[（(](?:滚球|滾球|初盘|初盤|赛前|賽前)[）)]\s*'
+    rf'大\s*/\s*小\s+(?:全场|全場|上半场|上半場|下半场|下半場)[大小]\s*{_NUMBER}\s*$')
+_FORM_HANDICAP = re.compile(
+    rf'^(?:足球|篮球|籃球)\s*[（(](?:滚球|滾球|初盘|初盤|赛前|賽前)[）)]\s*'
+    rf'(?:让球|讓球)\s+[主客]\s*[+\-]\s*{_NUMBER}\s*$')
 
 
 def bare_total_source_notice(content: str, *, has_image: bool = False) -> str:
@@ -74,6 +80,11 @@ def explicit_text_pick(content: str, *, has_image: bool = False) -> bool:
     if len(text) <= 100 and _FOLLOW.fullmatch(text):
         return True
     for line, recommendation in _current_pick_lines(content):
+        if _FORM_TOTAL.fullmatch(line) or _FORM_HANDICAP.fullmatch(line):
+            # A strict form row is a negative verification obligation only.
+            # Team identity, period, selection and valid quotes still come
+            # exclusively from Hermes and the attempt-scoped native tools.
+            return True
         if recommendation:
             if evidence_line_intent(line, 'handicap') or evidence_line_intent(line, 'total'):
                 return True

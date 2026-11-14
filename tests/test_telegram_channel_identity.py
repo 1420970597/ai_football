@@ -49,6 +49,53 @@ class ChannelIdentityCollectorTests(unittest.IsolatedAsyncioTestCase):
             'until_id':until, 'since':(datetime.now(timezone.utc)-timedelta(hours=since_hours)).isoformat()}]
         self.backend.positions[self.chat_id] = until+100
 
+    async def test_readonly_window_audit_filters_half_open_times_and_reports_coverage(self):
+        end = datetime.now(timezone.utc)-timedelta(minutes=1)
+        start = end-timedelta(minutes=30)
+        messages = [self.message(i) for i in range(1,5)]
+        for m, date in zip(messages, [end, end-timedelta(seconds=1), start, start-timedelta(seconds=1)]):
+            m.date = date
+        async def history(entity, **options):
+            self.assertEqual(100, options['limit'])
+            self.assertEqual(end, options['offset_date'])
+            for m in messages:
+                yield m
+        with patch.object(self.collector, '_history_messages', history):
+            result = await self.collector._inspect_window(self.entity, self.source,
+                {'window_start':start.isoformat(),'window_end':end.isoformat()})
+        self.assertTrue(result['complete'])
+        self.assertIsNone(result['next_cursor'])
+        self.assertEqual([2,3], [m['message_id'] for m in result['messages']])
+        self.assertEqual({}, self.backend.events)
+        self.assertNotIn('raw_text', result['messages'][0])
+
+    async def test_full_window_page_requires_following_the_returned_cursor(self):
+        end = datetime.now(timezone.utc)-timedelta(minutes=1)
+        start = end-timedelta(minutes=30)
+        async def history(entity, **options):
+            for number in range(200,100,-1):
+                m=self.message(number); m.date=end-timedelta(seconds=200-number+1)
+                yield m
+        with patch.object(self.collector, '_history_messages', history):
+            result=await self.collector._inspect_window(self.entity,self.source,
+                {'window_start':start.isoformat(),'window_end':end.isoformat(),'cursor':201})
+        self.assertFalse(result['complete'])
+        self.assertEqual(101,result['next_cursor'])
+        self.assertEqual(100,len(result['messages']))
+
+    async def test_invalid_or_expired_window_never_calls_upstream(self):
+        now=datetime.now(timezone.utc)
+        cases=[{}, {'window_start':'bad','window_end':'bad'},
+               {'window_start':(now-timedelta(hours=80)).isoformat(),'window_end':(now-timedelta(hours=79)).isoformat()},
+               {'window_start':now.isoformat(),'window_end':(now+timedelta(minutes=30)).isoformat()},
+               {'window_start':(now-timedelta(minutes=30)).replace(tzinfo=None).isoformat(),'window_end':now.isoformat()}]
+        with patch.object(self.collector,'_history_messages',side_effect=AssertionError('no RPC')):
+            for payload in cases:
+                with self.subTest(payload=payload):
+                    result=await self.collector._inspect_window(self.entity,self.source,payload)
+                    self.assertEqual('invalid_window',result['state'])
+                    self.assertFalse(result['complete'])
+
     async def test_broadcast_directory_offers_self_identity_without_admin_rpc(self):
         self.client.error = ChatAdminRequiredError(None)
         result = await self.collector._admins({'chat_id':self.chat_id})

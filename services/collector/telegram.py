@@ -594,6 +594,39 @@ class TelegramCollector:
         for message in members:
             yield message
 
+    async def _inspect_window(self, entity, source, payload):
+        """Read-only bounded audit, using the same account-wide RPC budget."""
+        try:
+            start = datetime.fromisoformat(payload['window_start'].replace('Z', '+00:00'))
+            end = datetime.fromisoformat(payload['window_end'].replace('Z', '+00:00'))
+            if start.utcoffset() is None or end.utcoffset() is None:
+                raise ValueError()
+            now = datetime.now(timezone.utc)
+            if not timedelta(0) < end-start <= timedelta(minutes=30) or end > now:
+                raise ValueError()
+            if start < now-timedelta(hours=72):
+                raise ValueError()
+            cursor = payload.get('cursor')
+            if cursor is not None and (type(cursor) is not int or cursor <= 0):
+                raise ValueError()
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return {'state': 'invalid_window', 'messages': [], 'complete': False}
+        options = {'limit': 100, 'offset_date': end}
+        if cursor is not None:
+            options['offset_id'] = cursor
+        page = [m async for m in self._history_messages(entity, **options)]
+        chat = str(utils.get_peer_id(entity))
+        items = [{'message_id': int(m.id), 'posted_at': _utc(m.date).isoformat(),
+                  'grouped_id': str(m.grouped_id) if getattr(m, 'grouped_id', None) else None,
+                  'kind': type(m).__name__, 'has_text': bool(getattr(m, 'message', None)),
+                  'has_media': bool(getattr(m, 'media', None)),
+                  'trusted': _trusted_message_author(chat, source, m) is not None}
+                 for m in page if start <= _utc(m.date) < end]
+        complete = len(page) < 100 or any(_utc(m.date) < start for m in page)
+        return {'state': 'ready', 'messages': items, 'complete': complete,
+                'next_cursor': None if complete else int(page[-1].id),
+                'window_start': start.isoformat(), 'window_end': end.isoformat()}
+
     async def _refresh_directory(self, chat_id: str, source: dict):
         if not callable(getattr(self.backend, 'directory', None)):
             return
@@ -1690,6 +1723,10 @@ class TelegramCollector:
                     info = {'state': 'ready', 'chat_id': str(utils.get_peer_id(entity)),
                             'source_kind': 'broadcast_channel' if _broadcast_channel(entity) else 'group',
                             'title': str(entity.title)}
+                    if 'window_start' in payload or 'window_end' in payload:
+                        chat = info['chat_id']
+                        source = dict(self.sources.get(chat, {}), verified_broadcast=_broadcast_channel(entity))
+                        return info | await self._inspect_window(entity, source, payload)
                     if payload.get('inspect_messages') is True:
                         chat = info['chat_id']
                         source = dict(self.sources.get(chat, {}), verified_broadcast=_broadcast_channel(entity))
